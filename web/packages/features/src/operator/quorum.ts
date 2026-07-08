@@ -1,5 +1,16 @@
 import type { FleetNode } from '../network/types'
-import type { NodeTrustStatus, TrustPeer, TrustSummary } from './types'
+import type {
+  NodeTrustStatus,
+  OperatorFetchResult,
+  OperatorQuorumInfo,
+  PerPeerClassification,
+  TrustPeer,
+  TrustSummary,
+} from './types'
+
+/** Node RPC error codes for the operator surface (`botho/src/rpc/mod.rs`). */
+const OPERATOR_NOT_ENABLED = -32020
+const OPERATOR_TOKEN_REJECTED = -32021
 
 /**
  * Fetch + derive for the operator trust view (#706).
@@ -116,6 +127,91 @@ export async function fetchNodeTrustStatus(
 /** Poll the whole fleet concurrently; one slow/dead node never blocks the rest. */
 export async function fetchTrustStatuses(nodes: FleetNode[]): Promise<NodeTrustStatus[]> {
   return Promise.all(nodes.map((n) => fetchNodeTrustStatus(n)))
+}
+
+/** Parse a string array field, dropping non-strings. `null`/absent ⇒ undefined. */
+function asStringArray(v: unknown): string[] | undefined {
+  if (!Array.isArray(v)) return undefined
+  return v.filter((x): x is string => typeof x === 'string')
+}
+
+/**
+ * Parse the `perPeer` object from `operator_getQuorumInfo`. The node reports
+ * `null` until the first gate evaluation — we map that (and any malformed
+ * shape) to `undefined`, so the UI shows "no evaluation yet" rather than an
+ * empty classification (anti-#541).
+ */
+function parsePerPeer(v: unknown): PerPeerClassification | undefined {
+  if (!v || typeof v !== 'object') return undefined
+  const o = v as Record<string, unknown>
+  const curated = asStringArray(o.curated)
+  const auto = asStringArray(o.auto)
+  const suppressed = asStringArray(o.suppressed)
+  if (curated === undefined || auto === undefined || suppressed === undefined) return undefined
+  return { curated, auto, suppressed }
+}
+
+/**
+ * Fetch the operator-only `operator_getQuorumInfo` for one node with a hard
+ * timeout. Distinguishes not-enabled / unauthorized / unreachable so the UI
+ * degrades correctly (see [`OperatorFetchResult`]).
+ *
+ * The token is passed straight through as a param; the NODE verifies it. An
+ * empty/absent token still calls the node, which rejects it — so the
+ * `unauthorized` path is exercised identically whether the token is missing or
+ * simply wrong.
+ */
+export async function fetchOperatorQuorumInfo(
+  node: FleetNode,
+  token: string | null,
+  timeoutMs = 5000,
+): Promise<OperatorFetchResult<OperatorQuorumInfo>> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(node.rpcEndpoint, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'operator_getQuorumInfo',
+        params: { token: token ?? '' },
+        id: 1,
+      }),
+    })
+    if (!response.ok) return { status: 'unreachable' }
+    const json = (await response.json()) as {
+      result?: Record<string, unknown>
+      error?: { code?: number }
+    }
+    if (json.error) {
+      if (json.error.code === OPERATOR_NOT_ENABLED) return { status: 'not-enabled' }
+      if (json.error.code === OPERATOR_TOKEN_REJECTED) return { status: 'unauthorized' }
+      return { status: 'unreachable' }
+    }
+    const result = json.result
+    if (!result || typeof result !== 'object') return { status: 'unreachable' }
+    const quorum = result.quorum as Record<string, unknown> | undefined
+    if (!quorum || typeof quorum !== 'object') return { status: 'unreachable' }
+
+    return {
+      status: 'ok',
+      data: {
+        mode: typeof quorum.mode === 'string' ? quorum.mode : 'unknown',
+        faultModel: typeof quorum.faultModel === 'string' ? quorum.faultModel : 'unknown',
+        threshold: asNumber(quorum.threshold) ?? 0,
+        members: asStringArray(quorum.members) ?? [],
+        minPeers: asNumber(quorum.minPeers) ?? 0,
+        maxAutoMembers: asNumber(quorum.maxAutoMembers) ?? 0,
+        perPeer: parsePerPeer(result.perPeer),
+      },
+    }
+  } catch {
+    return { status: 'unreachable' }
+  } finally {
+    clearTimeout(timeoutId)
+  }
 }
 
 /**

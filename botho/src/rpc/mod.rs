@@ -7,6 +7,7 @@ pub mod auth;
 pub mod deposit_scanner;
 pub mod faucet;
 pub mod metrics;
+pub mod operator;
 pub mod rate_limit;
 pub mod view_keys;
 pub mod websocket;
@@ -18,6 +19,7 @@ pub use metrics::{
     calculate_dir_size, check_health, check_ready, init_metrics, start_metrics_server,
     HealthResponse, HealthStatus, MetricsUpdater, NodeMetrics, ReadyResponse, DATA_DIR_USAGE_BYTES,
 };
+pub use operator::{OperatorAuditEntry, OperatorAuditLog};
 pub use rate_limit::{KeyTier, RateLimitInfo, RateLimiter};
 pub use view_keys::{RegistryError, ViewKeyInfo, ViewKeyRegistry};
 pub use websocket::WsBroadcaster;
@@ -26,6 +28,16 @@ use anyhow::Result;
 
 /// JSON-RPC internal error code
 const INTERNAL_ERROR: i32 = -32603;
+
+/// Operator surface is not configured (`[rpc.operator]` absent / empty secret).
+/// A clean, stable "feature off" signal — distinct from an auth failure so the
+/// dashboard can degrade to the public read-only view (#707).
+const OPERATOR_NOT_ENABLED: i32 = -32020;
+
+/// Operator read token missing, malformed, expired, or forged. Deliberately
+/// GENERIC: the node must not leak which check failed (expiry vs signature vs
+/// shape) — fail closed with one reason (#707).
+const OPERATOR_TOKEN_REJECTED: i32 = -32021;
 
 /// Helper macro to acquire a read lock, returning a JSON-RPC error if poisoned
 macro_rules! read_lock {
@@ -287,6 +299,18 @@ pub struct RpcState {
     /// loop, in which case submission remains mempool-local (previous
     /// behavior).
     pub tx_relay: Option<tokio::sync::mpsc::UnboundedSender<crate::transaction::Transaction>>,
+    /// Operator read-token secret from `[rpc.operator] read_token_secret`
+    /// (#707, P4.2). `None` ⇒ the operator surface is OFF: `operator_*` RPCs
+    /// return a clean "not enabled" error and the node behaves exactly as
+    /// today. `Some` ⇒ the node verifies magic-link READ tokens (constant-time
+    /// HMAC, signature-before-expiry — see
+    /// [`auth::verify_operator_read_token`]) before serving the
+    /// operator-only reads. This grants READS ONLY; there is no operator
+    /// write RPC (that is #709).
+    pub operator_read_token_secret: Option<String>,
+    /// Operator audit-log store (#707). Present-but-empty in P4.2; #709 wires
+    /// the append side. Surfaced by `operator_getAuditLog`.
+    pub operator_audit_log: Arc<OperatorAuditLog>,
 }
 
 impl RpcState {
@@ -326,6 +350,8 @@ impl RpcState {
             peers: Arc::new(RwLock::new(Vec::new())),
             network_stats: None,
             tx_relay: None,
+            operator_read_token_secret: None,
+            operator_audit_log: OperatorAuditLog::new(),
         }
     }
 
@@ -369,6 +395,8 @@ impl RpcState {
             peers: Arc::new(RwLock::new(Vec::new())),
             network_stats: None,
             tx_relay: None,
+            operator_read_token_secret: None,
+            operator_audit_log: OperatorAuditLog::new(),
         }
     }
 
@@ -410,6 +438,8 @@ impl RpcState {
             peers: Arc::new(RwLock::new(Vec::new())),
             network_stats: None,
             tx_relay: None,
+            operator_read_token_secret: None,
+            operator_audit_log: OperatorAuditLog::new(),
         }
     }
 
@@ -516,6 +546,16 @@ impl RpcState {
     /// / relay nodes / pre-first-rebuild state, in which case
     /// `node_getStatus` reports the gate fields as JSON `null` rather than
     /// fabricating values.
+    /// Enable the operator read surface (#707) by wiring in the
+    /// `[rpc.operator] read_token_secret`. An empty/whitespace secret is
+    /// treated as "not configured" (fail closed) and leaves the surface OFF.
+    /// `commands::run` calls this with
+    /// `Config::rpc.operator_read_token_secret()`.
+    pub fn with_operator_read_token_secret(mut self, secret: Option<String>) -> Self {
+        self.operator_read_token_secret = secret.filter(|s| !s.trim().is_empty());
+        self
+    }
+
     fn quorum_gate_snapshot(&self) -> Option<QuorumGateSnapshot> {
         let handle = self.quorum_gate_status.as_ref()?;
         let guard = handle.read().ok()?;
@@ -880,6 +920,12 @@ async fn handle_rpc_method(request: &JsonRpcRequest, state: &RpcState) -> JsonRp
         // Network methods
         "network_getInfo" => handle_network_info(id, state).await,
         "network_getPeers" => handle_get_peers(id, state).await,
+
+        // Operator-only READ methods (#707, P4.2). Token-gated; fail closed
+        // when `[rpc.operator]` is absent. READS ONLY — there is deliberately
+        // no operator write method here (that is #709).
+        "operator_getQuorumInfo" => handle_operator_quorum_info(id, &request.params, state).await,
+        "operator_getAuditLog" => handle_operator_audit_log(id, &request.params, state).await,
 
         // Exchange integration methods
         "exchange_registerViewKey" => handle_register_view_key(id, &request.params, state).await,
@@ -2286,6 +2332,148 @@ async fn handle_get_peers(id: Value, state: &RpcState) -> JsonRpcResponse {
         json!({
             "peers": peers_json,
             "peerCount": peers_json.len(),
+        }),
+    )
+}
+
+/// Shared gate for the operator-only READ RPCs (#707, P4.2).
+///
+/// Fail closed, in order:
+///   1. `[rpc.operator]` absent / empty secret ⇒ `OPERATOR_NOT_ENABLED` (a
+///      clean "feature off" signal; the node behaves exactly as today).
+///   2. the `token` param is verified with [`auth::verify_operator_read_token`]
+///      (constant-time HMAC, signature-before-expiry). ANY failure —
+///      missing/malformed/forged/expired — collapses to one GENERIC
+///      `OPERATOR_TOKEN_REJECTED` error: the node never leaks which check
+///      failed.
+///
+/// Returns `Ok(())` only when a valid, unexpired token was presented. This is
+/// a READ gate: it authorizes viewing operator-only data and grants no write
+/// capability whatsoever.
+fn operator_read_gate(id: &Value, params: &Value, state: &RpcState) -> Result<(), JsonRpcResponse> {
+    let secret = match state.operator_read_token_secret.as_deref() {
+        Some(s) => s,
+        None => {
+            return Err(JsonRpcResponse::error(
+                id.clone(),
+                OPERATOR_NOT_ENABLED,
+                "operator features are not enabled on this node ([rpc.operator] not configured)",
+            ));
+        }
+    };
+
+    let token = params.get("token").and_then(|v| v.as_str()).unwrap_or("");
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    match auth::verify_operator_read_token(token, secret, now) {
+        Ok(_exp) => Ok(()),
+        // Deliberately generic: do not reveal expiry-vs-signature-vs-malformed.
+        Err(_) => Err(JsonRpcResponse::error(
+            id.clone(),
+            OPERATOR_TOKEN_REJECTED,
+            "operator token invalid or expired",
+        )),
+    }
+}
+
+/// `operator_getQuorumInfo` (#707): the node's configured `[network.quorum]`
+/// plus the PER-PEER gate classification from the last real gate evaluation.
+///
+/// The public `node_getStatus` exposes only COUNTS; this operator-only method
+/// adds (a) the configured quorum contents (members list, mode, threshold,
+/// caps) and (b) which specific connected peers are curated / auto-promoted /
+/// suppressed — a targeting map the public surface must not hand out.
+///
+/// Anti-#541: the per-peer classification is `null` until the gate has run at
+/// least once (relay nodes / pre-first-rebuild), never a fabricated or
+/// zero-filled list. The classification comes verbatim from the gate's
+/// [`QuorumGateSnapshot`]; nothing is recomputed here.
+async fn handle_operator_quorum_info(
+    id: Value,
+    params: &Value,
+    state: &RpcState,
+) -> JsonRpcResponse {
+    if let Err(resp) = operator_read_gate(&id, params, state) {
+        return resp;
+    }
+
+    let q = &state.quorum;
+    let mode = match q.mode {
+        crate::config::QuorumMode::Explicit => "explicit",
+        crate::config::QuorumMode::Recommended => "recommended",
+    };
+    let fault_model = match q.fault_model {
+        crate::config::FaultModel::Crash => "crash",
+        crate::config::FaultModel::Bft => "bft",
+    };
+
+    // Per-peer classification from the last REAL gate evaluation, or null.
+    let gate = state.quorum_gate_snapshot();
+    let per_peer = gate.as_ref().map(|g| {
+        json!({
+            "curated": g.curated_peer_ids,
+            "auto": g.auto_peer_ids,
+            "suppressed": g.suppressed_peer_ids,
+        })
+    });
+
+    JsonRpcResponse::success(
+        id,
+        json!({
+            // Configured [network.quorum] contents (operator-only read).
+            "quorum": {
+                "mode": mode,
+                "faultModel": fault_model,
+                "threshold": q.threshold,
+                "members": q.members,
+                "minPeers": q.min_peers,
+                "maxAutoMembers": q.max_auto_members,
+            },
+            // Per-peer gate classification, or null until the first evaluation
+            // (anti-#541 — never fabricated).
+            "perPeer": per_peer,
+            // The same aggregate counts node_getStatus exposes, echoed for
+            // convenience; null until the first evaluation.
+            "gate": gate.as_ref().map(|g| json!({
+                "curatedMembers": g.curated_members,
+                "autoMembers": g.auto_members,
+                "suppressedPeers": g.suppressed_peers,
+                "maxAutoMembers": g.max_auto_members,
+                "intersectionRefused": g.intersection_refused,
+            })),
+        }),
+    )
+}
+
+/// `operator_getAuditLog` (#707): the operator audit log (read-token gated).
+///
+/// Present-but-empty in P4.2 — there is no write path to append to it yet
+/// (that is #709). Returns an empty `entries` list rather than a placeholder
+/// (anti-#541). An optional `limit` param bounds the returned entries.
+async fn handle_operator_audit_log(id: Value, params: &Value, state: &RpcState) -> JsonRpcResponse {
+    if let Err(resp) = operator_read_gate(&id, params, state) {
+        return resp;
+    }
+
+    let limit = params
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(200)
+        .min(1000);
+
+    let entries = state.operator_audit_log.recent(limit);
+    let count = entries.len();
+
+    JsonRpcResponse::success(
+        id,
+        json!({
+            "entries": entries,
+            "count": count,
         }),
     )
 }
@@ -3955,6 +4143,9 @@ mod tests {
             suppressed_peers: 0,
             max_auto_members: 8,
             intersection_refused: false,
+            curated_peer_ids: Vec::new(),
+            auto_peer_ids: Vec::new(),
+            suppressed_peer_ids: Vec::new(),
         });
         let quiet = handle_node_status(json!(1), &state).await.result.unwrap();
         assert_eq!(quiet["quorumCuratedMembers"], json!(0));
@@ -3971,6 +4162,9 @@ mod tests {
             suppressed_peers: 22,
             max_auto_members: 8,
             intersection_refused: true,
+            curated_peer_ids: Vec::new(),
+            auto_peer_ids: Vec::new(),
+            suppressed_peer_ids: Vec::new(),
         });
         let flooded = handle_node_status(json!(1), &state).await.result.unwrap();
         assert_eq!(flooded["quorumCuratedMembers"], json!(2));

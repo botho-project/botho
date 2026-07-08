@@ -63,6 +63,52 @@ export interface NodeTrustStatus {
   peers?: TrustPeer[]
 }
 
+/**
+ * Per-peer gate classification from the operator-only `operator_getQuorumInfo`
+ * (#707). `undefined` (not empty arrays) when the node has not yet run a gate
+ * evaluation — the node reports `perPeer: null` and we preserve that "no data"
+ * distinction (anti-#541).
+ */
+export interface PerPeerClassification {
+  /** Connected curated (operator-listed) members admitted by the gate. */
+  curated: string[]
+  /** Connected auto-discovered peers promoted into the quorum set. */
+  auto: string[]
+  /** Connected non-curated peers the gate is keeping OUT of the quorum. */
+  suppressed: string[]
+}
+
+/**
+ * Configured `[network.quorum]` contents for one node, from the operator-only
+ * `operator_getQuorumInfo` (#707). These are the gate's INPUTS the public
+ * surface does not expose.
+ */
+export interface OperatorQuorumInfo {
+  mode: string
+  faultModel: string
+  threshold: number
+  /** Operator-curated member PeerId strings. */
+  members: string[]
+  minPeers: number
+  maxAutoMembers: number
+  /** Per-peer classification, or `undefined` until the first gate evaluation. */
+  perPeer?: PerPeerClassification
+}
+
+/**
+ * Result of an operator-only fetch. Distinguishes the three states the
+ * token-gated read can be in, so the UI degrades correctly:
+ *   - `not-enabled`: the node has no `[rpc.operator]` config — operator reads
+ *     are impossible here; render the public view without an "expired" nag.
+ *   - `unauthorized`: token missing / rejected / expired — prompt for a link.
+ *   - `unreachable`: the call itself failed (transport/timeout).
+ */
+export type OperatorFetchResult<T> =
+  | { status: 'ok'; data: T }
+  | { status: 'not-enabled' }
+  | { status: 'unauthorized' }
+  | { status: 'unreachable' }
+
 /** Fleet-level trust facts derived from the live snapshots (pure function). */
 export interface TrustSummary {
   /** Reachable node count. */

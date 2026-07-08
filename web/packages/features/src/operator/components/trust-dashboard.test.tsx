@@ -11,7 +11,12 @@ import { describe, expect, it } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import { TrustDashboard } from './trust-dashboard'
 import type { FleetNode } from '../../network/types'
-import type { NodeTrustStatus, TrustPeer } from '../types'
+import type {
+  NodeTrustStatus,
+  OperatorFetchResult,
+  OperatorQuorumInfo,
+  TrustPeer,
+} from '../types'
 
 const NODES: FleetNode[] = [
   { id: 'seed', name: 'Seed (validator)', rpcEndpoint: 'https://seed.test/rpc' },
@@ -153,5 +158,99 @@ describe('TrustDashboard', () => {
     renderDash({ seed: live('seed') })
     const card = screen.getByTestId('trust-card-seed')
     expect(card.textContent).toContain('—')
+  })
+})
+
+describe('TrustDashboard operator view (#707)', () => {
+  const okInfo = (over: Partial<OperatorQuorumInfo> = {}): OperatorFetchResult<OperatorQuorumInfo> => ({
+    status: 'ok',
+    data: {
+      mode: 'recommended',
+      faultModel: 'crash',
+      threshold: 2,
+      members: ['12D3KooWCuratedMemberAAAA'],
+      minPeers: 1,
+      maxAutoMembers: 8,
+      perPeer: {
+        curated: ['12D3KooWCuratedMemberAAAA'],
+        auto: ['12D3KooWAutoPeerBBBB'],
+        suppressed: ['12D3KooWSuppressedCCCC'],
+      },
+      ...over,
+    },
+  })
+
+  it('shows NO operator panels or banner in the public view (no token)', () => {
+    cleanup()
+    render(<TrustDashboard nodes={NODES} statuses={{ seed: live('seed') }} operatorMode="disabled" />)
+    expect(screen.queryByText('Operator detail')).toBeNull()
+    expect(screen.queryByText(/Operator view/)).toBeNull()
+  })
+
+  it('renders the configured-members panel and per-peer badges with a valid token', () => {
+    cleanup()
+    render(
+      <TrustDashboard
+        nodes={NODES}
+        statuses={{ seed: live('seed') }}
+        operatorInfo={{ seed: okInfo() }}
+        operatorMode="active"
+      />,
+    )
+    expect(screen.getByText('Operator detail')).toBeDefined()
+    // Active-session banner.
+    expect(screen.getByText(/Operator view/)).toBeDefined()
+    // Configured members panel.
+    expect(screen.getByText('Configured members (1)')).toBeDefined()
+    expect(screen.getByText('12D3KooWCuratedMemberAAAA')).toBeDefined()
+    // Per-peer classification badges (curated / auto / suppressed).
+    expect(screen.getByText('curated')).toBeDefined()
+    expect(screen.getByText('auto')).toBeDefined()
+    expect(screen.getByText('suppressed')).toBeDefined()
+  })
+
+  it('renders "no gate evaluation yet" for perPeer:absent (anti-#541)', () => {
+    cleanup()
+    render(
+      <TrustDashboard
+        nodes={NODES}
+        statuses={{ seed: live('seed') }}
+        operatorInfo={{ seed: okInfo({ perPeer: undefined }) }}
+        operatorMode="active"
+      />,
+    )
+    expect(screen.getByText(/no gate evaluation yet/)).toBeDefined()
+    // No fabricated classification badges.
+    expect(screen.queryByText('curated')).toBeNull()
+  })
+
+  it('degrades to the public view with an expired-link banner on unauthorized', () => {
+    cleanup()
+    render(
+      <TrustDashboard
+        nodes={NODES}
+        statuses={{ seed: live('seed') }}
+        operatorInfo={{ seed: { status: 'unauthorized' } }}
+        operatorMode="unauthorized"
+      />,
+    )
+    // Both the fleet banner and the per-node panel flag the expired link.
+    expect(screen.getAllByText(/Operator link expired or invalid/).length).toBeGreaterThan(0)
+    expect(screen.getByText(/showing the public read-only view/)).toBeDefined()
+    // No operator detail data is shown.
+    expect(screen.queryByText('Configured members (1)')).toBeNull()
+  })
+
+  it('explains a fleet with no operator surface (not-enabled)', () => {
+    cleanup()
+    render(
+      <TrustDashboard
+        nodes={NODES}
+        statuses={{ seed: live('seed') }}
+        operatorInfo={{ seed: { status: 'not-enabled' } }}
+        operatorMode="not-enabled"
+      />,
+    )
+    expect(screen.getByText(/Operator reads are not enabled/)).toBeDefined()
   })
 })

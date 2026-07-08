@@ -1,12 +1,22 @@
 import { Card, CardContent } from '@botho/ui'
-import { AlertTriangle, Server, ShieldAlert, ShieldCheck, WifiOff } from 'lucide-react'
+import { AlertTriangle, Lock, Server, ShieldAlert, ShieldCheck, WifiOff } from 'lucide-react'
 import type { FleetNode } from '../../network/types'
-import type { NodeTrustStatus, TrustPeer } from '../types'
+import type {
+  NodeTrustStatus,
+  OperatorFetchResult,
+  OperatorQuorumInfo,
+  TrustPeer,
+} from '../types'
 
 export interface TrustNodeCardProps {
   node: FleetNode
   /** Trust snapshot; undefined while the first poll is in flight. */
   status?: NodeTrustStatus
+  /**
+   * Operator-only detail (#707) for this node, present only when a read token
+   * is being used. `undefined` ⇒ public read-only view (no operator panel).
+   */
+  operatorInfo?: OperatorFetchResult<OperatorQuorumInfo>
   className?: string
 }
 
@@ -20,7 +30,12 @@ export interface TrustNodeCardProps {
  * zero. `quorumGateIntersectionRefused` and `quorumDegenerate` render as
  * prominent warnings.
  */
-export function TrustNodeCard({ node, status, className }: TrustNodeCardProps) {
+export function TrustNodeCard({
+  node,
+  status,
+  operatorInfo,
+  className,
+}: TrustNodeCardProps) {
   if (status && !status.reachable) {
     return (
       <Card className={`border-[--color-danger]/40 ${className ?? ''}`}>
@@ -93,10 +108,127 @@ export function TrustNodeCard({ node, status, className }: TrustNodeCardProps) {
             </div>
 
             <PeerTable peers={status.peers} />
+            <OperatorDetail info={operatorInfo} />
           </>
         )}
       </CardContent>
     </Card>
+  )
+}
+
+/**
+ * Operator-only detail (#707), rendered ONLY when a read token is in use.
+ *
+ * Shows the configured `[network.quorum]` members panel and per-peer
+ * classification badges (curated / auto / suppressed) — data the public
+ * surface deliberately withholds. Degrades explicitly:
+ *   - `unauthorized`: the token was rejected — prompt for a fresh link.
+ *   - `not-enabled`: this node has no operator surface — say so, don't nag.
+ *   - `perPeer` absent: the gate has not evaluated yet ("—", anti-#541).
+ */
+function OperatorDetail({ info }: { info?: OperatorFetchResult<OperatorQuorumInfo> }) {
+  if (!info) return null
+
+  if (info.status === 'unauthorized') {
+    return (
+      <div className="mt-3 flex items-center gap-2 rounded border border-[--color-warning]/40 bg-[--color-warning]/10 p-2 text-xs text-[--color-warning]">
+        <Lock className="h-3.5 w-3.5 shrink-0" />
+        Operator link expired or invalid — mint a fresh link to view trust internals.
+      </div>
+    )
+  }
+  if (info.status === 'not-enabled') {
+    return (
+      <p className="mt-3 text-xs text-[--color-dim]">
+        Operator reads not enabled on this node.
+      </p>
+    )
+  }
+  if (info.status === 'unreachable') {
+    return (
+      <p className="mt-3 flex items-center gap-2 text-xs text-[--color-danger]">
+        <WifiOff className="h-3.5 w-3.5 shrink-0" />
+        Operator detail unavailable (operator_getQuorumInfo failed)
+      </p>
+    )
+  }
+
+  const q = info.data
+  const pp = q.perPeer
+  return (
+    <div className="mt-3 rounded border border-[--color-pulse]/30 bg-[--color-pulse]/5 p-2.5">
+      <div className="flex items-center gap-1.5 text-xs font-medium text-[--color-pulse]">
+        <Lock className="h-3.5 w-3.5 shrink-0" /> Operator detail
+      </div>
+
+      <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
+        <Stat label="Mode" value={q.mode} />
+        <Stat label="Fault model" value={q.faultModel} />
+        <Stat label="Threshold" value={q.threshold.toLocaleString()} />
+        <Stat label="Min peers" value={q.minPeers.toLocaleString()} />
+      </div>
+
+      <div className="mt-2 text-xs text-[--color-dim]">
+        Configured members ({q.members.length})
+      </div>
+      {q.members.length === 0 ? (
+        <p className="text-xs text-[--color-dim]">No curated members configured</p>
+      ) : (
+        <ul className="mt-0.5 space-y-0.5">
+          {q.members.map((m) => (
+            <li key={m} className="truncate font-mono text-xs text-[--color-light]" title={m}>
+              {m}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-2 text-xs text-[--color-dim]">Per-peer classification</div>
+      {pp === undefined ? (
+        <p className="text-xs text-[--color-dim]">— no gate evaluation yet</p>
+      ) : (
+        <div className="mt-1 flex flex-wrap gap-1">
+          {pp.curated.map((p) => (
+            <ClassBadge key={`c-${p}`} peerId={p} kind="curated" />
+          ))}
+          {pp.auto.map((p) => (
+            <ClassBadge key={`a-${p}`} peerId={p} kind="auto" />
+          ))}
+          {pp.suppressed.map((p) => (
+            <ClassBadge key={`s-${p}`} peerId={p} kind="suppressed" />
+          ))}
+          {pp.curated.length + pp.auto.length + pp.suppressed.length === 0 && (
+            <span className="text-xs text-[--color-dim]">No connected peers classified</span>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** A per-peer classification badge, colored by kind. */
+function ClassBadge({
+  peerId,
+  kind,
+}: {
+  peerId: string
+  kind: 'curated' | 'auto' | 'suppressed'
+}) {
+  const style =
+    kind === 'curated'
+      ? 'bg-[--color-pulse]/15 text-[--color-pulse]'
+      : kind === 'auto'
+        ? 'bg-[--color-warning]/15 text-[--color-warning]'
+        : 'bg-[--color-danger]/15 text-[--color-danger]'
+  const short = peerId.length > 12 ? `${peerId.slice(0, 8)}…${peerId.slice(-4)}` : peerId
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10px] ${style}`}
+      title={`${peerId} (${kind})`}
+    >
+      <span className="uppercase">{kind}</span>
+      <span className="text-[--color-light]">{short}</span>
+    </span>
   )
 }
 

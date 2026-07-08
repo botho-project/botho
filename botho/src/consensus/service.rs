@@ -196,6 +196,32 @@ pub struct QuorumGateSnapshot {
     /// kept its previous safe quorum set (or, at initial seed, fell back to a
     /// majority-threshold set over the same members).
     pub intersection_refused: bool,
+
+    /// Per-peer gate classification (#707, P4.2). These are the base58 PeerId
+    /// strings of the CONNECTED peers, partitioned exactly as the gate
+    /// evaluation above partitioned them — the single source of truth for the
+    /// classification (it is NEVER recomputed anywhere else). They back the
+    /// operator-only `operator_getQuorumInfo` RPC, which the public
+    /// `node_getStatus` deliberately does not expose (the per-peer map is a
+    /// targeting map for an adversary; the public surface reports counts only).
+    ///
+    /// Anti-#541: these lists are populated ONLY by a real gate evaluation.
+    /// Until the first evaluation the whole [`QuorumGateSnapshot`] is absent
+    /// (the shared handle holds `None`), so the RPC reports the classification
+    /// as `null`, never a fabricated or zero-filled list.
+    ///
+    /// Connected curated members admitted by the gate (operator-listed
+    /// `[network.quorum] members` that are currently connected).
+    pub curated_peer_ids: Vec<String>,
+
+    /// Connected auto-discovered peers PROMOTED into the quorum set by the gate
+    /// (bounded by `max_auto_members`; empty in `Explicit` mode).
+    pub auto_peer_ids: Vec<String>,
+
+    /// Connected non-curated peers the gate is keeping OUT of the quorum set
+    /// (over-cap auto peers in `Recommended` mode; every non-curated peer in
+    /// `Explicit` mode).
+    pub suppressed_peer_ids: Vec<String>,
 }
 
 /// Events emitted by the consensus service

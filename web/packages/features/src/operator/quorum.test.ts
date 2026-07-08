@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
-import { deriveTrustSummary, fetchNodeTrustStatus } from './quorum'
+import { deriveTrustSummary, fetchNodeTrustStatus, fetchOperatorQuorumInfo } from './quorum'
 import type { NodeTrustStatus } from './types'
 
 const node = { id: 'seed', name: 'Seed (validator)', rpcEndpoint: 'https://seed.test/rpc' }
@@ -204,5 +204,64 @@ describe('deriveTrustSummary', () => {
     expect(s.intersectionRefusedNodeIds).toEqual([])
     expect(s.degenerateNodeIds).toEqual([])
     expect(s.faultTolerantCount).toBe(0)
+  })
+})
+
+describe('fetchOperatorQuorumInfo (#707)', () => {
+  const QUORUM_OK = {
+    quorum: {
+      mode: 'recommended',
+      faultModel: 'crash',
+      threshold: 2,
+      members: ['12D3KooWCurated'],
+      minPeers: 1,
+      maxAutoMembers: 8,
+    },
+    perPeer: {
+      curated: ['12D3KooWCurated'],
+      auto: ['12D3KooWAuto'],
+      suppressed: ['12D3KooWSuppressed'],
+    },
+  }
+
+  it('parses a successful response including per-peer classification', async () => {
+    stubRpc({ operator_getQuorumInfo: { result: QUORUM_OK } })
+    const r = await fetchOperatorQuorumInfo(node, 'op.9999999999.sig')
+    expect(r.status).toBe('ok')
+    if (r.status === 'ok') {
+      expect(r.data.mode).toBe('recommended')
+      expect(r.data.members).toEqual(['12D3KooWCurated'])
+      expect(r.data.perPeer).toEqual({
+        curated: ['12D3KooWCurated'],
+        auto: ['12D3KooWAuto'],
+        suppressed: ['12D3KooWSuppressed'],
+      })
+    }
+  })
+
+  it('maps perPeer:null (no gate evaluation yet) to undefined — never fabricated', async () => {
+    stubRpc({
+      operator_getQuorumInfo: { result: { ...QUORUM_OK, perPeer: null } },
+    })
+    const r = await fetchOperatorQuorumInfo(node, 'tok')
+    expect(r.status).toBe('ok')
+    if (r.status === 'ok') expect(r.data.perPeer).toBeUndefined()
+  })
+
+  it('reports not-enabled on the -32020 error code', async () => {
+    stubRpc({ operator_getQuorumInfo: { error: { code: -32020 } } })
+    expect((await fetchOperatorQuorumInfo(node, 'tok')).status).toBe('not-enabled')
+  })
+
+  it('reports unauthorized on the -32021 error code (missing/expired/tampered)', async () => {
+    stubRpc({ operator_getQuorumInfo: { error: { code: -32021 } } })
+    expect((await fetchOperatorQuorumInfo(node, 'tok')).status).toBe('unauthorized')
+    // A null token still calls the node and surfaces its rejection.
+    expect((await fetchOperatorQuorumInfo(node, null)).status).toBe('unauthorized')
+  })
+
+  it('reports unreachable when the call throws — never throws into the poller', async () => {
+    stubRpc({ operator_getQuorumInfo: new Error('boom') })
+    expect((await fetchOperatorQuorumInfo(node, 'tok')).status).toBe('unreachable')
   })
 })

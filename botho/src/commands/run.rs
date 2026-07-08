@@ -480,6 +480,9 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
         ws_broadcaster.clone(),
     )
     .with_quorum(config.network.quorum.clone())
+    // Operator read surface (#707, P4.2). Absent [rpc.operator] ⇒ None ⇒ the
+    // operator_* RPCs stay OFF and the node behaves exactly as today.
+    .with_operator_read_token_secret(config.rpc.operator_read_token_secret().map(str::to_string))
     .with_identity(node_identity)
     .with_minter_health(minter_health.clone())
     .with_sync_status(sync_status.clone())
@@ -2245,6 +2248,12 @@ fn gated_scp_quorum_set(
     let curated_members;
     let auto_members;
     let suppressed_peers;
+    // Per-peer classification (#707): the base58 PeerId strings behind the
+    // counts above, computed HERE (the gate) and nowhere else. Surfaced by the
+    // operator-only `operator_getQuorumInfo` RPC.
+    let curated_peer_ids: Vec<String>;
+    let auto_peer_ids: Vec<String>;
+    let suppressed_peer_ids: Vec<String>;
 
     match quorum_cfg.mode {
         QuorumMode::Explicit => {
@@ -2277,6 +2286,12 @@ fn gated_scp_quorum_set(
             // Every connected non-curated peer is being kept out of the
             // quorum by the gate.
             suppressed_peers = auto_candidates.len();
+            // Per-peer (#707): connected curated peers are the classification's
+            // "curated"; auto is empty in Explicit mode; every connected
+            // non-curated peer is "suppressed".
+            curated_peer_ids = connected_curated.iter().map(|p| p.to_string()).collect();
+            auto_peer_ids = Vec::new();
+            suppressed_peer_ids = auto_candidates.iter().map(|p| p.to_string()).collect();
         }
         QuorumMode::Recommended => {
             // Connected curated members are always admitted and do not count
@@ -2322,6 +2337,22 @@ fn gated_scp_quorum_set(
             curated_members = connected_curated.len();
             auto_members = admitted_auto.len();
             suppressed_peers = auto_candidates.len() - admitted_auto.len();
+            // Per-peer (#707): curated = connected curated; auto = the peers
+            // actually admitted under the cap; suppressed = connected
+            // non-curated peers the cap left out. Derived straight from the
+            // same `admitted_auto` set the membership above was built from, so
+            // the lists cannot drift from the counts.
+            curated_peer_ids = connected_curated.iter().map(|p| p.to_string()).collect();
+            auto_peer_ids = auto_candidates
+                .iter()
+                .filter(|p| admitted_auto.contains(p))
+                .map(|p| p.to_string())
+                .collect();
+            suppressed_peer_ids = auto_candidates
+                .iter()
+                .filter(|p| !admitted_auto.contains(p))
+                .map(|p| p.to_string())
+                .collect();
         }
     }
 
@@ -2389,6 +2420,9 @@ fn gated_scp_quorum_set(
         suppressed_peers,
         max_auto_members: quorum_cfg.max_auto_members,
         intersection_refused,
+        curated_peer_ids,
+        auto_peer_ids,
+        suppressed_peer_ids,
     };
     (quorum_set, snapshot)
 }

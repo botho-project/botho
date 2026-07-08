@@ -266,6 +266,126 @@ impl HmacAuthenticator {
     }
 }
 
+// ============================================================================
+// Operator read-token (magic link) — #707, P4.2 of the #695 proposal
+// ============================================================================
+//
+// A node-verified, expiring, read-only bearer token that unlocks the
+// operator-only read RPCs (`operator_getQuorumInfo`, `operator_getAuditLog`).
+// It is the exact shape of the BaaS status link
+// (`web/packages/baas-worker/src/status-link.ts`), with the node as verifier:
+//
+//     op.<expUnixSeconds>.<hmacSha256Hex(secret, "op.<exp>")>
+//
+// The HMAC reuses the SAME `HmacSha256` primitive and the SAME
+// `constant_time_eq` compare as the exchange API-key auth above — there is a
+// single audited HMAC path in this module, never a second hand-rolled one.
+//
+// SECURITY POSTURE (mirrors status-link.ts):
+//   - The signature is verified BEFORE the expiry field is trusted. An attacker
+//     cannot forge or extend a token by tampering with the (unauthenticated)
+//     `exp` field: the HMAC covers `"op.<exp>"`, so any change to `exp` fails
+//     the constant-time compare before the expiry check ever runs.
+//   - The compare is constant-time.
+//   - The token is a bearer credential that grants READS ONLY. No RPC reachable
+//     with it mutates any state (the write path is #709, gated on a separate
+//     security review — `docs/security/quorum-write-path.md`).
+
+/// Fixed subject/domain tag for operator read tokens. Also acts as a domain
+/// separator so an operator token can never be confused with any other
+/// dot-delimited HMAC token shape.
+pub const OPERATOR_TOKEN_SUBJECT: &str = "op";
+
+/// Default lifetime of a freshly minted operator read token: 7 days. Parity
+/// with `DEFAULT_STATUS_TOKEN_TTL_SECONDS` in `status-link.ts`.
+pub const DEFAULT_OPERATOR_TOKEN_TTL_SECONDS: u64 = 7 * 24 * 60 * 60;
+
+/// Why an operator read token was rejected.
+///
+/// The RPC layer collapses ALL of these into a single generic client-facing
+/// error (it must not leak whether a token was malformed vs forged vs expired).
+/// The variants exist so tests can assert the internal verification ORDER —
+/// specifically that a bad signature is reported even when the token is also
+/// expired (signature is checked first, exactly like `status-link.ts`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OperatorTokenError {
+    /// Empty, wrong field count, wrong subject tag, or non-integer expiry.
+    Malformed,
+    /// The HMAC over `"op.<exp>"` did not match (tampered/forged token, or a
+    /// token signed with a different secret).
+    BadSignature,
+    /// The signature was valid but the token's (now-trusted) expiry has passed.
+    Expired,
+}
+
+/// Compute the hex HMAC-SHA256 of `payload` under `secret`, using the same
+/// `HmacSha256` primitive as the exchange API-key auth.
+fn hmac_sha256_hex(secret: &str, payload: &str) -> String {
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts keys of any length");
+    mac.update(payload.as_bytes());
+    hex::encode(mac.finalize().into_bytes())
+}
+
+/// Mint an operator read token valid until `exp_unix_seconds`.
+///
+/// `op.<exp>.<hmacSha256Hex(secret, "op.<exp>")>`. Minted off-node by the
+/// `botho operator mint-read-link` CLI; the node is the verifier.
+pub fn mint_operator_read_token(secret: &str, exp_unix_seconds: u64) -> String {
+    let payload = format!("{OPERATOR_TOKEN_SUBJECT}.{exp_unix_seconds}");
+    let sig = hmac_sha256_hex(secret, &payload);
+    format!("{payload}.{sig}")
+}
+
+/// Verify an operator read token and return its (trusted) expiry on success.
+///
+/// Verification order (parity with `status-link.ts`, fail closed):
+///   1. structural parse: exactly three dot-delimited fields, subject == `op`,
+///      integer expiry > 0 (else [`OperatorTokenError::Malformed`]);
+///   2. recompute the HMAC over `"op.<exp>"` and compare in CONSTANT TIME —
+///      **before** trusting any field ([`OperatorTokenError::BadSignature`]);
+///   3. only after the signature passes, honor the (now-trusted) expiry
+///      ([`OperatorTokenError::Expired`]).
+///
+/// `now_unix_seconds` is injectable so tests can pin the clock.
+pub fn verify_operator_read_token(
+    token: &str,
+    secret: &str,
+    now_unix_seconds: u64,
+) -> Result<u64, OperatorTokenError> {
+    if token.is_empty() {
+        return Err(OperatorTokenError::Malformed);
+    }
+
+    // Expect exactly three fields: subject . exp . signature.
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return Err(OperatorTokenError::Malformed);
+    }
+    let (subject, exp_str, sig) = (parts[0], parts[1], parts[2]);
+
+    if subject != OPERATOR_TOKEN_SUBJECT {
+        return Err(OperatorTokenError::Malformed);
+    }
+    let exp: u64 = match exp_str.parse() {
+        Ok(v) if v > 0 => v,
+        _ => return Err(OperatorTokenError::Malformed),
+    };
+
+    // Verify the signature BEFORE trusting the expiry. Constant-time compare.
+    let expected = hmac_sha256_hex(secret, &format!("{OPERATOR_TOKEN_SUBJECT}.{exp}"));
+    if !constant_time_eq(expected.as_bytes(), sig.as_bytes()) {
+        return Err(OperatorTokenError::BadSignature);
+    }
+
+    // Only now is `exp` trusted — honor it.
+    if now_unix_seconds >= exp {
+        return Err(OperatorTokenError::Expired);
+    }
+
+    Ok(exp)
+}
+
 /// Constant-time byte comparison.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
@@ -409,5 +529,110 @@ mod tests {
         assert!(constant_time_eq(b"hello", b"hello"));
         assert!(!constant_time_eq(b"hello", b"world"));
         assert!(!constant_time_eq(b"hello", b"hell"));
+    }
+
+    // ------------------------------------------------------------------
+    // Operator read-token (#707)
+    // ------------------------------------------------------------------
+
+    const OP_SECRET: &str = "operator-read-token-secret";
+    const NOW: u64 = 1_700_000_000;
+
+    #[test]
+    fn operator_token_round_trips() {
+        let exp = NOW + DEFAULT_OPERATOR_TOKEN_TTL_SECONDS;
+        let token = mint_operator_read_token(OP_SECRET, exp);
+        // Shape: op.<exp>.<hex-sig>
+        let parts: Vec<&str> = token.split('.').collect();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0], "op");
+        assert_eq!(parts[1], exp.to_string());
+        assert_eq!(parts[2].len(), 64, "hex sha256 is 64 hex chars");
+
+        let got = verify_operator_read_token(&token, OP_SECRET, NOW + 10);
+        assert_eq!(got, Ok(exp));
+    }
+
+    #[test]
+    fn operator_token_missing_or_malformed_rejected() {
+        assert_eq!(
+            verify_operator_read_token("", OP_SECRET, NOW),
+            Err(OperatorTokenError::Malformed)
+        );
+        assert_eq!(
+            verify_operator_read_token("garbage", OP_SECRET, NOW),
+            Err(OperatorTokenError::Malformed)
+        );
+        // Wrong field count.
+        assert_eq!(
+            verify_operator_read_token("op.123", OP_SECRET, NOW),
+            Err(OperatorTokenError::Malformed)
+        );
+        // Wrong subject tag.
+        let exp = NOW + 1000;
+        let sig = hmac_sha256_hex(OP_SECRET, &format!("op.{exp}"));
+        assert_eq!(
+            verify_operator_read_token(&format!("xx.{exp}.{sig}"), OP_SECRET, NOW),
+            Err(OperatorTokenError::Malformed)
+        );
+        // Non-integer expiry.
+        assert_eq!(
+            verify_operator_read_token(&format!("op.notanumber.{sig}"), OP_SECRET, NOW),
+            Err(OperatorTokenError::Malformed)
+        );
+    }
+
+    #[test]
+    fn operator_token_tampered_signature_rejected() {
+        let exp = NOW + 1000;
+        let token = mint_operator_read_token(OP_SECRET, exp);
+        // Tamper the expiry but keep the original signature: the HMAC covers
+        // "op.<exp>", so bumping exp must fail the signature check.
+        let parts: Vec<&str> = token.split('.').collect();
+        let forged = format!("op.{}.{}", exp + 999_999, parts[2]);
+        assert_eq!(
+            verify_operator_read_token(&forged, OP_SECRET, NOW),
+            Err(OperatorTokenError::BadSignature)
+        );
+    }
+
+    #[test]
+    fn operator_token_wrong_secret_rejected() {
+        let exp = NOW + 1000;
+        let token = mint_operator_read_token("other-secret", exp);
+        assert_eq!(
+            verify_operator_read_token(&token, OP_SECRET, NOW),
+            Err(OperatorTokenError::BadSignature)
+        );
+    }
+
+    #[test]
+    fn operator_token_expired_rejected_only_after_signature_passes() {
+        let exp = NOW + 60;
+        let token = mint_operator_read_token(OP_SECRET, exp);
+        // Valid signature, but the clock is past expiry.
+        assert_eq!(
+            verify_operator_read_token(&token, OP_SECRET, exp + 1),
+            Err(OperatorTokenError::Expired)
+        );
+    }
+
+    #[test]
+    fn operator_token_signature_checked_before_expiry() {
+        // A token that is BOTH expired AND has a bad signature must report the
+        // SIGNATURE failure, proving the signature is verified before the
+        // expiry is trusted (parity with status-link.ts verification order).
+        let exp = NOW - 100; // already expired
+        let token = mint_operator_read_token(OP_SECRET, exp);
+        let parts: Vec<&str> = token.split('.').collect();
+        // Corrupt the signature.
+        let mut bad_sig: String = parts[2].to_string();
+        bad_sig.replace_range(0..1, if &bad_sig[0..1] == "a" { "b" } else { "a" });
+        let both_bad = format!("op.{exp}.{bad_sig}");
+        assert_eq!(
+            verify_operator_read_token(&both_bad, OP_SECRET, NOW),
+            Err(OperatorTokenError::BadSignature),
+            "signature must be checked before expiry"
+        );
     }
 }
