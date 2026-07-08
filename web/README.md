@@ -124,7 +124,7 @@ E2E_BROWSER_CHANNEL=chrome \
 
 The hermetic suite above can never catch a **deploy** regression (it builds the
 app fresh and mocks `/rpc`). The live-smoke suite (`e2e/tests/live/smoke.spec.ts`)
-drives the **deployed** wallet at `https://wallet.botho.io` against the **live**
+drives the **deployed** wallet at `https://botho.io` against the **live**
 testnet SCP nodes, catching exactly the class of bug a hermetic run misses — e.g.
 the wasm-404 when a build lands on a Pages preview instead of production and
 `/pkg/bth_wasm_signer_bg.wasm` stops being served.
@@ -151,7 +151,7 @@ client-side (address renders), and `/claim` loads its empty/invalid state.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `BOTHO_LIVE` | _(unset)_ | Must be `1` or the whole live suite is skipped. |
-| `BOTHO_LIVE_URL` | `https://wallet.botho.io` | Override the deployed wallet URL under test. |
+| `BOTHO_LIVE_URL` | `https://botho.io` | Override the deployed wallet URL under test. |
 
 No default on-chain steps run (testnet mints on demand + faucet rate limits +
 ~30–80s block time make a full faucet→send→claim cycle flaky); any such step

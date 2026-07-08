@@ -10,7 +10,7 @@
  *
  * Link format (issue #460, architect "Option A"):
  *
- *   https://wallet.botho.io/claim#v1.<base58(16-byte entropy)>[.<amount-hint-pc>]
+ *   https://botho.io/claim#v1.<base58(16-byte entropy)>[.<amount-hint-pc>]
  *
  * - `v1`           one-char-ish version tag so the format can evolve.
  * - base58 entropy the 12-word (128-bit) mnemonic's raw 16-byte entropy,
@@ -136,7 +136,7 @@ export function encodeClaimLinkFragment(mnemonic: string, amountHint?: bigint): 
 /**
  * Build the full shareable claim URL for an ephemeral mnemonic.
  *
- * @param origin      e.g. `https://wallet.botho.io` (no trailing slash needed)
+ * @param origin      e.g. `https://botho.io` (no trailing slash needed)
  * @param mnemonic    the ephemeral 12-word mnemonic
  * @param amountHint  optional cosmetic picocredit hint
  */

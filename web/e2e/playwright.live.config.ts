@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
 /**
- * Live-smoke Playwright config — runs the deployed wallet (wallet.botho.io) +
+ * Live-smoke Playwright config — runs the deployed wallet (botho.io) +
  * the LIVE testnet, NOT a local build/mock.
  *
  * This is SEPARATE from playwright.config.ts on purpose:
@@ -17,10 +17,10 @@ import { defineConfig, devices } from '@playwright/test'
  *     BOTHO_LIVE=1 npx playwright test --config e2e/playwright.live.config.ts
  *
  * Override the target deployment with BOTHO_LIVE_URL (default
- * https://wallet.botho.io). This config is intentionally NOT wired into CI: it
+ * https://botho.io). This config is intentionally NOT wired into CI: it
  * hits live infrastructure and the faucet's rate limits.
  */
-const BASE_URL = process.env.BOTHO_LIVE_URL ?? 'https://wallet.botho.io'
+const BASE_URL = process.env.BOTHO_LIVE_URL ?? 'https://botho.io'
 
 export default defineConfig({
   testDir: './tests/live',
