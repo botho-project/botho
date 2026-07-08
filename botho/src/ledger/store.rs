@@ -134,15 +134,27 @@ fn check_cluster_tag_inheritance(
     // member mass. The real input is one member of its ring, so its cluster
     // mass is at most the ring's maximum for that cluster — a sound upper
     // bound that does not carry the old `ring_size` inflation multiplier.
+    //
+    // The maximum is taken over MEMBERS, and a single member's cluster mass is
+    // the SUM of that member's entries for the cluster. Computing the
+    // per-member mass first (rather than folding the max over raw entries)
+    // keeps the bound correct — and never too low, which would false-reject a
+    // valid block — even if a member's tag vector were to carry duplicate
+    // cluster-id entries. We do not depend on the tag-vector uniqueness
+    // invariant here: this is a consensus liveness property.
     let mut input_masses: BTreeMap<u64, u128> = BTreeMap::new();
     for ring in input_rings {
-        // Per-cluster mass of each member in this ring, then take the max per
-        // cluster across the ring's members and add it to the running bound.
         let mut ring_max: BTreeMap<u64, u128> = BTreeMap::new();
         for (tags, value) in ring {
+            // This member's total mass per cluster (sum of its own entries).
+            let mut member_mass: BTreeMap<u64, u128> = BTreeMap::new();
             for entry in &tags.entries {
                 let mass = (*value as u128) * (entry.weight as u128) / (TAG_WEIGHT_SCALE as u128);
-                let slot = ring_max.entry(entry.cluster_id.0).or_insert(0);
+                *member_mass.entry(entry.cluster_id.0).or_insert(0) += mass;
+            }
+            // Fold this member into the ring's per-cluster maximum.
+            for (cluster, mass) in member_mass {
+                let slot = ring_max.entry(cluster).or_insert(0);
                 *slot = (*slot).max(mass);
             }
         }
@@ -4716,7 +4728,7 @@ mod tests {
     /// inputs are NOT false-rejected (liveness).
     #[test]
     fn check_cluster_tag_inheritance_per_ring_max_bound() {
-        use bth_transaction_types::ClusterId;
+        use bth_transaction_types::{ClusterId, ClusterTagEntry};
 
         // (a) One ring of THREE cluster-1 decoys, each mass 1_000_000. The old
         // bound summed to 3_000_000; the per-ring maximum is 1_000_000. An
@@ -4774,6 +4786,31 @@ mod tests {
         assert!(
             check_cluster_tag_inheritance(&bg_input_one_decoy, &over).is_err(),
             "output above the single decoy's cluster-1 mass must be rejected"
+        );
+
+        // (d) Liveness under a duplicate-cluster-id member: a single member
+        // whose tag vector carries cluster 1 twice (weights 400_000 + 600_000)
+        // has cluster-1 mass 1_000_000 * (400_000 + 600_000) / SCALE =
+        // 1_000_000. The per-member SUM must be used for the max, so the
+        // ceiling is 1_000_000 and an output at 1_000_000 must PASS. A naive
+        // per-entry max would have used max(400_000, 600_000) = 600_000 and
+        // FALSE-REJECTED this valid tx — a consensus halt. We do not rely on
+        // the tag-vector uniqueness invariant here.
+        let mut dup_tags = ClusterTagVector::empty();
+        dup_tags.entries.push(ClusterTagEntry {
+            cluster_id: ClusterId(1),
+            weight: 400_000,
+        });
+        dup_tags.entries.push(ClusterTagEntry {
+            cluster_id: ClusterId(1),
+            weight: 600_000,
+        });
+        let dup_entry_member = vec![vec![(dup_tags, 1_000_000u64)]];
+        let at_full = vec![mk_tagged_output(1_000_000, 5, full_tag(1))];
+        assert!(
+            check_cluster_tag_inheritance(&dup_entry_member, &at_full).is_ok(),
+            "a member's duplicate cluster entries must SUM (per-member mass), \
+             not max — else a valid tx is false-rejected (#581 liveness)"
         );
     }
 
