@@ -143,22 +143,51 @@ Monetary reference & 5 seconds & Sustained-high-load level \\
   \item Combined structure requires both tiers for consensus
 \end{itemize}
 
-\subsubsection{Difficulty Adjustment Window: 144 Blocks}
+\subsubsection{Difficulty Adjustment: Per-Block, Time-Driven}
 
-\textbf{Why 144?}
+The live difficulty controller is \texttt{block::difficulty::EmissionController},
+whose \texttt{record\_block} path retargets difficulty \emph{every block} rather
+than on a fixed multi-block window. Each block, the controller compares the
+observed inter-block time against the target
+(\texttt{TARGET\_BLOCK\_TIME\_SECS} $= 5$\,s) and applies one integer,
+basis-point (\texttt{u128}) adjustment step. There is no accumulate-then-retarget
+epoch: the retarget cadence \emph{is} the block cadence.
+
+\textbf{Why per-block time-driven?}
 \begin{itemize}
-  \item At the 5\,s reference block time, represents $\sim$12 minutes
-  \item Long enough to smooth variance in block times
-  \item Short enough to respond to hashrate changes
-  \item Same philosophy as Bitcoin's 2016-block window scaled to block time
+  \item Responds to hashrate changes within a single block instead of waiting
+    for a window to fill
+  \item Driven purely by observed block time, not transaction count, so a
+    producer cannot skew difficulty by stuffing or starving blocks (M5, \#554)
+  \item Consensus-critical: all math is integer basis-point arithmetic
+    (no \texttt{f64}), so every node computes the identical difficulty
+    (\texttt{RATIO\_SCALE} $= 10{,}000$; audit cycle-6 C5, \#552)
 \end{itemize}
 
-\textbf{Adjustment bounds (0.5$\times$ to 2$\times$)}:
+\textbf{Per-block adjustment bounds (0.5$\times$ to 2$\times$)}:
 \begin{itemize}
-  \item Prevents oscillation from rapid hashrate changes
-  \item Allows recovery from 50\% hashrate drop in one window
-  \item Historical analysis shows changes $>$2$\times$ per window are rare
+  \item Each step is clamped to
+    $[\texttt{RATIO\_SCALE}/2,\ \texttt{MAX\_ADJUSTMENT\_FACTOR\_BPS}]
+    = [0.5\times,\ 2.0\times]$ per block
+  \item A single (consensus-bounded but loose) timestamp gap is additionally
+    capped at \texttt{MAX\_OBSERVED\_BLOCK\_TIME\_MULTIPLE} $= 12$ target
+    intervals ($\le 60$\,s at 5\,s target) before it feeds the controller
+  \item Prevents oscillation while still permitting recovery from a large
+    hashrate drop over a few consecutive blocks
 \end{itemize}
+
+\textbf{Note on the 17{,}280-block interval.} The
+\texttt{MonetaryPolicy.difficulty\_adjustment\_interval} field in
+\texttt{mainnet\_policy()} is set to $\texttt{BLOCKS\_PER\_YEAR}/365 = 17{,}280$
+blocks (one day at 5\,s). This is \emph{not} the live retarget cadence: it is
+consumed only by the simulation-tooling \texttt{DifficultyController} in the
+\texttt{cluster-tax} crate, which has no callers on the node's block path (the
+node's live controller is the per-block \texttt{EmissionController} above). The
+17{,}280 figure is a daily block count (it reappears as \texttt{blocks\_per\_day}
+in the halving derivation below), not a difficulty window. Prior revisions of
+this appendix cited a 144-block window (Bitcoin's 2016-block / $\sim$2-week
+retarget scaled to a $\sim$12-minute interval); no such constant exists in the
+Botho node, and it is dropped here as a stale port.
 
 \subsection{Economic Parameters}
 
