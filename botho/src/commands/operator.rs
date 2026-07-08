@@ -5,7 +5,9 @@
 //! read_token_secret` in the node's config file and prints the dashboard URL
 //! the operator opens:
 //!
-//!     https://<dashboard>/operator#token=op.<exp>.<hmac>
+//! ```text
+//! https://<dashboard>/operator#token=op.<exp>.<hmac>
+//! ```
 //!
 //! The token is a bearer credential granting READS ONLY (per-peer gate
 //! classification, configured quorum contents, audit log) — it can never
