@@ -545,7 +545,7 @@ pub struct FaucetRequestResult {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NetworkFeeRate {
-    /// Current base fee rate in nanoBTH per byte.
+    /// Current base fee rate in picocredits per byte.
     pub base_rate: u64,
 
     /// Minimum possible base rate (floor).

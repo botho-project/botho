@@ -114,7 +114,8 @@ impl TagVector {
     /// - `incoming`: tag vector of incoming coins
     /// - `incoming_value`: value of incoming coins
     pub fn mix(&mut self, self_value: u64, incoming: &TagVector, incoming_value: u64) {
-        let total_value = self_value + incoming_value;
+        // u128: two u64 values can sum past u64::MAX.
+        let total_value = self_value as u128 + incoming_value as u128;
         if total_value == 0 {
             return;
         }
@@ -127,14 +128,22 @@ impl TagVector {
             }
         }
 
-        // Compute weighted average for each cluster
+        // Compute weighted average for each cluster.
+        //
+        // Widened to u128 (#694): at picocredit scale a value can exceed
+        // u64::MAX / TAG_WEIGHT_SCALE (~1.84e13 picocredits ≈ 18.4 BTH), so
+        // `value * weight` must not be computed in u64. The result is a
+        // weighted average of weights (<= TAG_WEIGHT_SCALE), so it always fits
+        // TagWeight; the wider intermediate changes no result that did not
+        // previously overflow.
         for cluster in all_clusters {
-            let self_weight = self.get(cluster) as u64;
-            let incoming_weight = incoming.get(cluster) as u64;
+            let self_weight = self.get(cluster) as u128;
+            let incoming_weight = incoming.get(cluster) as u128;
 
             // new_weight = (self_value * self_weight + incoming_value * incoming_weight) /
             // total_value
-            let numerator = self_value * self_weight + incoming_value * incoming_weight;
+            let numerator =
+                self_value as u128 * self_weight + incoming_value as u128 * incoming_weight;
             let new_weight = (numerator / total_value) as TagWeight;
 
             self.set(cluster, new_weight);

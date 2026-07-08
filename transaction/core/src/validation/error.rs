@@ -176,7 +176,7 @@ pub enum TransactionValidationError {
     /// cluster_wealth {cluster_wealth}
     #[cfg(feature = "cluster-tax")]
     InsufficientClusterFee {
-        /// Required minimum fee in nanoBTH
+        /// Required minimum fee in picocredits
         required: u64,
         /// Actual fee declared in transaction
         actual: u64,

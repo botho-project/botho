@@ -340,9 +340,13 @@ pub fn run_simulation(
                         let final_rate = agents[sender_idx]
                             .effective_fee_rate(&state.cluster_wealth, &config.fee_curve);
 
-                        // Calculate if it was worth it
+                        // Calculate if it was worth it. i128 intermediate
+                        // (#694): pico-scale amounts × bps can exceed
+                        // i64::MAX; the divided result fits i64 at sim scale.
                         let rate_reduction = initial_rate as i64 - final_rate as i64;
-                        let savings_per_tx = rate_reduction as i64 * amount as i64 / 10_000;
+                        let savings_per_tx = (rate_reduction as i128 * amount as i128 / 10_000)
+                            .clamp(i64::MIN as i128, i64::MAX as i128)
+                            as i64;
                         let net_savings = savings_per_tx - total_wash_fees as i64;
 
                         metrics.record_wash_trade(total_wash_fees, net_savings);

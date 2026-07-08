@@ -205,36 +205,36 @@ pub const MAX_TOMBSTONE_BLOCKS: u64 = 20160;
 pub const PHASE1_BTH_DISTRIBUTION: u64 = 100_000_000;
 
 // =============================================================================
-// BTH Unit System
+// BTH Unit System (single unit: picocredits, decision #649)
 // =============================================================================
 //
 // BTH uses a 12-decimal precision system for maximum accounting accuracy.
-// The smallest unit is the "picocredit" (10^-12 BTH).
+// The one and only base unit is the "picocredit" (10^-12 BTH). Every amount
+// below the UI edge — transaction amounts, fees, fee curves, cluster wealth,
+// emission/monetary policy — is denominated in picocredits. Formatting into
+// BTH happens only in display components.
+//
+// (The former two-tier system, with a separate nanoBTH fee/display tier, was
+// retired by #694 per the #649 decision: it was the root of a recurring
+// unit-confusion bug class — see #626/#628.)
 //
 // Unit Hierarchy (all relative to picocredits):
-//   1 picocredit    = 1                    (smallest, internal base unit)
-//   1 nanoBTH       = 1,000 picocredits    (10^-9 BTH, fee display unit)
+//   1 picocredit    = 1                     (the base unit)
 //   1 microBTH      = 1,000,000 picocredits (10^-6 BTH)
 //   1 milliBTH      = 1,000,000,000 picocredits (10^-3 BTH)
 //   1 BTH           = 1,000,000,000,000 picocredits (10^12)
 //
-// Two-Tier Usage:
-//   - Picocredits (10^12): Internal transaction amounts, bridge contracts
-//   - NanoBTH (10^9): Fee calculations, user-facing display, cluster-tax
-//
-// The conversion factor is: 1 nanoBTH = 1,000 picocredits
-//
 // Overflow Safety:
-//   - 100M BTH at year 10 = 10^20 picocredits
-//   - Using u64 for picocredits: u64::MAX / 10^20 ≈ 184x max growth
-//   - At 2% annual inflation: (1.02)^263 ≈ 184x is the limit
-//   - Safe for ~260 years after Phase 1 (~270 years from genesis)
+//   - Individual transaction amounts stay in u64: u64::MAX ≈ 1.84 × 10^19
+//     picocredits ≈ 18.4M BTH per amount.
+//   - Aggregate supply exceeds u64 (100M BTH = 10^20 picocredits), so supply
+//     accounting is u128 throughout the node (issues #333/#626).
 
 // -----------------------------------------------------------------------------
-// Picocredit-based constants (internal precision, 12 decimals)
+// Picocredit constants (12-decimal precision)
 // -----------------------------------------------------------------------------
 
-/// One BTH = 10^12 picocredits (internal base unit)
+/// One BTH = 10^12 picocredits (the base unit)
 pub const BTH_TO_PICOCREDITS: u64 = 1_000_000_000_000;
 
 /// One milliBTH = 10^9 picocredits
@@ -242,22 +242,6 @@ pub const MILLIBTH_TO_PICOCREDITS: u64 = 1_000_000_000;
 
 /// One microBTH = 10^6 picocredits
 pub const MICROBTH_TO_PICOCREDITS: u64 = 1_000_000;
-
-/// One nanoBTH = 10^3 picocredits (conversion between fee and amount systems)
-pub const NANOBTH_TO_PICOCREDITS: u64 = 1_000;
-
-// -----------------------------------------------------------------------------
-// NanoBTH-based constants (fee/display precision, 9 decimals)
-// -----------------------------------------------------------------------------
-
-/// One microBTH = 10^3 nanoBTH
-pub const MICROBTH_TO_NANOBTH: u64 = 1_000;
-
-/// One milliBTH = 10^6 nanoBTH
-pub const MILLIBTH_TO_NANOBTH: u64 = 1_000_000;
-
-/// One BTH = 10^9 nanoBTH
-pub const BTH_TO_NANOBTH: u64 = 1_000_000_000;
 
 /// Blinding for the implicit fee outputs.
 pub const FEE_BLINDING: Scalar = Scalar::ZERO;
@@ -417,102 +401,27 @@ mod tests {
     }
 
     #[test]
-    fn test_microbth_to_nanobth() {
-        // 1 microBTH = 1e3 nanoBTH
-        assert_eq!(MICROBTH_TO_NANOBTH, 1_000);
-    }
-
-    #[test]
-    fn test_millibth_to_nanobth() {
-        // 1 milliBTH = 1e6 nanoBTH
-        assert_eq!(MILLIBTH_TO_NANOBTH, 1_000_000);
-        // milliBTH should be 1000x microBTH
-        assert_eq!(MILLIBTH_TO_NANOBTH, MICROBTH_TO_NANOBTH * 1000);
-    }
-
-    #[test]
-    fn test_bth_to_nanobth() {
-        // 1 BTH = 1e9 nanoBTH
-        assert_eq!(BTH_TO_NANOBTH, 1_000_000_000);
-        // BTH should be 1000x milliBTH
-        assert_eq!(BTH_TO_NANOBTH, MILLIBTH_TO_NANOBTH * 1000);
-    }
-
-    #[test]
     fn test_fee_blinding() {
         // Fee blinding should be zero (fees are public)
         assert_eq!(FEE_BLINDING, Scalar::ZERO);
     }
 
     #[test]
-    fn test_unit_conversions_consistency() {
-        // Verify unit conversion relationships
-        // 1 BTH = 1e9 nanoBTH
-        assert_eq!(BTH_TO_NANOBTH, 1_000_000_000u64);
-
-        // Phase 1 distribution in nanoBTH should NOT overflow u64
-        let phase1_nanobth = PHASE1_BTH_DISTRIBUTION.checked_mul(BTH_TO_NANOBTH);
-        assert!(
-            phase1_nanobth.is_some(),
-            "Phase 1 distribution in nanoBTH fits in u64"
-        );
-        assert_eq!(phase1_nanobth.unwrap(), 100_000_000_000_000_000u64); // 10^17
-
-        // With 2% annual inflation over 100 years from year 10 (~7.24x), still fits
-        // (1.02)^100 ≈ 7.244
-        let max_inflated_supply = (phase1_nanobth.unwrap() as f64 * 7.244) as u64;
-        assert!(
-            max_inflated_supply < u64::MAX,
-            "100-year inflated supply fits in u64"
-        );
-    }
-
-    #[test]
     fn test_inflation_headroom() {
-        // Verify we have headroom for 2% annual inflation over 250+ years
-        // Starting from 100M BTH at end of Phase 1
-        let phase1_supply_nanobth = PHASE1_BTH_DISTRIBUTION as u128 * BTH_TO_NANOBTH as u128;
+        // Verify u128 supply accounting has headroom for 2% annual inflation
+        // over 250+ years, starting from 100M BTH at end of Phase 1.
+        // (Supply-scale quantities are u128 in the node — #333/#626 — because
+        // 100M BTH = 10^20 picocredits already exceeds u64::MAX.)
+        let phase1_supply_pico = PHASE1_BTH_DISTRIBUTION as u128 * BTH_TO_PICOCREDITS as u128;
 
-        // (1.02)^100 ≈ 7.244
-        let inflation_factor_100y = 7244u128; // scaled by 1000
-        let supply_100y = phase1_supply_nanobth * inflation_factor_100y / 1000;
+        // (1.02)^250 ≈ 144.2 (scaled by 1000)
+        let supply_250y = phase1_supply_pico * 144_210 / 1_000;
 
-        // (1.02)^200 ≈ 52.5
-        let inflation_factor_200y = 52485u128; // scaled by 1000
-        let supply_200y = phase1_supply_nanobth * inflation_factor_200y / 1000;
-
-        // (1.02)^250 ≈ 144.2
-        let inflation_factor_250y = 144210u128; // scaled by 1000
-        let supply_250y = phase1_supply_nanobth * inflation_factor_250y / 1000;
-
+        // ~1.44e22 picocredits — u128 (max ~3.4e38) has ~16 orders of
+        // magnitude of headroom beyond that.
         assert!(
-            supply_100y < u64::MAX as u128,
-            "100-year supply fits in u64"
-        );
-        assert!(
-            supply_200y < u64::MAX as u128,
-            "200-year supply fits in u64"
-        );
-        assert!(
-            supply_250y < u64::MAX as u128,
-            "250-year supply fits in u64"
-        );
-
-        // Calculate the theoretical maximum years before overflow
-        // max_multiplier = u64::MAX / phase1_supply_nanobth
-        //                = 1.84e19 / 1e17 = 184
-        // (1.02)^x = 184 → x = ln(184) / ln(1.02) ≈ 263 years
-        //
-        // So we're safe for ~260 years after Phase 1 (year 10)
-        // That means safe until approximately year 270 from genesis
-        let max_safe_multiplier = u64::MAX as u128 / phase1_supply_nanobth;
-        assert!(
-            max_safe_multiplier > 100,
-            "At least 100x growth capacity (>230 years)"
-        );
-        assert!(
-            max_safe_multiplier > 180,
-            "At least 180x growth capacity (>260 years)"
+            supply_250y < u128::MAX / 1_000_000_000_000,
+            "250-year supply must fit u128 with ample headroom"
         );
     }
 
@@ -605,47 +514,25 @@ mod tests {
     }
 
     #[test]
-    fn test_nanobth_to_picocredits() {
-        // 1 nanoBTH = 10^3 picocredits
-        assert_eq!(NANOBTH_TO_PICOCREDITS, 1_000);
-        // nanoBTH should be 1/1000 of microBTH
-        assert_eq!(NANOBTH_TO_PICOCREDITS * 1000, MICROBTH_TO_PICOCREDITS);
-    }
-
-    #[test]
-    fn test_picocredit_nanobth_consistency() {
-        // Verify: 1 BTH = 10^9 nanoBTH = 10^12 picocredits
-        // Therefore: 1 nanoBTH = 1000 picocredits
-        assert_eq!(
-            BTH_TO_PICOCREDITS,
-            BTH_TO_NANOBTH * NANOBTH_TO_PICOCREDITS,
-            "BTH conversion should be consistent between picocredits and nanoBTH"
-        );
-    }
-
-    #[test]
     fn test_picocredit_supply_limits() {
         // Phase 1 distributes 100M BTH.
-        // In picocredits: 100M * 10^12 = 10^20, which overflows u64 (max ~1.84 * 10^19)
-        // In nanoBTH: 100M * 10^9 = 10^17, which fits in u64
+        // In picocredits: 100M * 10^12 = 10^20, which overflows u64
+        // (max ~1.84 * 10^19).
         //
-        // This is why supply tracking uses nanoBTH, not picocredits.
-        // Picocredits are used for individual transaction amounts (much smaller).
+        // This is why aggregate supply tracking is u128 in the node
+        // (#333/#626), while individual transaction amounts (much smaller)
+        // stay in u64 picocredits.
 
-        // Verify Phase 1 fits in nanoBTH
-        let phase1_nanobth = PHASE1_BTH_DISTRIBUTION.checked_mul(BTH_TO_NANOBTH);
-        assert!(
-            phase1_nanobth.is_some(),
-            "Phase 1 distribution fits in u64 nanoBTH"
-        );
-        assert_eq!(phase1_nanobth.unwrap(), 100_000_000_000_000_000u64); // 10^17
-
-        // Verify Phase 1 overflows in picocredits (expected behavior)
+        // Verify Phase 1 overflows u64 in picocredits (expected behavior)
         let phase1_picocredits = PHASE1_BTH_DISTRIBUTION.checked_mul(BTH_TO_PICOCREDITS);
         assert!(
             phase1_picocredits.is_none(),
             "Phase 1 in picocredits overflows u64 (expected)"
         );
+
+        // And fits comfortably in u128.
+        let phase1_pico_u128 = PHASE1_BTH_DISTRIBUTION as u128 * BTH_TO_PICOCREDITS as u128;
+        assert_eq!(phase1_pico_u128, 100_000_000_000_000_000_000u128); // 10^20
     }
 
     #[test]

@@ -158,16 +158,25 @@ pub fn execute_transfer(
     transferred_tags.apply_decay(config.decay_rate);
 
     // 4. Update cluster wealth (before mixing, to reflect decay)
-    // The sender's contribution to each cluster decreases
+    // The sender's contribution to each cluster decreases.
+    //
+    // The `value * weight` intermediates are computed in i128 (#694): at
+    // picocredit scale an amount can exceed i64::MAX / TAG_WEIGHT_SCALE, so
+    // the former i64 multiply could overflow. The divided mass is <= amount,
+    // so it fits back into i64 for all simulation magnitudes; clamp defends
+    // the (unreachable at sim scale) amount > i64::MAX case. The wider
+    // intermediate changes no result that did not previously overflow.
     for (cluster, weight) in sender.tags.iter() {
         // Mass leaving sender for this cluster
-        let mass_leaving = amount as i64 * weight as i64 / TAG_WEIGHT_SCALE as i64;
+        let mass_leaving = (amount as i128 * weight as i128 / TAG_WEIGHT_SCALE as i128)
+            .min(i64::MAX as i128) as i64;
         cluster_wealth.apply_delta(cluster, -mass_leaving);
     }
 
     // Mass arriving at receiver (after decay)
     for (cluster, weight) in transferred_tags.iter() {
-        let mass_arriving = net_amount as i64 * weight as i64 / TAG_WEIGHT_SCALE as i64;
+        let mass_arriving = (net_amount as i128 * weight as i128 / TAG_WEIGHT_SCALE as i128)
+            .min(i64::MAX as i128) as i64;
         cluster_wealth.apply_delta(cluster, mass_arriving);
     }
 

@@ -44,8 +44,8 @@ use crate::{
     MonetaryPolicy,
 };
 
-/// 1 BTH expressed in nanoBTH (the smallest unit used by the policy).
-const NANOBTH_PER_BTH: u128 = 1_000_000_000;
+/// 1 BTH expressed in picocredits (the base unit used by the policy, #649).
+const PICOCREDITS_PER_BTH: u128 = 1_000_000_000_000;
 
 /// Real-world blocks per year at 5-second blocks (issue #350 grid assumption).
 pub const BLOCKS_PER_YEAR: u64 = 6_307_200;
@@ -83,8 +83,8 @@ impl Schedule {
 /// real levers are `R0`, `H`, `K`, and the tail rate; the "100M vs 1.22B"
 /// framing is just the value of `H`.
 pub fn candidate_schedules() -> Vec<Schedule> {
-    // 50 BTH initial reward, in nanoBTH.
-    let r0: u64 = 50 * NANOBTH_PER_BTH as u64;
+    // 50 BTH initial reward, in picocredits.
+    let r0: u64 = 50 * PICOCREDITS_PER_BTH as u64;
 
     // Shared block-time / difficulty parameters: 5s blocks (mainnet timing).
     let base = MonetaryPolicy {
@@ -154,9 +154,9 @@ pub fn candidate_schedules() -> Vec<Schedule> {
 // Analytic monetary track (real-world scale, exact)
 // ===========================================================================
 
-/// Total Phase-1 supply (nanoBTH) emitted by `policy` over its real-world
+/// Total Phase-1 supply (picocredits) emitted by `policy` over its real-world
 /// halving schedule. Exact sum of `R0 >> h` over each halving epoch.
-pub fn phase1_supply_nanobth(policy: &MonetaryPolicy) -> u128 {
+pub fn phase1_supply_picocredits(policy: &MonetaryPolicy) -> u128 {
     let h = policy.halving_interval as u128;
     let r0 = policy.initial_reward as u128;
     let mut total = 0u128;
@@ -166,8 +166,8 @@ pub fn phase1_supply_nanobth(policy: &MonetaryPolicy) -> u128 {
     total
 }
 
-/// Cumulative supply (nanoBTH) emitted by the end of block `height` under the
-/// real-world schedule, including tail emission after Phase 1.
+/// Cumulative supply (picocredits) emitted by the end of block `height` under
+/// the real-world schedule, including tail emission after Phase 1.
 pub fn cumulative_supply_at(policy: &MonetaryPolicy, height: u64) -> u128 {
     let tail_start = policy.tail_emission_start_height();
     if height <= tail_start {
@@ -191,10 +191,12 @@ pub fn cumulative_supply_at(policy: &MonetaryPolicy, height: u64) -> u128 {
         }
         total
     } else {
-        let phase1 = phase1_supply_nanobth(policy);
-        // Tail reward is calibrated from supply at transition.
-        let tail_reward =
-            policy.calculate_tail_reward((phase1.min(u64::MAX as u128)) as u64) as u128;
+        let phase1 = phase1_supply_picocredits(policy);
+        // Tail reward is calibrated from supply at transition. Phase-1 supply
+        // in picocredits exceeds u64::MAX for every candidate schedule, so
+        // this MUST go through the u128 entry point — clamping to u64 would
+        // silently compute a wildly wrong tail reward (#694).
+        let tail_reward = policy.calculate_tail_reward_u128(phase1) as u128;
         let tail_blocks = (height - tail_start) as u128;
         phase1 + tail_blocks * tail_reward
     }
@@ -212,7 +214,7 @@ pub fn early_issuance_share(policy: &MonetaryPolicy, frac: f64) -> f64 {
     }
     let cutoff = (tail_start as f64 * frac).round() as u64;
     let early = cumulative_supply_at(policy, cutoff) as f64;
-    let total = phase1_supply_nanobth(policy) as f64;
+    let total = phase1_supply_picocredits(policy) as f64;
     if total == 0.0 {
         0.0
     } else {
@@ -224,7 +226,7 @@ pub fn early_issuance_share(policy: &MonetaryPolicy, frac: f64) -> f64 {
 /// simulated/real year `year`.
 pub fn pct_issued_by_year(policy: &MonetaryPolicy, year: u64) -> f64 {
     let height = year.saturating_mul(BLOCKS_PER_YEAR);
-    let total = phase1_supply_nanobth(policy) as f64;
+    let total = phase1_supply_picocredits(policy) as f64;
     if total == 0.0 {
         return 0.0;
     }
@@ -241,11 +243,13 @@ pub fn pct_issued_by_year(policy: &MonetaryPolicy, year: u64) -> f64 {
 /// gross tail emission rate. The net rate is lower by the fee-burn rate; the
 /// policy targets `tail_inflation_bps` net, so we report both.
 pub fn steady_state_inflation_pct(policy: &MonetaryPolicy) -> (f64, f64) {
-    let supply = phase1_supply_nanobth(policy);
+    let supply = phase1_supply_picocredits(policy);
     if supply == 0 {
         return (0.0, 0.0);
     }
-    let tail_reward = policy.calculate_tail_reward((supply.min(u64::MAX as u128)) as u64) as f64;
+    // See cumulative_supply_at: pico-scale supplies exceed u64::MAX, so the
+    // u128 entry point is required for a correct tail reward.
+    let tail_reward = policy.calculate_tail_reward_u128(supply) as f64;
     let gross_annual = tail_reward * BLOCKS_PER_YEAR as f64;
     let gross_pct = gross_annual / supply as f64 * 100.0;
     let net_pct = policy.tail_inflation_bps as f64 / 100.0; // bps -> %
@@ -271,7 +275,7 @@ pub fn monetary_metrics(schedule: &Schedule) -> MonetaryMetrics {
     let policy = &schedule.policy;
     let (gross, net) = steady_state_inflation_pct(policy);
     MonetaryMetrics {
-        total_supply_bth: phase1_supply_nanobth(policy) as f64 / NANOBTH_PER_BTH as f64,
+        total_supply_bth: phase1_supply_picocredits(policy) as f64 / PICOCREDITS_PER_BTH as f64,
         time_to_tail_years: schedule.time_to_tail_years(),
         early_share_10pct: early_issuance_share(policy, 0.10),
         early_share_25pct: early_issuance_share(policy, 0.25),
@@ -438,7 +442,7 @@ pub struct DistributionMetrics {
     pub gini_trajectory: Vec<(u64, f64)>,
     pub final_top_1_pct: f64,
     pub final_top_10_pct: f64,
-    /// Total block subsidy emitted over the run (nanoBTH-scale sim units).
+    /// Total block subsidy emitted over the run (picocredit-scale sim units).
     pub subsidy_emitted: u128,
     /// Total fees burned/recycled over the run.
     pub fees_recycled: u128,
@@ -521,8 +525,8 @@ pub fn run_schedule(
         0.0
     };
     // Turnover expressed as transactions per 1M BTH of final supply, so the
-    // figure is readable at nanoBTH scale (raw tx/nanoBTH is ~1e-12).
-    let supply_in_million_bth = final_supply as f64 / NANOBTH_PER_BTH as f64 / 1.0e6;
+    // figure is readable at picocredit scale (raw tx/picocredit is tiny).
+    let supply_in_million_bth = final_supply as f64 / PICOCREDITS_PER_BTH as f64 / 1.0e6;
     let turnover_per_supply = if supply_in_million_bth > 0.0 {
         tx_count as f64 / supply_in_million_bth
     } else {
@@ -745,7 +749,7 @@ agent RNG is seeded from agent IDs, so the run is reproducible.\n\n",
             "- **{}** ({}): R0={} BTH, H={} blocks (~{:.2} yr), K={}, tail={}bps.\n",
             sch.id,
             sch.label,
-            sch.policy.initial_reward / NANOBTH_PER_BTH as u64,
+            sch.policy.initial_reward / PICOCREDITS_PER_BTH as u64,
             sch.policy.halving_interval,
             sch.policy.halving_interval as f64 / BLOCKS_PER_YEAR as f64,
             sch.policy.halving_count,

@@ -118,8 +118,8 @@ async fn run_classical(
     apply_pending_change_tags(&mut utxos, &mut pending_tags);
 
     // Calculate progressive fee using cluster-tax model
-    // Use default base rate of 1 nanoBTH/byte (dynamic rate would come from
-    // network)
+    // Use default base rate of 1 picocredit/byte (dynamic rate would come
+    // from network)
     let fee_estimator = FeeEstimator::new();
 
     // Select UTXOs that would be used for this transaction (preview selection)

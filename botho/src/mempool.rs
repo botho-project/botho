@@ -525,7 +525,7 @@ impl Mempool {
             .update(tx_count, max_tx_count, at_min_block_time)
     }
 
-    /// Get the current dynamic fee base (in nanoBTH per byte)
+    /// Get the current dynamic fee base (in picocredits per byte)
     pub fn current_fee_base(&self) -> u64 {
         self.dynamic_fee.compute_base(self.at_min_block_time)
     }
@@ -552,7 +552,7 @@ impl Mempool {
     /// * `num_memos` - Number of outputs with memos
     ///
     /// # Returns
-    /// The minimum fee in nanoBTH
+    /// The minimum fee in picocredits
     pub fn estimate_fee(&self, tx_type: FeeTransactionType, _amount: u64, num_memos: usize) -> u64 {
         // Use 0 for estimation - wallets should use Wallet::compute_cluster_wealth()
         // and call suggest_fees() with their actual cluster wealth for accurate
@@ -598,7 +598,7 @@ impl Mempool {
     ///   cluster_getWealthByTargetKeys
     ///
     /// # Returns
-    /// Estimated fee in nanoBTH including cluster factor multiplier
+    /// Estimated fee in picocredits including cluster factor multiplier
     pub fn estimate_fee_with_wealth(
         &self,
         tx_type: FeeTransactionType,

@@ -19,7 +19,7 @@ pub trait Token {
 /// external.proto
 pub mod tokens {
     use super::*;
-    use crate::constants::MICROBTH_TO_NANOBTH;
+    use crate::constants::MICROBTH_TO_PICOCREDITS;
 
     /// The BTH token.
     pub struct Bth;
@@ -27,15 +27,16 @@ pub mod tokens {
         /// Token Id.
         const ID: TokenId = TokenId::BTH;
 
-        /// Minimum fee, denominated in nanoBTH.
-        const MINIMUM_FEE: u64 = 400 * MICROBTH_TO_NANOBTH;
+        /// Minimum fee, denominated in picocredits (#694; formerly the same
+        /// 400 microBTH expressed in nanoBTH).
+        const MINIMUM_FEE: u64 = 400 * MICROBTH_TO_PICOCREDITS;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constants::MICROBTH_TO_NANOBTH;
+    use crate::constants::MICROBTH_TO_PICOCREDITS;
 
     #[test]
     fn test_bth_token_id() {
@@ -44,9 +45,13 @@ mod tests {
 
     #[test]
     fn test_bth_minimum_fee() {
-        // Minimum fee should be 400 microBTH in nanoBTH
-        let expected_fee = 400 * MICROBTH_TO_NANOBTH;
+        // Minimum fee should be 400 microBTH in picocredits.
+        let expected_fee = 400 * MICROBTH_TO_PICOCREDITS;
         assert_eq!(tokens::Bth::MINIMUM_FEE, expected_fee);
+        // Pin the BTH-denominated value across the #694 re-denomination:
+        // 400 microBTH = 0.0004 BTH = 400,000,000 picocredits (raw value
+        // scaled x1000 from the former 400,000 nanoBTH; identical in BTH).
+        assert_eq!(tokens::Bth::MINIMUM_FEE, 400_000_000);
     }
 
     #[test]
