@@ -65,7 +65,8 @@ fn first_stale_transfer_tx(block: &Block) -> Option<usize> {
 /// supply — which `decay_rate = 0` captures exactly.
 const CONSENSUS_TAG_DECAY_RATE: u32 = 0;
 
-/// Cluster-tag inflation guard (issue #576, decomposition item H2-B3).
+/// Cluster-tag inflation guard (issue #576, decomposition item H2-B3;
+/// input-bound tightened in issue #581).
 ///
 /// Ports the integer/`BTreeMap` conservation-of-mass logic of
 /// `bth_transaction_core::validation::validate_cluster_tag_inheritance` to the
@@ -77,12 +78,33 @@ const CONSENSUS_TAG_DECAY_RATE: u32 = 0;
 /// exactly as in the upstream validator (they may arise from background
 /// attribution).
 ///
-/// `input_tagged` is the set of `(tags, value)` pairs resolved from the
-/// transaction's ring members against the committed UTXO set. The real input is
-/// hidden among decoys, so the resolved ring members are the only node-agnostic
-/// input set available; since the real inputs are a subset of the ring,
-/// ring-member mass is an upper bound on the true input mass and the guard
-/// therefore never false-rejects a valid block.
+/// # Input bound: per-ring maximum, not global sum (issue #581)
+///
+/// `input_rings` is the set of resolved `(tags, value)` members grouped **by
+/// ring** — one inner slice per transaction input. Exactly one member of each
+/// ring is the real spent input; the rest are decoys. The node cannot tell
+/// which, so it needs a node-agnostic upper bound on the real input's
+/// per-cluster mass.
+///
+/// The bound used is, per cluster `c`,
+/// `Σ over rings ( max over that ring's members of member.mass(c) )`.
+/// Since the real input is one member of its ring, its cluster-`c` mass is
+/// `≤` that ring's maximum, so the sum-of-per-ring-maxima is a valid upper
+/// bound and the guard **never false-rejects a valid block** (liveness-safe).
+/// It is also the *tightest* sound node-agnostic bound: a ring's contribution
+/// cannot be lowered below its maximum without risking a false-reject in the
+/// case where the real input *is* the maximum member.
+///
+/// This replaces the original bound (`Σ over ALL ring members`), which let an
+/// attacker sourcing real cluster-`c`-tagged UTXOs as decoys inflate cluster
+/// `c`'s ceiling to roughly `ring_size ×` the decoy mass and thereby attribute
+/// more cluster mass to their output than their real input supplied. The
+/// per-ring maximum removes the `ring_size` multiplier entirely: filling a
+/// ring with `R` cluster-`c` decoys of mass `M` now raises the ceiling to `M`,
+/// not `R·M`. The residual (a single decoy whose cluster-`c` mass exceeds the
+/// real input's) is bounded by one UTXO's mass and can only be closed by a
+/// consensus-visible binding to the real input (Phase-2 Pedersen-committed
+/// tags with ZK inheritance proofs; see `cluster_tags.rs`).
 ///
 /// Determinism (consensus fork safety): this is a pure function of the
 /// transaction plus committed UTXO state. All accumulation uses `BTreeMap`
@@ -92,7 +114,7 @@ const CONSENSUS_TAG_DECAY_RATE: u32 = 0;
 /// `f64`, and no node-local state enter the computation, so a proposer and a
 /// validator applying the same block reach an identical verdict.
 fn check_cluster_tag_inheritance(
-    input_tagged: &[(ClusterTagVector, u64)],
+    input_rings: &[Vec<(ClusterTagVector, u64)>],
     outputs: &[TxOutput],
 ) -> Result<(), LedgerError> {
     fn accumulate<'a>(
@@ -108,7 +130,39 @@ fn check_cluster_tag_inheritance(
         masses
     }
 
-    let input_masses = accumulate(input_tagged.iter().map(|(tags, value)| (*value, tags)));
+    // Input bound (#581): sum over rings of the per-ring, per-cluster MAXIMUM
+    // member mass. The real input is one member of its ring, so its cluster
+    // mass is at most the ring's maximum for that cluster — a sound upper
+    // bound that does not carry the old `ring_size` inflation multiplier.
+    //
+    // The maximum is taken over MEMBERS, and a single member's cluster mass is
+    // the SUM of that member's entries for the cluster. Computing the
+    // per-member mass first (rather than folding the max over raw entries)
+    // keeps the bound correct — and never too low, which would false-reject a
+    // valid block — even if a member's tag vector were to carry duplicate
+    // cluster-id entries. We do not depend on the tag-vector uniqueness
+    // invariant here: this is a consensus liveness property.
+    let mut input_masses: BTreeMap<u64, u128> = BTreeMap::new();
+    for ring in input_rings {
+        let mut ring_max: BTreeMap<u64, u128> = BTreeMap::new();
+        for (tags, value) in ring {
+            // This member's total mass per cluster (sum of its own entries).
+            let mut member_mass: BTreeMap<u64, u128> = BTreeMap::new();
+            for entry in &tags.entries {
+                let mass = (*value as u128) * (entry.weight as u128) / (TAG_WEIGHT_SCALE as u128);
+                *member_mass.entry(entry.cluster_id.0).or_insert(0) += mass;
+            }
+            // Fold this member into the ring's per-cluster maximum.
+            for (cluster, mass) in member_mass {
+                let slot = ring_max.entry(cluster).or_insert(0);
+                *slot = (*slot).max(mass);
+            }
+        }
+        for (cluster, mass) in ring_max {
+            *input_masses.entry(cluster).or_insert(0) += mass;
+        }
+    }
+
     let output_masses = accumulate(outputs.iter().map(|o| (o.amount, &o.cluster_tags)));
 
     let decay_factor = TAG_WEIGHT_SCALE.saturating_sub(CONSENSUS_TAG_DECAY_RATE) as u128;
@@ -1626,16 +1680,22 @@ impl Ledger {
     /// input is hidden among the decoys — and the real inputs are a subset of
     /// the ring, so this never false-rejects a valid block. See the
     /// determinism note on [`check_cluster_tag_inheritance`].
+    ///
+    /// Members are grouped **per ring** (#581): the tag-inheritance bound uses
+    /// the sum over rings of each ring's per-cluster maximum member mass, so
+    /// the input structure must preserve which members belong to which input.
     fn verify_cluster_tag_inheritance(&self, tx: &BothoTransaction) -> Result<(), LedgerError> {
-        let mut input_tagged: Vec<(ClusterTagVector, u64)> = Vec::new();
+        let mut input_rings: Vec<Vec<(ClusterTagVector, u64)>> = Vec::new();
         for input in tx.inputs.clsag() {
+            let mut ring: Vec<(ClusterTagVector, u64)> = Vec::new();
             for member in &input.ring {
                 if let Some(utxo) = self.get_utxo_by_target_key(&member.target_key)? {
-                    input_tagged.push((utxo.output.cluster_tags.clone(), utxo.output.amount));
+                    ring.push((utxo.output.cluster_tags.clone(), utxo.output.amount));
                 }
             }
+            input_rings.push(ring);
         }
-        check_cluster_tag_inheritance(&input_tagged, &tx.outputs)
+        check_cluster_tag_inheritance(&input_rings, &tx.outputs)
     }
 
     /// H1-B4 (issue #578, design #574): reject a transfer tx whose `fee` is
@@ -4531,10 +4591,10 @@ mod tests {
     fn check_cluster_tag_inheritance_rejects_inflation_accepts_decay() {
         use bth_transaction_types::ClusterId;
 
-        // Input: 1_000_000 picocredits fully attributed to cluster 1.
-        //   input mass(cluster 1) = 1_000_000 * 1_000_000 / TAG_WEIGHT_SCALE
-        //                         = 1_000_000.
-        let inputs = vec![(full_tag(1), 1_000_000u64)];
+        // One ring, one member: 1_000_000 picocredits fully attributed to
+        // cluster 1. input mass(cluster 1) = 1_000_000 * 1_000_000 /
+        // TAG_WEIGHT_SCALE = 1_000_000 (per-ring max over a single member).
+        let inputs = vec![vec![(full_tag(1), 1_000_000u64)]];
 
         // Legitimate: a decayed inheritance — fee burned, weight decayed to
         // 95%. Output mass = 990_000 * 950_000 / 1_000_000 = 940_500 <= input
@@ -4577,9 +4637,11 @@ mod tests {
         let ledger = Ledger::open(dir.path()).unwrap();
 
         // Two on-chain UTXOs, each 1_000_000 fully attributed to cluster 1.
-        // The transaction's ring references both; resolved cluster-1 input mass
-        // is therefore 2_000_000 (real input ⊆ ring, so this is an upper bound
-        // on the true input mass and never false-rejects).
+        // The transaction's single ring references both. Under the #581
+        // per-ring-maximum bound the resolved cluster-1 input ceiling is
+        // max(1_000_000, 1_000_000) = 1_000_000 — NOT the old sum of
+        // 2_000_000. This is exactly the decoy-inflation shape: one real
+        // 1_000_000 input plus one cluster-1 decoy of equal mass.
         let utxo_outputs = [
             mk_tagged_output(1_000_000, 10, full_tag(1)),
             mk_tagged_output(1_000_000, 20, full_tag(1)),
@@ -4609,7 +4671,7 @@ mod tests {
             pseudo_output_amount: 0,
         };
 
-        // Conserving: output mass 1_000_000 <= resolved input mass 2_000_000.
+        // Conserving: output mass 1_000_000 <= per-ring-max ceiling 1_000_000.
         let legit_tx = Tx {
             inputs: TxInputs::new(vec![mk_input()]),
             outputs: vec![mk_tagged_output(1_000_000, 30, full_tag(1))],
@@ -4621,8 +4683,29 @@ mod tests {
             "a conserving tx must pass the ledger-resolved guard"
         );
 
-        // Inflated: output mass 3_000_000 > resolved input mass 2_000_000 +
-        // tolerance → rejected.
+        // Decoy-sourced inflation (#581 regression): output mass 2_000_000.
+        // Under the OLD sum-over-all-ring-members bound the ceiling was
+        // 2_000_000 and this PASSED — the attacker attributed 2_000_000 of
+        // cluster-1 mass to their output while spending a single 1_000_000
+        // real input, sourcing the extra ceiling from a cluster-1 decoy. Under
+        // the per-ring-maximum bound the ceiling is 1_000_000, so it is now
+        // REJECTED.
+        let decoy_inflated_tx = Tx {
+            inputs: TxInputs::new(vec![mk_input()]),
+            outputs: vec![mk_tagged_output(2_000_000, 35, full_tag(1))],
+            fee: 0,
+            created_at_height: 0,
+        };
+        let err = ledger
+            .verify_cluster_tag_inheritance(&decoy_inflated_tx)
+            .expect_err("decoy-sourced tag inflation must now be rejected (#581)");
+        assert!(
+            matches!(err, LedgerError::InvalidBlock(_)),
+            "decoy inflation must surface as InvalidBlock, got {:?}",
+            err
+        );
+
+        // Inflated well past any ceiling: output mass 3_000_000 → rejected.
         let inflated_tx = Tx {
             inputs: TxInputs::new(vec![mk_input()]),
             outputs: vec![mk_tagged_output(3_000_000, 40, full_tag(1))],
@@ -4636,6 +4719,98 @@ mod tests {
             matches!(err, LedgerError::InvalidBlock(_)),
             "inflation must surface as InvalidBlock, got {:?}",
             err
+        );
+    }
+
+    /// #581 pure-function coverage of the per-ring-maximum input bound:
+    /// (a) the ring-size inflation multiplier is gone, (b) multi-input
+    /// transactions that legitimately combine cluster mass from several real
+    /// inputs are NOT false-rejected (liveness).
+    #[test]
+    fn check_cluster_tag_inheritance_per_ring_max_bound() {
+        use bth_transaction_types::{ClusterId, ClusterTagEntry};
+
+        // (a) One ring of THREE cluster-1 decoys, each mass 1_000_000. The old
+        // bound summed to 3_000_000; the per-ring maximum is 1_000_000. An
+        // output claiming 3_000_000 of cluster-1 from this single ring (one
+        // real 1_000_000 input + two cluster-1 decoys) is rejected.
+        let one_ring_three_decoys = vec![vec![
+            (full_tag(1), 1_000_000u64),
+            (full_tag(1), 1_000_000u64),
+            (full_tag(1), 1_000_000u64),
+        ]];
+        let inflated = vec![mk_tagged_output(3_000_000, 1, full_tag(1))];
+        assert!(
+            check_cluster_tag_inheritance(&one_ring_three_decoys, &inflated).is_err(),
+            "ring-size-multiplied decoy inflation must be rejected (bound is the \
+             per-ring max 1_000_000, not the sum 3_000_000)"
+        );
+        // The same ring legitimately supports an output up to its 1_000_000
+        // ceiling.
+        let at_ceiling = vec![mk_tagged_output(1_000_000, 2, full_tag(1))];
+        assert!(
+            check_cluster_tag_inheritance(&one_ring_three_decoys, &at_ceiling).is_ok(),
+            "an output at the per-ring-max ceiling must pass"
+        );
+
+        // (b) Liveness: THREE separate rings, each a real 1_000_000 cluster-1
+        // input (single-member rings). The bound is the SUM of the per-ring
+        // maxima = 3_000_000, so a tx that legitimately merges all three real
+        // inputs into a 3_000_000 cluster-1 output MUST pass — the per-ring
+        // maximum must not collapse independent real inputs.
+        let three_real_inputs = vec![
+            vec![(full_tag(1), 1_000_000u64)],
+            vec![(full_tag(1), 1_000_000u64)],
+            vec![(full_tag(1), 1_000_000u64)],
+        ];
+        let merged = vec![mk_tagged_output(3_000_000, 3, full_tag(1))];
+        assert!(
+            check_cluster_tag_inheritance(&three_real_inputs, &merged).is_ok(),
+            "merging three real single-input rings into one output must not \
+             false-reject (bound = sum of per-ring maxima = 3_000_000)"
+        );
+
+        // (c) A background (untagged) real input with a cluster-1 decoy: the
+        // ceiling is the decoy's mass (residual documented in #581), but it is
+        // no longer ring-size-multiplied. An output above the single decoy's
+        // mass is still rejected.
+        let bg_input_one_decoy = vec![vec![
+            (ClusterTagVector::empty(), 1_000_000u64),
+            (full_tag(1), 1_000_000u64),
+        ]];
+        let over = vec![mk_tagged_output(
+            1_500_000,
+            4,
+            ClusterTagVector::from_pairs(&[(ClusterId(1), TAG_WEIGHT_SCALE)]),
+        )];
+        assert!(
+            check_cluster_tag_inheritance(&bg_input_one_decoy, &over).is_err(),
+            "output above the single decoy's cluster-1 mass must be rejected"
+        );
+
+        // (d) Liveness under a duplicate-cluster-id member: a single member
+        // whose tag vector carries cluster 1 twice (weights 400_000 + 600_000)
+        // has cluster-1 mass 1_000_000 * (400_000 + 600_000) / SCALE =
+        // 1_000_000. The per-member SUM must be used for the max, so the
+        // ceiling is 1_000_000 and an output at 1_000_000 must PASS. A naive
+        // per-entry max would have used max(400_000, 600_000) = 600_000 and
+        // FALSE-REJECTED this valid tx — a consensus halt. We do not rely on
+        // the tag-vector uniqueness invariant here.
+        let mut dup_tags = ClusterTagVector::empty();
+        dup_tags.entries.push(ClusterTagEntry {
+            cluster_id: ClusterId(1),
+            weight: 400_000,
+        });
+        dup_tags.entries.push(ClusterTagEntry {
+            cluster_id: ClusterId(1),
+            weight: 600_000,
+        });
+        let dup_entry_member = vec![vec![(dup_tags, 1_000_000u64)]];
+        let at_full = vec![mk_tagged_output(1_000_000, 5, full_tag(1))];
+        assert!(
+            check_cluster_tag_inheritance(&dup_entry_member, &at_full).is_ok(),
+            "a member's duplicate cluster entries must SUM (per-member mass), \
+             not max — else a valid tx is false-rejected (#581 liveness)"
         );
     }
 
