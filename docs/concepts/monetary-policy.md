@@ -508,7 +508,7 @@ pub struct MonetaryEpoch {
 
     // ─── Fee Parameters ───────────────────────────────────────────
 
-    /// Minimum transaction fee in nanoBTH
+    /// Minimum transaction fee in picocredits
     pub min_fee: u64,
 
     /// Cluster fee curve: min rate in basis points (5 = 0.05%)
@@ -517,7 +517,7 @@ pub struct MonetaryEpoch {
     /// Cluster fee curve: max rate in basis points (3000 = 30%)
     pub cluster_fee_max_bps: u16,
 
-    /// Cluster wealth midpoint (sigmoid inflection) in nanoBTH
+    /// Cluster wealth midpoint (sigmoid inflection) in picocredits
     pub cluster_midpoint: u64,
 
     /// Tag decay per transaction hop in basis points (500 = 5%)
@@ -544,7 +544,7 @@ pub struct MonetaryEpoch {
     /// Blocks to transition from previous epoch's expectations
     pub transition_blocks: u64,
 
-    /// Expected burn rate per block in nanoBTH (for transition calibration)
+    /// Expected burn rate per block in picocredits (for transition calibration)
     pub expected_burn_rate: u64,
 }
 ```
@@ -568,10 +568,10 @@ MonetaryEpoch {
     activation_height: 0,
 
     // Fees
-    min_fee: 400_000,                              // 400 µBTH
+    min_fee: 400_000_000,                          // 400 µBTH
     cluster_fee_min_bps: 5,                        // 0.05%
     cluster_fee_max_bps: 3000,                     // 30%
-    cluster_midpoint: 10_000_000_000_000_000_000,  // 10M BTH in nanoBTH
+    cluster_midpoint: 10_000_000_000_000_000_000,  // 10M BTH in picocredits
     cluster_decay_bps: 500,                        // 5% per hop
 
     // Emission
@@ -595,7 +595,7 @@ MonetaryEpoch {
     activation_height: 31_536_000,                 // ~5 years (5 × 6,307,200)
 
     // Fees (halved 5 times from genesis)
-    min_fee: 12_500,                               // 12.5 µBTH
+    min_fee: 12_500_000,                           // 12.5 µBTH
     cluster_fee_min_bps: 5,
     cluster_fee_max_bps: 3000,
     cluster_midpoint: 10_000_000_000_000_000_000,
@@ -622,9 +622,9 @@ When parameters change at a fork, the difficulty adjustment needs to handle the 
 ### The Problem
 
 ```
-Before fork: burns averaging 1000 nanoBTH/block
+Before fork: burns averaging 1000 picocredits/block
 Fork activates: fee floor halves
-After fork: burns might be 500-2000 nanoBTH/block (unknown)
+After fork: burns might be 500-2000 picocredits/block (unknown)
 
 If we immediately use actual burns:
 - First epoch after fork sees huge deviation

@@ -730,7 +730,6 @@ struct Block {
 | 1 BTH | 10^12 | BTH |
 | 1 milliBTH | 10^9 | mBTH |
 | 1 microBTH | 10^6 | uBTH |
-| 1 nanoBTH | 10^3 | nBTH |
 | 1 picocredit | 1 | pico |
 
 The **picocredit** is the atomic unit used in all protocol calculations.

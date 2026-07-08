@@ -285,7 +285,7 @@ Botho uses size-based fees: `fee = fee_per_byte × tx_size × cluster_factor`
 | Transaction Type | Signature Size | Typical Total Size | Fee (1x cluster) |
 |-----------------|----------------|-------------------|------------------|
 | Minting | ~3.3 KB (ML-DSA) | ~1.5 KB | 0 |
-| Private | ~0.7 KB (CLSAG) | ~4 KB | ~4,000 nanoBTH |
+| Private | ~0.7 KB (CLSAG) | ~4 KB | ~4,000 picocredits |
 
 **Why these sizes?**
 
@@ -303,7 +303,7 @@ total_fee = fee_per_byte * tx_size * cluster_factor
 ```
 
 Where:
-- `fee_per_byte` = 1 nanoBTH per byte (default)
+- `fee_per_byte` = 1 picocredit per byte (default)
 - `tx_size` = transaction size in bytes
 - `cluster_factor` = progressive multiplier (1x to 6x) based on sender's cluster wealth
 

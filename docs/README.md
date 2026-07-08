@@ -100,7 +100,7 @@ Botho combines:
 - **Progressive Fees**: Cluster-based taxation that discourages wealth concentration
 - **Network Privacy**: Onion Gossip for transaction origin hiding (planned)
 
-The native currency unit is **BTH** (1 BTH = 1,000,000,000 nanoBTH).
+The native currency unit is **BTH** (1 BTH = 1,000,000,000,000 picocredits).
 
 ## Quick Start
 

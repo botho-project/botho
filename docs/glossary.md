@@ -23,11 +23,9 @@ A collection of transactions bundled together and added to the blockchain. Each 
 The amount of BTH created when a new block is mined. Botho starts at 50 BTH per block, halving every ~1 year until reaching tail emission.
 
 ### BTH
-The native currency unit of Botho. BTH uses a two-tier precision system:
-- **For individual transactions**: 1 BTH = 1,000,000,000,000 picocredits (10^12, internal precision)
-- **For supply tracking/display**: 1 BTH = 1,000,000,000 nanoBTH (10^9, user-facing)
-
-The conversion factor is: 1 nanoBTH = 1,000 picocredits. See [Unit System](tokenomics.md#unit-system) for details.
+The native currency unit of Botho. All amounts are denominated in a single base
+unit, the **picocredit**: 1 BTH = 1,000,000,000,000 picocredits (10^12). BTH is a
+human-facing formatting of picocredit amounts at the UI edge. See [Unit System](tokenomics.md#unit-system) for details.
 
 ### Bulletproofs
 A type of zero-knowledge proof used for range proofs. Ensures transaction amounts are positive without revealing the actual values. Used in Private transactions to hide amounts.
@@ -171,9 +169,6 @@ A sequence of words (typically 24) that encodes your wallet's master seed. Used 
 
 ## N
 
-### nanoBTH
-A display-friendly unit of BTH used for fee calculations and user interfaces. 1 BTH = 1,000,000,000 nanoBTH (10^9). 1 nanoBTH = 1,000 picocredits. NanoBTH is preferred for user-facing amounts because the numbers are more manageable.
-
 ### Node
 A computer running Botho software that participates in the network. Nodes relay transactions, validate blocks, and optionally mine.
 
@@ -201,7 +196,7 @@ Another node connected to your node in the P2P network.
 A cryptographic commitment that hides a value while allowing mathematical operations. Used in confidential transactions.
 
 ### Picocredits
-The smallest internal unit of BTH, used for transaction amounts and accounting precision. 1 BTH = 1,000,000,000,000 picocredits (10^12). This provides higher precision than nanoBTH for individual transaction calculations. The bridge contracts and core transaction system use picocredits internally, while user interfaces typically display amounts in nanoBTH or BTH for readability.
+The single base unit of BTH, used for all amounts — transaction values, fees, emission, and monetary policy. 1 BTH = 1,000,000,000,000 picocredits (10^12). Every amount in the protocol is denominated in picocredits (stored as u128 for supply-scale totals); user interfaces format picocredit amounts into BTH for readability.
 
 ### Post-Quantum Cryptography
 Cryptographic algorithms believed to be secure against quantum computer attacks. Botho uses ML-KEM-768 for all stealth addresses (permanent recipient privacy) and ML-DSA-65 for minting transaction signatures. Ring signatures use classical CLSAG for efficiency—sender privacy is ephemeral and degrades over time.

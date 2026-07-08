@@ -92,7 +92,7 @@ Performance benchmarks ─────────→ v0.2.0 Release
    - [ ] Update `clap` to fix unsound `anstream`
 
 9. **Documentation & Standards**
-   - [ ] Standardize unit naming (nanoBTH vs picocredits)
+   - [x] Standardize unit naming — unified all amounts to a single base unit (picocredits) end-to-end in #694/#712
    - [ ] Clarify block timing (60s vs 5-40s dynamic)
    - [ ] Document LION rejection sampling margin justification
 
