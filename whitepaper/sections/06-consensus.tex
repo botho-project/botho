@@ -89,10 +89,22 @@ $U_1 \cap U_2 \neq \emptyset$.
 \end{definition}
 
 \begin{theorem}[SCP Safety]
-If the network has quorum intersection and no Byzantine nodes, then SCP
-provides safety: no two honest nodes externalize different values for the
-same slot.
+If the network has quorum intersection and the Byzantine threshold is not
+exceeded---so that the intersection of any two quorums contains at least one
+honest node---then SCP provides safety: no two honest nodes externalize
+different values for the same slot. Safety does not require the absence of
+Byzantine nodes, only that no two quorums can be satisfied entirely by
+disjoint, adversary-controlled sets.
 \end{theorem}
+
+Safety and liveness are distinct properties with distinct assumptions.
+Safety, as stated above, holds under quorum intersection among honest nodes
+even under asynchrony. Liveness---that consensus eventually makes
+progress---is a separate guarantee requiring an intact, available honest
+quorum and network synchrony; it is treated in
+Section~\ref{sec:consensus-liveness}. When these liveness assumptions fail
+(e.g., a network partition), \Botho preserves safety by halting rather than
+forking.
 
 \subsubsection{Tiered Quorum Structure}
 
@@ -393,6 +405,7 @@ In practice, finality occurs within 5 seconds of block proposal, compared
 to 10--60 minutes for pure PoW systems.
 
 \subsection{Liveness Guarantees}
+\label{sec:consensus-liveness}
 
 \begin{theorem}[SCP Liveness]
 If the network is eventually synchronous and at most $f$ nodes are Byzantine
