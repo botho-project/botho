@@ -28,16 +28,22 @@ import {
 } from '../lib/rig-status'
 
 /**
- * P7.1 — "Get a rig" surface (#458 §2, §4; issue #504).
+ * P7.1 — "Host a node" surface (#458 §2, §4; issue #504).
  *
- * A thin signup page that lets a user buy a managed Botho mining node for
- * $50/mo. It collects the desired AWS region (allowlist, #458 §5), then asks the
+ * A thin signup page that lets a user subscribe to a managed Botho node —
+ * **framed as a node-HOSTING service**, not a mining-income product (decision
+ * #719; also the regulatory-safe framing — the 2025 SEC staff guidance treats
+ * mining as administrative/ministerial, and selling *compute hosting* with
+ * *non-custodial* rewards keeps this outside the investment-contract framing).
+ * It collects the desired AWS region (allowlist, #458 §5), then asks the
  * control-plane Worker (`@botho/baas-worker /checkout`) to create a Stripe
  * Checkout Session and redirects the browser to the Stripe-hosted page.
  *
- * Honest testnet copy (#458 §7): the value prop today is "your own always-on
- * node + the wallet experience + participation in mining," NOT profit. Billing
- * runs in Stripe TEST mode while on testnet.
+ * Honest value prop (#458 §7): we run an always-on Botho node for you so you —
+ * and everyone you invite — can transact from the app without anyone managing a
+ * server. Its mining participation helps secure the network; it is NOT an income
+ * promise (mining self-equilibrates to ~break-even; the managed hosting is the
+ * product). Billing runs in Stripe TEST mode while on testnet.
  *
  * Webhook → provisioning is P7.2 (#506); the rich status page is P6.3. After
  * checkout, Stripe redirects to `/rig/success` (the placeholder below).
@@ -96,24 +102,26 @@ export function RigPage() {
               <Server className="text-pulse" size={28} />
             </div>
             <h1 className="font-display text-3xl sm:text-4xl md:text-5xl font-bold mb-4">
-              Get a Managed Rig
+              Host a Node for Your Community
             </h1>
             <p className="text-base sm:text-lg text-ghost max-w-xl mx-auto">
-              Your own always-on Botho node in the cloud — joins the testnet,
-              participates in mining, and gives you a private RPC endpoint for the
-              wallet. <span className="text-light">$50/month.</span>
+              We run an always-on Botho node for you — no servers to manage. You,
+              and everyone you invite, transact from the app through your own
+              private endpoint. <span className="text-light">$50/month.</span>
             </p>
           </div>
 
-          {/* Honest testnet caveat (#458 §7) */}
+          {/* Honest value-prop caveat (#458 §7; hosting framing, decision #719) */}
           <div className="mb-8 p-4 rounded-xl bg-warning/10 border border-warning/30 flex gap-3">
             <AlertCircle className="text-warning shrink-0 mt-0.5" size={20} />
             <p className="text-sm text-ghost">
-              <span className="text-light font-medium">Testnet, no profit promised.</span>{' '}
-              Rigs mine <span className="text-light">testnet</span> BTH, which has no
-              real-world value today. What you get now is your own always-on node,
-              the full wallet experience, and a hand in keeping the network running —
-              not income. Charges run in Stripe test mode while we validate the
+              <span className="text-light font-medium">A hosting service, not an income scheme.</span>{' '}
+              You're paying for a managed node — the hub your community connects
+              through. It also mines to help secure the network, but that is
+              <span className="text-light"> not an income promise</span>: on testnet
+              the coins have no real value, and even on mainnet mining tends toward
+              break-even. The product is the always-on node and the wallet
+              experience. Charges run in Stripe test mode while we validate the
               service.
             </p>
           </div>
@@ -121,9 +129,9 @@ export function RigPage() {
           {/* What you get */}
           <div className="grid sm:grid-cols-3 gap-3 sm:gap-4 mb-8">
             {[
-              { icon: Cpu, title: 'Always-on node', desc: 'A t4g.medium running RandomX, joined to the testnet.' },
-              { icon: Globe, title: 'Private RPC', desc: 'Your own HTTPS endpoint to point the wallet at.' },
-              { icon: ShieldCheck, title: 'Non-custodial', desc: 'Keys stay on your device. The node never holds your funds.' },
+              { icon: Cpu, title: 'Managed for you', desc: 'An always-on node in the cloud — no AWS, no SSH, no upkeep.' },
+              { icon: Globe, title: "Your community's hub", desc: 'A private endpoint you and everyone you invite transact through.' },
+              { icon: ShieldCheck, title: 'Non-custodial', desc: 'Keys stay on every device. The node never holds anyone\'s funds.' },
             ].map((f) => (
               <div key={f.title} className="p-4 rounded-xl bg-slate/50 border border-steel">
                 <f.icon className="text-pulse mb-2" size={20} />
