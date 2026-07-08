@@ -1,0 +1,58 @@
+# pandoc defaults for anvil:report
+# Used by report-figures to render report.md → report.pdf
+# Override per-consumer by dropping a replacement at:
+#   .anvil/skills/report/assets/pandoc-defaults.yaml
+
+# Input format
+from: markdown+yaml_metadata_block+pipe_tables+grid_tables+raw_html
+
+# Output format
+to: pdf
+
+# Engine (pdf-engine: weasyprint is the default for the CSS path;
+# the LaTeX path overrides this when assets/report.tex is present)
+pdf-engine: weasyprint
+
+# Layout
+variables:
+  papersize: letter
+  margin-top: 1in
+  margin-bottom: 1in
+  margin-left: 1in
+  margin-right: 1in
+  fontsize: 11pt
+  mainfont: "Source Serif Pro"
+  sansfont: "Source Sans Pro"
+  monofont: "Source Code Pro"
+
+# Table of contents (recommended for reports >5 pages)
+toc: true
+toc-depth: 2
+
+# Numbered sections (helps with cross-references to "§3.2")
+number-sections: true
+
+# Page numbers
+include-in-header:
+  - text: |
+      <style>
+        @page {
+          @bottom-right {
+            content: "Page " counter(page) " of " counter(pages);
+            font-size: 9pt;
+            color: #666;
+          }
+        }
+      </style>
+
+# Citation handling (consumers can extend with their own .csl)
+# citeproc: true
+# csl: assets/chicago-author-date.csl
+
+# Standalone HTML/PDF (don't embed in another doc)
+standalone: true
+
+# Metadata defaults (overridden by report.md frontmatter)
+metadata:
+  lang: en-US
+  documentclass: article

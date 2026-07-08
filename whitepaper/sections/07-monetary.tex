@@ -123,43 +123,52 @@ utilization, creating natural inflation dampening.
 
 \subsubsection{Mechanism}
 
-Block time targets range from 5 to 40 seconds based on mempool pressure:
+The target block time is a deterministic function of recent transaction
+load, computed over a smoothing window of the last 10 blocks. Rather than a
+continuous curve, the protocol selects from five discrete levels keyed on the
+measured transaction rate (transactions per second):
 
 \begin{equation}
-T_{\text{target}} = T_{\min} + (T_{\max} - T_{\min}) \cdot (1 - U)
+T_{\text{target}}(\rho) =
+\begin{cases}
+3\text{s}  & \rho \geq 20 \text{ tx/s} \\
+5\text{s}  & \rho \geq 5  \text{ tx/s} \\
+10\text{s} & \rho \geq 1  \text{ tx/s} \\
+20\text{s} & \rho \geq 0.2 \text{ tx/s} \\
+40\text{s} & \text{otherwise (idle)}
+\end{cases}
 \end{equation}
 
-where:
-\begin{itemize}
-  \item $T_{\min} = 5$ seconds (minimum block time)
-  \item $T_{\max} = 40$ seconds (maximum block time)
-  \item $U \in [0, 1]$ is the normalized utilization factor
-\end{itemize}
-
-\subsubsection{Utilization Calculation}
-
-Utilization is computed from recent mempool activity:
-
-\begin{equation}
-U = \text{sigmoid}\left(\frac{\text{mempool\_weight} - \text{target\_weight}}{\text{sensitivity}}\right)
-\end{equation}
+where $\rho$ is the transaction rate measured over the smoothing window.
+The absolute consensus floor is $T_{\min} = 3$ seconds (SCP needs time to
+externalize) and the idle ceiling is $T_{\max} = 40$ seconds. Because the
+level is computed from committed chain state, every validator derives the
+same target for a given tip.
 
 \begin{table}[h]
 \centering
-\caption{Block timing by utilization}
+\caption{Block timing by transaction load}
 \label{tab:timing-util}
 \begin{tabular}{@{}lcc@{}}
 \toprule
-\textbf{Network State} & \textbf{Utilization} & \textbf{Block Time} \\
+\textbf{Network State} & \textbf{Tx Rate} & \textbf{Block Time} \\
 \midrule
-Idle (no transactions) & 0\% & 40s \\
-Light usage & 25\% & 31s \\
-Moderate usage & 50\% & 23s \\
-Heavy usage & 75\% & 14s \\
-Maximum demand & 100\% & 5s \\
+Idle & $<$0.2 tx/s & 40s \\
+Low usage & $\geq$0.2 tx/s & 20s \\
+Medium usage & $\geq$1 tx/s & 10s \\
+High usage & $\geq$5 tx/s & 5s \\
+Very high usage & $\geq$20 tx/s & 3s \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+The 5-second level is the \emph{monetary reference}: all emission and
+inflation figures in this section are computed at 5\,s blocks
+($N_{\text{year}} = 6{,}307{,}200$), the pace the network holds under
+sustained high load. Slower levels produce proportionally fewer blocks per
+year and therefore lower effective emission (Section~\ref{sec:dynamic-timing},
+Emission Bounds); the 3-second floor is reached only under transient
+maximum demand.
 
 \input{figures/dynamic-timing}
 
@@ -194,22 +203,24 @@ annual tail emission thus varies with utilization:
 
 \begin{table}[h]
 \centering
-\caption{Tail emission by utilization (at $\approx$611M tail-onset supply)}
+\caption{Tail emission by load level (at $\approx$611M tail-onset supply)}
 \label{tab:emission-util}
 \begin{tabular}{@{}lcc@{}}
 \toprule
-\textbf{Utilization} & \textbf{Blocks/Year} & \textbf{Gross Emission/Year} \\
+\textbf{Load Level} & \textbf{Blocks/Year} & \textbf{Gross Emission/Year} \\
 \midrule
-0\% (idle, 40s) & 788,400 & 1.91M BTH \\
-50\% (moderate, 23s) & 1,371,130 & 3.32M BTH \\
-100\% (maximum, 5s) & 6,307,200 & 15.28M BTH \\
+Idle (40s)   & 788,400   & 1.91M BTH \\
+Medium (10s) & 3,153,600 & 7.63M BTH \\
+High, reference (5s) & 6,307,200 & 15.28M BTH \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-At full utilization this is the 2.5\% gross (2\% net) tail target; sustained
-idle operation acts as a natural inflation dampener, holding emission well
-below the 2\% net rate.
+At the 5\,s monetary reference this is the 2.5\% gross (2\% net) tail target;
+sustained slower operation acts as a natural inflation dampener, holding
+emission below the 2\% net rate. The 3-second floor (transient maximum demand)
+would raise the block count to 10.5M/year, briefly exceeding the reference
+target until difficulty and load re-equilibrate.
 
 \subsection{Fee Economics}
 
@@ -227,6 +238,21 @@ For a typical 4 KB transaction:
 f_{\text{min}} = 4{,}000 \times 1 = 4{,}000 \text{ pico-BTH} = 4 \times 10^{-9} \text{ BTH}
 \end{equation}
 
+The 1\,pico-BTH/byte figure is the congestion \emph{floor}. Under load the
+dynamic base rises multiplicatively (a congestion response bounded by a
+$100\times$ safety clamp, i.e.\ $100$\,pico-BTH/byte), so the enforced
+minimum is
+\begin{equation}
+f_{\min} = \underbrace{b_{\text{dyn}}(\text{congestion})}_{1\ldots100\text{ pico/byte}}
+           \times \text{size} \times \text{cluster\_factor}
+           \;+\; d(\vec{t}, v),
+\end{equation}
+where $d(\vec{t}, v)$ is the \emph{cluster demurrage} stock-level term
+(Section~\ref{sec:cluster-tags}): a per-transfer charge proportional to the
+spent value, the annual demurrage rate, and the coins' cluster factor, so
+idle high-factor wealth carries a small holding cost that circulating
+low-factor coins avoid. Demurrage is exempt for factor-1 coins.
+
 \subsubsection{Progressive Fee Multiplier}
 
 Transactions pay additional fees based on cluster wealth (see
@@ -241,13 +267,28 @@ The cluster factor ranges from 1.0$\times$ (bottom 50\% wealth) to
 
 \subsubsection{Lottery-Based Fee Redistribution}
 
-Transaction fees are split between redistribution and burning:
+Transaction fees are split between a redistribution pool and burning:
 
 \begin{itemize}
-  \item \textbf{80\% redistributed}: Immediately distributed to 4 randomly
-    selected UTXOs via verifiable lottery
+  \item \textbf{80\% to the lottery pool}: Added to a persistent,
+    cumulative pool and distributed to 4 UTXOs per block via verifiable,
+    cluster-tilted lottery
   \item \textbf{20\% burned}: Permanently removed from supply
 \end{itemize}
+
+The lottery pool is not fee-funded alone. Each block also routes a
+height-scheduled \emph{emission share} of the block reward into the same
+pool: the share ramps from 0 at genesis by 10 percentage points per halving
+epoch to a 50\% cap (the miner keeps the remainder). Emission-routing is what
+lets redistribution reach idle wealth that never transacts --- transaction
+fees are a consumption tax and cannot, by themselves, touch coins that sit
+still (Section~\ref{sec:economic-modeling}). The pool balance is cumulative
+(carried over across blocks) and each block pays out
+\begin{equation}
+\text{payout} = \min\!\big(\underbrace{\text{carryover} + \text{emission\_share} + 0.8\,f_{\text{block}}}_{\text{available}},\; R(h)\big),
+\end{equation}
+capped at one block reward $R(h)$; any surplus carries over. The cap is the
+core anti-grinding bound (Section~\ref{sec:security}).
 
 This creates:
 
@@ -276,23 +317,34 @@ tilt (payout) are anchored to them.
 
 \subsubsection{Lottery Mechanism}
 
-For each transaction:
+The draw runs once \emph{per block}, over the block's accumulated pool:
 
 \begin{enumerate}
-  \item Calculate fee $f$ based on cluster factor and transaction size
-  \item Burn $0.2f$ (20\%)
-  \item Select 4 winning UTXOs with probability proportional to
+  \item Compute the fee split: burn $0.2\,f_{\text{block}}$; add
+    $0.8\,f_{\text{block}}$ plus the emission share to the cumulative pool,
+    and cap the payout at one block reward
+  \item Filter eligible candidates: UTXOs at least 720 blocks old and worth
+    at least $10^{6}$ pico-BTH (1 micro-BTH)
+  \item Derive the seed from the \emph{committed previous block hash} and
+    height,
     \begin{equation}
-    w_i = v_i \times \frac{\phi_{\max} - \phi_i + 1}{\phi_{\max}}
+    s = \Hash(\text{``LOTTERY\_SEED\_V1''} \,\|\, \text{prev\_block\_hash} \,\|\, h),
     \end{equation}
-    where $v_i$ is the UTXO value and $\phi_i \in [1, \phi_{\max}]$ its
-    cluster factor (cluster-tilted selection: a factor-1 coin has
-    $\phi_{\max} = 6$ times the per-value weight of a factor-6 coin)
-  \item Distribute $0.2f$ to each selected UTXO (80\% total)
+    and select 4 winners without replacement, each drawn with probability
+    proportional to
+    \begin{equation}
+    w_i = v_i \times (\phi_{\max} - \phi_i + 1),
+    \end{equation}
+    where $v_i$ is the UTXO value and $\phi_i \in [1, \phi_{\max}]$,
+    $\phi_{\max} = 6$, is its cluster factor (a factor-1 coin has $6\times$
+    the per-value weight of a factor-6 coin)
+  \item Split the capped payout equally among the 4 winners
 \end{enumerate}
 
-The lottery uses the previous block hash as verifiable randomness, ensuring
-selection cannot be manipulated by transaction creators.
+Because the seed depends only on the already-externalized previous block, a
+block proposer cannot bias the draw through transaction selection or ordering
+of the \emph{current} block. The anti-grinding argument is completed by the
+payout cap (Section~\ref{sec:security}, Lottery Grinding).
 
 \subsubsection{Effective Inflation}
 
@@ -322,6 +374,13 @@ High inequality & 96 BTH & 76.8 BTH & 19.2 BTH \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\textbf{Assumptions}: 1M transactions/day, each paying an average all-in fee
+of $\approx$16 $\mu$BTH in the factor-1 row (a 4 KB transaction well above the
+1\,pico-BTH/byte congestion floor, reflecting typical paid fees rather than
+the bare minimum); the daily-fee column scales with the mean cluster factor
+of each wealth distribution. These are illustrative flow magnitudes, not
+minimum-fee quotes.
 
 \subsection{Minter Incentives}
 
@@ -354,7 +413,7 @@ Several mechanisms encourage mining decentralization:
 
 \begin{itemize}
   \item \textbf{CPU-friendly PoW}: Algorithm resists ASIC development
-    (RandomX-based)
+    (RandomX-based~\cite{randomx})
   \item \textbf{Solo mining viable}: Tail emission ensures consistent
     income even at low hashrate
   \item \textbf{No economy of scale}: Linear scaling of rewards with
@@ -420,9 +479,12 @@ Halving count & 5 & Time-to-tail $\approx$ 5 years \\
 Phase-1 supply & $\approx$611M BTH & Geometric sum of 5 halvings \\
 Tail inflation & 2\% net/yr & Supply-dependent, perpetual \\
 Tail reward & $\approx$1.94 BTH/block & Net, at 611M supply (grows with supply) \\
-Min block time & 5 seconds & At maximum utilization \\
-Max block time & 40 seconds & At zero utilization \\
-Base fee rate & 1 pico-BTH/byte & Minimum transaction fee \\
+Min block time & 3 seconds & Consensus floor (very high load) \\
+Reference block time & 5 seconds & Monetary-calculation reference \\
+Max block time & 40 seconds & Idle ceiling \\
+Base fee rate & 1 pico-BTH/byte & Congestion floor (dynamic, $\leq$100$\times$) \\
+Lottery winners/block & 4 & Cluster-tilted, capped at one reward \\
+Emission-to-lottery cap & 50\% of reward & Ramps 10\%/halving epoch \\
 Max cluster factor & 6.0$\times$ & Top 1\% wealth multiplier \\
 Decimals & 12 & Smallest unit: 1 picocredit \\
 \bottomrule

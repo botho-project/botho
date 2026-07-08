@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: anvil
+Version: 0.7.1
+Summary: AI-orchestrated artifact creation using the filesystem as the coordination layer (consumer-side install).
+License: MIT
+Requires-Python: >=3.10
+Requires-Dist: pydantic>=2.0
+Requires-Dist: pyyaml>=6.0
+Provides-Extra: auto-shrink
+Requires-Dist: Pillow>=10.0; extra == "auto-shrink"
+Requires-Dist: numpy>=1.24; extra == "auto-shrink"

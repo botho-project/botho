@@ -73,15 +73,19 @@ The expected cluster factor depends on wealth distribution:
 \label{tab:fee-percentile}
 \begin{tabular}{@{}lcc@{}}
 \toprule
-\textbf{Percentile} & \textbf{Factor} & \textbf{4KB Tx Fee} \\
+\textbf{Percentile} & \textbf{Factor} & \textbf{4KB Tx Fee (floor)} \\
 \midrule
-0--50 & 1.0--1.5 & 4--6 $\mu$BTH \\
-50--90 & 1.5--3.0 & 6--12 $\mu$BTH \\
-90--99 & 3.0--5.0 & 12--20 $\mu$BTH \\
-99--100 & 5.0--6.0 & 20--24 $\mu$BTH \\
+0--50 & 1.0--1.5 & 4{,}000--6{,}000 pico \\
+50--90 & 1.5--3.0 & 6{,}000--12{,}000 pico \\
+90--99 & 3.0--5.0 & 12{,}000--20{,}000 pico \\
+99--100 & 5.0--6.0 & 20{,}000--24{,}000 pico \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\textit{Fees are the congestion-floor minimum (1 pico-BTH/byte $\times$ 4{,}096
+bytes $\times$ factor); $4{,}000$ pico-BTH $= 4\times10^{-9}$ BTH. Under
+congestion the dynamic base multiplies these by up to $100\times$.}
 
 \subsubsection{Redistribution Effect}
 
@@ -190,7 +194,10 @@ The annual security budget (miner revenue) is:
 \end{equation}
 
 With tail emission, this is guaranteed to be positive regardless of
-transaction volume.
+transaction volume. This directly addresses the fee-only security concern:
+fee-funded security is subject to instability and potential
+underinvestment~\cite{budish2022,huberman2021}, whereas a perpetual emission
+floor decouples the security budget from fee-market volatility.
 
 \subsubsection{Network Effect}
 
@@ -275,10 +282,21 @@ redistributive effect is only credited in the \emph{gamed} equilibrium.
 \textbf{Setup}: 100M BTH economy; 80 small holders (5\% of wealth, cluster
 factor 1$\times$), 30 mid holders (25\%, 2$\times$), 9 honest whales (65\%,
 6$\times$), 1 strategic whale (5\%, 6$\times$); initial Gini $G_0 = 0.77$.
-Conservative parameters: 2.5\%/yr of supply routed from tail emission to
-the lottery, 2\%/yr demurrage at factor 6, linear 6:1 payout tilt. Design
-criterion: $\Delta G > 0.05$ versus the no-redistribution baseline.
-Reproducible via \texttt{cluster-tax-sim lottery-experiment}.
+The operating point routes 2.5\%/yr of supply from tail emission into the
+lottery pool and applies 2\%/yr demurrage at factor 6, with the split-invariant
+6:1 payout tilt. Design criterion: $\Delta G > 0.05$ versus the
+no-redistribution baseline. Runs are deterministic given an RNG seed;
+the figures below use the default seed \texttt{2953379877} and are
+reproducible via \texttt{cluster-tax-sim lottery-experiment} (a multi-seed
+confidence interval is future work; see below).
+
+\textbf{These levers are part of the specified protocol}, not analysis-only
+add-ons. Emission-routing is the height-scheduled emission share paid into the
+lottery pool (Section~\ref{sec:monetary}, ramping to a 50\% cap), and
+demurrage is the cluster-scaled stock-level term on the consensus fee floor
+(Section~\ref{sec:cluster-tags}). The simulated ``cluster-tilted + emission +
+demurrage'' configuration is therefore the mechanism the protocol implements,
+at a representative operating point.
 
 \begin{table}[h]
 \centering
@@ -440,8 +458,9 @@ Mixing requires acquiring low-cluster UTXOs through genuine trade. With
 efficient markets, arbitrage prevents free cluster factor reduction.
 
 \textbf{Lottery Grinding}.
-Miners cannot influence random seed (derived from previous block hash and
-deterministic transaction ordering). Cost of grinding:
+Miners cannot influence the random seed, which is derived solely from the
+committed previous block hash and height
+(Section~\ref{sec:security}, Lottery Grinding). Cost of grinding:
 
 \begin{equation}
 \text{Cost}_{\text{grind}} = E[\text{hashpower}] \cdot t_{\text{grind}} \cdot P_{\text{electricity}} \gg E[\text{lottery\_gain}]
@@ -466,7 +485,7 @@ If adoption remains low:
 Risks and mitigations:
 \begin{itemize}
   \item \textbf{Risk}: ASIC development concentrates mining
-  \item \textbf{Mitigation}: CPU-friendly PoW (RandomX-based)
+  \item \textbf{Mitigation}: CPU-friendly PoW (RandomX-based~\cite{randomx})
   \item \textbf{Risk}: Pool concentration
   \item \textbf{Mitigation}: Solo mining viable with tail emission
 \end{itemize}

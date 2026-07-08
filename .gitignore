@@ -117,3 +117,5 @@ go_build_artifacts/
 .loom/usage-cache.json
 .loom/claude-config/
 .loom/logs/
+*.local.md
+/.voice/

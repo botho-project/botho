@@ -94,7 +94,11 @@ is perfectly hiding.
 
 \subsubsection{Anonymity Set Analysis}
 
-The effective anonymity set depends on decoy selection quality:
+The effective anonymity set depends on decoy selection quality. The reduction
+factors below are consistent with empirical traceability studies of
+ring-signature systems, notably Möser et al.'s analysis of Monero, which
+found that temporal and zero-decoy heuristics can sharply cut the effective
+ring size~\cite{monerotracing}:
 
 \begin{table}[h]
 \centering
@@ -519,7 +523,8 @@ Cluster-based progressive fees resist Sybil attacks:
 
 \subsubsection{Eclipse Attacks}
 
-\textbf{Mitigation}:
+Eclipse attacks monopolize a victim's peer connections to control its view of
+the network~\cite{eclipseattack}. \textbf{Mitigation}:
 \begin{itemize}
   \item Diverse peer selection (multiple ASNs, countries)
   \item Outbound connection preference
@@ -529,7 +534,8 @@ Cluster-based progressive fees resist Sybil attacks:
 
 \subsubsection{Selfish Mining}
 
-\Botho's hybrid consensus changes selfish mining dynamics:
+\Botho's hybrid consensus changes the selfish-mining dynamics first analyzed
+for longest-chain PoW~\cite{selfishmining}:
 
 \begin{itemize}
   \item Block withholding delays finalization but doesn't create advantage
@@ -635,6 +641,8 @@ submitting transactions via Tor.
 
 \textbf{Setup}: A chain analysis company maintains a database of
 ``poisoned'' outputs (outputs they created and can identify when spent).
+This is the zero-decoy / poisoned-output attack characterized empirically
+against Monero~\cite{monerotracing}.
 
 \textbf{Attack vector}:
 \begin{enumerate}
@@ -666,7 +674,7 @@ capital investment.
 
 \subsubsection{Scenario: Flood-and-Loot Attack}
 
-\textbf{Classic attack} (against pure PoW):
+\textbf{Classic attack}~\cite{floodloot} (against pure PoW):
 \begin{enumerate}
   \item Deposit funds at exchange
   \item Trade for another asset and withdraw
@@ -701,33 +709,38 @@ lottery rewards to their own UTXOs?
 \textbf{Attack vector}:
 \begin{enumerate}
   \item Control minting of blocks
-  \item Modify transaction ordering/selection to change randomness seed
-  \item Bias lottery toward controlled UTXOs
+  \item Modify transaction ordering/selection to change the randomness seed
+  \item Bias the lottery toward controlled UTXOs
 \end{enumerate}
 
-\textbf{Defense mechanism}: Lottery randomness is derived from:
+\textbf{Defense mechanism}: The lottery seed is derived only from the
+\emph{committed previous block}:
 \[
-\text{seed} = \Hash(\text{block\_hash} \| \text{future\_block\_hash}_{+10})
+\text{seed} = \Hash(\text{``LOTTERY\_SEED\_V1''} \| \text{prev\_block\_hash} \| h).
 \]
 
 \textbf{Analysis}:
 \begin{itemize}
-  \item Block hash includes PoW nonce (miner controls)
-  \item Future block hash is unknown at time of minting
-  \item Miner cannot predict which UTXOs will win
+  \item The seed does not depend on the current block's transactions, merkle
+    root, or ordering, so the proposer of block $h$ cannot bias the draw by
+    selecting or reordering its own transactions.
+  \item \texttt{prev\_block\_hash} is already externalized by SCP before block
+    $h$ is built, so it is fixed for every honest and Byzantine proposer alike.
+  \item The only remaining lever is to regrind the \emph{previous} block's PoW
+    to change its hash --- but this costs a full PoW solution, and the payout
+    it can redirect is bounded by the per-block cap (one block reward).
 \end{itemize}
 
-Even if miner controls the next 10 blocks (requiring sustained 100\%
-hashpower), they would need to also predict transaction inclusion to
-manipulate the seed meaningfully.
-
-\textbf{Cost-benefit}: The lottery redistributes only 80\% of fees. For
-grinding to be profitable:
+\textbf{Cost-benefit (the load-bearing bound)}: The pool pays out at most one
+block reward per block. Regrinding the previous block to reshape the seed
+therefore trades a full PoW solution (worth one block reward in expectation)
+for the chance to redirect at most a fraction of one reward:
 \[
-\text{grinding\_cost} < 0.8 \times \text{total\_fees} \times P(\text{success})
+\text{grinding\_cost} \;\approx\; R(h) \;>\; \Delta_{\text{payout}} \leq R(h) \times P(\text{controlled UTXO wins}).
 \]
 
-With negligible success probability, grinding is strictly unprofitable.
+Grinding is unprofitable by construction: the cost of the extra PoW solution
+exceeds the capped payout it can capture.
 
 \subsubsection{Scenario: Eclipse Attack on Light Client}
 
