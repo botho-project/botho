@@ -5,7 +5,7 @@
 # which runs `wrangler pages deploy dist --project-name=botho-wallet`.
 #
 # Requires CLOUDFLARE_API_TOKEN with the "Cloudflare Pages: Edit" permission.
-name = "botho-wallet"
+name = "botho"
 compatibility_date = "2024-01-01"
 
 # Pages serves the built SPA from dist/ (Vite build output).

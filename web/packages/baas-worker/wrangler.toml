@@ -63,7 +63,7 @@ ALLOWED_ORIGINS = "https://botho.io,https://wallet.botho.io"
 
 # --- status page / magic-link lookup (P6.3, #458 §4/§6) -------------------
 # Wallet origin used to build the "open in wallet" deep link (#458 §3 step 5).
-WALLET_BASE_URL = "https://wallet.botho.io"
+WALLET_BASE_URL = "https://botho.io"
 # Where Stripe returns the user after they close the Customer Portal.
 PORTAL_RETURN_URL = "https://botho.io/rig/status"
 
