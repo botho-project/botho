@@ -23,6 +23,69 @@ pub struct Config {
     /// Telemetry configuration for distributed tracing
     #[serde(default)]
     pub telemetry: TelemetryConfig,
+    /// RPC-server configuration, including the optional operator surface
+    /// (#707, P4.2 of the #695 proposal). Absent by default so existing
+    /// configs and node behavior are unchanged.
+    #[serde(default)]
+    pub rpc: RpcConfig,
+}
+
+/// RPC-server configuration.
+///
+/// Today this only carries the optional `[rpc.operator]` block. When the whole
+/// `[rpc]` section is absent from `config.toml`, this deserializes to its
+/// default (operator surface OFF) and the node behaves exactly as before.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RpcConfig {
+    /// Operator read-surface configuration (#707). Absent ⇒ the whole
+    /// operator feature is OFF: `operator_*` RPCs return a clean "not enabled"
+    /// error and the `botho operator mint-read-link` CLI refuses to mint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator: Option<OperatorConfig>,
+}
+
+/// Operator read-surface configuration (`[rpc.operator]`, #707).
+///
+/// The mere PRESENCE of this section (with a non-empty secret) turns the
+/// operator read RPCs on. It is deliberately a separate opt-in from the rest
+/// of the RPC surface: the operator-only reads (per-peer gate classification,
+/// configured quorum contents, audit log) are a targeting map an adversary
+/// must not get for free, so they are gated behind a node-verified magic-link
+/// token keyed on `read_token_secret`.
+///
+/// This surface is READ-ONLY by construction. The write path (operator-signed
+/// quorum curation) is a separate, separately-reviewed deliverable (#709,
+/// governed by `docs/security/quorum-write-path.md`); no field here grants any
+/// write capability.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperatorConfig {
+    /// HMAC-SHA256 secret the node uses to verify operator read tokens of the
+    /// form `op.<expUnixSeconds>.<hmacSha256Hex(secret, "op.<exp>")>`. Minted
+    /// off-node by `botho operator mint-read-link`. An empty secret is treated
+    /// as "not configured" (fail closed).
+    pub read_token_secret: String,
+}
+
+impl OperatorConfig {
+    /// The configured secret if it is present AND non-empty; `None` otherwise.
+    /// An empty secret must not enable the feature (fail closed).
+    pub fn effective_secret(&self) -> Option<&str> {
+        let s = self.read_token_secret.trim();
+        if s.is_empty() {
+            None
+        } else {
+            Some(self.read_token_secret.as_str())
+        }
+    }
+}
+
+impl RpcConfig {
+    /// The effective operator read-token secret, or `None` when the operator
+    /// surface is not configured (absent section OR empty secret). When this
+    /// is `None` the operator RPCs are OFF and the node behaves as today.
+    pub fn operator_read_token_secret(&self) -> Option<&str> {
+        self.operator.as_ref().and_then(|o| o.effective_secret())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -709,6 +772,7 @@ impl Config {
             minting: MintingConfig::default(),
             faucet: FaucetConfig::default(),
             telemetry: TelemetryConfig::default(),
+            rpc: RpcConfig::default(),
         }
     }
 
@@ -721,6 +785,7 @@ impl Config {
             minting: MintingConfig::default(),
             faucet: FaucetConfig::default(),
             telemetry: TelemetryConfig::default(),
+            rpc: RpcConfig::default(),
         }
     }
 

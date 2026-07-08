@@ -111,6 +111,30 @@ enum Commands {
         #[command(subcommand)]
         action: SnapshotAction,
     },
+
+    /// Operator tooling (read-only trust surface, #707)
+    Operator {
+        #[command(subcommand)]
+        action: OperatorAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum OperatorAction {
+    /// Mint a node-verified magic-link READ token and print the dashboard URL.
+    ///
+    /// Reads the `[rpc.operator] read_token_secret` from the node config file.
+    /// The link is a bearer credential granting READ-ONLY access to operator
+    /// trust internals; it grants no write capability.
+    MintReadLink {
+        /// Dashboard base URL the link points at.
+        #[arg(long, default_value = commands::operator::DEFAULT_DASHBOARD_URL)]
+        dashboard: String,
+
+        /// Token lifetime in seconds (default: 7 days).
+        #[arg(long)]
+        ttl: Option<u64>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -221,6 +245,11 @@ fn main() -> Result<()> {
                 commands::snapshot::load(&config_path, &input, verify_hash.as_deref())
             }
             SnapshotAction::Info { file } => commands::snapshot::info(&file),
+        },
+        Commands::Operator { action } => match action {
+            OperatorAction::MintReadLink { dashboard, ttl } => {
+                commands::operator::mint_read_link(&config_path, &dashboard, ttl)
+            }
         },
     }
 }

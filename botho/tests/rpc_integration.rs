@@ -1228,6 +1228,288 @@ async fn test_websocket_subscribe_roundtrip() {
     assert!(events.contains(&"peers".to_string()));
 }
 
+// ============================================================================
+// Operator read-surface Tests (#707, P4.2)
+// ============================================================================
+
+use std::sync::RwLock as StdRwLock;
+
+use botho::{
+    consensus::QuorumGateSnapshot,
+    rpc::auth::{mint_operator_read_token, DEFAULT_OPERATOR_TOKEN_TTL_SECONDS},
+};
+
+/// Spawn an RPC server with the operator read surface enabled under `secret`.
+/// If `gate` is provided, it is published into the shared gate handle so
+/// `operator_getQuorumInfo` can surface per-peer classification.
+async fn spawn_operator_rpc_server(
+    secret: Option<&str>,
+    gate: Option<QuorumGateSnapshot>,
+) -> (TempDir, SocketAddr, tokio::task::JoinHandle<()>) {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let ledger = Ledger::open(&temp_dir.path().join("ledger")).expect("ledger");
+    let mempool = Mempool::new();
+    let ws_broadcaster = Arc::new(WsBroadcaster::new(100));
+
+    let mut state = RpcState::new(
+        ledger,
+        mempool,
+        Network::Testnet,
+        None,
+        None,
+        vec!["*".to_string()],
+        ws_broadcaster,
+    )
+    .with_operator_read_token_secret(secret.map(str::to_string));
+
+    // A gate handle is always wired; it stays `None` (unevaluated) unless a
+    // snapshot is supplied — exercising the anti-#541 "null until evaluated"
+    // contract.
+    let gate_handle = Arc::new(StdRwLock::new(gate));
+    state = state.with_quorum_gate_status(gate_handle);
+
+    let state = Arc::new(state);
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    drop(listener);
+
+    let state_clone = state.clone();
+    let handle = tokio::spawn(async move {
+        let _ = botho::rpc::start_rpc_server(addr, state_clone).await;
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    (temp_dir, addr, handle)
+}
+
+/// A valid token for `secret` expiring in the default TTL.
+fn valid_operator_token(secret: &str) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    mint_operator_read_token(secret, now + DEFAULT_OPERATOR_TOKEN_TTL_SECONDS)
+}
+
+/// Acceptance criterion 1: with NO `[rpc.operator]` config, the operator RPCs
+/// return a clean "not enabled" error (and the node otherwise behaves as
+/// today).
+#[tokio::test]
+#[serial]
+async fn test_operator_disabled_without_config() {
+    let (_temp_dir, addr, _handle) = spawn_operator_rpc_server(None, None).await;
+    let client = Client::new();
+
+    for method in ["operator_getQuorumInfo", "operator_getAuditLog"] {
+        // Even WITH a plausible token, no secret ⇒ feature off.
+        let resp = rpc_call(
+            &client,
+            addr,
+            method,
+            json!({ "token": "op.9999999999.deadbeef" }),
+        )
+        .await;
+        assert!(
+            resp["result"].is_null(),
+            "{method} should not succeed when disabled"
+        );
+        assert_eq!(
+            resp["error"]["code"].as_i64(),
+            Some(-32020),
+            "{method} not-enabled code"
+        );
+        let msg = resp["error"]["message"].as_str().unwrap_or_default();
+        assert!(msg.contains("not enabled"), "{method}: {msg}");
+    }
+
+    // The node still serves its normal public surface unchanged.
+    let status = rpc_call(&client, addr, "node_getStatus", json!({})).await;
+    assert!(status["result"].is_object());
+}
+
+/// Missing / expired / tampered tokens are all rejected with the SAME generic
+/// reason (no leak of which check failed).
+#[tokio::test]
+#[serial]
+async fn test_operator_token_rejections_are_generic() {
+    let secret = "integration-operator-secret";
+    let (_temp_dir, addr, _handle) = spawn_operator_rpc_server(Some(secret), None).await;
+    let client = Client::new();
+
+    // (a) Missing token.
+    let missing = rpc_call(&client, addr, "operator_getQuorumInfo", json!({})).await;
+    // (b) Malformed token.
+    let malformed = rpc_call(
+        &client,
+        addr,
+        "operator_getQuorumInfo",
+        json!({ "token": "not-a-token" }),
+    )
+    .await;
+    // (c) Expired-but-validly-signed token.
+    let expired_tok = mint_operator_read_token(secret, 1_000_000_000); // year 2001
+    let expired = rpc_call(
+        &client,
+        addr,
+        "operator_getQuorumInfo",
+        json!({ "token": expired_tok }),
+    )
+    .await;
+    // (d) Tampered token (valid shape, wrong signature).
+    let good = valid_operator_token(secret);
+    let mut parts: Vec<&str> = good.split('.').collect();
+    let forged_exp = format!("op.{}.{}", 9_999_999_999u64, parts.pop().unwrap());
+    let tampered = rpc_call(
+        &client,
+        addr,
+        "operator_getQuorumInfo",
+        json!({ "token": forged_exp }),
+    )
+    .await;
+    // (e) Token signed with a DIFFERENT secret.
+    let wrong_secret_tok = valid_operator_token("some-other-secret");
+    let wrong_secret = rpc_call(
+        &client,
+        addr,
+        "operator_getQuorumInfo",
+        json!({ "token": wrong_secret_tok }),
+    )
+    .await;
+
+    for (label, resp) in [
+        ("missing", &missing),
+        ("malformed", &malformed),
+        ("expired", &expired),
+        ("tampered", &tampered),
+        ("wrong-secret", &wrong_secret),
+    ] {
+        assert!(resp["result"].is_null(), "{label} must not succeed");
+        assert_eq!(
+            resp["error"]["code"].as_i64(),
+            Some(-32021),
+            "{label} must use the generic rejection code"
+        );
+        // Every rejection reason is byte-for-byte identical (no oracle).
+        assert_eq!(
+            resp["error"]["message"].as_str(),
+            Some("operator token invalid or expired"),
+            "{label} reason must be generic"
+        );
+    }
+}
+
+/// A valid token unlocks `operator_getQuorumInfo`; with no gate evaluation yet
+/// the per-peer classification is `null` (anti-#541), never fabricated.
+#[tokio::test]
+#[serial]
+async fn test_operator_quorum_info_per_peer_null_until_evaluated() {
+    let secret = "integration-operator-secret-2";
+    let (_temp_dir, addr, _handle) = spawn_operator_rpc_server(Some(secret), None).await;
+    let client = Client::new();
+    let token = valid_operator_token(secret);
+
+    let resp = rpc_call(
+        &client,
+        addr,
+        "operator_getQuorumInfo",
+        json!({ "token": token }),
+    )
+    .await;
+    assert!(
+        resp["error"].is_null(),
+        "valid token must succeed: {:?}",
+        resp["error"]
+    );
+    let result = &resp["result"];
+    // Configured quorum contents are present.
+    assert!(result["quorum"].is_object());
+    assert!(result["quorum"]["members"].is_array());
+    // Per-peer classification is null until the gate runs — NOT an empty map.
+    assert!(
+        result["perPeer"].is_null(),
+        "perPeer must be null pre-evaluation"
+    );
+    assert!(result["gate"].is_null(), "gate must be null pre-evaluation");
+}
+
+/// After a REAL gate evaluation publishes a snapshot, `operator_getQuorumInfo`
+/// surfaces the exact per-peer classification the gate produced.
+#[tokio::test]
+#[serial]
+async fn test_operator_quorum_info_per_peer_after_evaluation() {
+    let secret = "integration-operator-secret-3";
+    let snapshot = QuorumGateSnapshot {
+        curated_members: 1,
+        auto_members: 1,
+        suppressed_peers: 1,
+        max_auto_members: 8,
+        intersection_refused: false,
+        curated_peer_ids: vec!["12D3KooWCurated".to_string()],
+        auto_peer_ids: vec!["12D3KooWAuto".to_string()],
+        suppressed_peer_ids: vec!["12D3KooWSuppressed".to_string()],
+    };
+    let (_temp_dir, addr, _handle) = spawn_operator_rpc_server(Some(secret), Some(snapshot)).await;
+    let client = Client::new();
+    let token = valid_operator_token(secret);
+
+    let resp = rpc_call(
+        &client,
+        addr,
+        "operator_getQuorumInfo",
+        json!({ "token": token }),
+    )
+    .await;
+    let per_peer = &resp["result"]["perPeer"];
+    assert_eq!(per_peer["curated"][0], "12D3KooWCurated");
+    assert_eq!(per_peer["auto"][0], "12D3KooWAuto");
+    assert_eq!(per_peer["suppressed"][0], "12D3KooWSuppressed");
+    assert_eq!(resp["result"]["gate"]["intersectionRefused"], json!(false));
+}
+
+/// `operator_getAuditLog` is present-but-empty in P4.2 (writes are #709).
+#[tokio::test]
+#[serial]
+async fn test_operator_audit_log_empty_but_present() {
+    let secret = "integration-operator-secret-4";
+    let (_temp_dir, addr, _handle) = spawn_operator_rpc_server(Some(secret), None).await;
+    let client = Client::new();
+    let token = valid_operator_token(secret);
+
+    let resp = rpc_call(
+        &client,
+        addr,
+        "operator_getAuditLog",
+        json!({ "token": token }),
+    )
+    .await;
+    assert!(resp["error"].is_null());
+    assert!(resp["result"]["entries"].is_array());
+    assert_eq!(resp["result"]["entries"].as_array().unwrap().len(), 0);
+    assert_eq!(resp["result"]["count"], json!(0));
+}
+
+/// The token grants READS ONLY: there is no operator write RPC. A plausible
+/// write method name must be an unknown method, even WITH a valid token.
+#[tokio::test]
+#[serial]
+async fn test_operator_token_grants_no_write_method() {
+    let secret = "integration-operator-secret-5";
+    let (_temp_dir, addr, _handle) = spawn_operator_rpc_server(Some(secret), None).await;
+    let client = Client::new();
+    let token = valid_operator_token(secret);
+
+    // #709's write method must NOT exist in this build.
+    let resp = rpc_call(
+        &client,
+        addr,
+        "operator_submitAction",
+        json!({ "token": token }),
+    )
+    .await;
+    assert!(resp["result"].is_null());
+    // Method-not-found (-32601), i.e. no write surface is reachable at all.
+    assert_eq!(resp["error"]["code"].as_i64(), Some(-32601));
+}
+
 #[tokio::test]
 #[serial]
 async fn test_websocket_plain_get_returns_400() {

@@ -6,6 +6,7 @@
 pub mod address;
 pub mod balance;
 pub mod init;
+pub mod operator;
 pub mod run;
 pub mod send;
 pub mod snapshot;

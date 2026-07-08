@@ -2,10 +2,12 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Logo } from '@botho/ui'
 import {
+  captureOperatorToken,
   NetworkDashboard,
   TrustDashboard,
   useFleetHistory,
   useFleetStatus,
+  useOperatorQuorumInfo,
   useTrustStatus,
 } from '@botho/features'
 import { ArrowLeft } from 'lucide-react'
@@ -27,6 +29,9 @@ type OperatorTab = 'fleet' | 'trust'
 
 export function OperatorPage() {
   const [tab, setTab] = useState<OperatorTab>('fleet')
+  // Lift any magic-link read token out of the URL fragment into sessionStorage
+  // on mount (#707), then strip it from the address bar. Null ⇒ public view.
+  const [token] = useState<string | null>(() => captureOperatorToken())
 
   return (
     <div className="min-h-screen">
@@ -68,7 +73,7 @@ export function OperatorPage() {
             </TabButton>
           </div>
 
-          {tab === 'fleet' ? <FleetTab /> : <TrustTab />}
+          {tab === 'fleet' ? <FleetTab /> : <TrustTab token={token} />}
         </div>
       </main>
     </div>
@@ -116,7 +121,21 @@ function FleetTab() {
   )
 }
 
-function TrustTab() {
+/**
+ * Trust tab (#706), upgraded for #707: when a valid read token is present it
+ * additionally polls `operator_getQuorumInfo` and renders per-peer
+ * classification badges + the configured-members panel. Without a token it
+ * degrades cleanly to the public read-only view.
+ */
+function TrustTab({ token }: { token: string | null }) {
   const { statuses } = useTrustStatus(FLEET)
-  return <TrustDashboard nodes={FLEET} statuses={statuses} />
+  const { info, mode } = useOperatorQuorumInfo(FLEET, token)
+  return (
+    <TrustDashboard
+      nodes={FLEET}
+      statuses={statuses}
+      operatorInfo={token ? info : undefined}
+      operatorMode={mode}
+    />
+  )
 }
