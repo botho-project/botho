@@ -143,8 +143,8 @@ describe('buildCheckoutSessionParams', () => {
     expect(params.get('subscription_data[metadata][region]')).toBe('us-west-2')
   })
 
-  it('always creates a customer for renewals/portal', () => {
-    expect(params.get('customer_creation')).toBe('always')
+  it('does not set customer_creation (subscription mode creates a Customer implicitly; Stripe rejects the param)', () => {
+    expect(params.has('customer_creation')).toBe(false)
   })
 
   it('omits customer_email when no email given', () => {

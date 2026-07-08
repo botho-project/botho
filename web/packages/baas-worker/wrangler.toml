@@ -51,7 +51,7 @@ crons = ["*/15 * * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "botho-baas"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "876905b5-a42f-4735-b888-4f9e898751c6"
 
 [vars]
 # Where Stripe redirects after a successful / cancelled checkout. These point at
