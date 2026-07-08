@@ -1,15 +1,24 @@
 % Dynamic Block Timing Diagram
-% Shows relationship between utilization, block time, and emission
+% Shows the discrete step function mapping transaction load to block time,
+% and the resulting throughput (blocks/hour).
+%
+% Ground truth: botho/src/block.rs BLOCK_TIME_LEVELS
+%   >=20 tx/s -> 3s, >=5 -> 5s, >=1 -> 10s, >=0.2 -> 20s, else 40s.
+% Floor 3s (consensus minimum), ceiling 40s (idle). See Section 7 prose.
 %
 % ACCESSIBILITY ALT TEXT:
-% A dual-axis graph showing dynamic block timing. X-axis shows network
-% utilization (0-100%). Left Y-axis shows block time in seconds (5-40s),
-% with a blue descending line from 40s at idle to 5s at full utilization.
-% Right Y-axis shows blocks per hour (90-720), with an orange dashed curve
-% rising inversely. Three colored regions indicate low (green), moderate
-% (yellow), and high (red) usage zones. Formula shown: T = Tmin + (Tmax -
-% Tmin) * (1 - U). Key insight: low usage means slower blocks and less
-% emission; high usage means faster blocks and more throughput.
+% A descending staircase graph showing dynamic block timing as a discrete
+% step function of network load. X-axis shows the measured transaction rate
+% (tx/s), rising left to right through five bands: Idle (<0.2), Low (>=0.2),
+% Medium (>=1), High (>=5), Very high (>=20 tx/s). Left Y-axis shows block
+% time at the five discrete levels 40, 20, 10, 5, 3 seconds. A blue staircase
+% steps down from 40s (idle) to a 3s floor (very high load), with a horizontal
+% tread across each band and a drop at each threshold. Right Y-axis shows the
+% corresponding throughput in blocks per hour: 90 (40s), 180 (20s), 360 (10s),
+% 720 (5s), 1200 (3s). Key insight: block time is not a continuous curve but
+% five discrete levels; as load rises the network steps to faster blocks
+% (higher throughput), bottoming out at the 3-second consensus floor, while
+% low load holds slower blocks and dampens emission.
 
 \begin{figure}[ht]
 \centering
@@ -18,77 +27,94 @@
     >=stealth,
 ]
 
+% Region shading by load band (left = idle/slow, right = busy/fast)
+\fill[green!8]  (0,0) rectangle (2,6);
+\fill[teal!8]   (2,0) rectangle (4,6);
+\fill[yellow!8] (4,0) rectangle (6,6);
+\fill[orange!8] (6,0) rectangle (8,6);
+\fill[red!8]    (8,0) rectangle (10,6);
+
+% Vertical threshold separators
+\foreach \x in {2,4,6,8} {
+    \draw[dashed, gray] (\x,0) -- (\x,6);
+}
+
 % Main axes
-\draw[->] (0,0) -- (10.5,0) node[right] {Utilization};
-\draw[->] (0,0) -- (0,6) node[above] {Block Time (s)};
+\draw[->] (0,0) -- (10,0);
+\draw[->] (0,0) -- (0,6.6) node[above] {Block time (s)};
+\node[below] at (5,-0.7) {Transaction rate (tx/s), rising load $\rightarrow$};
 
-% Secondary Y-axis (right side) for emission
-\draw[->] (10,0) -- (10,6) node[above] {Blocks/Hour};
+% Secondary Y-axis (right side) for throughput
+\draw[->] (10,0) -- (10,6.6) node[above] {Blocks/hour};
 
-% X-axis labels
-\foreach \x/\label in {0/0\%, 2.5/25\%, 5/50\%, 7.5/75\%, 10/100\%} {
+% X-axis threshold labels (band boundaries)
+\foreach \x/\label in {2/0.2, 4/1, 6/5, 8/20} {
     \draw (\x,-0.1) -- (\x,0.1);
     \node[below] at (\x,-0.15) {\scriptsize \label};
 }
 
-% Left Y-axis labels (block time: 5s to 40s)
-\foreach \y/\label in {0/5, 1.5/14, 3/23, 4.5/31, 6/40} {
+% Left Y-axis labels: five discrete block-time levels (equal ordinal spacing)
+\foreach \y/\label in {0/3, 1.5/5, 3/10, 4.5/20, 6/40} {
     \draw (-0.1,\y) -- (0.1,\y);
     \node[left] at (-0.15,\y) {\scriptsize \label};
 }
 
-% Right Y-axis labels (blocks per hour)
-\foreach \y/\label in {0/720, 1.5/257, 3/157, 4.5/116, 6/90} {
+% Right Y-axis labels: blocks/hour = 3600 / block-time, at the matching level
+\foreach \y/\label in {0/1200, 1.5/720, 3/360, 4.5/180, 6/90} {
     \draw (9.9,\y) -- (10.1,\y);
     \node[right] at (10.15,\y) {\scriptsize \label};
 }
 
-% Block time curve (linear: T = 40 - 35*U, mapped to y = 6 - 6*x/10)
-\draw[very thick, blue] (0,6) -- (10,0);
+% Discrete step function (descending staircase): block time falls as load rises
+% 40s (idle) -> 20s -> 10s -> 5s -> 3s (floor), each held across its load band.
+\draw[very thick, blue]
+    (0,6)   -- (2,6)
+    (2,4.5) -- (4,4.5)
+    (4,3)   -- (6,3)
+    (6,1.5) -- (8,1.5)
+    (8,0)   -- (10,0);
+% Risers (drops at each threshold), drawn dotted to read as transitions
+\draw[thick, blue, dotted]
+    (2,6)   -- (2,4.5)
+    (4,4.5) -- (4,3)
+    (6,3)   -- (6,1.5)
+    (8,1.5) -- (8,0);
+% Level dots
+\foreach \x/\y in {1/6, 3/4.5, 5/3, 7/1.5, 9/0} {
+    \fill[blue] (\x,\y) circle (1.5pt);
+}
 
-% Blocks per hour curve (inverse relationship, approximately)
-% At U=0: 40s -> 90 blocks/hr; At U=1: 5s -> 720 blocks/hr
-\draw[very thick, orange, dashed]
-    (0,6) .. controls (3,4.5) and (7,1.5) .. (10,0);
+% Per-band block-time value labels on each tread
+\node[font=\scriptsize, blue, above] at (1,6)   {40\,s};
+\node[font=\scriptsize, blue, above] at (3,4.5) {20\,s};
+\node[font=\scriptsize, blue, above] at (5,3)   {10\,s};
+\node[font=\scriptsize, blue, above] at (7,1.5) {5\,s};
+\node[font=\scriptsize, blue, above] at (9,0)   {3\,s};
 
-% Fill regions to show high/low utilization
-\fill[green!10] (0,0) rectangle (3,6);
-\fill[yellow!10] (3,0) rectangle (7,6);
-\fill[red!10] (7,0) rectangle (10,6);
-
-% Vertical region separators
-\draw[dashed, gray] (3,0) -- (3,6);
-\draw[dashed, gray] (7,0) -- (7,6);
-
-% Region labels
-\node[font=\scriptsize, align=center] at (1.5,5.3) {Low\\usage};
-\node[font=\scriptsize, align=center] at (5,5.3) {Moderate\\usage};
-\node[font=\scriptsize, align=center] at (8.5,5.3) {High\\usage};
-
-% Legend
-\node[anchor=west] at (0.5,-1.5) {
-    \begin{tabular}{cl}
-    \tikz\draw[very thick, blue] (0,0) -- (0.5,0); & Block time (left axis) \\
-    \tikz\draw[very thick, orange, dashed] (0,0) -- (0.5,0); & Throughput (right axis) \\
-    \end{tabular}
-};
+% Network-state band labels along the top
+\node[font=\scriptsize, align=center] at (1,5.6) {Idle};
+\node[font=\scriptsize, align=center] at (3,5.6) {Low};
+\node[font=\scriptsize, align=center] at (5,5.6) {Medium};
+\node[font=\scriptsize, align=center] at (7,5.6) {High};
+\node[font=\scriptsize, align=center] at (9,5.6) {Very\\high};
 
 % Key insight annotation
-\node[align=left, font=\scriptsize, anchor=west] at (4,-2.5) {
-    \textbf{Key insight}: Low utilization $\rightarrow$ slower blocks $\rightarrow$ less emission\\
-    High utilization $\rightarrow$ faster blocks $\rightarrow$ more throughput
-};
-
-% Formula
-\node[align=center, font=\scriptsize] at (5,7) {
-    $T_{\text{target}} = T_{\min} + (T_{\max} - T_{\min}) \cdot (1 - U)$
+\node[align=left, font=\scriptsize, anchor=north west] at (0,-1.15) {
+    \tikz\draw[very thick, blue] (0,0) -- (0.5,0); \; Block time (left axis) $=$
+    five discrete levels, not a continuous curve.\\[2pt]
+    \textbf{Key insight}: rising load steps to faster blocks (more throughput),
+    floored at the 3\,s consensus minimum;\\
+    idle load holds 40\,s blocks and dampens emission.
 };
 
 \end{tikzpicture}
-\caption{Dynamic block timing mechanism. Block time varies linearly from 40
-seconds (idle network) to 5 seconds (maximum demand). This creates natural
-inflation dampening: low usage produces fewer blocks and less emission, while
-high usage increases throughput to meet demand. The system self-regulates
-based on mempool pressure.}
+\caption{Dynamic block timing mechanism. The target block time is a
+deterministic \emph{step function} of the recent transaction rate, selecting
+one of five discrete levels---40, 20, 10, 5, or 3 seconds---as network load
+rises. The interval steps down from the 40-second idle ceiling to the
+3-second consensus floor (reached only under transient maximum demand),
+raising throughput from 90 to 1{,}200 blocks per hour. This creates natural
+inflation dampening: low usage holds slower blocks and less emission, while
+high usage steps to faster blocks to meet demand.}
 \label{fig:dynamic-timing}
 \end{figure}
