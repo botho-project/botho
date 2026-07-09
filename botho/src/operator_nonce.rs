@@ -330,15 +330,14 @@ mod tests {
     const NONCE_B: &str = "0011223344556677889900aabbccddee";
 
     fn tmp_store_path() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "botho-nonce-test-{}-{}",
-            std::process::id(),
-            // A monotonically-different suffix per call within a process.
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        // A process-unique, thread-safe suffix per call. A wall-clock suffix
+        // (SystemTime::now) collides when two parallel test threads start
+        // within the same clock tick, making them share a directory and race
+        // persist()'s rename target; an atomic counter cannot collide.
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("botho-nonce-test-{}-{}", std::process::id(), n));
         dir.join(NONCE_STORE_FILE)
     }
 
