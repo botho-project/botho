@@ -167,7 +167,7 @@ export function LandingPage() {
             </div>
           </div>
           <h1 className="font-display text-4xl sm:text-5xl md:text-7xl font-bold mb-4 sm:mb-6 leading-tight">
-            Privacy Currency for the{' '}
+            Private Currency for the{' '}
             <span className="text-gradient">Quantum Era</span>
           </h1>
           <p className="text-base sm:text-lg md:text-xl text-ghost mb-8 sm:mb-10 max-w-2xl mx-auto px-2">
@@ -236,7 +236,7 @@ export function LandingPage() {
           </h2>
           <p className="text-sm sm:text-base text-ghost mb-6 sm:mb-8 px-2">
             Create a wallet in seconds. No email, no KYC, no tracking. Or run your
-            own always-on node with a managed node.
+            own always-on node with managed hosting.
           </p>
           <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 justify-center px-4 sm:px-0">
             <Link to="/wallet" className="w-full sm:w-auto">
@@ -246,7 +246,7 @@ export function LandingPage() {
               </Button>
             </Link>
             <Link to="/node" className="w-full sm:w-auto">
-              <Button variant="secondary" size="lg" className="w-full sm:w-auto justify-center">
+              <Button variant="secondary" size="lg" className="w-full sm:w-auto justify-center px-8">
                 <Server className="mr-2" size={18} />
                 Host a Node
               </Button>
