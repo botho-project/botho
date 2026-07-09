@@ -483,6 +483,10 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     // Operator read surface (#707, P4.2). Absent [rpc.operator] ⇒ None ⇒ the
     // operator_* RPCs stay OFF and the node behaves exactly as today.
     .with_operator_read_token_secret(config.rpc.operator_read_token_secret().map(str::to_string))
+    // Operator-action signing public keys (#747, P4.4a). Empty/absent list ⇒
+    // no write surface (fail closed). No RPC consumes this yet; with an empty
+    // list the node behaves exactly as today.
+    .with_operator_action_public_keys(config.rpc.operator_action_public_keys())
     .with_identity(node_identity)
     .with_minter_health(minter_health.clone())
     .with_sync_status(sync_status.clone())

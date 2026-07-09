@@ -135,6 +135,19 @@ enum OperatorAction {
         #[arg(long)]
         ttl: Option<u64>,
     },
+
+    /// Generate an operator signing keypair (Ed25519) on this workstation.
+    ///
+    /// Writes a key file whose PRIVATE KEY is encrypted at rest under a
+    /// MANDATORY passphrase (prompted, or from $BOTHO_OPERATOR_KEY_PASSPHRASE).
+    /// Prints the public key and its `signerKeyId` fingerprint to provision
+    /// into each node's `[rpc.operator] action_public_keys`. The private key
+    /// never leaves this machine (#747, P4.4a).
+    Keygen {
+        /// Output path for the key file (default: ./operator-key.json).
+        #[arg(long, short)]
+        output: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -249,6 +262,9 @@ fn main() -> Result<()> {
         Commands::Operator { action } => match action {
             OperatorAction::MintReadLink { dashboard, ttl } => {
                 commands::operator::mint_read_link(&config_path, &dashboard, ttl)
+            }
+            OperatorAction::Keygen { output } => {
+                commands::operator::keygen(output.as_deref(), network)
             }
         },
     }
