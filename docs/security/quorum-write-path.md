@@ -253,6 +253,13 @@ as part of §4 step 7 payload validity).
   of any field — blocked by the signature. A captured envelope is therefore
   worthless except as an information leak (it reveals one intended config
   change), and transport is TLS anyway (§8.2).
+- **Dry-run exception (accepted)**: because dry runs never consume their
+  nonce (§4), a captured `dryRun: true` envelope CAN be re-submitted against
+  its target node until `expiresAt`. This is deliberate and bounded: the
+  re-submission cannot change state or be converted to an apply (`dryRun` is
+  signed, finding 1), and its only yield is re-reading the gate verdict for
+  one fixed hypothetical edit for ≤5 minutes — an information leak already
+  in the §8.2 row, further limited by TLS transport.
 - **Reordering**: two envelopes signed in sequence can arrive out of order
   within their windows; each is individually gate-validated against the
   then-current state, so the result is always a gate-accepted configuration,
