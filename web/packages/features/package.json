@@ -25,6 +25,8 @@
   "dependencies": {
     "@botho/core": "workspace:*",
     "@botho/ui": "workspace:*",
+    "@noble/curves": "^1.8.1",
+    "@noble/hashes": "^2.0.1",
     "lucide-react": "^0.562.0",
     "motion": "^12.23.26"
   },
