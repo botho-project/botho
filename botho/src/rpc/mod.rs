@@ -39,6 +39,16 @@ const OPERATOR_NOT_ENABLED: i32 = -32020;
 /// shape) — fail closed with one reason (#707).
 const OPERATOR_TOKEN_REJECTED: i32 = -32021;
 
+/// An operator WRITE action (`operator_submitAction`) was rejected: the request
+/// was verified but a check refused it, or the apply path returned a refusal.
+/// The response `result` carries the full structured outcome (outcome class,
+/// gate verdict, reason) — the error code merely signals "not applied" (#748).
+const OPERATOR_ACTION_REJECTED: i32 = -32022;
+
+/// The operator-action write channel into the event loop is unavailable (relay
+/// node / test state with no loop wired). Fail closed (#748).
+const OPERATOR_ACTION_UNAVAILABLE: i32 = -32023;
+
 /// Helper macro to acquire a read lock, returning a JSON-RPC error if poisoned
 macro_rules! read_lock {
     ($lock:expr, $id:expr) => {
@@ -323,6 +333,14 @@ pub struct RpcState {
     /// Operator audit-log store (#707). Present-but-empty in P4.2; #709 wires
     /// the append side. Surfaced by `operator_getAuditLog`.
     pub operator_audit_log: Arc<OperatorAuditLog>,
+    /// Bounded write channel into the `commands::run` event loop for verified
+    /// operator actions (#748, §4 apply path). `None` ⇒ no event loop is wired
+    /// (relay node / tests) ⇒ `operator_submitAction` fails closed with
+    /// `OPERATOR_ACTION_UNAVAILABLE`. Mirrors [`Self::tx_relay`]; bounded (not
+    /// unbounded) so a flood of actions cannot grow memory without bound — the
+    /// handler applies backpressure by awaiting a send permit.
+    pub operator_action_tx:
+        Option<tokio::sync::mpsc::Sender<crate::operator_action::OperatorActionRequest>>,
 }
 
 impl RpcState {
@@ -365,6 +383,7 @@ impl RpcState {
             operator_read_token_secret: None,
             operator_action_public_keys: Vec::new(),
             operator_audit_log: OperatorAuditLog::new(),
+            operator_action_tx: None,
         }
     }
 
@@ -411,6 +430,7 @@ impl RpcState {
             operator_read_token_secret: None,
             operator_action_public_keys: Vec::new(),
             operator_audit_log: OperatorAuditLog::new(),
+            operator_action_tx: None,
         }
     }
 
@@ -455,6 +475,7 @@ impl RpcState {
             operator_read_token_secret: None,
             operator_action_public_keys: Vec::new(),
             operator_audit_log: OperatorAuditLog::new(),
+            operator_action_tx: None,
         }
     }
 
@@ -619,6 +640,19 @@ impl RpcState {
         sender: tokio::sync::mpsc::UnboundedSender<crate::transaction::Transaction>,
     ) -> Self {
         self.tx_relay = Some(sender);
+        self
+    }
+
+    /// Wire in the BOUNDED operator-action channel into the `commands::run`
+    /// event loop (#748, §4 apply path). Mirrors [`Self::with_tx_relay`], but
+    /// bounded: the loop is the single applier and the handler awaits a send
+    /// permit, so a burst of actions cannot grow memory without bound. Absent ⇒
+    /// `operator_submitAction` fails closed with `OPERATOR_ACTION_UNAVAILABLE`.
+    pub fn with_operator_action_channel(
+        mut self,
+        sender: tokio::sync::mpsc::Sender<crate::operator_action::OperatorActionRequest>,
+    ) -> Self {
+        self.operator_action_tx = Some(sender);
         self
     }
 }
@@ -960,6 +994,12 @@ async fn handle_rpc_method(request: &JsonRpcRequest, state: &RpcState) -> JsonRp
         // no operator write method here (that is #709).
         "operator_getQuorumInfo" => handle_operator_quorum_info(id, &request.params, state).await,
         "operator_getAuditLog" => handle_operator_audit_log(id, &request.params, state).await,
+
+        // Operator-only WRITE method (#748, P4.4b). Signed-envelope verified
+        // (fail-closed, parse-after-verify), then gate-routed apply via the
+        // bounded channel into the event loop. Fails closed when
+        // `action_public_keys` is empty ("operator actions not configured").
+        "operator_submitAction" => handle_operator_submit_action(id, &request.params, state).await,
 
         // Exchange integration methods
         "exchange_registerViewKey" => handle_register_view_key(id, &request.params, state).await,
@@ -2512,6 +2552,171 @@ async fn handle_operator_audit_log(id: Value, params: &Value, state: &RpcState) 
     )
 }
 
+/// `operator_submitAction` (#748, P4.4b): the operator-signed quorum-curation
+/// WRITE path.
+///
+/// This handler owns verification steps 1–5 (which are all SECRET-FREE, so the
+/// ordering keeps no secret-dependent check ahead of signature verification, §9
+/// oracle-risk item):
+///   1. Config gate: `action_public_keys` non-empty, else "not configured".
+///   2. Signer known: `signerKeyId` selects a configured pubkey.
+///   3. Signature valid over the RECEIVED canonical bytes + domain separator,
+///      then parse-after-verify (finding 1: unknown/duplicate keys rejected).
+///   4. Target binding: `targetNode` == this node's PeerId.
+///   5. Freshness: `issuedAt - 30 <= now <= expiresAt`, lifetime <= 300s.
+///
+/// Steps 6 (nonce reserve-then-apply) and 7-apply (payload policy against the
+/// LIVE peer set, the EXISTING gate, install, `Config::save`) run in the
+/// `commands::run` event loop, because they need the live `NonceStore`, the
+/// connected-peer set, the consensus handle, and the config — the handler sends
+/// the verified envelope over the bounded channel and awaits the outcome.
+///
+/// The handler takes EXACTLY ONE argument object with two fields — `envelope`
+/// (canonical JSON string) and `signature` — and reads nothing else (finding 1:
+/// no sibling parameter influences processing).
+async fn handle_operator_submit_action(
+    id: Value,
+    params: &Value,
+    state: &RpcState,
+) -> JsonRpcResponse {
+    use crate::operator_action as oa;
+
+    // Step 1 (config gate), first and secret-free: an empty action_public_keys
+    // list means the write surface does not exist at all (fail-closed). This
+    // check precedes even envelope extraction so a node with the feature off
+    // returns the stable "not configured" signal regardless of request shape.
+    if state.operator_action_public_keys.is_empty() {
+        return operator_action_reject(id, &oa::RejectReason::NotConfigured, None);
+    }
+
+    // Extract the single (envelope, signature) argument (finding 1).
+    let signed = match oa::SignedEnvelope::from_params(params) {
+        Ok(s) => s,
+        Err(reason) => return operator_action_reject(id, &reason, None),
+    };
+
+    // The signerKeyId is needed to SELECT the verifying key (step 2), but we
+    // must not depend on secret data before signature verification — step 2 is a
+    // fingerprint scan over PUBLIC keys, so it is safe here. We first peek the
+    // signerKeyId out of the (as-yet-unverified) bytes only to pick the key; the
+    // signature is then checked over the exact received bytes, and the fully
+    // trusted parse happens AFTER that inside `verify_and_parse`.
+    let signer_key_id = match oa::peek_signer_key_id(&signed.envelope) {
+        Ok(s) => s,
+        Err(reason) => return operator_action_reject(id, &reason, None),
+    };
+
+    // Step 1 (config gate) + step 2 (signer known): select the verifying key.
+    let verifying_key =
+        match oa::select_verifying_key(&state.operator_action_public_keys, &signer_key_id) {
+            Ok(vk) => vk,
+            Err(reason) => return operator_action_reject(id, &reason, None),
+        };
+
+    // Step 3 (signature) + parse-after-verify (finding 1).
+    let parsed = match signed.verify_and_parse(&verifying_key) {
+        Ok(p) => p,
+        Err(reason) => return operator_action_reject(id, &reason, None),
+    };
+
+    // Step 4 (target binding).
+    if let Err(reason) = oa::check_target(&parsed, &state.identity.peer_id) {
+        return operator_action_reject(id, &reason, Some(&parsed));
+    }
+
+    // Step 5 (freshness).
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if let Err(reason) = oa::check_freshness(&parsed, now) {
+        return operator_action_reject(id, &reason, Some(&parsed));
+    }
+
+    // Steps 6 + 7-apply run in the event loop. Send the verified envelope over
+    // the bounded channel and await the synchronous outcome.
+    let tx = match state.operator_action_tx.as_ref() {
+        Some(tx) => tx,
+        None => {
+            return JsonRpcResponse::error(
+                id,
+                OPERATOR_ACTION_UNAVAILABLE,
+                "operator actions are not available on this node (no event loop wired)",
+            );
+        }
+    };
+
+    let (responder, receiver) = tokio::sync::oneshot::channel();
+    let request = oa::OperatorActionRequest { parsed, responder };
+    // Bounded send: awaits a permit (backpressure) rather than dropping.
+    if tx.send(request).await.is_err() {
+        return JsonRpcResponse::error(
+            id,
+            INTERNAL_ERROR,
+            "operator action could not be dispatched to the event loop",
+        );
+    }
+
+    match receiver.await {
+        Ok(outcome) => operator_action_response(id, outcome),
+        Err(_) => JsonRpcResponse::error(
+            id,
+            INTERNAL_ERROR,
+            "event loop dropped the operator action without responding",
+        ),
+    }
+}
+
+/// Build a JSON-RPC response for an early (handler-side) rejection, wrapping
+/// the structured outcome so #750 sees the same shape whether the refusal
+/// happened in the handler (steps 1–5) or the loop (steps 6–7).
+fn operator_action_reject(
+    id: Value,
+    reason: &crate::operator_action::RejectReason,
+    parsed: Option<&crate::operator_action::ParsedEnvelope>,
+) -> JsonRpcResponse {
+    let outcome = crate::operator_action::OperatorActionOutcome::rejected(reason, parsed);
+    operator_action_response(id, outcome)
+}
+
+/// Render an [`crate::operator_action::OperatorActionOutcome`] as a JSON-RPC
+/// response: applied outcomes are `success` (the caller reads the outcome
+/// class), refusals are `error` with the structured outcome in `data` so the
+/// dashboard renders the gate verdict truthfully (anti-#541: the verdict comes
+/// only from the node).
+fn operator_action_response(
+    id: Value,
+    outcome: crate::operator_action::OperatorActionOutcome,
+) -> JsonRpcResponse {
+    use crate::operator_action::OutcomeClass;
+    let body = serde_json::to_value(&outcome).unwrap_or(Value::Null);
+    match outcome.outcome {
+        OutcomeClass::Applied => JsonRpcResponse::success(id, body),
+        OutcomeClass::GateRefused | OutcomeClass::VerifyRefused => {
+            let code = if outcome.outcome == OutcomeClass::VerifyRefused {
+                // Not-configured is the dedicated "feature off" signal.
+                if outcome.audit_tag == "verify_refused:not_configured" {
+                    OPERATOR_NOT_ENABLED
+                } else {
+                    OPERATOR_ACTION_REJECTED
+                }
+            } else {
+                OPERATOR_ACTION_REJECTED
+            };
+            JsonRpcResponse {
+                jsonrpc: "2.0",
+                result: None,
+                error: Some(JsonRpcError {
+                    code,
+                    message: outcome.message.clone(),
+                    data: Some(body),
+                }),
+                id,
+            }
+        }
+    }
+}
+
 /// Check if the given origin is allowed based on the CORS configuration.
 /// Returns the origin to echo back if allowed, or None if denied.
 fn check_cors_origin(request_origin: Option<&str>, allowed_origins: &[String]) -> Option<String> {
@@ -3762,6 +3967,210 @@ mod tests {
         let state = empty_test_state()
             .with_operator_action_public_keys(vec!["  ".to_string(), "".to_string()]);
         assert!(state.operator_action_public_keys.is_empty());
+    }
+
+    // -- operator_submitAction RPC handler tests (#748) -----------------------
+
+    use ed25519_dalek::{Signer as _, SigningKey};
+
+    fn oa_test_key() -> SigningKey {
+        SigningKey::from_bytes(&[7u8; 32])
+    }
+
+    fn oa_signer_id(sk: &SigningKey) -> String {
+        crate::operator_key::fingerprint_hex(&sk.verifying_key().to_bytes())
+    }
+
+    fn oa_pubkey_hex(sk: &SigningKey) -> String {
+        hex::encode(sk.verifying_key().to_bytes())
+    }
+
+    /// A base58 PeerId to use as the node's identity / member targets.
+    fn oa_peer_id(seed: u8) -> String {
+        let kp = libp2p::identity::Keypair::ed25519_from_bytes([seed; 32]).unwrap();
+        libp2p::PeerId::from(kp.public()).to_string()
+    }
+
+    /// Build a signed envelope (canonical sorted-key JSON) and the RPC params
+    /// object `{envelope, signature}`.
+    #[allow(clippy::too_many_arguments)]
+    fn oa_params(
+        sk: &SigningKey,
+        action: &str,
+        params_json: &str,
+        target: &str,
+        issued_at: u64,
+        expires_at: u64,
+        nonce: &str,
+        dry_run: bool,
+    ) -> Value {
+        let canonical = format!(
+            "{{\"action\":\"{action}\",\"dryRun\":{dry_run},\"expiresAt\":{expires_at},\
+             \"issuedAt\":{issued_at},\"nonce\":\"{nonce}\",\"params\":{params_json},\
+             \"signerKeyId\":\"{s}\",\"targetNode\":\"{target}\",\"v\":1}}",
+            s = oa_signer_id(sk),
+        );
+        let mut msg = crate::operator_action::DOMAIN_SEPARATOR.to_vec();
+        msg.extend_from_slice(canonical.as_bytes());
+        let sig = sk.sign(&msg);
+        json!({ "envelope": canonical, "signature": hex::encode(sig.to_bytes()) })
+    }
+
+    fn oa_now() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    #[tokio::test]
+    async fn submit_action_not_configured_is_inert() {
+        // No action_public_keys ⇒ "operator actions not configured", fail-closed.
+        let state = empty_test_state();
+        let sk = oa_test_key();
+        let target = oa_peer_id(1);
+        let params = oa_params(
+            &sk,
+            "quorum.set_max_auto_members",
+            "{\"value\":8}",
+            &target,
+            oa_now(),
+            oa_now() + 100,
+            "00112233445566778899aabbccddeeff",
+            false,
+        );
+        let resp = handle_operator_submit_action(json!(1), &params, &state).await;
+        let err = resp.error.expect("must be an error");
+        assert_eq!(err.code, OPERATOR_NOT_ENABLED);
+    }
+
+    #[tokio::test]
+    async fn submit_action_bad_signature_rejected_at_handler() {
+        let sk = oa_test_key();
+        let target = oa_peer_id(1);
+        let state = empty_test_state().with_operator_action_public_keys(vec![oa_pubkey_hex(&sk)]);
+        let mut params = oa_params(
+            &sk,
+            "quorum.set_max_auto_members",
+            "{\"value\":8}",
+            &target,
+            oa_now(),
+            oa_now() + 100,
+            "00112233445566778899aabbccddeeff",
+            false,
+        );
+        // Corrupt the signature.
+        let sig = params["signature"].as_str().unwrap().to_string();
+        params["signature"] = json!(format!("ff{}", &sig[2..]));
+        let resp = handle_operator_submit_action(json!(1), &params, &state).await;
+        let err = resp.error.expect("bad sig must error");
+        assert_eq!(err.code, OPERATOR_ACTION_REJECTED);
+    }
+
+    #[tokio::test]
+    async fn submit_action_wrong_target_rejected_at_handler() {
+        let sk = oa_test_key();
+        let mut state =
+            empty_test_state().with_operator_action_public_keys(vec![oa_pubkey_hex(&sk)]);
+        // This node's identity is peer 9; the envelope targets peer 1.
+        state.identity.peer_id = oa_peer_id(9);
+        let params = oa_params(
+            &sk,
+            "quorum.set_max_auto_members",
+            "{\"value\":8}",
+            &oa_peer_id(1),
+            oa_now(),
+            oa_now() + 100,
+            "00112233445566778899aabbccddeeff",
+            false,
+        );
+        let resp = handle_operator_submit_action(json!(1), &params, &state).await;
+        let err = resp.error.expect("wrong target must error");
+        assert_eq!(err.code, OPERATOR_ACTION_REJECTED);
+        // The structured outcome is carried in `data` for the dashboard.
+        let data = err.data.expect("structured outcome in data");
+        assert_eq!(data["auditTag"], "verify_refused:wrong_target");
+    }
+
+    #[tokio::test]
+    async fn submit_action_channel_unavailable_fails_closed() {
+        // Configured + valid signature/target/freshness, but NO event-loop
+        // channel wired ⇒ fail closed with OPERATOR_ACTION_UNAVAILABLE.
+        let sk = oa_test_key();
+        let target = oa_peer_id(9);
+        let mut state =
+            empty_test_state().with_operator_action_public_keys(vec![oa_pubkey_hex(&sk)]);
+        state.identity.peer_id = target.clone();
+        let params = oa_params(
+            &sk,
+            "quorum.set_max_auto_members",
+            "{\"value\":8}",
+            &target,
+            oa_now(),
+            oa_now() + 100,
+            "00112233445566778899aabbccddeeff",
+            false,
+        );
+        let resp = handle_operator_submit_action(json!(1), &params, &state).await;
+        let err = resp.error.expect("no channel must error");
+        assert_eq!(err.code, OPERATOR_ACTION_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn submit_action_full_roundtrip_over_bounded_channel() {
+        // End-to-end: handler does steps 1–5, sends over a BOUNDED channel to a
+        // stand-in "event loop" that responds with an applied outcome. Verifies
+        // the channel is bounded and the synchronous request→verdict round trip
+        // works.
+        use crate::operator_action::{GateVerdict, OperatorActionOutcome, QuorumPosture};
+
+        let sk = oa_test_key();
+        let target = oa_peer_id(9);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let mut state = empty_test_state()
+            .with_operator_action_public_keys(vec![oa_pubkey_hex(&sk)])
+            .with_operator_action_channel(tx);
+        state.identity.peer_id = target.clone();
+
+        // Stand-in event loop: receive the verified request and reply "applied".
+        let loop_task = tokio::spawn(async move {
+            let req = rx.recv().await.expect("request");
+            // The handler must have verified + parsed before sending.
+            assert_eq!(req.parsed.target_node, oa_peer_id(9));
+            assert!(!req.parsed.dry_run);
+            let verdict = GateVerdict {
+                intersection_refused: false,
+                curated_members: 3,
+                auto_members: 1,
+                suppressed_peers: 0,
+                max_auto_members: 8,
+                fault_tolerant: true,
+                degenerate: false,
+            };
+            let posture = QuorumPosture {
+                mode: "recommended".to_string(),
+                members: vec![],
+                max_auto_members: 8,
+            };
+            let outcome = OperatorActionOutcome::applied(&req.parsed, posture, verdict);
+            let _ = req.responder.send(outcome);
+        });
+
+        let params = oa_params(
+            &sk,
+            "quorum.set_max_auto_members",
+            "{\"value\":8}",
+            &target,
+            oa_now(),
+            oa_now() + 100,
+            "00112233445566778899aabbccddeeff",
+            false,
+        );
+        let resp = handle_operator_submit_action(json!(1), &params, &state).await;
+        loop_task.await.unwrap();
+        let result = resp.result.expect("applied must be success");
+        assert_eq!(result["outcome"], "applied");
+        assert_eq!(result["gate"]["intersectionRefused"], false);
     }
 
     /// #392: thin wallets cannot learn which of their owned outputs are spent

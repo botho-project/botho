@@ -17,6 +17,7 @@ pub mod mempool;
 pub mod monetary;
 pub mod network;
 pub mod node;
+pub mod operator_action;
 pub mod operator_key;
 pub mod operator_nonce;
 pub mod pow;

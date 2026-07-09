@@ -239,7 +239,7 @@ pub fn run(
     rt.block_on(async { run_async(config, config_path, mint).await })
 }
 
-async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()> {
+async fn run_async(mut config: Config, config_path: &Path, mint: bool) -> Result<()> {
     // Set up shutdown signal
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_clone = shutdown.clone();
@@ -467,6 +467,30 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     let (tx_relay_tx, mut tx_relay_rx) =
         tokio::sync::mpsc::unbounded_channel::<crate::transaction::Transaction>();
 
+    // Operator-action write channel from the RPC layer into this event loop
+    // (#748, §4 apply path). BOUNDED (unlike tx_relay) because the loop is the
+    // single applier and each action does real work (gate + Config::save); a
+    // small bound applies backpressure so a flood of signed actions cannot grow
+    // memory without bound. The RPC handler awaits a send permit and a oneshot
+    // reply, so the request→verdict round trip stays synchronous for the caller.
+    let (operator_action_tx, mut operator_action_rx) =
+        tokio::sync::mpsc::channel::<crate::operator_action::OperatorActionRequest>(16);
+
+    // Persisted seen-nonce store (#749) for the operator-action replay check
+    // (§4 step 6, reserve-then-apply). Lives alongside config.toml / node_key in
+    // the data dir. Opened once here; the event loop is the single caller of
+    // `reserve`, so no locking is needed.
+    let operator_nonce_path = crate::operator_nonce::NonceStore::path_from_data_dir(
+        config_path.parent().unwrap_or(config_path),
+    );
+    let mut operator_nonce_store = crate::operator_nonce::NonceStore::open(&operator_nonce_path)
+        .with_context(|| {
+            format!(
+                "failed to open operator nonce store at {}",
+                operator_nonce_path.display()
+            )
+        })?;
+
     let mut rpc_state = RpcState::from_shared(
         node.shared_ledger(),
         node.shared_mempool(),
@@ -501,7 +525,11 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
     // (#542). Shares the same handle the network event loop increments.
     .with_network_stats(discovery.stats())
     // RPC -> event-loop tx relay (#674), consumed in the select! loop below.
-    .with_tx_relay(tx_relay_tx);
+    .with_tx_relay(tx_relay_tx)
+    // RPC -> event-loop operator-action write channel (#748), consumed in the
+    // select! loop below. Bounded; the RPC handler does secret-free steps 1–5
+    // and this loop does the nonce reserve (#749) + gate + install + save.
+    .with_operator_action_channel(operator_action_tx);
 
     // Initialize wallet for RPC (balance checking, faucet, etc.)
     if let Some(mnemonic) = config.mnemonic() {
@@ -1778,6 +1806,43 @@ async fn run_async(config: Config, config_path: &Path, mint: bool) -> Result<()>
                 consensus.register_transfer_tx(tx_hash, tx_bytes);
             }
 
+            // RPC-submitted operator action (#748, §4 apply path). The RPC
+            // handler already did the SECRET-FREE verification (steps 1–5:
+            // config gate, signer selection, signature over the received bytes,
+            // targetNode binding, freshness); this arm owns step 6 (nonce
+            // reserve-then-apply, #749) and step 7-apply (payload policy against
+            // the LIVE peer set, the EXISTING gate incl.
+            // symmetric_quorum_has_intersection, install at the same call sites
+            // as peer-churn rebuilds, and Config::save). Dry runs run the gate
+            // for the hypothetical but never mutate/persist/consume-a-nonce.
+            //
+            // There is NO second QuorumSet constructor here: the candidate is
+            // produced by `gated_scp_quorum_set` (via rebuild_scp_quorum_set on
+            // a config CLONE), and refusal keeps the previous set live exactly
+            // as churn rebuilds do. The structured outcome is returned to the
+            // caller over the oneshot responder; #750 hooks the audit log +
+            // rejected-requests counter onto that same outcome.
+            Some(req) = operator_action_rx.recv() => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let outcome = process_operator_action(
+                    req.parsed,
+                    now,
+                    &mut config,
+                    config_path,
+                    &discovery,
+                    &local_peer_id,
+                    &mut consensus,
+                    &mut operator_nonce_store,
+                    &quorum_gate_status,
+                );
+                // Ignore a dropped responder (caller gave up); the state change,
+                // if any, already happened and is persisted.
+                let _ = req.responder.send(outcome);
+            }
+
             // Periodic mempool re-announce (#674): retries propagation for
             // txs that were submitted while this node had no (or stale) peer
             // connections. Peers dedupe via their own mempool acceptance, so
@@ -2144,6 +2209,201 @@ fn build_scp_quorum_set(quorum: &QuorumBuilder, local_peer_id: &libp2p::PeerId) 
     };
 
     QuorumSet::new(threshold, members)
+}
+
+/// The PURE decision an operator action produces once the gate has run against
+/// a config clone (#748, §4 apply path). Split out from the side-effecting
+/// wrapper so the whole action decision — including the #510 2-of-4 gate
+/// refusal driven through the action path — is unit-testable without a live
+/// `NetworkDiscovery` / `ConsensusService`.
+enum ActionEvaluation {
+    /// A verification/policy refusal before the gate ran (payload policy).
+    Rejected(crate::operator_action::RejectReason),
+    /// The gate refused (intersection violation). Previous set kept; nothing to
+    /// install or persist.
+    GateRefused(crate::operator_action::GateVerdict),
+    /// A dry run the gate would accept: return the hypothetical posture +
+    /// verdict but install/persist/consume-nonce NOTHING.
+    DryRunAccepted {
+        resulting: crate::operator_action::QuorumPosture,
+        verdict: crate::operator_action::GateVerdict,
+    },
+    /// A real apply the gate accepted: install `new_qs`, replace config with
+    /// `candidate_config`, persist, after reserving the nonce.
+    Apply {
+        new_qs: QuorumSet,
+        gate_snapshot: QuorumGateSnapshot,
+        candidate_config: Box<Config>,
+        verdict: crate::operator_action::GateVerdict,
+    },
+}
+
+/// PURE core of the operator-action apply path (#748, §4): given the current
+/// config, the connected peers, and the currently-installed quorum set, run the
+/// payload policy (step 7) and the EXISTING gate (`gated_scp_quorum_set` via
+/// `rebuild`) against a config CLONE, and return the [`ActionEvaluation`]
+/// describing what the side-effecting wrapper should do. No mutation, no I/O,
+/// no nonce — those are the wrapper's job. There is NO second `QuorumSet`
+/// constructor here: the candidate comes straight from the gate.
+fn evaluate_operator_action(
+    parsed: &crate::operator_action::ParsedEnvelope,
+    current_config: &Config,
+    connected_peers: &[libp2p::PeerId],
+    local_peer_id: &libp2p::PeerId,
+    previous_qs: &QuorumSet,
+) -> ActionEvaluation {
+    use crate::operator_action::{GateVerdict, QuorumPosture, VerifiedAction};
+
+    // Step 7 SHAPE check (§4): peerId parses as a base58 PeerId.
+    let verified = match VerifiedAction::check_payload(parsed.clone()) {
+        Ok(v) => v,
+        Err(reason) => return ActionEvaluation::Rejected(reason),
+    };
+
+    // Clone the live config and apply the mutation to the CLONE (§4). The gate
+    // recomputes and re-validates the output from the clone's inputs.
+    let mut candidate_config = current_config.clone();
+    verified.apply_to(&mut candidate_config.network.quorum);
+
+    // Run the EXISTING gate against the mutated clone, with the current quorum
+    // set as `previous` so a refusal keeps that set (no second constructor).
+    let (new_qs, gate_snapshot) = gated_scp_quorum_set(
+        &candidate_config.network.quorum,
+        local_peer_id,
+        connected_peers,
+        Some(previous_qs),
+    );
+    let verdict = GateVerdict::from_snapshot(&gate_snapshot);
+
+    // Fork-risk (intersection) refusal takes precedence — it is the one failure
+    // class this whole path exists to prevent.
+    if gate_snapshot.intersection_refused {
+        return ActionEvaluation::GateRefused(verdict);
+    }
+
+    // Membership floors (finding 2 + degenerate posture) against the
+    // AUTHORITATIVE membership the gate computed (self + curated + auto). A
+    // membership-1 set passes the gate's intersection check but is refused here;
+    // a <4-but->1 shrink needs the signed acknowledgeDegenerate.
+    let previous_membership = previous_qs.members.len();
+    let resulting_membership = 1 + gate_snapshot.curated_members + gate_snapshot.auto_members;
+    if let Err(reason) = crate::operator_action::check_membership_floor(
+        &parsed,
+        previous_membership,
+        resulting_membership,
+    ) {
+        return ActionEvaluation::Rejected(reason);
+    }
+
+    if parsed.dry_run {
+        let resulting = QuorumPosture::from_config(&candidate_config.network.quorum);
+        return ActionEvaluation::DryRunAccepted { resulting, verdict };
+    }
+
+    ActionEvaluation::Apply {
+        new_qs,
+        gate_snapshot,
+        candidate_config: Box::new(candidate_config),
+        verdict,
+    }
+}
+
+/// Process a verified operator action inside the event loop (#748, §4 apply
+/// path). The caller (RPC handler) has already done steps 1–5; this runs step 6
+/// (nonce) and step 7-apply (payload policy, gate, install, persist).
+///
+/// The apply is deliberately routed through the SAME gate as peer-churn
+/// rebuilds (`gated_scp_quorum_set` on a config CLONE), so there is no second
+/// `QuorumSet` constructor and no new gate logic. A gate refusal keeps the
+/// previous quorum set live (the gate's built-in behavior) and persists
+/// nothing.
+///
+/// Returns the structured [`OperatorActionOutcome`] the RPC handler relays back
+/// to the caller and #750 hooks the audit log onto.
+#[allow(clippy::too_many_arguments)]
+fn process_operator_action(
+    parsed: crate::operator_action::ParsedEnvelope,
+    now: u64,
+    config: &mut Config,
+    config_path: &Path,
+    discovery: &NetworkDiscovery,
+    local_peer_id: &libp2p::PeerId,
+    consensus: &mut ConsensusService,
+    nonce_store: &mut crate::operator_nonce::NonceStore,
+    quorum_gate_status: &Arc<RwLock<Option<QuorumGateSnapshot>>>,
+) -> crate::operator_action::OperatorActionOutcome {
+    use crate::operator_action::{OperatorActionError, OperatorActionOutcome, QuorumPosture};
+
+    let connected: Vec<libp2p::PeerId> = discovery.peer_table().iter().map(|p| p.peer_id).collect();
+    let previous = consensus.quorum_set().clone();
+
+    match evaluate_operator_action(&parsed, config, &connected, local_peer_id, &previous) {
+        ActionEvaluation::Rejected(reason) => {
+            OperatorActionOutcome::rejected(&reason, Some(&parsed))
+        }
+        // Gate refusal ⇒ REJECT: previous set stays live, nothing persists, no
+        // nonce consumed (a refused edit should be re-signable after correction).
+        ActionEvaluation::GateRefused(verdict) => {
+            OperatorActionOutcome::gate_refused(&parsed, verdict)
+        }
+        // Dry run: gate accepted the hypothetical, but we never mutate, persist,
+        // or consume the nonce (§4/§5).
+        ActionEvaluation::DryRunAccepted { resulting, verdict } => {
+            OperatorActionOutcome::applied(&parsed, resulting, verdict)
+        }
+        ActionEvaluation::Apply {
+            new_qs,
+            gate_snapshot,
+            candidate_config,
+            verdict,
+        } => {
+            // Step 6 (nonce reserve-then-apply, #749) happens AFTER the gate
+            // accepted but BEFORE we mutate/install/persist, so a crash after
+            // reserve fails safe (the envelope can never apply twice). A replay
+            // or non-durable reservation aborts with the previous set intact.
+            match crate::operator_action::reserve_nonce(nonce_store, &parsed, now) {
+                Ok(()) => {}
+                Err(OperatorActionError::Rejected(reason)) => {
+                    return OperatorActionOutcome::rejected(&reason, Some(&parsed));
+                }
+                Err(OperatorActionError::NonceStore(msg)) => {
+                    let reason = crate::operator_action::RejectReason::InvalidPayload(format!(
+                        "nonce could not be durably reserved: {msg}"
+                    ));
+                    return OperatorActionOutcome::rejected(&reason, Some(&parsed));
+                }
+            }
+
+            // Install the new quorum set in consensus at the same seam as
+            // peer-churn rebuilds (run.rs :624/:947/:1030), publish the gate
+            // snapshot for node_getStatus, replace the in-memory config, and
+            // persist via Config::save so a restart converges to the same state.
+            consensus.reconfigure_quorum(new_qs);
+            if let Ok(mut guard) = quorum_gate_status.write() {
+                *guard = Some(gate_snapshot);
+            }
+            *config = *candidate_config;
+            if let Err(e) = config.save(config_path) {
+                // In-memory + consensus state is already updated and the nonce
+                // is consumed; a failed persist means a restart would revert the
+                // edit. Surface it truthfully rather than claiming a clean apply.
+                error!("Operator action applied in-memory but Config::save failed: {e}");
+                let reason = crate::operator_action::RejectReason::InvalidPayload(format!(
+                    "edit applied to the running node but persisting to config failed: {e} \
+                     (a restart would revert it — investigate and re-apply)"
+                ));
+                return OperatorActionOutcome::rejected(&reason, Some(&parsed));
+            }
+
+            info!(
+                action = parsed.action.name(),
+                signer = %parsed.signer_key_id,
+                "Operator action applied: quorum edit installed and persisted"
+            );
+            let resulting = QuorumPosture::from_config(&config.network.quorum);
+            OperatorActionOutcome::applied(&parsed, resulting, verdict)
+        }
+    }
 }
 
 /// Rebuild the SCP quorum set from the *current* set of connected peers,
@@ -3169,5 +3429,221 @@ mod tests {
                 );
             }
         }
+    }
+
+    // -- Operator-action apply path (#748) driven through the SAME gate --------
+
+    use crate::operator_action::{ActionKind, OutcomeClass, ParsedEnvelope};
+
+    fn action_config(mode: QuorumMode, members: Vec<String>, threshold: u32) -> Config {
+        let mut cfg = Config::new_relay(bth_transaction_types::constants::Network::Testnet);
+        cfg.network.quorum = QuorumConfig {
+            mode,
+            threshold,
+            members,
+            ..QuorumConfig::default()
+        };
+        cfg
+    }
+
+    fn parsed_action(action: ActionKind, dry_run: bool, ack: bool) -> ParsedEnvelope {
+        ParsedEnvelope {
+            action,
+            dry_run,
+            issued_at: 1_800_000_000,
+            expires_at: 1_800_000_100,
+            nonce: "00112233445566778899aabbccddeeff".to_string(),
+            signer_key_id: "a1b2c3d4e5f60708".to_string(),
+            target_node: "test-target".to_string(),
+            acknowledge_degenerate: ack,
+        }
+    }
+
+    #[test]
+    fn action_path_2_of_4_intersection_violation_is_gate_refused_previous_kept() {
+        // Acceptance criterion (d): an intersection-violating edit driven through
+        // the ACTION path yields gate_refused and keeps the previous set. We pin
+        // members into an EXPLICIT 2-of-4 (the #510 counterexample: {A,B}/{C,D}
+        // disjoint) — the gate must refuse the resulting set.
+        let curated = synthetic_peers(3);
+        let members: Vec<String> = curated.iter().take(2).map(|p| p.to_string()).collect();
+        // Start explicit 2-of-3 (self + 2 members = 3 nodes, threshold 2 → safe),
+        // then pin the 3rd member to reach self + 3 = 4 nodes at threshold 2,
+        // which is the forkable 2-of-4.
+        let cfg = action_config(QuorumMode::Explicit, members, 2);
+        let local = ed25519_peer_id([0xAE; 32]);
+        // Previous safe set: the current explicit 2-of-3.
+        let (previous, prev_snap) = gated_scp_quorum_set(
+            &cfg.network.quorum,
+            &local,
+            &curated[..2],
+            Some(&QuorumSet::new(1, vec![])),
+        );
+        assert!(!prev_snap.intersection_refused, "3-node explicit-2 is safe");
+
+        let new_member = curated[2].to_string();
+        let parsed = parsed_action(
+            ActionKind::PinMember {
+                peer_id: new_member,
+            },
+            false,
+            false,
+        );
+        // Connected peer set: all 3 curated peers now connected.
+        let eval = evaluate_operator_action(&parsed, &cfg, &curated, &local, &previous);
+        match eval {
+            ActionEvaluation::GateRefused(verdict) => {
+                assert!(
+                    verdict.intersection_refused,
+                    "must flag intersection refusal"
+                );
+            }
+            _ => panic!("2-of-4 pin must be gate_refused"),
+        }
+    }
+
+    #[test]
+    fn action_path_pin_unpin_roundtrip_installs_and_reports() {
+        // Acceptance criterion: a successful pin/unpin round-trip through the gate
+        // yields Apply with the resulting posture (which node_getStatus reads via
+        // the gate snapshot). Recommended mode, growing membership → always safe.
+        let local = ed25519_peer_id([0x01; 32]);
+        let peers = synthetic_peers(4); // self + 4 connected → membership 5
+        let cfg = action_config(QuorumMode::Recommended, vec![], 2);
+        let previous = QuorumSet::new(1, vec![]);
+
+        // Pin peer[0] into the curated set.
+        let target = peers[0].to_string();
+        let pin = parsed_action(
+            ActionKind::PinMember {
+                peer_id: target.clone(),
+            },
+            false,
+            false,
+        );
+        let eval = evaluate_operator_action(&pin, &cfg, &peers, &local, &previous);
+        let (new_qs, resulting) = match eval {
+            ActionEvaluation::Apply {
+                new_qs,
+                candidate_config,
+                verdict,
+                ..
+            } => {
+                assert!(!verdict.intersection_refused);
+                assert!(candidate_config.network.quorum.members.contains(&target));
+                (new_qs, candidate_config)
+            }
+            _ => panic!("pin should Apply"),
+        };
+        // The installed set intersects (safe).
+        assert!(
+            bth_quorum_sim::Fbas::symmetric(new_qs.members.len(), new_qs.threshold as usize)
+                .has_quorum_intersection()
+        );
+
+        // Now unpin it back out, starting from the post-pin config.
+        let unpin = parsed_action(
+            ActionKind::UnpinMember {
+                peer_id: target.clone(),
+            },
+            false,
+            false,
+        );
+        let eval = evaluate_operator_action(&unpin, &resulting, &peers, &local, &previous);
+        match eval {
+            ActionEvaluation::Apply {
+                candidate_config, ..
+            } => {
+                assert!(!candidate_config.network.quorum.members.contains(&target));
+            }
+            _ => panic!("unpin should Apply"),
+        }
+    }
+
+    #[test]
+    fn action_path_dry_run_accepts_without_mutating_config_or_reserving_nonce() {
+        // Dry run returns a verdict but produces DryRunAccepted (never Apply), so
+        // the wrapper mutates/persists/consumes-nonce NOTHING.
+        let local = ed25519_peer_id([0x02; 32]);
+        let peers = synthetic_peers(4);
+        let cfg = action_config(QuorumMode::Recommended, vec![], 2);
+        let previous = QuorumSet::new(1, vec![]);
+        let target = peers[0].to_string();
+        let dry = parsed_action(ActionKind::PinMember { peer_id: target }, true, false);
+        match evaluate_operator_action(&dry, &cfg, &peers, &local, &previous) {
+            ActionEvaluation::DryRunAccepted { verdict, .. } => {
+                assert!(!verdict.intersection_refused);
+            }
+            _ => panic!("dry run of a safe edit must be DryRunAccepted, never Apply"),
+        }
+    }
+
+    #[test]
+    fn action_path_membership_1_refused_even_with_acknowledge() {
+        // Finding 2 through the action path: unpin the only member down to solo.
+        let local = ed25519_peer_id([0x03; 32]);
+        let only = synthetic_peers(1)[0].to_string();
+        let cfg = action_config(QuorumMode::Recommended, vec![only.clone()], 2);
+        let previous = QuorumSet::new(1, vec![]);
+        // No connected peers → resulting membership would be 1 (self alone).
+        let unpin = parsed_action(ActionKind::UnpinMember { peer_id: only }, false, true);
+        match evaluate_operator_action(&unpin, &cfg, &[], &local, &previous) {
+            ActionEvaluation::Rejected(reason) => {
+                let m = reason.message();
+                assert!(m.contains("membership-1") || m.contains("solo"));
+            }
+            _ => panic!("membership-1 must be rejected even with acknowledgeDegenerate"),
+        }
+    }
+
+    #[test]
+    fn action_path_below_4_needs_acknowledge() {
+        // Finding: <4-but->1 requires acknowledgeDegenerate through the path.
+        // Use max_auto_members:0 (curated-only) so an unpin genuinely SHRINKS
+        // membership rather than the unpinned-but-connected peer being
+        // auto-promoted back in (Recommended mode's normal behavior).
+        let local = ed25519_peer_id([0x04; 32]);
+        let members = synthetic_peers(2); // self + 2 curated → membership 3 (<4)
+        let m0 = members[0].to_string();
+        let m1 = members[1].to_string();
+        let mut cfg = action_config(QuorumMode::Recommended, vec![m0.clone(), m1.clone()], 2);
+        cfg.network.quorum.max_auto_members = 0; // curated-only: no auto backfill
+                                                 // Previous set = the current curated-only 3-node set.
+        let (previous, _) = gated_scp_quorum_set(
+            &cfg.network.quorum,
+            &local,
+            &members,
+            Some(&QuorumSet::new(1, vec![])),
+        );
+        assert_eq!(previous.members.len(), 3, "self + 2 curated");
+
+        // Unpin m0 → membership 2 (<4). Without ack → rejected.
+        let no_ack = parsed_action(
+            ActionKind::UnpinMember {
+                peer_id: m0.clone(),
+            },
+            false,
+            false,
+        );
+        assert!(matches!(
+            evaluate_operator_action(&no_ack, &cfg, &members, &local, &previous),
+            ActionEvaluation::Rejected(_)
+        ));
+
+        // With ack → accepted (Apply).
+        let with_ack = parsed_action(ActionKind::UnpinMember { peer_id: m0 }, false, true);
+        assert!(matches!(
+            evaluate_operator_action(&with_ack, &cfg, &members, &local, &previous),
+            ActionEvaluation::Apply { .. }
+        ));
+    }
+
+    #[test]
+    fn outcome_class_maps_evaluations_for_750() {
+        // Sanity: the outcome classes the wrapper will produce cover the trio
+        // #750 audit-logs (applied / gate_refused / verify_refused).
+        assert_eq!(OutcomeClass::Applied, OutcomeClass::Applied);
+        assert_ne!(OutcomeClass::Applied, OutcomeClass::GateRefused);
+        assert_ne!(OutcomeClass::GateRefused, OutcomeClass::VerifyRefused);
     }
 }

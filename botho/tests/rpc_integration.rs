@@ -1487,17 +1487,24 @@ async fn test_operator_audit_log_empty_but_present() {
     assert_eq!(resp["result"]["count"], json!(0));
 }
 
-/// The token grants READS ONLY: there is no operator write RPC. A plausible
-/// write method name must be an unknown method, even WITH a valid token.
+/// The READ token grants READS ONLY: it confers NO write capability. As of #748
+/// the `operator_submitAction` method exists, but a read token is never
+/// accepted on it — and with no `action_public_keys` provisioned the whole
+/// write surface is inert (fail-closed, "operator actions not configured"). The
+/// read-token server helper wires a read secret but NO action public keys, so a
+/// submit attempt (even one shaped like a read call, with a `token`) is refused
+/// as not-configured rather than granting any write.
 #[tokio::test]
 #[serial]
-async fn test_operator_token_grants_no_write_method() {
+async fn test_operator_read_token_grants_no_write_capability() {
     let secret = "integration-operator-secret-5";
     let (_temp_dir, addr, _handle) = spawn_operator_rpc_server(Some(secret), None).await;
     let client = Client::new();
     let token = valid_operator_token(secret);
 
-    // #709's write method must NOT exist in this build.
+    // Passing a READ token to the write method grants nothing: the write path
+    // ignores the token entirely and, with no action_public_keys configured,
+    // fails closed as "not configured" (never applying anything).
     let resp = rpc_call(
         &client,
         addr,
@@ -1505,9 +1512,13 @@ async fn test_operator_token_grants_no_write_method() {
         json!({ "token": token }),
     )
     .await;
-    assert!(resp["result"].is_null());
-    // Method-not-found (-32601), i.e. no write surface is reachable at all.
-    assert_eq!(resp["error"]["code"].as_i64(), Some(-32601));
+    assert!(
+        resp["result"].is_null(),
+        "no write ever succeeds via a read token"
+    );
+    // OPERATOR_NOT_ENABLED (-32020): the write surface is inert (fail-closed),
+    // NOT method-not-found — the method exists but has no keys provisioned.
+    assert_eq!(resp["error"]["code"].as_i64(), Some(-32020));
 }
 
 #[tokio::test]
