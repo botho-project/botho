@@ -655,6 +655,17 @@ impl RpcState {
         self.operator_action_tx = Some(sender);
         self
     }
+
+    /// Wire in a PERSISTED operator audit log (#750, §6) opened from the data
+    /// dir. The default `RpcState` uses an in-memory-only store (tests / relay
+    /// nodes); `commands::run` overrides it with one backed by
+    /// `<data-dir>/operator-audit.jsonl` so authenticated outcomes survive
+    /// restart and the pre-signature rejected-requests counter (finding 3) is
+    /// surfaced in `node_getStatus`.
+    pub fn with_operator_audit_log(mut self, audit_log: Arc<OperatorAuditLog>) -> Self {
+        self.operator_audit_log = audit_log;
+        self
+    }
 }
 
 /// Start the RPC server
@@ -1213,6 +1224,15 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
     // reports "no data", not a plausible-looking constant.
     let quorum_gate = state.quorum_gate_snapshot();
 
+    // Operator-action pre-signature rejected-requests counter (#750, §6 review
+    // finding 3). Pre-signature failures (not-configured / unknown-signer /
+    // bad-signature) are reachable by ANY unauthenticated caller, so they are
+    // NOT audit-logged (that would be an unbounded disk-fill primitive); this
+    // counter is their only durable, observable trace. A spike here means the
+    // operator RPC port is being probed with junk. Read from the live audit-log
+    // store — never a fabricated constant (anti-#541–#544).
+    let operator_rejected_requests = state.operator_audit_log.rejected_requests();
+
     JsonRpcResponse::success(
         id,
         json!({
@@ -1272,6 +1292,11 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
             // An idle node (nothing to propose) is never "stalled".
             "slotStalled": slot_stalled,
             "slotStallSeconds": slot_stall_seconds,
+            // Operator-action pre-signature rejected requests (#750, finding 3):
+            // count of unauthenticated operator_submitAction requests refused
+            // before signature verification. NOT audit-logged; this is their
+            // only observable trace. 0 on a node never probed.
+            "operatorRejectedRequests": operator_rejected_requests,
             "lastExternalizedSlot": scp_slot.as_ref().and_then(|s| s.last_externalized_slot),
             "lastExternalizedSecondsAgo": scp_slot.as_ref().and_then(|s| s.last_externalized_seconds_ago),
             "effectiveSlotDurationSecs": scp_slot.as_ref().map(|s| s.effective_slot_duration_secs),
@@ -2585,14 +2610,15 @@ async fn handle_operator_submit_action(
     // list means the write surface does not exist at all (fail-closed). This
     // check precedes even envelope extraction so a node with the feature off
     // returns the stable "not configured" signal regardless of request shape.
+    // Pre-signature (finding 3): counted, never audit-logged (no envelope yet).
     if state.operator_action_public_keys.is_empty() {
-        return operator_action_reject(id, &oa::RejectReason::NotConfigured, None);
+        return operator_action_reject(id, &oa::RejectReason::NotConfigured, None, None, state);
     }
 
     // Extract the single (envelope, signature) argument (finding 1).
     let signed = match oa::SignedEnvelope::from_params(params) {
         Ok(s) => s,
-        Err(reason) => return operator_action_reject(id, &reason, None),
+        Err(reason) => return operator_action_reject(id, &reason, None, None, state),
     };
 
     // The signerKeyId is needed to SELECT the verifying key (step 2), but we
@@ -2603,34 +2629,41 @@ async fn handle_operator_submit_action(
     // trusted parse happens AFTER that inside `verify_and_parse`.
     let signer_key_id = match oa::peek_signer_key_id(&signed.envelope) {
         Ok(s) => s,
-        Err(reason) => return operator_action_reject(id, &reason, None),
+        Err(reason) => return operator_action_reject(id, &reason, None, None, state),
     };
 
     // Step 1 (config gate) + step 2 (signer known): select the verifying key.
+    // Still pre-signature — unknown-signer is unauthenticated (finding 3).
     let verifying_key =
         match oa::select_verifying_key(&state.operator_action_public_keys, &signer_key_id) {
             Ok(vk) => vk,
-            Err(reason) => return operator_action_reject(id, &reason, None),
+            Err(reason) => return operator_action_reject(id, &reason, None, None, state),
         };
 
-    // Step 3 (signature) + parse-after-verify (finding 1).
+    // Step 3 (signature) + parse-after-verify (finding 1). A bad signature is
+    // the LAST pre-signature failure (counted, never audit-logged); everything
+    // after this point is AUTHENTICATED and audit-logged.
     let parsed = match signed.verify_and_parse(&verifying_key) {
         Ok(p) => p,
-        Err(reason) => return operator_action_reject(id, &reason, None),
+        Err(reason) => return operator_action_reject(id, &reason, None, None, state),
     };
 
-    // Step 4 (target binding).
+    // From here the request is AUTHENTICATED: pass the envelope bytes so the
+    // audit hook can hash them (§6 envelopeHash) and append an entry.
+    let envelope = signed.envelope.as_str();
+
+    // Step 4 (target binding) — post-signature, audit-logged on refusal.
     if let Err(reason) = oa::check_target(&parsed, &state.identity.peer_id) {
-        return operator_action_reject(id, &reason, Some(&parsed));
+        return operator_action_reject(id, &reason, Some(&parsed), Some(envelope), state);
     }
 
-    // Step 5 (freshness).
+    // Step 5 (freshness) — post-signature, audit-logged on refusal.
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     if let Err(reason) = oa::check_freshness(&parsed, now) {
-        return operator_action_reject(id, &reason, Some(&parsed));
+        return operator_action_reject(id, &reason, Some(&parsed), Some(envelope), state);
     }
 
     // Steps 6 + 7-apply run in the event loop. Send the verified envelope over
@@ -2658,7 +2691,10 @@ async fn handle_operator_submit_action(
     }
 
     match receiver.await {
-        Ok(outcome) => operator_action_response(id, outcome),
+        // Loop-produced outcome (steps 6–7): applied / gate_refused /
+        // post-signature verify_refused. All AUTHENTICATED — audit-logged with
+        // the original envelope bytes' hash (§6).
+        Ok(outcome) => operator_action_response(id, outcome, Some(envelope), state),
         Err(_) => JsonRpcResponse::error(
             id,
             INTERNAL_ERROR,
@@ -2669,26 +2705,60 @@ async fn handle_operator_submit_action(
 
 /// Build a JSON-RPC response for an early (handler-side) rejection, wrapping
 /// the structured outcome so #750 sees the same shape whether the refusal
-/// happened in the handler (steps 1–5) or the loop (steps 6–7).
+/// happened in the handler (steps 1–5) or the loop (steps 6–7). `envelope` is
+/// the canonical signed bytes when the request reached authentication (for the
+/// audit `envelopeHash`); `None` for pre-signature failures.
 fn operator_action_reject(
     id: Value,
     reason: &crate::operator_action::RejectReason,
     parsed: Option<&crate::operator_action::ParsedEnvelope>,
+    envelope: Option<&str>,
+    state: &RpcState,
 ) -> JsonRpcResponse {
     let outcome = crate::operator_action::OperatorActionOutcome::rejected(reason, parsed);
-    operator_action_response(id, outcome)
+    operator_action_response(id, outcome, envelope, state)
 }
 
 /// Render an [`crate::operator_action::OperatorActionOutcome`] as a JSON-RPC
-/// response: applied outcomes are `success` (the caller reads the outcome
-/// class), refusals are `error` with the structured outcome in `data` so the
-/// dashboard renders the gate verdict truthfully (anti-#541: the verdict comes
-/// only from the node).
+/// response, ALSO wiring the #750 audit hook: an AUTHENTICATED outcome appends
+/// a §6 JSONL entry (+ `warn!` mirror); a PRE-signature outcome only increments
+/// the rejected-requests counter (+ rate-limited `debug!`) — never a file write
+/// (finding 3).
+///
+/// Applied outcomes are `success` (the caller reads the outcome class);
+/// refusals are `error` with the structured outcome in `data` so the dashboard
+/// renders the gate verdict truthfully (anti-#541: the verdict comes only from
+/// the node).
 fn operator_action_response(
     id: Value,
     outcome: crate::operator_action::OperatorActionOutcome,
+    envelope: Option<&str>,
+    state: &RpcState,
 ) -> JsonRpcResponse {
     use crate::operator_action::OutcomeClass;
+
+    // --- #750 audit hook (§6, finding 3) -----------------------------------
+    if outcome.authenticated {
+        // Authenticated: append the full §6 entry. The envelopeHash is the
+        // blake2b-256 of the exact signed bytes (the one blake2b helper).
+        if let Some(env) = envelope {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let hash = crate::operator_key::blake2b_256_hex(env.as_bytes());
+            if let Some(entry) = outcome.to_audit_entry(hash, ts) {
+                state.operator_audit_log.append(entry);
+            }
+        }
+    } else {
+        // Pre-signature (unauthenticated): counter + rate-limited debug! only.
+        // NEVER a JSONL write — this path is reachable by any anonymous caller.
+        state
+            .operator_audit_log
+            .note_pre_signature_rejection(outcome.audit_tag.as_str());
+    }
+
     let body = serde_json::to_value(&outcome).unwrap_or(Value::Null);
     match outcome.outcome {
         OutcomeClass::Applied => JsonRpcResponse::success(id, body),
@@ -4171,6 +4241,187 @@ mod tests {
         let result = resp.result.expect("applied must be success");
         assert_eq!(result["outcome"], "applied");
         assert_eq!(result["gate"]["intersectionRefused"], false);
+    }
+
+    // -- #750 audit hook at the RPC boundary ---------------------------------
+
+    /// A process-unique, thread-safe temp audit-log path (the #749 lesson: an
+    /// atomic counter, never SystemTime, to avoid parallel-test path races).
+    fn oa_audit_path() -> std::path::PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir()
+            .join(format!("botho-audit-rpc-{}-{}", std::process::id(), n))
+            .join(operator::AUDIT_LOG_FILE)
+    }
+
+    #[tokio::test]
+    async fn audit_applied_outcome_appends_full_shape_entry() {
+        // #750 AC: an applied outcome from the loop appends ONE JSONL entry with
+        // the full §6 shape, newQuorum present, envelopeHash a 64-char blake2b.
+        use crate::operator_action::{GateVerdict, OperatorActionOutcome, QuorumPosture};
+
+        let sk = oa_test_key();
+        let target = oa_peer_id(9);
+        let path = oa_audit_path();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let mut state = empty_test_state()
+            .with_operator_action_public_keys(vec![oa_pubkey_hex(&sk)])
+            .with_operator_action_channel(tx)
+            .with_operator_audit_log(OperatorAuditLog::open(&path));
+        state.identity.peer_id = target.clone();
+
+        let loop_task = tokio::spawn(async move {
+            let req = rx.recv().await.expect("request");
+            let verdict = GateVerdict {
+                intersection_refused: false,
+                curated_members: 4,
+                auto_members: 0,
+                suppressed_peers: 0,
+                max_auto_members: 8,
+                fault_tolerant: true,
+                degenerate: false,
+            };
+            let resulting = QuorumPosture {
+                mode: "recommended".to_string(),
+                members: vec![oa_peer_id(3)],
+                max_auto_members: 8,
+            };
+            let prev = QuorumPosture {
+                mode: "recommended".to_string(),
+                members: vec![],
+                max_auto_members: 8,
+            };
+            let outcome = OperatorActionOutcome::applied(&req.parsed, resulting, verdict)
+                .with_prev_quorum(prev);
+            let _ = req.responder.send(outcome);
+        });
+
+        let params = oa_params(
+            &sk,
+            "quorum.pin_member",
+            &format!("{{\"peerId\":\"{}\"}}", oa_peer_id(3)),
+            &target,
+            oa_now(),
+            oa_now() + 100,
+            "00112233445566778899aabbccddeeff",
+            false,
+        );
+        let resp = handle_operator_submit_action(json!(1), &params, &state).await;
+        loop_task.await.unwrap();
+        assert!(resp.result.is_some(), "applied is success");
+
+        // Exactly one entry, rendered from the store (anti-#541), full §6 shape.
+        let entries = state.operator_audit_log.recent(10);
+        assert_eq!(entries.len(), 1);
+        let e = &entries[0];
+        assert_eq!(e.outcome, "applied");
+        assert_eq!(e.action, "quorum.pin_member");
+        assert_eq!(e.envelope_hash.len(), 64, "blake2b-256 hex");
+        assert!(e.new_quorum.is_some(), "applied MUST carry newQuorum");
+        assert!(e.prev_quorum.is_some());
+        assert!(e.gate.is_some());
+        assert_eq!(e.params["peerId"], oa_peer_id(3));
+
+        // Persisted to the JSONL file as one line.
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(raw.lines().filter(|l| !l.trim().is_empty()).count(), 1);
+        // No pre-signature rejections occurred.
+        assert_eq!(state.operator_audit_log.rejected_requests(), 0);
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn audit_post_signature_refusal_appends_entry_without_new_quorum() {
+        // #750 AC: a POST-signature refusal (wrong target) is AUTHENTICATED, so
+        // it appends one entry — with the attempted params but NO newQuorum.
+        let sk = oa_test_key();
+        let path = oa_audit_path();
+        let mut state = empty_test_state()
+            .with_operator_action_public_keys(vec![oa_pubkey_hex(&sk)])
+            .with_operator_audit_log(OperatorAuditLog::open(&path));
+        state.identity.peer_id = oa_peer_id(9); // envelope targets peer 1
+        let params = oa_params(
+            &sk,
+            "quorum.set_max_auto_members",
+            "{\"value\":8}",
+            &oa_peer_id(1),
+            oa_now(),
+            oa_now() + 100,
+            "00112233445566778899aabbccddeeff",
+            false,
+        );
+        let resp = handle_operator_submit_action(json!(1), &params, &state).await;
+        assert!(resp.error.is_some());
+
+        let entries = state.operator_audit_log.recent(10);
+        assert_eq!(entries.len(), 1, "authenticated refusal is audit-logged");
+        assert_eq!(entries[0].outcome, "verify_refused:wrong_target");
+        assert!(
+            entries[0].new_quorum.is_none(),
+            "a refusal has no new state (§6)"
+        );
+        assert_eq!(entries[0].envelope_hash.len(), 64);
+        // Not a pre-signature failure ⇒ counter untouched.
+        assert_eq!(state.operator_audit_log.rejected_requests(), 0);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn finding3_presig_flood_bumps_node_status_counter_jsonl_empty() {
+        // FINDING 3 at the RPC boundary: a flood of PRE-signature failures
+        // (bad signature) increments the node_getStatus rejected-requests
+        // counter while the audit JSONL stays EMPTY (no disk-fill primitive).
+        let sk = oa_test_key();
+        let path = oa_audit_path();
+        let state = empty_test_state()
+            .with_operator_action_public_keys(vec![oa_pubkey_hex(&sk)])
+            .with_operator_audit_log(OperatorAuditLog::open(&path));
+
+        let target = oa_peer_id(9);
+        for i in 0..250u64 {
+            let mut params = oa_params(
+                &sk,
+                "quorum.set_max_auto_members",
+                "{\"value\":8}",
+                &target,
+                oa_now(),
+                oa_now() + 100,
+                &format!("{i:032x}"),
+                false,
+            );
+            // Replace with an all-zero (well-formed hex, 64-byte) signature that
+            // can NEVER verify ⇒ a deterministic pre-signature bad-signature
+            // failure (unlike flipping bytes of the real sig, which can rarely
+            // land back on a valid signature).
+            params["signature"] = json!("00".repeat(64));
+            let resp = handle_operator_submit_action(json!(1), &params, &state).await;
+            assert_eq!(resp.error.unwrap().code, OPERATOR_ACTION_REJECTED);
+        }
+
+        // Counter surfaced in node_getStatus reflects the flood...
+        let status = handle_node_status(json!(1), &state).await.result.unwrap();
+        assert_eq!(status["operatorRejectedRequests"], 250);
+        // ...while the audit log (file + memory) stayed EMPTY.
+        assert!(
+            state.operator_audit_log.recent(10).is_empty(),
+            "pre-signature failures must NOT be audit-logged"
+        );
+        assert!(
+            !path.exists(),
+            "pre-signature failures must NOT create the JSONL file"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[tokio::test]
+    async fn node_status_reports_zero_operator_rejects_by_default() {
+        // A node never probed reports 0 (not a fabricated constant — read live
+        // from the store).
+        let state = empty_test_state();
+        let status = handle_node_status(json!(1), &state).await.result.unwrap();
+        assert_eq!(status["operatorRejectedRequests"], 0);
     }
 
     /// #392: thin wallets cannot learn which of their owned outputs are spent

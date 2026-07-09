@@ -87,6 +87,20 @@ pub fn fingerprint_hex(public_key: &[u8; 32]) -> String {
     hex::encode(&digest[..FINGERPRINT_BYTES])
 }
 
+/// Compute the lowercase-hex `blake2b-256` digest of arbitrary bytes, using the
+/// SAME construction as [`fingerprint_hex`] (`Blake2b<U32>`).
+///
+/// This is the `envelopeHash` in the operator audit log
+/// (`docs/security/quorum-write-path.md` §6): the full 32-byte digest (64 hex
+/// chars) of the canonical signed envelope bytes. It reuses this module's
+/// existing blake2b machinery rather than pulling in another hash type, so the
+/// node has exactly one blake2b implementation on this path.
+pub fn blake2b_256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Blake2b256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
+}
+
 /// On-disk representation of an operator signing keypair.
 ///
 /// The public key is stored in the clear (it is public). The private key is

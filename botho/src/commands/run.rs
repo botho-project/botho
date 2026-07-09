@@ -491,6 +491,15 @@ async fn run_async(mut config: Config, config_path: &Path, mint: bool) -> Result
             )
         })?;
 
+    // Persisted operator audit log (#750, §6): append-only JSONL alongside
+    // config.toml / operator-nonces.json. Replayed on open so authenticated
+    // outcomes survive restart; the RPC audit hook appends to it and its
+    // pre-signature rejected-requests counter (finding 3) feeds node_getStatus.
+    let operator_audit_path = crate::rpc::OperatorAuditLog::path_from_data_dir(
+        config_path.parent().unwrap_or(config_path),
+    );
+    let operator_audit_log = crate::rpc::OperatorAuditLog::open(&operator_audit_path);
+
     let mut rpc_state = RpcState::from_shared(
         node.shared_ledger(),
         node.shared_mempool(),
@@ -529,7 +538,10 @@ async fn run_async(mut config: Config, config_path: &Path, mint: bool) -> Result
     // RPC -> event-loop operator-action write channel (#748), consumed in the
     // select! loop below. Bounded; the RPC handler does secret-free steps 1–5
     // and this loop does the nonce reserve (#749) + gate + install + save.
-    .with_operator_action_channel(operator_action_tx);
+    .with_operator_action_channel(operator_action_tx)
+    // Persisted operator audit log (#750, §6): authenticated outcomes append a
+    // JSONL entry; pre-signature failures bump the node_getStatus counter.
+    .with_operator_audit_log(operator_audit_log);
 
     // Initialize wallet for RPC (balance checking, faucet, etc.)
     if let Some(mnemonic) = config.mnemonic() {
@@ -2336,82 +2348,95 @@ fn process_operator_action(
 
     let connected: Vec<libp2p::PeerId> = discovery.peer_table().iter().map(|p| p.peer_id).collect();
     let previous = consensus.quorum_set().clone();
+    // Snapshot the pre-edit posture for the audit entry's `prevQuorum` (§6);
+    // attached to every outcome below so #750 does not re-derive it.
+    let prev_posture = QuorumPosture::from_config(&config.network.quorum);
 
-    match evaluate_operator_action(&parsed, config, &connected, local_peer_id, &previous) {
-        ActionEvaluation::Rejected(reason) => {
-            OperatorActionOutcome::rejected(&reason, Some(&parsed))
-        }
-        // Gate refusal ⇒ REJECT: previous set stays live, nothing persists, no
-        // nonce consumed (a refused edit should be re-signable after correction).
-        ActionEvaluation::GateRefused(verdict) => {
-            OperatorActionOutcome::gate_refused(&parsed, verdict)
-        }
-        // Dry run: gate accepted the hypothetical, but we never mutate, persist,
-        // or consume the nonce (§4/§5).
-        ActionEvaluation::DryRunAccepted { resulting, verdict } => {
-            OperatorActionOutcome::applied(&parsed, resulting, verdict)
-        }
-        ActionEvaluation::Apply {
-            new_qs,
-            gate_snapshot,
-            candidate_config,
-            verdict,
-        } => {
-            // Step 6 (nonce reserve-then-apply, #749) happens AFTER the gate
-            // accepted but BEFORE we mutate/install/persist, so a crash after
-            // reserve fails safe (the envelope can never apply twice). A replay
-            // or non-durable reservation aborts with the previous set intact.
-            //
-            // NOTE: this deliberately deviates from the literal step-6-before-
-            // gate ordering in `docs/security/quorum-write-path.md` §4. The
-            // load-bearing §9 invariant (reserve durably before install) is
-            // preserved; the only effect is that a gate-refused envelope does
-            // not burn its nonce, which is cheaper and state-neutral (a refused
-            // action changes nothing). Replay protection within the 300s window
-            // is unaffected. Reviewed and accepted on #748 (PR #755).
-            match crate::operator_action::reserve_nonce(nonce_store, &parsed, now) {
-                Ok(()) => {}
-                Err(OperatorActionError::Rejected(reason)) => {
-                    return OperatorActionOutcome::rejected(&reason, Some(&parsed));
+    let outcome =
+        match evaluate_operator_action(&parsed, config, &connected, local_peer_id, &previous) {
+            ActionEvaluation::Rejected(reason) => {
+                OperatorActionOutcome::rejected(&reason, Some(&parsed))
+            }
+            // Gate refusal ⇒ REJECT: previous set stays live, nothing persists, no
+            // nonce consumed (a refused edit should be re-signable after correction).
+            ActionEvaluation::GateRefused(verdict) => {
+                OperatorActionOutcome::gate_refused(&parsed, verdict)
+            }
+            // Dry run: gate accepted the hypothetical, but we never mutate, persist,
+            // or consume the nonce (§4/§5).
+            ActionEvaluation::DryRunAccepted { resulting, verdict } => {
+                OperatorActionOutcome::applied(&parsed, resulting, verdict)
+            }
+            ActionEvaluation::Apply {
+                new_qs,
+                gate_snapshot,
+                candidate_config,
+                verdict,
+            } => {
+                // Step 6 (nonce reserve-then-apply, #749) happens AFTER the gate
+                // accepted but BEFORE we mutate/install/persist, so a crash after
+                // reserve fails safe (the envelope can never apply twice). A replay
+                // or non-durable reservation aborts with the previous set intact.
+                //
+                // NOTE: this deliberately deviates from the literal step-6-before-
+                // gate ordering in `docs/security/quorum-write-path.md` §4. The
+                // load-bearing §9 invariant (reserve durably before install) is
+                // preserved; the only effect is that a gate-refused envelope does
+                // not burn its nonce, which is cheaper and state-neutral (a refused
+                // action changes nothing). Replay protection within the 300s window
+                // is unaffected. Reviewed and accepted on #748 (PR #755).
+                match crate::operator_action::reserve_nonce(nonce_store, &parsed, now) {
+                    Ok(()) => {}
+                    Err(OperatorActionError::Rejected(reason)) => {
+                        return OperatorActionOutcome::rejected(&reason, Some(&parsed))
+                            .with_prev_quorum(prev_posture);
+                    }
+                    Err(OperatorActionError::NonceStore(msg)) => {
+                        let reason = crate::operator_action::RejectReason::InvalidPayload(format!(
+                            "nonce could not be durably reserved: {msg}"
+                        ));
+                        return OperatorActionOutcome::rejected(&reason, Some(&parsed))
+                            .with_prev_quorum(prev_posture);
+                    }
                 }
-                Err(OperatorActionError::NonceStore(msg)) => {
+
+                // Install the new quorum set in consensus at the same seam as
+                // peer-churn rebuilds (run.rs :624/:947/:1030), publish the gate
+                // snapshot for node_getStatus, replace the in-memory config, and
+                // persist via Config::save so a restart converges to the same state.
+                consensus.reconfigure_quorum(new_qs);
+                if let Ok(mut guard) = quorum_gate_status.write() {
+                    *guard = Some(gate_snapshot);
+                }
+                *config = *candidate_config;
+                if let Err(e) = config.save(config_path) {
+                    // In-memory + consensus state is already updated and the nonce
+                    // is consumed; a failed persist means a restart would revert the
+                    // edit. Surface it truthfully rather than claiming a clean apply.
+                    error!("Operator action applied in-memory but Config::save failed: {e}");
                     let reason = crate::operator_action::RejectReason::InvalidPayload(format!(
-                        "nonce could not be durably reserved: {msg}"
-                    ));
-                    return OperatorActionOutcome::rejected(&reason, Some(&parsed));
-                }
-            }
-
-            // Install the new quorum set in consensus at the same seam as
-            // peer-churn rebuilds (run.rs :624/:947/:1030), publish the gate
-            // snapshot for node_getStatus, replace the in-memory config, and
-            // persist via Config::save so a restart converges to the same state.
-            consensus.reconfigure_quorum(new_qs);
-            if let Ok(mut guard) = quorum_gate_status.write() {
-                *guard = Some(gate_snapshot);
-            }
-            *config = *candidate_config;
-            if let Err(e) = config.save(config_path) {
-                // In-memory + consensus state is already updated and the nonce
-                // is consumed; a failed persist means a restart would revert the
-                // edit. Surface it truthfully rather than claiming a clean apply.
-                error!("Operator action applied in-memory but Config::save failed: {e}");
-                let reason = crate::operator_action::RejectReason::InvalidPayload(format!(
-                    "edit applied to the running node but persisting to config failed: {e} \
+                        "edit applied to the running node but persisting to config failed: {e} \
                      (a restart would revert it — investigate and re-apply)"
-                ));
-                return OperatorActionOutcome::rejected(&reason, Some(&parsed));
-            }
+                    ));
+                    return OperatorActionOutcome::rejected(&reason, Some(&parsed))
+                        .with_prev_quorum(prev_posture);
+                }
 
-            info!(
-                action = parsed.action.name(),
-                signer = %parsed.signer_key_id,
-                "Operator action applied: quorum edit installed and persisted"
-            );
-            let resulting = QuorumPosture::from_config(&config.network.quorum);
-            OperatorActionOutcome::applied(&parsed, resulting, verdict)
-        }
-    }
+                info!(
+                    action = parsed.action.name(),
+                    signer = %parsed.signer_key_id,
+                    "Operator action applied: quorum edit installed and persisted"
+                );
+                let resulting = QuorumPosture::from_config(&config.network.quorum);
+                OperatorActionOutcome::applied(&parsed, resulting, verdict)
+            }
+        };
+
+    // Attach the pre-edit posture (§6 prevQuorum) to the finalized outcome. This
+    // is the single value #750's audit hook reads (in the RPC handler) — no
+    // re-derivation. Authenticated outcomes (all loop outcomes are) then append
+    // a §6 JSONL entry; the `applied` case's resulting_quorum becomes newQuorum.
+    outcome.with_prev_quorum(prev_posture)
 }
 
 /// Rebuild the SCP quorum set from the *current* set of connected peers,
