@@ -2361,6 +2361,14 @@ fn process_operator_action(
             // accepted but BEFORE we mutate/install/persist, so a crash after
             // reserve fails safe (the envelope can never apply twice). A replay
             // or non-durable reservation aborts with the previous set intact.
+            //
+            // NOTE: this deliberately deviates from the literal step-6-before-
+            // gate ordering in `docs/security/quorum-write-path.md` §4. The
+            // load-bearing §9 invariant (reserve durably before install) is
+            // preserved; the only effect is that a gate-refused envelope does
+            // not burn its nonce, which is cheaper and state-neutral (a refused
+            // action changes nothing). Replay protection within the 300s window
+            // is unaffected. Reviewed and accepted on #748 (PR #755).
             match crate::operator_action::reserve_nonce(nonce_store, &parsed, now) {
                 Ok(()) => {}
                 Err(OperatorActionError::Rejected(reason)) => {

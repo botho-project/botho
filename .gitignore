@@ -119,3 +119,4 @@ go_build_artifacts/
 .loom/logs/
 *.local.md
 /.voice/
+.loom-managed
