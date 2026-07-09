@@ -1,0 +1,75 @@
+{
+  "_comment": [
+    "CROSS-LANGUAGE CANONICALIZATION FIXTURE (issue #751).",
+    "These values are produced by the NODE's Rust operator-action code",
+    "(botho/src/operator_action.rs) for the deterministic signing key",
+    "SigningKey::from_bytes(&[1u8; 32]). The browser composer MUST reproduce the",
+    "EXACT canonical byte string, the EXACT Ed25519 signature over",
+    "'botho-operator-action-v1' || canonical_bytes, the EXACT signerKeyId",
+    "(blake2b-256(pubkey)[..8] hex), and the EXACT envelopeHash",
+    "(blake2b-256(canonical_bytes) hex). If any of these drift, the node's",
+    "parse-after-verify signature check fails — the #1 failure mode for this",
+    "feature. action-envelope.test.ts asserts byte-equality against every entry.",
+    "To regenerate: temporarily print these from a Rust test in operator_action.rs",
+    "using the existing build_signed/sign_str test helpers (seed [1;32])."
+  ],
+  "domainSeparator": "botho-operator-action-v1",
+  "signingKeySeed": "0101010101010101010101010101010101010101010101010101010101010101",
+  "publicKeyHex": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+  "signerKeyId": "c5e21ab1c9f6022d",
+  "targetNode": "12D3KooWL3hwtanTFomj8bT4KQEHukZW7QxNMqtopYFKae2cJ7Nr",
+  "memberPeerId": "12D3KooWJWoaqZhDaoEFshF7Rh1bpY9ohihFhzcW6d69Lr2NASuq",
+  "envelopes": [
+    {
+      "name": "pin_member dryRun",
+      "fields": {
+        "v": 1,
+        "action": "quorum.pin_member",
+        "params": { "peerId": "12D3KooWJWoaqZhDaoEFshF7Rh1bpY9ohihFhzcW6d69Lr2NASuq" },
+        "targetNode": "12D3KooWL3hwtanTFomj8bT4KQEHukZW7QxNMqtopYFKae2cJ7Nr",
+        "signerKeyId": "c5e21ab1c9f6022d",
+        "nonce": "00112233445566778899aabbccddeeff",
+        "issuedAt": 1800000000,
+        "expiresAt": 1800000100,
+        "dryRun": true
+      },
+      "canonical": "{\"action\":\"quorum.pin_member\",\"dryRun\":true,\"expiresAt\":1800000100,\"issuedAt\":1800000000,\"nonce\":\"00112233445566778899aabbccddeeff\",\"params\":{\"peerId\":\"12D3KooWJWoaqZhDaoEFshF7Rh1bpY9ohihFhzcW6d69Lr2NASuq\"},\"signerKeyId\":\"c5e21ab1c9f6022d\",\"targetNode\":\"12D3KooWL3hwtanTFomj8bT4KQEHukZW7QxNMqtopYFKae2cJ7Nr\",\"v\":1}",
+      "signature": "0243ef32149904b90f38933e5d604413883ee70cf63958367fad3cec416135fee352c84022ac306be38f2abbcb17a1e7656311e112f2b4b2ab005915a8cdb006",
+      "envelopeHash": "3d0bba6b7353a6ccb9d1b71fe86b89a4e43c55faafef1c567cc7ace62554b5b5"
+    },
+    {
+      "name": "set_max_auto_members apply",
+      "fields": {
+        "v": 1,
+        "action": "quorum.set_max_auto_members",
+        "params": { "value": 8 },
+        "targetNode": "12D3KooWL3hwtanTFomj8bT4KQEHukZW7QxNMqtopYFKae2cJ7Nr",
+        "signerKeyId": "c5e21ab1c9f6022d",
+        "nonce": "aabbccddeeff00112233445566778899",
+        "issuedAt": 1800000000,
+        "expiresAt": 1800000100,
+        "dryRun": false
+      },
+      "canonical": "{\"action\":\"quorum.set_max_auto_members\",\"dryRun\":false,\"expiresAt\":1800000100,\"issuedAt\":1800000000,\"nonce\":\"aabbccddeeff00112233445566778899\",\"params\":{\"value\":8},\"signerKeyId\":\"c5e21ab1c9f6022d\",\"targetNode\":\"12D3KooWL3hwtanTFomj8bT4KQEHukZW7QxNMqtopYFKae2cJ7Nr\",\"v\":1}",
+      "signature": "33db378de0a4d6c4ab57d479c10d99bb273349865c7e8620edd48c2a23b276b9eb344184b6dac6b8426c930892f9665e4bc2fb192d62fa471f35920034a8560f",
+      "envelopeHash": "8a36b680bef590fec0cfff0c3fa2548e1483b47a9ec1952e986b506a70ec4597"
+    },
+    {
+      "name": "unpin_member acknowledgeDegenerate",
+      "fields": {
+        "v": 1,
+        "action": "quorum.unpin_member",
+        "params": { "peerId": "12D3KooWJWoaqZhDaoEFshF7Rh1bpY9ohihFhzcW6d69Lr2NASuq" },
+        "targetNode": "12D3KooWL3hwtanTFomj8bT4KQEHukZW7QxNMqtopYFKae2cJ7Nr",
+        "signerKeyId": "c5e21ab1c9f6022d",
+        "nonce": "0102030405060708090a0b0c0d0e0f10",
+        "issuedAt": 1800000000,
+        "expiresAt": 1800000100,
+        "dryRun": false,
+        "acknowledgeDegenerate": true
+      },
+      "canonical": "{\"acknowledgeDegenerate\":true,\"action\":\"quorum.unpin_member\",\"dryRun\":false,\"expiresAt\":1800000100,\"issuedAt\":1800000000,\"nonce\":\"0102030405060708090a0b0c0d0e0f10\",\"params\":{\"peerId\":\"12D3KooWJWoaqZhDaoEFshF7Rh1bpY9ohihFhzcW6d69Lr2NASuq\"},\"signerKeyId\":\"c5e21ab1c9f6022d\",\"targetNode\":\"12D3KooWL3hwtanTFomj8bT4KQEHukZW7QxNMqtopYFKae2cJ7Nr\",\"v\":1}",
+      "signature": "598e83d2933b0dc2ab81bd37fc099bafb94c2ff182e6bd40b53013ac335c4ae0b873bb30b4067d120a260dd8aaa0ec0b9a7c5761acecabddc507b1af8122eb0a"
+    }
+  ]
+}

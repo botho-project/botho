@@ -158,6 +158,12 @@ importers:
       '@botho/ui':
         specifier: workspace:*
         version: link:../ui
+      '@noble/curves':
+        specifier: ^1.8.1
+        version: 1.9.7
+      '@noble/hashes':
+        specifier: ^2.0.1
+        version: 2.0.1
       lucide-react:
         specifier: ^0.562.0
         version: 0.562.0(react@19.2.3)

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { FleetNode } from '../network/types'
 import { fetchOperatorQuorumInfo, fetchTrustStatuses } from './quorum'
+import { fetchAuditLog, type AuditEntry } from './audit'
 import type { NodeTrustStatus, OperatorFetchResult, OperatorQuorumInfo } from './types'
 
 /**
@@ -119,4 +120,48 @@ export function useOperatorQuorumInfo(
   }
 
   return { info, mode }
+}
+
+export interface UseOperatorAuditLogResult {
+  /** Per-node audit fetch result; missing key = first poll in flight. */
+  logs: Record<string, OperatorFetchResult<AuditEntry[]>>
+}
+
+/**
+ * Poll every node's persisted audit log (#750/#751, §6) using the operator read
+ * `token`. Entries come EXCLUSIVELY from the node (anti-#541). When `token` is
+ * falsy the hook does nothing (the audit view then shows an unavailable state).
+ *
+ * Callers must pass a referentially-stable `nodes` array — it is an effect
+ * dependency.
+ */
+export function useOperatorAuditLog(
+  nodes: FleetNode[],
+  token: string | null,
+  { pollMs = 30_000 }: UseTrustStatusOptions = {},
+): UseOperatorAuditLogResult {
+  const [logs, setLogs] = useState<Record<string, OperatorFetchResult<AuditEntry[]>>>({})
+
+  useEffect(() => {
+    if (!token) {
+      setLogs({})
+      return
+    }
+    let cancelled = false
+    const poll = async () => {
+      const results = await Promise.all(
+        nodes.map(async (n) => [n.id, await fetchAuditLog(n, token)] as const),
+      )
+      if (cancelled) return
+      setLogs(Object.fromEntries(results))
+    }
+    poll()
+    const id = setInterval(poll, pollMs)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [nodes, token, pollMs])
+
+  return { logs }
 }
