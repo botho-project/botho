@@ -41,13 +41,13 @@ This means even a well-resourced adversary monitoring network traffic cannot det
 
 ### Anti-Hoarding Economics
 
-Most cryptocurrencies reward early accumulators and punish late adopters. Botho inverts this with **progressive transaction fees** based on wealth concentration:
+Most cryptocurrencies reward early accumulators and punish late adopters. Botho inverts this with **progressive transaction fees** based on wealth concentration. Fees are size-based, multiplied by a cluster factor that grows with the wealth of the coins' origin cluster:
 
-| Wealth Level | Fee Rate |
+| Wealth Level | Fee Multiplier |
 |:--|:--|
-| Widely circulated coins | 0.05% |
-| Moderately concentrated | 1-5% |
-| Heavily hoarded | up to 30% |
+| Widely circulated coins | 1x (base rate) |
+| Mid-size clusters (~100K BTH) | ~3.5x |
+| Whale clusters | up to 6x |
 
 The system tracks coin *ancestry*, not identities. Coins that circulate through the economy pay less; coins that sit in whale wallets pay more. This is Sybil-resistant—splitting your wallet doesn't help because fees are based on where coins came from, not where they are now. **Cluster demurrage** adds a small spend-time holding charge on concentrated clusters, reaching idle wealth that a consumption tax cannot (well-circulated coins pay zero).
 
@@ -70,7 +70,7 @@ Botho combines proven cryptographic building blocks in a novel architecture:
 | Component | Technology | Benefit |
 |:--|:--|:--|
 | Consensus | Stellar Consensus Protocol (SCP) | 3-5 second finality, Byzantine fault tolerance |
-| Minting | Parallel proof-of-work | Fair block selection, not fastest-propagation-wins |
+| Minting | RandomX proof-of-work (issuance only) | CPU-egalitarian rewards, decoupled from consensus |
 | Privacy | CryptoNote stealth addresses | Unlinkable transactions |
 | Quantum safety | ML-KEM-768 + ML-DSA-65 | Future-proof key exchange and signatures |
 | Fee system | Cluster-tagged progressive fees | Economic equality without identity |
@@ -85,9 +85,9 @@ Botho has two transaction types:
 | **Minting** | Known (minter) | Hidden (ML-KEM) | Public | Block rewards |
 | **Private** | Hidden (CLSAG ring=20) | Hidden (ML-KEM) | Hidden | All transfers |
 
-Fees are calculated as: `fee = fee_per_byte × tx_size × cluster_factor`
+Fees are calculated as: `fee = fee_per_byte × tx_size × cluster_factor × output_penalty`
 
-The cluster factor (1x to 6x) is a progressive multiplier that discourages wealth concentration.
+The cluster factor (1x to 6x) is a progressive multiplier that discourages wealth concentration; the output penalty (quadratic in output count, capped at 100x) makes UTXO-farming attacks uneconomical.
 
 **Why this architecture?**
 
@@ -112,10 +112,10 @@ Unlike Bitcoin's probabilistic finality (wait 6 blocks = 60 minutes to be "sure"
 | Slot interval | 20 seconds (SCP consensus cycle) |
 | Dynamic block time | 5-40 seconds (adapts to network load) |
 | Monetary baseline | 5 seconds (for emission calculations) |
-| Difficulty adjustment | Every 1,440 blocks (~8 hours) |
+| Difficulty adjustment | Every 1,000 transactions (scales with usage) |
 | Phase 1 supply | ~611 million BTH (~5 years of halvings) |
 | Tail emission | Supply-dependent, ~1.9 BTH/block at the ~611M tail-onset supply (2% net annual inflation) |
-| Native unit | BTH (9 decimal places) |
+| Native unit | BTH (12 decimal places; 1 BTH = 10¹² picocredits) |
 
 Block timing adapts to network activity: busy networks produce faster blocks (5s), idle networks produce slower blocks (40s). This creates natural inflation dampening—less activity means less emission.
 

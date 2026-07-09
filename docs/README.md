@@ -16,7 +16,7 @@ Welcome to the Botho documentation. Botho is a privacy-preserving, mined cryptoc
 |----------|-------------|
 | [Why Botho?](concepts/comparison.md) | Comparison with Bitcoin, Monero, Zcash |
 | [Architecture](concepts/architecture.md) | System design and component overview |
-| [Transaction Types](concepts/transactions.md) | Minting, Plain, Standard-Private, and PQ-Private transactions |
+| [Transaction Types](concepts/transactions.md) | Minting and Private (CLSAG) transactions |
 | [Privacy](concepts/privacy.md) | Privacy features and cryptography |
 | [Tokenomics](concepts/tokenomics.md) | Supply, emission, fees, and economics |
 | [Progressive Fees](concepts/progressive-fees.md) | Provenance-based taxation that defeats Sybil attacks |
@@ -92,13 +92,13 @@ Welcome to the Botho documentation. Botho is a privacy-preserving, mined cryptoc
 
 Botho combines:
 
-- **Proof-of-Work Minting**: SHA-256 minting with variable difficulty
+- **Proof-of-Work Minting**: RandomX (CPU-egalitarian) minting with usage-scaled difficulty, decoupled from consensus
 - **Two Transaction Types**: Minting (block rewards) and Private (CLSAG ring signatures)
 - **Hybrid Post-Quantum Security**: ML-KEM stealth addresses, CLSAG ring signatures
 - **Confidential Amounts**: Pedersen commitments with Bulletproofs range proofs
 - **Byzantine Fault Tolerance**: Stellar Consensus Protocol (SCP) for consensus
 - **Progressive Fees**: Cluster-based taxation that discourages wealth concentration
-- **Network Privacy**: Onion Gossip for transaction origin hiding (planned)
+- **Network Privacy**: Onion Gossip for transaction origin hiding (phase 1 implemented; see `docs/security/onion-gossip-phase1-audit.md`)
 
 The native currency unit is **BTH** (1 BTH = 1,000,000,000,000 picocredits).
 

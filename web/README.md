@@ -4,8 +4,10 @@ Monorepo for Botho's web apps:
 
 - **`packages/web-wallet`** (`@botho/web-wallet`) — the public web wallet and
   ledger browser / block explorer served at `https://botho.io`. Routes:
-  `/` (landing), `/wallet`, `/explorer`, `/explorer/block/:hash`,
-  `/explorer/tx/:hash`, `/docs`.
+  `/` (landing), `/wallet`, `/pay`, `/claim`, `/contacts`, `/explorer`,
+  `/explorer/block/:hash`, `/explorer/tx/:hash`, `/network` (stats dashboard),
+  `/node` + `/node/status` (managed node hosting), `/operator` (operator
+  dashboard), `/docs`, `/about`.
 - **`packages/desktop`** (`@botho/desktop`) — the desktop (Tauri) wallet UI.
 - **`packages/features`** — shared feature components, including the explorer
   (`src/explorer/*`).
