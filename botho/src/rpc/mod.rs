@@ -308,6 +308,17 @@ pub struct RpcState {
     /// operator-only reads. This grants READS ONLY; there is no operator
     /// write RPC (that is #709).
     pub operator_read_token_secret: Option<String>,
+    /// Operator-action signing public keys (hex Ed25519) from
+    /// `[rpc.operator] action_public_keys` (#747, P4.4a). Empty ⇒ **no write
+    /// surface at all** (fail closed): the operator-signed quorum-curation write
+    /// path (#709, later sub-issues) refuses `operator_submitAction` when this
+    /// is empty. This issue lands ONLY the plumbing — no RPC reads this field
+    /// yet, so with an empty list the node behaves byte-identically to today.
+    ///
+    /// Populated exclusively from config at startup (SSH/config trust domain).
+    /// There is intentionally NO RPC or signed action that reads, adds, or
+    /// removes entries — verified by absence (see `config::OperatorConfig`).
+    pub operator_action_public_keys: Vec<String>,
     /// Operator audit-log store (#707). Present-but-empty in P4.2; #709 wires
     /// the append side. Surfaced by `operator_getAuditLog`.
     pub operator_audit_log: Arc<OperatorAuditLog>,
@@ -351,6 +362,7 @@ impl RpcState {
             network_stats: None,
             tx_relay: None,
             operator_read_token_secret: None,
+            operator_action_public_keys: Vec::new(),
             operator_audit_log: OperatorAuditLog::new(),
         }
     }
@@ -396,6 +408,7 @@ impl RpcState {
             network_stats: None,
             tx_relay: None,
             operator_read_token_secret: None,
+            operator_action_public_keys: Vec::new(),
             operator_audit_log: OperatorAuditLog::new(),
         }
     }
@@ -439,6 +452,7 @@ impl RpcState {
             network_stats: None,
             tx_relay: None,
             operator_read_token_secret: None,
+            operator_action_public_keys: Vec::new(),
             operator_audit_log: OperatorAuditLog::new(),
         }
     }
@@ -553,6 +567,25 @@ impl RpcState {
     /// `Config::rpc.operator_read_token_secret()`.
     pub fn with_operator_read_token_secret(mut self, secret: Option<String>) -> Self {
         self.operator_read_token_secret = secret.filter(|s| !s.trim().is_empty());
+        self
+    }
+
+    /// Provision the operator-action signing public keys (#747, P4.4a) from
+    /// `[rpc.operator] action_public_keys`. Fails closed identically to the
+    /// read-token accessor: empty/whitespace-only entries are filtered out and
+    /// trimmed, so an all-empty (or absent) list yields an empty `Vec` ⇒ **no
+    /// write surface** (downstream sub-issues refuse `operator_submitAction`
+    /// when this is empty). `commands::run` calls this with
+    /// `Config::rpc.operator_action_public_keys()`.
+    ///
+    /// No RPC or signed action mutates this list — it is provisioned once here
+    /// from config (SSH/config trust domain) and thereafter only read.
+    pub fn with_operator_action_public_keys(mut self, keys: Vec<String>) -> Self {
+        self.operator_action_public_keys = keys
+            .into_iter()
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty())
+            .collect();
         self
     }
 
@@ -3688,6 +3721,47 @@ async fn handle_faucet_status(id: Value, state: &RpcState) -> JsonRpcResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn empty_test_state() -> RpcState {
+        use crate::{ledger::Ledger, mempool::Mempool};
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        RpcState::new(
+            ledger,
+            Mempool::new(),
+            Network::Testnet,
+            None,
+            None,
+            vec![],
+            Arc::new(WsBroadcaster::new(16)),
+        )
+    }
+
+    /// #747: with no action_public_keys wired in, the field is empty — the
+    /// node has no operator write surface and behaves as today.
+    #[test]
+    fn operator_action_public_keys_default_empty() {
+        let state = empty_test_state();
+        assert!(state.operator_action_public_keys.is_empty());
+    }
+
+    /// #747: the builder filters empty/whitespace-only entries and trims,
+    /// failing closed identically to the read-token accessor.
+    #[test]
+    fn with_operator_action_public_keys_filters_fail_closed() {
+        let state = empty_test_state().with_operator_action_public_keys(vec![
+            "aa".to_string(),
+            "   ".to_string(),
+            "".to_string(),
+            " bb ".to_string(),
+        ]);
+        assert_eq!(state.operator_action_public_keys, vec!["aa", "bb"]);
+
+        // An all-empty list ⇒ no keys (no write surface).
+        let state = empty_test_state()
+            .with_operator_action_public_keys(vec!["  ".to_string(), "".to_string()]);
+        assert!(state.operator_action_public_keys.is_empty());
+    }
 
     /// #392: thin wallets cannot learn which of their owned outputs are spent
     /// because `chain_getOutputs` reports ownership only.

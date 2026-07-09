@@ -112,6 +112,18 @@ thiserror = "1"
 # Security
 zeroize = { workspace = true }
 chacha20poly1305 = { workspace = true }
+# Operator signing keypair (#747, P4.4a). Ed25519 for the operator-action
+# signing key (already the fleet's signature algorithm via libp2p identity);
+# Argon2id + ChaCha20-Poly1305 to encrypt the private key at rest under a
+# mandatory passphrase (the same at-rest recipe botho-wallet uses); blake2 for
+# the shared `blake2b-256(pubkey)[..8]` signerKeyId fingerprint.
+ed25519-dalek = { workspace = true, features = ["std", "rand_core"] }
+blake2 = { workspace = true, features = ["std"] }
+digest = { workspace = true }
+argon2 = "0.5"
+# Hidden passphrase prompt for `botho operator keygen` (same crate the wallet
+# CLI uses for password entry).
+rpassword = "7"
 
 # TLS tunnel transport (Phase 3.7)
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }

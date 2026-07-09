@@ -64,6 +64,24 @@ pub struct OperatorConfig {
     /// off-node by `botho operator mint-read-link`. An empty secret is treated
     /// as "not configured" (fail closed).
     pub read_token_secret: String,
+
+    /// Operator-action signing public keys (hex-encoded Ed25519, 64 hex chars
+    /// each), one per authorized operator key (#747, P4.4a; design
+    /// `docs/security/quorum-write-path.md` §2). **Public keys only** — no
+    /// private key material ever lives on a node.
+    ///
+    /// An empty/absent list means the node has **no write surface at all**
+    /// (fail closed): downstream sub-issues gate `operator_submitAction` on a
+    /// non-empty list. This issue lands ONLY the field + accessor + RpcState
+    /// plumbing; no RPC consumes it yet.
+    ///
+    /// This list is provisioned and changed over SSH/config exclusively. There
+    /// is intentionally NO RPC or signed-action code path that reads, adds, or
+    /// removes entries — key management must not be self-referential (a stolen
+    /// key must not enroll further keys, §2). That property is verified by
+    /// absence: no accessor here or elsewhere mutates this list.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub action_public_keys: Vec<String>,
 }
 
 impl OperatorConfig {
@@ -77,6 +95,18 @@ impl OperatorConfig {
             Some(self.read_token_secret.as_str())
         }
     }
+
+    /// The configured operator-action public keys, with empty/whitespace-only
+    /// entries filtered out and trimmed. Returns an empty `Vec` when none are
+    /// usably configured (fail closed — "no keys" ⇒ no write surface).
+    pub fn effective_action_public_keys(&self) -> Vec<String> {
+        self.action_public_keys
+            .iter()
+            .map(|k| k.trim())
+            .filter(|k| !k.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
 }
 
 impl RpcConfig {
@@ -85,6 +115,19 @@ impl RpcConfig {
     /// is `None` the operator RPCs are OFF and the node behaves as today.
     pub fn operator_read_token_secret(&self) -> Option<&str> {
         self.operator.as_ref().and_then(|o| o.effective_secret())
+    }
+
+    /// The effective operator-action signing public keys (hex Ed25519),
+    /// filtered fail-closed: empty/whitespace-only entries removed, absent
+    /// `[rpc.operator]` section ⇒ empty `Vec` ("no keys"). Downstream
+    /// sub-issues (#748+) require this to be non-empty before exposing any
+    /// operator write surface; an empty result means the write path stays OFF
+    /// and the node behaves exactly as today (#747).
+    pub fn operator_action_public_keys(&self) -> Vec<String> {
+        self.operator
+            .as_ref()
+            .map(|o| o.effective_action_public_keys())
+            .unwrap_or_default()
     }
 }
 
@@ -1270,5 +1313,42 @@ mod tests {
         let loaded = Config::load(&path).unwrap();
         assert_eq!(loaded.network.max_connections_per_ip, 5);
         assert_eq!(loaded.network.connection_whitelist.len(), 2);
+    }
+
+    #[test]
+    fn action_public_keys_absent_operator_section_yields_no_keys() {
+        // No [rpc.operator] at all ⇒ fail-closed empty list (no write surface).
+        let rpc = RpcConfig::default();
+        assert!(rpc.operator_action_public_keys().is_empty());
+    }
+
+    #[test]
+    fn action_public_keys_parse_and_filter_whitespace() {
+        let toml = "[operator]\n\
+             read_token_secret = \"s\"\n\
+             action_public_keys = [\"aa\", \"  \", \"\", \" bb \"]\n";
+        let rpc: RpcConfig = toml::from_str(toml).unwrap();
+        // Whitespace-only and empty entries filtered; survivors trimmed.
+        assert_eq!(rpc.operator_action_public_keys(), vec!["aa", "bb"]);
+    }
+
+    #[test]
+    fn action_public_keys_empty_list_yields_no_keys() {
+        // Present [rpc.operator] but an empty/all-whitespace key list still
+        // fails closed to "no keys".
+        let toml = "[operator]\n\
+             read_token_secret = \"s\"\n\
+             action_public_keys = [\"  \", \"\"]\n";
+        let rpc: RpcConfig = toml::from_str(toml).unwrap();
+        assert!(rpc.operator_action_public_keys().is_empty());
+    }
+
+    #[test]
+    fn action_public_keys_absent_field_defaults_empty() {
+        // [rpc.operator] present for the read token, but no action_public_keys
+        // field ⇒ empty (serde default) ⇒ no write surface.
+        let toml = "[operator]\nread_token_secret = \"s\"\n";
+        let rpc: RpcConfig = toml::from_str(toml).unwrap();
+        assert!(rpc.operator_action_public_keys().is_empty());
     }
 }
