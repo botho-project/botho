@@ -1,6 +1,8 @@
 # Quorum Write-Path Security Design (P4.3)
 
-**Status**: DRAFT — awaiting security review (issue #708).
+**Status**: DRAFT — review round 1 (issue #708, 2026-07-08) returned
+CHANGES REQUESTED; this revision addresses all four findings. Awaiting
+re-review on #708.
 **Scope**: the operator-signed quorum-curation write path for the P4 admin
 dashboard (#441 P4; architecture proposal on #695; decision record on #664).
 **Exit criterion**: implementation issue **#709 is blocked until this design
@@ -29,9 +31,9 @@ Two structural mitigations do the heavy lifting; everything else is
 defense-in-depth around them:
 
 1. **Every edit flows through the existing promotion gate.** The gate
-   (`gated_scp_quorum_set`, `botho/src/commands/run.rs:2214`) already refuses
+   (`gated_scp_quorum_set`, `botho/src/commands/run.rs:2217`) already refuses
    any candidate quorum set whose FBAS model admits disjoint quorums
-   (`symmetric_quorum_has_intersection`, applied at run.rs:2346, keeping the
+   (`symmetric_quorum_has_intersection`, applied at run.rs:2377, keeping the
    previous safe set on refusal). The write path adds **no second way to
    construct a quorum set** — an operator action only mutates the gate's
    *inputs* (`[network.quorum] members`, `max_auto_members`), and the gate
@@ -88,6 +90,7 @@ separator prevents cross-protocol signature reuse.
 ```json
 {
   "action": "quorum.pin_member",
+  "dryRun": false,
   "expiresAt": 1783450000,
   "issuedAt": 1783449700,
   "nonce": "9f2c...32 hex chars (128-bit random)...",
@@ -123,13 +126,20 @@ separator prevents cross-protocol signature reuse.
   individually signed; the dashboard automates composing them.
 - **`nonce`**: 128-bit random hex, single-use per node (§5).
 - **`issuedAt` / `expiresAt`**: unix seconds; `expiresAt − issuedAt ≤ 300`,
-  and the node enforces its own clock against both (±30 s skew allowance,
-  matching the tolerance posture of the BaaS webhook verifier).
+  and the node enforces its own clock against both (±30 s skew allowance —
+  deliberately tighter than the BaaS webhook verifier's 300 s tolerance,
+  because operator actions are interactive and fleet nodes run NTP).
 - **`signerKeyId`**: fingerprint of the signing pubkey; lets the node select
   the right key from `action_public_keys` and lets the audit log attribute
   actions without embedding whole keys.
 - **`v`**: envelope version; unknown versions are rejected (no downgrade
   path: v1 verifiers reject anything but `"v": 1`).
+- **`dryRun` (mandatory bool)** — review finding 1 (#708): dry-run-ness is
+  part of the SIGNED payload, never an RPC parameter. A signed preview is
+  therefore structurally incapable of being replayed as a real apply (and
+  vice versa): the operator's signature covers the operator's intent. This
+  generalizes to a verifier invariant stated in §4: **no request parameter
+  outside the signed envelope may influence processing.**
 - **`acknowledgeDegenerate` (optional bool, new, #709)**: REQUIRED to be
   `true` when the action's resulting membership is below 4 nodes (the BFT
   floor — below it the formula degenerates to n-of-n crash-only tolerance,
@@ -137,6 +147,14 @@ separator prevents cross-protocol signature reuse.
   the node refuses the action UNLESS the operator explicitly acknowledged the
   degenerate posture in the signed payload itself, so the acknowledgment is
   attributable and non-repudiable.
+- **Solo-quorum hard floor (review finding 2, #708)**: an action whose
+  resulting membership is **1 (the node alone) is refused outright — no
+  acknowledgment override**. A 1-of-1 quorum trivially passes the
+  intersection check (`1 > 1/2`) yet lets the node externalize alone and
+  diverge from the fleet — a self-fork the gate cannot see, because its FBAS
+  model is node-local. No legitimate remote-curation use case shrinks a node
+  to solo; that remains SSH-only. Evaluated at apply time against the
+  then-connected peer set, same as the `acknowledgeDegenerate` rule.
 
 ## 4. Node-side verification and apply
 
@@ -151,7 +169,7 @@ NOT a config-file reload path. Justification (proposal §3.3):
   *synchronously* whether the gate accepted or refused the edit (§4 step 6),
   which the dashboard renders truthfully (anti-#541: outcomes only ever come
   from node responses).
-- `Config::load` runs once at startup (`botho/src/config.rs:733`); there is
+- `Config::load` runs once at startup (`botho/src/config.rs:798`); there is
   no existing reload machinery to reuse, so a reload path would be MORE new
   code than the RPC, with worse properties.
 
@@ -169,9 +187,9 @@ fail-closed; first failure wins and is audit-logged as a refusal):
    apply, so a crash between the two fails safe — the envelope can never be
    applied twice, at the cost of requiring a re-signed retry after a crash).
 7. **Payload validity**: action is a known v1 action; `peerId` parses as a
-   base58 PeerId (mirroring the gate's own parse-and-warn at run.rs:2256);
+   base58 PeerId (mirroring the gate's own parse-and-warn at run.rs:2279);
    `max_auto_members` within sane bounds (0..=64); the
-   `acknowledgeDegenerate` rule (§3).
+   `acknowledgeDegenerate` rule and the solo-quorum hard floor (§3).
 
 **Apply path** — mirrors the #674 relay pattern (RPC → mpsc channel → event
 loop), because `rebuild_scp_quorum_set` needs `NetworkDiscovery` and the
@@ -185,24 +203,39 @@ consensus handle, which live in the `commands::run` event loop:
 3. It runs `rebuild_scp_quorum_set` with the mutated clone and
    `previous = Some(current quorum set)` — the EXISTING gate, including the
    deterministic auto-set trimming and the
-   `symmetric_quorum_has_intersection` check (run.rs:2346).
+   `symmetric_quorum_has_intersection` check (run.rs:2377).
 4. **If the gate refuses** (`quorumGateIntersectionRefused`): the action is
    REJECTED, the config clone is dropped, the previous quorum set stays live
    (that is the gate's built-in behavior), and the refusal — with the gate's
    verdict — is returned to the caller and audit-logged. Nothing persists.
 5. **If the gate accepts**: the in-memory config is replaced by the clone,
    the new quorum set is installed in consensus (the same call sites as the
-   peer-churn rebuilds at run.rs ~:621/:944/:1027 use), the config is
-   persisted via `Config::save` (`botho/src/config.rs:742`) so a restart
+   peer-churn rebuilds at run.rs :624/:947/:1030 use), the config is
+   persisted via `Config::save` (`botho/src/config.rs:807`) so a restart
    converges to the same state, and the applied action is audit-logged.
 6. The responder returns the full outcome (applied/refused, gate snapshot,
    resulting `[network.quorum]`) to the RPC caller.
 
-**`dryRun: true`** runs steps 1–4 identically but never mutates, persists, or
-consumes the nonce — it returns the gate verdict for the hypothetical edit.
-The dashboard uses this to show the operator the consequence of an action
-before signing the real one. Dry runs still require a valid signature (they
-reveal operator-only information: the would-be quorum composition).
+**Dry runs.** An envelope with `dryRun: true` (a signed field, §3) runs steps
+1–4 identically but never mutates, persists, or consumes the nonce — it
+returns the gate verdict for the hypothetical edit. The dashboard uses this
+to show the operator the consequence of an action before signing the real
+one; the real apply is a **separately signed** envelope with `dryRun: false`
+and a fresh nonce. Dry runs still require a valid signature (they reveal
+operator-only information: the would-be quorum composition).
+
+**Invariant (review finding 1, #708): the node acts only on the signed
+canonical bytes.** `operator_submitAction` takes exactly one argument — the
+envelope and its signature. There are no sibling RPC parameters, and any
+future parameter that could influence verification or application MUST be a
+field inside the signed envelope. The verifier checks signatures over the
+**received canonical byte string** and only then parses those exact bytes
+(parse-after-verify); it never re-canonicalizes a separately-parsed object.
+Optional-field ambiguity is excluded by construction: every v1 field,
+including `dryRun` and `acknowledgeDegenerate` where required (§3), has a
+defined canonical presence, and an envelope whose bytes parse to unknown or
+duplicate keys is rejected at the parse step (after signature verification,
+as part of §4 step 7 payload validity).
 
 ## 5. Replay protection
 
@@ -220,6 +253,13 @@ reveal operator-only information: the would-be quorum composition).
   of any field — blocked by the signature. A captured envelope is therefore
   worthless except as an information leak (it reveals one intended config
   change), and transport is TLS anyway (§8.2).
+- **Dry-run exception (accepted)**: because dry runs never consume their
+  nonce (§4), a captured `dryRun: true` envelope CAN be re-submitted against
+  its target node until `expiresAt`. This is deliberate and bounded: the
+  re-submission cannot change state or be converted to an apply (`dryRun` is
+  signed, finding 1), and its only yield is re-reading the gate verdict for
+  one fixed hypothetical edit for ≤5 minutes — an information leak already
+  in the §8.2 row, further limited by TLS transport.
 - **Reordering**: two envelopes signed in sequence can arrive out of order
   within their windows; each is individually gate-validated against the
   then-current state, so the result is always a gate-accepted configuration,
@@ -232,8 +272,14 @@ reveal operator-only information: the would-be quorum composition).
 ## 6. Audit logging
 
 - **Store (new, #709)**: append-only JSONL at
-  `<data-dir>/operator-audit.jsonl`, one entry per verification outcome
-  (applied, gate-refused, AND verification-refused):
+  `<data-dir>/operator-audit.jsonl`, one entry per **authenticated**
+  verification outcome — applied, gate-refused, and post-signature refusals
+  (bad target, expired, replayed nonce, invalid payload). **Pre-signature
+  failures (§4 steps 1–3) are NOT audit-logged** (review finding 3, #708):
+  they are reachable by any unauthenticated caller on the RPC port, so
+  logging them would hand out an unbounded disk-fill / log-spam primitive.
+  They get rate-limited `debug!`-level tracing plus a rejected-requests
+  counter surfaced in `node_getStatus`. Authenticated entries:
 
 ```json
 {"ts":1783449912,"signerKeyId":"a1b2c3d4e5f60708","envelopeHash":"blake2b-256 hex",
@@ -275,7 +321,7 @@ all.
 Examples: pinning a peer that then goes offline (in `recommended` mode a
 curated member is always admitted when connected, so this mostly self-heals;
 in `explicit` mode configured members count toward the threshold whether or
-not connected — run.rs:2251 — so pinning dead peers can raise the bar past
+not connected — run.rs:2261 — so pinning dead peers can raise the bar past
 what's reachable), or lowering `max_auto_members` below what quorum needs on
 a small fleet. The gate accepts these (intersection holds) but the node may
 stop externalizing — a stall, **not** a fork (`slotStalled` in
@@ -308,14 +354,14 @@ Per-node targeting means the fleet's `[network.quorum]` configs can diverge
 (one node accepted a pin, another refused because its connected-peer view
 differed). Under **`recommended` mode** this is merely operational
 untidiness: a curated member counts toward a node's quorum *only when
-connected* (run.rs:2308), so a divergent-but-each-intersection-valid fleet
+connected* (run.rs:2297), so a divergent-but-each-intersection-valid fleet
 still forms quorums over the peers actually reachable. Each node's LIVE set
 passed its own intersection check; the trust dashboard (#707) surfaces the
 divergence, and the fleet-action composer treats "some nodes refused" as a
 first-class partial-failure outcome.
 
 Under **`explicit` mode** the same divergence is more dangerous: configured
-members count toward the threshold whether or not connected (run.rs:2251), so
+members count toward the threshold whether or not connected (run.rs:2261), so
 a fleet that disagrees on membership can have each node individually pass
 intersection yet collectively fail to form a quorum any node will accept — a
 fleet-wide liveness stall that no single compensating action fixes (each node
@@ -334,11 +380,14 @@ part of the same future-review gate as mode/threshold actions (§3).
 | 8.2 | **Captured envelope** (network vantage) | Learn one intended config change (TLS makes even this unlikely) | Replay (nonce), retarget (targetNode), outlive 5 min (expiry), or modify (signature) — §5 |
 | 8.3 | **Compromised dashboard host** (Cloudflare Pages) | Serve a malicious bundle: steal read tokens; prompt the operator to sign attacker-chosen envelopes (the serious risk) | Sign anything itself (no key on the host). Mitigations: the dashboard shows the canonical envelope before signing; malicious signed actions are still gate-checked (no fork), audit-logged (attributable), and bounded by the v1 action set (worst case = liveness harassment, recoverable via §7). Residual risk accepted for testnet; mainnet hardening (SRI, self-hosting the operator page) tracked in #709. |
 | 8.4 | **Compromised node** (root) | Ignore/rewrite its own config, forge its own audit log, lie in RPC responses — that node is lost regardless of this design | Sign actions against OTHER nodes (no private key material anywhere on nodes — the design's core invariant); other nodes' gates and logs are unaffected |
-| 8.5 | **Malicious insider with the operator key** | Everything the write path allows: liveness harassment within the v1 action set, degenerate-posture edits (self-acknowledged, attributable) | Fork the chain (gate, §7.1); flip mode/threshold (not in v1); enroll new keys or erase fleet-wide audit trail (key list and logs are SSH-domain). Recovery: revoke via §2; SSH ladder §7. |
+| 8.5 | **Malicious insider with the operator key** | Everything the write path allows: liveness harassment within the v1 action set, degenerate-posture edits down to membership 2 (self-acknowledged, attributable) | Fork the fleet (gate, §7.1); drive any node to a self-externalizing solo quorum (membership-1 hard floor, §3); flip mode/threshold (not in v1); enroll new keys or erase fleet-wide audit trail (key list and logs are SSH-domain). Recovery: revoke via §2; SSH ladder §7. |
 
 The design's honest summary: **the write path converts "quorum edit" from a
-fork-capable SSH superpower into a fork-incapable, attributable, rate-bounded
-capability** — and the SSH superpower remains, unchanged, as the recovery
+fork-capable SSH superpower into an attributable, rate-bounded capability
+that cannot fork the fleet** — the intersection gate refuses splitting-set
+candidates, and the membership-1 hard floor (§3) closes the one edge where a
+gate-accepted edit could still make a node diverge (solo self-
+externalization). The SSH superpower remains, unchanged, as the recovery
 root. The new surface strictly dominates the status quo for safety while
 adding operator convenience.
 
@@ -352,5 +401,11 @@ adding operator convenience.
 - [ ] The gate-reuse claim holds: no code path in #709 may construct or
       install a QuorumSet except through `gated_scp_quorum_set`.
 - [ ] v1 action set stays minimal (no mode/threshold).
+- [ ] `dryRun` is a signed envelope field and no request parameter outside
+      the signed envelope influences processing (round-1 finding 1).
+- [ ] The membership-1 hard floor refuses solo-quorum-producing actions with
+      no acknowledgment override (round-1 finding 2).
+- [ ] Audit log records authenticated outcomes only; pre-signature failures
+      are rate-limited tracing + a counter (round-1 finding 3).
 - [ ] 8.3's residual risk (malicious bundle prompting the operator) is
       acceptable for testnet, and the mainnet hardening list is filed.
