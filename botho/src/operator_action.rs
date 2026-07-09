@@ -107,6 +107,19 @@ impl ActionKind {
             ActionKind::SetMaxAutoMembers { .. } => "quorum.set_max_auto_members",
         }
     }
+
+    /// The action's `params` object as it appears in the envelope, for the
+    /// audit log (§6: refusals log the *attempted* mutation in `params`).
+    /// Reconstructed from the parsed action so the audit entry never
+    /// re-reads untrusted bytes.
+    pub fn params_value(&self) -> Value {
+        match self {
+            ActionKind::PinMember { peer_id } | ActionKind::UnpinMember { peer_id } => {
+                serde_json::json!({ "peerId": peer_id })
+            }
+            ActionKind::SetMaxAutoMembers { value } => serde_json::json!({ "value": value }),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -776,6 +789,13 @@ pub struct OperatorActionOutcome {
     /// The attempted action name (`quorum.pin_member`, …), when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
+    /// The attempted action's `params` object, for the audit entry (§6:
+    /// refusals log the *attempted* mutation). `None` for pre-signature
+    /// rejections (no parsed action). Not serialized on the RPC wire (the
+    /// caller already has the signed envelope); used only to build the
+    /// audit entry.
+    #[serde(skip)]
+    pub audit_params: Option<Value>,
     /// Human-facing detail (rejection reason / applied summary).
     pub message: String,
     /// For refusals: the machine tag (`gate_refused` | `verify_refused:<tag>`);
@@ -785,6 +805,11 @@ pub struct OperatorActionOutcome {
     /// audit-logs authenticated outcomes; unauthenticated ones are rate-limited
     /// + counted (§6 review finding 3).
     pub authenticated: bool,
+    /// The `[network.quorum]` posture BEFORE the edit, when known (set by the
+    /// event loop, which alone sees the live config). Feeds the audit entry's
+    /// `prevQuorum` (§6). `None` for pre-gate handler-side rejections.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prev_quorum: Option<QuorumPosture>,
     /// The resulting `[network.quorum]` posture — present for `applied`, and
     /// for `dryRun` previews it is the HYPOTHETICAL resulting posture;
     /// `None` for refusals (no new state exists).
@@ -881,22 +906,25 @@ impl OperatorActionOutcome {
     /// action.
     pub fn rejected(reason: &RejectReason, parsed: Option<&ParsedEnvelope>) -> Self {
         let authenticated = reason.is_authenticated();
-        let (signer_key_id, action, dry_run) = match parsed {
+        let (signer_key_id, action, audit_params, dry_run) = match parsed {
             Some(p) => (
                 Some(p.signer_key_id.clone()),
                 Some(p.action.name().to_string()),
+                Some(p.action.params_value()),
                 p.dry_run,
             ),
-            None => (None, None, false),
+            None => (None, None, None, false),
         };
         Self {
             outcome: OutcomeClass::VerifyRefused,
             dry_run,
             signer_key_id,
             action,
+            audit_params,
             message: reason.message(),
             audit_tag: format!("verify_refused:{}", reason.tag()),
             authenticated,
+            prev_quorum: None,
             resulting_quorum: None,
             gate: None,
         }
@@ -910,11 +938,13 @@ impl OperatorActionOutcome {
             dry_run: parsed.dry_run,
             signer_key_id: Some(parsed.signer_key_id.clone()),
             action: Some(parsed.action.name().to_string()),
+            audit_params: Some(parsed.action.params_value()),
             message: "quorum promotion gate refused the edit (would admit disjoint quorums — \
                       fork risk); previous quorum set kept, nothing persisted"
                 .to_string(),
             audit_tag: "gate_refused".to_string(),
             authenticated: true,
+            prev_quorum: None,
             resulting_quorum: None,
             gate: Some(gate),
         }
@@ -935,12 +965,69 @@ impl OperatorActionOutcome {
             dry_run: parsed.dry_run,
             signer_key_id: Some(parsed.signer_key_id.clone()),
             action: Some(parsed.action.name().to_string()),
+            audit_params: Some(parsed.action.params_value()),
             message,
             audit_tag: "applied".to_string(),
             authenticated: true,
+            prev_quorum: None,
             resulting_quorum: Some(resulting),
             gate: Some(gate),
         }
+    }
+
+    /// Attach the pre-edit quorum posture (`prevQuorum`, §6). Only the event
+    /// loop knows the live config, so it sets this on the outcome before the
+    /// audit hook reads it. A no-op for outcomes that have no meaningful prior
+    /// state (pre-gate handler rejections).
+    pub fn with_prev_quorum(mut self, prev: QuorumPosture) -> Self {
+        self.prev_quorum = Some(prev);
+        self
+    }
+
+    /// Build the §6 audit entry for this AUTHENTICATED outcome.
+    ///
+    /// The caller supplies `envelope_hash` (the `blake2b-256` hex of the
+    /// canonical signed envelope bytes — computed via
+    /// [`crate::operator_key::blake2b_256_hex`], the one blake2b helper) and
+    /// the wall-clock `ts`, because the outcome itself is
+    /// transport-agnostic. Every other field is derived from the outcome —
+    /// #750 re-derives nothing.
+    ///
+    /// Returns `None` for a pre-signature (unauthenticated) outcome: those are
+    /// NEVER audit-logged (finding 3); the caller counts them instead.
+    /// `newQuorum` is populated ONLY for a real `applied` outcome (not dry
+    /// runs, which install nothing).
+    pub fn to_audit_entry(
+        &self,
+        envelope_hash: String,
+        ts: u64,
+    ) -> Option<crate::rpc::OperatorAuditEntry> {
+        if !self.authenticated {
+            return None;
+        }
+        let to_val = |p: &QuorumPosture| serde_json::to_value(p).ok();
+        // newQuorum only for a REAL applied edit (§6): a dry run installs
+        // nothing, and refusals have no new state.
+        let new_quorum = if self.outcome == OutcomeClass::Applied && !self.dry_run {
+            self.resulting_quorum.as_ref().and_then(to_val)
+        } else {
+            None
+        };
+        Some(crate::rpc::OperatorAuditEntry {
+            ts,
+            signer_key_id: self.signer_key_id.clone().unwrap_or_default(),
+            envelope_hash,
+            action: self.action.clone().unwrap_or_default(),
+            params: self.audit_params.clone().unwrap_or(Value::Null),
+            dry_run: self.dry_run,
+            outcome: self.audit_tag.clone(),
+            prev_quorum: self.prev_quorum.as_ref().and_then(to_val),
+            new_quorum,
+            gate: self
+                .gate
+                .as_ref()
+                .and_then(|g| serde_json::to_value(g).ok()),
+        })
     }
 }
 
