@@ -22,7 +22,8 @@
 //! - **Ed25519** (`ed25519-dalek`, the same primitive libp2p identity keys use)
 //!   — small signatures, no parameters to get wrong (§2 of the design).
 //! - **Argon2id + ChaCha20-Poly1305** for the at-rest envelope — the exact
-//!   recipe `botho-wallet`'s encrypted storage uses (`botho-wallet/src/storage.rs`).
+//!   recipe `botho-wallet`'s encrypted storage uses
+//!   (`botho-wallet/src/storage.rs`).
 //!
 //! ## Security boundary (documented in code, verified by absence)
 //!
@@ -161,8 +162,8 @@ impl OperatorKeyFile {
     /// Serialize the key file to pretty JSON and write it to `path` with
     /// owner-only permissions (Unix `0600`; owner-only ACL on Windows) —
     /// matching how `botho-wallet` protects its encrypted wallet file. Refuses
-    /// to clobber an existing file so a stray `keygen` cannot silently destroy a
-    /// provisioned key.
+    /// to clobber an existing file so a stray `keygen` cannot silently destroy
+    /// a provisioned key.
     pub fn write_to(&self, path: &std::path::Path) -> Result<()> {
         if path.exists() {
             return Err(anyhow!(
@@ -205,8 +206,7 @@ impl OperatorKeyFile {
 
     /// Parse the stored public key into its 32-byte form.
     pub fn public_key_bytes(&self) -> Result<[u8; 32]> {
-        let bytes =
-            hex::decode(&self.public_key).map_err(|_| anyhow!("invalid public_key hex"))?;
+        let bytes = hex::decode(&self.public_key).map_err(|_| anyhow!("invalid public_key hex"))?;
         let arr: [u8; 32] = bytes
             .as_slice()
             .try_into()
@@ -232,8 +232,7 @@ impl OperatorKeyFile {
 
         let derived = derive_key(passphrase, &self.salt)?;
 
-        let nonce_bytes =
-            hex::decode(&self.nonce).map_err(|_| anyhow!("invalid nonce hex"))?;
+        let nonce_bytes = hex::decode(&self.nonce).map_err(|_| anyhow!("invalid nonce hex"))?;
         if nonce_bytes.len() != 12 {
             return Err(anyhow!("invalid nonce length"));
         }
@@ -365,7 +364,10 @@ mod tests {
     fn each_generation_is_a_fresh_key() {
         let a = OperatorKeyFile::generate("p").unwrap();
         let b = OperatorKeyFile::generate("p").unwrap();
-        assert_ne!(a.public_key, b.public_key, "keygen must not be deterministic");
+        assert_ne!(
+            a.public_key, b.public_key,
+            "keygen must not be deterministic"
+        );
     }
 
     #[test]

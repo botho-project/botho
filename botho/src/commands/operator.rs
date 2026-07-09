@@ -103,9 +103,7 @@ pub fn mint_read_link(config_path: &Path, dashboard: &str, ttl_seconds: Option<u
 /// under an unknown passphrase.
 fn prompt_new_passphrase() -> Result<String> {
     loop {
-        eprint!(
-            "Enter a passphrase to encrypt the operator private key (required): "
-        );
+        eprint!("Enter a passphrase to encrypt the operator private key (required): ");
         std::io::stderr().flush()?;
         let pass = rpassword::read_password()?;
 
@@ -190,8 +188,10 @@ pub fn keygen(output: Option<&str>, network: Network) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::operator_key::fingerprint_hex;
-    use crate::rpc::auth::{verify_operator_read_token, OperatorTokenError};
+    use crate::{
+        operator_key::fingerprint_hex,
+        rpc::auth::{verify_operator_read_token, OperatorTokenError},
+    };
     use std::io::Write;
 
     /// Write a minimal config.toml carrying an `[rpc.operator]

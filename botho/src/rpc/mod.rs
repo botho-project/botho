@@ -310,10 +310,11 @@ pub struct RpcState {
     pub operator_read_token_secret: Option<String>,
     /// Operator-action signing public keys (hex Ed25519) from
     /// `[rpc.operator] action_public_keys` (#747, P4.4a). Empty ⇒ **no write
-    /// surface at all** (fail closed): the operator-signed quorum-curation write
-    /// path (#709, later sub-issues) refuses `operator_submitAction` when this
-    /// is empty. This issue lands ONLY the plumbing — no RPC reads this field
-    /// yet, so with an empty list the node behaves byte-identically to today.
+    /// surface at all** (fail closed): the operator-signed quorum-curation
+    /// write path (#709, later sub-issues) refuses `operator_submitAction`
+    /// when this is empty. This issue lands ONLY the plumbing — no RPC
+    /// reads this field yet, so with an empty list the node behaves
+    /// byte-identically to today.
     ///
     /// Populated exclusively from config at startup (SSH/config trust domain).
     /// There is intentionally NO RPC or signed action that reads, adds, or
