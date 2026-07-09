@@ -18,6 +18,7 @@ pub mod monetary;
 pub mod network;
 pub mod node;
 pub mod operator_key;
+pub mod operator_nonce;
 pub mod pow;
 pub mod rpc;
 pub mod telemetry;
