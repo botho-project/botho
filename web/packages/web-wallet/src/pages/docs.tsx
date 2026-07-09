@@ -37,8 +37,9 @@ Botho takes a different approach:
 
 - **Stealth addresses** ensure that each payment you receive goes to a unique one-time address, making it impossible to link your transactions together by watching the blockchain
 - **Post-quantum cryptography** protects your privacy against adversaries with quantum computers
-- **Federated Byzantine Agreement** provides fast finality without energy-intensive mining
-- **Fee burning** creates a deflationary monetary policy where transaction fees are permanently removed from circulation
+- **Federated Byzantine Agreement** provides fast finality — consensus safety never depends on hashpower
+- **Egalitarian issuance** distributes new coins through RandomX CPU mining that is deliberately decoupled from consensus: mining earns rewards but buys no say over which transactions confirm
+- **Progressive economics** — fees scale 1×–6× with wealth concentration, 80% of every fee is redistributed by lottery, and 20% is burned
 
 ### Creating a Wallet
 
@@ -46,19 +47,21 @@ Getting started with Botho takes just a few steps:
 
 1. **Visit the Wallet page** - Click "Launch Wallet" from the homepage or navigate directly to the wallet
 2. **Choose "Create New Wallet"** - You can also import an existing wallet if you have a recovery phrase
-3. **Secure your recovery phrase** - You'll be shown a 12-word mnemonic phrase. Write this down on paper and store it in a safe place. This phrase is the **only way** to recover your funds if you lose access to your device
+3. **Secure your recovery phrase** - You'll be shown a 24-word mnemonic phrase. Write this down on paper and store it in a safe place. This phrase is the **only way** to recover your funds if you lose access to your device
 4. **Optional: Set a password** - Add an encryption password for additional security. You'll need this password each time you open the wallet in this browser
 
 **Important:** Never share your recovery phrase with anyone. Anyone with these words can access your funds. Never store it digitally (no screenshots, no cloud storage, no password managers).
 
 ### Understanding Your Wallet Address
 
-Your wallet address looks like this: \`botho://1/B62qk4nuKn2U5qsR...\`
+Your wallet address looks like this: \`botho://1/4nuKn2U5qsRk3vD...\` (about 90 characters total)
 
 This address format includes:
-- **Protocol identifier** (\`botho://\`) - Identifies this as a Botho address
-- **Network version** (\`1/\`) - Indicates the mainnet (testnet uses different versions)
-- **Public key** - Your stealth address public key encoded in base58
+- **Protocol identifier** (\`botho://\` on mainnet, \`tbotho://\` on testnet) - Different prefixes prevent accidental cross-network sends
+- **Address version** (\`1/\` for classical addresses, \`1q/\` for quantum-safe addresses)
+- **Public keys** - Your view key and spend key, encoded together in base58
+
+Quantum-safe addresses (\`1q/\`) additionally embed ML-KEM and ML-DSA public keys, which makes them much longer (~4,400 characters) — better suited to QR codes and files than manual copying.
 
 You can safely share this address with anyone who wants to send you funds. Thanks to stealth addresses, each incoming transaction will be sent to a unique derived address that only you can spend from.
 
@@ -69,7 +72,7 @@ When someone sends you BTH:
 1. They use your public address to derive a unique one-time address
 2. The transaction is broadcast to the network and included in a block
 3. Your wallet scans new blocks and detects payments addressed to you
-4. The funds appear in your balance, typically within 20-30 seconds
+4. The funds appear in your balance, usually within one block — block time adapts to network load, from 5 seconds under heavy traffic up to 40 seconds when the network is idle
 
 ### Sending Payments
 
@@ -88,10 +91,10 @@ Transactions are final once confirmed—there are no chargebacks or reversals in
 Every Botho transaction requires a small fee. These fees serve three purposes:
 
 1. **Spam prevention** - Fees make it expensive to flood the network with junk transactions
-2. **Deflationary pressure** - All fees are permanently burned, reducing the total supply over time
-3. **Progressive taxation** - Fees scale based on cluster wealth, discouraging concentration without enabling Sybil attacks
+2. **Progressive taxation** - Fees scale 1× to 6× based on cluster wealth, discouraging concentration without enabling Sybil attacks
+3. **Redistribution and deflation** - 80% of every fee is redistributed to holders through a lottery; the remaining 20% is permanently burned
 
-Botho uses a cluster-based progressive fee system where fee rates range from 0.05% for diffused holdings to 30% for concentrated wealth. See the Fee Structure section for details.
+Fees are size-based, not amount-based: \`fee = per-byte rate × transaction size × cluster factor (1×–6×) × output penalty\`. See the Cluster Tags and Tokenomics sections for details.
 
 ### Security Best Practices
 
@@ -259,7 +262,7 @@ Output: 100 BTH {cluster_A: 70%, cluster_B: 30%}
 
 **4. Tags Decay Over Time**
 
-Each transaction hop decays the tag by 5%, spreading attribution across the economy. But decay only applies if the UTXO is at least 720 blocks old (~2 hours), preventing wash trading attacks.
+Each transaction hop decays the tag by 5%, spreading attribution across the economy. But decay only applies if the UTXO is at least 720 blocks old (one to a few hours, depending on the load-adaptive block time), preventing wash trading attacks.
 
 ### Why Splitting Doesn't Work
 
@@ -278,66 +281,66 @@ The "source wealth" of a cluster is the total value minted by that minter — sp
 
 ### Progressive Fee Curve
 
-The cluster factor determines how much you pay. Wealthy clusters pay higher rates:
+The cluster factor determines how much you pay. It follows a smooth sigmoid curve in the *logarithm* of cluster wealth, with its midpoint at 100,000 BTH:
 
-| Cluster Wealth | Fee Multiplier | Example Fee |
-|----------------|----------------|-------------|
-| Bottom 15% | 1x (base rate) | 0.05% |
-| Middle 15-70% | 1x-4x (linear) | 0.05%-1% |
-| Top 30% | 4x-6x (steep) | 1%-30% |
+| Cluster Wealth | Fee Multiplier |
+|----------------|----------------|
+| Small clusters (≤ ~1K BTH) | ~1x (base rate) |
+| Mid-size clusters (~100K BTH) | ~3.5x (curve midpoint) |
+| Whale clusters (≥ ~10M BTH) | ~6x (saturates) |
 
-**Same transfer, different fees:**
-
-- Whale cluster (1M BTH minted): pays ~15% fee rate
-- Retail cluster (10K BTH): pays ~1% fee rate
-- Well-circulated coins: pays 0.05% base rate
+The multiplier applies to a size-based fee (\`per-byte rate × transaction size\`), so the same transfer costs a whale cluster up to 6× what it costs well-circulated coins — and no amount of splitting changes that.
 
 ### Lottery-Based Redistribution
 
-80% of all transaction fees are redistributed to random UTXOs via an immediate lottery. 20% are burned.
+80% of all transaction fees are redistributed to eligible UTXOs via a lottery. 20% are burned.
 
 **How it works:**
 
 1. Each transaction pays a fee based on cluster factor
-2. 80% of the fee is split among 4 randomly selected UTXOs
+2. 80% of the fee is split among 4 winners drawn with verifiable randomness
 3. 20% is permanently burned (deflationary)
 
-**Why this is progressive:**
+**How winners are selected (cluster-weighted):**
 
-- Random selection favors the many (small holders) over the few (whales)
-- Exchanges holding user funds in few UTXOs lose to self-custody users with many UTXOs
-- Net effect: redistribution from custodial to non-custodial
+A UTXO's winning weight is its **value divided by its cluster factor**. This is the only progressive weighting that is split-invariant:
+
+- Weights are value-based, so splitting a position into many UTXOs never increases total weight
+- The tilt comes from cluster provenance, which inherits through splits
+- Well-circulated (low-factor) coins win proportionally more; whale-cluster coins win less
+
+To participate, a UTXO must be at least 720 blocks old and worth at least 1 µBTH.
 
 ### Ring Signatures and Tag Privacy
 
 Cluster tags work seamlessly with CLSAG ring signatures:
 
-**The challenge:** Ring signatures hide which input is real among 20 decoys. How do we calculate the correct fee?
+**The challenge:** Ring signatures hide which input is real among 20 ring members. How do we calculate the correct fee?
 
-**The solution:** Conservative propagation
+**The solution:** Centroid-based validation
 
 1. All ring members' tags are publicly known
-2. Fee is calculated using the *maximum* cluster factor in the ring
-3. Output tag propagates from the real input (verified but not revealed)
+2. The fee derives from the value-weighted *centroid* of the ring's tags, with floors that stop cheap background decoys from dragging the factor down
+3. The claimed output tags must be at least 70% similar (cosine similarity) to the ring centroid, or the transaction is rejected
 
-This prevents fee evasion — you can't pick low-factor decoys to reduce your fee, because the maximum is used.
+This prevents fee evasion — you can't cherry-pick low-factor decoys to cut your fee, because implausible ring compositions fail validation.
 
 ### Decay Mechanism Details
 
 To prevent wash trading (sending to yourself repeatedly to decay tags):
 
 **Age-Based Gating:**
-- Decay only applies to UTXOs at least 720 blocks (~2 hours) old
+- Decay only applies to UTXOs at least 720 blocks old
 - New outputs from rapid self-transfers don't decay
-- Maximum 12 decay events per day
+- The age gate naturally caps decay at ~12 events per day
 
 **Natural rate limiting:**
 
 | Attack | Result |
 |--------|--------|
 | 100 rapid self-transfers | 0% decay (all outputs too young) |
-| Patient attack (1 day) | 46% max decay (only 12 eligible) |
-| Patient attack (1 week) | 97% decay |
+| Patient attack (1 day) | ~46% max decay (only ~12 eligible hops) |
+| Patient attack (1 week) | ~99% decay — but you've paid ~84 transaction fees |
 | Holding without transacting | 0% decay |
 
 ### Privacy Considerations
@@ -352,21 +355,23 @@ The cluster tag system creates aligned incentives:
 
 | Behavior | Effect on Tags | Incentive |
 |----------|----------------|-----------|
-| **Circulate coins** | Tags decay and blend | Lower fees over time |
-| **Hoard wealth** | Tags remain concentrated | Higher fees |
-| **Use custodial services** | Fewer UTXOs for lottery | Less redistribution received |
-| **Self-custody** | More UTXOs | More lottery winnings |
+| **Circulate coins** | Tags decay and blend | Lower fees, higher lottery weight |
+| **Hoard wealth** | Tags remain concentrated | Higher fees, lower lottery weight, demurrage |
+| **Split into many UTXOs** | Tags unchanged | No benefit — fees and lottery weight are provenance- and value-based |
 
 ### Technical Parameters
 
 | Parameter | Value | Purpose |
 |-----------|-------|---------|
 | Decay rate | 5% per eligible hop | Gradual tag diffusion |
-| Min UTXO age | 720 blocks (~2 hours) | Wash trading prevention |
+| Min UTXO age (decay + lottery) | 720 blocks | Wash trading prevention |
+| Min UTXO value (lottery) | 1 µBTH | Dust exclusion |
+| Cluster factor range | 1x–6x (midpoint 3.5x at 100K BTH) | Progressive fees |
 | Ring size | 20 | Privacy set for tag propagation |
-| Lottery winners | 4 per transaction | Redistribution granularity |
-| Burn rate | 20% | Deflationary pressure |
-| Pool rate | 80% | Redistribution amount |
+| Lottery winners | 4 per drawing | Redistribution granularity |
+| Burn rate | 20% of fees | Deflationary pressure |
+| Pool rate | 80% of fees | Redistribution amount |
+| Demurrage | 2%/yr at max factor (see Tokenomics) | Reaches idle concentrated wealth |
 
 ### Summary
 
@@ -375,7 +380,7 @@ Cluster tags solve the "Sybil-resistant progressive taxation" problem that plagu
 1. **Track provenance, not identity** — Coins remember their origin
 2. **Resist splitting attacks** — Cluster wealth is fixed at minting
 3. **Enable progressive fees** — Wealthy clusters pay more
-4. **Power fair redistribution** — Lottery favors small holders
+4. **Power fair redistribution** — Lottery weight tilts toward well-circulated coins
 5. **Preserve privacy** — Works with ring signatures
 6. **Encourage circulation** — Tags decay through commerce
 
@@ -450,7 +455,7 @@ The key properties:
 
 Here's where it gets interesting. **Minting proximity correlates with wealth concentration** in predictable ways:
 
-**New minters tend to be wealthy.** Earning block rewards requires capital (for staking) or resources (for validation). Fresh coins disproportionately go to those with existing wealth.
+**New minters tend to be wealthy.** Earning block rewards requires hardware, electricity, and reliable uptime. Even with CPU-egalitarian RandomX mining, fresh coins disproportionately go to those with existing resources.
 
 **Active traders tend to be merchants.** Small businesses and regular users transact frequently, causing their coins to mix with coins from many sources.
 
@@ -493,37 +498,37 @@ Ring signatures and cluster tags work together seamlessly:
 
 **The challenge:** If we don't know which UTXO you're spending, how do we calculate the correct fee?
 
-**The solution: Conservative propagation.**
+**The solution: Centroid-based validation.**
 
 1. All 20 ring members' tags are publicly visible
-2. The fee is calculated using the **maximum** cluster factor in the ring
-3. You can't game this by picking low-fee decoys—the max is always used
+2. The fee derives from the **value-weighted centroid** of the ring's tags, with floors so cheap background decoys can't drag the factor down
+3. The output tags you claim must be at least 70% similar to that centroid, or validators reject the transaction
 
 \`\`\`
-Ring members: [UTXO_A: 2.0x, UTXO_B: 4.5x, UTXO_C: 1.5x, ...]
-Fee calculated using: max(all factors) = 4.5x
+Ring members' tags → value-weighted centroid → cluster factor
+Claimed output tags: must be ≥ 70% similar to the centroid
 \`\`\`
 
-This means **privacy doesn't enable fee evasion.** Even though the network doesn't know which UTXO is yours, they charge as if it's the most expensive one.
+This means **privacy doesn't enable fee evasion.** A large real input dominates its own ring's centroid, so cherry-picking low-factor decoys produces an implausible ring that fails validation instead of a discount.
 
 ### The Lottery Redistribution
 
-Fees flow back to the community through a value-weighted lottery:
+Fees flow back to the community through a cluster-tilted lottery:
 
-**80% of all fees** are redistributed to randomly selected UTXOs. **20% are burned** (deflationary).
+**80% of all fees** are redistributed to eligible UTXOs. **20% are burned** (deflationary).
 
 **How selection works:**
 
 \`\`\`
-tickets = max(1, value / threshold)
+weight = value ÷ cluster factor
 
-Small UTXO (100 BTH):  1 ticket  → 0.01 tickets/BTH
-Large UTXO (100K BTH): 100 tickets → 0.001 tickets/BTH
+Well-circulated UTXO (factor 1x):  full weight per BTH
+Whale-cluster UTXO (factor 6x):    1/6 the weight per BTH
 \`\`\`
 
-**Small holders get 10× more tickets per BTH.** This is progressive redistribution without knowing anyone's identity.
+**Well-circulated coins win up to 6× more per BTH than concentrated wealth.** This is progressive redistribution without knowing anyone's identity — and because weight is value-based, splitting a position into many UTXOs never increases its total weight.
 
-**Eligibility decay** prevents gaming: Inactive UTXOs lose lottery weight over time. You can't just split and park—you need to stay active to maintain eligibility.
+**Eligibility gates** prevent gaming: a UTXO must be at least 720 blocks old and worth at least 1 µBTH to participate.
 
 ### Attack Resistance
 
@@ -548,20 +553,19 @@ Verdict: Attack defeated
 **Parking Attack (Split and Wait):**
 \`\`\`
 Attacker: Split into 100 UTXOs, wait for lottery winnings
-Result: Value-weighted floor gives NO ticket advantage
-        Eligibility decay reduces to 10% weight
-        Split penalty costs 99× normal fee
-        Net ROI: < 1.0 (unprofitable)
+Result: Weight is value-based — splitting gains NO weight
+        Cluster factor inherits — the tilt still works against you
+        Quadratic output fees make the split itself cost up to 100×
 Verdict: Attack defeated
 \`\`\`
 
 **Wash Trading (Self-transfers):**
 \`\`\`
 Attacker: Send to self rapidly to decay tags
-Result: Age-gating requires 720 blocks (~2 hours) per decay
-        Maximum 12 decays per day = 46% daily decay
-        1 week of wash trading: 97% decay
-        Cost: 168 transaction fees
+Result: Age-gating requires 720 blocks per decay
+        At most ~12 decays per day ≈ 46% daily decay
+        1 week of wash trading: ~99% decay
+        Cost: ~84 transaction fees (each feeding the lottery)
 Verdict: Expensive, slow, detectable
 \`\`\`
 
@@ -571,11 +575,12 @@ Botho achieves privacy + progressivity through layered design:
 
 | Layer | Privacy Feature | Progressive Feature |
 |-------|-----------------|---------------------|
-| **Sender** | Ring signatures (1-of-20) | Conservative tag propagation |
+| **Sender** | Ring signatures (1-of-20) | Centroid-validated tag propagation |
 | **Recipient** | Stealth addresses | — |
 | **Amount** | Pedersen commitments | — |
 | **Fee rate** | — | Cluster factor curve (1-6×) |
-| **Redistribution** | Random selection | Value-weighted floor + decay |
+| **Holding cost** | — | Demurrage on idle wealthy-cluster coins |
+| **Redistribution** | Verifiable random drawing | Cluster-tilted weights (value ÷ factor) |
 
 Each layer contributes to both goals without conflict.
 
@@ -597,10 +602,10 @@ Botho's privacy + progressivity mechanism works because:
 
 1. **We track provenance, not identity** — Where coins came from, not who owns them
 2. **Provenance correlates with wealth behavior** — Fresh minters are wealthy, active traders are merchants
-3. **Ring signatures preserve privacy** — Conservative propagation prevents gaming
-4. **Value-weighted lottery is progressive** — Small holders get more tickets per BTH
-5. **Eligibility decay deters attacks** — Parking and splitting don't pay off
-6. **Commerce is rewarded** — Tags decay through legitimate trade
+3. **Ring signatures preserve privacy** — Centroid validation prevents gaming
+4. **Cluster-tilted lottery is progressive** — Well-circulated coins win more per BTH
+5. **Value-based weights and quadratic output fees deter attacks** — Parking and splitting don't pay off
+6. **Commerce is rewarded** — Tags decay through legitimate trade; idle concentrated wealth pays demurrage
 
 The result: **The first cryptocurrency where you can be private AND contribute fairly to the network, where the wealthy pay more without anyone knowing who they are.**
     `,
@@ -614,7 +619,7 @@ The result: **The first cryptocurrency where you can be private AND contribute f
 
 Botho uses the **Stellar Consensus Protocol (SCP)** for distributed consensus. SCP is a federated Byzantine agreement protocol that provides fast finality, energy efficiency, and flexible trust—without sacrificing decentralization.
 
-### Why Not Proof-of-Work?
+### Why Not Proof-of-Work Consensus?
 
 Proof-of-work (PoW) consensus, as used in Bitcoin, has significant drawbacks:
 
@@ -622,6 +627,8 @@ Proof-of-work (PoW) consensus, as used in Bitcoin, has significant drawbacks:
 - **Slow finality** - Bitcoin transactions aren't truly final for an hour or more
 - **Centralization pressure** - Mining economies of scale push toward industrial operations
 - **51% attacks** - If an attacker controls majority hashpower, they can rewrite history
+
+**Botho still uses proof-of-work — but only for coin issuance, never for consensus.** Blocks are minted through CPU-egalitarian RandomX mining, which decides *who earns the block reward*. Whether that block is *accepted* is decided entirely by SCP. This decoupling means an attacker with majority hashpower can out-earn everyone else, but cannot rewrite history or censor transactions — and because hashpower buys no security, there is no arms-race pressure toward Bitcoin-scale energy consumption.
 
 ### Why Not Proof-of-Stake?
 
@@ -745,9 +752,12 @@ cargo build --release
 ./target/release/botho init
 
 # This will:
-# - Generate a 12-word recovery phrase
-# - Create ~/.botho/config.toml
-# - Create ~/.botho/wallet.db
+# - Generate a 24-word recovery phrase
+# - Create your config and wallet under ~/.botho/
+
+# Variants:
+#   botho init --recover   # restore a wallet from an existing mnemonic
+#   botho init --relay     # relay/seed node config with no wallet
 \`\`\`
 
 **IMPORTANT:** Write down your recovery phrase and store it securely!
@@ -774,41 +784,46 @@ cargo build --release
 
 | Command | Description |
 |---------|-------------|
-| \`botho init\` | Create a new wallet with a 12-word mnemonic |
+| \`botho init\` | Create a new wallet with a 24-word mnemonic |
 | \`botho balance\` | Show your current wallet balance |
-| \`botho address\` | Display your receiving address |
-| \`botho send <address> <amount>\` | Send BTH to another address |
+| \`botho address\` | Display your receiving address (\`--save\` writes it to a file) |
+| \`botho send <address> <amount>\` | Send BTH (amount in BTH; \`--quantum\` for post-quantum crypto, \`--memo\` to attach an encrypted note) |
+
+All sends use CLSAG ring signatures — sender privacy is on by default, not a flag.
 
 **Node Commands:**
 
 | Command | Description |
 |---------|-------------|
 | \`botho run\` | Start the node and sync with the network |
-| \`botho run --mint\` | Start with minting enabled |
+| \`botho run --mint\` | Start with minting enabled (\`--mint-threads N\` to limit CPU use) |
 | \`botho status\` | Show node sync status and peer count |
+| \`botho snapshot\` | Manage UTXO snapshots for fast initial sync |
 
 ### Configuration
 
-The configuration file is located at \`~/.botho/config.toml\`:
+The configuration file lives under \`~/.botho/\`. All ports have network-specific defaults, so a minimal config works out of the box:
 
 \`\`\`toml
+# "mainnet" or "testnet"
+network_type = "testnet"
+
 [network]
-# Seed nodes for initial peer discovery
-seeds = ["seed.botho.io:8443"]
+# Defaults: gossip 7100 (mainnet) / 17100 (testnet)
+#           RPC    7101 (mainnet) / 17101 (testnet)
+#           metrics 9090 (mainnet) / 19090 (testnet), 0 disables
+# gossip_port = 17100
+# rpc_port = 17101
+# metrics_port = 19090
 
-# Your node's listen address
-listen = "0.0.0.0:8443"
-
-[rpc]
-# JSON-RPC API listen address
-listen = "127.0.0.1:8080"
+# Optional explicit bootstrap peers (multiaddr format).
+# If unset, peers are discovered via DNS seed TXT records
+# (seeds.botho.io / seeds.testnet.botho.io).
+# bootstrap_peers = ["/dns4/eu.seed.botho.io/tcp/7100/p2p/<peer-id>"]
 
 [minting]
-# Enable block minting
 enabled = false
-
-# Number of CPU threads for minting
-threads = 4
+threads = 0   # 0 = use all CPU cores
 \`\`\`
 
 ### Firewall Configuration
@@ -816,26 +831,26 @@ threads = 4
 If you want your node to accept incoming connections (recommended):
 
 \`\`\`bash
-# Allow P2P traffic
-sudo ufw allow 8443/tcp
+# Allow P2P gossip traffic (17100 on testnet, 7100 on mainnet)
+sudo ufw allow 17100/tcp
 
 # Optional: Allow RPC access (only if needed externally)
-# sudo ufw allow 8080/tcp
+# sudo ufw allow 17101/tcp
 \`\`\`
 
 ### Troubleshooting
 
 **Node won't sync:**
 - Check your internet connection
-- Verify firewall allows outbound connections on port 8443
-- Try clearing the database: \`rm -rf ~/.botho/chain.db\`
+- Verify firewall allows outbound connections on the gossip port
+- As a last resort, clear the chain database under \`~/.botho/\` and resync (testnet only — this rescans from genesis)
 
 **High memory usage:**
-- Reduce the database cache size in config
+- Reduce minting threads (RandomX keeps a large in-memory dataset)
 - Consider adding swap space if RAM is limited
 
 **Can't connect to peers:**
-- Ensure port 8443 is open for incoming connections
+- Ensure your gossip port (17100 testnet / 7100 mainnet) is open for incoming connections
 - Check if you're behind a strict NAT
     `,
   },
@@ -846,7 +861,7 @@ sudo ufw allow 8443/tcp
     content: `
 ## JSON-RPC API
 
-Botho nodes expose a JSON-RPC 2.0 API on port 8080. All requests use the standard JSON-RPC 2.0 format.
+Botho nodes expose a JSON-RPC 2.0 API on port **7101** (mainnet) or **17101** (testnet) by default; override with \`rpc_port\` in the config. All requests use the standard JSON-RPC 2.0 format.
 
 ### Request Format
 
@@ -867,16 +882,19 @@ Botho nodes expose a JSON-RPC 2.0 API on port 8080. All requests use the standar
 
 Get node status and sync information.
 
-**Response:**
+**Response (selected fields):**
 - \`version\` - Node software version
-- \`network\` - Network name (e.g., "botho-mainnet")
+- \`network\` - Network name (e.g., "botho-testnet")
 - \`uptimeSeconds\` - Node uptime in seconds
-- \`syncStatus\` - Current sync status
+- \`syncStatus\` / \`syncProgress\` / \`synced\` - Live sync state
 - \`chainHeight\` - Current blockchain height
 - \`tipHash\` - Hash of the latest block
-- \`peerCount\` - Number of connected peers
+- \`peerCount\` / \`scpPeerCount\` - Connected peers / SCP-participating peers
 - \`mempoolSize\` - Transactions in mempool
 - \`mintingActive\` - Whether minting is enabled
+- \`quorumFaultTolerant\` / \`quorumDegenerate\` - BFT posture (fault tolerance requires ≥ 4 participating nodes)
+
+The full response also includes build info, SCP slot progress, quorum-gate state, and miner-health fields for monitoring.
 
 ---
 
@@ -890,7 +908,9 @@ Get blockchain information.
 - \`height\` - Current block height
 - \`tipHash\` - Hash of the tip block
 - \`difficulty\` - Current mining difficulty
-- \`totalMined\` - Total coins mined
+- \`totalMined\` - Total coins mined (picocredits, as a string)
+- \`totalFeesBurned\` - Cumulative burned fees (picocredits, as a string)
+- \`circulatingSupply\` - totalMined minus burns (picocredits, as a string)
 - \`mempoolSize\` - Number of pending transactions
 - \`mempoolFees\` - Total fees in mempool
 
@@ -920,18 +940,19 @@ Get mempool statistics.
 - \`totalFees\` - Total fees from all transactions
 - \`txHashes\` - Array of transaction hashes (up to 100)
 
-### estimateFee
+### estimateFee (alias: tx_estimateFee)
 
 Estimate transaction fee.
 
 **Parameters:**
 - \`amount\` (number) - Transaction amount
-- \`private\` (boolean) - Whether transaction uses privacy features (default: true)
-- \`memos\` (number) - Number of memo fields
+- \`memos\` (number) - Number of encrypted memo fields
 
 **Response:**
 - \`minimumFee\` - Minimum required fee
-- \`feeRateBps\` - Fee rate in basis points
+- \`clusterFactor\` - Progressive multiplier, scaled ×1000 (1000 = 1x, 6000 = 6x)
+- \`clusterFactorDisplay\` - Human-readable factor (e.g., "1.25x")
+- \`clusterWealth\` - Cluster wealth the factor was derived from
 - \`recommendedFee\` - Recommended fee for normal priority
 - \`highPriorityFee\` - Fee for high priority confirmation
 
@@ -1023,6 +1044,24 @@ Get list of connected peers.
 
 **Response:**
 - \`peers\` - Array of peer information
+
+---
+
+## Other Methods
+
+The API surface is larger than this page. Notable additional methods:
+
+| Method | Purpose |
+|--------|---------|
+| \`getBlockByHash\` | Fetch a block by hash instead of height |
+| \`getSupplyInfo\` | Emission and supply details |
+| \`tx_get\` / \`tx_getStatus\` | Look up a transaction / its confirmation status |
+| \`address_validate\` | Check whether an address string is well-formed |
+| \`fee_getRate\` | Current dynamic fee rate |
+| \`cluster_getWealth\` / \`cluster_getAllWealth\` | Cluster wealth queries (powers the explorer views) |
+| \`chain_areKeyImagesSpent\` | Check key images for double-spend detection |
+| \`faucet_getStatus\` / \`faucet_request\` | Testnet faucet |
+| \`operator_*\` | Operator trust surface (disabled unless configured; see the operator runbooks) |
     `,
   },
   {
@@ -1047,15 +1086,16 @@ Production mainnet launch will be announced when the network is stable.
 
 ### Connecting to the Network
 
-**Seed Nodes:**
+**Seed Discovery:**
 
-Seed nodes help your node discover other peers on the network:
+Bootstrap peers are discovered via DNS TXT records rather than a hardcoded list:
 
-| Address | Location | Status |
-|---------|----------|--------|
-| seed.botho.io:8443 | Primary | Active |
+| Network | DNS Seed Domain |
+|---------|-----------------|
+| Mainnet | seeds.botho.io |
+| Testnet | seeds.testnet.botho.io |
 
-When your node starts, it connects to seed nodes to learn about other peers. After initial discovery, your node maintains connections to multiple peers for redundancy.
+When your node starts, it resolves the seed domain to learn about bootstrap peers (you can also pin explicit \`bootstrap_peers\` in the config). After initial discovery, your node maintains connections to multiple peers for redundancy.
 
 **Peer Discovery:**
 
@@ -1072,9 +1112,9 @@ Botho uses libp2p for networking, which supports multiple discovery mechanisms:
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Target block time | 20 seconds | Average time between blocks |
-| Max block size | 1 MB | Maximum serialized block size |
-| Max transactions per block | 250 | Transaction count limit |
+| Block time | 5–40 seconds (load-adaptive) | Fast blocks under heavy traffic, slow blocks when idle |
+| Max block size | 20 MB | Maximum serialized block size |
+| Max transactions per block | 5,000 | Transaction count limit |
 
 **Transaction Limits:**
 
@@ -1089,17 +1129,20 @@ Botho uses libp2p for networking, which supports multiple discovery mechanisms:
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Minimum fee | 400 µBTH | Floor fee for any transaction |
-| Fee calculation | Size-based | Larger transactions pay more |
-| Fee destination | Burned | All fees are permanently destroyed |
+| Fee formula | per-byte rate × size × cluster factor × output penalty | Size-based, wealth-progressive |
+| Cluster factor | 1x–6x | Progressive multiplier from coin provenance |
+| Output penalty | quadratic, capped at 100x | Anti-UTXO-farming |
+| Fee destination | 80% lottery / 20% burned | Redistribution plus deflationary pressure |
 
 ### Port Reference
 
-| Port | Protocol | Purpose |
-|------|----------|---------|
-| 8443 | TCP | P2P gossip (libp2p) |
-| 8080 | HTTP | JSON-RPC API |
-| 8080 | WebSocket | Real-time updates |
+Defaults differ by network (mainnet / testnet); all are configurable:
+
+| Port (mainnet / testnet) | Protocol | Purpose |
+|--------------------------|----------|---------|
+| 7100 / 17100 | TCP | P2P gossip (libp2p) |
+| 7101 / 17101 | HTTP + WebSocket | JSON-RPC API and real-time updates |
+| 9090 / 19090 | HTTP | Prometheus metrics |
 
 ### Network Security
 
@@ -1152,8 +1195,8 @@ Botho (BTH) uses a two-phase emission model designed for long-term sustainabilit
 | Token symbol | BTH |
 | Smallest unit | picocredit (10⁻¹² BTH) |
 | Pre-mine | None (100% mined) |
-| Phase 1 supply | ~100 million BTH |
-| Target block time | 20 seconds |
+| Phase 1 supply | ~611 million BTH |
+| Block time | 5–40 seconds (load-adaptive) |
 
 ### Unit System
 
@@ -1168,23 +1211,25 @@ BTH uses 12-decimal precision. The picocredit is the single base unit — every 
 
 ## Emission Schedule
 
-### Phase 1: Halving Period (Years 0-10)
+All monetary math assumes the 5-second full-load block time. When the network is idle and blocks slow down (up to 40 s), emission stretches proportionally — a natural dampener: a busy network emits at the full schedule, an idle one emits less.
 
-Minting rewards halve every ~2 years, distributing approximately 100 million BTH over 10 years.
+### Phase 1: Halving Period (~5 years at full load)
 
-| Period | Years | Minting Reward | Cumulative Supply |
-|--------|-------|--------------|-------------------|
-| Halving 0 | 0-2 | 50 BTH | ~52.6M BTH |
-| Halving 1 | 2-4 | 25 BTH | ~78.9M BTH |
-| Halving 2 | 4-6 | 12.5 BTH | ~92.0M BTH |
-| Halving 3 | 6-8 | 6.25 BTH | ~98.6M BTH |
-| Halving 4 | 8-10 | 3.125 BTH | ~100M BTH |
+The minting reward starts at 50 BTH and halves every **6,307,200 blocks** (one year of 5-second blocks). After five halving epochs, Phase 1 has distributed **611,010,000 BTH**:
 
-**Halving interval**: 3,153,600 blocks (~2 years at 20-second blocks)
+| Epoch | Minting Reward | Cumulative Supply |
+|-------|----------------|-------------------|
+| 1 | 50 BTH | ~315.4M BTH |
+| 2 | 25 BTH | ~473.0M BTH |
+| 3 | 12.5 BTH | ~552.0M BTH |
+| 4 | 6.25 BTH | ~591.3M BTH |
+| 5 | 3.125 BTH | ~611.0M BTH |
 
-### Phase 2: Tail Emission (Year 10+)
+(This is the canonical schedule ratified in issue #351, locked by regression tests in the node.)
 
-After Phase 1, Botho transitions to perpetual tail emission targeting **2% annual net inflation**.
+### Phase 2: Tail Emission
+
+After Phase 1, Botho transitions to perpetual tail emission targeting **2% annual net inflation** (gross emission minus fee burns), with difficulty adjusting to hit the target.
 
 **Why tail emission?**
 
@@ -1192,7 +1237,7 @@ After Phase 1, Botho transitions to perpetual tail emission targeting **2% annua
 - **Lost coin replacement** - Compensates for coins lost to forgotten keys
 - **Predictable monetary policy** - 2% is below typical fiat inflation
 
-At 100M BTH supply, the tail minting reward works out to approximately **1.59 BTH per block**.
+At the ~611M BTH Phase-1 supply and full load, 2% works out to roughly **2 BTH per block**, growing slowly with supply.
 
 ---
 
@@ -1200,12 +1245,19 @@ At 100M BTH supply, the tail minting reward works out to approximately **1.59 BT
 
 ### Transaction Fees
 
-All transaction fees are **burned**, creating deflationary pressure that offsets tail emission.
+Every fee is split two ways: **80% is redistributed** to holders through the cluster-tilted lottery, and **20% is burned**, creating deflationary pressure that offsets tail emission.
+
+\`\`\`
+fee = per-byte rate × transaction size × cluster factor × output penalty + memo fees
+\`\`\`
 
 | Parameter | Value |
 |-----------|-------|
-| Minimum fee | 400 µBTH (0.0004 BTH) |
-| Fee destination | Burned (removed from supply) |
+| Fee basis | Transaction size (bytes), not amount |
+| Cluster factor | 1x–6x progressive multiplier |
+| Output penalty | Quadratic in output count, capped at 100x |
+| Memo fee | Flat per encrypted memo |
+| Fee destination | 80% lottery pool / 20% burned |
 | Priority | Higher fees = faster confirmation |
 
 ### Cluster-Based Progressive Fees
@@ -1216,12 +1268,24 @@ Botho implements a novel **progressive fee system** that taxes wealth concentrat
 
 | Parameter | Value |
 |-----------|-------|
-| Minimum rate | 0.05% (well-circulated coins) |
-| Maximum rate | 30% (concentrated wealth) |
 | Cluster factor range | 1x to 6x multiplier |
+| Curve shape | Sigmoid in log(cluster wealth), midpoint 3.5x at 100K BTH |
 | Tag decay | 5% per eligible hop |
 
 **Why it's Sybil-resistant:** Splitting coins doesn't change their origin. A whale's coins carry the same cluster tag whether held in 1 UTXO or 1000.
+
+### Demurrage
+
+Transaction fees are a consumption tax — they can't touch wealth that never moves. Demurrage closes that gap: a **holding charge on wealthy-cluster coins, paid when they are eventually spent**.
+
+| Parameter | Value |
+|-----------|-------|
+| Rate | 2% per year at the maximum (6x) cluster factor |
+| Scaling | Proportional to (factor − 1) — factor-1 coins pay **zero** |
+| Bootstrap | Disabled during the first halving epoch |
+| Proceeds | Flow into the lottery redistribution pool |
+
+Everyday coins never pay demurrage; it binds only concentrated, idle wealth. Churning doesn't escape it — spending pays the accrued charge first, so the total paid over any holding period is the same no matter how often you self-transfer (and each transfer adds fees on top).
 
 > **See the [Cluster Tags](#cluster-tags) section** for a complete explanation of how provenance tracking, progressive fees, lottery redistribution, and ring signature privacy work together.
 
@@ -1231,14 +1295,14 @@ Botho implements a novel **progressive fee system** that taxes wealth concentrat
 
 ### Long-Term Growth
 
-| Year | Approximate Supply | Annual Inflation |
-|------|-------------------|------------------|
-| 2 | ~52.6M BTH | High (initial) |
-| 5 | ~85M BTH | ~15% |
-| 10 | ~100M BTH | ~3% |
-| 20 | ~122M BTH | 2% |
-| 50 | ~180M BTH | 2% |
-| 100 | ~295M BTH | 2% |
+At sustained full load (5-second blocks; slower when the network is idle):
+
+| Epoch | Approximate Supply | Annual Inflation |
+|-------|-------------------|------------------|
+| 1 | ~315M BTH | High (initial) |
+| 3 | ~552M BTH | ~17% |
+| 5 | ~611M BTH | ~3% |
+| Tail (perpetual) | +2%/year net of burns | 2% |
 
 ---
 
@@ -1250,11 +1314,11 @@ Botho implements a novel **progressive fee system** that taxes wealth concentrat
 - **Credibility** - No insider advantage or founder enrichment
 - **Decentralization** - No concentrated holdings from day one
 
-### Why Burn Fees?
+### Why Split Fees 80/20?
 
-- **Deflationary pressure** - Offsets tail emission
-- **Simple economics** - No complex fee distribution mechanisms
-- **Predictable** - Net inflation = gross emission - burns
+- **Redistribution** - 80% flows back to holders via the cluster-tilted lottery, favoring well-circulated coins
+- **Deflationary pressure** - The 20% burn offsets tail emission
+- **Predictable** - Net inflation = gross emission − burns
 
 ### Why Progressive Cluster Fees?
 

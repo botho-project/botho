@@ -190,19 +190,21 @@ pub const MAX_TOMBSTONE_BLOCKS: u64 = 20160;
 // The Botho network has NO pre-mine. Initial supply is 0 BTH.
 // All BTH is created through minting rewards.
 //
-// Phase 1 (Years 0-10): Halving schedule distributes ~100M BTH
-//   - Initial reward: ~50 BTH per block
-//   - 5 halvings every 2 years
+// Canonical emission schedule (#351; see botho/src/monetary.rs):
 //
-// Phase 2 (Year 10+): 2% annual net inflation target
+// Phase 1 (~5 years at full load): halving schedule distributes ~611M BTH
+//   - Initial reward: 50 BTH per block
+//   - 5 halvings, one per epoch of 6,307,200 blocks (~1 year at 5s blocks)
+//
+// Phase 2 (tail): 2% annual net inflation target
 //   - Difficulty adjusts to achieve target net inflation
 //   - Fee burns reduce effective inflation
 //
 // For detailed monetary policy, see: cluster-tax/src/monetary.rs
 
-/// Approximate BTH distributed during Phase 1 (10 years of halvings).
+/// Approximate BTH distributed during Phase 1 (5 halving epochs, #351).
 /// This is NOT a hard cap - inflation continues in Phase 2.
-pub const PHASE1_BTH_DISTRIBUTION: u64 = 100_000_000;
+pub const PHASE1_BTH_DISTRIBUTION: u64 = 611_010_000;
 
 // =============================================================================
 // BTH Unit System (single unit: picocredits, decision #649)
@@ -396,8 +398,9 @@ mod tests {
 
     #[test]
     fn test_phase1_bth_distribution() {
-        // Phase 1 distributes approximately 100 million BTH
-        assert_eq!(PHASE1_BTH_DISTRIBUTION, 100_000_000);
+        // Phase 1 distributes ~611 million BTH — the canonical #351 schedule,
+        // matching the regression-locked value in botho/src/monetary.rs.
+        assert_eq!(PHASE1_BTH_DISTRIBUTION, 611_010_000);
     }
 
     #[test]
@@ -409,9 +412,9 @@ mod tests {
     #[test]
     fn test_inflation_headroom() {
         // Verify u128 supply accounting has headroom for 2% annual inflation
-        // over 250+ years, starting from 100M BTH at end of Phase 1.
+        // over 250+ years, starting from ~611M BTH at end of Phase 1 (#351).
         // (Supply-scale quantities are u128 in the node — #333/#626 — because
-        // 100M BTH = 10^20 picocredits already exceeds u64::MAX.)
+        // ~611M BTH ≈ 6.11 * 10^20 picocredits already exceeds u64::MAX.)
         let phase1_supply_pico = PHASE1_BTH_DISTRIBUTION as u128 * BTH_TO_PICOCREDITS as u128;
 
         // (1.02)^250 ≈ 144.2 (scaled by 1000)
@@ -515,8 +518,8 @@ mod tests {
 
     #[test]
     fn test_picocredit_supply_limits() {
-        // Phase 1 distributes 100M BTH.
-        // In picocredits: 100M * 10^12 = 10^20, which overflows u64
+        // Phase 1 distributes ~611M BTH (#351).
+        // In picocredits: 611.01M * 10^12 ≈ 6.11 * 10^20, which overflows u64
         // (max ~1.84 * 10^19).
         //
         // This is why aggregate supply tracking is u128 in the node
@@ -532,7 +535,7 @@ mod tests {
 
         // And fits comfortably in u128.
         let phase1_pico_u128 = PHASE1_BTH_DISTRIBUTION as u128 * BTH_TO_PICOCREDITS as u128;
-        assert_eq!(phase1_pico_u128, 100_000_000_000_000_000_000u128); // 10^20
+        assert_eq!(phase1_pico_u128, 611_010_000_000_000_000_000u128); // ~6.11 * 10^20
     }
 
     #[test]
