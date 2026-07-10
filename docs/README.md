@@ -63,8 +63,7 @@ Welcome to the Botho documentation. Botho is a privacy-preserving, mined cryptoc
 ### Protocol Specification
 | Document | Description |
 |----------|-------------|
-| [Specification](specification/README.md) | Formal protocol specification |
-| [Protocol v0.1.0](specification/protocol-v0.1.0.md) | Complete protocol reference |
+| [Specification](specification/README.md) | Protocol specification index — historical snapshots + current-protocol pointers |
 
 ### Architecture Deep Dives
 | Document | Description |

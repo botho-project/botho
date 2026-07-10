@@ -1,10 +1,10 @@
 # Botho Protocol Specification
 
 **Version**: 0.1.0
-**Status**: Draft
+**Status**: Historical snapshot
 **Last Updated**: 2024-12-31
 
-> **⚠️ SUPERSEDED**: This specification has been replaced by [v0.2.0](protocol-v0.2.0.md). LION (PQ-Private) transactions described here have been **deprecated**. The current protocol uses only two transaction types: Minting (ML-DSA signatures) and Private (CLSAG ring signatures). See [ADR-0001](../decisions/0001-deprecate-lion-ring-signatures.md) for the deprecation decision.
+> **⚠️ HISTORICAL SNAPSHOT (SUPERSEDED)**: This specification was superseded by [v0.2.0](protocol-v0.2.0.md), which is itself a historical snapshot — **neither document describes the current wire protocol** (implemented version 4.1.0). See the [specification index](README.md) for the current protocol version and pointers to authoritative sources. LION (PQ-Private) transactions described here have been **deprecated**; the protocol uses only two transaction types: Minting (ML-DSA signatures) and Private (CLSAG ring signatures). See [ADR-0001](../decisions/0001-deprecate-lion-ring-signatures.md) for the deprecation decision.
 
 ## Abstract
 
