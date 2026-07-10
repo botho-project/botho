@@ -2,6 +2,22 @@
 
 This document describes Botho's monetary policy framework, including how fee parameters, difficulty adjustment, and emission targeting interact, and how planned fork upgrades can adjust these parameters over time.
 
+> **Implementation status.** The two-phase emission model, block-based halving
+> (#351), dynamic block timing, and emission-targeting difficulty controller are
+> **implemented** — the authoritative parameters live in
+> `botho/src/monetary.rs` (`mainnet_policy()`) and the live controller is
+> `EmissionController` in `botho/src/block.rs` (M5/#554: one time-based step
+> per block from observed inter-block time, clamped 0.5x–2x; the tx-count
+> emission-epoch controller described below is the retired pre-M5 design).
+> Tail-inflation targeting comes from the supply-dependent tail *reward*, not
+> from difficulty. The **`MonetaryEpoch` fork-upgrade
+> machinery from "Monetary Epochs" onward is a design proposal, not shipped
+> code**, and its illustrative fee fields (flat `min_fee`, bps-of-amount cluster
+> rates, 10M BTH midpoint) reflect an earlier fee model. The deployed fee model
+> is size-based with a 1x–6x cluster factor (log-domain sigmoid, midpoint
+> 100,000 BTH) and no flat minimum fee — see
+> [Tokenomics](tokenomics.md) and `cluster-tax/src/fee_curve.rs`.
+
 ## Overview
 
 Botho's monetary policy achieves predictable inflation through the interaction of three mechanisms:
@@ -550,6 +566,10 @@ pub struct MonetaryEpoch {
 ```
 
 ## Planned Epoch Schedule
+
+> **Illustrative proposal** — the heights and block rewards match the canonical
+> #351 schedule, but the min-fee ladder and the bps fee fields below belong to
+> the earlier fee model (see the implementation-status note at the top).
 
 | Epoch | Height | ~Year | Min Fee | Block Reward | Notes |
 |-------|--------|-------|---------|--------------|-------|

@@ -299,7 +299,8 @@ the residuals above are explicitly tracked, not mitigated.
 | Discrete Log (DLOG) | curve25519 | CLSAG signatures forgeable |
 | Decisional Diffie-Hellman (DDH) | curve25519 | Pedersen binding broken |
 | Learning With Errors (LWE) | ML-KEM, ML-DSA | PQ protections broken |
-| Collision Resistance | SHA-256, Blake2b | PoW and hashing compromised |
+| Collision Resistance | SHA-256, Blake2b | General hashing compromised |
+| PoW Soundness | RandomX | Minting rewards skewed (consensus safety unaffected — block acceptance is SCP's) |
 
 ### Consensus Assumptions
 

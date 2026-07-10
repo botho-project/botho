@@ -18,7 +18,7 @@ Key features:
 |--------|---------|-------|
 | Privacy | Transparent (all transactions public) | Private by default |
 | Finality | ~60 minutes (6 confirmations) | ~3-5 seconds |
-| Fee system | Flat fees to miners | Progressive fees, burned |
+| Fee system | Flat fees to miners | Progressive fees: 80% redistributed, 20% burned |
 | Long-term security | Relies on fees after 2140 | Perpetual tail emission |
 | Consensus | Nakamoto (longest chain) | SCP (Byzantine agreement) |
 
@@ -30,7 +30,7 @@ Both prioritize privacy, but differ in economics and consensus:
 |--------|--------|-------|
 | Consensus | Proof-of-work (RandomX) | PoW + SCP hybrid |
 | Finality | ~20 minutes (10 confirmations) | ~3-5 seconds |
-| Fee destination | To miners | Burned |
+| Fee destination | To miners | 80% redistribution lottery, 20% burned |
 | Wealth redistribution | None | Progressive cluster fees |
 | Quantum resistance | Not yet | Hybrid (see below) |
 
@@ -143,7 +143,7 @@ For maximum privacy, follow the [privacy best practices](privacy.md#privacy-best
 
 Botho uses a unique hybrid approach:
 
-1. **Proof-of-Work**: Miners find valid nonces (SHA-256)
+1. **Proof-of-Work**: Miners find valid nonces (RandomX, the CPU-egalitarian hash also used by Monero)
 2. **SCP Consensus**: The network agrees on which miner's block is accepted
 
 This means network latency doesn't determine winners — the quorum does.
@@ -165,7 +165,7 @@ Currently, with low network difficulty, CPU mining is viable.
 
 ### What hardware should I use?
 
-Botho uses SHA-256, which is ASIC-friendly. However, while the network is small, regular CPUs work fine. As the network grows, dedicated hardware may become necessary to remain competitive.
+Botho uses RandomX, which is deliberately ASIC- and GPU-resistant: ordinary CPUs compete on near-equal footing by design. A desktop with spare CPU cores is a reasonable mining setup, and dedicated hardware offers no dramatic advantage. Note that RandomX keeps a large in-memory dataset, so allow ~2-3 GB of RAM for mining.
 
 ---
 
@@ -190,10 +190,10 @@ Fees are not paid to miners. Each block, collected fees are split **80% into a c
 
 ### What are "cluster fees" and why do they exist?
 
-Cluster fees are progressive transaction fees based on coin ancestry:
+Cluster fees are progressive transaction fees based on coin ancestry. Fees are size-based, and the multiplier depends on where your coins came from:
 
-- Coins that circulate widely pay low fees (~0.05%)
-- Coins that stay concentrated pay high fees (up to 30%)
+- Coins that circulate widely pay the base rate (1x)
+- Coins from concentrated clusters pay up to 6x the base rate
 
 This discourages hoarding and encourages economic activity — without tracking identities. The system is Sybil-resistant because fees are based on where coins came from, not how many wallets you have.
 
@@ -203,7 +203,7 @@ Cluster tracking happens at the UTXO level, not the account level. The system kn
 
 ### Why do I pay higher fees than others?
 
-Fees are based on **source wealth** — where your coins originated. Coins traced back to large mining clusters pay higher fees (up to 15%), while well-circulated coins pay lower fees (~1%). This is Sybil-resistant because splitting coins doesn't change their origin.
+Fees are based on **source wealth** — where your coins originated. Coins traced back to large mining clusters pay up to 6x the base size-based fee, while well-circulated coins pay 1x. This is Sybil-resistant because splitting coins doesn't change their origin.
 
 ### How can I reduce my cluster attribution?
 
@@ -213,18 +213,18 @@ Through legitimate economic activity. When you spend coins and they mix with oth
 - **Mixing**: Combining with coins from different sources dilutes tags
 - **Rate limit**: Maximum ~12 decay events per day, regardless of transaction count
 
-After ~10-20 hops through real commerce, original cluster attribution becomes negligible.
+Through sustained real commerce — decay plus blending with counterparties' coins — original cluster attribution becomes negligible.
 
 ### What is the maximum fee I can pay?
 
-The progressive fee curve caps at **15%** for the wealthiest clusters (those controlling 70%+ of maximum tracked wealth). Most users pay between 1-10% based on coin provenance.
+The progressive multiplier caps at **6x** the base size-based fee, saturating for the wealthiest clusters (≳10M BTH of cluster wealth). Well-circulated coins pay 1x; the curve's midpoint (3.5x) sits at 100,000 BTH of cluster wealth.
 
 ### How does trading affect my privacy?
 
 Trading improves privacy over time:
 
-- Each legitimate transaction allows tags to decay by 5%
-- After ~10-20 hops through real commerce, original cluster attribution is negligible
+- Each eligible transaction hop decays tags by 5%, and blending with others' coins dilutes attribution faster still
+- With sustained real commerce, original cluster attribution becomes negligible
 - Ring signatures hide which specific input was spent
 - The age-based decay mechanism doesn't add any new trackable metadata (uses only the UTXO creation block, which is already public)
 

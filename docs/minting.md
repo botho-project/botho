@@ -1,16 +1,18 @@
 # Minting Guide
 
-Botho uses a **parallel proof-of-work** mechanism integrated with Stellar Consensus Protocol (SCP) for Byzantine fault tolerance.
+Botho uses a **parallel proof-of-work** mechanism (RandomX, CPU-egalitarian) integrated with Stellar Consensus Protocol (SCP) for Byzantine fault tolerance.
 
 ## How Minting Works
 
 ### The Minting Process
 
-1. **Find a Valid Nonce**: Minters search for a nonce that produces a hash below the difficulty target:
+1. **Find a Valid Nonce**: Minters search for a nonce whose RandomX hash satisfies the difficulty target:
 
    ```
-   SHA256(nonce || prev_block_hash || minter_view_key || minter_spend_key) < difficulty_target
+   RandomX(seed_key, nonce || prev_block_hash || minter_keys) < difficulty_target
    ```
+
+   The preimage binds `prev_block_hash`, so a miner cannot start working on block N+1 before seeing block N — preserving a fair latency edge for well-connected nodes while keeping CPU mining egalitarian.
 
 2. **Submit Minting Transaction**: Valid proofs are wrapped in a `MintingTx` and submitted to the consensus network
 
@@ -172,27 +174,20 @@ See [Architecture: Block Timing](architecture.md#block-timing-architecture) for 
 
 | Parameter | Value |
 |-----------|-------|
-| Adjustment interval | 17,280 blocks (~24h at 5s blocks) |
-| Maximum adjustment | ±25% per epoch |
+| Adjustment cadence | Every block (M5, #554) |
+| Signal | Observed inter-block time vs the 5 s target |
+| Per-step clamp | 0.5x–2x |
 
 ### Algorithm
 
-**Phase 1 (Halving)**:
 ```
-adjustment_ratio = expected_time / actual_time
-new_difficulty = current_difficulty × clamp(ratio, 0.75, 1.25)
+observed > target (blocks too slow) → ease PoW
+observed < target (blocks too fast) → harden PoW
+
+new_difficulty = current_difficulty × clamp(observed / target, 0.5, 2.0)
 ```
 
-**Phase 2 (Tail Emission)**:
-Difficulty adjustment blends timing (30%) and monetary targeting (70%) to maintain 2% net inflation:
-```
-timing_ratio = expected_time / actual_time
-monetary_ratio = actual_net_emission / target_net_emission
-combined_ratio = timing_ratio × 0.3 + monetary_ratio × 0.7
-new_difficulty = current_difficulty × clamp(combined_ratio, 0.75, 1.25)
-```
-
-This ensures the network can adapt block rate to hit inflation targets even when fee burns fluctuate.
+The signal deliberately ignores transaction count, so a block producer cannot skew difficulty by stuffing or starving blocks. Tail-phase inflation targeting comes from the supply-dependent tail *reward* (recomputed each block for 2% net), not from difficulty.
 
 ## Transaction Fees
 
@@ -204,7 +199,7 @@ emission. See [Cluster-Tilted Redistribution](design/cluster-tilted-redistributi
 
 | Parameter | Value |
 |-----------|-------|
-| Minimum fee | 400 µBTH (0.0004 BTH) |
+| Fee formula | per-byte rate × tx size × cluster factor (1x–6x) × output penalty |
 | Fee destination | 80% redistribution lottery, 20% burned |
 | Priority | Higher fees = faster confirmation |
 
@@ -251,9 +246,9 @@ curl -X POST http://localhost:7101/ \
 3. **Network difficulty**: Adjusts based on total network hashrate
 4. **Quorum stability**: Unstable peers can interrupt minting
 
-### No GPU/ASIC Advantage (Currently)
+### No GPU/ASIC Advantage (By Design)
 
-Botho uses SHA-256 for proof-of-work. While this is ASIC-friendly, the small network size means CPU minting is currently viable.
+Botho uses RandomX for proof-of-work — a memory-hard, CPU-optimized hash deliberately designed to resist ASICs and GPUs. Ordinary CPUs compete on near-equal footing, and that remains true as the network grows. Budget ~2-3 GB of RAM for the RandomX dataset when mining.
 
 ## Troubleshooting
 
@@ -309,6 +304,6 @@ A peer required for your quorum went offline.
 | Phase 1 supply | ~611 million BTH (~5 years) |
 | Tail emission | Supply-dependent (~1.9 BTH/block at ~611M tail-onset supply) |
 | Tail inflation target | 2% net |
-| Difficulty adjustment | Every 17,280 blocks (~24h at 5s) |
+| Difficulty adjustment | Every block, time-based (0.5x–2x per step) |
 | Gossip port | 7100 |
 | RPC port | 7101 |

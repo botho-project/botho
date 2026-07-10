@@ -44,7 +44,7 @@ Coins remember where they came from. The fee is based on **source wealth**, not 
 
 ## Fee Calculation
 
-The fee rate is determined by a **3-segment piecewise linear curve**:
+The progressive multiplier is determined by a **sigmoid curve in log-wealth**:
 
 ```mermaid
 flowchart LR
@@ -63,31 +63,34 @@ flowchart LR
     style F fill:#22c55e,color:#000
 ```
 
-**Formula**: `total_fee = base_fee × tx_size × cluster_factor`
+**Formula**: `total_fee = base_fee × tx_size × cluster_factor × output_penalty + memo_fees`
 
 The **cluster factor** (1x to 6x) is derived from the sender's source wealth using the curve below:
 
 ![Fee Curves Comparison](images/cluster-tax/fee_curves_comparison.png)
 
 ```
-Segment 1 (Poor):   [0, 15% of max)    → 1% flat rate
-Segment 2 (Middle): [15%, 70% of max)  → 2% to 10% linear
-Segment 3 (Rich):   [70%+ of max]      → 15% flat rate
+cluster_factor(W) = 1 + 5 × sigmoid((log2(W) − log2(w_mid)) / width)
+
+w_mid = 100,000 BTH  (curve midpoint: factor 3.5x)
+≲ 1K BTH   → ~1x     (base fee only)
+≳ 10M BTH  → ~6x     (saturates)
 ```
 
-This S-curve design:
-- **Protects the poor**: Low, flat rate up to 15% of max wealth
-- **Progressive middle**: Steepest progression where most redistribution occurs
-- **Caps the rich**: Plateau prevents extreme burden while ensuring contribution
+Working in the **logarithm** of wealth (integer-only fixed point, for consensus determinism) gives the curve its S-shape across orders of magnitude:
+- **Protects small clusters**: Flat ~1x across everyday wealth levels
+- **Progressive middle**: Steepest around the 100K BTH midpoint
+- **Caps the rich**: Saturates at 6x — a bounded premium, not confiscation
 
 ### Whale vs Poor: Same Transfer, Different Fees
 
 ![Whale vs Poor](images/cluster-tax/whale_vs_poor.png)
 
-A 10,000 BTH transfer costs:
-- **Whale** (source: 1M): 1,500 BTH (15% rate)
-- **Poor** (source: 10K): 114 BTH (1.1% rate)
-- **Ratio**: 13.2× higher fees for whale-origin coins
+The same ~4 KB transfer costs:
+- **Whale-origin coins** (cluster wealth 10M BTH): 6× the base size fee
+- **Well-circulated coins** (cluster wealth ≤ 1K BTH): 1× the base size fee
+
+The premium attaches to the coins' provenance, so it follows whale money wherever it goes — no restructuring of holdings changes it.
 
 ## Why Sybil Attacks Don't Work
 
@@ -95,9 +98,9 @@ A 10,000 BTH transfer costs:
 ```
 Whale splits 1M into 1000 × 1K UTXOs
 Each UTXO: source_wealth = 1M (unchanged)
-Each tx pays: rate(1M) = 15%
-Total fees: same as unsplit
-Result: Attack defeated
+Each tx pays: factor(1M) = 6x — and the split itself pays
+quadratic output penalties (up to 100x per transaction)
+Result: Attack defeated (splitting costs extra, saves nothing)
 ```
 
 ### Attack 2: Sybil Shuffle
@@ -105,7 +108,7 @@ Result: Attack defeated
 Whale creates 100 sybil accounts
 Transfers 10K to each sybil
 Each sybil's UTXO: source_wealth = 1M (inherited)
-Sybils pay: rate(1M) = 15%
+Sybils pay: factor(1M) = 6x
 Result: Attack defeated
 ```
 
@@ -124,10 +127,9 @@ As coins circulate through legitimate economic activity, their source_wealth nat
 
 ![Provenance Decay](images/cluster-tax/provenance_decay.png)
 
-After 10 transaction hops through merchants:
-- Initial source_wealth: 1,000,000
-- Final source_wealth: ~104,000 (90% decay)
-- Mixing with merchant coins accelerates decay vs pure 5%/hop
+Circulating through merchants diffuses attribution two ways at once:
+- Each **eligible hop** decays tags by 5%
+- **Blending** with counterparties' coins dilutes attribution much faster than decay alone — a value-weighted average with every combined input
 
 **This is by design**: Well-circulated money should pay lower fees than freshly-hoarded wealth.
 
@@ -142,12 +144,9 @@ We validated the progressive fee system through extensive simulation:
 | Flat 5% | -0.2353 | 9.1% |
 | Linear 1%-15% | -0.2396 | 12.8% |
 | Sigmoid | -0.2393 | 12.5% |
-| **3-Segment** | **-0.2399** | **12.4%** |
+| 3-Segment | -0.2399 | 12.4% |
 
-The 3-segment model achieves:
-- **0.3% better** inequality reduction than sigmoid
-- **0.1% lower** burn rate than sigmoid
-- **ZK-compatible** (provable with ~4.5 KB OR-proofs)
+These early sweeps compared curve *shapes*; all performed within a fraction of a percent of each other. The **deployed** curve is the log-domain sigmoid (`ClusterFactorCurve`, midpoint 100K BTH), chosen in the M2 calibration for its smoothness across orders of magnitude and consensus-deterministic integer implementation; the full mechanism (fees + tilted lottery + emission routing + demurrage) passes its Gini-reduction criterion with a 4–11x margin (see `experiments/ANALYSIS.md`).
 
 > **Note on "Burn Rate"**: the column above measures *fee intake* (fees collected as a fraction of value moved) in the original simulation, not the share of fees destroyed. In the shipped protocol, fees are **not** all burned — see **Where Fees Go** below.
 
@@ -183,12 +182,11 @@ See [Privacy](privacy.md#progressive-transaction-fees) for detailed analysis.
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| w1 (poor/middle boundary) | 15% of max | Below this: flat 1% rate |
-| w2 (middle/rich boundary) | 70% of max | Above this: flat 15% rate |
-| r_poor | 1% | Rate for poor segment |
-| r_mid_start | 2% | Rate at start of middle segment |
-| r_mid_end | 10% | Rate at end of middle segment |
-| r_rich | 15% | Rate for rich segment |
+| factor_min | 1x | Multiplier floor (small / well-circulated clusters) |
+| factor_max | 6x | Multiplier ceiling (saturates for whale clusters) |
+| w_mid | 100,000 BTH | Log-sigmoid midpoint (factor 3.5x) |
+| Curve domain | log₂(cluster wealth) | Integer-only fixed point (consensus-deterministic) |
+| Output penalty | quadratic, capped at 100x | Anti-UTXO-farming multiplier |
 | Decay rate | 5% per eligible hop | Tag decay when UTXO meets age requirement |
 | min_age_blocks | 720 blocks (~2 hours) | Minimum UTXO age for decay eligibility |
 
@@ -233,8 +231,8 @@ Unlike alternatives that track decay timing in UTXO metadata, age-based decay us
 | Attack | Transactions | Result |
 |--------|--------------|--------|
 | Rapid wash (1 minute) | 100 | 0% decay (all outputs too young) |
-| Patient wash (1 day) | 1000 | 46% decay (only 12 eligible) |
-| Patient wash (1 week) | 7000 | 97% decay (84 eligible) |
+| Patient wash (1 day) | 1000 | ~46% decay (only ~12 eligible) |
+| Patient wash (1 week) | 7000 | ~99% decay (84 eligible) — after paying ~84 fees |
 | Holding without transacting | 0 | 0% decay (requires spending) |
 
 > **See also**: [Cluster Tag Decay Design](../design/cluster-tag-decay.md) for mathematical proofs and simulation results.
@@ -245,10 +243,10 @@ Unlike alternatives that track decay timing in UTXO metadata, age-based decay us
 
 | Scenario | Fee Level | Why |
 |----------|-----------|-----|
-| Whale spends directly | High (15%) | Fresh whale money |
-| Whale's recipient spends | High (decayed) | Still linked to whale origin |
-| After 20 hops | Low | Tags have decayed/mixed |
-| Poor person spends their own | Low (1%) | Low source_wealth origin |
+| Whale spends directly | High (6x factor) | Fresh whale money |
+| Whale's recipient spends | High (slightly decayed) | Still linked to whale origin |
+| After many hops + blending | Low | Tags have decayed/mixed |
+| Poor person spends their own | Low (1x factor) | Low source_wealth origin |
 
 ### Incentive Alignment
 

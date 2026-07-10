@@ -182,7 +182,7 @@ Secret Network focuses on programmable privacy (smart contracts). Botho focuses 
 
 | Aspect | Botho | Bitcoin | Monero | Zcash |
 |--------|-------|---------|--------|-------|
-| Mechanism | PoW + SCP | PoW (SHA-256) | PoW (RandomX) | PoW (Equihash) |
+| Mechanism | SCP consensus + RandomX PoW (issuance only) | PoW (SHA-256) | PoW (RandomX) | PoW (Equihash) |
 | Block time | 5-40 sec (dynamic) | 600 sec | 120 sec | 75 sec |
 | Finality | Immediate | Probabilistic | Probabilistic | Probabilistic |
 | Fault tolerance | Byzantine | Crash | Crash | Crash |

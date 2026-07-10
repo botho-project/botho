@@ -60,7 +60,7 @@ A protocol for private cryptocurrency transactions, originally developed for Byt
 In ring signatures, a decoy is a transaction output included to hide the true sender. Decoys are selected using OSPEAD criteria: age distribution, cluster tag similarity, and amount plausibility.
 
 ### Difficulty
-A measure of how hard it is to find a valid proof-of-work. Difficulty adjusts to maintain target block times.
+A measure of how hard it is to find a valid proof-of-work. In Botho, difficulty adjusts every block from the observed inter-block time (5-second target, clamped 0.5x–2x per step); the signal deliberately ignores transaction count so block producers can't skew it.
 
 ### Dilithium
 A lattice-based signature scheme now standardized as ML-DSA. Botho uses ML-DSA-65 for minting transaction signatures.
@@ -208,7 +208,7 @@ A secret value that controls your funds. Never share your private keys or mnemon
 The standard transaction type for all value transfers. Uses CLSAG ring signatures (sender hidden among 20 decoys), Pedersen commitments with Bulletproofs (amounts hidden), and ML-KEM stealth addresses (recipient hidden with post-quantum security). Size-based fees (~4 KB typical).
 
 ### Proof-of-Work (PoW)
-A consensus mechanism where miners prove they've done computational work. Botho uses SHA-256 PoW.
+A mechanism where miners prove they've done computational work. Botho uses RandomX PoW for coin issuance only — block acceptance is decided by SCP consensus, not hashpower.
 
 ### Public Key
 A value derived from your private key that can be shared publicly. Used to receive funds and verify signatures.
@@ -229,6 +229,9 @@ In SCP, the subset of nodes that a particular node trusts. The intersection of q
 ---
 
 ## R
+
+### RandomX
+A CPU-egalitarian, ASIC/GPU-resistant proof-of-work hash function (originally developed for Monero). Used for Botho's minting PoW so ordinary CPUs can compete on near-equal footing.
 
 ### Range Proof
 A zero-knowledge proof that a hidden value falls within a valid range (e.g., is non-negative). Prevents creating coins from nothing.
@@ -253,10 +256,7 @@ A cryptographic signature that proves one member of a group signed a message, wi
 A digital signature scheme known for simplicity and efficiency. Botho uses Schnorr signatures (via Ed25519).
 
 ### Seed Node
-A well-known node used for initial peer discovery. Botho's seed node is `seed.botho.io`.
-
-### SHA-256
-**Secure Hash Algorithm 256-bit** — A cryptographic hash function used for Botho's proof-of-work.
+A well-known node used for initial peer discovery. Botho discovers bootstrap peers via DNS TXT records at `seeds.botho.io` (mainnet) / `seeds.testnet.botho.io` (testnet).
 
 ### Spend Key
 The private key required to spend funds. Part of the view/spend key pair.

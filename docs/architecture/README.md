@@ -65,7 +65,7 @@ This directory contains detailed architecture documentation for external securit
 │  │  │                           MINTER                                     ││   │
 │  │  │  ┌────────────────┐  ┌────────────────┐  ┌────────────────────────┐ ││   │
 │  │  │  │   PoW Search   │  │  MintingTx     │  │   Difficulty Adj.      │ ││   │
-│  │  │  │  (Multi-thread)│  │  Construction  │  │   (per 1000 tx)        │ ││   │
+│  │  │  │  (Multi-thread)│  │  Construction  │  │   (time-based, M5)     │ ││   │
 │  │  │  └────────────────┘  └────────────────┘  └────────────────────────┘ ││   │
 │  │  └──────────────────────────────────────────────────────────────────────┘│   │
 │  └──────────────────────────────────────────────────────────────────────────┘   │

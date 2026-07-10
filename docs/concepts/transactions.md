@@ -299,10 +299,10 @@ Output (150 BTH):
 
 ### Fee Calculation
 
-Cluster wealth determines progressive fee rate:
+Cluster wealth determines the progressive fee multiplier:
 ```
 cluster_wealth = sum(all_utxos * tag_weight)
-fee_rate = sigmoid(cluster_wealth)  // 0.05% to 30%
+cluster_factor = 1 + 5 × sigmoid(log2(cluster_wealth / w_mid))  // 1x to 6x, w_mid = 100,000 BTH
 ```
 
 ---
@@ -312,8 +312,10 @@ fee_rate = sigmoid(cluster_wealth)  // 0.05% to 30%
 Botho uses **size-based fees** with a **progressive cluster factor**:
 
 ```
-fee = fee_per_byte × tx_size × cluster_factor
+fee = fee_per_byte × tx_size × cluster_factor × output_penalty + memo_fees
 ```
+
+The output penalty is quadratic in output count (capped at 100x) to make UTXO farming uneconomical; each encrypted memo adds a flat 100 picocredits.
 
 | Type | Ring Size | Signature Size | Typical Total Size | Fee (1x cluster) | Fee (6x cluster) |
 |------|-----------|----------------|-------------------|------------------|------------------|

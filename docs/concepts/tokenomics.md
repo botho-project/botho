@@ -29,8 +29,8 @@ multiples like milliBTH and microBTH, only at the user-interface edge.
 | 1 BTH | 1,000,000,000,000 | 1 |
 
 Picocredits provide 12 decimals of precision. Aggregate supply exceeds u64 when
-expressed in picocredits (100M BTH = 10²⁰ picocredits), so supply totals are
-tracked in **u128**; individual transaction amounts fit comfortably in u64.
+expressed in picocredits (~611M BTH ≈ 6.11 × 10²⁰ picocredits), so supply totals
+are tracked in **u128**; individual transaction amounts fit comfortably in u64.
 
 ## Emission Schedule
 
@@ -94,7 +94,7 @@ Botho has a multi-layered fee system combining size-based fees, progressive weal
 ### Fee Formula
 
 ```
-fee = dynamic_base × tx_size × cluster_factor + memo_fees
+fee = dynamic_base × tx_size × cluster_factor × output_penalty + memo_fees
 ```
 
 | Component | Range | Description |
@@ -102,6 +102,7 @@ fee = dynamic_base × tx_size × cluster_factor + memo_fees
 | `dynamic_base` | 1-100 picocredits/byte | Adjusts based on network congestion |
 | `tx_size` | ~4-65 KB | Transaction size in bytes |
 | `cluster_factor` | 1x-6x | Progressive multiplier based on sender's cluster wealth |
+| `output_penalty` | quadratic in outputs, capped at 100x | Makes UTXO-farming (mass splitting) uneconomical |
 | `memo_fees` | 100 picocredits/memo | Additional fee for encrypted memos |
 
 #### Fee Destination: Redistribution Lottery + Burn (80/20)
@@ -159,7 +160,7 @@ Botho implements a novel **provenance-based progressive fee system** that taxes 
 1. **Source Wealth**: Every UTXO tracks the wealth of its original minter
 2. **Persistence**: Splitting doesn't change source_wealth—all pieces retain the original tag
 3. **Blending**: Combining UTXOs creates a value-weighted average source_wealth
-4. **Progressive Rate**: Fee rate increases with source_wealth via 3-segment curve
+4. **Progressive Multiplier**: The cluster factor rises with source_wealth along a sigmoid in log-wealth
 
 ![Fee Curves](images/cluster-tax/fee_curves_comparison.png)
 
@@ -167,9 +168,9 @@ Botho implements a novel **provenance-based progressive fee system** that taxes 
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Poor segment | 0-15% of max | 1% flat rate |
-| Middle segment | 15-70% of max | 2% to 10% linear |
-| Rich segment | 70%+ of max | 15% flat rate |
+| Cluster factor range | 1x–6x | Multiplier on the size-based fee |
+| Curve shape | Sigmoid in log₂(cluster wealth) | Integer-only fixed point (consensus-deterministic) |
+| Curve midpoint | 3.5x at 100,000 BTH cluster wealth | Pinned module constant (`W_MID_PICO`) |
 | Decay rate | 5% per eligible hop | Tag decay when UTXO is old enough |
 | Min UTXO age | 720 blocks (~2 hours) | UTXOs must be this old before decay applies |
 
@@ -187,7 +188,7 @@ This means a wash trader executing 100 rapid self-transfers gets 0% decay (all o
 
 ![Gini Reduction](images/cluster-tax/gini_reduction_comparison.png)
 
-The 3-segment model achieves **-0.2399 Gini reduction** (0.3% better than sigmoid) with **12.4% burn rate**.
+The deployed log-domain cluster-factor curve was calibrated against agent-based simulation sweeps (see `experiments/ANALYSIS.md` and [Cluster-Tilted Redistribution](../design/cluster-tilted-redistribution.md)); the full mechanism (progressive fees + tilted lottery + emission routing + demurrage) passes its Gini-reduction criterion with a 4–11x margin.
 
 #### Why It's Sybil-Resistant
 
@@ -205,8 +206,8 @@ Tags decay through legitimate commerce:
 
 - Coins that circulate widely pay lower fees over time
 - Hoarded coins retain high source_wealth → higher fees
-- ~10-20 transaction hops through merchants reduces source_wealth by 90%+
-- Each hop must meet the 2-hour age requirement to trigger decay
+- Diffusion compounds through commerce: each eligible hop decays tags 5%, and blending with counterparties' coins dilutes attribution much faster than decay alone
+- Each hop must meet the 720-block age requirement to trigger decay
 
 **Maximum decay rates** (due to age-based gating):
 - Per day: ~46% (12 eligible decays × 5% each)
@@ -240,50 +241,45 @@ The 5-second floor is also the baseline assumed by all monetary calculations (se
 
 ## Difficulty Adjustment
 
-Botho uses **transaction-based difficulty adjustment** that targets monetary policy goals rather than block timing (which is handled by dynamic timing above).
+Botho uses **time-based difficulty adjustment** (M5, #554): one step per block, driven by the observed inter-block time.
 
 ### Parameters
 
 | Parameter | Value |
 |-----------|-------|
-| Adjustment epoch | 10,000 transactions |
-| Min difficulty | 1,000 |
-| Max adjustment | ±25% per epoch |
+| Adjustment cadence | Every block |
+| Signal | Observed inter-block time vs the 5 s target |
+| Per-step clamp | 0.5x–2x |
+| Min difficulty | 1 (floor to prevent a stuck chain) |
 
-### Phase 1: Emission-Tracking Adjustment
-
-During the halving period, difficulty adjusts to maintain the target emission schedule:
-
-```
-epoch_target_emission = halving_reward × target_blocks_per_epoch
-adjustment_ratio = epoch_target_emission / actual_epoch_emission
-new_difficulty = old_difficulty × clamp(ratio, 0.75, 1.25)
-```
-
-### Phase 2: Monetary-Aware Adjustment
-
-After Phase 1, difficulty targets 2% net inflation by balancing gross emission against fee burns:
+### Algorithm
 
 ```
-target_gross = target_net_inflation + expected_fee_burns
-adjustment_ratio = target_gross / actual_gross
-new_difficulty = old_difficulty × clamp(ratio, 0.75, 1.25)
+observed > target (blocks too slow) → ease PoW
+observed < target (blocks too fast) → harden PoW
+
+new_difficulty = old_difficulty × clamp(observed / target, 0.5, 2.0)
 ```
 
-This ensures:
-- If net emission is too high → difficulty increases → fewer minting rewards
-- If net emission is too low → difficulty decreases → more minting rewards
-- Fee burn variations are automatically compensated
+Two properties worth noting:
+
+- **Producer-skew resistance**: the signal deliberately ignores transaction
+  count, so a block producer cannot move difficulty by stuffing or starving
+  blocks (this replaced the earlier tx-count-epoch controller).
+- **Emission targeting lives in the reward, not the difficulty**: tail-phase
+  2% net inflation is achieved by recomputing the supply-dependent tail
+  reward each block; difficulty's job is keeping PoW solvable at the target
+  block time as hashrate changes.
 
 ## Transaction Constraints
 
 | Parameter | Private | Minting |
 |-----------|---------|---------|
-| Max transactions per block | 100 | 1 |
+| Max transactions per block | 5,000 | 1 |
 | Max inputs per transaction | 16 | 0 |
 | Max outputs per transaction | 16 | 16 |
 | Ring size | 20 (CLSAG) | — |
-| Max transaction size | 100 KB | 10 KB |
+| Max transaction size | 100 KB | 100 KB |
 
 ## Supply Projections
 

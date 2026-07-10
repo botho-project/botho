@@ -239,7 +239,8 @@ Botho uses battle-tested cryptography with post-quantum enhancements:
 | Transfer signatures | CLSAG ring signatures (ring=20) |
 | Stealth addresses | ML-KEM-768 (post-quantum) |
 | Amount hiding | Pedersen commitments + Bulletproofs |
-| Hashing | SHA-256 (PoW), Blake2b (general) |
+| Proof-of-work | RandomX (CPU-egalitarian, issuance only) |
+| Hashing | SHA-256, Blake2b (general purpose) |
 
 ## Block Timing Architecture
 

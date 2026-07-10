@@ -112,7 +112,7 @@ Unlike Bitcoin's probabilistic finality (wait 6 blocks = 60 minutes to be "sure"
 | Slot interval | 20 seconds (SCP consensus cycle) |
 | Dynamic block time | 5-40 seconds (adapts to network load) |
 | Monetary baseline | 5 seconds (for emission calculations) |
-| Difficulty adjustment | Every 1,000 transactions (scales with usage) |
+| Difficulty adjustment | Every block, from observed block time (0.5x–2x per step) |
 | Phase 1 supply | ~611 million BTH (~5 years of halvings) |
 | Tail emission | Supply-dependent, ~1.9 BTH/block at the ~611M tail-onset supply (2% net annual inflation) |
 | Native unit | BTH (12 decimal places; 1 BTH = 10¹² picocredits) |

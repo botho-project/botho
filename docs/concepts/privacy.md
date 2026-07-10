@@ -103,7 +103,7 @@ Transaction fees are based on coin *ancestry* (source_wealth), not account ident
 1. **Source Wealth**: Every UTXO tracks the wealth of its original minter
 2. **Persistence**: Splitting doesn't change source_wealth—provenance tags persist
 3. **Blending**: Combining UTXOs creates a value-weighted average
-4. **Progressive Rate**: Fee rate increases with source_wealth via 3-segment curve (1% → 15%)
+4. **Progressive Multiplier**: The cluster factor rises with source_wealth along a log-domain sigmoid (1x → 6x on the size-based fee)
 
 ### Why It's Sybil-Resistant
 
@@ -115,20 +115,20 @@ Splitting transactions or creating multiple accounts doesn't reduce fees because
 
 ### Tag Decay
 
-Tags decay by ~5% per transaction hop:
+Tags decay by 5% per eligible transaction hop (the UTXO must be at least 720 blocks old):
 
 - Coins that circulate widely pay lower fees over time
 - Hoarded coins retain high source_wealth → pay higher fees
-- ~10 transaction hops through merchants reduces source_wealth by 90%
+- Blending with counterparties' coins dilutes attribution much faster than decay alone
 
 ### Parameters
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Poor segment | 0-15% of max | 1% flat rate |
-| Middle segment | 15-70% of max | 2% to 10% linear |
-| Rich segment | 70%+ of max | 15% flat rate |
-| Decay rate | 5% per hop | Tag decay per transaction |
+| Cluster factor | 1x–6x | Multiplier on the size-based fee |
+| Curve midpoint | 3.5x at 100,000 BTH | Sigmoid in log₂(cluster wealth) |
+| Decay rate | 5% per eligible hop | Tag decay per qualifying transaction |
+| Decay age gate | 720 blocks | Prevents wash-trading decay |
 
 > **See also**: [Progressive Fees](progressive-fees.md) for detailed analysis, simulation results, and ZK compatibility.
 

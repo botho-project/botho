@@ -2,7 +2,14 @@
 
 ## Status
 
-**Research** - Requires simulation validation
+**Superseded** — the [simulation sweep](asymmetric-fees-simulation.md) (2026-06-11)
+passed attack resistance but FAILED the Gini-reduction criterion, and per-UTXO
+ticket floors were later shown to subsidize whoever splits hardest. The shipped
+lottery uses **cluster-weighted selection** (weight = value ÷ cluster factor,
+no per-UTXO floor) — see
+[Cluster-Tilted Redistribution](cluster-tilted-redistribution.md) and
+`cluster-tax/src/lottery.rs`. Kept for the analysis framework and attack
+taxonomy.
 
 ## Overview
 
