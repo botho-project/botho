@@ -1,8 +1,18 @@
 # Botho Protocol Specification
 
 **Version**: 0.2.0
-**Status**: Draft
+**Status**: Historical snapshot
 **Last Updated**: 2025-01-03
+
+> **⚠️ HISTORICAL SNAPSHOT**: This document does **not** describe the current
+> wire protocol (implemented version 4.1.0, defined in
+> [`botho/src/network/discovery.rs`](../../botho/src/network/discovery.rs)).
+> It predates — at minimum — RandomX proof of work, the picocredit single-unit
+> migration, the current emission schedule, time-based difficulty, the 80/20
+> fee split with cluster-weighted lottery, demurrage, and dynamic block
+> timing. Do not implement against it. See the
+> [specification index](README.md) for the current protocol version and
+> pointers to authoritative sources.
 
 ## Abstract
 
