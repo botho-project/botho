@@ -60,22 +60,22 @@ function getEnvFaucetEndpoint(): string | undefined {
 export const INGRESS_NODES: IngressNode[] = [
   {
     id: 'seed',
-    name: 'US seed (Oregon)',
-    role: 'Primary SCP validator',
+    name: 'US seed 1',
+    role: 'Primary SCP validator — Oregon',
     rpcEndpoint: 'https://seed.botho.io/rpc',
     servesFaucet: false,
   },
   {
     id: 'seed2',
-    name: 'US seed 2 (Oregon)',
-    role: 'Secondary SCP validator',
+    name: 'US seed 2',
+    role: 'Secondary SCP validator — Oregon',
     rpcEndpoint: 'https://seed2.botho.io/rpc',
     servesFaucet: false,
   },
   {
     id: 'faucet',
-    name: 'US faucet (Oregon)',
-    role: 'SCP validator + faucet',
+    name: 'US faucet 1',
+    role: 'SCP validator + faucet — Oregon',
     rpcEndpoint: 'https://faucet.botho.io/rpc',
     servesFaucet: true,
   },
@@ -84,15 +84,15 @@ export const INGRESS_NODES: IngressNode[] = [
   // endpoints would be blocked as mixed content.
   {
     id: 'eu',
-    name: 'EU seed (Frankfurt)',
-    role: 'Regional relay seed',
+    name: 'EU seed 1',
+    role: 'Regional relay seed — Frankfurt',
     rpcEndpoint: 'https://eu.seed.botho.io/rpc',
     servesFaucet: false,
   },
   {
     id: 'ap',
-    name: 'AP seed (Singapore)',
-    role: 'Regional relay seed',
+    name: 'AP seed 1',
+    role: 'Regional relay seed — Singapore',
     rpcEndpoint: 'https://ap.seed.botho.io/rpc',
     servesFaucet: false,
   },

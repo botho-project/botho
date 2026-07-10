@@ -150,15 +150,15 @@ test.describe('Live smoke @ botho.io', () => {
 
     // The dropdown header + the three live ingress nodes. Scope the row
     // lookups to the dropdown container: the TRIGGER's accessible name also
-    // starts with the selected node's name ("US seed (Oregon) Testnet"), so an
+    // starts with the selected node's name ("US seed 1 Testnet"), so an
     // unscoped getByRole is a strict-mode violation once the menu is open.
     const dropdown = page.locator('div.absolute', {
       has: page.getByText(/Trusted RPC ingress/i),
     })
     await expect(page.getByText(/Trusted RPC ingress/i)).toBeVisible()
-    const seed = dropdown.getByRole('button', { name: /^US seed \(Oregon\)/ })
-    const seed2 = dropdown.getByRole('button', { name: /^US seed 2 \(Oregon\)/ })
-    const faucetNode = dropdown.getByRole('button', { name: /^US faucet \(Oregon\)/ })
+    const seed = dropdown.getByRole('button', { name: /^US seed 1/ })
+    const seed2 = dropdown.getByRole('button', { name: /^US seed 2/ })
+    const faucetNode = dropdown.getByRole('button', { name: /^US faucet 1/ })
     await expect(seed).toBeVisible()
     await expect(seed2).toBeVisible()
     await expect(faucetNode).toBeVisible()
