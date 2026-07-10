@@ -28,7 +28,7 @@ Botho's monetary policy achieves predictable inflation through the interaction o
 
 The key insight is that **block production and emission are decoupled**:
 
-- **Block production**: Controlled by SCP consensus (20-second slots, 5-40s dynamic based on load)
+- **Block production**: Controlled by SCP consensus (20-second slots, 3-40s dynamic based on load)
 - **Emission rate**: Controlled by mining difficulty (how many blocks include minting rewards)
 
 This separation allows precise monetary targeting without affecting transaction throughput.
@@ -42,7 +42,8 @@ This separation allows precise monetary targeting without affecting transaction 
 > - 5 halvings total before tail emission (~5 years at 5s blocks)
 > - See `monetary.rs::mainnet_policy()` for the authoritative implementation
 >
-> **Adaptive Inflation**: Since actual block times vary (5-40s based on network load),
+> **Adaptive Inflation**: Since actual block times vary (3-40s based on network load;
+> 3s only at very high load, 20+ tx/s),
 > effective inflation scales with network activity:
 >
 > | Block Time | Effective Inflation | Halving Period |
