@@ -72,7 +72,7 @@ When someone sends you BTH:
 1. They use your public address to derive a unique one-time address
 2. The transaction is broadcast to the network and included in a block
 3. Your wallet scans new blocks and detects payments addressed to you
-4. The funds appear in your balance, usually within one block — block time adapts to network load, from 5 seconds under heavy traffic up to 40 seconds when the network is idle
+4. The funds appear in your balance, usually within one block — block time adapts to network load, from 3 seconds under very heavy traffic up to 40 seconds when the network is idle
 
 ### Sending Payments
 
@@ -1112,7 +1112,7 @@ Botho uses libp2p for networking, which supports multiple discovery mechanisms:
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Block time | 5–40 seconds (load-adaptive) | Fast blocks under heavy traffic, slow blocks when idle |
+| Block time | 3–40 seconds (load-adaptive) | Fast blocks under heavy traffic (3 s only at 20+ tx/s), slow blocks when idle |
 | Max block size | 20 MB | Maximum serialized block size |
 | Max transactions per block | 5,000 | Transaction count limit |
 
@@ -1196,7 +1196,7 @@ Botho (BTH) uses a two-phase emission model designed for long-term sustainabilit
 | Smallest unit | picocredit (10⁻¹² BTH) |
 | Pre-mine | None (100% mined) |
 | Phase 1 supply | ~611 million BTH |
-| Block time | 5–40 seconds (load-adaptive) |
+| Block time | 3–40 seconds (load-adaptive; 5 s monetary baseline) |
 
 ### Unit System
 
@@ -1211,7 +1211,7 @@ BTH uses 12-decimal precision. The picocredit is the single base unit — every 
 
 ## Emission Schedule
 
-All monetary math assumes the 5-second full-load block time. When the network is idle and blocks slow down (up to 40 s), emission stretches proportionally — a natural dampener: a busy network emits at the full schedule, an idle one emits less.
+All monetary math assumes the 5-second high-load block time (actual blocks range 3–40 s, dropping to 3 s only at very high load, 20+ tx/s). When the network is idle and blocks slow down (up to 40 s), emission stretches proportionally — a natural dampener: a busy network emits at the full schedule, an idle one emits less.
 
 ### Phase 1: Halving Period (~5 years at full load)
 

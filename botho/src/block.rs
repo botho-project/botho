@@ -692,8 +692,15 @@ fn calculate_tail_reward_u128(
 pub mod dynamic_timing {
     use super::Block;
 
-    /// Minimum block time (consensus floor - SCP needs time to complete)
-    pub const MIN_BLOCK_TIME: u64 = 5;
+    // Superseded (issue #761): this constant was never consumed anywhere and
+    // contradicted the live 3 s floor. The single authority for the minimum
+    // block time is `crate::consensus::ConsensusConfig::MIN_BLOCK_TIME_SECS`
+    // (= 3), which matches the fastest tier of `BLOCK_TIME_LEVELS` below (a
+    // compile-time assertion at the bottom of this module keeps them in sync).
+    // Kept commented-out rather than deleted per CLAUDE.md code preservation.
+    //
+    // /// Minimum block time (consensus floor - SCP needs time to complete)
+    // pub const MIN_BLOCK_TIME: u64 = 5;
 
     /// Maximum block time (efficiency ceiling when idle)
     pub const MAX_BLOCK_TIME: u64 = 40;
@@ -716,6 +723,23 @@ pub mod dynamic_timing {
         (0.2, 20), // Low load: 0.2+ tx/s → 20s blocks
         (0.0, 40), // Idle: <0.2 tx/s → 40s blocks
     ];
+
+    /// Compile-time assertion: the consensus floor
+    /// (`ConsensusConfig::MIN_BLOCK_TIME_SECS`) must equal the fastest tier of
+    /// `BLOCK_TIME_LEVELS` so the two can never drift apart again (issue
+    /// #761). Only the u64 block-time component matters here; the f64 tx-rate
+    /// thresholds are irrelevant to the floor.
+    const _: () = assert!(
+        crate::consensus::ConsensusConfig::MIN_BLOCK_TIME_SECS == BLOCK_TIME_LEVELS[0].1,
+        "ConsensusConfig::MIN_BLOCK_TIME_SECS must match the fastest BLOCK_TIME_LEVELS tier"
+    );
+
+    /// Compile-time assertion: `MAX_BLOCK_TIME` must equal the slowest (idle)
+    /// tier of `BLOCK_TIME_LEVELS`.
+    const _: () = assert!(
+        MAX_BLOCK_TIME == BLOCK_TIME_LEVELS[BLOCK_TIME_LEVELS.len() - 1].1,
+        "MAX_BLOCK_TIME must match the slowest BLOCK_TIME_LEVELS tier"
+    );
 
     /// Compute the target block time based on recent transaction load.
     ///

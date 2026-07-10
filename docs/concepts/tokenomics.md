@@ -11,7 +11,7 @@ Botho (BTH) uses a two-phase emission model designed for long-term sustainabilit
 | Display unit | BTH (formatted from picocredits at the UI edge) |
 | Pre-mine | None (100% mined) |
 | Phase 1 supply | ~611 million BTH (~5 years of halvings) |
-| Block time | 5-40 seconds (dynamic based on load); 5s baseline for monetary calculations |
+| Block time | 3-40 seconds (dynamic based on load; 3s only at 20+ tx/s); 5s baseline for monetary calculations |
 | Consensus | SCP (Stellar Consensus Protocol) |
 
 ## Unit System
@@ -333,7 +333,7 @@ Two properties worth noting:
 | Pre-mine | None | None | None | ~72M ETH |
 | Fee destination | 80% redistributed (lottery), 20% burned | To minters | To minters | Partially burned |
 | Progressive fees | Yes (cluster-based) | No | No | No |
-| Block time | 5-40s (dynamic; 5s baseline) | 600s | 120s | 12s |
+| Block time | 3-40s (dynamic; 5s baseline) | 600s | 120s | 12s |
 
 ## Technical References
 

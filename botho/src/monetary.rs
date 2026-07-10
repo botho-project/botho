@@ -35,18 +35,20 @@ use bth_cluster_tax::MonetaryPolicy;
 ///
 /// # Block Time Assumption
 ///
-/// All monetary calculations assume **5 second blocks** (the minimum block time
-/// under high load). When actual block times are slower (up to 40s when idle),
+/// All monetary calculations assume **5 second blocks** (the high-load tier of
+/// dynamic timing; actual blocks range 3-40s, with 3s only at very high load,
+/// 20+ tx/s). When actual block times are slower (up to 40s when idle),
 /// effective inflation and halving pace will be proportionally lower.
 ///
 /// This creates a natural inflation dampener: busy network = full inflation,
 /// idle network = reduced inflation.
 ///
-/// | Actual Block Time | Effective Inflation | Halving Period |
-/// |-------------------|--------------------:|---------------:|
-/// | 5s (high load)    | 2.0%/year           | 1 year         |
-/// | 20s (normal)      | 0.5%/year           | 4 years        |
-/// | 40s (idle)        | 0.25%/year          | 8 years        |
+/// | Actual Block Time  | Effective Inflation | Halving Period |
+/// |--------------------|--------------------:|---------------:|
+/// | 3s (very high load)| ~3.3%/year          | ~0.6 years     |
+/// | 5s (high load)     | 2.0%/year           | 1 year         |
+/// | 20s (normal)       | 0.5%/year           | 4 years        |
+/// | 40s (idle)         | 0.25%/year          | 8 years        |
 ///
 /// # Canonical Emission Schedule (decided 2026-06-15, issue #351)
 ///
@@ -76,7 +78,7 @@ pub fn mainnet_policy() -> MonetaryPolicy {
         tail_inflation_bps: 200,
 
         // Block time: 5 seconds assumed for monetary calculations
-        // Actual block time varies 5-40s based on network load (see dynamic_timing)
+        // Actual block time varies 3-40s based on network load (see dynamic_timing)
         target_block_time_secs: ASSUMED_BLOCK_TIME,
         min_block_time_secs: 3,  // Absolute floor (consensus needs time)
         max_block_time_secs: 60, // Absolute ceiling

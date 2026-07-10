@@ -646,7 +646,7 @@ where Δ depends on network conditions and fee priority
 **Achieved via:**
 - Gossipsub message propagation
 - Fee-priority mempool ordering
-- Dynamic block timing (5-40s based on load)
+- Dynamic block timing (3-40s based on load)
 
 ### 6. Economic Redistribution Integrity
 

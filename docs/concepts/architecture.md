@@ -266,7 +266,7 @@ max_block_time_secs: 60,      // Absolute ceiling
 halving_interval: 6_307_200,  // ~1 year at 5s blocks
 ```
 
-### 2. Dynamic Block Timing (5-40s actual)
+### 2. Dynamic Block Timing (3-40s actual)
 
 **Location**: `botho/src/block.rs` → `dynamic_timing` module
 
@@ -295,7 +295,7 @@ These systems are **complementary**, not competing:
 │                              ▼                                   │
 │                     ┌────────────────┐                          │
 │                     │ Actual blocks  │                          │
-│                     │ 5-40s dynamic  │                          │
+│                     │ 3-40s dynamic  │                          │
 │                     └────────────────┘                          │
 │                              │                                   │
 │                              ▼                                   │
