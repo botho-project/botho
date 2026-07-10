@@ -8,6 +8,16 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/* Tailwind v4 auto-detection only scans the consuming app's own sources
+ * (node_modules — including pnpm workspace symlinks — is excluded), so
+ * utility classes used ONLY inside the shared workspace packages were
+ * silently missing from the generated CSS (e.g. the node-card `gap-x-8`
+ * and explorer search `pl-10` on /network and /explorer). Register the
+ * shared package sources explicitly; paths are relative to this file. */
+@source "../";
+@source "../../../features/src";
+@source "../../../adapters/src";
+
 @theme {
   /* Color palette - Dark pulse aesthetic */
   --color-void: #0a0b0f;

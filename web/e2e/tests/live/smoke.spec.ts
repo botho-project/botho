@@ -150,15 +150,15 @@ test.describe('Live smoke @ botho.io', () => {
 
     // The dropdown header + the three live ingress nodes. Scope the row
     // lookups to the dropdown container: the TRIGGER's accessible name also
-    // starts with the selected node's name ("Seed (validator) Testnet"), so an
+    // starts with the selected node's name ("US seed (Oregon) Testnet"), so an
     // unscoped getByRole is a strict-mode violation once the menu is open.
     const dropdown = page.locator('div.absolute', {
       has: page.getByText(/Trusted RPC ingress/i),
     })
     await expect(page.getByText(/Trusted RPC ingress/i)).toBeVisible()
-    const seed = dropdown.getByRole('button', { name: /^Seed \(validator\)/ })
-    const seed2 = dropdown.getByRole('button', { name: /^Seed 2 \(validator\)/ })
-    const faucetNode = dropdown.getByRole('button', { name: /^Faucet node/ })
+    const seed = dropdown.getByRole('button', { name: /^US seed \(Oregon\)/ })
+    const seed2 = dropdown.getByRole('button', { name: /^US seed 2 \(Oregon\)/ })
+    const faucetNode = dropdown.getByRole('button', { name: /^US faucet \(Oregon\)/ })
     await expect(seed).toBeVisible()
     await expect(seed2).toBeVisible()
     await expect(faucetNode).toBeVisible()
@@ -167,14 +167,14 @@ test.describe('Live smoke @ botho.io', () => {
     // the new selection (state change routed through selectIngress).
     await seed2.click()
     await expect(
-      page.getByRole('button', { name: /Seed 2/ }).first(),
+      page.getByRole('button', { name: /US seed 2/ }).first(),
       'trigger reflects newly selected ingress node'
     ).toBeVisible({ timeout: UI_TIMEOUT })
 
     // Selection persists across reload (localStorage-backed).
     await page.reload({ timeout: NAV_TIMEOUT })
     await page.waitForLoadState('networkidle')
-    await expect(page.getByRole('button', { name: /Seed 2/ }).first()).toBeVisible({
+    await expect(page.getByRole('button', { name: /US seed 2/ }).first()).toBeVisible({
       timeout: UI_TIMEOUT,
     })
   })

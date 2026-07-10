@@ -60,21 +60,21 @@ function getEnvFaucetEndpoint(): string | undefined {
 export const INGRESS_NODES: IngressNode[] = [
   {
     id: 'seed',
-    name: 'Seed (validator)',
+    name: 'US seed (Oregon)',
     role: 'Primary SCP validator',
     rpcEndpoint: 'https://seed.botho.io/rpc',
     servesFaucet: false,
   },
   {
     id: 'seed2',
-    name: 'Seed 2 (validator)',
+    name: 'US seed 2 (Oregon)',
     role: 'Secondary SCP validator',
     rpcEndpoint: 'https://seed2.botho.io/rpc',
     servesFaucet: false,
   },
   {
     id: 'faucet',
-    name: 'Faucet node',
+    name: 'US faucet (Oregon)',
     role: 'SCP validator + faucet',
     rpcEndpoint: 'https://faucet.botho.io/rpc',
     servesFaucet: true,
