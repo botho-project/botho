@@ -135,6 +135,18 @@ fn should_redial_bootstrap_peers(peer_count: usize, bootstrap_peer_count: usize)
     peer_count < bootstrap_peer_count
 }
 
+/// Decide whether the node should arm minting.
+///
+/// Minting is requested if EITHER the `--mint` CLI flag is passed OR
+/// `[minting] enabled = true` is set in config.toml. The CLI flag is a
+/// force-on override so operators can enable minting for a single run without
+/// editing config. Before this was wired up, `config.minting.enabled` was
+/// parsed but silently ignored on the run path — only `--mint` armed minting,
+/// contradicting the operator-facing docs (issue #767).
+fn want_to_mint(cli_mint_flag: bool, config_minting_enabled: bool) -> bool {
+    cli_mint_flag || config_minting_enabled
+}
+
 /// Check if minting should be enabled based on quorum config and connected
 /// peers
 fn check_minting_eligibility(
@@ -220,6 +232,13 @@ pub fn run(
     if let Some(threads) = mint_threads {
         config.minting.threads = threads;
     }
+
+    // Honor `[minting] enabled = true` from config.toml, not just the --mint CLI
+    // flag. The CLI flag remains a force-on override: minting arms if EITHER the
+    // flag is passed OR the config enables it. Without this,
+    // `config.minting.enabled` is parsed but silently ignored on the run path
+    // (see issue #767).
+    let mint = want_to_mint(mint, config.minting.enabled);
 
     // Check if minting is requested without a wallet
     if mint && !config.has_wallet() {
@@ -2982,6 +3001,31 @@ mod tests {
     // Mirror the production faucet thresholds used in `run`.
     const HIGH: u64 = 10_000_000_000_000_000; // 10,000 BTH
     const LOW: u64 = 5_000_000_000_000_000; // 5,000 BTH
+
+    // ---- Issue #767: `[minting] enabled = true` must arm minting, not just
+    // the --mint CLI flag ----
+
+    #[test]
+    fn config_enabled_arms_minting_without_cli_flag() {
+        // Regression test for issue #767: setting `[minting] enabled = true` in
+        // config.toml previously had no effect on the run path — only the
+        // --mint CLI flag armed minting. The config flag must work on its own.
+        assert!(want_to_mint(false, true));
+    }
+
+    #[test]
+    fn cli_flag_is_a_force_on_override() {
+        // The --mint CLI flag arms minting even when the config leaves it
+        // disabled, preserving the pre-existing force-on behavior.
+        assert!(want_to_mint(true, false));
+        assert!(want_to_mint(true, true));
+    }
+
+    #[test]
+    fn minting_stays_off_when_neither_source_requests_it() {
+        // With no CLI flag and config disabled, minting must not arm.
+        assert!(!want_to_mint(false, false));
+    }
 
     #[test]
     fn pauses_when_balance_high_and_mempool_empty() {
