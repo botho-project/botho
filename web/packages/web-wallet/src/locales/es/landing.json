@@ -1,0 +1,70 @@
+{
+  "brand": "Botho",
+  "nav": {
+    "explorer": "Explorador",
+    "network": "Red",
+    "docs": "Docs",
+    "hostNode": "Alojar un nodo",
+    "whitepaper": "Informe técnico",
+    "github": "GitHub",
+    "launchWallet": "Abrir monedero",
+    "openMenu": "Abrir menú",
+    "closeMenu": "Cerrar menú",
+    "blockExplorer": "Explorador de bloques",
+    "documentation": "Documentación"
+  },
+  "status": {
+    "testnetLive": "La red de pruebas está activa",
+    "productionPending": "Red de producción pendiente"
+  },
+  "hero": {
+    "titleLead": "Moneda privada para la",
+    "titleHighlight": "Era Cuántica",
+    "subtitle": "Finalidad instantánea con SCP. Direcciones de destinatario resistentes a la computación cuántica. Economía progresiva que premia la circulación frente al acaparamiento.",
+    "openWallet": "Abrir monedero",
+    "readDocs": "Leer la documentación"
+  },
+  "stats": {
+    "finality": { "label": "Finalidad", "value": "<5s", "note": "Consenso SCP" },
+    "ringSize": { "label": "Tamaño del anillo", "value": "20", "note": "Firmas CLSAG" },
+    "feeRange": { "label": "Rango de comisiones", "value": "1-6x", "note": "Según la procedencia" },
+    "addresses": { "label": "Direcciones", "value": "ML-KEM", "note": "Resistentes a la cuántica" }
+  },
+  "features": {
+    "private": {
+      "title": "Privado por defecto",
+      "description": "Cada transacción usa firmas de anillo. Sin modo transparente, sin el error de la dirección T. La privacidad es la base, no una función premium."
+    },
+    "economics": {
+      "title": "Economía progresiva",
+      "description": "Comisiones basadas en la procedencia de las monedas, no en la identidad. Las monedas recién acuñadas pagan más; las bien circuladas pagan menos. El 80 % de las comisiones se redistribuye mediante una lotería que favorece a los pequeños poseedores. Dividir no ayuda: las etiquetas rastrean el origen, no el importe."
+    },
+    "quantum": {
+      "title": "Resistente a la cuántica donde importa",
+      "description": "Las direcciones de destinatario usan ML-KEM-768: los ordenadores cuánticos no pueden rastrear quién recibió los fondos. Los compromisos de importe son seguros de forma incondicional. La privacidad del remitente se logra con eficientes firmas de anillo CLSAG."
+    },
+    "finality": {
+      "title": "Finalidad instantánea",
+      "description": "El consenso SCP hace que las transacciones sean definitivas en segundos. Sin reorganizaciones, sin esperas de 6 bloques, sin riesgo de doble gasto."
+    }
+  },
+  "cta": {
+    "title": "¿Listo para empezar?",
+    "subtitle": "Crea un monedero en segundos. Sin correo electrónico, sin KYC, sin seguimiento. O ejecuta tu propio nodo siempre activo con alojamiento gestionado.",
+    "createWallet": "Crear monedero",
+    "hostNode": "Alojar un nodo"
+  },
+  "footer": {
+    "projectName": "Proyecto Botho",
+    "explorer": "Explorador",
+    "documentation": "Documentación",
+    "whitepaper": "Informe técnico",
+    "github": "GitHub",
+    "motto": "\"Motho ke motho ka batho\" — Una persona es persona a través de otras personas"
+  },
+  "localeSwitcher": {
+    "label": "Idioma",
+    "english": "English",
+    "spanish": "Español"
+  }
+}

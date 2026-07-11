@@ -3,6 +3,10 @@ import { createRoot } from 'react-dom/client'
 import { registerSW } from 'virtual:pwa-register'
 import App from './App'
 import { shouldReloadOnControllerChange } from './lib/sw-reload'
+// Initialize i18next before the app renders (issue #764). This side-effect
+// import wires up react-i18next so `useTranslation()` works synchronously on
+// first paint — no flash of untranslated content on a non-default locale.
+import './lib/i18n'
 import '@botho/ui/styles/theme.css'
 
 // Auto-update the PWA after a deploy.

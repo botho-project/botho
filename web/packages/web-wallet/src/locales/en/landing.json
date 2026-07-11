@@ -1,0 +1,70 @@
+{
+  "brand": "Botho",
+  "nav": {
+    "explorer": "Explorer",
+    "network": "Network",
+    "docs": "Docs",
+    "hostNode": "Host a Node",
+    "whitepaper": "Whitepaper",
+    "github": "GitHub",
+    "launchWallet": "Launch Wallet",
+    "openMenu": "Open menu",
+    "closeMenu": "Close menu",
+    "blockExplorer": "Block Explorer",
+    "documentation": "Documentation"
+  },
+  "status": {
+    "testnetLive": "Test network is live",
+    "productionPending": "Production network pending"
+  },
+  "hero": {
+    "titleLead": "Private Currency for the",
+    "titleHighlight": "Quantum Era",
+    "subtitle": "Instant SCP finality. Quantum-safe recipient addresses. Progressive economics that reward circulation over hoarding.",
+    "openWallet": "Open Wallet",
+    "readDocs": "Read the Docs"
+  },
+  "stats": {
+    "finality": { "label": "Finality", "value": "<5s", "note": "SCP consensus" },
+    "ringSize": { "label": "Ring Size", "value": "20", "note": "CLSAG signatures" },
+    "feeRange": { "label": "Fee Range", "value": "1-6x", "note": "Based on provenance" },
+    "addresses": { "label": "Addresses", "value": "ML-KEM", "note": "Quantum-safe" }
+  },
+  "features": {
+    "private": {
+      "title": "Private by Default",
+      "description": "Every transaction uses ring signatures. No transparent mode, no T-addr mistake. Privacy is the baseline, not a premium feature."
+    },
+    "economics": {
+      "title": "Progressive Economics",
+      "description": "Fees based on coin provenance, not identity. Fresh mints pay more; well-traded coins pay less. 80% of fees redistributed via lottery that favors small holders. Splitting doesn't help—tags track origin, not amount."
+    },
+    "quantum": {
+      "title": "Quantum-Safe Where It Matters",
+      "description": "Recipient addresses use ML-KEM-768—quantum computers can't trace who received funds. Amount commitments are information-theoretically secure. Sender privacy via efficient CLSAG ring signatures."
+    },
+    "finality": {
+      "title": "Instant Finality",
+      "description": "SCP consensus means transactions are final in seconds. No reorgs, no 6-block waits, no double-spend risk."
+    }
+  },
+  "cta": {
+    "title": "Ready to Get Started?",
+    "subtitle": "Create a wallet in seconds. No email, no KYC, no tracking. Or run your own always-on node with managed hosting.",
+    "createWallet": "Create Wallet",
+    "hostNode": "Host a Node"
+  },
+  "footer": {
+    "projectName": "Botho Project",
+    "explorer": "Explorer",
+    "documentation": "Documentation",
+    "whitepaper": "Whitepaper",
+    "github": "GitHub",
+    "motto": "\"Motho ke motho ka batho\" — A person is a person through other people"
+  },
+  "localeSwitcher": {
+    "label": "Language",
+    "english": "English",
+    "spanish": "Español"
+  }
+}
