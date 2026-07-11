@@ -87,6 +87,15 @@ whitespace, integers only — no floats), signed as
 `Ed25519-sign(sk, "botho-operator-action-v1" || canonical_bytes)`. The domain
 separator prevents cross-protocol signature reuse.
 
+Cross-language drift between the browser signer and the node verifier — the #1
+failure mode for this feature — is guarded by a committed fixture
+(`web/packages/features/src/operator/fixtures/operator-action-fixtures.json`,
+pinned on the JS side by `action-envelope.test.ts`) and, on the Rust side, by
+`fixture_matches_node_canonicalization_no_drift` in `botho/src/operator_action.rs`,
+which fails `cargo test --workspace` if the node's canonical bytes drift from
+that fixture. Regenerate the fixture (per its `_comment` block) only when a
+canonicalization change is intentional (e.g. a new v2 field).
+
 ```json
 {
   "action": "quorum.pin_member",

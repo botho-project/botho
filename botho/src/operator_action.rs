@@ -1685,4 +1685,138 @@ mod tests {
         assert_eq!(outcome.audit_tag, "verify_refused:wrong_target");
         assert_eq!(outcome.action.as_deref(), Some("quorum.pin_member"));
     }
+
+    // -- Cross-language canonicalization drift guard (#759) ------------------
+    //
+    // The browser operator dashboard signs quorum-curation envelopes whose
+    // canonical bytes MUST byte-match what this node produces, or the node's
+    // parse-after-verify signature check fails in production (finding 1, the #1
+    // failure mode). The JS side is pinned by a committed fixture and
+    // `action-envelope.test.ts` asserts byte-equality against it. That fixture
+    // is a hand-maintained snapshot, so if the node's canonical byte production
+    // ever drifts (field order, optional-field handling, integer encoding, the
+    // domain separator, or the blake2b construction), the JS test keeps passing
+    // against the stale fixture while real signatures silently break at the node.
+    //
+    // This test closes that gap from the Rust side: it reconstructs each fixture
+    // envelope from the SAME seed key (`[1u8; 32]`) via the `build_signed` /
+    // `sign_str` helpers above — the closest proxy to the node's canonical byte
+    // production, since the node itself only ever verifies received bytes and has
+    // no standalone canonicalize function by design — and asserts the resulting
+    // canonical string, Ed25519 signature, and envelopeHash are byte-for-byte
+    // equal to the committed fixture. Any drift fails here under the existing
+    // `cargo test --workspace` CI gate, rather than as a production
+    // signature-verification failure.
+    //
+    // If a canonicalization change is intentional (e.g. a new v2 envelope field),
+    // regenerate the fixture per the recipe in its `_comment` block and update
+    // both the JS-consumed fixture and this test's expectations together.
+
+    /// Canonical no-whitespace, sorted-key JSON for a fixture `params` object.
+    ///
+    /// `serde_json::Value::Object` is backed by a `BTreeMap` here (the crate is
+    /// built WITHOUT the `preserve_order` feature), so `to_string` already
+    /// emits keys in lexicographic order with no insignificant whitespace
+    /// and integers as JSON numbers — the exact canonical form the operator
+    /// signer produces.
+    fn canonical_params_json(params: &Value) -> String {
+        serde_json::to_string(params).expect("params serialize")
+    }
+
+    #[test]
+    fn fixture_matches_node_canonicalization_no_drift() {
+        // Load the committed cross-language fixture that the browser side
+        // (action-envelope.test.ts) pins. Path is relative to THIS source file
+        // (botho/src/operator_action.rs): up out of `botho/src`, then into `web`.
+        let raw = include_str!(
+            "../../web/packages/features/src/operator/fixtures/operator-action-fixtures.json"
+        );
+        let fixture: Value = serde_json::from_str(raw).expect("fixture parses as JSON");
+
+        // The fixture is generated for the deterministic seed key [1u8; 32].
+        let sk = test_key(1);
+
+        // Guard the shared cross-language constants first: if any of these drift,
+        // every envelope below would drift too, but a targeted assertion gives a
+        // clearer failure.
+        assert_eq!(
+            fixture["signingKeySeed"].as_str().unwrap(),
+            hex::encode([1u8; 32]),
+            "fixture signingKeySeed must be the [1u8; 32] test seed"
+        );
+        assert_eq!(
+            fixture["publicKeyHex"].as_str().unwrap(),
+            pubkey_hex(&sk),
+            "node public key drifted from the committed fixture"
+        );
+        assert_eq!(
+            fixture["signerKeyId"].as_str().unwrap(),
+            signer_id(&sk),
+            "signerKeyId (fingerprint) drifted from the committed fixture"
+        );
+        assert_eq!(
+            fixture["domainSeparator"].as_str().unwrap().as_bytes(),
+            DOMAIN_SEPARATOR,
+            "domain separator drifted from the committed fixture"
+        );
+
+        let envelopes = fixture["envelopes"].as_array().expect("envelopes array");
+        assert!(
+            !envelopes.is_empty(),
+            "fixture must contain at least one envelope"
+        );
+
+        for entry in envelopes {
+            let name = entry["name"].as_str().unwrap_or("<unnamed>");
+            let fields = &entry["fields"];
+
+            let action = fields["action"].as_str().unwrap();
+            let target = fields["targetNode"].as_str().unwrap();
+            let nonce = fields["nonce"].as_str().unwrap();
+            let issued_at = fields["issuedAt"].as_u64().unwrap();
+            let expires_at = fields["expiresAt"].as_u64().unwrap();
+            let dry_run = fields["dryRun"].as_bool().unwrap();
+            // Optional field: present only for the acknowledgeDegenerate case.
+            let acknowledge_degenerate = fields
+                .get("acknowledgeDegenerate")
+                .and_then(|v| v.as_bool());
+            let params_json = canonical_params_json(&fields["params"]);
+
+            let signed = build_signed(
+                &sk,
+                action,
+                &params_json,
+                target,
+                issued_at,
+                expires_at,
+                nonce,
+                dry_run,
+                acknowledge_degenerate,
+            );
+
+            // 1. Canonical byte string must match exactly.
+            let expected_canonical = entry["canonical"].as_str().unwrap();
+            assert_eq!(
+                signed.envelope, expected_canonical,
+                "canonical bytes drifted for fixture entry {name:?}"
+            );
+
+            // 2. Ed25519 signature over (domain || canonical) must match exactly.
+            let expected_sig = entry["signature"].as_str().unwrap();
+            assert_eq!(
+                signed.signature_hex, expected_sig,
+                "signature drifted for fixture entry {name:?}"
+            );
+
+            // 3. envelopeHash (when the fixture pins one) must match the blake2b digest of
+            //    the canonical bytes — the node's audit-log hash (§6).
+            if let Some(expected_hash) = entry.get("envelopeHash").and_then(|v| v.as_str()) {
+                let actual_hash = crate::operator_key::blake2b_256_hex(signed.envelope.as_bytes());
+                assert_eq!(
+                    actual_hash, expected_hash,
+                    "envelopeHash drifted for fixture entry {name:?}"
+                );
+            }
+        }
+    }
 }
