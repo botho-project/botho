@@ -539,6 +539,26 @@ pub struct ChainSyncManager {
     /// penalised for a stale overlap after it resumes normal service or
     /// reconnects.
     peer_overlap_counts: HashMap<PeerId, u32>,
+    /// Local height at which a small (below-hysteresis) peer-ahead gap was
+    /// first observed while `Synced` (#766).
+    ///
+    /// The near-tip hysteresis ([`SYNC_BEHIND_THRESHOLD`]) assumes a small gap
+    /// is transient — gossip of the next contiguous block will close it — so it
+    /// deliberately does NOT re-enter catch-up for a 1..=9 block lag. That
+    /// assumption fails catastrophically for the *sole minter*: if it falls one
+    /// block behind, the block it needs is never gossiped to it (it is busy
+    /// minting a competing block on the stale parent), so the gap never closes
+    /// and the chain halts permanently (the #766 live-testnet incident).
+    ///
+    /// To break that deadlock without reintroducing thrash, we require a small
+    /// gap to *persist*: if we observe a peer still strictly ahead of us at the
+    /// *same* local height across a second status observation — i.e. gossip had
+    /// a full [`STATUS_REFRESH_INTERVAL`] to deliver the next block and did not
+    /// advance us at all — the "gossip will close it" assumption is disproven
+    /// and we re-enter catch-up via the sync state machine. This field records
+    /// the local height of the first such observation; it is cleared whenever
+    /// our height advances (gossip *did* make progress) or the gap closes.
+    small_gap_since_height: Option<u64>,
 }
 
 impl ChainSyncManager {
@@ -554,6 +574,7 @@ impl ChainSyncManager {
             reputation: ReputationManager::new(),
             last_status_refresh: Instant::now(),
             peer_overlap_counts: HashMap::new(),
+            small_gap_since_height: None,
         }
     }
 
@@ -617,6 +638,14 @@ impl ChainSyncManager {
     /// here, which — combined with a fixed-interval tick — re-anchored
     /// duplicate requests at the same start height and drove a retry loop.
     pub fn set_local_height(&mut self, height: u64) {
+        // If our committed height advanced, gossip (or a download) is making
+        // forward progress, so any previously observed "stuck" small gap is no
+        // longer stuck — reset the #766 persistence tracker. Only a gap that
+        // persists at the *same* local height across a status refresh proves
+        // gossip cannot close it.
+        if height > self.local_height {
+            self.small_gap_since_height = None;
+        }
         self.local_height = height;
     }
 
@@ -675,6 +704,73 @@ impl ChainSyncManager {
                     // gossip will close the gap. Mark synced.
                     self.state = SyncState::Synced;
                 }
+            }
+        }
+    }
+
+    /// Evaluate the #766 persistent-small-gap guard while `Synced` and, if the
+    /// gap has demonstrably failed to close via gossip, re-enter catch-up.
+    ///
+    /// The near-tip hysteresis leaves a small (1..=[`SYNC_BEHIND_THRESHOLD`])
+    /// gap to gossip. That is correct while the chain is advancing normally,
+    /// but deadlocks the *sole minter*: it falls one block behind, never
+    /// receives that block by gossip (it is minting a competing block on
+    /// the stale parent), and the gap never closes — a permanent halt.
+    ///
+    /// This guard requires such a small gap to *persist*: the first observation
+    /// of a below-threshold peer-ahead gap records the current local height; a
+    /// subsequent observation at the *same* local height (our tip has not moved
+    /// since — gossip had its chance and delivered nothing) proves gossip
+    /// cannot close it, so we download from the ahead peer instead.
+    /// `set_local_height` resets the tracker the moment our height
+    /// advances, so a gap that gossip *is* closing normally never trips
+    /// this and there is no download thrash.
+    ///
+    /// Returns `true` if the state transitioned to `Downloading`.
+    fn evaluate_persistent_small_gap(&mut self) -> bool {
+        if !matches!(self.state, SyncState::Synced) {
+            return false;
+        }
+        let Some((best_peer, height)) = self.best_peer().map(|(p, s)| (p, s.height)) else {
+            // No peer status: clear tracker, nothing to catch up to.
+            self.small_gap_since_height = None;
+            return false;
+        };
+
+        // A gap at or above the hysteresis threshold is handled by the ordinary
+        // `tick`/`on_status` path; a zero gap means we are at (or ahead of) the
+        // tip. Only a *small* strictly-positive gap (1..=SYNC_BEHIND_THRESHOLD)
+        // is the ambiguous case this guard resolves.
+        let small_gap =
+            height > self.local_height && height <= self.local_height + SYNC_BEHIND_THRESHOLD;
+        if !small_gap {
+            self.small_gap_since_height = None;
+            return false;
+        }
+
+        match self.small_gap_since_height {
+            // Second consecutive observation at the same local height: gossip
+            // had a full refresh interval and did not advance us. Disprove the
+            // "gossip will close it" assumption and re-enter catch-up.
+            Some(since) if since == self.local_height => {
+                debug!(
+                    local_height = self.local_height,
+                    peer_height = height,
+                    "Persistent small gap did not close via gossip; re-entering catch-up (#766)"
+                );
+                self.state = SyncState::Downloading {
+                    peer: best_peer,
+                    target_height: height,
+                };
+                self.pending_request = None;
+                self.small_gap_since_height = None;
+                true
+            }
+            // First observation (or a stale record from a since-advanced
+            // height): arm the tracker and give gossip one interval to close it.
+            _ => {
+                self.small_gap_since_height = Some(self.local_height);
+                false
             }
         }
     }
@@ -1109,11 +1205,19 @@ impl ChainSyncManager {
                     }
                 }
 
-                // Periodically re-poll a peer for its status. Status is
-                // request/response (not gossiped), so without this a synced
-                // node would never learn that a peer advanced and would rely
-                // solely on gossiped tip blocks to stay current.
+                // Below-hysteresis gap that gossip has failed to close: the
+                // sole-minter deadlock (#766). Evaluated once per status refresh
+                // so the two observations that constitute "persistent" are a
+                // full refresh interval apart — a gap gossip is genuinely
+                // closing advances our height in between and never trips this.
                 if self.last_status_refresh.elapsed() >= STATUS_REFRESH_INTERVAL {
+                    if self.evaluate_persistent_small_gap() {
+                        return None;
+                    }
+                    // Periodically re-poll a peer for its status. Status is
+                    // request/response (not gossiped), so without this a synced
+                    // node would never learn that a peer advanced and would rely
+                    // solely on gossiped tip blocks to stay current.
                     if let Some(peer) = connected_peers.first() {
                         self.last_status_refresh = Instant::now();
                         return Some(SyncAction::RequestStatus(*peer));
@@ -1291,6 +1395,130 @@ mod tests {
         assert!(
             matches!(manager.state(), SyncState::Downloading { .. }),
             "synced node beyond hysteresis threshold must re-enter catch-up"
+        );
+    }
+
+    #[test]
+    fn test_sole_minter_one_block_gap_reenters_catchup_when_gossip_stalls() {
+        // Regression for #766: the sole minter fell one block behind, never
+        // received that block by gossip (it was minting a competing block on the
+        // stale parent), so the below-hysteresis gap never closed and the chain
+        // halted permanently. A 1-block gap that PERSISTS across a status
+        // refresh (our height did not advance) must re-enter catch-up instead of
+        // reporting `synced: true` forever.
+        let mut manager = ChainSyncManager::new(2883);
+        let peer = make_peer_id();
+
+        // Reach Synced at our tip.
+        manager.on_status(peer, 2883, [1u8; 32]);
+        assert!(manager.is_synced());
+
+        // Peer externalizes block 2884; we are now one block behind on a
+        // different tip. The near-tip hysteresis leaves this to gossip, so we
+        // stay Synced for now (no thrash on a gap gossip *might* close).
+        manager.on_status(peer, 2884, [2u8; 32]);
+        assert!(
+            manager.is_synced(),
+            "a fresh 1-block gap is initially left to gossip"
+        );
+
+        // First refresh boundary: gossip has not advanced us (still 2883). The
+        // guard arms the persistence tracker and re-polls status. Still Synced.
+        manager.last_status_refresh =
+            Instant::now() - STATUS_REFRESH_INTERVAL - Duration::from_secs(1);
+        let action = manager.tick(&[peer]);
+        assert!(
+            matches!(action, Some(SyncAction::RequestStatus(p)) if p == peer),
+            "first stall observation re-polls status without downloading"
+        );
+        assert!(
+            manager.is_synced(),
+            "first observation only arms the tracker"
+        );
+
+        // The re-poll confirms the peer is still one block ahead.
+        manager.on_status(peer, 2884, [2u8; 32]);
+
+        // Second refresh boundary with our height STILL at 2883: gossip had a
+        // full interval and delivered nothing, so the gap is proven un-closeable
+        // by gossip. Re-enter catch-up and download block 2884 from the peer.
+        manager.last_status_refresh =
+            Instant::now() - STATUS_REFRESH_INTERVAL - Duration::from_secs(1);
+        manager.tick(&[peer]);
+        assert!(
+            matches!(
+                manager.state(),
+                SyncState::Downloading {
+                    target_height: 2884,
+                    ..
+                }
+            ),
+            "a persistent 1-block gap must re-enter catch-up (#766), got {:?}",
+            manager.state()
+        );
+        assert!(
+            !manager.status_snapshot().synced,
+            "must NOT report synced:true while a peer has externalized ahead (#766)"
+        );
+    }
+
+    #[test]
+    fn test_small_gap_closing_via_gossip_does_not_thrash_into_download() {
+        // The persistence guard must NOT fire when gossip IS closing the gap:
+        // our height advances between refreshes, so the tracker resets and we
+        // stay Synced (no redundant historical download). This guards against a
+        // #766 fix regressing the intentional near-tip hysteresis.
+        let mut manager = ChainSyncManager::new(100);
+        let peer = make_peer_id();
+
+        manager.on_status(peer, 100, [1u8; 32]);
+        assert!(manager.is_synced());
+
+        // Peer is 3 ahead (below hysteresis). First refresh arms the tracker.
+        manager.on_status(peer, 103, [2u8; 32]);
+        manager.last_status_refresh =
+            Instant::now() - STATUS_REFRESH_INTERVAL - Duration::from_secs(1);
+        manager.tick(&[peer]);
+        assert!(manager.is_synced());
+
+        // Gossip delivered the next block: our height advances to 101. This must
+        // reset the persistence tracker (gossip is working).
+        manager.set_local_height(101);
+        manager.on_status(peer, 103, [2u8; 32]);
+
+        // Next refresh: because height advanced since the first observation, the
+        // tracker was reset and this counts as a fresh first observation, not a
+        // stall. Still Synced, no download.
+        manager.last_status_refresh =
+            Instant::now() - STATUS_REFRESH_INTERVAL - Duration::from_secs(1);
+        manager.tick(&[peer]);
+        assert!(
+            manager.is_synced(),
+            "gossip advancing our height must reset the stall tracker; no download thrash"
+        );
+    }
+
+    #[test]
+    fn test_persistent_small_gap_ignored_off_refresh_boundary() {
+        // The guard is only evaluated on the status-refresh cadence, so the two
+        // observations that make a gap "persistent" are a full refresh interval
+        // apart. A tick that fires before the refresh interval must not advance
+        // the persistence state.
+        let mut manager = ChainSyncManager::new(100);
+        let peer = make_peer_id();
+
+        manager.on_status(peer, 100, [1u8; 32]);
+        manager.on_status(peer, 101, [2u8; 32]); // 1-block gap
+        assert!(manager.is_synced());
+
+        // Refresh timer is fresh: ticks fire but must not touch the tracker or
+        // transition state, no matter how many fire.
+        for _ in 0..5 {
+            manager.tick(&[peer]);
+        }
+        assert!(
+            manager.is_synced(),
+            "ticks before the refresh interval must not re-enter catch-up"
         );
     }
 
