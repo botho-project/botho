@@ -1,0 +1,202 @@
+# Self-Hosting the Operator Dashboard
+
+This runbook explains how a quorum operator can **build, verify, and self-host**
+the Botho operator dashboard (`/operator`) instead of trusting the shared
+Cloudflare Pages deploy at `botho.io` / `wallet.botho.io`.
+
+It is the operator-facing companion to
+[`docs/security/quorum-write-path.md`](../security/quorum-write-path.md) §8.3.1
+(bundle-integrity hardening) and parallels the node-binary procedure in
+[`reproducible-builds.md`](./reproducible-builds.md).
+
+## Why this exists
+
+The operator dashboard imports your operator Ed25519 signing key into the
+browser (encrypted under a mandatory passphrase, session-only, never sent to any
+host) and signs quorum-curation envelopes client-side. The serious residual risk
+(§8.3) is a **malicious bundle**: a compromised host could serve JavaScript that
+prompts you to sign attacker-chosen bytes.
+
+Two independent mitigations reduce this to near-zero for a careful operator:
+
+1. **Verify the bundle** you are about to run against a maintainer-published
+   hash, *before* you import your key. A tampered bundle produces a different
+   hash and is caught.
+2. **Self-host** that verified bundle from infrastructure you control, so the
+   shared Pages host is no longer in your trust path at all.
+
+This runbook covers both. Doing (1) alone already closes most of the risk; (2)
+removes the host entirely and is recommended for mainnet.
+
+## Prerequisites
+
+- Git
+- Node.js + [pnpm](https://pnpm.io/) (the repo uses pnpm workspaces under `web/`)
+- A trusted machine to build on
+- The maintainer-published bundle hash for the release you intend to run
+  (see [Where to find the published hash](#where-to-find-the-published-hash))
+
+## Step 1: Clone and check out a pinned commit
+
+Never build from a moving branch. Check out the exact tag/commit whose bundle
+hash the maintainer published.
+
+```bash
+git clone https://github.com/botho-project/botho.git
+cd botho
+git checkout <tag-or-commit>   # e.g. v0.3.2
+git rev-parse HEAD             # record this — it's what you're trusting
+```
+
+## Step 2: Build the bundle
+
+```bash
+cd web
+pnpm install --frozen-lockfile
+
+# Build the operator dashboard bundle (the whole SPA; /operator is one route).
+# Include the in-browser signer wasm so the signing path actually works:
+pnpm --filter @botho/web-wallet build:all
+```
+
+The build output lands in `web/packages/web-wallet/dist/`.
+
+> `build:all` runs `build:wasm` then `build`. If you only need to *inspect*
+> the bundle hash and not sign, plain `pnpm --filter @botho/web-wallet build`
+> is enough — but self-hosting for real use requires the wasm signer, so
+> prefer `build:all`.
+
+## Step 3: Verify the bundle hash
+
+Compute the aggregate bundle hash and compare it to the maintainer-published
+value **before you trust the bundle with your key**:
+
+```bash
+# From the repo root (or web/):
+web/scripts/verify-operator-bundle.sh --expected sha256-<published-value>
+```
+
+Or via the package script:
+
+```bash
+pnpm --filter @botho/web-wallet verify:operator-bundle -- --expected sha256-<published-value>
+```
+
+The script hashes every file in `dist/` (excluding source maps), then computes a
+single SHA-256 over the sorted per-file checksum list. On a match it prints
+`MATCH` and exits 0; on a mismatch it prints `MISMATCH`, tells you **not** to
+import your key, and exits 2.
+
+To see the full per-file listing (useful for auditing exactly what is in the
+bundle):
+
+```bash
+web/scripts/verify-operator-bundle.sh --manifest
+```
+
+### Reproducibility
+
+The bundle hash is deterministic: building the same pinned commit in two clean
+checkouts on the same toolchain produces the identical aggregate hash. If your
+hash does not match the published value:
+
+1. Confirm `git rev-parse HEAD` matches the published commit.
+2. Confirm `git status` is clean (no local modifications).
+3. Confirm you ran `pnpm install --frozen-lockfile` (lockfile-pinned deps).
+4. Re-run the build in a fresh `dist/` (`rm -rf web/packages/web-wallet/dist`).
+
+If it still differs, **do not proceed** — treat it as a potentially tampered
+source tree or a toolchain drift and report it.
+
+## Step 4: Serve the verified bundle
+
+Serve `web/packages/web-wallet/dist/` as static files from infrastructure you
+control. Any static file server works; the dashboard is a client-side SPA that
+talks to a node's read RPC / `operator_submitAction` endpoint over the network.
+
+Two examples:
+
+```bash
+# Option A: local-only preview (quickest — binds localhost)
+cd web
+pnpm --filter @botho/web-wallet preview   # serves dist/ on http://localhost:4173
+
+# Option B: any static file server you trust, on infra you control
+#   (nginx, caddy, `python3 -m http.server`, an internal Pages/Netlify you own, …)
+#   Point it at web/packages/web-wallet/dist/ and serve index.html as the SPA
+#   fallback for client-side routes like /operator.
+```
+
+Because the SPA uses client-side routing, configure your server to serve
+`index.html` for unknown paths (SPA fallback) so `/operator` resolves.
+
+> **RPC reachability.** The bundle reaches a node's RPC directly. For local
+> `pnpm preview`, the Vite preview proxy forwards `/rpc` to a seed node (see
+> `vite.config.ts`); for a custom static host you must ensure the browser can
+> reach your node's RPC (same-origin proxy or CORS), exactly as the shared
+> deploy does.
+
+## Step 5: Handle PWA auto-update (important)
+
+The SPA registers a service worker with `registerType: 'autoUpdate'`
+(`vite.config.ts`). On the shared deploy this silently fetches and activates a
+**newer** bundle after each deploy — which would defeat the whole point of
+pinning a verified bundle.
+
+When self-hosting, keep the served `dist/` **fixed**: serve one verified build
+and do not roll a newer one behind the same origin. With no newer bundle
+available, the service worker has nothing to pull, so your verified bundle stays
+in force. The service-worker files (`sw.js`, `workbox-*.js`) are themselves part
+of the verified trust set — `verify-operator-bundle.sh` hashes them — so a
+tampered service worker changes the aggregate hash and is caught by Step 3.
+
+If you *intentionally* upgrade to a newer release:
+
+1. Repeat Steps 1–3 at the new pinned commit against the new published hash.
+2. Replace the served `dist/` only after the new bundle verifies.
+3. Clear the old service worker / hard-refresh so the new bundle takes control.
+
+## Step 6: Confirm the dashboard works
+
+Load your self-hosted URL, open `/operator`, and confirm:
+
+- The **Actions** tab loads and lets you import your operator key (under a
+  passphrase).
+- The **dry-run preview** renders the canonical envelope before any signature
+  (this is the §8.3 mitigation — always read it and confirm the bytes are what
+  you intend before signing).
+- A dry-run against your real node returns the expected verdict.
+
+Only import your operator key into a bundle whose hash you verified in Step 3.
+
+## Where to find the published hash
+
+Maintainers publish the operator bundle hash for a release alongside the release
+artifacts (the same channel as `SHA256SUMS.txt` for node binaries — see
+[`reproducible-builds.md`](./reproducible-builds.md)). To publish one yourself as
+a maintainer:
+
+```bash
+git checkout <tag>
+cd web && pnpm install --frozen-lockfile && pnpm --filter @botho/web-wallet build:all
+web/scripts/verify-operator-bundle.sh     # prints: operator bundle hash: sha256-<...>
+```
+
+Publish that `sha256-<...>` value next to the release for the pinned commit.
+
+## What this does and does not remove from the trust path
+
+**Removed** by verify + self-host:
+
+- Trust in the shared Cloudflare Pages host serving an honest bundle.
+- Silent bundle replacement via PWA auto-update (when you serve a fixed build).
+
+**Still trusted** (out of scope for this runbook):
+
+- The pinned source commit and its dependency lockfile.
+- Your build machine and the toolchain on it.
+- The node you submit actions to (its gate + audit log — see §4, §6).
+
+Whether the in-browser key path is the right posture for mainnet at all —
+versus an air-gapped signer or hardware key — is a separate security-review
+decision tracked as a §8.3 follow-up, not something this runbook settles.

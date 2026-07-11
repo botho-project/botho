@@ -387,7 +387,7 @@ part of the same future-review gate as mode/threshold actions (§3).
 |---|---|---|---|
 | 8.1 | **Stolen read token** | View operator-only reads: per-peer gate classification (a targeting map), quorum configs, audit log, dry-run verdicts — until TTL (≤7d) or secret rotation | Change anything: the token is verify-only HMAC on the read path; `operator_submitAction` never accepts it |
 | 8.2 | **Captured envelope** (network vantage) | Learn one intended config change (TLS makes even this unlikely) | Replay (nonce), retarget (targetNode), outlive 5 min (expiry), or modify (signature) — §5 |
-| 8.3 | **Compromised dashboard host** (Cloudflare Pages) | Serve a malicious bundle: steal read tokens; prompt the operator to sign attacker-chosen envelopes (the serious risk) | Sign anything itself (no key on the host). Mitigations: the dashboard shows the canonical envelope before signing; malicious signed actions are still gate-checked (no fork), audit-logged (attributable), and bounded by the v1 action set (worst case = liveness harassment, recoverable via §7). Residual risk accepted for testnet; mainnet hardening (SRI, self-hosting the operator page) tracked in #709. |
+| 8.3 | **Compromised dashboard host** (Cloudflare Pages) | Serve a malicious bundle: steal read tokens; prompt the operator to sign attacker-chosen envelopes (the serious risk) | Sign anything itself (no key on the host). Mitigations: the dashboard shows the canonical envelope before signing; malicious signed actions are still gate-checked (no fork), audit-logged (attributable), and bounded by the v1 action set (worst case = liveness harassment, recoverable via §7). Residual risk accepted for testnet; mainnet hardening (SRI, self-hosting the operator page) tracked in #709/#757 — see §8.3.1 for the decided approach and `docs/operations/self-hosted-operator-dashboard.md` for the operator procedure. |
 | 8.4 | **Compromised node** (root) | Ignore/rewrite its own config, forge its own audit log, lie in RPC responses — that node is lost regardless of this design | Sign actions against OTHER nodes (no private key material anywhere on nodes — the design's core invariant); other nodes' gates and logs are unaffected |
 | 8.5 | **Malicious insider with the operator key** | Everything the write path allows: liveness harassment within the v1 action set, degenerate-posture edits down to membership 2 (self-acknowledged, attributable) | Fork the fleet (gate, §7.1); drive any node to a self-externalizing solo quorum (membership-1 hard floor, §3); flip mode/threshold (not in v1); enroll new keys or erase fleet-wide audit trail (key list and logs are SSH-domain). Recovery: revoke via §2; SSH ladder §7. |
 
@@ -399,6 +399,61 @@ gate-accepted edit could still make a node diverge (solo self-
 externalization). The SSH superpower remains, unchanged, as the recovery
 root. The new surface strictly dominates the status quo for safety while
 adding operator convenience.
+
+### 8.3.1 Addendum — 8.3 mainnet hardening: bundle integrity (SRI vs. self-hosting)
+
+8.3 accepts, for testnet, the residual risk that a compromised Pages host
+serves a malicious dashboard *bundle* that prompts the operator to sign
+attacker-chosen bytes. This addendum records the mainnet-hardening approach
+decided in #757 (follow-up to #709), so the choice and its trade-offs are not
+re-litigated at mainnet time.
+
+**Why "SRI on the operator page" is not a drop-in fix.** `/operator` is not a
+standalone deploy — it is one route inside the shared Vite SPA
+(`web/packages/web-wallet`), served from a single Cloudflare Pages project
+(`project-name=botho`) to `botho.io`/`wallet.botho.io` from one `dist/` build.
+Browser Subresource Integrity (`<script integrity="sha384-…">`) pins hashes of
+**sub-resources referenced by an HTML document the consumer controls**; it
+cannot pin the top-level, same-origin HTML document itself. So there are two
+distinct ways to close 8.3, with different cost/guarantee profiles:
+
+| Approach | Guarantee | Cost | Status |
+|---|---|---|---|
+| **(a) Split-build + true SRI** — give `/operator` its own Vite build / Pages target whose `index.html` pins `integrity=` hashes for its own JS/CSS chunks. | Browser *enforces* integrity: a tampered chunk fails to load, no operator action required. | High — a second build artifact + deploy target + CI job kept in sync with the shared `@botho/features`/`@botho/core` packages; touches Vite config, Pages topology, and the App router. | **Deferred to follow-up** (assessed **L**). Filed as a separate issue; see PR for #757. |
+| **(b) Whole-bundle hash pin + out-of-band verify** — a maintainer publishes an aggregate hash of the built `dist/` tree; the operator verifies their bundle against it **before importing their key**, and/or self-hosts that exact bundle. | Operator-enforced: integrity depends on the operator running the check. No browser enforcement, but no host-topology change. | Low — one verify script + a runbook. Composes directly with self-hosting. | **Shipped in #757.** `web/scripts/verify-operator-bundle.sh` + `docs/operations/self-hosted-operator-dashboard.md`. |
+
+**Interaction with self-hosting.** Approach (b) is the natural companion to the
+second §9 hardening item ("self-hosting the operator page"): an operator who
+builds the bundle from a pinned tag, verifies its aggregate hash against a
+maintainer-published value, and serves that `dist/` from infrastructure they
+control has removed the Pages host from the trust path entirely — without
+waiting on the split-build. (a) remains desirable on top of (b) for the
+non-self-hosting operator, because it moves enforcement from "operator
+remembers to run the check" to "the browser refuses the bad bundle." See
+`docs/operations/self-hosted-operator-dashboard.md` for the operator-facing
+procedure.
+
+**PWA auto-update caveat.** The SPA registers a service worker with
+`registerType: 'autoUpdate'` (`vite.config.ts`), which auto-fetches and
+activates a new bundle after a deploy. Under either approach this means a
+verified/pinned bundle can be silently replaced by a later one. The
+self-hosting runbook documents the required mitigation: serve a fixed,
+already-verified `dist/` (no rolling deploy behind it), so there is no newer
+bundle for the service worker to pull; and re-verify the hash after any
+intentional update before trusting a new signing session. Note that the
+service-worker files (`sw.js`, `workbox-*.js`) are **inside** the verified
+trust set — `verify-operator-bundle.sh` hashes them along with the app chunks —
+so a tampered service worker changes the aggregate hash and is caught.
+
+**Not closed by this addendum (human/operator follow-ups):**
+
+- The **§8.3 threat-model re-review** (checklist item 3 in #757 / §9) — deciding
+  whether an in-browser key path is the right mainnet posture at all, versus an
+  air-gapped signer or hardware key — is a security-reviewer judgement, not a
+  code change.
+- An operator **actually standing up** their own hosting for the bundle is an
+  infrastructure action outside this repo; the repo's job (done here) is to make
+  self-hosting *possible, scripted, and documented*.
 
 ## 9. Review checklist (for the #708 reviewer)
 
@@ -417,4 +472,8 @@ adding operator convenience.
 - [ ] Audit log records authenticated outcomes only; pre-signature failures
       are rate-limited tracing + a counter (round-1 finding 3).
 - [ ] 8.3's residual risk (malicious bundle prompting the operator) is
-      acceptable for testnet, and the mainnet hardening list is filed.
+      acceptable for testnet, and the mainnet hardening list is filed. The
+      decided mainnet approach and its trade-offs are recorded in §8.3.1;
+      the whole-bundle verify path (`web/scripts/verify-operator-bundle.sh` +
+      `docs/operations/self-hosted-operator-dashboard.md`) is in place, and the
+      split-build/true-SRI option is deferred to a tracked follow-up.
