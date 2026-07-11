@@ -213,6 +213,17 @@ For high-security deployments:
 3. Verify GPG signatures when available
 4. Audit the build script before running
 
+## Web Operator Bundle
+
+The node binaries above are not the only artifact operators verify. The
+**operator dashboard** (`/operator`) is a browser bundle that imports the
+operator signing key, so operators can verify and self-host it using the same
+build-then-compare-hashes discipline. See
+[`self-hosted-operator-dashboard.md`](./self-hosted-operator-dashboard.md) for
+the web-bundle procedure (`web/scripts/verify-operator-bundle.sh`) and
+[`../security/quorum-write-path.md`](../security/quorum-write-path.md) §8.3.1 for
+why it matters.
+
 ## Resources
 
 - [Reproducible Builds](https://reproducible-builds.org/) - Standards and best practices
