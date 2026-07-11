@@ -1,4 +1,12 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { useEffect } from 'react'
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Navigate,
+  useLocation,
+} from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { NetworkProvider } from './contexts/network'
 import { WalletProvider } from './contexts/wallet'
 import { LandingPage } from './pages/landing'
@@ -11,6 +19,8 @@ import { ExplorerPage } from './pages/explorer'
 import { NetworkPage } from './pages/network'
 import { OperatorPage } from './pages/operator'
 import { NodePage, NodeSuccessPage, NodeStatusPage } from './pages/node'
+import { parseLocalePath } from './lib/locale-path'
+import { DEFAULT_LOCALE, storeLocale } from './lib/i18n'
 
 /**
  * Decide what `/` should render.
@@ -37,34 +47,94 @@ function RootRoute() {
   return <LandingPage />
 }
 
+/**
+ * The application's route table, expressed in locale-agnostic (unprefixed)
+ * paths — `/`, `/wallet`, `/explorer`, ...
+ *
+ * Locale routing (issue #764) is handled one level up by `LocaleRoutes`, which
+ * strips any leading `/:locale` segment from the URL before matching here. That
+ * keeps every route literal (`/wallet`, not `/:locale/wallet`), so all existing
+ * absolute links and e2e expectations (`a[href="/wallet"]`, the wallet-host
+ * `/` -> `/wallet` redirect) keep working unchanged, and a non-default locale
+ * like `/es/wallet` resolves to exactly the same route as `/wallet`.
+ */
+function AppRoutes() {
+  return (
+    <Routes>
+      <Route path="/" element={<RootRoute />} />
+      {/* Landing is always reachable directly, regardless of host. */}
+      <Route path="/home" element={<LandingPage />} />
+      <Route path="/about" element={<LandingPage />} />
+      <Route path="/wallet" element={<WalletPage />} />
+      <Route path="/claim" element={<ClaimPage />} />
+      <Route path="/pay" element={<PayPage />} />
+      <Route path="/contacts" element={<ContactsPage />} />
+      <Route path="/explorer" element={<ExplorerPage />} />
+      <Route path="/network" element={<NetworkPage />} />
+      {/* Operator dashboard — public read surface (#706, #695 P4.1). */}
+      <Route path="/operator" element={<OperatorPage />} />
+      <Route path="/explorer/tx/:hash" element={<ExplorerPage />} />
+      <Route path="/explorer/block/:hash" element={<ExplorerPage />} />
+      <Route path="/docs" element={<DocsPage />} />
+      <Route path="/docs/*" element={<DocsPage />} />
+      {/* Botho-as-a-Service "Get a node" surface (#458 §4 / #504). */}
+      <Route path="/node" element={<NodePage />} />
+      <Route path="/node/success" element={<NodeSuccessPage />} />
+      {/* Node status page reached via magic link (#458 §4 / #507). */}
+      <Route path="/node/status" element={<NodeStatusPage />} />
+    </Routes>
+  )
+}
+
+/**
+ * Locale-routing shell (issue #764, phase 1).
+ *
+ * Reads the real URL, splits off any leading supported-locale segment (`/es`),
+ * and renders the locale-agnostic `AppRoutes` against the *remaining* path via
+ * the `location` prop. English (the default) is unprefixed; an unsupported or
+ * absent prefix falls back to the default locale (so `/xx/...` renders in
+ * English rather than 404-ing).
+ *
+ * As a side effect it keeps i18next's active language, the persisted choice,
+ * and the document's `<html lang>` attribute in sync with the URL — navigation
+ * is the single source of truth for the active language.
+ */
+function LocaleRoutes() {
+  const { i18n } = useTranslation()
+  const location = useLocation()
+  const { locale, rest } = parseLocalePath(location.pathname)
+
+  useEffect(() => {
+    if (i18n.language !== locale) {
+      void i18n.changeLanguage(locale)
+    }
+    storeLocale(locale)
+    if (typeof document !== 'undefined') {
+      document.documentElement.lang = locale
+    }
+  }, [i18n, locale])
+
+  // For the default locale the URL is already unprefixed; render it directly so
+  // `useLocation()` in child pages continues to report the real path. For a
+  // non-default locale, present the locale-stripped path to `AppRoutes`.
+  if (locale === DEFAULT_LOCALE) {
+    return <AppRoutes />
+  }
+
+  const strippedLocation = { ...location, pathname: rest }
+  return (
+    <Routes location={strippedLocation}>
+      <Route path="/*" element={<AppRoutes />} />
+    </Routes>
+  )
+}
+
 function App() {
   return (
     <NetworkProvider>
       <WalletProvider>
         <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<RootRoute />} />
-            {/* Landing is always reachable directly, regardless of host. */}
-            <Route path="/home" element={<LandingPage />} />
-            <Route path="/about" element={<LandingPage />} />
-            <Route path="/wallet" element={<WalletPage />} />
-            <Route path="/claim" element={<ClaimPage />} />
-            <Route path="/pay" element={<PayPage />} />
-            <Route path="/contacts" element={<ContactsPage />} />
-            <Route path="/explorer" element={<ExplorerPage />} />
-            <Route path="/network" element={<NetworkPage />} />
-            {/* Operator dashboard — public read surface (#706, #695 P4.1). */}
-            <Route path="/operator" element={<OperatorPage />} />
-            <Route path="/explorer/tx/:hash" element={<ExplorerPage />} />
-            <Route path="/explorer/block/:hash" element={<ExplorerPage />} />
-            <Route path="/docs" element={<DocsPage />} />
-            <Route path="/docs/*" element={<DocsPage />} />
-            {/* Botho-as-a-Service "Get a node" surface (#458 §4 / #504). */}
-            <Route path="/node" element={<NodePage />} />
-            <Route path="/node/success" element={<NodeSuccessPage />} />
-            {/* Node status page reached via magic link (#458 §4 / #507). */}
-            <Route path="/node/status" element={<NodeStatusPage />} />
-          </Routes>
+          <LocaleRoutes />
         </BrowserRouter>
       </WalletProvider>
     </NetworkProvider>
