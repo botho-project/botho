@@ -631,6 +631,9 @@ pub fn generate_synthetic_webrtc_pattern(packet_count: usize) -> TrafficPattern 
 }
 
 #[cfg(test)]
+// Test diagnostics printed to stdout (visible under `cargo test -- --nocapture`);
+// not part of production output. Mirrors the `commands` carve-out in lib.rs.
+#[allow(clippy::print_stdout)]
 mod tests {
     use super::*;
 
