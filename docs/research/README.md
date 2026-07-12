@@ -9,6 +9,7 @@ This section contains research analysis, comparisons, and technical evaluations.
 | [Botho vs zkVM Analysis](botho-vs-zkvm-analysis.md) | Comparison with zero-knowledge virtual machines |
 | [zkVM Groth16 Analysis](zkvm-groth-analysis.md) | Technical analysis of Groth16 proving systems |
 | [Useful PoW: ZK-Proof Generation](useful-pow-zk-proof-generation.md) | Why prime-finding/factoring PoUW is rejected and ZK-proof generation is the only useful-PoW direction that fits Botho (parked) |
+| [Product-Decision Synthesis (2026-07)](product-decision-synthesis-2026-07.md) | Roadmap synthesis folding #441/#458 open product decisions into a sequenced plan; regulatory posture, mobile custody UX, DePIN GTM lessons. Two steps are open maintainer decisions. |
 
 ## Purpose
 
