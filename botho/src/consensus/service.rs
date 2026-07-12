@@ -357,6 +357,27 @@ pub struct ConsensusService {
     /// participation gate.
     connected_peers: usize,
 
+    /// Startup sync gate (issue #770): has this node caught up to the fleet tip
+    /// since the current process started?
+    ///
+    /// Defaults to `true` so solo nodes, dev/genesis networks, and unit tests
+    /// are unaffected — they have no fleet to fall behind. The node run loop
+    /// sets this to `false` at startup ONLY when the node expects peers
+    /// (`min_peers >= 1`) and its on-disk chain height is behind the fleet tip,
+    /// and flips it back to `true` once [`ChainSyncManager`] reports `Synced`
+    /// (see `commands::run`). While `false`,
+    /// [`Self::should_propose_this_round`] withholds nomination/balloting
+    /// so a restarted node cannot re-enter SCP and mint at its stale local
+    /// slot before catch-up completes — the #766 live-testnet halt (chain
+    /// wedged at height 2884 while peers were at 2909).
+    ///
+    /// This gates only *local proposing/minting*, not SCP message
+    /// reception/relay: a resyncing node still gossips and tracks peer messages
+    /// so it is not deaf to the network. It touches no wire-protocol or
+    /// validity semantics — it is purely local startup sequencing (no hard
+    /// fork).
+    initial_sync_complete: bool,
+
     /// Highest SCP `slot_index` each QUORUM-MEMBER peer has advertised in a
     /// gossiped SCP message (issue #431). Used to corroborate a forward anchor
     /// against a v-blocking set of distinct quorum members before
@@ -527,6 +548,10 @@ impl ConsensusService {
             // the operator declared an expectation of peers.
             min_peers: 0,
             connected_peers: 0,
+            // Default true: no startup sync gate for solo/dev/test nodes. The
+            // run loop flips this to false at startup only when a peer-expecting
+            // node boots behind the fleet tip (issue #770).
+            initial_sync_complete: true,
             peer_advertised_slots: HashMap::new(),
         }
     }
@@ -547,6 +572,26 @@ impl ConsensusService {
     /// PeerDisconnected and once at startup.
     pub fn set_connected_peers(&mut self, connected_peers: usize) {
         self.connected_peers = connected_peers;
+    }
+
+    /// Startup sync gate (issue #770): tell the consensus service whether this
+    /// node has caught up to the fleet tip since the process started.
+    ///
+    /// Called by the node run loop. Set to `false` at startup when a
+    /// peer-expecting node boots behind the fleet tip, and back to `true` once
+    /// [`ChainSyncManager`] reaches `Synced`. While `false`,
+    /// [`Self::should_propose_this_round`] withholds nomination/balloting so a
+    /// restarted node cannot mint at its stale local slot before catch-up
+    /// completes (the #766 halt). See [`Self::initial_sync_complete`].
+    pub fn set_initial_sync_complete(&mut self, complete: bool) {
+        self.initial_sync_complete = complete;
+    }
+
+    /// Whether the startup sync gate currently permits proposing (issue #770).
+    /// Exposed for status/RPC and tests; `true` means the node has caught up
+    /// (or is a solo/dev node that never gates).
+    pub fn initial_sync_complete(&self) -> bool {
+        self.initial_sync_complete
     }
 
     /// Participation gate (issue #428): may this node propose/externalize a
@@ -570,8 +615,19 @@ impl ConsensusService {
     /// for *blocks*) — no deadlock.
     fn should_propose_this_round(&self) -> bool {
         if self.min_peers == 0 {
-            // Genuine single-node network: always mint solo.
+            // Genuine single-node network: always mint solo. The startup sync
+            // gate never applies here — a solo node has no fleet to fall behind
+            // (issue #770 solo carve-out).
             return true;
+        }
+        // Startup sync gate (issue #770): a peer-expecting node that booted
+        // behind the fleet tip must NOT nominate/ballot at its stale local slot
+        // until catch-up sync completes. Proposing before sync re-enters SCP at
+        // the stale slot and races the block download — the #766 halt. Defaults
+        // to true (set only by the run loop when actually behind at startup), so
+        // there is no regression for a clean restart already at tip.
+        if !self.initial_sync_complete {
+            return false;
         }
         // Expects peers: only propose once enough are connected to form the
         // configured quorum. If peers later drop below the expectation the
@@ -1387,6 +1443,23 @@ impl ConsensusService {
     ///
     /// This advances the SCP slot to `chain_height + 1`, matching
     /// [`ConsensusService::new`]'s `initial_slot = initial_height + 1`.
+    ///
+    /// # Canonical slot-derivation rule (issue #770, item 2)
+    ///
+    /// On (re-)entry to SCP — whether at process start
+    /// ([`ConsensusService::new`]) or after catch-up sync (here) — the SCP
+    /// slot index is ALWAYS derived from the local committed chain height
+    /// as `chain_height + 1`. It is NEVER seeded from a peer's advertised
+    /// slot or wall-clock round count. During an outage, running peers
+    /// advance their slot by wall clock via [`Self::advance_slot`]
+    /// (one externalization per round, including empty/no-op rounds), so their
+    /// slot index can outrun block height; a restarted node deliberately does
+    /// not copy that drifted counter. Instead it re-enters at `chain_height
+    /// + 1` and lets normal ballot exchange with peers repair any residual
+    /// offset once it is participating at the correct height. This keeps a
+    /// single, testable derivation rule ("slot = local height + 1 at
+    /// rejoin") rather than two independent mechanisms that agree only when
+    /// no halt has occurred.
     ///
     /// # SAFETY
     ///
@@ -2821,6 +2894,170 @@ mod tests {
             before,
             "solo mode must not fast-forward"
         );
+    }
+
+    // ---- Issue #770: startup sync gate on the SCP proposer ----
+
+    /// A peer-expecting node that boots behind the fleet tip must NOT
+    /// nominate/ballot at its stale local slot until initial sync completes,
+    /// even when peer-count quorum is already satisfied. This is the SCP-side
+    /// half of the #766 fix (the run-loop half gates `minting_enabled`).
+    #[test]
+    fn startup_sync_gate_withholds_proposing_until_synced() {
+        let cfg = ConsensusConfig::fixed_timing(0);
+        let mut svc = ConsensusService::new(
+            node(1),
+            recommended_quorum(&[1, 2]),
+            cfg,
+            genesis_chain_state(),
+        );
+        // Peer-count quorum is satisfied (the #766 precondition).
+        svc.set_min_peers(1);
+        svc.set_connected_peers(1);
+        assert!(
+            !svc.is_solo_mode(),
+            "2-of-2 quorum: not solo, so the participation + transitional guards \
+             would otherwise permit proposing"
+        );
+
+        // Node is still catching up to the fleet tip.
+        svc.set_initial_sync_complete(false);
+        assert!(
+            !svc.should_propose_this_round(),
+            "issue #770: a node behind the fleet tip must not propose/ballot at \
+             its stale slot even with quorum reachable"
+        );
+
+        // A submitted coinbase must be WITHHELD (not externalized) while behind.
+        let prev = [0u8; 32];
+        let tx = intrinsic_valid_minting_tx(1, prev, 1);
+        let bytes = bincode::serialize(&tx).expect("serialize");
+        svc.submit_minting_tx(tx.hash(), tx.pow_priority(), bytes);
+        svc.propose_pending_values();
+        assert!(
+            svc.externalized.is_none(),
+            "issue #770: node behind the tip must withhold its block, not \
+             re-enter SCP at the stale slot"
+        );
+        assert!(
+            !svc.pending_values.is_empty(),
+            "withheld coinbase must stay queued, not be dropped"
+        );
+
+        // Once initial sync completes, the gate releases and the node proposes
+        // via federated SCP (no regression to normal federated minting).
+        svc.set_initial_sync_complete(true);
+        assert!(
+            svc.should_propose_this_round(),
+            "gate must release once initial sync completes"
+        );
+        svc.propose_pending_values();
+        assert!(
+            !svc.proposed_values.is_empty(),
+            "after sync completes, the node must propose its value into SCP"
+        );
+    }
+
+    /// The startup sync gate must never block a genuine solo node
+    /// (`min_peers == 0`). A solo node has no fleet to fall behind and is
+    /// seeded `initial_sync_complete == true` by default; even if something
+    /// set it false, the `min_peers == 0` carve-out in
+    /// `should_propose_this_round` short-circuits before the sync gate is
+    /// consulted.
+    #[test]
+    fn startup_sync_gate_never_blocks_solo_node() {
+        let mut svc = solo_service();
+        assert_eq!(svc.min_peers, 0, "solo node has no peer expectation");
+        assert!(
+            svc.initial_sync_complete(),
+            "solo node defaults to synced (no fleet to fall behind)"
+        );
+        assert!(svc.should_propose_this_round());
+
+        // Even if the flag is forced false, the solo carve-out wins — no deadlock.
+        svc.set_initial_sync_complete(false);
+        assert!(
+            svc.should_propose_this_round(),
+            "issue #770 liveness carve-out: a min_peers==0 solo node must ALWAYS \
+             be able to mint, the sync gate must never deadlock it"
+        );
+    }
+
+    /// A federated node that boots already synced (the common clean-restart
+    /// case) is NOT delayed by the gate: the run loop seeds
+    /// `initial_sync_complete == true` for a node at/near tip, so proposing is
+    /// permitted immediately once quorum forms — no regression.
+    #[test]
+    fn startup_sync_gate_does_not_delay_node_already_at_tip() {
+        let cfg = ConsensusConfig::fixed_timing(0);
+        let mut svc = ConsensusService::new(
+            node(1),
+            recommended_quorum(&[1, 2]),
+            cfg,
+            genesis_chain_state(),
+        );
+        svc.set_min_peers(1);
+        svc.set_connected_peers(1);
+        // Default: initial_sync_complete == true (a node at tip is seeded true).
+        assert!(svc.initial_sync_complete());
+        assert!(
+            svc.should_propose_this_round(),
+            "a node already at tip must not be delayed by the #770 sync gate"
+        );
+    }
+
+    /// Canonical slot-derivation rule (issue #770, item 2): on rejoin the SCP
+    /// slot is ALWAYS derived from the LOCAL committed chain height as
+    /// `chain_height + 1`, never from a peer's drifted wall-clock slot counter.
+    ///
+    /// Simulates the #766 halt-and-restart divergence: during an outage running
+    /// peers advance their slot by wall clock (empty rounds included), so their
+    /// slot index outruns block height. A restarted node deliberately re-enters
+    /// at `local_height + 1`, not at the peers' inflated slot, and lets normal
+    /// ballot exchange repair any residual offset.
+    #[test]
+    fn slot_derivation_is_canonical_local_height_plus_one_across_halt() {
+        let cfg = ConsensusConfig::fixed_timing(1);
+        let qs = recommended_quorum(&[1, 2]);
+
+        // The node restarts from its on-disk ledger at height 2884 (the #766
+        // wedged height). ConsensusService::new seeds the SCP slot from the
+        // LOCAL height: initial_slot = height + 1 = 2885.
+        let mut restarted = ChainState::default();
+        restarted.height = 2884;
+        let mut node1 = ConsensusService::new(node(1), qs, cfg, restarted);
+        assert_eq!(
+            node1.current_slot(),
+            2885,
+            "SCP slot on (re)entry must be derived from LOCAL height + 1, not a \
+             peer's wall-clock slot counter (issue #770 canonical rule)"
+        );
+
+        // During the outage the fleet advanced to block height 2909 (peers were
+        // balloting a higher slot still, but the canonical rule keys off block
+        // height, not the peers' inflated slot index). After catch-up sync to
+        // 2909, the node reconciles its slot to 2909 + 1 = 2910 — again LOCAL
+        // height + 1, NOT whatever inflated slot the peers happen to be on.
+        assert!(
+            node1.sync_scp_slot_to_chain(2909),
+            "must reconcile the slot after catch-up sync"
+        );
+        assert_eq!(
+            node1.current_slot(),
+            2910,
+            "reconciled slot must be synced-chain-height + 1 (canonical rule), \
+             independent of peers' drifted wall-clock slot count"
+        );
+
+        // The rule is monotonic and idempotent: never moves backward, never
+        // re-seeds from a peer's higher slot claim.
+        assert!(!node1.sync_scp_slot_to_chain(2909));
+        assert_eq!(node1.current_slot(), 2910);
+        assert!(
+            !node1.sync_scp_slot_to_chain(2000),
+            "canonical rule never moves the slot backward toward a lower height"
+        );
+        assert_eq!(node1.current_slot(), 2910);
     }
 
     // ----------------------------------------------------------------------

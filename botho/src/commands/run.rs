@@ -181,6 +181,35 @@ fn check_minting_eligibility(
     )
 }
 
+/// Decide whether minting may be armed, combining the peer/quorum gate with the
+/// startup sync gate (issue #770).
+///
+/// This is the pure decision function behind every `minting_enabled = true`
+/// transition on the run path. It is deliberately kept free of `Config`/network
+/// types so it can be unit-tested exhaustively over the
+/// {quorum ok/not ok} x {synced/not synced} x {solo / federated} matrix,
+/// mirroring how [`check_minting_eligibility`] and
+/// [`should_redial_bootstrap_peers`] are already unit-tested independent of the
+/// async event loop.
+///
+/// The startup sync gate is **additive** to the existing peer/quorum gate, not
+/// a replacement: a restarted node can satisfy peer-count quorum while still
+/// being behind on blocks (exactly the #766 scenario — quorum reachable at the
+/// stale slot 2884 while peers balloted 2909). Both must hold before minting
+/// arms.
+///
+/// # Parameters
+/// - `quorum_ok`: the peer/quorum reachability result from
+///   [`check_minting_eligibility`] (which already folds in `want_to_mint`).
+/// - `initial_sync_complete`: `true` once the node has caught up to the fleet
+///   tip this session. For a genuine solo node (no peers, `min_peers == 0`) or
+///   a node that boots already at/near tip, the run loop seeds this `true`, so
+///   the gate never delays them — no regression for the common clean-restart or
+///   solo cases.
+fn should_arm_minting(quorum_ok: bool, initial_sync_complete: bool) -> bool {
+    quorum_ok && initial_sync_complete
+}
+
 /// Build the consensus config, honoring an optional test-only fixed-timing
 /// override.
 ///
@@ -744,6 +773,25 @@ async fn run_async(mut config: Config, config_path: &Path, mint: bool) -> Result
     // requesting the missing block range and applying it sequentially.
     let mut sync_manager = ChainSyncManager::new(local_height);
 
+    // Startup sync gate (issue #770): whether this node has caught up to the
+    // fleet tip since the process started. Until this is true, a node that
+    // expects peers must NOT arm minting or nominate at its stale local slot,
+    // even if peer-count quorum is already reachable — that is the #766 halt
+    // (a restart re-entered SCP at slot 2884 while peers balloted 2909, racing
+    // catch-up sync).
+    //
+    // Seeded from `min_peers_to_wait`: a genuine solo node (`min_peers == 0`)
+    // has no fleet to fall behind, so it starts synced and mints immediately
+    // (preserves the solo carve-out). A peer-expecting node starts NOT synced
+    // and flips true the first time the sync manager reports `Synced` — which,
+    // for a node already at/near tip, happens after the first peer-status round
+    // (no meaningful delay), and for a node genuinely behind happens only after
+    // catch-up completes. The `consensus` service mirrors this flag so its
+    // nomination/ballot proposer is gated identically (see
+    // `ConsensusService::set_initial_sync_complete`).
+    let mut initial_sync_complete = min_peers_to_wait == 0;
+    consensus.set_initial_sync_complete(initial_sync_complete);
+
     // Track minting state - can change as peers connect/disconnect
     let mut minting_enabled = false;
     // Track if minting was paused due to high faucet balance
@@ -758,8 +806,12 @@ async fn run_async(mut config: Config, config_path: &Path, mint: bool) -> Result
     println!();
     node.print_status_public()?;
 
-    // Start minting if quorum is satisfied
-    if can_mint_now {
+    // Start minting only if quorum is satisfied AND initial sync is complete
+    // (issue #770). A peer-expecting node that boots behind the fleet tip has
+    // `initial_sync_complete == false` here, so it does NOT arm minting at
+    // startup even when peer-count quorum is already reachable — it waits for
+    // the sync manager to reach `Synced` (handled in the sync-tick arm below).
+    if should_arm_minting(can_mint_now, initial_sync_complete) {
         info!("Starting minting - {}", quorum_message);
         node.start_minting_public()?;
         minting_enabled = true;
@@ -770,6 +822,12 @@ async fn run_async(mut config: Config, config_path: &Path, mint: bool) -> Result
         metrics_updater.set_minting_active(true);
         // Broadcast initial minting status to WebSocket clients
         ws_broadcaster.minting_status(true, 0.0, 0);
+    } else if mint && can_mint_now && !initial_sync_complete {
+        info!(
+            "Minting requested and quorum satisfied, but node is still syncing to \
+             the fleet tip — deferring minting until caught up (issue #770)"
+        );
+        println!("Minting will start when initial sync completes.");
     } else if mint {
         warn!("Minting requested but {}", quorum_message);
         println!("Minting will start when quorum is satisfied.");
@@ -1024,11 +1082,15 @@ async fn run_async(mut config: Config, config_path: &Path, mint: bool) -> Result
                                 );
                             }
 
-                            // Re-evaluate minting eligibility
+                            // Re-evaluate minting eligibility. The startup sync
+                            // gate (issue #770) is additive to the quorum gate:
+                            // even if quorum is now reachable, a node still
+                            // behind the fleet tip must not arm minting until it
+                            // has caught up (`initial_sync_complete`).
                             if mint && !minting_enabled {
                                 let connected = get_connected_peer_ids(&discovery);
                                 let (can_mint_now, msg) = check_minting_eligibility(&config, &connected, mint);
-                                if can_mint_now {
+                                if should_arm_minting(can_mint_now, initial_sync_complete) {
                                     info!("Quorum reached! {}", msg);
                                     if let Err(e) = node.start_minting_public() {
                                         warn!("Failed to start minting: {}", e);
@@ -1963,6 +2025,65 @@ async fn run_async(mut config: Config, config_path: &Path, mint: bool) -> Result
                     }
                 }
 
+                // Startup sync gate (issue #770): detect the first transition to
+                // `Synced` this session and release the minting/nomination gate.
+                //
+                // This is the STARTUP-side counterpart to the reactive
+                // `sync_scp_slot_to_chain` call in the block-applied arm above:
+                // that arm only fires after a catch-up batch is applied, so a
+                // node that reaches the tip via the pre-loop peer-wait window or
+                // via gossip (no explicit sync batch) would otherwise never
+                // release the gate. Here we release it the moment the sync state
+                // machine reports `Synced`, regardless of how the node got
+                // there.
+                if !initial_sync_complete && sync_manager.is_synced() {
+                    initial_sync_complete = true;
+                    consensus.set_initial_sync_complete(true);
+
+                    // Reconcile the SCP slot to the synced chain height BEFORE
+                    // the node casts its first ballot this session (issue #770,
+                    // acceptance criterion 2). Uses the canonical
+                    // `chain_height + 1` derivation; `sync_scp_slot_to_chain`
+                    // only advances an idle slot (its ballot/commit-state guard
+                    // is preserved) and is a no-op in solo mode.
+                    if let Ok(ledger) = node.shared_ledger().read() {
+                        if let Ok(state) = ledger.get_chain_state() {
+                            if consensus.sync_scp_slot_to_chain(state.height) {
+                                info!(
+                                    slot = consensus.current_slot(),
+                                    height = state.height,
+                                    "Initial sync complete: reconciled SCP slot to synced \
+                                     chain height before first ballot (issue #770)"
+                                );
+                            }
+                        }
+                    }
+
+                    info!("Initial sync to fleet tip complete — minting/nomination gate released (issue #770)");
+
+                    // Arm minting now if it was deferred purely on the sync gate
+                    // at startup (quorum was already reachable). Mirrors the
+                    // peer-connect arm's eligibility check.
+                    if mint && !minting_enabled {
+                        let connected = get_connected_peer_ids(&discovery);
+                        let (can_mint_now, msg) =
+                            check_minting_eligibility(&config, &connected, mint);
+                        if should_arm_minting(can_mint_now, initial_sync_complete) {
+                            info!("Starting minting after initial sync — {}", msg);
+                            if let Err(e) = node.start_minting_public() {
+                                warn!("Failed to start minting: {}", e);
+                            } else {
+                                minting_enabled = true;
+                                if let Ok(mut active) = minting_active.write() {
+                                    *active = true;
+                                }
+                                metrics_updater.set_minting_active(true);
+                                ws_broadcaster.minting_status(true, 0.0, 0);
+                            }
+                        }
+                    }
+                }
+
                 // Publish the post-tick sync state so `node_getStatus` reports
                 // honest sync info (#541). Done after `tick` so any state
                 // transition the tick performed is reflected immediately.
@@ -2170,10 +2291,12 @@ async fn run_async(mut config: Config, config_path: &Path, mint: bool) -> Result
                     if minting_paused_for_balance
                         && should_resume_from_balance_pause(balance, FAUCET_BALANCE_LOW, mempool_len)
                     {
-                        // Check quorum before resuming
+                        // Check quorum AND initial-sync completion before
+                        // resuming (issue #770): a node still catching up to the
+                        // fleet tip must not resume minting at its stale slot.
                         let connected = get_connected_peer_ids(&discovery);
                         let (can_mint, _) = check_minting_eligibility(&config, &connected, mint);
-                        if can_mint {
+                        if should_arm_minting(can_mint, initial_sync_complete) {
                             let reason = if mempool_len > 0 {
                                 format!("{} pending transaction(s) to mine", mempool_len)
                             } else {
@@ -3112,6 +3235,58 @@ mod tests {
         // regardless of its peer count.
         assert!(!should_redial_bootstrap_peers(0, 0));
         assert!(!should_redial_bootstrap_peers(3, 0));
+    }
+
+    // ---- Issue #770: startup sync gate — a restarted node behind the fleet
+    // tip must not arm minting until it has caught up, even when peer-count
+    // quorum is already reachable ----
+
+    #[test]
+    fn arms_minting_only_when_quorum_ok_and_synced() {
+        // The additive gate: BOTH the peer/quorum gate and the startup sync
+        // gate must hold before minting arms.
+        assert!(should_arm_minting(true, true));
+    }
+
+    #[test]
+    fn withholds_minting_when_behind_tip_despite_quorum() {
+        // The #766 incident condition: quorum is reachable at the stale slot
+        // (quorum_ok == true) but the node is still behind the fleet tip
+        // (initial_sync_complete == false). Minting MUST stay disarmed until
+        // catch-up completes — this is the whole point of issue #770.
+        assert!(!should_arm_minting(true, false));
+    }
+
+    #[test]
+    fn withholds_minting_when_quorum_not_satisfied() {
+        // No quorum -> no minting, regardless of sync state. Preserves the
+        // pre-existing #428 quorum gate.
+        assert!(!should_arm_minting(false, true));
+        assert!(!should_arm_minting(false, false));
+    }
+
+    #[test]
+    fn solo_node_arms_immediately_when_synced_seeded_true() {
+        // A genuine solo node (min_peers == 0) is seeded `initial_sync_complete
+        // == true` by the run loop, so once its (trivial) quorum is satisfied it
+        // arms immediately — no regression to solo/dev minting. Modeled here as
+        // (quorum_ok, sync_complete) == (true, true).
+        assert!(should_arm_minting(true, true));
+    }
+
+    #[test]
+    fn arm_minting_matrix_is_pure_conjunction() {
+        // Exhaustive 2x2 matrix: minting arms iff quorum_ok AND sync_complete.
+        for quorum_ok in [false, true] {
+            for sync_complete in [false, true] {
+                assert_eq!(
+                    should_arm_minting(quorum_ok, sync_complete),
+                    quorum_ok && sync_complete,
+                    "should_arm_minting must be a pure AND of its two gates \
+                     (quorum_ok={quorum_ok}, sync_complete={sync_complete})"
+                );
+            }
+        }
     }
 
     // ---- Issue #414: PeerId -> NodeID mapping must be deterministic + injective
