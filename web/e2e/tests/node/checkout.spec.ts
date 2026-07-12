@@ -30,10 +30,27 @@ test.describe('Node checkout', () => {
     await expect(
       page.getByRole('heading', { name: /Host a Node for Your Community/i }),
     ).toBeVisible()
-    // The honest "not an income scheme" caveat must be present (#458 §7).
-    await expect(page.getByText(/A hosting service, not an income scheme/i)).toBeVisible()
+    // The honest value framing must be present (#458 §7): mining is a feature,
+    // but coin value is stated plainly (testnet zero, mainnet floats).
+    await expect(page.getByText(/Your node mines for you/i)).toBeVisible()
+    await expect(page.getByText(/not an income promise/i)).toBeVisible()
     await expect(page.getByLabel('Region')).toBeVisible()
     await expect(page.getByRole('button', { name: /Subscribe/i })).toBeEnabled()
+  })
+
+  test('selecting a coming-soon region records it as preferredRegion and provisions in the default', async ({
+    page,
+  }) => {
+    const getBody = captureCheckout(page)
+
+    await page.getByLabel('Region').selectOption('af-south-1')
+    // The demand-capture notice explains the fallback.
+    await expect(page.getByText(/isn't live yet/i)).toBeVisible()
+
+    await page.getByRole('button', { name: /Subscribe/i }).click()
+    await page.waitForURL(MOCK_STRIPE_CHECKOUT_URL, { timeout: TIMEOUTS.NETWORK_REQUEST })
+
+    expect(getBody()).toEqual({ region: 'us-west-2', preferredRegion: 'af-south-1' })
   })
 
   test('subscribing POSTs {region} and redirects to the Stripe URL', async ({ page }) => {

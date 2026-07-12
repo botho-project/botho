@@ -26,6 +26,34 @@ export function isAllowedRegion(region: string): region is AllowedRegion {
 }
 
 /**
+ * The wider region catalog the UI may offer as "coming soon". A checkout's
+ * `preferredRegion` must be on this list; it is NEVER used to provision
+ * (only `REGION_ALLOWLIST` regions launch — the provisioner enforces that).
+ * The preference is recorded in Stripe metadata purely as demand data for
+ * deciding which datacenter to open next.
+ */
+export const REGION_CATALOG = [
+  'us-west-2',
+  'us-east-1',
+  'ca-central-1',
+  'sa-east-1',
+  'eu-central-1',
+  'eu-west-2',
+  'af-south-1',
+  'me-south-1',
+  'ap-south-1',
+  'ap-southeast-1',
+  'ap-northeast-1',
+  'ap-southeast-2',
+] as const
+export type CatalogRegion = (typeof REGION_CATALOG)[number]
+
+/** True if `region` is in the coming-soon catalog (demand-capture allowlist). */
+export function isCatalogRegion(region: string): region is CatalogRegion {
+  return (REGION_CATALOG as readonly string[]).includes(region)
+}
+
+/**
  * EC2 instance types a managed node may use. MVP is `t4g.medium`-only (#458 §3,
  * §5): RandomX's ~2GB dataset needs the RAM and this is the proven shape. Any
  * other type is rejected (the provisioner also *forces* this type rather than

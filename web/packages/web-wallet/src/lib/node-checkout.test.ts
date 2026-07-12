@@ -3,6 +3,7 @@ import {
   DEFAULT_NODE_REGION,
   NODE_REGIONS,
   NodeCheckoutError,
+  isRegionAvailable,
   startNodeCheckout,
 } from './node-checkout'
 
@@ -13,10 +14,17 @@ function okResponse(body: unknown, status = 200): Response {
   })
 }
 
-describe('node region allowlist', () => {
-  it('starts with only us-west-2', () => {
-    expect(NODE_REGIONS.map((r) => r.id)).toEqual(['us-west-2'])
+describe('node region catalog', () => {
+  it('offers exactly one provisionable region today (us-west-2)', () => {
+    expect(NODE_REGIONS.filter((r) => r.available).map((r) => r.id)).toEqual(['us-west-2'])
     expect(DEFAULT_NODE_REGION).toBe('us-west-2')
+  })
+
+  it('lists coming-soon regions for demand capture', () => {
+    const comingSoon = NODE_REGIONS.filter((r) => !r.available)
+    expect(comingSoon.length).toBeGreaterThan(0)
+    expect(isRegionAvailable('af-south-1')).toBe(false)
+    expect(isRegionAvailable('us-west-2')).toBe(true)
   })
 })
 

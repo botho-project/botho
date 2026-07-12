@@ -18,6 +18,7 @@ import {
   DEFAULT_NODE_REGION,
   NODE_REGIONS,
   NodeCheckoutError,
+  isRegionAvailable,
   startNodeCheckout,
 } from '../lib/node-checkout'
 import {
@@ -58,8 +59,12 @@ export function NodePage() {
     setError(null)
     setSubmitting(true)
     try {
+      // Coming-soon regions checkout in the default region; the actual
+      // preference rides along as demand data (Stripe metadata).
+      const available = isRegionAvailable(region)
       const session = await startNodeCheckout({
-        region,
+        region: available ? region : DEFAULT_NODE_REGION,
+        preferredRegion: available ? undefined : region,
         email: email.trim() || undefined,
       })
       // Redirect the browser to the Stripe-hosted checkout page.
@@ -107,22 +112,24 @@ export function NodePage() {
             <p className="text-base sm:text-lg text-ghost max-w-xl mx-auto">
               We run an always-on Botho node for you — no servers to manage. You,
               and everyone you invite, transact from the app through your own
-              private endpoint. <span className="text-light">$50/month.</span>
+              private endpoint.{' '}
+              <span className="text-light whitespace-nowrap">$50/month.</span>
             </p>
           </div>
 
-          {/* Honest value-prop caveat (#458 §7; hosting framing, decision #719) */}
+          {/* Honest value-prop framing (#458 §7; hosting framing, decision #719) */}
           <div className="mb-8 p-4 rounded-xl bg-warning/10 border border-warning/30 flex gap-3">
             <AlertCircle className="text-warning shrink-0 mt-0.5" size={20} />
             <p className="text-sm text-ghost">
-              <span className="text-light font-medium">A hosting service, not an income scheme.</span>{' '}
-              You're paying for a managed node — the hub your community connects
-              through. It also mines to help secure the network, but that is
-              <span className="text-light"> not an income promise</span>: on testnet
-              the coins have no real value, and even on mainnet mining tends toward
-              break-even. The product is the always-on node and the wallet
-              experience. Charges run in Stripe test mode while we validate the
-              service.
+              <span className="text-light font-medium">Your node mines for you.</span>{' '}
+              Out of the box it mines to the address you configure — helping secure
+              the network, with any rewards going straight to your wallet. What
+              you're buying is the managed hosting: the always-on node and the
+              wallet experience.{' '}
+              <span className="text-light">To be clear about value</span>: testnet
+              coins have zero real-world value, and mainnet coins float — mining
+              rewards are not an income promise. Charges run in Stripe test mode
+              while we validate the service.
             </p>
           </div>
 
@@ -153,16 +160,33 @@ export function NodePage() {
               disabled={submitting}
               className="w-full mb-1 px-3 py-2.5 rounded-lg bg-void border border-steel text-light focus:outline-none focus:border-pulse disabled:opacity-50"
             >
-              {NODE_REGIONS.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.label}
-                </option>
-              ))}
+              <optgroup label="Available now">
+                {NODE_REGIONS.filter((r) => r.available).map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.label}
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="Coming soon — tell us where you want to host">
+                {NODE_REGIONS.filter((r) => !r.available).map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.label}
+                  </option>
+                ))}
+              </optgroup>
             </select>
-            <p className="text-xs text-ghost mb-5">
-              More regions coming soon. Your node will be provisioned here once you
-              subscribe.
-            </p>
+            {isRegionAvailable(region) ? (
+              <p className="text-xs text-ghost mb-5">
+                Your node will be provisioned here once you subscribe.
+              </p>
+            ) : (
+              <p className="text-xs text-warning mb-5">
+                This region isn't live yet. Your node launches in{' '}
+                {NODE_REGIONS.find((r) => r.id === DEFAULT_NODE_REGION)?.label} for
+                now, and your preference is recorded to help us prioritize new
+                datacenters.
+              </p>
+            )}
 
             <label className="block text-sm font-medium text-light mb-2" htmlFor="node-email">
               Email <span className="text-ghost font-normal">(optional)</span>

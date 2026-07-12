@@ -15,7 +15,7 @@ import { OutstandingLinks } from '../components/OutstandingLinks'
 import { OfflineBanner } from '../components/OfflineBanner'
 import { CustomRpcTrustGate, CustomNodeBanner } from '../components/CustomRpcTrustGate'
 import { PasswordFields, PasswordSettingsModal, isPasswordValid } from '../components/PasswordSettingsModal'
-import { Send, Link2, Download, RefreshCw, ArrowLeft, Shield, Eye, KeyRound, AlertCircle, Lock, Settings, Trash2, Users, QrCode, Clock } from 'lucide-react'
+import { Send, Link2, Download, RefreshCw, ArrowLeft, Shield, ShieldCheck, Eye, KeyRound, AlertCircle, Lock, Settings, Trash2, Users, QrCode, Clock } from 'lucide-react'
 
 function CreateWalletView({ onCreate }: { onCreate: (mnemonic: string, password?: string) => void }) {
   const { t } = useTranslation('wallet')
@@ -465,6 +465,8 @@ function WalletDashboard() {
         resolveName={resolveName}
       />
 
+      <SecurityModelFooter isEncrypted={isEncrypted} />
+
       <SendModal
         isOpen={sendOpen}
         onClose={() => setSendOpen(false)}
@@ -544,6 +546,63 @@ function WalletDashboard() {
         </ModalOverlay>
       )}
     </div>
+  )
+}
+
+/**
+ * Bottom-of-dashboard explainer for the web wallet's privacy and security
+ * model. Every claim here must stay true to the implementation: client-side
+ * key generation + WASM signing (`@botho/core` wallet + bth_wasm_signer),
+ * full-chain output download with local trial-scanning (RemoteNodeAdapter
+ * `chain_getOutputs` — the node never learns which outputs are yours), and
+ * the AES-256-GCM / PBKDF2-SHA256@600k vault when a password is set.
+ */
+function SecurityModelFooter({ isEncrypted }: { isEncrypted: boolean }) {
+  return (
+    <Card className="p-5 sm:p-6 mt-2">
+      <div className="flex items-center gap-2 mb-3">
+        <ShieldCheck className="text-pulse" size={18} />
+        <h3 className="font-display text-sm font-semibold tracking-wide uppercase text-light">
+          How this wallet protects you
+        </h3>
+      </div>
+      <ul className="space-y-2 text-sm text-ghost">
+        <li>
+          <span className="text-light">Your keys never leave this browser.</span>{' '}
+          The recovery phrase is generated locally and transactions are signed
+          client-side; the node you connect to only ever sees signed
+          transactions, never keys.
+        </li>
+        <li>
+          <span className="text-light">The node can't see what's yours.</span>{' '}
+          The wallet downloads the chain's outputs and scans them locally with
+          your view key. Thanks to stealth addresses, the node learns your IP
+          and that you're syncing — not your balance, your addresses, or which
+          payments are yours.
+        </li>
+        <li>
+          <span className="text-light">
+            {isEncrypted ? 'Encrypted at rest.' : 'Set a password to encrypt at rest.'}
+          </span>{' '}
+          {isEncrypted
+            ? 'Your wallet is stored as an AES-256-GCM vault; the key is derived from your password (PBKDF2, 600k iterations) and is never stored.'
+            : 'Without a password, the wallet is stored unencrypted in this browser profile — anyone with access to this device can open it.'}
+        </li>
+        <li>
+          <span className="text-light">What this can't protect against:</span>{' '}
+          malware or browser extensions that can read this page, someone with
+          your recovery phrase, or a compromised device. For the strongest
+          setup, run your own node and keep the phrase on paper only.
+        </li>
+      </ul>
+      <p className="text-xs text-dim mt-3">
+        Details in the{' '}
+        <Link to="/docs#privacy" className="text-pulse hover:underline">
+          privacy documentation
+        </Link>
+        .
+      </p>
+    </Card>
   )
 }
 

@@ -28,12 +28,15 @@
  */
 export {
   REGION_ALLOWLIST,
+  REGION_CATALOG,
   isAllowedRegion,
+  isCatalogRegion,
   type AllowedRegion,
+  type CatalogRegion,
 } from './node-config'
 
 import type { AllowedRegion } from './node-config'
-import { isAllowedRegion } from './node-config'
+import { isAllowedRegion, isCatalogRegion } from './node-config'
 
 /**
  * The subset of Worker env this module needs. Bound from Worker secrets / vars
@@ -55,6 +58,11 @@ export interface CheckoutEnv {
 export interface CheckoutRequest {
   /** Desired AWS region for the node; must be in REGION_ALLOWLIST. */
   region: AllowedRegion
+  /**
+   * Region the customer actually wants once it opens; must be in
+   * REGION_CATALOG. Demand data only — never used to provision.
+   */
+  preferredRegion?: string
   /** Optional pre-filled customer email (lets Stripe skip asking). */
   email?: string
 }
@@ -85,6 +93,24 @@ export function validateCheckoutRequest(body: unknown): CheckoutValidation {
     return { ok: false, error: `region "${region}" is not in the allowlist` }
   }
 
+  let preferredRegion: string | undefined
+  if (
+    record.preferredRegion !== undefined &&
+    record.preferredRegion !== null &&
+    record.preferredRegion !== ''
+  ) {
+    if (typeof record.preferredRegion !== 'string') {
+      return { ok: false, error: 'preferredRegion must be a string' }
+    }
+    if (!isCatalogRegion(record.preferredRegion)) {
+      return {
+        ok: false,
+        error: `preferredRegion "${record.preferredRegion}" is not in the region catalog`,
+      }
+    }
+    preferredRegion = record.preferredRegion
+  }
+
   let email: string | undefined
   if (record.email !== undefined && record.email !== null && record.email !== '') {
     if (typeof record.email !== 'string') {
@@ -98,7 +124,7 @@ export function validateCheckoutRequest(body: unknown): CheckoutValidation {
     email = record.email
   }
 
-  return { ok: true, value: { region, email } }
+  return { ok: true, value: { region, preferredRegion, email } }
 }
 
 /**
@@ -161,6 +187,14 @@ export function buildCheckoutSessionParams(
   // read it from `subscription.metadata` regardless of which event fires.
   params.set('metadata[region]', req.region)
   params.set('subscription_data[metadata][region]', req.region)
+
+  // Demand data (#458 §5 expansion planning): where the customer actually
+  // wants to host once that datacenter opens. Read from the Stripe dashboard;
+  // deliberately NOT read by the provisioner.
+  if (req.preferredRegion && req.preferredRegion !== req.region) {
+    params.set('metadata[preferred_region]', req.preferredRegion)
+    params.set('subscription_data[metadata][preferred_region]', req.preferredRegion)
+  }
 
   if (req.email) {
     params.set('customer_email', req.email)

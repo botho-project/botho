@@ -50,6 +50,28 @@ describe('validateCheckoutRequest', () => {
     if (r.ok) expect(r.value.email).toBe('a@b.co')
   })
 
+  it('accepts a catalog preferredRegion (demand capture)', () => {
+    const r = validateCheckoutRequest({ region: 'us-west-2', preferredRegion: 'af-south-1' })
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value.preferredRegion).toBe('af-south-1')
+  })
+
+  it('rejects a preferredRegion outside the catalog', () => {
+    const r = validateCheckoutRequest({ region: 'us-west-2', preferredRegion: 'mars-north-1' })
+    expect(r.ok).toBe(false)
+  })
+
+  it('rejects a non-string preferredRegion', () => {
+    const r = validateCheckoutRequest({ region: 'us-west-2', preferredRegion: 42 })
+    expect(r.ok).toBe(false)
+  })
+
+  it('preferredRegion never widens the provisioning region', () => {
+    // A catalog region is still NOT a valid provisioning region.
+    const r = validateCheckoutRequest({ region: 'af-south-1' })
+    expect(r.ok).toBe(false)
+  })
+
   it('rejects a non-object body', () => {
     expect(validateCheckoutRequest(null).ok).toBe(false)
     expect(validateCheckoutRequest('nope').ok).toBe(false)
@@ -141,6 +163,22 @@ describe('buildCheckoutSessionParams', () => {
   it('captures region on both session and subscription metadata (#458 §3)', () => {
     expect(params.get('metadata[region]')).toBe('us-west-2')
     expect(params.get('subscription_data[metadata][region]')).toBe('us-west-2')
+  })
+
+  it('omits preferred_region metadata when not supplied', () => {
+    expect(params.has('metadata[preferred_region]')).toBe(false)
+    expect(params.has('subscription_data[metadata][preferred_region]')).toBe(false)
+  })
+
+  it('captures preferred_region on both metadata surfaces (demand data)', () => {
+    const p = buildCheckoutSessionParams(
+      { region: 'us-west-2', preferredRegion: 'af-south-1' },
+      ENV,
+    )
+    expect(p.get('metadata[preferred_region]')).toBe('af-south-1')
+    expect(p.get('subscription_data[metadata][preferred_region]')).toBe('af-south-1')
+    // The provisioning region is unchanged by the preference.
+    expect(p.get('metadata[region]')).toBe('us-west-2')
   })
 
   it('does not set customer_creation (subscription mode creates a Customer implicitly; Stripe rejects the param)', () => {

@@ -11,15 +11,34 @@
  */
 
 /**
- * AWS regions a managed node can be provisioned in (#458 §5). Mirrors the
- * server-side allowlist in `@botho/baas-worker`; the Worker re-validates, so this
- * is purely to constrain the dropdown. Start with us-west-2 only.
+ * The region catalog shown in the dropdown. `available: true` entries mirror
+ * the server-side provisioning allowlist in `@botho/baas-worker` (the Worker
+ * re-validates, so this is purely to constrain the UI). The rest are
+ * "coming soon": selectable so we can record demand (the choice is sent as
+ * `preferredRegion` and lands in Stripe metadata), but the node itself
+ * launches in the default region until that datacenter opens.
  */
-export const NODE_REGIONS: ReadonlyArray<{ id: string; label: string }> = [
-  { id: 'us-west-2', label: 'US West (Oregon) — us-west-2' },
+export const NODE_REGIONS: ReadonlyArray<{ id: string; label: string; available: boolean }> = [
+  { id: 'us-west-2', label: 'US West (Oregon) — us-west-2', available: true },
+  { id: 'us-east-1', label: 'US East (N. Virginia) — us-east-1', available: false },
+  { id: 'ca-central-1', label: 'Canada (Montréal) — ca-central-1', available: false },
+  { id: 'sa-east-1', label: 'South America (São Paulo) — sa-east-1', available: false },
+  { id: 'eu-central-1', label: 'Europe (Frankfurt) — eu-central-1', available: false },
+  { id: 'eu-west-2', label: 'Europe (London) — eu-west-2', available: false },
+  { id: 'af-south-1', label: 'Africa (Cape Town) — af-south-1', available: false },
+  { id: 'me-south-1', label: 'Middle East (Bahrain) — me-south-1', available: false },
+  { id: 'ap-south-1', label: 'Asia Pacific (Mumbai) — ap-south-1', available: false },
+  { id: 'ap-southeast-1', label: 'Asia Pacific (Singapore) — ap-southeast-1', available: false },
+  { id: 'ap-northeast-1', label: 'Asia Pacific (Tokyo) — ap-northeast-1', available: false },
+  { id: 'ap-southeast-2', label: 'Asia Pacific (Sydney) — ap-southeast-2', available: false },
 ]
 
-export const DEFAULT_NODE_REGION = NODE_REGIONS[0].id
+export const DEFAULT_NODE_REGION = NODE_REGIONS.find((r) => r.available)!.id
+
+/** True if `id` names a catalog region that can be provisioned today. */
+export function isRegionAvailable(id: string): boolean {
+  return NODE_REGIONS.some((r) => r.id === id && r.available)
+}
 
 /**
  * Base URL of the BaaS control-plane Worker. Configured at build time via
@@ -31,8 +50,13 @@ export function baasEndpoint(): string {
 }
 
 export interface StartNodeCheckoutInput {
-  /** Desired AWS region (must be one of NODE_REGIONS). */
+  /** Region the node will actually be provisioned in (must be available). */
   region: string
+  /**
+   * The region the user actually wants, when it isn't provisionable yet.
+   * Recorded in Stripe metadata as demand data for opening new datacenters.
+   */
+  preferredRegion?: string
   /** Optional email to pre-fill Stripe checkout. */
   email?: string
 }
@@ -64,6 +88,9 @@ export async function startNodeCheckout(
   fetchImpl: typeof fetch = fetch,
 ): Promise<NodeCheckoutSession> {
   const body: Record<string, unknown> = { region: input.region }
+  if (input.preferredRegion && input.preferredRegion !== input.region) {
+    body.preferredRegion = input.preferredRegion
+  }
   if (input.email) body.email = input.email
 
   let resp: Response
