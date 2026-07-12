@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
+import { createHash } from 'node:crypto'
 import { cpSync, existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
@@ -75,11 +76,111 @@ function wasmSignerPkgPlugin(): Plugin {
   }
 }
 
+// HTML entry files (relative to the package root) whose emitted document should
+// have Subresource Integrity (SRI) hashes injected onto every referenced
+// <script>/<link rel="stylesheet"> tag. Only the operator dashboard entry is
+// SRI-pinned (#772, §8.3.1 option (a)): its browser-enforced integrity is the
+// whole point of splitting it into its own build target. The main SPA entry
+// (index.html) is intentionally left unpinned — it is under PWA/auto-update
+// service-worker control, where injected integrity hashes on a document the SW
+// may replace would be self-defeating.
+const SRI_ENTRY_HTML = new Set(['operator.html'])
+
+/**
+ * Inject Subresource Integrity (`integrity="sha384-…"` + `crossorigin`) onto the
+ * `<script src>` and `<link rel="stylesheet" href>` tags of the operator entry's
+ * emitted HTML document (#772, §8.3.1 option (a)).
+ *
+ * Runs in Rollup's `generateBundle` (build only), after the entry's chunks and
+ * CSS have been emitted, so every referenced asset is present in the bundle and
+ * its final (hashed) filename is known. For each same-origin, root-relative
+ * asset reference in a targeted HTML file we compute the sha384 of the emitted
+ * asset's exact bytes and rewrite the tag to pin it. A tampered chunk on the
+ * host then fails the browser's integrity check and is never executed — no
+ * operator action required.
+ *
+ * Modeled on the post-build file-manipulation pattern `wasmSignerPkgPlugin`
+ * already uses in this file; hand-rolled (no new dependency) for one hash fn.
+ */
+function sriHashPlugin(): Plugin {
+  const sri = (bytes: string | Uint8Array): string =>
+    'sha384-' + createHash('sha384').update(bytes).digest('base64')
+
+  return {
+    name: 'botho-operator-sri',
+    apply: 'build',
+    enforce: 'post',
+    generateBundle(_options, bundle) {
+      // Index emitted assets/chunks by their root-absolute path (`/assets/x.js`)
+      // so we can resolve an HTML `src`/`href` to the emitted bytes.
+      const byPath = new Map<string, string | Uint8Array>()
+      for (const [fileName, output] of Object.entries(bundle)) {
+        const bytes =
+          output.type === 'chunk'
+            ? output.code
+            : typeof output.source === 'string'
+              ? output.source
+              : output.source
+        byPath.set('/' + fileName, bytes)
+      }
+
+      for (const [fileName, output] of Object.entries(bundle)) {
+        if (output.type !== 'asset') continue
+        if (!SRI_ENTRY_HTML.has(fileName)) continue
+        const html =
+          typeof output.source === 'string'
+            ? output.source
+            : Buffer.from(output.source).toString('utf8')
+
+        // Rewrite <script src="…">, <link rel="stylesheet" href="…"> and
+        // <link rel="modulepreload" href="…">, adding integrity (+ crossorigin
+        // where absent) for each root-relative asset we can resolve. The browser
+        // enforces integrity on all three, including modulepreloaded chunks the
+        // operator entry statically imports (e.g. the shared framework chunk).
+        const rewritten = html.replace(
+          /<(script|link)\b[^>]*>/gi,
+          (tag: string) => {
+            const isScript = /^<script/i.test(tag)
+            const isStyle =
+              /^<link/i.test(tag) && /rel\s*=\s*["']stylesheet["']/i.test(tag)
+            const isModulePreload =
+              /^<link/i.test(tag) && /rel\s*=\s*["']modulepreload["']/i.test(tag)
+            if (!isScript && !isStyle && !isModulePreload) return tag
+            if (/\bintegrity\s*=/i.test(tag)) return tag // already pinned
+
+            const attr = isScript ? 'src' : 'href'
+            const m = tag.match(new RegExp(`\\b${attr}\\s*=\\s*["']([^"']+)["']`, 'i'))
+            if (!m) return tag
+            const ref = m[1]
+            const bytes = byPath.get(ref)
+            if (bytes === undefined) return tag // external / unresolved — skip
+
+            const integrity = sri(bytes)
+            const closeIdx = tag.lastIndexOf('>')
+            const selfClosing = tag[closeIdx - 1] === '/'
+            const insertAt = selfClosing ? closeIdx - 1 : closeIdx
+            // Vite already emits a bare `crossorigin` on its own tags; only add
+            // one when the tag lacks it, to avoid a duplicate attribute.
+            const needsCrossorigin = !/\bcrossorigin\b/i.test(tag)
+            const injected =
+              ` integrity="${integrity}"` +
+              (needsCrossorigin ? ' crossorigin="anonymous"' : '')
+            return tag.slice(0, insertAt) + injected + tag.slice(insertAt)
+          },
+        )
+
+        output.source = rewritten
+      }
+    },
+  }
+}
+
 export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
     wasmSignerPkgPlugin(),
+    sriHashPlugin(),
     VitePWA({
       registerType: 'autoUpdate',
       // We register the service worker ourselves via the `virtual:pwa-register`
@@ -121,7 +222,16 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
-        navigateFallbackDenylist: [/\.pdf$/],
+        // Keep the operator dashboard document out of the precache manifest
+        // (#772, §8.3.1 option (a)). The SW must never cache or serve
+        // `operator.html`, so the browser always fetches the operator entry
+        // fresh over the network — an auto-updated SW then cannot silently swap
+        // the top-level document that pins the SRI hashes. The referenced JS/CSS
+        // chunks are still integrity-checked by the browser on that fresh fetch.
+        globIgnores: ['operator.html'],
+        // Never let the SPA's navigation fallback hijack /operator: it must
+        // resolve to the standalone operator document, not the main app shell.
+        navigateFallbackDenylist: [/\.pdf$/, /^\/operator(\/|$)/, /\/operator\.html$/],
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
@@ -175,5 +285,16 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: true,
+    rollupOptions: {
+      // Multi-page build (#772, §8.3.1 option (a)): the main SPA (index.html)
+      // and the standalone operator dashboard (operator.html) are two entry
+      // documents in the same Cloudflare Pages project. Vite emits a distinct
+      // entry chunk graph per entry; the operator document references only its
+      // own chunks, which `sriHashPlugin` then integrity-pins.
+      input: {
+        main: path.resolve(__dirname, 'index.html'),
+        operator: path.resolve(__dirname, 'operator.html'),
+      },
+    },
   },
 })

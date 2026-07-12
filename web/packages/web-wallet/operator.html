@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="description" content="Botho Operator Dashboard" />
+
+    <!-- Do NOT advertise this document to link-preview crawlers or search
+         indexes: the operator dashboard is an operational surface, not a
+         marketing page. -->
+    <meta name="robots" content="noindex, nofollow" />
+
+    <meta name="theme-color" content="#06b6d4" />
+
+    <!-- Favicon and Icons -->
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="mask-icon" href="/mask-icon.svg" color="#06b6d4" />
+
+    <title>Botho Operator</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!--
+      Standalone entry for the operator dashboard (#772, §8.3.1 option (a)).
+
+      The operator dashboard is split into its own Vite build target so this
+      document references ONLY its own hashed JS/CSS chunks. A build-time plugin
+      (`sriHashPlugin` in vite.config.ts) pins `integrity="sha384-…"` on the
+      emitted <script>/<link> tags below so the browser refuses a tampered chunk
+      with no operator action required.
+
+      This entry deliberately does NOT register the PWA service worker (see
+      operator-main.tsx): the operator document must always be fetched fresh
+      over the network so an auto-updated SW cannot silently swap it.
+    -->
+    <script type="module" src="/src/operator-main.tsx"></script>
+  </body>
+</html>
