@@ -1,0 +1,67 @@
+{
+  "header": {
+    "walletName": "Botho Wallet"
+  },
+  "title": "Send a Payment",
+  "parsing": "Reading the payment request…",
+  "errors": {
+    "notValidGeneric": "This payment-request link is not valid.",
+    "noRequest": "No payment request found. The link should look like .../pay#…",
+    "invalidRecipient": "This payment-request link has an invalid recipient address.",
+    "amountPositive": "Amount must be greater than 0.",
+    "amountInvalid": "Enter a valid amount.",
+    "paymentFailed": "Payment failed."
+  },
+  "confirm": {
+    "youArePaying": "You're paying",
+    "aBothoAddress": "a Botho address",
+    "selfPay": "This request is for your own address — you'd be paying yourself.",
+    "knownNamed": "You've paid {{name}} before — they're in your contacts.",
+    "knownUnnamed": "You've paid this address before — it's in your contacts.",
+    "unknownStrong": "You have not paid this address before.",
+    "unknown": "Double-check the full address above — payment-request links are attacker-controllable and payments can't be reversed.",
+    "noteLabel": "Note from the requester",
+    "noteFromBotho": "(not from Botho)",
+    "amountLabel": "Amount (BTH)",
+    "max": "Max: {{amount}} BTH",
+    "amountPlaceholder": "0.00",
+    "noAmountSpecified": "The requester didn't specify an amount — enter how much to send.",
+    "largePrefillStrong": "{{amount}} BTH",
+    "largePrefillPrefix": "This link is requesting a large amount (",
+    "largePrefillSuffix": "). I've verified the amount and recipient and want to send it.",
+    "sending": "Sending…",
+    "pay": "Pay {{amount}}",
+    "payNoAmount": "Pay"
+  },
+  "success": {
+    "paymentSent": "Payment sent",
+    "sentTo": "Sent {{amount}} BTH to {{recipient}}.",
+    "theRequester": "the requester",
+    "viewTransaction": "View transaction",
+    "savedToContacts": "Saved to your contacts.",
+    "savePrompt": "Save this address as a contact?",
+    "namePlaceholder": "Name (optional)",
+    "saveAsContact": "Save as contact",
+    "saveError": "Could not save contact.",
+    "goToWallet": "Go to my wallet"
+  },
+  "gate": {
+    "unlockPrompt": "Unlock your wallet to pay this request.",
+    "needWalletPrompt": "You need a wallet to pay this request.",
+    "createNew": "Create New",
+    "importExisting": "Import Existing",
+    "passwordPlaceholder": "Enter password",
+    "unlock": "Unlock",
+    "unlockFailed": "Unlock failed.",
+    "revealPrompt": "Click to reveal",
+    "confirmedPhrase": "I've written down my recovery phrase and stored it safely.",
+    "setPasswordPrompt": "Set a password — your wallet is encrypted on this device with it.",
+    "overwriteStrong": "This device already has a wallet{{suffix}}.",
+    "overwriteWarning": "Continuing replaces it and deletes its stored seed — any funds in it are lost unless you have its recovery phrase backed up.",
+    "createContinue": "Create & Continue",
+    "createFailed": "Could not create wallet.",
+    "seedPlaceholder": "Enter your 12 or 24 word recovery phrase…",
+    "importContinue": "Import & Continue",
+    "importFailed": "Import failed."
+  }
+}

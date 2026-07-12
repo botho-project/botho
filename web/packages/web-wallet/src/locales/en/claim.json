@@ -1,0 +1,48 @@
+{
+  "header": {
+    "walletName": "Botho Wallet"
+  },
+  "title": "Claim Your BTH",
+  "loading": {
+    "checking": "Checking your claim link…",
+    "reading": "Reading your claim link…"
+  },
+  "ready": {
+    "prompt": "Someone sent you a claim link.",
+    "reveal": "Reveal & check this link",
+    "privacyNote": "We only contact the network once you tap above — your link stays private until then."
+  },
+  "errors": {
+    "notValidGeneric": "This claim link is not valid.",
+    "noLink": "No claim link found. The link should look like .../claim#…",
+    "scanFailed": "Failed to scan the link.",
+    "invalidDestination": "Enter a valid destination address (tbotho://… or botho://…).",
+    "newWalletPassword": "Set a password for your new wallet before claiming.",
+    "confirmOverwrite": "Confirm replacing the wallet already stored on this device before claiming.",
+    "claimFailed": "Claim failed."
+  },
+  "waiting": "Waiting for the sender's payment to confirm on-chain. This page will update automatically — it can take a minute or two.",
+  "alreadyClaimed": "This link has already been claimed.",
+  "claimable": {
+    "youveBeenSent": "You've been sent",
+    "feeCovered": "Network fee of {{fee}} BTH covered by the sender.",
+    "sendToLabel": "Send to address",
+    "addressPlaceholder": "tbotho://1/…",
+    "createWallet": "Don't have a wallet? Create one",
+    "recoveryPhraseTitle": "Your new recovery phrase",
+    "recoveryPhraseNote": "Write this down and keep it safe — it is the ONLY way to recover this wallet. We'll save it encrypted in this browser when you claim.",
+    "passwordPrompt": "Set a password — your wallet is encrypted on this device with it.",
+    "overwriteWarningStrong": "This device already has a wallet{{suffix}}.",
+    "overwriteWarning": "Claiming with this NEW wallet replaces the stored one and deletes its seed — any funds in it are lost unless you have its recovery phrase backed up.",
+    "claiming": "Claiming…",
+    "claim": "Claim {{amount}} BTH",
+    "bearerWarning": "This is a bearer link — anyone with it can claim. Claim promptly so no one else does first."
+  },
+  "claimed": {
+    "amount": "Claimed {{amount}} BTH",
+    "onTheirWay": "The funds are on their way to your address.",
+    "viewTransaction": "View transaction",
+    "deleteMessageNote": "For your privacy, delete the message that contained this link from your chat. It's already claimed and can't be used again, but removing it keeps the secret out of your message history and backups.",
+    "goToWallet": "Go to my wallet"
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "header": {
+    "walletName": "Monedero Botho"
+  },
+  "title": "Reclama tus BTH",
+  "loading": {
+    "checking": "Comprobando tu enlace de reclamación…",
+    "reading": "Leyendo tu enlace de reclamación…"
+  },
+  "ready": {
+    "prompt": "Alguien te ha enviado un enlace de reclamación.",
+    "reveal": "Revelar y comprobar este enlace",
+    "privacyNote": "Solo contactamos con la red cuando tocas el botón de arriba: tu enlace permanece privado hasta entonces."
+  },
+  "errors": {
+    "notValidGeneric": "Este enlace de reclamación no es válido.",
+    "noLink": "No se encontró ningún enlace de reclamación. El enlace debería verse como .../claim#…",
+    "scanFailed": "No se pudo escanear el enlace.",
+    "invalidDestination": "Introduce una dirección de destino válida (tbotho://… o botho://…).",
+    "newWalletPassword": "Establece una contraseña para tu nuevo monedero antes de reclamar.",
+    "confirmOverwrite": "Confirma que quieres reemplazar el monedero ya almacenado en este dispositivo antes de reclamar.",
+    "claimFailed": "La reclamación falló."
+  },
+  "waiting": "Esperando a que el pago del remitente se confirme en la cadena. Esta página se actualizará automáticamente: puede tardar uno o dos minutos.",
+  "alreadyClaimed": "Este enlace ya ha sido reclamado.",
+  "claimable": {
+    "youveBeenSent": "Te han enviado",
+    "feeCovered": "Comisión de red de {{fee}} BTH cubierta por el remitente.",
+    "sendToLabel": "Enviar a la dirección",
+    "addressPlaceholder": "tbotho://1/…",
+    "createWallet": "¿No tienes monedero? Crea uno",
+    "recoveryPhraseTitle": "Tu nueva frase de recuperación",
+    "recoveryPhraseNote": "Anótala y guárdala en un lugar seguro: es la ÚNICA forma de recuperar este monedero. La guardaremos cifrada en este navegador cuando reclames.",
+    "passwordPrompt": "Establece una contraseña: tu monedero se cifra en este dispositivo con ella.",
+    "overwriteWarningStrong": "Este dispositivo ya tiene un monedero{{suffix}}.",
+    "overwriteWarning": "Reclamar con este NUEVO monedero reemplaza el almacenado y borra su semilla: cualquier fondo que contenga se perderá salvo que tengas su frase de recuperación respaldada.",
+    "claiming": "Reclamando…",
+    "claim": "Reclamar {{amount}} BTH",
+    "bearerWarning": "Este es un enlace al portador: cualquiera que lo tenga puede reclamarlo. Reclámalo pronto para que nadie lo haga antes."
+  },
+  "claimed": {
+    "amount": "Reclamados {{amount}} BTH",
+    "onTheirWay": "Los fondos van de camino a tu dirección.",
+    "viewTransaction": "Ver transacción",
+    "deleteMessageNote": "Por tu privacidad, elimina de tu chat el mensaje que contenía este enlace. Ya está reclamado y no se puede volver a usar, pero eliminarlo mantiene el secreto fuera de tu historial de mensajes y copias de seguridad.",
+    "goToWallet": "Ir a mi monedero"
+  }
+}

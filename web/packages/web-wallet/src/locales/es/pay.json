@@ -1,0 +1,67 @@
+{
+  "header": {
+    "walletName": "Monedero Botho"
+  },
+  "title": "Enviar un pago",
+  "parsing": "Leyendo la solicitud de pago…",
+  "errors": {
+    "notValidGeneric": "Este enlace de solicitud de pago no es válido.",
+    "noRequest": "No se encontró ninguna solicitud de pago. El enlace debería verse como .../pay#…",
+    "invalidRecipient": "Este enlace de solicitud de pago tiene una dirección de destinatario no válida.",
+    "amountPositive": "El importe debe ser mayor que 0.",
+    "amountInvalid": "Introduce un importe válido.",
+    "paymentFailed": "El pago falló."
+  },
+  "confirm": {
+    "youArePaying": "Estás pagando a",
+    "aBothoAddress": "una dirección de Botho",
+    "selfPay": "Esta solicitud es para tu propia dirección: te estarías pagando a ti mismo.",
+    "knownNamed": "Ya has pagado a {{name}} antes: está en tus contactos.",
+    "knownUnnamed": "Ya has pagado a esta dirección antes: está en tus contactos.",
+    "unknownStrong": "No has pagado a esta dirección antes.",
+    "unknown": "Verifica bien la dirección completa de arriba: los enlaces de solicitud de pago pueden estar controlados por atacantes y los pagos no se pueden revertir.",
+    "noteLabel": "Nota del solicitante",
+    "noteFromBotho": "(no de Botho)",
+    "amountLabel": "Importe (BTH)",
+    "max": "Máx.: {{amount}} BTH",
+    "amountPlaceholder": "0.00",
+    "noAmountSpecified": "El solicitante no especificó un importe: introduce cuánto enviar.",
+    "largePrefillStrong": "{{amount}} BTH",
+    "largePrefillPrefix": "Este enlace solicita un importe elevado (",
+    "largePrefillSuffix": "). He verificado el importe y el destinatario y quiero enviarlo.",
+    "sending": "Enviando…",
+    "pay": "Pagar {{amount}}",
+    "payNoAmount": "Pagar"
+  },
+  "success": {
+    "paymentSent": "Pago enviado",
+    "sentTo": "Se enviaron {{amount}} BTH a {{recipient}}.",
+    "theRequester": "el solicitante",
+    "viewTransaction": "Ver transacción",
+    "savedToContacts": "Guardado en tus contactos.",
+    "savePrompt": "¿Guardar esta dirección como contacto?",
+    "namePlaceholder": "Nombre (opcional)",
+    "saveAsContact": "Guardar como contacto",
+    "saveError": "No se pudo guardar el contacto.",
+    "goToWallet": "Ir a mi monedero"
+  },
+  "gate": {
+    "unlockPrompt": "Desbloquea tu monedero para pagar esta solicitud.",
+    "needWalletPrompt": "Necesitas un monedero para pagar esta solicitud.",
+    "createNew": "Crear nuevo",
+    "importExisting": "Importar existente",
+    "passwordPlaceholder": "Introduce la contraseña",
+    "unlock": "Desbloquear",
+    "unlockFailed": "El desbloqueo falló.",
+    "revealPrompt": "Haz clic para revelar",
+    "confirmedPhrase": "He anotado mi frase de recuperación y la he guardado de forma segura.",
+    "setPasswordPrompt": "Establece una contraseña: tu monedero se cifra en este dispositivo con ella.",
+    "overwriteStrong": "Este dispositivo ya tiene un monedero{{suffix}}.",
+    "overwriteWarning": "Si continúas, lo reemplazas y borras su semilla almacenada: cualquier fondo que contenga se perderá salvo que tengas su frase de recuperación respaldada.",
+    "createContinue": "Crear y continuar",
+    "createFailed": "No se pudo crear el monedero.",
+    "seedPlaceholder": "Introduce tu frase de recuperación de 12 o 24 palabras…",
+    "importContinue": "Importar y continuar",
+    "importFailed": "La importación falló."
+  }
+}

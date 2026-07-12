@@ -1,0 +1,61 @@
+{
+  "header": {
+    "walletName": "Monedero Botho"
+  },
+  "title": "Contactos",
+  "add": "Añadir",
+  "addDisabledPlaintext": "Añade una contraseña a tu monedero para guardar contactos",
+  "addDisabledLocked": "Desbloquea tu monedero para guardar contactos",
+  "sort": {
+    "name": "Nombre",
+    "lastTx": "Recientes",
+    "txCount": "Más pagados"
+  },
+  "plaintextHint": {
+    "title": "Los contactos requieren un monedero protegido con contraseña",
+    "body": "Tu monedero no tiene contraseña, así que los contactos no se pueden guardar: se cifran en este dispositivo y nunca se almacenan en texto plano. Añade una contraseña para empezar a guardar contactos.",
+    "cta": "Establecer una contraseña"
+  },
+  "lockedHint": {
+    "title": "El monedero está bloqueado",
+    "body": "Desbloquea tu monedero para ver y guardar contactos. Están cifrados en este dispositivo y no están disponibles mientras está bloqueado.",
+    "cta": "Ir al monedero para desbloquear"
+  },
+  "searchPlaceholder": "Buscar por nombre o dirección…",
+  "empty": {
+    "none": "Aún no hay contactos. Las direcciones a las que pagues aparecerán aquí, listas para etiquetar.",
+    "noMatch": "Ningún contacto coincide con tu búsqueda."
+  },
+  "row": {
+    "unnamed": "Sin nombre: toca para etiquetar",
+    "timesPaid": "{{count}}× pagado",
+    "editTitle": "Editar contacto",
+    "labelTitle": "Toca para etiquetar esta dirección",
+    "editButtonTitle": "Editar"
+  },
+  "editor": {
+    "addTitle": "Añadir contacto",
+    "editTitle": "Editar contacto",
+    "close": "Cerrar",
+    "nameLabel": "Nombre",
+    "namePlaceholder": "p. ej. Alicia",
+    "addressLabel": "Dirección",
+    "addressPlaceholder": "tbotho://1/…",
+    "addressFixed": "La dirección no se puede cambiar en un contacto existente.",
+    "notesLabel": "Notas",
+    "notesOptional": "(opcional)",
+    "notesPlaceholder": "Cualquier cosa que quieras recordar sobre este contacto…",
+    "saveAdd": "Añadir contacto",
+    "saveEdit": "Guardar cambios",
+    "deleteConfirmPrompt": "¿Eliminar este contacto? Esto solo borra la etiqueta local, no los pagos.",
+    "delete": "Eliminar",
+    "cancel": "Cancelar",
+    "deleteContact": "Eliminar contacto"
+  },
+  "errors": {
+    "enterAddress": "Introduce una dirección.",
+    "invalidAddress": "Eso no parece una dirección de Botho válida.",
+    "saveFailed": "No se pudo guardar el contacto.",
+    "deleteFailed": "No se pudo eliminar el contacto."
+  }
+}

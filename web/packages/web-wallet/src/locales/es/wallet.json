@@ -1,0 +1,86 @@
+{
+  "header": {
+    "walletNameLong": "Monedero Botho",
+    "walletNameShort": "Monedero"
+  },
+  "createView": {
+    "title": "Crear nuevo monedero",
+    "subtitle": "Anota tu frase de recuperación y guárdala de forma segura.",
+    "clickToReveal": "Haz clic para revelar",
+    "confirmPhrase": "He anotado mi frase de recuperación y la he guardado en un lugar seguro.",
+    "setPassword": "Establece una contraseña",
+    "passwordNote": "Tu monedero se cifra en este dispositivo con esta contraseña. No hay forma de recuperarlo si la olvidas: guarda tu frase de recuperación como copia de seguridad.",
+    "createButton": "Crear monedero"
+  },
+  "importView": {
+    "title": "Importar monedero",
+    "subtitle": "Introduce tu frase de recuperación de 12 o 24 palabras para restaurar tu monedero.",
+    "recoveryPhraseLabel": "Frase de recuperación",
+    "placeholder": "Introduce tu frase de recuperación, separando cada palabra con un espacio...",
+    "wordCountOne": "{{count}} palabra",
+    "wordCountOther": "{{count}} palabras",
+    "expectedWords": "Se esperan 12 o 24 palabras",
+    "setPassword": "Establece una contraseña",
+    "passwordNote": "Tu monedero se cifra en este dispositivo con esta contraseña.",
+    "importFailed": "La importación falló",
+    "importing": "Importando...",
+    "importButton": "Importar monedero"
+  },
+  "autoLock": {
+    "minute": "1 minuto",
+    "fiveMinutes": "5 minutos",
+    "fifteenMinutes": "15 minutos",
+    "thirtyMinutes": "30 minutos",
+    "hour": "1 hora",
+    "off": "Desactivado (nunca)"
+  },
+  "settingsModal": {
+    "title": "Ajustes",
+    "subtitle": "Controles de seguridad y del monedero.",
+    "autoLockLabel": "Bloqueo automático tras inactividad",
+    "autoLockEnabled": "Bloquea el monedero automáticamente cuando está inactivo. La actividad reinicia el temporizador.",
+    "autoLockDisabled": "Establece una contraseña para activar el bloqueo automático.",
+    "lockWallet": "Bloquear monedero",
+    "lockWalletTitle": "Bloquear monedero",
+    "enableLockingTitle": "Establece una contraseña para activar el bloqueo",
+    "enableLockingLink": "Establece una contraseña para activar el bloqueo",
+    "resetWallet": "Restablecer monedero",
+    "close": "Cerrar"
+  },
+  "dashboard": {
+    "send": "Enviar",
+    "receive": "Recibir",
+    "sendViaLink": "Enviar por enlace",
+    "request": "Solicitar",
+    "contacts": "Contactos",
+    "lockWalletTitle": "Bloquear monedero",
+    "enableLockingTitle": "Establece una contraseña para activar el bloqueo",
+    "settingsTitle": "Ajustes",
+    "protectedTitle": "El monedero está protegido con contraseña",
+    "protectedBody": "Tu semilla, contactos y enlaces de reclamación están cifrados en este dispositivo.",
+    "unprotectedTitle": "El monedero no tiene contraseña",
+    "unprotectedBody": "Establece una contraseña para cifrar tu monedero y activar los enlaces de reclamación.",
+    "changePassword": "Cambiar contraseña",
+    "setPassword": "Establecer una contraseña",
+    "recentTransactions": "Transacciones recientes",
+    "transactionFailed": "La transacción falló"
+  },
+  "resetModal": {
+    "title": "Restablecer monedero",
+    "body": "Esto eliminará tu monedero de este dispositivo. Asegúrate de tener guardada tu frase de recuperación antes de continuar.",
+    "confirm": "Restablecer y empezar de nuevo",
+    "cancel": "Cancelar"
+  },
+  "unlockView": {
+    "title": "Desbloquear monedero",
+    "subtitle": "Introduce tu contraseña para acceder a tu monedero.",
+    "passwordPlaceholder": "Introduce la contraseña",
+    "unlockFailed": "El desbloqueo falló",
+    "unlocking": "Desbloqueando...",
+    "unlock": "Desbloquear"
+  },
+  "setup": {
+    "createNew": "Crear nuevo",
+    "importExisting": "Importar existente"
+  }
+}

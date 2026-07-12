@@ -1,0 +1,86 @@
+{
+  "header": {
+    "walletNameLong": "Botho Wallet",
+    "walletNameShort": "Wallet"
+  },
+  "createView": {
+    "title": "Create New Wallet",
+    "subtitle": "Write down your recovery phrase and store it safely.",
+    "clickToReveal": "Click to reveal",
+    "confirmPhrase": "I have written down my recovery phrase and stored it in a safe place.",
+    "setPassword": "Set a password",
+    "passwordNote": "Your wallet is encrypted on this device with this password. There is no way to recover it if you forget it — keep your recovery phrase safe as a backup.",
+    "createButton": "Create Wallet"
+  },
+  "importView": {
+    "title": "Import Wallet",
+    "subtitle": "Enter your 12 or 24 word recovery phrase to restore your wallet.",
+    "recoveryPhraseLabel": "Recovery Phrase",
+    "placeholder": "Enter your recovery phrase, separating each word with a space...",
+    "wordCountOne": "{{count}} word",
+    "wordCountOther": "{{count}} words",
+    "expectedWords": "Expected 12 or 24 words",
+    "setPassword": "Set a password",
+    "passwordNote": "Your wallet is encrypted on this device with this password.",
+    "importFailed": "Import failed",
+    "importing": "Importing...",
+    "importButton": "Import Wallet"
+  },
+  "autoLock": {
+    "minute": "1 minute",
+    "fiveMinutes": "5 minutes",
+    "fifteenMinutes": "15 minutes",
+    "thirtyMinutes": "30 minutes",
+    "hour": "1 hour",
+    "off": "Off (never)"
+  },
+  "settingsModal": {
+    "title": "Settings",
+    "subtitle": "Security and wallet controls.",
+    "autoLockLabel": "Auto-lock after inactivity",
+    "autoLockEnabled": "Lock the wallet automatically when idle. Activity resets the timer.",
+    "autoLockDisabled": "Set a password to enable auto-lock.",
+    "lockWallet": "Lock wallet",
+    "lockWalletTitle": "Lock wallet",
+    "enableLockingTitle": "Set a password to enable locking",
+    "enableLockingLink": "Set a password to enable locking",
+    "resetWallet": "Reset wallet",
+    "close": "Close"
+  },
+  "dashboard": {
+    "send": "Send",
+    "receive": "Receive",
+    "sendViaLink": "Send via Link",
+    "request": "Request",
+    "contacts": "Contacts",
+    "lockWalletTitle": "Lock wallet",
+    "enableLockingTitle": "Set a password to enable locking",
+    "settingsTitle": "Settings",
+    "protectedTitle": "Wallet is password-protected",
+    "protectedBody": "Your seed, contacts, and claim links are encrypted on this device.",
+    "unprotectedTitle": "Wallet has no password",
+    "unprotectedBody": "Set a password to encrypt your wallet and enable claim links.",
+    "changePassword": "Change password",
+    "setPassword": "Set a password",
+    "recentTransactions": "Recent Transactions",
+    "transactionFailed": "Transaction failed"
+  },
+  "resetModal": {
+    "title": "Reset Wallet",
+    "body": "This will remove your wallet from this device. Make sure you have your recovery phrase saved before continuing.",
+    "confirm": "Reset & Start Over",
+    "cancel": "Cancel"
+  },
+  "unlockView": {
+    "title": "Unlock Wallet",
+    "subtitle": "Enter your password to access your wallet.",
+    "passwordPlaceholder": "Enter password",
+    "unlockFailed": "Unlock failed",
+    "unlocking": "Unlocking...",
+    "unlock": "Unlock"
+  },
+  "setup": {
+    "createNew": "Create New",
+    "importExisting": "Import Existing"
+  }
+}

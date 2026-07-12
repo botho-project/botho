@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
 import { Button, Card, Input, Logo, ModalOverlay } from '@botho/ui'
 import { createMnemonic12 } from '@botho/core'
@@ -17,6 +18,7 @@ import { PasswordFields, PasswordSettingsModal, isPasswordValid } from '../compo
 import { Send, Link2, Download, RefreshCw, ArrowLeft, Shield, Eye, KeyRound, AlertCircle, Lock, Settings, Trash2, Users, QrCode, Clock } from 'lucide-react'
 
 function CreateWalletView({ onCreate }: { onCreate: (mnemonic: string, password?: string) => void }) {
+  const { t } = useTranslation('wallet')
   const [showMnemonic, setShowMnemonic] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
   const [password, setPassword] = useState('')
@@ -39,8 +41,8 @@ function CreateWalletView({ onCreate }: { onCreate: (mnemonic: string, password?
           <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-pulse/10 flex items-center justify-center mx-auto mb-3 sm:mb-4">
             <Shield className="text-pulse" size={28} />
           </div>
-          <h2 className="font-display text-xl sm:text-2xl font-bold mb-2">Create New Wallet</h2>
-          <p className="text-ghost text-sm sm:text-base">Write down your recovery phrase and store it safely.</p>
+          <h2 className="font-display text-xl sm:text-2xl font-bold mb-2">{t('createView.title')}</h2>
+          <p className="text-ghost text-sm sm:text-base">{t('createView.subtitle')}</p>
         </div>
 
         <div className="relative mb-5 sm:mb-6">
@@ -53,7 +55,7 @@ function CreateWalletView({ onCreate }: { onCreate: (mnemonic: string, password?
               className="absolute inset-0 flex items-center justify-center gap-2 text-ghost hover:text-light transition-colors"
             >
               <Eye size={20} />
-              <span className="text-sm">Click to reveal</span>
+              <span className="text-sm">{t('createView.clickToReveal')}</span>
             </button>
           )}
         </div>
@@ -61,7 +63,7 @@ function CreateWalletView({ onCreate }: { onCreate: (mnemonic: string, password?
         <label className="flex items-start gap-3 mb-4 cursor-pointer">
           <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} className="mt-1 w-4 h-4 accent-pulse" />
           <span className="text-sm text-ghost">
-            I have written down my recovery phrase and stored it in a safe place.
+            {t('createView.confirmPhrase')}
             <span className="text-danger ml-1">*</span>
           </span>
         </label>
@@ -70,10 +72,9 @@ function CreateWalletView({ onCreate }: { onCreate: (mnemonic: string, password?
           <div className="flex items-start gap-3 mb-3">
             <Lock size={16} className="text-pulse mt-0.5 shrink-0" />
             <div>
-              <span className="text-sm text-light">Set a password</span>
+              <span className="text-sm text-light">{t('createView.setPassword')}</span>
               <p className="text-xs text-ghost mt-1">
-                Your wallet is encrypted on this device with this password. There is no way to
-                recover it if you forget it — keep your recovery phrase safe as a backup.
+                {t('createView.passwordNote')}
               </p>
             </div>
           </div>
@@ -86,7 +87,7 @@ function CreateWalletView({ onCreate }: { onCreate: (mnemonic: string, password?
         </div>
 
         <Button onClick={handleCreate} disabled={!confirmed || !showMnemonic || !passwordValid} className="w-full">
-          Create Wallet
+          {t('createView.createButton')}
         </Button>
       </Card>
     </div>
@@ -94,6 +95,7 @@ function CreateWalletView({ onCreate }: { onCreate: (mnemonic: string, password?
 }
 
 function ImportWalletView({ onImport }: { onImport: (mnemonic: string, password?: string) => Promise<void> }) {
+  const { t } = useTranslation('wallet')
   const [seedPhrase, setSeedPhrase] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [isImporting, setIsImporting] = useState(false)
@@ -110,7 +112,7 @@ function ImportWalletView({ onImport }: { onImport: (mnemonic: string, password?
     try {
       await onImport(seedPhrase, password)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Import failed')
+      setError(err instanceof Error ? err.message : t('importView.importFailed'))
     } finally {
       setIsImporting(false)
     }
@@ -123,29 +125,31 @@ function ImportWalletView({ onImport }: { onImport: (mnemonic: string, password?
           <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-pulse/10 flex items-center justify-center mx-auto mb-3 sm:mb-4">
             <KeyRound className="text-pulse" size={28} />
           </div>
-          <h2 className="font-display text-xl sm:text-2xl font-bold mb-2">Import Wallet</h2>
-          <p className="text-ghost text-sm sm:text-base">Enter your 12 or 24 word recovery phrase to restore your wallet.</p>
+          <h2 className="font-display text-xl sm:text-2xl font-bold mb-2">{t('importView.title')}</h2>
+          <p className="text-ghost text-sm sm:text-base">{t('importView.subtitle')}</p>
         </div>
 
         <div className="space-y-4">
           <div>
-            <label className="block text-sm text-ghost mb-2">Recovery Phrase</label>
+            <label className="block text-sm text-ghost mb-2">{t('importView.recoveryPhraseLabel')}</label>
             <textarea
               value={seedPhrase}
               onChange={(e) => {
                 setSeedPhrase(e.target.value)
                 setError(null)
               }}
-              placeholder="Enter your recovery phrase, separating each word with a space..."
+              placeholder={t('importView.placeholder')}
               rows={4}
               className="w-full p-3 sm:p-4 rounded-lg bg-abyss border border-steel font-mono text-xs sm:text-sm leading-relaxed resize-none focus:outline-none focus:ring-2 focus:ring-pulse/50 focus:border-pulse placeholder:text-ghost/50"
             />
             <div className="flex justify-between items-center mt-2">
               <span className="text-xs text-ghost">
-                {wordCount} {wordCount === 1 ? 'word' : 'words'}
+                {wordCount === 1
+                  ? t('importView.wordCountOne', { count: wordCount })
+                  : t('importView.wordCountOther', { count: wordCount })}
               </span>
               {wordCount > 0 && wordCount !== 12 && wordCount !== 24 && (
-                <span className="text-xs text-warning">Expected 12 or 24 words</span>
+                <span className="text-xs text-warning">{t('importView.expectedWords')}</span>
               )}
             </div>
           </div>
@@ -154,9 +158,9 @@ function ImportWalletView({ onImport }: { onImport: (mnemonic: string, password?
             <div className="flex items-start gap-3 mb-3">
               <Lock size={16} className="text-pulse mt-0.5 shrink-0" />
               <div>
-                <span className="text-sm text-light">Set a password</span>
+                <span className="text-sm text-light">{t('importView.setPassword')}</span>
                 <p className="text-xs text-ghost mt-1">
-                  Your wallet is encrypted on this device with this password.
+                  {t('importView.passwordNote')}
                 </p>
               </div>
             </div>
@@ -181,9 +185,9 @@ function ImportWalletView({ onImport }: { onImport: (mnemonic: string, password?
             className="w-full"
           >
             {isImporting ? (
-              <><RefreshCw size={16} className="mr-2 animate-spin" />Importing...</>
+              <><RefreshCw size={16} className="mr-2 animate-spin" />{t('importView.importing')}</>
             ) : (
-              'Import Wallet'
+              t('importView.importButton')
             )}
           </Button>
         </div>
@@ -192,14 +196,17 @@ function ImportWalletView({ onImport }: { onImport: (mnemonic: string, password?
   )
 }
 
-/** Auto-lock timeout options for the settings control (#490). 0 = Off/Never. */
-const AUTO_LOCK_OPTIONS: Array<{ minutes: number; label: string }> = [
-  { minutes: 1, label: '1 minute' },
-  { minutes: 5, label: '5 minutes' },
-  { minutes: 15, label: '15 minutes' },
-  { minutes: 30, label: '30 minutes' },
-  { minutes: 60, label: '1 hour' },
-  { minutes: 0, label: 'Off (never)' },
+/**
+ * Auto-lock timeout options for the settings control (#490). 0 = Off/Never.
+ * Labels are resolved via i18n (`wallet.autoLock.*`) at render time.
+ */
+const AUTO_LOCK_OPTIONS: Array<{ minutes: number; labelKey: string }> = [
+  { minutes: 1, labelKey: 'autoLock.minute' },
+  { minutes: 5, labelKey: 'autoLock.fiveMinutes' },
+  { minutes: 15, labelKey: 'autoLock.fifteenMinutes' },
+  { minutes: 30, labelKey: 'autoLock.thirtyMinutes' },
+  { minutes: 60, labelKey: 'autoLock.hour' },
+  { minutes: 0, labelKey: 'autoLock.off' },
 ]
 
 /**
@@ -225,6 +232,7 @@ function SettingsModal({
   onReset: () => void
   onClose: () => void
 }) {
+  const { t } = useTranslation('wallet')
   return (
     // Shared dismissal policy (#655): backdrop click / Escape close, same as
     // the explicit Close button.
@@ -237,8 +245,8 @@ function SettingsModal({
           <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-pulse/10 flex items-center justify-center mx-auto mb-3 sm:mb-4">
             <Settings className="text-pulse" size={28} />
           </div>
-          <h3 className="font-display text-lg sm:text-xl font-semibold mb-2">Settings</h3>
-          <p className="text-ghost text-sm">Security and wallet controls.</p>
+          <h3 className="font-display text-lg sm:text-xl font-semibold mb-2">{t('settingsModal.title')}</h3>
+          <p className="text-ghost text-sm">{t('settingsModal.subtitle')}</p>
         </div>
 
         <div className="space-y-5">
@@ -246,7 +254,7 @@ function SettingsModal({
           <div>
             <div className="flex items-center gap-2 mb-2">
               <Clock size={16} className="text-pulse shrink-0" />
-              <span className="text-sm font-medium text-light">Auto-lock after inactivity</span>
+              <span className="text-sm font-medium text-light">{t('settingsModal.autoLockLabel')}</span>
             </div>
             <select
               value={autoLockMinutes}
@@ -256,14 +264,14 @@ function SettingsModal({
             >
               {AUTO_LOCK_OPTIONS.map((opt) => (
                 <option key={opt.minutes} value={opt.minutes}>
-                  {opt.label}
+                  {t(opt.labelKey)}
                 </option>
               ))}
             </select>
             <p className="text-xs text-ghost mt-1">
               {isEncrypted
-                ? 'Lock the wallet automatically when idle. Activity resets the timer.'
-                : 'Set a password to enable auto-lock.'}
+                ? t('settingsModal.autoLockEnabled')
+                : t('settingsModal.autoLockDisabled')}
             </p>
           </div>
 
@@ -274,10 +282,10 @@ function SettingsModal({
               onClick={onLock}
               disabled={!isEncrypted}
               className="w-full justify-center"
-              title={isEncrypted ? 'Lock wallet' : 'Set a password to enable locking'}
+              title={isEncrypted ? t('settingsModal.lockWalletTitle') : t('settingsModal.enableLockingTitle')}
             >
               <Lock size={16} className="mr-2" />
-              Lock wallet
+              {t('settingsModal.lockWallet')}
             </Button>
             {!isEncrypted && (
               <button
@@ -285,7 +293,7 @@ function SettingsModal({
                 onClick={onSetPassword}
                 className="text-xs text-pulse hover:underline mt-2"
               >
-                Set a password to enable locking
+                {t('settingsModal.enableLockingLink')}
               </button>
             )}
           </div>
@@ -294,12 +302,12 @@ function SettingsModal({
           <div className="border-t border-steel pt-4">
             <Button variant="danger" onClick={onReset} className="w-full justify-center">
               <Trash2 size={16} className="mr-2" />
-              Reset wallet
+              {t('settingsModal.resetWallet')}
             </Button>
           </div>
 
           <Button variant="ghost" onClick={onClose} className="w-full justify-center">
-            Close
+            {t('settingsModal.close')}
           </Button>
         </div>
       </Card>
@@ -308,6 +316,7 @@ function SettingsModal({
 }
 
 function WalletDashboard() {
+  const { t } = useTranslation('wallet')
   const { address, balance, transactions, isConnecting, isConnected, refreshBalance, refreshTransactions, resetWallet, send, estimateFee, contacts, searchContacts, isEncrypted, setPassword, changePassword, lockWallet, autoLockMinutes, setAutoLockMinutes } = useWallet()
 
   // Resolve a counterparty address to a saved contact name for the transaction
@@ -349,7 +358,7 @@ function WalletDashboard() {
       await Promise.allSettled([refreshBalance(), refreshTransactions()])
       return { success: true, txHash }
     } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : 'Transaction failed' }
+      return { success: false, error: err instanceof Error ? err.message : t('dashboard.transactionFailed') }
     } finally {
       setIsSending(false)
     }
@@ -366,20 +375,20 @@ function WalletDashboard() {
   const actionButtons = (
     <>
       <Button onClick={() => setSendOpen(true)}>
-        <Send size={16} className="mr-2" />Send
+        <Send size={16} className="mr-2" />{t('dashboard.send')}
       </Button>
       <Button variant="secondary" onClick={() => setReceiveOpen(true)}>
-        <QrCode size={16} className="mr-2" />Receive
+        <QrCode size={16} className="mr-2" />{t('dashboard.receive')}
       </Button>
       <Button variant="secondary" onClick={() => setSendLinkOpen(true)}>
-        <Link2 size={16} className="mr-2" />Send via Link
+        <Link2 size={16} className="mr-2" />{t('dashboard.sendViaLink')}
       </Button>
       <Button variant="secondary" onClick={() => setRequestOpen(true)}>
-        <Download size={16} className="mr-2" />Request
+        <Download size={16} className="mr-2" />{t('dashboard.request')}
       </Button>
       <Link to="/contacts">
         <Button variant="secondary">
-          <Users size={16} className="mr-2" />Contacts
+          <Users size={16} className="mr-2" />{t('dashboard.contacts')}
         </Button>
       </Link>
       <Button variant="ghost" size="sm" onClick={refreshBalance} disabled={isConnecting}>
@@ -390,11 +399,11 @@ function WalletDashboard() {
         size="sm"
         onClick={lockWallet}
         disabled={!isEncrypted}
-        title={isEncrypted ? 'Lock wallet' : 'Set a password to enable locking'}
+        title={isEncrypted ? t('dashboard.lockWalletTitle') : t('dashboard.enableLockingTitle')}
       >
         <Lock size={16} />
       </Button>
-      <Button variant="ghost" size="sm" onClick={() => setShowSettings(true)} title="Settings">
+      <Button variant="ghost" size="sm" onClick={() => setShowSettings(true)} title={t('dashboard.settingsTitle')}>
         <Settings size={16} />
       </Button>
     </>
@@ -427,12 +436,12 @@ function WalletDashboard() {
             <Shield size={18} className={isEncrypted ? 'text-success mt-0.5 shrink-0' : 'text-warning mt-0.5 shrink-0'} />
             <div>
               <p className="text-sm font-medium text-light">
-                {isEncrypted ? 'Wallet is password-protected' : 'Wallet has no password'}
+                {isEncrypted ? t('dashboard.protectedTitle') : t('dashboard.unprotectedTitle')}
               </p>
               <p className="text-xs text-ghost mt-1">
                 {isEncrypted
-                  ? 'Your seed, contacts, and claim links are encrypted on this device.'
-                  : 'Set a password to encrypt your wallet and enable claim links.'}
+                  ? t('dashboard.protectedBody')
+                  : t('dashboard.unprotectedBody')}
               </p>
             </div>
           </div>
@@ -442,7 +451,7 @@ function WalletDashboard() {
             onClick={() => setShowPasswordModal(true)}
           >
             <KeyRound size={16} className="mr-2" />
-            {isEncrypted ? 'Change password' : 'Set a password'}
+            {isEncrypted ? t('dashboard.changePassword') : t('dashboard.setPassword')}
           </Button>
         </div>
       </Card>
@@ -451,7 +460,7 @@ function WalletDashboard() {
 
       <TransactionList
         transactions={transactions}
-        title="Recent Transactions"
+        title={t('dashboard.recentTransactions')}
         showChevron={false}
         resolveName={resolveName}
       />
@@ -520,15 +529,15 @@ function WalletDashboard() {
               <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-danger/10 flex items-center justify-center mx-auto mb-3 sm:mb-4">
                 <Trash2 className="text-danger" size={28} />
               </div>
-              <h3 className="font-display text-lg sm:text-xl font-semibold mb-2">Reset Wallet</h3>
-              <p className="text-ghost text-sm">This will remove your wallet from this device. Make sure you have your recovery phrase saved before continuing.</p>
+              <h3 className="font-display text-lg sm:text-xl font-semibold mb-2">{t('resetModal.title')}</h3>
+              <p className="text-ghost text-sm">{t('resetModal.body')}</p>
             </div>
             <div className="space-y-3">
               <Button variant="danger" onClick={handleReset} className="w-full justify-center">
-                Reset & Start Over
+                {t('resetModal.confirm')}
               </Button>
               <Button variant="secondary" onClick={() => setShowResetConfirm(false)} className="w-full justify-center">
-                Cancel
+                {t('resetModal.cancel')}
               </Button>
             </div>
           </Card>
@@ -539,6 +548,7 @@ function WalletDashboard() {
 }
 
 function UnlockWalletView({ onUnlock, address }: { onUnlock: (password: string) => Promise<void>; address: string | null }) {
+  const { t } = useTranslation('wallet')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [isUnlocking, setIsUnlocking] = useState(false)
@@ -549,7 +559,7 @@ function UnlockWalletView({ onUnlock, address }: { onUnlock: (password: string) 
     try {
       await onUnlock(password)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unlock failed')
+      setError(err instanceof Error ? err.message : t('unlockView.unlockFailed'))
     } finally {
       setIsUnlocking(false)
     }
@@ -568,8 +578,8 @@ function UnlockWalletView({ onUnlock, address }: { onUnlock: (password: string) 
           <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-pulse/10 flex items-center justify-center mx-auto mb-3 sm:mb-4">
             <Lock className="text-pulse" size={28} />
           </div>
-          <h2 className="font-display text-xl sm:text-2xl font-bold mb-2">Unlock Wallet</h2>
-          <p className="text-ghost text-sm sm:text-base">Enter your password to access your wallet.</p>
+          <h2 className="font-display text-xl sm:text-2xl font-bold mb-2">{t('unlockView.title')}</h2>
+          <p className="text-ghost text-sm sm:text-base">{t('unlockView.subtitle')}</p>
           {address && (
             <p className="text-xs text-ghost mt-2 font-mono truncate px-4">{address}</p>
           )}
@@ -578,7 +588,7 @@ function UnlockWalletView({ onUnlock, address }: { onUnlock: (password: string) 
         <div className="space-y-4">
           <Input
             type="password"
-            placeholder="Enter password"
+            placeholder={t('unlockView.passwordPlaceholder')}
             value={password}
             onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
               setPassword(e.target.value)
@@ -601,9 +611,9 @@ function UnlockWalletView({ onUnlock, address }: { onUnlock: (password: string) 
             className="w-full"
           >
             {isUnlocking ? (
-              <><RefreshCw size={16} className="mr-2 animate-spin" />Unlocking...</>
+              <><RefreshCw size={16} className="mr-2 animate-spin" />{t('unlockView.unlocking')}</>
             ) : (
-              'Unlock'
+              t('unlockView.unlock')
             )}
           </Button>
         </div>
@@ -615,6 +625,7 @@ function UnlockWalletView({ onUnlock, address }: { onUnlock: (password: string) 
 type WalletMode = 'create' | 'import'
 
 function WalletSetup({ onCreate, onImport }: { onCreate: (mnemonic: string, password?: string) => void; onImport: (mnemonic: string, password?: string) => Promise<void> }) {
+  const { t } = useTranslation('wallet')
   const [mode, setMode] = useState<WalletMode>('create')
 
   return (
@@ -629,7 +640,7 @@ function WalletSetup({ onCreate, onImport }: { onCreate: (mnemonic: string, pass
                 : 'text-ghost hover:text-light'
             }`}
           >
-            Create New
+            {t('setup.createNew')}
           </button>
           <button
             onClick={() => setMode('import')}
@@ -639,7 +650,7 @@ function WalletSetup({ onCreate, onImport }: { onCreate: (mnemonic: string, pass
                 : 'text-ghost hover:text-light'
             }`}
           >
-            Import Existing
+            {t('setup.importExisting')}
           </button>
         </div>
       </div>
@@ -654,6 +665,7 @@ function WalletSetup({ onCreate, onImport }: { onCreate: (mnemonic: string, pass
 }
 
 export function WalletPage() {
+  const { t } = useTranslation('wallet')
   const { hasWallet: walletExists, isLocked, isConnecting, address, createWallet, importWallet, unlockWallet } = useWallet()
 
   const handleCreate = async (mnemonic: string, password?: string) => {
@@ -703,8 +715,8 @@ export function WalletPage() {
           <Link to={homeHref} className="flex items-center gap-2 sm:gap-3">
             <ArrowLeft size={18} className="text-ghost" />
             <Logo size="sm" showText={false} />
-            <span className="font-display text-base sm:text-lg font-semibold hidden sm:inline">Botho Wallet</span>
-            <span className="font-display text-base font-semibold sm:hidden">Wallet</span>
+            <span className="font-display text-base sm:text-lg font-semibold hidden sm:inline">{t('header.walletNameLong')}</span>
+            <span className="font-display text-base font-semibold sm:hidden">{t('header.walletNameShort')}</span>
           </Link>
           <NetworkSelector />
         </div>
