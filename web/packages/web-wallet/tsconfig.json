@@ -8,5 +8,5 @@
     // Locale resource bundles (issue #764) are imported as typed JSON modules.
     "resolveJsonModule": true
   },
-  "include": ["src"]
+  "include": ["src", "functions"]
 }

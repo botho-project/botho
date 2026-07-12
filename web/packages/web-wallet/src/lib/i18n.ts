@@ -23,6 +23,13 @@
 import i18n from 'i18next'
 import { initReactI18next } from 'react-i18next'
 
+import {
+  DEFAULT_LOCALE,
+  isSupportedLocale,
+  SUPPORTED_LOCALES,
+  type SupportedLocale,
+} from './locales'
+
 import enLanding from '../locales/en/landing.json'
 import esLanding from '../locales/es/landing.json'
 import enWallet from '../locales/en/wallet.json'
@@ -37,24 +44,20 @@ import enDocs from '../locales/en/docs.json'
 import esDocs from '../locales/es/docs.json'
 
 /**
- * The set of locales the app knows how to render. `en` MUST stay first — it is
- * the default and the unprefixed locale. Add a new entry here (plus its
- * resource bundles) to light up an additional language.
+ * Locale constants live in the dependency-free `./locales` leaf module so build
+ * targets that must not import the i18next runtime (the edge Pages Function,
+ * #779) can share them. Re-exported here so existing `./i18n` importers are
+ * unchanged.
  */
-export const SUPPORTED_LOCALES = ['en', 'es'] as const
-
-export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number]
-
-/** The default locale, served without a URL prefix. */
-export const DEFAULT_LOCALE: SupportedLocale = 'en'
+export {
+  SUPPORTED_LOCALES,
+  DEFAULT_LOCALE,
+  isSupportedLocale,
+  type SupportedLocale,
+}
 
 /** localStorage key used to persist the visitor's explicit locale choice. */
 export const LOCALE_STORAGE_KEY = 'botho:locale'
-
-/** Type guard: is `value` one of the locales we actually support? */
-export function isSupportedLocale(value: string | undefined | null): value is SupportedLocale {
-  return value != null && (SUPPORTED_LOCALES as readonly string[]).includes(value)
-}
 
 /**
  * Read a previously persisted locale choice from localStorage, falling back to
