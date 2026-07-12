@@ -1,1340 +1,46 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { Logo } from '@botho/ui'
-import {
-  AlertTriangle,
-  ArrowLeft,
-  Book,
-  Code,
-  Shield,
-  Zap,
-  Globe,
-  Terminal,
-  Menu,
-  X,
-  Coins,
-  Tag,
-  Scale,
-} from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Menu, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
-const sections = [
-  {
-    id: 'getting-started',
-    title: 'Getting Started',
-    icon: Book,
-    content: `
-## Getting Started with Botho
+import { LocaleSwitcher } from '../components/LocaleSwitcher'
+import { DEFAULT_LOCALE, isSupportedLocale } from '../lib/i18n'
+import { SECTION_META, getSectionContent, type DocSectionId } from '../docs-content'
 
-Botho is a privacy-focused cryptocurrency designed for the post-quantum era. It combines **stealth addresses** for transaction privacy with the **Stellar Consensus Protocol (SCP)** for fast, energy-efficient consensus. Unlike proof-of-work cryptocurrencies, Botho achieves finality in seconds while maintaining strong privacy guarantees.
-
-### What Makes Botho Different?
-
-Traditional cryptocurrencies like Bitcoin have transparent blockchains where anyone can trace the flow of funds between addresses. Even "privacy coins" often rely on cryptographic assumptions that may be broken by future quantum computers.
-
-Botho takes a different approach:
-
-- **Stealth addresses** ensure that each payment you receive goes to a unique one-time address, making it impossible to link your transactions together by watching the blockchain
-- **Post-quantum cryptography** protects your privacy against adversaries with quantum computers
-- **Federated Byzantine Agreement** provides fast finality — consensus safety never depends on hashpower
-- **Egalitarian issuance** distributes new coins through RandomX CPU mining that is deliberately decoupled from consensus: mining earns rewards but buys no say over which transactions confirm
-- **Progressive economics** — fees scale 1×–6× with wealth concentration, 80% of every fee is redistributed by lottery, and 20% is burned
-
-### Creating a Wallet
-
-Getting started with Botho takes just a few steps:
-
-1. **Visit the Wallet page** - Click "Launch Wallet" from the homepage or navigate directly to the wallet
-2. **Choose "Create New Wallet"** - You can also import an existing wallet if you have a recovery phrase
-3. **Secure your recovery phrase** - You'll be shown a 24-word mnemonic phrase. Write this down on paper and store it in a safe place. This phrase is the **only way** to recover your funds if you lose access to your device
-4. **Optional: Set a password** - Add an encryption password for additional security. You'll need this password each time you open the wallet in this browser
-
-**Important:** Never share your recovery phrase with anyone. Anyone with these words can access your funds. Never store it digitally (no screenshots, no cloud storage, no password managers).
-
-### Understanding Your Wallet Address
-
-Your wallet address looks like this: \`botho://1/4nuKn2U5qsRk3vD...\` (about 90 characters total)
-
-This address format includes:
-- **Protocol identifier** (\`botho://\` on mainnet, \`tbotho://\` on testnet) - Different prefixes prevent accidental cross-network sends
-- **Address version** (\`1/\` for classical addresses, \`1q/\` for quantum-safe addresses)
-- **Public keys** - Your view key and spend key, encoded together in base58
-
-Quantum-safe addresses (\`1q/\`) additionally embed ML-KEM and ML-DSA public keys, which makes them much longer (~4,400 characters) — better suited to QR codes and files than manual copying.
-
-You can safely share this address with anyone who wants to send you funds. Thanks to stealth addresses, each incoming transaction will be sent to a unique derived address that only you can spend from.
-
-### Receiving Your First Payment
-
-When someone sends you BTH:
-
-1. They use your public address to derive a unique one-time address
-2. The transaction is broadcast to the network and included in a block
-3. Your wallet scans new blocks and detects payments addressed to you
-4. The funds appear in your balance, usually within one block — block time adapts to network load, from 3 seconds under very heavy traffic up to 40 seconds when the network is idle
-
-### Sending Payments
-
-To send BTH to someone else:
-
-1. Click the **Send** button in your wallet
-2. Enter the recipient's Botho address
-3. Enter the amount to send
-4. Review the transaction details including the fee
-5. Confirm the transaction
-
-Transactions are final once confirmed—there are no chargebacks or reversals in Botho.
-
-### Transaction Fees
-
-Every Botho transaction requires a small fee. These fees serve three purposes:
-
-1. **Spam prevention** - Fees make it expensive to flood the network with junk transactions
-2. **Progressive taxation** - Fees scale 1× to 6× based on cluster wealth, discouraging concentration without enabling Sybil attacks
-3. **Redistribution and deflation** - 80% of every fee is redistributed to holders through a lottery; the remaining 20% is permanently burned
-
-Fees are size-based, not amount-based: \`fee = per-byte rate × transaction size × cluster factor (1×–6×) × output penalty\`. See the Cluster Tags and Tokenomics sections for details.
-
-### Security Best Practices
-
-- **Back up your recovery phrase** on paper, stored in a secure location
-- **Use a password** to encrypt your wallet in the browser
-- **Consider running your own node** for maximum privacy
-- **Verify addresses carefully** before sending funds—transactions cannot be reversed
-    `,
-  },
-  {
-    id: 'privacy',
-    title: 'Privacy Features',
-    icon: Shield,
-    content: `
-## Privacy Features
-
-Privacy is not just a feature in Botho—it's a fundamental design principle. Every aspect of the protocol is designed to protect your financial privacy while maintaining the auditability properties needed for a sound monetary system.
-
-### Why Privacy Matters
-
-Financial privacy is essential for:
-
-- **Personal security** - Public wealth makes you a target for criminals
-- **Business confidentiality** - Competitors shouldn't see your supplier payments or revenue
-- **Fungibility** - Money should be interchangeable; tainted coins create a two-tier system
-- **Human dignity** - Your financial life is nobody's business but your own
-- **Censorship resistance** - When all transactions look identical, there's no basis for blocking particular payments. Bitcoin works hard to solve this problem with various techniques, but privacy-by-default solves it elegantly: validators cannot discriminate because they cannot distinguish
-
-### Stealth Addresses
-
-Stealth addresses are the foundation of Botho's privacy model. Here's how they work:
-
-**The Problem:** In Bitcoin, if you publish an address to receive donations, anyone can see every donation you've ever received by looking at that address on the blockchain.
-
-**The Solution:** In Botho, your public address is not where funds are actually sent. Instead, each sender uses your public address to mathematically derive a unique one-time address. Only you can detect and spend from these derived addresses.
-
-**Technical Details:**
-
-1. Your wallet has a **view keypair** and a **spend keypair**
-2. The sender generates a random value and combines it with your public keys
-3. This produces a one-time address that appears random to everyone else
-4. Your wallet uses your private view key to scan for payments addressed to you
-5. To spend, you use your private spend key to sign the transaction
-
-The result: Even if you publish your address publicly, no one watching the blockchain can determine how many payments you've received, when you received them, or how much they were for.
-
-### Ring Signatures (Private Transactions)
-
-When you send a **Private transaction**, Botho uses **CLSAG ring signatures** to hide which specific coins you're spending. Your transaction references 20 possible inputs (a "ring"), and the signature proves you own one of them without revealing which one.
-
-CLSAG (Concise Linkable Spontaneous Anonymous Group) is an efficient ring signature scheme that provides strong sender privacy with compact signatures (~700 bytes per input).
-
-This breaks the transaction graph that would otherwise allow tracing funds through the blockchain. An observer sees that *someone* in the ring spent *some* coins, but cannot determine which participant or which specific coins.
-
-> **Note:** All value transfers use ring signatures. Minting transactions (block rewards) use ML-DSA signatures since the minter is public.
-
-### Confidential Amounts
-
-In all **Private transactions** (which includes all value transfers), amounts are hidden using **Pedersen commitments** with **Bulletproofs** range proofs. These cryptographic constructs allow the network to verify that transactions balance (inputs equal outputs plus fees) without revealing the actual amounts.
-
-Validators can confirm:
-- No new money is created from thin air
-- The sender has sufficient funds
-- The fee is at least the minimum required
-- All amounts are positive (via Bulletproofs)
-
-But they cannot determine:
-- How much is being transferred
-- The sender's total balance
-- The recipient's total balance
-
-> **Note:** Minting transactions (block rewards) have public amounts for supply auditability, but recipients are still hidden via stealth addresses.
-
-### Post-Quantum Cryptography
-
-Quantum computers pose a future threat to the cryptographic algorithms that secure most cryptocurrencies today. Botho uses a **hybrid post-quantum architecture** that protects the most critical data while keeping transactions efficient.
-
-**Algorithms Used:**
-
-- **ML-KEM-768** (FIPS 203) - Post-quantum stealth addresses (recipient privacy is permanent)
-- **ML-DSA-65** (FIPS 204) - Post-quantum signatures for minting transactions
-- **CLSAG** - Classical ring signatures for private transactions (sender privacy is ephemeral)
-- **Pedersen + Bulletproofs** - Information-theoretic amount hiding (quantum-safe)
-
-**Why This Architecture?**
-
-Recipient identity is recorded on-chain forever—a quantum attacker in 2045 could link recipients from 2025 transactions. ML-KEM protects against this "harvest now, decrypt later" threat. Sender privacy, however, is ephemeral—its value degrades over time as economic context becomes historical. Using classical CLSAG keeps transactions small (~4 KB vs ~65 KB for post-quantum alternatives).
-
-**Transaction Types:**
-
-| Type | Recipient | Amount | Sender | Use Case |
-|------|-----------|--------|--------|----------|
-| Minting | Hidden (ML-KEM) | Public | Known (ML-DSA) | Block rewards |
-| Private | Hidden (ML-KEM) | Hidden | Hidden (CLSAG ring=20) | All transfers (~4 KB) |
-
-Recipients and amounts are protected against quantum computers. Sender privacy uses efficient classical signatures.
-
-### Privacy Best Practices
-
-To maximize your privacy when using Botho:
-
-1. **Run your own node** - This prevents revealing your addresses to third-party servers
-2. **Use a new address for each context** - While stealth addresses protect received funds, using separate addresses for work vs personal adds another layer
-3. **Be mindful of metadata** - Privacy on-chain doesn't help if you reveal information off-chain
-    `,
-  },
-  {
-    id: 'cluster-tags',
-    title: 'Cluster Tags',
-    icon: Tag,
-    content: `
-## Cluster Tags
-
-Cluster tags are Botho's novel mechanism for tracking coin provenance without compromising privacy. They enable **Sybil-resistant progressive fees**, **lottery-based redistribution**, and **privacy-preserving ring signatures**.
-
-### The Problem: Wealth Taxation Without Identity
-
-Traditional progressive taxation requires identity. In cryptocurrency:
-
-- **Amount-based fees** fail instantly — split 1M into 1000×1K and pay lower rates
-- **Account-based taxation** is impossible — anyone can create unlimited addresses
-- **Transaction counting** doesn't work — bots can create artificial activity
-
-**The core challenge:** How do you tax wealth concentration when you can't identify who owns what?
-
-### The Solution: Provenance Tracking
-
-Instead of tracking *who* owns coins, we track *where* they came from. Every coin carries a memory of its origin.
-
-**Key insight:** Splitting coins doesn't change where they came from.
-
-### How Cluster Tags Work
-
-**1. Clusters Are Born at Minting**
-
-Each block reward creates a unique "cluster" — an identity for coins minted by a specific minter. The minting reward carries a 100% tag for that cluster.
-
-\`\`\`
-Block 1000: Minter A receives 50 BTH
-  → Tag: {cluster_A: 100%}
-
-Block 1001: Minter B receives 50 BTH
-  → Tag: {cluster_B: 100%}
-\`\`\`
-
-**2. Tags Inherit on Transfer**
-
-When coins move, the recipient's UTXO inherits the sender's tags:
-
-\`\`\`
-Minter A → Merchant → Customer
-  100%   →   95%    →   90%   (A's cluster factor)
-\`\`\`
-
-**3. Tags Blend on Combination**
-
-When multiple inputs are spent together, output tags are a value-weighted average:
-
-\`\`\`
-Input 1: 70 BTH {cluster_A: 100%}
-Input 2: 30 BTH {cluster_B: 100%}
-─────────────────────────────────
-Output: 100 BTH {cluster_A: 70%, cluster_B: 30%}
-\`\`\`
-
-**4. Tags Decay Over Time**
-
-Each transaction hop decays the tag by 5%, spreading attribution across the economy. But decay only applies if the UTXO is at least 720 blocks old (one to a few hours, depending on the load-adaptive block time), preventing wash trading attacks.
-
-### Why Splitting Doesn't Work
-
-This is what makes cluster tags special:
-
-\`\`\`
-Whale splits 1,000,000 BTH into 1000 × 1000 BTH
-
-Before: 1 UTXO with {whale_cluster: 100%}
-After:  1000 UTXOs, each with {whale_cluster: 100%}
-
-Fee rate: unchanged (based on cluster wealth, not UTXO count)
-\`\`\`
-
-The "source wealth" of a cluster is the total value minted by that minter — splitting doesn't reduce it.
-
-### Progressive Fee Curve
-
-The cluster factor determines how much you pay. It follows a smooth sigmoid curve in the *logarithm* of cluster wealth, with its midpoint at 100,000 BTH:
-
-| Cluster Wealth | Fee Multiplier |
-|----------------|----------------|
-| Small clusters (≤ ~1K BTH) | ~1x (base rate) |
-| Mid-size clusters (~100K BTH) | ~3.5x (curve midpoint) |
-| Whale clusters (≥ ~10M BTH) | ~6x (saturates) |
-
-The multiplier applies to a size-based fee (\`per-byte rate × transaction size\`), so the same transfer costs a whale cluster up to 6× what it costs well-circulated coins — and no amount of splitting changes that.
-
-### Lottery-Based Redistribution
-
-80% of all transaction fees are redistributed to eligible UTXOs via a lottery. 20% are burned.
-
-**How it works:**
-
-1. Each transaction pays a fee based on cluster factor
-2. 80% of the fee is split among 4 winners drawn with verifiable randomness
-3. 20% is permanently burned (deflationary)
-
-**How winners are selected (cluster-weighted):**
-
-A UTXO's winning weight is its **value divided by its cluster factor**. This is the only progressive weighting that is split-invariant:
-
-- Weights are value-based, so splitting a position into many UTXOs never increases total weight
-- The tilt comes from cluster provenance, which inherits through splits
-- Well-circulated (low-factor) coins win proportionally more; whale-cluster coins win less
-
-To participate, a UTXO must be at least 720 blocks old and worth at least 1 µBTH.
-
-### Ring Signatures and Tag Privacy
-
-Cluster tags work seamlessly with CLSAG ring signatures:
-
-**The challenge:** Ring signatures hide which input is real among 20 ring members. How do we calculate the correct fee?
-
-**The solution:** Centroid-based validation
-
-1. All ring members' tags are publicly known
-2. The fee derives from the value-weighted *centroid* of the ring's tags, with floors that stop cheap background decoys from dragging the factor down
-3. The claimed output tags must be at least 70% similar (cosine similarity) to the ring centroid, or the transaction is rejected
-
-This prevents fee evasion — you can't cherry-pick low-factor decoys to cut your fee, because implausible ring compositions fail validation.
-
-### Decay Mechanism Details
-
-To prevent wash trading (sending to yourself repeatedly to decay tags):
-
-**Age-Based Gating:**
-- Decay only applies to UTXOs at least 720 blocks old
-- New outputs from rapid self-transfers don't decay
-- The age gate naturally caps decay at ~12 events per day
-
-**Natural rate limiting:**
-
-| Attack | Result |
-|--------|--------|
-| 100 rapid self-transfers | 0% decay (all outputs too young) |
-| Patient attack (1 day) | ~46% max decay (only ~12 eligible hops) |
-| Patient attack (1 week) | ~99% decay — but you've paid ~84 transaction fees |
-| Holding without transacting | 0% decay |
-
-### Privacy Considerations
-
-**Phase 1 (Current):** Tags are public on UTXOs. This enables direct fee verification but reveals some provenance information.
-
-**Phase 2 (Planned):** Tags will be hidden using Pedersen commitments with zero-knowledge proofs. Validators verify correct fees without seeing actual tag values.
-
-### Economic Incentives
-
-The cluster tag system creates aligned incentives:
-
-| Behavior | Effect on Tags | Incentive |
-|----------|----------------|-----------|
-| **Circulate coins** | Tags decay and blend | Lower fees, higher lottery weight |
-| **Hoard wealth** | Tags remain concentrated | Higher fees, lower lottery weight, demurrage |
-| **Split into many UTXOs** | Tags unchanged | No benefit — fees and lottery weight are provenance- and value-based |
-
-### Technical Parameters
-
-| Parameter | Value | Purpose |
-|-----------|-------|---------|
-| Decay rate | 5% per eligible hop | Gradual tag diffusion |
-| Min UTXO age (decay + lottery) | 720 blocks | Wash trading prevention |
-| Min UTXO value (lottery) | 1 µBTH | Dust exclusion |
-| Cluster factor range | 1x–6x (midpoint 3.5x at 100K BTH) | Progressive fees |
-| Ring size | 20 | Privacy set for tag propagation |
-| Lottery winners | 4 per drawing | Redistribution granularity |
-| Burn rate | 20% of fees | Deflationary pressure |
-| Pool rate | 80% of fees | Redistribution amount |
-| Demurrage | 2%/yr at max factor (see Tokenomics) | Reaches idle concentrated wealth |
-
-### Summary
-
-Cluster tags solve the "Sybil-resistant progressive taxation" problem that plagues cryptocurrency:
-
-1. **Track provenance, not identity** — Coins remember their origin
-2. **Resist splitting attacks** — Cluster wealth is fixed at minting
-3. **Enable progressive fees** — Wealthy clusters pay more
-4. **Power fair redistribution** — Lottery weight tilts toward well-circulated coins
-5. **Preserve privacy** — Works with ring signatures
-6. **Encourage circulation** — Tags decay through commerce
-
-This makes Botho the first cryptocurrency with a credible mechanism for wealth-based fees that can't be trivially evaded.
-    `,
-  },
-  {
-    id: 'privacy-progressivity',
-    title: 'Privacy + Progressivity',
-    icon: Scale,
-    content: `
-## How Botho Achieves Both Privacy and Progressivity
-
-This is Botho's most surprising achievement: **privacy and progressive economics working together, not against each other.**
-
-The conventional wisdom says these goals are incompatible. To tax the wealthy more, you need to know who's wealthy. But knowing who's wealthy means tracking identity and balances—the opposite of privacy.
-
-Botho proves this trade-off is false. Here's how.
-
-### The Apparent Impossibility
-
-Consider what "progressive taxation" traditionally requires:
-
-1. **Identify the taxpayer** — Link transactions to a person
-2. **Track their wealth** — Know how much they own
-3. **Apply graduated rates** — Charge more to those with more
-
-Every step violates privacy. If you know Alice has 1M coins, you've already destroyed her financial privacy.
-
-This creates what seems like a fundamental conflict:
-
-| Goal | Requires |
-|------|----------|
-| **Privacy** | Hide who owns what |
-| **Progressivity** | Know who owns what |
-
-Most projects accept this trade-off, choosing either:
-- **Full privacy** (Monero, Zcash): No progressive fees possible
-- **Full transparency** (Bitcoin, Ethereum): Progressive fees possible but no privacy
-
-Botho takes a third path.
-
-### The Key Insight: Provenance, Not Identity
-
-The breakthrough is realizing that progressive taxation doesn't *require* knowing identity or total wealth. It requires **correlating fees with economic behavior**.
-
-Instead of asking "Who owns this coin and how rich are they?" Botho asks:
-
-> "Where did this coin come from, and how much has it circulated?"
-
-This question has a surprising property: **it's answerable on-chain without linking to identity.**
-
-### What We Track: Minting Proximity
-
-Every coin in Botho carries a "cluster tag" — a memory of which minting event created it. This is not tracking the *owner*, but the *origin*.
-
-| Coin State | Tags | Fee Level |
-|------------|------|-----------|
-| Freshly minted | \`{cluster_A: 100%}\` | High |
-| Well-traded | \`{cluster_A: 5%, cluster_B: 15%, ...}\` | Low |
-
-The key properties:
-
-| Property | Effect |
-|----------|--------|
-| **Concentrated tags** | Recently minted, not yet circulated → High fees |
-| **Diversified tags** | Traded through many hands → Low fees |
-| **Splitting-resistant** | Splitting preserves tag concentration |
-| **Decay-resistant** | Only real commerce reduces tags |
-
-### Why This Is Progressive
-
-Here's where it gets interesting. **Minting proximity correlates with wealth concentration** in predictable ways:
-
-**New minters tend to be wealthy.** Earning block rewards requires hardware, electricity, and reliable uptime. Even with CPU-egalitarian RandomX mining, fresh coins disproportionately go to those with existing resources.
-
-**Active traders tend to be merchants.** Small businesses and regular users transact frequently, causing their coins to mix with coins from many sources.
-
-**Hoarders keep concentrated tags.** If you mine coins and hold them without trading, your tags never decay. You keep paying high fees.
-
-**Commerce diversifies naturally.** Every legitimate transaction mixes your tags with your counterparty's tags. Economic activity automatically reduces your fee rate.
-
-This creates a **behavioral correlation**:
-
-| Behavior Pattern | Tag State | Fee Level |
-|------------------|-----------|-----------|
-| Mine and hold (wealthy behavior) | Concentrated | High |
-| Active commerce (merchant behavior) | Diversified | Low |
-| Regular user spending | Mixed | Medium→Low |
-| Whale accumulating | Concentrated | High |
-
-We don't need to know *who* you are. We just observe *how your coins behave*.
-
-### What Remains Private
-
-This is crucial: **cluster tags reveal provenance, not identity.**
-
-| Information | Status |
-|-------------|--------|
-| Who owns a UTXO | **Private** (ring signatures) |
-| Who received a payment | **Private** (stealth addresses) |
-| Amount transferred | **Private** (confidential transactions) |
-| Your total balance | **Private** (no account linkage) |
-| Which UTXO you spent | **Private** (ring signatures) |
-| Where coins originated | Public (cluster tags) |
-| How diversified tags are | Public (enables fee calculation) |
-
-You reveal *something*—the coin's history—but not *who you are* or *what you own*.
-
-### The Ring Signature Integration
-
-Ring signatures and cluster tags work together seamlessly:
-
-**How ring signatures work:** When you spend, you prove "I own ONE of these 20 UTXOs" without revealing which one. This provides sender privacy.
-
-**The challenge:** If we don't know which UTXO you're spending, how do we calculate the correct fee?
-
-**The solution: Centroid-based validation.**
-
-1. All 20 ring members' tags are publicly visible
-2. The fee derives from the **value-weighted centroid** of the ring's tags, with floors so cheap background decoys can't drag the factor down
-3. The output tags you claim must be at least 70% similar to that centroid, or validators reject the transaction
-
-\`\`\`
-Ring members' tags → value-weighted centroid → cluster factor
-Claimed output tags: must be ≥ 70% similar to the centroid
-\`\`\`
-
-This means **privacy doesn't enable fee evasion.** A large real input dominates its own ring's centroid, so cherry-picking low-factor decoys produces an implausible ring that fails validation instead of a discount.
-
-### The Lottery Redistribution
-
-Fees flow back to the community through a cluster-tilted lottery:
-
-**80% of all fees** are redistributed to eligible UTXOs. **20% are burned** (deflationary).
-
-**How selection works:**
-
-\`\`\`
-weight = value ÷ cluster factor
-
-Well-circulated UTXO (factor 1x):  full weight per BTH
-Whale-cluster UTXO (factor 6x):    1/6 the weight per BTH
-\`\`\`
-
-**Well-circulated coins win up to 6× more per BTH than concentrated wealth.** This is progressive redistribution without knowing anyone's identity — and because weight is value-based, splitting a position into many UTXOs never increases its total weight.
-
-**Eligibility gates** prevent gaming: a UTXO must be at least 720 blocks old and worth at least 1 µBTH to participate.
-
-### Attack Resistance
-
-We've tested these mechanisms extensively:
-
-**Splitting Attack:**
-\`\`\`
-Attacker: Split 1M BTH into 1000 × 1K BTH
-Result: Each piece still has {whale_cluster: 100%}
-Fee reduction: 0% (cluster factor unchanged)
-Verdict: Attack defeated
-\`\`\`
-
-**Sybil Attack (Multiple Accounts):**
-\`\`\`
-Attacker: Create 100 sybil addresses, send 10K to each
-Result: Each sybil's UTXO inherits whale tags
-Fee reduction: Minimal (tags propagate)
-Verdict: Attack defeated
-\`\`\`
-
-**Parking Attack (Split and Wait):**
-\`\`\`
-Attacker: Split into 100 UTXOs, wait for lottery winnings
-Result: Weight is value-based — splitting gains NO weight
-        Cluster factor inherits — the tilt still works against you
-        Quadratic output fees make the split itself cost up to 100×
-Verdict: Attack defeated
-\`\`\`
-
-**Wash Trading (Self-transfers):**
-\`\`\`
-Attacker: Send to self rapidly to decay tags
-Result: Age-gating requires 720 blocks per decay
-        At most ~12 decays per day ≈ 46% daily decay
-        1 week of wash trading: ~99% decay
-        Cost: ~84 transaction fees (each feeding the lottery)
-Verdict: Expensive, slow, detectable
-\`\`\`
-
-### The Complete Picture
-
-Botho achieves privacy + progressivity through layered design:
-
-| Layer | Privacy Feature | Progressive Feature |
-|-------|-----------------|---------------------|
-| **Sender** | Ring signatures (1-of-20) | Centroid-validated tag propagation |
-| **Recipient** | Stealth addresses | — |
-| **Amount** | Pedersen commitments | — |
-| **Fee rate** | — | Cluster factor curve (1-6×) |
-| **Holding cost** | — | Demurrage on idle wealthy-cluster coins |
-| **Redistribution** | Verifiable random drawing | Cluster-tilted weights (value ÷ factor) |
-
-Each layer contributes to both goals without conflict.
-
-### Why This Matters
-
-This isn't just a technical achievement—it changes what's possible:
-
-**For users:** You get financial privacy AND a fair economic system. No trade-off required.
-
-**For merchants:** Low fees reward economic activity. The more you trade, the lower your rates.
-
-**For the network:** Wealth naturally flows from concentrated to distributed holdings. Self-custody is rewarded over custodial services.
-
-**For the ecosystem:** We've proven that "privacy vs. fairness" is a false dichotomy. Other projects can adopt these techniques.
-
-### Summary
-
-Botho's privacy + progressivity mechanism works because:
-
-1. **We track provenance, not identity** — Where coins came from, not who owns them
-2. **Provenance correlates with wealth behavior** — Fresh minters are wealthy, active traders are merchants
-3. **Ring signatures preserve privacy** — Centroid validation prevents gaming
-4. **Cluster-tilted lottery is progressive** — Well-circulated coins win more per BTH
-5. **Value-based weights and quadratic output fees deter attacks** — Parking and splitting don't pay off
-6. **Commerce is rewarded** — Tags decay through legitimate trade; idle concentrated wealth pays demurrage
-
-The result: **The first cryptocurrency where you can be private AND contribute fairly to the network, where the wealthy pay more without anyone knowing who they are.**
-    `,
-  },
-  {
-    id: 'consensus',
-    title: 'Consensus',
-    icon: Zap,
-    content: `
-## Stellar Consensus Protocol
-
-Botho uses the **Stellar Consensus Protocol (SCP)** for distributed consensus. SCP is a federated Byzantine agreement protocol that provides fast finality, energy efficiency, and flexible trust—without sacrificing decentralization.
-
-### Why Not Proof-of-Work Consensus?
-
-Proof-of-work (PoW) consensus, as used in Bitcoin, has significant drawbacks:
-
-- **Energy waste** - PoW deliberately consumes massive amounts of electricity as a security mechanism
-- **Slow finality** - Bitcoin transactions aren't truly final for an hour or more
-- **Centralization pressure** - Mining economies of scale push toward industrial operations
-- **51% attacks** - If an attacker controls majority hashpower, they can rewrite history
-
-**Botho still uses proof-of-work — but only for coin issuance, never for consensus.** Blocks are minted through CPU-egalitarian RandomX mining, which decides *who earns the block reward*. Whether that block is *accepted* is decided entirely by SCP. This decoupling means an attacker with majority hashpower can out-earn everyone else, but cannot rewrite history or censor transactions — and because hashpower buys no security, there is no arms-race pressure toward Bitcoin-scale energy consumption.
-
-### Why Not Proof-of-Stake?
-
-Proof-of-stake (PoS) improves on energy usage but introduces its own issues:
-
-- **Nothing-at-stake** - Validators can cheaply vote on multiple chain forks
-- **Wealth concentration** - The rich get richer through staking rewards
-- **Long-range attacks** - Old keys can potentially rewrite history
-- **Complexity** - PoS systems require intricate slashing and validator selection logic
-
-### How SCP Works
-
-SCP takes a fundamentally different approach based on **federated voting**:
-
-**Quorum Slices:** Each node in the network defines its own "quorum slice"—a set of other nodes it trusts. A node will only accept a statement as final when its quorum slice agrees.
-
-**Quorum Intersection:** The network is secure as long as all quorum slices share some nodes in common. This ensures that two conflicting statements cannot both achieve consensus.
-
-**Federated Voting:** Consensus proceeds through a series of voting rounds:
-
-1. **Nominate** - Nodes propose candidate values for the next block
-2. **Prepare** - Nodes vote to prepare a specific value
-3. **Commit** - Nodes vote to commit the prepared value
-4. **Externalize** - Once committed, the value is final
-
-**Key Insight:** Unlike PoW where you trust "the longest chain," in SCP you explicitly choose which nodes to trust. This makes the trust model transparent and auditable.
-
-### Properties of SCP
-
-**Decentralized Control:** No central authority determines consensus. Each node independently chooses its quorum slice based on its own assessment of trustworthiness.
-
-**Low Latency:** Transactions reach finality in seconds (typically 3-5 seconds under normal conditions), compared to minutes or hours for PoW systems.
-
-**Flexible Trust:** Participants can choose different quorum configurations based on their needs. Some may trust established institutions; others may trust a set of technical experts.
-
-**Asymptotic Security:** As the network grows and quorum slices become more interconnected, the system becomes more resilient against Byzantine failures.
-
-**Energy Efficiency:** SCP nodes only need to exchange messages and verify signatures—no computational puzzles, no energy waste.
-
-### Safety vs. Liveness
-
-SCP prioritizes **safety** over **liveness**:
-
-- **Safety:** The network will never confirm conflicting transactions
-- **Liveness:** The network should eventually make progress
-
-If the quorum structure is disrupted (too many nodes go offline), SCP will halt rather than risk confirming conflicting transactions. This is the correct trade-off for a monetary system—it's better to pause than to have funds stolen.
-
-### Quorum Configuration in Botho
-
-The Botho network starts with a bootstrap quorum centered on the foundation's seed nodes. Over time, as more independent nodes join, the quorum structure will become increasingly decentralized.
-
-Node operators can customize their quorum slice to trust:
-- The foundation's seed nodes (default)
-- Other known community nodes
-- Nodes run by exchanges or businesses they trust
-- Any combination of the above
-
-The health of the network depends on sufficient quorum intersection. The Botho explorer shows real-time quorum topology to help operators make informed decisions.
-    `,
-  },
-  {
-    id: 'running-node',
-    title: 'Running a Node',
-    icon: Terminal,
-    content: `
-## Running a Botho Node
-
-Running your own Botho node gives you the highest level of privacy and helps strengthen the network. When you run a node, your wallet connects directly to the blockchain without relying on third-party servers.
-
-### Why Run a Node?
-
-**Privacy:** When you use a light wallet or web wallet, you're trusting a server not to log your addresses or transactions. Running your own node means your wallet activity stays on your machine.
-
-**Verification:** Your node independently validates every transaction and block. You don't have to trust anyone's claims about the state of the network.
-
-**Network health:** More nodes make the network more resilient. Your node relays transactions and blocks, helping the network function.
-
-**Minting advantage:** Running your own node gives you lower latency in the minting competition. Nodes that receive new blocks faster can begin working on the next block sooner, increasing their chances of earning minting rewards.
-
-**Participation:** If you want to mint new blocks or participate in consensus, you need a full node.
-
-### System Requirements
-
-**Minimum Requirements:**
-- 2 CPU cores
-- 4 GB RAM
-- 50 GB SSD storage
-- 10 Mbps internet connection
-
-**Recommended:**
-- 4+ CPU cores
-- 8 GB RAM
-- 100 GB NVMe SSD
-- 100 Mbps internet connection
-
-The blockchain is currently small, but storage requirements will grow over time.
-
-### Installation
-
-**From Source (Recommended):**
-
-\`\`\`bash
-# Install Rust if you haven't already
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Clone the repository
-git clone https://github.com/botho-project/botho.git
-cd botho
-
-# Build in release mode
-cargo build --release
-
-# The binary is at ./target/release/botho
-\`\`\`
-
-**First-Time Setup:**
-
-\`\`\`bash
-# Initialize a new wallet and configuration
-./target/release/botho init
-
-# This will:
-# - Generate a 24-word recovery phrase
-# - Create your config and wallet under ~/.botho/
-
-# Variants:
-#   botho init --recover   # restore a wallet from an existing mnemonic
-#   botho init --relay     # relay/seed node config with no wallet
-\`\`\`
-
-**IMPORTANT:** Write down your recovery phrase and store it securely!
-
-### Running the Node
-
-**Basic operation:**
-
-\`\`\`bash
-# Start the node and sync with the network
-./target/release/botho run
-\`\`\`
-
-**With minting enabled:**
-
-\`\`\`bash
-# Start the node and participate in block production
-./target/release/botho run --mint
-\`\`\`
-
-### CLI Commands Reference
-
-**Wallet Commands:**
-
-| Command | Description |
-|---------|-------------|
-| \`botho init\` | Create a new wallet with a 24-word mnemonic |
-| \`botho balance\` | Show your current wallet balance |
-| \`botho address\` | Display your receiving address (\`--save\` writes it to a file) |
-| \`botho send <address> <amount>\` | Send BTH (amount in BTH; \`--quantum\` for post-quantum crypto, \`--memo\` to attach an encrypted note) |
-
-All sends use CLSAG ring signatures — sender privacy is on by default, not a flag.
-
-**Node Commands:**
-
-| Command | Description |
-|---------|-------------|
-| \`botho run\` | Start the node and sync with the network |
-| \`botho run --mint\` | Start with minting enabled (\`--mint-threads N\` to limit CPU use) |
-| \`botho status\` | Show node sync status and peer count |
-| \`botho snapshot\` | Manage UTXO snapshots for fast initial sync |
-
-### Configuration
-
-The configuration file lives under \`~/.botho/\`. All ports have network-specific defaults, so a minimal config works out of the box:
-
-\`\`\`toml
-# "mainnet" or "testnet"
-network_type = "testnet"
-
-[network]
-# Defaults: gossip 7100 (mainnet) / 17100 (testnet)
-#           RPC    7101 (mainnet) / 17101 (testnet)
-#           metrics 9090 (mainnet) / 19090 (testnet), 0 disables
-# gossip_port = 17100
-# rpc_port = 17101
-# metrics_port = 19090
-
-# Optional explicit bootstrap peers (multiaddr format).
-# If unset, peers are discovered via DNS seed TXT records
-# (seeds.botho.io / seeds.testnet.botho.io).
-# bootstrap_peers = ["/dns4/eu.seed.botho.io/tcp/7100/p2p/<peer-id>"]
-
-[minting]
-enabled = false
-threads = 0   # 0 = use all CPU cores
-\`\`\`
-
-### Firewall Configuration
-
-If you want your node to accept incoming connections (recommended):
-
-\`\`\`bash
-# Allow P2P gossip traffic (17100 on testnet, 7100 on mainnet)
-sudo ufw allow 17100/tcp
-
-# Optional: Allow RPC access (only if needed externally)
-# sudo ufw allow 17101/tcp
-\`\`\`
-
-### Troubleshooting
-
-**Node won't sync:**
-- Check your internet connection
-- Verify firewall allows outbound connections on the gossip port
-- As a last resort, clear the chain database under \`~/.botho/\` and resync (testnet only — this rescans from genesis)
-
-**High memory usage:**
-- Reduce minting threads (RandomX keeps a large in-memory dataset)
-- Consider adding swap space if RAM is limited
-
-**Can't connect to peers:**
-- Ensure your gossip port (17100 testnet / 7100 mainnet) is open for incoming connections
-- Check if you're behind a strict NAT
-    `,
-  },
-  {
-    id: 'api',
-    title: 'API Reference',
-    icon: Code,
-    content: `
-## JSON-RPC API
-
-Botho nodes expose a JSON-RPC 2.0 API on port **7101** (mainnet) or **17101** (testnet) by default; override with \`rpc_port\` in the config. All requests use the standard JSON-RPC 2.0 format.
-
-### Request Format
-
-\`\`\`json
-{
-  "jsonrpc": "2.0",
-  "method": "METHOD_NAME",
-  "params": { ... },
-  "id": 1
-}
-\`\`\`
-
----
-
-## Node Methods
-
-### node_getStatus
-
-Get node status and sync information.
-
-**Response (selected fields):**
-- \`version\` - Node software version
-- \`network\` - Network name (e.g., "botho-testnet")
-- \`uptimeSeconds\` - Node uptime in seconds
-- \`syncStatus\` / \`syncProgress\` / \`synced\` - Live sync state
-- \`chainHeight\` - Current blockchain height
-- \`tipHash\` - Hash of the latest block
-- \`peerCount\` / \`scpPeerCount\` - Connected peers / SCP-participating peers
-- \`mempoolSize\` - Transactions in mempool
-- \`mintingActive\` - Whether minting is enabled
-- \`quorumFaultTolerant\` / \`quorumDegenerate\` - BFT posture (fault tolerance requires ≥ 4 participating nodes)
-
-The full response also includes build info, SCP slot progress, quorum-gate state, and miner-health fields for monitoring.
-
----
-
-## Chain Methods
-
-### getChainInfo
-
-Get blockchain information.
-
-**Response:**
-- \`height\` - Current block height
-- \`tipHash\` - Hash of the tip block
-- \`difficulty\` - Current mining difficulty
-- \`totalMined\` - Total coins mined (picocredits, as a string)
-- \`totalFeesBurned\` - Cumulative burned fees (picocredits, as a string)
-- \`circulatingSupply\` - totalMined minus burns (picocredits, as a string)
-- \`mempoolSize\` - Number of pending transactions
-- \`mempoolFees\` - Total fees in mempool
-
-### getBlockByHeight
-
-Get a block by its height.
-
-**Parameters:**
-- \`height\` (number) - Block height
-
-**Response:**
-- \`height\` - Block height
-- \`hash\` - Block hash
-- \`prevHash\` - Previous block hash
-- \`timestamp\` - Block timestamp
-- \`difficulty\` - Block difficulty
-- \`nonce\` - Mining nonce
-- \`txCount\` - Number of transactions
-- \`mintingReward\` - Minting reward amount
-
-### getMempoolInfo
-
-Get mempool statistics.
-
-**Response:**
-- \`size\` - Number of transactions
-- \`totalFees\` - Total fees from all transactions
-- \`txHashes\` - Array of transaction hashes (up to 100)
-
-### estimateFee (alias: tx_estimateFee)
-
-Estimate transaction fee.
-
-**Parameters:**
-- \`amount\` (number) - Transaction amount
-- \`memos\` (number) - Number of encrypted memo fields
-
-**Response:**
-- \`minimumFee\` - Minimum required fee
-- \`clusterFactor\` - Progressive multiplier, scaled ×1000 (1000 = 1x, 6000 = 6x)
-- \`clusterFactorDisplay\` - Human-readable factor (e.g., "1.25x")
-- \`clusterWealth\` - Cluster wealth the factor was derived from
-- \`recommendedFee\` - Recommended fee for normal priority
-- \`highPriorityFee\` - Fee for high priority confirmation
-
----
-
-## Wallet Methods
-
-### chain_getOutputs
-
-Get transaction outputs for wallet sync.
-
-**Parameters:**
-- \`start_height\` (number) - Starting block height
-- \`end_height\` (number) - Ending block height (max 100 blocks per request)
-
-**Response:** Array of blocks, each containing:
-- \`height\` - Block height
-- \`outputs\` - Array of outputs with \`txHash\`, \`outputIndex\`, \`targetKey\`, \`publicKey\`, \`amountCommitment\`
-
-### wallet_getBalance
-
-Get wallet balance (requires local wallet).
-
-**Response:**
-- \`confirmed\` - Confirmed balance
-- \`pending\` - Pending balance
-- \`total\` - Total balance
-- \`utxoCount\` - Number of unspent outputs
-
-### wallet_getAddress
-
-Get wallet keys and address info.
-
-**Response:**
-- \`viewKey\` - Public view key (hex)
-- \`spendKey\` - Public spend key (hex)
-- \`hasWallet\` - Whether node has a wallet configured
-
----
-
-## Transaction Methods
-
-### tx_submit / sendRawTransaction
-
-Submit a signed transaction.
-
-**Parameters:**
-- \`tx_hex\` (string) - Hex-encoded serialized transaction
-
-**Response:**
-- \`txHash\` - Transaction hash
-
----
-
-## Minting Methods
-
-### minting_getStatus
-
-Get minting status.
-
-**Response:**
-- \`active\` - Whether minting is enabled
-- \`threads\` - Number of minting threads
-- \`hashrate\` - Current hashrate
-- \`totalHashes\` - Total hashes computed
-- \`blocksFound\` - Blocks mined by this node
-- \`currentDifficulty\` - Current network difficulty
-- \`uptimeSeconds\` - Minting uptime
-
----
-
-## Network Methods
-
-### network_getInfo
-
-Get network connection information.
-
-**Response:**
-- \`peerCount\` - Total peer count
-- \`inboundCount\` - Inbound connections
-- \`outboundCount\` - Outbound connections
-- \`bytesSent\` - Total bytes sent
-- \`bytesReceived\` - Total bytes received
-- \`uptimeSeconds\` - Connection uptime
-
-### network_getPeers
-
-Get list of connected peers.
-
-**Response:**
-- \`peers\` - Array of peer information
-
----
-
-## Other Methods
-
-The API surface is larger than this page. Notable additional methods:
-
-| Method | Purpose |
-|--------|---------|
-| \`getBlockByHash\` | Fetch a block by hash instead of height |
-| \`getSupplyInfo\` | Emission and supply details |
-| \`tx_get\` / \`tx_getStatus\` | Look up a transaction / its confirmation status |
-| \`address_validate\` | Check whether an address string is well-formed |
-| \`fee_getRate\` | Current dynamic fee rate |
-| \`cluster_getWealth\` / \`cluster_getAllWealth\` | Cluster wealth queries (powers the explorer views) |
-| \`chain_areKeyImagesSpent\` | Check key images for double-spend detection |
-| \`faucet_getStatus\` / \`faucet_request\` | Testnet faucet |
-| \`operator_*\` | Operator trust surface (disabled unless configured; see the operator runbooks) |
-    `,
-  },
-  {
-    id: 'network',
-    title: 'Network',
-    icon: Globe,
-    content: `
-## Network Information
-
-This page provides technical details about the Botho network, including connection information, network parameters, and security model.
-
-### Network Status
-
-The Botho network is currently in **testnet** phase. This means:
-
-- Coins have no monetary value
-- The network may be reset during development
-- Features are still being tested and refined
-- Bug reports and feedback are welcome
-
-Production mainnet launch will be announced when the network is stable.
-
-### Connecting to the Network
-
-**Seed Discovery:**
-
-Bootstrap peers are discovered via DNS TXT records rather than a hardcoded list:
-
-| Network | DNS Seed Domain |
-|---------|-----------------|
-| Mainnet | seeds.botho.io |
-| Testnet | seeds.testnet.botho.io |
-
-When your node starts, it resolves the seed domain to learn about bootstrap peers (you can also pin explicit \`bootstrap_peers\` in the config). After initial discovery, your node maintains connections to multiple peers for redundancy.
-
-**Peer Discovery:**
-
-Botho uses libp2p for networking, which supports multiple discovery mechanisms:
-
-- **Bootstrap nodes** - Known seed nodes for initial connection
-- **mDNS** - Local network discovery for development
-- **Kademlia DHT** - Distributed peer discovery
-- **Gossipsub** - Topic-based message propagation
-
-### Network Parameters
-
-**Block Production:**
-
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| Block time | 3–40 seconds (load-adaptive) | Fast blocks under heavy traffic (3 s only at 20+ tx/s), slow blocks when idle |
-| Max block size | 20 MB | Maximum serialized block size |
-| Max transactions per block | 5,000 | Transaction count limit |
-
-**Transaction Limits:**
-
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| Max inputs | 16 | Maximum inputs per transaction |
-| Max outputs | 16 | Maximum outputs per transaction |
-| Ring size | 20 | Number of members in CLSAG ring signature |
-| Max tx size | 100 KB | Maximum serialized transaction size |
-
-**Fees:**
-
-| Parameter | Value | Description |
-|-----------|-------|-------------|
-| Fee formula | per-byte rate × size × cluster factor × output penalty | Size-based, wealth-progressive |
-| Cluster factor | 1x–6x | Progressive multiplier from coin provenance |
-| Output penalty | quadratic, capped at 100x | Anti-UTXO-farming |
-| Fee destination | 80% lottery / 20% burned | Redistribution plus deflationary pressure |
-
-### Port Reference
-
-Defaults differ by network (mainnet / testnet); all are configurable:
-
-| Port (mainnet / testnet) | Protocol | Purpose |
-|--------------------------|----------|---------|
-| 7100 / 17100 | TCP | P2P gossip (libp2p) |
-| 7101 / 17101 | HTTP + WebSocket | JSON-RPC API and real-time updates |
-| 9090 / 19090 | HTTP | Prometheus metrics |
-
-### Network Security
-
-**Sybil Resistance:**
-
-The network resists Sybil attacks through:
-- Quorum-based consensus (SCP)
-- Reputation scoring for peers
-- Resource requirements for block minting
-
-**Eclipse Protection:**
-
-Nodes protect against eclipse attacks by:
-- Maintaining diverse peer connections
-- Preferring peers with established history
-- Regular peer rotation
-- Multiple independent peer discovery methods
-
-### Getting Involved
-
-**For Developers:**
-- Source code: [github.com/botho-project/botho](https://github.com/botho-project/botho)
-- Report bugs via GitHub issues
-- Contributions welcome (see CONTRIBUTING.md)
-
-**For Node Operators:**
-- Run a node to strengthen the network
-- Enable minting if you have reliable uptime
-- Monitor your node's quorum intersection
-
-**For Users:**
-- Test the wallet and report issues
-- Provide feedback on user experience
-- Help with documentation and translations
-    `,
-  },
-  {
-    id: 'tokenomics',
-    title: 'Tokenomics',
-    icon: Coins,
-    content: `
-## Tokenomics
-
-Botho (BTH) uses a two-phase emission model designed for long-term sustainability: an initial distribution phase with halvings, followed by perpetual tail emission targeting stable inflation.
-
-### Overview
-
-| Parameter | Value |
-|-----------|-------|
-| Token symbol | BTH |
-| Smallest unit | picocredit (10⁻¹² BTH) |
-| Pre-mine | None (100% mined) |
-| Phase 1 supply | ~611 million BTH |
-| Block time | 3–40 seconds (load-adaptive; 5 s monetary baseline) |
-
-### Unit System
-
-BTH uses 12-decimal precision. The picocredit is the single base unit — every amount on the wire (balances, fees, cluster wealth) is denominated in picocredits, and formatting into BTH happens only in the display layer:
-
-- **1 picocredit** = 0.000000000001 BTH (smallest unit)
-- **1 microBTH (µBTH)** = 1,000,000 picocredits = 0.000001 BTH
-- **1 milliBTH (mBTH)** = 1,000,000,000 picocredits = 0.001 BTH
-- **1 BTH** = 1,000,000,000,000 picocredits
-
----
-
-## Emission Schedule
-
-All monetary math assumes the 5-second high-load block time (actual blocks range 3–40 s, dropping to 3 s only at very high load, 20+ tx/s). When the network is idle and blocks slow down (up to 40 s), emission stretches proportionally — a natural dampener: a busy network emits at the full schedule, an idle one emits less.
-
-### Phase 1: Halving Period (~5 years at full load)
-
-The minting reward starts at 50 BTH and halves every **6,307,200 blocks** (one year of 5-second blocks). After five halving epochs, Phase 1 has distributed **611,010,000 BTH**:
-
-| Epoch | Minting Reward | Cumulative Supply |
-|-------|----------------|-------------------|
-| 1 | 50 BTH | ~315.4M BTH |
-| 2 | 25 BTH | ~473.0M BTH |
-| 3 | 12.5 BTH | ~552.0M BTH |
-| 4 | 6.25 BTH | ~591.3M BTH |
-| 5 | 3.125 BTH | ~611.0M BTH |
-
-(This is the canonical schedule ratified in issue #351, locked by regression tests in the node.)
-
-### Phase 2: Tail Emission
-
-After Phase 1, Botho transitions to perpetual tail emission targeting **2% annual net inflation** (gross emission minus fee burns), with difficulty adjusting to hit the target.
-
-**Why tail emission?**
-
-- **Security budget** - Ensures minters always have incentive to secure the network
-- **Lost coin replacement** - Compensates for coins lost to forgotten keys
-- **Predictable monetary policy** - 2% is below typical fiat inflation
-
-At the ~611M BTH Phase-1 supply and full load, 2% works out to roughly **2 BTH per block**, growing slowly with supply.
-
----
-
-## Fee Structure
-
-### Transaction Fees
-
-Every fee is split two ways: **80% is redistributed** to holders through the cluster-tilted lottery, and **20% is burned**, creating deflationary pressure that offsets tail emission.
-
-\`\`\`
-fee = per-byte rate × transaction size × cluster factor × output penalty + memo fees
-\`\`\`
-
-| Parameter | Value |
-|-----------|-------|
-| Fee basis | Transaction size (bytes), not amount |
-| Cluster factor | 1x–6x progressive multiplier |
-| Output penalty | Quadratic in output count, capped at 100x |
-| Memo fee | Flat per encrypted memo |
-| Fee destination | 80% lottery pool / 20% burned |
-| Priority | Higher fees = faster confirmation |
-
-### Cluster-Based Progressive Fees
-
-Botho implements a novel **progressive fee system** that taxes wealth concentration without enabling Sybil attacks.
-
-**The core innovation:** Instead of taxing based on transaction amount (easily gamed by splitting), fees are based on coin *provenance* — where coins originally came from.
-
-| Parameter | Value |
-|-----------|-------|
-| Cluster factor range | 1x to 6x multiplier |
-| Curve shape | Sigmoid in log(cluster wealth), midpoint 3.5x at 100K BTH |
-| Tag decay | 5% per eligible hop |
-
-**Why it's Sybil-resistant:** Splitting coins doesn't change their origin. A whale's coins carry the same cluster tag whether held in 1 UTXO or 1000.
-
-### Demurrage
-
-Transaction fees are a consumption tax — they can't touch wealth that never moves. Demurrage closes that gap: a **holding charge on wealthy-cluster coins, paid when they are eventually spent**.
-
-| Parameter | Value |
-|-----------|-------|
-| Rate | 2% per year at the maximum (6x) cluster factor |
-| Scaling | Proportional to (factor − 1) — factor-1 coins pay **zero** |
-| Bootstrap | Disabled during the first halving epoch |
-| Proceeds | Flow into the lottery redistribution pool |
-
-Everyday coins never pay demurrage; it binds only concentrated, idle wealth. Churning doesn't escape it — spending pays the accrued charge first, so the total paid over any holding period is the same no matter how often you self-transfer (and each transfer adds fees on top).
-
-> **See the [Cluster Tags](#cluster-tags) section** for a complete explanation of how provenance tracking, progressive fees, lottery redistribution, and ring signature privacy work together.
-
----
-
-## Supply Projections
-
-### Long-Term Growth
-
-At sustained full load (5-second blocks; slower when the network is idle):
-
-| Epoch | Approximate Supply | Annual Inflation |
-|-------|-------------------|------------------|
-| 1 | ~315M BTH | High (initial) |
-| 3 | ~552M BTH | ~17% |
-| 5 | ~611M BTH | ~3% |
-| Tail (perpetual) | +2%/year net of burns | 2% |
-
----
-
-## Economic Design Philosophy
-
-### Why No Pre-mine?
-
-- **Fair distribution** - Everyone starts equal; early minters take on risk
-- **Credibility** - No insider advantage or founder enrichment
-- **Decentralization** - No concentrated holdings from day one
-
-### Why Split Fees 80/20?
-
-- **Redistribution** - 80% flows back to holders via the cluster-tilted lottery, favoring well-circulated coins
-- **Deflationary pressure** - The 20% burn offsets tail emission
-- **Predictable** - Net inflation = gross emission − burns
-
-### Why Progressive Cluster Fees?
-
-- **Reduce concentration** — Wealthy clusters pay more
-- **Sybil-resistant** — Can't avoid by splitting accounts
-- **Encourage circulation** — Moving coins diffuses tags, reducing fees
-- **Privacy-compatible** — Works with ring signatures and stealth addresses
-
-> **Deep dive:** See the [Cluster Tags](#cluster-tags) documentation for the complete technical explanation.
-    `,
-  },
-]
 
 export function DocsPage() {
   const location = useLocation()
   const navigate = useNavigate()
+  const { t, i18n } = useTranslation('docs')
+
+  // Active locale for content selection + locale-preserving links. Derived from
+  // the URL prefix (LocaleRoutes strips `/es` before matching, but `useLocation`
+  // in this child still reports the real, prefixed pathname) with i18n.language
+  // as the fallback. `id` slugs and the `#hash` scheme are locale-INVARIANT, so
+  // only the markdown BODY and the nav/H1 TITLE change with the locale.
+  const localeSegment = location.pathname.split('/')[1]
+  const activeLocale = isSupportedLocale(localeSegment) ? localeSegment : DEFAULT_LOCALE
+  // Non-default locales keep their `/es` prefix on generated links so hash
+  // navigation and the path→hash redirect stay within the active language.
+  const localePrefix = activeLocale === DEFAULT_LOCALE ? '' : `/${activeLocale}`
+
+  // Build the render-order section list by zipping the locale-invariant meta
+  // (id + icon) with the active-locale title and markdown body.
+  const sections = useMemo(
+    () =>
+      SECTION_META.map((meta) => ({
+        id: meta.id,
+        icon: meta.icon,
+        title: t(`sections.${meta.id}`),
+        content: getSectionContent(meta.id, activeLocale),
+      })),
+    // i18n.language re-triggers when the active language changes mid-session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [t, activeLocale, i18n.language],
+  )
 
   // Path-style deep links (`/docs/<section>`) land here via the `/docs/*`
   // catchall route in App.tsx. The hash form (`/docs#<section>`) is the
@@ -1347,16 +53,17 @@ export function DocsPage() {
   const normalizedSegment = pathSegment.toLowerCase()
   // A hash always wins over a path segment (e.g. /docs/consensus#privacy).
   const hasHash = location.hash.slice(1) !== ''
-  const segmentIsKnown = normalizedSegment !== '' && sections.some((s) => s.id === normalizedSegment)
+  const segmentIsKnown =
+    normalizedSegment !== '' && SECTION_META.some((s) => s.id === normalizedSegment)
   const shouldRedirect = segmentIsKnown && !hasHash
 
   useEffect(() => {
     if (shouldRedirect) {
-      navigate(`/docs#${normalizedSegment}`, { replace: true })
+      navigate(`${localePrefix}/docs#${normalizedSegment}`, { replace: true })
     }
-  }, [shouldRedirect, normalizedSegment, navigate])
+  }, [shouldRedirect, normalizedSegment, navigate, localePrefix])
 
-  const hash = location.hash.slice(1) || 'getting-started'
+  const hash = (location.hash.slice(1) || 'getting-started') as DocSectionId
   const currentSection = sections.find((s) => s.id === hash) || sections[0]
   const notFoundSegment = !hasHash && pathSegment !== '' && !segmentIsKnown ? pathSegment : null
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
@@ -1370,17 +77,20 @@ export function DocsPage() {
       {/* Mobile header */}
       <header className="md:hidden sticky top-0 z-50 bg-abyss/95 backdrop-blur border-b border-steel">
         <div className="flex items-center justify-between px-4 py-3">
-          <Link to="/" className="flex items-center gap-2">
+          <Link to={localePrefix || '/'} className="flex items-center gap-2">
             <Logo size="sm" showText={false} />
-            <span className="font-display text-base font-semibold">Botho</span>
+            <span className="font-display text-base font-semibold">{t('brand')}</span>
           </Link>
-          <button
-            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="p-2 -mr-2 text-ghost hover:text-light transition-colors"
-            aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}
-          >
-            {mobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
-          </button>
+          <div className="flex items-center gap-2">
+            <LocaleSwitcher />
+            <button
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              className="p-2 -mr-2 text-ghost hover:text-light transition-colors"
+              aria-label={mobileMenuOpen ? t('closeMenu') : t('openMenu')}
+            >
+              {mobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
+            </button>
+          </div>
         </div>
       </header>
 
@@ -1401,9 +111,13 @@ export function DocsPage() {
         `}
       >
         <div className="p-4 border-b border-steel flex items-center justify-between">
-          <Link to="/" className="flex items-center gap-2" onClick={handleNavClick}>
+          <Link
+            to={localePrefix || '/'}
+            className="flex items-center gap-2"
+            onClick={handleNavClick}
+          >
             <Logo size="sm" showText={false} />
-            <span className="font-display text-base font-semibold">Botho Docs</span>
+            <span className="font-display text-base font-semibold">{t('brandDocs')}</span>
           </Link>
           <button
             onClick={() => setMobileMenuOpen(false)}
@@ -1416,7 +130,7 @@ export function DocsPage() {
           {sections.map((section) => (
             <Link
               key={section.id}
-              to={`/docs#${section.id}`}
+              to={`${localePrefix}/docs#${section.id}`}
               onClick={handleNavClick}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors ${
                 currentSection.id === section.id
@@ -1431,12 +145,12 @@ export function DocsPage() {
         </nav>
         <div className="p-4 border-t border-steel mt-auto">
           <Link
-            to="/"
+            to={localePrefix || '/'}
             onClick={handleNavClick}
             className="flex items-center gap-2 text-ghost hover:text-light transition-colors text-sm"
           >
             <ArrowLeft size={16} />
-            Back to home
+            {t('backToHome')}
           </Link>
         </div>
       </aside>
@@ -1444,15 +158,18 @@ export function DocsPage() {
       {/* Desktop sidebar */}
       <aside className="hidden md:block w-64 border-r border-steel bg-abyss/50 fixed top-0 bottom-0 left-0 overflow-y-auto">
         <div className="p-6">
-          <Link to="/" className="flex items-center gap-3 mb-8">
-            <Logo size="md" showText={false} />
-            <span className="font-display text-lg font-semibold">Botho</span>
-          </Link>
+          <div className="flex items-center justify-between mb-8">
+            <Link to={localePrefix || '/'} className="flex items-center gap-3">
+              <Logo size="md" showText={false} />
+              <span className="font-display text-lg font-semibold">{t('brand')}</span>
+            </Link>
+            <LocaleSwitcher />
+          </div>
           <nav className="space-y-1">
             {sections.map((section) => (
               <Link
                 key={section.id}
-                to={`/docs#${section.id}`}
+                to={`${localePrefix}/docs#${section.id}`}
                 className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
                   currentSection.id === section.id
                     ? 'bg-pulse/10 text-pulse'
@@ -1467,11 +184,11 @@ export function DocsPage() {
         </div>
         <div className="p-6 border-t border-steel">
           <Link
-            to="/"
+            to={localePrefix || '/'}
             className="flex items-center gap-2 text-ghost hover:text-light transition-colors text-sm"
           >
             <ArrowLeft size={16} />
-            Back to home
+            {t('backToHome')}
           </Link>
         </div>
       </aside>
@@ -1485,9 +202,7 @@ export function DocsPage() {
               className="mb-6 flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-200/90 text-sm"
             >
               <AlertTriangle size={16} className="shrink-0 mt-0.5 text-amber-400" />
-              <span>
-                Section &ldquo;{notFoundSegment}&rdquo; not found — showing Getting Started.
-              </span>
+              <span>{t('notFound', { segment: notFoundSegment })}</span>
             </div>
           )}
           <div className="flex items-center gap-3 mb-6 md:mb-8">

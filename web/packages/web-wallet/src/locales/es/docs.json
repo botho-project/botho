@@ -1,0 +1,19 @@
+{
+  "brand": "Botho",
+  "brandDocs": "Botho Docs",
+  "backToHome": "Volver al inicio",
+  "openMenu": "Abrir menú",
+  "closeMenu": "Cerrar menú",
+  "notFound": "Sección «{{segment}}» no encontrada — mostrando Primeros pasos.",
+  "sections": {
+    "getting-started": "Primeros pasos",
+    "privacy": "Funciones de privacidad",
+    "cluster-tags": "Etiquetas de clúster",
+    "privacy-progressivity": "Privacidad + Progresividad",
+    "consensus": "Consenso",
+    "running-node": "Ejecutar un nodo",
+    "api": "Referencia de la API",
+    "network": "Red",
+    "tokenomics": "Tokenómica"
+  }
+}

@@ -4,8 +4,11 @@
  * Phase 1 scope: framework setup + the marketing landing page translated into
  * one additional language (Spanish). Phase 2 (issue #777) added the
  * transactional surfaces — the `wallet`, `pay`, `claim`, and `contacts`
- * namespaces. `docs` and metadata/OG surfaces remain out of scope and land in
- * later phases.
+ * namespaces. Phase 3 (issue #778) added the `docs` namespace: section titles /
+ * nav labels live here as JSON keys, while the large markdown bodies live in
+ * per-locale `.md` files under `../docs-content/` (imported with Vite `?raw`)
+ * rather than as escaped JSON strings. Metadata/OG surfaces remain out of scope
+ * and land in a later phase.
  *
  * Locale is driven by a URL path prefix (`/es/...`) rather than a subdomain, so
  * the existing `botho.io` / `wallet.botho.io` host-switch logic in `App.tsx`
@@ -30,6 +33,8 @@ import enClaim from '../locales/en/claim.json'
 import esClaim from '../locales/es/claim.json'
 import enContacts from '../locales/en/contacts.json'
 import esContacts from '../locales/es/contacts.json'
+import enDocs from '../locales/en/docs.json'
+import esDocs from '../locales/es/docs.json'
 
 /**
  * The set of locales the app knows how to render. `en` MUST stay first — it is
@@ -80,6 +85,7 @@ const resources = {
     pay: enPay,
     claim: enClaim,
     contacts: enContacts,
+    docs: enDocs,
   },
   es: {
     landing: esLanding,
@@ -87,6 +93,7 @@ const resources = {
     pay: esPay,
     claim: esClaim,
     contacts: esContacts,
+    docs: esDocs,
   },
 } as const
 
@@ -98,7 +105,7 @@ if (!i18n.isInitialized) {
     fallbackLng: DEFAULT_LOCALE,
     supportedLngs: SUPPORTED_LOCALES as unknown as string[],
     defaultNS: 'landing',
-    ns: ['landing', 'wallet', 'pay', 'claim', 'contacts'],
+    ns: ['landing', 'wallet', 'pay', 'claim', 'contacts', 'docs'],
     interpolation: {
       // React already escapes interpolated values.
       escapeValue: false,
