@@ -86,11 +86,7 @@ go_build_artifacts/
 
 .env
 *.private
-.loom/state.json
-.loom/worktrees/
 .loom/sweep-checkpoint/
-.loom/*.log
-.loom/*.sock
 .loom-in-use
 .loom-checkpoint
 .loom/.daemon.pid
@@ -120,3 +116,7 @@ go_build_artifacts/
 *.local.md
 /.voice/
 .loom-managed
+.loom/worktrees/
+.loom/state.json
+.loom/*.log
+.loom/*.sock
