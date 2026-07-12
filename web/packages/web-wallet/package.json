@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "verify:operator-bundle": "../../scripts/verify-operator-bundle.sh --dist dist",
+    "verify:operator-sri": "../../scripts/verify-operator-bundle.sh --verify-sri --dist dist",
     "deploy": "pnpm build && wrangler pages deploy dist --project-name=botho",
     "deploy:all": "pnpm build:all && wrangler pages deploy dist --project-name=botho"
   },

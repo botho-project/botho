@@ -17,16 +17,25 @@ host) and signs quorum-curation envelopes client-side. The serious residual risk
 (§8.3) is a **malicious bundle**: a compromised host could serve JavaScript that
 prompts you to sign attacker-chosen bytes.
 
-Two independent mitigations reduce this to near-zero for a careful operator:
+Three mitigations reduce this to near-zero for a careful operator:
 
-1. **Verify the bundle** you are about to run against a maintainer-published
+1. **Browser-enforced SRI (option (a), #772), on by default.** `/operator` is
+   its own build entry (`operator.html`) whose HTML pins `integrity="sha384-…"`
+   hashes for every JS/CSS chunk it loads. Any tampered chunk fails the browser's
+   own integrity check and never executes — no operator action required. This
+   protects the operator entry's *sub-resources* even on the shared Pages deploy.
+   Its one residual gap: the browser does not integrity-check the top-level
+   `operator.html` document itself (SRI never does), so mitigations 2–3 remain
+   worthwhile.
+2. **Verify the bundle** you are about to run against a maintainer-published
    hash, *before* you import your key. A tampered bundle produces a different
-   hash and is caught.
-2. **Self-host** that verified bundle from infrastructure you control, so the
+   hash and is caught. This covers the top-level document that SRI cannot.
+3. **Self-host** that verified bundle from infrastructure you control, so the
    shared Pages host is no longer in your trust path at all.
 
-This runbook covers both. Doing (1) alone already closes most of the risk; (2)
-removes the host entirely and is recommended for mainnet.
+This runbook covers (2) and (3); (1) is automatic. Doing (2) alone already
+closes most of the risk on top of (1); (3) removes the host entirely and is
+recommended for mainnet.
 
 ## Prerequisites
 
@@ -54,12 +63,17 @@ git rev-parse HEAD             # record this — it's what you're trusting
 cd web
 pnpm install --frozen-lockfile
 
-# Build the operator dashboard bundle (the whole SPA; /operator is one route).
+# Build the operator dashboard bundle. The build is multi-page: the marketing/
+# wallet SPA is `dist/index.html`, and the operator dashboard is its own entry,
+# `dist/operator.html`, whose referenced chunks carry SRI integrity hashes.
 # Include the in-browser signer wasm so the signing path actually works:
 pnpm --filter @botho/web-wallet build:all
 ```
 
-The build output lands in `web/packages/web-wallet/dist/`.
+The build output lands in `web/packages/web-wallet/dist/`. Two HTML entry
+documents are emitted: `dist/index.html` (main SPA) and `dist/operator.html`
+(the standalone, SRI-pinned operator dashboard — this is what `/operator`
+serves).
 
 > `build:all` runs `build:wasm` then `build`. If you only need to *inspect*
 > the bundle hash and not sign, plain `pnpm --filter @botho/web-wallet build`
@@ -94,6 +108,23 @@ bundle):
 web/scripts/verify-operator-bundle.sh --manifest
 ```
 
+### Confirm the operator entry's browser-enforced SRI (option (a))
+
+Independently of the aggregate hash, you can confirm the operator entry pins a
+correct `sha384` integrity hash on each chunk it references — the scriptable
+equivalent of the check the browser performs on load:
+
+```bash
+web/scripts/verify-operator-bundle.sh --verify-sri
+# or: pnpm --filter @botho/web-wallet verify:operator-sri
+```
+
+It parses `dist/operator.html`, recomputes the `sha384` of each referenced chunk
+from disk, and exits 3 if any reference is missing an `integrity` attribute or
+the hash does not match. This is what protects you on the *shared* deploy even
+without self-hosting: a compromised host that swaps a chunk cannot match the
+pinned hash, and the browser refuses to run it.
+
 ### Reproducibility
 
 The bundle hash is deterministic: building the same pinned commit in two clean
@@ -123,12 +154,26 @@ pnpm --filter @botho/web-wallet preview   # serves dist/ on http://localhost:417
 
 # Option B: any static file server you trust, on infra you control
 #   (nginx, caddy, `python3 -m http.server`, an internal Pages/Netlify you own, …)
-#   Point it at web/packages/web-wallet/dist/ and serve index.html as the SPA
-#   fallback for client-side routes like /operator.
+#   Point it at web/packages/web-wallet/dist/. See the routing note below for
+#   how to map /operator to operator.html and everything else to index.html.
 ```
 
-Because the SPA uses client-side routing, configure your server to serve
-`index.html` for unknown paths (SPA fallback) so `/operator` resolves.
+Because the build is now multi-page, configure your server's client-side-routing
+fallback carefully:
+
+- `/operator` (and any `/<locale>/operator`, e.g. `/es/operator`) must serve
+  **`operator.html`** — the standalone, SRI-pinned operator document.
+- All other unknown paths serve **`index.html`** — the main SPA fallback.
+
+Serving `index.html` for `/operator` would load the un-SRI-pinned main SPA route
+instead of the split operator entry, silently discarding the browser-enforced
+integrity. Example nginx:
+
+```nginx
+location = /operator      { try_files /operator.html =404; }
+location ~ ^/[a-z]{2}/operator$ { try_files /operator.html =404; }
+location /                { try_files $uri /index.html; }
+```
 
 > **RPC reachability.** The bundle reaches a node's RPC directly. For local
 > `pnpm preview`, the Vite preview proxy forwards `/rpc` to a seed node (see
@@ -138,10 +183,18 @@ Because the SPA uses client-side routing, configure your server to serve
 
 ## Step 5: Handle PWA auto-update (important)
 
-The SPA registers a service worker with `registerType: 'autoUpdate'`
+The main SPA registers a service worker with `registerType: 'autoUpdate'`
 (`vite.config.ts`). On the shared deploy this silently fetches and activates a
 **newer** bundle after each deploy — which would defeat the whole point of
 pinning a verified bundle.
+
+> **Note (option (a), #772):** the operator entry is deliberately kept *out* of
+> the service worker. `operator-main.tsx` does not register the SW, and
+> `operator.html` is excluded from the Workbox precache
+> (`globIgnores: ['operator.html']`), so the operator document is always fetched
+> fresh over the network and cannot be silently swapped from the SW cache. The
+> guidance below still matters for the *rest* of the bundle and for the chunks
+> the operator entry loads.
 
 When self-hosting, keep the served `dist/` **fixed**: serve one verified build
 and do not roll a newer one behind the same origin. With no newer bundle
@@ -186,9 +239,15 @@ Publish that `sha256-<...>` value next to the release for the pinned commit.
 
 ## What this does and does not remove from the trust path
 
+**Removed** by browser-enforced SRI (automatic, even on the shared deploy):
+
+- Silent tampering of the operator entry's JS/CSS **chunks** — the browser
+  refuses any chunk whose bytes don't match the pinned `sha384` hash.
+
 **Removed** by verify + self-host:
 
-- Trust in the shared Cloudflare Pages host serving an honest bundle.
+- Trust in the shared Cloudflare Pages host serving an honest top-level
+  `operator.html` document (the one thing SRI cannot pin).
 - Silent bundle replacement via PWA auto-update (when you serve a fixed build).
 
 **Still trusted** (out of scope for this runbook):

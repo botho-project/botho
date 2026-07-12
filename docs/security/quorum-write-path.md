@@ -419,24 +419,58 @@ distinct ways to close 8.3, with different cost/guarantee profiles:
 
 | Approach | Guarantee | Cost | Status |
 |---|---|---|---|
-| **(a) Split-build + true SRI** — give `/operator` its own Vite build / Pages target whose `index.html` pins `integrity=` hashes for its own JS/CSS chunks. | Browser *enforces* integrity: a tampered chunk fails to load, no operator action required. | High — a second build artifact + deploy target + CI job kept in sync with the shared `@botho/features`/`@botho/core` packages; touches Vite config, Pages topology, and the App router. | **Deferred to follow-up** (assessed **L**). Filed as a separate issue; see PR for #757. |
+| **(a) Split-build + true SRI** — give `/operator` its own Vite build entry whose HTML document pins `integrity=` hashes for its own JS/CSS chunks. | Browser *enforces* integrity: a tampered chunk fails to load, no operator action required. | High — a second build entry + an SRI-injection plugin + PWA precache exclusion, kept in sync with the shared `@botho/features`/`@botho/core` packages; touches Vite config and adds a standalone operator app shell. | **Shipped in #772.** Multi-page Vite build (`operator.html` -> `operator-main.tsx`) within `web/packages/web-wallet` on the same Pages project; `sriHashPlugin` pins `sha384` integrity on the operator entry's chunks; a build-time test (`operator-sri.test.ts`) and `verify-operator-bundle.sh --verify-sri` enforce it. |
 | **(b) Whole-bundle hash pin + out-of-band verify** — a maintainer publishes an aggregate hash of the built `dist/` tree; the operator verifies their bundle against it **before importing their key**, and/or self-hosts that exact bundle. | Operator-enforced: integrity depends on the operator running the check. No browser enforcement, but no host-topology change. | Low — one verify script + a runbook. Composes directly with self-hosting. | **Shipped in #757.** `web/scripts/verify-operator-bundle.sh` + `docs/operations/self-hosted-operator-dashboard.md`. |
 
 **Interaction with self-hosting.** Approach (b) is the natural companion to the
 second §9 hardening item ("self-hosting the operator page"): an operator who
 builds the bundle from a pinned tag, verifies its aggregate hash against a
 maintainer-published value, and serves that `dist/` from infrastructure they
-control has removed the Pages host from the trust path entirely — without
-waiting on the split-build. (a) remains desirable on top of (b) for the
-non-self-hosting operator, because it moves enforcement from "operator
-remembers to run the check" to "the browser refuses the bad bundle." See
-`docs/operations/self-hosted-operator-dashboard.md` for the operator-facing
+control has removed the Pages host from the trust path entirely. (a) now sits
+**on top of** (b) for the non-self-hosting operator: it moves enforcement from
+"operator remembers to run the check" to "the browser refuses the bad chunk."
+See `docs/operations/self-hosted-operator-dashboard.md` for the operator-facing
 procedure.
+
+**What (a) landed (#772), and its residual gap.** The operator dashboard is now
+its own Vite build entry — `web/packages/web-wallet/operator.html` bootstraps
+`operator-main.tsx` -> `OperatorApp.tsx`, a slimmed router mounting only the
+`/operator` route (with the same `parseLocalePath` locale handling as the main
+SPA). It is emitted into the *same* Cloudflare Pages project (`dist/operator.html`
+alongside `dist/index.html`), so the `/operator` URL is unchanged and no DNS/
+Pages-topology change was needed. A build-time plugin (`sriHashPlugin` in
+`vite.config.ts`, modeled on the existing `wasmSignerPkgPlugin`) injects
+`integrity="sha384-…"` + `crossorigin` onto every `<script>`, `<link
+rel="stylesheet">`, and `<link rel="modulepreload">` in the emitted
+`operator.html` that references a local chunk. `operator-sri.test.ts` runs a
+real build and asserts, byte-for-byte, that every operator asset reference is
+pinned and every pinned hash matches the file on disk; `verify-operator-bundle.sh
+--verify-sri` performs the same check against a built `dist/` as a scriptable
+stand-in for the browser's own integrity enforcement.
+
+The **residual trust gap** is inherent to SRI and unchanged from the analysis
+above: browsers do **not** SRI-check a top-level, same-origin navigation, so the
+operator *document itself* (`operator.html`) is still trusted-on-load. The
+security gain from (a) is therefore specifically narrower than "the host can't
+lie": a compromised Pages host can still serve a bad `operator.html`, but it can
+**no longer silently swap the JS/CSS chunks that document references** without
+the browser refusing to execute them. That forces any attacker payload into the
+one HTML file that is smallest and easiest to diff/monitor, rather than hiding
+in any of N chunk files. Closing the top-level-document gap entirely still
+requires (b) — verifying the whole bundle out-of-band and/or self-hosting.
 
 **PWA auto-update caveat.** The SPA registers a service worker with
 `registerType: 'autoUpdate'` (`vite.config.ts`), which auto-fetches and
-activates a new bundle after a deploy. Under either approach this means a
-verified/pinned bundle can be silently replaced by a later one. The
+activates a new bundle after a deploy. SRI only pins *sub-resources*, not the
+top-level document, so an auto-updated SW that could serve `operator.html` from
+cache would defeat (a) (it could hand back a document pinning attacker-chosen
+hashes). The (a) mitigation, landed in #772: the operator entry does **not**
+register the service worker (`operator-main.tsx` omits the `registerSW` call),
+and `operator.html` is excluded from the Workbox precache manifest
+(`globIgnores: ['operator.html']` in `vite.config.ts`) with a
+`navigateFallbackDenylist` entry for `/operator`. The browser therefore always
+fetches the operator document fresh over the network, and the `integrity=`
+attributes on that fresh document protect its sub-resources. For (b), the
 self-hosting runbook documents the required mitigation: serve a fixed,
 already-verified `dist/` (no rolling deploy behind it), so there is no newer
 bundle for the service worker to pull; and re-verify the hash after any
@@ -475,5 +509,8 @@ so a tampered service worker changes the aggregate hash and is caught.
       acceptable for testnet, and the mainnet hardening list is filed. The
       decided mainnet approach and its trade-offs are recorded in §8.3.1;
       the whole-bundle verify path (`web/scripts/verify-operator-bundle.sh` +
-      `docs/operations/self-hosted-operator-dashboard.md`) is in place, and the
-      split-build/true-SRI option is deferred to a tracked follow-up.
+      `docs/operations/self-hosted-operator-dashboard.md`) is in place (option
+      (b), #757), and the split-build/browser-enforced-SRI option (a) has landed
+      (#772): the operator entry is its own SRI-pinned Vite build target,
+      excluded from the PWA service worker, with a build-time integrity test and
+      a `--verify-sri` script mode.
