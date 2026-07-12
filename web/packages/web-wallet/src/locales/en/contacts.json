@@ -1,0 +1,61 @@
+{
+  "header": {
+    "walletName": "Botho Wallet"
+  },
+  "title": "Contacts",
+  "add": "Add",
+  "addDisabledPlaintext": "Add a password to your wallet to save contacts",
+  "addDisabledLocked": "Unlock your wallet to save contacts",
+  "sort": {
+    "name": "Name",
+    "lastTx": "Recent",
+    "txCount": "Most paid"
+  },
+  "plaintextHint": {
+    "title": "Contacts require a password-protected wallet",
+    "body": "Your wallet has no password, so contacts can't be saved — they're encrypted on this device and never stored in cleartext. Add a password to start saving contacts.",
+    "cta": "Set a password"
+  },
+  "lockedHint": {
+    "title": "Wallet is locked",
+    "body": "Unlock your wallet to view and save contacts. They're encrypted on this device and unavailable while locked.",
+    "cta": "Go to wallet to unlock"
+  },
+  "searchPlaceholder": "Search by name or address…",
+  "empty": {
+    "none": "No contacts yet. Addresses you pay will appear here, ready to label.",
+    "noMatch": "No contacts match your search."
+  },
+  "row": {
+    "unnamed": "Unnamed — tap to label",
+    "timesPaid": "{{count}}× paid",
+    "editTitle": "Edit contact",
+    "labelTitle": "Tap to label this address",
+    "editButtonTitle": "Edit"
+  },
+  "editor": {
+    "addTitle": "Add contact",
+    "editTitle": "Edit contact",
+    "close": "Close",
+    "nameLabel": "Name",
+    "namePlaceholder": "e.g. Alice",
+    "addressLabel": "Address",
+    "addressPlaceholder": "tbotho://1/…",
+    "addressFixed": "The address can't be changed for an existing contact.",
+    "notesLabel": "Notes",
+    "notesOptional": "(optional)",
+    "notesPlaceholder": "Anything to remember about this contact…",
+    "saveAdd": "Add contact",
+    "saveEdit": "Save changes",
+    "deleteConfirmPrompt": "Remove this contact? This only deletes the local label, not any payments.",
+    "delete": "Delete",
+    "cancel": "Cancel",
+    "deleteContact": "Delete contact"
+  },
+  "errors": {
+    "enterAddress": "Enter an address.",
+    "invalidAddress": "That does not look like a valid Botho address.",
+    "saveFailed": "Could not save contact.",
+    "deleteFailed": "Could not delete contact."
+  }
+}

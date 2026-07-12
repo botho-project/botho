@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
 import { Button, Card, Input, Logo } from '@botho/ui'
 import {
@@ -57,6 +58,7 @@ type ParseState = 'parsing' | 'invalid' | 'ready'
 type SetupMode = 'unlock' | 'create' | 'import'
 
 export function PayPage() {
+  const { t } = useTranslation('pay')
   const {
     hasWallet,
     isLocked,
@@ -92,7 +94,7 @@ export function PayPage() {
   useEffect(() => {
     if (!initialHash || initialHash === '#') {
       setParseState('invalid')
-      setParseError('No payment request found. The link should look like .../pay#…')
+      setParseError(t('errors.noRequest'))
       return
     }
     try {
@@ -106,9 +108,9 @@ export function PayPage() {
       setParseState('ready')
     } catch (err) {
       setParseState('invalid')
-      setParseError(err instanceof Error ? err.message : 'This payment-request link is not valid.')
+      setParseError(err instanceof Error ? err.message : t('errors.notValidGeneric'))
     }
-  }, [initialHash])
+  }, [initialHash, t])
 
   const explorerBase = network.explorerUrl
 
@@ -120,7 +122,7 @@ export function PayPage() {
             <ArrowLeft size={18} className="text-ghost" />
             <Logo size="sm" showText={false} />
             <span className="font-display text-base sm:text-lg font-semibold hidden sm:inline">
-              Botho Wallet
+              {t('header.walletName')}
             </span>
           </Link>
         </div>
@@ -133,20 +135,20 @@ export function PayPage() {
               <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-pulse/10 flex items-center justify-center mx-auto mb-3 sm:mb-4">
                 <Send className="text-pulse" size={26} />
               </div>
-              <h2 className="font-display text-xl sm:text-2xl font-bold mb-2">Send a Payment</h2>
+              <h2 className="font-display text-xl sm:text-2xl font-bold mb-2">{t('title')}</h2>
             </div>
 
             {parseState === 'parsing' && (
               <div className="flex flex-col items-center gap-3 py-6 text-ghost">
                 <Loader2 size={28} className="animate-spin text-pulse" />
-                <p className="text-sm">Reading the payment request…</p>
+                <p className="text-sm">{t('parsing')}</p>
               </div>
             )}
 
             {parseState === 'invalid' && (
               <div className="flex items-start gap-2 p-3 rounded-lg bg-danger/10 border border-danger/20 text-danger text-sm">
                 <AlertCircle size={16} className="shrink-0 mt-0.5" />
-                <span>{parseError ?? 'This payment-request link is not valid.'}</span>
+                <span>{parseError ?? t('errors.notValidGeneric')}</span>
               </div>
             )}
 
@@ -207,6 +209,7 @@ function PayConfirm({
   refreshTransactions: () => Promise<void>
   explorerBase?: string
 }) {
+  const { t } = useTranslation('pay')
   const [amountStr, setAmountStr] = useState(
     request.amount !== undefined ? formatBTH(request.amount, { separators: false }) : '',
   )
@@ -243,9 +246,9 @@ function PayConfirm({
   if (amountStr.trim()) {
     try {
       amount = parseBTH(amountStr)
-      if (amount <= 0n) amountError = 'Amount must be greater than 0.'
+      if (amount <= 0n) amountError = t('errors.amountPositive')
     } catch {
-      amountError = 'Enter a valid amount.'
+      amountError = t('errors.amountInvalid')
     }
   }
 
@@ -267,7 +270,7 @@ function PayConfirm({
       setTxHash(hash)
       await Promise.allSettled([refreshBalance(), refreshTransactions()])
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Payment failed.')
+      setError(err instanceof Error ? err.message : t('errors.paymentFailed'))
     } finally {
       setIsSending(false)
     }
@@ -280,7 +283,7 @@ function PayConfirm({
       await addContact(saveName.trim(), request.to)
       setSavedContact(true)
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : 'Could not save contact.')
+      setSaveError(err instanceof Error ? err.message : t('success.saveError'))
     } finally {
       setSavingContact(false)
     }
@@ -297,9 +300,12 @@ function PayConfirm({
           <div className="w-12 h-12 rounded-full bg-success/10 flex items-center justify-center">
             <Check className="text-success" size={26} />
           </div>
-          <p className="text-lg font-semibold text-light">Payment sent</p>
+          <p className="text-lg font-semibold text-light">{t('success.paymentSent')}</p>
           <p className="text-sm text-ghost">
-            Sent {formatBTH(amount)} BTH to {contactName ?? 'the requester'}.
+            {t('success.sentTo', {
+              amount: formatBTH(amount),
+              recipient: contactName ?? t('success.theRequester'),
+            })}
           </p>
           {explorerTxUrl && (
             <a
@@ -308,7 +314,7 @@ function PayConfirm({
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-xs text-ghost hover:text-light"
             >
-              View transaction <ExternalLink size={12} />
+              {t('success.viewTransaction')} <ExternalLink size={12} />
             </a>
           )}
         </div>
@@ -317,17 +323,17 @@ function PayConfirm({
           (savedContact ? (
             <div className="flex items-center gap-2 p-3 rounded-lg bg-success/10 border border-success/20 text-success text-xs">
               <UserCheck size={15} className="shrink-0" />
-              <span>Saved to your contacts.</span>
+              <span>{t('success.savedToContacts')}</span>
             </div>
           ) : (
             <div className="space-y-2 p-3 rounded-lg bg-abyss border border-steel">
               <p className="text-xs text-ghost flex items-center gap-1.5">
                 <UserPlus size={14} className="text-pulse" />
-                Save this address as a contact?
+                {t('success.savePrompt')}
               </p>
               <Input
                 type="text"
-                placeholder="Name (optional)"
+                placeholder={t('success.namePlaceholder')}
                 value={saveName}
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                   setSaveName(e.target.value)
@@ -342,13 +348,13 @@ function PayConfirm({
                 className="w-full justify-center"
               >
                 {savingContact ? <Loader2 size={16} className="mr-2 animate-spin" /> : null}
-                Save as contact
+                {t('success.saveAsContact')}
               </Button>
             </div>
           ))}
 
         <Link to="/wallet">
-          <Button className="w-full justify-center">Go to my wallet</Button>
+          <Button className="w-full justify-center">{t('success.goToWallet')}</Button>
         </Link>
       </div>
     )
@@ -358,7 +364,7 @@ function PayConfirm({
     return (
       <div className="flex items-start gap-2 p-3 rounded-lg bg-danger/10 border border-danger/20 text-danger text-sm">
         <AlertCircle size={16} className="shrink-0 mt-0.5" />
-        <span>This payment-request link has an invalid recipient address.</span>
+        <span>{t('errors.invalidRecipient')}</span>
       </div>
     )
   }
@@ -366,9 +372,9 @@ function PayConfirm({
   return (
     <div className="space-y-4">
       <div className="text-center">
-        <p className="text-sm text-ghost">You&apos;re paying</p>
+        <p className="text-sm text-ghost">{t('confirm.youArePaying')}</p>
         <p className="font-display text-lg font-semibold text-light break-words">
-          {contactName ?? 'a Botho address'}
+          {contactName ?? t('confirm.aBothoAddress')}
         </p>
         <p className="text-xs text-ghost mt-1 font-mono break-all">{request.to}</p>
       </div>
@@ -376,7 +382,7 @@ function PayConfirm({
       {isSelfPay && (
         <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-200/90 text-xs">
           <ShieldAlert size={15} className="text-amber-400 shrink-0 mt-0.5" />
-          <span>This request is for your own address — you&apos;d be paying yourself.</span>
+          <span>{t('confirm.selfPay')}</span>
         </div>
       )}
 
@@ -391,8 +397,8 @@ function PayConfirm({
             <UserCheck size={15} className="shrink-0 mt-0.5" />
             <span>
               {contactName
-                ? `You've paid ${contactName} before — they're in your contacts.`
-                : "You've paid this address before — it's in your contacts."}
+                ? t('confirm.knownNamed', { name: contactName })
+                : t('confirm.knownUnnamed')}
             </span>
           </div>
         ) : (
@@ -400,10 +406,9 @@ function PayConfirm({
             <ShieldQuestion size={15} className="text-amber-400 shrink-0 mt-0.5" />
             <span>
               <strong className="font-semibold text-amber-100">
-                You have not paid this address before.
+                {t('confirm.unknownStrong')}
               </strong>{' '}
-              Double-check the full address above — payment-request links are
-              attacker-controllable and payments can&apos;t be reversed.
+              {t('confirm.unknown')}
             </span>
           </div>
         ))}
@@ -411,8 +416,8 @@ function PayConfirm({
       {request.memo && (
         <div>
           <label className="block text-sm text-ghost mb-1.5">
-            Note from the requester{' '}
-            <span className="text-ghost/60">(not from Botho)</span>
+            {t('confirm.noteLabel')}{' '}
+            <span className="text-ghost/60">{t('confirm.noteFromBotho')}</span>
           </label>
           <div className="px-3 py-2 rounded-lg bg-abyss border border-steel text-sm text-light break-words">
             {request.memo}
@@ -422,21 +427,21 @@ function PayConfirm({
 
       <div>
         <div className="flex items-center justify-between mb-1.5">
-          <label className="block text-sm text-ghost">Amount (BTH)</label>
+          <label className="block text-sm text-ghost">{t('confirm.amountLabel')}</label>
           {balance && (
             <button
               type="button"
               onClick={() => setAmountStr(formatBTH(balance.available, { separators: false }))}
               className="text-xs text-pulse hover:underline"
             >
-              Max: {formatBTH(balance.available)} BTH
+              {t('confirm.max', { amount: formatBTH(balance.available) })}
             </button>
           )}
         </div>
         <Input
           type="text"
           inputMode="decimal"
-          placeholder="0.00"
+          placeholder={t('confirm.amountPlaceholder')}
           value={amountStr}
           onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
             setAmountStr(e.target.value)
@@ -447,7 +452,7 @@ function PayConfirm({
         />
         {request.amount === undefined && (
           <p className="text-xs text-ghost mt-1">
-            The requester didn&apos;t specify an amount — enter how much to send.
+            {t('confirm.noAmountSpecified')}
           </p>
         )}
 
@@ -464,11 +469,11 @@ function PayConfirm({
               className="mt-0.5 w-4 h-4 accent-pulse shrink-0"
             />
             <span className="text-xs text-amber-200/90">
-              This link is requesting a large amount (
+              {t('confirm.largePrefillPrefix')}
               <strong className="font-semibold text-amber-100">
-                {formatBTH(prefilledAmount!)} BTH
+                {t('confirm.largePrefillStrong', { amount: formatBTH(prefilledAmount!) })}
               </strong>
-              ). I&apos;ve verified the amount and recipient and want to send it.
+              {t('confirm.largePrefillSuffix')}
             </span>
           </label>
         )}
@@ -492,12 +497,12 @@ function PayConfirm({
         {isSending ? (
           <>
             <Loader2 size={16} className="mr-2 animate-spin" />
-            Sending…
+            {t('confirm.sending')}
           </>
         ) : (
           <>
             <Send size={16} className="mr-2" />
-            Pay {amount > 0n ? `${formatBTH(amount)} BTH` : ''}
+            {amount > 0n ? t('confirm.pay', { amount: `${formatBTH(amount)} BTH` }) : t('confirm.payNoAmount')}
           </>
         )}
       </Button>
@@ -521,6 +526,7 @@ function WalletGate({
   onImport: (seedPhrase: string, password?: string) => Promise<void>
   onUnlock: (password: string) => Promise<void>
 }) {
+  const { t } = useTranslation('pay')
   const [mode, setMode] = useState<SetupMode>(isLocked ? 'unlock' : 'create')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -565,7 +571,7 @@ function WalletGate({
     try {
       await onUnlock(password)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unlock failed.')
+      setError(err instanceof Error ? err.message : t('gate.unlockFailed'))
     } finally {
       setBusy(false)
     }
@@ -578,7 +584,7 @@ function WalletGate({
     try {
       await onCreate(newMnemonic, newPassword)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not create wallet.')
+      setError(err instanceof Error ? err.message : t('gate.createFailed'))
     } finally {
       setBusy(false)
     }
@@ -591,7 +597,7 @@ function WalletGate({
     try {
       await onImport(seedPhrase, newPassword)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Import failed.')
+      setError(err instanceof Error ? err.message : t('gate.importFailed'))
     } finally {
       setBusy(false)
     }
@@ -603,8 +609,8 @@ function WalletGate({
     <div className="space-y-4">
       <p className="text-sm text-ghost text-center">
         {isLocked
-          ? 'Unlock your wallet to pay this request.'
-          : 'You need a wallet to pay this request.'}
+          ? t('gate.unlockPrompt')
+          : t('gate.needWalletPrompt')}
       </p>
 
       {!isLocked && (
@@ -618,7 +624,7 @@ function WalletGate({
               mode === 'create' ? 'bg-steel text-light' : 'text-ghost hover:text-light'
             }`}
           >
-            Create New
+            {t('gate.createNew')}
           </button>
           <button
             onClick={() => {
@@ -629,7 +635,7 @@ function WalletGate({
               mode === 'import' ? 'bg-steel text-light' : 'text-ghost hover:text-light'
             }`}
           >
-            Import Existing
+            {t('gate.importExisting')}
           </button>
         </div>
       )}
@@ -641,7 +647,7 @@ function WalletGate({
           </div>
           <Input
             type="password"
-            placeholder="Enter password"
+            placeholder={t('gate.passwordPlaceholder')}
             value={password}
             onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
               setPassword(e.target.value)
@@ -654,7 +660,7 @@ function WalletGate({
           />
           <Button onClick={handleUnlock} disabled={!password || busy} className="w-full justify-center">
             {busy ? <Loader2 size={16} className="mr-2 animate-spin" /> : null}
-            Unlock
+            {t('gate.unlock')}
           </Button>
         </div>
       )}
@@ -675,7 +681,7 @@ function WalletGate({
                 className="absolute inset-0 flex items-center justify-center gap-2 text-ghost hover:text-light"
               >
                 <Eye size={18} />
-                <span className="text-sm">Click to reveal</span>
+                <span className="text-sm">{t('gate.revealPrompt')}</span>
               </button>
             )}
           </div>
@@ -687,12 +693,12 @@ function WalletGate({
               className="mt-1 w-4 h-4 accent-pulse"
             />
             <span className="text-xs text-ghost">
-              I&apos;ve written down my recovery phrase and stored it safely.
+              {t('gate.confirmedPhrase')}
             </span>
           </label>
           <div>
             <p className="text-xs text-ghost mb-2">
-              Set a password — your wallet is encrypted on this device with it.
+              {t('gate.setPasswordPrompt')}
             </p>
             <PasswordFields
               password={newPassword}
@@ -711,11 +717,11 @@ function WalletGate({
               />
               <span className="text-xs text-danger">
                 <strong className="font-semibold">
-                  This device already has a wallet
-                  {existingWallet.address ? ` (${shortenAddress(existingWallet.address)})` : ''}.
+                  {t('gate.overwriteStrong', {
+                    suffix: existingWallet.address ? ` (${shortenAddress(existingWallet.address)})` : '',
+                  })}
                 </strong>{' '}
-                Continuing replaces it and deletes its stored seed — any funds in
-                it are lost unless you have its recovery phrase backed up.
+                {t('gate.overwriteWarning')}
               </span>
             </label>
           )}
@@ -725,7 +731,7 @@ function WalletGate({
             className="w-full justify-center"
           >
             {busy ? <Loader2 size={16} className="mr-2 animate-spin" /> : null}
-            Create &amp; Continue
+            {t('gate.createContinue')}
           </Button>
         </div>
       )}
@@ -738,13 +744,13 @@ function WalletGate({
               setSeedPhrase(e.target.value)
               setError(null)
             }}
-            placeholder="Enter your 12 or 24 word recovery phrase…"
+            placeholder={t('gate.seedPlaceholder')}
             rows={3}
             className="w-full p-3 rounded-lg bg-abyss border border-steel font-mono text-xs leading-relaxed resize-none focus:outline-none focus:ring-2 focus:ring-pulse/50 focus:border-pulse placeholder:text-ghost/50"
           />
           <div>
             <p className="text-xs text-ghost mb-2">
-              Set a password — your wallet is encrypted on this device with it.
+              {t('gate.setPasswordPrompt')}
             </p>
             <PasswordFields
               password={newPassword}
@@ -763,11 +769,11 @@ function WalletGate({
               />
               <span className="text-xs text-danger">
                 <strong className="font-semibold">
-                  This device already has a wallet
-                  {existingWallet.address ? ` (${shortenAddress(existingWallet.address)})` : ''}.
+                  {t('gate.overwriteStrong', {
+                    suffix: existingWallet.address ? ` (${shortenAddress(existingWallet.address)})` : '',
+                  })}
                 </strong>{' '}
-                Continuing replaces it and deletes its stored seed — any funds in
-                it are lost unless you have its recovery phrase backed up.
+                {t('gate.overwriteWarning')}
               </span>
             </label>
           )}
@@ -777,7 +783,7 @@ function WalletGate({
             className="w-full justify-center"
           >
             {busy ? <Loader2 size={16} className="mr-2 animate-spin" /> : null}
-            Import &amp; Continue
+            {t('gate.importContinue')}
           </Button>
         </div>
       )}

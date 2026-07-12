@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
 import { Button, Card, Input, Logo, ModalOverlay } from '@botho/ui'
 import { isValidAddress } from '@botho/core'
@@ -21,11 +22,8 @@ import { PasswordSettingsModal } from '../components/PasswordSettingsModal'
 
 type SortBy = 'name' | 'lastTx' | 'txCount'
 
-const SORT_LABELS: Record<SortBy, string> = {
-  name: 'Name',
-  lastTx: 'Recent',
-  txCount: 'Most paid',
-}
+/** Sort options in display order. Labels are resolved via i18n at render time. */
+const SORT_ORDER: SortBy[] = ['name', 'lastTx', 'txCount']
 
 /** Truncate an address for compact display. */
 function shortAddress(address: string, len = 10): string {
@@ -74,6 +72,7 @@ function arrange(contacts: Contact[], sortBy: SortBy, query: string): Contact[] 
  * entries (auto-created on send) show as "Unnamed — tap to label".
  */
 export function ContactsPage() {
+  const { t } = useTranslation('contacts')
   const {
     contacts,
     addContact,
@@ -119,7 +118,7 @@ export function ContactsPage() {
             <ArrowLeft size={18} className="text-ghost" />
             <Logo size="sm" showText={false} />
             <span className="font-display text-base sm:text-lg font-semibold hidden sm:inline">
-              Botho Wallet
+              {t('header.walletName')}
             </span>
           </Link>
         </div>
@@ -130,7 +129,7 @@ export function ContactsPage() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Users className="text-pulse" size={22} />
-              <h1 className="font-display text-xl sm:text-2xl font-bold">Contacts</h1>
+              <h1 className="font-display text-xl sm:text-2xl font-bold">{t('title')}</h1>
             </div>
             <Button
               onClick={() => setAdding(true)}
@@ -139,11 +138,11 @@ export function ContactsPage() {
                 canPersistContacts
                   ? undefined
                   : plaintextWallet
-                    ? 'Add a password to your wallet to save contacts'
-                    : 'Unlock your wallet to save contacts'
+                    ? t('addDisabledPlaintext')
+                    : t('addDisabledLocked')
               }
             >
-              <Plus size={16} className="mr-2" />Add
+              <Plus size={16} className="mr-2" />{t('add')}
             </Button>
           </div>
 
@@ -156,15 +155,13 @@ export function ContactsPage() {
                 <Lock size={18} className="text-pulse shrink-0 mt-0.5" />
                 <div className="space-y-2">
                   <p className="text-sm text-light">
-                    Contacts require a password-protected wallet
+                    {t('plaintextHint.title')}
                   </p>
                   <p className="text-xs text-ghost">
-                    Your wallet has no password, so contacts can&apos;t be saved —
-                    they&apos;re encrypted on this device and never stored in
-                    cleartext. Add a password to start saving contacts.
+                    {t('plaintextHint.body')}
                   </p>
                   <Button size="sm" onClick={() => setShowPasswordModal(true)}>
-                    Set a password
+                    {t('plaintextHint.cta')}
                   </Button>
                 </div>
               </div>
@@ -176,13 +173,12 @@ export function ContactsPage() {
               <div className="flex items-start gap-3">
                 <Lock size={18} className="text-pulse shrink-0 mt-0.5" />
                 <div className="space-y-2">
-                  <p className="text-sm text-light">Wallet is locked</p>
+                  <p className="text-sm text-light">{t('lockedHint.title')}</p>
                   <p className="text-xs text-ghost">
-                    Unlock your wallet to view and save contacts. They&apos;re
-                    encrypted on this device and unavailable while locked.
+                    {t('lockedHint.body')}
                   </p>
                   <Link to="/wallet">
-                    <Button size="sm">Go to wallet to unlock</Button>
+                    <Button size="sm">{t('lockedHint.cta')}</Button>
                   </Link>
                 </div>
               </div>
@@ -197,7 +193,7 @@ export function ContactsPage() {
             />
             <Input
               type="text"
-              placeholder="Search by name or address…"
+              placeholder={t('searchPlaceholder')}
               value={query}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
                 setQuery(e.target.value)
@@ -208,7 +204,7 @@ export function ContactsPage() {
 
           {/* Sort toggle */}
           <div className="flex rounded-lg bg-abyss border border-steel p-1">
-            {(Object.keys(SORT_LABELS) as SortBy[]).map((key) => (
+            {SORT_ORDER.map((key) => (
               <button
                 key={key}
                 onClick={() => setSortBy(key)}
@@ -218,7 +214,7 @@ export function ContactsPage() {
                     : 'text-ghost hover:text-light'
                 }`}
               >
-                {SORT_LABELS[key]}
+                {t(`sort.${key}`)}
               </button>
             ))}
           </div>
@@ -227,8 +223,8 @@ export function ContactsPage() {
           {arranged.length === 0 ? (
             <Card className="p-6 text-center text-ghost text-sm">
               {contacts.length === 0
-                ? 'No contacts yet. Addresses you pay will appear here, ready to label.'
-                : 'No contacts match your search.'}
+                ? t('empty.none')
+                : t('empty.noMatch')}
             </Card>
           ) : (
             <div className="space-y-2">
@@ -292,6 +288,7 @@ function ContactRow({
   editable?: boolean
   onEdit: () => void
 }) {
+  const { t } = useTranslation('contacts')
   const named = contact.name.trim().length > 0
   return (
     <Card className="p-3 sm:p-4 flex items-center justify-between gap-3">
@@ -302,8 +299,8 @@ function ContactRow({
         title={
           editable
             ? named
-              ? 'Edit contact'
-              : 'Tap to label this address'
+              ? t('row.editTitle')
+              : t('row.labelTitle')
             : undefined
         }
       >
@@ -313,11 +310,11 @@ function ContactRow({
               named ? 'text-light' : 'text-ghost italic'
             }`}
           >
-            {named ? contact.name : 'Unnamed — tap to label'}
+            {named ? contact.name : t('row.unnamed')}
           </span>
           {contact.txCount > 0 && (
             <span className="shrink-0 text-[11px] text-ghost bg-abyss border border-steel rounded-full px-2 py-0.5">
-              {contact.txCount}× paid
+              {t('row.timesPaid', { count: contact.txCount })}
             </span>
           )}
         </div>
@@ -328,7 +325,7 @@ function ContactRow({
           <p className="text-xs text-ghost/80 mt-1 truncate">{contact.notes}</p>
         )}
       </button>
-      <Button variant="ghost" size="sm" onClick={onEdit} disabled={!editable} title="Edit">
+      <Button variant="ghost" size="sm" onClick={onEdit} disabled={!editable} title={t('row.editButtonTitle')}>
         {named ? <Pencil size={16} /> : <Tag size={16} />}
       </Button>
     </Card>
@@ -348,6 +345,7 @@ function ContactEditor({
   onSave: (data: { name: string; address: string; notes?: string }) => Promise<void>
   onDelete?: () => Promise<void>
 }) {
+  const { t } = useTranslation('contacts')
   const [name, setName] = useState(contact?.name ?? '')
   const [address, setAddress] = useState(contact?.address ?? '')
   const [notes, setNotes] = useState(contact?.notes ?? '')
@@ -362,11 +360,11 @@ function ContactEditor({
   const handleSave = async () => {
     setError(null)
     if (!address.trim()) {
-      setError('Enter an address.')
+      setError(t('errors.enterAddress'))
       return
     }
     if (!isValidAddress(address.trim())) {
-      setError('That does not look like a valid Botho address.')
+      setError(t('errors.invalidAddress'))
       return
     }
     setBusy(true)
@@ -378,7 +376,7 @@ function ContactEditor({
       })
       onClose()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not save contact.')
+      setError(err instanceof Error ? err.message : t('errors.saveFailed'))
     } finally {
       setBusy(false)
     }
@@ -391,7 +389,7 @@ function ContactEditor({
       await onDelete()
       onClose()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not delete contact.')
+      setError(err instanceof Error ? err.message : t('errors.deleteFailed'))
       setBusy(false)
     }
   }
@@ -407,19 +405,19 @@ function ContactEditor({
       <Card className="w-full sm:max-w-md p-5 sm:p-6 rounded-t-2xl sm:rounded-2xl max-h-[92vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-5">
           <h3 className="font-display text-lg font-semibold">
-            {mode === 'add' ? 'Add contact' : 'Edit contact'}
+            {mode === 'add' ? t('editor.addTitle') : t('editor.editTitle')}
           </h3>
-          <button onClick={onClose} className="text-ghost hover:text-light" aria-label="Close">
+          <button onClick={onClose} className="text-ghost hover:text-light" aria-label={t('editor.close')}>
             <X size={20} />
           </button>
         </div>
 
         <div className="space-y-4">
           <div>
-            <label className="block text-sm text-ghost mb-1.5">Name</label>
+            <label className="block text-sm text-ghost mb-1.5">{t('editor.nameLabel')}</label>
             <Input
               type="text"
-              placeholder="e.g. Alice"
+              placeholder={t('editor.namePlaceholder')}
               value={name}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                 setName(e.target.value)
@@ -430,10 +428,10 @@ function ContactEditor({
           </div>
 
           <div>
-            <label className="block text-sm text-ghost mb-1.5">Address</label>
+            <label className="block text-sm text-ghost mb-1.5">{t('editor.addressLabel')}</label>
             <Input
               type="text"
-              placeholder="tbotho://1/…"
+              placeholder={t('editor.addressPlaceholder')}
               value={address}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                 setAddress(e.target.value)
@@ -444,14 +442,14 @@ function ContactEditor({
             />
             {!addressEditable && (
               <p className="text-xs text-ghost/70 mt-1">
-                The address can&apos;t be changed for an existing contact.
+                {t('editor.addressFixed')}
               </p>
             )}
           </div>
 
           <div>
             <label className="block text-sm text-ghost mb-1.5">
-              Notes <span className="text-ghost/70">(optional)</span>
+              {t('editor.notesLabel')} <span className="text-ghost/70">{t('editor.notesOptional')}</span>
             </label>
             <textarea
               value={notes}
@@ -459,7 +457,7 @@ function ContactEditor({
                 setNotes(e.target.value)
                 setError(null)
               }}
-              placeholder="Anything to remember about this contact…"
+              placeholder={t('editor.notesPlaceholder')}
               rows={3}
               className="w-full p-3 rounded-lg bg-abyss border border-steel text-sm leading-relaxed resize-none focus:outline-none focus:ring-2 focus:ring-pulse/50 focus:border-pulse placeholder:text-ghost/50"
             />
@@ -474,15 +472,14 @@ function ContactEditor({
 
           <Button onClick={handleSave} disabled={busy} className="w-full justify-center">
             <Check size={16} className="mr-2" />
-            {mode === 'add' ? 'Add contact' : 'Save changes'}
+            {mode === 'add' ? t('editor.saveAdd') : t('editor.saveEdit')}
           </Button>
 
           {mode === 'edit' && onDelete && (
             confirmDelete ? (
               <div className="space-y-2">
                 <p className="text-xs text-ghost text-center">
-                  Remove this contact? This only deletes the local label, not any
-                  payments.
+                  {t('editor.deleteConfirmPrompt')}
                 </p>
                 <div className="flex gap-2">
                   <Button
@@ -491,14 +488,14 @@ function ContactEditor({
                     disabled={busy}
                     className="flex-1 justify-center"
                   >
-                    <Trash2 size={16} className="mr-2" />Delete
+                    <Trash2 size={16} className="mr-2" />{t('editor.delete')}
                   </Button>
                   <Button
                     variant="secondary"
                     onClick={() => setConfirmDelete(false)}
                     className="flex-1 justify-center"
                   >
-                    Cancel
+                    {t('editor.cancel')}
                   </Button>
                 </div>
               </div>
@@ -508,7 +505,7 @@ function ContactEditor({
                 onClick={() => setConfirmDelete(true)}
                 className="w-full justify-center text-danger"
               >
-                <Trash2 size={16} className="mr-2" />Delete contact
+                <Trash2 size={16} className="mr-2" />{t('editor.deleteContact')}
               </Button>
             )
           )}

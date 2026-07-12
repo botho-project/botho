@@ -2,9 +2,10 @@
  * i18next initialization for the web-wallet SPA (issue #764, phase 1).
  *
  * Phase 1 scope: framework setup + the marketing landing page translated into
- * one additional language (Spanish). Only the `landing` namespace is wired up
- * here; wallet/pay/claim/docs surfaces are deliberately out of scope and land
- * in later phases.
+ * one additional language (Spanish). Phase 2 (issue #777) added the
+ * transactional surfaces — the `wallet`, `pay`, `claim`, and `contacts`
+ * namespaces. `docs` and metadata/OG surfaces remain out of scope and land in
+ * later phases.
  *
  * Locale is driven by a URL path prefix (`/es/...`) rather than a subdomain, so
  * the existing `botho.io` / `wallet.botho.io` host-switch logic in `App.tsx`
@@ -21,6 +22,14 @@ import { initReactI18next } from 'react-i18next'
 
 import enLanding from '../locales/en/landing.json'
 import esLanding from '../locales/es/landing.json'
+import enWallet from '../locales/en/wallet.json'
+import esWallet from '../locales/es/wallet.json'
+import enPay from '../locales/en/pay.json'
+import esPay from '../locales/es/pay.json'
+import enClaim from '../locales/en/claim.json'
+import esClaim from '../locales/es/claim.json'
+import enContacts from '../locales/en/contacts.json'
+import esContacts from '../locales/es/contacts.json'
 
 /**
  * The set of locales the app knows how to render. `en` MUST stay first — it is
@@ -65,8 +74,20 @@ export function storeLocale(locale: SupportedLocale): void {
 }
 
 const resources = {
-  en: { landing: enLanding },
-  es: { landing: esLanding },
+  en: {
+    landing: enLanding,
+    wallet: enWallet,
+    pay: enPay,
+    claim: enClaim,
+    contacts: enContacts,
+  },
+  es: {
+    landing: esLanding,
+    wallet: esWallet,
+    pay: esPay,
+    claim: esClaim,
+    contacts: esContacts,
+  },
 } as const
 
 // Initialize once. Guard against double-init under React StrictMode / HMR.
@@ -77,7 +98,7 @@ if (!i18n.isInitialized) {
     fallbackLng: DEFAULT_LOCALE,
     supportedLngs: SUPPORTED_LOCALES as unknown as string[],
     defaultNS: 'landing',
-    ns: ['landing'],
+    ns: ['landing', 'wallet', 'pay', 'claim', 'contacts'],
     interpolation: {
       // React already escapes interpolated values.
       escapeValue: false,

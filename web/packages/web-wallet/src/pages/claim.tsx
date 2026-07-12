@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
 import { Button, Card, Input, Logo } from '@botho/ui'
 import {
@@ -61,6 +62,7 @@ type ClaimState =
   | 'claimed'
 
 export function ClaimPage() {
+  const { t } = useTranslation('claim')
   const adapter = useAdapter()
   const { network } = useNetwork()
 
@@ -108,7 +110,7 @@ export function ClaimPage() {
   useEffect(() => {
     if (!initialHash || initialHash === '#') {
       setState('invalid')
-      setError('No claim link found. The link should look like .../claim#…')
+      setError(t('errors.noLink'))
       return
     }
     try {
@@ -124,9 +126,9 @@ export function ClaimPage() {
       setState('ready')
     } catch (err) {
       setState('invalid')
-      setError(err instanceof Error ? err.message : 'This claim link is not valid.')
+      setError(err instanceof Error ? err.message : t('errors.notValidGeneric'))
     }
-  }, [initialHash])
+  }, [initialHash, t])
 
   // Explicit user action that begins the first network call (the scan). Keeping
   // the scan behind this gate is what makes a preview/unfurl fetch a no-op.
@@ -151,10 +153,10 @@ export function ClaimPage() {
         setState((prev) => (prev === 'claimable' ? 'already-claimed' : 'waiting'))
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to scan the link.')
+      setError(err instanceof Error ? err.message : t('errors.scanFailed'))
       setState('invalid')
     }
-  }, [adapter, secret])
+  }, [adapter, secret, t])
 
   // 2. Scan once the secret is parsed, and re-scan on each new block while we
   //    are still waiting for the funding to confirm.
@@ -183,15 +185,15 @@ export function ClaimPage() {
     if (!secret) return
     const dest = destination.trim()
     if (!isValidAddress(dest)) {
-      setError('Enter a valid destination address (tbotho://… or botho://…).')
+      setError(t('errors.invalidDestination'))
       return
     }
     if (persistingNewWallet && !newWalletPasswordValid) {
-      setError('Set a password for your new wallet before claiming.')
+      setError(t('errors.newWalletPassword'))
       return
     }
     if (overwriteBlocked) {
-      setError('Confirm replacing the wallet already stored on this device before claiming.')
+      setError(t('errors.confirmOverwrite'))
       return
     }
     setError(null)
@@ -209,7 +211,7 @@ export function ClaimPage() {
       setState('claimed')
     } catch (err) {
       sweepingRef.current = false
-      const msg = err instanceof Error ? err.message : 'Claim failed.'
+      const msg = err instanceof Error ? err.message : t('errors.claimFailed')
       // A double-spend / empty-set error means someone else claimed first.
       if (/already claimed|empty|double|nothing to claim|spent|insufficient/i.test(msg)) {
         setState('already-claimed')
@@ -230,7 +232,7 @@ export function ClaimPage() {
           <Link to="/" className="flex items-center gap-2 sm:gap-3">
             <ArrowLeft size={18} className="text-ghost" />
             <Logo size="sm" showText={false} />
-            <span className="font-display text-base sm:text-lg font-semibold hidden sm:inline">Botho Wallet</span>
+            <span className="font-display text-base sm:text-lg font-semibold hidden sm:inline">{t('header.walletName')}</span>
           </Link>
         </div>
       </header>
@@ -242,14 +244,14 @@ export function ClaimPage() {
               <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-pulse/10 flex items-center justify-center mx-auto mb-3 sm:mb-4">
                 <Gift className="text-pulse" size={28} />
               </div>
-              <h2 className="font-display text-xl sm:text-2xl font-bold mb-2">Claim Your BTH</h2>
+              <h2 className="font-display text-xl sm:text-2xl font-bold mb-2">{t('title')}</h2>
             </div>
 
             {(state === 'parsing' || state === 'scanning') && (
               <div className="flex flex-col items-center gap-3 py-6 text-ghost">
                 <Loader2 size={28} className="animate-spin text-pulse" />
                 <p className="text-sm">
-                  {state === 'scanning' ? 'Checking your claim link…' : 'Reading your claim link…'}
+                  {state === 'scanning' ? t('loading.checking') : t('loading.reading')}
                 </p>
               </div>
             )}
@@ -257,7 +259,7 @@ export function ClaimPage() {
             {state === 'ready' && (
               <div className="space-y-4">
                 <div className="text-center">
-                  <p className="text-sm text-ghost">Someone sent you a claim link.</p>
+                  <p className="text-sm text-ghost">{t('ready.prompt')}</p>
                   {secret?.amountHint !== undefined && (
                     <p className="font-display text-2xl font-bold text-pulse mt-1">
                       ~{formatBTH(secret.amountHint)} BTH
@@ -266,11 +268,10 @@ export function ClaimPage() {
                 </div>
                 <Button onClick={handleReveal} className="w-full justify-center">
                   <Gift size={16} className="mr-2" />
-                  Reveal &amp; check this link
+                  {t('ready.reveal')}
                 </Button>
                 <p className="text-xs text-ghost text-center">
-                  We only contact the network once you tap above — your link stays private until
-                  then.
+                  {t('ready.privacyNote')}
                 </p>
               </div>
             )}
@@ -278,7 +279,7 @@ export function ClaimPage() {
             {state === 'invalid' && (
               <div className="flex items-start gap-2 p-3 rounded-lg bg-danger/10 border border-danger/20 text-danger text-sm">
                 <AlertCircle size={16} className="shrink-0 mt-0.5" />
-                <span>{error ?? 'This claim link is not valid.'}</span>
+                <span>{error ?? t('errors.notValidGeneric')}</span>
               </div>
             )}
 
@@ -286,8 +287,7 @@ export function ClaimPage() {
               <div className="flex flex-col items-center gap-3 py-4 text-center">
                 <Clock size={28} className="text-amber-400" />
                 <p className="text-sm text-ghost">
-                  Waiting for the sender&apos;s payment to confirm on-chain. This page will
-                  update automatically — it can take a minute or two.
+                  {t('waiting')}
                 </p>
                 <Loader2 size={18} className="animate-spin text-pulse" />
               </div>
@@ -296,25 +296,25 @@ export function ClaimPage() {
             {state === 'already-claimed' && (
               <div className="flex items-start gap-2 p-3 rounded-lg bg-steel/40 border border-steel text-light text-sm">
                 <Check size={16} className="shrink-0 mt-0.5 text-ghost" />
-                <span>This link has already been claimed.</span>
+                <span>{t('alreadyClaimed')}</span>
               </div>
             )}
 
             {(state === 'claimable' || state === 'sweeping') && scan && (
               <div className="space-y-4">
                 <div className="text-center">
-                  <p className="text-sm text-ghost">You&apos;ve been sent</p>
+                  <p className="text-sm text-ghost">{t('claimable.youveBeenSent')}</p>
                   <p className="font-display text-3xl font-bold text-pulse">{formatBTH(scan.net)} BTH</p>
                   <p className="text-xs text-ghost mt-1">
-                    Network fee of {formatBTH(scan.fee)} BTH covered by the sender.
+                    {t('claimable.feeCovered', { fee: formatBTH(scan.fee) })}
                   </p>
                 </div>
 
                 <div>
-                  <label className="block text-sm text-ghost mb-1.5">Send to address</label>
+                  <label className="block text-sm text-ghost mb-1.5">{t('claimable.sendToLabel')}</label>
                   <Input
                     type="text"
-                    placeholder="tbotho://1/…"
+                    placeholder={t('claimable.addressPlaceholder')}
                     value={destination}
                     onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                       setDestination(e.target.value)
@@ -329,25 +329,24 @@ export function ClaimPage() {
                     disabled={state === 'sweeping'}
                     className="text-xs text-pulse hover:underline mt-2"
                   >
-                    Don&apos;t have a wallet? Create one
+                    {t('claimable.createWallet')}
                   </button>
                 </div>
 
                 {showNewWallet && createdMnemonic && (
                   <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 space-y-2">
                     <div className="flex items-center gap-2 text-amber-300 text-sm font-medium">
-                      <Eye size={15} /> Your new recovery phrase
+                      <Eye size={15} /> {t('claimable.recoveryPhraseTitle')}
                     </div>
                     <p className="font-mono text-xs leading-relaxed text-amber-100/90 break-words">
                       {createdMnemonic}
                     </p>
                     <p className="text-xs text-amber-200/80">
-                      Write this down and keep it safe — it is the ONLY way to recover this
-                      wallet. We&apos;ll save it encrypted in this browser when you claim.
+                      {t('claimable.recoveryPhraseNote')}
                     </p>
                     <div className="pt-1">
                       <p className="text-xs text-amber-200/80 mb-2">
-                        Set a password — your wallet is encrypted on this device with it.
+                        {t('claimable.passwordPrompt')}
                       </p>
                       <PasswordFields
                         password={newWalletPassword}
@@ -366,15 +365,13 @@ export function ClaimPage() {
                         />
                         <span className="text-xs text-danger">
                           <strong className="font-semibold">
-                            This device already has a wallet
-                            {existingWallet.address
-                              ? ` (${shortenAddress(existingWallet.address)})`
-                              : ''}
-                            .
+                            {t('claimable.overwriteWarningStrong', {
+                              suffix: existingWallet.address
+                                ? ` (${shortenAddress(existingWallet.address)})`
+                                : '',
+                            })}
                           </strong>{' '}
-                          Claiming with this NEW wallet replaces the stored one and
-                          deletes its seed — any funds in it are lost unless you
-                          have its recovery phrase backed up.
+                          {t('claimable.overwriteWarning')}
                         </span>
                       </label>
                     )}
@@ -399,17 +396,16 @@ export function ClaimPage() {
                   className="w-full justify-center"
                 >
                   {state === 'sweeping' ? (
-                    <><Loader2 size={16} className="mr-2 animate-spin" />Claiming…</>
+                    <><Loader2 size={16} className="mr-2 animate-spin" />{t('claimable.claiming')}</>
                   ) : (
-                    <>Claim {formatBTH(scan.net)} BTH</>
+                    <>{t('claimable.claim', { amount: formatBTH(scan.net) })}</>
                   )}
                 </Button>
 
                 <div className="flex items-start gap-2 text-xs text-ghost">
                   <ShieldAlert size={14} className="shrink-0 mt-0.5" />
                   <span>
-                    This is a bearer link — anyone with it can claim. Claim promptly so no
-                    one else does first.
+                    {t('claimable.bearerWarning')}
                   </span>
                 </div>
               </div>
@@ -422,9 +418,9 @@ export function ClaimPage() {
                     <Check className="text-success" size={26} />
                   </div>
                   <p className="text-lg font-semibold text-light">
-                    Claimed {scan ? formatBTH(scan.net) : ''} BTH
+                    {t('claimed.amount', { amount: scan ? formatBTH(scan.net) : '' })}
                   </p>
-                  <p className="text-sm text-ghost">The funds are on their way to your address.</p>
+                  <p className="text-sm text-ghost">{t('claimed.onTheirWay')}</p>
                   {explorerTxUrl && (
                     <a
                       href={explorerTxUrl}
@@ -432,7 +428,7 @@ export function ClaimPage() {
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1 text-xs text-ghost hover:text-light"
                     >
-                      View transaction <ExternalLink size={12} />
+                      {t('claimed.viewTransaction')} <ExternalLink size={12} />
                     </a>
                   )}
                 </div>
@@ -443,14 +439,12 @@ export function ClaimPage() {
                 <div className="flex items-start gap-2 p-3 rounded-lg bg-steel/40 border border-steel text-xs text-ghost">
                   <ShieldAlert size={14} className="shrink-0 mt-0.5 text-amber-400" />
                   <span>
-                    For your privacy, delete the message that contained this link from your chat.
-                    It&apos;s already claimed and can&apos;t be used again, but removing it keeps the
-                    secret out of your message history and backups.
+                    {t('claimed.deleteMessageNote')}
                   </span>
                 </div>
 
                 <Link to="/wallet">
-                  <Button className="w-full justify-center">Go to my wallet</Button>
+                  <Button className="w-full justify-center">{t('claimed.goToWallet')}</Button>
                 </Link>
               </div>
             )}
