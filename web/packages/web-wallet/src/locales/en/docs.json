@@ -1,0 +1,19 @@
+{
+  "brand": "Botho",
+  "brandDocs": "Botho Docs",
+  "backToHome": "Back to home",
+  "openMenu": "Open menu",
+  "closeMenu": "Close menu",
+  "notFound": "Section “{{segment}}” not found — showing Getting Started.",
+  "sections": {
+    "getting-started": "Getting Started",
+    "privacy": "Privacy Features",
+    "cluster-tags": "Cluster Tags",
+    "privacy-progressivity": "Privacy + Progressivity",
+    "consensus": "Consensus",
+    "running-node": "Running a Node",
+    "api": "API Reference",
+    "network": "Network",
+    "tokenomics": "Tokenomics"
+  }
+}
