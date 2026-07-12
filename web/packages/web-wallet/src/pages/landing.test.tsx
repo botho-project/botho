@@ -79,7 +79,7 @@ describe('LandingPage i18n', () => {
 
     // MemoryRouter navigation drives the i18n change via the app shell in prod;
     // here we assert the switcher persisted the choice and, after changing the
-    // language directly (what LocaleSync does off the URL), Spanish renders.
+    // language directly (what LocaleRoutes does off the URL), Spanish renders.
     expect(localStorage.getItem('botho:locale')).toBe('es')
   })
 

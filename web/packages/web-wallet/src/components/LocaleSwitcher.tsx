@@ -4,7 +4,7 @@
  * Toggles the active locale by re-mapping the current URL to the target
  * locale's prefix (default locale = no prefix) and persisting the explicit
  * choice to localStorage. The actual `i18n.changeLanguage` + `<html lang>`
- * update is driven off the URL by `LocaleSync`, so navigation is the single
+ * update is driven off the URL by `LocaleRoutes`, so navigation is the single
  * source of truth for the active language.
  */
 import { useLocation, useNavigate } from 'react-router-dom'
