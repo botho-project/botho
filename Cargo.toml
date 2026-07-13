@@ -87,7 +87,7 @@ crc = { version = "3", default-features = false }
 criterion = "0.5"
 crossbeam-channel = "0.5"
 ctr = "0.9"
-curve25519-dalek = { version = "4", default-features = false }
+curve25519-dalek = { version = "4", default-features = false, features = ["precomputed-tables"] }
 der = { version = "0.7", default-features = false }
 digest = { version = "0.10", default-features = false }
 dashmap = "6"
