@@ -139,6 +139,33 @@ Holding-side pressure cannot be escaped structurally: splitting does not
 change cluster attribution, and shedding attribution through artificial
 transfers is rate-bounded by tag decay (Section~\ref{sec:security}).
 
+\paragraph{Intuition: why a holding cost, and why a targeted one.}
+A fixed-supply currency in the Bitcoin mold makes hoarding costless, indeed
+rewarding: a coin left untouched keeps its full claim on a supply that will
+never grow, so the rational move for the largest holders is to sit still and
+let scarcity appreciate their stake. That is good for a store of value but
+poor for a medium of exchange, and it concentrates wealth over time because
+those best able to wait accrue the appreciation. A pure tail-emission design
+(perpetual issuance, no offsetting drag) softens the deflation but does not
+change the incentive: new coins accrue to whoever mines, and idle wealth is
+diluted only uniformly, which large holders can hedge simply by holding a
+proportional share of hashpower. In neither design does sitting on wealth cost
+the holder anything relative to their peers.
+
+\Botho's anti-hoarding pressure comes from making idle wealth carry a small,
+\emph{cluster-scaled} holding cost while leaving circulating money alone. The
+$\text{holding\_cost}$ term above is negative---a net drag---precisely for the
+high-factor clusters that dominate the supply and positive-leaning for
+ordinary factor-1 balances, which recover much of their dilution through
+lottery income. The effect is a continuous incentive to \emph{spend} rather
+than accumulate, without penalizing the everyday user the way classical
+uniform demurrage does. Historical demurrage currencies (Freigeld, the
+Chiemgauer) taxed every balance equally and were rejected as user-hostile for
+exactly this reason (Section~\ref{sec:related}); \Botho's contribution is to
+aim the same circulation incentive only where concentration actually occurs,
+using the cluster factor as the targeting signal
+(Section~\ref{sec:economic-modeling}).
+
 \subsection{Game-Theoretic Analysis}
 
 \subsubsection{Miner Strategy}
