@@ -452,6 +452,10 @@ mod tests {
             view_key_file: None,
             spend_key_file: None,
             confirmations_required,
+            reserve_address: None,
+            release_signers: Vec::new(),
+            release_threshold: 0,
+            release_confirmations_required: 0,
         };
         let (_tx, rx) = broadcast::channel(1);
         // _tx dropped: try_recv returns Closed, but tests drive scan_once
@@ -625,6 +629,10 @@ mod tests {
                 view_key_file: None,
                 spend_key_file: None,
                 confirmations_required: 0,
+                reserve_address: None,
+                release_signers: Vec::new(),
+                release_threshold: 0,
+                release_confirmations_required: 0,
             },
             db.clone(),
             rx,
