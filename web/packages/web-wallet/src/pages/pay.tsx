@@ -29,6 +29,7 @@ import {
 import { useWallet } from '../contexts/wallet'
 import { useNetwork } from '../contexts/network'
 import { PasswordFields, isPasswordValid } from '../components/PasswordSettingsModal'
+import { LocaleSwitcher } from '../components/LocaleSwitcher'
 import { parsePaymentRequestFragment, type PaymentRequest } from '../lib/payment-request'
 
 /**
@@ -125,6 +126,7 @@ export function PayPage() {
               {t('header.walletName')}
             </span>
           </Link>
+          <LocaleSwitcher className="whitespace-nowrap" />
         </div>
       </header>
 

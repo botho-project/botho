@@ -38,6 +38,22 @@ function renderAt(path: string, element: React.ReactElement) {
   return render(<MemoryRouter initialEntries={[path]}>{element}</MemoryRouter>)
 }
 
+// The LocaleSwitcher's <select> is uniquely identified by its locale-invariant
+// option endonyms ("English"/"Español"). NodePage also renders a region
+// <select>, so this endonym match (not aria-label, which localizes to "Idioma"
+// under /es) disambiguates the switcher combobox from the region combobox.
+function localeSwitcherSelect(): HTMLSelectElement {
+  const match = screen
+    .getAllByRole('combobox')
+    .find((el) =>
+      Array.from((el as HTMLSelectElement).options).some(
+        (o) => o.textContent === 'Español',
+      ),
+    )
+  if (!match) throw new Error('LocaleSwitcher <select> not found')
+  return match as HTMLSelectElement
+}
+
 describe('node pages i18n', () => {
   beforeEach(() => {
     fetchNodeStatusMock.mockReset()
@@ -93,5 +109,35 @@ describe('node pages i18n', () => {
     renderAt('/es/node/status', <NodeStatusPage />)
     expect(await screen.findByText('En ejecución')).toBeTruthy()
     await waitFor(() => expect(screen.queryByText('Running')).toBeNull())
+  })
+
+  it('renders the locale switcher in the NodePage header with the active locale', () => {
+    renderAt('/node', <NodePage />)
+    const select = localeSwitcherSelect()
+    expect(select.value).toBe('en')
+    expect(select.options[select.selectedIndex].textContent).toBe('English')
+  })
+
+  it('renders the NodePage locale switcher label as Spanish on a direct /es load', async () => {
+    await i18n.changeLanguage('es')
+    renderAt('/es/node', <NodePage />)
+    const select = localeSwitcherSelect()
+    expect(select.value).toBe('es')
+    expect(select.options[select.selectedIndex].textContent).toBe('Español')
+  })
+
+  it('renders the locale switcher in the shared NodePageShell header (success page)', () => {
+    renderAt('/node/success', <NodeSuccessPage />)
+    const select = localeSwitcherSelect()
+    expect(select.value).toBe('en')
+    expect(select.options[select.selectedIndex].textContent).toBe('English')
+  })
+
+  it('renders the NodePageShell locale switcher as Spanish on a direct /es load', async () => {
+    await i18n.changeLanguage('es')
+    renderAt('/es/node/success', <NodeSuccessPage />)
+    const select = localeSwitcherSelect()
+    expect(select.value).toBe('es')
+    expect(select.options[select.selectedIndex].textContent).toBe('Español')
   })
 })

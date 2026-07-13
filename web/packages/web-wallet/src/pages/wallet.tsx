@@ -7,6 +7,7 @@ import { BalanceCard, TransactionList, SendModal, type SendFormData, type SendRe
 import { useWallet } from '../contexts/wallet'
 import { useNetwork } from '../contexts/network'
 import { NetworkSelector } from '../components/NetworkSelector'
+import { LocaleSwitcher } from '../components/LocaleSwitcher'
 import { FaucetButton } from '../components/FaucetButton'
 import { SendLinkModal } from '../components/SendLinkModal'
 import { RequestModal } from '../components/RequestModal'
@@ -777,7 +778,10 @@ export function WalletPage() {
             <span className="font-display text-base sm:text-lg font-semibold hidden sm:inline">{t('header.walletNameLong')}</span>
             <span className="font-display text-base font-semibold sm:hidden">{t('header.walletNameShort')}</span>
           </Link>
-          <NetworkSelector />
+          <div className="flex items-center gap-3">
+            <LocaleSwitcher className="whitespace-nowrap" />
+            <NetworkSelector />
+          </div>
         </div>
       </header>
       <main className="py-6 sm:py-8 md:py-12">

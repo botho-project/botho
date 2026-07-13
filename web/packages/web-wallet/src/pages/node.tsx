@@ -28,6 +28,7 @@ import {
   tokenFromSearch,
   type NodeStatus,
 } from '../lib/node-status'
+import { LocaleSwitcher } from '../components/LocaleSwitcher'
 
 /**
  * P7.1 — "Host a node" surface (#458 §2, §4; issue #504).
@@ -92,10 +93,13 @@ export function NodePage() {
             <Logo size="md" showText={false} />
             <span className="font-display text-lg sm:text-xl font-semibold">Botho</span>
           </Link>
-          <Link to="/" className="text-ghost hover:text-light transition-colors flex items-center gap-2">
-            <ArrowLeft size={18} />
-            {t('checkout.back')}
-          </Link>
+          <div className="flex items-center gap-4">
+            <LocaleSwitcher className="whitespace-nowrap" />
+            <Link to="/" className="text-ghost hover:text-light transition-colors flex items-center gap-2">
+              <ArrowLeft size={18} />
+              {t('checkout.back')}
+            </Link>
+          </div>
         </div>
       </header>
 
@@ -237,6 +241,7 @@ function NodePageShell({ children }: { children: React.ReactNode }) {
             <Logo size="md" showText={false} />
             <span className="font-display text-lg sm:text-xl font-semibold">Botho</span>
           </Link>
+          <LocaleSwitcher className="whitespace-nowrap" />
         </div>
       </header>
       <main className="flex-1 flex items-center justify-center pt-28 px-4 sm:px-6">
