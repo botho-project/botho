@@ -96,6 +96,7 @@ impl Network {
     }
 
     /// Parse from string
+    #[allow(clippy::should_implement_trait)] // inherent parser, newly lint-scoped via the bridge (#856)
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "mainnet" | "main" => Some(Network::Mainnet),
