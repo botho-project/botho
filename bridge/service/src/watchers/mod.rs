@@ -22,6 +22,11 @@ mod bth;
 mod ethereum;
 mod solana;
 
+/// Reorg + finality fuzz driving the Ethereum watcher (bridge epic #816,
+/// Phase 3, issue #829).
+#[cfg(test)]
+mod adversarial_tests;
+
 pub use bth::BthWatcher;
 pub use ethereum::EthereumWatcher;
 pub use solana::SolanaWatcher;

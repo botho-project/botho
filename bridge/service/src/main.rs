@@ -10,6 +10,8 @@ use std::path::PathBuf;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
+#[cfg(test)]
+mod adversarial_tests;
 mod api;
 mod attestation;
 #[cfg(test)]
