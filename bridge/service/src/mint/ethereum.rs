@@ -13,9 +13,9 @@
 //! ```
 //!
 //! The `bytes32` order id (`BridgeOrder::order_id_bytes`) is the on-chain
-//! idempotency key. NOTE: `WrappedBTH.sol` currently names this parameter
-//! `bthTxHash`; #826 renames it to `orderId` and adds the duplicate-order
-//! guard. The ABI (selector) is unchanged by that rename.
+//! idempotency key: `WrappedBTH.sol` records it in `processedOrders` and
+//! reverts on a duplicate (#826), closing the double-mint window even if
+//! an authorization is re-submitted.
 
 use alloy::{
     eips::{eip2718::Encodable2718, BlockNumberOrTag},
@@ -39,9 +39,8 @@ sol! {
     /// Typed binding for the wBTH token (`contracts/ethereum/contracts/WrappedBTH.sol`).
     #[allow(missing_docs)]
     interface IWrappedBTH {
-        /// #826 renames `bthTxHash` -> `orderId`; the selector is identical.
-        function bridgeMint(address to, uint256 amount, bytes32 bthTxHash) external;
-        event BridgeMint(address indexed to, uint256 amount, bytes32 indexed bthTxHash);
+        function bridgeMint(address to, uint256 amount, bytes32 orderId) external;
+        event BridgeMint(address indexed to, uint256 amount, bytes32 indexed orderId);
     }
 
     /// Gnosis Safe (v1.3+) surface used by the bridge.
@@ -90,7 +89,7 @@ pub fn encode_bridge_mint_calldata(to: Address, amount: U256, order_id: [u8; 32]
     IWrappedBTH::bridgeMintCall {
         to,
         amount,
-        bthTxHash: B256::from(order_id),
+        orderId: B256::from(order_id),
     }
     .abi_encode()
 }
@@ -205,7 +204,7 @@ pub fn find_bridge_mint_event(logs: &[Log], wbth: Address, order_id: [u8; 32]) -
     logs.iter().any(|log| {
         log.address() == wbth
             && log.topic0() == Some(&IWrappedBTH::BridgeMint::SIGNATURE_HASH)
-            // topics: [signature, to (indexed), bthTxHash/orderId (indexed)]
+            // topics: [signature, to (indexed), orderId (indexed)]
             && log.topics().get(2) == Some(&order_topic)
     })
 }
@@ -572,7 +571,7 @@ mod tests {
         let decoded = IWrappedBTH::bridgeMintCall::abi_decode(&calldata).unwrap();
         assert_eq!(decoded.to, to);
         assert_eq!(decoded.amount, amount);
-        assert_eq!(decoded.bthTxHash, B256::from(order_id));
+        assert_eq!(decoded.orderId, B256::from(order_id));
     }
 
     #[test]
