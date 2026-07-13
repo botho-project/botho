@@ -68,6 +68,21 @@ function renderAt(path: string) {
   )
 }
 
+// The LocaleSwitcher's <select> is uniquely identified by its locale-invariant
+// option endonyms ("English"/"Español"); this avoids depending on the active
+// locale's aria-label and tolerates other <select>s on the page.
+function localeSwitcherSelect(): HTMLSelectElement {
+  const match = screen
+    .getAllByRole('combobox')
+    .find((el) =>
+      Array.from((el as HTMLSelectElement).options).some(
+        (o) => o.textContent === 'Español',
+      ),
+    )
+  if (!match) throw new Error('LocaleSwitcher <select> not found')
+  return match as HTMLSelectElement
+}
+
 describe('PayPage i18n', () => {
   beforeEach(() => {
     localStorage.clear()
@@ -97,5 +112,20 @@ describe('PayPage i18n', () => {
     ).toBeTruthy()
     // English source string must NOT leak through untranslated.
     expect(screen.queryByRole('heading', { name: 'Send a Payment' })).toBeNull()
+  })
+
+  it('renders the locale switcher with the active locale on a default load', () => {
+    renderAt('/pay')
+    const select = localeSwitcherSelect()
+    expect(select.value).toBe('en')
+    expect(select.options[select.selectedIndex].textContent).toBe('English')
+  })
+
+  it('renders the locale switcher label reflecting Spanish on a direct /es load', async () => {
+    await i18n.changeLanguage('es')
+    renderAt('/es/pay')
+    const select = localeSwitcherSelect()
+    expect(select.value).toBe('es')
+    expect(select.options[select.selectedIndex].textContent).toBe('Español')
   })
 })

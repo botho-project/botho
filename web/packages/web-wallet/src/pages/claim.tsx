@@ -27,6 +27,7 @@ import {
 import { useAdapter } from '../contexts/wallet'
 import { useNetwork } from '../contexts/network'
 import { PasswordFields, isPasswordValid } from '../components/PasswordSettingsModal'
+import { LocaleSwitcher } from '../components/LocaleSwitcher'
 import { scanEphemeral, sweepEphemeral, type EphemeralScan } from '../lib/claim-link-ops'
 
 /**
@@ -234,6 +235,7 @@ export function ClaimPage() {
             <Logo size="sm" showText={false} />
             <span className="font-display text-base sm:text-lg font-semibold hidden sm:inline">{t('header.walletName')}</span>
           </Link>
+          <LocaleSwitcher className="whitespace-nowrap" />
         </div>
       </header>
 

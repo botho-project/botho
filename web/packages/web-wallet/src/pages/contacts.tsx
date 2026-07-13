@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { useWallet } from '../contexts/wallet'
 import { PasswordSettingsModal } from '../components/PasswordSettingsModal'
+import { LocaleSwitcher } from '../components/LocaleSwitcher'
 
 type SortBy = 'name' | 'lastTx' | 'txCount'
 
@@ -121,6 +122,7 @@ export function ContactsPage() {
               {t('header.walletName')}
             </span>
           </Link>
+          <LocaleSwitcher className="whitespace-nowrap" />
         </div>
       </header>
 
