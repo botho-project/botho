@@ -34,9 +34,9 @@
       "Effect": "Allow",
       "Action": ["ec2:RunInstances"],
       "Resource": [
-        "arn:aws:ec2:us-west-2:ACCOUNT_ID:image/ami-012798e88aebdba5c",
+        "arn:aws:ec2:us-west-2::image/ami-012798e88aebdba5c",
         "arn:aws:ec2:us-west-2:ACCOUNT_ID:security-group/sg-0dd3fc95ec3916a4a",
-        "arn:aws:ec2:us-west-2:ACCOUNT_ID:subnet/SUBNET_ID",
+        "arn:aws:ec2:us-west-2:ACCOUNT_ID:subnet/*",
         "arn:aws:ec2:us-west-2:ACCOUNT_ID:network-interface/*",
         "arn:aws:ec2:us-west-2:ACCOUNT_ID:volume/*",
         "arn:aws:ec2:us-west-2:ACCOUNT_ID:key-pair/botho-nodes"
