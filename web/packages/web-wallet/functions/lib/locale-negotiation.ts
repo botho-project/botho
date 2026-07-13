@@ -194,6 +194,39 @@ export function buildLocalePath(locale: SupportedLocale, rest: string): string {
   return `/${locale}${normalizedRest}`
 }
 
+/**
+ * `/en` is an orphan namespace: English is the *unprefixed* default locale, so a
+ * literal `/en` or `/en/*` path is not a locale prefix (see `parseLocaleFromPath`
+ * and its `locale-path.ts` twin — both deliberately leave `/en` un-stripped) and
+ * matches no client route → a blank SPA page (#797, item 4). These paths only
+ * arrive via stale bookmarks / external links, never from the switcher (which
+ * emits unprefixed paths for `en`).
+ *
+ * Detect such a path and return the canonical unprefixed equivalent so the edge
+ * can 301 it (a permanent URL-shape correction, not a preference negotiation):
+ *
+ *   `/en`            -> `/`
+ *   `/en/`           -> `/`
+ *   `/en/wallet`     -> `/wallet`
+ *   `/en/explorer/x` -> `/explorer/x`
+ *
+ * Returns `undefined` for any path that is NOT an `/en` orphan (including `/`,
+ * `/wallet`, `/es/...`, and lookalikes like `/enterprise`). The query string is
+ * NOT handled here — the caller preserves it — so this stays a pure path->path
+ * function. This check MUST run before Accept-Language negotiation so a first
+ * visit to `/en` is corrected to `/` (and only then, if applicable, negotiated
+ * to `/es`) rather than compounded into `/es/en`.
+ */
+export function stripEnPrefixRedirect(pathname: string): string | undefined {
+  if (pathname === '/en' || pathname === '/en/') return '/'
+  if (pathname.startsWith('/en/')) {
+    // Drop the leading `/en`, keeping the rest (already starts with `/`).
+    const rest = pathname.slice('/en'.length)
+    return rest || '/'
+  }
+  return undefined
+}
+
 /** Inputs to the redirect decision — plain primitives, no runtime types. */
 export interface NegotiationInput {
   /** Request path (no query string), e.g. `/wallet`. */

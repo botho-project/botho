@@ -68,4 +68,22 @@ describe('App locale routing', () => {
     expect(await screen.findByText('Quantum Era')).toBeTruthy()
     expect(document.documentElement.lang).toBe('en')
   })
+
+  it('redirects the /en orphan to the unprefixed English landing page (not blank)', async () => {
+    // `/en` matches no locale prefix (en is the unprefixed default) and no route,
+    // so without the catch-all it would render blank (#797, item 4c). The client
+    // redirect must land on `/` and show the English landing hero.
+    window.history.pushState({}, '', '/en')
+    render(<App />)
+    expect(await screen.findByText('Quantum Era')).toBeTruthy()
+    await waitFor(() => expect(window.location.pathname).toBe('/'))
+    expect(document.documentElement.lang).toBe('en')
+  })
+
+  it('strips the /en prefix from a deeper orphan path (/en/wallet -> /wallet)', async () => {
+    window.history.pushState({}, '', '/en/wallet')
+    render(<App />)
+    await waitFor(() => expect(window.location.pathname).toBe('/wallet'))
+    expect(document.documentElement.lang).toBe('en')
+  })
 })

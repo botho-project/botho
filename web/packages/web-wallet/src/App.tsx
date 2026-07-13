@@ -82,8 +82,27 @@ function AppRoutes() {
       <Route path="/node/success" element={<NodeSuccessPage />} />
       {/* Node status page reached via magic link (#458 §4 / #507). */}
       <Route path="/node/status" element={<NodeStatusPage />} />
+      {/*
+        `/en` is an orphan namespace — English is the unprefixed default, so
+        `/en` / `/en/*` match no route above and render blank (#797). The edge
+        301s these on a fresh load; this is client-side defense-in-depth for any
+        in-app navigation that constructs an `/en` URL without a full reload.
+      */}
+      <Route path="/en" element={<Navigate to="/" replace />} />
+      <Route path="/en/*" element={<EnPrefixRedirect />} />
     </Routes>
   )
+}
+
+/**
+ * Redirect a stale `/en/<rest>` URL to its unprefixed `/<rest>` equivalent,
+ * preserving the query string and hash. English is the unprefixed default, so
+ * `/en/wallet` is an orphan alias for `/wallet` (#797, item 4c).
+ */
+function EnPrefixRedirect() {
+  const location = useLocation()
+  const rest = location.pathname.slice('/en'.length) || '/'
+  return <Navigate to={`${rest}${location.search}${location.hash}`} replace />
 }
 
 /**

@@ -32,19 +32,27 @@ export function LandingPage() {
           </Link>
 
           {/* Desktop nav */}
-          <nav className="hidden md:flex items-center gap-8">
-            <Link to="/explorer" className="text-ghost hover:text-light transition-colors flex items-center gap-2">
+          {/*
+            Collapse to the hamburger at `lg:` (1024px) rather than `md:` (768px):
+            the six nav items + switcher + CTA leave no slack in the `max-w-6xl`
+            row, so ES's longer labels ("Alojar un nodo", "Informe técnico")
+            overflow/crush in the 768–1024px band where EN still just fits (#797).
+            `whitespace-nowrap` on every link/CTA additionally forbids two-line
+            wrapping (precedent: node.tsx:118).
+          */}
+          <nav className="hidden lg:flex items-center gap-8">
+            <Link to="/explorer" className="text-ghost hover:text-light transition-colors flex items-center gap-2 whitespace-nowrap">
               <Blocks size={18} />
               {t('nav.explorer')}
             </Link>
-            <Link to="/network" className="text-ghost hover:text-light transition-colors flex items-center gap-2">
+            <Link to="/network" className="text-ghost hover:text-light transition-colors flex items-center gap-2 whitespace-nowrap">
               <Activity size={18} />
               {t('nav.network')}
             </Link>
-            <Link to="/docs" className="text-ghost hover:text-light transition-colors">
+            <Link to="/docs" className="text-ghost hover:text-light transition-colors whitespace-nowrap">
               {t('nav.docs')}
             </Link>
-            <Link to="/node" className="text-ghost hover:text-light transition-colors flex items-center gap-2">
+            <Link to="/node" className="text-ghost hover:text-light transition-colors flex items-center gap-2 whitespace-nowrap">
               <Server size={18} />
               {t('nav.hostNode')}
             </Link>
@@ -52,7 +60,7 @@ export function LandingPage() {
               href="/botho-whitepaper.pdf"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-ghost hover:text-light transition-colors flex items-center gap-2"
+              className="text-ghost hover:text-light transition-colors flex items-center gap-2 whitespace-nowrap"
             >
               <FileText size={18} />
               {t('nav.whitepaper')}
@@ -61,21 +69,21 @@ export function LandingPage() {
               href="https://github.com/botho-project/botho"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-ghost hover:text-light transition-colors flex items-center gap-2"
+              className="text-ghost hover:text-light transition-colors flex items-center gap-2 whitespace-nowrap"
             >
               <Github size={18} />
               {t('nav.github')}
             </a>
-            <LocaleSwitcher />
+            <LocaleSwitcher className="whitespace-nowrap" />
             <Link to="/wallet">
-              <Button>{t('nav.launchWallet')}</Button>
+              <Button className="whitespace-nowrap">{t('nav.launchWallet')}</Button>
             </Link>
           </nav>
 
           {/* Mobile menu button */}
           <button
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="md:hidden p-2 -mr-2 text-ghost hover:text-light transition-colors"
+            className="lg:hidden p-2 -mr-2 text-ghost hover:text-light transition-colors"
             aria-label={mobileMenuOpen ? t('nav.closeMenu') : t('nav.openMenu')}
           >
             {mobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
@@ -84,7 +92,7 @@ export function LandingPage() {
 
         {/* Mobile menu */}
         {mobileMenuOpen && (
-          <div className="md:hidden border-t border-steel bg-abyss/95 backdrop-blur-md">
+          <div className="lg:hidden border-t border-steel bg-abyss/95 backdrop-blur-md">
             <nav className="px-4 py-4 space-y-1">
               <Link
                 to="/explorer"
@@ -134,7 +142,7 @@ export function LandingPage() {
               </div>
               <div className="pt-2">
                 <Link to="/wallet" onClick={() => setMobileMenuOpen(false)}>
-                  <Button className="w-full justify-center">{t('nav.launchWallet')}</Button>
+                  <Button className="w-full justify-center whitespace-nowrap">{t('nav.launchWallet')}</Button>
                 </Link>
               </div>
             </nav>

@@ -24,6 +24,7 @@ import {
   localizeDocumentHtml,
   negotiateLocaleRedirect,
   parseLocaleFromPath,
+  stripEnPrefixRedirect,
 } from './lib/locale-negotiation'
 
 // Minimal shape of the Cloudflare Pages Functions context we use. Declared
@@ -85,6 +86,24 @@ export const onRequest = async (context: PagesContext): Promise<Response> => {
   }
   if (!isDocumentRequest(request, pathname)) {
     return next()
+  }
+
+  // `/en` and `/en/*` are orphan URLs (English is the unprefixed default) that
+  // otherwise render a blank SPA page (#797). Permanently 301 them to the
+  // unprefixed equivalent, preserving the query string. This runs BEFORE
+  // Accept-Language negotiation so a first-time es visitor hitting `/en` lands on
+  // `/` (and, if applicable, is then negotiated onward) rather than `/es/en`.
+  const enTarget = stripEnPrefixRedirect(pathname)
+  if (enTarget !== undefined) {
+    return new Response(null, {
+      status: 301,
+      headers: {
+        Location: url.origin + enTarget + url.search,
+        // Path-shape correction is safe to cache, but keep it Vary-clean so it
+        // does not poison the negotiated/localized document cache keys.
+        'Cache-Control': 'public, max-age=3600',
+      },
+    })
   }
 
   const headers = request.headers
