@@ -36,6 +36,11 @@ name = "botho-baas"
 main = "src/index.ts"
 compatibility_date = "2024-09-23"
 
+# Production hostname — the web wallet's baasEndpoint() falls back to this
+# (web-wallet/src/lib/node-checkout.ts). Registered as a Workers custom
+# domain; Cloudflare manages the DNS record and certificate automatically.
+routes = [{ pattern = "baas.botho.io", custom_domain = true }]
+
 # --- SEC reconciliation cron (#508, #458 §5) -------------------------------
 # Scheduled sweep that lists every botho:managed-node=true EC2 instance,
 # cross-checks each botho:subscription against Stripe, and TERMINATES orphans
