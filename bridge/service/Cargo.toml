@@ -33,6 +33,10 @@ alloy = { workspace = true, features = [
     "sol-types",
 ] }
 
+# BTH release attestation verification (ADR 0002: federation Ed25519
+# signatures, mirroring the operator-signed-action machinery)
+ed25519-dalek = { workspace = true, features = ["std"] }
+
 # Database
 rusqlite = { version = "0.31", features = ["bundled"] }
 

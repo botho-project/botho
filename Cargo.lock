@@ -2035,6 +2035,7 @@ dependencies = [
  "bth-bridge-core",
  "chrono",
  "clap",
+ "ed25519-dalek",
  "hex",
  "rusqlite",
  "serde_json",

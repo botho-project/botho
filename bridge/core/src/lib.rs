@@ -15,7 +15,10 @@ pub mod chains;
 pub mod config;
 pub mod order;
 
-pub use attestation::{AttestationSignature, MintAuthorization, SignatureScheme};
+pub use attestation::{
+    release_payload_digest, AttestationSignature, MintAuthorization, ReleaseAuthorization,
+    SignatureScheme, RELEASE_ATTESTATION_DOMAIN_TAG,
+};
 pub use chains::{Chain, ChainAddress};
 pub use config::{
     BridgeConfig, BthConfig, EthereumConfig, GasPriceStrategy, SolanaCommitment, SolanaConfig,
