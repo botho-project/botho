@@ -18,6 +18,7 @@ mod attestation;
 mod chaos_tests;
 mod db;
 mod engine;
+mod federation;
 #[cfg(test)]
 mod fork_tests;
 mod mint;

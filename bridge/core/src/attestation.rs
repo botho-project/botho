@@ -17,9 +17,12 @@
 //! envelopes mirroring the operator-signed-action machinery
 //! (`botho/src/operator_action.rs`, P4.4), aggregated to the federation
 //! threshold by [`AttestationSet`]. Signature *collection over the network*
-//! between federation members is TODO(#858); everything cryptographic —
-//! signing, verification, replay rejection, order binding, thresholding —
-//! is implemented here and in `bridge/service/src/attestation.rs`.
+//! between federation members is the #858 transport in
+//! `bridge/service/src/federation.rs` (an authenticated `POST /api/attest`
+//! endpoint in front of this pipeline, plus outbound peer push); everything
+//! cryptographic — signing, verification, replay rejection, order binding,
+//! thresholding — is implemented here and in
+//! `bridge/service/src/attestation.rs`.
 
 use ed25519_dalek::{Signature as Ed25519Signature, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
@@ -841,6 +844,33 @@ pub fn peek_target_chain(envelope: &str) -> Result<Chain, AttestationRejectReaso
             "action `{other}` is not in the v1 allowlist"
         ))),
     }
+}
+
+/// Peek the bound order UUID out of the (still-unverified) envelope bytes,
+/// ONLY to route the received envelope to the on-record order the ingest
+/// pipeline then binds it against (#858 transport). Like [`peek_signer_key_id`]
+/// this is a hint that drives no security decision on its own: the routed
+/// order is re-checked field-by-field by `check_order_binding` AFTER the
+/// signature verifies, so a lying `orderId` selects an order the signature —
+/// or the order binding — then rejects.
+pub fn peek_order_id(envelope: &str) -> Result<Uuid, AttestationRejectReason> {
+    let value: Value = serde_json::from_str(envelope).map_err(|_| {
+        AttestationRejectReason::Malformed("envelope is not valid JSON".to_string())
+    })?;
+    let order_id = value
+        .as_object()
+        .and_then(|o| o.get("params"))
+        .and_then(|p| p.as_object())
+        .and_then(|p| p.get("orderId"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            AttestationRejectReason::Malformed(
+                "envelope missing string `params.orderId`".to_string(),
+            )
+        })?;
+    Uuid::parse_str(order_id).map_err(|_| {
+        AttestationRejectReason::Malformed("`params.orderId` is not a valid UUID".to_string())
+    })
 }
 
 /// Parse a chain from its canonical wire string ONLY (`ethereum` /

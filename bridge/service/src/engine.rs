@@ -14,6 +14,7 @@ use crate::{
         StubAttestationProvider,
     },
     db::{Database, LimitCheck, LimitViolation},
+    federation::{self, AttestState, PeerBroadcaster},
     mint::{ethereum::EthMinter, solana::SolMinter, ConfirmationStatus, Minter},
     release::{bth::BthReleaser, PreparedRelease, ReleaseConfirmation, Releaser},
     reserve::Reconciler,
@@ -91,19 +92,51 @@ impl BridgeEngine {
     /// for the health surface.
     ///
     /// - Federation configured and valid → the real
-    ///   [`FederationAttestationProvider`].
+    ///   [`FederationAttestationProvider`], with the #858 outbound transport
+    ///   ([`PeerBroadcaster`]) attached when peers are configured. The concrete
+    ///   provider is returned so the inbound `/api/attest` endpoint can route
+    ///   received envelopes into the SAME set (the endpoint needs the concrete
+    ///   type, not the trait object).
     /// - Federation configured but INVALID → [`DisabledAttestationProvider`]
     ///   (fail-closed: authorizations error, orders stay retryable). Never
     ///   silently downgrades to the permissive stub.
     /// - No federation configured → the development stub.
     fn build_attestation_provider(
         config: &BridgeConfig,
-    ) -> (Arc<dyn AttestationProvider>, bool, String) {
+    ) -> (
+        Arc<dyn AttestationProvider>,
+        Option<Arc<FederationAttestationProvider>>,
+        bool,
+        String,
+    ) {
         match FederationAttestationProvider::from_config(config) {
             Ok(Some(provider)) => {
                 info!("federation attestation provider active (ADR 0002 t-of-n custody)");
+                // #858 outbound: push each accepted local envelope to peers.
+                let provider = match PeerBroadcaster::new(
+                    &config.federation.peers,
+                    config.federation.peer_auth_token.clone(),
+                    Duration::from_secs(config.federation.peer_push_timeout_secs.max(1)),
+                ) {
+                    Some(broadcaster) => {
+                        info!(
+                            "federation transport active: pushing envelopes to {} peer(s) (#858)",
+                            config.federation.peers.len()
+                        );
+                        provider.with_peer_push(Arc::new(broadcaster))
+                    }
+                    None => {
+                        info!(
+                            "no federation peers configured; outbound envelope push disabled \
+                             (a threshold above the locally-signable count will not authorize)"
+                        );
+                        provider
+                    }
+                };
+                let concrete = Arc::new(provider);
                 (
-                    Arc::new(provider),
+                    concrete.clone(),
+                    Some(concrete),
                     true,
                     "federation provider active".to_string(),
                 )
@@ -115,6 +148,7 @@ impl BridgeEngine {
                 );
                 (
                     Arc::new(StubAttestationProvider),
+                    None,
                     true,
                     "development stub provider (no federation configured)".to_string(),
                 )
@@ -126,7 +160,12 @@ impl BridgeEngine {
                     e
                 );
                 let detail = format!("disabled: {}", e);
-                (Arc::new(DisabledAttestationProvider::new(e)), false, detail)
+                (
+                    Arc::new(DisabledAttestationProvider::new(e)),
+                    None,
+                    false,
+                    detail,
+                )
             }
         }
     }
@@ -149,7 +188,7 @@ impl BridgeEngine {
 
         let minters = Self::build_minters(&self.config);
         let releaser = Self::build_releaser(&self.config);
-        let (attestation, attestation_ok, attestation_detail) =
+        let (attestation, federation_provider, attestation_ok, attestation_detail) =
             Self::build_attestation_provider(&self.config);
 
         // Record component availability for the health surface
@@ -273,6 +312,41 @@ impl BridgeEngine {
             }))
         };
 
+        // Spawn the inbound federation attestation endpoint (#858):
+        // authenticated `POST /api/attest` that routes received envelopes
+        // into the same #824 verify pipeline. Enabled only when a concrete
+        // federation provider exists AND a listen address is configured
+        // (empty address = fail-safe: peers cannot reach us, threshold > 1
+        // never authorizes).
+        let attest_handle = match (
+            &federation_provider,
+            self.config.federation.attest_listen.is_empty(),
+        ) {
+            (Some(provider), false) => {
+                let addr = self.config.federation.attest_listen.clone();
+                let state = AttestState {
+                    provider: provider.clone(),
+                    db: self.db.clone(),
+                    inbound_auth_token: self.config.federation.inbound_auth_token.clone(),
+                };
+                let attest_shutdown = self.shutdown_tx.subscribe();
+                Some(tokio::spawn(async move {
+                    if let Err(e) = federation::serve(addr, state, attest_shutdown).await {
+                        error!("Bridge attestation endpoint error: {}", e);
+                    }
+                }))
+            }
+            (Some(_), true) => {
+                warn!(
+                    "federation provider active but federation.attest_listen is empty; \
+                     inbound peer attestations disabled (threshold above the locally-signable \
+                     count will not authorize — fail-safe)"
+                );
+                None
+            }
+            (None, _) => None,
+        };
+
         // Handle shutdown signals: SIGINT (ctrl-c) and, on unix, SIGTERM
         // (what systemd sends). Both trigger the same graceful drain:
         // every component gets the broadcast and is joined below.
@@ -308,6 +382,9 @@ impl BridgeEngine {
             reconcile_handle
         );
         if let Some(handle) = api_handle {
+            let _ = handle.await;
+        }
+        if let Some(handle) = attest_handle {
             let _ = handle.await;
         }
 
