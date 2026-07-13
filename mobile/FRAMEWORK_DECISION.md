@@ -103,6 +103,31 @@ let accessControl = SecAccessControlCreateWithFlags(
 - `.biometryCurrentSet`: Invalidate if biometrics change
 - Certificate pinning for RPC connections
 
+### Android-Specific Security
+
+`expo-secure-store` is cross-platform, so the same `keychain.ts` storage layer
+backs Android via the **Android Keystore** + `EncryptedSharedPreferences` — no
+separate native module or per-platform caller branching is needed.
+
+- **Android Keystore + `EncryptedSharedPreferences`**: the encrypted wallet blob
+  lives in `EncryptedSharedPreferences`, encrypted with a Keystore-held AES key.
+- **`requireAuthentication: true`** maps to `BiometricPrompt` + a Keystore key
+  created with `setUserAuthenticationRequired(true)` — the Android analog of the
+  iOS `SecAccessControl` biometry flags. It requires an enrolled biometric or
+  device credential (PIN/pattern/passcode); with none enrolled, `keychain.ts`
+  surfaces a typed `SecureStoreUnavailableError` (asks the user to set a screen
+  lock) instead of silently storing the wallet unauthenticated.
+- **No-cloud-backup**: Keystore-backed data is excluded from Android Auto Backup
+  by default — the security intent behind iOS's
+  `WHEN_UNLOCKED_THIS_DEVICE_ONLY`, achieved via a different platform mechanism.
+- **StrongBox / TEE hardware backing is device-dependent and NOT enforced**:
+  whether the key lands in a hardware-backed StrongBox / TEE keymaster vs. a
+  software keystore is a property of the device hardware. There is no public
+  `expo-secure-store` API to require StrongBox, so the app does not attempt to
+  condition behavior on it — this is a documented platform variance, not a
+  guarantee. The iOS-only `keychainAccessible` option is silently ignored by
+  `expo-secure-store` on Android.
+
 ## Rejected Alternatives
 
 ### Flutter
