@@ -49,6 +49,15 @@ pub struct EthereumConfig {
     /// wBTH contract address
     pub wbth_contract: String,
 
+    /// Gnosis Safe address holding `MINTER_ROLE` on the wBTH contract.
+    ///
+    /// Per ADR 0002, the Ethereum mint authority is a Gnosis Safe whose
+    /// owners are the validators' secp256k1 keys. Mints are submitted as
+    /// `Safe.execTransaction` wrapping `bridgeMint`. `None` disables mint
+    /// submission (watch-only deployments).
+    #[serde(default)]
+    pub safe_address: Option<String>,
+
     /// Chain ID (1 for mainnet, 5 for goerli, etc.)
     pub chain_id: u64,
 
@@ -211,6 +220,7 @@ impl Default for BridgeConfig {
             ethereum: EthereumConfig {
                 rpc_url: "http://localhost:8545".to_string(),
                 wbth_contract: "0x0000000000000000000000000000000000000000".to_string(),
+                safe_address: None,
                 chain_id: 1,
                 private_key_file: None,
                 confirmations_required: 12,

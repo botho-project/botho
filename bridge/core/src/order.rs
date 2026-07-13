@@ -4,9 +4,29 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::chains::Chain;
+use crate::{attestation::MintAuthorization, chains::Chain};
+
+/// Domain-separation tag for deriving the on-chain 32-byte order id from the
+/// order UUID. Changing this tag is a bridge-breaking change: in-flight
+/// orders would derive different on-chain ids.
+const ORDER_ID_DOMAIN_TAG: &[u8] = b"botho-bridge-order-id-v1";
+
+/// Derive the deterministic 32-byte on-chain order id from an order UUID.
+///
+/// Both destination chains bind mints to this same value: Ethereum passes it
+/// as the `bytes32` idempotency key of `WrappedBTH.bridgeMint` and Solana as
+/// the `[u8; 32]` argument of the `bridge_mint` instruction. The contract-side
+/// duplicate-order guard (#826) plus this derivation make a replayed
+/// attestation unable to mint twice.
+pub fn derive_order_id(order_uuid: &Uuid) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(ORDER_ID_DOMAIN_TAG);
+    hasher.update(order_uuid.as_bytes());
+    hasher.finalize().into()
+}
 
 /// Custom serde for memo field (fixed-size byte array)
 mod memo_serde {
@@ -138,6 +158,46 @@ impl OrderStatus {
             _ => None,
         }
     }
+
+    /// Check whether a transition from `self` to `next` is allowed.
+    ///
+    /// Allowed transitions:
+    /// - The forward happy path (each status to its [`OrderStatus::next`]). In
+    ///   particular `MintPending -> Completed` — callers must only take this
+    ///   edge once the destination-chain confirmation requirement is met (see
+    ///   `confirm_mint` in the bridge service).
+    /// - `MintPending -> DepositConfirmed`: reorg unwind. If a submitted mint
+    ///   tx is orphaned before finality the order rolls back to
+    ///   `DepositConfirmed` and is re-submitted, instead of terminally failing
+    ///   (the BTH deposit is still confirmed and owed).
+    /// - Any non-terminal status to `Failed`.
+    /// - `AwaitingDeposit` / `DepositDetected` to `Expired`.
+    ///
+    /// Terminal states allow no transitions.
+    pub fn can_transition_to(&self, next: &OrderStatus) -> bool {
+        if self.is_terminal() {
+            return false;
+        }
+
+        // Forward happy path.
+        if let Some(expected) = self.next() {
+            if std::mem::discriminant(&expected) == std::mem::discriminant(next) {
+                return true;
+            }
+        }
+
+        match (self, next) {
+            // Reorg unwind: submitted mint orphaned before finality.
+            (OrderStatus::MintPending, OrderStatus::DepositConfirmed) => true,
+            // Any non-terminal order may fail.
+            (_, OrderStatus::Failed { .. }) => true,
+            // Only orders still waiting on a deposit can expire.
+            (OrderStatus::AwaitingDeposit | OrderStatus::DepositDetected, OrderStatus::Expired) => {
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 impl std::fmt::Display for OrderStatus {
@@ -201,6 +261,19 @@ pub struct BridgeOrder {
     #[serde(with = "memo_serde")]
     pub memo: Option<[u8; 64]>,
 
+    /// Threshold attestation authorizing the mint (produced by the #824
+    /// attestation protocol once the deposit is confirmed). `None` until
+    /// the federation has signed.
+    #[serde(default)]
+    pub mint_authorization: Option<MintAuthorization>,
+
+    /// When the destination-chain transaction (`dest_tx`) reached the
+    /// required confirmation depth / finality. `None` while unconfirmed —
+    /// confirmation waits are reorg-aware: `dest_tx` may be set and later
+    /// cleared again if the tx is orphaned before this is set.
+    #[serde(default)]
+    pub dest_confirmed_at: Option<DateTime<Utc>>,
+
     /// Order creation timestamp
     pub created_at: DateTime<Utc>,
 
@@ -232,6 +305,8 @@ impl BridgeOrder {
             status: OrderStatus::AwaitingDeposit,
             error_message: None,
             memo: None,
+            mint_authorization: None,
+            dest_confirmed_at: None,
             created_at: now,
             updated_at: now,
         }
@@ -261,9 +336,19 @@ impl BridgeOrder {
             status: OrderStatus::BurnDetected,
             error_message: None,
             memo: None,
+            mint_authorization: None,
+            dest_confirmed_at: None,
             created_at: now,
             updated_at: now,
         }
+    }
+
+    /// The deterministic 32-byte on-chain order id for this order.
+    ///
+    /// See [`derive_order_id`]. Both the Ethereum and Solana mint paths
+    /// bind their on-chain mint to this exact value.
+    pub fn order_id_bytes(&self) -> [u8; 32] {
+        derive_order_id(&self.id)
     }
 
     /// Generate a memo containing the order ID for deposit identification.
@@ -290,6 +375,32 @@ impl BridgeOrder {
     pub fn set_status(&mut self, status: OrderStatus) {
         self.status = status;
         self.updated_at = Utc::now();
+    }
+
+    /// Guarded status transition. Returns an error (and leaves the order
+    /// unmodified) if [`OrderStatus::can_transition_to`] rejects the edge.
+    ///
+    /// Rolling back from `MintPending` to `DepositConfirmed` (reorg unwind)
+    /// clears `dest_tx` and `dest_confirmed_at` so the order is re-submitted
+    /// cleanly.
+    pub fn try_set_status(&mut self, status: OrderStatus) -> Result<(), String> {
+        if !self.status.can_transition_to(&status) {
+            return Err(format!(
+                "invalid order status transition: {} -> {}",
+                self.status, status
+            ));
+        }
+
+        if matches!(
+            (&self.status, &status),
+            (OrderStatus::MintPending, OrderStatus::DepositConfirmed)
+        ) {
+            self.dest_tx = None;
+            self.dest_confirmed_at = None;
+        }
+
+        self.set_status(status);
+        Ok(())
     }
 
     /// Mark the order as failed.
@@ -360,5 +471,102 @@ mod tests {
         assert!(OrderStatus::DepositConfirmed.is_actionable());
         assert!(OrderStatus::BurnConfirmed.is_actionable());
         assert!(!OrderStatus::AwaitingDeposit.is_actionable());
+    }
+
+    #[test]
+    fn test_order_id_derivation_is_stable() {
+        // Fixed UUID -> fixed on-chain order id. This vector must never
+        // change: in-flight orders bind to it on both chains.
+        let uuid = Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap();
+        let id1 = derive_order_id(&uuid);
+        let id2 = derive_order_id(&uuid);
+        assert_eq!(id1, id2, "derivation must be deterministic");
+
+        // Golden vector: sha256("botho-bridge-order-id-v1" || uuid_bytes).
+        let expected = {
+            let mut hasher = Sha256::new();
+            hasher.update(b"botho-bridge-order-id-v1");
+            hasher.update(uuid.as_bytes());
+            let out: [u8; 32] = hasher.finalize().into();
+            out
+        };
+        assert_eq!(id1, expected);
+
+        // Distinct orders derive distinct ids.
+        let other = Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap();
+        assert_ne!(derive_order_id(&other), id1);
+    }
+
+    #[test]
+    fn test_order_id_bytes_matches_free_function() {
+        // The ETH path calls order.order_id_bytes(); the Solana path may
+        // derive from the UUID directly. Both must agree.
+        let order = BridgeOrder::new_mint(
+            Chain::Ethereum,
+            1_000_000_000_000,
+            0,
+            "addr".to_string(),
+            "0x...".to_string(),
+        );
+        assert_eq!(order.order_id_bytes(), derive_order_id(&order.id));
+    }
+
+    #[test]
+    fn test_guarded_transitions_happy_path() {
+        assert!(OrderStatus::DepositConfirmed.can_transition_to(&OrderStatus::MintPending));
+        assert!(OrderStatus::MintPending.can_transition_to(&OrderStatus::Completed));
+        assert!(OrderStatus::AwaitingDeposit.can_transition_to(&OrderStatus::DepositDetected));
+    }
+
+    #[test]
+    fn test_guarded_transitions_reject_skips() {
+        // Cannot skip confirmation gating: DepositConfirmed -> Completed
+        // must go through MintPending.
+        assert!(!OrderStatus::DepositConfirmed.can_transition_to(&OrderStatus::Completed));
+        // Cannot complete before submitting.
+        assert!(!OrderStatus::DepositDetected.can_transition_to(&OrderStatus::MintPending));
+        // Terminal states are frozen.
+        assert!(!OrderStatus::Completed.can_transition_to(&OrderStatus::MintPending));
+        assert!(!OrderStatus::Failed {
+            reason: "x".to_string()
+        }
+        .can_transition_to(&OrderStatus::DepositConfirmed));
+        // Orders past the deposit stage cannot expire.
+        assert!(!OrderStatus::MintPending.can_transition_to(&OrderStatus::Expired));
+    }
+
+    #[test]
+    fn test_reorg_unwind_transition() {
+        // MintPending -> DepositConfirmed is the reorg rollback edge.
+        assert!(OrderStatus::MintPending.can_transition_to(&OrderStatus::DepositConfirmed));
+
+        let mut order = BridgeOrder::new_mint(
+            Chain::Ethereum,
+            1_000_000_000_000,
+            0,
+            "addr".to_string(),
+            "0x...".to_string(),
+        );
+        order.set_status(OrderStatus::MintPending);
+        order.dest_tx = Some("0xdeadbeef".to_string());
+
+        order.try_set_status(OrderStatus::DepositConfirmed).unwrap();
+        assert_eq!(order.status, OrderStatus::DepositConfirmed);
+        assert!(order.dest_tx.is_none(), "reorg unwind must clear dest_tx");
+        assert!(order.dest_confirmed_at.is_none());
+    }
+
+    #[test]
+    fn test_try_set_status_rejects_invalid() {
+        let mut order = BridgeOrder::new_mint(
+            Chain::Ethereum,
+            1_000_000_000_000,
+            0,
+            "addr".to_string(),
+            "0x...".to_string(),
+        );
+        // AwaitingDeposit -> Completed is not a legal edge.
+        assert!(order.try_set_status(OrderStatus::Completed).is_err());
+        assert_eq!(order.status, OrderStatus::AwaitingDeposit);
     }
 }

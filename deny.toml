@@ -73,6 +73,11 @@ ignore = [
     # rustls-pemfile 2.2.0 - unmaintained; no safe upgrade. Transitive via the
     # reqwest / rustls TLS stack.
     "RUSTSEC-2025-0134",  # rustls-pemfile unmaintained (no safe upgrade)
+
+    # proc-macro-error2 2.0.1 - unmaintained; compile-time-only proc-macro
+    # helper, transitive via alloy-sol-macro (bridge-service #821). Never in
+    # the runtime dependency graph. No fixed alloy release exists yet.
+    "RUSTSEC-2026-0173",  # proc-macro-error2 unmaintained (alloy-sol-macro, build-time only)
 ]
 
 [licenses]
