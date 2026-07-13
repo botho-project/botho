@@ -82,6 +82,11 @@ cargo build --target aarch64-apple-ios -p botho-wallet --lib
 
 ### Key Protection (Matching Desktop Wallet)
 
+> **Backup / recovery** extends (does not violate) this model. See
+> [`MOBILE_BACKUP_DESIGN.md`](./MOBILE_BACKUP_DESIGN.md) for the passkey/
+> biometric-gated encrypted-backup design and the decision record on why
+> iCloud Keychain sync is not reachable via `expo-secure-store`.
+
 1. **Mnemonic Never Leaves Rust**: Same pattern as `src-tauri/src/wallet.rs`
 2. **Session-Based Access**: Keys decrypted on unlock, zeroized on lock
 3. **Auto-Lock Timeout**: 15-minute inactivity timeout

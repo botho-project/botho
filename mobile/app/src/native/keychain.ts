@@ -33,6 +33,24 @@ const NODE_URL_KEY = "botho_node_url";
 /** Keychain key for the user-managed list of trusted nodes. */
 const NODE_LIST_KEY = "botho_node_list";
 
+/**
+ * RESERVED (not yet used): storage-key namespace for a future encrypted-backup
+ * blob, per the design in `mobile/MOBILE_BACKUP_DESIGN.md`.
+ *
+ * This name is reserved here so a future implementer does not collide with the
+ * `botho_*` keys above, and — critically — does NOT store credential-gated
+ * backup material under `WALLET_KEY`/`SECURE_OPTIONS`, which is
+ * `THIS_DEVICE_ONLY` (its whole point is to stay off any cloud backup). A
+ * backup blob is meant to be durable across device loss and must therefore use
+ * a distinct persistence path (durable/synchronizable store) with its own
+ * options, not this constant's local-only semantics.
+ *
+ * No code reads or writes this key yet: the backup feature is blocked on three
+ * prerequisites (native bridge, passkey library, Rust seed-export FFI) — see
+ * `MOBILE_BACKUP_DESIGN.md` §9. This is a naming reservation only.
+ */
+export const RESERVED_BACKUP_BLOB_KEY = "botho_encrypted_backup";
+
 /** Stored wallet data structure */
 export interface StoredWallet {
   /** Encrypted wallet data (from Rust) */

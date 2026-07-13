@@ -34,6 +34,7 @@ import {
   getBiometricType,
   authenticateWithBiometrics,
   SecureStoreUnavailableError,
+  RESERVED_BACKUP_BLOB_KEY,
 } from "./keychain";
 import type { ManagedNode } from "../config/nodes";
 
@@ -386,5 +387,32 @@ describe("authenticateWithBiometrics", () => {
       error: "user_cancel",
     });
     await expect(authenticateWithBiometrics()).resolves.toBe(false);
+  });
+});
+
+describe("RESERVED_BACKUP_BLOB_KEY", () => {
+  // Reserved namespace for the future encrypted-backup blob
+  // (mobile/MOBILE_BACKUP_DESIGN.md). Not yet read/written by any code path;
+  // these assertions lock in the invariants a future implementer relies on.
+  it("is a stable, non-empty botho-namespaced key", () => {
+    expect(RESERVED_BACKUP_BLOB_KEY).toBe("botho_encrypted_backup");
+  });
+
+  it("does not collide with the local-only wallet blob key", () => {
+    // The wallet blob is stored THIS_DEVICE_ONLY; a durable backup must use a
+    // distinct key so it is never conflated with the local-only copy.
+    expect(RESERVED_BACKUP_BLOB_KEY).not.toBe("botho_encrypted_wallet");
+  });
+
+  it("is not touched by any current save/delete path", async () => {
+    // No existing code should read or write the reserved key yet.
+    await saveEncryptedWallet("blob");
+    await deleteWallet();
+    const keysTouched = [
+      ...mockSecureStore.setItemAsync.mock.calls.map((c) => c[0]),
+      ...mockSecureStore.getItemAsync.mock.calls.map((c) => c[0]),
+      ...mockSecureStore.deleteItemAsync.mock.calls.map((c) => c[0]),
+    ];
+    expect(keysTouched).not.toContain(RESERVED_BACKUP_BLOB_KEY);
   });
 });

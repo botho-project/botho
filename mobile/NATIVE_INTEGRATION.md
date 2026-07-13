@@ -24,6 +24,15 @@ Expo native module that re-exposes the generated `MobileWallet` to JS, and a
 full on-device run. UniFFI generates the Rust↔Swift/Kotlin layer but not the
 React Native bridge — that thin module is written below.
 
+Also NOT done, and a prerequisite for the wallet-backup feature designed in
+[`MOBILE_BACKUP_DESIGN.md`](./MOBILE_BACKUP_DESIGN.md): the `BothoWallet` bridge
+will additionally need to forward **backup/restore** FFI methods once the Rust
+`export_encrypted_backup` / `import_encrypted_backup` surface exists (see that
+doc, §6.2 and §9). An iCloud-Keychain-synchronizable backup on iOS further
+requires a native `SecItemAdd(... kSecAttrSynchronizable: true ...)` path, which
+`expo-secure-store` cannot produce (see `MOBILE_BACKUP_DESIGN.md` §5) — that too
+would live in this bridge.
+
 ## Step 1 — Build the Rust static libs for the target platforms
 
 ```sh
