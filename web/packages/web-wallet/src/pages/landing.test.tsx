@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { LandingPage } from './landing'
 import i18n from '../lib/i18n'
 
@@ -81,6 +81,82 @@ describe('LandingPage i18n', () => {
     // here we assert the switcher persisted the choice and, after changing the
     // language directly (what LocaleRoutes does off the URL), Spanish renders.
     expect(localStorage.getItem('botho:locale')).toBe('es')
+  })
+
+  it('locale switcher label reflects Spanish on a direct /es load', async () => {
+    // Acceptance criterion (item 3): the switcher's displayed language must equal
+    // the actually-rendered language. `activeLocale` is derived purely from the
+    // URL, so `/es` → the <select value> is "es" (renders "Español"), matching
+    // the Spanish page content — no desync (#797).
+    await i18n.changeLanguage('es')
+    render(
+      <MemoryRouter initialEntries={['/es']}>
+        <LandingPage />
+      </MemoryRouter>,
+    )
+    const select = screen.getAllByRole('combobox')[0] as HTMLSelectElement
+    expect(select.value).toBe('es')
+    // The selected <option>'s visible label is the Spanish endonym.
+    const selected = select.options[select.selectedIndex]
+    expect(selected.textContent).toBe('Español')
+  })
+
+  it('locale switcher label reflects English on a direct /en (orphan) load', () => {
+    // Even the orphan `/en` path parses to the default (en) locale, so the
+    // switcher must read "English" — never a stale "Español". This is the
+    // item-3/item-4 shared-root-cause regression guard: with well-formed URLs the
+    // label can never desync from the rendered language (#797).
+    render(
+      <MemoryRouter initialEntries={['/en']}>
+        <LandingPage />
+      </MemoryRouter>,
+    )
+    const select = screen.getAllByRole('combobox')[0] as HTMLSelectElement
+    expect(select.value).toBe('en')
+    const selected = select.options[select.selectedIndex]
+    expect(selected.textContent).toBe('English')
+  })
+
+  it('locale switcher label reflects English on the unprefixed root (edge-redirect landing)', () => {
+    // Simulates a first-visit landing on the default-locale root after edge
+    // negotiation: the switcher reads "English" to match the rendered content.
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <LandingPage />
+      </MemoryRouter>,
+    )
+    const select = screen.getAllByRole('combobox')[0] as HTMLSelectElement
+    expect(select.value).toBe('en')
+  })
+
+  it('locale switcher navigates to the sibling locale path on an in-session switch', () => {
+    // es→en round-trip through the switcher control emits the UNPREFIXED path for
+    // en (never `/en/...`), and vice versa — the mechanism that keeps the label
+    // and the URL in agreement (#797, item 3 confirmed-correct).
+    let seen = ''
+    function LocationProbe() {
+      seen = useLocation().pathname
+      return null
+    }
+    const { rerender } = render(
+      <MemoryRouter initialEntries={['/es/wallet']}>
+        <LandingPage />
+        <LocationProbe />
+      </MemoryRouter>,
+    )
+    const select = screen.getAllByRole('combobox')[0] as HTMLSelectElement
+    // Reflects the /es URL.
+    expect(select.value).toBe('es')
+    // Switch es → en: must land on the unprefixed /wallet, not /en/wallet.
+    fireEvent.change(select, { target: { value: 'en' } })
+    expect(seen).toBe('/wallet')
+    expect(localStorage.getItem('botho:locale')).toBe('en')
+    rerender(
+      <MemoryRouter initialEntries={['/es/wallet']}>
+        <LandingPage />
+        <LocationProbe />
+      </MemoryRouter>,
+    )
   })
 
   it('exposes a language control labelled for assistive tech', () => {

@@ -18,6 +18,7 @@ import {
   parseLocaleFromPath,
   readCookie,
   SITE_ORIGIN,
+  stripEnPrefixRedirect,
   SUPPORTED_LOCALES,
 } from './locale-negotiation'
 
@@ -120,6 +121,53 @@ describe('buildLocalePath', () => {
     expect(buildLocalePath('en', '/wallet')).toBe('/wallet')
     expect(buildLocalePath('es', '/wallet')).toBe('/es/wallet')
     expect(buildLocalePath('es', '/')).toBe('/es')
+  })
+})
+
+describe('stripEnPrefixRedirect', () => {
+  it('maps the bare /en orphan (with or without trailing slash) to the root', () => {
+    expect(stripEnPrefixRedirect('/en')).toBe('/')
+    expect(stripEnPrefixRedirect('/en/')).toBe('/')
+  })
+
+  it('strips the /en prefix from deeper paths', () => {
+    expect(stripEnPrefixRedirect('/en/wallet')).toBe('/wallet')
+    expect(stripEnPrefixRedirect('/en/explorer/tx/abc')).toBe('/explorer/tx/abc')
+    expect(stripEnPrefixRedirect('/en/node/status')).toBe('/node/status')
+  })
+
+  it('returns undefined for paths that are NOT /en orphans', () => {
+    expect(stripEnPrefixRedirect('/')).toBeUndefined()
+    expect(stripEnPrefixRedirect('/wallet')).toBeUndefined()
+    expect(stripEnPrefixRedirect('/es')).toBeUndefined()
+    expect(stripEnPrefixRedirect('/es/wallet')).toBeUndefined()
+    // Lookalike segments that merely START with "en" must be left alone.
+    expect(stripEnPrefixRedirect('/enterprise')).toBeUndefined()
+    expect(stripEnPrefixRedirect('/env')).toBeUndefined()
+  })
+
+  it('runs independently of Accept-Language negotiation (the 301 wins, not /es/en)', () => {
+    // Regression guard for the compounding bug: negotiateLocaleRedirect would
+    // send a first-visit es browser on `/en` to `/es/en` (since `/en` is not an
+    // explicit locale prefix). The middleware must therefore apply the /en 301
+    // FIRST — this test documents that the pure strip helper resolves `/en` to
+    // the unprefixed root, and that negotiation of `/en` (were it ever reached)
+    // is exactly the pathology we avoid by ordering the strip ahead of it.
+    expect(stripEnPrefixRedirect('/en')).toBe('/')
+    const wouldCompound = negotiateLocaleRedirect({
+      pathname: '/en',
+      acceptLanguage: 'es-ES,es;q=0.9',
+      cookie: null,
+      userAgent:
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+    })
+    // Confirms the pathology exists at the negotiation layer (hence the ordering
+    // requirement): unguarded, `/en` negotiates onward to the orphan `/es/en`.
+    expect(wouldCompound).toEqual({
+      kind: 'redirect',
+      location: '/es/en',
+      cookieLocale: 'es',
+    })
   })
 })
 
