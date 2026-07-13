@@ -17,6 +17,21 @@ bth-bridge-core = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true, features = ["full"] }
+async-trait = { workspace = true }
+
+# Ethereum (wBTH mint submission per ADR 0002: Gnosis Safe execTransaction)
+alloy = { workspace = true, features = [
+    "consensus",
+    "contract",
+    "eips",
+    "network",
+    "provider-http",
+    "reqwest",
+    "reqwest-rustls-tls",
+    "rpc-types",
+    "signer-local",
+    "sol-types",
+] }
 
 # Database
 rusqlite = { version = "0.31", features = ["bundled"] }
@@ -24,6 +39,9 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 # Utilities
 chrono = { workspace = true, features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+hex = { workspace = true, features = ["std"] }
+serde_json = { workspace = true, features = ["std"] }
+sha2 = { workspace = true, features = ["std"] }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { workspace = true, features = ["derive"] }

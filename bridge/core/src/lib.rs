@@ -10,10 +10,14 @@
 //! - Configuration structures
 //! - Rate limiting logic
 
+pub mod attestation;
 pub mod chains;
 pub mod config;
 pub mod order;
 
+pub use attestation::{AttestationSignature, MintAuthorization, SignatureScheme};
 pub use chains::{Chain, ChainAddress};
-pub use config::{BridgeConfig, BthConfig, EthereumConfig, SolanaConfig};
-pub use order::{BridgeOrder, OrderStatus, OrderType};
+pub use config::{
+    BridgeConfig, BthConfig, EthereumConfig, GasPriceStrategy, SolanaCommitment, SolanaConfig,
+};
+pub use order::{derive_order_id, BridgeOrder, OrderStatus, OrderType};

@@ -60,6 +60,7 @@ rust-version = "1.83.0"
 [workspace.dependencies]
 aead = { version = "0.5", default-features = false }
 aes = "0.8"
+alloy = { version = "1", default-features = false }
 aes-gcm = "0.10"
 aligned-cmov = "2"
 anyhow = "1"
