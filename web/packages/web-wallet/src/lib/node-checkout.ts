@@ -17,20 +17,25 @@
  * "coming soon": selectable so we can record demand (the choice is sent as
  * `preferredRegion` and lands in Stripe metadata), but the node itself
  * launches in the default region until that datacenter opens.
+ *
+ * `labelKey` names an i18n key under the `node` namespace (`region.*`) resolved
+ * at render time with `t()` — this lib module cannot call `useTranslation()` at
+ * module scope, so it carries the key and the page component translates it (the
+ * same indirection `AUTO_LOCK_OPTIONS` uses in `wallet.tsx`).
  */
-export const NODE_REGIONS: ReadonlyArray<{ id: string; label: string; available: boolean }> = [
-  { id: 'us-west-2', label: 'US West (Oregon) — us-west-2', available: true },
-  { id: 'us-east-1', label: 'US East (N. Virginia) — us-east-1', available: false },
-  { id: 'ca-central-1', label: 'Canada (Montréal) — ca-central-1', available: false },
-  { id: 'sa-east-1', label: 'South America (São Paulo) — sa-east-1', available: false },
-  { id: 'eu-central-1', label: 'Europe (Frankfurt) — eu-central-1', available: false },
-  { id: 'eu-west-2', label: 'Europe (London) — eu-west-2', available: false },
-  { id: 'af-south-1', label: 'Africa (Cape Town) — af-south-1', available: false },
-  { id: 'me-south-1', label: 'Middle East (Bahrain) — me-south-1', available: false },
-  { id: 'ap-south-1', label: 'Asia Pacific (Mumbai) — ap-south-1', available: false },
-  { id: 'ap-southeast-1', label: 'Asia Pacific (Singapore) — ap-southeast-1', available: false },
-  { id: 'ap-northeast-1', label: 'Asia Pacific (Tokyo) — ap-northeast-1', available: false },
-  { id: 'ap-southeast-2', label: 'Asia Pacific (Sydney) — ap-southeast-2', available: false },
+export const NODE_REGIONS: ReadonlyArray<{ id: string; labelKey: string; available: boolean }> = [
+  { id: 'us-west-2', labelKey: 'region.usWest2', available: true },
+  { id: 'us-east-1', labelKey: 'region.usEast1', available: false },
+  { id: 'ca-central-1', labelKey: 'region.caCentral1', available: false },
+  { id: 'sa-east-1', labelKey: 'region.saEast1', available: false },
+  { id: 'eu-central-1', labelKey: 'region.euCentral1', available: false },
+  { id: 'eu-west-2', labelKey: 'region.euWest2', available: false },
+  { id: 'af-south-1', labelKey: 'region.afSouth1', available: false },
+  { id: 'me-south-1', labelKey: 'region.meSouth1', available: false },
+  { id: 'ap-south-1', labelKey: 'region.apSouth1', available: false },
+  { id: 'ap-southeast-1', labelKey: 'region.apSoutheast1', available: false },
+  { id: 'ap-northeast-1', labelKey: 'region.apNortheast1', available: false },
+  { id: 'ap-southeast-2', labelKey: 'region.apSoutheast2', available: false },
 ]
 
 export const DEFAULT_NODE_REGION = NODE_REGIONS.find((r) => r.available)!.id

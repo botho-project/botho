@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { Button, Card, Input, Logo } from '@botho/ui'
 import {
   Server,
@@ -50,6 +51,7 @@ import {
  * checkout, Stripe redirects to `/node/success` (the placeholder below).
  */
 export function NodePage() {
+  const { t } = useTranslation('node')
   const [region, setRegion] = useState<string>(DEFAULT_NODE_REGION)
   const [email, setEmail] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -71,13 +73,15 @@ export function NodePage() {
       window.location.assign(session.url)
     } catch (err) {
       const message =
-        err instanceof NodeCheckoutError
-          ? err.message
-          : 'Something went wrong starting checkout. Please try again.'
+        err instanceof NodeCheckoutError ? err.message : t('checkout.errorFallback')
       setError(message)
       setSubmitting(false)
     }
   }
+
+  const defaultRegionLabelKey = NODE_REGIONS.find(
+    (r) => r.id === DEFAULT_NODE_REGION,
+  )?.labelKey
 
   return (
     <div className="min-h-screen">
@@ -90,7 +94,7 @@ export function NodePage() {
           </Link>
           <Link to="/" className="text-ghost hover:text-light transition-colors flex items-center gap-2">
             <ArrowLeft size={18} />
-            Back
+            {t('checkout.back')}
           </Link>
         </div>
       </header>
@@ -101,19 +105,17 @@ export function NodePage() {
           <div className="text-center mb-10">
             <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-steel/50 border border-muted text-xs sm:text-sm text-ghost mb-6">
               <span className="w-2 h-2 rounded-full bg-warning" />
-              Testnet — billing runs in Stripe test mode
+              {t('checkout.testnetBadge')}
             </div>
             <div className="w-14 h-14 rounded-xl bg-pulse/10 flex items-center justify-center mx-auto mb-5">
               <Server className="text-pulse" size={28} />
             </div>
             <h1 className="font-display text-3xl sm:text-4xl md:text-5xl font-bold mb-4">
-              Host a Node for Your Community
+              {t('checkout.heroTitle')}
             </h1>
             <p className="text-base sm:text-lg text-ghost max-w-xl mx-auto">
-              We run an always-on Botho node for you — no servers to manage. You,
-              and everyone you invite, transact from the app through your own
-              private endpoint.{' '}
-              <span className="text-light whitespace-nowrap">$50/month.</span>
+              {t('checkout.heroSubtitlePrefix')}
+              <span className="text-light whitespace-nowrap">{t('checkout.heroPrice')}</span>
             </p>
           </div>
 
@@ -121,29 +123,24 @@ export function NodePage() {
           <div className="mb-8 p-4 rounded-xl bg-warning/10 border border-warning/30 flex gap-3">
             <AlertCircle className="text-warning shrink-0 mt-0.5" size={20} />
             <p className="text-sm text-ghost">
-              <span className="text-light font-medium">Your node mines for you.</span>{' '}
-              Out of the box it mines to the address you configure — helping secure
-              the network, with any rewards going straight to your wallet. What
-              you're buying is the managed hosting: the always-on node and the
-              wallet experience.{' '}
-              <span className="text-light">To be clear about value</span>: testnet
-              coins have zero real-world value, and mainnet coins float — mining
-              rewards are not an income promise. Charges run in Stripe test mode
-              while we validate the service.
+              <span className="text-light font-medium">{t('checkout.valueProp.leadStrong')}</span>
+              {t('checkout.valueProp.leadBody')}
+              <span className="text-light">{t('checkout.valueProp.clarityStrong')}</span>
+              {t('checkout.valueProp.clarityBody')}
             </p>
           </div>
 
           {/* What you get */}
           <div className="grid sm:grid-cols-3 gap-3 sm:gap-4 mb-8">
             {[
-              { icon: Cpu, title: 'Managed for you', desc: 'An always-on node in the cloud — no AWS, no SSH, no upkeep.' },
-              { icon: Globe, title: "Your community's hub", desc: 'A private endpoint you and everyone you invite transact through.' },
-              { icon: ShieldCheck, title: 'Non-custodial', desc: 'Keys stay on every device. The node never holds anyone\'s funds.' },
+              { icon: Cpu, titleKey: 'checkout.cards.managedTitle', descKey: 'checkout.cards.managedDesc' },
+              { icon: Globe, titleKey: 'checkout.cards.hubTitle', descKey: 'checkout.cards.hubDesc' },
+              { icon: ShieldCheck, titleKey: 'checkout.cards.custodyTitle', descKey: 'checkout.cards.custodyDesc' },
             ].map((f) => (
-              <div key={f.title} className="p-4 rounded-xl bg-slate/50 border border-steel">
+              <div key={f.titleKey} className="p-4 rounded-xl bg-slate/50 border border-steel">
                 <f.icon className="text-pulse mb-2" size={20} />
-                <div className="font-display font-semibold text-sm mb-1">{f.title}</div>
-                <div className="text-xs text-ghost">{f.desc}</div>
+                <div className="font-display font-semibold text-sm mb-1">{t(f.titleKey)}</div>
+                <div className="text-xs text-ghost">{t(f.descKey)}</div>
               </div>
             ))}
           </div>
@@ -151,7 +148,7 @@ export function NodePage() {
           {/* Checkout form */}
           <Card className="p-5 sm:p-6">
             <label className="block text-sm font-medium text-light mb-2" htmlFor="node-region">
-              Region
+              {t('checkout.regionLabel')}
             </label>
             <select
               id="node-region"
@@ -160,50 +157,45 @@ export function NodePage() {
               disabled={submitting}
               className="w-full mb-1 px-3 py-2.5 rounded-lg bg-void border border-steel text-light focus:outline-none focus:border-pulse disabled:opacity-50"
             >
-              <optgroup label="Available now">
+              <optgroup label={t('checkout.optgroupAvailable')}>
                 {NODE_REGIONS.filter((r) => r.available).map((r) => (
                   <option key={r.id} value={r.id}>
-                    {r.label}
+                    {t(r.labelKey)}
                   </option>
                 ))}
               </optgroup>
-              <optgroup label="Coming soon — tell us where you want to host">
+              <optgroup label={t('checkout.optgroupComingSoon')}>
                 {NODE_REGIONS.filter((r) => !r.available).map((r) => (
                   <option key={r.id} value={r.id}>
-                    {r.label}
+                    {t(r.labelKey)}
                   </option>
                 ))}
               </optgroup>
             </select>
             {isRegionAvailable(region) ? (
-              <p className="text-xs text-ghost mb-5">
-                Your node will be provisioned here once you subscribe.
-              </p>
+              <p className="text-xs text-ghost mb-5">{t('checkout.availableHint')}</p>
             ) : (
               <p className="text-xs text-warning mb-5">
-                This region isn't live yet. Your node launches in{' '}
-                {NODE_REGIONS.find((r) => r.id === DEFAULT_NODE_REGION)?.label} for
-                now, and your preference is recorded to help us prioritize new
-                datacenters.
+                {t('checkout.comingSoonHint', {
+                  region: defaultRegionLabelKey ? t(defaultRegionLabelKey) : '',
+                })}
               </p>
             )}
 
             <label className="block text-sm font-medium text-light mb-2" htmlFor="node-email">
-              Email <span className="text-ghost font-normal">(optional)</span>
+              {t('checkout.emailLabel')}{' '}
+              <span className="text-ghost font-normal">{t('checkout.emailOptional')}</span>
             </label>
             <Input
               id="node-email"
               type="email"
-              placeholder="you@example.com"
+              placeholder={t('checkout.emailPlaceholder')}
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               disabled={submitting}
               className="mb-1"
             />
-            <p className="text-xs text-ghost mb-6">
-              Pre-fills Stripe checkout and is where we'll send your node details.
-              You can also enter it on the next screen.
-            </p>
+            <p className="text-xs text-ghost mb-6">{t('checkout.emailHint')}</p>
 
             {error && (
               <div className="mb-4 p-3 rounded-lg bg-error/10 border border-error/30 flex gap-2 text-sm text-error">
@@ -221,15 +213,13 @@ export function NodePage() {
               {submitting ? (
                 <>
                   <Loader2 className="animate-spin mr-2" size={18} />
-                  Redirecting to Stripe…
+                  {t('checkout.submitting')}
                 </>
               ) : (
-                'Subscribe — $50/mo'
+                t('checkout.submit')
               )}
             </Button>
-            <p className="text-xs text-center text-ghost mt-3">
-              Secure checkout hosted by Stripe. Cancel anytime.
-            </p>
+            <p className="text-xs text-center text-ghost mt-3">{t('checkout.secureNote')}</p>
           </Card>
         </div>
       </main>
@@ -263,6 +253,7 @@ function NodePageShell({ children }: { children: React.ReactNode }) {
  * user at the live status page once they have their magic link.
  */
 export function NodeSuccessPage() {
+  const { t } = useTranslation('node')
   return (
     <NodePageShell>
       <Card className="max-w-md w-full p-6 sm:p-8 text-center">
@@ -270,21 +261,17 @@ export function NodeSuccessPage() {
           <Check className="text-success" size={28} />
         </div>
         <h1 className="font-display text-2xl sm:text-3xl font-bold mb-3">
-          Subscription started
+          {t('success.title')}
         </h1>
-        <p className="text-sm sm:text-base text-ghost mb-6">
-          Thanks! Your managed node is being provisioned. We'll email you a secure
-          link to your node's status page — it shows your private RPC URL, the
-          node's health, and a one-click link to open it in the wallet.
-        </p>
+        <p className="text-sm sm:text-base text-ghost mb-6">{t('success.body')}</p>
         <div className="flex flex-col gap-3">
           <Link to="/wallet">
             <Button size="lg" className="w-full justify-center">
-              Open Wallet
+              {t('success.openWallet')}
             </Button>
           </Link>
           <Link to="/" className="text-sm text-ghost hover:text-light transition-colors">
-            Back to home
+            {t('success.backToHome')}
           </Link>
         </div>
       </Card>
@@ -292,24 +279,30 @@ export function NodeSuccessPage() {
   )
 }
 
+/** i18n translator bound to the `node` namespace (from `useTranslation('node')`). */
+type NodeT = ReturnType<typeof useTranslation<'node'>>['t']
+
 /** Colored dot + label for a node's lifecycle state. */
-function StateBadge({ state }: { state: NodeStatus['state'] }) {
-  const map: Record<NodeStatus['state'], { label: string; cls: string }> = {
-    provisioning: { label: 'Provisioning', cls: 'bg-warning/20 text-warning' },
-    running: { label: 'Running', cls: 'bg-success/20 text-success' },
-    suspended: { label: 'Suspended', cls: 'bg-warning/20 text-warning' },
-    terminated: { label: 'Terminated', cls: 'bg-danger/20 text-danger' },
+function StateBadge({ state, t }: { state: NodeStatus['state']; t: NodeT }) {
+  const map: Record<NodeStatus['state'], { labelKey: string; cls: string }> = {
+    provisioning: { labelKey: 'status.state.provisioning', cls: 'bg-warning/20 text-warning' },
+    running: { labelKey: 'status.state.running', cls: 'bg-success/20 text-success' },
+    suspended: { labelKey: 'status.state.suspended', cls: 'bg-warning/20 text-warning' },
+    terminated: { labelKey: 'status.state.terminated', cls: 'bg-danger/20 text-danger' },
   }
-  const { label, cls } = map[state]
-  return <span className={`px-2 py-0.5 rounded text-xs font-medium ${cls}`}>{label}</span>
+  const { labelKey, cls } = map[state]
+  return <span className={`px-2 py-0.5 rounded text-xs font-medium ${cls}`}>{t(labelKey)}</span>
 }
 
 /** One-line health summary from node_getStatus. */
-function healthSummary(health: NodeStatus['health']): string {
-  if (health.status === 'unknown') return 'Not yet reporting'
-  if (health.status === 'offline') return 'Unreachable'
-  const h = health.chainHeight != null ? `height ${health.chainHeight}` : 'online'
-  const sync = health.synced ? 'synced' : `${Math.round(health.syncProgress ?? 0)}%`
+function healthSummary(health: NodeStatus['health'], t: NodeT): string {
+  if (health.status === 'unknown') return t('status.health.notReporting')
+  if (health.status === 'offline') return t('status.health.unreachable')
+  const h =
+    health.chainHeight != null
+      ? t('status.health.height', { height: health.chainHeight })
+      : t('status.health.online')
+  const sync = health.synced ? t('status.health.synced') : `${Math.round(health.syncProgress ?? 0)}%`
   return `${h} · ${sync}`
 }
 
@@ -321,6 +314,7 @@ function healthSummary(health: NodeStatus['health']): string {
  * and a "Manage Subscription" button (Stripe Customer Portal).
  */
 export function NodeStatusPage() {
+  const { t } = useTranslation('node')
   const [status, setStatus] = useState<NodeStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -332,7 +326,7 @@ export function NodeStatusPage() {
 
   const load = useCallback(async () => {
     if (!token) {
-      setError('This status link is missing its access token.')
+      setError(t('status.missingToken'))
       setLoading(false)
       return
     }
@@ -341,11 +335,11 @@ export function NodeStatusPage() {
     try {
       setStatus(await fetchNodeStatus(token))
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load your node status.')
+      setError(err instanceof Error ? err.message : t('status.loadError'))
     } finally {
       setLoading(false)
     }
-  }, [token])
+  }, [token, t])
 
   useEffect(() => {
     void load()
@@ -369,7 +363,7 @@ export function NodeStatusPage() {
       const url = await createPortalUrl(token)
       window.location.assign(url)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not open the billing portal.')
+      setError(err instanceof Error ? err.message : t('status.portalError'))
       setPortalBusy(false)
     }
   }
@@ -382,15 +376,15 @@ export function NodeStatusPage() {
             <Server className="text-pulse" size={22} />
           </div>
           <div>
-            <h1 className="font-display text-xl sm:text-2xl font-bold">Your managed node</h1>
-            <p className="text-xs text-ghost">Botho-as-a-Service · testnet</p>
+            <h1 className="font-display text-xl sm:text-2xl font-bold">{t('status.title')}</h1>
+            <p className="text-xs text-ghost">{t('status.subtitle')}</p>
           </div>
         </div>
 
         {loading && (
           <div className="flex items-center gap-2 text-ghost py-8 justify-center">
             <Loader2 className="animate-spin" size={18} />
-            Loading your node…
+            {t('status.loading')}
           </div>
         )}
 
@@ -401,7 +395,7 @@ export function NodeStatusPage() {
               <p>{error}</p>
               {token && (
                 <button onClick={load} className="underline mt-2 text-light">
-                  Try again
+                  {t('status.tryAgain')}
                 </button>
               )}
             </div>
@@ -411,27 +405,27 @@ export function NodeStatusPage() {
         {!loading && status && (
           <div className="flex flex-col gap-5">
             <div className="flex items-center justify-between">
-              <span className="text-sm text-ghost">Status</span>
+              <span className="text-sm text-ghost">{t('status.statusLabel')}</span>
               <div className="flex items-center gap-2">
-                <StateBadge state={status.state} />
-                <span className="text-xs text-ghost">{healthSummary(status.health)}</span>
+                <StateBadge state={status.state} t={t} />
+                <span className="text-xs text-ghost">{healthSummary(status.health, t)}</span>
               </div>
             </div>
 
             <div>
-              <span className="text-sm text-ghost block mb-1.5">RPC endpoint</span>
+              <span className="text-sm text-ghost block mb-1.5">{t('status.rpcLabel')}</span>
               <div className="flex gap-2">
                 <code className="flex-1 px-3 py-2 rounded-lg bg-void border border-steel text-xs sm:text-sm text-light break-all">
                   {status.rpcUrl}
                 </code>
-                <Button size="sm" variant="ghost" onClick={handleCopy} aria-label="Copy RPC URL">
+                <Button size="sm" variant="ghost" onClick={handleCopy} aria-label={t('status.copyRpcAria')}>
                   {copied ? <Check size={16} className="text-success" /> : <Copy size={16} />}
                 </Button>
               </div>
             </div>
 
             <div className="flex items-center justify-between text-sm">
-              <span className="text-ghost">Region</span>
+              <span className="text-ghost">{t('status.regionLabel')}</span>
               <span className="text-light">{status.region}</span>
             </div>
 
@@ -441,7 +435,7 @@ export function NodeStatusPage() {
               <a href={status.walletDeepLink}>
                 <Button size="lg" className="w-full justify-center gap-2">
                   <ExternalLink size={18} />
-                  Open in wallet
+                  {t('status.openInWallet')}
                 </Button>
               </a>
               <Button
@@ -456,7 +450,7 @@ export function NodeStatusPage() {
                 ) : (
                   <CreditCard size={18} />
                 )}
-                Manage subscription
+                {t('status.manageSubscription')}
               </Button>
             </div>
           </div>

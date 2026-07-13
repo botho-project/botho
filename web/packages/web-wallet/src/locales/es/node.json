@@ -1,0 +1,84 @@
+{
+  "region": {
+    "usWest2": "Oeste de EE. UU. (Oregón) — us-west-2",
+    "usEast1": "Este de EE. UU. (Norte de Virginia) — us-east-1",
+    "caCentral1": "Canadá (Montreal) — ca-central-1",
+    "saEast1": "Sudamérica (São Paulo) — sa-east-1",
+    "euCentral1": "Europa (Fráncfort) — eu-central-1",
+    "euWest2": "Europa (Londres) — eu-west-2",
+    "afSouth1": "África (Ciudad del Cabo) — af-south-1",
+    "meSouth1": "Oriente Medio (Baréin) — me-south-1",
+    "apSouth1": "Asia-Pacífico (Bombay) — ap-south-1",
+    "apSoutheast1": "Asia-Pacífico (Singapur) — ap-southeast-1",
+    "apNortheast1": "Asia-Pacífico (Tokio) — ap-northeast-1",
+    "apSoutheast2": "Asia-Pacífico (Sídney) — ap-southeast-2"
+  },
+  "checkout": {
+    "back": "Atrás",
+    "testnetBadge": "Red de pruebas — la facturación funciona en modo de prueba de Stripe",
+    "heroTitle": "Aloja un nodo para tu comunidad",
+    "heroSubtitlePrefix": "Ejecutamos un nodo de Botho siempre activo por ti, sin servidores que gestionar. Tú, y todas las personas que invites, transáis desde la app a través de vuestro propio punto de acceso privado. ",
+    "heroPrice": "$50 al mes.",
+    "valueProp": {
+      "leadStrong": "Tu nodo mina para ti.",
+      "leadBody": " Desde el primer momento mina hacia la dirección que configures, ayudando a proteger la red, y cualquier recompensa va directa a tu monedero. Lo que compras es el alojamiento gestionado: el nodo siempre activo y la experiencia del monedero. ",
+      "clarityStrong": "Para ser claros sobre el valor",
+      "clarityBody": ": las monedas de la red de pruebas no tienen ningún valor real, y las de la red principal fluctúan; las recompensas de minería no son una promesa de ingresos. Los cargos funcionan en modo de prueba de Stripe mientras validamos el servicio."
+    },
+    "cards": {
+      "managedTitle": "Gestionado por nosotros",
+      "managedDesc": "Un nodo siempre activo en la nube: sin AWS, sin SSH, sin mantenimiento.",
+      "hubTitle": "El centro de tu comunidad",
+      "hubDesc": "Un punto de acceso privado por el que transáis tú y todas las personas que invites.",
+      "custodyTitle": "Sin custodia",
+      "custodyDesc": "Las claves permanecen en cada dispositivo. El nodo nunca guarda los fondos de nadie."
+    },
+    "regionLabel": "Región",
+    "optgroupAvailable": "Disponible ahora",
+    "optgroupComingSoon": "Próximamente — dinos dónde quieres alojar",
+    "availableHint": "Tu nodo se aprovisionará aquí en cuanto te suscribas.",
+    "comingSoonHint": "Esta región aún no está activa. Por ahora tu nodo se lanza en {{region}}, y guardamos tu preferencia para ayudarnos a priorizar nuevos centros de datos.",
+    "emailLabel": "Correo electrónico",
+    "emailOptional": "(opcional)",
+    "emailPlaceholder": "tu@ejemplo.com",
+    "emailHint": "Rellena de antemano el pago de Stripe y es donde te enviaremos los detalles de tu nodo. También puedes introducirlo en la siguiente pantalla.",
+    "submitting": "Redirigiendo a Stripe…",
+    "submit": "Suscríbete — $50/mes",
+    "secureNote": "Pago seguro alojado por Stripe. Cancela cuando quieras.",
+    "errorFallback": "Algo salió mal al iniciar el pago. Inténtalo de nuevo."
+  },
+  "success": {
+    "title": "Suscripción iniciada",
+    "body": "¡Gracias! Tu nodo gestionado se está aprovisionando. Te enviaremos por correo un enlace seguro a la página de estado de tu nodo, que muestra tu URL de RPC privada, la salud del nodo y un enlace de un clic para abrirlo en el monedero.",
+    "openWallet": "Abrir el monedero",
+    "backToHome": "Volver al inicio"
+  },
+  "status": {
+    "title": "Tu nodo gestionado",
+    "subtitle": "Botho como servicio · red de pruebas",
+    "loading": "Cargando tu nodo…",
+    "missingToken": "A este enlace de estado le falta su token de acceso.",
+    "loadError": "No se pudo cargar el estado de tu nodo.",
+    "portalError": "No se pudo abrir el portal de facturación.",
+    "tryAgain": "Inténtalo de nuevo",
+    "statusLabel": "Estado",
+    "rpcLabel": "Punto de acceso RPC",
+    "copyRpcAria": "Copiar URL de RPC",
+    "regionLabel": "Región",
+    "openInWallet": "Abrir en el monedero",
+    "manageSubscription": "Gestionar suscripción",
+    "state": {
+      "provisioning": "Aprovisionando",
+      "running": "En ejecución",
+      "suspended": "Suspendido",
+      "terminated": "Terminado"
+    },
+    "health": {
+      "notReporting": "Aún no informa",
+      "unreachable": "Inalcanzable",
+      "online": "en línea",
+      "height": "altura {{height}}",
+      "synced": "sincronizado"
+    }
+  }
+}

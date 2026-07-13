@@ -42,6 +42,8 @@ import enContacts from '../locales/en/contacts.json'
 import esContacts from '../locales/es/contacts.json'
 import enDocs from '../locales/en/docs.json'
 import esDocs from '../locales/es/docs.json'
+import enNode from '../locales/en/node.json'
+import esNode from '../locales/es/node.json'
 
 /**
  * Locale constants live in the dependency-free `./locales` leaf module so build
@@ -89,6 +91,7 @@ const resources = {
     claim: enClaim,
     contacts: enContacts,
     docs: enDocs,
+    node: enNode,
   },
   es: {
     landing: esLanding,
@@ -97,6 +100,7 @@ const resources = {
     claim: esClaim,
     contacts: esContacts,
     docs: esDocs,
+    node: esNode,
   },
 } as const
 
@@ -108,7 +112,7 @@ if (!i18n.isInitialized) {
     fallbackLng: DEFAULT_LOCALE,
     supportedLngs: SUPPORTED_LOCALES as unknown as string[],
     defaultNS: 'landing',
-    ns: ['landing', 'wallet', 'pay', 'claim', 'contacts', 'docs'],
+    ns: ['landing', 'wallet', 'pay', 'claim', 'contacts', 'docs', 'node'],
     interpolation: {
       // React already escapes interpolated values.
       escapeValue: false,

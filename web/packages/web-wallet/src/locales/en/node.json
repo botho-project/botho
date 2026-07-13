@@ -1,0 +1,84 @@
+{
+  "region": {
+    "usWest2": "US West (Oregon) — us-west-2",
+    "usEast1": "US East (N. Virginia) — us-east-1",
+    "caCentral1": "Canada (Montréal) — ca-central-1",
+    "saEast1": "South America (São Paulo) — sa-east-1",
+    "euCentral1": "Europe (Frankfurt) — eu-central-1",
+    "euWest2": "Europe (London) — eu-west-2",
+    "afSouth1": "Africa (Cape Town) — af-south-1",
+    "meSouth1": "Middle East (Bahrain) — me-south-1",
+    "apSouth1": "Asia Pacific (Mumbai) — ap-south-1",
+    "apSoutheast1": "Asia Pacific (Singapore) — ap-southeast-1",
+    "apNortheast1": "Asia Pacific (Tokyo) — ap-northeast-1",
+    "apSoutheast2": "Asia Pacific (Sydney) — ap-southeast-2"
+  },
+  "checkout": {
+    "back": "Back",
+    "testnetBadge": "Testnet — billing runs in Stripe test mode",
+    "heroTitle": "Host a Node for Your Community",
+    "heroSubtitlePrefix": "We run an always-on Botho node for you — no servers to manage. You, and everyone you invite, transact from the app through your own private endpoint. ",
+    "heroPrice": "$50/month.",
+    "valueProp": {
+      "leadStrong": "Your node mines for you.",
+      "leadBody": " Out of the box it mines to the address you configure — helping secure the network, with any rewards going straight to your wallet. What you're buying is the managed hosting: the always-on node and the wallet experience. ",
+      "clarityStrong": "To be clear about value",
+      "clarityBody": ": testnet coins have zero real-world value, and mainnet coins float — mining rewards are not an income promise. Charges run in Stripe test mode while we validate the service."
+    },
+    "cards": {
+      "managedTitle": "Managed for you",
+      "managedDesc": "An always-on node in the cloud — no AWS, no SSH, no upkeep.",
+      "hubTitle": "Your community's hub",
+      "hubDesc": "A private endpoint you and everyone you invite transact through.",
+      "custodyTitle": "Non-custodial",
+      "custodyDesc": "Keys stay on every device. The node never holds anyone's funds."
+    },
+    "regionLabel": "Region",
+    "optgroupAvailable": "Available now",
+    "optgroupComingSoon": "Coming soon — tell us where you want to host",
+    "availableHint": "Your node will be provisioned here once you subscribe.",
+    "comingSoonHint": "This region isn't live yet. Your node launches in {{region}} for now, and your preference is recorded to help us prioritize new datacenters.",
+    "emailLabel": "Email",
+    "emailOptional": "(optional)",
+    "emailPlaceholder": "you@example.com",
+    "emailHint": "Pre-fills Stripe checkout and is where we'll send your node details. You can also enter it on the next screen.",
+    "submitting": "Redirecting to Stripe…",
+    "submit": "Subscribe — $50/mo",
+    "secureNote": "Secure checkout hosted by Stripe. Cancel anytime.",
+    "errorFallback": "Something went wrong starting checkout. Please try again."
+  },
+  "success": {
+    "title": "Subscription started",
+    "body": "Thanks! Your managed node is being provisioned. We'll email you a secure link to your node's status page — it shows your private RPC URL, the node's health, and a one-click link to open it in the wallet.",
+    "openWallet": "Open Wallet",
+    "backToHome": "Back to home"
+  },
+  "status": {
+    "title": "Your managed node",
+    "subtitle": "Botho-as-a-Service · testnet",
+    "loading": "Loading your node…",
+    "missingToken": "This status link is missing its access token.",
+    "loadError": "Could not load your node status.",
+    "portalError": "Could not open the billing portal.",
+    "tryAgain": "Try again",
+    "statusLabel": "Status",
+    "rpcLabel": "RPC endpoint",
+    "copyRpcAria": "Copy RPC URL",
+    "regionLabel": "Region",
+    "openInWallet": "Open in wallet",
+    "manageSubscription": "Manage subscription",
+    "state": {
+      "provisioning": "Provisioning",
+      "running": "Running",
+      "suspended": "Suspended",
+      "terminated": "Terminated"
+    },
+    "health": {
+      "notReporting": "Not yet reporting",
+      "unreachable": "Unreachable",
+      "online": "online",
+      "height": "height {{height}}",
+      "synced": "synced"
+    }
+  }
+}
