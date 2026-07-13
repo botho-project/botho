@@ -2018,6 +2018,7 @@ name = "bth-bridge-core"
 version = "0.3.2"
 dependencies = [
  "chrono",
+ "ed25519-dalek",
  "hex",
  "serde",
  "serde_json",

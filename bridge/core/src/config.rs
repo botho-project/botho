@@ -150,6 +150,22 @@ pub struct EthereumConfig {
     /// Gas price strategy
     #[serde(default)]
     pub gas_price_strategy: GasPriceStrategy,
+
+    /// Hex-encoded 20-byte Ethereum addresses of the mint federation — the
+    /// Gnosis Safe owners (the SCP validators' secp256k1 keys, per
+    /// ADR 0002). Every Ethereum mint attestation must be signed by one of
+    /// these. Empty disables federation attestation for Ethereum mints
+    /// (development only — the engine then uses the dev stub provider).
+    #[serde(default)]
+    pub mint_signers: Vec<String>,
+
+    /// The threshold `t` of distinct federation signatures required to
+    /// authorize an Ethereum wBTH mint (the Safe's own on-chain threshold
+    /// should equal it). Per ADR 0002 this must be no lower than the SCP
+    /// safety threshold in production. Must be >= 1 whenever `mint_signers`
+    /// is non-empty (a zero-threshold federation authorizes nothing).
+    #[serde(default)]
+    pub mint_threshold: u32,
 }
 
 fn default_eth_confirmations() -> u32 {
@@ -171,6 +187,19 @@ pub struct SolanaConfig {
     /// Commitment level
     #[serde(default)]
     pub commitment: SolanaCommitment,
+
+    /// Hex-encoded 32-byte Ed25519 public keys of the mint federation (the
+    /// SCP validators' node keys, per ADR 0002). Every Solana mint
+    /// attestation must be signed by one of these. Empty disables
+    /// federation attestation for Solana mints (development only).
+    #[serde(default)]
+    pub mint_signers: Vec<String>,
+
+    /// The threshold `t` of distinct federation signatures required to
+    /// authorize a Solana wBTH mint. Must be >= 1 whenever `mint_signers`
+    /// is non-empty.
+    #[serde(default)]
+    pub mint_threshold: u32,
 }
 
 /// Bridge-specific settings.
@@ -213,6 +242,24 @@ pub struct BridgeSettings {
     /// Enable testnet mode
     #[serde(default)]
     pub testnet: bool,
+
+    /// Path to this bridge node's Ed25519 attestation signing key (hex,
+    /// 32-byte seed) — its federation identity for BTH releases and Solana
+    /// mints (per ADR 0002, the validator's node key). `None` disables
+    /// local attestation signing.
+    #[serde(default)]
+    pub attestation_ed25519_key_file: Option<String>,
+
+    /// Path to this bridge node's secp256k1 attestation signing key (hex,
+    /// 32 bytes) — its Gnosis Safe owner identity for Ethereum mints.
+    /// `None` disables local Ethereum mint attestation signing.
+    #[serde(default)]
+    pub attestation_secp256k1_key_file: Option<String>,
+
+    /// Path of the persisted attestation nonce store (replay protection
+    /// across restarts). Defaults to `<db_path>.attestation-nonces.json`.
+    #[serde(default)]
+    pub attestation_nonce_file: Option<String>,
 }
 
 fn default_fee_bps() -> u32 {
@@ -308,12 +355,16 @@ impl Default for BridgeConfig {
                 private_key_file: None,
                 confirmations_required: 12,
                 gas_price_strategy: GasPriceStrategy::default(),
+                mint_signers: Vec::new(),
+                mint_threshold: 0,
             },
             solana: SolanaConfig {
                 rpc_url: "http://localhost:8899".to_string(),
                 wbth_program: "11111111111111111111111111111111".to_string(),
                 keypair_file: None,
                 commitment: SolanaCommitment::default(),
+                mint_signers: Vec::new(),
+                mint_threshold: 0,
             },
             bridge: BridgeSettings {
                 mnemonic_file: "bridge_mnemonic.enc".to_string(),
@@ -326,6 +377,9 @@ impl Default for BridgeConfig {
                 order_expiry_minutes: default_order_expiry(),
                 max_retries: default_max_retries(),
                 testnet: false,
+                attestation_ed25519_key_file: None,
+                attestation_secp256k1_key_file: None,
+                attestation_nonce_file: None,
             },
             reserve: ReserveSettings::default(),
         }

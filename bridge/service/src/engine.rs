@@ -9,7 +9,10 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     api,
-    attestation::{AttestationProvider, StubAttestationProvider},
+    attestation::{
+        AttestationProvider, DisabledAttestationProvider, FederationAttestationProvider,
+        StubAttestationProvider,
+    },
     db::Database,
     mint::{ethereum::EthMinter, solana::SolMinter, ConfirmationStatus, Minter},
     release::{bth::BthReleaser, PreparedRelease, ReleaseConfirmation, Releaser},
@@ -84,6 +87,38 @@ impl BridgeEngine {
         }
     }
 
+    /// Build the attestation provider (#824).
+    ///
+    /// - Federation configured and valid → the real
+    ///   [`FederationAttestationProvider`].
+    /// - Federation configured but INVALID → [`DisabledAttestationProvider`]
+    ///   (fail-closed: authorizations error, orders stay retryable). Never
+    ///   silently downgrades to the permissive stub.
+    /// - No federation configured → the development stub.
+    fn build_attestation_provider(config: &BridgeConfig) -> Arc<dyn AttestationProvider> {
+        match FederationAttestationProvider::from_config(config) {
+            Ok(Some(provider)) => {
+                info!("federation attestation provider active (ADR 0002 t-of-n custody)");
+                Arc::new(provider)
+            }
+            Ok(None) => {
+                warn!(
+                    "no attestation federation configured; using the development stub \
+                     provider (threshold 0 — production authorities reject its output)"
+                );
+                Arc::new(StubAttestationProvider)
+            }
+            Err(e) => {
+                error!(
+                    "attestation federation misconfigured: {}; refusing to authorize any \
+                     mint or release until the configuration is fixed",
+                    e
+                );
+                Arc::new(DisabledAttestationProvider::new(e))
+            }
+        }
+    }
+
     /// Run the bridge engine.
     pub async fn run(self) -> Result<(), String> {
         info!("Starting bridge engine");
@@ -130,8 +165,7 @@ impl BridgeEngine {
         // Spawn the order processing loop
         let minters = Self::build_minters(&self.config);
         let releaser = Self::build_releaser(&self.config);
-        // TODO(#824): swap the stub for the validator attestation protocol.
-        let attestation: Arc<dyn AttestationProvider> = Arc::new(StubAttestationProvider);
+        let attestation = Self::build_attestation_provider(&self.config);
         let processor = OrderProcessor::new(
             self.config.clone(),
             self.db.clone(),
@@ -357,6 +391,16 @@ impl OrderProcessor {
             .authorize_mint(order)
             .await
             .map_err(|e| format!("attestation failed: {}", e))?;
+        self.db.log_audit(
+            Some(&order.id),
+            "attestation_authorized",
+            &format!(
+                "action=bridge.mint_wbth chain={} threshold={} signers={}",
+                order.dest_chain,
+                auth.threshold,
+                auth.signatures.len()
+            ),
+        )?;
 
         // Build + sign (no broadcast yet).
         let prepared = minter
@@ -610,6 +654,15 @@ impl OrderProcessor {
             .authorize_release(order)
             .await
             .map_err(|e| format!("attestation failed: {}", e))?;
+        self.db.log_audit(
+            Some(&order.id),
+            "attestation_authorized",
+            &format!(
+                "action=bridge.release_bth threshold={} signers={}",
+                auth.threshold,
+                auth.signatures.len()
+            ),
+        )?;
 
         // Build + threshold-sign (no broadcast yet). Nothing was recorded
         // in the claim, so a failure here (including the #828

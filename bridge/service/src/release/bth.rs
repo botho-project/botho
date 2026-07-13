@@ -198,6 +198,21 @@ impl BthReleaser {
             )));
         }
 
+        // #842: a configured federation with threshold 0 would accept an
+        // authorization carrying ZERO signatures (0 distinct signers >=
+        // threshold 0) — i.e. an enabled releaser that spends the reserve
+        // with no federation authorization at all. Refuse at construction;
+        // burn orders then stay BurnConfirmed like any other misconfig.
+        // (threshold 0 with NO signers remains the documented dev-only
+        // no-pinning mode.)
+        if !federation.is_empty() && config.release_threshold == 0 {
+            return Err(ReleaseError::Config(
+                "release_threshold must be >= 1 when release_signers are configured \
+                 (threshold 0 would authorize reserve spends with no signatures)"
+                    .to_string(),
+            ));
+        }
+
         Ok(Self { config, federation })
     }
 
@@ -529,6 +544,19 @@ mod tests {
             BthReleaser::new(cfg),
             Err(ReleaseError::Config(_))
         ));
+
+        // #842: a configured federation with threshold 0 must be refused —
+        // it would authorize reserve spends with zero signatures.
+        let cfg = test_config(&[&k1, &k2], 0);
+        assert!(matches!(
+            BthReleaser::new(cfg),
+            Err(ReleaseError::Config(_))
+        ));
+
+        // The documented dev-only escape hatch (no signers, threshold 0)
+        // still constructs.
+        let cfg = test_config(&[], 0);
+        assert!(BthReleaser::new(cfg).is_ok());
     }
 
     #[tokio::test]

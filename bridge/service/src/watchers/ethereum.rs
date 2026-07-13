@@ -748,6 +748,8 @@ mod tests {
             private_key_file: None,
             confirmations_required,
             gas_price_strategy: Default::default(),
+            mint_signers: Vec::new(),
+            mint_threshold: 0,
         };
         let (_tx, rx) = broadcast::channel(1);
         (EthereumWatcher::new(config, db.clone(), rx), db)
