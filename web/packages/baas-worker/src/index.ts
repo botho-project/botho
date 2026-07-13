@@ -361,7 +361,12 @@ export async function handleWebhook(
     // acked so Stripe doesn't hammer us — the provisioner is idempotent and the
     // reconciliation cron (SEC #508) is the safety net for stuck work.
     if (handled.action === 'provision' && !handled.outcome.ok) {
-      console.error('webhook: provision failed', handled.subscriptionId, handled.outcome.code)
+      console.error(
+        'webhook: provision failed',
+        handled.subscriptionId,
+        handled.outcome.code,
+        'error' in handled.outcome ? handled.outcome.error : '',
+      )
     } else if (
       handled.action === 'provision' &&
       handled.outcome.ok &&
