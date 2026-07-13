@@ -25,7 +25,10 @@ import {
 import {
   createPortalUrl,
   fetchNodeStatus,
+  fetchSessionStatus,
+  sessionIdFromSearch,
   tokenFromSearch,
+  NodeStatusError,
   type NodeStatus,
 } from '../lib/node-status'
 import { LocaleSwitcher } from '../components/LocaleSwitcher'
@@ -251,14 +254,81 @@ function NodePageShell({ children }: { children: React.ReactNode }) {
   )
 }
 
+/** Delay (ms) between `/session-status` polls while provisioning is pending. */
+const SESSION_POLL_INTERVAL_MS = 3000
+/** Stop polling after this many attempts (~1 min at 3s) — the email is the fallback. */
+const SESSION_POLL_MAX_ATTEMPTS = 20
+
+/** Exchange state for the success page's `session_id` → status-link poll. */
+type SessionExchangeState =
+  | { kind: 'pending' }
+  | { kind: 'ready'; statusUrl: string }
+  | { kind: 'error' }
+  | { kind: 'no-session' }
+
 /**
- * Post-checkout success page (#458 §4). Stripe redirects here after a completed
- * checkout (`/node/success?session_id=...`). Provisioning is asynchronous (the
- * webhook launches the node), so this confirms the subscription and points the
- * user at the live status page once they have their magic link.
+ * Post-checkout success page (#458 §4, #805 part 1). Stripe redirects here after
+ * a completed checkout (`/node/success?session_id=...`). Provisioning is
+ * asynchronous (the webhook launches the node), so this page exchanges the
+ * `session_id` for a magic-link status URL via the control-plane Worker, polling
+ * while provisioning lands and rendering:
+ *   - pending: a spinner while the node comes up,
+ *   - ready:   a "View your node status" link,
+ *   - error:   a fallback if the session can't be confirmed,
+ *   - no-session: the plain confirmation when no `session_id` is present.
  */
 export function NodeSuccessPage() {
   const { t } = useTranslation('node')
+  const sessionId =
+    typeof window !== 'undefined' ? sessionIdFromSearch(window.location.search) : null
+  const [state, setState] = useState<SessionExchangeState>(
+    sessionId ? { kind: 'pending' } : { kind: 'no-session' },
+  )
+
+  useEffect(() => {
+    if (!sessionId) return
+    let cancelled = false
+    let attempts = 0
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    const poll = async () => {
+      attempts += 1
+      try {
+        const result = await fetchSessionStatus(sessionId)
+        if (cancelled) return
+        if (result.kind === 'ready') {
+          setState({ kind: 'ready', statusUrl: result.statusUrl })
+          return
+        }
+        // pending → keep polling until we hit the attempt cap.
+        if (attempts >= SESSION_POLL_MAX_ATTEMPTS) {
+          setState({ kind: 'no-session' })
+          return
+        }
+        timer = setTimeout(() => void poll(), SESSION_POLL_INTERVAL_MS)
+      } catch (err) {
+        if (cancelled) return
+        // A terminal 401 (unknown/expired session) stops polling with an error.
+        if (err instanceof NodeStatusError && err.status === 401) {
+          setState({ kind: 'error' })
+          return
+        }
+        // Transient error: retry until the cap, then fall back to the email note.
+        if (attempts >= SESSION_POLL_MAX_ATTEMPTS) {
+          setState({ kind: 'no-session' })
+          return
+        }
+        timer = setTimeout(() => void poll(), SESSION_POLL_INTERVAL_MS)
+      }
+    }
+
+    void poll()
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [sessionId])
+
   return (
     <NodePageShell>
       <Card className="max-w-md w-full p-6 sm:p-8 text-center">
@@ -269,9 +339,37 @@ export function NodeSuccessPage() {
           {t('success.title')}
         </h1>
         <p className="text-sm sm:text-base text-ghost mb-6">{t('success.body')}</p>
+
+        {state.kind === 'pending' && (
+          <div className="flex items-center justify-center gap-2 text-ghost mb-6">
+            <Loader2 className="animate-spin" size={18} />
+            <span className="text-sm">{t('success.provisioning')}</span>
+          </div>
+        )}
+
+        {state.kind === 'ready' && (
+          <a href={state.statusUrl} className="block mb-6">
+            <Button size="lg" className="w-full justify-center gap-2">
+              <ExternalLink size={18} />
+              {t('success.viewStatus')}
+            </Button>
+          </a>
+        )}
+
+        {state.kind === 'error' && (
+          <div className="mb-6 p-3 rounded-lg bg-warning/10 border border-warning/30 flex gap-2 text-sm text-warning text-left">
+            <AlertCircle size={18} className="shrink-0 mt-0.5" />
+            <span>{t('success.linkError')}</span>
+          </div>
+        )}
+
+        {state.kind === 'no-session' && (
+          <p className="text-sm text-ghost mb-6">{t('success.noSession')}</p>
+        )}
+
         <div className="flex flex-col gap-3">
           <Link to="/wallet">
-            <Button size="lg" className="w-full justify-center">
+            <Button size="lg" variant="ghost" className="w-full justify-center">
               {t('success.openWallet')}
             </Button>
           </Link>

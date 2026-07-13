@@ -49,7 +49,11 @@
   },
   "success": {
     "title": "Subscription started",
-    "body": "Thanks! Your managed node is being provisioned. We'll email you a secure link to your node's status page — it shows your private RPC URL, the node's health, and a one-click link to open it in the wallet.",
+    "body": "Thanks! Your managed node is being provisioned. Use the secure link below to reach your node's status page — it shows your private RPC URL, the node's health, and a one-click link to open it in the wallet.",
+    "provisioning": "Setting up your node… this usually takes a minute.",
+    "viewStatus": "View your node status",
+    "linkError": "We couldn't confirm this checkout. If you just paid, refresh in a moment; otherwise start over from the node page.",
+    "noSession": "Your subscription is being set up. Check your email for a secure link to your node's status page.",
     "openWallet": "Open Wallet",
     "backToHome": "Back to home"
   },

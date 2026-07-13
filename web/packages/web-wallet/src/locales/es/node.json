@@ -49,7 +49,11 @@
   },
   "success": {
     "title": "Suscripción iniciada",
-    "body": "¡Gracias! Tu nodo gestionado se está aprovisionando. Te enviaremos por correo un enlace seguro a la página de estado de tu nodo, que muestra tu URL de RPC privada, la salud del nodo y un enlace de un clic para abrirlo en el monedero.",
+    "body": "¡Gracias! Tu nodo gestionado se está aprovisionando. Usa el enlace seguro de abajo para acceder a la página de estado de tu nodo, que muestra tu URL de RPC privada, la salud del nodo y un enlace de un clic para abrirlo en el monedero.",
+    "provisioning": "Configurando tu nodo… esto suele tardar un minuto.",
+    "viewStatus": "Ver el estado de tu nodo",
+    "linkError": "No pudimos confirmar este pago. Si acabas de pagar, actualiza en un momento; si no, vuelve a empezar desde la página del nodo.",
+    "noSession": "Tu suscripción se está configurando. Revisa tu correo para encontrar un enlace seguro a la página de estado de tu nodo.",
     "openWallet": "Abrir el monedero",
     "backToHome": "Volver al inicio"
   },

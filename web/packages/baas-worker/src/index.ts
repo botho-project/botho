@@ -36,12 +36,14 @@ import {
   verifyStripeSignature,
   type WebhookEnv,
 } from './webhook'
-import { verifyStatusToken } from './status-link'
+import { mintStatusToken, verifyStatusToken } from './status-link'
 import {
   createPortalSession,
   lookupStatusForCustomer,
   StripePortalError,
 } from './status'
+import { exchangeSessionForStatus, buildStatusUrl } from './session-status'
+import { sendStatusLinkEmail, retrieveCustomerEmail } from './resend'
 import { D1NodeStore, type D1Like } from './node-store'
 import { reconcileOnce } from './reconcile'
 import {
@@ -94,6 +96,22 @@ export {
   type StatusResponse,
   type NodeHealth,
 } from './status'
+export {
+  retrieveCheckoutSession,
+  exchangeSessionForStatus,
+  buildStatusUrl,
+  StripeSessionError,
+  type SessionExchange,
+  type RetrievedSession,
+} from './session-status'
+export {
+  sendStatusLinkEmail,
+  retrieveCustomerEmail,
+  buildStatusLinkEmailBody,
+  DEFAULT_STATUS_FROM_ADDRESS,
+  type StatusLinkEmail,
+  type SendResult,
+} from './resend'
 
 /** Env keys used only by the `/status` + `/portal` surface (P6.3). */
 export interface StatusEnv {
@@ -112,6 +130,17 @@ export interface StatusEnv {
    * (e.g. "https://botho.io/node/status"). Worker var.
    */
   PORTAL_RETURN_URL?: string
+  /**
+   * Resend API key for status-link email delivery (#805 part 2). OPTIONAL: when
+   * unset the webhook skips the email entirely (the on-page /node/success link is
+   * the primary path). Worker secret when present, never the repo.
+   */
+  RESEND_API_KEY?: string
+  /**
+   * Verified `botho.io` sender for the status-link email (e.g.
+   * "Botho <nodes@botho.io>"). Worker var; falls back to a default when unset.
+   */
+  RESEND_FROM_ADDRESS?: string
 }
 
 export interface Env
@@ -204,6 +233,52 @@ export async function handleCheckout(
 }
 
 /**
+ * Env-gated status-link email dispatch fired on first successful provision
+ * (#805 part 2). FULLY INERT unless `RESEND_API_KEY` is set — with the key unset
+ * it logs-and-returns, never a 500, never blocking the webhook's ACK to Stripe.
+ *
+ * When enabled it: mints the same HMAC status token from the (verified) customer
+ * id, builds the `/node/status` URL, retrieves the customer's email from Stripe,
+ * and sends via Resend. Any failure (no email on file, Resend error) is logged
+ * and swallowed — provisioning already succeeded, and the on-page /node/success
+ * link is the primary delivery path.
+ */
+export async function dispatchStatusEmail(
+  env: Env,
+  customerId: string,
+  fetchImpl: typeof fetch = boundFetch,
+): Promise<void> {
+  if (!env.RESEND_API_KEY) {
+    // Optional feature: skip silently (the on-page success link still works).
+    return
+  }
+  if (!env.STATUS_LINK_SECRET || !env.WALLET_BASE_URL || !env.STRIPE_SECRET_KEY) {
+    console.warn('resend: status-link email skipped — status/stripe env incomplete')
+    return
+  }
+
+  try {
+    const email = await retrieveCustomerEmail(customerId, env.STRIPE_SECRET_KEY, fetchImpl)
+    if (!email) {
+      console.warn('resend: no email on file for customer, skipping status-link email')
+      return
+    }
+    const token = await mintStatusToken(customerId, env.STATUS_LINK_SECRET)
+    const statusUrl = buildStatusUrl(env.WALLET_BASE_URL, token)
+    const result = await sendStatusLinkEmail(
+      { to: email, statusUrl },
+      { apiKey: env.RESEND_API_KEY, from: env.RESEND_FROM_ADDRESS, fetchImpl },
+    )
+    if (!result.ok) {
+      console.error('resend: status-link email failed', result.status, result.error)
+    }
+  } catch (err) {
+    // Never let email failure affect the webhook ACK.
+    console.error('resend: status-link email dispatch error', err)
+  }
+}
+
+/**
  * Handle POST /webhook — the signature-verified Stripe → provision/deprovision
  * join (P7.2 / #506, #458 §2/§5). Exported for direct unit testing.
  *
@@ -218,7 +293,8 @@ export async function handleCheckout(
  *      subscription_id). Unknown event types are a 2xx no-op.
  *
  * `depsFor` is injectable so tests supply in-memory fakes; in production it
- * defaults to `depsFromEnv(env)` (real EC2/DNS/D1 clients).
+ * defaults to `depsFromEnv(env)` (real EC2/DNS/D1 clients). `notify` is likewise
+ * injectable so tests assert the part-2 status-email dispatch without network I/O.
  *
  * No CORS here: Stripe calls server-to-server, not from a browser.
  */
@@ -226,6 +302,11 @@ export async function handleWebhook(
   request: Request,
   env: Env,
   depsFor: (env: Env) => ReturnType<typeof depsFromEnv> = (e) => depsFromEnv(e),
+  notify: (
+    env: Env,
+    customerId: string,
+    fetchImpl?: typeof fetch,
+  ) => Promise<void> = dispatchStatusEmail,
 ): Promise<Response> {
   if (request.method !== 'POST') {
     return jsonResponse({ error: 'method not allowed' }, 405)
@@ -281,6 +362,15 @@ export async function handleWebhook(
     // reconciliation cron (SEC #508) is the safety net for stuck work.
     if (handled.action === 'provision' && !handled.outcome.ok) {
       console.error('webhook: provision failed', handled.subscriptionId, handled.outcome.code)
+    } else if (
+      handled.action === 'provision' &&
+      handled.outcome.ok &&
+      handled.outcome.created
+    ) {
+      // First successful provision (a fresh D1 insert, never a webhook replay).
+      // Mail the customer their status link (#805 part 2). Fully inert unless
+      // RESEND_API_KEY is set; never throws / blocks the ACK to Stripe.
+      await notify(env, handled.outcome.record.stripeCustomer)
     } else if (handled.action === 'teardown' && !handled.result.ok) {
       console.error('webhook: teardown failed', handled.subscriptionId, handled.result.error)
     }
@@ -370,6 +460,85 @@ export async function handleStatus(
     return jsonResponse(result.status, 200, cors)
   } catch (err) {
     console.error('status: lookup error', err)
+    return jsonResponse({ error: 'internal error' }, 500, cors)
+  }
+}
+
+/**
+ * Handle GET /session-status — the post-checkout `session_id` → status-token
+ * exchange for the success page (#805 part 1, #458 §4).
+ *
+ * The browser lands on `/node/success?session_id=cs_...` after Stripe checkout.
+ * That `session_id` is the only credential the payer's browser holds; we exchange
+ * it server-side for the same signed magic-link the `/status` page uses:
+ *   session_id → Stripe session retrieve → payment_status=paid → customer id
+ *              → mintStatusToken → status URL.
+ *
+ * Provisioning is asynchronous (the webhook writes the D1 row), so the paid-but-
+ * row-absent case returns a distinct `pending` signal (HTTP 202) the frontend
+ * polls on — NOT an error. Exported for direct unit testing.
+ *
+ *   200 -> { status: 'ready', statusUrl } once the node row exists
+ *   202 -> { status: 'pending' } paid, but provisioning hasn't landed yet
+ *   400 -> missing session_id
+ *   401 -> unknown / unpaid / malformed session (generic — no data leak)
+ *   500 -> service not configured
+ *
+ * Unknown, unpaid, and malformed sessions all answer with the SAME generic 401,
+ * mirroring `/status`'s no-leak precedent.
+ */
+export async function handleSessionStatus(
+  request: Request,
+  env: Env,
+  fetchImpl: typeof fetch = boundFetch,
+): Promise<Response> {
+  const origin = request.headers.get('Origin')
+  const cors = corsHeaders(env, origin)
+
+  if (request.method !== 'GET') {
+    return jsonResponse({ error: 'method not allowed' }, 405, cors)
+  }
+
+  // Fail closed if the signing secret / Stripe key / wallet base url are unset —
+  // we need all three to retrieve the session and mint a token.
+  if (!env.STATUS_LINK_SECRET || !env.STRIPE_SECRET_KEY || !env.WALLET_BASE_URL) {
+    console.error('session-status: not configured')
+    return jsonResponse({ error: 'service not configured' }, 500, cors)
+  }
+
+  const url = new URL(request.url)
+  const sessionId = url.searchParams.get('session_id')
+  if (!sessionId) {
+    return jsonResponse({ error: 'session_id is required' }, 400, cors)
+  }
+
+  let store: D1NodeStore
+  try {
+    store = storeFromEnv(env)
+  } catch (err) {
+    console.error('session-status: store unavailable', err)
+    return jsonResponse({ error: 'service not configured' }, 500, cors)
+  }
+
+  try {
+    const result = await exchangeSessionForStatus(sessionId, {
+      stripeSecretKey: env.STRIPE_SECRET_KEY,
+      statusLinkSecret: env.STATUS_LINK_SECRET,
+      walletBaseUrl: env.WALLET_BASE_URL,
+      store,
+      fetchImpl,
+    })
+    if (result.kind === 'ready') {
+      return jsonResponse({ status: 'ready', statusUrl: result.statusUrl }, 200, cors)
+    }
+    if (result.kind === 'pending') {
+      return jsonResponse({ status: 'pending' }, 202, cors)
+    }
+    // Generic 401 — never reveal which check failed or whether a node exists.
+    console.warn('session-status: rejected:', result.reason)
+    return jsonResponse({ error: 'unauthorized' }, 401, cors)
+  } catch (err) {
+    console.error('session-status: exchange error', err)
     return jsonResponse({ error: 'internal error' }, 500, cors)
   }
 }
@@ -504,6 +673,10 @@ export default {
 
     if (url.pathname === '/status') {
       return handleStatus(request, env)
+    }
+
+    if (url.pathname === '/session-status') {
+      return handleSessionStatus(request, env)
     }
 
     if (url.pathname === '/portal') {

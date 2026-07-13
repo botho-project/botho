@@ -32,6 +32,15 @@ WALLET_BASE_URL=http://localhost:5173
 # Where Stripe returns the user after they close the Customer Portal.
 PORTAL_RETURN_URL=http://localhost:5173/node/status
 
+# --- status-link email (#805 part 2, OPTIONAL) ----------------------------
+# Resend API key. When UNSET the worker still works — the /node/success page's
+# on-page status link is the primary delivery path — so this is skip-if-absent,
+# not required. Set it (and verify the botho.io domain in Resend) to also mail
+# the status link on first provision. NEVER commit a real value.
+# RESEND_API_KEY=re_REPLACE_ME
+# Verified sender for the status-link email (only used when RESEND_API_KEY is set).
+RESEND_FROM_ADDRESS=Botho <nodes@botho.io>
+
 # Browser origins allowed to call /checkout, /status, /portal during local dev.
 ALLOWED_ORIGINS=http://localhost:5173
 

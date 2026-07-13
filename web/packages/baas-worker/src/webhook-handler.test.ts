@@ -7,8 +7,8 @@
  * AWS / DNS / D1 is touched.
  */
 
-import { describe, it, expect } from 'vitest'
-import { handleWebhook, type Env } from './index'
+import { describe, it, expect, vi } from 'vitest'
+import { handleWebhook, dispatchStatusEmail, type Env } from './index'
 import { hmacSha256Hex } from './webhook'
 import { FakeDns, FakeEc2, FakeStore } from './test-fakes'
 import type { ProvisionerDeps } from './provisioner'
@@ -223,5 +223,95 @@ describe('handleWebhook', () => {
     const res = await handleWebhook(req, badEnv, depsFor)
     expect(res.status).toBe(500)
     expect(deps.ec2.runCalls).toHaveLength(0)
+  })
+
+  // --- #805 part 2: status-link email dispatch on first provision ----------
+
+  it('fires the status-email notify with the customer id on FIRST provision', async () => {
+    const { depsFor } = makeDeps()
+    const notify = vi.fn(async (_env: Env, _customerId: string) => {})
+    const req = await signedRequest({
+      type: 'checkout.session.completed',
+      data: {
+        object: { subscription: 'sub_notify', customer: 'cus_notify', metadata: { region: 'us-west-2' } },
+      },
+    })
+    const res = await handleWebhook(req, ENV, depsFor, notify)
+    expect(res.status).toBe(200)
+    expect(notify).toHaveBeenCalledTimes(1)
+    expect(notify.mock.calls[0][1]).toBe('cus_notify')
+  })
+
+  it('does NOT fire the notify on a replayed (already-provisioned) delivery', async () => {
+    const { depsFor } = makeDeps()
+    const notify = vi.fn(async (_env: Env, _customerId: string) => {})
+    const event = {
+      type: 'checkout.session.completed',
+      data: {
+        object: { subscription: 'sub_replay', customer: 'cus_replay', metadata: { region: 'us-west-2' } },
+      },
+    }
+    await handleWebhook(await signedRequest(event), ENV, depsFor, notify)
+    await handleWebhook(await signedRequest(event), ENV, depsFor, notify)
+    // Only the first (created) provision triggers an email.
+    expect(notify).toHaveBeenCalledTimes(1)
+  })
+
+  it('the real notify is INERT (no HTTP, webhook still 200s) when RESEND_API_KEY is unset', async () => {
+    const { depsFor } = makeDeps()
+    // No RESEND_API_KEY in ENV → dispatchStatusEmail must skip without any fetch.
+    const emailFetch = vi.fn(async () => new Response('{}', { status: 200 }))
+    const notify = (env: Env, customerId: string) =>
+      dispatchStatusEmail(env, customerId, emailFetch as unknown as typeof fetch)
+    const req = await signedRequest({
+      type: 'checkout.session.completed',
+      data: {
+        object: { subscription: 'sub_off', customer: 'cus_off', metadata: { region: 'us-west-2' } },
+      },
+    })
+    const res = await handleWebhook(req, ENV, depsFor, notify)
+    expect(res.status).toBe(200)
+    expect(emailFetch).not.toHaveBeenCalled()
+  })
+
+  it('the real notify sends via Resend (customer lookup + email) when RESEND_API_KEY is set', async () => {
+    const { depsFor } = makeDeps()
+    // First call = Stripe customer retrieve, second = Resend send.
+    const emailFetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: 'cus_on', email: 'buyer@example.com' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: 're_ok' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+    const gatedEnv: Env = {
+      ...ENV,
+      RESEND_API_KEY: 'rk_test',
+      STATUS_LINK_SECRET: 'status-secret',
+      WALLET_BASE_URL: 'https://botho.io',
+    }
+    const notify = (env: Env, customerId: string) =>
+      dispatchStatusEmail(env, customerId, emailFetch as unknown as typeof fetch)
+    const req = await signedRequest({
+      type: 'checkout.session.completed',
+      data: {
+        object: { subscription: 'sub_on', customer: 'cus_on', metadata: { region: 'us-west-2' } },
+      },
+    })
+    const res = await handleWebhook(req, gatedEnv, depsFor, notify)
+    expect(res.status).toBe(200)
+    // Customer retrieve then Resend send.
+    expect(emailFetch).toHaveBeenCalledTimes(2)
+    const resendCall = emailFetch.mock.calls[1] as unknown as [string, RequestInit]
+    expect(resendCall[0]).toBe('https://api.resend.com/emails')
+    const payload = JSON.parse(resendCall[1].body as string) as { to: string }
+    expect(payload.to).toBe('buyer@example.com')
   })
 })

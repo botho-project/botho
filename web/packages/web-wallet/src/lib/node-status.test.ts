@@ -3,6 +3,8 @@ import {
   NodeStatusError,
   createPortalUrl,
   fetchNodeStatus,
+  fetchSessionStatus,
+  sessionIdFromSearch,
   tokenFromSearch,
   type NodeStatus,
 } from './node-status'
@@ -66,6 +68,52 @@ describe('fetchNodeStatus', () => {
     })
     await expect(
       fetchNodeStatus('cus_A.1.sig', fetchMock as unknown as typeof fetch),
+    ).rejects.toBeInstanceOf(NodeStatusError)
+  })
+})
+
+describe('sessionIdFromSearch', () => {
+  it('extracts the session_id param', () => {
+    expect(sessionIdFromSearch('?session_id=cs_test_abc')).toBe('cs_test_abc')
+  })
+  it('returns null when absent or empty', () => {
+    expect(sessionIdFromSearch('')).toBeNull()
+    expect(sessionIdFromSearch('?token=x')).toBeNull()
+    expect(sessionIdFromSearch('?session_id=')).toBeNull()
+  })
+})
+
+describe('fetchSessionStatus', () => {
+  it('GETs /session-status?session_id= and returns a ready status URL on 200', async () => {
+    const fetchMock = vi.fn(async () =>
+      okResponse({ status: 'ready', statusUrl: 'https://botho.io/node/status?token=t' }),
+    )
+    const result = await fetchSessionStatus('cs_test_abc', fetchMock as unknown as typeof fetch)
+    expect(result).toEqual({ kind: 'ready', statusUrl: 'https://botho.io/node/status?token=t' })
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toMatch(/\/session-status\?session_id=cs_test_abc$/)
+    expect(init.method).toBe('GET')
+  })
+
+  it('maps a 202 to a pending result (keep polling)', async () => {
+    const fetchMock = vi.fn(async () => okResponse({ status: 'pending' }, 202))
+    const result = await fetchSessionStatus('cs_test_abc', fetchMock as unknown as typeof fetch)
+    expect(result).toEqual({ kind: 'pending' })
+  })
+
+  it('throws a terminal 401 for an unknown/unpaid session (stop polling)', async () => {
+    const fetchMock = vi.fn(async () => okResponse({ error: 'unauthorized' }, 401))
+    await expect(
+      fetchSessionStatus('cs_bad', fetchMock as unknown as typeof fetch),
+    ).rejects.toMatchObject({ status: 401 })
+  })
+
+  it('throws NodeStatusError when the network is unreachable', async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error('network down')
+    })
+    await expect(
+      fetchSessionStatus('cs_test_abc', fetchMock as unknown as typeof fetch),
     ).rejects.toBeInstanceOf(NodeStatusError)
   })
 })
