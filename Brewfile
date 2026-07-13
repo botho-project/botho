@@ -1,6 +1,3 @@
 # Build dependencies
-brew 'cmake'
-brew 'go' unless system "go version"
-brew 'pkg-config'
-brew 'protobuf'
-brew 'openssl@1.1'
+brew 'cmake'         # RandomX (vendor/randomx-rs) — builds RandomX C++ lib at compile time
+brew 'pkg-config'    # Tauri desktop crate (web/packages/desktop/src-tauri) native deps

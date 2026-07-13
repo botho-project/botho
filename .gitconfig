@@ -1,3 +1,0 @@
-[merge "theirs"]
-	name = "Always accept theirs"
-	driver = "cp -f %B %A"
