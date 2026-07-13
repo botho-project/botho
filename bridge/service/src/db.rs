@@ -159,6 +159,49 @@ pub struct ReserveSnapshot {
     /// `in_tolerance` AND the on-Botho reserve balance covered the ledger
     /// (when checkable). The dashboard's red/green peg state.
     pub peg_healthy: bool,
+    /// Whether the on-Botho reserve balance custody leg was actually
+    /// checked this pass (#846: consumers must be able to distinguish
+    /// "custody checked OK" from "custody never checked").
+    pub reserve_balance_checked: bool,
+}
+
+/// Outcome of an atomic rate-limit reservation
+/// ([`Database::check_and_reserve_limits`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LimitCheck {
+    /// The order's volume was reserved against the daily windows.
+    Reserved,
+    /// A reservation for this order already exists (crash/tick replay) —
+    /// the volume was counted exactly once.
+    AlreadyReserved,
+    /// The order violates a limit and must not proceed this window.
+    Rejected(LimitViolation),
+}
+
+/// Which limit a rejected order violated.
+// The shared `Cap` postfix is the point: each variant names WHICH cap.
+#[allow(clippy::enum_variant_names)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LimitViolation {
+    /// `amount > max_order_amount`: can never pass — permanent for this
+    /// order.
+    PerOrderCap,
+    /// The counterparty address's daily volume window is exhausted;
+    /// retryable next window.
+    AddressDailyCap,
+    /// The bridge-wide daily volume window is exhausted; retryable next
+    /// window (and an anomaly signal — callers trip the circuit breaker).
+    GlobalDailyCap,
+}
+
+impl std::fmt::Display for LimitViolation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LimitViolation::PerOrderCap => write!(f, "per-order amount cap"),
+            LimitViolation::AddressDailyCap => write!(f, "per-address daily volume cap"),
+            LimitViolation::GlobalDailyCap => write!(f, "global daily volume cap"),
+        }
+    }
 }
 
 /// Database wrapper for thread-safe access.
@@ -313,6 +356,35 @@ impl Database {
 
             CREATE INDEX IF NOT EXISTS idx_reserve_snapshots_taken
                 ON reserve_snapshots(taken_at);
+
+            CREATE TABLE IF NOT EXISTS bridge_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                paused INTEGER NOT NULL DEFAULT 0,
+                paused_reason TEXT,
+                paused_at INTEGER
+            );
+
+            INSERT OR IGNORE INTO bridge_state (id, paused) VALUES (1, 0);
+
+            CREATE TABLE IF NOT EXISTS limit_reservations (
+                order_id TEXT PRIMARY KEY REFERENCES bridge_orders(id),
+                address TEXT NOT NULL,
+                amount INTEGER NOT NULL,
+                day_bucket INTEGER NOT NULL,
+                created_at INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_limit_res_addr
+                ON limit_reservations(address, day_bucket);
+            CREATE INDEX IF NOT EXISTS idx_limit_res_day
+                ON limit_reservations(day_bucket);
+
+            CREATE TABLE IF NOT EXISTS component_health (
+                component TEXT PRIMARY KEY,
+                healthy INTEGER NOT NULL,
+                detail TEXT,
+                updated_at INTEGER NOT NULL
+            );
             "#,
         )
         .map_err(|e| format!("Migration failed: {}", e))?;
@@ -322,6 +394,14 @@ impl Database {
         // databases, so guard each with a pragma check.
         Self::ensure_column(&conn, "bridge_orders", "mint_authorization", "TEXT")?;
         Self::ensure_column(&conn, "bridge_orders", "dest_confirmed_at", "INTEGER")?;
+        // #846: persist whether the custody leg was checked, so the proof
+        // API can distinguish "checked OK" from "never checked".
+        Self::ensure_column(
+            &conn,
+            "reserve_snapshots",
+            "reserve_balance_checked",
+            "INTEGER",
+        )?;
 
         Ok(())
     }
@@ -450,14 +530,44 @@ impl Database {
         Ok(orders)
     }
 
-    /// Update order status.
+    /// Update order status, enforcing the state machine at the DB layer
+    /// (#839).
+    ///
+    /// The current status is read and validated inside the same
+    /// transaction: the write is rejected unless
+    /// [`OrderStatus::can_transition_to`] allows the edge. A same-status
+    /// write is treated as an idempotent refresh (replayed ticks may
+    /// re-assert a status, optionally updating the tx hash), never as a
+    /// transition. No writer can bypass the state machine or clobber a
+    /// terminal state through this path.
     pub fn update_order_status(
         &self,
         id: &Uuid,
         status: &OrderStatus,
         tx_hash: Option<&str>,
     ) -> Result<(), String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| format!("Transaction failed: {}", e))?;
+
+        let (current_str, current_err): (String, Option<String>) = tx
+            .query_row(
+                "SELECT status, error_message FROM bridge_orders WHERE id = ?1",
+                params![id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|e| format!("Order {} not found for status update: {}", id, e))?;
+        let current = parse_status(&current_str, current_err);
+
+        let same_status = std::mem::discriminant(&current) == std::mem::discriminant(status);
+        if !same_status && !current.can_transition_to(status) {
+            return Err(format!(
+                "illegal order status transition for {}: {} -> {}",
+                id, current, status
+            ));
+        }
 
         let now = Utc::now().timestamp();
         let status_str = status.to_string();
@@ -468,7 +578,7 @@ impl Database {
 
         if let Some(hash) = tx_hash {
             // Update with transaction hash
-            conn.execute(
+            tx.execute(
                 r#"
                 UPDATE bridge_orders
                 SET status = ?1, dest_tx = ?2, error_message = ?3, updated_at = ?4
@@ -478,7 +588,7 @@ impl Database {
             )
             .map_err(|e| format!("Update failed: {}", e))?;
         } else {
-            conn.execute(
+            tx.execute(
                 r#"
                 UPDATE bridge_orders
                 SET status = ?1, error_message = ?2, updated_at = ?3
@@ -489,7 +599,7 @@ impl Database {
             .map_err(|e| format!("Update failed: {}", e))?;
         }
 
-        Ok(())
+        tx.commit().map_err(|e| format!("Commit failed: {}", e))
     }
 
     /// Check if a deposit has been processed.
@@ -1180,25 +1290,159 @@ impl Database {
         .map_err(|e| format!("Update failed: {}", e))
     }
 
-    /// Unlock the locked output(s) recorded by `order_id` (a mint that
-    /// failed after its deposit was locked: the funds sit in the bridge
-    /// address but no longer back wrapped supply — they are owed back to
-    /// the depositor). Returns whether anything was unlocked.
-    pub fn unlock_outputs_for_order(&self, order_id: &Uuid) -> Result<bool, String> {
-        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+    /// Unlock `net_amount` of backing for a mint that failed after its
+    /// deposit was locked: the funds sit in the bridge address but no
+    /// longer back wrapped supply — they are owed back to the depositor.
+    ///
+    /// Value-based (#846): the order's own locked `dep:` output is
+    /// unlocked first, but if a release's FIFO spend already consumed it
+    /// (its residual value now lives in a `chg:` output attributed to the
+    /// release), the remainder is unlocked by VALUE from the chain's
+    /// locked outputs FIFO — mirroring [`Database::apply_release_spend`],
+    /// change semantics included — so the ledger never permanently
+    /// overcounts by the failed mint's amount.
+    ///
+    /// Exactly-once by attribution: a replay finds outputs already
+    /// unlocked with `spent_order_id == order_id` and returns `Ok(false)`.
+    /// Fails (rolling back) if the locked reserve cannot cover the
+    /// amount — an invariant violation the caller must surface.
+    pub fn unlock_backing_for_order(
+        &self,
+        order_id: &Uuid,
+        chain: Chain,
+        net_amount: u64,
+    ) -> Result<bool, String> {
+        let mut conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
 
-        let changed = conn
-            .execute(
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| format!("Transaction failed: {}", e))?;
+
+        // Idempotency: any output already attributed to this failed mint
+        // means the unlock was already applied.
+        let already: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM reserve_ledger WHERE spent_order_id = ?1",
+                params![order_id.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Query failed: {}", e))?;
+        if already > 0 {
+            return Ok(false);
+        }
+
+        let now = Utc::now().timestamp();
+        let mut remaining = net_amount as u128;
+
+        // Pass 1: the order's own locked outputs (the common case — the
+        // `dep:` output is untouched and matches the net amount exactly).
+        let own: Vec<(String, u64)> = Self::locked_rows(
+            &tx,
+            r#"
+            SELECT bridge_output_id, amount_picocredits FROM reserve_ledger
+            WHERE order_id = ?1 AND locked = 1
+            ORDER BY created_at ASC, rowid ASC
+            "#,
+            params![order_id.to_string()],
+        )?;
+        for (output_id, output_amount) in own {
+            tx.execute(
                 r#"
                 UPDATE reserve_ledger
                 SET locked = 0, spent_order_id = ?1, spent_at = ?2
-                WHERE order_id = ?1 AND locked = 1
+                WHERE bridge_output_id = ?3 AND locked = 1
                 "#,
-                params![order_id.to_string(), Utc::now().timestamp()],
+                params![order_id.to_string(), now, output_id],
             )
             .map_err(|e| format!("Update failed: {}", e))?;
+            remaining = remaining.saturating_sub(output_amount as u128);
+        }
 
-        Ok(changed > 0)
+        // Pass 2: FIFO by value over the chain's other locked outputs
+        // (the failed mint's own output was consumed by a release spend
+        // and its value carried into change).
+        if remaining > 0 {
+            let rows: Vec<(String, u64)> = Self::locked_rows(
+                &tx,
+                r#"
+                SELECT bridge_output_id, amount_picocredits FROM reserve_ledger
+                WHERE chain = ?1 AND locked = 1
+                ORDER BY created_at ASC, rowid ASC
+                "#,
+                params![chain.to_string()],
+            )?;
+
+            for (output_id, output_amount) in rows {
+                if remaining == 0 {
+                    break;
+                }
+                tx.execute(
+                    r#"
+                    UPDATE reserve_ledger
+                    SET locked = 0, spent_order_id = ?1, spent_at = ?2
+                    WHERE bridge_output_id = ?3 AND locked = 1
+                    "#,
+                    params![order_id.to_string(), now, output_id],
+                )
+                .map_err(|e| format!("Update failed: {}", e))?;
+
+                let output_amount = output_amount as u128;
+                if output_amount >= remaining {
+                    let change = output_amount - remaining;
+                    remaining = 0;
+                    if change > 0 {
+                        tx.execute(
+                            r#"
+                            INSERT INTO reserve_ledger (
+                                bridge_output_id, chain, amount_picocredits, locked,
+                                order_id, spent_order_id, created_at, spent_at
+                            ) VALUES (?1, ?2, ?3, 1, ?4, NULL, ?5, NULL)
+                            "#,
+                            params![
+                                format!("chg:{}", order_id),
+                                chain.to_string(),
+                                change as i64,
+                                order_id.to_string(),
+                                now,
+                            ],
+                        )
+                        .map_err(|e| format!("Insert change failed: {}", e))?;
+                    }
+                } else {
+                    remaining -= output_amount;
+                }
+            }
+        }
+
+        if remaining > 0 {
+            // Dropping the transaction rolls everything back.
+            return Err(format!(
+                "insufficient locked reserve on {}: short {} picocredits unlocking failed mint {}",
+                chain, remaining, order_id
+            ));
+        }
+
+        tx.commit().map_err(|e| format!("Commit failed: {}", e))?;
+        Ok(true)
+    }
+
+    /// Collect `(bridge_output_id, amount)` rows for a locked-output query.
+    fn locked_rows(
+        conn: &Connection,
+        sql: &str,
+        args: impl rusqlite::Params,
+    ) -> Result<Vec<(String, u64)>, String> {
+        let mut stmt = conn
+            .prepare(sql)
+            .map_err(|e| format!("Prepare failed: {}", e))?;
+        let rows = stmt
+            .query_map(args, |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+            })
+            .map_err(|e| format!("Query failed: {}", e))?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| format!("Collect failed: {}", e))?;
+        Ok(rows)
     }
 
     /// Apply a confirmed release to the reserve ledger: spend locked
@@ -1430,8 +1674,8 @@ impl Database {
             r#"
             INSERT INTO reserve_snapshots (
                 taken_at, locked_reserve, eth_supply, sol_supply,
-                drift, in_tolerance, peg_healthy
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                drift, in_tolerance, peg_healthy, reserve_balance_checked
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
             "#,
             params![
                 snapshot.taken_at,
@@ -1441,11 +1685,31 @@ impl Database {
                 snapshot.drift,
                 snapshot.in_tolerance as i64,
                 snapshot.peg_healthy as i64,
+                snapshot.reserve_balance_checked as i64,
             ],
         )
         .map_err(|e| format!("Insert failed: {}", e))?;
 
         Ok(())
+    }
+
+    /// Delete reconciliation snapshots older than `retain_secs`, always
+    /// keeping the most recent row (#846: the tables are otherwise
+    /// unbounded — one row per pass, ~525k rows/yr at the default 60s
+    /// cadence). Returns the number of pruned rows.
+    pub fn prune_reserve_snapshots(&self, retain_secs: i64) -> Result<usize, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let cutoff = Utc::now().timestamp() - retain_secs;
+
+        conn.execute(
+            r#"
+            DELETE FROM reserve_snapshots
+            WHERE taken_at < ?1
+              AND id != (SELECT MAX(id) FROM reserve_snapshots)
+            "#,
+            params![cutoff],
+        )
+        .map_err(|e| format!("Prune failed: {}", e))
     }
 
     /// Latest reconciliation snapshot, if any pass has run.
@@ -1456,7 +1720,8 @@ impl Database {
             .prepare(
                 r#"
                 SELECT taken_at, locked_reserve, eth_supply, sol_supply,
-                       drift, in_tolerance, peg_healthy
+                       drift, in_tolerance, peg_healthy,
+                       COALESCE(reserve_balance_checked, 0)
                 FROM reserve_snapshots ORDER BY id DESC LIMIT 1
                 "#,
             )
@@ -1471,10 +1736,314 @@ impl Database {
                 drift: row.get(4)?,
                 in_tolerance: row.get::<_, i64>(5)? != 0,
                 peg_healthy: row.get::<_, i64>(6)? != 0,
+                reserve_balance_checked: row.get::<_, i64>(7)? != 0,
             })
         })
         .optional()
         .map_err(|e| format!("Query failed: {}", e))
+    }
+
+    // === Circuit breaker (bridge_state singleton) ===
+
+    /// Whether the bridge is paused. Returns the pause reason when paused.
+    pub fn is_paused(&self) -> Result<Option<String>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        conn.query_row(
+            "SELECT paused, paused_reason FROM bridge_state WHERE id = 1",
+            [],
+            |row| {
+                let paused: i64 = row.get(0)?;
+                let reason: Option<String> = row.get(1)?;
+                Ok((paused != 0)
+                    .then(|| reason.unwrap_or_else(|| "paused (no reason recorded)".to_string())))
+            },
+        )
+        .map_err(|e| format!("Query failed: {}", e))
+    }
+
+    /// Set the global pause flag (the circuit breaker / kill switch).
+    ///
+    /// Returns whether the state CHANGED — callers audit-log the trip
+    /// exactly once, so an already-tripped breaker is not re-audited every
+    /// tick.
+    pub fn set_paused(&self, paused: bool, reason: Option<&str>) -> Result<bool, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let changed = conn
+            .execute(
+                r#"
+                UPDATE bridge_state
+                SET paused = ?1, paused_reason = ?2, paused_at = ?3
+                WHERE id = 1 AND paused != ?1
+                "#,
+                params![
+                    paused as i64,
+                    if paused { reason } else { None },
+                    if paused {
+                        Some(Utc::now().timestamp())
+                    } else {
+                        None
+                    },
+                ],
+            )
+            .map_err(|e| format!("Update failed: {}", e))?;
+
+        Ok(changed > 0)
+    }
+
+    // === Rate limits (per-order cap + daily rolling windows) ===
+
+    /// Atomically check and reserve an order's volume against the limits,
+    /// exactly once per order.
+    ///
+    /// In a single `BEGIN IMMEDIATE` transaction: an existing reservation
+    /// for `order_id` short-circuits to [`LimitCheck::AlreadyReserved`]
+    /// (a crashed or replayed tick never double-counts); otherwise the
+    /// per-order cap, the address's daily window, and the global daily
+    /// window are checked and — only if all pass — the volume is reserved
+    /// against the current UTC day bucket. A limit of 0 disables that
+    /// check. `Rejected` reserves nothing.
+    #[allow(clippy::too_many_arguments)]
+    pub fn check_and_reserve_limits(
+        &self,
+        order_id: &Uuid,
+        address: &str,
+        amount: u64,
+        max_order_amount: u64,
+        daily_limit_per_address: u64,
+        global_daily_limit: u64,
+        now: i64,
+    ) -> Result<LimitCheck, String> {
+        let mut conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| format!("Transaction failed: {}", e))?;
+
+        let existing: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM limit_reservations WHERE order_id = ?1",
+                params![order_id.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Query failed: {}", e))?;
+        if existing > 0 {
+            return Ok(LimitCheck::AlreadyReserved);
+        }
+
+        if max_order_amount > 0 && amount > max_order_amount {
+            return Ok(LimitCheck::Rejected(LimitViolation::PerOrderCap));
+        }
+
+        let day_bucket = now.div_euclid(86_400);
+
+        if daily_limit_per_address > 0 {
+            let addr_volume: i64 = tx
+                .query_row(
+                    r#"
+                    SELECT COALESCE(SUM(amount), 0) FROM limit_reservations
+                    WHERE address = ?1 AND day_bucket = ?2
+                    "#,
+                    params![address, day_bucket],
+                    |row| row.get(0),
+                )
+                .map_err(|e| format!("Query failed: {}", e))?;
+            if (addr_volume.max(0) as u128).saturating_add(amount as u128)
+                > daily_limit_per_address as u128
+            {
+                return Ok(LimitCheck::Rejected(LimitViolation::AddressDailyCap));
+            }
+        }
+
+        if global_daily_limit > 0 {
+            let global_volume: i64 = tx
+                .query_row(
+                    r#"
+                    SELECT COALESCE(SUM(amount), 0) FROM limit_reservations
+                    WHERE day_bucket = ?1
+                    "#,
+                    params![day_bucket],
+                    |row| row.get(0),
+                )
+                .map_err(|e| format!("Query failed: {}", e))?;
+            if (global_volume.max(0) as u128).saturating_add(amount as u128)
+                > global_daily_limit as u128
+            {
+                return Ok(LimitCheck::Rejected(LimitViolation::GlobalDailyCap));
+            }
+        }
+
+        tx.execute(
+            r#"
+            INSERT INTO limit_reservations (order_id, address, amount, day_bucket, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            "#,
+            params![
+                order_id.to_string(),
+                address,
+                amount as i64,
+                day_bucket,
+                now
+            ],
+        )
+        .map_err(|e| format!("Insert failed: {}", e))?;
+
+        tx.commit().map_err(|e| format!("Commit failed: {}", e))?;
+        Ok(LimitCheck::Reserved)
+    }
+
+    /// Total volume reserved against the daily window containing `now`
+    /// (monitoring / anomaly detection).
+    pub fn daily_reserved_volume(&self, now: i64) -> Result<u64, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let volume: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(amount), 0) FROM limit_reservations WHERE day_bucket = ?1",
+                params![now.div_euclid(86_400)],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Query failed: {}", e))?;
+        Ok(volume.max(0) as u64)
+    }
+
+    // === Monitoring queries (#827) ===
+
+    /// Order counts grouped by status (`failed: <reason>` variants are
+    /// folded into a single `failed` bucket).
+    pub fn order_status_counts(&self) -> Result<Vec<(String, i64)>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT CASE WHEN status LIKE 'failed%' THEN 'failed' ELSE status END AS bucket,
+                       COUNT(*)
+                FROM bridge_orders GROUP BY bucket ORDER BY bucket
+                "#,
+            )
+            .map_err(|e| format!("Prepare failed: {}", e))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|e| format!("Query failed: {}", e))?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| format!("Collect failed: {}", e))?;
+        Ok(rows)
+    }
+
+    /// Number of orders the engine still has to act on (the backlog the
+    /// circuit breaker trips on).
+    pub fn actionable_backlog(&self) -> Result<u64, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let count: i64 = conn
+            .query_row(
+                r#"
+                SELECT COUNT(*) FROM bridge_orders
+                WHERE status IN ('deposit_confirmed', 'mint_pending',
+                                 'burn_confirmed', 'release_pending')
+                "#,
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Query failed: {}", e))?;
+        Ok(count.max(0) as u64)
+    }
+
+    /// Orders past the settlement stages that have not advanced within
+    /// `older_than_secs` — stuck orders needing operator attention. Covers
+    /// every non-terminal status past `awaiting_deposit` (which expires
+    /// instead: no funds have moved yet).
+    pub fn stuck_orders(&self, older_than_secs: i64) -> Result<Vec<BridgeOrder>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let cutoff = Utc::now().timestamp() - older_than_secs;
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT id, order_type, source_chain, dest_chain, amount, fee,
+                       source_tx, dest_tx, source_address, dest_address,
+                       status, error_message, memo, mint_authorization,
+                       dest_confirmed_at, created_at, updated_at
+                FROM bridge_orders
+                WHERE status IN ('deposit_detected', 'deposit_confirmed', 'mint_pending',
+                                 'burn_detected', 'burn_confirmed', 'release_pending')
+                  AND updated_at < ?1
+                ORDER BY updated_at ASC
+                "#,
+            )
+            .map_err(|e| format!("Prepare failed: {}", e))?;
+
+        let rows = stmt
+            .query_map(params![cutoff], Self::row_to_order)
+            .map_err(|e| format!("Query failed: {}", e))?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| format!("Collect failed: {}", e))?;
+        Ok(rows)
+    }
+
+    /// Whether an audit entry with this action exists for the order
+    /// (used to emit alerts exactly once per order).
+    pub fn has_audit_for_order(&self, order_id: &Uuid, action: &str) -> Result<bool, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM audit_log WHERE order_id = ?1 AND action = ?2",
+                params![order_id.to_string(), action],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Query failed: {}", e))?;
+        Ok(count > 0)
+    }
+
+    // === Component health (signer / minter / releaser availability) ===
+
+    /// Record a component's availability (engine startup + runtime checks).
+    pub fn set_component_health(
+        &self,
+        component: &str,
+        healthy: bool,
+        detail: &str,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        conn.execute(
+            r#"
+            INSERT OR REPLACE INTO component_health (component, healthy, detail, updated_at)
+            VALUES (?1, ?2, ?3, ?4)
+            "#,
+            params![component, healthy as i64, detail, Utc::now().timestamp()],
+        )
+        .map_err(|e| format!("Insert failed: {}", e))?;
+
+        Ok(())
+    }
+
+    /// All recorded component health rows: `(component, healthy, detail)`.
+    pub fn component_health(&self) -> Result<Vec<(String, bool, String)>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let mut stmt = conn
+            .prepare("SELECT component, healthy, detail FROM component_health ORDER BY component")
+            .map_err(|e| format!("Prepare failed: {}", e))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)? != 0,
+                    row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                ))
+            })
+            .map_err(|e| format!("Query failed: {}", e))?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| format!("Collect failed: {}", e))?;
+        Ok(rows)
     }
 
     /// Log an audit event.
@@ -1622,12 +2191,81 @@ mod tests {
         assert_eq!(retrieved.id, order.id);
         assert_eq!(retrieved.amount, order.amount);
 
-        // Update status
-        db.update_order_status(&order.id, &OrderStatus::DepositConfirmed, None)
+        // Update status along a legal edge.
+        db.update_order_status(&order.id, &OrderStatus::DepositDetected, None)
             .unwrap();
 
         let updated = db.get_order(&order.id).unwrap().unwrap();
-        assert_eq!(updated.status, OrderStatus::DepositConfirmed);
+        assert_eq!(updated.status, OrderStatus::DepositDetected);
+    }
+
+    #[test]
+    fn test_update_order_status_enforces_state_machine() {
+        // #839: the DB layer itself rejects illegal transitions, so no
+        // future writer can bypass the state machine.
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+
+        let order = BridgeOrder::new_mint(
+            Chain::Ethereum,
+            1_000_000_000_000,
+            0,
+            "bth_addr".to_string(),
+            "0x1234567890abcdef1234567890abcdef12345678".to_string(),
+        );
+        db.insert_order(&order).unwrap();
+
+        // Illegal jump: AwaitingDeposit -> Completed.
+        let err = db
+            .update_order_status(&order.id, &OrderStatus::Completed, None)
+            .unwrap_err();
+        assert!(err.contains("illegal order status transition"), "{}", err);
+        assert_eq!(
+            db.get_order(&order.id).unwrap().unwrap().status,
+            OrderStatus::AwaitingDeposit
+        );
+
+        // Terminal states are frozen even through the raw update path.
+        db.update_order_status(&order.id, &OrderStatus::Expired, None)
+            .unwrap();
+        assert!(db
+            .update_order_status(&order.id, &OrderStatus::DepositDetected, None)
+            .is_err());
+        assert!(db
+            .update_order_status(
+                &order.id,
+                &OrderStatus::Failed {
+                    reason: "cannot clobber terminal".to_string()
+                },
+                None
+            )
+            .is_err());
+        assert_eq!(
+            db.get_order(&order.id).unwrap().unwrap().status,
+            OrderStatus::Expired
+        );
+
+        // Unknown order id is an error, not a silent no-op.
+        assert!(db
+            .update_order_status(&Uuid::new_v4(), &OrderStatus::Expired, None)
+            .is_err());
+    }
+
+    #[test]
+    fn test_update_order_status_same_status_is_idempotent_refresh() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let order = setup_mint_order(&db);
+
+        db.update_order_status(&order.id, &OrderStatus::MintPending, Some("0xtx"))
+            .unwrap();
+        // A replayed tick re-asserting the same status must not error.
+        db.update_order_status(&order.id, &OrderStatus::MintPending, Some("0xtx"))
+            .unwrap();
+        assert_eq!(
+            db.get_order(&order.id).unwrap().unwrap().status,
+            OrderStatus::MintPending
+        );
     }
 
     #[test]
@@ -2151,7 +2789,7 @@ mod tests {
     }
 
     #[test]
-    fn test_unlock_outputs_for_failed_mint() {
+    fn test_unlock_backing_for_failed_mint() {
         let db = reserve_db();
         let mint = Uuid::new_v4();
 
@@ -2159,10 +2797,250 @@ mod tests {
             .unwrap();
         assert_eq!(db.locked_reserve_total().unwrap(), 500);
 
-        assert!(db.unlock_outputs_for_order(&mint).unwrap());
+        assert!(db
+            .unlock_backing_for_order(&mint, Chain::Ethereum, 500)
+            .unwrap());
         assert_eq!(db.locked_reserve_total().unwrap(), 0);
         // Idempotent.
-        assert!(!db.unlock_outputs_for_order(&mint).unwrap());
+        assert!(!db
+            .unlock_backing_for_order(&mint, Chain::Ethereum, 500)
+            .unwrap());
+    }
+
+    #[test]
+    fn test_unlock_backing_by_value_after_fifo_consumed_dep_output() {
+        // #846 item 1: a release's FIFO spend consumed the failed mint's
+        // dep: output (its residual value lives in a chg: output). The
+        // unlock must still remove the failed mint's net amount from the
+        // locked ledger — by value — or the ledger overcounts forever.
+        let db = reserve_db();
+        let failed_mint = Uuid::new_v4();
+        let other_mint = Uuid::new_v4();
+        let release = Uuid::new_v4();
+
+        // FIFO order: the failed mint's output first (600), then another
+        // deposit (1_000).
+        db.record_locked_output(
+            &format!("dep:{}", failed_mint),
+            Chain::Ethereum,
+            600,
+            &failed_mint,
+        )
+        .unwrap();
+        db.record_locked_output(
+            &format!("dep:{}", other_mint),
+            Chain::Ethereum,
+            1_000,
+            &other_mint,
+        )
+        .unwrap();
+
+        // A release spends 700: consumes the failed mint's 600 entirely +
+        // 100 of the other output, change 900 attributed to the release.
+        assert!(db
+            .apply_release_spend(&release, Chain::Ethereum, 700)
+            .unwrap());
+        assert_eq!(db.locked_reserve_total().unwrap(), 900);
+
+        // Now the mint fails. Its dep: output is gone (locked = 0), so an
+        // id-based unlock would find nothing. The value-based unlock
+        // removes 600 from the remaining locked outputs FIFO.
+        assert!(db
+            .unlock_backing_for_order(&failed_mint, Chain::Ethereum, 600)
+            .unwrap());
+        assert_eq!(db.locked_reserve_total().unwrap(), 300);
+
+        // Change semantics: the 900 change output was consumed, and a new
+        // 300 change output attributed to the failed mint remains locked.
+        let change = db
+            .get_reserve_output(&format!("chg:{}", failed_mint))
+            .unwrap()
+            .unwrap();
+        assert!(change.locked);
+        assert_eq!(change.amount, 300);
+
+        // Replay is a no-op.
+        assert!(!db
+            .unlock_backing_for_order(&failed_mint, Chain::Ethereum, 600)
+            .unwrap());
+        assert_eq!(db.locked_reserve_total().unwrap(), 300);
+    }
+
+    #[test]
+    fn test_unlock_backing_insufficient_rolls_back() {
+        let db = reserve_db();
+        let mint = Uuid::new_v4();
+        db.record_locked_output("dep:other", Chain::Ethereum, 100, &Uuid::new_v4())
+            .unwrap();
+
+        // 500 > 100 locked: the whole unlock must fail and roll back.
+        let err = db
+            .unlock_backing_for_order(&mint, Chain::Ethereum, 500)
+            .unwrap_err();
+        assert!(err.contains("insufficient locked reserve"), "{}", err);
+        assert_eq!(db.locked_reserve_total().unwrap(), 100);
+    }
+
+    // === Circuit breaker + rate limits (#827) ===
+
+    #[test]
+    fn test_pause_state_roundtrip_and_change_detection() {
+        let db = reserve_db();
+
+        assert!(db.is_paused().unwrap().is_none());
+
+        // Trip: state changes exactly once.
+        assert!(db.set_paused(true, Some("drift alert")).unwrap());
+        assert_eq!(db.is_paused().unwrap().as_deref(), Some("drift alert"));
+        assert!(!db.set_paused(true, Some("drift alert")).unwrap());
+
+        // Resume clears the reason.
+        assert!(db.set_paused(false, None).unwrap());
+        assert!(db.is_paused().unwrap().is_none());
+        assert!(!db.set_paused(false, None).unwrap());
+    }
+
+    #[test]
+    fn test_limits_per_order_cap() {
+        let db = reserve_db();
+        let order = setup_mint_order(&db);
+
+        let check = db
+            .check_and_reserve_limits(&order.id, "0xuser", 1_001, 1_000, 0, 0, 1_000_000)
+            .unwrap();
+        assert_eq!(check, LimitCheck::Rejected(LimitViolation::PerOrderCap));
+        // Nothing was reserved.
+        assert_eq!(db.daily_reserved_volume(1_000_000).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_limits_daily_windows_and_day_boundary() {
+        let db = reserve_db();
+        let a = setup_mint_order(&db);
+        let b = setup_mint_order(&db);
+        let c = setup_mint_order(&db);
+        let now = 86_400 * 100 + 10; // some day bucket
+
+        // Address cap 1_000: first 700 passes...
+        assert_eq!(
+            db.check_and_reserve_limits(&a.id, "0xuser", 700, 0, 1_000, 10_000, now)
+                .unwrap(),
+            LimitCheck::Reserved
+        );
+        // ... a second 700 for the same address exceeds the window ...
+        assert_eq!(
+            db.check_and_reserve_limits(&b.id, "0xuser", 700, 0, 1_000, 10_000, now)
+                .unwrap(),
+            LimitCheck::Rejected(LimitViolation::AddressDailyCap)
+        );
+        // ... but passes at the next day boundary.
+        assert_eq!(
+            db.check_and_reserve_limits(&b.id, "0xuser", 700, 0, 1_000, 10_000, now + 86_400)
+                .unwrap(),
+            LimitCheck::Reserved
+        );
+
+        // Global cap: a different address is refused once the bridge-wide
+        // window is exhausted.
+        assert_eq!(
+            db.check_and_reserve_limits(&c.id, "0xother", 9_500, 0, 10_000, 10_000, now + 86_400)
+                .unwrap(),
+            LimitCheck::Rejected(LimitViolation::GlobalDailyCap)
+        );
+    }
+
+    #[test]
+    fn test_limits_reservation_is_exactly_once_per_order() {
+        let db = reserve_db();
+        let order = setup_mint_order(&db);
+        let now = 86_400 * 100;
+
+        assert_eq!(
+            db.check_and_reserve_limits(&order.id, "0xuser", 600, 0, 1_000, 0, now)
+                .unwrap(),
+            LimitCheck::Reserved
+        );
+        // A replayed tick (crash between reservation and mint) must not
+        // double-count the volume.
+        assert_eq!(
+            db.check_and_reserve_limits(&order.id, "0xuser", 600, 0, 1_000, 0, now)
+                .unwrap(),
+            LimitCheck::AlreadyReserved
+        );
+        assert_eq!(db.daily_reserved_volume(now).unwrap(), 600);
+    }
+
+    #[test]
+    fn test_monitoring_counts_backlog_stuck_and_health() {
+        let db = reserve_db();
+
+        let confirmed = setup_mint_order(&db); // deposit_confirmed
+        let mut stale = BridgeOrder::new_mint(
+            Chain::Ethereum,
+            1_000,
+            0,
+            "bth".to_string(),
+            "0x1234567890abcdef1234567890abcdef12345678".to_string(),
+        );
+        stale.set_status(OrderStatus::MintPending);
+        stale.updated_at = Utc::now() - chrono::Duration::hours(3);
+        db.insert_order(&stale).unwrap();
+
+        let counts = db.order_status_counts().unwrap();
+        assert!(counts.contains(&("deposit_confirmed".to_string(), 1)));
+        assert!(counts.contains(&("mint_pending".to_string(), 1)));
+        assert_eq!(db.actionable_backlog().unwrap(), 2);
+
+        // Only the stale order is stuck past a 1-hour threshold.
+        let stuck = db.stuck_orders(3_600).unwrap();
+        assert_eq!(stuck.len(), 1);
+        assert_eq!(stuck[0].id, stale.id);
+        let _ = confirmed;
+
+        // Component health roundtrip.
+        db.set_component_health("attestation", false, "federation misconfigured")
+            .unwrap();
+        db.set_component_health("releaser:bth", true, "").unwrap();
+        let health = db.component_health().unwrap();
+        assert_eq!(
+            health,
+            vec![
+                (
+                    "attestation".to_string(),
+                    false,
+                    "federation misconfigured".to_string()
+                ),
+                ("releaser:bth".to_string(), true, String::new()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_prune_reserve_snapshots_keeps_latest() {
+        let db = reserve_db();
+        let old = ReserveSnapshot {
+            taken_at: 1_000, // far in the past
+            locked_reserve: 1,
+            eth_supply: None,
+            sol_supply: None,
+            drift: 0,
+            in_tolerance: true,
+            peg_healthy: true,
+            reserve_balance_checked: false,
+        };
+        db.insert_reserve_snapshot(&old).unwrap();
+        db.insert_reserve_snapshot(&ReserveSnapshot {
+            taken_at: 2_000,
+            ..old.clone()
+        })
+        .unwrap();
+
+        // Both are ancient, but the latest row always survives pruning.
+        let pruned = db.prune_reserve_snapshots(86_400).unwrap();
+        assert_eq!(pruned, 1);
+        let latest = db.latest_reserve_snapshot().unwrap().unwrap();
+        assert_eq!(latest.taken_at, 2_000);
+        assert_eq!(db.prune_reserve_snapshots(86_400).unwrap(), 0);
     }
 
     #[test]
@@ -2221,6 +3099,7 @@ mod tests {
             drift: 0,
             in_tolerance: true,
             peg_healthy: true,
+            reserve_balance_checked: false,
         };
         db.insert_reserve_snapshot(&first).unwrap();
 
@@ -2232,6 +3111,7 @@ mod tests {
             drift: 1_000,
             in_tolerance: false,
             peg_healthy: false,
+            reserve_balance_checked: true,
         };
         db.insert_reserve_snapshot(&second).unwrap();
 

@@ -13,7 +13,7 @@ use crate::{
         AttestationProvider, DisabledAttestationProvider, FederationAttestationProvider,
         StubAttestationProvider,
     },
-    db::Database,
+    db::{Database, LimitCheck, LimitViolation},
     mint::{ethereum::EthMinter, solana::SolMinter, ConfirmationStatus, Minter},
     release::{bth::BthReleaser, PreparedRelease, ReleaseConfirmation, Releaser},
     reserve::Reconciler,
@@ -87,7 +87,8 @@ impl BridgeEngine {
         }
     }
 
-    /// Build the attestation provider (#824).
+    /// Build the attestation provider (#824), plus an availability verdict
+    /// for the health surface.
     ///
     /// - Federation configured and valid → the real
     ///   [`FederationAttestationProvider`].
@@ -95,18 +96,28 @@ impl BridgeEngine {
     ///   (fail-closed: authorizations error, orders stay retryable). Never
     ///   silently downgrades to the permissive stub.
     /// - No federation configured → the development stub.
-    fn build_attestation_provider(config: &BridgeConfig) -> Arc<dyn AttestationProvider> {
+    fn build_attestation_provider(
+        config: &BridgeConfig,
+    ) -> (Arc<dyn AttestationProvider>, bool, String) {
         match FederationAttestationProvider::from_config(config) {
             Ok(Some(provider)) => {
                 info!("federation attestation provider active (ADR 0002 t-of-n custody)");
-                Arc::new(provider)
+                (
+                    Arc::new(provider),
+                    true,
+                    "federation provider active".to_string(),
+                )
             }
             Ok(None) => {
                 warn!(
                     "no attestation federation configured; using the development stub \
                      provider (threshold 0 — production authorities reject its output)"
                 );
-                Arc::new(StubAttestationProvider)
+                (
+                    Arc::new(StubAttestationProvider),
+                    true,
+                    "development stub provider (no federation configured)".to_string(),
+                )
             }
             Err(e) => {
                 error!(
@@ -114,7 +125,8 @@ impl BridgeEngine {
                      mint or release until the configuration is fixed",
                     e
                 );
-                Arc::new(DisabledAttestationProvider::new(e))
+                let detail = format!("disabled: {}", e);
+                (Arc::new(DisabledAttestationProvider::new(e)), false, detail)
             }
         }
     }
@@ -122,6 +134,60 @@ impl BridgeEngine {
     /// Run the bridge engine.
     pub async fn run(self) -> Result<(), String> {
         info!("Starting bridge engine");
+
+        // Config-level kill switch: start paused until an operator resumes
+        // (the runtime state lives in the DB and otherwise survives
+        // restarts on its own).
+        if self.config.bridge.paused && self.db.set_paused(true, Some("paused via config"))? {
+            self.db.log_audit(
+                None,
+                "breaker_tripped",
+                "bridge.paused = true in configuration",
+            )?;
+            warn!("Bridge starting PAUSED (bridge.paused = true in config)");
+        }
+
+        let minters = Self::build_minters(&self.config);
+        let releaser = Self::build_releaser(&self.config);
+        let (attestation, attestation_ok, attestation_detail) =
+            Self::build_attestation_provider(&self.config);
+
+        // Record component availability for the health surface
+        // (`/api/status`, `/metrics`). The engine already fails closed on
+        // each unavailable component (orders stay retryable); this makes
+        // the degradation observable instead of silent.
+        self.db
+            .set_component_health("attestation", attestation_ok, &attestation_detail)?;
+        for chain in [Chain::Ethereum, Chain::Solana] {
+            let configured = minters.contains_key(&chain);
+            self.db.set_component_health(
+                &format!("minter:{}", chain),
+                configured,
+                if configured { "configured" } else { "disabled" },
+            )?;
+        }
+        self.db.set_component_health(
+            "releaser:bth",
+            releaser.is_some(),
+            if releaser.is_some() {
+                "configured"
+            } else {
+                "disabled"
+            },
+        )?;
+
+        let processor = OrderProcessor::new(
+            self.config.clone(),
+            self.db.clone(),
+            minters,
+            releaser,
+            attestation,
+        );
+
+        // Startup reconciliation (#843): roll stranded orders forward
+        // exactly once BEFORE any watcher or processing loop runs (no
+        // writer races while recovering).
+        processor.recover_on_startup()?;
 
         // Spawn the BTH watcher
         let bth_watcher = BthWatcher::new(
@@ -163,16 +229,6 @@ impl BridgeEngine {
         });
 
         // Spawn the order processing loop
-        let minters = Self::build_minters(&self.config);
-        let releaser = Self::build_releaser(&self.config);
-        let attestation = Self::build_attestation_provider(&self.config);
-        let processor = OrderProcessor::new(
-            self.config.clone(),
-            self.db.clone(),
-            minters,
-            releaser,
-            attestation,
-        );
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
         let process_handle = tokio::spawn(async move {
@@ -201,26 +257,43 @@ impl BridgeEngine {
             reconciler.run(reconcile_interval, reconcile_shutdown).await;
         });
 
-        // Spawn the proof-of-reserves HTTP API (#825); empty listen
-        // address disables it.
+        // Spawn the bridge HTTP API (#825 proof-of-reserves + #827
+        // monitoring/breaker surface); empty listen address disables it.
         let api_handle = if self.config.reserve.api_listen.is_empty() {
             None
         } else {
             let addr = self.config.reserve.api_listen.clone();
             let api_db = self.db.clone();
             let api_shutdown = self.shutdown_tx.subscribe();
+            let stuck_after_secs = self.config.bridge.order_expiry_minutes.max(1) * 60;
             Some(tokio::spawn(async move {
-                if let Err(e) = api::serve(addr, api_db, api_shutdown).await {
-                    error!("Proof-of-reserves API error: {}", e);
+                if let Err(e) = api::serve(addr, api_db, stuck_after_secs, api_shutdown).await {
+                    error!("Bridge API error: {}", e);
                 }
             }))
         };
 
-        // Handle shutdown signals
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
-                info!("Received shutdown signal");
+        // Handle shutdown signals: SIGINT (ctrl-c) and, on unix, SIGTERM
+        // (what systemd sends). Both trigger the same graceful drain:
+        // every component gets the broadcast and is joined below.
+        #[cfg(unix)]
+        {
+            let mut sigterm =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .map_err(|e| format!("failed to install SIGTERM handler: {}", e))?;
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    info!("Received SIGINT; shutting down gracefully");
+                }
+                _ = sigterm.recv() => {
+                    info!("Received SIGTERM; shutting down gracefully");
+                }
             }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
+            info!("Received shutdown signal");
         }
 
         // Send shutdown signal to all components
@@ -244,7 +317,7 @@ impl BridgeEngine {
 }
 
 /// Order processor handles pending orders.
-struct OrderProcessor {
+pub(crate) struct OrderProcessor {
     config: BridgeConfig,
     db: Database,
     minters: HashMap<Chain, Arc<dyn Minter>>,
@@ -253,7 +326,7 @@ struct OrderProcessor {
 }
 
 impl OrderProcessor {
-    fn new(
+    pub(crate) fn new(
         config: BridgeConfig,
         db: Database,
         minters: HashMap<Chain, Arc<dyn Minter>>,
@@ -269,18 +342,98 @@ impl OrderProcessor {
         }
     }
 
+    /// Startup reconciliation, run BEFORE any watcher or processing loop.
+    ///
+    /// #843: a crash between the BTH watcher's detect step and its confirm
+    /// step strands an order at `DepositDetected` forever — the watcher's
+    /// replay skips it ("not awaiting a deposit") and the processor only
+    /// picks up orders from `deposit_confirmed` onward. Detection implies
+    /// finality in the BTH watcher (scanned blocks always meet the
+    /// finality requirement), so any `DepositDetected` order with a
+    /// durably recorded `source_tx` is rolled forward to
+    /// `DepositConfirmed` (and its deposit marked processed — the other
+    /// half of the same crash window), exactly once, with an audit entry.
+    ///
+    /// Orders stranded at `MintPending` / `ReleasePending` /
+    /// `DepositConfirmed` / `BurnConfirmed` need no startup action: the
+    /// processing stages resume them via the `mints` / `release_claims`
+    /// exactly-once tables.
+    pub(crate) fn recover_on_startup(&self) -> Result<(), String> {
+        let detected = self.db.get_orders_by_status("deposit_detected")?;
+        for order in detected {
+            let Some(source_tx) = order.source_tx.clone() else {
+                // DepositDetected without a recorded tx should be
+                // unreachable (the detect write records both atomically);
+                // surface it rather than guess.
+                warn!(
+                    "Order {} is DepositDetected with no recorded source_tx; leaving for triage",
+                    order.id
+                );
+                continue;
+            };
+
+            // Crash-between-detect-and-mark window: the idempotency row
+            // may be missing; write it so the watcher's replay of the
+            // block short-circuits cleanly.
+            self.db.mark_deposit_processed(&source_tx, &order.id)?;
+            self.db
+                .update_order_status(&order.id, &OrderStatus::DepositConfirmed, None)?;
+            self.db.log_audit(
+                Some(&order.id),
+                "deposit_recovered",
+                &format!(
+                    "tx={} recovered DepositDetected -> DepositConfirmed on startup (#843)",
+                    source_tx
+                ),
+            )?;
+            info!(
+                "Recovered stranded order {} (DepositDetected -> DepositConfirmed, tx {})",
+                order.id, source_tx
+            );
+        }
+
+        Ok(())
+    }
+
     /// Process all pending orders.
     ///
     /// Submission (`DepositConfirmed -> MintPending`) and confirmation
     /// (`MintPending -> Completed`) are driven as separate retryable stages
     /// so a crash or RPC failure between them never loses (or duplicates)
     /// a mint.
-    async fn process_pending_orders(&self) -> Result<(), String> {
-        // Stage 1: confirmed deposits need a mint submitted.
-        let deposit_orders = self.db.get_orders_by_status("deposit_confirmed")?;
-        for order in deposit_orders {
-            if let Err(e) = self.submit_mint(&order).await {
-                warn!("Failed to submit mint for order {}: {}", order.id, e);
+    ///
+    /// Circuit breaker: when the bridge is paused (kill switch or
+    /// auto-trip) the SUBMIT stages are halted — no new value leaves the
+    /// bridge — while the CONFIRM stages keep running so already-broadcast
+    /// transactions settle to a durable terminal state.
+    pub(crate) async fn process_pending_orders(&self) -> Result<(), String> {
+        // Automatic breaker conditions (fail closed) are evaluated before
+        // any submission.
+        self.check_breaker_conditions()?;
+
+        match self.db.is_paused()? {
+            None => {
+                // Stage 1: confirmed deposits need a mint submitted.
+                let deposit_orders = self.db.get_orders_by_status("deposit_confirmed")?;
+                for order in deposit_orders {
+                    if let Err(e) = self.submit_mint(&order).await {
+                        warn!("Failed to submit mint for order {}: {}", order.id, e);
+                    }
+                }
+
+                // Stage 3: confirmed burns need a BTH release submitted.
+                let burn_orders = self.db.get_orders_by_status("burn_confirmed")?;
+                for order in burn_orders {
+                    if let Err(e) = self.submit_release(&order).await {
+                        warn!("Failed to submit release for order {}: {}", order.id, e);
+                    }
+                }
+            }
+            Some(reason) => {
+                debug!(
+                    "Bridge paused ({}); submit stages halted, confirm stages continue",
+                    reason
+                );
             }
         }
 
@@ -289,14 +442,6 @@ impl OrderProcessor {
         for order in pending_mints {
             if let Err(e) = self.confirm_mint(&order).await {
                 warn!("Failed to confirm mint for order {}: {}", order.id, e);
-            }
-        }
-
-        // Stage 3: confirmed burns need a BTH release submitted.
-        let burn_orders = self.db.get_orders_by_status("burn_confirmed")?;
-        for order in burn_orders {
-            if let Err(e) = self.submit_release(&order).await {
-                warn!("Failed to submit release for order {}: {}", order.id, e);
             }
         }
 
@@ -311,6 +456,125 @@ impl OrderProcessor {
         // Check for expired orders
         self.expire_stale_orders()?;
 
+        // Alert on orders stuck past the age threshold (funds have moved;
+        // they must never auto-expire — an operator has to act).
+        self.alert_stuck_orders()?;
+
+        Ok(())
+    }
+
+    /// Evaluate the automatic circuit-breaker conditions and trip the
+    /// breaker (fail closed) when one fires. The reconciler additionally
+    /// trips it on any peg-drift alert (see `reserve::Reconciler`).
+    fn check_breaker_conditions(&self) -> Result<(), String> {
+        if self.db.is_paused()?.is_some() {
+            return Ok(());
+        }
+
+        let max_pending = self.config.bridge.max_pending_orders;
+        if max_pending > 0 {
+            let backlog = self.db.actionable_backlog()?;
+            if backlog > max_pending {
+                self.trip_breaker(&format!(
+                    "actionable backlog {} exceeds max_pending_orders {}",
+                    backlog, max_pending
+                ))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Trip the circuit breaker: pause the submit stages, audit-log the
+    /// trip exactly once.
+    fn trip_breaker(&self, reason: &str) -> Result<(), String> {
+        if self.db.set_paused(true, Some(reason))? {
+            self.db.log_audit(None, "breaker_tripped", reason)?;
+            error!(
+                "CIRCUIT BREAKER TRIPPED: {}; submit stages halted (confirm stages continue). \
+                 Resume via POST /api/breaker after triage — see \
+                 docs/operations/runbooks/bridge-order-engine-recovery.md",
+                reason
+            );
+        }
+        Ok(())
+    }
+
+    /// Rate-limit gate for a submit stage: reserve the order's volume
+    /// against the per-order cap and the daily windows, exactly once per
+    /// order. Returns `Ok(true)` when the order may proceed.
+    ///
+    /// A daily-window rejection defers the order (retryable next window);
+    /// exhausting the GLOBAL window additionally trips the circuit
+    /// breaker — bridge-wide volume at the cap is an anomaly signal.
+    fn reserve_order_limits(&self, order: &BridgeOrder) -> Result<bool, String> {
+        use bth_bridge_core::OrderType;
+
+        // The counterparty whose daily window this order consumes: the
+        // wBTH recipient for mints, the wBTH burner for burns.
+        let address = match order.order_type {
+            OrderType::Mint => &order.dest_address,
+            OrderType::Burn => &order.source_address,
+        };
+
+        match self.db.check_and_reserve_limits(
+            &order.id,
+            address,
+            order.amount,
+            self.config.bridge.max_order_amount,
+            self.config.bridge.daily_limit_per_address,
+            self.config.bridge.global_daily_limit,
+            chrono::Utc::now().timestamp(),
+        )? {
+            LimitCheck::Reserved | LimitCheck::AlreadyReserved => Ok(true),
+            LimitCheck::Rejected(violation) => {
+                if !self.db.has_audit_for_order(&order.id, "rate_limited")? {
+                    self.db.log_audit(
+                        Some(&order.id),
+                        "rate_limited",
+                        &format!("violation={} amount={}", violation, order.amount),
+                    )?;
+                }
+                warn!(
+                    "Order {} deferred by rate limit ({}; amount {})",
+                    order.id, violation, order.amount
+                );
+                if violation == LimitViolation::GlobalDailyCap {
+                    self.trip_breaker(&format!(
+                        "global daily volume cap reached (order {} amount {})",
+                        order.id, order.amount
+                    ))?;
+                }
+                Ok(false)
+            }
+        }
+    }
+
+    /// Audit-log (exactly once per order) any order stuck past the age
+    /// threshold in a post-deposit stage.
+    fn alert_stuck_orders(&self) -> Result<(), String> {
+        let threshold_secs = self.config.bridge.order_expiry_minutes.max(1) * 60;
+        for order in self.db.stuck_orders(threshold_secs)? {
+            if self
+                .db
+                .has_audit_for_order(&order.id, "stuck_order_alert")?
+            {
+                continue;
+            }
+            let age_secs = (chrono::Utc::now() - order.updated_at).num_seconds();
+            self.db.log_audit(
+                Some(&order.id),
+                "stuck_order_alert",
+                &format!(
+                    "status={} age_secs={} threshold_secs={}",
+                    order.status, age_secs, threshold_secs
+                ),
+            )?;
+            warn!(
+                "Order {} stuck in {} for {}s (threshold {}s) — operator attention needed",
+                order.id, order.status, age_secs, threshold_secs
+            );
+        }
         Ok(())
     }
 
@@ -334,6 +598,13 @@ impl OrderProcessor {
                 },
                 None,
             )?;
+            return Ok(());
+        }
+
+        // Rate limits (#827): mirror the contract-side caps service-side.
+        // A deferred order stays DepositConfirmed and retries next window
+        // (the deposit already happened — never dropped).
+        if !self.reserve_order_limits(order)? {
             return Ok(());
         }
 
@@ -554,16 +825,36 @@ impl OrderProcessor {
                     .update_order_status(&order.id, &OrderStatus::Failed { reason }, None)?;
                 // Reserve accounting (#825): a failed mint's deposit no
                 // longer backs wrapped supply — it is owed back to the
-                // depositor. Unlock it so the peg ledger stays exact.
-                if self.db.unlock_outputs_for_order(&order.id)? {
-                    self.db.log_audit(
-                        Some(&order.id),
-                        "reserve_unlocked",
-                        &format!(
-                            "chain={} mint failed; deposit no longer backs supply",
-                            order.dest_chain
-                        ),
-                    )?;
+                // depositor. Unlock its VALUE (#846: the specific dep:
+                // output may already have been consumed by a release's
+                // FIFO spend) so the peg ledger stays exact. A shortfall
+                // is audited and surfaces as drift — never blocks the
+                // failure transition (already durably recorded above).
+                match self.db.unlock_backing_for_order(
+                    &order.id,
+                    order.dest_chain,
+                    order.net_amount(),
+                ) {
+                    Ok(true) => {
+                        self.db.log_audit(
+                            Some(&order.id),
+                            "reserve_unlocked",
+                            &format!(
+                                "chain={} amount={} mint failed; deposit no longer backs supply",
+                                order.dest_chain,
+                                order.net_amount()
+                            ),
+                        )?;
+                    }
+                    Ok(false) => {} // replay: already unlocked
+                    Err(e) => {
+                        error!(
+                            "Reserve unlock for failed mint order {} failed: {}",
+                            order.id, e
+                        );
+                        self.db
+                            .log_audit(Some(&order.id), "reserve_unlock_failed", &e)?;
+                    }
                 }
             }
         }
@@ -609,6 +900,13 @@ impl OrderProcessor {
             // the configuration.
             return Err("BTH release not configured".to_string());
         };
+
+        // Rate limits (#827): a deferred burn stays BurnConfirmed and
+        // retries next window — a confirmed burn is owed BTH and is never
+        // failed by a limit, only delayed and surfaced as stuck.
+        if !self.reserve_order_limits(order)? {
+            return Ok(());
+        }
 
         // Durable exactly-once claim, taken BEFORE any signing/submission.
         let claim = self
@@ -1549,5 +1847,242 @@ mod tests {
         );
         assert_eq!(db.count_audit_action("reserve_spend_failed").unwrap(), 1);
         assert_eq!(db.count_audit_action("reserve_spent").unwrap(), 0);
+    }
+
+    // === Circuit breaker + rate limits + monitoring (#827) ===
+
+    #[tokio::test]
+    async fn test_kill_switch_halts_submits_but_confirms_settle() {
+        let (processor, minter, releaser, db) = setup_full();
+
+        // An in-flight mint (already broadcast) and a not-yet-submitted
+        // deposit.
+        let inflight = insert_confirmed_deposit(&db);
+        processor.process_pending_orders().await.unwrap();
+        assert_eq!(
+            db.get_order(&inflight.id).unwrap().unwrap().status,
+            OrderStatus::MintPending
+        );
+        let waiting = insert_confirmed_deposit(&db);
+        let burn = insert_confirmed_burn(&db);
+
+        // Trip the kill switch.
+        assert!(db.set_paused(true, Some("manual")).unwrap());
+
+        // Confirm stage still settles the in-flight order...
+        minter.set_confirmation(ConfirmationStatus::Confirmed);
+        processor.process_pending_orders().await.unwrap();
+        assert_eq!(
+            db.get_order(&inflight.id).unwrap().unwrap().status,
+            OrderStatus::Completed,
+            "confirm stages must keep running while paused"
+        );
+
+        // ...but no NEW value leaves the bridge: the waiting deposit and
+        // the confirmed burn are untouched.
+        assert_eq!(
+            db.get_order(&waiting.id).unwrap().unwrap().status,
+            OrderStatus::DepositConfirmed,
+            "submit stages must halt while paused"
+        );
+        assert_eq!(
+            db.get_order(&burn.id).unwrap().unwrap().status,
+            OrderStatus::BurnConfirmed
+        );
+        assert_eq!(releaser.prepare_calls.load(Ordering::SeqCst), 0);
+
+        // Resume: everything proceeds.
+        assert!(db.set_paused(false, None).unwrap());
+        minter.set_confirmation(ConfirmationStatus::Pending { confirmations: 0 });
+        processor.process_pending_orders().await.unwrap();
+        assert_eq!(
+            db.get_order(&waiting.id).unwrap().unwrap().status,
+            OrderStatus::MintPending
+        );
+        assert_eq!(
+            db.get_order(&burn.id).unwrap().unwrap().status,
+            OrderStatus::ReleasePending
+        );
+    }
+
+    #[tokio::test]
+    async fn test_breaker_auto_trips_on_backlog() {
+        let (mut config, db) = (BridgeConfig::default(), {
+            let db = Database::open_in_memory().unwrap();
+            db.migrate().unwrap();
+            db
+        });
+        config.bridge.max_pending_orders = 2;
+
+        let minter = Arc::new(MockMinter::new(Chain::Ethereum));
+        let mut minters: HashMap<Chain, Arc<dyn Minter>> = HashMap::new();
+        minters.insert(Chain::Ethereum, minter.clone());
+        let processor = OrderProcessor::new(
+            config,
+            db.clone(),
+            minters,
+            None,
+            Arc::new(StubAttestationProvider),
+        );
+
+        // Backlog of 3 actionable orders > max_pending_orders of 2.
+        for _ in 0..3 {
+            insert_confirmed_deposit(&db);
+        }
+
+        processor.process_pending_orders().await.unwrap();
+
+        let reason = db.is_paused().unwrap().expect("breaker must trip");
+        assert!(reason.contains("backlog"), "{}", reason);
+        assert_eq!(db.count_audit_action("breaker_tripped").unwrap(), 1);
+        // Fail closed: nothing was submitted this tick.
+        assert_eq!(minter.prepare_calls.load(Ordering::SeqCst), 0);
+
+        // The trip is audited exactly once across further ticks.
+        processor.process_pending_orders().await.unwrap();
+        assert_eq!(db.count_audit_action("breaker_tripped").unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_per_order_cap_defers_mint() {
+        let (mut config, db) = (BridgeConfig::default(), {
+            let db = Database::open_in_memory().unwrap();
+            db.migrate().unwrap();
+            db
+        });
+        // Cap below the order amount.
+        config.bridge.max_order_amount = 1_000;
+
+        let minter = Arc::new(MockMinter::new(Chain::Ethereum));
+        let mut minters: HashMap<Chain, Arc<dyn Minter>> = HashMap::new();
+        minters.insert(Chain::Ethereum, minter.clone());
+        let processor = OrderProcessor::new(
+            config,
+            db.clone(),
+            minters,
+            None,
+            Arc::new(StubAttestationProvider),
+        );
+
+        let order = insert_confirmed_deposit(&db); // amount 1 BTH >> 1_000
+        processor.process_pending_orders().await.unwrap();
+
+        // Deferred, not failed, and never submitted.
+        assert_eq!(
+            db.get_order(&order.id).unwrap().unwrap().status,
+            OrderStatus::DepositConfirmed
+        );
+        assert_eq!(minter.prepare_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(db.count_audit_action("rate_limited").unwrap(), 1);
+        // The rejection is audited exactly once per order.
+        processor.process_pending_orders().await.unwrap();
+        assert_eq!(db.count_audit_action("rate_limited").unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_global_cap_trips_breaker() {
+        let (mut config, db) = (BridgeConfig::default(), {
+            let db = Database::open_in_memory().unwrap();
+            db.migrate().unwrap();
+            db
+        });
+        config.bridge.global_daily_limit = 1_000; // below one order
+
+        let minter = Arc::new(MockMinter::new(Chain::Ethereum));
+        let mut minters: HashMap<Chain, Arc<dyn Minter>> = HashMap::new();
+        minters.insert(Chain::Ethereum, minter.clone());
+        let processor = OrderProcessor::new(
+            config,
+            db.clone(),
+            minters,
+            None,
+            Arc::new(StubAttestationProvider),
+        );
+
+        insert_confirmed_deposit(&db);
+        processor.process_pending_orders().await.unwrap();
+
+        // Anomalous volume: the global window exhausting trips the
+        // breaker (fail closed).
+        let reason = db.is_paused().unwrap().expect("breaker must trip");
+        assert!(reason.contains("global daily volume"), "{}", reason);
+        assert_eq!(minter.prepare_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn test_stuck_order_alert_fires_once() {
+        let (processor, _minter, db) = setup();
+
+        // A MintPending order that has not advanced for 3 hours (default
+        // expiry threshold is 60 minutes). Funds moved: it must alert,
+        // never auto-expire.
+        let mut order = BridgeOrder::new_mint(
+            Chain::Ethereum,
+            1_000_000_000_000,
+            0,
+            "bth_addr".to_string(),
+            "0x1234567890abcdef1234567890abcdef12345678".to_string(),
+        );
+        order.set_status(OrderStatus::MintPending);
+        // Submitted tx that the (mock) chain keeps reporting as Pending —
+        // without it confirm_mint would unwind the order instead.
+        order.dest_tx = Some("0xstuck_mint_tx".to_string());
+        order.updated_at = chrono::Utc::now() - chrono::Duration::hours(3);
+        db.insert_order(&order).unwrap();
+
+        processor.process_pending_orders().await.unwrap();
+        assert_eq!(db.count_audit_action("stuck_order_alert").unwrap(), 1);
+        assert!(!db
+            .get_order(&order.id)
+            .unwrap()
+            .unwrap()
+            .status
+            .is_terminal());
+
+        // Exactly once per order, not per tick.
+        processor.process_pending_orders().await.unwrap();
+        assert_eq!(db.count_audit_action("stuck_order_alert").unwrap(), 1);
+    }
+
+    // === Startup recovery (#843) ===
+
+    #[tokio::test]
+    async fn test_recover_stranded_deposit_detected_order() {
+        let (processor, minter, db) = setup();
+
+        // Simulate the #843 crash window: the watcher recorded the detect
+        // (status + amount + source_tx durably written) and died before
+        // marking the deposit processed or confirming.
+        let order = BridgeOrder::new_mint(
+            Chain::Ethereum,
+            1_000_000_000_000,
+            1_000_000_000,
+            "bridge_addr".to_string(),
+            "0x1234567890abcdef1234567890abcdef12345678".to_string(),
+        );
+        db.insert_order(&order).unwrap();
+        assert!(db
+            .record_deposit_detected(&order.id, "0xdeposit", 999_000_000_000)
+            .unwrap());
+
+        // Startup recovery rolls it forward and closes both crash halves.
+        processor.recover_on_startup().unwrap();
+        let stored = db.get_order(&order.id).unwrap().unwrap();
+        assert_eq!(stored.status, OrderStatus::DepositConfirmed);
+        assert!(db.is_deposit_processed("0xdeposit").unwrap());
+        assert_eq!(db.count_audit_action("deposit_recovered").unwrap(), 1);
+
+        // Recovery is idempotent and the order then completes exactly once.
+        processor.recover_on_startup().unwrap();
+        assert_eq!(db.count_audit_action("deposit_recovered").unwrap(), 1);
+
+        processor.process_pending_orders().await.unwrap();
+        minter.set_confirmation(ConfirmationStatus::Confirmed);
+        processor.process_pending_orders().await.unwrap();
+        assert_eq!(
+            db.get_order(&order.id).unwrap().unwrap().status,
+            OrderStatus::Completed
+        );
+        assert_eq!(minter.prepare_calls.load(Ordering::SeqCst), 1);
     }
 }

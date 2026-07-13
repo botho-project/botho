@@ -12,6 +12,8 @@ use tracing_subscriber::FmtSubscriber;
 
 mod api;
 mod attestation;
+#[cfg(test)]
+mod chaos_tests;
 mod db;
 mod engine;
 mod mint;
