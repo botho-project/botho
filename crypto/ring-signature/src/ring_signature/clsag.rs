@@ -99,6 +99,12 @@ impl Clsag {
         )
     }
 
+    // The two `for i in 0..ring_size` loops below index parallel
+    // response/challenge buffers by ring position (with a real_index
+    // special-case), so an enumerate() rewrite would obscure the CLSAG
+    // round structure; keep the index form. (Newly lint-scoped when the
+    // bridge began compiling this crate under -D warnings, #856.)
+    #[allow(clippy::needless_range_loop)]
     fn sign_with_balance_check(
         message: &[u8],
         ring: &[ReducedTxOut],
@@ -239,6 +245,7 @@ impl Clsag {
     /// * `message` - Message that was signed.
     /// * `ring` - The ring of input addresses and commitments.
     /// * `output_commitment` - The output commitment.
+    #[allow(clippy::needless_range_loop)]
     pub fn verify(
         &self,
         message: &[u8],

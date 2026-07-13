@@ -1700,6 +1700,16 @@ async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> Json
                         .map(|e| [e.cluster_id.0, e.weight as u64])
                         .collect();
 
+                    // Encrypted memo ciphertext (additive, #856). Only the
+                    // recipient (who holds the view key) can decrypt it, so
+                    // exposing the ciphertext is privacy-safe — it is exactly
+                    // what already travels on-chain. Thin clients (the bridge
+                    // deposit watcher, and any wallet rendering received-payment
+                    // notes) need it to read the destination memo; `null` when
+                    // the output carries no memo. Coinbase / lottery outputs
+                    // never carry a memo and omit the field entirely.
+                    let e_memo = output.e_memo.as_ref().map(|m| hex::encode(m.as_bytes()));
+
                     outputs.push(json!({
                         "txHash": hex::encode(tx.hash()),
                         "outputIndex": idx,
@@ -1707,6 +1717,7 @@ async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> Json
                         "publicKey": hex::encode(output.public_key),
                         "amountCommitment": hex::encode(output.amount.to_le_bytes()),
                         "clusterTags": cluster_tags,
+                        "eMemo": e_memo,
                     }));
                 }
             }
