@@ -10,7 +10,7 @@ use serde::Deserialize;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, warn};
 
-use crate::db::{MetricsDb, MetricsSample};
+use crate::db::{MetricsDb, MetricsSample, ReserveProof};
 
 /// A node to poll: display name + RPC URL
 #[derive(Debug, Clone)]
@@ -161,6 +161,55 @@ pub async fn collect_metrics(
     Ok(collected)
 }
 
+/// Parse a bridge `GET /api/reserve/proof` response body (#825).
+pub fn parse_reserve_proof(body: &str) -> Result<ReserveProof> {
+    serde_json::from_str(body).context("Failed to parse reserve proof")
+}
+
+/// Poll the bridge service's proof-of-reserves endpoint and store the
+/// snapshot. A 503 (no reconciliation has run yet) is not an error — the
+/// bridge just started; nothing is recorded (no fabricated data).
+pub async fn collect_reserve(
+    client: &reqwest::Client,
+    bridge_url: &str,
+    db: &Arc<Mutex<MetricsDb>>,
+) -> Result<bool> {
+    let url = format!("{}/api/reserve/proof", bridge_url.trim_end_matches('/'));
+
+    let response = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .context("Failed to connect to bridge")?;
+
+    if response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE {
+        debug!("Bridge has no reserve snapshot yet ({url})");
+        return Ok(false);
+    }
+    if !response.status().is_success() {
+        anyhow::bail!("bridge returned HTTP {}", response.status());
+    }
+
+    let body = response
+        .text()
+        .await
+        .context("Failed to read bridge response body")?;
+    let proof = parse_reserve_proof(&body)?;
+
+    if !proof.peg_healthy {
+        warn!(
+            "Bridge peg UNHEALTHY: lockedReserve={} totalWrapped={:?} drift={}",
+            proof.locked_reserve, proof.total_wrapped, proof.drift
+        );
+    }
+
+    let mut db_lock = db.lock().unwrap();
+    db_lock.insert_reserve_snapshot(&proof)?;
+    debug!("Stored reserve snapshot: {:?}", proof);
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,5 +257,33 @@ mod tests {
     #[test]
     fn test_parse_status_response_garbage() {
         assert!(parse_status_response("not json").is_err());
+    }
+
+    #[test]
+    fn test_parse_reserve_proof_contract() {
+        // The exact body the bridge's GET /api/reserve/proof serves
+        // (bridge/service/src/api.rs, issue #825).
+        let body = r#"{
+            "lockedReserve": 1500,
+            "ethSupply": 1000,
+            "solSupply": null,
+            "totalWrapped": 1000,
+            "drift": -500,
+            "inTolerance": true,
+            "pegHealthy": true,
+            "takenAt": 1752000000
+        }"#;
+
+        let proof = parse_reserve_proof(body).unwrap();
+        assert_eq!(proof.locked_reserve, 1500);
+        assert_eq!(proof.eth_supply, Some(1000));
+        assert_eq!(proof.sol_supply, None);
+        assert_eq!(proof.total_wrapped, Some(1000));
+        assert_eq!(proof.drift, -500);
+        assert!(proof.in_tolerance);
+        assert!(proof.peg_healthy);
+        assert_eq!(proof.taken_at, 1_752_000_000);
+
+        assert!(parse_reserve_proof("not json").is_err());
     }
 }

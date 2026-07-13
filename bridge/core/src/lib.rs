@@ -21,6 +21,7 @@ pub use attestation::{
 };
 pub use chains::{Chain, ChainAddress};
 pub use config::{
-    BridgeConfig, BthConfig, EthereumConfig, GasPriceStrategy, SolanaCommitment, SolanaConfig,
+    BridgeConfig, BthConfig, EthereumConfig, GasPriceStrategy, ReserveSettings, SolanaCommitment,
+    SolanaConfig,
 };
 pub use order::{derive_order_id, BridgeOrder, OrderStatus, OrderType};

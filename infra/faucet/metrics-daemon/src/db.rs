@@ -85,6 +85,26 @@ pub struct HistoryPoint {
     pub tx_total: i64,
 }
 
+/// Bridge proof-of-reserves snapshot (#825).
+///
+/// Fetched from the bridge service's `GET /api/reserve/proof` and served
+/// verbatim via `GET /api/metrics/reserve`: the serialized shape is the
+/// shared contract (bridge -> daemon -> /network dashboard):
+/// `{lockedReserve, ethSupply, solSupply, totalWrapped, drift,
+///   inTolerance, pegHealthy, takenAt}` — amounts in picocredits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReserveProof {
+    pub locked_reserve: u64,
+    pub eth_supply: Option<u64>,
+    pub sol_supply: Option<u64>,
+    pub total_wrapped: Option<u64>,
+    pub drift: i64,
+    pub in_tolerance: bool,
+    pub peg_healthy: bool,
+    pub taken_at: i64,
+}
+
 /// Metrics database wrapper
 pub struct MetricsDb {
     conn: Connection,
@@ -158,6 +178,20 @@ impl MetricsDb {
             CREATE TABLE IF NOT EXISTS state (
                 key TEXT PRIMARY KEY,
                 value INTEGER NOT NULL
+            );
+
+            -- Bridge proof-of-reserves snapshots (#825). Keyed by the
+            -- bridge-side reconciliation time so re-polling the same
+            -- bridge pass replaces rather than duplicates.
+            CREATE TABLE IF NOT EXISTS reserve_snapshots (
+                taken_at INTEGER PRIMARY KEY,
+                locked_reserve INTEGER NOT NULL,
+                eth_supply INTEGER,
+                sol_supply INTEGER,
+                total_wrapped INTEGER,
+                drift INTEGER NOT NULL,
+                in_tolerance INTEGER NOT NULL,
+                peg_healthy INTEGER NOT NULL
             );
         "#,
         )?;
@@ -339,6 +373,54 @@ impl MetricsDb {
             .collect::<std::result::Result<_, _>>()?;
 
         Ok(heights.len() == window && heights.iter().all(|h| *h == heights[0]))
+    }
+
+    /// Store a bridge proof-of-reserves snapshot (#825). Idempotent per
+    /// bridge reconciliation pass (`taken_at` primary key).
+    pub fn insert_reserve_snapshot(&mut self, proof: &ReserveProof) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO reserve_snapshots
+             (taken_at, locked_reserve, eth_supply, sol_supply, total_wrapped,
+              drift, in_tolerance, peg_healthy)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                proof.taken_at,
+                proof.locked_reserve as i64,
+                proof.eth_supply.map(|s| s as i64),
+                proof.sol_supply.map(|s| s as i64),
+                proof.total_wrapped.map(|s| s as i64),
+                proof.drift,
+                proof.in_tolerance as i32,
+                proof.peg_healthy as i32,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Latest proof-of-reserves snapshot, if the bridge has been polled.
+    pub fn get_latest_reserve(&self) -> Result<Option<ReserveProof>> {
+        let result = self
+            .conn
+            .query_row(
+                "SELECT taken_at, locked_reserve, eth_supply, sol_supply, total_wrapped,
+                        drift, in_tolerance, peg_healthy
+                 FROM reserve_snapshots ORDER BY taken_at DESC LIMIT 1",
+                [],
+                |row| {
+                    Ok(ReserveProof {
+                        taken_at: row.get(0)?,
+                        locked_reserve: row.get::<_, i64>(1)? as u64,
+                        eth_supply: row.get::<_, Option<i64>>(2)?.map(|s| s as u64),
+                        sol_supply: row.get::<_, Option<i64>>(3)?.map(|s| s as u64),
+                        total_wrapped: row.get::<_, Option<i64>>(4)?.map(|s| s as u64),
+                        drift: row.get(5)?,
+                        in_tolerance: row.get::<_, i32>(6)? != 0,
+                        peg_healthy: row.get::<_, i32>(7)? != 0,
+                    })
+                },
+            )
+            .ok();
+        Ok(result)
     }
 
     /// Latest sample per node (with staleness flag), ordered by node name.
@@ -540,6 +622,56 @@ mod tests {
             .query_node_history("nope", Resolution::FiveMin, 0)
             .unwrap();
         assert!(none.is_empty());
+    }
+
+    #[test]
+    fn test_reserve_snapshot_roundtrip_latest_and_contract() {
+        let mut db = MetricsDb::open_in_memory().unwrap();
+        assert!(db.get_latest_reserve().unwrap().is_none());
+
+        let healthy = ReserveProof {
+            locked_reserve: 1_500,
+            eth_supply: Some(1_000),
+            sol_supply: None,
+            total_wrapped: Some(1_000),
+            drift: -500,
+            in_tolerance: true,
+            peg_healthy: true,
+            taken_at: 1_000,
+        };
+        db.insert_reserve_snapshot(&healthy).unwrap();
+
+        // Re-polling the same bridge pass replaces, never duplicates.
+        db.insert_reserve_snapshot(&healthy).unwrap();
+        assert_eq!(db.get_latest_reserve().unwrap().unwrap(), healthy);
+
+        let drifted = ReserveProof {
+            drift: 42,
+            in_tolerance: false,
+            peg_healthy: false,
+            taken_at: 2_000,
+            ..healthy.clone()
+        };
+        db.insert_reserve_snapshot(&drifted).unwrap();
+        assert_eq!(db.get_latest_reserve().unwrap().unwrap(), drifted);
+
+        // Serialized shape is the /api/metrics/reserve contract the
+        // dashboard hook consumes.
+        let json: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&drifted).unwrap()).unwrap();
+        for key in [
+            "lockedReserve",
+            "ethSupply",
+            "solSupply",
+            "totalWrapped",
+            "drift",
+            "inTolerance",
+            "pegHealthy",
+            "takenAt",
+        ] {
+            assert!(json.get(key).is_some(), "missing contract field {key}");
+        }
+        assert_eq!(json["pegHealthy"], false);
     }
 
     #[test]
