@@ -13,6 +13,8 @@
 pub mod attestation;
 pub mod chains;
 pub mod config;
+#[cfg(test)]
+mod happy_path_tests;
 pub mod nonce;
 pub mod order;
 

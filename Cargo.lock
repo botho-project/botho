@@ -2023,6 +2023,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "toml 0.9.10+spec-1.1.0",
  "uuid",
 ]
@@ -2039,6 +2040,7 @@ dependencies = [
  "clap",
  "ed25519-dalek",
  "hex",
+ "k256",
  "proptest",
  "rusqlite",
  "serde",

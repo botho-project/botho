@@ -1,0 +1,49 @@
+name: Contracts CI
+
+# Compiles and tests contracts/ethereum on every PR that can affect the
+# Solidity side or its Rust ABI bindings (#828, closes the gap flagged in
+# the #851 review / #852): the Hardhat suite pins the bridgeMint selector,
+# the BridgeMint/BridgeBurn event signatures + indexing, and the EIP-712
+# SafeTx digest that bridge/service/src/mint/ethereum.rs and
+# watchers/ethereum.rs bind — drift there must fail CI, not surface as a
+# production mint that never confirms.
+
+on:
+  pull_request:
+    paths:
+      - 'contracts/ethereum/**'
+      # The Rust files whose sol! bindings the Hardhat ABI-pinning tests
+      # mirror (#852): changes here should re-run the contract suite.
+      - 'bridge/service/src/mint/ethereum.rs'
+      - 'bridge/service/src/watchers/ethereum.rs'
+      - '.github/workflows/contracts-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  hardhat:
+    name: hardhat compile + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: contracts/ethereum
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: contracts/ethereum/package-lock.json
+
+      # npm ci: reproducible builds from the committed lockfile (#852 — the
+      # audited OpenZeppelin version is the built one).
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile contracts
+        run: npx hardhat compile
+
+      - name: Run contract tests
+        run: npx hardhat test

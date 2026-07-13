@@ -23,7 +23,7 @@
 //!   `Safe.execTransaction`.
 //! - **Local signing**: the bridge node self-attests with its own federation
 //!   keys through the SAME ingest pipeline (its own envelopes get no special
-//!   trust). Envelope transport between federation members is `TODO(#828)`;
+//!   trust). Envelope transport between federation members is `TODO(#858)`;
 //!   until then a threshold above 1 simply never authorizes — fail-safe, orders
 //!   stay in their confirmed state.
 //!
@@ -442,9 +442,9 @@ impl FederationAttestationProvider {
 
     /// Ingest one federation attestation for `order` at the current wall
     /// clock. This is the RPC seam validators will submit envelopes through
-    /// once inter-node transport lands (`TODO(#828)` — the endpoint routes
+    /// once inter-node transport lands (`TODO(#858)` — the endpoint routes
     /// the peeked order id to the on-record order, then calls this).
-    #[allow(dead_code)] // the #828 transport endpoint's entry point
+    #[allow(dead_code)] // the #858 transport endpoint's entry point
     pub fn submit_attestation(
         &self,
         envelope: &AttestationEnvelope,
@@ -660,7 +660,7 @@ impl FederationAttestationProvider {
         order: &BridgeOrder,
     ) -> Result<(), String> {
         let Some(sk) = &self.local_ed25519 else {
-            return Ok(()); // no local signer — rely on peers (#828)
+            return Ok(()); // no local signer — rely on peers (#858)
         };
         let my_id = hex::encode(sk.verifying_key().as_bytes());
         if self.set_contains(order.id, kind.name(), &my_id) {
@@ -901,7 +901,7 @@ impl AttestationProvider for FederationAttestationProvider {
                     }
                 }
 
-                // TODO(#828): request + ingest envelopes from the other
+                // TODO(#858): request + ingest envelopes from the other
                 // federation members. Until that transport exists a
                 // threshold above the locally-signable count simply never
                 // authorizes — fail-safe.
@@ -915,7 +915,7 @@ impl AttestationProvider for FederationAttestationProvider {
                     }),
                     None => Err(format!(
                         "attestation threshold not met ({}/{} distinct signers); \
-                         federation transport pending #828",
+                         federation transport pending #858",
                         collected, fed.threshold
                     )),
                 }
@@ -928,7 +928,7 @@ impl AttestationProvider for FederationAttestationProvider {
                 let kind = Self::mint_kind(order, None)?;
                 self.self_attest_ed25519(&kind, order)?;
 
-                // TODO(#828): federation transport (see the Ethereum arm).
+                // TODO(#858): federation transport (see the Ethereum arm).
                 let collected = self.progress(order.id, "bridge.mint_wbth");
                 match self.take_if_threshold_met(order.id, "bridge.mint_wbth", fed.threshold) {
                     Some(signatures) => Ok(MintAuthorization {
@@ -939,7 +939,7 @@ impl AttestationProvider for FederationAttestationProvider {
                     }),
                     None => Err(format!(
                         "attestation threshold not met ({}/{} distinct signers); \
-                         federation transport pending #828",
+                         federation transport pending #858",
                         collected, fed.threshold
                     )),
                 }
@@ -955,7 +955,7 @@ impl AttestationProvider for FederationAttestationProvider {
         let kind = Self::release_kind(order)?;
         self.self_attest_ed25519(&kind, order)?;
 
-        // TODO(#828): federation transport (see authorize_mint).
+        // TODO(#858): federation transport (see authorize_mint).
         let collected = self.progress(order.id, "bridge.release_bth");
         match self.take_if_threshold_met(order.id, "bridge.release_bth", fed.threshold) {
             Some(signatures) => Ok(ReleaseAuthorization {
@@ -967,7 +967,7 @@ impl AttestationProvider for FederationAttestationProvider {
             }),
             None => Err(format!(
                 "attestation threshold not met ({}/{} distinct signers); \
-                 federation transport pending #828",
+                 federation transport pending #858",
                 collected, fed.threshold
             )),
         }
@@ -1251,7 +1251,7 @@ mod tests {
         assert!(below.is_err());
         assert!(below.unwrap_err().contains("1/2"), "progress is reported");
 
-        // Peer k2 submits (transport = #828; here injected directly).
+        // Peer k2 submits (transport = #858; here injected directly).
         let peer = release_envelope(&order, &k2, "nonce-h");
         assert!(provider.submit_attestation_at(&peer, &order, NOW).accepted);
 

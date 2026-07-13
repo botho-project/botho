@@ -5,4 +5,5 @@ typechain-types/
 coverage/
 coverage.json
 .env
-package-lock.json
+# package-lock.json is COMMITTED (see #852): reproducible builds — the
+# audited OpenZeppelin version must be the deployed one, and CI uses npm ci.

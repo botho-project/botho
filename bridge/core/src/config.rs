@@ -119,7 +119,7 @@ pub struct BthConfig {
     /// authorize a reserve release. Per ADR 0002 this must be set no lower
     /// than the SCP safety threshold in production; the default of 0 is a
     /// development value that authorizes nothing spendable on its own
-    /// (release construction is additionally gated on #824/#828).
+    /// (release construction is additionally gated on #824/#856).
     #[serde(default)]
     pub release_threshold: u32,
 

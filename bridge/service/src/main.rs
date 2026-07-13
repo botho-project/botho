@@ -18,6 +18,8 @@ mod attestation;
 mod chaos_tests;
 mod db;
 mod engine;
+#[cfg(test)]
+mod fork_tests;
 mod mint;
 mod release;
 mod reserve;

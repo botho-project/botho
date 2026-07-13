@@ -1,0 +1,55 @@
+name: Bridge CI
+
+# EXECUTES the bridge test suites on every PR touching the bridge (#828).
+#
+# This is not redundant with workspace-build.yml: that workflow only
+# COMPILE-checks test targets (`cargo test --workspace --no-run`) and runs
+# doctests, so before this workflow existed the bridge's unit/integration
+# suite (order state machine, engine exactly-once decisions, watcher
+# confirmation/reorg logic, chaos/restart, reserve reconciler, attestation
+# pipeline) never actually ran in PR CI.
+#
+# The Ethereum fork tests are `#[ignore]`d here (they need a local node);
+# they run in the gated bridge-e2e.yml job and locally via
+# scripts/bridge-e2e-local.sh.
+
+on:
+  pull_request:
+    paths:
+      - 'bridge/**'
+      # The Rust suite pins contract ABI expectations (bridgeMint selector,
+      # BridgeMint/BridgeBurn topic layout, SafeTx digest vector), so
+      # contract changes must re-run it too.
+      - 'contracts/ethereum/contracts/**'
+      - '.github/workflows/bridge-ci.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  bridge-tests:
+    name: cargo test (bridge crates)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same pinned nightly as the rest of the repo (rust-toolchain channel).
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-03
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: bridge-ci
+
+      - name: Run bridge test suites
+        run: cargo test -p bth-bridge-core -p bth-bridge-service
+
+      - name: Clippy (bridge crates, deny warnings)
+        run: cargo clippy -p bth-bridge-core -p bth-bridge-service --all-targets -- -D warnings
