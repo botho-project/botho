@@ -278,6 +278,43 @@ pub struct PeerBroadcaster {
     timeout: std::time::Duration,
 }
 
+/// Maximum number of bytes read from a peer's push response.
+///
+/// `push_one` only parses the HTTP status line (`HTTP/1.1 <status> ...`) and
+/// discards the body, so the read is capped here rather than using an unbounded
+/// `read_to_end`. 8 KiB comfortably covers the status line plus any response
+/// headers a well-behaved peer sends, while bounding the worst-case transient
+/// heap a slow/malicious peer could grow during the push timeout window.
+const MAX_PEER_RESPONSE_BYTES: u64 = 8 * 1024;
+
+/// Read a peer's push response and parse the HTTP status code from the status
+/// line (`HTTP/1.1 <status> ...`).
+///
+/// Only the status line is needed, so the read is capped at
+/// [`MAX_PEER_RESPONSE_BYTES`] via [`AsyncReadExt::take`] rather than an
+/// unbounded `read_to_end`. This bounds the transient per-task heap a
+/// slow/malicious peer could grow by streaming body bytes for the whole push
+/// timeout window. Truncation is harmless: the status line is always first, so
+/// the capped buffer still contains everything the parse needs. A response with
+/// no parseable status yields `0`.
+async fn read_status_line<R>(reader: R) -> std::io::Result<u16>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let mut response = Vec::new();
+    reader
+        .take(MAX_PEER_RESPONSE_BYTES)
+        .read_to_end(&mut response)
+        .await?;
+    let text = String::from_utf8_lossy(&response);
+    let status: u16 = text
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    Ok(status)
+}
+
 /// A parsed peer base URL split into the pieces the raw-socket client needs.
 #[derive(Clone)]
 struct PeerEndpoint {
@@ -348,17 +385,9 @@ impl PeerBroadcaster {
                 .write_all(request.as_bytes())
                 .await
                 .map_err(|e| format!("write {}: {e}", peer.authority))?;
-            let mut response = Vec::new();
-            stream
-                .read_to_end(&mut response)
+            let status = read_status_line(&mut stream)
                 .await
                 .map_err(|e| format!("read {}: {e}", peer.authority))?;
-            let text = String::from_utf8_lossy(&response);
-            let status: u16 = text
-                .split_whitespace()
-                .nth(1)
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0);
             Ok::<u16, String>(status)
         };
 
@@ -981,5 +1010,72 @@ mod federation_transport_tests {
 
         let _ = sd.send(());
         let _ = srv.await;
+    }
+
+    // -- Bounded peer-response read (#874) ----------------------------------
+
+    /// A well-behaved peer returning `HTTP/1.1 200 OK` followed by a short body
+    /// still parses to status 200 (a short read below the cap is unaffected).
+    #[tokio::test]
+    async fn read_status_line_parses_normal_short_response() {
+        let (mut client, mut server) = tokio::io::duplex(64 * 1024);
+        server
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+            .await
+            .unwrap();
+        server.shutdown().await.unwrap();
+        let status = read_status_line(&mut client).await.unwrap();
+        assert_eq!(status, 200);
+    }
+
+    /// A peer that streams a valid status line followed by far more than the
+    /// cap still parses the status without reading (or allocating) past the
+    /// cap.
+    #[tokio::test]
+    async fn read_status_line_is_bounded_on_flood() {
+        // Status line + headers, then a body larger than MAX_PEER_RESPONSE_BYTES.
+        let mut payload =
+            b"HTTP/1.1 202 Accepted\r\nContent-Type: application/json\r\n\r\n".to_vec();
+        let flood_len = (MAX_PEER_RESPONSE_BYTES as usize) * 4;
+        payload.extend(std::iter::repeat_n(b'x', flood_len));
+
+        // Instrument the read path: `take(cap).read_to_end` must never buffer
+        // more than the cap even though the peer sent 4x that.
+        let mut buf = Vec::new();
+        {
+            let cursor = std::io::Cursor::new(payload.clone());
+            (&mut tokio::io::BufReader::new(cursor))
+                .take(MAX_PEER_RESPONSE_BYTES)
+                .read_to_end(&mut buf)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            buf.len() as u64,
+            MAX_PEER_RESPONSE_BYTES,
+            "read must stop at the cap even under a flood"
+        );
+
+        // And the shared helper still parses the status from the capped buffer.
+        let reader = tokio::io::BufReader::new(std::io::Cursor::new(payload));
+        let status = read_status_line(reader).await.unwrap();
+        assert_eq!(status, 202, "status line parses despite oversized body");
+    }
+
+    /// A peer that closes immediately after the status line (short read, well
+    /// below the cap) still parses correctly.
+    #[tokio::test]
+    async fn read_status_line_handles_status_only_response() {
+        let reader = std::io::Cursor::new(b"HTTP/1.1 500 Internal Server Error\r\n\r\n".to_vec());
+        let status = read_status_line(reader).await.unwrap();
+        assert_eq!(status, 500);
+    }
+
+    /// An empty / unparseable response yields status 0 (unchanged behavior).
+    #[tokio::test]
+    async fn read_status_line_defaults_to_zero_on_empty() {
+        let reader = std::io::Cursor::new(Vec::<u8>::new());
+        let status = read_status_line(reader).await.unwrap();
+        assert_eq!(status, 0);
     }
 }
