@@ -19,5 +19,8 @@ toml = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true, features = ["std"] }
 
-[dev-dependencies]
+# Attestation envelope protocol (#824): federation Ed25519 signatures and
+# canonical-JSON envelope parsing, mirroring the operator-signed-action
+# machinery.
+ed25519-dalek = { workspace = true, features = ["std"] }
 serde_json = { workspace = true, features = ["std"] }
