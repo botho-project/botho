@@ -47,6 +47,7 @@ Security auditing is iterative. Each internal audit:
 |------|---------|-------|----------|------|--------|-----|--------|
 | 2026-07-12 (c8) | Internal | Delta - Operator write path + consensus/BaaS | **0** | **0** | 1 new | 3 | **Healthy** |
 | 2026-07-05 (c7) | Internal | Delta - Verification (block-acceptance + BaaS + u128) | **0** | **0** | 1 new | 3 | **Healthy** |
+| 2026-06-11 (c6) | Internal | Delta - Block-acceptance path + consensus economics | **5** | 6 | 8 | 4 | Issues Found (all Criticals fixed by c7) |
 | 2026-01-03 (c5) | Internal | Full - Post Onion Gossip | **0** | **0** | 6 | 5 | **Clean** |
 | 2026-01-03 (c4) | Internal | Full - Post Security Fixes | **0** | **0** | 6 | 5 | **Clean** |
 | 2026-01-03 (c3) | Internal | Full - Post LION Deprecation | **0** | **0** | 10 | 8 | **Clean** |
