@@ -113,6 +113,57 @@ describe('idempotency (#458 §3, §5)', () => {
     if (second.ok) expect(second.created).toBe(false)
   })
 
+  it('backfills DNS + running for a row stuck in provisioning WITH an instance id (found live in #721 E2E)', async () => {
+    const { deps, ec2, dns, store } = makeDeps()
+    // Seed the exact live-E2E shape: launch succeeded but the RunInstances
+    // response had no IP, so the row has an instance id and sits in
+    // `provisioning`; a later delivery must finish DNS + running, not no-op.
+    await store.insertProvisioning({
+      user: 'cus_XYZ',
+      stripeCustomer: 'cus_XYZ',
+      subscriptionId: 'sub_ABC123',
+      nodeId: 'abc123',
+      region: 'us-west-2',
+      rpcUrl: 'https://node-abc123.testnet.botho.io/rpc',
+    })
+    await store.setInstanceId('sub_ABC123', 'i-stuck')
+    ec2.bySubscription.set('sub_ABC123', [
+      { instanceId: 'i-stuck', state: 'running', publicIp: '203.0.113.42', subscriptionTag: 'sub_ABC123' },
+    ])
+
+    const out = await provisionNode(REQ, deps)
+    expect(out.ok).toBe(true)
+    expect(ec2.runCalls).toHaveLength(0) // never launches a second box
+    if (out.ok) {
+      expect(out.record.state).toBe('running')
+      expect(out.created).toBe(false)
+    }
+    expect(dns.records.get('node-abc123.testnet.botho.io')?.content).toBe('203.0.113.42')
+    expect(store.rows.get('sub_ABC123')?.state).toBe('running')
+  })
+
+  it('stays provisioning (no DNS) when the stuck instance still has no public IP', async () => {
+    const { deps, ec2, dns, store } = makeDeps()
+    await store.insertProvisioning({
+      user: 'cus_XYZ',
+      stripeCustomer: 'cus_XYZ',
+      subscriptionId: 'sub_ABC123',
+      nodeId: 'abc123',
+      region: 'us-west-2',
+      rpcUrl: 'https://node-abc123.testnet.botho.io/rpc',
+    })
+    await store.setInstanceId('sub_ABC123', 'i-stuck')
+    ec2.bySubscription.set('sub_ABC123', [
+      { instanceId: 'i-stuck', state: 'pending', subscriptionTag: 'sub_ABC123' },
+    ])
+
+    const out = await provisionNode(REQ, deps)
+    expect(out.ok).toBe(true)
+    expect(ec2.runCalls).toHaveLength(0)
+    expect(dns.records.size).toBe(0)
+    expect(store.rows.get('sub_ABC123')?.state).toBe('provisioning')
+  })
+
   it('reconciles a D1 row stuck without an instance id against the EC2 tag', async () => {
     const { deps, ec2, store } = makeDeps()
     // Seed a provisioning row with no instance id (crashed mid-provision).

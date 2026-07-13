@@ -158,6 +158,22 @@ export async function provisionNode(
     // mid-provision), try to recover the instance from the EC2 tag before
     // deciding to launch — but DO NOT launch a second box.
     if (existing.instanceId) {
+      // A row stuck in `provisioning` with an instance id means the launch
+      // response lacked the public IP (it usually does) and no later delivery
+      // finished the job. Re-describe and complete the DNS + running
+      // transition here — otherwise the node stays `provisioning` forever and
+      // the reconcile sweep reaps a healthy box at the stuck threshold.
+      if (existing.state === 'provisioning') {
+        const live = (
+          await deps.ec2.describeBySubscription(req.region, req.subscriptionId)
+        ).find((i) => i.instanceId === existing.instanceId && isLiveInstanceState(i.state))
+        if (live?.publicIp) {
+          const hostname = nodeHostname(existing.nodeId, nodeDomain)
+          await deps.dns.upsertARecord(hostname, live.publicIp)
+          await deps.store.setState(req.subscriptionId, 'running')
+          return { ok: true, record: { ...existing, state: 'running' }, created: false }
+        }
+      }
       return { ok: true, record: existing, created: false }
     }
     const reconciled = await reconcileFromEc2(req, deps, existing)
