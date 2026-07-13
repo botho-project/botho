@@ -18,3 +18,4 @@ default = []
 [dependencies]
 anchor-lang = "0.29"
 anchor-spl = "0.29"
+hex = "0.4"
