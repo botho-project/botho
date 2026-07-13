@@ -23,9 +23,17 @@
 //!   `Safe.execTransaction`.
 //! - **Local signing**: the bridge node self-attests with its own federation
 //!   keys through the SAME ingest pipeline (its own envelopes get no special
-//!   trust). Envelope transport between federation members is `TODO(#858)`;
-//!   until then a threshold above 1 simply never authorizes — fail-safe, orders
-//!   stay in their confirmed state.
+//!   trust). Immediately after a self-attestation is accepted locally, the
+//!   envelope is pushed to the other federation members over the #858 transport
+//!   (an [`EnvelopePush`] broadcaster, wired to the peers' inbound `POST
+//!   /api/attest` endpoints); inbound peer envelopes arrive at THIS node's
+//!   endpoint and flow through [`submit_attestation`] — the same fail-closed
+//!   pipeline as any local envelope. When no broadcaster is configured
+//!   (single-node development, or threshold 1) a threshold above the
+//!   locally-signable count simply never authorizes — fail-safe, orders stay in
+//!   their confirmed state.
+//!
+//! [`submit_attestation`]: FederationAttestationProvider::submit_attestation
 //!
 //! [`StubAttestationProvider`] remains the development fallback when no
 //! federation is configured, and [`DisabledAttestationProvider`] is the
@@ -67,6 +75,22 @@ use crate::mint::ethereum::{encode_bridge_mint_calldata, safe_tx_hash, IGnosisSa
 
 /// Validity window the local signer stamps on its own attestations.
 const SELF_ATTESTATION_LIFETIME_SECS: u64 = 120;
+
+/// Outbound transport for freshly-signed local attestation envelopes (#858).
+///
+/// When this node self-attests (mint or release) it hands the accepted
+/// envelope to the broadcaster, which pushes it to the other federation
+/// members' inbound endpoints. Implementations are fire-and-forget with
+/// respect to the local authorization path: a slow or unreachable peer must
+/// never wedge or fail the local self-attestation (the peer will still
+/// self-attest and push its own envelope back). The envelope is
+/// self-authenticating, so the transport carries no trust — a dropped push
+/// only delays reaching threshold, and re-authorization re-pushes.
+pub trait EnvelopePush: Send + Sync {
+    /// Push one signed envelope to every configured peer. Errors are the
+    /// implementation's to log/absorb; the return is advisory.
+    fn broadcast(&self, envelope: &AttestationEnvelope);
+}
 
 /// Source of threshold mint and release authorizations.
 #[async_trait]
@@ -246,6 +270,11 @@ pub struct FederationAttestationProvider {
     local_ed25519: Option<SigningKey>,
     local_secp256k1: Option<PrivateKeySigner>,
     tracker: Mutex<Tracker>,
+    /// #858 outbound transport: pushes each accepted local envelope to the
+    /// other federation members. `None` disables outbound push (single-node
+    /// development / threshold 1) — the node then only ever counts its own
+    /// signer, which is fail-safe.
+    peer_push: Option<Arc<dyn EnvelopePush>>,
 }
 
 /// Parse a hex-encoded 32-byte Ed25519 public key list into verifying keys.
@@ -417,7 +446,95 @@ impl FederationAttestationProvider {
                 nonces,
                 sets: HashMap::new(),
             }),
+            peer_push: None,
         }))
+    }
+
+    /// Attach the #858 outbound transport: every accepted local
+    /// self-attestation envelope is pushed to the other federation members.
+    /// Consuming builder so the provider can be wrapped in an `Arc` after
+    /// wiring (the transport is set once, at engine start).
+    pub fn with_peer_push(mut self, push: Arc<dyn EnvelopePush>) -> Self {
+        self.peer_push = Some(push);
+        self
+    }
+
+    /// Test-support constructor for the #858 transport harness: a BTH-release
+    /// federation (Ed25519) with an in-memory nonce store and no peer push
+    /// (the caller attaches a real [`PeerBroadcaster`] via [`with_peer_push`]
+    /// so envelopes travel over the wire, not by direct injection).
+    #[cfg(test)]
+    pub(crate) fn new_bth_for_test(
+        signers: &[VerifyingKey],
+        threshold: u32,
+        local: SigningKey,
+    ) -> Self {
+        Self {
+            eth: None,
+            sol: None,
+            bth: Some(Ed25519Federation {
+                signers: signers.to_vec(),
+                threshold,
+            }),
+            local_ed25519: Some(local),
+            local_secp256k1: None,
+            tracker: Mutex::new(Tracker {
+                nonces: NonceStore::in_memory(),
+                sets: HashMap::new(),
+            }),
+            peer_push: None,
+        }
+    }
+
+    /// Test-support constructor for the #858 transport harness: an
+    /// Ethereum-mint federation (secp256k1 Safe owners) reading the Safe
+    /// nonce from a fixed source, with no peer push (the caller attaches a
+    /// real [`PeerBroadcaster`]).
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_eth_for_test(
+        owners: &[Address],
+        threshold: u32,
+        chain_id: u64,
+        safe: Address,
+        wbth: Address,
+        nonce_source: Arc<dyn SafeNonceSource>,
+        local: PrivateKeySigner,
+    ) -> Self {
+        Self {
+            eth: Some(EthFederation {
+                owners: owners.to_vec(),
+                threshold,
+                chain_id,
+                safe,
+                wbth,
+                nonce_source,
+            }),
+            sol: None,
+            bth: None,
+            local_ed25519: None,
+            local_secp256k1: Some(local),
+            tracker: Mutex::new(Tracker {
+                nonces: NonceStore::in_memory(),
+                sets: HashMap::new(),
+            }),
+            peer_push: None,
+        }
+    }
+
+    /// Distinct signers collected so far for `(order, action)` — test-only
+    /// observation of an [`AttestationSet`]'s progress WITHOUT touching it
+    /// (the #858 harness asserts a wired envelope actually reached a node).
+    #[cfg(test)]
+    pub(crate) fn distinct_signers_for_test(&self, order_id: Uuid, action: &'static str) -> u32 {
+        self.progress(order_id, action)
+    }
+
+    /// Build a release [`AttestationKind`] for `order` (test-only; the real
+    /// path is `release_kind`, which is private).
+    #[cfg(test)]
+    pub(crate) fn release_kind_for_test(order: &BridgeOrder) -> AttestationKind {
+        Self::release_kind(order).unwrap()
     }
 
     /// The configured threshold for a target chain's federation.
@@ -441,10 +558,11 @@ impl FederationAttestationProvider {
     }
 
     /// Ingest one federation attestation for `order` at the current wall
-    /// clock. This is the RPC seam validators will submit envelopes through
-    /// once inter-node transport lands (`TODO(#858)` — the endpoint routes
-    /// the peeked order id to the on-record order, then calls this).
-    #[allow(dead_code)] // the #858 transport endpoint's entry point
+    /// clock. This is the RPC seam validators submit envelopes through: the
+    /// #858 inbound endpoint (`POST /api/attest`) peeks the envelope's order
+    /// id, routes it to the on-record order, then calls this — which runs the
+    /// full fail-closed verify pipeline (the endpoint is pure transport in
+    /// front of verification, never a trusted inject).
     pub fn submit_attestation(
         &self,
         envelope: &AttestationEnvelope,
@@ -682,7 +800,19 @@ impl FederationAttestationProvider {
                 outcome.tag, outcome.message
             ));
         }
+        // #858: push our accepted envelope to the other federation members
+        // so their nodes reach threshold. Fire-and-forget — a peer failure
+        // never fails our local authorization path.
+        self.push_to_peers(&envelope);
         Ok(())
+    }
+
+    /// Hand a freshly-accepted local envelope to the #858 outbound transport
+    /// (no-op when no broadcaster is wired).
+    fn push_to_peers(&self, envelope: &AttestationEnvelope) {
+        if let Some(push) = &self.peer_push {
+            push.broadcast(envelope);
+        }
     }
 
     fn set_contains(&self, order_id: Uuid, action: &'static str, signer_key_id: &str) -> bool {
@@ -898,13 +1028,18 @@ impl AttestationProvider for FederationAttestationProvider {
                                 outcome.tag, outcome.message
                             ));
                         }
+                        // #858: push our Safe-owner envelope (bound to the
+                        // set's Safe nonce, so peers bind the SAME nonce) to
+                        // the other members. Fire-and-forget.
+                        self.push_to_peers(&envelope);
                     }
                 }
 
-                // TODO(#858): request + ingest envelopes from the other
-                // federation members. Until that transport exists a
-                // threshold above the locally-signable count simply never
-                // authorizes — fail-safe.
+                // #858: peer envelopes arrive asynchronously at this node's
+                // inbound endpoint and flow through submit_attestation into
+                // the same set. If the threshold is not yet met we fail-safe
+                // (the order stays retryable and re-authorizes on the next
+                // pass, re-pushing our envelope).
                 let collected = self.progress(order.id, "bridge.mint_wbth");
                 match self.take_if_threshold_met(order.id, "bridge.mint_wbth", fed.threshold) {
                     Some(signatures) => Ok(MintAuthorization {
@@ -915,7 +1050,7 @@ impl AttestationProvider for FederationAttestationProvider {
                     }),
                     None => Err(format!(
                         "attestation threshold not met ({}/{} distinct signers); \
-                         federation transport pending #858",
+                         awaiting peer envelopes (#858 transport)",
                         collected, fed.threshold
                     )),
                 }
@@ -928,7 +1063,9 @@ impl AttestationProvider for FederationAttestationProvider {
                 let kind = Self::mint_kind(order, None)?;
                 self.self_attest_ed25519(&kind, order)?;
 
-                // TODO(#858): federation transport (see the Ethereum arm).
+                // #858: self_attest_ed25519 already pushed our envelope to
+                // peers; peer envelopes arrive at the inbound endpoint. Below
+                // threshold is fail-safe (retries + re-pushes next pass).
                 let collected = self.progress(order.id, "bridge.mint_wbth");
                 match self.take_if_threshold_met(order.id, "bridge.mint_wbth", fed.threshold) {
                     Some(signatures) => Ok(MintAuthorization {
@@ -955,7 +1092,9 @@ impl AttestationProvider for FederationAttestationProvider {
         let kind = Self::release_kind(order)?;
         self.self_attest_ed25519(&kind, order)?;
 
-        // TODO(#858): federation transport (see authorize_mint).
+        // #858: self_attest_ed25519 already pushed our envelope to peers;
+        // peer envelopes arrive at the inbound endpoint. Below threshold is
+        // fail-safe (retries + re-pushes next pass).
         let collected = self.progress(order.id, "bridge.release_bth");
         match self.take_if_threshold_met(order.id, "bridge.release_bth", fed.threshold) {
             Some(signatures) => Ok(ReleaseAuthorization {
@@ -1013,6 +1152,7 @@ mod tests {
             local_ed25519: local,
             local_secp256k1: None,
             tracker: empty_tracker(),
+            peer_push: None,
         }
     }
 
@@ -1057,6 +1197,7 @@ mod tests {
             local_ed25519: None,
             local_secp256k1: local,
             tracker: empty_tracker(),
+            peer_push: None,
         }
     }
 

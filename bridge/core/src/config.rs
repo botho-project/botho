@@ -22,6 +22,83 @@ pub struct BridgeConfig {
     /// Reserve reconciliation / proof-of-reserves settings (#825).
     #[serde(default)]
     pub reserve: ReserveSettings,
+
+    /// Federation attestation transport settings (#858): how this node
+    /// exchanges signed attestation envelopes with the other validator
+    /// bridge nodes.
+    #[serde(default)]
+    pub federation: FederationSettings,
+}
+
+/// Federation attestation envelope transport settings (#858).
+///
+/// The #824 attestation pipeline verifies, replay-checks, order-binds, and
+/// thresholds signed envelopes, but each node only ever sees its OWN local
+/// signer's envelope until they are exchanged over the network. This section
+/// configures that exchange between the t-of-n validator bridge nodes (per
+/// ADR 0002 the SCP validator set doubles as the federation).
+///
+/// Envelopes are self-authenticating — every envelope carries a signature
+/// over domain-separated bytes plus a single-use replay nonce, verified
+/// fail-closed by the ingest pipeline regardless of how it arrived. The
+/// transport therefore needs integrity / anti-DoS but NOT confidentiality: a
+/// shared-secret bearer token gates the inbound endpoint (rejecting
+/// unauthenticated floods before any signature work) and authenticates
+/// outbound pushes to peers. The endpoint is pure transport in front of the
+/// existing verify pipeline; it never weakens verification.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FederationSettings {
+    /// Base URLs of the OTHER federation members' bridge services (e.g.
+    /// `https://bridge-2.example:9742`). When a node self-attests it pushes
+    /// its envelope to each peer's `/api/attest` endpoint. Empty disables
+    /// outbound push (single-node development, or threshold 1).
+    #[serde(default)]
+    pub peers: Vec<String>,
+
+    /// Listen address for the inbound attestation endpoint
+    /// (`POST /api/attest`). Empty string disables the inbound endpoint —
+    /// this node then only ever counts its own local signer, so any
+    /// threshold above 1 never authorizes (fail-safe). Distinct from the
+    /// proof-of-reserves API so the two surfaces can bind separately.
+    #[serde(default)]
+    pub attest_listen: String,
+
+    /// Shared bearer secret a peer must present (HTTP `Authorization:
+    /// Bearer <token>`) to submit an envelope to THIS node's inbound
+    /// endpoint. Empty disables the auth gate — acceptable only on a
+    /// trusted private network, since envelopes are self-authenticating,
+    /// but leaves the endpoint open to unauthenticated verification-work
+    /// floods. Set it in any exposed deployment.
+    #[serde(default)]
+    pub inbound_auth_token: Option<String>,
+
+    /// Bearer secret this node presents when pushing envelopes OUTBOUND to
+    /// peers (their `inbound_auth_token`). `None` sends no `Authorization`
+    /// header. In a symmetric federation every node shares one secret, so
+    /// this typically equals `inbound_auth_token`.
+    #[serde(default)]
+    pub peer_auth_token: Option<String>,
+
+    /// Per-request timeout (seconds) for an outbound push to a peer. A slow
+    /// or unreachable peer must never wedge the local self-attestation path.
+    #[serde(default = "default_peer_push_timeout_secs")]
+    pub peer_push_timeout_secs: u64,
+}
+
+fn default_peer_push_timeout_secs() -> u64 {
+    5
+}
+
+impl Default for FederationSettings {
+    fn default() -> Self {
+        Self {
+            peers: Vec::new(),
+            attest_listen: String::new(),
+            inbound_auth_token: None,
+            peer_auth_token: None,
+            peer_push_timeout_secs: default_peer_push_timeout_secs(),
+        }
+    }
 }
 
 /// Reserve reconciliation / proof-of-reserves settings (#825).
@@ -414,6 +491,7 @@ impl Default for BridgeConfig {
                 attestation_nonce_file: None,
             },
             reserve: ReserveSettings::default(),
+            federation: FederationSettings::default(),
         }
     }
 }
@@ -510,6 +588,40 @@ mod tests {
         assert_eq!(configured.release_signers.len(), 2);
         assert_eq!(configured.release_threshold, 3);
         assert_eq!(configured.release_confirmations_required, 2);
+    }
+
+    #[test]
+    fn test_federation_settings_default_and_parse() {
+        // Defaults (#858): no peers, inbound endpoint disabled, no auth,
+        // 5s push timeout — a single-node / threshold-1 deployment.
+        let config = BridgeConfig::default();
+        assert!(config.federation.peers.is_empty());
+        assert!(config.federation.attest_listen.is_empty());
+        assert!(config.federation.inbound_auth_token.is_none());
+        assert!(config.federation.peer_auth_token.is_none());
+        assert_eq!(config.federation.peer_push_timeout_secs, 5);
+
+        // A pre-existing config without a [federation] section still parses.
+        let legacy: FederationSettings = toml::from_str("").unwrap();
+        assert!(legacy.peers.is_empty());
+        assert_eq!(legacy.peer_push_timeout_secs, 5);
+
+        // The knobs round-trip from TOML.
+        let configured: FederationSettings = toml::from_str(
+            r#"
+            peers = ["http://bridge-2:9742", "http://bridge-3:9742"]
+            attest_listen = "0.0.0.0:9742"
+            inbound_auth_token = "in-secret"
+            peer_auth_token = "out-secret"
+            peer_push_timeout_secs = 3
+            "#,
+        )
+        .unwrap();
+        assert_eq!(configured.peers.len(), 2);
+        assert_eq!(configured.attest_listen, "0.0.0.0:9742");
+        assert_eq!(configured.inbound_auth_token.as_deref(), Some("in-secret"));
+        assert_eq!(configured.peer_auth_token.as_deref(), Some("out-secret"));
+        assert_eq!(configured.peer_push_timeout_secs, 3);
     }
 
     #[test]
