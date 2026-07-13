@@ -21,6 +21,7 @@
  */
 
 import type { NodeRecord, NodeState, NodeStore } from './node-store'
+import { boundFetch } from './bound-fetch'
 
 /** Health summary for a node, surfaced from `node_getStatus` (#458 §6). */
 export interface NodeHealth {
@@ -63,7 +64,7 @@ const HEALTH_TIMEOUT_MS = 5000
  */
 export async function fetchNodeHealth(
   rpcUrl: string,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = boundFetch,
 ): Promise<NodeHealth> {
   try {
     const controller = new AbortController()
@@ -123,7 +124,7 @@ export function buildWalletDeepLink(walletBaseUrl: string, rpcUrl: string): stri
 export async function buildStatusResponse(
   node: NodeRecord,
   walletBaseUrl: string,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = boundFetch,
 ): Promise<StatusResponse> {
   const health: NodeHealth =
     node.state === 'running'
@@ -157,7 +158,7 @@ export async function lookupStatusForCustomer(
   customerId: string,
   store: NodeStore,
   walletBaseUrl: string,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = boundFetch,
 ): Promise<StatusLookup> {
   const node = await store.getByCustomer(customerId)
   if (!node) return { ok: false, code: 'not_found' }
@@ -190,7 +191,7 @@ export async function createPortalSession(
   customerId: string,
   returnUrl: string,
   stripeSecretKey: string,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = boundFetch,
 ): Promise<{ url: string }> {
   const body = new URLSearchParams()
   body.set('customer', customerId)

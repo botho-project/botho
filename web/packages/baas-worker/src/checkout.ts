@@ -37,6 +37,7 @@ export {
 
 import type { AllowedRegion } from './node-config'
 import { isAllowedRegion, isCatalogRegion } from './node-config'
+import { boundFetch } from './bound-fetch'
 
 /**
  * The subset of Worker env this module needs. Bound from Worker secrets / vars
@@ -236,7 +237,7 @@ export interface CheckoutSessionResult {
 export async function createCheckoutSession(
   req: CheckoutRequest,
   env: CheckoutEnv,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = boundFetch,
 ): Promise<CheckoutSessionResult> {
   const body = buildCheckoutSessionParams(req, env)
 

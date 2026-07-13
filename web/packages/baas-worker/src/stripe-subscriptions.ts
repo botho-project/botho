@@ -13,6 +13,7 @@
  *
  * Secrets: the Stripe secret key comes from a Worker secret — never the repo.
  */
+import { boundFetch } from './bound-fetch'
 
 /**
  * Stripe subscription `status` values. A subscription only entitles a running
@@ -72,7 +73,7 @@ export class StripeSubscriptionError extends Error {
 export class HttpSubscriptionChecker implements SubscriptionChecker {
   constructor(
     private readonly stripeSecretKey: string,
-    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly fetchImpl: typeof fetch = boundFetch,
   ) {}
 
   async isActive(subscriptionId: string): Promise<boolean> {

@@ -9,6 +9,7 @@
  * Secrets: the API token + zone id come from Worker secrets / vars — never the
  * repo (#458 §2, §5).
  */
+import { boundFetch } from './bound-fetch'
 
 /** A managed DNS A record. */
 export interface DnsRecord {
@@ -63,7 +64,7 @@ export class HttpDnsClient implements DnsClient {
   constructor(
     private readonly apiToken: string,
     private readonly zoneId: string,
-    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly fetchImpl: typeof fetch = boundFetch,
   ) {}
 
   private headers(): Record<string, string> {

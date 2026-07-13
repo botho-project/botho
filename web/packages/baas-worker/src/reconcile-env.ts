@@ -23,6 +23,7 @@ import {
 import { DEFAULT_STUCK_PROVISIONING_MS, type ReconcileDeps } from './reconcile'
 import { D1NodeStore, type D1Like } from './node-store'
 import { HttpSubscriptionChecker } from './stripe-subscriptions'
+import { boundFetch } from './bound-fetch'
 
 /** Worker env keys the reconciler needs beyond the provisioner's. */
 export interface ReconcileEnv extends ProvisionerEnv {
@@ -75,7 +76,7 @@ export function reconcileRegions(env: ReconcileEnv): string[] {
  */
 export function reconcileDepsFromEnv(
   env: ReconcileEnv,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = boundFetch,
 ): ReconcileDeps {
   const missing = missingReconcileEnv(env)
   if (missing.length > 0) {

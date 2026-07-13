@@ -49,6 +49,7 @@ import {
   reconcileDepsFromEnv,
   type ReconcileEnv,
 } from './reconcile-env'
+import { boundFetch } from './bound-fetch'
 
 // Re-export the provisioner surface so the webhook (and any future consumer) can
 // import everything from the package entry without reaching into modules.
@@ -159,7 +160,7 @@ function jsonResponse(
 export async function handleCheckout(
   request: Request,
   env: Env,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = boundFetch,
 ): Promise<Response> {
   const origin = request.headers.get('Origin')
   const cors = corsHeaders(env, origin)
@@ -320,7 +321,7 @@ function storeFromEnv(env: Env): D1NodeStore {
 export async function handleStatus(
   request: Request,
   env: Env,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = boundFetch,
 ): Promise<Response> {
   const origin = request.headers.get('Origin')
   const cors = corsHeaders(env, origin)
@@ -388,7 +389,7 @@ export async function handleStatus(
 export async function handlePortal(
   request: Request,
   env: Env,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = boundFetch,
 ): Promise<Response> {
   const origin = request.headers.get('Origin')
   const cors = corsHeaders(env, origin)

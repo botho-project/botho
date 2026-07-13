@@ -25,6 +25,7 @@ import {
   DEFAULT_INSTANCE_TYPE,
 } from './node-config'
 import { D1NodeStore, type D1Like } from './node-store'
+import { boundFetch } from './bound-fetch'
 
 /** Worker env keys the provisioner needs. All secrets come from Worker secrets. */
 export interface ProvisionerEnv {
@@ -76,7 +77,7 @@ export function missingProvisionerEnv(env: ProvisionerEnv): string[] {
  */
 export function depsFromEnv(
   env: ProvisionerEnv,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: typeof fetch = boundFetch,
 ): ProvisionerDeps {
   const missing = missingProvisionerEnv(env)
   if (missing.length > 0) {

@@ -19,6 +19,7 @@
  */
 
 import { signAwsRequest, type AwsCredentials } from './aws-sigv4'
+import { boundFetch } from './bound-fetch'
 
 /** A live (non-terminated) managed node instance as seen by EC2. */
 export interface Ec2Instance {
@@ -202,7 +203,7 @@ export class Ec2Error extends Error {
 export class HttpEc2Client implements Ec2Client {
   constructor(
     private readonly credentials: AwsCredentials,
-    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly fetchImpl: typeof fetch = boundFetch,
   ) {}
 
   private async send(region: string, body: URLSearchParams): Promise<string> {
