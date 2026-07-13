@@ -6,6 +6,7 @@ This guide walks you through building Botho, creating a wallet, and running a no
 
 - **Rust** (1.83.0 or later)
 - **Cargo** (comes with Rust)
+- **macOS build tools**: `brew bundle` (installs `cmake`, `pkg-config` — see [Brewfile](../Brewfile)). `cmake` is required to build the RandomX C++ library (`vendor/randomx-rs` build script); `pkg-config` is needed by the Tauri desktop crate.
 
 Install Rust via [rustup](https://rustup.rs/):
 
