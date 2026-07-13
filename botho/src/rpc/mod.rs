@@ -1708,10 +1708,7 @@ async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> Json
                     // notes) need it to read the destination memo; `null` when
                     // the output carries no memo. Coinbase / lottery outputs
                     // never carry a memo and omit the field entirely.
-                    let e_memo = output
-                        .e_memo
-                        .as_ref()
-                        .map(|m| hex::encode(m.as_bytes()));
+                    let e_memo = output.e_memo.as_ref().map(|m| hex::encode(m.as_bytes()));
 
                     outputs.push(json!({
                         "txHash": hex::encode(tx.hash()),
