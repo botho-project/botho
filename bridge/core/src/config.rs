@@ -38,6 +38,35 @@ pub struct BthConfig {
     /// Number of confirmations required (0 for SCP finality)
     #[serde(default)]
     pub confirmations_required: u32,
+
+    /// The reserve wallet's public BTH address. Release transactions spend
+    /// reserve-owned outputs and return change to this address (preserving
+    /// factor-1/background provenance per ADR 0003). `None` disables
+    /// release submission (watch-only deployments).
+    #[serde(default)]
+    pub reserve_address: Option<String>,
+
+    /// Hex-encoded 32-byte Ed25519 public keys of the release federation
+    /// (the SCP validators' node keys, per ADR 0002). Every release
+    /// attestation signature must come from this set. Empty disables
+    /// federation-membership checking (development only).
+    #[serde(default)]
+    pub release_signers: Vec<String>,
+
+    /// The threshold `t` of distinct federation signatures required to
+    /// authorize a reserve release. Per ADR 0002 this must be set no lower
+    /// than the SCP safety threshold in production; the default of 0 is a
+    /// development value that authorizes nothing spendable on its own
+    /// (release construction is additionally gated on #824/#828).
+    #[serde(default)]
+    pub release_threshold: u32,
+
+    /// Confirmation depth required before a submitted release transaction
+    /// is considered final and the order advances `ReleasePending ->
+    /// Released`. 0 (the default) means SCP externalization finality: the
+    /// transaction's block is final as soon as it appears.
+    #[serde(default)]
+    pub release_confirmations_required: u32,
 }
 
 /// Ethereum connection configuration.
@@ -216,6 +245,10 @@ impl Default for BridgeConfig {
                 view_key_file: None,
                 spend_key_file: None,
                 confirmations_required: 0,
+                reserve_address: None,
+                release_signers: Vec::new(),
+                release_threshold: 0,
+                release_confirmations_required: 0,
             },
             ethereum: EthereumConfig {
                 rpc_url: "http://localhost:8545".to_string(),
@@ -270,5 +303,46 @@ mod tests {
         let config = BridgeConfig::default();
         assert_eq!(config.bridge.fee_bps, 10);
         assert!(!config.bridge.testnet);
+    }
+
+    #[test]
+    fn test_bth_release_knobs_default_and_parse() {
+        // Defaults: release submission disabled, SCP finality.
+        let config = BridgeConfig::default();
+        assert!(config.bth.reserve_address.is_none());
+        assert!(config.bth.release_signers.is_empty());
+        assert_eq!(config.bth.release_threshold, 0);
+        assert_eq!(config.bth.release_confirmations_required, 0);
+
+        // A pre-existing config without the release knobs still parses.
+        let legacy: BthConfig = toml::from_str(
+            r#"
+            rpc_url = "http://localhost:7101"
+            ws_url = "ws://localhost:7101/ws"
+            "#,
+        )
+        .unwrap();
+        assert!(legacy.reserve_address.is_none());
+        assert_eq!(legacy.release_confirmations_required, 0);
+
+        // The release knobs round-trip from TOML.
+        let configured: BthConfig = toml::from_str(
+            r#"
+            rpc_url = "http://localhost:7101"
+            ws_url = "ws://localhost:7101/ws"
+            reserve_address = "bth_reserve_addr"
+            release_signers = ["aa", "bb"]
+            release_threshold = 3
+            release_confirmations_required = 2
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            configured.reserve_address.as_deref(),
+            Some("bth_reserve_addr")
+        );
+        assert_eq!(configured.release_signers.len(), 2);
+        assert_eq!(configured.release_threshold, 3);
+        assert_eq!(configured.release_confirmations_required, 2);
     }
 }

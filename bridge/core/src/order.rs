@@ -170,6 +170,14 @@ impl OrderStatus {
     ///   tx is orphaned before finality the order rolls back to
     ///   `DepositConfirmed` and is re-submitted, instead of terminally failing
     ///   (the BTH deposit is still confirmed and owed).
+    /// - `ReleasePending -> BurnConfirmed`: release unwind. If a submitted BTH
+    ///   release tx provably cannot land (dropped and its inputs spent
+    ///   elsewhere, or invalid against the chain) the order rolls back to
+    ///   `BurnConfirmed` and is re-submitted — the wBTH burn is still confirmed
+    ///   and owed. Callers must only take this edge when the old tx can never
+    ///   resurface (see `confirm_release` in the bridge service): BTH has no
+    ///   on-chain order-id guard, so unwinding a tx that could still land would
+    ///   risk a double release.
     /// - Any non-terminal status to `Failed`.
     /// - `AwaitingDeposit` / `DepositDetected` to `Expired`.
     ///
@@ -189,6 +197,8 @@ impl OrderStatus {
         match (self, next) {
             // Reorg unwind: submitted mint orphaned before finality.
             (OrderStatus::MintPending, OrderStatus::DepositConfirmed) => true,
+            // Release unwind: submitted BTH release provably dropped.
+            (OrderStatus::ReleasePending, OrderStatus::BurnConfirmed) => true,
             // Any non-terminal order may fail.
             (_, OrderStatus::Failed { .. }) => true,
             // Only orders still waiting on a deposit can expire.
@@ -394,6 +404,7 @@ impl BridgeOrder {
         if matches!(
             (&self.status, &status),
             (OrderStatus::MintPending, OrderStatus::DepositConfirmed)
+                | (OrderStatus::ReleasePending, OrderStatus::BurnConfirmed)
         ) {
             self.dest_tx = None;
             self.dest_confirmed_at = None;
@@ -553,6 +564,46 @@ mod tests {
         order.try_set_status(OrderStatus::DepositConfirmed).unwrap();
         assert_eq!(order.status, OrderStatus::DepositConfirmed);
         assert!(order.dest_tx.is_none(), "reorg unwind must clear dest_tx");
+        assert!(order.dest_confirmed_at.is_none());
+    }
+
+    #[test]
+    fn test_release_flow_transitions() {
+        // Forward path.
+        assert!(OrderStatus::BurnDetected.can_transition_to(&OrderStatus::BurnConfirmed));
+        assert!(OrderStatus::BurnConfirmed.can_transition_to(&OrderStatus::ReleasePending));
+        assert!(OrderStatus::ReleasePending.can_transition_to(&OrderStatus::Released));
+
+        // No skipping the submission stage or the finality gate.
+        assert!(!OrderStatus::BurnConfirmed.can_transition_to(&OrderStatus::Released));
+        assert!(!OrderStatus::BurnDetected.can_transition_to(&OrderStatus::ReleasePending));
+
+        // Released is terminal and frozen.
+        assert!(!OrderStatus::Released.can_transition_to(&OrderStatus::ReleasePending));
+
+        // Burn orders cannot expire (the burn already happened; BTH is owed).
+        assert!(!OrderStatus::BurnConfirmed.can_transition_to(&OrderStatus::Expired));
+    }
+
+    #[test]
+    fn test_release_unwind_transition() {
+        // ReleasePending -> BurnConfirmed is the release rollback edge.
+        assert!(OrderStatus::ReleasePending.can_transition_to(&OrderStatus::BurnConfirmed));
+
+        let mut order = BridgeOrder::new_burn(
+            Chain::Ethereum,
+            1_000_000_000_000,
+            0,
+            "0xsource".to_string(),
+            "bth_addr".to_string(),
+            "0xburntx".to_string(),
+        );
+        order.set_status(OrderStatus::ReleasePending);
+        order.dest_tx = Some("bth_release_tx".to_string());
+
+        order.try_set_status(OrderStatus::BurnConfirmed).unwrap();
+        assert_eq!(order.status, OrderStatus::BurnConfirmed);
+        assert!(order.dest_tx.is_none(), "release unwind must clear dest_tx");
         assert!(order.dest_confirmed_at.is_none());
     }
 

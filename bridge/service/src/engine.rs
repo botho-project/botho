@@ -11,6 +11,7 @@ use crate::{
     attestation::{AttestationProvider, StubAttestationProvider},
     db::Database,
     mint::{ethereum::EthMinter, solana::SolMinter, ConfirmationStatus, Minter},
+    release::{bth::BthReleaser, PreparedRelease, ReleaseConfirmation, Releaser},
     watchers::{BthWatcher, EthereumWatcher},
 };
 
@@ -65,6 +66,22 @@ impl BridgeEngine {
         minters
     }
 
+    /// Build the BTH reserve-release backend from configuration.
+    ///
+    /// If the releaser cannot be constructed (missing reserve address, bad
+    /// federation key, unsatisfiable threshold, ...) release submission is
+    /// disabled with a warning: confirmed burns stay in `BurnConfirmed`
+    /// until the config is fixed — they are never dropped or failed.
+    fn build_releaser(config: &BridgeConfig) -> Option<Arc<dyn Releaser>> {
+        match BthReleaser::new(config.bth.clone()) {
+            Ok(releaser) => Some(Arc::new(releaser)),
+            Err(e) => {
+                warn!("BTH release disabled: {}", e);
+                None
+            }
+        }
+    }
+
     /// Run the bridge engine.
     pub async fn run(self) -> Result<(), String> {
         info!("Starting bridge engine");
@@ -97,10 +114,16 @@ impl BridgeEngine {
 
         // Spawn the order processing loop
         let minters = Self::build_minters(&self.config);
+        let releaser = Self::build_releaser(&self.config);
         // TODO(#824): swap the stub for the validator attestation protocol.
         let attestation: Arc<dyn AttestationProvider> = Arc::new(StubAttestationProvider);
-        let processor =
-            OrderProcessor::new(self.config.clone(), self.db.clone(), minters, attestation);
+        let processor = OrderProcessor::new(
+            self.config.clone(),
+            self.db.clone(),
+            minters,
+            releaser,
+            attestation,
+        );
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
         let process_handle = tokio::spawn(async move {
@@ -142,6 +165,7 @@ struct OrderProcessor {
     config: BridgeConfig,
     db: Database,
     minters: HashMap<Chain, Arc<dyn Minter>>,
+    releaser: Option<Arc<dyn Releaser>>,
     attestation: Arc<dyn AttestationProvider>,
 }
 
@@ -150,12 +174,14 @@ impl OrderProcessor {
         config: BridgeConfig,
         db: Database,
         minters: HashMap<Chain, Arc<dyn Minter>>,
+        releaser: Option<Arc<dyn Releaser>>,
         attestation: Arc<dyn AttestationProvider>,
     ) -> Self {
         Self {
             config,
             db,
             minters,
+            releaser,
             attestation,
         }
     }
@@ -183,11 +209,19 @@ impl OrderProcessor {
             }
         }
 
-        // Process confirmed burns (need to release BTH)
+        // Stage 3: confirmed burns need a BTH release submitted.
         let burn_orders = self.db.get_orders_by_status("burn_confirmed")?;
         for order in burn_orders {
-            if let Err(e) = self.process_burn_order(&order).await {
-                warn!("Failed to process burn order {}: {}", order.id, e);
+            if let Err(e) = self.submit_release(&order).await {
+                warn!("Failed to submit release for order {}: {}", order.id, e);
+            }
+        }
+
+        // Stage 4: submitted releases need confirmation (or unwind).
+        let pending_releases = self.db.get_orders_by_status("release_pending")?;
+        for order in pending_releases {
+            if let Err(e) = self.confirm_release(&order).await {
+                warn!("Failed to confirm release for order {}: {}", order.id, e);
             }
         }
 
@@ -408,23 +442,256 @@ impl OrderProcessor {
         Ok(())
     }
 
-    /// Process a burn order (burn confirmed, need to release BTH).
-    async fn process_burn_order(&self, order: &BridgeOrder) -> Result<(), String> {
+    /// Release submission stage: `BurnConfirmed -> ReleasePending`.
+    ///
+    /// Exactly-once: a durable claim in the `release_claims` table is taken
+    /// BEFORE any signing, and the signed transaction (hash + raw bytes) is
+    /// recorded BEFORE the first broadcast. A crash or concurrent tick at
+    /// any point either finds no recorded tx (nothing was ever broadcast —
+    /// safe to sign fresh) or finds the recorded tx and reuses it — the
+    /// engine NEVER signs a second release with different reserve inputs,
+    /// which could double-spend the reserve (BTH has no on-chain order-id
+    /// guard; the claims table is the release-side exactly-once guard).
+    async fn submit_release(&self, order: &BridgeOrder) -> Result<(), String> {
         info!(
-            "Processing burn order {} for {} picocredits",
-            order.id, order.amount
-        );
-
-        // TODO(#822): Implement actual BTH release (threshold-signed per
-        // ADR 0002, reusing the operator-signed-action machinery).
-        info!(
-            "Would send {} BTH to {}",
+            "Processing burn order {}: release {} picocredits to {}",
+            order.id,
             order.net_amount(),
             order.dest_address
         );
 
+        if order.dest_chain != Chain::Bth {
+            self.db.update_order_status(
+                &order.id,
+                &OrderStatus::Failed {
+                    reason: format!(
+                        "burn orders release on the BTH chain, not {}",
+                        order.dest_chain
+                    ),
+                },
+                None,
+            )?;
+            return Ok(());
+        }
+
+        let Some(releaser) = self.releaser.as_ref() else {
+            // Not failed: releasing is unconfigured/disabled. The order
+            // stays BurnConfirmed and is retried when the operator fixes
+            // the configuration.
+            return Err("BTH release not configured".to_string());
+        };
+
+        // Durable exactly-once claim, taken BEFORE any signing/submission.
+        let claim = self
+            .db
+            .try_claim_release(&order.id, &hex::encode(order.order_id_bytes()))?;
+
+        // Idempotency: a previously signed tx (crash between persistence
+        // and status update, or a re-poll) is reused, never re-signed.
+        if let Some(existing_tx) = claim.release_tx_hash {
+            info!(
+                "Order {} already has release tx {}; resuming without re-signing",
+                order.id, existing_tx
+            );
+            self.db.update_order_status(
+                &order.id,
+                &OrderStatus::ReleasePending,
+                Some(&existing_tx),
+            )?;
+            // Re-broadcast the exact recorded bytes (idempotent; "already
+            // known" is success). A failure here is non-fatal: the
+            // confirmation stage keeps polling and this path re-runs.
+            if let Some(raw) = claim.release_tx_raw {
+                let prepared = PreparedRelease {
+                    tx_hash: existing_tx.clone(),
+                    raw,
+                };
+                if let Err(e) = releaser.broadcast(&prepared).await {
+                    warn!(
+                        "Re-broadcast of recorded release tx {} for order {} failed: {}",
+                        existing_tx, order.id, e
+                    );
+                }
+            }
+            return Ok(());
+        }
+
+        // Threshold attestation from the validator federation (#824),
+        // bound to this exact order id, amount, and recipient. The
+        // releaser re-verifies every signature before touching reserve key
+        // material.
+        let auth = self
+            .attestation
+            .authorize_release(order)
+            .await
+            .map_err(|e| format!("attestation failed: {}", e))?;
+
+        // Build + threshold-sign (no broadcast yet). Nothing was recorded
+        // in the claim, so a failure here (including the #828
+        // NotImplemented stub) leaves the order BurnConfirmed for a clean
+        // retry — no reserve funds have moved.
+        let prepared = releaser
+            .prepare_release(order, &auth)
+            .await
+            .map_err(|e| format!("prepare_release failed: {}", e))?;
+
+        // Persist the signed tx BEFORE broadcast — the exactly-once guard.
+        let record = self
+            .db
+            .record_release_tx(&order.id, &prepared.tx_hash, &prepared.raw)?;
+        let recorded_tx = record
+            .release_tx_hash
+            .ok_or_else(|| "release tx missing after record".to_string())?;
         self.db
-            .update_order_status(&order.id, &OrderStatus::ReleasePending, None)?;
+            .update_order_status(&order.id, &OrderStatus::ReleasePending, Some(&recorded_tx))?;
+        self.db.log_audit(
+            Some(&order.id),
+            "release_submitted",
+            &format!(
+                "chain=bth tx={} amount={} recipient={}",
+                recorded_tx,
+                order.net_amount(),
+                order.dest_address
+            ),
+        )?;
+
+        if recorded_tx != prepared.tx_hash {
+            // Lost a race with another submission path: the recorded tx
+            // wins; do not broadcast ours.
+            warn!(
+                "Order {} already recorded release tx {}; discarding freshly signed {}",
+                order.id, recorded_tx, prepared.tx_hash
+            );
+            return Ok(());
+        }
+
+        // Broadcast the SAME signed tx with bounded retries. A persistent
+        // failure leaves the order ReleasePending: the resume path
+        // re-broadcasts the recorded bytes and the confirmation stage
+        // detects a provably-dead tx and unwinds it for re-submission.
+        let mut attempt = 0u32;
+        loop {
+            match releaser.broadcast(&prepared).await {
+                Ok(()) => {
+                    info!(
+                        "Broadcast release tx {} for order {}",
+                        prepared.tx_hash, order.id
+                    );
+                    break;
+                }
+                Err(e) => {
+                    attempt += 1;
+                    if attempt > self.config.bridge.max_retries {
+                        warn!(
+                            "Broadcast of {} failed after {} attempts: {}; leaving order {} \
+                             ReleasePending for resume/confirmation to handle",
+                            prepared.tx_hash, attempt, e, order.id
+                        );
+                        break;
+                    }
+                    warn!(
+                        "Broadcast attempt {}/{} for {} failed: {}; retrying same signed tx",
+                        attempt, self.config.bridge.max_retries, prepared.tx_hash, e
+                    );
+                    tokio::time::sleep(BROADCAST_RETRY_DELAY).await;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Release confirmation stage: `ReleasePending -> Released` (or unwind).
+    ///
+    /// `Released` only fires once the releaser reports the configured
+    /// confirmation requirement met (`release_confirmations_required`;
+    /// 0 = SCP externalization finality).
+    async fn confirm_release(&self, order: &BridgeOrder) -> Result<(), String> {
+        let Some(releaser) = self.releaser.as_ref() else {
+            return Err("BTH release not configured".to_string());
+        };
+
+        let dest_tx = match &order.dest_tx {
+            Some(tx) => tx.clone(),
+            None => match self
+                .db
+                .get_release_by_order(&order.id)?
+                .and_then(|c| c.release_tx_hash)
+            {
+                Some(tx) => tx,
+                None => {
+                    // ReleasePending with no recorded tx is inconsistent
+                    // state (should be unreachable): unwind for
+                    // re-submission — nothing was ever signed/broadcast.
+                    warn!(
+                        "Order {} is ReleasePending with no recorded release tx; rolling back",
+                        order.id
+                    );
+                    self.db.rollback_release(&order.id)?;
+                    return Ok(());
+                }
+            },
+        };
+
+        match releaser
+            .check_confirmation(order, &dest_tx)
+            .await
+            .map_err(|e| format!("check_confirmation failed: {}", e))?
+        {
+            ReleaseConfirmation::Confirmed => {
+                if !order.status.can_transition_to(&OrderStatus::Released) {
+                    return Err(format!(
+                        "order {} cannot be released from status {}",
+                        order.id, order.status
+                    ));
+                }
+                self.db.mark_release_confirmed(&order.id)?;
+                self.db.log_audit(
+                    Some(&order.id),
+                    "release_confirmed",
+                    &format!("chain=bth tx={}", dest_tx),
+                )?;
+                info!(
+                    "Release for order {} confirmed on BTH (tx {})",
+                    order.id, dest_tx
+                );
+            }
+            ReleaseConfirmation::Pending { confirmations } => {
+                debug!(
+                    "Release tx {} for order {} at {} confirmation(s); waiting",
+                    dest_tx, order.id, confirmations
+                );
+            }
+            ReleaseConfirmation::Dropped => {
+                // Unwind: ReleasePending -> BurnConfirmed. Only reported
+                // when the recorded tx PROVABLY cannot land (its key images
+                // were spent by a different tx, or it is permanently
+                // invalid), so re-signing a fresh tx on the next tick
+                // cannot double-release.
+                warn!(
+                    "Release tx {} for order {} provably dropped; \
+                     rolling back to BurnConfirmed for re-submission",
+                    dest_tx, order.id
+                );
+                self.db.rollback_release(&order.id)?;
+                self.db.log_audit(
+                    Some(&order.id),
+                    "release_dropped",
+                    &format!("chain=bth tx={}", dest_tx),
+                )?;
+            }
+            ReleaseConfirmation::Failed { reason } => {
+                warn!(
+                    "Release tx {} for order {} failed: {}",
+                    dest_tx, order.id, reason
+                );
+                // The claim is left intact deliberately: a Failed release
+                // needs operator attention, and any retry must reuse the
+                // recorded tx rather than sign a competing reserve spend.
+                self.db
+                    .update_order_status(&order.id, &OrderStatus::Failed { reason }, None)?;
+            }
+        }
 
         Ok(())
     }
@@ -448,9 +715,12 @@ impl OrderProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mint::{MintError, PreparedMint};
+    use crate::{
+        mint::{MintError, PreparedMint},
+        release::ReleaseError,
+    };
     use async_trait::async_trait;
-    use bth_bridge_core::MintAuthorization;
+    use bth_bridge_core::{MintAuthorization, ReleaseAuthorization};
     use std::sync::{
         atomic::{AtomicU32, Ordering},
         Mutex,
@@ -517,7 +787,71 @@ mod tests {
         }
     }
 
+    /// Programmable in-memory releaser for driving the engine in tests.
+    struct MockReleaser {
+        prepare_calls: AtomicU32,
+        broadcast_calls: AtomicU32,
+        next_tx: Mutex<String>,
+        confirmation: Mutex<ReleaseConfirmation>,
+        /// Attestations seen by prepare_release (order-binding assertions).
+        last_auth: Mutex<Option<ReleaseAuthorization>>,
+    }
+
+    impl MockReleaser {
+        fn new() -> Self {
+            Self {
+                prepare_calls: AtomicU32::new(0),
+                broadcast_calls: AtomicU32::new(0),
+                next_tx: Mutex::new("bth_release_tx_1".to_string()),
+                confirmation: Mutex::new(ReleaseConfirmation::Pending { confirmations: 0 }),
+                last_auth: Mutex::new(None),
+            }
+        }
+
+        fn set_next_tx(&self, tx: &str) {
+            *self.next_tx.lock().unwrap() = tx.to_string();
+        }
+
+        fn set_confirmation(&self, status: ReleaseConfirmation) {
+            *self.confirmation.lock().unwrap() = status;
+        }
+    }
+
+    #[async_trait]
+    impl Releaser for MockReleaser {
+        async fn prepare_release(
+            &self,
+            _order: &BridgeOrder,
+            auth: &ReleaseAuthorization,
+        ) -> Result<PreparedRelease, ReleaseError> {
+            self.prepare_calls.fetch_add(1, Ordering::SeqCst);
+            *self.last_auth.lock().unwrap() = Some(auth.clone());
+            Ok(PreparedRelease {
+                tx_hash: self.next_tx.lock().unwrap().clone(),
+                raw: vec![0xca, 0xfe],
+            })
+        }
+
+        async fn broadcast(&self, _prepared: &PreparedRelease) -> Result<(), ReleaseError> {
+            self.broadcast_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn check_confirmation(
+            &self,
+            _order: &BridgeOrder,
+            _dest_tx: &str,
+        ) -> Result<ReleaseConfirmation, ReleaseError> {
+            Ok(self.confirmation.lock().unwrap().clone())
+        }
+    }
+
     fn setup() -> (OrderProcessor, Arc<MockMinter>, Database) {
+        let (processor, minter, _releaser, db) = setup_full();
+        (processor, minter, db)
+    }
+
+    fn setup_full() -> (OrderProcessor, Arc<MockMinter>, Arc<MockReleaser>, Database) {
         let db = Database::open_in_memory().unwrap();
         db.migrate().unwrap();
 
@@ -525,13 +859,16 @@ mod tests {
         let mut minters: HashMap<Chain, Arc<dyn Minter>> = HashMap::new();
         minters.insert(Chain::Ethereum, minter.clone());
 
+        let releaser = Arc::new(MockReleaser::new());
+
         let processor = OrderProcessor::new(
             BridgeConfig::default(),
             db.clone(),
             minters,
+            Some(releaser.clone()),
             Arc::new(StubAttestationProvider),
         );
-        (processor, minter, db)
+        (processor, minter, releaser, db)
     }
 
     fn insert_confirmed_deposit(db: &Database) -> BridgeOrder {
@@ -705,5 +1042,239 @@ mod tests {
 
         let stored = db.get_order(&order.id).unwrap().unwrap();
         assert!(matches!(stored.status, OrderStatus::Failed { .. }));
+    }
+
+    // === Release (burn) path ===
+
+    fn insert_confirmed_burn(db: &Database) -> BridgeOrder {
+        let mut order = BridgeOrder::new_burn(
+            Chain::Ethereum,
+            1_000_000_000_000,
+            1_000_000_000,
+            "0x1234567890abcdef1234567890abcdef12345678".to_string(),
+            "bth_user_stealth_addr".to_string(),
+            "0xburntx".to_string(),
+        );
+        order.set_status(OrderStatus::BurnConfirmed);
+        db.insert_order(&order).unwrap();
+        order
+    }
+
+    #[tokio::test]
+    async fn test_release_submit_then_finality_gating() {
+        let (processor, _minter, releaser, db) = setup_full();
+        let order = insert_confirmed_burn(&db);
+
+        // Submission: BurnConfirmed -> ReleasePending with a recorded tx
+        // (claim taken and tx recorded BEFORE broadcast).
+        processor.process_pending_orders().await.unwrap();
+        let stored = db.get_order(&order.id).unwrap().unwrap();
+        assert_eq!(stored.status, OrderStatus::ReleasePending);
+        assert_eq!(stored.dest_tx.as_deref(), Some("bth_release_tx_1"));
+        let claim = db.get_release_by_order(&order.id).unwrap().unwrap();
+        assert_eq!(claim.release_tx_hash.as_deref(), Some("bth_release_tx_1"));
+        assert_eq!(claim.release_tx_raw.as_deref(), Some(&[0xca, 0xfe][..]));
+        assert_eq!(releaser.prepare_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(releaser.broadcast_calls.load(Ordering::SeqCst), 1);
+
+        // The attestation handed to the releaser was bound to THIS order:
+        // id, net amount, and recipient.
+        let auth = releaser.last_auth.lock().unwrap().clone().unwrap();
+        assert_eq!(auth.order_id, order.order_id_bytes());
+        assert_eq!(auth.amount, order.net_amount());
+        assert_eq!(auth.recipient, order.dest_address);
+
+        // Gating: while below the confirmation requirement the order must
+        // NOT reach Released.
+        releaser.set_confirmation(ReleaseConfirmation::Pending { confirmations: 0 });
+        processor.process_pending_orders().await.unwrap();
+        let stored = db.get_order(&order.id).unwrap().unwrap();
+        assert_eq!(
+            stored.status,
+            OrderStatus::ReleasePending,
+            "ReleasePending must not advance before finality"
+        );
+        assert!(stored.dest_confirmed_at.is_none());
+
+        // Finality reached (SCP externalization by default): Released.
+        releaser.set_confirmation(ReleaseConfirmation::Confirmed);
+        processor.process_pending_orders().await.unwrap();
+        let stored = db.get_order(&order.id).unwrap().unwrap();
+        assert_eq!(stored.status, OrderStatus::Released);
+        assert!(stored.dest_confirmed_at.is_some());
+        let claim = db.get_release_by_order(&order.id).unwrap().unwrap();
+        assert!(claim.confirmed_at.is_some());
+
+        // No double-release: the tx was signed exactly once end to end.
+        assert_eq!(releaser.prepare_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_release_resume_after_crash_reuses_recorded_tx() {
+        let (processor, _minter, releaser, db) = setup_full();
+        let order = insert_confirmed_burn(&db);
+
+        // Simulate a crash AFTER the release tx was signed and persisted
+        // but BEFORE the order status advanced: claim row with a recorded
+        // tx exists, order still BurnConfirmed.
+        db.try_claim_release(&order.id, &hex::encode(order.order_id_bytes()))
+            .unwrap();
+        db.record_release_tx(&order.id, "bth_persisted_before_crash", &[0xaa])
+            .unwrap();
+
+        processor.process_pending_orders().await.unwrap();
+
+        let stored = db.get_order(&order.id).unwrap().unwrap();
+        assert_eq!(stored.status, OrderStatus::ReleasePending);
+        assert_eq!(
+            stored.dest_tx.as_deref(),
+            Some("bth_persisted_before_crash")
+        );
+        // Exactly-once: NO new tx was signed — the recorded one was reused
+        // (and re-broadcast, which is idempotent).
+        assert_eq!(releaser.prepare_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(releaser.broadcast_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_release_crash_after_claim_before_sign_is_safe() {
+        let (processor, _minter, releaser, db) = setup_full();
+        let order = insert_confirmed_burn(&db);
+
+        // Crash AFTER the claim was taken but BEFORE anything was signed:
+        // claim exists with no recorded tx. Nothing was ever broadcast, so
+        // signing fresh on resume is safe — and must happen exactly once.
+        db.try_claim_release(&order.id, &hex::encode(order.order_id_bytes()))
+            .unwrap();
+
+        processor.process_pending_orders().await.unwrap();
+
+        let stored = db.get_order(&order.id).unwrap().unwrap();
+        assert_eq!(stored.status, OrderStatus::ReleasePending);
+        assert_eq!(stored.dest_tx.as_deref(), Some("bth_release_tx_1"));
+        assert_eq!(releaser.prepare_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_release_replayed_burn_single_release() {
+        let (processor, _minter, releaser, db) = setup_full();
+        let order = insert_confirmed_burn(&db);
+
+        // Multiple ticks over the same confirmed burn (a replayed burn
+        // event re-marking the order, or overlapping ticks) must produce
+        // exactly one signed release.
+        processor.process_pending_orders().await.unwrap();
+        processor.process_pending_orders().await.unwrap();
+        processor.process_pending_orders().await.unwrap();
+
+        assert_eq!(
+            releaser.prepare_calls.load(Ordering::SeqCst),
+            1,
+            "a burn order must be signed exactly once"
+        );
+        let claim = db.get_release_by_order(&order.id).unwrap().unwrap();
+        assert_eq!(claim.release_tx_hash.as_deref(), Some("bth_release_tx_1"));
+
+        // Even if the order is forced back to BurnConfirmed (replayed burn
+        // confirmation), the recorded tx is reused — never re-signed.
+        db.update_order_status(&order.id, &OrderStatus::BurnConfirmed, None)
+            .unwrap();
+        processor.process_pending_orders().await.unwrap();
+        assert_eq!(releaser.prepare_calls.load(Ordering::SeqCst), 1);
+        let stored = db.get_order(&order.id).unwrap().unwrap();
+        assert_eq!(stored.status, OrderStatus::ReleasePending);
+        assert_eq!(stored.dest_tx.as_deref(), Some("bth_release_tx_1"));
+    }
+
+    #[tokio::test]
+    async fn test_release_dropped_unwinds_and_resubmits() {
+        let (processor, _minter, releaser, db) = setup_full();
+        let order = insert_confirmed_burn(&db);
+
+        processor.process_pending_orders().await.unwrap();
+        assert_eq!(
+            db.get_order(&order.id).unwrap().unwrap().status,
+            OrderStatus::ReleasePending
+        );
+
+        // Provably-dead tx: unwind to BurnConfirmed; the next tick signs a
+        // fresh tx (safe only because Dropped guarantees the old one can
+        // never land).
+        releaser.set_confirmation(ReleaseConfirmation::Dropped);
+        processor.process_pending_orders().await.unwrap();
+
+        releaser.set_next_tx("bth_release_tx_2");
+        releaser.set_confirmation(ReleaseConfirmation::Pending { confirmations: 0 });
+        processor.process_pending_orders().await.unwrap();
+
+        let stored = db.get_order(&order.id).unwrap().unwrap();
+        assert_eq!(stored.status, OrderStatus::ReleasePending);
+        let claim = db.get_release_by_order(&order.id).unwrap().unwrap();
+        assert_eq!(
+            claim.release_tx_hash.as_deref(),
+            Some("bth_release_tx_2"),
+            "re-submission after a provably-dead tx signs a fresh tx"
+        );
+        assert_eq!(claim.order_id_hash, hex::encode(order.order_id_bytes()));
+        assert_eq!(releaser.prepare_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn test_release_failed_marks_order_failed_keeps_claim() {
+        let (processor, _minter, releaser, db) = setup_full();
+        let order = insert_confirmed_burn(&db);
+
+        processor.process_pending_orders().await.unwrap();
+
+        releaser.set_confirmation(ReleaseConfirmation::Failed {
+            reason: "wrong recipient output".to_string(),
+        });
+        processor.process_pending_orders().await.unwrap();
+
+        let stored = db.get_order(&order.id).unwrap().unwrap();
+        assert!(matches!(stored.status, OrderStatus::Failed { .. }));
+        // The claim survives so any operator-driven retry reuses the
+        // recorded tx instead of signing a competing reserve spend.
+        assert!(db.get_release_by_order(&order.id).unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_release_unconfigured_leaves_order_retryable() {
+        // No releaser configured: the burn order must stay BurnConfirmed
+        // (retry when the operator fixes the config), NOT fail or advance.
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let processor = OrderProcessor::new(
+            BridgeConfig::default(),
+            db.clone(),
+            HashMap::new(),
+            None,
+            Arc::new(StubAttestationProvider),
+        );
+        let order = insert_confirmed_burn(&db);
+
+        processor.process_pending_orders().await.unwrap();
+
+        let stored = db.get_order(&order.id).unwrap().unwrap();
+        assert_eq!(stored.status, OrderStatus::BurnConfirmed);
+        assert!(db.get_release_by_order(&order.id).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_release_pending_without_tx_rolls_back() {
+        let (processor, _minter, _releaser, db) = setup_full();
+        let order = insert_confirmed_burn(&db);
+
+        // Force the inconsistent state: ReleasePending with no claim.
+        db.update_order_status(&order.id, &OrderStatus::ReleasePending, None)
+            .unwrap();
+
+        processor.process_pending_orders().await.unwrap();
+
+        // The confirm stage unwinds it; the SAME tick's submit stage has
+        // already run, so it lands back at BurnConfirmed and is
+        // re-submitted next tick.
+        let stored = db.get_order(&order.id).unwrap().unwrap();
+        assert_eq!(stored.status, OrderStatus::BurnConfirmed);
     }
 }

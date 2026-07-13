@@ -4,7 +4,7 @@
 
 use bth_bridge_core::{BridgeOrder, Chain, MintAuthorization, OrderStatus, OrderType};
 use chrono::{DateTime, TimeZone, Utc};
-use rusqlite::{params, Connection, Result as SqliteResult};
+use rusqlite::{params, Connection, Result as SqliteResult, TransactionBehavior};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
@@ -28,6 +28,40 @@ pub struct MintRecord {
     /// When the transaction was persisted (always before first broadcast).
     pub submitted_at: DateTime<Utc>,
     /// When the transaction reached the required confirmation depth.
+    pub confirmed_at: Option<DateTime<Utc>>,
+}
+
+/// A row in the `release_claims` exactly-once table.
+///
+/// One row exists per burn order that has ever entered the release path.
+/// The claim is taken (row inserted with a NULL tx hash) BEFORE any signing
+/// or submission; the signed transaction's hash and raw bytes are recorded
+/// BEFORE the first broadcast. The `order_id` PRIMARY KEY is the
+/// service-side exactly-once guard: a concurrent tick or a post-restart
+/// re-entry finds the existing claim and either resumes with the recorded
+/// transaction (never re-signing with new inputs — a reserve double-spend
+/// risk) or, if nothing was recorded, knows nothing was ever broadcast and
+/// may safely sign fresh.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseClaim {
+    /// Bridge order UUID (string form).
+    pub order_id: Uuid,
+    /// Hex encoding of the 32-byte deterministic order id bound to the
+    /// release attestation.
+    pub order_id_hash: String,
+    /// BTH transaction hash of the signed release, `None` until a
+    /// transaction has been signed and durably recorded.
+    pub release_tx_hash: Option<String>,
+    /// The exact signed transaction bytes, persisted with the hash so a
+    /// resume after restart re-broadcasts the SAME transaction.
+    pub release_tx_raw: Option<Vec<u8>>,
+    /// When the claim was taken (always before signing).
+    pub claimed_at: DateTime<Utc>,
+    /// When the signed transaction was recorded (always before first
+    /// broadcast).
+    pub submitted_at: Option<DateTime<Utc>>,
+    /// When the transaction reached the required confirmation depth
+    /// (SCP finality by default).
     pub confirmed_at: Option<DateTime<Utc>>,
 }
 
@@ -121,6 +155,19 @@ impl Database {
             );
 
             CREATE UNIQUE INDEX IF NOT EXISTS idx_mints_order_hash ON mints(order_id_hash);
+
+            CREATE TABLE IF NOT EXISTS release_claims (
+                order_id TEXT PRIMARY KEY REFERENCES bridge_orders(id),
+                order_id_hash TEXT NOT NULL,
+                release_tx_hash TEXT,
+                release_tx_raw BLOB,
+                claimed_at INTEGER NOT NULL,
+                submitted_at INTEGER,
+                confirmed_at INTEGER
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_release_claims_order_hash
+                ON release_claims(order_id_hash);
             "#,
         )
         .map_err(|e| format!("Migration failed: {}", e))?;
@@ -451,6 +498,205 @@ impl Database {
         tx.commit().map_err(|e| format!("Commit failed: {}", e))
     }
 
+    // === Release exactly-once claims ===
+
+    /// Take (or find) the durable release claim for a burn order.
+    ///
+    /// Runs as a `BEGIN IMMEDIATE` transaction so the claim is durably
+    /// serialized against any concurrent writer BEFORE the caller does any
+    /// signing or submission. Returns the claim row:
+    ///
+    /// - `release_tx_hash == None`: this caller holds a fresh (or not yet
+    ///   signed) claim — nothing was ever recorded, so nothing was ever
+    ///   broadcast; it is safe to build and sign a transaction.
+    /// - `release_tx_hash == Some(tx)`: a transaction was already signed and
+    ///   recorded (possibly before a crash). The caller MUST reuse it and never
+    ///   sign a second transaction with different inputs.
+    pub fn try_claim_release(
+        &self,
+        order_id: &Uuid,
+        order_id_hash: &str,
+    ) -> Result<ReleaseClaim, String> {
+        {
+            let mut conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+            let tx = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(|e| format!("Transaction failed: {}", e))?;
+
+            tx.execute(
+                r#"
+                INSERT OR IGNORE INTO release_claims (
+                    order_id, order_id_hash, release_tx_hash, release_tx_raw,
+                    claimed_at, submitted_at, confirmed_at
+                ) VALUES (?1, ?2, NULL, NULL, ?3, NULL, NULL)
+                "#,
+                params![order_id.to_string(), order_id_hash, Utc::now().timestamp(),],
+            )
+            .map_err(|e| format!("Insert failed: {}", e))?;
+
+            tx.commit().map_err(|e| format!("Commit failed: {}", e))?;
+        }
+
+        self.get_release_by_order(order_id)?
+            .ok_or_else(|| "Release claim missing after insert".to_string())
+    }
+
+    /// Record the signed release transaction for a claimed order, exactly
+    /// once.
+    ///
+    /// Must be called BEFORE the transaction is first broadcast so a crash
+    /// between broadcast and persistence cannot lose the tx. Both the hash
+    /// and the raw signed bytes are stored so a post-restart resume
+    /// re-broadcasts the SAME transaction instead of re-signing with new
+    /// inputs (which could double-spend the reserve).
+    ///
+    /// If a transaction was already recorded (a lost race), the EXISTING
+    /// record is returned unchanged and the caller must discard its own
+    /// transaction without broadcasting it.
+    pub fn record_release_tx(
+        &self,
+        order_id: &Uuid,
+        tx_hash: &str,
+        tx_raw: &[u8],
+    ) -> Result<ReleaseClaim, String> {
+        {
+            let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+            conn.execute(
+                r#"
+                UPDATE release_claims
+                SET release_tx_hash = ?1, release_tx_raw = ?2, submitted_at = ?3
+                WHERE order_id = ?4 AND release_tx_hash IS NULL
+                "#,
+                params![
+                    tx_hash,
+                    tx_raw,
+                    Utc::now().timestamp(),
+                    order_id.to_string()
+                ],
+            )
+            .map_err(|e| format!("Update failed: {}", e))?;
+        }
+
+        self.get_release_by_order(order_id)?
+            .ok_or_else(|| "Release claim missing while recording tx".to_string())
+    }
+
+    /// Get the release claim for an order, if the release path was ever
+    /// entered.
+    pub fn get_release_by_order(&self, order_id: &Uuid) -> Result<Option<ReleaseClaim>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT order_id, order_id_hash, release_tx_hash, release_tx_raw,
+                       claimed_at, submitted_at, confirmed_at
+                FROM release_claims WHERE order_id = ?1
+                "#,
+            )
+            .map_err(|e| format!("Prepare failed: {}", e))?;
+
+        stmt.query_row(params![order_id.to_string()], Self::row_to_release)
+            .optional()
+            .map_err(|e| format!("Query failed: {}", e))
+    }
+
+    /// Mark an order's release as confirmed at the required depth.
+    ///
+    /// Atomically stamps `release_claims.confirmed_at` and moves the order
+    /// to `Released` with `dest_confirmed_at` set. The caller must have
+    /// validated the `ReleasePending -> Released` transition (finality
+    /// gating) before calling.
+    pub fn mark_release_confirmed(&self, order_id: &Uuid) -> Result<(), String> {
+        let mut conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let now = Utc::now().timestamp();
+
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Transaction failed: {}", e))?;
+
+        tx.execute(
+            r#"
+            UPDATE release_claims SET confirmed_at = ?1
+            WHERE order_id = ?2 AND confirmed_at IS NULL
+            "#,
+            params![now, order_id.to_string()],
+        )
+        .map_err(|e| format!("Update release_claims failed: {}", e))?;
+
+        tx.execute(
+            r#"
+            UPDATE bridge_orders
+            SET status = 'released', dest_confirmed_at = ?1, updated_at = ?1
+            WHERE id = ?2 AND status = 'release_pending'
+            "#,
+            params![now, order_id.to_string()],
+        )
+        .map_err(|e| format!("Update order failed: {}", e))?;
+
+        tx.commit().map_err(|e| format!("Commit failed: {}", e))
+    }
+
+    /// Release unwind: roll a `ReleasePending` order back to
+    /// `BurnConfirmed`.
+    ///
+    /// Atomically deletes the UNCONFIRMED claim and clears the order's
+    /// `dest_tx`, so `submit_release` re-runs cleanly. Confirmed releases
+    /// are never rolled back.
+    ///
+    /// The caller must only unwind when the recorded transaction PROVABLY
+    /// cannot land (see `ReleaseConfirmation::Dropped`): BTH has no
+    /// on-chain order-id guard, so re-signing with different inputs while
+    /// the old transaction could still land would risk a double release.
+    pub fn rollback_release(&self, order_id: &Uuid) -> Result<(), String> {
+        let mut conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let now = Utc::now().timestamp();
+
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Transaction failed: {}", e))?;
+
+        tx.execute(
+            "DELETE FROM release_claims WHERE order_id = ?1 AND confirmed_at IS NULL",
+            params![order_id.to_string()],
+        )
+        .map_err(|e| format!("Delete release claim failed: {}", e))?;
+
+        tx.execute(
+            r#"
+            UPDATE bridge_orders
+            SET status = 'burn_confirmed', dest_tx = NULL,
+                dest_confirmed_at = NULL, updated_at = ?1
+            WHERE id = ?2 AND status = 'release_pending'
+            "#,
+            params![now, order_id.to_string()],
+        )
+        .map_err(|e| format!("Update order failed: {}", e))?;
+
+        tx.commit().map_err(|e| format!("Commit failed: {}", e))
+    }
+
+    /// Convert a database row to a ReleaseClaim.
+    fn row_to_release(row: &rusqlite::Row<'_>) -> SqliteResult<ReleaseClaim> {
+        let order_id_str: String = row.get(0)?;
+        let order_id_hash: String = row.get(1)?;
+        let release_tx_hash: Option<String> = row.get(2)?;
+        let release_tx_raw: Option<Vec<u8>> = row.get(3)?;
+        let claimed_at: i64 = row.get(4)?;
+        let submitted_at: Option<i64> = row.get(5)?;
+        let confirmed_at: Option<i64> = row.get(6)?;
+
+        Ok(ReleaseClaim {
+            order_id: Uuid::parse_str(&order_id_str).unwrap_or_default(),
+            order_id_hash,
+            release_tx_hash,
+            release_tx_raw,
+            claimed_at: Utc.timestamp_opt(claimed_at, 0).unwrap(),
+            submitted_at: submitted_at.and_then(|t| Utc.timestamp_opt(t, 0).single()),
+            confirmed_at: confirmed_at.and_then(|t| Utc.timestamp_opt(t, 0).single()),
+        })
+    }
+
     /// Convert a database row to a MintRecord.
     fn row_to_mint(row: &rusqlite::Row<'_>) -> SqliteResult<MintRecord> {
         let order_id_str: String = row.get(0)?;
@@ -755,6 +1001,131 @@ mod tests {
         assert!(mint.is_some(), "confirmed mint record must survive");
         let stored = db.get_order(&order.id).unwrap().unwrap();
         assert_eq!(stored.status, OrderStatus::Completed);
+    }
+
+    fn setup_burn_order(db: &Database) -> BridgeOrder {
+        let mut order = BridgeOrder::new_burn(
+            Chain::Ethereum,
+            1_000_000_000_000,
+            1_000_000_000,
+            "0x1234567890abcdef1234567890abcdef12345678".to_string(),
+            "bth_user_stealth_addr".to_string(),
+            "0xburntx".to_string(),
+        );
+        order.set_status(OrderStatus::BurnConfirmed);
+        db.insert_order(&order).unwrap();
+        order
+    }
+
+    #[test]
+    fn test_release_claim_exactly_once() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let order = setup_burn_order(&db);
+        let hash = hex::encode(order.order_id_bytes());
+
+        // First claim: fresh, no tx recorded.
+        let first = db.try_claim_release(&order.id, &hash).unwrap();
+        assert!(first.release_tx_hash.is_none());
+        assert!(first.submitted_at.is_none());
+        assert!(first.confirmed_at.is_none());
+
+        // Record the signed tx (before broadcast).
+        let recorded = db
+            .record_release_tx(&order.id, "bth_tx_one", &[0xde, 0xad])
+            .unwrap();
+        assert_eq!(recorded.release_tx_hash.as_deref(), Some("bth_tx_one"));
+        assert_eq!(recorded.release_tx_raw.as_deref(), Some(&[0xde, 0xad][..]));
+        assert!(recorded.submitted_at.is_some());
+
+        // A re-claim (concurrent tick / post-restart) returns the SAME
+        // recorded tx — the caller must reuse it, never sign a second one.
+        let reclaim = db.try_claim_release(&order.id, &hash).unwrap();
+        assert_eq!(reclaim.release_tx_hash.as_deref(), Some("bth_tx_one"));
+
+        // A duplicate record with a DIFFERENT tx must not overwrite:
+        // exactly-once.
+        let second = db
+            .record_release_tx(&order.id, "bth_tx_two", &[0xbe, 0xef])
+            .unwrap();
+        assert_eq!(
+            second.release_tx_hash.as_deref(),
+            Some("bth_tx_one"),
+            "a recorded release tx must never be replaced"
+        );
+        assert_eq!(second.release_tx_raw.as_deref(), Some(&[0xde, 0xad][..]));
+    }
+
+    #[test]
+    fn test_release_confirm_flow() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let order = setup_burn_order(&db);
+        let hash = hex::encode(order.order_id_bytes());
+
+        db.try_claim_release(&order.id, &hash).unwrap();
+        db.record_release_tx(&order.id, "bth_tx", &[1]).unwrap();
+        db.update_order_status(&order.id, &OrderStatus::ReleasePending, Some("bth_tx"))
+            .unwrap();
+
+        db.mark_release_confirmed(&order.id).unwrap();
+
+        let claim = db.get_release_by_order(&order.id).unwrap().unwrap();
+        assert!(claim.confirmed_at.is_some());
+
+        let stored = db.get_order(&order.id).unwrap().unwrap();
+        assert_eq!(stored.status, OrderStatus::Released);
+        assert!(stored.dest_confirmed_at.is_some());
+    }
+
+    #[test]
+    fn test_release_rollback_clears_unconfirmed() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let order = setup_burn_order(&db);
+        let hash = hex::encode(order.order_id_bytes());
+
+        db.try_claim_release(&order.id, &hash).unwrap();
+        db.record_release_tx(&order.id, "bth_dropped", &[1])
+            .unwrap();
+        db.update_order_status(&order.id, &OrderStatus::ReleasePending, Some("bth_dropped"))
+            .unwrap();
+
+        // Provably-dead tx: unwind to BurnConfirmed, claim gone.
+        db.rollback_release(&order.id).unwrap();
+
+        assert!(db.get_release_by_order(&order.id).unwrap().is_none());
+        let stored = db.get_order(&order.id).unwrap().unwrap();
+        assert_eq!(stored.status, OrderStatus::BurnConfirmed);
+        assert!(stored.dest_tx.is_none());
+
+        // Re-entry after rollback takes a fresh claim.
+        let fresh = db.try_claim_release(&order.id, &hash).unwrap();
+        assert!(fresh.release_tx_hash.is_none());
+    }
+
+    #[test]
+    fn test_release_rollback_never_touches_confirmed() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let order = setup_burn_order(&db);
+        let hash = hex::encode(order.order_id_bytes());
+
+        db.try_claim_release(&order.id, &hash).unwrap();
+        db.record_release_tx(&order.id, "bth_tx", &[1]).unwrap();
+        db.update_order_status(&order.id, &OrderStatus::ReleasePending, Some("bth_tx"))
+            .unwrap();
+        db.mark_release_confirmed(&order.id).unwrap();
+
+        // A late rollback attempt must be a no-op on a confirmed release.
+        db.rollback_release(&order.id).unwrap();
+
+        assert!(
+            db.get_release_by_order(&order.id).unwrap().is_some(),
+            "confirmed release claim must survive"
+        );
+        let stored = db.get_order(&order.id).unwrap().unwrap();
+        assert_eq!(stored.status, OrderStatus::Released);
     }
 
     #[test]

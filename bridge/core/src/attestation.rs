@@ -88,6 +88,103 @@ impl MintAuthorization {
     }
 }
 
+/// Domain-separation tag for the BTH reserve-release attestation payload.
+///
+/// Mirrors the operator-signed-action pattern (`botho/src/operator_action.rs`
+/// `DOMAIN_SEPARATOR`, per ADR 0002): every federation signature covers this
+/// tag so a release signature can never be confused with (or replayed as) an
+/// operator action, a mint attestation, or any other Ed25519 payload signed
+/// by a validator node key. Changing this tag invalidates all in-flight
+/// release authorizations.
+pub const RELEASE_ATTESTATION_DOMAIN_TAG: &[u8] = b"botho-bridge-release-v1";
+
+/// Compute the digest the federation signs to authorize one BTH release.
+///
+/// `sha256(domain_tag || order_id || amount_le || recipient_len_le ||
+/// recipient)`
+///
+/// The digest binds the authorization to:
+/// - the deterministic on-chain **order id** (replay safety: the release
+///   engine's `release_claims` table plus the order state machine allow at most
+///   one release per order id, so a replayed authorization cannot trigger a
+///   second reserve spend);
+/// - the exact **net amount** in picocredits; and
+/// - the exact **recipient** BTH address (length-prefixed so the encoding is
+///   unambiguous).
+///
+/// The #824 attestation protocol produces signatures over exactly these
+/// bytes; the release engine verifies them before any reserve key material
+/// is touched.
+pub fn release_payload_digest(order_id: &[u8; 32], amount: u64, recipient: &str) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(RELEASE_ATTESTATION_DOMAIN_TAG);
+    hasher.update(order_id);
+    hasher.update(amount.to_le_bytes());
+    hasher.update((recipient.len() as u64).to_le_bytes());
+    hasher.update(recipient.as_bytes());
+    hasher.finalize().into()
+}
+
+/// Threshold authorization for a single BTH reserve release, produced by the
+/// #824 attestation protocol and bound to one bridge burn order.
+///
+/// Per ADR 0002, releases are authorized by a t-of-n threshold of the SCP
+/// validators' **Ed25519 node keys** (the scheme is always Ed25519 on the
+/// BTH side, so no scheme field is carried). Each signature covers
+/// [`release_payload_digest`], binding the order id, net amount, and
+/// recipient address — a signature for one order can never authorize a
+/// different amount, recipient, or a second release.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReleaseAuthorization {
+    /// The deterministic 32-byte order id this authorization is bound to.
+    /// Must equal [`crate::order::BridgeOrder::order_id_bytes`] for the
+    /// burn order being released.
+    #[serde(with = "hex_array_32")]
+    pub order_id: [u8; 32],
+
+    /// Net amount to pay the recipient, in picocredits
+    /// ([`crate::order::BridgeOrder::net_amount`]).
+    pub amount: u64,
+
+    /// The recipient's BTH address (`bridgeBurn`'s `bthAddress`). The
+    /// release transaction pays a **fresh one-time stealth output** derived
+    /// from this address (ADR 0004) — never a static payout key.
+    pub recipient: String,
+
+    /// The threshold `t` required by the federation configuration. Per
+    /// ADR 0002 this is never lower than the SCP safety threshold.
+    pub threshold: u32,
+
+    /// Collected validator Ed25519 signatures over
+    /// [`ReleaseAuthorization::digest`]. Must contain at least `threshold`
+    /// entries from distinct signers to be usable.
+    pub signatures: Vec<AttestationSignature>,
+}
+
+impl ReleaseAuthorization {
+    /// The digest every federation signature must cover.
+    pub fn digest(&self) -> [u8; 32] {
+        release_payload_digest(&self.order_id, self.amount, &self.recipient)
+    }
+
+    /// Whether enough distinct signers have signed to meet the threshold.
+    ///
+    /// This only counts distinct signer identities — cryptographic
+    /// verification of each signature (and federation membership) is the
+    /// release engine's job (`validate_release_attestation`).
+    pub fn meets_threshold(&self) -> bool {
+        let mut signers: Vec<&[u8]> = self
+            .signatures
+            .iter()
+            .map(|s| s.signer.as_slice())
+            .collect();
+        signers.sort();
+        signers.dedup();
+        signers.len() as u32 >= self.threshold
+    }
+}
+
 /// Hex serde for `Vec<u8>`.
 mod hex_bytes {
     use serde::{self, Deserialize, Deserializer, Serializer};
@@ -159,5 +256,62 @@ mod tests {
         let json = serde_json::to_string(&auth).unwrap();
         let back: MintAuthorization = serde_json::from_str(&json).unwrap();
         assert_eq!(auth, back);
+    }
+
+    #[test]
+    fn test_release_digest_golden_vector() {
+        use sha2::{Digest, Sha256};
+
+        // Pinned construction: sha256(tag || order_id || amount_le ||
+        // recipient_len_le || recipient). This must never change — in-flight
+        // release authorizations bind to it.
+        let order_id = [3u8; 32];
+        let digest = release_payload_digest(&order_id, 999_000_000_000, "bth_stealth_addr");
+
+        let expected: [u8; 32] = {
+            let mut hasher = Sha256::new();
+            hasher.update(b"botho-bridge-release-v1");
+            hasher.update([3u8; 32]);
+            hasher.update(999_000_000_000u64.to_le_bytes());
+            hasher.update((b"bth_stealth_addr".len() as u64).to_le_bytes());
+            hasher.update(b"bth_stealth_addr");
+            hasher.finalize().into()
+        };
+        assert_eq!(digest, expected);
+    }
+
+    #[test]
+    fn test_release_digest_binds_all_fields() {
+        let base = release_payload_digest(&[1u8; 32], 100, "addr");
+        // Different order id, amount, or recipient each produce a different
+        // digest — a signature cannot be replayed across any of them.
+        assert_ne!(base, release_payload_digest(&[2u8; 32], 100, "addr"));
+        assert_ne!(base, release_payload_digest(&[1u8; 32], 101, "addr"));
+        assert_ne!(base, release_payload_digest(&[1u8; 32], 100, "addr2"));
+    }
+
+    #[test]
+    fn test_release_authorization_threshold_and_serde() {
+        let mut auth = ReleaseAuthorization {
+            order_id: [7u8; 32],
+            amount: 42,
+            recipient: "bth_addr".to_string(),
+            threshold: 2,
+            signatures: vec![sig(1)],
+        };
+        assert!(!auth.meets_threshold());
+
+        auth.signatures.push(sig(2));
+        assert!(auth.meets_threshold());
+
+        // Duplicate signers do not count twice.
+        auth.signatures = vec![sig(1), sig(1)];
+        assert!(!auth.meets_threshold());
+
+        auth.signatures = vec![sig(1), sig(2)];
+        let json = serde_json::to_string(&auth).unwrap();
+        let back: ReleaseAuthorization = serde_json::from_str(&json).unwrap();
+        assert_eq!(auth, back);
+        assert_eq!(auth.digest(), back.digest());
     }
 }

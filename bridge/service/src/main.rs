@@ -14,6 +14,7 @@ mod attestation;
 mod db;
 mod engine;
 mod mint;
+mod release;
 mod watchers;
 
 use bth_bridge_core::BridgeConfig;
