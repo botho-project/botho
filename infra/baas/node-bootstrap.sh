@@ -34,6 +34,14 @@
 #
 # Re-running is safe (idempotent): each step checks current state first.
 #
+# Flags:
+#   --tls-retry-only   internal: run only the certbot-until-DNS retry step.
+#                      Invoked by the botho-tls-retry systemd timer; not for
+#                      manual use.
+#   --dry-run          local, non-EC2 smoke test of the two #807 additions
+#                      (DNS-seed -> bootstrap_peers resolution + systemd
+#                      unit-file rendering). No apt/certbot/systemd side effects.
+#
 # ---------------------------------------------------------------------------
 # PARAMETERS (environment variables / user-data exports)
 # ---------------------------------------------------------------------------
@@ -89,9 +97,15 @@
 #                      node-info.txt. The MVP is t4g.medium-only (#458 §5).
 #   NETWORK            (optional, default "testnet"). Only "testnet" is
 #                      supported by this slice.
-#   BOOTSTRAP_PEERS    (optional) comma-separated libp2p multiaddrs to use as
-#                      bootstrap_peers. Default: the live seed nodes plus DNS
-#                      seed discovery (seeds.testnet.botho.io).
+#   BOOTSTRAP_PEERS    (optional) comma-separated RESOLVED libp2p multiaddrs
+#                      (/ip4/<ip>/tcp/<port>/p2p/<peer_id>) to use as
+#                      bootstrap_peers verbatim. When unset, the script resolves
+#                      SEED_DOMAIN's TXT records into /ip4 peers itself (Fix 2,
+#                      #807); on empty/failed resolution it falls back to an
+#                      empty list + DNS-seed discovery with a loud log.
+#   SEED_DOMAIN        (optional, default "seeds.<NODE_DOMAIN>") DNS-seed domain
+#                      whose PEER_ID@host:port TXT records are resolved into
+#                      bootstrap_peers at config-write time (fresh provisions).
 #   MINT_THREADS       (optional, default 1) RandomX minting threads. t4g.medium
 #                      has 2 vCPU / ~4GB; 1 thread leaves headroom.
 #   CERTBOT_EMAIL      (optional) email for Let's Encrypt registration.
@@ -115,6 +129,10 @@
 #   /home/ubuntu/node-info.txt          machine-readable summary (RPC URL, peer
 #                                      id, mnemonic location, status command)
 #   systemd unit `botho` running `botho --testnet run --mint`
+#   systemd `botho-tls-retry.timer`/.service (only when the first inline certbot
+#     attempt fails because DNS is not yet pointed here) — retries certbot until
+#     DNS resolves, then self-disables. Re-invokes this script with
+#     --tls-retry-only from /usr/local/sbin/botho-node-bootstrap.sh.
 #   Read back any time with:  sudo /usr/local/bin/node-status   (installed here)
 #
 set -euo pipefail
@@ -123,6 +141,12 @@ set -euo pipefail
 # Logging: tee everything to a persistent log AND the cloud-init console.
 # ---------------------------------------------------------------------------
 LOG_FILE="/var/log/botho-node-bootstrap.log"
+# Degrade to a user-writable log if /var/log is not writable (e.g. a local
+# --dry-run as a non-root user); production/cloud-init runs as root and uses
+# the canonical path.
+if ! { : >> "$LOG_FILE"; } 2>/dev/null; then
+    LOG_FILE="${TMPDIR:-/tmp}/botho-node-bootstrap.log"
+fi
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 ts()   { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
@@ -149,6 +173,27 @@ CERTBOT_EMAIL="${CERTBOT_EMAIL:-admin@botho.io}"
 TLS_MODE="${TLS_MODE:-webroot}"
 NODE_WALLET_MNEMONIC="${NODE_WALLET_MNEMONIC:-}"
 BIP39_WORDLIST_URL="${BIP39_WORDLIST_URL:-https://raw.githubusercontent.com/bitcoin/bips/master/bip-0039/english.txt}"
+# DNS-seed domain resolved into bootstrap_peers at config-write time (Fix 2 /
+# issue #807). Testnet only in this slice, matching the NETWORK=testnet guard.
+SEED_DOMAIN="${SEED_DOMAIN:-seeds.${NODE_DOMAIN}}"
+
+# Mode/flag handling. The script has three entry modes:
+#   (default)         full first-boot provisioning (cloud-init user-data).
+#   --tls-retry-only  invoked ONLY by the botho-tls-retry systemd timer (Fix 1 /
+#                     issue #807): verify DNS points here, then try to issue the
+#                     TLS cert and swap nginx to the HTTPS site, self-disabling
+#                     the timer once a cert exists (or the retry cap elapses).
+#   --dry-run         local, non-EC2 function test of the two new pieces (seed
+#                     resolution + unit-file rendering). No apt/certbot/systemd.
+MODE="full"
+DRY_RUN=0
+for arg in "$@"; do
+    case "$arg" in
+        --tls-retry-only) MODE="tls-retry" ;;
+        --dry-run)        DRY_RUN=1 ;;
+        *) fail "unknown argument: $arg (supported: --tls-retry-only, --dry-run)" ;;
+    esac
+done
 
 # Service account: the Ubuntu arm64 AMI ships an "ubuntu" user; mirror the
 # seed/faucet layout that runs the node as that user with data in ~/.botho.
@@ -161,7 +206,11 @@ RPC_PORT=17101
 GOSSIP_PORT=17100
 
 [[ "$NETWORK" == "testnet" ]] || fail "Only NETWORK=testnet is supported in this slice (got '$NETWORK')."
-id "$RUN_USER" >/dev/null 2>&1 || fail "Expected user '$RUN_USER' to exist (Ubuntu arm64 AMI)."
+# The run-user guard is a production/EC2 precondition; skip it in --dry-run so
+# the new-behavior smoke test works on a dev laptop without an 'ubuntu' user.
+if [[ "$DRY_RUN" -ne 1 ]]; then
+    id "$RUN_USER" >/dev/null 2>&1 || fail "Expected user '$RUN_USER' to exist (Ubuntu arm64 AMI)."
+fi
 
 # Derive the public hostname from NODE_ID when NODE_HOSTNAME was not given
 # directly. The provisioner (#458 P6.2) assigns NODE_ID per subscription and
@@ -178,12 +227,382 @@ fi
 log "Params: NETWORK=$NETWORK NODE_ID='${NODE_ID:-<none>}' NODE_HOSTNAME='${NODE_HOSTNAME:-<none>}' REGION='${REGION:-<unset>}' TIER=$TIER TLS_MODE=$TLS_MODE MINT_THREADS=$MINT_THREADS"
 log "Binary source: ${BOTHO_BINARY_URL:-<unset: reuse existing $BIN_PATH, else latest GitHub release>}"
 
+# Path to the resolved copy of this script that the TLS-retry timer re-invokes.
+# cloud-init runs the original user-data from a transient path, so we install a
+# stable copy here (Step 5) and point the systemd unit at it.
+SELF_INSTALL_PATH="/usr/local/sbin/botho-node-bootstrap.sh"
+# systemd units + retry bookkeeping for the certbot-until-DNS retry (Fix 1).
+TLS_RETRY_SERVICE="/etc/systemd/system/botho-tls-retry.service"
+TLS_RETRY_TIMER="/etc/systemd/system/botho-tls-retry.timer"
+TLS_RETRY_STAMP="/var/lib/botho/tls-retry-first-attempt.epoch"
+TLS_RETRY_CAP_SECONDS=$((2 * 60 * 60))   # give up after ~2h of retries
+
+# ===========================================================================
+# Shared helpers (used by both full provisioning AND --tls-retry-only mode)
+# ===========================================================================
+NGINX_SITE="/etc/nginx/sites-available/${NODE_HOSTNAME:-_unset}"
+
+have_cert() { [[ -f "/etc/letsencrypt/live/${NODE_HOSTNAME}/fullchain.pem" ]]; }
+
+write_http_only_site() {
+    # Minimal HTTP server: ACME challenge + /rpc proxy. Used before certs
+    # exist (webroot mode) and as the whole config in TLS_MODE=skip.
+    cat > "$NGINX_SITE" <<EOF
+map \$http_upgrade \$connection_upgrade { default upgrade; '' close; }
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${NODE_HOSTNAME};
+
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location /health { access_log off; add_header Content-Type text/plain; return 200 "OK"; }
+
+    location /rpc {
+        limit_except POST OPTIONS { deny all; }
+        if (\$request_method = 'OPTIONS') {
+            add_header 'Access-Control-Allow-Origin' '*' always;
+            add_header 'Access-Control-Allow-Methods' 'POST, OPTIONS' always;
+            add_header 'Access-Control-Allow-Headers' 'Content-Type' always;
+            add_header 'Content-Length' 0; add_header 'Content-Type' 'text/plain';
+            return 204;
+        }
+        proxy_pass http://127.0.0.1:${RPC_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_hide_header 'Access-Control-Allow-Origin';
+        proxy_hide_header 'Vary';
+        add_header 'Access-Control-Allow-Origin' '*' always;
+        client_max_body_size 64k;
+    }
+}
+EOF
+}
+
+write_tls_site() {
+    # Full HTTPS site mirroring infra/seed/seed-nginx.conf: HTTP->HTTPS
+    # redirect, TLS, /rpc and /rpc/ws proxy with CORS de-duplication.
+    cat > "$NGINX_SITE" <<EOF
+map \$http_upgrade \$connection_upgrade { default upgrade; '' close; }
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${NODE_HOSTNAME};
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+    location / { return 301 https://\$host\$request_uri; }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name ${NODE_HOSTNAME};
+
+    ssl_certificate /etc/letsencrypt/live/${NODE_HOSTNAME}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${NODE_HOSTNAME}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    location /health { access_log off; add_header Content-Type text/plain; return 200 "OK"; }
+
+    location = /rpc/ws {
+        if (\$request_method = 'OPTIONS') {
+            add_header 'Access-Control-Allow-Origin' '*' always;
+            add_header 'Access-Control-Allow-Methods' 'GET, OPTIONS' always;
+            add_header 'Access-Control-Allow-Headers' 'Content-Type, Upgrade, Connection' always;
+            add_header 'Content-Length' 0; add_header 'Content-Type' 'text/plain';
+            return 204;
+        }
+        proxy_pass http://127.0.0.1:${RPC_PORT}/ws;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection \$connection_upgrade;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_hide_header 'Access-Control-Allow-Origin';
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 3600s;
+        proxy_read_timeout 3600s;
+        add_header 'Access-Control-Allow-Origin' '*' always;
+    }
+
+    location /rpc {
+        limit_except POST OPTIONS { deny all; }
+        if (\$request_method = 'OPTIONS') {
+            add_header 'Access-Control-Allow-Origin' '*' always;
+            add_header 'Access-Control-Allow-Methods' 'POST, OPTIONS' always;
+            add_header 'Access-Control-Allow-Headers' 'Content-Type' always;
+            add_header 'Content-Length' 0; add_header 'Content-Type' 'text/plain';
+            return 204;
+        }
+        proxy_pass http://127.0.0.1:${RPC_PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_hide_header 'Access-Control-Allow-Origin';
+        proxy_hide_header 'Access-Control-Allow-Methods';
+        proxy_hide_header 'Access-Control-Allow-Headers';
+        proxy_hide_header 'Vary';
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 30s;
+        proxy_read_timeout 30s;
+        add_header 'Access-Control-Allow-Origin' '*' always;
+        add_header 'Access-Control-Allow-Methods' 'POST, OPTIONS' always;
+        add_header 'Access-Control-Allow-Headers' 'Content-Type' always;
+        client_max_body_size 64k;
+    }
+}
+EOF
+}
+
+# Resolve this instance's own public IPv4 via IMDSv2 (same token pattern as
+# Step 6). Prints the IP or nothing.
+imds_public_ipv4() {
+    local token ip
+    token="$(curl -s -m 3 -X PUT "http://169.254.169.254/latest/api/token" \
+        -H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null)"
+    ip="$(curl -s -m 3 -H "X-aws-ec2-metadata-token: ${token}" \
+        http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null)"
+    printf '%s' "$ip"
+}
+
+# Resolve a hostname to its first A record. Prefers dig, falls back to getent
+# (which does A/AAAA lookups even without dnsutils installed).
+resolve_a() {
+    local host="$1" ip=""
+    if command -v dig >/dev/null 2>&1; then
+        ip="$(dig +short A "$host" 2>/dev/null | grep -E '^[0-9]+\.' | head -1)"
+    fi
+    if [[ -z "$ip" ]]; then
+        ip="$(getent ahostsv4 "$host" 2>/dev/null | awk '{print $1; exit}')"
+    fi
+    printf '%s' "$ip"
+}
+
+# True iff the node hostname's A record currently resolves to THIS instance's
+# public IP — the precondition for a certbot attempt (so the retry timer does
+# not burn Let's Encrypt rate limits while DNS is still absent/stale).
+dns_points_here() {
+    local public resolved
+    public="$(imds_public_ipv4)"
+    resolved="$(resolve_a "$NODE_HOSTNAME")"
+    [[ -n "$public" && -n "$resolved" && "$public" == "$resolved" ]]
+}
+
+# Fix 2: resolve the DNS-seed TXT records (peerid@host:port) into fully
+# resolved /ip4/<ip>/tcp/<port>/p2p/<peerid> multiaddrs and echo them as TOML
+# array lines. Empty output => caller falls back to an empty bootstrap_peers
+# list (today's behavior) with a loud log. This mirrors the node's own
+# parse_seed_record format (botho/src/network/dns_seeds.rs) but emits the
+# transport-accepted /ip4 form directly rather than the /dns4 form the node's
+# parser produces for hostname seeds (which the libp2p transport rejects).
+resolve_seed_peers() {
+    local domain="$1" txt line record host_port peer_id host port ip resolved_ip
+    if ! command -v dig >/dev/null 2>&1; then
+        log "  WARN: dig not available; cannot resolve TXT seeds for $domain" >&2
+        return 0
+    fi
+    txt="$(dig +short TXT "$domain" 2>/dev/null)"
+    [[ -n "$txt" ]] || return 0
+    while IFS= read -r line; do
+        # dig prints TXT values quoted; strip surrounding quotes.
+        record="${line%\"}"; record="${record#\"}"
+        [[ -n "$record" ]] || continue
+        # Format: PEER_ID@host:port
+        case "$record" in
+            *@*:*) : ;;
+            *) continue ;;
+        esac
+        peer_id="${record%%@*}"
+        host_port="${record#*@}"
+        host="${host_port%:*}"
+        port="${host_port##*:}"
+        [[ -n "$peer_id" && -n "$host" && -n "$port" ]] || continue
+        # Host may already be an IP; resolve_a passes IPs through via getent.
+        if [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            ip="$host"
+        else
+            ip="$(resolve_a "$host")"
+        fi
+        [[ -n "$ip" ]] || { log "  WARN: could not A-resolve seed host '$host'" >&2; continue; }
+        resolved_ip="$ip"
+        printf '    "/ip4/%s/tcp/%s/p2p/%s",\n' "$resolved_ip" "$port" "$peer_id"
+    done <<< "$txt"
+}
+
+# Fix 1: single attempt to acquire a webroot cert and swap nginx to the HTTPS
+# site. Assumes nginx is already serving the HTTP-only site (ACME webroot at
+# /var/www/certbot). Returns 0 iff a cert exists afterwards. Called by BOTH the
+# inline first attempt in Step 5 and the --tls-retry-only timer path, so the
+# certbot invocation lives in exactly one place.
+try_issue_tls_cert() {
+    if have_cert; then
+        return 0
+    fi
+    if ! dns_points_here; then
+        log "  TLS: DNS for $NODE_HOSTNAME does not resolve to this instance yet; skipping certbot this attempt"
+        return 1
+    fi
+    log "  TLS: DNS points here; requesting Let's Encrypt cert for $NODE_HOSTNAME (webroot)"
+    certbot certonly --webroot -w /var/www/certbot -n --agree-tos \
+        -m "$CERTBOT_EMAIL" -d "$NODE_HOSTNAME" \
+        || log "  WARN: certbot webroot failed for $NODE_HOSTNAME (will retry via timer)"
+    if have_cert; then
+        write_tls_site
+        nginx -t && systemctl reload nginx
+        log "  TLS: HTTPS /rpc ready for https://${NODE_HOSTNAME}/rpc"
+        return 0
+    fi
+    return 1
+}
+
+# Install (idempotently) the systemd oneshot+timer that re-invokes this script
+# with --tls-retry-only until a cert is issued or the retry cap elapses. Unit
+# content is deterministic, so re-running the bootstrap by hand just rewrites
+# identical files (no duplicate/competing timers).
+install_tls_retry_timer() {
+    install -d -m 0755 "$(dirname "$SELF_INSTALL_PATH")"
+    install -m 0755 "$SCRIPT_SELF" "$SELF_INSTALL_PATH"
+    install -d -m 0755 "$(dirname "$TLS_RETRY_STAMP")"
+
+    cat > "$TLS_RETRY_SERVICE" <<EOF
+[Unit]
+Description=Botho BaaS node TLS cert retry (certbot until DNS resolves)
+Documentation=https://github.com/botho-project/botho/blob/main/infra/baas/README.md
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=NODE_HOSTNAME=${NODE_HOSTNAME}
+Environment=CERTBOT_EMAIL=${CERTBOT_EMAIL}
+Environment=NETWORK=${NETWORK}
+ExecStart=${SELF_INSTALL_PATH} --tls-retry-only
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=botho-tls-retry
+EOF
+
+    cat > "$TLS_RETRY_TIMER" <<EOF
+[Unit]
+Description=Botho BaaS node TLS cert retry timer
+Documentation=https://github.com/botho-project/botho/blob/main/infra/baas/README.md
+
+[Timer]
+# Retry shortly after boot, then every 5 minutes, until the oneshot
+# self-disables the timer (cert issued) or the ~2h cap is reached.
+OnBootSec=1min
+OnUnitActiveSec=5min
+# Survive reboots that happen before DNS propagates.
+Persistent=true
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    systemctl daemon-reload
+    systemctl enable --now botho-tls-retry.timer >/dev/null 2>&1 \
+        || log "  WARN: could not enable botho-tls-retry.timer"
+    log "  TLS retry timer installed (retries certbot until DNS resolves, cap ~2h)"
+}
+
+# Stop the retry timer for good (cert issued, or retry cap exceeded).
+disable_tls_retry_timer() {
+    systemctl disable --now botho-tls-retry.timer >/dev/null 2>&1 || true
+}
+
+# --tls-retry-only entry point: one timer tick. Verify DNS, try the cert, and
+# self-disable the timer on success or once past the ~2h cap.
+run_tls_retry_only() {
+    [[ -n "$NODE_HOSTNAME" ]] || fail "--tls-retry-only requires NODE_HOSTNAME"
+    log "=== Botho TLS retry tick for $NODE_HOSTNAME ==="
+
+    if have_cert; then
+        log "  cert already present; ensuring TLS site is active and disabling retry timer"
+        write_tls_site
+        nginx -t && systemctl reload nginx || true
+        disable_tls_retry_timer
+        return 0
+    fi
+
+    # Retry cap bookkeeping: stamp the first attempt, give up after the cap.
+    install -d -m 0755 "$(dirname "$TLS_RETRY_STAMP")"
+    local now first
+    now="$(date +%s)"
+    if [[ -f "$TLS_RETRY_STAMP" ]]; then
+        first="$(cat "$TLS_RETRY_STAMP" 2>/dev/null || echo "$now")"
+    else
+        first="$now"
+        echo "$first" > "$TLS_RETRY_STAMP"
+    fi
+    if [[ "$first" =~ ^[0-9]+$ ]] && (( now - first > TLS_RETRY_CAP_SECONDS )); then
+        log "  ERROR: TLS retry cap (~2h) exceeded for $NODE_HOSTNAME with no cert; giving up and disabling timer. Investigate DNS for $NODE_HOSTNAME, then re-run node-bootstrap.sh."
+        disable_tls_retry_timer
+        return 0
+    fi
+
+    if try_issue_tls_cert; then
+        log "  cert issued; disabling retry timer"
+        disable_tls_retry_timer
+    else
+        log "  no cert yet ($(( (now - first) / 60 ))min elapsed of ~120min cap); timer will fire again"
+    fi
+    return 0
+}
+
+# --dry-run entry point: exercise the two new pieces locally (no EC2, no root,
+# no apt/certbot/systemd). Renders the seed-peer resolution and the systemd
+# unit files to stdout / a temp dir so they can be eyeballed and lint-checked.
+run_dry_run() {
+    log "=== DRY RUN: node-bootstrap.sh new-behavior smoke ==="
+    log "SEED_DOMAIN=$SEED_DOMAIN NODE_HOSTNAME='${NODE_HOSTNAME:-<none>}'"
+    log "resolve_seed_peers($SEED_DOMAIN) =>"
+    local peers
+    peers="$(resolve_seed_peers "$SEED_DOMAIN" || true)"
+    if [[ -n "$peers" ]]; then
+        printf '%s\n' "$peers"
+    else
+        log "  (empty — would fall back to bootstrap_peers = [] + DNS-seed discovery)"
+    fi
+    log "TLS retry timer would be installed at:"
+    log "  service: $TLS_RETRY_SERVICE  (ExecStart=$SELF_INSTALL_PATH --tls-retry-only)"
+    log "  timer:   $TLS_RETRY_TIMER    (OnBootSec=1min OnUnitActiveSec=5min cap=${TLS_RETRY_CAP_SECONDS}s)"
+    log "=== DRY RUN complete ==="
+    exit 0
+}
+
+# Resolve the path to THIS script so the timer can re-invoke it. In cloud-init,
+# $0 is a transient user-data path; we copy it to SELF_INSTALL_PATH in Step 5.
+SCRIPT_SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+
+# Mode dispatch (after all helpers are defined).
+if [[ "$DRY_RUN" -eq 1 ]]; then
+    run_dry_run
+fi
+if [[ "$MODE" == "tls-retry" ]]; then
+    run_tls_retry_only
+    exit 0
+fi
+
 # ===========================================================================
 # Step 1: Install dependencies (idempotent)
 # ===========================================================================
 log "Step 1: installing system dependencies"
 export DEBIAN_FRONTEND=noninteractive
-NEEDED_PKGS=(nginx certbot python3-certbot-nginx curl ca-certificates jq)
+NEEDED_PKGS=(nginx certbot python3-certbot-nginx curl ca-certificates jq dnsutils)
 MISSING=()
 for p in "${NEEDED_PKGS[@]}"; do
     dpkg -s "$p" >/dev/null 2>&1 || MISSING+=("$p")
@@ -333,25 +752,40 @@ else
     MNEMONIC="$(gen_mnemonic "$WORDLIST")"
 fi
 
-# Bootstrap peers.
+# Bootstrap peers (Fix 2, issue #807).
 #
 # IMPORTANT: the node's libp2p transport does NOT support bare `/dns4/.../tcp`
 # multiaddrs in the explicit `bootstrap_peers` list (it returns
-# MultiaddrNotSupported and never connects). The working path is DNS-seed
-# discovery: when `bootstrap_peers` is EMPTY and `dns_seeds.enabled = true`,
-# the node queries `seeds.testnet.botho.io` TXT records, resolves them to
-# `/ip4/.../tcp/<port>/p2p/<peer_id>` multiaddrs (which the transport DOES
-# support), and connects. Verified end-to-end on a fresh t4g.medium (#462).
+# MultiaddrNotSupported and never connects). Worse, the node's OWN DNS-seed
+# parser (botho/src/network/dns_seeds.rs `parse_seed_record`) builds exactly
+# that `/dns4/host/tcp/port/p2p/id` form for hostname-form TXT seeds — so even
+# a binary WITH config-driven DNS-seed discovery hits the same rejection for
+# `seeds.testnet.botho.io`'s `PEER_ID@host:port` records. Empty bootstrap_peers
+# therefore idles at peerCount 0 on the released binary.
 #
-# So:
-#   * default  -> leave bootstrap_peers EMPTY and let DNS discovery do the work.
-#   * override -> if BOOTSTRAP_PEERS is set, use it verbatim. Provide FULLY
-#     RESOLVED multiaddrs WITH a /p2p/<peer_id> suffix, preferably
-#     /ip4/<addr>/tcp/<port>/p2p/<peer_id> (bare /dns4 forms will NOT connect).
+# Durable fix: resolve the seed TXT records IN THIS SCRIPT into the
+# transport-accepted `/ip4/<ip>/tcp/<port>/p2p/<peer_id>` form and write them
+# into bootstrap_peers. `[network.dns_seeds] enabled = true` is kept regardless
+# (additive; helps binaries that gain IP-form discovery later).
+#
+# Precedence:
+#   * explicit BOOTSTRAP_PEERS override -> use it verbatim (must be resolved
+#     /ip4/.../p2p/... multiaddrs; bare /dns4 forms will NOT connect).
+#   * else resolve $SEED_DOMAIN TXT records -> /ip4/.../p2p/... entries.
+#   * else (resolution empty/failed) -> fall back to empty bootstrap_peers with
+#     a LOUD log, relying on dns_seeds discovery for binaries that support it.
 if [[ -n "$BOOTSTRAP_PEERS" ]]; then
     PEERS_TOML="$(echo "$BOOTSTRAP_PEERS" | tr ',' '\n' | sed -E 's/^ *| *$//g; s/^/    "/; s/$/",/')"
+    log "  bootstrap_peers: using explicit BOOTSTRAP_PEERS override"
 else
-    PEERS_TOML=""  # empty -> DNS-seed discovery (the proven-working path)
+    log "  resolving DNS-seed TXT records from $SEED_DOMAIN into bootstrap_peers"
+    PEERS_TOML="$(resolve_seed_peers "$SEED_DOMAIN" || true)"
+    if [[ -n "$PEERS_TOML" ]]; then
+        log "  resolved $(printf '%s\n' "$PEERS_TOML" | grep -c '/ip4/') seed peer(s) into bootstrap_peers"
+        printf '%s\n' "$PEERS_TOML" | sed 's/^/    -> /'
+    else
+        log "  WARN: no TXT seeds resolved for $SEED_DOMAIN; falling back to empty bootstrap_peers + DNS-seed discovery only (peerCount may stay 0 if the running binary does not support IP-form DNS discovery)"
+    fi
 fi
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
@@ -455,135 +889,17 @@ if [[ -z "$NODE_HOSTNAME" ]]; then
 else
     log "Step 5: configuring nginx (+TLS mode=$TLS_MODE) for $NODE_HOSTNAME"
     install -d -m 0755 /var/www/certbot
+    # NGINX_SITE was seeded from NODE_HOSTNAME at the top; keep it in sync in
+    # case NODE_HOSTNAME was derived from NODE_ID after that point.
     NGINX_SITE="/etc/nginx/sites-available/${NODE_HOSTNAME}"
 
-    write_http_only_site() {
-        # Minimal HTTP server: ACME challenge + /rpc proxy. Used before certs
-        # exist (webroot mode) and as the whole config in TLS_MODE=skip.
-        cat > "$NGINX_SITE" <<EOF
-map \$http_upgrade \$connection_upgrade { default upgrade; '' close; }
-server {
-    listen 80;
-    listen [::]:80;
-    server_name ${NODE_HOSTNAME};
-
-    location /.well-known/acme-challenge/ { root /var/www/certbot; }
-    location /health { access_log off; add_header Content-Type text/plain; return 200 "OK"; }
-
-    location /rpc {
-        limit_except POST OPTIONS { deny all; }
-        if (\$request_method = 'OPTIONS') {
-            add_header 'Access-Control-Allow-Origin' '*' always;
-            add_header 'Access-Control-Allow-Methods' 'POST, OPTIONS' always;
-            add_header 'Access-Control-Allow-Headers' 'Content-Type' always;
-            add_header 'Content-Length' 0; add_header 'Content-Type' 'text/plain';
-            return 204;
-        }
-        proxy_pass http://127.0.0.1:${RPC_PORT};
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_hide_header 'Access-Control-Allow-Origin';
-        proxy_hide_header 'Vary';
-        add_header 'Access-Control-Allow-Origin' '*' always;
-        client_max_body_size 64k;
-    }
-}
-EOF
-    }
-
-    write_tls_site() {
-        # Full HTTPS site mirroring infra/seed/seed-nginx.conf: HTTP->HTTPS
-        # redirect, TLS, /rpc and /rpc/ws proxy with CORS de-duplication.
-        cat > "$NGINX_SITE" <<EOF
-map \$http_upgrade \$connection_upgrade { default upgrade; '' close; }
-
-server {
-    listen 80;
-    listen [::]:80;
-    server_name ${NODE_HOSTNAME};
-    location /.well-known/acme-challenge/ { root /var/www/certbot; }
-    location / { return 301 https://\$host\$request_uri; }
-}
-
-server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name ${NODE_HOSTNAME};
-
-    ssl_certificate /etc/letsencrypt/live/${NODE_HOSTNAME}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/${NODE_HOSTNAME}/privkey.pem;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_prefer_server_ciphers on;
-    ssl_session_cache shared:SSL:10m;
-    ssl_session_timeout 1d;
-
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-
-    location /health { access_log off; add_header Content-Type text/plain; return 200 "OK"; }
-
-    location = /rpc/ws {
-        if (\$request_method = 'OPTIONS') {
-            add_header 'Access-Control-Allow-Origin' '*' always;
-            add_header 'Access-Control-Allow-Methods' 'GET, OPTIONS' always;
-            add_header 'Access-Control-Allow-Headers' 'Content-Type, Upgrade, Connection' always;
-            add_header 'Content-Length' 0; add_header 'Content-Type' 'text/plain';
-            return 204;
-        }
-        proxy_pass http://127.0.0.1:${RPC_PORT}/ws;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection \$connection_upgrade;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_hide_header 'Access-Control-Allow-Origin';
-        proxy_connect_timeout 10s;
-        proxy_send_timeout 3600s;
-        proxy_read_timeout 3600s;
-        add_header 'Access-Control-Allow-Origin' '*' always;
-    }
-
-    location /rpc {
-        limit_except POST OPTIONS { deny all; }
-        if (\$request_method = 'OPTIONS') {
-            add_header 'Access-Control-Allow-Origin' '*' always;
-            add_header 'Access-Control-Allow-Methods' 'POST, OPTIONS' always;
-            add_header 'Access-Control-Allow-Headers' 'Content-Type' always;
-            add_header 'Content-Length' 0; add_header 'Content-Type' 'text/plain';
-            return 204;
-        }
-        proxy_pass http://127.0.0.1:${RPC_PORT};
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_hide_header 'Access-Control-Allow-Origin';
-        proxy_hide_header 'Access-Control-Allow-Methods';
-        proxy_hide_header 'Access-Control-Allow-Headers';
-        proxy_hide_header 'Vary';
-        proxy_connect_timeout 10s;
-        proxy_send_timeout 30s;
-        proxy_read_timeout 30s;
-        add_header 'Access-Control-Allow-Origin' '*' always;
-        add_header 'Access-Control-Allow-Methods' 'POST, OPTIONS' always;
-        add_header 'Access-Control-Allow-Headers' 'Content-Type' always;
-        client_max_body_size 64k;
-    }
-}
-EOF
-    }
+    # Install a stable copy of this script so the TLS-retry systemd unit has a
+    # durable path to re-invoke (cloud-init's user-data path is transient).
+    install -d -m 0755 "$(dirname "$SELF_INSTALL_PATH")"
+    install -m 0755 "$SCRIPT_SELF" "$SELF_INSTALL_PATH"
 
     # Remove the default site so server_name matching is unambiguous.
     rm -f /etc/nginx/sites-enabled/default
-
-    have_cert() { [[ -f "/etc/letsencrypt/live/${NODE_HOSTNAME}/fullchain.pem" ]]; }
 
     case "$TLS_MODE" in
         skip)
@@ -597,29 +913,31 @@ EOF
                 systemctl stop nginx || true
                 certbot certonly --standalone -n --agree-tos -m "$CERTBOT_EMAIL" \
                     -d "$NODE_HOSTNAME" || log "  WARN: certbot --standalone failed (DNS not pointed yet?)"
+                systemctl start nginx || true
             fi
             if have_cert; then write_tls_site; else write_http_only_site; fi
             ln -sf "$NGINX_SITE" "/etc/nginx/sites-enabled/${NODE_HOSTNAME}"
             nginx -t && systemctl restart nginx
-            log "  nginx ready ($(have_cert && echo HTTPS || echo HTTP-only))"
+            if have_cert; then
+                log "  nginx ready (HTTPS)"
+            else
+                log "  nginx ready (HTTP-only); installing TLS retry timer"
+                install_tls_retry_timer
+            fi
             ;;
         webroot|*)
             # Bring up HTTP first so the ACME webroot challenge can be served,
-            # then obtain a cert and switch to the full TLS site.
+            # then try once inline. If DNS is not yet pointed here, a systemd
+            # timer retries certbot until DNS resolves (Fix 1, issue #807) and
+            # self-disables once a cert is issued — no manual re-run needed.
             write_http_only_site
             ln -sf "$NGINX_SITE" "/etc/nginx/sites-enabled/${NODE_HOSTNAME}"
             nginx -t && systemctl reload nginx
-            if ! have_cert; then
-                certbot certonly --webroot -w /var/www/certbot -n --agree-tos \
-                    -m "$CERTBOT_EMAIL" -d "$NODE_HOSTNAME" \
-                    || log "  WARN: certbot webroot failed (is DNS for $NODE_HOSTNAME pointed at this host yet?). Serving HTTP-only for now; re-run this script after DNS propagates."
-            fi
-            if have_cert; then
-                write_tls_site
-                nginx -t && systemctl reload nginx
+            if try_issue_tls_cert; then
                 log "  nginx HTTPS /rpc ready for https://${NODE_HOSTNAME}/rpc"
             else
-                log "  nginx HTTP-only /rpc ready (no cert yet)"
+                log "  nginx HTTP-only /rpc ready (no cert yet); installing TLS retry timer to acquire it once DNS resolves"
+                install_tls_retry_timer
             fi
             ;;
     esac

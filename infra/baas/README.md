@@ -25,7 +25,8 @@ recipe in `infra/seed/` and `infra/faucet/`:
 
 ## What it does (idempotent, logged to `/var/log/botho-node-bootstrap.log`)
 
-1. **Install deps** — nginx, certbot, curl, jq, ca-certificates.
+1. **Install deps** — nginx, certbot, curl, jq, ca-certificates, dnsutils
+   (`dig`, for DNS-seed TXT resolution).
 2. **Download the prebuilt `botho` linux-aarch64 binary** — from
    `BOTHO_BINARY_URL` if set (the release tarball
    `botho-vX.Y.Z-linux-aarch64.tar.gz`, or a bare-binary mirror), else reuse an
@@ -37,23 +38,49 @@ recipe in `infra/seed/` and `infra/faucet/`:
    `aarch64` and installed mode `0755`.
 3. **Generate identity + config** — a per-node 24-word wallet mnemonic and
    `~/.botho/testnet/config.toml` (testnet, RandomX minting on, faucet off,
-   `quorum.mode = recommended` / `min_peers = 1`, `bootstrap_peers = []`,
-   DNS-seed discovery `seeds.testnet.botho.io` enabled). The wallet mnemonic is
-   preserved across re-runs. The libp2p **node_key** (peer identity) is created
-   and persisted automatically by the binary at `~/.botho/testnet/node_key`, so
-   the peer id is stable across reboots with no extra handling.
+   `quorum.mode = recommended` / `min_peers = 1`, **resolved `bootstrap_peers`**
+   (see below), DNS-seed discovery `seeds.testnet.botho.io` still enabled). The
+   wallet mnemonic is preserved across re-runs. The libp2p **node_key** (peer
+   identity) is created and persisted automatically by the binary at
+   `~/.botho/testnet/node_key`, so the peer id is stable across reboots with no
+   extra handling.
 
-   > **Peering note (learned during verification):** the node's libp2p
-   > transport rejects bare `/dns4/host/tcp/port` entries in explicit
-   > `bootstrap_peers` (`MultiaddrNotSupported` → 0 peers). The working path is
-   > DNS-seed discovery (empty `bootstrap_peers` + `dns_seeds.enabled = true`),
-   > which resolves the seed TXT records to `/ip4/.../p2p/<peer_id>` multiaddrs
-   > the transport accepts. An explicit `BOOTSTRAP_PEERS` override must
-   > therefore supply resolved `/ip4/.../tcp/<port>/p2p/<peer_id>` multiaddrs.
+   > **Peering note (Fix 2, #807):** the node's libp2p transport rejects bare
+   > `/dns4/host/tcp/port` entries in `bootstrap_peers` (`MultiaddrNotSupported`
+   > → 0 peers). The node's **own** DNS-seed parser also emits that rejected
+   > `/dns4` form for the hostname-style `PEER_ID@host:port` records published at
+   > `seeds.testnet.botho.io`, so relying on empty `bootstrap_peers` +
+   > `dns_seeds` discovery idles at `peerCount 0` on the released binary. The
+   > bootstrap therefore **resolves the seed TXT records itself at config-write
+   > time** into the transport-accepted `/ip4/<ip>/tcp/<port>/p2p/<peer_id>`
+   > form (via `dig`) and writes them into `bootstrap_peers`.
+   > `[network.dns_seeds] enabled = true` is kept as an additive fallback for
+   > binaries that later gain IP-form discovery. If TXT resolution fails or
+   > returns nothing, the script falls back to empty `bootstrap_peers` with a
+   > loud `WARN` in the log rather than failing the boot. An explicit
+   > `BOOTSTRAP_PEERS` override still takes precedence and must supply resolved
+   > `/ip4/.../tcp/<port>/p2p/<peer_id>` multiaddrs. This resolution runs only
+   > on **fresh provisions** (the `config.toml`-does-not-exist path); a re-run
+   > on an existing node preserves its config verbatim (same idempotency
+   > semantics as the wallet mnemonic).
 4. **Install + start** the `botho` systemd unit
    (`botho --testnet run --mint --mint-threads N`).
 5. **nginx + TLS + `/rpc` proxy** for `NODE_HOSTNAME` (mirrors
    `seed-nginx.conf`: HTTP→HTTPS redirect, CORS de-duplication, `/rpc/ws`).
+
+   > **certbot retry-until-DNS (Fix 1, #807):** the provisioner now creates the
+   > node's DNS A record minutes *after* launch, so certbot cannot succeed on
+   > the first inline attempt. The bootstrap tries once, and if DNS does not yet
+   > resolve to this instance's public IP it installs a systemd **oneshot +
+   > timer** pair (`botho-tls-retry.service` / `.timer`) that re-invokes
+   > `node-bootstrap.sh --tls-retry-only` every ~5 min. Each tick verifies (via
+   > IMDSv2) that the hostname's A record points at this instance before calling
+   > Let's Encrypt (so it never burns ACME rate limits while DNS is absent);
+   > once a cert is issued it swaps in the TLS site and **self-disables the
+   > timer**. It gives up after a ~2h cap with a loud log line. This replaces
+   > the old "re-run this script after DNS propagates" manual step — no SSH
+   > needed. Re-running the bootstrap by hand rewrites the (deterministic) unit
+   > files without creating duplicate/competing timers.
 6. **Emit node info** to `~/node-info.txt` and install `node-status` for read-back.
 
 ## Inputs (env vars / user-data exports)
@@ -69,7 +96,8 @@ recipe in `infra/seed/` and `infra/faucet/`:
 | `REGION`              | no       | —                  | AWS region the node launched in (informational; the provisioner picks it at run-instances time). Recorded in `node-info.txt`. |
 | `TIER`                | no       | `t4g.medium`       | Instance type/tier (informational; MVP is t4g.medium-only). Recorded in `node-info.txt`. |
 | `NETWORK`             | no       | `testnet`          | Only `testnet` is supported in this slice. |
-| `BOOTSTRAP_PEERS`     | no       | DNS-seed discovery | Comma-separated **resolved** multiaddrs (`/ip4/.../tcp/<port>/p2p/<peer_id>`). Default empty -> DNS-seed discovery (the working path; bare `/dns4` is unsupported). |
+| `BOOTSTRAP_PEERS`     | no       | resolved from `SEED_DOMAIN` | Comma-separated **resolved** multiaddrs (`/ip4/.../tcp/<port>/p2p/<peer_id>`). When set, used verbatim (bare `/dns4` is unsupported). When unset, the bootstrap resolves `SEED_DOMAIN`'s TXT records into `/ip4/...` peers itself (Fix 2, #807); if that yields nothing it falls back to empty + DNS-seed discovery. |
+| `SEED_DOMAIN`         | no       | `seeds.<NODE_DOMAIN>` | DNS-seed domain whose `PEER_ID@host:port` TXT records are resolved into `bootstrap_peers` at config-write time (testnet: `seeds.testnet.botho.io`). |
 | `MINT_THREADS`        | no       | `1`                | RandomX threads (t4g.medium = 2 vCPU). |
 | `CERTBOT_EMAIL`       | no       | `admin@botho.io`   | Let's Encrypt registration email. |
 | `TLS_MODE`            | no       | `webroot`          | `webroot` (needs nginx+DNS) / `standalone` / `skip` (HTTP-only, for local testing). |
@@ -142,13 +170,16 @@ export BOTHO_BINARY_SHA256="019f31e8e29cf482567be1c51f65d499aeffda1b63f57098a991
 
 ### 2. DNS pre-creation (`NODE_HOSTNAME` / `NODE_ID`)
 
-The provisioner must create the `NODE_HOSTNAME` (or the derived
-`node-<NODE_ID>.<NODE_DOMAIN>`) A record pointing at the
-instance's public IP **before/at boot** so Let's Encrypt (`webroot`/
-`standalone`) can validate. If DNS isn't ready when the script runs, certbot is
-skipped gracefully and nginx serves HTTP-only `/rpc`; re-running the script
-after DNS propagates issues the cert and switches to HTTPS (idempotent). For
-DNS-less local testing use `TLS_MODE=skip`.
+The provisioner creates the `NODE_HOSTNAME` (or the derived
+`node-<NODE_ID>.<NODE_DOMAIN>`) A record pointing at the instance's public IP so
+Let's Encrypt (`webroot`/`standalone`) can validate. In the current flow this
+record is backfilled **minutes after launch** (the worker learns the public IP
+only once the instance is running). The bootstrap tolerates this: if DNS isn't
+pointed here yet when the script runs, it serves HTTP-only `/rpc` and installs a
+systemd timer that retries certbot every ~5 min until the A record resolves to
+this instance, then swaps to HTTPS and self-disables (see step 5 above, Fix 1 /
+#807). **No manual re-run is required** — the old "re-run this script after DNS
+propagates" step is obsolete. For DNS-less local testing use `TLS_MODE=skip`.
 
 ## Example user-data
 
