@@ -398,6 +398,18 @@ pub trait SolanaRpc: Send + Sync {
         signature: &str,
         commitment: &str,
     ) -> Result<Option<(Vec<String>, u64)>, String>;
+
+    /// `getTokenSupply(mint)` at `commitment`, returning the SPL mint's total
+    /// supply in its RAW base units (the `amount` field — an integer scaled by
+    /// the mint's decimals). The wBTH mint carries 12 decimals, matching the
+    /// picocredit base unit, so the raw amount is already in picocredits
+    /// (#853).
+    ///
+    /// A default `NotImplemented`-style error keeps the many mock transports
+    /// in the codebase compiling; the live [`HttpSolanaRpc`] overrides it.
+    async fn get_token_supply(&self, _mint: &str, _commitment: &str) -> Result<u128, String> {
+        Err("getTokenSupply not implemented for this transport".to_string())
+    }
 }
 
 /// A live JSON-RPC client over `reqwest`.
@@ -541,6 +553,13 @@ impl SolanaRpc for HttpSolanaRpc {
             .await?;
         parse_transaction_logs(&result)
     }
+
+    async fn get_token_supply(&self, mint: &str, commitment: &str) -> Result<u128, String> {
+        let result = self
+            .call("getTokenSupply", json!([mint, {"commitment": commitment}]))
+            .await?;
+        parse_token_supply(&result)
+    }
 }
 
 /// Marker string used to signal an idempotent "already processed" broadcast
@@ -656,6 +675,22 @@ pub fn parse_transaction_logs(result: &Value) -> Result<Option<(Vec<String>, u64
         })
         .unwrap_or_default();
     Ok(Some((logs, slot)))
+}
+
+/// Parse a `getTokenSupply` result into the RAW supply (base units), reading
+/// the `value.amount` string (a decimal integer already scaled by the mint's
+/// decimals). The wBTH mint's 12 decimals make this value picocredits (#853).
+pub fn parse_token_supply(result: &Value) -> Result<u128, String> {
+    let value = result
+        .get("value")
+        .ok_or_else(|| "getTokenSupply missing value".to_string())?;
+    let amount = value
+        .get("amount")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "getTokenSupply missing value.amount".to_string())?;
+    amount
+        .parse::<u128>()
+        .map_err(|e| format!("getTokenSupply amount {amount:?} is not a u128: {e}"))
 }
 
 /// Parse a `getAccountInfo` result into the raw account data.
@@ -942,6 +977,30 @@ mod tests {
             pairs,
             vec![("sigA".to_string(), 10), ("sigC".to_string(), 12)]
         );
+    }
+
+    #[test]
+    fn test_parse_token_supply() {
+        // The RPC returns the raw supply as a decimal string under
+        // value.amount (12-decimal wBTH mint => picocredits).
+        let result = json!({
+            "context": {"slot": 100},
+            "value": {"amount": "1500000000000", "decimals": 12, "uiAmount": 1.5, "uiAmountString": "1.5"}
+        });
+        assert_eq!(parse_token_supply(&result).unwrap(), 1_500_000_000_000);
+
+        // Zero supply.
+        let zero = json!({"value": {"amount": "0", "decimals": 12}});
+        assert_eq!(parse_token_supply(&zero).unwrap(), 0);
+
+        // A very large supply still fits u128 (u64::MAX * scale).
+        let big = json!({"value": {"amount": "340282366920938463463374607431768211455"}});
+        assert_eq!(parse_token_supply(&big).unwrap(), u128::MAX);
+
+        // Missing / malformed shapes are errors, never a silent zero.
+        assert!(parse_token_supply(&json!({})).is_err());
+        assert!(parse_token_supply(&json!({"value": {}})).is_err());
+        assert!(parse_token_supply(&json!({"value": {"amount": "not-a-number"}})).is_err());
     }
 
     #[test]

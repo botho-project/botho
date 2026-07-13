@@ -142,3 +142,29 @@ async fn bth_node_rpc_round_trips() {
         .expect("chain_areKeyImagesSpent");
     assert!(statuses.is_empty());
 }
+
+/// #853: the production [`crate::reserve::NodeReserveBalanceSource`] scans the
+/// live reserve window, drops spent/pending outputs, and sums the actual
+/// spendable factor-1 reserve balance — the custody leg of the reconciler.
+/// Proves `reserve_balance()` runs end-to-end against a real node without a
+/// mock (the sum depends on the funded reserve state the operator drives).
+#[tokio::test]
+#[ignore = "requires a live BTH node (set BRIDGE_BTH_RPC_URL + reserve key files)"]
+async fn bth_node_reserve_balance_reads_live_reserve() {
+    use crate::reserve::{NodeReserveBalanceSource, ReserveBalanceSource};
+
+    let Some(config) = live_config() else {
+        eprintln!(
+            "SKIP: set BRIDGE_BTH_RPC_URL, BRIDGE_BTH_RESERVE_VIEW_KEY, \
+             BRIDGE_BTH_RESERVE_SPEND_KEY to run this live-node test"
+        );
+        return;
+    };
+
+    let source = NodeReserveBalanceSource::new(config);
+    let balance = source
+        .reserve_balance()
+        .await
+        .expect("reserve_balance scans the live reserve window without error");
+    eprintln!("live reserve balance: {balance} picocredits (unspent factor-1)");
+}

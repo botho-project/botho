@@ -138,3 +138,25 @@ async fn solana_devnet_prepare_mint_against_live_pdas() {
         eprintln!("devnet mint {} status: {:?}", prepared.tx_id, status);
     }
 }
+
+/// Drill (#853): resolve the wBTH mint from the live `Bridge` account and read
+/// its outstanding SPL supply via `getTokenSupply` through the production
+/// [`crate::reserve::SolSupplySource`] — the exact path the reserve reconciler
+/// runs. Proves the Solana leg VERIFIES against a real cluster (12-decimal
+/// mint => picocredits).
+#[tokio::test]
+#[ignore = "requires a live cluster with an initialized wbth program"]
+async fn solana_devnet_reserve_supply_source() {
+    use crate::reserve::{SolSupplySource, SupplySource};
+
+    let Some(config) = config_from_env() else {
+        eprintln!("BRIDGE_SOLANA_RPC_URL unset — skipping");
+        return;
+    };
+    let source = SolSupplySource::new(&config).expect("construct supply source");
+    let supply = source
+        .wrapped_supply()
+        .await
+        .expect("read wBTH supply via getTokenSupply against the live cluster");
+    eprintln!("live wBTH Solana supply: {supply} picocredits");
+}
