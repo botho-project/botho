@@ -8,13 +8,17 @@
 %%
 %% Options:
 %%   anonymous  Suppress author/affiliation rendering for double-blind submission.
+%%   numeric    Render numeric [7]-style citations instead of the default
+%%              author-year (Author, Year) style. Composes with anonymous.
 %%
 %% Provides:
 %%   \title{}, \author{}, \date{}, \abstract{}
 %%   Standard \section, \subsection, \subsubsection
-%%   natbib (\citep, \citet) loaded with numbers + sort&compress
+%%   natbib (\citep, \citet) loaded with sort&compress; author-year
+%%     (round) by default, numeric with the `numeric` option
 %%   graphicx, amsmath, amssymb, xcolor, hyperref loaded
-%%   plainnat bibliography style baked in
+%%   plainnat bibliography style baked in (natbib-aware; adapts to
+%%     both author-year and numeric modes)
 
 \NeedsTeXFormat{LaTeX2e}
 \ProvidesClass{anvil-paper}[2026/05/28 Anvil generic paper class]
@@ -23,6 +27,9 @@
 \newif\ifanvil@anonymous
 \anvil@anonymousfalse
 \DeclareOption{anonymous}{\anvil@anonymoustrue}
+\newif\ifanvil@numeric
+\anvil@numericfalse
+\DeclareOption{numeric}{\anvil@numerictrue}
 \DeclareOption*{\PassOptionsToClass{\CurrentOption}{article}}
 \ProcessOptions\relax
 
@@ -38,7 +45,16 @@
 \RequirePackage{amssymb}
 \RequirePackage{amsthm}
 \RequirePackage{microtype}
-\RequirePackage[round,sort&compress,authoryear]{natbib}
+%% Citation style: author-year (round) by default; numeric with `numeric`
+%% option. `numbers` and `authoryear` are mutually exclusive natbib globals,
+%% so this must be a conditional load, not an option-append. plainnat (set as
+%% the default bibliographystyle below) is natbib-aware and renders correctly
+%% under either mode, so no bibliographystyle branching is required.
+\ifanvil@numeric
+  \RequirePackage[numbers,sort&compress]{natbib}
+\else
+  \RequirePackage[round,sort&compress,authoryear]{natbib}
+\fi
 \RequirePackage{booktabs}
 \RequirePackage{xcolor}
 \RequirePackage{caption}

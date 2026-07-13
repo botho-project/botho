@@ -46,7 +46,7 @@ Other vision findings surface as `Finding` items with severity `major` / `minor`
 - **Thread slug** (positional argument).
 - **Latest version directory**: highest `N` with `<thread>.{N}/main.tex` (or `main.md`).
 - **Rendered PDF**: `<thread>.{N}/paper.pdf`.
-  - If `main.tex` is the source, the PDF is produced by the standard `pdflatex` + `bibtex` cycle that `pub-audit` already runs (see `pub-audit.md`); the vision critic reuses that `paper.pdf` when present and current.
+  - If `main.tex` is the source, the PDF is produced by the convergence-loop compile that `pub-audit` already runs (`pdflatex`/`bibtex` rerun to the "Label(s) may have changed. Rerun" fixpoint, capped at 5 `pdflatex` passes — see `pub-audit.md` step 4); the vision critic reuses that `paper.pdf` when present and current.
   - If the source is Markdown (`main.md`), or no `pdflatex`-built PDF exists, the critic renders via `anvil.lib.render.render_pandoc_to_pdf(source_md, out_pdf)`.
 - **Per-page PNGs**: produced by `anvil.lib.render.render_pdf_to_pngs(pdf, out_dir, dpi=200)` from the PDF. Pub uses **200 DPI** by default (vs the deck's 150) — fine-grained axis-label and small-caption legibility evaluation needs the extra resolution at print scale.
 - **VLM**: Anthropic SDK by default; consumers without an API key inject a callback per `anvil/lib/vision.py`.
@@ -90,10 +90,21 @@ Other vision findings surface as `Finding` items with severity `major` / `minor`
    ```
    See `anvil/lib/snippets/progress.md` and `anvil/lib/snippets/scorecard_kind.md` for the canonical shapes.
 
+   **Non-Python-driver ordering (fail-open, manual fallback)** — issue #645: `staged_sidecar` is a Python context manager. A manual/agent session with **no orchestrating Python driver** cannot hold its `with` block open across the file writes below (it writes files with its own editing tool between discrete steps), so it MUST use the equivalent CLI shim rather than writing straight into the final `<thread>.{N}.vision/` dir (which silently reopens the #350 partial-write defect this primitive exists to close). Two tiers, in preference order:
+
+   1. **Primary — `python -m anvil.lib.sidecar` CLI shim** (the common case). This wraps the *exact same* `staged_sidecar` code, so the manifest check + single atomic `Path.rename` are enforced by code, not agent discipline:
+      - `python -m anvil.lib.sidecar stage <thread>.{N}.vision` → prints the staging path (`.<thread>.{N}.vision.tmp/`). (Refuses with a nonzero exit if `<thread>.{N}.vision/` already exists — matching `staged_sidecar`'s `FileExistsError` refuse-to-overwrite guard.)
+      - Write **all** required files (`_review.json`, `_meta.json`, `_progress.json`) into that printed staging path — never into the final `<thread>.{N}.vision/` name.
+      - `python -m anvil.lib.sidecar commit <thread>.{N}.vision --required _review.json,_meta.json,_progress.json` → verifies the manifest, then atomically renames staging → final. **Nonzero exit (1) leaves the staging dir in place with no partial final dir** if any required file is missing — the `SidecarIncompleteError` analog; fix the gap and re-`commit`.
+      - The stale-staging sweep of step 1 has an exact CLI analog: `python -m anvil.lib.sidecar cleanup <thread>.{N}.vision` (the parallel-safe per-critic sweep, issue #376).
+   2. **Last resort — manual `mv`-based staging** when even `python`/`uv` is unavailable. Reproduce the staging contract by hand: (a) at entry, sweep any leftover `rm -rf .<thread>.{N}.vision.tmp/` (the `cleanup_one_staging` analog); (b) `mkdir .<thread>.{N}.vision.tmp/` and write **every** required file into it — writing `_progress.json` **last**, so a mid-write interrupt is caught by the missing-manifest check rather than producing a final-named partial; (c) confirm all 3 required files are present, **then** `mv .<thread>.{N}.vision.tmp <thread>.{N}.vision` as the **last** step (POSIX `mv` on a same-filesystem dir-to-dir rename is atomic, matching `Path.rename`). Do NOT create `<thread>.{N}.vision/` before all files are staged. **Record the fallback durably** so a reader can tell atomicity was reproduced by hand rather than tool-verified: stamp `_meta.json` with `"atomicity_fallback": "manual-mv"` (e.g. `sidecar: staged_sidecar CLI unavailable (uv/python not on PATH); atomicity reproduced via manual mv this pass`). Absent this note the manual staging is indistinguishable from an unsafe direct write.
+
+   The two tiers land a byte-identical on-disk result to the `staged_sidecar` context-manager path; they exist only to give a Python-less session a code-enforced (tier 1) or contract-faithful (tier 2) route to the same atomicity guarantee. When an orchestrating Python driver IS present, use `staged_sidecar` directly as documented above — the CLI shim is not needed.
+
 3. **Ensure `paper.pdf` exists**:
    - If `<thread>.{N}/paper.pdf` exists and is newer than the source (`main.tex` and any `figures/` it includes), use it.
    - Otherwise render it:
-     - **LaTeX source**: run the `pdflatex main && bibtex main && pdflatex main && pdflatex main` cycle (the same one `pub-audit` runs) and copy/rename the result to `paper.pdf`. A non-zero exit is surfaced as a finding (the prose/audit critics will also catch the build failure).
+     - **LaTeX source**: run the convergence-loop compile (the same one `pub-audit` runs — `pdflatex`/`bibtex`, then rerun `pdflatex` to the "Label(s) may have changed. Rerun" fixpoint, capped at 5 `pdflatex` passes; see `pub-audit.md` step 4) and copy/rename the result to `paper.pdf`. A non-zero exit is surfaced as a finding (the prose/audit critics will also catch the build failure).
      - **Markdown source**: call `anvil.lib.render.render_pandoc_to_pdf(main_md, out_pdf)`.
 
 4. **Render per-page PNGs**:
