@@ -1,0 +1,81 @@
+# Prometheus alert rules for the BTH bridge service (#827).
+#
+# Scrape target: GET /metrics on `[reserve] api_listen` (default
+# 127.0.0.1:9741). Response procedures for every alert:
+# docs/operations/runbooks/bridge-order-engine-recovery.md
+
+groups:
+  - name: bth-bridge
+    rules:
+      - alert: BridgeBreakerTripped
+        expr: bridge_paused == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Bridge circuit breaker is tripped (submits halted)"
+          description: >
+            The bridge is paused (kill switch or auto-trip: backlog, global
+            volume cap, or reserve drift). Confirm stages keep settling
+            in-flight orders. Triage per the runbook before resuming via
+            POST /api/breaker.
+
+      - alert: BridgePegUnhealthy
+        expr: bridge_peg_healthy == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Proof-of-reserves reconciliation reports an unhealthy peg"
+          description: >
+            Wrapped supply vs locked reserve drifted beyond tolerance, or the
+            reserve custody check failed. The reconciler trips the breaker
+            automatically. Treat as a peg incident: freeze, reconcile, then
+            resume.
+
+      - alert: BridgeBacklogHigh
+        expr: bridge_actionable_backlog > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bridge actionable-order backlog is growing"
+          description: >
+            Orders are entering faster than they settle. At
+            bridge.max_pending_orders the breaker trips automatically.
+
+      - alert: BridgeStuckOrders
+        expr: bridge_stuck_orders > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Orders stuck past the age threshold"
+          description: >
+            Post-deposit orders have not advanced within
+            bridge.order_expiry_minutes. Funds have moved: they never
+            auto-expire — operator triage required (see the stuck-order
+            section of the runbook).
+
+      - alert: BridgeComponentDown
+        expr: bridge_component_healthy == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A bridge component (signer / minter / releaser) is unavailable"
+          description: >
+            The engine fails closed for the affected flow (orders stay
+            retryable, nothing is dropped), but throughput is degraded until
+            the component's configuration is fixed.
+
+      - alert: BridgeApiDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Bridge /metrics endpoint is unreachable"
+          description: >
+            The bridge service (or its API listener) is down; order
+            processing state is unknown.

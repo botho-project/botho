@@ -96,7 +96,7 @@ pub enum ReserveError {
     /// RPC / network failure (retryable next pass).
     Rpc(String),
     /// Transport not yet wired up (Solana supply / BTH reserve balance,
-    /// see #828). Fail-safe: the chain is reported unverified, never
+    /// see #853). Fail-safe: the chain is reported unverified, never
     /// silently healthy.
     NotImplemented(String),
 }
@@ -173,7 +173,7 @@ impl SupplySource for EthSupplySource {
 /// Solana supply source: wBTH SPL `Mint.supply` via `getTokenSupply`
 /// (12-decimal mint, 1:1 with picocredits).
 ///
-/// TODO(#828): implement against `SolanaConfig::rpc_url`. Until then this
+/// TODO(#853): implement against `SolanaConfig::rpc_url`. Until then this
 /// is a fail-safe stub: the reconciler reports Solana as UNVERIFIED (its
 /// DB-expected backing is excluded from drift math) rather than silently
 /// healthy.
@@ -197,7 +197,7 @@ impl SupplySource for SolSupplySource {
 
     async fn wrapped_supply(&self) -> Result<u128, ReserveError> {
         Err(ReserveError::NotImplemented(
-            "Solana getTokenSupply transport pending #828".to_string(),
+            "Solana getTokenSupply transport pending #853".to_string(),
         ))
     }
 }
@@ -215,7 +215,7 @@ pub trait ReserveBalanceSource: Send + Sync {
 
 /// Live BTH reserve-balance source.
 ///
-/// TODO(#828): implement against the BTH node transport (view-key scan of
+/// TODO(#853): implement against the BTH node transport (view-key scan of
 /// reserve-address outputs, the same wiring as `watchers::bth`). Until
 /// then this is a fail-safe stub: the custody check is SKIPPED and
 /// `reserveBalanceChecked` stays false — never a silent pass.
@@ -235,7 +235,7 @@ impl NodeReserveBalanceSource {
 impl ReserveBalanceSource for NodeReserveBalanceSource {
     async fn reserve_balance(&self) -> Result<u128, ReserveError> {
         Err(ReserveError::NotImplemented(
-            "BTH reserve-address balance transport pending #828".to_string(),
+            "BTH reserve-address balance transport pending #853".to_string(),
         ))
     }
 }
@@ -270,7 +270,7 @@ pub struct ReserveProof {
     pub locked_reserve: u64,
     /// Verified wBTH totalSupply on Ethereum, picocredits.
     pub eth_supply: Option<u64>,
-    /// Verified wBTH supply on Solana, picocredits (pending #828).
+    /// Verified wBTH supply on Solana, picocredits (pending #853).
     pub sol_supply: Option<u64>,
     /// Σ of the verified supplies, picocredits.
     pub total_wrapped: Option<u64>,
@@ -282,7 +282,7 @@ pub struct ReserveProof {
     /// (when checkable). The dashboard's red/green peg state.
     pub peg_healthy: bool,
     /// Whether the on-Botho reserve balance was actually checked (false
-    /// until the #828 transport lands).
+    /// until the #853 transport lands).
     pub reserve_balance_checked: bool,
     /// When the reconciliation ran (unix seconds).
     pub taken_at: i64,
@@ -297,6 +297,9 @@ pub struct Reconciler {
     supplies: Vec<Arc<dyn SupplySource>>,
     reserve_balance: Option<Arc<dyn ReserveBalanceSource>>,
     tolerance: u64,
+    /// Snapshot retention window in seconds (#846 pruning); `None`
+    /// disables pruning.
+    snapshot_retention_secs: Option<i64>,
 }
 
 impl Reconciler {
@@ -312,6 +315,7 @@ impl Reconciler {
             supplies,
             reserve_balance,
             tolerance,
+            snapshot_retention_secs: None,
         }
     }
 
@@ -326,12 +330,17 @@ impl Reconciler {
         }
         supplies.push(Arc::new(SolSupplySource::new(config.solana.clone())));
 
-        Self::new(
+        let mut reconciler = Self::new(
             db,
             supplies,
             Some(Arc::new(NodeReserveBalanceSource::new(config.bth.clone()))),
             config.reserve.tolerance_picocredits,
-        )
+        );
+        if config.reserve.snapshot_retention_days > 0 {
+            reconciler.snapshot_retention_secs =
+                Some(config.reserve.snapshot_retention_days as i64 * 86_400);
+        }
+        reconciler
     }
 
     /// One reconciliation pass: compute, persist, and (on violation)
@@ -447,7 +456,13 @@ impl Reconciler {
             drift,
             in_tolerance: all_in_tolerance,
             peg_healthy: proof.peg_healthy,
+            reserve_balance_checked,
         })?;
+        if let Some(retention) = self.snapshot_retention_secs {
+            if let Err(e) = self.db.prune_reserve_snapshots(retention) {
+                warn!("reserve snapshot pruning failed (will retry): {}", e);
+            }
+        }
         let details =
             serde_json::to_string(&proof).map_err(|e| format!("serialize proof: {}", e))?;
         self.db.log_audit(None, "reserve_reconcile", &details)?;
@@ -462,6 +477,24 @@ impl Reconciler {
                  custody incident (#825)",
                 locked_reserve, proof.total_wrapped, drift, all_in_tolerance, reserve_covered
             );
+            // Circuit breaker (#827): a peg incident halts the submit
+            // stages (fail closed) until an operator triages and resumes.
+            // Event-driven — a manual resume holds until the NEXT
+            // unhealthy pass, so recovery is never fought by stale state.
+            if self
+                .db
+                .set_paused(true, Some("reserve drift alert (peg unhealthy)"))?
+            {
+                self.db.log_audit(
+                    None,
+                    "breaker_tripped",
+                    "reserve drift alert (peg unhealthy)",
+                )?;
+                error!(
+                    "CIRCUIT BREAKER TRIPPED by reserve drift alert; submit stages halted. \
+                     See docs/operations/runbooks/bridge-order-engine-recovery.md"
+                );
+            }
         } else {
             debug!(
                 "reserve reconciled: locked={} wrapped={:?} drift={}",
@@ -708,7 +741,7 @@ mod tests {
 
         let eth = MockSupply::new(Chain::Ethereum, 1_000);
         let sol = MockSupply::new(Chain::Solana, 0);
-        sol.set_err(ReserveError::NotImplemented("pending #828".to_string()));
+        sol.set_err(ReserveError::NotImplemented("pending #853".to_string()));
         let reconciler = Reconciler::new(db.clone(), vec![eth, sol], None, 0);
 
         let proof = reconciler.reconcile_once().await.unwrap();
@@ -753,6 +786,60 @@ mod tests {
             "custody shortfall must flip the peg state"
         );
         assert_eq!(db.count_audit_action("reserve_drift_alert").unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_drift_alert_trips_circuit_breaker() {
+        let db = setup_db();
+        lock(&db, Chain::Ethereum, 1_000);
+
+        let eth = MockSupply::new(Chain::Ethereum, 1_000);
+        let reconciler = Reconciler::new(db.clone(), vec![eth.clone()], None, 0);
+
+        // Healthy pass: breaker stays closed.
+        assert!(reconciler.reconcile_once().await.unwrap().peg_healthy);
+        assert!(db.is_paused().unwrap().is_none());
+
+        // Drift: the alert trips the breaker (fail closed), audited once.
+        eth.set(1_001);
+        assert!(!reconciler.reconcile_once().await.unwrap().peg_healthy);
+        let reason = db.is_paused().unwrap().expect("breaker must trip");
+        assert!(reason.contains("drift"), "{}", reason);
+        assert_eq!(db.count_audit_action("breaker_tripped").unwrap(), 1);
+
+        // A second unhealthy pass does not re-audit the trip.
+        assert!(!reconciler.reconcile_once().await.unwrap().peg_healthy);
+        assert_eq!(db.count_audit_action("breaker_tripped").unwrap(), 1);
+
+        // Manual resume holds while passes are healthy again.
+        db.set_paused(false, None).unwrap();
+        eth.set(1_000);
+        assert!(reconciler.reconcile_once().await.unwrap().peg_healthy);
+        assert!(db.is_paused().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_persists_custody_verification_flag() {
+        // #846: a consumer must be able to distinguish "custody checked
+        // OK" from "custody never checked" from the persisted snapshot.
+        let db = setup_db();
+        lock(&db, Chain::Ethereum, 1_000);
+        let eth = MockSupply::new(Chain::Ethereum, 1_000);
+
+        // No balance source: pegHealthy but custody UNCHECKED.
+        let reconciler = Reconciler::new(db.clone(), vec![eth.clone()], None, 0);
+        reconciler.reconcile_once().await.unwrap();
+        let snapshot = db.latest_reserve_snapshot().unwrap().unwrap();
+        assert!(snapshot.peg_healthy);
+        assert!(!snapshot.reserve_balance_checked);
+
+        // With a balance source: custody CHECKED.
+        let balance = MockBalance::new(1_000);
+        let reconciler = Reconciler::new(db.clone(), vec![eth], Some(balance), 0);
+        reconciler.reconcile_once().await.unwrap();
+        let snapshot = db.latest_reserve_snapshot().unwrap().unwrap();
+        assert!(snapshot.peg_healthy);
+        assert!(snapshot.reserve_balance_checked);
     }
 
     #[tokio::test]

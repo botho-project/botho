@@ -50,6 +50,13 @@ pub struct ReserveSettings {
     /// the server.
     #[serde(default = "default_reserve_api_listen")]
     pub api_listen: String,
+
+    /// Days of reconciliation snapshot history to retain (#846: the table
+    /// grows one row per pass — ~525k rows/yr at the 60s default). Older
+    /// rows are pruned each pass; the most recent snapshot always
+    /// survives. 0 disables pruning.
+    #[serde(default = "default_snapshot_retention_days")]
+    pub snapshot_retention_days: u64,
 }
 
 fn default_reconcile_interval_secs() -> u64 {
@@ -60,12 +67,17 @@ fn default_reserve_api_listen() -> String {
     "127.0.0.1:9741".to_string()
 }
 
+fn default_snapshot_retention_days() -> u64 {
+    30
+}
+
 impl Default for ReserveSettings {
     fn default() -> Self {
         Self {
             tolerance_picocredits: 0,
             reconcile_interval_secs: default_reconcile_interval_secs(),
             api_listen: default_reserve_api_listen(),
+            snapshot_retention_days: default_snapshot_retention_days(),
         }
     }
 }
@@ -239,6 +251,20 @@ pub struct BridgeSettings {
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
 
+    /// Start with the circuit breaker tripped: the engine pauses the
+    /// submit stages (mints and releases) at startup until an operator
+    /// resumes via the API. Confirmation stages keep running so in-flight
+    /// orders settle. The runtime pause state lives in the database
+    /// (`bridge_state`) and survives restarts independently of this flag.
+    #[serde(default)]
+    pub paused: bool,
+
+    /// Actionable-order backlog above which the circuit breaker trips
+    /// automatically (a flood of orders is an anomaly signal — fail
+    /// closed and let an operator inspect). 0 disables the auto-trip.
+    #[serde(default = "default_max_pending_orders")]
+    pub max_pending_orders: u64,
+
     /// Enable testnet mode
     #[serde(default)]
     pub testnet: bool,
@@ -288,6 +314,10 @@ fn default_order_expiry() -> i64 {
 
 fn default_max_retries() -> u32 {
     3
+}
+
+fn default_max_pending_orders() -> u64 {
+    1_000
 }
 
 /// Gas price strategy for Ethereum transactions.
@@ -376,6 +406,8 @@ impl Default for BridgeConfig {
                 global_daily_limit: default_global_daily_limit(),
                 order_expiry_minutes: default_order_expiry(),
                 max_retries: default_max_retries(),
+                paused: false,
+                max_pending_orders: default_max_pending_orders(),
                 testnet: false,
                 attestation_ed25519_key_file: None,
                 attestation_secp256k1_key_file: None,
@@ -408,6 +440,35 @@ mod tests {
         let config = BridgeConfig::default();
         assert_eq!(config.bridge.fee_bps, 10);
         assert!(!config.bridge.testnet);
+        assert!(!config.bridge.paused);
+        assert_eq!(config.bridge.max_pending_orders, 1_000);
+    }
+
+    #[test]
+    fn test_breaker_knobs_parse() {
+        // A pre-existing config without the breaker knobs still parses
+        // with safe defaults, and the knobs round-trip from TOML.
+        let legacy: BridgeSettings = toml::from_str(
+            r#"
+            mnemonic_file = "m.enc"
+            db_path = "bridge.db"
+            "#,
+        )
+        .unwrap();
+        assert!(!legacy.paused);
+        assert_eq!(legacy.max_pending_orders, 1_000);
+
+        let configured: BridgeSettings = toml::from_str(
+            r#"
+            mnemonic_file = "m.enc"
+            db_path = "bridge.db"
+            paused = true
+            max_pending_orders = 50
+            "#,
+        )
+        .unwrap();
+        assert!(configured.paused);
+        assert_eq!(configured.max_pending_orders, 50);
     }
 
     #[test]
@@ -463,6 +524,7 @@ mod tests {
         let legacy: ReserveSettings = toml::from_str("").unwrap();
         assert_eq!(legacy.tolerance_picocredits, 0);
         assert_eq!(legacy.reconcile_interval_secs, 60);
+        assert_eq!(legacy.snapshot_retention_days, 30);
 
         // The knobs round-trip from TOML; empty api_listen disables.
         let configured: ReserveSettings = toml::from_str(
