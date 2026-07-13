@@ -85,7 +85,12 @@ The per-thread config supports the following optional fields:
 ```json
 {
   "max_iterations": 4,
-  "venue": "neurips"
+  "venue": "neurips",
+  "artifact_verify": {
+    "commands": ["lake build", "lake exe check_theorems"],
+    "cwd": "proof/",
+    "timeout_s": 300
+  }
 }
 ```
 
@@ -93,6 +98,7 @@ The per-thread config supports the following optional fields:
 |---|---|---|---|
 | `max_iterations` | int | 4 | Iteration cap (see above). |
 | `venue` | string | none | Target venue slug. When set, `pub-review` also scores the paper against the matching venue YAML and writes `_review.venue.json` alongside `_review.json`. Advisory only; does not change the /44 gate. See "Venue overlays" below. |
+| `artifact_verify` | object | none | Optional external-artifact verification gate (issue #663). When declared, `pub-review` runs each command in `commands` (a list of command strings) in the resolved `cwd` (thread-relative or absolute; defaults to the thread root) under a per-command `timeout_s` budget (default 300s). A failed command (non-zero exit or timeout) emits an `artifact_verify_*` critical flag that blocks the review. When absent, behavior is byte-identical to today. See "External-artifact verification" below. |
 
 ### Venue overlays (advisory)
 
@@ -125,6 +131,20 @@ When `venue` is set but no matching YAML is found in any tier, the reviewer emit
 #### Adding a consumer venue
 
 A consumer who wants to ship a custom venue (e.g., ICLR) drops a `Rubric`-shaped YAML into one of the two override tiers above. The YAML must validate against the `Rubric` schema in `anvil/lib/rubric.py` with `advisory: true`. See the shipped `rubrics/neurips.yaml` as a worked example. Set `venue: <slug>` in `<thread>/.anvil.json` to activate.
+
+### External-artifact verification (opt-in, fail-open) — issue #663
+
+`anvil:pub`'s render gate + numeric-consistency checker verify the *paper* artifact; the reproducibility rubric dimension (dim 5) scores whether replication *info is present*. Neither runs the **external artifact** a paper's central claim rests on — a companion Lean 4 proof repository that must `lake build` clean, a benchmark harness that must reproduce a headline number, a dataset whose checksum must match. A review pass can score a paper highly and advance it to READY while the artifact backing its central claim is silently broken (the motivating canary incident: a paper ACCEPTed with a headline theorem that did not actually hold, caught only later by manually running `lake build`).
+
+A consumer opts a thread in by declaring an `artifact_verify` block in `<thread>/.anvil.json` (schema table above). `pub-review` step 4f then runs each declared command as a deterministic pre-scoring gate — **run the artifact, not just the PDF**. This extends the *existing* "Build / compile failure" critical-flag class (`rubric.md`) to cover external companion artifacts; it is **not** a new rubric dimension and the rubric total stays /44.
+
+The contract mirrors the venue-overlay discovery/fail-open shape exactly (fail-open when undeclared, one-line stdout warning when declared-but-unresolvable):
+
+- **Absent** (the default for every existing thread): no subprocess call, no `_artifact_verify.json` file, no finding — behavior is **byte-identical** to a pre-#663 review. This is the load-bearing fail-open contract.
+- **Declared and resolvable**: each command in `commands` runs via `subprocess.run` in the resolved `cwd` (thread-relative or absolute; defaults to the thread root) under `timeout_s` (default 300s), subprocess-only with no new Python dependency. ALL commands run — an earlier failure does not short-circuit the rest — so a reviewer sees every failing step in one pass. A failed command (non-zero exit OR timeout) emits a `CriticalFlag` with `type` prefix `artifact_verify_<n>` (`<n>` is the 0-based command index) that routes through the unchanged `anvil/lib/critics.py::compute_verdict` path and forces `Verdict.BLOCK` — no aggregator or schema change.
+- **Declared but unresolvable** (missing / non-directory `cwd`, or a command whose executable is not launchable): the gate **fails open** — a one-line stdout warning + a `major` finding in `comments.md`, and the review proceeds. A broken declaration is a defect worth surfacing, but it must not be indistinguishable from "the reviewer never checked" — so it does NOT block and does NOT silently pass as "verified".
+
+The gate's raw stdout/stderr capture is written to `<thread>.{N}.review/_artifact_verify.json` (mirroring the render gate's `_gate.json`) for CI/operator inspection — a conditional output, NOT in the review's required-files manifest. The skill-local implementation lives at `anvil/skills/pub/lib/artifact_verify.py` (`discover_artifact_verify`, `verify`, `ArtifactVerifyResult.to_review()`/`to_critical_flags()`), modeled on `anvil/lib/render_gate.py`'s `GateResult` shape but scoped to pub per the "wait for the second consumer before generalizing" rule.
 
 ### Area Chair pattern (AI-Scientist) maps to existing N-critics-one-reviser
 
@@ -196,7 +216,7 @@ See `commands/pub-litsearch.md` § "Opt-in web search" and `commands/pub-review.
 2. Spot-check that cited papers actually support the surrounding claim (the auditor reads `<thread>/refs/` for any author-supplied source PDFs / notes; for citations whose source is not on disk, the auditor flags them as "claim-support unverified — source not on disk" rather than fabricating a verification).
 3. Flag claims that should have a citation but do not.
 4. Flag numerical values in the text (Tables, Sec. results) that disagree with figures/tables.
-5. Verify the LaTeX compiles: run `pdflatex main && bibtex main && pdflatex main && pdflatex main` (or equivalent) and capture the log. A non-zero exit OR any unresolved `??` citation in the rendered PDF is a critical flag.
+5. Verify the LaTeX compiles: run `pdflatex`/`bibtex`, then rerun `pdflatex` to the "Label(s) may have changed. Rerun" fixpoint, capped at 5 total `pdflatex` passes (latexmk-style convergence loop — see `commands/pub-audit.md` step 4; or equivalent) and capture the log. A non-zero exit, any unresolved `??` citation in the rendered PDF, OR non-convergence at the 5-pass cap is a critical flag.
 
 **`pub-figures`.** Writes into the current `<thread>.{N}/figures/` directory (not a sibling — figures are part of the artifact). The figurer SHOULD NOT invent data. Source scripts go in `figures/src/`; rendered outputs go in `figures/`. Conventions:
 - **TikZ / PGFPlots** (`.tex` files in `figures/`) — for diagrams and small plots; vector-native in the compiled PDF, included via `\input{figures/diagram-1.tex}`.
@@ -205,11 +225,11 @@ See `commands/pub-litsearch.md` § "Opt-in web search" and `commands/pub-review.
 
 The auditor (`pub-audit`) may re-run scripts in `figures/src/` to verify rendered outputs are current; this verification policy is documented in `pub-audit.md`.
 
-**`pub-review` render-gate hook (deterministic pre-flight).** `pub-review` runs a deterministic render-gate pre-flight via `anvil/lib/render_gate.py` (the LaTeX-skill analog of `marp_lint` for the deck/slides skills). The gate checks page count (`page_cap=None` — paper length is venue-dependent; consumers can override per-thread via `<thread>/.anvil.json: render_gate.page_cap`), overfull boxes (>5.0pt threshold), compile success, and source-side placeholders (`TODO` / `[TBD]` / `(figure)` / `.MISSING`). The gate runs after `pub-audit` has produced `paper.pdf` + `compile-log.txt`; if invoked before audit, the gate fails open with a clear stdout message and the review proceeds without enforcement. On failure, the gate emits a typed `Review(kind=tool_evidence)` with one `CriticalFlag` per failed gate dimension, which the existing `anvil/lib/critics.py::compute_verdict` path treats as `BLOCK`. See `commands/pub-review.md` step 4b.
+**`pub-review` render-gate hook (deterministic pre-flight).** `pub-review` runs a deterministic render-gate pre-flight via `anvil/lib/render_gate.py` (the LaTeX-skill analog of `marp_lint` for the deck/slides skills). The gate checks page count (`page_cap=None` — paper length is venue-dependent; consumers can override per-thread via `<thread>/.anvil.json: render_gate.page_cap`), overfull boxes (>5.0pt threshold), compile success, and source-side placeholders (`TODO` / `[TBD]` / `(figure)` / `.MISSING`). The gate runs after `pub-audit` has produced `main.pdf` + `compile-log.txt`; if invoked before audit, the gate fails open with a clear stdout message and the review proceeds without enforcement. On failure, the gate emits a typed `Review(kind=tool_evidence)` with one `CriticalFlag` per failed gate dimension, which the existing `anvil/lib/critics.py::compute_verdict` path treats as `BLOCK`. See `commands/pub-review.md` step 4b.
 
 ## Templates / assets
 
-- **Default LaTeX class**: `templates/anvil-paper.cls` — minimal generic single-column class with `\title`, `\author`, `\abstract`, standard sectioning, and `\bibliographystyle{plainnat}` baked in. Compiles cleanly with `pdflatex` + `bibtex` from a fresh checkout, no venue-specific assumptions. Supports an `anonymous` option (`\documentclass[anonymous]{anvil-paper}`) that suppresses author/affiliation rendering for double-blind submission.
+- **Default LaTeX class**: `templates/anvil-paper.cls` — minimal generic single-column class with `\title`, `\author`, `\abstract`, standard sectioning, and `\bibliographystyle{plainnat}` baked in. Compiles cleanly with `pdflatex` + `bibtex` from a fresh checkout, no venue-specific assumptions. Supports an `anonymous` option (`\documentclass[anonymous]{anvil-paper}`) that suppresses author/affiliation rendering for double-blind submission, and a `numeric` option (`\documentclass[numeric]{anvil-paper}`) that switches citations from the default author-year `(Author, Year)` style to numeric `[7]`-style — the two options compose (`\documentclass[numeric,anonymous]{anvil-paper}`).
 - **Bibliography**: BibTeX (`.bib`) is the primary format, with `natbib` for citation commands (`\citep{}`, `\citet{}`). Most venues accept either BibTeX or biblatex; BibTeX has wider tooling compatibility.
 - **Venue overrides**: NeurIPS, IEEE, ACM, arXiv, etc. are handled by the standard anvil override mechanism — the consumer drops `neurips_2024.sty` (or equivalent) into `.anvil/skills/pub/templates/` in their own repo and the brief instructs the drafter to switch the documentclass line (e.g., `\documentclass{neurips_2024}`). This skill ships **no venue style files** (licensing + staleness concerns).
 - **Entry-point template**: `templates/main.tex.j2` — Jinja2-style placeholder document with frontmatter hooks (`{{title}}`, `{{author}}`, `{{abstract}}`) and section skeletons (`\section{Introduction}`, etc.). The drafter substitutes from the brief and elaborates.
@@ -238,6 +258,18 @@ This skill ships opinionated defaults. Consumers are expected to override libera
 - `rubric.overrides.md` (optional) — Add domain-specific critical-flag examples or adjust the open-ended "any dealbreaker a sophisticated reader would catch" instruction.
 - `templates/<venue>.cls` or `templates/<venue>.sty` — Venue-specific style files. The brief tells the drafter to use them.
 - `BRIEF.md.example` — Reference brief shape; freeform prose with optional YAML frontmatter is accepted.
+
+## Migrating an existing paper
+
+Bringing a pre-existing, hand-authored LaTeX paper into the `pub` grammar is a **first-class, sanctioned workflow** — not a workaround. There are three supported class choices, all on equal footing; pick the cheapest one that preserves your paper's rendered output:
+
+1. **`\documentclass{anvil-paper}` (default).** Use when the paper has no load-bearing preamble and its citations are author-year. You get margins, `microtype`, colored `hyperref`, and caption styling for free.
+2. **`\documentclass[numeric]{anvil-paper}`.** Use when the *only* blocker is citation style — the paper renders numeric `[7]`-style citations. The `numeric` option swaps natbib into numeric mode (`\citep`/`\citet` unchanged) while keeping all of anvil-paper's other styling. This is strictly cheaper than a full keep-original-class migration, so prefer it when nothing but the citation style collides. Compose with `anonymous` if double-blind (`\documentclass[numeric,anonymous]{anvil-paper}`).
+3. **Keep the paper's original `\documentclass` (e.g. `\documentclass{article}`) and its preamble verbatim.** Use when the preamble itself collides with anvil-paper — custom theorem environments, `xcolor`/`hyperref`/`caption`/`amsthm` package-option clashes, or a citation style anvil-paper does not support even with `numeric`. Set `documentclass: article` (or the paper's original class) in the brief frontmatter and keep the paper's preamble in `main.tex` unchanged. This is a **sanctioned path on equal footing with the venue-style-file override**, not a deviation to note apologetically.
+
+**The lifecycle is class-agnostic.** `draft → review → revise → audit → figures`, the /44 rubric scoring, and the `render_gate.py` pre-flight all operate on the compiled artifact — **none of them inspect or require `anvil-paper.cls` specifically**, and no rubric dimension penalizes not using it. Keeping your own class costs you the free styling anvil-paper provides, nothing else.
+
+**Decision guidance:** use `\documentclass[numeric]{anvil-paper}` when only the citation style is the blocker; keep the original `\documentclass` verbatim when the preamble itself collides (theorem environments, package-option clashes, or highly customized macros). See `commands/pub-draft.md` § "Documentclass overrides" for how the brief frontmatter selects the class.
 
 ## Anonymous / double-blind submission
 

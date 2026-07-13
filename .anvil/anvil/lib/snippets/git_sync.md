@@ -137,6 +137,22 @@ Stage **only** the paths the phase wrote — never `git add -A`, never
   output is never swept into the commit.
 - Thread-level files the phase wrote (e.g., `refs/` stubs seeded by
   `memo-migrate-refs`) are staged explicitly by path.
+- **Dual-role commands** (a critic-sidecar writer that ALSO produces a
+  build artifact in the version dir as a side effect of its phase) are
+  the one case the two bullets above do not fully cover on their own.
+  Such a command stages its own sidecar dir **and** the specific
+  version-dir path(s) it wrote — always **by explicit path, never
+  `<thread>.{N}/` wholesale** — so an unrelated out-of-band operator
+  edit elsewhere in the version dir is not swept into the commit. The
+  worked example is `pub-audit` (`anvil/skills/pub/commands/pub-audit.md`):
+  its mandatory compile-verification step builds `<thread>.{N}/main.pdf`
+  into the version dir while its findings land in the
+  `<thread>.{N}.audit/` sidecar, so it stages both
+  `<thread>.{N}.audit/` and `<thread>.{N}/main.pdf` by path. A future
+  skill whose audit (or other sidecar-writing phase) compiles into the
+  version dir should follow the same by-path dual-staging shape rather
+  than assuming the two clean-cut phase shapes above are mutually
+  exclusive.
 
 The narrow staging scope is what makes the hook safe under parallel
 fan-out and safe in a repo with unrelated uncommitted operator edits.

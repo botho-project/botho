@@ -123,12 +123,17 @@ CLI entry-point
 ---------------
 
 ``python -m anvil.lib.numeric_consistency <version_dir>
-[--write-review] [--blocking]``
+[--write-review] [--blocking] [--body PATH]``
 
 Writes a JSON summary to stdout. Exit codes: ``0`` clean (or
 suppressed-only findings), ``1`` active findings, ``2`` invocation
 error. The body file is auto-detected: ``<slug>.md`` (the #295
 slug-echo memo shape) first, then ``main.tex`` (the pub shape).
+``--body PATH`` overrides discovery for adopted-in-place legacy
+threads whose entry point isn't ``<slug>.md``/``main.tex`` (e.g. a
+``paper.tex``); with ``--write-review`` the resolved
+portfolio-relative path is what the ``.numeric/_review.json`` sidecar
+records.
 """
 
 from __future__ import annotations
@@ -1028,13 +1033,30 @@ def check_text(text: str, *, latex: bool = False) -> Tuple[List[NumericFinding],
 # ---------------------------------------------------------------------------
 
 
-def _body_path(version_dir: Path) -> Path:
+def _body_path(version_dir: Path, *, body: Optional[Path] = None) -> Path:
     """Locate the body file inside a version directory.
 
     Detection order: ``<slug>.md`` (the #295 slug-echo memo shape —
     the slug is the parent dir name), then ``main.tex`` (the pub
     shape). Raises ``FileNotFoundError`` when neither exists.
+
+    When ``body`` is supplied (the adopted-in-place legacy-thread
+    override — e.g. a ``paper.tex`` entry point that matches neither
+    canonical name), the discovery chain is skipped entirely: a
+    relative override resolves against ``version_dir``, an absolute one
+    is used as-is, and the resolved path must exist (``FileNotFoundError``
+    naming the override, not the discovery chain, otherwise).
     """
+    if body is not None:
+        override = Path(body)
+        if not override.is_absolute():
+            override = version_dir / override
+        if not override.is_file():
+            raise FileNotFoundError(
+                f"numeric_consistency: --body override {override!s} does "
+                f"not exist or is not a file."
+            )
+        return override
     slug_md = version_dir / f"{version_dir.parent.name}.md"
     if slug_md.is_file():
         return slug_md
@@ -1048,11 +1070,44 @@ def _body_path(version_dir: Path) -> Path:
     )
 
 
-def check_numeric_consistency(version_dir: Path) -> NumericConsistencyResult:
+def _record_body_path(version_dir: Path, body: Path) -> str:
+    """Portfolio-relative body-path string for the result / sidecar.
+
+    For the common case (body lives inside ``version_dir``) this is the
+    bare filename (``body.name``), byte-identical to the pre-#670
+    contract. For an override that points outside ``version_dir`` (the
+    adopted-in-place / scratch-staging case), records the path relative
+    to the portfolio root (``version_dir.parent.parent`` under the
+    post-#295/#296 canonical model — the same convention
+    ``hyperlink_resolver`` / ``render_gate`` use), falling back to the
+    absolute path when the body lives outside the portfolio tree
+    entirely.
+    """
+    body = body.resolve()
+    version_dir = version_dir.resolve()
+    try:
+        body.relative_to(version_dir)
+        return body.name
+    except ValueError:
+        pass
+    portfolio_root = version_dir.parent.parent
+    try:
+        return str(body.relative_to(portfolio_root))
+    except ValueError:
+        return str(body)
+
+
+def check_numeric_consistency(
+    version_dir: Path, *, body: Optional[Path] = None
+) -> NumericConsistencyResult:
     """Run the check against a version directory's body file.
 
-    Raises ``FileNotFoundError`` when ``version_dir`` does not exist or
-    contains no recognizable body file (``<slug>.md`` / ``main.tex``).
+    ``body`` overrides body-file discovery (for adopted-in-place legacy
+    threads whose entry point isn't ``<slug>.md``/``main.tex``); when
+    omitted, behavior is byte-identical to the historical discovery
+    chain. Raises ``FileNotFoundError`` when ``version_dir`` does not
+    exist, an override path is missing, or no recognizable body file
+    (``<slug>.md`` / ``main.tex``) exists.
     """
     version_dir = Path(version_dir).resolve()
     if not version_dir.is_dir():
@@ -1060,12 +1115,12 @@ def check_numeric_consistency(version_dir: Path) -> NumericConsistencyResult:
             f"numeric_consistency: version_dir {version_dir!s} does not "
             f"exist or is not a directory."
         )
-    body = _body_path(version_dir)
-    text = body.read_text(encoding="utf-8")
-    findings, numbers, claims = check_text(text, latex=body.suffix == ".tex")
+    body_file = _body_path(version_dir, body=body)
+    text = body_file.read_text(encoding="utf-8")
+    findings, numbers, claims = check_text(text, latex=body_file.suffix == ".tex")
     return NumericConsistencyResult(
         version_dir=version_dir.name,
-        body_path=body.name,
+        body_path=_record_body_path(version_dir, body_file),
         numbers_extracted=numbers,
         claims_checked=claims,
         findings=findings,
@@ -1146,6 +1201,19 @@ def _build_cli_parser():
             "(#460); advisory consumers (memo/pub) MUST NOT set this."
         ),
     )
+    p.add_argument(
+        "--body",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Override body-file discovery (e.g. for adopted-in-place "
+            "legacy threads whose entry point isn't <slug>.md/main.tex, "
+            "such as a paper.tex). Relative paths resolve against "
+            "version_dir; absolute paths are used as-is. With "
+            "--write-review, the resolved portfolio-relative path is "
+            "recorded in the sidecar."
+        ),
+    )
     return p
 
 
@@ -1160,7 +1228,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = _build_cli_parser()
     args = parser.parse_args(argv)
     try:
-        result = check_numeric_consistency(Path(args.version_dir))
+        result = check_numeric_consistency(
+            Path(args.version_dir),
+            body=Path(args.body) if args.body else None,
+        )
     except FileNotFoundError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

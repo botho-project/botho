@@ -597,18 +597,48 @@ def _parse_overfull_boxes(log_text: str, threshold_pt: float) -> list[dict]:
     greater than: a 5.0pt-over-threshold-5.0 box is NOT reported (matches
     typical LaTeX overfull tolerance — exactly-at-threshold boxes are
     cosmetic).
+
+    **Dedupe contract (issue #668).** Multi-pass LaTeX cycles
+    (``pdflatex → bibtex → pdflatex → pdflatex``, as captured by
+    e.g. ``pub-audit``'s ``compile-log.txt``) re-emit the *same* overfull
+    warning on every ``pdflatex`` invocation, so a single real overfull box
+    appears once per pass in the concatenated log. We deduplicate by
+    ``(line, amount_pt, kind)`` — LaTeX line numbers are stable across
+    passes for line-anchored warnings (hbox ``at lines N--M``, vbox
+    ``detected at line N``), so identical triples are re-emissions of the
+    same underlying box, not independent defects. First occurrence wins, so
+    ``line``/``raw``/``kind`` reflect the first pass's text and single-pass
+    logs (no duplicate triples) are returned byte-identically.
+
+    Hits with no captured ``line`` (the regex line-span group is absent)
+    are **never** collapsed together: a genuinely line-less log with several
+    distinct warnings would otherwise degenerate to one entry. Only hits
+    with ``line is not None`` participate in dedupe; line-less hits are all
+    preserved in insertion order.
+
+    The dedupe changes only count/cardinality, never presence — the
+    verdict logic in :func:`gate` is presence-based (``if overfull:``), so a
+    log that flagged before still flags after.
     """
     hits: list[dict] = []
+    seen: set[tuple[int, float, str]] = set()
     for m in _OVERFULL_RE.finditer(log_text):
         amount = float(m.group("amount"))
         if amount <= threshold_pt:
             continue
         line_start = m.group("line_start")
+        line = int(line_start) if line_start else None
+        kind = f"{m.group('kind').lower()}box"
+        if line is not None:
+            key = (line, amount, kind)
+            if key in seen:
+                continue
+            seen.add(key)
         hits.append(
             {
-                "kind": f"{m.group('kind').lower()}box",
+                "kind": kind,
                 "amount_pt": amount,
-                "line": int(line_start) if line_start else None,
+                "line": line,
                 "raw": m.group(0).strip(),
             }
         )

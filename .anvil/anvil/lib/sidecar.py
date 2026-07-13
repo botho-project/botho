@@ -33,10 +33,10 @@ This module provides the directory-level analog:
 4. A per-critic entry-step sweep (:func:`cleanup_one_staging`) targets
    only the *single* staging path that corresponds to the calling
    critic's intended ``final_dir``. It is the load-bearing surface for
-   the 41 wired commands across 8 skills and is **parallel-safe**:
-   concurrent critics writing different sidecars under the same
-   portfolio root never sweep each other's in-flight staging dirs
-   (issue #376).
+   the critic-writing commands across all 11 artifact-class skills and
+   is **parallel-safe**: concurrent critics writing different sidecars
+   under the same portfolio root never sweep each other's in-flight
+   staging dirs (issue #376).
 5. An operator-facing portfolio-wide sweep
    (:func:`cleanup_stale_staging`) walks a parent directory for
    ``*.tmp/`` leading-dot dirs and removes them, logging the count. It
@@ -88,6 +88,40 @@ API
     # safe to call from a per-critic entry step in a parallel fan-out
     # workflow (see issue #376).
     cleanup_stale_staging(Path("output"))
+
+CLI shim (issue #645)
+---------------------
+
+A manual or agent review session with no orchestrating Python driver
+cannot hold the :func:`staged_sidecar` ``with`` block open across its
+file writes (it writes files with its own editing tool between discrete
+tool calls). The module therefore ships a ``python -m anvil.lib.sidecar``
+entry point that decomposes the context manager into two commands sharing
+the same atomicity guarantee — the manifest check + single
+``Path.rename`` — enforced by code rather than re-derived in prose::
+
+    # 1. Stage: create the staging dir, print its path to stdout.
+    python -m anvil.lib.sidecar stage output/acme-seed.3.review
+    #   -> output/.acme-seed.3.review.tmp
+
+    # 2. Write every required file into the printed staging path with
+    #    your own editing tool.
+
+    # 3. Commit: verify the manifest, then atomically rename staging ->
+    #    final. Nonzero exit (staging left in place) if any file missing.
+    python -m anvil.lib.sidecar commit output/acme-seed.3.review \
+        --required verdict.md,scoring.md,comments.md,_meta.json,_progress.json
+
+    # Sweep a single leftover staging dir (parallel-safe, issue #376):
+    python -m anvil.lib.sidecar cleanup output/acme-seed.3.review
+
+The ``stage``/``commit`` pair maps to :func:`stage_enter` /
+:func:`commit_staged`, which share every helper with
+:func:`staged_sidecar` (``staging_path_for``, ``_missing_required_files``,
+the ``FileExistsError`` refuse-to-overwrite guard,
+:class:`SidecarIncompleteError`). When even ``python``/``uv`` is
+unavailable, consuming command docs document a last-resort manual
+``mv``-based fallback (see e.g. ``anvil/skills/pub/commands/pub-review.md``).
 
 Contract
 --------
@@ -141,9 +175,12 @@ __all__ = [
     "STAGING_SUFFIX",
     "SidecarIncompleteError",
     "staged_sidecar",
+    "stage_enter",
+    "commit_staged",
     "staging_path_for",
     "cleanup_one_staging",
     "cleanup_stale_staging",
+    "main",
 ]
 
 
@@ -377,7 +414,8 @@ def cleanup_one_staging(final_dir: Path) -> bool:
     owns. Returns ``True`` iff a staging dir was actually removed.
 
     This is the **per-critic entry-step sweep** — the load-bearing
-    surface for the 41 wired commands across 8 skills. It is
+    surface for the critic-writing commands across all 11 artifact-class
+    skills. It is
     **parallel-safe**: when two critics fan out concurrently under the
     same portfolio root with distinct ``final_dir`` values, each one
     targets only its own staging path and never disturbs the sibling's
@@ -533,3 +571,272 @@ def _is_staging_dirname(name: str) -> bool:
     # ".tmp" alone (no body) is suspicious and we leave it alone.
     inner = name[len(_STAGING_PREFIX) : -len(STAGING_SUFFIX)]
     return bool(inner)
+
+
+# ---------------------------------------------------------------------------
+# Split stage/commit surface for CLI-driven (non-Python-driver) sessions
+# ---------------------------------------------------------------------------
+#
+# The :func:`staged_sidecar` context manager assumes an orchestrating Python
+# process that holds the ``with`` block open across all file writes. A manual
+# or agent review session with no such driver can only shell out to discrete
+# ``python -m anvil.lib.sidecar`` subcommands and write files with its own
+# editing tool between invocations. The two functions below decompose the
+# context manager's enter-side (``stage_enter``) and exit-side
+# (``commit_staged``) so the CLI can offer the same atomicity guarantee — the
+# manifest check + single ``Path.rename`` — across two process boundaries.
+# They share every helper with :func:`staged_sidecar` (``staging_path_for``,
+# ``_missing_required_files``, the ``FileExistsError`` refuse-to-overwrite
+# check, ``SidecarIncompleteError``), so there is no second copy of the
+# contract to drift.
+
+
+def stage_enter(final_dir: Path, *, parents: bool = True) -> Path:
+    """Create (and return) the staging dir for ``final_dir`` — the
+    enter-side of :func:`staged_sidecar`, exposed for the CLI.
+
+    Mirrors the ``__enter__`` half of :func:`staged_sidecar`: refuses if
+    ``final_dir`` already exists (:class:`FileExistsError`), wipes any
+    leftover staging dir from a prior interrupt, then ``mkdir``\\ s the
+    staging path. Returns the staging :class:`pathlib.Path` for the
+    caller to write files into.
+
+    Unlike :func:`staged_sidecar`, this does NOT verify a required-files
+    manifest or rename — that is :func:`commit_staged`'s job, invoked in a
+    later process once the caller has finished writing files.
+
+    Raises
+    ------
+    FileExistsError
+        If ``final_dir`` already exists. (We do not overwrite — same
+        immutability guarantee as :func:`staged_sidecar`.)
+    """
+    final_dir = Path(final_dir)
+    staging = staging_path_for(final_dir)
+
+    if final_dir.exists():
+        raise FileExistsError(
+            f"stage_enter: refusing to stage into {staging.name!r}; "
+            f"final target {final_dir!s} already exists. "
+            f"Caller is responsible for the resume/idempotency check "
+            f"before invoking stage_enter."
+        )
+
+    if staging.exists():
+        _log.info(
+            "stage_enter: removing prior staging dir %s (interrupted "
+            "previous attempt)",
+            staging,
+        )
+        shutil.rmtree(staging)
+
+    staging.mkdir(parents=parents, exist_ok=False)
+    return staging
+
+
+def commit_staged(final_dir: Path, required_files: Sequence[str]) -> Path:
+    """Verify the manifest and atomically rename staging → ``final_dir``.
+
+    The exit-side of :func:`staged_sidecar`, exposed for the CLI. Assumes
+    a prior :func:`stage_enter` (or a manual ``mkdir`` of the staging
+    path) already created ``staging_path_for(final_dir)`` and the caller
+    has written files into it. Verifies every name in ``required_files``
+    exists, then performs the single ``Path.rename`` to ``final_dir``.
+
+    Returns the ``final_dir`` path on success.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the staging dir does not exist (nothing to commit).
+    FileExistsError
+        If ``final_dir`` already exists — atomic rename only works onto a
+        non-existent target (same guard as :func:`staged_sidecar`).
+    SidecarIncompleteError
+        If any name in ``required_files`` is missing from the staging
+        dir. The staging dir is left in place for forensic inspection;
+        the rename is skipped — identical to :func:`staged_sidecar`'s
+        clean-exit manifest check.
+    """
+    final_dir = Path(final_dir)
+    staging = staging_path_for(final_dir)
+
+    if not staging.exists():
+        raise FileNotFoundError(
+            f"commit_staged: staging dir {staging!s} does not exist. "
+            f"Run `stage` first (or the writer never created it)."
+        )
+    if final_dir.exists():
+        raise FileExistsError(
+            f"commit_staged: refusing to commit {staging.name!r}; final "
+            f"target {final_dir!s} already exists. Atomic rename only "
+            f"works onto a non-existent target."
+        )
+
+    missing = _missing_required_files(staging, required_files)
+    if missing:
+        _log.warning(
+            "commit_staged: missing required files in %s: %s "
+            "(staging dir left in place for forensics)",
+            staging,
+            ", ".join(missing),
+        )
+        raise SidecarIncompleteError(
+            f"commit_staged: sidecar at {staging!s} is missing required "
+            f"files: {', '.join(missing)}. The staging directory is left "
+            f"in place; rename to {final_dir.name!r} has been skipped."
+        )
+
+    staging.rename(final_dir)
+    return final_dir
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point (non-Python-driver sessions — issue #645)
+# ---------------------------------------------------------------------------
+#
+# Mirrors the ``if __name__ == "__main__":`` precedent shipped by seven
+# sibling ``anvil/lib/*.py`` modules (evidence_check, numeric_consistency,
+# figure_content, hyperlink_resolver, export_schema, vocab_reminder,
+# inventorship_evidence). A manual or agent review session with no
+# orchestrating Python driver cannot call the :func:`staged_sidecar` context
+# manager directly; it CAN shell out to ``python -m anvil.lib.sidecar`` and
+# get the exact same atomicity guarantee — the manifest check + single
+# ``Path.rename`` — enforced by code rather than re-derived in prose. When
+# even ``python``/``uv`` is unavailable, the consuming command docs document a
+# last-resort manual ``mv``-based fallback (see e.g. pub-review.md).
+
+
+def _build_cli_parser():
+    import argparse
+
+    p = argparse.ArgumentParser(
+        prog="python -m anvil.lib.sidecar",
+        description=(
+            "Atomic sidecar directory writes via staging-then-rename "
+            "(issue #350). CLI shim for manual/agent review sessions with "
+            "no orchestrating Python driver: `stage` a staging dir, write "
+            "the required files into the printed path with your own "
+            "editing tool, then `commit` (verify manifest + atomic "
+            "rename). `cleanup` sweeps a single leftover staging dir."
+        ),
+    )
+    sub = p.add_subparsers(dest="subcommand", required=True)
+
+    p_stage = sub.add_parser(
+        "stage",
+        help=(
+            "Create the staging dir for FINAL_DIR and print its path to "
+            "stdout. Refuses if FINAL_DIR already exists."
+        ),
+    )
+    p_stage.add_argument(
+        "final_dir",
+        help="The intended final sidecar path, e.g. output/thread.3.review",
+    )
+
+    p_commit = sub.add_parser(
+        "commit",
+        help=(
+            "Verify the required-files manifest in the staging dir, then "
+            "atomically rename it to FINAL_DIR. Nonzero exit (leaving the "
+            "staging dir in place) if any required file is missing."
+        ),
+    )
+    p_commit.add_argument(
+        "final_dir",
+        help="The intended final sidecar path, e.g. output/thread.3.review",
+    )
+    p_commit.add_argument(
+        "--required",
+        required=True,
+        metavar="NAMES",
+        help=(
+            "Comma-separated list of required file basenames that MUST "
+            "exist in the staging dir (e.g. "
+            "verdict.md,scoring.md,comments.md,_meta.json,_progress.json)."
+        ),
+    )
+
+    p_cleanup = sub.add_parser(
+        "cleanup",
+        help=(
+            "Remove the single leftover staging dir corresponding to "
+            "FINAL_DIR (the parallel-safe per-critic sweep, issue #376). "
+            "Idempotent no-op when absent."
+        ),
+    )
+    p_cleanup.add_argument(
+        "final_dir",
+        help="The intended final sidecar path, e.g. output/thread.3.review",
+    )
+
+    return p
+
+
+def main(argv: "Sequence[str] | None" = None) -> int:
+    """CLI entry point. Returns the process exit code.
+
+    Subcommands:
+
+    - ``stage FINAL_DIR`` — create the staging dir and print its path.
+      Exit ``0`` on success; ``3`` if ``FINAL_DIR`` already exists.
+    - ``commit FINAL_DIR --required a,b,c`` — verify the manifest and
+      atomically rename staging → ``FINAL_DIR``. Exit ``0`` on success;
+      ``1`` if a required file is missing (staging dir left in place);
+      ``3`` if the staging dir is absent or ``FINAL_DIR`` already exists.
+    - ``cleanup FINAL_DIR`` — sweep the single leftover staging dir. Exit
+      ``0`` always (idempotent no-op when absent); prints whether a dir
+      was removed.
+
+    Exit-code contract mirrors the sibling ``anvil/lib/*.py`` CLIs: ``0``
+    clean, ``1`` a contract failure the caller must act on
+    (missing-required-file, the ``SidecarIncompleteError`` analog), and a
+    distinct nonzero code (``3``) for invocation/precondition errors.
+    """
+    import sys
+
+    parser = _build_cli_parser()
+    args = parser.parse_args(argv)
+    final_dir = Path(args.final_dir)
+
+    if args.subcommand == "stage":
+        try:
+            staging = stage_enter(final_dir)
+        except FileExistsError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 3
+        print(str(staging))
+        return 0
+
+    if args.subcommand == "commit":
+        required = [
+            name.strip() for name in args.required.split(",") if name.strip()
+        ]
+        try:
+            committed = commit_staged(final_dir, required)
+        except (FileNotFoundError, FileExistsError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 3
+        except SidecarIncompleteError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(str(committed))
+        return 0
+
+    if args.subcommand == "cleanup":
+        removed = cleanup_one_staging(final_dir)
+        staging = staging_path_for(final_dir)
+        if removed:
+            print(f"removed staging dir {staging}")
+        else:
+            print(f"no staging dir to remove at {staging}")
+        return 0
+
+    # argparse's required=True on the subparser guarantees we never fall
+    # through, but return a distinct code defensively.
+    return 3  # pragma: no cover
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

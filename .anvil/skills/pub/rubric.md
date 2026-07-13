@@ -122,7 +122,7 @@ A critical flag is an issue severe enough that **a sophisticated reader would im
 - **Missing experiment for a claim** — The paper claims a property (robustness, generality, efficiency) without the experiment that would substantiate it. A claim of "robust to noise" with no noise-sweep experiment is a flag.
 - **Numerical inconsistency** — A number reported in the text disagrees with the corresponding figure or table. Examples: text says 87.3 accuracy, Table 2 says 87.1; abstract claims 5x speedup, results show 3x.
 - **Close prior work ignored** — A paper exists in the literature that is so close to the claimed contribution that ignoring it constitutes a misrepresentation of novelty. This is harder to call than the first three — use only when the omitted paper is clearly known to a serious reviewer in the area.
-- **Build / compile failure** — `pdflatex` + `bibtex` cycle does not complete cleanly, OR the rendered PDF contains unresolved citations or references. Caught by `pub-audit`; if surfaced by the reviewer (e.g., from a build log shared in the version dir), set a flag.
+- **Build / compile failure** — `pdflatex` + `bibtex` cycle does not complete cleanly, OR the rendered PDF contains unresolved citations or references. Caught by `pub-audit`; if surfaced by the reviewer (e.g., from a build log shared in the version dir), set a flag. **This flag class also covers an external companion artifact** the paper's claims rest on (issue #663): when a thread declares an `artifact_verify` block in `<thread>/.anvil.json`, `pub-review` step 4f runs the declared commands (e.g., `lake build` on a companion Lean 4 proof repository, a benchmark harness, a dataset checksum) and a non-zero exit or timeout raises an `artifact_verify_<n>`-typed critical flag — "run the artifact, not just the PDF." A broken *declaration* (missing `cwd`, unlaunchable command) fails open as a `major` finding rather than a flag. See `SKILL.md` § "External-artifact verification" and `commands/pub-review.md` step 4f.
 
 The reviewer should also raise a flag for any other issue that, in their judgment, meets the standard above — these examples are starting points, not a closed set. **Critical flags from `pub-audit` carry equal weight** to those from `pub-review` and block advancement to `AUDITED` (i.e., the paper is not done) until addressed.
 
@@ -143,12 +143,21 @@ The reviewer writes a `verdict.md` at the top of the review sibling dir with:
   verdict.md           Top-level decision (see above)
   scoring.md           Per-dimension score + justification
   comments.md          Line-level comments keyed to main.tex sections
-  _review.json         Generic /44 scorecard (canonical critic JSON; see anvil/lib/review_schema.py).
-  _review.venue.json   (optional) Venue advisory overlay scorecard, written
-                       when <thread>/.anvil.json sets a `venue` field that
-                       resolves to a known venue YAML. Same JSON schema as
-                       _review.json; informational only.
+  findings.md          Cross-section observations + rubric version transition subsection
+  _review.json         Canonical critic JSON (anvil/lib/review_schema.py) — generic /44
+                       scorecard, rubric: "anvil-pub-v2". Drives the convergence gate.
+  _review.venue.json   (optional) Venue advisory overlay scorecard, written when
+                       <thread>/.anvil.json sets a `venue` field that resolves to a
+                       known venue YAML. Same JSON schema as _review.json; ADVISORY
+                       ONLY (informational; does not change the convergence gate).
+  _summary.md          JSON-in-markdown scorecard carrying the top-level `rubric` block +
+                       dimensions; sibling to _review.json for cross-version score comparison.
+  _meta.json           { critic, scorecard_kind: "human-verdict", started, finished, model,
+                       schema_version, rubric_id, rubric_total, advance_threshold }
+  _progress.json       Phase state for the reviewer (phase: review)
 ```
+
+All 8 files (`verdict.md`, `scoring.md`, `comments.md`, `findings.md`, `_review.json`, `_summary.md`, `_meta.json`, `_progress.json`) are written atomically via `anvil/lib/sidecar.py::staged_sidecar`; the reviewer dir does not exist in the final path until the full manifest is complete (see `commands/pub-review.md` step 3). `_review.venue.json` is the lone documented-optional file (conditional on a declared venue), written inside the same staging dir but not in the required-files manifest.
 
 The reviewer dir is **read-only once written** (state: `done` in its own `_progress.json`). Revisions consume it without modifying it.
 

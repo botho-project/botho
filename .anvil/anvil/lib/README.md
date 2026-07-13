@@ -53,7 +53,11 @@ anvil/lib/
     rubric.md                  Weighted-dimension scoring shape (per-skill `total`;
                                 /40 and /44 are the v0 observed shapes) + per-review
                                 rubric_id version stamping + convergence logic.
-    critics.md                 Sibling discovery + aggregation rules.
+    critics.md                 Sibling discovery + aggregation rules, plus the
+                                "Orchestrator output-file guard collisions" note
+                                (why required critic outputs like findings.md /
+                                verdict.md are whitelisted, not renamed, under
+                                harnesses with "no report files" guards).
     scorecard_kind.md          human-verdict | machine-summary discriminator.
     audit.md                   .review/ (judgment) vs .audit/ (tool-evidence)
                                 distinction; load-bearing tool_calls contract.

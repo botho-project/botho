@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: anvil
-Version: 0.7.1
+Version: 0.8.0
 Summary: AI-orchestrated artifact creation using the filesystem as the coordination layer (consumer-side install).
 License: MIT
 Requires-Python: >=3.10

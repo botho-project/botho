@@ -58,9 +58,10 @@ For a new thread, `N+1 == 1` so the output is `<thread>.1/`. (Note: a `<thread>.
    - **Declared-but-missing corpora**: proceed with whatever resolved (`resolve_subject_voice_docs` returns `missing: true` entries, never raises); the reviewer surfaces the broken declaration as a `major` finding.
 4. **Initialize `_progress.json`**: write `phases.draft.state = in_progress`, `phases.draft.started = <ISO timestamp>`, `metadata.iteration = N+1`, `metadata.max_iterations` (inherit from `<thread>/.anvil.json` if set, else 4). When the corpus tier is active (step 3b), also record `metadata.corpus_dirs_resolved`; when the subject voice tier is active (step 3c), also record `metadata.subject_voice_exemplars`; omit each entirely when its tier is inactive.
 5. **Choose documentclass**:
-   - If brief frontmatter sets `documentclass`, use that (e.g., `\documentclass{neurips_2024}`). The consumer is responsible for dropping the matching `.cls` / `.sty` into `.anvil/skills/pub/templates/` in their repo.
+   - If brief frontmatter sets `documentclass`, use that. This covers both a **venue style file** (e.g., `\documentclass{neurips_2024}`, where the consumer drops the matching `.cls` / `.sty` into `.anvil/skills/pub/templates/` in their repo) **and the paper's own original class when migrating an existing paper** (e.g., `documentclass: article`, where the paper's hand-authored preamble is kept verbatim in `main.tex`). Keeping the paper's original class is an explicitly supported value, not just venue styles — see the "Documentclass overrides" section below.
    - Otherwise, use `\documentclass{anvil-paper}` (which is shipped at `anvil/skills/pub/templates/anvil-paper.cls`).
    - If `anonymous: true` in the brief, append the `anonymous` option: `\documentclass[anonymous]{anvil-paper}` (or pass through to the venue override's anonymous mechanism if known).
+   - If the paper uses **numeric `[7]`-style citations** and anvil-paper is otherwise suitable, append the `numeric` option: `\documentclass[numeric]{anvil-paper}` (composes with `anonymous`: `\documentclass[numeric,anonymous]{anvil-paper}`). This is preferable to a full keep-original-class migration when citation style is the only blocker.
 6. **Build `main.tex`**: instantiate `templates/main.tex.j2` with the brief's frontmatter, then write the paper body:
    - `\title{}`, `\author{}` (or `Author Name(s) Withheld`), `\date{}`.
    - `\begin{abstract} ... \end{abstract}` — 100–200 words; restates the claim, the method in one sentence, the key result, the contribution.
@@ -125,6 +126,8 @@ The skill ships `templates/anvil-paper.cls`, a generic single-column class that 
 1. The consumer drops the venue style file into `.anvil/skills/pub/templates/` in their own repo (e.g., `.anvil/skills/pub/templates/neurips_2024.sty`).
 2. The brief sets `documentclass: neurips_2024` (or the appropriate value).
 3. The drafter emits `\documentclass{neurips_2024}` (with options as needed) and the venue style is found by `pdflatex` because it lives in the consumer's `.anvil/` overlay.
+
+The `documentclass:` frontmatter is **not restricted to venue styles**. When migrating an existing paper with a load-bearing preamble (custom theorem environments, `xcolor`/`hyperref`/`caption`/`amsthm` option clashes, or a citation style anvil-paper does not support even with the `numeric` option), the brief MAY set `documentclass: article` (or the paper's original class) and keep the paper's preamble verbatim in `main.tex`. This is a first-class, sanctioned value — the drafter's step-5 branch has no allowlist, and the lifecycle, rubric, and render-gate are all class-agnostic. See `SKILL.md` § "Migrating an existing paper" for the full decision guidance.
 
 This is the standard anvil override pattern — see `SKILL.md` "Defaults and overrides" and the consumer's `.anvil/skills/pub/` layout.
 

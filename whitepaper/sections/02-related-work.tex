@@ -39,6 +39,48 @@ addresses:
     wealth concentration.
 \end{enumerate}
 
+\subsubsection{MobileCoin}
+
+MobileCoin~\cite{mobilecoin} is the closest existing system to \Botho's
+design: it pairs CryptoNote-derived privacy with federated Byzantine
+consensus, the same two ingredients \Botho combines. Its transaction layer
+is a fork of Monero's cryptography---stealth addresses, ring signatures
+(RingCT/CLSAG), Pedersen commitments, and Bulletproofs---so privacy is
+mandatory rather than opt-in. Unlike Monero, however, MobileCoin replaces
+proof-of-work Nakamoto consensus with the Stellar Consensus
+Protocol~\cite{scp}, achieving fast, deterministic finality---the same
+consensus family \Botho adopts (discussed in the consensus review below).
+
+MobileCoin's distinguishing choice is its reliance on trusted hardware:
+\begin{itemize}
+  \item \textbf{Intel SGX secure enclaves}: Consensus and ledger-serving
+    nodes process transaction contents inside SGX enclaves, so the input
+    rings and other correlating data are never exposed in cleartext to node
+    operators. Confidentiality is enforced at runtime by the hardware, with
+    remote attestation used to verify that peers run the expected enclave
+    code---an approach it shares with Secret Network's TEE model (discussed
+    below).
+  \item \textbf{Fog service and oblivious RAM}: A dedicated service lets
+    light (mobile) clients discover their outputs without scanning the whole
+    chain, using oblivious-RAM techniques to avoid leaking which records a
+    client reads.
+\end{itemize}
+
+MobileCoin differs from \Botho in three respects that motivate our design:
+\begin{itemize}
+  \item \textbf{No hardware-trust dependency}: \Botho enforces privacy at the
+    protocol level and does not require SGX enclaves or remote attestation.
+    This removes MobileCoin's trust in Intel's attestation service and its
+    exposure to the recurring stream of SGX side-channel vulnerabilities, at
+    the cost of MobileCoin's enclave-enforced in-memory confidentiality.
+  \item \textbf{No quantum resistance}: Like Monero, MobileCoin's primitives
+    are entirely classical; \Botho adds ML-KEM-768 stealth-address
+    encapsulation and ML-DSA-65 authorization.
+  \item \textbf{No anti-hoarding mechanism}: MobileCoin has a fixed supply and
+    no demurrage or progressive-fee structure to discourage wealth
+    concentration.
+\end{itemize}
+
 \subsubsection{Zcash}
 
 Zcash~\cite{zcash} pioneered the use of zero-knowledge proofs

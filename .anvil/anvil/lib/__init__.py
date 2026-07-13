@@ -78,14 +78,50 @@ from anvil.lib.rubric import (
     discover_venue_rubric,
     load_rubric,
 )
-from anvil.lib.sidecar import (
-    STAGING_SUFFIX,
-    SidecarIncompleteError,
-    cleanup_one_staging,
-    cleanup_stale_staging,
-    staged_sidecar,
-    staging_path_for,
+# NOTE: the ``sidecar`` primitives are re-exported *lazily* via the PEP 562
+# module-level ``__getattr__`` below rather than with an eager
+# ``from anvil.lib.sidecar import (...)`` here. The eager form registers
+# ``anvil.lib.sidecar`` in ``sys.modules`` as an ordinary submodule during
+# package init, which makes ``python -m anvil.lib.sidecar`` emit a
+# ``runpy`` ``RuntimeWarning`` ("found in sys.modules after import of package
+# 'anvil.lib', but prior to execution") on every invocation — noise in every
+# critic log across every skill (issue #673). The lazy re-export preserves the
+# public contract (``from anvil.lib import staged_sidecar`` etc., documented in
+# CHANGELOG #350 and guarded by
+# ``test_sidecar_reexported_from_anvil_lib_package``) while keeping
+# ``anvil.lib.sidecar`` out of ``sys.modules`` until first attribute access.
+_SIDECAR_LAZY_ATTRS = frozenset(
+    {
+        "STAGING_SUFFIX",
+        "SidecarIncompleteError",
+        "cleanup_one_staging",
+        "cleanup_stale_staging",
+        "staged_sidecar",
+        "staging_path_for",
+    }
 )
+
+
+def __getattr__(name: str) -> object:
+    """Lazily resolve the sidecar re-exports (PEP 562).
+
+    Importing ``anvil.lib.sidecar`` eagerly at package-init time triggers a
+    ``runpy`` ``RuntimeWarning`` on ``python -m anvil.lib.sidecar`` (issue
+    #673). Deferring the import to first attribute access keeps the module out
+    of ``sys.modules`` until something actually needs it, so the ``-m``
+    invocation stays warning-free while the public re-export contract is
+    preserved.
+    """
+    if name in _SIDECAR_LAZY_ATTRS:
+        from anvil.lib import sidecar as _sidecar
+
+        return getattr(_sidecar, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    """Include the lazily re-exported sidecar names in ``dir(anvil.lib)``."""
+    return sorted(set(globals()) | _SIDECAR_LAZY_ATTRS)
 
 
 __all__ = [

@@ -126,7 +126,8 @@ is explicitly OUT of scope — the aggregator is untouched.
 CLI entry-point
 ---------------
 
-``python -m anvil.lib.evidence_check <version_dir> [--scoring <path>]``
+``python -m anvil.lib.evidence_check <version_dir> [--scoring <path>]
+[--body <path>]``
 
 Without ``--scoring``, discovers every critic-sibling
 ``<version_dir>.<critic>/scoring.md`` (table) and
@@ -144,8 +145,12 @@ per-skill fixed names in :data:`FIXED_BODY_NAMES` order: ``main.tex``
 ``datasheet.tex`` (datasheet), ``spec.tex`` (ip-uspto,
 ip-uspto-provisional) — issue #475. (``numeric_consistency._body_path``
 resolves only ``<slug>.md`` / ``main.tex``; that consumer set is
-separate and deliberately untouched.) ``.tex`` bodies match verbatim
-with the symmetric dash fold — no per-format normalization branch.
+separate and deliberately untouched.) ``--body PATH`` overrides
+discovery for adopted-in-place legacy threads whose entry point isn't
+``<slug>.md``/:data:`FIXED_BODY_NAMES` (e.g. a ``paper.tex``); the
+resolved (portfolio-relative) path is what ``body_path`` records.
+``.tex`` bodies match verbatim with the symmetric dash fold — no
+per-format normalization branch.
 
 Writes a JSON summary to stdout. Exit codes: ``0`` clean, ``1`` one or
 more findings, ``2`` invocation error (missing version dir, body file,
@@ -763,14 +768,31 @@ files — first hit wins.
 """
 
 
-def _body_path(version_dir: Path) -> Path:
+def _body_path(version_dir: Path, *, body: Optional[Path] = None) -> Path:
     """Locate the body file inside a version directory.
 
     Detection order: ``<slug>.md`` (the #295 slug-echo shape — the
     slug is the parent dir name) first, then each fixed name in
     :data:`FIXED_BODY_NAMES` order (issue #475). Raises
     ``FileNotFoundError`` listing the full chain when none exists.
+
+    When ``body`` is supplied (the adopted-in-place legacy-thread
+    override — e.g. a ``paper.tex`` entry point outside
+    :data:`FIXED_BODY_NAMES`), the discovery chain is skipped entirely:
+    a relative override resolves against ``version_dir``, an absolute
+    one is used as-is, and the resolved path must exist
+    (``FileNotFoundError`` naming the override, not the chain).
     """
+    if body is not None:
+        override = Path(body)
+        if not override.is_absolute():
+            override = version_dir / override
+        if not override.is_file():
+            raise FileNotFoundError(
+                f"evidence_check: --body override {override!s} does not "
+                f"exist or is not a file."
+            )
+        return override
     slug_md = version_dir / f"{version_dir.parent.name}.md"
     if slug_md.is_file():
         return slug_md
@@ -784,6 +806,33 @@ def _body_path(version_dir: Path) -> Path:
         f"(looked for {slug_md.name!r} per the #295 slug-echo convention, "
         f"then {fixed_chain})."
     )
+
+
+def _record_body_path(version_dir: Path, body: Path) -> str:
+    """Portfolio-relative body-path string for the result.
+
+    For the common case (body lives inside ``version_dir``) this is the
+    bare filename (``body.name``), byte-identical to the pre-#670
+    contract. For an override that points outside ``version_dir`` (the
+    adopted-in-place / scratch-staging case), records the path relative
+    to the portfolio root (``version_dir.parent.parent`` under the
+    post-#295/#296 canonical model — the same convention
+    ``numeric_consistency`` / ``hyperlink_resolver`` / ``render_gate``
+    use), falling back to the absolute path when the body lives outside
+    the portfolio tree entirely.
+    """
+    body = body.resolve()
+    version_dir = version_dir.resolve()
+    try:
+        body.relative_to(version_dir)
+        return body.name
+    except ValueError:
+        pass
+    portfolio_root = version_dir.parent.parent
+    try:
+        return str(body.relative_to(portfolio_root))
+    except ValueError:
+        return str(body)
 
 
 MACHINE_SUMMARY_KIND = "machine-summary"
@@ -869,6 +918,7 @@ def check_version_dir(
     version_dir: Path,
     *,
     scoring: Optional[Path] = None,
+    body: Optional[Path] = None,
 ) -> EvidenceCheckResult:
     """Run the check for a version directory.
 
@@ -877,8 +927,14 @@ def check_version_dir(
     advisory posture over legacy dirs). With ``scoring``, checks
     exactly that one file (the reviewer's staging-dir self-check path).
 
-    Raises ``FileNotFoundError`` when the version dir, its body file,
-    or an explicitly-passed ``scoring`` file is missing.
+    ``body`` overrides body-file discovery (for adopted-in-place legacy
+    threads whose entry point isn't ``<slug>.md``/:data:`FIXED_BODY_NAMES`,
+    e.g. a ``paper.tex``); when omitted, behavior is byte-identical to
+    the historical discovery chain.
+
+    Raises ``FileNotFoundError`` when the version dir, its body file (or
+    a missing ``--body`` override), or an explicitly-passed ``scoring``
+    file is missing.
     """
     version_dir = Path(version_dir).resolve()
     if not version_dir.is_dir():
@@ -886,8 +942,24 @@ def check_version_dir(
             f"evidence_check: version_dir {version_dir!s} does not exist "
             f"or is not a directory."
         )
-    body = _body_path(version_dir)
-    body_text = body.read_text(encoding="utf-8")
+    body_file = _body_path(version_dir, body=body)
+    body_text = body_file.read_text(encoding="utf-8")
+
+    # Multi-file LaTeX threads (issue #643): a pub ``main.tex`` that
+    # ``\input``/``\include``s section files has its real content in the
+    # children. Without this expansion a reviewer who (correctly, per
+    # pub-review.md step 4) reads the full resolved body and quotes a
+    # child section would trip a false ``fabricated_evidence`` finding —
+    # the quote is verbatim from ``sections/intro.tex`` but absent from the
+    # ~90-line ``main.tex`` shell. Expand ``.tex`` bodies to the resolved
+    # tree so quote-verification checks against the same document the
+    # reviewer scored. Non-``.tex`` bodies (markdown skills) are unchanged.
+    if body_file.suffix == ".tex":
+        from anvil.lib.tex_includes import resolve_tex_inputs
+
+        resolved = resolve_tex_inputs(body_file)
+        if len(resolved.files) > 1:
+            body_text = resolved.body
 
     if scoring is not None:
         scoring = Path(scoring)
@@ -901,7 +973,7 @@ def check_version_dir(
 
     result = EvidenceCheckResult(
         version_dir=version_dir.name,
-        body_path=body.name,
+        body_path=_record_body_path(version_dir, body_file),
         scoring_files=[str(p) for p in scoring_files],
     )
     for path in scoring_files:
@@ -958,6 +1030,19 @@ def _build_cli_parser():
             "and the sibling _meta.json scorecard_kind."
         ),
     )
+    p.add_argument(
+        "--body",
+        metavar="PATH",
+        default=None,
+        help=(
+            "Override body-file discovery (e.g. for adopted-in-place "
+            "legacy threads whose entry point isn't <slug>.md or one of "
+            "the FIXED_BODY_NAMES, such as a paper.tex). Relative paths "
+            "resolve against version_dir; absolute paths are used as-is. "
+            "The resolved (portfolio-relative) path is recorded in the "
+            "printed JSON's body_path."
+        ),
+    )
     return p
 
 
@@ -977,6 +1062,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         result = check_version_dir(
             Path(args.version_dir),
             scoring=Path(args.scoring) if args.scoring else None,
+            body=Path(args.body) if args.body else None,
         )
     except FileNotFoundError as exc:
         print(f"error: {exc}", file=sys.stderr)
