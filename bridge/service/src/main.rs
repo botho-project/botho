@@ -24,6 +24,9 @@ mod fork_tests;
 mod mint;
 mod release;
 mod reserve;
+#[cfg(test)]
+mod solana_devnet_tests;
+mod solana_rpc;
 mod watchers;
 
 use bth_bridge_core::BridgeConfig;

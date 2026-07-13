@@ -50,6 +50,16 @@ ed25519-dalek = { workspace = true, features = ["std"] }
 # Proof-of-reserves HTTP API (#825; same axum line as the metrics-daemon)
 axum = { version = "0.7", features = ["json"] }
 
+# Solana wBTH transport (#857): a lightweight raw JSON-RPC client
+# (reqwest) plus a self-contained legacy-message/transaction assembler.
+# We deliberately do NOT pull the heavy solana-sdk / solana-client stack:
+# the crypto we need is Ed25519 (already available via ed25519-dalek) and
+# base58 (bs58), and the legacy transaction wire format is small and stable.
+# reqwest and bs58 are already in the workspace lockfile (reqwest via alloy),
+# so this adds no new advisory surface.
+reqwest = { workspace = true, features = ["json", "rustls-tls"] }
+bs58 = "0.5"
+
 # Database
 rusqlite = { version = "0.31", features = ["bundled"] }
 

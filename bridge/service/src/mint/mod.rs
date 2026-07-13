@@ -31,8 +31,6 @@ pub enum MintError {
     Attestation(String),
     /// RPC / network failure (retryable).
     Rpc(String),
-    /// Functionality not yet wired up (Solana RPC bodies, see #857).
-    NotImplemented(String),
 }
 
 impl std::fmt::Display for MintError {
@@ -41,7 +39,6 @@ impl std::fmt::Display for MintError {
             MintError::Config(m) => write!(f, "config error: {}", m),
             MintError::Attestation(m) => write!(f, "attestation error: {}", m),
             MintError::Rpc(m) => write!(f, "rpc error: {}", m),
-            MintError::NotImplemented(m) => write!(f, "not implemented: {}", m),
         }
     }
 }
