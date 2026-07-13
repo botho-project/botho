@@ -23,7 +23,27 @@ import {
   getBiometricType,
   authenticateWithBiometrics,
   loadEncryptedWallet,
+  SecureStoreUnavailableError,
 } from "../src/native/keychain";
+
+/**
+ * Maps a caught unlock error to the Alert.alert title/message pair to show the
+ * user. A {@link SecureStoreUnavailableError} carries actionable guidance
+ * (enable a screen lock in device settings), so its message is surfaced
+ * verbatim; all other errors fall back to the generic retry message.
+ *
+ * Exported as a pure, side-effect-free function so the branching logic can be
+ * unit-tested without rendering the component tree.
+ */
+export function classifyUnlockError(err: unknown): {
+  title: string;
+  message: string;
+} {
+  if (err instanceof SecureStoreUnavailableError) {
+    return { title: "Error", message: err.message };
+  }
+  return { title: "Error", message: "Authentication failed. Please try again." };
+}
 
 export default function UnlockScreen() {
   const router = useRouter();
@@ -98,7 +118,8 @@ export default function UnlockScreen() {
       router.replace("/");
     } catch (err) {
       console.error("Biometric auth error:", err);
-      Alert.alert("Error", "Authentication failed. Please try again.");
+      const { title, message } = classifyUnlockError(err);
+      Alert.alert(title, message);
     } finally {
       setIsAuthenticating(false);
     }
