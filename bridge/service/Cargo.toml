@@ -37,6 +37,9 @@ alloy = { workspace = true, features = [
 # signatures, mirroring the operator-signed-action machinery)
 ed25519-dalek = { workspace = true, features = ["std"] }
 
+# Proof-of-reserves HTTP API (#825; same axum line as the metrics-daemon)
+axum = { version = "0.7", features = ["json"] }
+
 # Database
 rusqlite = { version = "0.31", features = ["bundled"] }
 
@@ -44,6 +47,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 chrono = { workspace = true, features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 hex = { workspace = true, features = ["std"] }
+serde = { workspace = true, features = ["derive", "std"] }
 serde_json = { workspace = true, features = ["std"] }
 sha2 = { workspace = true, features = ["std"] }
 tracing = { workspace = true }
@@ -51,4 +55,5 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
+proptest = { workspace = true, features = ["default-code-coverage"] }
 tempfile = { workspace = true }

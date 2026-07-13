@@ -111,6 +111,56 @@ pub struct BurnRecord {
     pub orphaned: bool,
 }
 
+/// A row in the `reserve_ledger` table (#825).
+///
+/// The locked BTH reserve is derived from bridge-controlled outputs, never
+/// from a mutable counter: each confirmed deposit records a locked output
+/// (amount = the wBTH backing it mints, i.e. the order's net amount), and
+/// each confirmed release spends locked outputs FIFO — returning any
+/// remainder to the ledger as a change output, exactly like the real
+/// reserve wallet returns change to the reserve address. Per ADR 0003 the
+/// reserve holds only factor-1 (zero-demurrage) coins, so
+/// `SUM(amount) WHERE locked = 1` is authoritative with no accrual term.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReserveOutput {
+    /// Stable identity of the output (`"dep:<order>"` for deposit-backed
+    /// outputs, `"chg:<order>"` for release change).
+    pub bridge_output_id: String,
+    /// Wrapped chain this output backs (ADR 0005 per-chain invariant).
+    pub chain: Chain,
+    /// Output amount in picocredits.
+    pub amount: u64,
+    /// Whether the output is still part of the locked reserve.
+    pub locked: bool,
+    /// Order that created the output.
+    pub order_id: Uuid,
+    /// Order whose release (or failure) spent/unlocked the output.
+    pub spent_order_id: Option<Uuid>,
+}
+
+/// A persisted reconciliation result (#825): one row per reconciler pass.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReserveSnapshot {
+    /// When the reconciliation ran (unix seconds).
+    pub taken_at: i64,
+    /// DB-derived locked reserve total in picocredits.
+    pub locked_reserve: u64,
+    /// On-chain wBTH totalSupply on Ethereum (picocredits), `None` when
+    /// the supply could not be verified this pass.
+    pub eth_supply: Option<u64>,
+    /// On-chain wBTH supply on Solana (picocredits), `None` when the
+    /// supply could not be verified this pass (transport pending #828).
+    pub sol_supply: Option<u64>,
+    /// Σ(verified wrapped supply) − Σ(locked backing of verified chains).
+    pub drift: i64,
+    /// Whether every verified chain was within tolerance + in-flight
+    /// allowance.
+    pub in_tolerance: bool,
+    /// `in_tolerance` AND the on-Botho reserve balance covered the ledger
+    /// (when checkable). The dashboard's red/green peg state.
+    pub peg_healthy: bool,
+}
+
 /// Database wrapper for thread-safe access.
 #[derive(Clone)]
 pub struct Database {
@@ -233,6 +283,36 @@ impl Database {
             );
 
             CREATE UNIQUE INDEX IF NOT EXISTS idx_burns_order ON processed_burns(order_id);
+
+            CREATE TABLE IF NOT EXISTS reserve_ledger (
+                bridge_output_id TEXT PRIMARY KEY,
+                chain TEXT NOT NULL,
+                amount_picocredits INTEGER NOT NULL,
+                locked INTEGER NOT NULL DEFAULT 1,
+                order_id TEXT NOT NULL,
+                spent_order_id TEXT,
+                created_at INTEGER NOT NULL,
+                spent_at INTEGER
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_reserve_chain_locked
+                ON reserve_ledger(chain, locked);
+            CREATE INDEX IF NOT EXISTS idx_reserve_spent_order
+                ON reserve_ledger(spent_order_id);
+
+            CREATE TABLE IF NOT EXISTS reserve_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                taken_at INTEGER NOT NULL,
+                locked_reserve INTEGER NOT NULL,
+                eth_supply INTEGER,
+                sol_supply INTEGER,
+                drift INTEGER NOT NULL,
+                in_tolerance INTEGER NOT NULL,
+                peg_healthy INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_reserve_snapshots_taken
+                ON reserve_snapshots(taken_at);
             "#,
         )
         .map_err(|e| format!("Migration failed: {}", e))?;
@@ -1032,6 +1112,371 @@ impl Database {
         })
     }
 
+    // === Reserve ledger (#825, ADR 0003/0005) ===
+
+    /// Record a locked reserve output backing a mint, exactly once.
+    ///
+    /// Idempotent by `bridge_output_id` (callers use `"dep:<order_id>"`):
+    /// a re-poll of the same confirmed deposit is a no-op. Returns whether
+    /// a new output was recorded.
+    pub fn record_locked_output(
+        &self,
+        bridge_output_id: &str,
+        chain: Chain,
+        amount: u64,
+        order_id: &Uuid,
+    ) -> Result<bool, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let changed = conn
+            .execute(
+                r#"
+                INSERT OR IGNORE INTO reserve_ledger (
+                    bridge_output_id, chain, amount_picocredits, locked,
+                    order_id, spent_order_id, created_at, spent_at
+                ) VALUES (?1, ?2, ?3, 1, ?4, NULL, ?5, NULL)
+                "#,
+                params![
+                    bridge_output_id,
+                    chain.to_string(),
+                    amount as i64,
+                    order_id.to_string(),
+                    Utc::now().timestamp(),
+                ],
+            )
+            .map_err(|e| format!("Insert failed: {}", e))?;
+
+        Ok(changed > 0)
+    }
+
+    /// Mark a single reserve output spent (attributed to `spent_order_id`).
+    /// Returns whether the output was newly unlocked.
+    pub fn mark_output_spent(
+        &self,
+        bridge_output_id: &str,
+        spent_order_id: &Uuid,
+    ) -> Result<bool, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        Ok(Self::mark_output_spent_stmt(&conn, bridge_output_id, spent_order_id)? > 0)
+    }
+
+    fn mark_output_spent_stmt(
+        conn: &Connection,
+        bridge_output_id: &str,
+        spent_order_id: &Uuid,
+    ) -> Result<usize, String> {
+        conn.execute(
+            r#"
+            UPDATE reserve_ledger
+            SET locked = 0, spent_order_id = ?1, spent_at = ?2
+            WHERE bridge_output_id = ?3 AND locked = 1
+            "#,
+            params![
+                spent_order_id.to_string(),
+                Utc::now().timestamp(),
+                bridge_output_id
+            ],
+        )
+        .map_err(|e| format!("Update failed: {}", e))
+    }
+
+    /// Unlock the locked output(s) recorded by `order_id` (a mint that
+    /// failed after its deposit was locked: the funds sit in the bridge
+    /// address but no longer back wrapped supply — they are owed back to
+    /// the depositor). Returns whether anything was unlocked.
+    pub fn unlock_outputs_for_order(&self, order_id: &Uuid) -> Result<bool, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let changed = conn
+            .execute(
+                r#"
+                UPDATE reserve_ledger
+                SET locked = 0, spent_order_id = ?1, spent_at = ?2
+                WHERE order_id = ?1 AND locked = 1
+                "#,
+                params![order_id.to_string(), Utc::now().timestamp()],
+            )
+            .map_err(|e| format!("Update failed: {}", e))?;
+
+        Ok(changed > 0)
+    }
+
+    /// Apply a confirmed release to the reserve ledger: spend locked
+    /// outputs of `chain` FIFO until `amount` (the GROSS burn amount — the
+    /// on-chain supply dropped by the full burn; the release fee stays in
+    /// bridge custody as revenue, not peg backing) is covered, returning
+    /// any remainder as a new locked change output.
+    ///
+    /// Exactly-once by `release_order_id`: a replay finds the prior spend
+    /// attribution and returns `Ok(false)` without touching the ledger.
+    /// Fails (rolling back) if the locked reserve of `chain` cannot cover
+    /// the amount — an invariant violation the caller must surface.
+    pub fn apply_release_spend(
+        &self,
+        release_order_id: &Uuid,
+        chain: Chain,
+        amount: u64,
+    ) -> Result<bool, String> {
+        let mut conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| format!("Transaction failed: {}", e))?;
+
+        // Idempotency: any output spent by (or change created for) this
+        // release means the spend was already applied.
+        let already: i64 = tx
+            .query_row(
+                r#"
+                SELECT COUNT(*) FROM reserve_ledger
+                WHERE spent_order_id = ?1 OR order_id = ?1
+                "#,
+                params![release_order_id.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Query failed: {}", e))?;
+        if already > 0 {
+            return Ok(false);
+        }
+
+        let rows: Vec<(String, u64)> = {
+            let mut stmt = tx
+                .prepare(
+                    r#"
+                    SELECT bridge_output_id, amount_picocredits FROM reserve_ledger
+                    WHERE chain = ?1 AND locked = 1
+                    ORDER BY created_at ASC, rowid ASC
+                    "#,
+                )
+                .map_err(|e| format!("Prepare failed: {}", e))?;
+            let mapped = stmt
+                .query_map(params![chain.to_string()], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+                })
+                .map_err(|e| format!("Query failed: {}", e))?
+                .collect::<SqliteResult<Vec<_>>>()
+                .map_err(|e| format!("Collect failed: {}", e))?;
+            mapped
+        };
+
+        let now = Utc::now().timestamp();
+        let mut remaining = amount as u128;
+        for (output_id, output_amount) in rows {
+            if remaining == 0 {
+                break;
+            }
+            tx.execute(
+                r#"
+                UPDATE reserve_ledger
+                SET locked = 0, spent_order_id = ?1, spent_at = ?2
+                WHERE bridge_output_id = ?3 AND locked = 1
+                "#,
+                params![release_order_id.to_string(), now, output_id],
+            )
+            .map_err(|e| format!("Update failed: {}", e))?;
+
+            let output_amount = output_amount as u128;
+            if output_amount >= remaining {
+                let change = output_amount - remaining;
+                remaining = 0;
+                if change > 0 {
+                    tx.execute(
+                        r#"
+                        INSERT INTO reserve_ledger (
+                            bridge_output_id, chain, amount_picocredits, locked,
+                            order_id, spent_order_id, created_at, spent_at
+                        ) VALUES (?1, ?2, ?3, 1, ?4, NULL, ?5, NULL)
+                        "#,
+                        params![
+                            format!("chg:{}", release_order_id),
+                            chain.to_string(),
+                            change as i64,
+                            release_order_id.to_string(),
+                            now,
+                        ],
+                    )
+                    .map_err(|e| format!("Insert change failed: {}", e))?;
+                }
+            } else {
+                remaining -= output_amount;
+            }
+        }
+
+        if remaining > 0 {
+            // Dropping the transaction rolls everything back.
+            return Err(format!(
+                "insufficient locked reserve on {}: short {} picocredits for release {}",
+                chain, remaining, release_order_id
+            ));
+        }
+
+        tx.commit().map_err(|e| format!("Commit failed: {}", e))?;
+        Ok(true)
+    }
+
+    /// Total locked reserve in picocredits: `SUM(amount) WHERE locked = 1`.
+    /// Summed in Rust as u128 to be overflow-safe, saturated to u64.
+    pub fn locked_reserve_total(&self) -> Result<u64, String> {
+        self.locked_sum(
+            "SELECT amount_picocredits FROM reserve_ledger WHERE locked = 1",
+            &[],
+        )
+    }
+
+    /// Locked reserve backing a single wrapped chain, in picocredits.
+    pub fn locked_reserve_by_chain(&self, chain: Chain) -> Result<u64, String> {
+        self.locked_sum(
+            "SELECT amount_picocredits FROM reserve_ledger WHERE locked = 1 AND chain = ?1",
+            &[&chain.to_string()],
+        )
+    }
+
+    fn locked_sum(&self, sql: &str, args: &[&dyn rusqlite::ToSql]) -> Result<u64, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut stmt = conn
+            .prepare(sql)
+            .map_err(|e| format!("Prepare failed: {}", e))?;
+        let amounts = stmt
+            .query_map(args, |row| row.get::<_, i64>(0))
+            .map_err(|e| format!("Query failed: {}", e))?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| format!("Collect failed: {}", e))?;
+        let total: u128 = amounts.into_iter().map(|a| a as u64 as u128).sum();
+        Ok(u64::try_from(total).unwrap_or(u64::MAX))
+    }
+
+    /// Look up a reserve output by id (test/ops helper).
+    pub fn get_reserve_output(
+        &self,
+        bridge_output_id: &str,
+    ) -> Result<Option<ReserveOutput>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT bridge_output_id, chain, amount_picocredits, locked,
+                       order_id, spent_order_id
+                FROM reserve_ledger WHERE bridge_output_id = ?1
+                "#,
+            )
+            .map_err(|e| format!("Prepare failed: {}", e))?;
+
+        stmt.query_row(params![bridge_output_id], |row| {
+            let chain_str: String = row.get(1)?;
+            let order_id_str: String = row.get(4)?;
+            let spent_order_id_str: Option<String> = row.get(5)?;
+            Ok(ReserveOutput {
+                bridge_output_id: row.get(0)?,
+                chain: chain_str.parse().unwrap_or(Chain::Ethereum),
+                amount: row.get::<_, i64>(2)? as u64,
+                locked: row.get::<_, i64>(3)? != 0,
+                order_id: Uuid::parse_str(&order_id_str).unwrap_or_default(),
+                spent_order_id: spent_order_id_str.and_then(|s| Uuid::parse_str(&s).ok()),
+            })
+        })
+        .optional()
+        .map_err(|e| format!("Query failed: {}", e))
+    }
+
+    /// Backing of mints still in flight toward `chain` (deposit locked,
+    /// wBTH not yet minted): `SUM(amount - fee)` over `deposit_confirmed`
+    /// and `mint_pending` orders. Part of the reconciler's drift allowance.
+    pub fn pending_mint_backing(&self, chain: Chain) -> Result<u64, String> {
+        self.pending_sum(
+            r#"
+            SELECT amount - fee FROM bridge_orders
+            WHERE order_type = 'mint' AND dest_chain = ?1
+              AND status IN ('deposit_confirmed', 'mint_pending')
+            "#,
+            chain,
+        )
+    }
+
+    /// Gross burn amounts in flight from `chain` (supply already reduced
+    /// on-chain, reserve spend not yet applied): `SUM(amount)` over
+    /// `burn_detected`, `burn_confirmed` and `release_pending` orders.
+    /// Part of the reconciler's drift allowance.
+    pub fn pending_burn_amount(&self, chain: Chain) -> Result<u64, String> {
+        self.pending_sum(
+            r#"
+            SELECT amount FROM bridge_orders
+            WHERE order_type = 'burn' AND source_chain = ?1
+              AND status IN ('burn_detected', 'burn_confirmed', 'release_pending')
+            "#,
+            chain,
+        )
+    }
+
+    fn pending_sum(&self, sql: &str, chain: Chain) -> Result<u64, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut stmt = conn
+            .prepare(sql)
+            .map_err(|e| format!("Prepare failed: {}", e))?;
+        let amounts = stmt
+            .query_map(params![chain.to_string()], |row| row.get::<_, i64>(0))
+            .map_err(|e| format!("Query failed: {}", e))?
+            .collect::<SqliteResult<Vec<_>>>()
+            .map_err(|e| format!("Collect failed: {}", e))?;
+        let total: u128 = amounts.into_iter().map(|a| a.max(0) as u128).sum();
+        Ok(u64::try_from(total).unwrap_or(u64::MAX))
+    }
+
+    /// Persist a reconciliation snapshot (#825 drift history).
+    pub fn insert_reserve_snapshot(&self, snapshot: &ReserveSnapshot) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        conn.execute(
+            r#"
+            INSERT INTO reserve_snapshots (
+                taken_at, locked_reserve, eth_supply, sol_supply,
+                drift, in_tolerance, peg_healthy
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "#,
+            params![
+                snapshot.taken_at,
+                snapshot.locked_reserve as i64,
+                snapshot.eth_supply.map(|s| s as i64),
+                snapshot.sol_supply.map(|s| s as i64),
+                snapshot.drift,
+                snapshot.in_tolerance as i64,
+                snapshot.peg_healthy as i64,
+            ],
+        )
+        .map_err(|e| format!("Insert failed: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Latest reconciliation snapshot, if any pass has run.
+    pub fn latest_reserve_snapshot(&self) -> Result<Option<ReserveSnapshot>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT taken_at, locked_reserve, eth_supply, sol_supply,
+                       drift, in_tolerance, peg_healthy
+                FROM reserve_snapshots ORDER BY id DESC LIMIT 1
+                "#,
+            )
+            .map_err(|e| format!("Prepare failed: {}", e))?;
+
+        stmt.query_row([], |row| {
+            Ok(ReserveSnapshot {
+                taken_at: row.get(0)?,
+                locked_reserve: row.get::<_, i64>(1)? as u64,
+                eth_supply: row.get::<_, Option<i64>>(2)?.map(|s| s as u64),
+                sol_supply: row.get::<_, Option<i64>>(3)?.map(|s| s as u64),
+                drift: row.get(4)?,
+                in_tolerance: row.get::<_, i64>(5)? != 0,
+                peg_healthy: row.get::<_, i64>(6)? != 0,
+            })
+        })
+        .optional()
+        .map_err(|e| format!("Query failed: {}", e))
+    }
+
     /// Log an audit event.
     pub fn log_audit(
         &self,
@@ -1582,5 +2027,215 @@ mod tests {
         let stored = db.get_order(&order.id).unwrap().unwrap();
         assert_eq!(stored.source_tx.as_deref(), Some("0xdeposit"));
         assert_eq!(stored.amount, 999_000_000_000);
+    }
+
+    // === Reserve ledger (#825) ===
+
+    fn reserve_db() -> Database {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db
+    }
+
+    #[test]
+    fn test_record_locked_output_idempotent() {
+        let db = reserve_db();
+        let order = Uuid::new_v4();
+
+        assert!(db
+            .record_locked_output("dep:a", Chain::Ethereum, 1_000, &order)
+            .unwrap());
+        // Replay (same output id, even a different amount) is a no-op.
+        assert!(!db
+            .record_locked_output("dep:a", Chain::Ethereum, 9_999, &order)
+            .unwrap());
+
+        assert_eq!(db.locked_reserve_total().unwrap(), 1_000);
+        let output = db.get_reserve_output("dep:a").unwrap().unwrap();
+        assert!(output.locked);
+        assert_eq!(output.amount, 1_000);
+        assert_eq!(output.order_id, order);
+    }
+
+    #[test]
+    fn test_mark_output_spent_moves_out_of_total_once() {
+        let db = reserve_db();
+        let mint = Uuid::new_v4();
+        let spender = Uuid::new_v4();
+
+        db.record_locked_output("dep:a", Chain::Ethereum, 700, &mint)
+            .unwrap();
+        db.record_locked_output("dep:b", Chain::Ethereum, 300, &mint)
+            .unwrap();
+        assert_eq!(db.locked_reserve_total().unwrap(), 1_000);
+
+        assert!(db.mark_output_spent("dep:a", &spender).unwrap());
+        assert_eq!(db.locked_reserve_total().unwrap(), 300);
+
+        // Double-spend rejected: already unlocked.
+        assert!(!db.mark_output_spent("dep:a", &spender).unwrap());
+        assert_eq!(db.locked_reserve_total().unwrap(), 300);
+
+        let output = db.get_reserve_output("dep:a").unwrap().unwrap();
+        assert!(!output.locked);
+        assert_eq!(output.spent_order_id, Some(spender));
+    }
+
+    #[test]
+    fn test_apply_release_spend_fifo_with_change() {
+        let db = reserve_db();
+        let m1 = Uuid::new_v4();
+        let m2 = Uuid::new_v4();
+        let release = Uuid::new_v4();
+
+        db.record_locked_output("dep:1", Chain::Ethereum, 600, &m1)
+            .unwrap();
+        db.record_locked_output("dep:2", Chain::Ethereum, 500, &m2)
+            .unwrap();
+        // A Solana-backed output must not be touched by an Ethereum spend.
+        db.record_locked_output("dep:sol", Chain::Solana, 400, &m1)
+            .unwrap();
+
+        // Spend 900: consumes dep:1 (600) + 300 of dep:2, change 200.
+        assert!(db
+            .apply_release_spend(&release, Chain::Ethereum, 900)
+            .unwrap());
+        assert_eq!(db.locked_reserve_by_chain(Chain::Ethereum).unwrap(), 200);
+        assert_eq!(db.locked_reserve_by_chain(Chain::Solana).unwrap(), 400);
+        assert_eq!(db.locked_reserve_total().unwrap(), 600);
+
+        let change = db
+            .get_reserve_output(&format!("chg:{}", release))
+            .unwrap()
+            .unwrap();
+        assert!(change.locked);
+        assert_eq!(change.amount, 200);
+        assert_eq!(change.order_id, release);
+
+        // Replay of the same release is a no-op (exactly-once).
+        assert!(!db
+            .apply_release_spend(&release, Chain::Ethereum, 900)
+            .unwrap());
+        assert_eq!(db.locked_reserve_total().unwrap(), 600);
+    }
+
+    #[test]
+    fn test_apply_release_spend_insufficient_rolls_back() {
+        let db = reserve_db();
+        let mint = Uuid::new_v4();
+        let release = Uuid::new_v4();
+
+        db.record_locked_output("dep:1", Chain::Ethereum, 100, &mint)
+            .unwrap();
+
+        // 250 > 100 locked: the whole spend must fail and roll back.
+        let err = db
+            .apply_release_spend(&release, Chain::Ethereum, 250)
+            .unwrap_err();
+        assert!(err.contains("insufficient locked reserve"), "{}", err);
+
+        // Nothing was mutated: the output is still locked, no change row.
+        assert_eq!(db.locked_reserve_total().unwrap(), 100);
+        assert!(db.get_reserve_output("dep:1").unwrap().unwrap().locked);
+        assert!(db
+            .get_reserve_output(&format!("chg:{}", release))
+            .unwrap()
+            .is_none());
+
+        // A later, coverable spend succeeds (the failed attempt left no
+        // idempotency residue).
+        assert!(db
+            .apply_release_spend(&release, Chain::Ethereum, 100)
+            .unwrap());
+        assert_eq!(db.locked_reserve_total().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_unlock_outputs_for_failed_mint() {
+        let db = reserve_db();
+        let mint = Uuid::new_v4();
+
+        db.record_locked_output(&format!("dep:{}", mint), Chain::Ethereum, 500, &mint)
+            .unwrap();
+        assert_eq!(db.locked_reserve_total().unwrap(), 500);
+
+        assert!(db.unlock_outputs_for_order(&mint).unwrap());
+        assert_eq!(db.locked_reserve_total().unwrap(), 0);
+        // Idempotent.
+        assert!(!db.unlock_outputs_for_order(&mint).unwrap());
+    }
+
+    #[test]
+    fn test_pending_allowance_sums_by_status_and_chain() {
+        let db = reserve_db();
+
+        let mut confirmed = BridgeOrder::new_mint(
+            Chain::Ethereum,
+            1_000,
+            100,
+            "bth".to_string(),
+            "0x1234567890abcdef1234567890abcdef12345678".to_string(),
+        );
+        confirmed.set_status(OrderStatus::DepositConfirmed);
+        db.insert_order(&confirmed).unwrap();
+
+        let mut completed = BridgeOrder::new_mint(
+            Chain::Ethereum,
+            2_000,
+            0,
+            "bth".to_string(),
+            "0x1234567890abcdef1234567890abcdef12345678".to_string(),
+        );
+        completed.set_status(OrderStatus::Completed);
+        db.insert_order(&completed).unwrap();
+
+        let mut burning = BridgeOrder::new_burn(
+            Chain::Ethereum,
+            700,
+            0,
+            "0x1234567890abcdef1234567890abcdef12345678".to_string(),
+            "bth_dest".to_string(),
+            "0xburn".to_string(),
+        );
+        burning.set_status(OrderStatus::BurnConfirmed);
+        db.insert_order(&burning).unwrap();
+
+        // Only the in-flight mint counts, net of fee; Completed does not.
+        assert_eq!(db.pending_mint_backing(Chain::Ethereum).unwrap(), 900);
+        assert_eq!(db.pending_mint_backing(Chain::Solana).unwrap(), 0);
+        // The unreleased burn counts gross.
+        assert_eq!(db.pending_burn_amount(Chain::Ethereum).unwrap(), 700);
+        assert_eq!(db.pending_burn_amount(Chain::Solana).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_reserve_snapshot_roundtrip_and_latest() {
+        let db = reserve_db();
+        assert!(db.latest_reserve_snapshot().unwrap().is_none());
+
+        let first = ReserveSnapshot {
+            taken_at: 1_000,
+            locked_reserve: 5_000,
+            eth_supply: Some(5_000),
+            sol_supply: None,
+            drift: 0,
+            in_tolerance: true,
+            peg_healthy: true,
+        };
+        db.insert_reserve_snapshot(&first).unwrap();
+
+        let second = ReserveSnapshot {
+            taken_at: 2_000,
+            locked_reserve: 5_000,
+            eth_supply: Some(6_000),
+            sol_supply: None,
+            drift: 1_000,
+            in_tolerance: false,
+            peg_healthy: false,
+        };
+        db.insert_reserve_snapshot(&second).unwrap();
+
+        let latest = db.latest_reserve_snapshot().unwrap().unwrap();
+        assert_eq!(latest, second);
     }
 }

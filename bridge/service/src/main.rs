@@ -10,11 +10,13 @@ use std::path::PathBuf;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
+mod api;
 mod attestation;
 mod db;
 mod engine;
 mod mint;
 mod release;
+mod reserve;
 mod watchers;
 
 use bth_bridge_core::BridgeConfig;

@@ -59,6 +59,11 @@ struct Args {
     #[arg(long, default_value = "17102")]
     api_port: u16,
 
+    /// Base URL of the bridge service's proof-of-reserves API (#825),
+    /// e.g. http://127.0.0.1:9741 — polled every tick when set
+    #[arg(long)]
+    bridge_url: Option<String>,
+
     /// Collection interval in seconds (default: 300 = 5 minutes)
     #[arg(long, default_value = "300")]
     interval: u64,
@@ -136,6 +141,14 @@ async fn main() -> Result<()> {
         let collected = collector::collect_metrics(&client, &nodes, &db).await?;
         info!("Collected {}/{} nodes", collected, nodes.len());
 
+        if let Some(bridge_url) = &args.bridge_url {
+            match collector::collect_reserve(&client, bridge_url, &db).await {
+                Ok(true) => info!("Collected bridge reserve snapshot"),
+                Ok(false) => info!("Bridge has no reserve snapshot yet"),
+                Err(e) => error!("Failed to collect bridge reserve: {:#}", e),
+            }
+        }
+
         // Run rollup
         {
             let mut db_lock = db.lock().unwrap();
@@ -179,6 +192,14 @@ async fn main() -> Result<()> {
         match collector::collect_metrics(&client, &nodes, &db).await {
             Ok(collected) => info!("Collected {}/{} nodes", collected, nodes.len()),
             Err(e) => error!("Failed to collect metrics: {}", e),
+        }
+
+        // Bridge proof-of-reserves passthrough (#825); a bridge failure
+        // never blocks node collection.
+        if let Some(bridge_url) = &args.bridge_url {
+            if let Err(e) = collector::collect_reserve(&client, bridge_url, &db).await {
+                error!("Failed to collect bridge reserve: {:#}", e);
+            }
         }
 
         // Run rollup every hour

@@ -7,6 +7,10 @@
 //! - GET /api/metrics/history?node=<name>&resolution=5min|hourly|daily&
 //!   since=<unix-seconds> -> JSON array of samples for that node: {timestamp,
 //!   height, peerCount, scpPeerCount, mempoolSize, txTotal}
+//! - GET /api/metrics/reserve -> latest bridge proof-of-reserves snapshot
+//!   (#825): {lockedReserve, ethSupply, solSupply, totalWrapped, drift,
+//!   inTolerance, pegHealthy, takenAt}; 404 until the bridge has been polled
+//!   (e.g. no --bridge-url configured)
 //! - GET /health
 
 use anyhow::Result;
@@ -43,6 +47,7 @@ pub async fn serve(addr: String, db: Arc<Mutex<MetricsDb>>) -> Result<()> {
         .route("/health", get(health))
         .route("/api/metrics/history", get(history))
         .route("/api/metrics/latest", get(latest))
+        .route("/api/metrics/reserve", get(reserve))
         .layer(cors)
         .with_state(db);
 
@@ -100,6 +105,20 @@ async fn latest(State(db): State<AppState>) -> impl IntoResponse {
 
     match db_lock.get_latest_per_node() {
         Ok(entries) => (StatusCode::OK, Json(entries)).into_response(),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+/// Get the latest bridge proof-of-reserves snapshot (#825).
+async fn reserve(State(db): State<AppState>) -> impl IntoResponse {
+    let db_lock = db.lock().unwrap();
+
+    match db_lock.get_latest_reserve() {
+        Ok(Some(proof)) => (StatusCode::OK, Json(proof)).into_response(),
+        Ok(None) => error_response(
+            StatusCode::NOT_FOUND,
+            "no reserve snapshot collected yet (is --bridge-url configured?)",
+        ),
         Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }

@@ -18,6 +18,56 @@ pub struct BridgeConfig {
 
     /// Bridge-specific settings
     pub bridge: BridgeSettings,
+
+    /// Reserve reconciliation / proof-of-reserves settings (#825).
+    #[serde(default)]
+    pub reserve: ReserveSettings,
+}
+
+/// Reserve reconciliation / proof-of-reserves settings (#825).
+///
+/// Per ADR 0003 the reserve holds only factor-1 (zero-demurrage) coins, so
+/// the peg invariant is exact: `Σ(wBTH outstanding) == locked BTH reserve`,
+/// with no decay term. The reconciler compares the DB-derived locked
+/// reserve against the on-chain wrapped supply per chain (ADR 0005) and
+/// alerts on any drift beyond `tolerance_picocredits` plus the in-flight
+/// allowance (orders between deposit-confirmation and mint, or between
+/// burn and release).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReserveSettings {
+    /// Absolute drift tolerance in picocredits on top of the in-flight
+    /// allowance. ADR 0003 makes the invariant exact, so the default is 0;
+    /// operators may raise it to absorb supply-poll timing skew.
+    #[serde(default)]
+    pub tolerance_picocredits: u64,
+
+    /// Seconds between reconciliation passes.
+    #[serde(default = "default_reconcile_interval_secs")]
+    pub reconcile_interval_secs: u64,
+
+    /// Listen address for the proof-of-reserves HTTP API
+    /// (`GET /api/reserve/proof`, `GET /health`). Empty string disables
+    /// the server.
+    #[serde(default = "default_reserve_api_listen")]
+    pub api_listen: String,
+}
+
+fn default_reconcile_interval_secs() -> u64 {
+    60
+}
+
+fn default_reserve_api_listen() -> String {
+    "127.0.0.1:9741".to_string()
+}
+
+impl Default for ReserveSettings {
+    fn default() -> Self {
+        Self {
+            tolerance_picocredits: 0,
+            reconcile_interval_secs: default_reconcile_interval_secs(),
+            api_listen: default_reserve_api_listen(),
+        }
+    }
 }
 
 /// BTH node connection configuration.
@@ -277,6 +327,7 @@ impl Default for BridgeConfig {
                 max_retries: default_max_retries(),
                 testnet: false,
             },
+            reserve: ReserveSettings::default(),
         }
     }
 }
@@ -344,5 +395,32 @@ mod tests {
         assert_eq!(configured.release_signers.len(), 2);
         assert_eq!(configured.release_threshold, 3);
         assert_eq!(configured.release_confirmations_required, 2);
+    }
+
+    #[test]
+    fn test_reserve_settings_default_and_parse() {
+        // Defaults: exact peg (ADR 0003), 60s cadence, localhost API.
+        let config = BridgeConfig::default();
+        assert_eq!(config.reserve.tolerance_picocredits, 0);
+        assert_eq!(config.reserve.reconcile_interval_secs, 60);
+        assert_eq!(config.reserve.api_listen, "127.0.0.1:9741");
+
+        // A pre-existing config without a [reserve] section still parses.
+        let legacy: ReserveSettings = toml::from_str("").unwrap();
+        assert_eq!(legacy.tolerance_picocredits, 0);
+        assert_eq!(legacy.reconcile_interval_secs, 60);
+
+        // The knobs round-trip from TOML; empty api_listen disables.
+        let configured: ReserveSettings = toml::from_str(
+            r#"
+            tolerance_picocredits = 5000
+            reconcile_interval_secs = 15
+            api_listen = ""
+            "#,
+        )
+        .unwrap();
+        assert_eq!(configured.tolerance_picocredits, 5000);
+        assert_eq!(configured.reconcile_interval_secs, 15);
+        assert!(configured.api_listen.is_empty());
     }
 }

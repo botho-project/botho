@@ -8,10 +8,12 @@ use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
 use crate::{
+    api,
     attestation::{AttestationProvider, StubAttestationProvider},
     db::Database,
     mint::{ethereum::EthMinter, solana::SolMinter, ConfirmationStatus, Minter},
     release::{bth::BthReleaser, PreparedRelease, ReleaseConfirmation, Releaser},
+    reserve::Reconciler,
     watchers::{BthWatcher, EthereumWatcher, SolanaWatcher},
 };
 
@@ -155,6 +157,31 @@ impl BridgeEngine {
             }
         });
 
+        // Spawn the reserve reconciler (#825): periodic peg-invariant
+        // check (DB-derived locked reserve vs on-chain wrapped supply).
+        let reconciler = Reconciler::from_config(&self.config, self.db.clone());
+        let reconcile_interval =
+            Duration::from_secs(self.config.reserve.reconcile_interval_secs.max(1));
+        let reconcile_shutdown = self.shutdown_tx.subscribe();
+        let reconcile_handle = tokio::spawn(async move {
+            reconciler.run(reconcile_interval, reconcile_shutdown).await;
+        });
+
+        // Spawn the proof-of-reserves HTTP API (#825); empty listen
+        // address disables it.
+        let api_handle = if self.config.reserve.api_listen.is_empty() {
+            None
+        } else {
+            let addr = self.config.reserve.api_listen.clone();
+            let api_db = self.db.clone();
+            let api_shutdown = self.shutdown_tx.subscribe();
+            Some(tokio::spawn(async move {
+                if let Err(e) = api::serve(addr, api_db, api_shutdown).await {
+                    error!("Proof-of-reserves API error: {}", e);
+                }
+            }))
+        };
+
         // Handle shutdown signals
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {
@@ -166,7 +193,16 @@ impl BridgeEngine {
         let _ = self.shutdown_tx.send(());
 
         // Wait for all components to finish
-        let _ = tokio::join!(bth_handle, eth_handle, sol_handle, process_handle);
+        let _ = tokio::join!(
+            bth_handle,
+            eth_handle,
+            sol_handle,
+            process_handle,
+            reconcile_handle
+        );
+        if let Some(handle) = api_handle {
+            let _ = handle.await;
+        }
 
         info!("Bridge engine stopped");
         Ok(())
@@ -265,6 +301,29 @@ impl OrderProcessor {
                 None,
             )?;
             return Ok(());
+        }
+
+        // Reserve accounting (#825, ADR 0003): the confirmed deposit's
+        // backing (net amount — the fee is bridge revenue, not peg
+        // backing) enters the locked ledger exactly once, BEFORE the mint
+        // is submitted, so the peg invariant is maintainable from the
+        // moment supply can appear. Idempotent by output id across ticks.
+        if self.db.record_locked_output(
+            &format!("dep:{}", order.id),
+            order.dest_chain,
+            order.net_amount(),
+            &order.id,
+        )? {
+            self.db.log_audit(
+                Some(&order.id),
+                "reserve_locked",
+                &format!(
+                    "chain={} amount={} tx={:?}",
+                    order.dest_chain,
+                    order.net_amount(),
+                    order.source_tx
+                ),
+            )?;
         }
 
         let Some(minter) = self.minters.get(&order.dest_chain) else {
@@ -449,6 +508,19 @@ impl OrderProcessor {
                 );
                 self.db
                     .update_order_status(&order.id, &OrderStatus::Failed { reason }, None)?;
+                // Reserve accounting (#825): a failed mint's deposit no
+                // longer backs wrapped supply — it is owed back to the
+                // depositor. Unlock it so the peg ledger stays exact.
+                if self.db.unlock_outputs_for_order(&order.id)? {
+                    self.db.log_audit(
+                        Some(&order.id),
+                        "reserve_unlocked",
+                        &format!(
+                            "chain={} mint failed; deposit no longer backs supply",
+                            order.dest_chain
+                        ),
+                    )?;
+                }
             }
         }
 
@@ -657,6 +729,36 @@ impl OrderProcessor {
                         "order {} cannot be released from status {}",
                         order.id, order.status
                     ));
+                }
+                // Reserve accounting (#825): spend locked outputs for the
+                // GROSS burn amount (the on-chain supply dropped by the
+                // full burn; the fee stays in custody as revenue). Applied
+                // BEFORE the order leaves `release_pending` so a crash
+                // between the two replays the idempotent spend next tick
+                // instead of losing it.
+                match self
+                    .db
+                    .apply_release_spend(&order.id, order.source_chain, order.amount)
+                {
+                    Ok(true) => {
+                        self.db.log_audit(
+                            Some(&order.id),
+                            "reserve_spent",
+                            &format!(
+                                "chain={} amount={} tx={}",
+                                order.source_chain, order.amount, dest_tx
+                            ),
+                        )?;
+                    }
+                    Ok(false) => {} // replay: already applied
+                    Err(e) => {
+                        // Do not block the release confirmation: the funds
+                        // already moved on-chain. The ledger mismatch will
+                        // surface as drift on the next reconciliation.
+                        error!("Reserve spend for release order {} failed: {}", order.id, e);
+                        self.db
+                            .log_audit(Some(&order.id), "reserve_spend_failed", &e)?;
+                    }
                 }
                 self.db.mark_release_confirmed(&order.id)?;
                 self.db.log_audit(
@@ -1289,5 +1391,110 @@ mod tests {
         // re-submitted next tick.
         let stored = db.get_order(&order.id).unwrap().unwrap();
         assert_eq!(stored.status, OrderStatus::BurnConfirmed);
+    }
+
+    // === Reserve accounting wiring (#825) ===
+
+    #[tokio::test]
+    async fn test_mint_lifecycle_locks_net_backing_exactly_once() {
+        let (processor, minter, db) = setup();
+        let order = insert_confirmed_deposit(&db);
+
+        // Submission locks the NET amount (fee = revenue, not backing).
+        processor.process_pending_orders().await.unwrap();
+        assert_eq!(db.locked_reserve_total().unwrap(), order.net_amount());
+        assert_eq!(
+            db.locked_reserve_by_chain(Chain::Ethereum).unwrap(),
+            order.net_amount()
+        );
+        assert_eq!(db.count_audit_action("reserve_locked").unwrap(), 1);
+
+        // Repeated ticks and confirmation never double-lock.
+        minter.set_confirmation(ConfirmationStatus::Confirmed);
+        processor.process_pending_orders().await.unwrap();
+        processor.process_pending_orders().await.unwrap();
+        assert_eq!(db.locked_reserve_total().unwrap(), order.net_amount());
+        assert_eq!(db.count_audit_action("reserve_locked").unwrap(), 1);
+        assert_eq!(
+            db.get_order(&order.id).unwrap().unwrap().status,
+            OrderStatus::Completed
+        );
+    }
+
+    #[tokio::test]
+    async fn test_failed_mint_unlocks_backing() {
+        let (processor, minter, db) = setup();
+        let order = insert_confirmed_deposit(&db);
+
+        processor.process_pending_orders().await.unwrap();
+        assert_eq!(db.locked_reserve_total().unwrap(), order.net_amount());
+
+        minter.set_confirmation(ConfirmationStatus::Failed {
+            reason: "no BridgeMint event".to_string(),
+        });
+        processor.process_pending_orders().await.unwrap();
+
+        // The failed mint's deposit no longer backs supply.
+        assert_eq!(db.locked_reserve_total().unwrap(), 0);
+        assert_eq!(db.count_audit_action("reserve_unlocked").unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_release_lifecycle_spends_gross_burn_from_reserve() {
+        let (processor, _minter, releaser, db) = setup_full();
+
+        // Seed the reserve as if prior mints locked 1.5 BTH of backing.
+        let prior_mint = uuid::Uuid::new_v4();
+        db.record_locked_output("dep:seed", Chain::Ethereum, 1_500_000_000_000, &prior_mint)
+            .unwrap();
+
+        // Burn of 1 BTH (gross); the release pays net to the user.
+        let order = insert_confirmed_burn(&db);
+        processor.process_pending_orders().await.unwrap();
+
+        // Not spent while ReleasePending.
+        assert_eq!(db.locked_reserve_total().unwrap(), 1_500_000_000_000);
+
+        releaser.set_confirmation(ReleaseConfirmation::Confirmed);
+        processor.process_pending_orders().await.unwrap();
+
+        // Released: the GROSS burn left the ledger, change stayed locked.
+        assert_eq!(
+            db.get_order(&order.id).unwrap().unwrap().status,
+            OrderStatus::Released
+        );
+        assert_eq!(
+            db.locked_reserve_total().unwrap(),
+            1_500_000_000_000 - order.amount
+        );
+        assert_eq!(db.count_audit_action("reserve_spent").unwrap(), 1);
+
+        // Replayed ticks never double-spend.
+        processor.process_pending_orders().await.unwrap();
+        assert_eq!(
+            db.locked_reserve_total().unwrap(),
+            1_500_000_000_000 - order.amount
+        );
+        assert_eq!(db.count_audit_action("reserve_spent").unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_release_spend_shortfall_alerts_but_never_blocks_release() {
+        let (processor, _minter, releaser, db) = setup_full();
+
+        // No locked backing at all (a drift condition): the release must
+        // still confirm — the funds already moved on-chain — while the
+        // ledger mismatch is audited for the reconciler to surface.
+        let order = insert_confirmed_burn(&db);
+        processor.process_pending_orders().await.unwrap();
+        releaser.set_confirmation(ReleaseConfirmation::Confirmed);
+        processor.process_pending_orders().await.unwrap();
+
+        assert_eq!(
+            db.get_order(&order.id).unwrap().unwrap().status,
+            OrderStatus::Released
+        );
+        assert_eq!(db.count_audit_action("reserve_spend_failed").unwrap(), 1);
+        assert_eq!(db.count_audit_action("reserve_spent").unwrap(), 0);
     }
 }
