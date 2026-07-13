@@ -28,7 +28,7 @@ pub use attestation::{
     parse_attestation_envelope, peek_order_id, peek_signer_key_id, peek_target_chain,
     release_payload_digest, sign_attestation_ed25519, AttestationEnvelope, AttestationKind,
     AttestationOutcome, AttestationRejectReason, AttestationSet, AttestationSignature,
-    MintAuthorization, ParsedAttestation, ReleaseAuthorization, SignatureScheme,
+    InsertOutcome, MintAuthorization, ParsedAttestation, ReleaseAuthorization, SignatureScheme,
     ATTESTATION_ENVELOPE_VERSION, ATTEST_DOMAIN_BTH, ATTEST_DOMAIN_ETH, ATTEST_DOMAIN_SOL,
     MAX_ATTESTATION_LIFETIME_SECS, RELEASE_ATTESTATION_DOMAIN_TAG,
 };

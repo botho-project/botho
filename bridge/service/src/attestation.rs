@@ -59,7 +59,7 @@ use bth_bridge_core::{
         canonical_attestation_envelope, check_attestation_freshness, check_order_binding,
         parse_attestation_envelope, peek_signer_key_id, peek_target_chain,
         sign_attestation_ed25519, AttestationEnvelope, AttestationKind, AttestationOutcome,
-        AttestationRejectReason, AttestationSet, ParsedAttestation,
+        AttestationRejectReason, AttestationSet, InsertOutcome, ParsedAttestation,
     },
     attestation_signed_message,
     nonce::{NonceStore, ReserveOutcome},
@@ -750,27 +750,58 @@ impl FederationAttestationProvider {
             .sets
             .entry((order.id, parsed.action.name()))
             .or_insert_with(|| AttestationSet::for_attestation(&parsed));
-        match set.insert(
+        // Whether this signer had already counted BEFORE this submission —
+        // needed to classify a set-mismatch (`Err`) as an equivocation
+        // (already-counted signer presenting a CONFLICTING Safe nonce) vs. a
+        // generic invalid payload (a signer that never counted for this set).
+        let already_counted = set.contains_signer(&parsed.signer_key_id);
+        match set.insert_classified(
             &parsed,
             AttestationSignature {
                 signer: signer_bytes,
                 signature: payload_sig,
             },
         ) {
-            Ok(_new_signer) => {
+            Ok(InsertOutcome::NewSigner | InsertOutcome::DuplicateBenign) => {
                 let signers = set.distinct_signers();
                 drop(tracker);
                 AttestationOutcome::accept(&parsed, signers, threshold)
             }
-            Err(e) => {
+            Ok(InsertOutcome::Equivocation) => {
+                // Shape 1: the already-counted signer presented a CONFLICTING
+                // payload signature for the same (order, action). Detection
+                // only — the first submission already counted, this one counts
+                // zero (funds-safety unchanged). Surface the equivocation so
+                // the db-bearing callsite raises the audit alarm; the outcome
+                // still reports as accepted (the set advanced on the first
+                // submission and this benign-shaped resubmission changes no
+                // funds decision).
                 let signers = set.distinct_signers();
                 drop(tracker);
-                AttestationOutcome::refuse(
+                AttestationOutcome::accept(&parsed, signers, threshold).with_equivocation()
+            }
+            Err(e) => {
+                // Shape 2 (Ethereum mints): `matches` rejected a CONFLICTING
+                // Safe nonce. When the signer had already counted for this
+                // set, that is an equivocation (two Safe nonces signed for one
+                // order), not a generic invalid payload — flag it for audit at
+                // most once per signer. Threshold counting is unchanged either
+                // way (this envelope never counts).
+                let is_equivocation =
+                    already_counted && set.flag_equivocation(&parsed.signer_key_id);
+                let signers = set.distinct_signers();
+                drop(tracker);
+                let refusal = AttestationOutcome::refuse(
                     &AttestationRejectReason::InvalidPayload(e),
                     Some(&parsed),
                     signers,
                     threshold,
-                )
+                );
+                if is_equivocation {
+                    refusal.with_equivocation()
+                } else {
+                    refusal
+                }
             }
         }
     }

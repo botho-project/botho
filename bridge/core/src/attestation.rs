@@ -648,6 +648,14 @@ pub struct AttestationOutcome {
     pub signers: u32,
     /// The configured federation threshold `t`.
     pub threshold: u32,
+    /// Detection-only flag: this VERIFIED envelope came from a signer that had
+    /// already attested this `(order, action)` with CONFLICTING bytes (a
+    /// different payload signature, or — for Ethereum mints — a different Safe
+    /// nonce). It is a governance-relevant equivocation signal the db-bearing
+    /// callsite audits (`attestation_equivocation`). It NEVER changes funds
+    /// behavior: the first submission already counted and an equivocating
+    /// resubmission still counts zero toward `t`.
+    pub equivocation: bool,
 }
 
 impl AttestationOutcome {
@@ -663,7 +671,15 @@ impl AttestationOutcome {
             order_id: Some(parsed.action.order_uuid()),
             signers,
             threshold,
+            equivocation: false,
         }
+    }
+
+    /// Flag this outcome as carrying an equivocation signal (detection only —
+    /// the threshold decision is unchanged). Chainable on `accept`/`refuse`.
+    pub fn with_equivocation(mut self) -> Self {
+        self.equivocation = true;
+        self
     }
 
     /// Build a refusal outcome. `parsed` is `Some` once the envelope parsed
@@ -684,6 +700,7 @@ impl AttestationOutcome {
             order_id: parsed.map(|p| p.action.order_uuid()),
             signers,
             threshold,
+            equivocation: false,
         }
     }
 }
@@ -1250,6 +1267,25 @@ pub fn check_order_binding(
     Ok(())
 }
 
+/// The classified result of inserting a verified attestation into an
+/// [`AttestationSet`]. The threshold decision is carried by the variant, and
+/// an already-counted signer is further split into a benign re-send vs. an
+/// equivocation so the ingest pipeline can raise a detection alarm WITHOUT
+/// changing what counts toward `t`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsertOutcome {
+    /// A new distinct signer was recorded and now counts once toward `t`.
+    NewSigner,
+    /// An already-counted signer re-sent IDENTICAL payload bytes (a benign
+    /// retry / duplicate delivery). Counts zero; not an alarm.
+    DuplicateBenign,
+    /// An already-counted signer presented CONFLICTING payload bytes for the
+    /// same `(order, action)` — an equivocation. Still counts zero (the
+    /// threshold is never inflated), but is a governance-relevant signal the
+    /// caller should audit.
+    Equivocation,
+}
+
 /// Collects verified per-signer attestations for ONE `(order, action)` and
 /// answers the threshold question. Deduplicates by signer identity: the
 /// same federation member attesting twice (even with distinct nonces)
@@ -1264,6 +1300,11 @@ pub struct AttestationSet {
     /// be combined into one `execTransaction`, so mismatches are rejected.
     safe_nonce: Option<u64>,
     entries: Vec<(String, AttestationSignature)>,
+    /// Signer key ids already flagged as equivocating, so the alarm fires at
+    /// most ONCE per signer even if that signer keeps re-submitting conflicting
+    /// bytes. Never affects threshold counting (an equivocating signer counts
+    /// once regardless of how many conflicts it presents).
+    flagged_equivocators: Vec<String>,
 }
 
 impl AttestationSet {
@@ -1279,6 +1320,7 @@ impl AttestationSet {
             target_chain: parsed.action.target_chain(),
             safe_nonce,
             entries: Vec::new(),
+            flagged_equivocators: Vec::new(),
         }
     }
 
@@ -1307,21 +1349,86 @@ impl AttestationSet {
     /// for a new distinct signer, `Ok(false)` if this signer already counted
     /// (double-count resistance), `Err` if the attestation does not belong
     /// to this set.
+    ///
+    /// This is the funds-path entry point: it answers only "did a new distinct
+    /// signer count?" and deliberately collapses the two already-counted cases
+    /// (benign re-send vs. equivocation) into a single `Ok(false)`. Callers
+    /// that need to DETECT equivocation (raise an audit alarm) must use
+    /// [`insert_classified`](Self::insert_classified) instead, which returns
+    /// the same threshold decision plus a conflict classification.
     pub fn insert(
         &mut self,
         parsed: &ParsedAttestation,
         signature: AttestationSignature,
     ) -> Result<bool, String> {
+        match self.insert_classified(parsed, signature)? {
+            InsertOutcome::NewSigner => Ok(true),
+            InsertOutcome::DuplicateBenign | InsertOutcome::Equivocation => Ok(false),
+        }
+    }
+
+    /// Insert a VERIFIED attestation's payload signature, classifying an
+    /// already-counted signer as either a benign re-send or an equivocation.
+    ///
+    /// The threshold decision is IDENTICAL to [`insert`](Self::insert): a new
+    /// distinct signer is recorded and counts once
+    /// ([`InsertOutcome::NewSigner`]); an already-counted signer is NOT
+    /// recorded and counts zero, whether it re-sent identical bytes
+    /// ([`InsertOutcome::DuplicateBenign`]) or CONFLICTING bytes
+    /// ([`InsertOutcome::Equivocation`]). The only added information is the
+    /// conflict signal — this method never inflates the distinct-signer count,
+    /// so funds-safety is unchanged (an equivocating signer still counts once).
+    ///
+    /// Conflict is decided by comparing the newly-presented payload signature
+    /// bytes against the entry already stored for that signer: identical bytes
+    /// are a benign retry, differing bytes are an equivocation (the signer has
+    /// signed two distinct payloads for one logical `(order, action)`). A
+    /// conflicting Safe nonce (Ethereum mints) is caught earlier by
+    /// [`matches`](Self::matches) and surfaces as `Err`; the pipeline treats
+    /// that separately (see the service layer's equivocation classifier).
+    pub fn insert_classified(
+        &mut self,
+        parsed: &ParsedAttestation,
+        signature: AttestationSignature,
+    ) -> Result<InsertOutcome, String> {
         self.matches(parsed)?;
-        if self
+        if let Some((_, stored)) = self
             .entries
             .iter()
-            .any(|(id, _)| *id == parsed.signer_key_id)
+            .find(|(id, _)| *id == parsed.signer_key_id)
         {
-            return Ok(false);
+            // Already counted. Distinguish a benign re-send (same signer, same
+            // payload signature bytes) from an equivocation (same signer,
+            // CONFLICTING payload signature — two distinct signed payloads for
+            // one logical order). Either way the signer still counts once.
+            if stored.signature == signature.signature {
+                return Ok(InsertOutcome::DuplicateBenign);
+            }
+            // Conflict. Flag it, but report `Equivocation` at most ONCE per
+            // signer so the audit alarm does not spam on repeated conflicts —
+            // subsequent conflicts from an already-flagged signer report as a
+            // benign duplicate (still counts zero).
+            if self.flag_equivocation(&parsed.signer_key_id) {
+                return Ok(InsertOutcome::Equivocation);
+            }
+            return Ok(InsertOutcome::DuplicateBenign);
         }
         self.entries.push((parsed.signer_key_id.clone(), signature));
-        Ok(true)
+        Ok(InsertOutcome::NewSigner)
+    }
+
+    /// Record that `signer_key_id` has equivocated, returning `true` only the
+    /// FIRST time (so the caller raises the alarm exactly once per signer).
+    /// Detection bookkeeping only — never touches threshold counting. Exposed
+    /// so the ingest pipeline can also dedup the Safe-nonce-conflict shape,
+    /// which `matches` rejects (as `Err`) before it reaches
+    /// [`insert_classified`](Self::insert_classified)'s entry comparison.
+    pub fn flag_equivocation(&mut self, signer_key_id: &str) -> bool {
+        if self.flagged_equivocators.iter().any(|s| s == signer_key_id) {
+            return false;
+        }
+        self.flagged_equivocators.push(signer_key_id.to_string());
+        true
     }
 
     /// Distinct signers collected so far.

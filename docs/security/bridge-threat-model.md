@@ -122,15 +122,24 @@ of the operator-action tag — and by forged-signature tests.
 | --- | --- | --- |
 | Same signer, two submissions → counts once (no threshold inflation) | `adversarial_tests::equivocating_signer_cannot_inflate_the_distinct_signer_count`, `attestation::pipeline_same_signer_with_fresh_nonces_counts_once_toward_threshold` | new / #847 |
 | Conflicting amount/recipient cannot pass order binding | `adversarial_tests::conflicting_payload_for_the_same_order_cannot_cross_order_binding`, `attestation::test_order_binding_rejects_field_mismatches` | new / #847 |
+| Conflicting bytes classified distinctly from a benign re-send | `adversarial_tests::equivocating_signer_is_classified_distinctly_from_a_benign_resend` | new (#859) |
+| Verified conflicting attestation raises an `attestation_equivocation` audit event, exactly once per signer, funds unchanged | `federation::federation_transport_tests::endpoint_audits_equivocation_exactly_once_per_signer` | new (#859) |
 
-**Residual / follow-up.** Equivocation is *neutralized* (order binding pins
-every field to the on-record order, and the aggregation set deduplicates by
-signer identity, so a single equivocating signer can neither move conflicting
-funds nor inflate the threshold), but it is **not actively detected**: the
-service does not raise an auditable "equivocation" alarm when a signer presents
-conflicting bytes for the same order id — it silently keeps the first valid
-submission and rejects the rest via the normal replay/binding paths. Active
-detection + alerting is filed as a hardening follow-up (see "Follow-ups").
+**Status: neutralized AND detected.** Equivocation is *neutralized* (order
+binding pins every field to the on-record order, and the aggregation set
+deduplicates by signer identity, so a single equivocating signer can neither
+move conflicting funds nor inflate the threshold). As of #859 it is also
+*actively detected*: when a VERIFIED envelope from a counted signer conflicts
+with what that signer already attested for one order (a different payload
+signature, or — for Ethereum mints — a different Safe nonce), the service emits
+a dedicated `attestation_equivocation` audit event carrying the signer key id +
+order id, distinct from `replayed_nonce` / `wrong_order` / `invalid_payload`.
+Detection is observation-only: the threshold decision is unchanged (an
+equivocating signer still counts exactly once), and the alarm fires at most once
+per signer. Auto-tripping the circuit breaker on equivocation was deliberately
+deferred (a single compromised key equivocating is exactly when the *other*
+honest signers may need to keep making progress) and is left as a policy
+follow-up.
 
 ### 8. Reorg double-count (add / orphan / re-add on the source chain)
 
@@ -184,6 +193,9 @@ detection + alerting is filed as a hardening follow-up (see "Follow-ups").
 
 ## Follow-ups filed
 
-- **Active equivocation detection & alerting** (#859) — raise an auditable
-  alarm when a federation member submits conflicting attestations for the same
-  order id (today: neutralized but silent). See threat #7.
+- **Active equivocation detection & alerting** (#859) — LANDED: a verified
+  conflicting attestation now emits a distinct `attestation_equivocation` audit
+  event (exactly once per signer), funds behavior unchanged. See threat #7.
+  Remaining policy follow-up: whether to auto-trip the circuit breaker on
+  equivocation (deferred — halting the whole bridge on one equivocation report
+  can strand the honest signers).
