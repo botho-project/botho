@@ -89,6 +89,21 @@ pub struct MintAuthorization {
     /// Collected validator signatures. Must contain at least `threshold`
     /// entries from distinct signers to be usable.
     pub signatures: Vec<AttestationSignature>,
+
+    /// The Gnosis Safe nonce every collected Ethereum payload signature is
+    /// bound to (`None` for Ed25519 / Solana mints, which are blockhash-bound
+    /// rather than nonce-bound).
+    ///
+    /// The Safe owner signatures were produced over a SafeTx digest that
+    /// includes this nonce; `Safe.execTransaction` only accepts them while it
+    /// is the Safe's *current* on-chain nonce. Carrying it here lets the
+    /// minter cross-check the live nonce **before broadcast** and trigger a
+    /// deliberate re-collection at the fresh nonce instead of broadcasting
+    /// signatures the Safe will reject (see #848). `#[serde(default)]` keeps
+    /// authorizations persisted before this field was added deserializable
+    /// (they decode as `None`).
+    #[serde(default)]
+    pub safe_nonce: Option<u64>,
 }
 
 impl MintAuthorization {
@@ -1388,6 +1403,7 @@ mod tests {
             scheme: SignatureScheme::Secp256k1,
             threshold: 2,
             signatures: vec![sig(1)],
+            safe_nonce: Some(7),
         };
         assert!(!auth.meets_threshold());
 
@@ -1406,10 +1422,30 @@ mod tests {
             scheme: SignatureScheme::Ed25519,
             threshold: 3,
             signatures: vec![sig(1), sig(2)],
+            safe_nonce: None,
         };
         let json = serde_json::to_string(&auth).unwrap();
         let back: MintAuthorization = serde_json::from_str(&json).unwrap();
         assert_eq!(auth, back);
+
+        // Ethereum mint authorizations carry the bound Safe nonce.
+        let eth_auth = MintAuthorization {
+            order_id: [3u8; 32],
+            scheme: SignatureScheme::Secp256k1,
+            threshold: 2,
+            signatures: vec![sig(1), sig(2)],
+            safe_nonce: Some(42),
+        };
+        let json = serde_json::to_string(&eth_auth).unwrap();
+        let back: MintAuthorization = serde_json::from_str(&json).unwrap();
+        assert_eq!(eth_auth, back);
+        assert_eq!(back.safe_nonce, Some(42));
+
+        // Authorizations persisted before `safe_nonce` existed still
+        // deserialize (the field defaults to `None`).
+        let legacy = r#"{"order_id":"0909090909090909090909090909090909090909090909090909090909090909","scheme":"ed25519","threshold":3,"signatures":[]}"#;
+        let back: MintAuthorization = serde_json::from_str(legacy).unwrap();
+        assert_eq!(back.safe_nonce, None);
     }
 
     #[test]

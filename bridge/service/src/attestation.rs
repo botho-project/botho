@@ -133,6 +133,7 @@ impl AttestationProvider for StubAttestationProvider {
             scheme,
             threshold: 0,
             signatures: vec![],
+            safe_nonce: None,
         })
     }
 
@@ -314,6 +315,32 @@ fn check_threshold(threshold: u32, n: usize, what: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Reject a federation configured with duplicate signer identities.
+///
+/// Duplicate owner addresses / signer pubkeys inflate the raw list length
+/// `n` used by [`check_threshold`], so a `threshold == padded_n` config would
+/// pass construction yet be unsatisfiable at runtime: the aggregator dedups
+/// by signer identity ([`AttestationSet::insert`]), so the *effective*
+/// federation is smaller than `n` and the threshold can never be reached —
+/// the order wedges forever, fail-safe but silent. Rejecting the misconfig at
+/// construction surfaces it immediately (#848).
+///
+/// `identities` must already be normalized (parsed/trimmed) so that surface
+/// variants like `"0xAbc"` and `"0xabc"` collide on the same canonical bytes.
+fn reject_duplicate_signers<T: Ord + Clone>(identities: &[T], what: &str) -> Result<(), String> {
+    let mut seen = identities.to_vec();
+    seen.sort();
+    if seen.windows(2).any(|w| w[0] == w[1]) {
+        return Err(format!(
+            "{}: duplicate signer identities configured — every federation \
+             member must be distinct (a repeated signer inflates the \
+             configured count and makes a threshold equal to it unsatisfiable)",
+            what
+        ));
+    }
+    Ok(())
+}
+
 /// The signer identity string for an Ethereum owner address: lowercase hex,
 /// no 0x prefix (40 chars).
 fn eth_signer_key_id(address: &Address) -> String {
@@ -333,11 +360,6 @@ impl FederationAttestationProvider {
         let eth = if eth_cfg.mint_signers.is_empty() {
             None
         } else {
-            check_threshold(
-                eth_cfg.mint_threshold,
-                eth_cfg.mint_signers.len(),
-                "ethereum.mint_threshold",
-            )?;
             let mut owners = Vec::with_capacity(eth_cfg.mint_signers.len());
             for s in &eth_cfg.mint_signers {
                 owners.push(
@@ -346,6 +368,14 @@ impl FederationAttestationProvider {
                         .map_err(|e| format!("bad ethereum mint signer {}: {}", s, e))?,
                 );
             }
+            // Dedup on the parsed 20-byte address (not the raw string), so
+            // checksummed / lowercase spellings of one owner collide.
+            reject_duplicate_signers(&owners, "ethereum.mint_signers")?;
+            check_threshold(
+                eth_cfg.mint_threshold,
+                owners.len(),
+                "ethereum.mint_threshold",
+            )?;
             let safe: Address = eth_cfg
                 .safe_address
                 .as_deref()
@@ -373,13 +403,18 @@ impl FederationAttestationProvider {
         let sol = if config.solana.mint_signers.is_empty() {
             None
         } else {
+            let signers = parse_ed25519_federation(&config.solana.mint_signers, "solana mint")?;
+            reject_duplicate_signers(
+                &signers.iter().map(|k| k.to_bytes()).collect::<Vec<_>>(),
+                "solana.mint_signers",
+            )?;
             check_threshold(
                 config.solana.mint_threshold,
-                config.solana.mint_signers.len(),
+                signers.len(),
                 "solana.mint_threshold",
             )?;
             Some(Ed25519Federation {
-                signers: parse_ed25519_federation(&config.solana.mint_signers, "solana mint")?,
+                signers,
                 threshold: config.solana.mint_threshold,
             })
         };
@@ -387,13 +422,18 @@ impl FederationAttestationProvider {
         let bth = if config.bth.release_signers.is_empty() {
             None
         } else {
+            let signers = parse_ed25519_federation(&config.bth.release_signers, "bth release")?;
+            reject_duplicate_signers(
+                &signers.iter().map(|k| k.to_bytes()).collect::<Vec<_>>(),
+                "bth.release_signers",
+            )?;
             check_threshold(
                 config.bth.release_threshold,
-                config.bth.release_signers.len(),
+                signers.len(),
                 "bth.release_threshold",
             )?;
             Some(Ed25519Federation {
-                signers: parse_ed25519_federation(&config.bth.release_signers, "bth release")?,
+                signers,
                 threshold: config.bth.release_threshold,
             })
         };
@@ -992,6 +1032,49 @@ impl AttestationProvider for FederationAttestationProvider {
                         .to_string()
                 })?;
 
+                // Stale-nonce eviction (#848 / #849). A partial set is pinned
+                // to the Safe nonce of its first attestation. If an unrelated
+                // Safe transaction executed while the set was below threshold,
+                // the Safe's on-chain nonce advances past the pinned nonce and
+                // every fresh-nonce attestation is (correctly) refused as a
+                // nonce mismatch — the set can never reach a usable threshold
+                // and the order wedges at DepositConfirmed until a restart.
+                //
+                // Read the live nonce OUTSIDE the tracker lock (RPC), then
+                // re-lock to evict only when the pinned nonce is STRICTLY
+                // behind. An equal nonce is the healthy case; a set pinned
+                // AHEAD of the read (a transient stale on-chain read) is left
+                // untouched — we never evict on a nonce that only appears to
+                // have moved. Dropping the set is safe: the collected
+                // signatures bind the stale nonce and are unusable anyway, and
+                // the durable nonce store forces each peer to re-sign with a
+                // fresh envelope nonce on re-collection (no replay risk).
+                let pinned_nonce = {
+                    let tracker = self.tracker.lock().expect("tracker lock poisoned");
+                    tracker
+                        .sets
+                        .get(&(order.id, "bridge.mint_wbth"))
+                        .and_then(|s| s.safe_nonce())
+                };
+                if let Some(pinned) = pinned_nonce {
+                    let live = fed.nonce_source.safe_nonce().await?;
+                    if pinned < live {
+                        let mut tracker = self.tracker.lock().expect("tracker lock poisoned");
+                        // Re-check under the lock: only evict if the set is
+                        // still pinned to the same stale nonce (it may have
+                        // been re-collected or taken between the RPC read and
+                        // re-acquiring the lock).
+                        if tracker
+                            .sets
+                            .get(&(order.id, "bridge.mint_wbth"))
+                            .and_then(|s| s.safe_nonce())
+                            == Some(pinned)
+                        {
+                            tracker.sets.remove(&(order.id, "bridge.mint_wbth"));
+                        }
+                    }
+                }
+
                 // Self-attest with the local Safe owner key, binding to the
                 // set's Safe nonce (or the current on-chain nonce for a
                 // fresh set) so all collected signatures share one SafeTx.
@@ -1041,12 +1124,24 @@ impl AttestationProvider for FederationAttestationProvider {
                 // (the order stays retryable and re-authorizes on the next
                 // pass, re-pushing our envelope).
                 let collected = self.progress(order.id, "bridge.mint_wbth");
+                // Snapshot the Safe nonce the set is pinned to BEFORE
+                // take_if_threshold_met removes the set, so the authorization
+                // can carry it for the minter's pre-broadcast cross-check
+                // (#848).
+                let collected_nonce = {
+                    let tracker = self.tracker.lock().expect("tracker lock poisoned");
+                    tracker
+                        .sets
+                        .get(&(order.id, "bridge.mint_wbth"))
+                        .and_then(|s| s.safe_nonce())
+                };
                 match self.take_if_threshold_met(order.id, "bridge.mint_wbth", fed.threshold) {
                     Some(signatures) => Ok(MintAuthorization {
                         order_id: order.order_id_bytes(),
                         scheme: SignatureScheme::Secp256k1,
                         threshold: fed.threshold,
                         signatures,
+                        safe_nonce: collected_nonce,
                     }),
                     None => Err(format!(
                         "attestation threshold not met ({}/{} distinct signers); \
@@ -1073,6 +1168,9 @@ impl AttestationProvider for FederationAttestationProvider {
                         scheme: SignatureScheme::Ed25519,
                         threshold: fed.threshold,
                         signatures,
+                        // Solana mints are blockhash-bound, not Safe-nonce
+                        // bound: no Safe nonce to cross-check.
+                        safe_nonce: None,
                     }),
                     None => Err(format!(
                         "attestation threshold not met ({}/{} distinct signers); \
@@ -1165,6 +1263,18 @@ mod tests {
         }
     }
 
+    /// A Safe nonce source whose reported value can be advanced mid-test, to
+    /// simulate an unrelated Safe transaction executing while a set is below
+    /// threshold (#848 eviction path).
+    struct MutableSafeNonce(std::sync::atomic::AtomicU64);
+
+    #[async_trait]
+    impl SafeNonceSource for MutableSafeNonce {
+        async fn safe_nonce(&self) -> Result<u64, String> {
+            Ok(self.0.load(std::sync::atomic::Ordering::SeqCst))
+        }
+    }
+
     const CHAIN_ID: u64 = 1;
 
     fn safe_addr() -> Address {
@@ -1191,6 +1301,32 @@ mod tests {
                 safe: safe_addr(),
                 wbth: wbth_addr(),
                 nonce_source: Arc::new(FixedSafeNonce(safe_nonce)),
+            }),
+            sol: None,
+            bth: None,
+            local_ed25519: None,
+            local_secp256k1: local,
+            tracker: empty_tracker(),
+            peer_push: None,
+        }
+    }
+
+    /// Like [`eth_provider`] but sharing a caller-held [`MutableSafeNonce`] so
+    /// the test can advance the on-chain nonce mid-run.
+    fn eth_provider_with_nonce_source(
+        owners: &[&PrivateKeySigner],
+        threshold: u32,
+        nonce_source: Arc<MutableSafeNonce>,
+        local: Option<PrivateKeySigner>,
+    ) -> FederationAttestationProvider {
+        FederationAttestationProvider {
+            eth: Some(EthFederation {
+                owners: owners.iter().map(|s| s.address()).collect(),
+                threshold,
+                chain_id: CHAIN_ID,
+                safe: safe_addr(),
+                wbth: wbth_addr(),
+                nonce_source,
             }),
             sol: None,
             bth: None,
@@ -1432,6 +1568,9 @@ mod tests {
         assert_eq!(auth.threshold, 2);
         assert_eq!(auth.signatures.len(), 2);
         assert!(auth.meets_threshold());
+        // The authorization carries the Safe nonce the signatures are bound
+        // to, so the minter can cross-check it pre-broadcast (#848).
+        assert_eq!(auth.safe_nonce, Some(7));
 
         // Every collected payload signature is a Safe owner signature over
         // THIS order's SafeTx digest at the attested Safe nonce — directly
@@ -1473,6 +1612,120 @@ mod tests {
         assert_eq!(provider.progress(order.id, "bridge.mint_wbth"), 1);
     }
 
+    #[tokio::test]
+    async fn authorize_mint_eth_evicts_a_set_pinned_behind_the_onchain_nonce() {
+        // A partial set is pinned to Safe nonce N (below threshold). An
+        // unrelated Safe transaction then advances the on-chain nonce to N+1.
+        // Without eviction, every fresh-nonce attestation is refused as a
+        // nonce mismatch and the order wedges forever (#848 / #849). The
+        // aggregator must drop the stale set and re-collect at N+1.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let (o1, o2) = (eth_signer(1), eth_signer(2));
+        let source = Arc::new(MutableSafeNonce(AtomicU64::new(7)));
+        // The local Safe owner is o1: authorize_mint self-attests.
+        let provider =
+            eth_provider_with_nonce_source(&[&o1, &o2], 2, Arc::clone(&source), Some(o1.clone()));
+        let order = eth_mint_order();
+
+        // First pass at nonce 7: self-attest (o1) pins the set to 7, below
+        // threshold (needs 2), so authorize_mint fails safe.
+        assert!(provider.authorize_mint(&order).await.is_err());
+        assert_eq!(provider.progress(order.id, "bridge.mint_wbth"), 1);
+
+        // An unrelated Safe tx executes: the on-chain nonce advances to 8.
+        // The set is still pinned to 7. A peer envelope at the fresh nonce 8
+        // cannot join the stale set (correct within-set refusal).
+        source.0.store(8, Ordering::SeqCst);
+        let e2_at_8 = eth_mint_envelope(&order, &o2, 8, "nonce-evict-1");
+        let refused = provider.submit_attestation_at(&e2_at_8, &order, NOW);
+        assert!(
+            !refused.accepted,
+            "fresh-nonce attestation cannot join a stale set"
+        );
+
+        // Next authorize_mint pass evicts the stale (nonce-7) set and
+        // re-collects fresh at nonce 8: o1 self-attests at 8, then an o2
+        // envelope at 8 reaches threshold.
+        assert!(provider.authorize_mint(&order).await.is_err()); // evicted + re-self-attested (1/2)
+        let e2_fresh = eth_mint_envelope(&order, &o2, 8, "nonce-evict-2");
+        assert!(
+            provider
+                .submit_attestation_at(&e2_fresh, &order, NOW)
+                .accepted,
+            "after eviction the set is pinned to 8 and accepts the o2 envelope"
+        );
+
+        let auth = provider
+            .authorize_mint(&order)
+            .await
+            .expect("order recovers at the fresh nonce without a restart");
+        assert_eq!(auth.signatures.len(), 2);
+        assert_eq!(auth.safe_nonce, Some(8), "re-collected at the fresh nonce");
+    }
+
+    #[tokio::test]
+    async fn authorize_mint_eth_does_not_evict_on_equal_or_stale_read() {
+        // Guard the eviction: an EQUAL on-chain nonce is the healthy case and
+        // must not drop the set; a transient on-chain read reported BEHIND the
+        // pinned nonce must also never evict (#848 edge cases).
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let (o1, o2) = (eth_signer(1), eth_signer(2));
+        let source = Arc::new(MutableSafeNonce(AtomicU64::new(7)));
+        let provider =
+            eth_provider_with_nonce_source(&[&o1, &o2], 2, Arc::clone(&source), Some(o1.clone()));
+        let order = eth_mint_order();
+
+        // Pin the set to nonce 7 (o1 self-attest, below threshold).
+        assert!(provider.authorize_mint(&order).await.is_err());
+        assert_eq!(provider.progress(order.id, "bridge.mint_wbth"), 1);
+
+        // Equal nonce: no eviction — the set survives (still 1/2 at nonce 7).
+        assert!(provider.authorize_mint(&order).await.is_err());
+        assert_eq!(provider.progress(order.id, "bridge.mint_wbth"), 1);
+
+        // A transient stale read reports the nonce BEHIND the pinned value:
+        // must not evict.
+        source.0.store(5, Ordering::SeqCst);
+        assert!(provider.authorize_mint(&order).await.is_err());
+        assert_eq!(
+            provider.progress(order.id, "bridge.mint_wbth"),
+            1,
+            "a behind-read must not drop the set"
+        );
+
+        // With the nonce back at 7, the o2 envelope completes the set.
+        source.0.store(7, Ordering::SeqCst);
+        let e2 = eth_mint_envelope(&order, &o2, 7, "nonce-equal-1");
+        assert!(provider.submit_attestation_at(&e2, &order, NOW).accepted);
+        let auth = provider.authorize_mint(&order).await.unwrap();
+        assert_eq!(auth.signatures.len(), 2);
+        assert_eq!(auth.safe_nonce, Some(7));
+    }
+
+    #[tokio::test]
+    async fn authorize_mint_solana_carries_no_safe_nonce() {
+        let (k1, k2) = (signing_key(10), signing_key(11));
+        let provider = FederationAttestationProvider {
+            eth: None,
+            sol: Some(Ed25519Federation {
+                signers: vec![k1.verifying_key(), k2.verifying_key()],
+                threshold: 1,
+            }),
+            bth: None,
+            local_ed25519: Some(k1.clone()),
+            local_secp256k1: None,
+            tracker: empty_tracker(),
+            peer_push: None,
+        };
+        let order = sol_mint_order();
+        let auth = provider.authorize_mint(&order).await.unwrap();
+        assert_eq!(auth.scheme, SignatureScheme::Ed25519);
+        assert_eq!(
+            auth.safe_nonce, None,
+            "Solana mints are not Safe-nonce bound"
+        );
+    }
+
     #[test]
     fn pipeline_rejects_eth_envelope_from_a_non_owner() {
         let (o1, byzantine) = (eth_signer(1), eth_signer(66));
@@ -1512,5 +1765,45 @@ mod tests {
             .err()
             .expect("threshold above n must be refused");
         assert!(err.contains("exceeds"), "{err}");
+    }
+
+    #[test]
+    fn from_config_rejects_duplicate_ed25519_signers() {
+        // A repeated signer inflates the configured count; the aggregator
+        // dedups by identity, so a threshold equal to the padded count is
+        // unsatisfiable. Reject the misconfig at construction (#848).
+        let key = hex::encode(signing_key(1).verifying_key().as_bytes());
+        let mut config = BridgeConfig::default();
+        config.solana.mint_signers = vec![key.clone(), key];
+        config.solana.mint_threshold = 2;
+        let err = FederationAttestationProvider::from_config(&config)
+            .err()
+            .expect("duplicate solana signers must be refused");
+        assert!(err.contains("duplicate signer identities"), "{err}");
+
+        // Distinct signers still construct.
+        let mut config = BridgeConfig::default();
+        config.solana.mint_signers = vec![
+            hex::encode(signing_key(1).verifying_key().as_bytes()),
+            hex::encode(signing_key(2).verifying_key().as_bytes()),
+        ];
+        config.solana.mint_threshold = 2;
+        assert!(FederationAttestationProvider::from_config(&config).is_ok());
+    }
+
+    #[test]
+    fn from_config_rejects_duplicate_eth_owners_checksum_insensitive() {
+        // The same owner spelled two ways (checksummed vs lowercase) must
+        // collide on the parsed 20-byte address, not the raw string (#848).
+        let addr = format!("0x{}", hex::encode([0x11u8; 20]));
+        let mut config = BridgeConfig::default();
+        config.ethereum.mint_signers = vec![addr.to_uppercase().replace("0X", "0x"), addr.clone()];
+        config.ethereum.mint_threshold = 2;
+        config.ethereum.safe_address = Some(format!("0x{}", hex::encode([0x22u8; 20])));
+        config.ethereum.wbth_contract = format!("0x{}", hex::encode([0x33u8; 20]));
+        let err = FederationAttestationProvider::from_config(&config)
+            .err()
+            .expect("duplicate eth owners must be refused");
+        assert!(err.contains("duplicate signer identities"), "{err}");
     }
 }

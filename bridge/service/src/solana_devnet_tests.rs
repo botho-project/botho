@@ -120,6 +120,7 @@ async fn solana_devnet_prepare_mint_against_live_pdas() {
             signer: vec![1u8; 32],
             signature: vec![2u8; 64],
         }],
+        safe_nonce: None,
     };
 
     let prepared = minter

@@ -531,6 +531,7 @@ mod tests {
                 signer: vec![1u8; 32],
                 signature: vec![2u8; 64],
             }],
+            safe_nonce: None,
         };
         (order, auth)
     }
@@ -749,6 +750,7 @@ mod tests {
                 signer: vec![1u8; 32],
                 signature: vec![2u8; 64],
             }],
+            safe_nonce: None,
         }
     }
 
