@@ -42,10 +42,10 @@ pub enum ReleaseError {
     /// The provided attestation does not authorize this release.
     Attestation(String),
     /// RPC / network failure (retryable).
-    /// TODO(#828): constructed by the live-node RPC wiring.
+    /// TODO(#856): constructed by the live-node RPC wiring.
     #[allow(dead_code)]
     Rpc(String),
-    /// Functionality not yet wired up (BTH wallet-send RPC, see #828).
+    /// Functionality not yet wired up (BTH wallet-send RPC, see #856).
     NotImplemented(String),
 }
 
@@ -76,7 +76,7 @@ pub struct PreparedRelease {
 /// Result of polling a submitted release transaction.
 ///
 /// The engine consumes every variant; production construction is the
-/// `TODO(#828)` confirmation-polling wiring (tests construct them via the
+/// `TODO(#856)` confirmation-polling wiring (tests construct them via the
 /// mock releaser), hence the `dead_code` allowance.
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]

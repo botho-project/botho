@@ -21,10 +21,10 @@
 //! The RPC-dependent bodies (recent-blockhash fetch, transaction assembly
 //! and Ed25519 multisig signing per #824, `send_transaction`,
 //! `get_signature_statuses` polling to the configured commitment) are
-//! `TODO(#824/#828)` stubs returning [`MintError::NotImplemented`]. They
+//! `TODO(#824/#857)` stubs returning [`MintError::NotImplemented`]. They
 //! require the `solana-client`/`anchor-client` dependency stack, which is
 //! deferred to keep this workspace's dependency tree (curve25519-dalek v4,
-//! zeroize, etc.) unconflicted until the Solana test harness (#828) lands
+//! zeroize, etc.) unconflicted until the Solana test harness (#857) lands
 //! and can validate the wiring end to end.
 
 use async_trait::async_trait;
@@ -36,7 +36,7 @@ use sha2::{Digest, Sha256};
 use super::{ConfirmationStatus, MintError, Minter, PreparedMint};
 
 /// Seed for the bridge state PDA (`seeds = [b"bridge"]` in the program).
-/// Consumed by the #828 transaction-assembly work (PDA derivation).
+/// Consumed by the #857 transaction-assembly work (PDA derivation).
 #[allow(dead_code)]
 pub const BRIDGE_PDA_SEED: &[u8] = b"bridge";
 
@@ -105,7 +105,7 @@ pub fn validate_solana_attestation(
 /// Solana minting backend.
 ///
 /// See the module docs: instruction construction and attestation validation
-/// are live; RPC submission/confirmation are `TODO(#824/#828)` stubs.
+/// are live; RPC submission/confirmation are `TODO(#824/#857)` stubs.
 pub struct SolMinter {
     #[allow(dead_code)]
     config: SolanaConfig,
@@ -147,7 +147,7 @@ impl Minter for SolMinter {
         let _instruction_data =
             encode_bridge_mint_instruction_data(order.net_amount(), order.order_id_bytes());
 
-        // TODO(#824/#828): assemble and sign the transaction. Requires the
+        // TODO(#824/#857): assemble and sign the transaction. Requires the
         // solana-sdk/anchor-client stack:
         //   1. Derive the Bridge PDA (seeds=[b"bridge"]) and the recipient's associated
         //      token account; prepend a create-idempotent-ATA instruction
@@ -159,20 +159,20 @@ impl Minter for SolMinter {
         //   4. The first signature is the transaction id (base58) — return it in
         //      PreparedMint.tx_id with the serialized tx in raw.
         Err(MintError::NotImplemented(
-            "Solana transaction assembly/signing pending #824 (attestation) and #828 \
+            "Solana transaction assembly/signing pending #824 (attestation) and #857 \
              (solana-test-validator harness)"
                 .to_string(),
         ))
     }
 
     async fn broadcast(&self, _prepared: &PreparedMint) -> Result<(), MintError> {
-        // TODO(#828): sendTransaction(base64(raw)) with
+        // TODO(#857): sendTransaction(base64(raw)) with
         // skip_preflight=false; treat "AlreadyProcessed" as success
         // (idempotent re-broadcast). The on-chain order-id guard (#826) and
         // the blockhash/durable-nonce guarantee a resubmit cannot
         // double-mint.
         Err(MintError::NotImplemented(
-            "Solana send_transaction pending #828".to_string(),
+            "Solana send_transaction pending #857".to_string(),
         ))
     }
 
@@ -181,14 +181,14 @@ impl Minter for SolMinter {
         _order: &BridgeOrder,
         _dest_tx: &str,
     ) -> Result<ConfirmationStatus, MintError> {
-        // TODO(#828): poll getSignatureStatuses(dest_tx) until the
+        // TODO(#857): poll getSignatureStatuses(dest_tx) until the
         // configured SolanaCommitment (default Finalized); confirm the
         // BridgeMintEvent in the tx meta/logs, then Confirmed. A dropped /
         // expired-blockhash signature (status None after the blockhash's
         // last_valid_block_height) maps to Reorged so the engine rolls the
         // order back to DepositConfirmed and re-submits.
         Err(MintError::NotImplemented(
-            "Solana get_signature_statuses polling pending #828".to_string(),
+            "Solana get_signature_statuses polling pending #857".to_string(),
         ))
     }
 }

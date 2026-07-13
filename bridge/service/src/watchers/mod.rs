@@ -19,7 +19,9 @@
 //!    commitment on Solana.
 
 mod bth;
-mod ethereum;
+// pub(crate): the fork tests (#828) drive the live-transport client and
+// its log-decoding helpers directly against a local node.
+pub(crate) mod ethereum;
 mod solana;
 
 /// Reorg + finality fuzz driving the Ethereum watcher (bridge epic #816,
@@ -41,7 +43,7 @@ pub enum WatchError {
     Rpc(String),
     /// Database failure.
     Db(String),
-    /// Transport not yet wired up (BTH websocket / Solana RPC, see #828).
+    /// Transport not yet wired up (BTH websocket #856 / Solana RPC #857).
     NotImplemented(String),
 }
 

@@ -29,7 +29,7 @@
 //! `getTransaction` at `Finalized` over `SolanaConfig::wbth_program`)
 //! requires the `solana-client` dependency stack, which is deferred (same
 //! reasoning as `mint::solana`); [`SolanaWatcher::poll_for_burns`] is a
-//! fail-safe `TODO(#828)` stub until the harness lands — it polls, logs,
+//! fail-safe `TODO(#857)` stub until the harness lands — it polls, logs,
 //! and creates no state.
 
 use bth_bridge_core::{SolanaCommitment, SolanaConfig};
@@ -44,7 +44,7 @@ use crate::{db::Database, engine::ShutdownSignal};
 const POLL_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Compute the Anchor event discriminator: the first 8 bytes of
-/// `sha256("event:<Name>")`. Consumed by the #828 transport wiring.
+/// `sha256("event:<Name>")`. Consumed by the #857 transport wiring.
 #[allow(dead_code)]
 pub fn anchor_event_discriminator(event_name: &str) -> [u8; 8] {
     let mut hasher = Sha256::new();
@@ -57,7 +57,7 @@ pub fn anchor_event_discriminator(event_name: &str) -> [u8; 8] {
 }
 
 /// A decoded `BridgeBurnEvent` from the wBTH program. Consumed by the
-/// #828 transport wiring.
+/// #857 transport wiring.
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SolanaBurn {
@@ -82,7 +82,7 @@ pub struct SolanaBurn {
 /// ```
 ///
 /// Returns `None` on a wrong discriminator, truncation, trailing bytes,
-/// or a non-UTF-8 address. Consumed by the #828 transport wiring.
+/// or a non-UTF-8 address. Consumed by the #857 transport wiring.
 #[allow(dead_code)]
 pub fn parse_bridge_burn_event(data: &[u8]) -> Option<SolanaBurn> {
     let expected = anchor_event_discriminator("BridgeBurnEvent");
@@ -184,7 +184,7 @@ impl SolanaWatcher {
 
     /// Poll for burn events.
     ///
-    /// TODO(#828): wire the RPC transport (needs the `solana-client`
+    /// TODO(#857): wire the RPC transport (needs the `solana-client`
     /// stack, deferred as in `mint::solana`):
     /// 1. Load the resume slot from `db.get_cursor(Chain::Solana)`.
     /// 2. `getSignaturesForAddress(SolanaConfig::wbth_program)` at FINALIZED
@@ -205,7 +205,7 @@ impl SolanaWatcher {
     /// Fail-safe: until wired, this creates no state.
     async fn poll_for_burns(&self) {
         debug!(
-            "Solana watcher idle: burn scan transport for program {} pending #828",
+            "Solana watcher idle: burn scan transport for program {} pending #857",
             self.config.wbth_program
         );
     }

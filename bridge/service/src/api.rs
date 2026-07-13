@@ -57,7 +57,7 @@ pub struct ReserveProofResponse {
     pub locked_reserve: u64,
     /// Verified wBTH totalSupply on Ethereum, picocredits.
     pub eth_supply: Option<u64>,
-    /// Verified wBTH supply on Solana, picocredits (pending #828).
+    /// Verified wBTH supply on Solana, picocredits (pending #853).
     pub sol_supply: Option<u64>,
     /// Σ of the verified supplies, picocredits.
     pub total_wrapped: Option<u64>,

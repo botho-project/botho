@@ -38,7 +38,7 @@
 //! The deterministic scan/match/gate/dedup pipeline is implemented and
 //! tested against [`BthChainClient`]. The live transport (`ws_url`
 //! NewBlock subscription + `view_key_file` stealth scanning + commitment
-//! opening) is a fail-safe `TODO(#828)` stub: until it is wired, the
+//! opening) is a fail-safe `TODO(#856)` stub: until it is wired, the
 //! watcher polls, logs, and creates no state.
 
 use async_trait::async_trait;
@@ -99,7 +99,7 @@ pub trait BthChainClient: Send + Sync {
 
 /// Live transport against a BTH node.
 ///
-/// TODO(#828): implement against `BthConfig::ws_url` — subscribe to
+/// TODO(#856): implement against `BthConfig::ws_url` — subscribe to
 /// NewBlock, and for each block run the view-key stealth scan
 /// (`view_key_file`) over outputs, verify the Pedersen commitment opening
 /// to reveal the amount (ADR 0004), read the output's `ClusterTagVector`
@@ -122,13 +122,13 @@ impl NodeBthClient {
 impl BthChainClient for NodeBthClient {
     async fn tip_height(&self) -> Result<u64, WatchError> {
         Err(WatchError::NotImplemented(
-            "BTH node websocket transport (ws_url NewBlock subscription) pending #828".to_string(),
+            "BTH node websocket transport (ws_url NewBlock subscription) pending #856".to_string(),
         ))
     }
 
     async fn block_at(&self, _height: u64) -> Result<Option<BthBlock>, WatchError> {
         Err(WatchError::NotImplemented(
-            "BTH block fetch + view-key stealth scan pending #828".to_string(),
+            "BTH block fetch + view-key stealth scan pending #856".to_string(),
         ))
     }
 }

@@ -149,7 +149,7 @@ pub struct ReserveSnapshot {
     /// the supply could not be verified this pass.
     pub eth_supply: Option<u64>,
     /// On-chain wBTH supply on Solana (picocredits), `None` when the
-    /// supply could not be verified this pass (transport pending #828).
+    /// supply could not be verified this pass (transport pending #853).
     pub sol_supply: Option<u64>,
     /// Σ(verified wrapped supply) − Σ(locked backing of verified chains).
     pub drift: i64,

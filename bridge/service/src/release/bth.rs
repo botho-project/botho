@@ -26,13 +26,13 @@
 //!   satisfiable by the configured signer set.
 //!
 //! The RPC-dependent bodies (reserve UTXO scan, transaction construction,
-//! CLSAG signing, `tx_submit`, confirmation polling) are `TODO(#828)` stubs
+//! CLSAG signing, `tx_submit`, confirmation polling) are `TODO(#856)` stubs
 //! returning [`ReleaseError::NotImplemented`] — they need a live BTH node
 //! and the wallet transaction-builder stack, wired and validated end to end
-//! by the #828 test harness. Each stub documents the exact pipeline it must
-//! implement; the engine-side exactly-once machinery (release claims,
-//! record-before-broadcast, submit/confirm split) is fully live and tested
-//! against a mock releaser.
+//! in #856 (extending the #828 fork-test harness pattern). Each stub documents
+//! the exact pipeline it must implement; the engine-side exactly-once machinery
+//! (release claims, record-before-broadcast, submit/confirm split) is fully
+//! live and tested against a mock releaser.
 
 use async_trait::async_trait;
 use bth_bridge_core::{BridgeOrder, BthConfig, ReleaseAuthorization};
@@ -153,7 +153,7 @@ pub fn validate_release_attestation(
 ///
 /// See the module docs: attestation verification and configuration
 /// validation are live; transaction construction / submission /
-/// confirmation are `TODO(#828)` stubs.
+/// confirmation are `TODO(#856)` stubs.
 pub struct BthReleaser {
     config: BthConfig,
     /// Parsed federation verifying keys (from `bth.release_signers`).
@@ -236,7 +236,7 @@ impl Releaser for BthReleaser {
         // this exact order id, amount, and recipient (ADR 0002).
         validate_release_attestation(order, auth, &self.federation, self.config.release_threshold)?;
 
-        // TODO(#828): construct and sign the release transaction against a
+        // TODO(#856): construct and sign the release transaction against a
         // live BTH node. The pipeline (mirroring the web wallet's
         // send flow in web/packages/wasm-signer/src/send.ts and
         // botho/src/commands/send.rs):
@@ -268,20 +268,20 @@ impl Releaser for BthReleaser {
         //      before the first broadcast so a crash after signing resumes with the
         //      same signed tx and never re-signs with new inputs (double-spend risk).
         Err(ReleaseError::NotImplemented(
-            "BTH release tx construction pending #824 (federation signing) and #828 \
+            "BTH release tx construction pending #824 (federation signing) and #856 \
              (live-node wallet-send wiring)"
                 .to_string(),
         ))
     }
 
     async fn broadcast(&self, _prepared: &PreparedRelease) -> Result<(), ReleaseError> {
-        // TODO(#828): submit via the node's `tx_submit` JSON-RPC
+        // TODO(#856): submit via the node's `tx_submit` JSON-RPC
         // (botho/src/rpc/mod.rs) at self.config.rpc_url. Idempotent: an
         // "already known" / duplicate-key-image-for-the-same-tx rejection of
         // our OWN recorded hash is success (the tx was submitted before a
         // restart).
         Err(ReleaseError::NotImplemented(
-            "BTH tx_submit wiring pending #828".to_string(),
+            "BTH tx_submit wiring pending #856".to_string(),
         ))
     }
 
@@ -290,7 +290,7 @@ impl Releaser for BthReleaser {
         _order: &BridgeOrder,
         _dest_tx: &str,
     ) -> Result<ReleaseConfirmation, ReleaseError> {
-        // TODO(#828): poll the node for the tx's block inclusion and depth:
+        // TODO(#856): poll the node for the tx's block inclusion and depth:
         //   - depth >= self.config.release_confirmations_required (0 = SCP
         //     externalization finality: in-a-block == final) -> Confirmed.
         //   - not yet included -> Pending { confirmations }.
@@ -301,7 +301,7 @@ impl Releaser for BthReleaser {
         //     on-chain order-id guard, so re-signing while the old tx could still land
         //     risks a double release.
         Err(ReleaseError::NotImplemented(
-            "BTH confirmation polling pending #828".to_string(),
+            "BTH confirmation polling pending #856".to_string(),
         ))
     }
 }
@@ -573,7 +573,7 @@ mod tests {
             Err(ReleaseError::Attestation(_))
         ));
 
-        // A valid attestation reaches the #828 construction stub.
+        // A valid attestation reaches the #856 construction stub.
         let auth = signed_auth(&order, &[&k1, &k2], 2);
         assert!(matches!(
             releaser.prepare_release(&order, &auth).await,

@@ -17,7 +17,7 @@
 //! envelopes mirroring the operator-signed-action machinery
 //! (`botho/src/operator_action.rs`, P4.4), aggregated to the federation
 //! threshold by [`AttestationSet`]. Signature *collection over the network*
-//! between federation members is TODO(#828); everything cryptographic —
+//! between federation members is TODO(#858); everything cryptographic —
 //! signing, verification, replay rejection, order binding, thresholding —
 //! is implemented here and in `bridge/service/src/attestation.rs`.
 

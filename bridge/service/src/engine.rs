@@ -963,7 +963,7 @@ impl OrderProcessor {
         )?;
 
         // Build + threshold-sign (no broadcast yet). Nothing was recorded
-        // in the claim, so a failure here (including the #828
+        // in the claim, so a failure here (including the #856
         // NotImplemented stub) leaves the order BurnConfirmed for a clean
         // retry — no reserve funds have moved.
         let prepared = releaser

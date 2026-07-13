@@ -31,7 +31,7 @@ pub enum MintError {
     Attestation(String),
     /// RPC / network failure (retryable).
     Rpc(String),
-    /// Functionality not yet wired up (Solana RPC bodies, see #828).
+    /// Functionality not yet wired up (Solana RPC bodies, see #857).
     NotImplemented(String),
 }
 
