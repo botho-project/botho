@@ -176,6 +176,10 @@ pub fn build_bridge_mint_instruction(
     }
 }
 
+/// Byte offset of the `mint_authority: Pubkey` field inside the `Bridge`
+/// account: it is the first field after the 8-byte Anchor discriminator.
+pub const BRIDGE_MINT_AUTHORITY_OFFSET: usize = 8;
+
 /// Byte offset of the `mint: Pubkey` field inside the `Bridge` account:
 /// 8-byte Anchor discriminator + mint_authority(32) + admin_authority(32) +
 /// pauser_authority(32).
@@ -193,6 +197,32 @@ pub fn parse_bridge_mint(data: &[u8]) -> Result<Pubkey, MintError> {
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&data[BRIDGE_MINT_OFFSET..end]);
     Ok(Pubkey(arr))
+}
+
+/// Extract the `mint_authority` pubkey from raw `Bridge` account data
+/// (#850 layout). Bounds-checked exactly like [`parse_bridge_mint`] — never a
+/// truncated read.
+pub fn parse_bridge_mint_authority(data: &[u8]) -> Result<Pubkey, MintError> {
+    let end = BRIDGE_MINT_AUTHORITY_OFFSET + 32;
+    if data.len() < end {
+        return Err(MintError::Rpc(format!(
+            "bridge account too small ({} bytes) to hold the mint_authority field",
+            data.len()
+        )));
+    }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&data[BRIDGE_MINT_AUTHORITY_OFFSET..end]);
+    Ok(Pubkey(arr))
+}
+
+/// Pure comparison at the heart of the ADR-0002 startup custody guard: the
+/// on-chain `mint_authority` being byte-equal to this node's local signing
+/// key means the mint authority is a lone hot key, NOT a multisig — a single
+/// compromised relayer key could then mint, bypassing the federation.
+///
+/// Returns `true` when the configuration is unsafe (authority == local key).
+pub fn mint_authority_is_local_key(mint_authority: &Pubkey, local_signer: &Pubkey) -> bool {
+    mint_authority.0 == local_signer.0
 }
 
 /// Solana minting backend. Live-wired per #857 (see module docs).
@@ -282,6 +312,94 @@ impl SolMinter {
                 ))
             })?;
         parse_bridge_mint(&data)
+    }
+
+    /// ADR-0002 startup custody guard: read the on-chain `Bridge` account's
+    /// `mint_authority` and verify it is NOT this node's own local signing key.
+    ///
+    /// A single-key `mint_authority` (equal to the local `keypair_file` pubkey)
+    /// bypasses the whole federation custody model on Solana — a lone
+    /// compromised relayer key could mint, because the on-chain program only
+    /// checks that the presented signer *equals* `bridge.mint_authority` and
+    /// the `t`-of-`n` threshold lives inside the multisig. In production the
+    /// authority must be a distinct SPL/Squads multisig.
+    ///
+    /// Behavior:
+    /// - Watch-only mode (no local signer) → nothing to compare, returns `Ok`.
+    /// - RPC/parse failure → non-fatal: the guarded property is a static
+    ///   mis-init, re-checkable next boot, so a transient RPC blip must not
+    ///   wedge startup. Logs a warning and returns `Ok`.
+    /// - Authority == local key → single-key authority detected. In a
+    ///   production posture ([`SolanaConfig::requires_multisig_authority`])
+    ///   this is a HARD error; otherwise a prominent warning.
+    /// - Authority != local key → the safe path, returns `Ok` silently.
+    pub async fn verify_mint_authority_is_not_local_key(&self) -> Result<(), MintError> {
+        let local_signer = match self.signer.as_ref().map(|(_, pk)| pk) {
+            Some(pk) => pk,
+            None => {
+                debug!("solana mint-authority guard: watch-only mode (no keypair_file), skipping");
+                return Ok(());
+            }
+        };
+
+        // Reuse the exact fetch resolve_mint uses; treat any RPC/parse failure
+        // as non-fatal for the guard (log + continue).
+        let data = match self
+            .rpc
+            .get_account_data(&self.bridge_pda.to_base58(), "finalized")
+            .await
+        {
+            Ok(Some(data)) => data,
+            Ok(None) => {
+                warn!(
+                    "solana mint-authority guard: bridge account {} not found \
+                     (is the program initialized?); skipping the custody check",
+                    self.bridge_pda.to_base58()
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                warn!(
+                    "solana mint-authority guard: could not fetch bridge account ({}); \
+                     skipping the custody check (re-checked next startup)",
+                    e
+                );
+                return Ok(());
+            }
+        };
+
+        let mint_authority = match parse_bridge_mint_authority(&data) {
+            Ok(pk) => pk,
+            Err(e) => {
+                warn!(
+                    "solana mint-authority guard: could not parse mint_authority ({}); \
+                     skipping the custody check",
+                    e
+                );
+                return Ok(());
+            }
+        };
+
+        if mint_authority_is_local_key(&mint_authority, local_signer) {
+            let msg = format!(
+                "solana bridge.mint_authority ({}) equals this node's local keypair_file key — \
+                 the mint authority is a SINGLE KEY, not a multisig. Per ADR 0002 it MUST be a \
+                 distinct SPL/Squads multisig; a lone compromised relayer key could otherwise \
+                 mint wBTH. Re-run `initialize` with a multisig mint_authority (see \
+                 contracts/solana/README.md deploy runbook).",
+                mint_authority.to_base58()
+            );
+            if self.config.requires_multisig_authority() {
+                return Err(MintError::Config(msg));
+            }
+            warn!("{}", msg);
+        } else {
+            debug!(
+                "solana mint-authority guard: on-chain mint_authority is distinct from the local \
+                 key (custody OK)"
+            );
+        }
+        Ok(())
     }
 }
 
@@ -655,9 +773,21 @@ mod tests {
 
     impl MockRpc {
         fn with_mint(mint: Pubkey) -> Self {
-            let mut data = vec![0u8; BRIDGE_MINT_OFFSET];
-            data.extend_from_slice(&mint.0);
+            Self::with_authorities(Pubkey([0u8; 32]), mint)
+        }
+
+        /// Build a mock seeding both the `mint_authority` (bytes [8..40]) and
+        /// the `mint` field of the on-chain `Bridge` account.
+        fn with_authorities(mint_authority: Pubkey, mint: Pubkey) -> Self {
+            // discriminator(8) || mint_authority(32) || admin(32) ||
+            // pauser(32) || mint(32) || tail
+            let mut data = vec![0u8; BRIDGE_MINT_AUTHORITY_OFFSET];
+            data.extend_from_slice(&mint_authority.0); // [8..40]
+            data.extend_from_slice(&[0u8; 32]); // admin_authority
+            data.extend_from_slice(&[0u8; 32]); // pauser_authority
+            data.extend_from_slice(&mint.0); // mint
             data.extend_from_slice(&[0u8; 100]);
+            debug_assert_eq!(data.len(), BRIDGE_MINT_OFFSET + 32 + 100);
             Self {
                 sent: Mutex::new(Vec::new()),
                 send_error: Mutex::new(None),
@@ -885,5 +1015,119 @@ mod tests {
     async fn test_send_transaction_base64_wire_is_standard() {
         // Guards the base64 encoding sendTransaction receives.
         assert_eq!(base64_encode(&[0, 0, 0]), "AAAA");
+    }
+
+    // ------------------------------------------------------------------
+    // ADR-0002 mint-authority custody guard (#879)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_bridge_mint_authority_well_formed() {
+        let authority = Pubkey([0x77u8; 32]);
+        let mut data = vec![0u8; BRIDGE_MINT_AUTHORITY_OFFSET];
+        data.extend_from_slice(&authority.0);
+        data.extend_from_slice(&[0u8; 200]);
+        assert_eq!(parse_bridge_mint_authority(&data).unwrap().0, authority.0);
+    }
+
+    #[test]
+    fn test_parse_bridge_mint_authority_rejects_truncated() {
+        // One byte short of the 40-byte minimum: must error, never truncate.
+        let data = vec![0u8; BRIDGE_MINT_AUTHORITY_OFFSET + 31];
+        assert!(matches!(
+            parse_bridge_mint_authority(&data),
+            Err(MintError::Rpc(_))
+        ));
+    }
+
+    #[test]
+    fn test_mint_authority_is_local_key_pure_comparison() {
+        let key = Pubkey([9u8; 32]);
+        let other = Pubkey([10u8; 32]);
+        // Equal bytes => single-key authority (unsafe).
+        assert!(mint_authority_is_local_key(&key, &key));
+        // Differing bytes => distinct authority (safe).
+        assert!(!mint_authority_is_local_key(&key, &other));
+    }
+
+    #[tokio::test]
+    async fn test_guard_flags_single_key_authority_warn_mode() {
+        // Authority == local key, non-production posture (no mint_signers):
+        // warn-only, so the guard returns Ok.
+        let (sk, pk) = test_signer();
+        let rpc = Arc::new(MockRpc::with_authorities(pk, Pubkey([0x33u8; 32])));
+        let minter = SolMinter::with_parts(test_config(), rpc, Some((sk, pk))).unwrap();
+        assert!(minter
+            .verify_mint_authority_is_not_local_key()
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_guard_hard_fails_single_key_authority_strict_mode() {
+        // Authority == local key AND a production posture (mint_signers +
+        // threshold configured): the guard must hard-fail.
+        let (sk, pk) = test_signer();
+        let rpc = Arc::new(MockRpc::with_authorities(pk, Pubkey([0x33u8; 32])));
+        let mut config = test_config();
+        config.mint_signers = vec![Pubkey([1u8; 32]).to_base58()];
+        config.mint_threshold = 1;
+        assert!(config.requires_multisig_authority());
+        let minter = SolMinter::with_parts(config, rpc, Some((sk, pk))).unwrap();
+        assert!(matches!(
+            minter.verify_mint_authority_is_not_local_key().await,
+            Err(MintError::Config(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_guard_passes_when_authority_differs() {
+        // Authority != local key: safe, even in strict mode.
+        let (sk, pk) = test_signer();
+        let multisig_authority = Pubkey([0x55u8; 32]);
+        let rpc = Arc::new(MockRpc::with_authorities(
+            multisig_authority,
+            Pubkey([0x33u8; 32]),
+        ));
+        let mut config = test_config();
+        config.mint_signers = vec![Pubkey([1u8; 32]).to_base58()];
+        config.mint_threshold = 1;
+        let minter = SolMinter::with_parts(config, rpc, Some((sk, pk))).unwrap();
+        assert!(minter
+            .verify_mint_authority_is_not_local_key()
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_guard_skips_in_watch_only_mode() {
+        // No local signer: nothing to compare, guard is a no-op even if the
+        // on-chain authority happens to match some key.
+        let rpc = Arc::new(MockRpc::with_authorities(
+            Pubkey([0x77u8; 32]),
+            Pubkey([0x33u8; 32]),
+        ));
+        let minter = SolMinter::with_parts(test_config(), rpc, None).unwrap();
+        assert!(minter
+            .verify_mint_authority_is_not_local_key()
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_guard_non_fatal_on_missing_bridge_account() {
+        // RPC returns no account: non-fatal (re-checked next boot), returns Ok
+        // even in strict mode.
+        let (sk, pk) = test_signer();
+        let rpc = Arc::new(MockRpc::with_authorities(pk, Pubkey([0x33u8; 32])));
+        *rpc.bridge_account.lock().unwrap() = None;
+        let mut config = test_config();
+        config.mint_signers = vec![Pubkey([1u8; 32]).to_base58()];
+        config.mint_threshold = 1;
+        let minter = SolMinter::with_parts(config, rpc, Some((sk, pk))).unwrap();
+        assert!(minter
+            .verify_mint_authority_is_not_local_key()
+            .await
+            .is_ok());
     }
 }

@@ -52,7 +52,14 @@ impl BridgeEngine {
     /// bad contract address, ...) is skipped with a warning: deposits to
     /// that chain stay in `DepositConfirmed` until the config is fixed —
     /// they are never dropped or failed.
-    fn build_minters(config: &BridgeConfig) -> HashMap<Chain, Arc<dyn Minter>> {
+    ///
+    /// Returns the trait-object map used by the [`OrderProcessor`], plus a
+    /// typed [`SolMinter`] handle (when Solana minting is enabled) so the
+    /// startup path can invoke its async ADR-0002 mint-authority custody guard
+    /// without downcasting the `Arc<dyn Minter>`.
+    fn build_minters(
+        config: &BridgeConfig,
+    ) -> (HashMap<Chain, Arc<dyn Minter>>, Option<Arc<SolMinter>>) {
         let mut minters: HashMap<Chain, Arc<dyn Minter>> = HashMap::new();
 
         match EthMinter::new(config.ethereum.clone()) {
@@ -62,14 +69,19 @@ impl BridgeEngine {
             Err(e) => warn!("Ethereum minting disabled: {}", e),
         }
 
-        match SolMinter::new(config.solana.clone()) {
+        let sol_minter = match SolMinter::new(config.solana.clone()) {
             Ok(minter) => {
-                minters.insert(Chain::Solana, Arc::new(minter));
+                let handle = Arc::new(minter);
+                minters.insert(Chain::Solana, handle.clone());
+                Some(handle)
             }
-            Err(e) => warn!("Solana minting disabled: {}", e),
-        }
+            Err(e) => {
+                warn!("Solana minting disabled: {}", e);
+                None
+            }
+        };
 
-        minters
+        (minters, sol_minter)
     }
 
     /// Build the BTH reserve-release backend from configuration.
@@ -186,7 +198,7 @@ impl BridgeEngine {
             warn!("Bridge starting PAUSED (bridge.paused = true in config)");
         }
 
-        let minters = Self::build_minters(&self.config);
+        let (minters, sol_minter) = Self::build_minters(&self.config);
         let releaser = Self::build_releaser(&self.config);
         let (attestation, federation_provider, attestation_ok, attestation_detail) =
             Self::build_attestation_provider(&self.config);
@@ -222,6 +234,22 @@ impl BridgeEngine {
             releaser,
             attestation,
         );
+
+        // ADR-0002 custody guard (#879): before any order flows, verify the
+        // on-chain Solana `bridge.mint_authority` is a distinct multisig, not
+        // this node's own key. Warn by default; hard-fail in a production
+        // posture (`solana.mint_signers`/`mint_threshold` configured). RPC
+        // failures are non-fatal (re-checked next boot) so they never wedge
+        // startup.
+        if let Some(sol_minter) = sol_minter.as_ref() {
+            if let Err(e) = sol_minter.verify_mint_authority_is_not_local_key().await {
+                error!(
+                    "Solana mint-authority custody check failed (ADR 0002): {}",
+                    e
+                );
+                return Err(format!("Solana mint-authority custody check failed: {}", e));
+            }
+        }
 
         // Startup reconciliation (#843): roll stranded orders forward
         // exactly once BEFORE any watcher or processing loop runs (no

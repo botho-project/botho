@@ -38,6 +38,53 @@ Record the concrete multisig addresses + thresholds here per deployment:
 |---------|-----------|-----------|---------------|----------------|-----------------|
 | (none deployed yet) | | | | | |
 
+### Deploy / init runbook — checked custody gate (ADR 0002)
+
+The custody model above is a **deploy-time invariant** the on-chain program
+cannot self-enforce: `wbth` only checks that the presented signer *equals*
+`bridge.mint_authority`; the `t`-of-`n` threshold lives inside the multisig.
+So if `initialize` sets `mint_authority` to the relayer's own single key, a
+lone compromised key can mint. Turn the invariant into a step an operator ticks
+off at deploy:
+
+1. `[ ]` Create the **mint** multisig (distinct from admin/pauser). Its members
+   are the SCP validators' Ed25519 keys, threshold `t ≥ SCP safety threshold`.
+   - SPL Token multisig:
+     ```bash
+     spl-token create-multisig <THRESHOLD> <VALIDATOR_PUBKEY_1> <VALIDATOR_PUBKEY_2> ... <VALIDATOR_PUBKEY_N>
+     # → prints the mint multisig address; record it below.
+     ```
+   - or a [Squads](https://squads.so) multisig PDA (members = validator keys),
+     recording the resulting multisig PDA address.
+2. `[ ]` Create the **admin** and **pauser** multisigs the same way (each
+   distinct from the mint multisig and from each other).
+3. `[ ]` Call `initialize` passing the three authority pubkeys **explicitly**
+   (the payer receives no standing role):
+   ```bash
+   anchor run initialize -- \
+     --mint-authority   <MINT_MULTISIG>   \
+     --admin-authority  <ADMIN_MULTISIG>  \
+     --pauser-authority <PAUSER_MULTISIG>
+   # (or the equivalent `solana`/TS client call that invokes `initialize`
+   #  with those three pubkeys)
+   ```
+4. `[ ]` **Hard gate — verify before any value flows:** `mint_authority` is a
+   **DISTINCT multisig** (Squads PDA or SPL Token multisig), **NOT** the
+   relayer / `bridge.solana.keypair_file` key, **and NOT** `admin_authority`.
+   The bridge service also enforces this at startup: it reads the on-chain
+   `mint_authority` and, in a production posture
+   (`solana.mint_signers`/`mint_threshold` configured), **fails to start** if it
+   equals this node's local key (warns otherwise) — see
+   `bridge/service/src/mint/solana.rs`
+   (`verify_mint_authority_is_not_local_key`, #879).
+5. `[ ]` Record the resulting addresses + thresholds in the per-deployment table
+   above (Program ID / wBTH mint / Mint multisig / Admin multisig / Pauser
+   multisig).
+6. `[ ]` Finalize the BPF upgrade authority (`--final`) before mainnet value
+   flows — see [Upgradeability](#upgradeability--immutable-at-deploy-bpf-upgrade-authority-revoked)
+   below. This custody gate and the upgrade-authority gate are the two deploy
+   gates that must both be closed before mainnet.
+
 ### Replay-proof, order-bound minting
 
 `bridge_mint(amount, order_id)` takes a 32-byte `order_id` (the bridge order
