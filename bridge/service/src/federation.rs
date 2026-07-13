@@ -205,6 +205,32 @@ pub async fn attest(
 
     // 3. Full fail-closed verify pipeline (the endpoint adds NO trust).
     let outcome = state.provider.submit_attestation(&envelope, &order);
+
+    // 3a. Equivocation detection (detection-only; funds behavior unchanged).
+    // A VERIFIED envelope from a known signer that conflicts with what that
+    // signer already attested for this order (different payload digest / Safe
+    // nonce) is a governance-relevant Byzantine signal — audit it distinctly
+    // from replayed_nonce / wrong_order / invalid_payload. The threshold set
+    // is unchanged: an equivocating signer still counts once.
+    if outcome.equivocation {
+        let signer = outcome.signer_key_id.as_deref().unwrap_or("<unknown>");
+        let action = outcome.action.as_deref().unwrap_or("<unknown>");
+        let details = format!(
+            "federation signer equivocated: signer={signer} order={} action={action} \
+             (conflicting attestation bytes for one order; funds neutralized, still counts once)",
+            order.id
+        );
+        warn!("attestation equivocation detected: {details}");
+        if let Err(e) = state
+            .db
+            .log_audit(Some(&order.id), "attestation_equivocation", &details)
+        {
+            // Audit is observability; a failed insert must not change the
+            // funds-safe HTTP verdict below.
+            warn!("failed to log attestation_equivocation audit event: {e}");
+        }
+    }
+
     let status = if outcome.accepted {
         StatusCode::OK
     } else {
@@ -1006,6 +1032,171 @@ mod federation_transport_tests {
         assert_eq!(
             provider.distinct_signers_for_test(order.id, "bridge.release_bth"),
             0
+        );
+
+        let _ = sd.send(());
+        let _ = srv.await;
+    }
+
+    // -- Equivocation detection (#859) --------------------------------------
+
+    /// Build an Ethereum-mint `AttestationKind` for `order` at `safe_nonce`
+    /// (the private `mint_kind` is not exposed; the fields are fully
+    /// determined by the order so we construct it directly).
+    fn eth_mint_kind(order: &BridgeOrder, safe_nonce: u64) -> bth_bridge_core::AttestationKind {
+        bth_bridge_core::AttestationKind::MintWbth {
+            dest_chain: order.dest_chain,
+            dest_address: order.dest_address.clone(),
+            amount: order.net_amount(),
+            order_id: order.id,
+            source_tx: order.source_tx.clone().unwrap(),
+            safe_nonce: Some(safe_nonce),
+        }
+    }
+
+    #[tokio::test]
+    async fn endpoint_audits_equivocation_exactly_once_per_signer() {
+        // A VERIFIED Safe owner that already counted for an order then submits
+        // a CONFLICTING attestation (a DIFFERENT Safe nonce for the same
+        // order) — the classic equivocation move. It must:
+        //   * raise a distinct `attestation_equivocation` audit event,
+        //   * fire that alarm EXACTLY ONCE per signer (repeated conflicts do not spam
+        //     the log),
+        //   * NEVER inflate the threshold set (funds-safety unchanged), and
+        //   * not fire for benign identical re-sends or for a second honest signer.
+        use crate::attestation::sign_attestation_secp256k1;
+
+        const N7: u64 = 7;
+        let (oa, ob) = (eth_key(11), eth_key(22));
+        let owners = vec![oa.address(), ob.address()];
+        let safe = Address::repeat_byte(0x5a);
+        let wbth = Address::repeat_byte(0xeb);
+        let chain_id = 1u64;
+        let order = eth_mint_order();
+
+        let provider = Arc::new(FederationAttestationProvider::new_eth_for_test(
+            &owners,
+            2,
+            chain_id,
+            safe,
+            wbth,
+            Arc::new(FixedNonce(N7)),
+            oa.clone(),
+        ));
+
+        // Hold a clone of the DB the endpoint audits into so we can count rows.
+        let db = db_with_order(&order);
+        let audit_db = db.clone();
+        let (url, sd, srv) = spawn_endpoint(provider.clone(), db).await;
+
+        let now = chrono::Utc::now().timestamp().max(0) as u64;
+        let sign = |safe_nonce: u64, replay_nonce: &str| {
+            let kind = eth_mint_kind(&order, safe_nonce);
+            sign_attestation_secp256k1(
+                &kind,
+                &oa,
+                chain_id,
+                safe,
+                wbth,
+                replay_nonce,
+                now,
+                now + 120,
+            )
+            .unwrap()
+        };
+
+        // 1) Owner A attests at Safe nonce 7 — accepted, counts once.
+        let e_ok = sign(N7, "eq-ok");
+        let (status, body) =
+            post_attest(&url, Some(AUTH), &serde_json::to_string(&e_ok).unwrap()).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(
+            provider.distinct_signers_for_test(order.id, "bridge.mint_wbth"),
+            1
+        );
+        assert_eq!(
+            audit_db
+                .count_audit_action("attestation_equivocation")
+                .unwrap(),
+            0
+        );
+
+        // 2) Owner A EQUIVOCATES: same order, CONFLICTING Safe nonce 8. The set refuses
+        //    to combine it (invalid_payload) AND flags it as an equivocation — one
+        //    audit row.
+        let e_conflict = sign(8, "eq-conflict-1");
+        let (status, body) = post_attest(
+            &url,
+            Some(AUTH),
+            &serde_json::to_string(&e_conflict).unwrap(),
+        )
+        .await;
+        assert_eq!(status, 409, "{body}");
+        assert!(body.contains("invalid_payload"), "{body}");
+        // Still exactly one counted signer — the conflict never counts.
+        assert_eq!(
+            provider.distinct_signers_for_test(order.id, "bridge.mint_wbth"),
+            1
+        );
+        assert_eq!(
+            audit_db
+                .count_audit_action("attestation_equivocation")
+                .unwrap(),
+            1
+        );
+
+        // 3) Owner A keeps equivocating (Safe nonce 9): still refused, but the alarm
+        //    fires EXACTLY ONCE per signer — no second audit row.
+        let e_conflict2 = sign(9, "eq-conflict-2");
+        let (status, _body) = post_attest(
+            &url,
+            Some(AUTH),
+            &serde_json::to_string(&e_conflict2).unwrap(),
+        )
+        .await;
+        assert_eq!(status, 409);
+        assert_eq!(
+            audit_db
+                .count_audit_action("attestation_equivocation")
+                .unwrap(),
+            1,
+            "equivocation must be audited exactly once per signer"
+        );
+
+        // 4) Owner A benignly re-sends its ORIGINAL nonce-7 attestation bytes (fresh
+        //    anti-replay nonce): a benign duplicate, NOT an alarm.
+        let e_benign = sign(N7, "eq-benign");
+        let (status, body) =
+            post_attest(&url, Some(AUTH), &serde_json::to_string(&e_benign).unwrap()).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(
+            audit_db
+                .count_audit_action("attestation_equivocation")
+                .unwrap(),
+            1,
+            "a benign identical re-send must not raise the equivocation alarm"
+        );
+
+        // 5) A DIFFERENT honest owner (B) attests at Safe nonce 7 — accepted, reaches
+        //    threshold, and raises NO equivocation alarm.
+        let e_b = {
+            let kind = eth_mint_kind(&order, N7);
+            sign_attestation_secp256k1(&kind, &ob, chain_id, safe, wbth, "eq-b", now, now + 120)
+                .unwrap()
+        };
+        let (status, body) =
+            post_attest(&url, Some(AUTH), &serde_json::to_string(&e_b).unwrap()).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(
+            provider.distinct_signers_for_test(order.id, "bridge.mint_wbth"),
+            2
+        );
+        assert_eq!(
+            audit_db
+                .count_audit_action("attestation_equivocation")
+                .unwrap(),
+            1,
+            "two distinct honest signers must not trigger the equivocation alarm"
         );
 
         let _ = sd.send(());

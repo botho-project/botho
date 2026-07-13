@@ -28,7 +28,7 @@ use crate::{
     attestation::{
         attestation_signed_message, canonical_attestation_envelope, release_payload_digest,
         sign_attestation_ed25519, AttestationEnvelope, AttestationKind, AttestationRejectReason,
-        AttestationSet, AttestationSignature, ATTEST_DOMAIN_BTH, ATTEST_DOMAIN_ETH,
+        AttestationSet, AttestationSignature, InsertOutcome, ATTEST_DOMAIN_BTH, ATTEST_DOMAIN_ETH,
         ATTEST_DOMAIN_SOL, MINT_ATTESTATION_DOMAIN_TAG_ETH, MINT_ATTESTATION_DOMAIN_TAG_SOL,
         RELEASE_ATTESTATION_DOMAIN_TAG,
     },
@@ -238,13 +238,15 @@ fn equivocating_signer_cannot_inflate_the_distinct_signer_count() {
     // count as two toward the threshold. The aggregation primitive
     // deduplicates by signer identity, so the second submission counts zero.
     //
-    // NOTE ON DETECTION (follow-up filed): `AttestationSet` is *resistant* to
+    // NOTE ON DETECTION (#859): `AttestationSet` is *resistant* to
     // equivocation (a single malicious signer can never move the threshold),
-    // but it does not *flag* the equivocation as an auditable event — it
-    // silently keeps the first submission. Active detection (raising an
-    // equivocation alarm when a signer presents conflicting bytes for the
-    // same order id) is tracked as a hardening follow-up. See the threat
-    // model doc: docs/security/bridge-threat-model.md.
+    // and now also *classifies* it — `insert_classified` reports
+    // `Equivocation` when a counted signer re-sends CONFLICTING bytes so the
+    // service can raise an `attestation_equivocation` audit alarm. This test
+    // pins the funds-safe behavior (`insert` still returns `Ok(false)`, the
+    // count stays at 1);
+    // `equivocating_signer_is_classified_distinctly_from_a_benign_resend` below
+    // pins the new classification. See docs/security/bridge-threat-model.md.
     let sk = signing_key(5);
     let order = burn_order();
     let kind = release_kind(&order);
@@ -277,6 +279,59 @@ fn equivocating_signer_cannot_inflate_the_distinct_signer_count() {
         !set.is_threshold_met(2),
         "a single equivocating signer can never satisfy a 2-of-n threshold"
     );
+}
+
+#[test]
+fn equivocating_signer_is_classified_distinctly_from_a_benign_resend() {
+    // #859: the set must DETECT (not just neutralize) equivocation. A counted
+    // signer that re-sends IDENTICAL bytes is a benign duplicate; a counted
+    // signer that presents CONFLICTING payload bytes for the same
+    // (order, action) is an equivocation — a governance-relevant alarm. In
+    // BOTH cases the threshold is unchanged (still counts once): detection is
+    // observation only, so funds-safety is preserved.
+    let sk = signing_key(9);
+    let order = burn_order();
+    let kind = release_kind(&order);
+
+    let env = sign_attestation_ed25519(&kind, &sk, "eq-c", now(), now() + 120).unwrap();
+    let parsed = env.verify_and_parse_ed25519(&sk.verifying_key()).unwrap();
+
+    let mut set = AttestationSet::for_attestation(&parsed);
+    let real_sig = AttestationSignature {
+        signer: sk.verifying_key().as_bytes().to_vec(),
+        signature: hex::decode(&env.payload_signature_hex).unwrap(),
+    };
+
+    // First submission: a new distinct signer counts.
+    assert_eq!(
+        set.insert_classified(&parsed, real_sig.clone()),
+        Ok(InsertOutcome::NewSigner),
+    );
+    assert_eq!(set.distinct_signers(), 1);
+
+    // Benign re-send: same signer, IDENTICAL bytes. Not an alarm, counts once.
+    assert_eq!(
+        set.insert_classified(&parsed, real_sig.clone()),
+        Ok(InsertOutcome::DuplicateBenign),
+    );
+    assert_eq!(set.distinct_signers(), 1);
+
+    // Equivocation: same signer, CONFLICTING payload signature bytes.
+    let mut conflicting = real_sig.clone();
+    conflicting.signature[0] ^= 0xff;
+    assert_eq!(
+        set.insert_classified(&parsed, conflicting.clone()),
+        Ok(InsertOutcome::Equivocation),
+        "a counted signer presenting different payload bytes must be flagged as equivocation"
+    );
+
+    // Funds-safety invariant: the equivocation NEVER inflated the count and
+    // NEVER satisfied a 2-of-n threshold, and the funds-path `insert` still
+    // reports the neutralizing `Ok(false)` for the conflicting resubmission.
+    assert_eq!(set.distinct_signers(), 1);
+    assert!(!set.is_threshold_met(2));
+    assert_eq!(set.insert(&parsed, conflicting), Ok(false));
+    assert_eq!(set.distinct_signers(), 1);
 }
 
 #[test]
