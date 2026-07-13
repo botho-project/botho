@@ -8,8 +8,9 @@ It folds the open product decisions from the Botho vision epics
 [#458](https://github.com/botho-project/botho/issues/458)) into a sequenced roadmap,
 grounded in a 2024–2026 state-of-the-art research pass. The open roadmap items are
 **business/strategy** calls, not architecture — none needs more engineering to decide.
-Two of them (roadmap steps 1 and 3) are explicitly marked
-**`[OPEN — maintainer decision]`** below and must not be read as already-decided.
+Two of them (roadmap steps 1 and 3) were originally marked open and were **resolved by
+the maintainer on 2026-07-12** — see the `[RESOLVED …]` markers below and
+[#719](https://github.com/botho-project/botho/issues/719).
 
 Provenance: deep-research run `wf_0ccde072` (2026-07-07). Auto-synthesis was stubbed, so
 the load-bearing claims below were re-fetched and verified by hand — provenance is noted
@@ -127,9 +128,12 @@ composes with Finding 1 (framing away from "returns").
 
 ## 4. Proposed Roadmap Sequencing
 
-1. **`[OPEN — maintainer decision]` Decide the root: testnet-only vs. drive to mainnet.**
-   Everything else keys off this. Mode 1's economics are hollow on testnet. This is the
-   maintainer's call — this document records the options, not a decision.
+1. **`[RESOLVED 2026-07-12 — testnet-only for now]` Decide the root: testnet-only vs.
+   drive to mainnet.** Maintainer decision (recorded on
+   [#719](https://github.com/botho-project/botho/issues/719)): Botho stays
+   testnet-focused; the mainnet gates (#616 audit, #722 legal) remain parked with no
+   spend on engaging firms yet. During testnet there is **no promise to maintain the
+   network long-term** — the stated goal is to prove everything works.
 2. **If mainnet-bound**, the two real gates are now clear and tractable: (a) the
    **external audit** ([#616](https://github.com/botho-project/botho/issues/616) — all
    four technical blockers cleared this session), and (b) a **confirmatory legal read**
@@ -137,11 +141,15 @@ composes with Finding 1 (framing away from "returns").
    [#722](https://github.com/botho-project/botho/issues/722); scope it as "does our
    dedicated-compute + administrative-hosting + non-custodial-rewards structure sit
    within the 2025 SEC mining guidance, and are we MSB-exempt if non-custodial?").
-3. **`[OPEN — maintainer decision]` Reframe the product** per Finding 3: lead with
-   **Mode 2** (free phone-to-phone payments, village-host adoption); position **Mode 1**
-   as convenience hosting, not mining income (also de-risks Finding 1). This is a
-   product-strategy call for the maintainer — recorded here as a recommendation, not a
-   decision.
+3. **`[RESOLVED 2026-07-12 — open-network framing]` Reframe the product.** Maintainer
+   decision (recorded on [#719](https://github.com/botho-project/botho/issues/719)),
+   superseding this document's Mode-1/Mode-2 dichotomy: the network is open — anyone can
+   submit transactions through any node for free, and anyone can download botho and mine
+   from a home computer; the free tier is not a product mode, it is how the network
+   works. The hosted Node is a **convenience product**: always-on, a slightly better
+   security/privacy story (your own RPC endpoint), and one-click mining. No income
+   promises, but no excessive caution about plainly saying you can pay for hosting and
+   turn on mining.
 4. **Mobile custody upgrade** per Finding 2: passkey-gated Keychain backup as the
    near-term MVP wallet-recovery improvement; MPC/Shamir later. This is buildable now and
    independent of mainnet timing. Tracked as a follow-up issue (see
@@ -166,9 +174,9 @@ composes with Finding 1 (framing away from "returns").
 - **Mobile wallet recovery-UX issue (Finding 2: passkey-gated Keychain backup MVP)** —
   filed as its own `loom:triage` issue for later curation. This document records the
   research; the feature itself is future scoped work, not part of this record.
-- The two `[OPEN — maintainer decision]` roadmap items (steps 1 and 3) are the
-  maintainer's calls. This document records the research-grounded options and
-  recommendations; it does not resolve them.
+- The two formerly-open roadmap items (steps 1 and 3) were **resolved by the maintainer
+  on 2026-07-12** — see the inline `[RESOLVED …]` markers above and the decision record
+  on [#719](https://github.com/botho-project/botho/issues/719).
 
 ---
 
