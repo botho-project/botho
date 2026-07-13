@@ -22,7 +22,7 @@ import {
   saveSelectedIngress,
   loadSelectedIngress,
   loadSelectedNetwork,
-  validateRpcEndpoint,
+  validateRpcEndpointForNetwork,
   fetchNodeHealth,
   saveCustomNodeFromLink,
   loadCustomNodeFromLink,
@@ -237,14 +237,16 @@ export function NetworkProvider({ children }: { children: ReactNode }) {
     }))
 
     try {
-      // Validate the endpoint is reachable
-      const isValid = await validateRpcEndpoint(endpoint)
+      // Validate the endpoint: https shape, reachability, and network match.
+      // Shared by the manual picker path and the accepted `?rpc=` deep link so
+      // both enforce the same guardrails before persisting (#587).
+      const validation = await validateRpcEndpointForNetwork(endpoint)
 
-      if (!isValid) {
+      if (!validation.ok) {
         setState(s => ({
           ...s,
           isValidating: false,
-          validationError: 'Could not connect to endpoint',
+          validationError: validation.error,
         }))
         return false
       }

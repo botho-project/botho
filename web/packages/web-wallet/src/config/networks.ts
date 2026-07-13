@@ -9,6 +9,8 @@
  * regardless of which ingress is selected.
  */
 
+import { isValidRpcUrl } from '../lib/custom-rpc-link'
+
 export interface NetworkConfig {
   id: string
   name: string
@@ -148,6 +150,15 @@ export const NETWORKS: Record<string, NetworkConfig> = {
 export const DEFAULT_NETWORK_ID = 'testnet'
 
 /**
+ * The network identifier a custom RPC endpoint must report (via `node_getStatus`'s
+ * `network` field) to be adopted as the wallet's ingress. A node on any other
+ * network (e.g. `botho-mainnet`) is rejected so the user can't silently point the
+ * testnet wallet at a wrong-network node. Matches `networkForIngress`'s
+ * `networkId` for the built-in testnet ingress.
+ */
+export const EXPECTED_NETWORK_ID = 'botho-testnet'
+
+/**
  * Get network configuration by ID
  */
 export function getNetwork(id: string): NetworkConfig | undefined {
@@ -185,6 +196,11 @@ export interface NodeHealth {
   synced?: boolean
   /** Sync progress percentage (0-100). */
   syncProgress?: number
+  /**
+   * The network the node reports (e.g. `botho-testnet`), when online. Used to
+   * reject a custom endpoint that answers but is on a different network.
+   */
+  network?: string
 }
 
 /**
@@ -212,7 +228,12 @@ export async function fetchNodeHealth(endpoint: string): Promise<NodeHealth> {
     if (!response.ok) return { status: 'offline' }
 
     const json = (await response.json()) as {
-      result?: { chainHeight?: number; synced?: boolean; syncProgress?: number }
+      result?: {
+        chainHeight?: number
+        synced?: boolean
+        syncProgress?: number
+        network?: string
+      }
       error?: unknown
     }
     if (json.error || !json.result) return { status: 'offline' }
@@ -222,14 +243,73 @@ export async function fetchNodeHealth(endpoint: string): Promise<NodeHealth> {
       chainHeight: json.result.chainHeight,
       synced: json.result.synced,
       syncProgress: json.result.syncProgress,
+      network: json.result.network,
     }
   } catch {
     return { status: 'offline' }
   }
 }
 
+/** True for loopback hosts (localhost / 127.0.0.1), which are exempt from the
+ * network-match check so local-dev nodes reporting a non-testnet network name
+ * still work. Mirrors `classifyRpcHost`'s loopback-as-`known` treatment. */
+function isLoopbackHost(endpoint: string): boolean {
+  try {
+    const host = new URL(endpoint).hostname.toLowerCase()
+    return host === 'localhost' || host === '127.0.0.1'
+  } catch {
+    return false
+  }
+}
+
 /**
- * Validate that an RPC endpoint is reachable
+ * Outcome of validating a custom RPC endpoint before adoption. `ok: true` means
+ * the endpoint passed the HTTPS-shape, reachability, and network-match checks and
+ * is safe to persist; `ok: false` carries a user-facing `error` message.
+ */
+export type RpcEndpointValidation = { ok: true } | { ok: false; error: string }
+
+/**
+ * Validate a custom RPC endpoint before adopting it as the wallet's ingress.
+ *
+ * Applied identically to the manually-pasted picker path and the accepted `?rpc=`
+ * deep link (#587). Three gates, cheapest first:
+ *   1. HTTPS-shape: must be `https://` (or `http://localhost` for dev) — reuses
+ *      `isValidRpcUrl` so both entry paths share the deep link's scheme check.
+ *   2. Reachability: `node_getStatus` must answer.
+ *   3. Network match: the reported `network` must equal `EXPECTED_NETWORK_ID`
+ *      (`botho-testnet`), so a wrong-network node is rejected instead of silently
+ *      connecting. Loopback hosts are exempt (local dev nodes may report other
+ *      network names).
+ */
+export async function validateRpcEndpointForNetwork(
+  endpoint: string,
+): Promise<RpcEndpointValidation> {
+  if (!isValidRpcUrl(endpoint)) {
+    return { ok: false, error: 'Enter a valid https:// endpoint.' }
+  }
+
+  const health = await fetchNodeHealth(endpoint)
+  if (health.status !== 'online') {
+    return { ok: false, error: 'Could not connect to endpoint' }
+  }
+
+  if (!isLoopbackHost(endpoint) && health.network && health.network !== EXPECTED_NETWORK_ID) {
+    return {
+      ok: false,
+      error: `This node is on a different network (${health.network})`,
+    }
+  }
+
+  return { ok: true }
+}
+
+/**
+ * Validate that an RPC endpoint is reachable.
+ *
+ * @deprecated Prefer `validateRpcEndpointForNetwork`, which also enforces the
+ * HTTPS shape and network match. Retained for callers that only need a boolean
+ * reachability probe.
  */
 export async function validateRpcEndpoint(endpoint: string): Promise<boolean> {
   const health = await fetchNodeHealth(endpoint)

@@ -17,6 +17,31 @@ function HealthDot({ health }: { health: NodeHealth | undefined }) {
   return <div className={`w-2 h-2 rounded-full shrink-0 ${color}`} />
 }
 
+/**
+ * Truncate a custom endpoint down to a short host label for the collapsed
+ * trigger, e.g. `https://node-1tsb0k9x2q.testnet.botho.io/rpc` ->
+ * `node-1tsb0k….testnet.botho.io`. Only the first (leftmost) label is
+ * shortened, so the operator domain stays recognizable. Falls back to the raw
+ * endpoint when it cannot be parsed as a URL.
+ */
+function truncateCustomHost(endpoint: string): string {
+  let host: string
+  try {
+    host = new URL(endpoint).hostname
+  } catch {
+    return endpoint
+  }
+  const dot = host.indexOf('.')
+  if (dot === -1) {
+    // No domain suffix — truncate the bare host if it's long.
+    return host.length > 14 ? `${host.slice(0, 12)}…` : host
+  }
+  const first = host.slice(0, dot)
+  const rest = host.slice(dot) // includes leading '.'
+  const shortFirst = first.length > 12 ? `${first.slice(0, 10)}…` : first
+  return `${shortFirst}${rest}`
+}
+
 /** One-line health summary text for a node. */
 function healthLabel(health: NodeHealth | undefined): string {
   if (!health || health.status === 'checking') return 'Checking…'
@@ -94,9 +119,14 @@ export function NetworkSelector({ className = '' }: NetworkSelectorProps) {
     }
   }
 
-  // Label shown on the trigger button: the selected ingress node's name.
+  // Label shown on the trigger button: the selected ingress node's name, or the
+  // truncated host of the active custom endpoint when on a custom node so the
+  // collapsed trigger reflects WHICH node the wallet is talking to (not a
+  // generic "Custom RPC").
   const selectedNode = ingressNodes.find((n) => n.id === ingressId)
-  const triggerLabel = selectedNode?.name ?? (ingressId === 'custom' ? 'Custom RPC' : 'Node')
+  const triggerLabel =
+    selectedNode?.name ??
+    (ingressId === 'custom' ? truncateCustomHost(network.rpcEndpoint) : 'Node')
 
   return (
     <div className={`relative ${className}`} ref={dropdownRef}>

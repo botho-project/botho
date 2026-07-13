@@ -164,6 +164,41 @@ describe('custom-RPC deep link is gated by the NetworkProvider (#587)', () => {
     expect(localStorage.getItem('botho_custom_node_from_link')).toBe('node-x.testnet.botho.io')
   })
 
+  it('accept rejects a wrong-network node and leaves the prior node intact (#806)', async () => {
+    // The link's node answers node_getStatus but reports a different network.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          jsonrpc: '2.0',
+          id: 1,
+          result: { chainHeight: 1, synced: true, network: 'botho-mainnet' },
+        }),
+      })),
+    )
+    setSearch(rpcQuery('https://node-x.testnet.botho.io/rpc'))
+    render(
+      <NetworkProvider>
+        <Probe />
+      </NetworkProvider>,
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId('pending-host').textContent).toBe('node-x.testnet.botho.io'),
+    )
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('accept'))
+    })
+
+    // Validation failed on the network mismatch: prompt clears, but we stay on
+    // the prior default node and never persist the custom endpoint.
+    await waitFor(() => expect(screen.getByTestId('pending-host').textContent).toBe('none'))
+    expect(screen.getByTestId('ingress').textContent).toBe('seed')
+    expect(screen.getByTestId('from-link').textContent).toBe('none')
+    expect(localStorage.getItem('botho_custom_node_from_link')).toBeNull()
+  })
+
   it('revert returns to the default node and clears the marker', async () => {
     setSearch(rpcQuery('https://node-x.testnet.botho.io/rpc'))
     render(
