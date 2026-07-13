@@ -77,7 +77,7 @@ How does the bridge keep `Σ(wBTH outstanding) == locked BTH reserve` given that
 
 ## Implementation
 
-See #831 (the consensus settlement op: charge formula, tag-rewrite rule, inheritance-bound carve-out, lottery routing, ring-signature interaction) and #825 (reserve accounting / proof-of-reserves consuming the factor-1 invariant). The bridge deposit path (#824/#822) enforces factor-1 eligibility before minting.
+See #831 (the consensus settlement op: charge formula, tag-rewrite rule, inheritance-bound carve-out, lottery routing, ring-signature interaction) and #825 (reserve accounting / proof-of-reserves consuming the factor-1 invariant). The bridge deposit path (#823/#821) enforces factor-1 eligibility before minting.
 
 ## References
 

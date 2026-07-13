@@ -3,7 +3,7 @@
 **Status**: Accepted
 **Date**: 2026-07-13
 **Decision Makers**: Core Team
-**Related**: [Epic #816](https://github.com/botho-project/botho/issues/816), issues #817, #821, #826, #827; ADR 0003–0005
+**Related**: [Epic #816](https://github.com/botho-project/botho/issues/816), issues #817, #824, #826, #827; ADR 0003–0005
 
 ## Context
 
@@ -21,7 +21,7 @@ Who holds the threshold keys that authorize wBTH minting and BTH reserve release
 
 Concretely:
 
-- **BTH reserve release** is authorized by a t-of-n threshold of the validators' **Ed25519** node keys, reusing the operator-signed-action machinery shipped in P4.4 (`operator_action.rs` domain-separated envelopes, `operator_nonce.rs` reserve-then-apply replay protection, `rpc/operator.rs` audit log). See ADR-linked issue #821 for the attestation protocol.
+- **BTH reserve release** is authorized by a t-of-n threshold of the validators' **Ed25519** node keys, reusing the operator-signed-action machinery shipped in P4.4 (`operator_action.rs` domain-separated envelopes, `operator_nonce.rs` reserve-then-apply replay protection, `rpc/operator.rs` audit log). See ADR-linked issue #824 for the attestation protocol.
 - **Solana wBTH mint** is authorized by the same validators' **Ed25519** keys — Solana uses Ed25519 natively, so no new key type is required.
 - **Ethereum wBTH mint** requires **secp256k1**, which SCP node keys are not. Each validator therefore also operates a secp256k1 signer, and the Ethereum mint authority is a **Gnosis Safe** whose owners are those secp256k1 keys, holding `MINTER_ROLE` on `WrappedBTH.sol` (threshold-ECDSA/TSS is an acceptable alternative producing a single on-chain signature).
 - The **bridge threshold `t` is set no lower than the SCP safety threshold** — it must never be easier to move the reserve than to move consensus.
@@ -30,7 +30,7 @@ Concretely:
 
 ### Positive
 
-1. **Reuses an audited pattern.** The operator-signed-action envelope + nonce + audit-log design was security-reviewed in cycle-8; the attestation protocol (#821) mirrors it rather than inventing new signature-verification code.
+1. **Reuses an audited pattern.** The operator-signed-action envelope + nonce + audit-log design was security-reviewed in cycle-8; the attestation protocol (#824) mirrors it rather than inventing new signature-verification code.
 2. **Fewer distinct trust roots.** Users already trust the validator set for chain safety; no new federation membership/governance surface is introduced.
 3. **Natural Solana fit.** Validators sign Solana authorizations with their existing Ed25519 keys — the second chain adds little custody complexity (ADR 0005).
 
@@ -64,10 +64,10 @@ Concretely:
 
 ## Implementation
 
-See #821 (attestation/authorization protocol), #826 (contract-side threshold mint authority), and #827 (secp256k1 key provisioning + rotation in the ops runbook). Follow-on sub-decisions: exact `t` value and the Safe-vs-TSS choice for the Ethereum side.
+See #824 (attestation/authorization protocol), #826 (contract-side threshold mint authority), and #827 (secp256k1 key provisioning + rotation in the ops runbook). Follow-on sub-decisions: exact `t` value and the Safe-vs-TSS choice for the Ethereum side.
 
 ## References
 
-- Epic #816; issues #817, #821, #826, #827
+- Epic #816; issues #817, #824, #826, #827
 - `botho/src/operator_action.rs`, `botho/src/operator_nonce.rs`, `botho/src/rpc/operator.rs` (reused pattern)
 - ADR 0003 (peg), ADR 0004 (privacy), ADR 0005 (chain scope)

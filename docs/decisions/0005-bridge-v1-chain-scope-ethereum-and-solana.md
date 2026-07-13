@@ -32,7 +32,7 @@ Does bridge v1 launch Ethereum-only, or Ethereum and Solana together?
 
 ### Neutral
 
-1. Solana finality/commitment semantics differ from Ethereum confirmations; the watchers (#824) handle each chain's reorg/finality model separately.
+1. Solana finality/commitment semantics differ from Ethereum confirmations; the watchers (#823) handle each chain's reorg/finality model separately.
 2. If schedule pressure emerges, Ethereum can still ship first with Solana following — the decision commits to both in scope, not to simultaneous release under all conditions.
 
 ## Alternatives Considered
@@ -44,7 +44,7 @@ Does bridge v1 launch Ethereum-only, or Ethereum and Solana together?
 
 ## Implementation
 
-Ripples into #822 (mint on both chains), #823/#824 (release + watchers handle burns from either chain), #826 (harden both `WrappedBTH.sol` and the `wbth` Anchor program), #825 (two-chain peg invariant), #828/#829 (test both — EVM fork tests and Solana test-validator), and #830 (audit both, including an external audit of each token program).
+Ripples into #821 (mint on both chains), #822/#823 (release + watchers handle burns from either chain), #826 (harden both `WrappedBTH.sol` and the `wbth` Anchor program), #825 (two-chain peg invariant), #828/#829 (test both — EVM fork tests and Solana test-validator), and #830 (audit both, including an external audit of each token program).
 
 ## References
 

@@ -3,7 +3,7 @@
 **Status**: Accepted
 **Date**: 2026-07-13
 **Decision Makers**: Core Team
-**Related**: [Epic #816](https://github.com/botho-project/botho/issues/816), issues #819, #823, #824, #826; ADR 0002, 0003, 0005
+**Related**: [Epic #816](https://github.com/botho-project/botho/issues/816), issues #819, #822, #823, #826; ADR 0002, 0003, 0005
 
 ## Context
 
@@ -56,9 +56,9 @@ Specifically:
 
 ## Implementation
 
-The lock-side amount-revelation mechanism (commitment opening vs. cleartext) is pinned in #824 (deposit watcher). Fresh-stealth release is enforced in #823. The user-facing "wrapping exits the anonymity set" warning is a wallet/UX task. A privacy design note documenting the accepted vectors goes under `docs/security/`.
+The lock-side amount-revelation mechanism (commitment opening vs. cleartext) is pinned in #823 (deposit watcher). Fresh-stealth release is enforced in #822. The user-facing "wrapping exits the anonymity set" warning is a wallet/UX task. A privacy design note documenting the accepted vectors goes under `docs/security/`.
 
 ## References
 
-- Epic #816; issues #819, #823, #824
+- Epic #816; issues #819, #822, #823
 - ADR 0002 (custody), ADR 0003 (peg), ADR 0005 (chain scope)
