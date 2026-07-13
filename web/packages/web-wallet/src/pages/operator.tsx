@@ -12,6 +12,7 @@ import {
   useFleetStatus,
   useOperatorAuditLog,
   useOperatorQuorumInfo,
+  useReserveProof,
   useTrustStatus,
   type SessionSigner,
 } from '@botho/features'
@@ -128,6 +129,7 @@ function TabButton({
 function FleetTab() {
   const { statuses, avgBlockSeconds } = useFleetStatus(FLEET)
   const { history, historyState } = useFleetHistory(FLEET, METRICS_API_BASE)
+  const { proof: reserve, state: reserveState } = useReserveProof(METRICS_API_BASE)
   return (
     <NetworkDashboard
       nodes={FLEET}
@@ -135,6 +137,8 @@ function FleetTab() {
       avgBlockSeconds={avgBlockSeconds}
       history={history}
       historyState={historyState}
+      reserve={reserve}
+      reserveState={reserveState}
     />
   )
 }

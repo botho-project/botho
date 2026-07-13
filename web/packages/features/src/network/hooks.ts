@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { averageBlockSeconds, fetchFleetNodeStatus } from './fleet'
-import type { FleetNode, FleetNodeStatus, MetricsHistorySample } from './types'
+import type {
+  FleetNode,
+  FleetNodeStatus,
+  MetricsHistorySample,
+  ReserveProof,
+  ReserveProofState,
+} from './types'
 
 /**
  * Reusable polling/history hooks for the fleet dashboard (#706).
@@ -173,4 +179,69 @@ export function useFleetHistory(
   }, [nodes, metricsApiBase, refreshMs, windowSeconds])
 
   return { history, historyState }
+}
+
+export interface UseReserveProofOptions {
+  /** Reserve refresh cadence in ms. The daemon reconciles infrequently, so a
+   * slow poll (~2 min, same cadence as history) is right. */
+  refreshMs?: number
+}
+
+export interface UseReserveProofResult {
+  /** Latest snapshot, or null until the first successful poll. */
+  proof: ReserveProof | null
+  /** Discriminated fetch outcome (see {@link ReserveProofState}). */
+  state: ReserveProofState
+}
+
+/**
+ * Fetch the latest bridge proof-of-reserves snapshot from the metrics-daemon
+ * (#825), degrading gracefully when the endpoint is absent or the daemon is
+ * down. Mirrors {@link useFleetHistory}'s poll + `cancelled` cleanup structure.
+ *
+ * The endpoint returns 404 until the daemon has polled a bridge (no
+ * `--bridge-url` configured). That is NOT an error — it maps to `absent`, the
+ * "hide or gray the card" case. Any other non-OK response or a network error
+ * maps to `unavailable` (same graceful path as history-unavailable; never
+ * fabricate values — the #541 lesson).
+ */
+export function useReserveProof(
+  metricsApiBase: string,
+  { refreshMs = 120_000 }: UseReserveProofOptions = {},
+): UseReserveProofResult {
+  const [proof, setProof] = useState<ReserveProof | null>(null)
+  const [state, setState] = useState<ReserveProofState>('unavailable')
+
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const r = await fetch(`${metricsApiBase}/api/metrics/reserve`)
+        // 404 = daemon not polling a bridge yet → hide/gray the card. Check
+        // this before the generic non-OK path so it isn't treated as an error.
+        if (r.status === 404) {
+          if (!cancelled) {
+            setProof(null)
+            setState('absent')
+          }
+          return
+        }
+        if (!r.ok) throw new Error(`reserve ${r.status}`)
+        const data = (await r.json()) as ReserveProof
+        if (cancelled) return
+        setProof(data)
+        setState('ok')
+      } catch {
+        if (!cancelled) setState('unavailable')
+      }
+    }
+    load()
+    const id = setInterval(load, refreshMs)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [metricsApiBase, refreshMs])
+
+  return { proof, state }
 }

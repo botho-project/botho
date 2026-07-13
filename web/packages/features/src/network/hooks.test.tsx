@@ -9,8 +9,8 @@
  */
 import { describe, expect, it, vi, afterEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
-import { useFleetHistory, useFleetStatus } from './hooks'
-import type { FleetNode } from './types'
+import { useFleetHistory, useFleetStatus, useReserveProof } from './hooks'
+import type { FleetNode, ReserveProof } from './types'
 
 const NODES: FleetNode[] = [
   { id: 'seed', name: 'Seed', rpcEndpoint: 'https://seed.test/rpc' },
@@ -79,6 +79,53 @@ describe('useFleetHistory', () => {
     )
     await waitFor(() => expect(result.current.historyState).toBe('ok'))
     expect(result.current.history.seed).toHaveLength(1)
+    unmount()
+  })
+})
+
+describe('useReserveProof', () => {
+  const PROOF: ReserveProof = {
+    lockedReserve: 123_000_000_000_000,
+    ethSupply: 100_000_000_000_000,
+    solSupply: null,
+    totalWrapped: null,
+    drift: 0,
+    inTolerance: true,
+    pegHealthy: true,
+    takenAt: 1_752_000_000,
+  }
+
+  it('reports ok with the parsed proof on 200', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => PROOF })),
+    )
+    const { result, unmount } = renderHook(() => useReserveProof('https://metrics.test'))
+    await waitFor(() => expect(result.current.state).toBe('ok'))
+    expect(result.current.proof).toEqual(PROOF)
+    unmount()
+  })
+
+  it('reports absent on 404 (daemon not polling a bridge yet)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 404 })))
+    const { result, unmount } = renderHook(() => useReserveProof('https://metrics.test'))
+    await waitFor(() => expect(result.current.state).toBe('absent'))
+    expect(result.current.proof).toBeNull()
+    unmount()
+  })
+
+  it('degrades to unavailable on a non-404 failure without throwing', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500 })))
+    const { result, unmount } = renderHook(() => useReserveProof('https://metrics.test'))
+    await waitFor(() => expect(result.current.state).toBe('unavailable'))
+    expect(result.current.proof).toBeNull()
+    unmount()
+  })
+
+  it('degrades to unavailable on a rejected fetch without throwing', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('down') }))
+    const { result, unmount } = renderHook(() => useReserveProof('https://metrics.test'))
+    await waitFor(() => expect(result.current.state).toBe('unavailable'))
     unmount()
   })
 })

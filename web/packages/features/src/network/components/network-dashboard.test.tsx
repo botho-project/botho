@@ -96,4 +96,54 @@ describe('NetworkDashboard', () => {
     // The live grid is unaffected.
     expect(screen.getByText('3/3')).toBeDefined()
   })
+
+  it('omits the reserve card entirely when reserveState is undefined', () => {
+    renderDash({ seed: live('seed'), eu: live('eu'), ap: live('ap') })
+    expect(screen.queryByText('Proof of Reserves')).toBeNull()
+  })
+
+  it('renders the reserve card with an ok proof', () => {
+    cleanup()
+    render(
+      <NetworkDashboard
+        nodes={NODES}
+        statuses={{ seed: live('seed'), eu: live('eu'), ap: live('ap') }}
+        avgBlockSeconds={20}
+        history={{}}
+        historyState="unavailable"
+        reserve={{
+          lockedReserve: 123_000_000_000_000,
+          ethSupply: 100_000_000_000_000,
+          solSupply: null,
+          totalWrapped: null,
+          drift: 0,
+          inTolerance: true,
+          pegHealthy: true,
+          takenAt: Math.floor(Date.now() / 1000) - 30,
+        }}
+        reserveState="ok"
+      />,
+    )
+    expect(screen.getByText('Proof of Reserves')).toBeDefined()
+    expect(screen.getByText('Peg healthy')).toBeDefined()
+    // The live grid is unaffected.
+    expect(screen.getByText('3/3')).toBeDefined()
+  })
+
+  it('hides the reserve card on the absent (404) state without breaking the grid', () => {
+    cleanup()
+    render(
+      <NetworkDashboard
+        nodes={NODES}
+        statuses={{ seed: live('seed'), eu: live('eu'), ap: live('ap') }}
+        avgBlockSeconds={20}
+        history={{}}
+        historyState="unavailable"
+        reserve={null}
+        reserveState="absent"
+      />,
+    )
+    expect(screen.queryByText('Proof of Reserves')).toBeNull()
+    expect(screen.getByText('3/3')).toBeDefined()
+  })
 })
