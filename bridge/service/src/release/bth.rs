@@ -17,10 +17,10 @@
 //! - **Federation attestation verification**
 //!   ([`validate_release_attestation`]): real Ed25519 verification of every
 //!   signature over the domain-separated release digest
-//!   ([`bth_bridge_core::release_payload_digest`]), bound to the exact order id
-//!   + amount + recipient; federation-membership and distinct-signer threshold
-//!   checks. No reserve key material is touched until this passes — no single
-//!   node can spend the reserve.
+//!   ([`bth_bridge_core::release_payload_digest`]), bound to the exact order
+//!   id, amount, and recipient; federation-membership and distinct-signer
+//!   threshold checks. No reserve key material is touched until this passes —
+//!   no single node can spend the reserve.
 //! - **Configuration validation** ([`BthReleaser::new`]): reserve address
 //!   present, federation keys parse to valid Ed25519 points, threshold is
 //!   satisfiable by the configured signer set.
