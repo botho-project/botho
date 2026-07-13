@@ -33,6 +33,16 @@ alloy = { workspace = true, features = [
     "sol-types",
 ] }
 
+# k256 reaches this crate through alloy; this edge exists ONLY to co-activate
+# `precomputed-tables` (+ its `std` gate) on the shared k256 build unit. The
+# workspace `.cargo/config.toml` injects `--cfg=feature="precomputed-tables"`
+# into every x86_64 build (a curve25519-dalek hack, see #361 and
+# crypto/secp256k1/Cargo.toml): without the REAL feature enabled, that injected
+# cfg makes k256 reference `once_cell` without linking it, so any
+# package-scoped build (`cargo test -p bth-bridge-service`, bridge-ci.yml)
+# fails to compile k256 on x86_64.
+k256 = { version = "0.13", default-features = false, features = ["ecdsa", "std", "precomputed-tables"] }
+
 # BTH release attestation verification (ADR 0002: federation Ed25519
 # signatures, mirroring the operator-signed-action machinery)
 ed25519-dalek = { workspace = true, features = ["std"] }
