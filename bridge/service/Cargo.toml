@@ -47,6 +47,37 @@ k256 = { version = "0.13", default-features = false, features = ["ecdsa", "std",
 # signatures, mirroring the operator-signed-action machinery)
 ed25519-dalek = { workspace = true, features = ["std"] }
 
+# Live BTH node transports (#856): deposit view-key scan + release tx
+# construction / CLSAG signing. We REUSE the node-identical crypto and wire
+# format rather than reimplement any of it:
+#   - bth-transaction-clsag: the exact Transaction/TxOutput/CLSAG types and the
+#     bincode wire format the node deserializes in `tx_submit`, plus MemoPayload
+#     and stealth `belongs_to` / `recover_spend_key` used to scan deposits and
+#     recover one-time spend keys for release inputs.
+#   - bth-account-keys / bth-crypto-keys: AccountKey + Ristretto keys (reserve
+#     view/spend keys, recipient address).
+#   - bth-crypto-ring-signature: node-identical key-image derivation for the
+#     provably-dead (dropped) release check.
+bth-transaction-clsag = { path = "../../transaction/clsag", default-features = false }
+bth-account-keys = { workspace = true }
+bth-crypto-keys = { workspace = true }
+bth-crypto-ring-signature = { workspace = true }
+
+# JSON-RPC over HTTP to the BTH node (getChainInfo / getBlockByHeight /
+# chain_getOutputs / tx_submit / getTransaction / chain_areKeyImagesSpent).
+# rustls-tls matches the alloy TLS backend so only one TLS stack links.
+reqwest = { workspace = true, features = ["json", "rustls-tls"] }
+
+# Deterministic-RNG signing in tests; OsRng in production.
+rand_core = { workspace = true, features = ["getrandom"] }
+
+# Recipient BTH address decoding (base58 view||spend, matching the node's
+# classical address layout).
+bs58 = { workspace = true }
+
+# The exact bincode wire format the node's `tx_submit` deserializes.
+bincode = { workspace = true }
+
 # Proof-of-reserves HTTP API (#825; same axum line as the metrics-daemon)
 axum = { version = "0.7", features = ["json"] }
 
@@ -57,8 +88,6 @@ axum = { version = "0.7", features = ["json"] }
 # base58 (bs58), and the legacy transaction wire format is small and stable.
 # reqwest and bs58 are already in the workspace lockfile (reqwest via alloy),
 # so this adds no new advisory surface.
-reqwest = { workspace = true, features = ["json", "rustls-tls"] }
-bs58 = "0.5"
 
 # Database
 rusqlite = { version = "0.31", features = ["bundled"] }
@@ -77,3 +106,8 @@ clap = { workspace = true, features = ["derive"] }
 [dev-dependencies]
 proptest = { workspace = true, features = ["default-code-coverage"] }
 tempfile = { workspace = true }
+# Deterministic RNG for reproducible tx-construction test vectors (#856).
+rand = { workspace = true, features = ["std_rng"] }
+# Test-only stealth outputs paid to the reserve (deposit-scan + release
+# input construction unit tests) reuse the node-identical output builder.
+bth-transaction-types = { workspace = true }

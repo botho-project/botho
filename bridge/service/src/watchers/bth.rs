@@ -48,7 +48,26 @@ use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
 use super::WatchError;
-use crate::{db::Database, engine::ShutdownSignal};
+use crate::{
+    bth_keys::ReserveKeys,
+    bth_rpc::{BthNodeRpc, RpcError},
+    bth_scan::scan_deposit_output,
+    db::Database,
+    engine::ShutdownSignal,
+};
+
+impl From<RpcError> for WatchError {
+    fn from(e: RpcError) -> Self {
+        match e {
+            // A node-side error response or decode skew is not a permanent
+            // config problem — retry on the next poll.
+            RpcError::Transport(m) | RpcError::Decode(m) => WatchError::Rpc(m),
+            RpcError::Node { code, message } => {
+                WatchError::Rpc(format!("node rpc {code}: {message}"))
+            }
+        }
+    }
+}
 
 /// Fixed-point scale for cluster factors, matching
 /// `cluster-tax::demurrage::FACTOR_SCALE` (1000 = factor 1.0×). A deposit
@@ -97,39 +116,111 @@ pub trait BthChainClient: Send + Sync {
     async fn block_at(&self, height: u64) -> Result<Option<BthBlock>, WatchError>;
 }
 
-/// Live transport against a BTH node.
+/// Live transport against a BTH node (#856).
 ///
-/// TODO(#856): implement against `BthConfig::ws_url` — subscribe to
-/// NewBlock, and for each block run the view-key stealth scan
-/// (`view_key_file`) over outputs, verify the Pedersen commitment opening
-/// to reveal the amount (ADR 0004), read the output's `ClusterTagVector`
-/// factor (ADR 0003), and decode the 64-byte deposit memo. Until then this
-/// client is a fail-safe stub: it reports `NotImplemented` and the watcher
-/// creates no state.
+/// Polls finalized blocks over the node's JSON-RPC (`getChainInfo` +
+/// `chain_getOutputs` at `BthConfig::rpc_url`), view-key-scans each output
+/// for ownership by the bridge deposit account (`ReserveKeys`), reveals the
+/// transparent amount (the node's transparent-amount model, ADR 0004),
+/// reads the output's cluster factor (ADR 0003), and decrypts the 64-byte
+/// destination memo. Only outputs the bridge deposit account OWNS become
+/// [`BthDeposit`]s, so the tested watcher state machine drives it unchanged.
+///
+/// Without configured reserve keys (`view_key_file` / `spend_key_file`) the
+/// client is watch-only: it reports `NotImplemented`, and the watcher — as
+/// before — stays idle and creates no state. This preserves the fail-safe
+/// posture for deployments that run the bridge without deposit scanning.
 pub struct NodeBthClient {
-    #[allow(dead_code)]
-    config: BthConfig,
+    rpc: BthNodeRpc,
+    reserve: Option<ReserveKeys>,
 }
 
 impl NodeBthClient {
     /// Build a client from configuration. Does not perform network I/O.
-    pub fn new(config: BthConfig) -> Self {
-        Self { config }
+    ///
+    /// A malformed `rpc_url` or key file surfaces as a `Config` error; the
+    /// watcher logs it and stays idle (fail-safe) rather than crashing.
+    pub fn new(config: BthConfig) -> Result<Self, WatchError> {
+        let rpc = BthNodeRpc::new(config.rpc_url.clone())
+            .map_err(|e| WatchError::Config(e.to_string()))?;
+        let reserve = ReserveKeys::load(
+            config.view_key_file.as_deref(),
+            config.spend_key_file.as_deref(),
+        )
+        .map_err(WatchError::Config)?;
+        Ok(Self { rpc, reserve })
     }
 }
 
 #[async_trait]
 impl BthChainClient for NodeBthClient {
     async fn tip_height(&self) -> Result<u64, WatchError> {
-        Err(WatchError::NotImplemented(
-            "BTH node websocket transport (ws_url NewBlock subscription) pending #856".to_string(),
-        ))
+        // Watch-only (no reserve keys): stay idle, exactly as the pre-#856
+        // stub did — the watcher treats NotImplemented as "no state created".
+        if self.reserve.is_none() {
+            return Err(WatchError::NotImplemented(
+                "BTH deposit scan disabled: bth.view_key_file / spend_key_file not configured"
+                    .to_string(),
+            ));
+        }
+        Ok(self.rpc.chain_tip().await?)
     }
 
-    async fn block_at(&self, _height: u64) -> Result<Option<BthBlock>, WatchError> {
-        Err(WatchError::NotImplemented(
-            "BTH block fetch + view-key stealth scan pending #856".to_string(),
-        ))
+    async fn block_at(&self, height: u64) -> Result<Option<BthBlock>, WatchError> {
+        let Some(reserve) = self.reserve.as_ref() else {
+            return Err(WatchError::NotImplemented(
+                "BTH deposit scan disabled: reserve keys not configured".to_string(),
+            ));
+        };
+        let account = reserve.account();
+
+        // One block's outputs. `chain_getOutputs` returns one entry per block
+        // that exists; an empty result means the node does not have this
+        // height yet (the watcher then stops the pass and retries).
+        let blocks = self.rpc.get_outputs(height, height).await?;
+        let Some(block) = blocks.into_iter().find(|b| b.height == height) else {
+            return Ok(None);
+        };
+
+        // A stable, deterministic per-height block id for the cursor/audit
+        // trail. The node's getBlockByHeight exposes the real block hash, but
+        // chain_getOutputs does not; the height-derived id is sufficient for
+        // the cursor's progress bookkeeping (dedup is keyed on tx hash).
+        let block_id = format!("bth_height_{height}");
+
+        let mut deposits = Vec::new();
+        for out in &block.outputs {
+            let scanned = scan_deposit_output(out, account).map_err(WatchError::Rpc)?;
+            let Some(scanned) = scanned else {
+                continue; // not ours
+            };
+
+            // A deposit identity that is stable across rescans: the source tx
+            // hash plus the output index (a single tx may pay the reserve more
+            // than once). Matches the `processed_deposits` dedup key.
+            let tx_hash = format!("{}:{}", scanned.owned.tx_hash, scanned.owned.output_index);
+
+            deposits.push(BthDeposit {
+                tx_hash,
+                amount: scanned.owned.amount,
+                memo: scanned.memo,
+                // Factor-1 (background) => FACTOR_SCALE; anything with explicit
+                // cluster weight is non-factor-1 and the state machine rejects
+                // it (ADR 0003). Report a sentinel above FACTOR_SCALE so the
+                // gate fails and audits the exact reason.
+                cluster_factor: if scanned.owned.factor_one {
+                    FACTOR_SCALE
+                } else {
+                    FACTOR_SCALE + 1
+                },
+            });
+        }
+
+        Ok(Some(BthBlock {
+            height,
+            block_id,
+            deposits,
+        }))
     }
 }
 
@@ -152,9 +243,18 @@ impl BthWatcher {
 
     /// Run the watcher.
     pub async fn run(mut self) -> Result<(), String> {
-        info!("Starting BTH watcher for {}", self.config.ws_url);
+        info!("Starting BTH watcher for {}", self.config.rpc_url);
 
-        let client = NodeBthClient::new(self.config.clone());
+        // Fail-safe: a misconfigured RPC/key file disables the watcher (no
+        // orders created) instead of crashing the engine, mirroring the
+        // Ethereum watcher.
+        let client = match NodeBthClient::new(self.config.clone()) {
+            Ok(client) => Some(client),
+            Err(e) => {
+                warn!("BTH watcher disabled: {}", e);
+                None
+            }
+        };
 
         loop {
             // Check for shutdown first
@@ -169,16 +269,18 @@ impl BthWatcher {
                 }
             }
 
-            match self.scan_once(&client).await {
-                Ok(blocks) if blocks > 0 => {
-                    debug!("BTH watcher processed {} block(s)", blocks);
+            if let Some(client) = &client {
+                match self.scan_once(client).await {
+                    Ok(blocks) if blocks > 0 => {
+                        debug!("BTH watcher processed {} block(s)", blocks);
+                    }
+                    Ok(_) => {}
+                    Err(WatchError::NotImplemented(msg)) => {
+                        // Watch-only (no reserve keys): no state is created.
+                        debug!("BTH watcher idle: {}", msg);
+                    }
+                    Err(e) => warn!("BTH scan failed (will retry): {}", e),
                 }
-                Ok(_) => {}
-                Err(WatchError::NotImplemented(msg)) => {
-                    // Fail-safe transport stub: no state is created.
-                    debug!("BTH watcher idle: {}", msg);
-                }
-                Err(e) => warn!("BTH scan failed (will retry): {}", e),
             }
 
             tokio::select! {

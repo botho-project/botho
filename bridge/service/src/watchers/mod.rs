@@ -18,7 +18,9 @@
 //!    plus a canonical-block-hash re-check on Ethereum, and `Finalized`
 //!    commitment on Solana.
 
-mod bth;
+// pub(crate): the BTH fork tests (#856) drive the live-transport client
+// (NodeBthClient) directly against a local node.
+pub(crate) mod bth;
 // pub(crate): the fork tests (#828) drive the live-transport client and
 // its log-decoding helpers directly against a local node.
 pub(crate) mod ethereum;

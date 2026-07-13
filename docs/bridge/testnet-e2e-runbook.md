@@ -5,12 +5,14 @@ infrastructure: **BTH deposit → wBTH mint → hold → wBTH burn → BTH
 release**, with the exact assertions each leg must satisfy.
 
 Status: **manual drill**. The Ethereum leg runs fully automated today (see
-[Layer 0](#layer-0-hermetic-ethereum-leg-automated)); the BTH legs are
-blocked on the live node transports (#856 — deposit scan + release
-construction; federation envelope transport is #858, Solana is #857). The
-gated CI job (`.github/workflows/bridge-e2e.yml`) automates Layer 0 nightly
-and will absorb the full drill once #856 lands — the [automation
-criteria](#automation-criteria) below define "done" for that.
+[Layer 0](#layer-0-hermetic-ethereum-leg-automated)); the BTH live-node
+transports (#856 — deposit scan + release construction/submission/
+confirmation) are now implemented and unit-tested, with an `#[ignore]`d
+live-node integration test (see [Layer 1.5](#layer-15-bth-node-leg-live)).
+The federation envelope transport is #858, Solana is #857. The gated CI job
+(`.github/workflows/bridge-e2e.yml`) automates Layer 0 nightly and will
+absorb the full drill once a testnet node + secrets are wired — the
+[automation criteria](#automation-criteria) below define "done" for that.
 
 ## Test layers
 
@@ -38,6 +40,37 @@ a role-less relayer EOA → confirmation polling with the order-bound
 watcher burn scan. It asserts exact factor-1 picocredit amounts (ADR 0003)
 and that `totalSupply` returns to zero.
 
+## Layer 1.5: BTH node leg (live)
+
+The BTH-node transports (#856) — the deposit view-key scan
+(`NodeBthClient`) and the release construction / submission / confirmation
+(`BthReleaser`) — carry an `#[ignore]`d integration test that runs the REAL
+Rust transport against a live node over JSON-RPC (mirroring
+`fork_tests.rs`):
+
+```bash
+# 1. Run a local BTH testnet node with JSON-RPC exposed and a funded,
+#    factor-1 reserve wallet (view/spend keys written as hex files).
+# 2. Point the test at it and run:
+BRIDGE_BTH_RPC_URL=http://127.0.0.1:7101 \
+BRIDGE_BTH_RESERVE_VIEW_KEY=/path/to/view.hex \
+BRIDGE_BTH_RESERVE_SPEND_KEY=/path/to/spend.hex \
+  cargo test -p bth-bridge-service -- --ignored bth_node_
+```
+
+The test (`bridge/service/src/bth_fork_tests.rs`) drives a real deposit
+scan (`NodeBthClient::block_at` → view-key match → factor-1 gate) and, when
+the reserve holds spendable factor-1 outputs, a real release
+(`BthReleaser::prepare_release` → `tx_submit` → confirmation poll), then
+scans the paid output back with the recipient view key to prove ADR 0004
+(fresh one-time stealth) and ADR 0003 (change back to the reserve). Without
+the environment variables the test **skips** (never a false pass — it never
+claims a live path it could not exercise).
+
+The pure transport-parsing and tx-construction logic (`bth_rpc`,
+`bth_scan`, `bth_keys`, and the releaser stages above the socket) is fully
+covered by native unit tests that run in every `cargo test` pass.
+
 ## Prerequisites (Layers 1–2)
 
 - **BTH testnet**: a synced node with JSON-RPC + websocket exposed; the
@@ -64,8 +97,9 @@ hashes, order UUIDs and their derived 32-byte order ids).
 1. Create a mint order via the bridge API; note `order_id`, the deposit
    address, and the memo.
 2. Send the BTH deposit (e.g. 100 BTH = `100_000_000_000_000` pc) from the
-   user wallet with the order memo. **Blocked on #856**: until the live
-   deposit scan lands, the watcher will not see this deposit.
+   user wallet with the order memo (the destination memo carries the order
+   UUID). The live deposit scan (`NodeBthClient`, #856) view-key-matches the
+   output to the reserve and reads the memo to bind it to the order.
 3. Watch the order walk `AwaitingDeposit → DepositDetected →
    DepositConfirmed` (SCP finality) `→ MintPending → Completed`.
 4. **Assert (amounts, ADR 0003):** wBTH minted to the user =
@@ -87,8 +121,10 @@ hashes, order UUIDs and their derived 32-byte order ids).
 7. From the user's Ethereum wallet call
    `bridgeBurn(net_amount, <bth destination>)`; note the `BridgeBurn` tx.
 8. Watch the order walk `BurnDetected → BurnConfirmed` (depth +
-   canonical-hash check) `→ ReleasePending → Released`. **Blocked on
-   #856**: release construction/submission is the live-transport gap.
+   canonical-hash check) `→ ReleasePending → Released`. The live release
+   transport (`BthReleaser`, #856) builds a CLSAG-signed reserve spend,
+   submits it via `tx_submit`, and polls `getTransaction` for the
+   configured depth (`release_confirmations_required`; 0 = SCP finality).
 9. **Assert (amounts):** BTH released = burned amount − bridge fee,
    exactly; the reserve change output returns to the reserve address with
    factor-1 provenance intact (ADR 0003).
