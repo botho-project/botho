@@ -77,7 +77,14 @@ use std::{sync::Arc, time::Duration};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
-use crate::db::{Database, ReserveSnapshot};
+use crate::{
+    bth_keys::ReserveKeys,
+    bth_rpc::BthNodeRpc,
+    bth_scan::{scan_deposit_output, OwnedOutput},
+    db::{Database, ReserveSnapshot},
+    mint::solana::{parse_bridge_mint, BRIDGE_PDA_SEED},
+    solana_rpc::{HttpSolanaRpc, Pubkey, SolanaRpc},
+};
 
 sol! {
     /// ERC-20 supply surface of the wBTH token
@@ -170,22 +177,75 @@ impl SupplySource for EthSupplySource {
     }
 }
 
-/// Solana supply source: wBTH SPL `Mint.supply` via `getTokenSupply`
-/// (12-decimal mint, 1:1 with picocredits).
+/// Solana supply source: wBTH SPL `Mint.supply` via `getTokenSupply` (#853).
 ///
-/// TODO(#853): implement against `SolanaConfig::rpc_url`. Until then this
-/// is a fail-safe stub: the reconciler reports Solana as UNVERIFIED (its
-/// DB-expected backing is excluded from drift math) rather than silently
-/// healthy.
+/// The wBTH SPL mint carries 12 decimals, so its raw supply (the
+/// `getTokenSupply` `amount`) is already in picocredits, 1:1 with the
+/// Ethereum leg. The mint address is not configured directly; it is the
+/// `mint` field of the on-chain `Bridge` PDA (`seeds = [b"bridge"]` under
+/// `solana.wbth_program`), the same source of truth [`crate::mint::solana`]
+/// resolves before every mint. Any transport/RPC failure surfaces as
+/// [`ReserveError::Rpc`], leaving the Solana leg UNVERIFIED (excluded from
+/// drift math) rather than reporting a false-healthy peg.
 pub struct SolSupplySource {
-    #[allow(dead_code)]
-    config: SolanaConfig,
+    rpc: Arc<dyn SolanaRpc>,
+    /// The bridge state PDA whose `mint` field names the wBTH mint.
+    bridge_pda: Pubkey,
+    commitment: String,
 }
 
 impl SolSupplySource {
-    /// Build a source from configuration. Does not perform network I/O.
-    pub fn new(config: SolanaConfig) -> Self {
-        Self { config }
+    /// Build a source from configuration. Does not perform network I/O. A
+    /// misconfiguration (empty/invalid `wbth_program`, unreachable-URL parse)
+    /// surfaces as [`ReserveError::Config`]; `from_config` maps that onto an
+    /// UNVERIFIED Solana leg (fail-safe), never a silent pass.
+    pub fn new(config: &SolanaConfig) -> Result<Self, ReserveError> {
+        if config.wbth_program.is_empty() {
+            return Err(ReserveError::Config(
+                "solana.wbth_program is empty".to_string(),
+            ));
+        }
+        let program_id = Pubkey::from_base58(&config.wbth_program)
+            .map_err(|e| ReserveError::Config(format!("invalid solana.wbth_program: {}", e)))?;
+        let (bridge_pda, _bump) = Pubkey::find_program_address(&[BRIDGE_PDA_SEED], &program_id)
+            .ok_or_else(|| ReserveError::Config("could not derive bridge PDA".to_string()))?;
+        let rpc: Arc<dyn SolanaRpc> = Arc::new(
+            HttpSolanaRpc::new(config.rpc_url.clone())
+                .map_err(|e| ReserveError::Config(format!("invalid solana rpc_url: {}", e)))?,
+        );
+        Ok(Self {
+            rpc,
+            bridge_pda,
+            commitment: commitment_str(config.commitment).to_string(),
+        })
+    }
+
+    /// Test/DI constructor: inject a mock transport and an already-derived
+    /// bridge PDA.
+    #[cfg(test)]
+    pub fn with_rpc(rpc: Arc<dyn SolanaRpc>, bridge_pda: Pubkey, commitment: String) -> Self {
+        Self {
+            rpc,
+            bridge_pda,
+            commitment,
+        }
+    }
+
+    /// Resolve the wBTH mint address from the on-chain `Bridge` account (its
+    /// `mint` field is the source of truth, set at `initialize`).
+    async fn resolve_mint(&self) -> Result<Pubkey, ReserveError> {
+        let data = self
+            .rpc
+            .get_account_data(&self.bridge_pda.to_base58(), &self.commitment)
+            .await
+            .map_err(ReserveError::Rpc)?
+            .ok_or_else(|| {
+                ReserveError::Rpc(format!(
+                    "bridge account {} not found — is the program initialized?",
+                    self.bridge_pda.to_base58()
+                ))
+            })?;
+        parse_bridge_mint(&data).map_err(|e| ReserveError::Rpc(e.to_string()))
     }
 }
 
@@ -196,9 +256,11 @@ impl SupplySource for SolSupplySource {
     }
 
     async fn wrapped_supply(&self) -> Result<u128, ReserveError> {
-        Err(ReserveError::NotImplemented(
-            "Solana getTokenSupply transport pending #853".to_string(),
-        ))
+        let mint = self.resolve_mint().await?;
+        self.rpc
+            .get_token_supply(&mint.to_base58(), &self.commitment)
+            .await
+            .map_err(ReserveError::Rpc)
     }
 }
 
@@ -213,31 +275,190 @@ pub trait ReserveBalanceSource: Send + Sync {
     async fn reserve_balance(&self) -> Result<u128, ReserveError>;
 }
 
-/// Live BTH reserve-balance source.
+/// How many recent blocks to scan for reserve-owned outputs. Mirrors
+/// [`crate::release::bth`]'s reserve window: the reserve holds a bounded set
+/// of factor-1 outputs and this covers realistic reserve depth cheaply.
+const RESERVE_SCAN_WINDOW: u64 = 10_000;
+
+/// Live BTH reserve-balance source (#853).
 ///
-/// TODO(#853): implement against the BTH node transport (view-key scan of
-/// reserve-address outputs, the same wiring as `watchers::bth`). Until
-/// then this is a fail-safe stub: the custody check is SKIPPED and
-/// `reserveBalanceChecked` stays false — never a silent pass.
+/// View-key-scans the recent reserve window (`chain_getOutputs` over
+/// `BthConfig::rpc_url`) for factor-1, reserve-owned outputs — the exact
+/// [`crate::bth_scan::scan_deposit_output`] primitive the deposit watcher and
+/// the [`crate::release::bth::BthReleaser`] use — drops any output whose key
+/// image is already spent/pending (`chain_areKeyImagesSpent`), and sums the
+/// remaining unspent amounts. That sum is the ACTUAL spendable reserve
+/// balance the reconciler's custody leg compares against the ledger.
+///
+/// Only factor-1 outputs count: a factor-1-only reserve is the peg backing
+/// (ADR 0003), and only factor-1 outputs are ever releasable, so this is the
+/// balance that must cover outstanding wBTH.
+///
+/// Without configured reserve keys (`view_key_file` / `spend_key_file`), or
+/// on any RPC failure, the source returns `NotImplemented` / `Rpc` and the
+/// custody leg stays UNVERIFIED (`reserveBalanceChecked` false) — never a
+/// silent healthy pass.
 pub struct NodeReserveBalanceSource {
-    #[allow(dead_code)]
-    config: BthConfig,
+    rpc: Arc<BthNodeRpc>,
+    reserve: Option<ReserveKeys>,
+    build_error: Option<String>,
 }
 
 impl NodeReserveBalanceSource {
     /// Build a source from configuration. Does not perform network I/O.
+    ///
+    /// A malformed `rpc_url` or key file is remembered and surfaced as
+    /// `Config` on every poll (the leg stays unverified) rather than
+    /// panicking or silently passing.
     pub fn new(config: BthConfig) -> Self {
-        Self { config }
+        let (rpc, build_error) = match BthNodeRpc::new(config.rpc_url.clone()) {
+            Ok(rpc) => (Arc::new(rpc), None),
+            Err(e) => (
+                // A placeholder client that will never be used (build_error is
+                // set, so every poll short-circuits before touching it).
+                Arc::new(BthNodeRpc::new("http://invalid.invalid").expect("static url")),
+                Some(e.to_string()),
+            ),
+        };
+        let reserve = match ReserveKeys::load(
+            config.view_key_file.as_deref(),
+            config.spend_key_file.as_deref(),
+        ) {
+            Ok(keys) => keys,
+            Err(e) => {
+                return Self {
+                    rpc,
+                    reserve: None,
+                    build_error: Some(build_error.unwrap_or(e)),
+                }
+            }
+        };
+        Self {
+            rpc,
+            reserve,
+            build_error,
+        }
+    }
+
+    /// Test/DI constructor: inject a client and reserve keys directly.
+    #[cfg(test)]
+    pub fn with_parts(rpc: Arc<BthNodeRpc>, reserve: Option<ReserveKeys>) -> Self {
+        Self {
+            rpc,
+            reserve,
+            build_error: None,
+        }
     }
 }
 
 #[async_trait]
 impl ReserveBalanceSource for NodeReserveBalanceSource {
     async fn reserve_balance(&self) -> Result<u128, ReserveError> {
-        Err(ReserveError::NotImplemented(
-            "BTH reserve-address balance transport pending #853".to_string(),
-        ))
+        if let Some(e) = &self.build_error {
+            return Err(ReserveError::Config(e.clone()));
+        }
+        // Watch-only (no reserve keys): the custody leg is genuinely
+        // uncheckable, so report NotImplemented (leg stays unverified).
+        let Some(reserve) = self.reserve.as_ref() else {
+            return Err(ReserveError::NotImplemented(
+                "BTH reserve-balance check disabled: bth.view_key_file / spend_key_file \
+                 not configured"
+                    .to_string(),
+            ));
+        };
+        let account = reserve.account();
+
+        let tip = self
+            .rpc
+            .chain_tip()
+            .await
+            .map_err(|e| ReserveError::Rpc(e.to_string()))?;
+        let start = tip.saturating_sub(RESERVE_SCAN_WINDOW);
+        let blocks = self
+            .rpc
+            .get_outputs(start, tip)
+            .await
+            .map_err(|e| ReserveError::Rpc(e.to_string()))?;
+
+        // Reserve-owned, factor-1 outputs (the peg backing, ADR 0003).
+        let mut owned: Vec<OwnedOutput> = Vec::new();
+        for block in &blocks {
+            for out in &block.outputs {
+                match scan_deposit_output(out, account).map_err(ReserveError::Config)? {
+                    Some(scanned) if scanned.owned.factor_one => owned.push(scanned.owned),
+                    _ => {}
+                }
+            }
+        }
+
+        if owned.is_empty() {
+            return Ok(0);
+        }
+
+        // Drop already-spent / pending outputs so the balance reflects only
+        // UNSPENT reserve value (the same double-spend guard the releaser
+        // uses before selecting inputs).
+        let key_images: Vec<String> = owned
+            .iter()
+            .map(|o| reserve_output_key_image(account, o))
+            .collect::<Result<_, _>>()?;
+        let statuses = self
+            .rpc
+            .are_key_images_spent(&key_images)
+            .await
+            .map_err(|e| ReserveError::Rpc(e.to_string()))?;
+
+        Ok(sum_unspent_reserve_balance(&owned, &statuses))
     }
+}
+
+/// Sum the amounts of `owned` reserve outputs whose key-image `statuses`
+/// (positionally aligned) report neither spent nor pending. The pure core of
+/// [`NodeReserveBalanceSource::reserve_balance`], unit-testable without a live
+/// node. A status shorter than `owned` conservatively treats the missing
+/// entries as spent (excluded), never overcounting the reserve.
+fn sum_unspent_reserve_balance(
+    owned: &[OwnedOutput],
+    statuses: &[crate::bth_rpc::KeyImageStatus],
+) -> u128 {
+    owned
+        .iter()
+        .zip(statuses)
+        .filter(|(_, s)| !s.spent && !s.pending)
+        .map(|(o, _)| o.amount as u128)
+        .sum()
+}
+
+/// Derive the key image of a reserve-owned output (node-identical), for the
+/// spent-status query. Reuses `recover_spend_key` + `KeyImage::from`, exactly
+/// what the node records in its double-spend set (mirrors the releaser's
+/// `release_input_key_image`).
+fn reserve_output_key_image(
+    account: &bth_account_keys::AccountKey,
+    owned: &OwnedOutput,
+) -> Result<String, ReserveError> {
+    use bth_crypto_ring_signature::KeyImage;
+    use bth_transaction_clsag::TxOutput;
+
+    let target_key: [u8; 32] = hex::decode(&owned.target_key)
+        .ok()
+        .and_then(|b| b.try_into().ok())
+        .ok_or_else(|| ReserveError::Config("owned output target_key not 32 bytes".into()))?;
+    let public_key: [u8; 32] = hex::decode(&owned.public_key)
+        .ok()
+        .and_then(|b| b.try_into().ok())
+        .ok_or_else(|| ReserveError::Config("owned output public_key not 32 bytes".into()))?;
+    let tx_out = TxOutput {
+        amount: owned.amount,
+        target_key,
+        public_key,
+        e_memo: None,
+        cluster_tags: Default::default(),
+    };
+    let onetime = tx_out
+        .recover_spend_key(account, owned.subaddress_index)
+        .ok_or_else(|| ReserveError::Config("cannot recover reserve one-time key".into()))?;
+    Ok(hex::encode(KeyImage::from(&onetime).as_bytes()))
 }
 
 /// Per-chain reconciliation detail in a [`ReserveProof`].
@@ -328,7 +549,13 @@ impl Reconciler {
             Ok(source) => supplies.push(Arc::new(source)),
             Err(e) => warn!("Ethereum supply polling disabled: {}", e),
         }
-        supplies.push(Arc::new(SolSupplySource::new(config.solana.clone())));
+        match SolSupplySource::new(&config.solana) {
+            Ok(source) => supplies.push(Arc::new(source)),
+            // A misconfigured Solana source is simply absent this pass; the
+            // Solana leg is then reported unverified (its DB-expected backing
+            // excluded from drift math), never silently healthy.
+            Err(e) => warn!("Solana supply polling disabled: {}", e),
+        }
 
         let mut reconciler = Self::new(
             db,
@@ -541,6 +768,17 @@ fn unverified_status(chain: Chain, locked: u64, in_flight: u64) -> ChainReserveS
 
 fn clamp_i64(v: i128) -> i64 {
     i64::try_from(v).unwrap_or(if v < 0 { i64::MIN } else { i64::MAX })
+}
+
+/// The JSON-RPC commitment string for a [`SolanaCommitment`] (the wire value
+/// `getTokenSupply` / `getAccountInfo` expect).
+fn commitment_str(commitment: bth_bridge_core::SolanaCommitment) -> &'static str {
+    use bth_bridge_core::SolanaCommitment::*;
+    match commitment {
+        Processed => "processed",
+        Confirmed => "confirmed",
+        Finalized => "finalized",
+    }
 }
 
 #[cfg(test)]
@@ -953,6 +1191,230 @@ mod tests {
                 .apply_release_spend(&Uuid::new_v4(), Chain::Ethereum, over)
                 .is_err());
         }
+    }
+
+    // === #853: live-transport source tests against mocked RPC ===
+
+    use crate::{
+        bth_rpc::KeyImageStatus,
+        mint::solana::BRIDGE_MINT_OFFSET,
+        solana_rpc::{SignatureState, SolanaRpc},
+    };
+    use bth_account_keys::AccountKey;
+    use bth_transaction_clsag::TxOutput;
+
+    /// A mock Solana RPC that serves a `Bridge` account (naming the wBTH mint)
+    /// and a programmable `getTokenSupply`.
+    struct MockSolanaRpc {
+        bridge_account: Mutex<Option<Vec<u8>>>,
+        token_supply: Mutex<Result<u128, String>>,
+    }
+
+    impl MockSolanaRpc {
+        fn new(mint: Pubkey, supply: u128) -> Arc<Self> {
+            let mut data = vec![0u8; BRIDGE_MINT_OFFSET];
+            data.extend_from_slice(&mint.0);
+            data.extend_from_slice(&[0u8; 100]);
+            Arc::new(Self {
+                bridge_account: Mutex::new(Some(data)),
+                token_supply: Mutex::new(Ok(supply)),
+            })
+        }
+
+        fn set_supply_err(&self, e: &str) {
+            *self.token_supply.lock().unwrap() = Err(e.to_string());
+        }
+
+        fn clear_bridge_account(&self) {
+            *self.bridge_account.lock().unwrap() = None;
+        }
+    }
+
+    #[async_trait]
+    impl SolanaRpc for MockSolanaRpc {
+        async fn get_latest_blockhash(&self) -> Result<([u8; 32], u64), String> {
+            Ok(([0u8; 32], 0))
+        }
+        async fn send_transaction(&self, _raw: &[u8]) -> Result<String, String> {
+            Err("unused".to_string())
+        }
+        async fn get_signature_status(&self, _s: &str) -> Result<SignatureState, String> {
+            Ok(SignatureState::Unknown)
+        }
+        async fn get_account_data(
+            &self,
+            _address: &str,
+            _commitment: &str,
+        ) -> Result<Option<Vec<u8>>, String> {
+            Ok(self.bridge_account.lock().unwrap().clone())
+        }
+        async fn get_signatures_for_address(
+            &self,
+            _a: &str,
+            _u: Option<&str>,
+            _c: &str,
+        ) -> Result<Vec<(String, u64)>, String> {
+            Ok(vec![])
+        }
+        async fn get_transaction_logs(
+            &self,
+            _s: &str,
+            _c: &str,
+        ) -> Result<Option<(Vec<String>, u64)>, String> {
+            Ok(None)
+        }
+        async fn get_token_supply(&self, _mint: &str, _commitment: &str) -> Result<u128, String> {
+            self.token_supply.lock().unwrap().clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sol_supply_source_resolves_mint_and_reports_supply() {
+        // The source resolves the wBTH mint from the Bridge account then reads
+        // getTokenSupply (raw base units == picocredits at 12 decimals).
+        let mint = Pubkey([7u8; 32]);
+        let rpc = MockSolanaRpc::new(mint, 4_200_000_000_000);
+        let source =
+            SolSupplySource::with_rpc(rpc.clone(), Pubkey([1u8; 32]), "finalized".to_string());
+
+        assert_eq!(source.chain(), Chain::Solana);
+        assert_eq!(source.wrapped_supply().await.unwrap(), 4_200_000_000_000);
+
+        // getTokenSupply RPC failure -> Rpc error (leg left unverified, never
+        // a false zero).
+        rpc.set_supply_err("connection reset");
+        assert!(matches!(
+            source.wrapped_supply().await,
+            Err(ReserveError::Rpc(_))
+        ));
+
+        // A missing Bridge account (program not initialized) is also an Rpc
+        // error, not a silent supply.
+        let rpc2 = MockSolanaRpc::new(mint, 1);
+        rpc2.clear_bridge_account();
+        let source2 = SolSupplySource::with_rpc(rpc2, Pubkey([1u8; 32]), "finalized".to_string());
+        assert!(matches!(
+            source2.wrapped_supply().await,
+            Err(ReserveError::Rpc(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_sol_supply_source_verifies_solana_leg_in_reconciler() {
+        // A live (mocked) Solana source makes the Solana leg VERIFY instead of
+        // being reported unverified: an exact match is healthy.
+        let db = setup_db();
+        lock(&db, Chain::Solana, 2_000);
+
+        let mint = Pubkey([9u8; 32]);
+        let rpc = MockSolanaRpc::new(mint, 2_000);
+        let sol: Arc<dyn SupplySource> = Arc::new(SolSupplySource::with_rpc(
+            rpc,
+            Pubkey([1u8; 32]),
+            "finalized".to_string(),
+        ));
+        let reconciler = Reconciler::new(db.clone(), vec![sol], None, 0);
+
+        let proof = reconciler.reconcile_once().await.unwrap();
+        assert_eq!(proof.sol_supply, Some(2_000));
+        assert_eq!(proof.total_wrapped, Some(2_000));
+        assert_eq!(proof.drift, 0);
+        assert!(proof.peg_healthy);
+        let sol_status = proof.chains.iter().find(|c| c.chain == "solana").unwrap();
+        assert!(sol_status.verified, "Solana leg must now VERIFY");
+    }
+
+    /// Build a reserve `OwnedOutput` (via the real scan path) for a factor-1
+    /// output the reserve owns, so its key-image derivation matches the node.
+    fn reserve_owned(reserve: &AccountKey, amount: u64, tag: &str) -> OwnedOutput {
+        use crate::bth_rpc::RpcOutput;
+        let out = TxOutput::new(amount, &reserve.default_subaddress());
+        let rpc = RpcOutput {
+            tx_hash: tag.to_string(),
+            output_index: 0,
+            target_key: hex::encode(out.target_key),
+            public_key: hex::encode(out.public_key),
+            amount,
+            cluster_tags: vec![],
+            e_memo: None,
+        };
+        scan_deposit_output(&rpc, reserve).unwrap().unwrap().owned
+    }
+
+    #[test]
+    fn test_sum_unspent_reserve_balance_excludes_spent_and_pending() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::from_seed([31u8; 32]);
+        let reserve = AccountKey::random(&mut rng);
+
+        let owned = vec![
+            reserve_owned(&reserve, 1_000, "a"),
+            reserve_owned(&reserve, 2_000, "b"),
+            reserve_owned(&reserve, 4_000, "c"),
+        ];
+        let unspent = KeyImageStatus {
+            spent: false,
+            pending: false,
+        };
+        let spent = KeyImageStatus {
+            spent: true,
+            pending: false,
+        };
+        let pending = KeyImageStatus {
+            spent: false,
+            pending: true,
+        };
+
+        // All unspent: full sum.
+        assert_eq!(
+            sum_unspent_reserve_balance(&owned, &[unspent, unspent, unspent]),
+            7_000
+        );
+        // The 2_000 output is spent, the 4_000 is pending: only 1_000 counts.
+        assert_eq!(
+            sum_unspent_reserve_balance(&owned, &[unspent, spent, pending]),
+            1_000
+        );
+        // A short status vector never overcounts (missing entries excluded).
+        assert_eq!(sum_unspent_reserve_balance(&owned, &[unspent]), 1_000);
+    }
+
+    #[test]
+    fn test_reserve_output_key_image_is_deterministic_and_node_identical() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::from_seed([37u8; 32]);
+        let reserve = AccountKey::random(&mut rng);
+        let owned = reserve_owned(&reserve, 5_000, "ki");
+
+        let ki1 = reserve_output_key_image(&reserve, &owned).unwrap();
+        let ki2 = reserve_output_key_image(&reserve, &owned).unwrap();
+        assert_eq!(ki1, ki2, "key image derivation must be deterministic");
+        assert_eq!(ki1.len(), 64, "32-byte key image, hex-encoded");
+    }
+
+    #[tokio::test]
+    async fn test_node_reserve_balance_source_watch_only_is_unverified() {
+        // No reserve keys configured: the custody leg is genuinely uncheckable
+        // and must report NotImplemented (leg stays unverified) — never a
+        // silent healthy pass.
+        let source = NodeReserveBalanceSource::with_parts(
+            Arc::new(BthNodeRpc::new("http://127.0.0.1:1/").unwrap()),
+            None,
+        );
+        assert!(matches!(
+            source.reserve_balance().await,
+            Err(ReserveError::NotImplemented(_))
+        ));
+
+        // Wired into the reconciler, a NotImplemented balance source leaves
+        // reserve_balance_checked false (custody UNCHECKED, not false-healthy).
+        let db = setup_db();
+        lock(&db, Chain::Ethereum, 1_000);
+        let eth = MockSupply::new(Chain::Ethereum, 1_000);
+        let reconciler = Reconciler::new(db.clone(), vec![eth], Some(Arc::new(source)), 0);
+        let proof = reconciler.reconcile_once().await.unwrap();
+        assert!(!proof.reserve_balance_checked);
+        assert!(proof.peg_healthy);
     }
 
     #[test]

@@ -179,7 +179,7 @@ pub fn build_bridge_mint_instruction(
 /// Byte offset of the `mint: Pubkey` field inside the `Bridge` account:
 /// 8-byte Anchor discriminator + mint_authority(32) + admin_authority(32) +
 /// pauser_authority(32).
-const BRIDGE_MINT_OFFSET: usize = 8 + 32 + 32 + 32;
+pub const BRIDGE_MINT_OFFSET: usize = 8 + 32 + 32 + 32;
 
 /// Extract the wBTH mint pubkey from raw `Bridge` account data (#850 layout).
 pub fn parse_bridge_mint(data: &[u8]) -> Result<Pubkey, MintError> {
