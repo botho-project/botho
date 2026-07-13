@@ -576,7 +576,13 @@ impl Database {
             _ => None,
         };
 
-        if let Some(hash) = tx_hash {
+        // Defense-in-depth: a same-status write on a terminal order
+        // (`Completed -> Completed`, etc.) must not clobber the recorded
+        // `dest_tx`. `same_status` already passed the transition guard above,
+        // so without this a second call with a different `tx_hash` would
+        // overwrite the settled destination tx. Only refresh the tx hash while
+        // the order is still non-terminal.
+        if let (Some(hash), false) = (tx_hash, current.is_terminal()) {
             // Update with transaction hash
             tx.execute(
                 r#"
@@ -2265,6 +2271,59 @@ mod tests {
         assert_eq!(
             db.get_order(&order.id).unwrap().unwrap().status,
             OrderStatus::MintPending
+        );
+    }
+
+    #[test]
+    fn test_update_order_status_terminal_same_status_preserves_dest_tx() {
+        // #855 defense-in-depth: a `Completed -> Completed` write with a
+        // different tx_hash must NOT overwrite the settled dest_tx.
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let order = setup_mint_order(&db); // DepositConfirmed
+
+        db.update_order_status(&order.id, &OrderStatus::MintPending, Some("0xtx"))
+            .unwrap();
+        db.update_order_status(&order.id, &OrderStatus::Completed, Some("A"))
+            .unwrap();
+        assert_eq!(
+            db.get_order(&order.id).unwrap().unwrap().dest_tx.as_deref(),
+            Some("A")
+        );
+
+        // Same-status write on a terminal order with a different hash must be
+        // a no-op for dest_tx (the tx-hash refresh branch is gated off).
+        db.update_order_status(&order.id, &OrderStatus::Completed, Some("B"))
+            .unwrap();
+        let after = db.get_order(&order.id).unwrap().unwrap();
+        assert_eq!(after.status, OrderStatus::Completed);
+        assert_eq!(
+            after.dest_tx.as_deref(),
+            Some("A"),
+            "terminal same-status write must not clobber the settled dest_tx"
+        );
+    }
+
+    #[test]
+    fn test_update_order_status_nonterminal_same_status_refreshes_dest_tx() {
+        // The terminal guard must not regress the legitimate non-terminal
+        // idempotent refresh: MintPending -> MintPending updates dest_tx.
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let order = setup_mint_order(&db);
+
+        db.update_order_status(&order.id, &OrderStatus::MintPending, Some("A"))
+            .unwrap();
+        assert_eq!(
+            db.get_order(&order.id).unwrap().unwrap().dest_tx.as_deref(),
+            Some("A")
+        );
+        db.update_order_status(&order.id, &OrderStatus::MintPending, Some("B"))
+            .unwrap();
+        assert_eq!(
+            db.get_order(&order.id).unwrap().unwrap().dest_tx.as_deref(),
+            Some("B"),
+            "non-terminal same-status refresh must still update dest_tx"
         );
     }
 

@@ -26,6 +26,8 @@
 //! to the `audit_log` by the reconciler; this surface serves the compact
 //! snapshots the dashboard renders.
 
+use std::net::ToSocketAddrs;
+
 use axum::{
     extract::State,
     http::StatusCode,
@@ -168,6 +170,35 @@ pub fn router(state: ApiState) -> Router {
         .with_state(state)
 }
 
+/// Classify a bind spec as reachable only from loopback.
+///
+/// Returns `true` when **every** resolved socket address is a loopback IP
+/// (`127.0.0.0/8` for IPv4, `::1` for IPv6) — i.e. the API is only reachable
+/// from the local host. Returns `false` when any resolved address is
+/// non-loopback (`0.0.0.0`, `::`, or a concrete external IP), meaning the
+/// unauthenticated breaker/status surface is exposed beyond localhost.
+///
+/// An address that cannot be resolved is treated as non-loopback (`false`)
+/// so callers err on the side of warning; in practice an unresolvable bind
+/// spec already fails earlier at `TcpListener::bind`, so this only runs on a
+/// successful bind.
+fn is_loopback_bind(addr: &str) -> bool {
+    match addr.to_socket_addrs() {
+        Ok(mut resolved) => {
+            let mut any = false;
+            for sa in resolved.by_ref() {
+                any = true;
+                if !sa.ip().is_loopback() {
+                    return false;
+                }
+            }
+            // No addresses resolved -> cannot confirm loopback -> warn.
+            any
+        }
+        Err(_) => false,
+    }
+}
+
 /// Serve the API until shutdown.
 pub async fn serve(
     addr: String,
@@ -179,6 +210,21 @@ pub async fn serve(
         .await
         .map_err(|e| format!("bind {} failed: {}", addr, e))?;
     info!("Bridge API listening on {}", addr);
+
+    // The breaker/status control surface is unauthenticated; its only defense
+    // is network placement (loopback by default). Warn loudly when the bind
+    // exposes it beyond localhost so an operator who set `0.0.0.0` to scrape
+    // /metrics remotely isn't silently exposing the un-pause kill switch.
+    if !is_loopback_bind(&addr) {
+        warn!(
+            "Bridge API bound to non-loopback address {} — POST /api/breaker is an \
+             UNAUTHENTICATED kill switch (pause/RESUME) and /api/status leaks operational \
+             detail. Anyone who can reach this address can defeat a fail-closed auto-trip \
+             during a peg incident. Put it behind a reverse proxy with auth or restrict access \
+             with firewall rules; see docs/operations/runbooks/bridge-order-engine-recovery.md",
+            addr
+        );
+    }
 
     axum::serve(
         listener,
@@ -408,6 +454,19 @@ mod tests {
             },
             db,
         )
+    }
+
+    #[test]
+    fn test_is_loopback_bind_classification() {
+        // #855: loopback binds must NOT warn.
+        assert!(is_loopback_bind("127.0.0.1:9741"));
+        assert!(is_loopback_bind("127.0.0.5:9741")); // 127.0.0.0/8
+        assert!(is_loopback_bind("[::1]:9741"));
+
+        // Non-loopback binds MUST warn (helper returns false).
+        assert!(!is_loopback_bind("0.0.0.0:9741"));
+        assert!(!is_loopback_bind("[::]:9741"));
+        assert!(!is_loopback_bind("192.0.2.10:9741")); // concrete external IP
     }
 
     #[test]
