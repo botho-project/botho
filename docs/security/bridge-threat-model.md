@@ -152,6 +152,7 @@ detection + alerting is filed as a hardening follow-up (see "Follow-ups").
 | Unbacked supply (unauthorized mint) trips alert | `reserve::test_drift_injection_unbacked_supply_trips_alert` | #844 |
 | Missing supply trips alert | `reserve::test_drift_injection_missing_supply_trips_alert` | #844 |
 | Custody theft (reserve moved w/o burn) flips peg state | `reserve::test_unauthorized_reserve_movement_trips_custody_alert` | #844 |
+| Demurrage decay of the reserve: a non-factor-1 (decaying) deposit never mints, so the reserve holds only zero-demurrage coins (ADR 0003) | `watchers::bth::test_non_factor1_deposit_rejected_with_audit` | #841 |
 | Contract supply invariant under random ops | `WrappedBTH.test.ts › supply accounting invariant (randomized)` | #851 |
 
 ### 10. Breaker bypass (drift/anomaly should halt, not merely log)
