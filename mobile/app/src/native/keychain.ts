@@ -1,9 +1,20 @@
 /**
- * iOS Keychain Integration
+ * Secure Wallet Storage (iOS Keychain + Android Keystore)
  *
- * Provides secure storage for encrypted wallet data using iOS Keychain
- * with biometric protection. Uses expo-secure-store under the hood with
- * additional configuration for maximum security.
+ * Provides secure storage for encrypted wallet data with biometric
+ * protection. Uses `expo-secure-store` under the hood, which is a
+ * cross-platform Expo module — NOT an iOS-only wrapper:
+ *
+ * - iOS: backed by the iOS Keychain (Security.framework), with
+ *   `SecAccessControl` biometry flags when `requireAuthentication` is set.
+ * - Android: backed by the Android Keystore + `EncryptedSharedPreferences`,
+ *   with `BiometricPrompt` gating when `requireAuthentication` is set (the
+ *   Keystore key is created with `setUserAuthenticationRequired(true)`).
+ *
+ * The same exported surface (`saveEncryptedWallet`, `loadEncryptedWallet`,
+ * etc.) therefore works on both platforms without per-platform branching in
+ * the callers (e.g. `walletStore.ts`). See the `SECURE_OPTIONS` doc comment
+ * below for which options are cross-platform vs. iOS-only.
  */
 
 import * as SecureStore from "expo-secure-store";
@@ -33,16 +44,60 @@ export interface StoredWallet {
 }
 
 /**
- * Keychain options for maximum security
+ * Secure-store options for the encrypted wallet blob.
  *
- * - kSecAttrAccessibleWhenUnlockedThisDeviceOnly: No iCloud backup
- * - requireAuthentication: Require biometric/passcode
+ * Per-platform behaviour of each field (important: some fields are silently
+ * ignored on Android, so the "maximum security" posture is NOT identical
+ * across platforms and must not be assumed to be):
+ *
+ * - `keychainAccessible` (**iOS-only**): `WHEN_UNLOCKED_THIS_DEVICE_ONLY` maps
+ *   to `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, which keeps the item out
+ *   of iCloud Keychain backup. `expo-secure-store` **ignores this field on
+ *   Android** — there is no Android accessibility constant. Android's own
+ *   equivalent (excluding Keystore-backed data from Auto Backup) is applied by
+ *   the platform by default, so the security intent still holds on Android,
+ *   just via a different mechanism, not via this option.
+ * - `requireAuthentication` (**cross-platform**): on iOS this sets
+ *   `SecAccessControl` biometry flags; on Android it routes the read/write
+ *   through `BiometricPrompt` and creates the Keystore key with
+ *   `setUserAuthenticationRequired(true)`. NOTE: on Android this **requires at
+ *   least one biometric or device credential to be enrolled** — otherwise
+ *   `expo-secure-store` throws at write time. See `SECURE_STORE_UNAVAILABLE`
+ *   below and `saveEncryptedWallet` / `loadEncryptedWallet` for how that is
+ *   handled.
+ * - `authenticationPrompt` (**cross-platform**): the message shown in the
+ *   biometric/credential prompt on both platforms.
+ *
+ * Whether the Keystore key material lands in hardware-backed StrongBox / TEE
+ * vs. a software keystore on Android is device-dependent and cannot be forced
+ * from JS (there is no public `expo-secure-store` API for it). This is
+ * documented in `mobile/README.md` and `mobile/FRAMEWORK_DECISION.md` rather
+ * than enforced in code.
  */
 const SECURE_OPTIONS: SecureStore.SecureStoreOptions = {
   keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
   requireAuthentication: true,
   authenticationPrompt: "Authenticate to access your Botho wallet",
 };
+
+/**
+ * Thrown when the secure store cannot satisfy the `requireAuthentication`
+ * contract because the device has no biometric or device-credential enrolled.
+ *
+ * This is most common on Android (many devices ship with "Swipe"/"None" screen
+ * lock), but can also occur on a fresh iOS simulator/device with no Face ID /
+ * Touch ID / passcode configured. Callers should surface an actionable message
+ * asking the user to set up a screen lock, rather than treating this as a
+ * generic storage failure.
+ */
+export class SecureStoreUnavailableError extends Error {
+  constructor(
+    message = "Secure storage requires a screen lock (biometric or device passcode/PIN). Please enable a screen lock in your device settings and try again."
+  ) {
+    super(message);
+    this.name = "SecureStoreUnavailableError";
+  }
+}
 
 /**
  * Check if biometric authentication is available
@@ -86,9 +141,86 @@ export async function authenticateWithBiometrics(
 }
 
 /**
- * Save encrypted wallet to Keychain
+ * Whether the device can satisfy `requireAuthentication`-gated secure storage.
  *
- * Requires biometric authentication to write.
+ * `requireAuthentication: true` needs an enrolled authenticator:
+ * - biometric (Face ID / Touch ID / fingerprint), OR
+ * - a device credential (PIN / pattern / passcode).
+ *
+ * `isBiometricAvailable()` only covers the biometric case, so we additionally
+ * treat `SECURITY_LEVEL >= SECRET` (a passcode/PIN is set) as sufficient — a
+ * device with a PIN but no fingerprint can still back `requireAuthentication`
+ * via device-credential fallback. This is what lets us give the user an
+ * actionable "set up a screen lock" message *before* the write throws.
+ */
+export async function isSecureStorageAvailable(): Promise<boolean> {
+  // A biometric enrollment is sufficient on both platforms.
+  if (await isBiometricAvailable()) return true;
+
+  // Otherwise, a device credential (PIN/pattern/passcode) is also sufficient
+  // for `requireAuthentication` via device-credential fallback.
+  const level = await LocalAuthentication.getEnrolledLevelAsync();
+  return level !== LocalAuthentication.SecurityLevel.NONE;
+}
+
+/**
+ * Fallback decision for `requireAuthentication`-gated storage on a device with
+ * no enrolled authenticator.
+ *
+ * Approach chosen (per issue #791 acceptance criteria — option "a" + "b"
+ * combined): we PROACTIVELY detect the missing-enrollment case via
+ * `isSecureStorageAvailable()` and throw a typed, actionable
+ * `SecureStoreUnavailableError` before ever calling `expo-secure-store`. We
+ * ALSO wrap the underlying call so that if the platform throws the native
+ * "no authentication enrolled" error anyway (races, platform quirks), it is
+ * normalized to the same typed error instead of leaking as an uncaught
+ * rejection. This keeps callers on a single, catchable failure mode on both
+ * iOS and Android.
+ *
+ * Rationale for erroring rather than silently downgrading to unauthenticated
+ * storage: the wallet blob is the most sensitive data in the app; storing it
+ * without `requireAuthentication` would be a silent security regression. It is
+ * better to require the user to set a screen lock than to weaken protection
+ * without their knowledge.
+ */
+async function setAuthenticatedItem(
+  key: string,
+  value: string
+): Promise<void> {
+  if (!(await isSecureStorageAvailable())) {
+    throw new SecureStoreUnavailableError();
+  }
+  try {
+    await SecureStore.setItemAsync(key, value, SECURE_OPTIONS);
+  } catch (error) {
+    if (isNoAuthEnrolledError(error)) {
+      throw new SecureStoreUnavailableError();
+    }
+    throw error;
+  }
+}
+
+/**
+ * Best-effort classifier for the native "no authentication enrolled" error.
+ *
+ * `expo-secure-store` surfaces this differently per platform/version, so we
+ * match on the well-known message fragments rather than a stable error code.
+ */
+function isNoAuthEnrolledError(error: unknown): boolean {
+  const message =
+    error instanceof Error ? error.message : String(error ?? "");
+  return (
+    /authentication/i.test(message) &&
+    /(not|no).*(enrolled|set up|available|configured)/i.test(message)
+  );
+}
+
+/**
+ * Save encrypted wallet to secure storage (iOS Keychain / Android Keystore).
+ *
+ * Requires biometric or device-credential authentication to write. Throws
+ * {@link SecureStoreUnavailableError} if the device has no screen lock
+ * configured (see the fallback decision on `setAuthenticatedItem`).
  */
 export async function saveEncryptedWallet(
   encryptedData: string
@@ -99,18 +231,17 @@ export async function saveEncryptedWallet(
     lastUnlock: Date.now(),
   };
 
-  await SecureStore.setItemAsync(
-    WALLET_KEY,
-    JSON.stringify(wallet),
-    SECURE_OPTIONS
-  );
+  await setAuthenticatedItem(WALLET_KEY, JSON.stringify(wallet));
 }
 
 /**
- * Load encrypted wallet from Keychain
+ * Load encrypted wallet from secure storage (iOS Keychain / Android Keystore).
  *
- * Requires biometric authentication to read.
- * Returns null if no wallet is stored.
+ * Requires biometric or device-credential authentication to read. Returns null
+ * if no wallet is stored. Re-throws {@link SecureStoreUnavailableError} so the
+ * caller can prompt the user to set up a screen lock (rather than silently
+ * treating "no lock configured" as "no wallet"); all other errors are logged
+ * and result in `null`.
  */
 export async function loadEncryptedWallet(): Promise<StoredWallet | null> {
   try {
@@ -119,17 +250,24 @@ export async function loadEncryptedWallet(): Promise<StoredWallet | null> {
 
     const wallet: StoredWallet = JSON.parse(data);
 
-    // Update last unlock time
+    // Update last unlock time (best-effort; failure here must not lose the
+    // successfully-read wallet).
     wallet.lastUnlock = Date.now();
-    await SecureStore.setItemAsync(
-      WALLET_KEY,
-      JSON.stringify(wallet),
-      SECURE_OPTIONS
-    );
+    try {
+      await setAuthenticatedItem(WALLET_KEY, JSON.stringify(wallet));
+    } catch (writeError) {
+      console.warn("Failed to update wallet unlock timestamp:", writeError);
+    }
 
     return wallet;
   } catch (error) {
-    console.error("Failed to load wallet from Keychain:", error);
+    if (error instanceof SecureStoreUnavailableError) {
+      throw error;
+    }
+    if (isNoAuthEnrolledError(error)) {
+      throw new SecureStoreUnavailableError();
+    }
+    console.error("Failed to load wallet from secure storage:", error);
     return null;
   }
 }

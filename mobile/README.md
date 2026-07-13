@@ -77,7 +77,31 @@ pnpm ios
 
 - `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`: No iCloud backup
 - Biometric protection (Face ID / Touch ID)
-- Hardware-backed encryption
+- Hardware-backed encryption (Secure Enclave where available)
+
+### Android Keystore
+
+The same `expo-secure-store`-backed storage layer (`app/src/native/keychain.ts`)
+runs on Android with no per-platform caller branching — parity with the iOS path:
+
+- **Android Keystore + `EncryptedSharedPreferences`**: the encrypted wallet blob
+  is stored in `EncryptedSharedPreferences`, encrypted with an Android
+  Keystore-held AES key. Analogous to iOS's `WHEN_UNLOCKED_THIS_DEVICE_ONLY`,
+  Keystore-backed data is excluded from Android Auto Backup by default, so the
+  wallet is not synced to the cloud.
+- **Biometric / device-credential protection**: `requireAuthentication: true`
+  routes reads/writes through Android's `BiometricPrompt` and creates the
+  Keystore key with `setUserAuthenticationRequired(true)`. This requires the
+  device to have a biometric or device credential (PIN/pattern/passcode)
+  enrolled — on a device with "Swipe"/"None" screen lock, `keychain.ts` throws a
+  typed `SecureStoreUnavailableError` prompting the user to set up a screen lock,
+  rather than silently downgrading to unauthenticated storage.
+- **Hardware backing is device-dependent**: whether the Keystore key lands in a
+  hardware-backed **StrongBox** / TEE keymaster vs. a software keystore depends
+  on the device's hardware. There is no public `expo-secure-store` API to *force*
+  StrongBox, so the app does **not** enforce it — this is a known platform
+  variance, not a guarantee. (Note: `keychainAccessible` in `SECURE_OPTIONS` is
+  iOS-only and is silently ignored by `expo-secure-store` on Android.)
 
 ### Network Security
 
