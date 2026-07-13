@@ -90,6 +90,8 @@ describe('node pages i18n', () => {
   it('renders the success page in English by default', () => {
     renderAt('/node/success', <NodeSuccessPage />)
     expect(screen.getByRole('heading', { name: 'Subscription started' })).toBeTruthy()
+    // No session_id → the no-session fallback copy renders in English.
+    expect(screen.getByText(/Check your email/i)).toBeTruthy()
   })
 
   it('renders the success page in Spanish under /es', async () => {
@@ -97,6 +99,8 @@ describe('node pages i18n', () => {
     renderAt('/es/node/success', <NodeSuccessPage />)
     expect(screen.getByRole('heading', { name: 'Suscripción iniciada' })).toBeTruthy()
     expect(screen.queryByRole('heading', { name: 'Subscription started' })).toBeNull()
+    // The no-session fallback copy is translated too (informal tú register).
+    expect(screen.getByText(/Revisa tu correo/i)).toBeTruthy()
   })
 
   it('renders the status page state badge in English by default', async () => {

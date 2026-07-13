@@ -99,6 +99,79 @@ export async function fetchNodeStatus(
   }
 }
 
+/** The `session_id` query-param name Stripe appends to the success URL. */
+export const SESSION_ID_PARAM = 'session_id'
+
+/**
+ * Read the Stripe `session_id` from a query string (the success page is opened as
+ * `/node/success?session_id=…`). Returns null when absent.
+ */
+export function sessionIdFromSearch(search: string): string | null {
+  try {
+    const v = new URLSearchParams(search).get(SESSION_ID_PARAM)
+    return v && v.trim() !== '' ? v.trim() : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Outcome of exchanging a Stripe `session_id` for a status link on the success
+ * page. `pending` means the payment is confirmed but provisioning hasn't written
+ * the node row yet — the caller should keep polling. `ready` carries the
+ * `/node/status?token=…` URL to link to.
+ */
+export type SessionStatus =
+  | { kind: 'ready'; statusUrl: string }
+  | { kind: 'pending' }
+
+/**
+ * Exchange a Stripe `session_id` for the node status URL via the control-plane
+ * Worker (#805 part 1). `fetchImpl` is injectable for tests.
+ *
+ * Response mapping (mirrors the Worker's `/session-status` contract):
+ *   - 200 → `{ kind: 'ready', statusUrl }`
+ *   - 202 → `{ kind: 'pending' }` (still provisioning — poll again)
+ *   - 401 → throw `NodeStatusError(…, 401)` — unknown/unpaid/malformed session,
+ *           terminal, the caller must STOP polling
+ *   - other → throw `NodeStatusError` (transient; the caller may retry)
+ */
+export async function fetchSessionStatus(
+  sessionId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<SessionStatus> {
+  const url = `${baasEndpoint()}/session-status?${SESSION_ID_PARAM}=${encodeURIComponent(sessionId)}`
+  let resp: Response
+  try {
+    resp = await fetchImpl(url, { method: 'GET' })
+  } catch {
+    throw new NodeStatusError('Could not reach the status service. Try again.')
+  }
+
+  if (resp.status === 202) {
+    return { kind: 'pending' }
+  }
+  if (!resp.ok) {
+    if (resp.status === 401) {
+      // Terminal: unknown / unpaid / malformed session — do NOT keep polling.
+      throw new NodeStatusError('This checkout link is invalid or has expired.', 401)
+    }
+    throw new NodeStatusError('Could not confirm your checkout.', resp.status)
+  }
+
+  let json: { status?: string; statusUrl?: string }
+  try {
+    json = (await resp.json()) as typeof json
+  } catch {
+    throw new NodeStatusError('Unexpected response from the status service.', resp.status)
+  }
+  if (json.status === 'pending') return { kind: 'pending' }
+  if (json.status === 'ready' && typeof json.statusUrl === 'string' && json.statusUrl.length > 0) {
+    return { kind: 'ready', statusUrl: json.statusUrl }
+  }
+  throw new NodeStatusError('Unexpected response from the status service.', resp.status)
+}
+
 /**
  * Open a Stripe Customer Portal session for the authenticated user and return
  * the hosted URL to redirect the browser to. The caller redirects.

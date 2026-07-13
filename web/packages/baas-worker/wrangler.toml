@@ -19,6 +19,13 @@
 #                       this; it binds to ONE Stripe customer so a user only ever
 #                       sees their own node. Any long random string. Required for
 #                       /status and /portal.
+#   RESEND_API_KEY      (OPTIONAL, #805 part 2) Resend API key for status-link
+#                       email delivery on first provision. When UNSET the worker
+#                       still functions fully — the /node/success page's on-page
+#                       link is the primary delivery path — so this is a
+#                       skip-if-absent optional secret, NOT a fail-closed gate.
+#                       Set with `wrangler secret put RESEND_API_KEY` once the
+#                       botho.io sending domain is verified in Resend.
 #   --- provisioner (#502, #458 §3/§5) — a DEDICATED, tightly-scoped IAM user ---
 #   AWS_ACCESS_KEY_ID       provisioner IAM user access key.
 #   AWS_SECRET_ACCESS_KEY   provisioner IAM user secret key.
@@ -71,6 +78,9 @@ ALLOWED_ORIGINS = "https://botho.io,https://wallet.botho.io"
 WALLET_BASE_URL = "https://botho.io"
 # Where Stripe returns the user after they close the Customer Portal.
 PORTAL_RETURN_URL = "https://botho.io/node/status"
+# Verified botho.io sender for the status-link email (#805 part 2). Only used
+# when RESEND_API_KEY (a secret) is also set; safe to leave as-is otherwise.
+RESEND_FROM_ADDRESS = "Botho <nodes@botho.io>"
 
 # --- provisioner non-secret config (#502) ---------------------------------
 # Compute shape (proven seed/faucet node). Non-secret identifiers.
