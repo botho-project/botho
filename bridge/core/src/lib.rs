@@ -16,6 +16,10 @@ pub mod config;
 pub mod nonce;
 pub mod order;
 
+/// Adversarial / cross-domain attestation tests (bridge epic #816, Phase 3).
+#[cfg(test)]
+mod adversarial_tests;
+
 pub use attestation::{
     attestation_domain, attestation_signed_message, canonical_attestation_envelope,
     check_attestation_freshness, check_order_binding, mint_payload_digest,

@@ -539,4 +539,133 @@ describe("WrappedBTH", function () {
       expect(burned).to.be.gt(0n);
     });
   });
+
+  // Adversarial rate-limit accounting fuzz (bridge epic #816, Phase 3,
+  // issue #829). The #851 supply invariant above disables the breaker and
+  // only bounds `dailyMinted <= dailyMintLimit`. This test attacks the
+  // rate-limit ACCOUNTING itself with the breaker ARMED: it drives
+  // randomized mints and time-jumps across UTC-day boundaries and asserts,
+  // after every operation, that `dailyMinted`, `remainingDailyMint()`, and
+  // the auto-pause state exactly match an independent model — including the
+  // reset-is-rolled-back-on-revert and no-reset-on-unpause subtleties.
+  describe("rate-limit accounting fuzz (randomized, breaker armed)", function () {
+    it("dailyMinted / remainingDailyMint / auto-pause track a model under random ops", async function () {
+      const { wbth, admin, minter, pauser, user } = await loadFixture(
+        deployFixture
+      );
+
+      // A tight regime so a handful of max-size mints fill a day. The run
+      // has two phases: with the breaker ARMED below the cap (phase 1,
+      // exercises auto-pause + recovery) and with the breaker DISABLED
+      // (phase 2, lets the counter reach the cap so the daily-limit revert
+      // fires). `currentThreshold` mirrors the on-chain breaker setting.
+      const DAILY_LIMIT = 5n * MAX_TX;
+      let currentThreshold = 4n * MAX_TX;
+      const PHASE2_AT = 70;
+      await wbth.connect(admin).setDailyMintLimit(DAILY_LIMIT);
+      await wbth.connect(admin).setAutoPauseThreshold(currentThreshold);
+
+      // Deterministic PRNG (mulberry32) so failures reproduce.
+      let seed = 0x0829a11;
+      const rand = () => {
+        seed |= 0;
+        seed = (seed + 0x6d2b79f5) | 0;
+        let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+
+      // Independent model of the contract's rate-limit state.
+      let modelMinted = 0n;
+      let modelResetDay = BigInt(Math.floor((await time.latest()) / 86400));
+      let modelPaused = false;
+      let sawLimitRevert = false;
+      let sawAutoPause = false;
+      let orderNonce = 0;
+
+      for (let i = 0; i < 140; i++) {
+        // Enter phase 2: disable the breaker so the counter can reach the
+        // daily cap and exercise the "Daily limit exceeded" revert (which
+        // the breaker would otherwise pre-empt at the threshold).
+        if (i === PHASE2_AT && currentThreshold !== 0n) {
+          if (modelPaused) {
+            await wbth.connect(pauser).unpause();
+            modelPaused = false;
+          }
+          await wbth.connect(admin).setAutoPauseThreshold(0);
+          currentThreshold = 0n;
+        }
+
+        // Recover from an auto-pause: unpause (no reset happens) and jump a
+        // full day so the NEXT mint's lazy reset clears the counter.
+        if (modelPaused) {
+          await wbth.connect(pauser).unpause();
+          await time.increase(86400 + 3600);
+          modelPaused = false;
+        }
+
+        const roll = rand();
+        const nowTs = await time.latest();
+        const today = BigInt(Math.floor(nowTs / 86400));
+
+        if (roll < 0.72) {
+          // Attempt a mint of 1..maxMintPerTx picocredits.
+          const amount = (BigInt(Math.floor(rand() * 1_000_000)) + 1n) * PICO;
+          // The contract resets the counter at the top of bridgeMint, but a
+          // revert on the limit check rolls that reset back.
+          const base = today > modelResetDay ? 0n : modelMinted;
+
+          if (base + amount <= DAILY_LIMIT) {
+            await wbth
+              .connect(minter)
+              .bridgeMint(user.address, amount, oid(`rl-${orderNonce++}`));
+            modelMinted = base + amount;
+            modelResetDay = today;
+            if (currentThreshold !== 0n && modelMinted >= currentThreshold) {
+              modelPaused = true;
+              sawAutoPause = true;
+            }
+          } else {
+            await expect(
+              wbth
+                .connect(minter)
+                .bridgeMint(user.address, amount, oid(`rl-${orderNonce++}`))
+            ).to.be.revertedWith("Daily limit exceeded");
+            sawLimitRevert = true;
+            // State (including the day counter) is unchanged by the revert.
+          }
+        } else {
+          // Jump 1..48 hours (often crossing a UTC-day boundary).
+          await time.increase(3600 * (1 + Math.floor(rand() * 48)));
+        }
+
+        // Accounting invariants after every operation.
+        const tsAfter = await time.latest();
+        const todayAfter = BigInt(Math.floor(tsAfter / 86400));
+        expect(await wbth.dailyMinted()).to.equal(modelMinted);
+        expect(await wbth.paused()).to.equal(modelPaused);
+
+        // remainingDailyMint() folds in the pending (not-yet-persisted) reset.
+        let expectedRemaining: bigint;
+        if (todayAfter > modelResetDay) {
+          expectedRemaining = DAILY_LIMIT;
+        } else if (modelMinted >= DAILY_LIMIT) {
+          expectedRemaining = 0n;
+        } else {
+          expectedRemaining = DAILY_LIMIT - modelMinted;
+        }
+        expect(await wbth.remainingDailyMint()).to.equal(expectedRemaining);
+        expect(await wbth.dailyMinted()).to.be.lte(await wbth.dailyMintLimit());
+      }
+
+      // The run must have actually exercised the interesting branches.
+      expect(sawLimitRevert, "fuzz never hit the daily-limit revert").to.equal(
+        true
+      );
+      expect(
+        sawAutoPause,
+        "fuzz never tripped the auto-pause breaker"
+      ).to.equal(true);
+    });
+  });
 });
