@@ -4,8 +4,9 @@
  * Success-page (`NodeSuccessPage`) state coverage (#805 part 1). The page
  * exchanges Stripe's `session_id` for a magic-link status URL via the
  * control-plane Worker, polling while provisioning lands. These tests assert the
- * pending → ready transition, the terminal-error state, and the no-session
- * fallback, with `fetchSessionStatus` mocked (no network).
+ * pending → ready transition, the terminal-error state, the no-session
+ * fallback, and the poll-exhausted fallback (#809 — must NOT promise an email,
+ * which is env-gated), with `fetchSessionStatus` mocked (no network).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
@@ -40,6 +41,7 @@ describe('NodeSuccessPage', () => {
   })
   afterEach(() => {
     cleanup()
+    vi.useRealTimers()
     window.history.replaceState({}, '', '/node/success')
   })
 
@@ -78,6 +80,23 @@ describe('NodeSuccessPage', () => {
     await waitFor(() => expect(screen.getByText('View your node status')).toBeTruthy(), {
       timeout: 6000,
     })
+  })
+
+  it('shows the still-provisioning fallback (no email promise) when polling exhausts', async () => {
+    vi.useFakeTimers()
+    window.history.replaceState({}, '', '/node/success?session_id=cs_test_slow')
+    // Provisioning never lands within the attempt cap.
+    fetchSessionStatusMock.mockResolvedValue({ kind: 'pending' })
+    renderSuccess()
+    // Drain the initial poll plus every retry interval up to the cap (20 × 3s).
+    for (let i = 0; i < 20; i++) {
+      await vi.advanceTimersByTimeAsync(3000)
+    }
+    expect(fetchSessionStatusMock).toHaveBeenCalledTimes(20)
+    // Poll-exhaustion copy asks the user to refresh — it must NOT promise an
+    // email (the status email is env-gated; #809).
+    expect(screen.getByText(/still being set up/i)).toBeTruthy()
+    expect(screen.queryByText(/check your email/i)).toBeNull()
   })
 
   it('shows the terminal error state on a 401 (stops polling)', async () => {

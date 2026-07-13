@@ -54,6 +54,7 @@
     "viewStatus": "View your node status",
     "linkError": "We couldn't confirm this checkout. If you just paid, refresh in a moment; otherwise start over from the node page.",
     "noSession": "Your subscription is being set up. Check your email for a secure link to your node's status page.",
+    "stillProvisioning": "Your node is still being set up. Refresh this page in a minute to get your secure status link.",
     "openWallet": "Open Wallet",
     "backToHome": "Back to home"
   },
