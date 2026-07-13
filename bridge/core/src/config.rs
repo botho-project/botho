@@ -291,6 +291,21 @@ pub struct SolanaConfig {
     pub mint_threshold: u32,
 }
 
+impl SolanaConfig {
+    /// Whether this Solana config is in a "production" custody posture: a
+    /// federation is configured (`mint_signers` non-empty AND a positive
+    /// `mint_threshold`), meaning ADR-0002 t-of-n custody is expected to be
+    /// enforced by an on-chain multisig `mint_authority`.
+    ///
+    /// The startup custody guard uses this as its strict-mode signal: in a
+    /// production posture a single-key `mint_authority` (equal to the local
+    /// `keypair_file` pubkey) is a HARD startup error; otherwise it is a
+    /// warning, so devnet/testnet single-key iteration is not bricked.
+    pub fn requires_multisig_authority(&self) -> bool {
+        !self.mint_signers.is_empty() && self.mint_threshold >= 1
+    }
+}
+
 /// Bridge-specific settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BridgeSettings {
