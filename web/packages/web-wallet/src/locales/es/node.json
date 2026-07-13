@@ -54,6 +54,7 @@
     "viewStatus": "Ver el estado de tu nodo",
     "linkError": "No pudimos confirmar este pago. Si acabas de pagar, actualiza en un momento; si no, vuelve a empezar desde la página del nodo.",
     "noSession": "Tu suscripción se está configurando. Revisa tu correo para encontrar un enlace seguro a la página de estado de tu nodo.",
+    "stillProvisioning": "Tu nodo todavía se está configurando. Actualiza esta página en un minuto para obtener tu enlace seguro de estado.",
     "openWallet": "Abrir el monedero",
     "backToHome": "Volver al inicio"
   },

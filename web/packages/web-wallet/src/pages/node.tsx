@@ -256,7 +256,7 @@ function NodePageShell({ children }: { children: React.ReactNode }) {
 
 /** Delay (ms) between `/session-status` polls while provisioning is pending. */
 const SESSION_POLL_INTERVAL_MS = 3000
-/** Stop polling after this many attempts (~1 min at 3s) — the email is the fallback. */
+/** Stop polling after this many attempts (~1 min at 3s) — then ask the user to refresh. */
 const SESSION_POLL_MAX_ATTEMPTS = 20
 
 /** Exchange state for the success page's `session_id` → status-link poll. */
@@ -265,6 +265,7 @@ type SessionExchangeState =
   | { kind: 'ready'; statusUrl: string }
   | { kind: 'error' }
   | { kind: 'no-session' }
+  | { kind: 'poll-exhausted' }
 
 /**
  * Post-checkout success page (#458 §4, #805 part 1). Stripe redirects here after
@@ -275,7 +276,9 @@ type SessionExchangeState =
  *   - pending: a spinner while the node comes up,
  *   - ready:   a "View your node status" link,
  *   - error:   a fallback if the session can't be confirmed,
- *   - no-session: the plain confirmation when no `session_id` is present.
+ *   - no-session: the plain confirmation when no `session_id` is present,
+ *   - poll-exhausted: provisioning outlasted the poll cap — ask the user to
+ *     refresh (no email promise: the status email is env-gated, #809).
  */
 export function NodeSuccessPage() {
   const { t } = useTranslation('node')
@@ -302,7 +305,7 @@ export function NodeSuccessPage() {
         }
         // pending → keep polling until we hit the attempt cap.
         if (attempts >= SESSION_POLL_MAX_ATTEMPTS) {
-          setState({ kind: 'no-session' })
+          setState({ kind: 'poll-exhausted' })
           return
         }
         timer = setTimeout(() => void poll(), SESSION_POLL_INTERVAL_MS)
@@ -313,9 +316,9 @@ export function NodeSuccessPage() {
           setState({ kind: 'error' })
           return
         }
-        // Transient error: retry until the cap, then fall back to the email note.
+        // Transient error: retry until the cap, then ask the user to refresh.
         if (attempts >= SESSION_POLL_MAX_ATTEMPTS) {
-          setState({ kind: 'no-session' })
+          setState({ kind: 'poll-exhausted' })
           return
         }
         timer = setTimeout(() => void poll(), SESSION_POLL_INTERVAL_MS)
@@ -365,6 +368,10 @@ export function NodeSuccessPage() {
 
         {state.kind === 'no-session' && (
           <p className="text-sm text-ghost mb-6">{t('success.noSession')}</p>
+        )}
+
+        {state.kind === 'poll-exhausted' && (
+          <p className="text-sm text-ghost mb-6">{t('success.stillProvisioning')}</p>
         )}
 
         <div className="flex flex-col gap-3">
