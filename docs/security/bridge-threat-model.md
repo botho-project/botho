@@ -190,6 +190,35 @@ follow-up.
   fail-safe stubs: an unverified chain is reported `verified: false` and
   excluded from drift math — never silently counted as healthy
   (`reserve::test_unverified_chain_is_flagged_not_alerted`).
+- **Liveness is deliberately traded for safety (griefing / DoS-of-honest-orders).**
+  The bridge is fail-closed everywhere — peg drift, backlog/global caps, the
+  on-chain auto-pause, and the operator kill-switch all *halt* rather than
+  degrade. An adversary who wants to freeze the bridge therefore can, but only
+  by paying real value; there is no free griefing vector. Every breaker trips on
+  **real** activity, not on spoofable signals:
+  - The on-chain auto-pause fires on **cumulative daily mint volume**
+    (`WrappedBTH.sol` `autoPauseThreshold = 10_000_000 * 10 ** 12`, i.e. 10M BTH,
+    contract line ~104; the halt is armed after each mint at lines ~220–222).
+    Minting requires a `t`-of-`n` federation attestation over the attacker's own
+    confirmed BTH deposits, so reaching the threshold means the attacker first
+    locked ~10M BTH of *real* reserve.
+  - The service backlog and global-cap breakers
+    (`max_pending_orders = 1000`, `global_daily_limit = 10M BTH` in
+    `bridge/core/src/config.rs`) trip only on real orders: burns require owning
+    wBTH, deposits require BTH, each order is bounded by
+    `max_order_amount = 1M BTH`, and every order pays `fee_bps = 10` (0.10%,
+    floored at `min_fee = 0.0001 BTH`). Filling the 1000-order backlog with
+    minimum-fee orders costs the attacker at least `1000 × 0.0001 BTH = 0.1 BTH`
+    in fees alone (far more if the orders carry non-trivial value, since the
+    0.10% fee scales with amount), and every order still ties up real BTH or
+    wBTH.
+  DoS-of-honest-orders therefore resolves to "bridge halts, funds safe, operator
+  recovers": the invariants (exactly-once, threshold auth, peg solvency) hold
+  through the halt, and the operator restores service by the documented procedure
+  in [`bridge-order-engine-recovery.md`](../operations/runbooks/bridge-order-engine-recovery.md).
+  The fail-closed cap/breaker behavior is exercised by
+  `engine::test_breaker_auto_trips_on_backlog` and
+  `engine::test_global_cap_trips_breaker` (both #854).
 
 ## Follow-ups filed
 
