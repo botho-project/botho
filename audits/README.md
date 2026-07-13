@@ -45,6 +45,8 @@ Security auditing is iterative. Each internal audit:
 
 | Date | Auditor | Scope | Critical | High | Medium | Low | Status |
 |------|---------|-------|----------|------|--------|-----|--------|
+| 2026-07-12 (c8) | Internal | Delta - Operator write path + consensus/BaaS | **0** | **0** | 1 new | 3 | **Healthy** |
+| 2026-07-05 (c7) | Internal | Delta - Verification (block-acceptance + BaaS + u128) | **0** | **0** | 1 new | 3 | **Healthy** |
 | 2026-01-03 (c5) | Internal | Full - Post Onion Gossip | **0** | **0** | 6 | 5 | **Clean** |
 | 2026-01-03 (c4) | Internal | Full - Post Security Fixes | **0** | **0** | 6 | 5 | **Clean** |
 | 2026-01-03 (c3) | Internal | Full - Post LION Deprecation | **0** | **0** | 10 | 8 | **Clean** |
@@ -63,6 +65,9 @@ External audit will be commissioned when:
 
 ## Report Index
 
+- [2026-07-12 Cycle 8](2026-07-12-cycle8.md) - Operator-signed quorum-curation write path (P4.4), consensus deltas, BaaS status-link; cycle-7 findings closed
+- [2026-07-05 Cycle 7](2026-07-05-cycle7.md) - Verification cycle: block-acceptance C1–C7 confirmed, BaaS worker, u128 widening, dep advisories
+- [2026-06-11 Cycle 6](2026-06-11-cycle6.md) - Block-acceptance hardening, 5 Criticals + Highs
 - [2026-01-03 Cycle 5](2026-01-03-cycle5.md) - Onion Gossip Phase 1 audit, 531 tests (+39%)
 - [2026-01-03 Cycle 4](2026-01-03-cycle4.md) - Security fixes verified, clippy warnings reduced 76%
 - [2026-01-03 Cycle 3](2026-01-03-cycle3.md) - LION deprecation, all Critical/High resolved
