@@ -65,6 +65,52 @@ pub struct ReleaseClaim {
     pub confirmed_at: Option<DateTime<Utc>>,
 }
 
+/// Persisted scan progress for a chain watcher.
+///
+/// One row per source chain. `last_height` is the last FULLY processed
+/// block (all its events handled and idempotency rows written), so a
+/// restart resumes at `last_height + 1` without missing events.
+/// `last_block_hash` is the canonical hash observed for that height —
+/// watchers on reorg-capable chains compare it against the node's current
+/// canonical hash to detect a reorg at/behind the cursor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatcherCursor {
+    /// Source chain this cursor tracks.
+    pub chain: Chain,
+    /// Last fully processed block height (slot on Solana).
+    pub last_height: u64,
+    /// Canonical block hash observed at `last_height` (None where the
+    /// chain has no reorgs to guard against, e.g. SCP-final BTH).
+    pub last_block_hash: Option<String>,
+}
+
+/// A row in the `processed_burns` idempotency table.
+///
+/// One row exists per source-chain burn event that has ever created a
+/// burn order. The `source_key` UNIQUE constraint makes event→order
+/// creation exactly-once: a rescan (cursor rewind) or a reorg re-add of
+/// the same burn finds the existing row and reuses its order instead of
+/// creating a duplicate release.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BurnRecord {
+    /// Stable identity of the burn event: `"<source_tx>#<ordinal>"` where
+    /// ordinal is the event's position among burn events of the SAME
+    /// transaction (stable across reorgs, unlike the absolute log index).
+    pub source_key: String,
+    /// Bridge order created for this burn.
+    pub order_id: Uuid,
+    /// Source chain of the burn.
+    pub chain: Chain,
+    /// Block height (slot) the burn was last observed in.
+    pub block_number: u64,
+    /// Canonical block hash the burn was last observed in.
+    pub block_hash: Option<String>,
+    /// True while the burn's block has been observed reorged out and the
+    /// event has not yet been re-observed in a canonical block. An
+    /// orphaned burn must never advance toward release.
+    pub orphaned: bool,
+}
+
 /// Database wrapper for thread-safe access.
 #[derive(Clone)]
 pub struct Database {
@@ -168,6 +214,25 @@ impl Database {
 
             CREATE UNIQUE INDEX IF NOT EXISTS idx_release_claims_order_hash
                 ON release_claims(order_id_hash);
+
+            CREATE TABLE IF NOT EXISTS watcher_cursors (
+                chain TEXT PRIMARY KEY,
+                last_height INTEGER NOT NULL,
+                last_block_hash TEXT,
+                updated_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS processed_burns (
+                source_key TEXT PRIMARY KEY,
+                order_id TEXT NOT NULL REFERENCES bridge_orders(id),
+                chain TEXT NOT NULL,
+                block_number INTEGER NOT NULL,
+                block_hash TEXT,
+                orphaned INTEGER NOT NULL DEFAULT 0,
+                processed_at INTEGER NOT NULL
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_burns_order ON processed_burns(order_id);
             "#,
         )
         .map_err(|e| format!("Migration failed: {}", e))?;
@@ -207,7 +272,12 @@ impl Database {
     /// Insert a new order.
     pub fn insert_order(&self, order: &BridgeOrder) -> Result<(), String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        Self::insert_order_stmt(&conn, order)
+    }
 
+    /// Execute the order INSERT against `conn` (also used inside
+    /// transactions, e.g. [`Database::insert_burn_order`]).
+    fn insert_order_stmt(conn: &Connection, order: &BridgeOrder) -> Result<(), String> {
         let mint_auth_json = order
             .mint_authorization
             .as_ref()
@@ -371,6 +441,252 @@ impl Database {
         .map_err(|e| format!("Insert failed: {}", e))?;
 
         Ok(())
+    }
+
+    /// Record a detected deposit on an `AwaitingDeposit` order: stamps the
+    /// REVEALED amount (ADR 0004) and the deposit tx as `source_tx`, and
+    /// advances the order to `DepositDetected`.
+    ///
+    /// The SQL `status = 'awaiting_deposit'` guard makes this both a state
+    /// transition check and an idempotency layer: replaying the same
+    /// deposit (cursor rewind) is a no-op. Returns whether the order was
+    /// updated.
+    pub fn record_deposit_detected(
+        &self,
+        order_id: &Uuid,
+        source_tx: &str,
+        amount: u64,
+    ) -> Result<bool, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let changed = conn
+            .execute(
+                r#"
+                UPDATE bridge_orders
+                SET status = 'deposit_detected', source_tx = ?1, amount = ?2, updated_at = ?3
+                WHERE id = ?4 AND status = 'awaiting_deposit'
+                "#,
+                params![
+                    source_tx,
+                    amount as i64,
+                    Utc::now().timestamp(),
+                    order_id.to_string()
+                ],
+            )
+            .map_err(|e| format!("Update failed: {}", e))?;
+
+        Ok(changed > 0)
+    }
+
+    // === Watcher cursors (restart/resume durability) ===
+
+    /// Load the persisted scan cursor for a chain, if any.
+    pub fn get_cursor(&self, chain: Chain) -> Result<Option<WatcherCursor>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let mut stmt = conn
+            .prepare("SELECT last_height, last_block_hash FROM watcher_cursors WHERE chain = ?1")
+            .map_err(|e| format!("Prepare failed: {}", e))?;
+
+        stmt.query_row(params![chain.to_string()], |row| {
+            let last_height: i64 = row.get(0)?;
+            let last_block_hash: Option<String> = row.get(1)?;
+            Ok(WatcherCursor {
+                chain,
+                last_height: last_height as u64,
+                last_block_hash,
+            })
+        })
+        .optional()
+        .map_err(|e| format!("Query failed: {}", e))
+    }
+
+    /// Persist the scan cursor for a chain. Watchers call this only AFTER
+    /// a block is fully processed, so a crash replays (never skips) the
+    /// in-flight block; the idempotency tables deduplicate the replay.
+    pub fn set_cursor(
+        &self,
+        chain: Chain,
+        last_height: u64,
+        last_block_hash: Option<&str>,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        conn.execute(
+            r#"
+            INSERT OR REPLACE INTO watcher_cursors (chain, last_height, last_block_hash, updated_at)
+            VALUES (?1, ?2, ?3, ?4)
+            "#,
+            params![
+                chain.to_string(),
+                last_height as i64,
+                last_block_hash,
+                Utc::now().timestamp()
+            ],
+        )
+        .map_err(|e| format!("Insert failed: {}", e))?;
+
+        Ok(())
+    }
+
+    // === Burn idempotency table ===
+
+    /// Atomically create a burn order together with its `processed_burns`
+    /// idempotency row.
+    ///
+    /// Exactly-once by `source_key`: if the burn was already recorded (a
+    /// cursor replay or reorg re-add), NOTHING is written — the whole
+    /// transaction rolls back and `Ok(false)` is returned so the caller
+    /// reuses the existing order. The single transaction closes the
+    /// crash window between "order inserted" and "idempotency row written".
+    pub fn insert_burn_order(
+        &self,
+        order: &BridgeOrder,
+        source_key: &str,
+        block_number: u64,
+        block_hash: Option<&str>,
+    ) -> Result<bool, String> {
+        let mut conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("Transaction failed: {}", e))?;
+
+        Self::insert_order_stmt(&tx, order)?;
+
+        let changed = tx
+            .execute(
+                r#"
+                INSERT OR IGNORE INTO processed_burns (
+                    source_key, order_id, chain, block_number, block_hash, orphaned, processed_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6)
+                "#,
+                params![
+                    source_key,
+                    order.id.to_string(),
+                    order.source_chain.to_string(),
+                    block_number as i64,
+                    block_hash,
+                    Utc::now().timestamp()
+                ],
+            )
+            .map_err(|e| format!("Insert failed: {}", e))?;
+
+        if changed == 0 {
+            // Duplicate source_key: drop the transaction (rolls back the
+            // order insert) — the existing record wins.
+            return Ok(false);
+        }
+
+        tx.commit().map_err(|e| format!("Commit failed: {}", e))?;
+        Ok(true)
+    }
+
+    /// Look up a burn record by its stable source key.
+    pub fn get_burn_by_source(&self, source_key: &str) -> Result<Option<BurnRecord>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT source_key, order_id, chain, block_number, block_hash, orphaned
+                FROM processed_burns WHERE source_key = ?1
+                "#,
+            )
+            .map_err(|e| format!("Prepare failed: {}", e))?;
+
+        stmt.query_row(params![source_key], Self::row_to_burn)
+            .optional()
+            .map_err(|e| format!("Query failed: {}", e))
+    }
+
+    /// Look up the burn record backing an order.
+    pub fn get_burn_by_order(&self, order_id: &Uuid) -> Result<Option<BurnRecord>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT source_key, order_id, chain, block_number, block_hash, orphaned
+                FROM processed_burns WHERE order_id = ?1
+                "#,
+            )
+            .map_err(|e| format!("Prepare failed: {}", e))?;
+
+        stmt.query_row(params![order_id.to_string()], Self::row_to_burn)
+            .optional()
+            .map_err(|e| format!("Query failed: {}", e))
+    }
+
+    /// Update where a burn was (re-)observed on the source chain and clear
+    /// its orphaned flag — used when a reorged-out burn is re-included in a
+    /// new canonical block (idempotent by order id: same record, same
+    /// order, new location).
+    pub fn update_burn_location(
+        &self,
+        source_key: &str,
+        block_number: u64,
+        block_hash: Option<&str>,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        conn.execute(
+            r#"
+            UPDATE processed_burns
+            SET block_number = ?1, block_hash = ?2, orphaned = 0
+            WHERE source_key = ?3
+            "#,
+            params![block_number as i64, block_hash, source_key],
+        )
+        .map_err(|e| format!("Update failed: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Flag a burn whose block was reorged out. Returns true if the flag
+    /// was newly set (so callers can audit-log the orphaning exactly once).
+    pub fn mark_burn_orphaned(&self, source_key: &str) -> Result<bool, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        let changed = conn
+            .execute(
+                "UPDATE processed_burns SET orphaned = 1 WHERE source_key = ?1 AND orphaned = 0",
+                params![source_key],
+            )
+            .map_err(|e| format!("Update failed: {}", e))?;
+
+        Ok(changed > 0)
+    }
+
+    /// Count audit-log entries with the given action (test/ops helper).
+    pub fn count_audit_action(&self, action: &str) -> Result<i64, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+        conn.query_row(
+            "SELECT COUNT(*) FROM audit_log WHERE action = ?1",
+            params![action],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Query failed: {}", e))
+    }
+
+    /// Convert a database row to a BurnRecord.
+    fn row_to_burn(row: &rusqlite::Row<'_>) -> SqliteResult<BurnRecord> {
+        let source_key: String = row.get(0)?;
+        let order_id_str: String = row.get(1)?;
+        let chain_str: String = row.get(2)?;
+        let block_number: i64 = row.get(3)?;
+        let block_hash: Option<String> = row.get(4)?;
+        let orphaned: i64 = row.get(5)?;
+
+        Ok(BurnRecord {
+            source_key,
+            order_id: Uuid::parse_str(&order_id_str).unwrap_or_default(),
+            chain: chain_str.parse().unwrap_or(Chain::Ethereum),
+            block_number: block_number as u64,
+            block_hash,
+            orphaned: orphaned != 0,
+        })
     }
 
     // === Mint idempotency table ===
@@ -1151,5 +1467,120 @@ mod tests {
         let stored = db.get_order(&order.id).unwrap().unwrap();
         assert_eq!(stored.mint_authorization, order.mint_authorization);
         assert!(stored.dest_confirmed_at.is_none());
+    }
+
+    #[test]
+    fn test_watcher_cursor_roundtrip() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+
+        assert!(db.get_cursor(Chain::Ethereum).unwrap().is_none());
+
+        db.set_cursor(Chain::Ethereum, 100, Some("0xaa")).unwrap();
+        let cursor = db.get_cursor(Chain::Ethereum).unwrap().unwrap();
+        assert_eq!(cursor.last_height, 100);
+        assert_eq!(cursor.last_block_hash.as_deref(), Some("0xaa"));
+
+        // Upsert replaces; per-chain rows are independent.
+        db.set_cursor(Chain::Ethereum, 101, Some("0xbb")).unwrap();
+        db.set_cursor(Chain::Bth, 7, None).unwrap();
+        let eth = db.get_cursor(Chain::Ethereum).unwrap().unwrap();
+        assert_eq!(eth.last_height, 101);
+        assert_eq!(eth.last_block_hash.as_deref(), Some("0xbb"));
+        let bth = db.get_cursor(Chain::Bth).unwrap().unwrap();
+        assert_eq!(bth.last_height, 7);
+        assert!(bth.last_block_hash.is_none());
+    }
+
+    fn burn_order(source_tx: &str) -> BridgeOrder {
+        BridgeOrder::new_burn(
+            Chain::Ethereum,
+            1_000_000_000_000,
+            0,
+            "0x1234567890abcdef1234567890abcdef12345678".to_string(),
+            "bth_stealth_addr".to_string(),
+            source_tx.to_string(),
+        )
+    }
+
+    #[test]
+    fn test_insert_burn_order_exactly_once_by_source_key() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+
+        let first = burn_order("0xburn");
+        assert!(db
+            .insert_burn_order(&first, "0xburn#0", 50, Some("0xblock50"))
+            .unwrap());
+
+        // Replay with the SAME source key (cursor rewind / reorg re-add):
+        // nothing is written, including the duplicate order.
+        let dup = burn_order("0xburn");
+        assert!(!db
+            .insert_burn_order(&dup, "0xburn#0", 51, Some("0xblock51"))
+            .unwrap());
+        assert!(db.get_order(&dup.id).unwrap().is_none());
+
+        let rec = db.get_burn_by_source("0xburn#0").unwrap().unwrap();
+        assert_eq!(rec.order_id, first.id);
+        assert_eq!(rec.block_number, 50);
+        assert!(!rec.orphaned);
+        assert_eq!(
+            db.get_burn_by_order(&first.id).unwrap().unwrap().source_key,
+            "0xburn#0"
+        );
+    }
+
+    #[test]
+    fn test_burn_orphan_and_relocate() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+
+        let order = burn_order("0xburn");
+        db.insert_burn_order(&order, "0xburn#0", 50, Some("0xold"))
+            .unwrap();
+
+        // Orphan flag is set exactly once.
+        assert!(db.mark_burn_orphaned("0xburn#0").unwrap());
+        assert!(!db.mark_burn_orphaned("0xburn#0").unwrap());
+        assert!(db.get_burn_by_source("0xburn#0").unwrap().unwrap().orphaned);
+
+        // Re-inclusion relocates the record and clears the flag.
+        db.update_burn_location("0xburn#0", 52, Some("0xnew"))
+            .unwrap();
+        let rec = db.get_burn_by_source("0xburn#0").unwrap().unwrap();
+        assert_eq!(rec.block_number, 52);
+        assert_eq!(rec.block_hash.as_deref(), Some("0xnew"));
+        assert!(!rec.orphaned);
+    }
+
+    #[test]
+    fn test_record_deposit_detected_guarded_and_idempotent() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+
+        let order = BridgeOrder::new_mint(
+            Chain::Ethereum,
+            1_000_000_000_000,
+            1_000_000_000,
+            "bridge_addr".to_string(),
+            "0x1234567890abcdef1234567890abcdef12345678".to_string(),
+        );
+        db.insert_order(&order).unwrap();
+
+        // First detection records the revealed amount + source tx.
+        assert!(db
+            .record_deposit_detected(&order.id, "0xdeposit", 999_000_000_000)
+            .unwrap());
+        let stored = db.get_order(&order.id).unwrap().unwrap();
+        assert_eq!(stored.status, OrderStatus::DepositDetected);
+        assert_eq!(stored.source_tx.as_deref(), Some("0xdeposit"));
+        assert_eq!(stored.amount, 999_000_000_000);
+
+        // Replay is a no-op (status guard).
+        assert!(!db.record_deposit_detected(&order.id, "0xother", 1).unwrap());
+        let stored = db.get_order(&order.id).unwrap().unwrap();
+        assert_eq!(stored.source_tx.as_deref(), Some("0xdeposit"));
+        assert_eq!(stored.amount, 999_000_000_000);
     }
 }

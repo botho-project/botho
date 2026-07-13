@@ -12,7 +12,7 @@ use crate::{
     db::Database,
     mint::{ethereum::EthMinter, solana::SolMinter, ConfirmationStatus, Minter},
     release::{bth::BthReleaser, PreparedRelease, ReleaseConfirmation, Releaser},
-    watchers::{BthWatcher, EthereumWatcher},
+    watchers::{BthWatcher, EthereumWatcher, SolanaWatcher},
 };
 
 /// Shutdown signal type.
@@ -112,6 +112,19 @@ impl BridgeEngine {
             }
         });
 
+        // Spawn the Solana watcher
+        let sol_watcher = SolanaWatcher::new(
+            self.config.solana.clone(),
+            self.db.clone(),
+            self.shutdown_tx.subscribe(),
+        );
+
+        let sol_handle = tokio::spawn(async move {
+            if let Err(e) = sol_watcher.run().await {
+                error!("Solana watcher error: {}", e);
+            }
+        });
+
         // Spawn the order processing loop
         let minters = Self::build_minters(&self.config);
         let releaser = Self::build_releaser(&self.config);
@@ -153,7 +166,7 @@ impl BridgeEngine {
         let _ = self.shutdown_tx.send(());
 
         // Wait for all components to finish
-        let _ = tokio::join!(bth_handle, eth_handle, process_handle);
+        let _ = tokio::join!(bth_handle, eth_handle, sol_handle, process_handle);
 
         info!("Bridge engine stopped");
         Ok(())
