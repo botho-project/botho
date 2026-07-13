@@ -82,6 +82,49 @@ export interface MetricsHistorySample {
   mempoolSize: number
 }
 
+/**
+ * Latest bridge proof-of-reserves snapshot, `GET /api/metrics/reserve` (#825).
+ *
+ * Backend source of truth: `ReserveProof` in
+ * `infra/faucet/metrics-daemon/src/db.rs` (`#[serde(rename_all = "camelCase")]`).
+ *
+ * Numeric contract: `lockedReserve`/`ethSupply`/`solSupply`/`totalWrapped` are
+ * Rust `u64` picocredits and `drift` is a signed `i64`, all serialized as bare
+ * JSON numbers. A full-supply value can exceed `Number.MAX_SAFE_INTEGER`, so we
+ * keep them as `number` on the wire type (that's how they arrive) and convert to
+ * `bigint` at format time via `BigInt(...)` — never pass `Number` picocredits
+ * through `formatBTH`, which takes a `bigint`.
+ *
+ * Nullable supplies mean the chain was unverified this pass (e.g. the Solana
+ * transport is still pending). `null` renders as "unverified", never `0`.
+ */
+export interface ReserveProof {
+  /** BTH locked in the bridge reserve (picocredits). */
+  lockedReserve: number
+  /** wBTH minted on Ethereum; null = chain unverified this pass. */
+  ethSupply: number | null
+  /** wBTH minted on Solana; null = transport pending / unverified. */
+  solSupply: number | null
+  /** ethSupply + solSupply; null if any leg is unverified. */
+  totalWrapped: number | null
+  /** Signed picocredits: lockedReserve − totalWrapped (can be negative). */
+  drift: number
+  /** Within the peg tolerance band. */
+  inTolerance: boolean
+  /** Authoritative red/green source for the peg indicator. */
+  pegHealthy: boolean
+  /** Unix SECONDS when the snapshot was taken. */
+  takenAt: number
+}
+
+/**
+ * `useReserveProof` state:
+ * - `ok`          — 200 with a parsed `ReserveProof`.
+ * - `absent`      — 404: daemon has not polled a bridge yet (hide/gray card).
+ * - `unavailable` — network error / non-404 non-OK (degrade gracefully, #541).
+ */
+export type ReserveProofState = 'ok' | 'absent' | 'unavailable'
+
 /** History fetcher the page injects (so components stay backend-agnostic). */
 export interface NetworkHistorySource {
   /** Per-node history samples, oldest first. Empty array = no data yet. */

@@ -1,8 +1,15 @@
-import type { FleetNode, FleetNodeStatus, MetricsHistorySample } from '../types'
+import type {
+  FleetNode,
+  FleetNodeStatus,
+  MetricsHistorySample,
+  ReserveProof,
+  ReserveProofState,
+} from '../types'
 import { deriveFleetSummary } from '../fleet'
 import { FleetSummaryStrip } from './fleet-summary'
 import { NodeCard } from './node-card'
 import { HistoryChart } from './history-chart'
+import { ReserveProofCard } from './reserve-proof-card'
 
 export interface NetworkDashboardProps {
   nodes: FleetNode[]
@@ -12,6 +19,13 @@ export interface NetworkDashboardProps {
   /** History series per node id (may be empty). */
   history: Record<string, MetricsHistorySample[]>
   historyState: 'ok' | 'empty' | 'unavailable'
+  /**
+   * Latest bridge proof-of-reserves snapshot (#845). Optional so surfaces that
+   * don't wire the reserve hook simply omit the card.
+   */
+  reserve?: ReserveProof | null
+  /** Reserve fetch outcome; `undefined`/`absent` hides the card. */
+  reserveState?: ReserveProofState
   className?: string
 }
 
@@ -26,6 +40,8 @@ export function NetworkDashboard({
   avgBlockSeconds,
   history,
   historyState,
+  reserve,
+  reserveState,
   className,
 }: NetworkDashboardProps) {
   const statusList = nodes
@@ -41,6 +57,10 @@ export function NetworkDashboard({
   return (
     <div className={`space-y-4 ${className ?? ''}`}>
       <FleetSummaryStrip summary={displaySummary} avgBlockSeconds={avgBlockSeconds} />
+
+      {reserveState !== undefined && (
+        <ReserveProofCard proof={reserve ?? null} state={reserveState} />
+      )}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {nodes.map((node) => (

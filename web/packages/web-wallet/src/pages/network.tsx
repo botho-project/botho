@@ -1,6 +1,11 @@
 import { Link } from 'react-router-dom'
 import { Logo } from '@botho/ui'
-import { NetworkDashboard, useFleetHistory, useFleetStatus } from '@botho/features'
+import {
+  NetworkDashboard,
+  useFleetHistory,
+  useFleetStatus,
+  useReserveProof,
+} from '@botho/features'
 import { ArrowLeft } from 'lucide-react'
 import { FLEET, METRICS_API_BASE } from '../config/fleet'
 
@@ -9,6 +14,7 @@ export function NetworkPage() {
   // /operator fleet tab shares this exact implementation — no forked copies.
   const { statuses, avgBlockSeconds } = useFleetStatus(FLEET)
   const { history, historyState } = useFleetHistory(FLEET, METRICS_API_BASE)
+  const { proof: reserve, state: reserveState } = useReserveProof(METRICS_API_BASE)
 
   return (
     <div className="min-h-screen">
@@ -47,6 +53,8 @@ export function NetworkPage() {
             avgBlockSeconds={avgBlockSeconds}
             history={history}
             historyState={historyState}
+            reserve={reserve}
+            reserveState={reserveState}
           />
         </div>
       </main>
