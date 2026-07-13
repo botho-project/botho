@@ -2603,6 +2603,7 @@ mod tests {
             scheme: bth_bridge_core::SignatureScheme::Secp256k1,
             threshold: 2,
             signatures: vec![],
+            safe_nonce: Some(7),
         });
         db.insert_order(&order).unwrap();
 

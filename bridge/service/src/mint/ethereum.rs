@@ -166,6 +166,33 @@ pub fn assemble_safe_signatures(auth: &MintAuthorization) -> Result<Bytes, MintE
     Ok(blob.into())
 }
 
+/// Pre-broadcast Safe-nonce cross-check (#848).
+///
+/// The collected Safe owner signatures on `auth` are bound to a specific Safe
+/// nonce (`auth.safe_nonce`). If an unrelated Safe transaction executed
+/// between attestation collection and mint submission, `on_chain_nonce` has
+/// advanced past it and `Safe.execTransaction` would revert. Detecting the
+/// mismatch here — before any transaction is persisted or broadcast — lets the
+/// engine re-authorize and re-collect at the fresh nonce instead of
+/// broadcasting a doomed transaction and silently discarding threshold
+/// signatures.
+///
+/// `Ok(())` when the authorization carries no nonce (Solana / legacy) or the
+/// attested nonce equals the on-chain nonce; a retryable
+/// [`MintError::StaleNonce`] otherwise.
+fn check_attested_nonce(auth: &MintAuthorization, on_chain_nonce: U256) -> Result<(), MintError> {
+    if let Some(attested_nonce) = auth.safe_nonce {
+        if U256::from(attested_nonce) != on_chain_nonce {
+            return Err(MintError::StaleNonce(format!(
+                "attestation bound to Safe nonce {} but Safe.nonce() is now {}; \
+                 re-authorizing to re-collect signatures at the current nonce",
+                attested_nonce, on_chain_nonce
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Map the configured [`GasPriceStrategy`] to EIP-1559 fee fields, given the
 /// next block's base fee and the observed priority-fee percentiles from
 /// `eth_feeHistory` (10th / 50th / 90th).
@@ -362,6 +389,13 @@ impl Minter for EthMinter {
 
         // Safe wrapper: execTransaction with the threshold owner signatures.
         let safe_nonce = self.safe_nonce().await?;
+
+        // Pre-broadcast nonce cross-check (#848): if the Safe's on-chain nonce
+        // advanced since the signatures were collected, fail with a distinct
+        // retryable error BEFORE persisting or broadcasting any tx, so the
+        // engine re-authorizes and re-collects at the fresh nonce.
+        check_attested_nonce(auth, safe_nonce)?;
+
         let signatures = assemble_safe_signatures(auth)?;
         debug!(
             "safe tx hash for order {}: {}",
@@ -586,6 +620,7 @@ mod tests {
             scheme: SignatureScheme::Secp256k1,
             threshold: 2,
             signatures: vec![sig(0xBB, 2), sig(0xAA, 1)],
+            safe_nonce: Some(0),
         };
 
         let blob = assemble_safe_signatures(&auth).unwrap();
@@ -604,11 +639,42 @@ mod tests {
                 signer: vec![1u8; 20],
                 signature: vec![0u8; 65],
             }],
+            safe_nonce: Some(0),
         };
         assert!(matches!(
             assemble_safe_signatures(&auth),
             Err(MintError::Attestation(_))
         ));
+    }
+
+    #[test]
+    fn test_check_attested_nonce_detects_mismatch_pre_broadcast() {
+        let auth = MintAuthorization {
+            order_id: [0u8; 32],
+            scheme: SignatureScheme::Secp256k1,
+            threshold: 1,
+            signatures: vec![AttestationSignature {
+                signer: vec![1u8; 20],
+                signature: vec![0u8; 65],
+            }],
+            safe_nonce: Some(7),
+        };
+
+        // Matching nonce: proceed.
+        assert!(check_attested_nonce(&auth, U256::from(7u64)).is_ok());
+
+        // Safe nonce advanced past the attested nonce: distinct stale-nonce
+        // error, so the engine re-authorizes instead of broadcasting.
+        let err = check_attested_nonce(&auth, U256::from(8u64)).unwrap_err();
+        assert!(matches!(err, MintError::StaleNonce(_)), "{err:?}");
+
+        // Authorizations without a Safe nonce (Solana / legacy) never trip the
+        // check.
+        let no_nonce = MintAuthorization {
+            safe_nonce: None,
+            ..auth
+        };
+        assert!(check_attested_nonce(&no_nonce, U256::from(999u64)).is_ok());
     }
 
     #[test]
@@ -618,6 +684,7 @@ mod tests {
             scheme: SignatureScheme::Ed25519,
             threshold: 0,
             signatures: vec![],
+            safe_nonce: None,
         };
         assert!(matches!(
             assemble_safe_signatures(&auth),

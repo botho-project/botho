@@ -31,6 +31,13 @@ pub enum MintError {
     Attestation(String),
     /// RPC / network failure (retryable).
     Rpc(String),
+    /// The Safe nonce the collected signatures are bound to no longer matches
+    /// the Safe's current on-chain nonce (an unrelated Safe transaction
+    /// executed between attestation collection and mint submission). Detected
+    /// **before broadcast** so the engine re-authorizes and re-collects at the
+    /// fresh nonce (#848) instead of broadcasting a transaction the Safe will
+    /// reject. Retryable via re-authorization.
+    StaleNonce(String),
 }
 
 impl std::fmt::Display for MintError {
@@ -39,6 +46,7 @@ impl std::fmt::Display for MintError {
             MintError::Config(m) => write!(f, "config error: {}", m),
             MintError::Attestation(m) => write!(f, "attestation error: {}", m),
             MintError::Rpc(m) => write!(f, "rpc error: {}", m),
+            MintError::StaleNonce(m) => write!(f, "stale safe nonce: {}", m),
         }
     }
 }
