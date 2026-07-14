@@ -33,14 +33,34 @@ export type CryptoType = 'clsag' | 'minting' | 'hybrid'
 
 export interface Transaction {
   id: TxHash
-  type: TransactionType
-  amount: Amount
+  /**
+   * Direction/kind of the transaction. Present for wallet-owned history rows
+   * (the wallet knows whether it sent or received). Omitted by the block
+   * explorer's `getTransaction`, where the node exposes no per-tx direction —
+   * consumers must not assert one (#913).
+   */
+  type?: TransactionType
+  /**
+   * Transaction amount in picocredits. Present only for wallet-owned history
+   * rows, where the amount is recovered from the wallet's own view key. The
+   * node never exposes per-tx amounts to third parties, and under confidential
+   * transactions (ADR 0006 Decision 1) it never will — so the block explorer
+   * leaves this undefined rather than fabricating a `0` (#913, deprecation D1
+   * in docs/design/post-ct-analytics.md).
+   */
+  amount?: Amount
   fee: Amount
   privacyLevel: PrivacyLevel
   /** Attribution type: clsag (ring signatures for private tx), minting (PoW-bound, no signature), or hybrid */
   cryptoType: CryptoType
   status: TransactionStatus
-  timestamp: Timestamp
+  /**
+   * Wall-clock time of the transaction (unix seconds). Present for wallet
+   * history and blocks whose timestamp is known. Omitted by the block
+   * explorer's `getTransaction` when the RPC does not expose a real timestamp —
+   * consumers render "—" rather than fabricating `Date.now()` (#913).
+   */
+  timestamp?: Timestamp
   blockHeight?: BlockHeight
   confirmations: number
   counterparty?: Address
@@ -84,7 +104,13 @@ export interface NodeInfo {
 export interface NetworkStats {
   blockHeight: BlockHeight
   difficulty: bigint
-  hashRate: string
+  /**
+   * Network hash rate as a decimal string. `null` when the data source does
+   * not expose it (e.g. the seed-node read RPC), in which case consumers render
+   * "n/a"/"—" rather than a fabricated "0" (#913, derive-or-n/a rule in
+   * docs/design/block-explorer-network-stats.md).
+   */
+  hashRate: string | null
   connectedPeers: number
   mempoolSize: number
 }

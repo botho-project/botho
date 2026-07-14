@@ -133,9 +133,9 @@ export function TransactionRow({
               than fabricating a relative time. */}
           <span
             className="text-xs text-[--color-dim]"
-            title={tx.timestamp > 0 ? formatAbsoluteTime(tx.timestamp) : undefined}
+            title={tx.timestamp != null && tx.timestamp > 0 ? formatAbsoluteTime(tx.timestamp) : undefined}
           >
-            {tx.timestamp > 0
+            {tx.timestamp != null && tx.timestamp > 0
               ? formatRelativeTime(tx.timestamp)
               : tx.blockHeight != null
                 ? `Block #${tx.blockHeight}`
@@ -151,8 +151,7 @@ export function TransactionRow({
         <div
           className={`font-mono font-semibold ${isReceive ? 'text-[--color-success]' : 'text-[--color-light]'}`}
         >
-          {isReceive ? '+' : '-'}
-          {formatBTH(tx.amount)} BTH
+          {tx.amount != null ? `${isReceive ? '+' : '-'}${formatBTH(tx.amount)} BTH` : '—'}
         </div>
         <div
           className={`flex items-center justify-end gap-1 text-xs ${statusConfig.color}`}

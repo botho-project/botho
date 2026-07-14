@@ -266,7 +266,10 @@ export class RemoteNodeAdapter implements NodeAdapter {
     return {
       blockHeight: status.chainHeight,
       difficulty: BigInt(chain.difficulty || 0),
-      hashRate: '0', // Not provided by RPC
+      // The seed-node read RPC does not expose hash rate. Report null so the
+      // consumer renders "n/a"/"—" rather than a fabricated "0 H/s" that would
+      // read as a real reading (#913, #541-class fabrication).
+      hashRate: null,
       connectedPeers: status.peerCount,
       mempoolSize: status.mempoolSize,
     }
@@ -483,15 +486,29 @@ export class RemoteNodeAdapter implements NodeAdapter {
 
       const status: Transaction['status'] = result.status === 'confirmed' ? 'confirmed' : 'pending'
 
+      // Resolve the real block timestamp when the tx is in a block. The RPC
+      // does not carry a per-tx timestamp, so rather than fabricate `Date.now()`
+      // (#913), look up the containing block. If the lookup fails, leave the
+      // timestamp undefined and let the consumer render "—".
+      let timestamp: number | undefined
+      if (result.blockHeight != null) {
+        const block = await this.getBlock(result.blockHeight)
+        if (block) {
+          timestamp = block.timestamp
+        }
+      }
+
       return {
         id: result.txHash,
-        type: 'receive' as const,
-        amount: BigInt(0), // Private (ring signatures) - amount not visible
+        // Direction, amount, and (when unresolved) timestamp are deliberately
+        // omitted: the node exposes no per-tx direction, and per-tx amounts are
+        // never public (deprecation D1, docs/design/post-ct-analytics.md). Only
+        // publicly-verifiable fields are asserted (#913).
         fee: BigInt(result.fee || 0),
         privacyLevel: 'private' as const,
         cryptoType,
         status,
-        timestamp: Date.now(), // RPC does not expose tx timestamp; block timestamp would require an extra lookup
+        timestamp,
         blockHeight: result.blockHeight ?? undefined,
         confirmations: result.confirmations || 0,
       }
@@ -839,13 +856,14 @@ export class RemoteNodeAdapter implements NodeAdapter {
 
     return {
       id: data.hash as string,
-      type: 'receive' as const,
-      amount: BigInt(0), // Private - not visible
+      // Direction and amount are not exposed by the node (and amounts never will
+      // be under CT); omit them rather than fabricate (#913). The WS event
+      // carries no wall-clock timestamp either — leave it undefined so consumers
+      // render "—" instead of "now".
       fee: BigInt((data.fee as number) || 0),
       privacyLevel: 'private' as const,
       cryptoType,
       status: data.in_block ? 'confirmed' as const : 'pending' as const,
-      timestamp: Date.now(),
       blockHeight: data.in_block as number | undefined,
       confirmations: data.in_block ? 1 : 0,
     }
