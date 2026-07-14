@@ -14,7 +14,7 @@ hard_rules:
 documents:
   - slug: botho-from-the-basics
     artifact_type: primer
-    spec_ref: ../sections/*.tex
+    spec_ref: ../../whitepaper/sections/*.tex
 ---
 
 # Botho from the Basics — project brief
