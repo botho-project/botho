@@ -22,7 +22,7 @@ Architecture
 
 - **Skill-local first.** Lives under ``anvil/skills/memo/lib/`` per the
   CLAUDE.md §"Skill-local first, lib promotion later" pattern. Promotion
-  to ``anvil/lib/`` is deferred until ``pub`` / ``report`` / ``proposal``
+  to ``anvil/lib/`` is deferred until ``paper`` / ``report`` / ``proposal``
   reach for the same primitive (current pattern: wait for the second
   consumer before generalizing).
 

@@ -2,7 +2,7 @@
 
 This file is a reference checklist consumed by `installation-figures` (when cataloging stubs or rendering the rare data figure) and by the `installation-review` critic (when scoring Dimension 2, spatial / architectural resolution, and Dimension 3, sensory / material language — both of which lean on figures).
 
-Unlike `anvil:pub`, where most figures are data plots the figurer can render, installation figures are dominated by **author-supplied artwork**: renders, site plans, and light studies that communicate the form and the felt experience. The figurer is **stub-by-default** — it catalogs what the artist must supply, it does not fabricate imagery.
+Unlike `anvil:paper`, where most figures are data plots the figurer can render, installation figures are dominated by **author-supplied artwork**: renders, site plans, and light studies that communicate the form and the felt experience. The figurer is **stub-by-default** — it catalogs what the artist must supply, it does not fabricate imagery.
 
 ## Expected figures
 

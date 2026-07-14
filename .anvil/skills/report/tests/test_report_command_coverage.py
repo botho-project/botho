@@ -136,5 +136,145 @@ class TestReportReviseSubjectTier(unittest.TestCase):
         self.assertIn("byte-identical to pre-#613", self.text)
 
 
+class TestReportPandocDefaultsParseContract(unittest.TestCase):
+    """The #701 pandoc-3.x defaults-file fix: report's page-number CSS is
+    threaded via ``variables: header-includes`` (a list of raw strings), NOT
+    a top-level ``include-in-header: - text:`` block — which does not parse in
+    a pandoc *defaults* file (``include-in-header`` there expects file paths).
+
+    Mirrors ``TestRenderGateHardeningContract`` in
+    ``anvil/skills/primer/tests/test_primer_command_coverage.py`` (PR #699):
+    a static schema-assertion pair plus an opportunistic real-render smoke
+    test that skips gracefully when the toolchain is absent.
+    """
+
+    _ASSET_REL = "assets/pandoc-defaults.yaml"
+
+    def _asset_text(self) -> str:
+        return (_SKILL_ROOT / self._ASSET_REL).read_text(encoding="utf-8")
+
+    def test_pandoc_defaults_asset_exists(self):
+        asset = _SKILL_ROOT / self._ASSET_REL
+        self.assertTrue(
+            asset.exists(),
+            f"missing report pandoc defaults asset: {asset}",
+        )
+
+    def test_no_toplevel_include_in_header_key(self):
+        """The invalid top-level ``include-in-header:`` block (with the
+        inline ``- text:`` form) must be gone — that is the exact form that
+        fails to parse under pandoc 3.x."""
+        text = self._asset_text()
+        # No unindented (top-level) include-in-header key. A commented mention
+        # in the schema note is fine, so match the YAML key at column 0.
+        self.assertNotIn(
+            "\ninclude-in-header:",
+            text,
+            "top-level include-in-header: block must be removed (does not "
+            "parse in a pandoc defaults file)",
+        )
+
+    def test_page_numbers_threaded_via_variables_header_includes(self):
+        """Exactly one ``header-includes:`` key, nested under ``variables:``,
+        carrying the page-number CSS content verbatim after it."""
+        text = self._asset_text()
+        # Exactly one header-includes key (the parse-valid inline path).
+        self.assertEqual(text.count("header-includes:"), 1)
+        # It lives under the variables: block (report keeps a single block,
+        # mirroring primer's single-block discipline).
+        variables_pos = text.index("\nvariables:")
+        header_pos = text.index("header-includes:")
+        self.assertGreater(
+            header_pos,
+            variables_pos,
+            "header-includes: must be nested under the variables: block",
+        )
+        # The header-includes key is indented (nested), not at column 0.
+        self.assertIn("  header-includes:", text)
+        self.assertNotIn("\nheader-includes:", text)
+        # The page-number CSS content is preserved verbatim, after the key.
+        for needle in (
+            "@page {",
+            "@bottom-right {",
+            'content: "Page " counter(page) " of " counter(pages);',
+        ):
+            self.assertIn(needle, text)
+            self.assertGreater(
+                text.rindex(needle),
+                header_pos,
+                f"{needle!r} must appear in the header-includes block",
+            )
+
+    def test_schema_note_comment_present(self):
+        """The primer-style schema-note comment (adapted for CSS/weasyprint)
+        must be carried over so the distinction is documented at the asset."""
+        text = self._asset_text()
+        self.assertIn("variables.header-includes", text)
+        self.assertIn("expects a list of *file paths*", text)
+
+    def test_pandoc_defaults_parses_and_footers_when_tools_available(self):
+        """Real-render smoke: the patched defaults file must parse under
+        pandoc 3.x (no Aeson exception) and the page-number footer must fire
+        under weasyprint — ``pdftotext`` on the output shows ``Page 1 of 1``.
+
+        Skipped when pandoc/weasyprint/pdftotext are absent (CI without a
+        toolchain), matching the opportunistic-smoke discipline in
+        ``anvil/skills/primer/tests/test_primer_command_coverage.py``.
+        """
+        import shutil
+        import subprocess
+        import tempfile
+
+        for tool in ("pandoc", "weasyprint", "pdftotext"):
+            if shutil.which(tool) is None:
+                self.skipTest(f"{tool} not on PATH; skipping real-render smoke")
+
+        asset = _SKILL_ROOT / self._ASSET_REL
+
+        with tempfile.TemporaryDirectory() as d:
+            work = Path(d)
+            body = work / "report.md"
+            body.write_text(
+                "---\ntitle: Smoke Report\n---\n\n"
+                "# A section\n\n"
+                "Some body text so the document is non-empty and renders to "
+                "a page.\n",
+                encoding="utf-8",
+            )
+            pdf = work / "report.pdf"
+            proc = subprocess.run(
+                [
+                    "pandoc",
+                    str(body),
+                    "-o",
+                    str(pdf),
+                    "--defaults",
+                    str(asset),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            # The defaults file must PARSE + COMPILE (exit 0). A parse failure
+            # surfaces as the "Aeson exception" this fix removes.
+            self.assertEqual(
+                proc.returncode, 0, f"pandoc failed: {proc.stderr[-800:]}"
+            )
+            self.assertTrue(pdf.exists() and pdf.stat().st_size > 0)
+
+            # Functional check: the "Page N of M" footer fired under
+            # weasyprint. pdftotext renders the @bottom-right counter content.
+            txt = subprocess.run(
+                ["pdftotext", str(pdf), "-"],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(txt.returncode, 0, f"pdftotext failed: {txt.stderr}")
+            self.assertIn(
+                "Page 1 of 1",
+                txt.stdout,
+                "page-number footer did not render under weasyprint",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

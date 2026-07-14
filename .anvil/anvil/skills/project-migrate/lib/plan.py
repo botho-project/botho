@@ -182,7 +182,7 @@ class BriefMergeOp:
     todo_comment
         Operator-confirmation marker (issue #408). When set, the BRIEF
         serializer appends it as a YAML comment on the
-        ``artifact_type:`` line (e.g. ``artifact_type: pub  # TODO...``).
+        ``artifact_type:`` line (e.g. ``artifact_type: paper  # TODO...``).
         YAML comments are ignored by ``yaml.safe_load`` and harmless to
         the no-pyyaml hand parser, and survive idempotent re-runs
         byte-for-byte (the no-op path never rewrites the BRIEF). A
@@ -822,15 +822,17 @@ def _infer_tex_artifact_type(text: str) -> Optional[str]:
 
     - ``\\documentclass{anvil-proposal}`` (or any anvil-proposal.cls
       reference) → ``proposal``
-    - any other ``\\documentclass`` → ``pub`` (registered as a
-      skill-identity value under #408)
+    - any other ``\\documentclass`` → ``paper`` (registered as a
+      skill-identity value under #408 as ``pub``; the skill was renamed
+      ``pub`` → ``paper`` under #694 and BRIEF synthesis now emits the
+      canonical ``paper``)
     - no ``\\documentclass`` → ``None`` (caller keeps the memo-class
       default, still TODO-marked)
     """
     if "anvil-proposal" in text:
         return "proposal"
     if "\\documentclass" in text:
-        return "pub"
+        return "paper"
     return None
 
 

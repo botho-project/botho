@@ -11,7 +11,7 @@
 %% ── Engine ──────────────────────────────────────────────────────────────────
 %% Compile with XeLaTeX (NOT pdflatex): the class uses fontspec for system fonts.
 %%   xelatex proposal.tex
-%% This differs from anvil:pub (pdflatex). The proposal-figures command's render
+%% This differs from anvil:paper (pdflatex). The proposal-figures command's render
 %% guidance notes the engine.
 %%
 %% ── Fonts ───────────────────────────────────────────────────────────────────

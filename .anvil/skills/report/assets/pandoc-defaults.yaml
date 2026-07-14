@@ -12,6 +12,16 @@ to: pdf
 # Engine (pdf-engine: weasyprint is the default for the CSS path;
 # the LaTeX path overrides this when assets/report.tex is present)
 pdf-engine: weasyprint
+#
+# NOTE on schema: inline header content is threaded via `variables:
+# header-includes` (a list of raw strings), NOT a top-level
+# `include-in-header:` block. In a pandoc *defaults* file, `include-in-header`
+# expects a list of *file paths* — the inline-`text` metadata form only
+# parses in document YAML metadata blocks / `--metadata` contexts, not here.
+# `variables.header-includes` is the parse-valid inline path (verified
+# against pandoc 3.x). This applies regardless of engine: report's
+# header-includes content is CSS (weasyprint), primer's is LaTeX (xelatex) —
+# both go through the same variables.header-includes key.
 
 # Layout
 variables:
@@ -24,17 +34,9 @@ variables:
   mainfont: "Source Serif Pro"
   sansfont: "Source Sans Pro"
   monofont: "Source Code Pro"
-
-# Table of contents (recommended for reports >5 pages)
-toc: true
-toc-depth: 2
-
-# Numbered sections (helps with cross-references to "§3.2")
-number-sections: true
-
-# Page numbers
-include-in-header:
-  - text: |
+  # Page numbers
+  header-includes:
+    - |
       <style>
         @page {
           @bottom-right {
@@ -44,6 +46,13 @@ include-in-header:
           }
         }
       </style>
+
+# Table of contents (recommended for reports >5 pages)
+toc: true
+toc-depth: 2
+
+# Numbered sections (helps with cross-references to "§3.2")
+number-sections: true
 
 # Citation handling (consumers can extend with their own .csl)
 # citeproc: true

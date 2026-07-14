@@ -7,7 +7,7 @@
 %% ── Engine ──────────────────────────────────────────────────────────────────
 %% Compile with XeLaTeX (NOT pdflatex): the class uses fontspec for system fonts.
 %%   xelatex installation.tex
-%% This differs from anvil:pub (pdflatex). The installation-figures command's
+%% This differs from anvil:paper (pdflatex). The installation-figures command's
 %% render guidance notes the engine.
 %%
 %% ── Fonts ───────────────────────────────────────────────────────────────────

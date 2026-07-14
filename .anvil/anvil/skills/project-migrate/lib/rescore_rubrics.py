@@ -70,7 +70,9 @@ class RubricIdentity:
 CURRENT_RUBRIC_BY_SKILL: Dict[str, RubricIdentity] = {
     "memo": RubricIdentity("anvil-memo-v2", 44, 35),
     "proposal": RubricIdentity("anvil-proposal-v2", 44, 35),
-    "pub": RubricIdentity("anvil-pub-v2", 44, 35),
+    # `pub` skill renamed to `paper` under #694; keyed on the current
+    # name, the rubric_id literal stays the frozen `anvil-pub-v2`.
+    "paper": RubricIdentity("anvil-pub-v2", 44, 35),
     "report": RubricIdentity("anvil-report-v2", 44, 39),
     "deck": RubricIdentity("anvil-deck-v2", 44, 39),
     "slides": RubricIdentity("anvil-slides-v2", 44, 35),
@@ -89,7 +91,10 @@ _BODY_FILENAME_TO_SKILL: Dict[str, str] = {
     "proposal.md": "proposal",
     "report.md": "report",
     "installation.md": "installation",
-    "pub.md": "pub",
+    "paper.md": "paper",
+    # Legacy body filename (issue #694): a pre-rename `pub.md` body
+    # resolves to the current skill name `paper`.
+    "pub.md": "paper",
     "deck.md": "deck",
     "slides.md": "slides",
     "ip-uspto.md": "ip-uspto",
@@ -107,8 +112,11 @@ _ARTIFACT_TYPE_TO_SKILL: Dict[str, str] = {
     "report": "report",
     "deck": "deck",
     "slides": "slides",
-    "pub": "pub",
-    "publication": "pub",
+    "paper": "paper",
+    # Legacy artifact_type strings (issue #694): pre-rename `pub` /
+    # informal `publication` resolve to the current skill name `paper`.
+    "pub": "paper",
+    "publication": "paper",
     "ip-uspto": "ip-uspto",
     "patent": "ip-uspto",
     "installation": "installation",

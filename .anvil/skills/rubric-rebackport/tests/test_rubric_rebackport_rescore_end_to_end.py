@@ -5,7 +5,7 @@ This test exercises the full rescore-apply flow that the per-skill
 reviewer hooks enable:
 
 1. Build a fixture project containing one legacy `<thread>.{N}.review/`
-   per skill (8 skills total — memo, proposal, pub, deck, slides, report,
+   per skill (8 skills total — memo, proposal, paper, deck, slides, report,
    ip-uspto, installation).
 2. Run `apply_plan(plan, allow_rescore_subprocess=True)` — the
    rebackport tool walks the inventory, plans one rescore per legacy
@@ -74,8 +74,11 @@ SKILL_FIXTURE_SPECS = {
         "anvil-proposal-v2",
         "anvil-proposal-v1-legacy-40",
     ),
-    "pub": (
-        "pub",
+    # The `pub` skill was renamed to `paper` under #694; the dict key,
+    # thread slug, and directory name are the CURRENT skill name, while
+    # the rubric_id literals stay the frozen `anvil-pub-v*` identities.
+    "paper": (
+        "paper",
         "main.tex",
         "anvil-pub-v2",
         "anvil-pub-v1",
@@ -145,7 +148,7 @@ def _build_per_skill_portfolio(root: Path) -> Path:
         artifact_type_map = {
             "memo": "investment-memo",
             "proposal": "proposal",
-            "pub": "pub",
+            "paper": "paper",
             "deck": "deck",
             "slides": "slides",
             "report": "report",

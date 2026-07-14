@@ -412,7 +412,7 @@ def _infer_artifact_type_for_file(
       them; SKILL.md:160 forbids that inference).
     - ``.md`` → ``investment-memo`` (memo-class default).
     - ``.tex`` with ``\\documentclass{anvil-proposal}`` → ``proposal``;
-      any other ``\\documentclass`` → ``pub``; no ``\\documentclass``
+      any other ``\\documentclass`` → ``paper``; no ``\\documentclass``
       → memo-class default.
     """
     if file.name == PROVISIONAL_BODY_FILENAME:

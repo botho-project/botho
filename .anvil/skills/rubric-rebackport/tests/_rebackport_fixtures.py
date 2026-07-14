@@ -298,10 +298,14 @@ def build_pub_44_unstamped(
     *,
     slug: str = "pub",
 ) -> Path:
-    """Build a /44-era pub thread whose review is missing `rubric_id`.
+    """Build a /44-era legacy-`pub` thread whose review is missing `rubric_id`.
 
-    Exercises the post-#357 catalog entry for ``("pub", 44)`` — the
-    canary failure mode that motivated issue #366.
+    The thread carries a legacy `pub.md` body + `artifact_type: pub`
+    BRIEF entry (the pre-#694 shape). Detection resolves both to the
+    CURRENT skill name ``paper``, so this exercises the post-#357 catalog
+    entry for ``("paper", 44)`` (the frozen ``anvil-pub-v2`` id) — the
+    canary failure mode that motivated issue #366, plus the #694 legacy
+    input-alias resolution.
     """
     project_dir = root / project_name
     project_dir.mkdir(parents=True, exist_ok=True)

@@ -93,7 +93,14 @@ KNOWN_RUBRICS: Dict[Tuple[str, int], RubricIdentity] = {
         "anvil-proposal-v1-legacy-40", 40, 32
     ),
     ("proposal", 44): RubricIdentity("anvil-proposal-v2", 44, 35),
-    ("pub", 40): RubricIdentity("anvil-pub-v1", 40, 32),
+    # The `pub` skill was renamed to `paper` under #694. The catalog is
+    # keyed on the CURRENT skill name (`paper`), so BRIEF/body-filename
+    # inference — which resolves a thread to the current skill — hits
+    # these rows. The rubric_id LITERALS stay `anvil-pub-v*`: they are
+    # frozen version identities already stamped onto existing consumer
+    # reviews, and `lookup_rubric_by_id` must keep recognizing them. A
+    # rename of the skill does NOT bump the rubric version.
+    ("paper", 40): RubricIdentity("anvil-pub-v1", 40, 32),
     ("report", 40): RubricIdentity("anvil-report-v1", 40, 35),
     ("deck", 40): RubricIdentity("anvil-deck-v1", 40, 35),
     ("slides", 40): RubricIdentity("anvil-slides-v1", 40, 32),
@@ -101,10 +108,12 @@ KNOWN_RUBRICS: Dict[Tuple[str, int], RubricIdentity] = {
         "anvil-installation-v1", 40, 32
     ),
     ("ip-uspto", 40): RubricIdentity("anvil-ip-uspto-v1", 40, 35),
-    # Post-#357: pub/report/deck/slides/installation migrated to /44 and
+    # Post-#357: paper/report/deck/slides/installation migrated to /44 and
     # ip-uspto to /45. See `anvil/skills/<skill>/commands/<skill>-review.md`
     # for the rubric_id literal each skill stamps post-#363 (issue #366).
-    ("pub", 44): RubricIdentity("anvil-pub-v2", 44, 35),
+    # (`paper` key, frozen `anvil-pub-v2` id — see the /40 row comment
+    # above; skill renamed under #694.)
+    ("paper", 44): RubricIdentity("anvil-pub-v2", 44, 35),
     ("report", 44): RubricIdentity("anvil-report-v2", 44, 39),
     ("deck", 44): RubricIdentity("anvil-deck-v2", 44, 39),
     ("slides", 44): RubricIdentity("anvil-slides-v2", 44, 35),
@@ -120,6 +129,12 @@ KNOWN_RUBRICS: Dict[Tuple[str, int], RubricIdentity] = {
         "anvil-ip-provisional-v1", 45, 39
     ),
     ("essay", 44): RubricIdentity("anvil-essay-v1", 44, 35),
+    # primer (#686) — the catalog fell behind when 0.8.1 shipped it;
+    # backfilled under #706 (the CatalogDriftGuard's anticipated third
+    # occurrence).
+    ("primer", 44): RubricIdentity("anvil-primer-v1", 44, 35),
+    # spec (#697/#706) — normative-correctness-dominant, audit-grade band.
+    ("spec", 44): RubricIdentity("anvil-spec-v1", 44, 39),
 }
 
 
@@ -131,7 +146,7 @@ KNOWN_RUBRICS: Dict[Tuple[str, int], RubricIdentity] = {
 CURRENT_RUBRIC_BY_SKILL: Dict[str, RubricIdentity] = {
     "memo": KNOWN_RUBRICS[("memo", 44)],
     "proposal": KNOWN_RUBRICS[("proposal", 44)],
-    "pub": KNOWN_RUBRICS[("pub", 44)],
+    "paper": KNOWN_RUBRICS[("paper", 44)],
     "report": KNOWN_RUBRICS[("report", 44)],
     "deck": KNOWN_RUBRICS[("deck", 44)],
     "slides": KNOWN_RUBRICS[("slides", 44)],
@@ -140,6 +155,8 @@ CURRENT_RUBRIC_BY_SKILL: Dict[str, RubricIdentity] = {
     "datasheet": KNOWN_RUBRICS[("datasheet", 44)],
     "ip-uspto-provisional": KNOWN_RUBRICS[("ip-uspto-provisional", 45)],
     "essay": KNOWN_RUBRICS[("essay", 44)],
+    "primer": KNOWN_RUBRICS[("primer", 44)],
+    "spec": KNOWN_RUBRICS[("spec", 44)],
 }
 
 
@@ -243,6 +260,15 @@ class RescoreSidecarSpec:
     sidecar_path: Path
     target_rubric: RubricIdentity
     legacy_rubric_id: str
+    # The CURRENT owning-skill name (issue #694). Carried explicitly
+    # rather than re-parsed from ``target_rubric.id`` at rescore time,
+    # because a rubric_id can be a frozen version identity whose skill
+    # token no longer matches the current skill directory name — e.g.
+    # the ``paper`` skill (renamed from ``pub``) still stamps the frozen
+    # ``anvil-pub-v2`` id, so parsing "pub" out of it would resolve the
+    # wrong (nonexistent) ``pub`` reviewer command. ``None`` falls back
+    # to the legacy rubric-id parse in :func:`rescore.invoke_rescore`.
+    skill: Optional[str] = None
 
 
 @dataclass
@@ -509,6 +535,7 @@ def _plan_rescore_review(
         sidecar_path=sidecar_path,
         target_rubric=rubric,
         legacy_rubric_id=legacy_rubric,
+        skill=review.inferred_skill,
     )
     return rp
 

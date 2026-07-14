@@ -24,7 +24,7 @@ The rubric is tuned for the way investors actually read decks: **narrative coher
 - Narrative + ask + market = **16/49 ≈ 32.7%**. A pitch deck is fundamentally a persuasive document with a request. The /44 → /49 migration preserves the 16-point anchor in absolute terms (re-anchoring to a /44 denominator would force rebalancing the calibrated narrative + ask + market weights, which the post-#357 calibration explicitly tuned).
 - Dim 9 *Rhetorical economy* (4/49) provides the explicit anti-bloat countervailing pressure — decks balloon under "more slides = more thorough" pressure, and a 30-slide deck is fatal regardless of per-slide quality. The 4-weight anti-bloat lever is preserved verbatim from the post-#357 calibration.
 - Dim 10 *Business-model & unit-economics credibility* (5/49) catches the failure mode where every other dim rewards a coherent argument and a clean rendering but no dim scores how the company makes money — a 39/44 READY-bar deck reaches the bar with a hand-wavy model slide. Weight 5 matches the dominant customer-facing dim weights (problem, market, traction, ask) — the business-model slide is at parity with the problem and market slides in investor decision weight, not subordinate.
-- Differentiates from `pub` (rigor + evidence dominate; calibrated for academic credibility) and `memo` (clarity-of-recommendation dominates; calibrated for internal IC decision-making).
+- Differentiates from `paper` (rigor + evidence dominate; calibrated for academic credibility) and `memo` (clarity-of-recommendation dominates; calibrated for internal IC decision-making).
 
 ## Critic dimension ownership
 

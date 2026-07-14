@@ -117,7 +117,7 @@ class TestRescoreDeferralBehavior(unittest.TestCase):
         for skill in (
             "memo",
             "proposal",
-            "pub",
+            "paper",  # renamed from `pub` under #694
             "deck",
             "slides",
             "report",

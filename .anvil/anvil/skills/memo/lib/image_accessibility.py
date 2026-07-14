@@ -31,7 +31,7 @@ Architecture & design decisions
 - **Skill-local first.** Lives under ``anvil/skills/memo/lib/`` per the
   CLAUDE.md "skill-local first, lib promotion later" pattern. Promotion
   of either this module OR ``memo_image_refs.py`` to ``anvil/lib/`` is
-  deferred until a second skill (``pub``, ``report``, ``proposal``)
+  deferred until a second skill (``paper``, ``report``, ``proposal``)
   reaches for the same primitive (current pattern: wait for the second
   consumer before generalizing).
 - **No schema delta.** Ships with the existing free-form

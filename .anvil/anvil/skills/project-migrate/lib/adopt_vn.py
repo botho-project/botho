@@ -107,7 +107,7 @@ _FOREIGN_TAG_SUFFIX_RE = re.compile(r"-v\d+$")
 # The adopt-vn inferred default (issue #432): the mode targets report
 # dirs, and nothing is guessed silently — the inference is ALWAYS
 # paired with a TODO(operator) marker. `report` is a registered
-# skill-identity artifact type (the #408 `pub` registry precedent).
+# skill-identity artifact type (the #408 `pub`/`paper` registry precedent).
 _DEFAULT_ADOPT_ARTIFACT_TYPE = "report"
 
 # Body-ish files recorded (never renamed — the #408 carve-out).

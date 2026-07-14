@@ -95,7 +95,8 @@ Public API
     identifies which skill owns the thread rather than selecting a memo
     rubric overlay subtype. Issue #394 grew the memo-scoped subset with
     the canary-proven ``challenge-memo`` and ``strategy-memo`` genres.
-    Issue #408 added the skill-identity value ``pub`` (research-paper
+    Issue #408 added the skill-identity value ``paper`` (registered as
+    ``pub``, renamed under #694) (research-paper
     threads, the project-migrate BRIEF-synthesis registry gap).
 
 ``MEMO_ARTIFACT_TYPES``
@@ -106,7 +107,7 @@ Public API
 
 ``SKILL_IDENTITY_ARTIFACT_TYPES``
     The skill-identity subset of :class:`ArtifactType` (``deck`` /
-    ``slides`` / ``proposal`` / ``pub``). Memo's overlay dispatch fails
+    ``slides`` / ``proposal`` / ``paper``). Memo's overlay dispatch fails
     loudly for exactly this set (issue #386, re-keyed explicit under
     #394 so consumer-declared memo types don't trip the rejection).
 
@@ -248,7 +249,7 @@ Issue #394 adds a **second validation tier**: an unregistered
 ``<consumer>/.anvil/skills/memo/rubric_overlays/<type>.json``, where
 ``<consumer>`` is the directory carrying the ``.anvil/`` install marker
 (located via :func:`anvil.lib.theme.find_consumer_root`, the same walk
-the theme catalog and the pub skill's consumer venue-rubric tier use).
+the theme catalog and the paper skill's consumer venue-rubric tier use).
 This lets a consumer register memo genres without a framework PR while
 keeping the enum honest — an unknown type with NO consumer overlay
 still fails loudly at parse time. Consumer-declared values are carried
@@ -293,7 +294,7 @@ Skill-local first
 Lives under ``anvil/skills/memo/lib/`` per the CLAUDE.md "skill-local
 first, lib promotion later" pattern. Promotion to ``anvil/lib/`` is queued
 for the second-consumer trigger (likely ``anvil:proposal`` if it adopts
-the project-BRIEF shape, or ``anvil:pub``).
+the project-BRIEF shape, or ``anvil:paper``).
 
 Relationship to ``project_discovery.py``
 ----------------------------------------
@@ -332,7 +333,7 @@ from anvil.lib.theme import find_consumer_root
 # (five seeds per the curator's confirmation comment on #283, plus the
 # canary-proven challenge-memo / strategy-memo registered under #394);
 # the rest are skill-identity values — deck / slides / proposal
-# added under #386, pub added under #408 (a pub-class LaTeX paper
+# added under #386, paper added under #408 (a paper-class LaTeX paper
 # thread in a shared project BRIEF previously had NO registered type,
 # so project-migrate's BRIEF synthesis silently defaulted a research
 # paper to 'investment-memo'), report added under #432 (the vN
@@ -362,6 +363,19 @@ from anvil.lib.theme import find_consumer_root
 #      below (NOT to MEMO_ARTIFACT_TYPES — no memo overlay JSON; memo
 #      commands fail loudly on non-memo types).
 #   2. Documenting it in the owning skill's SKILL.md.
+# Legacy input aliases for renamed artifact types (issue #694). Keyed by
+# the OLD string a consumer BRIEF may still carry; the value is the
+# CANONICAL enum member the parser normalizes to. This keeps existing
+# consumer BRIEFs (authored before a rename) parsing without a manual
+# edit, while the parser emits the canonical typed member going forward.
+#
+# `pub` → `paper`: the `anvil:pub` skill was renamed to `anvil:paper`
+# under #694 (hard rename, no skill-level forwarding alias). A consumer
+# BRIEF with `artifact_type: pub` still parses and normalizes to
+# `ArtifactType.PAPER`. This alias is INPUT-ONLY: nothing emits `"pub"`.
+_ARTIFACT_TYPE_INPUT_ALIASES: Dict[str, "ArtifactType"] = {}
+
+
 REGISTERED_ARTIFACT_TYPES: Tuple[str, ...] = (
     "investment-memo",
     "position-paper",
@@ -373,13 +387,14 @@ REGISTERED_ARTIFACT_TYPES: Tuple[str, ...] = (
     "deck",
     "slides",
     "proposal",
-    "pub",
+    "paper",
     "report",
     "ip-uspto",
     "ip-uspto-provisional",
     "essay",
     "datasheet",
     "primer",
+    "spec",
 )
 
 
@@ -428,12 +443,15 @@ class ArtifactType(str, Enum):
         Skill-identity value (#386): an ``anvil:proposal`` LaTeX
         customer-proposal thread. Not a memo subtype — selects no memo
         rubric overlay.
-    PUB
-        Skill-identity value (#408): an ``anvil:pub`` LaTeX
-        research-paper thread. Not a memo subtype — selects no memo
-        rubric overlay. Registered so project-migrate's BRIEF
-        synthesis can name pub-class ``.tex``-bodied threads instead
-        of silently defaulting them to ``investment-memo``.
+    PAPER
+        Skill-identity value (#408; skill renamed ``pub`` → ``paper``
+        under #694): an ``anvil:paper`` LaTeX research-paper thread. Not
+        a memo subtype — selects no memo rubric overlay. Registered so
+        project-migrate's BRIEF synthesis can name paper-class
+        ``.tex``-bodied threads instead of silently defaulting them to
+        ``investment-memo``. The legacy string ``pub`` is accepted as an
+        input alias (see ``_ARTIFACT_TYPE_INPUT_ALIASES``) so pre-rename
+        consumer BRIEFs keep parsing.
     REPORT
         Skill-identity value (#432): an ``anvil:report`` technical /
         customer-facing report thread. Not a memo subtype — selects no
@@ -441,7 +459,7 @@ class ArtifactType(str, Enum):
         report-dir adoption (``--adopt-vn``) can name the adopted
         thread's owning skill instead of silently defaulting to
         ``investment-memo`` (the same registry-gap shape #408 closed
-        for ``pub``).
+        for ``paper``).
     IP_USPTO
         Skill-identity value (#440): an ``anvil:ip-uspto`` USPTO
         non-provisional patent-application thread. Not a memo subtype —
@@ -484,6 +502,17 @@ class ArtifactType(str, Enum):
         project BRIEF can declare which skill owns a primer thread, and so
         the optional ``spec_ref`` companion-input key parses under the
         STRICT unknown-key rejection.
+    SPEC
+        Skill-identity value (#697/#706): an ``anvil:spec`` normative
+        technical-specification thread (a protocol/wire-format/consensus
+        spec maintained truthfully against its implementation; LaTeX
+        source-of-truth with an optional PDF render). Not a memo subtype —
+        selects no memo rubric overlay. Registered per the
+        #386/#408/#432/#440/#460/#686 precedent so a shared project BRIEF
+        can declare which skill owns a spec thread, and so the optional
+        ``code_ref`` companion-input key (the mirror image of primer's
+        ``spec_ref`` — the implementation the spec normatively describes)
+        parses under the STRICT unknown-key rejection.
     """
 
     INVESTMENT_MEMO = "investment-memo"
@@ -496,19 +525,25 @@ class ArtifactType(str, Enum):
     DECK = "deck"
     SLIDES = "slides"
     PROPOSAL = "proposal"
-    PUB = "pub"
+    PAPER = "paper"
     REPORT = "report"
     IP_USPTO = "ip-uspto"
     IP_USPTO_PROVISIONAL = "ip-uspto-provisional"
     ESSAY = "essay"
     DATASHEET = "datasheet"
     PRIMER = "primer"
+    SPEC = "spec"
+
+
+# Populate the legacy input-alias map now that the enum exists (issue
+# #694). See the map's definition above for the input-only contract.
+_ARTIFACT_TYPE_INPUT_ALIASES["pub"] = ArtifactType.PAPER
 
 
 # The memo-scoped subset of the registry: values that select a memo
 # rubric overlay (one overlay JSON per member ships under
 # `anvil/skills/memo/rubric_overlays/`). Skill-identity values (deck /
-# slides / proposal / pub) are deliberately excluded — memo's overlay dispatch
+# slides / proposal / paper) are deliberately excluded — memo's overlay dispatch
 # (`anvil/skills/memo/lib/rubric_overlays.py::select_overlay_for_thread`)
 # raises a clear skill-mismatch error for them instead of silently
 # scoring a non-memo artifact against the memo rubric (#386).
@@ -526,9 +561,11 @@ MEMO_ARTIFACT_TYPES: frozenset = frozenset(
 
 
 # The skill-identity subset of the registry (issue #386, made explicit
-# under #394; ``pub`` added under #408; ``report`` added under #432;
+# under #394; ``paper`` (registered as ``pub`` under #408, renamed #694);
+# ``report`` added under #432;
 # ``ip-uspto`` / ``ip-uspto-provisional`` added under #440; ``essay``
-# added under #460; ``datasheet`` added under #486):
+# added under #460; ``datasheet`` added under #486; ``primer`` added
+# under #686; ``spec`` added under #697/#706):
 # values that name which
 # NON-memo skill owns a thread in a
 # shared project BRIEF. Memo's overlay dispatch
@@ -543,13 +580,14 @@ SKILL_IDENTITY_ARTIFACT_TYPES: frozenset = frozenset(
         ArtifactType.DECK,
         ArtifactType.SLIDES,
         ArtifactType.PROPOSAL,
-        ArtifactType.PUB,
+        ArtifactType.PAPER,
         ArtifactType.REPORT,
         ArtifactType.IP_USPTO,
         ArtifactType.IP_USPTO_PROVISIONAL,
         ArtifactType.ESSAY,
         ArtifactType.DATASHEET,
         ArtifactType.PRIMER,
+        ArtifactType.SPEC,
     }
 )
 
@@ -559,8 +597,8 @@ SKILL_IDENTITY_ARTIFACT_TYPES: frozenset = frozenset(
 # ---------------------------------------------------------------------------
 
 # Relative path (under the consumer root) of the consumer-owned memo
-# rubric-overlay registry. Mirrors the pub skill's consumer venue-rubric
-# tier (`<consumer>/.anvil/skills/pub/rubrics/<venue>.yaml` — see
+# rubric-overlay registry. Mirrors the paper skill's consumer venue-rubric
+# tier (`<consumer>/.anvil/skills/paper/rubrics/<venue>.yaml` — see
 # `anvil/lib/rubric.py::discover_venue_rubric`).
 CONSUMER_MEMO_OVERLAYS_RELPATH: str = ".anvil/skills/memo/rubric_overlays"
 
@@ -707,6 +745,7 @@ _RECOGNIZED_DOCUMENT_KEYS = {
     "iteration_cap_rationale",
     "web_search",
     "spec_ref",
+    "code_ref",
 }
 
 # Default iteration cap. The override floor mirrors the deck skill's
@@ -1569,7 +1608,7 @@ class BriefDocument(BaseModel):
                   (Dims 3/5/6) are tracked separately at issue X.
     web_search
         Optional consumer-opt-in autonomous web literature search for
-        the ``pub`` skill's ``pub-litsearch`` / ``pub-review`` commands
+        the ``paper`` skill's ``paper-litsearch`` / ``paper-review`` commands
         (issue #424). Strict bool: ``true`` enables web search; absent /
         ``false`` / ``None`` are all equivalent and leave the commands
         byte-identical to their default no-web behavior. Non-bool
@@ -1585,13 +1624,13 @@ class BriefDocument(BaseModel):
         unknown-key rejection. Every web-discovered citation must still
         pass the resolver-verified-or-dropped contract via
         ``anvil/lib/cite.py::resolve()`` — see
-        ``anvil/skills/pub/commands/pub-litsearch.md``.
+        ``anvil/skills/paper/commands/paper-litsearch.md``.
 
         Example::
 
             documents:
               - slug: q3-method
-                artifact_type: pub
+                artifact_type: paper
                 web_search: true
     spec_ref
         Optional companion-input path/glob for the ``anvil:primer`` skill
@@ -1622,6 +1661,35 @@ class BriefDocument(BaseModel):
               - slug: botho-from-the-basics
                 artifact_type: primer
                 spec_ref: ../whitepaper/whitepaper.5/whitepaper.md
+    code_ref
+        Optional companion-input path/glob for the ``anvil:spec`` skill
+        (issue #697/#706): the **implementation** a normative spec
+        describes and must stay truthful to. The mirror image of
+        primer's ``spec_ref`` — where a primer teaches *alongside* a
+        formal spec, a spec is normatively describing an *implementation*.
+        Resolved project-root-first then consumer-root by
+        :func:`resolve_code_ref` (structurally identical to
+        :func:`resolve_spec_ref`). ``spec-audit`` reads the resolved
+        implementation as its consistency oracle; the three-way audit
+        verdict ("spec claim contradicts implementation") lands in Phase 2
+        (#707).
+
+        Type-and-emptiness only at parse time (non-empty string;
+        whitespace-only normalizes to ``None``) — file existence is a
+        resolution-time concern. The activation contract lives in
+        ``anvil/skills/spec/SKILL.md`` §"Code-ref contract": **absent**
+        → the consistency tier is silent/off and both critics record a
+        ``major`` finding recommending the operator declare it;
+        **declared-but-missing** → the tier activates but degrades
+        gracefully (a ``major`` finding, never a crash, never a false
+        critical flag), mirroring the ``spec_ref`` (#686) posture.
+
+        Example::
+
+            documents:
+              - slug: botho-consensus-spec
+                artifact_type: spec
+                code_ref: ../../src/**/*.rs
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1648,6 +1716,7 @@ class BriefDocument(BaseModel):
     iteration_cap_rationale: Optional[str] = Field(default=None)
     web_search: Optional[bool] = Field(default=None)
     spec_ref: Optional[str] = Field(default=None)
+    code_ref: Optional[str] = Field(default=None)
 
 
 class ProjectBrief(BaseModel):
@@ -2524,6 +2593,12 @@ def _validate_artifact_type(
         return ArtifactType(raw)
     except ValueError:
         pass
+    # Legacy input alias (issue #694): a renamed artifact type may still
+    # appear as its old string in a consumer BRIEF authored before the
+    # rename. Normalize to the canonical enum member. Input-only —
+    # nothing downstream emits the legacy string.
+    if raw in _ARTIFACT_TYPE_INPUT_ALIASES:
+        return _ARTIFACT_TYPE_INPUT_ALIASES[raw]
     if raw in consumer_types:
         return raw
     registered = list(REGISTERED_ARTIFACT_TYPES)
@@ -2664,6 +2739,37 @@ def _validate_spec_ref(raw: Any, field_path: str) -> Optional[str]:
             f"value as a path relative to the directory containing "
             f"BRIEF.md (e.g., "
             f"`spec_ref: ../whitepaper/whitepaper.5/whitepaper.md`)."
+        )
+    stripped = raw.strip()
+    if not stripped:
+        return None
+    return stripped
+
+
+def _validate_code_ref(raw: Any, field_path: str) -> Optional[str]:
+    """Validate a raw ``code_ref`` value (issue #697/#706).
+
+    Mirror of :func:`_validate_spec_ref` for the ``anvil:spec`` skill's
+    ``code_ref`` companion input (the implementation a normative spec
+    describes). Type-and-emptiness only: the value must be a string;
+    empty / whitespace-only normalizes to ``None`` (the tier-inactive
+    path). Surrounding whitespace is stripped.
+
+    No file-existence check at parse time — BRIEF parsing must not depend
+    on cwd, and the implementation is a resolution-time input. A
+    declared-but-missing path surfaces at resolution time via
+    :func:`resolve_code_ref` as a structured ``missing: true`` entry (the
+    spec critics' ``major`` finding), never a parse-time raise.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ValueError(
+            f"BRIEF.{field_path} must be a string path/glob; got "
+            f"{type(raw).__name__}: {raw!r} — suggested fix: write the "
+            f"value as a path relative to the directory containing "
+            f"BRIEF.md (e.g., "
+            f"`code_ref: ../../src/**/*.rs`)."
         )
     stripped = raw.strip()
     if not stripped:
@@ -2843,7 +2949,7 @@ def _validate_web_search(raw: Any, field_path: str) -> Optional[bool]:
     else — including the strings ``"true"`` / ``"yes"`` and the
     integers ``0`` / ``1`` — raises ``ValueError`` with a field-path
     message. The knob opts a thread into autonomous web literature
-    search for ``pub-litsearch`` / ``pub-review``, relaxing an anti-
+    search for ``paper-litsearch`` / ``paper-review``, relaxing an anti-
     hallucination posture, so a silently-coerced truthy value is worse
     than a loud parse failure.
     """
@@ -3059,6 +3165,11 @@ def _normalize_documents(
             field_path=f"documents[{i}].spec_ref",
         )
 
+        code_ref = _validate_code_ref(
+            entry.get("code_ref"),
+            field_path=f"documents[{i}].code_ref",
+        )
+
         # Paired-override validation runs after the per-field validators
         # so the cross-field error names both keys with already-normalized
         # values (e.g., whitespace-only rationale → None → "missing").
@@ -3084,6 +3195,7 @@ def _normalize_documents(
                 iteration_cap_rationale=iteration_cap_rationale,
                 web_search=web_search,
                 spec_ref=spec_ref,
+                code_ref=code_ref,
             )
         except ValidationError as exc:
             raise ValueError(
@@ -4045,6 +4157,211 @@ def resolve_spec_ref(
 
 
 # ---------------------------------------------------------------------------
+# Spec code-ref resolution (issue #697/#706)
+# ---------------------------------------------------------------------------
+#
+# DESIGN DECISION — standalone mirror, NOT a generalized resolver.
+#
+# ``code_ref`` (the implementation an ``anvil:spec`` normatively describes)
+# is structurally identical to primer's ``spec_ref`` (the formal sibling a
+# primer teaches alongside): a freeform path/glob, resolved project-root-
+# first then consumer-root, never raising on absence, carrying a
+# ``missing: true`` entry for a declared-but-unresolvable path. It would be
+# tempting to fold both into a single ``resolve_companion_ref(kind, ...)``.
+#
+# We deliberately ship a STANDALONE mirror (``resolve_code_ref`` /
+# ``ResolvedCodeRef``) rather than generalizing, for three reasons:
+#
+#   1. **Zero blast radius to primer.** Generalizing would touch
+#      ``resolve_spec_ref``'s call sites across five shipped primer command
+#      docs. A Phase-1 skeleton PR should not risk primer's shipped
+#      behavior for a DRY win.
+#   2. **CLAUDE.md convention: "skill-local first, lib promotion later."**
+#      The extraction pattern is "wait for the SECOND consumer before
+#      generalizing." ``spec_ref`` and ``code_ref`` are the first two
+#      companion-ref consumers; a THIRD plausible consumer is the right
+#      trigger to hoist a shared ``resolve_companion_ref`` — not the second.
+#   3. **Distinct semantics downstream.** ``spec_ref`` feeds a binary
+#      "contradicts / doesn't" audit; ``code_ref`` feeds a THREE-way verdict
+#      (spec-wrong / code-wrong / intentional-gap; Phase 2 / #707). Keeping
+#      the resolvers separate leaves room for the two to diverge in what
+#      they resolve (e.g. code_ref may later want a language-aware walk)
+#      without a shared-signature negotiation.
+#
+# The two resolvers share the SHAPE, not the code path — the small amount
+# of glob-walk duplication below is the accepted cost of the isolation. If
+# a third companion-ref consumer appears, that is the signal to promote a
+# shared ``_resolve_companion_ref_path`` helper both call.
+
+
+class ResolvedCodeRef(BaseModel):
+    """One resolved ``code_ref`` entry from :func:`resolve_code_ref` (issue #706).
+
+    The companion-input analog of :class:`ResolvedSpecRef`, for the
+    ``anvil:spec`` skill: the **implementation** (source tree, wire-format
+    reference, consensus-rule code) that a normative spec describes and
+    must stay truthful to. ``spec-audit`` reads the resolved
+    implementation as its consistency oracle; the full three-way verdict
+    ("spec claim contradicts implementation" — spec-wrong / code-wrong /
+    intentional-gap) lands in Phase 2 (#707).
+
+    Missing-file results are carried as a **structured** ``missing:
+    true`` entry — resolution never raises on absence. A ``missing:
+    true`` entry ACTIVATES the consistency tier and is the spec critics'
+    signal to surface a ``major`` finding (broken declaration) while
+    degrading gracefully (no cross-check, no false critical flag) — the
+    same defect-to-surface posture as ``spec_ref``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    declared: str = Field(
+        ...,
+        description="The verbatim path / glob string from the BRIEF.",
+    )
+    paths: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Absolute path string(s) of the resolved implementation "
+            "file(s). Single element for a plain path; sorted list for a "
+            "glob. Empty when ``missing``."
+        ),
+    )
+    missing: bool = Field(
+        ...,
+        description=(
+            "True when the declared path / glob matched no file at "
+            "either resolution root. The tier still ACTIVATES; the spec "
+            "critics surface a ``major`` finding and skip the "
+            "cross-check."
+        ),
+    )
+    source: Optional[Literal["project", "consumer", "absolute"]] = Field(
+        None,
+        description=(
+            "Which root the entry resolved against: ``project`` "
+            "(project-root hit, first precedence), ``consumer`` "
+            "(consumer-root fallback via the ``.anvil/`` marker walk), "
+            "``absolute`` (declared as an absolute path). ``None`` when "
+            "``missing``."
+        ),
+    )
+
+
+def resolve_code_ref(
+    project_dir: Path,
+    slug: str,
+    consumer_root: Optional[Path] = None,
+) -> Optional[ResolvedCodeRef]:
+    """Resolve a spec document's ``code_ref`` to on-disk path(s) (issue #706).
+
+    The companion-input resolution helper for the ``anvil:spec`` skill —
+    the mirror image of :func:`resolve_spec_ref`. Reads
+    ``<project_dir>/BRIEF.md`` leniently, looks up the document by
+    ``slug``, and — when that document declares a ``code_ref`` — resolves
+    it **project-root first, then consumer-root** (absolute paths bypass
+    the walk), the same walk ``spec_ref`` / the ``voice:`` docs use. A
+    ``code_ref`` may be a plain path or a glob (the common case for a
+    multi-file implementation, e.g. ``../../src/**/*.rs``); glob matches
+    are sorted and the first root with ≥1 match wins.
+
+    **Never raises on absence.** A declared-but-missing ``code_ref`` comes
+    back as a structured ``missing: true`` :class:`ResolvedCodeRef` — the
+    tier still activates and the spec critics surface a ``major`` finding,
+    degrading gracefully (no crash, no false critical flag).
+
+    Returns
+    -------
+    Optional[ResolvedCodeRef]
+        A resolved entry when the document declares a ``code_ref``;
+        ``None`` when the tier is **INACTIVE**: no BRIEF, malformed BRIEF
+        (lenient swallow), no matching document for ``slug``, or that
+        document declares no ``code_ref``. Callers branch on ``if
+        resolved is None:`` for the byte-identical inactive path.
+    """
+    try:
+        brief = load_project_brief(project_dir, consumer_root=consumer_root)
+    except ValueError:
+        return None
+    if brief is None:
+        return None
+
+    doc = brief.document_for_slug(slug)
+    if doc is None or doc.code_ref is None:
+        return None
+
+    declared = doc.code_ref
+    declared_path = Path(declared)
+
+    def _is_glob(s: str) -> bool:
+        return any(ch in s for ch in "*?[")
+
+    if declared_path.is_absolute():
+        if _is_glob(declared):
+            try:
+                matches = sorted(
+                    p
+                    for p in _glob.glob(declared, recursive=True)
+                    if Path(p).is_file()
+                )
+            except (OSError, ValueError):
+                matches = []
+            if matches:
+                return ResolvedCodeRef(
+                    declared=declared,
+                    paths=matches,
+                    missing=False,
+                    source="absolute",
+                )
+            return ResolvedCodeRef(declared=declared, missing=True)
+        if declared_path.is_file():
+            return ResolvedCodeRef(
+                declared=declared,
+                paths=[str(declared_path)],
+                missing=False,
+                source="absolute",
+            )
+        return ResolvedCodeRef(declared=declared, missing=True)
+
+    roots: List[Tuple[str, Path]] = [("project", Path(project_dir))]
+    resolved_consumer = (
+        Path(consumer_root)
+        if consumer_root is not None
+        else find_consumer_root(Path(project_dir))
+    )
+    if resolved_consumer is not None:
+        roots.append(("consumer", resolved_consumer))
+
+    for source, root in roots:
+        if _is_glob(declared):
+            try:
+                matches = sorted(
+                    str(p.resolve())
+                    for p in root.glob(declared)
+                    if p.is_file()
+                )
+            except (OSError, ValueError):
+                matches = []
+            if matches:
+                return ResolvedCodeRef(
+                    declared=declared,
+                    paths=matches,
+                    missing=False,
+                    source=source,
+                )
+        else:
+            candidate = root / declared_path
+            if candidate.is_file():
+                return ResolvedCodeRef(
+                    declared=declared,
+                    paths=[str(candidate.resolve())],
+                    missing=False,
+                    source=source,
+                )
+    return ResolvedCodeRef(declared=declared, missing=True)
+
+
+# ---------------------------------------------------------------------------
 # Thread-level BRIEF.md helpers (issue #348)
 # ---------------------------------------------------------------------------
 #
@@ -4219,7 +4536,9 @@ __all__ = [
     "MIN_DIM",
     "ProjectBrief",
     "REGISTERED_ARTIFACT_TYPES",
+    "ResolvedCodeRef",
     "ResolvedCorpusDir",
+    "ResolvedSpecRef",
     "ResolvedSubjectVoice",
     "ResolvedVoiceDoc",
     "RubricOverrides",
@@ -4237,8 +4556,10 @@ __all__ = [
     "load_project_brief_strict",
     "load_recommendation_target",
     "load_rubric_overrides_for_slug",
+    "resolve_code_ref",
     "resolve_corpus_dirs",
     "resolve_rhetoric_rules",
+    "resolve_spec_ref",
     "resolve_subject_voice_docs",
     "resolve_voice_docs",
 ]

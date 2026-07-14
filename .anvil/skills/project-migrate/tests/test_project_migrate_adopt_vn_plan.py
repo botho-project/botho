@@ -101,7 +101,7 @@ class TestArtifactType:
         assert "quarterly-report" in str(excinfo.value)
 
     def test_report_is_registered_skill_identity_type(self):
-        # The #432 registry addition (the #408 `pub` precedent): the
+        # The #432 registry addition (the #408 `pub`/`paper` precedent): the
         # inferred default must survive strict BRIEF validation.
         pytest.importorskip("anvil.lib.project_brief")
         from anvil.lib.project_brief import (

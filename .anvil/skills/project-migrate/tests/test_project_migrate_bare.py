@@ -15,10 +15,10 @@ Coverage map (curated acceptance criteria):
    (regression-locked) and `ProjectInventory.is_bare` /
    `ThreadInventory.observed_body_files` surface the sub-state.
 2. Planner: bare `.tex`-bodied threads get an inferred artifact_type
-   (`pub` / `proposal` per the \\documentclass scan) with
+   (`paper` / `proposal` per the \\documentclass scan) with
    `inferred=True` + TODO comment — never the silent default; plain-md
    bare threads keep the memo-class default WITH a TODO marker.
-3. `pub` is registered as a skill-identity artifact_type.
+3. `paper` is registered as a skill-identity artifact_type (renamed from `pub`, #694).
 4. Dry-run report prints the full proposed BRIEF via the shared
    `render_project_brief` (and stays byte-non-mutating).
 5. `--apply` writes the BRIEF with TODO YAML comments + body-prose TODO
@@ -139,13 +139,13 @@ class TestBarePlan(unittest.TestCase):
             self.assertEqual(len(p.documents), 1)
             doc = p.documents[0]
             self.assertIsNotNone(doc.brief_merge)
-            self.assertEqual(doc.brief_merge.artifact_type, "pub")
+            self.assertEqual(doc.brief_merge.artifact_type, "paper")
             self.assertTrue(doc.brief_merge.inferred)
             self.assertIsNotNone(doc.brief_merge.todo_comment)
             self.assertIn("TODO(operator)", doc.brief_merge.todo_comment)
             # Inference + deferral both surfaced as plan notes.
             notes = "\n".join(doc.notes)
-            self.assertIn("inferred as 'pub'", notes)
+            self.assertIn("inferred as 'paper'", notes)
             self.assertIn("NOT renamed", notes)
             self.assertTrue(doc.operator_todos)
 
@@ -218,7 +218,7 @@ class TestBareDryRun(unittest.TestCase):
             self.assertIn("## Proposed `BRIEF.md`", result.report)
             # The full rendered BRIEF text appears verbatim.
             self.assertIn(f"- slug: {SLUG}", result.report)
-            self.assertIn("artifact_type: pub  # TODO(operator)", result.report)
+            self.assertIn("artifact_type: paper  # TODO(operator)", result.report)
             self.assertIn("Operator confirmation checklist", result.report)
 
     def test_dry_run_report_matches_render(self) -> None:
@@ -260,7 +260,7 @@ class TestBareApply(unittest.TestCase):
             self.assertTrue(brief.is_file())
             text = brief.read_text(encoding="utf-8")
             # Frontmatter TODO YAML comments.
-            self.assertIn("artifact_type: pub  # TODO(operator)", text)
+            self.assertIn("artifact_type: paper  # TODO(operator)", text)
             self.assertIn(
                 "project: paper  # TODO(operator): confirm — defaulted "
                 "from directory name",
@@ -316,7 +316,7 @@ class TestBareApply(unittest.TestCase):
             brief = load_project_brief_strict(project, validate_dirs=True)
             slugs = [d.slug for d in brief.documents]
             self.assertEqual(slugs, [SLUG])
-            self.assertEqual(brief.documents[0].artifact_type, "pub")
+            self.assertEqual(brief.documents[0].artifact_type, "paper")
 
             deep_path = project / SLUG / f"{SLUG}.7" / "paper.tex"
             discovery = discover_thread_root(deep_path)

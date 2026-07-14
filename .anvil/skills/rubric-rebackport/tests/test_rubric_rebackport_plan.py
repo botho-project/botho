@@ -205,7 +205,7 @@ class TestRubricCatalog(unittest.TestCase):
     def test_known_rubrics_cover_44_skills(self) -> None:
         """All 6 post-#357 (skill, total) pairs are in the catalog."""
         for skill, total in [
-            ("pub", 44),
+            ("paper", 44),
             ("report", 44),
             ("deck", 44),
             ("slides", 44),
@@ -214,8 +214,8 @@ class TestRubricCatalog(unittest.TestCase):
         ]:
             self.assertIn((skill, total), KNOWN_RUBRICS)
 
-    def test_pub_v2_44_id_and_threshold(self) -> None:
-        ri = KNOWN_RUBRICS[("pub", 44)]
+    def test_paper_v2_44_id_and_threshold(self) -> None:
+        ri = KNOWN_RUBRICS[("paper", 44)]
         self.assertEqual(ri.id, "anvil-pub-v2")
         self.assertEqual(ri.total, 44)
         self.assertEqual(ri.advance_threshold, 35)
@@ -255,7 +255,7 @@ class TestRubricCatalog(unittest.TestCase):
         self,
     ) -> None:
         """CURRENT_RUBRIC_BY_SKILL must repoint at the post-#357 rubrics."""
-        for skill in ("pub", "report", "deck", "slides", "installation"):
+        for skill in ("paper", "report", "deck", "slides", "installation"):
             self.assertEqual(
                 CURRENT_RUBRIC_BY_SKILL[skill].total,
                 44,
@@ -276,7 +276,7 @@ class TestRubricCatalog(unittest.TestCase):
     def test_legacy_40_rows_retained_for_stamp_only_inference(self) -> None:
         """Adding /44 rows must NOT remove the /40 rows (legacy reviews still need them)."""
         for skill in (
-            "pub",
+            "paper",
             "report",
             "deck",
             "slides",
@@ -350,7 +350,7 @@ class TestPub44AutoInference(unittest.TestCase):
     `rubric_id` should resolve to `anvil-pub-v2` without `--legacy-rubric`.
 
     This is the canary failure mode that motivated issue #366: before
-    the catalog gained the `("pub", 44)` entry, the planner would skip
+    the catalog gained the `("paper", 44)` entry, the planner would skip
     such reviews with a "heuristic miss" note instead of stamping them.
     """
 
@@ -359,7 +359,7 @@ class TestPub44AutoInference(unittest.TestCase):
             project = build_pub_44_unstamped(Path(td))
             inv = inventory_tree(project)
             self.assertEqual(len(inv.reviews), 1)
-            self.assertEqual(inv.reviews[0].inferred_skill, "pub")
+            self.assertEqual(inv.reviews[0].inferred_skill, "paper")
             p = build_plan(inv, mode=Mode.STAMP_ONLY)
             rp = p.reviews[0]
             self.assertFalse(

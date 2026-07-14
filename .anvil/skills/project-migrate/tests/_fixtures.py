@@ -608,7 +608,7 @@ def build_bare_version_dir_threads(
         paper.pdf
 
     ``documentclass`` parametrizes the inference path: ``article``
-    (default) infers ``pub``; ``anvil-proposal`` infers ``proposal``.
+    (default) infers ``paper``; ``anvil-proposal`` infers ``proposal``.
     """
     project_dir = root / project_name
     project_dir.mkdir(parents=True, exist_ok=True)
@@ -811,7 +811,7 @@ def build_loose_file_batch(
         2026-05-19-topic-a.md           ← enrolls (md, date prefix)
         draft-response-2026-05-19.md    ← enrolls (md, date suffix)
         whitepaper.tex                  ← enrolls (tex, \\documentclass
-                                          → pub inference)
+                                          → paper inference)
         2026-05-19-same-topic.md        ← collision pair member 1
         same-topic-2026-05-20.md        ← collision pair member 2
                                           (both derive `same-topic`)
@@ -1252,7 +1252,7 @@ def build_bare_native_provisional(
     ``spec.tex``), no BRIEF.md, no ``.anvil.json``. Classifies
     PRE_283_CLASSIC / ``is_bare``; the planner must FILENAME-recognize
     ``provisional.tex`` → ``ip-uspto-provisional`` (never a
-    ``\\documentclass`` scan, which would mis-infer ``pub``).
+    ``\\documentclass`` scan, which would mis-infer ``paper``).
 
     Shape::
 
