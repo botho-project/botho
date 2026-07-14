@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "thread": "botho-from-the-basics",
+  "phases": {
+    "review": {
+      "state": "done",
+      "started": "2026-07-14T05:22:00Z",
+      "completed": "2026-07-14T05:32:00Z"
+    }
+  },
+  "metadata": {
+    "reviewed_version": "botho-from-the-basics.1",
+    "rubric_id": "anvil-primer-v1",
+    "total": 41,
+    "rubric_total": 44,
+    "advance_threshold": 35,
+    "advance": true,
+    "critical_flags": [],
+    "spec_ref_active": true,
+    "spec_ref_duplication_flags": 0,
+    "evidence_check": "pass"
+  }
+}

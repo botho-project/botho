@@ -1,0 +1,165 @@
+{
+  "version": 1,
+  "thread": "botho-from-the-basics",
+  "phases": {
+    "draft": {
+      "state": "done",
+      "started": "2026-07-14T05:13:23Z",
+      "completed": "2026-07-14T05:20:31Z"
+    }
+  },
+  "metadata": {
+    "iteration": 1,
+    "max_iterations": 4,
+    "spec_ref_declared": "../sections/*.tex",
+    "spec_ref_resolved": [
+      "whitepaper/sections/01-introduction.tex",
+      "whitepaper/sections/02-related-work.tex",
+      "whitepaper/sections/03-preliminaries.tex",
+      "whitepaper/sections/04-cryptography.tex",
+      "whitepaper/sections/05-transactions.tex",
+      "whitepaper/sections/06-consensus.tex",
+      "whitepaper/sections/07-monetary.tex",
+      "whitepaper/sections/08-network.tex",
+      "whitepaper/sections/09-security.tex",
+      "whitepaper/sections/10-economics.tex",
+      "whitepaper/sections/11-implementation.tex",
+      "whitepaper/sections/12-governance.tex",
+      "whitepaper/sections/13-conclusion.tex",
+      "whitepaper/sections/appendix-audit.tex",
+      "whitepaper/sections/appendix-formal.tex",
+      "whitepaper/sections/appendix-notation.tex",
+      "whitepaper/sections/appendix-parameters.tex",
+      "whitepaper/sections/appendix-regulatory.tex"
+    ],
+    "self_check": {
+      "dependency_order": [
+        {
+          "section": "1 Problems",
+          "assumes": [],
+          "taught": "self-contained motivation; seeds all later sections"
+        },
+        {
+          "section": "2 Toolbox",
+          "assumes": [
+            "black-box keys/hashes/signatures (stated audience baseline)"
+          ],
+          "taught": "hashes, one-way scalar-point math, signatures, KEM"
+        },
+        {
+          "section": "3 Stealth addresses",
+          "assumes": [
+            "one-way curve math (S2)",
+            "KEM concept deferred: classical DH handshake introduced as black box here"
+          ],
+          "taught": "view/spend split, one-time keys, subaddresses"
+        },
+        {
+          "section": "4 Ring signatures",
+          "assumes": [
+            "signatures (S2)",
+            "one-time output keys (S3)"
+          ],
+          "taught": "rings, decoys, key images; forward-pointer to cluster tags (S9) is flagged explicitly as a Botho-specific notion taught later"
+        },
+        {
+          "section": "5 Commitments",
+          "assumes": [
+            "one-way curve math (S2)",
+            "outputs (S3)"
+          ],
+          "taught": "Pedersen hiding/binding/homomorphism, balance equation, range proofs"
+        },
+        {
+          "section": "6 PQ hybrid",
+          "assumes": [
+            "KEM (S2)",
+            "classical stealth shape (S3)",
+            "ring signatures (S4)",
+            "harvest-now-decrypt-later (S1)"
+          ],
+          "taught": "ML-KEM-768 stealth swap, ML-DSA-65 minting, data-lifetime rule"
+        },
+        {
+          "section": "7 SCP",
+          "assumes": [
+            "hashes (S2)"
+          ],
+          "taught": "quorum slices, quorums, intersection, nominate/ballot/externalize, halt-not-fork"
+        },
+        {
+          "section": "8 PoW decoupling",
+          "assumes": [
+            "SCP (S7)",
+            "minting/ML-DSA (S6)"
+          ],
+          "taught": "proposal-vs-finality split, mining weight != consensus weight, RandomX, adaptive timing pointer to S9"
+        },
+        {
+          "section": "9 Economics",
+          "assumes": [
+            "UTXO/outputs (S3-5)",
+            "rings and decoy tag-similarity (S4)",
+            "mining/emission (S8)"
+          ],
+          "taught": "emission schedule, cluster tags, factor, progressive fees, demurrage, burn+lottery, adversarial-sim rationale"
+        },
+        {
+          "section": "10 Capstone",
+          "assumes": [
+            "everything S2-S9; no new mechanisms introduced"
+          ],
+          "taught": "end-to-end trace"
+        },
+        {
+          "section": "11 Where next",
+          "assumes": [
+            "all"
+          ],
+          "taught": "synthesis + section map + external literature"
+        }
+      ],
+      "spec_ref_grounding": {
+        "cross_referenced": [
+          "WP 1 Introduction (problem framing, design philosophy)",
+          "WP 2 Related Work (Monero/MobileCoin/Zcash comparison, PQ ring-signature size survey)",
+          "WP 3 Preliminaries (Pedersen, Bulletproofs, ML-KEM/ML-DSA parameter facts)",
+          "WP 4 Cryptography (key hierarchy, PQ stealth protocol, CLSAG, hybrid rationale table)",
+          "WP 5 Transactions (cluster tags, blending, decay, factor curve, Sybil theorem, decoy selection, ring-max fee rule)",
+          "WP 6 Consensus (SCP phases, quorum defs, fork-freedom, mining pools)",
+          "WP 7 Monetary (emission, tail, dynamic timing, fee split, lottery mechanism, constants)",
+          "WP 8 Network (Dandelion++)",
+          "WP 9 Security (lottery grinding cost-benefit)",
+          "WP 10 Economics (adversarial Gini simulation results)",
+          "WP appendix Parameter Justification (ring size, constants rationale)"
+        ],
+        "deliberately_not_duplicated": [
+          "All security proofs/theorem statements (IND-CCA2 reduction, CLSAG games, fork-freedom proof, Sybil-resistance induction, Nash equilibria) - taught as one-line intuitions, pointed to spec",
+          "CLSAG verification equations and aggregation coefficients",
+          "SLIP-10/HKDF derivation paths and subaddress equations",
+          "The log-sigmoid cluster-factor formula (described qualitatively: midpoint 100k BTH -> 3.5x, clamp 1-6x)",
+          "Normative parameter tables (constants quoted selectively, never as a table restating WP 7 / appendix)",
+          "Byte-level transaction structures and wire formats (WP 5, WP 8)",
+          "Supply projection table and tail-emission algebra"
+        ]
+      },
+      "technical_accuracy": [
+        "Paint-mixing analogy for scalar mult: lossy-but-true (one-wayness, not full group structure)",
+        "Pedersen 'locked box bolted to the transaction': hiding stated as information-theoretic per WP 3; binding as computational",
+        "'Key image = serial number unique to the coin but unlinkable': true per WP 4 linkability proof sketch",
+        "'~50x PQ ring signature overhead / ~35KB per input': WP 4 + WP 2 figures quoted directly",
+        "ML-DSA-65 attributed to MINTING signatures (per WP 4), NOT private spend authorization; refs/issue note said 'spend authorization' - spec followed, flagged for audit",
+        "Avoided quoting bit-security levels for ML-KEM-768/ML-DSA-65 (WP 3 gives 192/128-bit quantum figures; primer says 'NIST middle security category' - lossy-but-true, no contradiction)",
+        "Tail emission 'about 2% net' with gross-vs-net burn adjustment mentioned qualitatively; 611,010,000 rounded to 'roughly 611 million'",
+        "Demurrage 'parking fee accrued by idle concentrated wealth, charged when coins move': WP 7 defines it as a per-transfer stock-level term; phrased as charge-on-move to stay true",
+        "'Attack costs the attacker ~a fifth of its position over five years': WP 10 says ~19%",
+        "Tag decay 'about an hour at reference pace' = 720 blocks at 5s; noted clock-not-count constraint per WP 5",
+        "Lottery: 4 winners/block, dust floor 1 micro-BTH, maturity 720 blocks, seed from previous externalized block, payout capped at one reward - all per WP 7/WP 9",
+        "Finality 'a handful of seconds after proposal' = WP 6 block time + ~3-4s",
+        "Capstone fee 'a few tens of nano-BTH' for 2-in-2-out: consistent with WP 7 worked 16 nano-BTH (1-in-2-out floor) scaled for a larger ~5KB tx",
+        "MobileCoin characterization (SCP without mining, fixed supply, classical-only, SGX omitted as out of scope) per WP 2"
+      ]
+    },
+    "word_count": 8108
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "thread": "botho-from-the-basics",
+  "critic": "audit",
+  "phases": {
+    "audit": {
+      "state": "done",
+      "started": "2026-07-14T06:05:00Z",
+      "completed": "2026-07-14T06:38:00Z"
+    }
+  },
+  "metadata": {
+    "audited_version": "botho-from-the-basics.2",
+    "audit_clean": true,
+    "critical_flags": 0,
+    "factual_flags": 0,
+    "spec_contradiction_flags": 0,
+    "spec_ref_declared": "../sections/*.tex",
+    "spec_ref_active": true,
+    "spec_ref_missing": false,
+    "spec_ref_resolved_count": 18,
+    "delta_claims_verified": 18,
+    "carried_sample_verified": 15,
+    "findings": { "critical": 0, "major": 0, "minor": 2, "observation": 2 },
+    "code_oracles_consulted": ["cluster-tax/src/demurrage.rs"]
+  }
+}
