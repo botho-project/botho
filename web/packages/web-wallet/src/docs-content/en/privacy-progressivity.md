@@ -88,7 +88,7 @@ This is crucial: **cluster tags reveal provenance, not identity.**
 |-------------|--------|
 | Who owns a UTXO | **Private** (ring signatures) |
 | Who received a payment | **Private** (stealth addresses) |
-| Amount transferred | **Private** (confidential transactions) |
+| Amount transferred | **Private** in the target design (confidential transactions — in development, ADR 0006; public on the current testnet) |
 | Your total balance | **Private** (no account linkage) |
 | Which UTXO you spent | **Private** (ring signatures) |
 | Where coins originated | Public (cluster tags) |
@@ -183,7 +183,7 @@ Botho achieves privacy + progressivity through layered design:
 |-------|-----------------|---------------------|
 | **Sender** | Ring signatures (1-of-20) | Centroid-validated tag propagation |
 | **Recipient** | Stealth addresses | — |
-| **Amount** | Pedersen commitments | — |
+| **Amount** | Pedersen commitments (in development — ADR 0006) | — |
 | **Fee rate** | — | Cluster factor curve (1-6×) |
 | **Holding cost** | — | Demurrage on idle wealthy-cluster coins |
 | **Redistribution** | Verifiable random drawing | Cluster-tilted weights (value ÷ factor) |

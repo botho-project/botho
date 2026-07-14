@@ -88,7 +88,7 @@ Esto es crucial: **las etiquetas de clúster revelan procedencia, no identidad.*
 |-------------|--------|
 | Quién posee un UTXO | **Privado** (firmas de anillo) |
 | Quién recibió un pago | **Privado** (direcciones sigilosas) |
-| Importe transferido | **Privado** (transacciones confidenciales) |
+| Importe transferido | **Privado** en el diseño objetivo (transacciones confidenciales: en desarrollo, ADR 0006; públicos en la testnet actual) |
 | Tu saldo total | **Privado** (sin vinculación de cuentas) |
 | Qué UTXO gastaste | **Privado** (firmas de anillo) |
 | De dónde se originaron las monedas | Público (etiquetas de clúster) |
@@ -183,7 +183,7 @@ Botho logra privacidad + progresividad mediante un diseño por capas:
 |-------|-----------------|---------------------|
 | **Remitente** | Firmas de anillo (1 de 20) | Propagación de etiquetas validada por centroide |
 | **Destinatario** | Direcciones sigilosas | — |
-| **Importe** | Compromisos de Pedersen | — |
+| **Importe** | Compromisos de Pedersen (en desarrollo — ADR 0006) | — |
 | **Tarifa de comisión** | — | Curva del factor de clúster (1-6×) |
 | **Coste de retención** | — | Demurrage sobre monedas inactivas de clúster rico |
 | **Redistribución** | Sorteo aleatorio verificable | Pesos inclinados por clúster (valor ÷ factor) |

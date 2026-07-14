@@ -38,9 +38,11 @@ CLSAG (Concise Linkable Spontaneous Anonymous Group) is an efficient ring signat
 
 This breaks the transaction graph that would otherwise allow tracing funds through the blockchain. An observer sees that *someone* in the ring spent *some* coins, but cannot determine which participant or which specific coins.
 
-> **Note:** All value transfers use ring signatures. Minting transactions (block rewards) use ML-DSA signatures since the minter is public.
+> **Note:** All value transfers use ring signatures. Minting transactions (block rewards) carry no signature — the PoW preimage commits to the minter's public keys, so attribution is hash-based and quantum-resistant (ADR 0006).
 
 ### Confidential Amounts
+
+> **Implementation status:** Confidential amounts are the ratified design (ADR 0006) and are in development. On the current testnet, transaction amounts are public. This section describes the target design.
 
 In all **Private transactions** (which includes all value transfers), amounts are hidden using **Pedersen commitments** with **Bulletproofs** range proofs. These cryptographic constructs allow the network to verify that transactions balance (inputs equal outputs plus fees) without revealing the actual amounts.
 
@@ -64,22 +66,22 @@ Quantum computers pose a future threat to the cryptographic algorithms that secu
 **Algorithms Used:**
 
 - **ML-KEM-768** (FIPS 203) - Post-quantum stealth addresses (recipient privacy is permanent)
-- **ML-DSA-65** (FIPS 204) - Post-quantum signatures for minting transactions
+- **PoW-preimage binding** (RandomX, hash-based) - Minting attribution without signatures (quantum-resistant)
 - **CLSAG** - Classical ring signatures for private transactions (sender privacy is ephemeral)
-- **Pedersen + Bulletproofs** - Information-theoretic amount hiding (quantum-safe)
+- **Pedersen + Bulletproofs** - Information-theoretic amount hiding (quantum-safe; confidential amounts are in development, see above)
 
 **Why This Architecture?**
 
-Recipient identity is recorded on-chain forever—a quantum attacker in 2045 could link recipients from 2025 transactions. ML-KEM protects against this "harvest now, decrypt later" threat. Sender privacy, however, is ephemeral—its value degrades over time as economic context becomes historical. Using classical CLSAG keeps transactions small (~4 KB vs ~65 KB for post-quantum alternatives).
+Recipient identity is recorded on-chain forever—a quantum attacker in 2045 could link recipients from 2025 transactions. ML-KEM protects against this "harvest now, decrypt later" threat. Sender privacy, however, is ephemeral—its value degrades over time as economic context becomes historical. Using classical CLSAG keeps transactions small (~4 KB vs ~65 KB for post-quantum alternatives). ML-DSA-65 (FIPS 204) remains Botho's designated future signature family for quantum theft protection, but it has no live protocol role today.
 
 **Transaction Types:**
 
 | Type | Recipient | Amount | Sender | Use Case |
 |------|-----------|--------|--------|----------|
-| Minting | Hidden (ML-KEM) | Public | Known (ML-DSA) | Block rewards |
-| Private | Hidden (ML-KEM) | Hidden | Hidden (CLSAG ring=20) | All transfers (~4 KB) |
+| Minting | Hidden (ML-KEM) | Public | Known (PoW-bound) | Block rewards |
+| Private | Hidden (ML-KEM) | Hidden (in development) | Hidden (CLSAG ring=20) | All transfers (~4 KB) |
 
-Recipients and amounts are protected against quantum computers. Sender privacy uses efficient classical signatures.
+Recipients are protected against quantum computers; amount hiding is information-theoretically secure once confidential amounts ship. Sender privacy uses efficient classical signatures.
 
 ### Privacy Best Practices
 

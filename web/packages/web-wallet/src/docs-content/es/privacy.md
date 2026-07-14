@@ -38,9 +38,11 @@ CLSAG (Concise Linkable Spontaneous Anonymous Group) es un esquema eficiente de 
 
 Esto rompe el grafo de transacciones que de otro modo permitiría rastrear fondos a través de la cadena de bloques. Un observador ve que *alguien* del anillo gastó *algunas* monedas, pero no puede determinar qué participante ni qué monedas concretas.
 
-> **Nota:** Todas las transferencias de valor usan firmas de anillo. Las transacciones de acuñación (recompensas de bloque) usan firmas ML-DSA, ya que el acuñador es público.
+> **Nota:** Todas las transferencias de valor usan firmas de anillo. Las transacciones de acuñación (recompensas de bloque) no llevan firma: la preimagen de PoW se compromete con las claves públicas del acuñador, de modo que la atribución se basa en hashes y es resistente a la computación cuántica (ADR 0006).
 
 ### Importes confidenciales
+
+> **Estado de implementación:** Los importes confidenciales son el diseño ratificado (ADR 0006) y están en desarrollo. En la testnet actual, los importes de las transacciones son públicos. Esta sección describe el diseño objetivo.
 
 En todas las **transacciones privadas** (que incluyen todas las transferencias de valor), los importes se ocultan mediante **compromisos de Pedersen** con pruebas de rango **Bulletproofs**. Estas construcciones criptográficas permiten a la red verificar que las transacciones cuadran (las entradas igualan a las salidas más las comisiones) sin revelar los importes reales.
 
@@ -64,22 +66,22 @@ Los ordenadores cuánticos suponen una amenaza futura para los algoritmos cripto
 **Algoritmos utilizados:**
 
 - **ML-KEM-768** (FIPS 203): direcciones sigilosas poscuánticas (la privacidad del destinatario es permanente)
-- **ML-DSA-65** (FIPS 204): firmas poscuánticas para las transacciones de acuñación
+- **Vinculación por preimagen de PoW** (RandomX, basada en hashes): atribución de la acuñación sin firmas (resistente a la computación cuántica)
 - **CLSAG**: firmas de anillo clásicas para las transacciones privadas (la privacidad del remitente es efímera)
-- **Pedersen + Bulletproofs**: ocultación de importes con seguridad de teoría de la información (a prueba de cuántica)
+- **Pedersen + Bulletproofs**: ocultación de importes con seguridad de teoría de la información (a prueba de cuántica; los importes confidenciales están en desarrollo, véase más arriba)
 
 **¿Por qué esta arquitectura?**
 
-La identidad del destinatario queda registrada en la cadena para siempre: un atacante cuántico en 2045 podría vincular destinatarios a partir de transacciones de 2025. ML-KEM protege frente a esta amenaza de "recolectar ahora, descifrar después". La privacidad del remitente, en cambio, es efímera: su valor se degrada con el tiempo a medida que el contexto económico se vuelve histórico. Usar CLSAG clásico mantiene las transacciones pequeñas (~4 KB frente a ~65 KB de las alternativas poscuánticas).
+La identidad del destinatario queda registrada en la cadena para siempre: un atacante cuántico en 2045 podría vincular destinatarios a partir de transacciones de 2025. ML-KEM protege frente a esta amenaza de "recolectar ahora, descifrar después". La privacidad del remitente, en cambio, es efímera: su valor se degrada con el tiempo a medida que el contexto económico se vuelve histórico. Usar CLSAG clásico mantiene las transacciones pequeñas (~4 KB frente a ~65 KB de las alternativas poscuánticas). ML-DSA-65 (FIPS 204) sigue siendo la familia de firmas futura designada de Botho para la protección frente al robo cuántico, pero hoy no desempeña ningún papel activo en el protocolo.
 
 **Tipos de transacción:**
 
 | Tipo | Destinatario | Importe | Remitente | Caso de uso |
 |------|-----------|--------|--------|----------|
-| Acuñación | Oculto (ML-KEM) | Público | Conocido (ML-DSA) | Recompensas de bloque |
-| Privada | Oculto (ML-KEM) | Oculto | Oculto (anillo CLSAG=20) | Todas las transferencias (~4 KB) |
+| Acuñación | Oculto (ML-KEM) | Público | Conocido (vinculado a PoW) | Recompensas de bloque |
+| Privada | Oculto (ML-KEM) | Oculto (en desarrollo) | Oculto (anillo CLSAG=20) | Todas las transferencias (~4 KB) |
 
-Los destinatarios y los importes están protegidos frente a los ordenadores cuánticos. La privacidad del remitente usa firmas clásicas eficientes.
+Los destinatarios están protegidos frente a los ordenadores cuánticos; la ocultación de importes tendrá seguridad de teoría de la información cuando se implementen los importes confidenciales. La privacidad del remitente usa firmas clásicas eficientes.
 
 ### Buenas prácticas de privacidad
 
