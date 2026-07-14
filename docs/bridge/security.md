@@ -77,10 +77,16 @@ Rate limits protect against:
 
 ```toml
 [bridge]
-max_order_amount = 1000000000000000      # 1M BTH max per order
-daily_limit_per_address = 100000000000000  # 100k BTH/day per address
-global_daily_limit = 10000000000000000    # 10M BTH/day total
+max_order_amount = 1000000000000000      # 1,000 BTH max per order
+daily_limit_per_address = 100000000000000  # 100 BTH/day per address
+global_daily_limit = 10000000000000000    # 10,000 BTH/day total
 ```
+
+The service-side `global_daily_limit` (10,000 BTH/day) is intentionally
+1000× below the wBTH contract's `autoPauseThreshold` (`WrappedBTH.sol:104`,
+10M BTH/day): the federation cap is the tight first-line breaker, the
+contract threshold is the last-resort on-chain halt if the federation layer
+is compromised. Raising the federation cap is an operator decision (#895).
 
 ### Limit Tuning
 

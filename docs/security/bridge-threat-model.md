@@ -203,10 +203,10 @@ follow-up.
     confirmed BTH deposits, so reaching the threshold means the attacker first
     locked ~10M BTH of *real* reserve.
   - The service backlog and global-cap breakers
-    (`max_pending_orders = 1000`, `global_daily_limit = 10M BTH` in
+    (`max_pending_orders = 1000`, `global_daily_limit = 10,000 BTH` in
     `bridge/core/src/config.rs`) trip only on real orders: burns require owning
     wBTH, deposits require BTH, each order is bounded by
-    `max_order_amount = 1M BTH`, and every order pays `fee_bps = 10` (0.10%,
+    `max_order_amount = 1,000 BTH`, and every order pays `fee_bps = 10` (0.10%,
     floored at `min_fee = 0.0001 BTH`). Filling the 1000-order backlog with
     minimum-fee orders costs the attacker at least `1000 × 0.0001 BTH = 0.1 BTH`
     in fees alone (far more if the orders carry non-trivial value, since the
@@ -219,6 +219,17 @@ follow-up.
   The fail-closed cap/breaker behavior is exercised by
   `engine::test_breaker_auto_trips_on_backlog` and
   `engine::test_global_cap_trips_breaker` (both #854).
+
+  The 1000× gap between the federation cap and the contract breaker is
+  deliberate two-layer defense, not drift (#895): the service-side
+  `global_daily_limit` (10,000 BTH/day) is the *tight* cap that trips first
+  and bounds normal-operations blast radius, while the contract-side
+  `autoPauseThreshold` (`WrappedBTH.sol:104`, `10_000_000 * 10 ** 12` =
+  10M BTH/day) is the *loose*, last-resort on-chain breaker that still halts
+  minting even if the federation layer itself is compromised or
+  misconfigured. The federation default is pinned by
+  `config::tests::test_global_daily_limit_pinned_to_10k_bth`; raising it is
+  an operator/economics decision requiring explicit sign-off, not a refactor.
 
 ## Follow-ups filed
 
