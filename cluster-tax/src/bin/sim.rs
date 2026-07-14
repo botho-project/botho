@@ -4356,8 +4356,9 @@ mod cli {
     ///
     /// Sweeps SETTLEMENT_HORIZON_BLOCKS across plausible magnitudes × wealth-
     /// factor classes and prints the wrap-cost, churn-invariance and dGini-
-    /// erosion tables that back `docs/research/settlement-horizon-calibration.md`.
-    /// Does NOT wire anything into consensus — the horizon constant is ratified
+    /// erosion tables that back
+    /// `docs/research/settlement-horizon-calibration.md`. Does NOT wire
+    /// anything into consensus — the horizon constant is ratified
     /// by the maintainer at review, then landed by #831 / #925.
     fn run_settlement_horizon_sweep_cli() {
         use bth_cluster_tax::simulation::settlement_horizon_sweep::{

@@ -68,8 +68,7 @@
 //! implementation. All randomness is a deterministically seeded `ChaCha8Rng`,
 //! so the doc numbers regenerate byte-for-byte.
 
-use crate::fee_curve::PICO_PER_BTH;
-use crate::{demurrage_charge, ClusterFactorCurve};
+use crate::{demurrage_charge, fee_curve::PICO_PER_BTH, ClusterFactorCurve};
 
 use super::metrics::calculate_gini;
 
@@ -295,8 +294,9 @@ pub struct GiniErosionRow {
     /// leaves the population MORE unequal than holding would have (the leak the
     /// horizon must limit).
     pub gini_erosion: f64,
-    /// Δgini vs the no-demurrage baseline in the HOLD world — the redistribution
-    /// gain the mechanism produces; must exceed 0.05 (the design floor).
+    /// Δgini vs the no-demurrage baseline in the HOLD world — the
+    /// redistribution gain the mechanism produces; must exceed 0.05 (the
+    /// design floor).
     pub delta_gini_hold: f64,
     /// Δgini vs the no-demurrage baseline in the ESCAPE world — the residual
     /// gain once the top decile has wrapped out. If this drops below 0.05 the
@@ -738,7 +738,11 @@ mod tests {
     fn markdown_contains_all_horizons_and_gates() {
         let md = to_markdown(&run_settlement_horizon_sweep());
         for h in candidate_horizons() {
-            assert!(md.contains(h.label), "missing horizon {} in report", h.label);
+            assert!(
+                md.contains(h.label),
+                "missing horizon {} in report",
+                h.label
+            );
         }
         assert!(md.contains("churn-inv margin"));
         assert!(md.contains("Δgini_escape"));

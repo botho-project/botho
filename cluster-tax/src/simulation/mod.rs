@@ -35,9 +35,9 @@ pub mod m2;
 mod metrics;
 #[cfg(any(feature = "cli", test))]
 pub mod privacy;
+mod runner;
 #[cfg(any(feature = "cli", test))]
 pub mod settlement_horizon_sweep;
-mod runner;
 mod state;
 
 pub use agent::{Action, Agent, AgentId};
