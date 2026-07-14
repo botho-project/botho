@@ -16,7 +16,7 @@
  * The set of locales the app knows how to render. `en` MUST stay first — it is
  * the default and the unprefixed locale.
  */
-export const SUPPORTED_LOCALES = ['en', 'es'] as const
+export const SUPPORTED_LOCALES = ['en', 'es', 'zh'] as const
 
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number]
 

@@ -33,6 +33,20 @@ describe('parseAcceptLanguage', () => {
     expect(parseAcceptLanguage('en-GB,en;q=0.8')).toBe('en')
   })
 
+  it('collapses every Chinese variant onto the single supported zh bundle', () => {
+    // Simplified variants map straight to zh.
+    expect(parseAcceptLanguage('zh')).toBe('zh')
+    expect(parseAcceptLanguage('zh-CN')).toBe('zh')
+    expect(parseAcceptLanguage('zh-Hans')).toBe('zh')
+    expect(parseAcceptLanguage('zh-SG')).toBe('zh')
+    // Traditional variants also resolve to zh for now (better-than-English; a
+    // dedicated zh-Hant locale is a possible follow-up, see #921).
+    expect(parseAcceptLanguage('zh-TW')).toBe('zh')
+    expect(parseAcceptLanguage('zh-Hant')).toBe('zh')
+    // A realistic browser header lands on zh.
+    expect(parseAcceptLanguage('zh-CN,zh;q=0.9,en;q=0.8')).toBe('zh')
+  })
+
   it('picks the highest-weighted SUPPORTED locale, skipping unsupported ones', () => {
     // fr is unsupported and highest-weighted; es is the best supported match.
     expect(parseAcceptLanguage('fr;q=0.9,es;q=0.5')).toBe('es')
@@ -195,6 +209,16 @@ describe('negotiateLocaleRedirect', () => {
     expect(d).toEqual({ kind: 'redirect', location: '/es', cookieLocale: 'es' })
   })
 
+  it('redirects a first-visit zh-CN browser to the /zh equivalent', () => {
+    const d = negotiateLocaleRedirect({
+      pathname: '/wallet',
+      acceptLanguage: 'zh-CN,zh;q=0.9,en;q=0.8',
+      cookie: null,
+      userAgent: browserUA,
+    })
+    expect(d).toEqual({ kind: 'redirect', location: '/zh/wallet', cookieLocale: 'zh' })
+  })
+
   it('does NOT redirect a first-visit en browser (passes, stamps default cookie)', () => {
     const d = negotiateLocaleRedirect({
       pathname: '/wallet',
@@ -328,6 +352,23 @@ describe('localizeDocumentHtml', () => {
     // One alternate per supported locale + x-default.
     const count = (out.match(/rel="alternate"/g) ?? []).length
     expect(count).toBe(SUPPORTED_LOCALES.length + 1)
+  })
+
+  it('localizes og/twitter/description meta to Simplified Chinese for a zh path', () => {
+    const out = localizeDocumentHtml(baseHtml, 'zh', '/zh/wallet')
+    expect(out).toContain(
+      `<meta property="og:title" content="${LOCALE_METADATA.zh.title}" />`,
+    )
+    expect(out).toContain(
+      `<meta name="description" content="${LOCALE_METADATA.zh.description}" />`,
+    )
+    expect(out).toContain('<html lang="zh">')
+    expect(out).toContain(`<link rel="canonical" href="${SITE_ORIGIN}/zh/wallet" />`)
+    expect(out).toContain(
+      `<link rel="alternate" hreflang="zh" href="${SITE_ORIGIN}/zh/wallet" />`,
+    )
+    // No English title/description survives.
+    expect(out).not.toContain('Private Currency for the Quantum Era')
   })
 
   it('leaves English metadata content unchanged (no regression) for the default locale', () => {

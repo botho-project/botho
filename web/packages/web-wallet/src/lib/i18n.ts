@@ -44,6 +44,13 @@ import enDocs from '../locales/en/docs.json'
 import esDocs from '../locales/es/docs.json'
 import enNode from '../locales/en/node.json'
 import esNode from '../locales/es/node.json'
+import zhLanding from '../locales/zh/landing.json'
+import zhWallet from '../locales/zh/wallet.json'
+import zhPay from '../locales/zh/pay.json'
+import zhClaim from '../locales/zh/claim.json'
+import zhContacts from '../locales/zh/contacts.json'
+import zhDocs from '../locales/zh/docs.json'
+import zhNode from '../locales/zh/node.json'
 
 /**
  * Locale constants live in the dependency-free `./locales` leaf module so build
@@ -101,6 +108,15 @@ const resources = {
     contacts: esContacts,
     docs: esDocs,
     node: esNode,
+  },
+  zh: {
+    landing: zhLanding,
+    wallet: zhWallet,
+    pay: zhPay,
+    claim: zhClaim,
+    contacts: zhContacts,
+    docs: zhDocs,
+    node: zhNode,
   },
 } as const
 

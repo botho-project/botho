@@ -1,0 +1,19 @@
+{
+  "brand": "Botho",
+  "brandDocs": "Botho 文档",
+  "backToHome": "返回首页",
+  "openMenu": "打开菜单",
+  "closeMenu": "关闭菜单",
+  "notFound": "未找到章节 “{{segment}}” ——显示“快速开始”。",
+  "sections": {
+    "getting-started": "快速开始",
+    "privacy": "隐私特性",
+    "cluster-tags": "集群标签",
+    "privacy-progressivity": "隐私 + 渐进性",
+    "consensus": "共识",
+    "running-node": "运行节点",
+    "api": "API 参考",
+    "network": "网络",
+    "tokenomics": "代币经济"
+  }
+}

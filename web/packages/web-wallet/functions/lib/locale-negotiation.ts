@@ -58,6 +58,12 @@ export const LOCALE_METADATA: Record<SupportedLocale, LocaleMetadata> = {
       'Finalidad SCP instantánea. Direcciones de destinatario resistentes a la computación cuántica. Economía progresiva que premia la circulación sobre el acaparamiento.',
     htmlTitle: 'Botho',
   },
+  zh: {
+    title: 'Botho - 面向量子时代的隐私货币',
+    description:
+      'SCP 即时最终性。抗量子的收款人地址。奖励流通而非囤积的渐进式经济机制。',
+    htmlTitle: 'Botho',
+  },
 }
 
 /**
@@ -101,6 +107,14 @@ export function isBotUserAgent(userAgent: string | null | undefined): boolean {
  * that we actually support, or `undefined` if none match (or the header is
  * absent / unparseable). Only base language tags are compared (e.g. `es-MX`
  * matches `es`); region subtags are ignored since we key on base language.
+ *
+ * Because matching is on the base tag, every Chinese variant collapses to the
+ * single supported `zh` bundle (Simplified / zh-Hans): `zh`, `zh-CN`, `zh-Hans`,
+ * `zh-SG` — and, for now, also `zh-TW` / `zh-Hant`. Serving Simplified to a
+ * Traditional-preferring visitor is deliberately treated as better-than-English;
+ * a dedicated Traditional Chinese (`zh-Hant`) locale is a possible follow-up
+ * (see #921), at which point the script subtag would need explicit handling here
+ * rather than being discarded with the region subtag.
  *
  * A ~q-value parser is sufficient for the tiny supported set — no dependency.
  * `q` defaults to 1.0 when omitted, and entries are stably ordered by descending

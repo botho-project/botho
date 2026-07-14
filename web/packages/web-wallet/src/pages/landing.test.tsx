@@ -96,6 +96,46 @@ describe('LandingPage i18n', () => {
     expect(screen.queryByText(RETIRED_SIG_NAME)).toBeNull()
   })
 
+  it('renders Simplified Chinese hero copy when the active locale is zh', async () => {
+    await i18n.changeLanguage('zh')
+    render(
+      <MemoryRouter initialEntries={['/zh']}>
+        <LandingPage />
+      </MemoryRouter>,
+    )
+    expect(screen.getByText('隐私货币')).toBeTruthy()
+    expect(screen.getByText(/默认隐私/)).toBeTruthy()
+    // English source string must NOT leak through untranslated.
+    expect(screen.queryByText('Private by Default')).toBeNull()
+    expect(screen.queryByText('Quantum Era')).toBeNull()
+  })
+
+  it('qualifies the confidential-amounts claim as in-development (ADR 0006) in Chinese', async () => {
+    // i18n parity: the zh copy carries the same ADR 0006 qualifier as en (#907)
+    // — hidden amounts are "in development", never claimed as live.
+    await i18n.changeLanguage('zh')
+    render(
+      <MemoryRouter initialEntries={['/zh']}>
+        <LandingPage />
+      </MemoryRouter>,
+    )
+    expect(screen.getByText(/Pedersen 承诺隐藏金额的功能正在开发中（ADR 0006）/)).toBeTruthy()
+    expect(screen.queryByText(RETIRED_SIG_NAME)).toBeNull()
+  })
+
+  it('locale switcher label reflects Chinese on a direct /zh load', async () => {
+    await i18n.changeLanguage('zh')
+    render(
+      <MemoryRouter initialEntries={['/zh']}>
+        <LandingPage />
+      </MemoryRouter>,
+    )
+    const select = screen.getAllByRole('combobox')[0] as HTMLSelectElement
+    expect(select.value).toBe('zh')
+    const selected = select.options[select.selectedIndex]
+    expect(selected.textContent).toBe('中文')
+  })
+
   it('locale switcher toggles the rendered language', async () => {
     render(
       <MemoryRouter initialEntries={['/']}>

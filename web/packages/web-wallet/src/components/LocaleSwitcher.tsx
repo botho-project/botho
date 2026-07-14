@@ -20,6 +20,7 @@ import { parseLocalePath, switchLocaleInPath } from '../lib/locale-path'
 const LOCALE_LABELS: Record<SupportedLocale, string> = {
   en: 'English',
   es: 'Español',
+  zh: '中文',
 }
 
 export function LocaleSwitcher({ className = '' }: { className?: string }) {
