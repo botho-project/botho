@@ -12,29 +12,22 @@ use crate::{
     wallet::Wallet,
 };
 
-#[cfg(feature = "pq")]
-use crate::transaction_pq::QuantumPrivateTransaction;
-
 /// Pending transactions file name
 const PENDING_TXS_FILE: &str = "pending_txs.bin";
-
-/// Pending quantum-private transactions file name
-#[cfg(feature = "pq")]
-const PENDING_PQ_TXS_FILE: &str = "pending_pq_txs.bin";
 
 /// Send BTH to an address
 ///
 /// If `private` is true, uses ring signatures to hide which UTXO is being
-/// spent. If `quantum` is true, uses post-quantum cryptography (ML-KEM +
-/// ML-DSA). If recipient has a quantum address (botho://1q/), quantum mode is
-/// auto-enabled. If `memo` is provided, it will be encrypted and attached to
-/// the recipient's output.
+/// spent. If `memo` is provided, it will be encrypted and attached to the
+/// recipient's output.
+///
+/// Note: quantum-private transactions are retired (ADR 0006). Sending to a
+/// `botho://1q/...` address fails during address parsing with a clear error.
 pub fn run(
     config_path: &Path,
     address_str: &str,
     amount_str: &str,
     private: bool,
-    quantum: bool,
     memo: Option<&str>,
 ) -> Result<()> {
     let config = Config::load(config_path).context("No wallet found. Run 'botho init' first.")?;
@@ -50,12 +43,10 @@ pub fn run(
     // Get the network type
     let network = config.network_type();
 
-    // Parse recipient address and validate it's for the correct network
+    // Parse recipient address and validate it's for the correct network.
+    // Retired quantum addresses (botho://1q/...) are rejected here with a
+    // clear "quantum addresses retired (ADR 0006)" error.
     let parsed_address = Address::parse_for_network(address_str, network)?;
-
-    // Auto-enable quantum mode if recipient has a quantum address
-    #[cfg(feature = "pq")]
-    let quantum = quantum || parsed_address.is_quantum();
 
     // Get the classical address for standard operations
     let recipient = parsed_address.public_address();
@@ -157,35 +148,6 @@ pub fn run(
         }
         selected_utxos.push(utxo.clone());
         selected_amount += utxo.output.amount;
-    }
-
-    // Handle quantum-private transactions
-    #[cfg(feature = "pq")]
-    if quantum {
-        let pq_recipient = parsed_address.quantum_address().cloned().ok_or_else(|| {
-            anyhow::anyhow!("Quantum transaction requires a quantum-safe address (botho://1q/...)")
-        })?;
-
-        // For quantum-private transactions, use Hidden type (same fee structure)
-        let pq_fee =
-            fee_config.estimate_typical_fee(TransactionType::Hidden, cluster_wealth, num_memos);
-        return run_quantum(
-            config_path,
-            &pq_recipient,
-            amount,
-            pq_fee,
-            selected_utxos,
-            state.height,
-            &wallet,
-            network,
-        );
-    }
-
-    #[cfg(not(feature = "pq"))]
-    if quantum {
-        return Err(anyhow::anyhow!(
-            "Quantum-private transactions require the 'pq' feature. Rebuild with: cargo build --features pq"
-        ));
     }
 
     // Build outputs
@@ -342,134 +304,7 @@ fn parse_amount(s: &str) -> Result<u64> {
     Ok(picocredits)
 }
 
-/// Handle quantum-private transaction creation
-#[cfg(feature = "pq")]
-fn run_quantum(
-    config_path: &Path,
-    recipient: &bth_account_keys::QuantumSafePublicAddress,
-    amount: u64,
-    fee: u64,
-    selected_utxos: Vec<crate::transaction::Utxo>,
-    current_height: u64,
-    wallet: &Wallet,
-    network: bth_transaction_types::constants::Network,
-) -> Result<()> {
-    use crate::{address::format_quantum_address, transaction_pq::calculate_pq_fee};
-
-    // Calculate quantum-safe fee (larger transactions)
-    let pq_fee = calculate_pq_fee(selected_utxos.len(), 2); // 2 outputs: recipient + change
-    let effective_fee = std::cmp::max(fee, pq_fee);
-
-    println!();
-    println!("Creating quantum-private transaction...");
-    println!("Using ML-KEM-768 for key exchange, ML-DSA-65 for signatures");
-
-    // Create the quantum-private transaction
-    let tx = wallet.create_quantum_private_transaction(
-        &selected_utxos,
-        recipient,
-        amount,
-        effective_fee,
-        current_height,
-    )?;
-
-    let tx_hash = tx.hash();
-    let num_inputs = tx.inputs.len();
-
-    // Format address for display (truncate long PQ address)
-    let addr_display = format_quantum_address(recipient, network);
-    let addr_short = if addr_display.len() > 60 {
-        format!(
-            "{}...{}",
-            &addr_display[..30],
-            &addr_display[addr_display.len() - 20..]
-        )
-    } else {
-        addr_display
-    };
-
-    // Display transaction details
-    println!();
-    println!("=== Quantum-Private Transaction Created ===");
-    println!("From: your wallet");
-    println!("To: {}", addr_short);
-    println!("Amount: {:.12} BTH", amount as f64 / 1_000_000_000_000.0);
-    println!();
-    println!("Fee breakdown:");
-    println!("  Type: Quantum-Private (ML-KEM + ML-DSA)");
-    println!("  Size: ~6 KB (hybrid PQ signatures)");
-    println!(
-        "  Fee: {:.12} BTH (size-based)",
-        effective_fee as f64 / 1_000_000_000_000.0
-    );
-    println!();
-
-    let selected_amount: u64 = selected_utxos.iter().map(|u| u.output.amount).sum();
-    let change = selected_amount - amount - effective_fee;
-    if change > 0 {
-        println!("Change: {:.12} BTH", change as f64 / 1_000_000_000_000.0);
-    }
-
-    println!();
-    println!("Security:");
-    println!("  - Outputs: ML-KEM-768 encapsulation (1088 bytes)");
-    println!("  - Inputs: Schnorr + ML-DSA-65 signatures (64 + 3309 bytes)");
-    println!("  - Protected against \"harvest now, decrypt later\" attacks");
-    println!();
-    println!("Transaction hash: {}", hex::encode(&tx_hash[0..16]));
-    println!("Inputs: {}", num_inputs);
-    println!("Outputs: {}", tx.outputs.len());
-
-    // Save transaction to pending file
-    let pending_path = config_path
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join(PENDING_PQ_TXS_FILE);
-
-    save_pending_pq_tx(&pending_path, &tx)?;
-
-    println!();
-    println!("Quantum-private transaction saved to pending queue.");
-    println!("Start the node with 'botho run' to broadcast it.");
-    println!();
-
-    Ok(())
-}
-
-/// Save a quantum-private transaction to the pending transactions file
-#[cfg(feature = "pq")]
-fn save_pending_pq_tx(path: &Path, tx: &QuantumPrivateTransaction) -> Result<()> {
-    // Load existing pending transactions
-    let mut pending: Vec<QuantumPrivateTransaction> = load_pending_pq_txs(path).unwrap_or_default();
-
-    // Check if already exists
-    let tx_hash = tx.hash();
-    if pending.iter().any(|t| t.hash() == tx_hash) {
-        return Err(anyhow::anyhow!("Transaction already in pending queue"));
-    }
-
-    // Add new transaction
-    pending.push(tx.clone());
-
-    // Save back
-    let bytes = bincode::serialize(&pending)
-        .context("Failed to serialize pending quantum-private transactions")?;
-    fs::write(path, bytes).context("Failed to save pending quantum-private transactions")?;
-
-    Ok(())
-}
-
-/// Load pending quantum-private transactions from file
-#[cfg(feature = "pq")]
-pub fn load_pending_pq_txs(path: &Path) -> Result<Vec<QuantumPrivateTransaction>> {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-
-    let bytes = fs::read(path).context("Failed to read pending quantum-private transactions")?;
-
-    let pending: Vec<QuantumPrivateTransaction> = bincode::deserialize(&bytes)
-        .context("Failed to deserialize pending quantum-private transactions")?;
-
-    Ok(pending)
-}
+// NOTE (issue #903 / ADR 0006): the quantum-private send path (run_quantum,
+// pending-QP-tx file handling) was removed with the QP transaction class;
+// see docs/decisions/0006-pq-architecture-ratification.md and git history.
+// An old pending_pq_txs.bin left in a wallet dir is simply ignored.

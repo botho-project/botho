@@ -2489,7 +2489,6 @@ dependencies = [
  "bth-crypto-hashes",
  "bth-crypto-keys",
  "bth-crypto-multisig",
- "bth-crypto-pq",
  "bth-crypto-ring-signature",
  "bth-crypto-ring-signature-signer",
  "bth-transaction-types",

@@ -7,6 +7,9 @@ license = "GPL-3.0"
 
 [features]
 default = ["pq"]
+# The `pq` feature now covers only ML-KEM key derivation / quantum-safe
+# account keys (kept for universal ML-KEM outputs, ADR 0006 / #904). The
+# quantum-private transaction class was removed (issue #903).
 pq = ["bth-account-keys/pq", "bth-crypto-pq", "bth-transaction-clsag/pq"]
 
 [lib]
@@ -183,7 +186,7 @@ botho-wallet = { path = "../botho-wallet" }
 # Enable the CLSAG transaction crate's test-only constructors (e.g.
 # `Transaction::new_stub_with_fee`) for botho's own test/dev builds.
 bth-transaction-clsag = { path = "../transaction/clsag", features = ["test-utils"] }
-bth-transaction-core = { path = "../transaction/core", features = ["pq"] }
+bth-transaction-core = { path = "../transaction/core" }
 futures = "0.3"
 criterion = { workspace = true }
 rand_chacha = { workspace = true }

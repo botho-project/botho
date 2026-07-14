@@ -6,7 +6,9 @@
 //! exchanges, command line). Invalid addresses must be rejected gracefully
 //! without panics or undefined behavior.
 //!
-//! Botho supports both classical (Ristretto-based) and quantum-safe addresses.
+//! Botho supports classical (Ristretto-based) addresses; retired quantum
+//! address prefixes (ADR 0006) must be rejected gracefully with a clear
+//! error, never a panic.
 
 use arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
@@ -111,7 +113,7 @@ fn fuzz_raw_string(s: &str) {
 
         // Test other methods
         let _ = addr.network;
-        let _ = addr.is_quantum();
+        let _ = addr.public_address();
     }
 }
 

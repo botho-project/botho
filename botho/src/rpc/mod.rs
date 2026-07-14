@@ -982,7 +982,14 @@ async fn handle_rpc_method(request: &JsonRpcRequest, state: &RpcState) -> JsonRp
 
         // Transaction methods
         "tx_submit" | "sendRawTransaction" => handle_submit_tx(id, &request.params, state).await,
-        "pq_tx_submit" => handle_submit_pq_tx(id, &request.params, state).await,
+        // Quantum-private transactions were retired (ADR 0006, issue #903).
+        // Keep an explicit error so old clients get a clear message instead
+        // of a generic "method not found".
+        "pq_tx_submit" => JsonRpcResponse::error(
+            id,
+            -32601,
+            "quantum-private transactions retired (ADR 0006): pq_tx_submit has been removed",
+        ),
         "getTransaction" | "tx_get" => handle_get_transaction(id, &request.params, state).await,
         "getTransactionStatus" | "tx_getStatus" => {
             handle_get_transaction_status(id, &request.params, state).await
@@ -2011,78 +2018,6 @@ async fn handle_submit_tx(id: Value, params: &Value, state: &RpcState) -> JsonRp
     }
 }
 
-/// Handle quantum-private transaction submission
-#[cfg(feature = "pq")]
-async fn handle_submit_pq_tx(id: Value, params: &Value, _state: &RpcState) -> JsonRpcResponse {
-    use crate::transaction_pq::QuantumPrivateTransaction;
-
-    let tx_hex = match params.get("tx_hex").and_then(|v| v.as_str()) {
-        Some(hex) => hex,
-        None => return JsonRpcResponse::error(id, -32602, "Missing tx_hex parameter"),
-    };
-
-    let tx_bytes = match hex::decode(tx_hex) {
-        Ok(bytes) => bytes,
-        Err(_) => return JsonRpcResponse::error(id, -32602, "Invalid hex encoding"),
-    };
-
-    let tx: QuantumPrivateTransaction = match bincode::deserialize(&tx_bytes) {
-        Ok(tx) => tx,
-        Err(e) => {
-            return JsonRpcResponse::error(id, -32602, &format!("Invalid PQ transaction: {}", e))
-        }
-    };
-
-    // Validate structure
-    if let Err(e) = tx.is_valid_structure() {
-        return JsonRpcResponse::error(
-            id,
-            -32602,
-            &format!("Invalid PQ transaction structure: {}", e),
-        );
-    }
-
-    // Validate fee
-    if !tx.has_sufficient_fee() {
-        return JsonRpcResponse::error(
-            id,
-            -32602,
-            &format!(
-                "Insufficient fee: {} < {} required",
-                tx.fee,
-                tx.minimum_fee()
-            ),
-        );
-    }
-
-    // TODO: Full validation requires checking:
-    // 1. UTXO existence in ledger
-    // 2. Classical signature verification
-    // 3. PQ signature verification against stored pq_signing_pubkey
-    // 4. Adding to mempool (requires PQ-aware mempool)
-    //
-    // For now, return success with the transaction hash
-    // The transaction will be validated when included in a block
-    let tx_hash = tx.hash();
-
-    info!("Received PQ transaction: {}", hex::encode(&tx_hash[..8]));
-
-    JsonRpcResponse::success(
-        id,
-        json!({
-            "txHash": hex::encode(tx_hash),
-            "type": "quantum-private",
-            "size": tx.estimated_size(),
-        }),
-    )
-}
-
-/// Fallback for non-PQ builds
-#[cfg(not(feature = "pq"))]
-async fn handle_submit_pq_tx(id: Value, _params: &Value, _state: &RpcState) -> JsonRpcResponse {
-    JsonRpcResponse::error(id, -32601, "PQ transactions not enabled in this build")
-}
-
 /// Get a transaction by hash (for exchange integration)
 ///
 /// Returns transaction details including block height, confirmations,
@@ -2317,20 +2252,21 @@ async fn handle_validate_address(id: Value, params: &Value, _state: &RpcState) -
     match Address::parse(address_str) {
         Ok(addr) => {
             let network = addr.network.display_name();
-            let is_quantum = addr.is_quantum();
-            let address_type = if is_quantum { "quantum" } else { "classical" };
 
             // Get the canonical form
             let canonical = addr.to_address_string();
 
+            // Quantum addresses are retired (ADR 0006): they no longer parse,
+            // so any valid address here is classical. `isQuantum` is kept for
+            // response-shape compatibility with older clients.
             JsonRpcResponse::success(
                 id,
                 json!({
                     "valid": true,
                     "address": canonical,
                     "network": network,
-                    "type": address_type,
-                    "isQuantum": is_quantum,
+                    "type": "classical",
+                    "isQuantum": false,
                 }),
             )
         }

@@ -11,7 +11,6 @@ rust-version = { workspace = true }
 serde = ["dep:serde", "bth-crypto-keys/serde", "bth-crypto-ring-signature/serde"]
 prost = ["dep:prost", "bth-crypto-keys/prost", "bth-crypto-ring-signature/prost"]
 alloc = ["serde?/alloc", "bth-crypto-digestible/alloc"]
-pq = [] # Enables post-quantum address support
 
 default = ["alloc", "serde", "prost"]
 

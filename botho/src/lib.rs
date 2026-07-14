@@ -26,9 +26,6 @@ pub mod telemetry;
 pub mod transaction;
 pub mod wallet;
 
-#[cfg(feature = "pq")]
-pub mod transaction_pq;
-
 // Re-export commands module for CLI binary
 // Commands legitimately use println! for CLI output
 #[allow(clippy::print_stdout)]

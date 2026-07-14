@@ -90,7 +90,7 @@ cargo build --release
 | `botho init` | Crea un nuevo monedero con un mnemónico de 24 palabras |
 | `botho balance` | Muestra el saldo actual de tu monedero |
 | `botho address` | Muestra tu dirección de recepción (`--save` la escribe en un archivo) |
-| `botho send <address> <amount>` | Envía BTH (importe en BTH; `--quantum` para criptografía poscuántica, `--memo` para adjuntar una nota cifrada) |
+| `botho send <address> <amount>` | Envía BTH (importe en BTH; `--memo` para adjuntar una nota cifrada) |
 
 Todos los envíos usan firmas de anillo CLSAG: la privacidad del remitente está activa por defecto, no es un flag.
 
