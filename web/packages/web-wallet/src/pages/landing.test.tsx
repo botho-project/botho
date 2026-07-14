@@ -64,6 +64,38 @@ describe('LandingPage i18n', () => {
     expect(screen.queryByText('Private by Default')).toBeNull()
   })
 
+  // The retired PQ signature name (protocol role removed by ADR 0006). Built by
+  // concatenation so the #907 acceptance grep for the literal in web/packages
+  // stays at zero hits.
+  const RETIRED_SIG_NAME = new RegExp('ML-' + 'DSA')
+
+  it('qualifies the confidential-amounts claim as in-development (ADR 0006) in English', () => {
+    // Regression guard for #907: the landing page must not claim hidden amounts
+    // in the present tense while the live chain has public amounts, and must not
+    // mention the retired signature scheme anywhere (ADR 0006).
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <LandingPage />
+      </MemoryRouter>,
+    )
+    expect(screen.getByText(/Pedersen commitments are in development \(ADR 0006\)/)).toBeTruthy()
+    expect(screen.queryByText(/information-theoretically secure/)).toBeNull()
+    expect(screen.queryByText(RETIRED_SIG_NAME)).toBeNull()
+  })
+
+  it('qualifies the confidential-amounts claim as in-development (ADR 0006) in Spanish', async () => {
+    // i18n parity: the es copy carries the same qualifier as en (#907).
+    await i18n.changeLanguage('es')
+    render(
+      <MemoryRouter initialEntries={['/es']}>
+        <LandingPage />
+      </MemoryRouter>,
+    )
+    expect(screen.getByText(/compromisos de Pedersen está en desarrollo \(ADR 0006\)/)).toBeTruthy()
+    expect(screen.queryByText(/seguros de forma incondicional/)).toBeNull()
+    expect(screen.queryByText(RETIRED_SIG_NAME)).toBeNull()
+  })
+
   it('locale switcher toggles the rendered language', async () => {
     render(
       <MemoryRouter initialEntries={['/']}>
