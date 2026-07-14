@@ -1,6 +1,6 @@
 // Copyright (c) 2024 The Botho Foundation
 
-//! Solana wBTH minting (Anchor program `wbth_bridge`).
+//! Solana wBTH minting (Anchor program `wbth`).
 //!
 //! Per ADR 0002, Solana mint authorizations are signed natively by the
 //! validators' Ed25519 keys — no secp256k1 detour is needed. The on-chain

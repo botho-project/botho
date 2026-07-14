@@ -2,7 +2,7 @@
 
 //! Solana chain watcher for monitoring wBTH burns (burn flow).
 //!
-//! Watches the `wbth_bridge` Anchor program
+//! Watches the `wbth` Anchor program
 //! (`contracts/solana/programs/wbth`) for `BridgeBurnEvent { user, amount,
 //! bth_address, timestamp }` emissions and drives `BurnDetected ->
 //! BurnConfirmed`, mirroring the Ethereum watcher:
