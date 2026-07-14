@@ -1,0 +1,61 @@
+{
+  "header": {
+    "walletName": "Botho 钱包"
+  },
+  "title": "联系人",
+  "add": "添加",
+  "addDisabledPlaintext": "为你的钱包设置密码以保存联系人",
+  "addDisabledLocked": "解锁你的钱包以保存联系人",
+  "sort": {
+    "name": "姓名",
+    "lastTx": "最近",
+    "txCount": "支付最多"
+  },
+  "plaintextHint": {
+    "title": "联系人需要受密码保护的钱包",
+    "body": "你的钱包没有设置密码，因此无法保存联系人——它们会在本设备上加密，绝不会以明文形式存储。设置密码即可开始保存联系人。",
+    "cta": "设置密码"
+  },
+  "lockedHint": {
+    "title": "钱包已锁定",
+    "body": "解锁你的钱包以查看和保存联系人。它们会在本设备上加密，锁定时无法访问。",
+    "cta": "前往钱包解锁"
+  },
+  "searchPlaceholder": "按姓名或地址搜索…",
+  "empty": {
+    "none": "还没有联系人。你支付过的地址会显示在这里，随时可以添加标签。",
+    "noMatch": "没有联系人与你的搜索匹配。"
+  },
+  "row": {
+    "unnamed": "未命名——点击以添加标签",
+    "timesPaid": "已支付 {{count}} 次",
+    "editTitle": "编辑联系人",
+    "labelTitle": "点击为此地址添加标签",
+    "editButtonTitle": "编辑"
+  },
+  "editor": {
+    "addTitle": "添加联系人",
+    "editTitle": "编辑联系人",
+    "close": "关闭",
+    "nameLabel": "姓名",
+    "namePlaceholder": "例如 Alice",
+    "addressLabel": "地址",
+    "addressPlaceholder": "tbotho://1/…",
+    "addressFixed": "现有联系人的地址无法更改。",
+    "notesLabel": "备注",
+    "notesOptional": "（可选）",
+    "notesPlaceholder": "关于此联系人需要记住的任何内容…",
+    "saveAdd": "添加联系人",
+    "saveEdit": "保存更改",
+    "deleteConfirmPrompt": "移除此联系人？这只会删除本地标签，不会删除任何付款。",
+    "delete": "删除",
+    "cancel": "取消",
+    "deleteContact": "删除联系人"
+  },
+  "errors": {
+    "enterAddress": "请输入地址。",
+    "invalidAddress": "这看起来不像是有效的 Botho 地址。",
+    "saveFailed": "无法保存联系人。",
+    "deleteFailed": "无法删除联系人。"
+  }
+}

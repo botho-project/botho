@@ -17,7 +17,7 @@ import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { DocsPage } from './docs'
 import i18n from '../lib/i18n'
 
-/** Mirrors the `/docs` + `/es/docs` route pairs registered via LocaleRoutes. */
+/** Mirrors the `/docs` + `/es/docs` + `/zh/docs` route pairs registered via LocaleRoutes. */
 function renderDocs(initialEntries: string[]) {
   return render(
     <MemoryRouter initialEntries={initialEntries}>
@@ -26,6 +26,8 @@ function renderDocs(initialEntries: string[]) {
         <Route path="/docs/*" element={<DocsPage />} />
         <Route path="/es/docs" element={<DocsPage />} />
         <Route path="/es/docs/*" element={<DocsPage />} />
+        <Route path="/zh/docs" element={<DocsPage />} />
+        <Route path="/zh/docs/*" element={<DocsPage />} />
       </Routes>
     </MemoryRouter>,
   )
@@ -97,6 +99,68 @@ describe('DocsPage i18n (es)', () => {
     // Getting Started title in Spanish, plus a Spanish not-found hint.
     expect(activeHeading()).toBe('Primeros pasos')
     const hint = screen.getByText(/no encontrada — mostrando Primeros pasos/)
+    expect(hint.textContent).toContain('protocol')
+  })
+})
+
+describe('DocsPage i18n (zh)', () => {
+  beforeEach(() => i18n.changeLanguage('en'))
+  afterEach(() => {
+    cleanup()
+    return i18n.changeLanguage('en')
+  })
+
+  it('renders Simplified Chinese section titles and markdown under /zh/docs', async () => {
+    await i18n.changeLanguage('zh')
+    renderDocs(['/zh/docs'])
+
+    // Default section (getting-started) H1 uses the localized title.
+    expect(activeHeading()).toBe('快速开始')
+    // Body markdown comes from docs-content/zh/getting-started.md.
+    expect(screen.getByText(/Botho 是一种以隐私为核心的加密货币/)).toBeTruthy()
+    // English source copy must NOT leak through untranslated.
+    expect(screen.queryByText(/Botho is a privacy-focused cryptocurrency/)).toBeNull()
+  })
+
+  it('renders a Simplified Chinese deep-linked section (/zh/docs#cluster-tags)', async () => {
+    await i18n.changeLanguage('zh')
+    renderDocs(['/zh/docs#cluster-tags'])
+
+    expect(activeHeading()).toBe('集群标签')
+    expect(screen.getByText(/用于追踪币的来源而不损害隐私的新颖机制/)).toBeTruthy()
+  })
+
+  it('nav labels are localized while the hrefs keep the invariant slug', async () => {
+    await i18n.changeLanguage('zh')
+    renderDocs(['/zh/docs'])
+
+    const consensusLinks = screen.getAllByRole('link', { name: '共识' })
+    expect(consensusLinks.length).toBeGreaterThan(0)
+    // The href keeps the locale prefix + the English slug (locale-invariant id).
+    expect(consensusLinks[0].getAttribute('href')).toBe('/zh/docs#consensus')
+  })
+
+  it('re-renders the active section in the new language on a mid-session switch', async () => {
+    await i18n.changeLanguage('zh')
+    renderDocs(['/zh/docs#consensus'])
+    expect(activeHeading()).toBe('共识')
+    expect(screen.getByText(/SCP 是一种联邦拜占庭协议/)).toBeTruthy()
+
+    // Switching to English re-renders the same section under the English route.
+    cleanup()
+    await i18n.changeLanguage('en')
+    renderDocs(['/docs#consensus'])
+    await waitFor(() => expect(activeHeading()).toBe('Consensus'))
+    expect(
+      screen.getByText(/SCP is a federated Byzantine agreement protocol/),
+    ).toBeTruthy()
+  })
+
+  it('renders the not-found hint in Simplified Chinese for an unknown /zh/docs segment', async () => {
+    await i18n.changeLanguage('zh')
+    renderDocs(['/zh/docs/protocol'])
+    expect(activeHeading()).toBe('快速开始')
+    const hint = screen.getByText(/未找到.*显示“快速开始”/)
     expect(hint.textContent).toContain('protocol')
   })
 })

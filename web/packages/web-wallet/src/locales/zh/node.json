@@ -1,0 +1,89 @@
+{
+  "region": {
+    "usWest2": "美国西部（俄勒冈）— us-west-2",
+    "usEast1": "美国东部（弗吉尼亚北部）— us-east-1",
+    "caCentral1": "加拿大（蒙特利尔）— ca-central-1",
+    "saEast1": "南美洲（圣保罗）— sa-east-1",
+    "euCentral1": "欧洲（法兰克福）— eu-central-1",
+    "euWest2": "欧洲（伦敦）— eu-west-2",
+    "afSouth1": "非洲（开普敦）— af-south-1",
+    "meSouth1": "中东（巴林）— me-south-1",
+    "apSouth1": "亚太（孟买）— ap-south-1",
+    "apSoutheast1": "亚太（新加坡）— ap-southeast-1",
+    "apNortheast1": "亚太（东京）— ap-northeast-1",
+    "apSoutheast2": "亚太（悉尼）— ap-southeast-2"
+  },
+  "checkout": {
+    "back": "返回",
+    "testnetBadge": "测试网——账单在 Stripe 测试模式下运行",
+    "heroTitle": "为你的社区托管一个节点",
+    "heroSubtitlePrefix": "我们为你运行一个常在线的 Botho 节点——无需管理服务器。你以及你邀请的每一个人，都通过你自己的私有端点从应用中进行交易。 ",
+    "heroPrice": "每月 $50。",
+    "valueProp": {
+      "leadStrong": "你的节点为你挖矿。",
+      "leadBody": " 开箱即用，它会向你配置的地址挖矿——在帮助保护网络的同时，任何奖励都会直接进入你的钱包。你所购买的是托管服务：常在线的节点和钱包体验。 ",
+      "clarityStrong": "为了明确价值",
+      "clarityBody": "：测试网币没有任何现实价值，而主网币价格浮动——挖矿奖励并非收入承诺。在我们验证服务期间，费用在 Stripe 测试模式下扣取。"
+    },
+    "cards": {
+      "managedTitle": "为你托管",
+      "managedDesc": "云端常在线的节点——无需 AWS，无需 SSH，无需维护。",
+      "hubTitle": "你社区的中心",
+      "hubDesc": "一个供你和你邀请的所有人进行交易的私有端点。",
+      "custodyTitle": "非托管",
+      "custodyDesc": "密钥始终留在每台设备上。节点绝不持有任何人的资金。"
+    },
+    "regionLabel": "地区",
+    "optgroupAvailable": "现已可用",
+    "optgroupComingSoon": "即将推出——告诉我们你希望托管的地点",
+    "availableHint": "订阅后，你的节点将在此处配置。",
+    "comingSoonHint": "此地区尚未上线。你的节点暂时会在 {{region}} 启动，你的偏好已被记录，以帮助我们优先规划新的数据中心。",
+    "emailLabel": "邮箱",
+    "emailOptional": "（可选）",
+    "emailPlaceholder": "you@example.com",
+    "emailHint": "预填 Stripe 结账页面，也是我们发送节点详情的邮箱。你也可以在下一屏输入。",
+    "submitting": "正在跳转至 Stripe…",
+    "submit": "订阅——每月 $50",
+    "secureNote": "由 Stripe 托管的安全结账。可随时取消。",
+    "errorFallback": "启动结账时出现问题。请重试。"
+  },
+  "success": {
+    "title": "订阅已开始",
+    "body": "谢谢！你的托管节点正在配置中。使用下方安全链接访问你节点的状态页面——它会显示你的私有 RPC URL、节点健康状况，以及一键在钱包中打开的链接。",
+    "provisioning": "正在设置你的节点……通常需要一分钟。",
+    "viewStatus": "查看你的节点状态",
+    "linkError": "我们无法确认此次结账。如果你刚刚付款，请稍后刷新；否则请从节点页面重新开始。",
+    "noSession": "你的订阅正在设置中。请查收邮件，获取你节点状态页面的安全链接。",
+    "stillProvisioning": "你的节点仍在设置中。请在一分钟后刷新此页面以获取安全状态链接。",
+    "openWallet": "打开钱包",
+    "backToHome": "返回首页"
+  },
+  "status": {
+    "title": "你的托管节点",
+    "subtitle": "Botho 即服务 · 测试网",
+    "loading": "正在加载你的节点…",
+    "missingToken": "此状态链接缺少访问令牌。",
+    "loadError": "无法加载你的节点状态。",
+    "portalError": "无法打开账单门户。",
+    "tryAgain": "重试",
+    "statusLabel": "状态",
+    "rpcLabel": "RPC 端点",
+    "copyRpcAria": "复制 RPC URL",
+    "regionLabel": "地区",
+    "openInWallet": "在钱包中打开",
+    "manageSubscription": "管理订阅",
+    "state": {
+      "provisioning": "配置中",
+      "running": "运行中",
+      "suspended": "已暂停",
+      "terminated": "已终止"
+    },
+    "health": {
+      "notReporting": "尚未上报",
+      "unreachable": "无法连接",
+      "online": "在线",
+      "height": "高度 {{height}}",
+      "synced": "已同步"
+    }
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "header": {
+    "walletName": "Botho 钱包"
+  },
+  "title": "发送付款",
+  "parsing": "正在读取付款请求…",
+  "errors": {
+    "notValidGeneric": "此付款请求链接无效。",
+    "noRequest": "未找到付款请求。链接应形如 .../pay#…",
+    "invalidRecipient": "此付款请求链接的收款地址无效。",
+    "amountPositive": "金额必须大于 0。",
+    "amountInvalid": "请输入有效金额。",
+    "paymentFailed": "付款失败。"
+  },
+  "confirm": {
+    "youArePaying": "你正在支付给",
+    "aBothoAddress": "一个 Botho 地址",
+    "selfPay": "此请求指向你自己的地址——你将会付款给自己。",
+    "knownNamed": "你之前支付过 {{name}}——他们在你的联系人中。",
+    "knownUnnamed": "你之前支付过此地址——它在你的联系人中。",
+    "unknownStrong": "你此前未支付过此地址。",
+    "unknown": "请仔细核对上方的完整地址——付款请求链接可能被攻击者控制，且付款无法撤销。",
+    "noteLabel": "来自请求方的备注",
+    "noteFromBotho": "（并非来自 Botho）",
+    "amountLabel": "金额（BTH）",
+    "max": "最多：{{amount}} BTH",
+    "amountPlaceholder": "0.00",
+    "noAmountSpecified": "请求方未指定金额——请输入要发送的数额。",
+    "largePrefillStrong": "{{amount}} BTH",
+    "largePrefillPrefix": "此链接正在请求一笔大额款项（",
+    "largePrefillSuffix": "）。我已核实金额和收款人，确认要发送。",
+    "sending": "发送中…",
+    "pay": "支付 {{amount}}",
+    "payNoAmount": "支付"
+  },
+  "success": {
+    "paymentSent": "付款已发送",
+    "sentTo": "已向 {{recipient}} 发送 {{amount}} BTH。",
+    "theRequester": "请求方",
+    "viewTransaction": "查看交易",
+    "savedToContacts": "已保存至你的联系人。",
+    "savePrompt": "将此地址保存为联系人？",
+    "namePlaceholder": "姓名（可选）",
+    "saveAsContact": "保存为联系人",
+    "saveError": "无法保存联系人。",
+    "goToWallet": "前往我的钱包"
+  },
+  "gate": {
+    "unlockPrompt": "解锁你的钱包以支付此请求。",
+    "needWalletPrompt": "你需要一个钱包才能支付此请求。",
+    "createNew": "新建",
+    "importExisting": "导入现有",
+    "passwordPlaceholder": "输入密码",
+    "unlock": "解锁",
+    "unlockFailed": "解锁失败。",
+    "revealPrompt": "点击以揭示",
+    "confirmedPhrase": "我已记下我的恢复助记词并妥善保管。",
+    "setPasswordPrompt": "设置密码——你的钱包将用它在本设备上加密。",
+    "overwriteStrong": "本设备已有一个钱包{{suffix}}。",
+    "overwriteWarning": "继续操作会替换它并删除其存储的种子——除非你已备份其恢复助记词，否则其中的任何资金都将丢失。",
+    "createContinue": "创建并继续",
+    "createFailed": "无法创建钱包。",
+    "seedPlaceholder": "输入你的 12 或 24 个单词的恢复助记词…",
+    "importContinue": "导入并继续",
+    "importFailed": "导入失败。"
+  }
+}

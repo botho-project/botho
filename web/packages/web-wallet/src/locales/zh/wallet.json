@@ -1,0 +1,86 @@
+{
+  "header": {
+    "walletNameLong": "Botho 钱包",
+    "walletNameShort": "钱包"
+  },
+  "createView": {
+    "title": "创建新钱包",
+    "subtitle": "记下你的恢复助记词并妥善保管。",
+    "clickToReveal": "点击以揭示",
+    "confirmPhrase": "我已记下我的恢复助记词并将其保管在安全的地方。",
+    "setPassword": "设置密码",
+    "passwordNote": "你的钱包用此密码在本设备上加密。如果忘记密码将无法恢复——请妥善保管你的恢复助记词作为备份。",
+    "createButton": "创建钱包"
+  },
+  "importView": {
+    "title": "导入钱包",
+    "subtitle": "输入你的 12 或 24 个单词的恢复助记词以恢复你的钱包。",
+    "recoveryPhraseLabel": "恢复助记词",
+    "placeholder": "输入你的恢复助记词，各单词之间用空格分隔……",
+    "wordCountOne": "{{count}} 个单词",
+    "wordCountOther": "{{count}} 个单词",
+    "expectedWords": "应为 12 或 24 个单词",
+    "setPassword": "设置密码",
+    "passwordNote": "你的钱包用此密码在本设备上加密。",
+    "importFailed": "导入失败",
+    "importing": "导入中……",
+    "importButton": "导入钱包"
+  },
+  "autoLock": {
+    "minute": "1 分钟",
+    "fiveMinutes": "5 分钟",
+    "fifteenMinutes": "15 分钟",
+    "thirtyMinutes": "30 分钟",
+    "hour": "1 小时",
+    "off": "关闭（永不）"
+  },
+  "settingsModal": {
+    "title": "设置",
+    "subtitle": "安全与钱包控制。",
+    "autoLockLabel": "闲置后自动锁定",
+    "autoLockEnabled": "在空闲时自动锁定钱包。有操作时计时器会重置。",
+    "autoLockDisabled": "设置密码以启用自动锁定。",
+    "lockWallet": "锁定钱包",
+    "lockWalletTitle": "锁定钱包",
+    "enableLockingTitle": "设置密码以启用锁定",
+    "enableLockingLink": "设置密码以启用锁定",
+    "resetWallet": "重置钱包",
+    "close": "关闭"
+  },
+  "dashboard": {
+    "send": "发送",
+    "receive": "接收",
+    "sendViaLink": "通过链接发送",
+    "request": "请求",
+    "contacts": "联系人",
+    "lockWalletTitle": "锁定钱包",
+    "enableLockingTitle": "设置密码以启用锁定",
+    "settingsTitle": "设置",
+    "protectedTitle": "钱包受密码保护",
+    "protectedBody": "你的种子、联系人和领取链接都在本设备上加密。",
+    "unprotectedTitle": "钱包未设置密码",
+    "unprotectedBody": "设置密码以加密你的钱包并启用领取链接。",
+    "changePassword": "修改密码",
+    "setPassword": "设置密码",
+    "recentTransactions": "最近交易",
+    "transactionFailed": "交易失败"
+  },
+  "resetModal": {
+    "title": "重置钱包",
+    "body": "这将从本设备移除你的钱包。继续前请确保你已保存恢复助记词。",
+    "confirm": "重置并重新开始",
+    "cancel": "取消"
+  },
+  "unlockView": {
+    "title": "解锁钱包",
+    "subtitle": "输入你的密码以访问你的钱包。",
+    "passwordPlaceholder": "输入密码",
+    "unlockFailed": "解锁失败",
+    "unlocking": "解锁中……",
+    "unlock": "解锁"
+  },
+  "setup": {
+    "createNew": "新建",
+    "importExisting": "导入现有"
+  }
+}

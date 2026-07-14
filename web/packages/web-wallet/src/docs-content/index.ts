@@ -58,6 +58,17 @@ import esApi from './es/api.md?raw'
 import esNetwork from './es/network.md?raw'
 import esTokenomics from './es/tokenomics.md?raw'
 
+// --- Simplified Chinese markdown bodies --------------------------------------
+import zhGettingStarted from './zh/getting-started.md?raw'
+import zhPrivacy from './zh/privacy.md?raw'
+import zhClusterTags from './zh/cluster-tags.md?raw'
+import zhPrivacyProgressivity from './zh/privacy-progressivity.md?raw'
+import zhConsensus from './zh/consensus.md?raw'
+import zhRunningNode from './zh/running-node.md?raw'
+import zhApi from './zh/api.md?raw'
+import zhNetwork from './zh/network.md?raw'
+import zhTokenomics from './zh/tokenomics.md?raw'
+
 /** A documentation section id — a stable, English, URL-addressable slug. */
 export type DocSectionId =
   | 'getting-started'
@@ -118,6 +129,17 @@ const CONTENT_BY_LOCALE: Record<SupportedLocale, ContentMap> = {
     api: esApi,
     network: esNetwork,
     tokenomics: esTokenomics,
+  },
+  zh: {
+    'getting-started': zhGettingStarted,
+    privacy: zhPrivacy,
+    'cluster-tags': zhClusterTags,
+    'privacy-progressivity': zhPrivacyProgressivity,
+    consensus: zhConsensus,
+    'running-node': zhRunningNode,
+    api: zhApi,
+    network: zhNetwork,
+    tokenomics: zhTokenomics,
   },
 }
 

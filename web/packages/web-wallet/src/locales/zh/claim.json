@@ -1,0 +1,48 @@
+{
+  "header": {
+    "walletName": "Botho 钱包"
+  },
+  "title": "领取你的 BTH",
+  "loading": {
+    "checking": "正在检查你的领取链接…",
+    "reading": "正在读取你的领取链接…"
+  },
+  "ready": {
+    "prompt": "有人给你发送了一个领取链接。",
+    "reveal": "揭示并检查此链接",
+    "privacyNote": "只有在你点击上方按钮后，我们才会联系网络——在此之前你的链接保持私密。"
+  },
+  "errors": {
+    "notValidGeneric": "此领取链接无效。",
+    "noLink": "未找到领取链接。链接应形如 .../claim#…",
+    "scanFailed": "扫描链接失败。",
+    "invalidDestination": "请输入有效的目标地址（tbotho://… 或 botho://…）。",
+    "newWalletPassword": "领取前请为你的新钱包设置密码。",
+    "confirmOverwrite": "领取前请确认替换本设备上已存储的钱包。",
+    "claimFailed": "领取失败。"
+  },
+  "waiting": "正在等待发送方的付款在链上确认。此页面将自动更新——可能需要一两分钟。",
+  "alreadyClaimed": "此链接已被领取。",
+  "claimable": {
+    "youveBeenSent": "有人向你发送了",
+    "feeCovered": "{{fee}} BTH 的网络手续费由发送方承担。",
+    "sendToLabel": "发送至地址",
+    "addressPlaceholder": "tbotho://1/…",
+    "createWallet": "还没有钱包？创建一个",
+    "recoveryPhraseTitle": "你的新恢复助记词",
+    "recoveryPhraseNote": "请记下并妥善保管——这是恢复此钱包的唯一方式。领取时我们会将其加密保存在此浏览器中。",
+    "passwordPrompt": "设置密码——你的钱包将用它在本设备上加密。",
+    "overwriteWarningStrong": "本设备已有一个钱包{{suffix}}。",
+    "overwriteWarning": "使用此新钱包领取会替换已存储的钱包并删除其种子——除非你已备份其恢复助记词，否则其中的任何资金都将丢失。",
+    "claiming": "领取中…",
+    "claim": "领取 {{amount}} BTH",
+    "bearerWarning": "这是一个持有即领取的链接——任何拥有它的人都可以领取。请尽快领取，以免被他人抢先。"
+  },
+  "claimed": {
+    "amount": "已领取 {{amount}} BTH",
+    "onTheirWay": "资金正在发往你的地址。",
+    "viewTransaction": "查看交易",
+    "deleteMessageNote": "为保护你的隐私，请从聊天记录中删除包含此链接的消息。它已被领取且无法再次使用，但将其删除可使该秘密不留存于你的消息历史和备份中。",
+    "goToWallet": "前往我的钱包"
+  }
+}

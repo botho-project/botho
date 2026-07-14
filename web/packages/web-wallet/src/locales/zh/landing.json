@@ -1,0 +1,70 @@
+{
+  "brand": "Botho",
+  "nav": {
+    "explorer": "浏览器",
+    "network": "网络",
+    "docs": "文档",
+    "hostNode": "托管节点",
+    "whitepaper": "白皮书",
+    "github": "GitHub",
+    "launchWallet": "打开钱包",
+    "openMenu": "打开菜单",
+    "closeMenu": "关闭菜单",
+    "blockExplorer": "区块浏览器",
+    "documentation": "文档"
+  },
+  "status": {
+    "testnetLive": "测试网已上线",
+    "productionPending": "生产网络待发布"
+  },
+  "hero": {
+    "titleLead": "面向量子时代的",
+    "titleHighlight": "隐私货币",
+    "subtitle": "SCP 即时最终性。抗量子的收款人地址。奖励流通而非囤积的渐进式经济机制。",
+    "openWallet": "打开钱包",
+    "readDocs": "阅读文档"
+  },
+  "stats": {
+    "finality": { "label": "最终性", "value": "<5s", "note": "SCP 共识" },
+    "ringSize": { "label": "环大小", "value": "20", "note": "CLSAG 签名" },
+    "feeRange": { "label": "手续费区间", "value": "1-6x", "note": "基于来源" },
+    "addresses": { "label": "地址", "value": "ML-KEM", "note": "抗量子" }
+  },
+  "features": {
+    "private": {
+      "title": "默认隐私",
+      "description": "每笔交易都使用环签名。没有透明模式，也不会出现 T 地址式的失误。隐私是基线，而非高级功能。"
+    },
+    "economics": {
+      "title": "渐进式经济机制",
+      "description": "手续费基于币的来源，而非身份。新铸造的币付费更高；充分流通的币付费更低。80% 的手续费通过偏向小额持有者的抽奖重新分配。拆分并无帮助——标签追踪的是来源，而非金额。"
+    },
+    "quantum": {
+      "title": "在关键之处抗量子",
+      "description": "收款人地址使用 ML-KEM-768——量子计算机无法追踪谁收到了资金。通过 Pedersen 承诺隐藏金额的功能正在开发中（ADR 0006）；目前金额是公开的。发送方隐私通过高效的 CLSAG 环签名实现。"
+    },
+    "finality": {
+      "title": "即时最终性",
+      "description": "SCP 共识意味着交易在几秒内即成为最终交易。没有重组，无需等待 6 个区块，没有双花风险。"
+    }
+  },
+  "cta": {
+    "title": "准备好开始了吗？",
+    "subtitle": "几秒钟即可创建钱包。无需邮箱，无需 KYC，无追踪。也可以通过托管服务运行你自己的常在线节点。",
+    "createWallet": "创建钱包",
+    "hostNode": "托管节点"
+  },
+  "footer": {
+    "projectName": "Botho 项目",
+    "explorer": "浏览器",
+    "documentation": "文档",
+    "whitepaper": "白皮书",
+    "github": "GitHub",
+    "motto": "\"Motho ke motho ka batho\" — 人因他人而成其为人"
+  },
+  "localeSwitcher": {
+    "label": "语言",
+    "english": "English",
+    "spanish": "Español"
+  }
+}
