@@ -5,8 +5,44 @@ authors = ["Botho Foundation"]
 edition = "2021"
 publish = false
 
+# ============================================================================
+# Toolchain watch (#920)
+# ============================================================================
+# This crate is pinned, via the repo-root `rust-toolchain`, to
+# `nightly-2025-12-03`. Do NOT bump that pin casually: a replacement nightly
+# must satisfy BOTH of these constraints, or `cargo fuzz` breaks somewhere:
+#
+#   1. Its rustc must still COMPILE the pinned dep tree. Rolling nightlies past
+#      ~2026-06 fail to build the transitive `hashbrown 0.14.5`
+#      ("cannot specialize on trait Copy"); a bump likely needs coordinated dep
+#      updates (e.g. hashbrown) and a fresh `fuzz/Cargo.lock`.
+#   2. Its shipped AddressSanitizer runtime must not DEADLOCK on the local dyld.
+#      The 2025-12-03 ASan runtime hangs in `__asan::InitializeShadowMemory`
+#      before `main` on macOS 26.5 (arm64) — the root cause of #920. A bump that
+#      fixes (1) but not (2) still leaves macOS devs unable to `cargo fuzz run`.
+#
+# Until a nightly satisfies both, macOS developers use the native-smoke path
+# (the `native-smoke` feature + `native_smoke` bin below); coverage-guided runs
+# happen in ubuntu CI (`.github/workflows/fuzz.yml`). See `fuzz/README.md`.
+
 [package.metadata]
 cargo-fuzz = true
+
+# The shared fuzz-harness bodies (#920). Both the `fuzz_targets/*` libFuzzer
+# binaries and the native-smoke driver import these, so a harness change can
+# never drift between the coverage-guided path and the macOS smoke path.
+[lib]
+path = "src/lib.rs"
+test = true
+doc = false
+bench = false
+
+[features]
+# Enables the `native_smoke` binary (a plain, sanitizer-free driver that runs
+# the shared harnesses over the corpus + randomized inputs on macOS, where
+# libFuzzer/ASan deadlocks — #920). Off by default so a normal `cargo build`
+# of this crate does not pull the driver in.
+native-smoke = []
 
 # Fuzz crate must be in its own workspace to resolve git dependencies correctly
 [workspace]
@@ -48,6 +84,17 @@ rand_chacha = "0.3"
 subtle = "2"
 curve25519-dalek = "4"
 tempfile = "3"
+
+# Native-smoke driver (#920): NOT a libFuzzer target. Runs the shared harness
+# bodies over corpus + randomized inputs on a stock toolchain (no libFuzzer,
+# no sanitizer) so it works on macOS. Gated behind the `native-smoke` feature.
+[[bin]]
+name = "native_smoke"
+path = "bin/native_smoke.rs"
+required-features = ["native-smoke"]
+test = false
+doc = false
+bench = false
 
 [[bin]]
 name = "fuzz_transaction"
