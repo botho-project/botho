@@ -37,7 +37,7 @@ The version dir's `_progress.json` is updated with `phases.figures.state = done`
 
 ## Figure source-of-truth policy (stub-by-default)
 
-Unlike `anvil:pub` (where most figures are data plots the figurer can render), installation figures are dominated by **author-supplied artwork** — exterior/interior/detail renders, site plans, and light studies. The figurer **cannot and must not fabricate** these. Following `anvil:ip-uspto`'s figures stance, the figurer's default action for an unresolved artwork reference is to produce a **stub** (`<name>.MISSING`) describing what the artist must supply, NOT a generated image.
+Unlike `anvil:paper` (where most figures are data plots the figurer can render), installation figures are dominated by **author-supplied artwork** — exterior/interior/detail renders, site plans, and light studies. The figurer **cannot and must not fabricate** these. Following `anvil:ip-uspto`'s figures stance, the figurer's default action for an unresolved artwork reference is to produce a **stub** (`<name>.MISSING`) describing what the artist must supply, NOT a generated image.
 
 The figurer only *renders* a figure when it has a deterministic source it can run:
 - A TikZ standalone (`figures/src/<name>.tex`) — compiled inline via `\input{figures/<name>.tex}` at document build (XeLaTeX); the figurer only syntax-checks it.

@@ -93,7 +93,7 @@ Skill-local first
 
 Lives under ``anvil/skills/memo/lib/`` per the CLAUDE.md "skill-local
 first, lib promotion later" pattern. Promotion to ``anvil/lib/memo/`` is
-queued for the second-consumer trigger — likely ``anvil:pub`` or
+queued for the second-consumer trigger — likely ``anvil:paper`` or
 ``anvil:proposal`` if they adopt analogous portfolio-shared evidence
 contracts. Until then, this module has zero ``anvil.*`` runtime imports
 (mirrors ``refs_pdf.py`` / ``memo_image_refs.py`` /

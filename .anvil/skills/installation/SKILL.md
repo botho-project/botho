@@ -10,7 +10,7 @@ user-invocable: false
 
 The `installation` skill produces defensible concept proposals for experiential and installation artwork — one-of-a-kind placed art whose value is conceptual, perceptual, and architectural (no commercial model, no TAM, no investor ask). It runs the canonical anvil lifecycle: `draft → review → revise → figures`, with `revise` looping to `review` until the rubric threshold is met or the iteration cap is reached.
 
-These artifacts are *memo-shaped* — a LaTeX prose document with callouts, spec/budget tables, hero images, and an Open Decisions close. The lifecycle, state machine, and rubric format mirror **`anvil:memo`** exactly; the LaTeX template + figures + examples + tests scaffolding mirrors **`anvil:pub`** and **`anvil:ip-uspto`** (the LaTeX-producing skills). Only the section template and rubric dimensions are specific to installation art.
+These artifacts are *memo-shaped* — a LaTeX prose document with callouts, spec/budget tables, hero images, and an Open Decisions close. The lifecycle, state machine, and rubric format mirror **`anvil:memo`** exactly; the LaTeX template + figures + examples + tests scaffolding mirrors **`anvil:paper`** and **`anvil:ip-uspto`** (the LaTeX-producing skills). Only the section template and rubric dimensions are specific to installation art.
 
 ## Artifact contract
 

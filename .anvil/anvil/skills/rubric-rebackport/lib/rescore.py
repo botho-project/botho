@@ -128,10 +128,15 @@ def invoke_rescore(
     -------
     A :class:`RescoreOutcome` recording the result.
     """
-    # Resolve owning skill from the sidecar spec's target rubric id.
-    # The convention is `anvil-<skill>-...` so a quick parse picks it up.
-    skill: Optional[str] = None
-    if spec.target_rubric.id.startswith("anvil-"):
+    # Resolve owning skill. Prefer the CURRENT skill name the planner
+    # carried on the spec (issue #694): a rubric_id may be a frozen
+    # version identity whose skill token no longer matches the current
+    # skill directory (e.g. the `paper` skill still stamps the frozen
+    # `anvil-pub-v2` id — parsing "pub" out of it resolves the wrong,
+    # nonexistent reviewer command). Fall back to the legacy rubric-id
+    # parse only when the planner did not supply a skill.
+    skill: Optional[str] = getattr(spec, "skill", None)
+    if skill is None and spec.target_rubric.id.startswith("anvil-"):
         tail = spec.target_rubric.id[len("anvil-"):]
         # Take everything up to the first `-v` so multi-token skills
         # like `ip-uspto` survive.

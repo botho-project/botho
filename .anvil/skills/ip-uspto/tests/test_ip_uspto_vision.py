@@ -26,7 +26,7 @@ expected vision detection for that fixture.
 
 This test file is named ``test_ip_uspto_vision.py`` (not
 ``test_vision.py`` or a generic name shared with the deck/slides/report/
-pub skills) to avoid the known pytest rootdir filename-collision across
+paper skills) to avoid the known pytest rootdir filename-collision across
 skills.
 """
 

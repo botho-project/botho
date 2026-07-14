@@ -145,7 +145,7 @@ Every critic directory contains:
 
 Uniform schema enables `ip-uspto-revise` to enumerate findings programmatically without per-critic special-casing. Critics that don't fill a rubric dimension leave it `null` rather than zero — the reviser aggregates non-null scores by mean.
 
-**Schema note**: this schema (`_summary.md` / `findings.md` / `_meta.json`) is the canonical `machine-summary` scorecard kind documented in `anvil/lib/snippets/scorecard_kind.md`. The memo, pub, slides, and report skills use the `human-verdict` kind (`verdict.md` / `scoring.md` / `comments.md`); the deck skill is the layered/aggregator reference (both kinds present). The two-kind discriminator (set in `_meta.json` as `scorecard_kind`) is how consumers distinguish the shapes without hardcoding skill-specific knowledge — see `anvil/lib/snippets/scorecard_kind.md` and `anvil/lib/snippets/critics.md` for the aggregation rules.
+**Schema note**: this schema (`_summary.md` / `findings.md` / `_meta.json`) is the canonical `machine-summary` scorecard kind documented in `anvil/lib/snippets/scorecard_kind.md`. The memo, paper, slides, and report skills use the `human-verdict` kind (`verdict.md` / `scoring.md` / `comments.md`); the deck skill is the layered/aggregator reference (both kinds present). The two-kind discriminator (set in `_meta.json` as `scorecard_kind`) is how consumers distinguish the shapes without hardcoding skill-specific knowledge — see `anvil/lib/snippets/scorecard_kind.md` and `anvil/lib/snippets/critics.md` for the aggregation rules.
 
 ### Reviser composition
 
@@ -336,7 +336,7 @@ See `rubric.md` for the 9-dimension /45 USPTO scoring schema, the ≥39 advance 
 the shared project-BRIEF registry
 (`anvil/lib/project_brief.py::REGISTERED_ARTIFACT_TYPES` /
 `SKILL_IDENTITY_ARTIFACT_TYPES`; issue #440, following the
-#386/#408/#432 pattern for `deck`/`slides`/`proposal`/`pub`/`report`).
+#386/#408/#432 pattern for `deck`/`slides`/`proposal`/`paper`/`report`).
 In a shared project BRIEF, a `documents:` entry with
 `artifact_type: ip-uspto` declares that this skill owns the thread. It
 is NOT a memo subtype: it selects no memo rubric overlay, and memo
@@ -362,7 +362,7 @@ Beyond the standard `draft → review → revise → figures → audit` lifecycl
 
 ### Render-gate threshold calibration
 
-The ip-skill pre-flight + audit-backstop call sites pass `overfull_threshold_pt=2.0` to `compile_and_gate(...)`, **tighter than** the framework default of 5.0pt in `anvil/lib/render_gate.py`. Rationale (issue #572): a filed provisional shipped with a 83.6pt overfull (~16× the framework default; >40× the ip-skill override). The 2.0pt call-site value is the legal-artifact calibration — strict enough to catch margin-breaking content well below the issue body's "egregious / >10pt" line, loose enough that sub-point cosmetic slop still passes. The framework default in `render_gate.py` remains 5.0pt to avoid disturbing the `installation`, `proposal`, `datasheet`, `pub`, `report` consumers that inherit it. The override is per-call-site, not per-skill-config, so an audit done outside the ip-skill commands (e.g., a consumer custom critic) does NOT inherit the tighter threshold unless it passes the same kwarg.
+The ip-skill pre-flight + audit-backstop call sites pass `overfull_threshold_pt=2.0` to `compile_and_gate(...)`, **tighter than** the framework default of 5.0pt in `anvil/lib/render_gate.py`. Rationale (issue #572): a filed provisional shipped with a 83.6pt overfull (~16× the framework default; >40× the ip-skill override). The 2.0pt call-site value is the legal-artifact calibration — strict enough to catch margin-breaking content well below the issue body's "egregious / >10pt" line, loose enough that sub-point cosmetic slop still passes. The framework default in `render_gate.py` remains 5.0pt to avoid disturbing the `installation`, `proposal`, `datasheet`, `paper`, `report` consumers that inherit it. The override is per-call-site, not per-skill-config, so an audit done outside the ip-skill commands (e.g., a consumer custom critic) does NOT inherit the tighter threshold unless it passes the same kwarg.
 
 ## Defaults and overrides
 

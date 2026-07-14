@@ -97,7 +97,7 @@ The standard anvil state machine terminates at `AUDITED`. For customer-facing ma
 
 The `.promote/` sibling is the on-disk evidence that the thread is in state `CUSTOMER-READY`.
 
-**Framework extraction note (per #10)**: this two-stage extension is implemented inline in this skill. When `anvil/lib/state_machine.py` lands, the pattern (post-`AUDITED` named terminal states with explicit human-acknowledgment guards) is a candidate to be promoted to a first-class extension point. Similar gates likely needed by other skills: `pub` → `SUBMITTED`, `ip-uspto` → `FILED`. The recommendation is to wait until ≥2 skills need the pattern before extracting it.
+**Framework extraction note (per #10)**: this two-stage extension is implemented inline in this skill. When `anvil/lib/state_machine.py` lands, the pattern (post-`AUDITED` named terminal states with explicit human-acknowledgment guards) is a candidate to be promoted to a first-class extension point. Similar gates likely needed by other skills: `paper` → `SUBMITTED`, `ip-uspto` → `FILED`. The recommendation is to wait until ≥2 skills need the pattern before extracting it.
 
 **Demotion**: a `CUSTOMER-READY` thread cannot be demoted. To correct a delivered report, start a new version (`<thread>.{N+2}/`) with a fresh `draft → review+audit → revise → promote` cycle. The original `CUSTOMER-READY` receipt remains as audit trail; the new receipt supersedes for delivery purposes.
 
@@ -143,7 +143,7 @@ auditor should keep in mind.)
 
 **Auditor use of `prior_reports`**: the auditor uses this list to cross-check the current draft for **contradictions with previously-delivered material**. Inconsistency across an engagement's report series is a critical-flag offense (see `rubric.md`, critical flag: "internal contradictions across the engagement").
 
-**Framework extraction note (per #10)**: per-project scoping is implemented inline by this skill. Other future skills (`pub` with multi-paper grant projects, `ip-uspto` with patent families) likely benefit from a parallel pattern. Candidate for `anvil/lib/project_scope.py` once a second consumer exists.
+**Framework extraction note (per #10)**: per-project scoping is implemented inline by this skill. Other future skills (`paper` with multi-paper grant projects, `ip-uspto` with patent families) likely benefit from a parallel pattern. Candidate for `anvil/lib/project_scope.py` once a second consumer exists.
 
 ## Cross-project customer context (opt-in, defaults off — issue #429)
 
@@ -252,7 +252,7 @@ Resolution rule: consumer overrides win when present, else fall back to skill de
 the shared project-BRIEF registry
 (`anvil/lib/project_brief.py::REGISTERED_ARTIFACT_TYPES` /
 `SKILL_IDENTITY_ARTIFACT_TYPES`; issue #432, following the #386/#408
-pattern for `deck`/`slides`/`proposal`/`pub`). In a shared project
+pattern for `deck`/`slides`/`proposal`/`paper`). In a shared project
 BRIEF, a `documents:` entry with `artifact_type: report` declares that
 this skill owns the thread. It is NOT a memo subtype: it selects no
 memo rubric overlay, and memo commands fail loudly when pointed at a
@@ -282,7 +282,7 @@ The patterns that recurred vs `anvil:memo` (#3) — input for #10's framework ex
 | Per-project `_project.md` shared context | — | New: recipient + engagement + prior_reports cross-check |
 | PDF as primary deliverable | — | New: pandoc default + LaTeX opt-in |
 
-**Extraction candidates for `anvil/lib/` (per #10)**: project-scope loader, two-stage promotion state-machine extension hook, pandoc render helper. None should be extracted from a single consumer — wait until at least one more skill (likely `pub` or `ip-uspto`) needs a parallel pattern.
+**Extraction candidates for `anvil/lib/` (per #10)**: project-scope loader, two-stage promotion state-machine extension hook, pandoc render helper. None should be extracted from a single consumer — wait until at least one more skill (likely `paper` or `ip-uspto`) needs a parallel pattern.
 
 ## Git sync hook (opt-in, off by default)
 

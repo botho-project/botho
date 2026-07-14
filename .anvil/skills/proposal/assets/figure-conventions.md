@@ -2,7 +2,7 @@
 
 This file is a reference checklist consumed by `proposal-figures` (when rendering deterministic diagrams or cataloging stubs) and by the `proposal-review` and `proposal-audit` critics (when scoring design correctness, scope completeness, and — for the priced tables — cost credibility). The priced-table section is the most important part of this file: the BOM, labor estimate, and project total are the heart of a buildable-system proposal, and dimension 6 (cost credibility) and audit-flag 4 (internal inconsistency) are scored directly against them.
 
-Unlike `anvil:pub`, where most figures are data plots the figurer can render, proposal figures are a mix: a **topology diagram** the figurer can render from TikZ, a **data chart** it can render from a `.csv`, and **author-supplied artwork** (a photo-real site/routing plan) it can only stub. The figurer renders what it has a deterministic source for and stubs the rest — it never fabricates imagery or data.
+Unlike `anvil:paper`, where most figures are data plots the figurer can render, proposal figures are a mix: a **topology diagram** the figurer can render from TikZ, a **data chart** it can render from a `.csv`, and **author-supplied artwork** (a photo-real site/routing plan) it can only stub. The figurer renders what it has a deterministic source for and stubs the rest — it never fabricates imagery or data.
 
 ## Expected figures
 

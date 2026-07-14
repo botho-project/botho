@@ -156,7 +156,7 @@ Rationale: a delivered report is a fact in the recipient's hands. Removing the o
 
 ## Framework extraction note (per #10)
 
-This command is the inline implementation of a two-stage promotion gate that the report skill needs but the standard anvil state machine does not provide. When `anvil/lib/state_machine.py` lands, the recommendation is to expose a **terminal-state extension hook** that allows skills to register additional post-`AUDITED` states with declared entry guards (acknowledgment requirements, precondition checks, custom receipt schemas). Likely consumers of the same pattern: `anvil:pub` (post-`AUDITED` → `SUBMITTED`), `anvil:ip-uspto` (post-`AUDITED` → `FILED`).
+This command is the inline implementation of a two-stage promotion gate that the report skill needs but the standard anvil state machine does not provide. When `anvil/lib/state_machine.py` lands, the recommendation is to expose a **terminal-state extension hook** that allows skills to register additional post-`AUDITED` states with declared entry guards (acknowledgment requirements, precondition checks, custom receipt schemas). Likely consumers of the same pattern: `anvil:paper` (post-`AUDITED` → `SUBMITTED`), `anvil:ip-uspto` (post-`AUDITED` → `FILED`).
 
 Wait until ≥2 skills need the pattern before extracting it. For now, this command is the reference implementation; future skills can copy it and adapt the receipt schema.
 

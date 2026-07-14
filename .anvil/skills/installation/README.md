@@ -26,7 +26,7 @@ Experiential / installation artwork — one-of-a-kind placed art whose value is 
 This skill is built by composing two existing skills:
 
 - **`anvil:memo`** — the lifecycle, state machine, and `rubric.md` format reference. Memo is markdown-only (no LaTeX), so it supplies the *process* shape: `draft → review → revise → figures`, `EMPTY → DRAFTED → REVIEWED → REVISED → … → READY`, ≥35 advance, critical-flag short-circuit, `max_iterations: 4`, the `verdict.md` / `scoring.md` / `comments.md` critic triple, and "no separate audit phase in v0."
-- **`anvil:pub` / `anvil:ip-uspto`** — the LaTeX template + figures + examples + tests machinery. These supply the `.cls` + `.tex.j2` template pattern, the structural-not-golden examples stance, and the figurer's "never invent data / stub-by-default" policy.
+- **`anvil:paper` / `anvil:ip-uspto`** — the LaTeX template + figures + examples + tests machinery. These supply the `.cls` + `.tex.j2` template pattern, the structural-not-golden examples stance, and the figurer's "never invent data / stub-by-default" policy.
 
 ## Canonical worked instance
 
@@ -34,7 +34,7 @@ The grounding example is **Quiet Place** — a spherical anechoic chamber for tw
 
 ## Renderer
 
-LaTeX via the shipped `templates/anvil-installation.cls`, compiled with **XeLaTeX** (`xelatex installation.tex`). The class defaults to Helvetica Neue and falls back to Latin Modern Sans (ships with every TeX Live install) via `\IfFontExistsTF`, so it compiles with no system fonts. This differs from `anvil:pub`, which uses pdflatex.
+LaTeX via the shipped `templates/anvil-installation.cls`, compiled with **XeLaTeX** (`xelatex installation.tex`). The class defaults to Helvetica Neue and falls back to Latin Modern Sans (ships with every TeX Live install) via `\IfFontExistsTF`, so it compiles with no system fonts. This differs from `anvil:paper`, which uses pdflatex.
 
 ## Participatory gating
 

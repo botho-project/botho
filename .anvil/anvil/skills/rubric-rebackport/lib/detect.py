@@ -85,7 +85,12 @@ _BODY_FILENAME_TO_SKILL: Dict[str, str] = {
     "proposal.md": "proposal",
     "report.md": "report",
     "installation.md": "installation",
-    "pub.md": "pub",
+    "paper.md": "paper",
+    # Legacy body filename (issue #694): the `pub` skill was renamed to
+    # `paper`. Existing consumer threads still carry a `pub.md` body — it
+    # resolves to the CURRENT skill name `paper` so their reviews keep
+    # inferring the right (paper) rubric row.
+    "pub.md": "paper",
     "deck.md": "deck",
     "slides.md": "slides",
     "ip-uspto.md": "ip-uspto",
@@ -363,8 +368,13 @@ def _load_brief_skill_map(project_tree: Path) -> Dict[str, str]:
         "report": "report",
         "deck": "deck",
         "slides": "slides",
-        "pub": "pub",
-        "publication": "pub",
+        "paper": "paper",
+        # Legacy artifact_type strings (issue #694): the `pub` skill was
+        # renamed to `paper`. A pre-rename BRIEF carrying `artifact_type:
+        # pub` (or the informal `publication`) still resolves to the
+        # CURRENT skill name `paper`.
+        "pub": "paper",
+        "publication": "paper",
         "ip-uspto": "ip-uspto",
         "patent": "ip-uspto",
         "installation": "installation",

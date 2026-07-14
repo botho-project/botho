@@ -38,7 +38,7 @@ Design notes
 3. **Skill-local first.** Lives under ``anvil/skills/memo/lib/`` per the
    CLAUDE.md "skill-local first, lib promotion later" pattern. Promotion to
    ``anvil/lib/memo/`` is a follow-on once ``anvil:report`` /
-   ``anvil:pub`` / ``anvil:proposal`` grow analogous ``refs/`` source-of-truth
+   ``anvil:paper`` / ``anvil:proposal`` grow analogous ``refs/`` source-of-truth
    contracts.
 
 4. **Empty-extraction is NOT an error.** A real-world PDF can have zero
@@ -61,7 +61,7 @@ Design notes
    model. The ``check_*_available()`` family in ``anvil/lib/render.py`` (#65
    mmdc, #85 pdfjam, #102 auto-shrink) remains the precedent for the
    ``PDFTOTEXT_REMEDIATION`` install-story shape. If a second consumer
-   surfaces (e.g., ``anvil:report`` / ``anvil:pub`` grow analogous PDF
+   surfaces (e.g., ``anvil:report`` / ``anvil:paper`` grow analogous PDF
    back-checks), promote this module — and the ``RenderError`` mirror —
    into ``anvil/lib/memo/`` per the established #10 / #26 / #69 / #102
    promotion pattern.
@@ -83,7 +83,7 @@ class RenderError(RuntimeError):
     installs land at ``.anvil/`` with no top-level ``anvil/`` package on
     ``sys.path`` — importing from ``anvil.lib.render`` would dangle every
     consumer install (issue #199). Promote to ``anvil/lib/memo/`` if and
-    when a second consumer (``anvil:report`` / ``anvil:pub`` / similar)
+    when a second consumer (``anvil:report`` / ``anvil:paper`` / similar)
     grows the same PDF back-check shape.
     """
 

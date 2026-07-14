@@ -11,7 +11,7 @@ description: Pre-draft (or re-run) external-substrate critic for the deck skill.
 
 This command is the optional pre-draft step described in `SKILL.md` for the deck skill. It is a **sibling critic**, not a phase that gates the state machine. The drafter consumes the initial perspective; the reviser consumes any re-run perspective alongside `.review/`, `.market/`, `.narrative/`, `.design/`, and `.audit/`. The framework contract for the perspective shape lives in `anvil/lib/snippets/perspective.md` (in an installed consumer repo: `.anvil/anvil/lib/snippets/perspective.md`); this command is the deck-skill instantiation of that contract.
 
-`deck-perspective` is the canary-skill consumer of the perspective primitive promoted in #143/#148. It mirrors `anvil/skills/pub/commands/pub-litsearch.md` (the load-bearing existing precedent that the perspective primitive generalizes), tuned for pitch-deck substrate: market signals, competitor decks, comparable financings, and regulatory context — NOT academic literature.
+`deck-perspective` is the canary-skill consumer of the perspective primitive promoted in #143/#148. It mirrors `anvil/skills/paper/commands/paper-litsearch.md` (the load-bearing existing precedent that the perspective primitive generalizes), tuned for pitch-deck substrate: market signals, competitor decks, comparable financings, and regulatory context — NOT academic literature.
 
 ## Why this is a separate role
 
@@ -22,7 +22,7 @@ Folding external-substrate gathering into the drafter conflates two distinct fai
 
 Separating perspective lets each role do one job. It also lets the reviser **re-run** perspective when the reviewer (or `deck-market`) points out a gap in market substrate, without re-drafting the deck — the next revision picks up the new perspective sibling and updates the affected slides (market, competition, comparables) specifically.
 
-The architectural choice of "perspective" over "research" disambiguates from `anvil:pub`'s "research papers" domain and from consumer-local research directories some adopters maintain (per #117 / `perspective.md` §"Naming: perspective, not research"). For deck the substrate is *market perspective*, not academic literature.
+The architectural choice of "perspective" over "research" disambiguates from `anvil:paper`'s "research papers" domain and from consumer-local research directories some adopters maintain (per #117 / `perspective.md` §"Naming: perspective, not research"). For deck the substrate is *market perspective*, not academic literature.
 
 ## Critical constraint: do not invent candidates
 
@@ -40,7 +40,7 @@ The only entries allowed in `candidates.md` are:
 
 If the brief or the reviewer's comments name a substrate area but no source material exists on disk and no fetcher is available, the role surfaces the gap in `notes.md` for the operator to fill manually (e.g., by running their own search, dropping competitor PDFs into `<thread>/refs/`, or pasting verified comparables into the brief). The role does NOT invent a plausible-looking "Series A, $15M, led by Sequoia, 2024" to close the gap.
 
-This rule is the deck-skill restatement of `pub-litsearch.md`'s "Critical constraint: do not invent citations" — both inherit the no-fabrication discipline from the perspective framework primitive.
+This rule is the deck-skill restatement of `paper-litsearch.md`'s "Critical constraint: do not invent citations" — both inherit the no-fabrication discipline from the perspective framework primitive.
 
 ## Subprocess-only by default — operator brings the fetcher
 
@@ -78,7 +78,7 @@ Nested under the thread root `<thread>/`:
 - **Positioning summary** (3–5 paragraphs): how the deck's claim relates to the supplied market substrate. For each cluster (competitors, comparable transactions, customer evidence, regulatory context), name the cluster, identify the closest 1–3 entries (with anchor references back to `candidates.md`, e.g., `[#acme-series-b]`), and state how the deck extends / contradicts / complements the substrate. Examples: "The deck positions Acme as the first sub-$500k automation-stack for mid-market — `candidates.md#acme-series-b` shows the closest competitor (Acme Co, $40M Series B, 2024) targets enterprise; the brief's competitive framing is supported by the substrate." / "The deck's '$8B TAM' claim is unsupported by the supplied substrate; the closest market report (`candidates.md#mckinsey-2024-industrial`) sizes the addressable segment at $1.2B."
 - **Confirmed coverage**: bullet list of substrate areas the supplied references cover adequately (e.g., "competitor landscape: 6 named direct competitors with funding stage + product positioning verified", "comparables: 3 recent Series A transactions in adjacent sector with disclosed valuations").
 - **Identified gaps**: bullet list of areas where the brief or the drafter would clearly benefit from additional substrate but none was supplied or fetched. Each gap names the area precisely enough that the operator can search ("recent Series A comparables in industrial-automation, mid-market segment, 2024–2025"; "customer-side regulatory context — OSHA/ISO certifications referenced in deck but not attested in refs/"). **The role does not invent placeholder entries to fill these gaps** — it names the gap and stops.
-- **Re-run delta** (re-run path only): a short paragraph naming what changed since the previous perspective sibling — which review comments / market-critic findings drove the re-run, which gaps were closed by new substrate, which remain open. Mirrors `pub-litsearch.md`'s "re-run delta" convention.
+- **Re-run delta** (re-run path only): a short paragraph naming what changed since the previous perspective sibling — which review comments / market-critic findings drove the re-run, which gaps were closed by new substrate, which remain open. Mirrors `paper-litsearch.md`'s "re-run delta" convention.
 
 ### `candidates.md`
 
@@ -195,7 +195,7 @@ This command follows the framework re-run pattern documented in `anvil/lib/snipp
 - Initial perspective lives at `<thread>.0.perspective/` (pre-draft, before `<thread>.1/` exists).
 - A reviewer (or `deck-market` cross-check critic) flagging a substrate gap on `<thread>.{N}/` triggers `deck-revise` to invoke `deck-perspective` again, producing `<thread>.{N}.perspective/`. Downstream consumers (next drafter pass via `deck-revise`, next `deck-market` cross-check) read the **latest** perspective sibling — they do not aggregate across versions.
 - The previous sibling at `<thread>.0.perspective/` is preserved on disk for audit trail; nothing deletes it. The auditor can compare across siblings to track substrate evolution.
-- A re-run perspective sibling MUST include a delta paragraph in `notes.md` naming what changed: which review comments / market-critic findings drove the re-run, which gaps were closed by new substrate (operator added refs, agent fetched a missing comparable), which remain open. Mirrors `pub-litsearch.md`'s re-run discipline.
+- A re-run perspective sibling MUST include a delta paragraph in `notes.md` naming what changed: which review comments / market-critic findings drove the re-run, which gaps were closed by new substrate (operator added refs, agent fetched a missing comparable), which remain open. Mirrors `paper-litsearch.md`'s re-run discipline.
 
 ## Idempotence and resumability
 
@@ -234,7 +234,7 @@ Perspective outputs (`notes.md` + `candidates.md`) are read narratively by the d
 - **Cluster substrate, don't dump.** A flat list of 30 random "competitors" is less useful to the drafter than 6 verified direct competitors + 4 comparable transactions + 3 customer-evidence pointers + 2 market reports. Cluster by intended deck consumer (competition slide / comparables narrative / traction backing / market slide).
 - **Surface contradictions explicitly.** If refs say one thing and the brief says another, the role's job is to NAME the contradiction in `notes.md` "Identified gaps", not to pick a side silently. The drafter (or operator) resolves.
 
-**Snippet references**: See `anvil/lib/snippets/perspective.md` for the framework contract (layout, no-fabrication rule, three consumer classes, re-run pattern, subprocess-only-by-default posture). See `anvil/lib/snippets/progress.md` for the `_progress.json` read-merge-write recipe and `anvil/lib/snippets/timestamp.md` for the ISO-8601 UTC timestamp convention. See `anvil/lib/snippets/scorecard_kind.md` for the `human-verdict` vs `machine-summary` discriminator. See `anvil/skills/pub/commands/pub-litsearch.md` for the load-bearing existing precedent the perspective primitive generalizes.
+**Snippet references**: See `anvil/lib/snippets/perspective.md` for the framework contract (layout, no-fabrication rule, three consumer classes, re-run pattern, subprocess-only-by-default posture). See `anvil/lib/snippets/progress.md` for the `_progress.json` read-merge-write recipe and `anvil/lib/snippets/timestamp.md` for the ISO-8601 UTC timestamp convention. See `anvil/lib/snippets/scorecard_kind.md` for the `human-verdict` vs `machine-summary` discriminator. See `anvil/skills/paper/commands/paper-litsearch.md` for the load-bearing existing precedent the perspective primitive generalizes.
 
 ## Git sync (opt-in, off by default)
 

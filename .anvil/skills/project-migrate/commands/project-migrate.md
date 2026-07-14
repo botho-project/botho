@@ -215,7 +215,7 @@ artifact_type=..., apply=...)`. The flow:
    registry (#394: registered + consumer-declared); else inferred WITH a
    `# TODO(operator)` marker (`.md` → `investment-memo`;
    `.tex` with `\documentclass{anvil-proposal}` → `proposal`; other
-   `\documentclass` → `pub`).
+   `\documentclass` → `paper`).
 6. **Batch semantics**: N files → N independently-planned
    `DocumentPlan`s in ONE project. Plan-time errors (slug collisions —
    existing or intra-batch, non-md/tex inputs, already-enrolled inputs,

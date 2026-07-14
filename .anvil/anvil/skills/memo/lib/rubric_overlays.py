@@ -12,7 +12,7 @@ two-tier (issue #394) — consumer first, shipped second:
    how a consumer declares a memo genre with no framework release, and
    also how a consumer recalibrates a *shipped* type without forking
    anvil (consumer wins on collision — the ``discover_venue_rubric``
-   precedent from the pub skill).
+   precedent from the paper skill).
 2. **Shipped tier**: ``anvil/skills/memo/rubric_overlays/<artifact-type>.json``.
 
 Both tiers are parsed with the same strict schema (dim-key validation,

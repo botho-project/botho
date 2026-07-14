@@ -7,7 +7,7 @@ COUNSEL-READY companion is `counsel_memo.tex`, #480) — with
 both anvil's own provisional body (`spec.tex`) and the native
 consumer's `provisional.tex` use `\\documentclass{anvil-uspto}` — the
 SAME class the full ip-uspto spec uses — so the `_infer_tex_artifact_type`
-`\\documentclass` scan silently mis-maps `provisional.tex` to `pub`.
+`\\documentclass` scan silently mis-maps `provisional.tex` to `paper`.
 Recognition must be FILENAME-driven (SKILL.md:160 forbids
 provisional-vs-full content inference).
 
@@ -24,8 +24,8 @@ Coverage map (curated test plan):
 4. Counsel-only refusal: a version dir with `counsel_memo.tex` and no
    `provisional.tex` raises a typed plan-time error; nothing mutates.
 5. No-mis-classify regression: a `provisional.tex` thread does NOT
-   infer `pub` (guards the `_infer_tex_artifact_type` `\\documentclass`
-   → `pub` fallthrough).
+   infer `paper` (guards the `_infer_tex_artifact_type` `\\documentclass`
+   → `paper` fallthrough).
 6. Disambiguation invariant: a `spec.tex` full ip-uspto thread is NOT
    silently inferred as provisional (filename is the only signal).
 7. Dry-run byte-identical: enroll/bare dry-run leaves the tree
@@ -233,13 +233,13 @@ class TestBareNativeProvisional(unittest.TestCase):
 
 class TestNoMisClassify(unittest.TestCase):
     def test_provisional_does_not_infer_pub(self) -> None:
-        """Guards the `_infer_tex_artifact_type` `\\documentclass` → `pub`
+        """Guards the `_infer_tex_artifact_type` `\\documentclass` → `paper`
         fallthrough: a provisional.tex body (which uses anvil-uspto, not
-        anvil-proposal) must NOT silently become `pub`."""
+        anvil-proposal) must NOT silently become `paper`."""
         with TemporaryDirectory() as td:
             project = build_bare_native_provisional(Path(td))
             p = build_plan(project)
-            self.assertNotEqual(p.documents[0].brief_merge.artifact_type, "pub")
+            self.assertNotEqual(p.documents[0].brief_merge.artifact_type, "paper")
             self.assertEqual(
                 p.documents[0].brief_merge.artifact_type,
                 "ip-uspto-provisional",

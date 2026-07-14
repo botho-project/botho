@@ -3,7 +3,7 @@
 Covers: enroll-into-existing-project (file moved, BRIEF byte-prefix
 preserved, strict parse passes, ``discover_thread_root`` resolves),
 enroll-with-no-project (minimal BRIEF synthesized via the #408 path),
-batch enrollment, ``.tex`` enrollment (slug-echo body + pub inference),
+batch enrollment, ``.tex`` enrollment (slug-echo body + paper inference),
 git-mv history follow, and apply-time per-doc failure isolation with
 the BRIEF written for the succeeded subset.
 """
@@ -206,8 +206,8 @@ class TestEnrollBatch:
         assert "slug: topic-a" in text
         assert "slug: draft-response" in text
         assert "slug: whitepaper" in text
-        # \documentclass{article} → pub inference, TODO-marked.
-        assert "artifact_type: pub" in text
+        # \documentclass{article} → paper inference, TODO-marked.
+        assert "artifact_type: paper" in text
 
     def test_apply_failure_isolates_per_doc_brief_for_succeeded_subset(
         self, tmp_path, monkeypatch

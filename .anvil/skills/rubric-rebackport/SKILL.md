@@ -213,13 +213,13 @@ total but not id), the planner can heuristically pick from the
 | memo | 44 | `anvil-memo-v2` | 35 |
 | proposal | 40 | `anvil-proposal-v1-legacy-40` | 32 |
 | proposal | 44 | `anvil-proposal-v2` | 35 |
-| pub | 40 | `anvil-pub-v1` | 32 |
+| paper | 40 | `anvil-pub-v1` | 32 |
 | report | 40 | `anvil-report-v1` | 35 |
 | deck | 40 | `anvil-deck-v1` | 35 |
 | slides | 40 | `anvil-slides-v1` | 32 |
 | installation | 40 | `anvil-installation-v1` | 32 |
 | ip-uspto | 40 | `anvil-ip-uspto-v1` | 35 |
-| pub | 44 | `anvil-pub-v2` | 35 |
+| paper | 44 | `anvil-pub-v2` | 35 |
 | report | 44 | `anvil-report-v2` | 39 |
 | deck | 44 | `anvil-deck-v2` | 39 |
 | slides | 44 | `anvil-slides-v2` | 35 |
@@ -228,15 +228,29 @@ total but not id), the planner can heuristically pick from the
 | datasheet | 44 | `anvil-datasheet-v1` | 39 |
 | ip-uspto-provisional | 45 | `anvil-ip-provisional-v1` | 39 |
 | essay | 44 | `anvil-essay-v1` | 35 |
+| primer | 44 | `anvil-primer-v1` | 35 |
+| spec | 44 | `anvil-spec-v1` | 39 |
 
 The /40 rows remain in the catalog because stamp-only inference still
 needs them for legacy reviews authored against pre-#357 rubrics. The
 /44 (/45) rows are the targets for post-#357 reviews. The datasheet
-(#421) / ip-uspto-provisional (#444) / essay (#477) skills shipped with
+(#421) / ip-uspto-provisional (#444) / essay (#477) / primer (#686) /
+spec (#697/#706) skills shipped with
 per-review stamping from day one, so they carry no /40 legacy rows
-(issue #482). Note the id asymmetry: the provisional skill's directory
+(issue #482; primer + spec backfilled into the catalog under #706). Note the id asymmetry: the provisional skill's directory
 name is `ip-uspto-provisional` but its rubric_id is
 `anvil-ip-provisional-v1` (no "uspto").
+
+The `paper` skill shows a second id asymmetry (issue #694): the skill
+was renamed from `pub` to `paper`, but its rubric_id literals stay
+`anvil-pub-v1` / `anvil-pub-v2`. A rubric_id is a **frozen version
+identity** already stamped onto existing consumer reviews — renaming the
+skill directory does NOT bump the rubric version. The catalog is keyed
+on the *current* skill name (`paper`), so inference from a `paper.md`
+(or legacy `pub.md`) body — or an `artifact_type: paper` / legacy
+`artifact_type: pub` BRIEF entry — resolves to these rows, while
+`lookup_rubric_by_id` keeps recognizing the `anvil-pub-*` id literals on
+existing reviews.
 
 When the legacy `_meta.json` lacks `rubric_total` entirely AND
 `--legacy-rubric` is absent, the review is skipped with an

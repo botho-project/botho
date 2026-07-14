@@ -47,7 +47,7 @@ The grounding example is **Gossamer LAN** — a hair-thin single-mode fiber netw
 
 ## Renderer
 
-LaTeX via the shipped `templates/anvil-proposal.cls`, compiled with **XeLaTeX** (`xelatex proposal.tex`). The class defaults to Helvetica Neue and falls back to Latin Modern Sans (ships with every TeX Live install) via `\IfFontExistsTF`, so it compiles with no system fonts. This differs from `anvil:pub`, which uses pdflatex.
+LaTeX via the shipped `templates/anvil-proposal.cls`, compiled with **XeLaTeX** (`xelatex proposal.tex`). The class defaults to Helvetica Neue and falls back to Latin Modern Sans (ships with every TeX Live install) via `\IfFontExistsTF`, so it compiles with no system fonts. This differs from `anvil:paper`, which uses pdflatex.
 
 ## The `customer_kind` knob
 

@@ -13,7 +13,7 @@ Architecture
 
 - **Skill-local first.** Lives under ``anvil/skills/report/lib/`` per the
   CLAUDE.md §"Skill-local first, lib promotion later" pattern. Promotion
-  to ``anvil/lib/`` is deferred until ``memo`` / ``pub`` / ``proposal``
+  to ``anvil/lib/`` is deferred until ``memo`` / ``paper`` / ``proposal``
   reach for the same primitive (current pattern: wait for the second
   consumer before generalizing). The deferred sibling
   ``figure_content`` critic (Phase 5, issue #340) will touch similar

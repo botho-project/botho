@@ -106,7 +106,7 @@ are consumed by external tooling (marp CLI, xelatex,
 
 **Artifact types.** The registered artifact-type enum
 (`anvil/lib/project_brief.py::ArtifactType`) carries skill-identity
-values `deck`, `slides`, `proposal` (issue #386), and `pub` (issue
+values `deck`, `slides`, `proposal` (issue #386), and `paper` (registered as `pub`, issue
 #408) alongside the memo subtypes. The migration infers the type from
 the retained body filename and writes it into the BRIEF `documents:`
 entry: `deck.md` → `deck`, `proposal.tex` → `proposal`. Threads with
@@ -121,7 +121,7 @@ body shape alone cannot distinguish them; edit the BRIEF entry to
 On **bare** threads (issue #408) the inference extends to observed
 non-`.md` bodies (`*.tex`): a body with
 `\documentclass{anvil-proposal}` infers `proposal`; any other
-`\documentclass` infers `pub`; markdown-bodied bare threads keep the
+`\documentclass` infers `paper`; markdown-bodied bare threads keep the
 `investment-memo` default. Every bare inference — including the
 default — is paired with a `# TODO(operator)` confirmation marker;
 nothing is guessed silently. Observed body filenames (e.g.
@@ -179,7 +179,7 @@ file to a thread:
   back on failure.
 - Artifact types come from `--artifact-type` (two-tier validation per
   #394) or are inferred with a `# TODO(operator)` marker (`.md` →
-  `investment-memo`; `.tex` → `proposal`/`pub` from `\documentclass`).
+  `investment-memo`; `.tex` → `proposal`/`paper` from `\documentclass`).
 - Batch form: N files enroll into ONE project as N independently
   planned documents. Plan-time errors (slug collisions, non-md/tex,
   already-enrolled inputs, malformed BRIEF) abort pre-mutation;
@@ -212,7 +212,7 @@ is the conversion path:
   the dry-run preview is byte-identical to the apply-time write.
 - Artifact type: `--artifact-type` (two-tier #394 validation) or
   inferred `report` with a TODO marker (`report` is a registered
-  skill-identity artifact type as of #432, the #408 `pub` precedent).
+  skill-identity artifact type as of #432, the #408 `pub`/`paper` precedent).
 - Post-adopt names pass project-scout's foreign-grammar guard clean;
   re-running on an adopted tree is a no-op.
 

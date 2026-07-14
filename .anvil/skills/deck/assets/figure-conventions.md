@@ -326,7 +326,7 @@ Extract real numbers from the brief into a CSV first; do not inline made-up data
 
 A figure script that pulls a number from a peer thread (e.g., a deck chart
 referencing the latest investor memo's headline number, or a comparison
-chart sourcing data from a sibling pub's tables) SHOULD reference the peer
+chart sourcing data from a sibling paper's tables) SHOULD reference the peer
 through the optional `<thread>.latest` symlink convention rather than
 hardcoding a version number:
 
