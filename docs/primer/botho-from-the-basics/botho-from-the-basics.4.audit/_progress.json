@@ -1,0 +1,26 @@
+{
+  "version": 4,
+  "thread": "botho-from-the-basics",
+  "critic": "audit",
+  "phases": {
+    "audit": {
+      "state": "done",
+      "started": "2026-07-14T17:55:00Z",
+      "completed": "2026-07-14T18:20:00Z"
+    }
+  },
+  "metadata": {
+    "audited_version": "botho-from-the-basics.4",
+    "audit_clean": true,
+    "factual_flags": 0,
+    "spec_contradiction_flags": 0,
+    "spec_ref_resolved": true,
+    "spec_ref_note": "18 sections, post-PR-#901/ADR-0006 content; oracle changed underneath v3, so carried claims were spot-re-verified (S1-S10) in addition to the full delta walk (D1-D16)",
+    "code_cross_checks": [
+      "botho/src/block.rs MintingTx: no signature field",
+      "botho/src/pow.rs pow_preimage: nonce||prev_hash||view||spend",
+      "transaction/clsag/src/lib.rs TxOutput: cleartext amount u64, no KEM ciphertext field"
+    ],
+    "new_operator_observation": "O3: WP-internal 06-consensus.tex:177 Hash(block_header||nonce) vs 04-cryptography.tex:348-351 four-field preimage"
+  }
+}
