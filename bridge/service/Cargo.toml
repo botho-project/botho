@@ -7,6 +7,14 @@ description = "BTH bridge service for Ethereum and Solana"
 license = "Apache-2.0"
 rust-version = { workspace = true }
 
+# Library target (#897): exposes ONLY the pure byte parsers (Solana account
+# layout, federation status line, Safe-nonce check, duplicate-signer check)
+# so the out-of-workspace fuzz crate can link them. NOT a public API — see
+# src/lib.rs docs. The module tree lives in the lib; the bin is a thin shim.
+[lib]
+name = "bth_bridge_service"
+path = "src/lib.rs"
+
 [[bin]]
 name = "bth-bridge"
 path = "src/main.rs"

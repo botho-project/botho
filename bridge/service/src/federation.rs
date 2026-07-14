@@ -311,7 +311,26 @@ pub struct PeerBroadcaster {
 /// `read_to_end`. 8 KiB comfortably covers the status line plus any response
 /// headers a well-behaved peer sends, while bounding the worst-case transient
 /// heap a slow/malicious peer could grow during the push timeout window.
-const MAX_PEER_RESPONSE_BYTES: u64 = 8 * 1024;
+pub const MAX_PEER_RESPONSE_BYTES: u64 = 8 * 1024;
+
+/// Parse the HTTP status code out of a raw peer response
+/// (`HTTP/1.1 <status> ...`): the second whitespace-separated token, or `0`
+/// when there is no parseable status.
+///
+/// Pure and synchronous — the single source of truth for the status-line
+/// parse. The async I/O wrapper [`read_status_line`] caps the bytes it feeds
+/// in at [`MAX_PEER_RESPONSE_BYTES`]; this function itself allocates at most
+/// once (the `from_utf8_lossy` copy when the input is not valid UTF-8),
+/// proportional to the input it is given. Exposed through the crate's
+/// library target so the fuzz crate can drive it with adversarial bytes
+/// (#897).
+pub fn parse_status_line(response: &[u8]) -> u16 {
+    let text = String::from_utf8_lossy(response);
+    text.split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0)
+}
 
 /// Read a peer's push response and parse the HTTP status code from the status
 /// line (`HTTP/1.1 <status> ...`).
@@ -332,13 +351,7 @@ where
         .take(MAX_PEER_RESPONSE_BYTES)
         .read_to_end(&mut response)
         .await?;
-    let text = String::from_utf8_lossy(&response);
-    let status: u16 = text
-        .split_whitespace()
-        .nth(1)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-    Ok(status)
+    Ok(parse_status_line(&response))
 }
 
 /// A parsed peer base URL split into the pieces the raw-socket client needs.

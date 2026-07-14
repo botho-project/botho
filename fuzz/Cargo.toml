@@ -32,6 +32,9 @@ bth-util-from-random = { path = "../util/from-random" }
 bth-util-repr-bytes = { path = "../util/repr-bytes" }
 bth-cluster-tax = { path = "../cluster-tax" }
 bth-bridge-core = { path = "../bridge/core" }
+# Tier B bridge parsers (#897): the service's [lib] target exposes ONLY the
+# pure byte parsers (see bridge/service/src/lib.rs).
+bth-bridge-service = { path = "../bridge/service" }
 
 # Serialization
 bincode = "1"
@@ -147,6 +150,20 @@ bench = false
 [[bin]]
 name = "fuzz_bridge_attestation"
 path = "fuzz_targets/fuzz_bridge_attestation.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_bridge_solana_parse"
+path = "fuzz_targets/fuzz_bridge_solana_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_federation_status_line"
+path = "fuzz_targets/fuzz_federation_status_line.rs"
 test = false
 doc = false
 bench = false

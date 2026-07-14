@@ -285,6 +285,8 @@ jobs:
       matrix:
         target:
           - fuzz_bridge_attestation
+          - fuzz_bridge_solana_parse
+          - fuzz_federation_status_line
 
     steps:
       - uses: actions/checkout@v4

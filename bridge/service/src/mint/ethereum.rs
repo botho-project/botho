@@ -180,7 +180,10 @@ pub fn assemble_safe_signatures(auth: &MintAuthorization) -> Result<Bytes, MintE
 /// `Ok(())` when the authorization carries no nonce (Solana / legacy) or the
 /// attested nonce equals the on-chain nonce; a retryable
 /// [`MintError::StaleNonce`] otherwise.
-fn check_attested_nonce(auth: &MintAuthorization, on_chain_nonce: U256) -> Result<(), MintError> {
+pub fn check_attested_nonce(
+    auth: &MintAuthorization,
+    on_chain_nonce: U256,
+) -> Result<(), MintError> {
     if let Some(attested_nonce) = auth.safe_nonce {
         if U256::from(attested_nonce) != on_chain_nonce {
             return Err(MintError::StaleNonce(format!(

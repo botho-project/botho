@@ -10,29 +10,9 @@ use std::path::PathBuf;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
-#[cfg(test)]
-mod adversarial_tests;
-mod api;
-mod attestation;
-#[cfg(test)]
-mod bth_fork_tests;
-mod bth_keys;
-mod bth_rpc;
-mod bth_scan;
-#[cfg(test)]
-mod chaos_tests;
-mod db;
-mod engine;
-mod federation;
-#[cfg(test)]
-mod fork_tests;
-mod mint;
-mod release;
-mod reserve;
-#[cfg(test)]
-mod solana_devnet_tests;
-mod solana_rpc;
-mod watchers;
+// The module tree lives in the library target (`src/lib.rs`, #897); the
+// binary is a thin wire-up shim over the `#[doc(hidden)]` entry-point facade.
+use bth_bridge_service::bin_support::{BridgeEngine, Database};
 
 use bth_bridge_core::BridgeConfig;
 
@@ -87,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize database
     info!("Initializing database at {}", config.bridge.db_path);
-    let db = db::Database::open(&config.bridge.db_path)?;
+    let db = Database::open(&config.bridge.db_path)?;
     db.migrate()?;
 
     if args.migrate {
@@ -103,7 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("  Testnet: {}", config.bridge.testnet);
 
     // Start the bridge engine
-    let engine = engine::BridgeEngine::new(config.clone(), db);
+    let engine = BridgeEngine::new(config.clone(), db);
 
     // Run the engine (this will spawn watchers and process orders)
     engine.run().await?;
