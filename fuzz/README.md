@@ -27,14 +27,76 @@ cd fuzz
 cargo fuzz build            # uses the pinned channel via rust-toolchain
 ```
 
-### macOS execution caveat
+### macOS execution caveat (#920) — use native-smoke instead
 
-On macOS 15+ (Darwin 25), the AddressSanitizer runtime shipped with the pinned
-nightly deadlocks during process initialization (in
-`__asan::InitializeShadowMemory` while iterating the dyld shared cache), before
-`main` and before any fuzz input runs. The targets therefore **build** on macOS
-but cannot be **executed** there. Run the fuzzers on Linux (the scheduled CI
-jobs run on `ubuntu-latest`), or build-only locally on macOS.
+On macOS 26.5.1 (Darwin 25, arm64), every `cargo fuzz run <target>` with the
+pinned `nightly-2025-12-03` toolchain **hangs before `main`** and never prints
+the libFuzzer banner (observed 30+ min at ~70% CPU on a `-max_total_time=60`
+run). `sample` shows a recursive ASan-init deadlock inside `dyld`, not target
+code:
+
+```
+__asan::AsanInitInternal
+  -> __asan::InitializeShadowMemory
+    -> __sanitizer::MemoryRangeIsAvailable -> get_dyld_hdr
+      -> dyld_shared_cache_iterate_text_swift -> _Block_copy -> malloc
+        -> __sanitizer_mz_malloc -> __asan::AsanInitFromRtl
+          -> __sanitizer::StaticSpinMutex::LockSlow   <- spins on the lock
+                                                          AsanInitInternal holds
+```
+
+This reproduces identically across targets (it is environmental — the rustc
+ASan runtime vs macOS 26.5 dyld — not specific to any harness), so the targets
+**build** on macOS but cannot be **executed** there via libFuzzer. `-s none`
+does not help (`if-watch` links as a sancov-instrumented dylib whose
+`__sanitizer_cov_trace_*` symbols have no runtime to bind to without a
+sanitizer), and a rolling `+nightly` no longer compiles the pinned dep tree
+(`hashbrown 0.14` "cannot specialize on trait Copy").
+
+**Coverage-guided runs happen in ubuntu CI (`.github/workflows/fuzz.yml`).**
+For local development on macOS, use the **native-smoke** path below, which runs
+the *exact same* harness bodies (no libFuzzer, no sanitizer) so it is immune to
+the deadlock.
+
+## Native-smoke path (runnable on macOS today)
+
+The bridge fuzz harnesses' bodies live in the `botho-fuzz` **library**
+(`fuzz/src/*.rs`). Each `fuzz_targets/*.rs` libFuzzer binary and the
+native-smoke driver call the *same* `run_from_bytes` function, so the two paths
+can never drift. The native-smoke path replays every committed
+`fuzz/corpus/<target>/` seed plus N randomized inputs through those shared
+bodies, with `debug_assertions` on, on a stock toolchain — so a panic or a
+violated invariant surfaces without ever touching libFuzzer/ASan.
+
+Targets currently covered: `fuzz_bridge_attestation`,
+`fuzz_bridge_solana_parse`, `fuzz_federation_status_line`.
+
+### As a `cargo test` (quickest — one test per target)
+
+```bash
+cd fuzz
+cargo test -p botho-fuzz --features native-smoke
+# Override the randomized-input count per target (default 2_000 for the test):
+BOTHO_FUZZ_SMOKE_ITERS=100000 cargo test -p botho-fuzz --features native-smoke
+```
+
+### As a standalone driver (the ~100k dev budget)
+
+```bash
+cd fuzz
+# Default: 100_000 randomized inputs per target, plus the whole corpus.
+cargo run --features native-smoke --bin native_smoke
+
+# Cheap CI/dev-fast run, deterministic seed, single target:
+BOTHO_FUZZ_SMOKE_ITERS=2000 BOTHO_FUZZ_SMOKE_SEED=42 \
+  cargo run --features native-smoke --bin native_smoke -- fuzz_federation_status_line
+```
+
+The native-smoke path is **not** coverage-guided — it is a smoke test, not a
+substitute for the scheduled ubuntu fuzz runs. Its job is to let macOS
+developers exercise the harnesses locally and catch obvious regressions before
+pushing. Where a fuzz-related issue's test plan says "run each target 60s
+locally", macOS developers should instead run the native-smoke suite above.
 
 ## Available Fuzz Targets
 

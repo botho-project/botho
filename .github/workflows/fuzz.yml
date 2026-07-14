@@ -67,6 +67,20 @@ jobs:
         # No `+nightly`: the rust-toolchain file selects the pinned channel.
         run: cargo fuzz build
 
+      # Cheap native-smoke run (#920). This is NOT libFuzzer/sanitizer: it runs
+      # the SAME shared harness bodies (fuzz/src/*.rs) over the committed corpus
+      # plus a small number of randomized inputs on the pinned stock toolchain.
+      # It guards against the harnesses drifting from a runnable state — the
+      # macOS-runnable path — without needing a coverage-guided run on PRs. The
+      # heavy, coverage-guided fuzzing still happens in the scheduled jobs below.
+      - name: Native-smoke the bridge harnesses (no libFuzzer)
+        working-directory: fuzz
+        env:
+          # Small, fast budget for the PR guard; the standalone driver defaults
+          # to the ~100k dev budget locally.
+          BOTHO_FUZZ_SMOKE_ITERS: '5000'
+        run: cargo test -p botho-fuzz --features native-smoke
+
   fuzz-crypto:
     name: Fuzz Crypto Primitives
     # Long-running fuzz jobs only run on schedule/manual dispatch, never on PRs
