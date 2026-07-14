@@ -4,7 +4,7 @@
 **Status**: Historical snapshot
 **Last Updated**: 2024-12-31
 
-> **⚠️ HISTORICAL SNAPSHOT (SUPERSEDED)**: This specification was superseded by [v0.2.0](protocol-v0.2.0.md), which is itself a historical snapshot — **neither document describes the current wire protocol** (implemented version 4.1.0). See the [specification index](README.md) for the current protocol version and pointers to authoritative sources. LION (PQ-Private) transactions described here have been **deprecated**; the protocol uses only two transaction types: Minting (ML-DSA signatures) and Private (CLSAG ring signatures). See [ADR-0001](../decisions/0001-deprecate-lion-ring-signatures.md) for the deprecation decision.
+> **⚠️ HISTORICAL SNAPSHOT (SUPERSEDED)**: This specification was superseded by [v0.2.0](protocol-v0.2.0.md), which is itself a historical snapshot — **neither document describes the current wire protocol** (implemented version 4.1.0). See the [specification index](README.md) for the current protocol version and the [whitepaper](../../whitepaper/) for the ratified design. LION (PQ-Private) transactions described here have been **deprecated** ([ADR-0001](../decisions/0001-deprecate-lion-ring-signatures.md)); the protocol uses only two transaction types: Minting and Private (CLSAG ring signatures). The ML-DSA minting signatures described here were also retired — minting attribution binds via the PoW preimage, with no signature ([ADR 0006](../decisions/0006-pq-architecture-ratification.md)).
 
 ## Abstract
 

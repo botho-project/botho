@@ -252,9 +252,9 @@ Instead of LION, Botho uses a hybrid approach:
 | Component | Algorithm | Quantum Safety |
 |-----------|-----------|----------------|
 | Stealth addresses | ML-KEM-768 | Post-quantum |
-| Minting signatures | ML-DSA-65 | Post-quantum |
+| Minting attribution | PoW-preimage binding (no signature — [ADR 0006](../decisions/0006-pq-architecture-ratification.md)) | Post-quantum (hash-based) |
 | Ring signatures | CLSAG | Classical |
-| Amount hiding | Pedersen | Info-theoretic |
+| Amount hiding | Pedersen (in development — #904) | Info-theoretic |
 
 This provides post-quantum protection for permanent data (recipient identity) while keeping transactions small enough for desktop nodes.
 
@@ -381,5 +381,5 @@ Properties:
 
 ### Post-Quantum
 - [ ] ML-KEM-768 parameters provide 192-bit security
-- [ ] ML-DSA-65 parameters provide 128-bit security
+- [ ] ML-DSA-65 parameters provide 128-bit security (designated future signature family; no live protocol role)
 - [ ] Stealth address key encapsulation verified

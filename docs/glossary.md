@@ -28,7 +28,7 @@ unit, the **picocredit**: 1 BTH = 1,000,000,000,000 picocredits (10^12). BTH is 
 human-facing formatting of picocredit amounts at the UI edge. See [Unit System](tokenomics.md#unit-system) for details.
 
 ### Bulletproofs
-A type of zero-knowledge proof used for range proofs. Ensures transaction amounts are positive without revealing the actual values. Used in Private transactions to hide amounts.
+A type of zero-knowledge proof used for range proofs. Ensures transaction amounts are positive without revealing the actual values. Used in Private transactions to hide amounts (ratified design, in development — #904; amounts are public on the current testnet).
 
 ### Byzantine Fault Tolerance (BFT)
 The ability of a system to continue operating correctly even if some participants are malicious or faulty. SCP provides BFT for Botho consensus.
@@ -63,7 +63,7 @@ In ring signatures, a decoy is a transaction output included to hide the true se
 A measure of how hard it is to find a valid proof-of-work. In Botho, difficulty adjusts every block from the observed inter-block time (5-second target, clamped 0.5x–2x per step); the signal deliberately ignores transaction count so block producers can't skew it.
 
 ### Dilithium
-A lattice-based signature scheme now standardized as ML-DSA. Botho uses ML-DSA-65 for minting transaction signatures.
+A lattice-based signature scheme now standardized as ML-DSA. In Botho, ML-DSA-65 is the designated future signature family if a post-quantum authorization path is ever introduced; it has no live protocol role today (minting attribution uses PoW-preimage binding — see [ADR 0006](decisions/0006-pq-architecture-ratification.md)).
 
 ---
 
@@ -112,7 +112,7 @@ A fixed-size output produced by a hash function. Used for block identification, 
 The speed at which a miner computes hashes, typically measured in H/s (hashes per second).
 
 ### Hybrid Cryptography
-Using both classical and post-quantum algorithms together. Botho uses a strategic hybrid approach: ML-KEM-768 (post-quantum) for all stealth addresses (permanent recipient privacy), ML-DSA-65 (post-quantum) for minting signatures, and CLSAG (classical) for ring signatures (ephemeral sender privacy).
+Using both classical and post-quantum algorithms together. Botho uses a strategic hybrid approach: ML-KEM-768 (post-quantum) for all stealth addresses (permanent recipient privacy), hash-based PoW-preimage binding for minting attribution (quantum-sound), and CLSAG (classical) for ring signatures (ephemeral sender privacy).
 
 ---
 
@@ -151,10 +151,10 @@ The pool of unconfirmed transactions waiting to be included in a block. Transact
 Botho's term for mining — the process of creating new blocks and earning block rewards.
 
 ### Minting Transaction
-A transaction type that creates new coins as block rewards. Minting transactions have no inputs, use ML-DSA signatures, and create new cluster origins. Amounts are public for supply auditability, but recipients are hidden via stealth addresses.
+A transaction type that creates new coins as block rewards. Minting transactions have no inputs, carry no signature (the RandomX PoW preimage commits to the minter's public keys — see whitepaper §4, "Minting Attribution"), and create new cluster origins. Amounts are public for supply auditability, but recipients are hidden via stealth addresses.
 
 ### ML-DSA (Dilithium)
-**Module Lattice Digital Signature Algorithm** — A post-quantum signature scheme standardized by NIST (FIPS 204). Botho uses ML-DSA-65 for Minting transaction authorization.
+**Module Lattice Digital Signature Algorithm** — A post-quantum signature scheme standardized by NIST (FIPS 204). ML-DSA-65 is Botho's designated future signature family if a post-quantum authorization path is ever introduced; it has no live protocol role ([ADR 0006](decisions/0006-pq-architecture-ratification.md)).
 
 ### ML-KEM (Kyber)
 **Module Lattice Key Encapsulation Mechanism** — A post-quantum key exchange scheme standardized by NIST (FIPS 203). Botho uses ML-KEM-768 for post-quantum stealth addresses.
@@ -199,13 +199,13 @@ A cryptographic commitment that hides a value while allowing mathematical operat
 The single base unit of BTH, used for all amounts — transaction values, fees, emission, and monetary policy. 1 BTH = 1,000,000,000,000 picocredits (10^12). Every amount in the protocol is denominated in picocredits (stored as u128 for supply-scale totals); user interfaces format picocredit amounts into BTH for readability.
 
 ### Post-Quantum Cryptography
-Cryptographic algorithms believed to be secure against quantum computer attacks. Botho uses ML-KEM-768 for all stealth addresses (permanent recipient privacy) and ML-DSA-65 for minting transaction signatures. Ring signatures use classical CLSAG for efficiency—sender privacy is ephemeral and degrades over time.
+Cryptographic algorithms believed to be secure against quantum computer attacks. Botho uses ML-KEM-768 for all stealth addresses (permanent recipient privacy); minting attribution is hash-based (PoW-preimage binding), which is quantum-sound. Ring signatures use classical CLSAG for efficiency—sender privacy is ephemeral and degrades over time.
 
 ### Private Key
 A secret value that controls your funds. Never share your private keys or mnemonic.
 
 ### Private Transaction
-The standard transaction type for all value transfers. Uses CLSAG ring signatures (sender hidden among 20 decoys), Pedersen commitments with Bulletproofs (amounts hidden), and ML-KEM stealth addresses (recipient hidden with post-quantum security). Size-based fees (~4 KB typical).
+The standard transaction type for all value transfers. Uses CLSAG ring signatures (sender hidden among 20 decoys), Pedersen commitments with Bulletproofs (amounts hidden — the ratified design per [ADR 0006](decisions/0006-pq-architecture-ratification.md), in development; amounts are public on the current testnet), and ML-KEM stealth addresses (recipient hidden with post-quantum security). Size-based fees (~4 KB typical).
 
 ### Proof-of-Work (PoW)
 A mechanism where miners prove they've done computational work. Botho uses RandomX PoW for coin issuance only — block acceptance is decided by SCP consensus, not hashpower.
@@ -240,7 +240,7 @@ A zero-knowledge proof that a hidden value falls within a valid range (e.g., is 
 A cryptographic signature that proves one member of a group signed a message, without revealing which one. Used to hide transaction senders.
 
 ### RingCT
-**Ring Confidential Transactions** — Combines ring signatures with confidential amounts. Botho implements this via CLSAG ring signatures (for sender privacy) combined with Pedersen commitments and Bulletproofs (for amount privacy).
+**Ring Confidential Transactions** — Combines ring signatures with confidential amounts. Botho's design uses CLSAG ring signatures (for sender privacy) combined with Pedersen commitments and Bulletproofs (for amount privacy); the confidential-amounts half is in development ([ADR 0006](decisions/0006-pq-architecture-ratification.md)) and amounts are public on the current testnet.
 
 ### RPC
 **Remote Procedure Call** — A protocol for making requests to a node. Botho provides a JSON-RPC API on port 7101.

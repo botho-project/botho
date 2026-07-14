@@ -43,6 +43,11 @@ Yes, where it matters most:
 | **Recipient privacy** | ML-KEM-768 stealth addresses | ✓ PQ-safe |
 | **Amount privacy** | Pedersen hiding (info-theoretic) | ✓ PQ-safe |
 | **Sender anonymity** | CLSAG ring signatures | Classical |
+| **Minting attribution** | PoW-preimage binding (hash-based) | ✓ PQ-safe |
+
+> **Status**: Amount privacy (Pedersen commitments + Bulletproofs) is the
+> ratified design ([ADR 0006](decisions/0006-pq-architecture-ratification.md))
+> and is in development (#904). On the current testnet, amounts are public.
 
 **Why is sender anonymity classical?**
 
@@ -103,10 +108,10 @@ All transactions hide the **recipient** (via ML-KEM stealth addresses). Other pr
 | Type | Recipient | Amount | Sender |
 |------|-----------|--------|--------|
 | Minting | Hidden | Public | Known (minter) |
-| Private | Hidden | Hidden | Hidden (20-member ring) |
+| Private | Hidden | Hidden (in development — see status note above) | Hidden (20-member ring) |
 
 **Sender privacy** depends on transaction type:
-- **Minting**: Sender is visible (ML-DSA signature)
+- **Minting**: Minter is known (the PoW preimage commits to the minter's public keys)
 - **Private**: Sender hidden via CLSAG ring signatures (ring size 20)
 
 ### Can I see my transaction on a block explorer?
@@ -114,10 +119,10 @@ All transactions hide the **recipient** (via ML-KEM stealth addresses). Other pr
 You can see that a transaction exists, but:
 
 - **Recipient**: Always hidden (stealth addresses)
-- **Amount**: Hidden except for Minting transactions
+- **Amount**: Hidden by design for Private transactions (confidential amounts are in development — public on the current testnet); always public for Minting
 - **Sender**: Hidden for Private transactions (ring signatures)
 
-For Private transactions, sender, recipient, and amount are all hidden.
+For Private transactions, sender and recipient are hidden today; amounts will be hidden once confidential transactions ship (#904).
 
 ### What information is NOT hidden?
 

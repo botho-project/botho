@@ -11,6 +11,12 @@ Botho provides strong transaction privacy through a combination of cryptographic
 | Hide sender | CLSAG ring signatures (ring=20) | Classical | ~10+ effective anonymity |
 | Secure communication | Encrypted memos (AES-256-CTR) | Classical | Perfect |
 
+> **Implementation status**: Amount hiding (confidential transactions) is the
+> ratified design ([ADR 0006](../decisions/0006-pq-architecture-ratification.md))
+> and is in development (#904). On the current testnet, amounts are public;
+> recipient and sender privacy are live. Amount-privacy statements in this
+> document describe the target design.
+
 **Privacy architecture**: Botho prioritizes post-quantum protection for **recipient identity** and **amount privacy** because these are permanent (on-chain forever). Sender anonymity uses classical CLSAG ring signatures, which provides excellent present-day privacy while keeping transactions small and accessible. See [Why This Architecture?](#why-this-architecture) for the detailed rationale.
 
 ## Transaction Types
@@ -152,7 +158,7 @@ Ring signature transactions hide the true sender among a group of possible signe
 |--------|-----------|----------------|----------------|
 | **CLSAG** | 20 | ~700 bytes | Classical |
 
-> **Note**: Ring signatures are used in all private transactions. Minting transactions use ML-DSA signatures (minter is known).
+> **Note**: Ring signatures are used in all private transactions. Minting transactions carry no signature — the PoW preimage commits to the minter's public keys (minter is known; see whitepaper §4, "Minting Attribution").
 
 ### How Ring Signatures Work
 
@@ -275,8 +281,8 @@ Botho supports two transaction types. See [Transaction Types](transactions.md) f
 
 | Type | Amount Privacy | Sender Privacy | Signature | Use Case |
 |------|---------------|----------------|-----------|----------|
-| Minting | Public | Known (minter) | ML-DSA | Block rewards |
-| Private | Hidden | Hidden (CLSAG ring=20) | CLSAG | All transfers |
+| Minting | Public | Known (minter) | None (PoW-preimage binding) | Block rewards |
+| Private | Hidden (CT — in development, see [Confidential Amounts](#confidential-amounts)) | Hidden (CLSAG ring=20) | CLSAG | All transfers |
 
 ### Fee Structure
 
@@ -284,7 +290,7 @@ Botho uses size-based fees: `fee = fee_per_byte × tx_size × cluster_factor`
 
 | Transaction Type | Signature Size | Typical Total Size | Fee (1x cluster) |
 |-----------------|----------------|-------------------|------------------|
-| Minting | ~3.3 KB (ML-DSA) | ~1.5 KB | 0 |
+| Minting | None (PoW-preimage binding) | ~1.5 KB | 0 |
 | Private | ~0.7 KB (CLSAG) | ~4 KB | ~4,000 picocredits |
 
 **Why these sizes?**
@@ -310,6 +316,11 @@ Where:
 See [Tokenomics](tokenomics.md) for details on cluster-based progressive fees.
 
 ## Confidential Amounts
+
+> **Implementation status**: Confidential amounts are the ratified design
+> ([ADR 0006](../decisions/0006-pq-architecture-ratification.md)) and are in
+> development (#904). On the current testnet, transaction amounts are public.
+> This section describes the target design.
 
 All transaction types except Minting hide amounts using Pedersen commitments and Bulletproofs range proofs.
 
@@ -465,9 +476,9 @@ Botho provides post-quantum protection for recipient identity and amount privacy
 | Component | Algorithm | Standard | Quantum Safety |
 |-----------|-----------|----------|----------------|
 | Stealth addresses | ML-KEM-768 | FIPS 203 | ✓ Full |
-| Minting signatures | ML-DSA-65 | FIPS 204 | ✓ Full |
+| Minting attribution | PoW-preimage binding (RandomX) | hash-based | ✓ Full (Grover-only) |
 | Ring signatures | CLSAG | curve25519 | Classical |
-| Amount hiding | Pedersen | info-theoretic | ✓ Full |
+| Amount hiding | Pedersen | info-theoretic | ✓ Full (CT in development, #904) |
 
 ### Ring Size
 
@@ -513,7 +524,7 @@ This ensures all ring members would produce similar output tag patterns, prevent
 All keys derive deterministically from the BIP39 mnemonic:
 
 ```
-mnemonic → SLIP-10 seed → HKDF → {ML-KEM keypair, ML-DSA keypair, classical keypair}
+mnemonic → SLIP-10 seed → HKDF → {ML-KEM keypair, ML-DSA keypair (reserved — designated future signature family, no live protocol role), classical keypair}
 ```
 
 ### Transaction Sizes
@@ -548,10 +559,10 @@ Compact transaction sizes enable desktop-friendly blockchain growth while mainta
 | Ring signatures | All tx (CLSAG) | All tx (CLSAG) | No |
 | Ring size | 20 | 16 | N/A |
 | **Effective anonymity** | **10+ of 20** | ~11 of 16 (estimated) | Perfect (ZK) |
-| Confidential amounts | All types | Yes | Shielded only |
+| Confidential amounts | All transfers by design (in development, #904) | Yes | Shielded only |
 | Encrypted memos | Yes | No | Shielded only |
 | Post-quantum stealth | Yes (ML-KEM-768) | No | No |
-| Post-quantum amounts | Yes (info-theoretic) | No | No |
+| Post-quantum amounts | Yes by design (info-theoretic) | No | No |
 | Privacy by default | Yes | Yes | No (opt-in) |
 | Progressive fees | Yes (cluster tags) | No | No |
 | Desktop node feasible | Yes (~100 GB/yr) | Yes | Yes |
@@ -567,4 +578,4 @@ Compact transaction sizes enable desktop-friendly blockchain growth while mainta
 - [CLSAG Paper](https://eprint.iacr.org/2019/654.pdf) - Concise Linkable Ring Signatures
 - [Bulletproofs Paper](https://eprint.iacr.org/2017/1066.pdf) - Range proof system
 - [ML-KEM (FIPS 203)](https://csrc.nist.gov/pubs/fips/203/final) - Post-quantum key encapsulation
-- [ML-DSA (FIPS 204)](https://csrc.nist.gov/pubs/fips/204/final) - Post-quantum digital signatures
+- [ML-DSA (FIPS 204)](https://csrc.nist.gov/pubs/fips/204/final) - Post-quantum digital signatures (Botho's designated future signature family; no live protocol role)

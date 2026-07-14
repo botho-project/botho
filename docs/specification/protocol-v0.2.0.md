@@ -4,15 +4,20 @@
 **Status**: Historical snapshot
 **Last Updated**: 2025-01-03
 
-> **⚠️ HISTORICAL SNAPSHOT**: This document does **not** describe the current
-> wire protocol (implemented version 4.1.0, defined in
+> **⚠️ HISTORICAL SNAPSHOT (SUPERSEDED)**: This document does **not** describe
+> the current wire protocol (implemented version 4.1.0, defined in
 > [`botho/src/network/discovery.rs`](../../botho/src/network/discovery.rs)).
 > It predates — at minimum — RandomX proof of work, the picocredit single-unit
 > migration, the current emission schedule, time-based difficulty, the 80/20
 > fee split with cluster-weighted lottery, demurrage, and dynamic block
-> timing. Do not implement against it. See the
-> [specification index](README.md) for the current protocol version and
-> pointers to authoritative sources.
+> timing. It is superseded as a design reference by the
+> [whitepaper](../../whitepaper/) and
+> [ADR 0006](../decisions/0006-pq-architecture-ratification.md): in
+> particular, the ML-DSA-65 minting signatures specified below were never
+> the shipped mechanism and were retired by ADR 0006 (minting attribution
+> binds via the RandomX PoW preimage; no signature). Do not implement
+> against this document. See the [specification index](README.md) for the
+> current protocol version and pointers to authoritative sources.
 
 ## Abstract
 

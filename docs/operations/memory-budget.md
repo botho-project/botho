@@ -62,7 +62,6 @@ Ring signature operations have significant stack requirements:
 | Operation | Memory | Duration |
 |-----------|--------|----------|
 | CLSAG Verification | ~10 KB stack | ~2 ms |
-| ML-DSA Verification | ~50 KB stack | ~5 ms |
 | Batch Verification (10 tx) | ~200 KB stack | ~50 ms |
 
 **Notes:**

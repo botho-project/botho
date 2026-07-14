@@ -83,7 +83,7 @@ The following assets require protection in the Botho system:
 |----------|---------|------------------|-------------------|
 | Spend Private Key | Authorizes fund transfers | Encrypted wallet file | Complete fund loss |
 | View Private Key | Scans incoming transactions | Encrypted wallet file | Privacy loss (incoming) |
-| ML-DSA Private Key | Minting transaction signing | Encrypted wallet file | Minting capability loss |
+| ML-DSA Private Key | Reserved (designated future signature family — no live protocol role, [ADR 0006](../decisions/0006-pq-architecture-ratification.md)) | Encrypted wallet file | None today (unused by protocol) |
 | Mnemonic (24 words) | Master seed for all keys | User responsibility | Complete fund loss |
 
 **File references:**
@@ -96,7 +96,7 @@ The following assets require protection in the Botho system:
 |--------------|-----------|----------------|
 | Recipient hiding | ML-KEM-768 stealth addresses | Recipient identity |
 | Sender hiding | CLSAG ring signatures (ring=20) | Sender identity |
-| Amount hiding | Pedersen commitments + Bulletproofs | Transaction values |
+| Amount hiding | Pedersen commitments + Bulletproofs (ratified design, in development — #904; amounts public on current testnet) | Transaction values |
 | Memo privacy | AES-256-CTR encryption | Payment metadata |
 
 **File references:**
@@ -244,7 +244,7 @@ economic state whose integrity is now an asset in its own right. See the
 
 **Cannot:**
 - Break ML-KEM-768 stealth addresses
-- Break ML-DSA minting signatures
+- Break PoW-preimage minting attribution (hash-based)
 - Reverse hash functions
 
 **Note:** CLSAG ring signatures are classical and vulnerable to quantum attacks. However, sender privacy is ephemeral—its value degrades over time as economic context becomes historical. See [ADR-0001](../decisions/0001-deprecate-lion-ring-signatures.md) for the rationale.
@@ -283,7 +283,7 @@ the residuals above are explicitly tracked, not mitigated.
 | Component | Algorithm | Quantum Safety |
 |-----------|-----------|----------------|
 | Stealth addresses | ML-KEM-768 | Full |
-| Minting signatures | ML-DSA-65 | Full |
+| Minting attribution | PoW-preimage binding (RandomX) | Full (hash-based) |
 | Private sender | CLSAG | Classical (ephemeral privacy) |
 | Commitments (hiding) | Pedersen | Information-theoretic |
 | Commitments (binding) | Pedersen | Classical only |
@@ -298,7 +298,7 @@ the residuals above are explicitly tracked, not mitigated.
 |------------|-----------|----------------------|
 | Discrete Log (DLOG) | curve25519 | CLSAG signatures forgeable |
 | Decisional Diffie-Hellman (DDH) | curve25519 | Pedersen binding broken |
-| Learning With Errors (LWE) | ML-KEM, ML-DSA | PQ protections broken |
+| Learning With Errors (LWE) | ML-KEM | PQ recipient privacy broken |
 | Collision Resistance | SHA-256, Blake2b | General hashing compromised |
 | PoW Soundness | RandomX | Minting rewards skewed (consensus safety unaffected — block acceptance is SCP's) |
 
@@ -575,6 +575,8 @@ Pr[adversary correctly determines R1 = R2 | blockchain] ≤ negl(λ)
 
 ### 2. Amount Confidentiality
 
+> **Status**: Target design ([ADR 0006](../decisions/0006-pq-architecture-ratification.md)), in development (#904). Amounts are public on the current testnet.
+
 **Property:** Transaction amounts are hidden from all observers except sender and recipient.
 
 **Formal statement:**
@@ -796,7 +798,7 @@ mempool's dynamic base can only make a node *stricter*.
 | Threat | Mitigation | Implementation |
 |--------|------------|----------------|
 | Key compromise | Argon2id + ChaCha20-Poly1305 | `storage.rs:189-220` |
-| Signature forgery | Ed25519, CLSAG, ML-DSA verification | `transaction.rs:1335-1357` |
+| Signature forgery | Ed25519, CLSAG verification | `transaction.rs:1335-1357` |
 | Quantum harvest-now-decrypt-later | ML-KEM-768 for stealth addresses | `pq_onetime_keys.rs` |
 | Replay attacks | Key images (CLSAG) | `ledger/store.rs:800-845` |
 
@@ -907,7 +909,7 @@ mempool's dynamic base can only make a node *stricter*.
 
 ### External Standards
 - [NIST FIPS 203](https://csrc.nist.gov/pubs/fips/203/final) - ML-KEM specification
-- [NIST FIPS 204](https://csrc.nist.gov/pubs/fips/204/final) - ML-DSA specification
+- [NIST FIPS 204](https://csrc.nist.gov/pubs/fips/204/final) - ML-DSA specification (designated future signature family; no live protocol role)
 - [RFC 9180](https://datatracker.ietf.org/doc/rfc9180/) - HPKE specification
 - [OWASP Top 10](https://owasp.org/www-project-top-ten/) - Web security risks
 - [CryptoNote](https://cryptonote.org/whitepaper.pdf) - Stealth address protocol

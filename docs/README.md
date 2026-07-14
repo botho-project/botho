@@ -94,7 +94,7 @@ Botho combines:
 - **Proof-of-Work Minting**: RandomX (CPU-egalitarian) minting with usage-scaled difficulty, decoupled from consensus
 - **Two Transaction Types**: Minting (block rewards) and Private (CLSAG ring signatures)
 - **Hybrid Post-Quantum Security**: ML-KEM stealth addresses, CLSAG ring signatures
-- **Confidential Amounts**: Pedersen commitments with Bulletproofs range proofs
+- **Confidential Amounts**: Pedersen commitments with Bulletproofs range proofs (ratified design — in development, #904; amounts are public on the current testnet)
 - **Byzantine Fault Tolerance**: Stellar Consensus Protocol (SCP) for consensus
 - **Progressive Fees**: Cluster-based taxation that discourages wealth concentration
 - **Network Privacy**: Onion Gossip for transaction origin hiding (phase 1 implemented; see `docs/security/onion-gossip-phase1-audit.md`)

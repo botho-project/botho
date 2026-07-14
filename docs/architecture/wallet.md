@@ -44,7 +44,7 @@ Botho wallets derive all keys from a single BIP39 mnemonic and support both clas
 │  │                      │             │                      │            │
 │  │  ┌────────────────┐  │             │  ┌────────────────┐  │            │
 │  │  │ AccountKey     │  │             │  │ ML-DSA-65      │  │            │
-│  │  │ (view+spend)   │  │             │  │ (Signatures)   │  │            │
+│  │  │ (view+spend)   │  │             │  │ (Reserved)     │  │            │
 │  │  └────────────────┘  │             │  └────────────────┘  │            │
 │  │                      │             │                      │            │
 │  └──────────────────────┘             └──────────────────────┘            │
@@ -59,7 +59,7 @@ Botho wallets derive all keys from a single BIP39 mnemonic and support both clas
 | `Wallet` | Struct | Main wallet interface | `botho/src/wallet.rs` |
 | `AccountKey` | Struct | Classical view+spend key pair | `account-keys/src/account_keys.rs` |
 | `MlKem768KeyPair` | Struct | Post-quantum key encapsulation | `crypto/pq/src/kem.rs` |
-| `MlDsa65KeyPair` | Struct | Post-quantum signatures | `crypto/pq/src/sig.rs` |
+| `MlDsa65KeyPair` | Struct | Reserved — designated future signature family, no live protocol role ([ADR 0006](../decisions/0006-pq-architecture-ratification.md)) | `crypto/pq/src/sig.rs` |
 
 **Code Reference:** `botho/src/wallet.rs`
 
@@ -114,7 +114,7 @@ Botho wallets derive all keys from a single BIP39 mnemonic and support both clas
 | Classical View | 32 bytes | 32 bytes | Scanning outputs |
 | Classical Spend | 32 bytes | 32 bytes | Signing transactions |
 | ML-KEM-768 | 1,184 bytes | 2,400 bytes | PQ key exchange |
-| ML-DSA-65 | 1,952 bytes | 4,032 bytes | PQ signatures |
+| ML-DSA-65 | 1,952 bytes | 4,032 bytes | Reserved (designated future signature family; no live protocol role) |
 
 **Code Reference:** `account-keys/src/account_keys.rs`
 
