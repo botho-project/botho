@@ -38,7 +38,7 @@ CLSAG (Concise Linkable Spontaneous Anonymous Group) es un esquema eficiente de 
 
 Esto rompe el grafo de transacciones que de otro modo permitiría rastrear fondos a través de la cadena de bloques. Un observador ve que *alguien* del anillo gastó *algunas* monedas, pero no puede determinar qué participante ni qué monedas concretas.
 
-> **Nota:** Todas las transferencias de valor usan firmas de anillo. Las transacciones de acuñación (recompensas de bloque) no llevan firma: la preimagen de PoW se compromete con las claves públicas del acuñador, de modo que la atribución se basa en hashes y es resistente a la computación cuántica (ADR 0006).
+> **Nota:** Todas las transferencias de valor usan firmas de anillo. Las transacciones de acuñación (recompensas de bloque) no llevan firma: la preimagen de PoW queda vinculada a las claves públicas del acuñador, de modo que la atribución se basa en hashes y es resistente a la computación cuántica (ADR 0006).
 
 ### Importes confidenciales
 
