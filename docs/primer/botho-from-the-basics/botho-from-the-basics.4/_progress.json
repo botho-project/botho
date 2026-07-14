@@ -1,0 +1,116 @@
+{
+  "version": 4,
+  "thread": "botho-from-the-basics",
+  "phases": {
+    "revise": {
+      "state": "done",
+      "started": "2026-07-14T17:05:00Z",
+      "completed": "2026-07-14T17:40:00Z"
+    },
+    "figures": {
+      "state": "done",
+      "started": "2026-07-14T17:12:00Z",
+      "completed": "2026-07-14T17:16:00Z"
+    }
+  },
+  "metadata": {
+    "iteration": 4,
+    "max_iterations": 4,
+    "revised_from": "botho-from-the-basics.3",
+    "consumed_critics": [
+      "botho-from-the-basics.3.review",
+      "botho-from-the-basics.3.audit"
+    ],
+    "operator_override": "v3 combined verdict was AUDITED (review 44/44 advance:true, audit_clean:true); the step-2 early exit was operator-waived because the spec_ref oracle changed underneath the primer: whitepaper PR #901 + ADR 0006 (docs/decisions/0006-pq-architecture-ratification.md) replaced ML-DSA-65 minting signatures with PoW-preimage attribution binding, so v3 \u00a76 now contradicts the corrected spec. This v4 is the operator-directed spec-consistency restoration scoped by GitHub issue #905 (+ its comments); no other changes.",
+    "score_history": [
+      {
+        "iteration": 1,
+        "total": 41,
+        "threshold": 35,
+        "rubric_id": "anvil-primer-v1"
+      },
+      {
+        "iteration": 2,
+        "total": 43,
+        "threshold": 35,
+        "rubric_id": "anvil-primer-v1"
+      },
+      {
+        "iteration": 3,
+        "total": 44,
+        "threshold": 35,
+        "rubric_id": "anvil-primer-v1"
+      }
+    ],
+    "spec_ref_declared": "../../whitepaper/sections/*.tex",
+    "spec_ref_resolved": [
+      "whitepaper/sections/01-introduction.tex",
+      "whitepaper/sections/02-related-work.tex",
+      "whitepaper/sections/03-preliminaries.tex",
+      "whitepaper/sections/04-cryptography.tex",
+      "whitepaper/sections/05-transactions.tex",
+      "whitepaper/sections/06-consensus.tex",
+      "whitepaper/sections/07-monetary.tex",
+      "whitepaper/sections/08-network.tex",
+      "whitepaper/sections/09-security.tex",
+      "whitepaper/sections/10-economics.tex",
+      "whitepaper/sections/11-implementation.tex",
+      "whitepaper/sections/12-governance.tex",
+      "whitepaper/sections/13-conclusion.tex",
+      "whitepaper/sections/appendix-audit.tex",
+      "whitepaper/sections/appendix-formal.tex",
+      "whitepaper/sections/appendix-notation.tex",
+      "whitepaper/sections/appendix-parameters.tex",
+      "whitepaper/sections/appendix-regulatory.tex"
+    ],
+    "spec_ref_note": "Project root moved from whitepaper/primer/ to docs/primer/; the BRIEF's spec_ref glob is now ../../whitepaper/sections/*.tex and re-resolves to the same 18 sections, post-PR-#901 content. Governing text for this revision: 04-cryptography.tex \u00a7Minting Attribution (lines 340\u2013365), 03-preliminaries.tex lines 149\u2013157 (designated future signature family), tab:hybrid row 'Minting attribution / Permanent / PoW hash binding'.",
+    "self_check": {
+      "dependency_order_delta": [
+        "\u00a76 minting re-teach uses only \u00a72-toolbox hashes + the pre-existing '(Section 8)' mining forward-pointer the v3 critics accepted as bridgeable",
+        "\u00a710 step 8 points back to \u00a76 for the zero-signature attribution",
+        "\u00a711 caveat uses only \u00a75/\u00a76 vocabulary, both taught long before"
+      ],
+      "spec_ref_grounding_delta": [
+        "New \u00a76 teaching beat matches WP \u00a74 Minting Attribution: preimage commits to minter keys; reattribution destroys the PoW against an externalized chain; Grover-only quantum exposure; no signature; ~5.3 KB/block saved (3,309 B sig + 1,952 B pk = 5,261 B)",
+        "ML-DSA-65 survives only as the designated future signature family (WP \u00a73) \u2014 grep-verified: exactly two deliberate mentions remain (\u00a76 parenthetical, \u00a711 FIPS 204 pointer)",
+        "\u00a711 caveat facts (public amounts today, no ML-KEM ciphertexts today, QP tier retired) verified against ADR 0006 context + decisions 1/2/4"
+      ],
+      "technical_accuracy_delta": [
+        "fig2 minting box now 'PoW-preimage binding (hash-based), zero signature bytes' and PERM subgraph header no longer claims lattice for the minting leg",
+        "fig5 step 8 drops ML-DSA-65; 'identity bound by the PoW preimage \u2014 no signature'",
+        "No remaining claim anywhere in body or exhibits that minting transactions are signed"
+      ]
+    },
+    "word_count": 8936,
+    "word_count_delta": 320,
+    "figures_carried_forward": {
+      "from": "botho-from-the-basics.3/exhibits",
+      "note": "All 10 exhibit files copied from v3 so relative refs resolve; fig1/fig3/fig4 (.mmd + .png) byte-identical carries. fig2-hybrid-pq-envelope and fig5-capstone-payment-timeline re-authored (.mmd) per #905/ADR 0006 and re-rendered (.png) in this phase via mmdc 11.15.0 (anvil mermaid theme at .anvil/anvil/lib/figures/mermaid-theme.json, -b white -s 2, system-Chrome puppeteer executablePath override); both re-renders visually verified (theme classes intact, text legible, no clipping). v3 remains untouched."
+    },
+    "pdf_note": "No PDF in this version by design; primer-figures runs after the v4 critic pair (with the #690-thread render hardening: 0.85\\textheight cap, labelformat=empty, source-driven glyph sweep).",
+    "figures": {
+      "rendered": [
+        "exhibits/fig1-stealth-address-flow.png",
+        "exhibits/fig2-hybrid-pq-envelope.png",
+        "exhibits/fig3-scp-mining-decoupling.png",
+        "exhibits/fig4-anti-hoarding-money-flow.png",
+        "exhibits/fig5-capstone-payment-timeline.png"
+      ],
+      "rendered_note": "No diagrams re-rendered in this phase by design: all five exhibits were already present in the v4 version dir (fig2/fig5 re-rendered during the v4 revise per #905/ADR 0006; fig1/fig3/fig4 byte-identical carries from v3). Presence verified; recorded as rendered.",
+      "pdf": "botho-from-the-basics.pdf",
+      "skipped": [],
+      "gate": {
+        "audited_gate": "review 44/44 ADVANCE (botho-from-the-basics.4.review) + audit CLEAN (botho-from-the-basics.4.audit) confirmed before render",
+        "placeholder_scan": "clean (source body and pdftotext output, 0 hits)",
+        "render": "pandoc 3.x --defaults primer-pandoc-defaults-v4.yaml (xelatex, STIX Two Text 11pt, letter, TOC depth 2), hardened v3 header carried to primer-header-v4.tex: 0.85\\textheight \\pandocbounded cap, caption labelformat=empty, newunicodechar STIX Two Math fallbacks for U+2192 U+21D2 U+2260 U+2212 U+2074 U+2076; cwd = version dir so exhibits/ paths resolve"
+      },
+      "verification": {
+        "pages": 22,
+        "pdfimages": "5 images embedded (pages 5, 9, 13, 18, 19) \u2014 one per figure, >=5 required",
+        "glyph_sweep": "source-driven: all 14 non-ASCII codepoints in the v4 body (\u00a7 \u00b2 \u00b7 \u00b9 \u00d7 \u00e8 \u2013 \u2014 \u2074 \u2076 \u2192 \u21d2 \u2212 \u2260) match pdftotext counts exactly (e.g. \u2014 175/175, \u00a7 32/32); v4 prose introduced NO new glyphs beyond the v3 set \u2014 no header additions needed; extras in PDF are pandoc smart quotes/bullets/ellipses only",
+        "doubled_captions": "none (pdftotext regex Figure N: Figure N \u2014 0 hits)",
+        "visual_spot_check": "pages 9 (fig2) and 19 (fig5) rasterized via pdftoppm and inspected: fig2 PERM lane shows PoW-preimage binding / zero signature bytes, fig5 step 8 shows identity bound by the PoW preimage \u2014 no signature; themes intact, text legible, captions fit, no clipping or page-number overlap"
+      }
+    }
+  }
+}

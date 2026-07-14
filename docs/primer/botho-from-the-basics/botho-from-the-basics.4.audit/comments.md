@@ -1,0 +1,11 @@
+# Audit comments — botho-from-the-basics.4 (line-keyed to botho-from-the-basics.md)
+
+1. **L387 (fig2 caption, C4)** — verified. "Guarantees that must hold forever get quantum-resistant protection" is the correct post-ADR-0006 grouping: only the ML-KEM leg is lattice; the minting leg is hash-based. Matches tab:hybrid (`04-cryptography.tex:370–384`).
+2. **L421–448 (§6 minting re-teach, C1)** — verified end to end against `04-cryptography.tex:340–365` + `botho/src/pow.rs` + `botho/src/block.rs`. "The block of data a miner hashes… includes the miner's own public address keys" is a lossy-but-true compression of the four-field preimage (correctly leaves the equation to the spec). The ~5.3 KB figure = the spec's 5,261 B; the reattribution and Grover-only claims are the spec's own argument in teaching voice. The ML-DSA-65 parenthetical is the `03-preliminaries.tex:149–157` framing, conditional mood preserved ("*if* … ever introduced").
+3. **L474 (blockquote pointer, C2)** — verified. "Minting Attribution" is the spec's renamed subsection at `04-cryptography.tex:340`; "Minting Signatures" no longer exists in the spec.
+4. **L952–956 (§10 step 8, C6)** — verified; only the signature clause changed, and the back-pointer "per Section 6" resolves correctly.
+5. **L991–1000 (§11 status caveat, C8)** — verified on all three facts against code (`transaction/clsag/src/lib.rs:300–325`) and ADR 0006 (context; decisions 1, 2, 4). Placement at the send-the-reader-out section is exactly where the explorer-contradiction risk lives. §5/§6 remain unhedged target-design teaching, per the single-caveat discipline.
+6. **L1025–1026 (§11 literature pointer, C7)** — verified; FIPS numbers correct, designated-future-family framing matches §3.
+7. **L1029–1034 (§11 recap, C7)** — verified; "permanent guarantees" (not "secrets") is the more accurate word now that one hardened leg is public-but-unforgeable attribution.
+8. **exhibits/fig2-hybrid-pq-envelope.png** — viewed; renders the re-authored source faithfully; zero signature bytes / hash-based claims all spec-true; no clipping, theme intact.
+9. **exhibits/fig5-capstone-payment-timeline.png** — viewed; step 8 now "identity bound by the PoW preimage — no signature"; all other steps unchanged from the v3-audited render.

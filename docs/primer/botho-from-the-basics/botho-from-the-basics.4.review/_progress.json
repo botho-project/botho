@@ -1,0 +1,35 @@
+{
+  "version": 4,
+  "thread": "botho-from-the-basics",
+  "phases": {
+    "review": {
+      "state": "done",
+      "started": "2026-07-14T17:05:00Z",
+      "completed": "2026-07-14T17:25:00Z"
+    }
+  },
+  "metadata": {
+    "critic": "review",
+    "rubric_id": "anvil-primer-v1",
+    "total": 44,
+    "advance_threshold": 35,
+    "advance": true,
+    "critical_flags": [],
+    "delta_perimeter": "diff v3->v4 verified: 6 body hunks + 2 re-authored .mmd (fig2, fig5) = 8 source hunks matching changelog C1-C8, plus 2 re-rendered PNGs; fig1/fig3/fig4 byte-identical. Unchanged material scored leaning on botho-from-the-basics.3.review (44/44, zero flags).",
+    "spec_ref": {
+      "declared": "../../whitepaper/sections/*.tex",
+      "ran": true,
+      "missing": false,
+      "resolved_count": 18,
+      "duplication_flags": 0,
+      "governing_text": "04-cryptography.tex:340-365 (Minting Attribution), 03-preliminaries.tex:149-157 (designated future signature family)"
+    },
+    "evidence_check": {
+      "ran": true,
+      "pass": true,
+      "findings": 0
+    },
+    "scope_distribution": { "preserve": 5, "expand": 0, "reduce": 0 },
+    "next": "primer-revise botho-from-the-basics (combined verdict with botho-from-the-basics.4.audit); primer-figures after the critic pair per the v4 pdf_note"
+  }
+}
