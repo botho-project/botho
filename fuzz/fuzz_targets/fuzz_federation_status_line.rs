@@ -16,19 +16,18 @@
 //!
 //! Semantic assertions (not just no-panic):
 //!
-//!   * arbitrary bytes — including empty, all-whitespace, and non-UTF-8 —
-//!     never panic; inputs with fewer than two whitespace-separated tokens
-//!     parse to `0` (the "no parseable status" sentinel);
+//!   * arbitrary bytes — including empty, all-whitespace, and non-UTF-8 — never
+//!     panic; inputs with fewer than two whitespace-separated tokens parse to
+//!     `0` (the "no parseable status" sentinel);
 //!   * round-trip: a well-formed `HTTP/1.1 <code> ...` line parses back to
-//!     exactly `<code>` for every `u16`, with arbitrary header/body bytes
-//!     after the CRLF;
-//!   * cap behavior (`MAX_PEER_RESPONSE_BYTES`): for a response flooded to
-//!     more than 3x the 8 KiB cap, parsing the transport-capped prefix
-//!     yields the same status as parsing the whole flood — truncation at
-//!     the cap is harmless because the status line always comes first (the
-//!     exact invariant `read_status_line` relies on); the > 8 KiB parse
-//!     itself is panic-free and allocation is proportional to the input
-//!     actually given.
+//!     exactly `<code>` for every `u16`, with arbitrary header/body bytes after
+//!     the CRLF;
+//!   * cap behavior (`MAX_PEER_RESPONSE_BYTES`): for a response flooded to more
+//!     than 3x the 8 KiB cap, parsing the transport-capped prefix yields the
+//!     same status as parsing the whole flood — truncation at the cap is
+//!     harmless because the status line always comes first (the exact invariant
+//!     `read_status_line` relies on); the > 8 KiB parse itself is panic-free
+//!     and allocation is proportional to the input actually given.
 //!
 //! Issue refs: #897 (this target + the `parse_status_line` extraction from
 //! the async `read_status_line`), #892 (fuzz plan), #858 (federation

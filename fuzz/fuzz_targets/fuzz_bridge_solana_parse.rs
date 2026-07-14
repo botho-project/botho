@@ -8,18 +8,18 @@
 //! (ADR 0002):
 //!
 //!   * [`parse_bridge_mint`] / [`parse_bridge_mint_authority`] slice pubkeys
-//!     out of raw Solana `Bridge` account bytes fetched over RPC — a
-//!     malicious or buggy RPC endpoint fully controls this input. A panic is
-//!     a remote DoS of the bridge node; a wrong slice is worse (it feeds the
-//!     ADR-0002 mint-authority custody guard).
+//!     out of raw Solana `Bridge` account bytes fetched over RPC — a malicious
+//!     or buggy RPC endpoint fully controls this input. A panic is a remote DoS
+//!     of the bridge node; a wrong slice is worse (it feeds the ADR-0002
+//!     mint-authority custody guard).
 //!   * [`check_attested_nonce`] is the pre-broadcast Gnosis Safe nonce
-//!     cross-check (#848) between collected federation signatures and the
-//!     live chain — the last gate before a doomed/replayable
-//!     `execTransaction` broadcast.
-//!   * [`reject_duplicate_signers`] is the federation-construction dedup
-//!     check (#848): missing a duplicate silently yields an unsatisfiable
-//!     t-of-n federation (wedged orders); a false positive bricks a valid
-//!     config at startup.
+//!     cross-check (#848) between collected federation signatures and the live
+//!     chain — the last gate before a doomed/replayable `execTransaction`
+//!     broadcast.
+//!   * [`reject_duplicate_signers`] is the federation-construction dedup check
+//!     (#848): missing a duplicate silently yields an unsatisfiable t-of-n
+//!     federation (wedged orders); a false positive bricks a valid config at
+//!     startup.
 //!
 //! One target covers the whole mint-path parser family via an `Arbitrary`
 //! mode enum (the grouping sanctioned by #897: the status-line parser gets
@@ -27,13 +27,13 @@
 //! unrelated). Each arm asserts *semantic* postconditions against a
 //! reference model, not just panic-freedom:
 //!
-//!   * Solana parsers: `Ok` exactly when the account data covers
-//!     `offset + 32` bytes, and the returned pubkey is byte-identical to the
+//!   * Solana parsers: `Ok` exactly when the account data covers `offset + 32`
+//!     bytes, and the returned pubkey is byte-identical to the
 //!     `data[offset..offset + 32]` window; truncated / boundary / oversized
 //!     inputs never panic and errors are always `MintError::Rpc`.
-//!   * `check_attested_nonce`: `Ok` exactly when no nonce is attested
-//!     (Solana / legacy) or the attested nonce equals the on-chain nonce;
-//!     every failure is the retryable `MintError::StaleNonce`.
+//!   * `check_attested_nonce`: `Ok` exactly when no nonce is attested (Solana /
+//!     legacy) or the attested nonce equals the on-chain nonce; every failure
+//!     is the retryable `MintError::StaleNonce`.
 //!   * `reject_duplicate_signers`: `Err` exactly when the identity list
 //!     contains a duplicate (reference: set cardinality), independent of
 //!     ordering.
@@ -48,8 +48,8 @@ use libfuzzer_sys::fuzz_target;
 
 use bth_bridge_core::{AttestationSignature, MintAuthorization, SignatureScheme};
 use bth_bridge_service::{
-    check_attested_nonce, parse_bridge_mint, parse_bridge_mint_authority,
-    reject_duplicate_signers, MintError, BRIDGE_MINT_AUTHORITY_OFFSET, BRIDGE_MINT_OFFSET, U256,
+    check_attested_nonce, parse_bridge_mint, parse_bridge_mint_authority, reject_duplicate_signers,
+    MintError, BRIDGE_MINT_AUTHORITY_OFFSET, BRIDGE_MINT_OFFSET, U256,
 };
 
 // ============================================================================
@@ -107,7 +107,10 @@ fuzz_target!(|mode: Mode| {
 fn exercise_solana_parsers(data: &[u8]) {
     for (offset, result) in [
         (BRIDGE_MINT_OFFSET, parse_bridge_mint(data)),
-        (BRIDGE_MINT_AUTHORITY_OFFSET, parse_bridge_mint_authority(data)),
+        (
+            BRIDGE_MINT_AUTHORITY_OFFSET,
+            parse_bridge_mint_authority(data),
+        ),
     ] {
         let end = offset + 32;
         match result {
