@@ -33,14 +33,14 @@ const cryptoConfig = {
     border: 'border-[#3B82F6]/30',
     tooltip: 'Uses CLSAG ring signatures to hide sender identity',
   },
-  mldsa: {
+  minting: {
     icon: Shield,
     label: 'Minting',
-    fullLabel: 'Minting (ML-DSA)',
+    fullLabel: 'Minting (PoW-bound)',
     color: 'text-[#8B5CF6]',
     bg: 'bg-[#8B5CF6]/10',
     border: 'border-[#8B5CF6]/30',
-    tooltip: 'Uses ML-DSA post-quantum signatures for minting',
+    tooltip: 'Attribution is bound by the proof-of-work preimage — hash-based, quantum-resistant, no signature',
   },
   hybrid: {
     icon: Layers,
@@ -49,13 +49,13 @@ const cryptoConfig = {
     color: 'text-[#6366F1]',
     bg: 'bg-gradient-to-r from-[#3B82F6]/10 to-[#8B5CF6]/10',
     border: 'border-[#6366F1]/30',
-    tooltip: 'Uses both CLSAG and ML-DSA signatures',
+    tooltip: 'Combines CLSAG ring signatures with PoW-bound minting attribution',
   },
 }
 
 // Legacy config for backward compatibility
 const legacyConfig = {
-  standard: cryptoConfig.mldsa,
+  standard: cryptoConfig.minting,
   private: cryptoConfig.clsag,
 }
 

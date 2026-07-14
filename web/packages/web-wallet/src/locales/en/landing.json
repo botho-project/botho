@@ -41,7 +41,7 @@
     },
     "quantum": {
       "title": "Quantum-Safe Where It Matters",
-      "description": "Recipient addresses use ML-KEM-768—quantum computers can't trace who received funds. Amount commitments are information-theoretically secure. Sender privacy via efficient CLSAG ring signatures."
+      "description": "Recipient addresses use ML-KEM-768—quantum computers can't trace who received funds. Hidden amounts via Pedersen commitments are in development (ADR 0006); today amounts are public. Sender privacy via efficient CLSAG ring signatures."
     },
     "finality": {
       "title": "Instant Finality",

@@ -333,7 +333,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     if (!adapter) return { fee: BigInt(0), clusterFactorDisplay: '1.00x' }
 
     // Estimate transaction size based on privacy level
-    // Standard: Minting transaction with ML-DSA signature
+    // Standard: minting transaction (PoW-bound attribution, no signature — ADR 0006)
     // Private: CLSAG ring signature (~700 bytes per input, ring=20)
     const sizeBytes = privacyLevel === 'private' ? 4000 : 2000
     // NOTE (#634): no cluster wealth is passed here, so this UI estimate uses the

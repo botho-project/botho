@@ -41,7 +41,7 @@
     },
     "quantum": {
       "title": "Resistente a la cuántica donde importa",
-      "description": "Las direcciones de destinatario usan ML-KEM-768: los ordenadores cuánticos no pueden rastrear quién recibió los fondos. Los compromisos de importe son seguros de forma incondicional. La privacidad del remitente se logra con eficientes firmas de anillo CLSAG."
+      "description": "Las direcciones de destinatario usan ML-KEM-768: los ordenadores cuánticos no pueden rastrear quién recibió los fondos. La ocultación de importes mediante compromisos de Pedersen está en desarrollo (ADR 0006); hoy los importes son públicos. La privacidad del remitente se logra con eficientes firmas de anillo CLSAG."
     },
     "finality": {
       "title": "Finalidad instantánea",

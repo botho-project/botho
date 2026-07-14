@@ -560,8 +560,8 @@ export class LocalNodeAdapter implements NodeAdapter {
     // Map RPC type field to CryptoType
     const rpcType = data.type as string | undefined
     let cryptoType: CryptoType = 'clsag' // default
-    if (rpcType === 'mldsa') {
-      cryptoType = 'mldsa'
+    if (rpcType === 'minting') {
+      cryptoType = 'minting'
     } else if (rpcType === 'hybrid') {
       cryptoType = 'hybrid'
     }
@@ -629,8 +629,8 @@ export class LocalNodeAdapter implements NodeAdapter {
     // Map RPC type field to CryptoType (if present as cryptoType or type)
     const rpcCryptoType = (data.cryptoType || data.crypto_type) as string | undefined
     let cryptoType: CryptoType = 'clsag' // default
-    if (rpcCryptoType === 'mldsa') {
-      cryptoType = 'mldsa'
+    if (rpcCryptoType === 'minting') {
+      cryptoType = 'minting'
     } else if (rpcCryptoType === 'hybrid') {
       cryptoType = 'hybrid'
     } else if (rpcCryptoType === 'clsag') {

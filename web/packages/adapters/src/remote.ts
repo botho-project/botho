@@ -475,8 +475,8 @@ export class RemoteNodeAdapter implements NodeAdapter {
 
       // Map RPC signature type to the explorer CryptoType.
       let cryptoType: CryptoType = 'clsag'
-      if (result.type === 'mldsa') {
-        cryptoType = 'mldsa'
+      if (result.type === 'minting') {
+        cryptoType = 'minting'
       } else if (result.type === 'hybrid') {
         cryptoType = 'hybrid'
       }
@@ -831,8 +831,8 @@ export class RemoteNodeAdapter implements NodeAdapter {
     // Map RPC type field to CryptoType
     const rpcType = data.type as string | undefined
     let cryptoType: CryptoType = 'clsag' // default
-    if (rpcType === 'mldsa') {
-      cryptoType = 'mldsa'
+    if (rpcType === 'minting') {
+      cryptoType = 'minting'
     } else if (rpcType === 'hybrid') {
       cryptoType = 'hybrid'
     }
