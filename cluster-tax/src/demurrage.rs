@@ -31,6 +31,28 @@
 //! invariant to churn frequency; churning just adds transaction fees on
 //! top (which also feed the lottery pool).
 //!
+//! ### Scope of the churn-invariance claim: it holds WITHIN a wealth class
+//!
+//! Churn-invariance is invariance of *accrued* demurrage under re-spending at
+//! the *same* cluster factor. It does NOT price a **class transition**. The
+//! charge is proportional to `elapsed` (age-since-creation), so a coin spent
+//! while young (`elapsed ≈ 0`) pays ≈0 *regardless of factor* — the
+//! ring-centroid factor floor ([`ring_centroid_implied_factor`]) raises the
+//! factor a background-tagged output claims, but multiplies a near-zero
+//! elapsed. A holder can therefore spend a freshly-created wealthy coin to a
+//! fully background-tagged output (legal deflation under
+//! `check_cluster_tag_inheritance`, which only rejects inflation), pay ≈0, and
+//! land a genuinely-background coin whose future ring floor is 1× — escaping
+//! all FUTURE stock-level demurrage. This is a real, unpriced future-demurrage
+//! leak, demonstrated by [`tests::demurrage_background_reset_leak_is_real`] and
+//! written up in `docs/research/demurrage-background-reset-leak.md`. It mirrors
+//! exactly the escape #831's settlement op closes for the wrapping on-ramp: the
+//! settlement op prices the same class transition by charging *capitalized
+//! future* demurrage (ADR 0003), whereas an ordinary spend charges only
+//! *accrued-to-date* demurrage. The proposed on-chain fix (price the class
+//! transition = charge capitalized future demurrage on deflation) is tracked as
+//! a mainnet blocker in issue #925.
+//!
 //! ## Determinism
 //!
 //! CONSENSUS-CRITICAL: pure integer arithmetic throughout.
@@ -589,5 +611,126 @@ mod tests {
         let one_year = demurrage_charge(1_000_000, 6_000, BLOCKS_PER_YEAR, 200, BLOCKS_PER_YEAR);
         let half = demurrage_charge(1_000_000, 6_000, BLOCKS_PER_YEAR / 2, 200, BLOCKS_PER_YEAR);
         assert_eq!(one_year, half * 2);
+    }
+
+    /// REGRESSION / EVIDENCE (issue #834): a wealthy holder can reset a coin's
+    /// demurrage class to background via an ordinary spend, paying ≈0 and
+    /// escaping ALL future stock-level demurrage.
+    ///
+    /// This test walks the exact suspect sequence and ASSERTS the observed
+    /// charges at each step. It is the executable answer to issue #834:
+    /// **the leak is real.** The full write-up is in
+    /// `docs/research/demurrage-background-reset-leak.md`.
+    ///
+    /// The mechanism reproduced here is the consensus fee-floor demurrage term
+    /// (`Ledger::consensus_fee_floor` in `botho/src/ledger/store.rs`):
+    /// `demurrage_charge(output_sum, max(claimed_factor, ring_implied),
+    /// elapsed@max, rate, bpy)`. This test drives the two pure pieces that
+    /// path composes — [`ring_centroid_implied_factor`] (the factor floor
+    /// the spender cannot rewrite) and [`demurrage_charge`] (the
+    /// accrued-time charge) — so the numbers are the real consensus
+    /// numbers, not a re-derivation.
+    ///
+    /// If a future fix prices the class transition (e.g. charging capitalized
+    /// future demurrage on deflation, mirroring #831's settlement charge), the
+    /// `spend#1` assertion below will start failing — which is the intended
+    /// signal that the leak is closed. Update this test at that point to assert
+    /// the new priced-transition charge.
+    #[test]
+    fn demurrage_background_reset_leak_is_real() {
+        use crate::ClusterFactorCurve;
+        const PICO_PER_BTH: u128 = 1_000_000_000_000;
+        let curve = ClusterFactorCurve::default_params();
+        let rate_bps = 200u32; // 2%/yr at max factor
+
+        // A wealthy cluster: 10M BTH of tagged wealth.
+        let wealthy_cluster_wealth: u128 = 10_000_000 * PICO_PER_BTH;
+        // The coin being manipulated: 1000 BTH (in picocredits, fits u64).
+        let output_sum: u64 = 1_000 * PICO_PER_BTH as u64;
+
+        // --- Baseline: what an HONEST wealthy holder pays if they simply hold
+        //     the coin for a year and then spend it (no class reset). The ring
+        //     is composed of members carrying the wealthy cluster's public,
+        //     inherited tags, so the implied factor floor is high; the coin is
+        //     one year old, so elapsed = BLOCKS_PER_YEAR.
+        let wealthy_ring = [(output_sum, wealthy_cluster_wealth)];
+        let wealthy_factor = ring_centroid_implied_factor(&wealthy_ring, &curve);
+        assert_eq!(
+            wealthy_factor, 5745,
+            "10M-BTH cluster maps to factor 5.745x (observed floor)"
+        );
+        let honest_annual_charge = demurrage_charge(
+            output_sum,
+            wealthy_factor,
+            BLOCKS_PER_YEAR,
+            rate_bps,
+            BLOCKS_PER_YEAR,
+        );
+        assert_eq!(
+            honest_annual_charge, 18_980_000_000_000,
+            "honest wealthy holder pays ~18.98 BTH/yr on a 1000-BTH coin (in pico)"
+        );
+
+        // --- Step 1 of the attack: the whale first re-spends the wealthy coin
+        //     wealthy->wealthy to RESET its creation height (standard UTXO
+        //     behavior: a new output's created_at = the current block). This
+        //     pays the accrued charge for however long it had sat — but the
+        //     whale times it so the coin is spent again immediately, so the
+        //     age it must pay for at Step 2 is ~0. We model the post-reset coin
+        //     as elapsed = 0.
+
+        // --- Step 2 (the leak): spend the now-YOUNG wealthy coin to a fully
+        //     background-tagged output. `check_cluster_tag_inheritance` permits
+        //     this (deflation is legal; only inflation is rejected). The ring
+        //     floor still raises the factor to the wealthy 5745 — but demurrage
+        //     is proportional to elapsed, and elapsed ≈ 0, so the charge is 0.
+        let young_elapsed = 0u64;
+        let reset_spend_charge = demurrage_charge(
+            output_sum,
+            wealthy_factor, // ring floor IS applied — factor is high...
+            young_elapsed,  // ...but elapsed is ~0, so it does nothing.
+            rate_bps,
+            BLOCKS_PER_YEAR,
+        );
+        assert_eq!(
+            reset_spend_charge, 0,
+            "THE LEAK: spending a young wealthy coin to background pays ZERO \
+             demurrage despite the ring floor raising the factor to {wealthy_factor}"
+        );
+
+        // --- After the reset: the output genuinely carries background tags, so
+        //     future rings composed of background members imply factor 1x.
+        let background_ring = [(output_sum, 0u128)];
+        let background_factor = ring_centroid_implied_factor(&background_ring, &curve);
+        assert_eq!(
+            background_factor, FACTOR_SCALE,
+            "the reset coin's ring floor is now 1x (background)"
+        );
+
+        // --- Future demurrage on the reset coin: ZERO, forever, no matter how
+        //     long it is held. The stock-level charge the mechanism is designed
+        //     to extract has been fully escaped.
+        let future_charge_one_year = demurrage_charge(
+            output_sum,
+            background_factor,
+            BLOCKS_PER_YEAR,
+            rate_bps,
+            BLOCKS_PER_YEAR,
+        );
+        assert_eq!(
+            future_charge_one_year, 0,
+            "escaped: the reset background coin pays zero demurrage even held a full year, \
+             vs the honest {honest_annual_charge} it would owe as a wealthy coin"
+        );
+
+        // --- The bottom line: total demurrage paid to shed the wealthy class is
+        //     0, while the priced exit (#831's settlement op) would charge the
+        //     capitalized future demurrage. The gap between these is the leak.
+        let total_paid_to_escape = reset_spend_charge + future_charge_one_year;
+        assert_eq!(total_paid_to_escape, 0);
+        assert!(
+            honest_annual_charge > total_paid_to_escape,
+            "an unpriced class transition strictly undercuts holding: {honest_annual_charge} > {total_paid_to_escape}"
+        );
     }
 }
