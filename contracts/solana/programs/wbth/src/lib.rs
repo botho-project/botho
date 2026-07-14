@@ -63,8 +63,14 @@ declare_id!("wBTH111111111111111111111111111111111111111");
 ///   `auto_pause_threshold` (default = the daily limit; 0 disables), the bridge
 ///   pauses itself — the triggering mint still succeeds (it is within the daily
 ///   limit) but a guardian must investigate and unpause.
+// NOTE: the module is named `wbth` (not `wbth_bridge`) deliberately: Anchor
+// 0.29 names the generated IDL/TypeScript after the #[program] MODULE (not the
+// [lib] crate name), and Anchor.toml's [programs.*] entries plus
+// tests/wbth.ts (`target/types/wbth`, `anchor.workspace.Wbth`) all expect
+// `wbth`. Instruction discriminators are `global:<method>` in Anchor 0.29, so
+// the module name has no on-chain / service-side encoding effect.
 #[program]
-pub mod wbth_bridge {
+pub mod wbth {
     use super::*;
 
     /// Maximum amount a single `bridge_mint` may mint (picocredits, 1M BTH).

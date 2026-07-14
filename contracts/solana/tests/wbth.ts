@@ -272,7 +272,9 @@ describe("wbth", () => {
       await doMint(bthToPico(10), oid(200), user.publicKey, ata);
 
       let captured: any = null;
-      const listener = program.addEventListener("bridgeBurnEvent", (ev) => {
+      // Anchor 0.29 matches the IDL event name as written in Rust
+      // (PascalCase); the camelCase form is a 0.30+ convention.
+      const listener = program.addEventListener("BridgeBurnEvent", (ev) => {
         captured = ev;
       });
 
@@ -288,7 +290,9 @@ describe("wbth", () => {
         .signers([user])
         .rpc();
 
-      await new Promise((r) => setTimeout(r, 500));
+      // Generous delivery window: the ws log subscription on a cold CI
+      // validator can lag well past 500ms.
+      await new Promise((r) => setTimeout(r, 2000));
       await program.removeEventListener(listener);
 
       assert.ok(captured, "BridgeBurn event not emitted");
@@ -351,7 +355,9 @@ describe("wbth", () => {
     });
 
     it("admin can set the daily limit and auto-pause threshold", async () => {
-      const newLimit = bthToPico(20_000_000);
+      // Must stay within u64: 20M BTH = 2e19 picocredits would exceed
+      // u64::MAX (~1.8447e19) and fail borsh encoding client-side.
+      const newLimit = bthToPico(15_000_000);
       await program.methods
         .setDailyLimit(newLimit)
         .accounts({ bridge: bridgePda, adminAuthority: adminAuthority.publicKey })

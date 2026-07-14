@@ -1,0 +1,156 @@
+name: Solana Contracts CI
+
+# Builds and tests the wBTH Anchor program (contracts/solana) on every PR that
+# can affect the Solana side or the Rust minter whose instruction-data /
+# account-meta / seed / Bridge-layout assumptions the ts-mocha suite pins
+# (#883, orphaned by the #872 partial close). The hardened mint-authority
+# program (#850) previously had NO CI proving it even compiles as an SBF
+# program, and tests/wbth.ts (#850) was never executed anywhere — this runs
+# `anchor build` then `anchor test` so drift fails CI instead of surfacing as a
+# stuck mint on devnet/mainnet.
+#
+# Kept SEPARATE from the Ethereum contracts-ci.yml so this slow/heavy job
+# (full Solana + Anchor toolchain install + SBF compile + solana-test-validator
+# spin-up) never gates Ethereum/bridge PRs.
+
+on:
+  pull_request:
+    paths:
+      - 'contracts/solana/**'
+      # The Rust minter whose (discriminator, account-meta order, seeds,
+      # Bridge mint offset) assumptions the ts-mocha suite validates against a
+      # built program: changes here should re-run the Anchor suite.
+      - 'bridge/service/src/mint/solana.rs'
+      - '.github/workflows/solana-contracts-ci.yml'
+  workflow_dispatch:
+
+# Toolchain pins are load-bearing, not cosmetic: a floating Solana/Anchor
+# install silently regenerates an IDL incompatible with the pinned 0.29 crates.
+env:
+  SOLANA_VERSION: '1.18.26'
+  ANCHOR_VERSION: '0.29.0'
+  # Force EVERY rustup-shimmed cargo/rustc invocation in this job (avm install,
+  # anchor's cargo metadata, any stray cargo call) onto the pinned toolchain —
+  # not just the dtolnay action's default. Solana's cargo-build-sbf invokes its
+  # own bundled platform-tools cargo (rustc 1.75) directly by path, so this
+  # does not interfere with the SBF compile itself.
+  RUSTUP_TOOLCHAIN: '1.79.0'
+
+jobs:
+  anchor:
+    name: anchor build + test
+    runs-on: ubuntu-latest
+    # SBF build + validator spin-up + cold toolchain install is slow; give it
+    # generous headroom. Warm-cache runs are materially faster.
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: contracts/solana
+    steps:
+      - uses: actions/checkout@v4
+
+      # Host Rust toolchain (avm/anchor CLI install + anchor's cargo metadata).
+      # PINNED (not @stable) on purpose: `anchor build` shells out to Solana
+      # 1.18.26's bundled `cargo-build-sbf`, whose older Cargo (rustc 1.75)
+      # only understands lockfile version <= 3, while current stable Rust
+      # (>= 1.83) writes lockfile version 4 by default. A version-3
+      # `Cargo.lock` IS committed under contracts/solana/ (resolved with
+      # cargo's MSRV-aware resolver against wbth's rust-version = 1.72 so
+      # every crate in the graph compiles under the SBF rustc 1.75); the pin
+      # plus the job-level RUSTUP_TOOLCHAIN env plus the lockfile-sync guards
+      # below keep any step from regenerating it at v4.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.79.0
+
+      # Cache cargo registry/git + the workspace target so warm re-runs skip
+      # recompiling the crate graph. Keyed on the program manifests.
+      - name: Cache cargo + build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/solana/target
+          key: solana-cargo-${{ runner.os }}-${{ env.SOLANA_VERSION }}-${{ env.ANCHOR_VERSION }}-${{ hashFiles('contracts/solana/Cargo.lock', 'contracts/solana/Cargo.toml', 'contracts/solana/programs/wbth/Cargo.toml') }}
+          restore-keys: |
+            solana-cargo-${{ runner.os }}-${{ env.SOLANA_VERSION }}-${{ env.ANCHOR_VERSION }}-
+
+      # Cache the installed Solana toolchain + avm/Anchor binaries; the cold
+      # install of both is the slow path.
+      - name: Cache Solana + Anchor toolchains
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/share/solana
+            ~/.avm
+          key: solana-toolchain-${{ runner.os }}-${{ env.SOLANA_VERSION }}-anchor-${{ env.ANCHOR_VERSION }}
+
+      - name: Install Solana CLI (pinned)
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${SOLANA_VERSION}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Verify Solana CLI
+        run: solana --version
+
+      # avm itself must ALSO be pinned (--tag): an untagged install builds avm
+      # from anchor master, whose workspace is edition-2024 now — unparseable
+      # by the pinned cargo 1.79.
+      - name: Install Anchor CLI (pinned via avm)
+        run: |
+          if ! command -v avm >/dev/null 2>&1; then
+            cargo install --git https://github.com/coral-xyz/anchor --tag "v${ANCHOR_VERSION}" avm --locked --force
+          fi
+          avm install "${ANCHOR_VERSION}"
+          avm use "${ANCHOR_VERSION}"
+
+      - name: Verify Anchor CLI
+        run: anchor --version
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # No JS lockfile is committed under contracts/solana/, so `npm ci` (which
+      # requires one) cannot be used here; `npm install` tolerates its absence.
+      # If a package-lock.json is committed later, switch to `npm ci` + npm
+      # cache for parity with contracts-ci.yml (#861).
+      - name: Install JS dependencies
+        run: npm install
+
+      # `anchor test` uses ~/.config/solana/id.json as the provider wallet
+      # (Anchor.toml [provider].wallet) and funds it from the spawned validator.
+      - name: Generate a local provider keypair
+        run: |
+          mkdir -p "$HOME/.config/solana"
+          solana-keygen new --no-bip39-passphrase --force -o "$HOME/.config/solana/id.json"
+
+      # Guard: the committed version-3 Cargo.lock must be in sync with the
+      # manifests BEFORE any build step runs, so nothing later has a reason to
+      # regenerate it (a regeneration by a modern cargo is what previously
+      # produced the v4 lock the SBF Cargo cannot parse). `--locked` makes
+      # cargo hard-fail instead of silently rewriting.
+      - name: Verify committed Cargo.lock is v3 and in sync
+        run: |
+          head -3 Cargo.lock
+          grep -q '^version = 3$' Cargo.lock
+          cargo metadata --locked --format-version 1 > /dev/null
+
+      # Compiles the SBF program AND generates target/types/wbth.ts (the type
+      # tests/wbth.ts imports). Must run before `anchor test`.
+      - name: anchor build
+        run: anchor build
+
+      # Guard: fail loudly if any step rewrote the committed lockfile — that
+      # would mean the pinned-toolchain assumptions above have drifted.
+      - name: Assert Cargo.lock unchanged by build
+        run: git diff --exit-code -- Cargo.lock
+
+      # Spawns solana-test-validator and runs the ts-mocha suite (via the
+      # npm-consistent `npx ts-mocha` [scripts] test line in Anchor.toml). The
+      # suite's successful bridge_mint proves the account-meta order the Rust
+      # minter (bridge/service/src/mint/solana.rs) builds is accepted by the
+      # built program.
+      - name: anchor test
+        run: anchor test
