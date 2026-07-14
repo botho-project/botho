@@ -336,13 +336,12 @@ pub struct BridgeSettings {
     ///
     /// This is one half of a deliberate two-layer defense:
     /// 1. This service-side cap trips the circuit breaker first
-    ///    (`engine::test_global_cap_trips_breaker`), pausing mints and
-    ///    releases while confirmations settle.
+    ///    (`engine::test_global_cap_trips_breaker`), pausing mints and releases
+    ///    while confirmations settle.
     /// 2. The contract-side `autoPauseThreshold`
-    ///    (`contracts/ethereum/contracts/WrappedBTH.sol:104`,
-    ///    `10_000_000 * 10 ** 12` = 10M BTH/day) is the last-resort
-    ///    on-chain breaker that halts minting even if the federation
-    ///    layer is compromised or misconfigured.
+    ///    (`contracts/ethereum/contracts/WrappedBTH.sol:104`, `10_000_000 * 10
+    ///    ** 12` = 10M BTH/day) is the last-resort on-chain breaker that halts
+    ///    minting even if the federation layer is compromised or misconfigured.
     ///
     /// The two knobs are intentionally 1000× apart: the tight cap bounds
     /// normal-operations blast radius, the loose breaker only backstops
