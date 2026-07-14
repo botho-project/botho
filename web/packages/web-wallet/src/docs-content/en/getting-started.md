@@ -31,10 +31,10 @@ Your wallet address looks like this: `botho://1/4nuKn2U5qsRk3vD...` (about 90 ch
 
 This address format includes:
 - **Protocol identifier** (`botho://` on mainnet, `tbotho://` on testnet) - Different prefixes prevent accidental cross-network sends
-- **Address version** (`1/` for classical addresses, `1q/` for quantum-safe addresses)
+- **Address version** (`1/`, the current address version)
 - **Public keys** - Your view key and spend key, encoded together in base58
 
-Quantum-safe addresses (`1q/`) additionally embed ML-KEM and ML-DSA public keys, which makes them much longer (~4,400 characters) — better suited to QR codes and files than manual copying.
+There is no separate quantum-safe address type: the earlier `1q/` quantum-address tier was retired (ADR 0006). Post-quantum recipient privacy is universal by design — ML-KEM keys are derived from your standard address, so every address keeps the same short format.
 
 You can safely share this address with anyone who wants to send you funds. Thanks to stealth addresses, each incoming transaction will be sent to a unique derived address that only you can spend from.
 

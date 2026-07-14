@@ -31,10 +31,10 @@ La dirección de tu monedero se parece a esto: `botho://1/4nuKn2U5qsRk3vD...` (u
 
 Este formato de dirección incluye:
 - **Identificador de protocolo** (`botho://` en mainnet, `tbotho://` en testnet): los distintos prefijos evitan envíos accidentales entre redes
-- **Versión de dirección** (`1/` para direcciones clásicas, `1q/` para direcciones a prueba de cuántica)
+- **Versión de dirección** (`1/`, la versión de dirección actual)
 - **Claves públicas**: tu clave de visualización y tu clave de gasto, codificadas juntas en base58
 
-Las direcciones a prueba de cuántica (`1q/`) incorporan además claves públicas ML-KEM y ML-DSA, lo que las hace mucho más largas (~4 400 caracteres); son más adecuadas para códigos QR y archivos que para copiarlas a mano.
+No existe un tipo de dirección a prueba de cuántica separado: el antiguo nivel de direcciones cuánticas `1q/` fue retirado (ADR 0006). La privacidad poscuántica del destinatario es universal por diseño: las claves ML-KEM se derivan de tu dirección estándar, de modo que todas las direcciones mantienen el mismo formato corto.
 
 Puedes compartir esta dirección con total tranquilidad con cualquiera que quiera enviarte fondos. Gracias a las direcciones sigilosas, cada transacción entrante se enviará a una dirección derivada única que solo tú puedes gastar.
 
