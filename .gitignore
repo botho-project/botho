@@ -64,6 +64,10 @@ dist/
 # Per-crate lock files
 Cargo.lock
 !/Cargo.lock
+# The Solana program's lock IS committed: CI must keep it at lockfile
+# version 3 so Solana 1.18.26's bundled cargo-build-sbf (Cargo <= v3)
+# can parse it (#883 / PR #894).
+!/contracts/solana/Cargo.lock
 
 # Homebrew bundle
 /Brewfile.lock.json

@@ -29,6 +29,12 @@ on:
 env:
   SOLANA_VERSION: '1.18.26'
   ANCHOR_VERSION: '0.29.0'
+  # Force EVERY rustup-shimmed cargo/rustc invocation in this job (avm install,
+  # anchor's cargo metadata, any stray cargo call) onto the pinned toolchain —
+  # not just the dtolnay action's default. Solana's cargo-build-sbf invokes its
+  # own bundled platform-tools cargo (rustc 1.75) directly by path, so this
+  # does not interfere with the SBF compile itself.
+  RUSTUP_TOOLCHAIN: '1.79.0'
 
 jobs:
   anchor:
@@ -43,14 +49,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Rust toolchain the Anchor / SBF build shells out to. PINNED (not
-      # @stable) on purpose: `anchor build` shells out to Solana 1.18.26's
-      # bundled `cargo-build-sbf`, whose older Cargo only understands lockfile
-      # version <= 3. Current stable Rust (>= 1.83) writes lockfile version 4 by
-      # default, so a floating @stable regenerates a v4 `Cargo.lock` (none is
-      # committed under contracts/solana/) that the SBF Cargo cannot parse,
-      # aborting the build. 1.79.0 still emits v3 and cleanly builds avm/anchor
-      # 0.29 — keeping the generated lock at a version the SBF toolchain reads.
+      # Host Rust toolchain (avm/anchor CLI install + anchor's cargo metadata).
+      # PINNED (not @stable) on purpose: `anchor build` shells out to Solana
+      # 1.18.26's bundled `cargo-build-sbf`, whose older Cargo (rustc 1.75)
+      # only understands lockfile version <= 3, while current stable Rust
+      # (>= 1.83) writes lockfile version 4 by default. A version-3
+      # `Cargo.lock` IS committed under contracts/solana/ (resolved with
+      # cargo's MSRV-aware resolver against wbth's rust-version = 1.72 so
+      # every crate in the graph compiles under the SBF rustc 1.75); the pin
+      # plus the job-level RUSTUP_TOOLCHAIN env plus the lockfile-sync guards
+      # below keep any step from regenerating it at v4.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@1.79.0
 
@@ -63,7 +71,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             contracts/solana/target
-          key: solana-cargo-${{ runner.os }}-${{ env.SOLANA_VERSION }}-${{ env.ANCHOR_VERSION }}-${{ hashFiles('contracts/solana/Cargo.toml', 'contracts/solana/programs/wbth/Cargo.toml') }}
+          key: solana-cargo-${{ runner.os }}-${{ env.SOLANA_VERSION }}-${{ env.ANCHOR_VERSION }}-${{ hashFiles('contracts/solana/Cargo.lock', 'contracts/solana/Cargo.toml', 'contracts/solana/programs/wbth/Cargo.toml') }}
           restore-keys: |
             solana-cargo-${{ runner.os }}-${{ env.SOLANA_VERSION }}-${{ env.ANCHOR_VERSION }}-
 
@@ -115,10 +123,26 @@ jobs:
           mkdir -p "$HOME/.config/solana"
           solana-keygen new --no-bip39-passphrase --force -o "$HOME/.config/solana/id.json"
 
+      # Guard: the committed version-3 Cargo.lock must be in sync with the
+      # manifests BEFORE any build step runs, so nothing later has a reason to
+      # regenerate it (a regeneration by a modern cargo is what previously
+      # produced the v4 lock the SBF Cargo cannot parse). `--locked` makes
+      # cargo hard-fail instead of silently rewriting.
+      - name: Verify committed Cargo.lock is v3 and in sync
+        run: |
+          head -3 Cargo.lock
+          grep -q '^version = 3$' Cargo.lock
+          cargo metadata --locked --format-version 1 > /dev/null
+
       # Compiles the SBF program AND generates target/types/wbth.ts (the type
       # tests/wbth.ts imports). Must run before `anchor test`.
       - name: anchor build
         run: anchor build
+
+      # Guard: fail loudly if any step rewrote the committed lockfile — that
+      # would mean the pinned-toolchain assumptions above have drifted.
+      - name: Assert Cargo.lock unchanged by build
+        run: git diff --exit-code -- Cargo.lock
 
       # Spawns solana-test-validator and runs the ts-mocha suite (via the
       # npm-consistent `npx ts-mocha` [scripts] test line in Anchor.toml). The

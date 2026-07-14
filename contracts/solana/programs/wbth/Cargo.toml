@@ -3,6 +3,13 @@ name = "wbth"
 version = "0.1.0"
 description = "Wrapped BTH SPL token bridge program"
 edition = "2021"
+# MSRV pinned below the rustc bundled with Solana 1.18.26's platform-tools
+# (v1.41 -> rustc 1.75). This lets modern cargo's MSRV-aware resolver
+# (resolver.incompatible-rust-versions = "fallback") pick dependency versions
+# the SBF toolchain can actually compile when (re)generating Cargo.lock.
+# 1.72 (not 1.75) also sidesteps prerelease-version comparison edge cases with
+# the "1.75.0-dev" rustc the SBF toolchain reports.
+rust-version = "1.72.0"
 
 [lib]
 crate-type = ["cdylib", "lib"]
