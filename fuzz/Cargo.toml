@@ -31,6 +31,7 @@ bth-transaction-core = { path = "../transaction/core", features = ["pq"] }
 bth-util-from-random = { path = "../util/from-random" }
 bth-util-repr-bytes = { path = "../util/repr-bytes" }
 bth-cluster-tax = { path = "../cluster-tax" }
+bth-bridge-core = { path = "../bridge/core" }
 
 # Serialization
 bincode = "1"
@@ -38,6 +39,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
 bs58 = "0.5"
+uuid = { version = "1", features = ["v4"] }
 rand = "0.8"
 rand_chacha = "0.3"
 subtle = "2"
@@ -145,6 +147,13 @@ bench = false
 [[bin]]
 name = "fuzz_cluster_tax_math"
 path = "fuzz_targets/fuzz_cluster_tax_math.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_bridge_attestation"
+path = "fuzz_targets/fuzz_bridge_attestation.rs"
 test = false
 doc = false
 bench = false

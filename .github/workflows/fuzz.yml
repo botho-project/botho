@@ -13,6 +13,7 @@ on:
       - 'account-keys/**'
       - 'transaction/**'
       - 'util/**'
+      - 'bridge/**'
       - 'rust-toolchain'
       - '.github/workflows/fuzz.yml'
   schedule:
@@ -269,10 +270,61 @@ jobs:
           path: fuzz/artifacts/${{ matrix.target }}/
           retention-days: 30
 
+  fuzz-bridge:
+    name: Fuzz Bridge Federation
+    # Custody-relevant bridge federation targets (issue #892). The attestation
+    # set is the t-of-n threshold chokepoint that ingests adversarial per-signer
+    # attestations; a crash or a violated invariant here is a finding, not a
+    # nuisance — minimize and file a bug.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60  # 1 hour max
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_bridge_attestation
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-03
+          components: rust-src,llvm-tools-preview
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --version 0.13.1 --locked
+
+      - name: Cache fuzz corpus
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.sha }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.target }}-
+
+      - name: Run fuzz target
+        working-directory: fuzz
+        run: |
+          echo "Fuzzing ${{ matrix.target }} for $FUZZ_TIME seconds..."
+          # No `+nightly`: rust-toolchain pins the channel used for the whole repo.
+          cargo fuzz run ${{ matrix.target }} -- -max_total_time=$FUZZ_TIME
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crash-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          retention-days: 30
+
   fuzz-summary:
     name: Fuzz Summary
     runs-on: ubuntu-latest
-    needs: [fuzz-crypto, fuzz-network, fuzz-parsing, fuzz-consensus]
+    needs: [fuzz-crypto, fuzz-network, fuzz-parsing, fuzz-consensus, fuzz-bridge]
     if: always()
 
     steps:
@@ -281,7 +333,8 @@ jobs:
           if [ "${{ needs.fuzz-crypto.result }}" == "failure" ] || \
              [ "${{ needs.fuzz-network.result }}" == "failure" ] || \
              [ "${{ needs.fuzz-parsing.result }}" == "failure" ] || \
-             [ "${{ needs.fuzz-consensus.result }}" == "failure" ]; then
+             [ "${{ needs.fuzz-consensus.result }}" == "failure" ] || \
+             [ "${{ needs.fuzz-bridge.result }}" == "failure" ]; then
             echo "::error::One or more fuzz targets found crashes!"
             exit 1
           fi
