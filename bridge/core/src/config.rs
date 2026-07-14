@@ -331,7 +331,22 @@ pub struct BridgeSettings {
     #[serde(default = "default_daily_limit")]
     pub daily_limit_per_address: u64,
 
-    /// Global daily limit in picocredits
+    /// Global daily mint-volume limit in picocredits — the
+    /// FEDERATION-SIDE tight cap (default 10,000 BTH/day).
+    ///
+    /// This is one half of a deliberate two-layer defense:
+    /// 1. This service-side cap trips the circuit breaker first
+    ///    (`engine::test_global_cap_trips_breaker`), pausing mints and releases
+    ///    while confirmations settle.
+    /// 2. The contract-side `autoPauseThreshold`
+    ///    (`contracts/ethereum/contracts/WrappedBTH.sol:104`, `10_000_000 * 10
+    ///    ** 12` = 10M BTH/day) is the last-resort on-chain breaker that halts
+    ///    minting even if the federation layer is compromised or misconfigured.
+    ///
+    /// The two knobs are intentionally 1000× apart: the tight cap bounds
+    /// normal-operations blast radius, the loose breaker only backstops
+    /// catastrophe. Raising this cap is an operator/economics decision,
+    /// not a code cleanup — see issue #895.
     #[serde(default = "default_global_daily_limit")]
     pub global_daily_limit: u64,
 
@@ -389,15 +404,19 @@ fn default_min_fee() -> u64 {
 }
 
 fn default_max_order() -> u64 {
-    1_000_000_000_000_000 // 1M BTH
+    1_000_000_000_000_000 // 1,000 BTH per order (picocredits)
 }
 
 fn default_daily_limit() -> u64 {
-    100_000_000_000_000 // 100k BTH per address
+    100_000_000_000_000 // 100 BTH per address per day (picocredits)
 }
 
 fn default_global_daily_limit() -> u64 {
-    10_000_000_000_000_000 // 10M BTH global
+    // 10,000 BTH/day global — federation-side tight cap. The contract's
+    // autoPauseThreshold (WrappedBTH.sol:104) is 10M BTH, the last-resort
+    // on-chain breaker; the 1000× gap is intentional (see #895 and the
+    // doc-comment on `BridgeSettings::global_daily_limit`).
+    10_000_000_000_000_000
 }
 
 fn default_order_expiry() -> i64 {
@@ -535,6 +554,25 @@ mod tests {
         assert!(!config.bridge.testnet);
         assert!(!config.bridge.paused);
         assert_eq!(config.bridge.max_pending_orders, 1_000);
+    }
+
+    #[test]
+    fn test_global_daily_limit_pinned_to_10k_bth() {
+        // Pin the federation-side global daily cap to 10,000 BTH
+        // (× 10^12 picocredits/BTH). This value is DELIBERATELY 1000×
+        // below the contract-side autoPauseThreshold (WrappedBTH.sol:104,
+        // 10M BTH last-resort breaker) — two-layer defense in depth.
+        //
+        // If this assertion fails, someone changed a security cap.
+        // Raising it is an operator/economics decision requiring explicit
+        // sign-off (see issue #895), plus updates to the field
+        // doc-comment and docs/security/bridge-threat-model.md.
+        const PICOCREDITS_PER_BTH: u64 = 1_000_000_000_000;
+        assert_eq!(default_global_daily_limit(), 10_000 * PICOCREDITS_PER_BTH);
+        assert_eq!(
+            BridgeConfig::default().bridge.global_daily_limit,
+            10_000 * PICOCREDITS_PER_BTH
+        );
     }
 
     #[test]

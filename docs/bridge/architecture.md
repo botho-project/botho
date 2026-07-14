@@ -148,9 +148,12 @@ fee_bps = 10              # 0.1% fee
 min_fee = 100000000       # 0.0001 BTH minimum
 
 # Rate limits (in picocredits, 12 decimals)
-max_order_amount = 1000000000000000      # 1M BTH per order
-daily_limit_per_address = 100000000000000  # 100k BTH/day per address
-global_daily_limit = 10000000000000000    # 10M BTH/day global
+max_order_amount = 1000000000000000      # 1,000 BTH per order
+daily_limit_per_address = 100000000000000  # 100 BTH/day per address
+global_daily_limit = 10000000000000000    # 10,000 BTH/day global (federation
+                                          # tight cap; contract-side
+                                          # autoPauseThreshold = 10M BTH is the
+                                          # last-resort breaker — see #895)
 
 # Timing
 order_expiry_minutes = 60  # 1 hour timeout
