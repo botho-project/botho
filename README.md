@@ -21,8 +21,14 @@ The world needs a digital currency that works for everyone—not just early adop
 Every transaction is private by default. No surveillance, no tracking, no exceptions.
 
 - **Stealth addresses** ensure recipients can't be linked across transactions
-- **Confidential amounts** hide transaction values from observers
-- **Post-quantum ready** with ML-KEM-768 and ML-DSA-65 hybrid cryptography
+- **Confidential amounts** hide transaction values from observers *(ratified design — in development; see status note below)*
+- **Post-quantum ready** with ML-KEM-768 stealth addresses and hash-based minting attribution
+
+> **Implementation status**: Confidential amounts (Pedersen commitments +
+> Bulletproofs) are the ratified design ([ADR 0006](./docs/decisions/0006-pq-architecture-ratification.md), tracked in
+> [#904](https://github.com/botho-project/botho/issues/904)). On the current
+> testnet, transaction amounts are public; recipient privacy (stealth
+> addresses) and sender privacy (ring signatures) are live.
 
 Unlike "transparent by default" cryptocurrencies, Botho treats financial privacy the way cash does—as the baseline, not a premium feature.
 
@@ -72,7 +78,7 @@ Botho combines proven cryptographic building blocks in a novel architecture:
 | Consensus | Stellar Consensus Protocol (SCP) | 3-5 second finality, Byzantine fault tolerance |
 | Minting | RandomX proof-of-work (issuance only) | CPU-egalitarian rewards, decoupled from consensus |
 | Privacy | CryptoNote stealth addresses | Unlinkable transactions |
-| Quantum safety | ML-KEM-768 + ML-DSA-65 | Future-proof key exchange and signatures |
+| Quantum safety | ML-KEM-768 stealth addresses; PoW-preimage minting attribution | Future-proof recipient privacy and hash-based (quantum-sound) reward binding |
 | Fee system | Cluster-tagged progressive fees | Economic equality without identity |
 | Network privacy | Onion Gossip | Transaction origin hidden from observers |
 
@@ -83,7 +89,7 @@ Botho has two transaction types:
 | Type | Sender | Recipient | Amount | Use Case |
 |:--|:--|:--|:--|:--|
 | **Minting** | Known (minter) | Hidden (ML-KEM) | Public | Block rewards |
-| **Private** | Hidden (CLSAG ring=20) | Hidden (ML-KEM) | Hidden | All transfers |
+| **Private** | Hidden (CLSAG ring=20) | Hidden (ML-KEM) | Hidden (CT — in development, see status note above) | All transfers |
 
 Fees are calculated as: `fee = fee_per_byte × tx_size × cluster_factor × output_penalty`
 
@@ -99,7 +105,7 @@ We use ML-KEM-768 (post-quantum) for stealth addresses and CLSAG (classical) for
 
 3. **Size matters** — Post-quantum ring signatures would be ~50x larger than CLSAG, making blockchain growth unsustainable for desktop nodes. See [ADR-0001](./docs/decisions/0001-deprecate-lion-ring-signatures.md).
 
-4. **Amount hiding is already quantum-safe** — Pedersen commitments have information-theoretic hiding. A quantum computer can't reveal amounts.
+4. **Amount hiding is quantum-safe by design** — Pedersen commitments have information-theoretic hiding. A quantum computer can't reveal amounts. (Confidential amounts are in development — see the status note above.)
 
 ### Fast Finality
 
@@ -217,8 +223,10 @@ Botho is audited internally on a rolling cycle. The most recent cycle (cycle
 6, 2026-06) hardened the gossip/sync block-acceptance path against forged
 difficulty, inflated rewards, counterfeit ring members, and tx-list
 substitution under valid PoW, and migrated to ML-DSA 0.1.1
-(RUSTSEC-2025-0144 timing side-channel in the PQ transaction-authorization
-signature). All audit reports live in [`audits/`](./audits/).
+(RUSTSEC-2025-0144 timing side-channel in the since-retired PQ
+transaction-authorization path; see
+[ADR 0006](./docs/decisions/0006-pq-architecture-ratification.md)). All audit
+reports live in [`audits/`](./audits/).
 
 ### Origins
 

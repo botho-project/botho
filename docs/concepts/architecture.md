@@ -235,10 +235,10 @@ Botho uses battle-tested cryptography with post-quantum enhancements:
 | Component | Implementation |
 |-----------|----------------|
 | Key derivation | BIP39 + SLIP-10 + HKDF |
-| Minting signatures | ML-DSA-65 (post-quantum) |
+| Minting attribution | PoW-preimage binding (hash-based, no signature — see [ADR 0006](../decisions/0006-pq-architecture-ratification.md)) |
 | Transfer signatures | CLSAG ring signatures (ring=20) |
 | Stealth addresses | ML-KEM-768 (post-quantum) |
-| Amount hiding | Pedersen commitments + Bulletproofs |
+| Amount hiding | Pedersen commitments + Bulletproofs (ratified design, in development — #904; public amounts on the current testnet) |
 | Proof-of-work | RandomX (CPU-egalitarian, issuance only) |
 | Hashing | SHA-256, Blake2b (general purpose) |
 

@@ -22,9 +22,9 @@ Security in Botho operates at multiple layers:
 | Threat | Protection |
 |--------|------------|
 | Transaction surveillance | Stealth addresses, ring signatures |
-| Amount analysis | Confidential transactions (Pedersen + Bulletproofs) |
+| Amount analysis | Confidential transactions (Pedersen + Bulletproofs) — ratified design ([ADR 0006](../decisions/0006-pq-architecture-ratification.md)), in development (#904); amounts are public on the current testnet |
 | Quantum computers (recipients) | ML-KEM-768 stealth addresses |
-| Quantum computers (minting) | ML-DSA-65 signatures |
+| Quantum computers (minting) | PoW-preimage binding (hash-based attribution; no signature) |
 | Double-spending | SCP consensus, key images |
 | Replay attacks | Tombstone blocks |
 | Network-level attacks | Peer reputation, rate limiting |

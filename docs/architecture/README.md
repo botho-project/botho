@@ -205,11 +205,11 @@ BIP39 Mnemonic (24 words)
 | Property | Guarantee | Implementation |
 |----------|-----------|----------------|
 | **Double-Spend Prevention** | Key images are unique per output | UTXO model + key image tracking |
-| **Amount Hiding** | Transaction amounts are hidden | Pedersen commitments + Bulletproofs |
+| **Amount Hiding** | Transaction amounts are hidden (ratified design — in development, #904; amounts public on current testnet) | Pedersen commitments + Bulletproofs |
 | **Sender Privacy** | Sender identity is hidden | Ring signatures (CLSAG) with 20 decoys |
 | **Recipient Privacy** | Recipient address not on chain | Stealth addresses (one-time keys) |
 | **Consensus Safety** | No conflicting finalization | SCP with quorum intersection |
-| **Post-Quantum Ready** | PQ stealth addresses and minting | ML-KEM-768, ML-DSA-65 |
+| **Post-Quantum Ready** | PQ stealth addresses; hash-based minting attribution | ML-KEM-768; PoW-preimage binding |
 
 ## Related Documentation
 

@@ -2,6 +2,12 @@
 
 Botho supports two transaction types, each designed for specific use cases.
 
+> **Implementation status**: Amount hiding (Pedersen commitments +
+> Bulletproofs) is the ratified design
+> ([ADR 0006](../decisions/0006-pq-architecture-ratification.md)) and is in
+> development (#904); on the current testnet, amounts are public. Amount
+> privacy descriptions below refer to the target design.
+
 ## Overview
 
 | Property | Minting | Private |
@@ -12,7 +18,7 @@ Botho supports two transaction types, each designed for specific use cases.
 | **Sender Privacy** | Known (minter) | Hidden (CLSAG ring) |
 | **Stealth Address** | ML-KEM-768 | ML-KEM-768 |
 | **Amount Encoding** | Plaintext | Pedersen + Bulletproofs |
-| **Authorization** | ML-DSA-65 | CLSAG (ring size 20) |
+| **Authorization** | None — PoW-preimage binding | CLSAG (ring size 20) |
 | **Ring Size** | — | 20 decoys |
 | **Max Inputs** | 1 | 16 |
 | **Quantum Resistance** | Full | Recipient + Amount: full |
@@ -69,7 +75,7 @@ TxOutput {
 | Stealth addresses | ML-KEM-768 | Recipient unlinkability | 1088 B ciphertext | Post-quantum |
 | Amount commitments | Pedersen | Hide transaction amounts | 32 B | Hiding: unconditional |
 | Range proofs | Bulletproofs | Prove amounts are valid | ~700 B | Classical |
-| Minting auth | ML-DSA-65 | Authorize minting | 3309 B | Post-quantum |
+| Minting attribution | PoW-preimage binding (RandomX) | Bind reward to minter keys | 0 B (no signature) | Post-quantum (hash-based) |
 | Ring signatures | CLSAG (ring=20) | Hide sender | ~700 B/input | Classical |
 | Key images | x * Hp(P) | Prevent double-spending | 32 B | Classical |
 
@@ -83,7 +89,7 @@ Minting transactions create new coins as block rewards. They have no inputs (coi
 
 - **Inputs**: None (coinbase)
 - **Outputs**: Stealth addresses with plaintext amounts
-- **Authorization**: ML-DSA signature from the minter
+- **Authorization**: None — the RandomX PoW preimage commits to the minter's public keys (see whitepaper §4, "Minting Attribution")
 - **Cluster**: Creates a new cluster origin
 
 ### Structure
@@ -91,7 +97,7 @@ Minting transactions create new coins as block rewards. They have no inputs (coi
 ```
 MintingTx {
     block_height: u64,
-    minter_proof: MinterProof,      // PoW solution + ML-DSA signature
+    minter_proof: MinterProof,      // PoW solution (preimage commits to minter keys; no signature)
     outputs: Vec<MintingOutput>,
     cluster_id: ClusterId,          // New cluster created by this mint
 }
@@ -319,7 +325,7 @@ The output penalty is quadratic in output count (capped at 100x) to make UTXO fa
 
 | Type | Ring Size | Signature Size | Typical Total Size | Fee (1x cluster) | Fee (6x cluster) |
 |------|-----------|----------------|-------------------|------------------|------------------|
-| Minting | — | ~3.3 KB (ML-DSA) | ~1.5 KB | 0 | 0 |
+| Minting | — | None (no signature) | ~1.5 KB | 0 | 0 |
 | Private | 20 | ~0.7 KB (CLSAG) | ~4 KB | ~4,000 picocredits | ~24,000 picocredits |
 
 ### Transaction Limits
@@ -367,7 +373,7 @@ Botho provides strong quantum resistance where it matters most:
 |-----------|-------------------|----------------|------------------|
 | Stealth addresses | ECDH | Shor's algorithm | ML-KEM-768 |
 | Amount hiding | Pedersen | Grover (minimal) | Information-theoretic hiding |
-| Minting signatures | Schnorr | Shor's algorithm | ML-DSA-65 |
+| Minting attribution | Hash preimage (RandomX) | Grover (minimal) | PoW-preimage binding (no signature) |
 | Ring signatures | CLSAG | Shor's algorithm | Classical (see rationale) |
 
 **Why is classical CLSAG acceptable?**
@@ -399,7 +405,7 @@ For maximum privacy, follow [privacy best practices](privacy.md#privacy-best-pra
 ## Technical References
 
 - [ML-KEM (FIPS 203)](https://csrc.nist.gov/pubs/fips/203/final) - Post-quantum key encapsulation
-- [ML-DSA (FIPS 204)](https://csrc.nist.gov/pubs/fips/204/final) - Post-quantum signatures
+- [ML-DSA (FIPS 204)](https://csrc.nist.gov/pubs/fips/204/final) - Post-quantum signatures (Botho's designated future signature family; no live protocol role)
 - [CLSAG Paper](https://eprint.iacr.org/2019/654.pdf) - Concise Linkable Ring Signatures
 - [Bulletproofs](https://eprint.iacr.org/2017/1066.pdf) - Range proofs
 - [Pedersen Commitments](https://link.springer.com/content/pdf/10.1007/3-540-46766-1_9.pdf) - Commitment scheme

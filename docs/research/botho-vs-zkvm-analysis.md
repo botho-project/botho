@@ -1,5 +1,10 @@
 # Ledger Size and Performance: Botho vs zkVM Architectures
 
+> **Historical research note**: This analysis predates [ADR 0006](../decisions/0006-pq-architecture-ratification.md).
+> References to LION and ML-DSA reflect the architecture under study at the
+> time; LION was deprecated (ADR 0001) and ML-DSA has no live protocol role.
+> See the current [whitepaper](../../whitepaper/) for the ratified design.
+
 ## Executive Summary
 
 This analysis compares Botho's ring-signature-based privacy architecture with zkVM-based approaches like Nexus. The fundamental tradeoff is between **verification locality** (ring signatures require all ring members on-chain) and **computational overhead** (zkVMs require expensive proof generation).

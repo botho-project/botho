@@ -46,7 +46,7 @@ The v0.x specification snapshots covered:
 - **Transaction Format**: Minting and Private transaction structures
 - **Consensus (SCP)**: Stellar Consensus Protocol implementation
 - **Network Protocol**: P2P messaging and synchronization
-- **Cryptographic Primitives**: CLSAG, ML-KEM, ML-DSA, Bulletproofs
+- **Cryptographic Primitives**: CLSAG, ML-KEM, ML-DSA, Bulletproofs (ML-DSA as then-specified; it has no live protocol role today — see [ADR 0006](../decisions/0006-pq-architecture-ratification.md))
 - **Block Structure**: Headers, PoW, and minting transactions
 - **Monetary System**: Units, supply schedule, and fee structure
 - **Network Configuration**: Ports, addresses, and parameters

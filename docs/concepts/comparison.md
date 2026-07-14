@@ -32,7 +32,7 @@ Bitcoin transactions are fully transparent. Anyone can see:
 - Amount transferred
 - Full transaction history
 
-Botho transactions reveal none of this. Every transaction uses stealth addresses (hiding recipients), and ring signature transactions hide senders among 20 decoys.
+Botho transactions hide sender and recipient today: every transaction uses stealth addresses (hiding recipients), and ring signature transactions hide senders among 20 decoys. Amount hiding (confidential transactions) is the ratified design ([ADR 0006](../decisions/0006-pq-architecture-ratification.md)) and is in development (#904) — on the current testnet, amounts are public.
 
 **Finality**
 
@@ -169,14 +169,14 @@ Secret Network focuses on programmable privacy (smart contracts). Botho focuses 
 
 | Component | Botho | Bitcoin | Monero | Zcash |
 |-----------|-------|---------|--------|-------|
-| Signatures | ML-DSA (minting) / CLSAG (transfers) | ECDSA/Schnorr | CLSAG | RedDSA |
+| Signatures | CLSAG (transfers); minting is signature-free (PoW-preimage binding) | ECDSA/Schnorr | CLSAG | RedDSA |
 | Key exchange | ML-KEM-768 | N/A | ECDH | DH |
 | Stealth addresses | Yes (PQ) | No | Yes | Shielded only |
 | Ring signatures | Yes (CLSAG) | No | Yes (CLSAG) | No |
 | Ring size | 20 | N/A | 16 | N/A |
 | Zero-knowledge | Bulletproofs | No | Bulletproofs | Halo2 |
 | Quantum-safe stealth | Yes (ML-KEM) | No | No | No |
-| Quantum-safe amounts | Yes (info-theoretic) | No | No | No |
+| Quantum-safe amounts | Yes by design (info-theoretic; CT in development, #904) | No | No | No |
 
 ### Consensus
 
