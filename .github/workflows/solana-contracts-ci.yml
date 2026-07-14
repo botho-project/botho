@@ -43,9 +43,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Rust toolchain the Anchor / SBF build shells out to.
+      # Rust toolchain the Anchor / SBF build shells out to. PINNED (not
+      # @stable) on purpose: `anchor build` shells out to Solana 1.18.26's
+      # bundled `cargo-build-sbf`, whose older Cargo only understands lockfile
+      # version <= 3. Current stable Rust (>= 1.83) writes lockfile version 4 by
+      # default, so a floating @stable regenerates a v4 `Cargo.lock` (none is
+      # committed under contracts/solana/) that the SBF Cargo cannot parse,
+      # aborting the build. 1.79.0 still emits v3 and cleanly builds avm/anchor
+      # 0.29 — keeping the generated lock at a version the SBF toolchain reads.
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.79.0
 
       # Cache cargo registry/git + the workspace target so warm re-runs skip
       # recompiling the crate graph. Keyed on the program manifests.
