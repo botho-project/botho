@@ -75,7 +75,7 @@ MobileCoin differs from \Botho in three respects that motivate our design:
     the cost of MobileCoin's enclave-enforced in-memory confidentiality.
   \item \textbf{No quantum resistance}: Like Monero, MobileCoin's primitives
     are entirely classical; \Botho adds ML-KEM-768 stealth-address
-    encapsulation and ML-DSA-65 authorization.
+    encapsulation for quantum-durable recipient privacy.
   \item \textbf{No anti-hoarding mechanism}: MobileCoin has a fixed supply and
     no demurrage or progressive-fee structure to discourage wealth
     concentration.
@@ -285,9 +285,9 @@ research area. Current approaches include:
 \begin{center}
 \begin{tabular}{@{}lrrr@{}}
 \toprule
-\textbf{Scheme} & \textbf{Ring 16} & \textbf{Ring 32} & \textbf{Quantum Safe} \\
+\textbf{Scheme} & \textbf{Ring 20} & \textbf{Ring 40} & \textbf{Quantum Safe} \\
 \midrule
-CLSAG & 704 B & 1,376 B & No \\
+CLSAG & 704 B & 1,344 B & No \\
 Lattice Ring (typical) & 35 KB & 70 KB & Yes \\
 Hash-based Ring & 100+ KB & 200+ KB & Yes \\
 \bottomrule
@@ -295,7 +295,7 @@ Hash-based Ring & 100+ KB & 200+ KB & Yes \\
 \end{center}
 
 \textbf{Timeline assessment}: Practical post-quantum ring signatures achieving
-sub-10 KB sizes for ring size 16 remain 5--10 years away based on current
+sub-10 KB sizes for ring size 20 remain 5--10 years away based on current
 research trajectories. \Botho's hybrid architecture is designed to accommodate
 migration when such constructions mature, while providing immediate quantum
 resistance for permanent on-chain data (recipient identities).
@@ -317,11 +317,14 @@ post-quantum security with reasonable performance.
 \begin{itemize}
   \item \textbf{ML-KEM-768} for stealth addresses: Recipient identity is
     permanent on-chain data requiring permanent protection.
-  \item \textbf{ML-DSA-65} for minting: Block producer identity is public
-    and must be unforgeable long-term.
   \item \textbf{CLSAG} for ring signatures: Sender privacy is ephemeral;
     classical cryptography provides efficiency.
 \end{itemize}
+
+No post-quantum signature is used: minting attribution is bound by the
+proof-of-work preimage over the minter's public keys, a hash-based
+commitment that is itself quantum-resistant
+(Section~\ref{sec:minting-attribution}).
 
 This selective application achieves meaningful quantum resistance while
 maintaining practical transaction sizes.

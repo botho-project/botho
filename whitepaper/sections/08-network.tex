@@ -191,7 +191,7 @@ Hash = [u8; 32]
 // CompressedPoint: 32 bytes (Ristretto255)
 Point = [u8; 32]
 
-// Signature: Variable (CLSAG ~700B, ML-DSA ~3.3KB)
+// Signature: Variable (CLSAG ~700B at ring 20)
 Signature = varint(len) ++ [u8; len]
 
 // Block header: Fixed 120 bytes

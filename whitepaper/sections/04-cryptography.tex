@@ -337,17 +337,32 @@ This prevents:
   \item Overflow attacks (amounts wrapping around)
 \end{itemize}
 
-\subsection{Minting Signatures}
+\subsection{Minting Attribution}
+\label{sec:minting-attribution}
 
-Block rewards (minting transactions) use ML-DSA-65 signatures since the
-minter's identity is public and must be verifiable long-term.
+Block rewards (minting transactions) carry no signature. The minter's
+identity is public, and attribution is bound by the proof of work
+itself: the RandomX preimage commits to the minter's public address
+keys,
 
 \begin{equation}
-\sigma_{\text{mint}} = \MLDSA.\Sign(\sk_{\text{minter}}, \text{block\_hash} \| \text{nonce})
+h_{\text{PoW}} = \text{RandomX}\bigl(\text{nonce} \| \text{prev\_hash}
+\| \pk_{\text{view}} \| \pk_{\text{spend}}\bigr)
 \end{equation}
 
-The minter's ML-DSA public key is derived from the same seed as their
-Ristretto keys, enabling unified key management.
+and the minting transaction is valid only if $h_{\text{PoW}}$ meets the
+difficulty target. Reattributing a block's reward would change the
+minting transaction's hash --- and with it the cluster origin identifier
+and the stealth reward output derived from it
+(Section~\ref{sec:cluster-tags}) --- and would require redoing the proof
+of work against a chain whose blocks are already externalized by
+consensus (Section~\ref{sec:consensus}). Because the binding is
+hash-based, it is subject only to Grover-type quantum speedups and
+remains sound against a cryptographically relevant quantum computer:
+minting attribution needs no post-quantum signature, and adding one
+(ML-DSA-65's 3{,}309-byte signature plus 1{,}952-byte public key on
+every block) would cost roughly 33~GB of chain growth per year at the
+reference block time for no additional security in this model.
 
 \subsection{Hybrid Architecture Rationale}
 \label{sec:hybrid-rationale}
@@ -363,7 +378,7 @@ Ristretto keys, enabling unified key management.
 Recipient identity & Permanent & ML-KEM-768 & On-chain forever; must be PQ \\
 Sender identity & Ephemeral & CLSAG & Value degrades; efficiency wins \\
 Amounts & Permanent & Pedersen & Information-theoretic hiding \\
-Minting authority & Permanent & ML-DSA-65 & Verifiable long-term \\
+Minting attribution & Permanent & PoW hash binding & Hash-based; quantum-resistant \\
 \bottomrule
 \end{tabular}
 \end{table}
