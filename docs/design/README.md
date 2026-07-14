@@ -36,6 +36,7 @@ This section contains design proposals, roadmaps, and technical specifications f
 |----------|--------|-------------|
 | [Ring Signature Privacy Analysis](ring-signature-privacy-analysis.md) | Complete | Privacy guarantees analysis |
 | [Ring Signature Tag Propagation](ring-signature-tag-propagation.md) | Complete | Tag behavior through rings |
+| [Post-CT Analytics Fate Map](post-ct-analytics.md) | Accepted | Every amounts-dependent surface mapped to its fate under confidential transactions; required-public-aggregates contract for #902 |
 
 ## Wallet & Addresses
 
