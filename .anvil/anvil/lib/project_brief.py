@@ -379,6 +379,7 @@ REGISTERED_ARTIFACT_TYPES: Tuple[str, ...] = (
     "ip-uspto-provisional",
     "essay",
     "datasheet",
+    "primer",
 )
 
 
@@ -474,6 +475,15 @@ class ArtifactType(str, Enum):
         ``artifact_type: datasheet`` and rubric-rebackport's BRIEF-route
         inference (#484) resolves an unstamped datasheet review to the
         ``("datasheet", 44)`` KNOWN_RUBRICS row.
+    PRIMER
+        Skill-identity value (#686): an ``anvil:primer`` long-form
+        pedagogical explainer thread (a teach-from-intuition companion to
+        a formal spec; markdown source-of-truth with an optional PDF
+        render). Not a memo subtype — selects no memo rubric overlay.
+        Registered per the #386/#408/#432/#440/#460 precedent so a shared
+        project BRIEF can declare which skill owns a primer thread, and so
+        the optional ``spec_ref`` companion-input key parses under the
+        STRICT unknown-key rejection.
     """
 
     INVESTMENT_MEMO = "investment-memo"
@@ -492,6 +502,7 @@ class ArtifactType(str, Enum):
     IP_USPTO_PROVISIONAL = "ip-uspto-provisional"
     ESSAY = "essay"
     DATASHEET = "datasheet"
+    PRIMER = "primer"
 
 
 # The memo-scoped subset of the registry: values that select a memo
@@ -538,6 +549,7 @@ SKILL_IDENTITY_ARTIFACT_TYPES: frozenset = frozenset(
         ArtifactType.IP_USPTO_PROVISIONAL,
         ArtifactType.ESSAY,
         ArtifactType.DATASHEET,
+        ArtifactType.PRIMER,
     }
 )
 
@@ -694,6 +706,7 @@ _RECOGNIZED_DOCUMENT_KEYS = {
     "max_iterations",
     "iteration_cap_rationale",
     "web_search",
+    "spec_ref",
 }
 
 # Default iteration cap. The override floor mirrors the deck skill's
@@ -1580,6 +1593,35 @@ class BriefDocument(BaseModel):
               - slug: q3-method
                 artifact_type: pub
                 web_search: true
+    spec_ref
+        Optional companion-input path/glob for the ``anvil:primer`` skill
+        (issue #686): the formal sibling artifact (a whitepaper, spec,
+        standard, or API doc) that a primer teaches *alongside*. Resolved
+        project-root-first then consumer-root by
+        :func:`resolve_spec_ref` — the same walk the ``voice:`` docs and
+        ``report``'s ``prior_reports[]`` use. ``primer-audit`` reads the
+        resolved document as its spec-consistency oracle (the
+        "Contradicts cited spec" critical flag); ``primer-review`` reads
+        it for the "Duplicates formal spec section" critical flag.
+
+        Type-and-emptiness only at parse time (non-empty string;
+        whitespace-only normalizes to ``None``) — file existence is a
+        resolution-time concern (BRIEF parsing must not depend on cwd).
+        The activation contract lives in ``anvil/skills/primer/SKILL.md``
+        §"Spec-ref contract": **absent** → the spec-consistency tier is
+        silent/off and both critics record a ``major`` finding
+        recommending the operator declare it; **declared-but-missing** →
+        the tier activates but degrades gracefully (a ``major`` finding,
+        never a crash, never a false critical flag), mirroring the
+        ``customer:`` (#429) / ``voice:`` (#461) declared-but-missing
+        posture.
+
+        Example::
+
+            documents:
+              - slug: botho-from-the-basics
+                artifact_type: primer
+                spec_ref: ../whitepaper/whitepaper.5/whitepaper.md
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1605,6 +1647,7 @@ class BriefDocument(BaseModel):
     max_iterations: Optional[int] = Field(default=None)
     iteration_cap_rationale: Optional[str] = Field(default=None)
     web_search: Optional[bool] = Field(default=None)
+    spec_ref: Optional[str] = Field(default=None)
 
 
 class ProjectBrief(BaseModel):
@@ -2598,6 +2641,36 @@ def _validate_render_template(raw: Any, field_path: str) -> Optional[str]:
     return stripped
 
 
+def _validate_spec_ref(raw: Any, field_path: str) -> Optional[str]:
+    """Validate a raw ``spec_ref`` value (issue #686).
+
+    Type-and-emptiness only: the value must be a string; empty /
+    whitespace-only normalizes to ``None`` (back-compat — a YAML author
+    can write ``spec_ref:`` with nothing on the right-hand side and get
+    the tier-inactive path). Surrounding whitespace is stripped.
+
+    No file-existence check at parse time — BRIEF parsing must not depend
+    on cwd, and the spec is a resolution-time input. A declared-but-
+    missing path surfaces at resolution time via
+    :func:`resolve_spec_ref` as a structured ``missing: true`` entry (the
+    primer critics' ``major`` finding), never a parse-time raise.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ValueError(
+            f"BRIEF.{field_path} must be a string path/glob; got "
+            f"{type(raw).__name__}: {raw!r} — suggested fix: write the "
+            f"value as a path relative to the directory containing "
+            f"BRIEF.md (e.g., "
+            f"`spec_ref: ../whitepaper/whitepaper.5/whitepaper.md`)."
+        )
+    stripped = raw.strip()
+    if not stripped:
+        return None
+    return stripped
+
+
 def _validate_render_lua_filters(
     raw: Any, field_path: str
 ) -> Optional[List[str]]:
@@ -2981,6 +3054,11 @@ def _normalize_documents(
             field_path=f"documents[{i}].web_search",
         )
 
+        spec_ref = _validate_spec_ref(
+            entry.get("spec_ref"),
+            field_path=f"documents[{i}].spec_ref",
+        )
+
         # Paired-override validation runs after the per-field validators
         # so the cross-field error names both keys with already-normalized
         # values (e.g., whitespace-only rationale → None → "missing").
@@ -3005,6 +3083,7 @@ def _normalize_documents(
                 max_iterations=max_iterations,
                 iteration_cap_rationale=iteration_cap_rationale,
                 web_search=web_search,
+                spec_ref=spec_ref,
             )
         except ValidationError as exc:
             raise ValueError(
@@ -3788,6 +3867,181 @@ def resolve_rhetoric_rules(
     return _resolve_voice_path(
         brief.voice.rhetoric_rules, "rhetoric_rules", roots
     )
+
+
+# ---------------------------------------------------------------------------
+# Primer spec-ref resolution (issue #686)
+# ---------------------------------------------------------------------------
+
+
+class ResolvedSpecRef(BaseModel):
+    """One resolved ``spec_ref`` entry from :func:`resolve_spec_ref` (issue #686).
+
+    The companion-input analog of :class:`ResolvedVoiceDoc`, for the
+    ``anvil:primer`` skill: the formal sibling artifact (whitepaper /
+    spec / standard / API doc) a primer teaches alongside.
+    ``primer-audit`` reads the resolved document as its spec-consistency
+    oracle; ``primer-review`` reads it for the duplication sweep.
+
+    Missing-file results are carried as a **structured** ``missing:
+    true`` entry — resolution never raises on absence. A ``missing:
+    true`` entry ACTIVATES the spec-consistency tier and is the primer
+    critics' signal to surface a ``major`` finding (broken declaration)
+    while degrading gracefully (no spec cross-check, no false critical
+    flag) — the same defect-to-surface posture as the ``voice:`` /
+    ``customer:`` declared-but-missing contract.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    declared: str = Field(
+        ...,
+        description="The verbatim path / glob string from the BRIEF.",
+    )
+    paths: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Absolute path string(s) of the resolved spec document(s). "
+            "Single element for a plain path; sorted list for a glob. "
+            "Empty when ``missing``."
+        ),
+    )
+    missing: bool = Field(
+        ...,
+        description=(
+            "True when the declared path / glob matched no file at "
+            "either resolution root. The tier still ACTIVATES; the "
+            "primer critics surface a ``major`` finding and skip the "
+            "cross-check."
+        ),
+    )
+    source: Optional[Literal["project", "consumer", "absolute"]] = Field(
+        None,
+        description=(
+            "Which root the entry resolved against: ``project`` "
+            "(project-root hit, first precedence), ``consumer`` "
+            "(consumer-root fallback via the ``.anvil/`` marker walk), "
+            "``absolute`` (declared as an absolute path). ``None`` when "
+            "``missing``."
+        ),
+    )
+
+
+def resolve_spec_ref(
+    project_dir: Path,
+    slug: str,
+    consumer_root: Optional[Path] = None,
+) -> Optional[ResolvedSpecRef]:
+    """Resolve a primer document's ``spec_ref`` to on-disk path(s) (issue #686).
+
+    The companion-input resolution helper for the ``anvil:primer`` skill.
+    Reads ``<project_dir>/BRIEF.md`` leniently, looks up the document by
+    ``slug``, and — when that document declares a ``spec_ref`` — resolves
+    it **project-root first, then consumer-root** (absolute paths bypass
+    the walk), the same walk the ``voice:`` docs and ``report``'s
+    ``prior_reports[]`` paths use. A ``spec_ref`` may be a plain path (the
+    common case) or a glob; glob matches are sorted and the first root
+    with ≥1 match wins.
+
+    **Never raises on absence.** A declared-but-missing ``spec_ref``
+    comes back as a structured ``missing: true`` :class:`ResolvedSpecRef`
+    — the tier still activates and the primer critics surface a ``major``
+    finding, degrading gracefully (no crash, no false critical flag; the
+    ``customer_context.py`` / ``resolve_voice_docs`` posture).
+
+    Returns
+    -------
+    Optional[ResolvedSpecRef]
+        A resolved entry when the document declares a ``spec_ref``;
+        ``None`` when the tier is **INACTIVE**: no BRIEF, malformed /
+        structurally invalid BRIEF (lenient swallow, mirroring
+        :func:`resolve_voice_docs`), no matching document for ``slug``,
+        or that document declares no ``spec_ref``. Callers branch on
+        ``if resolved is None:`` for the byte-identical inactive path.
+    """
+    try:
+        brief = load_project_brief(project_dir, consumer_root=consumer_root)
+    except ValueError:
+        return None
+    if brief is None:
+        return None
+
+    doc = brief.document_for_slug(slug)
+    if doc is None or doc.spec_ref is None:
+        return None
+
+    declared = doc.spec_ref
+    declared_path = Path(declared)
+
+    # Absolute declared paths bypass the root walk. A glob may be
+    # declared for either shape; a bare path with no glob metacharacters
+    # resolves via a direct is_file() check, a glob via _glob.glob.
+    def _is_glob(s: str) -> bool:
+        return any(ch in s for ch in "*?[")
+
+    if declared_path.is_absolute():
+        if _is_glob(declared):
+            try:
+                matches = sorted(
+                    p
+                    for p in _glob.glob(declared, recursive=True)
+                    if Path(p).is_file()
+                )
+            except (OSError, ValueError):
+                matches = []
+            if matches:
+                return ResolvedSpecRef(
+                    declared=declared,
+                    paths=matches,
+                    missing=False,
+                    source="absolute",
+                )
+            return ResolvedSpecRef(declared=declared, missing=True)
+        if declared_path.is_file():
+            return ResolvedSpecRef(
+                declared=declared,
+                paths=[str(declared_path)],
+                missing=False,
+                source="absolute",
+            )
+        return ResolvedSpecRef(declared=declared, missing=True)
+
+    roots: List[Tuple[str, Path]] = [("project", Path(project_dir))]
+    resolved_consumer = (
+        Path(consumer_root)
+        if consumer_root is not None
+        else find_consumer_root(Path(project_dir))
+    )
+    if resolved_consumer is not None:
+        roots.append(("consumer", resolved_consumer))
+
+    for source, root in roots:
+        if _is_glob(declared):
+            try:
+                matches = sorted(
+                    str(p.resolve())
+                    for p in root.glob(declared)
+                    if p.is_file()
+                )
+            except (OSError, ValueError):
+                matches = []
+            if matches:
+                return ResolvedSpecRef(
+                    declared=declared,
+                    paths=matches,
+                    missing=False,
+                    source=source,
+                )
+        else:
+            candidate = root / declared_path
+            if candidate.is_file():
+                return ResolvedSpecRef(
+                    declared=declared,
+                    paths=[str(candidate.resolve())],
+                    missing=False,
+                    source=source,
+                )
+    return ResolvedSpecRef(declared=declared, missing=True)
 
 
 # ---------------------------------------------------------------------------

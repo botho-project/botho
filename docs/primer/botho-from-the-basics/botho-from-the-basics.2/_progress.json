@@ -1,0 +1,122 @@
+{
+  "version": 2,
+  "thread": "botho-from-the-basics",
+  "phases": {
+    "revise": {
+      "state": "done",
+      "started": "2026-07-14T05:33:00Z",
+      "completed": "2026-07-14T05:40:25Z"
+    },
+    "figures": {
+      "state": "done",
+      "started": "2026-07-14T05:52:00Z",
+      "completed": "2026-07-14T06:04:00Z"
+    }
+  },
+  "metadata": {
+    "iteration": 2,
+    "max_iterations": 4,
+    "revised_from": "botho-from-the-basics.1",
+    "consumed_critics": [
+      "botho-from-the-basics.1.review",
+      "botho-from-the-basics.1.audit"
+    ],
+    "operator_override": "v1 combined verdict was AUDITED-eligible (review 41/44 advance:true, audit_clean:true); operator waived the step-2 early exit and directed a polish revision consuming both critics' enumerated fixes.",
+    "score_history": [
+      {
+        "iteration": 1,
+        "total": 41,
+        "threshold": 35,
+        "rubric_id": "anvil-primer-v1"
+      }
+    ],
+    "spec_ref_declared": "../sections/*.tex",
+    "spec_ref_resolved": [
+      "whitepaper/sections/01-introduction.tex",
+      "whitepaper/sections/02-related-work.tex",
+      "whitepaper/sections/03-preliminaries.tex",
+      "whitepaper/sections/04-cryptography.tex",
+      "whitepaper/sections/05-transactions.tex",
+      "whitepaper/sections/06-consensus.tex",
+      "whitepaper/sections/07-monetary.tex",
+      "whitepaper/sections/08-network.tex",
+      "whitepaper/sections/09-security.tex",
+      "whitepaper/sections/10-economics.tex",
+      "whitepaper/sections/11-implementation.tex",
+      "whitepaper/sections/12-governance.tex",
+      "whitepaper/sections/13-conclusion.tex",
+      "whitepaper/sections/appendix-audit.tex",
+      "whitepaper/sections/appendix-formal.tex",
+      "whitepaper/sections/appendix-notation.tex",
+      "whitepaper/sections/appendix-parameters.tex",
+      "whitepaper/sections/appendix-regulatory.tex"
+    ],
+    "self_check": {
+      "dependency_order_delta": [
+        "zero-knowledge: removed from §4; first (glossed) use now §5 range proofs",
+        "BFT: expanded at first flow use in §7 ('Byzantine-fault-tolerant... survive participants that fail or lie')",
+        "nonce / difficulty target: glossed at point of use in §8, pointing back to §2 hash unpredictability",
+        "MEV: expanded inline in §9.5 ('miner-extractable value')",
+        "multi-output penalty: introduced and glossed inline in capstone step 2 ('4, for the two outputs')",
+        "§9.1 bridge uses only the 5-second reference pace taught in §8; capstone arithmetic uses only picocredit units taught in §9.1"
+      ],
+      "spec_ref_grounding_delta": [
+        "Demurrage anchor: WP §10 operating point '2%/yr demurrage at factor 6' quoted as one number with the 'representative operating point' hedge; affine-to-zero at factor 1 per implemented mechanism (cluster-tax/src/demurrage.rs, 200 bps at max factor); no formula imported",
+        "Blocks/year: WP §7 constants + Parameter appendix (6,307,200 blocks ≈ 1 year at 5 s) quoted in prose as 'about 6.3 million'",
+        "Year-20 horizon: WP §7 supply projection (884.9M at year 20 → Phase-1 ≈ 69%)",
+        "Capstone fee: complete worked instance per WP §7 minimum_fee_dynamic_with_outputs shape (1 pico/byte × ~5,000 B × 1 × min(2,10)² = 4) = 20,000 pico = 20 nano-BTH; ~5 KB per Parameter appendix; single worked example, not the spec's equation environment",
+        "Factor at 1M BTH: WP §5 table ≈5.2–6.0× → 'climb past 5× toward the 6× ceiling'",
+        "Gini under attack: WP §10 full-system row +0.078 honest / +0.076 gamed → 'holds essentially unchanged — it does not degrade'"
+      ],
+      "technical_accuracy_delta": [
+        "50 × 6.3M ≈ 315M year one; Σ(315M halving ×5) ≈ 611.0M — matches WP §7 S1 = 611,010,000",
+        "'odds proportional to the computation it contributes, with no structural edge for specialized hardware' — exactly WP linear-reward-scaling + ASIC-resistance claims; per-watt assertion removed (F5)",
+        "Capstone summary: per-input 1-of-20 guarantee stated instead of the 2-of-40 union upper bound (F4)",
+        "Fee-leakage caveat added: size + lineage class + demurrage clock for factor >1 (F9); 'never who and never how much' remains true",
+        "ML-DSA-65 treatment unchanged — primer follows the whitepaper oracle; WP↔code divergence (audit F2) escalated operator-side as a separate GitHub issue"
+      ]
+    },
+    "word_count": 8338,
+    "word_count_delta": 230,
+    "figures": {
+      "rendered": [
+        {
+          "png": "exhibits/fig1-stealth-address-flow.png",
+          "source": "exhibits/fig1-stealth-address-flow.mmd",
+          "teaches": "Stealth-address flow (§3, ML-KEM handshake per §6): sender mints a fresh one-time output key from the recipient's published keys; recipient detects 'mine' by redoing the handshake with the view key; everyone else sees an unlinkable key."
+        },
+        {
+          "png": "exhibits/fig2-hybrid-pq-envelope.png",
+          "source": "exhibits/fig2-hybrid-pq-envelope.mmd",
+          "teaches": "Hybrid post-quantum architecture (§6): permanent secrets (recipient identity → ML-KEM-768; minting attribution → ML-DSA-65) vs ephemeral sender anonymity on classical CLSAG, under the harvest-now-decrypt-later threat."
+        },
+        {
+          "png": "exhibits/fig3-scp-mining-decoupling.png",
+          "source": "exhibits/fig3-scp-mining-decoupling.mmd",
+          "teaches": "Mining decoupled from consensus (§§7–8): RandomX PoW meters issuance and block proposals; operator-curated quorum slices give SCP finality; hashpower buys zero consensus votes; halt-don't-fork."
+        },
+        {
+          "png": "exhibits/fig4-anti-hoarding-money-flow.png",
+          "source": "exhibits/fig4-anti-hoarding-money-flow.mmd",
+          "teaches": "Anti-hoarding money flow (§9): cluster factor prices progressive fees + demurrage; 20% of fees burned, 80% plus an emission slice fund the per-block lottery of 4 UTXOs weighted value × inverse-factor tilt toward small lineages."
+        },
+        {
+          "png": "exhibits/fig5-capstone-payment-timeline.png",
+          "source": "exhibits/fig5-capstone-payment-timeline.mmd",
+          "teaches": "Capstone (§10): Amara pays Ben 40 BTH end to end — build (steps 1–6), propagate (7), mine + finalize (8–9), aftermath (10–11)."
+        }
+      ],
+      "pdf": "botho-from-the-basics.pdf",
+      "pdf_renderer": "pandoc (anvil/lib/render.py::render_pandoc_to_pdf, xelatex engine, STIX Two Text; 17 pages)",
+      "skipped": [],
+      "render_gate": {
+        "placeholder_scan_hits": 0
+      },
+      "notes": [
+        "No .mmd sources existed under refs/; the five diagrams were authored in this phase from the AUDITED v2 body (audit-verified claims only) and their sources archived under exhibits/ beside the PNGs.",
+        "mmdc's pinned puppeteer Chrome was absent from ~/.cache/puppeteer; rendered via system Google Chrome through a puppeteer-config executablePath override — no diagram skipped.",
+        "Body markdown untouched per the primer-figures contract; exhibits are self-describing (filenames + .mmd header comments + this manifest), so the pandoc PDF contains prose only."
+      ]
+    }
+  }
+}

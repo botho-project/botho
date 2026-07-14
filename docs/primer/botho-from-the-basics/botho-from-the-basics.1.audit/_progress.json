@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "thread": "botho-from-the-basics",
+  "phases": {
+    "audit": {
+      "state": "done",
+      "started": "2026-07-14T05:22:00Z",
+      "completed": "2026-07-14T05:31:00Z"
+    }
+  },
+  "metadata": {
+    "audited_version": 1,
+    "audit_clean": true,
+    "critical_flags": [],
+    "factual_flags": 0,
+    "spec_contradiction_flags": 0,
+    "spec_ref_declared": "../sections/*.tex",
+    "spec_ref_resolved_count": 18,
+    "spec_ref_missing": false,
+    "major_findings": ["F2: whitepaper §4 ML-DSA-65 minting-signature claim diverges from live code (MintingTx carries no ML-DSA signature; transaction_pq.rs signs inputs) — operator-facing, primer follows the spec oracle correctly"]
+  }
+}

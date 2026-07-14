@@ -78,6 +78,7 @@ anvil/skills/memo/lib/render_phase.py
 anvil/skills/memo/lib/rubric_overlays.py
 anvil/skills/memo/lib/rubric_overrides_suffix.py
 anvil/skills/memo/lib/theme_resolver.py
+anvil/skills/primer/__init__.py
 anvil/skills/project-book/lib/__init__.py
 anvil/skills/project-book/lib/collect.py
 anvil/skills/project-book/lib/compile.py
