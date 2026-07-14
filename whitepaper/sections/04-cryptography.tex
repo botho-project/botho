@@ -49,18 +49,37 @@ The public address is the tuple $(A, B)$.
 \subsubsection{Subaddress Derivation}
 
 Subaddresses allow generation of unlimited unlinkable addresses from a
-single master key pair. For subaddress index $i$:
+single master key pair. \Botho uses the \emph{multiplicative} subaddress
+construction (as in MobileCoin), which differs from Monero's additive
+scheme: the view subaddress key is the product $a \cdot D_i$ rather than
+a shifted point $A + \delta_i G$. For subaddress index $i$, a
+domain-separated scalar is derived with Blake2b-512:
+
+\begin{equation}
+\delta_i = \Hs(\text{``bth\_subaddress''} \| a \| i),
+\quad \Hs(\cdot) = \text{Blake2b-512}(\cdot) \bmod q
+\end{equation}
+
+The subaddress private key pair $(c_i, d_i)$ --- view and spend
+respectively --- is then:
 
 \begin{align}
-\delta_i &= \Hs(\text{``SubAddr''} \| a \| i) \\
-c_i &= a + \delta_i \mod q \\
-d_i &= b + \delta_i \mod q
+d_i &= \delta_i + b \mod q \\
+c_i &= a \cdot d_i = a\,(\delta_i + b) \mod q
 \end{align}
 
-The subaddress public key pair is:
+with corresponding public keys:
+
 \begin{equation}
-(C_i, D_i) = (c_i G, d_i G) = (A + \delta_i G, B + \delta_i G)
+D_i = d_i G = \delta_i G + B, \qquad C_i = c_i G = a \cdot D_i
 \end{equation}
+
+Here $D_i$ is the subaddress spend public key and $C_i$ is the
+subaddress view public key; the published subaddress is the pair
+$(C_i, D_i)$. Note that the view key is obtained multiplicatively as
+$a \cdot D_i$, not by the additive offset $A + \delta_i G$: this is the
+defining difference from the Monero construction and is what the
+reference implementation computes.
 
 \begin{theorem}[Subaddress Unlinkability]
 Without knowledge of the view key $a$, subaddresses $(C_i, D_i)$ and
@@ -104,13 +123,21 @@ hybrid split buys quantum-durable recipient privacy for the cost of a single
 
 \subsubsection{Protocol Description}
 
-Let the recipient have address $(A, B)$ where $A$ is interpreted as an
-ML-KEM public key (derived via a domain-separated hash from the Ristretto
-point).
+The recipient's ML-KEM keypair is \emph{not} derived from the Ristretto
+address point. Instead it is generated independently from the same BIP39
+seed as the rest of the account-key hierarchy: the 512-bit seed is fed
+through HKDF-SHA256 with domain separator \texttt{"botho-pq-v1"} and info
+label \texttt{"kem-seed"} to produce a 32-byte ML-KEM seed, from which the
+ML-KEM-768 keypair $(\pk_{\text{kem}}, \sk_{\text{kem}})$ is deterministically
+generated (a sibling \texttt{"sig-seed"} label likewise seeds the ML-DSA-65
+signing keypair). Consequently the recipient's address publishes
+$\pk_{\text{kem}}$ directly alongside the Ristretto spend key $B$; there is
+no hash-of-point step, which would in any case not yield a valid ML-KEM key.
 
 \textbf{Sender} (creating output for recipient):
 \begin{enumerate}
-  \item Derive ML-KEM public key: $\pk_{\text{kem}} = \text{DeriveKEM}(A)$
+  \item Obtain the recipient's ML-KEM public key $\pk_{\text{kem}}$ from
+    their address
   \item Encapsulate: $(c, K) \leftarrow \MLKEM.\Encap(\pk_{\text{kem}})$
   \item Compute scalar: $s = \Hs(K \| \text{output\_index})$
   \item Compute one-time public key: $P = sG + B$
@@ -119,7 +146,8 @@ point).
 
 \textbf{Recipient} (scanning for received outputs):
 \begin{enumerate}
-  \item Derive ML-KEM secret key: $\sk_{\text{kem}} = \text{DeriveKEM}(a)$
+  \item Regenerate the ML-KEM secret key $\sk_{\text{kem}}$ from the BIP39
+    seed (HKDF label \texttt{"kem-seed"}, as above)
   \item For each output with ciphertext $c$:
     \begin{enumerate}
       \item Decapsulate: $K \leftarrow \MLKEM.\Decap(\sk_{\text{kem}}, c)$
