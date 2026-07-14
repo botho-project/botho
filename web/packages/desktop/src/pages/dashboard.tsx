@@ -17,7 +17,10 @@ function formatNumber(n: number): string {
   return new Intl.NumberFormat().format(n)
 }
 
-function formatHashRate(hashRate: string | number): string {
+function formatHashRate(hashRate: string | number | null): string {
+  // null means the connected data source does not expose hash rate (e.g. the
+  // seed-node read RPC): render "n/a" rather than a fabricated "0 H/s" (#913).
+  if (hashRate === null) return 'n/a'
   const rate = typeof hashRate === 'string' ? parseFloat(hashRate) : hashRate
   if (isNaN(rate)) return hashRate.toString()
   if (rate >= 1e12) return `${(rate / 1e12).toFixed(2)} TH/s`

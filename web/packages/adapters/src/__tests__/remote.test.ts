@@ -292,6 +292,108 @@ describe('RemoteNodeAdapter.getBlock enriched fields (#700)', () => {
   })
 })
 
+describe('RemoteNodeAdapter.getNetworkStats', () => {
+  function rpc(result: Record<string, unknown>) {
+    return { jsonrpc: '2.0', result, id: 1 }
+  }
+
+  it('reports hashRate as null (not a fabricated "0") — the read RPC has no hash rate (#913)', async () => {
+    const adapter = await connectedAdapter({
+      getChainInfo: rpc({ difficulty: 12345 }),
+    })
+    const stats = await adapter.getNetworkStats()
+    expect(stats.hashRate).toBeNull()
+    // The public fields the RPC does expose are still populated.
+    expect(typeof stats.blockHeight).toBe('number')
+    expect(stats.difficulty).toBe(12345n)
+  })
+})
+
+describe('RemoteNodeAdapter.getTransaction', () => {
+  function rpc(result: Record<string, unknown>) {
+    return { jsonrpc: '2.0', result, id: 1 }
+  }
+
+  const txHash = 'ab'.repeat(32)
+
+  it('does not fabricate amount or type — the node exposes neither (#913, D1)', async () => {
+    const adapter = await connectedAdapter({
+      getTransaction: rpc({
+        txHash,
+        status: 'confirmed',
+        blockHeight: null,
+        confirmations: 3,
+        inMempool: false,
+        fee: 250,
+      }),
+    })
+    const tx = await adapter.getTransaction(txHash)
+    expect(tx).not.toBeNull()
+    // Neither amount nor direction is asserted.
+    expect(tx!.amount).toBeUndefined()
+    expect(tx!.type).toBeUndefined()
+    // The public fee is preserved as a bigint.
+    expect(tx!.fee).toBe(250n)
+  })
+
+  it('leaves timestamp undefined (not Date.now()) when the tx is not in a block (#913)', async () => {
+    const adapter = await connectedAdapter({
+      getTransaction: rpc({
+        txHash,
+        status: 'pending',
+        blockHeight: null,
+        confirmations: 0,
+        inMempool: true,
+        fee: 100,
+      }),
+    })
+    const tx = await adapter.getTransaction(txHash)
+    expect(tx!.timestamp).toBeUndefined()
+  })
+
+  it('resolves the real block timestamp when the tx is in a block (#913)', async () => {
+    const adapter = await connectedAdapter({
+      getTransaction: rpc({
+        txHash,
+        status: 'confirmed',
+        blockHeight: 42,
+        confirmations: 5,
+        inMempool: false,
+        fee: 250,
+      }),
+      getBlockByHeight: rpc({
+        height: 42,
+        hash: 'f'.repeat(64),
+        prevHash: 'e'.repeat(64),
+        timestamp: 1751840000,
+        difficulty: 1,
+        txCount: 1,
+        mintingReward: 0,
+      }),
+    })
+    const tx = await adapter.getTransaction(txHash)
+    expect(tx!.timestamp).toBe(1751840000)
+    expect(tx!.blockHeight).toBe(42)
+  })
+
+  it('leaves timestamp undefined when the block lookup fails (no fabrication)', async () => {
+    const adapter = await connectedAdapter({
+      getTransaction: rpc({
+        txHash,
+        status: 'confirmed',
+        blockHeight: 42,
+        confirmations: 5,
+        inMempool: false,
+        fee: 250,
+      }),
+      // getBlockByHeight is intentionally unrouted -> RPC error -> getBlock returns null.
+    })
+    const tx = await adapter.getTransaction(txHash)
+    expect(tx!.timestamp).toBeUndefined()
+    expect(tx!.blockHeight).toBe(42)
+  })
+})
+
 describe('u128 / u64 wire-format round-trips', () => {
   it('round-trips BigInt("99999999999999999999") (> u64 max) exactly', () => {
     const big = '99999999999999999999'
