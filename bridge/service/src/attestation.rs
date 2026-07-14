@@ -327,7 +327,7 @@ fn check_threshold(threshold: u32, n: usize, what: &str) -> Result<(), String> {
 ///
 /// `identities` must already be normalized (parsed/trimmed) so that surface
 /// variants like `"0xAbc"` and `"0xabc"` collide on the same canonical bytes.
-fn reject_duplicate_signers<T: Ord + Clone>(identities: &[T], what: &str) -> Result<(), String> {
+pub fn reject_duplicate_signers<T: Ord + Clone>(identities: &[T], what: &str) -> Result<(), String> {
     let mut seen = identities.to_vec();
     seen.sort();
     if seen.windows(2).any(|w| w[0] == w[1]) {
