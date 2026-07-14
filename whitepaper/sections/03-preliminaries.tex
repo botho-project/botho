@@ -146,25 +146,15 @@ attacks, with:
   \item Shared secret size: 32 bytes
 \end{itemize}
 
-\subsubsection{ML-DSA-65}
-
-ML-DSA (Module-Lattice-based Digital Signature Algorithm)~\cite{fips204,dilithium},
-formerly known as Dilithium, is a NIST-standardized post-quantum signature
-scheme.
-
-\begin{itemize}
-  \item $(\pk, \sk) \leftarrow \MLDSA.\KeyGen()$: Generate keypair
-  \item $\sigma \leftarrow \MLDSA.\Sign(\sk, m)$: Sign message
-  \item $\{0,1\} \leftarrow \MLDSA.\Verify(\pk, m, \sigma)$: Verify signature
-\end{itemize}
-
-ML-DSA-65 (security level 3) provides approximately 128-bit security
-against quantum attacks, with:
-\begin{itemize}
-  \item Public key size: 1,952 bytes
-  \item Secret key size: 4,032 bytes
-  \item Signature size: 3,309 bytes
-\end{itemize}
+The protocol uses no post-quantum signature scheme: spend authorization
+is classical (Section~\ref{sec:clsag}) and minting attribution is bound
+by the proof-of-work preimage itself
+(Section~\ref{sec:minting-attribution}), which is hash-based and
+therefore quantum-resistant without a signature. Should a post-quantum
+authorization path be introduced in a future protocol version, ML-DSA
+(Module-Lattice-based Digital Signature
+Algorithm)~\cite{fips204,dilithium} at security level 3 (ML-DSA-65) is
+the designated signature family.
 
 \subsection{Security Definitions}
 

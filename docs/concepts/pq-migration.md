@@ -9,9 +9,15 @@ Botho now uses a simpler hybrid approach that doesn't require migration:
 | Component | Algorithm | Security Level |
 |-----------|-----------|----------------|
 | Stealth addresses | ML-KEM-768 | Post-quantum (permanent recipient privacy) |
-| Minting signatures | ML-DSA-65 | Post-quantum |
+| Minting attribution | PoW preimage binding (no signature) | Post-quantum (hash-based; Grover-only) |
 | Ring signatures | CLSAG (ring=20) | Classical (ephemeral sender privacy) |
 | Amount hiding | Pedersen commitments | Information-theoretic |
+
+> Minting transactions carry no signature: the RandomX preimage commits to
+> the minter's public keys, so reattributing a reward means redoing the
+> proof of work against an externalized chain. ML-DSA-65 remains the
+> designated signature family if a post-quantum authorization path is ever
+> introduced (see whitepaper §4, "Minting Attribution").
 
 ### Why No Migration Is Needed
 

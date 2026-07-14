@@ -322,7 +322,9 @@ where predicates $Q_i$ are:
   \item $Q_5$: \textbf{Minting Validity}
     \[
     \sum B.\text{mint}.\text{outputs} \leq R(B.\text{height}) \land
-    \text{ML-DSA.Verify}(B.\text{mint}.\text{sig})
+    \Hash\bigl(B.\text{mint}.\text{nonce} \| B.\text{prev} \|
+    B.\text{mint}.\pk_{\text{view}} \| B.\text{mint}.\pk_{\text{spend}}\bigr)
+    < B.\text{target}
     \]
 
   \item $Q_6$: \textbf{Transaction Validity}

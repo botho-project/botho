@@ -254,14 +254,15 @@ Block {
 }
 
 BlockHeader {
-    version: u8,
+    version: u32,
     prev_block_hash: Hash,
-    merkle_root: Hash,
+    tx_root: Hash,
     timestamp: u64,
     height: u64,
     difficulty: u64,
-    nonce: u64,
-    minter_public_key: MLDSAPublicKey,
+    nonce: u64,                  // PoW solution
+    minter_view_key: [u8; 32],   // Bound by the PoW preimage
+    minter_spend_key: [u8; 32],  // Bound by the PoW preimage
 }
 
 SCPProof {

@@ -17,7 +17,7 @@
 \toprule
 \textbf{Type} & \textbf{Inputs} & \textbf{Outputs} & \textbf{Signature} & \textbf{Size} & \textbf{Use Case} \\
 \midrule
-Minting & 0 & 1--16 & ML-DSA-65 & $\sim$2 KB & Block rewards \\
+Minting & 0 & 1 & PoW binding (none) & $\sim$0.2 KB & Block rewards \\
 Private & 1--16 & 1--16 & CLSAG & $\sim$4 KB & All transfers \\
 \bottomrule
 \end{tabular}
@@ -90,21 +90,29 @@ TxOutput {
 Minting transactions create new coins as block rewards:
 
 \begin{lstlisting}[language=,caption={Minting transaction structure}]
-MintingTransaction {
+MintingTx {
     block_height: u64,
-    nonce: u64,
-    minter_public_key: MLDSAPublicKey,  // 1,952 bytes
-    outputs: Vec<TxOutput>,
-    signature: MLDSASignature,           // 3,309 bytes
+    reward: u64,                 // Public amount (picocredits)
+    minter_view_key: [u8; 32],   // Bound by the PoW preimage
+    minter_spend_key: [u8; 32],  // Bound by the PoW preimage
+    target_key: [u8; 32],        // Stealth one-time reward key
+    public_key: [u8; 32],        // Ephemeral key for minter scanning
+    prev_block_hash: [u8; 32],
+    difficulty: u64,
+    nonce: u64,                  // PoW solution
+    timestamp: u64,
 }
 \end{lstlisting}
 
 Unlike private transactions:
 \begin{itemize}
   \item No inputs (new coins created)
-  \item Public amounts (for supply auditability)
-  \item Known sender (minter identity is public)
-  \item Recipients still hidden via stealth addresses
+  \item Public reward amount (for supply auditability)
+  \item Known sender (the minter's address keys are in the clear and
+    bound by the PoW preimage; no signature is carried ---
+    Section~\ref{sec:minting-attribution})
+  \item The reward recipient is still hidden via a stealth output ---
+    even a minter who wins repeatedly produces unlinkable reward outputs
 \end{itemize}
 
 \subsection{Cluster Tags and Progressive Fees}
@@ -130,11 +138,13 @@ value attributable to that cluster.
 
 \subsubsection{Cluster Creation at Minting}
 
-Each minting transaction creates a new cluster. The minter's public key
-hash serves as the cluster identifier:
+Each minting transaction creates a new cluster. The minting
+transaction's hash --- which commits to the minter's public keys, the
+block height, and the PoW solution --- serves as the cluster
+identifier (truncated to 64 bits):
 
 \begin{equation}
-c_{\text{new}} = \Hash(\text{minter\_pubkey} \| \text{block\_height})
+c_{\text{new}} = \text{Trunc}_{64}\bigl(\Hash(\text{minting tx})\bigr)
 \end{equation}
 
 Minting outputs carry a tag vector with 100\% attribution to the new cluster:
