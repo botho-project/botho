@@ -172,10 +172,10 @@ Miners compete to propose blocks via proof-of-work:
 
 \begin{enumerate}
   \item Miner constructs candidate block with transactions from mempool
-  \item Miner searches for nonce satisfying:
-    \begin{equation}
-    \Hash(\text{block\_header} \| \text{nonce}) < \text{target}
-    \end{equation}
+  \item Miner searches for a nonce whose proof-of-work hash
+    $h_{\text{PoW}}$ (the RandomX preimage over the minter's address keys
+    defined in Section~\ref{sec:minting-attribution}) meets the
+    difficulty target, i.e. $h_{\text{PoW}} < \text{target}$
   \item First valid block is broadcast to the network
   \item Multiple proposals may arrive; SCP selects among them
 \end{enumerate}
