@@ -130,6 +130,20 @@ node-reachable dependency advisories are already tracked (#659 hickory,
   privilege remote surface; if not, the design doc itself is offered for
   review comment.
 
+### 4.8 Bridge proof-of-reserve under confidential amounts (forward flag)
+
+The BTH↔wBTH bridge audit is scoped separately (#830) and remains the first
+call on the external-audit budget. One item is flagged here because it
+couples to the core-protocol roadmap: once confidential amounts land
+(ADR 0006 Decision 1, epics #902/#904), third parties can no longer read the
+bridge reserve balance from public ledger amounts, and proof-of-reserve
+becomes a **federation view-key / attested-opening disclosure protocol**
+(see `docs/design/post-ct-analytics.md` §3). The audit must cover: what is
+disclosed and by whom, key rotation/revocation, and whether a spoofed or
+stale disclosure can fake solvency. This is in scope regardless of whether
+CT lands before or after the engagement, because the disclosure design
+constrains how the reserve address is structured today.
+
 ## 5. Prior-work package (provided to auditors)
 
 - `docs/security/threat-model.md` — refreshed through cycle 7 + the
