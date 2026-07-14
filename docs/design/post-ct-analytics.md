@@ -56,7 +56,7 @@ computing functions in `botho/src/rpc/mod.rs`, `botho/src/rpc/metrics.rs`,
 `botho/src/ledger/store.rs`, `botho/src/mempool.rs`, and
 `bridge/service/src/api.rs`. The node's observability layer is clean post
 #541–#544: unwired optional handles default to `0`/`false`/`null` (never a
-plausible fake constant). The two fabrication bugs found live in the **web
+plausible fake constant). The fabrication bugs found all live in the **web
 adapter**, not the node — see §5.
 
 ### 1.1 `/network` dashboard (`web/packages/features/src/network/`, page `web/packages/web-wallet/src/pages/network.tsx`)
@@ -87,7 +87,7 @@ adapter**, not the node — see §5.
 | Prometheus `botho_total_minted`, `botho_total_fees_burned` (`rpc/metrics.rs`) | Same ledger counters | **Yes** | **(a)** — same derivation |
 | `cluster_getAllWealth`, `cluster_getWealth` | `ledger.get_all_cluster_wealth()` / `cluster_wealth_db` | **Yes** | **(a) — conditional on #902** (A4) |
 | `cluster_getWealthByTargetKeys` (wallet's own cluster wealth + own UTXO total) | `ledger.compute_cluster_wealth_for_utxos(target_keys)` over public amounts | **Yes** | **(b)** — becomes wallet-local computation over the wallet's own (view-key-decrypted) outputs; the node can no longer compute it for arbitrary target keys |
-| `fee_estimate` / `tx_estimateFee`, `fee_getRate` | Per-byte schedule + dynamic base + cluster factor (`transaction/src/fees.rs`, `mempool.rs`) — size-based, amount used only for structure estimation | Indirectly | **(a)** — fees are public by design; per-byte pricing was chosen for exactly this (ADR 0006 / #904 note). Sender-side factor input moves to the wallet (see §1.5) |
+| `estimateFee` / `tx_estimateFee`, `fee_getRate` | Per-byte schedule + dynamic base + cluster factor (`transaction/src/fees.rs`, `mempool.rs`) — size-based, amount used only for structure estimation | Indirectly | **(a)** — fees are public by design; per-byte pricing was chosen for exactly this (ADR 0006 / #904 note). Sender-side factor input moves to the wallet (see §1.5) |
 | `getTransaction` → `fee` | `tx.fee` | Yes | **(a)** (A1) |
 | `node_getStatus`, `network_getInfo`, `network_getPeers`, `minting_getStatus`, `/health`, `/metrics` (non-monetary fields) | Live atomics / snapshots; zero/null defaults only when handles unwired (anti-#541 gates) | No | **(a)** — unaffected |
 
@@ -194,9 +194,11 @@ metrics daemon — and anyone else — can recompute `lockedReserve`. Notes:
   delete the row (do it now, ahead of CT; tracked as a follow-up fix, §5).
   Under CT this is not a loss — it is the design.
 - **D2 — No BTH-denominated velocity / transfer-volume analytics, ever.**
-  Never shipped (the dashboard has no such stat; `getNetworkStats` is
-  consumerless), and under CT the sum of transferred value is not a public
-  quantity by construction. Decision: transaction-**count** velocity
+  Never shipped: the dashboard has no such stat, and while
+  `getNetworkStats` *does* have a consumer (the desktop dashboard, via
+  `useNetworkStats`), none of the consumed fields (blockHeight, peers,
+  mempool, hashRate) are BTH-denominated value analytics. Under CT the sum
+  of transferred value is not a public quantity by construction. Decision: transaction-**count** velocity
   (mempool throughput, `totalTransactions`, tx/block) is the supported
   metric family; value-velocity requests are rejected as
   incompatible-by-design, not "not yet implemented".
@@ -227,7 +229,7 @@ anti-fabrication design (miner health, network stats fallback, SCP slot
 constant.
 
 Fabrications found in the **web adapter** (`web/packages/adapters/src/remote.ts`),
-to fix as a follow-up (filed from this PR):
+to fix as a follow-up (filed from this PR as #913):
 
 1. `remote.ts:489` — `getTransaction` returns `amount: BigInt(0)`, rendered
    as a real "Amount: 0 BTH" (`transaction-detail.tsx:64`). Fix = D1.
@@ -235,8 +237,14 @@ to fix as a follow-up (filed from this PR):
    "now"; render "—" or resolve the block timestamp instead.
 3. `remote.ts:488` — `type: 'receive'` hardcoded for every transaction.
 4. `remote.ts:269` — `getNetworkStats` still carries the `hashRate: '0'`
-   stub. Currently dormant (no consumer renders it) but a standing trap;
-   derive-or-"n/a" per the dashboard design doc if ever surfaced.
+   stub, and it **is rendered live**: the desktop dashboard's "Hash Rate"
+   card (`web/packages/desktop/src/pages/dashboard.tsx:75`) displays
+   `stats.hashRate` via `formatHashRate`, fed by
+   `useNetworkStats.ts:34` → `adapter.getNetworkStats()` over a
+   `RemoteNodeAdapter` connection (`desktop/src/contexts/connection.tsx:59`).
+   So the desktop shows "0 H/s" as if it were a real reading — a live
+   #541-class fabricated display, not a standing trap. Fix =
+   derive-or-"n/a" per the dashboard design doc.
 
 ## 6. Summary
 
