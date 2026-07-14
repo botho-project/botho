@@ -57,7 +57,7 @@
 \draw[arrow] (spendpub) -- (subaddr);
 
 % PQ derivation
-\draw[arrow] (seed) -- ++(3.5,0) |- (pqkem) node[pos=0.25, above, font=\scriptsize] {DeriveKEM};
+\draw[arrow] (seed) -- ++(3.5,0) |- (pqkem) node[pos=0.25, above, font=\scriptsize] {HKDF kem-seed};
 \draw[arrow] (pqkem) -- (pqdsa) node[label] {DeriveDSA};
 
 % Grouping box for classical keys
