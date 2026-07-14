@@ -93,10 +93,13 @@ jobs:
       - name: Verify Solana CLI
         run: solana --version
 
+      # avm itself must ALSO be pinned (--tag): an untagged install builds avm
+      # from anchor master, whose workspace is edition-2024 now — unparseable
+      # by the pinned cargo 1.79.
       - name: Install Anchor CLI (pinned via avm)
         run: |
           if ! command -v avm >/dev/null 2>&1; then
-            cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
+            cargo install --git https://github.com/coral-xyz/anchor --tag "v${ANCHOR_VERSION}" avm --locked --force
           fi
           avm install "${ANCHOR_VERSION}"
           avm use "${ANCHOR_VERSION}"
