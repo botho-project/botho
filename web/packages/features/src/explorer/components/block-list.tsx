@@ -91,11 +91,17 @@ export function BlockList({ title = 'Recent Blocks', className }: BlockListProps
                 </div>
               </div>
 
-              {/* Reward */}
+              {/* Reward — omitted for live WebSocket blocks, whose event
+                  payload carries no reward. Render "—" rather than a
+                  fabricated "+0" (#924). */}
               <div className="text-right">
-                <p className="font-mono text-sm text-[--color-success]">
-                  +{formatAmount(block.reward)}
-                </p>
+                {block.reward !== undefined ? (
+                  <p className="font-mono text-sm text-[--color-success]">
+                    +{formatAmount(block.reward)}
+                  </p>
+                ) : (
+                  <p className="font-mono text-sm text-[--color-dim]">—</p>
+                )}
                 <p className="mt-1 text-xs text-[--color-dim]">reward</p>
               </div>
 

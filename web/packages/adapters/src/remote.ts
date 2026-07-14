@@ -104,7 +104,8 @@ function mapRpcBlock(result: RpcBlockResult): Block {
     timestamp: result.timestamp,
     previousHash: result.prevHash,
     transactionCount: result.txCount,
-    size: 0, // Not provided
+    // The read RPC does not expose serialized block size; omit it rather than
+    // fabricate `0`, which renders as a real "0 B" reading (#924, #541-class).
     reward: BigInt(result.mintingReward || 0),
     difficulty: BigInt(result.difficulty || 0),
   }
@@ -837,8 +838,10 @@ export class RemoteNodeAdapter implements NodeAdapter {
       timestamp: data.timestamp as number,
       previousHash: '', // Not included in WS event
       transactionCount: data.tx_count as number,
-      size: 0, // Not included in WS event
-      reward: BigInt(0), // Not included in WS event
+      // Size and reward are not carried by the WS block event (the node's
+      // NewBlock payload is height/hash/timestamp/tx_count/difficulty only).
+      // Omit them rather than fabricate `0`/`+0`, which would render as real
+      // readings in the explorer block list (#924, #541-class fabrication).
       difficulty: BigInt((data.difficulty as number) || 0),
     }
   }

@@ -169,9 +169,21 @@ export interface Block {
   timestamp: Timestamp
   previousHash: BlockHash
   transactionCount: number
-  size: number
+  /**
+   * Serialized block size in bytes. Present for blocks fetched via the enriched
+   * RPC. Omitted for blocks delivered over the live WebSocket event, whose
+   * payload does not carry a size — consumers render "—" rather than a
+   * fabricated `0` (#924, #541-class fabrication).
+   */
+  size?: number
   minter?: Address
-  reward: Amount
+  /**
+   * Block reward in picocredits. Present for blocks fetched via the enriched
+   * RPC. Omitted for blocks delivered over the live WebSocket event, whose
+   * payload does not carry a reward — consumers omit the reward rather than
+   * flash a fabricated "+0" (#924, #541-class fabrication).
+   */
+  reward?: Amount
   difficulty: bigint
   /**
    * Enriched explorer fields (#700). Optional and additive — older nodes
