@@ -76,6 +76,32 @@ exchange~\cite{cryptonote,courtois-stealth}, building on the dual-key
 stealth-address construction (DKSAP). \Botho replaces the ECDH step with
 ML-KEM-768 to achieve post-quantum recipient privacy.
 
+\paragraph{Intuition.}
+Recipient privacy in a classical CryptoNote coin rests entirely on the
+hardness of the ECDH problem: the link between an output and its owner is an
+elliptic-curve Diffie--Hellman shared secret. That secret is not disclosed on
+chain, but everything needed to \emph{recompute} it under a quantum attacker
+is---the sender's ephemeral public key sits in the transaction permanently.
+An adversary who records the chain today and later runs Shor's algorithm
+recovers the shared secret and deanonymizes every historical recipient. This
+is the \emph{harvest-now, decrypt-later} exposure, and because recipient
+identity is permanent on-chain data (Table~\ref{tab:hybrid}) it cannot be
+mitigated by waiting or rotating keys after the fact.
+
+Replacing the ECDH step with an ML-KEM-768 encapsulation closes this exposure
+at its source. The sender encapsulates a fresh shared secret against the
+recipient's KEM public key; recovering it requires breaking a lattice problem
+believed hard even for quantum adversaries, so the recipient-unlinkability
+reduction of the Security Analysis below survives quantumly. Crucially,
+the KEM hardens only the \emph{key-exchange} step---the part whose secrecy
+must last forever---while sender anonymity continues to rely on the compact
+classical ring signature of Section~\ref{sec:clsag}. Making the entire spend
+authorization post-quantum would instead demand lattice ring signatures, whose
+$\sim$50$\times$ size overhead we quantify in
+Section~\ref{sec:hybrid-rationale} under ``Why not full post-quantum?''; the
+hybrid split buys quantum-durable recipient privacy for the cost of a single
+1{,}088-byte ciphertext per output rather than that blowup.
+
 \subsubsection{Protocol Description}
 
 Let the recipient have address $(A, B)$ where $A$ is interpreted as an
@@ -324,6 +350,7 @@ The minter's ML-DSA public key is derived from the same seed as their
 Ristretto keys, enabling unified key management.
 
 \subsection{Hybrid Architecture Rationale}
+\label{sec:hybrid-rationale}
 
 \begin{table}[h]
 \centering

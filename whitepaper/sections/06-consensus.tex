@@ -52,6 +52,32 @@ Byzantine fault tolerance & --- & \checkmark \\
 \end{tabular}
 \end{center}
 
+\paragraph{Intuition: two jobs, two mechanisms.}
+The table above is not a menu from which \Botho picks the better column; it is
+a division of labor. Consensus has to answer two separate questions, and no
+single mechanism answers both well. The first is \emph{who gets to issue new
+coins and propose the next block}---an open-entry question, where the right
+answer is a permissionless, Sybil-resistant lottery, which is exactly what
+proof-of-work provides. The second is \emph{which proposed block is final}---an
+agreement question, where the right answer is a Byzantine-agreement protocol
+that externalizes one block irreversibly, which is exactly what SCP provides.
+\Botho assigns each question to the mechanism suited to it and keeps the two
+deliberately decoupled: a miner's hashpower buys the right to \emph{propose}
+and to earn issuance, but carries no weight in the SCP \emph{vote} that
+finalizes the block. Mining weight and consensus voting weight are orthogonal.
+
+This decoupling is what distinguishes \Botho from both of its neighbors.
+MobileCoin adopts the same SCP finality but has no mining at all---its supply
+is premined and fixed, so it never needs a permissionless issuance
+lottery~(Section~\ref{sec:related}). Proof-of-work coins such as Bitcoin have
+the issuance lottery but no SCP layer, so they inherit only probabilistic
+finality and remain reorg-vulnerable. By running both, \Botho obtains
+permissionless, fairly distributed issuance \emph{and} fast deterministic
+finality simultaneously---the combination quantified in the comparison of
+Table~\ref{tab:consensus-comparison}. The cost is operating two subsystems
+rather than one; the benefit is that neither has to be compromised to
+approximate the other's guarantee.
+
 \input{figures/consensus-flow}
 
 \subsection{Stellar Consensus Protocol}
