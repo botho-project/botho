@@ -568,6 +568,16 @@ mod cli {
             seed: u64,
         },
 
+        /// Settlement-horizon calibration sweep (empirical gate for #833):
+        /// sweeps SETTLEMENT_HORIZON_BLOCKS across 1mo/6mo/1yr/2yr/5yr of
+        /// blocks (5s reference) × wealth-factor classes derived from the real
+        /// ClusterFactorCurve. Reports wrap cost as % of settled value, the
+        /// churn-invariance margin (settling must never be cheaper than holding
+        /// over the horizon), the dGini erosion if the top decile wraps out at
+        /// each price, and the lottery-pool revenue. Recommends a horizon
+        /// against both failure modes. Does NOT wire anything into consensus.
+        SettlementHorizonSweep,
+
         /// M2 (#605 / #626 §7) — RECALIBRATED-CUMULATIVE run: exercises the
         /// REAL production log-domain cluster-factor curve (not the
         /// #314 hardcoded factors). Population declared in BTH, factor
@@ -851,6 +861,7 @@ mod cli {
                 honest_jitter_bps,
                 seed,
             ),
+            Command::SettlementHorizonSweep => run_settlement_horizon_sweep_cli(),
             Command::M2Cumulative {
                 horizon_years,
                 gamed,
@@ -4339,6 +4350,22 @@ mod cli {
 
         let report = run_decoy_sweep(&params);
         println!("{}", to_table(&report));
+    }
+
+    /// Settlement-horizon calibration sweep (empirical gate for issue #833).
+    ///
+    /// Sweeps SETTLEMENT_HORIZON_BLOCKS across plausible magnitudes × wealth-
+    /// factor classes and prints the wrap-cost, churn-invariance and dGini-
+    /// erosion tables that back `docs/research/settlement-horizon-calibration.md`.
+    /// Does NOT wire anything into consensus — the horizon constant is ratified
+    /// by the maintainer at review, then landed by #831 / #925.
+    fn run_settlement_horizon_sweep_cli() {
+        use bth_cluster_tax::simulation::settlement_horizon_sweep::{
+            run_settlement_horizon_sweep, to_markdown,
+        };
+        let report = run_settlement_horizon_sweep();
+        println!("# Settlement-Horizon Calibration Sweep (issue #833)\n");
+        println!("{}", to_markdown(&report));
     }
 }
 
