@@ -58,7 +58,7 @@
 
 % PQ derivation
 \draw[arrow] (seed) -- ++(3.5,0) |- (pqkem) node[pos=0.25, above, font=\scriptsize] {HKDF kem-seed};
-\draw[arrow] (pqkem) -- (pqdsa) node[label] {DeriveDSA};
+\draw[arrow] (seed) -- ++(3.5,0) |- (pqdsa) node[pos=0.25, above, font=\scriptsize] {HKDF sig-seed};
 
 % Grouping box for classical keys
 \begin{scope}[on background layer]
