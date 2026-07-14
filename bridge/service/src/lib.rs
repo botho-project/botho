@@ -79,6 +79,5 @@ pub use alloy::primitives::U256;
 /// service internals `pub`.
 #[doc(hidden)]
 pub mod bin_support {
-    pub use crate::db::Database;
-    pub use crate::engine::BridgeEngine;
+    pub use crate::{db::Database, engine::BridgeEngine};
 }
