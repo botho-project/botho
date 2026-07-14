@@ -47,11 +47,16 @@ export function BlockDetail({ block, className }: BlockDetailProps) {
             <DetailRow label="Height" value={block.height.toLocaleString()} />
             <DetailRow label="Timestamp" value={formatTime(block.timestamp)} />
             <DetailRow label="Transactions" value={block.transactionCount.toString()} />
-            <DetailRow label="Size" value={formatSize(block.size)} />
+            <DetailRow
+              label="Size"
+              value={block.size !== undefined ? formatSize(block.size) : '—'}
+            />
             <DetailRow
               label="Reward"
-              value={`${formatAmount(block.reward)} BTH`}
-              valueClass="text-[--color-success]"
+              value={
+                block.reward !== undefined ? `${formatAmount(block.reward)} BTH` : '—'
+              }
+              valueClass={block.reward !== undefined ? 'text-[--color-success]' : undefined}
             />
             <DetailRow label="Difficulty" value={formatDifficulty(block.difficulty)} />
             {block.totalFees !== undefined && (

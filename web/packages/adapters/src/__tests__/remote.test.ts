@@ -290,6 +290,49 @@ describe('RemoteNodeAdapter.getBlock enriched fields (#700)', () => {
     expect(block!.transactions).toEqual([])
     expect(lastCall('getBlockByHash')?.params.hash).toBe('f'.repeat(64))
   })
+
+  it('omits size — the read RPC does not expose it (not a fabricated 0) (#924)', async () => {
+    const adapter = await connectedAdapter({ getBlockByHeight: rpc(legacyBlock) })
+    const block = await adapter.getBlock(42)
+    expect(block!.size).toBeUndefined()
+  })
+})
+
+describe('RemoteNodeAdapter.parseBlockEvent (WS block event)', () => {
+  // The node's NewBlock WS payload carries only height/hash/timestamp/tx_count/
+  // difficulty (botho/src/rpc/websocket.rs::WsEvent::NewBlock). It has no reward
+  // or size, so the adapter must omit them rather than fabricate 0/+0 (#924).
+  const wsBlock = {
+    height: 100,
+    hash: 'a'.repeat(64),
+    timestamp: 1751900000,
+    tx_count: 3,
+    difficulty: 54321,
+  }
+
+  /** Exercise the private WS parser via bracket access. */
+  function parse(adapter: RemoteNodeAdapter, data: Record<string, unknown>) {
+    return (adapter as unknown as {
+      parseBlockEvent(d: Record<string, unknown>): import('@botho/core').Block
+    }).parseBlockEvent(data)
+  }
+
+  it('omits reward and size — the WS event carries neither (not fabricated 0) (#924)', async () => {
+    const adapter = await connectedAdapter({})
+    const block = parse(adapter, wsBlock)
+    expect(block.reward).toBeUndefined()
+    expect(block.size).toBeUndefined()
+  })
+
+  it('still maps the fields the WS event does carry', async () => {
+    const adapter = await connectedAdapter({})
+    const block = parse(adapter, wsBlock)
+    expect(block.height).toBe(100)
+    expect(block.hash).toBe('a'.repeat(64))
+    expect(block.timestamp).toBe(1751900000)
+    expect(block.transactionCount).toBe(3)
+    expect(block.difficulty).toBe(54321n)
+  })
 })
 
 describe('RemoteNodeAdapter.getNetworkStats', () => {
