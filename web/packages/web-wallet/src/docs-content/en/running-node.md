@@ -90,7 +90,7 @@ cargo build --release
 | `botho init` | Create a new wallet with a 24-word mnemonic |
 | `botho balance` | Show your current wallet balance |
 | `botho address` | Display your receiving address (`--save` writes it to a file) |
-| `botho send <address> <amount>` | Send BTH (amount in BTH; `--quantum` for post-quantum crypto, `--memo` to attach an encrypted note) |
+| `botho send <address> <amount>` | Send BTH (amount in BTH; `--memo` to attach an encrypted note) |
 
 All sends use CLSAG ring signatures — sender privacy is on by default, not a flag.
 

@@ -305,14 +305,6 @@ impl RpcPool {
         Ok(result.tx_hash)
     }
 
-    /// Submit a signed quantum-private transaction
-    pub async fn submit_pq_transaction(&mut self, tx_hex: &str) -> Result<String> {
-        let result: SubmitTxResult = self
-            .call("pq_tx_submit", json!({ "tx_hex": tx_hex }))
-            .await?;
-        Ok(result.tx_hash)
-    }
-
     /// Get fee estimate
     pub async fn estimate_fee(&mut self, priority: &str) -> Result<u64> {
         let result: FeeEstimate = self
@@ -492,8 +484,9 @@ pub struct TxOutput {
     /// Array of [cluster_id, weight] pairs where weight is parts per million.
     #[serde(default)]
     pub cluster_tags: Vec<[u64; 2]>,
-    /// ML-KEM-768 ciphertext for PQ outputs (1088 bytes, hex-encoded)
-    /// Only present for QuantumPrivateTxOut outputs
+    /// ML-KEM-768 ciphertext for PQ outputs (1088 bytes, hex-encoded).
+    /// Reserved for universal ML-KEM outputs (ADR 0006 / #904); current
+    /// nodes do not emit this field.
     pub pq_ciphertext: Option<String>,
     /// Indicates if this is a quantum-private output
     #[serde(default)]

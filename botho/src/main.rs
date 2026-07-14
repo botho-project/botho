@@ -78,7 +78,7 @@ enum Commands {
 
     /// Show receiving address
     Address {
-        /// Save address to a file (use .botho for classical, .pq for quantum)
+        /// Save address to a file (e.g. myaddress.botho)
         #[arg(long)]
         save: Option<String>,
     },
@@ -94,11 +94,6 @@ enum Commands {
         /// Use ring signatures for sender privacy (hides which UTXO you spent)
         #[arg(long)]
         private: bool,
-
-        /// Use quantum-safe cryptography for post-quantum security
-        /// Outputs use ML-KEM-768, inputs use Schnorr + ML-DSA-65 signatures
-        #[arg(long)]
-        quantum: bool,
 
         /// Attach an encrypted memo to the transaction (max 62 bytes)
         /// Only the recipient can decrypt and read this message
@@ -242,16 +237,8 @@ fn main() -> Result<()> {
             address,
             amount,
             private,
-            quantum,
             memo,
-        } => commands::send::run(
-            &config_path,
-            &address,
-            &amount,
-            private,
-            quantum,
-            memo.as_deref(),
-        ),
+        } => commands::send::run(&config_path, &address, &amount, private, memo.as_deref()),
         Commands::Snapshot { action } => match action {
             SnapshotAction::Create { output } => commands::snapshot::create(&config_path, &output),
             SnapshotAction::Load { input, verify_hash } => {

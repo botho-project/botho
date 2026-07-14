@@ -64,8 +64,8 @@ impl ApiPermissions {
             "exchange_registerViewKey" | "exchange_unregisterViewKey" | "exchange_listViewKeys" => {
                 self.exchange_api && self.register_view_keys
             }
-            // Transaction methods
-            "tx_submit" | "sendRawTransaction" | "pq_tx_submit" => self.submit_transactions,
+            // Transaction methods ("pq_tx_submit" retired, ADR 0006)
+            "tx_submit" | "sendRawTransaction" => self.submit_transactions,
             // All other methods are allowed by default
             _ => true,
         }

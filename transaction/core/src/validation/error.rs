@@ -197,33 +197,6 @@ pub enum TransactionValidationError {
     /// Wrong number of pseudo-tag-outputs in signature
     PseudoTagOutputCountMismatch,
 
-    // =========== Quantum-Private Transaction Errors ===========
-    /// Classical (Schnorr) signature verification failed for quantum-private
-    /// input
-    #[cfg(feature = "pq")]
-    QuantumPrivateSchnorrVerificationFailed,
-
-    /// Post-quantum (Dilithium) signature verification failed for
-    /// quantum-private input
-    #[cfg(feature = "pq")]
-    QuantumPrivateDilithiumVerificationFailed,
-
-    /// Invalid ML-KEM ciphertext in quantum-private output
-    #[cfg(feature = "pq")]
-    InvalidPqCiphertext,
-
-    /// Invalid ML-DSA public key in quantum-private output
-    #[cfg(feature = "pq")]
-    InvalidPqPublicKey,
-
-    /// Quantum-private transaction missing required PQ signature
-    #[cfg(feature = "pq")]
-    MissingPqSignature,
-
-    /// Quantum-private input references invalid output
-    #[cfg(feature = "pq")]
-    InvalidPqOutputReference,
-
     // =========== Ring Tag Plausibility Errors ===========
     /** Ring tag centroid mismatch: output tags don't match ring composition.
      * similarity_permille={0}, threshold_permille={1} (values in permille:

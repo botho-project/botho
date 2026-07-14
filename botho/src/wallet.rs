@@ -130,11 +130,6 @@ pub enum EntropyProofResult {
     Fallback(String),
 }
 
-#[cfg(feature = "pq")]
-use crate::transaction_pq::{
-    QuantumPrivateTransaction, QuantumPrivateTxInput, QuantumPrivateTxOutput,
-};
-
 /// Wallet manages a single account derived from a BIP39 mnemonic.
 ///
 /// Security: The mnemonic phrase is stored in a `Zeroizing<String>` wrapper
@@ -736,122 +731,10 @@ impl Wallet {
         CommittedTagVectorSecret::from_plaintext(output.amount, &tags, &mut OsRng)
     }
 
-    /// Create a quantum-private transaction for post-quantum security.
-    ///
-    /// Quantum-private transactions use hybrid classical + post-quantum
-    /// cryptography:
-    /// - Outputs: Classical stealth keys + ML-KEM-768 encapsulation
-    /// - Inputs: Schnorr signature + ML-DSA-65 (Dilithium) signature
-    ///
-    /// This provides protection against "harvest now, decrypt later" attacks
-    /// where adversaries archive blockchain data for future quantum
-    /// cryptanalysis.
-    ///
-    /// # Arguments
-    /// * `utxos_to_spend` - The wallet's UTXOs to spend
-    /// * `recipient` - Recipient's quantum-safe public address
-    /// * `amount` - Amount to send
-    /// * `fee` - Transaction fee
-    /// * `current_height` - Current blockchain height
-    ///
-    /// # Returns
-    /// A fully signed quantum-private transaction ready for broadcast
-    #[cfg(feature = "pq")]
-    pub fn create_quantum_private_transaction(
-        &self,
-        utxos_to_spend: &[Utxo],
-        recipient: &QuantumSafePublicAddress,
-        amount: u64,
-        fee: u64,
-        current_height: u64,
-    ) -> Result<QuantumPrivateTransaction> {
-        if utxos_to_spend.is_empty() {
-            return Err(anyhow::anyhow!("No UTXOs to spend"));
-        }
-
-        // Calculate total input value
-        let total_input: u64 = utxos_to_spend.iter().map(|u| u.output.amount).sum();
-        let change = total_input
-            .checked_sub(amount + fee)
-            .ok_or_else(|| anyhow::anyhow!("Insufficient funds for amount + fee"))?;
-
-        // Build outputs
-        let mut outputs = Vec::new();
-
-        // Output to recipient
-        outputs.push(QuantumPrivateTxOutput::new(amount, recipient));
-
-        // Change output (if any)
-        if change > 0 {
-            let change_addr = self.quantum_safe_address();
-            outputs.push(QuantumPrivateTxOutput::new(change, &change_addr));
-        }
-
-        // Build a preliminary transaction to get signing hash
-        let preliminary_tx =
-            QuantumPrivateTransaction::new(Vec::new(), outputs.clone(), fee, current_height);
-        let signing_hash = preliminary_tx.signing_hash();
-
-        // Build and sign inputs
-        let mut inputs = Vec::new();
-
-        for utxo in utxos_to_spend {
-            // Verify ownership and recover classical one-time private key
-            let subaddress_index = utxo.output.belongs_to(&self.account_key).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "UTXO does not belong to this wallet: {}",
-                    hex::encode(&utxo.id.tx_hash[0..8])
-                )
-            })?;
-
-            let onetime_private = utxo
-                .output
-                .recover_spend_key(&self.account_key, subaddress_index)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Failed to recover spend key for UTXO {}",
-                        hex::encode(&utxo.id.tx_hash[0..8])
-                    )
-                })?;
-
-            // For PQ inputs, we need to derive the PQ one-time keypair.
-            // Since existing UTXOs don't have PQ ciphertexts yet, we use a
-            // deterministic derivation from the output's key material.
-            // This provides forward secrecy: new quantum-private outputs will
-            // have proper ML-KEM encapsulation.
-            //
-            // We compute: shared_secret = SHA256("botho-pq-bridge" || target_key ||
-            // public_key || view_private) This binds the PQ signature to the
-            // specific output and the wallet's view key.
-            let pq_shared_secret = {
-                use sha2::{Digest, Sha256};
-                let view_private_bytes = self.account_key.view_private_key().to_bytes();
-                let mut hasher = Sha256::new();
-                hasher.update(b"botho-pq-bridge-v1");
-                hasher.update(&utxo.output.target_key);
-                hasher.update(&utxo.output.public_key);
-                hasher.update(&view_private_bytes);
-                let hash: [u8; 32] = hasher.finalize().into();
-                hash
-            };
-
-            // Create quantum-private input with dual signatures
-            let input = QuantumPrivateTxInput::new(
-                utxo.id.tx_hash,
-                utxo.id.output_index,
-                &signing_hash,
-                &onetime_private,
-                &pq_shared_secret,
-            );
-
-            inputs.push(input);
-        }
-
-        // Create the final transaction
-        let tx = QuantumPrivateTransaction::new(inputs, outputs, fee, current_height);
-
-        Ok(tx)
-    }
+    // NOTE (issue #903 / ADR 0006): create_quantum_private_transaction was
+    // removed with the quantum-private transaction class. The ML-KEM key
+    // derivation surface above (quantum_safe_address / pq_account_key) is
+    // KEPT for universal ML-KEM outputs (issue #904).
 }
 
 #[cfg(test)]

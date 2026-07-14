@@ -34,15 +34,6 @@ impl Network {
         }
     }
 
-    /// Quantum-safe address prefix for this network
-    #[cfg(feature = "pq")]
-    pub const fn quantum_address_prefix(&self) -> &'static str {
-        match self {
-            Network::Mainnet => "botho://1q/",
-            Network::Testnet => "tbotho://1q/",
-        }
-    }
-
     /// Default gossip port for this network
     pub const fn default_gossip_port(&self) -> u16 {
         match self {

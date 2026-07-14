@@ -394,26 +394,6 @@ Submit a signed transaction to the network.
 
 ---
 
-### `pq_tx_submit`
-
-Submit a post-quantum signed transaction.
-
-**Parameters:**
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `tx_hex` | string | Yes | Serialized PQ transaction (hex-encoded bincode) |
-
-**Response:**
-| Field | Type | Description |
-|-------|------|-------------|
-| `txHash` | string | Transaction hash (hex) |
-| `type` | string | Always "quantum-private" |
-| `size` | integer | Transaction size in bytes |
-
-**Note:** Requires the node to be built with the `pq` feature.
-
----
-
 ### `estimateFee` / `tx_estimateFee`
 
 Estimate the transaction fee.
