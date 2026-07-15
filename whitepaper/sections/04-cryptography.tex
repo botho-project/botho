@@ -92,8 +92,14 @@ independent random points.
 
 Traditional CryptoNote stealth addresses use ECDH for key
 exchange~\cite{cryptonote,courtois-stealth}, building on the dual-key
-stealth-address construction (DKSAP). \Botho replaces the ECDH step with
-ML-KEM-768 to achieve post-quantum recipient privacy.
+stealth-address construction (DKSAP). \Botho keeps that classical ECDH step
+and \emph{additionally} binds an ML-KEM-768 encapsulation into the same
+one-time key---a \emph{hybrid} construction. Each output's one-time key is
+derived from BOTH the classical Diffie--Hellman shared secret and the ML-KEM
+shared secret, so an attacker must break \emph{both} elliptic-curve ECDH
+\emph{and} lattice ML-KEM to recover or link an output. This achieves
+post-quantum recipient privacy without discarding the classical security the
+network already relies on.
 
 \paragraph{Intuition.}
 Recipient privacy in a classical CryptoNote coin rests entirely on the
@@ -107,11 +113,16 @@ is the \emph{harvest-now, decrypt-later} exposure, and because recipient
 identity is permanent on-chain data (Table~\ref{tab:hybrid}) it cannot be
 mitigated by waiting or rotating keys after the fact.
 
-Replacing the ECDH step with an ML-KEM-768 encapsulation closes this exposure
-at its source. The sender encapsulates a fresh shared secret against the
-recipient's KEM public key; recovering it requires breaking a lattice problem
+Folding an ML-KEM-768 encapsulation into the one-time key---alongside, not in
+place of, the classical ECDH secret---closes this exposure at its source. The
+sender encapsulates a fresh shared secret against the recipient's KEM public
+key and mixes it with the classical Diffie--Hellman secret when deriving the
+output's one-time key; recovering that key requires breaking a lattice problem
 believed hard even for quantum adversaries, so the recipient-unlinkability
-reduction of the Security Analysis below survives quantumly. Crucially,
+reduction of the Security Analysis below survives quantumly. Because the
+derivation is hybrid, the output also remains at least as private as a classical
+CryptoNote coin against any adversary who has \emph{not} broken ECDH: a flaw in
+the lattice assumption alone cannot deanonymize the recipient. Crucially,
 the KEM hardens only the \emph{key-exchange} step---the part whose secrecy
 must last forever---while sender anonymity continues to rely on the compact
 classical ring signature of Section~\ref{sec:clsag}. Making the entire spend
@@ -134,12 +145,23 @@ signing keypair). Consequently the recipient's address publishes
 $\pk_{\text{kem}}$ directly alongside the Ristretto spend key $B$; there is
 no hash-of-point step, which would in any case not yield a valid ML-KEM key.
 
+The one-time key binds \emph{two} shared secrets: the classical ECDH secret
+$\dhsecret = rC = aR$ (as in classical CryptoNote, where $r$ is the sender's
+ephemeral scalar, $R = rG$ the published transaction public key, $C$ the
+recipient's view key, and $a$ its secret) \emph{and} the ML-KEM shared secret
+$K$. The stealth scalar is the domain-separated hash of both:
+\[
+  s = \Hs\bigl(\dhsecret \,\|\, K \,\|\, \text{output\_index}\bigr).
+\]
+
 \textbf{Sender} (creating output for recipient):
 \begin{enumerate}
-  \item Obtain the recipient's ML-KEM public key $\pk_{\text{kem}}$ from
-    their address
+  \item Obtain the recipient's view key $C$ and ML-KEM public key
+    $\pk_{\text{kem}}$ from their address
+  \item Sample ephemeral scalar $r$; publish transaction public key $R = rG$
+  \item Compute classical DH secret: $\dhsecret = rC$
   \item Encapsulate: $(c, K) \leftarrow \MLKEM.\Encap(\pk_{\text{kem}})$
-  \item Compute scalar: $s = \Hs(K \| \text{output\_index})$
+  \item Compute hybrid scalar: $s = \Hs(\dhsecret \| K \| \text{output\_index})$
   \item Compute one-time public key: $P = sG + B$
   \item Include ciphertext $c$ (1,088 bytes) in transaction output
 \end{enumerate}
@@ -148,10 +170,11 @@ no hash-of-point step, which would in any case not yield a valid ML-KEM key.
 \begin{enumerate}
   \item Regenerate the ML-KEM secret key $\sk_{\text{kem}}$ from the BIP39
     seed (HKDF label \texttt{"kem-seed"}, as above)
-  \item For each output with ciphertext $c$:
+  \item For each output with transaction public key $R$ and ciphertext $c$:
     \begin{enumerate}
+      \item Recompute classical DH secret: $\dhsecret = aR$ (\,$= rC$\,)
       \item Decapsulate: $K \leftarrow \MLKEM.\Decap(\sk_{\text{kem}}, c)$
-      \item Compute scalar: $s' = \Hs(K \| \text{output\_index})$
+      \item Compute hybrid scalar: $s' = \Hs(\dhsecret \| K \| \text{output\_index})$
       \item Compute expected key: $P' = s'G + B$
       \item If $P' = P$ (output's public key), this output belongs to us
       \item Compute private key: $x = s' + b \mod q$
@@ -159,21 +182,34 @@ no hash-of-point step, which would in any case not yield a valid ML-KEM key.
 \end{enumerate}
 
 \textbf{Verification}: The one-time private key $x$ satisfies
-$xG = (s + b)G = sG + B = P$.
+$xG = (s + b)G = sG + B = P$, and because $aR = a(rG) = r(aG) = rC$ the sender
+and recipient derive the identical hybrid scalar $s = s'$.
 
 \subsubsection{Security Analysis}
 
 \begin{theorem}[Recipient Unlinkability]
-Under the IND-CCA2 security of ML-KEM-768, an adversary (including a
-quantum adversary) cannot link outputs to recipients with probability
-better than negligible, given only the blockchain.
+If \emph{either} the ML-KEM-768 encapsulation is IND-CCA2 secure \emph{or} the
+elliptic-curve Diffie--Hellman problem is hard, an adversary cannot link
+outputs to recipients with probability better than negligible, given only the
+blockchain. In particular, a quantum adversary---who is assumed to break
+ECDH---is still defeated by the ML-KEM branch, while an adversary who breaks
+only the lattice assumption is still defeated by the classical branch.
 \end{theorem}
 
 \begin{proof}
-We prove by reduction to ML-KEM IND-CCA2 security. Suppose adversary
-$\Adv$ can distinguish outputs belonging to recipient $R$ with
-non-negligible advantage $\epsilon$. We construct adversary $\Adv'$
-that breaks ML-KEM IND-CCA2 with advantage $\epsilon/2$.
+Because the stealth scalar $s = \Hs(\dhsecret \| K \| \text{output\_index})$ is a
+domain-separated hash of \emph{both} shared secrets, modelling $\Hs$ as a
+random oracle makes $s$ (hence the one-time key $P$) pseudorandom whenever
+\emph{either} $\dhsecret$ or $K$ is unknown to the adversary. It therefore suffices
+to exhibit a reduction for each branch; we give the post-quantum (ML-KEM)
+branch, as the classical ECDH branch is the standard CryptoNote
+unlinkability argument~\cite{cryptonote} applied to the $\dhsecret$ input.
+
+We prove the ML-KEM branch by reduction to ML-KEM IND-CCA2 security. Suppose
+adversary $\Adv$ can distinguish outputs belonging to recipient $R$ with
+non-negligible advantage $\epsilon$, given $\dhsecret$ (i.e.\ even after ECDH is
+broken). We construct adversary $\Adv'$ that breaks ML-KEM IND-CCA2 with
+advantage $\epsilon/2$.
 
 \textbf{Setup}: $\Adv'$ receives ML-KEM public key $\pk^*$ from the
 IND-CCA2 challenger. $\Adv'$ sets this as the target recipient's
@@ -188,8 +224,8 @@ the target). $\Adv'$ queries the IND-CCA2 challenger with
 $(\pk^*, \pk_{\text{other}})$ and receives ciphertext $c^*$ encapsulating
 either $K_0$ or $K_1$ (random bit $b$).
 
-$\Adv'$ computes $s^* = \Hs(K_b \| \text{index})$ and $P^* = s^*G + B_b$,
-returning output $(c^*, P^*)$ to $\Adv$.
+$\Adv'$ computes $s^* = \Hs(\dhsecret \| K_b \| \text{index})$ and
+$P^* = s^*G + B_b$, returning output $(c^*, P^*)$ to $\Adv$.
 
 \textbf{Analysis}: If $\Adv$ correctly identifies the recipient with
 probability $1/2 + \epsilon$, then $\Adv'$ correctly guesses $b$ with

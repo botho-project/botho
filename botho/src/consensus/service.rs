@@ -2128,7 +2128,10 @@ mod tests {
             public_key: [2u8; 32],
             e_memo: None,
             cluster_tags: ClusterTagVector::empty(),
-            kem_ciphertext: None,
+            // Universal ML-KEM (6.0.0, #973): a valid value-transfer output must
+            // carry a structurally-valid hybrid ML-KEM ciphertext, else the SCP
+            // validity callback rejects it.
+            kem_ciphertext: Some(vec![1u8; 1088]),
         };
         Transaction::new_clsag(vec![input], vec![output], MIN_TX_FEE, 0)
     }
@@ -2350,7 +2353,10 @@ mod tests {
             minter_spend_key: [tag.wrapping_add(1); 32],
             target_key: [tag.wrapping_add(2); 32],
             public_key: [tag.wrapping_add(3); 32],
-            kem_ciphertext: None,
+            // Universal ML-KEM (6.0.0, #973): the coinbase must carry a
+            // structurally-valid hybrid ML-KEM ciphertext for the intrinsic SCP
+            // validity path to accept it.
+            kem_ciphertext: Some(vec![tag; 1088]),
             prev_block_hash,
             difficulty: u64::MAX,
             nonce: tag as u64,

@@ -654,6 +654,67 @@ pub fn validate_block_lottery(
     Ok(accounting.carryover_after(accounting.payout))
 }
 
+/// Bind each lottery payout's stealth envelope — its one-time `target_key`,
+/// `public_key`, AND its hybrid ML-KEM `kem_ciphertext` — to the winning UTXO
+/// it redistributes to.
+///
+/// Sub-issue 5 of the universal-ML-KEM rollout (#958) added
+/// [`crate::block::LotteryOutput::hash()`] but explicitly deferred wiring this
+/// check to the enforcement cutover (#973). A lottery payout MUST reuse the
+/// winning UTXO's stealth keys and its ML-KEM ciphertext verbatim, so the
+/// winner — who holds the ML-KEM secret — recovers the payout with the exact
+/// hybrid derivation (same shared secret, same output index) they used for the
+/// original UTXO. This rejects a proposer that commits a payout whose stealth
+/// envelope does not match the winning UTXO (e.g. redirecting funds or
+/// stripping the ciphertext so the winner cannot recover the payout).
+///
+/// `winner_lookup` returns the winning UTXO's `(target_key, public_key,
+/// kem_ciphertext)` for a 36-byte UTXO id, or `None` if the UTXO is absent.
+///
+/// This is a block-apply–time check: it needs the winning UTXO's stealth keys,
+/// which live in the ledger and are NOT carried by [`LotteryCandidate`], so it
+/// cannot live inside [`validate_block_lottery`] (a pure function of the
+/// candidate set). It runs against the same UTXO set `add_block` credits from,
+/// so proposer and validator agree deterministically. Correct on both the
+/// classical chain (`None == None`) and the 6.0.0 hybrid chain.
+pub fn validate_lottery_output_bindings<F>(
+    lottery_outputs: &[crate::block::LotteryOutput],
+    winner_lookup: F,
+) -> Result<(), LotteryValidationError>
+where
+    F: Fn(&[u8; 36]) -> Option<([u8; 32], [u8; 32], Option<Vec<u8>>)>,
+{
+    for (index, output) in lottery_outputs.iter().enumerate() {
+        let winner_id = output.winner_utxo_id();
+        let (target_key, public_key, kem_ciphertext) =
+            winner_lookup(&winner_id).ok_or_else(|| LotteryValidationError::WinnerNotEligible {
+                utxo_id: hex::encode(&winner_id[..8]),
+            })?;
+
+        // Reconstruct the payout's expected consensus identity from the winning
+        // UTXO's own stealth envelope and the (id-derived) payout amount, then
+        // compare the committed payout's identity hash. Equal hashes ⇔ the
+        // committed target_key, public_key, and kem_ciphertext all match the
+        // winning UTXO.
+        let expected = crate::block::LotteryOutput::from_utxo_id(
+            winner_id,
+            output.payout,
+            target_key,
+            public_key,
+            kem_ciphertext,
+        );
+        if output.hash() != expected.hash() {
+            return Err(LotteryValidationError::OutputMismatch {
+                index,
+                reason: "payout stealth envelope (target/public key or ML-KEM ciphertext) \
+                         does not match the winning UTXO"
+                    .to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -928,7 +989,10 @@ mod tests {
     // Tests for validate_block_lottery
     // ========================================================================
 
-    use crate::block::{Block, BlockHeader, BlockLotterySummary, LotteryOutput, MintingTx};
+    use crate::{
+        block::{Block, BlockHeader, BlockLotterySummary, LotteryOutput, MintingTx},
+        transaction::TxOutput,
+    };
 
     fn create_test_block(
         height: u64,
@@ -1211,6 +1275,128 @@ mod tests {
             "Burning the pool share must be rejected: {:?}",
             result
         );
+    }
+
+    // ------------------------------------------------------------------
+    // validate_lottery_output_bindings (sub-issue 5 deferred check, #973)
+    // ------------------------------------------------------------------
+
+    fn payout_for(winner_id: [u8; 36], payout: u64, output: &TxOutput) -> LotteryOutput {
+        LotteryOutput::from_utxo_id(
+            winner_id,
+            payout,
+            output.target_key,
+            output.public_key,
+            output.kem_ciphertext.clone(),
+        )
+    }
+
+    fn winning_output(target: u8, ct: Option<Vec<u8>>) -> TxOutput {
+        TxOutput {
+            amount: 50_000,
+            target_key: [target; 32],
+            public_key: [target.wrapping_add(1); 32],
+            e_memo: None,
+            cluster_tags: bth_transaction_types::ClusterTagVector::empty(),
+            kem_ciphertext: ct,
+        }
+    }
+
+    #[test]
+    fn binding_accepts_matching_envelope() {
+        let mut winner_id = [0u8; 36];
+        winner_id[..32].copy_from_slice(&[0xABu8; 32]);
+        let winner = winning_output(7, Some(vec![0x11u8; 1088]));
+        let payout = payout_for(winner_id, 900, &winner);
+
+        let lookup = |id: &[u8; 36]| {
+            if *id == winner_id {
+                Some((
+                    winner.target_key,
+                    winner.public_key,
+                    winner.kem_ciphertext.clone(),
+                ))
+            } else {
+                None
+            }
+        };
+        assert!(validate_lottery_output_bindings(&[payout], lookup).is_ok());
+    }
+
+    #[test]
+    fn binding_rejects_redirected_target_key() {
+        let mut winner_id = [0u8; 36];
+        winner_id[..32].copy_from_slice(&[0xABu8; 32]);
+        let winner = winning_output(7, Some(vec![0x11u8; 1088]));
+        let mut payout = payout_for(winner_id, 900, &winner);
+        // Proposer redirects the payout to a different one-time key.
+        payout.target_key = [0xFF; 32];
+
+        let lookup = |_: &[u8; 36]| {
+            Some((
+                winner.target_key,
+                winner.public_key,
+                winner.kem_ciphertext.clone(),
+            ))
+        };
+        assert!(matches!(
+            validate_lottery_output_bindings(&[payout], lookup),
+            Err(LotteryValidationError::OutputMismatch { index: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn binding_rejects_stripped_ciphertext() {
+        let mut winner_id = [0u8; 36];
+        winner_id[..32].copy_from_slice(&[0xABu8; 32]);
+        let winner = winning_output(7, Some(vec![0x11u8; 1088]));
+        let mut payout = payout_for(winner_id, 900, &winner);
+        // Proposer strips the ML-KEM ciphertext so the winner cannot recover.
+        payout.kem_ciphertext = None;
+
+        let lookup = |_: &[u8; 36]| {
+            Some((
+                winner.target_key,
+                winner.public_key,
+                winner.kem_ciphertext.clone(),
+            ))
+        };
+        assert!(matches!(
+            validate_lottery_output_bindings(&[payout], lookup),
+            Err(LotteryValidationError::OutputMismatch { index: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn binding_rejects_missing_winner() {
+        let mut winner_id = [0u8; 36];
+        winner_id[..32].copy_from_slice(&[0xABu8; 32]);
+        let winner = winning_output(7, Some(vec![0x11u8; 1088]));
+        let payout = payout_for(winner_id, 900, &winner);
+
+        let lookup = |_: &[u8; 36]| None;
+        assert!(matches!(
+            validate_lottery_output_bindings(&[payout], lookup),
+            Err(LotteryValidationError::WinnerNotEligible { .. })
+        ));
+    }
+
+    #[test]
+    fn binding_accepts_classical_winner() {
+        // A classical (pre-6.0.0) winner: None == None binds correctly.
+        let mut winner_id = [0u8; 36];
+        winner_id[..32].copy_from_slice(&[0xABu8; 32]);
+        let winner = winning_output(3, None);
+        let payout = payout_for(winner_id, 400, &winner);
+
+        let lookup = |_: &[u8; 36]| {
+            Some((
+                winner.target_key,
+                winner.public_key,
+                winner.kem_ciphertext.clone(),
+            ))
+        };
+        assert!(validate_lottery_output_bindings(&[payout], lookup).is_ok());
     }
 
     // ------------------------------------------------------------------

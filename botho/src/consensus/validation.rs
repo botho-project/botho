@@ -9,10 +9,81 @@
 use crate::{
     block::{calculate_block_reward, MintingTx},
     ledger::ChainState,
+    network::PROTOCOL_VERSION,
     transaction::Transaction,
 };
 use std::sync::{Arc, RwLock};
 use tracing::{debug, warn};
+
+/// ML-KEM-768 encapsulation ciphertext length in bytes (FIPS 203).
+///
+/// Mirrors `bth_crypto_pq::ML_KEM_768_CIPHERTEXT_BYTES`, redeclared here so the
+/// consensus enforcement compiles under `--no-default-features` (the
+/// `bth-crypto-pq` crate is an optional, `pq`-gated dependency). Covered by a
+/// cross-check test against the crypto crate when the `pq` feature is on.
+pub const ML_KEM_768_CIPHERTEXT_BYTES: usize = 1088;
+
+/// Protocol epoch (major version) at which universal ML-KEM enforcement
+/// activates — the fresh-genesis 6.0.0 reset that ships hybrid stealth on every
+/// output (ADR 0008, #954/#958).
+const KEM_ENFORCEMENT_PROTOCOL_MAJOR: u64 = 6;
+
+/// Parse the major component of a semantic-version string in a `const` context.
+const fn protocol_major(version: &str) -> u64 {
+    let bytes = version.as_bytes();
+    let mut i = 0;
+    let mut major = 0u64;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b < b'0' || b > b'9' {
+            break;
+        }
+        major = major * 10 + (b - b'0') as u64;
+        i += 1;
+    }
+    major
+}
+
+/// Whether consensus REQUIRES a valid hybrid ML-KEM ciphertext on every
+/// value-transfer, minting-reward, and lottery-payout output.
+///
+/// This is a **compile-time constant** — a pure function of two constants baked
+/// into the binary, evaluated with the transaction value — NOT a runtime read
+/// of the chain tip. That property is load-bearing: [`validate_transfer_tx`]
+/// and [`validate_minting_tx_intrinsic`] are the SCP consensus validity gates,
+/// whose no-fork invariant requires validity to be a pure function of the value
+/// (issues #419 / #451). A tip-relative gate here could partition the quorum.
+///
+/// Enforcement is active iff BOTH hold:
+/// - the binary is built with post-quantum crypto (`pq`, on by default). A
+///   `--no-default-features` build has no lattice stack, produces classical
+///   outputs, and therefore must NOT reject them; and
+/// - the protocol epoch is >= 6.0.0 (the fresh-genesis reset that ships
+///   universal ML-KEM). A pre-reset binary (`PROTOCOL_VERSION` < 6.0.0) runs
+///   the classical chain and never enforces, so a node briefly running this
+///   code before the reset cannot reject its own legitimate ciphertext-less
+///   outputs. This is the "protocol epoch" cutover gate (issue #973).
+pub const KEM_CIPHERTEXT_ENFORCED: bool =
+    cfg!(feature = "pq") && protocol_major(PROTOCOL_VERSION) >= KEM_ENFORCEMENT_PROTOCOL_MAJOR;
+
+/// Enforce that a stealth output carries a valid hybrid ML-KEM ciphertext.
+///
+/// A no-op when [`KEM_CIPHERTEXT_ENFORCED`] is false (pre-reset / no-PQ
+/// binaries). Otherwise the ciphertext must be present and exactly
+/// [`ML_KEM_768_CIPHERTEXT_BYTES`] long. The ciphertext's *cryptographic*
+/// validity is not (and cannot be) checked here — only the recipient holding
+/// the ML-KEM secret can decapsulate — so structural presence + length is the
+/// consensus-enforceable invariant.
+fn check_kem_ciphertext(kem_ciphertext: &Option<Vec<u8>>) -> Result<(), ValidationError> {
+    if !KEM_CIPHERTEXT_ENFORCED {
+        return Ok(());
+    }
+    match kem_ciphertext {
+        Some(ct) if ct.len() == ML_KEM_768_CIPHERTEXT_BYTES => Ok(()),
+        Some(ct) => Err(ValidationError::InvalidKemCiphertext { len: ct.len() }),
+        None => Err(ValidationError::MissingKemCiphertext),
+    }
+}
 
 /// Validation errors for transactions
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,7 +93,10 @@ pub enum ValidationError {
     WrongPrevBlockHash,
     WrongBlockHeight,
     WrongDifficulty,
-    WrongReward { expected: u64, got: u64 },
+    WrongReward {
+        expected: u64,
+        got: u64,
+    },
     TimestampTooFarInFuture,
     TimestampBeforeParent,
 
@@ -34,8 +108,22 @@ pub enum ValidationError {
     InputNotFound,
     InputAlreadySpent,
     InvalidSignature,
-    InsufficientFunds { input: u64, output: u64, fee: u64 },
+    InsufficientFunds {
+        input: u64,
+        output: u64,
+        fee: u64,
+    },
     StaleTransaction,
+
+    // Universal ML-KEM enforcement errors (6.0.0, #958/#973)
+    /// A value-transfer, minting-reward, or lottery-payout output required a
+    /// hybrid ML-KEM ciphertext but none was present.
+    MissingKemCiphertext,
+    /// A stealth output's ML-KEM ciphertext was present but not the required
+    /// [`ML_KEM_768_CIPHERTEXT_BYTES`] length.
+    InvalidKemCiphertext {
+        len: usize,
+    },
 
     // General errors
     DeserializationFailed(String),
@@ -69,6 +157,14 @@ impl std::fmt::Display for ValidationError {
                 )
             }
             Self::StaleTransaction => write!(f, "Transaction is stale"),
+            Self::MissingKemCiphertext => {
+                write!(f, "Output is missing its required ML-KEM ciphertext")
+            }
+            Self::InvalidKemCiphertext { len } => write!(
+                f,
+                "Output ML-KEM ciphertext has wrong length: {} (expected {})",
+                len, ML_KEM_768_CIPHERTEXT_BYTES
+            ),
             Self::DeserializationFailed(e) => write!(f, "Deserialization failed: {}", e),
             Self::ChainStateUnavailable => write!(f, "Chain state unavailable"),
         }
@@ -132,6 +228,12 @@ impl TransactionValidator {
             "Validating minting transaction (intrinsic / tip-agnostic)"
         );
 
+        // Universal ML-KEM (6.0.0, #958/#973): the coinbase reward output must
+        // carry a valid hybrid ML-KEM ciphertext (encapsulated to the minter's
+        // own published KEM key). A pure structural property of the value, so it
+        // holds the SCP no-fork invariant. Gated by [`KEM_CIPHERTEXT_ENFORCED`].
+        check_kem_ciphertext(&tx.kem_ciphertext)?;
+
         // Timestamp must not be absurdly far in the future. This is a bound on
         // a property of the value relative to wall-clock time, NOT relative to
         // the local chain tip, so all honest nodes agree on it (within clock
@@ -189,6 +291,12 @@ impl TransactionValidator {
         debug!(height = tx.block_height, "Validating minting transaction");
 
         // Check cheap validations first before expensive PoW verification
+
+        // 0. Universal ML-KEM (6.0.0, #958/#973): the coinbase reward output must
+        // carry a valid hybrid ML-KEM ciphertext. Gated by the compile-time
+        // [`KEM_CIPHERTEXT_ENFORCED`] cutover constant; a no-op on pre-reset /
+        // no-PQ binaries.
+        check_kem_ciphertext(&tx.kem_ciphertext)?;
 
         // 1. Check prev_block_hash matches current chain tip
         if tx.prev_block_hash != state.tip_hash {
@@ -324,6 +432,15 @@ impl TransactionValidator {
             return Err(ValidationError::ZeroAmountOutput);
         }
 
+        // Universal ML-KEM (6.0.0, #958/#973): every value-transfer output must
+        // carry a valid hybrid ML-KEM ciphertext. This is a pure structural
+        // property of the value (present + correct length), so it holds the SCP
+        // no-fork invariant. Gated by the compile-time [`KEM_CIPHERTEXT_ENFORCED`]
+        // cutover constant; a no-op on pre-reset / no-PQ binaries.
+        for output in &tx.outputs {
+            check_kem_ciphertext(&output.kem_ciphertext)?;
+        }
+
         // UTXO existence, double-spend, and signature verification are NOT done
         // here. They happen in mempool.add_tx() and at block-apply, which have
         // ledger access and verify:
@@ -457,8 +574,25 @@ mod tests {
             .unwrap_or(0)
     }
 
-    /// Helper to create a test output
+    /// Helper to create a well-formed 6.0.0 test output: carries a
+    /// structurally-valid hybrid ML-KEM ciphertext so it passes universal
+    /// enforcement ([`KEM_CIPHERTEXT_ENFORCED`]). Under a
+    /// `--no-default-features` (no-PQ) build the ciphertext is simply
+    /// ignored.
     fn test_output(amount: u64, id: u8) -> TxOutput {
+        TxOutput {
+            amount,
+            target_key: [id; 32],
+            public_key: [id.wrapping_add(1); 32],
+            e_memo: None,
+            cluster_tags: ClusterTagVector::empty(),
+            kem_ciphertext: Some(vec![id; ML_KEM_768_CIPHERTEXT_BYTES]),
+        }
+    }
+
+    /// A classical (ciphertext-less) test output — REJECTED under 6.0.0
+    /// enforcement. Used by the reject-path tests.
+    fn classical_output(amount: u64, id: u8) -> TxOutput {
         TxOutput {
             amount,
             target_key: [id; 32],
@@ -503,7 +637,9 @@ mod tests {
             minter_spend_key: [0u8; 32],
             target_key: [0u8; 32],
             public_key: [0u8; 32],
-            kem_ciphertext: None,
+            // Valid ciphertext so enforcement passes and the height check is
+            // reached (this test targets WrongBlockHeight, not the KEM gate).
+            kem_ciphertext: Some(vec![0u8; ML_KEM_768_CIPHERTEXT_BYTES]),
             prev_block_hash: [0u8; 32],
             difficulty: 1000,
             nonce: 0,
@@ -604,7 +740,7 @@ mod tests {
             minter_spend_key: [0u8; 32],
             target_key: [0u8; 32],
             public_key: [0u8; 32],
-            kem_ciphertext: None,
+            kem_ciphertext: Some(vec![0u8; ML_KEM_768_CIPHERTEXT_BYTES]),
             prev_block_hash: [0u8; 32],
             difficulty: 1000,
             nonce: 0,
@@ -674,6 +810,210 @@ mod tests {
 
         let err = ValidationError::InvalidSignature;
         assert_eq!(format!("{}", err), "Invalid signature");
+    }
+
+    #[test]
+    fn test_kem_validation_error_display() {
+        let err = ValidationError::MissingKemCiphertext;
+        assert!(format!("{}", err).contains("missing"));
+
+        let err = ValidationError::InvalidKemCiphertext { len: 42 };
+        let s = format!("{}", err);
+        assert!(s.contains("42"));
+        assert!(s.contains(&ML_KEM_768_CIPHERTEXT_BYTES.to_string()));
+    }
+
+    /// The compile-time cutover gate: universal ML-KEM enforcement is active
+    /// exactly when the binary carries post-quantum crypto AND the protocol
+    /// epoch is >= 6.0.0. Under the default (pq) build on 6.0.0 it must be ON.
+    #[test]
+    fn test_kem_enforcement_gate_active_on_reset() {
+        assert_eq!(protocol_major("6.0.0"), 6);
+        assert_eq!(protocol_major("5.9.9"), 5);
+        assert_eq!(protocol_major("10.1.0"), 10);
+        // The shipped constant tracks PROTOCOL_VERSION.
+        assert_eq!(
+            KEM_CIPHERTEXT_ENFORCED,
+            cfg!(feature = "pq") && protocol_major(PROTOCOL_VERSION) >= 6
+        );
+    }
+
+    // The following reject/accept tests only make sense when the cutover gate is
+    // active, i.e. a post-quantum (`pq`) build. A `--no-default-features` build
+    // produces classical outputs and must NOT reject them, which the gate
+    // guarantees by staying OFF.
+    #[cfg(feature = "pq")]
+    mod kem_enforcement {
+        use super::*;
+
+        /// The local ciphertext-length constant must equal the crypto crate's
+        /// canonical value (it is redeclared for `--no-default-features`).
+        #[test]
+        fn local_ciphertext_len_matches_crypto_crate() {
+            assert_eq!(
+                ML_KEM_768_CIPHERTEXT_BYTES,
+                bth_crypto_pq::ML_KEM_768_CIPHERTEXT_BYTES
+            );
+        }
+
+        /// A transfer tx whose output lacks a ciphertext is REJECTED.
+        #[test]
+        fn transfer_tx_missing_ciphertext_rejected() {
+            let validator = TransactionValidator::new(mock_chain_state());
+            let tx = Transaction::new_clsag(
+                vec![test_clsag_input(1)],
+                vec![classical_output(1000, 1)],
+                MIN_TX_FEE,
+                10,
+            );
+            assert!(matches!(
+                validator.validate_transfer_tx(&tx),
+                Err(ValidationError::MissingKemCiphertext)
+            ));
+        }
+
+        /// A transfer tx whose output ciphertext is the wrong length is
+        /// REJECTED.
+        #[test]
+        fn transfer_tx_wrong_length_ciphertext_rejected() {
+            let validator = TransactionValidator::new(mock_chain_state());
+            let mut out = test_output(1000, 1);
+            out.kem_ciphertext = Some(vec![0u8; ML_KEM_768_CIPHERTEXT_BYTES - 1]);
+            let tx = Transaction::new_clsag(vec![test_clsag_input(1)], vec![out], MIN_TX_FEE, 10);
+            assert!(matches!(
+                validator.validate_transfer_tx(&tx),
+                Err(ValidationError::InvalidKemCiphertext {
+                    len
+                }) if len == ML_KEM_768_CIPHERTEXT_BYTES - 1
+            ));
+        }
+
+        /// A transfer tx with a valid hybrid output is ACCEPTED.
+        #[test]
+        fn transfer_tx_valid_hybrid_accepted() {
+            let validator = TransactionValidator::new(mock_chain_state());
+            let tx = Transaction::new_clsag(
+                vec![test_clsag_input(1)],
+                vec![test_output(1000, 1)],
+                MIN_TX_FEE,
+                10,
+            );
+            assert!(validator.validate_transfer_tx(&tx).is_ok());
+        }
+
+        /// If ANY output lacks a ciphertext (even alongside valid ones) the tx
+        /// is REJECTED.
+        #[test]
+        fn transfer_tx_mixed_outputs_rejected() {
+            let validator = TransactionValidator::new(mock_chain_state());
+            let tx = Transaction::new_clsag(
+                vec![test_clsag_input(1)],
+                vec![test_output(1000, 1), classical_output(500, 2)],
+                MIN_TX_FEE,
+                10,
+            );
+            assert!(matches!(
+                validator.validate_transfer_tx(&tx),
+                Err(ValidationError::MissingKemCiphertext)
+            ));
+        }
+
+        /// A minting tx whose coinbase output lacks a ciphertext is REJECTED on
+        /// BOTH the tip-relative and intrinsic (SCP) paths.
+        #[test]
+        fn minting_tx_missing_ciphertext_rejected() {
+            let validator = TransactionValidator::new(mock_chain_state());
+            let tx = MintingTx {
+                block_height: 11,
+                reward: 600_000_000_000,
+                minter_view_key: [0u8; 32],
+                minter_spend_key: [0u8; 32],
+                target_key: [0u8; 32],
+                public_key: [0u8; 32],
+                kem_ciphertext: None,
+                prev_block_hash: [0u8; 32],
+                difficulty: 1000,
+                nonce: 0,
+                timestamp: current_timestamp(),
+            };
+            assert!(matches!(
+                validator.validate_minting_tx(&tx),
+                Err(ValidationError::MissingKemCiphertext)
+            ));
+            assert!(matches!(
+                TransactionValidator::validate_minting_tx_intrinsic(&tx),
+                Err(ValidationError::MissingKemCiphertext)
+            ));
+        }
+
+        /// A minting tx with a wrong-length coinbase ciphertext is REJECTED.
+        #[test]
+        fn minting_tx_wrong_length_ciphertext_rejected() {
+            let tx = MintingTx {
+                block_height: 11,
+                reward: 600_000_000_000,
+                minter_view_key: [0u8; 32],
+                minter_spend_key: [0u8; 32],
+                target_key: [0u8; 32],
+                public_key: [0u8; 32],
+                kem_ciphertext: Some(vec![0u8; 7]),
+                prev_block_hash: [0u8; 32],
+                difficulty: 1000,
+                nonce: 0,
+                timestamp: current_timestamp(),
+            };
+            assert!(matches!(
+                TransactionValidator::validate_minting_tx_intrinsic(&tx),
+                Err(ValidationError::InvalidKemCiphertext { len: 7 })
+            ));
+        }
+
+        /// End-to-end: a real 6.0.0 coinbase built via the production
+        /// `MintingTx::new` path (encapsulating to a v2 address that publishes
+        /// an ML-KEM key) carries a valid 1088-byte ciphertext, so the
+        /// universal ML-KEM gate ACCEPTS it — any failure is on an
+        /// unrelated check (e.g. unsolved PoW), never a KEM error.
+        /// Avoids solving RandomX in-test.
+        #[test]
+        fn real_hybrid_coinbase_passes_kem_gate() {
+            use bth_account_keys::AccountKey;
+            use bth_crypto_pq::MlKem768KeyPair;
+            use rand_chacha::ChaCha20Rng;
+            use rand_core::SeedableRng;
+
+            let mut rng = ChaCha20Rng::from_seed([9u8; 32]);
+            let account = AccountKey::random(&mut rng);
+            let kem = MlKem768KeyPair::from_seed(&[0x5A; 32]);
+            let addr = account
+                .default_subaddress()
+                .with_pq_keys(kem.public_key().as_bytes().to_vec(), Vec::new());
+
+            let tx = MintingTx::new(
+                11,
+                600_000_000_000,
+                &addr,
+                [0u8; 32],
+                1000,
+                current_timestamp(),
+            );
+            assert_eq!(
+                tx.kem_ciphertext.as_ref().map(|c| c.len()),
+                Some(ML_KEM_768_CIPHERTEXT_BYTES),
+                "real 6.0.0 coinbase must carry a 1088-byte ciphertext"
+            );
+            // The KEM gate accepts it: the only way intrinsic validation fails is
+            // an unrelated check (unsolved PoW), never a KEM error.
+            match TransactionValidator::validate_minting_tx_intrinsic(&tx) {
+                Ok(())
+                | Err(ValidationError::InvalidPoW)
+                | Err(ValidationError::TimestampTooFarInFuture) => {}
+                Err(ValidationError::MissingKemCiphertext)
+                | Err(ValidationError::InvalidKemCiphertext { .. }) => {
+                    panic!("real hybrid coinbase must not fail the KEM gate")
+                }
+                other => panic!("unexpected validation result: {other:?}"),
+            }
+        }
     }
 
     #[test]
