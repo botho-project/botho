@@ -1025,4 +1025,53 @@ mod tests {
         // Verify the secret has the correct total mass
         assert_eq!(secret.total_mass, 1_000_000);
     }
+
+    /// Node-side of the acceptance heart (issue #970): a hybrid output paid to
+    /// the wallet is detected by `Wallet::scan_output` (ML-KEM decapsulation
+    /// folded into the classical stealth check) and its one-time spend key is
+    /// recovered by `Wallet::recover_output_spend_key` — the exact scan+spend
+    /// dispatch `create_private_transaction` runs on inputs. A recovered
+    /// one-time private key `x` must satisfy `x·G == target_key`.
+    #[cfg(feature = "pq")]
+    #[test]
+    fn wallet_scans_and_recovers_hybrid_output() {
+        use bth_crypto_keys::RistrettoPublic;
+
+        let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+        let wallet = Wallet::from_mnemonic(mnemonic).unwrap();
+
+        let output_index = 0u32;
+        let out = TxOutput::new_hybrid_to_address(
+            5_000_000_000_000,
+            &wallet.default_address(),
+            output_index,
+            None,
+            ClusterTagVector::empty(),
+        )
+        .expect("wallet address must publish an ML-KEM key");
+        assert!(out.kem_ciphertext.is_some(), "must be a hybrid output");
+
+        let subaddr = wallet
+            .scan_output(&out, output_index)
+            .expect("wallet must detect its own hybrid output");
+        let onetime = wallet
+            .recover_output_spend_key(&out, subaddr, output_index)
+            .expect("wallet must recover the one-time spend key");
+        assert_eq!(
+            RistrettoPublic::from(&onetime).to_bytes(),
+            out.target_key,
+            "recovered one-time key must map to the output target_key",
+        );
+
+        // Back-compat: a classical (KEM-less) output still scans + recovers on
+        // the same unified path.
+        let classical = TxOutput::new(2_000_000_000_000, &wallet.default_address());
+        assert!(classical.kem_ciphertext.is_none());
+        let cidx = wallet
+            .scan_output(&classical, 0)
+            .expect("classical output must scan on the unified path");
+        assert!(wallet
+            .recover_output_spend_key(&classical, cidx, 0)
+            .is_some());
+    }
 }
