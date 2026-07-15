@@ -578,6 +578,57 @@ mod cli {
         /// against both failure modes. Does NOT wire anything into consensus.
         SettlementHorizonSweep,
 
+        /// CT-compatible lottery-selection sweep (design-research gate for the
+        /// lottery sub-problem of #902): scores five winner-selection rules
+        /// head-to-head — Uniform, the incumbent ClusterWeighted
+        /// (value×inverse- factor; NOT CT-compatible, included as the
+        /// redistribution yardstick), and three value-free CT-clean
+        /// candidates (FeeInverse, CirculationGated, and their Hybrid).
+        /// Reuses the real ClusterFactorCurve, demurrage_charge,
+        /// LotteryCandidate/SelectionMode weights and the shared
+        /// calculate_gini. Reports each rule's Δgini vs a burn baseline
+        /// (redistribution recovery), its weight-gain under a whale
+        /// splitting attack (Sybil resistance), and
+        /// its CT-compatibility + incremental leakage. Determines whether a
+        /// value-free rule recovers ClusterWeighted's redistribution without
+        /// the ZK weighted-sampling sort. Does NOT wire anything into
+        /// consensus.
+        LotterySelectionSweep,
+
+        /// Structural Sybil-brake sweep (realized-capture follow-up to #902):
+        /// the sibling `lottery-selection-sweep` proved no value-free WEIGHT
+        /// can be split-invariant, but measured Sybil capture as
+        /// ticket-share in a fixed 100-holder pool (an overstatement).
+        /// This sweep tests whether three value-free / CT-clean
+        /// STRUCTURAL brakes — a last-N-blocks candidate window, a
+        /// fee-denominated eligibility floor, and a per-block payout
+        /// cap — keep the *realized* whale capture bounded,
+        /// against a real organic candidate stream (denominator scales with the
+        /// window) and a rolling window (the whale must re-split forever,
+        /// paying base fees). Reuses the real demurrage_charge,
+        /// ClusterFactorCurve and calculate_gini. Reports realized
+        /// capture, attacker cost/captured ratio, and honest
+        /// redistribution Δgini. Determines whether the structural
+        /// brakes make a value-free rule (Path A/C) viable or leave the
+        /// ZK sort (Path B) required. Does NOT wire anything into consensus.
+        LotterySybilBrakeSweep,
+
+        /// Reward-cap sweep (Path C ratification gate for #902): validates the
+        /// maintainer's chosen value-free lottery — a uniform draw over the
+        /// last-N circulation window with the reward-cap invariant
+        /// `R = min(actual_fee_pool, ρ·base_fee)`, where ρ counts ALL outputs
+        /// in the window including the whale's own splits. Tests two claims:
+        /// (1) the cap makes splitting net-zero (whale winnings exactly equal
+        /// its base-fee cost at every split factor k) — Sybil-neutral by
+        /// construction; and (2) whether the cap throttles redistribution into
+        /// irrelevance — measures the fraction of demurrage revenue that flows
+        /// through the capped lottery under burn-the-excess vs carry-forward,
+        /// plus the resulting Δgini vs the uncapped windowed lottery and the
+        /// value-weighted incumbent. Reuses the real demurrage_charge,
+        /// ClusterFactorCurve and calculate_gini. Does NOT wire anything into
+        /// consensus.
+        LotteryRewardCapSweep,
+
         /// Bridge-import calibration sweep (empirical gate for #937):
         /// calibrates ADR 0007's two constants — epoch length K and
         /// import-factor floor F. Sweeps K across ~14h/1d/2d/3.5d/1wk
@@ -891,6 +942,9 @@ mod cli {
                 seed,
             ),
             Command::SettlementHorizonSweep => run_settlement_horizon_sweep_cli(),
+            Command::LotterySelectionSweep => run_lottery_selection_sweep_cli(),
+            Command::LotterySybilBrakeSweep => run_lottery_sybil_brake_sweep_cli(),
+            Command::LotteryRewardCapSweep => run_lottery_reward_cap_sweep_cli(),
             Command::BridgeImportSweep => run_bridge_import_sweep_cli(),
             Command::HonestOverchargeSweep => run_honest_overcharge_sweep_cli(),
             Command::M2Cumulative {
@@ -4400,12 +4454,57 @@ mod cli {
         println!("{}", to_markdown(&report));
     }
 
+    /// CT-compatible lottery-selection sweep (design-research gate for #902).
+    ///
+    /// Prints the redistribution, Sybil-resistance and CT-compatibility tables
+    /// that back `docs/research/ct-compatible-lottery-selection.md`. Does NOT
+    /// wire anything into consensus — the selection-rule decision is ratified
+    /// by the maintainer and carried into the CT spec (anvil:spec
+    /// authoring).
+    fn run_lottery_selection_sweep_cli() {
+        use bth_cluster_tax::simulation::lottery_selection_sweep::{
+            run_lottery_selection_sweep, to_markdown,
+        };
+        let report = run_lottery_selection_sweep();
+        println!("# CT-Compatible Lottery-Selection Sweep (issue #902)\n");
+        println!("{}", to_markdown(&report));
+    }
+
     fn run_bridge_import_sweep_cli() {
         use bth_cluster_tax::simulation::bridge_import_sweep::{
             run_bridge_import_sweep, to_markdown,
         };
         let report = run_bridge_import_sweep();
         println!("# Bridge-Import Calibration Sweep (issue #937)\n");
+        println!("{}", to_markdown(&report));
+    }
+
+    /// Structural Sybil-brake sweep (realized-capture follow-up to #902).
+    ///
+    /// Prints the realized-capture, payout-cap, fee-floor and honest-
+    /// redistribution tables that back §7 of
+    /// `docs/research/ct-compatible-lottery-selection.md`. Does NOT wire
+    /// anything into consensus.
+    fn run_lottery_sybil_brake_sweep_cli() {
+        use bth_cluster_tax::simulation::lottery_sybil_brake_sweep::{
+            run_sybil_brake_sweep, to_markdown,
+        };
+        let report = run_sybil_brake_sweep();
+        println!("# Structural Sybil-Brake Sweep (issue #902 §7)\n");
+        println!("{}", to_markdown(&report));
+    }
+
+    /// Reward-cap sweep (Path C ratification gate for #902).
+    ///
+    /// Prints the net-zero (Claim 1) and throughput + Δgini (Claim 2) tables
+    /// that back §9 of `docs/research/ct-compatible-lottery-selection.md`. Does
+    /// NOT wire anything into consensus.
+    fn run_lottery_reward_cap_sweep_cli() {
+        use bth_cluster_tax::simulation::lottery_reward_cap_sweep::{
+            run_reward_cap_sweep, to_markdown,
+        };
+        let report = run_reward_cap_sweep();
+        println!("# Reward-Cap Sweep — Path C Ratification Gate (issue #902 §9)\n");
         println!("{}", to_markdown(&report));
     }
 
