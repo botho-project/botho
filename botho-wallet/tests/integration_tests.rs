@@ -816,6 +816,7 @@ mod transaction_hash {
             public_key: public,
             e_memo: None,
             cluster_tags: Default::default(),
+            kem_ciphertext: None,
         }
     }
 

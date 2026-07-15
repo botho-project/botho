@@ -84,6 +84,7 @@ fn build_output(f: &FuzzOutput) -> TxOutput {
         public_key: f.public_key,
         e_memo: None,
         cluster_tags: Default::default(),
+        kem_ciphertext: None,
     }
 }
 
