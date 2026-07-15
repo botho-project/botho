@@ -93,7 +93,10 @@ pub enum ValidationError {
     WrongPrevBlockHash,
     WrongBlockHeight,
     WrongDifficulty,
-    WrongReward { expected: u64, got: u64 },
+    WrongReward {
+        expected: u64,
+        got: u64,
+    },
     TimestampTooFarInFuture,
     TimestampBeforeParent,
 
@@ -105,7 +108,11 @@ pub enum ValidationError {
     InputNotFound,
     InputAlreadySpent,
     InvalidSignature,
-    InsufficientFunds { input: u64, output: u64, fee: u64 },
+    InsufficientFunds {
+        input: u64,
+        output: u64,
+        fee: u64,
+    },
     StaleTransaction,
 
     // Universal ML-KEM enforcement errors (6.0.0, #958/#973)
@@ -114,7 +121,9 @@ pub enum ValidationError {
     MissingKemCiphertext,
     /// A stealth output's ML-KEM ciphertext was present but not the required
     /// [`ML_KEM_768_CIPHERTEXT_BYTES`] length.
-    InvalidKemCiphertext { len: usize },
+    InvalidKemCiphertext {
+        len: usize,
+    },
 
     // General errors
     DeserializationFailed(String),
@@ -567,8 +576,9 @@ mod tests {
 
     /// Helper to create a well-formed 6.0.0 test output: carries a
     /// structurally-valid hybrid ML-KEM ciphertext so it passes universal
-    /// enforcement ([`KEM_CIPHERTEXT_ENFORCED`]). Under a `--no-default-features`
-    /// (no-PQ) build the ciphertext is simply ignored.
+    /// enforcement ([`KEM_CIPHERTEXT_ENFORCED`]). Under a
+    /// `--no-default-features` (no-PQ) build the ciphertext is simply
+    /// ignored.
     fn test_output(amount: u64, id: u8) -> TxOutput {
         TxOutput {
             amount,
@@ -862,7 +872,8 @@ mod tests {
             ));
         }
 
-        /// A transfer tx whose output ciphertext is the wrong length is REJECTED.
+        /// A transfer tx whose output ciphertext is the wrong length is
+        /// REJECTED.
         #[test]
         fn transfer_tx_wrong_length_ciphertext_rejected() {
             let validator = TransactionValidator::new(mock_chain_state());
@@ -958,10 +969,11 @@ mod tests {
         }
 
         /// End-to-end: a real 6.0.0 coinbase built via the production
-        /// `MintingTx::new` path (encapsulating to a v2 address that publishes an
-        /// ML-KEM key) carries a valid 1088-byte ciphertext, so the universal
-        /// ML-KEM gate ACCEPTS it — any failure is on an unrelated check (e.g.
-        /// unsolved PoW), never a KEM error. Avoids solving RandomX in-test.
+        /// `MintingTx::new` path (encapsulating to a v2 address that publishes
+        /// an ML-KEM key) carries a valid 1088-byte ciphertext, so the
+        /// universal ML-KEM gate ACCEPTS it — any failure is on an
+        /// unrelated check (e.g. unsolved PoW), never a KEM error.
+        /// Avoids solving RandomX in-test.
         #[test]
         fn real_hybrid_coinbase_passes_kem_gate() {
             use bth_account_keys::AccountKey;
@@ -976,8 +988,14 @@ mod tests {
                 .default_subaddress()
                 .with_pq_keys(kem.public_key().as_bytes().to_vec(), Vec::new());
 
-            let tx =
-                MintingTx::new(11, 600_000_000_000, &addr, [0u8; 32], 1000, current_timestamp());
+            let tx = MintingTx::new(
+                11,
+                600_000_000_000,
+                &addr,
+                [0u8; 32],
+                1000,
+                current_timestamp(),
+            );
             assert_eq!(
                 tx.kem_ciphertext.as_ref().map(|c| c.len()),
                 Some(ML_KEM_768_CIPHERTEXT_BYTES),

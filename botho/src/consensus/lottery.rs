@@ -687,10 +687,8 @@ where
     for (index, output) in lottery_outputs.iter().enumerate() {
         let winner_id = output.winner_utxo_id();
         let (target_key, public_key, kem_ciphertext) =
-            winner_lookup(&winner_id).ok_or_else(|| {
-                LotteryValidationError::WinnerNotEligible {
-                    utxo_id: hex::encode(&winner_id[..8]),
-                }
+            winner_lookup(&winner_id).ok_or_else(|| LotteryValidationError::WinnerNotEligible {
+                utxo_id: hex::encode(&winner_id[..8]),
             })?;
 
         // Reconstruct the payout's expected consensus identity from the winning
@@ -991,8 +989,10 @@ mod tests {
     // Tests for validate_block_lottery
     // ========================================================================
 
-    use crate::block::{Block, BlockHeader, BlockLotterySummary, LotteryOutput, MintingTx};
-    use crate::transaction::TxOutput;
+    use crate::{
+        block::{Block, BlockHeader, BlockLotterySummary, LotteryOutput, MintingTx},
+        transaction::TxOutput,
+    };
 
     fn create_test_block(
         height: u64,
@@ -1311,7 +1311,11 @@ mod tests {
 
         let lookup = |id: &[u8; 36]| {
             if *id == winner_id {
-                Some((winner.target_key, winner.public_key, winner.kem_ciphertext.clone()))
+                Some((
+                    winner.target_key,
+                    winner.public_key,
+                    winner.kem_ciphertext.clone(),
+                ))
             } else {
                 None
             }
@@ -1329,7 +1333,11 @@ mod tests {
         payout.target_key = [0xFF; 32];
 
         let lookup = |_: &[u8; 36]| {
-            Some((winner.target_key, winner.public_key, winner.kem_ciphertext.clone()))
+            Some((
+                winner.target_key,
+                winner.public_key,
+                winner.kem_ciphertext.clone(),
+            ))
         };
         assert!(matches!(
             validate_lottery_output_bindings(&[payout], lookup),
@@ -1347,7 +1355,11 @@ mod tests {
         payout.kem_ciphertext = None;
 
         let lookup = |_: &[u8; 36]| {
-            Some((winner.target_key, winner.public_key, winner.kem_ciphertext.clone()))
+            Some((
+                winner.target_key,
+                winner.public_key,
+                winner.kem_ciphertext.clone(),
+            ))
         };
         assert!(matches!(
             validate_lottery_output_bindings(&[payout], lookup),
@@ -1377,8 +1389,13 @@ mod tests {
         let winner = winning_output(3, None);
         let payout = payout_for(winner_id, 400, &winner);
 
-        let lookup =
-            |_: &[u8; 36]| Some((winner.target_key, winner.public_key, winner.kem_ciphertext.clone()));
+        let lookup = |_: &[u8; 36]| {
+            Some((
+                winner.target_key,
+                winner.public_key,
+                winner.kem_ciphertext.clone(),
+            ))
+        };
         assert!(validate_lottery_output_bindings(&[payout], lookup).is_ok());
     }
 

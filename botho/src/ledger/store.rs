@@ -1124,9 +1124,10 @@ impl Ledger {
         // payout whose envelope does not match the winner (redirected funds or a
         // stripped ciphertext the winner could not recover).
         if !block.lottery_outputs.is_empty() {
-            let rtxn = self.env.read_txn().map_err(|e| {
-                LedgerError::Database(format!("Failed to start read txn: {}", e))
-            })?;
+            let rtxn = self
+                .env
+                .read_txn()
+                .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
             validate_lottery_output_bindings(&block.lottery_outputs, |winner_id| {
                 self.utxo_db
                     .get(&rtxn, winner_id)
