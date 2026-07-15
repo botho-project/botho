@@ -645,9 +645,7 @@ mod tests {
 
     /// Build a v2 address with dummy-but-correctly-sized PQ payloads.
     fn sample_v2_address() -> bth_account_keys::PublicAddress {
-        use bth_account_keys::{
-            AccountKey, ML_DSA_65_PUBLIC_KEY_LEN, ML_KEM_768_PUBLIC_KEY_LEN,
-        };
+        use bth_account_keys::{AccountKey, ML_DSA_65_PUBLIC_KEY_LEN, ML_KEM_768_PUBLIC_KEY_LEN};
         use rand::SeedableRng;
         let mut rng = rand::rngs::StdRng::from_seed([5u8; 32]);
         let kem = vec![7u8; ML_KEM_768_PUBLIC_KEY_LEN];
@@ -689,7 +687,10 @@ mod tests {
         // WASM-signer path.
         let wasm = bth_wasm_signer::core::encode_address_string(&addr, true).expect("wasm encode");
 
-        assert_eq!(node, mobile, "node and mobile encoders must be byte-identical");
+        assert_eq!(
+            node, mobile,
+            "node and mobile encoders must be byte-identical"
+        );
         assert_eq!(node, wasm, "node and wasm encoders must be byte-identical");
 
         // All three decode the string back to the same view/spend/kem/dsa.

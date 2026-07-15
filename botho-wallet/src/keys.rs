@@ -163,8 +163,9 @@ impl WalletKeys {
 
     /// Format the address as a short human-readable abbreviation (`cad:` form).
     ///
-    /// This is a display abbreviation only — use [`Self::public_address_string`]
-    /// for the full, shareable `botho://2/…` address string.
+    /// This is a display abbreviation only — use
+    /// [`Self::public_address_string`] for the full, shareable
+    /// `botho://2/…` address string.
     pub fn address_string(&self) -> String {
         let addr = self.public_address();
         format!(
@@ -560,9 +561,8 @@ mod tests {
             // signing keypair.
             let msg = b"botho wallet address v2 round trip";
             let signature = pq_account.pq_sig_keypair().sign(msg);
-            let decoded_dsa =
-                bth_crypto_pq::MlDsa65PublicKey::from_bytes(decoded.dsa_public_key())
-                    .expect("decoded DSA key is well formed");
+            let decoded_dsa = bth_crypto_pq::MlDsa65PublicKey::from_bytes(decoded.dsa_public_key())
+                .expect("decoded DSA key is well formed");
             assert!(decoded_dsa.verify(msg, &signature).is_ok());
         }
     }

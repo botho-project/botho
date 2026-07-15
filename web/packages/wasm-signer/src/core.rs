@@ -67,10 +67,7 @@ pub struct RecipientAddress {
 /// string: routing through the shared codec guarantees the wasm build is
 /// byte-identical to the node and mobile encoders (no hand-rolled base58 in
 /// JavaScript). The address must carry both post-quantum keys.
-pub fn encode_address_string(
-    addr: &PublicAddress,
-    testnet: bool,
-) -> Result<String, String> {
+pub fn encode_address_string(addr: &PublicAddress, testnet: bool) -> Result<String, String> {
     let network = if testnet {
         bth_address_codec::Network::Testnet
     } else {

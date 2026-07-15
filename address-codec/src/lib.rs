@@ -12,7 +12,8 @@
 //! the post-quantum ML-KEM-768 and ML-DSA-65 public keys) a single mismatch
 //! would silently make an address un-spendable on one client. This crate is the
 //! ONE place that turns a [`PublicAddress`] into a `botho://2/<base58>` string
-//! and back, so every encoder routes through identical logic and cannot diverge.
+//! and back, so every encoder routes through identical logic and cannot
+//! diverge.
 //!
 //! # Address format v2 (`botho://2/`)
 //!
@@ -75,8 +76,9 @@ const DSA_START: usize = KEM_START + ML_KEM_768_PUBLIC_KEY_LEN;
 
 /// The network an address belongs to.
 ///
-/// Defined locally so the codec stays a leaf crate (no dependency on the heavier
-/// transaction-types crate). Callers map their own network enum to/from this.
+/// Defined locally so the codec stays a leaf crate (no dependency on the
+/// heavier transaction-types crate). Callers map their own network enum to/from
+/// this.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Network {
     /// Main network (`botho://2/…`).
@@ -181,10 +183,7 @@ impl std::error::Error for AddressCodecError {}
 /// lengths ([`ML_KEM_768_PUBLIC_KEY_LEN`] / [`ML_DSA_65_PUBLIC_KEY_LEN`]);
 /// otherwise [`AddressCodecError::MissingPqKeys`] is returned. A classical-only
 /// address cannot be represented in the v2 format.
-pub fn encode_address(
-    addr: &PublicAddress,
-    network: Network,
-) -> Result<String, AddressCodecError> {
+pub fn encode_address(addr: &PublicAddress, network: Network) -> Result<String, AddressCodecError> {
     let kem = addr.kem_public_key();
     let dsa = addr.dsa_public_key();
     if kem.len() != ML_KEM_768_PUBLIC_KEY_LEN || dsa.len() != ML_DSA_65_PUBLIC_KEY_LEN {
@@ -272,10 +271,10 @@ mod tests {
     use rand::rngs::StdRng;
     use rand_core::{RngCore, SeedableRng};
 
-    /// Build a v2 address with deterministic (seeded) PQ payloads of the correct
-    /// raw lengths. The bytes need not be valid PQ keys for the string
-    /// encode/decode invariants (validity of the KEM/DSA keys is a producer
-    /// concern, not the codec's).
+    /// Build a v2 address with deterministic (seeded) PQ payloads of the
+    /// correct raw lengths. The bytes need not be valid PQ keys for the
+    /// string encode/decode invariants (validity of the KEM/DSA keys is a
+    /// producer concern, not the codec's).
     fn sample_v2_address(seed: u8) -> PublicAddress {
         let mut rng: StdRng = SeedableRng::from_seed([seed; 32]);
         let spend = RistrettoPublic::from_random(&mut rng);
@@ -291,7 +290,10 @@ mod tests {
     /// `default-features = false` account-keys dependency, so assert address
     /// equality field-by-field instead of via `assert_eq!`.
     fn assert_addresses_eq(a: &PublicAddress, b: &PublicAddress) {
-        assert_eq!(a.view_public_key().to_bytes(), b.view_public_key().to_bytes());
+        assert_eq!(
+            a.view_public_key().to_bytes(),
+            b.view_public_key().to_bytes()
+        );
         assert_eq!(
             a.spend_public_key().to_bytes(),
             b.spend_public_key().to_bytes()
@@ -426,9 +428,7 @@ mod tests {
     #[test]
     fn derived_address_round_trips_and_pq_keys_still_work() {
         use bth_account_keys::AccountKey;
-        use bth_crypto_pq::{
-            derive_pq_keys_from_seed, MlDsa65PublicKey, MlKem768PublicKey,
-        };
+        use bth_crypto_pq::{derive_pq_keys_from_seed, MlDsa65PublicKey, MlKem768PublicKey};
 
         let seed = [17u8; 64];
         let mut rng: StdRng = SeedableRng::from_seed([9u8; 32]);
