@@ -3643,14 +3643,47 @@ async fn handle_faucet_request(
         }
     };
 
-    // Build outputs
+    // Build outputs.
+    //
+    // Protocol 6.0.0: every value-transfer output is a hybrid post-quantum
+    // stealth output carrying an ML-KEM-768 ciphertext encapsulated to the
+    // destination's published KEM key (issue #958 sub-issue 4). The recipient
+    // output is index 0; the change output (a self-send encapsulated to our
+    // own address) is index 1.
     let mut outputs = Vec::new();
-    outputs.push(TxOutput::new(amount, &recipient));
+    match TxOutput::new_hybrid_to_address(
+        amount,
+        &recipient,
+        0,
+        None,
+        bth_transaction_types::ClusterTagVector::empty(),
+    ) {
+        Ok(out) => outputs.push(out),
+        Err(e) => {
+            error!(
+                "Faucet: recipient address lacks a valid ML-KEM-768 key: {}",
+                e
+            );
+            return JsonRpcResponse::error(id, -32000, "Recipient address is not post-quantum");
+        }
+    }
 
-    // Change output (if any)
+    // Change output (if any), encapsulated to our own published address.
     let change = selected_amount - amount - fee;
     if change > 0 {
-        outputs.push(TxOutput::new(change, &our_address));
+        match TxOutput::new_hybrid_to_address(
+            change,
+            &our_address,
+            1,
+            None,
+            bth_transaction_types::ClusterTagVector::empty(),
+        ) {
+            Ok(out) => outputs.push(out),
+            Err(e) => {
+                error!("Faucet: wallet address lacks a valid ML-KEM-768 key: {}", e);
+                return JsonRpcResponse::error(id, -32000, "Wallet address is not post-quantum");
+            }
+        }
     }
 
     // Create the transaction

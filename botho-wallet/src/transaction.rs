@@ -408,23 +408,34 @@ impl TransactionBuilder {
         // the inputs (matches the node's create_private_transaction).
         let inherited_tags = inherited_cluster_tags(&selected);
 
-        // Recipient output (real stealth address via Ristretto DH).
-        let mut outputs = vec![TxOutput::new_with_cluster_tags(
+        // Recipient output (index 0): a hybrid post-quantum stealth output.
+        // The sender encapsulates a shared secret against the recipient's
+        // published ML-KEM-768 key and attaches the 1,088-byte ciphertext,
+        // folding the secret into the one-time key (issue #958 sub-issue 4,
+        // whitepaper §4.2). Fails loudly if the address is not v2 (post-quantum).
+        let mut outputs = vec![TxOutput::new_hybrid_to_address(
             amount,
             recipient,
+            0,
             None,
             inherited_tags.clone(),
-        )];
+        )
+        .map_err(|e| anyhow!("recipient address is not post-quantum: {}", e))?];
 
         // Change: if above dust, create a change output back to ourselves;
         // otherwise absorb the dust into the fee to avoid an unspendable UTXO.
+        // The change output (index 1) is a self-send whose ciphertext is
+        // encapsulated to our OWN published address so we can later scan and
+        // recover it under the hybrid scheme.
         let (actual_fee, change_output_public_key) = if change >= DUST_THRESHOLD {
-            let change_output = TxOutput::new_with_cluster_tags(
+            let change_output = TxOutput::new_hybrid_to_address(
                 change,
                 &self.keys.public_address(),
+                1,
                 None,
                 inherited_tags.clone(),
-            );
+            )
+            .map_err(|e| anyhow!("wallet address is not post-quantum: {}", e))?;
             let change_key = change_output.public_key;
             outputs.push(change_output);
             (fee, Some(change_key))
@@ -1142,40 +1153,96 @@ mod tests {
             )
             .expect("build should succeed");
 
-        // The first output is the recipient output. The recipient's scanner
-        // must detect ownership via the DH stealth protocol.
-        let recipient_scanner = WalletScanner::new(&recipient_keys);
+        // The first output is the recipient output.
         let out = &result.transaction.outputs[0];
         assert_eq!(out.amount, send_amount);
-        let owned = recipient_scanner.check_ownership(&out.target_key, &out.public_key);
-        assert_eq!(
-            owned,
-            Some(0),
-            "recipient must detect the output on their default subaddress"
-        );
 
-        // And the *sender* must NOT detect the recipient's output as their own.
-        let sender_scanner = WalletScanner::new(&keys);
-        assert_eq!(
-            sender_scanner.check_ownership(&out.target_key, &out.public_key),
-            None,
-            "sender must not own the recipient's output"
-        );
-
-        // The change output (if any) must be detectable by the sender.
-        if let Some(change_key) = result.change_output_public_key {
-            let change_out = result
-                .transaction
-                .outputs
-                .iter()
-                .find(|o| o.public_key == change_key)
-                .expect("change output present");
-            assert!(
-                sender_scanner
-                    .check_ownership(&change_out.target_key, &change_out.public_key)
-                    .is_some(),
-                "sender must detect their own change output"
+        // Protocol 6.0.0: every value-transfer output is a hybrid post-quantum
+        // stealth output, so detection requires BOTH the classical view key and
+        // the ML-KEM secret key (belongs_to_hybrid), scanned at the output's
+        // index within the transaction.
+        #[cfg(feature = "pq")]
+        {
+            let recipient_account = recipient_keys.account_key();
+            let recipient_pq = recipient_keys.pq_account_key();
+            assert_eq!(
+                out.belongs_to_hybrid(recipient_account, recipient_pq.pq_kem_keypair(), 0),
+                Some(bth_account_keys::DEFAULT_SUBADDRESS_INDEX),
+                "recipient must detect the hybrid output on their default subaddress"
             );
+
+            // The recipient output carries a 1,088-byte ML-KEM ciphertext.
+            assert_eq!(
+                out.kem_ciphertext.as_ref().map(|c| c.len()),
+                Some(bth_crypto_pq::ML_KEM_768_CIPHERTEXT_BYTES),
+                "recipient output must carry a 1088-byte ML-KEM ciphertext"
+            );
+
+            // The *sender* must NOT detect the recipient's output as their own.
+            let sender_account = keys.account_key();
+            let sender_pq = keys.pq_account_key();
+            assert_eq!(
+                out.belongs_to_hybrid(sender_account, sender_pq.pq_kem_keypair(), 0),
+                None,
+                "sender must not own the recipient's output"
+            );
+
+            // The change output (if any) must be detectable by the sender at its
+            // own output index and carry a ciphertext of its own.
+            if let Some(change_key) = result.change_output_public_key {
+                let (idx, change_out) = result
+                    .transaction
+                    .outputs
+                    .iter()
+                    .enumerate()
+                    .find(|(_, o)| o.public_key == change_key)
+                    .expect("change output present");
+                assert_eq!(
+                    change_out.kem_ciphertext.as_ref().map(|c| c.len()),
+                    Some(bth_crypto_pq::ML_KEM_768_CIPHERTEXT_BYTES),
+                    "change output must carry a 1088-byte ML-KEM ciphertext"
+                );
+                assert!(
+                    change_out
+                        .belongs_to_hybrid(sender_account, sender_pq.pq_kem_keypair(), idx as u32)
+                        .is_some(),
+                    "sender must detect their own change output under the hybrid scheme"
+                );
+            }
+        }
+
+        // Classical fallback (`--no-default-features`): outputs are classical
+        // stealth outputs and remain detectable via the DH scanner.
+        #[cfg(not(feature = "pq"))]
+        {
+            let recipient_scanner = WalletScanner::new(&recipient_keys);
+            assert_eq!(
+                recipient_scanner.check_ownership(&out.target_key, &out.public_key),
+                Some(0),
+                "recipient must detect the output on their default subaddress"
+            );
+
+            let sender_scanner = WalletScanner::new(&keys);
+            assert_eq!(
+                sender_scanner.check_ownership(&out.target_key, &out.public_key),
+                None,
+                "sender must not own the recipient's output"
+            );
+
+            if let Some(change_key) = result.change_output_public_key {
+                let change_out = result
+                    .transaction
+                    .outputs
+                    .iter()
+                    .find(|o| o.public_key == change_key)
+                    .expect("change output present");
+                assert!(
+                    sender_scanner
+                        .check_ownership(&change_out.target_key, &change_out.public_key)
+                        .is_some(),
+                    "sender must detect their own change output"
+                );
+            }
         }
     }
 

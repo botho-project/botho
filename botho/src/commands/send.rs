@@ -4,6 +4,8 @@ use anyhow::{Context, Result};
 use bth_cluster_tax::{FeeConfig, TransactionType};
 use std::{fs, path::Path};
 
+use bth_transaction_types::ClusterTagVector;
+
 use crate::{
     address::Address,
     config::{ledger_db_path_from_config, Config},
@@ -150,17 +152,42 @@ pub fn run(
         selected_amount += utxo.output.amount;
     }
 
-    // Build outputs
+    // Build outputs.
+    //
+    // Under protocol 6.0.0 every value-transfer output is a hybrid
+    // post-quantum stealth output: the sender encapsulates a shared secret
+    // against the destination's published ML-KEM-768 key and attaches the
+    // 1,088-byte ciphertext (issue #958 sub-issue 4, whitepaper §4.2). The
+    // recipient output is index 0; the change output (a self-send whose
+    // ciphertext is encapsulated to our OWN published address) is index 1.
     let mut outputs = Vec::new();
 
     // Output to recipient (with optional memo)
     let memo_payload = memo.map(MemoPayload::destination);
-    outputs.push(TxOutput::new_with_memo(amount, &recipient, memo_payload));
+    outputs.push(
+        TxOutput::new_hybrid_to_address(
+            amount,
+            &recipient,
+            0,
+            memo_payload,
+            ClusterTagVector::empty(),
+        )
+        .context("recipient address does not publish a valid ML-KEM-768 key")?,
+    );
 
-    // Change output (if any) - no memo on change
+    // Change output (if any) - no memo on change, encapsulated to our address
     let change = selected_amount - amount - fee;
     if change > 0 {
-        outputs.push(TxOutput::new(change, &our_address));
+        outputs.push(
+            TxOutput::new_hybrid_to_address(
+                change,
+                &our_address,
+                1,
+                None,
+                ClusterTagVector::empty(),
+            )
+            .context("wallet address does not publish a valid ML-KEM-768 key")?,
+        );
     }
 
     // Create the transaction (always private with CLSAG ring signatures)

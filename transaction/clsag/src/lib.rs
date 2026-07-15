@@ -129,6 +129,37 @@ impl std::fmt::Display for TransactionStructureError {
 
 impl std::error::Error for TransactionStructureError {}
 
+/// Error returned when a value-transfer output cannot be built as a hybrid
+/// post-quantum stealth output because the destination address does not
+/// publish a well-formed ML-KEM-768 public key.
+///
+/// Under the protocol 6.0.0 output format every address is v2 and publishes a
+/// 1,184-byte ML-KEM-768 key (issue #958, whitepaper §4.2), so the
+/// value-transfer send path fails loudly rather than emit a KEM-less output
+/// that consensus enforcement (issue #958 sub-issue 7) would reject. There is
+/// no silent classical fallback on a `pq`-enabled node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HybridOutputError {
+    /// The destination address does not carry a valid ML-KEM-768 public key
+    /// (the published key is absent or not exactly
+    /// `bth_account_keys::ML_KEM_768_PUBLIC_KEY_LEN` bytes).
+    MissingKemPublicKey,
+}
+
+impl std::fmt::Display for HybridOutputError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MissingKemPublicKey => write!(
+                f,
+                "destination address does not publish a valid ML-KEM-768 public key \
+                 (required for the protocol 6.0.0 hybrid stealth output format)"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for HybridOutputError {}
+
 /// Picocredits per credit (10^12)
 pub const PICOCREDITS_PER_CREDIT: u64 = 1_000_000_000_000;
 
@@ -750,6 +781,69 @@ impl TxOutput {
             &subaddress_spend_private,
             &kem_secret,
             output_index,
+        ))
+    }
+
+    /// Build a hybrid post-quantum stealth output addressed to `recipient`,
+    /// reading the ML-KEM-768 public key published in the recipient's address.
+    ///
+    /// This is the value-transfer **send-path** constructor: it looks up the
+    /// recipient's published ML-KEM-768 key (address format v2, ADR 0008),
+    /// encapsulates a shared secret against it, attaches the resulting
+    /// 1,088-byte ciphertext, and folds the secret into the one-time
+    /// `target_key` (see [`TxOutput::new_hybrid`]).
+    ///
+    /// `output_index` is the output's position within its transaction and is
+    /// bound into the one-time-key derivation, so the recipient (and, for
+    /// change/self-send, the sender) must scan with the same index.
+    ///
+    /// # Errors
+    /// Returns [`HybridOutputError::MissingKemPublicKey`] if `recipient` does
+    /// not publish a well-formed ML-KEM-768 key. Under protocol 6.0.0 every
+    /// address is v2, so a missing key is a hard error rather than a silent
+    /// classical fallback (which would emit a KEM-less output that consensus
+    /// enforcement rejects).
+    pub fn new_hybrid_to_address(
+        amount: u64,
+        recipient: &PublicAddress,
+        output_index: u32,
+        memo: Option<MemoPayload>,
+        cluster_tags: ClusterTagVector,
+    ) -> Result<Self, HybridOutputError> {
+        let kem_public_key = MlKem768PublicKey::from_bytes(recipient.kem_public_key())
+            .map_err(|_| HybridOutputError::MissingKemPublicKey)?;
+        Ok(Self::new_hybrid(
+            amount,
+            recipient,
+            &kem_public_key,
+            output_index,
+            memo,
+            cluster_tags,
+        ))
+    }
+}
+
+/// Classical fallback for builds without the `pq` feature.
+///
+/// The protocol 6.0.0 node builds with `pq` enabled by default; this branch
+/// exists solely so the `--no-default-features` build keeps compiling. It emits
+/// a classical stealth output with `kem_ciphertext == None`.
+#[cfg(not(feature = "pq"))]
+impl TxOutput {
+    /// Classical fallback: constructs a classical stealth output (no ML-KEM
+    /// ciphertext). `output_index` is unused in the classical derivation.
+    pub fn new_hybrid_to_address(
+        amount: u64,
+        recipient: &PublicAddress,
+        _output_index: u32,
+        memo: Option<MemoPayload>,
+        cluster_tags: ClusterTagVector,
+    ) -> Result<Self, HybridOutputError> {
+        Ok(Self::new_with_cluster_tags(
+            amount,
+            recipient,
+            memo,
+            cluster_tags,
         ))
     }
 }
@@ -2274,5 +2368,65 @@ mod pq_tests {
             id_with_ct, id_without_ct,
             "the ML-KEM ciphertext must be bound into the output id"
         );
+    }
+
+    // The send-path constructor reads the ML-KEM key PUBLISHED in the
+    // recipient's address (rather than taking it as a separate argument),
+    // encapsulates to it, and produces a spendable hybrid output.
+    #[test]
+    fn new_hybrid_to_address_reads_published_kem_key() {
+        let (account, kem) = recipient(20);
+        // A v2 address that publishes the recipient's ML-KEM-768 key.
+        let addr = account
+            .default_subaddress()
+            .with_pq_keys(kem.public_key().as_bytes().to_vec(), Vec::new());
+
+        let output_index = 2u32;
+        let out = TxOutput::new_hybrid_to_address(
+            3_000_000,
+            &addr,
+            output_index,
+            None,
+            ClusterTagVector::empty(),
+        )
+        .expect("address publishes a valid ML-KEM key");
+
+        // Carries a 1,088-byte ML-KEM ciphertext.
+        assert_eq!(
+            out.kem_ciphertext.as_ref().map(|c| c.len()),
+            Some(ML_KEM_768_CIPHERTEXT_BYTES),
+            "send-path output must carry a 1088-byte ciphertext"
+        );
+
+        // Recipient decapsulates, detects ownership, and recovers the one-time
+        // spend key whose public point equals the output target_key.
+        let idx = out
+            .belongs_to_hybrid(&account, &kem, output_index)
+            .expect("recipient detects the send-path output");
+        let spend_key = out
+            .recover_spend_key_hybrid(&account, &kem, idx, output_index)
+            .expect("recipient recovers the one-time spend key");
+        assert_eq!(
+            RistrettoPublic::from(&spend_key).to_bytes(),
+            out.target_key,
+            "recovered one-time key must regenerate the output target_key"
+        );
+    }
+
+    // On the 6.0.0 chain every address is v2. A classical-only (KEM-less)
+    // address must fail loudly rather than silently emit a KEM-less output.
+    #[test]
+    fn new_hybrid_to_address_rejects_kem_less_address() {
+        let (account, _kem) = recipient(21);
+        let addr = account.default_subaddress();
+        assert!(
+            addr.kem_public_key().is_empty(),
+            "fixture address must be classical-only"
+        );
+
+        let err =
+            TxOutput::new_hybrid_to_address(1_000_000, &addr, 0, None, ClusterTagVector::empty())
+                .expect_err("a KEM-less address must be rejected");
+        assert_eq!(err, HybridOutputError::MissingKemPublicKey);
     }
 }
