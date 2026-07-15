@@ -956,6 +956,7 @@ mod tests {
             minter_spend_key: [0u8; 32],
             target_key: [0u8; 32],
             public_key: [0u8; 32],
+            kem_ciphertext: None,
             prev_block_hash: prev_hash,
             difficulty: u64::MAX,
             nonce: 0,
@@ -1025,6 +1026,7 @@ mod tests {
             payout: 900,
             target_key: [0u8; 32],
             public_key: [0u8; 32],
+            kem_ciphertext: None,
         }];
 
         let block = create_test_block(100, prev_hash, 1000, lottery_summary, lottery_outputs);
@@ -1082,6 +1084,7 @@ mod tests {
             payout: 700, // Wrong! Should be 800
             target_key: [0u8; 32],
             public_key: [0u8; 32],
+            kem_ciphertext: None,
         }];
 
         let block = create_test_block(100, prev_hash, 1000, lottery_summary, lottery_outputs);
@@ -1114,6 +1117,7 @@ mod tests {
             payout: 800,
             target_key: [0u8; 32],
             public_key: [0u8; 32],
+            kem_ciphertext: None,
         }];
 
         let block = create_test_block(100, prev_hash, 1000, lottery_summary, lottery_outputs);

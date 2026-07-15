@@ -3726,6 +3726,7 @@ mod tests {
             minter_spend_key: [2u8; 32],
             target_key: [3u8; 32],
             public_key: [4u8; 32],
+            kem_ciphertext: None,
             prev_block_hash: [0u8; 32],
             difficulty: 1000,
             nonce: 0,
