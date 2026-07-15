@@ -1728,7 +1728,7 @@ dependencies = [
 
 [[package]]
 name = "botho"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "aes",
  "anyhow",
@@ -1827,7 +1827,7 @@ dependencies = [
 
 [[package]]
 name = "botho-desktop"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "botho-wallet",
@@ -1846,7 +1846,7 @@ dependencies = [
 
 [[package]]
 name = "botho-exchange-scanner"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1871,7 +1871,7 @@ dependencies = [
 
 [[package]]
 name = "botho-metrics-daemon"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
@@ -1890,7 +1890,7 @@ dependencies = [
 
 [[package]]
 name = "botho-mobile"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bip39",
@@ -1913,7 +1913,7 @@ dependencies = [
 
 [[package]]
 name = "botho-wallet"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -2022,7 +2022,7 @@ dependencies = [
 
 [[package]]
 name = "bth-bridge-core"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "chrono",
  "ed25519-dalek",
@@ -2037,7 +2037,7 @@ dependencies = [
 
 [[package]]
 name = "bth-bridge-service"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "alloy",
  "async-trait",
@@ -2072,7 +2072,7 @@ dependencies = [
 
 [[package]]
 name = "bth-cluster-tax"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "bth-transaction-types",
  "clap",
@@ -2313,7 +2313,7 @@ dependencies = [
 
 [[package]]
 name = "bth-crypto-pq"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "criterion",
  "hex",
@@ -2378,7 +2378,7 @@ dependencies = [
 
 [[package]]
 name = "bth-crypto-secp256k1"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "hex",
  "hmac",
@@ -2403,7 +2403,7 @@ dependencies = [
 
 [[package]]
 name = "bth-discover"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bth-common",
@@ -2425,7 +2425,7 @@ dependencies = [
 
 [[package]]
 name = "bth-gossip"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "bitflags 2.13.0",
  "bth-common",
