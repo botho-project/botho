@@ -215,8 +215,8 @@ pub fn create_shared_secret(
 // secrets, an adversary must break the classical curve problem *and* the
 // ML-KEM lattice problem to link or spend the output:
 //
-//     s = Blake2b-512( DOMAIN || dh_secret.compress() || K || output_index ) mod q
-//     target_key         = s * G + D
+//     s = Blake2b-512( DOMAIN || dh_secret.compress() || K || output_index )
+// mod q     target_key         = s * G + D
 //     onetime_private_key = s + d
 //
 // where `dh_secret = r * C` for the sender and `dh_secret = a * R` for the

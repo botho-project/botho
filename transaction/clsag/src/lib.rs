@@ -1926,8 +1926,7 @@ mod tests {
 mod pq_tests {
     use super::*;
     use bth_crypto_pq::{MlKem768KeyPair, ML_KEM_768_CIPHERTEXT_BYTES};
-    use rand::rngs::StdRng;
-    use rand::SeedableRng;
+    use rand::{rngs::StdRng, SeedableRng};
 
     // A deterministic (account, ML-KEM keypair) recipient for tests.
     fn recipient(seed: u8) -> (AccountKey, MlKem768KeyPair) {
@@ -1948,7 +1947,10 @@ mod pq_tests {
             None,
             ClusterTagVector::empty(),
         );
-        let ct = out.kem_ciphertext.as_ref().expect("hybrid output has ciphertext");
+        let ct = out
+            .kem_ciphertext
+            .as_ref()
+            .expect("hybrid output has ciphertext");
         assert_eq!(
             ct.len(),
             ML_KEM_768_CIPHERTEXT_BYTES,
@@ -2111,7 +2113,10 @@ mod pq_tests {
             None,
             ClusterTagVector::empty(),
         );
-        assert_eq!(a, b, "hybrid construction must be deterministic in its inputs");
+        assert_eq!(
+            a, b,
+            "hybrid construction must be deterministic in its inputs"
+        );
     }
 
     #[test]
