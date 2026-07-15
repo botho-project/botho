@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "thread": "botho-bridge-spec",
+  "critic": "audit",
+  "phases": {
+    "audit": {
+      "state": "done",
+      "started": "2026-07-14T19:10:00Z",
+      "completed": "2026-07-14T19:35:00Z"
+    }
+  },
+  "metadata": {
+    "rubric_id": "anvil-spec-v1",
+    "rubric_total": 44,
+    "advance_threshold": 39,
+    "scorecard_kind": "human-verdict",
+    "audit_clean": true,
+    "code_ref_active": true,
+    "code_ref_resolved_count": 35,
+    "claims_checked": 42,
+    "contradictions": 0,
+    "critical_flags": 0,
+    "major_findings": 1,
+    "disposition_counts": {
+      "spec_wrong": 0,
+      "code_wrong": 0,
+      "intentional_gap": 4,
+      "unregistered": 0
+    },
+    "atomicity_fallback": "manual-mv",
+    "findings_written_via": "bash-heredoc (anvil#717 output-file guard rejected findings.md on the Write tool)"
+  }
+}

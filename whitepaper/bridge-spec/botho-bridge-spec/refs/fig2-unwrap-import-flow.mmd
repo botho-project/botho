@@ -1,0 +1,16 @@
+sequenceDiagram
+    autonumber
+    actor U as User
+    participant C as ETH / SOL Watcher
+    participant F as Federation (t-of-n)
+    participant R as BTH Reserve
+
+    U->>C: Burn wBTH
+    C->>C: Confirm (depth window / Finalized)
+    C->>F: Confirmed burn
+    F->>F: Collect t-of-n release attestation<br/>(order-bound)
+    F->>R: Release reserve BTH
+    R->>R: Release to fresh stealth address
+    Note over R: Target-state: tag 100% to epoch<br/>import cluster c_import(m)<br/>at import_factor(m) >= F
+    Note over R: Live (register row IMP-2):<br/>releases a factor-1 output
+    R-->>U: BTH received

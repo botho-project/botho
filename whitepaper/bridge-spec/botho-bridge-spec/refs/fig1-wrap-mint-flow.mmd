@@ -1,0 +1,18 @@
+sequenceDiagram
+    autonumber
+    actor U as User
+    participant R as BTH Reserve
+    participant W as BTH Watcher (SCP)
+    participant F as Federation (t-of-n)
+    participant D as Destination contract<br/>(Ethereum / Solana)
+
+    U->>R: Lock deposit (factor-1 BTH)
+    alt factor-1 deposit
+        R->>W: Await SCP finality
+        W->>F: Confirmed final deposit
+        F->>F: Collect t-of-n attestation<br/>(domain-separated, order-bound)
+        F->>D: bridgeMint(to, amount, orderId)
+        D-->>U: wBTH minted (exactly-once / orderId)
+    else non-factor-1 deposit
+        R-->>U: Rejected before any mint<br/>(audit event, never mints)
+    end
