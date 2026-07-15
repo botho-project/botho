@@ -578,17 +578,19 @@ mod cli {
         /// against both failure modes. Does NOT wire anything into consensus.
         SettlementHorizonSweep,
 
-        /// Bridge-import calibration sweep (empirical gate for #937): calibrates
-        /// ADR 0007's two constants — epoch length K and import-factor floor F.
-        /// Sweeps K across ~14h/1d/2d/3.5d/1wk of blocks (5s reference) and F
-        /// across 1.0x..2.0x, using the real ClusterFactorCurve, the real
-        /// TagVector::mix blend, the demurrage kernel, and the shared
-        /// calculate_gini. Reports split-game cost (wall-clock to dilute a whale
-        /// import to the floor) vs innocent-small-entrant collateral in a
-        /// co-occurring flood epoch (the K trade-off); residual anti-hoarding vs
-        /// onboarding friction (the F trade-off); the decay-by-circulation curve
-        /// and the pure-external-holder >= F invariant. Recommends K + F against
-        /// both failure modes. Does NOT wire anything into consensus.
+        /// Bridge-import calibration sweep (empirical gate for #937):
+        /// calibrates ADR 0007's two constants — epoch length K and
+        /// import-factor floor F. Sweeps K across ~14h/1d/2d/3.5d/1wk
+        /// of blocks (5s reference) and F across 1.0x..2.0x, using the
+        /// real ClusterFactorCurve, the real TagVector::mix blend, the
+        /// demurrage kernel, and the shared calculate_gini. Reports
+        /// split-game cost (wall-clock to dilute a whale import to the
+        /// floor) vs innocent-small-entrant collateral in a
+        /// co-occurring flood epoch (the K trade-off); residual anti-hoarding
+        /// vs onboarding friction (the F trade-off); the
+        /// decay-by-circulation curve and the pure-external-holder >= F
+        /// invariant. Recommends K + F against both failure modes. Does
+        /// NOT wire anything into consensus.
         BridgeImportSweep,
 
         /// M2 (#605 / #626 §7) — RECALIBRATED-CUMULATIVE run: exercises the

@@ -6,8 +6,9 @@
 //! cluster**: every unwrap in height range `[mK, (m+1)K)` joins one shared
 //! origin `c_import(m) = H("bridge-import" ‖ m)`, where `m = ⌊height / K⌋`. The
 //! import cluster's wealth (the curve input) is the **sum of all unwrap amounts
-//! in the epoch**, and the production [`crate::ClusterFactorCurve`] maps it to a
-//! factor — the identical curve domestic clusters use — clamped to a floor `F`:
+//! in the epoch**, and the production [`crate::ClusterFactorCurve`] maps it to
+//! a factor — the identical curve domestic clusters use — clamped to a floor
+//! `F`:
 //!
 //! ```text
 //! import_factor(m) = max(F, ClusterFactorCurve(Σ unwrap amounts in epoch m))
@@ -16,26 +17,28 @@
 //! Two constants require calibration before ADR 0007 moves Proposed → Accepted:
 //!
 //! 1. **Epoch length `K`** (blocks). Trades **split-game cost** (≈ `K` blocks ×
-//!    5 s per dilution step — a whale must spread its unwraps across *epochs* to
-//!    dilute the shared pool, and each epoch costs wall-clock time) against
+//!    5 s per dilution step — a whale must spread its unwraps across *epochs*
+//!    to dilute the shared pool, and each epoch costs wall-clock time) against
 //!    **co-location collateral** (a genuinely small entrant that lands in a
 //!    co-occurring whale-flood epoch inherits the flood's high factor). Short
 //!    `K` → little collateral but cheaper to split-game over time; long `K` →
 //!    costlier to game but a small entrant is likelier caught in a flood.
-//! 2. **Import-factor floor `F`**. Bounds the split-game payoff (the best factor
-//!    a whale can reach by diluting is `F`, not `1`) and sets the minimum
-//!    bridge-entry toll. `F = 1` = no floor (split-gameable toward 1×); higher
-//!    `F` penalizes *all* imports more bluntly, including small honest entrants.
+//! 2. **Import-factor floor `F`**. Bounds the split-game payoff (the best
+//!    factor a whale can reach by diluting is `F`, not `1`) and sets the
+//!    minimum bridge-entry toll. `F = 1` = no floor (split-gameable toward 1×);
+//!    higher `F` penalizes *all* imports more bluntly, including small honest
+//!    entrants.
 //!
 //! # The load-bearing structural fact (why the epoch key defeats the split)
 //!
 //! A **size-based per-unwrap factor** is Sybil-able: a whale drip-splits into
 //! `N` dust unwraps, each a separate low-wealth origin at factor ~1×, then
-//! reassembles domestically. The epoch key defeats this because all unwraps in a
-//! window **share one accumulating cluster** — intra-epoch splitting piles into
-//! the same pool and still hits the high factor. Diluting requires spreading
-//! across *epochs*, which costs `K` blocks each. **Time-as-cost replaces
-//! provenance-as-cost.** This sweep quantifies exactly how much time, per `K`.
+//! reassembles domestically. The epoch key defeats this because all unwraps in
+//! a window **share one accumulating cluster** — intra-epoch splitting piles
+//! into the same pool and still hits the high factor. Diluting requires
+//! spreading across *epochs*, which costs `K` blocks each. **Time-as-cost
+//! replaces provenance-as-cost.** This sweep quantifies exactly how much time,
+//! per `K`.
 //!
 //! # Decay by circulation (the third experiment)
 //!
@@ -51,9 +54,9 @@
 //! # Method (a focused, deterministic experiment)
 //!
 //! Like [`super::settlement_horizon_sweep`], this is a focused, deterministic
-//! computation rather than the full agent framework: the levers here are the two
-//! constants `K` and `F` against analytic failure modes, not multi-agent flow.
-//! It reuses the shipped [`crate::ClusterFactorCurve`], the shipped
+//! computation rather than the full agent framework: the levers here are the
+//! two constants `K` and `F` against analytic failure modes, not multi-agent
+//! flow. It reuses the shipped [`crate::ClusterFactorCurve`], the shipped
 //! [`crate::TagVector`] blend, the shipped [`crate::demurrage_charge`] kernel,
 //! and the shared [`super::metrics::calculate_gini`] — no second curve, blend,
 //! charge, or Gini implementation. Everything is a pure function of the inputs
@@ -103,8 +106,8 @@ impl Epoch {
     }
 }
 
-/// The candidate epoch lengths swept, in report order: ~14 h → ~1 week of blocks
-/// at the 5s reference. These bracket the ADR's stated range.
+/// The candidate epoch lengths swept, in report order: ~14 h → ~1 week of
+/// blocks at the 5s reference. These bracket the ADR's stated range.
 pub fn candidate_epochs() -> Vec<Epoch> {
     vec![
         Epoch {
@@ -137,8 +140,8 @@ pub fn candidate_floors() -> Vec<u64> {
     vec![1000, 1250, 1500, 1750, 2000]
 }
 
-/// A bridge-inflow regime: the total unwrap volume that lands in a single epoch,
-/// used to derive the epoch cluster's factor from the real curve.
+/// A bridge-inflow regime: the total unwrap volume that lands in a single
+/// epoch, used to derive the epoch cluster's factor from the real curve.
 #[derive(Clone, Copy, Debug)]
 pub struct VolumeRegime {
     /// Human label ("low" / "medium" / "high").
@@ -147,9 +150,9 @@ pub struct VolumeRegime {
     pub epoch_volume_bth: u64,
 }
 
-/// Bridge-volume regimes, spanning the curve: an organic trickle (well below the
-/// 100k-BTH midpoint), a medium inflow near the knee, and a capital flood at/
-/// above saturation.
+/// Bridge-volume regimes, spanning the curve: an organic trickle (well below
+/// the 100k-BTH midpoint), a medium inflow near the knee, and a capital flood
+/// at/ above saturation.
 pub fn volume_regimes() -> Vec<VolumeRegime> {
     vec![
         VolumeRegime {
@@ -197,7 +200,8 @@ pub fn import_factor(epoch_volume_bth: u64, floor_scaled: u64) -> u64 {
 #[derive(Clone, Debug)]
 pub struct SplitGameRow {
     pub epoch: Epoch,
-    /// The whale's total import size in BTH (the wealth it wants at factor `F`).
+    /// The whale's total import size in BTH (the wealth it wants at factor
+    /// `F`).
     pub whale_import_bth: u64,
     /// The floor `F` in effect, FACTOR_SCALE units.
     pub floor_scaled: u64,
@@ -256,8 +260,7 @@ pub fn split_game_table(
             // n epochs total elapsed. We report total elapsed time to place all
             // n tranches, which is what the whale actually pays.
             let total_blocks = n.saturating_mul(epoch.blocks);
-            let split_game_days =
-                total_blocks as f64 * SECONDS_PER_BLOCK as f64 / 86_400.0;
+            let split_game_days = total_blocks as f64 * SECONDS_PER_BLOCK as f64 / 86_400.0;
             rows.push(SplitGameRow {
                 epoch,
                 whale_import_bth: whale,
@@ -286,8 +289,8 @@ pub struct CollateralRow {
     /// `max(F, curve(small))`. A retail-scale import is low on the curve, so
     /// this is the floor F whenever F exceeds the coin's natural curve factor.
     pub alone_factor_scaled: u64,
-    /// Factor the small entrant actually gets, caught in the shared flood epoch:
-    /// `import_factor(small + flood)`.
+    /// Factor the small entrant actually gets, caught in the shared flood
+    /// epoch: `import_factor(small + flood)`.
     pub caught_factor_scaled: u64,
     /// The collateral premium: caught factor ÷ alone factor. 1.0 = no
     /// collateral; higher = the innocent pays for the whale's flood.
@@ -327,15 +330,16 @@ pub fn collateral_table(
 // ============================================================================
 
 /// One row of the floor table: for each candidate `F`, the residual anti-
-/// hoarding on imported wealth before it circulates, and the onboarding friction
-/// a genuine small entrant pays.
+/// hoarding on imported wealth before it circulates, and the onboarding
+/// friction a genuine small entrant pays.
 #[derive(Clone, Debug)]
 pub struct FloorRow {
     /// The floor `F`, FACTOR_SCALE units.
     pub floor_scaled: u64,
     /// Effective factor a genuine SMALL entrant pays: `max(F, curve(small))`.
     /// A retail-scale import sits low on the curve, so the floor F is the toll
-    /// whenever F exceeds the coin's natural curve factor (the onboarding toll).
+    /// whenever F exceeds the coin's natural curve factor (the onboarding
+    /// toll).
     pub small_entrant_factor_scaled: u64,
     /// One year of demurrage a small entrant's imported coin owes at factor `F`
     /// before it circulates, as a % of the coin value — the onboarding friction
@@ -347,8 +351,9 @@ pub struct FloorRow {
     /// dGini-style residual: the effective-factor GAP between a background
     /// (factor-1) domestic coin and a floored imported coin, normalized to the
     /// max possible gap (6× − 1×). 0 = imported wealth is indistinguishable
-    /// from background (no residual anti-hoarding); 1 = maximally taxed. This is
-    /// the "does imported wealth stay meaningfully above background" metric.
+    /// from background (no residual anti-hoarding); 1 = maximally taxed. This
+    /// is the "does imported wealth stay meaningfully above background"
+    /// metric.
     pub residual_above_background: f64,
 }
 
@@ -438,17 +443,18 @@ impl Default for DecayParams {
         Self {
             coin_value_bth: 10_000,
             incoming_frac_bps: 10_000, // receives 1× its value in domestic money per spend
-            import_factor_scaled: 6 * ClusterFactorCurve::FACTOR_SCALE, // worst case: a flood import
+            // worst case: a flood import
+            import_factor_scaled: 6 * ClusterFactorCurve::FACTOR_SCALE,
             max_spends: 20,
             epoch_m: 7,
         }
     }
 }
 
-/// Effective factor from an import-cluster weight fraction: value-weighted blend
-/// of `import_factor` (on the import-tagged share) and 1× (background) on the
-/// rest — mirrors how the demurrage/fee kernels weight a coin's factor by its
-/// tag composition.
+/// Effective factor from an import-cluster weight fraction: value-weighted
+/// blend of `import_factor` (on the import-tagged share) and 1× (background) on
+/// the rest — mirrors how the demurrage/fee kernels weight a coin's factor by
+/// its tag composition.
 fn effective_factor(import_weight: u32, import_factor_scaled: u64) -> u64 {
     let w = import_weight as u128;
     let scale = TAG_WEIGHT_SCALE as u128;
@@ -483,10 +489,7 @@ pub fn decay_by_circulation(params: &DecayParams) -> Vec<DecayRow> {
             spends,
             import_weight,
             import_weight_frac: import_weight as f64 / TAG_WEIGHT_SCALE as f64,
-            effective_factor_scaled: effective_factor(
-                import_weight,
-                params.import_factor_scaled,
-            ),
+            effective_factor_scaled: effective_factor(import_weight, params.import_factor_scaled),
         }
     };
     rows.push(record(0, &tag));
@@ -527,9 +530,9 @@ pub fn pure_external_holder_factor(params: &DecayParams, spends: u64) -> u64 {
 /// footprint** — the concentration signal the ADR wants. We compute the Gini of
 /// the population's *effective-spendable* wealth (value ÷ factor, a proxy for
 /// how much low-cost purchasing power each holder commands), with the flood
-/// entering at 1× (ADR 0003 status quo) vs at its epoch factor ≥ `F` (ADR 0007).
-/// Entering above background DIVIDES the flood's spendable footprint by its
-/// factor, so the effective-spendable Gini *falls*: the flood no longer
+/// entering at 1× (ADR 0003 status quo) vs at its epoch factor ≥ `F` (ADR
+/// 0007). Entering above background DIVIDES the flood's spendable footprint by
+/// its factor, so the effective-spendable Gini *falls*: the flood no longer
 /// dominates the cheap-money distribution the way a factor-1 entry would. The
 /// gap between the two Ginis is the leak ADR 0007 narrows.
 #[derive(Clone, Debug)]
@@ -538,8 +541,8 @@ pub struct GiniIllustration {
     /// Gini of effective-spendable wealth when the flood enters at factor-1
     /// (the ADR 0003 status quo — the entry leak).
     pub gini_flood_at_background: f64,
-    /// Gini of effective-spendable wealth when the flood enters at the floor `F`
-    /// (ADR 0007).
+    /// Gini of effective-spendable wealth when the flood enters at the floor
+    /// `F` (ADR 0007).
     pub gini_flood_at_floor: f64,
 }
 
@@ -609,9 +612,9 @@ pub struct BridgeImportReport {
     /// Spends needed to blend the worst-case import coin below the halfway
     /// effective-factor point (import → background).
     pub decay_half_spends: Option<u64>,
-    /// Spends needed to blend the worst-case import coin down to the recommended
-    /// floor (`RECOMMENDED_FLOOR`) — the "how long until an imported coin is as
-    /// cheap as a fresh honest import" milestone.
+    /// Spends needed to blend the worst-case import coin down to the
+    /// recommended floor (`RECOMMENDED_FLOOR`) — the "how long until an
+    /// imported coin is as cheap as a fresh honest import" milestone.
     pub decay_to_floor_spends: Option<u64>,
 }
 
@@ -641,9 +644,11 @@ pub fn run_bridge_import_sweep() -> BridgeImportReport {
     let decay_start_factor_scaled = decay_params.import_factor_scaled;
 
     // Spends to reach the halfway effective-factor point.
-    let start = decay_rows.first().map(|r| r.effective_factor_scaled).unwrap_or(0);
-    let halfway =
-        (start + ClusterFactorCurve::FACTOR_SCALE) / 2;
+    let start = decay_rows
+        .first()
+        .map(|r| r.effective_factor_scaled)
+        .unwrap_or(0);
+    let halfway = (start + ClusterFactorCurve::FACTOR_SCALE) / 2;
     let decay_half_spends = decay_rows
         .iter()
         .find(|r| r.effective_factor_scaled <= halfway)
@@ -672,7 +677,10 @@ pub fn run_bridge_import_sweep() -> BridgeImportReport {
 
 /// Format a FACTOR_SCALE factor as e.g. "1.500x".
 fn fmt_factor(scaled: u64) -> String {
-    format!("{:.3}x", scaled as f64 / ClusterFactorCurve::FACTOR_SCALE as f64)
+    format!(
+        "{:.3}x",
+        scaled as f64 / ClusterFactorCurve::FACTOR_SCALE as f64
+    )
 }
 
 /// Render the report as Markdown tables (the doc numbers are generated from
@@ -689,8 +697,12 @@ pub fn to_markdown(report: &BridgeImportReport) -> String {
          — `epochs to floor` — and each epoch costs K blocks × 5 s of wall-clock time.\n\n",
         fmt_factor(RECOMMENDED_FLOOR),
     ));
-    s.push_str("| K | whale import (BTH) | undiluted factor | epochs to floor | split-game cost |\n");
-    s.push_str("|---|-------------------:|-----------------:|----------------:|----------------:|\n");
+    s.push_str(
+        "| K | whale import (BTH) | undiluted factor | epochs to floor | split-game cost |\n",
+    );
+    s.push_str(
+        "|---|-------------------:|-----------------:|----------------:|----------------:|\n",
+    );
     for r in &report.split_game_rows {
         s.push_str(&format!(
             "| {} ({:.1}h) | {} | {} | {} | {:.1} days |\n",
@@ -731,7 +743,9 @@ pub fn to_markdown(report: &BridgeImportReport) -> String {
     s.push('\n');
 
     // --- Floor table ------------------------------------------------------
-    s.push_str("### Import-factor floor F sweep: residual anti-hoarding vs onboarding friction\n\n");
+    s.push_str(
+        "### Import-factor floor F sweep: residual anti-hoarding vs onboarding friction\n\n",
+    );
     s.push_str(&format!(
         "For each candidate F: the effective factor a genuine small entrant ({} BTH) pays (the \
          onboarding toll — `max(F, curve(small))`; a 1,000-BTH import is ~1.265× on the raw \
@@ -767,8 +781,12 @@ pub fn to_markdown(report: &BridgeImportReport) -> String {
          on the rest. No time-based decay — only *circulation* normalizes.\n\n",
         fmt_factor(report.decay_start_factor_scaled),
     ));
-    s.push_str("| domestic-mixing spends | import weight | import weight (frac) | effective factor |\n");
-    s.push_str("|-----------------------:|-------------:|---------------------:|-----------------:|\n");
+    s.push_str(
+        "| domestic-mixing spends | import weight | import weight (frac) | effective factor |\n",
+    );
+    s.push_str(
+        "|-----------------------:|-------------:|---------------------:|-----------------:|\n",
+    );
     for r in &report.decay_rows {
         s.push_str(&format!(
             "| {} | {} | {:.4} | {} |\n",
@@ -853,7 +871,10 @@ mod tests {
         let mut last_n = 0u64;
         for r in &rows {
             if last_n != 0 {
-                assert_eq!(r.epochs_to_floor, last_n, "epochs-to-floor is K-independent");
+                assert_eq!(
+                    r.epochs_to_floor, last_n,
+                    "epochs-to-floor is K-independent"
+                );
             }
             last_n = r.epochs_to_floor;
             assert!(
@@ -905,7 +926,10 @@ mod tests {
             last_toll = r.small_entrant_annual_toll_pct;
         }
         // The recommended 1.5× floor binds a small entrant to exactly 1.5×.
-        let rec = rows.iter().find(|r| r.floor_scaled == RECOMMENDED_FLOOR).unwrap();
+        let rec = rows
+            .iter()
+            .find(|r| r.floor_scaled == RECOMMENDED_FLOOR)
+            .unwrap();
         assert_eq!(rec.small_entrant_factor_scaled, RECOMMENDED_FLOOR);
         // A 2× floor sits above zero residual.
         let two_x = rows.iter().find(|r| r.floor_scaled == 2000).unwrap();
