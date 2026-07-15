@@ -593,6 +593,20 @@ mod cli {
         /// NOT wire anything into consensus.
         BridgeImportSweep,
 
+        /// Honest-overcharge sweep (empirical gate for #950, informs #925):
+        /// measures the honest false-positive / over-charge surface of the
+        /// #925 base-layer downgrade charge across 1mo/6mo/1yr/2yr/5yr of
+        /// blocks (5s reference). Drives the shipped simulation::agents
+        /// population (retail/merchant/mixer/whale) through the real
+        /// ring_centroid_implied_factor + demurrage_charge kernels and the
+        /// production ClusterFactorCurve. Reports the honest false-positive
+        /// rate, over-charge magnitude, exploit-vs-honest separation (confirms
+        /// the young-wealthy→background leak is still priced while honest
+        /// background→background and in-class spends stay at zero), and the
+        /// decoy-contamination sensitivity. Does NOT wire anything into
+        /// consensus.
+        HonestOverchargeSweep,
+
         /// M2 (#605 / #626 §7) — RECALIBRATED-CUMULATIVE run: exercises the
         /// REAL production log-domain cluster-factor curve (not the
         /// #314 hardcoded factors). Population declared in BTH, factor
@@ -878,6 +892,7 @@ mod cli {
             ),
             Command::SettlementHorizonSweep => run_settlement_horizon_sweep_cli(),
             Command::BridgeImportSweep => run_bridge_import_sweep_cli(),
+            Command::HonestOverchargeSweep => run_honest_overcharge_sweep_cli(),
             Command::M2Cumulative {
                 horizon_years,
                 gamed,
@@ -4391,6 +4406,15 @@ mod cli {
         };
         let report = run_bridge_import_sweep();
         println!("# Bridge-Import Calibration Sweep (issue #937)\n");
+        println!("{}", to_markdown(&report));
+    }
+
+    fn run_honest_overcharge_sweep_cli() {
+        use bth_cluster_tax::simulation::downgrade_overcharge_sweep::{
+            run_honest_overcharge_sweep, to_markdown,
+        };
+        let report = run_honest_overcharge_sweep();
+        println!("# Honest-Overcharge Sweep for the #925 Downgrade Charge (issue #950)\n");
         println!("{}", to_markdown(&report));
     }
 }

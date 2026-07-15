@@ -254,6 +254,17 @@ both the #831 settlement op and the #925 deflation-pricing rule read that single
 If a future need to diverge them arises, that should be its own ADR with its own evidence —
 the default posture is one dial.
 
+**#925-specific over-charge check (issue #950).** Because #925 auto-applies the downgrade
+charge to *every* deflating spend (unlike #831's opt-in op), it carries a false-positive risk
+this sweep does not measure: it could over-charge honest activity that looks like a downgrade.
+That surface is quantified separately in
+[`demurrage-downgrade-overcharge.md`](demurrage-downgrade-overcharge.md) (sim
+`downgrade_overcharge_sweep`, seed `0xB07A_0925`). Headline: over a realistic honest agent mix
+the honest false-positive rate is **0.0000% at every horizon** while the #834 exploit is charged
+1.90%–9.49% of value — so the honest side imposes no additional constraint on the horizon choice
+above. The one caveat is a wallet-layer decoy-selection note (do not put wealthy coins in a
+background spender's ring), not a consensus change.
+
 ## 7. What this deliverable is (and isn't)
 
 This is the **calibration simulation + recommendation**. The final `SETTLEMENT_HORIZON_BLOCKS`
