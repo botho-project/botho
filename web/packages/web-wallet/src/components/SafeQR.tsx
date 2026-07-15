@@ -22,12 +22,41 @@ import { QrCode } from 'lucide-react'
  */
 
 /**
- * Maximum payload (characters ≈ bytes for our base58/ASCII payloads) that fits a
- * single QR symbol. Uses the EC-level-L byte-mode ceiling; we intentionally pick
- * the largest so short payloads always QR, and only genuinely oversized ones
- * (full v2 addresses / links) fall back.
+ * Version-40 byte-mode capacity of a single QR symbol, per error-correction
+ * level. The fit decision MUST use the ceiling for the *same* EC level the
+ * symbol is rendered at — a higher-EC level packs fewer data bytes, so using
+ * the level-L ceiling (2953) while rendering at the default level M (2331)
+ * would judge a ~2331..2953-byte payload as "fits" and then hand it to
+ * `qrcode.react`, which throws during render (#979). Keying the cap off the
+ * rendered `level` makes the two impossible to drift apart.
+ *
+ * Sources: ISO/IEC 18004 version-40 byte-mode data capacities.
  */
-export const SINGLE_QR_BYTE_CAP = 2953
+export const QR_V40_BYTE_CAP: Record<'L' | 'M' | 'Q' | 'H', number> = {
+  L: 2953,
+  M: 2331,
+  Q: 1663,
+  H: 1273,
+}
+
+/**
+ * Maximum payload (characters ≈ bytes for our base58/ASCII payloads) that fits a
+ * single QR symbol at the given EC `level`. This is the single source of truth
+ * for the fit decision, so the cap can never diverge from the level the symbol
+ * is actually rendered at.
+ */
+export function singleQrByteCap(level: 'L' | 'M' | 'Q' | 'H'): number {
+  return QR_V40_BYTE_CAP[level]
+}
+
+/**
+ * Level-L ceiling, retained for reference/back-compat. Prefer
+ * `singleQrByteCap(level)` — this constant is only correct when rendering at
+ * EC level L, and using it directly is exactly the drift that #979 fixed.
+ *
+ * @deprecated Use {@link singleQrByteCap} keyed on the rendered `level`.
+ */
+export const SINGLE_QR_BYTE_CAP = QR_V40_BYTE_CAP.L
 
 export function SafeQR({
   value,
@@ -42,7 +71,10 @@ export function SafeQR({
   ariaLabel?: string
   className?: string
 }) {
-  const fits = value.length > 0 && value.length <= SINGLE_QR_BYTE_CAP
+  // Cap is derived from the SAME level the symbol renders at, so a payload that
+  // passes this guard is always encodable at that level (#979).
+  const cap = singleQrByteCap(level)
+  const fits = value.length > 0 && value.length <= cap
 
   if (fits) {
     return (
