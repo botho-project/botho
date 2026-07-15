@@ -197,6 +197,154 @@ pub fn create_shared_secret(
     RistrettoPublic::from(x * Y)
 }
 
+// ============================================================================
+// Hybrid post-quantum stealth one-time keys (issue #954, whitepaper §4.2)
+// ============================================================================
+//
+// The classical helpers above derive the one-time key scalar as
+// `Hs(r * C) = Hs(a * R)` — a pure classical Diffie--Hellman shared secret.
+// A quantum adversary running Shor's algorithm against the permanently
+// on-chain ephemeral key `R = r * D` recovers that secret and deanonymises the
+// recipient ("harvest now, decrypt later").
+//
+// The hybrid helpers below fold a second, ML-KEM-768 shared secret `K` into
+// the same scalar. `K` is encapsulated against the recipient's ML-KEM public
+// key (published in the recipient's address) and its 1,088-byte ciphertext is
+// carried on the output; recovering `K` requires breaking a lattice problem
+// believed hard even for quantum adversaries. Because the scalar binds BOTH
+// secrets, an adversary must break the classical curve problem *and* the
+// ML-KEM lattice problem to link or spend the output:
+//
+//     s = Blake2b-512( DOMAIN || dh_secret.compress() || K || output_index ) mod q
+//     target_key         = s * G + D
+//     onetime_private_key = s + d
+//
+// where `dh_secret = r * C` for the sender and `dh_secret = a * R` for the
+// recipient (these are equal by DH symmetry). This is a strict superset of the
+// whitepaper §4.2 construction `s = Hs(K || output_index)`: dropping the
+// `dh_secret` term recovers the pure-ML-KEM scalar, and the IND-CCA2
+// recipient-unlinkability reduction of §4.2 still goes through because `K`
+// remains an unrecoverable random input to the hash.
+//
+// The ML-KEM shared secret is passed as an opaque 32-byte array so this crate
+// takes no dependency on the PQ primitives; the caller (the transaction layer)
+// performs encapsulation/decapsulation and threads the 32 bytes through.
+
+use crate::domain_separators::HYBRID_PQ_STEALTH_SCALAR_DOMAIN_TAG;
+
+/// Length in bytes of an ML-KEM-768 shared secret.
+pub const KEM_SHARED_SECRET_LEN: usize = 32;
+
+/// Computes the hybrid stealth one-time-key scalar
+/// `Hs(dh_secret || K || output_index)`.
+///
+/// # Arguments
+/// * `dh_secret` - The classical DH shared secret point (`r * C` for the
+///   sender, `a * R` for the recipient).
+/// * `kem_shared_secret` - The 32-byte ML-KEM-768 shared secret `K`.
+/// * `output_index` - The output's index within its transaction (domain
+///   separation across multiple outputs).
+fn hybrid_stealth_scalar(
+    dh_secret: RistrettoPoint,
+    kem_shared_secret: &[u8; KEM_SHARED_SECRET_LEN],
+    output_index: u32,
+) -> Scalar {
+    let mut hasher = Blake2b512::new();
+    hasher.update(HYBRID_PQ_STEALTH_SCALAR_DOMAIN_TAG.as_bytes());
+    hasher.update(dh_secret.compress().as_bytes());
+    hasher.update(kem_shared_secret);
+    hasher.update(output_index.to_le_bytes());
+    Scalar::from_hash(hasher)
+}
+
+/// Creates the hybrid `target_key = Hs(r * C || K || i) * G + D` for an output
+/// sent to subaddress `(C, D)` with ML-KEM shared secret `K`.
+///
+/// # Arguments
+/// * `tx_private_key` - The output's ephemeral private key `r` (unique per
+///   output).
+/// * `recipient` - The recipient subaddress `(C, D)`.
+/// * `kem_shared_secret` - The 32-byte ML-KEM-768 shared secret `K` from
+///   encapsulating against the recipient's ML-KEM public key.
+/// * `output_index` - The output's index within its transaction.
+pub fn create_tx_out_target_key_hybrid(
+    tx_private_key: &RistrettoPrivate,
+    recipient: &impl RingCtAddress,
+    kem_shared_secret: &[u8; KEM_SHARED_SECRET_LEN],
+    output_index: u32,
+) -> RistrettoPublic {
+    let s: Scalar = {
+        let r = tx_private_key.as_ref();
+        let view_public = recipient.view_public_key();
+        let C: &RistrettoPoint = &RistrettoPoint::from(&view_public);
+        hybrid_stealth_scalar(r * C, kem_shared_secret, output_index)
+    };
+
+    let spend_public = recipient.spend_public_key();
+    let D: &RistrettoPoint = &RistrettoPoint::from(&spend_public);
+    RistrettoPublic::from(s * G + D)
+}
+
+/// Recovers the subaddress spend key `D` an output was sent to, under the
+/// hybrid construction: computes `P - Hs(a * R || K || i) * G`.
+///
+/// If the output belongs to this recipient the returned value equals `D_i`;
+/// otherwise it is meaningless.
+///
+/// # Arguments
+/// * `view_private_key` - The recipient's view private key `a`.
+/// * `tx_out_target_key` - The output's target key `P`.
+/// * `tx_out_public_key` - The output's ephemeral public key `R = r * D`.
+/// * `kem_shared_secret` - The 32-byte ML-KEM-768 shared secret `K` recovered
+///   by decapsulating the output's ciphertext.
+/// * `output_index` - The output's index within its transaction.
+pub fn recover_public_subaddress_spend_key_hybrid(
+    view_private_key: &RistrettoPrivate,
+    tx_out_target_key: &RistrettoPublic,
+    tx_out_public_key: &RistrettoPublic,
+    kem_shared_secret: &[u8; KEM_SHARED_SECRET_LEN],
+    output_index: u32,
+) -> RistrettoPublic {
+    let s: Scalar = {
+        let a = view_private_key.as_ref();
+        let R = tx_out_public_key.as_ref();
+        hybrid_stealth_scalar(a * R, kem_shared_secret, output_index)
+    };
+
+    let P = tx_out_target_key.as_ref();
+    RistrettoPublic::from(P - s * G)
+}
+
+/// Computes the hybrid one-time private key `Hs(a * R || K || i) + d`.
+///
+/// This assumes the output belongs to the provided keys (check with
+/// [`recover_public_subaddress_spend_key_hybrid`] first).
+///
+/// # Arguments
+/// * `tx_out_public_key` - The output's ephemeral public key `R = r * D`.
+/// * `view_private_key` - The recipient's view private key `a`.
+/// * `subaddress_spend_private_key` - The subaddress spend private key `d`.
+/// * `kem_shared_secret` - The 32-byte ML-KEM-768 shared secret `K` recovered
+///   by decapsulating the output's ciphertext.
+/// * `output_index` - The output's index within its transaction.
+pub fn recover_onetime_private_key_hybrid(
+    tx_out_public_key: &RistrettoPublic,
+    view_private_key: &RistrettoPrivate,
+    subaddress_spend_private_key: &RistrettoPrivate,
+    kem_shared_secret: &[u8; KEM_SHARED_SECRET_LEN],
+    output_index: u32,
+) -> RistrettoPrivate {
+    let s: Scalar = {
+        let a = view_private_key.as_ref();
+        let R = tx_out_public_key.as_ref();
+        hybrid_stealth_scalar(a * R, kem_shared_secret, output_index)
+    };
+
+    let d = subaddress_spend_private_key.as_ref();
+    let x = s + d;
+    RistrettoPrivate::from(x)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -431,6 +579,129 @@ mod tests {
             let bA = create_shared_secret(&A, &b);
 
             assert_eq!(aB, bA);
+        })
+    }
+
+    // ------------------------------------------------------------------
+    // Hybrid post-quantum stealth one-time keys (issue #954)
+    // ------------------------------------------------------------------
+
+    #[test]
+    // The hybrid target key must round-trip: the recipient recovers their own
+    // spend key and the matching one-time private key, given the same K.
+    fn test_hybrid_target_key_roundtrip() {
+        run_with_several_seeds(|mut rng| {
+            let account = AccountKey::random(&mut rng);
+            let (_c, d, recipient) = get_subaddress(&account, 42);
+            let kem_secret = [0xABu8; KEM_SHARED_SECRET_LEN];
+            let output_index: u32 = 3;
+
+            let tx_private_key = RistrettoPrivate::from_random(&mut rng);
+            let tx_target_key = create_tx_out_target_key_hybrid(
+                &tx_private_key,
+                &recipient,
+                &kem_secret,
+                output_index,
+            );
+            let tx_public_key =
+                create_tx_out_public_key(&tx_private_key, recipient.spend_public_key());
+
+            // Detection: recovered spend key equals the recipient's D.
+            let d_prime = recover_public_subaddress_spend_key_hybrid(
+                account.view_private_key(),
+                &tx_target_key,
+                &tx_public_key,
+                &kem_secret,
+                output_index,
+            );
+            assert_eq!(&d_prime, recipient.spend_public_key());
+
+            // Spend: recovered one-time private key regenerates the target key.
+            let onetime_private_key = recover_onetime_private_key_hybrid(
+                &tx_public_key,
+                account.view_private_key(),
+                &d,
+                &kem_secret,
+                output_index,
+            );
+            assert_eq!(tx_target_key, RistrettoPublic::from(&onetime_private_key));
+        })
+    }
+
+    #[test]
+    // The ML-KEM secret is load-bearing: a wrong/absent K must not detect the
+    // output (breaking the classical layer alone is insufficient).
+    fn test_hybrid_wrong_kem_secret_fails_detection() {
+        run_with_several_seeds(|mut rng| {
+            let account = AccountKey::random(&mut rng);
+            let (_c, _d, recipient) = get_subaddress(&account, 9);
+            let kem_secret = [0x11u8; KEM_SHARED_SECRET_LEN];
+            let wrong_kem_secret = [0x22u8; KEM_SHARED_SECRET_LEN];
+            let output_index: u32 = 0;
+
+            let tx_private_key = RistrettoPrivate::from_random(&mut rng);
+            let tx_target_key = create_tx_out_target_key_hybrid(
+                &tx_private_key,
+                &recipient,
+                &kem_secret,
+                output_index,
+            );
+            let tx_public_key =
+                create_tx_out_public_key(&tx_private_key, recipient.spend_public_key());
+
+            // Correct classical keys but the wrong ML-KEM secret => no match.
+            let d_prime = recover_public_subaddress_spend_key_hybrid(
+                account.view_private_key(),
+                &tx_target_key,
+                &tx_public_key,
+                &wrong_kem_secret,
+                output_index,
+            );
+            assert_ne!(&d_prime, recipient.spend_public_key());
+        })
+    }
+
+    #[test]
+    // The output index domain-separates: the same (r, K) at a different index
+    // yields a different scalar, so detection at the wrong index fails.
+    fn test_hybrid_output_index_domain_separation() {
+        run_with_several_seeds(|mut rng| {
+            let account = AccountKey::random(&mut rng);
+            let (_c, _d, recipient) = get_subaddress(&account, 5);
+            let kem_secret = [0x33u8; KEM_SHARED_SECRET_LEN];
+
+            let tx_private_key = RistrettoPrivate::from_random(&mut rng);
+            let tx_target_key =
+                create_tx_out_target_key_hybrid(&tx_private_key, &recipient, &kem_secret, 0);
+            let tx_public_key =
+                create_tx_out_public_key(&tx_private_key, recipient.spend_public_key());
+
+            let d_prime_wrong_index = recover_public_subaddress_spend_key_hybrid(
+                account.view_private_key(),
+                &tx_target_key,
+                &tx_public_key,
+                &kem_secret,
+                1, // wrong index
+            );
+            assert_ne!(&d_prime_wrong_index, recipient.spend_public_key());
+        })
+    }
+
+    #[test]
+    // The hybrid scalar is deterministic in its inputs.
+    fn test_hybrid_scalar_deterministic() {
+        run_with_several_seeds(|mut rng| {
+            let dh = RistrettoPoint::random(&mut rng);
+            let kem_secret = [0x44u8; KEM_SHARED_SECRET_LEN];
+            let s1 = hybrid_stealth_scalar(dh, &kem_secret, 7);
+            let s2 = hybrid_stealth_scalar(dh, &kem_secret, 7);
+            assert_eq!(s1, s2);
+
+            // Changing any input changes the scalar.
+            assert_ne!(s1, hybrid_stealth_scalar(dh, &kem_secret, 8));
+            let mut other_secret = kem_secret;
+            other_secret[0] ^= 1;
+            assert_ne!(s1, hybrid_stealth_scalar(dh, &other_secret, 7));
         })
     }
 }
