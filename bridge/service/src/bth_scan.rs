@@ -21,6 +21,7 @@
 
 use bth_account_keys::{AccountKey, PublicAddress};
 use bth_crypto_keys::RistrettoPublic;
+use bth_crypto_pq::MlKem768KeyPair;
 use bth_transaction_clsag::{
     ClsagRingInput, EncryptedMemo, MemoPayload, RingMember, Transaction, TxOutput,
     DEFAULT_RING_SIZE, DUST_THRESHOLD, MIN_TX_FEE,
@@ -47,6 +48,10 @@ pub struct OwnedOutput {
     pub subaddress_index: u64,
     /// Whether the output is factor-1 (background/commerce, wrap-eligible).
     pub factor_one: bool,
+    /// Unified ML-KEM-768 ciphertext (1088 bytes) for a hybrid deposit, else
+    /// `None` (classical). Retained so the release path can recover the
+    /// one-time key via hybrid decapsulation (issue #970).
+    pub kem_ciphertext: Option<Vec<u8>>,
 }
 
 /// The result of view-key testing a deposit-address output.
@@ -84,13 +89,20 @@ fn tx_output_from_rpc(out: &RpcOutput) -> Result<TxOutput, String> {
         }
         None => None,
     };
+    let kem_ciphertext = match &out.kem_ciphertext {
+        Some(hex_ct) => Some(
+            hex::decode(hex_ct)
+                .map_err(|e| format!("output kem_ciphertext: invalid hex: {e}"))?,
+        ),
+        None => None,
+    };
     Ok(TxOutput {
         amount: out.amount,
         target_key: parse_hex_32("output.target_key", &out.target_key)?,
         public_key: parse_hex_32("output.public_key", &out.public_key)?,
         e_memo,
         cluster_tags: Default::default(),
-        kem_ciphertext: None,
+        kem_ciphertext,
     })
 }
 
@@ -104,10 +116,36 @@ fn tx_output_from_rpc(out: &RpcOutput) -> Result<TxOutput, String> {
 pub fn scan_deposit_output(
     out: &RpcOutput,
     account: &AccountKey,
+    kem_keypair: Option<&MlKem768KeyPair>,
 ) -> Result<Option<ScannedDeposit>, String> {
     let tx_out = tx_output_from_rpc(out)?;
-    let Some(subaddress_index) = tx_out.belongs_to(account) else {
-        return Ok(None);
+
+    // Unified hybrid scan path (issue #970). A hybrid deposit (KEM ciphertext
+    // present) can only be detected by ML-KEM decapsulation with the reserve's
+    // secret; without it the deposit is NOT silently dropped — we warn loudly so
+    // the operator wires the reserve KEM key rather than losing funds.
+    let subaddress_index = if tx_out.kem_ciphertext.is_some() {
+        match kem_keypair {
+            Some(kp) => match tx_out.belongs_to_account(account, kp, out.output_index) {
+                Some(idx) => idx,
+                None => return Ok(None),
+            },
+            None => {
+                tracing::warn!(
+                    tx_hash = %out.tx_hash,
+                    output_index = out.output_index,
+                    "hybrid (ML-KEM) output seen but reserve has no ML-KEM secret \
+                     configured; cannot scan it — configure the reserve KEM key to \
+                     detect hybrid deposits"
+                );
+                return Ok(None);
+            }
+        }
+    } else {
+        match tx_out.belongs_to(account) {
+            Some(idx) => idx,
+            None => return Ok(None),
+        }
     };
 
     // Destination memo (order UUID). `decrypt_memo` returns None for an
@@ -126,6 +164,7 @@ pub fn scan_deposit_output(
             amount: out.amount,
             subaddress_index,
             factor_one: out.explicit_cluster_weight() == 0,
+            kem_ciphertext: tx_out.kem_ciphertext.clone(),
         },
         memo,
     }))
@@ -185,6 +224,7 @@ pub fn build_release_tx<R: RngCore + CryptoRng>(
     fee: u64,
     inputs: &[ReleaseInput],
     created_at_height: u64,
+    kem_keypair: Option<&MlKem768KeyPair>,
     rng: &mut R,
 ) -> Result<Transaction, String> {
     if inputs.is_empty() {
@@ -260,11 +300,25 @@ pub fn build_release_tx<R: RngCore + CryptoRng>(
             public_key: parse_hex_32("input.public_key", &input.owned.public_key)?,
             e_memo: None,
             cluster_tags: Default::default(),
-            kem_ciphertext: None,
+            kem_ciphertext: input.owned.kem_ciphertext.clone(),
         };
-        let onetime_private = real_output
-            .recover_spend_key(account, input.owned.subaddress_index)
-            .ok_or("failed to recover one-time private key for reserve input")?;
+        // Unified recovery (issue #970): a hybrid reserve input needs the ML-KEM
+        // secret to reconstruct its one-time key; a classical input uses the
+        // pure view-key path. Both dispatch through `recover_spend_key_for`.
+        let onetime_private = if real_output.kem_ciphertext.is_some() {
+            let kp = kem_keypair.ok_or(
+                "hybrid reserve input requires an ML-KEM secret to recover its one-time key",
+            )?;
+            real_output.recover_spend_key_for(
+                account,
+                kp,
+                input.owned.subaddress_index,
+                input.owned.output_index,
+            )
+        } else {
+            real_output.recover_spend_key(account, input.owned.subaddress_index)
+        }
+        .ok_or("failed to recover one-time private key for reserve input")?;
 
         let real_member = RingMember::from_output(&real_output);
         let real_target = real_member.target_key;
@@ -356,6 +410,7 @@ mod tests {
                 .map(|e| (e.cluster_id.0, e.weight as u64))
                 .collect(),
             e_memo: out.e_memo.as_ref().map(|m| hex::encode(m.as_bytes())),
+            kem_ciphertext: out.kem_ciphertext.as_ref().map(hex::encode),
         }
     }
 
@@ -365,6 +420,77 @@ mod tests {
         bytes.extend_from_slice(&addr.view_public_key().to_bytes());
         bytes.extend_from_slice(&addr.spend_public_key().to_bytes());
         bs58::encode(bytes).into_string()
+    }
+
+    /// A hybrid (ML-KEM) deposit to the reserve is detected only with the
+    /// reserve's ML-KEM secret, and the detected output is spendable via hybrid
+    /// one-time-key recovery in a release tx (issue #970). Without the secret
+    /// the deposit is skipped (with a loud warning) rather than silently
+    /// treated as classical.
+    #[test]
+    fn hybrid_deposit_is_detected_and_released_with_kem_secret() {
+        let mut rng = StdRng::from_seed([73u8; 32]);
+        let reserve = AccountKey::random(&mut rng);
+        let stranger = AccountKey::random(&mut rng);
+        let recipient = AccountKey::random(&mut rng).default_subaddress();
+        let kem = MlKem768KeyPair::from_seed(&[0x33u8; 32]);
+
+        // Send path (sub-issue 4): a hybrid output paying the reserve, KEM ct
+        // encapsulated to the reserve's ML-KEM key.
+        let owned_amount = 10_000_000_000_000u64;
+        let out = TxOutput::new_hybrid(
+            owned_amount,
+            &reserve.default_subaddress(),
+            kem.public_key(),
+            0,
+            None,
+            ClusterTagVector::empty(),
+        );
+        assert!(out.kem_ciphertext.is_some(), "hybrid output carries a KEM ct");
+        let rpc = rpc_output_from_txoutput(&out, "0xhybrid", 0);
+
+        // Without the KEM secret the reserve cannot detect it (warns, not silent).
+        assert!(
+            scan_deposit_output(&rpc, &reserve, None).unwrap().is_none(),
+            "hybrid deposit must not be seen without the ML-KEM secret",
+        );
+        // A stranger with the wrong classical keys never detects it either.
+        assert!(
+            scan_deposit_output(&rpc, &stranger, Some(&kem))
+                .unwrap()
+                .is_none(),
+            "a stranger must not detect the reserve's hybrid deposit",
+        );
+
+        // With the reserve's KEM secret the deposit is detected + factor-1.
+        let scanned = scan_deposit_output(&rpc, &reserve, Some(&kem))
+            .unwrap()
+            .expect("reserve must detect its hybrid deposit with the KEM secret");
+        assert_eq!(scanned.owned.amount, owned_amount);
+        assert!(scanned.owned.factor_one, "no cluster tags => factor-1");
+        assert!(
+            scanned.owned.kem_ciphertext.is_some(),
+            "owned output must retain the KEM ciphertext for release",
+        );
+
+        // Release path: the hybrid reserve input is spendable via hybrid
+        // one-time-key recovery, and the signed tx self-verifies.
+        let inputs = vec![ReleaseInput {
+            owned: scanned.owned,
+            decoys: make_decoys(DEFAULT_RING_SIZE - 1, owned_amount, &mut rng),
+        }];
+        let tx = build_release_tx(
+            &reserve,
+            &recipient,
+            4_000_000_000_000,
+            MIN_TX_FEE,
+            &inputs,
+            5_000,
+            Some(&kem),
+            &mut rng,
+        )
+        .expect("hybrid reserve release builds and self-verifies");
+        assert_eq!(tx.inputs.len(), 1);
     }
 
     #[test]
@@ -382,7 +508,7 @@ mod tests {
         );
         let rpc = rpc_output_from_txoutput(&deposit, "0xdep", 0);
 
-        let scanned = scan_deposit_output(&rpc, &reserve)
+        let scanned = scan_deposit_output(&rpc, &reserve, None)
             .unwrap()
             .expect("reserve owns the deposit");
         assert_eq!(scanned.owned.amount, 1_000_000_000_000);
@@ -393,7 +519,7 @@ mod tests {
         // A stranger's identical output is invisible to the reserve scan.
         let theirs = TxOutput::new(1_000_000_000_000, &stranger.default_subaddress());
         assert!(
-            scan_deposit_output(&rpc_output_from_txoutput(&theirs, "0xx", 0), &reserve)
+            scan_deposit_output(&rpc_output_from_txoutput(&theirs, "0xx", 0), &reserve, None)
                 .unwrap()
                 .is_none()
         );
@@ -418,7 +544,7 @@ mod tests {
             },
         );
         let rpc = rpc_output_from_txoutput(&tagged, "0xtag", 0);
-        let scanned = scan_deposit_output(&rpc, &reserve).unwrap().unwrap();
+        let scanned = scan_deposit_output(&rpc, &reserve, None).unwrap().unwrap();
         assert!(!scanned.owned.factor_one);
     }
 
@@ -427,7 +553,7 @@ mod tests {
         let mut rng = StdRng::from_seed([7u8; 32]);
         let reserve = AccountKey::random(&mut rng);
         let no_memo = TxOutput::new(500, &reserve.default_subaddress());
-        let scanned = scan_deposit_output(&rpc_output_from_txoutput(&no_memo, "0xn", 0), &reserve)
+        let scanned = scan_deposit_output(&rpc_output_from_txoutput(&no_memo, "0xn", 0), &reserve, None)
             .unwrap()
             .unwrap();
         assert_eq!(scanned.memo, None);
@@ -475,6 +601,7 @@ mod tests {
         let owned = scan_deposit_output(
             &rpc_output_from_txoutput(&reserve_out, "0xreserve", 0),
             &reserve,
+            None,
         )
         .unwrap()
         .unwrap()
@@ -485,7 +612,7 @@ mod tests {
 
         let amount = 4_000_000_000_000u64;
         let fee = MIN_TX_FEE;
-        let tx = build_release_tx(&reserve, &recipient, amount, fee, &inputs, 5_000, &mut rng)
+        let tx = build_release_tx(&reserve, &recipient, amount, fee, &inputs, 5_000, None, &mut rng)
             .expect("release tx builds and self-verifies");
 
         // Node verifier accepts it.
@@ -536,6 +663,7 @@ mod tests {
             let owned2 = scan_deposit_output(
                 &rpc_output_from_txoutput(&reserve_out2, "0xreserve2", 0),
                 &reserve,
+                None,
             )
             .unwrap()
             .unwrap()
@@ -546,7 +674,7 @@ mod tests {
             }]
         };
         let tx2 =
-            build_release_tx(&reserve, &recipient, amount, fee, &inputs2, 5_001, &mut rng).unwrap();
+            build_release_tx(&reserve, &recipient, amount, fee, &inputs2, 5_001, None, &mut rng).unwrap();
         assert_ne!(
             tx.outputs[0].target_key, tx2.outputs[0].target_key,
             "two releases to the same address must use distinct one-time keys (ADR 0004)"
@@ -562,7 +690,7 @@ mod tests {
         let owned_amount = 1_000_000_000u64;
         let reserve_out = TxOutput::new(owned_amount, &reserve.default_subaddress());
         let owned =
-            scan_deposit_output(&rpc_output_from_txoutput(&reserve_out, "0xr", 0), &reserve)
+            scan_deposit_output(&rpc_output_from_txoutput(&reserve_out, "0xr", 0), &reserve, None)
                 .unwrap()
                 .unwrap()
                 .owned;
@@ -579,6 +707,7 @@ mod tests {
             MIN_TX_FEE,
             &inputs,
             1,
+            None,
             &mut rng,
         )
         .unwrap_err();
@@ -594,7 +723,7 @@ mod tests {
         let owned_amount = 10_000_000_000_000u64;
         let reserve_out = TxOutput::new(owned_amount, &reserve.default_subaddress());
         let owned =
-            scan_deposit_output(&rpc_output_from_txoutput(&reserve_out, "0xr", 0), &reserve)
+            scan_deposit_output(&rpc_output_from_txoutput(&reserve_out, "0xr", 0), &reserve, None)
                 .unwrap()
                 .unwrap()
                 .owned;
@@ -611,6 +740,7 @@ mod tests {
             MIN_TX_FEE,
             &inputs,
             1,
+            None,
             &mut rng,
         )
         .unwrap_err();

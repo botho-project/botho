@@ -330,7 +330,9 @@ impl BthReleaser {
 
         for block in &blocks {
             for out in &block.outputs {
-                match scan_deposit_output(out, account).map_err(ReleaseError::Config)? {
+                // Reserve holds no ML-KEM secret today; hybrid outputs are
+                // warned about, not silently missed (issue #970).
+                match scan_deposit_output(out, account, None).map_err(ReleaseError::Config)? {
                     // A reserve-owned, factor-1 output is a candidate input.
                     Some(scanned) if scanned.owned.factor_one => owned.push(scanned.owned),
                     // A reserve-owned but NON-factor-1 output must never be
@@ -478,6 +480,10 @@ impl Releaser for BthReleaser {
         // 4-5, 7. Build + CLSAG-sign: fresh stealth recipient output, change
         // back to the reserve, self-verified against the node's verifier.
         let created_at_height = rpc.chain_tip().await?;
+        // The reserve holds no ML-KEM secret today (classical key files), so
+        // pass `None`. A hybrid reserve input would fail loudly here rather than
+        // produce an invalid tx (issue #970); wiring a reserve KEM key is a
+        // follow-up.
         let tx = build_release_tx(
             reserve.account(),
             &recipient,
@@ -485,6 +491,7 @@ impl Releaser for BthReleaser {
             RELEASE_FEE,
             &inputs,
             created_at_height,
+            None,
             &mut rand_core::OsRng,
         )
         .map_err(|e| ReleaseError::Config(format!("release tx construction failed: {e}")))?;

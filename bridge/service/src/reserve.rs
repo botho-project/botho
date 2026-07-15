@@ -384,7 +384,11 @@ impl ReserveBalanceSource for NodeReserveBalanceSource {
         let mut owned: Vec<OwnedOutput> = Vec::new();
         for block in &blocks {
             for out in &block.outputs {
-                match scan_deposit_output(out, account).map_err(ReserveError::Config)? {
+                // The reserve is loaded from classical view/spend key files and
+                // holds no ML-KEM secret today, so pass `None`: hybrid deposits
+                // are warned about (never silently missed, issue #970) rather
+                // than detected. Wiring a reserve KEM key file is a follow-up.
+                match scan_deposit_output(out, account, None).map_err(ReserveError::Config)? {
                     Some(scanned) if scanned.owned.factor_one => owned.push(scanned.owned),
                     _ => {}
                 }
@@ -1338,8 +1342,12 @@ mod tests {
             amount,
             cluster_tags: vec![],
             e_memo: None,
+            kem_ciphertext: None,
         };
-        scan_deposit_output(&rpc, reserve).unwrap().unwrap().owned
+        scan_deposit_output(&rpc, reserve, None)
+            .unwrap()
+            .unwrap()
+            .owned
     }
 
     #[test]

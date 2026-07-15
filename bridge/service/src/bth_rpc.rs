@@ -79,6 +79,12 @@ pub struct RpcOutput {
     /// one, else `None`. Only the recipient's view key can decrypt it; the
     /// deposit watcher reads the destination memo (order UUID) from it.
     pub e_memo: Option<String>,
+    /// Hex-encoded unified ML-KEM-768 ciphertext (1088 bytes) for a hybrid
+    /// output, else `None` (classical/legacy). Emitted by the node as
+    /// `kemCiphertext` (issue #970). The deposit watcher decapsulates it with
+    /// the reserve's ML-KEM secret to detect hybrid deposits; without it a
+    /// hybrid deposit would be silently missed.
+    pub kem_ciphertext: Option<String>,
 }
 
 impl RpcOutput {
@@ -309,6 +315,8 @@ struct RawOutput {
     cluster_tags: Vec<[u64; 2]>,
     #[serde(rename = "eMemo", default)]
     e_memo: Option<String>,
+    #[serde(rename = "kemCiphertext", default)]
+    kem_ciphertext: Option<String>,
 }
 
 /// Decode the transparent amount from the node's little-endian
@@ -352,6 +360,7 @@ fn decode_block_outputs(block: &Value) -> Result<RpcBlockOutputs, RpcError> {
                 .map(|[id, w]| (id, w))
                 .collect(),
             e_memo: parsed.e_memo,
+            kem_ciphertext: parsed.kem_ciphertext,
         });
     }
     Ok(RpcBlockOutputs { height, outputs })

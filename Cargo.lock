@@ -2065,6 +2065,7 @@ dependencies = [
  "bth-bridge-core",
  "bth-cluster-tax",
  "bth-crypto-keys",
+ "bth-crypto-pq",
  "bth-crypto-ring-signature",
  "bth-transaction-clsag",
  "bth-transaction-types",
