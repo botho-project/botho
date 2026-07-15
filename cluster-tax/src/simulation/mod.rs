@@ -30,6 +30,8 @@ pub mod constrained_analysis;
 #[cfg(any(feature = "cli", test))]
 pub mod decoy_quantile_sweep;
 #[cfg(any(feature = "cli", test))]
+pub mod downgrade_overcharge_sweep;
+#[cfg(any(feature = "cli", test))]
 pub mod emission_sweep;
 pub mod lottery;
 #[cfg(any(feature = "cli", test))]
