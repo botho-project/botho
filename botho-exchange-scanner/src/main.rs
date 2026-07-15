@@ -347,6 +347,13 @@ async fn get_outputs(
                 .and_then(parse_amount_le)
                 .unwrap_or(0);
 
+            // Unified ML-KEM ciphertext (issue #970): present marks a hybrid
+            // output. Without it the scanner would silently miss hybrid funds.
+            let kem_ciphertext = output
+                .get("kemCiphertext")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
             outputs.push(RpcOutput {
                 tx_hash,
                 output_index,
@@ -354,6 +361,7 @@ async fn get_outputs(
                 public_key,
                 amount,
                 block_height,
+                kem_ciphertext,
             });
         }
     }
