@@ -40,12 +40,12 @@ pub fn run(config_path: &Path, save_path: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    // Classical address (short form)
-    let classical_addr = format_classical_address(&wallet.default_address(), network);
+    // v2 post-quantum address string
+    let classical_addr = format_classical_address(&wallet.default_address(), network)?;
 
     println!("=== Your Botho Address ===");
     println!();
-    println!("Classical (~90 chars):");
+    println!("Post-quantum (v2):");
     println!("{}", classical_addr);
     println!();
     println!("---");

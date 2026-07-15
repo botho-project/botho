@@ -39,6 +39,7 @@ dirs = "5"
 
 # Crypto & Keys
 bth-account-keys = { path = "../account-keys" }
+bth-address-codec = { path = "../address-codec" }
 bth-crypto-keys = { path = "../crypto/keys" }
 bth-crypto-pq = { path = "../crypto/pq", optional = true }
 bth-crypto-ring-signature = { path = "../crypto/ring-signature" }
