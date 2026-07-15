@@ -23,11 +23,6 @@ use wallet_ops::{SendError, SignerKeys};
 
 uniffi::setup_scaffolding!();
 
-/// Testnet classical address prefix: `tbotho://1/<base58(view||spend)>`.
-/// Matches `botho/src/address.rs::TESTNET_CLASSICAL_PREFIX` so faucet/send
-/// recipients are parseable by the node.
-const TESTNET_CLASSICAL_PREFIX: &str = "tbotho://1/";
-
 /// Errors that can occur in mobile wallet operations
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum MobileWalletError {
@@ -224,16 +219,16 @@ impl MobileWallet {
         let keys = botho_wallet::keys::WalletKeys::from_mnemonic(&mnemonic)
             .map_err(|_| MobileWalletError::InvalidMnemonic)?;
 
-        // Get public address. The `display` field uses the canonical testnet
-        // address format (`tbotho://1/<base58(view||spend)>`) so it is directly
-        // parseable by the node for faucet requests and sends.
+        // Get public address. The `display` field uses the canonical testnet v2
+        // address format (`tbotho://2/<base58(view||spend||kem||dsa)>`) so it is
+        // directly parseable by the node for faucet requests and sends.
         let addr = keys.public_address();
         let view_bytes = addr.view_public_key().to_bytes();
         let spend_bytes = addr.spend_public_key().to_bytes();
         let address = WalletAddress {
             view_public_key: hex::encode(view_bytes),
             spend_public_key: hex::encode(spend_bytes),
-            display: encode_testnet_address(&view_bytes, &spend_bytes),
+            display: encode_testnet_address(&addr)?,
         };
 
         // Create session
@@ -362,7 +357,7 @@ impl MobileWallet {
 
     /// Send a transfer of `amount_picocredits` to `to_address`.
     ///
-    /// `to_address` must be a testnet address (`tbotho://1/<base58>`) or the
+    /// `to_address` must be a testnet v2 address (`tbotho://2/<base58>`) or the
     /// legacy `view:<hex>,spend:<hex>` form. Syncs, builds a node-valid CLSAG
     /// transaction from the wallet's spendable outputs, submits it, and returns
     /// the transaction hash.
@@ -577,33 +572,35 @@ fn parse_u64_value(v: &serde_json::Value) -> u64 {
     }
 }
 
-/// Encode a testnet classical address as `tbotho://1/<base58(view||spend)>`.
-fn encode_testnet_address(view_bytes: &[u8; 32], spend_bytes: &[u8; 32]) -> String {
-    let mut bytes = Vec::with_capacity(64);
-    bytes.extend_from_slice(view_bytes);
-    bytes.extend_from_slice(spend_bytes);
-    let encoded = bs58::encode(&bytes).into_string();
-    format!("{TESTNET_CLASSICAL_PREFIX}{encoded}")
+/// Encode a testnet v2 address as
+/// `tbotho://2/<base58(view||spend||kem||dsa)>` via the shared codec.
+///
+/// The address must carry both post-quantum keys (the wallet's seed-derived
+/// addresses always do).
+fn encode_testnet_address(addr: &bth_account_keys::PublicAddress) -> MobileResult<String> {
+    bth_address_codec::encode_address(addr, bth_address_codec::Network::Testnet)
+        .map_err(|_| MobileWalletError::InvalidAddress)
 }
 
 /// Parse a recipient address string into the signer-core recipient form (hex
 /// view/spend keys).
 ///
-/// Accepts the testnet classical form (`tbotho://1/<base58(view||spend)>`) and
-/// the legacy `view:<hex>,spend:<hex>` form.
+/// Accepts the testnet v2 form (`tbotho://2/<base58(view||spend||kem||dsa)>`,
+/// decoded via the shared [`bth_address_codec`]) and the legacy
+/// `view:<hex>,spend:<hex>` form. (The post-quantum keys carried by a v2
+/// address are validated on decode; wiring them into the outgoing ciphertext is
+/// a later rollout sub-issue.)
 fn parse_recipient(address: &str) -> MobileResult<RecipientAddress> {
     let address = address.trim();
 
-    if let Some(encoded) = address.strip_prefix(TESTNET_CLASSICAL_PREFIX) {
-        let bytes = bs58::decode(encoded)
-            .into_vec()
+    if address.starts_with(bth_address_codec::MAINNET_PREFIX)
+        || address.starts_with(bth_address_codec::TESTNET_PREFIX)
+    {
+        let (addr, _network) = bth_address_codec::decode_address(address)
             .map_err(|_| MobileWalletError::InvalidAddress)?;
-        if bytes.len() != 64 {
-            return Err(MobileWalletError::InvalidAddress);
-        }
         return Ok(RecipientAddress {
-            view_public_key: hex::encode(&bytes[0..32]),
-            spend_public_key: hex::encode(&bytes[32..64]),
+            view_public_key: hex::encode(addr.view_public_key().to_bytes()),
+            spend_public_key: hex::encode(addr.spend_public_key().to_bytes()),
         });
     }
 
@@ -646,16 +643,85 @@ mod tests {
         assert_eq!(format_bth(1_500_000), "0.000001 BTH");
     }
 
+    /// Build a v2 address with dummy-but-correctly-sized PQ payloads.
+    fn sample_v2_address() -> bth_account_keys::PublicAddress {
+        use bth_account_keys::{AccountKey, ML_DSA_65_PUBLIC_KEY_LEN, ML_KEM_768_PUBLIC_KEY_LEN};
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::from_seed([5u8; 32]);
+        let kem = vec![7u8; ML_KEM_768_PUBLIC_KEY_LEN];
+        let dsa = vec![9u8; ML_DSA_65_PUBLIC_KEY_LEN];
+        AccountKey::random(&mut rng)
+            .default_subaddress()
+            .with_pq_keys(kem, dsa)
+    }
+
     #[test]
     fn testnet_address_roundtrip() {
-        let view = [7u8; 32];
-        let spend = [9u8; 32];
-        let addr = encode_testnet_address(&view, &spend);
-        assert!(addr.starts_with("tbotho://1/"));
+        let public = sample_v2_address();
+        let addr = encode_testnet_address(&public).expect("encode v2");
+        assert!(addr.starts_with("tbotho://2/"));
 
         let parsed = parse_recipient(&addr).expect("parse tbotho");
-        assert_eq!(parsed.view_public_key, hex::encode(view));
-        assert_eq!(parsed.spend_public_key, hex::encode(spend));
+        assert_eq!(
+            parsed.view_public_key,
+            hex::encode(public.view_public_key().to_bytes())
+        );
+        assert_eq!(
+            parsed.spend_public_key,
+            hex::encode(public.spend_public_key().to_bytes())
+        );
+    }
+
+    // Cross-encoder byte-identical vector (ADR 0008 D5): the SAME address must
+    // encode to the SAME `tbotho://2/…` string via the node codec, the mobile
+    // bridge, and the wasm-signer — and each must decode it back identically.
+    #[test]
+    fn cross_encoder_byte_identical_node_mobile_wasm() {
+        let addr = sample_v2_address();
+
+        // NODE path == the shared codec directly (node routes through it).
+        let node = bth_address_codec::encode_address(&addr, bth_address_codec::Network::Testnet)
+            .expect("node encode");
+        // MOBILE bridge path.
+        let mobile = encode_testnet_address(&addr).expect("mobile encode");
+        // WASM-signer path.
+        let wasm = bth_wasm_signer::core::encode_address_string(&addr, true).expect("wasm encode");
+
+        assert_eq!(
+            node, mobile,
+            "node and mobile encoders must be byte-identical"
+        );
+        assert_eq!(node, wasm, "node and wasm encoders must be byte-identical");
+
+        // All three decode the string back to the same view/spend/kem/dsa.
+        let (node_dec, _) = bth_address_codec::decode_address(&node).expect("node decode");
+        let mobile_dec = parse_recipient(&mobile).expect("mobile decode");
+        let wasm_dec = bth_wasm_signer::core::decode_address_string(&wasm).expect("wasm decode");
+
+        assert_eq!(
+            hex::encode(node_dec.view_public_key().to_bytes()),
+            mobile_dec.view_public_key
+        );
+        assert_eq!(
+            hex::encode(node_dec.spend_public_key().to_bytes()),
+            mobile_dec.spend_public_key
+        );
+        assert_eq!(node_dec.kem_public_key(), wasm_dec.kem_public_key());
+        assert_eq!(node_dec.dsa_public_key(), wasm_dec.dsa_public_key());
+        assert_eq!(
+            node_dec.view_public_key().to_bytes(),
+            wasm_dec.view_public_key().to_bytes()
+        );
+    }
+
+    #[test]
+    fn old_v1_address_rejected() {
+        // A 64-byte v1 body under the retired prefix must not parse.
+        let body = bs58::encode([0u8; 64]).into_string();
+        assert!(matches!(
+            parse_recipient(&format!("tbotho://1/{body}")),
+            Err(MobileWalletError::InvalidAddress)
+        ));
     }
 
     #[test]

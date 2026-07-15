@@ -1740,6 +1740,7 @@ dependencies = [
  "botho-wallet",
  "bs58 0.5.1",
  "bth-account-keys",
+ "bth-address-codec",
  "bth-cluster-tax",
  "bth-common",
  "bth-consensus-scp",
@@ -1832,6 +1833,7 @@ dependencies = [
  "anyhow",
  "botho-wallet",
  "bth-account-keys",
+ "bth-address-codec",
  "bth-crypto-keys",
  "dirs 5.0.1",
  "hex",
@@ -1897,6 +1899,7 @@ dependencies = [
  "botho-wallet",
  "bs58 0.4.0",
  "bth-account-keys",
+ "bth-address-codec",
  "bth-crypto-keys",
  "bth-transaction-clsag",
  "bth-wasm-signer",
@@ -1920,6 +1923,7 @@ dependencies = [
  "bincode",
  "botho",
  "bth-account-keys",
+ "bth-address-codec",
  "bth-cluster-tax",
  "bth-core",
  "bth-crypto-keys",
@@ -2018,6 +2022,19 @@ name = "bth-account-keys-types"
 version = "7.1.0"
 dependencies = [
  "bth-crypto-keys",
+]
+
+[[package]]
+name = "bth-address-codec"
+version = "0.1.0"
+dependencies = [
+ "bs58 0.4.0",
+ "bth-account-keys",
+ "bth-crypto-keys",
+ "bth-crypto-pq",
+ "bth-util-from-random",
+ "rand 0.8.7",
+ "rand_core 0.6.4",
 ]
 
 [[package]]
@@ -2655,6 +2672,7 @@ version = "0.1.0"
 dependencies = [
  "bincode",
  "bth-account-keys",
+ "bth-address-codec",
  "bth-crypto-keys",
  "bth-crypto-ring-signature",
  "bth-transaction-clsag",

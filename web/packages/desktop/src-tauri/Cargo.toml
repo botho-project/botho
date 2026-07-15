@@ -25,6 +25,7 @@ tauri-plugin-log = "2"
 # Botho wallet crates
 botho-wallet = { path = "../../../../botho-wallet", default-features = false, features = [] }
 bth-account-keys = { workspace = true }
+bth-address-codec = { workspace = true }
 bth-crypto-keys = { workspace = true }
 
 # Async runtime

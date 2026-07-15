@@ -1,23 +1,30 @@
 // Copyright (c) 2024 Botho Foundation
 
-//! Unified address format for Botho
+//! Unified address format for Botho (address format v2, ADR 0008)
 //!
-//! Supports classical addresses with a clean URI format:
+//! Supports the universal post-quantum address with a clean URI format:
 //!
 //! Mainnet:
-//! - Classical: `botho://1/<base58(view||spend)>` (~90 chars)
+//! - `botho://2/<base58(view||spend||kem||dsa)>` (~4.4k chars)
 //!
 //! Testnet:
-//! - Classical: `tbotho://1/<base58(view||spend)>` (~91 chars)
+//! - `tbotho://2/<base58(view||spend||kem||dsa)>`
 //!
-//! The version number (1) allows for future format upgrades.
-//! The 't' prefix indicates testnet addresses.
+//! The base58 body carries the two 32-byte Ristretto keys **and** the raw
+//! ML-KEM-768 (1184 B) and ML-DSA-65 (1952 B) public keys — 3200 bytes total.
+//! The version number (2) supersedes the retired 64-byte v1 format; the 't'
+//! prefix indicates testnet addresses.
 //!
-//! The former quantum-private address class (`botho://1q/...`) is retired
-//! (ADR 0006, docs/decisions/0006-pq-architecture-ratification.md): the
-//! separate quantum-private transaction class was removed before mainnet.
-//! Parsing such an address returns a clear error. Post-quantum protection
-//! is moving to universal ML-KEM on standard outputs (#904).
+//! The actual base58 encode/decode lives in the shared [`bth_address_codec`]
+//! crate (ADR 0008 D5) so the node, the browser wasm-signer, the mobile bridge,
+//! and the wallet all route through **one** implementation and cannot drift.
+//!
+//! Retired formats fail loudly on parse:
+//! - old 64-byte v1 (`botho://1/...`) — carries no post-quantum keys, cannot
+//!   receive on the v2 chain (ADR 0008);
+//! - the former quantum-private class (`botho://1q/...`, `botho-pq://1/...`) —
+//!   ADR 0006, the separate quantum-private transaction class was removed
+//!   before mainnet.
 
 use anyhow::{anyhow, Result};
 use bth_account_keys::PublicAddress;
@@ -25,22 +32,37 @@ use bth_crypto_keys::RistrettoPublic;
 use bth_transaction_types::constants::Network;
 
 /// Address format version
-pub const ADDRESS_VERSION: u8 = 1;
+pub const ADDRESS_VERSION: u8 = 2;
 
-/// Classical address prefixes by network
-pub const MAINNET_CLASSICAL_PREFIX: &str = "botho://1/";
-pub const TESTNET_CLASSICAL_PREFIX: &str = "tbotho://1/";
+/// v2 address prefixes by network
+pub const MAINNET_CLASSICAL_PREFIX: &str = bth_address_codec::MAINNET_PREFIX;
+pub const TESTNET_CLASSICAL_PREFIX: &str = bth_address_codec::TESTNET_PREFIX;
+
+/// Retired v1 (64-byte, classical-only) prefixes.
+///
+/// Kept only so `Address::parse` can detect old v1 addresses and reject them
+/// with a clear error instead of a confusing format failure.
+pub const MAINNET_V1_PREFIX: &str = bth_address_codec::MAINNET_V1_PREFIX;
+pub const TESTNET_V1_PREFIX: &str = bth_address_codec::TESTNET_V1_PREFIX;
 
 /// Retired quantum-private address prefixes (ADR 0006).
 ///
 /// Kept only so `Address::parse` can detect legacy quantum addresses and
 /// reject them with a clear error instead of a confusing format failure.
-pub const MAINNET_QUANTUM_PREFIX: &str = "botho://1q/";
-pub const TESTNET_QUANTUM_PREFIX: &str = "tbotho://1q/";
-const LEGACY_QUANTUM_PREFIX: &str = "botho-pq://1/";
+pub const MAINNET_QUANTUM_PREFIX: &str = bth_address_codec::MAINNET_QUANTUM_PREFIX;
+pub const TESTNET_QUANTUM_PREFIX: &str = bth_address_codec::TESTNET_QUANTUM_PREFIX;
+const LEGACY_QUANTUM_PREFIX: &str = bth_address_codec::LEGACY_QUANTUM_PREFIX;
 
 // Legacy prefix for backwards compatibility
 pub const CLASSICAL_PREFIX: &str = MAINNET_CLASSICAL_PREFIX;
+
+/// Map a node [`Network`] to the shared codec's network enum.
+fn codec_network(network: Network) -> bth_address_codec::Network {
+    match network {
+        Network::Mainnet => bth_address_codec::Network::Mainnet,
+        Network::Testnet => bth_address_codec::Network::Testnet,
+    }
+}
 
 /// Represents a classical address, with network info
 #[derive(Debug, Clone)]
@@ -88,19 +110,31 @@ impl Address {
                 "quantum addresses retired (ADR 0006): the quantum-private \
                  transaction class was removed before mainnet, so this \
                  address can no longer receive funds.\n\
-                 Ask the recipient for a classical address (botho://1/...).\n\
+                 Ask the recipient for a current address (botho://2/...).\n\
                  Post-quantum protection is moving to universal ML-KEM on \
                  standard outputs (see issue #904)."
             ));
         }
 
-        // Check for testnet classical prefix
+        // Reject retired 64-byte v1 addresses loudly (ADR 0008): they carry no
+        // post-quantum keys and cannot receive on the v2 chain. Checked before
+        // the v2 prefixes so `botho://1/...` never silently mis-parses.
+        if s.starts_with(MAINNET_V1_PREFIX) || s.starts_with(TESTNET_V1_PREFIX) {
+            return Err(anyhow!(
+                "address format v1 (botho://1/) retired (ADR 0008): v1 \
+                 addresses carry no post-quantum keys and cannot receive on the \
+                 v2 chain.\n\
+                 Ask the recipient to regenerate a botho://2/ address."
+            ));
+        }
+
+        // Check for testnet v2 prefix
         if s.starts_with(TESTNET_CLASSICAL_PREFIX) {
             let addr = parse_classical_address(s, Network::Testnet)?;
             return Ok(Address::classical(addr, Network::Testnet));
         }
 
-        // Check for mainnet classical prefix
+        // Check for mainnet v2 prefix
         if s.starts_with(MAINNET_CLASSICAL_PREFIX) {
             let addr = parse_classical_address(s, Network::Mainnet)?;
             return Ok(Address::classical(addr, Network::Mainnet));
@@ -114,8 +148,8 @@ impl Address {
 
         Err(anyhow!(
             "Invalid address format. Expected:\n  \
-             Mainnet:  botho://1/<base58>\n  \
-             Testnet:  tbotho://1/<base58>\n  \
+             Mainnet:  botho://2/<base58>\n  \
+             Testnet:  tbotho://2/<base58>\n  \
              Legacy:   view:<hex>,spend:<hex>"
         ))
     }
@@ -155,8 +189,12 @@ impl Address {
         }
     }
 
-    /// Format as a string
-    pub fn to_address_string(&self) -> String {
+    /// Format as a `botho://2/<base58>` string.
+    ///
+    /// Fails if the underlying [`PublicAddress`] does not carry both
+    /// post-quantum keys at their exact raw lengths (a v2 address cannot be
+    /// represented without them).
+    pub fn to_address_string(&self) -> Result<String> {
         match &self.kind {
             AddressKind::Classical(addr) => format_classical_address(addr, self.network),
         }
@@ -167,12 +205,12 @@ impl Address {
         let content = format!(
             "# Botho Address\n\
              # Network: {}\n\
-             # Type: Classical\n\
+             # Type: PostQuantum (v2)\n\
              # Created: {}\n\n\
              {}\n",
             self.network.display_name(),
             chrono_lite_now(),
-            self.to_address_string()
+            self.to_address_string()?
         );
 
         std::fs::write(path, content).map_err(|e| anyhow!("Failed to write address file: {}", e))
@@ -181,7 +219,10 @@ impl Address {
 
 impl std::fmt::Display for Address {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_address_string())
+        match self.to_address_string() {
+            Ok(s) => write!(f, "{s}"),
+            Err(e) => write!(f, "<invalid address: {e}>"),
+        }
     }
 }
 
@@ -193,40 +234,33 @@ fn classical_prefix(network: Network) -> &'static str {
     }
 }
 
-/// Format a classical address as `botho://1/<base58>` or `tbotho://1/<base58>`
-pub fn format_classical_address(addr: &PublicAddress, network: Network) -> String {
-    let mut bytes = Vec::with_capacity(64);
-    bytes.extend_from_slice(&addr.view_public_key().to_bytes());
-    bytes.extend_from_slice(&addr.spend_public_key().to_bytes());
-
-    let encoded = bs58::encode(&bytes).into_string();
-    format!("{}{}", classical_prefix(network), encoded)
+/// Format a v2 address as `botho://2/<base58>` or `tbotho://2/<base58>`.
+///
+/// Routes through the shared [`bth_address_codec`] (ADR 0008 D5). Fails if the
+/// address does not carry both post-quantum keys.
+pub fn format_classical_address(addr: &PublicAddress, network: Network) -> Result<String> {
+    bth_address_codec::encode_address(addr, codec_network(network))
+        .map_err(|e| anyhow!("Failed to encode address: {e}"))
 }
 
-/// Parse a classical address from `botho://1/<base58>` or `tbotho://1/<base58>`
+/// Parse a v2 address from `botho://2/<base58>` or `tbotho://2/<base58>`.
+///
+/// Routes through the shared [`bth_address_codec`] and verifies the decoded
+/// network matches `network`.
 pub fn parse_classical_address(s: &str, network: Network) -> Result<PublicAddress> {
-    let prefix = classical_prefix(network);
-    let encoded = s
-        .strip_prefix(prefix)
-        .ok_or_else(|| anyhow!("Invalid classical address prefix for {}", network))?;
+    let (addr, decoded_network) =
+        bth_address_codec::decode_address(s).map_err(|e| anyhow!("{e}"))?;
 
-    let bytes = bs58::decode(encoded)
-        .into_vec()
-        .map_err(|e| anyhow!("Invalid base58 encoding: {}", e))?;
-
-    if bytes.len() != 64 {
+    let expected = codec_network(network);
+    if decoded_network != expected {
         return Err(anyhow!(
-            "Invalid address length: expected 64 bytes, got {}",
-            bytes.len()
+            "Address network mismatch: decoded {:?}, expected {:?}",
+            decoded_network,
+            expected
         ));
     }
 
-    let view_key =
-        RistrettoPublic::try_from(&bytes[0..32]).map_err(|e| anyhow!("Invalid view key: {}", e))?;
-    let spend_key = RistrettoPublic::try_from(&bytes[32..64])
-        .map_err(|e| anyhow!("Invalid spend key: {}", e))?;
-
-    Ok(PublicAddress::new(&spend_key, &view_key))
+    Ok(addr)
 }
 
 /// Parse legacy address format: "view:<hex>,spend:<hex>"
@@ -287,33 +321,62 @@ fn chrono_lite_now() -> String {
 mod tests {
     use super::*;
 
+    /// Build a v2 address with dummy-but-correctly-sized PQ payloads.
+    fn sample_v2_public_address() -> PublicAddress {
+        use bth_util_from_random::FromRandom;
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::from_seed([3u8; 32]);
+        let spend = RistrettoPublic::from_random(&mut rng);
+        let view = RistrettoPublic::from_random(&mut rng);
+        let kem = vec![7u8; bth_account_keys::ML_KEM_768_PUBLIC_KEY_LEN];
+        let dsa = vec![9u8; bth_account_keys::ML_DSA_65_PUBLIC_KEY_LEN];
+        PublicAddress::new_with_pq(&spend, &view, kem, dsa)
+    }
+
     #[test]
     fn test_mainnet_prefix() {
-        let view_bytes = [1u8; 32];
-        let spend_bytes = [2u8; 32];
-
-        let formatted = format!(
-            "{}{}",
-            MAINNET_CLASSICAL_PREFIX,
-            bs58::encode([view_bytes, spend_bytes].concat()).into_string()
-        );
-
-        assert!(formatted.starts_with("botho://1/"));
+        let addr = sample_v2_public_address();
+        let formatted = format_classical_address(&addr, Network::Mainnet).unwrap();
+        assert!(formatted.starts_with("botho://2/"));
         assert!(!formatted.starts_with("tbotho://"));
     }
 
     #[test]
     fn test_testnet_prefix() {
-        let view_bytes = [1u8; 32];
-        let spend_bytes = [2u8; 32];
+        let addr = sample_v2_public_address();
+        let formatted = format_classical_address(&addr, Network::Testnet).unwrap();
+        assert!(formatted.starts_with("tbotho://2/"));
+    }
 
-        let formatted = format!(
-            "{}{}",
-            TESTNET_CLASSICAL_PREFIX,
-            bs58::encode([view_bytes, spend_bytes].concat()).into_string()
-        );
+    #[test]
+    fn test_v2_round_trip_through_address_parse() {
+        let addr = sample_v2_public_address();
+        for network in [Network::Mainnet, Network::Testnet] {
+            let s = format_classical_address(&addr, network).unwrap();
+            let parsed = Address::parse(&s).expect("v2 address parses");
+            assert_eq!(parsed.network, network);
+            let pa = parsed.public_address();
+            assert_eq!(pa.kem_public_key(), addr.kem_public_key());
+            assert_eq!(pa.dsa_public_key(), addr.dsa_public_key());
+            // Canonical re-render is identical.
+            assert_eq!(parsed.to_address_string().unwrap(), s);
+        }
+    }
 
-        assert!(formatted.starts_with("tbotho://1/"));
+    #[test]
+    fn test_old_v1_address_rejected_with_clear_error() {
+        // A well-formed 64-byte v1 body under the retired prefix must fail
+        // loudly, not silently truncate into a bogus address.
+        let body = bs58::encode([0u8; 64]).into_string();
+        for prefix in ["botho://1/", "tbotho://1/"] {
+            let err = Address::parse(&format!("{prefix}{body}"))
+                .expect_err("v1 address must not parse")
+                .to_string();
+            assert!(
+                err.contains("v1") && err.contains("ADR 0008"),
+                "error must cite the v1 retirement, got: {err}"
+            );
+        }
     }
 
     #[test]
@@ -329,11 +392,11 @@ mod tests {
     #[test]
     fn test_address_prefixes_are_distinct() {
         // Mainnet prefixes
-        assert!(MAINNET_CLASSICAL_PREFIX.starts_with("botho://1/"));
+        assert!(MAINNET_CLASSICAL_PREFIX.starts_with("botho://2/"));
         assert!(MAINNET_QUANTUM_PREFIX.starts_with("botho://1q/"));
 
         // Testnet prefixes
-        assert!(TESTNET_CLASSICAL_PREFIX.starts_with("tbotho://1/"));
+        assert!(TESTNET_CLASSICAL_PREFIX.starts_with("tbotho://2/"));
         assert!(TESTNET_QUANTUM_PREFIX.starts_with("tbotho://1q/"));
 
         // Testnet can be distinguished from mainnet

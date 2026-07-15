@@ -60,6 +60,99 @@ pub struct RecipientAddress {
     pub view_public_key: String,
 }
 
+/// Encode a [`PublicAddress`] as a `botho://2/<base58>` / `tbotho://2/<base58>`
+/// address string via the shared [`bth_address_codec`] (ADR 0008 D5).
+///
+/// This is the browser wallet's Rust entry point for producing an address
+/// string: routing through the shared codec guarantees the wasm build is
+/// byte-identical to the node and mobile encoders (no hand-rolled base58 in
+/// JavaScript). The address must carry both post-quantum keys.
+pub fn encode_address_string(addr: &PublicAddress, testnet: bool) -> Result<String, String> {
+    let network = if testnet {
+        bth_address_codec::Network::Testnet
+    } else {
+        bth_address_codec::Network::Mainnet
+    };
+    bth_address_codec::encode_address(addr, network).map_err(|e| e.to_string())
+}
+
+/// Decode a `botho://2/…` / `tbotho://2/…` address string into a
+/// [`PublicAddress`] via the shared [`bth_address_codec`].
+///
+/// Old 64-byte v1 (`botho://1/…`) and the retired quantum prefixes are rejected
+/// with a clear error.
+pub fn decode_address_string(s: &str) -> Result<PublicAddress, String> {
+    bth_address_codec::decode_address(s)
+        .map(|(addr, _network)| addr)
+        .map_err(|e| e.to_string())
+}
+
+/// A v2 address decoded into its four raw components, hex-encoded, for the JS
+/// boundary.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecodedV2Address {
+    /// `"mainnet"` or `"testnet"`.
+    pub network: String,
+    /// Hex-encoded 32-byte view public key.
+    pub view_public_key: String,
+    /// Hex-encoded 32-byte spend public key.
+    pub spend_public_key: String,
+    /// Hex-encoded raw ML-KEM-768 public key (1184 bytes).
+    pub kem_public_key: String,
+    /// Hex-encoded raw ML-DSA-65 public key (1952 bytes).
+    pub dsa_public_key: String,
+}
+
+/// Decode a v2 address string into hex components for JavaScript.
+///
+/// The browser wallet uses this instead of a hand-rolled base58 decoder so its
+/// parsing is byte-identical to the node/mobile/wallet encoders.
+pub fn decode_address_to_dto(s: &str) -> Result<DecodedV2Address, String> {
+    let (addr, network) = bth_address_codec::decode_address(s).map_err(|e| e.to_string())?;
+    let network = match network {
+        bth_address_codec::Network::Mainnet => "mainnet",
+        bth_address_codec::Network::Testnet => "testnet",
+    };
+    Ok(DecodedV2Address {
+        network: network.to_string(),
+        view_public_key: hex::encode(addr.view_public_key().to_bytes()),
+        spend_public_key: hex::encode(addr.spend_public_key().to_bytes()),
+        kem_public_key: hex::encode(addr.kem_public_key()),
+        dsa_public_key: hex::encode(addr.dsa_public_key()),
+    })
+}
+
+/// Encode a v2 address string from hex components (the JS boundary form).
+///
+/// `kem_hex` / `dsa_hex` must be the raw ML-KEM-768 (1184 B) / ML-DSA-65
+/// (1952 B) public keys. Routes through the shared codec.
+pub fn encode_address_from_hex(
+    view_hex: &str,
+    spend_hex: &str,
+    kem_hex: &str,
+    dsa_hex: &str,
+    testnet: bool,
+) -> Result<String, String> {
+    let view = RistrettoPublic::try_from(
+        hex::decode(view_hex.trim())
+            .map_err(|e| format!("invalid view key hex: {e}"))?
+            .as_slice(),
+    )
+    .map_err(|e| format!("invalid view key: {e}"))?;
+    let spend = RistrettoPublic::try_from(
+        hex::decode(spend_hex.trim())
+            .map_err(|e| format!("invalid spend key hex: {e}"))?
+            .as_slice(),
+    )
+    .map_err(|e| format!("invalid spend key: {e}"))?;
+    let kem = hex::decode(kem_hex.trim()).map_err(|e| format!("invalid kem key hex: {e}"))?;
+    let dsa = hex::decode(dsa_hex.trim()).map_err(|e| format!("invalid dsa key hex: {e}"))?;
+
+    let addr = PublicAddress::new_with_pq(&spend, &view, kem, dsa);
+    encode_address_string(&addr, testnet)
+}
+
 /// The full client-side signing request.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

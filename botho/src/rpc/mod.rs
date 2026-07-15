@@ -2254,7 +2254,19 @@ async fn handle_validate_address(id: Value, params: &Value, _state: &RpcState) -
             let network = addr.network.display_name();
 
             // Get the canonical form
-            let canonical = addr.to_address_string();
+            let canonical = match addr.to_address_string() {
+                Ok(s) => s,
+                Err(e) => {
+                    return JsonRpcResponse::success(
+                        id,
+                        json!({
+                            "valid": false,
+                            "error": e.to_string(),
+                            "address": address_str,
+                        }),
+                    )
+                }
+            };
 
             // Quantum addresses are retired (ADR 0006): they no longer parse,
             // so any valid address here is classical. `isQuantum` is kept for

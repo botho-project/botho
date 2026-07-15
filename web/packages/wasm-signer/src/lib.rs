@@ -36,8 +36,9 @@ pub mod core;
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use crate::core::{
-        build_and_sign_inner, compute_owned_output_key_images_inner, scan_owned_outputs_inner,
-        KeyImageRequest, ScanRequest, SignRequest,
+        build_and_sign_inner, compute_owned_output_key_images_inner, decode_address_to_dto,
+        encode_address_from_hex, scan_owned_outputs_inner, KeyImageRequest, ScanRequest,
+        SignRequest,
     };
     use wasm_bindgen::prelude::*;
 
@@ -90,6 +91,35 @@ mod wasm {
         let result = compute_owned_output_key_images_inner(&req).map_err(|e| JsError::new(&e))?;
         serde_wasm_bindgen::to_value(&result)
             .map_err(|e| JsError::new(&format!("failed to serialize key images: {e}")))
+    }
+
+    /// Decode a `botho://2/…` / `tbotho://2/…` address string into its hex
+    /// components (`network`, `viewPublicKey`, `spendPublicKey`,
+    /// `kemPublicKey`, `dsaPublicKey`).
+    ///
+    /// The browser wallet uses this shared Rust codec instead of a hand-rolled
+    /// base58 decoder in JavaScript, so its parsing is byte-identical to the
+    /// node and mobile encoders (ADR 0008 D5). Old 64-byte v1 addresses and the
+    /// retired quantum prefixes throw a clear error.
+    #[wasm_bindgen(js_name = decodeAddress)]
+    pub fn decode_address(address: &str) -> Result<JsValue, JsError> {
+        let dto = decode_address_to_dto(address).map_err(|e| JsError::new(&e))?;
+        serde_wasm_bindgen::to_value(&dto)
+            .map_err(|e| JsError::new(&format!("failed to serialize decoded address: {e}")))
+    }
+
+    /// Encode a `botho://2/…` / `tbotho://2/…` address string from hex key
+    /// components via the shared codec.
+    #[wasm_bindgen(js_name = encodeAddress)]
+    pub fn encode_address(
+        view_hex: &str,
+        spend_hex: &str,
+        kem_hex: &str,
+        dsa_hex: &str,
+        testnet: bool,
+    ) -> Result<String, JsError> {
+        encode_address_from_hex(view_hex, spend_hex, kem_hex, dsa_hex, testnet)
+            .map_err(|e| JsError::new(&e))
     }
 
     /// The CLSAG ring size the network requires (decoys + 1 real input).
