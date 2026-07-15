@@ -595,6 +595,24 @@ mod cli {
         /// consensus.
         LotterySelectionSweep,
 
+        /// Structural Sybil-brake sweep (realized-capture follow-up to #902):
+        /// the sibling `lottery-selection-sweep` proved no value-free WEIGHT
+        /// can be split-invariant, but measured Sybil capture as
+        /// ticket-share in a fixed 100-holder pool (an overstatement).
+        /// This sweep tests whether three value-free / CT-clean
+        /// STRUCTURAL brakes — a last-N-blocks candidate window, a
+        /// fee-denominated eligibility floor, and a per-block payout
+        /// cap — keep the *realized* whale capture bounded,
+        /// against a real organic candidate stream (denominator scales with the
+        /// window) and a rolling window (the whale must re-split forever,
+        /// paying base fees). Reuses the real demurrage_charge,
+        /// ClusterFactorCurve and calculate_gini. Reports realized
+        /// capture, attacker cost/captured ratio, and honest
+        /// redistribution Δgini. Determines whether the structural
+        /// brakes make a value-free rule (Path A/C) viable or leave the
+        /// ZK sort (Path B) required. Does NOT wire anything into consensus.
+        LotterySybilBrakeSweep,
+
         /// Bridge-import calibration sweep (empirical gate for #937):
         /// calibrates ADR 0007's two constants — epoch length K and
         /// import-factor floor F. Sweeps K across ~14h/1d/2d/3.5d/1wk
@@ -895,6 +913,7 @@ mod cli {
             ),
             Command::SettlementHorizonSweep => run_settlement_horizon_sweep_cli(),
             Command::LotterySelectionSweep => run_lottery_selection_sweep_cli(),
+            Command::LotterySybilBrakeSweep => run_lottery_sybil_brake_sweep_cli(),
             Command::BridgeImportSweep => run_bridge_import_sweep_cli(),
             Command::M2Cumulative {
                 horizon_years,
@@ -4425,6 +4444,21 @@ mod cli {
         };
         let report = run_bridge_import_sweep();
         println!("# Bridge-Import Calibration Sweep (issue #937)\n");
+        println!("{}", to_markdown(&report));
+    }
+
+    /// Structural Sybil-brake sweep (realized-capture follow-up to #902).
+    ///
+    /// Prints the realized-capture, payout-cap, fee-floor and honest-
+    /// redistribution tables that back §7 of
+    /// `docs/research/ct-compatible-lottery-selection.md`. Does NOT wire
+    /// anything into consensus.
+    fn run_lottery_sybil_brake_sweep_cli() {
+        use bth_cluster_tax::simulation::lottery_sybil_brake_sweep::{
+            run_sybil_brake_sweep, to_markdown,
+        };
+        let report = run_sybil_brake_sweep();
+        println!("# Structural Sybil-Brake Sweep (issue #902 §7)\n");
         println!("{}", to_markdown(&report));
     }
 }

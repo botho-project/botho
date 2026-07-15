@@ -139,7 +139,7 @@ Three coherent paths follow:
 Adopt **FeeInverse** (or Hybrid) and stop the splitting attack with something *other* than the weight formula, since the formula can't do it:
 - **Eligibility floors, not weight tilts.** The existing lottery already gates on `min_utxo_age` (720 blocks) and `min_utxo_value` (1 microBTH). A 1,000-way split of a 100k-BTH whale still clears both — but a materially higher `min_utxo_value` **denominated against the public fee** (e.g. "eligible only if the coin's public fee ≥ F") caps how finely a position can be shattered into *eligible* tickets. This is value-free (keys on the public fee) and is the natural CT analogue of the min-value gate.
 - **Per-winner caps.** The consensus lottery already caps payout at one block reward for anti-grinding. A per-UTXO or per-stealth-cluster payout cap bounds what any single fragmented position can extract per block regardless of ticket count.
-- **What it gives up:** strict split-invariance. It bets that eligibility floors + payout caps keep the *realized* subsidy small even though the *weight* subsidy is large. That bet needs its own simulation (out of scope here) before it can be ratified.
+- **What it gives up:** strict split-invariance. It bets that eligibility floors + payout caps keep the *realized* subsidy small even though the *weight* subsidy is large. **§7 tests that bet directly** — and finds it holds only *conditionally*: the realized subsidy is 0% on a busy, mature chain but positive (and unbounded by any window) when the chain is quiet or the reward is fat, the fee floor is counterproductive, and the payout cap is CT-evadable. Path A is viable only under the standing invariant `reward ≤ organic-circulation-cost`; see §7.5.
 
 ### Path B — Keep ClusterWeighted and pay for the ZK sort (the path the reframe was trying to avoid)
 If split-invariance is non-negotiable — and §4.3 shows it is the *only* thing ClusterWeighted buys — then the value must be read in zero-knowledge, and the Merkle-sum-tree sort of #902 §3 is **unavoidable**. Rough scope of what that costs (for the spec author to size properly):
@@ -156,10 +156,89 @@ Given §4.2 (ClusterWeighted routes pool back to whales in honest populations) a
 
 1. **Split-invariance: hard requirement or soft?** Is a bounded, floor-limited Sybil subsidy on *lottery selection* acceptable, given demurrage/emission carry the load-bearing redistribution and the payout is already reward-capped per block? This single answer chooses between Path A/C and Path B.
 2. **Is the lottery's progressive tilt still load-bearing?** §4.2 suggests ClusterWeighted under-redistributes in honest populations and only shines against gamed whales. If demurrage already delivers the Δgini floor (per `cluster-tilted-redistribution.md`), can the lottery drop the tilt (Path C) and keep only broad, Sybil-floored distribution?
-3. **Eligibility-floor calibration (if Path A/C).** What `min public fee` / per-position payout cap keeps the *realized* whale capture small under a 1,000-way split? This needs a follow-up sim (a realized-payout version of Track 2, not just a weight-share version).
+3. **Eligibility-floor calibration (if Path A/C).** ~~What `min public fee` / per-position payout cap keeps the *realized* whale capture small under a 1,000-way split?~~ **Answered in §7.** The realized-payout follow-up (`lottery_sybil_brake_sweep`) shows: a last-N window is capture-neutral (realized capture = `1 − √(ρ·base_fee/R)`, independent of N); a fee floor is regressive and inverts to a 100% whale subsidy past a threshold (drop it); a payout cap is CT-evadable via unlinkable clusters. The only real Sybil brake is the economic invariant `reward ≤ organic-circulation-cost`, which fails during bootstrap/quiet periods. Recommend N ≈ 10k blocks and **no** fee floor *if* Path A/C is chosen; see §7.5.
 4. **ZK-sort budget (if Path B).** Is a few-KB, few-ms per-winner proof ×4/block acceptable at target block times, and can the offset be bound to the finalized seed tightly enough to kill prover grinding? This is the gadget #902 §3 asks the spec to specify.
 5. **Consistency with the demurrage/tag gadgets.** #902 items 1 (demurrage inequality proof) and 2 (tag-blend proof) face the same "read hidden value" wall. If the epic adopts a committed-value machinery for those anyway, Path B's Merkle-sum tree may be nearly free to add — changing the cost-benefit against Path A/C. The three sub-problems should be sized together, not independently.
 
-## 7. What this deliverable is (and isn't)
+## 7. Structural Sybil brakes — do candidate-pool restrictions bound the *realized* subsidy?
+
+§4.3 measured the Sybil attack as **ticket share in a fixed 100-holder population**, which overstates it: it freezes the denominator and reads the weight share, not the money the whale actually takes home. Open question 3 asked for the *realized-payout* follow-up: with a real organic candidate stream (a live economy creating many fresh outputs every block), a **rolling** last-N-blocks window (so the whale must re-split forever, paying base fees each cycle), and three **structural brakes that are NOT weight tilts** — a last-N candidate window, a fee-denominated eligibility floor, and a per-block payout cap — does the *realized* whale capture stay small enough to make a value-free rule (Path A/C) viable?
+
+**Reproduce:**
+```
+cargo run -p bth-cluster-tax --features cli --bin cluster-tax-sim -- lottery-sybil-brake-sweep
+```
+Sim source: `cluster-tax/src/simulation/lottery_sybil_brake_sweep.rs` (deterministic; seed `0xB07A_0902_2`; expected-value, no draws → byte-for-byte reproducible, `report_is_reproducible` test + two live runs `diff`-clean). It reuses the shipped kernels — the real `demurrage_charge` (the public-fee-vs-age curve), the real `ClusterFactorCurve` (tier factors), `calculate_gini`, and the `public_fee_pico` proxy + constants from `lottery_selection_sweep`. The rule under test is **uniform weight over eligible candidates** — the representative value-free rule, since §4.3 showed every value-free rule shares the same per-ticket hole; the brakes, not the weight, are the variable here.
+
+### 7.1 The organic stream turns "ticket share" into "realized capture"
+
+Model a whale that fragments its 100k-BTH position and *continuously* refreshes the pieces to keep them inside the last-N window, competing against an organic stream of ρ fresh outputs/block. At stationarity the whale's profit-maximising realized capture (fraction of the *payout* it takes home over a long run, confirmed by a deterministic K-scan) is
+
+```
+s* = max(0, 1 − √(ρ · base_fee / R))
+```
+
+where **ρ** = organic outputs/block, **base_fee** = per-output floor (0.25 BTH), **R** = per-block lottery reward. The headline is what is *absent* from that formula: **the window size N.** The window changes the recency semantics and the whale's refresh cost, but *not* the capture ceiling.
+
+| regime (ρ, R) | N=100 | N=1k | N=10k | N=100k | cost/captured | attack? |
+|---|---:|---:|---:|---:|---:|:--:|
+| busy chain, steady reward (ρ=20, R=3.8) | 0.00% | 0.00% | 0.00% | 0.00% | n/a | **deterred** |
+| quiet chain, steady reward (ρ=2, R=3.8) | 64.5% | 63.6% | 62.8% | 64.6% | 0.35–0.37× | pays ~2.8× |
+| busy chain, fat reward (ρ=20, R=20) | 49.8% | 48.9% | 50.8% | 49.9% | 0.49–0.51× | pays ~2× |
+
+**Reading it — the brake is the economy, not the window.** The gate is the ratio `ρ·base_fee / R`, the honest economy's own per-block circulation cost against the reward:
+
+- **When `ρ·base_fee ≥ R`, the attack is unprofitable at every window size** and the whale does not split at all (K\*=0, 0% capture). On a *busy* chain (ρ=20 ⇒ ρ·base_fee=5 BTH) with the #351 steady reward (~3.8 BTH/block), the value-free uniform lottery is **Sybil-safe by economics alone** — no ZK sort, no floor, no cap. The organic circulation the whale must out-ticket is simply too cheap for it and too expensive to fake.
+- **When the chain is quiet or the reward is fat, no window saves it.** A quiet chain (ρ=2, thin denominator) lets the whale capture ~63% and the attack pays for itself ~2.8× (it burns 0.35 BTH in fees per 1 BTH of pool it wins). A *bootstrap* chain with fat early emission (R=20) hands it ~50% even at ρ=20. These are exactly the adversary-favourable regimes — low activity, or high reward — and the window is powerless in all of them.
+
+The window's real contribution is therefore **not** a capture bound: it is (i) the *recency* semantic that makes "circulated" meaningful, and (ii) forcing the attack to be a *recurring* cost rather than a one-time `(K−1)·base_fee`. Both are worth having, but neither is the Sybil bound the reframe needed.
+
+### 7.2 The fee floor is regressive and *non-monotone* — it can invert into a whale subsidy
+
+A fee-denominated floor (`eligible only if public fee ≥ F`) is the CT analogue of `min_utxo_value`. But under CT a **fresh** coin has fee ≈ base_fee *regardless of its hidden value* — demurrage has not accrued — so a floor above base can only be cleared by an **aged** coin, in direct tension with a *recency* window. The aging tax (blocks to clear F, whale factor):
+
+| floor F (BTH) | 100-BTH coin | 1k | 10k | 100k |
+|---:|---:|---:|---:|---:|
+| 0.25 (≈base) | 0 | 0 | 0 | 0 |
+| 0.50 | 830,772 | 83,079 | 8,313 | 833 |
+| 1.00 | 2,492,310 | 249,236 | 24,927 | 2,498 |
+
+At a 10k-block window (~14 h), a 100-BTH coin needs **830k blocks** to clear a 0.50-BTH floor — it can *never* be both fresh-enough and fee-heavy-enough. So the floor excludes the organic poor first. Worse, it is non-monotone (quiet regime, N=10k):
+
+| floor F (BTH) | whale K\* | realized capture |
+|---:|---:|---:|
+| 0.00 | 33,733 | 62.8% |
+| 0.50 | 11 | 8.6% |
+| 1.00 | 1 | **100.0%** |
+
+F=0.50 does cap the whale (large pieces ⇒ 11 tickets ⇒ 8.6%) — but only by disenfranchising every organic tier that cannot clear it. Pushed to F=1.00, **no in-window coin clears the floor except the whale's own large, aged, consolidated position**, which then wins 100% of a pool nobody else can enter. A fee floor under a recency window does not bound the whale; past a threshold it *hands the whale everything*. It is disqualified.
+
+### 7.3 The payout cap bounds capture — but is CT-evadable
+
+A per-block per-owner payout cap directly clamps realized capture to the cap (quiet regime, N=10k): 25% cap → 25.0%, 10% → 10.0%, 5% → 5.0%. This is the one brake that *does* bound capture on paper. Its fatal flaw is CT-specific: the cap must be keyed to an **unforgeable identity**, and under confidential amounts the whale's fresh coins share no tags, so they form **distinct, unlinkable stealth clusters**. A per-cluster cap is evaded by splitting across clusters — the very same "structure the holder controls for free" wall the *weight* hit in §4.4. The cap is a real bound only against an attacker who cannot manufacture identities, which is not the CT threat model. It is a best-case ceiling, not a guarantee.
+
+### 7.4 Honest redistribution *survives* the window (indeed improves)
+
+Does restricting the lottery to *circulated* (recently-moved) coins starve honest redistribution? No — 10-year collect-and-redistribute over the §4.1 population:
+
+| policy | final Gini | Δgini |
+|---|---:|---:|
+| Uniform (all holders) | 0.6508 | +0.1017 |
+| Windowed (circulated only) | 0.6381 | **+0.1144** |
+
+The window *concentrates* the pool on actively-circulating holders — here the poor commerce tier, exactly the intended beneficiaries — while idle whales self-exclude by not transacting. Windowed redistribution is **at least as equalizing** as the unrestricted lottery. The only casualty is the idle *poor* holder, also excluded; that is acceptable precisely because demurrage already redistributes the stock (per `cluster-tilted-redistribution.md`), so the lottery is free to reward circulation.
+
+### 7.5 Verdict — do the structural brakes rescue the value-free path?
+
+**Partly, and conditionally — not robustly.** The realized-capture lens deflates the §4.3 scare: the "always ~91% ticket share" becomes **0% on a busy steady chain** and a *bounded, self-limiting* subsidy even when positive. And honest redistribution is unharmed (improved) by a last-N window. That is real progress for Path A/C. But the bound that does the work is **economic** (`ρ·base_fee ≥ R`), and it degrades exactly in the adversary-favourable regimes:
+
+- The **last-N window** is *capture-neutral* — it fixes recency and imposes a recurring cost, but does not bound the subsidy.
+- The **fee floor** is *counterproductive* — regressive, and past a threshold it inverts to a 100% whale subsidy. Drop it.
+- The **payout cap** is *CT-evadable* — a real bound only against an attacker who cannot mint unlinkable clusters, which CT lets it do.
+- The residual Sybil safety therefore rests entirely on the standing invariant **reward ≤ organic circulation cost** (`R ≤ ρ·base_fee`). That holds on a busy, mature chain at the #351 steady reward, but **fails during bootstrap** (fat early emission) and **whenever activity thins** (which an adversary can help along by quieting the chain).
+
+**So:** a value-free rule (Path A/C) with a **last-N-blocks window (recommend N ≈ 10k blocks, ~14 h — a natural "recently circulated" horizon), no fee floor, and the base-fee floor kept as the only value gate** is viable **iff** the protocol is willing to bound the per-block lottery reward against a floor of organic activity (`R ≤ ρ·base_fee`) and to accept a bounded residual subsidy in quiet/bootstrap regimes. If instead a **hard, regime-independent** Sybil bound is required — safe even when the chain is quiet or the reward is fat — then the structural brakes do **not** deliver it, and **Path B (the ZK weighted-sampling sort) stands** as the only mechanism that bounds capture independent of activity and reward. The follow-up does not overturn §5's core result (no value-free *weight* is split-invariant); it maps precisely which *deployments* can live with that and which still need the sort.
+
+## 8. What this deliverable is (and isn't)
 
 This is the **design-research + calibration simulation** for the lottery sub-problem, giving the eventual `anvil:spec` authoring a concrete starting point: which rule, which properties it recovers, and the crisp Path A/B/C decision it surfaces. It does **not** change any consensus code, and it does **not** by itself pick the rule — that is a maintainer ratification (and, for Path A/C, needs the realized-payout follow-up sim of open question 3). The sim is committed and seeded so the numbers regenerate on demand and can be re-run against different population assumptions.
