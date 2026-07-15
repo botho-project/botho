@@ -63,6 +63,23 @@
 //! [`tests::demurrage_background_reset_leak_is_real`] asserts the priced
 //! transition.
 //!
+//! ### The opt-in sibling (#831): the demurrage-settlement operation
+//!
+//! [`demurrage_settlement_charge`] is the **explicit opt-in counterpart** of
+//! the same charge. Where #925 prices the *implicit* class exit that any
+//! deflating spend performs, a settlement transaction is an *explicit*,
+//! consensus-recognized reclassification of a wealthy coin down to
+//! factor-1/background in exchange for **wrap eligibility** (the bridge
+//! on-ramp, #822/#825). It is the ONE sanctioned place cluster mass legitimately DROPS to
+//! background: the drop is deflation (already legal under
+//! `check_cluster_tag_inheritance`, which only rejects inflation), but it is
+//! only *wrap-eligible* when it rides an accepted settlement transaction that
+//! paid the full capitalized charge. Both doors read the SAME
+//! [`SETTLEMENT_HORIZON_BLOCKS`] and reuse the SAME
+//! [`capitalized_reset_charge`], so settling is never cheaper than holding over
+//! the horizon (churn-invariance across the class transition), and neither door
+//! undercuts the other.
+//!
 //! ## Determinism
 //!
 //! CONSENSUS-CRITICAL: pure integer arithmetic throughout.
@@ -204,6 +221,59 @@ pub fn capitalized_reset_charge(
         blocks_per_year,
     );
     at_floor.saturating_sub(at_output)
+}
+
+/// The opt-in **settlement charge** (#831): the one-time price a holder pays to
+/// permanently reclassify a wealthy-cluster coin down to factor-1 / background
+/// so it becomes wrap-eligible (the bridge on-ramp, #822/#825).
+///
+/// This is the **explicit opt-in counterpart** to #925's **implicit** downgrade
+/// charge ([`spend_demurrage_charge`] / [`capitalized_reset_charge`]): both
+/// price a permanent exit from a wealth class at the capitalized future
+/// demurrage the shed cluster mass would otherwise owe, over the *same* shared
+/// [`SETTLEMENT_HORIZON_BLOCKS`]. Sharing the horizon is what keeps neither
+/// door a cheaper route than the other (calibration doc §6).
+///
+/// A settlement transaction declares **all-background (factor-1) outputs**, so
+/// the exit target is exactly [`FACTOR_SCALE`] (1×) and the charge is
+/// [`capitalized_reset_charge`] evaluated from the ring-floored input class
+/// down to background — **reused verbatim, no second charge model**.
+///
+/// `input_floor_factor` MUST be the ring-centroid / import-composed factor
+/// floor the spender cannot rewrite ([`ring_centroid_implied_factor`] etc.),
+/// never a spender-declared factor — otherwise a wealthy holder could
+/// under-declare the input's class to pay a smaller charge (the anti-dilution
+/// machinery is the same one #925 relies on). A genuinely background (factor-1)
+/// coin returns 0 (nothing to shed), so honest commerce coins settle for free.
+///
+/// # Relationship to the consensus fee floor
+///
+/// The consensus fee floor already charges `spend_demurrage_charge =
+/// max(accrued, capitalized)` on every spend. For a settlement, whose outputs
+/// are background, `claimed_factor == FACTOR_SCALE` so the capitalized term
+/// equals **exactly** this settlement charge — hence a settlement is priced by
+/// the existing floor with no separate additive term (double-charging is
+/// avoided by construction), and the floor is always `>= base +
+/// demurrage_settlement_charge`.
+///
+/// # Determinism
+/// CONSENSUS-CRITICAL: pure integer arithmetic (one
+/// [`capitalized_reset_charge`] call). Liveness-safe: only ever raises the fee
+/// floor.
+pub fn demurrage_settlement_charge(
+    settled_value: u64,
+    input_floor_factor: u64,
+    rate_bps: u32,
+    blocks_per_year: u64,
+) -> u64 {
+    capitalized_reset_charge(
+        settled_value,
+        input_floor_factor,
+        FACTOR_SCALE, // exit target: factor-1 / background
+        SETTLEMENT_HORIZON_BLOCKS,
+        rate_bps,
+        blocks_per_year,
+    )
 }
 
 /// Total demurrage owed on a spend under #925: the greater of accrued-to-date
@@ -898,6 +968,124 @@ mod tests {
             reset_spend_charge > honest_annual_charge,
             "the priced class transition now costs MORE than one honest year: \
              {reset_spend_charge} > {honest_annual_charge}"
+        );
+    }
+
+    // ---- #831: demurrage-settlement charge (the explicit opt-in door) ----
+
+    /// The settlement charge REUSES #925's `capitalized_reset_charge` primitive
+    /// verbatim (no reimplementation): `demurrage_settlement_charge` is exactly
+    /// that primitive with the exit target pinned to factor-1/background and
+    /// the shared `SETTLEMENT_HORIZON_BLOCKS`.
+    #[test]
+    fn settlement_charge_is_capitalized_reset_to_background() {
+        let rate_bps = 200u32;
+        let value = 1_000_000u64;
+        for floor in [FACTOR_SCALE, 2_000, 3_500, 5_745, MAX_FACTOR_SCALED] {
+            let settlement = demurrage_settlement_charge(value, floor, rate_bps, BLOCKS_PER_YEAR);
+            let capitalized = capitalized_reset_charge(
+                value,
+                floor,
+                FACTOR_SCALE, // background exit target
+                SETTLEMENT_HORIZON_BLOCKS,
+                rate_bps,
+                BLOCKS_PER_YEAR,
+            );
+            assert_eq!(
+                settlement, capitalized,
+                "settlement charge must equal capitalized_reset_charge to background at floor {floor}"
+            );
+        }
+    }
+
+    /// A genuinely background (factor-1) coin settles for FREE — there is no
+    /// wealthy class to shed, so honest commerce is never charged to wrap.
+    #[test]
+    fn settlement_charge_factor_one_is_free() {
+        assert_eq!(
+            demurrage_settlement_charge(1_000_000, FACTOR_SCALE, 200, BLOCKS_PER_YEAR),
+            0,
+            "background/factor-1 coin pays zero to settle"
+        );
+    }
+
+    /// A wealthy coin pays a strictly positive settlement charge, and it is the
+    /// full capitalized future demurrage over the horizon — i.e. exactly
+    /// `H`-years of demurrage at the ring-floored class (linearity of
+    /// `demurrage_charge` in elapsed). This is the "never a cheaper escape than
+    /// holding" property the calibration relies on.
+    #[test]
+    fn settlement_charge_wealthy_equals_horizon_years_of_demurrage() {
+        let rate_bps = 200u32;
+        let value = 1_000_000u64;
+        let floor = MAX_FACTOR_SCALED; // 6x
+        let settle = demurrage_settlement_charge(value, floor, rate_bps, BLOCKS_PER_YEAR);
+        assert!(
+            settle > 0,
+            "wealthy coin must pay a positive settlement charge"
+        );
+
+        // One year of ordinary in-class demurrage at the same floor.
+        let one_year = demurrage_charge(value, floor, BLOCKS_PER_YEAR, rate_bps, BLOCKS_PER_YEAR);
+        let horizon_years = SETTLEMENT_HORIZON_BLOCKS / BLOCKS_PER_YEAR; // 5
+        assert_eq!(
+            settle,
+            one_year * horizon_years,
+            "settling = paying {horizon_years} years of demurrage up front (churn-invariant \
+             across the class transition: never cheaper than holding over the horizon)"
+        );
+    }
+
+    /// The settlement charge is **elapsed-independent** (anti-instant-flip): a
+    /// freshly-minted wealthy coin pays the SAME settlement charge as a
+    /// year-old one, because the charge capitalizes a FIXED horizon rather than
+    /// the accrued age. So a holder cannot mint→settle→wrap a young coin
+    /// cheaply.
+    #[test]
+    fn settlement_charge_is_elapsed_independent() {
+        let rate_bps = 200u32;
+        let value = 1_000_000u64;
+        let floor = 5_745u64;
+        // demurrage_settlement_charge takes no elapsed at all — it is a pure
+        // function of value/floor/rate/bpy — so any two "ages" give one number.
+        let young = demurrage_settlement_charge(value, floor, rate_bps, BLOCKS_PER_YEAR);
+        let old = demurrage_settlement_charge(value, floor, rate_bps, BLOCKS_PER_YEAR);
+        assert_eq!(young, old, "settlement charge does not depend on coin age");
+        assert!(young > 0);
+    }
+
+    /// Determinism: the settlement charge is a pure integer function —
+    /// identical across repeated calls (no float, no map iteration, no
+    /// node-local state).
+    #[test]
+    fn settlement_charge_is_deterministic() {
+        let a = demurrage_settlement_charge(1_234_567, 4_321, 200, BLOCKS_PER_YEAR);
+        let b = demurrage_settlement_charge(1_234_567, 4_321, 200, BLOCKS_PER_YEAR);
+        assert_eq!(a, b);
+    }
+
+    /// The opt-in settlement charge and the implicit #925 downgrade charge are
+    /// two doors on the SAME horizon: settling a wealthy coin to background
+    /// costs exactly what a #925 spend-to-background of a young coin costs — so
+    /// neither door is a cheaper route than the other.
+    #[test]
+    fn settlement_and_implicit_downgrade_charge_match() {
+        let rate_bps = 200u32;
+        let value = 2_000_000u64;
+        let floor = 5_000u64;
+        let settle = demurrage_settlement_charge(value, floor, rate_bps, BLOCKS_PER_YEAR);
+        // #925 implicit charge for a YOUNG (elapsed=0) wealthy->background spend.
+        let implicit = spend_demurrage_charge(
+            value,
+            floor,        // ring-floored input class
+            FACTOR_SCALE, // declared background output
+            0,            // young: accrued ≈ 0, capitalized dominates
+            rate_bps,
+            BLOCKS_PER_YEAR,
+        );
+        assert_eq!(
+            settle, implicit,
+            "the opt-in settlement price equals the implicit downgrade price on the shared horizon"
         );
     }
 }

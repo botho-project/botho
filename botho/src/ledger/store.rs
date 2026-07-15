@@ -185,6 +185,31 @@ fn check_cluster_tag_inheritance(
     Ok(())
 }
 
+/// The bridge **wrap-eligibility** predicate (issues #831 / #822 / #824).
+///
+/// The wrap on-ramp (the bridge chain watcher, #824) admits a deposit output
+/// for wrapping to wBTH ONLY if it was produced by an accepted
+/// demurrage-settlement transaction AND carries a background/factor-1 tag. Both
+/// conditions are necessary:
+///
+/// - **`producing_tx.is_settlement()`** — the transaction that created the
+///   output was an explicit settlement, which block acceptance only admits
+///   after the capitalized settlement charge was paid (C7 fee floor) and the
+///   tag- rewrite rule held (C8, [`Ledger::verify_settlement`]). Binding to the
+///   FLAG, not merely to background tags, is what closes the cheap-escape: a
+///   normal spend-to-background is trivially background-tagged but is **not**
+///   wrap-eligible, so a wealthy holder cannot bypass the capitalized charge by
+///   an ordinary spend.
+/// - **`output.cluster_tags.is_empty()`** — the output itself reads as
+///   factor-1/background, so a settled-then-wrapped coin is peg-neutral (#825):
+///   it carries no residual cluster provenance into the bridge reserve.
+///
+/// Pure comparison — no ledger read, no node-local state — so every node (and
+/// the bridge) evaluates it identically.
+pub fn wrap_eligible(output: &TxOutput, producing_tx: &BothoTransaction) -> bool {
+    producing_tx.is_settlement() && output.cluster_tags.is_empty()
+}
+
 /// Congestion-free deterministic fee base for the consensus fee floor
 /// (issue #578, design #574 item H1-B4).
 ///
@@ -1017,6 +1042,31 @@ impl Ledger {
                 })?;
         }
 
+        // C8 (issue #831): demurrage-settlement structural validity.
+        //
+        // A settlement is the sanctioned wrap on-ramp (#822/#825): it
+        // reclassifies wealthy-cluster value down to factor-1/background in
+        // exchange for wrap eligibility. C7 above already priced the capitalized
+        // settlement charge — because a settlement's outputs are background, the
+        // shared `spend_demurrage_charge` fires its `capitalized_reset_charge`
+        // term (== `demurrage_settlement_charge`) at the ring-floored input
+        // class, so an under-paid settlement is already rejected. This check
+        // enforces the STRUCTURAL rules that make the `settlement` flag mean
+        // exactly what `wrap_eligible` trusts: every output is background (the
+        // tag-rewrite rule; the one sanctioned full mass-drop to background) and
+        // the certified `settled_value` matches the outputs. Pure tag/integer
+        // comparison — no node-local state, proposer == validator. Non-settlement
+        // txs are untouched.
+        for (tx_idx, tx) in block.transactions.iter().enumerate() {
+            self.verify_settlement(tx).map_err(|e| match e {
+                LedgerError::InvalidBlock(msg) => LedgerError::InvalidBlock(format!(
+                    "Transaction {} settlement validation failed: {}",
+                    tx_idx, msg
+                )),
+                other => other,
+            })?;
+        }
+
         // Validate lottery results and compute the new carryover pool.
         // The pool is consensus state: fees' pool share and the
         // height-scheduled emission share flow in; capped payouts flow out.
@@ -1746,6 +1796,64 @@ impl Ledger {
             input_rings.push(ring);
         }
         check_cluster_tag_inheritance(&input_rings, &tx.outputs)
+    }
+
+    /// C8 (issue #831): structural validity of an explicit demurrage-settlement
+    /// transaction — the sanctioned wrap on-ramp (#822/#825).
+    ///
+    /// The *price* of a settlement (the capitalized future demurrage over
+    /// `SETTLEMENT_HORIZON_BLOCKS`) is enforced by the consensus fee floor
+    /// (`consensus_fee_floor`/`verify_consensus_fee_floor`, C7): a settlement
+    /// declares background outputs, so the shared `spend_demurrage_charge`
+    /// fires its `capitalized_reset_charge` term — identical to
+    /// [`bth_cluster_tax::demurrage_settlement_charge`] — at the ring-floored
+    /// input class the spender cannot rewrite. This method enforces the
+    /// STRUCTURAL rules so the `settlement` flag certifies exactly what
+    /// [`wrap_eligible`] trusts:
+    ///
+    /// - **Tag-rewrite rule:** every output MUST carry a background
+    ///   (`ClusterTagVector::empty`) tag. A settlement reclassifies *all* value
+    ///   to factor-1; this is the ONE sanctioned place cluster mass drops to
+    ///   background, and it is bounded to a FULL drop — never a partial/cheap
+    ///   laundering of provenance, which would leave a wealthy tag on a
+    ///   supposedly-settled output.
+    /// - **Certified value:** `settled_value == Σ output amounts`. The balance
+    ///   equation already bounds the output sum by the resolved input value, so
+    ///   this ties the flag's certified figure to the actual reclassified
+    ///   value.
+    ///
+    /// Non-settlement transactions return `Ok(())` unchanged. Pure tag/integer
+    /// comparison — no node-local state — so proposer and validator agree.
+    fn verify_settlement(&self, tx: &BothoTransaction) -> Result<(), LedgerError> {
+        let Some(settlement) = &tx.settlement else {
+            return Ok(());
+        };
+
+        // Tag-rewrite rule: a settlement produces ONLY background value.
+        for (i, out) in tx.outputs.iter().enumerate() {
+            if !out.cluster_tags.is_empty() {
+                return Err(LedgerError::InvalidBlock(format!(
+                    "settlement output {} is not background (carries {} cluster tag(s)); \
+                     a settlement must reclassify all value to factor-1",
+                    i,
+                    out.cluster_tags.len()
+                )));
+            }
+        }
+
+        // Certified value must equal the summed (all-background) outputs.
+        let output_sum = tx
+            .outputs
+            .iter()
+            .fold(0u64, |acc, o| acc.saturating_add(o.amount));
+        if settlement.settled_value != output_sum {
+            return Err(LedgerError::InvalidBlock(format!(
+                "settlement settled_value {} does not equal output sum {}",
+                settlement.settled_value, output_sum
+            )));
+        }
+
+        Ok(())
     }
 
     /// H1-B4 (issue #578, design #574): reject a transfer tx whose `fee` is
@@ -3605,6 +3713,7 @@ mod tests {
             outputs: vec![],
             fee: 0,
             created_at_height,
+            settlement: None,
         };
 
         // mock_minting_tx-equivalent: build_direct sets header.height from the
@@ -4906,6 +5015,7 @@ mod tests {
             outputs: vec![mk_tagged_output(1_000_000, 30, full_tag(1))],
             fee: 0,
             created_at_height: 0,
+            settlement: None,
         };
         assert!(
             ledger.verify_cluster_tag_inheritance(&legit_tx).is_ok(),
@@ -4924,6 +5034,7 @@ mod tests {
             outputs: vec![mk_tagged_output(2_000_000, 35, full_tag(1))],
             fee: 0,
             created_at_height: 0,
+            settlement: None,
         };
         let err = ledger
             .verify_cluster_tag_inheritance(&decoy_inflated_tx)
@@ -4940,6 +5051,7 @@ mod tests {
             outputs: vec![mk_tagged_output(3_000_000, 40, full_tag(1))],
             fee: 0,
             created_at_height: 0,
+            settlement: None,
         };
         let err = ledger
             .verify_cluster_tag_inheritance(&inflated_tx)
@@ -5093,7 +5205,22 @@ mod tests {
             outputs,
             fee,
             created_at_height: 0,
+            settlement: None,
         }
+    }
+
+    /// Like [`mk_transfer_tx`] but flags the tx as a #831 demurrage-settlement
+    /// certifying `settled_value` (defaults to Σ output amounts).
+    #[cfg(test)]
+    fn mk_settlement_tx(
+        ring: Vec<RingMember>,
+        outputs: Vec<TxOutput>,
+        fee: u64,
+        settled_value: u64,
+    ) -> BothoTransaction {
+        let mut tx = mk_transfer_tx(ring, outputs, fee);
+        tx.settlement = Some(crate::transaction::SettlementInfo { settled_value });
+        tx
     }
 
     /// A transfer tx with a fee one picocredit below the recomputed floor is
@@ -5359,6 +5486,195 @@ mod tests {
         // Determinism: proposer and validators recompute the identical verdict.
         let again = ledger.consensus_fee_floor(&tx, block_height).unwrap();
         assert_eq!(floor, again, "consensus floor must be deterministic");
+    }
+
+    // ---- #831: demurrage-settlement operation (the wrap on-ramp) ----
+
+    /// The consensus fee floor prices an explicit settlement of a young wealthy
+    /// coin at exactly `base + demurrage_settlement_charge` — the SAME shared
+    /// `capitalized_reset_charge` primitive #925 uses (not a reimplementation),
+    /// computed from the ring-floored input class the spender cannot rewrite.
+    /// Determinism: proposer == validator (recomputation is bit-identical).
+    #[test]
+    fn consensus_fee_floor_prices_settlement_at_capitalized_charge() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        ledger
+            .set_cluster_wealth_for_test(7, 10_000_000_000_000_000_000)
+            .unwrap();
+
+        let block_height = 8_000_000u64;
+        // Young wealthy ring (cluster 7); the settlement declares all-background
+        // outputs (the reclassification).
+        let mut specs = vec![(100_000_000u64, block_height, 7u64, 200u8)];
+        for i in 0..10u8 {
+            specs.push((100_000_000, block_height, 7, 201 + i));
+        }
+        let ring = seed_ring_utxos(&ledger, &specs);
+        let output_sum = 90_000_000u64;
+        let outputs = vec![mk_tagged_output(output_sum, 230, ClusterTagVector::empty())];
+        let tx = mk_settlement_tx(ring, outputs, 0, output_sum);
+
+        let floor = ledger.consensus_fee_floor(&tx, block_height).unwrap();
+        let base_only = base_only_fee(&ledger, &tx);
+        let charge = floor - base_only;
+
+        // The settlement charge is exactly the shared primitive to background.
+        let policy = crate::monetary::mainnet_policy();
+        let rate = policy.demurrage_rate_bps(block_height);
+        let bpy = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
+        let curve = bth_cluster_tax::ClusterFactorCurve::default_params();
+        let floor_factor =
+            bth_cluster_tax::ring_centroid_implied_factor(&[(output_sum, 10u128.pow(19))], &curve);
+        let expected =
+            bth_cluster_tax::demurrage_settlement_charge(output_sum, floor_factor, rate, bpy);
+        assert!(expected > 0, "wealthy settlement must cost > 0");
+        assert_eq!(
+            charge, expected,
+            "settlement priced at demurrage_settlement_charge (reuses #925's capitalized primitive)"
+        );
+
+        // Determinism.
+        let again = ledger.consensus_fee_floor(&tx, block_height).unwrap();
+        assert_eq!(floor, again, "settlement floor must be deterministic");
+    }
+
+    /// A settlement of a genuinely background coin costs ZERO extra (factor-1
+    /// settles free), so honest commerce coins wrap without penalty.
+    #[test]
+    fn consensus_fee_floor_settlement_of_background_is_free() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let block_height = 8_000_000u64;
+        let ring = seed_ring_utxos(&ledger, &[(1_000_000, 0, 0, 210)]);
+        let output_sum = 900_000u64;
+        let outputs = vec![mk_tagged_output(output_sum, 231, ClusterTagVector::empty())];
+        let tx = mk_settlement_tx(ring, outputs, 0, output_sum);
+
+        let floor = ledger.consensus_fee_floor(&tx, block_height).unwrap();
+        let base_only = base_only_fee(&ledger, &tx);
+        assert_eq!(
+            floor, base_only,
+            "settling a background coin adds no charge (factor-1 settles free)"
+        );
+    }
+
+    /// UNDER-PAY rejected: a settlement whose `fee` is one picocredit below
+    /// `base + settlement_charge` is rejected at block acceptance; at exactly
+    /// the floor it passes the fee gate.
+    #[test]
+    fn consensus_fee_floor_rejects_underpaid_settlement() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        ledger
+            .set_cluster_wealth_for_test(7, 10_000_000_000_000_000_000)
+            .unwrap();
+        let block_height = 8_000_000u64;
+        let ring = seed_ring_utxos(&ledger, &[(100_000_000, block_height, 7, 212)]);
+        let output_sum = 90_000_000u64;
+        let outputs = vec![mk_tagged_output(output_sum, 233, ClusterTagVector::empty())];
+
+        let floor = {
+            let tx = mk_settlement_tx(ring.clone(), outputs.clone(), 0, output_sum);
+            ledger.consensus_fee_floor(&tx, block_height).unwrap()
+        };
+        assert!(floor > 1);
+
+        let under = mk_settlement_tx(ring.clone(), outputs.clone(), floor - 1, output_sum);
+        assert!(
+            ledger
+                .verify_consensus_fee_floor(&under, block_height)
+                .is_err(),
+            "an under-paid settlement must be rejected"
+        );
+        let at_floor = mk_settlement_tx(ring, outputs, floor, output_sum);
+        assert!(
+            ledger
+                .verify_consensus_fee_floor(&at_floor, block_height)
+                .is_ok(),
+            "a settlement paying exactly the floor is accepted by the fee gate"
+        );
+    }
+
+    /// Tag-rewrite rule / anti-laundering: a settlement whose output still
+    /// carries a (wealthy) cluster tag is rejected — a settlement may ONLY drop
+    /// to full background, never leave partial provenance on a "settled" coin.
+    #[test]
+    fn verify_settlement_rejects_nonbackground_output() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let ring = seed_ring_utxos(&ledger, &[(1_000_000, 0, 7, 214)]);
+        // Output still tagged to cluster 7 — NOT a clean reclassification.
+        let outputs = vec![mk_tagged_output(900_000, 235, full_tag(7))];
+        let tx = mk_settlement_tx(ring, outputs, 0, 900_000);
+        let err = ledger
+            .verify_settlement(&tx)
+            .expect_err("settlement with a tagged output must be rejected");
+        assert!(matches!(err, LedgerError::InvalidBlock(_)), "got {:?}", err);
+    }
+
+    /// A settlement whose certified `settled_value` disagrees with its outputs
+    /// is rejected (no under-certifying to weaken the wrap accounting).
+    #[test]
+    fn verify_settlement_rejects_wrong_certified_value() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let ring = seed_ring_utxos(&ledger, &[(1_000_000, 0, 0, 216)]);
+        let outputs = vec![mk_tagged_output(900_000, 236, ClusterTagVector::empty())];
+        // certified value != Σ outputs (900_000)
+        let tx = mk_settlement_tx(ring, outputs, 0, 800_000);
+        assert!(
+            ledger.verify_settlement(&tx).is_err(),
+            "settled_value must equal the output sum"
+        );
+    }
+
+    /// A well-formed settlement (all-background outputs, matching certified
+    /// value) passes structural validation; a non-settlement tx is unaffected.
+    #[test]
+    fn verify_settlement_accepts_wellformed_and_ignores_transfers() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let ring = seed_ring_utxos(&ledger, &[(1_000_000, 0, 0, 218)]);
+        let outputs = vec![mk_tagged_output(900_000, 237, ClusterTagVector::empty())];
+        let settlement = mk_settlement_tx(ring.clone(), outputs.clone(), 0, 900_000);
+        assert!(ledger.verify_settlement(&settlement).is_ok());
+
+        // A plain transfer (even one with a tagged output) is not a settlement,
+        // so verify_settlement is a no-op Ok for it.
+        let transfer = mk_transfer_tx(ring, vec![mk_tagged_output(900_000, 238, full_tag(7))], 0);
+        assert!(ledger.verify_settlement(&transfer).is_ok());
+    }
+
+    /// The `wrap_eligible` predicate: true ONLY for a background output
+    /// produced by an accepted settlement tx. A wealthy output is
+    /// ineligible; and crucially a background output from a NON-settlement
+    /// spend is ALSO ineligible — binding to the flag (not merely the tag)
+    /// is what closes the cheap-escape (a normal spend-to-background cannot
+    /// wrap).
+    #[test]
+    fn wrap_eligible_requires_settlement_flag_and_background() {
+        let bg = mk_tagged_output(900_000, 240, ClusterTagVector::empty());
+        let wealthy = mk_tagged_output(900_000, 241, full_tag(7));
+
+        let settlement = mk_settlement_tx(Vec::new(), vec![bg.clone()], 0, 900_000);
+        let transfer = mk_transfer_tx(Vec::new(), vec![bg.clone()], 0);
+
+        // The single sanctioned case: background output + settlement flag.
+        assert!(
+            wrap_eligible(&bg, &settlement),
+            "settled background is wrap-eligible"
+        );
+
+        // Cheap-escape closed: a normal spend-to-background is NOT eligible.
+        assert!(
+            !wrap_eligible(&bg, &transfer),
+            "a background output from a non-settlement spend must NOT be wrap-eligible"
+        );
+
+        // A wealthy output is never eligible, flag or not.
+        assert!(!wrap_eligible(&wealthy, &settlement));
+        assert!(!wrap_eligible(&wealthy, &transfer));
     }
 
     /// #925 no-over-charge: an honest background→background spend (declared 1×
