@@ -510,6 +510,7 @@ mod tests {
             outputs: vec![],
             fee: 0,
             created_at_height: block_height - MAX_TX_AGE, // exactly on the boundary, kept
+            settlement: None,
         };
         // Stale tx: created_at_height + MAX_TX_AGE < block_height (filtered).
         let stale = Transaction {
@@ -517,6 +518,7 @@ mod tests {
             outputs: vec![],
             fee: 0,
             created_at_height: block_height - MAX_TX_AGE - 1,
+            settlement: None,
         };
         let fresh_hash = fresh.hash();
         let stale_hash = stale.hash();
@@ -589,6 +591,7 @@ mod tests {
             outputs: vec![],
             fee: 0,
             created_at_height: u64::MAX,
+            settlement: None,
         };
         let crafted_hash = crafted.hash();
 
@@ -678,6 +681,7 @@ mod tests {
             outputs: vec![],
             fee,
             created_at_height: 0,
+            settlement: None,
         }
     }
 

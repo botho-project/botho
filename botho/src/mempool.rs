@@ -706,6 +706,39 @@ impl Mempool {
         tx.is_valid_structure()
             .map_err(|e| MempoolError::InvalidTransaction(e.to_string()))?;
 
+        // #831: demurrage-settlement structural validity (mirrors the consensus
+        // C8 check `Ledger::verify_settlement` so relay rejects a malformed
+        // settlement at admission, not only at block acceptance). A settlement
+        // must reclassify ALL value to factor-1/background (the tag-rewrite rule)
+        // and certify a `settled_value` equal to its outputs. Checked here, up
+        // front, as a cheap structural rule (before ring-signature work). The
+        // settlement CHARGE is enforced further below by the shared
+        // `spend_demurrage_charge` demurrage term (a background-output downgrade
+        // prices the capitalized settlement charge from the ring floor), so no
+        // separate charge check is needed here.
+        if let Some(settlement) = &tx.settlement {
+            for (i, out) in tx.outputs.iter().enumerate() {
+                if !out.cluster_tags.is_empty() {
+                    return Err(MempoolError::InvalidTransaction(format!(
+                        "settlement output {} is not background (carries {} cluster tag(s)); \
+                         a settlement must reclassify all value to factor-1",
+                        i,
+                        out.cluster_tags.len()
+                    )));
+                }
+            }
+            let settlement_output_sum = tx
+                .outputs
+                .iter()
+                .fold(0u64, |acc, o| acc.saturating_add(o.amount));
+            if settlement.settled_value != settlement_output_sum {
+                return Err(MempoolError::InvalidTransaction(format!(
+                    "settlement settled_value {} does not equal output sum {}",
+                    settlement.settled_value, settlement_output_sum
+                )));
+            }
+        }
+
         // Validate inputs (all transactions use CLSAG ring signatures)
         let (input_sum, ring_members, ring_tags) =
             self.validate_clsag_inputs(tx.inputs.clsag(), &tx, ledger)?;
@@ -1484,6 +1517,72 @@ mod tests {
             fee.max(MIN_TX_FEE), // Ensure minimum fee
             height,
         )
+    }
+
+    /// #831: a settlement whose output still carries a cluster tag is rejected
+    /// at mempool ADMISSION (before ring-signature work), mirroring the
+    /// consensus C8 structural rule — a settlement may only reclassify to full
+    /// background, never launder partial provenance cheaply.
+    #[test]
+    fn mempool_rejects_settlement_with_nonbackground_output() {
+        use bth_transaction_types::ClusterId;
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let mut mempool = Mempool::new();
+
+        let output = TxOutput {
+            amount: 2_000_000,
+            target_key: [50; 32],
+            public_key: [51; 32],
+            e_memo: None,
+            cluster_tags: ClusterTagVector::single(ClusterId(7)),
+        };
+        let tx = Transaction::new_settlement(
+            vec![test_clsag_input(1)],
+            vec![output],
+            MIN_TX_FEE,
+            0,
+            2_000_000,
+        );
+        let err = mempool
+            .add_tx(tx, &ledger)
+            .expect_err("settlement with a tagged output must be rejected at admission");
+        assert!(
+            matches!(err, MempoolError::InvalidTransaction(_)),
+            "got {err:?}"
+        );
+    }
+
+    /// #831: a settlement whose certified `settled_value` disagrees with its
+    /// outputs is rejected at mempool admission.
+    #[test]
+    fn mempool_rejects_settlement_with_wrong_certified_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let mut mempool = Mempool::new();
+
+        let output = TxOutput {
+            amount: 2_000_000,
+            target_key: [52; 32],
+            public_key: [53; 32],
+            e_memo: None,
+            cluster_tags: ClusterTagVector::empty(),
+        };
+        // certified value (1_000_000) != Σ outputs (2_000_000)
+        let tx = Transaction::new_settlement(
+            vec![test_clsag_input(2)],
+            vec![output],
+            MIN_TX_FEE,
+            0,
+            1_000_000,
+        );
+        let err = mempool
+            .add_tx(tx, &ledger)
+            .expect_err("settlement certified value must match outputs");
+        assert!(
+            matches!(err, MempoolError::InvalidTransaction(_)),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -2474,6 +2573,7 @@ mod tests {
             outputs,
             fee: 0,
             created_at_height: 0,
+            settlement: None,
         };
 
         let fee_config = FeeConfig::default();

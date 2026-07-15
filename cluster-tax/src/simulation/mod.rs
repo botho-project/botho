@@ -35,6 +35,12 @@ pub mod downgrade_overcharge_sweep;
 pub mod emission_sweep;
 pub mod lottery;
 #[cfg(any(feature = "cli", test))]
+pub mod lottery_reward_cap_sweep;
+#[cfg(any(feature = "cli", test))]
+pub mod lottery_selection_sweep;
+#[cfg(any(feature = "cli", test))]
+pub mod lottery_sybil_brake_sweep;
+#[cfg(any(feature = "cli", test))]
 pub mod m2;
 mod metrics;
 #[cfg(any(feature = "cli", test))]

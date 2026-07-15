@@ -1148,6 +1148,35 @@ impl TxInputs {
 // Transaction
 // ============================================================================
 
+/// Marks a transaction as an explicit **demurrage-settlement** operation
+/// (#831).
+///
+/// A settlement is the sanctioned — and only — wrap on-ramp for a
+/// wealthy-cluster coin: it reclassifies the spent value down to
+/// factor-1/background in exchange for **wrap eligibility** (the bridge, #822 /
+/// #825), and in return pays the capitalized future demurrage the shed cluster
+/// mass would otherwise owe (`bth_cluster_tax::demurrage_settlement_charge`
+/// over `SETTLEMENT_HORIZON_BLOCKS`), folded into `fee` so it flows to the
+/// redistribution lottery pool through the existing split (no new sink).
+///
+/// Consensus requires, when this is present, that every output of the
+/// transaction carries a background (`ClusterTagVector::empty()`) tag and that
+/// `settled_value == Σ output amounts`. The flag — not merely background output
+/// tags — is what the bridge's `wrap_eligible` predicate binds to: a normal
+/// spend-to-background is trivially tagged and is NOT wrap-eligible, so a
+/// wealthy holder cannot bypass the capitalized charge by an ordinary spend.
+///
+/// The field is covered by both [`Transaction::hash`] and
+/// [`Transaction::signing_hash`], so a settlement flag can neither be added nor
+/// stripped without invalidating the signature.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SettlementInfo {
+    /// The reclassified value the settlement certifies as background. Equals
+    /// the sum of the (all-background) output amounts; carried explicitly
+    /// so it is covered by the tx digest + signature.
+    pub settled_value: u64,
+}
+
 /// A transfer transaction (user-initiated, spending existing UTXOs).
 ///
 /// This is the main transaction type for value transfers. Minting/coinbase
@@ -1171,6 +1200,12 @@ pub struct Transaction {
 
     /// Block height when this tx was created (for replay protection)
     pub created_at_height: u64,
+
+    /// Present iff this is an explicit demurrage-settlement transaction (#831),
+    /// the bridge wrap on-ramp. `None` for an ordinary transfer. Covered by the
+    /// tx hash and signing hash (cannot be added/stripped post-signature).
+    #[serde(default)]
+    pub settlement: Option<SettlementInfo>,
 }
 
 impl Transaction {
@@ -1188,7 +1223,35 @@ impl Transaction {
             outputs,
             fee,
             created_at_height,
+            settlement: None,
         }
+    }
+
+    /// Create a demurrage-settlement transaction (#831): an explicit,
+    /// consensus-recognized reclassification of the spent wealthy-cluster value
+    /// to factor-1/background for wrap eligibility. `settled_value` MUST equal
+    /// the sum of the (all-background) output amounts; consensus rejects a
+    /// settlement whose outputs are not all background or whose `settled_value`
+    /// disagrees with them. See [`SettlementInfo`].
+    pub fn new_settlement(
+        inputs: Vec<ClsagRingInput>,
+        outputs: Vec<TxOutput>,
+        fee: u64,
+        created_at_height: u64,
+        settled_value: u64,
+    ) -> Self {
+        Self {
+            inputs: TxInputs::new(inputs),
+            outputs,
+            fee,
+            created_at_height,
+            settlement: Some(SettlementInfo { settled_value }),
+        }
+    }
+
+    /// True iff this transaction is an explicit demurrage-settlement (#831).
+    pub fn is_settlement(&self) -> bool {
+        self.settlement.is_some()
     }
 
     /// Alias for new() for backward compatibility.
@@ -1246,6 +1309,16 @@ impl Transaction {
 
         hasher.update(self.fee.to_le_bytes());
         hasher.update(self.created_at_height.to_le_bytes());
+        // #831: bind the settlement marker + certified value into the tx hash so
+        // it cannot be added/stripped without changing the hash. A `1` tag byte
+        // plus the value distinguishes `Some(0)` from `None` unambiguously.
+        match &self.settlement {
+            Some(s) => {
+                hasher.update([1u8]);
+                hasher.update(s.settled_value.to_le_bytes());
+            }
+            None => hasher.update([0u8]),
+        }
         hasher.finalize().into()
     }
 
@@ -1269,6 +1342,16 @@ impl Transaction {
 
         hasher.update(self.fee.to_le_bytes());
         hasher.update(self.created_at_height.to_le_bytes());
+        // #831: the settlement marker is part of the signed message, so a
+        // signature over a settlement tx does not verify if the flag is
+        // stripped, and vice versa. Same encoding as `hash()`.
+        match &self.settlement {
+            Some(s) => {
+                hasher.update([1u8]);
+                hasher.update(s.settled_value.to_le_bytes());
+            }
+            None => hasher.update([0u8]),
+        }
         hasher.finalize().into()
     }
 
@@ -1446,6 +1529,7 @@ impl Transaction {
             outputs: vec![],
             fee,
             created_at_height: 0,
+            settlement: None,
         }
     }
 }
@@ -1755,6 +1839,59 @@ mod tests {
             tx.verify_ring_signatures().is_ok(),
             "single-input balanced tx must verify"
         );
+    }
+
+    // ---- #831: the settlement marker is signature-covered ----
+
+    /// The `settlement` flag must be covered by BOTH `hash()` and
+    /// `signing_hash()`: adding or stripping it (or changing its certified
+    /// value) changes both hashes, so it cannot be forged onto a signed tx nor
+    /// stripped from one.
+    #[test]
+    fn settlement_flag_is_covered_by_tx_and_signing_hash() {
+        let outputs = vec![test_output(TEST_AMOUNT, [7u8; 32], [8u8; 32])];
+        let plain = Transaction::new_clsag(Vec::new(), outputs.clone(), MIN_TX_FEE, 1);
+        let settled =
+            Transaction::new_settlement(Vec::new(), outputs.clone(), MIN_TX_FEE, 1, TEST_AMOUNT);
+
+        assert!(!plain.is_settlement());
+        assert!(settled.is_settlement());
+
+        // Both the full tx hash and the signing hash must differ.
+        assert_ne!(
+            plain.hash(),
+            settled.hash(),
+            "settlement flag must change the tx hash"
+        );
+        assert_ne!(
+            plain.signing_hash(),
+            settled.signing_hash(),
+            "settlement flag must change the signing hash (so it is signature-covered)"
+        );
+
+        // Changing the certified value also changes the hashes.
+        let settled_other =
+            Transaction::new_settlement(Vec::new(), outputs, MIN_TX_FEE, 1, TEST_AMOUNT + 1);
+        assert_ne!(settled.hash(), settled_other.hash());
+        assert_ne!(settled.signing_hash(), settled_other.signing_hash());
+    }
+
+    /// `new_settlement` carries the certified value, and an ordinary transfer
+    /// built via `new`/`new_clsag` is not a settlement.
+    #[test]
+    fn settlement_constructor_sets_flag_and_value() {
+        let outputs = vec![test_output(TEST_AMOUNT, [7u8; 32], [8u8; 32])];
+        let settled =
+            Transaction::new_settlement(Vec::new(), outputs.clone(), MIN_TX_FEE, 1, TEST_AMOUNT);
+        assert!(settled.is_settlement());
+        assert_eq!(
+            settled.settlement.as_ref().unwrap().settled_value,
+            TEST_AMOUNT
+        );
+
+        let plain = Transaction::new_clsag(Vec::new(), outputs, MIN_TX_FEE, 1);
+        assert!(!plain.is_settlement());
+        assert!(plain.settlement.is_none());
     }
 
     #[test]
