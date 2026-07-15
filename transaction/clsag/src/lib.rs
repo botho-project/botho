@@ -67,6 +67,14 @@ use bth_crypto_ring_signature::{
 };
 use bth_transaction_types::ClusterTagVector;
 use bth_util_from_random::FromRandom;
+
+#[cfg(feature = "pq")]
+use bth_crypto_pq::{MlKem768Ciphertext, MlKem768KeyPair, MlKem768PublicKey};
+#[cfg(feature = "pq")]
+use bth_crypto_ring_signature::onetime_keys::{
+    create_tx_out_target_key_hybrid, recover_onetime_private_key_hybrid,
+    recover_public_subaddress_spend_key_hybrid,
+};
 use ctr::Ctr64BE;
 use hkdf::Hkdf;
 use rand_core::{CryptoRng, OsRng, RngCore};
@@ -322,6 +330,23 @@ pub struct TxOutput {
     /// concentrated wealth.
     #[serde(default)]
     pub cluster_tags: ClusterTagVector,
+
+    /// ML-KEM-768 encapsulation ciphertext (1,088 bytes) for the universal
+    /// post-quantum stealth envelope (issue #954, whitepaper §4.2).
+    ///
+    /// When present, the sender encapsulated a shared secret `K` against the
+    /// recipient's ML-KEM-768 public key and folded `K` — together with the
+    /// classical DH shared secret — into the one-time `target_key` (see
+    /// [`TxOutput::new_hybrid`]). The recipient decapsulates this ciphertext to
+    /// recover `K` and re-derive the one-time key. Recovering `K` requires
+    /// breaking a lattice problem believed hard for quantum adversaries, which
+    /// closes the "harvest now, decrypt later" exposure of classical stealth
+    /// addresses.
+    ///
+    /// `None` on classical (pre-6.0.0-format) outputs. Under the protocol
+    /// 6.0.0 output format every value-transfer output carries a ciphertext.
+    #[serde(default)]
+    pub kem_ciphertext: Option<Vec<u8>>,
 }
 
 impl TxOutput {
@@ -367,6 +392,7 @@ impl TxOutput {
             public_key: public_key.to_bytes(),
             e_memo,
             cluster_tags: ClusterTagVector::empty(),
+            kem_ciphertext: None,
         }
     }
 
@@ -399,6 +425,7 @@ impl TxOutput {
             public_key: public_key.to_bytes(),
             e_memo,
             cluster_tags,
+            kem_ciphertext: None,
         }
     }
 
@@ -417,6 +444,7 @@ impl TxOutput {
             public_key: public_key.to_bytes(),
             e_memo: None,
             cluster_tags: ClusterTagVector::empty(),
+            kem_ciphertext: None,
         }
     }
 
@@ -442,11 +470,20 @@ impl TxOutput {
     }
 
     /// Compute a unique identifier for this output.
+    ///
+    /// When present, the ML-KEM-768 ciphertext is bound into the identifier so
+    /// that two outputs sharing the same one-time keys but different
+    /// encapsulations (which cannot both be valid) do not collide. Classical
+    /// outputs (`kem_ciphertext == None`) hash exactly as before, preserving
+    /// existing identifiers.
     pub fn id(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(self.amount.to_le_bytes());
         hasher.update(self.target_key);
         hasher.update(self.public_key);
+        if let Some(ct) = &self.kem_ciphertext {
+            hasher.update(ct);
+        }
         hasher.finalize().into()
     }
 
@@ -510,6 +547,209 @@ impl TxOutput {
             &public_key,
             view_private,
             &subaddress_spend_private,
+        ))
+    }
+}
+
+// ============================================================================
+// Universal ML-KEM-768 hybrid stealth envelope (issue #954, whitepaper §4.2)
+// ============================================================================
+
+/// Subaddress indices scanned by the hybrid detector: the default subaddress
+/// and the change subaddress.
+///
+/// Unlike the classical [`TxOutput::belongs_to`] (which returns the *labels*
+/// 0/1), the hybrid detector returns the *actual* subaddress index so that
+/// [`TxOutput::recover_spend_key_hybrid`] derives the correct spend key.
+#[cfg(feature = "pq")]
+const HYBRID_SCAN_SUBADDRESSES: [u64; 2] = [
+    bth_account_keys::DEFAULT_SUBADDRESS_INDEX,
+    bth_account_keys::CHANGE_SUBADDRESS_INDEX,
+];
+
+#[cfg(feature = "pq")]
+impl TxOutput {
+    /// Create a hybrid post-quantum stealth output for a recipient.
+    ///
+    /// Combines the classical CryptoNote stealth handshake with an ML-KEM-768
+    /// encapsulation (whitepaper §4.2). The sender:
+    ///
+    /// 1. Generates a fresh ephemeral key `r` and publishes `R = r * D`.
+    /// 2. Encapsulates a shared secret `K` against the recipient's ML-KEM-768
+    ///    public key (obtained from the recipient's address) and attaches the
+    ///    1,088-byte ciphertext.
+    /// 3. Derives the one-time `target_key` from BOTH the classical DH secret
+    ///    `r * C` and the ML-KEM secret `K` (see
+    ///    [`create_tx_out_target_key_hybrid`]).
+    ///
+    /// An adversary must break the classical curve problem *and* the ML-KEM
+    /// lattice problem to link or spend the output.
+    ///
+    /// # Arguments
+    /// * `amount` - Output value in picocredits.
+    /// * `recipient` - The recipient's classical subaddress `(C, D)`.
+    /// * `recipient_kem_public_key` - The recipient's ML-KEM-768 public key.
+    /// * `output_index` - The output's index within its transaction.
+    /// * `memo` - Optional encrypted memo.
+    /// * `cluster_tags` - Cluster ancestry tags for progressive fees.
+    pub fn new_hybrid(
+        amount: u64,
+        recipient: &PublicAddress,
+        recipient_kem_public_key: &MlKem768PublicKey,
+        output_index: u32,
+        memo: Option<MemoPayload>,
+        cluster_tags: ClusterTagVector,
+    ) -> Self {
+        let tx_private_key = RistrettoPrivate::from_random(&mut OsRng);
+        let (ciphertext, kem_secret) = recipient_kem_public_key.encapsulate();
+
+        Self::assemble_hybrid(
+            amount,
+            recipient,
+            &tx_private_key,
+            ciphertext.as_bytes(),
+            kem_secret.as_bytes(),
+            output_index,
+            memo,
+            cluster_tags,
+        )
+    }
+
+    /// Deterministic hybrid constructor used by tests and callers that supply
+    /// their own ephemeral key and pre-encapsulated `(ciphertext, secret)`
+    /// pair. Production code should use [`TxOutput::new_hybrid`], which draws a
+    /// fresh ephemeral key and encapsulation from the OS RNG.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_hybrid_with_parts(
+        amount: u64,
+        recipient: &PublicAddress,
+        tx_private_key: &RistrettoPrivate,
+        kem_ciphertext: &[u8; bth_crypto_pq::ML_KEM_768_CIPHERTEXT_BYTES],
+        kem_shared_secret: &[u8; 32],
+        output_index: u32,
+        memo: Option<MemoPayload>,
+        cluster_tags: ClusterTagVector,
+    ) -> Self {
+        Self::assemble_hybrid(
+            amount,
+            recipient,
+            tx_private_key,
+            kem_ciphertext,
+            kem_shared_secret,
+            output_index,
+            memo,
+            cluster_tags,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn assemble_hybrid(
+        amount: u64,
+        recipient: &PublicAddress,
+        tx_private_key: &RistrettoPrivate,
+        kem_ciphertext: &[u8; bth_crypto_pq::ML_KEM_768_CIPHERTEXT_BYTES],
+        kem_shared_secret: &[u8; 32],
+        output_index: u32,
+        memo: Option<MemoPayload>,
+        cluster_tags: ClusterTagVector,
+    ) -> Self {
+        let target_key = create_tx_out_target_key_hybrid(
+            tx_private_key,
+            recipient,
+            kem_shared_secret,
+            output_index,
+        );
+        let public_key = create_tx_out_public_key(tx_private_key, recipient.spend_public_key());
+
+        let e_memo = memo.map(|m| {
+            let shared_secret = create_shared_secret(recipient.view_public_key(), tx_private_key);
+            m.encrypt(&shared_secret)
+        });
+
+        Self {
+            amount,
+            target_key: target_key.to_bytes(),
+            public_key: public_key.to_bytes(),
+            e_memo,
+            cluster_tags,
+            kem_ciphertext: Some(kem_ciphertext.to_vec()),
+        }
+    }
+
+    /// Decapsulate this output's ML-KEM ciphertext with the account's ML-KEM
+    /// keypair, returning the 32-byte shared secret `K`.
+    ///
+    /// Returns `None` if the output carries no ciphertext or the ciphertext is
+    /// malformed. Note: ML-KEM decapsulation is IND-CCA2 and never "fails" for
+    /// a well-formed ciphertext — a ciphertext not intended for this key simply
+    /// yields a different (useless) secret, which the subsequent stealth check
+    /// rejects.
+    fn hybrid_kem_secret(&self, kem_keypair: &MlKem768KeyPair) -> Option<[u8; 32]> {
+        let ct_bytes = self.kem_ciphertext.as_ref()?;
+        let ciphertext = MlKem768Ciphertext::from_bytes(ct_bytes).ok()?;
+        let secret = kem_keypair.decapsulate(&ciphertext).ok()?;
+        Some(*secret.as_bytes())
+    }
+
+    /// Detect whether this hybrid output belongs to `account`.
+    ///
+    /// Recovers the ML-KEM secret `K` by decapsulating the output's ciphertext
+    /// with `kem_keypair`, then checks the hybrid one-time key against the
+    /// account's default (0) and change (1) subaddresses.
+    ///
+    /// Returns `Some(subaddress_index)` on a match, else `None`. Both the
+    /// classical view key (in `account`) and the ML-KEM secret key (in
+    /// `kem_keypair`) are required: neither alone suffices.
+    pub fn belongs_to_hybrid(
+        &self,
+        account: &AccountKey,
+        kem_keypair: &MlKem768KeyPair,
+        output_index: u32,
+    ) -> Option<u64> {
+        let kem_secret = self.hybrid_kem_secret(kem_keypair)?;
+        let view_private = account.view_private_key();
+        let public_key = RistrettoPublic::try_from(&self.public_key[..]).ok()?;
+        let target_key = RistrettoPublic::try_from(&self.target_key[..]).ok()?;
+
+        let recovered_spend_key = recover_public_subaddress_spend_key_hybrid(
+            view_private,
+            &target_key,
+            &public_key,
+            &kem_secret,
+            output_index,
+        );
+        let recovered_bytes = recovered_spend_key.to_bytes();
+
+        for index in HYBRID_SCAN_SUBADDRESSES {
+            let subaddr = account.subaddress(index);
+            if recovered_bytes == subaddr.spend_public_key().to_bytes() {
+                return Some(index);
+            }
+        }
+        None
+    }
+
+    /// Recover the one-time private key needed to spend this hybrid output.
+    ///
+    /// Call only after [`TxOutput::belongs_to_hybrid`] returns `Some`.
+    pub fn recover_spend_key_hybrid(
+        &self,
+        account: &AccountKey,
+        kem_keypair: &MlKem768KeyPair,
+        subaddress_index: u64,
+        output_index: u32,
+    ) -> Option<RistrettoPrivate> {
+        let kem_secret = self.hybrid_kem_secret(kem_keypair)?;
+        let public_key = RistrettoPublic::try_from(&self.public_key[..]).ok()?;
+        let view_private = account.view_private_key();
+        let subaddress_spend_private = account.subaddress_spend_private(subaddress_index);
+
+        Some(recover_onetime_private_key_hybrid(
+            &public_key,
+            view_private,
+            &subaddress_spend_private,
+            &kem_secret,
+            output_index,
         ))
     }
 }
@@ -1222,6 +1462,7 @@ mod tests {
             public_key: public,
             e_memo: None,
             cluster_tags: ClusterTagVector::empty(),
+            kem_ciphertext: None,
         }
     }
 
@@ -1668,11 +1909,228 @@ mod tests {
             public_key: [0u8; 32],
             e_memo: None,
             cluster_tags: Default::default(),
+            kem_ciphertext: None,
         };
         let unbalanced = Transaction::new_clsag(Vec::new(), vec![bogus_output], 7, 1);
         assert!(
             unbalanced.verify_ring_signatures().is_err(),
             "zero-input tx with nonzero outputs must not balance (0 != 1007)"
+        );
+    }
+}
+
+// ============================================================================
+// Hybrid ML-KEM-768 stealth envelope tests (issue #954, whitepaper §4.2)
+// ============================================================================
+#[cfg(all(test, feature = "pq"))]
+mod pq_tests {
+    use super::*;
+    use bth_crypto_pq::{MlKem768KeyPair, ML_KEM_768_CIPHERTEXT_BYTES};
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+
+    // A deterministic (account, ML-KEM keypair) recipient for tests.
+    fn recipient(seed: u8) -> (AccountKey, MlKem768KeyPair) {
+        let mut rng = StdRng::from_seed([seed; 32]);
+        let account = AccountKey::random(&mut rng);
+        let kem_keypair = MlKem768KeyPair::from_seed(&[seed ^ 0x5A; 32]);
+        (account, kem_keypair)
+    }
+
+    #[test]
+    fn hybrid_output_carries_ml_kem_ciphertext() {
+        let (account, kem) = recipient(1);
+        let out = TxOutput::new_hybrid(
+            1_000_000,
+            &account.default_subaddress(),
+            kem.public_key(),
+            0,
+            None,
+            ClusterTagVector::empty(),
+        );
+        let ct = out.kem_ciphertext.as_ref().expect("hybrid output has ciphertext");
+        assert_eq!(
+            ct.len(),
+            ML_KEM_768_CIPHERTEXT_BYTES,
+            "ciphertext must be exactly 1,088 bytes"
+        );
+    }
+
+    #[test]
+    fn hybrid_roundtrip_send_scan_spend() {
+        let (account, kem) = recipient(2);
+        let output_index = 4u32;
+        let out = TxOutput::new_hybrid(
+            42_000_000,
+            &account.default_subaddress(),
+            kem.public_key(),
+            output_index,
+            None,
+            ClusterTagVector::empty(),
+        );
+
+        // Scan: the recipient detects ownership at the default subaddress.
+        let idx = out
+            .belongs_to_hybrid(&account, &kem, output_index)
+            .expect("recipient must detect the hybrid output");
+        assert_eq!(idx, 0);
+
+        // Spend: the recovered one-time private key regenerates target_key.
+        let spend_key = out
+            .recover_spend_key_hybrid(&account, &kem, idx, output_index)
+            .expect("recipient must recover the one-time spend key");
+        assert_eq!(
+            RistrettoPublic::from(&spend_key).to_bytes(),
+            out.target_key,
+            "onetime_private_key * G must equal the output target_key"
+        );
+    }
+
+    #[test]
+    fn hybrid_detects_change_subaddress() {
+        let (account, kem) = recipient(3);
+        let out = TxOutput::new_hybrid(
+            7_000_000,
+            &account.change_subaddress(),
+            kem.public_key(),
+            0,
+            None,
+            ClusterTagVector::empty(),
+        );
+        assert_eq!(
+            out.belongs_to_hybrid(&account, &kem, 0),
+            Some(bth_account_keys::CHANGE_SUBADDRESS_INDEX)
+        );
+    }
+
+    #[test]
+    fn hybrid_wrong_ml_kem_key_cannot_detect() {
+        // The ML-KEM secret is load-bearing: a party with the correct classical
+        // view key but the WRONG ML-KEM key cannot detect the output.
+        let (account, kem) = recipient(4);
+        let wrong_kem = MlKem768KeyPair::from_seed(&[0xEE; 32]);
+        let out = TxOutput::new_hybrid(
+            5_000_000,
+            &account.default_subaddress(),
+            kem.public_key(),
+            0,
+            None,
+            ClusterTagVector::empty(),
+        );
+        assert_eq!(
+            out.belongs_to_hybrid(&account, &wrong_kem, 0),
+            None,
+            "wrong ML-KEM key must not detect the output"
+        );
+    }
+
+    #[test]
+    fn hybrid_classical_only_scan_cannot_detect() {
+        // The classical detector (belongs_to) uses only the DH secret and must
+        // NOT recognise a hybrid output — proving the classical secret alone is
+        // insufficient to link the output.
+        let (account, kem) = recipient(5);
+        let out = TxOutput::new_hybrid(
+            9_000_000,
+            &account.default_subaddress(),
+            kem.public_key(),
+            0,
+            None,
+            ClusterTagVector::empty(),
+        );
+        assert_eq!(
+            out.belongs_to(&account),
+            None,
+            "classical-only scan must not detect a hybrid output"
+        );
+    }
+
+    #[test]
+    fn hybrid_wrong_output_index_cannot_detect() {
+        let (account, kem) = recipient(6);
+        let out = TxOutput::new_hybrid(
+            3_000_000,
+            &account.default_subaddress(),
+            kem.public_key(),
+            2,
+            None,
+            ClusterTagVector::empty(),
+        );
+        // Correct keys, wrong index => no detection (index is domain-separating).
+        assert_eq!(out.belongs_to_hybrid(&account, &kem, 3), None);
+        assert_eq!(out.belongs_to_hybrid(&account, &kem, 2), Some(0));
+    }
+
+    #[test]
+    fn hybrid_output_serialization_roundtrips() {
+        let (account, kem) = recipient(7);
+        let out = TxOutput::new_hybrid(
+            11_000_000,
+            &account.default_subaddress(),
+            kem.public_key(),
+            1,
+            Some(MemoPayload::destination("pq-envelope")),
+            ClusterTagVector::empty(),
+        );
+
+        let json = serde_json::to_string(&out).expect("serialize");
+        let restored: TxOutput = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(out, restored, "TxOutput must serde round-trip");
+        assert_eq!(out.kem_ciphertext, restored.kem_ciphertext);
+        // The restored output is still spendable by the recipient.
+        assert_eq!(restored.belongs_to_hybrid(&account, &kem, 1), Some(0));
+    }
+
+    #[test]
+    fn hybrid_deterministic_with_fixed_parts() {
+        // Same ephemeral key + same (ciphertext, secret) => identical output.
+        let (account, _kem) = recipient(8);
+        let mut rng = StdRng::from_seed([9u8; 32]);
+        let tx_private_key = RistrettoPrivate::from_random(&mut rng);
+        let ct = [0x7Cu8; ML_KEM_768_CIPHERTEXT_BYTES];
+        let secret = [0x3Du8; 32];
+
+        let a = TxOutput::new_hybrid_with_parts(
+            1_234_567,
+            &account.default_subaddress(),
+            &tx_private_key,
+            &ct,
+            &secret,
+            0,
+            None,
+            ClusterTagVector::empty(),
+        );
+        let b = TxOutput::new_hybrid_with_parts(
+            1_234_567,
+            &account.default_subaddress(),
+            &tx_private_key,
+            &ct,
+            &secret,
+            0,
+            None,
+            ClusterTagVector::empty(),
+        );
+        assert_eq!(a, b, "hybrid construction must be deterministic in its inputs");
+    }
+
+    #[test]
+    fn hybrid_ciphertext_bound_into_output_id() {
+        let (account, kem) = recipient(10);
+        let mut out = TxOutput::new_hybrid(
+            2_500_000,
+            &account.default_subaddress(),
+            kem.public_key(),
+            0,
+            None,
+            ClusterTagVector::empty(),
+        );
+        let id_with_ct = out.id();
+        out.kem_ciphertext = None;
+        let id_without_ct = out.id();
+        assert_ne!(
+            id_with_ct, id_without_ct,
+            "the ML-KEM ciphertext must be bound into the output id"
         );
     }
 }

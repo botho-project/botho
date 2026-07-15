@@ -13,7 +13,7 @@ path = "src/lib.rs"
 
 [features]
 default = []
-pq = ["bth-account-keys/pq"]
+pq = ["bth-account-keys/pq", "dep:bth-crypto-pq"]
 # Exposes test-only constructors (e.g. `Transaction::new_stub_with_fee`) to
 # downstream crates' test/dev builds. Enabled by `botho` as a dev-dependency
 # feature so its tests can build stub transactions across the crate boundary.
@@ -31,6 +31,7 @@ serde = { version = "1", features = ["derive"] }
 # Botho crypto / key primitives (all wasm-compatible)
 bth-account-keys = { path = "../../account-keys" }
 bth-crypto-keys = { path = "../../crypto/keys" }
+bth-crypto-pq = { path = "../../crypto/pq", optional = true }
 bth-crypto-ring-signature = { path = "../../crypto/ring-signature" }
 bth-transaction-types = { path = "../types", default-features = true }
 bth-util-from-random = { path = "../../util/from-random" }
@@ -45,3 +46,4 @@ getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]
 rand = "0.8"
+serde_json = "1"
