@@ -33,6 +33,8 @@ pub mod decoy_quantile_sweep;
 pub mod emission_sweep;
 pub mod lottery;
 #[cfg(any(feature = "cli", test))]
+pub mod lottery_reward_cap_sweep;
+#[cfg(any(feature = "cli", test))]
 pub mod lottery_selection_sweep;
 #[cfg(any(feature = "cli", test))]
 pub mod lottery_sybil_brake_sweep;
