@@ -35,7 +35,9 @@ use libfuzzer_sys::fuzz_target;
 
 use botho::{
     block::Block,
-    consensus::lottery::{compute_pool_accounting, reward_cap, validate_block_lottery, LotteryFeeConfig},
+    consensus::lottery::{
+        compute_pool_accounting, reward_cap, validate_block_lottery, LotteryFeeConfig,
+    },
 };
 use bth_cluster_tax::{LotteryCandidate, TagVector};
 
@@ -111,13 +113,8 @@ fuzz_target!(|data: FuzzData| {
             block.minting_tx.reward,
             &config,
         );
-        let accounting = compute_pool_accounting(
-            total_fees,
-            emission_share,
-            stored_pool,
-            payout_cap,
-            &config,
-        );
+        let accounting =
+            compute_pool_accounting(total_fees, emission_share, stored_pool, payout_cap, &config);
 
         // The burn share must always equal the fee burn (both branches).
         assert_eq!(
