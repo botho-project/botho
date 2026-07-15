@@ -24,6 +24,8 @@
 mod agent;
 pub mod agents;
 #[cfg(any(feature = "cli", test))]
+pub mod bridge_import_sweep;
+#[cfg(any(feature = "cli", test))]
 pub mod constrained_analysis;
 #[cfg(any(feature = "cli", test))]
 pub mod decoy_quantile_sweep;
