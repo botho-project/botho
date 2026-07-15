@@ -25,7 +25,7 @@ use serial_test::serial;
 use tempfile::TempDir;
 
 use botho::{
-    block::{Block, BlockHeader, BlockLotterySummary, MintingTx},
+    block::{Block, BlockHeader, BlockLotterySummary, MintingTx, MINTING_OUTPUT_INDEX},
     consensus::{BlockBuilder, LotteryFeeConfig},
     ledger::Ledger,
     mempool::{Mempool, MempoolError},
@@ -218,33 +218,67 @@ fn apply_lottery_to_block(block: Block, ledger: &Ledger) -> Block {
 /// For ring signature transactions, UTXOs are not directly removed from the
 /// set. Instead, we check if the key image for each owned output has been
 /// recorded as spent.
+///
+/// Protocol 6.0.0 note: coinbase (minting) outputs are now **hybrid**
+/// post-quantum stealth outputs — their one-time `target_key` folds in an
+/// ML-KEM-768 shared secret bound to the output index (#957/#958). The
+/// classical `belongs_to`/`recover_spend_key` detectors cannot see them, so
+/// ownership is resolved through the unified
+/// `belongs_to_account`/`recover_spend_key_for` dispatchers (#970), which use
+/// `belongs_to_hybrid` when a ciphertext is present and fall back to the
+/// classical path otherwise. Regular tx outputs in these tests are classical
+/// (built via `TxOutput::new`), so they take the classical branch — but routing
+/// everything through the unified detectors keeps the scan correct regardless
+/// of which construction produced the output.
 fn scan_wallet_utxos(ledger: &Ledger, wallet: &WalletKeys) -> Vec<(Utxo, u64)> {
     use bth_crypto_ring_signature::KeyImage;
 
     let mut owned_utxos = Vec::new();
     let state = ledger.get_chain_state().unwrap();
 
+    let account = wallet.account_key();
+    // Derive the ML-KEM keypair once (keygen-from-seed is expensive) and let the
+    // ownership closure below borrow it for every output.
+    #[cfg(feature = "pq")]
+    let pq = wallet.pq_account_key();
+    #[cfg(feature = "pq")]
+    let kem = pq.pq_kem_keypair();
+
+    // Resolve `(subaddress_index, key_image)` for an output the wallet owns, at
+    // the output's index within its transaction (bound into the hybrid one-time
+    // key). Returns `None` when the output does not belong to this wallet.
+    let resolve = |output: &TxOutput, output_index: u32| -> Option<(u64, KeyImage)> {
+        #[cfg(feature = "pq")]
+        {
+            let idx = output.belongs_to_account(account, kem, output_index)?;
+            let onetime_private = output.recover_spend_key_for(account, kem, idx, output_index)?;
+            Some((idx, KeyImage::from(&onetime_private)))
+        }
+        #[cfg(not(feature = "pq"))]
+        {
+            let _ = output_index;
+            let idx = output.belongs_to(account)?;
+            let onetime_private = output.recover_spend_key(account, idx)?;
+            Some((idx, KeyImage::from(&onetime_private)))
+        }
+    };
+
     for height in 0..=state.height {
         if let Ok(block) = ledger.get_block(height) {
-            // Check coinbase output
+            // Check coinbase output (hybrid, at MINTING_OUTPUT_INDEX under 6.0.0)
             let coinbase_output = block.minting_tx.to_tx_output();
-            if let Some(subaddr_idx) = coinbase_output.belongs_to(wallet.account_key()) {
+            if let Some((subaddr_idx, key_image)) = resolve(&coinbase_output, MINTING_OUTPUT_INDEX)
+            {
                 let block_hash = block.hash();
-                let utxo_id = UtxoId::new(block_hash, 0);
+                let utxo_id = UtxoId::new(block_hash, MINTING_OUTPUT_INDEX);
                 if let Ok(Some(utxo)) = ledger.get_utxo(&utxo_id) {
                     // Check if this output's key image has been spent
-                    if let Some(onetime_private) = utxo
-                        .output
-                        .recover_spend_key(wallet.account_key(), subaddr_idx)
+                    if ledger
+                        .is_key_image_spent(key_image.as_bytes())
+                        .unwrap_or(None)
+                        .is_none()
                     {
-                        let key_image = KeyImage::from(&onetime_private);
-                        if ledger
-                            .is_key_image_spent(key_image.as_bytes())
-                            .unwrap_or(None)
-                            .is_none()
-                        {
-                            owned_utxos.push((utxo, subaddr_idx));
-                        }
+                        owned_utxos.push((utxo, subaddr_idx));
                     }
                 }
             }
@@ -253,22 +287,16 @@ fn scan_wallet_utxos(ledger: &Ledger, wallet: &WalletKeys) -> Vec<(Utxo, u64)> {
             for tx in &block.transactions {
                 let tx_hash = tx.hash();
                 for (idx, output) in tx.outputs.iter().enumerate() {
-                    if let Some(subaddr_idx) = output.belongs_to(wallet.account_key()) {
+                    if let Some((subaddr_idx, key_image)) = resolve(output, idx as u32) {
                         let utxo_id = UtxoId::new(tx_hash, idx as u32);
                         if let Ok(Some(utxo)) = ledger.get_utxo(&utxo_id) {
                             // Check if this output's key image has been spent
-                            if let Some(onetime_private) = utxo
-                                .output
-                                .recover_spend_key(wallet.account_key(), subaddr_idx)
+                            if ledger
+                                .is_key_image_spent(key_image.as_bytes())
+                                .unwrap_or(None)
+                                .is_none()
                             {
-                                let key_image = KeyImage::from(&onetime_private);
-                                if ledger
-                                    .is_key_image_spent(key_image.as_bytes())
-                                    .unwrap_or(None)
-                                    .is_none()
-                                {
-                                    owned_utxos.push((utxo, subaddr_idx));
-                                }
+                                owned_utxos.push((utxo, subaddr_idx));
                             }
                         }
                     }
@@ -349,11 +377,37 @@ fn create_signed_transaction(
     let preliminary_tx = Transaction::new_clsag(Vec::new(), outputs.clone(), fee, current_height);
     let signing_hash = preliminary_tx.signing_hash();
 
-    // Recover the one-time private key for the real input
-    let onetime_private = sender_utxo
-        .output
-        .recover_spend_key(sender_wallet.account_key(), subaddress_index)
-        .expect("Failed to recover spend key - UTXO doesn't belong to wallet");
+    // Recover the one-time private key for the real input.
+    //
+    // Protocol 6.0.0: a coinbase UTXO is a hybrid ML-KEM stealth output whose
+    // one-time key folds in the ML-KEM shared secret bound to the output index,
+    // so the classical `recover_spend_key` returns the wrong scalar and the
+    // resulting CLSAG signature fails to verify. Route through the unified
+    // `recover_spend_key_for` (#970) at the UTXO's own output index — it uses
+    // the hybrid recovery for ciphertext-bearing outputs (coinbases) and the
+    // classical path for the classical change/received outputs these tests mint.
+    let output_index = sender_utxo.id.output_index;
+    #[cfg(feature = "pq")]
+    let onetime_private = {
+        let pq = sender_wallet.pq_account_key();
+        sender_utxo
+            .output
+            .recover_spend_key_for(
+                sender_wallet.account_key(),
+                pq.pq_kem_keypair(),
+                subaddress_index,
+                output_index,
+            )
+            .expect("Failed to recover spend key - UTXO doesn't belong to wallet")
+    };
+    #[cfg(not(feature = "pq"))]
+    let onetime_private = {
+        let _ = output_index;
+        sender_utxo
+            .output
+            .recover_spend_key(sender_wallet.account_key(), subaddress_index)
+            .expect("Failed to recover spend key - UTXO doesn't belong to wallet")
+    };
 
     // Get decoys from the ledger
     let exclude_keys = vec![sender_utxo.output.target_key];
