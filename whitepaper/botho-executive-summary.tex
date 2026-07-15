@@ -47,7 +47,13 @@ Fast Finality & Hybrid PoW+SCP consensus achieves deterministic finality in
 $\sim$5 seconds. Unlike Bitcoin, finalized blocks cannot be reverted. \\[0.5em]
 Fair Economics & Progressive fees based on coin ancestry (not identity) create
 Sybil-resistant pressure against wealth concentration. Fees are 80\%
-redistributed via lottery, 20\% burned. \\
+redistributed via lottery, 20\% burned. \\[0.5em]
+Cross-chain Bridge & Native BTH wraps 1:1 to transparent \textbf{wBTH} on
+Ethereum and Solana (factor-1 peg; a \(t\)-of-\(n\) validator federation
+custodies the reserve). Unwrapped coins enter tagged to a block-epoch
+\emph{import cluster} (epoch \(K\!=\!1\) day, floor \(F\!=\!1.5\times\)), so
+freshly-imported wealth is expensive until it circulates---closing the
+lineage-reset round-trip. \\
 \bottomrule
 \end{tabular}
 

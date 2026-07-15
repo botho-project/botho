@@ -18,6 +18,42 @@ Security considerations and operational requirements for the BTH Bridge.
 1. **External Attackers** - Attempting to exploit bridge for profit
 2. **Malicious Operators** - Insider threat from bridge operators
 3. **Network Attackers** - Chain-level attacks (reorgs, censorship)
+4. **Lineage-reset gamers** - Domestic holders trying to bypass the
+   cluster-factor anti-hoarding mechanism via the bridge (see below)
+
+## Economic Security: Import Cluster Tagging (ADR 0007)
+
+Beyond custody and key security, the bridge must not become an economic
+side-door around Botho's anti-hoarding mechanism, which prices **coin lineage**
+(a demurrage / fee / lottery multiplier of 1×–6× derived from the wealth
+traceable to a coin's cluster origin). Two vectors arise at the boundary:
+
+- **The entry leak** — external wealth unwrapping in at factor-1 pays no lineage
+  premium. This is unavoidable in general (taxing external wealth entry would
+  break bridge liquidity), but it is **materially narrowed** below.
+- **The round-trip laundromat** — a domestic holder round-trips
+  (BTH → wBTH → unwrap → factor-1 BTH) to reset a high-factor lineage to
+  background for the price of a wrap.
+
+**Mitigation ([ADR 0007](../decisions/0007-bridge-import-cluster-tagging.md);
+normative in whitepaper §11; live as of protocol 5.0.0):** unwrapping does
+**not** release a plain factor-1 background coin. The released output is tagged
+100% to a **block-epoch import cluster** `c_import(m) = H("bridge-import" ‖ ⌊h/K⌋)`
+at an elevated factor `max(F, ClusterFactorCurve(Σ unwrap amounts in the epoch))`,
+with:
+
+| Constant | Value | Meaning |
+|----------|-------|---------|
+| `K` | **17,280 blocks (1 day)** | import epoch length |
+| `F` | **1.5×** | import-factor floor |
+
+All unwraps in an epoch share one accumulating cluster (so intra-epoch splitting
+is Sybil-resistant — diluting costs wall-clock time, not free splits), and the
+factor decays **only by circulation** (≈9 domestic-mixing spends from a 6× flood
+to the floor). This **closes the round-trip laundromat** — a round-trip now
+degrades lineage instead of resetting it — and **collapses the reset-vector map**
+(the bridge is removed from the lineage-reset-door list). The full threat → test
+mapping is in the [bridge threat model](../security/bridge-threat-model.md).
 
 ## Hot Wallet Security
 

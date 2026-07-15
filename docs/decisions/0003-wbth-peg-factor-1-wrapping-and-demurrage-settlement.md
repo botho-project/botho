@@ -31,6 +31,15 @@ How does the bridge keep `Σ(wBTH outstanding) == locked BTH reserve` given that
 
 3. **Unwrap yields factor-1 provenance.** Releases produce background/factor-1 outputs, matching what went in, so the bridge cannot be used to launder a high-cluster coin into a fresh low-factor one.
 
+   > **Superseded in part by [ADR 0007](0007-bridge-import-cluster-tagging.md) (2026-07-14).**
+   > This item as written (unwrap → plain factor-1 background) left a residual
+   > round-trip-laundromat / entry-leak vector. Under ADR 0007 (live as of
+   > protocol 5.0.0), unwrapping instead tags the released output 100% to a
+   > **block-epoch import cluster** at an elevated factor `≥ F = 1.5×`
+   > (epoch key `K = 17,280` blocks = 1 day), which normalizes toward background
+   > only by circulation. The anti-laundering goal of this item is preserved and
+   > strengthened; the exact "factor-1 output" mechanism is the part superseded.
+
 4. **Post-wrap demurrage escape is accepted.** Once wrapped, coins sit in transparent wBTH and pay no further demurrage. This is treated as "they settled on the way in," keeping wBTH a clean 1:1 DeFi asset.
 
 ## Consequences
