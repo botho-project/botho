@@ -146,12 +146,12 @@ $\pk_{\text{kem}}$ directly alongside the Ristretto spend key $B$; there is
 no hash-of-point step, which would in any case not yield a valid ML-KEM key.
 
 The one-time key binds \emph{two} shared secrets: the classical ECDH secret
-$\dh = rC = aR$ (as in classical CryptoNote, where $r$ is the sender's
+$\dhsecret = rC = aR$ (as in classical CryptoNote, where $r$ is the sender's
 ephemeral scalar, $R = rG$ the published transaction public key, $C$ the
 recipient's view key, and $a$ its secret) \emph{and} the ML-KEM shared secret
 $K$. The stealth scalar is the domain-separated hash of both:
 \[
-  s = \Hs\bigl(\dh \,\|\, K \,\|\, \text{output\_index}\bigr).
+  s = \Hs\bigl(\dhsecret \,\|\, K \,\|\, \text{output\_index}\bigr).
 \]
 
 \textbf{Sender} (creating output for recipient):
@@ -159,9 +159,9 @@ $K$. The stealth scalar is the domain-separated hash of both:
   \item Obtain the recipient's view key $C$ and ML-KEM public key
     $\pk_{\text{kem}}$ from their address
   \item Sample ephemeral scalar $r$; publish transaction public key $R = rG$
-  \item Compute classical DH secret: $\dh = rC$
+  \item Compute classical DH secret: $\dhsecret = rC$
   \item Encapsulate: $(c, K) \leftarrow \MLKEM.\Encap(\pk_{\text{kem}})$
-  \item Compute hybrid scalar: $s = \Hs(\dh \| K \| \text{output\_index})$
+  \item Compute hybrid scalar: $s = \Hs(\dhsecret \| K \| \text{output\_index})$
   \item Compute one-time public key: $P = sG + B$
   \item Include ciphertext $c$ (1,088 bytes) in transaction output
 \end{enumerate}
@@ -172,9 +172,9 @@ $K$. The stealth scalar is the domain-separated hash of both:
     seed (HKDF label \texttt{"kem-seed"}, as above)
   \item For each output with transaction public key $R$ and ciphertext $c$:
     \begin{enumerate}
-      \item Recompute classical DH secret: $\dh = aR$ (\,$= rC$\,)
+      \item Recompute classical DH secret: $\dhsecret = aR$ (\,$= rC$\,)
       \item Decapsulate: $K \leftarrow \MLKEM.\Decap(\sk_{\text{kem}}, c)$
-      \item Compute hybrid scalar: $s' = \Hs(\dh \| K \| \text{output\_index})$
+      \item Compute hybrid scalar: $s' = \Hs(\dhsecret \| K \| \text{output\_index})$
       \item Compute expected key: $P' = s'G + B$
       \item If $P' = P$ (output's public key), this output belongs to us
       \item Compute private key: $x = s' + b \mod q$
@@ -197,17 +197,17 @@ only the lattice assumption is still defeated by the classical branch.
 \end{theorem}
 
 \begin{proof}
-Because the stealth scalar $s = \Hs(\dh \| K \| \text{output\_index})$ is a
+Because the stealth scalar $s = \Hs(\dhsecret \| K \| \text{output\_index})$ is a
 domain-separated hash of \emph{both} shared secrets, modelling $\Hs$ as a
 random oracle makes $s$ (hence the one-time key $P$) pseudorandom whenever
-\emph{either} $\dh$ or $K$ is unknown to the adversary. It therefore suffices
+\emph{either} $\dhsecret$ or $K$ is unknown to the adversary. It therefore suffices
 to exhibit a reduction for each branch; we give the post-quantum (ML-KEM)
 branch, as the classical ECDH branch is the standard CryptoNote
-unlinkability argument~\cite{cryptonote} applied to the $\dh$ input.
+unlinkability argument~\cite{cryptonote} applied to the $\dhsecret$ input.
 
 We prove the ML-KEM branch by reduction to ML-KEM IND-CCA2 security. Suppose
 adversary $\Adv$ can distinguish outputs belonging to recipient $R$ with
-non-negligible advantage $\epsilon$, given $\dh$ (i.e.\ even after ECDH is
+non-negligible advantage $\epsilon$, given $\dhsecret$ (i.e.\ even after ECDH is
 broken). We construct adversary $\Adv'$ that breaks ML-KEM IND-CCA2 with
 advantage $\epsilon/2$.
 
@@ -224,7 +224,7 @@ the target). $\Adv'$ queries the IND-CCA2 challenger with
 $(\pk^*, \pk_{\text{other}})$ and receives ciphertext $c^*$ encapsulating
 either $K_0$ or $K_1$ (random bit $b$).
 
-$\Adv'$ computes $s^* = \Hs(\dh \| K_b \| \text{index})$ and
+$\Adv'$ computes $s^* = \Hs(\dhsecret \| K_b \| \text{index})$ and
 $P^* = s^*G + B_b$, returning output $(c^*, P^*)$ to $\Adv$.
 
 \textbf{Analysis}: If $\Adv$ correctly identifies the recipient with
