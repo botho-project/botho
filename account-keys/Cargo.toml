@@ -39,7 +39,12 @@ zeroize = { workspace = true }
 # Botho dependencies
 bth-account-keys-types = { workspace = true }
 bth-core = { workspace = true }
-bth-crypto-digestible = { workspace = true }
+# `alloc` + `derive` are required unconditionally: `PublicAddress` derives
+# `Digestible` over `Vec<u8>` PQ-key fields, and the `Vec<u8>: Digestible` impl
+# is gated behind the digestible `alloc` feature. This crate is always-alloc
+# (`extern crate alloc`), so enabling these here keeps `--no-default-features`
+# builds green.
+bth-crypto-digestible = { workspace = true, features = ["alloc", "derive"] }
 bth-crypto-hashes = { workspace = true }
 bth-crypto-keys = { workspace = true }
 bth-crypto-pq = { workspace = true, optional = true }

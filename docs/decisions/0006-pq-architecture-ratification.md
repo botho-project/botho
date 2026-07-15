@@ -101,3 +101,6 @@ ML-DSA-65 the designated future signature family.
   CLSAG sender privacy)
 - #899 — whitepaper §4 ↔ code divergence report
 - Whitepaper §4 "Minting Attribution", §Post-Quantum Stealth Addresses
+- [ADR 0008](0008-universal-pq-address-format-and-hybrid-stealth.md) — the
+  concrete universal-PQ address format (v2), hybrid stealth preimage, and
+  KEM/DSA bundling that implement this direction

@@ -36,12 +36,21 @@ pub async fn run(wallet_path: &Path, show_pq: bool) -> Result<()> {
         println!();
         println!("Quantum-safe address (ML-KEM-768 + ML-DSA-65):");
         println!();
-        let pq_addr = keys.pq_address_string();
-        // The address is long, so we'll show it wrapped
-        println!("  {}", pq_addr);
+        let pq_addr = keys.pq_public_address();
+        println!(
+            "  ML-KEM-768 public key ({} bytes):",
+            pq_addr.kem_public_key().len()
+        );
+        println!("    {}", hex::encode(pq_addr.kem_public_key()));
+        println!(
+            "  ML-DSA-65 public key ({} bytes):",
+            pq_addr.dsa_public_key().len()
+        );
+        println!("    {}", hex::encode(pq_addr.dsa_public_key()));
         println!();
-        println!("  Note: This address is ~4.3KB and includes post-quantum public keys");
-        println!("  for protection against future quantum computer attacks.");
+        println!("  Note: post-quantum public keys are now part of the unified");
+        println!("  address (format v2). The compact base58 v2 address string is");
+        println!("  introduced in a later rollout step.");
     }
 
     #[cfg(not(feature = "pq"))]

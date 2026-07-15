@@ -12,6 +12,7 @@
 
 #![allow(non_snake_case)]
 
+use alloc::vec::Vec;
 use bth_core::{
     keys::{
         RootSpendPrivate, RootSpendPublic, RootViewPrivate, SubaddressSpendPublic,
@@ -44,7 +45,31 @@ pub use bth_core::{
     },
 };
 
+/// Length in bytes of a raw ML-KEM-768 public key (published in a v2 address).
+///
+/// Kept as a local constant so the base `account-keys` type carries no hard
+/// dependency on `bth-crypto-pq` (D1: raw fixed bytes, validate-on-parse).
+pub const ML_KEM_768_PUBLIC_KEY_LEN: usize = 1184;
+
+/// Length in bytes of a raw ML-DSA-65 public key (published in a v2 address).
+pub const ML_DSA_65_PUBLIC_KEY_LEN: usize = 1952;
+
 /// A Botho user's public subaddress.
+///
+/// # Address format v2 (universal post-quantum)
+///
+/// In addition to the two 32-byte Ristretto keys, an address carries two raw
+/// post-quantum public keys as fixed-length byte payloads (ADR 0008):
+///
+/// - `kem_public_key` — ML-KEM-768 (`ML_KEM_768_PUBLIC_KEY_LEN` = 1184 bytes)
+/// - `dsa_public_key` — ML-DSA-65 (`ML_DSA_65_PUBLIC_KEY_LEN` = 1952 bytes)
+///
+/// Both PQ keys are stored as raw bytes (D1: keep the base type free of a hard
+/// `bth-crypto-pq` dependency; validate the exact length on parse). Both PQ
+/// keys are part of the address's `Digestible` / `ShortAddressHash` identity
+/// (D3: an address's PQ keys must not be swappable). A classical-only ("v1")
+/// address leaves both PQ fields empty and hashes/serializes exactly as before
+/// aside from the two extra (empty) fields.
 #[derive(Clone, Digestible, Eq, Hash, Ord, PartialEq, PartialOrd, Zeroize)]
 #[cfg_attr(feature = "prost", derive(Message))]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -56,16 +81,35 @@ pub struct PublicAddress {
     /// The user's public subaddress spend key `D`.
     #[cfg_attr(feature = "prost", prost(message, required, tag = "2"))]
     spend_public_key: RistrettoPublic,
+
+    /// Raw ML-KEM-768 public key (1184 bytes) published in the address.
+    ///
+    /// Empty for classical-only (v1) addresses. For v2 addresses this MUST be
+    /// exactly `ML_KEM_768_PUBLIC_KEY_LEN` bytes (validated on parse).
+    #[cfg_attr(feature = "prost", prost(bytes, tag = "3"))]
+    kem_public_key: Vec<u8>,
+
+    /// Raw ML-DSA-65 public key (1952 bytes) published in the address.
+    ///
+    /// Empty for classical-only (v1) addresses. For v2 addresses this MUST be
+    /// exactly `ML_DSA_65_PUBLIC_KEY_LEN` bytes (validated on parse).
+    #[cfg_attr(feature = "prost", prost(bytes, tag = "4"))]
+    dsa_public_key: Vec<u8>,
 }
 
 impl fmt::Display for PublicAddress {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "BTH")?;
+        // Classical keys first (spend||view), preserving the historical v1
+        // rendering. The PQ keys are appended only when present, so a
+        // classical-only address renders identically to before.
         for byte in self
             .spend_public_key
             .to_bytes()
             .iter()
             .chain(self.view_public_key().to_bytes().iter())
+            .chain(self.kem_public_key.iter())
+            .chain(self.dsa_public_key.iter())
         {
             write!(f, "{byte:02X}")?;
         }
@@ -84,7 +128,48 @@ impl PublicAddress {
         Self {
             view_public_key: *view_public_key,
             spend_public_key: *spend_public_key,
+            kem_public_key: Vec::new(),
+            dsa_public_key: Vec::new(),
         }
+    }
+
+    /// Create a new v2 (universal post-quantum) public address.
+    ///
+    /// # Arguments
+    /// * `spend_public_key` - The user's public subaddress spend key `D`.
+    /// * `view_public_key` - The user's public subaddress view key `C`.
+    /// * `kem_public_key` - Raw ML-KEM-768 public key bytes (expected length
+    ///   `ML_KEM_768_PUBLIC_KEY_LEN`).
+    /// * `dsa_public_key` - Raw ML-DSA-65 public key bytes (expected length
+    ///   `ML_DSA_65_PUBLIC_KEY_LEN`).
+    ///
+    /// The PQ keys are stored verbatim; length validation is performed on
+    /// parse (D1). Callers deriving from real keypairs always supply
+    /// correctly-sized bytes.
+    #[inline]
+    pub fn new_with_pq(
+        spend_public_key: &RistrettoPublic,
+        view_public_key: &RistrettoPublic,
+        kem_public_key: Vec<u8>,
+        dsa_public_key: Vec<u8>,
+    ) -> Self {
+        Self {
+            view_public_key: *view_public_key,
+            spend_public_key: *spend_public_key,
+            kem_public_key,
+            dsa_public_key,
+        }
+    }
+
+    /// Attach post-quantum public keys to an existing (classical) address.
+    ///
+    /// Consumes `self` and returns a v2 address carrying the supplied raw
+    /// ML-KEM-768 and ML-DSA-65 public keys.
+    #[inline]
+    pub fn with_pq_keys(mut self, kem_public_key: Vec<u8>, dsa_public_key: Vec<u8>) -> Self {
+        self.kem_public_key = kem_public_key;
+        self.dsa_public_key = dsa_public_key;
+        self
     }
 
     /// Get the public subaddress view key.
@@ -95,6 +180,30 @@ impl PublicAddress {
     /// Get the public subaddress spend key.
     pub fn spend_public_key(&self) -> &RistrettoPublic {
         &self.spend_public_key
+    }
+
+    /// Get the raw ML-KEM-768 public key bytes.
+    ///
+    /// Empty for classical-only (v1) addresses.
+    pub fn kem_public_key(&self) -> &[u8] {
+        &self.kem_public_key
+    }
+
+    /// Get the raw ML-DSA-65 public key bytes.
+    ///
+    /// Empty for classical-only (v1) addresses.
+    pub fn dsa_public_key(&self) -> &[u8] {
+        &self.dsa_public_key
+    }
+
+    /// Whether this address publishes well-formed post-quantum keys.
+    ///
+    /// Returns true only when both PQ keys are present and have exactly the
+    /// expected raw lengths (`ML_KEM_768_PUBLIC_KEY_LEN` and
+    /// `ML_DSA_65_PUBLIC_KEY_LEN`).
+    pub fn has_pq_keys(&self) -> bool {
+        self.kem_public_key.len() == ML_KEM_768_PUBLIC_KEY_LEN
+            && self.dsa_public_key.len() == ML_DSA_65_PUBLIC_KEY_LEN
     }
 }
 
@@ -262,10 +371,9 @@ impl AccountKey {
             RistrettoPublic::from(&subaddress_spend_private)
         };
 
-        PublicAddress {
-            view_public_key,
-            spend_public_key,
-        }
+        // Classical-only (v1) subaddress. PQ keys are attached by the
+        // quantum-safe derivation path (see `quantum_safe.rs`).
+        PublicAddress::new(&spend_public_key, &view_public_key)
     }
 
     /// The private spend key for the default subaddress.
@@ -430,10 +538,9 @@ impl ViewAccountKey {
         )
             .subaddress(index);
 
-        PublicAddress {
-            view_public_key: view_public.inner(),
-            spend_public_key: spend_public.inner(),
-        }
+        // Classical-only (v1) subaddress. PQ keys are attached by the
+        // quantum-safe derivation path (see `quantum_safe.rs`).
+        PublicAddress::new(&spend_public.inner(), &view_public.inner())
     }
 
     /// The public spend key for the default subaddress.
@@ -501,6 +608,107 @@ mod account_key_tests {
             let result: PublicAddress = bth_util_serial::decode(&ser).unwrap();
             assert_eq!(acct.default_subaddress(), result);
         });
+    }
+
+    // Build a v2 address with deterministic (index-seeded) PQ payloads of the
+    // correct raw lengths. The bytes are not required to be valid PQ keys for
+    // these struct/serde/digest tests (validation happens on address-string
+    // parse, sub-issue 3).
+    fn sample_pq_address(rng: &mut StdRng) -> PublicAddress {
+        let spend = RistrettoPublic::from_random(rng);
+        let view = RistrettoPublic::from_random(rng);
+        let mut kem = alloc::vec![0u8; ML_KEM_768_PUBLIC_KEY_LEN];
+        rng.fill_bytes(&mut kem);
+        let mut dsa = alloc::vec![0u8; ML_DSA_65_PUBLIC_KEY_LEN];
+        rng.fill_bytes(&mut dsa);
+        PublicAddress::new_with_pq(&spend, &view, kem, dsa)
+    }
+
+    #[test]
+    // A v2 address (with both PQ keys) round-trips through prost/bth_util_serial.
+    fn bth_util_serial_prost_roundtrip_public_address_v2() {
+        let mut rng: StdRng = SeedableRng::from_seed([7u8; 32]);
+        let addr = sample_pq_address(&mut rng);
+
+        // Byte-length invariants for a well-formed v2 address.
+        assert_eq!(addr.kem_public_key().len(), ML_KEM_768_PUBLIC_KEY_LEN);
+        assert_eq!(addr.dsa_public_key().len(), ML_DSA_65_PUBLIC_KEY_LEN);
+        assert!(addr.has_pq_keys());
+
+        let ser = bth_util_serial::encode(&addr);
+        let result: PublicAddress = bth_util_serial::decode(&ser).unwrap();
+        assert_eq!(addr, result);
+        assert_eq!(result.kem_public_key(), addr.kem_public_key());
+        assert_eq!(result.dsa_public_key(), addr.dsa_public_key());
+    }
+
+    #[test]
+    // A classical-only (v1) address has empty PQ fields and is not `has_pq_keys`.
+    fn classical_address_has_no_pq_keys() {
+        let mut rng: StdRng = SeedableRng::from_seed([9u8; 32]);
+        let addr = PublicAddress::new(
+            &RistrettoPublic::from_random(&mut rng),
+            &RistrettoPublic::from_random(&mut rng),
+        );
+        assert!(addr.kem_public_key().is_empty());
+        assert!(addr.dsa_public_key().is_empty());
+        assert!(!addr.has_pq_keys());
+    }
+
+    #[test]
+    // Both PQ keys are part of the address identity (Digestible /
+    // ShortAddressHash). Swapping either PQ key MUST change the
+    // ShortAddressHash (D3).
+    fn pq_keys_are_part_of_short_address_hash() {
+        let mut rng: StdRng = SeedableRng::from_seed([11u8; 32]);
+        let spend = RistrettoPublic::from_random(&mut rng);
+        let view = RistrettoPublic::from_random(&mut rng);
+        let mut kem = alloc::vec![0u8; ML_KEM_768_PUBLIC_KEY_LEN];
+        rng.fill_bytes(&mut kem);
+        let mut dsa = alloc::vec![0u8; ML_DSA_65_PUBLIC_KEY_LEN];
+        rng.fill_bytes(&mut dsa);
+
+        let base = PublicAddress::new_with_pq(&spend, &view, kem.clone(), dsa.clone());
+
+        // Classical-only address with the SAME Ristretto keys must hash differently.
+        let classical = PublicAddress::new(&spend, &view);
+        assert_ne!(
+            ShortAddressHash::from(&base),
+            ShortAddressHash::from(&classical),
+            "PQ keys must contribute to the address hash"
+        );
+
+        // Flip one byte of the KEM key -> different hash.
+        let mut kem2 = kem.clone();
+        kem2[0] ^= 0xff;
+        let kem_swapped = PublicAddress::new_with_pq(&spend, &view, kem2, dsa.clone());
+        assert_ne!(
+            ShortAddressHash::from(&base),
+            ShortAddressHash::from(&kem_swapped),
+            "swapping the KEM key must change the address hash"
+        );
+
+        // Flip one byte of the DSA key -> different hash.
+        let mut dsa2 = dsa.clone();
+        dsa2[0] ^= 0xff;
+        let dsa_swapped = PublicAddress::new_with_pq(&spend, &view, kem, dsa2);
+        assert_ne!(
+            ShortAddressHash::from(&base),
+            ShortAddressHash::from(&dsa_swapped),
+            "swapping the DSA key must change the address hash"
+        );
+
+        // Determinism: identical inputs -> identical hash.
+        let base_again = PublicAddress::new_with_pq(
+            &spend,
+            &view,
+            base.kem_public_key().to_vec(),
+            base.dsa_public_key().to_vec(),
+        );
+        assert_eq!(
+            ShortAddressHash::from(&base),
+            ShortAddressHash::from(&base_again)
+        );
     }
 
     #[test]

@@ -1,16 +1,27 @@
 //! Quantum-Safe Account Keys
 //!
-//! This module provides post-quantum cryptographic extensions to the standard
-//! account key types. It combines classical (Ristretto/Schnorr) keys with
-//! NIST-standardized post-quantum algorithms:
+//! This module provides the post-quantum *secret-key holder* used to derive an
+//! account's post-quantum public keys. It combines classical (Ristretto/
+//! Schnorr) keys with NIST-standardized post-quantum algorithms:
 //!
 //! - **ML-KEM-768** (Kyber): Key Encapsulation for stealth address key exchange
 //! - **ML-DSA-65** (Dilithium): Digital signatures for transaction signing
 //!
+//! # Unified address type
+//!
+//! As of address format v2 (ADR 0008), the post-quantum public keys are folded
+//! directly into the canonical [`PublicAddress`]. There is no longer a separate
+//! `QuantumSafePublicAddress` type or a `botho-pq://` address string; a
+//! quantum-safe subaddress is simply a [`PublicAddress`] whose
+//! [`PublicAddress::kem_public_key`] and [`PublicAddress::dsa_public_key`]
+//! fields are populated. [`QuantumSafeAccountKey`] remains as the secret-side
+//! keypair holder that derives those keys from the mnemonic (its unification
+//! into `AccountKey` is tracked by the key-hierarchy sub-issue).
+//!
 //! # Hybrid Security Model
 //!
-//! Quantum-safe transactions require BOTH classical and post-quantum signatures
-//! to verify. This provides:
+//! Quantum-safe transactions require BOTH classical and post-quantum secrets to
+//! spend. This provides:
 //!
 //! 1. Immediate protection against "harvest now, decrypt later" attacks
 //! 2. Fallback security if either cryptosystem is broken
@@ -19,73 +30,32 @@
 //! # Usage
 //!
 //! ```ignore
-//! use bth_account_keys::{QuantumSafeAccountKey, QuantumSafePublicAddress};
+//! use bth_account_keys::QuantumSafeAccountKey;
 //!
 //! // Create from mnemonic (PQ keys derived deterministically)
 //! let account = QuantumSafeAccountKey::from_mnemonic("word1 word2 ... word24");
 //!
-//! // Get quantum-safe public address for receiving
+//! // Get the unified public address for receiving (carries both PQ keys)
 //! let address = account.default_subaddress();
 //!
 //! // Address includes both classical and PQ public keys
 //! println!("Classical view key: {:?}", address.view_public_key());
-//! println!("PQ KEM key: {:?}", address.pq_view_public_key());
+//! println!("PQ KEM key bytes:  {}", address.kem_public_key().len());
 //! ```
 
-use alloc::{string::String, vec::Vec};
+use alloc::vec::Vec;
 use core::fmt;
 
 use bip39::{Language, Mnemonic, Seed};
 use bth_crypto_pq::{
-    derive_pq_keys_from_seed, MlDsa65KeyPair, MlDsa65PublicKey, MlKem768KeyPair, MlKem768PublicKey,
-    PqKeyMaterial, BIP39_SEED_SIZE, ML_DSA_65_PUBLIC_KEY_BYTES, ML_KEM_768_PUBLIC_KEY_BYTES,
+    derive_pq_keys_from_seed, MlDsa65KeyPair, MlKem768KeyPair, PqKeyMaterial, BIP39_SEED_SIZE,
 };
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::{AccountKey, PublicAddress};
 
-/// Errors that can occur when parsing a quantum-safe address
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AddressParseError {
-    /// Invalid address prefix (expected "botho-pq://1/")
-    InvalidPrefix,
-    /// Invalid base58 encoding
-    InvalidBase58,
-    /// Invalid address length
-    InvalidLength {
-        /// Expected byte length
-        expected: usize,
-        /// Actual byte length
-        got: usize,
-    },
-    /// Invalid classical Ristretto key
-    InvalidClassicalKey,
-    /// Invalid post-quantum key
-    InvalidPqKey,
-}
-
-impl fmt::Display for AddressParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidPrefix => write!(f, "invalid address prefix, expected 'botho-pq://1/'"),
-            Self::InvalidBase58 => write!(f, "invalid base58 encoding"),
-            Self::InvalidLength { expected, got } => {
-                write!(
-                    f,
-                    "invalid length: expected {} bytes, got {}",
-                    expected, got
-                )
-            }
-            Self::InvalidClassicalKey => write!(f, "invalid classical Ristretto public key"),
-            Self::InvalidPqKey => write!(f, "invalid post-quantum public key"),
-        }
-    }
-}
-
-// Note: Error trait requires std; pq feature enables std
+// Note: pq feature enables std; kept for parity with the rest of the crate.
 extern crate std;
-
-impl std::error::Error for AddressParseError {}
 
 /// Quantum-safe account key combining classical and post-quantum keys
 ///
@@ -211,35 +181,40 @@ impl QuantumSafeAccountKey {
         &self.pq_sig_keypair
     }
 
-    /// Get the default quantum-safe subaddress
-    pub fn default_subaddress(&self) -> QuantumSafePublicAddress {
-        QuantumSafePublicAddress::from_parts(
-            self.classical.default_subaddress(),
-            self.pq_kem_keypair.public_key().clone(),
-            self.pq_sig_keypair.public_key().clone(),
-        )
+    /// Raw ML-KEM-768 public key bytes for this account (account-wide).
+    fn kem_public_bytes(&self) -> Vec<u8> {
+        self.pq_kem_keypair.public_key().as_bytes().to_vec()
     }
 
-    /// Get the change quantum-safe subaddress
-    pub fn change_subaddress(&self) -> QuantumSafePublicAddress {
-        QuantumSafePublicAddress::from_parts(
-            self.classical.change_subaddress(),
-            self.pq_kem_keypair.public_key().clone(),
-            self.pq_sig_keypair.public_key().clone(),
-        )
+    /// Raw ML-DSA-65 public key bytes for this account (account-wide).
+    fn dsa_public_bytes(&self) -> Vec<u8> {
+        self.pq_sig_keypair.public_key().as_bytes().to_vec()
     }
 
-    /// Get the i^th quantum-safe subaddress
+    /// Get the default quantum-safe subaddress (as a unified
+    /// [`PublicAddress`]).
+    pub fn default_subaddress(&self) -> PublicAddress {
+        self.classical
+            .default_subaddress()
+            .with_pq_keys(self.kem_public_bytes(), self.dsa_public_bytes())
+    }
+
+    /// Get the change quantum-safe subaddress (as a unified [`PublicAddress`]).
+    pub fn change_subaddress(&self) -> PublicAddress {
+        self.classical
+            .change_subaddress()
+            .with_pq_keys(self.kem_public_bytes(), self.dsa_public_bytes())
+    }
+
+    /// Get the i^th quantum-safe subaddress (as a unified [`PublicAddress`]).
     ///
     /// Note: The PQ public keys are the same across all subaddresses.
     /// Subaddress derivation only affects the classical keys.
     /// One-time PQ keys are derived per-output using the encapsulated secret.
-    pub fn subaddress(&self, index: u64) -> QuantumSafePublicAddress {
-        QuantumSafePublicAddress::from_parts(
-            self.classical.subaddress(index),
-            self.pq_kem_keypair.public_key().clone(),
-            self.pq_sig_keypair.public_key().clone(),
-        )
+    pub fn subaddress(&self, index: u64) -> PublicAddress {
+        self.classical
+            .subaddress(index)
+            .with_pq_keys(self.kem_public_bytes(), self.dsa_public_bytes())
     }
 
     /// Derive classical AccountKey from mnemonic
@@ -274,216 +249,10 @@ impl fmt::Debug for QuantumSafeAccountKey {
     }
 }
 
-/// Quantum-safe public address for receiving funds
-///
-/// This extended address format includes both classical and post-quantum
-/// public keys, enabling senders to create outputs that are protected
-/// against quantum adversaries.
-///
-/// # Size
-///
-/// - Classical keys: 64 bytes (view + spend)
-/// - PQ KEM key: 1184 bytes (ML-KEM-768)
-/// - PQ Signature key: 1952 bytes (ML-DSA-65)
-/// - Total: ~3200 bytes
-///
-/// # Encoding
-///
-/// Quantum-safe addresses use a distinct prefix for identification:
-/// - Standard: `botho://1/<base58(view||spend)>`
-/// - Quantum-safe: `botho-pq://1/<base58(view||spend||pq_kem||pq_sig)>`
-#[derive(Clone)]
-pub struct QuantumSafePublicAddress {
-    /// Classical public address (view + spend public keys)
-    classical: PublicAddress,
-
-    /// ML-KEM-768 public key for quantum-safe key encapsulation
-    pq_kem_public_key: MlKem768PublicKey,
-
-    /// ML-DSA-65 public key for quantum-safe signature verification
-    pq_sig_public_key: MlDsa65PublicKey,
-}
-
-impl QuantumSafePublicAddress {
-    /// Create a quantum-safe address from its component parts
-    pub fn from_parts(
-        classical: PublicAddress,
-        pq_kem_public_key: MlKem768PublicKey,
-        pq_sig_public_key: MlDsa65PublicKey,
-    ) -> Self {
-        Self {
-            classical,
-            pq_kem_public_key,
-            pq_sig_public_key,
-        }
-    }
-
-    /// Get the classical public address
-    pub fn classical(&self) -> &PublicAddress {
-        &self.classical
-    }
-
-    /// Get the classical view public key
-    pub fn view_public_key(&self) -> &bth_crypto_keys::RistrettoPublic {
-        self.classical.view_public_key()
-    }
-
-    /// Get the classical spend public key
-    pub fn spend_public_key(&self) -> &bth_crypto_keys::RistrettoPublic {
-        self.classical.spend_public_key()
-    }
-
-    /// Get the ML-KEM-768 public key for quantum-safe key encapsulation
-    pub fn pq_kem_public_key(&self) -> &MlKem768PublicKey {
-        &self.pq_kem_public_key
-    }
-
-    /// Get the ML-DSA-65 public key for quantum-safe signature verification
-    pub fn pq_sig_public_key(&self) -> &MlDsa65PublicKey {
-        &self.pq_sig_public_key
-    }
-
-    /// Serialize to bytes
-    ///
-    /// Format: classical_view || classical_spend || pq_kem || pq_sig
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes =
-            Vec::with_capacity(32 + 32 + ML_KEM_768_PUBLIC_KEY_BYTES + ML_DSA_65_PUBLIC_KEY_BYTES);
-
-        bytes.extend_from_slice(&self.classical.view_public_key().to_bytes());
-        bytes.extend_from_slice(&self.classical.spend_public_key().to_bytes());
-        bytes.extend_from_slice(self.pq_kem_public_key.as_bytes());
-        bytes.extend_from_slice(self.pq_sig_public_key.as_bytes());
-
-        bytes
-    }
-
-    /// Total serialized size in bytes
-    pub const SERIALIZED_SIZE: usize =
-        32 + 32 + ML_KEM_768_PUBLIC_KEY_BYTES + ML_DSA_65_PUBLIC_KEY_BYTES;
-
-    /// Encode as a quantum-safe address string
-    ///
-    /// Format: `botho-pq://1/<base58>`
-    pub fn to_address_string(&self) -> String {
-        use alloc::format;
-
-        let bytes = self.to_bytes();
-        let encoded = bs58::encode(&bytes).into_string();
-        format!("botho-pq://1/{}", encoded)
-    }
-
-    /// Decode a quantum-safe address from its string representation
-    ///
-    /// Format: `botho-pq://1/<base58>`
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The prefix is not `botho-pq://1/`
-    /// - The base58 decoding fails
-    /// - The decoded length doesn't match `SERIALIZED_SIZE`
-    /// - The classical keys are not valid Ristretto points
-    pub fn from_address_string(s: &str) -> Result<Self, AddressParseError> {
-        const PREFIX: &str = "botho-pq://1/";
-
-        let encoded = s
-            .strip_prefix(PREFIX)
-            .ok_or(AddressParseError::InvalidPrefix)?;
-
-        let bytes = bs58::decode(encoded)
-            .into_vec()
-            .map_err(|_| AddressParseError::InvalidBase58)?;
-
-        if bytes.len() != Self::SERIALIZED_SIZE {
-            return Err(AddressParseError::InvalidLength {
-                expected: Self::SERIALIZED_SIZE,
-                got: bytes.len(),
-            });
-        }
-
-        Self::from_bytes(&bytes)
-    }
-
-    /// Deserialize from bytes
-    ///
-    /// Format: classical_view || classical_spend || pq_kem || pq_sig
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, AddressParseError> {
-        if bytes.len() != Self::SERIALIZED_SIZE {
-            return Err(AddressParseError::InvalidLength {
-                expected: Self::SERIALIZED_SIZE,
-                got: bytes.len(),
-            });
-        }
-
-        let mut offset = 0;
-
-        // Classical view key (32 bytes)
-        let view_bytes: [u8; 32] = bytes[offset..offset + 32]
-            .try_into()
-            .expect("slice is 32 bytes");
-        let view_public_key = bth_crypto_keys::RistrettoPublic::try_from(&view_bytes)
-            .map_err(|_| AddressParseError::InvalidClassicalKey)?;
-        offset += 32;
-
-        // Classical spend key (32 bytes)
-        let spend_bytes: [u8; 32] = bytes[offset..offset + 32]
-            .try_into()
-            .expect("slice is 32 bytes");
-        let spend_public_key = bth_crypto_keys::RistrettoPublic::try_from(&spend_bytes)
-            .map_err(|_| AddressParseError::InvalidClassicalKey)?;
-        offset += 32;
-
-        let classical = PublicAddress::new(&spend_public_key, &view_public_key);
-
-        // PQ KEM key (1184 bytes)
-        let kem_bytes = &bytes[offset..offset + ML_KEM_768_PUBLIC_KEY_BYTES];
-        let pq_kem_public_key = MlKem768PublicKey::from_bytes(kem_bytes)
-            .map_err(|_| AddressParseError::InvalidPqKey)?;
-        offset += ML_KEM_768_PUBLIC_KEY_BYTES;
-
-        // PQ Sig key (1952 bytes)
-        let sig_bytes = &bytes[offset..offset + ML_DSA_65_PUBLIC_KEY_BYTES];
-        let pq_sig_public_key =
-            MlDsa65PublicKey::from_bytes(sig_bytes).map_err(|_| AddressParseError::InvalidPqKey)?;
-
-        Ok(Self {
-            classical,
-            pq_kem_public_key,
-            pq_sig_public_key,
-        })
-    }
-}
-
-impl fmt::Debug for QuantumSafePublicAddress {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("QuantumSafePublicAddress")
-            .field("classical", &self.classical)
-            .field("pq_kem", &format_args!("MlKem768PublicKey(...)"))
-            .field("pq_sig", &format_args!("MlDsa65PublicKey(...)"))
-            .finish()
-    }
-}
-
-impl fmt::Display for QuantumSafePublicAddress {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.to_address_string())
-    }
-}
-
-impl PartialEq for QuantumSafePublicAddress {
-    fn eq(&self, other: &Self) -> bool {
-        self.classical == other.classical
-            && self.pq_kem_public_key.as_bytes() == other.pq_kem_public_key.as_bytes()
-            && self.pq_sig_public_key.as_bytes() == other.pq_sig_public_key.as_bytes()
-    }
-}
-
-impl Eq for QuantumSafePublicAddress {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bth_crypto_pq::{ML_DSA_65_PUBLIC_KEY_BYTES, ML_KEM_768_PUBLIC_KEY_BYTES};
 
     const TEST_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
@@ -496,37 +265,24 @@ mod tests {
     }
 
     #[test]
-    fn test_quantum_safe_public_address() {
+    fn test_unified_public_address_carries_pq_keys() {
         let account = QuantumSafeAccountKey::from_mnemonic(TEST_MNEMONIC);
         let address = account.default_subaddress();
 
-        // Check size constants
+        // The unified PublicAddress carries both PQ keys at their raw lengths.
+        assert_eq!(address.kem_public_key().len(), ML_KEM_768_PUBLIC_KEY_BYTES);
+        assert_eq!(address.dsa_public_key().len(), ML_DSA_65_PUBLIC_KEY_BYTES);
+        assert!(address.has_pq_keys());
+
+        // The published PQ keys match the account's keypairs.
         assert_eq!(
-            address.pq_kem_public_key().as_bytes().len(),
-            ML_KEM_768_PUBLIC_KEY_BYTES
+            address.kem_public_key(),
+            account.pq_kem_keypair().public_key().as_bytes()
         );
         assert_eq!(
-            address.pq_sig_public_key().as_bytes().len(),
-            ML_DSA_65_PUBLIC_KEY_BYTES
+            address.dsa_public_key(),
+            account.pq_sig_keypair().public_key().as_bytes()
         );
-    }
-
-    #[test]
-    fn test_address_serialization() {
-        let account = QuantumSafeAccountKey::from_mnemonic(TEST_MNEMONIC);
-        let address = account.default_subaddress();
-
-        let bytes = address.to_bytes();
-        assert_eq!(bytes.len(), QuantumSafePublicAddress::SERIALIZED_SIZE);
-    }
-
-    #[test]
-    fn test_address_string_format() {
-        let account = QuantumSafeAccountKey::from_mnemonic(TEST_MNEMONIC);
-        let address = account.default_subaddress();
-
-        let addr_string = address.to_address_string();
-        assert!(addr_string.starts_with("botho-pq://1/"));
     }
 
     #[test]
@@ -538,14 +294,8 @@ mod tests {
         let addr_change = account.change_subaddress();
 
         // PQ keys should be the same across subaddresses
-        assert_eq!(
-            addr0.pq_kem_public_key().as_bytes(),
-            addr1.pq_kem_public_key().as_bytes()
-        );
-        assert_eq!(
-            addr0.pq_sig_public_key().as_bytes(),
-            addr_change.pq_sig_public_key().as_bytes()
-        );
+        assert_eq!(addr0.kem_public_key(), addr1.kem_public_key());
+        assert_eq!(addr0.dsa_public_key(), addr_change.dsa_public_key());
 
         // Classical keys should differ between subaddresses
         assert_ne!(
@@ -555,70 +305,15 @@ mod tests {
     }
 
     #[test]
-    fn test_address_roundtrip() {
-        let account = QuantumSafeAccountKey::from_mnemonic(TEST_MNEMONIC);
-        let address = account.default_subaddress();
-
-        // Encode to string
-        let addr_string = address.to_address_string();
-
-        // Decode back
-        let parsed = QuantumSafePublicAddress::from_address_string(&addr_string)
-            .expect("should parse valid address");
-
-        // Should be equal
-        assert_eq!(address, parsed);
-    }
-
-    #[test]
-    fn test_address_bytes_roundtrip() {
-        let account = QuantumSafeAccountKey::from_mnemonic(TEST_MNEMONIC);
-        let address = account.default_subaddress();
-
-        // Serialize to bytes
-        let bytes = address.to_bytes();
-
-        // Deserialize back
-        let parsed =
-            QuantumSafePublicAddress::from_bytes(&bytes).expect("should parse valid bytes");
-
-        // Should be equal
-        assert_eq!(address, parsed);
-    }
-
-    #[test]
-    fn test_address_parse_invalid_prefix() {
-        let result = QuantumSafePublicAddress::from_address_string("botho://1/abc");
-        assert_eq!(result, Err(AddressParseError::InvalidPrefix));
-    }
-
-    #[test]
-    fn test_address_parse_invalid_base58() {
-        let result = QuantumSafePublicAddress::from_address_string("botho-pq://1/invalid!base58");
-        assert_eq!(result, Err(AddressParseError::InvalidBase58));
-    }
-
-    #[test]
-    fn test_address_parse_invalid_length() {
-        // Valid base58 but wrong length
-        let result = QuantumSafePublicAddress::from_address_string("botho-pq://1/abc123");
-        assert!(matches!(
-            result,
-            Err(AddressParseError::InvalidLength { .. })
-        ));
-    }
-
-    #[test]
     fn test_deterministic_key_derivation() {
         // Same mnemonic should produce identical keys every time
         let account1 = QuantumSafeAccountKey::from_mnemonic(TEST_MNEMONIC);
         let account2 = QuantumSafeAccountKey::from_mnemonic(TEST_MNEMONIC);
 
-        // Get addresses to compare classical keys
         let addr1 = account1.default_subaddress();
         let addr2 = account2.default_subaddress();
 
-        // Classical keys should be identical (via address comparison)
+        // Classical keys should be identical
         assert_eq!(
             addr1.view_public_key().to_bytes(),
             addr2.view_public_key().to_bytes()
@@ -640,9 +335,8 @@ mod tests {
             account2.pq_sig_keypair().public_key().as_bytes()
         );
 
-        // Full address should be identical
+        // Full unified address should be identical (classical + PQ).
         assert_eq!(addr1, addr2);
-        assert_eq!(addr1.to_address_string(), addr2.to_address_string());
     }
 
     #[test]
@@ -652,7 +346,6 @@ mod tests {
             "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong",
         );
 
-        // Get addresses to compare
         let addr1 = account1.default_subaddress();
         let addr2 = account2.default_subaddress();
 

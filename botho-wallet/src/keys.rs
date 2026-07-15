@@ -22,7 +22,7 @@ use zeroize::Zeroizing;
 use crate::secmem::{lock_string, LockedRegion};
 
 #[cfg(feature = "pq")]
-use bth_account_keys::{QuantumSafeAccountKey, QuantumSafePublicAddress};
+use bth_account_keys::QuantumSafeAccountKey;
 
 /// Number of words in the mnemonic phrase
 const MNEMONIC_WORDS: usize = 24;
@@ -225,23 +225,17 @@ impl WalletKeys {
 
     /// Get the quantum-safe public address for receiving funds
     ///
-    /// This address includes both classical and post-quantum public keys,
-    /// allowing senders to create quantum-resistant outputs.
+    /// Returns the unified [`PublicAddress`] (address format v2, ADR 0008),
+    /// which carries both classical Ristretto keys and the post-quantum
+    /// ML-KEM-768 / ML-DSA-65 public keys, allowing senders to create
+    /// quantum-resistant outputs.
+    ///
+    /// Note: the v2 base58 address-*string* encoding is introduced in a later
+    /// rollout sub-issue; the legacy `botho-pq://` string was retired together
+    /// with the parallel `QuantumSafePublicAddress` type.
     #[cfg(feature = "pq")]
-    pub fn pq_public_address(&self) -> QuantumSafePublicAddress {
+    pub fn pq_public_address(&self) -> PublicAddress {
         self.pq_account_key().default_subaddress()
-    }
-
-    /// Get the quantum-safe address as a string
-    ///
-    /// Format: `botho-pq://1/<base58(view||spend||pq_kem||pq_sig)>`
-    ///
-    /// Note: This address is ~4.3KB when base58-encoded due to the size
-    /// of post-quantum public keys (ML-KEM-768: 1184 bytes, ML-DSA-65: 1952
-    /// bytes).
-    #[cfg(feature = "pq")]
-    pub fn pq_address_string(&self) -> String {
-        self.pq_public_address().to_address_string()
     }
 }
 
@@ -461,29 +455,16 @@ mod tests {
         }
 
         #[test]
-        fn test_pq_address_string_format() {
-            let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
-            let pq_addr = keys.pq_address_string();
-
-            // Should have the correct prefix
-            assert!(pq_addr.starts_with("botho-pq://1/"));
-
-            // Should be a valid base58-encoded address
-            assert!(pq_addr.len() > 100); // PQ addresses are large
-        }
-
-        #[test]
-        fn test_pq_address_roundtrip() {
-            use bth_account_keys::QuantumSafePublicAddress;
+        fn test_pq_public_address_carries_pq_keys() {
+            use bth_account_keys::{ML_DSA_65_PUBLIC_KEY_LEN, ML_KEM_768_PUBLIC_KEY_LEN};
 
             let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
-            let pq_addr = keys.pq_address_string();
+            let addr = keys.pq_public_address();
 
-            // Should be able to parse the address back
-            let parsed =
-                QuantumSafePublicAddress::from_address_string(&pq_addr).expect("should parse");
-            let reparsed = parsed.to_address_string();
-            assert_eq!(pq_addr, reparsed);
+            // The unified v2 address carries both PQ keys at their raw lengths.
+            assert_eq!(addr.kem_public_key().len(), ML_KEM_768_PUBLIC_KEY_LEN);
+            assert_eq!(addr.dsa_public_key().len(), ML_DSA_65_PUBLIC_KEY_LEN);
+            assert!(addr.has_pq_keys());
         }
     }
 }

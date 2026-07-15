@@ -8,12 +8,12 @@
 //!
 //! # Quantum-Safe Keys (Optional)
 //!
-//! When the `pq` feature is enabled, this crate also provides quantum-safe
-//! account key types that combine classical (Ristretto/Schnorr) keys with
-//! post-quantum (ML-KEM/ML-DSA) keys for protection against future quantum
-//! computers.
-//!
-//! See [`QuantumSafeAccountKey`] and [`QuantumSafePublicAddress`] for details.
+//! When the `pq` feature is enabled, this crate also provides a quantum-safe
+//! account key type ([`QuantumSafeAccountKey`]) that combines classical
+//! (Ristretto/Schnorr) keys with post-quantum (ML-KEM/ML-DSA) keys for
+//! protection against future quantum computers. The post-quantum public keys
+//! are folded directly into the canonical [`PublicAddress`] (address format
+//! v2, ADR 0008) rather than a separate address type.
 
 extern crate alloc;
 
@@ -30,6 +30,7 @@ pub use crate::{
     account_keys::{
         AccountKey, PublicAddress, ShortAddressHash, ViewAccountKey, CHANGE_SUBADDRESS_INDEX,
         DEFAULT_SUBADDRESS_INDEX, GIFT_CODE_SUBADDRESS_INDEX, INVALID_SUBADDRESS_INDEX,
+        ML_DSA_65_PUBLIC_KEY_LEN, ML_KEM_768_PUBLIC_KEY_LEN,
     },
     burn_address::{burn_address, burn_address_view_private, BURN_ADDRESS_VIEW_PRIVATE_BYTES},
     error::{Error, Result},
@@ -37,4 +38,4 @@ pub use crate::{
 };
 
 #[cfg(feature = "pq")]
-pub use crate::quantum_safe::{AddressParseError, QuantumSafeAccountKey, QuantumSafePublicAddress};
+pub use crate::quantum_safe::QuantumSafeAccountKey;
