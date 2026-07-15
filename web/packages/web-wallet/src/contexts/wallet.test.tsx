@@ -18,6 +18,17 @@ import { WalletProvider, useWallet } from './wallet'
 // happy path, which is itself mocked at ../lib/claim-link-ops, so it is never
 // actually invoked — it is stubbed purely to satisfy the import.
 vi.mock('@botho/wasm-signer', () => ({
+  deriveV2Address: vi.fn(async (mnemonic: string) => {
+    // Deterministic per-mnemonic stand-in for the wasm v2 deriver: base58-only
+    // body so `/^tbotho:\/\/2\/[A-Za-z1-9]+$/` matches and different
+    // mnemonics yield different addresses.
+    const b58 = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz123456789'
+    let acc = ''
+    for (let i = 0; i < mnemonic.length && acc.length < 40; i++) {
+      acc += b58[mnemonic.charCodeAt(i) % b58.length]
+    }
+    return 'tbotho://2/' + (acc || '11111')
+  }),
   // No owned outputs => zero spendable balance; the context falls back to the
   // mocked adapter balance, which is what the tests assert against.
   spendableBalance: vi.fn().mockResolvedValue(0n),
@@ -177,7 +188,7 @@ describe('WalletContext', () => {
       await waitFor(() => {
         expect(screen.getByTestId('hasWallet').textContent).toBe('yes')
         expect(screen.getByTestId('address').textContent).not.toBe('none')
-        expect(screen.getByTestId('address').textContent).toMatch(/^tbotho:\/\/1\//)
+        expect(screen.getByTestId('address').textContent).toMatch(/^tbotho:\/\/2\//)
       })
     })
 
@@ -218,7 +229,7 @@ describe('WalletContext', () => {
 
       await waitFor(() => {
         expect(screen.getByTestId('hasWallet').textContent).toBe('yes')
-        expect(screen.getByTestId('address').textContent).toMatch(/^tbotho:\/\/1\//)
+        expect(screen.getByTestId('address').textContent).toMatch(/^tbotho:\/\/2\//)
       })
     })
 
@@ -476,7 +487,7 @@ describe('Import Wallet Integration', () => {
 
     // Wallet should now exist
     expect(screen.getByTestId('hasWallet').textContent).toBe('yes')
-    expect(screen.getByTestId('address').textContent).toMatch(/^tbotho:\/\/1\/[A-Za-z1-9]+$/)
+    expect(screen.getByTestId('address').textContent).toMatch(/^tbotho:\/\/2\/[A-Za-z1-9]+$/)
 
     // Should be able to export it
     const exported = await walletRef!.exportWallet()

@@ -10,7 +10,20 @@ import {
   isWithinClaimLinkCap,
   assertClaimLinkAmountWithinCap,
 } from './claim-link'
-import { isValidMnemonic, deriveAddress, createMnemonic } from './index'
+import {
+  isValidMnemonic,
+  createMnemonic,
+  deriveDefaultSubaddressPublicKeys,
+  formatAddress,
+} from './index'
+
+// Local test helper: reproduce per-mnemonic address determinism WITHOUT wasm by
+// packing the real classical keys plus placeholder PQ bytes of the correct v2
+// lengths (real ML-KEM/ML-DSA derivation lives in @botho/wasm-signer).
+function deriveAddress(mnemonic: string): string {
+  const { viewPublic, spendPublic } = deriveDefaultSubaddressPublicKeys(mnemonic, 0)
+  return formatAddress(viewPublic, spendPublic, new Uint8Array(1184), new Uint8Array(1952), 'testnet')
+}
 
 describe('claim-link helpers', () => {
   describe('createClaimLinkMnemonic', () => {

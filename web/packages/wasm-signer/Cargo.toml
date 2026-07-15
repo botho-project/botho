@@ -22,6 +22,11 @@ bth-transaction-clsag = { path = "../../../transaction/clsag" }
 bth-account-keys = { path = "../../../account-keys" }
 bth-address-codec = { path = "../../../address-codec" }
 bth-crypto-keys = { path = "../../../crypto/keys" }
+# Post-quantum key derivation, identical to the node's. Used to derive the
+# ML-KEM-768 / ML-DSA-65 public keys of a wallet address from its BIP39 seed so
+# the browser emits address-format-v2 (`botho://2/…`) addresses byte-identical
+# to the node (issue #965).
+bth-crypto-pq = { path = "../../../crypto/pq" }
 # Key-image derivation, identical to the node's double-spend check. Used to
 # compute owned-output key images so the wallet can query spent status via the
 # node's `chain_areKeyImagesSpent` RPC and exclude spent outputs.
@@ -38,8 +43,17 @@ wasm-bindgen = "0.2"
 serde-wasm-bindgen = "0.6"
 
 # getrandom with the browser backend so OsRng works inside wasm.
+#
+# Three major versions are present: 0.2 (via the classical crypto stack) uses
+# the `js` feature; 0.3 (via rand 0.9) and 0.4 (via ml-dsa's digest stack, pulled
+# in by bth-crypto-pq for post-quantum key derivation) select their wasm backend
+# through the `getrandom_backend="wasm_js"` cfg set in the workspace
+# `.cargo/config.toml`, but that backend is only compiled when each crate's
+# `wasm_js` feature is on — enabled here via renamed direct deps.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
+getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
 rand = "0.8"

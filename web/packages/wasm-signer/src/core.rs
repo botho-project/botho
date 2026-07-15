@@ -123,6 +123,87 @@ pub fn decode_address_to_dto(s: &str) -> Result<DecodedV2Address, String> {
     })
 }
 
+/// A wallet's post-quantum public keys, derived from its BIP39 seed,
+/// hex-encoded for the JS boundary.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DerivedPqPublicKeys {
+    /// Hex-encoded raw ML-KEM-768 public key (1184 bytes).
+    pub kem_public_key: String,
+    /// Hex-encoded raw ML-DSA-65 public key (1952 bytes).
+    pub dsa_public_key: String,
+}
+
+/// Parse a hex-encoded 64-byte BIP39 seed.
+fn parse_bip39_seed(seed_hex: &str) -> Result<[u8; bth_crypto_pq::BIP39_SEED_SIZE], String> {
+    let bytes = hex::decode(seed_hex.trim()).map_err(|e| format!("invalid seed hex: {e}"))?;
+    if bytes.len() != bth_crypto_pq::BIP39_SEED_SIZE {
+        return Err(format!(
+            "BIP39 seed must be {} bytes, got {}",
+            bth_crypto_pq::BIP39_SEED_SIZE,
+            bytes.len()
+        ));
+    }
+    let mut out = [0u8; bth_crypto_pq::BIP39_SEED_SIZE];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
+/// Derive a wallet's account-wide post-quantum public keys from its 64-byte
+/// BIP39 seed, using the **node-identical** derivation
+/// ([`bth_crypto_pq::derive_pq_keys_from_seed`]).
+///
+/// The browser wallet computes the BIP39 seed from the mnemonic in JavaScript
+/// (`@scure/bip39`, empty passphrase) and calls this to obtain the raw
+/// ML-KEM-768 / ML-DSA-65 public keys that go into its address-format-v2
+/// address. Reusing the node's `derive_pq_keys_from_seed` guarantees the
+/// browser-emitted address carries the exact PQ keys the node would derive for
+/// the same seed, so an output built to the address is receivable.
+pub fn derive_pq_public_keys_from_seed(seed_hex: &str) -> Result<DerivedPqPublicKeys, String> {
+    let seed = parse_bip39_seed(seed_hex)?;
+    let pq = bth_crypto_pq::derive_pq_keys_from_seed(&seed);
+    Ok(DerivedPqPublicKeys {
+        kem_public_key: hex::encode(pq.kem_keypair.public_key().as_bytes()),
+        dsa_public_key: hex::encode(pq.sig_keypair.public_key().as_bytes()),
+    })
+}
+
+/// Derive a browser wallet's full address-format-v2 (`botho://2/…`) string from
+/// its BIP39 seed and its classical default-subaddress public keys.
+///
+/// This is the browser wallet's single entry point for producing its own
+/// shareable address. It mirrors the node's `WalletKeys::public_address_string`
+/// exactly:
+///
+///   1. the classical view/spend keys are the account's **default-subaddress**
+///      (index 0) Ristretto public keys — derived in TypeScript
+///      (`deriveDefaultSubaddressPublicKeys`, pinned byte-identical to the node
+///      by `derivation-parity.test.ts`) and passed in as hex;
+///   2. the ML-KEM-768 / ML-DSA-65 public keys are derived from the same BIP39
+///      seed via the node-identical
+///      [`bth_crypto_pq::derive_pq_keys_from_seed`];
+///   3. the whole [`PublicAddress`] is encoded through the shared
+///      [`bth_address_codec`] (ADR 0008 D5), so the string is byte-identical to
+///      the node / mobile / CLI encoders.
+///
+/// The result is a `botho://2/…` (or `tbotho://2/…`) address the node accepts
+/// and can receive to.
+pub fn derive_address_from_seed(
+    seed_hex: &str,
+    view_hex: &str,
+    spend_hex: &str,
+    testnet: bool,
+) -> Result<String, String> {
+    let pq = derive_pq_public_keys_from_seed(seed_hex)?;
+    encode_address_from_hex(
+        view_hex,
+        spend_hex,
+        &pq.kem_public_key,
+        &pq.dsa_public_key,
+        testnet,
+    )
+}
+
 /// Encode a v2 address string from hex components (the JS boundary form).
 ///
 /// `kem_hex` / `dsa_hex` must be the raw ML-KEM-768 (1184 B) / ML-DSA-65
@@ -908,6 +989,84 @@ mod tests {
             to_account_root.belongs_to(&recipient).is_none(),
             "account-root output must NOT be detectable (the original bug)"
         );
+    }
+
+    /// #965: the browser's v2 address derivation must be byte-identical to the
+    /// node's. This uses the canonical BIP39 test vector (the 12-word
+    /// "abandon…about" mnemonic → the well-known Trezor 64-byte seed) plus the
+    /// account's default-subaddress classical public keys (the exact bytes the
+    /// node derives for that mnemonic, pinned by the web wallet's
+    /// `derivation-parity.test.ts`), and asserts:
+    ///
+    ///   * the produced string is a `botho://2/…` / `tbotho://2/…` v2 address;
+    ///   * it decodes back through the shared codec to the same view/spend
+    ///     keys;
+    ///   * the embedded PQ keys equal `derive_pq_keys_from_seed(seed)`, i.e.
+    ///     the node's own derivation.
+    ///
+    /// The printed address is the golden vector the TS `deriveV2Address` test
+    /// asserts against, closing the loop web ⇄ node.
+    #[test]
+    fn v2_address_from_seed_matches_node_derivation() {
+        // Canonical BIP39 seed for
+        // "abandon abandon abandon abandon abandon abandon abandon abandon
+        //  abandon abandon abandon about" (empty passphrase).
+        let seed_hex = "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4";
+        // Default-subaddress (index 0) public keys the node derives for that
+        // mnemonic (see web/packages/core/src/wallet/derivation-parity.test.ts).
+        let view_hex = "60eeebc23d5d4fa3b90621292da88f39c6df05114bd405319cf9adc905905773";
+        let spend_hex = "8e2cf7239559d62c6ca0c0718eac345da1fa9348aa741a94d6489025a05a917c";
+
+        let addr_str = derive_address_from_seed(seed_hex, view_hex, spend_hex, true)
+            .expect("derive v2 address");
+        assert!(
+            addr_str.starts_with("tbotho://2/"),
+            "expected a testnet v2 address, got: {addr_str}"
+        );
+        println!("GOLDEN tbotho v2 address (abandon…about): {addr_str}");
+
+        // Decodes back to the same classical keys via the shared codec.
+        let decoded = decode_address_string(&addr_str).expect("decode produced address");
+        assert_eq!(hex::encode(decoded.view_public_key().to_bytes()), view_hex);
+        assert_eq!(
+            hex::encode(decoded.spend_public_key().to_bytes()),
+            spend_hex
+        );
+
+        // The embedded PQ keys are exactly the node's seed derivation.
+        let mut seed = [0u8; bth_crypto_pq::BIP39_SEED_SIZE];
+        hex::decode_to_slice(seed_hex, &mut seed).unwrap();
+        let pq = bth_crypto_pq::derive_pq_keys_from_seed(&seed);
+        assert_eq!(
+            decoded.kem_public_key(),
+            pq.kem_keypair.public_key().as_bytes()
+        );
+        assert_eq!(
+            decoded.dsa_public_key(),
+            pq.sig_keypair.public_key().as_bytes()
+        );
+
+        // Mainnet uses the same body under a different prefix.
+        let main = derive_address_from_seed(seed_hex, view_hex, spend_hex, false).unwrap();
+        assert!(main.starts_with("botho://2/"));
+        assert_eq!(
+            main.strip_prefix("botho://2/").unwrap(),
+            addr_str.strip_prefix("tbotho://2/").unwrap()
+        );
+    }
+
+    #[test]
+    fn derive_pq_public_keys_from_seed_has_correct_lengths() {
+        let seed_hex = "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4";
+        let pq = derive_pq_public_keys_from_seed(seed_hex).expect("derive pq");
+        // ML-KEM-768 public key = 1184 bytes (2368 hex chars); ML-DSA-65 = 1952
+        // bytes (3904 hex chars).
+        assert_eq!(pq.kem_public_key.len(), 1184 * 2);
+        assert_eq!(pq.dsa_public_key.len(), 1952 * 2);
+        // Deterministic.
+        let pq2 = derive_pq_public_keys_from_seed(seed_hex).unwrap();
+        assert_eq!(pq.kem_public_key, pq2.kem_public_key);
+        assert_eq!(pq.dsa_public_key, pq2.dsa_public_key);
     }
 
     #[test]

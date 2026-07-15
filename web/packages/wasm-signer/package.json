@@ -17,8 +17,11 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
-  "devDependencies": {
+  "dependencies": {
     "@botho/core": "workspace:*",
+    "@scure/bip39": "^2.0.1"
+  },
+  "devDependencies": {
     "@types/node": "^22.10.0",
     "typescript": "~5.9.3",
     "vitest": "^4.0.16"

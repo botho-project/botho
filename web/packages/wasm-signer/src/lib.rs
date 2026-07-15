@@ -37,8 +37,8 @@ pub mod core;
 mod wasm {
     use crate::core::{
         build_and_sign_inner, compute_owned_output_key_images_inner, decode_address_to_dto,
-        encode_address_from_hex, scan_owned_outputs_inner, KeyImageRequest, ScanRequest,
-        SignRequest,
+        derive_address_from_seed, derive_pq_public_keys_from_seed, encode_address_from_hex,
+        scan_owned_outputs_inner, KeyImageRequest, ScanRequest, SignRequest,
     };
     use wasm_bindgen::prelude::*;
 
@@ -119,6 +119,40 @@ mod wasm {
         testnet: bool,
     ) -> Result<String, JsError> {
         encode_address_from_hex(view_hex, spend_hex, kem_hex, dsa_hex, testnet)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// Derive a wallet's account-wide post-quantum public keys from its 64-byte
+    /// BIP39 seed (hex), using the node-identical
+    /// `bth_crypto_pq::derive_pq_keys_from_seed`. Returns
+    /// `{ kemPublicKey, dsaPublicKey }` (hex). Throws on a malformed seed.
+    ///
+    /// The browser wallet computes the BIP39 seed from its mnemonic in JS and
+    /// calls this so the ML-KEM-768 / ML-DSA-65 keys in its v2 address are
+    /// byte-identical to what the node derives for the same seed.
+    #[wasm_bindgen(js_name = derivePqPublicKeysFromSeed)]
+    pub fn derive_pq_public_keys_from_seed_wasm(seed_hex: &str) -> Result<JsValue, JsError> {
+        let keys = derive_pq_public_keys_from_seed(seed_hex).map_err(|e| JsError::new(&e))?;
+        serde_wasm_bindgen::to_value(&keys)
+            .map_err(|e| JsError::new(&format!("failed to serialize pq keys: {e}")))
+    }
+
+    /// Derive a browser wallet's full v2 address string (`botho://2/…` /
+    /// `tbotho://2/…`) from its BIP39 seed (hex) and its classical
+    /// default-subaddress view/spend public keys (hex).
+    ///
+    /// Combines the node-identical PQ derivation (from the seed) with the
+    /// shared address codec, mirroring the node's
+    /// `WalletKeys::public_address_string`, so a browser-generated address
+    /// is accepted and receivable by the node.
+    #[wasm_bindgen(js_name = deriveAddressFromSeed)]
+    pub fn derive_address_from_seed_wasm(
+        seed_hex: &str,
+        view_hex: &str,
+        spend_hex: &str,
+        testnet: bool,
+    ) -> Result<String, JsError> {
+        derive_address_from_seed(seed_hex, view_hex, spend_hex, testnet)
             .map_err(|e| JsError::new(&e))
     }
 

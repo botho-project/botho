@@ -4,16 +4,23 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import type { Balance } from '@botho/core'
-import { deriveAddress } from '@botho/core'
+import { deriveDefaultSubaddressPublicKeys, formatAddress } from '@botho/core'
 import { SendModal } from './send-modal'
 
-// A couple of real, valid testnet addresses derived from fixed mnemonics. Using
-// the real deriver keeps the test honest about what the production validator
-// (`@botho/core`'s isValidAddress) accepts.
-const VALID_ADDRESS = deriveAddress(
+// A couple of real, valid testnet v2 addresses derived from fixed mnemonics.
+// Using the real classical deriver + shared v2 codec keeps the test honest about
+// what the production validator (`@botho/core`'s isValidAddress) accepts. The
+// post-quantum bytes are deterministic placeholders of the correct v2 lengths
+// (the real ML-KEM/ML-DSA derivation lives in @botho/wasm-signer, which needs
+// wasm); `isValidAddress` only length-checks those fields.
+function testAddress(mnemonic: string): string {
+  const { viewPublic, spendPublic } = deriveDefaultSubaddressPublicKeys(mnemonic, 0)
+  return formatAddress(viewPublic, spendPublic, new Uint8Array(1184), new Uint8Array(1952), 'testnet')
+}
+const VALID_ADDRESS = testAddress(
   'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
 )
-const OTHER_ADDRESS = deriveAddress(
+const OTHER_ADDRESS = testAddress(
   'legal winner thank year wave sausage worth useful legal winner thank yellow',
 )
 

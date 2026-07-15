@@ -16,6 +16,15 @@ rustflags = ["-C", "target-cpu=skylake", '--cfg=curve25519_dalek_backend="simd"'
 [target.x86_64-apple-darwin]
 rustflags = ["-C", "target-cpu=skylake", '--cfg=curve25519_dalek_backend="simd"']
 
+# WebAssembly (browser) build for the wallet's `bth-wasm-signer` crate. The
+# post-quantum key derivation (bth-crypto-pq → ml-kem / ml-dsa → rand 0.9 /
+# digest) pulls getrandom 0.3/0.4, whose wasm32-unknown-unknown backend is
+# selected by this cfg (paired with each getrandom's `wasm_js` feature, enabled
+# in the wasm-signer's Cargo.toml). Without it getrandom fails to compile for
+# wasm. getrandom 0.2 (also present) uses its own `js` feature and ignores this.
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg=getrandom_backend="wasm_js"']
+
 [cargo-new]
 name = "Botho"
 email = ""

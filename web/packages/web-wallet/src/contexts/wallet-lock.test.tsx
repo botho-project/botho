@@ -17,6 +17,17 @@ import { WalletProvider, useWallet } from './wallet'
 // Stub the wasm signer so the module import is hermetic (no wasm artifact on a
 // fresh checkout). None of these tests exercise real signing/scanning.
 vi.mock('@botho/wasm-signer', () => ({
+  deriveV2Address: vi.fn(async (mnemonic: string) => {
+    // Deterministic per-mnemonic stand-in for the wasm v2 deriver: base58-only
+    // body so `/^tbotho:\/\/2\/[A-Za-z1-9]+$/` matches and different
+    // mnemonics yield different addresses.
+    const b58 = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz123456789'
+    let acc = ''
+    for (let i = 0; i < mnemonic.length && acc.length < 40; i++) {
+      acc += b58[mnemonic.charCodeAt(i) % b58.length]
+    }
+    return 'tbotho://2/' + (acc || '11111')
+  }),
   spendableBalance: vi.fn().mockResolvedValue(0n),
   buildOwnedHistory: vi.fn().mockResolvedValue([]),
   buildSendTransaction: vi.fn().mockResolvedValue({ txHex: '0xstub' }),

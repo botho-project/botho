@@ -9,10 +9,10 @@ import {
   createMnemonic12,
   getWalletInfo,
   saveWallet,
-  deriveAddress,
   shortenAddress,
   type ClaimLinkSecret,
 } from '@botho/core'
+import { deriveV2Address } from '@botho/wasm-signer'
 import {
   Gift,
   AlertCircle,
@@ -175,11 +175,14 @@ export function ClaimPage() {
     return unsub
   }, [state, adapter, runScan])
 
-  const handleCreateWallet = () => {
+  const handleCreateWallet = async () => {
     const m = createMnemonic12()
     setCreatedMnemonic(m)
-    setDestination(deriveAddress(m))
+    // Reveal the new-wallet UI synchronously so the password fields appear
+    // immediately; the destination address is a v2 address whose post-quantum
+    // keys are derived (node-identically) in wasm, so it fills a tick later.
     setShowNewWallet(true)
+    setDestination(await deriveV2Address(m))
   }
 
   const handleSweep = async () => {
@@ -205,7 +208,7 @@ export function ClaimPage() {
       // use it afterwards in this browser — encrypted under their password
       // (#672/#475; saveWallet with a password writes a vault blob).
       if (createdMnemonic && showNewWallet) {
-        await saveWallet(createdMnemonic, newWalletPassword)
+        await saveWallet(createdMnemonic, newWalletPassword, await deriveV2Address(createdMnemonic))
       }
       const { txHash } = await sweepEphemeral(adapter, secret.mnemonic, dest)
       setClaimTxHash(txHash)

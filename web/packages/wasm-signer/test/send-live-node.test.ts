@@ -38,9 +38,10 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { deriveKeypairs, deriveAddress, parseAddress } from '@botho/core'
+import { deriveKeypairs, parseAddress } from '@botho/core'
 import {
   buildSendTransaction,
+  deriveV2Address,
   setSigner,
   resetSigner,
   type ChainOutput,
@@ -191,7 +192,7 @@ maybe('node-backed: web-wallet -> tx -> ledger', () => {
 
     // The recipient address is encoded from the recipient mnemonic's default
     // subaddress keys (#383), exactly as the wallet UI does it.
-    const recipientAddress = deriveAddress(recipientMnemonic, 'testnet')
+    const recipientAddress = await deriveV2Address(recipientMnemonic, 'testnet')
     const recipientParsed = parseAddress(recipientAddress)
     const recipient = {
       spend_public_key: toHex(recipientParsed.spendPublic),

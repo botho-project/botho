@@ -141,6 +141,28 @@ export interface OwnedOutputKeyImage {
   keyImage: string
 }
 
+/** A v2 address decoded into its raw hex components (from `decodeAddress`). */
+export interface DecodedV2Address {
+  /** `"mainnet"` or `"testnet"`. */
+  network: string
+  /** Hex-encoded 32-byte view public key. */
+  viewPublicKey: string
+  /** Hex-encoded 32-byte spend public key. */
+  spendPublicKey: string
+  /** Hex-encoded raw ML-KEM-768 public key (1184 bytes). */
+  kemPublicKey: string
+  /** Hex-encoded raw ML-DSA-65 public key (1952 bytes). */
+  dsaPublicKey: string
+}
+
+/** A wallet's post-quantum public keys, derived from its BIP39 seed (hex). */
+export interface DerivedPqPublicKeys {
+  /** Hex-encoded raw ML-KEM-768 public key (1184 bytes). */
+  kemPublicKey: string
+  /** Hex-encoded raw ML-DSA-65 public key (1952 bytes). */
+  dsaPublicKey: string
+}
+
 /** The wasm module's exported surface. */
 export interface WasmSigner {
   /**
@@ -162,6 +184,51 @@ export interface WasmSigner {
    * balance and spendable selection. The keys never leave the client.
    */
   computeOwnedOutputKeyImages(request: KeyImageRequest): OwnedOutputKeyImage[]
+  /**
+   * Derive the account's post-quantum public keys from its 64-byte BIP39 seed
+   * (hex), using the node-identical `derive_pq_keys_from_seed`. Returns the raw
+   * ML-KEM-768 / ML-DSA-65 public keys (hex). Throws on a malformed seed.
+   *
+   * Optional in the type only so lightweight test fakes (which stub just the
+   * transaction methods) still satisfy `WasmSigner`; the real wasm module
+   * loaded by {@link loadSigner} always provides it.
+   */
+  derivePqPublicKeysFromSeed?(seedHex: string): DerivedPqPublicKeys
+  /**
+   * Derive the wallet's full v2 address string (`botho://2/…` / `tbotho://2/…`)
+   * from its 64-byte BIP39 seed (hex) and its classical default-subaddress
+   * view/spend public keys (hex). Combines the node-identical PQ derivation with
+   * the shared address codec so the string is byte-identical to the node.
+   *
+   * Optional in the type only (see {@link derivePqPublicKeysFromSeed}).
+   */
+  deriveAddressFromSeed?(
+    seedHex: string,
+    viewHex: string,
+    spendHex: string,
+    testnet: boolean,
+  ): string
+  /**
+   * Encode a v2 address string from hex key components via the shared codec
+   * (`view`, `spend`, raw `kem`, raw `dsa`). Routes through the same Rust the
+   * node uses, so it cannot drift from the node/mobile/CLI encoders.
+   *
+   * Optional in the type only (see {@link derivePqPublicKeysFromSeed}).
+   */
+  encodeAddress?(
+    viewHex: string,
+    spendHex: string,
+    kemHex: string,
+    dsaHex: string,
+    testnet: boolean,
+  ): string
+  /**
+   * Decode a `botho://2/…` / `tbotho://2/…` address string into its hex
+   * components via the shared codec. Rejects retired v1 / quantum prefixes.
+   *
+   * Optional in the type only (see {@link derivePqPublicKeysFromSeed}).
+   */
+  decodeAddress?(address: string): DecodedV2Address
   /** The CLSAG ring size the network requires (decoys + 1 real input). */
   ringSize(): number
   /** The minimum transaction fee in picocredits. */
@@ -184,6 +251,21 @@ export async function loadSigner(): Promise<WasmSigner> {
       buildAndSign: (request: unknown) => string
       scanOwnedOutputs: (request: unknown) => unknown
       computeOwnedOutputKeyImages: (request: unknown) => unknown
+      derivePqPublicKeysFromSeed: (seedHex: string) => unknown
+      deriveAddressFromSeed: (
+        seedHex: string,
+        viewHex: string,
+        spendHex: string,
+        testnet: boolean,
+      ) => string
+      encodeAddress: (
+        viewHex: string,
+        spendHex: string,
+        kemHex: string,
+        dsaHex: string,
+        testnet: boolean,
+      ) => string
+      decodeAddress: (address: string) => unknown
       ringSize: () => number
       minFee: () => bigint
     }
@@ -208,6 +290,22 @@ export async function loadSigner(): Promise<WasmSigner> {
         mod.scanOwnedOutputs(request) as OwnedOutput[],
       computeOwnedOutputKeyImages: (request: KeyImageRequest) =>
         mod.computeOwnedOutputKeyImages(request) as OwnedOutputKeyImage[],
+      derivePqPublicKeysFromSeed: (seedHex: string) =>
+        mod.derivePqPublicKeysFromSeed(seedHex) as DerivedPqPublicKeys,
+      deriveAddressFromSeed: (
+        seedHex: string,
+        viewHex: string,
+        spendHex: string,
+        testnet: boolean,
+      ) => mod.deriveAddressFromSeed(seedHex, viewHex, spendHex, testnet),
+      encodeAddress: (
+        viewHex: string,
+        spendHex: string,
+        kemHex: string,
+        dsaHex: string,
+        testnet: boolean,
+      ) => mod.encodeAddress(viewHex, spendHex, kemHex, dsaHex, testnet),
+      decodeAddress: (address: string) => mod.decodeAddress(address) as DecodedV2Address,
       ringSize: () => mod.ringSize(),
       minFee: () => mod.minFee(),
     }
@@ -234,6 +332,8 @@ export function resetSigner(): void {
 export function setSigner(signer: WasmSigner): void {
   cached = Promise.resolve(signer)
 }
+
+export { deriveV2Address, decodeV2Address } from './address'
 
 export {
   buildSendTransaction,

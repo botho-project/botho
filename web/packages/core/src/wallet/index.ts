@@ -1,8 +1,8 @@
 import { generateMnemonic, validateMnemonic } from '@scure/bip39'
 import { wordlist } from '@scure/bip39/wordlists/english.js'
 import {
-  deriveAddressFromMnemonic,
   deriveKeypairs,
+  deriveDefaultSubaddressPublicKeys,
   formatAddress,
   parseAddress,
   isValidAddress,
@@ -27,8 +27,8 @@ export {
 
 // Re-export address utilities
 export {
-  deriveAddressFromMnemonic,
   deriveKeypairs,
+  deriveDefaultSubaddressPublicKeys,
   formatAddress,
   parseAddress,
   isValidAddress,
@@ -121,23 +121,6 @@ export function isValidMnemonic(mnemonic: string): boolean {
   return validateMnemonic(mnemonic, wordlist)
 }
 
-/**
- * Derive a wallet address from a mnemonic
- *
- * Uses proper Botho address derivation:
- * 1. Mnemonic → BIP39 seed (64 bytes, empty passphrase)
- * 2. Seed → SLIP-10 Ed25519 derivation at m/44'/866'/0'
- * 3. SLIP-10 key → HKDF-SHA512 → view and spend Ristretto255 keys
- * 4. Public keys → base58 encoding → tbotho://1/<base58>
- */
-export function deriveAddress(mnemonic: string, network: 'mainnet' | 'testnet' = 'testnet'): string {
-  if (!isValidMnemonic(mnemonic)) {
-    throw new Error('Invalid mnemonic')
-  }
-
-  return deriveAddressFromMnemonic(mnemonic, network)
-}
-
 const STORAGE_KEY_MNEMONIC = 'botho-wallet-mnemonic'
 const STORAGE_KEY_ADDRESS = 'botho-wallet-address'
 const STORAGE_KEY_ENCRYPTED = 'botho-wallet-encrypted'
@@ -184,10 +167,19 @@ export function passwordStrength(password: string): PasswordStrength {
  * PBKDF2-SHA256 @ 600k). Passing no password is an explicit plaintext opt-out
  * (the UI strongly discourages it); it is preserved only for backward
  * compatibility and migration.
+ *
+ * `address` is the wallet's v2 (`botho://2/…`) address. It is supplied by the
+ * caller rather than derived here because a v2 address requires the account's
+ * post-quantum keys, which are derived in `@botho/wasm-signer` (see
+ * `deriveV2Address`) — JavaScript never re-implements ML-KEM/ML-DSA keygen. When
+ * omitted (e.g. a password change that only re-encrypts the seed) the previously
+ * stored address is preserved.
  */
-export async function saveWallet(mnemonic: string, password?: string): Promise<void> {
-  const address = deriveAddress(mnemonic)
-
+export async function saveWallet(
+  mnemonic: string,
+  password?: string,
+  address?: string,
+): Promise<void> {
   if (password) {
     if (password.length < MIN_PASSWORD_LENGTH) {
       throw new Error(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`)
@@ -200,7 +192,11 @@ export async function saveWallet(mnemonic: string, password?: string): Promise<v
     localStorage.setItem(STORAGE_KEY_ENCRYPTED, 'false')
   }
 
-  localStorage.setItem(STORAGE_KEY_ADDRESS, address)
+  // Only (re)write the stored address when the caller supplies one. A
+  // password-change re-save omits it, preserving the existing v2 address.
+  if (address !== undefined) {
+    localStorage.setItem(STORAGE_KEY_ADDRESS, address)
+  }
 }
 
 /**
