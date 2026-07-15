@@ -6,6 +6,7 @@ use bth_cluster_tax::{
     ClusterId as TaxClusterId,
 };
 use bth_core::slip10::Slip10KeyGenerator;
+use bth_crypto_keys::RistrettoPrivate;
 use bth_transaction_types::{ClusterTagVector, TAG_WEIGHT_SCALE};
 use rand::{rngs::OsRng, seq::SliceRandom};
 use std::collections::HashMap;
@@ -355,6 +356,58 @@ impl Wallet {
         &self.pq_account_key
     }
 
+    /// Detect whether `output` belongs to this wallet on the unified hybrid
+    /// scan path (issue #970).
+    ///
+    /// With the `pq` feature (the node default) this decapsulates the output's
+    /// ML-KEM ciphertext with the wallet's derived ML-KEM secret and folds it
+    /// into the classical DH stealth check ([`TxOutput::belongs_to_account`]).
+    /// KEM-less (classical/legacy) outputs fall through to the classical check
+    /// on the same path. `output_index` is the output's position within its
+    /// transaction and is bound into the hybrid one-time key.
+    ///
+    /// Returns `Some(subaddress_index)` on a match.
+    pub fn scan_output(&self, output: &TxOutput, output_index: u32) -> Option<u64> {
+        #[cfg(feature = "pq")]
+        {
+            output.belongs_to_account(
+                &self.account_key,
+                self.pq_account_key.pq_kem_keypair(),
+                output_index,
+            )
+        }
+        #[cfg(not(feature = "pq"))]
+        {
+            let _ = output_index;
+            output.belongs_to(&self.account_key)
+        }
+    }
+
+    /// Recover the one-time private key needed to spend `output`, matching
+    /// [`Wallet::scan_output`]. Call only after `scan_output` returns
+    /// `Some(subaddress_index)`.
+    pub fn recover_output_spend_key(
+        &self,
+        output: &TxOutput,
+        subaddress_index: u64,
+        output_index: u32,
+    ) -> Option<RistrettoPrivate> {
+        #[cfg(feature = "pq")]
+        {
+            output.recover_spend_key_for(
+                &self.account_key,
+                self.pq_account_key.pq_kem_keypair(),
+                subaddress_index,
+                output_index,
+            )
+        }
+        #[cfg(not(feature = "pq"))]
+        {
+            let _ = output_index;
+            output.recover_spend_key(&self.account_key, subaddress_index)
+        }
+    }
+
     /// Sign all inputs of a transaction using stealth address keys
     ///
     /// With stealth addresses, each UTXO has a unique one-time key. This
@@ -484,17 +537,22 @@ impl Wallet {
         let mut ring_inputs = Vec::with_capacity(utxos_to_spend.len());
 
         for utxo in utxos_to_spend {
-            // Verify ownership and recover one-time private key
-            let subaddress_index = utxo.output.belongs_to(&self.account_key).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "UTXO does not belong to this wallet: {}",
-                    hex::encode(&utxo.id.tx_hash[0..8])
-                )
-            })?;
+            // Verify ownership and recover the one-time private key on the
+            // unified hybrid scan/spend path (issue #970). Hybrid UTXOs bind the
+            // output's position within its creating transaction into the
+            // one-time key, so scan and recover with `utxo.id.output_index`.
+            let output_index = utxo.id.output_index;
+            let subaddress_index = self
+                .scan_output(&utxo.output, output_index)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "UTXO does not belong to this wallet: {}",
+                        hex::encode(&utxo.id.tx_hash[0..8])
+                    )
+                })?;
 
-            let onetime_private = utxo
-                .output
-                .recover_spend_key(&self.account_key, subaddress_index)
+            let onetime_private = self
+                .recover_output_spend_key(&utxo.output, subaddress_index, output_index)
                 .ok_or_else(|| {
                     anyhow::anyhow!(
                         "Failed to recover spend key for UTXO {}",

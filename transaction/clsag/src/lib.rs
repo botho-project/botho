@@ -784,6 +784,52 @@ impl TxOutput {
         ))
     }
 
+    /// Unified ownership check across the single hybrid scan path (issue #970).
+    ///
+    /// Under protocol 6.0.0 every producer emits hybrid outputs, so this is the
+    /// one detector the live scan/spend paths call. It dispatches on the
+    /// presence of an ML-KEM ciphertext:
+    ///
+    /// * ciphertext present → [`TxOutput::belongs_to_hybrid`] (classical DH ⊕
+    ///   ML-KEM decapsulation), the universal 6.0.0 case.
+    /// * ciphertext absent  → classical [`TxOutput::belongs_to`], preserving
+    ///   back-compat for any legacy/`--no-default-features` classical output.
+    ///
+    /// Returns `Some(subaddress_index)` on a match. `output_index` is only
+    /// consulted on the hybrid branch (it is bound into the one-time key).
+    pub fn belongs_to_account(
+        &self,
+        account: &AccountKey,
+        kem_keypair: &MlKem768KeyPair,
+        output_index: u32,
+    ) -> Option<u64> {
+        if self.kem_ciphertext.is_some() {
+            self.belongs_to_hybrid(account, kem_keypair, output_index)
+        } else {
+            self.belongs_to(account)
+        }
+    }
+
+    /// Unified one-time-key recovery matching [`TxOutput::belongs_to_account`].
+    ///
+    /// Dispatches to [`TxOutput::recover_spend_key_hybrid`] when the output
+    /// carries an ML-KEM ciphertext, else the classical
+    /// [`TxOutput::recover_spend_key`]. Call only after `belongs_to_account`
+    /// returns `Some(subaddress_index)`.
+    pub fn recover_spend_key_for(
+        &self,
+        account: &AccountKey,
+        kem_keypair: &MlKem768KeyPair,
+        subaddress_index: u64,
+        output_index: u32,
+    ) -> Option<RistrettoPrivate> {
+        if self.kem_ciphertext.is_some() {
+            self.recover_spend_key_hybrid(account, kem_keypair, subaddress_index, output_index)
+        } else {
+            self.recover_spend_key(account, subaddress_index)
+        }
+    }
+
     /// Build a hybrid post-quantum stealth output addressed to `recipient`,
     /// reading the ML-KEM-768 public key published in the recipient's address.
     ///

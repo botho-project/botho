@@ -1523,12 +1523,17 @@ impl Ledger {
         Ok(utxos.iter().map(|u| u.output.amount).sum())
     }
 
-    /// Scan all UTXOs and return those belonging to the given account key.
+    /// Scan all UTXOs and return candidate outputs for the given account key.
     ///
-    /// This performs stealth address detection by checking each output's
-    /// target_key against the account's view key. This is necessary because
-    /// stealth outputs use one-time addresses that can only be identified
-    /// by the recipient.
+    /// This is a fast pre-filter: it returns every UTXO whose classical view-key
+    /// stealth check matches, plus every hybrid UTXO (one carrying an ML-KEM
+    /// ciphertext). Hybrid outputs cannot be confirmed with the view key alone —
+    /// ownership additionally requires ML-KEM decapsulation with the wallet's
+    /// KEM secret (issue #970) — so they are returned as candidates for the
+    /// caller to verify via [`crate::wallet::Wallet::scan_output`]. Over-
+    /// including hybrid candidates here (rather than silently dropping them) is
+    /// what keeps the live scan path from missing hybrid funds; every caller
+    /// re-verifies ownership before use.
     pub fn scan_utxos_for_account(
         &self,
         account_key: &AccountKey,
@@ -1549,8 +1554,13 @@ impl Ledger {
         for result in iter {
             if let Ok((_, value)) = result {
                 if let Ok(utxo) = bincode::deserialize::<Utxo>(value) {
-                    // Check if this output belongs to us using stealth detection
-                    if utxo.output.belongs_to(account_key).is_some() {
+                    // Classical view-key match, OR a hybrid output (KEM
+                    // ciphertext present) that only the caller — holding the
+                    // ML-KEM secret — can confirm. Include both so hybrid funds
+                    // are never silently missed; callers re-verify ownership.
+                    let is_candidate = utxo.output.belongs_to(account_key).is_some()
+                        || utxo.output.kem_ciphertext.is_some();
+                    if is_candidate {
                         owned_utxos.push(utxo);
                     }
                 }

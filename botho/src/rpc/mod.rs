@@ -94,6 +94,7 @@ use crate::{
     ledger::Ledger,
     mempool::Mempool,
     network::{NetworkStats, SyncStatusSnapshot},
+    block::MINTING_OUTPUT_INDEX,
     node::MinterHealth,
     transaction::{TxOutput, MIN_TX_FEE},
     wallet::Wallet,
@@ -1694,6 +1695,10 @@ async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> Json
                 "publicKey": hex::encode(coinbase.public_key),
                 "amountCommitment": hex::encode(coinbase.amount.to_le_bytes()),
                 "clusterTags": coinbase_tags,
+                // Unified ML-KEM ciphertext field (issue #970): hex, or null for
+                // a classical/legacy KEM-less output. Thin wallets need it to
+                // decapsulate and detect hybrid outputs on the single scan path.
+                "kemCiphertext": coinbase.kem_ciphertext.as_ref().map(hex::encode),
                 "coinbase": true,
             }));
 
@@ -1725,6 +1730,8 @@ async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> Json
                         "amountCommitment": hex::encode(output.amount.to_le_bytes()),
                         "clusterTags": cluster_tags,
                         "eMemo": e_memo,
+                        // Unified ML-KEM ciphertext (issue #970): hex or null.
+                        "kemCiphertext": output.kem_ciphertext.as_ref().map(hex::encode),
                     }));
                 }
             }
@@ -1749,6 +1756,8 @@ async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> Json
                     "publicKey": hex::encode(lottery_output.public_key),
                     "amountCommitment": hex::encode(lottery_output.payout.to_le_bytes()),
                     "clusterTags": Vec::<[u64; 2]>::new(),
+                    // Unified ML-KEM ciphertext (issue #970): hex or null.
+                    "kemCiphertext": lottery_output.kem_ciphertext.as_ref().map(hex::encode),
                     "lottery": true,
                 }));
             }
@@ -1904,12 +1913,11 @@ async fn handle_wallet_balance(id: Value, state: &RpcState) -> JsonRpcResponse {
     let mut utxo_count = 0;
 
     for utxo in &all_utxos {
-        // Check if this output belongs to us and get subaddress index
-        if let Some(subaddress_index) = utxo.output.belongs_to(wallet.account_key()) {
+        // Unified hybrid scan path (issue #970): decapsulate + view-key check.
+        if let Some(subaddress_index) = wallet.scan_output(&utxo.output, utxo.id.output_index) {
             // Recover the one-time private key to compute key image
-            if let Some(onetime_private) = utxo
-                .output
-                .recover_spend_key(wallet.account_key(), subaddress_index)
+            if let Some(onetime_private) =
+                wallet.recover_output_spend_key(&utxo.output, subaddress_index, utxo.id.output_index)
             {
                 let key_image = bth_crypto_ring_signature::KeyImage::from(&onetime_private);
                 let key_image_bytes = key_image.as_bytes();
@@ -3547,12 +3555,11 @@ async fn handle_faucet_request(
     let mut utxos = Vec::new();
     info!("Faucet: scanning {} UTXOs from ledger", all_utxos.len());
     for (idx, utxo) in all_utxos.iter().enumerate() {
-        // Check if this output belongs to us and get subaddress index
-        if let Some(subaddress_index) = utxo.output.belongs_to(wallet.account_key()) {
+        // Unified hybrid scan path (issue #970): decapsulate + view-key check.
+        if let Some(subaddress_index) = wallet.scan_output(&utxo.output, utxo.id.output_index) {
             // Recover the one-time private key
-            if let Some(onetime_private) = utxo
-                .output
-                .recover_spend_key(wallet.account_key(), subaddress_index)
+            if let Some(onetime_private) =
+                wallet.recover_output_spend_key(&utxo.output, subaddress_index, utxo.id.output_index)
             {
                 // Compute the key image
                 let key_image = bth_crypto_ring_signature::KeyImage::from(&onetime_private);
@@ -3839,12 +3846,16 @@ fn calculate_dispensed_from_blockchain(
                 Err(_) => continue,
             };
 
-            // Check minting tx output (mining rewards to faucet)
+            // Check minting tx output (mining rewards to faucet). The coinbase
+            // reward always sits at MINTING_OUTPUT_INDEX; the unified hybrid
+            // scan path (issue #970) decapsulates its ML-KEM ciphertext.
             let minting_output = block.minting_tx.to_tx_output();
-            if let Some(subaddr_idx) = minting_output.belongs_to(wallet.account_key()) {
-                if let Some(onetime_key) =
-                    minting_output.recover_spend_key(wallet.account_key(), subaddr_idx)
-                {
+            if let Some(subaddr_idx) = wallet.scan_output(&minting_output, MINTING_OUTPUT_INDEX) {
+                if let Some(onetime_key) = wallet.recover_output_spend_key(
+                    &minting_output,
+                    subaddr_idx,
+                    MINTING_OUTPUT_INDEX,
+                ) {
                     let key_image = bth_crypto_ring_signature::KeyImage::from(&onetime_key);
                     cache.key_images.insert(*key_image.as_bytes());
                 }
@@ -3852,10 +3863,11 @@ fn calculate_dispensed_from_blockchain(
 
             // Check regular tx outputs (change back to faucet, or incoming transfers)
             for tx in &block.transactions {
-                for output in tx.outputs.iter() {
-                    if let Some(subaddr_idx) = output.belongs_to(wallet.account_key()) {
+                for (idx, output) in tx.outputs.iter().enumerate() {
+                    let output_index = idx as u32;
+                    if let Some(subaddr_idx) = wallet.scan_output(output, output_index) {
                         if let Some(onetime_key) =
-                            output.recover_spend_key(wallet.account_key(), subaddr_idx)
+                            wallet.recover_output_spend_key(output, subaddr_idx, output_index)
                         {
                             let key_image = bth_crypto_ring_signature::KeyImage::from(&onetime_key);
                             cache.key_images.insert(*key_image.as_bytes());
