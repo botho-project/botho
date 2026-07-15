@@ -79,6 +79,13 @@ stateDiagram-v2
 - `ReleasePending` - BTH release transaction submitted
 - `Released` - BTH sent and confirmed
 
+> **Unwrap does not mint a plain background coin.** The released BTH is **not** a
+> plain factor-1 background output. Per [ADR 0007](../decisions/0007-bridge-import-cluster-tagging.md)
+> and whitepaper §11, the release is tagged 100% to a **block-epoch import
+> cluster** `c_import(m) = H("bridge-import" ‖ ⌊h/K⌋)` at an elevated factor
+> `≥ F`, with **`K = 17,280` blocks (1 day)** and floor **`F = 1.5×`**. See
+> [Import Cluster Tagging](#import-cluster-tagging-adr-0007) below.
+
 ### Error States
 
 - `Failed` - Order failed with error message (manual intervention needed)
@@ -212,6 +219,50 @@ net_amount = amount - fee
 **Global Limits:**
 - Maximum 10,000,000 BTH total per 24 hours
 - Protects against coordinated attacks or exploits
+
+## Import Cluster Tagging (ADR 0007)
+
+Botho prices **coin lineage**: the wealth traceable to a coin's cluster origin
+maps onto a demurrage / fee / lottery multiplier (1×–6×). Wrapping and unwrapping
+would otherwise bypass this mechanism, so the release path applies **import
+cluster tagging** ([ADR 0007](../decisions/0007-bridge-import-cluster-tagging.md);
+normative in whitepaper §11). It is **live as of protocol 5.0.0** (#942).
+
+**What it fixes.** If unwrapped BTH returned at plain factor-1 (background), two
+leaks would follow:
+
+1. **The entry leak** — external wealth of any size could buy wBTH on a DEX and
+   unwrap at factor-1, paying no lineage premium (unavoidable in general — you
+   cannot tax external wealth entry without breaking bridge liquidity).
+2. **The round-trip laundromat** — a domestic holder with a high-factor lineage
+   could round-trip (BTH → wBTH → unwrap → factor-1 BTH) and reset to background
+   for the price of a wrap, trivially bypassing the cluster-factor mechanism.
+
+**The mechanism.** For an unwrap at block height `h`:
+
+| Symbol | Definition | Value |
+|--------|------------|-------|
+| Epoch key `m` | `⌊h / K⌋` | — |
+| Epoch length `K` | blocks per import epoch | **17,280 blocks (1 day)** |
+| Import cluster | `c_import(m) = H("bridge-import" ‖ m)` | 100%-weight tag on the released output |
+| Import factor | `max(F, ClusterFactorCurve(Σ unwrap amounts in epoch m))` | ≥ floor |
+| Floor `F` | minimum import factor | **1.5×** |
+
+- All unwraps in an epoch **share one accumulating cluster**, so intra-epoch
+  splitting piles into the same pool (Sybil-resistant). Diluting requires
+  spreading across *epochs* — wall-clock time, not free splitting.
+- The factor **decays only by circulation**: as the imported coin mixes with
+  background-tagged coins through ordinary spends, its factor falls toward
+  background (a worst-case 6× flood import reaches the 1.5× floor in ≈9
+  domestic-mixing spends). Sitting idle never normalizes imported wealth.
+- Because unwrap amounts are already public at the bridge boundary (ADR 0004),
+  the import factor is computable with **no zero-knowledge machinery**.
+
+**Consequence — reset-vector collapse.** The bridge round-trip now *degrades*
+lineage (out at factor-1, back at import-factor ≥ 1.5×) instead of resetting it,
+so the bridge is removed from the lineage-reset-door list. See the
+[bridge threat model](../security/bridge-threat-model.md) for how this closes the
+round-trip laundromat threat.
 
 ## Order Identification
 

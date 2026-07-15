@@ -22,6 +22,7 @@ ADRs are immutable once accepted. If a decision changes, a new ADR supersedes th
 | [0003](0003-wbth-peg-factor-1-wrapping-and-demurrage-settlement.md) | wBTH Peg — Factor-1 Wrapping + Demurrage-Settlement On-ramp | Accepted | 2026-07-13 |
 | [0004](0004-bridge-privacy-semantics.md) | Bridge Privacy Semantics | Accepted | 2026-07-13 |
 | [0005](0005-bridge-v1-chain-scope-ethereum-and-solana.md) | Bridge v1 Chain Scope — Ethereum and Solana | Accepted | 2026-07-13 |
+| [0007](0007-bridge-import-cluster-tagging.md) | Bridge-Import Cluster Tagging via Block-Epoch Keys | Accepted | 2026-07-14 |
 
 ## ADR Statuses
 

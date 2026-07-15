@@ -174,6 +174,49 @@ follow-up.
 | On-chain auto-pause at anomalous cumulative volume | `WrappedBTH.test.ts › auto-pause circuit breaker` (3 cases) | #851 |
 | **Randomized rate-limit accounting + breaker** | `WrappedBTH.test.ts › rate-limit accounting fuzz (randomized, breaker armed)` | new (#829) |
 
+### 11. Lineage reset via bridge round-trip (economic bypass of the cluster-factor mechanism)
+
+Distinct from the custody/consensus threats above, the bridge must not become an
+economic side-door around Botho's anti-hoarding mechanism, which prices **coin
+lineage** (a 1×–6× demurrage / fee / lottery multiplier from the wealth traceable
+to a coin's cluster origin). If unwrapped BTH returned at plain factor-1
+(background), two leaks would follow (see
+[ADR 0007](../decisions/0007-bridge-import-cluster-tagging.md), normative in
+whitepaper §11):
+
+- **Entry leak** — external wealth of any size unwraps in at factor-1, paying no
+  lineage premium (unavoidable in general; *materially narrowed* by the mitigation).
+- **Round-trip laundromat** — a domestic holder round-trips
+  (BTH → wBTH → unwrap → factor-1 BTH) to reset a high-factor lineage to
+  background for the price of a wrap; a cheap reset door makes the whole
+  cluster-factor mechanism trivially bypassable.
+
+**Mitigation — import cluster tagging (ADR 0007, live as of protocol 5.0.0).**
+Unwrapping tags the released output 100% to a block-epoch **import cluster**
+`c_import(m) = H("bridge-import" ‖ ⌊h/K⌋)` at factor
+`max(F, ClusterFactorCurve(Σ unwrap amounts in epoch m))`, with **`K = 17,280`
+blocks (1 day)** and floor **`F = 1.5×`**. All unwraps in an epoch share one
+accumulating cluster (intra-epoch splitting is Sybil-resistant — dilution costs
+wall-clock time, not free splits), and the import factor **decays only by
+circulation** (≈9 domestic-mixing spends from a 6× flood to the floor). Because
+unwrap amounts are public at the bridge boundary (ADR 0004), the factor needs no
+zero-knowledge machinery.
+
+| Vector | Test | Wave |
+| --- | --- | --- |
+| Unwrap release output is tagged 100% to the block-epoch import cluster (not plain factor-1) | `bth_scan::build_release_tx_pays_recipient_and_change_to_reserve` | #938/#942 |
+| Import cluster id is deterministic and epoch-distinct (Sybil-resistant key) | `bridge_import::import_cluster_id_is_deterministic_and_epoch_distinct` | #942 |
+| Floor binds a small import and yields to a flood (size-sensitive above `F`) | `bridge_import::floor_binds_small_import_and_yields_to_flood` | #942 |
+| Floor never lowers a curve factor below `F = 1.5×` | `bridge_import::apply_import_floor_never_lowers` | #942 |
+
+**Status: reset-vector collapsed.** A bridge round-trip now *degrades* lineage
+(out at factor-1, back at import-factor ≥ 1.5×) instead of resetting it, so the
+bridge is removed from the lineage-reset-door list. The only remaining domestic
+reset door is the spend-to-background leak, tracked separately (#925). The
+shared-fate coupling (an unwrapper's factor depends partly on same-epoch
+strangers) is judged a feature: a sudden capital flood is treated as maximally
+concentrated, an organic trickle enters benignly.
+
 ## Boundary of the model (accepted assumptions)
 
 - **Reorgs deeper than `confirmations_required`.** A burn confirms only at

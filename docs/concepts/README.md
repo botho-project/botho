@@ -12,6 +12,7 @@ This section explains the core concepts and design decisions behind Botho.
 | [Tokenomics](tokenomics.md) | Emission schedule, fees, and supply |
 | [Monetary Policy](monetary-policy.md) | Difficulty adjustment, epochs, and upgrades |
 | [Progressive Fees](progressive-fees.md) | Provenance-based fees that discourage hoarding |
+| [Bridge](bridge.md) | The BTH ↔ wBTH cross-chain bridge and import cluster tagging |
 | [Security](security.md) | Security model and best practices |
 | [Comparison](comparison.md) | How Botho compares to Bitcoin, Monero, Zcash |
 | [PQ Migration](pq-migration.md) | Post-quantum migration considerations (deprecated) |

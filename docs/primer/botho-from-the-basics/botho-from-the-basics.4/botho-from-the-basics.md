@@ -1018,6 +1018,18 @@ deferred rigor. The map, by question:
 | Upgrade and governance process | §12 Governance |
 | Why each constant has the value it has | Parameter Justification appendix |
 
+**One mechanism this primer doesn't teach: the bridge.** Botho can be wrapped
+1:1 into a transparent token, **wBTH**, on Ethereum and Solana to reach their
+DeFi liquidity, then unwrapped back to native BTH. The one-line intuition worth
+carrying over from Section 9: money that circulates *within* Botho is cheaper to
+spend, so freshly-imported wrapped coins enter **expensive** — an unwrap is
+tagged to a one-day "import cluster" at an elevated cluster factor (floor 1.5×)
+and only normalizes toward background as it is spent and mixes domestically. That
+closes the obvious dodge (round-trip through the bridge to reset a high-factor
+lineage). For the full treatment see the whitepaper's bridge section
+(§11, *The BTH ↔ wBTH Bridge*) and architecture decision record ADR 0007, plus
+the concepts explainer at `docs/concepts/bridge.md`.
+
 **Out to the literature** for the standard primitives: *Zero to Monero*
 (stealth addresses, ring signatures, RingCT, in full depth); the CLSAG and
 Bulletproofs papers; the CryptoNote whitepaper for historical grounding;
