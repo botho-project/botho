@@ -7,10 +7,11 @@ use anyhow::{anyhow, Result};
 #[cfg(feature = "pq")]
 use bth_account_keys::QuantumSafeAccountKey;
 use bth_account_keys::{AccountKey, PublicAddress};
-use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-use bth_crypto_ring_signature::onetime_keys::{
-    recover_onetime_private_key, recover_public_subaddress_spend_key,
-};
+use bth_crypto_keys::RistrettoPrivate;
+#[cfg(test)]
+use bth_crypto_keys::RistrettoPublic;
+#[cfg(test)]
+use bth_crypto_ring_signature::onetime_keys::recover_public_subaddress_spend_key;
 use bth_transaction_clsag::{ClsagRingInput, RingMember, Transaction, TxOutput, MIN_RING_SIZE};
 use bth_transaction_types::{ClusterId, ClusterTagEntry, ClusterTagVector};
 use rand::{rngs::OsRng, seq::SliceRandom};
@@ -28,13 +29,6 @@ use crate::{
 // so callers (e.g. `commands::send`) can enforce it without importing the crate
 // directly.
 pub use bth_transaction_clsag::MIN_TX_FEE;
-
-#[cfg(feature = "pq")]
-use bth_crypto_pq::MlKem768Ciphertext;
-#[cfg(feature = "pq")]
-use bth_crypto_ring_signature::pq_onetime_keys::check_pq_output_ownership;
-#[cfg(feature = "pq")]
-use sha2::{Digest, Sha256};
 
 /// Picocredits per CAD
 pub const PICOCREDITS_PER_CAD: u64 = 1_000_000_000_000;
@@ -81,6 +75,12 @@ pub struct OwnedUtxo {
     /// Optional for backwards compatibility with older wallet files.
     #[serde(default)]
     pub cluster_tags: Option<StoredTags>,
+    /// Unified ML-KEM-768 ciphertext (1088 bytes) for hybrid outputs, or `None`
+    /// for a classical/legacy output. Present on every 6.0.0 output; retained
+    /// so this UTXO can later be spent via hybrid one-time-key recovery (issue
+    /// #970). `serde(default)` keeps older wallet files loadable.
+    #[serde(default)]
+    pub kem_ciphertext: Option<Vec<u8>>,
 }
 
 impl OwnedUtxo {
@@ -97,37 +97,42 @@ impl OwnedUtxo {
         self.cluster_tags.clone().unwrap_or_default()
     }
 
-    /// Recover the one-time private key needed to spend this output
-    ///
-    /// Uses the stealth address protocol to derive the spend key from:
-    /// - The view private key (for DH shared secret)
-    /// - The subaddress spend private key
-    /// - The output's public key (ephemeral DH key)
-    pub fn recover_spend_key(&self, account_key: &AccountKey) -> Option<RistrettoPrivate> {
-        let public_key = RistrettoPublic::try_from(&self.public_key[..]).ok()?;
-        let view_private = account_key.view_private_key();
-        let subaddress_spend_private = account_key.subaddress_spend_private(self.subaddress_index);
-
-        Some(recover_onetime_private_key(
-            &public_key,
-            view_private,
-            &subaddress_spend_private,
-        ))
+    /// Reconstruct the minimal on-chain [`TxOutput`] needed to run the unified
+    /// scan/recover crypto. Only `target_key`, `public_key`, and
+    /// `kem_ciphertext` participate in ownership/one-time-key derivation.
+    fn as_tx_output(&self) -> TxOutput {
+        TxOutput {
+            amount: self.amount,
+            target_key: self.target_key,
+            public_key: self.public_key,
+            e_memo: None,
+            cluster_tags: ClusterTagVector::empty(),
+            kem_ciphertext: self.kem_ciphertext.clone(),
+        }
     }
 
-    /// Derive a PQ shared secret for this output (bridge mode)
+    /// Recover the one-time private key needed to spend this output on the
+    /// unified hybrid scan/spend path (issue #970).
     ///
-    /// For classical UTXOs that don't have PQ ciphertexts, we derive a
-    /// deterministic shared secret from the output's key material. This
-    /// provides forward secrecy: new PQ outputs will have proper ML-KEM.
-    #[cfg(feature = "pq")]
-    pub fn pq_bridge_secret(&self, view_private_bytes: &[u8; 32]) -> [u8; 32] {
-        let mut hasher = Sha256::new();
-        hasher.update(b"botho-pq-bridge-v1");
-        hasher.update(self.target_key);
-        hasher.update(self.public_key);
-        hasher.update(view_private_bytes);
-        hasher.finalize().into()
+    /// For a hybrid UTXO (KEM ciphertext present) this decapsulates with the
+    /// wallet's derived ML-KEM secret and folds the shared secret into the
+    /// classical stealth derivation; a classical/legacy UTXO uses the pure
+    /// view-key path. Both dispatch through [`TxOutput::recover_spend_key_for`].
+    pub fn recover_spend_key(&self, keys: &WalletKeys) -> Option<RistrettoPrivate> {
+        let output = self.as_tx_output();
+        #[cfg(feature = "pq")]
+        {
+            output.recover_spend_key_for(
+                keys.account_key(),
+                keys.pq_account_key().pq_kem_keypair(),
+                self.subaddress_index,
+                self.output_index,
+            )
+        }
+        #[cfg(not(feature = "pq"))]
+        {
+            output.recover_spend_key(keys.account_key(), self.subaddress_index)
+        }
     }
 }
 
@@ -138,64 +143,13 @@ pub struct UtxoId {
     pub output_index: u32,
 }
 
-/// A quantum-private UTXO owned by this wallet (ML-KEM encapsulated)
-///
-/// These outputs use post-quantum cryptography for stealth address
-/// derivation, protecting against "harvest now, decrypt later" attacks.
-#[cfg(feature = "pq")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PqOwnedUtxo {
-    /// Transaction hash that created this output
-    pub tx_hash: [u8; 32],
-    /// Output index in the transaction
-    pub output_index: u32,
-    /// Amount in picocredits
-    pub amount: u64,
-    /// Block height where created
-    pub created_at: u64,
-    /// ML-KEM-768 ciphertext (1088 bytes) for key decapsulation
-    pub kem_ciphertext: Vec<u8>,
-    /// One-time target key (Ristretto point)
-    pub target_key: [u8; 32],
-    /// Subaddress index that owns this output
-    pub subaddress_index: u64,
-}
-
-#[cfg(feature = "pq")]
-impl PqOwnedUtxo {
-    /// Create a UTXO identifier
-    pub fn id(&self) -> UtxoId {
-        UtxoId {
-            tx_hash: self.tx_hash,
-            output_index: self.output_index,
-        }
-    }
-
-    /// Recover the one-time private key needed to spend this PQ output
-    ///
-    /// Uses ML-KEM decapsulation to derive the shared secret, then
-    /// computes the one-time private key using the PQ stealth address protocol.
-    pub fn recover_spend_key(
-        &self,
-        pq_account_key: &QuantumSafeAccountKey,
-    ) -> Option<RistrettoPrivate> {
-        use bth_crypto_ring_signature::pq_onetime_keys::recover_pq_onetime_private_key;
-
-        let ciphertext = MlKem768Ciphertext::from_bytes(self.kem_ciphertext.as_slice()).ok()?;
-        let kem_keypair = pq_account_key.pq_kem_keypair();
-        let subaddress_spend_private = pq_account_key
-            .classical()
-            .subaddress_spend_private(self.subaddress_index);
-
-        recover_pq_onetime_private_key(
-            kem_keypair,
-            &ciphertext,
-            &subaddress_spend_private,
-            self.output_index,
-        )
-        .ok()
-    }
-}
+// NOTE (issue #970): the separate `PqOwnedUtxo` / `PqWalletScanner` /
+// `scan_pq_outputs` path (which used the pre-#957 `pq_onetime_keys` scheme) has
+// been retired. Under protocol 6.0.0 every output is hybrid, so a single
+// `WalletScanner`/`OwnedUtxo` path handles classical and hybrid outputs alike,
+// detecting hybrids via ML-KEM decapsulation folded into the classical stealth
+// check (`TxOutput::belongs_to_account`). The old code is preserved in git
+// history (pre-#970).
 
 // NOTE: The wallet's own flat `botho-tx-v1` Transaction/TxInput/TxOutput types
 // (with cryptographically-broken stealth outputs) have been replaced by the
@@ -449,7 +403,6 @@ impl TransactionBuilder {
             Transaction::new_clsag(Vec::new(), outputs.clone(), actual_fee, self.sync_height);
         let signing_hash = preliminary.signing_hash();
 
-        let account_key = self.keys.account_key();
         let mut rng = OsRng;
         let mut ring_inputs = Vec::with_capacity(selected.len());
 
@@ -462,8 +415,9 @@ impl TransactionBuilder {
                 ));
             }
 
-            // Recover the one-time private key for this UTXO.
-            let onetime_private = utxo.recover_spend_key(account_key).ok_or_else(|| {
+            // Recover the one-time private key for this UTXO on the unified
+            // hybrid scan/spend path (issue #970).
+            let onetime_private = utxo.recover_spend_key(&self.keys).ok_or_else(|| {
                 anyhow!(
                     "Failed to recover spend key for UTXO {}",
                     hex::encode(&utxo.tx_hash[0..8])
@@ -557,9 +511,18 @@ impl TransactionBuilder {
     }
 }
 
-/// Wallet scanner for finding owned outputs using stealth address detection
+/// Wallet scanner for finding owned outputs on the unified hybrid scan path.
+///
+/// Under protocol 6.0.0 every output is hybrid: detection decapsulates the
+/// output's ML-KEM ciphertext with the wallet's derived ML-KEM secret and folds
+/// the shared secret into the classical stealth check. A KEM-less
+/// (classical/legacy) output is detected by the pure view-key check on the same
+/// path. This single scanner replaces the retired `PqWalletScanner` (issue
+/// #970).
 pub struct WalletScanner<'a> {
     account_key: &'a AccountKey,
+    #[cfg(feature = "pq")]
+    pq_account_key: QuantumSafeAccountKey,
 }
 
 impl<'a> WalletScanner<'a> {
@@ -567,15 +530,13 @@ impl<'a> WalletScanner<'a> {
     pub fn new(keys: &'a WalletKeys) -> Self {
         Self {
             account_key: keys.account_key(),
+            #[cfg(feature = "pq")]
+            pq_account_key: keys.pq_account_key(),
         }
     }
 
-    /// Scan block outputs for UTXOs belonging to this wallet
-    ///
-    /// Uses proper stealth address detection:
-    /// 1. Parse target_key and public_key from output
-    /// 2. Recover the expected spend public key using view private key
-    /// 3. Check against known subaddresses
+    /// Scan block outputs for UTXOs belonging to this wallet on the single
+    /// hybrid path (issue #970): classical and hybrid outputs alike.
     pub fn scan_outputs(&self, block_outputs: &[BlockOutputs]) -> Vec<OwnedUtxo> {
         let mut owned = Vec::new();
 
@@ -598,8 +559,21 @@ impl<'a> WalletScanner<'a> {
                 // Parse amount (stored as LE bytes in hex)
                 let amount = Self::parse_amount(&output.amount_commitment);
 
-                // Check if this output belongs to us using stealth address detection
-                if let Some(subaddress_index) = self.check_ownership(&target_key, &public_key) {
+                // Decode the unified ML-KEM ciphertext (hex) when present. Its
+                // presence marks a hybrid output; `None` is classical/legacy.
+                let kem_ciphertext: Option<Vec<u8>> = output
+                    .kem_ciphertext
+                    .as_ref()
+                    .and_then(|s| hex::decode(s).ok());
+
+                // Unified ownership check (hybrid decapsulation folded into the
+                // classical stealth check, or pure classical when KEM-less).
+                if let Some(subaddress_index) = self.check_ownership(
+                    &target_key,
+                    &public_key,
+                    kem_ciphertext.as_deref(),
+                    output.output_index,
+                ) {
                     // Convert cluster tags from RPC format to StoredTags
                     let cluster_tags = Self::parse_cluster_tags(&output.cluster_tags);
 
@@ -612,6 +586,7 @@ impl<'a> WalletScanner<'a> {
                         public_key,
                         subaddress_index,
                         cluster_tags,
+                        kem_ciphertext,
                     });
                 }
             }
@@ -620,12 +595,53 @@ impl<'a> WalletScanner<'a> {
         owned
     }
 
-    /// Check if an output belongs to this wallet using stealth address
-    /// derivation
+    /// Check whether an output belongs to this wallet on the unified path.
     ///
-    /// Returns `Some(subaddress_index)` if the output belongs to us, `None`
-    /// otherwise.
-    fn check_ownership(&self, target_key: &[u8; 32], public_key: &[u8; 32]) -> Option<u64> {
+    /// When `kem_ciphertext` is present (hybrid, the 6.0.0 case) this runs the
+    /// #957 hybrid detector — ML-KEM decapsulation combined with the classical
+    /// DH stealth check via [`TxOutput::belongs_to_account`]. A `None`
+    /// ciphertext falls through to the classical view-key check on the same
+    /// path. Returns `Some(subaddress_index)` on a match.
+    fn check_ownership(
+        &self,
+        target_key: &[u8; 32],
+        public_key: &[u8; 32],
+        kem_ciphertext: Option<&[u8]>,
+        output_index: u32,
+    ) -> Option<u64> {
+        // Reconstruct the minimal on-chain output and dispatch through the
+        // canonical unified detector so the thin wallet and node share crypto.
+        let output = TxOutput {
+            amount: 0,
+            target_key: *target_key,
+            public_key: *public_key,
+            e_memo: None,
+            cluster_tags: ClusterTagVector::empty(),
+            kem_ciphertext: kem_ciphertext.map(|c| c.to_vec()),
+        };
+
+        #[cfg(feature = "pq")]
+        {
+            output.belongs_to_account(
+                self.account_key,
+                self.pq_account_key.pq_kem_keypair(),
+                output_index,
+            )
+        }
+        #[cfg(not(feature = "pq"))]
+        {
+            let _ = output_index;
+            output.belongs_to(self.account_key)
+        }
+    }
+
+    /// Classical-only ownership check retained for the reference unit tests.
+    #[cfg(test)]
+    fn check_ownership_classical(
+        &self,
+        target_key: &[u8; 32],
+        public_key: &[u8; 32],
+    ) -> Option<u64> {
         let view_private = self.account_key.view_private_key();
 
         // Parse keys
@@ -702,134 +718,6 @@ impl<'a> WalletScanner<'a> {
     }
 }
 
-/// Quantum-private wallet scanner for finding PQ outputs using ML-KEM
-/// decapsulation
-#[cfg(feature = "pq")]
-pub struct PqWalletScanner<'a> {
-    pq_account_key: QuantumSafeAccountKey,
-    keys: &'a WalletKeys,
-}
-
-#[cfg(feature = "pq")]
-impl<'a> PqWalletScanner<'a> {
-    /// Create a new PQ scanner for the given wallet keys
-    pub fn new(keys: &'a WalletKeys) -> Self {
-        Self {
-            pq_account_key: keys.pq_account_key(),
-            keys,
-        }
-    }
-
-    /// Scan block outputs for quantum-private UTXOs belonging to this wallet
-    ///
-    /// Uses ML-KEM decapsulation to check ownership:
-    /// 1. Parse ciphertext and target_key from output
-    /// 2. Decapsulate shared secret using our KEM keypair
-    /// 3. Verify target key matches expected value
-    pub fn scan_pq_outputs(&self, block_outputs: &[BlockOutputs]) -> Vec<PqOwnedUtxo> {
-        let mut owned = Vec::new();
-
-        for block in block_outputs {
-            for output in &block.outputs {
-                // Skip non-PQ outputs
-                if !output.is_pq_output {
-                    continue;
-                }
-
-                // Parse PQ ciphertext
-                let ciphertext_bytes = match output
-                    .pq_ciphertext
-                    .as_ref()
-                    .and_then(|s| hex::decode(s).ok())
-                {
-                    Some(bytes) => bytes,
-                    None => continue,
-                };
-
-                let ciphertext = match MlKem768Ciphertext::from_bytes(ciphertext_bytes.as_slice()) {
-                    Ok(ct) => ct,
-                    Err(_) => continue,
-                };
-
-                // Parse target key
-                let target_key = match WalletScanner::parse_key(&output.target_key) {
-                    Some(k) => k,
-                    None => continue,
-                };
-
-                let target_key_point = match RistrettoPublic::try_from(&target_key[..]) {
-                    Ok(pk) => pk,
-                    Err(_) => continue,
-                };
-
-                let tx_hash = match WalletScanner::parse_key(&output.tx_hash) {
-                    Some(h) => h,
-                    None => continue,
-                };
-
-                // Parse amount
-                let amount = WalletScanner::parse_amount(&output.amount_commitment);
-
-                // Check ownership against subaddresses
-                if let Some(subaddress_index) =
-                    self.check_pq_ownership(&ciphertext, &target_key_point, output.output_index)
-                {
-                    owned.push(PqOwnedUtxo {
-                        tx_hash,
-                        output_index: output.output_index,
-                        amount,
-                        created_at: block.height,
-                        kem_ciphertext: ciphertext_bytes,
-                        target_key,
-                        subaddress_index,
-                    });
-                }
-            }
-        }
-
-        owned
-    }
-
-    /// Check if a PQ output belongs to this wallet
-    fn check_pq_ownership(
-        &self,
-        ciphertext: &MlKem768Ciphertext,
-        target_key: &RistrettoPublic,
-        output_index: u32,
-    ) -> Option<u64> {
-        let kem_keypair = self.pq_account_key.pq_kem_keypair();
-        let account_key = self.keys.account_key();
-
-        // Check against default subaddress (index 0)
-        let default_subaddr = account_key.default_subaddress();
-        let default_spend = default_subaddr.spend_public_key();
-        if check_pq_output_ownership(
-            kem_keypair,
-            default_spend,
-            ciphertext,
-            target_key,
-            output_index,
-        ) {
-            return Some(0);
-        }
-
-        // Check against change subaddress (index 1)
-        let change_subaddr = account_key.change_subaddress();
-        let change_spend = change_subaddr.spend_public_key();
-        if check_pq_output_ownership(
-            kem_keypair,
-            change_spend,
-            ciphertext,
-            target_key,
-            output_index,
-        ) {
-            return Some(1);
-        }
-
-        None
-    }
-}
-
 /// Sync wallet UTXOs with the network
 pub async fn sync_wallet(
     rpc: &mut RpcPool,
@@ -862,72 +750,6 @@ pub async fn sync_wallet(
     }
 
     Ok((all_utxos, current_height))
-}
-
-/// Result of syncing both classical and PQ UTXOs
-#[cfg(feature = "pq")]
-pub struct SyncResult {
-    /// Classical (non-PQ) UTXOs
-    pub classical_utxos: Vec<OwnedUtxo>,
-    /// Quantum-private UTXOs (ML-KEM encapsulated)
-    pub pq_utxos: Vec<PqOwnedUtxo>,
-    /// Current chain height
-    pub height: u64,
-}
-
-/// Sync wallet UTXOs with the network, returning both classical and PQ outputs
-///
-/// This scans the blockchain for both:
-/// - Classical stealth address outputs (ECDH-based)
-/// - Quantum-private outputs (ML-KEM-based)
-#[cfg(feature = "pq")]
-pub async fn sync_wallet_all(
-    rpc: &mut RpcPool,
-    keys: &WalletKeys,
-    from_height: u64,
-) -> Result<SyncResult> {
-    // Get current chain height
-    let chain_info = rpc.get_chain_info().await?;
-    let current_height = chain_info.height;
-
-    if from_height >= current_height {
-        return Ok(SyncResult {
-            classical_utxos: vec![],
-            pq_utxos: vec![],
-            height: current_height,
-        });
-    }
-
-    let classical_scanner = WalletScanner::new(keys);
-    let pq_scanner = PqWalletScanner::new(keys);
-
-    let mut all_classical = Vec::new();
-    let mut all_pq = Vec::new();
-
-    // Scan in batches of 100 blocks
-    const BATCH_SIZE: u64 = 100;
-    let mut height = from_height;
-
-    while height < current_height {
-        let end_height = (height + BATCH_SIZE).min(current_height);
-
-        let outputs = rpc.get_outputs(height, end_height).await?;
-
-        // Scan for both types of outputs
-        let classical = classical_scanner.scan_outputs(&outputs);
-        let pq = pq_scanner.scan_pq_outputs(&outputs);
-
-        all_classical.extend(classical);
-        all_pq.extend(pq);
-
-        height = end_height;
-    }
-
-    Ok(SyncResult {
-        classical_utxos: all_classical,
-        pq_utxos: all_pq,
-        height: current_height,
-    })
 }
 
 /// Apply pending change tags to discovered UTXOs.
@@ -1012,6 +834,7 @@ mod tests {
                 public_key: [0u8; 32],
                 subaddress_index: 0,
                 cluster_tags: None,
+                kem_ciphertext: None,
             },
             OwnedUtxo {
                 tx_hash: [2u8; 32],
@@ -1022,6 +845,7 @@ mod tests {
                 public_key: [0u8; 32],
                 subaddress_index: 0,
                 cluster_tags: None,
+                kem_ciphertext: None,
             },
         ];
 
@@ -1056,10 +880,11 @@ mod tests {
             public_key: out.public_key,
             subaddress_index: 0,
             cluster_tags: None,
+            kem_ciphertext: None,
         };
         // Sanity: the wallet must be able to recover the spend key.
         assert!(
-            utxo.recover_spend_key(keys.account_key()).is_some(),
+            utxo.recover_spend_key(keys).is_some(),
             "fixture UTXO must be spendable by the wallet"
         );
         utxo
@@ -1275,137 +1100,140 @@ mod tests {
         );
     }
 
+    // ------------------------------------------------------------------
+    // Unified hybrid scan/spend path tests (issue #970).
+    //
+    // The single `WalletScanner`/`OwnedUtxo` path replaces the retired
+    // `PqWalletScanner`/`PqOwnedUtxo`. These drive the receiving side of the
+    // universal-ML-KEM rollout: a hybrid output (built by the send path of
+    // sub-issue 4 via `new_hybrid_to_address`) is serialized exactly as
+    // `chain_getOutputs` emits it, the scanner detects it by ML-KEM
+    // decapsulation, and the discovered UTXO recovers a one-time spend key.
+    // ------------------------------------------------------------------
     #[cfg(feature = "pq")]
-    mod pq_tests {
+    mod hybrid_scan_tests {
         use super::*;
         use crate::rpc_pool::TxOutput as RpcTxOutput;
 
         const TEST_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+        const RECIPIENT_MNEMONIC: &str = "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title";
 
-        #[test]
-        fn test_pq_owned_utxo_serialization() {
-            let utxo = PqOwnedUtxo {
-                tx_hash: [1u8; 32],
-                output_index: 0,
-                amount: 1_000_000_000_000,
-                created_at: 100,
-                kem_ciphertext: vec![0u8; 1088],
-                target_key: [2u8; 32],
-                subaddress_index: 0,
-            };
-
-            // Test serialization roundtrip
-            let serialized = bincode::serialize(&utxo).expect("serialize");
-            let deserialized: PqOwnedUtxo = bincode::deserialize(&serialized).expect("deserialize");
-
-            assert_eq!(utxo.tx_hash, deserialized.tx_hash);
-            assert_eq!(utxo.output_index, deserialized.output_index);
-            assert_eq!(utxo.amount, deserialized.amount);
-            assert_eq!(utxo.created_at, deserialized.created_at);
-            assert_eq!(utxo.kem_ciphertext, deserialized.kem_ciphertext);
-            assert_eq!(utxo.target_key, deserialized.target_key);
-            assert_eq!(utxo.subaddress_index, deserialized.subaddress_index);
+        /// Serialize an on-chain [`TxOutput`] into the thin-wallet RPC DTO
+        /// exactly as the node's `chain_getOutputs` handler does (issue #970):
+        /// the unified `kemCiphertext` field carries the hex ciphertext, or is
+        /// absent/`None` for a classical output.
+        fn rpc_output_from_txoutput(out: &TxOutput, output_index: u32) -> RpcTxOutput {
+            RpcTxOutput {
+                tx_hash: hex::encode([9u8; 32]),
+                output_index,
+                target_key: hex::encode(out.target_key),
+                public_key: hex::encode(out.public_key),
+                amount_commitment: hex::encode(out.amount.to_le_bytes()),
+                cluster_tags: vec![],
+                kem_ciphertext: out.kem_ciphertext.as_ref().map(hex::encode),
+            }
         }
 
+        /// End-to-end acceptance heart: send (sub-issue-4 path) → scanner
+        /// detects → spend (input hybrid-recovery). A hybrid output addressed to
+        /// the wallet is found by decapsulation, and the recovered one-time
+        /// private key satisfies `x·G == target_key`, i.e. the funds are
+        /// spendable.
         #[test]
-        fn test_pq_owned_utxo_id() {
-            let utxo = PqOwnedUtxo {
-                tx_hash: [42u8; 32],
-                output_index: 7,
-                amount: 1_000_000,
-                created_at: 500,
-                kem_ciphertext: vec![0u8; 1088],
-                target_key: [0u8; 32],
-                subaddress_index: 0,
-            };
-
-            let id = utxo.id();
-            assert_eq!(id.tx_hash, [42u8; 32]);
-            assert_eq!(id.output_index, 7);
-        }
-
-        #[test]
-        fn test_pq_scanner_skips_non_pq_outputs() {
+        fn hybrid_output_is_scanned_and_spendable() {
             let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
-            let scanner = PqWalletScanner::new(&keys);
+            let amount = 1_000_000_000_000u64;
+            let output_index = 0u32;
 
-            // Create a non-PQ output
-            let outputs = vec![BlockOutputs {
+            // Send path (sub-issue 4): build a hybrid output to our own address.
+            let out = TxOutput::new_hybrid_to_address(
+                amount,
+                &keys.public_address(),
+                output_index,
+                None,
+                ClusterTagVector::empty(),
+            )
+            .expect("address must publish an ML-KEM key");
+            assert_eq!(
+                out.kem_ciphertext.as_ref().map(|c| c.len()),
+                Some(bth_crypto_pq::ML_KEM_768_CIPHERTEXT_BYTES),
+                "hybrid output must carry a 1,088-byte ciphertext",
+            );
+
+            // Scanner detects it on the single unified path.
+            let scanner = WalletScanner::new(&keys);
+            let blocks = vec![BlockOutputs {
                 height: 100,
-                outputs: vec![RpcTxOutput {
-                    tx_hash: hex::encode([1u8; 32]),
-                    output_index: 0,
-                    target_key: hex::encode([2u8; 32]),
-                    public_key: hex::encode([3u8; 32]),
-                    amount_commitment: hex::encode(1000u64.to_le_bytes()),
-                    cluster_tags: vec![],
-                    pq_ciphertext: None,
-                    is_pq_output: false, // Not a PQ output
-                }],
+                outputs: vec![rpc_output_from_txoutput(&out, output_index)],
             }];
+            let owned = scanner.scan_outputs(&blocks);
+            assert_eq!(owned.len(), 1, "scanner must detect the hybrid output");
+            assert_eq!(owned[0].amount, amount);
+            assert!(
+                owned[0].kem_ciphertext.is_some(),
+                "discovered UTXO must retain its KEM ciphertext for spending",
+            );
 
-            let result = scanner.scan_pq_outputs(&outputs);
-            assert!(result.is_empty(), "Should not find any PQ outputs");
+            // Spend: input hybrid-recovery yields a one-time key with x·G == P.
+            let onetime = owned[0]
+                .recover_spend_key(&keys)
+                .expect("wallet must recover the one-time spend key");
+            assert_eq!(
+                RistrettoPublic::from(&onetime).to_bytes(),
+                out.target_key,
+                "recovered one-time private key must map to the output target_key",
+            );
         }
 
+        /// Back-compat: a classical output (no KEM ciphertext) still scans on the
+        /// same unified path.
         #[test]
-        fn test_pq_scanner_rejects_invalid_ciphertext() {
+        fn classical_none_ciphertext_still_scans() {
             let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
-            let scanner = PqWalletScanner::new(&keys);
+            let amount = 2_000_000_000_000u64;
+            let out = TxOutput::new(amount, &keys.public_address());
+            assert!(out.kem_ciphertext.is_none(), "classical output has no KEM ct");
 
-            // Create a PQ output with invalid ciphertext (wrong size)
-            let outputs = vec![BlockOutputs {
-                height: 100,
-                outputs: vec![RpcTxOutput {
-                    tx_hash: hex::encode([1u8; 32]),
-                    output_index: 0,
-                    target_key: hex::encode([2u8; 32]),
-                    public_key: hex::encode([3u8; 32]),
-                    amount_commitment: hex::encode(1000u64.to_le_bytes()),
-                    cluster_tags: vec![],
-                    pq_ciphertext: Some(hex::encode([0u8; 100])), // Wrong size
-                    is_pq_output: true,
-                }],
+            let scanner = WalletScanner::new(&keys);
+            let blocks = vec![BlockOutputs {
+                height: 7,
+                outputs: vec![rpc_output_from_txoutput(&out, 0)],
             }];
-
-            let result = scanner.scan_pq_outputs(&outputs);
-            assert!(result.is_empty(), "Should reject invalid ciphertext size");
+            let owned = scanner.scan_outputs(&blocks);
+            assert_eq!(owned.len(), 1, "classical output must scan on unified path");
+            assert!(owned[0].kem_ciphertext.is_none());
+            assert!(
+                owned[0].recover_spend_key(&keys).is_some(),
+                "classical UTXO must remain spendable",
+            );
         }
 
+        /// Negative: a hybrid output addressed to a stranger is invisible — our
+        /// ML-KEM decapsulation yields a different secret and the stealth check
+        /// fails (mirrors the #957 clsag negative test).
         #[test]
-        fn test_sync_result_fields() {
-            let result = SyncResult {
-                classical_utxos: vec![OwnedUtxo {
-                    tx_hash: [1u8; 32],
-                    output_index: 0,
-                    amount: 1_000_000_000_000,
-                    created_at: 100,
-                    target_key: [0u8; 32],
-                    public_key: [0u8; 32],
-                    subaddress_index: 0,
-                    cluster_tags: None,
-                }],
-                pq_utxos: vec![PqOwnedUtxo {
-                    tx_hash: [2u8; 32],
-                    output_index: 0,
-                    amount: 500_000_000_000,
-                    created_at: 101,
-                    kem_ciphertext: vec![0u8; 1088],
-                    target_key: [0u8; 32],
-                    subaddress_index: 0,
-                }],
-                height: 1000,
-            };
+        fn hybrid_output_for_stranger_not_detected() {
+            let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+            let stranger = WalletKeys::from_mnemonic(RECIPIENT_MNEMONIC).unwrap();
 
-            assert_eq!(result.classical_utxos.len(), 1);
-            assert_eq!(result.pq_utxos.len(), 1);
-            assert_eq!(result.height, 1000);
+            let out = TxOutput::new_hybrid_to_address(
+                500_000_000_000,
+                &stranger.public_address(),
+                0,
+                None,
+                ClusterTagVector::empty(),
+            )
+            .expect("stranger address publishes an ML-KEM key");
 
-            let classical_total: u64 = result.classical_utxos.iter().map(|u| u.amount).sum();
-            let pq_total: u64 = result.pq_utxos.iter().map(|u| u.amount).sum();
-
-            assert_eq!(classical_total, 1_000_000_000_000);
-            assert_eq!(pq_total, 500_000_000_000);
+            let scanner = WalletScanner::new(&keys);
+            let blocks = vec![BlockOutputs {
+                height: 100,
+                outputs: vec![rpc_output_from_txoutput(&out, 0)],
+            }];
+            assert!(
+                scanner.scan_outputs(&blocks).is_empty(),
+                "a stranger's hybrid output must not be detected",
+            );
         }
     }
 }
