@@ -161,7 +161,10 @@ impl WalletKeys {
         self.public_address().spend_public_key().to_bytes()
     }
 
-    /// Format the address as a human-readable string
+    /// Format the address as a short human-readable abbreviation (`cad:` form).
+    ///
+    /// This is a display abbreviation only — use [`Self::public_address_string`]
+    /// for the full, shareable `botho://2/…` address string.
     pub fn address_string(&self) -> String {
         let addr = self.public_address();
         format!(
@@ -169,6 +172,15 @@ impl WalletKeys {
             hex::encode(&addr.view_public_key().to_bytes()[..16]),
             hex::encode(&addr.spend_public_key().to_bytes()[..16])
         )
+    }
+
+    /// Format the full, shareable v2 address string
+    /// (`botho://2/…` / `tbotho://2/…`) via the shared [`bth_address_codec`]
+    /// (ADR 0008 D5), so the wallet cannot drift from the node/wasm/mobile
+    /// encoders. Fails if the derived address does not carry post-quantum keys.
+    pub fn public_address_string(&self, network: bth_address_codec::Network) -> Result<String> {
+        bth_address_codec::encode_address(&self.public_address(), network)
+            .map_err(|e| anyhow!("failed to encode address: {e}"))
     }
 
     /// Sign a message with the spend private key
@@ -502,6 +514,56 @@ mod tests {
             let pq = keys.pq_public_address();
             assert_eq!(plain.kem_public_key(), pq.kem_public_key());
             assert_eq!(plain.dsa_public_key(), pq.dsa_public_key());
+        }
+
+        // End-to-end (issue #963 acceptance): a derived wallet address encodes
+        // to `botho://2/…`, decodes back to a `PublicAddress`, and the recovered
+        // post-quantum keys still decapsulate / verify against the wallet's
+        // derived secret keypairs.
+        #[test]
+        fn derived_wallet_address_v2_round_trips_and_pq_still_works() {
+            let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+
+            // Encode via the shared codec, decode it back.
+            let s = keys
+                .public_address_string(bth_address_codec::Network::Testnet)
+                .expect("encode v2 wallet address");
+            assert!(s.starts_with("tbotho://2/"));
+            let (decoded, net) =
+                bth_address_codec::decode_address(&s).expect("decode v2 wallet address");
+            assert_eq!(net, bth_address_codec::Network::Testnet);
+
+            // Decoded PQ keys match the wallet's derived account-wide keys.
+            let pq_account = keys.pq_account_key();
+            assert_eq!(
+                decoded.kem_public_key(),
+                pq_account.pq_kem_keypair().public_key().as_bytes()
+            );
+            assert_eq!(
+                decoded.dsa_public_key(),
+                pq_account.pq_sig_keypair().public_key().as_bytes()
+            );
+
+            // The decoded KEM key encapsulates to a secret the wallet's derived
+            // KEM keypair decapsulates.
+            let decoded_kem =
+                bth_crypto_pq::MlKem768PublicKey::from_bytes(decoded.kem_public_key())
+                    .expect("decoded KEM key is well formed");
+            let (ciphertext, sender_secret) = decoded_kem.encapsulate();
+            let recipient_secret = pq_account
+                .pq_kem_keypair()
+                .decapsulate(&ciphertext)
+                .expect("decapsulation with wallet secret");
+            assert_eq!(sender_secret.as_bytes(), recipient_secret.as_bytes());
+
+            // The decoded DSA key verifies a signature from the wallet's derived
+            // signing keypair.
+            let msg = b"botho wallet address v2 round trip";
+            let signature = pq_account.pq_sig_keypair().sign(msg);
+            let decoded_dsa =
+                bth_crypto_pq::MlDsa65PublicKey::from_bytes(decoded.dsa_public_key())
+                    .expect("decoded DSA key is well formed");
+            assert!(decoded_dsa.verify(msg, &signature).is_ok());
         }
     }
 }

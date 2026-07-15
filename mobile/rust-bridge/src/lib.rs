@@ -674,6 +674,45 @@ mod tests {
         );
     }
 
+    // Cross-encoder byte-identical vector (ADR 0008 D5): the SAME address must
+    // encode to the SAME `tbotho://2/…` string via the node codec, the mobile
+    // bridge, and the wasm-signer — and each must decode it back identically.
+    #[test]
+    fn cross_encoder_byte_identical_node_mobile_wasm() {
+        let addr = sample_v2_address();
+
+        // NODE path == the shared codec directly (node routes through it).
+        let node = bth_address_codec::encode_address(&addr, bth_address_codec::Network::Testnet)
+            .expect("node encode");
+        // MOBILE bridge path.
+        let mobile = encode_testnet_address(&addr).expect("mobile encode");
+        // WASM-signer path.
+        let wasm = bth_wasm_signer::core::encode_address_string(&addr, true).expect("wasm encode");
+
+        assert_eq!(node, mobile, "node and mobile encoders must be byte-identical");
+        assert_eq!(node, wasm, "node and wasm encoders must be byte-identical");
+
+        // All three decode the string back to the same view/spend/kem/dsa.
+        let (node_dec, _) = bth_address_codec::decode_address(&node).expect("node decode");
+        let mobile_dec = parse_recipient(&mobile).expect("mobile decode");
+        let wasm_dec = bth_wasm_signer::core::decode_address_string(&wasm).expect("wasm decode");
+
+        assert_eq!(
+            hex::encode(node_dec.view_public_key().to_bytes()),
+            mobile_dec.view_public_key
+        );
+        assert_eq!(
+            hex::encode(node_dec.spend_public_key().to_bytes()),
+            mobile_dec.spend_public_key
+        );
+        assert_eq!(node_dec.kem_public_key(), wasm_dec.kem_public_key());
+        assert_eq!(node_dec.dsa_public_key(), wasm_dec.dsa_public_key());
+        assert_eq!(
+            node_dec.view_public_key().to_bytes(),
+            wasm_dec.view_public_key().to_bytes()
+        );
+    }
+
     #[test]
     fn old_v1_address_rejected() {
         // A 64-byte v1 body under the retired prefix must not parse.

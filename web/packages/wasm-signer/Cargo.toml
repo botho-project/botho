@@ -20,6 +20,7 @@ path = "src/lib.rs"
 # format the node deserializes in `tx_submit`.
 bth-transaction-clsag = { path = "../../../transaction/clsag" }
 bth-account-keys = { path = "../../../account-keys" }
+bth-address-codec = { path = "../../../address-codec" }
 bth-crypto-keys = { path = "../../../crypto/keys" }
 # Key-image derivation, identical to the node's double-spend check. Used to
 # compute owned-output key images so the wallet can query spent status via the

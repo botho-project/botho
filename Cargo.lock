@@ -1833,6 +1833,7 @@ dependencies = [
  "anyhow",
  "botho-wallet",
  "bth-account-keys",
+ "bth-address-codec",
  "bth-crypto-keys",
  "dirs 5.0.1",
  "hex",
@@ -1922,6 +1923,7 @@ dependencies = [
  "bincode",
  "botho",
  "bth-account-keys",
+ "bth-address-codec",
  "bth-cluster-tax",
  "bth-core",
  "bth-crypto-keys",
@@ -2670,6 +2672,7 @@ version = "0.1.0"
 dependencies = [
  "bincode",
  "bth-account-keys",
+ "bth-address-codec",
  "bth-crypto-keys",
  "bth-crypto-ring-signature",
  "bth-transaction-clsag",

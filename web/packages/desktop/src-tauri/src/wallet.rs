@@ -681,6 +681,24 @@ async fn get_balance_internal(
 fn parse_recipient_address(address: &str) -> Result<bth_account_keys::PublicAddress> {
     use bth_crypto_keys::RistrettoPublic;
 
+    // Format 0: canonical v2 address string (`botho://2/…` / `tbotho://2/…`),
+    // decoded via the shared codec so this shell cannot drift from the node /
+    // wasm / mobile encoders (ADR 0008 D5). Old 64-byte v1 and the retired
+    // quantum prefixes fail loudly here.
+    let trimmed = address.trim();
+    if trimmed.starts_with(bth_address_codec::MAINNET_PREFIX)
+        || trimmed.starts_with(bth_address_codec::TESTNET_PREFIX)
+        || trimmed.starts_with(bth_address_codec::MAINNET_V1_PREFIX)
+        || trimmed.starts_with(bth_address_codec::TESTNET_V1_PREFIX)
+        || trimmed.starts_with(bth_address_codec::MAINNET_QUANTUM_PREFIX)
+        || trimmed.starts_with(bth_address_codec::TESTNET_QUANTUM_PREFIX)
+        || trimmed.starts_with(bth_address_codec::LEGACY_QUANTUM_PREFIX)
+    {
+        let (addr, _network) =
+            bth_address_codec::decode_address(trimmed).map_err(|e| anyhow!("{e}"))?;
+        return Ok(addr);
+    }
+
     // Format 1: cad:<view_hex>:<spend_hex> (16-byte prefixes)
     if address.starts_with("cad:") {
         let parts: Vec<&str> = address.split(':').collect();
