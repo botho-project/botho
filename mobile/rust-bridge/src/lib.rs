@@ -357,7 +357,7 @@ impl MobileWallet {
 
     /// Send a transfer of `amount_picocredits` to `to_address`.
     ///
-    /// `to_address` must be a testnet address (`tbotho://1/<base58>`) or the
+    /// `to_address` must be a testnet v2 address (`tbotho://2/<base58>`) or the
     /// legacy `view:<hex>,spend:<hex>` form. Syncs, builds a node-valid CLSAG
     /// transaction from the wallet's spendable outputs, submits it, and returns
     /// the transaction hash.

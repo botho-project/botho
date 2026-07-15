@@ -110,7 +110,7 @@ impl Address {
                 "quantum addresses retired (ADR 0006): the quantum-private \
                  transaction class was removed before mainnet, so this \
                  address can no longer receive funds.\n\
-                 Ask the recipient for a classical address (botho://1/...).\n\
+                 Ask the recipient for a current address (botho://2/...).\n\
                  Post-quantum protection is moving to universal ML-KEM on \
                  standard outputs (see issue #904)."
             ));

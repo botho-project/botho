@@ -302,7 +302,7 @@ async fn rpc_call(client: &Client, addr: SocketAddr, method: &str, params: Value
 ///
 /// Builds a deterministic, *distinct* wallet for each `seed` (so per-address
 /// rate-limit tests see independent addresses) and formats its default
-/// subaddress as a `tbotho://1/...` testnet address. The faucet parses this on
+/// subaddress as a `tbotho://2/...` testnet address. The faucet parses this on
 /// the Testnet network.
 fn test_address(seed: u8) -> String {
     // Deterministic 32 bytes of entropy keyed by `seed`, distinct per seed.
@@ -311,7 +311,9 @@ fn test_address(seed: u8) -> String {
         .expect("Failed to build mnemonic from entropy");
     let wallet =
         Wallet::from_mnemonic(mnemonic.phrase()).expect("Failed to create wallet from mnemonic");
-    Address::classical(wallet.default_address(), Network::Testnet).to_address_string()
+    Address::classical(wallet.default_address(), Network::Testnet)
+        .to_address_string()
+        .expect("wallet address should encode as a v2 address string")
 }
 
 // ============================================================================
