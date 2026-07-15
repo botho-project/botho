@@ -29,6 +29,7 @@ fn test_output(amount: u64, id: u8) -> TxOutput {
         public_key: [id.wrapping_add(1); 32],
         e_memo: None,
         cluster_tags: ClusterTagVector::empty(),
+        kem_ciphertext: None,
     }
 }
 

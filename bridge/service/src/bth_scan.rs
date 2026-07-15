@@ -90,6 +90,7 @@ fn tx_output_from_rpc(out: &RpcOutput) -> Result<TxOutput, String> {
         public_key: parse_hex_32("output.public_key", &out.public_key)?,
         e_memo,
         cluster_tags: Default::default(),
+        kem_ciphertext: None,
     })
 }
 
@@ -259,6 +260,7 @@ pub fn build_release_tx<R: RngCore + CryptoRng>(
             public_key: parse_hex_32("input.public_key", &input.owned.public_key)?,
             e_memo: None,
             cluster_tags: Default::default(),
+            kem_ciphertext: None,
         };
         let onetime_private = real_output
             .recover_spend_key(account, input.owned.subaddress_index)
@@ -275,6 +277,7 @@ pub fn build_release_tx<R: RngCore + CryptoRng>(
                 public_key: parse_hex_32("decoy.public_key", &decoy.public_key)?,
                 e_memo: None,
                 cluster_tags: Default::default(),
+                kem_ciphertext: None,
             }));
         }
         shuffle(&mut ring, rng);

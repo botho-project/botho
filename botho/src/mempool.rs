@@ -1449,6 +1449,7 @@ mod tests {
             public_key: [id.wrapping_add(1); 32],
             e_memo: None,
             cluster_tags: ClusterTagVector::empty(),
+            kem_ciphertext: None,
         }
     }
 
@@ -1506,6 +1507,7 @@ mod tests {
                 public_key: [0x33; 32],
                 e_memo: None,
                 cluster_tags: ClusterTagVector::single(ClusterId(1)),
+                kem_ciphertext: None,
             },
             created_at: 1,
         };
@@ -1529,6 +1531,7 @@ mod tests {
             public_key: [0x56; 32],
             e_memo: None,
             cluster_tags: ClusterTagVector::single(ClusterId(1)),
+            kem_ciphertext: None,
         };
         let wealth = effective_cluster_wealth_from_outputs(&[small_output], &ledger).unwrap();
         assert_eq!(wealth, whale_amount as u128);
@@ -1542,6 +1545,7 @@ mod tests {
             public_key: [0x58; 32],
             e_memo: None,
             cluster_tags: half_tags,
+            kem_ciphertext: None,
         };
         let wealth = effective_cluster_wealth_from_outputs(&[half_output], &ledger).unwrap();
         assert_eq!(wealth, whale_amount as u128 / 2);
@@ -1579,6 +1583,7 @@ mod tests {
             public_key: [0x56; 32],
             e_memo: None,
             cluster_tags: ClusterTagVector::single(ClusterId(1)),
+            kem_ciphertext: None,
         };
         let result = effective_cluster_wealth_from_outputs(&[tagged_output], &ledger);
         assert!(
@@ -2316,6 +2321,7 @@ mod tests {
                 public_key: [seed.wrapping_add(1); 32],
                 e_memo: None,
                 cluster_tags: tags,
+                kem_ciphertext: None,
             };
             utxos.push(Utxo {
                 id: UtxoId::new([seed; 32], 0),
@@ -2455,6 +2461,7 @@ mod tests {
                 ClusterId(wealthy_cluster),
                 TAG_WEIGHT_SCALE,
             )]),
+            kem_ciphertext: None,
         }];
         let tx = Transaction {
             inputs: TxInputs::new(vec![ClsagRingInput {

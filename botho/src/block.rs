@@ -333,6 +333,7 @@ impl MintingTx {
             public_key: self.public_key,
             e_memo: None, // Minting rewards don't have memos
             cluster_tags: ClusterTagVector::single(cluster_id),
+            kem_ciphertext: None,
         }
     }
 }
@@ -399,6 +400,7 @@ impl LotteryOutput {
             public_key: self.public_key,
             e_memo: None, // Lottery payouts don't need memos
             cluster_tags,
+            kem_ciphertext: None,
         }
     }
 }

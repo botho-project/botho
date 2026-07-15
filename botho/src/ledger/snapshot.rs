@@ -375,6 +375,7 @@ mod tests {
                 public_key: [id.wrapping_add(1); 32],
                 e_memo: None,
                 cluster_tags: ClusterTagVector::default(),
+                kem_ciphertext: None,
             },
             created_at: id as u64,
         }

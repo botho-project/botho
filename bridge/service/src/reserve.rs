@@ -454,6 +454,7 @@ fn reserve_output_key_image(
         public_key,
         e_memo: None,
         cluster_tags: Default::default(),
+        kem_ciphertext: None,
     };
     let onetime = tx_out
         .recover_spend_key(account, owned.subaddress_index)

@@ -1183,6 +1183,7 @@ impl Ledger {
                 public_key: winner_utxo.output.public_key,
                 e_memo: None,
                 cluster_tags: winner_utxo.output.cluster_tags.clone(),
+                kem_ciphertext: None,
             };
 
             let payout_utxo_id = UtxoId::new(new_hash, (lottery_idx as u32) + 1);
@@ -3888,6 +3889,7 @@ mod tests {
             public_key: [0x33; 32],
             e_memo: None,
             cluster_tags: ClusterTagVector::empty(),
+            kem_ciphertext: None,
         };
         let utxo = Utxo {
             id: utxo_id,
@@ -3935,6 +3937,7 @@ mod tests {
                 public_key: [0x33; 32],
                 e_memo: None,
                 cluster_tags: ClusterTagVector::single(ClusterId(1)),
+                kem_ciphertext: None,
             },
             created_at: 1,
         };
@@ -3946,6 +3949,7 @@ mod tests {
                 public_key: [0x44; 32],
                 e_memo: None,
                 cluster_tags: ClusterTagVector::single(ClusterId(1)),
+                kem_ciphertext: None,
             },
             created_at: 1,
         };
@@ -3994,6 +3998,7 @@ mod tests {
             public_key: [tk ^ 0xA0; 32],
             e_memo: None,
             cluster_tags: full_tags(cluster),
+            kem_ciphertext: None,
         }
     }
 
@@ -4210,6 +4215,7 @@ mod tests {
                 public_key: [0x22; 32],
                 e_memo: None,
                 cluster_tags: ClusterTagVector::empty(),
+                kem_ciphertext: None,
             },
             created_at: 0,
         };
@@ -4245,6 +4251,7 @@ mod tests {
                 public_key: [0xCC; 32],
                 e_memo: None,
                 cluster_tags: ClusterTagVector::empty(),
+                kem_ciphertext: None,
             },
             created_at: 100,
         };
@@ -4612,6 +4619,7 @@ mod tests {
                 public_key: [0u8; 32],
                 e_memo: None,
                 cluster_tags: ClusterTagVector::empty(),
+                kem_ciphertext: None,
             },
             created_at: 0, // eligible at any height >= min_utxo_age
         }
@@ -4801,6 +4809,7 @@ mod tests {
             public_key: [seed.wrapping_add(100); 32],
             e_memo: None,
             cluster_tags: tags,
+            kem_ciphertext: None,
         }
     }
 

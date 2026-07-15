@@ -466,6 +466,7 @@ impl TransactionBuilder {
                 public_key: utxo.public_key,
                 e_memo: None,
                 cluster_tags: ClusterTagVector::empty(),
+                kem_ciphertext: None,
             };
             let real_member = RingMember::from_output(&real_output);
 
