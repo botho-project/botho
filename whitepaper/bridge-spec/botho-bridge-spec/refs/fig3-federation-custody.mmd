@@ -1,0 +1,26 @@
+flowchart TB
+    subgraph VAL[SCP Validators]
+        V1["Validator 1<br/>Ed25519 + secp256k1"]
+        V2["Validator 2<br/>Ed25519 + secp256k1"]
+        Vn["Validator n<br/>Ed25519 + secp256k1"]
+    end
+
+    AS["Attestation set<br/>aggregated t-of-n"]:::anvil-accent
+
+    V1 --> AS
+    V2 --> AS
+    Vn --> AS
+
+    AS -->|"BTH release<br/>(Ed25519)"| BR["BTH reserve release"]
+    AS -->|"Solana mint<br/>(Ed25519)"| SOL["Solana SPL / Squads<br/>mint authority"]
+    AS -->|"Ethereum mint<br/>(secp256k1)"| MS["minterSafe<br/>MINTER_ROLE"]
+
+    subgraph ETH[Ethereum three-Safe split]
+        MS
+        AD["adminSafe<br/>role admin"]:::anvil-muted
+        PS["pauserSafe<br/>PAUSER_ROLE"]:::anvil-warning
+    end
+
+    classDef anvil-accent fill:#1f4e7a,stroke:#1a1a1a,color:#ffffff;
+    classDef anvil-muted fill:#6b6b6b,stroke:#1a1a1a,color:#ffffff;
+    classDef anvil-warning fill:#b5651d,stroke:#1a1a1a,color:#ffffff;

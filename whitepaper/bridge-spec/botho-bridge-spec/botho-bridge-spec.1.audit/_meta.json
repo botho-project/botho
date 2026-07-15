@@ -1,0 +1,14 @@
+{
+  "critic": "audit",
+  "role": "auditor",
+  "started": "2026-07-14T19:10:00Z",
+  "finished": "2026-07-14T19:35:00Z",
+  "model": "claude-opus-4-8",
+  "schema_version": 1,
+  "scorecard_kind": "human-verdict",
+  "rubric_id": "anvil-spec-v1",
+  "rubric_total": 44,
+  "advance_threshold": 39,
+  "atomicity_fallback": "manual-mv",
+  "audit_clean": true
+}

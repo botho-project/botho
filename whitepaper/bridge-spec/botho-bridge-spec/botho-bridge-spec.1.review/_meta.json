@@ -1,0 +1,12 @@
+{
+  "critic": "review",
+  "role": "spec-review.md",
+  "started": "2026-07-14T19:30:00Z",
+  "finished": "2026-07-14T19:45:00Z",
+  "model": "claude-opus-4-8",
+  "schema_version": 1,
+  "scorecard_kind": "human-verdict",
+  "rubric_id": "anvil-spec-v1",
+  "rubric_total": 44,
+  "advance_threshold": 39
+}

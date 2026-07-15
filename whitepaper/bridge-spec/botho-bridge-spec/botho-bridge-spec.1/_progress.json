@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "thread": "botho-bridge-spec",
+  "phases": {
+    "draft": {
+      "state": "done",
+      "started": "2026-07-14T19:05:00Z",
+      "completed": "2026-07-14T19:20:00Z"
+    }
+  },
+  "metadata": {
+    "iteration": 1,
+    "max_iterations": 4,
+    "artifact_type": "spec",
+    "rubric_id": "anvil-spec-v1",
+    "rubric_total": 44,
+    "advance_threshold": 39,
+    "adoption_note": "Authored initial normative LaTeX for whitepaper section 11 from the ratified ADRs (0002-0005, 0007) + the implementation. Not a placement/adoption of a pre-existing body: this section did not exist yet, so the drafter synthesized the initial normative body that will become the 'existing spec' the anvil:spec lifecycle then reviews/audits/adopts. Constants and predicates are taken from the ADRs and cross-checked against code_ref, not invented.",
+    "code_ref_resolved": [
+      "/Users/rwalters/GitHub/botho/bridge/**/*.rs (35 files; scalar glob per BRIEF resolves the bridge Rust service)",
+      "bridge/service/src/mint/ethereum.rs",
+      "bridge/service/src/mint/solana.rs",
+      "bridge/service/src/release/bth.rs",
+      "bridge/service/src/bth_scan.rs",
+      "bridge/service/src/reserve.rs",
+      "bridge/core/src/attestation.rs",
+      "bridge/core/src/config.rs",
+      "cluster-tax/src/simulation/bridge_import_sweep.rs (import-factor mechanism lives here, not on the release path)",
+      "contracts/ethereum/contracts/WrappedBTH.sol (auditor consults manually per BRIEF note)",
+      "contracts/solana/programs/wbth/src/lib.rs",
+      "transaction/clsag/src/lib.rs (DEFAULT_RING_SIZE = 20)"
+    ],
+    "constants_marked": [
+      { "name": "wbth_decimals", "value": "12", "unit": "decimals", "verified_against": "WrappedBTH.sol:14 (12 decimals, 1 base unit == 1 picocredit)" },
+      { "name": "bridge_threshold_floor", "value": "t_scp", "unit": "validators", "verified_against": "ADR 0002; release/bth.rs threshold_floor param; symbolic (no numeric t pinned in code)" },
+      { "name": "ring_size", "value": "20", "unit": "members", "verified_against": "transaction/clsag/src/lib.rs:571 DEFAULT_RING_SIZE = 20" },
+      { "name": "import_epoch_blocks", "value": "17280", "unit": "blocks", "verified_against": "ADR 0007 (K = 17,280 = 1 day @ 5s); NOT yet in bridge code (simulation only)" },
+      { "name": "import_factor_floor", "value": "1.5", "unit": "x", "verified_against": "ADR 0007 (F = 1.5x); NOT yet in bridge code (simulation only)" }
+    ],
+    "figure_plan": [
+      {
+        "id": "fig1",
+        "caption": "Wrap / lock -> mint flow (BTH -> wBTH): factor-1 deposit locked, SCP-final, t-of-n attested, minted against orderId; non-factor-1 rejected.",
+        "path": "exhibits/fig1-wrap-mint-flow.png",
+        "source": "inline mermaid: sequenceDiagram user -> reserve (lock factor-1 BTH) -> BTH watcher (SCP final) -> federation (t-of-n attest) -> destination contract (bridgeMint orderId); side branch non-factor-1 -> reject"
+      },
+      {
+        "id": "fig2",
+        "caption": "Unwrap -> import-tagging flow (wBTH -> BTH): burn confirmed, attested, reserve BTH released to fresh stealth address tagged 100% to c_import(m) at import_factor(m) >= F. Target-state; live releases factor-1.",
+        "path": "exhibits/fig2-unwrap-import-flow.png",
+        "source": "inline mermaid: sequenceDiagram user (burn wBTH) -> ETH/SOL watcher (confirm) -> federation (t-of-n release attest) -> reserve (release to fresh stealth, tag c_import(m) at import_factor>=F); annotate target-state vs live factor-1"
+      },
+      {
+        "id": "fig3",
+        "caption": "Federation custody / attestation topology: each validator holds Ed25519 (BTH release + Solana mint) + secp256k1 (Ethereum); threshold envelopes aggregated t-of-n; Ethereum three-Safe split (minter/admin/pauser).",
+        "path": "exhibits/fig3-federation-custody.png",
+        "source": "inline mermaid: flowchart validators (Ed25519 + secp256k1) -> attestation set (t-of-n) -> {BTH reserve release, Solana SPL/Squads mint, Ethereum minterSafe MINTER_ROLE}; show adminSafe + pauserSafe as separate role holders"
+      }
+    ],
+    "self_check": {
+      "code_ref_grounding": "Verified live claims against code: Ethereum mint path (mint/ethereum.rs Safe execTransaction + bridgeMint orderId) LIVE; release path (release/bth.rs validate_release_attestation + live #856 transport) LIVE; exactly-once (record-before-broadcast, order-marker PDA, processedOrders) LIVE; three-Safe structure (WrappedBTH.sol minterSafe/adminSafe/pauserSafe) LIVE; domain tags (attestation.rs) LIVE; peg reconciler (reserve.rs, unverified-chain fail-safe) LIVE; 12 decimals + ring size 20 verified. Import tagging (ADR 0007) marked TARGET-STATE (register IMP row) because it lives ONLY in cluster-tax simulation; bth_scan.rs release output carries EMPTY cluster tags (asserts factor-1). Demurrage-settlement op TARGET-STATE (no consensus op in code). Solana marked TARGET-STATE despite being code-complete because integration is #[ignore]d/unverified end-to-end and external audit is pending.",
+      "adoption_note": "Initial-authoring (adoption-first skill applied to a not-yet-existing section): synthesized the normative body from ratified ADRs + code, not a filesystem placement of a prior LaTeX tree.",
+      "figure_note": "Three draft-time figure references placed (fig1 wrap/mint, fig2 unwrap/import, fig3 custody); spec-figures renders to exhibits/fig{1,2,3}-*.png.",
+      "adr_code_disagreements": [
+        "IMPORT TAGGING: ADR 0007 (ratified) says unwrap tags c_import(m) at import_factor>=F; code releases factor-1 (bth_scan.rs empty cluster tags, asserted). Disposition guidance: intentional-gap, registered (IMP-1 / #938). Not a code-wrong escalation.",
+        "SOLANA SCOPE: BRIEF + ADR framing calls Solana transports 'stubbed (#856/#857/#858/#853)'. Code disagrees: mint/solana.rs, solana_rpc.rs, watchers/solana.rs are LIVE-WIRED (#857) against a raw JSON-RPC client, only #[ignore]d live-node integration + external audit outstanding. Spec records Solana as target-state on the audit/integration axis but flags the BRIEF's 'stubbed' characterization as stale relative to code (auditor should confirm the disposition; likely spec/BRIEF-wording, not code-wrong).",
+        "release/bth.rs #856: BRIEF/ADR-era 'stub' language is superseded — the RPC-dependent release stages are LIVE per the in-code module docs; spec describes them as live accordingly."
+      ]
+    }
+  }
+}

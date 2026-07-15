@@ -1,0 +1,27 @@
+{
+  "constant_consistency": {
+    "found": true,
+    "declarations": [
+      { "name": "wbth_decimals", "value": "12", "unit": "decimals", "section": "Motivation and Scope", "source": "botho-bridge-spec.tex", "kind": "marker" },
+      { "name": "bridge_threshold_floor", "value": "t_scp", "unit": "validators", "section": "Threshold authorization", "source": "botho-bridge-spec.tex", "kind": "marker" },
+      { "name": "ring_size", "value": "20", "unit": "members", "section": "Privacy at the Boundary", "source": "botho-bridge-spec.tex", "kind": "marker" },
+      { "name": "import_epoch_blocks", "value": "17280", "unit": "blocks", "section": "Epoch-keyed import cluster (target-state)", "source": "botho-bridge-spec.tex", "kind": "marker" },
+      { "name": "import_factor_floor", "value": "1.5", "unit": "x", "section": "Epoch-keyed import cluster (target-state)", "source": "botho-bridge-spec.tex", "kind": "marker" },
+      { "name": "import_epoch_blocks", "value": "17280", "unit": "blocks", "section": "Epoch-keyed import cluster (target-state)", "source": "botho-bridge-spec.tex", "kind": "marker" },
+      { "name": "import_factor_floor", "value": "1.5", "unit": "x", "section": "Epoch-keyed import cluster (target-state)", "source": "botho-bridge-spec.tex", "kind": "marker" }
+    ],
+    "violations": [],
+    "passed": true
+  },
+  "figure_exhibit": {
+    "step_4c": "missing-exhibits",
+    "referenced": [
+      "exhibits/fig1-wrap-mint-flow.png",
+      "exhibits/fig2-unwrap-import-flow.png",
+      "exhibits/fig3-federation-custody.png"
+    ],
+    "exhibits_dir_exists": false,
+    "dim6_capped": 2,
+    "dim7_capped": 2
+  }
+}

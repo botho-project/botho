@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "thread": "botho-bridge-spec",
+  "critic": "review",
+  "phases": {
+    "review": {
+      "state": "done",
+      "started": "2026-07-14T19:30:00Z",
+      "completed": "2026-07-14T19:45:00Z"
+    }
+  },
+  "metadata": {
+    "reviews_version": 1,
+    "rubric_id": "anvil-spec-v1",
+    "rubric_total": 44,
+    "advance_threshold": 39,
+    "total_score": 38,
+    "advance": false,
+    "review_critical_flags": 0,
+    "constant_gate": { "found": true, "declarations": 7, "distinct_names": 5, "violations": 0, "passed": true },
+    "figure_gate": { "step_4c": "missing-exhibits", "dim6_capped": 2, "dim7_capped": 2 },
+    "code_ref_tier": "active-but-deferred-to-audit",
+    "evidence_check": { "spans_checked": 9, "fabricated_evidence": 0 },
+    "scope": "prose/structure/consistency reviewer; code-side factual cross-check owned by parallel spec-audit"
+  }
+}
