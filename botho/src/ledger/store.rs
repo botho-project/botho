@@ -1759,11 +1759,21 @@ impl Ledger {
     /// consensus_floor(tx) = base_minimum_fee(tx_size, num_outputs, num_memos,
     ///                                        cluster_wealth,  // NO congestion
     ///                                        CONSENSUS_FEE_BASE)
-    ///                     + demurrage_charge(output_sum, floored_factor,
+    ///                     + spend_demurrage_charge(output_sum,
+    ///                                        floored_factor,  // composed input floor
+    ///                                        claimed_factor,  // declared output
     ///                                        ring_elapsed_quantile@max,
     ///                                        rate_bps(height), blocks_per_year)
     /// require: tx.fee >= consensus_floor(tx)
     /// ```
+    ///
+    /// where `spend_demurrage_charge = max(accrued_to_date, capitalized_reset)`
+    /// (issue #925): the capitalized term prices a genuine class downgrade
+    /// (`claimed_factor < floored_factor`) at capitalized future demurrage over
+    /// the shared `SETTLEMENT_HORIZON_BLOCKS`, closing the #834
+    /// background-reset leak. It is zero for in-class and
+    /// background→background spends, so it only ever raises the floor on an
+    /// actual downgrade.
     ///
     /// # Why this is a pure function of block + chain state (design #574 Q5)
     ///
@@ -1918,9 +1928,23 @@ impl Ledger {
         let import_floor = self.import_floor_factor_from_outputs(&tx.outputs)?;
         let demurrage_factor = demurrage_factor.max(import_floor);
 
-        let demurrage = bth_cluster_tax::demurrage_charge(
+        // #925 (background-reset leak, #834): total demurrage is
+        // `max(accrued_to_date, capitalized_reset_charge)`. The capitalized term
+        // prices a genuine class DOWNGRADE — the spender-declared output factor
+        // `claimed_factor` dropping below the composed input-class floor
+        // `demurrage_factor` (ring-centroid B2 + ADR-0007 import floor) — at
+        // capitalized future demurrage over the shared
+        // `SETTLEMENT_HORIZON_BLOCKS`, mirroring #831's settlement charge. It
+        // fires ONLY on a downgrade (`claimed_factor < demurrage_factor`); an
+        // in-class or background→background spend has `claimed_factor ==
+        // demurrage_factor` ⇒ zero capitalized, so honest holds pay only their
+        // accrued-to-date demurrage exactly as before. The young-coin exploit
+        // (elapsed ≈ 0 ⇒ accrued ≈ 0) is now caught by the capitalized term.
+        // Pure integer math; only ever RAISES the floor (liveness-safe).
+        let demurrage = bth_cluster_tax::spend_demurrage_charge(
             output_sum,
             demurrage_factor,
+            claimed_factor,
             elapsed,
             policy.demurrage_rate_bps(block_height),
             blocks_per_year,
@@ -5250,6 +5274,180 @@ mod tests {
             floor > base_only,
             "the wealthy ring's implied factor must floor the background claim and \
              charge demurrage (floor={floor}, base={base_only})"
+        );
+    }
+
+    /// Recompute the pure base minimum fee (no demurrage) for a tx, so a test
+    /// can isolate the demurrage contribution of the consensus floor.
+    #[cfg(test)]
+    fn base_only_fee(ledger: &Ledger, tx: &BothoTransaction) -> u64 {
+        use bth_cluster_tax::{FeeConfig, TransactionType};
+        let fc = FeeConfig::default();
+        let cw = ledger
+            .effective_cluster_wealth_from_outputs(&tx.outputs)
+            .unwrap();
+        fc.minimum_fee_dynamic_with_outputs(
+            TransactionType::Hidden,
+            tx.estimate_size(),
+            cw,
+            tx.outputs.len(),
+            tx.outputs.iter().filter(|o| o.has_memo()).count(),
+            CONSENSUS_FEE_BASE,
+        )
+    }
+
+    /// #925: spending a YOUNG wealthy coin to a background output — the #834
+    /// background-reset exploit — is now PRICED at the capitalized reset even
+    /// though the accrued-to-date demurrage is ≈0 (elapsed ≈ 0). This is the
+    /// consensus analog of `demurrage_background_reset_leak_is_real`.
+    #[test]
+    fn consensus_fee_floor_prices_young_wealthy_to_background_downgrade() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        // Wealthy cluster 7 (10M BTH in picocredits).
+        ledger
+            .set_cluster_wealth_for_test(7, 10_000_000_000_000_000_000)
+            .unwrap();
+
+        // Demurrage active (past the halving interval).
+        let block_height = 8_000_000u64;
+        // The real input is YOUNG: created at the current height (age 0), and
+        // wealthy (tagged to cluster 7). Fresh wealthy decoys too — the whole
+        // ring is young.
+        let mut specs = vec![(100_000_000u64, block_height, 7u64, 70u8)];
+        for i in 0..10u8 {
+            specs.push((100_000_000, block_height, 7, 71 + i));
+        }
+        let ring = seed_ring_utxos(&ledger, &specs);
+        // Output: fully background (the deflating downgrade).
+        let output_sum = 90_000_000u64;
+        let outputs = vec![mk_tagged_output(output_sum, 140, ClusterTagVector::empty())];
+        let tx = mk_transfer_tx(ring, outputs, 0);
+
+        let floor = ledger.consensus_fee_floor(&tx, block_height).unwrap();
+        let base_only = base_only_fee(&ledger, &tx);
+        let demurrage = floor - base_only;
+
+        assert!(
+            demurrage > 0,
+            "the young-wealthy→background downgrade must be priced (leak closed): \
+             demurrage={demurrage}"
+        );
+
+        // The charge equals the capitalized reset over SETTLEMENT_HORIZON_BLOCKS,
+        // computed from the same public inputs.
+        let policy = crate::monetary::mainnet_policy();
+        let rate = policy.demurrage_rate_bps(block_height);
+        let bpy = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
+        let curve = bth_cluster_tax::ClusterFactorCurve::default_params();
+        let floor_factor =
+            bth_cluster_tax::ring_centroid_implied_factor(&[(output_sum, 10u128.pow(19))], &curve);
+        assert_eq!(floor_factor, 5745, "10M-BTH cluster floors at 5.745×");
+        let expected = bth_cluster_tax::capitalized_reset_charge(
+            output_sum,
+            floor_factor,
+            bth_cluster_tax::demurrage::FACTOR_SCALE, // background 1× declared
+            bth_cluster_tax::SETTLEMENT_HORIZON_BLOCKS,
+            rate,
+            bpy,
+        );
+        assert_eq!(
+            demurrage, expected,
+            "downgrade charge must equal the capitalized reset ({expected})"
+        );
+
+        // Determinism: proposer and validators recompute the identical verdict.
+        let again = ledger.consensus_fee_floor(&tx, block_height).unwrap();
+        assert_eq!(floor, again, "consensus floor must be deterministic");
+    }
+
+    /// #925 no-over-charge: an honest background→background spend (declared 1×
+    /// over a background ring) incurs ZERO downgrade charge — the floor is 1×
+    /// on both sides, so there is nothing to price. Honest commerce is
+    /// untouched.
+    #[test]
+    fn consensus_fee_floor_honest_background_spend_has_zero_downgrade_charge() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let block_height = 8_000_000u64;
+        // Background ring (cluster 0 = untagged) + background output.
+        let ring = seed_ring_utxos(
+            &ledger,
+            &[(100_000_000, 0, 0, 50), (100_000_000, 10, 0, 51)],
+        );
+        let outputs = vec![mk_tagged_output(90_000_000, 150, ClusterTagVector::empty())];
+        let tx = mk_transfer_tx(ring, outputs, 0);
+
+        let floor = ledger.consensus_fee_floor(&tx, block_height).unwrap();
+        let base_only = base_only_fee(&ledger, &tx);
+        assert_eq!(
+            floor, base_only,
+            "an honest background spend pays zero demurrage (floor==base): \
+             floor={floor}, base={base_only}"
+        );
+    }
+
+    /// #925 max-form: an honest OLD in-class wealthy spend pays its
+    /// accrued-to-date demurrage, NOT the (larger) capitalized reset — the
+    /// `max(accrued, capitalized)` form never over-charges an in-class hold
+    /// because there is no downgrade (capitalized term is 0).
+    #[test]
+    fn consensus_fee_floor_honest_inclass_wealthy_pays_accrued_not_capitalized() {
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        ledger
+            .set_cluster_wealth_for_test(8, 10_000_000_000_000_000_000)
+            .unwrap();
+        let block_height = 8_000_000u64;
+        // OLD wealthy ring (created at height 0 → age 8M blocks), spent IN-CLASS
+        // (output tagged to the same wealthy cluster 8).
+        let ring = seed_ring_utxos(&ledger, &[(100_000_000, 0, 8, 60), (100_000_000, 0, 8, 61)]);
+        let output_sum = 90_000_000u64;
+        let outputs = vec![mk_tagged_output(
+            output_sum,
+            160,
+            ClusterTagVector::from_pairs(&[(
+                bth_transaction_types::ClusterId(8),
+                TAG_WEIGHT_SCALE,
+            )]),
+        )];
+        let tx = mk_transfer_tx(ring, outputs, 0);
+
+        let floor = ledger.consensus_fee_floor(&tx, block_height).unwrap();
+        let base_only = base_only_fee(&ledger, &tx);
+        let demurrage = floor - base_only;
+
+        let policy = crate::monetary::mainnet_policy();
+        let rate = policy.demurrage_rate_bps(block_height);
+        let bpy = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
+        let elapsed = bth_cluster_tax::ring_elapsed_quantile(
+            &[(100_000_000, 0), (100_000_000, 0)],
+            block_height,
+            CONSENSUS_RING_AGE_QUANTILE_BPS,
+        );
+        // In-class: floor factor == declared factor == 5745, so the accrued term
+        // is charged and the capitalized (downgrade) term is exactly 0.
+        let accrued = bth_cluster_tax::demurrage_charge(output_sum, 5745, elapsed, rate, bpy);
+        assert_eq!(
+            demurrage, accrued,
+            "an in-class hold pays only accrued-to-date demurrage: \
+             demurrage={demurrage}, accrued={accrued}"
+        );
+        // And that accrued (8M blocks ≈ 1.27yr) is strictly below the 5yr
+        // capitalized reset a downgrade would have cost — proving `max` picked
+        // the smaller, honest obligation.
+        let capitalized = bth_cluster_tax::capitalized_reset_charge(
+            output_sum,
+            5745,
+            bth_cluster_tax::demurrage::FACTOR_SCALE,
+            bth_cluster_tax::SETTLEMENT_HORIZON_BLOCKS,
+            rate,
+            bpy,
+        );
+        assert!(
+            accrued < capitalized,
+            "the honest accrued charge {accrued} must be below the capitalized reset \
+             {capitalized} it is NOT charged"
         );
     }
 

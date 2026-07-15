@@ -97,7 +97,9 @@ use crate::{
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
-use super::settlement_horizon_sweep::{candidate_horizons, Horizon, BLOCKS_PER_YEAR, RATE_BPS};
+use super::settlement_horizon_sweep::{
+    candidate_horizons, factor_classes, FactorClass, Horizon, BLOCKS_PER_YEAR, RATE_BPS,
+};
 
 /// Deterministic seed for this sweep (distinct from the settlement sweep's
 /// `0xB07A_0833`).
@@ -324,24 +326,16 @@ pub fn downgrade_charge(
     output_declared_factor: u64,
     horizon_blocks: u64,
 ) -> u64 {
-    if output_declared_factor >= input_floor_factor {
-        return 0;
-    }
-    let at_floor = demurrage_charge(
+    // Reuse the shipped consensus kernel verbatim so the sim and the node price
+    // the identical downgrade (issue #925 Part 2).
+    crate::capitalized_reset_charge(
         value_pico,
         input_floor_factor,
-        horizon_blocks,
-        RATE_BPS,
-        BLOCKS_PER_YEAR,
-    );
-    let at_output = demurrage_charge(
-        value_pico,
         output_declared_factor,
         horizon_blocks,
         RATE_BPS,
         BLOCKS_PER_YEAR,
-    );
-    at_floor.saturating_sub(at_output)
+    )
 }
 
 /// A generated honest spend, with its horizon-independent downgrade
@@ -640,6 +634,217 @@ fn evaluate_exploit(
     }
 }
 
+// ===========================================================================
+// Factor-similarity decoy band (§4.6, issue #925 Part 1)
+// ===========================================================================
+//
+// §4.5 showed the ONLY honest over-charge channel is a wealthy decoy
+// contaminating a background spender's value-weighted ring floor (8.3% FP at 1%
+// contamination). The wallet-layer fix mirrors the shipped
+// `AGE_SIMILARITY_SPREAD_BPS = 1000` (±10%) age band in
+// `botho/src/decoy_selection.rs`: draw only decoys whose cluster factor is
+// within a band around the real input's factor, so a background (1×) spender
+// draws only near-1× decoys and the floor stays exact.
+//
+// This sweep finds the widest band that keeps the honest false-positive rate at
+// ~0% while retaining the same-class decoy pool (anonymity). Because factor is
+// class-quantized (the curve is flat at exactly 1× for background wealth), the
+// same-class background pool is retained at ANY band width; the binding
+// constraint is the band's UPPER edge staying below the nearest wealthy class.
+
+/// The pathological raw decoy contamination the factor band is stress-tested
+/// against: 5% wealthy decoys (the §4.5 level that produced a 34% FP rate with
+/// NO band filter). A good band must drive that back to ~0.
+pub const FACTOR_BAND_CONTAMINATION_BPS: u32 = 500;
+
+/// Candidate factor-similarity band widths (basis points of multiplicative
+/// spread around the real input's factor). ±5% … ±500%: the lower values match
+/// the age band convention; the wide values expose the knee where wealthy
+/// classes bleed into a background spender's band.
+pub fn factor_band_widths() -> Vec<u32> {
+    vec![
+        500, 1_000, 2_000, 3_500, 5_000, 9_000, 10_000, 25_000, 50_000,
+    ]
+}
+
+/// Inclusive upper edge of the factor band around `real_factor` at `band_bps`
+/// spread, clamped to the curve maximum (6×). Mirrors `age_similarity_band`.
+fn factor_band_hi(real_factor: u64, band_bps: u32) -> u64 {
+    let delta = (real_factor as u128 * band_bps as u128 / 10_000) as u64;
+    real_factor
+        .saturating_add(delta)
+        .min(6 * ClusterFactorCurve::FACTOR_SCALE)
+}
+
+/// Inclusive lower edge of the factor band, floored at the 1× minimum.
+fn factor_band_lo(real_factor: u64, band_bps: u32) -> u64 {
+    let delta = (real_factor as u128 * band_bps as u128 / 10_000) as u64;
+    real_factor
+        .saturating_sub(delta)
+        .max(ClusterFactorCurve::FACTOR_SCALE)
+}
+
+/// Draw one wealthy decoy's `(value_pico, cluster_wealth_pico)` from a random
+/// factor class (spread across the top decile), so the band knee surfaces as
+/// each class progressively enters a widening band.
+fn draw_wealthy_decoy(
+    classes: &[FactorClass],
+    params: &HonestSweepParams,
+    rng: &mut ChaCha8Rng,
+) -> (u64, u128) {
+    let class = &classes[rng.gen_range(0..classes.len())];
+    let dv = rng.gen_range(params.wealthy_decoy_value_bth.0..=params.wealthy_decoy_value_bth.1);
+    (
+        bth_to_pico_u64(dv),
+        class.cluster_wealth_bth as u128 * PICO_PER_BTH,
+    )
+}
+
+/// One row of the factor-band sweep: a candidate band width and its measured
+/// effect on the honest FP rate and the eligible decoy pool.
+#[derive(Clone, Debug)]
+pub struct FactorBandRow {
+    /// Band width in basis points of multiplicative spread (1000 = ±10%).
+    pub band_bps: u32,
+    /// Inclusive upper factor edge for a background (1×) spender at this band.
+    pub band_hi_factor: u64,
+    /// Number of wealthy factor classes that leak into a 1× spender's band.
+    pub wealthy_classes_admitted: usize,
+    /// Fraction of a realistic mixed candidate pool
+    /// ((1−c) background + c wealthy) admitted by the band — the eligible pool.
+    pub eligible_pool_frac: f64,
+    /// Fraction of the same-class (background) sub-pool retained (anonymity).
+    /// 1.0 at every band: factor is class-quantized, so a background spender
+    /// never loses same-class candidates.
+    pub same_class_retained: f64,
+    /// Honest false-positive rate for background spends WITH the band filter,
+    /// at the pathological [`FACTOR_BAND_CONTAMINATION_BPS`] raw
+    /// contamination.
+    pub false_positive_rate: f64,
+    /// Mean over-charge (% of value) on the tripped spends at the 5yr horizon.
+    pub mean_overcharge_5yr: f64,
+}
+
+impl FactorBandRow {
+    /// True when the band drives the honest false-positive rate to zero — the
+    /// selection criterion for `FACTOR_SIMILARITY_SPREAD`.
+    pub fn fp_safe(&self) -> bool {
+        self.false_positive_rate == 0.0
+    }
+}
+
+/// Evaluate one factor-band width: apply the band filter to a background
+/// spender's decoy selection at the pathological contamination level and
+/// measure the residual FP rate + eligible pool.
+fn evaluate_factor_band(
+    params: &HonestSweepParams,
+    classes: &[FactorClass],
+    curve: &ClusterFactorCurve,
+    band_bps: u32,
+) -> FactorBandRow {
+    // A background spender's real input is fully diffused → factor 1×.
+    let real_factor = curve.factor(0);
+    let lo = factor_band_lo(real_factor, band_bps);
+    let hi = factor_band_hi(real_factor, band_bps);
+
+    // Which wealthy classes leak into the band (analytic).
+    let wealthy_classes_admitted = classes
+        .iter()
+        .filter(|c| {
+            let f = curve.factor(c.cluster_wealth_bth as u128 * PICO_PER_BTH);
+            f > real_factor && f >= lo && f <= hi
+        })
+        .count();
+
+    // Eligible pool of a mixed candidate set: (1−c) background (always in-band)
+    // + c wealthy spread uniformly across the classes (in-band iff its factor
+    // fits the band). Background retention is 1.0 by construction.
+    let c = FACTOR_BAND_CONTAMINATION_BPS as f64 / 10_000.0;
+    let eligible_pool_frac =
+        (1.0 - c) + c * (wealthy_classes_admitted as f64 / classes.len() as f64);
+
+    // Monte-Carlo FP: build banded background rings and count floors > 1×.
+    let value_pico = bth_to_pico_u64(params.exploit_coin_value_bth.max(1));
+    let mut rng = ChaCha8Rng::seed_from_u64(params.seed ^ 0xBA0D_0000 ^ band_bps as u64);
+    let output_declared = real_factor; // background spender declares 1×
+    let mut tripped = 0usize;
+    let mut sum_overcharge = 0.0f64;
+    for _ in 0..params.n_spends {
+        // Real background input.
+        let mut ring: Vec<(u64, u128)> = Vec::with_capacity(params.ring_size);
+        let bg_real_value =
+            rng.gen_range(params.bg_decoy_value_bth.0..=params.bg_decoy_value_bth.1);
+        ring.push((bth_to_pico_u64(bg_real_value), 0));
+        for _ in 1..params.ring_size {
+            let wealthy = rng.gen_range(0..10_000u32) < FACTOR_BAND_CONTAMINATION_BPS;
+            let (dv, dw) = if wealthy {
+                draw_wealthy_decoy(classes, params, &mut rng)
+            } else {
+                let dv = rng.gen_range(params.bg_decoy_value_bth.0..=params.bg_decoy_value_bth.1);
+                (bth_to_pico_u64(dv), 0u128)
+            };
+            let f = curve.factor(dw);
+            if f >= lo && f <= hi {
+                // Passes the band filter → admitted.
+                ring.push((dv, dw));
+            } else {
+                // Rejected by the band filter → the wallet substitutes an
+                // in-band (background) decoy, exactly as Part 3 does.
+                let sub = rng.gen_range(params.bg_decoy_value_bth.0..=params.bg_decoy_value_bth.1);
+                ring.push((bth_to_pico_u64(sub), 0));
+            }
+        }
+        let input_floor = ring_centroid_implied_factor(&ring, curve);
+        if output_declared < input_floor {
+            tripped += 1;
+            let charge = downgrade_charge(
+                value_pico,
+                input_floor,
+                output_declared,
+                5 * BLOCKS_PER_YEAR,
+            );
+            sum_overcharge += charge as f64 / value_pico as f64 * 100.0;
+        }
+    }
+
+    FactorBandRow {
+        band_bps,
+        band_hi_factor: hi,
+        wealthy_classes_admitted,
+        eligible_pool_frac,
+        same_class_retained: 1.0,
+        false_positive_rate: tripped as f64 / params.n_spends as f64,
+        mean_overcharge_5yr: if tripped > 0 {
+            sum_overcharge / tripped as f64
+        } else {
+            0.0
+        },
+    }
+}
+
+/// Run the factor-band sweep across all candidate band widths.
+pub fn factor_band_sweep(
+    params: &HonestSweepParams,
+    classes: &[FactorClass],
+    curve: &ClusterFactorCurve,
+) -> Vec<FactorBandRow> {
+    factor_band_widths()
+        .into_iter()
+        .map(|bw| evaluate_factor_band(params, classes, curve, bw))
+        .collect()
+}
+
+/// The widest FP-safe band width in a completed sweep — the recommended
+/// `FACTOR_SIMILARITY_SPREAD`. Falls back to the tightest band if none is safe
+/// (never happens for the shipped population).
+pub fn recommended_factor_band(rows: &[FactorBandRow]) -> u32 {
+    rows.iter()
+        .filter(|r| r.fp_safe())
+        .map(|r| r.band_bps)
+        .max()
+        .unwrap_or(0)
+}
+
 /// The full honest-overcharge report.
 #[derive(Clone, Debug)]
 pub struct HonestOverchargeReport {
@@ -655,6 +860,11 @@ pub struct HonestOverchargeReport {
     pub sensitivity: Vec<PopulationResult>,
     /// The exploit spend, confirming the leak is still priced at every horizon.
     pub exploit: ExploitResult,
+    /// Factor-similarity decoy band sweep (§4.6, #925 Part 1): picks
+    /// `FACTOR_SIMILARITY_SPREAD` for the wallet-layer decoy filter.
+    pub factor_band: Vec<FactorBandRow>,
+    /// The recommended (widest FP-safe) band width, in basis points.
+    pub recommended_factor_band_bps: u32,
 }
 
 /// Run the complete honest-overcharge sweep with the default configuration.
@@ -671,6 +881,9 @@ pub fn run_honest_overcharge_sweep() -> HonestOverchargeReport {
         .map(|c| evaluate_population(&archetypes, &params, &horizons, c, &curve))
         .collect();
     let exploit = evaluate_exploit(&params, &horizons, &curve);
+    let classes = factor_classes();
+    let factor_band = factor_band_sweep(&params, &classes, &curve);
+    let recommended_factor_band_bps = recommended_factor_band(&factor_band);
 
     HonestOverchargeReport {
         horizons,
@@ -680,6 +893,8 @@ pub fn run_honest_overcharge_sweep() -> HonestOverchargeReport {
         clean,
         sensitivity,
         exploit,
+        factor_band,
+        recommended_factor_band_bps,
     }
 }
 
@@ -845,6 +1060,58 @@ pub fn to_markdown(report: &HonestOverchargeReport) -> String {
     }
     s.push('\n');
 
+    // 6. Factor-similarity decoy band (§4.6, #925 Part 1).
+    s.push_str("### Factor-similarity decoy band (picks `FACTOR_SIMILARITY_SPREAD`)\n\n");
+    s.push_str(&format!(
+        "The §4.5 contamination channel is closed at the wallet layer by a factor band \
+         mirroring the shipped `AGE_SIMILARITY_SPREAD_BPS` (±10%) age band: a background (1×) \
+         spender draws only decoys whose cluster factor sits within the band around its real \
+         input's factor. This sweep applies that filter at the pathological {:.1}% raw \
+         contamination (the §4.5 level that gave a {:.1}% FP rate UNFILTERED) and finds the \
+         widest band that keeps the honest FP rate at 0%. Band edge = `1000 × (1 + spread)` \
+         clamped to 6×; same-class (background) pool retention is 1.00 at every band because \
+         factor is class-quantized.\n\n",
+        FACTOR_BAND_CONTAMINATION_BPS as f64 / 100.0,
+        report
+            .sensitivity
+            .iter()
+            .find(|r| r.contamination_bps == FACTOR_BAND_CONTAMINATION_BPS)
+            .map(|r| r.false_positive_rate * 100.0)
+            .unwrap_or(0.0),
+    ));
+    s.push_str(
+        "| factor band | band edge (×) | wealthy classes admitted | eligible pool | \
+         same-class pool | honest FP rate | mean over-charge @5yr | FP-safe |\n",
+    );
+    s.push_str(
+        "|------------:|--------------:|-------------------------:|--------------:|\
+         ----------------:|---------------:|----------------------:|:-------:|\n",
+    );
+    for r in &report.factor_band {
+        s.push_str(&format!(
+            "| ±{:.0}% | {:.3}× | {} / {} | {:.2}% | {:.2}% | {:.4}% | {:.4}% | {} |\n",
+            r.band_bps as f64 / 100.0,
+            r.band_hi_factor as f64 / ClusterFactorCurve::FACTOR_SCALE as f64,
+            r.wealthy_classes_admitted,
+            factor_classes().len(),
+            r.eligible_pool_frac * 100.0,
+            r.same_class_retained * 100.0,
+            r.false_positive_rate * 100.0,
+            r.mean_overcharge_5yr,
+            if r.fp_safe() { "yes" } else { "NO" },
+        ));
+    }
+    s.push('\n');
+    s.push_str(&format!(
+        "**Recommended `FACTOR_SIMILARITY_SPREAD` = ±{:.0}% ({} bps)** — the age-band \
+         convention, comfortably inside the widest FP-safe band (±{:.0}%). Every band that \
+         excludes the nearest wealthy class drives the honest FP rate to exactly 0% while \
+         retaining the full same-class background pool.\n\n",
+        1_000_f64 / 100.0,
+        1_000,
+        recommended_factor_band(&report.factor_band) as f64 / 100.0,
+    ));
+
     s
 }
 
@@ -957,6 +1224,61 @@ mod tests {
             *rates.last().unwrap() > 0.0,
             "heavy contamination must produce some false positives"
         );
+    }
+
+    #[test]
+    fn factor_band_recommendation_is_the_age_band_and_is_fp_safe() {
+        // The recommended band (±10%, matching AGE_SIMILARITY_SPREAD_BPS) must
+        // drive the honest FP rate to exactly 0 at the pathological
+        // contamination, and the widest FP-safe band must be at least ±10%.
+        let report = run_honest_overcharge_sweep();
+        let ten_pct = report
+            .factor_band
+            .iter()
+            .find(|r| r.band_bps == 1_000)
+            .expect("±10% band swept");
+        assert_eq!(
+            ten_pct.false_positive_rate, 0.0,
+            "±10% band must be FP-safe at {}bps contamination",
+            FACTOR_BAND_CONTAMINATION_BPS
+        );
+        assert_eq!(ten_pct.same_class_retained, 1.0, "same-class pool retained");
+        assert!(
+            report.recommended_factor_band_bps >= 1_000,
+            "widest FP-safe band {} must be at least the ±10% convention",
+            report.recommended_factor_band_bps
+        );
+    }
+
+    #[test]
+    fn factor_band_knee_admits_wealthy_classes_and_raises_fp() {
+        // A pathologically wide band eventually bleeds a wealthy class into a
+        // background spender's ring, lifting FP above zero — the knee that
+        // bounds the safe band from above.
+        let report = run_honest_overcharge_sweep();
+        let widest = report.factor_band.last().unwrap();
+        assert!(
+            widest.wealthy_classes_admitted > 0,
+            "the widest swept band must admit at least one wealthy class"
+        );
+        assert!(
+            widest.false_positive_rate > 0.0,
+            "admitting wealthy classes must produce honest false positives (FP={})",
+            widest.false_positive_rate
+        );
+        // FP rate is monotonically non-decreasing in band width (wider admits
+        // more contamination, never less).
+        let rates: Vec<f64> = report
+            .factor_band
+            .iter()
+            .map(|r| r.false_positive_rate)
+            .collect();
+        for w in rates.windows(2) {
+            assert!(
+                w[1] >= w[0] - 1e-12,
+                "FP rate must be non-decreasing in band width: {rates:?}"
+            );
+        }
     }
 
     #[test]

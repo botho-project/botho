@@ -121,7 +121,20 @@ use crate::{
 /// index is built from genesis). Interacts with #925 (the remaining spend-to-
 /// background reset door) only in that both touch the factor-floor area; they
 /// are SEPARATE mechanisms.
-pub const PROTOCOL_VERSION: &str = "5.0.0";
+/// PROTOCOL 6.0.0 (#925, background-reset leak): the consensus fee floor now
+/// prices a demurrage class DOWNGRADE — a spend whose declared output factor
+/// drops below the composed ring-implied input floor — at capitalized future
+/// demurrage over `SETTLEMENT_HORIZON_BLOCKS` (`max(accrued,
+/// capitalized_reset)` via `bth_cluster_tax::spend_demurrage_charge`), routed
+/// to the lottery pool. This closes the last domestic reset door (spend
+/// young-wealthy → background paid ≈0). It is CONSENSUS-BREAKING: a 5.x peer
+/// charges only accrued-to-date demurrage and would accept/produce blocks whose
+/// deflating spends the 6.0.0 chain now requires to pay the higher downgrade
+/// floor, so the two fork. MAJOR bump (`is_consensus_compatible` is major-only)
+/// with `MIN_SUPPORTED_PROTOCOL_VERSION` rising to 6.0.0 in lockstep
+/// (pre-mainnet testnet reset). Shares the single `SETTLEMENT_HORIZON_BLOCKS`
+/// dial with #831.
+pub const PROTOCOL_VERSION: &str = "6.0.0";
 
 /// Minimum supported protocol version.
 /// Peers below this version are consensus-incompatible and are disconnected.
@@ -140,7 +153,12 @@ pub const PROTOCOL_VERSION: &str = "5.0.0";
 /// floor (#938): 4.x peers apply no import floor and would fork the
 /// import-tagged/floored chain, so they must be disconnected (major-only
 /// check).
-pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "5.0.0";
+///
+/// Raised to 6.0.0 for the #925 downgrade-charge consensus rule: 5.x peers
+/// price only accrued-to-date demurrage and would fork the chain that now
+/// charges the capitalized reset on deflating spends, so they must be
+/// disconnected.
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "6.0.0";
 
 /// Topic for block announcements
 const BLOCKS_TOPIC: &str = "botho/blocks/1.0.0";
@@ -2221,11 +2239,31 @@ mod tests {
         // the >=F import floor (#938): a consensus-breaking fee-floor rule.
         // MAJOR (not minor) because `is_consensus_compatible` is major-only, so
         // a minor bump would leave 4.x peers connected and silently forking.
-        assert_eq!(PROTOCOL_VERSION, "5.0.0");
+        //
+        // Bumped to 6.0.0 (MAJOR) for the #925 downgrade charge: the consensus
+        // fee floor now prices a demurrage class downgrade at capitalized future
+        // demurrage, another consensus-breaking fee-floor rule. MAJOR so 5.x
+        // peers (accrued-only) are disconnected rather than left forking.
+        assert_eq!(PROTOCOL_VERSION, "6.0.0");
         let parsed = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
-        assert_eq!(parsed.major, 5);
+        assert_eq!(parsed.major, 6);
         assert_eq!(parsed.minor, 0);
         assert_eq!(parsed.patch, 0);
+    }
+
+    /// #925 is a consensus-breaking MAJOR bump (5.x → 6.0.0): 5.x peers price
+    /// only accrued-to-date demurrage and would silently fork the chain that
+    /// now charges the capitalized downgrade reset, so they must be
+    /// DISCONNECTED.
+    #[test]
+    fn test_v5_peers_are_consensus_incompatible_after_issue_925() {
+        let local = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
+        let v5_peer = ProtocolVersion::parse("5.0.0").unwrap();
+        assert!(!v5_peer.is_consensus_compatible(&local));
+        assert_eq!(
+            ProtocolVersion::consensus_incompatibility(&Some(v5_peer.clone()), &local),
+            Some(v5_peer)
+        );
     }
 
     /// ADR 0007 (#938) is a consensus-breaking MAJOR bump (4.x → 5.0.0), so 4.x
@@ -2244,9 +2282,9 @@ mod tests {
 
     #[test]
     fn test_min_supported_protocol_version_constant() {
-        assert_eq!(MIN_SUPPORTED_PROTOCOL_VERSION, "5.0.0");
+        assert_eq!(MIN_SUPPORTED_PROTOCOL_VERSION, "6.0.0");
         let parsed = ProtocolVersion::parse(MIN_SUPPORTED_PROTOCOL_VERSION).unwrap();
-        assert_eq!(parsed.major, 5);
+        assert_eq!(parsed.major, 6);
         assert_eq!(parsed.minor, 0);
     }
 

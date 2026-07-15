@@ -43,15 +43,25 @@
 //! fully background-tagged output (legal deflation under
 //! `check_cluster_tag_inheritance`, which only rejects inflation), pay ≈0, and
 //! land a genuinely-background coin whose future ring floor is 1× — escaping
-//! all FUTURE stock-level demurrage. This is a real, unpriced future-demurrage
-//! leak, demonstrated by [`tests::demurrage_background_reset_leak_is_real`] and
-//! written up in `docs/research/demurrage-background-reset-leak.md`. It mirrors
-//! exactly the escape #831's settlement op closes for the wrapping on-ramp: the
-//! settlement op prices the same class transition by charging *capitalized
-//! future* demurrage (ADR 0003), whereas an ordinary spend charges only
-//! *accrued-to-date* demurrage. The proposed on-chain fix (price the class
-//! transition = charge capitalized future demurrage on deflation) is tracked as
-//! a mainnet blocker in issue #925.
+//! all FUTURE stock-level demurrage. This was a real, unpriced future-demurrage
+//! leak (issue #834, write-up in
+//! `docs/research/demurrage-background-reset-leak.md`).
+//!
+//! ### The fix (#925): price the class transition
+//!
+//! [`spend_demurrage_charge`] closes the leak by charging
+//! `max(accrued_to_date, capitalized_reset_charge)` on every spend. The
+//! capitalized term ([`capitalized_reset_charge`]) prices the permanent exit
+//! from a wealth class at *capitalized future* demurrage over the shared
+//! [`SETTLEMENT_HORIZON_BLOCKS`], mirroring exactly the escape #831's
+//! settlement op closes for the wrapping on-ramp (ADR 0003). Because it keys
+//! strictly off an actual downgrade relative to the ring floor, an honest hold
+//! spent at its true class pays only its accrued demurrage, and a genuine
+//! background→ background spend (floor 1× on both sides) pays zero — but the
+//! young-coin exploit, whose `elapsed ≈ 0` zeroed the accrued term, now pays
+//! the full capitalized reset.
+//! [`tests::demurrage_background_reset_leak_is_real`] asserts the priced
+//! transition.
 //!
 //! ## Determinism
 //!
@@ -115,6 +125,141 @@ pub fn demurrage_charge(
     let charge = charge.saturating_mul(time_fraction) / TIME_SCALE;
 
     u64::try_from(charge).unwrap_or(u64::MAX)
+}
+
+/// Blocks per year at the 5s reference block time (`31_536_000 s / 5 s`).
+/// Matches `mainnet_policy().target_block_time_secs = 5` and the simulation
+/// sweeps (`settlement_horizon_sweep`, `downgrade_overcharge_sweep`).
+pub const BLOCKS_PER_YEAR_5S: u64 = 6_307_200;
+
+/// Shared capitalization horizon for a **permanent exit from the demurrage
+/// regime** (ADR 0003 / issue #833).
+///
+/// Both escape doors read this ONE constant so neither is a cheaper route than
+/// the other:
+///
+/// - #831's opt-in **settlement op** (wrap wealthy → factor-1, then bridge
+///   out).
+/// - #925's automatic **downgrade charge** (spend wealthy → background output),
+///   priced by [`spend_demurrage_charge`] / [`capitalized_reset_charge`].
+///
+/// = **5 years** at the 5s reference block time (`5 × BLOCKS_PER_YEAR_5S` =
+/// `31_536_000`). Calibrated in
+/// `docs/research/settlement-horizon-calibration.md`: 5yr is the only swept
+/// horizon that keeps the residual redistribution gain above the 0.05 design
+/// floor even if the entire top decile exits at once, while keeping the
+/// wrap/downgrade cost a 1.9%–9.5% friction rather than a wall. A single shared
+/// horizon prevents the cheaper door from dominating (calibration doc §6); if a
+/// future need to diverge the two arises it must be its own ADR.
+pub const SETTLEMENT_HORIZON_BLOCKS: u64 = 5 * BLOCKS_PER_YEAR_5S; // 31_536_000
+
+/// Capitalized future-demurrage charge for a demurrage-class **downgrade** —
+/// the base-layer analog of #831's settlement charge (issue #925).
+///
+/// Prices the permanent exit from a wealth class on a deflating spend: the
+/// **net** capitalized future demurrage escaped by declaring an output at
+/// `output_factor` when the input's true class floor — the ring-implied /
+/// import-composed factor the spender cannot rewrite — is `input_floor_factor`:
+///
+/// ```text
+/// if output_factor < input_floor_factor {
+///     demurrage_charge(value, input_floor_factor, horizon)
+///         - demurrage_charge(value, output_factor, horizon)
+/// } else { 0 }   // in-class or inflation ⇒ nothing to price
+/// ```
+///
+/// Reuses [`demurrage_charge`] verbatim (no second charge model). A genuine
+/// background→background spend floors at 1× on both sides ⇒ `1000 < 1000` is
+/// false ⇒ zero charge, so honest commerce is never touched. Keyed strictly off
+/// an actual downgrade relative to the ring floor, so it fires only on the
+/// young-coin exploit the accrued-to-date term misses.
+///
+/// # Determinism
+/// CONSENSUS-CRITICAL: pure integer arithmetic (two [`demurrage_charge`] calls
+/// and a saturating subtraction). Liveness-safe: only ever raises the fee
+/// floor.
+pub fn capitalized_reset_charge(
+    transfer_value: u64,
+    input_floor_factor: u64,
+    output_factor: u64,
+    horizon_blocks: u64,
+    rate_bps: u32,
+    blocks_per_year: u64,
+) -> u64 {
+    if output_factor >= input_floor_factor {
+        return 0;
+    }
+    let at_floor = demurrage_charge(
+        transfer_value,
+        input_floor_factor,
+        horizon_blocks,
+        rate_bps,
+        blocks_per_year,
+    );
+    let at_output = demurrage_charge(
+        transfer_value,
+        output_factor,
+        horizon_blocks,
+        rate_bps,
+        blocks_per_year,
+    );
+    at_floor.saturating_sub(at_output)
+}
+
+/// Total demurrage owed on a spend under #925: the greater of accrued-to-date
+/// demurrage and the capitalized charge for a class downgrade.
+///
+/// ```text
+/// charge = max(
+///     demurrage_charge(value, input_floor_factor, elapsed, ...),        // accrued-to-date
+///     capitalized_reset_charge(value, input_floor_factor, output_factor,
+///                              SETTLEMENT_HORIZON_BLOCKS, ...),          // priced class exit
+/// )
+/// ```
+///
+/// This is the **load-bearing formula** from the #925 verdict
+/// (`docs/research/demurrage-background-reset-leak.md`): an honest hold spent
+/// at its true class pays its real accrued demurrage (the capitalized term is 0
+/// because there is no downgrade), while the young-coin exploit — which drives
+/// `elapsed ≈ 0` so accrued ≈ 0 — is caught by the capitalized term. The `max`
+/// (not a sum) guarantees the charge never exceeds the larger of the two
+/// obligations, so it never over-charges an honest spend and stays symmetric
+/// with #831's opt-in settlement price (capitalized future demurrage over the
+/// same [`SETTLEMENT_HORIZON_BLOCKS`]).
+///
+/// `input_floor_factor` is the composed ring floor the spender cannot rewrite
+/// (`max(claimed, ring_centroid_implied_factor, import_floor)`),
+/// `output_factor` is the spender-declared output factor. A downgrade is
+/// exactly `output_factor < input_floor_factor`; a background→background spend
+/// floors at 1× on both sides and pays zero.
+///
+/// # Determinism
+/// CONSENSUS-CRITICAL: pure integer arithmetic. Liveness-safe: only ever raises
+/// the fee floor, never false-rejects a valid spend.
+pub fn spend_demurrage_charge(
+    transfer_value: u64,
+    input_floor_factor: u64,
+    output_factor: u64,
+    elapsed_blocks: u64,
+    rate_bps: u32,
+    blocks_per_year: u64,
+) -> u64 {
+    let accrued = demurrage_charge(
+        transfer_value,
+        input_floor_factor,
+        elapsed_blocks,
+        rate_bps,
+        blocks_per_year,
+    );
+    let capitalized = capitalized_reset_charge(
+        transfer_value,
+        input_floor_factor,
+        output_factor,
+        SETTLEMENT_HORIZON_BLOCKS,
+        rate_bps,
+        blocks_per_year,
+    );
+    accrued.max(capitalized)
 }
 
 /// Compute the value-weighted elapsed-blocks centroid for a set of ring
@@ -613,29 +758,26 @@ mod tests {
         assert_eq!(one_year, half * 2);
     }
 
-    /// REGRESSION / EVIDENCE (issue #834): a wealthy holder can reset a coin's
-    /// demurrage class to background via an ordinary spend, paying ≈0 and
-    /// escaping ALL future stock-level demurrage.
+    /// REGRESSION (issue #834 → fix #925): the wealthy-holder class-reset
+    /// escape is now **priced**. A holder who spends a young wealthy coin
+    /// to a background output no longer pays ≈0 —
+    /// [`spend_demurrage_charge`] charges the capitalized reset (the same
+    /// capitalized future demurrage #831's settlement op charges), so the
+    /// class transition costs the full price.
     ///
-    /// This test walks the exact suspect sequence and ASSERTS the observed
-    /// charges at each step. It is the executable answer to issue #834:
-    /// **the leak is real.** The full write-up is in
+    /// This test walks the exact former-leak sequence and ASSERTS the new
+    /// priced charge at the deflating step. It is the executable proof that
+    /// the fix closes the #834 leak. The full write-up is in
     /// `docs/research/demurrage-background-reset-leak.md`.
     ///
     /// The mechanism reproduced here is the consensus fee-floor demurrage term
     /// (`Ledger::consensus_fee_floor` in `botho/src/ledger/store.rs`):
-    /// `demurrage_charge(output_sum, max(claimed_factor, ring_implied),
-    /// elapsed@max, rate, bpy)`. This test drives the two pure pieces that
-    /// path composes — [`ring_centroid_implied_factor`] (the factor floor
-    /// the spender cannot rewrite) and [`demurrage_charge`] (the
-    /// accrued-time charge) — so the numbers are the real consensus
-    /// numbers, not a re-derivation.
-    ///
-    /// If a future fix prices the class transition (e.g. charging capitalized
-    /// future demurrage on deflation, mirroring #831's settlement charge), the
-    /// `spend#1` assertion below will start failing — which is the intended
-    /// signal that the leak is closed. Update this test at that point to assert
-    /// the new priced-transition charge.
+    /// `spend_demurrage_charge(output_sum, floor_factor, output_factor,
+    /// elapsed@max, rate, bpy)`, which composes
+    /// [`ring_centroid_implied_factor`] (the factor floor the spender
+    /// cannot rewrite), [`demurrage_charge`] (the accrued-time charge) and
+    /// [`capitalized_reset_charge`] (the priced class exit) — so the
+    /// numbers are the real consensus numbers, not a re-derivation.
     #[test]
     fn demurrage_background_reset_leak_is_real() {
         use crate::ClusterFactorCurve;
@@ -649,88 +791,113 @@ mod tests {
         let output_sum: u64 = 1_000 * PICO_PER_BTH as u64;
 
         // --- Baseline: what an HONEST wealthy holder pays if they simply hold
-        //     the coin for a year and then spend it (no class reset). The ring
-        //     is composed of members carrying the wealthy cluster's public,
-        //     inherited tags, so the implied factor floor is high; the coin is
-        //     one year old, so elapsed = BLOCKS_PER_YEAR.
+        //     the coin for a year and then spend it IN-CLASS (no downgrade). The
+        //     ring members carry the wealthy cluster's public tags, so the
+        //     implied factor floor is high; the coin is one year old, so
+        //     elapsed = BLOCKS_PER_YEAR. Spent in-class, the capitalized term is
+        //     0 and the holder pays only the accrued-to-date demurrage.
         let wealthy_ring = [(output_sum, wealthy_cluster_wealth)];
         let wealthy_factor = ring_centroid_implied_factor(&wealthy_ring, &curve);
         assert_eq!(
             wealthy_factor, 5745,
             "10M-BTH cluster maps to factor 5.745x (observed floor)"
         );
-        let honest_annual_charge = demurrage_charge(
+        let honest_annual_charge = spend_demurrage_charge(
             output_sum,
-            wealthy_factor,
+            wealthy_factor, // input floor
+            wealthy_factor, // output declared in-class => no downgrade
             BLOCKS_PER_YEAR,
             rate_bps,
             BLOCKS_PER_YEAR,
         );
         assert_eq!(
             honest_annual_charge, 18_980_000_000_000,
-            "honest wealthy holder pays ~18.98 BTH/yr on a 1000-BTH coin (in pico)"
+            "honest in-class wealthy holder pays ~18.98 BTH/yr on a 1000-BTH coin (accrued only)"
         );
 
-        // --- Step 1 of the attack: the whale first re-spends the wealthy coin
+        // --- Step 1 of the former attack: the whale re-spends the wealthy coin
         //     wealthy->wealthy to RESET its creation height (standard UTXO
-        //     behavior: a new output's created_at = the current block). This
-        //     pays the accrued charge for however long it had sat — but the
-        //     whale times it so the coin is spent again immediately, so the
-        //     age it must pay for at Step 2 is ~0. We model the post-reset coin
-        //     as elapsed = 0.
+        //     behavior). It times Step 2 to follow immediately, so the age it
+        //     must pay for at Step 2 is ~0. We model the post-reset coin as
+        //     elapsed = 0.
 
-        // --- Step 2 (the leak): spend the now-YOUNG wealthy coin to a fully
-        //     background-tagged output. `check_cluster_tag_inheritance` permits
-        //     this (deflation is legal; only inflation is rejected). The ring
-        //     floor still raises the factor to the wealthy 5745 — but demurrage
-        //     is proportional to elapsed, and elapsed ≈ 0, so the charge is 0.
+        // --- Step 2 (formerly THE LEAK, now PRICED): spend the now-YOUNG wealthy
+        //     coin to a fully background-tagged output. The ring floor raises the
+        //     input factor to the wealthy 5745 while the declared output factor
+        //     is 1x — a genuine class DOWNGRADE. `spend_demurrage_charge` now
+        //     charges the capitalized reset for the shed mass even though the
+        //     accrued-to-date term is ~0 (elapsed ≈ 0).
         let young_elapsed = 0u64;
-        let reset_spend_charge = demurrage_charge(
+        let output_declared_factor = FACTOR_SCALE; // background 1x claim
+        let reset_spend_charge = spend_demurrage_charge(
             output_sum,
-            wealthy_factor, // ring floor IS applied — factor is high...
-            young_elapsed,  // ...but elapsed is ~0, so it does nothing.
+            wealthy_factor,         // input floor (ring-implied, unrewritable)
+            output_declared_factor, // declared background => downgrade
+            young_elapsed,          // accrued term ≈ 0 ...
+            rate_bps,
+            BLOCKS_PER_YEAR,
+        );
+        // The charge equals the capitalized reset over the 5-year settlement
+        // horizon: by linearity that is exactly 5 × one honest year at the floor.
+        let expected_capitalized = capitalized_reset_charge(
+            output_sum,
+            wealthy_factor,
+            output_declared_factor,
+            SETTLEMENT_HORIZON_BLOCKS,
             rate_bps,
             BLOCKS_PER_YEAR,
         );
         assert_eq!(
-            reset_spend_charge, 0,
-            "THE LEAK: spending a young wealthy coin to background pays ZERO \
-             demurrage despite the ring floor raising the factor to {wealthy_factor}"
+            reset_spend_charge, expected_capitalized,
+            "the priced downgrade charge must equal the capitalized reset"
+        );
+        assert_eq!(
+            reset_spend_charge, 94_900_000_000_000,
+            "THE FIX: spending a young wealthy coin to background now costs the capitalized \
+             reset = 5 × the honest annual ({honest_annual_charge}), i.e. ~94.9 BTH"
+        );
+        assert_eq!(
+            reset_spend_charge,
+            honest_annual_charge * 5,
+            "capitalized over the 5yr horizon = 5 years of accrued demurrage, up front"
+        );
+        assert!(
+            reset_spend_charge > 0,
+            "the class transition is no longer free (leak closed)"
         );
 
         // --- After the reset: the output genuinely carries background tags, so
-        //     future rings composed of background members imply factor 1x.
+        //     future rings composed of background members imply factor 1x. A
+        //     genuine background→background spend floors at 1x on BOTH sides,
+        //     so there is no downgrade to price and the charge is zero — honest
+        //     commerce is never touched.
         let background_ring = [(output_sum, 0u128)];
         let background_factor = ring_centroid_implied_factor(&background_ring, &curve);
         assert_eq!(
             background_factor, FACTOR_SCALE,
             "the reset coin's ring floor is now 1x (background)"
         );
-
-        // --- Future demurrage on the reset coin: ZERO, forever, no matter how
-        //     long it is held. The stock-level charge the mechanism is designed
-        //     to extract has been fully escaped.
-        let future_charge_one_year = demurrage_charge(
+        let future_charge_one_year = spend_demurrage_charge(
             output_sum,
-            background_factor,
+            background_factor, // input floor 1x
+            background_factor, // output 1x => no downgrade
             BLOCKS_PER_YEAR,
             rate_bps,
             BLOCKS_PER_YEAR,
         );
         assert_eq!(
             future_charge_one_year, 0,
-            "escaped: the reset background coin pays zero demurrage even held a full year, \
-             vs the honest {honest_annual_charge} it would owe as a wealthy coin"
+            "an honest background->background spend pays zero: floor 1x on both sides"
         );
 
-        // --- The bottom line: total demurrage paid to shed the wealthy class is
-        //     0, while the priced exit (#831's settlement op) would charge the
-        //     capitalized future demurrage. The gap between these is the leak.
-        let total_paid_to_escape = reset_spend_charge + future_charge_one_year;
-        assert_eq!(total_paid_to_escape, 0);
+        // --- The bottom line: shedding the wealthy class now costs the full
+        //     capitalized reset up front (symmetric with #831's settlement op),
+        //     which strictly exceeds the honest single-year accrued charge. The
+        //     free exit is closed.
         assert!(
-            honest_annual_charge > total_paid_to_escape,
-            "an unpriced class transition strictly undercuts holding: {honest_annual_charge} > {total_paid_to_escape}"
+            reset_spend_charge > honest_annual_charge,
+            "the priced class transition now costs MORE than one honest year: \
+             {reset_spend_charge} > {honest_annual_charge}"
         );
     }
 }

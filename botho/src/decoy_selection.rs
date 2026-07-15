@@ -284,6 +284,66 @@ pub fn age_similarity_band(real_input_age: u64) -> (u64, u64) {
     (min_age, max_age)
 }
 
+/// Fixed-point scale for cluster factors (1000 = 1.0×, 6000 = 6.0×). Matches
+/// `bth_cluster_tax::ClusterFactorCurve::FACTOR_SCALE` and the demurrage
+/// kernel.
+pub const FACTOR_SCALE: u64 = 1_000;
+
+/// Maximum cluster factor in FACTOR_SCALE units (6.0×).
+pub const MAX_FACTOR_SCALED: u64 = 6 * FACTOR_SCALE;
+
+/// Factor-similarity policy: maximum relative spread, in basis points, of a
+/// selected decoy's cluster factor around the real input's factor
+/// (1000 bps = ±10%).
+///
+/// # Why this exists (issue #925, consensus-economic dependency of the #834 fix)
+///
+/// #925 prices a demurrage class DOWNGRADE: the consensus fee floor charges the
+/// capitalized future demurrage whenever a spend's declared output factor drops
+/// **below** the value-weighted ring-implied input floor
+/// (`bth_cluster_tax::spend_demurrage_charge`). For a genuine background (1×)
+/// spend the floor is exactly 1× ⇒ no downgrade ⇒ zero charge — but ONLY if the
+/// ring floor is exact. A single high-value **wealthy decoy** in a background
+/// spender's ring inflates the value-weighted floor above 1× and spuriously
+/// trips the downgrade charge (the honest-overcharge channel quantified in
+/// `docs/research/demurrage-downgrade-overcharge.md` §4.5: 8.3% false positives
+/// at just 1% contamination).
+///
+/// This band closes that channel at the wallet layer, exactly as
+/// [`AGE_SIMILARITY_SPREAD_BPS`] closes the age-dilution channel for the
+/// elapsed term: a spender draws only decoys whose cluster factor is within
+/// ±10% of its real input's factor, so a background spender draws only near-1×
+/// decoys and the ring floor stays exact.
+///
+/// # Why ±10% (docs/research/demurrage-downgrade-overcharge.md §4.6)
+///
+/// The band-width sweep (`downgrade_overcharge_sweep::factor_band_sweep`) shows
+/// the honest false-positive rate stays at **exactly 0%** for every band up to
+/// ±90% (the nearest wealthy class, 1.939×, only enters the band at ±100%),
+/// while the same-class background pool is retained at 100% at every width
+/// (factor is class-quantized, unlike continuous age). ±10% is adopted to match
+/// the established [`AGE_SIMILARITY_SPREAD_BPS`] convention with a ~9× safety
+/// margin to the first contaminating class, and it caps any in-band decoy's
+/// factor at 1.100× — so a worst-case admitted decoy can lift the floor by at
+/// most 10% of the 1× minimum. The gamma/OSPEAD age distribution and the
+/// [`AGE_SIMILARITY_SPREAD_BPS`] age band still apply WITHIN the factor band.
+pub const FACTOR_SIMILARITY_SPREAD: u64 = 1_000;
+
+/// Compute the inclusive `[min_factor, max_factor]` decoy-factor band around a
+/// real input's cluster factor under the [`FACTOR_SIMILARITY_SPREAD`] policy.
+///
+/// Mirrors [`age_similarity_band`]. Both bounds are clamped into the valid
+/// factor range `[FACTOR_SCALE, MAX_FACTOR_SCALED]`, so a background (1×) real
+/// input yields `[1000, 1100]` — admitting the whole background class while
+/// excluding every wealthy class.
+pub fn factor_similarity_band(real_input_factor: u64) -> (u64, u64) {
+    let f = real_input_factor.clamp(FACTOR_SCALE, MAX_FACTOR_SCALED);
+    let delta = (f as u128 * FACTOR_SIMILARITY_SPREAD as u128 / 10_000) as u64;
+    let min_factor = f.saturating_sub(delta).max(FACTOR_SCALE);
+    let max_factor = f.saturating_add(delta).min(MAX_FACTOR_SCALED);
+    (min_factor, max_factor)
+}
+
 /// An output candidate for decoy selection with age and cluster information.
 #[derive(Debug, Clone)]
 pub struct OutputCandidate {
@@ -295,6 +355,12 @@ pub struct OutputCandidate {
     pub age_blocks: u64,
     /// Cluster tags for this output (for cluster-aware selection)
     pub cluster_tags: ClusterTags,
+    /// The candidate's effective cluster factor in FACTOR_SCALE units
+    /// (1000 = 1×, 6000 = 6×), resolved by the wallet from the output's tags
+    /// against global per-cluster wealth. Drives the [`factor_similarity_band`]
+    /// filter (#925). Defaults to `FACTOR_SCALE` (1× / background) when
+    /// unknown.
+    pub effective_factor: u64,
 }
 
 impl OutputCandidate {
@@ -309,6 +375,7 @@ impl OutputCandidate {
             created_at: utxo.created_at,
             age_blocks,
             cluster_tags: ClusterTags::empty(),
+            effective_factor: FACTOR_SCALE,
         }
     }
 
@@ -324,12 +391,22 @@ impl OutputCandidate {
             created_at: utxo.created_at,
             age_blocks,
             cluster_tags,
+            effective_factor: FACTOR_SCALE,
         }
     }
 
     /// Add cluster tags to an existing candidate.
     pub fn with_cluster_tags(mut self, cluster_tags: ClusterTags) -> Self {
         self.cluster_tags = cluster_tags;
+        self
+    }
+
+    /// Set the candidate's effective cluster factor (FACTOR_SCALE units), used
+    /// by the [`factor_similarity_band`] decoy filter (#925). The wallet
+    /// resolves this from the output's cluster tags against global per-cluster
+    /// wealth via `bth_cluster_tax::ClusterFactorCurve`.
+    pub fn with_effective_factor(mut self, effective_factor: u64) -> Self {
+        self.effective_factor = effective_factor.clamp(FACTOR_SCALE, MAX_FACTOR_SCALED);
         self
     }
 
@@ -835,26 +912,64 @@ impl GammaDecoySelector {
         exclude_keys: &[[u8; 32]],
         rng: &mut R,
     ) -> Result<Vec<TxOutput>, DecoySelectionError> {
+        // #925 factor-similarity band: only draw decoys whose cluster factor is
+        // within ±FACTOR_SIMILARITY_SPREAD of the real input's factor, so a
+        // background (1×) spender draws only near-1× decoys and the consensus
+        // ring floor stays exact — a wealthy decoy would inflate the
+        // value-weighted floor and spuriously trip the #925 downgrade charge
+        // (docs/research/demurrage-downgrade-overcharge.md §4.5/§4.6). The band
+        // is applied ON TOP of the age + cluster-similarity filters; the gamma
+        // age distribution still applies within it.
+        let (min_factor, max_factor) = factor_similarity_band(real_input.effective_factor);
+        let in_factor_band = |c: &OutputCandidate| {
+            c.effective_factor >= min_factor && c.effective_factor <= max_factor
+        };
+
         // Filter candidates by:
         // 1. Minimum age
         // 2. Not excluded
-        // 3. Cluster similarity above threshold
+        // 3. Factor-similarity band (#925)
+        // 4. Cluster similarity above threshold
         let cluster_compatible: Vec<&OutputCandidate> = candidates
             .iter()
             .filter(|c| {
                 c.age_blocks >= MIN_DECOY_AGE_BLOCKS
                     && !exclude_keys.contains(&c.output.target_key)
+                    && in_factor_band(c)
                     && real_input.cluster_similarity(c) >= MIN_CLUSTER_SIMILARITY
             })
             .collect();
 
-        // If we have enough cluster-compatible candidates, use those
+        // If we have enough cluster-compatible, factor-banded candidates, use them
         if cluster_compatible.len() >= count {
             return self.select_from_pool(&cluster_compatible, count, exclude_keys, rng);
         }
 
-        // Fallback: relax cluster requirements but prefer similar ones
-        // This happens early in network life or with unusual cluster profiles
+        // Fallback 1: keep the factor band (it is consensus-economically
+        // load-bearing) but relax the cluster-similarity requirement.
+        let factor_banded: Vec<&OutputCandidate> = candidates
+            .iter()
+            .filter(|c| {
+                c.age_blocks >= MIN_DECOY_AGE_BLOCKS
+                    && !exclude_keys.contains(&c.output.target_key)
+                    && in_factor_band(c)
+            })
+            .collect();
+        if factor_banded.len() >= count {
+            return self.select_with_cluster_scoring(
+                &factor_banded,
+                count,
+                real_input,
+                exclude_keys,
+                rng,
+            );
+        }
+
+        // Fallback 2 (liveness): a sparse chain cannot supply `count` in-band
+        // decoys. Rather than fail the spend, relax the factor band and select
+        // from the full eligible pool. The #925 charge is liveness-safe (it only
+        // ever raises the fee floor), so a rare over-charge here is preferable to
+        // a stuck transaction — and the wallet can surface the higher fee.
         let eligible: Vec<&OutputCandidate> = candidates
             .iter()
             .filter(|c| {
@@ -1184,6 +1299,7 @@ mod tests {
             created_at: current_height.saturating_sub(age_blocks),
             age_blocks,
             cluster_tags: ClusterTags::empty(),
+            effective_factor: FACTOR_SCALE,
         }
     }
 
@@ -1204,6 +1320,7 @@ mod tests {
             created_at: current_height.saturating_sub(age_blocks),
             age_blocks,
             cluster_tags,
+            effective_factor: FACTOR_SCALE,
         }
     }
 
@@ -1842,5 +1959,107 @@ mod tests {
             high_sim > low_sim,
             "Matching cluster should have higher similarity"
         );
+    }
+
+    // =========================================================================
+    // Factor-similarity band tests (#925)
+    // =========================================================================
+
+    #[test]
+    fn test_factor_similarity_band_background() {
+        // A background (1×) real input admits [1000, 1100] — the whole
+        // background class, excluding every wealthy class.
+        let (lo, hi) = factor_similarity_band(FACTOR_SCALE);
+        assert_eq!(lo, 1_000);
+        assert_eq!(hi, 1_100);
+        // The nearest wealthy class (1.939× = 1939) is well outside the band.
+        assert!(1_939 > hi);
+    }
+
+    #[test]
+    fn test_factor_similarity_band_clamps() {
+        // Below-1× and above-6× inputs clamp into the valid factor range.
+        let (lo, _) = factor_similarity_band(0);
+        assert_eq!(lo, FACTOR_SCALE);
+        let (_, hi) = factor_similarity_band(u64::MAX);
+        assert_eq!(hi, MAX_FACTOR_SCALED);
+        // A mid-tier factor gets a symmetric ±10% band.
+        let (lo, hi) = factor_similarity_band(3_000);
+        assert_eq!(lo, 2_700);
+        assert_eq!(hi, 3_300);
+    }
+
+    #[test]
+    fn test_factor_band_excludes_wealthy_decoys_for_background_spender() {
+        // A background spender's ring must exclude a high-value wealthy decoy —
+        // exactly the §4.5 contamination the #925 charge would otherwise trip.
+        let selector = GammaDecoySelector::new();
+        let current_height = 100_000;
+        let mut real_key = [0u8; 32];
+        real_key[0] = 200;
+        // Background real input (factor 1×).
+        let real_input = make_candidate(real_key, 5_000, current_height);
+        assert_eq!(real_input.effective_factor, FACTOR_SCALE);
+
+        // Candidate pool: plenty of background (1×) decoys + a few wealthy ones.
+        let mut candidates = Vec::new();
+        for i in 0..15u8 {
+            let mut key = [0u8; 32];
+            key[0] = i;
+            candidates.push(make_candidate(key, 4_800 + i as u64 * 10, current_height));
+        }
+        for i in 0..5u8 {
+            let mut key = [0u8; 32];
+            key[0] = 100 + i;
+            // Wealthy decoy: factor 5.745× — the §4.5 contaminant.
+            candidates.push(
+                make_candidate(key, 4_800 + i as u64 * 10, current_height)
+                    .with_effective_factor(5_745),
+            );
+        }
+
+        let mut rng = rand::thread_rng();
+        let exclude = vec![real_key];
+        let decoys = selector
+            .select_decoys_cluster_aware(&candidates, 6, &real_input, &exclude, &mut rng)
+            .expect("selection succeeds with ample in-band background decoys");
+        assert_eq!(decoys.len(), 6);
+
+        // None of the selected decoys may be one of the wealthy keys (100..105):
+        // the factor band filtered them out, so the ring floor stays 1×.
+        for d in &decoys {
+            assert!(
+                d.target_key[0] < 100,
+                "a wealthy decoy leaked past the factor band"
+            );
+        }
+    }
+
+    #[test]
+    fn test_factor_band_liveness_fallback_when_pool_sparse() {
+        // If the in-band pool cannot supply `count`, selection still succeeds
+        // (liveness fallback), rather than failing the spend.
+        let selector = GammaDecoySelector::new();
+        let current_height = 100_000;
+        let mut real_key = [0u8; 32];
+        real_key[0] = 200;
+        let real_input = make_candidate(real_key, 5_000, current_height);
+
+        // Only wealthy candidates available (no in-band background decoys).
+        let candidates: Vec<OutputCandidate> = (0..8u8)
+            .map(|i| {
+                let mut key = [0u8; 32];
+                key[0] = i;
+                make_candidate(key, 4_800 + i as u64 * 10, current_height)
+                    .with_effective_factor(5_745)
+            })
+            .collect();
+
+        let mut rng = rand::thread_rng();
+        let exclude = vec![real_key];
+        let decoys = selector
+            .select_decoys_cluster_aware(&candidates, 6, &real_input, &exclude, &mut rng)
+            .expect("liveness fallback selects out-of-band decoys rather than failing");
+        assert_eq!(decoys.len(), 6);
     }
 }

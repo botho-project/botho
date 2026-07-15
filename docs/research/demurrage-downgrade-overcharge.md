@@ -169,6 +169,47 @@ mean over-charge is ~9.39% of the small coin's value at 5yr, essentially the ful
 capitalized demurrage applied to an innocent commerce coin. This is the reverse of the H2
 age-dilution attack — here value-weighting *inflates* the floor instead of a spender diluting it.
 
+### 4.6 Factor-similarity decoy band — closing the §4.5 channel (issue #925 Part 1)
+
+§4.5 leaves exactly one wallet-layer lever: a background spender must not draw a high-value
+wealthy coin as a decoy. This is the direct analog of the age-dilution concern PR #595 closed
+for the elapsed term with the **`AGE_SIMILARITY_SPREAD_BPS = 1000` (±10%)** age band. We
+close the factor channel the same way: a background (1×) spender draws only decoys whose
+cluster factor sits within a band around its real input's factor. The sweep below applies that
+filter at the **pathological 5% raw contamination** (the §4.5 level that produced a 34.1% FP
+rate *unfiltered*) and finds the widest band that still keeps the honest false-positive rate at
+0%, while retaining the same-class decoy pool. Reproduce with `honest-overcharge-sweep`; every
+number is regenerated, nothing hand-computed.
+
+| factor band | band edge (×) | wealthy classes admitted | eligible pool | same-class pool | honest FP rate | mean over-charge @5yr | FP-safe |
+|------------:|--------------:|-------------------------:|--------------:|----------------:|---------------:|----------------------:|:-------:|
+| ±5% | 1.050× | 0 / 6 | 95.00% | 100.00% | 0.0000% | 0.0000% | yes |
+| ±10% | 1.100× | 0 / 6 | 95.00% | 100.00% | 0.0000% | 0.0000% | yes |
+| ±20% | 1.200× | 0 / 6 | 95.00% | 100.00% | 0.0000% | 0.0000% | yes |
+| ±35% | 1.350× | 0 / 6 | 95.00% | 100.00% | 0.0000% | 0.0000% | yes |
+| ±50% | 1.500× | 0 / 6 | 95.00% | 100.00% | 0.0000% | 0.0000% | yes |
+| ±90% | 1.900× | 0 / 6 | 95.00% | 100.00% | 0.0000% | 0.0000% | yes |
+| ±100% | 2.000× | 1 / 6 | 95.83% | 100.00% | 8.0300% | 1.5649% | NO |
+| ±250% | 3.500× | 3 / 6 | 97.50% | 100.00% | 22.3000% | 3.3979% | NO |
+| ±500% | 6.000× | 6 / 6 | 100.00% | 100.00% | 41.6500% | 6.1196% | NO |
+
+**Reading it:** because the factor curve is flat at *exactly* 1× for background wealth, the
+same-class (background) decoy pool is retained at **100% at every band width** — unlike the
+continuous age band, tightening the factor band never costs a background spender any same-class
+candidate. The band's only job is to keep its **upper** edge below the nearest wealthy class.
+The nearest wealthy class is 1.939× (a 10k-BTH cluster), which enters the band only at ±100%
+(edge 2.000×). Every band up to **±90%** therefore drives the honest FP rate to **exactly 0%**;
+at ±100% the first wealthy class bleeds in and FP jumps to 8.03%, then rises monotonically as
+wider bands admit more classes.
+
+**Recommended `FACTOR_SIMILARITY_SPREAD` = ±10% (1000 bps)** — the established
+`AGE_SIMILARITY_SPREAD_BPS` convention, sitting ~9× inside the widest FP-safe band (±90%). It
+gives a background spender the full same-class background pool (maximal within-class anonymity)
+with a large margin against cross-class contamination, and by construction caps any admitted
+decoy's factor at 1.100× — so even a worst-case in-band decoy could lift the floor by at most
+10% of the 1× minimum, exactly mirroring the ≤1.10 over-charge bound the age band guarantees.
+Part 3 wires this constant into `botho/src/decoy_selection.rs`.
+
 ## 5. Read-out: is the keying tight enough?
 
 **Yes, at the consensus layer — conditional on decoy-selection hygiene at the wallet layer.**
