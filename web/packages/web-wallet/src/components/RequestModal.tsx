@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { QRCodeSVG } from 'qrcode.react'
+import { SafeQR } from './SafeQR'
 import { Button, Card, Input, ModalOverlay } from '@botho/ui'
 import { formatBTH, parseBTH } from '@botho/core'
 import { Download, Copy, Check, AlertCircle, X, QrCode } from 'lucide-react'
@@ -236,9 +236,7 @@ export function RequestModal({ isOpen, onClose }: { isOpen: boolean; onClose: ()
             {url && (
               <>
                 <div className="flex flex-col items-center gap-3">
-                  <div className="rounded-xl bg-white p-3">
-                    <QRCodeSVG value={url} size={176} level="M" />
-                  </div>
+                  <SafeQR value={url} size={176} ariaLabel="Payment request QR code" />
                   <p className="text-xs text-ghost flex items-center gap-1.5">
                     <QrCode size={13} />
                     {shareAddressOnly ? (

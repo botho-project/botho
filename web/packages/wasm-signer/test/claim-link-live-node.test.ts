@@ -32,7 +32,6 @@ import { dirname, join } from 'node:path'
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import {
   deriveKeypairs,
-  deriveAddress,
   parseAddress,
   createClaimLinkMnemonic,
   buildClaimLink,
@@ -40,6 +39,7 @@ import {
 } from '@botho/core'
 import {
   buildSendTransaction,
+  deriveV2Address,
   spendableBalance,
   setSigner,
   resetSigner,
@@ -192,7 +192,7 @@ maybe('claim-link node-backed: create -> claim -> already-claimed (#460)', () =>
   it('funds an ephemeral link, claims it to a fresh address, then reads back claimed', async () => {
     // 1. CREATE — fund a fresh ephemeral wallet (net + sweep-fee reserve).
     const ephMnemonic = createClaimLinkMnemonic()
-    const ephAddress = deriveAddress(ephMnemonic)
+    const ephAddress = await deriveV2Address(ephMnemonic)
     const url = buildClaimLink('https://wallet.botho.io', ephMnemonic, LINK_NET)
 
     const fundTx = await sendTx(senderMnemonic, ephAddress, LINK_NET + SWEEP_FEE_RESERVE, MIN_TX_FEE)
@@ -202,7 +202,7 @@ maybe('claim-link node-backed: create -> claim -> already-claimed (#460)', () =>
     // 2. PARSE — link round-trips back to the same ephemeral wallet.
     const parsed = parseClaimLinkFragment(url)
     expect(parsed.amountHint).toBe(LINK_NET)
-    expect(deriveAddress(parsed.mnemonic)).toBe(ephAddress)
+    expect(await deriveV2Address(parsed.mnemonic)).toBe(ephAddress)
 
     // 3. SCAN — the ephemeral wallet now holds exactly the funded amount.
     const ephGross = await spendableBalance(keysOf(parsed.mnemonic), sendRpc)
@@ -210,7 +210,7 @@ maybe('claim-link node-backed: create -> claim -> already-claimed (#460)', () =>
 
     // 4. CLAIM — sweep to a DISTINCT recipient, fee paid from the output.
     const destMnemonic = createClaimLinkMnemonic()
-    const destAddress = deriveAddress(destMnemonic)
+    const destAddress = await deriveV2Address(destMnemonic)
     const sweepNet = ephGross - MIN_TX_FEE
     const sweepTx = await sendTx(parsed.mnemonic, destAddress, sweepNet, MIN_TX_FEE)
     await waitForMined(sweepTx)

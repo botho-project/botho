@@ -8,7 +8,8 @@ import {
   type ReactNode,
 } from 'react'
 import { RemoteNodeAdapter, type FeeEstimate, type WsConnectionStatus } from '@botho/adapters'
-import { AddressBook, EncryptedAddressBook, ClaimLinkStore, EncryptedClaimLinks, saveWallet, loadWallet, loadWalletWithKey, getWalletInfo, deriveAddress, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet, createClaimLinkMnemonic, buildClaimLink, assertClaimLinkAmountWithinCap, VaultKey, MIN_PASSWORD_LENGTH } from '@botho/core'
+import { AddressBook, EncryptedAddressBook, ClaimLinkStore, EncryptedClaimLinks, saveWallet, loadWallet, loadWalletWithKey, getWalletInfo, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet, createClaimLinkMnemonic, buildClaimLink, assertClaimLinkAmountWithinCap, VaultKey, MIN_PASSWORD_LENGTH } from '@botho/core'
+import { deriveV2Address } from '@botho/wasm-signer'
 import type { Balance, Contact, NodeInfo, Transaction, ClaimLinkRecord, Timestamp } from '@botho/core'
 import { buildSendTransaction, spendableBalance, buildOwnedHistory, netOwnedHistory, ownedOutputTargetKeys } from '@botho/wasm-signer'
 import { buildAndSubmitSend, scanEphemeral, sweepEphemeral, SWEEP_FEE_RESERVE } from '../lib/claim-link-ops'
@@ -355,6 +356,15 @@ function createAdapterFromNetwork(network: NetworkConfig): RemoteNodeAdapter {
 }
 
 /**
+ * Which address-string network prefix the wallet emits (`botho://2/` vs
+ * `tbotho://2/`). The live deployment is testnet; this preserves the address
+ * network the wallet used before v2 (the old `deriveAddress` defaulted to
+ * testnet). Kept as a single named constant so a future mainnet cutover flips
+ * one place.
+ */
+const ADDRESS_NETWORK: 'mainnet' | 'testnet' = 'testnet'
+
+/**
  * Get initial network configuration
  */
 function getInitialNetwork(): NetworkConfig {
@@ -605,9 +615,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       throw new Error('Invalid mnemonic provided')
     }
 
-    // Save wallet (mnemonic + derived address) to localStorage
-    await saveWallet(mnemonic, password)
-    const address = deriveAddress(mnemonic)
+    // Derive the wallet's v2 (`botho://2/…`) address — carries the account's
+    // post-quantum keys, derived node-identically in wasm — then persist it with
+    // the seed so `Receive`/storage show the v2 address the node can pay.
+    const address = await deriveV2Address(mnemonic, ADDRESS_NETWORK)
+    await saveWallet(mnemonic, password, address)
 
     // Store mnemonic in memory
     mnemonicRef.current = mnemonic
@@ -641,9 +653,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       throw new Error('Invalid recovery phrase. Please check your words and try again.')
     }
 
-    // Save wallet using proper derivation
-    await saveWallet(normalized, password)
-    const address = deriveAddress(normalized)
+    // Derive the wallet's v2 address (post-quantum keys derived in wasm) and
+    // persist it with the seed.
+    const address = await deriveV2Address(normalized, ADDRESS_NETWORK)
+    await saveWallet(normalized, password, address)
 
     // Store mnemonic in memory
     mnemonicRef.current = normalized
@@ -1181,7 +1194,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     // 1. Generate the ephemeral wallet (the link's bearer secret) and its addr.
     const ephMnemonic = createClaimLinkMnemonic()
-    const ephAddress = deriveAddress(ephMnemonic)
+    const ephAddress = await deriveV2Address(ephMnemonic, ADDRESS_NETWORK)
 
     // 2. Fund the ephemeral address with amount + a sweep-fee reserve, so the
     //    recipient nets `amount` after paying the sweep fee from the output.

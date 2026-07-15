@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { setSigner, resetSigner, type WasmSigner } from '@botho/wasm-signer'
-import { deriveAddress, createClaimLinkMnemonic } from '@botho/core'
+import {
+  deriveDefaultSubaddressPublicKeys,
+  formatAddress,
+  createClaimLinkMnemonic,
+} from '@botho/core'
+
+// Local test helper: real classical keys + placeholder PQ bytes of the correct
+// v2 lengths (real ML-KEM/ML-DSA derivation lives in @botho/wasm-signer).
+function deriveAddress(mnemonic: string): string {
+  const { viewPublic, spendPublic } = deriveDefaultSubaddressPublicKeys(mnemonic, 0)
+  return formatAddress(viewPublic, spendPublic, new Uint8Array(1184), new Uint8Array(1952), 'testnet')
+}
 import { scanEphemeral, sweepEphemeral, MIN_TX_FEE, SWEEP_FEE_RESERVE } from './claim-link-ops'
 import type { RemoteNodeAdapter } from '@botho/adapters'
 

@@ -240,10 +240,14 @@ importers:
         version: 5.9.3
 
   packages/wasm-signer:
-    devDependencies:
+    dependencies:
       '@botho/core':
         specifier: workspace:*
         version: link:../core
+      '@scure/bip39':
+        specifier: ^2.0.1
+        version: 2.0.1
+    devDependencies:
       '@types/node':
         specifier: ^22.10.0
         version: 22.19.21
@@ -8317,7 +8321,7 @@ snapshots:
       '@apideck/better-ajv-errors': 0.3.6(ajv@8.17.1)
       '@babel/core': 7.28.5
       '@babel/preset-env': 7.28.5(@babel/core@7.28.5)
-      '@babel/runtime': 7.28.4
+      '@babel/runtime': 7.29.7
       '@rollup/plugin-babel': 5.3.1(@babel/core@7.28.5)(@types/babel__core@7.20.5)(rollup@2.79.2)
       '@rollup/plugin-node-resolve': 15.3.1(rollup@2.79.2)
       '@rollup/plugin-replace': 2.4.2(rollup@2.79.2)

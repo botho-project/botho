@@ -1,12 +1,27 @@
 /**
- * Botho Address Derivation
+ * Botho Address Derivation (address format v2, ADR 0008)
  *
  * Derives proper Botho addresses from BIP39 mnemonics following the protocol:
  *
  * 1. Mnemonic → BIP39 seed (64 bytes, empty passphrase)
  * 2. Seed → SLIP-10 Ed25519 derivation at m/44'/866'/0'
  * 3. SLIP-10 key → HKDF-SHA512 → view and spend Ristretto255 keys
- * 4. Public keys → base58 encoding → tbotho://1/<base58>
+ * 4. Default-subaddress (index 0) view/spend keys + the account's ML-KEM-768 /
+ *    ML-DSA-65 public keys → base58 → `botho://2/<base58>` / `tbotho://2/…`.
+ *
+ * This module owns the **classical** half (SLIP-10 view/spend derivation,
+ * pinned byte-identical to the node by `derivation-parity.test.ts`) and the v2
+ * address-string **codec** (`formatAddress` / `parseAddress`), whose base58 body
+ * layout `view(32)‖spend(32)‖kem(1184)‖dsa(1952)` is byte-identical to the
+ * shared Rust codec (`address-codec`) — guarded by `address-v2.test.ts` against
+ * the golden the node emits.
+ *
+ * The **post-quantum** half (deriving the ML-KEM / ML-DSA public keys from the
+ * seed) and the canonical address *production* live in `@botho/wasm-signer`
+ * (`deriveV2Address`), which reuses the node's exact `derive_pq_keys_from_seed`
+ * and the shared codec via wasm — JavaScript never re-implements ML-KEM/ML-DSA
+ * key generation. Because a v2 address requires those PQ keys, this module no
+ * longer produces a full address from a mnemonic on its own.
  */
 
 import { mnemonicToSeedSync } from '@scure/bip39'
@@ -37,9 +52,29 @@ const SUBADDRESS_DOMAIN_TAG = 'bth_subaddress'
 // (0) or change subaddress, NOT the account-root keys.
 const DEFAULT_SUBADDRESS_INDEX = 0
 
-// Address prefixes
-const TESTNET_PREFIX = 'tbotho://1/'
-const MAINNET_PREFIX = 'botho://1/'
+// Address prefixes (address format v2, ADR 0008). The version bump from `1` to
+// `2` makes old 64-byte classical-only addresses fail loudly on parse rather
+// than silently mis-decode.
+const TESTNET_PREFIX = 'tbotho://2/'
+const MAINNET_PREFIX = 'botho://2/'
+
+// Retired prefixes, kept only so `parseAddress` can reject them with a clear
+// error instead of a confusing format failure.
+const TESTNET_V1_PREFIX = 'tbotho://1/'
+const MAINNET_V1_PREFIX = 'botho://1/'
+const MAINNET_QUANTUM_PREFIX = 'botho://1q/'
+const TESTNET_QUANTUM_PREFIX = 'tbotho://1q/'
+const LEGACY_QUANTUM_PREFIX = 'botho-pq://1/'
+
+// Raw post-quantum public-key byte lengths (must match the node:
+// `ML_KEM_768_PUBLIC_KEY_LEN` / `ML_DSA_65_PUBLIC_KEY_LEN`).
+const ML_KEM_768_PUBLIC_KEY_LEN = 1184
+const ML_DSA_65_PUBLIC_KEY_LEN = 1952
+
+// Byte offsets within the decoded v2 body: view(32)‖spend(32)‖kem(1184)‖dsa(1952).
+const VIEW_LEN = 32
+const SPEND_LEN = 32
+const V2_BODY_LEN = VIEW_LEN + SPEND_LEN + ML_KEM_768_PUBLIC_KEY_LEN + ML_DSA_65_PUBLIC_KEY_LEN // 3200
 
 /**
  * SLIP-0010 master key for the Ed25519 curve.
@@ -316,61 +351,97 @@ export function deriveDefaultSubaddressPublicKeys(
 }
 
 /**
- * Format a Botho address from view and spend public keys
+ * Format a v2 Botho address string from its four public-key components.
  *
- * Classical address format: tbotho://1/<base58(view || spend)>
+ * Layout (address format v2, ADR 0008), base58 of the fixed concatenation:
+ *
+ *   view(32) ‖ spend(32) ‖ kem(1184) ‖ dsa(1952)   = 3200 bytes
+ *
+ * → `botho://2/<base58>` (mainnet) or `tbotho://2/<base58>` (testnet). This is
+ * byte-identical to the shared Rust codec (`address-codec::encode_address`);
+ * the equality is guarded by `address-v2.test.ts` against the node's golden.
+ *
+ * The ML-KEM-768 / ML-DSA-65 public keys are NOT derived here — they come from
+ * `@botho/wasm-signer`'s node-identical seed derivation. This function only
+ * packs already-derived keys, so a wallet's own address is produced via
+ * `deriveV2Address` (wasm), which calls the shared codec directly.
  */
 export function formatAddress(
   viewPublic: Uint8Array,
   spendPublic: Uint8Array,
-  network: 'mainnet' | 'testnet' = 'testnet'
+  kemPublic: Uint8Array,
+  dsaPublic: Uint8Array,
+  network: 'mainnet' | 'testnet' = 'testnet',
 ): string {
-  // Concatenate view (32 bytes) || spend (32 bytes)
-  const combined = new Uint8Array(64)
-  combined.set(viewPublic, 0)
-  combined.set(spendPublic, 32)
+  if (viewPublic.length !== VIEW_LEN || spendPublic.length !== SPEND_LEN) {
+    throw new Error('Invalid address: view and spend keys must be 32 bytes each')
+  }
+  if (kemPublic.length !== ML_KEM_768_PUBLIC_KEY_LEN) {
+    throw new Error(
+      `Invalid address: ML-KEM key must be ${ML_KEM_768_PUBLIC_KEY_LEN} bytes, got ${kemPublic.length}`,
+    )
+  }
+  if (dsaPublic.length !== ML_DSA_65_PUBLIC_KEY_LEN) {
+    throw new Error(
+      `Invalid address: ML-DSA key must be ${ML_DSA_65_PUBLIC_KEY_LEN} bytes, got ${dsaPublic.length}`,
+    )
+  }
 
-  // Encode as base58
-  const encoded = base58.encode(combined)
+  const body = new Uint8Array(V2_BODY_LEN)
+  body.set(viewPublic, 0)
+  body.set(spendPublic, VIEW_LEN)
+  body.set(kemPublic, VIEW_LEN + SPEND_LEN)
+  body.set(dsaPublic, VIEW_LEN + SPEND_LEN + ML_KEM_768_PUBLIC_KEY_LEN)
 
-  // Add network prefix
+  const encoded = base58.encode(body)
   const prefix = network === 'testnet' ? TESTNET_PREFIX : MAINNET_PREFIX
   return prefix + encoded
 }
 
 /**
- * Derive a complete Botho address from a mnemonic
- *
- * Packs the DEFAULT-SUBADDRESS (index 0) public keys, matching the node's
- * `wallet_getAddress` (which returns default-subaddress keys) and the
- * recipient scan `TxOutput::belongs_to` (default/change subaddress). Packing
- * the account-root keys here instead would produce an address whose outputs
- * the recipient's scan cannot detect.
- */
-export function deriveAddressFromMnemonic(
-  mnemonic: string,
-  network: 'mainnet' | 'testnet' = 'testnet',
-  accountIndex: number = 0
-): string {
-  const { viewPublic, spendPublic } = deriveDefaultSubaddressPublicKeys(mnemonic, accountIndex)
-  return formatAddress(viewPublic, spendPublic, network)
-}
-
-/**
- * Parse a Botho address string into its components
+ * Parsed v2 Botho address components.
  */
 export interface ParsedAddress {
   network: 'mainnet' | 'testnet'
   viewPublic: Uint8Array
   spendPublic: Uint8Array
+  /** Raw ML-KEM-768 public key (1184 bytes). */
+  kemPublic: Uint8Array
+  /** Raw ML-DSA-65 public key (1952 bytes). */
+  dsaPublic: Uint8Array
 }
 
+/**
+ * Parse a v2 Botho address string into its components.
+ *
+ * Rejects retired formats loudly: the quantum-private prefixes (ADR 0006) and
+ * old 64-byte v1 addresses (ADR 0008), which cannot receive on the v2 chain.
+ * The base58 body layout matches the shared Rust codec exactly.
+ */
 export function parseAddress(address: string): ParsedAddress {
   const trimmed = address.trim()
 
+  // Reject retired quantum-private addresses before anything else (ADR 0006).
+  if (
+    trimmed.startsWith(MAINNET_QUANTUM_PREFIX) ||
+    trimmed.startsWith(TESTNET_QUANTUM_PREFIX) ||
+    trimmed.startsWith(LEGACY_QUANTUM_PREFIX)
+  ) {
+    throw new Error(
+      'Quantum addresses were retired (ADR 0006). Ask the recipient for a current botho://2/ address.',
+    )
+  }
+
+  // Reject retired v1 (64-byte, classical-only) addresses loudly (ADR 0008).
+  // Checked before the v2 prefix so `botho://1/…` never silently mis-parses.
+  if (trimmed.startsWith(MAINNET_V1_PREFIX) || trimmed.startsWith(TESTNET_V1_PREFIX)) {
+    throw new Error(
+      'Address format v1 (botho://1/) was retired (ADR 0008): it carries no post-quantum keys and cannot receive on the v2 chain. Ask the recipient to regenerate a botho://2/ address.',
+    )
+  }
+
   let network: 'mainnet' | 'testnet'
   let encoded: string
-
   if (trimmed.startsWith(TESTNET_PREFIX)) {
     network = 'testnet'
     encoded = trimmed.slice(TESTNET_PREFIX.length)
@@ -378,20 +449,22 @@ export function parseAddress(address: string): ParsedAddress {
     network = 'mainnet'
     encoded = trimmed.slice(MAINNET_PREFIX.length)
   } else {
-    throw new Error('Invalid address format: missing tbotho:// or botho:// prefix')
+    throw new Error('Invalid address format: expected botho://2/ or tbotho://2/ prefix')
   }
 
-  // Decode base58
   const decoded = base58.decode(encoded)
-
-  if (decoded.length !== 64) {
-    throw new Error(`Invalid address: expected 64 bytes, got ${decoded.length}`)
+  if (decoded.length !== V2_BODY_LEN) {
+    throw new Error(`Invalid address: expected ${V2_BODY_LEN} bytes, got ${decoded.length}`)
   }
 
+  const kemStart = VIEW_LEN + SPEND_LEN
+  const dsaStart = kemStart + ML_KEM_768_PUBLIC_KEY_LEN
   return {
     network,
-    viewPublic: decoded.slice(0, 32),
-    spendPublic: decoded.slice(32, 64),
+    viewPublic: decoded.slice(0, VIEW_LEN),
+    spendPublic: decoded.slice(VIEW_LEN, kemStart),
+    kemPublic: decoded.slice(kemStart, dsaStart),
+    dsaPublic: decoded.slice(dsaStart, V2_BODY_LEN),
   }
 }
 

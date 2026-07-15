@@ -13,10 +13,18 @@ import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/re
 import { MemoryRouter } from 'react-router-dom'
 import {
   createMnemonic12,
-  deriveAddressFromMnemonic,
+  deriveDefaultSubaddressPublicKeys,
+  formatAddress,
   BTH_MULTIPLIER,
   type Contact,
 } from '@botho/core'
+
+// Local helper: real classical keys + placeholder PQ bytes of the correct v2
+// lengths (real ML-KEM/ML-DSA derivation lives in @botho/wasm-signer).
+function deriveAddressFromMnemonic(mnemonic: string, network: 'mainnet' | 'testnet'): string {
+  const { viewPublic, spendPublic } = deriveDefaultSubaddressPublicKeys(mnemonic, 0)
+  return formatAddress(viewPublic, spendPublic, new Uint8Array(1184), new Uint8Array(1952), network)
+}
 import { buildPaymentRequestFragment, type PaymentRequest } from '../lib/payment-request'
 import { PayPage } from './pay'
 

@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import { QRCodeSVG } from 'qrcode.react'
 import { Button, Card, ModalOverlay } from '@botho/ui'
 import { QrCode, Copy, Check, AlertCircle, X, Link2 } from 'lucide-react'
 import { useWallet } from '../contexts/wallet'
+import { SafeQR } from './SafeQR'
 
 /**
  * "Receive" — show the wallet's OWN public address as a scannable QR so someone
@@ -73,17 +73,16 @@ export function ReceiveModal({
         ) : (
           <div className="space-y-4">
             <p className="text-sm text-ghost">
-              Let someone scan this to pay you in person. The QR is your public address — no amount,
-              no link, no secret. Anyone can send you any amount.
+              Share your public address so someone can pay you. Post-quantum (v2) addresses are too
+              large for a scannable QR — copy the address below and send it to the payer. No amount,
+              no link, no secret; anyone can send you any amount.
             </p>
 
             <div className="flex flex-col items-center gap-3">
-              <div className="rounded-xl bg-white p-3">
-                <QRCodeSVG value={address} size={200} level="M" aria-label="Receiving address QR code" />
-              </div>
+              <SafeQR value={address} size={200} ariaLabel="Receiving address QR code" />
               <p className="text-xs text-ghost flex items-center gap-1.5">
                 <QrCode size={13} />
-                Scan to pay me
+                Copy your address to share it
               </p>
             </div>
 

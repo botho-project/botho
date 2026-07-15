@@ -3,7 +3,8 @@ import {
   createMnemonic,
   createMnemonic12,
   isValidMnemonic,
-  deriveAddress,
+  deriveDefaultSubaddressPublicKeys,
+  formatAddress,
   encrypt,
   decrypt,
   saveWallet,
@@ -23,6 +24,26 @@ import {
   passwordStrength,
   LEGACY_PBKDF2_ITERATIONS,
 } from './index'
+
+// Local test helper reproducing the wallet's per-mnemonic address determinism
+// WITHOUT wasm. It packs the REAL classical default-subaddress keys plus
+// deterministic placeholder post-quantum bytes of the correct v2 lengths; the
+// real ML-KEM/ML-DSA derivation lives in @botho/wasm-signer (`deriveV2Address`).
+// `parseAddress` only length-checks the PQ fields, so these round-trip.
+function deriveAddress(
+  mnemonic: string,
+  network: 'mainnet' | 'testnet' = 'testnet',
+): string {
+  if (!isValidMnemonic(mnemonic)) throw new Error('Invalid mnemonic')
+  const { viewPublic, spendPublic } = deriveDefaultSubaddressPublicKeys(mnemonic, 0)
+  return formatAddress(
+    viewPublic,
+    spendPublic,
+    new Uint8Array(1184),
+    new Uint8Array(1952),
+    network,
+  )
+}
 
 // Mock localStorage
 const localStorageMock = (() => {
@@ -130,14 +151,14 @@ describe('Wallet Core Functions', () => {
       expect(address1).toBe(address2)
     })
 
-    it('starts with tbotho://1/ prefix (testnet default)', () => {
+    it('starts with tbotho://2/ prefix (testnet default)', () => {
       const address = deriveAddress(TEST_MNEMONIC_12)
-      expect(address.startsWith('tbotho://1/')).toBe(true)
+      expect(address.startsWith('tbotho://2/')).toBe(true)
     })
 
-    it('uses botho://1/ prefix for mainnet', () => {
+    it('uses botho://2/ prefix for mainnet', () => {
       const address = deriveAddress(TEST_MNEMONIC_12, 'mainnet')
-      expect(address.startsWith('botho://1/')).toBe(true)
+      expect(address.startsWith('botho://2/')).toBe(true)
     })
 
     it('derives different addresses for different mnemonics', () => {
@@ -153,14 +174,14 @@ describe('Wallet Core Functions', () => {
     it('produces consistent addresses (test vector)', () => {
       // This is a known test vector - the address should always be the same
       const address = deriveAddress(TEST_MNEMONIC_12)
-      // Verify it matches the tbotho://1/<base58> format
-      expect(address).toMatch(/^tbotho:\/\/1\/[A-Za-z1-9]+$/)
+      // Verify it matches the tbotho://2/<base58> format
+      expect(address).toMatch(/^tbotho:\/\/2\/[A-Za-z1-9]+$/)
     })
 
     it('produces base58-encoded public keys', () => {
       const address = deriveAddress(TEST_MNEMONIC_12)
       // Extract the base58 part and verify it's valid
-      const base58Part = address.slice('tbotho://1/'.length)
+      const base58Part = address.slice('tbotho://2/'.length)
       // Base58 should only contain valid characters (no 0, O, I, l)
       expect(base58Part).toMatch(/^[A-HJ-NP-Za-km-z1-9]+$/)
     })
@@ -203,7 +224,7 @@ describe('Wallet Core Functions', () => {
 
   describe('saveWallet', () => {
     it('saves unencrypted wallet', async () => {
-      await saveWallet(TEST_MNEMONIC_12)
+      await saveWallet(TEST_MNEMONIC_12, undefined, deriveAddress(TEST_MNEMONIC_12))
 
       expect(localStorage.getItem('botho-wallet-mnemonic')).toBe(TEST_MNEMONIC_12)
       expect(localStorage.getItem('botho-wallet-encrypted')).toBe('false')
@@ -211,7 +232,7 @@ describe('Wallet Core Functions', () => {
     })
 
     it('saves encrypted wallet with password', async () => {
-      await saveWallet(TEST_MNEMONIC_12, 'mypassword')
+      await saveWallet(TEST_MNEMONIC_12, 'mypassword', deriveAddress(TEST_MNEMONIC_12))
 
       const stored = localStorage.getItem('botho-wallet-mnemonic')
       expect(stored).not.toBe(TEST_MNEMONIC_12) // Should be encrypted
@@ -220,7 +241,7 @@ describe('Wallet Core Functions', () => {
     })
 
     it('stores correct address', async () => {
-      await saveWallet(TEST_MNEMONIC_12)
+      await saveWallet(TEST_MNEMONIC_12, undefined, deriveAddress(TEST_MNEMONIC_12))
 
       const storedAddress = localStorage.getItem('botho-wallet-address')
       const expectedAddress = deriveAddress(TEST_MNEMONIC_12)
@@ -230,7 +251,7 @@ describe('Wallet Core Functions', () => {
 
   describe('loadWallet', () => {
     it('loads unencrypted wallet', async () => {
-      await saveWallet(TEST_MNEMONIC_12)
+      await saveWallet(TEST_MNEMONIC_12, undefined, deriveAddress(TEST_MNEMONIC_12))
 
       const wallet = await loadWallet()
       expect(wallet).not.toBeNull()
@@ -240,7 +261,7 @@ describe('Wallet Core Functions', () => {
 
     it('loads encrypted wallet with correct password', async () => {
       const password = 'testpass123'
-      await saveWallet(TEST_MNEMONIC_12, password)
+      await saveWallet(TEST_MNEMONIC_12, password, deriveAddress(TEST_MNEMONIC_12))
 
       const wallet = await loadWallet(password)
       expect(wallet).not.toBeNull()
@@ -248,13 +269,13 @@ describe('Wallet Core Functions', () => {
     })
 
     it('throws error when loading encrypted wallet without password', async () => {
-      await saveWallet(TEST_MNEMONIC_12, 'mypassword')
+      await saveWallet(TEST_MNEMONIC_12, 'mypassword', deriveAddress(TEST_MNEMONIC_12))
 
       await expect(loadWallet()).rejects.toThrow('Password required to unlock wallet')
     })
 
     it('throws error for incorrect password', async () => {
-      await saveWallet(TEST_MNEMONIC_12, 'correct-password')
+      await saveWallet(TEST_MNEMONIC_12, 'correct-password', deriveAddress(TEST_MNEMONIC_12))
 
       await expect(loadWallet('wrong-password')).rejects.toThrow('Incorrect password')
     })
@@ -274,7 +295,7 @@ describe('Wallet Core Functions', () => {
     })
 
     it('returns correct info for unencrypted wallet', async () => {
-      await saveWallet(TEST_MNEMONIC_12)
+      await saveWallet(TEST_MNEMONIC_12, undefined, deriveAddress(TEST_MNEMONIC_12))
 
       const info = getWalletInfo()
       expect(info.exists).toBe(true)
@@ -283,7 +304,7 @@ describe('Wallet Core Functions', () => {
     })
 
     it('returns correct info for encrypted wallet', async () => {
-      await saveWallet(TEST_MNEMONIC_12, 'password')
+      await saveWallet(TEST_MNEMONIC_12, 'password', deriveAddress(TEST_MNEMONIC_12))
 
       const info = getWalletInfo()
       expect(info.exists).toBe(true)
@@ -298,7 +319,7 @@ describe('Wallet Core Functions', () => {
     })
 
     it('returns true after saving wallet', async () => {
-      await saveWallet(TEST_MNEMONIC_12)
+      await saveWallet(TEST_MNEMONIC_12, undefined, deriveAddress(TEST_MNEMONIC_12))
       expect(hasStoredWallet()).toBe(true)
     })
   })
@@ -309,19 +330,19 @@ describe('Wallet Core Functions', () => {
     })
 
     it('returns false for unencrypted wallet', async () => {
-      await saveWallet(TEST_MNEMONIC_12)
+      await saveWallet(TEST_MNEMONIC_12, undefined, deriveAddress(TEST_MNEMONIC_12))
       expect(isWalletEncrypted()).toBe(false)
     })
 
     it('returns true for encrypted wallet', async () => {
-      await saveWallet(TEST_MNEMONIC_12, 'password')
+      await saveWallet(TEST_MNEMONIC_12, 'password', deriveAddress(TEST_MNEMONIC_12))
       expect(isWalletEncrypted()).toBe(true)
     })
   })
 
   describe('clearWallet', () => {
     it('removes all wallet data', async () => {
-      await saveWallet(TEST_MNEMONIC_12, 'password')
+      await saveWallet(TEST_MNEMONIC_12, 'password', deriveAddress(TEST_MNEMONIC_12))
       expect(hasStoredWallet()).toBe(true)
 
       clearWallet()
@@ -344,7 +365,7 @@ describe('Import Wallet Flow', () => {
 
     // Simulate import flow
     expect(isValidMnemonic(mnemonic)).toBe(true)
-    await saveWallet(mnemonic)
+    await saveWallet(mnemonic, undefined, deriveAddress(mnemonic))
 
     const wallet = await loadWallet()
     expect(wallet).not.toBeNull()
@@ -355,7 +376,7 @@ describe('Import Wallet Flow', () => {
     const mnemonic = TEST_MNEMONIC_24
 
     expect(isValidMnemonic(mnemonic)).toBe(true)
-    await saveWallet(mnemonic)
+    await saveWallet(mnemonic, undefined, deriveAddress(mnemonic))
 
     const wallet = await loadWallet()
     expect(wallet).not.toBeNull()
@@ -368,7 +389,7 @@ describe('Import Wallet Flow', () => {
     const normalized = messyInput.trim().toLowerCase().replace(/\s+/g, ' ')
 
     expect(isValidMnemonic(normalized)).toBe(true)
-    await saveWallet(normalized)
+    await saveWallet(normalized, undefined, deriveAddress(normalized))
 
     const wallet = await loadWallet()
     expect(wallet!.mnemonic).toBe(normalized)
@@ -384,7 +405,7 @@ describe('Import Wallet Flow', () => {
     const mnemonic = TEST_MNEMONIC_12
     const password = 'secure-password'
 
-    await saveWallet(mnemonic, password)
+    await saveWallet(mnemonic, password, deriveAddress(mnemonic))
 
     // Verify it's encrypted
     expect(isWalletEncrypted()).toBe(true)
@@ -537,12 +558,12 @@ describe('Password policy (#475)', () => {
   it('requires at least MIN_PASSWORD_LENGTH characters when saving with a password', async () => {
     expect(MIN_PASSWORD_LENGTH).toBeGreaterThanOrEqual(8)
     const short = 'a'.repeat(MIN_PASSWORD_LENGTH - 1)
-    await expect(saveWallet(TEST_MNEMONIC_12, short)).rejects.toThrow(/at least/i)
+    await expect(saveWallet(TEST_MNEMONIC_12, short, deriveAddress(TEST_MNEMONIC_12))).rejects.toThrow(/at least/i)
   })
 
   it('accepts a password at the minimum length', async () => {
     const ok = 'a'.repeat(MIN_PASSWORD_LENGTH)
-    await expect(saveWallet(TEST_MNEMONIC_12, ok)).resolves.toBeUndefined()
+    await expect(saveWallet(TEST_MNEMONIC_12, ok, deriveAddress(TEST_MNEMONIC_12))).resolves.toBeUndefined()
     expect(isWalletEncrypted()).toBe(true)
   })
 
@@ -557,7 +578,7 @@ describe('Encrypt-by-default + versioned KDF header (#475)', () => {
   beforeEach(() => localStorage.clear())
 
   it('writes a VERSIONED vault blob (not legacy) when a password is given', async () => {
-    await saveWallet(TEST_MNEMONIC_12, 'a-good-password')
+    await saveWallet(TEST_MNEMONIC_12, 'a-good-password', deriveAddress(TEST_MNEMONIC_12))
     const blob = localStorage.getItem(STORAGE_KEY_MNEMONIC)!
     expect(blob).not.toContain(TEST_MNEMONIC_12) // encrypted
     expect(isVaultBlob(blob)).toBe(true) // versioned header present
@@ -566,13 +587,13 @@ describe('Encrypt-by-default + versioned KDF header (#475)', () => {
 
   it('round-trips an encrypted wallet via the new format', async () => {
     const pw = 'a-good-password'
-    await saveWallet(TEST_MNEMONIC_12, pw)
+    await saveWallet(TEST_MNEMONIC_12, pw, deriveAddress(TEST_MNEMONIC_12))
     const stored = await loadWallet(pw)
     expect(stored!.mnemonic).toBe(TEST_MNEMONIC_12)
   })
 
   it('rejects the wrong password on unlock', async () => {
-    await saveWallet(TEST_MNEMONIC_12, 'the-right-password')
+    await saveWallet(TEST_MNEMONIC_12, 'the-right-password', deriveAddress(TEST_MNEMONIC_12))
     await expect(loadWallet('the-wrong-password')).rejects.toThrow('Incorrect password')
   })
 })
@@ -617,7 +638,7 @@ describe('Legacy wallet migration on unlock (#475)', () => {
     expect(getWalletInfo().isEncrypted).toBe(false)
 
     // Re-save WITH a password (the encrypt-by-default UI path) upgrades it.
-    await saveWallet(loaded!.mnemonic, 'now-encrypted-pass')
+    await saveWallet(loaded!.mnemonic, 'now-encrypted-pass', deriveAddress(loaded!.mnemonic))
     const blob = localStorage.getItem(STORAGE_KEY_MNEMONIC)!
     expect(blob).not.toBe(TEST_MNEMONIC_12)
     expect(isVaultBlob(blob)).toBe(true)

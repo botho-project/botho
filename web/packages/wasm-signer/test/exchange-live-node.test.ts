@@ -50,7 +50,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { deriveKeypairs, deriveAddress, parseAddress } from '@botho/core'
+import { deriveKeypairs, deriveDefaultSubaddressPublicKeys } from '@botho/core'
 import {
   buildSendTransaction,
   spendableBalance,
@@ -174,10 +174,10 @@ maybe('node-backed: two-user bidirectional payment exchange (#390)', () => {
 
   // Recipient address keys (default-subaddress, #383) decoded from the address.
   const recipientOf = (mnemonic: string) => {
-    const parsed = parseAddress(deriveAddress(mnemonic, 'testnet'))
+    const { viewPublic, spendPublic } = deriveDefaultSubaddressPublicKeys(mnemonic, 0)
     return {
-      spend_public_key: toHex(parsed.spendPublic),
-      view_public_key: toHex(parsed.viewPublic),
+      spend_public_key: toHex(spendPublic),
+      view_public_key: toHex(viewPublic),
     }
   }
 
