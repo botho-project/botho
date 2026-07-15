@@ -1,0 +1,29 @@
+[package]
+name = "bth-address-codec"
+version = "0.1.0"
+authors = ["Botho"]
+edition = "2021"
+license = "Apache-2.0"
+description = "Single shared base58 codec for Botho address strings (format v2, ADR 0008). Used by every encoder (node, wasm-signer, mobile, wallet, desktop) so they cannot drift."
+rust-version = { workspace = true }
+
+[dependencies]
+# The canonical address type and the raw PQ-key length constants. The codec is
+# the ONE place that turns a `PublicAddress` into the `botho://2/<base58>` string
+# and back, so no consumer needs to hand-roll base58.
+bth-account-keys = { workspace = true }
+bth-crypto-keys = { workspace = true }
+bs58 = { workspace = true }
+
+[dev-dependencies]
+# The end-to-end "derived wallet address round-trips + PQ keys still work" test
+# needs the real seed-derived PQ keys, so it enables the pq paths here.
+bth-account-keys = { workspace = true, features = ["pq"] }
+bth-crypto-pq = { workspace = true }
+bth-util-from-random = { workspace = true }
+rand = { workspace = true }
+rand_core = { workspace = true }
+
+[features]
+default = ["std"]
+std = ["bth-account-keys/std", "bs58/std"]
