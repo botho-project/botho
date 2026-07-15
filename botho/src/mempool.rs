@@ -1536,6 +1536,7 @@ mod tests {
             public_key: [51; 32],
             e_memo: None,
             cluster_tags: ClusterTagVector::single(ClusterId(7)),
+            kem_ciphertext: None,
         };
         let tx = Transaction::new_settlement(
             vec![test_clsag_input(1)],
@@ -1567,6 +1568,7 @@ mod tests {
             public_key: [53; 32],
             e_memo: None,
             cluster_tags: ClusterTagVector::empty(),
+            kem_ciphertext: None,
         };
         // certified value (1_000_000) != Σ outputs (2_000_000)
         let tx = Transaction::new_settlement(
