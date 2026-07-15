@@ -578,6 +578,23 @@ mod cli {
         /// against both failure modes. Does NOT wire anything into consensus.
         SettlementHorizonSweep,
 
+        /// CT-compatible lottery-selection sweep (design-research gate for the
+        /// lottery sub-problem of #902): scores five winner-selection rules
+        /// head-to-head — Uniform, the incumbent ClusterWeighted
+        /// (value×inverse- factor; NOT CT-compatible, included as the
+        /// redistribution yardstick), and three value-free CT-clean
+        /// candidates (FeeInverse, CirculationGated, and their Hybrid).
+        /// Reuses the real ClusterFactorCurve, demurrage_charge,
+        /// LotteryCandidate/SelectionMode weights and the shared
+        /// calculate_gini. Reports each rule's Δgini vs a burn baseline
+        /// (redistribution recovery), its weight-gain under a whale
+        /// splitting attack (Sybil resistance), and
+        /// its CT-compatibility + incremental leakage. Determines whether a
+        /// value-free rule recovers ClusterWeighted's redistribution without
+        /// the ZK weighted-sampling sort. Does NOT wire anything into
+        /// consensus.
+        LotterySelectionSweep,
+
         /// Bridge-import calibration sweep (empirical gate for #937):
         /// calibrates ADR 0007's two constants — epoch length K and
         /// import-factor floor F. Sweeps K across ~14h/1d/2d/3.5d/1wk
@@ -877,6 +894,7 @@ mod cli {
                 seed,
             ),
             Command::SettlementHorizonSweep => run_settlement_horizon_sweep_cli(),
+            Command::LotterySelectionSweep => run_lottery_selection_sweep_cli(),
             Command::BridgeImportSweep => run_bridge_import_sweep_cli(),
             Command::M2Cumulative {
                 horizon_years,
@@ -4382,6 +4400,22 @@ mod cli {
         };
         let report = run_settlement_horizon_sweep();
         println!("# Settlement-Horizon Calibration Sweep (issue #833)\n");
+        println!("{}", to_markdown(&report));
+    }
+
+    /// CT-compatible lottery-selection sweep (design-research gate for #902).
+    ///
+    /// Prints the redistribution, Sybil-resistance and CT-compatibility tables
+    /// that back `docs/research/ct-compatible-lottery-selection.md`. Does NOT
+    /// wire anything into consensus — the selection-rule decision is ratified
+    /// by the maintainer and carried into the CT spec (anvil:spec
+    /// authoring).
+    fn run_lottery_selection_sweep_cli() {
+        use bth_cluster_tax::simulation::lottery_selection_sweep::{
+            run_lottery_selection_sweep, to_markdown,
+        };
+        let report = run_lottery_selection_sweep();
+        println!("# CT-Compatible Lottery-Selection Sweep (issue #902)\n");
         println!("{}", to_markdown(&report));
     }
 

@@ -12,6 +12,7 @@ This section contains research analysis, comparisons, and technical evaluations.
 | [Product-Decision Synthesis (2026-07)](product-decision-synthesis-2026-07.md) | Roadmap synthesis folding #441/#458 open product decisions into a sequenced plan; regulatory posture, mobile custody UX, DePIN GTM lessons. Two steps are open maintainer decisions. |
 | [Settlement-Horizon Calibration](settlement-horizon-calibration.md) | Calibrating `SETTLEMENT_HORIZON_BLOCKS` (#833): wrap-out demurrage-settlement price vs Gini-erosion, across horizon × factor class. |
 | [Bridge-Import Calibration](bridge-import-calibration.md) | Calibrating ADR 0007's epoch length `K` + import-factor floor `F` (#937): split-game cost vs innocent-entrant collateral, residual anti-hoarding vs onboarding friction, decay-by-circulation. |
+| [CT-Compatible Lottery Selection](ct-compatible-lottery-selection.md) | Can a value-free lottery selection rule avoid the ZK weighted-sampling sort under confidential amounts (#902)? Scores Uniform / ClusterWeighted / FeeInverse / CirculationGated / Hybrid on redistribution, Sybil resistance, and CT-cleanliness. Finding: value-free rules recover (even beat) the redistribution and are CT-clean, but cannot recover split-invariance from public signals — surfaces a Path A/B/C decision. |
 
 ## Purpose
 
