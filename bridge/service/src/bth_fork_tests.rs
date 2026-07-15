@@ -56,6 +56,7 @@ fn live_config() -> Option<BthConfig> {
         ws_url: String::new(),
         view_key_file: Some(view_key_file),
         spend_key_file: Some(spend_key_file),
+        pq_seed_file: None,
         confirmations_required: 0,
         reserve_address: Some("bth_reserve_addr".to_string()),
         release_signers: Vec::new(),

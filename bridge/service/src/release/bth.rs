@@ -285,6 +285,7 @@ impl BthReleaser {
         let reserve = match ReserveKeys::load(
             config.view_key_file.as_deref(),
             config.spend_key_file.as_deref(),
+            config.pq_seed_file.as_deref(),
         ) {
             Ok(keys) => keys,
             Err(e) => {
@@ -292,6 +293,17 @@ impl BthReleaser {
                 None
             }
         };
+        // Publish the reserve's v2 (`botho://2/…`) receive address at startup
+        // when a PQ seed is configured, so operators/senders can encapsulate
+        // hybrid deposits to it (issue #972).
+        if let Some(keys) = reserve.as_ref() {
+            if keys.has_pq_keys() {
+                match keys.public_address_uri(bth_address_codec::Network::Mainnet) {
+                    Ok(uri) => info!("BTH reserve published v2 address: {uri}"),
+                    Err(e) => warn!("BTH reserve v2 address unavailable: {e}"),
+                }
+            }
+        }
 
         Ok(Self {
             config,
@@ -330,9 +342,12 @@ impl BthReleaser {
 
         for block in &blocks {
             for out in &block.outputs {
-                // Reserve holds no ML-KEM secret today; hybrid outputs are
-                // warned about, not silently missed (issue #970).
-                match scan_deposit_output(out, account, None).map_err(ReleaseError::Config)? {
+                // Pass the reserve's ML-KEM secret (when configured) so hybrid
+                // reserve outputs are DETECTED as spendable inputs, not warned
+                // about (issue #972). A classical-only reserve passes `None`.
+                match scan_deposit_output(out, account, reserve.kem_keypair())
+                    .map_err(ReleaseError::Config)?
+                {
                     // A reserve-owned, factor-1 output is a candidate input.
                     Some(scanned) if scanned.owned.factor_one => owned.push(scanned.owned),
                     // A reserve-owned but NON-factor-1 output must never be
@@ -350,10 +365,12 @@ impl BthReleaser {
         }
 
         // Drop already-spent / pending inputs so we never double-spend the
-        // reserve across releases.
+        // reserve across releases. A hybrid reserve output's key image must be
+        // derived from its hybrid one-time key (issue #972), so the reserve's
+        // ML-KEM secret is threaded through.
         let key_images: Vec<String> = owned
             .iter()
-            .map(|o| release_input_key_image(account, o))
+            .map(|o| release_input_key_image(account, o, reserve.kem_keypair()))
             .collect::<Result<_, _>>()?;
         let statuses = rpc.are_key_images_spent(&key_images).await?;
         let spendable: Vec<OwnedOutput> = owned
@@ -373,6 +390,7 @@ impl BthReleaser {
 fn release_input_key_image(
     account: &bth_account_keys::AccountKey,
     owned: &OwnedOutput,
+    kem_keypair: Option<&bth_crypto_pq::MlKem768KeyPair>,
 ) -> Result<String, ReleaseError> {
     let target_key: [u8; 32] = hex::decode(&owned.target_key)
         .ok()
@@ -388,11 +406,23 @@ fn release_input_key_image(
         public_key,
         e_memo: None,
         cluster_tags: Default::default(),
-        kem_ciphertext: None,
+        kem_ciphertext: owned.kem_ciphertext.clone(),
     };
-    let onetime = tx_out
-        .recover_spend_key(account, owned.subaddress_index)
-        .ok_or_else(|| ReleaseError::Config("cannot recover reserve one-time key".into()))?;
+    // A hybrid reserve output's one-time key (and hence its key image) can only
+    // be reconstructed via ML-KEM decapsulation; a classical output uses the
+    // pure view-key path (issue #972). Both dispatch through the same unified
+    // recovery the release signer uses, so the spent-status key image matches.
+    let onetime = if tx_out.kem_ciphertext.is_some() {
+        let kp = kem_keypair.ok_or_else(|| {
+            ReleaseError::Config(
+                "hybrid reserve output requires an ML-KEM secret to derive its key image".into(),
+            )
+        })?;
+        tx_out.recover_spend_key_for(account, kp, owned.subaddress_index, owned.output_index)
+    } else {
+        tx_out.recover_spend_key(account, owned.subaddress_index)
+    }
+    .ok_or_else(|| ReleaseError::Config("cannot recover reserve one-time key".into()))?;
     Ok(hex::encode(KeyImage::from(&onetime).as_bytes()))
 }
 
@@ -480,10 +510,10 @@ impl Releaser for BthReleaser {
         // 4-5, 7. Build + CLSAG-sign: fresh stealth recipient output, change
         // back to the reserve, self-verified against the node's verifier.
         let created_at_height = rpc.chain_tip().await?;
-        // The reserve holds no ML-KEM secret today (classical key files), so
-        // pass `None`. A hybrid reserve input would fail loudly here rather than
-        // produce an invalid tx (issue #970); wiring a reserve KEM key is a
-        // follow-up.
+        // Pass the reserve's ML-KEM secret (when a PQ seed is configured) so a
+        // hybrid reserve input can be spent via hybrid one-time-key recovery
+        // (issue #972). A classical-only reserve passes `None`, and a hybrid
+        // input then fails loudly rather than producing an invalid tx (#970).
         let tx = build_release_tx(
             reserve.account(),
             &recipient,
@@ -491,7 +521,7 @@ impl Releaser for BthReleaser {
             RELEASE_FEE,
             &inputs,
             created_at_height,
-            None,
+            reserve.kem_keypair(),
             &mut rand_core::OsRng,
         )
         .map_err(|e| ReleaseError::Config(format!("release tx construction failed: {e}")))?;
@@ -612,6 +642,7 @@ mod tests {
             ws_url: "ws://localhost:7101/ws".to_string(),
             view_key_file: None,
             spend_key_file: None,
+            pq_seed_file: None,
             confirmations_required: 0,
             reserve_address: Some("bth_reserve_addr".to_string()),
             release_signers: signers

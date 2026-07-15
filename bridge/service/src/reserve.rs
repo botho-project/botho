@@ -323,6 +323,7 @@ impl NodeReserveBalanceSource {
         let reserve = match ReserveKeys::load(
             config.view_key_file.as_deref(),
             config.spend_key_file.as_deref(),
+            config.pq_seed_file.as_deref(),
         ) {
             Ok(keys) => keys,
             Err(e) => {
@@ -384,11 +385,13 @@ impl ReserveBalanceSource for NodeReserveBalanceSource {
         let mut owned: Vec<OwnedOutput> = Vec::new();
         for block in &blocks {
             for out in &block.outputs {
-                // The reserve is loaded from classical view/spend key files and
-                // holds no ML-KEM secret today, so pass `None`: hybrid deposits
-                // are warned about (never silently missed, issue #970) rather
-                // than detected. Wiring a reserve KEM key file is a follow-up.
-                match scan_deposit_output(out, account, None).map_err(ReserveError::Config)? {
+                // Pass the reserve's ML-KEM secret (when a PQ seed is
+                // configured) so hybrid deposits to the reserve are DETECTED,
+                // not just warned about (issue #972). A classical-only reserve
+                // still passes `None` and warns on hybrid outputs (#970).
+                match scan_deposit_output(out, account, reserve.kem_keypair())
+                    .map_err(ReserveError::Config)?
+                {
                     Some(scanned) if scanned.owned.factor_one => owned.push(scanned.owned),
                     _ => {}
                 }

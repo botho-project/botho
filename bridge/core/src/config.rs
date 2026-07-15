@@ -174,6 +174,16 @@ pub struct BthConfig {
     /// Path to encrypted spend key file (for withdrawals)
     pub spend_key_file: Option<String>,
 
+    /// Path to the reserve's post-quantum seed file: a single hex-encoded
+    /// 64-byte BIP39 seed. When present, the reserve derives its ML-KEM-768 +
+    /// ML-DSA-65 keypairs from this seed exactly as a normal wallet does
+    /// (`derive_pq_keys_from_seed`), publishes a v2 (`botho://2/…`) address so
+    /// senders can encapsulate to it, and can DETECT + spend hybrid (ML-KEM)
+    /// deposits under protocol 6.0.0. Absent = classical-only (v1) reserve:
+    /// hybrid deposits are warned about, not detected (issue #972).
+    #[serde(default)]
+    pub pq_seed_file: Option<String>,
+
     /// Number of confirmations required (0 for SCP finality)
     #[serde(default)]
     pub confirmations_required: u32,
@@ -482,6 +492,7 @@ impl Default for BridgeConfig {
                 ws_url: "ws://localhost:7101/ws".to_string(),
                 view_key_file: None,
                 spend_key_file: None,
+                pq_seed_file: None,
                 confirmations_required: 0,
                 reserve_address: None,
                 release_signers: Vec::new(),

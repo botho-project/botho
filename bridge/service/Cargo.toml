@@ -68,8 +68,13 @@ bth-transaction-types = { workspace = true }
 bth-account-keys = { workspace = true }
 bth-crypto-keys = { workspace = true }
 bth-crypto-ring-signature = { workspace = true }
-# ML-KEM-768 encapsulation/decapsulation for hybrid deposit detection (#970).
+# ML-KEM-768 encapsulation/decapsulation for hybrid deposit detection (#970),
+# plus `derive_pq_keys_from_seed` to derive the reserve's PQ keypairs from its
+# seed exactly as a normal wallet does (issue #972).
 bth-crypto-pq = { path = "../../crypto/pq" }
+# Canonical v2 (`botho://2/…`) address encoder/decoder: publishes the reserve's
+# post-quantum receive address so senders can encapsulate to it (issue #972).
+bth-address-codec = { workspace = true }
 
 # JSON-RPC over HTTP to the BTH node (getChainInfo / getBlockByHeight /
 # chain_getOutputs / tx_submit / getTransaction / chain_areKeyImagesSpent).
