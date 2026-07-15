@@ -39,8 +39,8 @@
 //! ```
 
 use bth_cluster_tax::{
-    draw_winners, verify_drawing, LotteryCandidate, LotteryDrawConfig, LotteryResult,
-    LotteryWinner, SelectionMode, TagVector,
+    count_eligible, draw_winners, sybil_reward_cap, verify_drawing, LotteryCandidate,
+    LotteryDrawConfig, LotteryResult, LotteryWinner, TagVector,
 };
 use tracing::{debug, info};
 
@@ -231,6 +231,35 @@ impl LotteryPoolAccounting {
     pub fn carryover_after(&self, distributed: u64) -> u128 {
         self.available.saturating_sub(distributed as u128)
     }
+}
+
+/// Path C per-block lottery reward cap `R`, in base units.
+///
+/// `R = min(ρ · base_fee, block_reward)` where:
+/// - `ρ` = [`count_eligible`] over the circulation window (splits included) and
+///   `ρ · base_fee` = [`sybil_reward_cap`] is the **Sybil-neutrality** cap that
+///   makes splitting net-zero (research §9.1); and
+/// - `block_reward` is retained as the **anti-grinding** upper bound
+///   (regrinding the previous block can shift at most one reward's worth of
+///   payout).
+///
+/// This cap is fed to [`compute_pool_accounting`] as its `payout_cap`, so the
+/// per-block payout is `min(available_accumulator, R)`: the over-cap fee pool
+/// is carried forward in `available`, never burned, preserving both supply and
+/// the per-block cap that gives the Sybil bound.
+///
+/// CONSENSUS-CRITICAL: a deterministic integer function of the candidate set,
+/// height, and block reward — proposer and validators agree exactly. Both build
+/// their candidate set from `Ledger::get_lottery_validation_candidates`.
+pub fn reward_cap(
+    candidates: &[LotteryCandidate],
+    block_height: u64,
+    block_reward: u64,
+    config: &LotteryFeeConfig,
+) -> u64 {
+    let rho = count_eligible(candidates, block_height, &config.draw_config);
+    // Sybil cap ρ·base_fee (u128) clamped by the anti-grinding block reward.
+    sybil_reward_cap(rho).min(block_reward as u128) as u64
 }
 
 /// Compute the lottery pool accounting for a block.
@@ -539,15 +568,13 @@ pub fn validate_block_lottery(
 
     // 1. Compute the expected pool accounting from consensus state: fees,
     // the height-scheduled emission share, the stored carryover pool, and
-    // the per-block payout cap (one block reward; anti-grinding bound).
+    // the Path C per-block payout cap R = min(ρ·base_fee, block_reward)
+    // (Sybil-neutrality cap ∧ anti-grinding bound). The over-cap fee pool is
+    // carried forward in `available`, never burned.
     let emission_share = block.minting_tx.lottery_emission_share();
-    let accounting = compute_pool_accounting(
-        total_fees,
-        emission_share,
-        stored_pool,
-        block.minting_tx.reward,
-        config,
-    );
+    let payout_cap = reward_cap(candidates, block.height(), block.minting_tx.reward, config);
+    let accounting =
+        compute_pool_accounting(total_fees, emission_share, stored_pool, payout_cap, config);
 
     // Handle no-winners case: only the fee burn share is burned; the pool
     // share (fees + emission) carries over to future blocks.
@@ -718,7 +745,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bth_cluster_tax::TagVector;
+    use bth_cluster_tax::{SelectionMode, TagVector};
 
     fn make_candidate(id: u8, value: u64, creation_block: u64) -> LotteryCandidate {
         let mut utxo_id = [0u8; 36];
@@ -864,6 +891,108 @@ mod tests {
             "carryover ({pool}) should exceed u64::MAX ({})",
             u64::MAX
         );
+    }
+
+    // ========================================================================
+    // Path C: value-free selection + endogenous reward cap (#955)
+    // ========================================================================
+
+    #[test]
+    fn test_consensus_default_selection_is_uniform() {
+        // ClusterWeighted retired as default; the value-free Uniform draw over
+        // the circulation window is the new default.
+        let config = LotteryFeeConfig::default();
+        assert!(matches!(
+            config.draw_config.selection_mode,
+            SelectionMode::Uniform
+        ));
+        assert_eq!(
+            config.draw_config.circulation_window,
+            bth_cluster_tax::CIRCULATION_WINDOW_BLOCKS
+        );
+    }
+
+    #[test]
+    fn test_reward_cap_min_of_sybil_and_block_reward() {
+        let config = LotteryFeeConfig::default();
+        let height = 1_000;
+        let base = bth_cluster_tax::LOTTERY_BASE_FEE_PICO as u128;
+        // 4 eligible candidates (mature, in-window, above the dust floor).
+        let candidates: Vec<_> = (0..4).map(|i| make_candidate(i, 10_000_000, 0)).collect();
+
+        // Huge block reward → the Sybil cap ρ·base_fee binds.
+        assert_eq!(
+            reward_cap(&candidates, height, u64::MAX, &config) as u128,
+            4 * base
+        );
+        // Tiny block reward → the anti-grinding cap binds.
+        assert_eq!(reward_cap(&candidates, height, 1_000, &config), 1_000);
+        // No eligible candidates → cap 0 (no payout, pool carries over).
+        assert_eq!(reward_cap(&[], height, u64::MAX, &config), 0);
+    }
+
+    #[test]
+    fn test_reward_cap_makes_splitting_net_zero() {
+        // The KEY Sybil property through the consensus cap: a whale creating k
+        // of the ρ eligible outputs wins back EXACTLY the k base fees it pays.
+        let config = LotteryFeeConfig::default();
+        let base = bth_cluster_tax::LOTTERY_BASE_FEE_PICO as u128;
+        let height = 1_000;
+        for rho_o in [2usize, 20, 200] {
+            for k in [1usize, 5, 50, 500] {
+                let rho = rho_o + k;
+                let cands: Vec<_> = (0..rho)
+                    .map(|i| make_candidate(i as u8, 10_000_000, 0))
+                    .collect();
+                // Block reward huge so the Sybil cap binds at ρ·base_fee.
+                let cap = reward_cap(&cands, height, u64::MAX, &config) as u128;
+                assert_eq!(cap, rho as u128 * base);
+                let winnings = cap * k as u128 / rho as u128; // uniform share k/ρ
+                let cost = k as u128 * base;
+                assert_eq!(winnings, cost, "net-zero: rho_o={rho_o} k={k}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_carry_forward_conserves_supply_and_drains_at_cap() {
+        // Over many blocks with a fat fee pool and a small cap, the excess must
+        // carry forward (never burned), the per-block payout must stay ≤ cap,
+        // and total pool inflow must equal total payout + final carryover.
+        let config = LotteryFeeConfig::default();
+        let height = 1_000;
+        let base = bth_cluster_tax::LOTTERY_BASE_FEE_PICO;
+        let candidates: Vec<_> = (0..2).map(|i| make_candidate(i, 10_000_000, 0)).collect();
+        let cap = reward_cap(&candidates, height, u64::MAX, &config);
+        assert_eq!(cap as u128, 2 * base as u128); // ρ=2 → 0.5 BTH/block
+
+        let total_fees = 1_000_000_000_000u64; // 1 BTH of fees/block (pool = 0.8 BTH)
+        let emission_share = 0u64;
+        let blocks = 100u128;
+
+        let mut pool: u128 = 0;
+        let mut total_inflow: u128 = 0;
+        let mut total_payout: u128 = 0;
+        for _ in 0..blocks {
+            let acc = compute_pool_accounting(total_fees, emission_share, pool, cap, &config);
+            // Inflow into the redistribution pool = fee_pool + emission (the
+            // burn share is separate and not part of the pool).
+            total_inflow += acc.fee_pool as u128 + emission_share as u128;
+            assert!(acc.payout as u128 <= cap as u128, "per-block payout ≤ cap");
+            total_payout += acc.payout as u128;
+            pool = acc.carryover_after(acc.payout);
+        }
+
+        // Supply conservation: no mint, no leak — everything in is paid or held.
+        assert_eq!(
+            total_inflow,
+            total_payout + pool,
+            "carry-forward pool conserves supply exactly"
+        );
+        // The pool > cap each block, so it drains at exactly the cap rate...
+        assert_eq!(total_payout, cap as u128 * blocks, "drains at the cap rate");
+        // ...and the un-drained excess accumulates rather than being burned.
+        assert!(pool > 0, "over-cap excess carried forward, not burned");
     }
 
     #[test]

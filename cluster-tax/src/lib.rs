@@ -151,13 +151,14 @@ pub use validate::{
 // ============================================================================
 //
 // The lottery system redistributes 80% of fees to random UTXO holders.
-// Default selection mode: Hybrid { alpha: 0.3 }
-// - 3.84x Sybil resistance (acceptable gaming ratio)
-// - 69% Gini coefficient reduction (progressive redistribution)
-// - 0 bits privacy cost (no information leaked)
+// Default selection mode: Uniform (Path C, value-free / CT-compatible).
+// - Sybil resistance from the circulation window + endogenous reward cap
+//   (`sybil_reward_cap`), not the weight formula (splitting is net-zero).
+// - CT-clean: the draw reads no confidential UTXO value.
 //
-// See docs/design/lottery-redistribution.md for analysis.
+// See docs/research/ct-compatible-lottery-selection.md for the analysis.
 pub use lottery::{
-    draw_winners, verify_drawing, LotteryCandidate, LotteryDrawConfig, LotteryResult,
-    LotteryWinner, SelectionMode,
+    count_eligible, draw_winners, sybil_reward_cap, verify_drawing, LotteryCandidate,
+    LotteryDrawConfig, LotteryResult, LotteryWinner, SelectionMode, CIRCULATION_WINDOW_BLOCKS,
+    LOTTERY_BASE_FEE_PICO,
 };

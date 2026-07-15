@@ -3440,9 +3440,16 @@ impl Ledger {
 
             if let Ok((_, value)) = result {
                 if let Ok(utxo) = bincode::deserialize::<Utxo>(value) {
-                    // Check eligibility: age and value thresholds
+                    // Check eligibility: circulation window (mature but recently
+                    // created) and dust floor. The recency upper bound
+                    // (age <= circulation_window) is the Path C addition; it
+                    // must match LotteryCandidate::is_eligible so ρ (the reward-
+                    // cap denominator) is consistent across nodes.
                     let age = block_height.saturating_sub(utxo.created_at);
-                    if age >= config.min_utxo_age && utxo.output.amount >= config.min_utxo_value {
+                    if age >= config.min_utxo_age
+                        && age <= config.circulation_window
+                        && utxo.output.amount >= config.min_utxo_value
+                    {
                         // Convert ClusterTagVector to TagVector for entropy calculation
                         let tag_vector =
                             Self::cluster_tags_to_tag_vector(&utxo.output.cluster_tags);

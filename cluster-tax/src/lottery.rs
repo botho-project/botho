@@ -4,21 +4,51 @@
 //! redistribution. Unlike the simulation module, this is designed for actual
 //! use in block production and validation with verifiable randomness.
 //!
-//! ## Selection Mode
+//! ## Selection Mode — Path C (value-free)
 //!
-//! The default selection mode is `ClusterWeighted`: winner weight is UTXO
-//! value scaled by the inverse cluster factor. This is the only mode whose
-//! progressive term is split-invariant — weights are value-based (splitting
-//! a position never increases total weight) and the tilt depends on cluster
-//! provenance, which inherits through splits.
+//! The default selection mode is `Uniform`: every eligible UTXO has an equal
+//! chance. This is the ratified **Path C** value-free selection
+//! (`docs/research/ct-compatible-lottery-selection.md`), which is compatible
+//! with confidential amounts because the draw reads no UTXO value.
 //!
-//! Per-UTXO weight terms (Uniform, the alpha component of Hybrid) are
-//! subsidies to whoever splits hardest: adversarial simulation shows a
-//! strategic whale splitting into 1,000 UTXOs captures the payout stream
-//! (~300x weight gain under Hybrid alpha=0.3) and inequality rises.
+//! A uniform draw is not split-invariant on its own — a whale that fragments a
+//! position into `k` fresh coins buys `k` tickets. Sybil resistance instead
+//! comes from two value-free, structural brakes applied *outside* the weight
+//! formula:
 //!
-//! See `docs/design/cluster-tilted-redistribution.md` for the validated
-//! design and `experiments/ANALYSIS.md` for the gamed-equilibrium results.
+//! 1. **Circulation window** ([`CIRCULATION_WINDOW_BLOCKS`]): only outputs
+//!    created within the last `N` blocks are eligible, so the whale must
+//!    continuously re-split (paying base fees each cycle) to stay in the draw.
+//! 2. **Endogenous reward cap** `R = min(fee_pool, ρ · base_fee)`, where `ρ` is
+//!    the count of in-window eligible outputs (whale splits included) and
+//!    `base_fee` is [`LOTTERY_BASE_FEE_PICO`]. Because the cap rises by exactly
+//!    `base_fee` per extra eligible output, a splitter wins back exactly the
+//!    base fee it pays: splitting is **net-zero** (net-negative when the pool
+//!    is thin). See [`sybil_reward_cap`] and §9 of the research memo.
+//!
+//! The historical value-weighted modes (`ClusterWeighted`, `ValueWeighted`,
+//! `Hybrid`, `EntropyWeighted`) are retained for simulation/back-compat but are
+//! no longer the default: they read the (now-confidential) UTXO value and would
+//! require a ZK weighted-sampling sort under CT.
+//!
+//! See `docs/design/cluster-tilted-redistribution.md` for the prior
+//! value-weighted design and `docs/research/ct-compatible-lottery-selection.md`
+//! for the Path C ratification (redistribution, Sybil, and CT analysis).
+
+/// Circulation window `N`, in blocks: an output is lottery-eligible only if it
+/// was created within the last `N` blocks (a recency / "recently circulated"
+/// filter). ~14 h at the 5 s reference block time.
+///
+/// CONSENSUS-CRITICAL: proposer and validators must agree exactly.
+/// Ratified value (research §7.5 / §9): 10,000 blocks.
+pub const CIRCULATION_WINDOW_BLOCKS: u64 = 10_000;
+
+/// Per-output base fee floor, in picocredits (0.25 BTH; 1 BTH = 1e12 pico).
+///
+/// Sets the Path C endogenous reward cap `R = min(fee_pool, ρ · base_fee)`
+/// (see [`sybil_reward_cap`]). This is the only value gate the lottery keeps
+/// beyond dust — matching the public base-fee floor charged on every output.
+pub const LOTTERY_BASE_FEE_PICO: u64 = 250_000_000_000;
 
 use sha2::{Digest, Sha256};
 
@@ -43,6 +73,11 @@ pub struct LotteryDrawConfig {
     /// Default: 1_000_000 (1 microBTH)
     pub min_utxo_value: u64,
 
+    /// Circulation window `N`, in blocks: an output is eligible only if it was
+    /// created within the last `N` blocks (recency filter for Path C).
+    /// Default: [`CIRCULATION_WINDOW_BLOCKS`] (10,000).
+    pub circulation_window: u64,
+
     /// Selection mode for choosing winners.
     pub selection_mode: SelectionMode,
 }
@@ -54,9 +89,12 @@ impl Default for LotteryDrawConfig {
             winners_per_draw: 4,
             min_utxo_age: 720,
             min_utxo_value: 1_000_000,
-            // Cluster-tilted: the only split-invariant progressive mode.
-            // See docs/design/cluster-tilted-redistribution.md
-            selection_mode: SelectionMode::ClusterWeighted,
+            circulation_window: CIRCULATION_WINDOW_BLOCKS,
+            // Path C: value-free uniform draw over the circulation window.
+            // Sybil resistance comes from the window + endogenous reward cap
+            // (sybil_reward_cap), not the weight formula. CT-compatible.
+            // See docs/research/ct-compatible-lottery-selection.md
+            selection_mode: SelectionMode::Uniform,
         }
     }
 }
@@ -67,10 +105,10 @@ impl Default for LotteryDrawConfig {
 /// (favoring small holders) and Sybil resistance (preventing gaming).
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum SelectionMode {
-    /// Uniform: each UTXO has equal chance.
-    /// - Progressive: Yes (many small UTXOs beat few large ones)
-    /// - Sybil resistance: Poor (splitting = more tickets)
-    /// - Gaming ratio: ~9.3x
+    /// Uniform: each UTXO has equal chance. **Path C default** — value-free
+    /// and CT-compatible; Sybil resistance comes from the circulation window +
+    /// endogenous reward cap ([`sybil_reward_cap`]), not the weight formula.
+    #[default]
     Uniform,
 
     /// Value-weighted: probability proportional to UTXO value.
@@ -87,7 +125,7 @@ pub enum SelectionMode {
 
     /// Cluster-factor weighted: lower factor = more weight.
     /// Progressive via fee system (commerce coins worth more).
-    #[default]
+    /// Retired as the default under CT (reads the confidential UTXO value).
     ClusterWeighted,
 
     /// Entropy-weighted: higher tag entropy = more weight.
@@ -140,9 +178,17 @@ impl LotteryCandidate {
     }
 
     /// Check if this UTXO is eligible for the lottery.
+    ///
+    /// Path C eligibility is a *circulation window*: the output must be mature
+    /// enough (`age >= min_utxo_age`, anti-manipulation) yet recently created
+    /// (`age <= circulation_window`, the recency filter that forces a splitter
+    /// to keep re-paying base fees), and clear the dust floor
+    /// (`value >= min_utxo_value`). All bounds are integer and deterministic.
     pub fn is_eligible(&self, current_block: u64, config: &LotteryDrawConfig) -> bool {
         let age = current_block.saturating_sub(self.creation_block);
-        age >= config.min_utxo_age && self.value >= config.min_utxo_value
+        age >= config.min_utxo_age
+            && age <= config.circulation_window
+            && self.value >= config.min_utxo_value
     }
 
     /// Calculate the lottery weight based on selection mode.
@@ -187,6 +233,44 @@ impl LotteryCandidate {
             }
         }
     }
+}
+
+/// Count the in-window eligible outputs `ρ` for a candidate set.
+///
+/// This is the Path C reward-cap denominator: `ρ` counts every eligible output
+/// in the circulation window, **including a splitter's own outputs** —
+/// consensus cannot distinguish organic from Sybil outputs, so it must count
+/// them all. That is precisely what makes the cap Sybil-neutral (see
+/// [`sybil_reward_cap`]).
+///
+/// CONSENSUS-CRITICAL: a pure count over [`LotteryCandidate::is_eligible`], so
+/// proposer and validators agree exactly.
+pub fn count_eligible(
+    candidates: &[LotteryCandidate],
+    current_block: u64,
+    config: &LotteryDrawConfig,
+) -> usize {
+    candidates
+        .iter()
+        .filter(|c| c.is_eligible(current_block, config))
+        .count()
+}
+
+/// Path C endogenous reward cap `ρ · base_fee`, in base units (picocredits).
+///
+/// The per-block lottery payout is capped at `R = min(fee_pool, ρ · base_fee)`,
+/// where `ρ` = [`count_eligible`] and `base_fee` = [`LOTTERY_BASE_FEE_PICO`].
+/// Under a uniform draw a splitter creating `k` of the `ρ` eligible outputs
+/// wins expected `k/ρ · R = k · base_fee`, exactly the `k · base_fee` it pays
+/// in base fees — splitting is net-zero (net-negative when `fee_pool < cap`).
+/// This is the regime-independent Sybil bound (research §9.1).
+///
+/// Returns `u128`: `ρ` can be up to the candidate cap and `base_fee` is
+/// ~2.5e11, so the product can exceed `u64` in principle; the consensus caller
+/// clamps it against the block reward (anti-grinding) before it is used as a
+/// `u64` payout.
+pub fn sybil_reward_cap(eligible_count: usize) -> u128 {
+    (eligible_count as u128).saturating_mul(LOTTERY_BASE_FEE_PICO as u128)
 }
 
 /// Result of a lottery drawing.
@@ -268,12 +352,30 @@ pub fn draw_winners(
     let mut used_indices = std::collections::HashSet::new();
 
     for i in 0..num_winners {
-        // Deterministic 128-bit roll in [0, total_weight). The modulo bias
-        // is at most total_weight / 2^128 — negligible and, crucially,
-        // identical on every platform.
-        let roll = verifiable_random_u128(&seed, i as u64) % total_weight;
+        // Weighted sampling WITHOUT replacement: the roll must be taken against
+        // the weight of the *remaining* (not-yet-selected) candidates, not the
+        // original `total_weight`. Rolling against the full total lets a roll
+        // land in the range covered by already-selected candidates, so the
+        // cumulative walk finds no winner and the draw silently under-fills —
+        // which is common under the uniform (small-integer) Path C weights.
+        // Recomputing the remaining total guarantees every slot is filled while
+        // staying a pure, deterministic function of the seed and weights.
+        let remaining_total: u128 = weights
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| !used_indices.contains(idx))
+            .map(|(_, (_, w))| *w)
+            .sum();
+        if remaining_total == 0 {
+            break;
+        }
 
-        // Select winner based on cumulative weights
+        // Deterministic 128-bit roll in [0, remaining_total). The modulo bias
+        // is at most remaining_total / 2^128 — negligible and, crucially,
+        // identical on every platform.
+        let roll = verifiable_random_u128(&seed, i as u64) % remaining_total;
+
+        // Select winner based on cumulative weights over remaining candidates.
         let mut cumulative: u128 = 0;
         for (idx, (candidate, weight)) in weights.iter().enumerate() {
             if used_indices.contains(&idx) {
@@ -388,15 +490,114 @@ mod tests {
     }
 
     #[test]
-    fn test_default_is_cluster_weighted() {
-        // The default MUST stay split-invariant: per-UTXO weight terms
-        // (Uniform, Hybrid's alpha component) are subsidies to splitters.
-        // See docs/design/cluster-tilted-redistribution.md
+    fn test_default_is_uniform_path_c() {
+        // Path C: the default is the value-free Uniform draw over the
+        // circulation window. ClusterWeighted (value-reading) is retired as the
+        // default because it is not CT-compatible. Sybil resistance now comes
+        // from the window + endogenous reward cap, not the weight formula.
+        // See docs/research/ct-compatible-lottery-selection.md
         let config = LotteryDrawConfig::default();
-        assert!(matches!(
-            config.selection_mode,
-            SelectionMode::ClusterWeighted
-        ));
+        assert!(matches!(config.selection_mode, SelectionMode::Uniform));
+        assert_eq!(config.circulation_window, CIRCULATION_WINDOW_BLOCKS);
+    }
+
+    #[test]
+    fn test_circulation_window_eligibility() {
+        // Eligible only inside [min_utxo_age, circulation_window] and above the
+        // dust floor. The recency upper bound is the Path C addition.
+        let config = LotteryDrawConfig::default(); // age 720..=10_000
+        let current = 20_000u64;
+
+        // In window: created 5_000 blocks ago (age 15_000)? No — too old.
+        let too_old = make_candidate(1, 1_000_000, 1000, 0.0, current - 15_000);
+        assert!(
+            !too_old.is_eligible(current, &config),
+            "age > window excluded"
+        );
+
+        // Recently circulated: age 5_000 (within 10_000) and mature (>=720).
+        let fresh = make_candidate(2, 1_000_000, 1000, 0.0, current - 5_000);
+        assert!(fresh.is_eligible(current, &config), "in-window is eligible");
+
+        // Boundary: exactly N blocks old is still eligible (inclusive).
+        let boundary = make_candidate(3, 1_000_000, 1000, 0.0, current - 10_000);
+        assert!(boundary.is_eligible(current, &config), "age == N eligible");
+
+        // Too young (age < min_utxo_age).
+        let young = make_candidate(4, 1_000_000, 1000, 0.0, current - 100);
+        assert!(!young.is_eligible(current, &config), "age < min excluded");
+    }
+
+    #[test]
+    fn test_splitting_is_net_zero_under_reward_cap() {
+        // KEY Sybil property (research §9.1): under the endogenous cap
+        // R = ρ·base_fee with a uniform draw, a whale that creates k of the ρ
+        // eligible outputs wins back EXACTLY the base fees it pays — net-zero,
+        // independent of the split factor k and the organic rate ρ_o.
+        //
+        // winnings = R · k / ρ = (ρ·base_fee)·k/ρ = k·base_fee = cost.
+        // This is integer-exact because R is a multiple of ρ.
+        let base_fee = LOTTERY_BASE_FEE_PICO as u128;
+        for rho_o in [2usize, 20, 200, 5000] {
+            for k in [1usize, 5, 50, 500, 5000] {
+                let rho = rho_o + k;
+                let cap = sybil_reward_cap(rho); // R with the pool ≫ cap
+                assert_eq!(cap, rho as u128 * base_fee);
+
+                // Whale's expected winnings = R · (k/ρ), integer-exact.
+                let winnings = cap * k as u128 / rho as u128;
+                let cost = k as u128 * base_fee;
+                assert_eq!(
+                    winnings, cost,
+                    "splitting must be net-zero: ρ_o={rho_o} k={k} \
+                     winnings={winnings} cost={cost}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_splitting_is_net_negative_when_pool_thin() {
+        // net = 0 is only the ceiling: when the actual fee pool is below the
+        // cap, R = pool < ρ·base_fee, so the whale wins strictly less than it
+        // pays (research §9.1, thin-pool table).
+        let base_fee = LOTTERY_BASE_FEE_PICO as u128;
+        let (rho_o, k) = (20usize, 500usize);
+        let rho = rho_o + k;
+        let cap = sybil_reward_cap(rho);
+        // Pool at half the cap.
+        let pool = cap / 2;
+        let r = pool.min(cap);
+        let winnings = r * k as u128 / rho as u128;
+        let cost = k as u128 * base_fee;
+        assert!(winnings < cost, "thin pool → net-negative for the splitter");
+    }
+
+    #[test]
+    fn test_sybil_reward_cap_grows_one_base_fee_per_output() {
+        // The cap must rise by exactly one base fee for each additional
+        // eligible output — the algebraic root of net-zero splitting.
+        let base = LOTTERY_BASE_FEE_PICO as u128;
+        assert_eq!(sybil_reward_cap(0), 0);
+        assert_eq!(sybil_reward_cap(1), base);
+        assert_eq!(sybil_reward_cap(101) - sybil_reward_cap(100), base);
+    }
+
+    #[test]
+    fn test_count_eligible_counts_splits() {
+        // ρ counts every in-window eligible output, splits included.
+        let config = LotteryDrawConfig::default();
+        let current = 30_000u64;
+        // Created 25_000 → age 5_000, inside the 10_000 window.
+        let cands: Vec<LotteryCandidate> = (0..10)
+            .map(|i| make_candidate(i, 1_000_000, 1000, 0.0, 25_000))
+            .collect();
+        assert_eq!(count_eligible(&cands, current, &config), 10);
+
+        // Add an out-of-window (too-old, age 30_000) output: not counted.
+        let mut with_old = cands.clone();
+        with_old.push(make_candidate(99, 1_000_000, 1000, 0.0, 0));
+        assert_eq!(count_eligible(&with_old, current, &config), 10);
     }
 
     #[test]

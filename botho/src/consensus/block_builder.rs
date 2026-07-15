@@ -306,14 +306,21 @@ impl BlockBuilder {
         let total_fees: u64 = block.total_fees();
 
         // Pool accounting: carryover + emission share + fee pool share,
-        // payouts capped at one block reward (anti-grinding bound). Must
-        // match validation exactly.
+        // payouts capped at the Path C reward cap R = min(ρ·base_fee,
+        // block_reward) (Sybil-neutrality ∧ anti-grinding). The over-cap fee
+        // pool carries forward in `available`. Must match validation exactly.
         let emission_share = block.minting_tx.lottery_emission_share();
+        let payout_cap = crate::consensus::lottery::reward_cap(
+            candidates,
+            block.height(),
+            block.minting_tx.reward,
+            lottery_config,
+        );
         let accounting = crate::consensus::lottery::compute_pool_accounting(
             total_fees,
             emission_share,
             stored_pool,
-            block.minting_tx.reward,
+            payout_cap,
             lottery_config,
         );
 
