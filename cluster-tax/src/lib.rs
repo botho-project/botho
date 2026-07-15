@@ -35,6 +35,7 @@
 //!   clusters.
 
 pub mod analysis;
+pub mod bridge_import;
 pub mod crypto;
 pub mod demurrage;
 pub mod dynamic_fee;
@@ -53,6 +54,10 @@ mod lottery;
 mod tag;
 mod transfer;
 
+pub use bridge_import::{
+    apply_import_floor, import_cluster_factor, import_cluster_id, import_cluster_id_for_height,
+    import_epoch, BRIDGE_IMPORT_EPOCH_BLOCKS, BRIDGE_IMPORT_FACTOR_FLOOR,
+};
 pub use cluster::{ClusterId, ClusterWealth};
 
 // ============================================================================
@@ -115,6 +120,8 @@ pub use fee_curve::{
     TransactionType,
     // Phase 2/3: ZK-compatible fee curve
     ZkFeeCurve,
+    // Picocredits per BTH (ledger scale) — consumed by the bridge-import floor.
+    PICO_PER_BTH,
 };
 pub use signing::{
     create_tag_signature, verify_tag_signature, TagSigningConfig, TagSigningError, TagSigningInput,

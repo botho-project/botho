@@ -57,6 +57,11 @@ ed25519-dalek = { workspace = true, features = ["std"] }
 #   - bth-crypto-ring-signature: node-identical key-image derivation for the
 #     provably-dead (dropped) release check.
 bth-transaction-clsag = { path = "../../transaction/clsag", default-features = false }
+# Single source of truth for the bridge-import cluster key + floor (ADR 0007):
+# the release tag derivation MUST be byte-identical to the ledger's consensus
+# check, so both consume `bth_cluster_tax::import_cluster_id_for_height`.
+bth-cluster-tax = { workspace = true }
+bth-transaction-types = { workspace = true }
 bth-account-keys = { workspace = true }
 bth-crypto-keys = { workspace = true }
 bth-crypto-ring-signature = { workspace = true }
@@ -106,6 +111,6 @@ proptest = { workspace = true, features = ["default-code-coverage"] }
 tempfile = { workspace = true }
 # Deterministic RNG for reproducible tx-construction test vectors (#856).
 rand = { workspace = true, features = ["std_rng"] }
-# Test-only stealth outputs paid to the reserve (deposit-scan + release
-# input construction unit tests) reuse the node-identical output builder.
-bth-transaction-types = { workspace = true }
+# (bth-transaction-types is a normal dependency — see [dependencies] — since
+# the release path now constructs the ADR 0007 import cluster tag in production
+# code, not just tests.)

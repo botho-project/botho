@@ -2046,6 +2046,7 @@ dependencies = [
  "bs58 0.4.0",
  "bth-account-keys",
  "bth-bridge-core",
+ "bth-cluster-tax",
  "bth-crypto-keys",
  "bth-crypto-ring-signature",
  "bth-transaction-clsag",

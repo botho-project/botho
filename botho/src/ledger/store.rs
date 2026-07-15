@@ -276,6 +276,22 @@ pub struct Ledger {
     /// supply range. See [`decode_cluster_wealth`] for the reject-legacy read
     /// contract.
     cluster_wealth_db: Database<Bytes, Bytes>,
+    /// bridge_import_clusters: cluster_id (8 bytes) -> [] (presence-only set)
+    ///
+    /// PROTOCOL 5.0.0 (ADR 0007, #938): the set of cluster ids that are
+    /// bridge-import clusters `c_import(m) = H("bridge-import" ‖ m)`. An id is
+    /// recorded when a block whose height falls in epoch `m` creates an output
+    /// tagged to `import_cluster_id(m)` — i.e. an unwrap's minted output (the
+    /// bridge tags it; see `bridge/service/src/bth_scan.rs`). Membership is
+    /// what makes the ≥F import floor enforceable at spend time: a coin
+    /// whose tag references a recorded import cluster is priced at
+    /// `max(curve, F)` on that tagged fraction, whether it is a fresh
+    /// unwrap output or a forwarded import tag on a later spend. Recording
+    /// is a pure function of block height
+    /// + output tag (the id must equal this-epoch's `import_cluster_id`), so
+    /// every node builds the identical set — no fork, and the rebuild path
+    /// reconstructs it byte-identically from the block store.
+    bridge_import_clusters_db: Database<Bytes, Bytes>,
 }
 
 /// Serialized width of a `cluster_wealth_db` value: 16-byte little-endian
@@ -399,6 +415,30 @@ impl Ledger {
         Ok(())
     }
 
+    /// Test-only: record a cluster id in the bridge-import set directly (ADR
+    /// 0007, #938), bypassing the block-apply recording path. Used by the
+    /// consensus import-floor tests to seed an import cluster without minting a
+    /// full block at the matching epoch height.
+    #[cfg(test)]
+    pub fn record_bridge_import_cluster_for_test(
+        &self,
+        cluster_id: u64,
+    ) -> Result<(), LedgerError> {
+        let mut wtxn = self
+            .env
+            .write_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start write txn: {}", e)))?;
+        self.bridge_import_clusters_db
+            .put(&mut wtxn, cluster_id.to_le_bytes().as_slice(), &[])
+            .map_err(|e| {
+                LedgerError::Database(format!("Failed to record bridge-import cluster: {}", e))
+            })?;
+        wtxn.commit().map_err(|e| {
+            LedgerError::Database(format!("Failed to commit bridge-import cluster: {}", e))
+        })?;
+        Ok(())
+    }
+
     /// Open or create a ledger at the given path for a specific network.
     ///
     /// The ledger will be initialized with the appropriate genesis block
@@ -432,7 +472,7 @@ impl Ledger {
         // its lifetime.
         let env = unsafe {
             let mut opts = EnvOpenOptions::new();
-            opts.max_dbs(7) // Increased for cluster_wealth_db
+            opts.max_dbs(8) // +bridge_import_clusters_db (ADR 0007, #938)
                 .map_size(1024 * 1024 * 1024); // 1GB
             if let Some(readers) = max_readers {
                 opts.max_readers(readers);
@@ -471,6 +511,11 @@ impl Ledger {
             .map_err(|e| {
                 LedgerError::Database(format!("Failed to create cluster_wealth db: {}", e))
             })?;
+        let bridge_import_clusters_db = env
+            .create_database(&mut wtxn, Some("bridge_import_clusters"))
+            .map_err(|e| {
+                LedgerError::Database(format!("Failed to create bridge_import_clusters db: {}", e))
+            })?;
 
         wtxn.commit()
             .map_err(|e| LedgerError::Database(format!("Failed to commit: {}", e)))?;
@@ -485,6 +530,7 @@ impl Ledger {
             key_images_db,
             tx_index_db,
             cluster_wealth_db,
+            bridge_import_clusters_db,
         };
 
         // Initialize with genesis if empty
@@ -1096,6 +1142,10 @@ impl Ledger {
                 self.add_to_address_index(&mut wtxn, &utxo)?;
                 // Update cluster wealth tracking
                 self.update_cluster_wealth_for_output(&mut wtxn, output)?;
+                // ADR 0007 (#938): if this output carries this-epoch's
+                // bridge-import tag (an unwrap's minted output), record the
+                // import cluster so the ≥F floor is enforceable at spend time.
+                self.record_bridge_import_clusters_for_output(&mut wtxn, output, new_height)?;
             }
         }
 
@@ -1857,6 +1907,17 @@ impl Ledger {
             &fee_config.cluster_curve,
         )?;
 
+        // ADR 0007 (#938): the bridge-import floor. Imported wealth (tagged to a
+        // bridge-import cluster) is priced at ≥ F on its import-tagged fraction,
+        // so an unwrapped coin cannot be spent at background factor-1 until it
+        // circulates the tag off. This is a SEPARATE lower bound from the
+        // ring-centroid floor above: both are `max` against the demurrage
+        // factor, so composing them is a single dominating `max` — no
+        // double-floor. It only ever RAISES the factor, and only for value that
+        // actually traces to a recorded import cluster.
+        let import_floor = self.import_floor_factor_from_outputs(&tx.outputs)?;
+        let demurrage_factor = demurrage_factor.max(import_floor);
+
         let demurrage = bth_cluster_tax::demurrage_charge(
             output_sum,
             demurrage_factor,
@@ -1912,6 +1973,69 @@ impl Ledger {
         }
 
         Ok(total_weighted_wealth / total_value)
+    }
+
+    /// The bridge-import factor floor implied by a transaction's OUTPUT tags
+    /// (ADR 0007, #938).
+    ///
+    /// Returns a value-weighted blend, in FACTOR_SCALE units, of the
+    /// bridge-import floor `F` on the value tagged to recorded import clusters
+    /// and background `1×` on the rest:
+    ///
+    /// ```text
+    /// import_floor = Σ_outputs Σ_import-tags (value·weight/SCALE)·F
+    ///              + (Σ_outputs value − import-tagged value)·1×
+    ///              ────────────────────────────────────────────────
+    ///                              Σ_outputs value
+    /// ```
+    ///
+    /// This mirrors the calibration sim's value-weighted `effective_factor`
+    /// blend (`simulation::bridge_import_sweep`): a coin that is 100% import-
+    /// tagged floors at exactly `F`; a coin whose import weight has blended
+    /// down through domestic spends floors proportionally lower, decaying
+    /// to `1×` as the import weight reaches zero (decay-by-circulation, ADR
+    /// 0007 §4). A tx with no import-tagged value returns `1×`
+    /// (FACTOR_SCALE), a no-op against the `max` at the call site.
+    /// Membership is the recorded-import-cluster set
+    /// (`is_bridge_import_cluster`), fail-closed on DB error.
+    ///
+    /// Pure integer u128 accumulation; no float. `TAG_WEIGHT_SCALE` weights and
+    /// `FACTOR_SCALE` factors compose exactly.
+    fn import_floor_factor_from_outputs(&self, outputs: &[TxOutput]) -> Result<u64, LedgerError> {
+        use bth_cluster_tax::{ClusterFactorCurve, BRIDGE_IMPORT_FACTOR_FLOOR};
+
+        let background = ClusterFactorCurve::FACTOR_SCALE as u128; // 1× in FACTOR_SCALE
+        let floor = BRIDGE_IMPORT_FACTOR_FLOOR as u128; // F in FACTOR_SCALE
+
+        let mut total_value: u128 = 0;
+        let mut import_value: u128 = 0;
+
+        for output in outputs {
+            let amount = output.amount as u128;
+            total_value = total_value.saturating_add(amount);
+            for entry in &output.cluster_tags.entries {
+                if self.is_bridge_import_cluster(entry.cluster_id.0)? {
+                    let tagged =
+                        amount.saturating_mul(entry.weight as u128) / (TAG_WEIGHT_SCALE as u128);
+                    import_value = import_value.saturating_add(tagged);
+                }
+            }
+        }
+
+        if total_value == 0 {
+            return Ok(ClusterFactorCurve::FACTOR_SCALE);
+        }
+        // Clamp defensively: a malformed tag set could push import_value past
+        // total_value; the blend must never exceed F.
+        let import_value = import_value.min(total_value);
+        let background_value = total_value - import_value;
+
+        // Value-weighted blend of F (import fraction) and 1× (rest).
+        let blended = (floor
+            .saturating_mul(import_value)
+            .saturating_add(background.saturating_mul(background_value)))
+            / total_value;
+        Ok(blended as u64)
     }
 
     // ========================================================================
@@ -2380,6 +2504,63 @@ impl Ledger {
         Ok(())
     }
 
+    /// Record any bridge-import cluster tags carried by an output created at
+    /// `height` (ADR 0007, #938).
+    ///
+    /// An output tag is a genuine bridge-import origin iff its cluster id
+    /// equals `import_cluster_id(⌊height/K⌋)` — the deterministic epoch key
+    /// for the block that creates it. This is the ONLY way a cluster enters
+    /// the import set: the derivation is a pure function of the block
+    /// height and the tag, so every node records the identical set (no
+    /// fork). A domestic mint or ordinary transfer output can only be
+    /// recorded here if its randomly- derived tag id collides with this
+    /// exact epoch's hash-derived import id (cryptographically negligible),
+    /// and even then the id *is* that epoch's import cluster, so treating
+    /// it as one is consistent.
+    fn record_bridge_import_clusters_for_output(
+        &self,
+        wtxn: &mut RwTxn,
+        output: &TxOutput,
+        height: u64,
+    ) -> Result<(), LedgerError> {
+        let epoch_import_id = bth_cluster_tax::import_cluster_id_for_height(height).0;
+        for entry in &output.cluster_tags.entries {
+            if entry.cluster_id.0 == epoch_import_id {
+                let key = epoch_import_id.to_le_bytes();
+                self.bridge_import_clusters_db
+                    .put(wtxn, key.as_slice(), &[])
+                    .map_err(|e| {
+                        LedgerError::Database(format!(
+                            "Failed to record bridge-import cluster: {}",
+                            e
+                        ))
+                    })?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether `cluster_id` is a recorded bridge-import cluster (ADR 0007).
+    ///
+    /// Presence-only lookup; fail-closed on DB error (propagates rather than
+    /// defaulting to `false`, which would silently drop the ≥F import floor —
+    /// the M7 fail-closed discipline).
+    pub fn is_bridge_import_cluster(&self, cluster_id: u64) -> Result<bool, LedgerError> {
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
+        let key = cluster_id.to_le_bytes();
+        match self.bridge_import_clusters_db.get(&rtxn, key.as_slice()) {
+            Ok(Some(_)) => Ok(true),
+            Ok(None) => Ok(false),
+            Err(e) => Err(LedgerError::Database(format!(
+                "Failed to read bridge-import cluster: {}",
+                e
+            ))),
+        }
+    }
+
     /// Get the total wealth attributed to a specific cluster.
     ///
     /// Returns the sum of (amount × weight / TAG_WEIGHT_SCALE) for all UTXOs
@@ -2575,8 +2756,14 @@ impl Ledger {
             .read_txn()
             .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
 
-        // First pass: compute wealth from all UTXOs
+        // First pass: compute wealth from all UTXOs, and reconstruct the
+        // bridge-import cluster set (ADR 0007, #938) from each UTXO's
+        // `created_at` height — an output tag is an import origin iff its id
+        // equals `import_cluster_id(⌊created_at/K⌋)`, exactly the incremental
+        // `record_bridge_import_clusters_for_output` rule, so the rebuilt set is
+        // byte-identical.
         let mut cluster_wealths: HashMap<u64, u128> = HashMap::new();
+        let mut import_clusters: std::collections::HashSet<u64> = std::collections::HashSet::new();
         let iter = self
             .utxo_db
             .iter(&rtxn)
@@ -2585,6 +2772,8 @@ impl Ledger {
         for item in iter {
             if let Ok((_, value)) = item {
                 if let Ok(utxo) = bincode::deserialize::<Utxo>(value) {
+                    let epoch_import_id =
+                        bth_cluster_tax::import_cluster_id_for_height(utxo.created_at).0;
                     for entry in &utxo.output.cluster_tags.entries {
                         // Full u128 contribution (no down-cast), matching the
                         // incremental path exactly at the new width.
@@ -2598,6 +2787,10 @@ impl Ledger {
                         // demurrage inputs read `cluster_wealth_db`. See #604.
                         let e = cluster_wealths.entry(entry.cluster_id.0).or_insert(0u128);
                         *e = e.saturating_add(contribution);
+
+                        if entry.cluster_id.0 == epoch_import_id {
+                            import_clusters.insert(epoch_import_id);
+                        }
                     }
                 }
             }
@@ -2614,6 +2807,11 @@ impl Ledger {
         self.cluster_wealth_db
             .clear(&mut wtxn)
             .map_err(|e| LedgerError::Database(format!("Failed to clear cluster wealth: {}", e)))?;
+        self.bridge_import_clusters_db
+            .clear(&mut wtxn)
+            .map_err(|e| {
+                LedgerError::Database(format!("Failed to clear bridge-import clusters: {}", e))
+            })?;
 
         // Write new values
         for (cluster_id, wealth) in &cluster_wealths {
@@ -2621,6 +2819,13 @@ impl Ledger {
                 .put(&mut wtxn, &cluster_id.to_le_bytes(), &wealth.to_le_bytes())
                 .map_err(|e| {
                     LedgerError::Database(format!("Failed to write cluster wealth: {}", e))
+                })?;
+        }
+        for cluster_id in &import_clusters {
+            self.bridge_import_clusters_db
+                .put(&mut wtxn, &cluster_id.to_le_bytes(), &[])
+                .map_err(|e| {
+                    LedgerError::Database(format!("Failed to write bridge-import cluster: {}", e))
                 })?;
         }
 
@@ -5110,6 +5315,299 @@ mod tests {
         assert!(
             rich > poor,
             "raising the cluster's global wealth must raise the floor (poor={poor}, rich={rich})"
+        );
+    }
+
+    // ========================================================================
+    // ADR 0007 bridge-import cluster tagging + >=F import floor (#938)
+    //
+    // Consensus-layer assertions mirroring the #940 calibration sim
+    // (cluster-tax/src/simulation/bridge_import_sweep.rs) at the fee-floor
+    // enforcement point. K = 17,280 blocks, F = 1.5x (1500 FACTOR_SCALE).
+    // ========================================================================
+
+    /// A small import (below the curve knee) lands at exactly the >=F floor,
+    /// and a flood import lands at the epoch-summed factor (well above F).
+    /// This is the core ADR 0007 pricing at the consensus layer.
+    #[test]
+    fn import_floor_small_lands_at_f_flood_lands_at_curve() {
+        use bth_cluster_tax::{
+            import_cluster_id_for_height, ClusterFactorCurve, BRIDGE_IMPORT_FACTOR_FLOOR,
+            PICO_PER_BTH,
+        };
+        use bth_transaction_types::ClusterId;
+
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        // An unwrap output created at some height carries this-epoch's import id.
+        let height = 3 * bth_cluster_tax::BRIDGE_IMPORT_EPOCH_BLOCKS + 42;
+        let import_id = import_cluster_id_for_height(height).0;
+        ledger
+            .record_bridge_import_cluster_for_test(import_id)
+            .unwrap();
+
+        // SMALL import: a 1,000-BTH epoch. curve(small) < F, so the import floor
+        // binds at exactly F = 1.5x. import_floor_factor_from_outputs blends F on
+        // the (100%) import-tagged output => exactly F.
+        let small_out = vec![mk_tagged_output(
+            90_000_000,
+            80,
+            ClusterTagVector::from_pairs(&[(ClusterId(import_id), TAG_WEIGHT_SCALE)]),
+        )];
+        ledger
+            .set_cluster_wealth_for_test(import_id, 1_000 * PICO_PER_BTH)
+            .unwrap();
+        let small_floor = ledger.import_floor_factor_from_outputs(&small_out).unwrap();
+        assert_eq!(
+            small_floor, BRIDGE_IMPORT_FACTOR_FLOOR,
+            "a small import must land at exactly F=1.5x (got {small_floor})"
+        );
+
+        // FLOOD import: a 10,000,000-BTH epoch saturates the curve. The import
+        // *cluster factor* (curve then floor) is well above F. The floor does
+        // not lower a curve factor that already exceeds it.
+        let curve = ClusterFactorCurve::default_params();
+        let flood_wealth = 10_000_000u128 * PICO_PER_BTH;
+        let flood_factor = bth_cluster_tax::import_cluster_factor(flood_wealth, &curve);
+        assert!(
+            flood_factor > 5_000,
+            "a flood import must price near 6x, got {flood_factor}"
+        );
+        assert_eq!(
+            flood_factor,
+            curve.factor(flood_wealth),
+            "the >=F floor must NOT alter a flood factor already above F (no double-floor)"
+        );
+    }
+
+    /// Two unwraps in the SAME epoch share one accumulating cluster (the
+    /// Sybil-resistance load-bearing fact). Distinct heights inside
+    /// `[mK,(m+1)K)` resolve to the same import cluster id, so their wealth
+    /// pools together.
+    #[test]
+    fn import_two_unwraps_same_epoch_share_cluster() {
+        use bth_cluster_tax::{import_cluster_id_for_height, BRIDGE_IMPORT_EPOCH_BLOCKS};
+
+        let m = 5u64;
+        let h1 = m * BRIDGE_IMPORT_EPOCH_BLOCKS + 1;
+        let h2 = m * BRIDGE_IMPORT_EPOCH_BLOCKS + (BRIDGE_IMPORT_EPOCH_BLOCKS - 1);
+        assert_eq!(
+            import_cluster_id_for_height(h1),
+            import_cluster_id_for_height(h2),
+            "two unwraps in the same epoch must share one import cluster"
+        );
+
+        // And that shared cluster, once recorded, floors an output tagged to it.
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let shared = import_cluster_id_for_height(h1).0;
+        ledger
+            .record_bridge_import_cluster_for_test(shared)
+            .unwrap();
+        assert!(ledger.is_bridge_import_cluster(shared).unwrap());
+    }
+
+    /// Unwraps in DIFFERENT epochs form distinct clusters (diluting requires
+    /// spreading across epochs — the time-as-cost that defeats the drip-split).
+    #[test]
+    fn import_different_epochs_distinct_clusters() {
+        use bth_cluster_tax::{import_cluster_id_for_height, BRIDGE_IMPORT_EPOCH_BLOCKS};
+        let h1 = 5 * BRIDGE_IMPORT_EPOCH_BLOCKS + 1;
+        let h2 = 6 * BRIDGE_IMPORT_EPOCH_BLOCKS + 1;
+        assert_ne!(
+            import_cluster_id_for_height(h1),
+            import_cluster_id_for_height(h2),
+            "unwraps in different epochs must form distinct clusters"
+        );
+    }
+
+    /// Decay-on-spend: as an imported coin blends its import tag down toward
+    /// background (the existing value-weighted mix), the import floor it faces
+    /// falls proportionally, reaching 1x (background) as the import weight hits
+    /// zero. Proven here via the consensus floor helper on partially-blended
+    /// output tags — no new decay machinery.
+    #[test]
+    fn import_floor_decays_with_tag_blend_toward_background() {
+        use bth_cluster_tax::import_cluster_id_for_height;
+        use bth_transaction_types::{ClusterId, ClusterTagEntry};
+
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let import_id =
+            import_cluster_id_for_height(7 * bth_cluster_tax::BRIDGE_IMPORT_EPOCH_BLOCKS).0;
+        ledger
+            .record_bridge_import_cluster_for_test(import_id)
+            .unwrap();
+
+        // 100% import-tagged => floor is exactly F.
+        let full = vec![mk_tagged_output(
+            100_000_000,
+            81,
+            ClusterTagVector::from_pairs(&[(ClusterId(import_id), TAG_WEIGHT_SCALE)]),
+        )];
+        let full_floor = ledger.import_floor_factor_from_outputs(&full).unwrap();
+        assert_eq!(full_floor, 1_500, "100% import weight floors at F=1.5x");
+
+        // 50% import weight (blended with background) => floor blends halfway
+        // between F (1500) and background (1000) = 1250.
+        let mut half_tags = ClusterTagVector::empty();
+        half_tags.entries.push(ClusterTagEntry {
+            cluster_id: ClusterId(import_id),
+            weight: TAG_WEIGHT_SCALE / 2,
+        });
+        let half = vec![mk_tagged_output(100_000_000, 82, half_tags)];
+        let half_floor = ledger.import_floor_factor_from_outputs(&half).unwrap();
+        assert_eq!(
+            half_floor, 1_250,
+            "50% import weight must blend the floor halfway to background (got {half_floor})"
+        );
+
+        // 0% import weight (fully blended to background) => floor is 1x: the
+        // imported coin is now as cheap as domestically-circulated money.
+        let bg = vec![mk_tagged_output(100_000_000, 83, ClusterTagVector::empty())];
+        let bg_floor = ledger.import_floor_factor_from_outputs(&bg).unwrap();
+        assert_eq!(
+            bg_floor,
+            bth_cluster_tax::ClusterFactorCurve::FACTOR_SCALE,
+            "a fully-circulated coin faces no import floor (1x)"
+        );
+    }
+
+    /// A pure-external hold — an import-tagged coin that never blends in
+    /// domestic value — stays at >=F. Its tag never shifts, so the floor
+    /// never falls.
+    #[test]
+    fn import_pure_external_hold_stays_at_f() {
+        use bth_cluster_tax::import_cluster_id_for_height;
+        use bth_transaction_types::ClusterId;
+
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let import_id =
+            import_cluster_id_for_height(9 * bth_cluster_tax::BRIDGE_IMPORT_EPOCH_BLOCKS).0;
+        ledger
+            .record_bridge_import_cluster_for_test(import_id)
+            .unwrap();
+
+        // A never-mixing coin keeps its 100% import tag through any number of
+        // self-spends; the floor helper still returns exactly F for it.
+        let held = vec![mk_tagged_output(
+            50_000_000,
+            84,
+            ClusterTagVector::from_pairs(&[(ClusterId(import_id), TAG_WEIGHT_SCALE)]),
+        )];
+        for _ in 0..5 {
+            let f = ledger.import_floor_factor_from_outputs(&held).unwrap();
+            assert_eq!(f, 1_500, "a pure-external hold must stay at >=F=1.5x");
+        }
+    }
+
+    /// The >=F import floor and the ring-centroid floor compose without a
+    /// double-floor: the consensus fee floor uses `max(claimed, ring_centroid,
+    /// import_floor)`, so a wealthy-ring demurrage factor already above F is
+    /// UNCHANGED by the import floor, and a background claim with an import tag
+    /// is raised to F (not stacked on top of the ring floor).
+    #[test]
+    fn import_floor_composes_with_ring_centroid_no_double_floor() {
+        use bth_cluster_tax::{import_cluster_id_for_height, PICO_PER_BTH};
+        use bth_transaction_types::ClusterId;
+
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        // Demurrage active (past halving) so factors actually price.
+        let block_height = 8_000_000u64;
+        let import_id = import_cluster_id_for_height(block_height).0;
+        ledger
+            .record_bridge_import_cluster_for_test(import_id)
+            .unwrap();
+
+        // CASE A: background ring + a 100% import-tagged output, small import
+        // wealth. The ring implies ~1x (no wealthy cluster), the claimed factor
+        // is ~1x, but the import floor raises the demurrage factor to F. The
+        // floor must therefore EXCEED the identical tx with a non-import tag.
+        let ring_bg = seed_ring_utxos(&ledger, &[(100_000_000, 0, 0, 90)]);
+        let import_out = vec![mk_tagged_output(
+            90_000_000,
+            91,
+            ClusterTagVector::from_pairs(&[(ClusterId(import_id), TAG_WEIGHT_SCALE)]),
+        )];
+        // Keep the import cluster's global wealth tiny so curve(wealth) < F and
+        // the floor is what binds (not the curve).
+        ledger
+            .set_cluster_wealth_for_test(import_id, 1_000 * PICO_PER_BTH)
+            .unwrap();
+        let tx_import = mk_transfer_tx(ring_bg.clone(), import_out, 0);
+        let floor_import = ledger
+            .consensus_fee_floor(&tx_import, block_height)
+            .unwrap();
+
+        // Same-shape tx whose output is a non-import cluster of equal tiny wealth
+        // (so its claimed factor is also ~1x) — no import floor applies.
+        let plain_cluster = 424242u64;
+        ledger
+            .set_cluster_wealth_for_test(plain_cluster, 1_000 * PICO_PER_BTH)
+            .unwrap();
+        let plain_out = vec![mk_tagged_output(
+            90_000_000,
+            92,
+            ClusterTagVector::from_pairs(&[(ClusterId(plain_cluster), TAG_WEIGHT_SCALE)]),
+        )];
+        let tx_plain = mk_transfer_tx(ring_bg, plain_out, 0);
+        let floor_plain = ledger.consensus_fee_floor(&tx_plain, block_height).unwrap();
+        assert!(
+            floor_import > floor_plain,
+            "the import floor must raise a background-priced import above an \
+             equivalent non-import tx (import={floor_import}, plain={floor_plain})"
+        );
+
+        // CASE B: a WEALTHY ring already drives the demurrage factor above F.
+        // Adding the import tag must NOT stack another floor on top — the
+        // effective factor is the single dominating max, so the floor equals a
+        // recomputation where import_floor <= ring_centroid and is absorbed.
+        ledger
+            .set_cluster_wealth_for_test(5, 10_000_000_000_000_000_000)
+            .unwrap();
+        let rich_ring =
+            seed_ring_utxos(&ledger, &[(100_000_000, 0, 5, 93), (100_000_000, 0, 5, 94)]);
+        // Output tagged to the (low-wealth) import cluster: its own claimed
+        // factor is ~1x but the rich ring floors far above F. The import floor
+        // (F=1.5x) is BELOW the ring-centroid floor here, so it must be absorbed
+        // by the max — the presence of the import tag cannot raise the floor
+        // beyond what the wealthy ring already implies.
+        let out_rich = vec![mk_tagged_output(
+            90_000_000,
+            95,
+            ClusterTagVector::from_pairs(&[(ClusterId(import_id), TAG_WEIGHT_SCALE)]),
+        )];
+        let tx_rich_import = mk_transfer_tx(rich_ring.clone(), out_rich, 0);
+        let floor_rich_import = ledger
+            .consensus_fee_floor(&tx_rich_import, block_height)
+            .unwrap();
+
+        // Same wealthy ring, same output but tagged to a DISTINCT non-import
+        // cluster of equally-tiny wealth: the ring-centroid floor is identical,
+        // and since the import floor (1.5x) is below that ring floor, the two
+        // fee floors MUST be equal — proving no double-floor stacking.
+        let plain2 = 555555u64;
+        ledger
+            .set_cluster_wealth_for_test(plain2, 1_000 * PICO_PER_BTH)
+            .unwrap();
+        let out_rich_plain = vec![mk_tagged_output(
+            90_000_000,
+            96,
+            ClusterTagVector::from_pairs(&[(ClusterId(plain2), TAG_WEIGHT_SCALE)]),
+        )];
+        let tx_rich_plain = mk_transfer_tx(rich_ring, out_rich_plain, 0);
+        let floor_rich_plain = ledger
+            .consensus_fee_floor(&tx_rich_plain, block_height)
+            .unwrap();
+        assert_eq!(
+            floor_rich_import, floor_rich_plain,
+            "when the ring-centroid floor already exceeds F, the import floor must be \
+             absorbed by the single max (no double-floor): import={floor_rich_import}, \
+             plain={floor_rich_plain}"
         );
     }
 }

@@ -25,6 +25,7 @@ use bth_transaction_clsag::{
     ClsagRingInput, EncryptedMemo, MemoPayload, RingMember, Transaction, TxOutput,
     DEFAULT_RING_SIZE, DUST_THRESHOLD, MIN_TX_FEE,
 };
+use bth_transaction_types::{ClusterId, ClusterTagVector};
 use rand_core::{CryptoRng, RngCore};
 
 use crate::bth_rpc::RpcOutput;
@@ -212,10 +213,19 @@ pub fn build_release_tx<R: RngCore + CryptoRng>(
         .checked_sub(spent)
         .ok_or("insufficient reserve inputs: do not cover amount + fee")?;
 
-    // Recipient output: a FRESH one-time stealth output (ADR 0004). Assert it
-    // carries no cluster tags — the release must not launder provenance.
-    let recipient_output = TxOutput::new(amount, recipient);
-    debug_assert!(recipient_output.cluster_tags.is_empty());
+    // Recipient output: a FRESH one-time stealth output (ADR 0004), tagged
+    // 100% to the block-epoch bridge-import cluster (ADR 0007). Before ADR 0007
+    // this output carried NO cluster tag, so unwrapped BTH returned at factor-1
+    // (background) — the entry leak / round-trip-laundromat the ADR closes. Now
+    // it joins `c_import(⌊height/K⌋)`, an accumulating shared origin whose
+    // factor is `max(F=1.5x, curve(Σ epoch unwrap volume))`; it normalizes to
+    // background only by circulating (the existing value-weighted tag blend on
+    // spends), never by sitting idle. The derivation is the single
+    // consensus-canonical helper the ledger also uses, so the tag can never
+    // drift from the node's enforcement.
+    let import_cluster_id = bth_cluster_tax::import_cluster_id_for_height(created_at_height);
+    let import_tags = ClusterTagVector::single(ClusterId(import_cluster_id.0));
+    let recipient_output = TxOutput::new_with_cluster_tags(amount, recipient, None, import_tags);
     let mut outputs = vec![recipient_output];
 
     // Change back to the reserve's default subaddress (ADR 0003). Sub-dust
@@ -490,9 +500,22 @@ mod tests {
         let recipient_out = &tx.outputs[0];
         assert_eq!(recipient_out.amount, amount);
         assert!(recipient_out.belongs_to(&recipient_account).is_some());
-        assert!(
-            recipient_out.cluster_tags.is_empty(),
-            "recipient output must carry no cluster tags (no laundering)"
+        // ...and it is tagged 100% to the block-epoch bridge-import cluster
+        // (ADR 0007, #938): height 5,000 is in epoch 0 (< K = 17,280).
+        let expected_import = bth_cluster_tax::import_cluster_id_for_height(5_000).0;
+        assert_eq!(
+            recipient_out.cluster_tags.entries.len(),
+            1,
+            "recipient output must carry exactly the import cluster tag"
+        );
+        assert_eq!(
+            recipient_out.cluster_tags.entries[0].cluster_id.0, expected_import,
+            "recipient output must be tagged to c_import(epoch 0)"
+        );
+        assert_eq!(
+            recipient_out.cluster_tags.entries[0].weight,
+            bth_transaction_types::TAG_WEIGHT_SCALE,
+            "the import tag must be 100% weight"
         );
         // ...and it must NOT be detectable by the reserve (fresh one-time key).
         assert!(recipient_out.belongs_to(&reserve).is_none());

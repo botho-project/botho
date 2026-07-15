@@ -402,7 +402,7 @@ impl ExtendedTxSignature {
 
         // Version byte
         let version = r.read_bytes(1)?[0];
-        if version < EXTENDED_SIG_VERSION_V2 || version > EXTENDED_SIG_VERSION_V3 {
+        if !(EXTENDED_SIG_VERSION_V2..=EXTENDED_SIG_VERSION_V3).contains(&version) {
             return Err(DeserializeError::InvalidVersion);
         }
 
