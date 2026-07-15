@@ -107,9 +107,10 @@ fn fuzz_raw_string(s: &str) {
 
     // If parsing succeeds, verify roundtrip
     if let Ok(addr) = result {
-        let canonical = addr.to_address_string();
         // Re-parsing the canonical form should succeed
-        let _ = Address::parse(&canonical);
+        if let Ok(canonical) = addr.to_address_string() {
+            let _ = Address::parse(&canonical);
+        }
 
         // Test other methods
         let _ = addr.network;
