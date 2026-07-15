@@ -104,9 +104,9 @@ fn effective_cluster_wealth_from_outputs(
 ///
 /// Value-weighted blend, in FACTOR_SCALE units, of `F` on the value tagged to
 /// recorded bridge-import clusters and `1×` on the rest. Relay policy mirrors
-/// the consensus floor so a tx admitted by the mempool can never fall below what
-/// consensus requires (the relay-only-tightening invariant). Fail-closed on DB
-/// error.
+/// the consensus floor so a tx admitted by the mempool can never fall below
+/// what consensus requires (the relay-only-tightening invariant). Fail-closed
+/// on DB error.
 fn import_floor_factor_from_outputs(outputs: &[TxOutput], ledger: &Ledger) -> Result<u64, String> {
     use bth_cluster_tax::{ClusterFactorCurve, BRIDGE_IMPORT_FACTOR_FLOOR};
 
@@ -136,7 +136,8 @@ fn import_floor_factor_from_outputs(outputs: &[TxOutput], ledger: &Ledger) -> Re
     }
     let import_value = import_value.min(total_value);
     let background_value = total_value - import_value;
-    let blended = (floor.saturating_mul(import_value)
+    let blended = (floor
+        .saturating_mul(import_value)
         .saturating_add(background.saturating_mul(background_value)))
         / total_value;
     Ok(blended as u64)

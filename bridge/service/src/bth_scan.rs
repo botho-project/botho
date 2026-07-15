@@ -224,10 +224,8 @@ pub fn build_release_tx<R: RngCore + CryptoRng>(
     // consensus-canonical helper the ledger also uses, so the tag can never
     // drift from the node's enforcement.
     let import_cluster_id = bth_cluster_tax::import_cluster_id_for_height(created_at_height);
-    let import_tags =
-        ClusterTagVector::single(ClusterId(import_cluster_id.0));
-    let recipient_output =
-        TxOutput::new_with_cluster_tags(amount, recipient, None, import_tags);
+    let import_tags = ClusterTagVector::single(ClusterId(import_cluster_id.0));
+    let recipient_output = TxOutput::new_with_cluster_tags(amount, recipient, None, import_tags);
     let mut outputs = vec![recipient_output];
 
     // Change back to the reserve's default subaddress (ADR 0003). Sub-dust

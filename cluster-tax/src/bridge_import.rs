@@ -1,8 +1,8 @@
 //! Bridge-import cluster tagging (ADR 0007).
 //!
-//! Unwrapping wBTH → BTH mints BTH into a **block-epoch import cluster** instead
-//! of returning it at factor-1 (background). Every unwrap whose output lands in
-//! block-height range `[mK, (m+1)K)` joins one shared cluster origin
+//! Unwrapping wBTH → BTH mints BTH into a **block-epoch import cluster**
+//! instead of returning it at factor-1 (background). Every unwrap whose output
+//! lands in block-height range `[mK, (m+1)K)` joins one shared cluster origin
 //!
 //! ```text
 //! c_import(m) = H("bridge-import" ‖ m),   m = ⌊height / K⌋
@@ -40,12 +40,12 @@
 //! CONSENSUS-CRITICAL. `import_epoch` is integer division; `import_cluster_id`
 //! is SHA-256 over a fixed-format preimage (mirroring how
 //! `MintingTx::to_tx_output` derives a mint `ClusterId` from a hash — first 8
-//! little-endian bytes); the floor clamp is a `max` on `u64` FACTOR_SCALE units.
-//! No floats, bit-identical on every platform.
+//! little-endian bytes); the floor clamp is a `max` on `u64` FACTOR_SCALE
+//! units. No floats, bit-identical on every platform.
 
 use sha2::{Digest, Sha256};
 
-use crate::{ClusterId, ClusterFactorCurve};
+use crate::{ClusterFactorCurve, ClusterId};
 
 /// Epoch length `K`, in blocks (ADR 0007, ratified 2026-07-14 via #937/#940).
 ///
@@ -64,8 +64,8 @@ pub const BRIDGE_IMPORT_EPOCH_BLOCKS: u64 = 17_280;
 /// (1000 = 1.0×), ratified 2026-07-14 (#937/#940).
 ///
 /// `F = 1_500` = 1.5×. This is the residual anti-hoarding premium a split-gamer
-/// cannot erode (the best factor reachable by diluting across epochs is `F`, not
-/// 1×) and the minimum toll for entering via the bridge rather than earning
+/// cannot erode (the best factor reachable by diluting across epochs is `F`,
+/// not 1×) and the minimum toll for entering via the bridge rather than earning
 /// domestically. It clears the ~1.27× a genuine ~1000-BTH retail import already
 /// prices on the raw curve (so the floor binds) at a ~0.20 %/yr transient
 /// onboarding toll that blends off in ≈9 domestic spends.
@@ -86,12 +86,12 @@ pub fn import_epoch(height: u64) -> u64 {
 /// The canonical import cluster id for epoch `m`:
 /// `c_import(m) = H("bridge-import" ‖ m)`.
 ///
-/// The preimage is `BRIDGE_IMPORT_DOMAIN ‖ m.to_le_bytes()`; the id is the first
-/// 8 little-endian bytes of the SHA-256 digest, folded into the `u64` cluster-id
-/// space — the identical convention `MintingTx::to_tx_output` uses to derive a
-/// mint cluster id from a tx hash. A bridge-import cluster is simply a third way
-/// to create a cluster origin (alongside minting), with no new machinery beyond
-/// the tag.
+/// The preimage is `BRIDGE_IMPORT_DOMAIN ‖ m.to_le_bytes()`; the id is the
+/// first 8 little-endian bytes of the SHA-256 digest, folded into the `u64`
+/// cluster-id space — the identical convention `MintingTx::to_tx_output` uses
+/// to derive a mint cluster id from a tx hash. A bridge-import cluster is
+/// simply a third way to create a cluster origin (alongside minting), with no
+/// new machinery beyond the tag.
 pub fn import_cluster_id(epoch: u64) -> ClusterId {
     let mut hasher = Sha256::new();
     hasher.update(BRIDGE_IMPORT_DOMAIN);
@@ -112,9 +112,9 @@ pub fn import_cluster_id_for_height(height: u64) -> ClusterId {
 /// cluster.
 ///
 /// `curve_factor` is the import cluster's curve-derived factor
-/// (`ClusterFactorCurve::factor(import_cluster_wealth)`), in FACTOR_SCALE units.
-/// Returns `max(curve_factor, F)`. Never lowers a factor; a flood epoch whose
-/// curve factor already exceeds `F` is unchanged.
+/// (`ClusterFactorCurve::factor(import_cluster_wealth)`), in FACTOR_SCALE
+/// units. Returns `max(curve_factor, F)`. Never lowers a factor; a flood epoch
+/// whose curve factor already exceeds `F` is unchanged.
 #[inline]
 pub fn apply_import_floor(curve_factor: u64) -> u64 {
     curve_factor.max(BRIDGE_IMPORT_FACTOR_FLOOR)
@@ -191,20 +191,33 @@ mod tests {
 
         // A small import sits below the curve knee → floored to exactly F.
         let small = 1_000u128 * PICO_PER_BTH;
-        assert_eq!(import_cluster_factor(small, &curve), BRIDGE_IMPORT_FACTOR_FLOOR);
+        assert_eq!(
+            import_cluster_factor(small, &curve),
+            BRIDGE_IMPORT_FACTOR_FLOOR
+        );
 
         // A flood import saturates the curve well above F → floor does not bind.
         let flood = 10_000_000u128 * PICO_PER_BTH;
         let flood_factor = import_cluster_factor(flood, &curve);
-        assert!(flood_factor > 5_000, "flood import must price near 6x, got {flood_factor}");
-        assert_eq!(flood_factor, curve.factor(flood), "floor must not alter a flood factor");
+        assert!(
+            flood_factor > 5_000,
+            "flood import must price near 6x, got {flood_factor}"
+        );
+        assert_eq!(
+            flood_factor,
+            curve.factor(flood),
+            "floor must not alter a flood factor"
+        );
     }
 
     #[test]
     fn apply_import_floor_never_lowers() {
         assert_eq!(apply_import_floor(0), BRIDGE_IMPORT_FACTOR_FLOOR);
         assert_eq!(apply_import_floor(1_000), BRIDGE_IMPORT_FACTOR_FLOOR);
-        assert_eq!(apply_import_floor(BRIDGE_IMPORT_FACTOR_FLOOR), BRIDGE_IMPORT_FACTOR_FLOOR);
+        assert_eq!(
+            apply_import_floor(BRIDGE_IMPORT_FACTOR_FLOOR),
+            BRIDGE_IMPORT_FACTOR_FLOOR
+        );
         assert_eq!(apply_import_floor(6_000), 6_000);
     }
 }

@@ -30,7 +30,7 @@ use crate::TagWeight;
 // ============================================================================
 
 /// Transaction version indicating supported features.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum TransactionVersion {
     /// V1: Original transaction format
     /// - Basic stealth addresses
@@ -41,6 +41,7 @@ pub enum TransactionVersion {
     /// - Committed cluster tags
     /// - Tag conservation proofs
     /// - ExtendedTxSignature without entropy proof
+    #[default]
     V2 = 2,
 
     /// V3: Phase 2 entropy proofs
@@ -74,12 +75,6 @@ impl TransactionVersion {
     /// Convert to byte.
     pub fn to_byte(self) -> u8 {
         self as u8
-    }
-}
-
-impl Default for TransactionVersion {
-    fn default() -> Self {
-        Self::V2
     }
 }
 

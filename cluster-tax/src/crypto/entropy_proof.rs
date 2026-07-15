@@ -192,7 +192,7 @@ impl EntropyProofBuilder {
         // p_k = m_k / total_mass
         // p_k^2 = m_k^2 / total_mass^2
         let mut sum_p_squared = 0u128;
-        for (_, mass) in &cluster_masses {
+        for mass in cluster_masses.values() {
             let p_squared = (*mass as u128 * *mass as u128) / (total_mass as u128);
             sum_p_squared += p_squared;
         }
@@ -212,9 +212,8 @@ impl EntropyProofBuilder {
         let p_sum = normalized as f64 / ENTROPY_SCALE as f64;
         let h2 = if p_sum > 0.0 && p_sum < 1.0 {
             -p_sum.log2()
-        } else if p_sum >= 1.0 {
-            0.0
         } else {
+            // p_sum >= 1.0 (max concentration) or p_sum <= 0.0 → zero entropy
             0.0
         };
 

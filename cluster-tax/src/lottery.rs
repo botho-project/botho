@@ -65,7 +65,7 @@ impl Default for LotteryDrawConfig {
 ///
 /// Different modes provide different trade-offs between progressivity
 /// (favoring small holders) and Sybil resistance (preventing gaming).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub enum SelectionMode {
     /// Uniform: each UTXO has equal chance.
     /// - Progressive: Yes (many small UTXOs beat few large ones)
@@ -87,17 +87,12 @@ pub enum SelectionMode {
 
     /// Cluster-factor weighted: lower factor = more weight.
     /// Progressive via fee system (commerce coins worth more).
+    #[default]
     ClusterWeighted,
 
     /// Entropy-weighted: higher tag entropy = more weight.
     /// Sybil-resistant (splits preserve entropy).
     EntropyWeighted { entropy_bonus: f64 },
-}
-
-impl Default for SelectionMode {
-    fn default() -> Self {
-        Self::ClusterWeighted
-    }
 }
 
 /// Fixed-point scale for cluster factors (1000 = 1.0x, 6000 = 6.0x).

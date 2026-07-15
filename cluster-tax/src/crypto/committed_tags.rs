@@ -751,10 +751,10 @@ impl CommittedFeeProver {
         let mut challenges = vec![Scalar::ZERO; ZkFeeCurve::NUM_SEGMENTS];
         let mut simulated_challenges_sum = Scalar::ZERO;
 
-        for i in 0..ZkFeeCurve::NUM_SEGMENTS {
+        for (i, challenge) in challenges.iter_mut().enumerate() {
             if i != real_segment {
-                challenges[i] = Scalar::random(rng);
-                simulated_challenges_sum += challenges[i];
+                *challenge = Scalar::random(rng);
+                simulated_challenges_sum += *challenge;
             }
         }
 

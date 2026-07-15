@@ -957,7 +957,10 @@ impl ZkFeeCurve {
     /// | b3 = W_MID<<3 | 8e17 | 800,000 | 4928 |
     /// | b4 = W_MID<<8 | 2.56e19 | 25,600,000 | 5909 |
     /// | b5 | u128::MAX | — | 6000 |
-    pub fn default() -> Self {
+    ///
+    /// The canonical constructor lives in the [`Default`] impl; call
+    /// `ZkFeeCurve::default()`.
+    fn default_curve() -> Self {
         let w = ClusterFactorCurve::W_MID_PICO;
         Self {
             boundaries: [0, w >> 8, w >> 3, w << 3, w << 8, u128::MAX],
@@ -1122,7 +1125,7 @@ impl ZkFeeCurve {
 
 impl Default for ZkFeeCurve {
     fn default() -> Self {
-        Self::default()
+        Self::default_curve()
     }
 }
 

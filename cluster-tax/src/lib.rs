@@ -118,10 +118,10 @@ pub use fee_curve::{
     FeeRateBps,
     SegmentParams,
     TransactionType,
-    // Picocredits per BTH (ledger scale) — consumed by the bridge-import floor.
-    PICO_PER_BTH,
     // Phase 2/3: ZK-compatible fee curve
     ZkFeeCurve,
+    // Picocredits per BTH (ledger scale) — consumed by the bridge-import floor.
+    PICO_PER_BTH,
 };
 pub use signing::{
     create_tag_signature, verify_tag_signature, TagSigningConfig, TagSigningError, TagSigningInput,

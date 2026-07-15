@@ -110,15 +110,15 @@ use crate::{
 /// wBTH → BTH now tags the minted output 100% to a block-epoch import cluster
 /// `c_import(⌊height/K⌋)` (K = 17,280 blocks) instead of returning it at
 /// factor-1 (background), and the consensus fee floor prices any import-tagged
-/// value at ≥ F = 1.5× on that fraction until it circulates the tag off. This is
-/// a CONSENSUS-BREAKING change: a 4.x peer applies no import floor and would
-/// accept/produce blocks whose release outputs the 5.0.0 chain now expects to be
-/// import-tagged and floored, so the two fork. The bump is therefore MAJOR
+/// value at ≥ F = 1.5× on that fraction until it circulates the tag off. This
+/// is a CONSENSUS-BREAKING change: a 4.x peer applies no import floor and would
+/// accept/produce blocks whose release outputs the 5.0.0 chain now expects to
+/// be import-tagged and floored, so the two fork. The bump is therefore MAJOR
 /// (`is_consensus_compatible` compares majors only — a minor bump would merely
 /// warn, leaving 4.x peers connected and silently forking) and
 /// `MIN_SUPPORTED_PROTOCOL_VERSION` rises to 5.0.0 in lockstep (pre-mainnet
-/// testnet reset — no in-place migration; the new `bridge_import_clusters` index
-/// is built from genesis). Interacts with #925 (the remaining spend-to-
+/// testnet reset — no in-place migration; the new `bridge_import_clusters`
+/// index is built from genesis). Interacts with #925 (the remaining spend-to-
 /// background reset door) only in that both touch the factor-floor area; they
 /// are SEPARATE mechanisms.
 pub const PROTOCOL_VERSION: &str = "5.0.0";
@@ -138,7 +138,8 @@ pub const PROTOCOL_VERSION: &str = "5.0.0";
 ///
 /// Raised to 5.0.0 for the ADR 0007 bridge-import cluster tagging + ≥F import
 /// floor (#938): 4.x peers apply no import floor and would fork the
-/// import-tagged/floored chain, so they must be disconnected (major-only check).
+/// import-tagged/floored chain, so they must be disconnected (major-only
+/// check).
 pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "5.0.0";
 
 /// Topic for block announcements
