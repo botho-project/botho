@@ -141,9 +141,10 @@ mod wasm {
     /// `tbotho://2/…`) from its BIP39 seed (hex) and its classical
     /// default-subaddress view/spend public keys (hex).
     ///
-    /// Combines the node-identical PQ derivation (from the seed) with the shared
-    /// address codec, mirroring the node's `WalletKeys::public_address_string`,
-    /// so a browser-generated address is accepted and receivable by the node.
+    /// Combines the node-identical PQ derivation (from the seed) with the
+    /// shared address codec, mirroring the node's
+    /// `WalletKeys::public_address_string`, so a browser-generated address
+    /// is accepted and receivable by the node.
     #[wasm_bindgen(js_name = deriveAddressFromSeed)]
     pub fn derive_address_from_seed_wasm(
         seed_hex: &str,

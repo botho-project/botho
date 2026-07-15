@@ -123,8 +123,8 @@ pub fn decode_address_to_dto(s: &str) -> Result<DecodedV2Address, String> {
     })
 }
 
-/// A wallet's post-quantum public keys, derived from its BIP39 seed, hex-encoded
-/// for the JS boundary.
+/// A wallet's post-quantum public keys, derived from its BIP39 seed,
+/// hex-encoded for the JS boundary.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DerivedPqPublicKeys {
@@ -180,7 +180,8 @@ pub fn derive_pq_public_keys_from_seed(seed_hex: &str) -> Result<DerivedPqPublic
 ///      (`deriveDefaultSubaddressPublicKeys`, pinned byte-identical to the node
 ///      by `derivation-parity.test.ts`) and passed in as hex;
 ///   2. the ML-KEM-768 / ML-DSA-65 public keys are derived from the same BIP39
-///      seed via the node-identical [`bth_crypto_pq::derive_pq_keys_from_seed`];
+///      seed via the node-identical
+///      [`bth_crypto_pq::derive_pq_keys_from_seed`];
 ///   3. the whole [`PublicAddress`] is encoded through the shared
 ///      [`bth_address_codec`] (ADR 0008 D5), so the string is byte-identical to
 ///      the node / mobile / CLI encoders.
@@ -194,7 +195,13 @@ pub fn derive_address_from_seed(
     testnet: bool,
 ) -> Result<String, String> {
     let pq = derive_pq_public_keys_from_seed(seed_hex)?;
-    encode_address_from_hex(view_hex, spend_hex, &pq.kem_public_key, &pq.dsa_public_key, testnet)
+    encode_address_from_hex(
+        view_hex,
+        spend_hex,
+        &pq.kem_public_key,
+        &pq.dsa_public_key,
+        testnet,
+    )
 }
 
 /// Encode a v2 address string from hex components (the JS boundary form).
@@ -992,9 +999,10 @@ mod tests {
     /// `derivation-parity.test.ts`), and asserts:
     ///
     ///   * the produced string is a `botho://2/…` / `tbotho://2/…` v2 address;
-    ///   * it decodes back through the shared codec to the same view/spend keys;
-    ///   * the embedded PQ keys equal `derive_pq_keys_from_seed(seed)`, i.e. the
-    ///     node's own derivation.
+    ///   * it decodes back through the shared codec to the same view/spend
+    ///     keys;
+    ///   * the embedded PQ keys equal `derive_pq_keys_from_seed(seed)`, i.e.
+    ///     the node's own derivation.
     ///
     /// The printed address is the golden vector the TS `deriveV2Address` test
     /// asserts against, closing the loop web ⇄ node.
@@ -1020,14 +1028,23 @@ mod tests {
         // Decodes back to the same classical keys via the shared codec.
         let decoded = decode_address_string(&addr_str).expect("decode produced address");
         assert_eq!(hex::encode(decoded.view_public_key().to_bytes()), view_hex);
-        assert_eq!(hex::encode(decoded.spend_public_key().to_bytes()), spend_hex);
+        assert_eq!(
+            hex::encode(decoded.spend_public_key().to_bytes()),
+            spend_hex
+        );
 
         // The embedded PQ keys are exactly the node's seed derivation.
         let mut seed = [0u8; bth_crypto_pq::BIP39_SEED_SIZE];
         hex::decode_to_slice(seed_hex, &mut seed).unwrap();
         let pq = bth_crypto_pq::derive_pq_keys_from_seed(&seed);
-        assert_eq!(decoded.kem_public_key(), pq.kem_keypair.public_key().as_bytes());
-        assert_eq!(decoded.dsa_public_key(), pq.sig_keypair.public_key().as_bytes());
+        assert_eq!(
+            decoded.kem_public_key(),
+            pq.kem_keypair.public_key().as_bytes()
+        );
+        assert_eq!(
+            decoded.dsa_public_key(),
+            pq.sig_keypair.public_key().as_bytes()
+        );
 
         // Mainnet uses the same body under a different prefix.
         let main = derive_address_from_seed(seed_hex, view_hex, spend_hex, false).unwrap();
