@@ -812,9 +812,17 @@ impl Mempool {
                 10_000, // quantile_bps = 10000 == max
             );
             let blocks_per_year = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
-            bth_cluster_tax::demurrage_charge(
+            // #925: mirror the consensus fee floor's downgrade pricing exactly so
+            // relay never admits a tx below what block validation requires (the
+            // relay-only-tightening invariant asserted below). Same
+            // `spend_demurrage_charge = max(accrued, capitalized_reset)` kernel,
+            // same `demurrage_factor` (composed input floor) and `claimed_factor`
+            // (declared output), so the demurrage term is byte-identical to
+            // `Ledger::consensus_fee_floor`.
+            bth_cluster_tax::spend_demurrage_charge(
                 output_sum,
                 demurrage_factor,
+                claimed_factor,
                 elapsed,
                 policy.demurrage_rate_bps(chain_height),
                 blocks_per_year,
@@ -2394,9 +2402,13 @@ mod tests {
         let chain_height = ledger.get_chain_state().map(|s| s.height).unwrap_or(0);
         let elapsed = bth_cluster_tax::ring_elapsed_quantile(&ring_members, chain_height, 10_000);
         let blocks_per_year = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
-        let demurrage = bth_cluster_tax::demurrage_charge(
+        // Mirror the mempool's real demurrage term (#925): the downgrade-aware
+        // `spend_demurrage_charge`, so this helper stays in lockstep with both
+        // `Mempool::validate_transaction` and `Ledger::consensus_fee_floor`.
+        let demurrage = bth_cluster_tax::spend_demurrage_charge(
             output_sum,
             demurrage_factor,
+            claimed_factor,
             elapsed,
             policy.demurrage_rate_bps(chain_height),
             blocks_per_year,
