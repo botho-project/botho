@@ -190,7 +190,9 @@ impl BthChainClient for NodeBthClient {
 
         let mut deposits = Vec::new();
         for out in &block.outputs {
-            let scanned = scan_deposit_output(out, account).map_err(WatchError::Rpc)?;
+            // Reserve holds no ML-KEM secret today; hybrid outputs are warned
+            // about, not silently missed (issue #970).
+            let scanned = scan_deposit_output(out, account, None).map_err(WatchError::Rpc)?;
             let Some(scanned) = scanned else {
                 continue; // not ours
             };

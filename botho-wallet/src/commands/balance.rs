@@ -8,11 +8,7 @@ use crate::{
     transaction::format_amount,
 };
 
-#[cfg(not(feature = "pq"))]
 use crate::transaction::sync_wallet;
-
-#[cfg(feature = "pq")]
-use crate::transaction::sync_wallet_all;
 
 use super::{decrypt_wallet_with_rate_limiting, print_error, print_success};
 
@@ -90,7 +86,11 @@ async fn display_balance_classical(
     Ok(())
 }
 
-/// Display balance with PQ UTXO scanning
+/// Display balance with hybrid (quantum-safe) UTXO scanning.
+///
+/// Since issue #970 there is a single scan path: `sync_wallet` detects both
+/// classical and hybrid (ML-KEM) outputs. Hybrid UTXOs are those carrying a KEM
+/// ciphertext; the breakdown below classifies discovered UTXOs on that field.
 #[cfg(feature = "pq")]
 async fn display_balance_pq(
     rpc: &mut RpcPool,
@@ -98,11 +98,14 @@ async fn display_balance_pq(
     wallet: &EncryptedWallet,
     detailed: bool,
 ) -> Result<()> {
-    let result = sync_wallet_all(rpc, keys, wallet.sync_height).await?;
+    let (utxos, height) = sync_wallet(rpc, keys, wallet.sync_height).await?;
 
-    // Calculate balances
-    let classical_total: u64 = result.classical_utxos.iter().map(|u| u.amount).sum();
-    let pq_total: u64 = result.pq_utxos.iter().map(|u| u.amount).sum();
+    // Classify on the unified scan result: KEM ciphertext present => hybrid.
+    let (pq_utxos, classical_utxos): (Vec<_>, Vec<_>) =
+        utxos.iter().partition(|u| u.kem_ciphertext.is_some());
+
+    let classical_total: u64 = classical_utxos.iter().map(|u| u.amount).sum();
+    let pq_total: u64 = pq_utxos.iter().map(|u| u.amount).sum();
     let total = classical_total + pq_total;
 
     println!();
@@ -119,14 +122,14 @@ async fn display_balance_pq(
     }
 
     println!();
-    println!("Synced to block {}", result.height);
+    println!("Synced to block {}", height);
 
     if detailed {
         // Show classical UTXOs
-        if !result.classical_utxos.is_empty() {
+        if !classical_utxos.is_empty() {
             println!();
-            println!("Classical UTXOs ({}):", result.classical_utxos.len());
-            for (i, utxo) in result.classical_utxos.iter().enumerate() {
+            println!("Classical UTXOs ({}):", classical_utxos.len());
+            for (i, utxo) in classical_utxos.iter().enumerate() {
                 println!(
                     "  {}. {} (block {})",
                     i + 1,
@@ -136,11 +139,11 @@ async fn display_balance_pq(
             }
         }
 
-        // Show PQ UTXOs
-        if !result.pq_utxos.is_empty() {
+        // Show hybrid (quantum-safe) UTXOs
+        if !pq_utxos.is_empty() {
             println!();
-            println!("Quantum-safe UTXOs ({}):", result.pq_utxos.len());
-            for (i, utxo) in result.pq_utxos.iter().enumerate() {
+            println!("Quantum-safe UTXOs ({}):", pq_utxos.len());
+            for (i, utxo) in pq_utxos.iter().enumerate() {
                 println!(
                     "  {}. {} (block {}) [PQ]",
                     i + 1,
@@ -151,7 +154,7 @@ async fn display_balance_pq(
         }
 
         // Show summary if no UTXOs at all
-        if result.classical_utxos.is_empty() && result.pq_utxos.is_empty() {
+        if classical_utxos.is_empty() && pq_utxos.is_empty() {
             println!();
             println!("No UTXOs found.");
         }

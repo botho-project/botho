@@ -484,13 +484,14 @@ pub struct TxOutput {
     /// Array of [cluster_id, weight] pairs where weight is parts per million.
     #[serde(default)]
     pub cluster_tags: Vec<[u64; 2]>,
-    /// ML-KEM-768 ciphertext for PQ outputs (1088 bytes, hex-encoded).
-    /// Reserved for universal ML-KEM outputs (ADR 0006 / #904); current
-    /// nodes do not emit this field.
-    pub pq_ciphertext: Option<String>,
-    /// Indicates if this is a quantum-private output
+    /// Unified ML-KEM-768 ciphertext (1088 bytes, hex-encoded), emitted by the
+    /// node as `kemCiphertext` on the single hybrid scan path (issue #970).
+    /// `None` for a classical/legacy KEM-less output. The scanner decapsulates
+    /// this with the wallet's derived ML-KEM secret to detect hybrid outputs;
+    /// there is no longer a separate `is_pq_output` flag — presence of the
+    /// ciphertext IS the hybrid marker.
     #[serde(default)]
-    pub is_pq_output: bool,
+    pub kem_ciphertext: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -753,9 +754,8 @@ mod tests {
         assert_eq!(out.public_key, "cafebabe");
         assert_eq!(out.amount_commitment, "0100000000000000");
         assert_eq!(out.cluster_tags, vec![[1, 1_000_000], [2, 500_000]]);
-        // Optional PQ fields default cleanly when absent.
-        assert!(out.pq_ciphertext.is_none());
-        assert!(!out.is_pq_output);
+        // The unified ML-KEM ciphertext field defaults to None when absent.
+        assert!(out.kem_ciphertext.is_none());
     }
 
     /// Mirrors the coinbase output shape emitted by `chain_getOutputs`

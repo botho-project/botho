@@ -2215,8 +2215,9 @@ async fn run_async(mut config: Config, config_path: &Path, mint: bool) -> Result
                                     let mempool = rpc_state.mempool.read().ok();
                                     let mut total = 0u64;
                                     for utxo in &utxos {
-                                        if let Some(subaddr_idx) = utxo.output.belongs_to(wallet.account_key()) {
-                                            if let Some(onetime_key) = utxo.output.recover_spend_key(wallet.account_key(), subaddr_idx) {
+                                        // Unified hybrid scan path (issue #970).
+                                        if let Some(subaddr_idx) = wallet.scan_output(&utxo.output, utxo.id.output_index) {
+                                            if let Some(onetime_key) = wallet.recover_output_spend_key(&utxo.output, subaddr_idx, utxo.id.output_index) {
                                                 let key_image = bth_crypto_ring_signature::KeyImage::from(&onetime_key);
                                                 let key_image_bytes = key_image.as_bytes();
 

@@ -18,6 +18,8 @@ path = "src/main.rs"
 bth-account-keys = { path = "../account-keys" }
 bth-crypto-keys = { path = "../crypto/keys" }
 bth-crypto-ring-signature = { path = "../crypto/ring-signature" }
+# ML-KEM-768 decapsulation for hybrid deposit detection (issue #970).
+bth-crypto-pq = { path = "../crypto/pq" }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -50,3 +52,5 @@ tempfile = "3"
 rand = "0.8"
 rand_core = "0.6"
 bth-util-from-random = { path = "../util/from-random" }
+# Build real hybrid outputs (send path) to assert the scanner detects them.
+bth-transaction-clsag = { path = "../transaction/clsag", features = ["pq"] }

@@ -45,6 +45,7 @@ fn owned_utxo(keys: &WalletKeys, amount: u64, created_at: u64, seed: u8) -> Owne
         public_key: out.public_key,
         subaddress_index: 0,
         cluster_tags: None,
+        kem_ciphertext: None,
     }
 }
 
@@ -441,6 +442,7 @@ mod utxo_selection {
                 public_key: [0u8; 32],
                 subaddress_index: 0,
                 cluster_tags: None,
+                kem_ciphertext: None,
             },
             OwnedUtxo {
                 tx_hash: [2u8; 32],
@@ -451,6 +453,7 @@ mod utxo_selection {
                 public_key: [0u8; 32],
                 subaddress_index: 0,
                 cluster_tags: None,
+                kem_ciphertext: None,
             },
         ];
 
@@ -476,6 +479,7 @@ mod utxo_selection {
                 public_key: [0u8; 32],
                 subaddress_index: 0,
                 cluster_tags: None,
+                kem_ciphertext: None,
             },
             OwnedUtxo {
                 tx_hash: [2u8; 32],
@@ -486,6 +490,7 @@ mod utxo_selection {
                 public_key: [0u8; 32],
                 subaddress_index: 0,
                 cluster_tags: None,
+                kem_ciphertext: None,
             },
             OwnedUtxo {
                 tx_hash: [3u8; 32],
@@ -496,6 +501,7 @@ mod utxo_selection {
                 public_key: [0u8; 32],
                 subaddress_index: 0,
                 cluster_tags: None,
+                kem_ciphertext: None,
             },
         ];
 
@@ -891,6 +897,7 @@ mod cluster_tags {
             public_key: [0u8; 32],
             subaddress_index: 0,
             cluster_tags: Some(tags),
+            kem_ciphertext: None,
         };
 
         // Verify cluster tags are stored
@@ -916,6 +923,7 @@ mod cluster_tags {
             public_key: [0u8; 32],
             subaddress_index: 0,
             cluster_tags: Some(tags),
+            kem_ciphertext: None,
         };
 
         // tags() helper should return the stored tags
@@ -935,6 +943,7 @@ mod cluster_tags {
             public_key: [0u8; 32],
             subaddress_index: 0,
             cluster_tags: None,
+            kem_ciphertext: None,
         };
 
         // tags() helper should return empty StoredTags when None
@@ -972,6 +981,7 @@ mod cluster_tags {
             public_key: [0xEF; 32],
             subaddress_index: 1,
             cluster_tags: Some(tags),
+            kem_ciphertext: None,
         };
 
         // Serialize and deserialize

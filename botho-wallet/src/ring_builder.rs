@@ -181,8 +181,7 @@ mod tests {
             public_key: hex::encode(out.public_key),
             amount_commitment: hex::encode(amount.to_le_bytes()),
             cluster_tags: vec![],
-            pq_ciphertext: None,
-            is_pq_output: false,
+            kem_ciphertext: None,
         }
     }
 

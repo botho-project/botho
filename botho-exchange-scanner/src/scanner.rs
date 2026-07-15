@@ -8,7 +8,10 @@ use std::collections::HashMap;
 
 use bth_account_keys::ViewAccountKey;
 use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
-use bth_crypto_ring_signature::onetime_keys::recover_public_subaddress_spend_key;
+use bth_crypto_pq::{MlKem768Ciphertext, MlKem768KeyPair};
+use bth_crypto_ring_signature::onetime_keys::{
+    recover_public_subaddress_spend_key, recover_public_subaddress_spend_key_hybrid,
+};
 
 use crate::{config::ScannerConfig, deposit::DetectedDeposit};
 
@@ -29,6 +32,12 @@ pub struct ExchangeScanner {
 
     /// Maximum subaddress index being scanned
     subaddress_max: u64,
+
+    /// Optional ML-KEM-768 secret keypair (issue #970). Required to detect
+    /// *hybrid* outputs, whose one-time key folds in an ML-KEM shared secret
+    /// recoverable only by decapsulation. A view-only scanner (no keypair)
+    /// cannot see hybrid deposits and warns rather than silently missing them.
+    kem_keypair: Option<MlKem768KeyPair>,
 }
 
 impl ExchangeScanner {
@@ -117,7 +126,16 @@ impl ExchangeScanner {
             spend_key_lookup,
             subaddress_min: min_index,
             subaddress_max: max_index,
+            kem_keypair: None,
         })
+    }
+
+    /// Attach an ML-KEM-768 secret keypair so the scanner can detect hybrid
+    /// outputs (issue #970). Without it, hybrid outputs are warned about rather
+    /// than silently missed.
+    pub fn with_kem_keypair(mut self, kem_keypair: MlKem768KeyPair) -> Self {
+        self.kem_keypair = Some(kem_keypair);
+        self
     }
 
     /// Get the view account key.
@@ -157,6 +175,37 @@ impl ExchangeScanner {
         self.spend_key_lookup.get(&recovered_bytes).copied()
     }
 
+    /// Check ownership of a *hybrid* output (issue #970): decapsulate the
+    /// ML-KEM ciphertext with the scanner's KEM secret, fold the shared secret
+    /// into the stealth spend-key recovery, and look up the result in the same
+    /// precomputed subaddress table. Returns `None` if the scanner has no KEM
+    /// secret or the ciphertext is malformed / not addressed to us.
+    fn check_ownership_hybrid(
+        &self,
+        target_key: &[u8; 32],
+        public_key: &[u8; 32],
+        kem_ciphertext: &[u8],
+        output_index: u32,
+    ) -> Option<u64> {
+        let kem_keypair = self.kem_keypair.as_ref()?;
+        let ciphertext = MlKem768Ciphertext::from_bytes(kem_ciphertext).ok()?;
+        let kem_secret = kem_keypair.decapsulate(&ciphertext).ok()?;
+
+        let public_key_point = RistrettoPublic::try_from(&public_key[..]).ok()?;
+        let target_key_point = RistrettoPublic::try_from(&target_key[..]).ok()?;
+
+        let recovered_spend_key = recover_public_subaddress_spend_key_hybrid(
+            self.view_account_key.view_private_key(),
+            &target_key_point,
+            &public_key_point,
+            kem_secret.as_bytes(),
+            output_index,
+        );
+        self.spend_key_lookup
+            .get(&recovered_spend_key.to_bytes())
+            .copied()
+    }
+
     /// Scan a batch of outputs and return detected deposits.
     ///
     /// # Arguments
@@ -178,8 +227,33 @@ impl ExchangeScanner {
                 None => continue,
             };
 
+            // Unified hybrid scan path (issue #970): a hybrid output (KEM
+            // ciphertext present) is detected by ML-KEM decapsulation; a
+            // classical output uses the pure view-key check. A hybrid output
+            // seen without a configured KEM secret is warned about, never
+            // silently missed.
+            let ownership = match output
+                .kem_ciphertext
+                .as_ref()
+                .and_then(|s| hex::decode(s).ok())
+            {
+                Some(ct) => {
+                    if self.kem_keypair.is_none() {
+                        tracing::warn!(
+                            tx_hash = %output.tx_hash,
+                            output_index = output.output_index,
+                            "hybrid (ML-KEM) output seen but scanner has no ML-KEM \
+                             secret configured; cannot detect it — configure the \
+                             KEM secret to scan hybrid deposits"
+                        );
+                    }
+                    self.check_ownership_hybrid(&target_key, &public_key, &ct, output.output_index)
+                }
+                None => self.check_ownership(&target_key, &public_key),
+            };
+
             // Check ownership
-            if let Some(subaddress_index) = self.check_ownership(&target_key, &public_key) {
+            if let Some(subaddress_index) = ownership {
                 let tx_hash = match parse_key_32(&output.tx_hash) {
                     Some(h) => h,
                     None => continue,
@@ -259,6 +333,10 @@ pub struct RpcOutput {
     pub amount: u64,
     /// Block height containing this output
     pub block_height: u64,
+    /// Hex-encoded unified ML-KEM-768 ciphertext (1088 bytes) for a hybrid
+    /// output, else `None` (classical). Emitted by the node as `kemCiphertext`
+    /// (issue #970); required to detect hybrid deposits.
+    pub kem_ciphertext: Option<String>,
 }
 
 /// Parse a 32-byte key from hex string.
@@ -313,5 +391,59 @@ mod tests {
         assert!(scanner.get_subaddress(0).is_some());
         assert!(scanner.get_subaddress(100).is_some());
         assert!(scanner.get_subaddress(101).is_none());
+    }
+
+    /// A hybrid (ML-KEM) deposit is detected only when the scanner holds the
+    /// matching ML-KEM secret; a view-only scanner (no secret) does not detect
+    /// it (issue #970). This proves the exchange scanner does not silently miss
+    /// hybrid funds when the secret is configured.
+    #[test]
+    fn detects_hybrid_output_with_kem_secret() {
+        use bth_account_keys::AccountKey;
+        use bth_transaction_clsag::TxOutput;
+
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        let account = AccountKey::random(&mut rng);
+        let kem = MlKem768KeyPair::from_seed(&[0x21u8; 32]);
+
+        let view_private = account.view_private_key().clone();
+        let spend_public = RistrettoPublic::from(account.spend_private_key());
+
+        let idx = 2u64;
+        let output_index = 0u32;
+        // Send path: a hybrid output paying subaddress `idx` of the account.
+        let recipient = account.subaddress(idx);
+        let out = TxOutput::new_hybrid(
+            1_000_000,
+            &recipient,
+            kem.public_key(),
+            output_index,
+            None,
+            Default::default(),
+        );
+        let rpc = RpcOutput {
+            tx_hash: hex::encode([1u8; 32]),
+            output_index,
+            target_key: hex::encode(out.target_key),
+            public_key: hex::encode(out.public_key),
+            amount: 1_000_000,
+            block_height: 10,
+            kem_ciphertext: out.kem_ciphertext.as_ref().map(hex::encode),
+        };
+
+        // View-only scanner (no KEM secret) cannot see the hybrid deposit.
+        let view_only = ExchangeScanner::new(view_private.clone(), spend_public, 0, 5).unwrap();
+        assert!(
+            view_only.scan_outputs(&[rpc.clone()], 12).is_empty(),
+            "hybrid output must be invisible without the ML-KEM secret",
+        );
+
+        // With the KEM secret the deposit is detected at the right subaddress.
+        let scanner = ExchangeScanner::new(view_private, spend_public, 0, 5)
+            .unwrap()
+            .with_kem_keypair(kem);
+        let deposits = scanner.scan_outputs(&[rpc], 12);
+        assert_eq!(deposits.len(), 1, "scanner must detect the hybrid deposit");
+        assert_eq!(deposits[0].subaddress_index, idx);
     }
 }

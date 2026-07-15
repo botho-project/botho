@@ -56,7 +56,10 @@ ed25519-dalek = { workspace = true, features = ["std"] }
 #     view/spend keys, recipient address).
 #   - bth-crypto-ring-signature: node-identical key-image derivation for the
 #     provably-dead (dropped) release check.
-bth-transaction-clsag = { path = "../../transaction/clsag", default-features = false }
+# `pq` gives the hybrid ML-KEM stealth detectors (`belongs_to_account` /
+# `recover_spend_key_for`, issue #970) so the reserve scan/release path can see
+# and spend hybrid deposits under protocol 6.0.0, not just classical outputs.
+bth-transaction-clsag = { path = "../../transaction/clsag", default-features = false, features = ["pq"] }
 # Single source of truth for the bridge-import cluster key + floor (ADR 0007):
 # the release tag derivation MUST be byte-identical to the ledger's consensus
 # check, so both consume `bth_cluster_tax::import_cluster_id_for_height`.
@@ -65,6 +68,8 @@ bth-transaction-types = { workspace = true }
 bth-account-keys = { workspace = true }
 bth-crypto-keys = { workspace = true }
 bth-crypto-ring-signature = { workspace = true }
+# ML-KEM-768 encapsulation/decapsulation for hybrid deposit detection (#970).
+bth-crypto-pq = { path = "../../crypto/pq" }
 
 # JSON-RPC over HTTP to the BTH node (getChainInfo / getBlockByHeight /
 # chain_getOutputs / tx_submit / getTransaction / chain_areKeyImagesSpent).
