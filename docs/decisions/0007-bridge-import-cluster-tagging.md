@@ -1,6 +1,6 @@
 # ADR 0007: Bridge-Import Cluster Tagging via Block-Epoch Keys
 
-**Status**: Proposed (mechanism ratified in principle; two constants — epoch length `K` and import-factor floor `F` — pending a calibration simulation before acceptance)
+**Status**: Accepted (ratified 2026-07-14 with `K` = 1 day = 17,280 blocks and `F` = 1.5×, per the #937/#940 calibration)
 **Date**: 2026-07-14
 **Decision Makers**: Core Team
 **Related**: ADR 0002 (federation custody), ADR 0003 (factor-1 wrap + demurrage-settlement), ADR 0004 (bridge privacy / amount revelation), ADR 0006 (PQ + confidential-amounts target); issues #831, #925, #902, #904, epic #816
@@ -23,11 +23,11 @@ We accept (2026-07-14 design discussion) that (1) is **unavoidable in the genera
 
 Concretely:
 
-1. **Epoch-keyed import cluster.** Every unwrap in block height range `[mK, (m+1)K)` joins a single shared cluster origin `c_import(m) = H("bridge-import" ‖ m)`, where `m = ⌊height / K⌋`. The unwrapped output carries a 100%-weight tag to `c_import(m)`, exactly as a minting output carries 100% attribution to its new mint cluster (a bridge-import cluster is simply a *third way to create a cluster origin*, alongside minting — no new machinery beyond the tag).
+1. **Epoch-keyed import cluster.** Every unwrap in block height range `[mK, (m+1)K)` joins a single shared cluster origin `c_import(m) = H("bridge-import" ‖ m)`, where `m = ⌊height / K⌋` and **`K = 17,280` blocks (1 day at the 5s reference)**. The unwrapped output carries a 100%-weight tag to `c_import(m)`, exactly as a minting output carries 100% attribution to its new mint cluster (a bridge-import cluster is simply a *third way to create a cluster origin*, alongside minting — no new machinery beyond the tag).
 
 2. **Factor from shared epoch wealth.** The import cluster's wealth (the curve input) is the **sum of all unwrap amounts in the epoch**, and the production `ClusterFactorCurve` (log-sigmoid, `W_MID = 100k`, saturating 6×) maps it to the factor — the identical curve domestic clusters use. A quiet epoch with small total inflow yields a low factor; a high-volume / flood epoch yields a high factor.
 
-3. **Import-factor floor `F`.** The effective factor of any bridge-import cluster is clamped to `≥ F`. This bounds the payoff of split-gaming (below) and encodes the minimum "toll" for entering via the bridge rather than earning domestically.
+3. **Import-factor floor `F`.** The effective factor of any bridge-import cluster is clamped to `≥ F`, with **`F = 1.5×`**. This bounds the payoff of split-gaming (below — a split-gamer cannot erode below the floor) and encodes the minimum "toll" for entering via the bridge rather than earning domestically. `F = 1.5` clears the ~1.27× a genuine ~1000-BTH retail import already prices at (so the floor binds), while the transient onboarding toll on a small entrant is ~0.20%/yr and self-heals in ≈9 domestic-mixing spends (#940).
 
 4. **Decay only by circulation.** An imported coin's factor falls solely through the existing value-weighted tag-blending on spends: as it mixes with background-tagged inputs it shifts weight off `c_import(m)` toward background and its factor drops. There is no time-based decay — sitting idle does not normalize imported wealth; *using* it in the domestic economy does.
 
@@ -53,14 +53,14 @@ We judge the shared-fate coupling a **feature, not a bug**: bridge-inflow-*rate*
 - **Two grades of BTH, accepted.** Unwrapped BTH is more expensive to spend than domestically-circulated background BTH until it circulates. This is continuous with the cluster-tag design (BTH is already non-fungible by lineage); wBTH↔BTH market pricing of the usage-cost differential is left to the market (Core Team, 2026-07-14) — the protocol does not attempt to equalize it.
 - **Re-scopes #831 / #925 / the settlement horizon.** With the round-trip door closed, the demurrage-settlement charge (#831) and the #925 fix price only the two remaining doors. The shared-horizon calibration (#833) recommended 5yr against a mass-exodus worst case now judged unrealistic; in light of this ADR the Core Team leans toward a **1-year** lineage-reset horizon (break-even = "you repay ~a year of dodged demurrage, no more"), shared across #831 and #925, with #925 structured as `charge = max(actual_accrued_demurrage, capitalized_reset_charge)` so an old coin spent normally pays its real accrued demurrage and the horizon bites only the young-coin exploit. Those decisions are finalized in the #831/#925 issues, not here; this ADR only records that the reset-vector collapse is what makes a low horizon safe.
 
-## Open calibration (blocks acceptance)
+## Calibration (resolved — #937 / #940)
 
-Two constants require a calibration simulation (mirroring #833's `settlement_horizon_sweep`) before this ADR moves Proposed → Accepted:
+Both constants were calibrated by `cluster-tax/src/simulation/bridge_import_sweep.rs` (deterministic, reproducible; results in `docs/research/bridge-import-calibration.md`) and ratified 2026-07-14:
 
-1. **Epoch length `K`.** Trades split-game cost (≈ `K` blocks × 5s per dilution step) against co-location collateral. Candidate range: ~10k blocks (~14 h) to ~1 week. Sim: cost-to-split-game vs innocent-co-entrant tax across bridge-volume regimes.
-2. **Import-factor floor `F`.** Bounds the split-game payoff (best achievable factor) and sets the minimum bridge-entry toll. `F = 1` = no floor (epoch-wealth-only, split-gameable toward 1×); higher `F` penalizes all imports more bluntly. Candidate range: 1.5×–2×.
+1. **Epoch length `K` = 17,280 blocks (1 day).** The split game is dead at *every* candidate `K` — a 2M-BTH whale needs 541 separate epochs to drip-dilute an import down to the floor, and "epochs-to-floor" is `K`-independent, so `K` only converts that into wall-clock time (541 days at 1-day epochs). `K` therefore trades only collateral-*probability* (the chance a small entrant lands in a co-occurring whale-flood epoch) against operational legibility; shorter is marginally better on collateral (14 h is the collateral-optimal endpoint) but 1 day was chosen for legibility, since the collateral over-charge is small and self-heals in ≈9 spends. **A future maintainer preferring minimal collateral over legibility may set `K` = 10,080 blocks (~14 h); the sim regenerates the numbers.**
+2. **Import-factor floor `F` = 1.5×.** `F = 1.0` is rejected (the whole premium is gameable toward 1× with patience); `F = 1.5` is the residual a split-gamer cannot erode, clears the ~1.27× a retail ~1000-BTH import already prices, and carries a ~0.20%/yr transient onboarding toll.
 
-A companion sim should also confirm the decay-by-circulation dynamics (how many domestic-mixing spends normalize an imported coin) and check that a pure-external holder who never receives domestic money remains at ≥ F (intended).
+Decay-by-circulation confirmed against the real `TagVector::mix`: a worst-case 6× flood import blends to the 1.5× floor in ≈9 domestic-mixing spends (most of the drop in the first 4). The ADR §Decision invariant holds: a pure-external holder who never receives domestic value stays at 6× indefinitely (mixing with zero incoming value is a no-op on the tag).
 
 ## Alternatives considered
 
