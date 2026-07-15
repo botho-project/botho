@@ -111,6 +111,12 @@ impl FromRandom for RootIdentity {
 }
 
 /// Derive an AccountKey from RootIdentity
+///
+/// The resulting account key is **classical-only**: `RootIdentity` carries 32
+/// bytes of root entropy, not the 512-bit BIP39 seed that the canonical PQ
+/// derivation (whitepaper §4.2, `derive_pq_keys_from_seed`) requires, so no PQ
+/// public keys are attached. Callers that hold the BIP39 seed attach the
+/// account-wide PQ keys with [`AccountKey::attach_pq_from_seed`].
 impl From<&RootIdentity> for AccountKey {
     fn from(src: &RootIdentity) -> Self {
         let spend_private_key = RistrettoPrivate::from(root_identity_hkdf_helper(

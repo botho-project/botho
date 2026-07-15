@@ -164,16 +164,25 @@ impl Wallet {
         let slip10_key = mnemonic.derive_slip10_key(0);
         let account_key = AccountKey::from(slip10_key);
 
-        // Create unified quantum-safe account from BIP39 seed
-        // IMPORTANT: Uses the SAME classical keys to maintain single identity
+        // Create unified quantum-safe account from BIP39 seed and attach the
+        // account-wide PQ public keys to the classical account key so its
+        // emitted addresses publish them (whitepaper §4.2).
+        // IMPORTANT: Uses the SAME classical keys and the SAME derived PQ keys
+        // to maintain a single unified identity — the account key and the
+        // quantum-safe account key therefore agree on the published PQ keys.
         #[cfg(feature = "pq")]
-        let pq_account_key = {
+        let (account_key, pq_account_key) = {
             let seed_bytes: &[u8; BIP39_SEED_SIZE] = bip39_seed
                 .as_bytes()
                 .try_into()
                 .expect("BIP39 seed is always 64 bytes");
             let pq_keys = derive_pq_keys_from_seed(seed_bytes);
-            QuantumSafeAccountKey::from_parts(account_key.clone(), pq_keys)
+            let account_key = account_key.with_pq_public_keys(
+                pq_keys.kem_keypair.public_key().as_bytes().to_vec(),
+                pq_keys.sig_keypair.public_key().as_bytes().to_vec(),
+            );
+            let pq_account_key = QuantumSafeAccountKey::from_parts(account_key.clone(), pq_keys);
+            (account_key, pq_account_key)
         };
 
         Ok(Self {
