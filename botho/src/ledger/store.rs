@@ -12,7 +12,9 @@ use tracing::{debug, info, warn};
 use super::{ChainState, LedgerError};
 use crate::{
     block::{calculate_block_reward, Block},
-    consensus::{validate_block_lottery, LotteryFeeConfig, MAX_TX_AGE},
+    consensus::{
+        validate_block_lottery, validate_lottery_output_bindings, LotteryFeeConfig, MAX_TX_AGE,
+    },
     decoy_selection::{DecoySelectionError, GammaDecoySelector, OutputCandidate},
     transaction::{RingMember, Transaction as BothoTransaction, TxOutput, Utxo, UtxoId},
 };
@@ -1111,6 +1113,44 @@ impl Ledger {
             stored_lottery_pool
         };
 
+        // Bind each lottery payout's stealth envelope (target/public key AND the
+        // hybrid ML-KEM ciphertext) to the winning UTXO it redistributes to
+        // (sub-issue 5 deferred check, #973). `validate_block_lottery` above
+        // confirms winner eligibility and payout accounting but cannot see the
+        // winning UTXO's stealth keys (they are not carried by
+        // `LotteryCandidate`); this read-only check resolves them from the same
+        // pre-block UTXO set the payouts are credited from, so proposer and
+        // validator agree deterministically. Rejects a proposer that commits a
+        // payout whose envelope does not match the winner (redirected funds or a
+        // stripped ciphertext the winner could not recover).
+        if !block.lottery_outputs.is_empty() {
+            let rtxn = self.env.read_txn().map_err(|e| {
+                LedgerError::Database(format!("Failed to start read txn: {}", e))
+            })?;
+            validate_lottery_output_bindings(&block.lottery_outputs, |winner_id| {
+                self.utxo_db
+                    .get(&rtxn, winner_id)
+                    .ok()
+                    .flatten()
+                    .and_then(|bytes| bincode::deserialize::<Utxo>(bytes).ok())
+                    .map(|u| {
+                        (
+                            u.output.target_key,
+                            u.output.public_key,
+                            u.output.kem_ciphertext,
+                        )
+                    })
+            })
+            .map_err(|e| {
+                warn!(
+                    block_height = block.height(),
+                    error = %e,
+                    "Lottery payout stealth-envelope binding failed"
+                );
+                LedgerError::InvalidBlock(format!("Lottery payout binding failed: {}", e))
+            })?;
+        }
+
         // Store block and update metadata
         let mut wtxn = self
             .env
@@ -1201,13 +1241,15 @@ impl Ledger {
 
         // Mint lottery payout UTXOs.
         //
-        // Each payout creates a new spendable UTXO for the winner. The keys
-        // and cluster tags are taken from the WINNING UTXO (looked up by its
-        // id), not from the proposer-supplied fields on the LotteryOutput —
-        // `validate_block_lottery` confirms each winner_utxo_id is an eligible
-        // candidate and that payout totals match the pool accounting, but it
-        // does not bind the output's target_key/public_key, so trusting those
-        // fields would let a proposer redirect payouts to themselves.
+        // Each payout creates a new spendable UTXO for the winner. The stealth
+        // keys, cluster tags, and hybrid ML-KEM ciphertext are taken from the
+        // WINNING UTXO (looked up by its id), not from the proposer-supplied
+        // fields on the LotteryOutput — trusting those fields would let a
+        // proposer redirect payouts to themselves. `validate_block_lottery`
+        // confirms winner eligibility and payout accounting; the
+        // `validate_lottery_output_bindings` check above additionally binds the
+        // committed LotteryOutput's stealth envelope to this same winning UTXO,
+        // so the block's on-chain payout data is trustworthy to scanners.
         //
         // Deterministic id scheme: (block_hash, 1 + lottery_index). The
         // coinbase occupies (block_hash, 0); transaction outputs use the tx
@@ -1233,7 +1275,13 @@ impl Ledger {
                 public_key: winner_utxo.output.public_key,
                 e_memo: None,
                 cluster_tags: winner_utxo.output.cluster_tags.clone(),
-                kem_ciphertext: None,
+                // Inherit the winning UTXO's hybrid ML-KEM envelope so the winner
+                // recovers the payout with the exact hybrid derivation (same
+                // shared secret, same output index) they used for the original
+                // UTXO (#958/#973). `None` for a classical winning UTXO. The
+                // binding check above guarantees this equals the committed
+                // `lottery_output.kem_ciphertext`.
+                kem_ciphertext: winner_utxo.output.kem_ciphertext.clone(),
             };
 
             let payout_utxo_id = UtxoId::new(new_hash, (lottery_idx as u32) + 1);
