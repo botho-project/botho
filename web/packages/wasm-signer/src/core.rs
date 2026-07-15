@@ -119,6 +119,7 @@ fn ring_member_from_parts(
         public_key: parse_hex_32("public_key", public_key)?,
         e_memo: None,
         cluster_tags: Default::default(),
+        kem_ciphertext: None,
     };
     Ok(RingMember::from_output(&output))
 }
@@ -214,6 +215,7 @@ pub fn build_and_sign_with_rng<R: RngCore + CryptoRng>(
             public_key: parse_hex_32("input.public_key", &input.public_key)?,
             e_memo: None,
             cluster_tags: Default::default(),
+            kem_ciphertext: None,
         };
         let onetime_private = real_output
             .recover_spend_key(&account, input.subaddress_index)
@@ -327,6 +329,7 @@ pub fn scan_owned_outputs_inner(req: &ScanRequest) -> Result<Vec<OwnedOutput>, S
             public_key: parse_hex_32("output.public_key", &out.public_key)?,
             e_memo: None,
             cluster_tags: Default::default(),
+            kem_ciphertext: None,
         };
         if let Some(subaddress_index) = tx_out.belongs_to(&account) {
             owned.push(OwnedOutput {
@@ -401,6 +404,7 @@ pub fn compute_owned_output_key_images_inner(
             public_key: parse_hex_32("output.public_key", &out.public_key)?,
             e_memo: None,
             cluster_tags: Default::default(),
+            kem_ciphertext: None,
         };
         let onetime_private = tx_out
             .recover_spend_key(&account, out.subaddress_index)

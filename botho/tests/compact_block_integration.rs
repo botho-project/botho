@@ -135,6 +135,7 @@ fn create_mock_transaction(seed: u64) -> Transaction {
         public_key,
         e_memo: None,
         cluster_tags: ClusterTagVector::default(),
+        kem_ciphertext: None,
     };
 
     Transaction::new_clsag(

@@ -761,6 +761,7 @@ mod tests {
                 public_key: [0u8; 32],
                 e_memo: None,
                 cluster_tags,
+                kem_ciphertext: None,
             },
             created_at: 0,
         }

@@ -650,6 +650,7 @@ mod tests {
                 public_key: [20u8; 32],
                 cluster_tags: ClusterTagVector::single(bth_transaction_types::ClusterId(1)),
                 e_memo: None,
+                kem_ciphertext: None,
             },
             created_at,
         }

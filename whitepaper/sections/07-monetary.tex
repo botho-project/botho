@@ -368,9 +368,9 @@ creating net deflation.
 \toprule
 \textbf{Wealth Distribution} & \textbf{Daily Fees} & \textbf{Redistributed} & \textbf{Burned} \\
 \midrule
-Equal (factor 1.0) & 16 mBTH & 12.8 mBTH & 3.2 mBTH \\
-Current inequality & 48 mBTH & 38.4 mBTH & 9.6 mBTH \\
-High inequality & 96 mBTH & 76.8 mBTH & 19.2 mBTH \\
+Equal (factor 1.0) & 24.7 mBTH & 19.8 mBTH & 4.9 mBTH \\
+Current inequality & 74.1 mBTH & 59.3 mBTH & 14.8 mBTH \\
+High inequality & 148.2 mBTH & 118.6 mBTH & 29.6 mBTH \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -378,20 +378,24 @@ High inequality & 96 mBTH & 76.8 mBTH & 19.2 mBTH \\
 \textbf{Assumptions and derivation}: the per-transaction figure is the
 congestion-floor consensus minimum for a standard transfer, computed directly
 from the fee formula (\texttt{minimum\_fee\_dynamic\_with\_outputs},
-\texttt{botho/src/ledger/store.rs}). Take a 4 KB transaction
-($\text{size} = 4{,}000$ bytes) with 2 outputs (payment + change) from a
-factor-1 cluster, at the congestion floor $b = 1$\,pico-BTH/byte:
+\texttt{botho/src/ledger/store.rs}). Take a standard 2-output transfer
+(payment + change) from a factor-1 cluster. Under the universal ML-KEM-768
+stealth format (Section~\ref{sec:pq-stealth}) every output carries a mandatory
+1{,}088-byte encapsulation ciphertext, so a $\approx$4{,}000-byte transaction
+body grows by $2\times1{,}088 = 2{,}176$ bytes to
+$\text{size} \approx 6{,}176$ bytes. At the congestion floor
+$b = 1$\,pico-BTH/byte:
 \begin{equation}
-f_{\text{tx}} = \underbrace{b}_{1} \times \underbrace{\text{size}}_{4{,}000}
+f_{\text{tx}} = \underbrace{b}_{1} \times \underbrace{\text{size}}_{6{,}176}
   \times \underbrace{\text{cluster\_factor}}_{1.0}
   \times \underbrace{\text{output\_penalty}}_{2^{2} = 4}
-  = 16{,}000 \text{ pico-BTH} = 1.6\times10^{-8}\,\text{BTH},
+  = 24{,}704 \text{ pico-BTH} = 2.47\times10^{-8}\,\text{BTH},
 \end{equation}
-i.e.\ 16\,nano-BTH per transaction (the 2-output superlinear penalty
+i.e.\ $\approx$24.7\,nano-BTH per transaction (the 2-output superlinear penalty
 $\min(2,10)^2 = 4$ is part of the enforced minimum). Over 1M
 transactions/day the factor-1 aggregate is
-$10^{6}\times16{,}000\text{ pico-BTH} = 1.6\times10^{10}\text{ pico-BTH}
- = 1.6\times10^{-2}\,\text{BTH} = 16\,\text{mBTH}$. The remaining rows scale
+$10^{6}\times24{,}704\text{ pico-BTH} = 2.47\times10^{10}\text{ pico-BTH}
+ = 2.47\times10^{-2}\,\text{BTH} \approx 24.7\,\text{mBTH}$. The remaining rows scale
 the aggregate by each distribution's mean cluster factor ($\approx3\times$ and
 $\approx6\times$, within the 1--6 range). These are floor-level flow
 magnitudes; a rising dynamic base (up to the $100\times$ clamp) or larger,

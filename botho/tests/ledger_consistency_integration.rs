@@ -1181,6 +1181,7 @@ fn test_c3_block_rejected_when_ring_member_target_key_not_in_utxo_set() {
         public_key: [0x22; 32],
         e_memo: None,
         cluster_tags: bth_transaction_types::ClusterTagVector::empty(),
+        kem_ciphertext: None,
     };
     let bad_tx = Transaction::new(vec![fake_input], vec![fake_output], 0, 0);
 
@@ -1245,6 +1246,7 @@ fn test_c3_block_rejected_when_ring_member_commitment_mismatched() {
         public_key: [0x22; 32],
         e_memo: None,
         cluster_tags: bth_transaction_types::ClusterTagVector::empty(),
+        kem_ciphertext: None,
     };
     let bad_tx = Transaction::new(vec![fake_input], vec![fake_output], 0, 1);
 

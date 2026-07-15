@@ -68,6 +68,7 @@ fn rpc_output_to_ring_member(out: &RpcTxOutput) -> Option<RingMember> {
         public_key,
         e_memo: None,
         cluster_tags: ClusterTagVector::empty(),
+        kem_ciphertext: None,
     };
     Some(RingMember::from_output(&tx_out))
 }
@@ -198,6 +199,7 @@ mod tests {
             public_key: member.public_key,
             e_memo: None,
             cluster_tags: ClusterTagVector::empty(),
+            kem_ciphertext: None,
         };
         assert_eq!(
             member.commitment,

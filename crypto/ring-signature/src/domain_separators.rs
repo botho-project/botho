@@ -32,3 +32,14 @@ pub const CLSAG_AGG_COEFF_C_DOMAIN_TAG: &str = "bth_clsag_agg_c";
 
 /// Domain separator for CLSAG round hash (challenge computation).
 pub const CLSAG_ROUND_HASH_DOMAIN_TAG: &str = "bth_clsag_round";
+
+/// Domain separator for the hybrid post-quantum stealth one-time key scalar.
+///
+/// Used by the universal ML-KEM-768 stealth envelope (issue #954, whitepaper
+/// §4.2). The one-time key scalar folds BOTH the classical Diffie--Hellman
+/// shared secret (`r * C = a * R`) and the ML-KEM-768 shared secret `K` into a
+/// single Blake2b-512 → scalar reduction, so an adversary must break *both*
+/// the classical elliptic-curve problem *and* the ML-KEM lattice problem to
+/// link or steal an output. The `v1` suffix version-binds the construction to
+/// the protocol 6.0.0 output format.
+pub const HYBRID_PQ_STEALTH_SCALAR_DOMAIN_TAG: &str = "bth_hybrid_pq_stealth_scalar_v1";

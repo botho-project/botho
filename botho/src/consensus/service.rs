@@ -2128,6 +2128,7 @@ mod tests {
             public_key: [2u8; 32],
             e_memo: None,
             cluster_tags: ClusterTagVector::empty(),
+            kem_ciphertext: None,
         };
         Transaction::new_clsag(vec![input], vec![output], MIN_TX_FEE, 0)
     }
