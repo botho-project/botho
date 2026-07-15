@@ -9,6 +9,15 @@ use sha2::{Digest, Sha256};
 
 use crate::transaction::{Transaction, TxOutput};
 
+/// The coinbase reward occupies output index 0 within its (single-output)
+/// minting transaction.
+///
+/// This index is bound into the hybrid ML-KEM one-time-key derivation
+/// (whitepaper §4.2, issue #958), so the minter must scan its own reward at
+/// this same index. Lottery payouts reuse the winning UTXO's keys and index
+/// verbatim, so they are unaffected by this constant.
+pub const MINTING_OUTPUT_INDEX: u32 = 0;
+
 /// Genesis block magic bytes for mainnet (stored in prev_block_hash).
 /// ASCII: "BOTHO_MAINNET_GENESIS_V1" padded to 32 bytes
 pub const MAINNET_GENESIS_MAGIC: [u8; 32] = [
@@ -195,6 +204,18 @@ pub struct MintingTx {
     /// Used by minter to derive the shared secret for detecting ownership.
     pub public_key: [u8; 32],
 
+    /// ML-KEM-768 encapsulation ciphertext (1,088 bytes) for the hybrid
+    /// post-quantum stealth envelope (issue #958, whitepaper §4.2).
+    ///
+    /// Coinbase has no external sender, so the minter encapsulates a shared
+    /// secret against its OWN published ML-KEM-768 key and folds it — together
+    /// with the classical DH secret — into `target_key`. The minter recovers
+    /// its reward by decapsulating this ciphertext with its ML-KEM secret key.
+    /// `None` on classical (pre-6.0.0-format) coinbases, which hash and
+    /// serialize exactly as before.
+    #[serde(default)]
+    pub kem_ciphertext: Option<Vec<u8>>,
+
     // PoW proof fields
     /// Previous block hash this minting tx builds on
     pub prev_block_hash: [u8; 32],
@@ -224,25 +245,65 @@ impl MintingTx {
         let minter_view_key = minter_address.view_public_key().to_bytes();
         let minter_spend_key = minter_address.spend_public_key().to_bytes();
 
-        // Generate random ephemeral key for stealth output
-        let tx_private_key = RistrettoPrivate::from_random(&mut OsRng);
-
-        // Create stealth keys for the reward output
-        let target_key = create_tx_out_target_key(&tx_private_key, minter_address);
-        let public_key =
-            create_tx_out_public_key(&tx_private_key, minter_address.spend_public_key());
+        // Create the hybrid stealth keys for the reward output, encapsulating
+        // to the minter's own published ML-KEM key (see
+        // [`MintingTx::coinbase_stealth_fields`]).
+        let (target_key, public_key, kem_ciphertext) =
+            Self::coinbase_stealth_fields(minter_address);
 
         Self {
             block_height,
             reward,
             minter_view_key,
             minter_spend_key,
-            target_key: target_key.to_bytes(),
-            public_key: public_key.to_bytes(),
+            target_key,
+            public_key,
+            kem_ciphertext,
             prev_block_hash,
             difficulty,
             nonce: 0,
             timestamp,
+        }
+    }
+
+    /// Build the coinbase reward's stealth output fields
+    /// `(target_key, public_key, kem_ciphertext)` for `minter_address`.
+    ///
+    /// A coinbase has no external sender, so the minter encapsulates a shared
+    /// secret against its OWN published ML-KEM-768 key and folds it into the
+    /// one-time `target_key` (the #957 hybrid construction, reused via
+    /// [`TxOutput::new_hybrid_to_address`]). This lets the minter scan and
+    /// spend its reward while keeping the classical DH stealth privacy.
+    ///
+    /// The reward always occupies [`MINTING_OUTPUT_INDEX`] within its
+    /// single-output minting transaction, and that index is bound into the
+    /// hybrid derivation.
+    ///
+    /// Falls back to a classical stealth output (`kem_ciphertext == None`) when
+    /// `minter_address` publishes no well-formed ML-KEM key (a pre-v2 / test
+    /// address, or a `--no-default-features` build). Consensus enforcement that
+    /// every output carry a ciphertext lands in a later sub-issue (#958 step
+    /// 7).
+    pub(crate) fn coinbase_stealth_fields(
+        minter_address: &PublicAddress,
+    ) -> ([u8; 32], [u8; 32], Option<Vec<u8>>) {
+        match TxOutput::new_hybrid_to_address(
+            0,
+            minter_address,
+            MINTING_OUTPUT_INDEX,
+            None,
+            ClusterTagVector::empty(),
+        ) {
+            Ok(out) => (out.target_key, out.public_key, out.kem_ciphertext),
+            Err(_) => {
+                // Address publishes no ML-KEM key: emit a classical stealth
+                // output so pre-v2 / test addresses keep working.
+                let tx_private_key = RistrettoPrivate::from_random(&mut OsRng);
+                let target_key = create_tx_out_target_key(&tx_private_key, minter_address);
+                let public_key =
+                    create_tx_out_public_key(&tx_private_key, minter_address.spend_public_key());
+                (target_key.to_bytes(), public_key.to_bytes(), None)
+            }
         }
     }
 
@@ -289,6 +350,16 @@ impl MintingTx {
         hasher.update(self.minter_spend_key);
         hasher.update(self.target_key);
         hasher.update(self.public_key);
+        // Bind the ML-KEM ciphertext into the coinbase's consensus identity so
+        // the post-quantum envelope is committed (whitepaper §4.2, #958).
+        // Classical coinbases (`None`) are skipped, so their hash is
+        // byte-identical to the pre-6.0.0 layout — block-hash determinism and
+        // the header↔minting-tx PoW link (which does not use this hash) are
+        // preserved. Folded immediately after the stealth keys it accompanies,
+        // before the PoW-proof fields.
+        if let Some(ct) = &self.kem_ciphertext {
+            hasher.update(ct);
+        }
         hasher.update(self.prev_block_hash);
         hasher.update(self.difficulty.to_le_bytes());
         hasher.update(self.nonce.to_le_bytes());
@@ -333,7 +404,7 @@ impl MintingTx {
             public_key: self.public_key,
             e_memo: None, // Minting rewards don't have memos
             cluster_tags: ClusterTagVector::single(cluster_id),
-            kem_ciphertext: None,
+            kem_ciphertext: self.kem_ciphertext.clone(),
         }
     }
 }
@@ -358,6 +429,18 @@ pub struct LotteryOutput {
 
     /// Ephemeral public key for stealth derivation
     pub public_key: [u8; 32],
+
+    /// ML-KEM-768 ciphertext (1,088 bytes) inherited from the winning UTXO's
+    /// hybrid stealth envelope (issue #958, whitepaper §4.2).
+    ///
+    /// A lottery payout reuses the winning UTXO's one-time stealth keys
+    /// (`target_key`/`public_key`) so it goes to the same owner; it therefore
+    /// also reuses the winning UTXO's ML-KEM ciphertext, and the winner
+    /// recovers the payout with the exact hybrid derivation (same shared
+    /// secret, same output index) they used for the original UTXO. `None` when
+    /// the winning UTXO is a classical (pre-6.0.0) output.
+    #[serde(default)]
+    pub kem_ciphertext: Option<Vec<u8>>,
 }
 
 impl LotteryOutput {
@@ -370,11 +453,17 @@ impl LotteryOutput {
     }
 
     /// Create from a 36-byte UTXO ID.
+    ///
+    /// `kem_ciphertext` is the winning UTXO's ML-KEM ciphertext, reused
+    /// verbatim so the payout carries the same hybrid stealth envelope as the
+    /// output it redistributes to (issue #958). Pass `None` for a classical
+    /// winning UTXO.
     pub fn from_utxo_id(
         utxo_id: [u8; 36],
         payout: u64,
         target_key: [u8; 32],
         public_key: [u8; 32],
+        kem_ciphertext: Option<Vec<u8>>,
     ) -> Self {
         let mut tx_hash = [0u8; 32];
         tx_hash.copy_from_slice(&utxo_id[..32]);
@@ -385,7 +474,28 @@ impl LotteryOutput {
             payout,
             target_key,
             public_key,
+            kem_ciphertext,
         }
+    }
+
+    /// Compute a consensus identity hash over this lottery payout.
+    ///
+    /// Binds the ML-KEM ciphertext (when present) into the payout identity so
+    /// the post-quantum envelope is committed alongside the stealth keys,
+    /// mirroring [`MintingTx::hash`]. Classical payouts (`kem_ciphertext ==
+    /// None`) hash over the classical fields only, so their identity is
+    /// unchanged from the pre-6.0.0 layout.
+    pub fn hash(&self) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(self.winner_tx_hash);
+        hasher.update(self.winner_output_index.to_le_bytes());
+        hasher.update(self.payout.to_le_bytes());
+        hasher.update(self.target_key);
+        hasher.update(self.public_key);
+        if let Some(ct) = &self.kem_ciphertext {
+            hasher.update(ct);
+        }
+        hasher.finalize().into()
     }
 
     /// Convert to a TxOutput for ledger storage.
@@ -400,7 +510,7 @@ impl LotteryOutput {
             public_key: self.public_key,
             e_memo: None, // Lottery payouts don't need memos
             cluster_tags,
-            kem_ciphertext: None,
+            kem_ciphertext: self.kem_ciphertext.clone(),
         }
     }
 }
@@ -464,6 +574,8 @@ impl Block {
                 // Genesis has no stealth output - use zero keys
                 target_key: [0u8; 32],
                 public_key: [0u8; 32],
+                // Genesis coinbase is classical (no ML-KEM envelope)
+                kem_ciphertext: None,
                 prev_block_hash: genesis_magic, // Network-specific magic
                 difficulty: u64::MAX,
                 nonce: 0,
@@ -2030,5 +2142,272 @@ mod tests {
 
         // net_supply also computed in u128 without wrapping.
         assert_eq!(ctrl.net_supply(), expected);
+    }
+
+    /// A classical (KEM-less) coinbase must hash byte-for-byte the same as the
+    /// pre-6.0.0 layout: the `kem_ciphertext` fold is skipped when `None`, so
+    /// existing minting-tx identities and block-hash determinism are preserved.
+    #[test]
+    fn classical_minting_hash_is_backcompat() {
+        let tx = MintingTx {
+            block_height: 11,
+            reward: 600_000_000_000,
+            minter_view_key: [1u8; 32],
+            minter_spend_key: [2u8; 32],
+            target_key: [3u8; 32],
+            public_key: [4u8; 32],
+            kem_ciphertext: None,
+            prev_block_hash: [5u8; 32],
+            difficulty: 1000,
+            nonce: 7,
+            timestamp: 42,
+        };
+
+        // Recompute the legacy digest (classical field order, no ciphertext).
+        let mut hasher = Sha256::new();
+        hasher.update(tx.block_height.to_le_bytes());
+        hasher.update(tx.reward.to_le_bytes());
+        hasher.update(tx.minter_view_key);
+        hasher.update(tx.minter_spend_key);
+        hasher.update(tx.target_key);
+        hasher.update(tx.public_key);
+        hasher.update(tx.prev_block_hash);
+        hasher.update(tx.difficulty.to_le_bytes());
+        hasher.update(tx.nonce.to_le_bytes());
+        hasher.update(tx.timestamp.to_le_bytes());
+        let expected: [u8; 32] = hasher.finalize().into();
+
+        assert_eq!(
+            tx.hash(),
+            expected,
+            "a None ciphertext must hash exactly as the legacy layout"
+        );
+        // Determinism.
+        assert_eq!(tx.hash(), tx.hash());
+    }
+
+    /// A classical (KEM-less) lottery payout hashes over the classical fields
+    /// only, so its identity matches the pre-6.0.0 layout.
+    #[test]
+    fn classical_lottery_hash_is_backcompat() {
+        let out = LotteryOutput {
+            winner_tx_hash: [1u8; 32],
+            winner_output_index: 2,
+            payout: 5,
+            target_key: [3u8; 32],
+            public_key: [4u8; 32],
+            kem_ciphertext: None,
+        };
+
+        let mut hasher = Sha256::new();
+        hasher.update(out.winner_tx_hash);
+        hasher.update(out.winner_output_index.to_le_bytes());
+        hasher.update(out.payout.to_le_bytes());
+        hasher.update(out.target_key);
+        hasher.update(out.public_key);
+        let expected: [u8; 32] = hasher.finalize().into();
+
+        assert_eq!(out.hash(), expected);
+    }
+
+    /// The lottery-payout hash binds the ML-KEM ciphertext: attaching or
+    /// mutating it changes the payout identity.
+    #[test]
+    fn lottery_hash_binds_kem_ciphertext() {
+        let classical = LotteryOutput {
+            winner_tx_hash: [1u8; 32],
+            winner_output_index: 2,
+            payout: 5,
+            target_key: [3u8; 32],
+            public_key: [4u8; 32],
+            kem_ciphertext: None,
+        };
+        let h_classical = classical.hash();
+
+        let mut hybrid = classical.clone();
+        hybrid.kem_ciphertext = Some(vec![0x11u8; 1088]);
+        let h_hybrid = hybrid.hash();
+        assert_ne!(
+            h_classical, h_hybrid,
+            "attaching a ciphertext must change the payout hash"
+        );
+
+        let mut hybrid_mutated = hybrid.clone();
+        let mut ct = hybrid_mutated.kem_ciphertext.take().unwrap();
+        ct[0] ^= 0xFF;
+        hybrid_mutated.kem_ciphertext = Some(ct);
+        assert_ne!(
+            h_hybrid,
+            hybrid_mutated.hash(),
+            "mutating the ciphertext must change the payout hash"
+        );
+    }
+
+    #[cfg(feature = "pq")]
+    mod pq_kem_tests {
+        use super::*;
+        use bth_account_keys::AccountKey;
+        use bth_crypto_keys::RistrettoPublic;
+        use bth_crypto_pq::{MlKem768KeyPair, ML_KEM_768_CIPHERTEXT_BYTES};
+        use rand_chacha::ChaCha20Rng;
+        use rand_core::SeedableRng;
+
+        /// A deterministic minter/winner: a classical account plus an ML-KEM
+        /// keypair, and a `PublicAddress` that PUBLISHES that KEM key (address
+        /// format v2). The holder can both receive to `addr` and scan/spend
+        /// with `(account, kem)`.
+        fn minter(seed: u8) -> (AccountKey, MlKem768KeyPair, PublicAddress) {
+            let mut rng = ChaCha20Rng::from_seed([seed; 32]);
+            let account = AccountKey::random(&mut rng);
+            let kem = MlKem768KeyPair::from_seed(&[seed ^ 0x5A; 32]);
+            let addr = account
+                .default_subaddress()
+                .with_pq_keys(kem.public_key().as_bytes().to_vec(), Vec::new());
+            (account, kem, addr)
+        }
+
+        /// The minting reward output carries a valid 1,088-byte ML-KEM
+        /// ciphertext encapsulated to the minter's own published KEM key, and
+        /// the minter recovers (scans + spends) its reward.
+        #[test]
+        fn minting_reward_carries_ciphertext_and_minter_recovers() {
+            let (account, kem, addr) = minter(1);
+            let tx = MintingTx::new(11, 600_000_000_000, &addr, [7u8; 32], 1000, 42);
+
+            let ct = tx
+                .kem_ciphertext
+                .as_ref()
+                .expect("coinbase must carry an ML-KEM ciphertext");
+            assert_eq!(
+                ct.len(),
+                ML_KEM_768_CIPHERTEXT_BYTES,
+                "ciphertext must be exactly 1,088 bytes"
+            );
+
+            // to_tx_output propagates the ciphertext unchanged.
+            let out = tx.to_tx_output();
+            assert_eq!(out.kem_ciphertext.as_deref(), Some(ct.as_slice()));
+
+            // The minter scans its reward at MINTING_OUTPUT_INDEX and recovers
+            // the one-time spend key (belongs_to_hybrid + recover).
+            let idx = out
+                .belongs_to_hybrid(&account, &kem, MINTING_OUTPUT_INDEX)
+                .expect("minter must detect its own reward");
+            let spend = out
+                .recover_spend_key_hybrid(&account, &kem, idx, MINTING_OUTPUT_INDEX)
+                .expect("minter must recover the one-time spend key");
+            assert_eq!(
+                RistrettoPublic::from(&spend).to_bytes(),
+                out.target_key,
+                "onetime_private_key * G must equal target_key"
+            );
+        }
+
+        /// `coinbase_stealth_fields` encapsulates to a published KEM key, and
+        /// falls back to a classical (KEM-less) output for an address that
+        /// publishes no KEM key.
+        #[test]
+        fn coinbase_stealth_fields_encapsulates_or_falls_back() {
+            let (_a, _k, addr) = minter(9);
+            let (_tk, _pk, ct) = MintingTx::coinbase_stealth_fields(&addr);
+            assert_eq!(
+                ct.as_ref().map(|c| c.len()),
+                Some(ML_KEM_768_CIPHERTEXT_BYTES)
+            );
+
+            // A KEM-less address (empty published key) falls back to classical.
+            let classical_addr = PublicAddress::from_random(&mut OsRng);
+            let (_tk2, _pk2, ct2) = MintingTx::coinbase_stealth_fields(&classical_addr);
+            assert!(
+                ct2.is_none(),
+                "an address with no published KEM key must fall back to classical"
+            );
+        }
+
+        /// A lottery payout reuses the winning UTXO's hybrid envelope
+        /// (target/public keys AND ciphertext), and the winner — who holds the
+        /// KEM secret — decapsulates and recovers the payout.
+        #[test]
+        fn lottery_payout_reuses_envelope_and_winner_recovers() {
+            let (account, kem, addr) = minter(2);
+            let output_index = 3u32;
+
+            // The winning UTXO: a hybrid output the winner already owns.
+            let winning = TxOutput::new_hybrid_to_address(
+                50_000,
+                &addr,
+                output_index,
+                None,
+                ClusterTagVector::empty(),
+            )
+            .expect("winning UTXO is a hybrid output");
+
+            // Build the payout reusing the winner's stealth envelope. The UTXO
+            // id embeds the original output index in its trailing 4 bytes.
+            let mut utxo_id = [0u8; 36];
+            utxo_id[..32].copy_from_slice(&[0xABu8; 32]);
+            utxo_id[32..].copy_from_slice(&output_index.to_le_bytes());
+            let payout = LotteryOutput::from_utxo_id(
+                utxo_id,
+                900,
+                winning.target_key,
+                winning.public_key,
+                winning.kem_ciphertext.clone(),
+            );
+
+            let ct = payout
+                .kem_ciphertext
+                .as_ref()
+                .expect("payout must carry a ciphertext");
+            assert_eq!(ct.len(), ML_KEM_768_CIPHERTEXT_BYTES);
+            assert_eq!(
+                payout.kem_ciphertext, winning.kem_ciphertext,
+                "payout must reuse the winning UTXO's ciphertext verbatim"
+            );
+            assert_eq!(payout.winner_output_index, output_index);
+
+            // The winner detects + recovers the payout with the same hybrid
+            // derivation (same shared secret, same output index).
+            let out = payout.to_tx_output(ClusterTagVector::empty());
+            let idx = out
+                .belongs_to_hybrid(&account, &kem, output_index)
+                .expect("winner must detect the lottery payout");
+            let spend = out
+                .recover_spend_key_hybrid(&account, &kem, idx, output_index)
+                .expect("winner must recover the payout spend key");
+            assert_eq!(RistrettoPublic::from(&spend).to_bytes(), out.target_key);
+        }
+
+        /// `MintingTx::hash()` binds the ML-KEM ciphertext: mutating or
+        /// dropping it changes the coinbase identity, while the
+        /// PoW/header link (which does not use this hash) is
+        /// unaffected.
+        #[test]
+        fn minting_hash_binds_kem_ciphertext_and_pow_link_unaffected() {
+            let (_a, _k, addr) = minter(4);
+            let tx = MintingTx::new(11, 600_000_000_000, &addr, [7u8; 32], 1000, 42);
+            let base = tx.hash();
+            assert_eq!(base, tx.hash(), "hash must be deterministic");
+
+            // Mutating the ciphertext changes the hash.
+            let mut mutated = tx.clone();
+            let mut ct = mutated.kem_ciphertext.take().unwrap();
+            ct[0] ^= 0xFF;
+            mutated.kem_ciphertext = Some(ct);
+            assert_ne!(base, mutated.hash(), "hash must bind the ciphertext");
+
+            // Dropping the ciphertext changes the hash.
+            let mut dropped = tx.clone();
+            dropped.kem_ciphertext = None;
+            assert_ne!(base, dropped.hash());
+
+            // The PoW hash (header↔minting-tx link) does NOT depend on the
+            // ciphertext, so folding it in cannot desync header and minting tx.
+            assert_eq!(
+                tx.pow_hash(),
+                dropped.pow_hash(),
+                "kem_ciphertext must not affect the PoW/header link"
+            );
+        }
     }
 }

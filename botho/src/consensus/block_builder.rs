@@ -398,6 +398,9 @@ impl BlockBuilder {
                     winner.payout,
                     utxo.output.target_key,
                     utxo.output.public_key,
+                    // Reuse the winning UTXO's hybrid ML-KEM envelope so the
+                    // payout is recoverable by the same owner (issue #958).
+                    utxo.output.kem_ciphertext.clone(),
                 ));
             } else {
                 warn!(
@@ -465,6 +468,7 @@ mod tests {
             minter_spend_key: [2u8; 32],
             target_key: [3u8; 32],
             public_key: [4u8; 32],
+            kem_ciphertext: None,
             prev_block_hash: [0u8; 32],
             difficulty: 1000,
             nonce: 12345,

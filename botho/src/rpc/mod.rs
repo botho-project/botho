@@ -5642,6 +5642,7 @@ mod tests {
                     payout: 60,
                     target_key: [4u8; 32],
                     public_key: [5u8; 32],
+                    kem_ciphertext: None,
                 },
                 LotteryOutput {
                     winner_tx_hash: [6u8; 32],
@@ -5649,6 +5650,7 @@ mod tests {
                     payout: 40,
                     target_key: [7u8; 32],
                     public_key: [8u8; 32],
+                    kem_ciphertext: None,
                 },
             ],
             BlockLotterySummary {

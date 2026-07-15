@@ -2350,6 +2350,7 @@ mod tests {
             minter_spend_key: [tag.wrapping_add(1); 32],
             target_key: [tag.wrapping_add(2); 32],
             public_key: [tag.wrapping_add(3); 32],
+            kem_ciphertext: None,
             prev_block_hash,
             difficulty: u64::MAX,
             nonce: tag as u64,
