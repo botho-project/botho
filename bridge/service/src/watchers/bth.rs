@@ -146,6 +146,7 @@ impl NodeBthClient {
         let reserve = ReserveKeys::load(
             config.view_key_file.as_deref(),
             config.spend_key_file.as_deref(),
+            config.pq_seed_file.as_deref(),
         )
         .map_err(WatchError::Config)?;
         Ok(Self { rpc, reserve })
@@ -190,9 +191,11 @@ impl BthChainClient for NodeBthClient {
 
         let mut deposits = Vec::new();
         for out in &block.outputs {
-            // Reserve holds no ML-KEM secret today; hybrid outputs are warned
-            // about, not silently missed (issue #970).
-            let scanned = scan_deposit_output(out, account, None).map_err(WatchError::Rpc)?;
+            // Pass the reserve's ML-KEM secret (when a PQ seed is configured)
+            // so hybrid deposits to the reserve are DETECTED, not just warned
+            // about (issue #972). A classical-only reserve passes `None`.
+            let scanned = scan_deposit_output(out, account, reserve.kem_keypair())
+                .map_err(WatchError::Rpc)?;
             let Some(scanned) = scanned else {
                 continue; // not ours
             };
@@ -555,6 +558,7 @@ mod tests {
             ws_url: "ws://localhost:7101/ws".to_string(),
             view_key_file: None,
             spend_key_file: None,
+            pq_seed_file: None,
             confirmations_required,
             reserve_address: None,
             release_signers: Vec::new(),
@@ -732,6 +736,7 @@ mod tests {
                 ws_url: String::new(),
                 view_key_file: None,
                 spend_key_file: None,
+                pq_seed_file: None,
                 confirmations_required: 0,
                 reserve_address: None,
                 release_signers: Vec::new(),

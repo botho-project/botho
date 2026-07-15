@@ -2064,6 +2064,7 @@ dependencies = [
  "bincode",
  "bs58 0.4.0",
  "bth-account-keys",
+ "bth-address-codec",
  "bth-bridge-core",
  "bth-cluster-tax",
  "bth-crypto-keys",
