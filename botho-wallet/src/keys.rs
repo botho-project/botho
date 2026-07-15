@@ -102,9 +102,27 @@ impl WalletKeys {
         // SAFETY: The phrase we just created is valid for the lifetime of Self
         let lock = unsafe { lock_string(&phrase) };
 
-        // Derive keys using SLIP-0010 (account index 0)
+        // Derive the full BIP39 seed (with PBKDF2 key stretching) BEFORE the
+        // mnemonic is consumed by SLIP-0010 derivation. This is the seed the
+        // canonical PQ derivation (§4.2) requires.
+        #[cfg(feature = "pq")]
+        let bip39_seed = bip39::Seed::new(&mnemonic, "");
+
+        // Derive classical keys using SLIP-0010 (account index 0).
         let slip10_key = mnemonic.derive_slip10_key(0);
         let account_key = AccountKey::from(slip10_key);
+
+        // Attach the account-wide PQ public keys (ML-KEM-768 + ML-DSA-65)
+        // derived from the same BIP39 seed, so the wallet's emitted addresses
+        // publish them (whitepaper §4.2).
+        #[cfg(feature = "pq")]
+        let account_key = {
+            let seed_bytes: &[u8; bth_crypto_pq::BIP39_SEED_SIZE] = bip39_seed
+                .as_bytes()
+                .try_into()
+                .expect("BIP39 seed is always 64 bytes");
+            account_key.attach_pq_from_seed(seed_bytes)
+        };
 
         Ok(Self {
             _mnemonic_lock: Some(lock),
@@ -465,6 +483,25 @@ mod tests {
             assert_eq!(addr.kem_public_key().len(), ML_KEM_768_PUBLIC_KEY_LEN);
             assert_eq!(addr.dsa_public_key().len(), ML_DSA_65_PUBLIC_KEY_LEN);
             assert!(addr.has_pq_keys());
+        }
+
+        #[test]
+        fn test_plain_public_address_carries_derived_pq_keys() {
+            // The wallet's plain account key (not just the quantum-safe view)
+            // now emits addresses carrying the account-wide PQ keys derived from
+            // the same BIP39 seed. The plain and quantum-safe addresses must
+            // agree on the published PQ keys (single unified identity).
+            let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+
+            let plain = keys.public_address();
+            assert!(
+                plain.has_pq_keys(),
+                "wallet's default address must publish PQ keys"
+            );
+
+            let pq = keys.pq_public_address();
+            assert_eq!(plain.kem_public_key(), pq.kem_public_key());
+            assert_eq!(plain.dsa_public_key(), pq.dsa_public_key());
         }
     }
 }
