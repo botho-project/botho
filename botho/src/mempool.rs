@@ -99,6 +99,49 @@ fn effective_cluster_wealth_from_outputs(
     Ok(total_weighted_wealth / total_value)
 }
 
+/// The bridge-import factor floor implied by a tx's OUTPUT tags (ADR 0007,
+/// #938), mirroring `Ledger::import_floor_factor_from_outputs`.
+///
+/// Value-weighted blend, in FACTOR_SCALE units, of `F` on the value tagged to
+/// recorded bridge-import clusters and `1×` on the rest. Relay policy mirrors
+/// the consensus floor so a tx admitted by the mempool can never fall below what
+/// consensus requires (the relay-only-tightening invariant). Fail-closed on DB
+/// error.
+fn import_floor_factor_from_outputs(outputs: &[TxOutput], ledger: &Ledger) -> Result<u64, String> {
+    use bth_cluster_tax::{ClusterFactorCurve, BRIDGE_IMPORT_FACTOR_FLOOR};
+
+    let background = ClusterFactorCurve::FACTOR_SCALE as u128;
+    let floor = BRIDGE_IMPORT_FACTOR_FLOOR as u128;
+
+    let mut total_value: u128 = 0;
+    let mut import_value: u128 = 0;
+
+    for output in outputs {
+        let amount = output.amount as u128;
+        total_value = total_value.saturating_add(amount);
+        for entry in &output.cluster_tags.entries {
+            let is_import = ledger
+                .is_bridge_import_cluster(entry.cluster_id.0)
+                .map_err(|e| format!("is_bridge_import_cluster({}): {}", entry.cluster_id.0, e))?;
+            if is_import {
+                let tagged =
+                    amount.saturating_mul(entry.weight as u128) / (TAG_WEIGHT_SCALE as u128);
+                import_value = import_value.saturating_add(tagged);
+            }
+        }
+    }
+
+    if total_value == 0 {
+        return Ok(ClusterFactorCurve::FACTOR_SCALE);
+    }
+    let import_value = import_value.min(total_value);
+    let background_value = total_value - import_value;
+    let blended = (floor.saturating_mul(import_value)
+        .saturating_add(background.saturating_mul(background_value)))
+        / total_value;
+    Ok(blended as u64)
+}
+
 // ============================================================================
 // Ring Tag Plausibility Validation
 // ============================================================================
@@ -738,6 +781,15 @@ impl Mempool {
         let claimed_factor = self.fee_config.cluster_factor(cluster_wealth);
         let demurrage_factor =
             self.ring_centroid_floored_factor(&ring_tags, claimed_factor, ledger)?;
+
+        // ADR 0007 (#938): the bridge-import floor. Mirror the consensus fee
+        // floor's ≥F clamp on imported-wealth outputs so relay never admits a
+        // tx below what consensus requires (the relay-only-tightening invariant
+        // asserted below depends on this). Separate `max` from the ring-centroid
+        // floor above — no double-floor.
+        let import_floor = import_floor_factor_from_outputs(&tx.outputs, ledger)
+            .map_err(MempoolError::LedgerError)?;
+        let demurrage_factor = demurrage_factor.max(import_floor);
 
         // Current chain tip height. Used both for the demurrage clock below and
         // for the relay-only-tightening invariant check (M1-B5), so the mempool

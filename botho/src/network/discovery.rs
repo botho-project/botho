@@ -106,7 +106,22 @@ use crate::{
 /// since the 4.0.0 reset (#626) — every migrated value is identical in BTH
 /// terms, so 4.0.0 peers accept exactly the same blocks. Per the #608 lesson:
 /// major = consensus-breaking disconnect, minor = warn (soft, RPC-shape-only).
-pub const PROTOCOL_VERSION: &str = "4.1.0";
+/// PROTOCOL 5.0.0 (ADR 0007, #938): bridge-import cluster tagging. Unwrapping
+/// wBTH → BTH now tags the minted output 100% to a block-epoch import cluster
+/// `c_import(⌊height/K⌋)` (K = 17,280 blocks) instead of returning it at
+/// factor-1 (background), and the consensus fee floor prices any import-tagged
+/// value at ≥ F = 1.5× on that fraction until it circulates the tag off. This is
+/// a CONSENSUS-BREAKING change: a 4.x peer applies no import floor and would
+/// accept/produce blocks whose release outputs the 5.0.0 chain now expects to be
+/// import-tagged and floored, so the two fork. The bump is therefore MAJOR
+/// (`is_consensus_compatible` compares majors only — a minor bump would merely
+/// warn, leaving 4.x peers connected and silently forking) and
+/// `MIN_SUPPORTED_PROTOCOL_VERSION` rises to 5.0.0 in lockstep (pre-mainnet
+/// testnet reset — no in-place migration; the new `bridge_import_clusters` index
+/// is built from genesis). Interacts with #925 (the remaining spend-to-
+/// background reset door) only in that both touch the factor-floor area; they
+/// are SEPARATE mechanisms.
+pub const PROTOCOL_VERSION: &str = "5.0.0";
 
 /// Minimum supported protocol version.
 /// Peers below this version are consensus-incompatible and are disconnected.
@@ -119,8 +134,12 @@ pub const PROTOCOL_VERSION: &str = "4.1.0";
 ///
 /// Deliberately NOT raised for the 4.1.0 minor bump (#694 unit migration):
 /// 4.0.0 peers remain consensus-compatible (no block-acceptance rule changed),
-/// so they must keep connecting rather than be disconnected.
-pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "4.0.0";
+/// so they kept connecting rather than being disconnected.
+///
+/// Raised to 5.0.0 for the ADR 0007 bridge-import cluster tagging + ≥F import
+/// floor (#938): 4.x peers apply no import floor and would fork the
+/// import-tagged/floored chain, so they must be disconnected (major-only check).
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "5.0.0";
 
 /// Topic for block announcements
 const BLOCKS_TOPIC: &str = "botho/blocks/1.0.0";
@@ -2196,31 +2215,37 @@ mod tests {
         // Bumped to 4.1.0 (MINOR) for the #694 nanoBTH -> picocredits
         // migration: the RPC contract's declared units change but no
         // consensus rule does, so 4.0.x peers stay connected (warn-only).
-        assert_eq!(PROTOCOL_VERSION, "4.1.0");
+        //
+        // Bumped to 5.0.0 (MAJOR) for ADR 0007 bridge-import cluster tagging +
+        // the >=F import floor (#938): a consensus-breaking fee-floor rule.
+        // MAJOR (not minor) because `is_consensus_compatible` is major-only, so
+        // a minor bump would leave 4.x peers connected and silently forking.
+        assert_eq!(PROTOCOL_VERSION, "5.0.0");
         let parsed = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
-        assert_eq!(parsed.major, 4);
-        assert_eq!(parsed.minor, 1);
+        assert_eq!(parsed.major, 5);
+        assert_eq!(parsed.minor, 0);
         assert_eq!(parsed.patch, 0);
     }
 
-    /// The #694 unit migration must NOT disconnect 4.0.0 peers: it is a
-    /// minor (RPC-shape-only) bump and 4.0.0 is consensus-compatible.
+    /// ADR 0007 (#938) is a consensus-breaking MAJOR bump (4.x → 5.0.0), so 4.x
+    /// peers must now be DISCONNECTED as consensus-incompatible — they apply no
+    /// import floor and would silently fork the import-tagged/floored chain.
     #[test]
-    fn test_v4_peers_remain_consensus_compatible_with_current() {
+    fn test_v4_peers_are_consensus_incompatible_after_adr0007() {
         let local = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
-        let v4_peer = ProtocolVersion::parse("4.0.0").unwrap();
-        assert!(v4_peer.is_consensus_compatible(&local));
+        let v4_peer = ProtocolVersion::parse("4.1.0").unwrap();
+        assert!(!v4_peer.is_consensus_compatible(&local));
         assert_eq!(
-            ProtocolVersion::consensus_incompatibility(&Some(v4_peer), &local),
-            None
+            ProtocolVersion::consensus_incompatibility(&Some(v4_peer.clone()), &local),
+            Some(v4_peer)
         );
     }
 
     #[test]
     fn test_min_supported_protocol_version_constant() {
-        assert_eq!(MIN_SUPPORTED_PROTOCOL_VERSION, "4.0.0");
+        assert_eq!(MIN_SUPPORTED_PROTOCOL_VERSION, "5.0.0");
         let parsed = ProtocolVersion::parse(MIN_SUPPORTED_PROTOCOL_VERSION).unwrap();
-        assert_eq!(parsed.major, 4);
+        assert_eq!(parsed.major, 5);
         assert_eq!(parsed.minor, 0);
     }
 
