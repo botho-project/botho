@@ -70,8 +70,8 @@
 //! deflating spend performs, a settlement transaction is an *explicit*,
 //! consensus-recognized reclassification of a wealthy coin down to
 //! factor-1/background in exchange for **wrap eligibility** (the bridge
-//! on-ramp, #822/#825). It is the ONE sanctioned place cluster mass legitimately DROPS to
-//! background: the drop is deflation (already legal under
+//! on-ramp, #822/#825). It is the ONE sanctioned place cluster mass
+//! legitimately DROPS to background: the drop is deflation (already legal under
 //! `check_cluster_tag_inheritance`, which only rejects inflation), but it is
 //! only *wrap-eligible* when it rides an accepted settlement transaction that
 //! paid the full capitalized charge. Both doors read the SAME

@@ -908,14 +908,15 @@ impl TxInputs {
 // Transaction
 // ============================================================================
 
-/// Marks a transaction as an explicit **demurrage-settlement** operation (#831).
+/// Marks a transaction as an explicit **demurrage-settlement** operation
+/// (#831).
 ///
 /// A settlement is the sanctioned — and only — wrap on-ramp for a
 /// wealthy-cluster coin: it reclassifies the spent value down to
 /// factor-1/background in exchange for **wrap eligibility** (the bridge, #822 /
 /// #825), and in return pays the capitalized future demurrage the shed cluster
-/// mass would otherwise owe (`bth_cluster_tax::demurrage_settlement_charge` over
-/// `SETTLEMENT_HORIZON_BLOCKS`), folded into `fee` so it flows to the
+/// mass would otherwise owe (`bth_cluster_tax::demurrage_settlement_charge`
+/// over `SETTLEMENT_HORIZON_BLOCKS`), folded into `fee` so it flows to the
 /// redistribution lottery pool through the existing split (no new sink).
 ///
 /// Consensus requires, when this is present, that every output of the
@@ -930,9 +931,9 @@ impl TxInputs {
 /// stripped without invalidating the signature.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SettlementInfo {
-    /// The reclassified value the settlement certifies as background. Equals the
-    /// sum of the (all-background) output amounts; carried explicitly so it is
-    /// covered by the tx digest + signature.
+    /// The reclassified value the settlement certifies as background. Equals
+    /// the sum of the (all-background) output amounts; carried explicitly
+    /// so it is covered by the tx digest + signature.
     pub settled_value: u64,
 }
 
