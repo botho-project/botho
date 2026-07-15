@@ -1,6 +1,6 @@
 {
   "name": "wbth-ethereum",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Wrapped BTH ERC-20 token for Ethereum",
   "scripts": {
     "compile": "hardhat compile",

@@ -1,6 +1,6 @@
 [package]
 name = "bth-gossip"
-version = "0.3.2"
+version = "0.4.0"
 authors = ["Botho Foundation"]
 edition = "2021"
 license = "Apache-2.0"

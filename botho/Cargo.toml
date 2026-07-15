@@ -1,6 +1,6 @@
 [package]
 name = "botho"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2021"
 description = "A privacy-preserving mined cryptocurrency"
 license = "GPL-3.0"
