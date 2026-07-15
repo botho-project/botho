@@ -35,7 +35,7 @@ use libfuzzer_sys::fuzz_target;
 
 use botho::{
     block::Block,
-    consensus::lottery::{compute_pool_accounting, validate_block_lottery, LotteryFeeConfig},
+    consensus::lottery::{compute_pool_accounting, reward_cap, validate_block_lottery, LotteryFeeConfig},
 };
 use bth_cluster_tax::{LotteryCandidate, TagVector};
 
@@ -103,11 +103,19 @@ fuzz_target!(|data: FuzzData| {
     if r1.is_ok() {
         let total_fees = block.total_fees();
         let emission_share = block.minting_tx.lottery_emission_share();
+        // Path C payout cap R = min(ρ·base_fee, block_reward), recomputed from
+        // the same candidate set validation used (see reward_cap).
+        let payout_cap = reward_cap(
+            &candidates,
+            block.height(),
+            block.minting_tx.reward,
+            &config,
+        );
         let accounting = compute_pool_accounting(
             total_fees,
             emission_share,
             stored_pool,
-            block.minting_tx.reward,
+            payout_cap,
             &config,
         );
 
