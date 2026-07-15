@@ -117,7 +117,8 @@ impl OwnedUtxo {
     /// For a hybrid UTXO (KEM ciphertext present) this decapsulates with the
     /// wallet's derived ML-KEM secret and folds the shared secret into the
     /// classical stealth derivation; a classical/legacy UTXO uses the pure
-    /// view-key path. Both dispatch through [`TxOutput::recover_spend_key_for`].
+    /// view-key path. Both dispatch through
+    /// [`TxOutput::recover_spend_key_for`].
     pub fn recover_spend_key(&self, keys: &WalletKeys) -> Option<RistrettoPrivate> {
         let output = self.as_tx_output();
         #[cfg(feature = "pq")]
@@ -1135,10 +1136,10 @@ mod tests {
         }
 
         /// End-to-end acceptance heart: send (sub-issue-4 path) → scanner
-        /// detects → spend (input hybrid-recovery). A hybrid output addressed to
-        /// the wallet is found by decapsulation, and the recovered one-time
-        /// private key satisfies `x·G == target_key`, i.e. the funds are
-        /// spendable.
+        /// detects → spend (input hybrid-recovery). A hybrid output addressed
+        /// to the wallet is found by decapsulation, and the recovered
+        /// one-time private key satisfies `x·G == target_key`, i.e. the
+        /// funds are spendable.
         #[test]
         fn hybrid_output_is_scanned_and_spendable() {
             let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
@@ -1185,14 +1186,17 @@ mod tests {
             );
         }
 
-        /// Back-compat: a classical output (no KEM ciphertext) still scans on the
-        /// same unified path.
+        /// Back-compat: a classical output (no KEM ciphertext) still scans on
+        /// the same unified path.
         #[test]
         fn classical_none_ciphertext_still_scans() {
             let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
             let amount = 2_000_000_000_000u64;
             let out = TxOutput::new(amount, &keys.public_address());
-            assert!(out.kem_ciphertext.is_none(), "classical output has no KEM ct");
+            assert!(
+                out.kem_ciphertext.is_none(),
+                "classical output has no KEM ct"
+            );
 
             let scanner = WalletScanner::new(&keys);
             let blocks = vec![BlockOutputs {

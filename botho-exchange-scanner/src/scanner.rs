@@ -247,12 +247,7 @@ impl ExchangeScanner {
                              KEM secret to scan hybrid deposits"
                         );
                     }
-                    self.check_ownership_hybrid(
-                        &target_key,
-                        &public_key,
-                        &ct,
-                        output.output_index,
-                    )
+                    self.check_ownership_hybrid(&target_key, &public_key, &ct, output.output_index)
                 }
                 None => self.check_ownership(&target_key, &public_key),
             };
@@ -437,8 +432,7 @@ mod tests {
         };
 
         // View-only scanner (no KEM secret) cannot see the hybrid deposit.
-        let view_only =
-            ExchangeScanner::new(view_private.clone(), spend_public, 0, 5).unwrap();
+        let view_only = ExchangeScanner::new(view_private.clone(), spend_public, 0, 5).unwrap();
         assert!(
             view_only.scan_outputs(&[rpc.clone()], 12).is_empty(),
             "hybrid output must be invisible without the ML-KEM secret",

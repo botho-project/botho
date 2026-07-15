@@ -91,8 +91,7 @@ fn tx_output_from_rpc(out: &RpcOutput) -> Result<TxOutput, String> {
     };
     let kem_ciphertext = match &out.kem_ciphertext {
         Some(hex_ct) => Some(
-            hex::decode(hex_ct)
-                .map_err(|e| format!("output kem_ciphertext: invalid hex: {e}"))?,
+            hex::decode(hex_ct).map_err(|e| format!("output kem_ciphertext: invalid hex: {e}"))?,
         ),
         None => None,
     };
@@ -446,7 +445,10 @@ mod tests {
             None,
             ClusterTagVector::empty(),
         );
-        assert!(out.kem_ciphertext.is_some(), "hybrid output carries a KEM ct");
+        assert!(
+            out.kem_ciphertext.is_some(),
+            "hybrid output carries a KEM ct"
+        );
         let rpc = rpc_output_from_txoutput(&out, "0xhybrid", 0);
 
         // Without the KEM secret the reserve cannot detect it (warns, not silent).
@@ -553,9 +555,13 @@ mod tests {
         let mut rng = StdRng::from_seed([7u8; 32]);
         let reserve = AccountKey::random(&mut rng);
         let no_memo = TxOutput::new(500, &reserve.default_subaddress());
-        let scanned = scan_deposit_output(&rpc_output_from_txoutput(&no_memo, "0xn", 0), &reserve, None)
-            .unwrap()
-            .unwrap();
+        let scanned = scan_deposit_output(
+            &rpc_output_from_txoutput(&no_memo, "0xn", 0),
+            &reserve,
+            None,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(scanned.memo, None);
     }
 
@@ -612,8 +618,10 @@ mod tests {
 
         let amount = 4_000_000_000_000u64;
         let fee = MIN_TX_FEE;
-        let tx = build_release_tx(&reserve, &recipient, amount, fee, &inputs, 5_000, None, &mut rng)
-            .expect("release tx builds and self-verifies");
+        let tx = build_release_tx(
+            &reserve, &recipient, amount, fee, &inputs, 5_000, None, &mut rng,
+        )
+        .expect("release tx builds and self-verifies");
 
         // Node verifier accepts it.
         tx.verify_ring_signatures().unwrap();
@@ -673,8 +681,10 @@ mod tests {
                 decoys: make_decoys(DEFAULT_RING_SIZE - 1, owned_amount, &mut rng),
             }]
         };
-        let tx2 =
-            build_release_tx(&reserve, &recipient, amount, fee, &inputs2, 5_001, None, &mut rng).unwrap();
+        let tx2 = build_release_tx(
+            &reserve, &recipient, amount, fee, &inputs2, 5_001, None, &mut rng,
+        )
+        .unwrap();
         assert_ne!(
             tx.outputs[0].target_key, tx2.outputs[0].target_key,
             "two releases to the same address must use distinct one-time keys (ADR 0004)"
@@ -689,11 +699,14 @@ mod tests {
 
         let owned_amount = 1_000_000_000u64;
         let reserve_out = TxOutput::new(owned_amount, &reserve.default_subaddress());
-        let owned =
-            scan_deposit_output(&rpc_output_from_txoutput(&reserve_out, "0xr", 0), &reserve, None)
-                .unwrap()
-                .unwrap()
-                .owned;
+        let owned = scan_deposit_output(
+            &rpc_output_from_txoutput(&reserve_out, "0xr", 0),
+            &reserve,
+            None,
+        )
+        .unwrap()
+        .unwrap()
+        .owned;
         let inputs = vec![ReleaseInput {
             owned,
             decoys: make_decoys(DEFAULT_RING_SIZE - 1, owned_amount, &mut rng),
@@ -722,11 +735,14 @@ mod tests {
 
         let owned_amount = 10_000_000_000_000u64;
         let reserve_out = TxOutput::new(owned_amount, &reserve.default_subaddress());
-        let owned =
-            scan_deposit_output(&rpc_output_from_txoutput(&reserve_out, "0xr", 0), &reserve, None)
-                .unwrap()
-                .unwrap()
-                .owned;
+        let owned = scan_deposit_output(
+            &rpc_output_from_txoutput(&reserve_out, "0xr", 0),
+            &reserve,
+            None,
+        )
+        .unwrap()
+        .unwrap()
+        .owned;
         let mut short = make_decoys(DEFAULT_RING_SIZE - 1, owned_amount, &mut rng);
         short.truncate(2);
         let inputs = vec![ReleaseInput {

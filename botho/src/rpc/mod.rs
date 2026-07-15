@@ -89,12 +89,12 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     address::Address,
+    block::MINTING_OUTPUT_INDEX,
     config::QuorumConfig,
     consensus::{QuorumGateSnapshot, ScpSlotSnapshot},
     ledger::Ledger,
     mempool::Mempool,
     network::{NetworkStats, SyncStatusSnapshot},
-    block::MINTING_OUTPUT_INDEX,
     node::MinterHealth,
     transaction::{TxOutput, MIN_TX_FEE},
     wallet::Wallet,
@@ -1916,9 +1916,11 @@ async fn handle_wallet_balance(id: Value, state: &RpcState) -> JsonRpcResponse {
         // Unified hybrid scan path (issue #970): decapsulate + view-key check.
         if let Some(subaddress_index) = wallet.scan_output(&utxo.output, utxo.id.output_index) {
             // Recover the one-time private key to compute key image
-            if let Some(onetime_private) =
-                wallet.recover_output_spend_key(&utxo.output, subaddress_index, utxo.id.output_index)
-            {
+            if let Some(onetime_private) = wallet.recover_output_spend_key(
+                &utxo.output,
+                subaddress_index,
+                utxo.id.output_index,
+            ) {
                 let key_image = bth_crypto_ring_signature::KeyImage::from(&onetime_private);
                 let key_image_bytes = key_image.as_bytes();
 
@@ -3558,9 +3560,11 @@ async fn handle_faucet_request(
         // Unified hybrid scan path (issue #970): decapsulate + view-key check.
         if let Some(subaddress_index) = wallet.scan_output(&utxo.output, utxo.id.output_index) {
             // Recover the one-time private key
-            if let Some(onetime_private) =
-                wallet.recover_output_spend_key(&utxo.output, subaddress_index, utxo.id.output_index)
-            {
+            if let Some(onetime_private) = wallet.recover_output_spend_key(
+                &utxo.output,
+                subaddress_index,
+                utxo.id.output_index,
+            ) {
                 // Compute the key image
                 let key_image = bth_crypto_ring_signature::KeyImage::from(&onetime_private);
                 let key_image_bytes = key_image.as_bytes();

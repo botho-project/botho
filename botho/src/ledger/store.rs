@@ -1525,14 +1525,15 @@ impl Ledger {
 
     /// Scan all UTXOs and return candidate outputs for the given account key.
     ///
-    /// This is a fast pre-filter: it returns every UTXO whose classical view-key
-    /// stealth check matches, plus every hybrid UTXO (one carrying an ML-KEM
-    /// ciphertext). Hybrid outputs cannot be confirmed with the view key alone —
-    /// ownership additionally requires ML-KEM decapsulation with the wallet's
-    /// KEM secret (issue #970) — so they are returned as candidates for the
-    /// caller to verify via [`crate::wallet::Wallet::scan_output`]. Over-
-    /// including hybrid candidates here (rather than silently dropping them) is
-    /// what keeps the live scan path from missing hybrid funds; every caller
+    /// This is a fast pre-filter: it returns every UTXO whose classical
+    /// view-key stealth check matches, plus every hybrid UTXO (one carrying
+    /// an ML-KEM ciphertext). Hybrid outputs cannot be confirmed with the
+    /// view key alone — ownership additionally requires ML-KEM
+    /// decapsulation with the wallet's KEM secret (issue #970) — so they
+    /// are returned as candidates for the caller to verify via
+    /// [`crate::wallet::Wallet::scan_output`]. Over- including hybrid
+    /// candidates here (rather than silently dropping them) is what keeps
+    /// the live scan path from missing hybrid funds; every caller
     /// re-verifies ownership before use.
     pub fn scan_utxos_for_account(
         &self,

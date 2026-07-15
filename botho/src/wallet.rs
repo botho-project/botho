@@ -542,14 +542,14 @@ impl Wallet {
             // output's position within its creating transaction into the
             // one-time key, so scan and recover with `utxo.id.output_index`.
             let output_index = utxo.id.output_index;
-            let subaddress_index = self
-                .scan_output(&utxo.output, output_index)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "UTXO does not belong to this wallet: {}",
-                        hex::encode(&utxo.id.tx_hash[0..8])
-                    )
-                })?;
+            let subaddress_index =
+                self.scan_output(&utxo.output, output_index)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "UTXO does not belong to this wallet: {}",
+                            hex::encode(&utxo.id.tx_hash[0..8])
+                        )
+                    })?;
 
             let onetime_private = self
                 .recover_output_spend_key(&utxo.output, subaddress_index, output_index)
