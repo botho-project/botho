@@ -13,7 +13,7 @@ use tracing::{debug, warn};
 use zeroize::Zeroizing;
 
 #[cfg(feature = "pq")]
-use bth_account_keys::{QuantumSafeAccountKey, QuantumSafePublicAddress};
+use bth_account_keys::QuantumSafeAccountKey;
 #[cfg(feature = "pq")]
 use bth_crypto_pq::{derive_pq_keys_from_seed, BIP39_SEED_SIZE};
 
@@ -331,15 +331,13 @@ impl Wallet {
     }
 
     /// Get the quantum-safe public address for receiving funds
+    ///
+    /// Returns the unified [`PublicAddress`] (address format v2, ADR 0008),
+    /// carrying both classical Ristretto keys and the post-quantum ML-KEM-768
+    /// / ML-DSA-65 public keys.
     #[cfg(feature = "pq")]
-    pub fn quantum_safe_address(&self) -> QuantumSafePublicAddress {
+    pub fn quantum_safe_address(&self) -> PublicAddress {
         self.pq_account_key.default_subaddress()
-    }
-
-    /// Format the quantum-safe public address as a string for display
-    #[cfg(feature = "pq")]
-    pub fn quantum_safe_address_string(&self) -> String {
-        self.quantum_safe_address().to_address_string()
     }
 
     /// Get the quantum-safe account key
