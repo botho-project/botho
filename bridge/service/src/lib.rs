@@ -34,6 +34,8 @@ mod bth_scan;
 mod chaos_tests;
 mod db;
 #[cfg(test)]
+mod defi_round_trip_tests;
+#[cfg(test)]
 mod e2e_full_loop_tests;
 mod engine;
 mod federation;

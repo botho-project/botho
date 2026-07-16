@@ -26,6 +26,7 @@ funded Safes + Sepolia ETH land (#866/#868) — the
 |---|---|---|---|
 | 0 | Ethereum leg, real Rust pipeline, local chain | `scripts/bridge-e2e-local.sh` | nightly CI + on demand |
 | 0.5 | Ethereum leg, real Rust pipeline, **Sepolia fork** (no secrets/funds) | `scripts/bridge-e2e-fork.sh` | on-demand CI (`workflow_dispatch`) |
+| 0.75 | **Full DeFi round trip** (mint→wrap→fund→pool→swap→repatriate) through the real engine + real Uniswap v3, **Sepolia fork** + local Botho node (no secrets/funds) | `scripts/bridge-e2e-defi-fork.sh` | on-demand CI (`workflow_dispatch`) |
 | 1.75 | Orchestrated full loop through the real engine, local Botho + Hardhat nodes | `scripts/bridge-e2e-full-loop.sh` | nightly CI + on demand |
 | 1 | wBTH contract on Sepolia (mint through the real Safe) | this runbook, steps 1–5 | before any bridge deploy |
 | 2 | Full BTH testnet round trip (live Sepolia) | this runbook, all steps | blocked on #866/#868 |
@@ -84,6 +85,95 @@ set `BRIDGE_FORK_EXPECTED_CHAIN_ID=11155111`, leave `BRIDGE_FORK_FUND_ACCOUNTS`
 **unset** (there is no `setBalance` on a real chain), and supply a genuinely
 funded relayer/owner key in place of the dev keys. No test code changes —
 #866 is a config swap, not a rewrite.
+
+## Layer 0.75: full DeFi round trip (Sepolia fork, #1005)
+
+**The mainnet liquidity-launch rehearsal.** This is the headline
+demonstration AND the exact sequence the team runs at mainnet to bootstrap
+wBTH liquidity on a DEX — first against a Sepolia fork (here, zero creds),
+then live testnet, then mainnet, by swapping the RPC endpoint and a funded
+key (see the [flip table](#fork--testnet--mainnet-flip-the-launch-runbook)).
+
+It joins two already-landed pieces into ONE continuous journey of a coin,
+driven end to end through the REAL bridge engine
+(`OrderProcessor::process_pending_orders`) and the REAL Uniswap v3 periphery
+inherited from forked Sepolia state:
+
+```bash
+./scripts/bridge-e2e-defi-fork.sh https://ethereum-sepolia-rpc.publicnode.com
+# or:  SEPOLIA_RPC_URL=... ./scripts/bridge-e2e-defi-fork.sh
+```
+
+The driver compiles the contracts, starts `anvil --fork-url <rpc>` (chain id
+11155111) and a `botho-testnet` node, mines a reserve warmup, then runs the
+`#[ignore]`d test `bridge/service/src/defi_round_trip_tests.rs`, which walks
+the six steps:
+
+1. **Mint BTH** on the local Botho node (a funded factor-1 reserve).
+2. **Wrap → wBTH** — the engine drives the mint order to `Completed` via
+   t-of-n EIP-712 federation attestation → `Safe.execTransaction(bridgeMint)`
+   (reusing the Layer 1.75 wrap leg). The token's ONLY `MINTER` is the Safe,
+   so **every wBTH in the demo is a wrapped coin**.
+3. **Fund gas** on the fork via `*_setBalance` and wrap ETH into WETH (the
+   faucet + WETH stand-ins — no real funds).
+4. **Seed the pool** — create the wBTH/WETH Uniswap v3 pool and add two-sided
+   liquidity, the wBTH side drawn from the wrap (reusing the #1004 harness
+   helpers `create_pool_and_add_liquidity`).
+5. **Purchase** — swap WETH → wBTH against the seeded pool (the market buys
+   wBTH; `swap_weth_for_wbth`).
+6. **Repatriate** — `bridgeBurn` exactly the swap proceeds and let the engine
+   drive the burn order to `Released` via t-of-n Ed25519 attestation →
+   `BthReleaser` reserve spend to a fresh stealth output the user scans back
+   (reusing the Layer 1.75 unwrap leg).
+
+So a coin genuinely travels **Botho BTH → wBTH → into a DEX pool → bought via
+a swap → back to native BTH.** The test enforces as hard failures:
+
+1. **Peg on wrap** — `wbth.balanceOf(user) == totalSupply() == BTH locked`
+   (ADR 0003 factor-1, exact); the reconciler reports `drift == 0` after the
+   mint.
+2. **Pool + swap** — `factory.getPool(...)` is non-zero, the position has
+   `liquidity > 0`, and the swap moved WETH → wBTH in the right direction.
+3. **Provenance of the repatriated coin** — the burn amount **equals the swap
+   output**, and the released BTH equals that amount (net of fees, zero here),
+   paid to a fresh one-time stealth output (ADR 0004) the user's OWN view key
+   scans back, on a tx unlinkable to the EVM burn.
+4. **Proof-of-reserves across the whole loop** — `drift == 0` at the start
+   (`0/0`), after the mint (`WRAP/WRAP`), and after the partial repatriation
+   (`WRAP−swapOut / WRAP−swapOut`): only the backing for the repatriated coins
+   is unlocked; the rest stays locked behind the wBTH still circulating in the
+   pool.
+
+The test **self-skips** (green — never a false pass) unless BOTH a Sepolia
+fork is reachable (the Uniswap periphery only exists on a fork/live chain)
+AND the BTH reserve/user wallet key material is provided (32-byte hex files
+via the env vars in the script header). Without the reserve keys the BTH legs
+skip, exactly like Layers 1.5/1.75 — pending the reserve key provisioning
+(#999).
+
+CI wiring: the `defi-round-trip` job in `.github/workflows/bridge-e2e.yml`
+runs this on `workflow_dispatch` only (kept off the nightly schedule for the
+same public-RPC rate-limit reason as Layer 0.5), reads the `SEPOLIA_RPC_URL`
+repo secret, and skips cleanly when it is absent.
+
+### Fork → testnet → mainnet flip (the launch runbook)
+
+The SAME test + driver seed a live pool by swapping endpoints only — no
+test-logic change. This is the literal mainnet liquidity-bootstrap procedure:
+
+| Setting | Fork (Layer 0.75, now) | Live testnet (Phase B) | Mainnet launch |
+|---|---|---|---|
+| `BRIDGE_FORK_RPC_URL` | local `anvil --fork-url <sepolia>` | live Sepolia RPC | mainnet RPC |
+| `BRIDGE_FORK_EXPECTED_CHAIN_ID` | `11155111` | `11155111` | `1` |
+| `BRIDGE_UNISWAP_*` / `BRIDGE_WETH_ADDRESS` | Sepolia defaults | Sepolia defaults | mainnet addresses |
+| `BRIDGE_WBTH_ADDRESS` | throwaway deploy | #866-deployed token | mainnet token |
+| `BRIDGE_FORK_FUND_ACCOUNTS` | `1` (`*_setBalance`) | **unset** (real gas) | **unset** (real gas) |
+| LP / relayer key | dev key | funded testnet key | funded mainnet key |
+| BTH reserve | local `botho-testnet` reserve | live testnet reserve | mainnet reserve |
+
+Phase B (#866/#868/#869) supplies the live deploy, funded keys, and a
+persistent pool; the Solana venue is #867/#870. This layer is the fork
+rehearsal + the harness those reuse verbatim.
 
 ## Layer 1.5: BTH node leg (live)
 
