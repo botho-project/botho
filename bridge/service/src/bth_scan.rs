@@ -174,16 +174,24 @@ pub fn scan_deposit_output(
 /// `tbotho://`) or a bare base58 body, matching the node's
 /// `parse_classical_address` layout (64 bytes: view || spend).
 pub fn decode_recipient_address(address: &str) -> Result<PublicAddress, String> {
-    // Strip any scheme prefix up to the last '/'; a bare base58 string is
-    // used as-is. The bridge is network-agnostic here (it validates the byte
-    // layout, not the human-readable prefix).
+    // Prefer the canonical address codec: it parses both v1 (classical) and v2
+    // (hybrid ML-KEM/ML-DSA) addresses and returns a `PublicAddress` carrying
+    // the recipient's post-quantum public keys. On the protocol-6.0.0 chain the
+    // release recipient is the user's published v2 address (`tbotho://2/…`,
+    // ~3.2 KB), which the legacy 64-byte path below cannot represent (#972/#1025).
+    if let Ok((addr, _network)) = bth_address_codec::decode_address(address) {
+        return Ok(addr);
+    }
+
+    // Legacy fallback: a bare base58 `view || spend` (64 bytes), no PQ keys.
+    // Kept so classical callers/tests that pass a raw address still work.
     let body = address.rsplit('/').next().unwrap_or(address);
     let bytes = bs58::decode(body)
         .into_vec()
         .map_err(|e| format!("recipient address: invalid base58: {e}"))?;
     if bytes.len() != 64 {
         return Err(format!(
-            "recipient address: expected 64 bytes, got {}",
+            "recipient address: not a v1/v2 address and not a 64-byte view||spend (got {} bytes)",
             bytes.len()
         ));
     }
@@ -265,13 +273,47 @@ pub fn build_release_tx<R: RngCore + CryptoRng>(
     // drift from the node's enforcement.
     let import_cluster_id = bth_cluster_tax::import_cluster_id_for_height(created_at_height);
     let import_tags = ClusterTagVector::single(ClusterId(import_cluster_id.0));
-    let recipient_output = TxOutput::new_with_cluster_tags(amount, recipient, None, import_tags);
+    // On the protocol-6.0.0 chain the recipient publishes an ML-KEM key, so the
+    // release pays a HYBRID stealth output (ADR 0004): the ciphertext is
+    // encapsulated to the recipient's KEM key and folded into the one-time key,
+    // and the recipient scans it back with its ML-KEM secret (the test's
+    // assertion 2). A classical (v1) recipient falls back to a pure-DH stealth
+    // output. The recipient is output index 0, bound into the hybrid derivation.
+    let recipient_output = if recipient.has_pq_keys() {
+        TxOutput::new_hybrid_to_address(amount, recipient, 0, None, import_tags)
+            .map_err(|e| format!("recipient hybrid output: {e:?}"))?
+    } else {
+        TxOutput::new_with_cluster_tags(amount, recipient, None, import_tags)
+    };
     let mut outputs = vec![recipient_output];
 
     // Change back to the reserve's default subaddress (ADR 0003). Sub-dust
     // change is folded into the fee (never an unspendable output).
+    //
+    // On the protocol-6.0.0 chain EVERY value output must carry an ML-KEM
+    // ciphertext (`KEM_CIPHERTEXT_ENFORCED`, #973) or the node rejects the tx
+    // at intrinsic validation — so the change is a HYBRID self-send encapsulated
+    // to the reserve's OWN ML-KEM key (the reserve's `AccountKey` does not carry
+    // its PQ public key inline, so we pass the keypair's public key directly to
+    // `new_hybrid`). The reserve scans this change back with its ML-KEM secret
+    // for a later release. Change is output index 1, bound into the derivation.
+    // A classical-only reserve (pre-6.0.0 / no PQ seed) falls back to a pure-DH
+    // output (#972/#1025).
+    let change_output = |amount: u64| -> TxOutput {
+        match kem_keypair {
+            Some(kp) => TxOutput::new_hybrid(
+                amount,
+                &account.default_subaddress(),
+                kp.public_key(),
+                1,
+                None,
+                ClusterTagVector::default(),
+            ),
+            None => TxOutput::new(amount, &account.default_subaddress()),
+        }
+    };
     let actual_fee = if change >= DUST_THRESHOLD {
-        outputs.push(TxOutput::new(change, &account.default_subaddress()));
+        outputs.push(change_output(change));
         fee
     } else {
         fee + change

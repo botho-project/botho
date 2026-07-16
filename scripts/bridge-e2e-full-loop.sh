@@ -118,7 +118,14 @@ cd "$REPO_ROOT"
 # minting/externalizing — independent of the #1000 SYNC-gate fix. A 2-node
 # cluster satisfies both the participation gate (1 peer each) and the 2-of-2
 # SCP quorum, so it actually produces blocks. --clean guarantees a fresh chain.
-cargo run --release --bin botho-testnet -- start --nodes 2 --clean --wait-consensus
+#
+# NOT --wait-consensus: on a fresh chain the FIRST block takes longer than the
+# harness's 30s consensus-wait timeout (RandomX difficulty calibrates upward
+# over the first few blocks), so --wait-consensus would abort the run before a
+# single block is mined. The height-poll warmup below is the robust wait — it
+# tolerates the slow first block and blocks until the chain is actually deep
+# enough to form decoy rings.
+cargo run --release --bin botho-testnet -- start --nodes 2 --clean
 BOTHO_STARTED=1
 
 # Warm the chain up so the reserve funding + release can each form a CLSAG ring

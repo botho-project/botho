@@ -354,8 +354,16 @@ impl BthReleaser {
                     // spent (it would launder cluster provenance, ADR 0003);
                     // it is neither an input nor a decoy.
                     Some(_) => {}
-                    // Everyone else's outputs are decoy candidates.
-                    None => decoy_pool.push(out.clone()),
+                    // Everyone else's outputs are decoy candidates — but only if
+                    // they are plausible spendable UTXOs. `chain_getOutputs`
+                    // replays every historical output, including the genesis
+                    // placeholder (height 0, amount 0, all-zero target key) that
+                    // is NOT in the UTXO set; using it as a ring member makes the
+                    // node reject the release block ("ring member target_key not
+                    // in UTXO set", C3). Skip zero-amount / all-zero-key outputs
+                    // so every decoy resolves to a real UTXO (#1025).
+                    None if is_spendable_decoy(out) => decoy_pool.push(out.clone()),
+                    None => {}
                 }
             }
         }
@@ -382,6 +390,16 @@ impl BthReleaser {
 
         Ok((spendable, decoy_pool))
     }
+}
+
+/// Whether an output is a plausible spendable UTXO to use as a CLSAG ring
+/// decoy. `chain_getOutputs` replays every historical output, including the
+/// genesis coinbase placeholder (height 0, amount 0, all-zero target key),
+/// which is not minted into the UTXO set. A ring member whose target key is not
+/// in the UTXO set makes the node reject the whole release block (C3 ring
+/// resolution), so such outputs must never be chosen as decoys (#1025).
+fn is_spendable_decoy(out: &crate::bth_rpc::RpcOutput) -> bool {
+    out.amount > 0 && out.target_key.trim_matches('0').len() != 0
 }
 
 /// Derive the key image of a reserve-owned output (node-identical), for the
