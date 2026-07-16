@@ -148,7 +148,7 @@ const DEV_KEYS: [&str; 4] = [
     "7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6",
 ];
 
-fn rpc_url() -> String {
+pub(crate) fn rpc_url() -> String {
     std::env::var("BRIDGE_FORK_RPC_URL").unwrap_or_else(|_| "http://127.0.0.1:8545".to_string())
 }
 
@@ -157,7 +157,7 @@ fn rpc_url() -> String {
 /// Sepolia fork/live). When unset the test accepts whatever the node reports,
 /// so the default local run is not pinned and a fork/live chain needs no code
 /// change — see #992.
-fn expected_chain_id() -> Option<u64> {
+pub(crate) fn expected_chain_id() -> Option<u64> {
     std::env::var("BRIDGE_FORK_EXPECTED_CHAIN_ID")
         .ok()
         .map(|s| {
@@ -181,7 +181,7 @@ fn fork_fund_requested() -> bool {
     )
 }
 
-fn dev_signer(index: usize) -> PrivateKeySigner {
+pub(crate) fn dev_signer(index: usize) -> PrivateKeySigner {
     DEV_KEYS[index].parse().expect("valid dev key")
 }
 
@@ -206,7 +206,7 @@ async fn set_balance(provider: &DynProvider, addr: Address, value: U256) {
 /// (typically zero), so top them up before they must pay gas. Gated on
 /// `BRIDGE_FORK_FUND_ACCOUNTS`; a no-op otherwise (the local 31337 accounts
 /// are already funded). Mints test ETH only — no real funded account (#992).
-async fn fund_dev_accounts_if_requested(provider: &DynProvider) {
+pub(crate) async fn fund_dev_accounts_if_requested(provider: &DynProvider) {
     if !fork_fund_requested() {
         return;
     }
@@ -218,7 +218,7 @@ async fn fund_dev_accounts_if_requested(provider: &DynProvider) {
 }
 
 /// Read a Hardhat artifact's creation bytecode.
-fn artifact_bytecode(rel_path: &str) -> Vec<u8> {
+pub(crate) fn artifact_bytecode(rel_path: &str) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../contracts/ethereum/artifacts")
         .join(rel_path);
@@ -237,7 +237,11 @@ fn artifact_bytecode(rel_path: &str) -> Vec<u8> {
 }
 
 /// Deploy a contract (creation bytecode + ABI-encoded constructor args).
-async fn deploy(provider: &DynProvider, bytecode: Vec<u8>, ctor_args: Vec<u8>) -> Address {
+pub(crate) async fn deploy(
+    provider: &DynProvider,
+    bytecode: Vec<u8>,
+    ctor_args: Vec<u8>,
+) -> Address {
     let mut code = bytecode;
     code.extend_from_slice(&ctor_args);
     let tx = TransactionRequest::default().with_deploy_code(code);
@@ -254,7 +258,7 @@ async fn deploy(provider: &DynProvider, bytecode: Vec<u8>, ctor_args: Vec<u8>) -
         .expect("deploy receipt has address")
 }
 
-async fn call_u256(provider: &DynProvider, to: Address, input: Vec<u8>) -> U256 {
+pub(crate) async fn call_u256(provider: &DynProvider, to: Address, input: Vec<u8>) -> U256 {
     let ret = provider
         .call(TransactionRequest::default().with_to(to).with_input(input))
         .await
