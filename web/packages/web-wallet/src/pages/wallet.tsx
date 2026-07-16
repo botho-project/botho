@@ -779,6 +779,13 @@ export function WalletPage() {
             <span className="font-display text-base font-semibold sm:hidden">{t('header.walletNameShort')}</span>
           </Link>
           <div className="flex items-center gap-3">
+            {/* wBTH discovery entry point on the wallet host (#1030). */}
+            <Link
+              to="/trade"
+              className="text-sm text-ghost hover:text-light transition-colors whitespace-nowrap hidden sm:inline"
+            >
+              {t('bridge:nav.trade')}
+            </Link>
             <LocaleSwitcher className="whitespace-nowrap" />
             <NetworkSelector />
           </div>

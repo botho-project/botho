@@ -17,6 +17,7 @@ import { ContactsPage } from './pages/contacts'
 import { DocsPage } from './pages/docs'
 import { ExplorerPage } from './pages/explorer'
 import { NetworkPage } from './pages/network'
+import { TradePage } from './pages/trade'
 import { OperatorPage } from './pages/operator'
 import { NodePage, NodeSuccessPage, NodeStatusPage } from './pages/node'
 import { parseLocalePath } from './lib/locale-path'
@@ -71,6 +72,8 @@ function AppRoutes() {
       <Route path="/contacts" element={<ContactsPage />} />
       <Route path="/explorer" element={<ExplorerPage />} />
       <Route path="/network" element={<NetworkPage />} />
+      {/* wBTH discovery / bridge scaffold — Tier 0 (#1030, epic #1029). */}
+      <Route path="/trade" element={<TradePage />} />
       {/* Operator dashboard — public read surface (#706, #695 P4.1). */}
       <Route path="/operator" element={<OperatorPage />} />
       <Route path="/explorer/tx/:hash" element={<ExplorerPage />} />

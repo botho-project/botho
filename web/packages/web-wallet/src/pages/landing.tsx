@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Button, Logo } from '@botho/ui'
-import {Activity, Shield, Scale, Atom, Zap, ArrowRight, Github, Menu, X, FileText, Blocks, Server} from 'lucide-react'
+import {Activity, Shield, Scale, Atom, Zap, ArrowRight, ArrowLeftRight, Github, Menu, X, FileText, Blocks, Server} from 'lucide-react'
 import { LocaleSwitcher } from '../components/LocaleSwitcher'
 
 // Feature/stat metadata is locale-agnostic (icons + translation keys). The
@@ -48,6 +48,10 @@ export function LandingPage() {
             <Link to="/network" className="text-ghost hover:text-light transition-colors flex items-center gap-2 whitespace-nowrap">
               <Activity size={18} />
               {t('nav.network')}
+            </Link>
+            <Link to="/trade" className="text-ghost hover:text-light transition-colors flex items-center gap-2 whitespace-nowrap">
+              <ArrowLeftRight size={18} />
+              {t('nav.trade')}
             </Link>
             <Link to="/docs" className="text-ghost hover:text-light transition-colors whitespace-nowrap">
               {t('nav.docs')}
@@ -101,6 +105,14 @@ export function LandingPage() {
               >
                 <Blocks size={18} />
                 {t('nav.blockExplorer')}
+              </Link>
+              <Link
+                to="/trade"
+                onClick={() => setMobileMenuOpen(false)}
+                className="flex items-center gap-2 px-4 py-3 rounded-lg text-ghost hover:text-light hover:bg-steel/50 transition-colors"
+              >
+                <ArrowLeftRight size={18} />
+                {t('nav.trade')}
               </Link>
               <Link
                 to="/docs"

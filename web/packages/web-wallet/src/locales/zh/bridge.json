@@ -1,0 +1,74 @@
+{
+  "meta": {
+    "titleLong": "Trade wBTH",
+    "titleShort": "Trade",
+    "testnetBadge": "Testnet"
+  },
+  "nav": {
+    "trade": "Trade"
+  },
+  "hero": {
+    "title": "Trade wrapped BTH",
+    "subtitle": "wBTH is Botho wrapped 1:1 onto other chains so it can trade on their DEXs. This page lists where wBTH lives today and explains how to bridge BTH across.",
+    "testnetNotice": "Everything on this page is testnet. These tokens, pools, and addresses exist only on test networks and are not valid on mainnet."
+  },
+  "peg": {
+    "heading": "Peg health",
+    "subheading": "Live proof-of-reserves: BTH locked in the bridge reserve versus wBTH minted across chains. Green means the peg is intact."
+  },
+  "venues": {
+    "heading": "Where to trade",
+    "subheading": "Seeded wBTH pools across chains. Links open the venue in a new tab — Botho never brokers the swap.",
+    "tradeOn": "Trade on {{venue}}",
+    "viewPool": "View pool",
+    "comingSoon": "Coming soon",
+    "comingSoonNote": "HIP-1 spot market is not live yet (pending #877).",
+    "testnet": "Testnet",
+    "tokenAddress": "Token",
+    "poolAddress": "Pool",
+    "empty": "No venues are configured for this network yet."
+  },
+  "export": {
+    "heading": "How to bridge BTH → wBTH",
+    "intro": "Exporting BTH locks it in the bridge reserve and mints an equal amount of wBTH on the destination chain. For Tier 0 this is a guided, manual flow — the integrated in-wallet version is coming next.",
+    "steps": {
+      "factor1": {
+        "title": "1. Hold factor-1 BTH",
+        "body": "Only factor-1 (zero-demurrage) BTH can be exported, so wrapped supply can never drift from the locked reserve."
+      },
+      "lock": {
+        "title": "2. Lock in the reserve",
+        "body": "Send the BTH to the bridge reserve. It stays locked 1:1 against every wBTH that gets minted."
+      },
+      "mint": {
+        "title": "3. Mint wBTH",
+        "body": "The bridge attests your deposit exactly once and mints an equal amount of wBTH to your address on the destination chain."
+      },
+      "trade": {
+        "title": "4. Trade wBTH",
+        "body": "Swap your wBTH on any venue above — or bring it back later when the Unwrap flow ships."
+      }
+    },
+    "guarantees": {
+      "peg": {
+        "title": "1:1 peg",
+        "body": "Every wBTH is backed by exactly one BTH locked in the reserve — no fractional backing."
+      },
+      "exactlyOnce": {
+        "title": "Exactly-once",
+        "body": "Each deposit mints wBTH once and only once; replays are rejected at multiple layers."
+      },
+      "factorOne": {
+        "title": "Factor-1 only",
+        "body": "Exported BTH must be zero-demurrage, keeping wrapped supply exactly aligned with the reserve."
+      }
+    },
+    "cta": {
+      "title": "Integrated export is coming",
+      "body": "A one-click, in-wallet BTH → wBTH export flow will slot in right here in a later tier. For now, follow the guided steps above.",
+      "button": "Export BTH",
+      "disabledTitle": "Integrated export ships in a later tier.",
+      "badge": "Coming soon"
+    }
+  }
+}

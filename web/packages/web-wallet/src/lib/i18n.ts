@@ -44,6 +44,8 @@ import enDocs from '../locales/en/docs.json'
 import esDocs from '../locales/es/docs.json'
 import enNode from '../locales/en/node.json'
 import esNode from '../locales/es/node.json'
+import enBridge from '../locales/en/bridge.json'
+import esBridge from '../locales/es/bridge.json'
 import zhLanding from '../locales/zh/landing.json'
 import zhWallet from '../locales/zh/wallet.json'
 import zhPay from '../locales/zh/pay.json'
@@ -51,6 +53,7 @@ import zhClaim from '../locales/zh/claim.json'
 import zhContacts from '../locales/zh/contacts.json'
 import zhDocs from '../locales/zh/docs.json'
 import zhNode from '../locales/zh/node.json'
+import zhBridge from '../locales/zh/bridge.json'
 
 /**
  * Locale constants live in the dependency-free `./locales` leaf module so build
@@ -99,6 +102,7 @@ const resources = {
     contacts: enContacts,
     docs: enDocs,
     node: enNode,
+    bridge: enBridge,
   },
   es: {
     landing: esLanding,
@@ -108,6 +112,7 @@ const resources = {
     contacts: esContacts,
     docs: esDocs,
     node: esNode,
+    bridge: esBridge,
   },
   zh: {
     landing: zhLanding,
@@ -117,6 +122,7 @@ const resources = {
     contacts: zhContacts,
     docs: zhDocs,
     node: zhNode,
+    bridge: zhBridge,
   },
 } as const
 
@@ -128,7 +134,7 @@ if (!i18n.isInitialized) {
     fallbackLng: DEFAULT_LOCALE,
     supportedLngs: SUPPORTED_LOCALES as unknown as string[],
     defaultNS: 'landing',
-    ns: ['landing', 'wallet', 'pay', 'claim', 'contacts', 'docs', 'node'],
+    ns: ['landing', 'wallet', 'pay', 'claim', 'contacts', 'docs', 'node', 'bridge'],
     interpolation: {
       // React already escapes interpolated values.
       escapeValue: false,
