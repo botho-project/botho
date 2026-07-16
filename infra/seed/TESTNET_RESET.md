@@ -220,11 +220,18 @@ producing blocks after a reset:
 6. **Verify recovery**: `chainHeight` climbs, and **all nodes agree on one
    `tipHash`** at the same height (query each host's local RPC per §7).
 
-> The 6.0.0 reset also surfaced a *separate*, code-level wedge suspicion under
-> investigation in #998 (fresh genesis externalizes a few blocks then stalls
-> even solo/firewalled). If steps 1-6 do not recover a fresh-genesis chain,
-> capture `node_getStatus` + minter logs and escalate on #998 rather than
-> re-running the reset blindly.
+> **What the 6.0.0 reset taught us (#998, resolved).** The wedge that looked
+> like a code bug was **entirely operational**: (a) the stale old-protocol
+> zombie nodes above held the propose-gate closed, and (b) an incorrect
+> `[network.quorum] members=[]` set during debugging is a *degenerate* quorum
+> that can never externalize — which manufactured the misleading "stalls even
+> solo" symptom. The 6.0.0 code is **not** at fault: an offline investigation
+> reproduced a fresh 6.0.0 genesis minting 12+ successive blocks with no wedge
+> (regression tests in #1001). So if steps 1-6 don't recover, the cause is
+> almost certainly still operational — re-check for a degenerate/`members=[]`
+> quorum and any un-firewalled old-protocol peer before suspecting the code.
+> The one genuine code hardening from the incident is #1000 (a
+> consensus-incompatible peer's height gossip should not stall the minter).
 
 ## 7. Verifying a node via LOCAL RPC (not public HTTPS)
 
