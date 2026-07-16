@@ -59,8 +59,11 @@ jobs:
   # correct release to a fresh stealth output (ADR 0004), the
   # proof-of-reserves invariant across the loop (ADR 0003), and federation
   # authorization (t-of-n EIP-712 mint + t-of-n Ed25519 release; a single
-  # signer never moves value). The BTH leg self-skips (green) until the
-  # reserve wallet key material is provisioned — see
+  # signer never moves value). The driver PROVISIONS the reserve/user wallet
+  # key material at runtime (#999) via `botho-testnet gen-bridge-keys` — the
+  # reserve is the node's own pre-funded (factor-1-accruing) mining wallet and
+  # NO secret is committed. The BTH leg runs the moment the harness can boot a
+  # healthy single-node 6.0.0 testnet (the #998/#1000 wedge prerequisite); see
   # scripts/bridge-e2e-full-loop.sh and docs/bridge/testnet-e2e-runbook.md.
   full-loop:
     name: Full loop (local Botho + hardhat, real engine)

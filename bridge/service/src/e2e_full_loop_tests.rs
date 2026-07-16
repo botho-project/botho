@@ -53,12 +53,20 @@
 //! BRIDGE_BTH_RPC_URL=http://127.0.0.1:27201 \
 //! BRIDGE_BTH_RESERVE_VIEW_KEY=/path/reserve.view.hex \
 //! BRIDGE_BTH_RESERVE_SPEND_KEY=/path/reserve.spend.hex \
+//! BRIDGE_BTH_RESERVE_PQ_SEED=/path/reserve.pq_seed.hex \
 //! BRIDGE_BTH_RESERVE_ADDRESS=<reserve bth address> \
 //! BRIDGE_BTH_USER_ADDRESS=<user bth address> \
 //! BRIDGE_BTH_USER_VIEW_KEY=/path/user.view.hex \
 //! BRIDGE_BTH_USER_SPEND_KEY=/path/user.spend.hex \
+//! BRIDGE_BTH_USER_PQ_SEED=/path/user.pq_seed.hex \
 //!   cargo test -p bth-bridge-service -- --ignored full_loop_
 //! ```
+//!
+//! The `*_PQ_SEED` files are the 64-byte BIP39 seeds the reserve/user derive
+//! their ML-KEM-768 secrets from (issue #972); on the protocol-6.0.0 hybrid
+//! chain they are required for the wallet to detect outputs paid to it. The
+//! hermetic driver provisions all of the above at runtime via
+//! `botho-testnet gen-bridge-keys` (no committed secret).
 //!
 //! The Ethereum half swaps `local (31337) → Sepolia-fork → live Sepolia`
 //! purely by pointing `BRIDGE_FORK_RPC_URL` at a fork/live RPC (+ a funded
@@ -176,10 +184,19 @@ struct BthEnv {
     rpc_url: String,
     reserve_view_key: String,
     reserve_spend_key: String,
+    /// Reserve ML-KEM/ML-DSA BIP39 seed file (`bth.pq_seed_file`, issue #972).
+    /// Required on the protocol-6.0.0 hybrid chain: every value output carries
+    /// an ML-KEM ciphertext, so the reserve can only detect (and therefore
+    /// spend) its own outputs when it holds the matching ML-KEM secret. `None`
+    /// leaves a classical-only reserve (hybrid deposits warned, not detected).
+    reserve_pq_seed: Option<String>,
     reserve_address: String,
     user_address: String,
     user_view_key: String,
     user_spend_key: String,
+    /// User ML-KEM/ML-DSA BIP39 seed file, for scanning back the released
+    /// hybrid stealth output (assertion 2) on the 6.0.0 chain.
+    user_pq_seed: Option<String>,
     /// Amount to wrap (picocredits). The driver must fund the reserve with at
     /// least this much spendable factor-1 balance. Default 1 BTH.
     amount: u64,
@@ -194,10 +211,14 @@ fn bth_env() -> Option<BthEnv> {
         rpc_url: non_empty("BRIDGE_BTH_RPC_URL")?,
         reserve_view_key: non_empty("BRIDGE_BTH_RESERVE_VIEW_KEY")?,
         reserve_spend_key: non_empty("BRIDGE_BTH_RESERVE_SPEND_KEY")?,
+        // The PQ seeds are optional to preserve the classical-key skip contract,
+        // but required for the loop to detect hybrid outputs on the 6.0.0 chain.
+        reserve_pq_seed: non_empty("BRIDGE_BTH_RESERVE_PQ_SEED"),
         reserve_address: non_empty("BRIDGE_BTH_RESERVE_ADDRESS")?,
         user_address: non_empty("BRIDGE_BTH_USER_ADDRESS")?,
         user_view_key: non_empty("BRIDGE_BTH_USER_VIEW_KEY")?,
         user_spend_key: non_empty("BRIDGE_BTH_USER_SPEND_KEY")?,
+        user_pq_seed: non_empty("BRIDGE_BTH_USER_PQ_SEED"),
         amount: non_empty("BRIDGE_BTH_AMOUNT")
             .and_then(|s| s.parse().ok())
             .unwrap_or(1_000_000_000_000),
@@ -319,7 +340,10 @@ async fn full_loop_wrap_mint_burn_release() {
         ws_url: String::new(),
         view_key_file: Some(bth.reserve_view_key.clone()),
         spend_key_file: Some(bth.reserve_spend_key.clone()),
-        pq_seed_file: None,
+        // On protocol 6.0.0 every value output is hybrid, so the reserve needs
+        // its ML-KEM secret to detect (and spend) its own factor-1 outputs
+        // (issue #972). The driver provisions this from the node's own seed.
+        pq_seed_file: bth.reserve_pq_seed.clone(),
         confirmations_required: 0,
         reserve_address: Some(bth.reserve_address.clone()),
         release_signers: vec![
@@ -566,7 +590,9 @@ async fn full_loop_wrap_mint_burn_release() {
         ws_url: String::new(),
         view_key_file: Some(bth.user_view_key.clone()),
         spend_key_file: Some(bth.user_spend_key.clone()),
-        pq_seed_file: None,
+        // The user scans back a hybrid stealth output (ADR 0004) on the 6.0.0
+        // chain, so it likewise needs its ML-KEM secret to see the release.
+        pq_seed_file: bth.user_pq_seed.clone(),
         confirmations_required: 0,
         reserve_address: Some(bth.user_address.clone()),
         release_signers: Vec::new(),

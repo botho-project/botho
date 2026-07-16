@@ -243,12 +243,32 @@ four properties as hard failures:
    Ed25519 signature does NOT release (left `BurnConfirmed`); both cross the
    configured 2-of-2 threshold before any value moves.
 
-Provision the BTH reserve/user wallet key material (32-byte hex files) via
-the environment variables documented in the script header. Without them the
-test **self-skips** (green — never a false pass, the same discipline as
-Layer 1.5). The Ethereum half swaps `local → Sepolia-fork → live Sepolia`
-purely by pointing `BRIDGE_FORK_RPC_URL` at a fork/live RPC (+ a funded
-relayer key for live) with no test-logic change (companion #992/#866).
+The BTH reserve/user wallet key material is **provisioned at runtime** by the
+driver (#999): after the node is up it runs `botho-testnet gen-bridge-keys`,
+which exports the node's own deterministic **pre-funded mining wallet** as the
+reserve and mints a fresh random user wallet. Because the reserve *is* the
+miner, it already owns spendable **factor-1** (zero-cluster-weight) outputs
+from lottery emission (`LotteryOutput::to_tx_output(ClusterTagVector::empty())`,
+ADR 0003) — exactly what the CLSAG release spends. Each wallet emits a
+32-byte-hex classical view/spend pair plus a 64-byte-hex ML-KEM/ML-DSA BIP39
+seed (`*_PQ_SEED`, issue #972), which the protocol-6.0.0 hybrid chain requires
+for the wallet to detect outputs paid to it. **No private key is committed**:
+the reserve derives from the harness's in-code disposable node mnemonic and the
+user keys are random at runtime. Bring-your-own-reserve still works — set the
+`BRIDGE_BTH_RESERVE_*` env vars and auto-provisioning is skipped; leave them
+unset and provisioning disabled and the test **self-skips** (green — never a
+false pass, the same discipline as Layer 1.5).
+
+> **Gating prerequisite.** The driver boots a single-node `botho-testnet`
+> (`start --nodes 1`). Until the harness can bring up a *healthy* single-node
+> 6.0.0 testnet that externalizes blocks (the #998/#1000 wedge work — today the
+> harness rejects `--nodes 1` outright), the job cannot reach the provisioning
+> or test steps. The key-provisioning wiring above lands independently and runs
+> the moment that prerequisite is met.
+
+The Ethereum half swaps `local → Sepolia-fork → live Sepolia` purely by
+pointing `BRIDGE_FORK_RPC_URL` at a fork/live RPC (+ a funded relayer key for
+live) with no test-logic change (companion #992/#866).
 
 ## Phase B — account provisioning (#1008)
 
