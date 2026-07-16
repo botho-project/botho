@@ -37,6 +37,12 @@ struct DerivedKeys {
     /// post-quantum output, so the recipient's key is required to encapsulate
     /// the ciphertext and the sender's own key seeds its change (issue #978).
     kem_public_hex: String,
+    /// Hex-encoded 64-byte BIP39 seed. The RECEIVE scan needs this to derive the
+    /// wallet's ML-KEM SECRET (node-identically, via the feature-independent
+    /// `derive_pq_keys_from_seed`) and decapsulate hybrid outputs — proving the
+    /// mobile crate (which builds `botho-wallet` with `pq` OFF) can detect
+    /// hybrid receives without `WalletKeys::public_address()` (issue #988/#984).
+    seed_hex: String,
 }
 
 /// The 64-byte BIP39 seed for a mnemonic (empty passphrase), matching the seed
@@ -71,7 +77,8 @@ fn derive_from_seed(seed: u8) -> DerivedKeys {
     // v2 (post-quantum) and the hybrid send path attaches ML-KEM ciphertexts —
     // exactly what the bridge does. Derived from the seed here because the
     // mobile crate builds `botho-wallet` without its `pq` feature.
-    let pq = bth_crypto_pq::derive_pq_keys_from_seed(&mnemonic_to_seed(&mnemonic));
+    let seed = mnemonic_to_seed(&mnemonic);
+    let pq = bth_crypto_pq::derive_pq_keys_from_seed(&seed);
     let kem_bytes = pq.kem_keypair.public_key().as_bytes().to_vec();
     let dsa_bytes = pq.sig_keypair.public_key().as_bytes().to_vec();
 
@@ -79,6 +86,7 @@ fn derive_from_seed(seed: u8) -> DerivedKeys {
         spend_private_hex: hex::encode(account.spend_private_key().to_bytes()),
         view_private_hex: hex::encode(account.view_private_key().to_bytes()),
         kem_public_hex: hex::encode(&kem_bytes),
+        seed_hex: hex::encode(seed),
         // Outputs are sent to the default subaddress; `belongs_to` returns
         // subaddress index 0 for these. The address carries the derived PQ keys
         // so it is a valid v2 (post-quantum) recipient.
@@ -97,6 +105,28 @@ fn mint_owned_output(amount: u64, recipient: &PublicAddress) -> ChainOutput {
         target_key: hex::encode(out.target_key),
         public_key: hex::encode(out.public_key),
         amount,
+        output_index: 0,
+        kem_ciphertext: None,
+    }
+}
+
+/// Mint a HYBRID (post-quantum) stealth output of `amount` picocredits owned by
+/// `recipient` at `output_index`, shaped as `chain_getOutputs` reports it: with
+/// its ML-KEM-768 ciphertext preserved. This is what a 6.0.0 producer emits and
+/// what the RECEIVE scan must decapsulate to detect (#988).
+fn mint_hybrid_owned_output(
+    amount: u64,
+    recipient: &PublicAddress,
+    output_index: u32,
+) -> ChainOutput {
+    let out = TxOutput::new_hybrid_to_address(amount, recipient, output_index, None, Default::default())
+        .expect("recipient publishes an ML-KEM key (v2 address)");
+    ChainOutput {
+        target_key: hex::encode(out.target_key),
+        public_key: hex::encode(out.public_key),
+        amount,
+        output_index,
+        kem_ciphertext: out.kem_ciphertext.as_ref().map(hex::encode),
     }
 }
 
@@ -148,6 +178,7 @@ fn scan_recovers_owned_outputs_and_ignores_others() {
     let scanned = scan_owned_outputs_inner(&ScanRequest {
         spend_private_key: wallet.spend_private_hex.clone(),
         view_private_key: wallet.view_private_hex.clone(),
+        seed: wallet.seed_hex.clone(),
         outputs: vec![foreign_a, owned_a.clone(), foreign_b, owned_b.clone()],
     })
     .expect("scan should succeed");
@@ -172,6 +203,7 @@ fn key_image_derivation_is_stable_and_unique_per_output() {
     let scanned = scan_owned_outputs_inner(&ScanRequest {
         spend_private_key: wallet.spend_private_hex.clone(),
         view_private_key: wallet.view_private_hex.clone(),
+        seed: wallet.seed_hex.clone(),
         outputs: vec![
             mint_owned_output(5_000_000_000, &wallet.public_address),
             mint_owned_output(3_000_000_000, &wallet.public_address),
@@ -182,6 +214,7 @@ fn key_image_derivation_is_stable_and_unique_per_output() {
     let req = KeyImageRequest {
         spend_private_key: wallet.spend_private_hex.clone(),
         view_private_key: wallet.view_private_hex.clone(),
+        seed: wallet.seed_hex.clone(),
         outputs: scanned,
     };
 
@@ -209,6 +242,7 @@ fn build_and_sign_produces_node_verifiable_tx() {
     let owned = scan_owned_outputs_inner(&ScanRequest {
         spend_private_key: sender.spend_private_hex.clone(),
         view_private_key: sender.view_private_hex.clone(),
+        seed: sender.seed_hex.clone(),
         outputs: vec![mint_owned_output(input_amount, &sender.public_address)],
     })
     .expect("scan input");
@@ -275,6 +309,7 @@ fn build_and_sign_rejects_insufficient_inputs() {
     let owned = scan_owned_outputs_inner(&ScanRequest {
         spend_private_key: sender.spend_private_hex.clone(),
         view_private_key: sender.view_private_hex.clone(),
+        seed: sender.seed_hex.clone(),
         outputs: vec![mint_owned_output(input_amount, &sender.public_address)],
     })
     .expect("scan");
@@ -314,5 +349,77 @@ fn build_and_sign_rejects_insufficient_inputs() {
     assert!(
         result.is_err(),
         "build+sign must reject inputs that cannot cover amount + fee"
+    );
+}
+
+#[test]
+fn scan_detects_hybrid_receive_and_recovers_key_image() {
+    // #988: prove the mobile crate's RECEIVE scan (the same
+    // `bth_wasm_signer::core::scan_owned_outputs_inner` the bridge's
+    // `wallet_ops::sync` calls) detects a 6.0.0 HYBRID output by decapsulating
+    // its ML-KEM ciphertext with the wallet's seed-derived secret — and then
+    // recovers its key image so it is spendable. This is the exact gap that left
+    // mobile wallets unable to see incoming funds / their own change.
+    let wallet = derive_from_seed(1);
+    let foreign = mint_decoy(9_000_000_000);
+
+    // A hybrid payment to us (output index 0) plus a foreign hybrid output.
+    let received = mint_hybrid_owned_output(5_000_000_000, &wallet.public_address, 0);
+    assert!(
+        received.kem_ciphertext.is_some(),
+        "a 6.0.0 output must carry an ML-KEM ciphertext"
+    );
+
+    let scanned = scan_owned_outputs_inner(&ScanRequest {
+        spend_private_key: wallet.spend_private_hex.clone(),
+        view_private_key: wallet.view_private_hex.clone(),
+        seed: wallet.seed_hex.clone(),
+        outputs: vec![foreign, received.clone()],
+    })
+    .expect("scan should succeed");
+
+    assert_eq!(scanned.len(), 1, "only our hybrid output is detected");
+    assert_eq!(scanned[0].amount, 5_000_000_000);
+    assert_eq!(scanned[0].subaddress_index, 0);
+    assert_eq!(scanned[0].target_key, received.target_key);
+    assert!(
+        scanned[0].kem_ciphertext.is_some(),
+        "the detected output carries its ciphertext for spend recovery"
+    );
+
+    // The hybrid one-time spend key must recover (seed-aware key-image path), so
+    // the received funds are spendable.
+    let images = compute_owned_output_key_images_inner(&KeyImageRequest {
+        spend_private_key: wallet.spend_private_hex.clone(),
+        view_private_key: wallet.view_private_hex.clone(),
+        seed: wallet.seed_hex.clone(),
+        outputs: scanned,
+    })
+    .expect("key-image derivation must succeed for the detected hybrid output");
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[0].key_image.len(), 64, "hex 32-byte key image");
+}
+
+#[test]
+fn scan_ignores_hybrid_output_addressed_to_another_wallet() {
+    // #988 negative: a hybrid output to someone else must NOT decapsulate to our
+    // keys — the wrong ML-KEM secret yields a useless shared secret and the
+    // stealth check rejects it.
+    let me = derive_from_seed(1);
+    let other = derive_from_seed(2);
+
+    let theirs = mint_hybrid_owned_output(5_000_000_000, &other.public_address, 0);
+
+    let scanned = scan_owned_outputs_inner(&ScanRequest {
+        spend_private_key: me.spend_private_hex.clone(),
+        view_private_key: me.view_private_hex.clone(),
+        seed: me.seed_hex.clone(),
+        outputs: vec![theirs],
+    })
+    .expect("scan should succeed");
+
+    assert!(
+        scanned.is_empty(),
+        "a hybrid output addressed to another wallet must not be detected"
     );
 }

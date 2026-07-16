@@ -31,6 +31,18 @@ pub struct RpcOutput {
     pub public_key: String,
     #[serde(rename = "amountCommitment")]
     pub amount_commitment: String,
+    /// The output's position within its creating transaction. Under protocol
+    /// 6.0.0 this index is bound into the hybrid one-time key, so the RECEIVE
+    /// scan needs it to detect hybrid outputs (issue #988). Coinbase outputs are
+    /// reported as `u32::MAX` by the node and normalized to `MINTING_OUTPUT_INDEX`
+    /// (0) by the consumer. Defaults to 0 when absent.
+    #[serde(rename = "outputIndex", default)]
+    pub output_index: u32,
+    /// Hex-encoded ML-KEM-768 ciphertext, or `null` for a classical/legacy
+    /// KEM-less output (issue #970). The scan decapsulates it to detect the
+    /// hybrid one-time key.
+    #[serde(rename = "kemCiphertext", default)]
+    pub kem_ciphertext: Option<String>,
 }
 
 /// Spent/pending status of a key image from `chain_areKeyImagesSpent`.
