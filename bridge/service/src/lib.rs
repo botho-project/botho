@@ -33,6 +33,8 @@ mod bth_scan;
 #[cfg(test)]
 mod chaos_tests;
 mod db;
+#[cfg(test)]
+mod e2e_full_loop_tests;
 mod engine;
 mod federation;
 #[cfg(test)]
