@@ -935,8 +935,8 @@ pub fn is_mainnet_enabled() -> bool {
 /// Some testnet conveniences are unsafe to expose on an *internet-facing*
 /// public testnet node even though they are firewalled off mainnet:
 ///
-///   * `dev_settleToBackground` — an unauthenticated, CPU-heavy (full UTXO
-///     scan + CLSAG ring build), *mutating* self-send RPC, and
+///   * `dev_settleToBackground` — an unauthenticated, CPU-heavy (full UTXO scan
+///     + CLSAG ring build), *mutating* self-send RPC, and
 ///   * lifting the anonymous RPC rate limit to effectively unlimited.
 ///
 /// Both are DoS-amplification vectors if reachable on a live public node, so
