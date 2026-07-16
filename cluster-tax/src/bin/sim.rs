@@ -595,6 +595,22 @@ mod cli {
         /// consensus.
         LotterySelectionSweep,
 
+        /// CT provenance-factor calibration sweep (design-research gate for
+        /// decision D2 of #902): the factor curve's input — cluster wealth
+        /// Σ v·weight — is the one quantity CT hides. Scores the value-weighted
+        /// baseline against value-free provenance factors from PUBLIC signals
+        /// (coin age, hop count, and the ADR-0007-generalized mint-epoch origin
+        /// with circulation-only decay + floor F). Reuses the real
+        /// ClusterFactorCurve, demurrage_charge, TagVector::mix blend and the
+        /// shared calculate_gini. Reports each rule's faithfulness to the
+        /// baseline, its honest Δgini, its Sybil manufacturability (can a whale
+        /// churn/self-hop/split to FAKE a low factor for free?), and the gamed
+        /// Δgini. Determines whether Option B (value-free provenance) holds the
+        /// Δgini + Sybil bars — dissolving the last CT gadget — or whether
+        /// Option A (octave-bucket proof over committed wealth) stands. Does
+        /// NOT wire anything into consensus.
+        ProvenanceFactorSweep,
+
         /// Structural Sybil-brake sweep (realized-capture follow-up to #902):
         /// the sibling `lottery-selection-sweep` proved no value-free WEIGHT
         /// can be split-invariant, but measured Sybil capture as
@@ -943,6 +959,7 @@ mod cli {
             ),
             Command::SettlementHorizonSweep => run_settlement_horizon_sweep_cli(),
             Command::LotterySelectionSweep => run_lottery_selection_sweep_cli(),
+            Command::ProvenanceFactorSweep => run_provenance_factor_sweep_cli(),
             Command::LotterySybilBrakeSweep => run_lottery_sybil_brake_sweep_cli(),
             Command::LotteryRewardCapSweep => run_lottery_reward_cap_sweep_cli(),
             Command::BridgeImportSweep => run_bridge_import_sweep_cli(),
@@ -4467,6 +4484,19 @@ mod cli {
         };
         let report = run_lottery_selection_sweep();
         println!("# CT-Compatible Lottery-Selection Sweep (issue #902)\n");
+        println!("{}", to_markdown(&report));
+    }
+
+    /// CT provenance-factor calibration sweep (design-research gate for D2 of
+    /// #902). Prints the faithfulness, honest-Δgini, Sybil-manufacturability and
+    /// gamed-Δgini tables that back `docs/research/ct-provenance-factor-
+    /// calibration.md`. Does NOT wire anything into consensus.
+    fn run_provenance_factor_sweep_cli() {
+        use bth_cluster_tax::simulation::provenance_factor_sweep::{
+            run_provenance_factor_sweep, to_markdown,
+        };
+        let report = run_provenance_factor_sweep();
+        println!("# CT Provenance-Factor Calibration Sweep — D2 (issue #902)\n");
         println!("{}", to_markdown(&report));
     }
 
