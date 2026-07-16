@@ -399,7 +399,7 @@ impl BthReleaser {
 /// in the UTXO set makes the node reject the whole release block (C3 ring
 /// resolution), so such outputs must never be chosen as decoys (#1025).
 fn is_spendable_decoy(out: &crate::bth_rpc::RpcOutput) -> bool {
-    out.amount > 0 && out.target_key.trim_matches('0').len() != 0
+    out.amount > 0 && !out.target_key.trim_matches('0').is_empty()
 }
 
 /// Derive the key image of a reserve-owned output (node-identical), for the

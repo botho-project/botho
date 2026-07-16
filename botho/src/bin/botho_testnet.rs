@@ -1086,6 +1086,12 @@ fn start_node_process(node: &NodeState, config_path: &Path, verbose: bool) -> Re
             "run",
             "--mint",
         ])
+        // These are throwaway local harness nodes: opt in to the dev/test RPC
+        // surface (`dev_settleToBackground` for reserve funding + the lifted
+        // anonymous rate limit for the heavy e2e drive loops, #1025). A live
+        // public testnet node does NOT set this, so it keeps its 100/min
+        // anonymous limit and never exposes the mutating dev RPC (M1/L1).
+        .env("BOTHO_ENABLE_DEV_RPC", "1")
         .stdout(Stdio::from(log_file.try_clone()?))
         .stderr(Stdio::from(log_file))
         .spawn()

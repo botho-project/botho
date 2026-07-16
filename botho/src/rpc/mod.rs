@@ -3812,13 +3812,18 @@ async fn handle_dev_settle_to_background(
     params: &Value,
     state: &RpcState,
 ) -> JsonRpcResponse {
-    // Testnet-only footgun guard: settlement is a legitimate operation for any
-    // holder, but this self-send helper exists purely for the local harness.
-    if state.network_type != Network::Testnet {
+    // Footgun guard: settlement is a legitimate operation for any holder, but
+    // this unauthenticated, CPU-heavy (full UTXO scan + CLSAG ring build),
+    // *mutating* self-send helper exists purely for the local harness. It is
+    // firewalled off mainnet by network type AND gated behind the explicit
+    // dev-RPC opt-in (`BOTHO_ENABLE_DEV_RPC`, set by the `botho-testnet`
+    // harness) so that a *live public* internet-facing testnet node does not
+    // expose it by default — only a throwaway local harness node does (M1/L1).
+    if state.network_type != Network::Testnet || !crate::config::is_dev_rpc_enabled() {
         return JsonRpcResponse::error(
             id,
             -32000,
-            "dev_settleToBackground is only available on testnet",
+            "dev_settleToBackground is not enabled (testnet + BOTHO_ENABLE_DEV_RPC only)",
         );
     }
 
