@@ -53,13 +53,15 @@ pub struct SpendInput {
 ///
 /// The browser wallet decodes the recipient's `botho://2/` (v2) address into
 /// these raw components before calling the signer (`parseAddress` in
-/// `@botho/core`, or the wasm `decodeAddress`, both of which expose `kemPublic`).
+/// `@botho/core`, or the wasm `decodeAddress`, both of which expose
+/// `kemPublic`).
 ///
 /// Under protocol 6.0.0 every send output is a hybrid post-quantum stealth
 /// output: the signer encapsulates a shared secret against `kem_public_key` and
 /// attaches the resulting 1,088-byte ML-KEM ciphertext (issue #978). A missing
-/// or malformed key is a hard error — a KEM-less output is rejected by consensus
-/// (`validate_transfer_tx`, #974) — so this field is required, not optional.
+/// or malformed key is a hard error — a KEM-less output is rejected by
+/// consensus (`validate_transfer_tx`, #974) — so this field is required, not
+/// optional.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RecipientAddress {
     /// Hex-encoded 32-byte spend public key (`D`).
@@ -67,8 +69,8 @@ pub struct RecipientAddress {
     /// Hex-encoded 32-byte view public key (`C`).
     pub view_public_key: String,
     /// Hex-encoded raw ML-KEM-768 public key (1184 bytes) published in the
-    /// recipient's v2 address. The sender encapsulates against this to build the
-    /// hybrid one-time key and attach the ciphertext.
+    /// recipient's v2 address. The sender encapsulates against this to build
+    /// the hybrid one-time key and attach the ciphertext.
     pub kem_public_key: String,
 }
 
@@ -415,14 +417,9 @@ pub fn build_and_sign_with_rng<R: RngCore + CryptoRng>(
     // the output's position in the tx (recipient=0, change=1). A recipient (or
     // sender) address that lacks a well-formed ML-KEM key is a hard error, never
     // a silent KEM-less output that 6.0.0 consensus would reject.
-    let recipient_output = TxOutput::new_hybrid_to_address(
-        req.amount,
-        &recipient,
-        0,
-        None,
-        Default::default(),
-    )
-    .map_err(|e| format!("recipient address is not post-quantum (v2): {e}"))?;
+    let recipient_output =
+        TxOutput::new_hybrid_to_address(req.amount, &recipient, 0, None, Default::default())
+            .map_err(|e| format!("recipient address is not post-quantum (v2): {e}"))?;
     let mut outputs = vec![recipient_output];
     let actual_fee = if change >= DUST_THRESHOLD {
         let change_output =
@@ -1258,11 +1255,8 @@ mod tests {
 
         // The recipient's node-identical hybrid scan detects the recipient
         // output (index 0) at its default subaddress.
-        let recipient_index = tx.outputs[0].belongs_to_hybrid(
-            &recipient_account,
-            &recipient_pq.kem_keypair,
-            0,
-        );
+        let recipient_index =
+            tx.outputs[0].belongs_to_hybrid(&recipient_account, &recipient_pq.kem_keypair, 0);
         assert_eq!(
             recipient_index,
             Some(0),
@@ -1270,8 +1264,7 @@ mod tests {
         );
 
         // The sender's own hybrid scan detects the change output (index 1).
-        let change_index =
-            tx.outputs[1].belongs_to_hybrid(&sender, &sender_pq.kem_keypair, 1);
+        let change_index = tx.outputs[1].belongs_to_hybrid(&sender, &sender_pq.kem_keypair, 1);
         assert_eq!(
             change_index,
             Some(0),
@@ -1288,9 +1281,9 @@ mod tests {
     }
 
     /// #978 acceptance #4: a recipient whose address publishes no ML-KEM key
-    /// (empty `kem_public_key`, i.e. a retired v1 / classical-only address) is a
-    /// HARD ERROR on 6.0.0 — the signer must never emit a KEM-less output that
-    /// consensus would reject. Fail loudly instead.
+    /// (empty `kem_public_key`, i.e. a retired v1 / classical-only address) is
+    /// a HARD ERROR on 6.0.0 — the signer must never emit a KEM-less output
+    /// that consensus would reject. Fail loudly instead.
     #[test]
     fn send_to_kemless_address_is_hard_error() {
         let mut rng = StdRng::from_seed([47u8; 32]);

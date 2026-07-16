@@ -1069,17 +1069,11 @@ mod tests {
                     decoys,
                 }],
                 recipient: RecipientAddress {
-                    spend_public_key: hex::encode(
-                        recipient_addr.spend_public_key().to_bytes(),
-                    ),
+                    spend_public_key: hex::encode(recipient_addr.spend_public_key().to_bytes()),
                     view_public_key: hex::encode(recipient_addr.view_public_key().to_bytes()),
-                    kem_public_key: hex::encode(
-                        recipient_kem.kem_keypair.public_key().as_bytes(),
-                    ),
+                    kem_public_key: hex::encode(recipient_kem.kem_keypair.public_key().as_bytes()),
                 },
-                sender_kem_public_key: hex::encode(
-                    sender_kem.kem_keypair.public_key().as_bytes(),
-                ),
+                sender_kem_public_key: hex::encode(sender_kem.kem_keypair.public_key().as_bytes()),
                 amount: 4_000_000_000,
                 fee: MIN_TX_FEE,
                 created_at_height: 1000,
