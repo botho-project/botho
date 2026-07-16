@@ -68,3 +68,128 @@ export type VenueDirectory = Record<BridgeNetwork, Venue[]>
  * dependency on react-i18next (matching the rest of the module).
  */
 export type Translate = (key: string, options?: Record<string, unknown>) => string
+
+// ─── Tier 1: integrated BTH → wBTH export (#1031) ───────────────────────────
+
+/**
+ * Destination chains the wallet can EXPORT to (open a mint order for). This is
+ * a strict subset of {@link VenueChain}: Hyperliquid is discovery-only
+ * (`coming-soon`) until its HIP-1 spot market lands (#877), so it is not an
+ * export destination yet.
+ */
+export type DestinationChain = 'ethereum' | 'solana'
+
+/**
+ * Mint-order status. Strings are byte-identical to the Rust
+ * `OrderStatus::Display` impl (`bridge/core/src/order.rs`) so the API can be
+ * consumed verbatim. The wallet only ever opens MINT orders, so the burn-side
+ * states (`burn_*`, `release_*`, `released`) are intentionally omitted.
+ */
+export type MintOrderStatus =
+  | 'awaiting_deposit'
+  | 'deposit_detected'
+  | 'deposit_confirmed'
+  | 'mint_pending'
+  | 'completed'
+  | 'expired'
+  | 'failed'
+
+/** Request body for opening a mint order. */
+export interface CreateMintOrderRequest {
+  /** Chain wBTH is minted on. */
+  destChain: DestinationChain
+  /** The user's OWN address on `destChain` — where wBTH lands. */
+  destAddress: string
+  /**
+   * Gross BTH to lock, in picocredits, as a decimal STRING to preserve the full
+   * u64 range across JSON without precision loss (mirrors the reserve-proof
+   * number contract in `network/`).
+   */
+  amount: string
+}
+
+/**
+ * A mint order as returned by the bridge order API. Amounts are picocredit
+ * strings (u64-safe). Field names are camelCase to match the existing
+ * `serde(rename_all = "camelCase")` convention on the bridge's HTTP responses.
+ */
+export interface MintOrder {
+  /** Order UUID. */
+  id: string
+  /** Current state-machine status. */
+  status: MintOrderStatus
+  /** Chain wBTH is minted on. */
+  destChain: DestinationChain
+  /** The user's address on `destChain`. */
+  destAddress: string
+  /** Gross BTH to lock, picocredits (string). */
+  amount: string
+  /** Bridge fee, picocredits (string). */
+  fee: string
+  /** BTH reserve deposit address the wallet must send the deposit to. */
+  depositAddress: string
+  /**
+   * Order memo the deposit must carry so the bridge watcher associates the
+   * deposit with this order (the first 16 bytes are the order UUID; see
+   * `BridgeOrder::generate_memo`). Hex-encoded.
+   */
+  memo: string
+  /** Destination-chain mint tx hash, once wBTH is minted. */
+  destTx?: string | null
+  /** Unix seconds after which an unpaid order expires. */
+  expiresAt?: number | null
+  /** Failure reason when `status === 'failed'`. */
+  failureReason?: string | null
+}
+
+/**
+ * Everything the integrated {@link ExportPanel} needs from the host app,
+ * injected by the `/trade` page so `@botho/features` keeps NO dependency on the
+ * wallet context or the bridge client wiring (mirroring how the page injects
+ * venue/reserve data into {@link BridgeView}). The wallet does the BTH side
+ * ONLY — there is deliberately no counterparty-chain signing hook here.
+ */
+export interface ExportController {
+  /**
+   * The bridge order API client, or `null` when no endpoint is configured
+   * (`VITE_BRIDGE_API_BASE` unset). `null` makes the panel render an explicit
+   * "endpoint not wired yet" state instead of a broken form.
+   */
+  client: BridgeClientLike | null
+  /** Active bridge network — drives testnet labeling. */
+  network: BridgeNetwork
+  /** Snapshot of the wallet state relevant to exporting. */
+  wallet: ExportWalletState
+  /**
+   * Build + sign + submit the BTH deposit via the wallet's existing
+   * wasm-signer send path (`@botho/wasm-signer`). Resolves to the deposit tx
+   * hash. This is the ONLY signing the wallet does; wBTH is minted by the
+   * bridge to the user's own counterparty-chain wallet.
+   */
+  submitDeposit(args: {
+    depositAddress: string
+    amount: bigint
+    memo: string
+  }): Promise<string>
+  /** Navigate the user to the wallet (to create/open or unlock it). */
+  requestWallet?: () => void
+}
+
+/** Wallet fields the export panel reads (no secrets, no signing keys). */
+export interface ExportWalletState {
+  /** Whether a wallet exists in this browser. */
+  hasWallet: boolean
+  /** Whether the wallet is locked (deposit signing needs it unlocked). */
+  isLocked: boolean
+  /** Spendable balance in picocredits, or `null` when unknown/locked. */
+  spendableBalance: bigint | null
+}
+
+/**
+ * Structural subset of `BridgeClient` (from `bridge-client.ts`). Declared here
+ * so `types.ts` stays dependency-free; the concrete client satisfies it.
+ */
+export interface BridgeClientLike {
+  createMintOrder(req: CreateMintOrderRequest): Promise<MintOrder>
+  getOrderStatus(id: string): Promise<MintOrder>
+}

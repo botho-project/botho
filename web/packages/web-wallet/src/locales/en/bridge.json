@@ -63,12 +63,81 @@
         "body": "Exported BTH must be zero-demurrage, keeping wrapped supply exactly aligned with the reserve."
       }
     },
-    "cta": {
-      "title": "Integrated export is coming",
-      "body": "A one-click, in-wallet BTH → wBTH export flow will slot in right here in a later tier. For now, follow the guided steps above.",
-      "button": "Export BTH",
-      "disabledTitle": "Integrated export ships in a later tier.",
-      "badge": "Coming soon"
+    "panel": {
+      "title": "Export BTH → wBTH",
+      "subtitle": "Build and submit the BTH deposit from this wallet. wBTH is minted to your own address on the destination chain — this wallet never signs on that chain.",
+      "testnetBadge": "Testnet",
+      "notConfigured": {
+        "title": "Integrated export endpoint not wired yet",
+        "body": "The in-wallet export flow is built and reuses your wallet's signing path, but the public bridge order API (create/status, CORS) is not exposed on this deployment yet. Follow the guided steps above in the meantime."
+      },
+      "noWallet": {
+        "title": "Open your wallet to export",
+        "body": "Exporting builds and signs a BTH deposit from your wallet. Create or open your wallet first.",
+        "cta": "Go to wallet"
+      },
+      "locked": {
+        "title": "Unlock your wallet to export",
+        "body": "Your wallet is locked. Unlock it to build and sign the BTH deposit.",
+        "cta": "Unlock wallet"
+      },
+      "chains": {
+        "ethereum": "Ethereum",
+        "solana": "Solana",
+        "hyperliquid": "Hyperliquid"
+      },
+      "form": {
+        "chainLabel": "Destination chain",
+        "chainHint": "Where wBTH is minted — to your own wallet on that chain.",
+        "comingSoon": "Soon",
+        "addressLabel": "Your {{chain}} address",
+        "addressPlaceholder": {
+          "ethereum": "0x… (your EVM wallet)",
+          "solana": "Your Solana wallet address"
+        },
+        "addressInvalid": "Enter a valid {{chain}} address.",
+        "amountLabel": "Amount",
+        "max": "Max: {{amount}} BTH",
+        "balanceUnknown": "Unlock your wallet to see your balance.",
+        "insufficient": "Amount exceeds your spendable balance.",
+        "amountRequired": "Enter an amount to export.",
+        "factor1Notice": "Only factor-1 (zero-demurrage) BTH can be exported (ADR 0003). The bridge verifies eligibility on deposit and mints only for factor-1 coins.",
+        "feePreview": "A bridge fee is quoted when you create the order, and a BTH network fee applies to the deposit. You receive wBTH equal to your deposit minus the bridge fee.",
+        "submit": "Create order & deposit",
+        "submitting": "Submitting…"
+      },
+      "order": {
+        "id": "Order",
+        "destination": "Destination",
+        "amount": "Amount",
+        "fee": "Bridge fee",
+        "receive": "You receive",
+        "deposit": "Deposit",
+        "depositSubmitted": "Submitted",
+        "depositFailed": "Deposit not submitted: {{error}}",
+        "retryDeposit": "Retry deposit",
+        "newExport": "Start another export"
+      },
+      "status": {
+        "awaiting_deposit": "Awaiting deposit",
+        "deposit_detected": "Deposit detected",
+        "deposit_confirmed": "Deposit confirmed",
+        "mint_pending": "Minting wBTH",
+        "completed": "Completed",
+        "expired": "Expired",
+        "failed": "Failed",
+        "expiredNote": "This order expired before a confirmed deposit. Start a new export.",
+        "failedNote": "This order failed: {{reason}}"
+      },
+      "completed": {
+        "title": "wBTH minted to your wallet",
+        "body": "Your wBTH is now in your {{chain}} wallet.",
+        "viewTx": "View mint transaction",
+        "tradeNow": "Trade wBTH now"
+      },
+      "error": {
+        "generic": "Something went wrong. Please try again."
+      }
     }
   }
 }
