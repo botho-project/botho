@@ -21,6 +21,13 @@ junit*
 **/cargo/
 **/cmake-build-debug/
 
+# Reproducible release build scratch dirs (scripts/build-release.sh).
+# These live at the repo root and would otherwise show as untracked, marking
+# the working tree "dirty" and mislabeling tagged release binaries as
+# "<hash>-dirty" (see botho/build.rs and #996).
+/target-release/
+/.cargo-home/
+
 # Coverage reports
 coverage-report/
 
