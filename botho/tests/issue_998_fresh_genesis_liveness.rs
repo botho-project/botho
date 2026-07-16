@@ -24,8 +24,8 @@ use botho::{
     ledger::Ledger,
     transaction::PICOCREDITS_PER_CREDIT,
 };
-use bth_account_keys::PublicAddress;
 use botho_wallet::WalletKeys;
+use bth_account_keys::PublicAddress;
 
 /// Trivial PoW difficulty for instant mining; must equal the chain's pinned
 /// difficulty because block acceptance enforces `header.difficulty ==
@@ -54,8 +54,8 @@ fn pq_minter_address() -> PublicAddress {
         .pq_public_address()
 }
 
-/// Build a valid minting-only block for `height` on top of `prev_hash`, mining a
-/// trivial-difficulty PoW. The coinbase is a hybrid ML-KEM output.
+/// Build a valid minting-only block for `height` on top of `prev_hash`, mining
+/// a trivial-difficulty PoW. The coinbase is a hybrid ML-KEM output.
 fn mine_minting_block(height: u64, prev_hash: [u8; 32], minter: &PublicAddress) -> Block {
     let timestamp = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
