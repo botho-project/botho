@@ -16,7 +16,7 @@
  */
 
 import { deriveKeypairs, parseAddress } from '@botho/core'
-import { buildSendTransaction, spendableBalance, deriveKemPublicKey, type SendRpc } from '@botho/wasm-signer'
+import { buildSendTransaction, spendableBalance, deriveKemPublicKey, mnemonicToSeedHex, type SendRpc } from '@botho/wasm-signer'
 import type { RemoteNodeAdapter } from '@botho/adapters'
 
 /** Signer's MIN_TX_FEE (picocredits) — mirrors wallet.tsx `send()`. */
@@ -83,6 +83,7 @@ export async function buildAndSubmitSend(
     keys: {
       spendPrivateKey: toHex(kp.spendPrivate),
       viewPrivateKey: toHex(kp.viewPrivate),
+      seed: mnemonicToSeedHex(senderMnemonic),
     },
     recipient: {
       spend_public_key: toHex(recipientKeys.spendPublic),
@@ -130,6 +131,7 @@ export async function scanEphemeral(
     {
       spendPrivateKey: toHex(kp.spendPrivate),
       viewPrivateKey: toHex(kp.viewPrivate),
+      seed: mnemonicToSeedHex(ephMnemonic),
     },
     rpcFromAdapter(adapter),
   )
@@ -169,6 +171,7 @@ export async function sweepEphemeral(
     keys: {
       spendPrivateKey: toHex(kp.spendPrivate),
       viewPrivateKey: toHex(kp.viewPrivate),
+      seed: mnemonicToSeedHex(ephMnemonic),
     },
     recipient: {
       spend_public_key: toHex(destKeys.spendPublic),

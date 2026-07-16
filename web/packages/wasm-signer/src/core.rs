@@ -553,15 +553,16 @@ pub struct ScanRequest {
     /// Hex-encoded 64-byte BIP39 seed of the wallet. **Stays client-side.**
     ///
     /// Used to derive the wallet's ML-KEM-768 secret keypair
-    /// ([`bth_crypto_pq::derive_pq_keys_from_seed`], node-identical) so the scan
-    /// can decapsulate each hybrid output's ciphertext and detect the 6.0.0
-    /// hybrid one-time key. This is the feature-independent derivation the send
-    /// side already uses (`derivePqPublicKeysFromSeed`) — NOT
-    /// `WalletKeys::public_address()`, which requires the `pq` feature and is
-    /// unavailable in the mobile crate's classical `botho-wallet` build (#984).
-    /// Empty means "classical-only scan" (no ML-KEM secret available): outputs
-    /// are matched with the legacy [`TxOutput::belongs_to`] check, so hybrid
-    /// outputs are not detected. Defaults to empty for back-compat.
+    /// ([`bth_crypto_pq::derive_pq_keys_from_seed`], node-identical) so the
+    /// scan can decapsulate each hybrid output's ciphertext and detect the
+    /// 6.0.0 hybrid one-time key. This is the feature-independent
+    /// derivation the send side already uses (`derivePqPublicKeysFromSeed`)
+    /// — NOT `WalletKeys::public_address()`, which requires the `pq`
+    /// feature and is unavailable in the mobile crate's classical
+    /// `botho-wallet` build (#984). Empty means "classical-only scan" (no
+    /// ML-KEM secret available): outputs are matched with the legacy
+    /// [`TxOutput::belongs_to`] check, so hybrid outputs are not detected.
+    /// Defaults to empty for back-compat.
     #[serde(default)]
     pub seed: String,
     /// Candidate outputs (e.g. every output the node returned for a height
@@ -605,14 +606,14 @@ pub struct OwnedOutput {
 /// published in the wallet's own v2 address. It does NOT route through
 /// `WalletKeys::public_address()` (which needs the `pq` feature and is absent
 /// from the mobile crate's classical build — the trap documented in #984).
-fn derive_kem_keypair(
-    seed_hex: &str,
-) -> Result<Option<bth_crypto_pq::MlKem768KeyPair>, String> {
+fn derive_kem_keypair(seed_hex: &str) -> Result<Option<bth_crypto_pq::MlKem768KeyPair>, String> {
     if seed_hex.trim().is_empty() {
         return Ok(None);
     }
     let seed = parse_bip39_seed(seed_hex)?;
-    Ok(Some(bth_crypto_pq::derive_pq_keys_from_seed(&seed).kem_keypair))
+    Ok(Some(
+        bth_crypto_pq::derive_pq_keys_from_seed(&seed).kem_keypair,
+    ))
 }
 
 /// Parse an optional hex-encoded ML-KEM-768 ciphertext into raw bytes.
@@ -700,9 +701,9 @@ pub struct KeyImageRequest {
     pub spend_private_key: String,
     /// Hex-encoded 32-byte account view private key. **Stays client-side.**
     pub view_private_key: String,
-    /// Hex-encoded 64-byte BIP39 seed. **Stays client-side.** Used to derive the
-    /// wallet's ML-KEM-768 secret so a hybrid owned output's one-time spend key
-    /// (hence its key image) can be recovered via
+    /// Hex-encoded 64-byte BIP39 seed. **Stays client-side.** Used to derive
+    /// the wallet's ML-KEM-768 secret so a hybrid owned output's one-time
+    /// spend key (hence its key image) can be recovered via
     /// [`TxOutput::recover_spend_key_for`]. Empty falls back to classical
     /// recovery; defaults to empty for back-compat (#988).
     #[serde(default)]
@@ -723,9 +724,9 @@ pub struct OwnedOutputKeyImage {
     pub amount: u64,
     /// Subaddress index that received this output (0 = default, 1 = change).
     pub subaddress_index: u64,
-    /// The output's position within its creating transaction, preserved from the
-    /// scan so a subsequent spend recovers the hybrid one-time key on the
-    /// unified path (issue #988). Defaults to 0 for back-compat.
+    /// The output's position within its creating transaction, preserved from
+    /// the scan so a subsequent spend recovers the hybrid one-time key on
+    /// the unified path (issue #988). Defaults to 0 for back-compat.
     #[serde(default)]
     pub output_index: u32,
     /// The owned output's ML-KEM-768 ciphertext (hex), or `None` for a
@@ -772,12 +773,9 @@ pub fn compute_owned_output_key_images_inner(
         // a hybrid (ciphertext-bearing) output needs the ML-KEM secret + its
         // bound `output_index`; a KEM-less output uses classical recovery.
         let onetime_private = match &kem_keypair {
-            Some(kp) => tx_out.recover_spend_key_for(
-                &account,
-                kp,
-                out.subaddress_index,
-                out.output_index,
-            ),
+            Some(kp) => {
+                tx_out.recover_spend_key_for(&account, kp, out.subaddress_index, out.output_index)
+            }
             None => tx_out.recover_spend_key(&account, out.subaddress_index),
         }
         .ok_or("failed to recover one-time private key for owned output")?;
@@ -1472,9 +1470,10 @@ mod tests {
         hex::encode([seed_byte; bth_crypto_pq::BIP39_SEED_SIZE])
     }
 
-    /// Turn a signed transaction output into a `ChainOutput` exactly as the node
-    /// RPC (`chain_getOutputs`) would present it: stealth keys, transparent
-    /// amount, its position within the tx, and its hybrid ML-KEM ciphertext.
+    /// Turn a signed transaction output into a `ChainOutput` exactly as the
+    /// node RPC (`chain_getOutputs`) would present it: stealth keys,
+    /// transparent amount, its position within the tx, and its hybrid
+    /// ML-KEM ciphertext.
     fn chain_output_of(out: &TxOutput, output_index: u32) -> ChainOutput {
         ChainOutput {
             target_key: hex::encode(out.target_key),
@@ -1487,13 +1486,13 @@ mod tests {
 
     /// #988: a hybrid output SENT (via the #978 send path) to the wallet's
     /// address MUST be DETECTED by the shared `scan_owned_outputs_inner` — the
-    /// exact receive path both the browser sync and the mobile `wallet_ops::sync`
-    /// consume — by decapsulating its ML-KEM ciphertext with the wallet's
-    /// seed-derived secret, AND its one-time spend key must recover so the funds
-    /// are spendable (`x·G == target_key`). This is the RECEIVE-side counterpart
-    /// to #978: before this fix the scan built every candidate with
-    /// `kem_ciphertext: None` and used the classical `belongs_to`, so hybrid
-    /// incoming payments were invisible.
+    /// exact receive path both the browser sync and the mobile
+    /// `wallet_ops::sync` consume — by decapsulating its ML-KEM ciphertext
+    /// with the wallet's seed-derived secret, AND its one-time spend key
+    /// must recover so the funds are spendable (`x·G == target_key`). This
+    /// is the RECEIVE-side counterpart to #978: before this fix the scan
+    /// built every candidate with `kem_ciphertext: None` and used the
+    /// classical `belongs_to`, so hybrid incoming payments were invisible.
     #[test]
     fn hybrid_received_output_is_detected_and_spendable_by_scan() {
         let mut rng = StdRng::from_seed([53u8; 32]);

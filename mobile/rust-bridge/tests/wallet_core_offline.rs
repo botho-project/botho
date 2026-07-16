@@ -37,11 +37,12 @@ struct DerivedKeys {
     /// post-quantum output, so the recipient's key is required to encapsulate
     /// the ciphertext and the sender's own key seeds its change (issue #978).
     kem_public_hex: String,
-    /// Hex-encoded 64-byte BIP39 seed. The RECEIVE scan needs this to derive the
-    /// wallet's ML-KEM SECRET (node-identically, via the feature-independent
-    /// `derive_pq_keys_from_seed`) and decapsulate hybrid outputs — proving the
-    /// mobile crate (which builds `botho-wallet` with `pq` OFF) can detect
-    /// hybrid receives without `WalletKeys::public_address()` (issue #988/#984).
+    /// Hex-encoded 64-byte BIP39 seed. The RECEIVE scan needs this to derive
+    /// the wallet's ML-KEM SECRET (node-identically, via the
+    /// feature-independent `derive_pq_keys_from_seed`) and decapsulate
+    /// hybrid outputs — proving the mobile crate (which builds
+    /// `botho-wallet` with `pq` OFF) can detect hybrid receives without
+    /// `WalletKeys::public_address()` (issue #988/#984).
     seed_hex: String,
 }
 
@@ -119,8 +120,9 @@ fn mint_hybrid_owned_output(
     recipient: &PublicAddress,
     output_index: u32,
 ) -> ChainOutput {
-    let out = TxOutput::new_hybrid_to_address(amount, recipient, output_index, None, Default::default())
-        .expect("recipient publishes an ML-KEM key (v2 address)");
+    let out =
+        TxOutput::new_hybrid_to_address(amount, recipient, output_index, None, Default::default())
+            .expect("recipient publishes an ML-KEM key (v2 address)");
     ChainOutput {
         target_key: hex::encode(out.target_key),
         public_key: hex::encode(out.public_key),

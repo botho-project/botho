@@ -105,6 +105,21 @@ export interface ChainOutput {
   publicKey: string
   /** Amount in picocredits (recovered from the transparent commitment). */
   amount: bigint | number
+  /**
+   * The output's position within its creating transaction (`outputIndex` from
+   * `chain_getOutputs`). Under protocol 6.0.0 this index is bound into the
+   * hybrid one-time key, so it must be supplied for hybrid detection to work.
+   * Optional (defaults to 0) so legacy callers that only scanned classical
+   * outputs keep compiling (#988).
+   */
+  outputIndex?: number
+  /**
+   * Hex-encoded ML-KEM-768 ciphertext (`kemCiphertext` from
+   * `chain_getOutputs`), or null/undefined for a classical/legacy KEM-less
+   * output. When present (and a `seed` is supplied), the scan decapsulates it
+   * to detect the hybrid one-time key (#970/#988).
+   */
+  kemCiphertext?: string | null
 }
 
 /** A request to scan candidate outputs for ones owned by the account. */
@@ -113,6 +128,13 @@ export interface ScanRequest {
   spendPrivateKey: string
   /** Hex-encoded 32-byte account view private key. Stays client-side. */
   viewPrivateKey: string
+  /**
+   * Hex-encoded 64-byte BIP39 seed. Stays client-side. Used to derive the
+   * wallet's ML-KEM secret (node-identical `derive_pq_keys_from_seed`) so the
+   * scan can decapsulate hybrid outputs and detect 6.0.0 incoming payments and
+   * change. Omit / empty for a classical-only scan (#988).
+   */
+  seed?: string
   /** Candidate outputs to test for ownership. */
   outputs: ChainOutput[]
 }
@@ -127,6 +149,17 @@ export interface OwnedOutput {
   amount: bigint
   /** Subaddress index that received this output (0 = default, 1 = change). */
   subaddressIndex: bigint
+  /**
+   * The output's position within its creating transaction, carried through from
+   * the scan so a later spend recovers the hybrid one-time key. Optional for
+   * back-compat (#988).
+   */
+  outputIndex?: number
+  /**
+   * The owned output's ML-KEM-768 ciphertext (hex), or null for a classical
+   * output — preserved from the scan for hybrid spend-key recovery (#988).
+   */
+  kemCiphertext?: string | null
 }
 
 /**
@@ -138,6 +171,12 @@ export interface KeyImageRequest {
   spendPrivateKey: string
   /** Hex-encoded 32-byte account view private key. Stays client-side. */
   viewPrivateKey: string
+  /**
+   * Hex-encoded 64-byte BIP39 seed. Stays client-side. Used to recover a hybrid
+   * owned output's one-time spend key (hence its key image). Omit / empty for
+   * classical recovery (#988).
+   */
+  seed?: string
   /** The wallet's owned outputs to derive key images for. */
   outputs: OwnedOutput[]
 }
@@ -152,6 +191,10 @@ export interface OwnedOutputKeyImage {
   amount: bigint
   /** Subaddress index that received this output (0 = default, 1 = change). */
   subaddressIndex: bigint
+  /** The output's position within its creating transaction (#988). */
+  outputIndex?: number
+  /** The owned output's ML-KEM-768 ciphertext (hex), or null (#988). */
+  kemCiphertext?: string | null
   /**
    * Hex-encoded 32-byte key image. Querying the node's
    * `chain_areKeyImagesSpent` RPC with this value reveals whether the output
@@ -352,7 +395,7 @@ export function setSigner(signer: WasmSigner): void {
   cached = Promise.resolve(signer)
 }
 
-export { deriveV2Address, decodeV2Address, deriveKemPublicKey } from './address'
+export { deriveV2Address, decodeV2Address, deriveKemPublicKey, mnemonicToSeedHex } from './address'
 
 export {
   buildSendTransaction,

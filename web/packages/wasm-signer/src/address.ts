@@ -62,6 +62,19 @@ export async function deriveV2Address(
 }
 
 /**
+ * Derive the wallet's hex-encoded 64-byte BIP39 seed from its mnemonic (empty
+ * passphrase) — the same seed the node/browser derive PQ keys from.
+ *
+ * The RECEIVE scan needs this seed to derive the wallet's ML-KEM SECRET (via the
+ * node-identical `derive_pq_keys_from_seed` in wasm) so it can decapsulate and
+ * detect 6.0.0 hybrid outputs — incoming payments and the wallet's own change
+ * (issue #988). Callers pass it as `SignerKeys.seed`.
+ */
+export function mnemonicToSeedHex(mnemonic: string): string {
+  return toHex(mnemonicToSeedSync(mnemonic, ''))
+}
+
+/**
  * Derive the wallet's raw ML-KEM-768 public key (hex) from its BIP39 mnemonic,
  * via the node-identical `derive_pq_keys_from_seed` in wasm.
  *
