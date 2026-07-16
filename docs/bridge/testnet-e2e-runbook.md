@@ -340,6 +340,85 @@ Mapping to `contracts/ethereum/scripts/deploy.ts` +
 - `BRIDGE_SEPOLIA_LP` is the LP / relayer EOA the Layer 0.75 DeFi round trip
   uses (its private key file feeds the harness's LP key env var).
 
+## Phase B.1 — deploy the custody Safe + WrappedBTH (#1011)
+
+The first live-deploy step. Custody is a SINGLE **2-of-3 Gnosis Safe** used for
+all three WrappedBTH roles (admin/minter/pauser), owned by the three
+`BRIDGE_SAFE_OWNER_{1,2,3}` EOAs from the account-provisioning step above
+(maintainer-ratified). The deployer EOA only pays gas and receives NO roles
+(ADR 0002).
+
+`contracts/ethereum/hardhat.config.ts` now auto-loads a **git-ignored**
+`contracts/ethereum/.env` (via `dotenv/config`), so `PRIVATE_KEY`,
+`SEPOLIA_RPC_URL`, `ETHERSCAN_API_KEY`, `BRIDGE_SAFE_OWNER_*` and `WBTH_*_SAFE`
+resolve without a manual `source`. Never print or commit that file.
+
+The Safe is created against the **canonical Safe v1.3.0** deployment (identical
+on mainnet and Sepolia, pinned from `safe-global/safe-deployments`, all verified
+to have live bytecode on Sepolia): SafeProxyFactory
+`0xa6B71E26C5e0845f74c812102Ca7114b6a896AB2`, GnosisSafe singleton
+`0xd9Db270c1B5E3Bd161E8c8503c55cEABeE709552`, CompatibilityFallbackHandler
+`0xf48f2B2d2a534e402487b3ee7C18c33Aec0Fe5e4`. `deploy-safe.ts` calls
+`createProxyWithNonce(singleton, Safe.setup(owners, 2, 0x0, 0x, handler, 0x0, 0,
+0x0), saltNonce)` and self-asserts `getOwners()`/`getThreshold()`.
+
+### B.1.a — fork-test first (no real ETH, no secret)
+
+Prove the whole bring-up against a Sepolia fork before spending testnet ETH.
+Requires foundry (`anvil` + `cast`):
+
+```bash
+./scripts/deploy-safe-fork-test.sh https://ethereum-sepolia-rpc.publicnode.com
+```
+
+It forks Sepolia (`anvil --fork-url`), `anvil_setBalance`-funds a throwaway
+deployer, deploys the 2-of-3 Safe, asserts owners + threshold, deploys
+WrappedBTH with the Safe as admin/minter/pauser, and asserts the Safe holds all
+three roles while the deployer holds none. Ends with `FORK TEST PASSED`. Uses
+throwaway anvil dev accounts — no `.env`, no real key.
+
+### B.1.b — live Sepolia run
+
+Fill `contracts/ethereum/.env` (git-ignored) with the funded deployer key and
+the three owner addresses, then:
+
+```bash
+cd contracts/ethereum
+cat > .env <<'EOF'          # git-ignored — never commit
+PRIVATE_KEY=0x<funded deployer private key>
+SEPOLIA_RPC_URL=https://<your sepolia rpc>
+ETHERSCAN_API_KEY=<etherscan key, for verify>
+BRIDGE_SAFE_OWNER_1=0x<owner 1>
+BRIDGE_SAFE_OWNER_2=0x<owner 2>
+BRIDGE_SAFE_OWNER_3=0x<owner 3>
+EOF
+
+# 1. Deploy the 2-of-3 Safe (prints SAFE_ADDRESS=0x...):
+npx hardhat run scripts/deploy-safe.ts --network sepolia
+
+# 2. Point all three WrappedBTH roles at that one Safe and deploy the token:
+echo "WBTH_ADMIN_SAFE=0x<safe address>"  >> .env
+echo "WBTH_MINTER_SAFE=0x<safe address>" >> .env
+echo "WBTH_PAUSER_SAFE=0x<safe address>" >> .env
+npx hardhat run scripts/deploy.ts --network sepolia
+
+# 3. Verify on Etherscan (constructor args = the Safe, three times):
+npx hardhat verify --network sepolia 0x<wbth address> \
+  0x<safe address> 0x<safe address> 0x<safe address>
+```
+
+Or run steps 1–2 in one shot (deploy-safe → wire roles → deploy WrappedBTH →
+print addresses + Etherscan links):
+
+```bash
+cd contracts/ethereum
+npx hardhat run scripts/deploy-all.ts --network sepolia
+```
+
+Record the resulting Safe + wBTH addresses and the threshold in the deployment
+table in `contracts/ethereum/README.md`. Then the Layer 1–2 drill below can run
+with `BRIDGE_WBTH_ADDRESS` = the deployed token and the Safe as its minter.
+
 ## Prerequisites (Layers 1–2)
 
 - **BTH testnet**: a synced node with JSON-RPC + websocket exposed; the
