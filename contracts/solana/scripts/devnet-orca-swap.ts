@@ -42,7 +42,8 @@ async function main() {
 
   const amountIn = DecimalUtil.toBN(SWAP_WBTH, WBTH_DECIMALS);
   const quote = await swapQuoteByInputToken(
-    pool, WBTH_MINT, amountIn, Percentage.fromFraction(1, 100),
+    pool, WBTH_MINT, amountIn,
+    Percentage.fromFraction(Number(process.env.SLIPPAGE_BPS ?? "100"), 10_000), // #1017
     ORCA_WHIRLPOOL_PROGRAM_ID, ctx.fetcher, undefined,
   );
   console.log(`swap ${SWAP_WBTH} wBTH -> est ${quote.estimatedAmountOut.toString()} lamports WSOL`);

@@ -112,12 +112,11 @@ jobs:
         with:
           node-version: 22
 
-      # No JS lockfile is committed under contracts/solana/, so `npm ci` (which
-      # requires one) cannot be used here; `npm install` tolerates its absence.
-      # If a package-lock.json is committed later, switch to `npm ci` + npm
-      # cache for parity with contracts-ci.yml (#861).
+      # `contracts/solana/package-lock.json` is committed (#1014), so use
+      # `npm ci` for a deterministic, lockfile-pinned install that never
+      # rewrites the lock (parity with contracts-ci.yml, #861/#1016).
       - name: Install JS dependencies
-        run: npm install
+        run: npm ci
 
       # `anchor test` uses ~/.config/solana/id.json as the provider wallet
       # (Anchor.toml [provider].wallet) and funds it from the spawned validator.

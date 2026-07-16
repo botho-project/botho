@@ -40,6 +40,15 @@ const WBTH_LIQ = 100_000_000_000_000_000n; // 10^17 pico = 100,000 wBTH
 const WETH_LIQ = 100_000_000_000_000_000n; // 10^17 wei  = 0.1 WETH
 const SWAP_IN = 10_000_000_000_000_000n; //   10^16 wei  = 0.01 WETH
 const FEE = 3000; // 0.30% tier
+
+// Slippage bounds. Zero is safe HERE only because this script is Sepolia-only
+// (chainId guard below) and seeds a fresh, empty pool where there is no MEV to
+// sandwich. A mainnet port MUST set non-zero bounds (#1017): SLIPPAGE_BPS
+// clamps the liquidity add against amount*Desired, and SWAP_MIN_OUT sets the
+// swap's amountOutMinimum (best derived from a live Quoter quote off-chain).
+const SLIPPAGE_BPS = BigInt(process.env.SLIPPAGE_BPS ?? "0"); // 0 = no bound
+const SWAP_MIN_OUT = BigInt(process.env.SWAP_MIN_OUT ?? "0"); // wBTH base units
+const minBound = (desired: bigint) => (desired * (10_000n - SLIPPAGE_BPS)) / 10_000n;
 const TICK_SPACING = 60; // fee 3000 -> spacing 60
 const LP_ETH_FUND = ethers.parseEther("0.3"); // WETH (0.11) + gas headroom
 const WETH_WRAP = WETH_LIQ + SWAP_IN; // 0.11 WETH total the LP needs
@@ -231,7 +240,7 @@ async function main() {
   const mintParams = {
     token0, token1, fee: FEE, tickLower, tickUpper,
     amount0Desired: amount0, amount1Desired: amount1,
-    amount0Min: 0n, amount1Min: 0n,
+    amount0Min: minBound(amount0), amount1Min: minBound(amount1),
     recipient: lp.address, deadline: BigInt(2n ** 63n),
   };
   const sim = await npm.mint.staticCall(mintParams);
@@ -247,7 +256,7 @@ async function main() {
   const wbthBeforeSwap = await wbth.balanceOf(lp.address);
   const swapParams = {
     tokenIn: UNI.weth, tokenOut: WBTH, fee: FEE, recipient: lp.address,
-    amountIn: SWAP_IN, amountOutMinimum: 0n, sqrtPriceLimitX96: 0n,
+    amountIn: SWAP_IN, amountOutMinimum: SWAP_MIN_OUT, sqrtPriceLimitX96: 0n,
   };
   await waitTx("exactInputSingle", router.exactInputSingle(swapParams));
   const wbthAfterSwap = await wbth.balanceOf(lp.address);
