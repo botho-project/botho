@@ -4,7 +4,15 @@ import { ReserveProofCard } from '../../network/components/reserve-proof-card'
 import type { ReserveProof, ReserveProofState } from '../../network/types'
 import { VenueDirectory } from './venue-directory'
 import { ExportExplainer } from './export-panel'
-import type { DestinationChain, ExportController, Translate, Venue, VenueChain } from '../types'
+import { UnwrapExplainer } from './unwrap-panel'
+import type {
+  DestinationChain,
+  ExportController,
+  Translate,
+  UnwrapController,
+  Venue,
+  VenueChain,
+} from '../types'
 
 export interface BridgeViewProps {
   /** Venues to list (from `useBridgeVenues`). */
@@ -21,6 +29,12 @@ export interface BridgeViewProps {
    * still renders without it (the panel shows a "not configured" state).
    */
   exportController?: ExportController
+  /**
+   * Unwrap wiring (#1032): the wallet + release-order client the `UnwrapPanel`
+   * needs, injected by the page. Optional so the discovery page still renders
+   * without it (the panel shows the destination + guidance, tracking degrades).
+   */
+  unwrapController?: UnwrapController
   className?: string
 }
 
@@ -45,10 +59,13 @@ export function BridgeView({
   reserveState,
   t,
   exportController,
+  unwrapController,
   className,
 }: BridgeViewProps) {
   const venuesRef = useRef<HTMLDivElement>(null)
   const [highlightChain, setHighlightChain] = useState<VenueChain | null>(null)
+  // Export/Unwrap direction toggle (#1032): the two legs of the round trip.
+  const [tab, setTab] = useState<'export' | 'unwrap'>('export')
 
   const onTradeNow = (chain: DestinationChain) => {
     setHighlightChain(chain)
@@ -88,13 +105,52 @@ export function BridgeView({
         />
       </div>
 
-      {/* Guided export explainer + the Tier 1 integrated export panel. */}
-      <ExportExplainer
-        t={t}
-        controller={exportController}
-        onTradeNow={onTradeNow}
-        className="mt-10"
-      />
+      {/* Export / Unwrap direction toggle — the two legs of the round trip. */}
+      <section className="mt-10">
+        <div
+          role="tablist"
+          aria-label={t('tabs.ariaLabel')}
+          className="inline-flex rounded-xl border border-[--color-steel] bg-[--color-abyss]/40 p-1"
+        >
+          <button
+            role="tab"
+            type="button"
+            aria-selected={tab === 'export'}
+            onClick={() => setTab('export')}
+            className={`rounded-lg px-4 py-1.5 text-sm font-medium transition-colors ${
+              tab === 'export'
+                ? 'bg-[--color-pulse]/15 text-[--color-light]'
+                : 'text-[--color-dim] hover:text-[--color-soft]'
+            }`}
+          >
+            {t('tabs.export')}
+          </button>
+          <button
+            role="tab"
+            type="button"
+            aria-selected={tab === 'unwrap'}
+            onClick={() => setTab('unwrap')}
+            className={`rounded-lg px-4 py-1.5 text-sm font-medium transition-colors ${
+              tab === 'unwrap'
+                ? 'bg-[--color-pulse]/15 text-[--color-light]'
+                : 'text-[--color-dim] hover:text-[--color-soft]'
+            }`}
+          >
+            {t('tabs.unwrap')}
+          </button>
+        </div>
+
+        {tab === 'export' ? (
+          <ExportExplainer
+            t={t}
+            controller={exportController}
+            onTradeNow={onTradeNow}
+            className="mt-6"
+          />
+        ) : (
+          <UnwrapExplainer t={t} controller={unwrapController} className="mt-6" />
+        )}
+      </section>
     </div>
   )
 }

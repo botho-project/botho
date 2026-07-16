@@ -7,6 +7,11 @@
   "nav": {
     "trade": "Trade"
   },
+  "tabs": {
+    "ariaLabel": "Bridge direction",
+    "export": "Export BTH → wBTH",
+    "unwrap": "Unwrap wBTH → BTH"
+  },
   "hero": {
     "title": "Trade wrapped BTH",
     "subtitle": "wBTH is Botho wrapped 1:1 onto other chains so it can trade on their DEXs. This page lists where wBTH lives today and explains how to bridge BTH across.",
@@ -134,6 +139,101 @@
         "body": "Your wBTH is now in your {{chain}} wallet.",
         "viewTx": "View mint transaction",
         "tradeNow": "Trade wBTH now"
+      },
+      "error": {
+        "generic": "Something went wrong. Please try again."
+      }
+    }
+  },
+  "unwrap": {
+    "heading": "How to unwrap wBTH → BTH",
+    "intro": "Unwrapping burns wBTH on its chain and releases the locked BTH back to you. You burn in your own wallet — this wallet only provides the Botho release address, guides the burn, and tracks the release. It never signs on the other chain.",
+    "steps": {
+      "destination": {
+        "title": "1. Get your release address",
+        "body": "This wallet gives you a Botho address to receive the released BTH — a fresh stealth address, private by default."
+      },
+      "burn": {
+        "title": "2. Burn wBTH yourself",
+        "body": "In your own wallet, call bridgeBurn(amount, bthAddress) on the wBTH token, pasting the release address above as bthAddress."
+      },
+      "track": {
+        "title": "3. Track the release",
+        "body": "The bridge detects your burn, confirms it, and releases an equal amount of BTH (minus the bridge fee) to your address."
+      },
+      "receive": {
+        "title": "4. Receive BTH",
+        "body": "The released BTH lands at your release address. This wallet already scans for it — check your balance once the release completes."
+      }
+    },
+    "panel": {
+      "title": "Unwrap wBTH → BTH",
+      "subtitle": "Get your Botho release address and burn wBTH in your own wallet. The bridge releases the locked BTH to you — this wallet never signs on the other chain.",
+      "testnetBadge": "Testnet",
+      "noWallet": {
+        "title": "Open your wallet to unwrap",
+        "body": "Unwrapping releases BTH to your Botho address. Create or open your wallet first to get a release address.",
+        "cta": "Go to wallet"
+      },
+      "locked": {
+        "title": "Unlock your wallet to unwrap",
+        "body": "Your wallet is locked, so a release address is unavailable. Unlock it to get the Botho address to release BTH to.",
+        "cta": "Unlock wallet"
+      },
+      "chains": {
+        "ethereum": "Ethereum",
+        "solana": "Solana",
+        "hyperliquid": "Hyperliquid"
+      },
+      "form": {
+        "chainLabel": "Source chain (where you burn wBTH)",
+        "comingSoon": "Soon",
+        "destinationLabel": "Your BTH release address",
+        "destinationHint": "Copy this into your burn call as bthAddress. The released BTH lands here.",
+        "copy": "Copy",
+        "copied": "Copied",
+        "amountLabel": "Amount to unwrap",
+        "amountToken": "amount",
+        "amountHint": "The wBTH amount you will burn. You receive an equal amount of BTH minus the bridge fee.",
+        "amountRequired": "Enter an amount to unwrap.",
+        "burnHeading": "Burn wBTH on {{chain}}",
+        "burnIntro": "Do this in your OWN wallet (MetaMask / Phantom). bridgeBurn is the only burn path — it releases your BTH; a plain transfer does not.",
+        "tokenLabel": "wBTH token to burn",
+        "callLabel": "Burn call",
+        "callHint": "amount is in picocredits (u64); bthAddress is your release address above.",
+        "openApp": "Open {{chain}} to burn",
+        "track": "I've started the burn — track release",
+        "trackHint": "Opens a release order and tracks it. Your BTH arrives whether or not you track it here.",
+        "submitting": "Opening…",
+        "notConfigured": {
+          "title": "Live release tracking not wired yet",
+          "body": "The public bridge order API (create/status, CORS) is not exposed on this deployment yet. You can still burn wBTH using the guidance above — the bridge watches the chain and releases BTH to your address regardless. Check your wallet balance after the release completes."
+        }
+      },
+      "order": {
+        "id": "Order",
+        "source": "Source chain",
+        "destination": "Release to",
+        "amount": "Amount",
+        "fee": "Bridge fee",
+        "receive": "You receive",
+        "viewBurnTx": "View burn transaction",
+        "newUnwrap": "Start another unwrap"
+      },
+      "status": {
+        "burn_detected": "Burn detected",
+        "burn_confirmed": "Burn confirmed",
+        "release_pending": "Releasing BTH",
+        "released": "Released",
+        "expired": "Expired",
+        "failed": "Failed",
+        "expiredNote": "This order expired before a detected burn. Start a new unwrap.",
+        "failedNote": "This order failed: {{reason}}"
+      },
+      "released": {
+        "title": "BTH released to your wallet",
+        "body": "The BTH has been released to your address. This wallet scans owned outputs — check your balance to see it arrive.",
+        "releaseTx": "Release tx: {{tx}}"
       },
       "error": {
         "generic": "Something went wrong. Please try again."

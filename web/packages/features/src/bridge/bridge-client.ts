@@ -18,14 +18,26 @@
  *
  * This client codifies the contract that fast-follow must honor so the UI is
  * complete and correct the moment the endpoint lands:
- *   - `POST {base}/api/bridge/orders`       → 200 {@link MintOrder}
- *   - `GET  {base}/api/bridge/orders/{id}`  → 200 {@link MintOrder}
+ *   - `POST {base}/api/bridge/orders`               → 200 {@link MintOrder}
+ *   - `GET  {base}/api/bridge/orders/{id}`          → 200 {@link MintOrder}
+ *   - `POST {base}/api/bridge/release-orders`       → 200 {@link ReleaseOrder}
+ *   - `GET  {base}/api/bridge/release-orders/{id}`  → 200 {@link ReleaseOrder}
+ *
+ * The release-order endpoints (Unwrap, #1032) share the same #1036 backend
+ * fast-follow — the burn happens in the user's OWN counterparty wallet, and the
+ * order only registers the intent (source chain + BTH release address + amount)
+ * so the bridge can correlate the burn and track the release to `released`.
  *
  * Until a base URL is configured (`VITE_BRIDGE_API_BASE`), the wallet passes a
- * `null` client and the panel renders an explicit "endpoint not wired yet"
- * state — it never silently pretends to work.
+ * `null` client and the panels render an explicit "endpoint not wired yet"
+ * state — they never silently pretend to work.
  */
-import type { CreateMintOrderRequest, MintOrder } from './types'
+import type {
+  CreateMintOrderRequest,
+  CreateReleaseOrderRequest,
+  MintOrder,
+  ReleaseOrder,
+} from './types'
 
 /** Error thrown by {@link BridgeClient} calls that reach the network. */
 export class BridgeApiError extends Error {
@@ -42,8 +54,12 @@ export class BridgeApiError extends Error {
 export interface BridgeClient {
   /** Open a mint order; returns the deposit address + memo to send BTH to. */
   createMintOrder(req: CreateMintOrderRequest): Promise<MintOrder>
-  /** Fetch the latest state of an order by id. */
+  /** Fetch the latest state of a mint order by id. */
   getOrderStatus(id: string): Promise<MintOrder>
+  /** Open a release order (Unwrap, #1032); registers the burn intent. */
+  createReleaseOrder(req: CreateReleaseOrderRequest): Promise<ReleaseOrder>
+  /** Fetch the latest state of a release order by id. */
+  getReleaseOrderStatus(id: string): Promise<ReleaseOrder>
 }
 
 /** Strip a single trailing slash so `${base}/api/...` never doubles up. */
@@ -101,6 +117,24 @@ export function createBridgeClient(
         `${base}/api/bridge/orders/${encodeURIComponent(id)}`,
       )
       return (await parseJson(res)) as MintOrder
+    },
+
+    async createReleaseOrder(
+      req: CreateReleaseOrderRequest,
+    ): Promise<ReleaseOrder> {
+      const res = await fetchImpl(`${base}/api/bridge/release-orders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req),
+      })
+      return (await parseJson(res)) as ReleaseOrder
+    },
+
+    async getReleaseOrderStatus(id: string): Promise<ReleaseOrder> {
+      const res = await fetchImpl(
+        `${base}/api/bridge/release-orders/${encodeURIComponent(id)}`,
+      )
+      return (await parseJson(res)) as ReleaseOrder
     },
   }
 }

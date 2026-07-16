@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { BridgeApiError, createBridgeClient } from './bridge-client'
-import type { MintOrder } from './types'
+import type { MintOrder, ReleaseOrder } from './types'
 
 const ORDER: MintOrder = {
   id: '11111111-1111-1111-1111-111111111111',
@@ -68,5 +68,53 @@ describe('createBridgeClient', () => {
     await expect(
       client.createMintOrder({ destChain: 'ethereum', destAddress: ORDER.destAddress, amount: '1' }),
     ).rejects.toBeInstanceOf(BridgeApiError)
+  })
+})
+
+const RELEASE: ReleaseOrder = {
+  id: '22222222-2222-2222-2222-222222222222',
+  status: 'burn_detected',
+  sourceChain: 'ethereum',
+  bthAddress: 'tbotho://2/releasedest',
+  amount: '5000000000000',
+  fee: '100000000',
+  tokenAddress: '0x49b985ec427ee771a601f11b18f7d4402fa2dd7b',
+  sourceTx: '0xburntx',
+  destTx: null,
+  expiresAt: 1_760_000_000,
+  failureReason: null,
+}
+
+describe('createBridgeClient — release orders (#1032)', () => {
+  it('POSTs release-order create to the normalized base and returns the order', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(RELEASE))
+    const client = createBridgeClient('https://bridge.test/', fetchImpl as unknown as typeof fetch)
+
+    const order = await client.createReleaseOrder({
+      sourceChain: 'ethereum',
+      bthAddress: RELEASE.bthAddress,
+      amount: RELEASE.amount,
+    })
+
+    expect(order).toEqual(RELEASE)
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('https://bridge.test/api/bridge/release-orders')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body as string)).toEqual({
+      sourceChain: 'ethereum',
+      bthAddress: RELEASE.bthAddress,
+      amount: RELEASE.amount,
+    })
+  })
+
+  it('GETs release-order status by id (url-encoded)', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ ...RELEASE, status: 'released' }))
+    const client = createBridgeClient('https://bridge.test', fetchImpl as unknown as typeof fetch)
+
+    const order = await client.getReleaseOrderStatus(RELEASE.id)
+
+    expect(order.status).toBe('released')
+    const [url] = fetchImpl.mock.calls[0] as unknown as [string]
+    expect(url).toBe(`https://bridge.test/api/bridge/release-orders/${RELEASE.id}`)
   })
 })

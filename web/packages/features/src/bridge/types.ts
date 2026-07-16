@@ -193,3 +193,134 @@ export interface BridgeClientLike {
   createMintOrder(req: CreateMintOrderRequest): Promise<MintOrder>
   getOrderStatus(id: string): Promise<MintOrder>
 }
+
+// ─── Unwrap: wBTH → BTH return leg (#1032) ──────────────────────────────────
+
+/**
+ * Source chains the wallet can UNWRAP from (the chain the user burns wBTH on).
+ * Mirrors {@link DestinationChain}: Hyperliquid is discovery-only
+ * (`coming-soon`) until its HIP-1 spot market lands (#877), so it is not an
+ * unwrap source yet.
+ */
+export type SourceChain = 'ethereum' | 'solana'
+
+/**
+ * Release-order status. Strings are byte-identical to the Rust
+ * `OrderStatus::Display` impl (`bridge/core/src/order.rs`) for the burn side —
+ * `burn_detected → burn_confirmed → release_pending → released`, with
+ * `expired` / `failed` as off-path terminal states. Keeping the strings
+ * identical means the client consumes the release API verbatim once #1036
+ * exposes it.
+ */
+export type ReleaseOrderStatus =
+  | 'burn_detected'
+  | 'burn_confirmed'
+  | 'release_pending'
+  | 'released'
+  | 'expired'
+  | 'failed'
+
+/**
+ * Request body for opening a release order. The wallet registers its INTENT to
+ * unwrap — the source chain, the Botho address the released BTH should land at
+ * (the wallet's own receive address, ADR 0004), and the wBTH amount it will
+ * burn. The user then executes the `bridgeBurn(amount, bthAddress)` call in
+ * THEIR OWN counterparty wallet; the bridge correlates that burn to this order
+ * by the `bthAddress` + `amount` and releases the BTH. The Botho wallet never
+ * signs on the counterparty chain.
+ */
+export interface CreateReleaseOrderRequest {
+  /** Chain the user burns wBTH on. */
+  sourceChain: SourceChain
+  /** The Botho address released BTH is sent to (the wallet's receive address). */
+  bthAddress: string
+  /**
+   * Gross wBTH to burn, in picocredits, as a decimal STRING to preserve the
+   * full u64 range across JSON without precision loss (mirrors
+   * {@link CreateMintOrderRequest}).
+   */
+  amount: string
+}
+
+/**
+ * A release order as returned by the bridge order API (#1036 fast-follow).
+ * Amounts are picocredit strings (u64-safe); field names are camelCase to match
+ * the bridge's `serde(rename_all = "camelCase")` HTTP responses.
+ */
+export interface ReleaseOrder {
+  /** Order UUID. */
+  id: string
+  /** Current release state-machine status. */
+  status: ReleaseOrderStatus
+  /** Chain the user burns wBTH on. */
+  sourceChain: SourceChain
+  /** The Botho address released BTH is sent to. */
+  bthAddress: string
+  /** Gross wBTH to burn, picocredits (string). */
+  amount: string
+  /** Bridge fee, picocredits (string). */
+  fee: string
+  /** wBTH token/mint address the user must burn on `sourceChain`. */
+  tokenAddress: string
+  /** Source-chain burn tx hash, once the burn is detected. */
+  sourceTx?: string | null
+  /** Botho release tx hash, once the BTH is released. */
+  destTx?: string | null
+  /** Unix seconds after which an unburned order expires. */
+  expiresAt?: number | null
+  /** Failure reason when `status === 'failed'`. */
+  failureReason?: string | null
+}
+
+/**
+ * Structural subset of `BridgeClient` for the release side. Declared here so
+ * `types.ts` stays dependency-free; the concrete client satisfies it. Kept
+ * separate from {@link BridgeClientLike} so the mint-only `ExportController`
+ * mocks stay valid (they need not implement release methods).
+ */
+export interface ReleaseClientLike {
+  createReleaseOrder(req: CreateReleaseOrderRequest): Promise<ReleaseOrder>
+  getReleaseOrderStatus(id: string): Promise<ReleaseOrder>
+}
+
+/**
+ * Everything the {@link UnwrapPanel} needs from the host app, injected by the
+ * `/trade` page so `@botho/features` keeps NO dependency on the wallet context
+ * or the bridge client wiring (mirroring {@link ExportController}).
+ *
+ * There is deliberately NO signing hook here: the wallet does not sign on the
+ * counterparty chain, and the released BTH simply arrives at `releaseAddress`
+ * (which the wallet already scans for owned outputs). The wallet's whole job is
+ * destination + guidance + tracking + receipt.
+ */
+export interface UnwrapController {
+  /**
+   * The release-order API client, or `null` when no endpoint is configured
+   * (`VITE_BRIDGE_API_BASE` unset). `null` keeps the destination + burn
+   * guidance visible (they need no backend — the bridge watches the chain and
+   * releases regardless) but disables live order tracking, mirroring how the
+   * export panel degrades when unconfigured.
+   */
+  client: ReleaseClientLike | null
+  /** Active bridge network — drives testnet labeling. */
+  network: BridgeNetwork
+  /** Snapshot of the wallet state relevant to unwrapping. */
+  wallet: UnwrapWalletState
+  /** Navigate the user to the wallet (to create/open or unlock it). */
+  requestWallet?: () => void
+}
+
+/** Wallet fields the unwrap panel reads (no secrets, no signing keys). */
+export interface UnwrapWalletState {
+  /** Whether a wallet exists in this browser. */
+  hasWallet: boolean
+  /** Whether the wallet is locked. */
+  isLocked: boolean
+  /**
+   * The wallet's Botho receive address for the released BTH — a stealth address
+   * (ADR 0004), reused from the wallet context (the same value the Receive
+   * modal shows). `null` when no wallet exists or it is locked and the address
+   * is unavailable.
+   */
+  releaseAddress: string | null
+}

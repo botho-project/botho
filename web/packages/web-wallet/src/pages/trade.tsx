@@ -9,6 +9,7 @@ import {
   useBridgeVenues,
   useReserveProof,
   type ExportController,
+  type UnwrapController,
 } from '@botho/features'
 import { ArrowLeft } from 'lucide-react'
 import { METRICS_API_BASE } from '../config/fleet'
@@ -36,7 +37,7 @@ export function TradePage() {
   const { venues } = useBridgeVenues()
   const { proof: reserve, state: reserveState } = useReserveProof(METRICS_API_BASE)
 
-  const { hasWallet, isLocked, balance, send } = useWallet()
+  const { hasWallet, isLocked, balance, send, address } = useWallet()
 
   // The bridge order client — `null` until a CORS-enabled public order endpoint
   // is configured (see config/bridge.ts). A null client makes the export panel
@@ -65,6 +66,24 @@ export function TradePage() {
       requestWallet: () => navigate('/wallet'),
     }),
     [client, hasWallet, isLocked, balance, send, navigate],
+  )
+
+  // Unwrap (#1032): the wallet provides the Botho release destination (its own
+  // receive address — a stealth address, ADR 0004, the same value the Receive
+  // modal shows) + guides the burn, then tracks the release order. The wallet
+  // NEVER signs on the counterparty chain, so there is no signing hook here.
+  const unwrapController = useMemo<UnwrapController>(
+    () => ({
+      client,
+      network: ACTIVE_BRIDGE_NETWORK,
+      wallet: {
+        hasWallet,
+        isLocked,
+        releaseAddress: address,
+      },
+      requestWallet: () => navigate('/wallet'),
+    }),
+    [client, hasWallet, isLocked, address, navigate],
   )
 
   // On the wallet subdomain the landing lives at `/home`; keep `/` elsewhere so
@@ -116,6 +135,7 @@ export function TradePage() {
             reserveState={reserveState}
             t={t}
             exportController={exportController}
+            unwrapController={unwrapController}
           />
         </div>
       </main>
