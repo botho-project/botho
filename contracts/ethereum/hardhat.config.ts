@@ -1,3 +1,8 @@
+// Auto-load contracts/ethereum/.env (git-ignored) so PRIVATE_KEY,
+// SEPOLIA_RPC_URL, ETHERSCAN_API_KEY and the WBTH_*_SAFE / BRIDGE_SAFE_OWNER_*
+// addresses resolve without a manual `source .env` (#1011). Secrets are only
+// read from this git-ignored file — never printed, never committed.
+import "dotenv/config";
 import { HardhatUserConfig } from "hardhat/config";
 import "@nomicfoundation/hardhat-toolbox";
 
@@ -17,6 +22,13 @@ const config: HardhatUserConfig = {
     },
     localhost: {
       url: "http://127.0.0.1:8545",
+    },
+    // Local Sepolia FORK for dry-running deploys with no real testnet ETH
+    // (#1011/#992). Point BRIDGE_FORK_RPC_URL at an `anvil --fork-url <sepolia>`
+    // node; the deployer is any key funded on the fork via anvil_setBalance.
+    fork: {
+      url: process.env.BRIDGE_FORK_RPC_URL || "http://127.0.0.1:8545",
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
     },
     sepolia: {
       url: process.env.SEPOLIA_RPC_URL || "",
