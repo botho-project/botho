@@ -104,3 +104,7 @@ ML-DSA-65 the designated future signature family.
 - [ADR 0008](0008-universal-pq-address-format-and-hybrid-stealth.md) — the
   concrete universal-PQ address format (v2), hybrid stealth preimage, and
   KEM/DSA bundling that implement this direction
+- [ADR 0009](0009-confidential-amounts-economics.md) — discharges Decision 1's
+  open design work: how the value-dependent economics (demurrage, lottery,
+  cluster-tag blending, factor curve) reconcile with hidden amounts (ZK-light,
+  no Merkle-sum tree, no weighted-sampling sort)

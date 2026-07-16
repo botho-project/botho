@@ -75,3 +75,4 @@ Decay-by-circulation confirmed against the real `TagVector::mix`: a worst-case 6
 - ADR 0003 (factor-1 wrap eligibility + demurrage-settlement), ADR 0004 (bridge amount revelation), ADR 0006 (confidential-amounts target)
 - #925 (spend-to-background leak — the remaining domestic reset door), #831 (settlement op), #833 (horizon calibration), #902 (CT↔economics spec epic)
 - 2026-07-14 design discussion (this ADR's derivation): the entry leak, the reset-vector map, shared-fate as intrinsic to identity-free Sybil-resistance
+- [ADR 0009](0009-confidential-amounts-economics.md) — generalizes this epoch-keyed, circulation-decayed, `F`-floored provenance factor inward to *domestic* mint-origin wealth (the `EpochOrigin` rule), inheriting `F` = 1.5× and `K` = 17,280; the same construction now keys both the bridge factor (public unwrap amounts) and the domestic factor (public coinbase amounts) under confidential amounts
