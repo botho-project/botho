@@ -53,6 +53,10 @@ atlassian-ide-plugin.xml
 *.sublime-workspace
 *.sublime-project
 
+# Secrets — private keys, keystores, generated testnet accounts.
+# NEVER commit key material. See scripts/bridge-testnet-accounts.sh (#1008).
+.secrets/
+
 # Dockerfile-build output
 dist/
 /keyrings/live/pubring.gpg~

@@ -250,6 +250,96 @@ Layer 1.5). The Ethereum half swaps `local → Sepolia-fork → live Sepolia`
 purely by pointing `BRIDGE_FORK_RPC_URL` at a fork/live RPC (+ a funded
 relayer key for live) with no test-logic change (companion #992/#866).
 
+## Phase B — account provisioning (#1008)
+
+Before the live-Sepolia drill (Layers 1–2) and the DeFi launch flip
+(Layer 0.75 → testnet column) you need funded testnet accounts. One command
+generates every keypair into a **git-ignored** directory, prints only the
+**public** addresses + a faucet checklist, and emits a role→address env file
+the live-deploy harness consumes:
+
+```bash
+./scripts/bridge-testnet-accounts.sh
+```
+
+It generates:
+
+| Role | Chain | Curve | Purpose |
+|---|---|---|---|
+| `deployer` | Sepolia | secp256k1 | signs the `WrappedBTH` deploy tx (holds NO roles, ADR 0002) |
+| `lp` | Sepolia | secp256k1 | LP / relayer EOA for the DeFi round trip (Layer 0.75) |
+| `safe-owner-1/2/3` | Sepolia | secp256k1 | owner EOAs of the Gnosis Safe(s) |
+| `solana-deployer` | devnet | ed25519 | Solana program upgrade/authority key |
+| `solana-lp` | devnet | ed25519 | Solana LP key |
+
+**Secret discipline (the point of this script):**
+
+- Private keys are written to `.secrets/bridge-testnet/` (`0600`, dir `0700`),
+  which is covered by `.gitignore` (`.secrets/`). The script **refuses to run**
+  if that directory is not git-ignored — it will not write key material into a
+  tracked path.
+- Only **public** addresses and file paths are printed. Private keys are
+  **never** echoed to stdout and **never** committed.
+- Re-running is **idempotent**: an existing key file is skipped ("exists,
+  skipping"), never overwritten — so re-running after funding cannot nuke a
+  funded account.
+- **Testnet only.** The beta testnet is disposable; do not reuse these keys on
+  mainnet.
+
+Verify nothing leaked before proceeding:
+
+```bash
+git status --porcelain .secrets/                          # must print nothing
+git check-ignore -v .secrets/bridge-testnet/eth-deployer.key   # must print a match
+```
+
+**Tooling.** The script prefers `cast wallet new` (foundry) for ETH and
+`solana-keygen new` for Solana when installed, and otherwise falls back to
+`openssl` + an embedded, test-vector-validated keccak-256 / base58 helper — so
+it runs with only `bash`, `python3`, and `openssl` present. Install the native
+tools for canonical keystores: foundry (`https://getfoundry.sh`), Solana CLI
+(`https://docs.solana.com/cli/install-solana-cli-tools`).
+
+**Faucets.** The script prints per-address instructions:
+
+- **Sepolia ETH** — Alchemy faucet (`https://sepoliafaucet.com`, 0.5/day),
+  Google Cloud Web3 faucet (0.05/day, no account gate), or the pk910 PoW faucet
+  (`https://sepolia-faucet.pk910.de`, mine to earn, no cap). Suggested:
+  deployer ~0.4, lp ~0.2, each Safe owner ~0.05 Sepolia ETH.
+- **Solana devnet** — `solana airdrop 2 <pubkey> --url devnet` per address
+  (2 SOL/request, rate-limited per day/IP).
+
+**Emitted env → live deploy.** The script writes
+`.secrets/bridge-testnet/addresses.env` (git-ignored; public addresses only)
+and prints it:
+
+```
+BRIDGE_SEPOLIA_DEPLOYER=0x…
+BRIDGE_SEPOLIA_LP=0x…
+BRIDGE_SAFE_OWNER_1=0x…
+BRIDGE_SAFE_OWNER_2=0x…
+BRIDGE_SAFE_OWNER_3=0x…
+BRIDGE_SOLANA_DEPLOYER=…
+BRIDGE_SOLANA_LP=…
+```
+
+Mapping to `contracts/ethereum/scripts/deploy.ts` +
+`contracts/ethereum/hardhat.config.ts`:
+
+- `deploy.ts` signs with the deployer **private** key, which hardhat reads from
+  the `PRIVATE_KEY` env var. Wire the two together and confirm they agree:
+  ```bash
+  export PRIVATE_KEY="$(cat .secrets/bridge-testnet/eth-deployer.key)"
+  # the deploy log's "Deployer" line must equal BRIDGE_SEPOLIA_DEPLOYER
+  ```
+- The three `safe-owner-*` EOAs are the **owners** of the Gnosis Safe(s). Deploy
+  the Safe(s) from those owners (Safe UI/SDK), then set the resulting Safe
+  **contract** addresses as `WBTH_ADMIN_SAFE` / `WBTH_MINTER_SAFE` /
+  `WBTH_PAUSER_SAFE` for `deploy.ts` (ADR 0002). This script provisions the
+  owner EOAs, not the Safe addresses themselves.
+- `BRIDGE_SEPOLIA_LP` is the LP / relayer EOA the Layer 0.75 DeFi round trip
+  uses (its private key file feeds the harness's LP key env var).
+
 ## Prerequisites (Layers 1–2)
 
 - **BTH testnet**: a synced node with JSON-RPC + websocket exposed; the
