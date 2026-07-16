@@ -54,6 +54,7 @@ import { deriveKeypairs, deriveDefaultSubaddressPublicKeys } from '@botho/core'
 import {
   buildSendTransaction,
   spendableBalance,
+  deriveKemPublicKey,
   setSigner,
   resetSigner,
   type ChainOutput,
@@ -172,12 +173,14 @@ maybe('node-backed: two-user bidirectional payment exchange (#390)', () => {
     }
   }
 
-  // Recipient address keys (default-subaddress, #383) decoded from the address.
-  const recipientOf = (mnemonic: string) => {
+  // Recipient address keys (default-subaddress, #383) plus the recipient's
+  // ML-KEM key (#978), so the send can build a hybrid post-quantum output.
+  const recipientOf = async (mnemonic: string) => {
     const { viewPublic, spendPublic } = deriveDefaultSubaddressPublicKeys(mnemonic, 0)
     return {
       spend_public_key: toHex(spendPublic),
       view_public_key: toHex(viewPublic),
+      kem_public_key: await deriveKemPublicKey(mnemonic),
     }
   }
 
@@ -282,8 +285,10 @@ maybe('node-backed: two-user bidirectional payment exchange (#390)', () => {
 
     const keysA = keysOf(mnemonicA)
     const keysB = keysOf(mnemonicB)
-    const addrB = recipientOf(mnemonicB)
-    const addrA = recipientOf(mnemonicA)
+    const addrB = await recipientOf(mnemonicB)
+    const addrA = await recipientOf(mnemonicA)
+    const kemA = await deriveKemPublicKey(mnemonicA)
+    const kemB = await deriveKemPublicKey(mnemonicB)
 
     // ----------------------------------------------------------------------
     // Step 2: A is funded; B owns nothing yet.
@@ -306,6 +311,7 @@ maybe('node-backed: two-user bidirectional payment exchange (#390)', () => {
     const ab = await buildSendTransaction({
       keys: keysA,
       recipient: addrB,
+      senderKemPublicKey: kemA,
       amount: sendAmount,
       fee,
       rpc: sendRpc(),
@@ -369,6 +375,7 @@ maybe('node-backed: two-user bidirectional payment exchange (#390)', () => {
     const ba = await buildSendTransaction({
       keys: keysB,
       recipient: addrA,
+      senderKemPublicKey: kemB,
       amount: returnAmount,
       fee,
       rpc: sendRpc(),

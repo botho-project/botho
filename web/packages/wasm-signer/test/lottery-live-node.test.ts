@@ -54,6 +54,7 @@ import { deriveKeypairs, deriveDefaultSubaddressPublicKeys } from '@botho/core'
 import {
   buildSendTransaction,
   spendableBalance,
+  deriveKemPublicKey,
   setSigner,
   resetSigner,
   type ChainOutput,
@@ -190,11 +191,12 @@ maybe('node-backed: three-user exchange until a lottery payout (#394)', () => {
     }
   }
 
-  const recipientOf = (mnemonic: string) => {
+  const recipientOf = async (mnemonic: string) => {
     const { viewPublic, spendPublic } = deriveDefaultSubaddressPublicKeys(mnemonic, 0)
     return {
       spend_public_key: toHex(spendPublic),
       view_public_key: toHex(viewPublic),
+      kem_public_key: await deriveKemPublicKey(mnemonic),
     }
   }
 
@@ -312,9 +314,12 @@ maybe('node-backed: three-user exchange until a lottery payout (#394)', () => {
     const keysA = keysOf(mnemonicA)
     const keysB = keysOf(mnemonicB)
     const keysC = keysOf(mnemonicC)
-    const addrA = recipientOf(mnemonicA)
-    const addrB = recipientOf(mnemonicB)
-    const addrC = recipientOf(mnemonicC)
+    const addrA = await recipientOf(mnemonicA)
+    const addrB = await recipientOf(mnemonicB)
+    const addrC = await recipientOf(mnemonicC)
+    const kemA = await deriveKemPublicKey(mnemonicA)
+    const kemB = await deriveKemPublicKey(mnemonicB)
+    const kemC = await deriveKemPublicKey(mnemonicC)
 
     // The per-block payout cap (anti-grinding) is one block reward. Read it from
     // a mined block so the cap assertion is grounded in the chain's real reward.
@@ -333,7 +338,7 @@ maybe('node-backed: three-user exchange until a lottery payout (#394)', () => {
     const PER_OUTPUT = 4_000_000_000n // picocredits per distributed output
 
     const distribute = async (
-      recipient: ReturnType<typeof recipientOf>,
+      recipient: Awaited<ReturnType<typeof recipientOf>>,
       label: string,
     ): Promise<void> => {
       for (let i = 0; i < SPLIT; i++) {
@@ -341,6 +346,7 @@ maybe('node-backed: three-user exchange until a lottery payout (#394)', () => {
         const tx = await buildSendTransaction({
           keys: keysA,
           recipient,
+          senderKemPublicKey: kemA,
           amount: PER_OUTPUT,
           fee,
           rpc: sendRpc(),
@@ -368,9 +374,9 @@ maybe('node-backed: three-user exchange until a lottery payout (#394)', () => {
     // a lottery payout to A/B/C after every mined block, until one wins.
     // ----------------------------------------------------------------------
     const wallets = [
-      { name: 'A', keys: keysA, addr: addrA },
-      { name: 'B', keys: keysB, addr: addrB },
-      { name: 'C', keys: keysC, addr: addrC },
+      { name: 'A', keys: keysA, addr: addrA, kem: kemA },
+      { name: 'B', keys: keysB, addr: addrB, kem: kemB },
+      { name: 'C', keys: keysC, addr: addrC, kem: kemC },
     ] as const
 
     // Track which lottery outputs we've already seen, so a "new" payout is one
@@ -419,6 +425,7 @@ maybe('node-backed: three-user exchange until a lottery payout (#394)', () => {
         const tx = await buildSendTransaction({
           keys: from.keys,
           recipient: to.addr,
+          senderKemPublicKey: from.kem,
           amount: sendAmount,
           fee,
           rpc: sendRpc(),

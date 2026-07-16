@@ -48,16 +48,30 @@ pub struct SpendInput {
     pub decoys: Vec<DecoyOutput>,
 }
 
-/// A recipient address, as the two 32-byte Ristretto public keys.
+/// A recipient address: the two 32-byte Ristretto stealth keys PLUS the
+/// recipient's raw ML-KEM-768 public key.
 ///
-/// The browser wallet decodes whatever address format it uses (e.g. base58)
-/// into these raw keys before calling the signer.
+/// The browser wallet decodes the recipient's `botho://2/` (v2) address into
+/// these raw components before calling the signer (`parseAddress` in
+/// `@botho/core`, or the wasm `decodeAddress`, both of which expose
+/// `kemPublic`).
+///
+/// Under protocol 6.0.0 every send output is a hybrid post-quantum stealth
+/// output: the signer encapsulates a shared secret against `kem_public_key` and
+/// attaches the resulting 1,088-byte ML-KEM ciphertext (issue #978). A missing
+/// or malformed key is a hard error — a KEM-less output is rejected by
+/// consensus (`validate_transfer_tx`, #974) — so this field is required, not
+/// optional.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RecipientAddress {
     /// Hex-encoded 32-byte spend public key (`D`).
     pub spend_public_key: String,
     /// Hex-encoded 32-byte view public key (`C`).
     pub view_public_key: String,
+    /// Hex-encoded raw ML-KEM-768 public key (1184 bytes) published in the
+    /// recipient's v2 address. The sender encapsulates against this to build
+    /// the hybrid one-time key and attach the ciphertext.
+    pub kem_public_key: String,
 }
 
 /// Encode a [`PublicAddress`] as a `botho://2/<base58>` / `tbotho://2/<base58>`
@@ -246,6 +260,13 @@ pub struct SignRequest {
     pub inputs: Vec<SpendInput>,
     /// Recipient of the transfer.
     pub recipient: RecipientAddress,
+    /// Hex-encoded raw ML-KEM-768 public key (1184 bytes) of the SENDER's own
+    /// v2 address. The change output is a self-send whose ciphertext is
+    /// encapsulated against this key, so the sender can later scan and recover
+    /// its change under the hybrid scheme (issue #978). Derived from the
+    /// wallet's BIP39 seed (`derivePqPublicKeysFromSeed`), it is the same key
+    /// published in the wallet's own `botho://2/` address.
+    pub sender_kem_public_key: String,
     /// Amount to send to the recipient, in picocredits.
     pub amount: u64,
     /// Transaction fee in picocredits.
@@ -272,6 +293,24 @@ fn parse_private(field: &str, s: &str) -> Result<RistrettoPrivate, String> {
 fn parse_public(field: &str, s: &str) -> Result<RistrettoPublic, String> {
     let bytes = parse_hex_32(field, s)?;
     RistrettoPublic::try_from(&bytes).map_err(|e| format!("{field}: invalid public key: {e:?}"))
+}
+
+/// Parse a hex-encoded raw ML-KEM-768 public key, validating its length up
+/// front so the caller gets a clear error before the encapsulation step.
+///
+/// A missing (empty) or wrong-length key means the pasted address is not a v2
+/// post-quantum address; on 6.0.0 that is a hard error, since a KEM-less output
+/// would be rejected by consensus.
+fn parse_kem_public_key(field: &str, s: &str) -> Result<Vec<u8>, String> {
+    let bytes = hex::decode(s.trim()).map_err(|e| format!("{field}: invalid hex: {e}"))?;
+    if bytes.len() != bth_crypto_pq::ML_KEM_768_PUBLIC_KEY_BYTES {
+        return Err(format!(
+            "{field}: expected a {}-byte ML-KEM-768 public key (v2 address), got {} bytes",
+            bth_crypto_pq::ML_KEM_768_PUBLIC_KEY_BYTES,
+            bytes.len()
+        ));
+    }
+    Ok(bytes)
 }
 
 /// Reconstruct a [`RingMember`] from a chain output's keys + amount.
@@ -327,10 +366,27 @@ pub fn build_and_sign_with_rng<R: RngCore + CryptoRng>(
     let view_private = parse_private("viewPrivateKey", &req.view_private_key)?;
     let account = AccountKey::new(&spend_private, &view_private);
 
-    // Reconstruct the recipient address.
-    let recipient = PublicAddress::new(
+    // Reconstruct the recipient's v2 (post-quantum) address: the classical
+    // stealth keys plus the recipient's published ML-KEM-768 key. The DSA key is
+    // not consulted on the send path (only the recipient verifies signatures),
+    // so it is left empty.
+    let recipient = PublicAddress::new_with_pq(
         &parse_public("recipient.spendPublicKey", &req.recipient.spend_public_key)?,
         &parse_public("recipient.viewPublicKey", &req.recipient.view_public_key)?,
+        parse_kem_public_key("recipient.kemPublicKey", &req.recipient.kem_public_key)?,
+        Vec::new(),
+    );
+
+    // Reconstruct the sender's OWN v2 address for change: the account's
+    // default-subaddress stealth keys plus the sender's own published ML-KEM-768
+    // key (derived from the wallet seed). The change output encapsulates against
+    // this so the sender can later recover it under the hybrid scheme.
+    let default_subaddress = account.default_subaddress();
+    let sender_address = PublicAddress::new_with_pq(
+        default_subaddress.spend_public_key(),
+        default_subaddress.view_public_key(),
+        parse_kem_public_key("senderKemPublicKey", &req.sender_kem_public_key)?,
+        Vec::new(),
     );
 
     // Sum inputs and validate the balance equation up front.
@@ -348,12 +404,28 @@ pub fn build_and_sign_with_rng<R: RngCore + CryptoRng>(
         .checked_sub(spent)
         .ok_or("insufficient funds: inputs do not cover amount + fee")?;
 
-    // Build outputs: recipient + (optional) change back to our default
-    // subaddress. Sub-dust change is folded into the fee so we never create an
-    // unspendable output and the balance equation still holds exactly.
-    let mut outputs = vec![TxOutput::new(req.amount, &recipient)];
+    // Build outputs: recipient (index 0) + (optional) change (index 1) back to
+    // our own address. Sub-dust change is folded into the fee so we never create
+    // an unspendable output and the balance equation still holds exactly.
+    //
+    // Every output is a HYBRID post-quantum stealth output (protocol 6.0.0,
+    // issue #978): the signer encapsulates a shared secret against the
+    // recipient's (resp. sender's) published ML-KEM-768 key, attaches the
+    // 1,088-byte ciphertext, and folds the secret into the one-time key —
+    // byte-identical to the node send path (`new_hybrid_to_address`, #966). The
+    // `output_index` is bound into the one-time-key derivation, so it MUST match
+    // the output's position in the tx (recipient=0, change=1). A recipient (or
+    // sender) address that lacks a well-formed ML-KEM key is a hard error, never
+    // a silent KEM-less output that 6.0.0 consensus would reject.
+    let recipient_output =
+        TxOutput::new_hybrid_to_address(req.amount, &recipient, 0, None, Default::default())
+            .map_err(|e| format!("recipient address is not post-quantum (v2): {e}"))?;
+    let mut outputs = vec![recipient_output];
     let actual_fee = if change >= DUST_THRESHOLD {
-        outputs.push(TxOutput::new(change, &account.default_subaddress()));
+        let change_output =
+            TxOutput::new_hybrid_to_address(change, &sender_address, 1, None, Default::default())
+                .map_err(|e| format!("sender address is not post-quantum (v2): {e}"))?;
+        outputs.push(change_output);
         req.fee
     } else {
         req.fee + change
@@ -630,16 +702,38 @@ fn shuffle<T, R: RngCore>(items: &mut [T], rng: &mut R) {
 mod tests {
     use super::*;
     use bth_account_keys::AccountKey;
+    use bth_crypto_pq::PqKeyMaterial;
     use bth_transaction_clsag::TxOutput;
     use rand::{rngs::StdRng, SeedableRng};
 
-    /// Create a recipient address request fragment from an account.
-    fn recipient_of(account: &AccountKey) -> RecipientAddress {
+    /// Derive a deterministic ML-KEM-768 / ML-DSA-65 keypair for tests from a
+    /// single seed byte (the node-identical `derive_pq_keys_from_seed`).
+    fn pq_keys(seed_byte: u8) -> PqKeyMaterial {
+        let seed = [seed_byte; bth_crypto_pq::BIP39_SEED_SIZE];
+        bth_crypto_pq::derive_pq_keys_from_seed(&seed)
+    }
+
+    /// The hex-encoded raw ML-KEM-768 public key for a test PQ keypair.
+    fn kem_public_hex(pq: &PqKeyMaterial) -> String {
+        hex::encode(pq.kem_keypair.public_key().as_bytes())
+    }
+
+    /// Create a recipient address request fragment from an account, publishing
+    /// the ML-KEM-768 public key of `pq` (so the send path can encapsulate a
+    /// ciphertext against a v2 address).
+    fn recipient_of_with_pq(account: &AccountKey, pq: &PqKeyMaterial) -> RecipientAddress {
         let addr = account.default_subaddress();
         RecipientAddress {
             spend_public_key: hex::encode(addr.spend_public_key().to_bytes()),
             view_public_key: hex::encode(addr.view_public_key().to_bytes()),
+            kem_public_key: kem_public_hex(pq),
         }
+    }
+
+    /// Convenience: a recipient with a throwaway (deterministic) ML-KEM key for
+    /// tests that only care that outputs are well-formed, not receivability.
+    fn recipient_of(account: &AccountKey) -> RecipientAddress {
+        recipient_of_with_pq(account, &pq_keys(0xAB))
     }
 
     /// Make `count` random decoy outputs paid to a throwaway recipient.
@@ -689,6 +783,7 @@ mod tests {
                 decoys,
             }],
             recipient: recipient_of(&recipient_account),
+            sender_kem_public_key: kem_public_hex(&pq_keys(0xCD)),
             amount: send_amount,
             fee,
             created_at_height: 1000,
@@ -779,6 +874,7 @@ mod tests {
                 decoys,
             }],
             recipient: recipient_of(&recipient_account),
+            sender_kem_public_key: kem_public_hex(&pq_keys(0xCD)),
             amount: 5_000_000_000,
             fee: MIN_TX_FEE,
             created_at_height: 1000,
@@ -1078,5 +1174,151 @@ mod tests {
         let mut sorted = items.clone();
         sorted.sort();
         assert_eq!(sorted, original, "shuffle must be a permutation");
+    }
+
+    /// #978: every output a browser SEND builds (recipient + change) MUST carry
+    /// a valid 1,088-byte ML-KEM-768 ciphertext, encapsulated against the
+    /// respective published address. Without this, the output is rejected by
+    /// 6.0.0 consensus enforcement (`validate_transfer_tx`, #974).
+    #[test]
+    fn browser_send_outputs_carry_ml_kem_ciphertexts() {
+        let mut rng = StdRng::from_seed([41u8; 32]);
+        let sender = AccountKey::random(&mut rng);
+
+        // Ensure a change output exists: owned - amount - fee well above dust.
+        let owned_amount = 10_000_000_000u64;
+        let send_amount = 4_000_000_000u64;
+        let req = make_request(&sender, owned_amount, send_amount, MIN_TX_FEE, &mut rng);
+
+        let tx = build_and_sign_with_rng(&req, &mut rng).expect("build+sign should succeed");
+
+        // Recipient (index 0) + change (index 1).
+        assert_eq!(tx.outputs.len(), 2, "expected recipient + change outputs");
+        for (i, out) in tx.outputs.iter().enumerate() {
+            let ct = out
+                .kem_ciphertext
+                .as_ref()
+                .unwrap_or_else(|| panic!("output {i} is missing its ML-KEM ciphertext"));
+            assert_eq!(
+                ct.len(),
+                bth_crypto_pq::ML_KEM_768_CIPHERTEXT_BYTES,
+                "output {i} ciphertext must be exactly 1088 bytes"
+            );
+        }
+    }
+
+    /// #978: the hybrid one-time key a browser SEND derives must match the node
+    /// construction — proven end-to-end by having a NODE scanner
+    /// (`belongs_to_hybrid`, classical DH ⊕ ML-KEM decapsulation) detect the
+    /// browser-built outputs. The recipient detects its output at index 0; the
+    /// sender detects its own change at index 1. If the browser derived the
+    /// one-time key even slightly differently from the node, neither scan would
+    /// match and the funds would be unspendable.
+    #[test]
+    fn browser_send_outputs_are_receivable_by_node_scanner() {
+        let mut rng = StdRng::from_seed([43u8; 32]);
+
+        // Sender: classical account + its own ML-KEM keypair (published in the
+        // sender's v2 address, used to encapsulate change).
+        let sender = AccountKey::random(&mut rng);
+        let sender_pq = pq_keys(0x11);
+
+        // Recipient: classical account + its own ML-KEM keypair (published in
+        // the recipient's v2 address).
+        let recipient_account = AccountKey::random(&mut rng);
+        let recipient_pq = pq_keys(0x22);
+
+        let owned_amount = 10_000_000_000u64;
+        let send_amount = 4_000_000_000u64;
+        let owned = TxOutput::new(owned_amount, &sender.default_subaddress());
+        let decoys = make_decoys(DEFAULT_RING_SIZE - 1, owned_amount, &mut rng);
+
+        let req = SignRequest {
+            spend_private_key: hex::encode(sender.spend_private_key().to_bytes()),
+            view_private_key: hex::encode(sender.view_private_key().to_bytes()),
+            inputs: vec![SpendInput {
+                target_key: hex::encode(owned.target_key),
+                public_key: hex::encode(owned.public_key),
+                amount: owned_amount,
+                subaddress_index: 0,
+                decoys,
+            }],
+            recipient: recipient_of_with_pq(&recipient_account, &recipient_pq),
+            sender_kem_public_key: kem_public_hex(&sender_pq),
+            amount: send_amount,
+            fee: MIN_TX_FEE,
+            created_at_height: 1000,
+        };
+
+        let tx = build_and_sign_with_rng(&req, &mut rng).expect("build+sign should succeed");
+        assert_eq!(tx.outputs.len(), 2);
+
+        // The recipient's node-identical hybrid scan detects the recipient
+        // output (index 0) at its default subaddress.
+        let recipient_index =
+            tx.outputs[0].belongs_to_hybrid(&recipient_account, &recipient_pq.kem_keypair, 0);
+        assert_eq!(
+            recipient_index,
+            Some(0),
+            "recipient must detect the browser-built output at subaddress 0"
+        );
+
+        // The sender's own hybrid scan detects the change output (index 1).
+        let change_index = tx.outputs[1].belongs_to_hybrid(&sender, &sender_pq.kem_keypair, 1);
+        assert_eq!(
+            change_index,
+            Some(0),
+            "sender must detect its own change at default subaddress"
+        );
+
+        // Cross-check: the recipient must NOT detect the sender's change, and
+        // vice versa (the ciphertexts are bound to distinct ML-KEM keys).
+        assert_eq!(
+            tx.outputs[1].belongs_to_hybrid(&recipient_account, &recipient_pq.kem_keypair, 1),
+            None,
+            "recipient must not detect the sender's change"
+        );
+    }
+
+    /// #978 acceptance #4: a recipient whose address publishes no ML-KEM key
+    /// (empty `kem_public_key`, i.e. a retired v1 / classical-only address) is
+    /// a HARD ERROR on 6.0.0 — the signer must never emit a KEM-less output
+    /// that consensus would reject. Fail loudly instead.
+    #[test]
+    fn send_to_kemless_address_is_hard_error() {
+        let mut rng = StdRng::from_seed([47u8; 32]);
+        let sender = AccountKey::random(&mut rng);
+        let recipient_account = AccountKey::random(&mut rng);
+
+        let owned_amount = 10_000_000_000u64;
+        let owned = TxOutput::new(owned_amount, &sender.default_subaddress());
+        let decoys = make_decoys(DEFAULT_RING_SIZE - 1, owned_amount, &mut rng);
+
+        let mut recipient = recipient_of(&recipient_account);
+        recipient.kem_public_key = String::new(); // v1 / classical-only address
+
+        let req = SignRequest {
+            spend_private_key: hex::encode(sender.spend_private_key().to_bytes()),
+            view_private_key: hex::encode(sender.view_private_key().to_bytes()),
+            inputs: vec![SpendInput {
+                target_key: hex::encode(owned.target_key),
+                public_key: hex::encode(owned.public_key),
+                amount: owned_amount,
+                subaddress_index: 0,
+                decoys,
+            }],
+            recipient,
+            sender_kem_public_key: kem_public_hex(&pq_keys(0xCD)),
+            amount: 4_000_000_000,
+            fee: MIN_TX_FEE,
+            created_at_height: 1000,
+        };
+
+        let err = build_and_sign_with_rng(&req, &mut rng)
+            .expect_err("a KEM-less recipient address must be rejected");
+        assert!(
+            err.contains("ML-KEM") || err.contains("post-quantum"),
+            "error should explain the address is not post-quantum, got: {err}"
+        );
     }
 }

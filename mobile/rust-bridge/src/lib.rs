@@ -357,10 +357,11 @@ impl MobileWallet {
 
     /// Send a transfer of `amount_picocredits` to `to_address`.
     ///
-    /// `to_address` must be a testnet v2 address (`tbotho://2/<base58>`) or the
-    /// legacy `view:<hex>,spend:<hex>` form. Syncs, builds a node-valid CLSAG
-    /// transaction from the wallet's spendable outputs, submits it, and returns
-    /// the transaction hash.
+    /// `to_address` must be a testnet v2 (post-quantum) address
+    /// (`tbotho://2/<base58>`); classical-only forms are rejected because a
+    /// send output on 6.0.0 requires the recipient's published ML-KEM key.
+    /// Syncs, builds a node-valid CLSAG transaction from the wallet's
+    /// spendable outputs, submits it, and returns the transaction hash.
     pub async fn send_transaction(
         &self,
         to_address: String,
@@ -535,9 +536,27 @@ impl MobileWallet {
             .map_err(|_| MobileWalletError::InvalidMnemonic)?;
         let account = keys.account_key();
 
+        // Derive the wallet's OWN ML-KEM-768 public key from its BIP39 seed
+        // using the node-identical derivation (`derive_pq_keys_from_seed`, via
+        // the shared wasm-signer core). The change output is a self-send
+        // encapsulated against this key so the sender can later recover its
+        // change under the 6.0.0 hybrid scheme (issue #978).
+        //
+        // Derived here from the seed (rather than via `WalletKeys`) so it is
+        // present even in the mobile crate's isolated build, where
+        // `botho-wallet`'s `pq` feature is off and `public_address()` carries no
+        // PQ keys. The seed-derived key is byte-identical to the one the node
+        // and browser derive for the same mnemonic.
+        let seed = bip39::Mnemonic::parse_normalized(&mnemonic)
+            .map_err(|_| MobileWalletError::InvalidMnemonic)?
+            .to_seed("");
+        let sender_pq = bth_wasm_signer::core::derive_pq_public_keys_from_seed(&hex::encode(seed))
+            .map_err(|message| MobileWalletError::InternalError { message })?;
+
         let signer = SignerKeys {
             spend_private_key: hex::encode(account.spend_private_key().to_bytes()),
             view_private_key: hex::encode(account.view_private_key().to_bytes()),
+            sender_kem_public_key: sender_pq.kem_public_key,
         };
         Ok((signer, address))
     }
@@ -583,13 +602,20 @@ fn encode_testnet_address(addr: &bth_account_keys::PublicAddress) -> MobileResul
 }
 
 /// Parse a recipient address string into the signer-core recipient form (hex
-/// view/spend keys).
+/// view/spend keys plus the recipient's raw ML-KEM-768 public key).
 ///
-/// Accepts the testnet v2 form (`tbotho://2/<base58(view||spend||kem||dsa)>`,
-/// decoded via the shared [`bth_address_codec`]) and the legacy
-/// `view:<hex>,spend:<hex>` form. (The post-quantum keys carried by a v2
-/// address are validated on decode; wiring them into the outgoing ciphertext is
-/// a later rollout sub-issue.)
+/// Only the v2 post-quantum form
+/// (`(t)botho://2/<base58(view||spend||kem||dsa)>`, decoded via the shared
+/// [`bth_address_codec`]) is accepted. Under protocol 6.0.0 every send output
+/// is a hybrid post-quantum output whose 1,088-byte ML-KEM ciphertext is
+/// encapsulated against the recipient's published ML-KEM-768 key (issue #978),
+/// so that key is required.
+///
+/// The retired v1 form and the legacy `view:<hex>,spend:<hex>` form publish no
+/// ML-KEM key, so a send to them cannot produce a valid output — a KEM-less
+/// output is rejected by consensus enforcement (`validate_transfer_tx`, #974).
+/// Both are hard-errored here rather than silently building an unacceptable
+/// transaction.
 fn parse_recipient(address: &str) -> MobileResult<RecipientAddress> {
     let address = address.trim();
 
@@ -598,31 +624,21 @@ fn parse_recipient(address: &str) -> MobileResult<RecipientAddress> {
     {
         let (addr, _network) = bth_address_codec::decode_address(address)
             .map_err(|_| MobileWalletError::InvalidAddress)?;
+        // A v2 address must publish well-formed post-quantum keys; a
+        // classical-only decode cannot yield the ML-KEM key we must encapsulate
+        // against.
+        if !addr.has_pq_keys() {
+            return Err(MobileWalletError::InvalidAddress);
+        }
         return Ok(RecipientAddress {
             view_public_key: hex::encode(addr.view_public_key().to_bytes()),
             spend_public_key: hex::encode(addr.spend_public_key().to_bytes()),
+            kem_public_key: hex::encode(addr.kem_public_key()),
         });
     }
 
-    // Legacy "view:<hex>,spend:<hex>"
-    if address.starts_with("view:") {
-        let parts: Vec<&str> = address.split(',').collect();
-        if parts.len() == 2 {
-            let view_hex = parts[0].trim().strip_prefix("view:");
-            let spend_hex = parts[1].trim().strip_prefix("spend:");
-            if let (Some(v), Some(s)) = (view_hex, spend_hex) {
-                let view = hex::decode(v.trim()).map_err(|_| MobileWalletError::InvalidAddress)?;
-                let spend = hex::decode(s.trim()).map_err(|_| MobileWalletError::InvalidAddress)?;
-                if view.len() == 32 && spend.len() == 32 {
-                    return Ok(RecipientAddress {
-                        view_public_key: hex::encode(view),
-                        spend_public_key: hex::encode(spend),
-                    });
-                }
-            }
-        }
-    }
-
+    // Any non-v2 form (retired v1, legacy `view:…,spend:…`) publishes no ML-KEM
+    // key and cannot be sent to on 6.0.0.
     Err(MobileWalletError::InvalidAddress)
 }
 
@@ -670,6 +686,9 @@ mod tests {
             parsed.spend_public_key,
             hex::encode(public.spend_public_key().to_bytes())
         );
+        // The parsed recipient must carry the address's published ML-KEM key so
+        // the send path can encapsulate the output's ciphertext (#978).
+        assert_eq!(parsed.kem_public_key, hex::encode(public.kem_public_key()));
     }
 
     // Cross-encoder byte-identical vector (ADR 0008 D5): the SAME address must
@@ -706,6 +725,11 @@ mod tests {
             hex::encode(node_dec.spend_public_key().to_bytes()),
             mobile_dec.spend_public_key
         );
+        // The mobile parse path also recovers the published ML-KEM key.
+        assert_eq!(
+            hex::encode(node_dec.kem_public_key()),
+            mobile_dec.kem_public_key
+        );
         assert_eq!(node_dec.kem_public_key(), wasm_dec.kem_public_key());
         assert_eq!(node_dec.dsa_public_key(), wasm_dec.dsa_public_key());
         assert_eq!(
@@ -724,14 +748,19 @@ mod tests {
         ));
     }
 
+    /// #978: the legacy `view:…,spend:…` form publishes no ML-KEM key, so on
+    /// protocol 6.0.0 it is a hard error — a send to it would produce a
+    /// KEM-less output that consensus enforcement rejects. It must no
+    /// longer parse.
     #[test]
-    fn parse_legacy_address() {
+    fn parse_legacy_address_is_rejected() {
         let view = hex::encode([1u8; 32]);
         let spend = hex::encode([2u8; 32]);
         let legacy = format!("view:{view},spend:{spend}");
-        let parsed = parse_recipient(&legacy).expect("parse legacy");
-        assert_eq!(parsed.view_public_key, view);
-        assert_eq!(parsed.spend_public_key, spend);
+        assert!(matches!(
+            parse_recipient(&legacy),
+            Err(MobileWalletError::InvalidAddress)
+        ));
     }
 
     #[test]
@@ -751,5 +780,150 @@ mod tests {
         assert_eq!(parse_u64_value(&serde_json::json!(42)), 42);
         assert_eq!(parse_u64_value(&serde_json::json!("123")), 123);
         assert_eq!(parse_u64_value(&serde_json::json!(null)), 0);
+    }
+}
+
+/// Send-path acceptance: a transaction built exactly the way the mobile bridge
+/// builds it must produce hybrid post-quantum outputs the node accepts and the
+/// wallets can receive (issue #978). This exercises the two pieces the bridge
+/// wires together — the recipient's ML-KEM key recovered by [`parse_recipient`]
+/// from a real v2 address, and the sender's own ML-KEM key threaded through
+/// [`SignerKeys`] — and proves the resulting outputs carry valid ciphertexts
+/// and are detected by the node-identical hybrid scanner.
+#[cfg(test)]
+mod send_acceptance_tests {
+    use super::{encode_testnet_address, parse_recipient};
+    use crate::wallet_ops::SignerKeys;
+    use bth_account_keys::AccountKey;
+    use bth_crypto_pq::{derive_pq_keys_from_seed, PqKeyMaterial, BIP39_SEED_SIZE};
+    use bth_transaction_clsag::{TxOutput, DEFAULT_RING_SIZE, MIN_TX_FEE};
+    use bth_wasm_signer::core::{build_and_sign_with_rng, DecoyOutput, SignRequest, SpendInput};
+    use rand::{rngs::StdRng, SeedableRng};
+
+    /// Deterministic ML-KEM-768 / ML-DSA-65 keypair from a seed byte, using the
+    /// node-identical derivation.
+    fn pq_from(seed_byte: u8) -> PqKeyMaterial {
+        derive_pq_keys_from_seed(&[seed_byte; BIP39_SEED_SIZE])
+    }
+
+    /// `count` random decoy outputs paid to throwaway recipients.
+    fn make_decoys(count: usize, amount: u64, rng: &mut StdRng) -> Vec<DecoyOutput> {
+        (0..count)
+            .map(|_| {
+                let decoy_account = AccountKey::random(rng);
+                let out = TxOutput::new(amount, &decoy_account.default_subaddress());
+                DecoyOutput {
+                    target_key: hex::encode(out.target_key),
+                    public_key: hex::encode(out.public_key),
+                    amount,
+                }
+            })
+            .collect()
+    }
+
+    /// #978 (mobile): a send built via the bridge's real components — recipient
+    /// parsed from a `tbotho://2/` address (carrying its ML-KEM key) and the
+    /// sender's own KEM key threaded through `SignerKeys` — yields a
+    /// transaction whose recipient (index 0) and change (index 1) outputs
+    /// BOTH carry a valid 1,088-byte ML-KEM ciphertext and are detected by
+    /// the respective node-identical hybrid scanner. Before this fix the
+    /// mobile bridge omitted both KEM keys, so the outputs were KEM-less
+    /// and rejected by 6.0.0 consensus enforcement (`validate_transfer_tx`,
+    /// #974).
+    #[test]
+    fn mobile_built_send_outputs_carry_kem_and_are_receivable() {
+        let mut rng = StdRng::from_seed([57u8; 32]);
+
+        // Sender: classical account + its own ML-KEM keypair.
+        let sender = AccountKey::random(&mut rng);
+        let sender_pq = pq_from(0x31);
+
+        // Recipient: classical account + its own ML-KEM keypair, published in a
+        // real v2 address string the mobile bridge parses.
+        let recipient = AccountKey::random(&mut rng);
+        let recipient_pq = pq_from(0x42);
+        let recipient_address = recipient.default_subaddress().with_pq_keys(
+            recipient_pq.kem_keypair.public_key().as_bytes().to_vec(),
+            recipient_pq.sig_keypair.public_key().as_bytes().to_vec(),
+        );
+        let recipient_addr_str = encode_testnet_address(&recipient_address).expect("encode v2");
+
+        // MOBILE parse path recovers the recipient's published ML-KEM key.
+        let parsed_recipient = parse_recipient(&recipient_addr_str).expect("parse v2 recipient");
+        assert!(
+            !parsed_recipient.kem_public_key.is_empty(),
+            "parsed recipient must carry the published ML-KEM key"
+        );
+
+        // MOBILE signer keys: spend/view + the sender's own derived KEM key
+        // (same shape `signer_keys()` builds).
+        let signer = SignerKeys {
+            spend_private_key: hex::encode(sender.spend_private_key().to_bytes()),
+            view_private_key: hex::encode(sender.view_private_key().to_bytes()),
+            sender_kem_public_key: hex::encode(sender_pq.kem_keypair.public_key().as_bytes()),
+        };
+
+        // Owned input well above amount + fee so a change output exists.
+        let owned_amount = 10_000_000_000u64;
+        let send_amount = 4_000_000_000u64;
+        let owned = TxOutput::new(owned_amount, &sender.default_subaddress());
+        let decoys = make_decoys(DEFAULT_RING_SIZE - 1, owned_amount, &mut rng);
+
+        // Build the SignRequest exactly as `wallet_ops::send` does.
+        let request = SignRequest {
+            spend_private_key: signer.spend_private_key.clone(),
+            view_private_key: signer.view_private_key.clone(),
+            inputs: vec![SpendInput {
+                target_key: hex::encode(owned.target_key),
+                public_key: hex::encode(owned.public_key),
+                amount: owned_amount,
+                subaddress_index: 0,
+                decoys,
+            }],
+            recipient: parsed_recipient,
+            sender_kem_public_key: signer.sender_kem_public_key.clone(),
+            amount: send_amount,
+            fee: MIN_TX_FEE,
+            created_at_height: 1000,
+        };
+
+        let tx = build_and_sign_with_rng(&request, &mut rng).expect("mobile build+sign");
+
+        // Recipient (index 0) + change (index 1), each with a 1,088-byte
+        // ML-KEM ciphertext.
+        assert_eq!(tx.outputs.len(), 2, "expected recipient + change outputs");
+        for (i, out) in tx.outputs.iter().enumerate() {
+            let ct = out
+                .kem_ciphertext
+                .as_ref()
+                .unwrap_or_else(|| panic!("output {i} is missing its ML-KEM ciphertext"));
+            assert_eq!(
+                ct.len(),
+                bth_crypto_pq::ML_KEM_768_CIPHERTEXT_BYTES,
+                "output {i} ciphertext must be exactly 1088 bytes"
+            );
+        }
+
+        // The recipient's node-identical hybrid scan detects its output; the
+        // sender's detects its own change. If either KEM key were wrong the
+        // one-time key would not match and the funds would be unspendable.
+        assert_eq!(
+            tx.outputs[0].belongs_to_hybrid(&recipient, &recipient_pq.kem_keypair, 0),
+            Some(0),
+            "recipient must detect the mobile-built output at subaddress 0"
+        );
+        assert_eq!(
+            tx.outputs[1].belongs_to_hybrid(&sender, &sender_pq.kem_keypair, 1),
+            Some(0),
+            "sender must detect its own change at default subaddress"
+        );
+
+        // Cross-check: neither wallet detects the other's output (ciphertexts
+        // are bound to distinct ML-KEM keys).
+        assert_eq!(
+            tx.outputs[1].belongs_to_hybrid(&recipient, &recipient_pq.kem_keypair, 1),
+            None,
+            "recipient must not detect the sender's change"
+        );
     }
 }

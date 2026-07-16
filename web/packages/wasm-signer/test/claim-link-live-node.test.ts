@@ -40,6 +40,7 @@ import {
 import {
   buildSendTransaction,
   deriveV2Address,
+  deriveKemPublicKey,
   spendableBalance,
   setSigner,
   resetSigner,
@@ -117,7 +118,11 @@ const keysOf = (m: string) => {
 }
 const recipientOf = (addr: string) => {
   const k = parseAddress(addr)
-  return { spend_public_key: toHex(k.spendPublic), view_public_key: toHex(k.viewPublic) }
+  return {
+    spend_public_key: toHex(k.spendPublic),
+    view_public_key: toHex(k.viewPublic),
+    kem_public_key: toHex(k.kemPublic),
+  }
 }
 
 maybe('claim-link node-backed: create -> claim -> already-claimed (#460)', () => {
@@ -181,6 +186,7 @@ maybe('claim-link node-backed: create -> claim -> already-claimed (#460)', () =>
     const { txHex } = await buildSendTransaction({
       keys: keysOf(senderM),
       recipient: recipientOf(destAddr),
+      senderKemPublicKey: await deriveKemPublicKey(senderM),
       amount,
       fee,
       rpc: sendRpc,

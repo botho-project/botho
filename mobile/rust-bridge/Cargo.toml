@@ -59,6 +59,10 @@ bip39 = { version = "2", features = ["rand"] }
 [dev-dependencies]
 # Full tokio for the gated live-testnet end-to-end test (multi-thread + macros).
 tokio = { version = "1", features = ["full"] }
+# Node-identical post-quantum key derivation, used only by the send-path
+# acceptance test to derive the sender/recipient ML-KEM keypairs and run the
+# hybrid ownership scan (`belongs_to_hybrid`) over mobile-built outputs (#978).
+bth-crypto-pq = { path = "../../crypto/pq" }
 
 [build-dependencies]
 uniffi = { version = "0.28", features = ["build"] }

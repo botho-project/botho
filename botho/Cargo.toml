@@ -188,6 +188,11 @@ botho-wallet = { path = "../botho-wallet" }
 # `Transaction::new_stub_with_fee`) for botho's own test/dev builds.
 bth-transaction-clsag = { path = "../transaction/clsag", features = ["test-utils"] }
 bth-transaction-core = { path = "../transaction/core" }
+# The browser (WebAssembly) transaction builder, compiled natively (rlib) so a
+# node-side test can build a transaction exactly as the web wallet does and
+# assert it passes the node's `validate_transfer_tx` universal-ML-KEM gate — the
+# end-to-end acceptance proof for issue #978.
+bth-wasm-signer = { path = "../web/packages/wasm-signer" }
 futures = "0.3"
 criterion = { workspace = true }
 rand_chacha = { workspace = true }

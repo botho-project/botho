@@ -32,6 +32,12 @@ function fakeSigner(): WasmSigner {
     buildAndSign: () => 'deadbeef',
     ringSize: () => 3,
     minFee: () => MIN_TX_FEE,
+    // Placeholder v2-length PQ keys so `deriveKemPublicKey` (used by the sweep
+    // path for change encapsulation, #978) resolves without real crypto.
+    derivePqPublicKeysFromSeed: () => ({
+      kemPublicKey: '00'.repeat(1184),
+      dsaPublicKey: '00'.repeat(1952),
+    }),
     scanOwnedOutputs: ({ outputs }) =>
       outputs
         .filter((o) => o.targetKey.startsWith('eph'))

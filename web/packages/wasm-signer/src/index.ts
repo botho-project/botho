@@ -49,12 +49,24 @@ export interface SpendInput {
   decoys: DecoyOutput[]
 }
 
-/** A recipient address, as the two 32-byte Ristretto public keys (hex). */
+/**
+ * A recipient address: the two 32-byte Ristretto stealth keys PLUS the
+ * recipient's raw ML-KEM-768 public key (all hex).
+ *
+ * Under protocol 6.0.0 every send output is a hybrid post-quantum stealth
+ * output: the signer encapsulates a shared secret against `kem_public_key` and
+ * attaches the resulting 1,088-byte ML-KEM ciphertext (issue #978). Decode a
+ * `botho://2/` address with `parseAddress` (`@botho/core`) or `decodeAddress`
+ * and pass `kemPublic` here. A missing/malformed key is a hard error — a
+ * KEM-less output is rejected by 6.0.0 consensus.
+ */
 export interface RecipientAddress {
   /** Hex-encoded 32-byte spend public key (`D`). */
   spend_public_key: string
   /** Hex-encoded 32-byte view public key (`C`). */
   view_public_key: string
+  /** Hex-encoded raw ML-KEM-768 public key (1184 bytes) from the v2 address. */
+  kem_public_key: string
 }
 
 /**
@@ -70,6 +82,13 @@ export interface SignRequest {
   inputs: SpendInput[]
   /** Recipient of the transfer. */
   recipient: RecipientAddress
+  /**
+   * Hex-encoded raw ML-KEM-768 public key (1184 bytes) of the SENDER's own v2
+   * address. The change output is a self-send encapsulated against this key so
+   * the sender can later recover its change under the hybrid scheme (#978).
+   * Derive it from the wallet seed via `derivePqPublicKeysFromSeed`.
+   */
+  senderKemPublicKey: string
   /** Amount to send to the recipient, in picocredits. */
   amount: bigint | number
   /** Transaction fee in picocredits. */
@@ -333,7 +352,7 @@ export function setSigner(signer: WasmSigner): void {
   cached = Promise.resolve(signer)
 }
 
-export { deriveV2Address, decodeV2Address } from './address'
+export { deriveV2Address, decodeV2Address, deriveKemPublicKey } from './address'
 
 export {
   buildSendTransaction,

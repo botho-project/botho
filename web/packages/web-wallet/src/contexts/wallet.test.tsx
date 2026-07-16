@@ -35,6 +35,8 @@ vi.mock('@botho/wasm-signer', () => ({
   // No owned outputs => empty client-side history.
   buildOwnedHistory: vi.fn().mockResolvedValue([]),
   buildSendTransaction: vi.fn().mockResolvedValue({ txHex: '0xstub' }),
+  // Sender's own ML-KEM key for change encapsulation (#978); stubbed.
+  deriveKemPublicKey: vi.fn().mockResolvedValue('00'.repeat(1184)),
 }))
 
 // Mock localStorage

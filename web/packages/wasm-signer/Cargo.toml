@@ -17,8 +17,11 @@ path = "src/lib.rs"
 [dependencies]
 # The shared, node-identical CLSAG transaction implementation. Producing a
 # transaction via this crate guarantees byte-for-byte the same bincode wire
-# format the node deserializes in `tx_submit`.
-bth-transaction-clsag = { path = "../../../transaction/clsag" }
+# format the node deserializes in `tx_submit`. The `pq` feature exposes the
+# hybrid post-quantum send-path constructor (`TxOutput::new_hybrid_to_address`),
+# so browser SENDS attach an ML-KEM-768 ciphertext to every output and are
+# accepted under 6.0.0 universal-ML-KEM consensus enforcement (issue #978).
+bth-transaction-clsag = { path = "../../../transaction/clsag", features = ["pq"] }
 bth-account-keys = { path = "../../../account-keys" }
 bth-address-codec = { path = "../../../address-codec" }
 bth-crypto-keys = { path = "../../../crypto/keys" }

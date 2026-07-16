@@ -19,6 +19,12 @@ use crate::rpc::{amount_from_commitment, NodeRpc};
 pub struct SignerKeys {
     pub spend_private_key: String,
     pub view_private_key: String,
+    /// Hex-encoded raw ML-KEM-768 public key (1184 bytes) of the wallet's OWN
+    /// v2 address, derived from its BIP39 seed via the node-identical
+    /// `derive_pq_keys_from_seed`. The change output is a self-send whose
+    /// ciphertext is encapsulated against this key, so the sender can later
+    /// recover its change under the 6.0.0 hybrid scheme (issue #978).
+    pub sender_kem_public_key: String,
 }
 
 /// A wallet's spendable view of the chain: owned, unspent outputs + the height
@@ -231,6 +237,10 @@ pub async fn send(
         view_private_key: keys.view_private_key.clone(),
         inputs: spend_inputs,
         recipient,
+        // The sender's own published ML-KEM-768 key: the change (self-send)
+        // output encapsulates against this so the sender can recover it under
+        // the 6.0.0 hybrid scheme (issue #978).
+        sender_kem_public_key: keys.sender_kem_public_key.clone(),
         amount,
         fee,
         created_at_height: height,
