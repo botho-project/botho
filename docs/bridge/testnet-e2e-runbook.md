@@ -4,14 +4,20 @@ The full round-trip drill for the BTH ↔ wBTH bridge on live test
 infrastructure: **BTH deposit → wBTH mint → hold → wBTH burn → BTH
 release**, with the exact assertions each leg must satisfy.
 
-Status: **manual drill**. The Ethereum leg runs fully automated today (see
+Status: **local full loop automated; live-testnet drill manual**. The
+Ethereum leg runs fully automated (see
 [Layer 0](#layer-0-hermetic-ethereum-leg-automated)); the BTH live-node
 transports (#856 — deposit scan + release construction/submission/
-confirmation) are now implemented and unit-tested, with an `#[ignore]`d
+confirmation) are implemented and unit-tested, with an `#[ignore]`d
 live-node integration test (see [Layer 1.5](#layer-15-bth-node-leg-live)).
-The federation envelope transport is #858, Solana is #857. The gated CI job
-(`.github/workflows/bridge-e2e.yml`) automates Layer 0 nightly and will
-absorb the full drill once a testnet node + secrets are wired — the
+Now that #856 is closed, the **orchestrated full loop** (wrap → mint → burn
+→ release, driven through the real engine with a local Botho node AND a
+local Hardhat node) runs as an `#[ignore]`d harness (see
+[Layer 1.75](#layer-175-orchestrated-full-loop-local-automated), #993). The
+federation envelope transport is #858, Solana is #857. The gated CI job
+(`.github/workflows/bridge-e2e.yml`) automates Layer 0 and the local full
+loop; the **live-Sepolia** round trip below stays a manual drill until
+funded Safes + Sepolia ETH land (#866/#868) — the
 [automation criteria](#automation-criteria) below define "done" for that.
 
 ## Test layers
@@ -19,8 +25,9 @@ absorb the full drill once a testnet node + secrets are wired — the
 | Layer | What runs | Where | Cadence |
 |---|---|---|---|
 | 0 | Ethereum leg, real Rust pipeline, local chain | `scripts/bridge-e2e-local.sh` | nightly CI + on demand |
+| 1.75 | Orchestrated full loop through the real engine, local Botho + Hardhat nodes | `scripts/bridge-e2e-full-loop.sh` | nightly CI + on demand |
 | 1 | wBTH contract on Sepolia (mint through the real Safe) | this runbook, steps 1–5 | before any bridge deploy |
-| 2 | Full BTH testnet round trip | this runbook, all steps | blocked on #856 |
+| 2 | Full BTH testnet round trip (live Sepolia) | this runbook, all steps | blocked on #866/#868 |
 
 ## Layer 0: hermetic Ethereum leg (automated)
 
@@ -70,6 +77,50 @@ claims a live path it could not exercise).
 The pure transport-parsing and tx-construction logic (`bth_rpc`,
 `bth_scan`, `bth_keys`, and the releaser stages above the socket) is fully
 covered by native unit tests that run in every `cargo test` pass.
+
+## Layer 1.75: orchestrated full loop (local, automated)
+
+The single **wrap → mint-wBTH → burn → release-BTH** round trip, driven end
+to end through the REAL bridge engine (`OrderProcessor::process_pending_orders`)
+with BOTH chains live and zero external creds — the compelling "demonstrate
+wrapped BTH" artifact (#993). Unlike Layer 0 (Ethereum leg only, synthetic
+order) and Layer 1.5 (BTH transport only), this boots a local Botho node AND
+a local Hardhat node and lets the engine walk a real mint order
+`DepositConfirmed → … → Completed` and a real burn order
+`BurnConfirmed → … → Released`:
+
+```bash
+./scripts/bridge-e2e-full-loop.sh
+```
+
+The driver compiles the contracts, starts a Hardhat node (chain id 31337)
+and a `botho-testnet` node, mines a reserve warmup, then runs the
+`#[ignore]`d test `bridge/service/src/e2e_full_loop_tests.rs`. That test
+wires ONE `BridgeConfig` across both chains, builds the production
+`EthMinter` + `BthReleaser` + `FederationAttestationProvider`, and enforces
+four properties as hard failures:
+
+1. **Peg intake** — `wbth.balanceOf(user)` and `totalSupply()` equal the
+   order's net amount, which equals the reserve ledger's locked backing
+   (ADR 0003 factor-1, exact).
+2. **Correct release to a fresh stealth output** — the live `BthReleaser`
+   pays `net_amount` to a one-time output (ADR 0004) that the user's OWN
+   view key scans back off the live node, distinct from the EVM burn tx.
+3. **Proof-of-reserves invariant** — the `Reconciler` reports `drift == 0`
+   (`Σ wBTH == locked reserve`) after the mint and again after the release,
+   with the live BTH node consulted for the custody leg, returning to `0/0`
+   once unwrapped.
+4. **Federation authorization** — a single Safe-owner signature does NOT
+   mint (the engine leaves the order `DepositConfirmed`) and a single
+   Ed25519 signature does NOT release (left `BurnConfirmed`); both cross the
+   configured 2-of-2 threshold before any value moves.
+
+Provision the BTH reserve/user wallet key material (32-byte hex files) via
+the environment variables documented in the script header. Without them the
+test **self-skips** (green — never a false pass, the same discipline as
+Layer 1.5). The Ethereum half swaps `local → Sepolia-fork → live Sepolia`
+purely by pointing `BRIDGE_FORK_RPC_URL` at a fork/live RPC (+ a funded
+relayer key for live) with no test-logic change (companion #992/#866).
 
 ## Prerequisites (Layers 1–2)
 
@@ -158,13 +209,19 @@ hashes, order UUIDs and their derived 32-byte order ids).
 
 ## Automation criteria
 
-`bridge-e2e.yml`'s `testnet-round-trip` job replaces this manual drill
-when ALL hold:
+The **local** full loop is already automated — `bridge-e2e.yml`'s
+`full-loop` job boots both nodes and runs Layer 1.75 (#993). The remaining
+manual drill is the **live-Sepolia** round trip; `bridge-e2e.yml`'s
+`testnet-round-trip` job replaces it when ALL hold:
 
-1. #856 (BTH deposit scan + release transports) merged and validated.
-2. Testnet secrets provisioned as repo/environment secrets: reserve
-   view/spend keys, relayer key, federation attestation keys (testnet-only
-   material — the beta testnet is disposable).
+1. ~~#856 (BTH deposit scan + release transports) merged and validated.~~
+   Done — exercised by Layers 1.5 and 1.75.
+2. #866/#868: `WrappedBTH` + Safes deployed to live Sepolia, and testnet
+   secrets provisioned as repo/environment secrets — reserve view/spend
+   keys, relayer key, federation attestation keys (testnet-only material —
+   the beta testnet is disposable).
 3. The drill scripted end to end with the assertions above as hard
    failures, including the ADR 0004 stealth re-shield check via view-key
-   scan.
+   scan. The local `full-loop` job (Layer 1.75) already enforces exactly
+   these assertions; the live variant swaps in the Sepolia RPC + funded
+   relayer key (no test-logic change).

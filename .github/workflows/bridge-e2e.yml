@@ -49,12 +49,52 @@ jobs:
       - name: Run Ethereum-leg e2e
         run: ./scripts/bridge-e2e-local.sh
 
-  # The live-testnet BTH -> wBTH -> burn -> BTH round trip is a MANUAL
-  # drill for now: the BTH release / deposit-scan live transports are
-  # pending (#856), so the full loop cannot run unattended. The procedure,
-  # its assertions (exact amounts per ADR 0003, stealth re-shield per
-  # ADR 0004, terminal order states, proof-of-reserves), and the
-  # automation criteria for this job live in
+  # The orchestrated FULL LOOP (#993): wrap -> mint-wBTH -> burn ->
+  # release-BTH driven through the REAL bridge engine
+  # (OrderProcessor::process_pending_orders) with BOTH chains live — a local
+  # Botho node (botho-testnet) AND a local Hardhat node — and ZERO external
+  # creds. It boots both nodes and runs the #[ignore]d full-loop test
+  # (bridge/service/src/e2e_full_loop_tests.rs), enforcing the four
+  # properties as hard failures: peg intake (wBTH minted == BTH locked),
+  # correct release to a fresh stealth output (ADR 0004), the
+  # proof-of-reserves invariant across the loop (ADR 0003), and federation
+  # authorization (t-of-n EIP-712 mint + t-of-n Ed25519 release; a single
+  # signer never moves value). The BTH leg self-skips (green) until the
+  # reserve wallet key material is provisioned — see
+  # scripts/bridge-e2e-full-loop.sh and docs/bridge/testnet-e2e-runbook.md.
+  full-loop:
+    name: Full loop (local Botho + hardhat, real engine)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: contracts/ethereum/package-lock.json
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-03
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: bridge-e2e-full-loop
+
+      - name: Run full-loop e2e
+        run: ./scripts/bridge-e2e-full-loop.sh
+
+  # The live-Sepolia BTH -> wBTH -> burn -> BTH round trip is a MANUAL drill
+  # for now: it needs funded Gnosis Safes + Sepolia ETH (#866/#868). The
+  # local variant of this same loop runs unattended in the `full-loop` job
+  # above. The procedure, its assertions (exact amounts per ADR 0003,
+  # stealth re-shield per ADR 0004, terminal order states,
+  # proof-of-reserves), and the automation criteria live in
   # docs/bridge/testnet-e2e-runbook.md.
   testnet-round-trip:
     name: Testnet round trip (manual runbook pointer)
@@ -66,7 +106,7 @@ jobs:
 
       - name: Point at the runbook
         run: |
-          echo "::notice::The live testnet round trip is a manual drill until the"
-          echo "::notice::BTH live transports land (#856; Solana: #857, federation"
-          echo "::notice::transport: #858). Follow docs/bridge/testnet-e2e-runbook.md"
-          echo "::notice::and record the drill results on the tracking issue (#816)."
+          echo "::notice::The LOCAL full loop is automated (see the full-loop job)."
+          echo "::notice::The live-Sepolia round trip is a manual drill until funded"
+          echo "::notice::Safes + Sepolia ETH land (#866/#868). Follow"
+          echo "::notice::docs/bridge/testnet-e2e-runbook.md and record results on #816."
