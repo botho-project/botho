@@ -98,7 +98,7 @@ export async function spendableOwnedOutputs(
   const withImages = signer.computeOwnedOutputKeyImages({
     spendPrivateKey: keys.spendPrivateKey,
     viewPrivateKey: keys.viewPrivateKey,
-    seed: keys.seed,
+    seed: keys.seed ?? '',
     outputs: owned,
   })
   const statuses = await rpc.areKeyImagesSpent(withImages.map((o) => o.keyImage))
@@ -137,7 +137,7 @@ export async function spendableBalance(
   const owned = signer.scanOwnedOutputs({
     spendPrivateKey: keys.spendPrivateKey,
     viewPrivateKey: keys.viewPrivateKey,
-    seed: keys.seed,
+    seed: keys.seed ?? '',
     outputs: candidates,
   })
   const spendable = await spendableOwnedOutputs(signer, keys, owned, rpc)
@@ -168,7 +168,7 @@ export async function ownedOutputTargetKeys(
   const owned = signer.scanOwnedOutputs({
     spendPrivateKey: keys.spendPrivateKey,
     viewPrivateKey: keys.viewPrivateKey,
-    seed: keys.seed,
+    seed: keys.seed ?? '',
     outputs: candidates,
   })
   return owned.map((o) => o.targetKey)
@@ -254,7 +254,7 @@ export async function buildOwnedHistory(
   const owned = signer.scanOwnedOutputs({
     spendPrivateKey: keys.spendPrivateKey,
     viewPrivateKey: keys.viewPrivateKey,
-    seed: keys.seed,
+    seed: keys.seed ?? '',
     outputs: candidates.map((c) => ({
       targetKey: c.targetKey,
       publicKey: c.publicKey,
@@ -270,7 +270,7 @@ export async function buildOwnedHistory(
   const withImages = signer.computeOwnedOutputKeyImages({
     spendPrivateKey: keys.spendPrivateKey,
     viewPrivateKey: keys.viewPrivateKey,
-    seed: keys.seed,
+    seed: keys.seed ?? '',
     outputs: owned,
   })
   const statuses = await rpc.areKeyImagesSpent(withImages.map((o) => o.keyImage))
@@ -534,7 +534,7 @@ export async function buildSendTransaction(
   const owned = signer.scanOwnedOutputs({
     spendPrivateKey: keys.spendPrivateKey,
     viewPrivateKey: keys.viewPrivateKey,
-    seed: keys.seed,
+    seed: keys.seed ?? '',
     outputs: candidates,
   })
   if (owned.length === 0) {
