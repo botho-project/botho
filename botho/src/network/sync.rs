@@ -15,7 +15,7 @@ use libp2p::{
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io,
     sync::Arc,
     time::{Duration, Instant},
@@ -559,6 +559,25 @@ pub struct ChainSyncManager {
     /// the local height of the first such observation; it is cleared whenever
     /// our height advances (gossip *did* make progress) or the gap closes.
     small_gap_since_height: Option<u64>,
+    /// Peers known to be consensus-incompatible (protocol major mismatch).
+    ///
+    /// The node disconnects such peers, but their chain-height advertisement
+    /// (a `GetStatus` round-trip or a gossiped tip) can land *before* the
+    /// disconnect completes. A stale old-protocol node advertising a higher
+    /// (old-chain) height would then be picked as `best_peer()`, driving the
+    /// sync state machine into `Downloading` and never reaching `Synced` — so
+    /// `initial_sync_complete` (and therefore the propose-gate) stays closed
+    /// and a freshly-reset chain cannot produce blocks until the zombies
+    /// are firewalled off (the #998 6.0.0-reset incident, #1000).
+    ///
+    /// Once a `PeerId` is recorded here it is treated as incompatible for the
+    /// lifetime of the manager: protocol-major compatibility is a stable
+    /// property of a peer's cryptographic identity, so a reconnecting zombie
+    /// must not be able to re-inject its height and churn sync/quorum on every
+    /// connect. Height advertisements from these peers are ignored
+    /// ([`Self::on_status`], [`Self::note_gossiped_tip`]) and they are excluded
+    /// from peer selection ([`Self::best_peer`]).
+    incompatible_peers: HashSet<PeerId>,
 }
 
 impl ChainSyncManager {
@@ -575,6 +594,7 @@ impl ChainSyncManager {
             last_status_refresh: Instant::now(),
             peer_overlap_counts: HashMap::new(),
             small_gap_since_height: None,
+            incompatible_peers: HashSet::new(),
         }
     }
 
@@ -656,6 +676,16 @@ impl ChainSyncManager {
 
     /// Handle status response from a peer
     pub fn on_status(&mut self, peer: PeerId, height: u64, tip_hash: [u8; 32]) {
+        // A consensus-incompatible peer's advertised height is an old-chain
+        // height that must never influence sync-completion or peer selection.
+        // Ignoring it here closes the race where a late in-flight status
+        // response lands after the peer was marked incompatible but before its
+        // disconnect completes (#998 / #1000).
+        if self.incompatible_peers.contains(&peer) {
+            debug!(%peer, height, "Ignoring status from consensus-incompatible peer");
+            return;
+        }
+
         debug!(%peer, height, "Received peer status");
 
         self.peer_statuses.insert(
@@ -805,8 +835,14 @@ impl ChainSyncManager {
             return;
         }
 
-        // Record the observed tip against the connected peers as a hint.
+        // Record the observed tip against the connected peers as a hint, but
+        // never against a consensus-incompatible peer: attributing an
+        // (old-chain) height to a zombie would let it drive sync selection and
+        // hold the propose-gate closed (#998 / #1000).
         for peer in connected_peers {
+            if self.incompatible_peers.contains(peer) {
+                continue;
+            }
             self.peer_statuses.insert(
                 *peer,
                 PeerStatus {
@@ -1019,6 +1055,40 @@ impl ChainSyncManager {
         Duration::from_millis((millis * factor) as u64)
     }
 
+    /// Record that a peer is consensus-incompatible (protocol major mismatch)
+    /// and purge any height it has already advertised.
+    ///
+    /// Called from the run loop the moment a `PeerVersionIncompatible` event is
+    /// observed — before the disconnect it triggers has necessarily landed. A
+    /// stale old-protocol node may have already completed a `GetStatus`
+    /// round-trip or relayed a gossiped tip, seeding `peer_statuses` with a
+    /// higher (old-chain) height. Left in place, that height is picked by
+    /// [`Self::best_peer`], forces the state machine into `Downloading`, and
+    /// prevents `is_synced()` from ever becoming true — holding the minter's
+    /// propose-gate closed on a freshly-reset chain (#998 / #1000).
+    ///
+    /// This both marks the peer (so any late in-flight status response or
+    /// gossip is ignored — see [`Self::on_status`] /
+    /// [`Self::note_gossiped_tip`]) and scrubs its current influence on the
+    /// sync state machine by routing through the same teardown as a
+    /// disconnect.
+    pub fn mark_incompatible(&mut self, peer: PeerId) {
+        let newly_marked = self.incompatible_peers.insert(peer);
+        if newly_marked {
+            debug!(%peer, "Marking peer consensus-incompatible; ignoring its height advertisements");
+        }
+        // Scrub any height/state this peer has already contributed. If we had
+        // entered `Downloading` targeting this peer's advertised (old-chain)
+        // height, this resets us to `Discovery` so the next tick re-evaluates
+        // against only compatible peers.
+        self.on_peer_disconnected(&peer);
+    }
+
+    /// Whether `peer` has been recorded as consensus-incompatible.
+    pub fn is_incompatible(&self, peer: &PeerId) -> bool {
+        self.incompatible_peers.contains(peer)
+    }
+
     /// Handle peer disconnection
     pub fn on_peer_disconnected(&mut self, peer: &PeerId) {
         self.peer_statuses.remove(peer);
@@ -1051,11 +1121,16 @@ impl ChainSyncManager {
     ///    reputation
     /// 3. For peers at very different heights, prefer higher height
     fn best_peer(&self) -> Option<(PeerId, &PeerStatus)> {
-        // Filter out banned peers
+        // Filter out banned peers and consensus-incompatible peers. The latter
+        // must never be selected as a sync source: their advertised height is
+        // an old-chain height that would drive the state machine into
+        // `Downloading` and never reach `Synced` (#998 / #1000).
         let candidates: Vec<_> = self
             .peer_statuses
             .iter()
-            .filter(|(peer, _)| !self.reputation.is_banned(peer))
+            .filter(|(peer, _)| {
+                !self.reputation.is_banned(peer) && !self.incompatible_peers.contains(peer)
+            })
             .collect();
 
         if candidates.is_empty() {
@@ -1114,19 +1189,41 @@ impl ChainSyncManager {
 
         match &self.state {
             SyncState::Discovery => {
-                // Request status from all connected peers we don't have status for
+                // Consensus-incompatible peers are being torn down and their
+                // (old-chain) height must never drive sync. Treat them as absent
+                // for status collection and the readiness gate, but still count
+                // them toward "are we connected to anyone" so a freshly-reset
+                // minter whose ONLY peers are zombies concludes initial sync
+                // (via the no-compatible-peer -> Synced branch below) instead of
+                // waiting in Discovery forever (#998 / #1000).
+                let has_connected_peer = !connected_peers.is_empty();
+
+                // Request status only from COMPATIBLE peers we don't have status
+                // for. Never round-trip an incompatible peer: its response is
+                // ignored by `on_status`, so requesting it would spin Discovery
+                // without ever advancing.
                 for peer in connected_peers {
+                    if self.incompatible_peers.contains(peer) {
+                        continue;
+                    }
                     if !self.peer_statuses.contains_key(peer) {
                         return Some(SyncAction::RequestStatus(*peer));
                     }
                 }
 
-                // If we have statuses from all peers, check if we need to sync
-                if !connected_peers.is_empty()
-                    && connected_peers
-                        .iter()
-                        .all(|p| self.peer_statuses.contains_key(p))
-                {
+                // Once every COMPATIBLE connected peer has answered (vacuously
+                // true when all peers are incompatible), decide. Requiring at
+                // least one connected peer preserves the min-peers wait for a
+                // genuinely isolated node.
+                let all_compatible_have_status = connected_peers
+                    .iter()
+                    .filter(|p| !self.incompatible_peers.contains(p))
+                    .all(|p| self.peer_statuses.contains_key(p));
+
+                if has_connected_peer && all_compatible_have_status {
+                    // `best_peer()` already excludes incompatible peers, so when
+                    // every peer is a zombie it returns `None` and we fall to the
+                    // genesis branch below.
                     if let Some((best_peer, status)) = self.best_peer() {
                         // Initial catch-up: trigger on any gap gossip can't
                         // bridge (gap >= 2), NOT the near-tip hysteresis
@@ -1144,7 +1241,11 @@ impl ChainSyncManager {
                             return Some(SyncAction::Synced);
                         }
                     } else {
-                        // No peers, consider synced (we're the genesis)
+                        // No compatible peer to sync from — either we are the
+                        // genesis node, or every connected peer is a
+                        // consensus-incompatible zombie. Either way there is no
+                        // valid higher chain to catch up to, so consider synced
+                        // and let the propose-gate open (#1000).
                         self.state = SyncState::Synced;
                         return Some(SyncAction::Synced);
                     }
@@ -1217,8 +1318,12 @@ impl ChainSyncManager {
                     // Periodically re-poll a peer for its status. Status is
                     // request/response (not gossiped), so without this a synced
                     // node would never learn that a peer advanced and would rely
-                    // solely on gossiped tip blocks to stay current.
-                    if let Some(peer) = connected_peers.first() {
+                    // solely on gossiped tip blocks to stay current. Skip
+                    // incompatible peers — their status is ignored anyway.
+                    if let Some(peer) = connected_peers
+                        .iter()
+                        .find(|p| !self.incompatible_peers.contains(p))
+                    {
                         self.last_status_refresh = Instant::now();
                         return Some(SyncAction::RequestStatus(*peer));
                     }
@@ -1812,6 +1917,159 @@ mod tests {
         manager.on_status(peer, 100, [1u8; 32]);
 
         assert!(manager.is_synced());
+    }
+
+    // ========================================================================
+    // Consensus-incompatible peer isolation (#998 / #1000)
+    // ========================================================================
+
+    #[test]
+    fn test_incompatible_peer_status_is_ignored() {
+        // A consensus-incompatible peer advertising a much higher (old-chain)
+        // height must NOT drive us into Downloading. Pre-fix, its height was
+        // recorded and picked by best_peer(), so the manager never reached
+        // Synced and the propose-gate stayed closed (#998 / #1000).
+        let mut manager = ChainSyncManager::new(0);
+        let zombie = make_peer_id();
+
+        manager.mark_incompatible(zombie);
+        assert!(manager.is_incompatible(&zombie));
+
+        // Its status advertisement is dropped entirely.
+        manager.on_status(zombie, 10_000, [9u8; 32]);
+        assert!(
+            matches!(manager.state(), SyncState::Discovery),
+            "incompatible peer's height must not trigger Downloading, state was {:?}",
+            manager.state()
+        );
+    }
+
+    #[test]
+    fn test_mark_incompatible_scrubs_already_recorded_height() {
+        // Race: the zombie completes its GetStatus round-trip (recording a high
+        // height and entering Downloading) BEFORE the PeerVersionIncompatible
+        // event lands. mark_incompatible must scrub that influence.
+        let mut manager = ChainSyncManager::new(0);
+        let zombie = make_peer_id();
+
+        manager.on_status(zombie, 10_000, [9u8; 32]);
+        assert!(
+            matches!(manager.state(), SyncState::Downloading { .. }),
+            "precondition: high-height status enters Downloading"
+        );
+
+        // Learning the peer is incompatible scrubs its height and resets state.
+        manager.mark_incompatible(zombie);
+        assert!(
+            matches!(manager.state(), SyncState::Discovery),
+            "mark_incompatible must reset the Downloading target sourced from the zombie"
+        );
+
+        // A late in-flight status response from the same peer is now ignored.
+        manager.on_status(zombie, 10_001, [8u8; 32]);
+        assert!(matches!(manager.state(), SyncState::Discovery));
+    }
+
+    #[test]
+    fn test_minter_with_only_incompatible_peers_reaches_synced() {
+        // The #998 6.0.0-reset incident: a freshly-reset minter (height 0) whose
+        // ONLY peers are consensus-incompatible zombies advertising a higher
+        // old-chain height must still complete initial sync (is_synced() -> true)
+        // so its propose-gate opens. connected_peers still contains the zombie
+        // (disconnect is async), so the manager must treat it as absent.
+        let mut manager = ChainSyncManager::new(0);
+        let zombie = make_peer_id();
+
+        // Zombie advertises a higher height, then is flagged incompatible.
+        manager.on_status(zombie, 10_000, [9u8; 32]);
+        manager.mark_incompatible(zombie);
+
+        // Drive the state machine with the zombie still in the connected set.
+        let action = manager.tick(&[zombie]);
+        assert!(
+            matches!(action, Some(SyncAction::Synced)),
+            "expected Synced action, got {action:?}"
+        );
+        assert!(
+            manager.is_synced(),
+            "a minter whose only peers are incompatible must conclude initial sync"
+        );
+    }
+
+    #[test]
+    fn test_incompatible_peer_not_requested_in_discovery() {
+        // Discovery must not round-trip an incompatible peer for status (its
+        // response is ignored anyway); with only a zombie connected it should
+        // conclude Synced rather than spinning on RequestStatus.
+        let mut manager = ChainSyncManager::new(5);
+        let zombie = make_peer_id();
+        manager.mark_incompatible(zombie);
+
+        let action = manager.tick(&[zombie]);
+        assert!(
+            matches!(action, Some(SyncAction::Synced)),
+            "expected Synced action, got {action:?}"
+        );
+        assert!(manager.is_synced());
+    }
+
+    #[test]
+    fn test_incompatible_peer_excluded_from_best_peer() {
+        // A compatible peer at height 100 and an incompatible zombie at height
+        // 10_000: selection must ignore the zombie and sync toward the honest
+        // tip only.
+        let mut manager = ChainSyncManager::new(0);
+        let honest = make_peer_id();
+        let zombie = make_peer_id();
+
+        manager.mark_incompatible(zombie);
+        manager.on_status(zombie, 10_000, [9u8; 32]); // ignored
+        manager.on_status(honest, 100, [1u8; 32]); // drives download to 100
+
+        match manager.state() {
+            SyncState::Downloading { target_height, .. } => {
+                assert_eq!(
+                    *target_height, 100,
+                    "must target the honest peer's height, not the zombie's"
+                );
+            }
+            other => panic!("expected Downloading toward honest peer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_incompatible_gossiped_tip_is_ignored() {
+        // A gossiped tip attributed to a connected set that contains only an
+        // incompatible peer must not seed that peer's height.
+        let mut manager = ChainSyncManager::new(0);
+        let zombie = make_peer_id();
+        manager.mark_incompatible(zombie);
+
+        manager.note_gossiped_tip(&[zombie], 10_000, [9u8; 32]);
+        assert!(
+            matches!(manager.state(), SyncState::Discovery),
+            "gossiped tip from an incompatible-only peer set must not trigger catch-up"
+        );
+    }
+
+    #[test]
+    fn test_incompatible_marking_persists_across_reconnect() {
+        // Protocol-major compatibility is a stable property of a peer's identity.
+        // A zombie that disconnects and reconnects must stay ignored so it cannot
+        // churn sync/quorum on every connect.
+        let mut manager = ChainSyncManager::new(0);
+        let zombie = make_peer_id();
+
+        manager.mark_incompatible(zombie);
+        manager.on_peer_disconnected(&zombie);
+        assert!(
+            manager.is_incompatible(&zombie),
+            "marking must survive disconnect"
+        );
+
+        // Reconnect + re-advertise higher height: still ignored.
+        manager.on_status(zombie, 10_000, [9u8; 32]);
+        assert!(matches!(manager.state(), SyncState::Discovery));
     }
 
     // ========================================================================

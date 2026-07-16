@@ -1638,6 +1638,15 @@ async fn run_async(mut config: Config, config_path: &Path, mint: bool) -> Result
                                 local_version = %local_version,
                                 "Disconnecting consensus-incompatible peer (protocol major mismatch)"
                             );
+                            // Record the incompatibility BEFORE disconnecting so
+                            // the peer's chain-height advertisement is scrubbed
+                            // and any late in-flight status / gossip is ignored.
+                            // The disconnect below is async; without this, a
+                            // stale old-protocol node advertising a higher
+                            // (old-chain) height could hold the propose-gate
+                            // closed on a freshly-reset chain until it is
+                            // firewalled off (#998 / #1000).
+                            sync_manager.mark_incompatible(peer);
                             let _ = swarm.disconnect_peer_id(peer);
                         }
 

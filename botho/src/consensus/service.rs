@@ -2029,6 +2029,93 @@ mod tests {
         );
     }
 
+    /// Issue #1000 regression: a consensus-incompatible peer's (old-chain)
+    /// height advertisement must NOT hold the startup propose-gate closed.
+    ///
+    /// The #998 6.0.0-reset incident: two stale 4.0.0 nodes advertising a
+    /// higher old-chain height held the fresh minter's propose-gate closed
+    /// (`should_propose_this_round` -> `!initial_sync_complete`), because the
+    /// sync state machine picked the zombie's height as the catch-up target and
+    /// never reached `Synced`. This wires a REAL [`ChainSyncManager`] to the
+    /// consensus gate exactly as the run loop does and proves the gate opens.
+    #[test]
+    fn incompatible_peer_height_does_not_hold_propose_gate_closed() {
+        use crate::network::{ChainSyncManager, SyncAction};
+        use libp2p::PeerId;
+
+        // A freshly-reset minter that expects peers (min_peers == 1) booted
+        // behind the fleet, so the startup sync gate holds the propose-gate
+        // closed until catch-up completes.
+        let mut svc = solo_service();
+        svc.set_min_peers(1);
+        svc.set_connected_peers(1);
+        svc.set_initial_sync_complete(false);
+        assert!(
+            !svc.should_propose_this_round(),
+            "propose-gate must stay closed while initial sync is incomplete"
+        );
+
+        // Its ONLY peer is a consensus-incompatible zombie advertising a much
+        // higher (old-chain) height. Model the run loop: the zombie completes a
+        // status round-trip (recording its height), then is flagged
+        // incompatible and disconnected.
+        let mut sync = ChainSyncManager::new(0);
+        let zombie = PeerId::random();
+        sync.on_status(zombie, 10_000, [9u8; 32]);
+        sync.mark_incompatible(zombie);
+
+        // The sync state machine must still reach Synced — initial sync
+        // completes — even though the only peer advertises a higher height.
+        let action = sync.tick(&[zombie]);
+        assert!(
+            matches!(action, Some(SyncAction::Synced)),
+            "sync must complete despite an incompatible higher-height peer, got {action:?}"
+        );
+        assert!(sync.is_synced());
+
+        // The run loop flips the consensus gate once the sync manager is Synced.
+        svc.set_initial_sync_complete(sync.is_synced());
+        assert!(
+            svc.should_propose_this_round(),
+            "propose-gate must open once initial sync completes; an incompatible \
+             peer's height must not hold it closed (#998 / #1000)"
+        );
+    }
+
+    /// Issue #1000 regression (liveness): once initial sync completes despite
+    /// an incompatible higher-height peer, a solo-capable minter proposes
+    /// and externalizes a block.
+    #[test]
+    fn minter_externalizes_after_sync_completes_despite_incompatible_peers() {
+        use crate::network::{ChainSyncManager, SyncAction};
+        use libp2p::PeerId;
+
+        // Drive a real sync manager whose only peer is an incompatible zombie
+        // advertising a higher old-chain height; it must still complete initial
+        // sync rather than chasing the zombie's height forever.
+        let mut sync = ChainSyncManager::new(0);
+        let zombie = PeerId::random();
+        sync.on_status(zombie, 10_000, [9u8; 32]);
+        sync.mark_incompatible(zombie);
+        assert!(
+            matches!(sync.tick(&[zombie]), Some(SyncAction::Synced)),
+            "sync must complete against an incompatible-only peer set"
+        );
+
+        // A solo-capable minter, gated on that sync completion, now proposes and
+        // directly externalizes a block once the gate is open.
+        let mut svc = solo_service();
+        svc.set_initial_sync_complete(sync.is_synced());
+        assert!(svc.should_propose_this_round());
+        svc.submit_transaction([7u8; 32], 0, vec![1, 2, 3]);
+        svc.propose_pending_values();
+        assert!(
+            svc.externalized.is_some(),
+            "once initial sync completes the minter must externalize a block \
+             (#998 / #1000)"
+        );
+    }
+
     /// Issue #433 regression: the 1-of-1 -> 2-of-2 transition must not fork.
     ///
     /// A node that expects peers (`min_peers == 1`) and already has a peer
