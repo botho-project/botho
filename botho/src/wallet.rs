@@ -457,7 +457,74 @@ impl Wallet {
         current_height: u64,
         ledger: &Ledger,
     ) -> Result<Transaction> {
-        self.create_private_transaction_impl(utxos_to_spend, outputs, fee, current_height, ledger)
+        self.create_private_transaction_impl(
+            utxos_to_spend,
+            outputs,
+            fee,
+            current_height,
+            ledger,
+            None,
+        )
+    }
+
+    /// Create an explicit demurrage-settlement transaction (#831): the
+    /// consensus-recognized reclassification of spent (cluster-tagged) value to
+    /// **factor-1/background** for wrap eligibility (ADR 0003).
+    ///
+    /// Unlike [`Self::create_private_transaction`] — which forces every output
+    /// to inherit the inputs' decayed cluster tags (coin-lineage tracking) — a
+    /// settlement emits **all-background** outputs (empty [`ClusterTagVector`])
+    /// and stamps the transaction with a [`SettlementInfo`] whose
+    /// `settled_value` equals the summed output amounts. Consensus prices the
+    /// capitalized future demurrage of the downgrade into the fee floor (C7,
+    /// issue #925); in the bootstrap epoch that charge is zero, so a settlement
+    /// there costs only the base fee.
+    ///
+    /// This is what lets a bridge reserve accrue **spendable factor-1** outputs
+    /// (the releaser's `factor_one` filter, `release/bth.rs`) from otherwise
+    /// cluster-tagged coinbase inputs — the local full-loop e2e's reserve
+    /// funding path (#1025).
+    ///
+    /// The caller supplies the recipient outputs; their `cluster_tags` are
+    /// overwritten to empty here (a settlement MUST reclassify all value to
+    /// background, enforced by `Ledger::verify_settlement`). `settled_value` is
+    /// derived from the output amounts.
+    ///
+    /// # Arguments
+    /// * `utxos_to_spend` - The wallet's UTXOs to settle (spend as inputs)
+    /// * `outputs` - Recipient outputs (their cluster tags are forced empty)
+    /// * `fee` - Transaction fee (must clear the consensus fee floor)
+    /// * `current_height` - Current blockchain height
+    /// * `ledger` - Ledger for fetching decoy outputs
+    pub fn create_settlement_transaction(
+        &self,
+        utxos_to_spend: &[Utxo],
+        outputs: Vec<TxOutput>,
+        fee: u64,
+        current_height: u64,
+        ledger: &Ledger,
+    ) -> Result<Transaction> {
+        // A settlement reclassifies ALL value to background: force every output
+        // to carry an empty cluster-tag vector (verify_settlement rejects any
+        // non-background output).
+        let outputs: Vec<TxOutput> = outputs
+            .into_iter()
+            .map(|mut o| {
+                o.cluster_tags = ClusterTagVector::empty();
+                o
+            })
+            .collect();
+        let settled_value = outputs
+            .iter()
+            .fold(0u64, |acc, o| acc.saturating_add(o.amount));
+        self.create_private_transaction_impl(
+            utxos_to_spend,
+            outputs,
+            fee,
+            current_height,
+            ledger,
+            Some(settled_value),
+        )
     }
 
     /// Alias for `create_clsag_transaction` for backwards compatibility.
@@ -486,10 +553,25 @@ impl Wallet {
         current_height: u64,
         ledger: &Ledger,
     ) -> Result<Transaction> {
-        self.create_private_transaction_impl(utxos_to_spend, outputs, fee, current_height, ledger)
+        self.create_private_transaction_impl(
+            utxos_to_spend,
+            outputs,
+            fee,
+            current_height,
+            ledger,
+            None,
+        )
     }
 
     /// Internal implementation for CLSAG private transactions.
+    ///
+    /// `settlement_value` selects the transaction flavor:
+    /// - `None` — an ordinary transfer: every output inherits the inputs'
+    ///   merged+decayed cluster tags (coin-lineage tracking).
+    /// - `Some(v)` — an explicit demurrage-settlement (#831): outputs keep the
+    ///   (empty/background) tags the caller set and the tx is stamped
+    ///   `new_settlement(.., v)`. The settlement flag is bound into the signing
+    ///   hash, so the preliminary tx used for signing must carry it too.
     fn create_private_transaction_impl(
         &self,
         utxos_to_spend: &[Utxo],
@@ -497,29 +579,39 @@ impl Wallet {
         fee: u64,
         current_height: u64,
         ledger: &Ledger,
+        settlement_value: Option<u64>,
     ) -> Result<Transaction> {
         if utxos_to_spend.is_empty() {
             return Err(anyhow::anyhow!("No UTXOs to spend"));
         }
 
-        // Compute inherited cluster tags from inputs with default decay
-        // All outputs inherit the same merged+decayed tag vector from inputs
-        let inherited_tags =
-            Self::compute_inherited_tags(utxos_to_spend, DEFAULT_CLUSTER_DECAY_RATE);
+        // Ordinary transfers force every output to inherit the inputs'
+        // merged+decayed cluster tags. A settlement instead reclassifies all
+        // value to background, so it keeps the caller's (empty) tags untouched.
+        let outputs: Vec<TxOutput> = if settlement_value.is_some() {
+            outputs
+        } else {
+            let inherited_tags =
+                Self::compute_inherited_tags(utxos_to_spend, DEFAULT_CLUSTER_DECAY_RATE);
+            outputs
+                .into_iter()
+                .map(|mut o| {
+                    o.cluster_tags = inherited_tags.clone();
+                    o
+                })
+                .collect()
+        };
 
-        // Apply inherited tags to all outputs
-        let outputs: Vec<TxOutput> = outputs
-            .into_iter()
-            .map(|mut o| {
-                o.cluster_tags = inherited_tags.clone();
-                o
-            })
-            .collect();
-
-        // Build a preliminary transaction to get the signing hash
-        // We'll replace the inputs with real ring inputs after signing
-        let preliminary_tx =
-            Transaction::new_clsag(Vec::new(), outputs.clone(), fee, current_height);
+        // Build a preliminary transaction to get the signing hash. The
+        // settlement flag is covered by the signing hash, so it must be present
+        // here for a settlement (else the signature would not bind it).
+        // We'll replace the inputs with real ring inputs after signing.
+        let preliminary_tx = match settlement_value {
+            Some(v) => {
+                Transaction::new_settlement(Vec::new(), outputs.clone(), fee, current_height, v)
+            }
+            None => Transaction::new_clsag(Vec::new(), outputs.clone(), fee, current_height),
+        };
         let signing_hash = preliminary_tx.signing_hash();
 
         // Number of decoys per ring (MIN_RING_SIZE - 1 since real input is included)
@@ -651,8 +743,12 @@ impl Wallet {
             ring_inputs.push(ring_input);
         }
 
-        // Create the final transaction with CLSAG ring inputs
-        let tx = Transaction::new_clsag(ring_inputs, outputs, fee, current_height);
+        // Create the final transaction with CLSAG ring inputs, preserving the
+        // settlement flag so the on-chain tx matches what was signed.
+        let tx = match settlement_value {
+            Some(v) => Transaction::new_settlement(ring_inputs, outputs, fee, current_height, v),
+            None => Transaction::new_clsag(ring_inputs, outputs, fee, current_height),
+        };
 
         Ok(tx)
     }
@@ -732,6 +828,7 @@ impl Wallet {
             fee,
             current_height,
             ledger,
+            None,
         )?;
 
         Ok((tx, entropy_result))

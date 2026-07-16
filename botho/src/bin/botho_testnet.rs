@@ -145,11 +145,14 @@ enum Commands {
     /// deterministic node mnemonic (already in-code and disposable) and the
     /// user keys are freshly random at runtime.
     ///
-    /// The RESERVE is the node's own pre-funded mining wallet, so it already
-    /// owns spendable **factor-1** (zero-cluster-weight) outputs from lottery
-    /// emission (`LotteryOutput::to_tx_output(ClusterTagVector::empty())`),
-    /// which is exactly what the CLSAG release path spends (ADR 0003). The
-    /// USER wallet only receives the released stealth output (ADR 0004).
+    /// The RESERVE is the node's own pre-funded mining wallet. NOTE (#1025): a
+    /// freshly-mined node accrues ONLY 100%-cluster-tagged coinbases
+    /// (`MintingTx::to_tx_output` tags each with a new cluster) and lottery
+    /// EMISSION is zero in the bootstrap epoch — so the reserve does NOT
+    /// naturally own the **factor-1** (zero-cluster-weight) outputs the CLSAG
+    /// release path spends (ADR 0003). Run `fund-reserve` after this to settle
+    /// a coinbase into a spendable factor-1 output. The USER wallet only
+    /// receives the released stealth output (ADR 0004).
     GenBridgeKeys {
         /// Node index whose deterministic wallet becomes the bridge reserve.
         #[arg(long, default_value_t = 0)]
@@ -158,6 +161,35 @@ enum Commands {
         /// Directory to write the key files into (created if missing).
         #[arg(long)]
         out: PathBuf,
+    },
+
+    /// Fund the bridge reserve with a spendable **factor-1** (background)
+    /// output by settling the node wallet's own coins (#1025).
+    ///
+    /// A freshly-mined node accrues ONLY 100%-cluster-tagged coinbases, never
+    /// factor-1, so the bridge releaser (which spends only factor-1 reserve
+    /// outputs, ADR 0003) would find nothing. This calls the node's
+    /// `dev_settleToBackground` RPC (testnet-only) to emit an explicit
+    /// demurrage-settlement that reclassifies a coinbase to factor-1, then
+    /// waits for it to be mined — retrying while the chain is still warming up
+    /// (insufficient ring decoys / no mature coinbase yet).
+    FundReserve {
+        /// Node index whose wallet is the reserve (matches `gen-bridge-keys`).
+        #[arg(long, default_value_t = 0)]
+        node: usize,
+
+        /// Picocredits to settle to factor-1 (must cover the wrap amount +
+        /// release fee). Default 1 BTH.
+        #[arg(long, default_value_t = 1_000_000_000_000)]
+        amount: u64,
+
+        /// Base gossip port (RPC = base + 100 + node); locates the node RPC.
+        #[arg(long, default_value_t = DEFAULT_BASE_PORT)]
+        base_port: u16,
+
+        /// Max seconds to wait for the settlement to succeed and be mined.
+        #[arg(long, default_value_t = 900)]
+        timeout_secs: u64,
     },
 }
 
@@ -235,6 +267,12 @@ fn main() -> Result<()> {
         Commands::RestartNode { node } => cmd_restart_node(node, args.verbose),
         Commands::Clean => cmd_clean(args.verbose),
         Commands::GenBridgeKeys { node, out } => cmd_gen_bridge_keys(node, &out),
+        Commands::FundReserve {
+            node,
+            amount,
+            base_port,
+            timeout_secs,
+        } => cmd_fund_reserve(node, amount, base_port, timeout_secs),
     }
 }
 
@@ -832,8 +870,9 @@ fn cmd_gen_bridge_keys(node: usize, out: &Path) -> Result<()> {
         let _ = fs::set_permissions(out, fs::Permissions::from_mode(0o700));
     }
 
-    // RESERVE = the node's own deterministic (pre-funded, factor-1-accruing)
-    // wallet. Deriving from the SAME mnemonic the harness boots node `node`
+    // RESERVE = the node's own deterministic (pre-funded) wallet. It accrues
+    // cluster-tagged coinbases; `fund-reserve` settles one into factor-1.
+    // Deriving from the SAME mnemonic the harness boots node `node`
     // with means the reserve keys detect that node's coinbase + lottery
     // outputs — no secret is introduced.
     let reserve_mnemonic = generate_deterministic_mnemonic(node)?;
@@ -861,6 +900,102 @@ fn cmd_gen_bridge_keys(node: usize, out: &Path) -> Result<()> {
     emit_bridge_wallet(out, "user", "USER", &user)?;
 
     Ok(())
+}
+
+/// Fund the bridge reserve with a spendable factor-1 output (#1025).
+///
+/// Calls the node's testnet-only `dev_settleToBackground` RPC, which emits an
+/// explicit demurrage-settlement reclassifying one of the node wallet's own
+/// (cluster-tagged) coinbases to a factor-1/background output back to itself.
+/// Retries while the chain is still warming up (no mature coinbase yet, or too
+/// few decoys to form the ring), then waits for the settlement to be mined.
+fn cmd_fund_reserve(node: usize, amount: u64, base_port: u16, timeout_secs: u64) -> Result<()> {
+    let rpc_port = base_port + RPC_PORT_OFFSET + node as u16;
+    let rpc_url = format!("http://127.0.0.1:{}", rpc_port);
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(RPC_TIMEOUT_SECS))
+        .build()?;
+
+    eprintln!(
+        "Funding reserve (node {}) with a factor-1 settlement of {} pc via {}",
+        node, amount, rpc_url
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+
+    // 1) Retry the settlement until the chain has matured enough to build it (a
+    //    mature coinbase to spend + DEFAULT_RING_SIZE-1 decoys for the ring).
+    let tx_hash = loop {
+        if Instant::now() >= deadline {
+            return Err(anyhow!(
+                "timed out waiting to submit the reserve settlement (chain never \
+                 warmed up enough: need a mature coinbase + a full decoy ring)"
+            ));
+        }
+
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "dev_settleToBackground",
+            "params": { "amount": amount },
+        });
+        match client.post(&rpc_url).json(&request).send() {
+            Ok(resp) => {
+                let body: serde_json::Value = resp.json().unwrap_or_else(|_| json!({}));
+                if let Some(hash) = body
+                    .get("result")
+                    .and_then(|r| r.get("txHash"))
+                    .and_then(|h| h.as_str())
+                {
+                    eprintln!("Reserve settlement submitted: tx {hash}");
+                    break hash.to_string();
+                }
+                let msg = body
+                    .get("error")
+                    .and_then(|e| e.get("message"))
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("unknown error");
+                eprintln!("  settlement not ready yet ({msg}); retrying in 10s");
+            }
+            Err(e) => eprintln!("  RPC call failed ({e}); retrying in 10s"),
+        }
+        thread::sleep(Duration::from_secs(10));
+    };
+
+    // 2) Wait for the settlement to be mined (confirmed), so the reserve owns a
+    //    spendable factor-1 output before the release leg runs.
+    loop {
+        if Instant::now() >= deadline {
+            return Err(anyhow!(
+                "reserve settlement {tx_hash} submitted but not mined before timeout"
+            ));
+        }
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tx_get",
+            "params": { "tx_hash": tx_hash },
+        });
+        if let Ok(resp) = client.post(&rpc_url).json(&request).send() {
+            let body: serde_json::Value = resp.json().unwrap_or_else(|_| json!({}));
+            if body
+                .get("result")
+                .and_then(|r| r.get("status"))
+                .and_then(|s| s.as_str())
+                == Some("confirmed")
+            {
+                let h = body
+                    .get("result")
+                    .and_then(|r| r.get("blockHeight"))
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                eprintln!("Reserve settlement {tx_hash} confirmed at block {h}");
+                eprintln!("Reserve now owns a spendable factor-1 output.");
+                return Ok(());
+            }
+        }
+        thread::sleep(Duration::from_secs(5));
+    }
 }
 
 // ============================================================================
@@ -1136,7 +1271,8 @@ mod tests {
 
     /// The exported classical view/spend scalars are exactly the node wallet's
     /// own keys — the invariant that makes "reserve == the pre-funded miner"
-    /// hold, so the reserve owns the node's factor-1 lottery outputs.
+    /// hold, so the reserve detects (and, after `fund-reserve` settles one into
+    /// factor-1, can spend) the node's own coinbase outputs.
     #[test]
     fn reserve_keys_match_node_wallet() {
         let mnemonic = generate_deterministic_mnemonic(1).unwrap();
