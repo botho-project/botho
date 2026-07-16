@@ -111,6 +111,37 @@ pub struct BurnRecord {
     pub orphaned: bool,
 }
 
+/// A registered release-tracking intent (#1036), a row in `release_intents`.
+///
+/// Purely a UX correlation aid for the wallet Unwrap flow: the burn happens
+/// in the user's OWN counterparty wallet (`bridgeBurn(amount, bthAddress)`),
+/// the watcher detects it and creates the real `BridgeOrder` (keyed by the
+/// on-chain `bthAddress` + amount), and the release is submitted regardless.
+/// This record just lets the public API hand the wallet a UUID to poll and
+/// then correlate that UUID back to the watcher-created burn order. It is
+/// NEVER read by the release pipeline and carries no custody authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseIntent {
+    /// Client-facing tracking UUID.
+    pub id: Uuid,
+    /// Chain the user will burn wBTH on.
+    pub source_chain: Chain,
+    /// Botho address the released BTH is destined for (the burn's embedded
+    /// `bthAddress`; the correlation key to the watcher-created burn order).
+    pub bth_address: String,
+    /// Gross wBTH the user intends to burn, in picocredits.
+    pub amount: u64,
+    /// Bridge fee quoted at registration, in picocredits.
+    pub fee: u64,
+    /// wBTH token/mint address the user must burn on `source_chain`.
+    pub token_address: String,
+    /// When the intent was registered (unix seconds).
+    pub created_at: i64,
+    /// When the intent expires if no matching burn is ever seen (unix
+    /// seconds).
+    pub expires_at: i64,
+}
+
 /// A row in the `reserve_ledger` table (#825).
 ///
 /// The locked BTH reserve is derived from bridge-controlled outputs, never
@@ -385,6 +416,28 @@ impl Database {
                 detail TEXT,
                 updated_at INTEGER NOT NULL
             );
+
+            -- Release-order tracking intents (#1036). Purely a UX correlation
+            -- aid for the wallet Unwrap flow: the user registers the Botho
+            -- release address + amount they intend to burn wBTH for, so the
+            -- public API can later correlate the watcher-created burn order
+            -- (keyed by the on-chain bthAddress + amount) and report its
+            -- status. This table is NON-CUSTODIAL and is NEVER read by the
+            -- release pipeline — burns are self-describing and released
+            -- regardless of whether an intent was ever registered.
+            CREATE TABLE IF NOT EXISTS release_intents (
+                id TEXT PRIMARY KEY,
+                source_chain TEXT NOT NULL,
+                bth_address TEXT NOT NULL,
+                amount INTEGER NOT NULL,
+                fee INTEGER NOT NULL,
+                token_address TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_release_intents_addr
+                ON release_intents(bth_address, amount);
             "#,
         )
         .map_err(|e| format!("Migration failed: {}", e))?;
@@ -528,6 +581,103 @@ impl Database {
             .map_err(|e| format!("Collect failed: {}", e))?;
 
         Ok(orders)
+    }
+
+    /// Register a release-tracking intent (#1036).
+    ///
+    /// Non-custodial: this only records the wallet's stated intent so the
+    /// public API can hand back a pollable UUID and later correlate it to the
+    /// watcher-created burn order. See [`ReleaseIntent`].
+    pub fn insert_release_intent(&self, intent: &ReleaseIntent) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        conn.execute(
+            r#"
+            INSERT INTO release_intents (
+                id, source_chain, bth_address, amount, fee, token_address,
+                created_at, expires_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            "#,
+            params![
+                intent.id.to_string(),
+                intent.source_chain.to_string(),
+                intent.bth_address,
+                intent.amount as i64,
+                intent.fee as i64,
+                intent.token_address,
+                intent.created_at,
+                intent.expires_at,
+            ],
+        )
+        .map_err(|e| format!("Insert release intent failed: {}", e))?;
+        Ok(())
+    }
+
+    /// Fetch a registered release intent by its tracking UUID (#1036).
+    pub fn get_release_intent(&self, id: &Uuid) -> Result<Option<ReleaseIntent>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT id, source_chain, bth_address, amount, fee, token_address,
+                       created_at, expires_at
+                FROM release_intents WHERE id = ?1
+                "#,
+            )
+            .map_err(|e| format!("Prepare failed: {}", e))?;
+        let result = stmt
+            .query_row(params![id.to_string()], |row| {
+                let id_str: String = row.get(0)?;
+                let chain_str: String = row.get(1)?;
+                Ok(ReleaseIntent {
+                    id: Uuid::parse_str(&id_str).unwrap_or_default(),
+                    source_chain: chain_str.parse().unwrap_or(Chain::Bth),
+                    bth_address: row.get(2)?,
+                    amount: row.get::<_, i64>(3)? as u64,
+                    fee: row.get::<_, i64>(4)? as u64,
+                    token_address: row.get(5)?,
+                    created_at: row.get(6)?,
+                    expires_at: row.get(7)?,
+                })
+            })
+            .optional()
+            .map_err(|e| format!("Query failed: {}", e))?;
+        Ok(result)
+    }
+
+    /// Correlate a release intent to the watcher-created burn order (#1036).
+    ///
+    /// Burn orders are created by the counterparty-chain watchers keyed by the
+    /// on-chain `bthAddress` (stored as the order's `dest_address`) and the
+    /// revealed burn amount. Returns the most recent matching burn order, or
+    /// `None` if no burn has been detected yet. Correlation is best-effort
+    /// tracking only — two identical (address, amount) burns are
+    /// indistinguishable here, which is acceptable for a status hint (the
+    /// release itself is driven by the self-describing burn, not this lookup).
+    pub fn find_burn_order_for_release(
+        &self,
+        bth_address: &str,
+        amount: u64,
+    ) -> Result<Option<BridgeOrder>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT id, order_type, source_chain, dest_chain, amount, fee,
+                       source_tx, dest_tx, source_address, dest_address,
+                       status, error_message, memo, mint_authorization,
+                       dest_confirmed_at, created_at, updated_at
+                FROM bridge_orders
+                WHERE order_type = 'burn' AND dest_address = ?1 AND amount = ?2
+                ORDER BY created_at DESC
+                LIMIT 1
+                "#,
+            )
+            .map_err(|e| format!("Prepare failed: {}", e))?;
+        let result = stmt
+            .query_row(params![bth_address, amount as i64], Self::row_to_order)
+            .optional()
+            .map_err(|e| format!("Query failed: {}", e))?;
+        Ok(result)
     }
 
     /// Update order status, enforcing the state machine at the DB layer

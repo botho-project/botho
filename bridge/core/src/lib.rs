@@ -34,8 +34,8 @@ pub use attestation::{
 };
 pub use chains::{Chain, ChainAddress};
 pub use config::{
-    BridgeConfig, BthConfig, EthereumConfig, FederationSettings, GasPriceStrategy, ReserveSettings,
-    SolanaCommitment, SolanaConfig,
+    BridgeConfig, BthConfig, EthereumConfig, FederationSettings, GasPriceStrategy,
+    PublicApiSettings, ReserveSettings, SolanaCommitment, SolanaConfig,
 };
 pub use nonce::{NonceStore, ReserveOutcome};
 pub use order::{derive_order_id, BridgeOrder, OrderStatus, OrderType};
