@@ -1,0 +1,10 @@
+{
+  "chains": {
+    "Sepolia": {
+      "rpc": "https://ethereum-sepolia-rpc.publicnode.com"
+    },
+    "HyperEVM": {
+      "rpc": "https://rpc.hyperliquid-testnet.xyz/evm"
+    }
+  }
+}
