@@ -45,6 +45,8 @@ pub mod m2;
 mod metrics;
 #[cfg(any(feature = "cli", test))]
 pub mod privacy;
+#[cfg(any(feature = "cli", test))]
+pub mod provenance_factor_sweep;
 mod runner;
 #[cfg(any(feature = "cli", test))]
 pub mod settlement_horizon_sweep;
