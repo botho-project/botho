@@ -265,14 +265,63 @@ f_{\text{total}} = f_{\text{base}} \times \text{size} \times \text{cluster\_fact
 The cluster factor ranges from 1.0$\times$ (bottom 50\% wealth) to
 6.0$\times$ (top 1\% wealth).
 
+\subsubsection{Demurrage Class-Transition Charge}
+\label{sec:demurrage-class-transition}
+
+Ordinary demurrage accrues \emph{over holding time} and is paid on each spend.
+On its own this leaves a leak: a wealthy coin can be spent while young ---
+before demurrage has accrued (\texttt{elapsed}~$\approx 0$) --- into a
+background (factor-1) output, permanently escaping its class's future holding
+cost at near-zero cost. \Botho\ closes this by charging, on every spend,
+\begin{equation}
+d_{\text{spend}} = \max\!\big(\underbrace{d_{\text{accrued}}}_{\text{time-based}},\;
+\underbrace{d_{\text{cap}}}_{\text{capitalized reset}}\big),
+\end{equation}
+where $d_{\text{accrued}}$ is the ordinary accrued demurrage and the
+\emph{capitalized reset charge} $d_{\text{cap}}$ prices a permanent
+\emph{class downgrade} --- the case where a spend declares an output factor
+\emph{below} the input's ring-implied class floor (the factor the spender
+cannot rewrite). It equals the net future demurrage escaped by the downgrade,
+capitalized over a settlement horizon $H = 5$ years
+($\texttt{SETTLEMENT\_HORIZON\_BLOCKS} = 31{,}536{,}000$ blocks at the 5\,s
+reference):
+\begin{equation}
+d_{\text{cap}} = d(\text{value}, \phi_{\text{floor}}, H) - d(\text{value}, \phi_{\text{out}}, H)
+\quad\text{if } \phi_{\text{out}} < \phi_{\text{floor}},\; \text{else } 0.
+\end{equation}
+A genuine background$\to$background spend floors at 1$\times$ on both sides, so
+$d_{\text{cap}} = 0$ and honest commerce is never touched; only an actual
+downgrade relative to the ring floor is priced. The charge folds into the
+consensus fee floor and thus flows, via the 80/20 split, into the same
+lottery redistribution pool (ADR~0009; issue~\#925).
+
+Because the floor is an order statistic over the ring's implied factors
+weighted by input value, a single high-value decoy in an honest background spender's
+ring could spuriously lift the floor above 1$\times$ and trip the charge. Decoy
+selection therefore draws only ring members whose cluster factor lies within a
+\textbf{$\pm 10\%$ factor-similarity band} of the real input's factor
+(\texttt{FACTOR\_SIMILARITY\_SPREAD}), so a background spender draws only
+near-1$\times$ decoys and the ring floor stays exact.
+
+A holder may also \emph{opt in} to a \textbf{demurrage-settlement operation}
+(issue~\#831): a transaction declaring all-background (factor-1) outputs pays
+the same capitalized reset charge --- evaluated from the ring-floored input
+class down to 1$\times$ over the same horizon $H$ --- to permanently reclassify
+a wealthy coin to factor-1 and make it wrap-eligible for the bridge on-ramp
+(Section~\ref{sec:bridge}). Both doors (the implicit \#925 downgrade charge and
+the explicit \#831 settlement charge) read the \emph{one} shared horizon $H$
+and reuse the same charge formula, so neither is a cheaper route out of the
+demurrage regime than the other.
+
 \subsubsection{Lottery-Based Fee Redistribution}
 
 Transaction fees are split between a redistribution pool and burning:
 
 \begin{itemize}
   \item \textbf{80\% to the lottery pool}: Added to a persistent,
-    cumulative pool and distributed to 4 UTXOs per block via verifiable,
-    cluster-tilted lottery
+    cumulative pool and distributed to 4 UTXOs per block via a verifiable,
+    value-free uniform lottery over a circulation window (\emph{Path C};
+    ADR~0009)
   \item \textbf{20\% burned}: Permanently removed from supply
 \end{itemize}
 
@@ -285,33 +334,59 @@ fees are a consumption tax and cannot, by themselves, touch coins that sit
 still (Section~\ref{sec:economic-modeling}). The pool balance is cumulative
 (carried over across blocks) and each block pays out
 \begin{equation}
-\text{payout} = \min\!\big(\underbrace{\text{carryover} + \text{emission\_share} + 0.8\,f_{\text{block}}}_{\text{available}},\; R(h)\big),
+\text{payout} = \min\!\big(\underbrace{\text{carryover} + \text{emission\_share} + 0.8\,f_{\text{block}}}_{\text{available}},\; R\big),
+\qquad
+R = \min\!\big(\rho \cdot f_{\text{lott}},\; R(h)\big),
 \end{equation}
-capped at one block reward $R(h)$; any surplus carries over. The cap is the
-core anti-grinding bound (Section~\ref{sec:security}).
+where the \emph{reward cap} $R$ is the smaller of the Path~C Sybil cap
+$\rho \cdot f_{\text{lott}}$ ($\rho$ = the count of in-window eligible
+outputs, $f_{\text{lott}} = 0.25$ BTH the lottery base fee) and one block
+reward $R(h)$. Any surplus \emph{carries forward} to later blocks rather than
+being burned, so $\approx$100\% of collected fees are eventually redistributed.
+The block-reward term $R(h)$ is the anti-grinding bound
+(Section~\ref{sec:security}); the $\rho \cdot f_{\text{lott}}$ term is the
+Sybil-neutrality bound (below).
 
 This creates:
 
 \begin{itemize}
-  \item \textbf{Progressive redistribution}: Winner selection is
-    \emph{cluster-tilted} --- weighted by UTXO value scaled by the inverse
-    cluster factor --- so payouts flow preferentially toward coins from
-    low-wealth clusters
-  \item \textbf{Split-invariance}: Because weights are value-based, splitting
-    a position into many UTXOs never increases total lottery weight; payouts
-    are never a function of UTXO count, which the holder controls for free
+  \item \textbf{Value-free selection}: Winners are drawn \emph{uniformly}
+    over the circulation window --- no UTXO value and no cluster factor enters
+    the draw, so the lottery reads only public chain state and remains
+    compatible with confidential amounts (ADR~0009)
+  \item \textbf{Reward-cap net-zero (Sybil-neutrality)}: A holder that splits
+    a position into many outputs to buy more tickets also raises the reward
+    cap $R = \rho \cdot f_{\text{lott}}$ by exactly one base fee per extra
+    eligible output. It therefore wins back precisely its base-fee outlay ---
+    realized net gain is \emph{zero} at every split factor, and strictly
+    negative whenever the fee pool is thin. Sybil resistance comes from the
+    cap, not from a value-based weight formula
+  \item \textbf{Progressive intake}: Redistribution progressivity now lives
+    on the \emph{source} side --- the demurrage and progressive-fee terms
+    that fill the pool are value- and factor-dependent, while the payout draw
+    is Sybil-neutral
   \item \textbf{Deflationary pressure}: 20\% burn creates supply reduction
   \item \textbf{Anti-MEV}: No miner incentive to reorder transactions
   \item \textbf{Alignment}: Miner income comes from block rewards only
 \end{itemize}
 
-Earlier designs weighted winner selection uniformly per UTXO. Adversarial
-simulation (Section~\ref{sec:economic-modeling}) shows any per-UTXO payout
-term is a subsidy to whoever splits hardest: a strategic holder that splits
-and churns UTXOs captures the payout stream and inequality \emph{rises}.
-Cluster tags are the only split-invariant progressive signal available in an
-anonymous-value system, so both the fee multiplier (intake) and the lottery
-tilt (payout) are anchored to them.
+Earlier designs drew winners with weight
+$w_i = v_i \times (\phi_{\max} - \phi_i + 1)$ --- proportional to UTXO value
+and tilted by the inverse cluster factor. That weight is \emph{split-invariant}
+(splitting conserves value hence weight), but it reads the UTXO value directly,
+which is incompatible with the confidential amounts of ADR~0006/0009, and
+adversarial simulation (the \texttt{cluster-tax} lottery-selection sweep;
+Section~\ref{sec:economic-modeling}) showed the value term dominates the
+factor tilt in realistic populations, routing much of the pool
+\emph{back} to whales. Path~C (ADR~0009,
+\texttt{docs/research/ct-compatible-lottery-selection.md}) retires the value
+tilt entirely: the payout is a uniform draw whose split-resistance is the
+endogenous reward cap, not the weight. Because consensus must count a
+splitter's \emph{own} outputs in $\rho$, the cap rises in lockstep with the
+tickets bought, pinning the attacker's realized gain at zero --- a
+regime-independent Sybil bound obtained from public signals alone, with no
+zero-knowledge value proof. In honest populations this is strictly more
+equalizing than the retired tilt.
 
 \input{figures/fee-flow}
 
@@ -321,30 +396,34 @@ The draw runs once \emph{per block}, over the block's accumulated pool:
 
 \begin{enumerate}
   \item Compute the fee split: burn $0.2\,f_{\text{block}}$; add
-    $0.8\,f_{\text{block}}$ plus the emission share to the cumulative pool,
-    and cap the payout at one block reward
-  \item Filter eligible candidates: UTXOs at least 720 blocks old and worth
-    at least $10^{6}$ pico-BTH (1 micro-BTH)
+    $0.8\,f_{\text{block}}$ plus the emission share to the cumulative pool
+  \item Filter eligible candidates: UTXOs at least 720 blocks old, worth at
+    least $10^{6}$ pico-BTH (1 micro-BTH), and \emph{spent-and-recreated
+    within the last $N = 10{,}000$-block circulation window} --- idle wealth
+    self-excludes and the base fee is the only value gate. Let $\rho$ be the
+    resulting count of eligible outputs
+  \item Set the reward cap $R = \min(\rho \cdot f_{\text{lott}},\, R(h))$,
+    with $f_{\text{lott}} = 0.25$ BTH the lottery base fee and $R(h)$ one
+    block reward; pay out $\min(\text{available},\, R)$ this block and carry
+    any surplus forward
   \item Derive the seed from the \emph{committed previous block hash} and
     height,
     \begin{equation}
     s = \Hash(\text{``LOTTERY\_SEED\_V1''} \,\|\, \text{prev\_block\_hash} \,\|\, h),
     \end{equation}
-    and select 4 winners without replacement, each drawn with probability
-    proportional to
-    \begin{equation}
-    w_i = v_i \times (\phi_{\max} - \phi_i + 1),
-    \end{equation}
-    where $v_i$ is the UTXO value and $\phi_i \in [1, \phi_{\max}]$,
-    $\phi_{\max} = 6$, is its cluster factor (a factor-1 coin has $6\times$
-    the per-value weight of a factor-6 coin)
+    and select 4 winners \emph{uniformly} without replacement --- every
+    eligible UTXO has equal probability, with no value or cluster-factor
+    weight
   \item Split the capped payout equally among the 4 winners
 \end{enumerate}
 
 Because the seed depends only on the already-externalized previous block, a
 block proposer cannot bias the draw through transaction selection or ordering
-of the \emph{current} block. The anti-grinding argument is completed by the
-payout cap (Section~\ref{sec:security}, Lottery Grinding).
+of the \emph{current} block. Two bounds complete the security argument: the
+per-block reward cap makes seed-grinding unprofitable
+(Section~\ref{sec:security}, Lottery Grinding), and the Sybil cap
+$\rho \cdot f_{\text{lott}}$ makes ticket-splitting net-zero (the reward-cap
+property above).
 
 \subsubsection{Effective Inflation}
 
@@ -502,8 +581,12 @@ Min block time & 3 seconds & Consensus floor (very high load) \\
 Reference block time & 5 seconds & Monetary-calculation reference \\
 Max block time & 40 seconds & Idle ceiling \\
 Base fee rate & 1 pico-BTH/byte & Congestion floor (dynamic, $\leq$100$\times$) \\
-Lottery winners/block & 4 & Cluster-tilted, capped at one reward \\
+Lottery winners/block & 4 & Value-free uniform draw (Path C) \\
+Lottery circulation window & 10,000 blocks & Eligibility horizon ($\approx$14\,h) \\
+Lottery base fee & 0.25 BTH & Reward cap $R = \min(\rho f_{\text{lott}}, R(h))$ \\
 Emission-to-lottery cap & 50\% of reward & Ramps 10\%/halving epoch \\
+Settlement horizon & 5 years & Capitalized reset / class-downgrade charge \\
+Decoy factor band & $\pm 10\%$ & Keeps ring floor exact on 1$\times$ spends \\
 Max cluster factor & 6.0$\times$ & Top 1\% wealth multiplier \\
 Decimals & 12 & Smallest unit: 1 picocredit \\
 \bottomrule
