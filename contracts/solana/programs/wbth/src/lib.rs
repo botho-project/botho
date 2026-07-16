@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Burn, Mint, MintTo, Token, TokenAccount};
 
-declare_id!("wBTH111111111111111111111111111111111111111");
+declare_id!("CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE");
 
 /// Wrapped BTH (wBTH) SPL token bridge program.
 ///

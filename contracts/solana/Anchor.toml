@@ -3,13 +3,13 @@ seeds = false
 skip-lint = false
 
 [programs.localnet]
-wbth = "wBTH111111111111111111111111111111111111111"
+wbth = "CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE"
 
 [programs.devnet]
-wbth = "wBTH111111111111111111111111111111111111111"
+wbth = "CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE"
 
 [programs.mainnet]
-wbth = "wBTH111111111111111111111111111111111111111"
+wbth = "CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE"
 
 [registry]
 url = "https://api.apr.dev"
