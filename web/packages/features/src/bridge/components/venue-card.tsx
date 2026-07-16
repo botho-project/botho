@@ -6,6 +6,8 @@ export interface VenueCardProps {
   venue: Venue
   /** `bridge`-namespace translator supplied by the page. */
   t: Translate
+  /** Emphasize this card (post-export "Trade wBTH now" hand-off, #1031). */
+  highlight?: boolean
   className?: string
 }
 
@@ -27,12 +29,14 @@ function shortAddress(addr: string): string {
  * chain client, no wallet-connect. `coming-soon` venues render a badge and no
  * trade link (e.g. Hyperliquid HIP-1 spot, pending #877).
  */
-export function VenueCard({ venue, t, className }: VenueCardProps) {
+export function VenueCard({ venue, t, highlight = false, className }: VenueCardProps) {
   const Icon = CHAIN_ICON[venue.chain]
   const isLive = venue.status === 'live' && !!venue.tradeUrl
 
   return (
-    <Card className={className}>
+    <Card
+      className={`${highlight ? 'ring-2 ring-[--color-pulse]' : ''} ${className ?? ''}`.trim()}
+    >
       <CardContent className="flex h-full flex-col p-5">
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-2.5">

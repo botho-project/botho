@@ -10,6 +10,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+
+// TradePage reads the wallet context for the Tier 1 integrated export (#1031).
+// The discovery-page smoke test doesn't exercise the wallet, so we stub the
+// context to a lightweight "no wallet" snapshot rather than mounting the real
+// WalletProvider (whose async node/claim-link effects are irrelevant here).
+vi.mock('../contexts/wallet', () => ({
+  useWallet: () => ({
+    hasWallet: false,
+    isLocked: false,
+    balance: null,
+    send: () => Promise.resolve(''),
+  }),
+}))
+
 import { TradePage } from './trade'
 import i18n from '../lib/i18n'
 
@@ -62,9 +76,10 @@ describe('TradePage (Tier 0)', () => {
     renderTrade()
     expect(screen.getByRole('heading', { name: 'Peg health' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: /How to bridge BTH/i })).toBeTruthy()
-    // The Tier 1 extension point renders a disabled export CTA.
-    const cta = screen.getByRole('button', { name: 'Export BTH' })
-    expect(cta.hasAttribute('disabled')).toBe(true)
+    // The Tier 1 export panel renders; with no bridge order endpoint configured
+    // in tests (VITE_BRIDGE_API_BASE unset) it shows its explicit
+    // "not wired yet" state rather than a form (#1031).
+    expect(screen.getByText(/endpoint not wired yet/i)).toBeTruthy()
     // Reserve card degrades to its unavailable placeholder (no live backend).
     await waitFor(() =>
       expect(screen.getByText(/Reserve proof unavailable/i)).toBeTruthy(),
