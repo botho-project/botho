@@ -34,9 +34,38 @@ three authority pubkeys explicitly; the payer receives no standing role.
 
 Record the concrete multisig addresses + thresholds here per deployment:
 
-| Network | Program ID | wBTH mint | Mint multisig | Admin multisig | Pauser multisig |
+| Network | Program ID | wBTH mint | Mint authority | Admin authority | Pauser authority |
 |---------|-----------|-----------|---------------|----------------|-----------------|
-| (none deployed yet) | | | | | |
+| Devnet | `CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE` | `F7LsiATxVQxnDEBWemfuq1BgFDYbuzqMMJ5eZjaB7LFX` | `97oZgGpd71du52gguVkWEe1xkPvXh5PZPB2Jq3yvNRyU` | `CGztXiN1wjm4vDvbPkY29dumoJvxkY6GLAUVFhbDqtGP` | `CgK9WQJdmAh97x5hkg8kyDFu8idwCqHKiEAjJ9qprjig` |
+
+> **Devnet uses single-key authorities, NOT multisigs.** `bridge_mint` takes
+> `mint_authority` as a transaction `Signer`, and an SPL Token multisig cannot
+> sign a generic (non-Token-program) instruction — only a plain keypair or a
+> Squads PDA (via CPI `invoke_signed`) can. So the three roles above are
+> **distinct single keys** for testnet iteration (role separation preserved).
+> **Mainnet MUST replace each with a distinct Squads multisig** per the custody
+> gate below — that is the deploy-time invariant to verify before value flows.
+
+Bridge PDA `5bLHYxv4P5NMoAFaiKN2WfWQxwK2FL6PqKYZqPgSs9mx` (`seeds=[b"bridge"]`) is
+the wBTH mint + freeze authority; the mint is 12-decimal (1 unit = 1 picocredit).
+
+**Devnet DeFi loop (2026-07-16, #867/#870)** — the Solana analogue of the
+Ethereum Uniswap bootstrap, driven by `scripts/devnet-bridge-setup.ts` +
+`scripts/devnet-orca-pool.ts` + `scripts/devnet-orca-swap.ts`:
+1. `initialize` — created the wBTH SPL mint + bridge state.
+2. `bridge_mint` — 100,000 wBTH to the LP through the multisig-gated path.
+3. Orca **wBTH/WSOL Whirlpool** `9Yog17D3nt1v9cREJBh1Ddeo6fRGuS48hbQcaH9WH1JS`
+   (tickSpacing 64), seeded with ~0.05 WSOL + ~50,444 wBTH full-ish-range.
+4. Swap 500 wBTH → WSOL confirmed the pool trades.
+
+Devnet program deployed 2026-07-16 (#867). ProgramData
+`841Ze82wGocyUQsJ64eCoPTqi6pGGpZvbv4LpJvdk7P3`; **upgrade authority retained**
+by the deployer `DKQP1zzhaJdegRj5myDAstogtCvMkWUyoVgiv4tGLker` for testnet
+iteration (revoke with `--final` before mainnet). Built with Solana **1.18.26**
+/ platform-tools v1.41 (Anchor 0.29 → solana-program 1.18 needs rustc ≥1.71;
+the 1.17.25 platform-tools rustc 1.68 fails on `serde_json`). `initialize` (SPL
+mint + the three distinct multisigs) and the Orca pool (#870) are the next
+steps.
 
 ### Deploy / init runbook — checked custody gate (ADR 0002)
 

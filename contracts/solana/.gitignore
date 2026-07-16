@@ -1,0 +1,11 @@
+# Anchor / Solana build + JS deps — never commit
+node_modules/
+target/
+.anchor/
+test-ledger/
+*.log
+
+# Keypairs / secrets never live here (canonical store: repo-root .secrets/,
+# gitignored). The program keypair (target/deploy/wbth-keypair.json) is backed
+# up to .secrets/bridge-testnet/solana-program-keypair.json.
+*-keypair.json

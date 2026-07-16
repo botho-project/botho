@@ -39,6 +39,13 @@ const config: HardhatUserConfig = {
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
     },
   },
+  // Etherscan source verification (#1013). Key is read from the git-ignored
+  // .env (ETHERSCAN_API_KEY) via dotenv above — never committed.
+  etherscan: {
+    // Etherscan API V2 — a single multichain key (chainid selects the
+    // explorer). V1 per-network keys are deprecated.
+    apiKey: process.env.ETHERSCAN_API_KEY || "",
+  },
 };
 
 export default config;

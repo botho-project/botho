@@ -21,7 +21,32 @@ Record the concrete Safe addresses + thresholds here per deployment:
 
 | Network | wBTH | Admin Safe | Minter Safe | Pauser Safe |
 |---------|------|-----------|-------------|-------------|
-| (none deployed yet) | | | | |
+| Sepolia (testnet) | [`0x49b985ec427ee771a601f11b18f7d4402fa2dd7b`](https://sepolia.etherscan.io/address/0x49b985ec427ee771a601f11b18f7d4402fa2dd7b#code) (verified) | `0x61274F558f9027e2D402d3340dE89152FA3F3947` | `0x61274F558f9027e2D402d3340dE89152FA3F3947` | `0x61274F558f9027e2D402d3340dE89152FA3F3947` |
+
+Sepolia Safe is a **2-of-3** Gnosis Safe (owners
+`0xc74E98…`, `0x1D72CD…`, `0x53bce9…`); the deployer
+(`0x111018…`) holds no roles. Deployed + verified 2026-07-16 (#1013).
+
+**Live DeFi round trip (2026-07-16, #866/#868/#869).** The full mainnet
+liquidity-launch sequence was run end to end on Sepolia via
+`scripts/live-defi-roundtrip.ts` (a faithful ethers port of the fork-tested
+`bridge/service/src/{uniswap_fork_tests,defi_round_trip_tests}.rs`):
+
+1. **Mint** 100,000 wBTH to the LP through the real 2-of-3 Safe —
+   `execTransaction(bridgeMint)` with two owner secp256k1 sigs, relayed by
+   the role-less deployer (ADR-0002 custody, exactly as
+   `bridge/service/src/mint/ethereum.rs`).
+2. **Pool** wBTH/WETH created on Uniswap v3 (0.30% tier) at
+   [`0x16C4fDbe2b7497EA67f1DC8205dd2F5B31458D53`](https://sepolia.etherscan.io/address/0x16C4fDbe2b7497EA67f1DC8205dd2F5B31458D53),
+   seeded with 100,000 wBTH + 0.1 WETH full-range liquidity.
+3. **Swap** 0.01 WETH → 9,066 wBTH through `SwapRouter02.exactInputSingle`.
+4. **Repatriate** — `bridgeBurn` of the swap proceeds (Ethereum-side leg;
+   totalSupply 100,000 → 90,934 wBTH).
+
+The custody mint was pre-flighted against live state with
+`scripts/validate-mint-sim.ts` (signature recovery + `eth_call`, zero spend).
+The native-BTH release leg (Layer 2, #866/#868) remains separate — it needs a
+live Botho node + watcher.
 
 ### Replay-proof, order-bound minting
 
