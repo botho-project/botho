@@ -16,7 +16,7 @@
  * - Solana devnet: https://explorer.solana.com (with `?cluster=devnet`)
  * - HyperEVM test: https://testnet.purrsec.com
  */
-import type { BridgeNetwork, Venue, VenueDirectory } from './types'
+import type { BridgeNetwork, SourceChain, Venue, VenueDirectory } from './types'
 
 // --- Ethereum Sepolia (Uniswap v3 wBTH/WETH) --------------------------------
 const WBTH_SEPOLIA = '0x49b985ec427ee771a601f11b18f7d4402fa2dd7b'
@@ -83,4 +83,84 @@ export const ACTIVE_BRIDGE_NETWORK: BridgeNetwork = 'testnet'
 /** Venues for a given network (defaults to the active/testnet set). */
 export function getVenues(network: BridgeNetwork = ACTIVE_BRIDGE_NETWORK): Venue[] {
   return VENUES[network]
+}
+
+// ─── Unwrap: burn targets (#1032) ───────────────────────────────────────────
+
+/**
+ * Where + how the user burns wBTH to redeem native BTH. The Botho wallet never
+ * signs this call — the user executes `bridgeBurn(amount, bthAddress)` in THEIR
+ * OWN counterparty wallet (MetaMask / Phantom / Anchor client), pasting the
+ * wallet-provided BTH release address as `bthAddress`. This config drives the
+ * unwrap panel's burn guidance (token to burn + a deep-link to where the user
+ * executes it), so it stays config-driven and mainnet-swappable like `VENUES`.
+ *
+ * `bridgeBurn` is the ONLY burn path on both chains:
+ * - Ethereum: `function bridgeBurn(uint256 amount, string bthAddress)`
+ *   (`contracts/ethereum/contracts/WrappedBTH.sol`).
+ * - Solana:   the `bridgeBurn(amount, bthAddress)` Anchor instruction
+ *   (`contracts/solana/tests/wbth.ts`).
+ */
+export interface BurnTarget {
+  /** Source chain the user burns on. */
+  chain: SourceChain
+  /** Human chain + network, e.g. "Ethereum Sepolia". */
+  chainLabel: string
+  /** wBTH token/mint address the user burns. */
+  tokenAddress: string
+  /**
+   * The exact burn call the user makes, e.g. `bridgeBurn(amount, bthAddress)`.
+   * `bthAddress` is the wallet-provided BTH release destination; `amount` is in
+   * picocredits (u64), matching the token's on-chain decimals.
+   */
+  burnCall: string
+  /**
+   * Deep-link to where the user executes the burn: the block-explorer
+   * write-contract tab on Ethereum, or the token/program page on Solana (Solana
+   * explorers have no generic write UI — the burn is an Anchor instruction).
+   */
+  appUrl: string
+  /** Block-explorer address page for the wBTH token. */
+  explorerUrl: string
+}
+
+const TESTNET_BURN_TARGETS: BurnTarget[] = [
+  {
+    chain: 'ethereum',
+    chainLabel: 'Ethereum Sepolia',
+    tokenAddress: WBTH_SEPOLIA,
+    burnCall: 'bridgeBurn(amount, bthAddress)',
+    // Etherscan "Write Contract" tab, where the user calls bridgeBurn directly.
+    appUrl: `https://sepolia.etherscan.io/address/${WBTH_SEPOLIA}#writeContract`,
+    explorerUrl: `https://sepolia.etherscan.io/address/${WBTH_SEPOLIA}`,
+  },
+  {
+    chain: 'solana',
+    chainLabel: 'Solana devnet',
+    tokenAddress: WBTH_SOLANA_MINT,
+    burnCall: 'bridgeBurn(amount, bthAddress)',
+    appUrl: `https://explorer.solana.com/address/${WBTH_SOLANA_MINT}?cluster=devnet`,
+    explorerUrl: `https://explorer.solana.com/address/${WBTH_SOLANA_MINT}?cluster=devnet`,
+  },
+]
+
+/** Burn targets keyed by network. Mainnet is empty until a production peg exists. */
+export const BURN_TARGETS: Record<BridgeNetwork, BurnTarget[]> = {
+  testnet: TESTNET_BURN_TARGETS,
+  mainnet: [],
+}
+
+/** Burn targets for a given network (defaults to the active/testnet set). */
+export function getBurnTargets(
+  network: BridgeNetwork = ACTIVE_BRIDGE_NETWORK,
+): BurnTarget[] {
+  return BURN_TARGETS[network]
+}
+
+/** The burn target for a specific source chain, or `undefined` if unsupported. */
+export function getBurnTarget(
+  chain: SourceChain,
+  network: BridgeNetwork = ACTIVE_BRIDGE_NETWORK,
+): BurnTarget | undefined {
+  return BURN_TARGETS[network].find((b) => b.chain === chain)
 }
