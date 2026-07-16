@@ -25,6 +25,13 @@ pub struct SignerKeys {
     /// ciphertext is encapsulated against this key, so the sender can later
     /// recover its change under the 6.0.0 hybrid scheme (issue #978).
     pub sender_kem_public_key: String,
+    /// Hex-encoded 64-byte BIP39 seed of the wallet (never leaves device). The
+    /// RECEIVE scan derives the wallet's ML-KEM SECRET from this
+    /// (feature-independent `derive_pq_keys_from_seed`, NOT
+    /// `WalletKeys::public_address()` — which needs the `pq` feature the mobile
+    /// `botho-wallet` build disables) to decapsulate and detect 6.0.0 hybrid
+    /// outputs — incoming payments and the wallet's own change (issue #988).
+    pub seed: String,
 }
 
 /// A wallet's spendable view of the chain: owned, unspent outputs + the height
@@ -41,15 +48,36 @@ impl SyncedWallet {
     }
 }
 
-/// Fetch every chain output as a `ChainOutput` (with transparent amount).
+/// The node reports a coinbase output's `outputIndex` as this sentinel to
+/// distinguish it from regular transaction outputs; its hybrid one-time key is
+/// bound to `MINTING_OUTPUT_INDEX` (0), so normalize it before scanning.
+const COINBASE_OUTPUT_INDEX_SENTINEL: u32 = u32::MAX;
+/// The index a coinbase output's hybrid one-time key is actually bound to (the
+/// node's `MINTING_OUTPUT_INDEX`).
+const MINTING_OUTPUT_INDEX: u32 = 0;
+
+/// Fetch every chain output as a `ChainOutput` (with transparent amount, its
+/// position within its tx, and its ML-KEM ciphertext) — everything the RECEIVE
+/// scan needs to detect 6.0.0 hybrid outputs (issue #988).
 async fn fetch_candidates(rpc: &NodeRpc, height: u64) -> Result<Vec<ChainOutput>, String> {
     let raw = rpc.get_outputs(0, height).await?;
     Ok(raw
         .into_iter()
-        .map(|o| ChainOutput {
-            target_key: o.target_key,
-            public_key: o.public_key,
-            amount: amount_from_commitment(&o.amount_commitment),
+        .map(|o| {
+            // Normalize the coinbase sentinel to the index its one-time key is
+            // actually bound to, so a mined coinbase is detectable too.
+            let output_index = if o.output_index == COINBASE_OUTPUT_INDEX_SENTINEL {
+                MINTING_OUTPUT_INDEX
+            } else {
+                o.output_index
+            };
+            ChainOutput {
+                target_key: o.target_key,
+                public_key: o.public_key,
+                amount: amount_from_commitment(&o.amount_commitment),
+                output_index,
+                kem_ciphertext: o.kem_ciphertext,
+            }
         })
         .collect())
 }
@@ -71,6 +99,9 @@ pub async fn sync(rpc: &NodeRpc, keys: &SignerKeys) -> Result<SyncedWallet, Stri
     let owned = scan_owned_outputs_inner(&ScanRequest {
         spend_private_key: keys.spend_private_key.clone(),
         view_private_key: keys.view_private_key.clone(),
+        // Seed-derived ML-KEM secret so the scan decapsulates hybrid outputs
+        // (incoming payments + our own change) under 6.0.0 (issue #988).
+        seed: keys.seed.clone(),
         outputs: candidates,
     })?;
 
@@ -100,6 +131,9 @@ async fn filter_spendable(
     let with_images = compute_owned_output_key_images_inner(&KeyImageRequest {
         spend_private_key: keys.spend_private_key.clone(),
         view_private_key: keys.view_private_key.clone(),
+        // Seed so a hybrid owned output's one-time spend key (hence key image)
+        // recovers via the unified path (issue #988).
+        seed: keys.seed.clone(),
         outputs: owned,
     })?;
 
@@ -119,6 +153,10 @@ async fn filter_spendable(
                 public_key: o.public_key,
                 amount: o.amount,
                 subaddress_index: o.subaddress_index,
+                // Preserve hybrid metadata so a later spend recovers the
+                // one-time key on the unified path (issue #988).
+                output_index: o.output_index,
+                kem_ciphertext: o.kem_ciphertext,
             });
         }
     }

@@ -66,6 +66,18 @@ function leHexToBigInt(hex: string): bigint {
 }
 
 /**
+ * The node reports a coinbase output's `outputIndex` as `u32::MAX` to
+ * distinguish it from a regular transaction output. Its hybrid one-time key is
+ * bound to `MINTING_OUTPUT_INDEX` (0), so a thin wallet must normalize the
+ * sentinel back to 0 before scanning, or a mined coinbase would be
+ * undetectable (#988).
+ */
+const COINBASE_OUTPUT_INDEX_SENTINEL = 0xffffffff
+function normalizeOutputIndex(outputIndex: number): number {
+  return outputIndex === COINBASE_OUTPUT_INDEX_SENTINEL ? 0 : outputIndex
+}
+
+/**
  * Wire shape of `getBlockByHeight` / `getBlockByHash` results. The
  * `transactions` / `totalFees` / `lottery` fields are the additive explorer
  * enrichment from #700 — older nodes omit them, so they are all optional and
@@ -366,7 +378,15 @@ export class RemoteNodeAdapter implements NodeAdapter {
   async getRawOutputs(
     startHeight: number,
     endHeight: number,
-  ): Promise<Array<{ targetKey: string; publicKey: string; amount: bigint }>> {
+  ): Promise<
+    Array<{
+      targetKey: string
+      publicKey: string
+      amount: bigint
+      outputIndex: number
+      kemCiphertext: string | null
+    }>
+  > {
     const result = await this.call<Array<{
       height: number
       outputs: Array<{
@@ -375,6 +395,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
         targetKey: string
         publicKey: string
         amountCommitment: string
+        kemCiphertext?: string | null
       }>
     }>>('chain_getOutputs', {
       start_height: startHeight,
@@ -386,6 +407,12 @@ export class RemoteNodeAdapter implements NodeAdapter {
         targetKey: output.targetKey,
         publicKey: output.publicKey,
         amount: leHexToBigInt(output.amountCommitment),
+        // The output's tx position, needed to detect 6.0.0 hybrid outputs
+        // (#988). The node reports a coinbase as u32::MAX; normalize it to the
+        // index its one-time key is actually bound to (MINTING_OUTPUT_INDEX=0).
+        outputIndex: normalizeOutputIndex(output.outputIndex),
+        // ML-KEM ciphertext (hex) or null for a classical/legacy output (#970).
+        kemCiphertext: output.kemCiphertext ?? null,
       })),
     )
   }
@@ -408,6 +435,8 @@ export class RemoteNodeAdapter implements NodeAdapter {
       targetKey: string
       publicKey: string
       amount: bigint
+      outputIndex: number
+      kemCiphertext: string | null
     }>
   > {
     const result = await this.call<Array<{
@@ -418,6 +447,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
         targetKey: string
         publicKey: string
         amountCommitment: string
+        kemCiphertext?: string | null
       }>
     }>>('chain_getOutputs', {
       start_height: startHeight,
@@ -431,6 +461,9 @@ export class RemoteNodeAdapter implements NodeAdapter {
         targetKey: output.targetKey,
         publicKey: output.publicKey,
         amount: leHexToBigInt(output.amountCommitment),
+        // Hybrid-detection metadata (#988), coinbase sentinel normalized.
+        outputIndex: normalizeOutputIndex(output.outputIndex),
+        kemCiphertext: output.kemCiphertext ?? null,
       })),
     )
   }

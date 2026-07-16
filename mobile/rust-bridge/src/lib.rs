@@ -557,6 +557,10 @@ impl MobileWallet {
             spend_private_key: hex::encode(account.spend_private_key().to_bytes()),
             view_private_key: hex::encode(account.view_private_key().to_bytes()),
             sender_kem_public_key: sender_pq.kem_public_key,
+            // The BIP39 seed (hex) so the RECEIVE scan can derive the wallet's
+            // ML-KEM secret and detect hybrid incoming payments + its own change
+            // (issue #988). Same feature-independent seed the send path uses.
+            seed: hex::encode(seed),
         };
         Ok((signer, address))
     }
@@ -861,6 +865,8 @@ mod send_acceptance_tests {
             spend_private_key: hex::encode(sender.spend_private_key().to_bytes()),
             view_private_key: hex::encode(sender.view_private_key().to_bytes()),
             sender_kem_public_key: hex::encode(sender_pq.kem_keypair.public_key().as_bytes()),
+            // Send-only test: the seed is only consulted by the RECEIVE scan.
+            seed: String::new(),
         };
 
         // Owned input well above amount + fee so a change output exists.

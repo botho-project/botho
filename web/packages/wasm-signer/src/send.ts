@@ -30,6 +30,13 @@ export interface SignerKeys {
   spendPrivateKey: string
   /** Hex-encoded 32-byte account view private key. */
   viewPrivateKey: string
+  /**
+   * Hex-encoded 64-byte BIP39 seed (from `mnemonicToSeedSync(mnemonic, '')`).
+   * Threaded into the RECEIVE scan so it can derive the wallet's ML-KEM secret
+   * and detect 6.0.0 hybrid outputs — incoming payments and the wallet's own
+   * change. Optional: omit for a classical-only scan (#988).
+   */
+  seed?: string
 }
 
 /**
@@ -91,6 +98,7 @@ export async function spendableOwnedOutputs(
   const withImages = signer.computeOwnedOutputKeyImages({
     spendPrivateKey: keys.spendPrivateKey,
     viewPrivateKey: keys.viewPrivateKey,
+    seed: keys.seed ?? '',
     outputs: owned,
   })
   const statuses = await rpc.areKeyImagesSpent(withImages.map((o) => o.keyImage))
@@ -129,6 +137,7 @@ export async function spendableBalance(
   const owned = signer.scanOwnedOutputs({
     spendPrivateKey: keys.spendPrivateKey,
     viewPrivateKey: keys.viewPrivateKey,
+    seed: keys.seed ?? '',
     outputs: candidates,
   })
   const spendable = await spendableOwnedOutputs(signer, keys, owned, rpc)
@@ -159,6 +168,7 @@ export async function ownedOutputTargetKeys(
   const owned = signer.scanOwnedOutputs({
     spendPrivateKey: keys.spendPrivateKey,
     viewPrivateKey: keys.viewPrivateKey,
+    seed: keys.seed ?? '',
     outputs: candidates,
   })
   return owned.map((o) => o.targetKey)
@@ -244,10 +254,14 @@ export async function buildOwnedHistory(
   const owned = signer.scanOwnedOutputs({
     spendPrivateKey: keys.spendPrivateKey,
     viewPrivateKey: keys.viewPrivateKey,
+    seed: keys.seed ?? '',
     outputs: candidates.map((c) => ({
       targetKey: c.targetKey,
       publicKey: c.publicKey,
       amount: c.amount,
+      // Preserve the hybrid metadata so 6.0.0 outputs are detected (#988).
+      outputIndex: c.outputIndex,
+      kemCiphertext: c.kemCiphertext,
     })),
   })
   if (owned.length === 0) return []
@@ -256,6 +270,7 @@ export async function buildOwnedHistory(
   const withImages = signer.computeOwnedOutputKeyImages({
     spendPrivateKey: keys.spendPrivateKey,
     viewPrivateKey: keys.viewPrivateKey,
+    seed: keys.seed ?? '',
     outputs: owned,
   })
   const statuses = await rpc.areKeyImagesSpent(withImages.map((o) => o.keyImage))
@@ -519,6 +534,7 @@ export async function buildSendTransaction(
   const owned = signer.scanOwnedOutputs({
     spendPrivateKey: keys.spendPrivateKey,
     viewPrivateKey: keys.viewPrivateKey,
+    seed: keys.seed ?? '',
     outputs: candidates,
   })
   if (owned.length === 0) {

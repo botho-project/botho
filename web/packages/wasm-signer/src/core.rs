@@ -514,8 +514,9 @@ pub fn build_and_sign_with_rng<R: RngCore + CryptoRng>(
 /// A chain output the wallet wants to test for ownership / use as a decoy.
 ///
 /// These are exactly the fields the node returns from `chain_getOutputs`
-/// (`targetKey`, `publicKey`, and the transparent `amount` recovered from
-/// `amountCommitment`).
+/// (`targetKey`, `publicKey`, the transparent `amount` recovered from
+/// `amountCommitment`, the output's `outputIndex` within its transaction, and
+/// its optional ML-KEM `kemCiphertext`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChainOutput {
@@ -525,6 +526,20 @@ pub struct ChainOutput {
     pub public_key: String,
     /// Amount in picocredits (recovered from the transparent commitment).
     pub amount: u64,
+    /// The output's position within its creating transaction (`outputIndex`
+    /// from `chain_getOutputs`). Under protocol 6.0.0 this index is bound into
+    /// the hybrid one-time key, so it MUST match the value the producer used
+    /// (recipient=0, change=1, coinbase=0). Defaults to 0 so legacy callers
+    /// that only scanned classical (index-independent) outputs still
+    /// deserialize.
+    #[serde(default)]
+    pub output_index: u32,
+    /// Hex-encoded ML-KEM-768 ciphertext (`kemCiphertext` from
+    /// `chain_getOutputs`), or `None` for a classical/legacy KEM-less output.
+    /// When present, the scan decapsulates it with the wallet's seed-derived
+    /// ML-KEM secret to detect the hybrid one-time key (issue #970/#988).
+    #[serde(default)]
+    pub kem_ciphertext: Option<String>,
 }
 
 /// A scan request: the account's private keys plus candidate chain outputs.
@@ -535,6 +550,21 @@ pub struct ScanRequest {
     pub spend_private_key: String,
     /// Hex-encoded 32-byte account view private key. **Stays client-side.**
     pub view_private_key: String,
+    /// Hex-encoded 64-byte BIP39 seed of the wallet. **Stays client-side.**
+    ///
+    /// Used to derive the wallet's ML-KEM-768 secret keypair
+    /// ([`bth_crypto_pq::derive_pq_keys_from_seed`], node-identical) so the
+    /// scan can decapsulate each hybrid output's ciphertext and detect the
+    /// 6.0.0 hybrid one-time key. This is the feature-independent
+    /// derivation the send side already uses (`derivePqPublicKeysFromSeed`)
+    /// — NOT `WalletKeys::public_address()`, which requires the `pq`
+    /// feature and is unavailable in the mobile crate's classical
+    /// `botho-wallet` build (#984). Empty means "classical-only scan" (no
+    /// ML-KEM secret available): outputs are matched with the legacy
+    /// [`TxOutput::belongs_to`] check, so hybrid outputs are not detected.
+    /// Defaults to empty for back-compat.
+    #[serde(default)]
+    pub seed: String,
     /// Candidate outputs (e.g. every output the node returned for a height
     /// range) to test for ownership.
     pub outputs: Vec<ChainOutput>,
@@ -552,37 +582,106 @@ pub struct OwnedOutput {
     pub amount: u64,
     /// Subaddress index that received this output (0 = default, 1 = change).
     pub subaddress_index: u64,
+    /// The output's position within its creating transaction. Carried through
+    /// from the scan so the hybrid one-time-key recovery
+    /// ([`TxOutput::recover_spend_key_for`]) can rebind it when deriving the
+    /// key image / spend key. Defaults to 0 for back-compat.
+    #[serde(default)]
+    pub output_index: u32,
+    /// The owned output's ML-KEM-768 ciphertext (hex), or `None` for a
+    /// classical/legacy output. Preserved from the scan so key-image
+    /// derivation dispatches down the same hybrid-when-present path (#988).
+    #[serde(default)]
+    pub kem_ciphertext: Option<String>,
+}
+
+/// Derive the wallet's ML-KEM-768 secret keypair from its hex BIP39 seed, using
+/// the **node-identical**, feature-independent
+/// [`bth_crypto_pq::derive_pq_keys_from_seed`].
+///
+/// Returns `Ok(None)` when `seed_hex` is empty (a classical-only scan: no
+/// ML-KEM secret available, so hybrid outputs cannot be decapsulated). This is
+/// the same derivation the send side uses for the public half
+/// (`derive_pq_public_keys_from_seed`), so the secret matches the ML-KEM key
+/// published in the wallet's own v2 address. It does NOT route through
+/// `WalletKeys::public_address()` (which needs the `pq` feature and is absent
+/// from the mobile crate's classical build — the trap documented in #984).
+fn derive_kem_keypair(seed_hex: &str) -> Result<Option<bth_crypto_pq::MlKem768KeyPair>, String> {
+    if seed_hex.trim().is_empty() {
+        return Ok(None);
+    }
+    let seed = parse_bip39_seed(seed_hex)?;
+    Ok(Some(
+        bth_crypto_pq::derive_pq_keys_from_seed(&seed).kem_keypair,
+    ))
+}
+
+/// Parse an optional hex-encoded ML-KEM-768 ciphertext into raw bytes.
+fn parse_kem_ciphertext(field: &str, ct: &Option<String>) -> Result<Option<Vec<u8>>, String> {
+    match ct {
+        None => Ok(None),
+        Some(s) if s.trim().is_empty() => Ok(None),
+        Some(s) => {
+            let bytes = hex::decode(s.trim()).map_err(|e| format!("{field}: invalid hex: {e}"))?;
+            Ok(Some(bytes))
+        }
+    }
 }
 
 /// Identify which of `outputs` belong to the account, using the
-/// **node-identical** stealth-address ownership check
-/// ([`TxOutput::belongs_to`]).
+/// **node-identical** unified hybrid scan ([`TxOutput::belongs_to_account`],
+/// issue #970).
 ///
-/// This runs the same Rust the node runs in `scan_utxos_for_account`, so a
-/// thin client never has to re-implement the subaddress math in JavaScript (a
-/// notorious source of cross-implementation drift). The view/spend keys are
-/// used only to recover the stealth relationship and never leave the client.
+/// This is the single RECEIVE-scan path shared by both wallet frontends (the
+/// browser sync and the mobile `wallet_ops::sync`). Under protocol 6.0.0 every
+/// producer emits **hybrid** outputs whose one-time key folds in an ML-KEM
+/// shared secret, so a purely-classical `belongs_to` check (the pre-#988
+/// behaviour) could not detect incoming payments or the wallet's own change.
+///
+/// For each candidate it reconstructs the on-chain [`TxOutput`] **with its real
+/// `kem_ciphertext`** and dispatches via `belongs_to_account`:
+/// * ciphertext present + seed supplied → decapsulate with the wallet's
+///   seed-derived ML-KEM secret and check the hybrid one-time key at the
+///   output's `output_index`;
+/// * ciphertext absent → classical [`TxOutput::belongs_to`] (back-compat).
+///
+/// When no seed is supplied (`req.seed` empty) the scan stays classical-only
+/// and hybrid outputs are skipped, exactly as before. The keys/seed never leave
+/// the client.
 pub fn scan_owned_outputs_inner(req: &ScanRequest) -> Result<Vec<OwnedOutput>, String> {
     let spend_private = parse_private("spendPrivateKey", &req.spend_private_key)?;
     let view_private = parse_private("viewPrivateKey", &req.view_private_key)?;
     let account = AccountKey::new(&spend_private, &view_private);
+    let kem_keypair = derive_kem_keypair(&req.seed)?;
 
     let mut owned = Vec::new();
     for out in &req.outputs {
+        let kem_ciphertext = parse_kem_ciphertext("output.kem_ciphertext", &out.kem_ciphertext)?;
         let tx_out = TxOutput {
             amount: out.amount,
             target_key: parse_hex_32("output.target_key", &out.target_key)?,
             public_key: parse_hex_32("output.public_key", &out.public_key)?,
             e_memo: None,
             cluster_tags: Default::default(),
-            kem_ciphertext: None,
+            kem_ciphertext,
         };
-        if let Some(subaddress_index) = tx_out.belongs_to(&account) {
+        // Unified dispatch (mirrors the node's `Wallet::scan_output`): with the
+        // ML-KEM secret available, `belongs_to_account` decapsulates a
+        // ciphertext-bearing output and folds the secret into the classical DH
+        // stealth check; a KEM-less output falls through to the classical path.
+        // Without a seed we can only run the classical check.
+        let detected = match &kem_keypair {
+            Some(kp) => tx_out.belongs_to_account(&account, kp, out.output_index),
+            None => tx_out.belongs_to(&account),
+        };
+        if let Some(subaddress_index) = detected {
             owned.push(OwnedOutput {
                 target_key: out.target_key.clone(),
                 public_key: out.public_key.clone(),
                 amount: out.amount,
                 subaddress_index,
+                output_index: out.output_index,
+                kem_ciphertext: out.kem_ciphertext.clone(),
             });
         }
     }
@@ -602,6 +701,13 @@ pub struct KeyImageRequest {
     pub spend_private_key: String,
     /// Hex-encoded 32-byte account view private key. **Stays client-side.**
     pub view_private_key: String,
+    /// Hex-encoded 64-byte BIP39 seed. **Stays client-side.** Used to derive
+    /// the wallet's ML-KEM-768 secret so a hybrid owned output's one-time
+    /// spend key (hence its key image) can be recovered via
+    /// [`TxOutput::recover_spend_key_for`]. Empty falls back to classical
+    /// recovery; defaults to empty for back-compat (#988).
+    #[serde(default)]
+    pub seed: String,
     /// The wallet's owned outputs to derive key images for.
     pub outputs: Vec<OwnedOutput>,
 }
@@ -618,6 +724,15 @@ pub struct OwnedOutputKeyImage {
     pub amount: u64,
     /// Subaddress index that received this output (0 = default, 1 = change).
     pub subaddress_index: u64,
+    /// The output's position within its creating transaction, preserved from
+    /// the scan so a subsequent spend recovers the hybrid one-time key on
+    /// the unified path (issue #988). Defaults to 0 for back-compat.
+    #[serde(default)]
+    pub output_index: u32,
+    /// The owned output's ML-KEM-768 ciphertext (hex), or `None` for a
+    /// classical/legacy output, preserved from the scan (issue #988).
+    #[serde(default)]
+    pub kem_ciphertext: Option<String>,
     /// Hex-encoded 32-byte key image. Querying the node's
     /// `chain_areKeyImagesSpent` RPC with this value reveals whether the output
     /// has already been spent on-chain (or is pending in the mempool).
@@ -641,26 +756,37 @@ pub fn compute_owned_output_key_images_inner(
     let spend_private = parse_private("spendPrivateKey", &req.spend_private_key)?;
     let view_private = parse_private("viewPrivateKey", &req.view_private_key)?;
     let account = AccountKey::new(&spend_private, &view_private);
+    let kem_keypair = derive_kem_keypair(&req.seed)?;
 
     let mut result = Vec::with_capacity(req.outputs.len());
     for out in &req.outputs {
+        let kem_ciphertext = parse_kem_ciphertext("output.kem_ciphertext", &out.kem_ciphertext)?;
         let tx_out = TxOutput {
             amount: out.amount,
             target_key: parse_hex_32("output.target_key", &out.target_key)?,
             public_key: parse_hex_32("output.public_key", &out.public_key)?,
             e_memo: None,
             cluster_tags: Default::default(),
-            kem_ciphertext: None,
+            kem_ciphertext,
         };
-        let onetime_private = tx_out
-            .recover_spend_key(&account, out.subaddress_index)
-            .ok_or("failed to recover one-time private key for owned output")?;
+        // Recover the one-time spend key on the same unified path as the scan:
+        // a hybrid (ciphertext-bearing) output needs the ML-KEM secret + its
+        // bound `output_index`; a KEM-less output uses classical recovery.
+        let onetime_private = match &kem_keypair {
+            Some(kp) => {
+                tx_out.recover_spend_key_for(&account, kp, out.subaddress_index, out.output_index)
+            }
+            None => tx_out.recover_spend_key(&account, out.subaddress_index),
+        }
+        .ok_or("failed to recover one-time private key for owned output")?;
         let key_image = KeyImage::from(&onetime_private);
         result.push(OwnedOutputKeyImage {
             target_key: out.target_key.clone(),
             public_key: out.public_key.clone(),
             amount: out.amount,
             subaddress_index: out.subaddress_index,
+            output_index: out.output_index,
+            kem_ciphertext: out.kem_ciphertext.clone(),
             key_image: hex::encode(key_image.as_bytes()),
         });
     }
@@ -849,11 +975,14 @@ mod tests {
         let ki_req = KeyImageRequest {
             spend_private_key: hex::encode(sender.spend_private_key().to_bytes()),
             view_private_key: hex::encode(sender.view_private_key().to_bytes()),
+            seed: String::new(),
             outputs: vec![OwnedOutput {
                 target_key: hex::encode(owned.target_key),
                 public_key: hex::encode(owned.public_key),
                 amount: owned_amount,
                 subaddress_index: 0,
+                output_index: 0,
+                kem_ciphertext: None,
             }],
         };
         let computed = compute_owned_output_key_images_inner(&ki_req).unwrap();
@@ -903,16 +1032,21 @@ mod tests {
         let scan = ScanRequest {
             spend_private_key: hex::encode(me.spend_private_key().to_bytes()),
             view_private_key: hex::encode(me.view_private_key().to_bytes()),
+            seed: String::new(),
             outputs: vec![
                 ChainOutput {
                     target_key: hex::encode(mine.target_key),
                     public_key: hex::encode(mine.public_key),
                     amount: 1_000_000_000,
+                    output_index: 0,
+                    kem_ciphertext: None,
                 },
                 ChainOutput {
                     target_key: hex::encode(theirs.target_key),
                     public_key: hex::encode(theirs.public_key),
                     amount: 2_000_000_000,
+                    output_index: 0,
+                    kem_ciphertext: None,
                 },
             ],
         };
@@ -922,6 +1056,7 @@ mod tests {
         let ki_req = KeyImageRequest {
             spend_private_key: scan.spend_private_key.clone(),
             view_private_key: scan.view_private_key.clone(),
+            seed: scan.seed.clone(),
             outputs: owned,
         };
         let kis = compute_owned_output_key_images_inner(&ki_req).unwrap();
@@ -1002,11 +1137,14 @@ mod tests {
             target_key: hex::encode(o.target_key),
             public_key: hex::encode(o.public_key),
             amount: o.amount,
+            output_index: 0,
+            kem_ciphertext: o.kem_ciphertext.as_ref().map(hex::encode),
         };
 
         let req = ScanRequest {
             spend_private_key: hex::encode(me.spend_private_key().to_bytes()),
             view_private_key: hex::encode(me.view_private_key().to_bytes()),
+            seed: String::new(),
             outputs: vec![to_chain(&mine_a), to_chain(&theirs), to_chain(&mine_b)],
         };
 
@@ -1058,11 +1196,14 @@ mod tests {
             target_key: hex::encode(o.target_key),
             public_key: hex::encode(o.public_key),
             amount: o.amount,
+            output_index: 0,
+            kem_ciphertext: o.kem_ciphertext.as_ref().map(hex::encode),
         };
 
         let req = ScanRequest {
             spend_private_key: hex::encode(recipient.spend_private_key().to_bytes()),
             view_private_key: hex::encode(recipient.view_private_key().to_bytes()),
+            seed: String::new(),
             outputs: vec![to_chain(&to_subaddress), to_chain(&to_account_root)],
         };
 
@@ -1319,6 +1460,258 @@ mod tests {
         assert!(
             err.contains("ML-KEM") || err.contains("post-quantum"),
             "error should explain the address is not post-quantum, got: {err}"
+        );
+    }
+
+    /// The hex-encoded 64-byte BIP39 seed whose `derive_pq_keys_from_seed`
+    /// ML-KEM keypair equals `pq_keys(seed_byte)` — so a wallet built from this
+    /// seed can decapsulate outputs encapsulated against `pq_keys(seed_byte)`.
+    fn seed_hex(seed_byte: u8) -> String {
+        hex::encode([seed_byte; bth_crypto_pq::BIP39_SEED_SIZE])
+    }
+
+    /// Turn a signed transaction output into a `ChainOutput` exactly as the
+    /// node RPC (`chain_getOutputs`) would present it: stealth keys,
+    /// transparent amount, its position within the tx, and its hybrid
+    /// ML-KEM ciphertext.
+    fn chain_output_of(out: &TxOutput, output_index: u32) -> ChainOutput {
+        ChainOutput {
+            target_key: hex::encode(out.target_key),
+            public_key: hex::encode(out.public_key),
+            amount: out.amount,
+            output_index,
+            kem_ciphertext: out.kem_ciphertext.as_ref().map(hex::encode),
+        }
+    }
+
+    /// #988: a hybrid output SENT (via the #978 send path) to the wallet's
+    /// address MUST be DETECTED by the shared `scan_owned_outputs_inner` — the
+    /// exact receive path both the browser sync and the mobile
+    /// `wallet_ops::sync` consume — by decapsulating its ML-KEM ciphertext
+    /// with the wallet's seed-derived secret, AND its one-time spend key
+    /// must recover so the funds are spendable (`x·G == target_key`). This
+    /// is the RECEIVE-side counterpart to #978: before this fix the scan
+    /// built every candidate with `kem_ciphertext: None` and used the
+    /// classical `belongs_to`, so hybrid incoming payments were invisible.
+    #[test]
+    fn hybrid_received_output_is_detected_and_spendable_by_scan() {
+        let mut rng = StdRng::from_seed([53u8; 32]);
+
+        // Sender pays a recipient whose ML-KEM keypair is derived from a known
+        // seed (so the recipient can scan with that seed).
+        let sender = AccountKey::random(&mut rng);
+        let recipient_account = AccountKey::random(&mut rng);
+        let recipient_pq = pq_keys(0x22);
+
+        let owned_amount = 10_000_000_000u64;
+        let send_amount = 4_000_000_000u64;
+        let owned = TxOutput::new(owned_amount, &sender.default_subaddress());
+        let decoys = make_decoys(DEFAULT_RING_SIZE - 1, owned_amount, &mut rng);
+
+        let req = SignRequest {
+            spend_private_key: hex::encode(sender.spend_private_key().to_bytes()),
+            view_private_key: hex::encode(sender.view_private_key().to_bytes()),
+            inputs: vec![SpendInput {
+                target_key: hex::encode(owned.target_key),
+                public_key: hex::encode(owned.public_key),
+                amount: owned_amount,
+                subaddress_index: 0,
+                decoys,
+            }],
+            recipient: recipient_of_with_pq(&recipient_account, &recipient_pq),
+            sender_kem_public_key: kem_public_hex(&pq_keys(0x11)),
+            amount: send_amount,
+            fee: MIN_TX_FEE,
+            created_at_height: 1000,
+        };
+        let tx = build_and_sign_with_rng(&req, &mut rng).expect("build+sign should succeed");
+        assert_eq!(tx.outputs.len(), 2, "recipient (0) + change (1)");
+
+        // The recipient scans the chain outputs through the SHARED path, passing
+        // its seed so the scan derives its ML-KEM secret and decapsulates.
+        let scan = ScanRequest {
+            spend_private_key: hex::encode(recipient_account.spend_private_key().to_bytes()),
+            view_private_key: hex::encode(recipient_account.view_private_key().to_bytes()),
+            seed: seed_hex(0x22),
+            outputs: vec![
+                chain_output_of(&tx.outputs[0], 0),
+                chain_output_of(&tx.outputs[1], 1),
+            ],
+        };
+        let owned = scan_owned_outputs_inner(&scan).expect("scan should succeed");
+        assert_eq!(
+            owned.len(),
+            1,
+            "recipient must detect exactly its own hybrid output"
+        );
+        assert_eq!(owned[0].amount, send_amount);
+        assert_eq!(owned[0].subaddress_index, 0);
+        assert_eq!(owned[0].output_index, 0);
+        assert!(
+            owned[0].kem_ciphertext.is_some(),
+            "detected hybrid output must carry its ciphertext for spend recovery"
+        );
+
+        // The recovered one-time spend key must satisfy x·G == target_key, i.e.
+        // the recipient can actually SPEND what it received. Recovery runs on the
+        // same unified path the key-image derivation uses.
+        let recovered = tx.outputs[0]
+            .recover_spend_key_for(&recipient_account, &recipient_pq.kem_keypair, 0, 0)
+            .expect("hybrid spend key must recover");
+        assert_eq!(
+            RistrettoPublic::from(&recovered).to_bytes(),
+            tx.outputs[0].target_key,
+            "x·G must equal the output's one-time target key (spendable)"
+        );
+
+        // And the shared key-image path (seed-aware) succeeds end-to-end.
+        let ki = compute_owned_output_key_images_inner(&KeyImageRequest {
+            spend_private_key: scan.spend_private_key.clone(),
+            view_private_key: scan.view_private_key.clone(),
+            seed: scan.seed.clone(),
+            outputs: owned,
+        })
+        .expect("key-image derivation must succeed for the detected hybrid output");
+        assert_eq!(ki.len(), 1);
+    }
+
+    /// #988: the wallet's OWN change (a hybrid self-send, output index 1) must be
+    /// detected by its own sync through the shared scan path. Without the fix,
+    /// spending money made your change vanish from your balance until a full
+    /// rescan by a hybrid-aware node.
+    #[test]
+    fn hybrid_self_send_change_is_detected_on_sync() {
+        let mut rng = StdRng::from_seed([59u8; 32]);
+
+        // The sender's change is encapsulated against its OWN ML-KEM key, which
+        // is derived from `seed_hex(0x33)`.
+        let sender = AccountKey::random(&mut rng);
+        let sender_pq = pq_keys(0x33);
+        let recipient_account = AccountKey::random(&mut rng);
+        let recipient_pq = pq_keys(0x44);
+
+        let owned_amount = 10_000_000_000u64;
+        let send_amount = 4_000_000_000u64;
+        let owned = TxOutput::new(owned_amount, &sender.default_subaddress());
+        let decoys = make_decoys(DEFAULT_RING_SIZE - 1, owned_amount, &mut rng);
+
+        let req = SignRequest {
+            spend_private_key: hex::encode(sender.spend_private_key().to_bytes()),
+            view_private_key: hex::encode(sender.view_private_key().to_bytes()),
+            inputs: vec![SpendInput {
+                target_key: hex::encode(owned.target_key),
+                public_key: hex::encode(owned.public_key),
+                amount: owned_amount,
+                subaddress_index: 0,
+                decoys,
+            }],
+            recipient: recipient_of_with_pq(&recipient_account, &recipient_pq),
+            sender_kem_public_key: kem_public_hex(&sender_pq),
+            amount: send_amount,
+            fee: MIN_TX_FEE,
+            created_at_height: 1000,
+        };
+        let tx = build_and_sign_with_rng(&req, &mut rng).expect("build+sign should succeed");
+        assert_eq!(tx.outputs.len(), 2);
+
+        // The sender syncs and must find its own change (output index 1) at the
+        // change subaddress (index 1).
+        let owned = scan_owned_outputs_inner(&ScanRequest {
+            spend_private_key: hex::encode(sender.spend_private_key().to_bytes()),
+            view_private_key: hex::encode(sender.view_private_key().to_bytes()),
+            seed: seed_hex(0x33),
+            outputs: vec![
+                chain_output_of(&tx.outputs[0], 0),
+                chain_output_of(&tx.outputs[1], 1),
+            ],
+        })
+        .expect("scan should succeed");
+
+        assert_eq!(owned.len(), 1, "sender must detect its own change");
+        let change = &owned[0];
+        // The change output is at position 1 within the tx, but the browser send
+        // path pays change back to the sender's DEFAULT subaddress (index 0) —
+        // the same key its own address publishes (mirrors #978's node-scanner
+        // test, which detects the change at subaddress 0).
+        assert_eq!(change.output_index, 1);
+        assert_eq!(change.subaddress_index, 0);
+        assert_eq!(change.amount, owned_amount - send_amount - MIN_TX_FEE);
+    }
+
+    /// #988 back-compat: a classical (`kemCiphertext: None`) output must still be
+    /// detected on the same shared scan path, even when a seed IS supplied. The
+    /// unified `belongs_to_account` dispatch falls through to the classical
+    /// `belongs_to` when an output carries no ciphertext.
+    #[test]
+    fn classical_none_ciphertext_output_still_scans_with_seed() {
+        let mut rng = StdRng::from_seed([61u8; 32]);
+        let me = AccountKey::random(&mut rng);
+
+        // A legacy classical output (no ciphertext) paid to my default address.
+        let mine = TxOutput::new(7_000, &me.default_subaddress());
+        assert!(mine.kem_ciphertext.is_none());
+
+        let owned = scan_owned_outputs_inner(&ScanRequest {
+            spend_private_key: hex::encode(me.spend_private_key().to_bytes()),
+            view_private_key: hex::encode(me.view_private_key().to_bytes()),
+            // Seed present, but the output is KEM-less → classical branch.
+            seed: seed_hex(0x77),
+            outputs: vec![chain_output_of(&mine, 0)],
+        })
+        .expect("scan should succeed");
+
+        assert_eq!(owned.len(), 1, "classical output must still be detected");
+        assert_eq!(owned[0].amount, 7_000);
+        assert_eq!(owned[0].subaddress_index, 0);
+        assert!(owned[0].kem_ciphertext.is_none());
+    }
+
+    /// #988 negative: a hybrid output addressed to a DIFFERENT wallet must NOT be
+    /// detected by this wallet's scan — decapsulating the ciphertext with the
+    /// wrong ML-KEM secret yields a useless secret and the stealth check fails.
+    #[test]
+    fn hybrid_output_to_other_wallet_is_not_detected() {
+        let mut rng = StdRng::from_seed([67u8; 32]);
+
+        let sender = AccountKey::random(&mut rng);
+        let recipient_account = AccountKey::random(&mut rng);
+        let recipient_pq = pq_keys(0x22);
+        // A DIFFERENT wallet doing the scanning.
+        let stranger = AccountKey::random(&mut rng);
+
+        let owned_amount = 10_000_000_000u64;
+        let owned = TxOutput::new(owned_amount, &sender.default_subaddress());
+        let decoys = make_decoys(DEFAULT_RING_SIZE - 1, owned_amount, &mut rng);
+
+        let req = SignRequest {
+            spend_private_key: hex::encode(sender.spend_private_key().to_bytes()),
+            view_private_key: hex::encode(sender.view_private_key().to_bytes()),
+            inputs: vec![SpendInput {
+                target_key: hex::encode(owned.target_key),
+                public_key: hex::encode(owned.public_key),
+                amount: owned_amount,
+                subaddress_index: 0,
+                decoys,
+            }],
+            recipient: recipient_of_with_pq(&recipient_account, &recipient_pq),
+            sender_kem_public_key: kem_public_hex(&pq_keys(0x11)),
+            amount: 4_000_000_000,
+            fee: MIN_TX_FEE,
+            created_at_height: 1000,
+        };
+        let tx = build_and_sign_with_rng(&req, &mut rng).expect("build+sign should succeed");
+
+        // The stranger scans the recipient's output with its OWN (wrong) seed.
+        let owned = scan_owned_outputs_inner(&ScanRequest {
+            spend_private_key: hex::encode(stranger.spend_private_key().to_bytes()),
+            view_private_key: hex::encode(stranger.view_private_key().to_bytes()),
+            seed: seed_hex(0x99),
+            outputs: vec![chain_output_of(&tx.outputs[0], 0)],
+        })
+        .expect("scan should succeed");
+        assert!(
+            owned.is_empty(),
+            "an output addressed to another wallet must not be detected"
         );
     }
 }
