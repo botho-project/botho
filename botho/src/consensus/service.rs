@@ -2505,6 +2505,176 @@ mod tests {
         );
     }
 
+    /// REPRODUCTION (issue #998): a fresh 6.0.0 genesis externalizes a few
+    /// blocks then wedges — the single minter re-proposes its coinbase forever
+    /// but the slot never externalizes. This drives the exact fleet topology
+    /// (a 2-of-2 quorum where only ONE node mints — the faucet) across many
+    /// successive slots and asserts the slot index advances past height 5.
+    #[test]
+    fn single_minter_federated_advances_past_height_5() {
+        let cfg = ConsensusConfig::fixed_timing(0);
+        let qs = recommended_quorum(&[1, 2]);
+
+        // Node A is the sole minter (faucet); node B validates only.
+        let mut a = ConsensusService::new(node(1), qs.clone(), cfg.clone(), genesis_chain_state());
+        let mut b = ConsensusService::new(node(2), qs, cfg, genesis_chain_state());
+        assert!(
+            !a.is_solo_mode() && !b.is_solo_mode(),
+            "must be a 2-node quorum"
+        );
+
+        let mut prev = [0u8; 32];
+        for height in 1..=8u64 {
+            // The faucet mints its coinbase for this height and gossips it to B.
+            let tx = intrinsic_valid_minting_tx(1, prev, height);
+            submit_and_register(&mut a, &mut b, &tx);
+
+            // Faithful pump: sleep so the SCP round/ballot TIMEOUTS actually fire
+            // (default scp_timebase is 1s), matching the live fleet where the
+            // single minter re-proposes for many seconds. Without real elapsed
+            // time, a single-proposer slot can never escalate nomination leaders.
+            let mut a_ext: Option<Vec<ConsensusValue>> = None;
+            let mut b_ext: Option<Vec<ConsensusValue>> = None;
+            let mut to_a: Vec<ScpMessage> = Vec::new();
+            let mut to_b: Vec<ScpMessage> = Vec::new();
+            for _ in 0..120 {
+                for m in to_a.drain(..) {
+                    let _ = a.handle_message(m);
+                }
+                for m in to_b.drain(..) {
+                    let _ = b.handle_message(m);
+                }
+                a.tick();
+                b.tick();
+                while let Some(ev) = a.next_event() {
+                    match ev {
+                        ConsensusEvent::BroadcastMessage(msg) => to_b.push(msg),
+                        ConsensusEvent::SlotExternalized { values, .. } => {
+                            a_ext.get_or_insert(values);
+                        }
+                        _ => {}
+                    }
+                }
+                while let Some(ev) = b.next_event() {
+                    match ev {
+                        ConsensusEvent::BroadcastMessage(msg) => to_a.push(msg),
+                        ConsensusEvent::SlotExternalized { values, .. } => {
+                            b_ext.get_or_insert(values);
+                        }
+                        _ => {}
+                    }
+                }
+                if a_ext.is_some() && b_ext.is_some() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            let a_vals = a_ext.unwrap_or_else(|| panic!("node A never externalized slot {height}"));
+            let b_vals = b_ext.unwrap_or_else(|| panic!("node B never externalized slot {height}"));
+            assert_eq!(a_vals, b_vals, "fork at height {height}");
+            assert_eq!(
+                a_vals.iter().filter(|v| v.is_minting_tx).count(),
+                1,
+                "exactly one coinbase must externalize at height {height}"
+            );
+
+            // Advance both nodes to the next slot, as the run loop does after
+            // applying the externalized block.
+            a.advance_slot();
+            b.advance_slot();
+
+            // Derive the next tip from the externalized coinbase hash so each
+            // height proposes a distinct value (mirrors a real chain tip).
+            prev = a_vals[0].tx_hash;
+        }
+
+        assert!(
+            a.current_slot() > 5,
+            "chain wedged: slot only reached {}",
+            a.current_slot()
+        );
+    }
+
+    /// REPRODUCTION probe (issue #998): the gossip/SCP delivery RACE. A peer
+    /// can receive the minter's SCP `NominatePrepare` (which references the
+    /// coinbase by hash) BEFORE it has registered the gossiped minting-tx
+    /// bytes — the 6.0.0 coinbase is ~1 KB larger (ML-KEM ciphertext),
+    /// widening this window. On the cache miss the validity_fn drops the
+    /// value ("not in cache"). SCP must still recover once the tx is
+    /// registered and the minter re-broadcasts on its nomination timeout;
+    /// if it cannot, the slot wedges silently in `NominatePrepare` —
+    /// exactly the reported symptom.
+    #[test]
+    fn federated_recovers_from_delayed_minting_tx_registration() {
+        let cfg = ConsensusConfig::fixed_timing(0);
+        let qs = recommended_quorum(&[1, 2]);
+        let mut a = ConsensusService::new(node(1), qs.clone(), cfg.clone(), genesis_chain_state());
+        let mut b = ConsensusService::new(node(2), qs, cfg, genesis_chain_state());
+
+        let tx = intrinsic_valid_minting_tx(1, [0u8; 32], 1);
+        let tx_hash = tx.hash();
+        let bytes = bincode::serialize(&tx).expect("serialize");
+
+        // A submits and proposes; B does NOT yet have the tx (registration lost
+        // the race with the SCP message).
+        a.submit_minting_tx(tx_hash, tx.pow_priority(), bytes.clone());
+
+        let mut to_a: Vec<ScpMessage> = Vec::new();
+        let mut to_b: Vec<ScpMessage> = Vec::new();
+        let mut a_ext: Option<Vec<ConsensusValue>> = None;
+        let mut b_ext: Option<Vec<ConsensusValue>> = None;
+        let mut registered_b = false;
+
+        for round in 0..120 {
+            for m in to_a.drain(..) {
+                let _ = a.handle_message(m);
+            }
+            for m in to_b.drain(..) {
+                // B processes A's nominate; on the first few rounds the tx is
+                // NOT in B's cache, so the value is dropped.
+                let _ = b.handle_message(m);
+            }
+            // Register the tx on B only AFTER it has already seen (and dropped)
+            // A's first nominate — the delayed-gossip race.
+            if round == 2 && !registered_b {
+                b.register_minting_tx(tx_hash, bytes.clone());
+                registered_b = true;
+            }
+            a.tick();
+            b.tick();
+            while let Some(ev) = a.next_event() {
+                match ev {
+                    ConsensusEvent::BroadcastMessage(msg) => to_b.push(msg),
+                    ConsensusEvent::SlotExternalized { values, .. } => {
+                        a_ext.get_or_insert(values);
+                    }
+                    _ => {}
+                }
+            }
+            while let Some(ev) = b.next_event() {
+                match ev {
+                    ConsensusEvent::BroadcastMessage(msg) => to_a.push(msg),
+                    ConsensusEvent::SlotExternalized { values, .. } => {
+                        b_ext.get_or_insert(values);
+                    }
+                    _ => {}
+                }
+            }
+            if a_ext.is_some() && b_ext.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        assert!(
+            a_ext.is_some() && b_ext.is_some(),
+            "WEDGE: slot never externalized after a delayed minting-tx \
+             registration race (a_ext={:?}, b_ext={:?})",
+            a_ext.is_some(),
+            b_ext.is_some()
+        );
+    }
+
     /// Issue #593 regression (pins the #428/#433 gates against #427 Finding 3):
     /// the STAGGERED-start 2-node solo-latch fork must not occur end-to-end.
     ///

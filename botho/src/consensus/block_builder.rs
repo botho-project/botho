@@ -483,6 +483,154 @@ mod tests {
         }
     }
 
+    /// REPRODUCTION (issue #998): once the lottery first draws WINNERS (fleet
+    /// runs with a low `min_utxo_age`, so eligible coinbase outputs appear a
+    /// few blocks in), the block the proposer builds via `apply_lottery`
+    /// must pass the validator gates `validate_block_lottery` AND
+    /// `validate_lottery_output_bindings` — otherwise the proposer's own
+    /// `add_block` rejects its block and the chain wedges (the minter re-mints
+    /// the same height forever). No existing test exercised the winner path
+    /// (all use min_utxo_age=720, so nothing is ever eligible).
+    #[test]
+    fn winner_drawing_block_passes_validator_gates() {
+        use crate::{
+            block::BlockLotterySummary,
+            consensus::lottery::{
+                validate_block_lottery, validate_lottery_output_bindings, LotteryFeeConfig,
+            },
+            transaction::{TxOutput, UtxoId},
+        };
+        use bth_cluster_tax::{LotteryCandidate, LotteryDrawConfig, TagVector};
+        use bth_transaction_types::ClusterTagVector;
+
+        // Lottery config with a LOW age gate (the fleet's testnet setting) so the
+        // eligible-output / winner path is actually exercised.
+        let config = LotteryFeeConfig {
+            pool_fraction_permille: 800,
+            draw_config: LotteryDrawConfig {
+                min_utxo_age: 0,
+                min_utxo_value: 1,
+                winners_per_draw: 4,
+                ..Default::default()
+            },
+        };
+
+        let height = 5u64;
+        let prev_hash = [7u8; 32];
+
+        // A single eligible coinbase UTXO carrying a 6.0.0 hybrid ML-KEM
+        // ciphertext, created early so it is in-window and mature at height 5.
+        let winner_utxo_id = UtxoId::new([0xAAu8; 32], 0);
+        let winner_out = TxOutput {
+            amount: 50_000_000_000_000,
+            target_key: [0x11u8; 32],
+            public_key: [0x22u8; 32],
+            e_memo: None,
+            cluster_tags: ClusterTagVector::empty(),
+            kem_ciphertext: Some(vec![0x33u8; 1088]),
+        };
+        let winner_utxo = Utxo {
+            id: winner_utxo_id,
+            output: winner_out.clone(),
+            created_at: 0,
+        };
+        let candidate = LotteryCandidate::new(
+            winner_utxo_id.to_bytes(),
+            winner_out.amount,
+            1000,
+            &TagVector::new(),
+            0,
+        );
+        let candidates = vec![candidate];
+
+        // A carryover pool large enough that the per-block payout is nonzero, so
+        // the draw actually produces winners.
+        let stored_pool: u128 = 10_000_000_000_000;
+
+        // Minting-only block (no transfers/fees) at height 5.
+        let minting_tx = MintingTx {
+            block_height: height,
+            reward: 50_000_000_000_000,
+            minter_view_key: [1u8; 32],
+            minter_spend_key: [2u8; 32],
+            target_key: [3u8; 32],
+            public_key: [4u8; 32],
+            kem_ciphertext: Some(vec![9u8; 1088]),
+            prev_block_hash: prev_hash,
+            difficulty: u64::MAX,
+            nonce: 1,
+            timestamp: 1_000_000,
+        };
+        let block = Block {
+            header: BlockHeader {
+                version: 1,
+                prev_block_hash: prev_hash,
+                tx_root: [0u8; 32],
+                timestamp: 1_000_000,
+                height,
+                difficulty: u64::MAX,
+                nonce: 1,
+                minter_view_key: [1u8; 32],
+                minter_spend_key: [2u8; 32],
+            },
+            minting_tx,
+            transactions: vec![],
+            lottery_outputs: vec![],
+            lottery_summary: BlockLotterySummary::default(),
+        };
+
+        // Proposer path: build the block's lottery outputs/summary.
+        let lookup_utxo = |id: &[u8; 36]| {
+            if *id == winner_utxo_id.to_bytes() {
+                Some(winner_utxo.clone())
+            } else {
+                None
+            }
+        };
+        let built =
+            BlockBuilder::apply_lottery(block, &candidates, stored_pool, lookup_utxo, &config);
+
+        // The draw must have produced at least one winner (otherwise the test is
+        // vacuous and the winner path is not exercised).
+        assert!(
+            !built.lottery_outputs.is_empty(),
+            "test setup did not draw any winners (payout={}, summary={:?})",
+            built.lottery_summary.pool_distributed,
+            built.lottery_summary
+        );
+
+        // Validator path 1: validate_block_lottery must accept the proposer's
+        // own block (this is what add_block runs; a mismatch wedges the chain).
+        let vres = validate_block_lottery(&built, &candidates, stored_pool, &prev_hash, &config);
+        assert!(
+            vres.is_ok(),
+            "validate_block_lottery REJECTED the proposer's own winner block \
+             (chain would wedge): {:?}; summary={:?}, outputs={}",
+            vres.err(),
+            built.lottery_summary,
+            built.lottery_outputs.len()
+        );
+
+        // Validator path 2: the ML-KEM binding gate (#973) must accept it too.
+        let bindings = validate_lottery_output_bindings(&built.lottery_outputs, |id| {
+            if *id == winner_utxo_id.to_bytes() {
+                Some((
+                    winner_out.target_key,
+                    winner_out.public_key,
+                    winner_out.kem_ciphertext.clone(),
+                ))
+            } else {
+                None
+            }
+        });
+        assert!(
+            bindings.is_ok(),
+            "validate_lottery_output_bindings REJECTED the proposer's own \
+             winner block (chain would wedge): {:?}",
+            bindings.err()
+        );
+    }
+
     #[test]
     fn test_build_direct() {
         let minting_tx = mock_minting_tx(1);
