@@ -5,11 +5,43 @@ The testnet path that puts **wBTH** on Hyperliquid, covering issue **#876**
 swap demo). This is mostly ops + third-party (Wormhole / Hyperliquid) tooling,
 not core-bridge Rust.
 
-> Status: **planned** — architecture chosen, commands drafted from the current
-> (2026-07) Wormhole NTT + Hyperliquid docs. Not yet executed on testnet;
-> on-chain steps are gated on HyperEVM gas (HYPE) and, for #877, HyperCore
-> testnet USDC. Verify the flagged items live (CLI chain-name string, decimal
-> knobs) before running.
+> Status: **DEPLOYED on testnet (2026-07-16, #1026)** — the NTT bridge is live
+> and a Sepolia→HyperEVM round trip is proven. Addresses below. #877 (HIP-1
+> spot) is next.
+
+## Deployed (testnet, 2026-07-16, #1026)
+
+Single deployer `0x111018cfe4523097B7f651f3A06fA9a2956CF155` (Sepolia ETH +
+HyperEVM HYPE). Full config in [`contracts/wbth-ntt/deployment.json`](../../contracts/wbth-ntt/deployment.json).
+
+| | Sepolia (hub, LOCKING) | HyperEVM 998 (spoke, BURNING) |
+|---|---|---|
+| NttManager | `0xC5652d52fBE4c41c91a65Ecd18304B20e58Df491` | `0x07F159042E9F89484dfdA37D09057c871dbCB475` |
+| WormholeTransceiver | `0xbEe886BcC887e96487C2103e46fDa7aDA6b89195` | `0xC5652d52fBE4c41c91a65Ecd18304B20e58Df491` |
+| Token | wBTH `0x49b985ec…` (existing, **untouched**) | PeerToken `0x230f154Ae33A53dcFFEDedB2d92cc1F32BcE7610` (`WbthPeerToken.sol`, 12 dec, minter = NttManager) |
+
+Round trip proven: 10 wBTH locked on Sepolia (`NttManager.transfer`, deployer
+100→90) → VAA seq 2 → **manually redeemed** on HyperEVM (no Wormhole executor on
+testnet: `WormholeTransceiver.receiveMessage`, script `hl-8`) → 10 wBTH PeerToken
+minted, 1:1. The Sepolia 2-of-3 Safe was **never touched** (locking uses
+`approve` + `transferFrom`, not the mint path). Peered both directions,
+inbound+outbound rate limits set.
+
+**Ops scripts** (`contracts/ethereum/scripts/hl-1..8`, keys read from gitignored
+`.secrets/`): 1-3 = HYPE funding via the official HL route (bridge ETH→Arbitrum,
+swap→USDC, deposit to HL mainnet), 4 = forward HYPE to deployer, 5 = deploy
+PeerToken, 6 = set minter, 7 = mint demo wBTH via Safe, 8 = redeem VAA.
+
+**Deploy caveats hit** (for a re-run): Sepolia `add-chain` needs `--skip-verify`
+(no etherscan verifier configured); HyperEVM burning mode does **not** auto-deploy
+the PeerToken (deploy `WbthPeerToken` first, pass `--token`); the deployer must
+be HL-testnet-activated *and* opted into big blocks before HyperEVM deploys; no
+Wormhole executor on HyperEVM testnet ⇒ redeem manually.
+
+---
+
+> Original plan (retained for reference). Verify the flagged items on any re-run
+> (CLI chain-name string, decimal knobs).
 
 ## Design decision — hub/locking, keep the Safe untouched
 
