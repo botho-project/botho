@@ -22,7 +22,7 @@ use std::collections::HashMap;
 
 use crate::{
     block::MintingTx,
-    config::{Config, QuorumConfig, QuorumMode},
+    config::{is_dev_rpc_enabled, Config, QuorumConfig, QuorumMode},
     consensus::{
         BlockBuilder, ConsensusConfig, ConsensusEvent, ConsensusService, LotteryFeeConfig,
         QuorumGateSnapshot, ScpSlotSnapshot, TransactionValidator,
@@ -36,8 +36,8 @@ use crate::{
     node::{MintedMintingTx, Node, SharedLedger},
     rpc::{
         calculate_dir_size, init_metrics, start_metrics_server, start_rpc_server, FaucetState,
-        MetricsUpdater, NodeIdentity, PeerInfoSnapshot, RpcState, WsBroadcaster,
-        DATA_DIR_USAGE_BYTES,
+        KeyTier, MetricsUpdater, NodeIdentity, PeerInfoSnapshot, RateLimiter, RpcState,
+        WsBroadcaster, DATA_DIR_USAGE_BYTES,
     },
     transaction::Transaction,
     wallet::Wallet,
@@ -619,6 +619,25 @@ async fn run_async(mut config: Config, config_path: &Path, mint: bool) -> Result
         }
     } else {
         debug!("No wallet configured (running in relay mode)");
+    }
+
+    // Local testnet harness / e2e drivers poll the RPC very heavily: the bridge
+    // full-loop reconciler + release drive loop + the user's 200-block stealth
+    // scan-back easily blow past the 100 req/min "anonymous" tier and start
+    // getting 429s mid-loop (#1025). Lifting the limit is fine for a throwaway
+    // localhost harness node, but a *live public* testnet node is
+    // internet-facing, so an unlimited anonymous tier is a DoS-amplification
+    // vector (M1). Gate the lift on Testnet AND the explicit dev-RPC opt-in
+    // (`BOTHO_ENABLE_DEV_RPC`, which the `botho-testnet` harness sets on the
+    // nodes it spawns) — off by default. A normal public testnet node keeps the
+    // standard 100/min anonymous limit; mainnet is unchanged.
+    if !config.network_type.is_production() && is_dev_rpc_enabled() {
+        info!(
+            "Dev RPC enabled (BOTHO_ENABLE_DEV_RPC): lifting the anonymous RPC rate limit \
+             for local e2e drivers"
+        );
+        rpc_state.rate_limiter =
+            Arc::new(RateLimiter::with_default_tier(KeyTier::Custom(1_000_000)));
     }
 
     let rpc_state = Arc::new(rpc_state);

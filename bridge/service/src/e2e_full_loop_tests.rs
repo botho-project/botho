@@ -573,8 +573,16 @@ async fn full_loop_wrap_mint_burn_release() {
 
     // Assertion 4d — now at threshold (2/2), the engine releases through the
     // live BthReleaser: BurnConfirmed → ReleasePending → Released.
+    //
+    // Unlike the mint leg (Ethereum/Hardhat auto-mines each tx instantly), the
+    // release is confirmed only once its tx is MINED into a real BTH block
+    // (`check_confirmation` requires confirmations >= 1). On a live SCP testnet
+    // that is a full consensus round, so the budget must span at least one
+    // block time — far longer than the mint leg's. `drive_until` returns as
+    // soon as the order is Released, so this large cap only bounds a failure,
+    // never the happy path.
     let final_release =
-        drive_until(&processor, &db, &burn_order.id, OrderStatus::Released, 60).await;
+        drive_until(&processor, &db, &burn_order.id, OrderStatus::Released, 600).await;
     assert_eq!(
         final_release,
         OrderStatus::Released,

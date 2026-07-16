@@ -1042,6 +1042,13 @@ async fn handle_rpc_method(request: &JsonRpcRequest, state: &RpcState) -> JsonRp
         "faucet_request" => handle_faucet_request(id, &request.params, state, None).await,
         "faucet_getStatus" => handle_faucet_status(id, state).await,
 
+        // Dev/testnet-only: settle the node wallet's own coins to factor-1
+        // (background) so a bridge reserve can accrue spendable factor-1 outputs
+        // (#1025 full-loop reserve funding).
+        "dev_settleToBackground" => {
+            handle_dev_settle_to_background(id, &request.params, state).await
+        }
+
         _ => JsonRpcResponse::error(id, -32601, &format!("Method not found: {}", request.method)),
     }
 }
@@ -3782,6 +3789,225 @@ async fn handle_faucet_request(
             JsonRpcResponse::error(id, -32000, &format!("Failed to serialize response: {}", e))
         }
     }
+}
+
+/// `dev_settleToBackground` (testnet-only): build an explicit
+/// demurrage-settlement (#831) that spends the node wallet's own (cluster-
+/// tagged) coins to a **factor-1/background** output back to its own address,
+/// and submit it to the mempool.
+///
+/// This is the local full-loop bridge e2e's reserve-funding primitive (#1025).
+/// The bridge releaser (`release/bth.rs`) only ever spends **factor-1**
+/// reserve outputs (ADR 0003), but a freshly-mined node accrues ONLY
+/// 100%-cluster-tagged coinbases (`block.rs::to_tx_output`) — it never
+/// naturally holds factor-1. A settlement is the consensus-sanctioned
+/// reclassification to background (the same on-ramp a real wrap deposit
+/// uses); in the bootstrap epoch the capitalized settlement charge is zero
+/// (`demurrage_rate_bps == 0`), so it costs only the base fee.
+///
+/// Params: `{ "amount": <picocredits, optional, default 1 BTH> }`.
+/// Gated to testnet — never exposed on mainnet.
+async fn handle_dev_settle_to_background(
+    id: Value,
+    params: &Value,
+    state: &RpcState,
+) -> JsonRpcResponse {
+    // Footgun guard: settlement is a legitimate operation for any holder, but
+    // this unauthenticated, CPU-heavy (full UTXO scan + CLSAG ring build),
+    // *mutating* self-send helper exists purely for the local harness. It is
+    // firewalled off mainnet by network type AND gated behind the explicit
+    // dev-RPC opt-in (`BOTHO_ENABLE_DEV_RPC`, set by the `botho-testnet`
+    // harness) so that a *live public* internet-facing testnet node does not
+    // expose it by default — only a throwaway local harness node does (M1/L1).
+    if state.network_type != Network::Testnet || !crate::config::is_dev_rpc_enabled() {
+        return JsonRpcResponse::error(
+            id,
+            -32000,
+            "dev_settleToBackground is not enabled (testnet + BOTHO_ENABLE_DEV_RPC only)",
+        );
+    }
+
+    let wallet = match &state.wallet {
+        Some(w) => w,
+        None => return JsonRpcResponse::error(id, -32000, "Node wallet not configured"),
+    };
+
+    // Amount to settle to background (default 1 BTH). The remainder of the
+    // selected input(s) becomes background change back to us.
+    const DEFAULT_SETTLE_AMOUNT: u64 = 1_000_000_000_000; // 1 BTH
+    let amount = params
+        .get("amount")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(DEFAULT_SETTLE_AMOUNT);
+
+    let fee = MIN_TX_FEE;
+    let required = match amount.checked_add(fee) {
+        Some(r) => r,
+        None => return JsonRpcResponse::error(id, -32602, "amount + fee overflow"),
+    };
+
+    let our_address = wallet.default_address();
+
+    let ledger = read_lock!(state.ledger, id);
+
+    // Scan our own spendable UTXOs (stealth ownership via the account key).
+    let all_utxos = match ledger.scan_utxos_for_account(wallet.account_key()) {
+        Ok(u) => u,
+        Err(e) => {
+            error!("dev_settleToBackground: failed to scan UTXOs: {}", e);
+            return JsonRpcResponse::error(id, -32000, "Failed to scan wallet UTXOs");
+        }
+    };
+
+    // Drop spent / pending inputs (chain + mempool), mirroring the faucet.
+    let mempool = read_lock!(state.mempool, id);
+    let mut utxos = Vec::new();
+    for utxo in &all_utxos {
+        if let Some(subaddress_index) = wallet.scan_output(&utxo.output, utxo.id.output_index) {
+            if let Some(onetime_private) = wallet.recover_output_spend_key(
+                &utxo.output,
+                subaddress_index,
+                utxo.id.output_index,
+            ) {
+                let key_image = bth_crypto_ring_signature::KeyImage::from(&onetime_private);
+                let key_image_bytes = key_image.as_bytes();
+                if mempool.is_key_image_pending(&key_image_bytes) {
+                    continue;
+                }
+                match ledger.is_key_image_spent(&key_image_bytes) {
+                    Ok(None) => utxos.push(utxo.clone()),
+                    Ok(Some(_)) => continue,
+                    Err(e) => {
+                        error!("dev_settleToBackground: key image check failed: {}", e);
+                        return JsonRpcResponse::error(id, -32000, "Key image check failed");
+                    }
+                }
+            }
+        }
+    }
+    drop(mempool);
+
+    // Select enough inputs to cover amount + fee.
+    let mut selected_utxos = Vec::new();
+    let mut selected_amount = 0u64;
+    for utxo in &utxos {
+        if selected_amount >= required {
+            break;
+        }
+        selected_utxos.push(utxo.clone());
+        selected_amount = selected_amount.saturating_add(utxo.output.amount);
+    }
+    if selected_amount < required {
+        return JsonRpcResponse::error(
+            id,
+            -32000,
+            &format!(
+                "insufficient spendable balance: have {} pc, need {} pc (mine more blocks)",
+                selected_amount, required
+            ),
+        );
+    }
+
+    let current_height = match ledger.get_chain_state() {
+        Ok(s) => s.height,
+        Err(e) => {
+            error!("dev_settleToBackground: failed to get chain state: {}", e);
+            return JsonRpcResponse::error(id, -32000, "Failed to get chain state");
+        }
+    };
+
+    // Build the (background) outputs: the settled amount + any change, both back
+    // to our own address. `create_settlement_transaction` forces empty cluster
+    // tags and stamps the settlement flag / settled_value.
+    let mut outputs = Vec::new();
+    match TxOutput::new_hybrid_to_address(
+        amount,
+        &our_address,
+        0,
+        None,
+        bth_transaction_types::ClusterTagVector::empty(),
+    ) {
+        Ok(out) => outputs.push(out),
+        Err(e) => {
+            error!(
+                "dev_settleToBackground: wallet address lacks ML-KEM key: {}",
+                e
+            );
+            return JsonRpcResponse::error(id, -32000, "Wallet address is not post-quantum");
+        }
+    }
+    let change = selected_amount - amount - fee;
+    if change > 0 {
+        match TxOutput::new_hybrid_to_address(
+            change,
+            &our_address,
+            1,
+            None,
+            bth_transaction_types::ClusterTagVector::empty(),
+        ) {
+            Ok(out) => outputs.push(out),
+            Err(e) => {
+                error!(
+                    "dev_settleToBackground: wallet address lacks ML-KEM key: {}",
+                    e
+                );
+                return JsonRpcResponse::error(id, -32000, "Wallet address is not post-quantum");
+            }
+        }
+    }
+
+    let tx = match wallet.create_settlement_transaction(
+        &selected_utxos,
+        outputs,
+        fee,
+        current_height,
+        &ledger,
+    ) {
+        Ok(t) => t,
+        Err(e) => {
+            error!("dev_settleToBackground: failed to build settlement: {}", e);
+            return JsonRpcResponse::error(
+                id,
+                -32000,
+                &format!("Failed to build settlement transaction: {}", e),
+            );
+        }
+    };
+
+    let tx_hash = tx.hash();
+    let tx_hash_hex = hex::encode(tx_hash);
+    drop(ledger);
+
+    // Submit to mempool.
+    {
+        let mut mempool = write_lock!(state.mempool, id);
+        let ledger = read_lock!(state.ledger, id);
+        if let Err(e) = mempool.add_tx(tx.clone(), &ledger) {
+            error!("dev_settleToBackground: mempool rejected settlement: {}", e);
+            return JsonRpcResponse::error(
+                id,
+                -32000,
+                &format!("Failed to submit settlement transaction: {}", e),
+            );
+        }
+    }
+
+    state.ws_broadcaster.new_transaction(&tx_hash, fee, None);
+
+    info!(
+        "dev_settleToBackground: settled {} pc to factor-1 (tx: {})",
+        amount,
+        &tx_hash_hex[..16.min(tx_hash_hex.len())]
+    );
+
+    JsonRpcResponse::success(
+        id,
+        json!({
+            "txHash": tx_hash_hex,
+            "settledAmount": amount.to_string(),
+            "changeAmount": change.to_string(),
+        }),
+    )
 }
 
 /// Faucet dispense statistics calculated from blockchain.

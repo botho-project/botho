@@ -930,6 +930,29 @@ pub fn is_mainnet_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// Whether the local dev/test RPC surface is enabled.
+///
+/// Some testnet conveniences are unsafe to expose on an *internet-facing*
+/// public testnet node even though they are firewalled off mainnet:
+///
+///   * `dev_settleToBackground` — an unauthenticated, CPU-heavy (full UTXO scan
+///     + CLSAG ring build), *mutating* self-send RPC, and
+///   * lifting the anonymous RPC rate limit to effectively unlimited.
+///
+/// Both are DoS-amplification vectors if reachable on a live public node, so
+/// they are gated on Testnet AND this explicit opt-in flag (off by default).
+/// The local full-loop e2e harness (`botho-testnet`) sets it for the throwaway
+/// nodes it spawns; a normal `botho --testnet run` does not, so a public
+/// testnet node keeps its 100/min anonymous limit and never exposes the dev
+/// RPC. Mainnet is unaffected (already firewalled by network type).
+///
+/// Set `BOTHO_ENABLE_DEV_RPC=1` (or `true`) to enable.
+pub fn is_dev_rpc_enabled() -> bool {
+    std::env::var("BOTHO_ENABLE_DEV_RPC")
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false)
+}
+
 /// Validate that the requested network can be used.
 /// Returns an error if mainnet is requested but not enabled.
 pub fn validate_network(network: Network) -> Result<()> {

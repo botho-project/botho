@@ -39,11 +39,17 @@
 #
 # The reserve key material is PROVISIONED AT RUNTIME (#999): after the node is
 # up this script runs `botho-testnet gen-bridge-keys`, which exports the
-# node's own deterministic (pre-funded) mining wallet as the reserve — so it
-# already owns spendable factor-1 (zero-demurrage, ADR 0003) outputs from
-# lottery emission — and mints a fresh random user wallet. NO private key is
-# committed to the repo. If you would rather bring your own reserve, set the
-# BRIDGE_BTH_RESERVE_* vars yourself and the auto-provisioning is skipped.
+# node's own deterministic (pre-funded) mining wallet as the reserve, and mints
+# a fresh random user wallet. NO private key is committed to the repo.
+#
+# A freshly-mined node accrues ONLY 100%-cluster-tagged coinbases, never
+# factor-1 (lottery EMISSION is zero in the bootstrap epoch), so the reserve
+# would have nothing the releaser's factor_one filter can spend (#1025). The
+# driver therefore also runs `botho-testnet fund-reserve`, which settles one of
+# node 0's coinbases into a spendable factor-1/background output (ADR 0003) it
+# owns — the zero-cost settlement the bootstrap epoch permits. If you would
+# rather bring your own funded reserve, set the BRIDGE_BTH_RESERVE_* vars
+# yourself and both the keygen and the funding step are skipped.
 #
 # When no reserve key material is provided AND provisioning is disabled the
 # test SELF-SKIPS (green), exactly like bridge/service/src/bth_fork_tests.rs —
@@ -106,27 +112,65 @@ export BRIDGE_BTH_RPC_URL="${BRIDGE_BTH_RPC_URL:-http://127.0.0.1:27200}"
 
 echo "==> Starting local Botho node (botho-testnet)"
 cd "$REPO_ROOT"
-# A single node externalizes blocks under SCP with an n=1 quorum; the harness
-# default is fine too. --clean guarantees a fresh chain each run.
-cargo run --release --bin botho-testnet -- start --nodes 1 --clean --wait-consensus
+# TWO nodes (reserve = node 0). A lone `--nodes 1` node cannot externalize on
+# this harness: the testnet config sets `min_peers = 1`, so the #428
+# participation gate (should_propose_this_round) blocks a peerless node from
+# minting/externalizing — independent of the #1000 SYNC-gate fix. A 2-node
+# cluster satisfies both the participation gate (1 peer each) and the 2-of-2
+# SCP quorum, so it actually produces blocks. --clean guarantees a fresh chain.
+#
+# NOT --wait-consensus: on a fresh chain the FIRST block takes longer than the
+# harness's 30s consensus-wait timeout (RandomX difficulty calibrates upward
+# over the first few blocks), so --wait-consensus would abort the run before a
+# single block is mined. The height-poll warmup below is the robust wait — it
+# tolerates the slow first block and blocks until the chain is actually deep
+# enough to form decoy rings.
+cargo run --release --bin botho-testnet -- start --nodes 2 --clean
 BOTHO_STARTED=1
 
-echo "==> Mining a reserve warmup (spendable factor-1 outputs + decoy ring)"
-# The CLSAG release needs reserve-owned factor-1 outputs AND enough decoys in
-# the recent window (DEFAULT_RING_SIZE-1 per input). The harness pre-funds a
-# deterministic wallet; give the chain time to produce a spendable window.
-sleep 15
+# Warm the chain up so the reserve funding + release can each form a CLSAG ring
+# (DEFAULT_RING_SIZE = 20, i.e. 19 decoys per input). The release draws its
+# decoys from NON-reserve outputs (node 1's coinbases), so we need enough blocks
+# that ~19 of them exist. Poll the tip until it clears the warmup bar.
+BRIDGE_BTH_WARMUP_HEIGHT="${BRIDGE_BTH_WARMUP_HEIGHT:-50}"
+echo "==> Warming the chain up to height >= $BRIDGE_BTH_WARMUP_HEIGHT (decoy anonymity set)"
+warmup_deadline=$(( $(date +%s) + 2400 ))
+while :; do
+    height="$(curl -sf -X POST -H 'Content-Type: application/json' \
+        --data '{"jsonrpc":"2.0","method":"getChainInfo","params":{},"id":1}' \
+        "$BRIDGE_BTH_RPC_URL" 2>/dev/null | sed -n 's/.*"height":\([0-9]*\).*/\1/p')"
+    height="${height:-0}"
+    echo "    tip height: $height"
+    if [[ "$height" -ge "$BRIDGE_BTH_WARMUP_HEIGHT" ]]; then
+        break
+    fi
+    if [[ "$(date +%s)" -ge "$warmup_deadline" ]]; then
+        echo "::warning::chain did not reach height $BRIDGE_BTH_WARMUP_HEIGHT within the" \
+             "warmup budget (at $height); continuing — the release may skip on too few decoys."
+        break
+    fi
+    sleep 10
+done
 
 # Provision the reserve + user wallet key material at runtime (#999) unless the
 # caller supplied their own reserve. The reserve is the node's own pre-funded
-# mining wallet (it owns spendable factor-1 lottery-emission outputs), so no
-# secret is committed. `eval` imports the `export BRIDGE_BTH_*` lines the tool
-# prints on stdout (its human logs go to stderr).
+# mining wallet, and no secret is committed. `eval` imports the
+# `export BRIDGE_BTH_*` lines the tool prints on stdout (human logs -> stderr).
 if [[ -z "${BRIDGE_BTH_RESERVE_VIEW_KEY:-}" ]]; then
     echo "==> Provisioning bridge reserve + user keys (runtime keygen; no secret committed)"
     BRIDGE_KEYS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/bridge-full-loop-keys.XXXXXX")"
     eval "$(cargo run --release --bin botho-testnet -- \
         gen-bridge-keys --node 0 --out "$BRIDGE_KEYS_DIR")"
+
+    # A freshly-mined node accrues ONLY 100%-cluster-tagged coinbases — never
+    # factor-1 — so the releaser's factor_one filter (release/bth.rs) would find
+    # nothing to spend (#1025 gap M2). Settle one of node 0's coinbases to a
+    # factor-1/background output it owns, giving the reserve a spendable
+    # factor-1 UTXO. In the bootstrap epoch the capitalized settlement charge is
+    # zero, so this costs only the base fee. Skipped when the caller BYO reserve.
+    echo "==> Funding the reserve with a factor-1 settlement output (#1025)"
+    cargo run --release --bin botho-testnet -- \
+        fund-reserve --node 0 --amount "${BRIDGE_BTH_AMOUNT:-1000000000000}"
 else
     echo "==> Using caller-provided BTH reserve key material"
 fi
