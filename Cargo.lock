@@ -1904,6 +1904,7 @@ dependencies = [
  "bth-account-keys",
  "bth-address-codec",
  "bth-crypto-keys",
+ "bth-crypto-pq",
  "bth-transaction-clsag",
  "bth-wasm-signer",
  "hex",

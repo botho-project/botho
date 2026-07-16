@@ -32,6 +32,19 @@ struct DerivedKeys {
     spend_private_hex: String,
     view_private_hex: String,
     public_address: PublicAddress,
+    /// Hex raw ML-KEM-768 public key derived from the same mnemonic's BIP39
+    /// seed (node-identical). Under 6.0.0 every send output is a hybrid
+    /// post-quantum output, so the recipient's key is required to encapsulate
+    /// the ciphertext and the sender's own key seeds its change (issue #978).
+    kem_public_hex: String,
+}
+
+/// The 64-byte BIP39 seed for a mnemonic (empty passphrase), matching the seed
+/// the node/browser derive PQ keys from.
+fn mnemonic_to_seed(mnemonic: &str) -> [u8; bth_crypto_pq::BIP39_SEED_SIZE] {
+    bip39::Mnemonic::parse_normalized(mnemonic)
+        .expect("valid mnemonic")
+        .to_seed("")
 }
 
 /// Build a deterministic, checksum-valid 24-word mnemonic from a fixed 32-byte
@@ -52,12 +65,26 @@ fn derive_from_seed(seed: u8) -> DerivedKeys {
     let keys = botho_wallet::keys::WalletKeys::from_mnemonic(&mnemonic)
         .expect("mnemonic should derive wallet keys");
     let account = keys.account_key();
+
+    // Derive the account-wide post-quantum keys from the same BIP39 seed
+    // (node-identical `derive_pq_keys_from_seed`), so the test's addresses are
+    // v2 (post-quantum) and the hybrid send path attaches ML-KEM ciphertexts —
+    // exactly what the bridge does. Derived from the seed here because the
+    // mobile crate builds `botho-wallet` without its `pq` feature.
+    let pq = bth_crypto_pq::derive_pq_keys_from_seed(&mnemonic_to_seed(&mnemonic));
+    let kem_bytes = pq.kem_keypair.public_key().as_bytes().to_vec();
+    let dsa_bytes = pq.sig_keypair.public_key().as_bytes().to_vec();
+
     DerivedKeys {
         spend_private_hex: hex::encode(account.spend_private_key().to_bytes()),
         view_private_hex: hex::encode(account.view_private_key().to_bytes()),
+        kem_public_hex: hex::encode(&kem_bytes),
         // Outputs are sent to the default subaddress; `belongs_to` returns
-        // subaddress index 0 for these.
-        public_address: account.default_subaddress(),
+        // subaddress index 0 for these. The address carries the derived PQ keys
+        // so it is a valid v2 (post-quantum) recipient.
+        public_address: account
+            .default_subaddress()
+            .with_pq_keys(kem_bytes, dsa_bytes),
     }
 }
 
@@ -208,6 +235,7 @@ fn build_and_sign_produces_node_verifiable_tx() {
     let recipient_addr = RecipientAddress {
         view_public_key: hex::encode(recipient.public_address.view_public_key().to_bytes()),
         spend_public_key: hex::encode(recipient.public_address.spend_public_key().to_bytes()),
+        kem_public_key: recipient.kem_public_hex.clone(),
     };
 
     let tx_hex = build_and_sign_inner(&SignRequest {
@@ -221,6 +249,7 @@ fn build_and_sign_produces_node_verifiable_tx() {
             decoys,
         }],
         recipient: recipient_addr,
+        sender_kem_public_key: sender.kem_public_hex.clone(),
         amount,
         fee: MIN_TX_FEE,
         created_at_height: 1,
@@ -274,7 +303,9 @@ fn build_and_sign_rejects_insufficient_inputs() {
         recipient: RecipientAddress {
             view_public_key: hex::encode(recipient.public_address.view_public_key().to_bytes()),
             spend_public_key: hex::encode(recipient.public_address.spend_public_key().to_bytes()),
+            kem_public_key: recipient.kem_public_hex.clone(),
         },
+        sender_kem_public_key: sender.kem_public_hex.clone(),
         amount: 50_000_000_000,
         fee: MIN_TX_FEE,
         created_at_height: 1,
