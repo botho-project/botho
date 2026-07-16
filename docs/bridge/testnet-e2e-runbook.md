@@ -19,6 +19,7 @@ absorb the full drill once a testnet node + secrets are wired — the
 | Layer | What runs | Where | Cadence |
 |---|---|---|---|
 | 0 | Ethereum leg, real Rust pipeline, local chain | `scripts/bridge-e2e-local.sh` | nightly CI + on demand |
+| 0.5 | Ethereum leg, real Rust pipeline, **Sepolia fork** (no secrets/funds) | `scripts/bridge-e2e-fork.sh` | on-demand CI (`workflow_dispatch`) |
 | 1 | wBTH contract on Sepolia (mint through the real Safe) | this runbook, steps 1–5 | before any bridge deploy |
 | 2 | Full BTH testnet round trip | this runbook, all steps | blocked on #856 |
 
@@ -39,6 +40,43 @@ a role-less relayer EOA → confirmation polling with the order-bound
 `BridgeMint` event check → idempotent re-broadcast → user `bridgeBurn` →
 watcher burn scan. It asserts exact factor-1 picocredit amounts (ADR 0003)
 and that `totalSupply` returns to zero.
+
+## Layer 0.5: Sepolia-fork Ethereum leg (no secrets, #992)
+
+The **same** Rust pipeline as Layer 0, but against a local node that FORKS
+real Sepolia state (chain id 11155111) over a public RPC — the closest-to-
+real-testnet demonstration achievable with **no funded account, no deployed
+contract, and no secret**. A throwaway `WrappedBTH` + `SafeStub` is freshly
+deployed onto the forked state, and the four dev accounts are funded on the
+fork via `anvil_setBalance` / `hardhat_setBalance` (test ETH — no real funds):
+
+```bash
+./scripts/bridge-e2e-fork.sh https://sepolia.example/v2/<key>
+# or:  SEPOLIA_RPC_URL=... ./scripts/bridge-e2e-fork.sh
+```
+
+The driver starts `anvil --fork-url <rpc>` (or `npx hardhat node --fork`),
+waits for RPC, and runs the `#[ignore]`d `fork_` test with two env knobs:
+
+- `BRIDGE_FORK_EXPECTED_CHAIN_ID=11155111` — pins the fork's chain id (the
+  test reads the chain id from the node; when this is unset it accepts
+  whatever the node reports, which is why the Layer 0 local run — chain id
+  31337 — needs no code change).
+- `BRIDGE_FORK_FUND_ACCOUNTS=1` — mints test ETH to the dev accounts on the
+  fork before deploying. A no-op on the local 31337 path (already funded).
+
+CI wiring: the `ethereum-leg-sepolia-fork` job in
+`.github/workflows/bridge-e2e.yml` runs this on `workflow_dispatch` only
+(kept off the nightly schedule to avoid public-RPC rate-limit flakiness —
+promote to nightly once a stable archive RPC is provisioned). It reads a
+`SEPOLIA_RPC_URL` repo secret and skips cleanly when the secret is absent.
+
+**Flip to live Sepolia (#866):** this is the same parametrization the live
+deploy reuses — point `BRIDGE_FORK_RPC_URL` at a live Sepolia RPC (no fork),
+set `BRIDGE_FORK_EXPECTED_CHAIN_ID=11155111`, leave `BRIDGE_FORK_FUND_ACCOUNTS`
+**unset** (there is no `setBalance` on a real chain), and supply a genuinely
+funded relayer/owner key in place of the dev keys. No test code changes —
+#866 is a config swap, not a rewrite.
 
 ## Layer 1.5: BTH node leg (live)
 

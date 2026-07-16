@@ -49,6 +49,67 @@ jobs:
       - name: Run Ethereum-leg e2e
         run: ./scripts/bridge-e2e-local.sh
 
+  # Same Ethereum-leg pipeline as `ethereum-leg`, but against a node forking
+  # REAL Sepolia state over a public RPC (chain id 11155111) — the closest-to-
+  # real-testnet demo achievable with NO funded account, deployed contract, or
+  # secret (#992). The dev accounts are funded on the fork via *_setBalance and
+  # a throwaway WrappedBTH + SafeStub is freshly deployed onto the forked state.
+  #
+  # workflow_dispatch ONLY: a public-RPC fork in nightly CI risks rate-limit
+  # flakiness (maintainer decision — promote to nightly only once a stable
+  # archive RPC is provisioned). Skips cleanly when SEPOLIA_RPC_URL is absent.
+  ethereum-leg-sepolia-fork:
+    name: Ethereum leg (Sepolia fork, no secrets/funds)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for SEPOLIA_RPC_URL
+        id: rpc
+        env:
+          SEPOLIA_RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
+        run: |
+          if [[ -z "$SEPOLIA_RPC_URL" ]]; then
+            echo "::notice::SEPOLIA_RPC_URL secret is not set — skipping the"
+            echo "::notice::Sepolia-fork e2e. Provision a public/Alchemy/Infura"
+            echo "::notice::Sepolia RPC as the SEPOLIA_RPC_URL repo secret to run it."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node
+        if: steps.rpc.outputs.present == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: contracts/ethereum/package-lock.json
+
+      - name: Install Rust
+        if: steps.rpc.outputs.present == 'true'
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-03
+
+      - name: Install Foundry (anvil)
+        if: steps.rpc.outputs.present == 'true'
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Cache cargo
+        if: steps.rpc.outputs.present == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: bridge-e2e
+
+      - name: Run Sepolia-fork e2e
+        if: steps.rpc.outputs.present == 'true'
+        env:
+          SEPOLIA_RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
+        run: ./scripts/bridge-e2e-fork.sh
+
   # The live-testnet BTH -> wBTH -> burn -> BTH round trip is a MANUAL
   # drill for now: the BTH release / deposit-scan live transports are
   # pending (#856), so the full loop cannot run unattended. The procedure,
