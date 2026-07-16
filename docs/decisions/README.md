@@ -25,6 +25,7 @@ ADRs are immutable once accepted. If a decision changes, a new ADR supersedes th
 | [0006](0006-pq-architecture-ratification.md) | Post-Quantum & Privacy Architecture Ratification | Accepted | 2026-07-14 |
 | [0007](0007-bridge-import-cluster-tagging.md) | Bridge-Import Cluster Tagging via Block-Epoch Keys | Accepted | 2026-07-14 |
 | [0008](0008-universal-pq-address-format-and-hybrid-stealth.md) | Universal PQ Address Format (v2) + Hybrid Stealth Preimage | Accepted | 2026-07-15 |
+| [0009](0009-confidential-amounts-economics.md) | Confidential-Amounts Economics — Value-Dependent Anti-Hoarding under Hidden Amounts | Proposed | 2026-07-16 |
 
 ## ADR Statuses
 
