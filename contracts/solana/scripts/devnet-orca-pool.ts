@@ -30,6 +30,9 @@ const SOL_DECIMALS = 9;
 // with tens of thousands of wBTH from the 100k we minted.
 const INIT_PRICE = new Decimal("0.000001");
 const SECRETS = path.resolve(__dirname, "../../../.secrets/bridge-testnet");
+// Slippage bound for liquidity add + swap (#1017). Default 1% for devnet; a
+// mainnet run should tune this and derive tight min-outs from the live quote.
+const SLIPPAGE = Percentage.fromFraction(Number(process.env.SLIPPAGE_BPS ?? "100"), 10_000);
 
 function load(name: string): Keypair {
   return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(path.join(SECRETS, `${name}.json`), "utf8"))));
@@ -101,7 +104,7 @@ async function main() {
     sqrtPrice: data.sqrtPrice,
     tickLowerIndex: lower,
     tickUpperIndex: upper,
-    slippageTolerance: Percentage.fromFraction(1, 100),
+    slippageTolerance: SLIPPAGE,
     tokenExtensionCtx: NO_TOKEN_EXTENSION_CONTEXT,
   });
   console.log(`   quote: tokenA max ${quote.tokenMaxA.toString()}, tokenB max ${quote.tokenMaxB.toString()}`);
@@ -114,7 +117,7 @@ async function main() {
   const refreshed = await client.getPool(poolPda.publicKey);
   const swapIn = DecimalUtil.toBN(new Decimal("0.005"), SOL_DECIMALS);
   const swapQuote = await swapQuoteByInputToken(
-    refreshed, NATIVE_MINT, swapIn, Percentage.fromFraction(1, 100),
+    refreshed, NATIVE_MINT, swapIn, SLIPPAGE,
     ORCA_WHIRLPOOL_PROGRAM_ID, ctx.fetcher, undefined,
   );
   console.log(`   estimated out ${swapQuote.estimatedAmountOut.toString()} (of wBTH mint)`);

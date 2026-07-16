@@ -8,8 +8,10 @@ wbth = "CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE"
 [programs.devnet]
 wbth = "CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE"
 
-[programs.mainnet]
-wbth = "CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE"
+# [programs.mainnet] is intentionally omitted — no mainnet deploy exists yet.
+# Add it back with the REAL mainnet program id at mainnet-deploy time; do not
+# copy the devnet id here (it would misdirect `anchor deploy --provider.cluster
+# mainnet`). localnet keeps the devnet id only so `anchor test` resolves.
 
 [registry]
 url = "https://api.apr.dev"
