@@ -27,16 +27,27 @@
 #   BRIDGE_BTH_RPC_URL            node JSON-RPC (default http://127.0.0.1:27200)
 #   BRIDGE_BTH_RESERVE_VIEW_KEY   reserve wallet view key (32-byte hex file)
 #   BRIDGE_BTH_RESERVE_SPEND_KEY  reserve wallet spend key (32-byte hex file)
+#   BRIDGE_BTH_RESERVE_PQ_SEED    reserve ML-KEM/ML-DSA BIP39 seed (64-byte hex
+#                                 file; required on the 6.0.0 hybrid chain to
+#                                 detect + spend the reserve's own outputs)
 #   BRIDGE_BTH_RESERVE_ADDRESS    reserve public BTH address (change target)
 #   BRIDGE_BTH_USER_ADDRESS       user BTH address (release destination)
 #   BRIDGE_BTH_USER_VIEW_KEY      user wallet view key (scan-back)
 #   BRIDGE_BTH_USER_SPEND_KEY     user wallet spend key (scan-back)
+#   BRIDGE_BTH_USER_PQ_SEED       user ML-KEM/ML-DSA BIP39 seed (64-byte hex)
 #   BRIDGE_BTH_AMOUNT             picocredits to wrap (default 1 BTH)
 #
-# When the BTH reserve key material is not provided the test SELF-SKIPS
-# (green), exactly like bridge/service/src/bth_fork_tests.rs — it never claims
-# a live path it could not exercise. Provision the reserve wallet keys (an
-# operator or a key-export step) to run the loop unattended.
+# The reserve key material is PROVISIONED AT RUNTIME (#999): after the node is
+# up this script runs `botho-testnet gen-bridge-keys`, which exports the
+# node's own deterministic (pre-funded) mining wallet as the reserve — so it
+# already owns spendable factor-1 (zero-demurrage, ADR 0003) outputs from
+# lottery emission — and mints a fresh random user wallet. NO private key is
+# committed to the repo. If you would rather bring your own reserve, set the
+# BRIDGE_BTH_RESERVE_* vars yourself and the auto-provisioning is skipped.
+#
+# When no reserve key material is provided AND provisioning is disabled the
+# test SELF-SKIPS (green), exactly like bridge/service/src/bth_fork_tests.rs —
+# it never claims a live path it could not exercise.
 #
 # The live-Sepolia variant of this same loop stays a manual drill (funded
 # Safes + Sepolia ETH): docs/bridge/testnet-e2e-runbook.md.
@@ -105,6 +116,20 @@ echo "==> Mining a reserve warmup (spendable factor-1 outputs + decoy ring)"
 # the recent window (DEFAULT_RING_SIZE-1 per input). The harness pre-funds a
 # deterministic wallet; give the chain time to produce a spendable window.
 sleep 15
+
+# Provision the reserve + user wallet key material at runtime (#999) unless the
+# caller supplied their own reserve. The reserve is the node's own pre-funded
+# mining wallet (it owns spendable factor-1 lottery-emission outputs), so no
+# secret is committed. `eval` imports the `export BRIDGE_BTH_*` lines the tool
+# prints on stdout (its human logs go to stderr).
+if [[ -z "${BRIDGE_BTH_RESERVE_VIEW_KEY:-}" ]]; then
+    echo "==> Provisioning bridge reserve + user keys (runtime keygen; no secret committed)"
+    BRIDGE_KEYS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/bridge-full-loop-keys.XXXXXX")"
+    eval "$(cargo run --release --bin botho-testnet -- \
+        gen-bridge-keys --node 0 --out "$BRIDGE_KEYS_DIR")"
+else
+    echo "==> Using caller-provided BTH reserve key material"
+fi
 
 echo "==> Running the full-loop e2e against ETH=$BRIDGE_FORK_RPC_URL BTH=$BRIDGE_BTH_RPC_URL"
 if [[ -z "${BRIDGE_BTH_RESERVE_VIEW_KEY:-}" || -z "${BRIDGE_BTH_RESERVE_SPEND_KEY:-}" ]]; then

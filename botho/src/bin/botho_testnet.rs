@@ -40,7 +40,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
-use bip39::{Language, Mnemonic};
+use bip39::{Language, Mnemonic, Seed};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -133,6 +133,32 @@ enum Commands {
 
     /// Clean all testnet data
     Clean,
+
+    /// Provision bridge reserve + user wallet key material for the full-loop
+    /// e2e (#999).
+    ///
+    /// Writes 32-byte-hex classical view/spend key files plus a 64-byte-hex
+    /// ML-KEM/ML-DSA BIP39 seed file for two wallets and prints the shell
+    /// `export` lines the bridge full-loop driver
+    /// (`scripts/bridge-e2e-full-loop.sh`) consumes via `eval`. NO secret
+    /// is committed: the reserve keys derive from the harness's own
+    /// deterministic node mnemonic (already in-code and disposable) and the
+    /// user keys are freshly random at runtime.
+    ///
+    /// The RESERVE is the node's own pre-funded mining wallet, so it already
+    /// owns spendable **factor-1** (zero-cluster-weight) outputs from lottery
+    /// emission (`LotteryOutput::to_tx_output(ClusterTagVector::empty())`),
+    /// which is exactly what the CLSAG release path spends (ADR 0003). The
+    /// USER wallet only receives the released stealth output (ADR 0004).
+    GenBridgeKeys {
+        /// Node index whose deterministic wallet becomes the bridge reserve.
+        #[arg(long, default_value_t = 0)]
+        node: usize,
+
+        /// Directory to write the key files into (created if missing).
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 
 /// Testnet state persisted to disk
@@ -208,6 +234,7 @@ fn main() -> Result<()> {
         Commands::KillNode { node } => cmd_kill_node(node, args.verbose),
         Commands::RestartNode { node } => cmd_restart_node(node, args.verbose),
         Commands::Clean => cmd_clean(args.verbose),
+        Commands::GenBridgeKeys { node, out } => cmd_gen_bridge_keys(node, &out),
     }
 }
 
@@ -674,6 +701,169 @@ fn cmd_clean(verbose: bool) -> Result<()> {
 }
 
 // ============================================================================
+// Bridge key provisioning (#999)
+// ============================================================================
+
+/// One wallet's bridge key material: the on-disk file contents plus the
+/// published v2 (`tbotho://2/…`) receive address.
+struct BridgeKeyMaterial {
+    /// 32-byte hex Ristretto view private scalar (`bth.view_key_file`).
+    view_hex: String,
+    /// 32-byte hex Ristretto spend private scalar (`bth.spend_key_file`).
+    spend_hex: String,
+    /// 64-byte hex BIP39 seed the reserve derives its ML-KEM-768 / ML-DSA-65
+    /// keypairs from (`bth.pq_seed_file`, issue #972). Required on the
+    /// protocol-6.0.0 hybrid chain so the scanner can decapsulate outputs paid
+    /// to this wallet.
+    pq_seed_hex: String,
+    /// Published v2 address (carries the classical + ML-KEM + ML-DSA public
+    /// keys), byte-identical to what `bth-bridge-service`'s `ReserveKeys`
+    /// advertises from the same files.
+    address: String,
+}
+
+/// Derive the bridge key material for a BIP39 mnemonic.
+///
+/// The classical view/spend private scalars come from the SAME SLIP-10 path
+/// the node wallet uses (`botho::wallet::Wallet::from_mnemonic`), so the
+/// derived reserve keys are exactly the node's own keys and detect the node's
+/// coinbase/lottery outputs. The PQ seed is the 64-byte BIP39 seed, and the
+/// published address is reconstructed the way `ReserveKeys::public_address`
+/// does (`AccountKey::new(spend, view).default_subaddress().with_pq_keys(…)`),
+/// so the printed `*_ADDRESS` matches what the reserve advertises.
+fn derive_bridge_key_material(mnemonic_phrase: &str) -> Result<BridgeKeyMaterial> {
+    use bth_account_keys::AccountKey;
+    use bth_address_codec::{encode_address, Network};
+    use bth_crypto_keys::RistrettoPrivate;
+    use bth_crypto_pq::derive_pq_keys_from_seed;
+
+    // Classical keys via the tested node-wallet derivation (SLIP-10 + the same
+    // key material the running node uses to receive funds).
+    let wallet = botho::wallet::Wallet::from_mnemonic(mnemonic_phrase)
+        .map_err(|e| anyhow!("derive wallet from mnemonic: {e}"))?;
+    let view_priv = wallet.account_key().view_private_key().to_bytes();
+    let spend_priv = wallet.account_key().spend_private_key().to_bytes();
+
+    // 64-byte BIP39 seed → ML-KEM-768 / ML-DSA-65 material (issue #972). Same
+    // `Seed::new(&mnemonic, "")` the wallet feeds `derive_pq_keys_from_seed`,
+    // so the reserve's published KEM key matches the secret it decapsulates
+    // with.
+    let mnemonic = Mnemonic::from_phrase(mnemonic_phrase, Language::English)
+        .map_err(|e| anyhow!("invalid mnemonic: {e}"))?;
+    let seed = Seed::new(&mnemonic, "");
+    let seed_bytes: [u8; 64] = seed
+        .as_bytes()
+        .try_into()
+        .map_err(|_| anyhow!("BIP39 seed must be 64 bytes"))?;
+    let pq = derive_pq_keys_from_seed(&seed_bytes);
+    let kem_pub = pq.kem_keypair.public_key().as_bytes().to_vec();
+    let dsa_pub = pq.sig_keypair.public_key().as_bytes().to_vec();
+
+    // Reconstruct the published v2 address exactly like `ReserveKeys` does from
+    // the on-disk files, so config validation + the reconciler custody query
+    // see the same address the reserve advertises.
+    let account = AccountKey::new(
+        &RistrettoPrivate::try_from(&spend_priv).map_err(|e| anyhow!("spend scalar: {e:?}"))?,
+        &RistrettoPrivate::try_from(&view_priv).map_err(|e| anyhow!("view scalar: {e:?}"))?,
+    );
+    let address = encode_address(
+        &account.default_subaddress().with_pq_keys(kem_pub, dsa_pub),
+        Network::Testnet,
+    )
+    .map_err(|e| anyhow!("encode v2 address: {e}"))?;
+
+    Ok(BridgeKeyMaterial {
+        view_hex: hex::encode(view_priv),
+        spend_hex: hex::encode(spend_priv),
+        pq_seed_hex: hex::encode(seed_bytes),
+        address,
+    })
+}
+
+/// Write a key file with owner-only permissions (0600 on Unix).
+fn write_key_file(path: &Path, contents: &str) -> Result<()> {
+    fs::write(path, format!("{contents}\n"))
+        .with_context(|| format!("write key file {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("chmod 600 {}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// Materialize one wallet's key files under `dir` with the given `role` prefix
+/// and print the matching `export` lines for the bridge full-loop driver.
+fn emit_bridge_wallet(dir: &Path, role: &str, upper: &str, keys: &BridgeKeyMaterial) -> Result<()> {
+    let view_path = dir.join(format!("{role}.view.hex"));
+    let spend_path = dir.join(format!("{role}.spend.hex"));
+    let pq_seed_path = dir.join(format!("{role}.pq_seed.hex"));
+
+    write_key_file(&view_path, &keys.view_hex)?;
+    write_key_file(&spend_path, &keys.spend_hex)?;
+    write_key_file(&pq_seed_path, &keys.pq_seed_hex)?;
+
+    // Only the `export` lines go to stdout so the driver can `eval` them; all
+    // human-facing logs go to stderr. Values are double-quoted so paths with
+    // shell-special characters survive `eval`.
+    println!(
+        "export BRIDGE_BTH_{upper}_VIEW_KEY=\"{}\"",
+        view_path.display()
+    );
+    println!(
+        "export BRIDGE_BTH_{upper}_SPEND_KEY=\"{}\"",
+        spend_path.display()
+    );
+    println!(
+        "export BRIDGE_BTH_{upper}_PQ_SEED=\"{}\"",
+        pq_seed_path.display()
+    );
+    println!("export BRIDGE_BTH_{upper}_ADDRESS=\"{}\"", keys.address);
+    Ok(())
+}
+
+/// Provision bridge reserve + user wallet key material (#999).
+fn cmd_gen_bridge_keys(node: usize, out: &Path) -> Result<()> {
+    fs::create_dir_all(out).with_context(|| format!("create key dir {}", out.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(out, fs::Permissions::from_mode(0o700));
+    }
+
+    // RESERVE = the node's own deterministic (pre-funded, factor-1-accruing)
+    // wallet. Deriving from the SAME mnemonic the harness boots node `node`
+    // with means the reserve keys detect that node's coinbase + lottery
+    // outputs — no secret is introduced.
+    let reserve_mnemonic = generate_deterministic_mnemonic(node)?;
+    let reserve = derive_bridge_key_material(&reserve_mnemonic)?;
+
+    // USER = a freshly random wallet (only ever receives the released stealth
+    // output). Never persisted anywhere but the disposable key dir.
+    let mut entropy = [0u8; 16];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut entropy);
+    let user_mnemonic = Mnemonic::from_entropy(&entropy, Language::English)
+        .map_err(|e| anyhow!("generate user mnemonic: {e}"))?
+        .phrase()
+        .to_string();
+    let user = derive_bridge_key_material(&user_mnemonic)?;
+
+    eprintln!(
+        "Provisioned bridge key material in {} (reserve = node {} wallet, user = fresh random)",
+        out.display(),
+        node
+    );
+    eprintln!("  reserve address: {}", reserve.address);
+    eprintln!("  user address:    {}", user.address);
+
+    emit_bridge_wallet(out, "reserve", "RESERVE", &reserve)?;
+    emit_bridge_wallet(out, "user", "USER", &user)?;
+
+    Ok(())
+}
+
+// ============================================================================
 // Helper Functions
 // ============================================================================
 
@@ -903,4 +1093,71 @@ fn wait_for_consensus(nodes: &[NodeState], timeout_secs: u64) -> Result<()> {
     }
 
     Err(anyhow!("Timeout waiting for consensus"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The derived key files have the exact on-disk shape the bridge loader
+    /// (`bth-bridge-service`'s `ReserveKeys::load`) expects: 32-byte-hex
+    /// classical scalars and a 64-byte-hex BIP39 seed, plus a v2 address.
+    #[test]
+    fn bridge_key_material_has_expected_shape() {
+        let mnemonic = generate_deterministic_mnemonic(0).unwrap();
+        let keys = derive_bridge_key_material(&mnemonic).unwrap();
+
+        // 32-byte classical scalars, 64-byte PQ seed (hex-encoded).
+        assert_eq!(hex::decode(&keys.view_hex).unwrap().len(), 32);
+        assert_eq!(hex::decode(&keys.spend_hex).unwrap().len(), 32);
+        assert_eq!(hex::decode(&keys.pq_seed_hex).unwrap().len(), 64);
+
+        // Published address is a testnet v2 (post-quantum) URI.
+        assert!(
+            keys.address.starts_with("tbotho://2/"),
+            "expected a v2 testnet address, got {}",
+            keys.address
+        );
+    }
+
+    /// Derivation is deterministic for the reserve (same node mnemonic → same
+    /// keys), which is what lets the reserve keys detect the running node's
+    /// pre-funded outputs.
+    #[test]
+    fn reserve_derivation_is_deterministic() {
+        let mnemonic = generate_deterministic_mnemonic(3).unwrap();
+        let a = derive_bridge_key_material(&mnemonic).unwrap();
+        let b = derive_bridge_key_material(&mnemonic).unwrap();
+        assert_eq!(a.view_hex, b.view_hex);
+        assert_eq!(a.spend_hex, b.spend_hex);
+        assert_eq!(a.pq_seed_hex, b.pq_seed_hex);
+        assert_eq!(a.address, b.address);
+    }
+
+    /// The exported classical view/spend scalars are exactly the node wallet's
+    /// own keys — the invariant that makes "reserve == the pre-funded miner"
+    /// hold, so the reserve owns the node's factor-1 lottery outputs.
+    #[test]
+    fn reserve_keys_match_node_wallet() {
+        let mnemonic = generate_deterministic_mnemonic(1).unwrap();
+        let keys = derive_bridge_key_material(&mnemonic).unwrap();
+        let wallet = botho::wallet::Wallet::from_mnemonic(&mnemonic).unwrap();
+        assert_eq!(
+            keys.view_hex,
+            hex::encode(wallet.account_key().view_private_key().to_bytes())
+        );
+        assert_eq!(
+            keys.spend_hex,
+            hex::encode(wallet.account_key().spend_private_key().to_bytes())
+        );
+    }
+
+    /// Distinct nodes yield distinct reserve keys (no accidental key reuse).
+    #[test]
+    fn distinct_nodes_yield_distinct_keys() {
+        let a = derive_bridge_key_material(&generate_deterministic_mnemonic(0).unwrap()).unwrap();
+        let b = derive_bridge_key_material(&generate_deterministic_mnemonic(1).unwrap()).unwrap();
+        assert_ne!(a.spend_hex, b.spend_hex);
+        assert_ne!(a.address, b.address);
+    }
 }
