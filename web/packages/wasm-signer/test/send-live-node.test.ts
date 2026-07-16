@@ -42,6 +42,7 @@ import { deriveKeypairs, parseAddress } from '@botho/core'
 import {
   buildSendTransaction,
   deriveV2Address,
+  deriveKemPublicKey,
   setSigner,
   resetSigner,
   type ChainOutput,
@@ -197,7 +198,10 @@ maybe('node-backed: web-wallet -> tx -> ledger', () => {
     const recipient = {
       spend_public_key: toHex(recipientParsed.spendPublic),
       view_public_key: toHex(recipientParsed.viewPublic),
+      kem_public_key: toHex(recipientParsed.kemPublic),
     }
+    // The sender's own ML-KEM key (for change encapsulation, #978).
+    const senderKemPublicKey = await deriveKemPublicKey(senderMnemonic)
 
     // --- Pre-send ledger snapshot ----------------------------------------
     const heightBefore = (await rpc<{ chainHeight: number }>('node_getStatus', {})).chainHeight
@@ -243,6 +247,7 @@ maybe('node-backed: web-wallet -> tx -> ledger', () => {
     const { txHex, inputTotal } = await buildSendTransaction({
       keys: senderKeys,
       recipient,
+      senderKemPublicKey,
       amount,
       fee,
       rpc: sendRpc,

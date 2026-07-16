@@ -62,6 +62,24 @@ export async function deriveV2Address(
 }
 
 /**
+ * Derive the wallet's raw ML-KEM-768 public key (hex) from its BIP39 mnemonic,
+ * via the node-identical `derive_pq_keys_from_seed` in wasm.
+ *
+ * This is the sender's OWN ML-KEM public key — the one published in its
+ * `botho://2/` address. The send path needs it to encapsulate the change output
+ * back to the sender (a hybrid self-send), so the sender can later recover its
+ * change under the post-quantum scheme (issue #978).
+ */
+export async function deriveKemPublicKey(mnemonic: string): Promise<string> {
+  const seed = mnemonicToSeedSync(mnemonic, '')
+  const signer = await loadSigner()
+  if (!signer.derivePqPublicKeysFromSeed) {
+    throw new Error('wasm-signer: derivePqPublicKeysFromSeed unavailable (stale wasm build?)')
+  }
+  return signer.derivePqPublicKeysFromSeed(toHex(seed)).kemPublicKey
+}
+
+/**
  * Decode a v2 address string into its hex components via the shared wasm codec.
  *
  * Use this when a byte-identical-to-the-node decode is required (e.g. to

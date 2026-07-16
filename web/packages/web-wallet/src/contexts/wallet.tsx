@@ -11,7 +11,7 @@ import { RemoteNodeAdapter, type FeeEstimate, type WsConnectionStatus } from '@b
 import { AddressBook, EncryptedAddressBook, ClaimLinkStore, EncryptedClaimLinks, saveWallet, loadWallet, loadWalletWithKey, getWalletInfo, deriveKeypairs, parseAddress, isValidMnemonic, clearWallet, createClaimLinkMnemonic, buildClaimLink, assertClaimLinkAmountWithinCap, VaultKey, MIN_PASSWORD_LENGTH } from '@botho/core'
 import { deriveV2Address } from '@botho/wasm-signer'
 import type { Balance, Contact, NodeInfo, Transaction, ClaimLinkRecord, Timestamp } from '@botho/core'
-import { buildSendTransaction, spendableBalance, buildOwnedHistory, netOwnedHistory, ownedOutputTargetKeys } from '@botho/wasm-signer'
+import { buildSendTransaction, spendableBalance, buildOwnedHistory, netOwnedHistory, ownedOutputTargetKeys, deriveKemPublicKey } from '@botho/wasm-signer'
 import { buildAndSubmitSend, scanEphemeral, sweepEphemeral, SWEEP_FEE_RESERVE } from '../lib/claim-link-ops'
 import { type NetworkConfig, loadSelectedNetwork, loadSelectedIngress, NETWORKS, DEFAULT_NETWORK_ID, DEFAULT_INGRESS_ID, createCustomNetwork, networkForIngress, getIngressNode } from '../config/networks'
 
@@ -1059,7 +1059,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
 
     // 4. Build + CLSAG-sign entirely client-side (wasm). The keys never leave
-    //    the browser; only the signed bytes are submitted.
+    //    the browser; only the signed bytes are submitted. Every output is a
+    //    hybrid post-quantum output (6.0.0, #978): the recipient output
+    //    encapsulates against the recipient's published ML-KEM key
+    //    (recipientKeys.kemPublic), and the change output against the wallet's
+    //    OWN ML-KEM key (derived from the mnemonic).
+    const senderKemPublicKey = await deriveKemPublicKey(mnemonic)
     const { txHex } = await buildSendTransaction({
       keys: {
         spendPrivateKey: toHex(kp.spendPrivate),
@@ -1068,7 +1073,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       recipient: {
         spend_public_key: toHex(recipientKeys.spendPublic),
         view_public_key: toHex(recipientKeys.viewPublic),
+        kem_public_key: toHex(recipientKeys.kemPublic),
       },
+      senderKemPublicKey,
       amount,
       fee,
       rpc: {

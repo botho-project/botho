@@ -61,6 +61,10 @@ maybe('wasm signer (requires build:wasm)', () => {
     // structural parsing far enough to hit the balance check; the inputs sum
     // (1) is far below amount + fee, so it must fail with "insufficient funds".
     const zero = '00'.repeat(32)
+    // A structurally valid (length-1184) ML-KEM-768 public key placeholder. The
+    // signer only length-checks it before the balance check this test targets,
+    // so an all-zero key suffices to reach "insufficient funds" (#978).
+    const zeroKem = '00'.repeat(1184)
     const decoys = Array.from({ length: ringSize - 1 }, () => ({
       target_key: zero,
       public_key: zero,
@@ -85,7 +89,8 @@ maybe('wasm signer (requires build:wasm)', () => {
           decoys,
         },
       ],
-      recipient: { spend_public_key: zero, view_public_key: zero },
+      recipient: { spend_public_key: zero, view_public_key: zero, kem_public_key: zeroKem },
+      senderKemPublicKey: zeroKem,
       amount: 5_000_000_000,
       fee: 100_000_000,
       createdAtHeight: 1000,
@@ -97,13 +102,15 @@ maybe('wasm signer (requires build:wasm)', () => {
   it('rejects a fee below the network minimum', async () => {
     const signer = await loadSignerNode()
     const zero = '00'.repeat(32)
+    const zeroKem = '00'.repeat(1184)
     const request: SignRequest = {
       spendPrivateKey: zero,
       viewPrivateKey: zero,
       inputs: [
         { target_key: zero, public_key: zero, amount: 10_000_000_000, subaddress_index: 0, decoys: [] },
       ],
-      recipient: { spend_public_key: zero, view_public_key: zero },
+      recipient: { spend_public_key: zero, view_public_key: zero, kem_public_key: zeroKem },
+      senderKemPublicKey: zeroKem,
       amount: 5_000_000_000,
       fee: 1, // below MIN_TX_FEE
       createdAtHeight: 1000,

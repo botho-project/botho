@@ -1014,6 +1014,104 @@ mod tests {
                 other => panic!("unexpected validation result: {other:?}"),
             }
         }
+
+        /// #978 acceptance heart: a transfer built by the BROWSER signer
+        /// (`bth_wasm_signer`, the exact Rust the web wallet compiles to wasm)
+        /// is ACCEPTED by the node's `validate_transfer_tx` universal-ML-KEM
+        /// gate. This closes the loop the issue opened: before this change the
+        /// browser emitted `kem_ciphertext: None` on every output and every
+        /// browser send was rejected. Now the browser encapsulates against the
+        /// recipient's (and its own, for change) published ML-KEM key, so both
+        /// outputs carry a 1088-byte ciphertext and consensus accepts the tx.
+        #[test]
+        fn browser_built_transfer_passes_node_kem_gate() {
+            use bth_account_keys::AccountKey;
+            use bth_transaction_clsag::DEFAULT_RING_SIZE;
+            use bth_wasm_signer::core::{
+                build_and_sign_with_rng, DecoyOutput, RecipientAddress, SignRequest, SpendInput,
+            };
+            use rand_chacha::ChaCha20Rng;
+            use rand_core::{RngCore, SeedableRng};
+
+            let mut rng = ChaCha20Rng::from_seed([73u8; 32]);
+
+            // Sender + recipient classical accounts, each with a published
+            // ML-KEM key (their v2 addresses).
+            let sender = AccountKey::random(&mut rng);
+            let sender_kem = bth_crypto_pq::derive_pq_keys_from_seed(&[0x11; 64]);
+            let recipient = AccountKey::random(&mut rng);
+            let recipient_kem = bth_crypto_pq::derive_pq_keys_from_seed(&[0x22; 64]);
+
+            // The sender's owned output + a full decoy ring.
+            let owned_amount = 10_000_000_000u64;
+            let owned = TxOutput::new(owned_amount, &sender.default_subaddress());
+            let decoys: Vec<DecoyOutput> = (0..DEFAULT_RING_SIZE - 1)
+                .map(|_| {
+                    let acct = AccountKey::random(&mut rng);
+                    let out = TxOutput::new(owned_amount, &acct.default_subaddress());
+                    DecoyOutput {
+                        target_key: hex::encode(out.target_key),
+                        public_key: hex::encode(out.public_key),
+                        amount: owned_amount,
+                    }
+                })
+                .collect();
+
+            let recipient_addr = recipient.default_subaddress();
+            let req = SignRequest {
+                spend_private_key: hex::encode(sender.spend_private_key().to_bytes()),
+                view_private_key: hex::encode(sender.view_private_key().to_bytes()),
+                inputs: vec![SpendInput {
+                    target_key: hex::encode(owned.target_key),
+                    public_key: hex::encode(owned.public_key),
+                    amount: owned_amount,
+                    subaddress_index: 0,
+                    decoys,
+                }],
+                recipient: RecipientAddress {
+                    spend_public_key: hex::encode(
+                        recipient_addr.spend_public_key().to_bytes(),
+                    ),
+                    view_public_key: hex::encode(recipient_addr.view_public_key().to_bytes()),
+                    kem_public_key: hex::encode(
+                        recipient_kem.kem_keypair.public_key().as_bytes(),
+                    ),
+                },
+                sender_kem_public_key: hex::encode(
+                    sender_kem.kem_keypair.public_key().as_bytes(),
+                ),
+                amount: 4_000_000_000,
+                fee: MIN_TX_FEE,
+                created_at_height: 1000,
+            };
+
+            // Build + CLSAG-sign exactly as the browser does.
+            let mut sign_rng = ChaCha20Rng::from_seed({
+                let mut s = [0u8; 32];
+                rng.fill_bytes(&mut s);
+                s
+            });
+            let tx = build_and_sign_with_rng(&req, &mut sign_rng)
+                .expect("browser signer must build+sign the tx");
+
+            // Every output carries a 1088-byte ML-KEM ciphertext.
+            assert_eq!(tx.outputs.len(), 2, "recipient + change");
+            for out in &tx.outputs {
+                assert_eq!(
+                    out.kem_ciphertext.as_ref().map(|c| c.len()),
+                    Some(ML_KEM_768_CIPHERTEXT_BYTES),
+                    "browser output must carry a 1088-byte ciphertext"
+                );
+            }
+
+            // The node's SCP consensus validity gate ACCEPTS the browser-built
+            // transfer. Enforcement is active in this build (pq + 6.0.0).
+            assert!(KEM_CIPHERTEXT_ENFORCED, "test presumes 6.0.0 + pq build");
+            let validator = TransactionValidator::new(mock_chain_state());
+            validator
+                .validate_transfer_tx(&tx)
+                .expect("node must accept the browser-built transfer under 6.0.0");
+        }
     }
 
     #[test]

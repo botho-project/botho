@@ -428,8 +428,18 @@ export function netOwnedHistory(entries: HistoryEntry[]): NettedHistoryEntry[] {
 export interface BuildSendParams {
   /** Account keys derived from the wallet mnemonic. */
   keys: SignerKeys
-  /** Recipient address keys (decoded from a `tbotho://` address). */
+  /**
+   * Recipient address keys (decoded from a `botho://2/` address). Must include
+   * the recipient's raw ML-KEM-768 public key (`kem_public_key`) so the send
+   * output can be a hybrid post-quantum output (#978).
+   */
   recipient: RecipientAddress
+  /**
+   * Hex-encoded raw ML-KEM-768 public key (1184 bytes) of the SENDER's own v2
+   * address, used to encapsulate the change output back to the sender (#978).
+   * Derive it from the wallet seed via `derivePqPublicKeysFromSeed`.
+   */
+  senderKemPublicKey: string
   /** Amount to send, in picocredits. */
   amount: bigint
   /** Fee, in picocredits. Must be >= the network minimum. */
@@ -479,9 +489,19 @@ function selectInputs(owned: OwnedOutput[], target: bigint): OwnedOutput[] | nul
 export async function buildSendTransaction(
   params: BuildSendParams,
 ): Promise<BuildSendResult> {
-  const { keys, recipient, amount, fee, rpc } = params
+  const { keys, recipient, senderKemPublicKey, amount, fee, rpc } = params
 
   if (amount <= 0n) throw new Error('Amount must be greater than 0')
+  if (!recipient.kem_public_key) {
+    throw new Error(
+      'Recipient address has no ML-KEM key: it is a retired v1 / classical-only ' +
+        'address that cannot receive on the post-quantum (6.0.0) chain. Ask the ' +
+        'recipient for a current botho://2/ address.',
+    )
+  }
+  if (!senderKemPublicKey) {
+    throw new Error('Missing sender ML-KEM public key for change encapsulation')
+  }
 
   const signer = await loadSigner()
   const ringSize = signer.ringSize()
@@ -570,6 +590,7 @@ export async function buildSendTransaction(
     viewPrivateKey: keys.viewPrivateKey,
     inputs: spendInputs,
     recipient,
+    senderKemPublicKey,
     amount,
     fee,
     createdAtHeight: height,

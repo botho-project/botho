@@ -31,6 +31,7 @@ vi.mock('@botho/wasm-signer', () => ({
   spendableBalance: vi.fn().mockResolvedValue(0n),
   buildOwnedHistory: vi.fn().mockResolvedValue([]),
   buildSendTransaction: vi.fn().mockResolvedValue({ txHex: '0xstub' }),
+  deriveKemPublicKey: vi.fn().mockResolvedValue('00'.repeat(1184)),
 }))
 
 // Real-backing localStorage mock so the encrypted stores actually persist blobs
