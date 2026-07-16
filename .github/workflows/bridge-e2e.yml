@@ -150,6 +150,79 @@ jobs:
           SEPOLIA_RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
         run: ./scripts/bridge-e2e-fork.sh
 
+  # The full wBTH DeFi ROUND TRIP (#1005) — the mainnet liquidity-launch
+  # rehearsal. Joins the full-loop wrap/repatriate legs (real engine) with the
+  # Uniswap-v3 fork harness into ONE continuous journey of a coin, driven end to
+  # end against a node forking REAL Sepolia state (chain id 11155111) plus a
+  # local Botho node:
+  #   mint BTH -> wrap->wBTH (t-of-n EIP-712 Safe bridgeMint) -> fund gas +
+  #   WETH -> seed the wBTH/WETH Uniswap v3 pool + add liquidity -> swap
+  #   WETH->wBTH (the market buys) -> bridgeBurn the swap proceeds -> t-of-n
+  #   Ed25519 release to a fresh stealth output the user scans back.
+  # It asserts the peg on wrap (ADR 0003), pool + swap moved balances, the burn
+  # amount == the swap output and the released BTH == that amount to a fresh
+  # ADR-0004 output, and proof-of-reserves drift == 0 across the whole loop.
+  #
+  # workflow_dispatch ONLY and skips cleanly when SEPOLIA_RPC_URL is absent —
+  # the Uniswap periphery only exists on a Sepolia fork, and a public-RPC fork
+  # in nightly CI risks rate-limit flakiness (same discipline as
+  # ethereum-leg-sepolia-fork). The BTH leg self-skips (green) until the reserve
+  # wallet key material is provisioned (#999), same as the full-loop job. The
+  # live-Sepolia variant flips by swapping RPC + a funded key (#866/#869) — see
+  # scripts/bridge-e2e-defi-fork.sh and docs/bridge/testnet-e2e-runbook.md.
+  defi-round-trip:
+    name: DeFi round trip (Sepolia fork + local Botho, real engine + Uniswap)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for SEPOLIA_RPC_URL
+        id: rpc
+        env:
+          SEPOLIA_RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
+        run: |
+          if [[ -z "$SEPOLIA_RPC_URL" ]]; then
+            echo "::notice::SEPOLIA_RPC_URL secret is not set — skipping the DeFi"
+            echo "::notice::round-trip e2e (the Uniswap v3 periphery only exists on a"
+            echo "::notice::Sepolia fork). Provision a public/Alchemy/Infura Sepolia"
+            echo "::notice::RPC as the SEPOLIA_RPC_URL repo secret to run it."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node
+        if: steps.rpc.outputs.present == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: contracts/ethereum/package-lock.json
+
+      - name: Install Rust
+        if: steps.rpc.outputs.present == 'true'
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-03
+
+      - name: Install Foundry (anvil)
+        if: steps.rpc.outputs.present == 'true'
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Cache cargo
+        if: steps.rpc.outputs.present == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: bridge-e2e-defi-round-trip
+
+      - name: Run DeFi round-trip e2e
+        if: steps.rpc.outputs.present == 'true'
+        env:
+          SEPOLIA_RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
+        run: ./scripts/bridge-e2e-defi-fork.sh
+
   # The live-testnet BTH -> wBTH -> burn -> BTH round trip is a MANUAL
   # drill for now: it needs funded Gnosis Safes + Sepolia ETH (#866/#868),
   # and the BTH live transports (#856). The local variant of this same loop

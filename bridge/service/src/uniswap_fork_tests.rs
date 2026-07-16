@@ -244,6 +244,267 @@ fn full_range_ticks(fee: u32) -> (i32, i32) {
     (lower, upper)
 }
 
+// ---------------------------------------------------------------------------
+// Reusable harness helpers (#1005): the Uniswap v3 pool-seed + swap primitive,
+// factored out of the inline test below so the DeFi round-trip e2e
+// (`defi_round_trip_tests.rs`) drives the SAME real-periphery path. Kept
+// `pub(crate)` — internal to the bridge service test tree.
+// ---------------------------------------------------------------------------
+
+/// The real (forked) Uniswap v3 periphery + WETH, resolved from env with the
+/// canonical Sepolia values as defaults (the fork -> live flip point).
+pub(crate) struct UniswapV3Env {
+    pub factory: Address,
+    pub position_manager: Address,
+    pub swap_router: Address,
+    pub weth: Address,
+}
+
+/// Resolve the Uniswap v3 periphery + WETH addresses from env (canonical
+/// Sepolia defaults). The same struct flips to a live pool by swapping env.
+pub(crate) fn uniswap_v3_env() -> UniswapV3Env {
+    UniswapV3Env {
+        factory: env_addr("BRIDGE_UNISWAP_FACTORY", DEFAULT_FACTORY),
+        position_manager: env_addr("BRIDGE_UNISWAP_POSITION_MANAGER", DEFAULT_POSITION_MANAGER),
+        swap_router: env_addr("BRIDGE_UNISWAP_SWAP_ROUTER", DEFAULT_SWAP_ROUTER),
+        weth: env_addr("BRIDGE_WETH_ADDRESS", DEFAULT_WETH),
+    }
+}
+
+/// Result of seeding the pool + adding two-sided liquidity.
+pub(crate) struct LiquidityResult {
+    pub pool: Address,
+    pub liquidity: u128,
+    pub amount0: U256,
+    pub amount1: U256,
+}
+
+/// Outcome of a WETH -> wBTH swap (deltas on the swapper's balances).
+pub(crate) struct SwapResult {
+    pub wbth_out: U256,
+    pub weth_spent: U256,
+}
+
+/// Wrap `amount` wei of native ETH into WETH on the signer behind `provider`
+/// (`WETH9.deposit`). The account must already hold `amount` + gas.
+pub(crate) async fn wrap_weth(provider: &DynProvider, weth: Address, amount: U256) {
+    send_tx_value(provider, weth, IWETH9::depositCall {}.abi_encode(), amount).await;
+}
+
+/// Create the wBTH/WETH pool at a 1:1 raw price if it does not exist, then add
+/// a full-range two-sided position of `wbth_amount` wBTH + `weth_amount` WETH
+/// from the signer behind `provider` (which must hold both balances). Returns
+/// the pool address and the minted liquidity. The exact price is not
+/// load-bearing for a full-range position — a 1:1 interior guarantees both
+/// sides are consumed.
+pub(crate) async fn create_pool_and_add_liquidity(
+    provider: &DynProvider,
+    uni: &UniswapV3Env,
+    wbth: Address,
+    lp_addr: Address,
+    wbth_amount: U256,
+    weth_amount: U256,
+    fee: u32,
+) -> LiquidityResult {
+    let weth = uni.weth;
+    // Sort into token0/token1 and map the desired amounts to the sorted slots.
+    let (token0, token1, amount0, amount1) = if wbth < weth {
+        (wbth, weth, wbth_amount, weth_amount)
+    } else {
+        (weth, wbth, weth_amount, wbth_amount)
+    };
+    let (tick_lower, tick_upper) = full_range_ticks(fee);
+    let sqrt_price_x96: U160 = U160::from(1u8) << 96;
+
+    send_tx(
+        provider,
+        uni.position_manager,
+        INonfungiblePositionManager::createAndInitializePoolIfNecessaryCall {
+            token0,
+            token1,
+            fee: U24::from(fee),
+            sqrtPriceX96: sqrt_price_x96,
+        }
+        .abi_encode(),
+    )
+    .await;
+
+    // Confirm the pool now exists in the factory.
+    let pool_ret = provider
+        .call(
+            TransactionRequest::default()
+                .with_to(uni.factory)
+                .with_input(
+                    IUniswapV3Factory::getPoolCall {
+                        tokenA: token0,
+                        tokenB: token1,
+                        fee: U24::from(fee),
+                    }
+                    .abi_encode(),
+                ),
+        )
+        .await
+        .expect("getPool call");
+    let pool = IUniswapV3Factory::getPoolCall::abi_decode_returns(&pool_ret).expect("pool address");
+    assert_ne!(
+        pool,
+        Address::ZERO,
+        "factory.getPool returned the zero address"
+    );
+
+    // Approve both tokens to the position manager.
+    send_tx(
+        provider,
+        token0,
+        IERC20::approveCall {
+            spender: uni.position_manager,
+            amount: U256::MAX,
+        }
+        .abi_encode(),
+    )
+    .await;
+    send_tx(
+        provider,
+        token1,
+        IERC20::approveCall {
+            spender: uni.position_manager,
+            amount: U256::MAX,
+        }
+        .abi_encode(),
+    )
+    .await;
+
+    let mint_params = INonfungiblePositionManager::MintParams {
+        token0,
+        token1,
+        fee: U24::from(fee),
+        tickLower: I24::try_from(tick_lower).expect("tickLower fits i24"),
+        tickUpper: I24::try_from(tick_upper).expect("tickUpper fits i24"),
+        amount0Desired: amount0,
+        amount1Desired: amount1,
+        amount0Min: U256::ZERO,
+        amount1Min: U256::ZERO,
+        recipient: lp_addr,
+        deadline: U256::from(u64::MAX),
+    };
+    let mint_input = INonfungiblePositionManager::mintCall {
+        params: mint_params,
+    }
+    .abi_encode();
+
+    // Simulate the mint to read the minted liquidity (a state-changing call
+    // returns nothing usable from the receipt), then apply it on-chain.
+    let mint_ret = provider
+        .call(
+            TransactionRequest::default()
+                .with_from(lp_addr)
+                .with_to(uni.position_manager)
+                .with_input(mint_input.clone()),
+        )
+        .await
+        .expect("mint simulates");
+    let minted =
+        INonfungiblePositionManager::mintCall::abi_decode_returns(&mint_ret).expect("mint return");
+    send_tx(provider, uni.position_manager, mint_input).await;
+
+    LiquidityResult {
+        pool,
+        liquidity: minted.liquidity,
+        amount0: minted.amount0,
+        amount1: minted.amount1,
+    }
+}
+
+/// Swap `amount_in` WETH -> wBTH through the real `SwapRouter02` from the
+/// signer behind `provider`, returning the balance deltas. Approves WETH to
+/// the router first.
+pub(crate) async fn swap_weth_for_wbth(
+    provider: &DynProvider,
+    uni: &UniswapV3Env,
+    wbth: Address,
+    recipient: Address,
+    amount_in: U256,
+    fee: u32,
+) -> SwapResult {
+    send_tx(
+        provider,
+        uni.weth,
+        IWETH9::approveCall {
+            spender: uni.swap_router,
+            amount: U256::MAX,
+        }
+        .abi_encode(),
+    )
+    .await;
+
+    let wbth_before = call_u256(
+        provider,
+        wbth,
+        IERC20::balanceOfCall { account: recipient }.abi_encode(),
+    )
+    .await;
+    let weth_before = call_u256(
+        provider,
+        uni.weth,
+        IWETH9::balanceOfCall { account: recipient }.abi_encode(),
+    )
+    .await;
+
+    send_tx(
+        provider,
+        uni.swap_router,
+        ISwapRouter02::exactInputSingleCall {
+            params: ISwapRouter02::ExactInputSingleParams {
+                tokenIn: uni.weth,
+                tokenOut: wbth,
+                fee: U24::from(fee),
+                recipient,
+                amountIn: amount_in,
+                amountOutMinimum: U256::ZERO,
+                sqrtPriceLimitX96: U160::ZERO,
+            },
+        }
+        .abi_encode(),
+    )
+    .await;
+
+    let wbth_after = call_u256(
+        provider,
+        wbth,
+        IERC20::balanceOfCall { account: recipient }.abi_encode(),
+    )
+    .await;
+    let weth_after = call_u256(
+        provider,
+        uni.weth,
+        IWETH9::balanceOfCall { account: recipient }.abi_encode(),
+    )
+    .await;
+
+    SwapResult {
+        wbth_out: wbth_after - wbth_before,
+        weth_spent: weth_before - weth_after,
+    }
+}
+
+/// Whether the resolved Uniswap factory address actually has deployed code at
+/// the connected node — false on a plain local dev chain (31337) where the
+/// canonical Sepolia periphery does not exist. The round-trip e2e uses this to
+/// self-skip cleanly when pointed at a non-fork node (#1005).
+pub(crate) async fn uniswap_periphery_present(provider: &DynProvider, uni: &UniswapV3Env) -> bool {
+    let has_code = |addr: Address| async move {
+        provider
+            .get_code_at(addr)
+            .await
+            .map(|code| !code.is_empty())
+            .unwrap_or(false)
+    };
+    has_code(uni.factory).await
+        && has_code(uni.position_manager).await
+        && has_code(uni.swap_router).await
+        && has_code(uni.weth).await
+}
+
 /// The Uniswap-v3 fork harness: pool create + two-sided liquidity + swap
 /// against the real forked Sepolia periphery. Requires a fork node — see the
 /// module docs. Self-skips cleanly when no node is reachable.
@@ -286,10 +547,8 @@ async fn uniswap_fork_pool_create_add_liquidity_and_swap() {
     fund_dev_accounts_if_requested(&deploy_provider).await;
 
     // ---- Resolve the real (forked) Uniswap periphery + WETH -------------
-    let factory = env_addr("BRIDGE_UNISWAP_FACTORY", DEFAULT_FACTORY);
-    let position_manager = env_addr("BRIDGE_UNISWAP_POSITION_MANAGER", DEFAULT_POSITION_MANAGER);
-    let swap_router = env_addr("BRIDGE_UNISWAP_SWAP_ROUTER", DEFAULT_SWAP_ROUTER);
-    let weth = env_addr("BRIDGE_WETH_ADDRESS", DEFAULT_WETH);
+    let uni = uniswap_v3_env();
+    let weth = uni.weth;
 
     // ---- Deploy a throwaway wBTH; deployer holds MINTER_ROLE ------------
     // (admin / minter / pauser) — deployer as minter so it can mint directly.
@@ -323,204 +582,56 @@ async fn uniswap_fork_pool_create_add_liquidity_and_swap() {
 
     // Wrap 1 ETH -> WETH (the LP was funded above / already funded locally).
     let one_eth = U256::from(1_000_000_000_000_000_000u64);
-    send_tx_value(
-        &lp_provider,
-        weth,
-        IWETH9::depositCall {}.abi_encode(),
-        one_eth,
-    )
-    .await;
+    wrap_weth(&lp_provider, weth, one_eth).await;
 
-    // ---- Sort into token0/token1 and pick a fee tier --------------------
-    let (token0, token1) = if wbth < weth {
-        (wbth, weth)
-    } else {
-        (weth, wbth)
-    };
     let fee: u32 = 3000; // 0.30% tier, tick spacing 60
-    let (tick_lower, tick_upper) = full_range_ticks(fee);
 
-    // Initialize at a 1:1 raw price: sqrtPriceX96 = sqrt(1) * 2^96 = 2^96.
-    // Full-range liquidity means the exact price is not load-bearing; a 1:1
-    // interior price simply guarantees both sides are consumed two-sided.
-    let sqrt_price_x96: U160 = U160::from(1u8) << 96;
-    send_tx(
-        &lp_provider,
-        position_manager,
-        INonfungiblePositionManager::createAndInitializePoolIfNecessaryCall {
-            token0,
-            token1,
-            fee: U24::from(fee),
-            sqrtPriceX96: sqrt_price_x96,
-        }
-        .abi_encode(),
-    )
-    .await;
-
-    // Pool must now exist in the factory.
-    let pool_ret = lp_provider
-        .call(
-            TransactionRequest::default().with_to(factory).with_input(
-                IUniswapV3Factory::getPoolCall {
-                    tokenA: token0,
-                    tokenB: token1,
-                    fee: U24::from(fee),
-                }
-                .abi_encode(),
-            ),
-        )
-        .await
-        .expect("getPool call");
-    let pool = IUniswapV3Factory::getPoolCall::abi_decode_returns(&pool_ret).expect("pool address");
-    assert_ne!(
-        pool,
-        Address::ZERO,
-        "factory.getPool returned the zero address"
-    );
-
-    // ---- Approve both tokens to the position manager, then mint ---------
-    send_tx(
-        &lp_provider,
-        token0,
-        IERC20::approveCall {
-            spender: position_manager,
-            amount: U256::MAX,
-        }
-        .abi_encode(),
-    )
-    .await;
-    send_tx(
-        &lp_provider,
-        token1,
-        IERC20::approveCall {
-            spender: position_manager,
-            amount: U256::MAX,
-        }
-        .abi_encode(),
-    )
-    .await;
-
+    // ---- Create the pool + add two-sided liquidity via the shared helper --
     // Provide an equal raw amount of each token (1:1 price -> both consumed).
     // 10^17 base units: 10^17 pico wBTH (of the 2*10^17 minted) and 0.1 WETH
     // (of the 1 wrapped) — both sides funded, so the position is two-sided.
     let liq_amount = U256::from(100_000_000_000_000_000u64);
-    let mint_params = INonfungiblePositionManager::MintParams {
-        token0,
-        token1,
-        fee: U24::from(fee),
-        tickLower: I24::try_from(tick_lower).expect("tickLower fits i24"),
-        tickUpper: I24::try_from(tick_upper).expect("tickUpper fits i24"),
-        amount0Desired: liq_amount,
-        amount1Desired: liq_amount,
-        amount0Min: U256::ZERO,
-        amount1Min: U256::ZERO,
-        recipient: lp_addr,
-        deadline: U256::from(u64::MAX),
-    };
-    let mint_input = INonfungiblePositionManager::mintCall {
-        params: mint_params,
-    }
-    .abi_encode();
-
-    // Simulate the mint to read the minted liquidity (a state-changing call
-    // returns nothing usable from the receipt), then apply it on-chain.
-    let mint_ret = lp_provider
-        .call(
-            TransactionRequest::default()
-                .with_from(lp_addr)
-                .with_to(position_manager)
-                .with_input(mint_input.clone()),
-        )
-        .await
-        .expect("mint simulates");
-    let minted =
-        INonfungiblePositionManager::mintCall::abi_decode_returns(&mint_ret).expect("mint return");
-    assert!(minted.liquidity > 0, "minted position has zero liquidity");
-    assert!(minted.amount0 > U256::ZERO, "token0 side not funded");
-    assert!(minted.amount1 > U256::ZERO, "token1 side not funded");
-    send_tx(&lp_provider, position_manager, mint_input).await;
-
-    // ---- Swap WETH -> wBTH through the real router ----------------------
-    send_tx(
+    let liq = create_pool_and_add_liquidity(
         &lp_provider,
-        weth,
-        IWETH9::approveCall {
-            spender: swap_router,
-            amount: U256::MAX,
-        }
-        .abi_encode(),
+        &uni,
+        wbth,
+        lp_addr,
+        liq_amount,
+        liq_amount,
+        fee,
     )
     .await;
+    assert!(liq.liquidity > 0, "minted position has zero liquidity");
+    assert!(liq.amount0 > U256::ZERO, "token0 side not funded");
+    assert!(liq.amount1 > U256::ZERO, "token1 side not funded");
 
+    // ---- Swap WETH -> wBTH through the real router (shared helper) --------
+    // 0.01 WETH in (leaves plenty after the 0.1 WETH provided as liquidity).
+    let amount_in = U256::from(10_000_000_000_000_000u64);
     let wbth_before = call_u256(
         &lp_provider,
         wbth,
         IERC20::balanceOfCall { account: lp_addr }.abi_encode(),
     )
     .await;
-    let weth_before = call_u256(
-        &lp_provider,
-        weth,
-        IWETH9::balanceOfCall { account: lp_addr }.abi_encode(),
-    )
-    .await;
-
-    // 0.01 WETH in (leaves plenty after the 0.1 WETH provided as liquidity).
-    let amount_in = U256::from(10_000_000_000_000_000u64);
-    send_tx(
-        &lp_provider,
-        swap_router,
-        ISwapRouter02::exactInputSingleCall {
-            params: ISwapRouter02::ExactInputSingleParams {
-                tokenIn: weth,
-                tokenOut: wbth,
-                fee: U24::from(fee),
-                recipient: lp_addr,
-                amountIn: amount_in,
-                amountOutMinimum: U256::ZERO,
-                sqrtPriceLimitX96: U160::ZERO,
-            },
-        }
-        .abi_encode(),
-    )
-    .await;
-
-    let wbth_after = call_u256(
-        &lp_provider,
-        wbth,
-        IERC20::balanceOfCall { account: lp_addr }.abi_encode(),
-    )
-    .await;
-    let weth_after = call_u256(
-        &lp_provider,
-        weth,
-        IWETH9::balanceOfCall { account: lp_addr }.abi_encode(),
-    )
-    .await;
-
-    assert!(
-        wbth_after > wbth_before,
-        "swap did not increase wBTH ({wbth_before} -> {wbth_after})"
-    );
-    assert!(
-        weth_after < weth_before,
-        "swap did not decrease WETH ({weth_before} -> {weth_after})"
-    );
+    let swap = swap_weth_for_wbth(&lp_provider, &uni, wbth, lp_addr, amount_in, fee).await;
+    assert!(swap.wbth_out > U256::ZERO, "swap did not increase wBTH");
     assert_eq!(
-        weth_before - weth_after,
-        amount_in,
+        swap.weth_spent, amount_in,
         "exactInputSingle spent exactly amountIn WETH"
     );
-    let swapped_wbth = wbth_after - wbth_before;
+    let swapped_wbth = swap.wbth_out;
     eprintln!(
-        "uniswap fork: pool {pool:#x}, minted liquidity {}, swapped in {amount_in} WETH -> {swapped_wbth} wBTH",
-        minted.liquidity
+        "uniswap fork: pool {:#x}, minted liquidity {}, swapped in {amount_in} WETH -> {swapped_wbth} wBTH",
+        liq.pool, liq.liquidity
     );
 
     // ---- The swapped wBTH is a normal ERC-20 balance the user can redeem -
-    // Prove it: bridgeBurn the swap proceeds (the repatriation hook #1005 will
-    // wire) and confirm the balance drops — closing the DeFi round trip's
-    // "purchase wBTH, then send it home" half.
+    // Prove it: bridgeBurn the swap proceeds (the repatriation hook the
+    // round-trip e2e #1005 wires through the real engine) and confirm the
+    // balance drops — closing the DeFi round trip's "purchase wBTH, then send
+    // it home" half.
+    let wbth_after = wbth_before + swapped_wbth;
     send_tx(
         &lp_provider,
         wbth,
