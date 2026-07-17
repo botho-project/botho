@@ -244,8 +244,32 @@ pub struct Database {
 #[allow(dead_code)]
 impl Database {
     /// Open or create the database.
+    ///
+    /// The connection is opened in WAL mode with a busy timeout so that
+    /// SEVERAL bridge-service processes can share one database file — the
+    /// single-host federation topology the #868 testnet drill runs (N
+    /// instances, each with its own attestation key, coordinating through
+    /// the shared order store while exchanging envelopes over the wire).
+    /// The exactly-once submission guards (`record_mint_submitted` /
+    /// `record_release_tx`) already arbitrate multi-writer races at the
+    /// row level; WAL + a busy timeout make the underlying file access
+    /// safe across processes instead of failing fast with SQLITE_BUSY.
     pub fn open(path: &str) -> Result<Self, String> {
         let conn = Connection::open(path).map_err(|e| format!("Failed to open database: {}", e))?;
+
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| format!("Failed to set busy timeout: {}", e))?;
+        // `PRAGMA journal_mode=WAL` returns the resulting mode as a row.
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))
+            .map_err(|e| format!("Failed to enable WAL mode: {}", e))?;
+        if !mode.eq_ignore_ascii_case("wal") {
+            // Non-fatal: some filesystems (e.g. network mounts) refuse WAL.
+            // Single-process deployments work fine in rollback mode.
+            tracing::warn!(
+                "database journal_mode is {mode}, not WAL; multi-process sharing unsafe"
+            );
+        }
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
