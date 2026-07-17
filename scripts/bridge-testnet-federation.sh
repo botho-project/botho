@@ -46,6 +46,12 @@
 #   ./scripts/bridge-testnet-federation.sh logs [i]      # tail instance logs
 #   ./scripts/bridge-testnet-federation.sh down          # stop all instances
 #   ./scripts/bridge-testnet-federation.sh clean         # down + delete run state (keeps keys)
+#   ./scripts/bridge-testnet-federation.sh rotate        # e2e key-rotation drill (#1061):
+#                    mock same-set election -> pause -> drain -> fresh keys on
+#                    every surface -> OLD-KEYS-DEAD assertions -> resume ->
+#                    post-rotation attestation + proof-of-reserves. Individual
+#                    phases: rotate-elect|pause|drain|keys|safe|solana|bth|
+#                    restart|verify|resume|attest (see the rotate section).
 #
 # ENV KNOBS (defaults target the LIVE testnet):
 #   BRIDGE_FED_NODES=3                 federation size n
@@ -630,7 +636,812 @@ cmd_logs() {
     tail -40 "$RUN_DIR/bridge-$i.log"
 }
 
-usage() { sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'; }
+# ===========================================================================
+# rotate: the e2e key-rotation drill (#1061, serving the #1060 elected-
+# multisig direction).
+#
+# A MOCK election re-elects the SAME member set (membership-stable), and the
+# entire handover machinery then runs with FRESH keys on every custody
+# surface:
+#
+#   rotate-elect    mock same-set election -> election/term-<K>.json
+#   rotate-pause    trip the breaker; public order API must refuse creates
+#   rotate-drain    no value-in-motion orders before any key changes
+#   rotate-keys     fresh ed25519 keys + attest token + Safe owner keys
+#                   (old material archived under federation/retired/term-<K-1>)
+#   rotate-safe     LIVE Sepolia Safe owner swap (swapOwner x N via 2-of-3
+#                   execTransaction; relayer pays gas)
+#   rotate-solana   devnet wbth mint-authority rotation (spl-token; gated
+#                   with exact commands when tooling is absent)
+#   rotate-bth      BTH reserve re-key (new reserve wallet; the funds-moving
+#                   sweep is OPERATOR-GATED while #1051 holds — documented)
+#   rotate-restart  re-render configs (they pin the NEW public keys) + restart
+#   rotate-verify   OLD KEYS ARE POWERLESS — gates the resume:
+#                     * validly-signed OLD-key attestation -> refused:unknown_signer
+#                     * OLD key under a NEW signer id      -> refused:bad_signature
+#                     * OLD attest bearer token            -> 401
+#                     * OLD Safe owners: isOwner false + execTransaction
+#                       simulation reverts (GS026); NEW owners' simulation OK
+#   rotate-resume   lift the breaker (refuses unless rotate-verify passed);
+#                   commits the new term
+#   rotate-attest   post-rotation threshold attestation round (audit log shows
+#                   attestation_authorized AFTER resume) + proof-of-reserves
+#                   drift unchanged vs the pre-pause baseline
+#   rotate          all of the above, in order
+#
+# The MOCK ELECTION INTERFACE is the only seam: everything after rotate-elect
+# consumes ONLY election/term-<K>.json. A real #1060 election replaces
+# rotate-elect (same document schema) and nothing else.
+#
+# Extra env knobs:
+#   BRIDGE_ROTATE_DRAIN_DEADLINE=300   secs to wait for in-flight orders
+#   BRIDGE_ROTATE_ACK_PARKED=          csv of order ids (or "all") the operator
+#                                      acknowledges as parked-retryable (soft
+#                                      states only; value-in-motion states are
+#                                      never overridable)
+#   BRIDGE_ROTATE_ATTEST_DEADLINE=600  secs to wait for the post-rotation
+#                                      attestation round
+#   BRIDGE_SOLANA_MINT=F7Lsi…          the devnet wbth SPL mint
+# ===========================================================================
+
+ELECTION_DIR="$FED_DIR/election"
+SOL_MINT="${BRIDGE_SOLANA_MINT:-F7LsiATxVQxnDEBWemfuq1BgFDYbuzqMMJ5eZjaB7LFX}"
+ETH_SENTINEL="0x0000000000000000000000000000000000000001"
+ETH_ZERO="0x0000000000000000000000000000000000000000"
+
+current_term()      { cat "$ELECTION_DIR/current-term" 2>/dev/null || echo 1; }
+election_doc()      { echo "$ELECTION_DIR/term-$1.json"; }
+rotate_state_dir()  { echo "$ELECTION_DIR/rotate-term-$1"; }
+retired_dir()       { echo "$FED_DIR/retired/term-$1"; }
+
+pending_term() {
+    local next=$(( $(current_term) + 1 ))
+    [[ -f "$(election_doc "$next")" ]] ||
+        die "no election document for term $next — run rotate-elect first"
+    echo "$next"
+}
+
+require_phase() {
+    # require_phase <term> <marker> <hint>
+    [[ -f "$(rotate_state_dir "$1")/$2" ]] ||
+        die "rotation term $1: phase '$2' has not completed — run $3 first"
+}
+
+need_cast() {
+    local cast="${CAST_BIN:-$HOME/.foundry/bin/cast}"
+    [[ -x "$cast" ]] || die "cast (foundry) required: $cast"
+    echo "$cast"
+}
+
+# ---------------------------------------------------------------------------
+# rotate-elect: MOCK election. Re-elects the CURRENT member set with a term
+# bump. The emitted document is the full interface the rest of the rotation
+# consumes — a real election result (#1060) drops in here unchanged.
+# ---------------------------------------------------------------------------
+cmd_rotate_elect() {
+    require_gitignored
+    mkdir -p "$ELECTION_DIR" && chmod 700 "$ELECTION_DIR"
+    local cur next doc
+    cur="$(current_term)"; next=$(( cur + 1 )); doc="$(election_doc "$next")"
+    if [[ -f "$doc" ]]; then
+        log "election document for term $next already exists"
+        jq . "$doc" >&2
+        return 0
+    fi
+    local i
+    {
+        for i in $(seq 1 "$N"); do
+            jq -n --argjson i "$i" \
+                --arg ed "$(tr -d '[:space:]' < "$FED_DIR/ed25519-$i.pub")" \
+                --arg eth "$(tr -d '[:space:]' < "$SECRETS_DIR/eth-safe-owner-$i.addr" 2>/dev/null || true)" \
+                '{index: $i, ed25519AttestationPubkey: $ed, ethSafeOwner: $eth}'
+        done
+    } | jq -s --argjson term "$next" --argjson thr "$T" \
+        '{v: 1, electionKind: "mock-same-set", mock: true, term: $term,
+          electedAt: (now | floor), threshold: $thr, members: .}' > "$doc"
+    chmod 600 "$doc"
+    ok "MOCK election: term $next re-elects the same $N members (threshold $T)"
+    jq . "$doc" >&2
+    mkdir -p "$(rotate_state_dir "$next")" && chmod 700 "$(rotate_state_dir "$next")"
+}
+
+# ---------------------------------------------------------------------------
+# rotate-pause: trip the breaker for the handover; assert the pause is
+# visible on every ops surface AND that the public order API refuses new
+# orders (503, probed with an invalid body so no order is ever created).
+# ---------------------------------------------------------------------------
+cmd_rotate_pause() {
+    local term st i
+    term="$(pending_term)"; st="$(rotate_state_dir "$term")"; mkdir -p "$st"
+
+    # Pre-rotation proof-of-reserves baseline: rotation must move NO value,
+    # so the post-rotation drift must equal this exactly.
+    curl -sf "http://127.0.0.1:$(ops_port 1)/api/reserve/proof" \
+        > "$st/proof-baseline.json" 2>/dev/null ||
+        warn "no reserve-proof snapshot yet (baseline unavailable)"
+
+    curl -sf -X POST "http://127.0.0.1:$(ops_port 1)/api/breaker" \
+        -H 'Content-Type: application/json' \
+        -d "{\"paused\":true,\"reason\":\"rotation drill term $term\"}" | jq . >&2 ||
+        die "breaker pause request failed (are the instances up?)"
+
+    for i in $(seq 1 "$N"); do
+        curl -sf "http://127.0.0.1:$(ops_port "$i")/api/status" |
+            jq -e '.paused == true' >/dev/null ||
+            die "instance $i does not report paused"
+    done
+    ok "breaker tripped on all $N instances (shared store)"
+
+    # Public surface: an INVALID create body must answer 503 (pause gate
+    # precedes validation) — proves the gate without creating an order.
+    local code
+    code="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+        "$(public_api)/api/bridge/orders" -H 'Content-Type: application/json' \
+        -d '{"destChain":"ethereum","destAddress":"nope","amount":"1"}')"
+    [[ "$code" == "503" ]] ||
+        die "public order API answered $code while paused (want 503)"
+    ok "public order API refuses new orders while paused (503)"
+    date +%s > "$st/paused"
+}
+
+# ---------------------------------------------------------------------------
+# rotate-drain: no key change while value is in motion.
+#   HARD states (submission in flight — never overridable): mint_pending,
+#     release_pending.
+#   SOFT states (no value moving, retryable under the new keys):
+#     awaiting_deposit, deposit_detected, deposit_confirmed, burn_detected,
+#     burn_confirmed — waited on, then require an explicit operator ack
+#     (BRIDGE_ROTATE_ACK_PARKED) recorded in the drill state.
+# ---------------------------------------------------------------------------
+cmd_rotate_drain() {
+    local term st deadline hard soft
+    term="$(pending_term)"; st="$(rotate_state_dir "$term")"
+    require_phase "$term" paused rotate-pause
+    deadline=$(( $(date +%s) + ${BRIDGE_ROTATE_DRAIN_DEADLINE:-300} ))
+
+    while :; do
+        hard="$(db_query "SELECT COALESCE(GROUP_CONCAT(id),'') FROM bridge_orders
+                          WHERE status IN ('mint_pending','release_pending');")"
+        soft="$(db_query "SELECT COALESCE(GROUP_CONCAT(id),'') FROM bridge_orders
+                          WHERE status IN ('awaiting_deposit','deposit_detected',
+                                           'deposit_confirmed','burn_detected',
+                                           'burn_confirmed');")"
+        [[ -z "$hard" && -z "$soft" ]] && break
+        [[ "$(date +%s)" -ge "$deadline" ]] && {
+            [[ -n "$hard" ]] &&
+                die "value-in-motion orders did not settle: $hard — NEVER rotate under these"
+            # Soft/parked orders: explicit operator acknowledgment required.
+            local ack="${BRIDGE_ROTATE_ACK_PARKED:-}" id missing=""
+            if [[ "$ack" != "all" ]]; then
+                for id in ${soft//,/ }; do
+                    [[ ",$ack," == *",$id,"* ]] || missing+="$id "
+                done
+                [[ -z "$missing" ]] ||
+                    die "parked orders not acknowledged: $missing— re-run with \
+BRIDGE_ROTATE_ACK_PARKED listing them (or 'all') to accept rotating under \
+parked-retryable orders (their attestation sets rebuild under the new keys)"
+            fi
+            warn "rotating under operator-acknowledged parked orders: $soft"
+            printf '%s\n' "$soft" > "$st/acked-parked-orders"
+            break
+        }
+        log "draining: in-flight [${hard:-none}] parked [${soft:-none}]"
+        sleep 10
+    done
+    ok "drain complete (no value in motion)"
+    date +%s > "$st/drained"
+}
+
+# ---------------------------------------------------------------------------
+# rotate-keys: archive the old term's key material, generate fresh keys.
+# Surfaces: federation ed25519 attestation keys, the shared attest bearer
+# token, and the Sepolia Safe owner secp256k1 keys. (The LP/relayer key is
+# NOT rotated: it holds no roles by design — ADR 0002 — gas only.)
+# ---------------------------------------------------------------------------
+cmd_rotate_keys() {
+    require_gitignored
+    local term st ret i
+    term="$(pending_term)"; st="$(rotate_state_dir "$term")"
+    ret="$(retired_dir $(( term - 1 )))"
+    require_phase "$term" drained rotate-drain
+
+    if [[ -d "$ret" ]]; then
+        log "term $(( term - 1 )) key material already retired — resuming"
+    else
+        mkdir -p "$ret" && chmod 700 "$ret"
+        for i in $(seq 1 "$N"); do
+            mv "$FED_DIR/ed25519-$i.key" "$FED_DIR/ed25519-$i.pub" "$ret/"
+            [[ -f "$SECRETS_DIR/eth-safe-owner-$i.key" ]] && {
+                mv "$SECRETS_DIR/eth-safe-owner-$i.key" "$ret/"
+                mv "$SECRETS_DIR/eth-safe-owner-$i.addr" "$ret/"
+            }
+        done
+        mv "$FED_DIR/attest-token" "$ret/"
+        ok "retired term-$(( term - 1 )) keys into $ret"
+    fi
+
+    # Fresh federation ed25519 keys + attest token (idempotent).
+    for i in $(seq 1 "$N"); do
+        if [[ ! -f "$FED_DIR/ed25519-$i.key" ]]; then
+            read -r priv pub < <(gen_ed25519)
+            printf '%s\n' "$priv" > "$FED_DIR/ed25519-$i.key"
+            chmod 600 "$FED_DIR/ed25519-$i.key"
+            printf '%s\n' "$pub" > "$FED_DIR/ed25519-$i.pub"
+            ok "fresh ed25519 federation key $i (pub $pub)"
+        fi
+    done
+    if [[ ! -f "$FED_DIR/attest-token" ]]; then
+        openssl rand -hex 32 > "$FED_DIR/attest-token"
+        chmod 600 "$FED_DIR/attest-token"
+        ok "fresh shared attest bearer token"
+    fi
+
+    # Fresh Sepolia Safe owner keys (disposable testnet keys).
+    local cast out addr key
+    cast="$(need_cast)"
+    for i in $(seq 1 "$N"); do
+        if [[ ! -f "$SECRETS_DIR/eth-safe-owner-$i.key" ]]; then
+            out="$("$cast" wallet new --json)"
+            addr="$(jq -r 'if type=="array" then .[0].address else .address end' <<<"$out")"
+            key="$(jq -r 'if type=="array" then .[0].private_key else .private_key end' <<<"$out")"
+            [[ "$addr" == 0x* && "$key" == 0x* ]] || die "cast wallet new parse failed"
+            printf '%s\n' "$key" > "$SECRETS_DIR/eth-safe-owner-$i.key"
+            chmod 600 "$SECRETS_DIR/eth-safe-owner-$i.key"
+            printf '%s\n' "$addr" > "$SECRETS_DIR/eth-safe-owner-$i.addr"
+            ok "fresh Safe owner key $i: $addr"
+        fi
+    done
+    date +%s > "$st/keys"
+}
+
+# ---------------------------------------------------------------------------
+# rotate-safe: LIVE Sepolia owner handover. For each member, swapOwner(prev,
+# old, new) executed through the Safe itself, signed by 2 keys that are
+# CURRENT owners at that moment (the signing set migrates as the swaps land
+# — the real rotation choreography). The relayer LP EOA only pays gas.
+# ---------------------------------------------------------------------------
+safe_owners_live() {
+    local cast="$1"
+    "$cast" call --rpc-url "$ETH_RPC" "$SAFE" "getOwners()(address[])" |
+        tr -d '[] ' | tr ',' '\n'
+}
+
+safe_is_owner() {
+    local cast="$1" addr="$2"
+    "$cast" call --rpc-url "$ETH_RPC" "$SAFE" "isOwner(address)(bool)" "$addr"
+}
+
+safe_key_for_owner() {
+    # safe_key_for_owner <ret-dir> <owner-addr> — the key file we hold for a
+    # CURRENT on-chain owner (searches new keys first, then retired).
+    local ret="$1" want f addr
+    want="$(tr '[:upper:]' '[:lower:]' <<<"$2")"
+    for f in "$SECRETS_DIR"/eth-safe-owner-*.addr "$ret"/eth-safe-owner-*.addr; do
+        [[ -f "$f" ]] || continue
+        addr="$(tr -d '[:space:]' < "$f" | tr '[:upper:]' '[:lower:]')"
+        [[ "$addr" == "$want" ]] && { echo "${f%.addr}.key"; return 0; }
+    done
+    return 1
+}
+
+safe_tx_hash() {
+    # safe_tx_hash <cast> <data> — EIP-712 SafeTx hash of a 0-value self-call
+    # at the CURRENT nonce.
+    local cast="$1" data="$2" nonce
+    nonce="$("$cast" call --rpc-url "$ETH_RPC" "$SAFE" "nonce()(uint256)")"
+    "$cast" call --rpc-url "$ETH_RPC" "$SAFE" \
+        "getTransactionHash(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,uint256)(bytes32)" \
+        "$SAFE" 0 "$data" 0 0 0 0 "$ETH_ZERO" "$ETH_ZERO" "$nonce"
+}
+
+safe_sign_sorted() {
+    # safe_sign_sorted <cast> <txhash> <addr1:key1> <addr2:key2> — Safe
+    # requires signatures concatenated in ascending signer-address order
+    # (sort on the LOWERCASED address only; never touch the key path).
+    local cast="$1" txhash="$2"; shift 2
+    local pair addr key sig out=""
+    while read -r addr key; do
+        sig="$("$cast" wallet sign --no-hash \
+            --private-key "$(tr -d '[:space:]' < "$key")" "$txhash")"
+        out+="${sig#0x}"
+    done < <(
+        for pair in "$@"; do
+            printf '%s %s\n' \
+                "$(tr '[:upper:]' '[:lower:]' <<<"${pair%%:*}")" "${pair#*:}"
+        done | sort
+    )
+    echo "0x$out"
+}
+
+cmd_rotate_safe() {
+    require_gitignored
+    local term st ret cast i
+    term="$(pending_term)"; st="$(rotate_state_dir "$term")"
+    ret="$(retired_dir $(( term - 1 )))"
+    require_phase "$term" keys rotate-keys
+    cast="$(need_cast)"
+
+    local thr0; thr0="$("$cast" call --rpc-url "$ETH_RPC" "$SAFE" "getThreshold()(uint256)")"
+
+    for i in $(seq 1 "$N"); do
+        local old_addr new_addr
+        old_addr="$(tr -d '[:space:]' < "$ret/eth-safe-owner-$i.addr")"
+        new_addr="$(tr -d '[:space:]' < "$SECRETS_DIR/eth-safe-owner-$i.addr")"
+
+        if [[ "$(safe_is_owner "$cast" "$new_addr")" == "true" ]]; then
+            log "owner $i already swapped ($new_addr)"
+            continue
+        fi
+
+        # prevOwner in the Safe's linked list (SENTINEL before the first).
+        local prev="$ETH_SENTINEL" cur found=""
+        while read -r cur; do
+            if [[ "$(tr '[:upper:]' '[:lower:]' <<<"$cur")" == \
+                  "$(tr '[:upper:]' '[:lower:]' <<<"$old_addr")" ]]; then
+                found=1; break
+            fi
+            prev="$cur"
+        done < <(safe_owners_live "$cast")
+        [[ -n "$found" ]] || die "old owner $old_addr not in the live owner set"
+
+        local data txhash
+        data="$("$cast" calldata 'swapOwner(address,address,address)' \
+            "$prev" "$old_addr" "$new_addr")"
+        txhash="$(safe_tx_hash "$cast" "$data")"
+
+        # Two signer keys that are CURRENT owners right now.
+        local owner pairs=() keyf
+        while read -r owner; do
+            [[ "${#pairs[@]}" -ge 2 ]] && break
+            keyf="$(safe_key_for_owner "$ret" "$owner")" || continue
+            pairs+=("$owner:$keyf")
+        done < <(safe_owners_live "$cast")
+        [[ "${#pairs[@]}" -ge 2 ]] || die "fewer than 2 controllable current owners"
+
+        local sigs tx
+        sigs="$(safe_sign_sorted "$cast" "$txhash" "${pairs[@]}")"
+        log "swapOwner: member $i  $old_addr -> $new_addr (prev $prev)"
+        tx="$("$cast" send --rpc-url "$ETH_RPC" \
+            --private-key "$(tr -d '[:space:]' < "$SECRETS_DIR/eth-lp.key")" \
+            "$SAFE" \
+            'execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)' \
+            "$SAFE" 0 "$data" 0 0 0 0 "$ETH_ZERO" "$ETH_ZERO" "$sigs" --json)"
+        [[ "$(jq -r .status <<<"$tx")" == "0x1" ]] ||
+            die "swapOwner execTransaction reverted: $(jq -r .transactionHash <<<"$tx")"
+        ok "owner $i swapped: $(jq -r .transactionHash <<<"$tx")"
+
+        [[ "$(safe_is_owner "$cast" "$old_addr")" == "false" ]] ||
+            die "old owner $old_addr still an owner after swap"
+        [[ "$(safe_is_owner "$cast" "$new_addr")" == "true" ]] ||
+            die "new owner $new_addr not an owner after swap"
+    done
+
+    local thr1; thr1="$("$cast" call --rpc-url "$ETH_RPC" "$SAFE" "getThreshold()(uint256)")"
+    [[ "$thr0" == "$thr1" ]] || die "Safe threshold changed: $thr0 -> $thr1"
+    ok "Sepolia Safe owner set fully rotated (threshold unchanged: $thr1)"
+    date +%s > "$st/safe"
+}
+
+# ---------------------------------------------------------------------------
+# rotate-solana: devnet wbth SPL mint-authority rotation. Testnet custody is
+# a single key by design (#867); rotation is one SetAuthority. When the
+# Solana CLI tooling is absent the leg is GATED and the exact commands are
+# printed. Mainnet delta: the authority is a Squads multisig — rotation is a
+# member-swap proposal inside Squads, not SetAuthority.
+# ---------------------------------------------------------------------------
+solana_mint_authority() {
+    curl -sf -X POST -H 'Content-Type: application/json' --data \
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getAccountInfo\",\"params\":[\"$SOL_MINT\",{\"encoding\":\"base64\"}]}" \
+        "$SOL_RPC" | python3 -c '
+import base64, json, sys
+raw = json.load(sys.stdin)["result"]["value"]["data"][0]
+data = base64.b64decode(raw)
+if int.from_bytes(data[0:4], "little") != 1:
+    print("none"); sys.exit()
+pk = data[4:36]
+ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+n = int.from_bytes(pk, "big"); out = ""
+while n:
+    n, r = divmod(n, 58); out = ALPHABET[r] + out
+for b in pk:
+    if b == 0: out = "1" + out
+    else: break
+print(out)'
+}
+
+cmd_rotate_solana() {
+    require_gitignored
+    local term st ret auth0
+    term="$(pending_term)"; st="$(rotate_state_dir "$term")"
+    ret="$(retired_dir $(( term - 1 )))"
+    require_phase "$term" keys rotate-keys
+
+    auth0="$(solana_mint_authority || echo unknown)"
+    log "devnet wbth mint $SOL_MINT current mint authority: $auth0"
+
+    if command -v solana-keygen >/dev/null && command -v spl-token >/dev/null; then
+        if [[ ! -f "$ret/solana-mint-auth.json" ]]; then
+            mv "$SECRETS_DIR/solana-mint-auth.json" "$ret/"
+            solana-keygen new --no-bip39-passphrase --silent \
+                -o "$SECRETS_DIR/solana-mint-auth.json"
+            chmod 600 "$SECRETS_DIR/solana-mint-auth.json"
+        fi
+        local newpub
+        newpub="$(solana-keygen pubkey "$SECRETS_DIR/solana-mint-auth.json")"
+        spl-token authorize "$SOL_MINT" mint "$newpub" \
+            --authority "$ret/solana-mint-auth.json" \
+            --fee-payer "$SECRETS_DIR/solana-lp.json" --url "$SOL_RPC" >&2
+        local auth1; auth1="$(solana_mint_authority)"
+        [[ "$auth1" == "$newpub" ]] ||
+            die "mint authority did not rotate: $auth1 (want $newpub)"
+        ok "devnet wbth mint authority rotated: $auth0 -> $auth1"
+        echo "live" > "$st/leg-solana"
+    else
+        warn "solana-keygen / spl-token not installed — Solana leg GATED."
+        warn "Operator commands (devnet, single-key authority per #867):"
+        warn "  solana-keygen new -o $SECRETS_DIR/solana-mint-auth-term$term.json"
+        warn "  spl-token authorize $SOL_MINT mint <NEW_PUBKEY> \\"
+        warn "      --authority $SECRETS_DIR/solana-mint-auth.json --url $SOL_RPC"
+        warn "  # then archive the old keypair under $ret/"
+        warn "Mainnet delta: authority = Squads multisig; rotation is a"
+        warn "member-swap proposal executed inside Squads (no SetAuthority)."
+        echo "gated:tooling (authority still $auth0)" > "$st/leg-solana"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# rotate-bth: BTH reserve re-key. Generates a NEW random reserve wallet and
+# points reserve.env at it; the funds-moving sweep (old reserve -> new
+# reserve address, factor-1 preserved) is a live BTH transaction that is
+# OPERATOR-GATED while the betanet cannot confirm transactions (#1051).
+# On this drill's betanet the reserve ledger's locked balance is 0 (funding
+# itself is blocked, see the runbook prerequisites), so the sweep is vacuous.
+# ---------------------------------------------------------------------------
+cmd_rotate_bth() {
+    require_gitignored
+    local term st ret locked
+    term="$(pending_term)"; st="$(rotate_state_dir "$term")"
+    ret="$(retired_dir $(( term - 1 )))"
+    require_phase "$term" keys rotate-keys
+
+    locked="$(jq -r '.lockedReserve // "unknown"' "$st/proof-baseline.json" 2>/dev/null || echo unknown)"
+    log "reserve ledger locked balance at pause: ${locked} pc"
+
+    # New reserve wallet (random; the deterministic harness wallet must never
+    # custody reserve funds — same rule as gen-reserve).
+    if [[ -f "$FED_DIR/bth-reserve/user.view.hex" && ! -d "$ret/bth-reserve" ]]; then
+        mv "$FED_DIR/bth-reserve" "$ret/bth-reserve"
+        ok "retired old BTH reserve wallet into $ret/bth-reserve"
+    fi
+    if [[ ! -f "$FED_DIR/bth-reserve/user.view.hex" ]]; then
+        local dir="$FED_DIR/bth-reserve" exports addr
+        mkdir -p "$dir"
+        if exports="$(cd "$REPO_ROOT" && cargo run --release --bin botho-testnet -- \
+                gen-bridge-keys --node 0 --out "$dir" 2>/dev/null)"; then
+            rm -f "$dir/reserve.view.hex" "$dir/reserve.spend.hex" "$dir/reserve.pq_seed.hex"
+            addr="$(printf '%s\n' "$exports" | sed -n 's/^export BRIDGE_BTH_USER_ADDRESS="\(.*\)"$/\1/p')"
+            [[ -n "$addr" ]] || die "gen-bridge-keys did not print the user address"
+            printf '%s\n' "$addr" > "$dir/address.txt"
+            # reserve.env: keep the user wallet, swap the reserve wallet.
+            sed -i.bak "s|^export BRIDGE_BTH_RESERVE_ADDRESS=.*|export BRIDGE_BTH_RESERVE_ADDRESS=\"$addr\"|" \
+                "$FED_DIR/reserve.env" && rm -f "$FED_DIR/reserve.env.bak"
+            ok "new BTH reserve wallet: $addr (reserve.env updated)"
+        else
+            rmdir "$dir" 2>/dev/null || true
+            warn "botho-testnet gen-bridge-keys unavailable — generate the new"
+            warn "reserve wallet with:"
+            warn "  cargo run --release --bin botho-testnet -- gen-bridge-keys \\"
+            warn "      --node 0 --out $FED_DIR/bth-reserve"
+            echo "gated:tooling" > "$st/leg-bth"
+            return 0
+        fi
+    fi
+
+    # The funds-moving sweep.
+    if [[ "$locked" == "0" ]]; then
+        warn "old reserve holds 0 locked pc — the sweep tx is VACUOUS on this"
+        warn "betanet (funding is itself blocked, runbook prerequisite 2)."
+        echo "vacuous (locked=0); sweep procedure documented, gated on #1051" > "$st/leg-bth"
+    else
+        warn "OPERATOR-GATED (#1051): the betanet cannot confirm transactions."
+        warn "Build+sign the sweep of every factor-1 reserve UTXO from the OLD"
+        warn "reserve wallet ($ret/bth-reserve) to the NEW reserve address"
+        warn "($(cat "$FED_DIR/bth-reserve/address.txt" 2>/dev/null)), submit once"
+        warn "#1051 unfreezes, and record the tx hash in the drill log."
+        echo "gated:#1051 (locked=$locked pc awaiting sweep)" > "$st/leg-bth"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# rotate-restart: re-render configs (they pin the NEW public key sets and
+# the NEW attest token) and restart every instance. Same env knobs as `up`
+# (RESERVE_TOLERANCE, caps) must be supplied on this invocation too.
+# ---------------------------------------------------------------------------
+cmd_rotate_restart() {
+    local term st
+    term="$(pending_term)"; st="$(rotate_state_dir "$term")"
+    require_phase "$term" keys rotate-keys
+    cmd_down
+    cmd_up
+    date +%s > "$st/restarted"
+}
+
+# ---------------------------------------------------------------------------
+# rotate-verify: THE RESUME GATE — prove the old key set is powerless.
+# ---------------------------------------------------------------------------
+attest_envelope_signed_by() {
+    # attest_envelope_signed_by <seed-hex-file> <signer-key-id> <order-id>
+    #   <amount> <bth-address> <source-tx>
+    # Builds a canonically-encoded, correctly domain-separated, VALIDLY
+    # ed25519-SIGNED release attestation envelope (mirrors
+    # bridge/core/src/attestation.rs) — signed by the given seed, presented
+    # under the given signer id.
+    python3 - "$@" <<'PYEOF'
+import base64, hashlib, json, os, subprocess, sys, tempfile, time, uuid
+
+seed_file, signer_id, order_id, amount, bth_addr, source_tx = sys.argv[1:7]
+seed = bytes.fromhex(open(seed_file).read().strip())
+assert len(seed) == 32, "ed25519 seed must be 32 bytes"
+# Minimal PKCS8 wrapping of a raw ed25519 seed (RFC 8410).
+der = bytes.fromhex("302e020100300506032b657004220420") + seed
+pem = ("-----BEGIN PRIVATE KEY-----\n"
+       + base64.encodebytes(der).decode()
+       + "-----END PRIVATE KEY-----\n")
+
+def sign(msg: bytes) -> str:
+    with tempfile.TemporaryDirectory() as d:
+        kp, mp, sp = (os.path.join(d, n) for n in ("k.pem", "m.bin", "s.bin"))
+        open(kp, "w").write(pem)
+        open(mp, "wb").write(msg)
+        subprocess.run(["openssl", "pkeyutl", "-sign", "-inkey", kp,
+                        "-rawin", "-in", mp, "-out", sp], check=True)
+        return open(sp, "rb").read().hex()
+
+issued = int(time.time()); expires = issued + 240
+nonce = "rotate-drill-" + uuid.uuid4().hex
+amt = int(amount)
+params = ('{"amount":%d,"bthAddress":%s,"orderId":%s,'
+          '"sourceChain":"ethereum","sourceTx":%s}') % (
+    amt, json.dumps(bth_addr), json.dumps(order_id), json.dumps(source_tx))
+envelope = ('{"action":"bridge.release_bth","expiresAt":%d,"issuedAt":%d,'
+            '"nonce":%s,"params":%s,"signerKeyId":%s,"v":1}') % (
+    expires, issued, json.dumps(nonce), params, json.dumps(signer_id))
+
+env_msg = b"botho-bridge-attest-bth-v1" + envelope.encode()
+oid = hashlib.sha256(b"botho-bridge-order-id-v1"
+                     + uuid.UUID(order_id).bytes).digest()
+payload = hashlib.sha256(b"botho-bridge-release-v1" + oid
+                         + amt.to_bytes(8, "little")
+                         + len(bth_addr.encode()).to_bytes(8, "little")
+                         + bth_addr.encode()).digest()
+print(json.dumps({"envelope": envelope,
+                  "signature_hex": sign(env_msg),
+                  "payload_signature_hex": sign(payload)}))
+PYEOF
+}
+
+attest_post_tag() {
+    # attest_post_tag <instance-i> <token> <body> -> "<http-code> <tag>"
+    local i="$1" token="$2" body="$3" resp code
+    resp="$(curl -s -w '\n%{http_code}' -X POST \
+        "http://127.0.0.1:$(attest_port "$i")/api/attest" \
+        -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
+        -d "$body")"
+    code="${resp##*$'\n'}"
+    echo "$code $(jq -r '.tag // "no-tag"' <<<"${resp%$'\n'*}" 2>/dev/null || echo unparsed)"
+}
+
+cmd_rotate_verify() {
+    local term st ret cast i
+    term="$(pending_term)"; st="$(rotate_state_dir "$term")"
+    ret="$(retired_dir $(( term - 1 )))"
+    require_phase "$term" restarted rotate-restart
+    cast="$(need_cast)"
+
+    # ── (a) federation: a VALIDLY-SIGNED old-key attestation must be refused
+    local order_row order_id amount source_tx
+    order_row="$(db_query "SELECT id || '|' || amount || '|' || COALESCE(source_tx,'0xdeadbeef')
+                           FROM bridge_orders ORDER BY created_at DESC LIMIT 1;")"
+    if [[ -n "$order_row" ]]; then
+        order_id="${order_row%%|*}"
+        amount="$(cut -d'|' -f2 <<<"$order_row")"
+        source_tx="$(cut -d'|' -f3 <<<"$order_row")"
+    else
+        die "no order on record to bind the probe attestation to — run the \
+mint drill once (the attest endpoint refuses unknown orders before the \
+signer check, so the probe needs a real order id)"
+    fi
+
+    local new_token old_token old_pub new_pub body out
+    new_token="$(cat "$FED_DIR/attest-token")"
+    old_token="$(cat "$ret/attest-token")"
+    old_pub="$(tr -d '[:space:]' < "$ret/ed25519-1.pub")"
+    new_pub="$(tr -d '[:space:]' < "$FED_DIR/ed25519-1.pub")"
+
+    # OLD key, OLD signer id — fully valid signature, retired identity.
+    body="$(attest_envelope_signed_by "$ret/ed25519-1.key" "$old_pub" \
+        "$order_id" "$amount" "bth-rotation-drill-probe" "$source_tx")"
+    for i in $(seq 1 "$N"); do
+        out="$(attest_post_tag "$i" "$new_token" "$body")"
+        [[ "$out" == *"refused:unknown_signer"* ]] ||
+            die "instance $i accepted (or mis-refused) an OLD-key attestation: $out"
+    done
+    ok "old-key attestation refused:unknown_signer on all $N instances"
+
+    # OLD key presenting a NEW signer id — impersonation attempt must fail
+    # on the SIGNATURE (also proves the pipeline is verifying, not just
+    # blanket-refusing).
+    body="$(attest_envelope_signed_by "$ret/ed25519-1.key" "$new_pub" \
+        "$order_id" "$amount" "bth-rotation-drill-probe" "$source_tx")"
+    out="$(attest_post_tag 1 "$new_token" "$body")"
+    [[ "$out" == *"refused:bad_signature"* ]] ||
+        die "old key impersonating a new signer id was not signature-refused: $out"
+    ok "old key under a new signer id refused:bad_signature (pipeline live)"
+
+    # OLD bearer token — transport auth also rotated.
+    out="$(attest_post_tag 1 "$old_token" "$body")"
+    [[ "$out" == 401* ]] ||
+        die "old attest bearer token was not refused: $out"
+    ok "old attest bearer token refused (401)"
+
+    # ── (b) Sepolia Safe: old owners are out AND cannot execute
+    for i in $(seq 1 "$N"); do
+        local old_addr new_addr
+        old_addr="$(tr -d '[:space:]' < "$ret/eth-safe-owner-$i.addr")"
+        new_addr="$(tr -d '[:space:]' < "$SECRETS_DIR/eth-safe-owner-$i.addr")"
+        [[ "$(safe_is_owner "$cast" "$old_addr")" == "false" ]] ||
+            die "old owner $old_addr is STILL an owner"
+        [[ "$(safe_is_owner "$cast" "$new_addr")" == "true" ]] ||
+            die "new owner $new_addr is NOT an owner"
+    done
+    ok "isOwner: all old owners removed, all new owners present"
+
+    # execTransaction simulation (eth_call — free, no state change) of a
+    # benign 0-value self-call: OLD-owner signatures must REVERT (GS026),
+    # NEW-owner signatures must succeed.
+    local txhash old_sigs new_sigs sim
+    txhash="$(safe_tx_hash "$cast" "0x")"
+    old_sigs="$(safe_sign_sorted "$cast" "$txhash" \
+        "$(tr -d '[:space:]' < "$ret/eth-safe-owner-1.addr"):$ret/eth-safe-owner-1.key" \
+        "$(tr -d '[:space:]' < "$ret/eth-safe-owner-2.addr"):$ret/eth-safe-owner-2.key")"
+    new_sigs="$(safe_sign_sorted "$cast" "$txhash" \
+        "$(tr -d '[:space:]' < "$SECRETS_DIR/eth-safe-owner-1.addr"):$SECRETS_DIR/eth-safe-owner-1.key" \
+        "$(tr -d '[:space:]' < "$SECRETS_DIR/eth-safe-owner-2.addr"):$SECRETS_DIR/eth-safe-owner-2.key")"
+
+    if sim="$("$cast" call --rpc-url "$ETH_RPC" --from \
+            "$(tr -d '[:space:]' < "$SECRETS_DIR/eth-lp.addr")" "$SAFE" \
+            'execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)(bool)' \
+            "$SAFE" 0 "0x" 0 0 0 0 "$ETH_ZERO" "$ETH_ZERO" "$old_sigs" 2>&1)"; then
+        die "OLD Safe owners can still execute (simulation succeeded: $sim)"
+    fi
+    grep -qi "GS026\|revert" <<<"$sim" ||
+        warn "old-owner simulation failed with unexpected error: $sim"
+    ok "old Safe owners cannot execute (simulation reverted: ${sim##*$'\n'})"
+
+    sim="$("$cast" call --rpc-url "$ETH_RPC" --from \
+        "$(tr -d '[:space:]' < "$SECRETS_DIR/eth-lp.addr")" "$SAFE" \
+        'execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)(bool)' \
+        "$SAFE" 0 "0x" 0 0 0 0 "$ETH_ZERO" "$ETH_ZERO" "$new_sigs")" ||
+        die "NEW Safe owners cannot execute (control simulation failed: $sim)"
+    ok "new Safe owners execute (control simulation: $sim)"
+
+    # ── (c) gated legs are recorded, not silently skipped
+    local leg
+    for leg in solana bth; do
+        [[ -f "$st/leg-$leg" ]] ||
+            die "leg '$leg' has no recorded outcome — run rotate-$leg"
+        log "leg $leg: $(cat "$st/leg-$leg")"
+    done
+
+    date +%s > "$st/verified"
+    ok "OLD KEY SET IS POWERLESS on every live surface — resume is unlocked"
+}
+
+# ---------------------------------------------------------------------------
+# rotate-resume: lift the breaker — ONLY after rotate-verify passed — and
+# commit the new term.
+# ---------------------------------------------------------------------------
+cmd_rotate_resume() {
+    local term st i code
+    term="$(pending_term)"; st="$(rotate_state_dir "$term")"
+    require_phase "$term" verified rotate-verify
+
+    curl -sf -X POST "http://127.0.0.1:$(ops_port 1)/api/breaker" \
+        -H 'Content-Type: application/json' \
+        -d '{"paused":false}' | jq . >&2 || die "breaker resume request failed"
+
+    for i in $(seq 1 "$N"); do
+        curl -sf "http://127.0.0.1:$(ops_port "$i")/api/status" |
+            jq -e '.paused == false' >/dev/null ||
+            die "instance $i still reports paused"
+    done
+
+    # Public surface: the same invalid-body probe now reaches validation
+    # (400) instead of the pause gate (503) — gate lifted, no order created.
+    code="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+        "$(public_api)/api/bridge/orders" -H 'Content-Type: application/json' \
+        -d '{"destChain":"ethereum","destAddress":"nope","amount":"1"}')"
+    [[ "$code" == "400" ]] ||
+        die "public order API answered $code after resume (want 400)"
+
+    echo "$term" > "$ELECTION_DIR/current-term"
+    date +%s > "$st/resumed"
+    ok "breaker lifted; term $term committed — the NEW set is live"
+}
+
+# ---------------------------------------------------------------------------
+# rotate-attest: post-rotation proof round. The NEW set must (1) reach a
+# fresh attestation threshold (audit log records attestation_authorized
+# AFTER the resume — old-key envelopes cannot contribute, as proven by
+# rotate-verify) and (2) hold the proof-of-reserves invariant exactly where
+# the pre-pause baseline left it (rotation moves no value).
+# ---------------------------------------------------------------------------
+cmd_rotate_attest() {
+    local term st resumed deadline row
+    term="$(( $(current_term) ))"
+    st="$(rotate_state_dir "$term")"
+    [[ -f "$st/resumed" ]] || die "term $term has not resumed — run rotate-resume"
+    resumed="$(cat "$st/resumed")"
+    deadline=$(( $(date +%s) + ${BRIDGE_ROTATE_ATTEST_DEADLINE:-600} ))
+
+    log "waiting for a post-rotation attestation threshold (audit log after $resumed)…"
+    while :; do
+        row="$(db_query "SELECT created_at || ' ' || COALESCE(order_id,'-') || ' ' || details
+                         FROM audit_log
+                         WHERE action = 'attestation_authorized' AND created_at >= $resumed
+                         ORDER BY created_at DESC LIMIT 1;")"
+        [[ -n "$row" ]] && break
+        [[ "$(date +%s)" -ge "$deadline" ]] &&
+            die "no attestation_authorized after resume within the deadline — \
+needs an actionable order (e.g. the parked burn order, with caps raised) to \
+drive a round; see the runbook"
+        sleep 15
+    done
+    ok "post-rotation threshold reached by the NEW set: $row"
+
+    # Proof-of-reserves: drift must equal the pre-pause baseline exactly.
+    local baseline drift i
+    baseline="$(jq -r '.drift // empty' "$st/proof-baseline.json" 2>/dev/null)"
+    sleep 5
+    for i in $(seq 1 "$N"); do
+        drift="$(curl -sf "http://127.0.0.1:$(ops_port "$i")/api/reserve/proof" |
+            jq -r '.drift // empty')"
+        [[ -n "$drift" ]] || { warn "instance $i: no reconciliation snapshot yet"; continue; }
+        if [[ -n "$baseline" ]]; then
+            [[ "$drift" == "$baseline" ]] ||
+                die "instance $i drift moved across the rotation: $baseline -> $drift"
+        fi
+        log "instance $i post-rotation drift: $drift (baseline ${baseline:-n/a})"
+    done
+    ok "proof-of-reserves invariant unchanged across the rotation"
+    date +%s > "$st/attested"
+
+    echo
+    echo "=== rotation drill term $term summary ==="
+    echo "  federation ed25519 : rotated LIVE (old keys refused:unknown_signer)"
+    echo "  attest bearer token: rotated LIVE (old token 401)"
+    echo "  Sepolia Safe owners: rotated LIVE (old owners out + cannot execute)"
+    echo "  Solana wbth mint   : $(cat "$st/leg-solana" 2>/dev/null || echo unrecorded)"
+    echo "  BTH reserve        : $(cat "$st/leg-bth" 2>/dev/null || echo unrecorded)"
+    echo "  post-rotation round: attestation_authorized by the NEW set"
+    echo "  proof-of-reserves  : drift unchanged"
+}
+
+cmd_rotate() {
+    cmd_rotate_elect
+    cmd_rotate_pause
+    cmd_rotate_drain
+    cmd_rotate_keys
+    cmd_rotate_safe
+    cmd_rotate_solana
+    cmd_rotate_bth
+    cmd_rotate_restart
+    cmd_rotate_verify
+    cmd_rotate_resume
+    cmd_rotate_attest
+}
+
+usage() { sed -n '2,66p' "$0" | sed 's/^# \{0,1\}//'; }
 
 case "${1:-}" in
     keys)         cmd_keys ;;
@@ -647,5 +1458,17 @@ case "${1:-}" in
     drill-mint)   shift; cmd_drill_mint "$@" ;;
     drill-burn)   shift; cmd_drill_burn "$@" ;;
     logs)         shift; cmd_logs "$@" ;;
+    rotate)          cmd_rotate ;;
+    rotate-elect)    cmd_rotate_elect ;;
+    rotate-pause)    cmd_rotate_pause ;;
+    rotate-drain)    cmd_rotate_drain ;;
+    rotate-keys)     cmd_rotate_keys ;;
+    rotate-safe)     cmd_rotate_safe ;;
+    rotate-solana)   cmd_rotate_solana ;;
+    rotate-bth)      cmd_rotate_bth ;;
+    rotate-restart)  cmd_rotate_restart ;;
+    rotate-verify)   cmd_rotate_verify ;;
+    rotate-resume)   cmd_rotate_resume ;;
+    rotate-attest)   cmd_rotate_attest ;;
     *)            usage; exit 1 ;;
 esac

@@ -565,6 +565,161 @@ A production deployment starts from a genesis reserve ledger reconciled to
 any pre-existing supply (or a fresh token) so the tolerance stays 0; drill
 assertions use drift *deltas* around each leg either way.
 
+## Phase D — the key-rotation drill (#1061)
+
+Per the #1060 direction (bridge = small **elected** multisig, rotated by
+periodic elections with a tolerated outage), the federation driver carries a
+reproducible end-to-end **rotation drill**: a MOCK election re-elects the
+**same** member set — membership-stable, keys-fresh — and the entire
+handover machinery then runs with fresh keys on every custody surface. The
+same-set mock is deliberate: it needs zero election-mechanism design, yet
+exercises exactly the part that must be provably correct before any real
+election matters — the re-key handover and the *old-keys-are-dead* proof.
+
+```bash
+# with the Phase C federation up (same env knobs — tolerance, caps):
+./scripts/bridge-testnet-federation.sh rotate
+# or phase by phase:
+#   rotate-elect  rotate-pause  rotate-drain  rotate-keys  rotate-safe
+#   rotate-solana rotate-bth    rotate-restart rotate-verify
+#   rotate-resume rotate-attest
+```
+
+### The mock-election interface (the #1060 seam)
+
+`rotate-elect` writes `federation/election/term-<K>.json`:
+
+```json
+{
+  "v": 1,
+  "electionKind": "mock-same-set",
+  "mock": true,
+  "term": 2,
+  "electedAt": 1752720000,
+  "threshold": 2,
+  "members": [
+    { "index": 1, "ed25519AttestationPubkey": "…", "ethSafeOwner": "0x…" },
+    { "index": 2, "…": "…" },
+    { "index": 3, "…": "…" }
+  ]
+}
+```
+
+Everything after `rotate-elect` consumes ONLY this document (plus the key
+files it references by member index). A real #1060 election replaces
+`rotate-elect` — same schema, possibly different members — and **nothing
+else changes**. A membership-changing election additionally maps
+added/removed indices onto `addOwnerWithThreshold`/`removeOwner` instead of
+pure `swapOwner`; the drill's pause → drain → re-key → verify → resume
+skeleton is identical.
+
+### Phase order and what each step asserts
+
+| Phase | Action | Gate/assertion |
+|---|---|---|
+| `rotate-elect` | mock same-set election → term document | — |
+| `rotate-pause` | trip the breaker (shared store — all N pause) | every `/api/status` shows `paused`; the PUBLIC order API answers **503** to an order-create probe (deliberately invalid body — proves the gate with no order created). The public surface gained a READ-ONLY pause gate for exactly this (#1061): while paused the bridge must stop *accepting* orders, not merely stop settling them |
+| `rotate-drain` | wait for in-flight orders | **hard** states (`mint_pending`, `release_pending` — value in motion) are never overridable; **soft** states (`awaiting_deposit`, `deposit_*`, `burn_*` — parked, retryable) require an explicit `BRIDGE_ROTATE_ACK_PARKED` operator ack, recorded in the drill state (their attestation sets rebuild under the new keys) |
+| `rotate-keys` | archive term-`K−1` material under `federation/retired/term-<K−1>/`; fresh Ed25519 federation keys, fresh shared attest bearer token, fresh Safe-owner secp256k1 keys | all writes under the git-ignored secrets dir (`require_gitignored`); the LP/relayer key is NOT rotated — it holds no roles (ADR 0002) |
+| `rotate-safe` | LIVE Sepolia: `swapOwner(prev, old, new)` per member, executed through the Safe by 2-of-3 `execTransaction`; the signing set migrates as swaps land (swap 1 signed by old-2+old-3, swap 2 by new-1+old-3, swap 3 by new-1+new-2 — the real handover choreography) | receipt `status == 1`; `isOwner(old) == false`, `isOwner(new) == true`, threshold unchanged after every swap |
+| `rotate-solana` | devnet wbth SPL mint-authority `SetAuthority` to a fresh key (single-key testnet custody per #867) | authority re-read from chain equals the new pubkey; **gated with exact commands when Solana tooling is absent** |
+| `rotate-bth` | new random BTH reserve wallet; `reserve.env` re-pointed | the funds-moving sweep (old reserve → new reserve, factor-1 preserved) is a live BTH tx — **operator-gated while #1051 holds**; on this betanet the locked reserve is 0 (funding itself is blocked, prerequisite 2), so the sweep is vacuous and the procedure is documented instead |
+| `rotate-restart` | re-render configs (pin the NEW pubkey sets + token) and restart all N | staggered `/health` wait, as in `up` |
+| `rotate-verify` | **the resume gate: old keys are powerless** | see below — resume refuses to run until this phase passes |
+| `rotate-resume` | lift the breaker, commit `current-term = K` | all instances unpaused; the public probe now answers **400** (validation) instead of 503 — gate lifted, still no order created |
+| `rotate-attest` | post-rotation proof round | a fresh `attestation_authorized` audit row AFTER the resume timestamp (the NEW set reaching threshold — old envelopes cannot contribute, per `rotate-verify`), and `/api/reserve/proof` drift EXACTLY equal to the pre-pause baseline on every instance (rotation moves no value) |
+
+### The old-keys-dead assertions (`rotate-verify`)
+
+The drill does not merely diff configs — it fires real, validly-signed
+old-key material at the live surfaces and requires refusal:
+
+1. **Federation attestation**: a canonically-encoded, domain-separated,
+   correctly Ed25519-signed release attestation envelope — signed by a
+   RETIRED key, bound to a real on-record order — is POSTed to every
+   instance's authenticated `/api/attest`. Required outcome on all N:
+   `refused:unknown_signer`. (The envelope is built outside the Rust
+   codebase — python + openssl mirroring `bridge/core/src/attestation.rs` —
+   so the probe cannot accidentally share a bug with the verifier.)
+2. **Impersonation control**: the same envelope presented under a NEW
+   member's signer id but still signed by the old key must be
+   `refused:bad_signature` — proves the pipeline is verifying signatures,
+   not blanket-refusing, and that a retired key cannot ride a current
+   identity.
+3. **Transport auth**: the OLD shared attest bearer token gets HTTP 401.
+4. **Sepolia Safe**: `isOwner(old) == false` for every retired owner, and an
+   `execTransaction` **simulation** (`eth_call` — free, no state change) of a
+   benign 0-value self-call signed by two OLD owner keys must revert
+   (`GS026`), while the same call signed by two NEW owner keys succeeds.
+5. **Gated legs** (Solana/BTH when tooling or #1051 gates them) must have a
+   recorded outcome — a leg can be gated, never silently skipped.
+
+Only after all of the above does `rotate-resume` lift the pause.
+
+### What the 2026-07-17 live rotation run PROVED (drill log)
+
+Run against the live Phase C topology (3 instances, threshold 2; live
+Sepolia Safe `0x61274F55…`; per-instance betanet RPCs;
+`BRIDGE_RESERVE_TOLERANCE` at the audited `191033891061198509` baseline),
+term 1 → term 2:
+
+1. **Mock election** re-elected the 3 sitting members
+   (`federation/election/term-2.json`, `electionKind=mock-same-set`).
+2. **Pause**: breaker tripped (`rotation drill term 2`), all 3 instances
+   reported paused off the shared store, and the PUBLIC order API answered
+   **503** to the invalid-body probe — the new read-only pause gate live.
+3. **Drain**: no value-in-motion orders; the Phase C parked burn order
+   `b25af574-…7d6b` (9 066 BTH, `burn_confirmed`, destination unparseable
+   by design) was explicitly acknowledged via `BRIDGE_ROTATE_ACK_PARKED`
+   and recorded; the stale Phase C mint order had expired on its own.
+4. **Re-key**: term-1 material archived to `federation/retired/term-1/`;
+   3 fresh Ed25519 keys, fresh attest token, 3 fresh Safe owner keys.
+5. **LIVE Sepolia Safe handover** — three real `swapOwner` 2-of-3
+   `execTransaction`s, signing set migrating as swaps landed:
+   * owner 1 `0xc74E98E2…` → `0x8475814F…`
+     [`0xa527245f…a7c3`](https://sepolia.etherscan.io/tx/0xa527245f454a484ee9e29bf11dfd2016bfa14b8bd72f8b32c16d14c60df1a7c3)
+   * owner 2 `0x1D72CDeC…` → `0xdc6d844a…`
+     [`0xe681874f…def1`](https://sepolia.etherscan.io/tx/0xe681874f686c0964e96dc34c6355451df825ce15ac40ed2c7b9349242327def1)
+   * owner 3 `0x53bce951…` → `0x1590A5Fd…`
+     [`0x493c408e…64b5`](https://sepolia.etherscan.io/tx/0x493c408e0bc9e970de23a832d619462bec40150cb6b314c5da8badce366464b5)
+   Threshold 2 unchanged throughout.
+6. **Solana leg GATED (tooling)**: live devnet read showed mint authority
+   `5bLHYxv4P5NMoAFaiKN2WfWQxwK2FL6PqKYZqPgSs9mx` (single key per #867);
+   `solana-keygen`/`spl-token` absent on the drill host, exact operator
+   commands printed and recorded.
+7. **BTH leg**: new random reserve wallet generated and `reserve.env`
+   re-pointed; the sweep was **vacuous** — the reserve ledger's locked
+   balance was 0 pc (funding itself is blocked, prerequisite 2), with the
+   funded-case sweep documented and gated on #1051.
+8. **Old keys proven POWERLESS (the resume gate)** — all live:
+   * validly-signed old-key release attestation →
+     `refused:unknown_signer` on **all 3** instances;
+   * old key under a NEW signer id → `refused:bad_signature`;
+   * old attest bearer token → HTTP 401;
+   * all 3 old owners `isOwner == false`, all 3 new owners `true`;
+   * `execTransaction` simulation signed by two OLD owners reverted
+     **GS026**; the same call signed by two NEW owners simulated `true`.
+9. **Resume**: breaker lifted, all instances unpaused, public probe flipped
+   503 → 400 (gate lifted, no order created), `current-term = 2` committed.
+10. **Post-rotation proof round**: 2 s after resume the audit log recorded
+    `attestation_authorized action=bridge.release_bth threshold=2
+    signers=2` (then `signers=3`) for the parked burn order — the NEW set
+    reaching threshold over the wire (old envelopes cannot contribute, per
+    step 8). Proof-of-reserves drift was **exactly**
+    `191033891061198509` on every instance both before the pause and after
+    the resume — the rotation moved no value.
+
+### Live vs documented legs (honest scorecard)
+
+| Surface | This drill | Mainnet delta |
+|---|---|---|
+| Federation Ed25519 attestation keys | **live** — swapped, old refused `unknown_signer` | same mechanics; keys live in HSM/enclave per operator |
+| Shared attest bearer token | **live** — rotated, old token 401 | per-peer mTLS/token per #1019 hardening |
+| Sepolia Safe owner set | **live** — 3 × on-chain `swapOwner` via 2-of-3 `execTransaction` | per-role Safes (#1019); owner EOAs → hardware keys; same `swapOwner` choreography |
+| Solana wbth mint authority | **gated: tooling** (single-key `SetAuthority`, exact commands printed) | authority = Squads multisig: rotation is a member-swap **proposal inside Squads**, not `SetAuthority` |
+| BTH reserve wallet | wallet re-keyed; sweep **vacuous** (locked = 0) / **operator-gated on #1051** when funded | reserve sweep is a normal factor-1 reserve spend to the new reserve address, run under the SAME pause window, verified by the reconciler before resume |
+| Election | **mock same-set** | real #1060 election result document, same schema |
+
 ## Prerequisites (Layers 1–2)
 
 - **BTH testnet**: a synced node with JSON-RPC + websocket exposed; the
