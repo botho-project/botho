@@ -1,2 +1,17 @@
 packages:
   - 'packages/*'
+
+# Pre-declared dependency build-script approvals (issue #1045).
+#
+# pnpm >= 10 blocks dependency install/postinstall scripts by default and
+# auto-injects a placeholder block here on every `pnpm install` for any dep
+# it flagged, causing spurious diffs in every web PR. Declaring the decisions
+# up front means a fresh `pnpm install` leaves this file unchanged.
+#
+# - esbuild: installs/validates its platform-specific binary (vite dev/build)
+# - sharp: installs prebuilt native image-processing binaries
+# - workerd: downloads the Cloudflare Workers runtime binary (wrangler dev)
+allowBuilds:
+  esbuild: true
+  sharp: true
+  workerd: true
