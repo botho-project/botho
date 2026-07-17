@@ -1,0 +1,3 @@
+# Generated snap bundle (mm-snap build). The committed snap.manifest.json
+# carries the shasum of the last local build; rebuild before running tests.
+dist/
