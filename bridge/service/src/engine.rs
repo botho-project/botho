@@ -28,6 +28,12 @@ pub type ShutdownSignal = broadcast::Receiver<()>;
 /// Delay between re-broadcast attempts of an already-signed mint tx.
 const BROADCAST_RETRY_DELAY: Duration = Duration::from_secs(2);
 
+/// How long expired, deposit-less mint orders and expired release intents
+/// are retained before the processing loop deletes them (#1042). Long enough
+/// for any wallet to observe the terminal `expired` status; short enough
+/// that abandoned public order-create residue cannot accumulate forever.
+const EXPIRED_ORDER_RETENTION_SECS: i64 = 7 * 24 * 60 * 60;
+
 /// The main bridge engine that coordinates all components.
 pub struct BridgeEngine {
     config: BridgeConfig,
@@ -584,6 +590,10 @@ impl OrderProcessor {
 
         // Check for expired orders
         self.expire_stale_orders()?;
+
+        // Prune long-expired order-create residue (#1042) so distributed
+        // spam against the public API cannot grow the DB without bound.
+        self.prune_expired_public_orders()?;
 
         // Alert on orders stuck past the age threshold (funds have moved;
         // they must never auto-expire — an operator has to act).
@@ -1303,6 +1313,32 @@ impl OrderProcessor {
             }
         }
 
+        Ok(())
+    }
+
+    /// Prune long-expired public order-create residue (#1042).
+    ///
+    /// The public order API (#1036) lets anonymous clients create
+    /// `AwaitingDeposit` mint orders and release-tracking intents; per-IP
+    /// rate limits and the global create ceiling bound the RATE and the
+    /// OUTSTANDING count, but abandoned rows would still accumulate forever
+    /// without this. Expired, deposit-less mint orders and expired intents
+    /// are kept for [`EXPIRED_ORDER_RETENTION_SECS`] so a wallet can still
+    /// poll the terminal `expired` status, then deleted. Rows where funds
+    /// ever moved are never pruned (see the `Database` prune docs).
+    fn prune_expired_public_orders(&self) -> Result<(), String> {
+        let orders = self
+            .db
+            .prune_expired_mint_orders(EXPIRED_ORDER_RETENTION_SECS)?;
+        let intents = self
+            .db
+            .prune_expired_release_intents(EXPIRED_ORDER_RETENTION_SECS)?;
+        if orders > 0 || intents > 0 {
+            info!(
+                "Pruned {} expired mint order(s) and {} expired release intent(s)",
+                orders, intents
+            );
+        }
         Ok(())
     }
 }

@@ -37,7 +37,28 @@
 //!     un-listed origin is refused the `Access-Control-Allow-Origin` header.
 //!   * Per-IP rate limiting (a tight cap on order-create specifically) plus a
 //!     request body-size cap blunt spam/flooding.
+//!   * A GLOBAL order-create ceiling (`public_api.max_open_orders`, #1042)
+//!     backstops the per-IP limits against distributed spam, and the engine
+//!     loop prunes expired/abandoned create residue so the DB stays bounded.
 //!   * The kill switch and ops detail are simply not routed here.
+//!
+//! ─── Information-exposure scope (#1042) ────────────────────────────────────
+//! These endpoints are UNAUTHENTICATED, so everything they return must be
+//! either (a) data the caller supplied, or (b) derivable from PUBLIC on-chain
+//! state. Today that holds:
+//!   * The mint GET returns only mint-order fields the creator supplied plus
+//!     the reserve deposit address (published) and tx hashes (on-chain).
+//!   * The release-intent GET echoes the caller-registered intent and
+//!     correlates it to a watcher-created burn order by `(bthAddress, amount)`.
+//!     Anyone can register an intent for an arbitrary pair and poll it to learn
+//!     whether a matching burn exists and its status/tx hashes — ALL of which
+//!     is already public on the counterparty chain and the BTH chain, so no
+//!     confidentiality is lost.
+//!
+//! Any future field added to these responses must preserve that invariant:
+//! never surface operator/ops state (pause reason, backlog, reserve detail),
+//! internal error strings, or anything not reconstructible from public
+//! chain data. Ops detail belongs on the loopback `api.rs` surface only.
 //!
 //! CORS + IP rate limiting assume the bind is either direct or behind a
 //! trusted reverse proxy that preserves the peer address; behind an untrusted
@@ -99,6 +120,9 @@ pub struct PublicApiConfig {
     rate_limit_per_min: u32,
     /// Max request body size, bytes.
     max_body_bytes: usize,
+    /// Global ceiling on outstanding order-create records (0 = unlimited).
+    /// See [`bth_bridge_core::PublicApiSettings::max_open_orders`] (#1042).
+    max_open_orders: u64,
 }
 
 impl PublicApiConfig {
@@ -117,6 +141,7 @@ impl PublicApiConfig {
             create_rate_limit_per_min: config.public_api.create_rate_limit_per_min,
             rate_limit_per_min: config.public_api.rate_limit_per_min,
             max_body_bytes: config.public_api.max_body_bytes.max(1),
+            max_open_orders: config.public_api.max_open_orders,
         }
     }
 
@@ -464,6 +489,30 @@ async fn create_mint_order(
         );
     }
 
+    // GLOBAL create ceiling (#1042): the per-IP limiter bounds per-client
+    // rate, but a distributed source could otherwise grow the DB without
+    // bound. The engine loop expires and prunes abandoned orders, so a full
+    // backlog drains on its own.
+    if state.cfg.max_open_orders > 0 {
+        match state.db.count_awaiting_deposit_mint_orders() {
+            Ok(open) if open >= state.cfg.max_open_orders => {
+                warn!(
+                    "public api: mint order-create refused: {} open orders >= global cap {}",
+                    open, state.cfg.max_open_orders
+                );
+                return err(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "order backlog is full; retry later",
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                warn!("public api: open-order count failed: {}", e);
+                return err(StatusCode::INTERNAL_SERVER_ERROR, "failed to create order");
+            }
+        }
+    }
+
     let mut order = BridgeOrder::new_mint(
         chain,
         amount,
@@ -596,6 +645,33 @@ async fn create_release_order(
     }
 
     let now = Utc::now().timestamp();
+
+    // GLOBAL create ceiling (#1042), mirroring the mint path: unexpired
+    // intents are counted; expired ones stop counting immediately and are
+    // pruned by the engine loop after a retention window.
+    if state.cfg.max_open_orders > 0 {
+        match state.db.count_active_release_intents(now) {
+            Ok(open) if open >= state.cfg.max_open_orders => {
+                warn!(
+                    "public api: release-intent create refused: {} active intents >= global cap {}",
+                    open, state.cfg.max_open_orders
+                );
+                return err(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "release-order backlog is full; retry later",
+                );
+            }
+            Ok(_) => {}
+            Err(e) => {
+                warn!("public api: active-intent count failed: {}", e);
+                return err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to register release order",
+                );
+            }
+        }
+    }
+
     let expires_at = now.saturating_add(state.cfg.order_expiry_minutes.max(0).saturating_mul(60));
     let intent = ReleaseIntent {
         id: Uuid::new_v4(),
@@ -615,6 +691,19 @@ async fn create_release_order(
             "failed to register release order",
         );
     }
+    // Audit-log symmetry with mint create (#1042). Intents are not
+    // `bridge_orders` rows, so the id travels in the details instead of the
+    // (FK-referencing) order_id column.
+    if let Err(e) = state.db.log_audit(
+        None,
+        "release_intent_created",
+        &format!(
+            "public API release intent {}: source={} amount={}",
+            intent.id, chain, amount
+        ),
+    ) {
+        warn!("public api: audit log failed: {}", e);
+    }
 
     (
         StatusCode::OK,
@@ -624,6 +713,19 @@ async fn create_release_order(
 }
 
 /// `GET /api/bridge/release-orders/{id}`: release order status.
+///
+/// Information-exposure scope (#1042): this endpoint returns ONLY
+///   * the caller-registered intent fields echoed back (chain, bthAddress,
+///     amount, fee, token address, expiry), and
+///   * when a burn order correlates by `(bthAddress, amount)`: its status tag,
+///     burn tx hash (`sourceTx`), release tx hash (`destTx`), and failure
+///     reason — all reconstructible from public on-chain data.
+///
+/// Because intents are unauthenticated, anyone can register an arbitrary
+/// `(bthAddress, amount)` pair and poll this endpoint; that reveals nothing
+/// non-public (burns and releases are public on both chains). Keep it that
+/// way: never add operator/ops state, internal errors, or per-user data
+/// here — see the module-level "Information-exposure scope" section.
 async fn get_release_order(
     State(state): State<PublicApiState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -803,7 +905,15 @@ mod tests {
             create_rate_limit_per_min: 100,
             rate_limit_per_min: 1_000,
             max_body_bytes: 8 * 1024,
+            max_open_orders: 10_000,
         }
+    }
+
+    /// A structurally valid bare BTH address (base58 of 64 bytes, the
+    /// legacy `view32 || spend32` layout) — #1042 tightened
+    /// `ChainAddress::validate`, so tests must use decodable addresses.
+    fn test_bth_address() -> String {
+        bs58::encode([7u8; 64]).into_string()
     }
 
     fn test_state() -> (PublicApiState, Database) {
@@ -1095,9 +1205,19 @@ mod tests {
         let (addr, shutdown_tx, server) = spawn_public_server(state).await;
 
         // Register a release intent.
-        let body = r#"{"sourceChain":"ethereum","bthAddress":"bth_user_receive_addr","amount":"500000000000"}"#;
-        let (status, resp) =
-            http_request(addr, "POST", "/api/bridge/release-orders", Some(body), None).await;
+        let bth_addr = test_bth_address();
+        let body = format!(
+            r#"{{"sourceChain":"ethereum","bthAddress":"{}","amount":"500000000000"}}"#,
+            bth_addr
+        );
+        let (status, resp) = http_request(
+            addr,
+            "POST",
+            "/api/bridge/release-orders",
+            Some(body.as_str()),
+            None,
+        )
+        .await;
         assert_eq!(status, 200, "{}", resp);
         let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(json["status"], "awaiting_burn");
@@ -1128,7 +1248,7 @@ mod tests {
             500_000_000_000,
             0,
             "0xsource".to_string(),
-            "bth_user_receive_addr".to_string(),
+            bth_addr,
             "0xburntx".to_string(),
         );
         burn.set_status(OrderStatus::BurnConfirmed);
@@ -1181,6 +1301,124 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(json["status"], "failed");
         assert_eq!(json["failureReason"], "deposit never arrived");
+
+        let _ = shutdown_tx.send(());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_global_create_cap_on_mint_orders() {
+        // #1042: the GLOBAL ceiling refuses order-create once the number of
+        // awaiting-deposit mint orders reaches the cap, independent of
+        // client IP (the per-IP limiter is generous here).
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let mut cfg = test_config();
+        cfg.max_open_orders = 2;
+        let state = PublicApiState::new(db, cfg);
+        let (addr, shutdown_tx, server) = spawn_public_server(state).await;
+
+        let body = r#"{"destChain":"ethereum","destAddress":"0x1234567890abcdef1234567890abcdef12345678","amount":"1000000000000"}"#;
+        for _ in 0..2 {
+            let (status, _) =
+                http_request(addr, "POST", "/api/bridge/orders", Some(body), None).await;
+            assert_eq!(status, 200);
+        }
+        let (status, resp) =
+            http_request(addr, "POST", "/api/bridge/orders", Some(body), None).await;
+        assert_eq!(status, 503, "create past the global cap must be refused");
+        assert!(resp.contains("backlog"), "{}", resp);
+
+        let _ = shutdown_tx.send(());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_global_create_cap_on_release_intents() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let mut cfg = test_config();
+        cfg.max_open_orders = 1;
+        let state = PublicApiState::new(db, cfg);
+        let (addr, shutdown_tx, server) = spawn_public_server(state).await;
+
+        let body = format!(
+            r#"{{"sourceChain":"ethereum","bthAddress":"{}","amount":"500000000000"}}"#,
+            test_bth_address()
+        );
+        let (status, _) = http_request(
+            addr,
+            "POST",
+            "/api/bridge/release-orders",
+            Some(body.as_str()),
+            None,
+        )
+        .await;
+        assert_eq!(status, 200);
+
+        let (status, resp) = http_request(
+            addr,
+            "POST",
+            "/api/bridge/release-orders",
+            Some(body.as_str()),
+            None,
+        )
+        .await;
+        assert_eq!(status, 503, "intent create past the global cap refused");
+        assert!(resp.contains("backlog"), "{}", resp);
+
+        let _ = shutdown_tx.send(());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_create_release_order_rejects_invalid_bth_address() {
+        // #1042: the strengthened BTH validator rejects junk destinations at
+        // order-create (the old validator only rejected empty strings).
+        let (state, _db) = test_state();
+        let (addr, shutdown_tx, server) = spawn_public_server(state).await;
+
+        for bad in ["bth_user_receive_addr", "not base58!", "botho://1/abc"] {
+            let body = format!(
+                r#"{{"sourceChain":"ethereum","bthAddress":"{}","amount":"500000000000"}}"#,
+                bad
+            );
+            let (status, _) = http_request(
+                addr,
+                "POST",
+                "/api/bridge/release-orders",
+                Some(body.as_str()),
+                None,
+            )
+            .await;
+            assert_eq!(status, 400, "junk BTH address {:?} must be rejected", bad);
+        }
+
+        let _ = shutdown_tx.send(());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_release_intent_create_writes_audit_row() {
+        // #1042 audit symmetry: release-intent create logs an audit line
+        // like mint create does.
+        let (state, db) = test_state();
+        let (addr, shutdown_tx, server) = spawn_public_server(state).await;
+
+        let body = format!(
+            r#"{{"sourceChain":"ethereum","bthAddress":"{}","amount":"500000000000"}}"#,
+            test_bth_address()
+        );
+        let (status, _) = http_request(
+            addr,
+            "POST",
+            "/api/bridge/release-orders",
+            Some(body.as_str()),
+            None,
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(db.count_audit_action("release_intent_created").unwrap(), 1);
 
         let _ = shutdown_tx.send(());
         server.await.unwrap();

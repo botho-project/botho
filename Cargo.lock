@@ -2045,6 +2045,7 @@ dependencies = [
 name = "bth-bridge-core"
 version = "0.6.0"
 dependencies = [
+ "bs58 0.4.0",
  "chrono",
  "ed25519-dalek",
  "hex",
