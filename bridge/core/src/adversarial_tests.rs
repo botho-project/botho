@@ -61,6 +61,7 @@ fn burn_order() -> BridgeOrder {
         "0x1234567890abcdef1234567890abcdef12345678".to_string(),
         "bth_user_stealth_addr".to_string(),
         "0xburntx".to_string(),
+        0,
     )
 }
 

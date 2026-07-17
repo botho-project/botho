@@ -620,6 +620,7 @@ async fn defi_round_trip_mint_wrap_pool_swap_repatriate() {
         event.from.clone(),
         event.bth_address.clone(),
         event.tx_hash.clone(),
+        0,
     );
     burn_order.set_status(OrderStatus::BurnConfirmed);
     db.insert_order(&burn_order).expect("insert burn order");

@@ -400,6 +400,7 @@ impl EthereumWatcher {
             event.from.clone(),
             event.bth_address.clone(),
             event.tx_hash.clone(),
+            ordinal,
         );
 
         let inserted = self

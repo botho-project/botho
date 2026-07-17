@@ -356,6 +356,7 @@ fn burn_order() -> BridgeOrder {
         "0x1234567890abcdef1234567890abcdef12345678".to_string(),
         "bth_user_stealth_addr".to_string(),
         "0xburntx".to_string(),
+        0,
     );
     order.set_status(OrderStatus::BurnConfirmed);
     order
@@ -770,6 +771,7 @@ async fn load_test_concurrent_orders_exactly_once() {
             format!("0xburner{:038}", i),
             "bth_user_stealth_addr".to_string(),
             format!("0xburntx{}", i),
+            0,
         );
         order.set_status(OrderStatus::BurnConfirmed);
         db.insert_order(&order).unwrap();
