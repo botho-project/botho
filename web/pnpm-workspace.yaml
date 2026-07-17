@@ -11,7 +11,9 @@ packages:
 # - esbuild: installs/validates its platform-specific binary (vite dev/build)
 # - sharp: installs prebuilt native image-processing binaries
 # - workerd: downloads the Cloudflare Workers runtime binary (wrangler dev)
+# - @swc/core: downloads/validates its prebuilt native binding (snaps-jest transform)
 allowBuilds:
+  '@swc/core': true
   esbuild: true
   sharp: true
   workerd: true

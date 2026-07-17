@@ -1061,11 +1061,18 @@ mod tests {
             let req = SignRequest {
                 spend_private_key: hex::encode(sender.spend_private_key().to_bytes()),
                 view_private_key: hex::encode(sender.view_private_key().to_bytes()),
+                // The seed that derived `sender_kem`: lets the signer take the
+                // unified recovery path (#988). Classical (KEM-less) input, so
+                // `output_index`/`kem_ciphertext` are the legacy defaults and
+                // recovery is unchanged.
+                seed: hex::encode([0x11u8; 64]),
                 inputs: vec![SpendInput {
                     target_key: hex::encode(owned.target_key),
                     public_key: hex::encode(owned.public_key),
                     amount: owned_amount,
                     subaddress_index: 0,
+                    output_index: 0,
+                    kem_ciphertext: None,
                     decoys,
                 }],
                 recipient: RecipientAddress {

@@ -1,0 +1,25 @@
+{
+  "version": "0.0.1",
+  "description": "Phase-0 feasibility spike: Botho wallet signing inside the MetaMask Snaps runtime (issue #815). NOT for distribution.",
+  "proposedName": "Botho Snap Spike",
+  "source": {
+    "shasum": "tKAtL6nTD4y+pQRIOjjR3Z1s63nNn9MyNKXN34lWwdI=",
+    "location": {
+      "npm": {
+        "filePath": "dist/bundle.js",
+        "packageName": "@botho/snap-spike",
+        "registry": "https://registry.npmjs.org/"
+      }
+    }
+  },
+  "initialPermissions": {
+    "endowment:rpc": {
+      "dapps": true
+    },
+    "endowment:webassembly": {},
+    "endowment:network-access": {},
+    "snap_getEntropy": {}
+  },
+  "platformVersion": "11.2.0",
+  "manifestVersion": "0.1"
+}
