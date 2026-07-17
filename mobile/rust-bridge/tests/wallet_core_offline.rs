@@ -289,6 +289,7 @@ fn build_and_sign_produces_node_verifiable_tx() {
         amount,
         fee: MIN_TX_FEE,
         created_at_height: 1,
+        bridge_deposit_memo: None,
     })
     // `build_and_sign_inner` self-verifies structure + ring signatures + the
     // balance equation under the node's own verifier before returning, so a
@@ -346,6 +347,7 @@ fn build_and_sign_rejects_insufficient_inputs() {
         amount: 50_000_000_000,
         fee: MIN_TX_FEE,
         created_at_height: 1,
+        bridge_deposit_memo: None,
     });
 
     assert!(

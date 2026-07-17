@@ -54,6 +54,30 @@ export interface CreatedClaimLink {
   id: string
 }
 
+/**
+ * Optional, TYPED extras for a {@link WalletContextValue.send}. The two fields
+ * are DELIBERATELY distinct channels for two incompatible meanings (#1037):
+ *
+ * - `note` is a human free-text note (e.g. the Send-modal "Add a note…" field or
+ *   a payment-request note). It is COSMETIC only and is NOT embedded on-chain —
+ *   preserving the pre-#1037 behavior where the note was dropped, so a plain
+ *   note like "lunch" never causes the send to fail.
+ * - `bridgeDepositMemo` is the bridge deposit order memo: a 64-byte hex value
+ *   (from the public order API, `BridgeOrder::generate_memo`) that IS embedded
+ *   on the recipient output's encrypted `e_memo` so the bridge watcher can match
+ *   the deposit to its mint order. Only the bridge ExportPanel sets this.
+ *
+ * Keeping them separate stops the free-text note from ever reaching the WASM
+ * signer's strict 64-byte-hex validator (which is correct for the bridge memo
+ * but would reject an ordinary note).
+ */
+export interface SendOptions {
+  /** Human free-text note. Cosmetic; never embedded on-chain (#1037). */
+  note?: string
+  /** Bridge deposit order memo (64-byte hex), embedded on-chain (#1037). */
+  bridgeDepositMemo?: string
+}
+
 interface WalletContextValue extends WalletState {
   // Connection
   connect: () => Promise<void>
@@ -120,7 +144,7 @@ interface WalletContextValue extends WalletState {
   getVaultKey: () => VaultKey | null
 
   // Transactions
-  send: (to: string, amount: bigint, memo?: string) => Promise<string>
+  send: (to: string, amount: bigint, options?: SendOptions) => Promise<string>
   /**
    * Estimate the fee for a send, returning both the fee and the node-computed
    * cluster fee factor display string (#635). Mirrors the {@link send} flow:
@@ -1003,7 +1027,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setState(s => ({ ...s, isEncrypted: true, isLocked: false }))
   }, [state.isEncrypted, state.isLocked, rewrapUnderNewKey])
 
-  const send = useCallback(async (to: string, amount: bigint, memo?: string): Promise<string> => {
+  const send = useCallback(async (to: string, amount: bigint, options?: SendOptions): Promise<string> => {
+    // Two DISTINCT channels (#1037): a human free-text `note` is cosmetic and is
+    // intentionally NOT threaded into the signer (preserving pre-#1037 behavior,
+    // where a note like "lunch" is dropped and never fails the send). Only the
+    // bridge deposit order memo (64-byte hex) is embedded on-chain.
+    const bridgeDepositMemo = options?.bridgeDepositMemo
     const adapter = adapterRef.current
     if (!adapter.isConnected()) {
       throw new Error('Not connected to a node')
@@ -1086,10 +1115,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       senderKemPublicKey,
       amount,
       fee,
-      // Optional destination memo: for a BTH→wBTH bridge deposit this is the
-      // mint order memo, embedded on-chain so the bridge watcher can match the
-      // deposit to its order (#1037). Undefined for an ordinary send.
-      memo,
+      // Bridge deposit order memo: for a BTH→wBTH bridge deposit this is the
+      // mint order memo (64-byte hex), embedded on-chain so the bridge watcher
+      // can match the deposit to its order (#1037). Undefined for an ordinary
+      // send or a free-text note.
+      bridgeDepositMemo,
       rpc: {
         getChainHeight: () => adapter.getBlockHeight(),
         getOutputs: (start, end) => adapter.getRawOutputs(start, end),

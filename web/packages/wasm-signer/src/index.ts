@@ -96,15 +96,18 @@ export interface SignRequest {
   /** Chain height to stamp the transaction with (replay protection). */
   createdAtHeight: bigint | number
   /**
-   * Optional destination memo (hex-encoded 64 bytes) embedded on the RECIPIENT
-   * output. This is the bridge deposit hook (#1037): a BTH→wBTH mint deposit
-   * carries the order memo (first 16 bytes = the mint-order UUID, from
+   * Optional BRIDGE DEPOSIT memo (hex-encoded 64 bytes) embedded on the
+   * RECIPIENT output. This is a DEDICATED, typed channel for the bridge deposit
+   * hook (#1037) — distinct from any human free-text "note" a wallet UI
+   * collects, which must NEVER be routed here. A BTH→wBTH mint deposit carries
+   * the order memo (first 16 bytes = the mint-order UUID, from
    * `BridgeOrder::generate_memo`, returned as a 128-char hex string by the
    * public order API) so the bridge watcher can view-key-match the deposit to
    * its order (`bth_scan.rs`). Encrypted to the recipient's view key like any
-   * memo. Omit / empty for an ordinary send — no memo, unchanged privacy.
+   * memo. A present value MUST be exactly 64 bytes of hex (the signer hard-errors
+   * otherwise). Omit / empty for an ordinary send — no memo, unchanged privacy.
    */
-  memo?: string
+  bridgeDepositMemo?: string
 }
 
 /** A chain output (as returned by `chain_getOutputs`) to test for ownership. */

@@ -891,6 +891,7 @@ mod send_acceptance_tests {
             amount: send_amount,
             fee: MIN_TX_FEE,
             created_at_height: 1000,
+            bridge_deposit_memo: None,
         };
 
         let tx = build_and_sign_with_rng(&request, &mut rng).expect("mobile build+sign");

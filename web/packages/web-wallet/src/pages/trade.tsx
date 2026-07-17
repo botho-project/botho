@@ -60,9 +60,11 @@ export function TradePage() {
         spendableBalance: balance ? balance.available : null,
       },
       // Reuse the wallet's real wasm-signer send path for the BTH deposit: send
-      // to the reserve deposit address carrying the order memo. No new signing.
+      // to the reserve deposit address carrying the order memo on the DEDICATED
+      // on-chain bridge channel (#1037), so the watcher can match the deposit to
+      // its order. This is the only caller that sets `bridgeDepositMemo`.
       submitDeposit: ({ depositAddress, amount, memo }) =>
-        send(depositAddress, amount, memo),
+        send(depositAddress, amount, { bridgeDepositMemo: memo }),
       requestWallet: () => navigate('/wallet'),
     }),
     [client, hasWallet, isLocked, balance, send, navigate],

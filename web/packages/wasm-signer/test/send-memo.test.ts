@@ -10,11 +10,14 @@ import {
 } from '../src/index'
 
 /**
- * #1037: `buildSendTransaction` must thread an optional destination memo through
- * to the wasm signer's `buildAndSign` request, so a BTH→wBTH bridge deposit
- * carries the order memo the watcher matches on. These tests use a FAKE signer
- * (injected via {@link setSigner}) that captures the `SignRequest` it is handed,
- * so they assert the plumbing without needing the compiled wasm artifact.
+ * #1037: `buildSendTransaction` must thread the optional, DEDICATED bridge
+ * deposit memo (`bridgeDepositMemo`) through to the wasm signer's `buildAndSign`
+ * request, so a BTH→wBTH bridge deposit carries the order memo the watcher
+ * matches on. Crucially, this is a channel SEPARATE from any human free-text
+ * note, so an ordinary send never routes text into the signer's strict 64-byte
+ * validator. These tests use a FAKE signer (injected via {@link setSigner}) that
+ * captures the `SignRequest` it is handed, so they assert the plumbing without
+ * needing the compiled wasm artifact.
  */
 
 const INPUT_KEY = 'a'.repeat(64)
@@ -50,7 +53,7 @@ function fakeSigner(): { signer: WasmSigner; lastRequest: () => SignRequest | nu
   return { signer, lastRequest: () => captured }
 }
 
-function params(memo?: string): BuildSendParams {
+function params(bridgeDepositMemo?: string): BuildSendParams {
   return {
     keys: { spendPrivateKey: '11'.repeat(32), viewPrivateKey: '22'.repeat(32) },
     recipient: {
@@ -61,7 +64,7 @@ function params(memo?: string): BuildSendParams {
     senderKemPublicKey: KEM_PUBLIC,
     amount: 500_000_000_000n,
     fee: 100_000_000n,
-    memo,
+    bridgeDepositMemo,
     rpc: {
       getChainHeight: async () => 100,
       getOutputs: async () => [
@@ -79,10 +82,10 @@ function params(memo?: string): BuildSendParams {
   }
 }
 
-describe('buildSendTransaction memo threading (#1037)', () => {
+describe('buildSendTransaction bridge-deposit memo threading (#1037)', () => {
   afterEach(() => resetSigner())
 
-  it('passes the destination memo into the buildAndSign request', async () => {
+  it('passes the bridge deposit memo into the buildAndSign request', async () => {
     const { signer, lastRequest } = fakeSigner()
     setSigner(signer)
 
@@ -92,15 +95,15 @@ describe('buildSendTransaction memo threading (#1037)', () => {
     expect(txHex).toBe('deadbeef')
     const req = lastRequest()
     expect(req).not.toBeNull()
-    expect(req?.memo).toBe(orderMemo)
+    expect(req?.bridgeDepositMemo).toBe(orderMemo)
   })
 
-  it('leaves memo undefined for an ordinary send', async () => {
+  it('leaves bridgeDepositMemo undefined for an ordinary send', async () => {
     const { signer, lastRequest } = fakeSigner()
     setSigner(signer)
 
     await buildSendTransaction(params())
 
-    expect(lastRequest()?.memo).toBeUndefined()
+    expect(lastRequest()?.bridgeDepositMemo).toBeUndefined()
   })
 })
