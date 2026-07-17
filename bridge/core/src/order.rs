@@ -14,6 +14,12 @@ use crate::{attestation::MintAuthorization, chains::Chain};
 /// orders would derive different on-chain ids.
 const ORDER_ID_DOMAIN_TAG: &[u8] = b"botho-bridge-order-id-v1";
 
+/// Domain-separation tag for deriving a burn order's UUID from its stable
+/// on-chain burn-source tuple. Changing this tag is a bridge-breaking change:
+/// in-flight burn orders would derive different UUIDs (same caveat as
+/// [`ORDER_ID_DOMAIN_TAG`]). Safe pre-mainnet.
+const BURN_ORDER_ID_DOMAIN_TAG: &[u8] = b"botho-bridge-burn-order-uuid-v1";
+
 /// Derive the deterministic 32-byte on-chain order id from an order UUID.
 ///
 /// Both destination chains bind mints to this same value: Ethereum passes it
@@ -26,6 +32,48 @@ pub fn derive_order_id(order_uuid: &Uuid) -> [u8; 32] {
     hasher.update(ORDER_ID_DOMAIN_TAG);
     hasher.update(order_uuid.as_bytes());
     hasher.finalize().into()
+}
+
+/// Derive a deterministic burn-order UUID from the stable on-chain burn-source
+/// tuple: `(source_chain, tx_hash, ordinal)`.
+///
+/// This triple uniquely identifies a single finalized on-chain burn — it is
+/// exactly the watchers' `burn_source_key` (`"<tx_hash>#<ordinal>"`) plus the
+/// source chain. Because it is chain-observable and identical for every
+/// federation member watching the same finalized burn, two independent bridge
+/// instances derive the **same** UUID for one burn. This lets their
+/// attestation envelopes — which bind via [`derive_order_id`] over this UUID —
+/// aggregate to threshold with zero cross-member trust and no shared store
+/// (see #1050 Phase 1).
+///
+/// The digest is domain-separated and length-prefixes the chain tag and tx
+/// hash so distinct tuples cannot collide by concatenation ambiguity. The
+/// resulting UUID has RFC-4122 version (5) and variant bits set.
+pub fn derive_burn_order_uuid(source_chain: Chain, tx_hash: &str, ordinal: u32) -> Uuid {
+    let mut hasher = Sha256::new();
+    hasher.update(BURN_ORDER_ID_DOMAIN_TAG);
+
+    // Chain tag, length-prefixed to avoid concatenation ambiguity.
+    let chain_tag = source_chain.to_string();
+    hasher.update((chain_tag.len() as u32).to_le_bytes());
+    hasher.update(chain_tag.as_bytes());
+
+    // Transaction hash / signature, length-prefixed.
+    hasher.update((tx_hash.len() as u32).to_le_bytes());
+    hasher.update(tx_hash.as_bytes());
+
+    // Per-transaction ordinal.
+    hasher.update(ordinal.to_le_bytes());
+
+    let digest: [u8; 32] = hasher.finalize().into();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+
+    // Set RFC-4122 version (5, name-based SHA-1 family) and variant bits so
+    // the value is a well-formed UUID.
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes)
 }
 
 /// Custom serde for memo field (fixed-size byte array)
@@ -323,6 +371,14 @@ impl BridgeOrder {
     }
 
     /// Create a new burn order (wBTH -> BTH).
+    ///
+    /// The order id is **deterministic**: it is derived from the stable
+    /// burn-source tuple `(source_chain, source_tx, ordinal)` via
+    /// [`derive_burn_order_uuid`], where `ordinal` is the burn event's index
+    /// among burn events of the same transaction (the watchers' per-tx
+    /// ordinal). Every federation member watching the same finalized on-chain
+    /// burn therefore constructs the identical order id, so their attestation
+    /// envelopes aggregate to threshold without a shared store (#1050 Phase 1).
     pub fn new_burn(
         source_chain: Chain,
         amount: u64,
@@ -330,10 +386,12 @@ impl BridgeOrder {
         source_address: String,
         bth_address: String,
         source_tx: String,
+        ordinal: u32,
     ) -> Self {
         let now = Utc::now();
+        let id = derive_burn_order_uuid(source_chain, &source_tx, ordinal);
         Self {
-            id: Uuid::new_v4(),
+            id,
             order_type: OrderType::Burn,
             source_chain,
             dest_chain: Chain::Bth,
@@ -523,6 +581,70 @@ mod tests {
     }
 
     #[test]
+    fn test_burn_order_id_is_deterministic_across_independent_instances() {
+        // #1050 Phase 1: two federation members independently observe the
+        // SAME finalized on-chain burn and each call new_burn. Their orders
+        // MUST carry the identical id so their attestation envelopes (bound
+        // via order_id_bytes -> derive_order_id) aggregate to threshold with
+        // no shared store.
+        let member_a = BridgeOrder::new_burn(
+            Chain::Ethereum,
+            1_000_000_000_000,
+            0,
+            "0xburner".to_string(),
+            "bth_recipient".to_string(),
+            "0xdeadbeef".to_string(),
+            2,
+        );
+        // A second, independent instance may observe different *non-source*
+        // details (fee policy, address casing from its own RPC decode) yet
+        // still reconstructs the same id from the source tuple alone.
+        let member_b = BridgeOrder::new_burn(
+            Chain::Ethereum,
+            1_000_000_000_000,
+            999, // different local fee policy
+            "0xburner".to_string(),
+            "bth_recipient".to_string(),
+            "0xdeadbeef".to_string(),
+            2,
+        );
+        assert_eq!(
+            member_a.id, member_b.id,
+            "same burn-source tuple must yield the same order id"
+        );
+        // And it equals the pure helper over the source tuple.
+        assert_eq!(
+            member_a.id,
+            derive_burn_order_uuid(Chain::Ethereum, "0xdeadbeef", 2)
+        );
+    }
+
+    #[test]
+    fn test_burn_order_id_differs_for_distinct_source_tuples() {
+        let base = derive_burn_order_uuid(Chain::Ethereum, "0xabc", 0);
+        // Different ordinal (second burn in the same tx).
+        assert_ne!(base, derive_burn_order_uuid(Chain::Ethereum, "0xabc", 1));
+        // Different tx hash.
+        assert_ne!(base, derive_burn_order_uuid(Chain::Ethereum, "0xdef", 0));
+        // Different source chain (same tx-hash string).
+        assert_ne!(base, derive_burn_order_uuid(Chain::Solana, "0xabc", 0));
+        // A burn on Solana with the same nominal fields is still distinct.
+        assert_ne!(
+            derive_burn_order_uuid(Chain::Solana, "sig123", 0),
+            derive_burn_order_uuid(Chain::Solana, "sig123", 1)
+        );
+    }
+
+    #[test]
+    fn test_burn_order_uuid_is_well_formed_v5() {
+        // Version nibble = 5, RFC-4122 variant bits = 0b10.
+        let id = derive_burn_order_uuid(Chain::Ethereum, "0xabc", 0);
+        let bytes = id.as_bytes();
+        assert_eq!(bytes[6] >> 4, 0x5, "version must be 5");
+        assert_eq!(bytes[8] >> 6, 0b10, "variant must be RFC-4122");
+    }
+
+    #[test]
     fn test_guarded_transitions_happy_path() {
         assert!(OrderStatus::DepositConfirmed.can_transition_to(&OrderStatus::MintPending));
         assert!(OrderStatus::MintPending.can_transition_to(&OrderStatus::Completed));
@@ -597,6 +719,7 @@ mod tests {
             "0xsource".to_string(),
             "bth_addr".to_string(),
             "0xburntx".to_string(),
+            0,
         );
         order.set_status(OrderStatus::ReleasePending);
         order.dest_tx = Some("bth_release_tx".to_string());

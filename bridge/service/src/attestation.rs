@@ -1379,6 +1379,7 @@ mod tests {
             "0x1234567890abcdef1234567890abcdef12345678".to_string(),
             "bth_user_stealth_addr".to_string(),
             "0xburntx".to_string(),
+            0,
         );
         order.set_status(OrderStatus::BurnConfirmed);
         order
@@ -1494,7 +1495,10 @@ mod tests {
         let k1 = signing_key(1);
         let provider = bth_provider(&[&k1], 1, None);
         let order_a = burn_order();
-        let order_b = burn_order(); // distinct UUID
+        // Burn ids are deterministic over the source tuple (#1050); a
+        // genuinely different order has a different id, modeled here directly.
+        let mut order_b = burn_order();
+        order_b.id = Uuid::from_u128(order_b.id.as_u128() ^ 1);
 
         let envelope = release_envelope(&order_a, &k1, "nonce-d");
         let outcome = provider.submit_attestation_at(&envelope, &order_b, NOW);

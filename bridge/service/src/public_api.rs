@@ -1544,6 +1544,7 @@ mod tests {
             "0xsource".to_string(),
             bth_addr,
             "0xburntx".to_string(),
+            0,
         );
         burn.set_status(OrderStatus::BurnConfirmed);
         db.insert_order(&burn).unwrap();
@@ -1712,6 +1713,7 @@ mod tests {
             "0xsource".to_string(),
             test_bth_address(),
             "0xburntx".to_string(),
+            0,
         );
         burn.status = OrderStatus::Released;
         db.insert_order(&burn).unwrap();

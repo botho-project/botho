@@ -316,6 +316,7 @@ impl SolanaWatcher {
             bs58_encode_user(&burn.user),
             burn.bth_address.clone(),
             signature.to_string(),
+            ordinal,
         );
 
         let inserted = self.db.insert_burn_order(&order, &source_key, slot, None)?;

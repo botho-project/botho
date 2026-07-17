@@ -529,6 +529,7 @@ async fn fork_eth_mint_and_burn_round_trip() {
         event.from.clone(),
         event.bth_address.clone(),
         event.tx_hash.clone(),
+        0,
     );
     assert_eq!(burn_order.status, OrderStatus::BurnDetected);
     burn_order

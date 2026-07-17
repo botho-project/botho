@@ -660,6 +660,7 @@ mod federation_transport_tests {
             "0x1234567890abcdef1234567890abcdef12345678".to_string(),
             "bth_user_stealth_addr".to_string(),
             "0xburntx".to_string(),
+            0,
         );
         order.set_status(OrderStatus::BurnConfirmed);
         order
@@ -974,8 +975,11 @@ mod federation_transport_tests {
             0
         );
 
-        // A completely absent order id routes to a 404 (unknown_order).
-        let absent = burn_order();
+        // A completely absent order id routes to a 404 (unknown_order). Burn
+        // ids are deterministic over the source tuple (#1050); give `absent`
+        // an id not present in the DB to model a truly unknown order.
+        let mut absent = burn_order();
+        absent.id = uuid::Uuid::from_u128(absent.id.as_u128() ^ 1);
         let kind2 = FederationAttestationProvider::release_kind_for_test(&absent);
         let env2 =
             bth_bridge_core::sign_attestation_ed25519(&kind2, &ka, "adv-absent", now, now + 120)

@@ -680,6 +680,7 @@ mod tests {
             "0x1234567890abcdef1234567890abcdef12345678".to_string(),
             "bth_user_stealth_addr".to_string(),
             "0xburntx".to_string(),
+            0,
         );
         order.set_status(bth_bridge_core::OrderStatus::BurnConfirmed);
         order

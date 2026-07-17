@@ -543,21 +543,44 @@ impl Database {
     /// Execute the order INSERT against `conn` (also used inside
     /// transactions, e.g. [`Database::insert_burn_order`]).
     fn insert_order_stmt(conn: &Connection, order: &BridgeOrder) -> Result<(), String> {
+        Self::insert_order_stmt_impl(conn, order, false)
+    }
+
+    /// Like [`Database::insert_order_stmt`] but tolerates a pre-existing id
+    /// (`INSERT OR IGNORE`). Used by the burn path, whose ids are deterministic
+    /// over the source tuple (#1050) and therefore idempotent across replays
+    /// and concurrent watchers observing the same burn.
+    fn insert_order_stmt_or_ignore(conn: &Connection, order: &BridgeOrder) -> Result<(), String> {
+        Self::insert_order_stmt_impl(conn, order, true)
+    }
+
+    fn insert_order_stmt_impl(
+        conn: &Connection,
+        order: &BridgeOrder,
+        or_ignore: bool,
+    ) -> Result<(), String> {
         let mint_auth_json = order
             .mint_authorization
             .as_ref()
             .map(|a| serde_json::to_string(a).map_err(|e| format!("Serialize failed: {}", e)))
             .transpose()?;
 
+        let verb = if or_ignore {
+            "INSERT OR IGNORE"
+        } else {
+            "INSERT"
+        };
         conn.execute(
-            r#"
-            INSERT INTO bridge_orders (
+            &format!(
+                r#"
+            {verb} INTO bridge_orders (
                 id, order_type, source_chain, dest_chain, amount, fee,
                 source_tx, dest_tx, source_address, dest_address,
                 status, error_message, memo, mint_authorization,
                 dest_confirmed_at, created_at, updated_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
-            "#,
+            "#
+            ),
             params![
                 order.id.to_string(),
                 order.order_type.to_string(),
@@ -1095,7 +1118,16 @@ impl Database {
             .transaction()
             .map_err(|e| format!("Transaction failed: {}", e))?;
 
-        Self::insert_order_stmt(&tx, order)?;
+        // Insert the order row idempotently. Burn order ids are deterministic
+        // over the source tuple (#1050 Phase 1) — the same finalized burn
+        // always derives the same id — so a replay or a concurrent watcher
+        // observing the same burn presents the SAME id. `INSERT OR IGNORE`
+        // makes that a no-op instead of hard-erroring on `bridge_orders.id`;
+        // the `processed_burns` insert below (gated on the stable, unique
+        // `source_key`) remains the exactly-once arbiter that decides the
+        // return value. The FK from `processed_burns.order_id` requires the
+        // order row to exist first, so this ordering is preserved.
+        Self::insert_order_stmt_or_ignore(&tx, order)?;
 
         let changed = tx
             .execute(
@@ -1116,8 +1148,8 @@ impl Database {
             .map_err(|e| format!("Insert failed: {}", e))?;
 
         if changed == 0 {
-            // Duplicate source_key: drop the transaction (rolls back the
-            // order insert) — the existing record wins.
+            // Duplicate source_key: drop the transaction (rolls back the order
+            // insert, if any) — the existing record wins.
             return Ok(false);
         }
 
@@ -2816,6 +2848,7 @@ mod tests {
             "0x1234567890abcdef1234567890abcdef12345678".to_string(),
             "bth_user_stealth_addr".to_string(),
             "0xburntx".to_string(),
+            0,
         );
         order.set_status(OrderStatus::BurnConfirmed);
         db.insert_order(&order).unwrap();
@@ -2990,6 +3023,7 @@ mod tests {
             "0x1234567890abcdef1234567890abcdef12345678".to_string(),
             "bth_stealth_addr".to_string(),
             source_tx.to_string(),
+            0,
         )
     }
 
@@ -3004,12 +3038,17 @@ mod tests {
             .unwrap());
 
         // Replay with the SAME source key (cursor rewind / reorg re-add):
-        // nothing is written, including the duplicate order.
+        // the second insert is a no-op. Burn ids are deterministic over the
+        // source tuple (#1050), so `dup` derives the SAME id as `first`; the
+        // idempotency guard must skip it rather than collide on the order id.
         let dup = burn_order("0xburn");
+        assert_eq!(dup.id, first.id, "same burn tuple must derive the same id");
         assert!(!db
             .insert_burn_order(&dup, "0xburn#0", 51, Some("0xblock51"))
             .unwrap());
-        assert!(db.get_order(&dup.id).unwrap().is_none());
+        // Exactly one order row exists, unchanged from the first insert (the
+        // replay did not overwrite block 50 with block 51).
+        assert!(db.get_order(&first.id).unwrap().is_some());
 
         let rec = db.get_burn_by_source("0xburn#0").unwrap().unwrap();
         assert_eq!(rec.order_id, first.id);
@@ -3481,6 +3520,7 @@ mod tests {
             "0x1234567890abcdef1234567890abcdef12345678".to_string(),
             "bth_dest".to_string(),
             "0xburn".to_string(),
+            0,
         );
         burning.set_status(OrderStatus::BurnConfirmed);
         db.insert_order(&burning).unwrap();
@@ -3552,6 +3592,7 @@ mod tests {
             "0xsource".to_string(),
             "bth_dest".to_string(),
             "0xburntx".to_string(),
+            0,
         );
         db.insert_order(&burn).unwrap();
         assert_eq!(db.count_awaiting_deposit_mint_orders().unwrap(), 1);
@@ -3639,6 +3680,7 @@ mod tests {
             "0xsource".to_string(),
             "bth_dest".to_string(),
             format!("0xburntx-{}", Uuid::new_v4()),
+            0,
         );
         o.status = status;
         o.created_at = Utc.timestamp_opt(created, 0).unwrap();

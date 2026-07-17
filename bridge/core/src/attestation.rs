@@ -1638,6 +1638,7 @@ mod tests {
             "0x1234567890abcdef1234567890abcdef12345678".to_string(),
             "bth_user_stealth_addr".to_string(),
             "0xburntx".to_string(),
+            0,
         )
     }
 
@@ -1978,13 +1979,18 @@ mod tests {
     fn test_order_binding_rejects_cross_order_reuse() {
         let sk = signing_key(1);
         let order_a = burn_order_from_eth();
-        let order_b = burn_order_from_eth(); // fresh UUID, same shape
+        // Same shape but a DIFFERENT id. Since #1050 made burn ids
+        // deterministic over the source tuple, a second order with an
+        // identical source tuple would derive the same id; we set a distinct
+        // id explicitly to exercise the id-mismatch branch in isolation.
+        let mut order_b = burn_order_from_eth();
+        order_b.id = Uuid::from_u128(order_b.id.as_u128() ^ 1);
 
         let env = sign(&release_kind(&order_a), &sk, "aa");
         let parsed = env.verify_and_parse_ed25519(&sk.verifying_key()).unwrap();
 
-        // Bound to order A: order B is rejected even though every other
-        // field (amount, recipient, chains, source tx) matches.
+        // Bound to order A: order B is rejected on the id mismatch even though
+        // every other field (amount, recipient, chains, source tx) matches.
         assert!(check_order_binding(&parsed, &order_a).is_ok());
         assert!(matches!(
             check_order_binding(&parsed, &order_b),
@@ -2072,8 +2078,11 @@ mod tests {
         assert!(set.is_threshold_met(2));
         assert_eq!(set.signatures().len(), 2);
 
-        // A different order's attestation cannot enter this set.
-        let other = burn_order_from_eth();
+        // A different order's attestation cannot enter this set. Burn ids are
+        // now deterministic (#1050), so a genuinely different order has a
+        // different source tuple / id; set a distinct id to model that.
+        let mut other = burn_order_from_eth();
+        other.id = Uuid::from_u128(other.id.as_u128() ^ 1);
         let env = sign(&release_kind(&other), &k1, "n4");
         let p_other = env.verify_and_parse_ed25519(&k1.verifying_key()).unwrap();
         assert!(set.insert(&p_other, sig_of(&k1)).is_err());
