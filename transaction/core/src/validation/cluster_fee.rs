@@ -688,7 +688,8 @@ mod tests {
         // Calculate minimum fee
         let effective_wealth =
             compute_effective_cluster_wealth_from_tags(&input_tags, &input_values, &wealth_map);
-        let min_fee = fee_config.compute_fee(TransactionType::Hidden, 4000, effective_wealth, 0);
+        let min_fee =
+            fee_config.compute_fee(TransactionType::Hidden, 4000, effective_wealth as u128, 0);
 
         // Should pass with exact minimum
         let result = validate_cluster_fee_from_tags(
@@ -778,7 +779,7 @@ mod tests {
         let minimum_fee = fee_config.compute_fee(
             TransactionType::Hidden,
             tx_size_bytes,
-            effective_wealth,
+            effective_wealth as u128,
             num_memos,
         );
 
@@ -927,8 +928,13 @@ mod tests {
 
         // Calculate the required fee
         let max_wealth = compute_ring_max_cluster_wealth(&ring_tags, &ring_values, &wealth_map);
-        let min_fee =
-            fee_config.compute_fee_with_outputs(TransactionType::Hidden, 4000, max_wealth, 2, 0);
+        let min_fee = fee_config.compute_fee_with_outputs(
+            TransactionType::Hidden,
+            4000,
+            max_wealth as u128,
+            2,
+            0,
+        );
 
         // Should pass with exact minimum
         let result = validate_ring_cluster_fee(
@@ -1087,7 +1093,7 @@ mod tests {
         let min_fee = fee_config.compute_fee_with_dynamic_base_and_outputs(
             TransactionType::Hidden,
             4000,
-            max_wealth,
+            max_wealth as u128,
             2,
             0,
             dynamic_base,
