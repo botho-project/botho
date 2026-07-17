@@ -18,7 +18,7 @@ ADRs are immutable once accepted. If a decision changes, a new ADR supersedes th
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
 | [0001](0001-deprecate-lion-ring-signatures.md) | Deprecate LION Ring Signatures | Accepted | 2026-01-03 |
-| [0002](0002-bridge-custody-scp-validator-federation.md) | Bridge Custody & Trust Model — SCP Validator Federation | Accepted | 2026-07-13 |
+| [0002](0002-bridge-custody-scp-validator-federation.md) | Bridge Custody & Trust Model — SCP Validator Federation | Accepted (signer identity superseded by 0010) | 2026-07-13 |
 | [0003](0003-wbth-peg-factor-1-wrapping-and-demurrage-settlement.md) | wBTH Peg — Factor-1 Wrapping + Demurrage-Settlement On-ramp | Accepted | 2026-07-13 |
 | [0004](0004-bridge-privacy-semantics.md) | Bridge Privacy Semantics | Accepted | 2026-07-13 |
 | [0005](0005-bridge-v1-chain-scope-ethereum-and-solana.md) | Bridge v1 Chain Scope — Ethereum and Solana | Accepted | 2026-07-13 |
@@ -26,6 +26,7 @@ ADRs are immutable once accepted. If a decision changes, a new ADR supersedes th
 | [0007](0007-bridge-import-cluster-tagging.md) | Bridge-Import Cluster Tagging via Block-Epoch Keys | Accepted | 2026-07-14 |
 | [0008](0008-universal-pq-address-format-and-hybrid-stealth.md) | Universal PQ Address Format (v2) + Hybrid Stealth Preimage | Accepted | 2026-07-15 |
 | [0009](0009-confidential-amounts-economics.md) | Confidential-Amounts Economics — Value-Dependent Anti-Hoarding under Hidden Amounts | Proposed | 2026-07-16 |
+| [0010](0010-elected-bridge-multisig.md) | Bridge Custody — Small Elected Multisig, Decoupled from SCP Quorum Structure | Accepted | 2026-07-17 |
 
 ## ADR Statuses
 

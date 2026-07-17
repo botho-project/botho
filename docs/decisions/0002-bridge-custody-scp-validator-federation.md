@@ -1,6 +1,6 @@
 # ADR 0002: Bridge Custody & Trust Model — SCP Validator Federation
 
-**Status**: Accepted
+**Status**: Accepted; signer-identity model superseded by [ADR 0010](0010-elected-bridge-multisig.md) (2026-07-17 — bridge custody is a small elected multisig decoupled from SCP quorum structure; the t-of-n threshold-signing mechanics ratified here are unchanged)
 **Date**: 2026-07-13
 **Decision Makers**: Core Team
 **Related**: [Epic #816](https://github.com/botho-project/botho/issues/816), issues #817, #824, #826, #827; ADR 0003–0005
