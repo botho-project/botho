@@ -22,9 +22,13 @@
 //!   - `GET  /api/bridge/stats`               → aggregate wrap/unwrap activity
 //!   - `GET  /health`                         → static liveness (leaks nothing)
 //!
-//! There is deliberately no code path from this router to the breaker, the
-//! ops status snapshot, the Prometheus surface, or reserve-proof control.
-//! `test_public_router_does_not_serve_ops_endpoints` pins that invariant.
+//! There is deliberately no code path from this router that can CONTROL the
+//! breaker, the ops status snapshot, the Prometheus surface, or reserve-proof
+//! state. `test_public_router_does_not_serve_ops_endpoints` pins that
+//! invariant. The order-CREATE endpoints do READ the shared pause flag and
+//! refuse new orders (503, reason never surfaced) while the breaker is
+//! tripped (#1061) — accepting deposits into a paused pipeline would strand
+//! user funds mid-incident.
 //!
 //! ─── Threat model ─────────────────────────────────────────────────────────
 //! This is a MINTING surface (i.e. money) reachable from the open internet, so:
@@ -501,6 +505,37 @@ async fn public_health() -> Response {
     (StatusCode::OK, "OK").into_response()
 }
 
+/// Read-only breaker gate for the order-CREATE endpoints (#1061).
+///
+/// While the circuit breaker is tripped (peg incident, rotation drill, kill
+/// switch) the bridge must stop ACCEPTING new orders, not merely stop settling
+/// them — otherwise users are invited to send deposits into a paused pipeline.
+/// This is strictly a READ of the shared pause flag: there is still no code
+/// path from this router that can CHANGE breaker state, and the paused REASON
+/// (operational detail) is never surfaced. Fails closed: if the pause flag
+/// cannot be read, order creation is refused.
+///
+/// Returns `Some(response)` when creation must be refused, `None` to proceed.
+fn paused_gate(state: &PublicApiState) -> Option<Response> {
+    match state.db.is_paused() {
+        Ok(None) => None,
+        Ok(Some(_)) => Some(err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "bridge is paused; order creation is temporarily unavailable",
+        )),
+        Err(e) => {
+            warn!(
+                "public api: pause-state read failed (failing closed): {}",
+                e
+            );
+            Some(err(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "order creation is temporarily unavailable",
+            ))
+        }
+    }
+}
+
 /// `POST /api/bridge/orders`: open a mint order (BTH → wBTH).
 async fn create_mint_order(
     State(state): State<PublicApiState>,
@@ -515,6 +550,13 @@ async fn create_mint_order(
             StatusCode::TOO_MANY_REQUESTS,
             "rate limit exceeded; retry shortly",
         );
+    }
+
+    // Breaker gate BEFORE any request validation: while paused the surface
+    // uniformly answers 503, so a rotation/incident drill can probe the gate
+    // with a deliberately invalid body and never create a real order (#1061).
+    if let Some(resp) = paused_gate(&state) {
+        return resp;
     }
 
     let Json(req) = match payload {
@@ -677,6 +719,11 @@ async fn create_release_order(
             StatusCode::TOO_MANY_REQUESTS,
             "rate limit exceeded; retry shortly",
         );
+    }
+
+    // Breaker gate BEFORE any request validation (see create_mint_order).
+    if let Some(resp) = paused_gate(&state) {
+        return resp;
     }
 
     let Json(req) = match payload {
@@ -1278,6 +1325,90 @@ mod tests {
         }
         let (status, _) = http_request(addr, "POST", "/api/bridge/orders", Some(body), None).await;
         assert_eq!(status, 429, "4th create in the window must be throttled");
+
+        let _ = shutdown_tx.send(());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_order_create_refused_while_paused() {
+        // #1061: while the breaker is tripped the public surface must refuse
+        // NEW orders on both create endpoints — uniformly 503 BEFORE any
+        // request validation (so an invalid-body probe distinguishes
+        // paused (503) from live (400) without creating an order) — and the
+        // paused REASON must never be surfaced. Reads never pause-gate.
+        let (state, db) = test_state();
+        let (addr, shutdown_tx, server) = spawn_public_server(state).await;
+
+        db.set_paused(true, Some("rotation drill: secret operational detail"))
+            .unwrap();
+
+        let mint_body = r#"{"destChain":"ethereum","destAddress":"0x1234567890abcdef1234567890abcdef12345678","amount":"1000000000000"}"#;
+        let (status, resp) =
+            http_request(addr, "POST", "/api/bridge/orders", Some(mint_body), None).await;
+        assert_eq!(status, 503, "mint create must be refused while paused");
+        assert!(
+            !resp.contains("secret operational detail"),
+            "paused reason must not leak: {}",
+            resp
+        );
+
+        let release_body = r#"{"sourceChain":"ethereum","bthAddress":"bth1qtestaddress","amount":"1000000000000"}"#;
+        let (status, _) = http_request(
+            addr,
+            "POST",
+            "/api/bridge/release-orders",
+            Some(release_body),
+            None,
+        )
+        .await;
+        assert_eq!(
+            status, 503,
+            "release-intent create must be refused while paused"
+        );
+
+        // Even an INVALID body answers 503 while paused (gate precedes
+        // validation) — the drill's no-side-effect probe.
+        let (status, _) = http_request(
+            addr,
+            "POST",
+            "/api/bridge/orders",
+            Some(r#"{"destChain":"ethereum","destAddress":"nope","amount":"1"}"#),
+            None,
+        )
+        .await;
+        assert_eq!(status, 503, "gate must precede validation while paused");
+
+        // Reads stay available while paused (status polling mid-incident).
+        let (status, _) = http_request(
+            addr,
+            "GET",
+            "/api/bridge/orders/00000000-0000-0000-0000-000000000000",
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(status, 404, "reads must not be pause-gated");
+
+        // Resume: the same invalid probe now hits validation (400), and a
+        // valid create succeeds.
+        db.set_paused(false, None).unwrap();
+        let (status, _) = http_request(
+            addr,
+            "POST",
+            "/api/bridge/orders",
+            Some(r#"{"destChain":"ethereum","destAddress":"nope","amount":"1"}"#),
+            None,
+        )
+        .await;
+        assert_eq!(status, 400, "after resume the gate must lift");
+        let (status, resp) =
+            http_request(addr, "POST", "/api/bridge/orders", Some(mint_body), None).await;
+        assert_eq!(
+            status, 200,
+            "valid create must succeed after resume: {}",
+            resp
+        );
 
         let _ = shutdown_tx.send(());
         server.await.unwrap();
