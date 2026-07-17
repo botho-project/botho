@@ -28,6 +28,93 @@ pub struct BridgeConfig {
     /// bridge nodes.
     #[serde(default)]
     pub federation: FederationSettings,
+
+    /// Public, browser-reachable order API settings (#1036). This is a
+    /// SEPARATE surface from the loopback ops API (`reserve.api_listen`,
+    /// which co-hosts the unauthenticated `/api/breaker` kill switch); it
+    /// serves ONLY user-initiated mint/release order create + status.
+    /// Disabled by default (`listen` empty) — the operator opts in.
+    #[serde(default)]
+    pub public_api: PublicApiSettings,
+}
+
+/// Public order API settings (#1036).
+///
+/// The user-facing wallet export/unwrap flows (epic #1029) need a
+/// browser-reachable surface to open a mint order and poll its status. That
+/// surface is DELIBERATELY separate from the operational API
+/// (`ReserveSettings::api_listen`): the ops router co-hosts `POST
+/// /api/breaker` — an unauthenticated pause/RESUME kill switch — plus
+/// `/api/status`, `/metrics` and reserve-proof control, none of which may be
+/// exposed to the internet. The public router binds its OWN listener and
+/// serves ONLY `POST/GET /api/bridge/orders[/{id}]` and
+/// `POST/GET /api/bridge/release-orders[/{id}]`, with a scoped CORS allow-list,
+/// per-IP rate limiting, and strict input validation (it is a minting surface,
+/// i.e. money). See the module docs in `bridge/service/src/public_api.rs`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicApiSettings {
+    /// Listen address for the public order API (e.g. `0.0.0.0:9743`). Empty
+    /// string (the default) DISABLES the public surface entirely — the
+    /// operator must opt in. Bind this behind a TLS-terminating reverse
+    /// proxy in production; unlike the ops API it is meant to face browsers,
+    /// but it must NEVER share a listener with the breaker/ops router.
+    #[serde(default)]
+    pub listen: String,
+
+    /// Exact-match CORS allow-list of web origins permitted to call the API
+    /// from a browser (e.g. `https://botho.io`). Empty (the default) emits
+    /// NO `Access-Control-Allow-Origin` header, so browsers on other origins
+    /// are blocked while non-browser clients (curl, the wallet's own host)
+    /// still work. Wildcards are intentionally NOT supported — a minting
+    /// surface should name its callers.
+    #[serde(default)]
+    pub cors_allowed_origins: Vec<String>,
+
+    /// Maximum order-CREATE requests accepted per client IP per 60s window
+    /// (anti-spam on the money-moving path). 0 disables the create cap.
+    #[serde(default = "default_create_rate_limit")]
+    pub create_rate_limit_per_min: u32,
+
+    /// Maximum total requests (status polls etc.) accepted per client IP per
+    /// 60s window. 0 disables the general cap.
+    #[serde(default = "default_public_rate_limit")]
+    pub rate_limit_per_min: u32,
+
+    /// Minimum gross order amount in picocredits. An order must be at least
+    /// this large AND strictly greater than its fee (net > 0). 0 falls back
+    /// to "strictly greater than the fee".
+    #[serde(default)]
+    pub min_order_amount: u64,
+
+    /// Maximum request body size in bytes for order-create POSTs (defense
+    /// against oversized-payload abuse). Defaults to 8 KiB.
+    #[serde(default = "default_public_max_body_bytes")]
+    pub max_body_bytes: usize,
+}
+
+fn default_create_rate_limit() -> u32 {
+    10
+}
+
+fn default_public_rate_limit() -> u32 {
+    120
+}
+
+fn default_public_max_body_bytes() -> usize {
+    8 * 1024
+}
+
+impl Default for PublicApiSettings {
+    fn default() -> Self {
+        Self {
+            listen: String::new(),
+            cors_allowed_origins: Vec::new(),
+            create_rate_limit_per_min: default_create_rate_limit(),
+            rate_limit_per_min: default_public_rate_limit(),
+            min_order_amount: 0,
+            max_body_bytes: default_public_max_body_bytes(),
+        }
+    }
 }
 
 /// Federation attestation envelope transport settings (#858).
@@ -537,6 +624,7 @@ impl Default for BridgeConfig {
             },
             reserve: ReserveSettings::default(),
             federation: FederationSettings::default(),
+            public_api: PublicApiSettings::default(),
         }
     }
 }
@@ -686,6 +774,45 @@ mod tests {
         assert_eq!(configured.inbound_auth_token.as_deref(), Some("in-secret"));
         assert_eq!(configured.peer_auth_token.as_deref(), Some("out-secret"));
         assert_eq!(configured.peer_push_timeout_secs, 3);
+    }
+
+    #[test]
+    fn test_public_api_settings_default_and_parse() {
+        // Default: the public order surface is DISABLED (empty listen) so an
+        // operator must explicitly opt in — the money-moving surface never
+        // binds by accident (#1036).
+        let config = BridgeConfig::default();
+        assert!(config.public_api.listen.is_empty());
+        assert!(config.public_api.cors_allowed_origins.is_empty());
+        assert_eq!(config.public_api.create_rate_limit_per_min, 10);
+        assert_eq!(config.public_api.rate_limit_per_min, 120);
+        assert_eq!(config.public_api.min_order_amount, 0);
+        assert_eq!(config.public_api.max_body_bytes, 8 * 1024);
+
+        // A pre-existing config without a [public_api] section still parses.
+        let legacy: PublicApiSettings = toml::from_str("").unwrap();
+        assert!(legacy.listen.is_empty());
+        assert_eq!(legacy.create_rate_limit_per_min, 10);
+        assert_eq!(legacy.max_body_bytes, 8 * 1024);
+
+        // The knobs round-trip from TOML.
+        let configured: PublicApiSettings = toml::from_str(
+            r#"
+            listen = "0.0.0.0:9743"
+            cors_allowed_origins = ["https://botho.io", "http://localhost:5173"]
+            create_rate_limit_per_min = 3
+            rate_limit_per_min = 30
+            min_order_amount = 1000
+            max_body_bytes = 2048
+            "#,
+        )
+        .unwrap();
+        assert_eq!(configured.listen, "0.0.0.0:9743");
+        assert_eq!(configured.cors_allowed_origins.len(), 2);
+        assert_eq!(configured.create_rate_limit_per_min, 3);
+        assert_eq!(configured.rate_limit_per_min, 30);
+        assert_eq!(configured.min_order_amount, 1000);
+        assert_eq!(configured.max_body_bytes, 2048);
     }
 
     #[test]

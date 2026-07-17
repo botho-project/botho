@@ -16,6 +16,7 @@ use crate::{
     db::{Database, LimitCheck, LimitViolation},
     federation::{self, AttestState, PeerBroadcaster},
     mint::{ethereum::EthMinter, solana::SolMinter, ConfirmationStatus, Minter},
+    public_api::{self, PublicApiConfig, PublicApiState},
     release::{bth::BthReleaser, PreparedRelease, ReleaseConfirmation, Releaser},
     reserve::Reconciler,
     watchers::{BthWatcher, EthereumWatcher, SolanaWatcher},
@@ -340,6 +341,26 @@ impl BridgeEngine {
             }))
         };
 
+        // Spawn the PUBLIC order API (#1036): a SEPARATE, browser-reachable
+        // surface for user-initiated mint/release orders, bound on its OWN
+        // listener. It shares NOTHING with the loopback ops router above — in
+        // particular it never routes the `/api/breaker` kill switch or the
+        // ops/status/metrics/reserve-proof control. Empty listen = disabled
+        // (the operator opts in).
+        let public_api_handle = if self.config.public_api.listen.is_empty() {
+            None
+        } else {
+            let addr = self.config.public_api.listen.clone();
+            let state =
+                PublicApiState::new(self.db.clone(), PublicApiConfig::from_config(&self.config));
+            let public_shutdown = self.shutdown_tx.subscribe();
+            Some(tokio::spawn(async move {
+                if let Err(e) = public_api::serve_public(addr, state, public_shutdown).await {
+                    error!("Bridge public order API error: {}", e);
+                }
+            }))
+        };
+
         // Spawn the inbound federation attestation endpoint (#858):
         // authenticated `POST /api/attest` that routes received envelopes
         // into the same #824 verify pipeline. Enabled only when a concrete
@@ -410,6 +431,9 @@ impl BridgeEngine {
             reconcile_handle
         );
         if let Some(handle) = api_handle {
+            let _ = handle.await;
+        }
+        if let Some(handle) = public_api_handle {
             let _ = handle.await;
         }
         if let Some(handle) = attest_handle {

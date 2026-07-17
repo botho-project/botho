@@ -6,27 +6,24 @@
  * BTH deposit and watches the order walk its state machine.
  *
  * ─── Backend reachability (READ THIS) ──────────────────────────────────────
- * As of this change the bridge service (`bridge/service/src/api.rs`) exposes
- * ONLY operational endpoints (`/health`, `/metrics`, `/api/status`,
- * `/api/breaker`, `/api/reserve/proof`). It exposes NO order-create/status
- * endpoint, has NO CORS layer, and binds loopback by default *by design* —
+ * The operational bridge API (`bridge/service/src/api.rs`) exposes ONLY
+ * operational endpoints (`/health`, `/metrics`, `/api/status`, `/api/breaker`,
+ * `/api/reserve/proof`), has NO CORS layer, and binds loopback by design —
  * that router co-hosts `POST /api/breaker`, an unauthenticated kill switch, so
- * it must not be published to browsers. A user-facing order surface therefore
- * needs a SEPARATE, CORS-enabled, rate-limited public bind with input
- * validation and its own security review (it is a minting surface, i.e. money),
- * which is out of scope for this web-wallet PR and tracked as a fast-follow.
- *
- * This client codifies the contract that fast-follow must honor so the UI is
- * complete and correct the moment the endpoint lands:
+ * it must not be published to browsers. The user-facing order surface this
+ * client targets is therefore a SEPARATE, CORS-enabled, rate-limited public
+ * bind (`bridge/service/src/public_api.rs`, config `public_api.listen`, #1036)
+ * that serves ONLY these endpoints and never the breaker/ops control:
  *   - `POST {base}/api/bridge/orders`               → 200 {@link MintOrder}
  *   - `GET  {base}/api/bridge/orders/{id}`          → 200 {@link MintOrder}
  *   - `POST {base}/api/bridge/release-orders`       → 200 {@link ReleaseOrder}
  *   - `GET  {base}/api/bridge/release-orders/{id}`  → 200 {@link ReleaseOrder}
  *
- * The release-order endpoints (Unwrap, #1032) share the same #1036 backend
- * fast-follow — the burn happens in the user's OWN counterparty wallet, and the
- * order only registers the intent (source chain + BTH release address + amount)
- * so the bridge can correlate the burn and track the release to `released`.
+ * The release-order endpoints (Unwrap, #1032) register a NON-CUSTODIAL tracking
+ * intent — the burn happens in the user's OWN counterparty wallet, and the
+ * order only records the intent (source chain + BTH release address + amount)
+ * so the bridge can correlate the watcher-detected burn and track the release
+ * to `released`. Until a burn is detected the status is `awaiting_burn`.
  *
  * Until a base URL is configured (`VITE_BRIDGE_API_BASE`), the wallet passes a
  * `null` client and the panels render an explicit "endpoint not wired yet"

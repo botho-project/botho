@@ -42,6 +42,7 @@ mod federation;
 #[cfg(test)]
 mod fork_tests;
 mod mint;
+mod public_api;
 mod release;
 mod reserve;
 #[cfg(test)]

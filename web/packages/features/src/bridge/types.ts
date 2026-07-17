@@ -205,14 +205,20 @@ export interface BridgeClientLike {
 export type SourceChain = 'ethereum' | 'solana'
 
 /**
- * Release-order status. Strings are byte-identical to the Rust
- * `OrderStatus::Display` impl (`bridge/core/src/order.rs`) for the burn side —
+ * Release-order status. The burn-side strings are byte-identical to the Rust
+ * `OrderStatus::Display` impl (`bridge/core/src/order.rs`) —
  * `burn_detected → burn_confirmed → release_pending → released`, with
- * `expired` / `failed` as off-path terminal states. Keeping the strings
- * identical means the client consumes the release API verbatim once #1036
- * exposes it.
+ * `expired` / `failed` as off-path terminal states.
+ *
+ * `awaiting_burn` is a public-API-only pre-state (#1036): a release order is a
+ * NON-CUSTODIAL tracking intent (the burn happens in the user's own
+ * counterparty wallet and is self-describing), so between registration and the
+ * watcher detecting the on-chain burn there is not yet any `BridgeOrder` to
+ * report — the API returns `awaiting_burn` until it can correlate one by
+ * `(bthAddress, amount)`. It has no Rust `OrderStatus` counterpart by design.
  */
 export type ReleaseOrderStatus =
+  | 'awaiting_burn'
   | 'burn_detected'
   | 'burn_confirmed'
   | 'release_pending'
