@@ -277,11 +277,17 @@ fn build_and_sign_produces_node_verifiable_tx() {
     let tx_hex = build_and_sign_inner(&SignRequest {
         spend_private_key: sender.spend_private_hex.clone(),
         view_private_key: sender.view_private_hex.clone(),
+        // Thread the seed so the signer can decapsulate a hybrid input on the
+        // unified recovery path (#988); harmless for this classical input.
+        seed: sender.seed_hex.clone(),
         inputs: vec![SpendInput {
             target_key: input.target_key.clone(),
             public_key: input.public_key.clone(),
             amount: input.amount,
             subaddress_index: input.subaddress_index,
+            // Preserve the scanned output's hybrid metadata (#988).
+            output_index: input.output_index,
+            kem_ciphertext: input.kem_ciphertext.clone(),
             decoys,
         }],
         recipient: recipient_addr,
@@ -298,6 +304,97 @@ fn build_and_sign_produces_node_verifiable_tx() {
 
     assert!(!tx_hex.is_empty());
     // Output is hex (the wire form submitted to `tx_submit`).
+    assert!(hex::decode(&tx_hex).is_ok(), "signed tx must be valid hex");
+}
+
+/// #988 regression (mobile spend leg): a 6.0.0 HYBRID owned output must be
+/// spendable via the exact mobile-shaped path (`wallet_ops::send` threads the
+/// scanned `seed` + `output_index` + `kem_ciphertext` into the signer). Without
+/// that threading the signer would classically recover the one-time key of a
+/// hybrid input, derive the WRONG key, and self-verification of the CLSAG ring
+/// signature would fail — the same bug this PR fixes for the web wallet. Minting
+/// a hybrid input (`new_hybrid_to_address`), scanning it (which decapsulates and
+/// preserves the metadata), and spending it end-to-end proves the mobile leg is
+/// fixed too, not just left latent.
+#[test]
+fn build_and_sign_spends_hybrid_output() {
+    let sender = derive_from_seed(1);
+    let recipient = derive_from_seed(2);
+
+    // A HYBRID (ciphertext-bearing) input bound to a non-trivial output index —
+    // exactly the shape a 6.0.0 producer emits and `chain_getOutputs` reports.
+    let input_amount = 100_000_000_000u64; // 0.1 BTH
+    let hybrid_output_index = 3u32;
+    let owned = scan_owned_outputs_inner(&ScanRequest {
+        spend_private_key: sender.spend_private_hex.clone(),
+        view_private_key: sender.view_private_hex.clone(),
+        // The seed-derived ML-KEM secret is what decapsulates the hybrid input.
+        seed: sender.seed_hex.clone(),
+        outputs: vec![mint_hybrid_owned_output(
+            input_amount,
+            &sender.public_address,
+            hybrid_output_index,
+        )],
+    })
+    .expect("scan hybrid input");
+    assert_eq!(owned.len(), 1, "the hybrid output must be detected as owned");
+    let input: &OwnedOutput = &owned[0];
+    // The scan preserved the hybrid metadata the spend needs (#988).
+    assert_eq!(input.output_index, hybrid_output_index);
+    assert!(
+        input.kem_ciphertext.is_some(),
+        "scanned hybrid input must carry its ML-KEM ciphertext"
+    );
+
+    let decoys: Vec<DecoyOutput> = (0..DEFAULT_RING_SIZE - 1)
+        .map(|i| {
+            let d = mint_decoy(input_amount + i as u64 + 1);
+            DecoyOutput {
+                target_key: d.target_key,
+                public_key: d.public_key,
+                amount: d.amount,
+            }
+        })
+        .collect();
+
+    let amount = 10_000_000_000u64;
+    assert!(amount >= DUST_THRESHOLD);
+
+    let recipient_addr = RecipientAddress {
+        view_public_key: hex::encode(recipient.public_address.view_public_key().to_bytes()),
+        spend_public_key: hex::encode(recipient.public_address.spend_public_key().to_bytes()),
+        kem_public_key: recipient.kem_public_hex.clone(),
+    };
+
+    // Build the SignRequest exactly as `wallet_ops::send` does: thread the seed
+    // and the scanned output's hybrid metadata so the signer recovers the true
+    // one-time key on the unified path.
+    let tx_hex = build_and_sign_inner(&SignRequest {
+        spend_private_key: sender.spend_private_hex.clone(),
+        view_private_key: sender.view_private_hex.clone(),
+        seed: sender.seed_hex.clone(),
+        inputs: vec![SpendInput {
+            target_key: input.target_key.clone(),
+            public_key: input.public_key.clone(),
+            amount: input.amount,
+            subaddress_index: input.subaddress_index,
+            output_index: input.output_index,
+            kem_ciphertext: input.kem_ciphertext.clone(),
+            decoys,
+        }],
+        recipient: recipient_addr,
+        sender_kem_public_key: sender.kem_public_hex.clone(),
+        amount,
+        fee: MIN_TX_FEE,
+        created_at_height: 1,
+        bridge_deposit_memo: None,
+    })
+    // Self-verification (structure + CLSAG ring signatures + balance) runs under
+    // the node's own verifier before returning; success means the hybrid input
+    // was spent with the correct one-time key.
+    .expect("hybrid input must be spendable with threaded seed + ciphertext");
+
+    assert!(!tx_hex.is_empty());
     assert!(hex::decode(&tx_hex).is_ok(), "signed tx must be valid hex");
 }
 
@@ -331,11 +428,14 @@ fn build_and_sign_rejects_insufficient_inputs() {
     let result = build_and_sign_inner(&SignRequest {
         spend_private_key: sender.spend_private_hex.clone(),
         view_private_key: sender.view_private_hex.clone(),
+        seed: sender.seed_hex.clone(),
         inputs: vec![SpendInput {
             target_key: owned[0].target_key.clone(),
             public_key: owned[0].public_key.clone(),
             amount: owned[0].amount,
             subaddress_index: owned[0].subaddress_index,
+            output_index: owned[0].output_index,
+            kem_ciphertext: owned[0].kem_ciphertext.clone(),
             decoys,
         }],
         recipient: RecipientAddress {

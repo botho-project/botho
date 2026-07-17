@@ -879,11 +879,16 @@ mod send_acceptance_tests {
         let request = SignRequest {
             spend_private_key: signer.spend_private_key.clone(),
             view_private_key: signer.view_private_key.clone(),
+            // Classical (KEM-less) input in this send-only test: empty seed +
+            // no ciphertext takes the classical recovery path unchanged (#988).
+            seed: signer.seed.clone(),
             inputs: vec![SpendInput {
                 target_key: hex::encode(owned.target_key),
                 public_key: hex::encode(owned.public_key),
                 amount: owned_amount,
                 subaddress_index: 0,
+                output_index: 0,
+                kem_ciphertext: None,
                 decoys,
             }],
             recipient: parsed_recipient,

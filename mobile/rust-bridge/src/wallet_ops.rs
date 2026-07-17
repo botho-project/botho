@@ -265,6 +265,14 @@ pub async fn send(
                 public_key: input.public_key.clone(),
                 amount: input.amount,
                 subaddress_index: input.subaddress_index,
+                // Thread the hybrid metadata scanned on the receive side (#988):
+                // under protocol 6.0.0 the one-time key is bound to
+                // `output_index` and recovered by decapsulating `kem_ciphertext`
+                // with the wallet seed. Omitting these would classically recover
+                // a hybrid input's spend key, yielding the wrong one-time key and
+                // an invalid CLSAG signature — the same bug this PR fixes for web.
+                output_index: input.output_index,
+                kem_ciphertext: input.kem_ciphertext.clone(),
                 decoys,
             }
         })
@@ -273,6 +281,10 @@ pub async fn send(
     let request = SignRequest {
         spend_private_key: keys.spend_private_key.clone(),
         view_private_key: keys.view_private_key.clone(),
+        // The wallet seed lets the signer derive the ML-KEM secret and
+        // decapsulate a hybrid input's ciphertext to recover its true one-time
+        // spend key on the unified path (#988). Never leaves the device.
+        seed: keys.seed.clone(),
         inputs: spend_inputs,
         recipient,
         // The sender's own published ML-KEM-768 key: the change (self-send)
