@@ -214,15 +214,16 @@ fn should_arm_minting(quorum_ok: bool, initial_sync_complete: bool) -> bool {
 /// a node is allowed to consider itself synced and arm minting.
 ///
 /// This is the discriminator that seeds `initial_sync_complete` (via
-/// `min_peers_to_wait == 0`) and drives the discovery wait loop. It must return:
+/// `min_peers_to_wait == 0`) and drives the discovery wait loop. It must
+/// return:
 ///
 /// - `Recommended` mode: the configured `min_peers`. A `min_peers == 0` config
 ///   is a genuine solo node and is seeded synced (unchanged pre/post #770).
 /// - `Explicit` mode with a **non-empty** member set: `1`. The operator has
-///   declared trusted peers, so the node genuinely expects a fleet and must keep
-///   the #770 startup gate — wait for >=1 peer, sync to the tip, then mint. This
-///   is what prevents a restarted node from re-entering SCP at a stale slot while
-///   the fleet is ahead (#766/#998/#1000).
+///   declared trusted peers, so the node genuinely expects a fleet and must
+///   keep the #770 startup gate — wait for >=1 peer, sync to the tip, then
+///   mint. This is what prevents a restarted node from re-entering SCP at a
+///   stale slot while the fleet is ahead (#766/#998/#1000).
 /// - `Explicit` mode with an **empty** member set: `0`. Such a quorum is
 ///   solo-by-design — its threshold is satisfied by self alone with zero peers
 ///   (`Config::can_reach_quorum` reports it minteable), so there is no fleet to
