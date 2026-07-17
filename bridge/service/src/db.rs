@@ -3773,7 +3773,10 @@ mod tests {
         // Exact 2 * i64::MAX — larger than i64::MAX, still within u64.
         let expected = 2u128 * i64::MAX as u128;
         assert_eq!(all.completed.volume, expected);
-        assert!(expected > i64::MAX as u128, "test must cross the i64 ceiling");
+        assert!(
+            expected > i64::MAX as u128,
+            "test must cross the i64 ceiling"
+        );
     }
 
     #[test]
