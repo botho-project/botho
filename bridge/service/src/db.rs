@@ -142,6 +142,31 @@ pub struct ReleaseIntent {
     pub expires_at: i64,
 }
 
+/// Count + gross volume (picocredits) for one activity bucket (#1054).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ActivityAggregate {
+    /// Number of orders in the bucket.
+    pub count: u64,
+    /// Sum of gross order amounts, picocredits.
+    pub volume: u64,
+}
+
+/// Wrap/unwrap activity aggregates for one order type over one window
+/// (#1054). Produced by [`Database::aggregate_order_activity`]; buckets are
+/// disjoint and cover every order of the type, so the bucket sums equal the
+/// window total.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ActivityBreakdown {
+    /// Settled orders (`completed` mints / `released` burns).
+    pub completed: ActivityAggregate,
+    /// In-flight orders (every non-terminal status).
+    pub pending: ActivityAggregate,
+    /// Orders that timed out.
+    pub expired: ActivityAggregate,
+    /// Terminal failures.
+    pub failed: ActivityAggregate,
+}
+
 /// A row in the `reserve_ledger` table (#825).
 ///
 /// The locked BTH reserve is derived from bridge-controlled outputs, never
@@ -703,6 +728,70 @@ impl Database {
             )
             .map_err(|e| format!("Count failed: {}", e))?;
         Ok(count.max(0) as u64)
+    }
+
+    /// Aggregate wrap/unwrap activity for one order type (#1054).
+    ///
+    /// Backs the public `GET /api/bridge/stats` endpoint: counts and gross
+    /// BTH volumes (picocredits, `SUM(amount)`) over `bridge_orders` rows of
+    /// `order_type`, bucketed by outcome:
+    ///
+    /// * `completed` — settled orders (`completed` for mints, `released` for
+    ///   burns; both strings map here so either type aggregates correctly).
+    /// * `expired`   — orders that timed out (`expired`).
+    /// * `failed`    — terminal failures (stored as `failed: <reason>`).
+    /// * `pending`   — every other (in-flight) status.
+    ///
+    /// `since` bounds the window: only rows with `created_at >= since` count
+    /// (INCLUSIVE edge — an order created exactly at the cutoff is in the
+    /// window). Pass `None` for all-time.
+    ///
+    /// AGGREGATES ONLY: no per-order field leaves this query, so the result
+    /// is safe for the unauthenticated public surface (#1042 scope rules).
+    pub fn aggregate_order_activity(
+        &self,
+        order_type: OrderType,
+        since: Option<i64>,
+    ) -> Result<ActivityBreakdown, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut stmt = conn
+            .prepare(
+                r#"
+                SELECT status, COUNT(*), COALESCE(SUM(amount), 0)
+                FROM bridge_orders
+                WHERE order_type = ?1 AND created_at >= ?2
+                GROUP BY status
+                "#,
+            )
+            .map_err(|e| format!("Prepare failed: {}", e))?;
+
+        let rows = stmt
+            .query_map(
+                params![order_type.to_string(), since.unwrap_or(i64::MIN)],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .map_err(|e| format!("Query failed: {}", e))?;
+
+        let mut breakdown = ActivityBreakdown::default();
+        for row in rows {
+            let (status, count, volume) = row.map_err(|e| format!("Row failed: {}", e))?;
+            let bucket = match status.as_str() {
+                "completed" | "released" => &mut breakdown.completed,
+                "expired" => &mut breakdown.expired,
+                // Stored as `failed: <reason>` (OrderStatus::Display).
+                s if s.starts_with("failed") => &mut breakdown.failed,
+                _ => &mut breakdown.pending,
+            };
+            bucket.count = bucket.count.saturating_add(count.max(0) as u64);
+            bucket.volume = bucket.volume.saturating_add(volume.max(0) as u64);
+        }
+        Ok(breakdown)
     }
 
     /// Delete EXPIRED mint orders that never saw a deposit, once they are
@@ -3516,5 +3605,138 @@ mod tests {
         assert_eq!(db.prune_expired_release_intents(1_000).unwrap(), 1);
         assert!(db.get_release_intent(&stale.id).unwrap().is_none());
         assert!(db.get_release_intent(&live.id).unwrap().is_some());
+    }
+
+    /// Build a mint order with a forced status + creation time (bypassing
+    /// the state machine — these rows exercise the aggregation SQL only).
+    fn mint_at(amount: u64, status: OrderStatus, created: i64) -> BridgeOrder {
+        let mut o = BridgeOrder::new_mint(
+            Chain::Ethereum,
+            amount,
+            1,
+            "bth_reserve".to_string(),
+            "0xdest".to_string(),
+        );
+        o.status = status;
+        o.created_at = Utc.timestamp_opt(created, 0).unwrap();
+        o
+    }
+
+    /// Build a burn order with a forced status + creation time.
+    fn burn_at(amount: u64, status: OrderStatus, created: i64) -> BridgeOrder {
+        let mut o = BridgeOrder::new_burn(
+            Chain::Ethereum,
+            amount,
+            1,
+            "0xsource".to_string(),
+            "bth_dest".to_string(),
+            format!("0xburntx-{}", Uuid::new_v4()),
+        );
+        o.status = status;
+        o.created_at = Utc.timestamp_opt(created, 0).unwrap();
+        o
+    }
+
+    #[test]
+    fn test_aggregate_order_activity_buckets_mint_orders() {
+        // #1054: the wrap-side aggregation buckets by outcome and applies
+        // the window edge INCLUSIVELY on created_at.
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+
+        let now = Utc::now().timestamp();
+        let cutoff = now - 86_400;
+
+        // In-window: one of each bucket.
+        db.insert_order(&mint_at(100, OrderStatus::Completed, now - 10))
+            .unwrap();
+        db.insert_order(&mint_at(200, OrderStatus::AwaitingDeposit, now - 10))
+            .unwrap();
+        db.insert_order(&mint_at(300, OrderStatus::MintPending, now - 10))
+            .unwrap();
+        db.insert_order(&mint_at(400, OrderStatus::Expired, now - 10))
+            .unwrap();
+        db.insert_order(&mint_at(
+            500,
+            OrderStatus::Failed {
+                reason: "boom".to_string(),
+            },
+            now - 10,
+        ))
+        .unwrap();
+        // Window edge: created exactly AT the cutoff is IN the window...
+        db.insert_order(&mint_at(1_000, OrderStatus::Completed, cutoff))
+            .unwrap();
+        // ...one second earlier is all-time only.
+        db.insert_order(&mint_at(10_000, OrderStatus::Completed, cutoff - 1))
+            .unwrap();
+
+        let day = db
+            .aggregate_order_activity(OrderType::Mint, Some(cutoff))
+            .unwrap();
+        assert_eq!(day.completed.count, 2, "in-window + exact-cutoff order");
+        assert_eq!(day.completed.volume, 1_100);
+        assert_eq!(day.pending.count, 2, "awaiting_deposit + mint_pending");
+        assert_eq!(day.pending.volume, 500);
+        assert_eq!(day.expired.count, 1);
+        assert_eq!(day.expired.volume, 400);
+        assert_eq!(day.failed.count, 1);
+        assert_eq!(day.failed.volume, 500);
+
+        let all = db.aggregate_order_activity(OrderType::Mint, None).unwrap();
+        assert_eq!(all.completed.count, 3, "pre-cutoff order counts all-time");
+        assert_eq!(all.completed.volume, 11_100);
+        assert_eq!(all.pending, day.pending);
+        assert_eq!(all.expired, day.expired);
+        assert_eq!(all.failed, day.failed);
+    }
+
+    #[test]
+    fn test_aggregate_order_activity_buckets_burn_orders_separately() {
+        // #1054: unwraps aggregate over BURN orders only — `released` is
+        // their settled bucket — and never bleed into the mint side.
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+
+        let now = Utc::now().timestamp();
+        let cutoff = now - 86_400;
+
+        db.insert_order(&burn_at(700, OrderStatus::Released, now - 10))
+            .unwrap();
+        db.insert_order(&burn_at(800, OrderStatus::BurnConfirmed, now - 10))
+            .unwrap();
+        db.insert_order(&burn_at(900, OrderStatus::Released, cutoff - 1))
+            .unwrap();
+        // A completed MINT order must not appear in the burn aggregate.
+        db.insert_order(&mint_at(100, OrderStatus::Completed, now - 10))
+            .unwrap();
+
+        let day = db
+            .aggregate_order_activity(OrderType::Burn, Some(cutoff))
+            .unwrap();
+        assert_eq!(day.completed.count, 1);
+        assert_eq!(day.completed.volume, 700);
+        assert_eq!(day.pending.count, 1);
+        assert_eq!(day.pending.volume, 800);
+        assert_eq!(day.expired, ActivityAggregate::default());
+        assert_eq!(day.failed, ActivityAggregate::default());
+
+        let all = db.aggregate_order_activity(OrderType::Burn, None).unwrap();
+        assert_eq!(all.completed.count, 2);
+        assert_eq!(all.completed.volume, 1_600);
+
+        // And the mint aggregate sees only the mint order.
+        let mint_all = db.aggregate_order_activity(OrderType::Mint, None).unwrap();
+        assert_eq!(mint_all.completed.count, 1);
+        assert_eq!(mint_all.completed.volume, 100);
+        assert_eq!(mint_all.pending, ActivityAggregate::default());
+    }
+
+    #[test]
+    fn test_aggregate_order_activity_empty_db_is_all_zero() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let empty = db.aggregate_order_activity(OrderType::Mint, None).unwrap();
+        assert_eq!(empty, ActivityBreakdown::default());
     }
 }

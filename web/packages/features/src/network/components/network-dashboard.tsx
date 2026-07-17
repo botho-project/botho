@@ -5,11 +5,13 @@ import type {
   ReserveProof,
   ReserveProofState,
 } from '../types'
+import type { BridgeStats, BridgeStatsState, Translate } from '../../bridge/types'
 import { deriveFleetSummary } from '../fleet'
 import { FleetSummaryStrip } from './fleet-summary'
 import { NodeCard } from './node-card'
 import { HistoryChart } from './history-chart'
 import { ReserveProofCard } from './reserve-proof-card'
+import { BridgeActivityCard } from './bridge-activity-card'
 
 export interface NetworkDashboardProps {
   nodes: FleetNode[]
@@ -26,6 +28,19 @@ export interface NetworkDashboardProps {
   reserve?: ReserveProof | null
   /** Reserve fetch outcome; `undefined`/`absent` hides the card. */
   reserveState?: ReserveProofState
+  /**
+   * Aggregate wrap/unwrap activity (#1054). Optional so surfaces that don't
+   * wire the bridge-stats hook simply omit the card.
+   */
+  bridgeStats?: BridgeStats | null
+  /** Bridge-stats fetch outcome; `undefined`/`absent` hides the card. */
+  bridgeStatsState?: BridgeStatsState
+  /**
+   * `bridge`-namespace translator for the activity card's strings. Required
+   * (alongside `bridgeStatsState`) for the card to render — the features
+   * package keeps no react-i18next dependency.
+   */
+  bridgeStatsT?: Translate
   className?: string
 }
 
@@ -42,6 +57,9 @@ export function NetworkDashboard({
   historyState,
   reserve,
   reserveState,
+  bridgeStats,
+  bridgeStatsState,
+  bridgeStatsT,
   className,
 }: NetworkDashboardProps) {
   const statusList = nodes
@@ -60,6 +78,14 @@ export function NetworkDashboard({
 
       {reserveState !== undefined && (
         <ReserveProofCard proof={reserve ?? null} state={reserveState} />
+      )}
+
+      {bridgeStatsState !== undefined && bridgeStatsT !== undefined && (
+        <BridgeActivityCard
+          stats={bridgeStats ?? null}
+          state={bridgeStatsState}
+          t={bridgeStatsT}
+        />
       )}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">

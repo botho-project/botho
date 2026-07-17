@@ -316,6 +316,74 @@ export interface UnwrapController {
   requestWallet?: () => void
 }
 
+// ─── Bridge activity stats (#1054) ──────────────────────────────────────────
+
+/**
+ * One `GET /api/bridge/stats` bucket: order count + gross BTH volume. The
+ * volume is a picocredit decimal STRING (u64-safe across JSON), matching the
+ * amount convention of every other bridge response.
+ */
+export interface BridgeStatsAggregate {
+  /** Number of orders in the bucket. */
+  count: number
+  /** Sum of gross order amounts, picocredits (string). */
+  volume: string
+}
+
+/**
+ * Per-window outcome split. Buckets are disjoint and cover every order of the
+ * side/window, so they sum to the window total.
+ */
+export interface BridgeStatsWindow {
+  /** Settled orders (`completed` mints / `released` burns). */
+  completed: BridgeStatsAggregate
+  /** In-flight orders (every non-terminal status). */
+  pending: BridgeStatsAggregate
+  /** Orders that timed out. */
+  expired: BridgeStatsAggregate
+  /** Terminal failures. */
+  failed: BridgeStatsAggregate
+}
+
+/** One side of the bridge over both reporting windows. */
+export interface BridgeStatsSide {
+  last24h: BridgeStatsWindow
+  allTime: BridgeStatsWindow
+}
+
+/**
+ * Aggregate wrap/unwrap activity as returned by the public bridge API's
+ * `GET /api/bridge/stats` (#1054). Field names match the Rust
+ * `BridgeStatsResponse` (`bridge/service/src/public_api.rs`). Aggregates
+ * only — the endpoint never serves per-order detail.
+ */
+export interface BridgeStats {
+  /** When the aggregate was computed (unix seconds; server-cached 30 s). */
+  generatedAt: number
+  /** BTH → wBTH exports (mint orders). */
+  wraps: BridgeStatsSide
+  /** wBTH → BTH releases (burn orders). */
+  unwraps: BridgeStatsSide
+}
+
+/**
+ * Structural subset of `BridgeClient` for the stats side. Declared here so
+ * `types.ts` stays dependency-free; the concrete client satisfies it.
+ */
+export interface BridgeStatsClientLike {
+  getBridgeStats(): Promise<BridgeStats>
+}
+
+/**
+ * Bridge-stats fetch outcome, mirroring `ReserveProofState` in `network/`:
+ * - `ok`          — `stats` holds a live aggregate.
+ * - `absent`      — no public bridge API is configured (client is `null`);
+ *   hide the card entirely.
+ * - `unavailable` — an endpoint is configured but unreachable/erroring;
+ *   render a grayed placeholder, never fabricated values (#541 lesson).
+ */
+export type BridgeStatsState = 'ok' | 'absent' | 'unavailable'
+
 /** Wallet fields the unwrap panel reads (no secrets, no signing keys). */
 export interface UnwrapWalletState {
   /** Whether a wallet exists in this browser. */

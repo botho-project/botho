@@ -9,6 +9,10 @@ export {
   type ReserveProofCardProps,
 } from './components/reserve-proof-card'
 export {
+  BridgeActivityCard,
+  type BridgeActivityCardProps,
+} from './components/bridge-activity-card'
+export {
   NetworkDashboard,
   type NetworkDashboardProps,
 } from './components/network-dashboard'
