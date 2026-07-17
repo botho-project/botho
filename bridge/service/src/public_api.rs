@@ -19,6 +19,7 @@
 //!   - `GET  /api/bridge/orders/{id}`         → mint order status
 //!   - `POST /api/bridge/release-orders`      → register an unwrap intent
 //!   - `GET  /api/bridge/release-orders/{id}` → release order status
+//!   - `GET  /api/bridge/stats`               → aggregate wrap/unwrap activity
 //!   - `GET  /health`                         → static liveness (leaks nothing)
 //!
 //! There is deliberately no code path from this router to the breaker, the
@@ -88,7 +89,7 @@ use tokio::sync::broadcast;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::db::{Database, ReleaseIntent};
+use crate::db::{ActivityAggregate, ActivityBreakdown, Database, ReleaseIntent};
 
 /// Runtime configuration snapshot for the public order API, derived from
 /// [`BridgeConfig`] at startup. Held behind an `Arc` in [`PublicApiState`].
@@ -161,6 +162,13 @@ impl PublicApiConfig {
     }
 }
 
+/// How long a computed `/api/bridge/stats` aggregate is served from memory
+/// before the orders DB is queried again (#1054). Polling clients therefore
+/// cannot use the endpoint to hammer the DB — at most one aggregation pass
+/// per TTL regardless of request rate (the per-IP limiter still applies on
+/// top).
+const STATS_CACHE_TTL: Duration = Duration::from_secs(30);
+
 /// Shared state of the public API router.
 #[derive(Clone)]
 pub struct PublicApiState {
@@ -170,6 +178,8 @@ pub struct PublicApiState {
     cfg: Arc<PublicApiConfig>,
     /// Per-IP fixed-window rate limiter.
     limiter: Arc<RateLimiter>,
+    /// Cached `/api/bridge/stats` aggregate + when it was computed (#1054).
+    stats_cache: Arc<Mutex<Option<(Instant, BridgeStatsResponse)>>>,
 }
 
 impl PublicApiState {
@@ -179,6 +189,7 @@ impl PublicApiState {
             db,
             cfg: Arc::new(cfg),
             limiter: Arc::new(RateLimiter::new()),
+            stats_cache: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -314,6 +325,74 @@ struct ReleaseOrderResponse {
     expires_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     failure_reason: Option<String>,
+}
+
+/// One `/api/bridge/stats` bucket: order count + gross BTH volume (#1054).
+/// The volume is a picocredit decimal STRING (u64-safe across JSON), matching
+/// the amount convention of every other public-API response.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StatsAggregate {
+    count: u64,
+    volume: String,
+}
+
+impl From<ActivityAggregate> for StatsAggregate {
+    fn from(a: ActivityAggregate) -> Self {
+        Self {
+            count: a.count,
+            volume: a.volume.to_string(),
+        }
+    }
+}
+
+/// Per-window outcome split. Buckets are disjoint and cover every order of
+/// the side/window, so they sum to the window total.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StatsWindow {
+    completed: StatsAggregate,
+    pending: StatsAggregate,
+    expired: StatsAggregate,
+    failed: StatsAggregate,
+}
+
+impl From<ActivityBreakdown> for StatsWindow {
+    fn from(b: ActivityBreakdown) -> Self {
+        Self {
+            completed: b.completed.into(),
+            pending: b.pending.into(),
+            expired: b.expired.into(),
+            failed: b.failed.into(),
+        }
+    }
+}
+
+/// One side of the bridge (wraps = mint orders, unwraps = burn orders) over
+/// both reporting windows.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StatsSide {
+    last_24h: StatsWindow,
+    all_time: StatsWindow,
+}
+
+/// `GET /api/bridge/stats` response (#1054). Field names match
+/// `web/packages/features/src/bridge/types.ts` (`BridgeStats`).
+///
+/// Information-exposure scope (#1042): AGGREGATES ONLY — counts and summed
+/// volumes, all derivable from public on-chain activity. No per-order detail,
+/// no addresses, no ops state may ever be added here.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BridgeStatsResponse {
+    /// When the aggregate was computed (unix seconds); with the cache TTL
+    /// this may lag "now" by up to [`STATS_CACHE_TTL`].
+    generated_at: i64,
+    /// BTH → wBTH exports (mint orders).
+    wraps: StatsSide,
+    /// wBTH → BTH releases (burn orders).
+    unwraps: StatsSide,
 }
 
 /// Error envelope; the web client surfaces `error` verbatim.
@@ -785,6 +864,89 @@ async fn get_release_order(
     }
 }
 
+/// `GET /api/bridge/stats`: aggregate wrap/unwrap activity (#1054).
+///
+/// Serves counts + gross BTH volumes for mint (wrap) and burn (unwrap)
+/// orders, split completed/pending/expired/failed over a 24-hour and an
+/// all-time window. The aggregate is cached for [`STATS_CACHE_TTL`] so the
+/// endpoint cannot be used to hammer the orders DB, and it sits behind the
+/// same per-IP limiter as the status polls.
+///
+/// Information-exposure scope (#1042): aggregates only — every number here
+/// is derivable from public on-chain data (deposits, mints, burns, releases
+/// are all public on their chains). Never add per-order detail, addresses,
+/// or ops state to this response.
+async fn get_bridge_stats(
+    State(state): State<PublicApiState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+) -> Response {
+    if !state
+        .limiter
+        .check(&rl_key(peer, "get"), state.cfg.rate_limit_per_min)
+    {
+        return err(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate limit exceeded; retry shortly",
+        );
+    }
+
+    // Serve from the cache while fresh.
+    {
+        let cache = state
+            .stats_cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some((computed_at, cached)) = cache.as_ref() {
+            if computed_at.elapsed() < STATS_CACHE_TTL {
+                return (StatusCode::OK, Json(cached.clone())).into_response();
+            }
+        }
+    }
+
+    let now = Utc::now().timestamp();
+    let day_ago = now - 24 * 3600;
+    let compute = || -> Result<BridgeStatsResponse, String> {
+        Ok(BridgeStatsResponse {
+            generated_at: now,
+            wraps: StatsSide {
+                last_24h: state
+                    .db
+                    .aggregate_order_activity(OrderType::Mint, Some(day_ago))?
+                    .into(),
+                all_time: state
+                    .db
+                    .aggregate_order_activity(OrderType::Mint, None)?
+                    .into(),
+            },
+            unwraps: StatsSide {
+                last_24h: state
+                    .db
+                    .aggregate_order_activity(OrderType::Burn, Some(day_ago))?
+                    .into(),
+                all_time: state
+                    .db
+                    .aggregate_order_activity(OrderType::Burn, None)?
+                    .into(),
+            },
+        })
+    };
+
+    match compute() {
+        Ok(stats) => {
+            let mut cache = state
+                .stats_cache
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            *cache = Some((Instant::now(), stats.clone()));
+            (StatusCode::OK, Json(stats)).into_response()
+        }
+        Err(e) => {
+            warn!("public api: bridge stats aggregation failed: {}", e);
+            err(StatusCode::INTERNAL_SERVER_ERROR, "stats unavailable")
+        }
+    }
+}
+
 // ─────────────────────────────────── CORS ──────────────────────────────────
 
 /// Exact-match CORS middleware. Reflects the request `Origin` back only when it
@@ -847,6 +1009,7 @@ pub fn public_router(state: PublicApiState) -> Router {
         .route("/api/bridge/orders/:id", get(get_mint_order))
         .route("/api/bridge/release-orders", post(create_release_order))
         .route("/api/bridge/release-orders/:id", get(get_release_order))
+        .route("/api/bridge/stats", get(get_bridge_stats))
         .layer(DefaultBodyLimit::max(max_body))
         .layer(middleware::from_fn_with_state(cors_cfg, cors_mw))
         .with_state(state)
@@ -1366,6 +1529,115 @@ mod tests {
         .await;
         assert_eq!(status, 503, "intent create past the global cap refused");
         assert!(resp.contains("backlog"), "{}", resp);
+
+        let _ = shutdown_tx.send(());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_bridge_stats_aggregates_both_sides() {
+        // #1054: /api/bridge/stats reports wrap (mint) and unwrap (burn)
+        // counts + volumes split by outcome over 24h and all-time windows —
+        // aggregates only, no per-order detail.
+        let (state, db) = test_state();
+
+        // Wrap side: one completed, one pending (awaiting deposit), plus a
+        // completed order OUTSIDE the 24h window.
+        let mut done = BridgeOrder::new_mint(
+            Chain::Ethereum,
+            1_000,
+            1,
+            "bth_reserve_deposit_addr".to_string(),
+            "0x1234567890abcdef1234567890abcdef12345678".to_string(),
+        );
+        done.status = OrderStatus::Completed;
+        db.insert_order(&done).unwrap();
+
+        let pending = BridgeOrder::new_mint(
+            Chain::Ethereum,
+            2_000,
+            1,
+            "bth_reserve_deposit_addr".to_string(),
+            "0x1234567890abcdef1234567890abcdef12345678".to_string(),
+        );
+        db.insert_order(&pending).unwrap();
+
+        let mut old = BridgeOrder::new_mint(
+            Chain::Ethereum,
+            4_000,
+            1,
+            "bth_reserve_deposit_addr".to_string(),
+            "0x1234567890abcdef1234567890abcdef12345678".to_string(),
+        );
+        old.status = OrderStatus::Completed;
+        old.created_at = Utc::now() - chrono::Duration::days(2);
+        db.insert_order(&old).unwrap();
+
+        // Unwrap side: one released burn order.
+        let mut burn = BridgeOrder::new_burn(
+            Chain::Ethereum,
+            500,
+            1,
+            "0xsource".to_string(),
+            test_bth_address(),
+            "0xburntx".to_string(),
+        );
+        burn.status = OrderStatus::Released;
+        db.insert_order(&burn).unwrap();
+
+        let (addr, shutdown_tx, server) = spawn_public_server(state).await;
+        let (status, resp) = http_request(addr, "GET", "/api/bridge/stats", None, None).await;
+        assert_eq!(status, 200, "{}", resp);
+        let json: serde_json::Value = serde_json::from_str(&resp).unwrap();
+
+        assert_eq!(json["wraps"]["last24h"]["completed"]["count"], 1);
+        assert_eq!(json["wraps"]["last24h"]["completed"]["volume"], "1000");
+        assert_eq!(json["wraps"]["last24h"]["pending"]["count"], 1);
+        assert_eq!(json["wraps"]["last24h"]["pending"]["volume"], "2000");
+        assert_eq!(json["wraps"]["allTime"]["completed"]["count"], 2);
+        assert_eq!(json["wraps"]["allTime"]["completed"]["volume"], "5000");
+        assert_eq!(json["unwraps"]["last24h"]["completed"]["count"], 1);
+        assert_eq!(json["unwraps"]["last24h"]["completed"]["volume"], "500");
+        assert_eq!(json["unwraps"]["allTime"]["completed"]["count"], 1);
+        assert!(json["generatedAt"].as_i64().unwrap() > 0);
+
+        // Aggregates-only invariant: no order ids, addresses, memos, or tx
+        // hashes anywhere in the response body.
+        assert!(!resp.contains(&done.id.to_string()), "{}", resp);
+        assert!(!resp.contains("bth_reserve_deposit_addr"), "{}", resp);
+        assert!(!resp.contains("0xburntx"), "{}", resp);
+
+        let _ = shutdown_tx.send(());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_bridge_stats_is_cached() {
+        // #1054: within the cache TTL the endpoint serves the memoized
+        // aggregate instead of re-querying the DB — new orders do not appear
+        // until the TTL lapses, so polling cannot hammer the DB.
+        let (state, db) = test_state();
+        let (addr, shutdown_tx, server) = spawn_public_server(state).await;
+
+        let (status, first) = http_request(addr, "GET", "/api/bridge/stats", None, None).await;
+        assert_eq!(status, 200, "{}", first);
+        let json: serde_json::Value = serde_json::from_str(&first).unwrap();
+        assert_eq!(json["wraps"]["allTime"]["completed"]["count"], 0);
+
+        // A new completed order lands after the first (cached) computation.
+        let mut done = BridgeOrder::new_mint(
+            Chain::Ethereum,
+            1_000,
+            1,
+            "bth_reserve_deposit_addr".to_string(),
+            "0x1234567890abcdef1234567890abcdef12345678".to_string(),
+        );
+        done.status = OrderStatus::Completed;
+        db.insert_order(&done).unwrap();
+
+        let (status, second) = http_request(addr, "GET", "/api/bridge/stats", None, None).await;
+        assert_eq!(status, 200, "{}", second);
+        assert_eq!(first, second, "cached response must be served verbatim");
 
         let _ = shutdown_tx.send(());
         server.await.unwrap();

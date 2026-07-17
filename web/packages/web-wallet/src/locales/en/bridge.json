@@ -21,6 +21,15 @@
     "heading": "Peg health",
     "subheading": "Live proof-of-reserves: BTH locked in the bridge reserve versus wBTH minted across chains. Green means the peg is intact."
   },
+  "stats": {
+    "title": "Bridge activity",
+    "unavailable": "Bridge activity unavailable — the node's public bridge API is not reachable.",
+    "wraps24h": "Wraps (24h)",
+    "wrapsAllTime": "Wraps (all time)",
+    "unwraps24h": "Unwraps (24h)",
+    "unwrapsAllTime": "Unwraps (all time)",
+    "bucketSummary": "{{completed}} completed · {{pending}} pending"
+  },
   "venues": {
     "heading": "Where to trade",
     "subheading": "Seeded wBTH pools across chains. Links open the venue in a new tab — Botho never brokers the swap.",

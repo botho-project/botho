@@ -30,6 +30,7 @@
  * state — they never silently pretend to work.
  */
 import type {
+  BridgeStats,
   CreateMintOrderRequest,
   CreateReleaseOrderRequest,
   MintOrder,
@@ -57,6 +58,8 @@ export interface BridgeClient {
   createReleaseOrder(req: CreateReleaseOrderRequest): Promise<ReleaseOrder>
   /** Fetch the latest state of a release order by id. */
   getReleaseOrderStatus(id: string): Promise<ReleaseOrder>
+  /** Fetch aggregate wrap/unwrap activity (#1054; server-cached ~30 s). */
+  getBridgeStats(): Promise<BridgeStats>
 }
 
 /** Strip a single trailing slash so `${base}/api/...` never doubles up. */
@@ -132,6 +135,11 @@ export function createBridgeClient(
         `${base}/api/bridge/release-orders/${encodeURIComponent(id)}`,
       )
       return (await parseJson(res)) as ReleaseOrder
+    },
+
+    async getBridgeStats(): Promise<BridgeStats> {
+      const res = await fetchImpl(`${base}/api/bridge/stats`)
+      return (await parseJson(res)) as BridgeStats
     },
   }
 }

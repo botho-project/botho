@@ -1,13 +1,18 @@
+import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 import { Logo } from '@botho/ui'
 import {
   NetworkDashboard,
+  createBridgeClient,
+  useBridgeStats,
   useFleetHistory,
   useFleetStatus,
   useReserveProof,
 } from '@botho/features'
 import { ArrowLeft } from 'lucide-react'
 import { FLEET, METRICS_API_BASE } from '../config/fleet'
+import { BRIDGE_API_BASE } from '../config/bridge'
 
 export function NetworkPage() {
   // Polling/history wiring lives in @botho/features hooks (#706) so the
@@ -15,6 +20,15 @@ export function NetworkPage() {
   const { statuses, avgBlockSeconds } = useFleetStatus(FLEET)
   const { history, historyState } = useFleetHistory(FLEET, METRICS_API_BASE)
   const { proof: reserve, state: reserveState } = useReserveProof(METRICS_API_BASE)
+  // Bridge activity (#1054): same public order API the /trade page uses.
+  // Unconfigured (`VITE_BRIDGE_API_BASE` unset) → null client → the card is
+  // hidden; configured-but-unreachable degrades to an "unavailable" state.
+  const bridgeClient = useMemo(
+    () => (BRIDGE_API_BASE ? createBridgeClient(BRIDGE_API_BASE) : null),
+    [],
+  )
+  const { stats: bridgeStats, state: bridgeStatsState } = useBridgeStats(bridgeClient)
+  const { t: bridgeT } = useTranslation('bridge')
 
   return (
     <div className="min-h-screen">
@@ -55,6 +69,9 @@ export function NetworkPage() {
             historyState={historyState}
             reserve={reserve}
             reserveState={reserveState}
+            bridgeStats={bridgeStats}
+            bridgeStatsState={bridgeStatsState}
+            bridgeStatsT={bridgeT}
           />
         </div>
       </main>

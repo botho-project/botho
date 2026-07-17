@@ -118,3 +118,26 @@ describe('createBridgeClient — release orders (#1032)', () => {
     expect(url).toBe(`https://bridge.test/api/bridge/release-orders/${RELEASE.id}`)
   })
 })
+
+describe('createBridgeClient — bridge stats (#1054)', () => {
+  it('GETs the aggregate stats from the normalized base', async () => {
+    const zero = { count: 0, volume: '0' }
+    const window = { completed: zero, pending: zero, expired: zero, failed: zero }
+    const STATS = {
+      generatedAt: 1_760_000_000,
+      wraps: {
+        last24h: { ...window, completed: { count: 2, volume: '5000000000000' } },
+        allTime: window,
+      },
+      unwraps: { last24h: window, allTime: window },
+    }
+    const fetchImpl = vi.fn(async () => jsonResponse(STATS))
+    const client = createBridgeClient('https://bridge.test/', fetchImpl as unknown as typeof fetch)
+
+    const stats = await client.getBridgeStats()
+
+    expect(stats).toEqual(STATS)
+    const [url] = fetchImpl.mock.calls[0] as unknown as [string]
+    expect(url).toBe('https://bridge.test/api/bridge/stats')
+  })
+})
