@@ -147,8 +147,11 @@ pub struct ReleaseIntent {
 pub struct ActivityAggregate {
     /// Number of orders in the bucket.
     pub count: u64,
-    /// Sum of gross order amounts, picocredits.
-    pub volume: u64,
+    /// Sum of gross order amounts, picocredits. `u128` so cumulative all-time
+    /// volume cannot overflow at mainnet scale (#1059): a `u64` sum saturates
+    /// at ~18.4M BTH and a SQLite `SUM(amount)` errors at ~9.22M BTH, both
+    /// below plausible cumulative bridge volume. `u128` covers ~3.4e26 BTH.
+    pub volume: u128,
 }
 
 /// Wrap/unwrap activity aggregates for one order type over one window
@@ -733,8 +736,8 @@ impl Database {
     /// Aggregate wrap/unwrap activity for one order type (#1054).
     ///
     /// Backs the public `GET /api/bridge/stats` endpoint: counts and gross
-    /// BTH volumes (picocredits, `SUM(amount)`) over `bridge_orders` rows of
-    /// `order_type`, bucketed by outcome:
+    /// BTH volumes (picocredits) over `bridge_orders` rows of `order_type`,
+    /// bucketed by outcome:
     ///
     /// * `completed` — settled orders (`completed` for mints, `released` for
     ///   burns; both strings map here so either type aggregates correctly).
@@ -748,19 +751,28 @@ impl Database {
     ///
     /// AGGREGATES ONLY: no per-order field leaves this query, so the result
     /// is safe for the unauthenticated public surface (#1042 scope rules).
+    ///
+    /// Volume is summed in Rust as `u128` rather than via SQLite integer
+    /// `SUM(amount)` (#1059): SQLite's integer SUM hard-errors on i64 overflow
+    /// (~9.22M BTH/bucket) which would 500 the endpoint permanently, and a
+    /// `u64` accumulator would silently saturate at ~18.4M BTH. Streaming the
+    /// raw `status, amount` per row and accumulating in u128 is exact (no
+    /// float loss) and cannot overflow at any realistic supply.
     pub fn aggregate_order_activity(
         &self,
         order_type: OrderType,
         since: Option<i64>,
     ) -> Result<ActivityBreakdown, String> {
         let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        // Stream raw per-row (status, amount) instead of a SQLite
+        // `SUM(amount)`: integer SUM errors on i64 overflow (#1059). Volume is
+        // accumulated in Rust as u128 so it cannot overflow at mainnet scale.
         let mut stmt = conn
             .prepare(
                 r#"
-                SELECT status, COUNT(*), COALESCE(SUM(amount), 0)
+                SELECT status, amount
                 FROM bridge_orders
                 WHERE order_type = ?1 AND created_at >= ?2
-                GROUP BY status
                 "#,
             )
             .map_err(|e| format!("Prepare failed: {}", e))?;
@@ -768,19 +780,13 @@ impl Database {
         let rows = stmt
             .query_map(
                 params![order_type.to_string(), since.unwrap_or(i64::MIN)],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, i64>(2)?,
-                    ))
-                },
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
             )
             .map_err(|e| format!("Query failed: {}", e))?;
 
         let mut breakdown = ActivityBreakdown::default();
         for row in rows {
-            let (status, count, volume) = row.map_err(|e| format!("Row failed: {}", e))?;
+            let (status, amount) = row.map_err(|e| format!("Row failed: {}", e))?;
             let bucket = match status.as_str() {
                 "completed" | "released" => &mut breakdown.completed,
                 "expired" => &mut breakdown.expired,
@@ -788,8 +794,10 @@ impl Database {
                 s if s.starts_with("failed") => &mut breakdown.failed,
                 _ => &mut breakdown.pending,
             };
-            bucket.count = bucket.count.saturating_add(count.max(0) as u64);
-            bucket.volume = bucket.volume.saturating_add(volume.max(0) as u64);
+            bucket.count = bucket.count.saturating_add(1);
+            // Clamp defensively (`.max(0)`); `saturating_add` never triggers at
+            // u128 width but is kept as defense-in-depth.
+            bucket.volume = bucket.volume.saturating_add(amount.max(0) as u128);
         }
         Ok(breakdown)
     }
@@ -3738,5 +3746,84 @@ mod tests {
         db.migrate().unwrap();
         let empty = db.aggregate_order_activity(OrderType::Mint, None).unwrap();
         assert_eq!(empty, ActivityBreakdown::default());
+    }
+
+    #[test]
+    fn test_aggregate_order_activity_no_i64_overflow_past_i64_max() {
+        // #1059: a single status bucket whose summed volume exceeds i64::MAX
+        // (~9.22M BTH in picocredits) must NOT error. The old SQLite
+        // `SUM(amount)` raised an "integer overflow" runtime error here and
+        // the handler mapped it to a permanent 500.
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+
+        let now = Utc::now().timestamp();
+        // Each row carries the largest amount a single order can store
+        // (amount is persisted as i64). Two of them sum past i64::MAX.
+        let big = i64::MAX as u64;
+        db.insert_order(&mint_at(big, OrderStatus::Completed, now - 20))
+            .unwrap();
+        db.insert_order(&mint_at(big, OrderStatus::Completed, now - 10))
+            .unwrap();
+
+        let all = db
+            .aggregate_order_activity(OrderType::Mint, None)
+            .expect("aggregation must not overflow past i64::MAX");
+        assert_eq!(all.completed.count, 2);
+        // Exact 2 * i64::MAX — larger than i64::MAX, still within u64.
+        let expected = 2u128 * i64::MAX as u128;
+        assert_eq!(all.completed.volume, expected);
+        assert!(expected > i64::MAX as u128, "test must cross the i64 ceiling");
+    }
+
+    #[test]
+    fn test_aggregate_order_activity_no_u64_saturation_past_u64_max() {
+        // #1059: the u128 widening must be genuinely exercised — a bucket whose
+        // summed volume exceeds u64::MAX (~18.4M BTH) must return the EXACT
+        // total, not a saturated `u64::MAX`. A u64 `saturating_add` accumulator
+        // would have silently clamped here (wrong-but-plausible number).
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+
+        let now = Utc::now().timestamp();
+        let big = i64::MAX as u64;
+        // Three rows of i64::MAX sum to 3 * i64::MAX ≈ 2.77e19 > u64::MAX.
+        db.insert_order(&mint_at(big, OrderStatus::Completed, now - 30))
+            .unwrap();
+        db.insert_order(&mint_at(big, OrderStatus::Completed, now - 20))
+            .unwrap();
+        db.insert_order(&mint_at(big, OrderStatus::Completed, now - 10))
+            .unwrap();
+
+        let all = db
+            .aggregate_order_activity(OrderType::Mint, None)
+            .expect("aggregation must not error");
+        assert_eq!(all.completed.count, 3);
+        let expected = 3u128 * i64::MAX as u128;
+        assert_eq!(
+            all.completed.volume, expected,
+            "u128 sum must be exact, not saturated at u64::MAX"
+        );
+        assert!(
+            expected > u64::MAX as u128,
+            "test must cross the u64 ceiling to exercise the u128 widening"
+        );
+    }
+
+    #[test]
+    fn test_aggregate_order_activity_single_row_at_i64_max_boundary() {
+        // #1059 edge case: exactly i64::MAX in a single row (the per-order
+        // storage boundary) must round-trip through the aggregate unchanged —
+        // not clamped, not errored.
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+
+        let now = Utc::now().timestamp();
+        db.insert_order(&mint_at(i64::MAX as u64, OrderStatus::Completed, now - 10))
+            .unwrap();
+
+        let all = db.aggregate_order_activity(OrderType::Mint, None).unwrap();
+        assert_eq!(all.completed.count, 1);
+        assert_eq!(all.completed.volume, i64::MAX as u128);
     }
 }

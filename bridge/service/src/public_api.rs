@@ -332,8 +332,8 @@ struct ReleaseOrderResponse {
 }
 
 /// One `/api/bridge/stats` bucket: order count + gross BTH volume (#1054).
-/// The volume is a picocredit decimal STRING (u64-safe across JSON), matching
-/// the amount convention of every other public-API response.
+/// The volume is a picocredit decimal STRING (u128-safe across JSON, #1059),
+/// matching the amount convention of every other public-API response.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StatsAggregate {
