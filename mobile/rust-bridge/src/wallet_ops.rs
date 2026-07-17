@@ -282,6 +282,10 @@ pub async fn send(
         amount,
         fee,
         created_at_height: height,
+        // The mobile wallet has no bridge-deposit flow, so it never sets the
+        // dedicated bridge order-memo channel (#1037). An ordinary send carries
+        // no on-chain memo — byte-identical to before.
+        bridge_deposit_memo: None,
     };
 
     let tx_hex = build_and_sign_inner(&request).map_err(SendError::Other)?;

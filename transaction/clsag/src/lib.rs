@@ -256,6 +256,28 @@ impl MemoPayload {
         Self { data }
     }
 
+    /// Create a destination memo carrying raw 64-byte binary data.
+    ///
+    /// Unlike [`MemoPayload::destination`] (which takes a UTF-8 `&str` and
+    /// truncates/pads it), this preserves an arbitrary 64-byte payload exactly.
+    /// It is used to embed a bridge deposit's **order memo** — a 64-byte value
+    /// whose first 16 bytes are the mint-order UUID
+    /// (`BridgeOrder::generate_memo` in `bridge/core`) — because those
+    /// bytes are raw binary (a UUID), not UTF-8. The memo `type` is set to
+    /// `[0x02, 0x00]` (Destination) so the output is not treated as
+    /// "unused" ([`MemoPayload::is_unused`]), and
+    /// [`MemoPayload::memo_data`] returns the 64 bytes byte-for-byte — exactly
+    /// what the bridge watcher reads before recovering the order UUID
+    /// (`bridge/service/src/bth_scan.rs`).
+    pub fn destination_bytes(data: &[u8; 64]) -> Self {
+        let mut buf = [0u8; ENCRYPTED_MEMO_SIZE];
+        // Type: 0x0200 = Destination memo (non-zero => not "unused").
+        buf[0] = 0x02;
+        buf[1] = 0x00;
+        buf[2..ENCRYPTED_MEMO_SIZE].copy_from_slice(data);
+        Self { data: buf }
+    }
+
     /// Get the memo type bytes (first 2 bytes)
     pub fn memo_type(&self) -> [u8; 2] {
         [self.data[0], self.data[1]]
@@ -1692,6 +1714,48 @@ mod tests {
 
     /// Default test amount that's above the dust threshold
     const TEST_AMOUNT: u64 = DUST_THRESHOLD * 10;
+
+    /// A destination memo built from raw 64 bytes preserves them byte-for-byte
+    /// in `memo_data()`, is not "unused", and survives an encrypt -> on-chain
+    /// output -> `decrypt_memo` round-trip. This is the exact path a
+    /// wallet-built bridge deposit uses to carry the order UUID for the
+    /// watcher to match.
+    #[test]
+    fn destination_bytes_roundtrips_through_output_memo() {
+        use bth_account_keys::AccountKey;
+        use rand::{rngs::StdRng, SeedableRng};
+
+        // A 64-byte order memo: first 16 bytes a UUID-like value, rest zero
+        // (mirrors `BridgeOrder::generate_memo`).
+        let mut order_memo = [0u8; 64];
+        order_memo[..16].copy_from_slice(&[
+            0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54,
+            0x32, 0x10,
+        ]);
+
+        let memo = MemoPayload::destination_bytes(&order_memo);
+        assert!(!memo.is_unused(), "a destination memo must not be 'unused'");
+        assert_eq!(memo.memo_type(), [0x02, 0x00], "destination memo type");
+        assert_eq!(
+            memo.memo_data(),
+            &order_memo,
+            "memo_data must equal the raw 64 order bytes byte-for-byte"
+        );
+
+        // Encrypt onto an output for a recipient and decrypt it back with the
+        // recipient's view key — the exact read the watcher performs.
+        let mut rng = StdRng::from_seed([37u8; 32]);
+        let recipient = AccountKey::random(&mut rng);
+        let out = TxOutput::new_with_memo(TEST_AMOUNT, &recipient.default_subaddress(), Some(memo));
+        let decrypted = out
+            .decrypt_memo(&recipient)
+            .expect("recipient decrypts its own memo");
+        assert_eq!(
+            decrypted.memo_data(),
+            &order_memo,
+            "decrypted memo_data must recover the raw order bytes"
+        );
+    }
 
     /// Helper to create a minimal test ring member
     fn test_ring_member(id: u8) -> RingMember {

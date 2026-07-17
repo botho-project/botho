@@ -1077,6 +1077,7 @@ mod tests {
                 amount: 4_000_000_000,
                 fee: MIN_TX_FEE,
                 created_at_height: 1000,
+                bridge_deposit_memo: None,
             };
 
             // Build + CLSAG-sign exactly as the browser does.

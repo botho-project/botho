@@ -354,7 +354,11 @@ function WalletDashboard() {
       // Drive the real client-side send path: derive keys -> scan owned
       // outputs -> build + CLSAG-sign in wasm -> submit to the node. Keys never
       // leave the browser. Returns the node-assigned tx hash.
-      const txHash = await send(data.recipient, data.amount, data.memo)
+      // The Send-modal "Memo — Add a note…" field is a human free-text note. It
+      // rides the cosmetic `note` channel (dropped, never embedded on-chain), so
+      // a note like "lunch" never fails the send (#1037). Only the bridge
+      // ExportPanel uses the on-chain `bridgeDepositMemo` channel.
+      const txHash = await send(data.recipient, data.amount, { note: data.memo })
       // Reflect the spend in the UI: refresh balance + history (best effort).
       await Promise.allSettled([refreshBalance(), refreshTransactions()])
       return { success: true, txHash }

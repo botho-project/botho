@@ -26,7 +26,7 @@ import {
   UserCheck,
   UserPlus,
 } from 'lucide-react'
-import { useWallet } from '../contexts/wallet'
+import { useWallet, type SendOptions } from '../contexts/wallet'
 import { useNetwork } from '../contexts/network'
 import { PasswordFields, isPasswordValid } from '../components/PasswordSettingsModal'
 import { LocaleSwitcher } from '../components/LocaleSwitcher'
@@ -206,7 +206,7 @@ function PayConfirm({
   balance: import('@botho/core').Balance | null
   contacts: Contact[]
   addContact: (name: string, address: string, notes?: string) => Promise<Contact>
-  send: (to: string, amount: bigint, memo?: string) => Promise<string>
+  send: (to: string, amount: bigint, options?: SendOptions) => Promise<string>
   refreshBalance: () => Promise<void>
   refreshTransactions: () => Promise<void>
   explorerBase?: string
@@ -268,7 +268,11 @@ function PayConfirm({
     setError(null)
     setIsSending(true)
     try {
-      const hash = await send(request.to, amount, request.memo)
+      // A payment-request note is human free-text: send it on the cosmetic
+      // `note` channel so it is never routed into the signer's strict bridge
+      // memo validator (#1037). It is not embedded on-chain (unchanged from
+      // pre-#1037 behavior).
+      const hash = await send(request.to, amount, { note: request.memo })
       setTxHash(hash)
       await Promise.allSettled([refreshBalance(), refreshTransactions()])
     } catch (err) {
