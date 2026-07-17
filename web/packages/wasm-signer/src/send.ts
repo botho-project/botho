@@ -117,6 +117,11 @@ export async function spendableOwnedOutputs(
       publicKey: o.publicKey,
       amount: o.amount,
       subaddressIndex: o.subaddressIndex,
+      // Preserve the hybrid recovery fields (#988) so a later SPEND of this
+      // output can recover its one-time key (outputIndex is bound into the
+      // 6.0.0 one-time key; the ciphertext is decapsulated at signing time).
+      outputIndex: o.outputIndex,
+      kemCiphertext: o.kemCiphertext ?? null,
     }))
 }
 
@@ -604,6 +609,12 @@ export async function buildSendTransaction(
       public_key: input.publicKey,
       amount: toBigInt(input.amount),
       subaddress_index: toBigInt(input.subaddressIndex),
+      // Hybrid one-time-key recovery inputs (#988): the output's tx position
+      // (bound into the 6.0.0 one-time key) and its ML-KEM ciphertext, both
+      // preserved from the scan. Without these a hybrid input would sign with
+      // the wrong one-time key and fail CLSAG verification.
+      output_index: input.outputIndex ?? 0,
+      kem_ciphertext: input.kemCiphertext ?? null,
       decoys: decoys.map((d) => ({
         target_key: d.targetKey,
         public_key: d.publicKey,
@@ -615,6 +626,9 @@ export async function buildSendTransaction(
   const request: SignRequest = {
     spendPrivateKey: keys.spendPrivateKey,
     viewPrivateKey: keys.viewPrivateKey,
+    // The wallet seed (when supplied) enables hybrid spend-key recovery for
+    // 6.0.0 outputs inside the signer (#988).
+    seed: keys.seed ?? '',
     inputs: spendInputs,
     recipient,
     senderKemPublicKey,

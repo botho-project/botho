@@ -43,6 +43,19 @@ export interface SpendInput {
   /** Subaddress index that received this output (0 = default, 1 = change). */
   subaddress_index: bigint | number
   /**
+   * The output's position within its creating transaction. Bound into the
+   * 6.0.0 hybrid one-time key, so it MUST be supplied (from the scan's
+   * `outputIndex`) to spend a hybrid output (#988). Optional (defaults to 0)
+   * for classical/legacy callers.
+   */
+  output_index?: number
+  /**
+   * Hex-encoded ML-KEM-768 ciphertext of the owned output (from the scan's
+   * `kemCiphertext`), or null/undefined for a classical KEM-less output.
+   * Required to recover a hybrid output's one-time spend key (#988).
+   */
+  kem_ciphertext?: string | null
+  /**
    * Decoys for this input's ring. Must contain at least `ringSize() - 1`
    * distinct outputs.
    */
@@ -78,6 +91,13 @@ export interface SignRequest {
   spendPrivateKey: string
   /** Hex-encoded 32-byte account view private key. Stays client-side. */
   viewPrivateKey: string
+  /**
+   * Hex-encoded 64-byte BIP39 seed. Stays client-side. Used to derive the
+   * wallet's ML-KEM secret so a HYBRID owned input's one-time spend key can be
+   * recovered at signing time (#988) — without it a 6.0.0 output cannot be
+   * spent. Omit / empty for a classical-only spend.
+   */
+  seed?: string
   /** Owned outputs being spent (one ring per input). */
   inputs: SpendInput[]
   /** Recipient of the transfer. */

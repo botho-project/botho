@@ -43,6 +43,19 @@ pub struct SpendInput {
     pub amount: u64,
     /// Subaddress index that received this output (0 = default, 1 = change).
     pub subaddress_index: u64,
+    /// The output's position within its creating transaction. Under protocol
+    /// 6.0.0 this index is bound into the HYBRID one-time key, so it must be
+    /// supplied to spend a hybrid (ciphertext-bearing) owned output (#988).
+    /// Defaults to 0 for classical/legacy callers.
+    #[serde(default)]
+    pub output_index: u32,
+    /// Hex-encoded ML-KEM-768 ciphertext of the owned output, or `None` for a
+    /// classical/legacy KEM-less output. When present (and the request carries
+    /// a `seed`), the signer decapsulates it to recover the HYBRID one-time
+    /// private key — without it a 6.0.0 output's spend key cannot be derived
+    /// and the produced ring signature would be invalid (#988).
+    #[serde(default)]
+    pub kem_ciphertext: Option<String>,
     /// Decoys for this input's ring. Must contain at least `ringSize - 1`
     /// distinct outputs (the signer uses exactly `ringSize - 1`).
     pub decoys: Vec<DecoyOutput>,
@@ -256,6 +269,14 @@ pub struct SignRequest {
     pub spend_private_key: String,
     /// Hex-encoded 32-byte account view private key. **Stays client-side.**
     pub view_private_key: String,
+    /// Hex-encoded 64-byte BIP39 seed of the wallet. **Stays client-side.**
+    /// Used to derive the wallet's ML-KEM-768 secret (node-identical
+    /// `derive_pq_keys_from_seed`) so a HYBRID owned output's one-time private
+    /// key can be recovered at SPEND time — the same unified recovery the
+    /// key-image path uses (#988). Empty means classical-only recovery, which
+    /// cannot spend 6.0.0 hybrid outputs.
+    #[serde(default)]
+    pub seed: String,
     /// Owned outputs being spent (one ring per input).
     pub inputs: Vec<SpendInput>,
     /// Recipient of the transfer.
@@ -508,6 +529,11 @@ pub fn build_and_sign_with_rng<R: RngCore + CryptoRng>(
     );
     let signing_hash = preliminary.signing_hash();
 
+    // The wallet's ML-KEM secret (from the BIP39 seed), for recovering the
+    // one-time private key of HYBRID owned inputs (#988). `None` (empty seed)
+    // falls back to classical recovery.
+    let kem_keypair = derive_kem_keypair(&req.seed)?;
+
     // Build one CLSAG ring input per spent output.
     let mut ring_inputs = Vec::with_capacity(req.inputs.len());
     for input in &req.inputs {
@@ -520,18 +546,32 @@ pub fn build_and_sign_with_rng<R: RngCore + CryptoRng>(
             ));
         }
 
-        // Recover the one-time private key for this owned output.
+        // Recover the one-time private key for this owned output, on the same
+        // unified path the key-image derivation uses (#988): a hybrid
+        // (ciphertext-bearing) output needs the ML-KEM secret plus the
+        // `output_index` bound into its one-time key; a KEM-less output uses
+        // classical recovery. Signing a hybrid input WITHOUT its ciphertext
+        // would silently derive the wrong one-time key and produce an invalid
+        // CLSAG signature.
+        let kem_ciphertext = parse_kem_ciphertext("input.kem_ciphertext", &input.kem_ciphertext)?;
         let real_output = TxOutput {
             amount: input.amount,
             target_key: parse_hex_32("input.target_key", &input.target_key)?,
             public_key: parse_hex_32("input.public_key", &input.public_key)?,
             e_memo: None,
             cluster_tags: Default::default(),
-            kem_ciphertext: None,
+            kem_ciphertext,
         };
-        let onetime_private = real_output
-            .recover_spend_key(&account, input.subaddress_index)
-            .ok_or("failed to recover one-time private key for input")?;
+        let onetime_private = match &kem_keypair {
+            Some(kp) => real_output.recover_spend_key_for(
+                &account,
+                kp,
+                input.subaddress_index,
+                input.output_index,
+            ),
+            None => real_output.recover_spend_key(&account, input.subaddress_index),
+        }
+        .ok_or("failed to recover one-time private key for input")?;
 
         // Assemble the ring: real member + (ringSize - 1) decoys, then shuffle
         // so the real input's position is hidden.
@@ -965,9 +1005,12 @@ mod tests {
         let recipient_account = AccountKey::random(rng);
 
         SignRequest {
+            seed: String::new(),
             spend_private_key: hex::encode(sender.spend_private_key().to_bytes()),
             view_private_key: hex::encode(sender.view_private_key().to_bytes()),
             inputs: vec![SpendInput {
+                output_index: 0,
+                kem_ciphertext: None,
                 target_key: hex::encode(owned.target_key),
                 public_key: hex::encode(owned.public_key),
                 amount: owned_amount,
@@ -1060,9 +1103,12 @@ mod tests {
         let decoys = make_decoys(DEFAULT_RING_SIZE - 1, owned_amount, &mut rng);
         let recipient_account = AccountKey::random(&mut rng);
         let req = SignRequest {
+            seed: String::new(),
             spend_private_key: hex::encode(sender.spend_private_key().to_bytes()),
             view_private_key: hex::encode(sender.view_private_key().to_bytes()),
             inputs: vec![SpendInput {
+                output_index: 0,
+                kem_ciphertext: None,
                 target_key: hex::encode(owned.target_key),
                 public_key: hex::encode(owned.public_key),
                 amount: owned_amount,
@@ -1443,9 +1489,12 @@ mod tests {
         let decoys = make_decoys(DEFAULT_RING_SIZE - 1, owned_amount, &mut rng);
 
         let req = SignRequest {
+            seed: String::new(),
             spend_private_key: hex::encode(sender.spend_private_key().to_bytes()),
             view_private_key: hex::encode(sender.view_private_key().to_bytes()),
             inputs: vec![SpendInput {
+                output_index: 0,
+                kem_ciphertext: None,
                 target_key: hex::encode(owned.target_key),
                 public_key: hex::encode(owned.public_key),
                 amount: owned_amount,
@@ -1490,6 +1539,104 @@ mod tests {
         );
     }
 
+    /// #988 spend leg (found by the #815 snap spike): a HYBRID owned output —
+    /// which is what EVERY received output is under 6.0.0, including solo
+    /// coinbases — must be spendable through `build_and_sign`. The signer must
+    /// recover the hybrid one-time key from the wallet seed + the output's
+    /// ciphertext + its bound `output_index` (the same unified recovery the
+    /// key-image path uses). Before this fix the sign path hardcoded classical
+    /// recovery (`kem_ciphertext: None`), silently derived the WRONG one-time
+    /// key for hybrid inputs, and failed its own CLSAG self-verification.
+    #[test]
+    fn hybrid_owned_output_is_spendable_with_seed_and_ciphertext() {
+        let mut rng = StdRng::from_seed([61u8; 32]);
+
+        // The wallet under test: classical account + PQ keys derived from a
+        // known 64-byte seed (exactly how a real wallet derives them).
+        let seed = [0x33u8; bth_crypto_pq::BIP39_SEED_SIZE];
+        let seed_hex = hex::encode(seed);
+        let wallet = AccountKey::random(&mut rng);
+        let wallet_pq = bth_crypto_pq::derive_pq_keys_from_seed(&seed);
+
+        // A funder pays the wallet: tx1's recipient output (index 0) is a
+        // HYBRID output to the wallet's v2 address.
+        let funder = AccountKey::random(&mut rng);
+        let funder_pq = pq_keys(0x44);
+        let funder_amount = 20_000_000_000u64;
+        let funder_owned = TxOutput::new(funder_amount, &funder.default_subaddress());
+        let received_amount = 10_000_000_000u64;
+        let fund_req = SignRequest {
+            seed: String::new(),
+            spend_private_key: hex::encode(funder.spend_private_key().to_bytes()),
+            view_private_key: hex::encode(funder.view_private_key().to_bytes()),
+            inputs: vec![SpendInput {
+                output_index: 0,
+                kem_ciphertext: None,
+                target_key: hex::encode(funder_owned.target_key),
+                public_key: hex::encode(funder_owned.public_key),
+                amount: funder_amount,
+                subaddress_index: 0,
+                decoys: make_decoys(DEFAULT_RING_SIZE - 1, funder_amount, &mut rng),
+            }],
+            recipient: recipient_of_with_pq(&wallet, &wallet_pq),
+            sender_kem_public_key: kem_public_hex(&funder_pq),
+            amount: received_amount,
+            fee: MIN_TX_FEE,
+            created_at_height: 1000,
+            bridge_deposit_memo: None,
+        };
+        let tx1 = build_and_sign_with_rng(&fund_req, &mut rng).expect("funding tx should build");
+        let received = &tx1.outputs[0];
+        assert!(
+            received.kem_ciphertext.is_some(),
+            "6.0.0 recipient output must be hybrid"
+        );
+        assert_eq!(
+            received.belongs_to_hybrid(&wallet, &wallet_pq.kem_keypair, 0),
+            Some(0),
+            "wallet must detect the hybrid output"
+        );
+
+        // Now SPEND that hybrid output. With the seed + ciphertext +
+        // output_index supplied, the signer recovers the hybrid one-time key
+        // and the produced tx passes its own node-identical verification.
+        let spend_req = SignRequest {
+            seed: seed_hex,
+            spend_private_key: hex::encode(wallet.spend_private_key().to_bytes()),
+            view_private_key: hex::encode(wallet.view_private_key().to_bytes()),
+            inputs: vec![SpendInput {
+                output_index: 0,
+                kem_ciphertext: Some(hex::encode(
+                    received.kem_ciphertext.as_ref().expect("hybrid ciphertext"),
+                )),
+                target_key: hex::encode(received.target_key),
+                public_key: hex::encode(received.public_key),
+                amount: received_amount,
+                subaddress_index: 0,
+                decoys: make_decoys(DEFAULT_RING_SIZE - 1, received_amount, &mut rng),
+            }],
+            recipient: recipient_of(&funder),
+            sender_kem_public_key: kem_public_hex(&wallet_pq),
+            amount: 4_000_000_000,
+            fee: MIN_TX_FEE,
+            created_at_height: 1001,
+            bridge_deposit_memo: None,
+        };
+        let tx2 = build_and_sign_with_rng(&spend_req, &mut rng)
+            .expect("hybrid owned output must be spendable with seed + ciphertext");
+        tx2.verify_ring_signatures()
+            .expect("spend of hybrid output must verify");
+
+        // Regression guard: the SAME spend WITHOUT the seed (classical-only
+        // recovery) must fail — never silently produce an invalid signature.
+        let mut classical_req = spend_req.clone();
+        classical_req.seed = String::new();
+        assert!(
+            build_and_sign_with_rng(&classical_req, &mut rng).is_err(),
+            "classical recovery of a hybrid input must fail loudly"
+        );
+    }
+
     /// #978 acceptance #4: a recipient whose address publishes no ML-KEM key
     /// (empty `kem_public_key`, i.e. a retired v1 / classical-only address) is
     /// a HARD ERROR on 6.0.0 — the signer must never emit a KEM-less output
@@ -1508,9 +1655,12 @@ mod tests {
         recipient.kem_public_key = String::new(); // v1 / classical-only address
 
         let req = SignRequest {
+            seed: String::new(),
             spend_private_key: hex::encode(sender.spend_private_key().to_bytes()),
             view_private_key: hex::encode(sender.view_private_key().to_bytes()),
             inputs: vec![SpendInput {
+                output_index: 0,
+                kem_ciphertext: None,
                 target_key: hex::encode(owned.target_key),
                 public_key: hex::encode(owned.public_key),
                 amount: owned_amount,
@@ -1579,9 +1729,12 @@ mod tests {
         let decoys = make_decoys(DEFAULT_RING_SIZE - 1, owned_amount, &mut rng);
 
         let req = SignRequest {
+            seed: String::new(),
             spend_private_key: hex::encode(sender.spend_private_key().to_bytes()),
             view_private_key: hex::encode(sender.view_private_key().to_bytes()),
             inputs: vec![SpendInput {
+                output_index: 0,
+                kem_ciphertext: None,
                 target_key: hex::encode(owned.target_key),
                 public_key: hex::encode(owned.public_key),
                 amount: owned_amount,
@@ -1667,9 +1820,12 @@ mod tests {
         let decoys = make_decoys(DEFAULT_RING_SIZE - 1, owned_amount, &mut rng);
 
         let req = SignRequest {
+            seed: String::new(),
             spend_private_key: hex::encode(sender.spend_private_key().to_bytes()),
             view_private_key: hex::encode(sender.view_private_key().to_bytes()),
             inputs: vec![SpendInput {
+                output_index: 0,
+                kem_ciphertext: None,
                 target_key: hex::encode(owned.target_key),
                 public_key: hex::encode(owned.public_key),
                 amount: owned_amount,
@@ -1756,9 +1912,12 @@ mod tests {
         let decoys = make_decoys(DEFAULT_RING_SIZE - 1, owned_amount, &mut rng);
 
         let req = SignRequest {
+            seed: String::new(),
             spend_private_key: hex::encode(sender.spend_private_key().to_bytes()),
             view_private_key: hex::encode(sender.view_private_key().to_bytes()),
             inputs: vec![SpendInput {
+                output_index: 0,
+                kem_ciphertext: None,
                 target_key: hex::encode(owned.target_key),
                 public_key: hex::encode(owned.public_key),
                 amount: owned_amount,
@@ -1818,9 +1977,12 @@ mod tests {
         let decoys = make_decoys(DEFAULT_RING_SIZE - 1, owned_amount, &mut rng);
 
         let req = SignRequest {
+            seed: String::new(),
             spend_private_key: hex::encode(sender.spend_private_key().to_bytes()),
             view_private_key: hex::encode(sender.view_private_key().to_bytes()),
             inputs: vec![SpendInput {
+                output_index: 0,
+                kem_ciphertext: None,
                 target_key: hex::encode(owned.target_key),
                 public_key: hex::encode(owned.public_key),
                 amount: owned_amount,

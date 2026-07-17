@@ -6,14 +6,17 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./pkg-bundler/*": "./pkg-bundler/*"
   },
   "files": [
     "src",
-    "pkg"
+    "pkg",
+    "pkg-bundler"
   ],
   "scripts": {
     "build:wasm": "wasm-pack build --target web --out-dir pkg --out-name bth_wasm_signer",
+    "build:wasm:bundler": "wasm-pack build --target bundler --out-dir pkg-bundler --out-name bth_wasm_signer",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

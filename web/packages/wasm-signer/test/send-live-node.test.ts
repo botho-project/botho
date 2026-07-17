@@ -43,6 +43,7 @@ import {
   buildSendTransaction,
   deriveV2Address,
   deriveKemPublicKey,
+  mnemonicToSeedHex,
   setSigner,
   resetSigner,
   type ChainOutput,
@@ -101,6 +102,15 @@ async function loadWasmNode(): Promise<WasmSigner> {
     buildAndSign: (request) => mod.buildAndSign(request),
     scanOwnedOutputs: (request) => mod.scanOwnedOutputs(request),
     computeOwnedOutputKeyImages: (request) => mod.computeOwnedOutputKeyImages(request),
+    // The address-production surface: needed because the injected signer is
+    // used by `deriveV2Address`/`deriveKemPublicKey` (v2 recipient encoding +
+    // change-encapsulation key), which this test drives like the wallet UI.
+    derivePqPublicKeysFromSeed: (seedHex) => mod.derivePqPublicKeysFromSeed!(seedHex),
+    deriveAddressFromSeed: (seedHex, viewHex, spendHex, testnet) =>
+      mod.deriveAddressFromSeed!(seedHex, viewHex, spendHex, testnet),
+    encodeAddress: (viewHex, spendHex, kemHex, dsaHex, testnet) =>
+      mod.encodeAddress!(viewHex, spendHex, kemHex, dsaHex, testnet),
+    decodeAddress: (address) => mod.decodeAddress!(address),
     ringSize: () => mod.ringSize(),
     minFee: () => mod.minFee(),
   }
@@ -125,6 +135,26 @@ interface RawOutput {
   targetKey: string
   publicKey: string
   amountCommitment: string
+  outputIndex: number
+  kemCiphertext?: string | null
+}
+
+// The node reports a coinbase output's outputIndex as u32::MAX; its one-time
+// key is bound to MINTING_OUTPUT_INDEX = 0 (mirrors the wallet adapter).
+const COINBASE_OUTPUT_INDEX_SENTINEL = 0xffffffff
+
+function mapRawOutput(o: RawOutput): ChainOutput {
+  return {
+    targetKey: o.targetKey,
+    publicKey: o.publicKey,
+    amount: leHexToBigInt(o.amountCommitment),
+    // Hybrid detection/spend inputs (#988): under 6.0.0 EVERY output —
+    // including solo coinbases — is hybrid, so the scan needs the output's tx
+    // position and ML-KEM ciphertext (plus the wallet seed) to detect it.
+    outputIndex:
+      o.outputIndex === COINBASE_OUTPUT_INDEX_SENTINEL ? 0 : o.outputIndex,
+    kemCiphertext: o.kemCiphertext ?? null,
+  }
 }
 
 /** Fetch every output `[0, height]` as ChainOutputs (amount recovered LE). */
@@ -136,13 +166,7 @@ async function fetchChainOutputs(
     start_height: 0,
     end_height: height,
   })
-  return blocks.flatMap((b) =>
-    b.outputs.map((o) => ({
-      targetKey: o.targetKey,
-      publicKey: o.publicKey,
-      amount: leHexToBigInt(o.amountCommitment),
-    })),
-  )
+  return blocks.flatMap((b) => b.outputs.map(mapRawOutput))
 }
 
 maybe('node-backed: web-wallet -> tx -> ledger', () => {
@@ -189,6 +213,9 @@ maybe('node-backed: web-wallet -> tx -> ledger', () => {
     const senderKeys = {
       spendPrivateKey: toHex(senderKp.spendPrivate),
       viewPrivateKey: toHex(senderKp.viewPrivate),
+      // The BIP39 seed enables hybrid (6.0.0) output detection in the scan and
+      // hybrid one-time-key recovery in the signer (#988).
+      seed: mnemonicToSeedHex(senderMnemonic),
     }
 
     // The recipient address is encoded from the recipient mnemonic's default
@@ -218,6 +245,7 @@ maybe('node-backed: web-wallet -> tx -> ledger', () => {
     const recipientKeys = {
       spendPrivateKey: toHex(deriveKeypairs(recipientMnemonic, 0).spendPrivate),
       viewPrivateKey: toHex(deriveKeypairs(recipientMnemonic, 0).viewPrivate),
+      seed: mnemonicToSeedHex(recipientMnemonic),
     }
     const recipientOwnedBefore = signer.scanOwnedOutputs({
       ...recipientKeys,
@@ -231,15 +259,7 @@ maybe('node-backed: web-wallet -> tx -> ledger', () => {
         rpc<Array<{ outputs: RawOutput[] }>>('chain_getOutputs', {
           start_height: start,
           end_height: end,
-        }).then((blocks) =>
-          blocks.flatMap((b) =>
-            b.outputs.map((o) => ({
-              targetKey: o.targetKey,
-              publicKey: o.publicKey,
-              amount: leHexToBigInt(o.amountCommitment),
-            })),
-          ),
-        ),
+        }).then((blocks) => blocks.flatMap((b) => b.outputs.map(mapRawOutput))),
       areKeyImagesSpent: (keyImages) =>
         rpc<KeyImageSpentStatus[]>('chain_areKeyImagesSpent', { keyImages }),
     }

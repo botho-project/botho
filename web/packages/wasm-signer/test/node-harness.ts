@@ -134,10 +134,15 @@ export async function startNodeBackedHarness(opts: HarnessOptions): Promise<Node
       '[network.dns_seeds]',
       'enabled = false',
       '',
+      // Quorum: RECOMMENDED mode with min_peers = 0, i.e. a genuine solo node.
+      // This must NOT be "explicit": since the #770 startup sync gate, an
+      // explicit-mode node is seeded `initial_sync_complete = false` and, with
+      // zero connected peers, the sync manager stays in Discovery forever — so
+      // minting never arms and the harness times out at 0 blocks. A
+      // recommended-mode node with `min_peers = 0` takes the solo carve-out
+      // (seeded synced) and mints immediately.
       '[network.quorum]',
-      'mode = "explicit"',
-      'threshold = 1',
-      'members = []',
+      'mode = "recommended"',
       'min_peers = 0',
       '',
       '[minting]',
