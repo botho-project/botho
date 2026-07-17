@@ -312,10 +312,10 @@ fn build_and_sign_produces_node_verifiable_tx() {
 /// scanned `seed` + `output_index` + `kem_ciphertext` into the signer). Without
 /// that threading the signer would classically recover the one-time key of a
 /// hybrid input, derive the WRONG key, and self-verification of the CLSAG ring
-/// signature would fail — the same bug this PR fixes for the web wallet. Minting
-/// a hybrid input (`new_hybrid_to_address`), scanning it (which decapsulates and
-/// preserves the metadata), and spending it end-to-end proves the mobile leg is
-/// fixed too, not just left latent.
+/// signature would fail — the same bug this PR fixes for the web wallet.
+/// Minting a hybrid input (`new_hybrid_to_address`), scanning it (which
+/// decapsulates and preserves the metadata), and spending it end-to-end proves
+/// the mobile leg is fixed too, not just left latent.
 #[test]
 fn build_and_sign_spends_hybrid_output() {
     let sender = derive_from_seed(1);
@@ -337,7 +337,11 @@ fn build_and_sign_spends_hybrid_output() {
         )],
     })
     .expect("scan hybrid input");
-    assert_eq!(owned.len(), 1, "the hybrid output must be detected as owned");
+    assert_eq!(
+        owned.len(),
+        1,
+        "the hybrid output must be detected as owned"
+    );
     let input: &OwnedOutput = &owned[0];
     // The scan preserved the hybrid metadata the spend needs (#988).
     assert_eq!(input.output_index, hybrid_output_index);
