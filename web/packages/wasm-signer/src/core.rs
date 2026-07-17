@@ -9,8 +9,8 @@
 use bth_account_keys::{AccountKey, PublicAddress};
 use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 use bth_transaction_clsag::{
-    ClsagRingInput, RingMember, Transaction, TxOutput, DEFAULT_RING_SIZE, DUST_THRESHOLD,
-    MIN_TX_FEE,
+    ClsagRingInput, MemoPayload, RingMember, Transaction, TxOutput, DEFAULT_RING_SIZE,
+    DUST_THRESHOLD, MIN_TX_FEE,
 };
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -273,6 +273,24 @@ pub struct SignRequest {
     pub fee: u64,
     /// Chain height to stamp the transaction with (replay protection).
     pub created_at_height: u64,
+    /// Optional destination memo (hex-encoded 64 bytes) to embed on the
+    /// RECIPIENT output (index 0).
+    ///
+    /// This is the bridge deposit hook (#1037, epic #1029): a BTH→wBTH mint
+    /// deposit must carry the order memo — a 64-byte value whose first 16 bytes
+    /// are the mint-order UUID (`BridgeOrder::generate_memo`, returned by the
+    /// public order API as a 128-char hex string) — so the bridge watcher can
+    /// view-key-match the deposit to its order
+    /// (`bridge/service/src/bth_scan.rs` `scan_deposit_output`). When
+    /// present the signer encrypts it into the recipient output's `e_memo`
+    /// via [`MemoPayload::destination_bytes`], the exact format the watcher
+    /// decrypts + reads.
+    ///
+    /// When absent or empty the recipient output carries NO memo —
+    /// byte-identical to an ordinary (non-bridge) send, preserving privacy.
+    /// Defaults to `None` for back-compat with callers that never set it.
+    #[serde(default)]
+    pub memo: Option<String>,
 }
 
 fn parse_hex_32(field: &str, s: &str) -> Result<[u8; 32], String> {
@@ -311,6 +329,34 @@ fn parse_kem_public_key(field: &str, s: &str) -> Result<Vec<u8>, String> {
         ));
     }
     Ok(bytes)
+}
+
+/// Parse an optional hex-encoded 64-byte destination memo into a
+/// [`MemoPayload`].
+///
+/// Returns `Ok(None)` when the memo is absent or an empty string (an ordinary
+/// send: no memo, byte-identical to today). A present memo MUST hex-decode to
+/// exactly 64 bytes — the fixed order-memo width the bridge watcher reads
+/// (`bth_scan.rs`) and the public order API emits (`generate_memo`, 128 hex
+/// chars). Any other length is a hard error rather than a silently truncated /
+/// zero-padded memo that would fail to match the order UUID.
+fn parse_memo(field: &str, memo: &Option<String>) -> Result<Option<MemoPayload>, String> {
+    match memo {
+        None => Ok(None),
+        Some(s) if s.trim().is_empty() => Ok(None),
+        Some(s) => {
+            let bytes = hex::decode(s.trim()).map_err(|e| format!("{field}: invalid hex: {e}"))?;
+            if bytes.len() != 64 {
+                return Err(format!(
+                    "{field}: expected a 64-byte memo (128 hex chars), got {} bytes",
+                    bytes.len()
+                ));
+            }
+            let mut arr = [0u8; 64];
+            arr.copy_from_slice(&bytes);
+            Ok(Some(MemoPayload::destination_bytes(&arr)))
+        }
+    }
 }
 
 /// Reconstruct a [`RingMember`] from a chain output's keys + amount.
@@ -417,9 +463,19 @@ pub fn build_and_sign_with_rng<R: RngCore + CryptoRng>(
     // the output's position in the tx (recipient=0, change=1). A recipient (or
     // sender) address that lacks a well-formed ML-KEM key is a hard error, never
     // a silent KEM-less output that 6.0.0 consensus would reject.
-    let recipient_output =
-        TxOutput::new_hybrid_to_address(req.amount, &recipient, 0, None, Default::default())
-            .map_err(|e| format!("recipient address is not post-quantum (v2): {e}"))?;
+    // Optional destination memo on the RECIPIENT output (index 0): the bridge
+    // deposit hook (#1037). Encrypted to the recipient's view key like any memo,
+    // so only the deposit account (the bridge reserve) can read it. `None` for
+    // an ordinary send => no memo, unchanged privacy.
+    let recipient_memo = parse_memo("memo", &req.memo)?;
+    let recipient_output = TxOutput::new_hybrid_to_address(
+        req.amount,
+        &recipient,
+        0,
+        recipient_memo,
+        Default::default(),
+    )
+    .map_err(|e| format!("recipient address is not post-quantum (v2): {e}"))?;
     let mut outputs = vec![recipient_output];
     let actual_fee = if change >= DUST_THRESHOLD {
         let change_output =
@@ -913,6 +969,7 @@ mod tests {
             amount: send_amount,
             fee,
             created_at_height: 1000,
+            memo: None,
         }
     }
 
@@ -1007,6 +1064,7 @@ mod tests {
             amount: 5_000_000_000,
             fee: MIN_TX_FEE,
             created_at_height: 1000,
+            memo: None,
         };
         let tx = build_and_sign_with_rng(&req, &mut rng).unwrap();
         let signed_ki = hex::encode(tx.inputs.clsag()[0].key_image());
@@ -1389,6 +1447,7 @@ mod tests {
             amount: send_amount,
             fee: MIN_TX_FEE,
             created_at_height: 1000,
+            memo: None,
         };
 
         let tx = build_and_sign_with_rng(&req, &mut rng).expect("build+sign should succeed");
@@ -1453,6 +1512,7 @@ mod tests {
             amount: 4_000_000_000,
             fee: MIN_TX_FEE,
             created_at_height: 1000,
+            memo: None,
         };
 
         let err = build_and_sign_with_rng(&req, &mut rng)
@@ -1523,6 +1583,7 @@ mod tests {
             amount: send_amount,
             fee: MIN_TX_FEE,
             created_at_height: 1000,
+            memo: None,
         };
         let tx = build_and_sign_with_rng(&req, &mut rng).expect("build+sign should succeed");
         assert_eq!(tx.outputs.len(), 2, "recipient (0) + change (1)");
@@ -1610,6 +1671,7 @@ mod tests {
             amount: send_amount,
             fee: MIN_TX_FEE,
             created_at_height: 1000,
+            memo: None,
         };
         let tx = build_and_sign_with_rng(&req, &mut rng).expect("build+sign should succeed");
         assert_eq!(tx.outputs.len(), 2);
@@ -1698,6 +1760,7 @@ mod tests {
             amount: 4_000_000_000,
             fee: MIN_TX_FEE,
             created_at_height: 1000,
+            memo: None,
         };
         let tx = build_and_sign_with_rng(&req, &mut rng).expect("build+sign should succeed");
 
@@ -1713,5 +1776,130 @@ mod tests {
             owned.is_empty(),
             "an output addressed to another wallet must not be detected"
         );
+    }
+
+    /// #1037: a send carrying a bridge order memo embeds it on the RECIPIENT
+    /// output (index 0) in the exact format the bridge watcher reads. The
+    /// deposit account (bridge reserve) recovers the 64-byte memo via
+    /// `decrypt_memo` — the same call `bth_scan::scan_deposit_output` makes —
+    /// and the first 16 bytes are the order UUID
+    /// (`BridgeOrder::order_id_from_memo`). The change output carries NO
+    /// memo. This is the wallet half of the deposit-matching round trip.
+    #[test]
+    fn bridge_order_memo_is_embedded_on_recipient_output() {
+        let mut rng = StdRng::from_seed([203u8; 32]);
+        let sender = AccountKey::random(&mut rng);
+        // The recipient is the bridge deposit account (the reserve).
+        let deposit_account = AccountKey::random(&mut rng);
+        let deposit_pq = pq_keys(0x5a);
+
+        // A 64-byte order memo: first 16 bytes the order UUID, rest zero
+        // (mirrors `BridgeOrder::generate_memo`; the public API hands this back
+        // as a 128-char hex string).
+        let mut order_memo = [0u8; 64];
+        order_memo[..16].copy_from_slice(&[
+            0xde, 0xad, 0xbe, 0xef, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99,
+            0xaa, 0xbb,
+        ]);
+        let memo_hex = hex::encode(order_memo);
+
+        let owned_amount = 10_000_000_000u64;
+        let owned = TxOutput::new(owned_amount, &sender.default_subaddress());
+        let decoys = make_decoys(DEFAULT_RING_SIZE - 1, owned_amount, &mut rng);
+
+        let req = SignRequest {
+            spend_private_key: hex::encode(sender.spend_private_key().to_bytes()),
+            view_private_key: hex::encode(sender.view_private_key().to_bytes()),
+            inputs: vec![SpendInput {
+                target_key: hex::encode(owned.target_key),
+                public_key: hex::encode(owned.public_key),
+                amount: owned_amount,
+                subaddress_index: 0,
+                decoys,
+            }],
+            recipient: recipient_of_with_pq(&deposit_account, &deposit_pq),
+            sender_kem_public_key: kem_public_hex(&pq_keys(0xcd)),
+            amount: 5_000_000_000,
+            fee: MIN_TX_FEE,
+            created_at_height: 1000,
+            memo: Some(memo_hex),
+        };
+        let tx = build_and_sign_with_rng(&req, &mut rng).expect("build+sign should succeed");
+
+        // The recipient (deposit) output is index 0 and carries the memo.
+        let recipient_out = &tx.outputs[0];
+        assert!(
+            recipient_out.e_memo.is_some(),
+            "the deposit output must carry the order memo"
+        );
+        let decrypted = recipient_out
+            .decrypt_memo(&deposit_account)
+            .expect("deposit account decrypts the memo with its view key");
+        assert!(!decrypted.is_unused(), "the memo must not read as 'unused'");
+        assert_eq!(
+            decrypted.memo_data(),
+            &order_memo,
+            "decrypted memo must equal the 64 order bytes byte-for-byte"
+        );
+        // The first 16 bytes are the order UUID the watcher binds to.
+        assert_eq!(&decrypted.memo_data()[..16], &order_memo[..16]);
+
+        // The change output (index 1) must NOT carry a memo — no privacy leak.
+        assert_eq!(tx.outputs.len(), 2, "recipient + change");
+        assert!(
+            tx.outputs[1].e_memo.is_none(),
+            "the change output must not carry a memo"
+        );
+
+        // The deposit output must NOT be detectable by the sender/stranger and the
+        // tx must still verify under the node's verifier.
+        tx.verify_ring_signatures().unwrap();
+        tx.is_valid_structure().unwrap();
+    }
+
+    /// #1037 no-regression: an ordinary send (no memo) produces outputs with NO
+    /// encrypted memo — byte-identical to the pre-#1037 behaviour. Both an
+    /// absent memo and an empty-string memo take the no-memo path.
+    #[test]
+    fn absent_or_empty_memo_produces_no_output_memo() {
+        let mut rng = StdRng::from_seed([204u8; 32]);
+        let sender = AccountKey::random(&mut rng);
+
+        // Absent memo (None) via the shared helper.
+        let req_none = make_request(&sender, 10_000_000_000, 5_000_000_000, MIN_TX_FEE, &mut rng);
+        assert!(req_none.memo.is_none());
+        let tx_none = build_and_sign_with_rng(&req_none, &mut rng).unwrap();
+        for o in &tx_none.outputs {
+            assert!(
+                o.e_memo.is_none(),
+                "no output may carry a memo for a plain send"
+            );
+        }
+
+        // Empty-string memo is treated as no memo, not a zero-length memo.
+        let mut req_empty =
+            make_request(&sender, 10_000_000_000, 5_000_000_000, MIN_TX_FEE, &mut rng);
+        req_empty.memo = Some(String::new());
+        let tx_empty = build_and_sign_with_rng(&req_empty, &mut rng).unwrap();
+        for o in &tx_empty.outputs {
+            assert!(
+                o.e_memo.is_none(),
+                "an empty memo must not attach an e_memo"
+            );
+        }
+    }
+
+    /// #1037: a memo that does not hex-decode to exactly 64 bytes is a hard
+    /// error rather than a silently truncated/padded memo that would fail to
+    /// match the order UUID.
+    #[test]
+    fn malformed_memo_length_is_rejected() {
+        let mut rng = StdRng::from_seed([205u8; 32]);
+        let sender = AccountKey::random(&mut rng);
+        let mut req = make_request(&sender, 10_000_000_000, 5_000_000_000, MIN_TX_FEE, &mut rng);
+        // 16 bytes, not 64.
+        req.memo = Some(hex::encode([7u8; 16]));
+        let err = build_and_sign_with_rng(&req, &mut rng).unwrap_err();
+        assert!(err.contains("expected a 64-byte memo"), "got: {err}");
     }
 }

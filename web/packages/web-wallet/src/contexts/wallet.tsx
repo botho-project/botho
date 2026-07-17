@@ -1003,7 +1003,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setState(s => ({ ...s, isEncrypted: true, isLocked: false }))
   }, [state.isEncrypted, state.isLocked, rewrapUnderNewKey])
 
-  const send = useCallback(async (to: string, amount: bigint, _memo?: string): Promise<string> => {
+  const send = useCallback(async (to: string, amount: bigint, memo?: string): Promise<string> => {
     const adapter = adapterRef.current
     if (!adapter.isConnected()) {
       throw new Error('Not connected to a node')
@@ -1086,6 +1086,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       senderKemPublicKey,
       amount,
       fee,
+      // Optional destination memo: for a BTH→wBTH bridge deposit this is the
+      // mint order memo, embedded on-chain so the bridge watcher can match the
+      // deposit to its order (#1037). Undefined for an ordinary send.
+      memo,
       rpc: {
         getChainHeight: () => adapter.getBlockHeight(),
         getOutputs: (start, end) => adapter.getRawOutputs(start, end),

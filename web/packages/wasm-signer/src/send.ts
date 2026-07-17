@@ -459,6 +459,13 @@ export interface BuildSendParams {
   amount: bigint
   /** Fee, in picocredits. Must be >= the network minimum. */
   fee: bigint
+  /**
+   * Optional destination memo (hex-encoded 64 bytes) to embed on the recipient
+   * output. Used for a BTH→wBTH bridge deposit: pass the mint order's `memo`
+   * (from the public order API) so the bridge watcher can match the deposit to
+   * its order (#1037). Omit for an ordinary send.
+   */
+  memo?: string
   /** Node RPC accessor. */
   rpc: SendRpc
 }
@@ -504,7 +511,7 @@ function selectInputs(owned: OwnedOutput[], target: bigint): OwnedOutput[] | nul
 export async function buildSendTransaction(
   params: BuildSendParams,
 ): Promise<BuildSendResult> {
-  const { keys, recipient, senderKemPublicKey, amount, fee, rpc } = params
+  const { keys, recipient, senderKemPublicKey, amount, fee, memo, rpc } = params
 
   if (amount <= 0n) throw new Error('Amount must be greater than 0')
   if (!recipient.kem_public_key) {
@@ -610,6 +617,9 @@ export async function buildSendTransaction(
     amount,
     fee,
     createdAtHeight: height,
+    // Thread the (optional) destination memo through to the signer so a bridge
+    // deposit carries the order memo the watcher matches on (#1037).
+    memo,
   }
 
   // 4. Build + CLSAG-sign inside wasm. The signer self-verifies the produced tx

@@ -537,6 +537,63 @@ mod tests {
         assert_eq!(tx.inputs.len(), 1);
     }
 
+    /// #1037 round-trip proof: a deposit built the way the WASM signer builds it
+    /// — a hybrid output to the reserve carrying the order memo via
+    /// `MemoPayload::destination_bytes` (the exact call
+    /// `bth_wasm_signer::core` makes) — is view-key-matched by the watcher back
+    /// to its order UUID.
+    ///
+    /// The memo is the *real* wire memo `BridgeOrder::generate_memo` produces
+    /// (UUID in the first 16 bytes), so this asserts the wallet embed format
+    /// and the watcher read format agree end to end: `scan_deposit_output`
+    /// decrypts the memo and `BridgeOrder::order_id_from_memo` recovers the
+    /// order's id.
+    #[test]
+    fn scan_matches_wallet_built_deposit_memo_to_order() {
+        use bth_bridge_core::{BridgeOrder, Chain};
+
+        let mut rng = StdRng::from_seed([37u8; 32]);
+        let reserve = AccountKey::random(&mut rng);
+        let kem = MlKem768KeyPair::from_seed(&[0x51u8; 32]);
+
+        // A real mint order; its generated memo carries the order UUID.
+        let mut order = BridgeOrder::new_mint(
+            Chain::Ethereum,
+            1_000_000_000_000,
+            1_000_000_000,
+            "bth_deposit_addr".to_string(),
+            "0x1234567890abcdef1234567890abcdef12345678".to_string(),
+        );
+        let order_memo: [u8; 64] = order.generate_memo();
+
+        // The wallet embeds the 64-byte memo via `destination_bytes` (the exact
+        // WASM construction path) on a hybrid deposit output to the reserve.
+        let deposit = TxOutput::new_hybrid(
+            1_000_000_000_000,
+            &reserve.default_subaddress(),
+            kem.public_key(),
+            0,
+            Some(MemoPayload::destination_bytes(&order_memo)),
+            ClusterTagVector::empty(),
+        );
+        let rpc = rpc_output_from_txoutput(&deposit, "0xdeposit", 0);
+
+        // The watcher scans it with the reserve account + KEM secret.
+        let scanned = scan_deposit_output(&rpc, &reserve, Some(&kem))
+            .unwrap()
+            .expect("reserve detects its hybrid deposit");
+        let memo = scanned.memo.expect("the deposit carries a decodable memo");
+        assert_eq!(memo, order_memo, "decrypted memo must equal the order memo");
+
+        // The watcher recovers the order UUID and it matches the order.
+        let recovered =
+            BridgeOrder::order_id_from_memo(&memo).expect("watcher recovers a UUID from the memo");
+        assert_eq!(
+            recovered, order.id,
+            "the recovered order id must match the order the wallet was told to reference"
+        );
+    }
+
     #[test]
     fn scan_detects_owned_output_and_decrypts_memo() {
         let mut rng = StdRng::from_seed([3u8; 32]);
