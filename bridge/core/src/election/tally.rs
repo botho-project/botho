@@ -105,6 +105,12 @@ impl ElectionParams {
         if self.seats < 2 {
             return Err("seats (N) must be >= 2".to_string());
         }
+        // Upper bound mirrors the v2 term-document schema (`members.maxItems: 5`,
+        // the ratified 3-of-5 shape). A larger board would emit a document that
+        // fails schema validation, so reject it here at parameter time.
+        if self.seats > 5 {
+            return Err("seats (N) must be <= 5".to_string());
+        }
         if self.threshold < 2 {
             return Err("threshold (k) must be >= 2".to_string());
         }

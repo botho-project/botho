@@ -593,6 +593,214 @@ fn params_validation_rejects_bad_shapes() {
     assert!(params(1, 10, 20, 2, 3).validate().is_err());
     // seats < 2
     assert!(params(1, 10, 20, 1, 1).validate().is_err());
-    // valid
+    // seats > 5 (schema caps members at maxItems: 5)
+    assert!(params(1, 10, 20, 6, 3).validate().is_err());
+    // valid (the ratified 3-of-5 shape is the upper bound)
     assert!(params(1, 10, 20, 5, 3).validate().is_ok());
+}
+
+// --- seam guard: the emitted `elected` doc must validate against the on-main
+// v2 JSON schema (docs/bridge/schemas/term-document.v2.schema.json), and the
+// schema must keep `execution`/`signatures` seal-only. This is the guard the
+// #1073 review asked for so the #1067 → #1066 seam can never silently regress.
+
+/// Resolve a path relative to the repository root (this crate lives at
+/// `bridge/core`, so the root is two levels up from `CARGO_MANIFEST_DIR`).
+fn repo_path(rel: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(rel)
+}
+
+/// Load and parse the checked-in v2 term-document schema.
+fn load_v2_schema() -> serde_json::Value {
+    let path = repo_path("docs/bridge/schemas/term-document.v2.schema.json");
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("read schema {}: {e}", path.display()));
+    serde_json::from_str(&raw).expect("schema is valid JSON")
+}
+
+/// A small, offline JSON Schema (Draft 2020-12) validator covering exactly the
+/// keyword subset the term-document schema uses: `type`, `const`, `enum`,
+/// `minimum`, `required`, `properties`, `items`, `minItems`, `maxItems`,
+/// `allOf`, and `if`/`then`/`else`. Errors are accumulated into `errors`;
+/// an empty vec means the instance validates.
+fn validate_schema(
+    schema: &serde_json::Value,
+    inst: &serde_json::Value,
+    path: &str,
+    errors: &mut Vec<String>,
+) {
+    let obj = match schema.as_object() {
+        Some(o) => o,
+        None => return,
+    };
+
+    if let Some(t) = obj.get("type").and_then(|v| v.as_str()) {
+        let ok = match t {
+            "object" => inst.is_object(),
+            "array" => inst.is_array(),
+            "string" => inst.is_string(),
+            "integer" => inst.is_i64() || inst.is_u64(),
+            "number" => inst.is_number(),
+            "boolean" => inst.is_boolean(),
+            _ => true,
+        };
+        if !ok {
+            errors.push(format!("{path}: expected type {t}"));
+            return;
+        }
+    }
+
+    if let Some(c) = obj.get("const") {
+        if inst != c {
+            errors.push(format!("{path}: const mismatch"));
+        }
+    }
+
+    if let Some(vals) = obj.get("enum").and_then(|v| v.as_array()) {
+        if !vals.iter().any(|v| v == inst) {
+            errors.push(format!("{path}: not in enum"));
+        }
+    }
+
+    if let Some(min) = obj.get("minimum").and_then(|v| v.as_f64()) {
+        if let Some(n) = inst.as_f64() {
+            if n < min {
+                errors.push(format!("{path}: below minimum"));
+            }
+        }
+    }
+
+    if let (Some(req), Some(map)) = (
+        obj.get("required").and_then(|v| v.as_array()),
+        inst.as_object(),
+    ) {
+        for k in req.iter().filter_map(|k| k.as_str()) {
+            if !map.contains_key(k) {
+                errors.push(format!("{path}: '{k}' is a required property"));
+            }
+        }
+    }
+
+    if let (Some(props), Some(map)) = (
+        obj.get("properties").and_then(|v| v.as_object()),
+        inst.as_object(),
+    ) {
+        for (k, subschema) in props {
+            if let Some(child) = map.get(k) {
+                validate_schema(subschema, child, &format!("{path}/{k}"), errors);
+            }
+        }
+    }
+
+    if let (Some(items), Some(arr)) = (obj.get("items"), inst.as_array()) {
+        for (i, el) in arr.iter().enumerate() {
+            validate_schema(items, el, &format!("{path}/{i}"), errors);
+        }
+    }
+
+    if let (Some(mi), Some(arr)) = (
+        obj.get("minItems").and_then(|v| v.as_u64()),
+        inst.as_array(),
+    ) {
+        if (arr.len() as u64) < mi {
+            errors.push(format!("{path}: fewer than minItems {mi}"));
+        }
+    }
+    if let (Some(ma), Some(arr)) = (
+        obj.get("maxItems").and_then(|v| v.as_u64()),
+        inst.as_array(),
+    ) {
+        if (arr.len() as u64) > ma {
+            errors.push(format!("{path}: more than maxItems {ma}"));
+        }
+    }
+
+    if let Some(all) = obj.get("allOf").and_then(|v| v.as_array()) {
+        for sub in all {
+            validate_schema(sub, inst, path, errors);
+        }
+    }
+
+    if let Some(if_s) = obj.get("if") {
+        let mut probe = Vec::new();
+        validate_schema(if_s, inst, path, &mut probe);
+        if probe.is_empty() {
+            if let Some(then_s) = obj.get("then") {
+                validate_schema(then_s, inst, path, errors);
+            }
+        } else if let Some(else_s) = obj.get("else") {
+            validate_schema(else_s, inst, path, errors);
+        }
+    }
+}
+
+fn schema_errors(schema: &serde_json::Value, inst: &serde_json::Value) -> Vec<String> {
+    let mut errors = Vec::new();
+    validate_schema(schema, inst, "", &mut errors);
+    errors
+}
+
+#[test]
+fn emitted_elected_doc_validates_against_v2_schema() {
+    let schema = load_v2_schema();
+
+    // The exact JSON `assemble_elected_term_doc` emits must validate against the
+    // v2 schema that #1074 merged to `main` — this is the #1067 → #1066 seam.
+    let (_nodes, snap, p, ledger) = five_node_scenario();
+    let result = tally(&snap, &p, &ledger).unwrap();
+    let doc = assemble_elected_term_doc(&snap, &p, &result).unwrap();
+    let inst: serde_json::Value = serde_json::from_str(&doc.to_json()).unwrap();
+
+    let errs = schema_errors(&schema, &inst);
+    assert!(errs.is_empty(), "elected doc failed v2 schema: {errs:?}");
+
+    // The seam's whole point: an `elected` doc carries NO execution/signatures,
+    // and that must be legal (those are seal-only).
+    let map = inst.as_object().unwrap();
+    assert!(!map.contains_key("execution"));
+    assert!(!map.contains_key("signatures"));
+}
+
+#[test]
+fn sealed_example_fixture_validates_and_execution_is_seal_only() {
+    let schema = load_v2_schema();
+
+    // The checked-in sealed fixture must still validate (proves the conditional
+    // `execution`/`signatures` requirement moved to the sealed branch, not that
+    // it was dropped).
+    let sealed_raw = std::fs::read_to_string(repo_path(
+        "docs/bridge/schemas/examples/term-3.sealed.example.json",
+    ))
+    .expect("read sealed example");
+    let sealed: serde_json::Value = serde_json::from_str(&sealed_raw).unwrap();
+    let errs = schema_errors(&schema, &sealed);
+    assert!(errs.is_empty(), "sealed fixture failed v2 schema: {errs:?}");
+
+    // Teeth check #1: a sealed doc that omits `execution` / `signatures` MUST
+    // fail — otherwise the conditional requirement never moved.
+    let mut broken_sealed = sealed.clone();
+    let m = broken_sealed.as_object_mut().unwrap();
+    m.remove("execution");
+    m.remove("signatures");
+    let errs = schema_errors(&schema, &broken_sealed);
+    assert!(
+        errs.iter().any(|e| e.contains("'execution'"))
+            && errs.iter().any(|e| e.contains("'signatures'")),
+        "sealed doc without execution/signatures should fail: {errs:?}"
+    );
+
+    // Teeth check #2: the validator actually enforces top-level `required` — an
+    // elected doc missing `members` must fail, so the seam test above has bite.
+    let (_nodes, snap, p, ledger) = five_node_scenario();
+    let result = tally(&snap, &p, &ledger).unwrap();
+    let doc = assemble_elected_term_doc(&snap, &p, &result).unwrap();
+    let mut broken_elected: serde_json::Value = serde_json::from_str(&doc.to_json()).unwrap();
+    broken_elected.as_object_mut().unwrap().remove("members");
+    let errs = schema_errors(&schema, &broken_elected);
+    assert!(
+        errs.iter().any(|e| e.contains("'members'")),
+        "elected doc without members should fail: {errs:?}"
+    );
 }
