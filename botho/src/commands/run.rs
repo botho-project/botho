@@ -210,6 +210,40 @@ fn should_arm_minting(quorum_ok: bool, initial_sync_complete: bool) -> bool {
     quorum_ok && initial_sync_complete
 }
 
+/// Decide how many peers the startup discovery/sync gate should wait for before
+/// a node is allowed to consider itself synced and arm minting.
+///
+/// This is the discriminator that seeds `initial_sync_complete` (via
+/// `min_peers_to_wait == 0`) and drives the discovery wait loop. It must
+/// return:
+///
+/// - `Recommended` mode: the configured `min_peers`. A `min_peers == 0` config
+///   is a genuine solo node and is seeded synced (unchanged pre/post #770).
+/// - `Explicit` mode with a **non-empty** member set: `1`. The operator has
+///   declared trusted peers, so the node genuinely expects a fleet and must
+///   keep the #770 startup gate — wait for >=1 peer, sync to the tip, then
+///   mint. This is what prevents a restarted node from re-entering SCP at a
+///   stale slot while the fleet is ahead (#766/#998/#1000).
+/// - `Explicit` mode with an **empty** member set: `0`. Such a quorum is
+///   solo-by-design — its threshold is satisfied by self alone with zero peers
+///   (`Config::can_reach_quorum` reports it minteable), so there is no fleet to
+///   fall behind. Keeping the peer-wait gate here would deadlock forever: the
+///   `has_connected_peer` gate in `sync.rs` `tick()` can never become true, so
+///   `initial_sync_complete` never flips and minting is deferred indefinitely.
+///   Seeding `0` restores pre-#770 solo behavior for this config (issue #1056).
+fn min_peers_to_wait_for_startup(quorum: &QuorumConfig) -> usize {
+    match quorum.mode {
+        QuorumMode::Explicit => {
+            if quorum.members.is_empty() {
+                0
+            } else {
+                1
+            }
+        }
+        QuorumMode::Recommended => quorum.min_peers as usize,
+    }
+}
+
 /// Build the consensus config, honoring an optional test-only fixed-timing
 /// override.
 ///
@@ -358,10 +392,7 @@ async fn run_async(mut config: Config, config_path: &Path, mint: bool) -> Result
     let mut swarm = discovery.start().await?;
 
     // Determine minimum peers to wait for based on quorum config
-    let min_peers_to_wait = match config.network.quorum.mode {
-        QuorumMode::Explicit => 1, // In explicit mode, wait for at least one peer
-        QuorumMode::Recommended => config.network.quorum.min_peers as usize,
-    };
+    let min_peers_to_wait = min_peers_to_wait_for_startup(&config.network.quorum);
 
     // Wait for peers with timeout
     info!(
@@ -3316,6 +3347,86 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ---- Issue #1056: an explicit-mode solo node (threshold=1, members=[])
+    // with no peers must seed `initial_sync_complete = true` and arm minting,
+    // instead of deadlocking forever on the #770 startup peer-wait gate. The
+    // gate must remain intact for any explicit config that lists members. ----
+
+    #[test]
+    fn explicit_solo_empty_members_waits_for_zero_peers() {
+        // The regression: an explicit quorum with NO members is solo-by-design.
+        // It must wait for 0 peers so `initial_sync_complete` seeds true and the
+        // node arms minting at startup (produces blocks solo). Before the fix
+        // this hardcoded to 1 and the peerless node never left Discovery.
+        let cfg = QuorumConfig {
+            mode: QuorumMode::Explicit,
+            threshold: 1,
+            members: vec![],
+            ..QuorumConfig::default()
+        };
+        assert_eq!(
+            min_peers_to_wait_for_startup(&cfg),
+            0,
+            "explicit solo (threshold=1, members=[]) must wait for 0 peers so it \
+             seeds initial_sync_complete=true and can mint solo (issue #1056)"
+        );
+        // The seeding derivation the run loop uses: initial_sync_complete is
+        // `min_peers_to_wait == 0`.
+        assert!(
+            min_peers_to_wait_for_startup(&cfg) == 0,
+            "empty-member explicit config must seed initial_sync_complete = true"
+        );
+    }
+
+    #[test]
+    fn explicit_with_members_still_waits_for_a_peer() {
+        // The #770 gate must be UNCHANGED for fleet configs: an explicit quorum
+        // that lists members genuinely expects trusted peers, so it must wait
+        // for >=1 peer, sync, then mint — even when threshold is 1 (self alone
+        // satisfies the threshold but the node should still catch up first).
+        let cfg = QuorumConfig {
+            mode: QuorumMode::Explicit,
+            threshold: 1,
+            members: vec!["12D3KooWSomeCuratedMemberPeerId".to_string()],
+            ..QuorumConfig::default()
+        };
+        assert_eq!(
+            min_peers_to_wait_for_startup(&cfg),
+            1,
+            "explicit config with members must keep the #770 gate: wait for a \
+             peer and sync before minting"
+        );
+
+        // Also true for a higher threshold with several members.
+        let cfg_multi = QuorumConfig {
+            mode: QuorumMode::Explicit,
+            threshold: 2,
+            members: vec!["peerA".to_string(), "peerB".to_string()],
+            ..QuorumConfig::default()
+        };
+        assert_eq!(min_peers_to_wait_for_startup(&cfg_multi), 1);
+    }
+
+    #[test]
+    fn recommended_mode_peer_wait_is_unchanged() {
+        // Recommended mode is untouched by the #1056 fix: it always mirrors the
+        // configured min_peers. min_peers==0 stays a solo carve-out (seeds
+        // synced); min_peers>=1 keeps waiting.
+        let solo = QuorumConfig {
+            mode: QuorumMode::Recommended,
+            min_peers: 0,
+            ..QuorumConfig::default()
+        };
+        assert_eq!(min_peers_to_wait_for_startup(&solo), 0);
+
+        let fleet = QuorumConfig {
+            mode: QuorumMode::Recommended,
+            min_peers: 3,
+            ..QuorumConfig::default()
+        };
+        assert_eq!(min_peers_to_wait_for_startup(&fleet), 3);
     }
 
     // ---- Issue #414: PeerId -> NodeID mapping must be deterministic + injective
