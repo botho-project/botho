@@ -55,6 +55,8 @@ anvil/skills/deck/lib/parity_lint.py
 anvil/skills/deck/lib/placeholder_backend.py
 anvil/skills/deck/lib/prompt_journal.py
 anvil/skills/essay/__init__.py
+anvil/skills/help/lib/__init__.py
+anvil/skills/help/lib/introspect.py
 anvil/skills/installation/__init__.py
 anvil/skills/ip-uspto/lib/__init__.py
 anvil/skills/ip-uspto/lib/conversion_deadline.py

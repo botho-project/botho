@@ -457,9 +457,14 @@ in this skill. Steps:
    1. **Primary — `python -m anvil.lib.sidecar` CLI shim** (the common
       case; wraps the *exact same* `staged_sidecar` code, so the
       manifest check + single atomic `Path.rename` are code-enforced, not
-      agent discipline). For the sidecar dir `<slug>.{N}.<tag>/` being
-      converted:
-      - `python -m anvil.lib.sidecar stage <slug>.{N}.<tag>` — but note this
+      agent discipline). In an installed consumer repo (anvil vendored
+      under `.anvil/`, not on `sys.path`), prefix every invocation below
+      with `uv run --project .anvil` (the `.anvil/pyproject.toml` +
+      `uv sync --project .anvil` shipped by the installer since #230 make
+      the module resolvable from the consumer root); in the anvil source
+      repo the bare `python -m anvil.lib.sidecar` form works as-is. For the
+      sidecar dir `<slug>.{N}.<tag>/` being converted:
+      - `uv run --project .anvil python -m anvil.lib.sidecar stage <slug>.{N}.<tag>` — but note this
         primitive **refuses to overwrite an existing final dir**
         (`FileExistsError`), whereas this conversion **replaces a live dir
         in place**. So the moved-aside contract is preserved by hand first:
@@ -467,7 +472,7 @@ in this skill. Steps:
         original), THEN `stage <slug>.{N}.<tag>` to open a fresh staging
         path, write the full replacement (verbatim `review.md` copied back
         from the `.bak` + the new `_review.json` + `_meta.json`) into it.
-      - `python -m anvil.lib.sidecar commit <slug>.{N}.<tag> --required review.md,_review.json,_meta.json`
+      - `uv run --project .anvil python -m anvil.lib.sidecar commit <slug>.{N}.<tag> --required review.md,_review.json,_meta.json`
         → verifies the manifest, then atomically renames staging → final.
         **Nonzero exit (1) leaves the staging dir in place with no partial
         final dir** if any required file is missing; on success remove the
@@ -475,7 +480,7 @@ in this skill. Steps:
         it (`mv <slug>.{N}.<tag>.bak <slug>.{N}.<tag>`) so the sidecar is
         left **byte-identical** — matching the "original dir is restored
         untouched" isolation guarantee above.
-      - Stale-staging sweep analog: `python -m anvil.lib.sidecar cleanup <slug>.{N}.<tag>`.
+      - Stale-staging sweep analog: `uv run --project .anvil python -m anvil.lib.sidecar cleanup <slug>.{N}.<tag>`.
    2. **Last resort — manual `mv`-based staging** when even `python`/`uv`
       is unavailable. Reproduce the contract by hand: (a) `mv
       <slug>.{N}.<tag> <slug>.{N}.<tag>.bak` to move the live original
@@ -556,7 +561,7 @@ operator gate is binding — a rescore NEVER runs silently. Steps:
    **Non-Python-driver ordering (fail-open, manual fallback)** — issue
    #645: because this reuses Phase 3a's staged/backup/swap pattern, the
    two-tier CLI-shim / manual-`mv` fallback documented at §9 step 4 (the
-   `python -m anvil.lib.sidecar stage/commit/cleanup` shim, then the manual
+   `uv run --project .anvil python -m anvil.lib.sidecar stage/commit/cleanup` shim, then the manual
    moved-aside `mv` last resort with a durable `atomicity_fallback:
    manual-mv` stamp) applies verbatim to this scored-rescore write for a
    driver-less agent session; the only difference is the replacement
