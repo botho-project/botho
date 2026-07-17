@@ -48,10 +48,14 @@
 #   ./scripts/bridge-testnet-federation.sh clean         # down + delete run state (keeps keys)
 #   ./scripts/bridge-testnet-federation.sh rotate        # e2e key-rotation drill (#1061):
 #                    mock same-set election -> pause -> drain -> fresh keys on
-#                    every surface -> OLD-KEYS-DEAD assertions -> resume ->
-#                    post-rotation attestation + proof-of-reserves. Individual
-#                    phases: rotate-elect|pause|drain|keys|safe|solana|bth|
-#                    restart|verify|resume|attest (see the rotate section).
+#                    every surface -> SEAL the v2 term document -> OLD-KEYS-DEAD
+#                    assertions -> resume -> post-rotation attestation +
+#                    proof-of-reserves. Individual phases: rotate-elect|pause|
+#                    drain|keys|safe|solana|bth|seal|restart|verify|resume|attest
+#                    (see the rotate section).
+#   ./scripts/bridge-testnet-federation.sh term-doc-selftest  # OFFLINE v2
+#                    term-document self-check (no services): schema + the
+#                    elected->sealed transition + signature verification.
 #
 # ENV KNOBS (defaults target the LIVE testnet):
 #   BRIDGE_FED_NODES=3                 federation size n
@@ -689,10 +693,237 @@ SOL_MINT="${BRIDGE_SOLANA_MINT:-F7LsiATxVQxnDEBWemfuq1BgFDYbuzqMMJ5eZjaB7LFX}"
 ETH_SENTINEL="0x0000000000000000000000000000000000000001"
 ETH_ZERO="0x0000000000000000000000000000000000000000"
 
+# v2 term-document schema (docs/bridge/election-dynamics.md §5.2, ADR 0010) and
+# its committed worked example. The rotation drill emits documents that MUST
+# validate against this schema (rotate-seal / rotate-verify / term-doc-selftest).
+TERM_SCHEMA="$REPO_ROOT/docs/bridge/schemas/term-document.v2.schema.json"
+TERM_SCHEMA_REL="docs/bridge/schemas/term-document.v2.schema.json"
+TERM_EXAMPLE="$REPO_ROOT/docs/bridge/schemas/examples/term-3.sealed.example.json"
+# Domain-separation prefix for every term-document signature (mirrors the
+# attestation-envelope discipline in bridge/core/src/attestation.rs).
+TERM_DOC_DOMAIN="botho.bridge.term.v2:"
+# Handover / term windows (seconds). Ratification-pending numbers (§7): a 72h
+# handover deadline and a ~93-day term.
+TERM_HANDOVER_SECS="${BRIDGE_TERM_HANDOVER_SECS:-259200}"
+TERM_LENGTH_SECS="${BRIDGE_TERM_LENGTH_SECS:-8035200}"
+
 current_term()      { cat "$ELECTION_DIR/current-term" 2>/dev/null || echo 1; }
 election_doc()      { echo "$ELECTION_DIR/term-$1.json"; }
 rotate_state_dir()  { echo "$ELECTION_DIR/rotate-term-$1"; }
 retired_dir()       { echo "$FED_DIR/retired/term-$1"; }
+node_id_for()       { printf 'node-fed-%02d' "$1"; }
+sha256_hex()        { python3 -c 'import hashlib,sys;print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'; }
+
+# ---------------------------------------------------------------------------
+# Term-document (v2) cryptographic + assembly helpers. Signatures are real
+# ed25519 (openssl), domain-separated with TERM_DOC_DOMAIN, over three
+# well-defined payloads (§5.2 "Normative semantics"):
+#   * keySubmissionSig      — signed by a member's LONG-LIVED identity key,
+#                             over (v, term, nodeId, keys).
+#   * tallyAttestations[].sig — signed by an elector's LONG-LIVED identity key,
+#                             over the ELECTED/tally snapshot (the election-
+#                             decided fields only: v, term, electionKind,
+#                             electorate, tally, threshold, membership
+#                             identities). Stable across sealing, so electors
+#                             sign ONCE at tally time.
+#   * outgoing[].sig        — signed by an OUTGOING member's retired attestation
+#                             key, over the complete SEALED document minus the
+#                             signatures object (the full authorization chain).
+# ---------------------------------------------------------------------------
+ensure_identity_keys() {
+    # ensure_identity_keys <fed_dir> <n> — long-lived per-member identity keys
+    # (curated identity; NEVER rotated — distinct from the per-term
+    # attestation keys). Created once, persist across terms.
+    local fd="$1" n="$2" i priv pub
+    for i in $(seq 1 "$n"); do
+        if [[ ! -f "$fd/identity-$i.key" ]]; then
+            read -r priv pub < <(gen_ed25519)
+            printf '%s\n' "$priv" > "$fd/identity-$i.key"; chmod 600 "$fd/identity-$i.key"
+            printf '%s\n' "$pub"  > "$fd/identity-$i.pub"
+        fi
+    done
+}
+
+ed25519_sign_hex() {
+    # ed25519_sign_hex <seed-hex> ; message on stdin -> hex signature on stdout
+    # (python via -c so the piped message reaches stdin, not a heredoc).
+    python3 -c '
+import base64, os, subprocess, sys, tempfile
+seed = bytes.fromhex(sys.argv[1].strip()); assert len(seed) == 32, "32-byte seed"
+der = bytes.fromhex("302e020100300506032b657004220420") + seed
+pem = ("-----BEGIN PRIVATE KEY-----\n"
+       + base64.encodebytes(der).decode() + "-----END PRIVATE KEY-----\n")
+msg = sys.stdin.buffer.read()
+with tempfile.TemporaryDirectory() as d:
+    kp, mp, sp = (os.path.join(d, n) for n in ("k.pem", "m.bin", "s.bin"))
+    open(kp, "w").write(pem); open(mp, "wb").write(msg)
+    subprocess.run(["openssl", "pkeyutl", "-sign", "-inkey", kp,
+                    "-rawin", "-in", mp, "-out", sp], check=True)
+    print(open(sp, "rb").read().hex())
+' "$1"
+}
+
+ed25519_verify_hex() {
+    # ed25519_verify_hex <pub-hex> <sig-hex> ; message on stdin ; exit 0 if valid
+    python3 -c '
+import base64, os, subprocess, sys, tempfile
+pub = bytes.fromhex(sys.argv[1].strip()); sig = bytes.fromhex(sys.argv[2].strip())
+der = bytes.fromhex("302a300506032b6570032100") + pub
+pem = ("-----BEGIN PUBLIC KEY-----\n"
+       + base64.encodebytes(der).decode() + "-----END PUBLIC KEY-----\n")
+msg = sys.stdin.buffer.read()
+with tempfile.TemporaryDirectory() as d:
+    kp, mp, sp = (os.path.join(d, n) for n in ("k.pem", "m.bin", "s.bin"))
+    open(kp, "w").write(pem); open(mp, "wb").write(msg); open(sp, "wb").write(sig)
+    r = subprocess.run(["openssl", "pkeyutl", "-verify", "-pubin", "-inkey", kp,
+                        "-rawin", "-in", mp, "-sigfile", sp],
+                       capture_output=True)
+    sys.exit(0 if r.returncode == 0 else 1)
+' "$1" "$2"
+}
+
+# The three canonical signing payloads (domain prefix + canonical JSON: jq -cS
+# = sorted keys, compact). Each reads the document from $1.
+tally_msg() {
+    { printf '%s' "$TERM_DOC_DOMAIN"
+      jq -cS '{v, term, electionKind, electorate, tally, threshold,
+               members: [.members[] | {index, nodeId, approvals}]}' "$1"; }
+}
+keysub_msg() {   # keysub_msg <doc> <member-index-1based>
+    { printf '%s' "$TERM_DOC_DOMAIN"
+      jq -cS --argjson i "$2" \
+        '{v, term, nodeId: .members[$i-1].nodeId, keys: .members[$i-1].keys}' "$1"; }
+}
+outgoing_msg() {
+    { printf '%s' "$TERM_DOC_DOMAIN"; jq -cS 'del(.signatures)' "$1"; }
+}
+
+validate_term_doc() {
+    # validate_term_doc <doc> [pass|fail] — validate against the committed v2
+    # schema. SKIPs (with a warning) when python jsonschema is unavailable.
+    local doc="$1" expect="${2:-pass}" out rc
+    # `&& rc=0 || rc=$?` keeps a non-zero exit (expected for negative cases)
+    # from tripping `set -e` before we can inspect it.
+    out="$(python3 - "$TERM_SCHEMA" "$doc" <<'PY'
+import json, sys
+try:
+    from jsonschema import Draft202012Validator
+except Exception:
+    print("SKIP jsonschema unavailable"); sys.exit(2)
+schema = json.load(open(sys.argv[1])); doc = json.load(open(sys.argv[2]))
+errs = sorted(Draft202012Validator(schema).iter_errors(doc), key=lambda e: list(e.path))
+if errs:
+    print("INVALID: " + "/".join(map(str, errs[0].path)) + ": " + errs[0].message); sys.exit(1)
+print("VALID"); sys.exit(0)
+PY
+)" && rc=0 || rc=$?
+    if [[ $rc -eq 2 ]]; then warn "term-doc schema check skipped ($out)"; return 0; fi
+    if [[ "$expect" == pass ]]; then
+        [[ $rc -eq 0 ]] || die "term document did NOT validate against $TERM_SCHEMA_REL: $out ($doc)"
+    else
+        [[ $rc -eq 1 ]] || die "expected term document to be REJECTED but rc=$rc ($out) ($doc)"
+    fi
+}
+
+emit_elected_doc() {
+    # emit_elected_doc <doc> <term> <fed_dir> <secrets_dir> <election_kind>
+    # Membership-only 'elected' document (no per-term keys yet). Mirrors the
+    # #1067 tally output; the drill's same-set mock stands in for the ballot.
+    local doc="$1" term="$2" fd="$3" sd="$4" kind="$5" i
+    ensure_identity_keys "$fd" "$N"
+    local members eligible now="$(date +%s)"
+    members="$(for i in $(seq 1 "$N"); do
+        jq -n --argjson idx "$i" --arg nid "$(node_id_for "$i")" --argjson ap "$N" \
+            '{index: $idx, nodeId: $nid, approvals: $ap}'
+      done | jq -s '.')"
+    eligible="$(for i in $(seq 1 "$N"); do node_id_for "$i"; done | jq -R . | jq -s '.')"
+    local curationHash
+    curationHash="$(printf '%s' "$(jq -cS . <<<"$eligible")" | sha256_hex)"
+    local base
+    base="$(jq -n \
+        --argjson term "$term" --arg kind "$kind" --arg chash "$curationHash" \
+        --argjson eligible "$eligible" --argjson members "$members" \
+        --argjson thr "$T" --arg safe "$SAFE" --arg solmint "$SOL_MINT" \
+        --argjson now "$now" --argjson hand "$TERM_HANDOVER_SECS" --argjson len "$TERM_LENGTH_SECS" \
+        '{v: 2, term: $term, electionKind: $kind, status: "elected",
+          electorate: {curationDocHash: $chash, snapshotHeight: 0, eligible: $eligible},
+          tally: {rule: "approval-top-N-v1", openHeight: 0, closeHeight: 0,
+                  ballots: ($eligible | length), resultHash: ""},
+          threshold: $thr,
+          members: $members,
+          execution: {ethereum: {safe: $safe, intent: "swapOwner", newThreshold: $thr},
+                      solana:   {authority: $solmint, intent: "setAuthority"},
+                      bth:      {intent: "reserveSweepFactor1", newReserveAddress: "pending-seal"}},
+          validity: {electedAt: $now, handoverDeadline: ($now + $hand), termEnd: ($now + $len)}}')"
+    # resultHash binds the tally transcript (mock: the membership ranking).
+    local rhash
+    rhash="$(jq -cS '{term, members: [.members[] | {index, nodeId, approvals}]}' <<<"$base" | sha256_hex)"
+    base="$(jq --arg rh "$rhash" '.tally.resultHash = $rh' <<<"$base")"
+    printf '%s' "$base" > "$doc.wip"
+    # Tally attestations: each eligible elector signs the tally snapshot ONCE.
+    local att="[]" sig
+    for i in $(seq 1 "$N"); do
+        sig="$(tally_msg "$doc.wip" | ed25519_sign_hex "$(cat "$fd/identity-$i.key")")"
+        att="$(jq --arg nid "$(node_id_for "$i")" --arg s "ed25519:$sig" \
+            '. + [{nodeId: $nid, sig: $s}]' <<<"$att")"
+    done
+    jq --argjson att "$att" '. + {signatures: {tallyAttestations: $att, outgoing: []}}' \
+        "$doc.wip" > "$doc"
+    rm -f "$doc.wip"; chmod 600 "$doc"
+}
+
+emit_sealed_doc() {
+    # emit_sealed_doc <doc> <fed_dir> <secrets_dir> <retired_dir> [solanaMember] [bthReserve]
+    # Select-then-keygen: consume an 'elected' document and produce a 'sealed'
+    # one by binding fresh per-term keys (signed by each winner's long-lived
+    # identity key) and the outgoing federation's counter-signature.
+    local doc="$1" fd="$2" sd="$3" ret="$4" solmember="${5:-}" bthres="${6:-}" i
+    local status; status="$(jq -r '.status' "$doc")"
+    [[ "$status" == "sealed" ]] && { log "term document already sealed"; return 0; }
+    [[ "$status" == "elected" ]] || die "term document is '$status', expected 'elected' — run rotate-elect"
+    ensure_identity_keys "$fd" "$N"
+    local newdoc; newdoc="$(cat "$doc")"
+    # Per-member fresh key material. ed25519 + ethSafeOwner rotate per member;
+    # solana/bth custody is single-key on testnet (#867/#1051) so those repeat
+    # across members here (mainnet gives each member a distinct Squads/reserve
+    # share). Absent live legs fall back to a clearly-marked mock placeholder.
+    local sm="${solmember:-mock:solana-single-custody}"
+    local br="${bthres:-mock:bth-reserve-single-custody}"
+    for i in $(seq 1 "$N"); do
+        local edpub ethaddr keys
+        edpub="$(tr -d '[:space:]' < "$fd/ed25519-$i.pub")"
+        ethaddr="$(tr -d '[:space:]' < "$sd/eth-safe-owner-$i.addr" 2>/dev/null || echo "")"
+        keys="$(jq -n --arg ed "$edpub" --arg eth "$ethaddr" --arg s "$sm" --arg b "$br" \
+            '{ed25519AttestationPubkey: $ed, ethSafeOwner: $eth, solanaMember: $s, bthReserveKey: $b}')"
+        newdoc="$(jq --argjson i "$i" --argjson keys "$keys" '.members[$i-1].keys = $keys' <<<"$newdoc")"
+    done
+    newdoc="$(jq --arg br "${bthres:-pending-seal}" \
+        '.status = "sealed" | .execution.bth.newReserveAddress = $br' <<<"$newdoc")"
+    [[ -n "$solmember" ]] && newdoc="$(jq --arg a "$solmember" '.execution.solana.authority = $a' <<<"$newdoc")"
+    printf '%s' "$newdoc" > "$doc.wip"
+    # keySubmissionSig: each member binds its fresh keys with its identity key.
+    for i in $(seq 1 "$N"); do
+        local sig
+        sig="$(keysub_msg "$doc.wip" "$i" | ed25519_sign_hex "$(cat "$fd/identity-$i.key")")"
+        newdoc="$(jq --argjson i "$i" --arg s "ed25519:$sig" \
+            '.members[$i-1].keySubmissionSig = $s' <<<"$newdoc")"
+        printf '%s' "$newdoc" > "$doc.wip"
+    done
+    # Outgoing counter-signature: threshold-T retired attestation keys sign the
+    # completed sealed document (signatures removed).
+    local outg="[]"
+    for i in $(seq 1 "$T"); do
+        [[ -f "$ret/ed25519-$i.key" ]] ||
+            die "no retired attestation key $i under $ret to counter-sign the handover"
+        local opub osig
+        opub="$(tr -d '[:space:]' < "$ret/ed25519-$i.pub")"
+        osig="$(outgoing_msg "$doc.wip" | ed25519_sign_hex "$(cat "$ret/ed25519-$i.key")")"
+        outg="$(jq --argjson idx "$i" --arg p "$opub" --arg s "ed25519:$osig" \
+            '. + [{index: $idx, ed25519AttestationPubkey: $p, sig: $s}]' <<<"$outg")"
+    done
+    newdoc="$(jq --argjson o "$outg" '.signatures.outgoing = $o' <<<"$newdoc")"
+    printf '%s\n' "$newdoc" > "$doc"; rm -f "$doc.wip"; chmod 600 "$doc"
+}
 
 pending_term() {
     local next=$(( $(current_term) + 1 ))
@@ -714,9 +945,11 @@ need_cast() {
 }
 
 # ---------------------------------------------------------------------------
-# rotate-elect: MOCK election. Re-elects the CURRENT member set with a term
-# bump. The emitted document is the full interface the rest of the rotation
-# consumes — a real election result (#1060) drops in here unchanged.
+# rotate-elect: MOCK election (v2 term document, status "elected"). Re-elects
+# the CURRENT member set with a term bump, pinning MEMBERSHIP ONLY — the fresh
+# per-term keys do not exist yet and are bound later by rotate-seal (the
+# select-then-keygen lifecycle, ADR 0010 §5.1). A real #1060/#1067 election
+# drops an 'elected' document in here unchanged; nothing downstream changes.
 # ---------------------------------------------------------------------------
 cmd_rotate_elect() {
     require_gitignored
@@ -724,25 +957,16 @@ cmd_rotate_elect() {
     local cur next doc
     cur="$(current_term)"; next=$(( cur + 1 )); doc="$(election_doc "$next")"
     if [[ -f "$doc" ]]; then
-        log "election document for term $next already exists"
+        log "election document for term $next already exists (status $(jq -r .status "$doc"))"
         jq . "$doc" >&2
         return 0
     fi
-    local i
-    {
-        for i in $(seq 1 "$N"); do
-            jq -n --argjson i "$i" \
-                --arg ed "$(tr -d '[:space:]' < "$FED_DIR/ed25519-$i.pub")" \
-                --arg eth "$(tr -d '[:space:]' < "$SECRETS_DIR/eth-safe-owner-$i.addr" 2>/dev/null || true)" \
-                '{index: $i, ed25519AttestationPubkey: $ed, ethSafeOwner: $eth}'
-        done
-    } | jq -s --argjson term "$next" --argjson thr "$T" \
-        '{v: 1, electionKind: "mock-same-set", mock: true, term: $term,
-          electedAt: (now | floor), threshold: $thr, members: .}' > "$doc"
-    chmod 600 "$doc"
-    ok "MOCK election: term $next re-elects the same $N members (threshold $T)"
+    emit_elected_doc "$doc" "$next" "$FED_DIR" "$SECRETS_DIR" "mock-same-set"
+    validate_term_doc "$doc" pass
+    ok "MOCK election (v2): term $next re-elects the same $N members — status=elected (keys bound at rotate-seal), threshold $T"
     jq . "$doc" >&2
     mkdir -p "$(rotate_state_dir "$next")" && chmod 700 "$(rotate_state_dir "$next")"
+    date +%s > "$(rotate_state_dir "$next")/elected"
 }
 
 # ---------------------------------------------------------------------------
@@ -1153,6 +1377,40 @@ cmd_rotate_bth() {
 }
 
 # ---------------------------------------------------------------------------
+# rotate-seal: the SELECT-THEN-KEYGEN seal step. Consumes the 'elected' term
+# document (membership) and produces the 'sealed' one by binding the fresh
+# per-term keys generated in rotate-keys/-solana/-bth: each winner submits its
+# fresh keys signed by its long-lived identity key (keySubmissionSig), and the
+# OUTGOING federation counter-signs the completed document at threshold. Only a
+# sealed document authorizes execution and drives rotate-verify. Runs after the
+# key-generating legs; solana/bth custody is single-key on testnet so those
+# per-member fields carry the shared fresh value (or a mock marker if a leg is
+# gated) — mainnet issues each member a distinct Squads/reserve share.
+# ---------------------------------------------------------------------------
+cmd_rotate_seal() {
+    require_gitignored
+    local term st ret doc solmember bthres
+    term="$(pending_term)"; st="$(rotate_state_dir "$term")"
+    ret="$(retired_dir $(( term - 1 )))"
+    require_phase "$term" keys rotate-keys
+    doc="$(election_doc "$term")"
+
+    # Freshly-generated single-custody material, when the live legs produced it.
+    solmember=""; bthres=""
+    if command -v solana-keygen >/dev/null 2>&1 && [[ -f "$SECRETS_DIR/solana-mint-auth.json" ]]; then
+        solmember="$(solana-keygen pubkey "$SECRETS_DIR/solana-mint-auth.json" 2>/dev/null || echo "")"
+    fi
+    [[ -f "$FED_DIR/bth-reserve/address.txt" ]] &&
+        bthres="$(tr -d '[:space:]' < "$FED_DIR/bth-reserve/address.txt")"
+
+    emit_sealed_doc "$doc" "$FED_DIR" "$SECRETS_DIR" "$ret" "$solmember" "$bthres"
+    validate_term_doc "$doc" pass
+    ok "term $term SEALED (v2): fresh per-term keys submitted + outgoing counter-signed; validates against $TERM_SCHEMA_REL"
+    log "sealed doc: status=$(jq -r .status "$doc") members=$(jq '.members|length' "$doc") outgoing-sigs=$(jq '.signatures.outgoing|length' "$doc")"
+    date +%s > "$st/sealed"
+}
+
+# ---------------------------------------------------------------------------
 # rotate-restart: re-render configs (they pin the NEW public key sets and
 # the NEW attest token) and restart every instance. Same env knobs as `up`
 # (RESERVE_TOLERANCE, caps) must be supplied on this invocation too.
@@ -1161,6 +1419,7 @@ cmd_rotate_restart() {
     local term st
     term="$(pending_term)"; st="$(rotate_state_dir "$term")"
     require_phase "$term" keys rotate-keys
+    require_phase "$term" sealed rotate-seal
     cmd_down
     cmd_up
     date +%s > "$st/restarted"
@@ -1237,6 +1496,28 @@ cmd_rotate_verify() {
     ret="$(retired_dir $(( term - 1 )))"
     require_phase "$term" restarted rotate-restart
     cast="$(need_cast)"
+
+    # ── (0) the SEALED term document is the authority for this rotation. It
+    #        validates against the committed v2 schema, and its pinned per-member
+    #        keys must equal the live fresh key files the instances now run on
+    #        (so old-keys-dead assertions below check the exact set the document
+    #        authorized — not merely whatever is on disk).
+    local doc; doc="$(election_doc "$term")"
+    [[ "$(jq -r '.status' "$doc")" == "sealed" ]] ||
+        die "term $term document is not 'sealed' — run rotate-seal before rotate-verify"
+    validate_term_doc "$doc" pass
+    for i in $(seq 1 "$N"); do
+        local dpub daddr lpub laddr
+        dpub="$(jq -r --argjson i "$i" '.members[$i-1].keys.ed25519AttestationPubkey' "$doc")"
+        daddr="$(jq -r --argjson i "$i" '.members[$i-1].keys.ethSafeOwner' "$doc")"
+        lpub="$(tr -d '[:space:]' < "$FED_DIR/ed25519-$i.pub")"
+        laddr="$(tr -d '[:space:]' < "$SECRETS_DIR/eth-safe-owner-$i.addr")"
+        [[ "$dpub" == "$lpub" ]] ||
+            die "sealed doc ed25519 pubkey for member $i disagrees with the live key file"
+        [[ "$(tr '[:upper:]' '[:lower:]' <<<"$daddr")" == "$(tr '[:upper:]' '[:lower:]' <<<"$laddr")" ]] ||
+            die "sealed doc Safe owner for member $i disagrees with the live key file"
+    done
+    ok "sealed term document validates (v2 schema) and pins the live fresh key set"
 
     # ── (a) federation: a VALIDLY-SIGNED old-key attestation must be refused
     local order_row order_id amount source_tx
@@ -1435,13 +1716,110 @@ cmd_rotate() {
     cmd_rotate_safe
     cmd_rotate_solana
     cmd_rotate_bth
+    cmd_rotate_seal
     cmd_rotate_restart
     cmd_rotate_verify
     cmd_rotate_resume
     cmd_rotate_attest
 }
 
-usage() { sed -n '2,66p' "$0" | sed 's/^# \{0,1\}//'; }
+# ---------------------------------------------------------------------------
+# term-doc-selftest: OFFLINE self-check of the v2 term-document format — needs
+# no live services. Exercises the exact emit_elected_doc / emit_sealed_doc code
+# paths the drill uses: validates the committed worked example, drives the
+# elected -> sealed transition with real ed25519 key submission + outgoing
+# counter-signatures, verifies every signature cryptographically, and asserts
+# the schema REJECTS a sealed document that is missing its per-term keys (nit a).
+# ---------------------------------------------------------------------------
+verify_tally_attestations() {
+    local doc="$1" fd="$2" n k nid sig pub idx
+    n="$(jq '.signatures.tallyAttestations | length' "$doc")"
+    for k in $(seq 0 $(( n - 1 ))); do
+        nid="$(jq -r --argjson k "$k" '.signatures.tallyAttestations[$k].nodeId' "$doc")"
+        sig="$(jq -r --argjson k "$k" '.signatures.tallyAttestations[$k].sig' "$doc")"; sig="${sig#ed25519:}"
+        idx="${nid##*-}"; idx="$(( 10#$idx ))"
+        pub="$(tr -d '[:space:]' < "$fd/identity-$idx.pub")"
+        tally_msg "$doc" | ed25519_verify_hex "$pub" "$sig" ||
+            die "tallyAttestation for $nid failed to verify against its identity key"
+    done
+    ok "all $n tallyAttestations verify (cover the tally/membership snapshot)"
+}
+verify_key_submissions() {
+    local doc="$1" fd="$2" i sig pub
+    for i in $(seq 1 "$N"); do
+        sig="$(jq -r --argjson i "$i" '.members[$i-1].keySubmissionSig' "$doc")"; sig="${sig#ed25519:}"
+        pub="$(tr -d '[:space:]' < "$fd/identity-$i.pub")"
+        keysub_msg "$doc" "$i" | ed25519_verify_hex "$pub" "$sig" ||
+            die "keySubmissionSig for member $i failed to verify against its identity key"
+    done
+    ok "all $N keySubmissionSig verify against the long-lived identity keys"
+}
+verify_outgoing() {
+    local doc="$1" n k pub sig idx
+    n="$(jq '.signatures.outgoing | length' "$doc")"
+    [[ "$n" -ge "$T" ]] || die "outgoing counter-signatures ($n) below threshold $T"
+    for k in $(seq 0 $(( n - 1 ))); do
+        idx="$(jq -r --argjson k "$k" '.signatures.outgoing[$k].index' "$doc")"
+        pub="$(jq -r --argjson k "$k" '.signatures.outgoing[$k].ed25519AttestationPubkey' "$doc")"
+        sig="$(jq -r --argjson k "$k" '.signatures.outgoing[$k].sig' "$doc")"; sig="${sig#ed25519:}"
+        outgoing_msg "$doc" | ed25519_verify_hex "$pub" "$sig" ||
+            die "outgoing counter-signature index $idx failed to verify"
+    done
+    ok "outgoing counter-signatures verify (threshold $T reached)"
+}
+cmd_term_doc_selftest() {
+    command -v jq >/dev/null      || die "jq required"
+    command -v python3 >/dev/null || die "python3 required"
+    command -v openssl >/dev/null || die "openssl (ed25519) required"
+    [[ -f "$TERM_SCHEMA" ]]  || die "missing schema $TERM_SCHEMA_REL"
+    [[ -f "$TERM_EXAMPLE" ]] || die "missing worked example $TERM_EXAMPLE"
+
+    local tmp; tmp="$(mktemp -d)"
+    # shellcheck disable=SC2064
+    trap "rm -rf '$tmp'" RETURN
+    local N_save="$N" T_save="$T"; N=3; T=2
+    local fd="$tmp/fed" sd="$tmp/sec" ret="$tmp/retired" doc="$tmp/term-2.json" i p q
+    mkdir -p "$fd" "$sd" "$ret"
+    for i in $(seq 1 "$N"); do
+        read -r p q < <(gen_ed25519)   # fresh per-term attestation key
+        printf '%s\n' "$p" > "$fd/ed25519-$i.key"; printf '%s\n' "$q" > "$fd/ed25519-$i.pub"
+        read -r p q < <(gen_ed25519)   # outgoing (retired) attestation key
+        printf '%s\n' "$p" > "$ret/ed25519-$i.key"; printf '%s\n' "$q" > "$ret/ed25519-$i.pub"
+        printf '0x%040x\n' "$i" > "$sd/eth-safe-owner-$i.addr"   # well-formed fake addr
+    done
+
+    log "1/5 committed worked example validates against $TERM_SCHEMA_REL"
+    validate_term_doc "$TERM_EXAMPLE" pass; ok "worked example is schema-valid"
+
+    log "2/5 elected document: membership only, no per-term keys"
+    emit_elected_doc "$doc" 2 "$fd" "$sd" "mock-same-set"
+    validate_term_doc "$doc" pass
+    [[ "$(jq -r '.status' "$doc")" == "elected" ]] || die "elected doc has wrong status"
+    [[ "$(jq '.members[0] | has("keys")' "$doc")" == "false" ]] ||
+        die "elected doc must NOT carry per-term keys"
+    verify_tally_attestations "$doc" "$fd"
+
+    log "3/5 negative: a 'sealed' document without keys must be REJECTED (nit a)"
+    jq '.status = "sealed"' "$doc" > "$tmp/bad.json"
+    validate_term_doc "$tmp/bad.json" fail; ok "schema rejects sealed-without-keys"
+
+    log "4/5 seal transition: fresh keys + submission sigs + outgoing counter-sign"
+    emit_sealed_doc "$doc" "$fd" "$sd" "$ret" \
+        "Examp1eSo1anaMember1111111111111111111111111" \
+        "bth1qexamplereserve0000000000000000000000000"
+    validate_term_doc "$doc" pass
+    [[ "$(jq -r '.status' "$doc")" == "sealed" ]] || die "sealed doc has wrong status"
+
+    log "5/5 verify every signature cryptographically"
+    verify_key_submissions "$doc" "$fd"
+    verify_outgoing "$doc" "$ret"
+    verify_tally_attestations "$doc" "$fd"   # still valid post-seal (nit b)
+
+    N="$N_save"; T="$T_save"
+    ok "term-document v2 self-check PASSED (elected -> sealed, key submission, counter-sign, schema)"
+}
+
+usage() { sed -n '2,71p' "$0" | sed 's/^# \{0,1\}//'; }
 
 case "${1:-}" in
     keys)         cmd_keys ;;
@@ -1466,9 +1844,11 @@ case "${1:-}" in
     rotate-safe)     cmd_rotate_safe ;;
     rotate-solana)   cmd_rotate_solana ;;
     rotate-bth)      cmd_rotate_bth ;;
+    rotate-seal)     cmd_rotate_seal ;;
     rotate-restart)  cmd_rotate_restart ;;
     rotate-verify)   cmd_rotate_verify ;;
     rotate-resume)   cmd_rotate_resume ;;
     rotate-attest)   cmd_rotate_attest ;;
+    term-doc-selftest) cmd_term_doc_selftest ;;
     *)            usage; exit 1 ;;
 esac

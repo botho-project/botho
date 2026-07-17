@@ -581,51 +581,65 @@ election matters — the re-key handover and the *old-keys-are-dead* proof.
 ./scripts/bridge-testnet-federation.sh rotate
 # or phase by phase:
 #   rotate-elect  rotate-pause  rotate-drain  rotate-keys  rotate-safe
-#   rotate-solana rotate-bth    rotate-restart rotate-verify
+#   rotate-solana rotate-bth    rotate-seal   rotate-restart rotate-verify
 #   rotate-resume rotate-attest
+# offline artifact self-check (no live services needed):
+./scripts/bridge-testnet-federation.sh term-doc-selftest
 ```
 
-### The mock-election interface (the #1060 seam)
+### The mock-election interface (the #1060 seam) — v2 term document
 
-`rotate-elect` writes `federation/election/term-<K>.json`:
+`rotate-elect` writes `federation/election/term-<K>.json` as a **v2 term
+document** (ADR 0010; canonical schema
+[`docs/bridge/schemas/term-document.v2.schema.json`](schemas/term-document.v2.schema.json),
+full field reference in `docs/bridge/election-dynamics.md` §5.2). The document
+has a **two-stage lifecycle** (select-then-keygen): `rotate-elect` pins
+MEMBERSHIP as `status: "elected"` (no keys yet), and `rotate-seal` binds the
+fresh per-term keys and flips it to `status: "sealed"`.
 
 ```json
 {
-  "v": 1,
-  "electionKind": "mock-same-set",
-  "mock": true,
+  "v": 2,
   "term": 2,
-  "electedAt": 1752720000,
+  "electionKind": "mock-same-set",
+  "status": "elected",
+  "electorate": { "curationDocHash": "…", "snapshotHeight": 0,
+                  "eligible": ["node-fed-01", "node-fed-02", "node-fed-03"] },
+  "tally": { "rule": "approval-top-N-v1", "ballots": 3, "resultHash": "…", "…": "…" },
   "threshold": 2,
-  "members": [
-    { "index": 1, "ed25519AttestationPubkey": "…", "ethSafeOwner": "0x…" },
-    { "index": 2, "…": "…" },
-    { "index": 3, "…": "…" }
-  ]
+  "members": [ { "index": 1, "nodeId": "node-fed-01", "approvals": 3 }, "…" ],
+  "execution": { "ethereum": { "safe": "0x…", "intent": "swapOwner" }, "…": "…" },
+  "validity": { "electedAt": 0, "handoverDeadline": 0, "termEnd": 0 },
+  "signatures": { "tallyAttestations": [ "…" ], "outgoing": [] }
 }
 ```
 
-Everything after `rotate-elect` consumes ONLY this document (plus the key
-files it references by member index). A real #1060 election replaces
-`rotate-elect` — same schema, possibly different members — and **nothing
-else changes**. A membership-changing election additionally maps
+`rotate-seal` then adds each member's `keys` + `keySubmissionSig` (fresh keys
+signed by the member's long-lived identity key) and the `signatures.outgoing`
+counter-signature at threshold, and sets `status: "sealed"`. Everything after
+the seal consumes ONLY this document; `rotate-verify` re-validates it against
+the schema and cross-checks its pinned keys against the live key files. A real
+#1060/#1067 election replaces `rotate-elect`'s tally with an on-chain ballot —
+same `elected` schema, possibly different members — and `rotate-seal` and the
+rest are **unchanged**. A membership-changing election additionally maps
 added/removed indices onto `addOwnerWithThreshold`/`removeOwner` instead of
-pure `swapOwner`; the drill's pause → drain → re-key → verify → resume
+pure `swapOwner`; the drill's pause → drain → re-key → seal → verify → resume
 skeleton is identical.
 
 ### Phase order and what each step asserts
 
 | Phase | Action | Gate/assertion |
 |---|---|---|
-| `rotate-elect` | mock same-set election → term document | — |
+| `rotate-elect` | mock same-set election → **v2 `elected` term document** (membership only, no keys) | emitted document validates against `docs/bridge/schemas/term-document.v2.schema.json` |
 | `rotate-pause` | trip the breaker (shared store — all N pause) | every `/api/status` shows `paused`; the PUBLIC order API answers **503** to an order-create probe (deliberately invalid body — proves the gate with no order created). The public surface gained a READ-ONLY pause gate for exactly this (#1061): while paused the bridge must stop *accepting* orders, not merely stop settling them |
 | `rotate-drain` | wait for in-flight orders | **hard** states (`mint_pending`, `release_pending` — value in motion) are never overridable; **soft** states (`awaiting_deposit`, `deposit_*`, `burn_*` — parked, retryable) require an explicit `BRIDGE_ROTATE_ACK_PARKED` operator ack, recorded in the drill state (their attestation sets rebuild under the new keys) |
 | `rotate-keys` | archive term-`K−1` material under `federation/retired/term-<K−1>/`; fresh Ed25519 federation keys, fresh shared attest bearer token, fresh Safe-owner secp256k1 keys | all writes under the git-ignored secrets dir (`require_gitignored`); the LP/relayer key is NOT rotated — it holds no roles (ADR 0002) |
 | `rotate-safe` | LIVE Sepolia: `swapOwner(prev, old, new)` per member, executed through the Safe by 2-of-3 `execTransaction`; the signing set migrates as swaps land (swap 1 signed by old-2+old-3, swap 2 by new-1+old-3, swap 3 by new-1+new-2 — the real handover choreography) | receipt `status == 1`; `isOwner(old) == false`, `isOwner(new) == true`, threshold unchanged after every swap |
 | `rotate-solana` | devnet wbth SPL mint-authority `SetAuthority` to a fresh key (single-key testnet custody per #867) | authority re-read from chain equals the new pubkey; **gated with exact commands when Solana tooling is absent** |
 | `rotate-bth` | new random BTH reserve wallet; `reserve.env` re-pointed | the funds-moving sweep (old reserve → new reserve, factor-1 preserved) is a live BTH tx — **operator-gated while #1051 holds**; on this betanet the locked reserve is 0 (funding itself is blocked, prerequisite 2), so the sweep is vacuous and the procedure is documented instead |
-| `rotate-restart` | re-render configs (pin the NEW pubkey sets + token) and restart all N | staggered `/health` wait, as in `up` |
-| `rotate-verify` | **the resume gate: old keys are powerless** | see below — resume refuses to run until this phase passes |
+| `rotate-seal` | **select-then-keygen seal**: bind the fresh per-term keys into the term document (each winner's `keySubmissionSig`, signed by its long-lived identity key), gather the outgoing counter-signatures at threshold, flip `status` → `sealed` | the sealed document validates against the v2 schema; only a `sealed` document authorizes execution (the `if/then` in the schema makes per-term keys REQUIRED at `sealed`) |
+| `rotate-restart` | re-render configs (pin the NEW pubkey sets + token) and restart all N | requires a `sealed` term document; staggered `/health` wait, as in `up` |
+| `rotate-verify` | **the resume gate: old keys are powerless** | first re-validates the `sealed` term document against the v2 schema and asserts its pinned per-member keys equal the live key files (the document is the authority); then see below — resume refuses to run until this phase passes |
 | `rotate-resume` | lift the breaker, commit `current-term = K` | all instances unpaused; the public probe now answers **400** (validation) instead of 503 — gate lifted, still no order created |
 | `rotate-attest` | post-rotation proof round | a fresh `attestation_authorized` audit row AFTER the resume timestamp (the NEW set reaching threshold — old envelopes cannot contribute, per `rotate-verify`), and `/api/reserve/proof` drift EXACTLY equal to the pre-pause baseline on every instance (rotation moves no value) |
 

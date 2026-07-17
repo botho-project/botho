@@ -510,19 +510,65 @@ the normative fields:
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["status"],
+        "properties": { "status": { "const": "sealed" } }
+      },
+      "then": {
+        "properties": {
+          "members": {
+            "items": {
+              "required": ["index", "nodeId", "keys", "keySubmissionSig"]
+            }
+          },
+          "signatures": {
+            "properties": { "outgoing": { "minItems": 1 } }
+          }
+        }
+      }
+    }
+  ]
 }
 ```
 
+The `if/then` above is normative (it resolves the #1064 review's schema
+nit): the per-term `keys` and `keySubmissionSig` on every member, and at least
+one `outgoing` counter-signature, are OPTIONAL while `status == "elected"`
+(the tally has run but keygen has not) and REQUIRED once `status == "sealed"`.
+The standalone, machine-checkable copy of this schema lives at
+[`schemas/term-document.v2.schema.json`](schemas/term-document.v2.schema.json)
+and a worked, schema-valid instance at
+[`schemas/examples/term-3.sealed.example.json`](schemas/examples/term-3.sealed.example.json).
+
 Normative semantics not expressible in JSON Schema:
 
-- **Signing payload**: every signature (`keySubmissionSig`,
-  `tallyAttestations[].sig`, `outgoing[].sig`) is over the canonical JSON
-  encoding (sorted keys, no whitespace) of the document with the
-  `signatures` object removed and, for `keySubmissionSig`, scoped to
-  `(v, term, nodeId, keys)` — domain-separated with the prefix
-  `botho.bridge.term.v2:` following the existing attestation-envelope
-  discipline in `bridge/core/src/attestation.rs`.
+- **Signing payloads**: every signature is over `botho.bridge.term.v2:`
+  (the domain-separation prefix, following the attestation-envelope discipline
+  in `bridge/core/src/attestation.rs`) concatenated with a canonical JSON
+  encoding (sorted keys, no whitespace). The three signatures cover three
+  DIFFERENT, precisely-scoped snapshots — this is the #1064 review's nit (b):
+  - `keySubmissionSig` (each member, signed by its long-lived curated identity
+    key) covers `{v, term, nodeId, keys}` — that member's own fresh key
+    submission and nothing else, so a member binds exactly the keys it
+    generated.
+  - `tallyAttestations[].sig` (each elector, signed by its long-lived curated
+    identity key) covers the **`elected`/tally snapshot**: the
+    election-decided fields only —
+    `{v, term, electionKind, electorate, tally, threshold,
+    members:[{index, nodeId, approvals}]}` (membership identities, NO keys, NO
+    execution/validity, `signatures` omitted). Electors sign the tally result
+    ONCE at close, and — because none of these fields change when the document
+    is later sealed — those same attestations remain valid on the sealed
+    document without re-collection. A verifier recomputes this projection from
+    the sealed document to check them.
+  - `outgoing[].sig` (each outgoing member, signed by its *retired* per-term
+    attestation key) covers the **complete `sealed` document with the
+    `signatures` object removed** (status `sealed`, all `keys` and
+    `keySubmissionSig` present) — the full authorization chain, so the
+    outgoing set counter-signs exactly what it is handing custody to.
 - **`elected` → `sealed` transition** requires: every `members[].keys`
   block present, every `keySubmissionSig` valid against the member's
   curated identity key, `tallyAttestations` from a majority of
@@ -539,16 +585,32 @@ Normative semantics not expressible in JSON Schema:
   Gravity binds signing to the unbonding period; we bind handover to an
   explicit deadline in the artifact itself.
 - **Mock compatibility**: the #1063 drill adopts v2 with
-  `electionKind: "mock-same-set"`, `status` written as `elected` by
-  `rotate-elect` (membership only — dropping the mock's premature key
-  fields) and flipped to `sealed` at the end of `rotate-keys`, when the
-  fresh key material exists. `rotate-verify`'s assertions then read keys
-  from the sealed document instead of the raw key files. `term`,
-  `threshold`, `members[].index`, `members[].keys.ed25519AttestationPubkey`
-  and `.ethSafeOwner` keep their v1 names, so the diff to the driver is
-  mechanical.
+  `electionKind: "mock-same-set"`. `rotate-elect` writes the `elected`
+  document (membership only — dropping the v1 mock's premature key fields);
+  a dedicated `rotate-seal` phase, running after the key-generating legs
+  (`rotate-keys`/`-solana`/`-bth`), collects the fresh per-term keys, has each
+  member sign its `keySubmissionSig`, gathers the outgoing counter-signatures
+  at threshold, and flips the document to `sealed`. `rotate-verify` then
+  treats the sealed document as the authority: it re-validates it against the
+  committed schema and asserts its pinned per-member keys equal the live key
+  files before running the old-keys-dead probes. `term`, `threshold`,
+  `members[].index`, `members[].keys.ed25519AttestationPubkey` and
+  `.ethSafeOwner` keep their v1 names, so the diff to the driver is
+  incremental. Testnet Solana/BTH custody is single-key (#867/#1051), so those
+  per-member key fields carry the shared fresh value (or a `mock:` marker when
+  a leg is gated); mainnet issues each member a distinct Squads/reserve share.
+  An offline `term-doc-selftest` phase exercises this whole elected→sealed
+  transition (real signatures, schema validation) with no live services.
 
 ### 5.3 Worked example (sealed, scheduled election, term 3, 2-of-3)
+
+Every address, pubkey and node id below is a NON-FUNCTIONAL placeholder —
+repeated-digit hex, `EXAMPLE`-tagged base58, or `node-example-NN` — chosen so
+nothing here can be mistaken for a real live deployment (this resolves the
+#1064 review's nit (c): the earlier draft reused look-alike values from the
+live Sepolia Safe, devnet program and testnet node roster). A committed,
+schema-valid copy of this instance lives at
+[`schemas/examples/term-3.sealed.example.json`](schemas/examples/term-3.sealed.example.json).
 
 ```json
 {
@@ -557,56 +619,60 @@ Normative semantics not expressible in JSON Schema:
   "electionKind": "scheduled",
   "status": "sealed",
   "electorate": {
-    "curationDocHash": "b1946ac92492d2347c6235b4d2611184…",
+    "curationDocHash": "0000…0003",
     "snapshotHeight": 41800,
-    "eligible": ["node-tokyo-01", "node-frankfurt-01", "node-oregon-01",
-                 "node-saopaulo-01", "node-sydney-01"]
+    "eligible": ["node-example-01", "node-example-02", "node-example-03",
+                 "node-example-04", "node-example-05"]
   },
   "tally": {
     "rule": "approval-top-N-v1",
     "openHeight": 41800,
     "closeHeight": 42520,
     "ballots": 5,
-    "resultHash": "9f86d081884c7d659a2feaa0c55ad015…"
+    "resultHash": "1111…1111"
   },
   "threshold": 2,
   "members": [
     {
       "index": 1,
-      "nodeId": "node-tokyo-01",
+      "nodeId": "node-example-01",
       "approvals": 5,
       "keys": {
-        "ed25519AttestationPubkey": "4f2a…e91c",
-        "ethSafeOwner": "0x8475814F0f96814D315e88D0f5FdE1Ad9e376ce1",
-        "solanaMember": "5bLHYxv4P5NMoAFaiKN2WfWQxwK2FL6PqKYZqPgSs9mx",
-        "bthReserveKey": "bth1q7x…"
+        "ed25519AttestationPubkey": "1111…1111",
+        "ethSafeOwner": "0x1111111111111111111111111111111111111111",
+        "solanaMember": "Examp1eSo1anaMember1111111111111111111111111",
+        "bthReserveKey": "bth1qexamplereserveshare111…"
       },
-      "keySubmissionSig": "ed25519:88ac…"
+      "keySubmissionSig": "ed25519:1111…"
     },
     {
       "index": 2,
-      "nodeId": "node-frankfurt-01",
+      "nodeId": "node-example-02",
       "approvals": 4,
-      "keys": { "ed25519AttestationPubkey": "a7d3…", "ethSafeOwner": "0xdc6d…",
-                "solanaMember": "F7Ls…", "bthReserveKey": "bth1qme…" },
-      "keySubmissionSig": "ed25519:41b0…"
+      "keys": { "ed25519AttestationPubkey": "2222…2222",
+                "ethSafeOwner": "0x2222222222222222222222222222222222222222",
+                "solanaMember": "Examp1eSo1anaMember2222222222222222222222222",
+                "bthReserveKey": "bth1qexamplereserveshare222…" },
+      "keySubmissionSig": "ed25519:2222…"
     },
     {
       "index": 3,
-      "nodeId": "node-saopaulo-01",
+      "nodeId": "node-example-03",
       "approvals": 4,
-      "keys": { "ed25519AttestationPubkey": "c2f8…", "ethSafeOwner": "0x1590…",
-                "solanaMember": "9Yog…", "bthReserveKey": "bth1qzt…" },
-      "keySubmissionSig": "ed25519:07de…"
+      "keys": { "ed25519AttestationPubkey": "3333…3333",
+                "ethSafeOwner": "0x3333333333333333333333333333333333333333",
+                "solanaMember": "Examp1eSo1anaMember3333333333333333333333333",
+                "bthReserveKey": "bth1qexamplereserveshare333…" },
+      "keySubmissionSig": "ed25519:3333…"
     }
   ],
   "execution": {
-    "ethereum": { "safe": "0x61274F55c1a2e3ea361df9d43fA9e2818a17BbdC",
+    "ethereum": { "safe": "0x000000000000000000000000000000000000cAfE",
                   "intent": "swapOwner", "newThreshold": 2 },
-    "solana":   { "authority": "CZDnzeywrqEMxWEfKZbGgnfPuxkPMKMEN2RTsSJasNGK",
+    "solana":   { "authority": "Examp1eSquadsAuthority11111111111111111111111",
                   "intent": "squadsConfigMemberSwap" },
     "bth":      { "intent": "reserveSweepFactor1",
-                  "newReserveAddress": "bth1qreserve3…" }
+                  "newReserveAddress": "bth1qexamplereserve333…" }
   },
   "validity": {
     "electedAt": 1760400000,
@@ -615,14 +681,14 @@ Normative semantics not expressible in JSON Schema:
   },
   "signatures": {
     "tallyAttestations": [
-      { "nodeId": "node-tokyo-01",     "sig": "ed25519:aa01…" },
-      { "nodeId": "node-frankfurt-01", "sig": "ed25519:bb02…" },
-      { "nodeId": "node-oregon-01",    "sig": "ed25519:cc03…" },
-      { "nodeId": "node-sydney-01",    "sig": "ed25519:dd04…" }
+      { "nodeId": "node-example-01", "sig": "ed25519:aa01…" },
+      { "nodeId": "node-example-02", "sig": "ed25519:bb02…" },
+      { "nodeId": "node-example-03", "sig": "ed25519:cc03…" },
+      { "nodeId": "node-example-04", "sig": "ed25519:dd04…" }
     ],
     "outgoing": [
-      { "index": 1, "ed25519AttestationPubkey": "old-1f9e…", "sig": "ed25519:ee05…" },
-      { "index": 2, "ed25519AttestationPubkey": "old-2c44…", "sig": "ed25519:ff06…" }
+      { "index": 1, "ed25519AttestationPubkey": "old1…old1", "sig": "ed25519:ee05…" },
+      { "index": 2, "ed25519AttestationPubkey": "old2…old2", "sig": "ed25519:ff06…" }
     ]
   }
 }

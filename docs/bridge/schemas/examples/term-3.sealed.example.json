@@ -1,0 +1,84 @@
+{
+  "_comment": "EXAMPLE ONLY — sealed, scheduled election, term 3, 2-of-3. Every address/key below is a NON-FUNCTIONAL placeholder (repeated-digit or EXAMPLE-tagged); none is a real deployment. Mirrors docs/bridge/election-dynamics.md §5.3. Signatures are illustrative fixed strings, not cryptographically valid — the driver's `term-doc-selftest` exercises real signatures.",
+  "v": 2,
+  "term": 3,
+  "electionKind": "scheduled",
+  "status": "sealed",
+  "electorate": {
+    "curationDocHash": "0000000000000000000000000000000000000000000000000000000000000003",
+    "snapshotHeight": 41800,
+    "eligible": ["node-example-01", "node-example-02", "node-example-03",
+                 "node-example-04", "node-example-05"]
+  },
+  "tally": {
+    "rule": "approval-top-N-v1",
+    "openHeight": 41800,
+    "closeHeight": 42520,
+    "ballots": 5,
+    "resultHash": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "threshold": 2,
+  "members": [
+    {
+      "index": 1,
+      "nodeId": "node-example-01",
+      "approvals": 5,
+      "keys": {
+        "ed25519AttestationPubkey": "1111111111111111111111111111111111111111111111111111111111111111",
+        "ethSafeOwner": "0x1111111111111111111111111111111111111111",
+        "solanaMember": "Examp1eSo1anaMember1111111111111111111111111",
+        "bthReserveKey": "bth1qexamplereserveshare111111111111111111111"
+      },
+      "keySubmissionSig": "ed25519:1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "index": 2,
+      "nodeId": "node-example-02",
+      "approvals": 4,
+      "keys": {
+        "ed25519AttestationPubkey": "2222222222222222222222222222222222222222222222222222222222222222",
+        "ethSafeOwner": "0x2222222222222222222222222222222222222222",
+        "solanaMember": "Examp1eSo1anaMember2222222222222222222222222",
+        "bthReserveKey": "bth1qexamplereserveshare222222222222222222222"
+      },
+      "keySubmissionSig": "ed25519:2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    {
+      "index": 3,
+      "nodeId": "node-example-03",
+      "approvals": 4,
+      "keys": {
+        "ed25519AttestationPubkey": "3333333333333333333333333333333333333333333333333333333333333333",
+        "ethSafeOwner": "0x3333333333333333333333333333333333333333",
+        "solanaMember": "Examp1eSo1anaMember3333333333333333333333333",
+        "bthReserveKey": "bth1qexamplereserveshare333333333333333333333"
+      },
+      "keySubmissionSig": "ed25519:3333333333333333333333333333333333333333333333333333333333333333"
+    }
+  ],
+  "execution": {
+    "ethereum": { "safe": "0x000000000000000000000000000000000000cAfE",
+                  "intent": "swapOwner", "newThreshold": 2 },
+    "solana":   { "authority": "Examp1eSquadsAuthority11111111111111111111111",
+                  "intent": "squadsConfigMemberSwap" },
+    "bth":      { "intent": "reserveSweepFactor1",
+                  "newReserveAddress": "bth1qexamplereserve3333333333333333333333333" }
+  },
+  "validity": {
+    "electedAt": 1760400000,
+    "handoverDeadline": 1760659200,
+    "termEnd": 1768435200
+  },
+  "signatures": {
+    "tallyAttestations": [
+      { "nodeId": "node-example-01", "sig": "ed25519:aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01" },
+      { "nodeId": "node-example-02", "sig": "ed25519:bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02" },
+      { "nodeId": "node-example-03", "sig": "ed25519:cc03cc03cc03cc03cc03cc03cc03cc03cc03cc03cc03cc03cc03cc03cc03cc03" },
+      { "nodeId": "node-example-04", "sig": "ed25519:dd04dd04dd04dd04dd04dd04dd04dd04dd04dd04dd04dd04dd04dd04dd04dd04" }
+    ],
+    "outgoing": [
+      { "index": 1, "ed25519AttestationPubkey": "old1old1old1old1old1old1old1old1old1old1old1old1old1old1old1old1", "sig": "ed25519:ee05ee05ee05ee05ee05ee05ee05ee05ee05ee05ee05ee05ee05ee05ee05ee05" },
+      { "index": 2, "ed25519AttestationPubkey": "old2old2old2old2old2old2old2old2old2old2old2old2old2old2old2old2", "sig": "ed25519:ff06ff06ff06ff06ff06ff06ff06ff06ff06ff06ff06ff06ff06ff06ff06ff06" }
+    ]
+  }
+}
