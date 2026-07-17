@@ -312,8 +312,13 @@ fn test_solana_address_validation_bounds() {
 
 #[test]
 fn test_bth_address_validation() {
-    let valid = ChainAddress::new(Chain::Bth, "bth_some_base58_address");
+    // A bare base58 body must decode to exactly 64 bytes (view || spend);
+    // arbitrary non-base58 strings are rejected (#1042 tightened this).
+    let valid = ChainAddress::new(Chain::Bth, bs58::encode([5u8; 64]).into_string());
     assert!(valid.validate().is_ok());
+
+    let junk = ChainAddress::new(Chain::Bth, "bth_some_base58_address");
+    assert!(junk.validate().is_err());
 
     let empty = ChainAddress::new(Chain::Bth, "");
     assert!(empty.validate().unwrap_err().contains("empty"));

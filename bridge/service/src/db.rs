@@ -644,6 +644,82 @@ impl Database {
         Ok(result)
     }
 
+    /// Number of mint orders still awaiting their BTH deposit.
+    ///
+    /// Backs the public API's GLOBAL order-create ceiling (#1042): the
+    /// per-IP rate limiter bounds per-client rate, but only this bounds the
+    /// total outstanding created orders under distributed spam.
+    pub fn count_awaiting_deposit_mint_orders(&self) -> Result<u64, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let count: i64 = conn
+            .query_row(
+                r#"
+                SELECT COUNT(*) FROM bridge_orders
+                WHERE order_type = 'mint' AND status = 'awaiting_deposit'
+                "#,
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Count failed: {}", e))?;
+        Ok(count.max(0) as u64)
+    }
+
+    /// Number of release-tracking intents that have not yet expired.
+    ///
+    /// Backs the public API's GLOBAL order-create ceiling (#1042) for the
+    /// release-intent surface, mirroring
+    /// [`Database::count_awaiting_deposit_mint_orders`].
+    pub fn count_active_release_intents(&self, now: i64) -> Result<u64, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM release_intents WHERE expires_at > ?1",
+                params![now],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Count failed: {}", e))?;
+        Ok(count.max(0) as u64)
+    }
+
+    /// Delete EXPIRED mint orders that never saw a deposit, once they are
+    /// older than `retain_secs` (#1042).
+    ///
+    /// Only rows where `status = 'expired'`, `order_type = 'mint'` and
+    /// `source_tx IS NULL` qualify — i.e. abandoned order-create residue
+    /// where no funds ever moved. Orders that saw a deposit (or any burn /
+    /// settled order) are NEVER pruned; they are the bridge's accounting
+    /// record. Audit-log rows are kept (append-only history). Returns the
+    /// number of pruned rows.
+    pub fn prune_expired_mint_orders(&self, retain_secs: i64) -> Result<usize, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let cutoff = Utc::now().timestamp() - retain_secs;
+        conn.execute(
+            r#"
+            DELETE FROM bridge_orders
+            WHERE status = 'expired'
+              AND order_type = 'mint'
+              AND source_tx IS NULL
+              AND updated_at < ?1
+            "#,
+            params![cutoff],
+        )
+        .map_err(|e| format!("Prune failed: {}", e))
+    }
+
+    /// Delete release-tracking intents that expired more than `retain_secs`
+    /// ago (#1042). Intents are non-custodial UX correlation records (never
+    /// read by the release pipeline), so pruning them can never affect a
+    /// release. Returns the number of pruned rows.
+    pub fn prune_expired_release_intents(&self, retain_secs: i64) -> Result<usize, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let cutoff = Utc::now().timestamp() - retain_secs;
+        conn.execute(
+            "DELETE FROM release_intents WHERE expires_at < ?1",
+            params![cutoff],
+        )
+        .map_err(|e| format!("Prune failed: {}", e))
+    }
+
     /// Correlate a release intent to the watcher-created burn order (#1036).
     ///
     /// Burn orders are created by the counterparty-chain watchers keyed by the
@@ -3327,5 +3403,94 @@ mod tests {
 
         let latest = db.latest_reserve_snapshot().unwrap().unwrap();
         assert_eq!(latest, second);
+    }
+
+    #[test]
+    fn test_count_and_prune_expired_mint_orders() {
+        // #1042: expired, deposit-less mint orders are countable (global
+        // create ceiling) and prunable (bounded DB growth); anything that
+        // saw funds move is never pruned.
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+
+        let order = BridgeOrder::new_mint(
+            Chain::Ethereum,
+            1_000_000_000_000,
+            1_000_000_000,
+            "bth_reserve_addr".to_string(),
+            "0x1234567890abcdef1234567890abcdef12345678".to_string(),
+        );
+        db.insert_order(&order).unwrap();
+        assert_eq!(db.count_awaiting_deposit_mint_orders().unwrap(), 1);
+
+        // A burn order does not count toward the mint-create ceiling.
+        let burn = BridgeOrder::new_burn(
+            Chain::Ethereum,
+            500,
+            0,
+            "0xsource".to_string(),
+            "bth_dest".to_string(),
+            "0xburntx".to_string(),
+        );
+        db.insert_order(&burn).unwrap();
+        assert_eq!(db.count_awaiting_deposit_mint_orders().unwrap(), 1);
+
+        // Expire the mint order; the count drops, the row still exists.
+        db.update_order_status(&order.id, &OrderStatus::Expired, None)
+            .unwrap();
+        assert_eq!(db.count_awaiting_deposit_mint_orders().unwrap(), 0);
+        assert!(db.get_order(&order.id).unwrap().is_some());
+
+        // Within the retention window nothing is pruned (updated_at is
+        // "now"; a large retain_secs puts the cutoff in the past).
+        assert_eq!(db.prune_expired_mint_orders(3600).unwrap(), 0);
+        assert!(db.get_order(&order.id).unwrap().is_some());
+
+        // Past the retention window (negative retention pushes the cutoff
+        // into the future) the expired residue is deleted...
+        assert_eq!(db.prune_expired_mint_orders(-1).unwrap(), 1);
+        assert!(db.get_order(&order.id).unwrap().is_none());
+        // ...but the burn order (funds moved) is untouched.
+        assert!(db.get_order(&burn.id).unwrap().is_some());
+    }
+
+    #[test]
+    fn test_count_and_prune_expired_release_intents() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+
+        let now = Utc::now().timestamp();
+        let live = ReleaseIntent {
+            id: Uuid::new_v4(),
+            source_chain: Chain::Ethereum,
+            bth_address: "bth_addr_live".to_string(),
+            amount: 100,
+            fee: 1,
+            token_address: "0xtoken".to_string(),
+            created_at: now,
+            expires_at: now + 3_600,
+        };
+        let stale = ReleaseIntent {
+            id: Uuid::new_v4(),
+            source_chain: Chain::Ethereum,
+            bth_address: "bth_addr_stale".to_string(),
+            amount: 200,
+            fee: 1,
+            token_address: "0xtoken".to_string(),
+            created_at: now - 10_000,
+            expires_at: now - 5_000,
+        };
+        db.insert_release_intent(&live).unwrap();
+        db.insert_release_intent(&stale).unwrap();
+
+        // Only the unexpired intent counts toward the global ceiling.
+        assert_eq!(db.count_active_release_intents(now).unwrap(), 1);
+
+        // Retention keeps recently-expired intents pollable...
+        assert_eq!(db.prune_expired_release_intents(10_000).unwrap(), 0);
+        // ...and prunes them once the window elapses; the live intent stays.
+        assert_eq!(db.prune_expired_release_intents(1_000).unwrap(), 1);
+        assert!(db.get_release_intent(&stale.id).unwrap().is_none());
+        assert!(db.get_release_intent(&live.id).unwrap().is_some());
     }
 }

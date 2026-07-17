@@ -14,6 +14,10 @@ std = []
 [dependencies]
 serde = { workspace = true, features = ["derive", "alloc"] }
 chrono = { workspace = true, features = ["serde", "std", "clock"] }
+# Structural BTH address validation (#1042): base58-decode the address body so
+# junk destinations are rejected at order-create. Tiny, already in the
+# workspace lockfile (the bridge service uses it for recipient decoding).
+bs58 = { workspace = true }
 uuid = { version = "1", features = ["v4", "serde"] }
 toml = { workspace = true }
 hex = { workspace = true }

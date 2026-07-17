@@ -90,6 +90,16 @@ pub struct PublicApiSettings {
     /// against oversized-payload abuse). Defaults to 8 KiB.
     #[serde(default = "default_public_max_body_bytes")]
     pub max_body_bytes: usize,
+
+    /// GLOBAL ceiling on outstanding public order-create records (#1042):
+    /// when the number of mint orders still awaiting their deposit — or,
+    /// independently, of unexpired release-tracking intents — reaches this
+    /// value, further creates are refused with 503 until the backlog drains
+    /// (deposits arrive, or the engine expires and prunes the residue). The
+    /// per-IP rate limits bound per-client rate; this is the backstop against
+    /// DISTRIBUTED spam growing the DB without bound. 0 disables the ceiling.
+    #[serde(default = "default_public_max_open_orders")]
+    pub max_open_orders: u64,
 }
 
 fn default_create_rate_limit() -> u32 {
@@ -104,6 +114,10 @@ fn default_public_max_body_bytes() -> usize {
     8 * 1024
 }
 
+fn default_public_max_open_orders() -> u64 {
+    10_000
+}
+
 impl Default for PublicApiSettings {
     fn default() -> Self {
         Self {
@@ -113,6 +127,7 @@ impl Default for PublicApiSettings {
             rate_limit_per_min: default_public_rate_limit(),
             min_order_amount: 0,
             max_body_bytes: default_public_max_body_bytes(),
+            max_open_orders: default_public_max_open_orders(),
         }
     }
 }
@@ -788,12 +803,14 @@ mod tests {
         assert_eq!(config.public_api.rate_limit_per_min, 120);
         assert_eq!(config.public_api.min_order_amount, 0);
         assert_eq!(config.public_api.max_body_bytes, 8 * 1024);
+        assert_eq!(config.public_api.max_open_orders, 10_000);
 
         // A pre-existing config without a [public_api] section still parses.
         let legacy: PublicApiSettings = toml::from_str("").unwrap();
         assert!(legacy.listen.is_empty());
         assert_eq!(legacy.create_rate_limit_per_min, 10);
         assert_eq!(legacy.max_body_bytes, 8 * 1024);
+        assert_eq!(legacy.max_open_orders, 10_000);
 
         // The knobs round-trip from TOML.
         let configured: PublicApiSettings = toml::from_str(
@@ -804,6 +821,7 @@ mod tests {
             rate_limit_per_min = 30
             min_order_amount = 1000
             max_body_bytes = 2048
+            max_open_orders = 5
             "#,
         )
         .unwrap();
@@ -813,6 +831,7 @@ mod tests {
         assert_eq!(configured.rate_limit_per_min, 30);
         assert_eq!(configured.min_order_amount, 1000);
         assert_eq!(configured.max_body_bytes, 2048);
+        assert_eq!(configured.max_open_orders, 5);
     }
 
     #[test]
