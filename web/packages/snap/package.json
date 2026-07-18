@@ -1,0 +1,29 @@
+{
+  "name": "@botho/snap",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Botho MetaMask Snap (Phase-1 MVP, issue #815): manage a privacy-by-default Botho wallet from inside MetaMask. Derives Botho keys from the MetaMask SRP, runs the node-identical bth-wasm-signer inside the Snaps SES sandbox, and talks to a user-selected Botho node for receive / balance / send.",
+  "main": "./dist/bundle.js",
+  "scripts": {
+    "build:wasm-bundler": "pnpm --filter @botho/wasm-signer build:wasm:bundler",
+    "build:snap": "mm-snap build",
+    "test:snap": "mm-snap build && jest",
+    "typecheck": "node scripts/typecheck.mjs"
+  },
+  "dependencies": {
+    "@botho/core": "workspace:*",
+    "@botho/wasm-signer": "workspace:*",
+    "@metamask/snaps-sdk": "^11.2.0",
+    "@scure/bip39": "^2.0.1"
+  },
+  "devDependencies": {
+    "@jest/globals": "^29.7.0",
+    "@metamask/snaps-cli": "^8.4.1",
+    "@metamask/snaps-jest": "^10.2.0",
+    "@types/node": "^22.10.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.4.11",
+    "ts-node": "^10.9.2",
+    "typescript": "~5.9.3"
+  }
+}
