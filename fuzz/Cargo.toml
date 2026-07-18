@@ -209,6 +209,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "fuzz_bridge_ethereum_parse"
+path = "fuzz_targets/fuzz_bridge_ethereum_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "fuzz_federation_status_line"
 path = "fuzz_targets/fuzz_federation_status_line.rs"
 test = false

@@ -113,6 +113,70 @@ pub fn decode_burn_log(log: &Log) -> Option<BurnEvent> {
     })
 }
 
+/// Fuzz seam (#1076): assemble a well-formed `BridgeBurn` RPC log from
+/// attacker-controlled parts and run it through the production
+/// [`decode_burn_log`], so the coverage-guided target and the macOS
+/// native-smoke driver exercise the real ABI-encode -> decode -> `u64`-narrow
+/// path without the fuzz crate depending on `alloy` (mirrors how the Solana
+/// parsers are exposed for #897/#920).
+///
+/// `amount_be` is the raw 32-byte big-endian `uint256` the contract would
+/// emit; a value above `u64::MAX` picocredits must be *rejected* (the returned
+/// `None`), never silently wrapped into a smaller quantity.
+pub fn fuzz_decode_burn_log_parts(
+    from: [u8; 20],
+    amount_be: [u8; 32],
+    bth_address: &str,
+    tx_hash: [u8; 32],
+    block_hash: [u8; 32],
+    block_number: u64,
+    log_index: u64,
+) -> Option<BurnEvent> {
+    use alloy::primitives::{B256, U256};
+    let event = IWrappedBTHEvents::BridgeBurn {
+        from: Address::from(from),
+        amount: U256::from_be_bytes(amount_be),
+        bthAddress: bth_address.to_string(),
+    };
+    let log = Log {
+        inner: alloy::primitives::Log {
+            address: Address::ZERO,
+            data: event.encode_log_data(),
+        },
+        block_number: Some(block_number),
+        block_hash: Some(B256::from(block_hash)),
+        transaction_hash: Some(B256::from(tx_hash)),
+        log_index: Some(log_index),
+        ..Default::default()
+    };
+    decode_burn_log(&log)
+}
+
+/// Fuzz seam (#1076): feed arbitrary bytes as the non-indexed ABI log `data`
+/// under the correct `BridgeBurn` topic set, proving [`decode_burn_log`]'s
+/// alloy ABI decoder never panics on adversarial RPC bytes (a malformed
+/// dynamic `string` / `uint256` region fully controlled by whoever emits the
+/// burn). A garbage body simply fails to decode and yields `None`.
+pub fn fuzz_decode_burn_log_raw(data: &[u8]) -> Option<BurnEvent> {
+    use alloy::primitives::{Bytes, LogData, B256};
+    // Two topics: the event signature plus the indexed `from` slot, so the
+    // topic check passes and the decoder proceeds into the fuzzer-controlled
+    // data region (where the interesting boundary logic lives).
+    let topics = vec![IWrappedBTHEvents::BridgeBurn::SIGNATURE_HASH, B256::ZERO];
+    let log = Log {
+        inner: alloy::primitives::Log {
+            address: Address::ZERO,
+            data: LogData::new_unchecked(topics, Bytes::copy_from_slice(data)),
+        },
+        block_number: Some(1),
+        block_hash: Some(B256::ZERO),
+        transaction_hash: Some(B256::ZERO),
+        log_index: Some(0),
+        ..Default::default()
+    };
+    decode_burn_log(&log)
+}
+
 /// Read access to the Ethereum chain, mockable for tests.
 #[async_trait]
 pub trait EthChainClient: Send + Sync {

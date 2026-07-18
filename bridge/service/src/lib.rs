@@ -59,6 +59,10 @@ mod watchers;
 /// Federation-config duplicate-signer rejection (service-root
 /// `attestation.rs`; distinct from bridge-core's `attestation.rs`).
 pub use attestation::reject_duplicate_signers;
+/// Recipient-address decode for the native-BTH release path (#1076): the
+/// attacker-controlled `bthAddress` from a wBTH burn becomes the release
+/// recipient, so its decode sits on an adversarial input path.
+pub use bth_scan::decode_recipient_address;
 /// HTTP status-line parsing for peer push responses, plus the read cap the
 /// async I/O layer applies before the parse ever sees the bytes.
 pub use federation::{parse_status_line, MAX_PEER_RESPONSE_BYTES};
@@ -72,6 +76,11 @@ pub use mint::solana::{
 /// Supporting types required to name the parser signatures above.
 pub use mint::MintError;
 pub use solana_rpc::Pubkey;
+/// Ethereum burn-log decode (#1076): fuzz seams that assemble a `BridgeBurn`
+/// RPC log from attacker-controlled parts / raw ABI bytes and run it through
+/// the production `decode_burn_log`, plus the decoded event type. The
+/// `bthAddress` string and `uint256` amount are fully attacker-controlled.
+pub use watchers::ethereum::{fuzz_decode_burn_log_parts, fuzz_decode_burn_log_raw, BurnEvent};
 
 /// `check_attested_nonce` takes the Safe's on-chain nonce as an
 /// `alloy::primitives::U256`; re-exported so callers (the fuzz crate) do not
