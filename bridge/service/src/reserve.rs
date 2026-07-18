@@ -519,6 +519,194 @@ pub struct ReserveProof {
     pub chains: Vec<ChainReserveStatus>,
 }
 
+/// One chain's inputs to the pure proof-of-reserves verdict.
+///
+/// [`reconcile_once`](Reconciler::reconcile_once) fills these from the DB
+/// (`locked`, `in_flight`) and the on-chain supply poll (`supply`), then hands
+/// the whole slice to [`reserve_verdict`]. A chain whose supply could not be
+/// read this pass carries `supply: None` and is excluded from the drift math
+/// (surfaced as unverified), never treated as silently healthy.
+#[derive(Debug, Clone, Copy)]
+pub struct ChainFigure {
+    /// Which wrapped chain these figures describe.
+    pub chain: Chain,
+    /// Verified on-chain wrapped supply in picocredits, or `None` when the
+    /// supply poll failed / is not-yet-implemented for this chain this pass.
+    pub supply: Option<u128>,
+    /// Ledger-locked backing attributed to this chain, in picocredits.
+    pub locked: u64,
+    /// In-flight allowance (pending mints net + pending burns gross).
+    pub in_flight: u64,
+}
+
+/// The output of the pure reserve verdict: everything
+/// [`reconcile_once`](Reconciler::reconcile_once) needs to assemble a
+/// [`ReserveProof`] and drive the alert / circuit-breaker path, computed with
+/// **no** I/O.
+#[derive(Debug, Clone)]
+pub struct ReserveVerdict {
+    /// Per-chain reconciliation detail (verified + unverified chains).
+    pub chains: Vec<ChainReserveStatus>,
+    /// Verified Ethereum wBTH supply (picocredits), if the Ethereum leg was
+    /// verified this pass.
+    pub eth_supply: Option<u64>,
+    /// Verified Solana wBTH supply (picocredits), if verified this pass.
+    pub sol_supply: Option<u64>,
+    /// Σ of the verified supplies (picocredits), saturating to `u64::MAX`;
+    /// `None` when no chain was verified.
+    pub total_wrapped: Option<u64>,
+    /// Σ(verified supply) − Σ(verified locked backing), saturating to `i64`.
+    pub drift: i64,
+    /// Every verified chain was within tolerance + in-flight allowance.
+    pub in_tolerance: bool,
+    /// The actual reserve balance covered the ledger-locked total (trivially
+    /// `true` when the custody leg was not checkable this pass).
+    pub reserve_covered: bool,
+    /// Whether the on-chain reserve balance was actually checked this pass.
+    pub reserve_balance_checked: bool,
+    /// `in_tolerance && reserve_covered` — the dashboard's red/green peg state.
+    pub peg_healthy: bool,
+}
+
+/// The **pure** proof-of-reserves math: per-chain drift + tolerance, the
+/// multi-chain aggregation, the custody-coverage check, and the
+/// `peg_healthy` derivation, with zero side effects.
+///
+/// This is the single source of truth for the peg verdict:
+/// [`reconcile_once`](Reconciler::reconcile_once) gathers the figures (DB +
+/// RPC) and calls straight into here, and the `fuzz_bridge_reserve_math`
+/// coverage-guided target (#1078) drives the *same* function over adversarial
+/// inputs, so the fuzzed math can never drift from the production path.
+///
+/// # Arguments
+/// * `figures` — per-chain locked backing / in-flight allowance / verified
+///   supply (see [`ChainFigure`]).
+/// * `locked_reserve_total` — the ledger's total locked reserve (all chains).
+/// * `reserve_balance` — the actual on-chain reserve balance, or `None` when
+///   the custody leg could not be read this pass (then `reserve_covered` is
+///   assumed satisfied — the drift legs still guard the peg).
+/// * `tolerance` — `reserve.tolerance_picocredits` (default 0, the exact peg).
+///
+/// # Invariants (exercised by `fuzz_bridge_reserve_math`)
+/// * Total function: no panic and no arithmetic overflow for any input across
+///   the full `u64`/`u128` range (all boundary arithmetic saturates).
+/// * No false-healthy: a real shortfall — unbacked supply beyond tolerance on
+///   any verified chain, or an actual reserve balance short of the ledger
+///   beyond tolerance — is never reported `peg_healthy`.
+/// * An exact peg (every verified chain `supply == locked`, custody covered) is
+///   always `peg_healthy`.
+/// * Monotone in drift: worsening coverage (higher locked / lower balance) or
+///   growing an already-unbacked supply never flips unhealthy → healthy.
+pub fn reserve_verdict(
+    figures: &[ChainFigure],
+    locked_reserve_total: u64,
+    reserve_balance: Option<u128>,
+    tolerance: u64,
+) -> ReserveVerdict {
+    let tol = tolerance as u128;
+
+    let mut chains = Vec::with_capacity(figures.len());
+    let mut eth_supply: Option<u64> = None;
+    let mut sol_supply: Option<u64> = None;
+    let mut verified_supply: u128 = 0;
+    let mut verified_locked: u128 = 0;
+    let mut any_verified = false;
+    let mut all_in_tolerance = true;
+
+    for fig in figures {
+        match fig.supply {
+            Some(supply) => {
+                let (drift, in_tolerance) = chain_tolerance(supply, fig.locked, fig.in_flight, tol);
+                if !in_tolerance {
+                    all_in_tolerance = false;
+                }
+                any_verified = true;
+                verified_supply = verified_supply.saturating_add(supply);
+                verified_locked = verified_locked.saturating_add(fig.locked as u128);
+
+                let supply_u64 = u64::try_from(supply).unwrap_or(u64::MAX);
+                match fig.chain {
+                    Chain::Ethereum => eth_supply = Some(supply_u64),
+                    Chain::Solana => sol_supply = Some(supply_u64),
+                    Chain::Bth => {}
+                }
+                chains.push(ChainReserveStatus {
+                    chain: fig.chain.to_string(),
+                    verified: true,
+                    wrapped_supply: Some(supply_u64),
+                    locked_backing: fig.locked,
+                    in_flight: fig.in_flight,
+                    drift: Some(drift),
+                    in_tolerance,
+                });
+            }
+            None => chains.push(unverified_status(fig.chain, fig.locked, fig.in_flight)),
+        }
+    }
+
+    let drift = signed_drift(verified_supply, verified_locked);
+
+    // Custody leg: the ACTUAL reserve balance must cover the ledger-locked
+    // total. When the balance was not readable this pass (`None`), the custody
+    // leg is not asserted — the per-chain drift legs still guard the peg.
+    let mut reserve_balance_checked = false;
+    let mut reserve_covered = true;
+    if let Some(balance) = reserve_balance {
+        reserve_balance_checked = true;
+        if balance.saturating_add(tol) < locked_reserve_total as u128 {
+            reserve_covered = false;
+        }
+    }
+
+    ReserveVerdict {
+        chains,
+        eth_supply,
+        sol_supply,
+        total_wrapped: any_verified.then(|| u64::try_from(verified_supply).unwrap_or(u64::MAX)),
+        drift,
+        in_tolerance: all_in_tolerance,
+        reserve_covered,
+        reserve_balance_checked,
+        peg_healthy: all_in_tolerance && reserve_covered,
+    }
+}
+
+/// Per-chain tolerance decision, overflow-safe across the full `u64`/`u128`
+/// range. Returns `(drift_for_display, in_tolerance)`.
+///
+/// A chain is in tolerance iff both bounds hold (ADR 0003 semantics):
+///
+/// ```text
+/// supply − locked <=  tolerance                 (no unbacked wrapped supply)
+/// locked − supply <=  in_flight + tolerance     (no missing supply)
+/// ```
+///
+/// The comparisons are done in `u128` (saturating) so an adversarial
+/// `uint256`-sourced supply near `u128::MAX` can neither wrap the signed
+/// subtraction nor let an unbacked chain slip through as healthy.
+fn chain_tolerance(supply: u128, locked: u64, in_flight: u64, tol: u128) -> (i64, bool) {
+    let locked = locked as u128;
+    // supply − locked > tolerance  ⇒ unbacked wrapped supply.
+    let unbacked = supply > locked.saturating_add(tol);
+    // locked − supply > in_flight + tolerance  ⇒ supply that should exist is
+    // missing / the ledger overcounts.
+    let missing = locked > supply.saturating_add(in_flight as u128).saturating_add(tol);
+    (signed_drift(supply, locked), !unbacked && !missing)
+}
+
+/// `supply − locked` as a signed drift, saturating into `i64` without any
+/// intermediate `i128` overflow (which `x as i128 - y as i128` risks for
+/// `u128` operands above `i128::MAX`).
+fn signed_drift(supply: u128, locked: u128) -> i64 {
+    if supply >= locked {
+        i64::try_from(supply - locked).unwrap_or(i64::MAX)
+    } else {
+        i64::try_from(locked - supply)
+            .map(|v| -v)
+            .unwrap_or(i64::MIN)
+    }
+}
+
 /// Periodic reconciler: DB-derived locked reserve vs on-chain wrapped
 /// supply per chain vs (when available) the actual reserve balance.
 pub struct Reconciler {
@@ -582,16 +770,11 @@ impl Reconciler {
     /// alert. Returns the proof snapshot.
     pub async fn reconcile_once(&self) -> Result<ReserveProof, String> {
         let taken_at = Utc::now().timestamp();
-        let tolerance = self.tolerance as u128;
 
-        let mut chains = Vec::with_capacity(self.supplies.len());
-        let mut eth_supply: Option<u64> = None;
-        let mut sol_supply: Option<u64> = None;
-        let mut verified_supply: u128 = 0;
-        let mut verified_locked: u128 = 0;
-        let mut any_verified = false;
-        let mut all_in_tolerance = true;
-
+        // --- Gather per-chain figures (DB + RPC). No verdict math here: the
+        //     drift/tolerance/aggregation lives in the pure `reserve_verdict`
+        //     so the fuzz target (#1078) drives the exact same code path. ---
+        let mut figures = Vec::with_capacity(self.supplies.len());
         for source in &self.supplies {
             let chain = source.chain();
             let locked = self.db.locked_reserve_by_chain(chain)?;
@@ -600,68 +783,36 @@ impl Reconciler {
                 .pending_mint_backing(chain)?
                 .saturating_add(self.db.pending_burn_amount(chain)?);
 
-            match source.wrapped_supply().await {
-                Ok(supply) => {
-                    let drift = supply as i128 - locked as i128;
-                    let in_tolerance = drift <= tolerance as i128
-                        && (-drift) <= (in_flight as u128 + tolerance) as i128;
-                    if !in_tolerance {
-                        all_in_tolerance = false;
-                    }
-                    any_verified = true;
-                    verified_supply = verified_supply.saturating_add(supply);
-                    verified_locked = verified_locked.saturating_add(locked as u128);
-
-                    let supply_u64 = u64::try_from(supply).unwrap_or(u64::MAX);
-                    match chain {
-                        Chain::Ethereum => eth_supply = Some(supply_u64),
-                        Chain::Solana => sol_supply = Some(supply_u64),
-                        Chain::Bth => {}
-                    }
-                    chains.push(ChainReserveStatus {
-                        chain: chain.to_string(),
-                        verified: true,
-                        wrapped_supply: Some(supply_u64),
-                        locked_backing: locked,
-                        in_flight,
-                        drift: Some(clamp_i64(drift)),
-                        in_tolerance,
-                    });
-                }
+            let supply = match source.wrapped_supply().await {
+                Ok(supply) => Some(supply),
                 Err(ReserveError::NotImplemented(msg)) => {
                     debug!("{} supply unverified: {}", chain, msg);
-                    chains.push(unverified_status(chain, locked, in_flight));
+                    None
                 }
                 Err(e) => {
                     // Transient RPC failure: the chain goes unverified for
                     // this pass (surfaced via `verified: false`), it does
                     // NOT fabricate a drift alert.
                     warn!("{} supply poll failed (will retry): {}", chain, e);
-                    chains.push(unverified_status(chain, locked, in_flight));
+                    None
                 }
-            }
+            };
+            figures.push(ChainFigure {
+                chain,
+                supply,
+                locked,
+                in_flight,
+            });
         }
 
         let locked_reserve = self.db.locked_reserve_total()?;
-        let drift = clamp_i64(verified_supply as i128 - verified_locked as i128);
 
-        // Custody leg: the ACTUAL reserve balance must cover the ledger.
-        let mut reserve_balance_checked = false;
-        let mut reserve_covered = true;
+        // Custody leg: read the ACTUAL reserve balance (`None` = not checkable
+        // this pass; the drift legs still guard the peg).
+        let mut reserve_balance: Option<u128> = None;
         if let Some(source) = &self.reserve_balance {
             match source.reserve_balance().await {
-                Ok(balance) => {
-                    reserve_balance_checked = true;
-                    if balance.saturating_add(tolerance) < locked_reserve as u128 {
-                        reserve_covered = false;
-                        warn!(
-                            "reserve balance {} below ledger-locked {} (short {})",
-                            balance,
-                            locked_reserve,
-                            locked_reserve as u128 - balance
-                        );
-                    }
-                }
+                Ok(balance) => reserve_balance = Some(balance),
                 Err(ReserveError::NotImplemented(msg)) => {
                     debug!("reserve balance unverified: {}", msg)
                 }
@@ -669,29 +820,47 @@ impl Reconciler {
             }
         }
 
+        // --- Pure verdict: the SAME function `fuzz_bridge_reserve_math`
+        //     exercises. ---
+        let verdict = reserve_verdict(&figures, locked_reserve, reserve_balance, self.tolerance);
+        let all_in_tolerance = verdict.in_tolerance;
+        let reserve_covered = verdict.reserve_covered;
+        let drift = verdict.drift;
+        if verdict.reserve_balance_checked && !reserve_covered {
+            // `reserve_balance` is `Some` whenever the custody leg was checked.
+            if let Some(balance) = reserve_balance {
+                warn!(
+                    "reserve balance {} below ledger-locked {} (short {})",
+                    balance,
+                    locked_reserve,
+                    (locked_reserve as u128).saturating_sub(balance)
+                );
+            }
+        }
+
         let proof = ReserveProof {
             locked_reserve,
-            eth_supply,
-            sol_supply,
-            total_wrapped: any_verified.then(|| u64::try_from(verified_supply).unwrap_or(u64::MAX)),
+            eth_supply: verdict.eth_supply,
+            sol_supply: verdict.sol_supply,
+            total_wrapped: verdict.total_wrapped,
             drift,
             in_tolerance: all_in_tolerance,
-            peg_healthy: all_in_tolerance && reserve_covered,
-            reserve_balance_checked,
+            peg_healthy: verdict.peg_healthy,
+            reserve_balance_checked: verdict.reserve_balance_checked,
             taken_at,
-            chains,
+            chains: verdict.chains,
         };
 
         // Persist the pass (drift history is auditable) + audit trail.
         self.db.insert_reserve_snapshot(&ReserveSnapshot {
             taken_at,
             locked_reserve,
-            eth_supply,
-            sol_supply,
+            eth_supply: proof.eth_supply,
+            sol_supply: proof.sol_supply,
             drift,
             in_tolerance: all_in_tolerance,
             peg_healthy: proof.peg_healthy,
-            reserve_balance_checked,
+            reserve_balance_checked: proof.reserve_balance_checked,
         })?;
         if let Some(retention) = self.snapshot_retention_secs {
             if let Err(e) = self.db.prune_reserve_snapshots(retention) {
@@ -772,10 +941,6 @@ fn unverified_status(chain: Chain, locked: u64, in_flight: u64) -> ChainReserveS
         drift: None,
         in_tolerance: true,
     }
-}
-
-fn clamp_i64(v: i128) -> i64 {
-    i64::try_from(v).unwrap_or(if v < 0 { i64::MIN } else { i64::MAX })
 }
 
 /// The JSON-RPC commitment string for a [`SolanaCommitment`] (the wire value

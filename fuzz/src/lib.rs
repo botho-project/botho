@@ -43,6 +43,7 @@ use arbitrary::{Arbitrary, Unstructured};
 
 pub mod bridge_attestation;
 pub mod bridge_ethereum_parse;
+pub mod bridge_reserve_math;
 pub mod bridge_solana_parse;
 pub mod federation_status_line;
 
@@ -62,6 +63,7 @@ pub fn decode_take_rest<'a, T: Arbitrary<'a>>(data: &'a [u8]) -> Option<T> {
 pub const NATIVE_SMOKE_TARGETS: &[&str] = &[
     "fuzz_bridge_attestation",
     "fuzz_bridge_ethereum_parse",
+    "fuzz_bridge_reserve_math",
     "fuzz_bridge_solana_parse",
     "fuzz_federation_status_line",
 ];
@@ -75,6 +77,7 @@ pub fn run_target_from_bytes(target: &str, data: &[u8]) {
     match target {
         "fuzz_bridge_attestation" => bridge_attestation::run_from_bytes(data),
         "fuzz_bridge_ethereum_parse" => bridge_ethereum_parse::run_from_bytes(data),
+        "fuzz_bridge_reserve_math" => bridge_reserve_math::run_from_bytes(data),
         "fuzz_bridge_solana_parse" => bridge_solana_parse::run_from_bytes(data),
         "fuzz_federation_status_line" => federation_status_line::run_from_bytes(data),
         other => panic!("unknown native-smoke target: {other}"),
@@ -171,6 +174,11 @@ mod native_smoke_tests {
     #[test]
     fn smoke_bridge_ethereum_parse() {
         smoke("fuzz_bridge_ethereum_parse");
+    }
+
+    #[test]
+    fn smoke_bridge_reserve_math() {
+        smoke("fuzz_bridge_reserve_math");
     }
 
     #[test]

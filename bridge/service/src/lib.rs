@@ -75,6 +75,13 @@ pub use mint::solana::{
 };
 /// Supporting types required to name the parser signatures above.
 pub use mint::MintError;
+/// Proof-of-reserves verdict math (#1078): the pure, side-effect-free
+/// drift/tolerance/aggregation + `peg_healthy` derivation the live
+/// `Reconciler` runs, exposed so the `fuzz_bridge_reserve_math` coverage-guided
+/// target drives the exact same function (no test-only reimplementation that
+/// could drift from production). A false-healthy peg is the highest-severity
+/// bridge failure, so this custody-relevant math sits under continuous fuzzing.
+pub use reserve::{reserve_verdict, ChainFigure, ChainReserveStatus, ReserveVerdict};
 pub use solana_rpc::Pubkey;
 /// Ethereum burn-log decode (#1076): fuzz seams that assemble a `BridgeBurn`
 /// RPC log from attacker-controlled parts / raw ABI bytes and run it through

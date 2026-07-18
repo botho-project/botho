@@ -216,6 +216,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "fuzz_bridge_reserve_math"
+path = "fuzz_targets/fuzz_bridge_reserve_math.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "fuzz_federation_status_line"
 path = "fuzz_targets/fuzz_federation_status_line.rs"
 test = false
