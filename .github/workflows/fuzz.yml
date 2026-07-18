@@ -299,6 +299,7 @@ jobs:
       matrix:
         target:
           - fuzz_bridge_attestation
+          - fuzz_bridge_ethereum_parse
           - fuzz_bridge_solana_parse
           - fuzz_federation_status_line
 
