@@ -5,8 +5,7 @@
   "description": "Election-result artifact for the elected bridge multisig (ADR 0010, docs/bridge/election-dynamics.md §5.2). Two-stage lifecycle: an 'elected' document pins MEMBERSHIP (produced by the tally, #1067); a 'sealed' document additionally pins the fresh per-term KEYS (produced by the seal step after keygen). Only a 'sealed' document authorizes execution.",
   "type": "object",
   "required": ["v", "term", "electionKind", "status", "electorate",
-               "tally", "threshold", "members", "execution", "validity",
-               "signatures"],
+               "tally", "threshold", "members", "validity"],
   "properties": {
     "v": { "const": 2 },
     "term": { "type": "integer", "minimum": 1 },
@@ -125,12 +124,13 @@
   },
   "allOf": [
     {
-      "$comment": "Nit (a), #1064 review: per-term keys and the outgoing counter-signature are REQUIRED once the document is sealed. An 'elected' document (membership only, produced by the tally before keygen) legitimately carries neither.",
+      "$comment": "Nit (a), #1064 review + #1073 seam: per-term keys, execution intents, and the outgoing counter-signature are REQUIRED once the document is sealed. An 'elected' document (membership only, produced by the tally before keygen — #1067) legitimately carries none of them: `execution` and `signatures` are populated at seal time, so they are required only under `status == sealed`, not unconditionally at the top level.",
       "if": {
         "required": ["status"],
         "properties": { "status": { "const": "sealed" } }
       },
       "then": {
+        "required": ["execution", "signatures"],
         "properties": {
           "members": {
             "items": {

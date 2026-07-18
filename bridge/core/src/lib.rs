@@ -13,6 +13,7 @@
 pub mod attestation;
 pub mod chains;
 pub mod config;
+pub mod election;
 #[cfg(test)]
 mod happy_path_tests;
 pub mod nonce;
@@ -36,6 +37,12 @@ pub use chains::{Chain, ChainAddress};
 pub use config::{
     BridgeConfig, BthConfig, EthereumConfig, FederationSettings, GasPriceStrategy,
     PublicApiSettings, ReserveSettings, SolanaCommitment, SolanaConfig,
+};
+pub use election::{
+    assemble_elected_term_doc, canonical_ballot_memo, canonical_nomination_memo,
+    parse_election_memo, sign_election_memo_ed25519, tally, verify_election_memo,
+    CandidateStanding, CuratedNode, CurationSnapshot, ElectedTermDoc, ElectionKind, ElectionMemo,
+    ElectionParams, MemoTransaction, TallyResult, TallyStatus, Validity,
 };
 pub use nonce::{NonceStore, ReserveOutcome};
 pub use order::{derive_order_id, BridgeOrder, OrderStatus, OrderType};
