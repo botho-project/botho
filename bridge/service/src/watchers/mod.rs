@@ -22,9 +22,10 @@
 // (NodeBthClient) directly against a local node.
 pub(crate) mod bth;
 // pub(crate): the fork tests (#828) drive the live-transport client and
-// its log-decoding helpers directly against a local node.
+// its log-decoding helpers directly against a local node. The Solana devnet
+// drills (#1079) likewise drive `solana::burns_from_logs` directly.
 pub(crate) mod ethereum;
-mod solana;
+pub(crate) mod solana;
 
 /// Reorg + finality fuzz driving the Ethereum watcher (bridge epic #816,
 /// Phase 3, issue #829).
