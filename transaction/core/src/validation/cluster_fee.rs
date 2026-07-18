@@ -965,6 +965,15 @@ mod tests {
 
     #[test]
     fn test_validate_ring_cluster_fee_insufficient() {
+        // Cluster wealth is denominated in PICOCREDITS and the fee curve pins
+        // its progressivity midpoint at W_MID = 100,000 BTH = 1e17 pico (#626).
+        // Wealth values must therefore straddle that threshold to exercise the
+        // curve's dynamic range: a poor cluster below the midpoint pays ~1x, a
+        // rich cluster above it pays a materially higher multiplier. (Bare
+        // integers like 100_000 are ~1e-7 BTH — dust — and collapse to the flat
+        // 1x floor, which is why the original expectations were vacuous.)
+        const PICO: u64 = 1_000_000_000_000;
+
         // Ring with one rich member
         let tags_rich = make_tag_vector(&[(1, TAG_WEIGHT_SCALE)]);
         let tags_poor = make_tag_vector(&[(2, TAG_WEIGHT_SCALE)]);
@@ -972,9 +981,12 @@ mod tests {
         let ring_tags: Vec<&ClusterTagVector> = vec![&tags_rich, &tags_poor];
         let ring_values = vec![1_000_000u64, 1_000_000];
 
+        let poor_wealth = 100 * PICO; // 100 BTH: below midpoint, ~1x
+        let rich_wealth = 1_000_000 * PICO; // 1,000,000 BTH: above midpoint
+
         let mut wealth_map = ClusterWealthMap::new();
-        wealth_map.set(ClusterId(1), 100_000_000); // Very rich
-        wealth_map.set(ClusterId(2), 100_000);
+        wealth_map.set(ClusterId(1), rich_wealth); // Very rich
+        wealth_map.set(ClusterId(2), poor_wealth);
 
         let fee_config = FeeConfig::default();
 
@@ -998,9 +1010,22 @@ mod tests {
         let poor_fee = fee_config.compute_fee_with_outputs(
             TransactionType::Hidden,
             4000,
-            100_000, // Poor cluster wealth
+            poor_wealth as u128, // Poor cluster wealth
             2,
             0,
+        );
+        // Sanity: the conservative (max) fee genuinely exceeds the poor fee, so
+        // the rejection below is meaningful and not a flat-curve coincidence.
+        let rich_fee = fee_config.compute_fee_with_outputs(
+            TransactionType::Hidden,
+            4000,
+            rich_wealth as u128,
+            2,
+            0,
+        );
+        assert!(
+            rich_fee > poor_fee,
+            "rich cluster must incur a strictly higher fee than the poor cluster"
         );
         let result = validate_ring_cluster_fee(
             poor_fee,
@@ -1020,7 +1045,17 @@ mod tests {
 
     #[test]
     fn test_ring_fee_gaming_prevention() {
-        // Test that attacker with rich coins cannot lower fees by selecting poor decoys
+        // Test that attacker with rich coins cannot lower fees by selecting poor
+        // decoys.
+        //
+        // Wealth is in PICOCREDITS; the curve's progressivity midpoint is
+        // W_MID = 100,000 BTH = 1e17 pico (#626). The attacker's cluster sits
+        // well above the midpoint (higher multiplier) and the decoys sit well
+        // below it (~1x), so the poor fee is genuinely cheaper — exactly the
+        // gap an attacker would try to exploit. The conservative max-wealth
+        // rule must close that gap.
+        const PICO: u64 = 1_000_000_000_000;
+
         let tags_attacker = make_tag_vector(&[(1, TAG_WEIGHT_SCALE)]); // Rich attacker
         let tags_decoy1 = make_tag_vector(&[(2, TAG_WEIGHT_SCALE)]); // Poor decoy
         let tags_decoy2 = make_tag_vector(&[(2, TAG_WEIGHT_SCALE)]); // Poor decoy
@@ -1029,19 +1064,38 @@ mod tests {
         let ring_tags: Vec<&ClusterTagVector> = vec![&tags_attacker, &tags_decoy1, &tags_decoy2];
         let ring_values = vec![1_000_000u64; 3];
 
+        let rich_wealth = 1_000_000 * PICO; // 1,000,000 BTH: above midpoint
+        let poor_wealth = 100 * PICO; // 100 BTH: below midpoint, ~1x
+
         let mut wealth_map = ClusterWealthMap::new();
-        wealth_map.set(ClusterId(1), 100_000_000); // Rich attacker cluster
-        wealth_map.set(ClusterId(2), 10_000); // Very poor decoy cluster
+        wealth_map.set(ClusterId(1), rich_wealth); // Rich attacker cluster
+        wealth_map.set(ClusterId(2), poor_wealth); // Poor decoy cluster
 
         let fee_config = FeeConfig::default();
 
         // Fee for the rich cluster (what attacker should pay)
-        let rich_fee =
-            fee_config.compute_fee_with_outputs(TransactionType::Hidden, 4000, 100_000_000, 2, 0);
+        let rich_fee = fee_config.compute_fee_with_outputs(
+            TransactionType::Hidden,
+            4000,
+            rich_wealth as u128,
+            2,
+            0,
+        );
 
         // Fee for the poor cluster (what attacker wants to pay)
-        let poor_fee =
-            fee_config.compute_fee_with_outputs(TransactionType::Hidden, 4000, 10_000, 2, 0);
+        let poor_fee = fee_config.compute_fee_with_outputs(
+            TransactionType::Hidden,
+            4000,
+            poor_wealth as u128,
+            2,
+            0,
+        );
+
+        // The attack only makes sense if the poor fee is actually cheaper.
+        assert!(
+            poor_fee < rich_fee,
+            "poor-decoy fee must be strictly cheaper for the gaming test to be meaningful"
+        );
 
         // Attacker tries to pay the poor fee - should fail!
         let result = validate_ring_cluster_fee(

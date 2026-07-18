@@ -84,3 +84,14 @@ jobs:
       # fast (seconds) and deterministic, so run them for real.
       - name: Run doctests
         run: cargo test --workspace --doc
+
+      # The `cluster-tax`-gated code in `bth-transaction-core` only compiles —
+      # and its tests only run — under `--all-features`. The default workspace
+      # build/test above never exercises that path, so both a COMPILE break
+      # (#1057) and two latent RUNTIME fee-gaming test failures (#1068) sat
+      # green for a long time. `cargo check --all-features` alone was not
+      # enough to catch #1068 (the module compiled but its tests failed), so we
+      # RUN the crate's `--all-features` tests here. Scoped to the one crate to
+      # stay fast and deterministic (~seconds).
+      - name: Run bth-transaction-core --all-features tests (cluster-tax path)
+        run: cargo test -p bth-transaction-core --all-features
