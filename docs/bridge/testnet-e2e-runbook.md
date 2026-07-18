@@ -27,6 +27,7 @@ funded Safes + Sepolia ETH land (#866/#868) — the
 | 0 | Ethereum leg, real Rust pipeline, local chain | `scripts/bridge-e2e-local.sh` | nightly CI + on demand |
 | 0.5 | Ethereum leg, real Rust pipeline, **Sepolia fork** (no secrets/funds) | `scripts/bridge-e2e-fork.sh` | on-demand CI (`workflow_dispatch`) |
 | 0.75 | **Full DeFi round trip** (mint→wrap→fund→pool→swap→repatriate) through the real engine + real Uniswap v3, **Sepolia fork** + local Botho node (no secrets/funds) | `scripts/bridge-e2e-defi-fork.sh` | on-demand CI (`workflow_dispatch`) |
+| 0.75-Solana | **Solana DeFi round trip** (mint→wrap→seed→swap→burn→release) through the real bridge transports + real Orca Whirlpool; bridge legs on `solana-test-validator`, Orca legs on **live devnet** (operator, #1052/#868) | `scripts/bridge-e2e-defi-solana.sh` | construction-validated + on-demand operator run |
 | 1.75 | Orchestrated full loop through the real engine, local Botho + Hardhat nodes | `scripts/bridge-e2e-full-loop.sh` | nightly CI + on demand |
 | 1 | wBTH contract on Sepolia (mint through the real Safe) | this runbook, steps 1–5 | before any bridge deploy |
 | 2 | Full BTH testnet round trip (live Sepolia) | this runbook, all steps | blocked on #866/#868 |
@@ -174,6 +175,87 @@ test-logic change. This is the literal mainnet liquidity-bootstrap procedure:
 Phase B (#866/#868/#869) supplies the live deploy, funded keys, and a
 persistent pool; the Solana venue is #867/#870. This layer is the fork
 rehearsal + the harness those reuse verbatim.
+
+## Layer 0.75-Solana: Solana DeFi round trip (#1079)
+
+**The Solana analog of Layer 0.75** — the same headline
+**mint → wrap → seed → swap → burn → release** journey of a coin, for the
+Solana venue, driven through the REAL bridge-service transports and the REAL
+Orca Whirlpool:
+
+```bash
+./scripts/bridge-e2e-defi-solana.sh            # full driver
+./scripts/bridge-e2e-defi-solana.sh --check    # hermetic self-check (no cluster)
+```
+
+The driver boots a local `botho-testnet` node (the release/reserve leg) and —
+when `RUN_LOCAL_VALIDATOR=1` — a `solana-test-validator` with the wbth program
+`--clone-upgradeable-program`d from devnet, then runs the `#[ignore]`d
+transport drills in `bridge/service/src/solana_devnet_tests.rs`
+(`solana_devnet_*`, including `solana_devnet_defi_round_trip_wrap_peg_burn`),
+which walk the legs:
+
+1. **Mint BTH** on the local Botho node (a funded factor-1 reserve).
+2. **Wrap → wBTH** — the REAL Ed25519 t-of-n mint-submission transport
+   (`bridge/service/src/mint/solana.rs`) assembles + signs the hardened
+   `bridge_mint`; the #850 per-order marker PDA makes the on-chain mint
+   **exactly-once**. The wBTH mint's only authority is the federation key, so
+   **every wBTH is a wrapped coin — no shortcut mint**.
+3. **Seed the pool** — drive `contracts/solana/scripts/devnet-orca-pool.ts`
+   with the FRESHLY bridge-minted wBTH: set `BRIDGE_SOLANA_RECIPIENT` to the
+   `solana-lp` pubkey so the wrapped coin lands in the LP's ATA and seeds the
+   Orca position (the thread — not a throwaway mint).
+4. **Purchase** — swap against the seeded pool
+   (`contracts/solana/scripts/devnet-orca-swap.ts`).
+5. **Repatriate** — the REAL Solana burn-watcher transport
+   (`bridge/service/src/watchers/solana.rs`, `burns_from_logs` over
+   `getSignaturesForAddress` → `getTransaction` logs) decodes the
+   `BridgeBurnEvent`; the engine then releases native BTH to a fresh one-time
+   stealth output (ADR 0004) the user's OWN view key scans back — the same
+   `BthReleaser` leg as Layer 1.5/1.75.
+
+The drill enforces as hard failures the **Solana-leg peg invariant**: a full
+`reserve::Reconciler` pass reports `sol_supply` present and equal to the direct
+`SolSupplySource` read (`Σ wBTH devnet supply` verified, #853); on a broadcast
+run the supply delta equals the wrapped amount (**factor-1**, 12-decimal wBTH ==
+picocredits, ADR 0003); and re-preparing the same order re-derives the same
+marker PDA (**exactly-once**).
+
+### Honest limitation / operator boundary
+
+Unlike the Ethereum path, **Orca Whirlpools cannot be forked/cloned
+hermetically** (cloning a full Orca deployment + config + tick arrays via
+`--clone` is fragile — see the maintainer note on #865). So the **Orca
+pool/swap legs (steps 3–4) can only be validated against LIVE devnet** (needs
+devnet SOL + the deployed program `CZDnzeywrqEM…` / mint `F7Lsi…`), gated behind
+`RUN_ORCA=1`, and a **federated** Solana mint additionally needs the Squads
+multisig from **#1052**. This layer therefore ships a **construction-validated
+driver**: the bridge-transport legs (steps 1–2, 5) run against a local validator
+or self-skip green, and the final live-devnet Orca execution is the operator
+step tracked by **#1052 / #868** — the accepted pattern for the Solana legs
+(cf. `solana_devnet_tests.rs`). The transport drills **self-skip** (green — never
+a false pass) unless `BRIDGE_SOLANA_RPC_URL` + `BRIDGE_SOLANA_PROGRAM` (and
+`BRIDGE_SOLANA_KEYPAIR` to also assemble the mint) are set.
+
+### Required accounts (reuse the #1008 Phase B provisioning)
+
+| Key | Cluster | Role |
+|---|---|---|
+| `solana-lp` (`.secrets/bridge-testnet/solana-lp.json`) | devnet | LP wallet: seeds the Orca pool + swaps; the wBTH mint recipient |
+| `solana-deployer` (`.secrets/bridge-testnet/solana-deployer.json`) | devnet | deploys/initializes the wbth program + mint authority |
+| `BRIDGE_SOLANA_KEYPAIR` | validator/devnet | the federation mint-authority keypair (single-key on testnet; Squads on mainnet, #1052) |
+
+### Fork → testnet → mainnet flip (Solana venue)
+
+The SAME driver + drills flip by config only — no test-logic change:
+
+| Setting | Local validator (now) | Live devnet (operator, #1052/#868) | Mainnet-beta launch |
+|---|---|---|---|
+| `BRIDGE_SOLANA_RPC_URL` | `http://127.0.0.1:8899` (`RUN_LOCAL_VALIDATOR=1`) | `https://api.devnet.solana.com` | mainnet-beta RPC |
+| `BRIDGE_SOLANA_PROGRAM` / `_WBTH_MINT` | cloned from devnet | #867 program / #870 mint | mainnet program / mint |
+| `RUN_ORCA` | **unset** (Orca can't be cloned) | `1` (live devnet Orca) | `1` (live mainnet Orca) |
+| Mint authority | single-key `BRIDGE_SOLANA_KEYPAIR` | single-key or Squads (#1052) | **Squads multisig** (#1052) |
+| BTH reserve | local `botho-testnet` reserve | live testnet reserve | mainnet reserve |
 
 ## Layer 1.5: BTH node leg (live)
 

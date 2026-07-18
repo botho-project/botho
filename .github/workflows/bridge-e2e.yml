@@ -226,6 +226,27 @@ jobs:
           SEPOLIA_RPC_URL: ${{ secrets.SEPOLIA_RPC_URL }}
         run: ./scripts/bridge-e2e-defi-fork.sh
 
+  # The Solana DeFi round trip (#1079) is construction-validated: Orca
+  # Whirlpools cannot be forked/cloned hermetically, so the pool/swap legs run
+  # against LIVE devnet (operator step, #1052/#868) and cannot run in CI. What
+  # CI CAN gate on every push is the driver's wiring + shell hygiene via the
+  # hermetic --check self-check (touches no cluster). The bridge-transport
+  # drills themselves self-skip (green) when unconfigured, exactly like the
+  # Ethereum legs — see scripts/bridge-e2e-defi-solana.sh and the
+  # "Layer 0.75-Solana" section of docs/bridge/testnet-e2e-runbook.md.
+  defi-round-trip-solana:
+    name: Solana DeFi round trip (construction-validated self-check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shellcheck the Solana DeFi driver
+        run: shellcheck scripts/bridge-e2e-defi-solana.sh
+
+      - name: Hermetic self-check (no cluster)
+        run: ./scripts/bridge-e2e-defi-solana.sh --check
+
   # The live-testnet BTH -> wBTH -> burn -> BTH round trip is a MANUAL
   # drill for now: it needs funded Gnosis Safes + Sepolia ETH (#866/#868),
   # and the BTH live transports (#856). The local variant of this same loop
