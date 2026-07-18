@@ -55,9 +55,7 @@ pub struct KeySourceConfig<'a> {
 /// watch-only deployment). Otherwise returns the secret in a [`Zeroizing`]
 /// buffer that is wiped on drop; the caller parses it into the chain-specific
 /// signer. The secret itself is never logged.
-pub fn load_key_material(
-    src: KeySourceConfig<'_>,
-) -> Result<Option<Zeroizing<String>>, MintError> {
+pub fn load_key_material(src: KeySourceConfig<'_>) -> Result<Option<Zeroizing<String>>, MintError> {
     // Env var takes precedence: it is the mainnet load path (no plaintext key
     // file on disk). A configured-but-missing var fails closed rather than
     // silently falling back to a file.

@@ -33,8 +33,10 @@ use bth_bridge_core::{
 };
 use tracing::{debug, info, warn};
 
-use super::keysource::{load_key_material, KeySourceConfig};
-use super::{ConfirmationStatus, MintError, Minter, PreparedMint};
+use super::{
+    keysource::{load_key_material, KeySourceConfig},
+    ConfirmationStatus, MintError, Minter, PreparedMint,
+};
 
 sol! {
     /// Typed binding for the wBTH token (`contracts/ethereum/contracts/WrappedBTH.sol`).
@@ -640,7 +642,8 @@ mod tests {
         std::env::remove_var(var);
     }
 
-    /// A configured-but-unset relayer env var fails closed (no silent fallback).
+    /// A configured-but-unset relayer env var fails closed (no silent
+    /// fallback).
     #[test]
     fn relayer_env_var_unset_fails_closed() {
         let var = "BTH_TEST_ETH_RELAYER_KEY_UNSET_1077";

@@ -49,8 +49,10 @@ use std::sync::Arc;
 use tracing::{debug, info, warn};
 use zeroize::{Zeroize, Zeroizing};
 
-use super::keysource::{load_key_material, KeySourceConfig};
-use super::{ConfirmationStatus, MintError, Minter, PreparedMint};
+use super::{
+    keysource::{load_key_material, KeySourceConfig},
+    ConfirmationStatus, MintError, Minter, PreparedMint,
+};
 use crate::solana_rpc::{
     AccountMeta, HttpSolanaRpc, Instruction, LegacyMessage, Pubkey, SignatureState, SolanaRpc,
     Transaction, ALREADY_PROCESSED_MARKER, SYSTEM_PROGRAM_ID, TOKEN_PROGRAM_ID,
