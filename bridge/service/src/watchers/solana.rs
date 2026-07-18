@@ -546,6 +546,8 @@ mod tests {
             rpc_url: "http://localhost:8899".to_string(),
             wbth_program: "So11111111111111111111111111111111111111112".to_string(),
             keypair_file: None,
+            keypair_env: None,
+            enforce_key_permissions: false,
             commitment: SolanaCommitment::Finalized,
             mint_signers: Vec::new(),
             mint_threshold: 0,

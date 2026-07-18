@@ -115,6 +115,10 @@ sha2 = { workspace = true, features = ["std"] }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { workspace = true, features = ["derive"] }
+# At-rest hardening of the relayer/submit signing keys (#1077): the raw key
+# buffer read from a file/env var is wrapped in `Zeroizing` so it is wiped from
+# memory after parsing into the chain signer.
+zeroize = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true, features = ["default-code-coverage"] }

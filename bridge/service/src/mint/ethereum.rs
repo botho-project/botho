@@ -33,6 +33,7 @@ use bth_bridge_core::{
 };
 use tracing::{debug, info, warn};
 
+use super::keysource::{load_key_material, KeySourceConfig};
 use super::{ConfirmationStatus, MintError, Minter, PreparedMint};
 
 sol! {
@@ -275,15 +276,19 @@ impl EthMinter {
             .map_err(|e| MintError::Config(format!("invalid ethereum rpc_url: {}", e)))?;
         let provider = ProviderBuilder::new().connect_http(url).erased();
 
-        // TODO(#827): the relayer key file is currently read as plaintext
-        // hex; key provisioning/encryption is tracked in the ops runbook
-        // issue. The relayer is NOT a custody key — it only pays gas; the
-        // mint authority is the Safe threshold (ADR 0002).
-        let relayer = match config.private_key_file.as_deref() {
-            Some(path) => {
-                let raw = std::fs::read_to_string(path).map_err(|e| {
-                    MintError::Config(format!("cannot read private_key_file {}: {}", path, e))
-                })?;
+        // The relayer EOA only pays gas to submit `execTransaction`; it is NOT
+        // a custody key — the mint authority is the Safe threshold (ADR 0002).
+        // At-rest hardening of this key — file-permission preflight, a
+        // non-plaintext (env-var) load path, and buffer zeroization — is #1077
+        // (see `super::keysource`); provisioning is the bridge ops runbook. The
+        // raw hex is loaded into a zeroizing buffer and wiped once parsed.
+        let relayer = match load_key_material(KeySourceConfig {
+            file: config.private_key_file.as_deref(),
+            env_var: config.private_key_env.as_deref(),
+            enforce_permissions: config.enforce_key_permissions,
+            label: "ethereum.private_key",
+        })? {
+            Some(raw) => {
                 let signer: PrivateKeySigner = raw
                     .trim()
                     .parse()
@@ -592,6 +597,57 @@ mod tests {
 
     fn addr(byte: u8) -> Address {
         Address::from([byte; 20])
+    }
+
+    /// A minimal minter config; the relayer key source is filled in per test.
+    fn eth_config() -> EthereumConfig {
+        EthereumConfig {
+            rpc_url: "http://localhost:8545".to_string(),
+            wbth_contract: "0x00000000000000000000000000000000000000ee".to_string(),
+            safe_address: Some("0x00000000000000000000000000000000000000AA".to_string()),
+            chain_id: 1,
+            private_key_file: None,
+            private_key_env: None,
+            enforce_key_permissions: false,
+            confirmations_required: 1,
+            gas_price_strategy: Default::default(),
+            mint_signers: Vec::new(),
+            mint_threshold: 0,
+        }
+    }
+
+    /// #1077 AC: the non-plaintext (env-var) load path works end-to-end for the
+    /// Ethereum relayer key — no plaintext key file on disk. The well-known
+    /// Hardhat account #0 key derives its known address, proving the key was
+    /// loaded and parsed from the environment.
+    #[test]
+    fn relayer_key_loads_from_env_var() {
+        const HARDHAT0_KEY: &str =
+            "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+        let hardhat0_addr: Address = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+            .parse()
+            .unwrap();
+
+        let var = "BTH_TEST_ETH_RELAYER_KEY_1077";
+        std::env::set_var(var, HARDHAT0_KEY);
+
+        let mut config = eth_config();
+        config.private_key_env = Some(var.to_string());
+        let minter = EthMinter::new(config).expect("minter builds from env-var relayer key");
+
+        let (loaded_addr, _wallet) = minter.relayer.expect("relayer configured via env var");
+        assert_eq!(loaded_addr, hardhat0_addr);
+        std::env::remove_var(var);
+    }
+
+    /// A configured-but-unset relayer env var fails closed (no silent fallback).
+    #[test]
+    fn relayer_env_var_unset_fails_closed() {
+        let var = "BTH_TEST_ETH_RELAYER_KEY_UNSET_1077";
+        std::env::remove_var(var);
+        let mut config = eth_config();
+        config.private_key_env = Some(var.to_string());
+        assert!(EthMinter::new(config).is_err());
     }
 
     #[test]

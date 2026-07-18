@@ -164,6 +164,8 @@ fn watcher(confirmations_required: u32) -> (EthereumWatcher, Database) {
         safe_address: None,
         chain_id: 1,
         private_key_file: None,
+        private_key_env: None,
+        enforce_key_permissions: false,
         confirmations_required,
         gas_price_strategy: Default::default(),
         mint_signers: Vec::new(),

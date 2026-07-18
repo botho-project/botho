@@ -57,25 +57,62 @@ mapping is in the [bridge threat model](../security/bridge-threat-model.md).
 
 ## Hot Wallet Security
 
-### Key Storage Requirements
+### Relayer / Submit Key At-Rest Handling (#1077)
+
+The Ethereum **relayer** key (`ethereum.private_key_file` / `..._env`) and the
+Solana **submit** key (`solana.keypair_file` / `..._env`) are **not** custody
+keys — custody is the Gnosis Safe / Squads threshold per
+[ADR 0002](../decisions/0002-bridge-custody-scp-validator-federation.md). They
+only pay gas and broadcast the threshold-authorized mint transaction. A
+compromised relayer/submit key still enables **gas drain** and **submission
+griefing**, so the loader hardens their at-rest handling:
+
+- **Load source.** A key may come from a plaintext file on disk (an explicit
+  testnet opt-in) OR from an **environment variable** (`private_key_env` /
+  `keypair_env`). When an env-var name is configured it takes **precedence** over
+  the file, so a mainnet deployment never needs a plaintext key file on disk —
+  the secret is injected at runtime by a secrets manager, a systemd
+  `LoadCredential=`, or an OS keyring that exports into the process environment.
+  A configured-but-unset var **fails closed** (no silent fallback to a file).
+- **File-permission preflight.** A group- or world-accessible key file is
+  refused when `enforce_key_permissions = true` (recommended for mainnet) and
+  otherwise **warned** about (the testnet-compatible default), always logging the
+  offending octal mode. Tighten key files to `chmod 600`.
+- **Zeroization.** The raw key buffer is wiped from memory after it is parsed
+  into the signer. Key material is **never logged** — only the file path, its
+  permission mode, and the env-var name appear in messages.
 
 **Production Environment:**
-- Keys stored in encrypted files with strong passphrase
-- Passphrase loaded from environment variable (not command line)
-- File permissions: `chmod 600` (owner read/write only)
+- Prefer the **env-var** load path (`*_env`) so no plaintext key file is on disk
+- Set `enforce_key_permissions = true` so an insecure key file is refused
+- If a file is used, `chmod 600` (owner read/write only)
+- Passphrase / secret loaded from the environment (not command line)
 - HSM recommended for high-value deployments
 
-**Configuration Example:**
+**Configuration Example (mainnet — env-var keys, permission enforcement on):**
 ```toml
 [bth]
 view_key_file = "/secure/bridge/bth_view.enc"
 spend_key_file = "/secure/bridge/bth_spend.enc"
 
 [ethereum]
-private_key_file = "/secure/bridge/eth_key.enc"
+# No plaintext key file on disk: the relayer key is injected via the environment
+# (e.g. systemd LoadCredential / secrets manager) under this variable name.
+private_key_env = "BTH_BRIDGE_ETH_RELAYER_KEY"
+enforce_key_permissions = true
 
 [solana]
-keypair_file = "/secure/bridge/sol_keypair.enc"
+keypair_env = "BTH_BRIDGE_SOL_SUBMIT_KEY"
+enforce_key_permissions = true
+```
+
+**Configuration Example (testnet — plaintext file opt-in, still supported):**
+```toml
+[ethereum]
+private_key_file = "/secure/bridge/eth_key.hex"   # chmod 600
+
+[solana]
+keypair_file = "/secure/bridge/sol_keypair.json"  # chmod 600
 ```
 
 ### Key Rotation

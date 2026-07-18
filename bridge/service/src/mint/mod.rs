@@ -17,6 +17,7 @@
 //!    -> DepositConfirmed` and re-submit.
 
 pub mod ethereum;
+mod keysource;
 pub mod solana;
 
 use async_trait::async_trait;
