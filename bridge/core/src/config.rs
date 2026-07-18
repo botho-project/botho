@@ -341,8 +341,28 @@ pub struct EthereumConfig {
     /// Chain ID (1 for mainnet, 5 for goerli, etc.)
     pub chain_id: u64,
 
-    /// Path to encrypted private key file
+    /// Path to the relayer (submit) key file. The relayer EOA pays gas to
+    /// submit `Safe.execTransaction`; it is NOT a custody key (custody = the
+    /// Safe threshold, ADR 0002). On testnet this may be a plaintext hex file
+    /// (explicit opt-in). `None` (with no `private_key_env`) disables mint
+    /// submission (watch-only). At-rest hardening is tracked in #1077; see the
+    /// bridge ops runbook for provisioning.
     pub private_key_file: Option<String>,
+
+    /// Name of an environment variable holding the relayer key (hex secp256k1,
+    /// `0x`-optional). When set it takes PRECEDENCE over `private_key_file`, so
+    /// a mainnet deployment can inject the key at runtime (secrets manager /
+    /// systemd credential / OS keyring) with NO plaintext key file on disk
+    /// (#1077). A configured-but-unset var fails closed.
+    #[serde(default)]
+    pub private_key_env: Option<String>,
+
+    /// Hard-fail (rather than warn) when the relayer `private_key_file` is
+    /// group/world accessible. Default `false` keeps testnet drills working
+    /// with loosely-permissioned files while still logging the offending mode;
+    /// set `true` for mainnet so an insecure key file is refused (#1077).
+    #[serde(default)]
+    pub enforce_key_permissions: bool,
 
     /// Number of confirmations required
     #[serde(default = "default_eth_confirmations")]
@@ -382,8 +402,25 @@ pub struct SolanaConfig {
     /// wBTH program ID
     pub wbth_program: String,
 
-    /// Path to encrypted keypair file
+    /// Path to the submit keypair file (hex 32-byte seed or Solana CLI JSON
+    /// array). The local key assembles/relays the multisig transaction; per
+    /// ADR 0002 the on-chain `mint_authority` is a distinct SPL/Squads
+    /// multisig, so this is NOT a custody key. On testnet this may be a
+    /// plaintext file (explicit opt-in). At-rest hardening is tracked in #1077.
     pub keypair_file: Option<String>,
+
+    /// Name of an environment variable holding the submit key (hex 32-byte
+    /// seed or Solana CLI JSON array). When set it takes PRECEDENCE over
+    /// `keypair_file`, so a mainnet deployment needs NO plaintext key file on
+    /// disk (#1077). A configured-but-unset var fails closed.
+    #[serde(default)]
+    pub keypair_env: Option<String>,
+
+    /// Hard-fail (rather than warn) when `keypair_file` is group/world
+    /// accessible. Default `false` keeps testnet drills working while logging
+    /// the offending mode; set `true` for mainnet (#1077).
+    #[serde(default)]
+    pub enforce_key_permissions: bool,
 
     /// Commitment level
     #[serde(default)]
@@ -607,6 +644,8 @@ impl Default for BridgeConfig {
                 safe_address: None,
                 chain_id: 1,
                 private_key_file: None,
+                private_key_env: None,
+                enforce_key_permissions: false,
                 confirmations_required: 12,
                 gas_price_strategy: GasPriceStrategy::default(),
                 mint_signers: Vec::new(),
@@ -616,6 +655,8 @@ impl Default for BridgeConfig {
                 rpc_url: "http://localhost:8899".to_string(),
                 wbth_program: "11111111111111111111111111111111".to_string(),
                 keypair_file: None,
+                keypair_env: None,
+                enforce_key_permissions: false,
                 commitment: SolanaCommitment::default(),
                 mint_signers: Vec::new(),
                 mint_threshold: 0,
@@ -832,6 +873,62 @@ mod tests {
         assert_eq!(configured.min_order_amount, 1000);
         assert_eq!(configured.max_body_bytes, 2048);
         assert_eq!(configured.max_open_orders, 5);
+    }
+
+    #[test]
+    fn test_relayer_key_source_knobs_default_and_parse() {
+        // Defaults (#1077): no env-var override, permission enforcement off
+        // (testnet-compatible — files are only warned about, not refused).
+        let config = BridgeConfig::default();
+        assert!(config.ethereum.private_key_env.is_none());
+        assert!(!config.ethereum.enforce_key_permissions);
+        assert!(config.solana.keypair_env.is_none());
+        assert!(!config.solana.enforce_key_permissions);
+
+        // A pre-existing config without the new knobs still parses (the fields
+        // are `#[serde(default)]`, so testnet configs are unaffected).
+        let legacy: EthereumConfig = toml::from_str(
+            r#"
+            rpc_url = "http://localhost:8545"
+            wbth_contract = "0x0000000000000000000000000000000000000000"
+            chain_id = 1
+            "#,
+        )
+        .unwrap();
+        assert!(legacy.private_key_env.is_none());
+        assert!(!legacy.enforce_key_permissions);
+
+        // The knobs round-trip from TOML for both chains.
+        let eth: EthereumConfig = toml::from_str(
+            r#"
+            rpc_url = "http://localhost:8545"
+            wbth_contract = "0x0000000000000000000000000000000000000000"
+            chain_id = 1
+            private_key_env = "BTH_BRIDGE_ETH_RELAYER_KEY"
+            enforce_key_permissions = true
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            eth.private_key_env.as_deref(),
+            Some("BTH_BRIDGE_ETH_RELAYER_KEY")
+        );
+        assert!(eth.enforce_key_permissions);
+
+        let sol: SolanaConfig = toml::from_str(
+            r#"
+            rpc_url = "http://localhost:8899"
+            wbth_program = "11111111111111111111111111111111"
+            keypair_env = "BTH_BRIDGE_SOL_SUBMIT_KEY"
+            enforce_key_permissions = true
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            sol.keypair_env.as_deref(),
+            Some("BTH_BRIDGE_SOL_SUBMIT_KEY")
+        );
+        assert!(sol.enforce_key_permissions);
     }
 
     #[test]

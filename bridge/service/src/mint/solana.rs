@@ -47,8 +47,12 @@ use ed25519_dalek::{Signer as _, SigningKey};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
+use zeroize::{Zeroize, Zeroizing};
 
-use super::{ConfirmationStatus, MintError, Minter, PreparedMint};
+use super::{
+    keysource::{load_key_material, KeySourceConfig},
+    ConfirmationStatus, MintError, Minter, PreparedMint,
+};
 use crate::solana_rpc::{
     AccountMeta, HttpSolanaRpc, Instruction, LegacyMessage, Pubkey, SignatureState, SolanaRpc,
     Transaction, ALREADY_PROCESSED_MARKER, SYSTEM_PROGRAM_ID, TOKEN_PROGRAM_ID,
@@ -252,8 +256,18 @@ impl SolMinter {
         let (bridge_pda, _bump) = Pubkey::find_program_address(&[BRIDGE_PDA_SEED], &program_id)
             .ok_or_else(|| MintError::Config("could not derive bridge PDA".to_string()))?;
 
-        let signer = match config.keypair_file.as_deref() {
-            Some(path) => Some(load_signer(path)?),
+        // The local submit key assembles/relays the multisig transaction; per
+        // ADR 0002 it is NOT a custody key (custody = the SPL/Squads multisig
+        // `mint_authority`). At-rest hardening — permission preflight, an
+        // env-var load path so mainnet needs no plaintext key on disk, and
+        // buffer zeroization — is #1077 (see `super::keysource`).
+        let signer = match load_key_material(KeySourceConfig {
+            file: config.keypair_file.as_deref(),
+            env_var: config.keypair_env.as_deref(),
+            enforce_permissions: config.enforce_key_permissions,
+            label: "solana.keypair",
+        })? {
+            Some(raw) => Some(parse_signer(&raw)?),
             None => None,
         };
 
@@ -403,39 +417,52 @@ impl SolMinter {
     }
 }
 
-/// Load an Ed25519 signing key from a file. Accepts either a 64-char hex
-/// 32-byte seed (parity with `bridge.attestation_ed25519_key_file`) or a
-/// Solana CLI JSON keypair array of 64 bytes (`[secret_scalar(32) ||
-/// pub(32)]`).
-fn load_signer(path: &str) -> Result<(SigningKey, Pubkey), MintError> {
-    let raw = std::fs::read_to_string(path).map_err(|e| {
-        MintError::Config(format!("cannot read solana keypair_file {}: {}", path, e))
-    })?;
+/// Parse an Ed25519 signing key from raw key material (loaded from a file or an
+/// env var by [`super::keysource`], #1077). Accepts either a 64-char hex
+/// 32-byte seed (parity with `bridge.attestation_ed25519_key_file`) or a Solana
+/// CLI JSON keypair array of 64 bytes (`[secret_scalar(32) || pub(32)]`).
+///
+/// Every intermediate secret buffer — the decoded bytes and the extracted seed
+/// — is zeroized before this function returns, so the only surviving copy of
+/// the secret is inside the returned [`SigningKey`]. The caller's `raw` buffer
+/// is a `Zeroizing<String>` wiped on drop.
+fn parse_signer(raw: &str) -> Result<(SigningKey, Pubkey), MintError> {
     let trimmed = raw.trim();
 
-    let seed: [u8; 32] = if trimmed.starts_with('[') {
+    let mut seed: [u8; 32] = if trimmed.starts_with('[') {
         // Solana CLI JSON array: 64 bytes, the first 32 are the seed.
-        let bytes: Vec<u8> = serde_json::from_str(trimmed)
-            .map_err(|e| MintError::Config(format!("invalid keypair JSON: {}", e)))?;
+        let bytes: Zeroizing<Vec<u8>> = Zeroizing::new(
+            serde_json::from_str::<Vec<u8>>(trimmed)
+                .map_err(|e| MintError::Config(format!("invalid keypair JSON: {}", e)))?,
+        );
         if bytes.len() != 64 {
             return Err(MintError::Config(format!(
                 "solana keypair JSON must be 64 bytes, got {}",
                 bytes.len()
             )));
         }
-        bytes[..32]
-            .try_into()
-            .map_err(|_| MintError::Config("keypair seed slice error".to_string()))?
+        let mut s = [0u8; 32];
+        s.copy_from_slice(&bytes[..32]);
+        s
     } else {
-        let bytes = hex::decode(trimmed)
-            .map_err(|e| MintError::Config(format!("invalid keypair hex: {}", e)))?;
-        bytes.try_into().map_err(|v: Vec<u8>| {
-            MintError::Config(format!("keypair seed must be 32 bytes, got {}", v.len()))
-        })?
+        let bytes: Zeroizing<Vec<u8>> = Zeroizing::new(
+            hex::decode(trimmed)
+                .map_err(|e| MintError::Config(format!("invalid keypair hex: {}", e)))?,
+        );
+        if bytes.len() != 32 {
+            return Err(MintError::Config(format!(
+                "keypair seed must be 32 bytes, got {}",
+                bytes.len()
+            )));
+        }
+        let mut s = [0u8; 32];
+        s.copy_from_slice(&bytes[..]);
+        s
     };
 
     let sk = SigningKey::from_bytes(&seed);
     let pubkey = Pubkey(sk.verifying_key().to_bytes());
+    seed.zeroize();
     Ok((sk, pubkey))
 }
 
@@ -654,6 +681,65 @@ mod tests {
         (order, auth)
     }
 
+    /// `parse_signer` accepts both accepted encodings — a 64-char hex seed and
+    /// a Solana CLI 64-byte JSON array — and derives the SAME key from each
+    /// (the JSON's first 32 bytes are the seed). Guards the #1077 zeroizing
+    /// refactor against a behavior change.
+    #[test]
+    fn parse_signer_accepts_hex_and_json() {
+        let seed = [0x24u8; 32];
+        let expected = SigningKey::from_bytes(&seed);
+        let pub_bytes = expected.verifying_key().to_bytes();
+
+        // Hex form.
+        let (sk_hex, pk_hex) = parse_signer(&hex::encode(seed)).unwrap();
+        assert_eq!(sk_hex.to_bytes(), seed);
+        assert_eq!(pk_hex.0, pub_bytes);
+
+        // Solana CLI JSON array (secret_scalar(32) || pub(32)).
+        let mut json_bytes = seed.to_vec();
+        json_bytes.extend_from_slice(&pub_bytes);
+        let json = serde_json::to_string(&json_bytes).unwrap();
+        let (sk_json, pk_json) = parse_signer(&json).unwrap();
+        assert_eq!(sk_json.to_bytes(), seed);
+        assert_eq!(pk_json.0, pub_bytes);
+
+        // Malformed inputs are rejected.
+        assert!(parse_signer("not-hex").is_err());
+        assert!(parse_signer("[1,2,3]").is_err());
+    }
+
+    /// #1077 AC: the non-plaintext (env-var) load path works end-to-end for the
+    /// Solana submit key — no plaintext key file on disk. `SolMinter::new`
+    /// reads the hex seed from the environment and derives the expected signer.
+    #[test]
+    fn submit_key_loads_from_env_var() {
+        let seed = [0x31u8; 32];
+        let expected = SigningKey::from_bytes(&seed);
+
+        let var = "BTH_TEST_SOL_SUBMIT_KEY_1077";
+        std::env::set_var(var, hex::encode(seed));
+
+        let mut config = test_config();
+        config.keypair_env = Some(var.to_string());
+        let minter = SolMinter::new(config).expect("minter builds from env-var submit key");
+
+        let (sk, pk) = minter.signer.expect("submit key configured via env var");
+        assert_eq!(sk.to_bytes(), seed);
+        assert_eq!(pk.0, expected.verifying_key().to_bytes());
+        std::env::remove_var(var);
+    }
+
+    /// A configured-but-unset submit env var fails closed (no silent fallback).
+    #[test]
+    fn submit_key_env_var_unset_fails_closed() {
+        let var = "BTH_TEST_SOL_SUBMIT_KEY_UNSET_1077";
+        std::env::remove_var(var);
+        let mut config = test_config();
+        config.keypair_env = Some(var.to_string());
+        assert!(SolMinter::new(config).is_err());
+    }
+
     #[test]
     fn test_attestation_validation() {
         let (order, auth) = order_and_auth();
@@ -842,6 +928,8 @@ mod tests {
             // A valid base58 32-byte program id.
             wbth_program: Pubkey([8u8; 32]).to_base58(),
             keypair_file: None,
+            keypair_env: None,
+            enforce_key_permissions: false,
             commitment: SolanaCommitment::Finalized,
             mint_signers: Vec::new(),
             mint_threshold: 0,

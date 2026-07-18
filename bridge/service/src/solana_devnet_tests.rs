@@ -55,6 +55,8 @@ fn config_from_env() -> Option<SolanaConfig> {
         rpc_url,
         wbth_program,
         keypair_file: env::var("BRIDGE_SOLANA_KEYPAIR").ok(),
+        keypair_env: None,
+        enforce_key_permissions: false,
         commitment: SolanaCommitment::Finalized,
         mint_signers: Vec::new(),
         mint_threshold: 0,
