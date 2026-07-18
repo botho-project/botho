@@ -165,32 +165,32 @@ async fn solana_devnet_reserve_supply_source() {
 }
 
 /// The Solana analog of `defi_round_trip_tests::defi_round_trip_…` (#1079): the
-/// **mint → wrap → (Orca seed/swap) → burn → release** journey of a coin for the
-/// Solana venue, driven through the REAL bridge-service transports and asserted
-/// across the loop.
+/// **mint → wrap → (Orca seed/swap) → burn → release** journey of a coin for
+/// the Solana venue, driven through the REAL bridge-service transports and
+/// asserted across the loop.
 ///
 /// ## Construction-validated boundary (the accepted Solana pattern)
 ///
-/// Unlike the Ethereum driver, this drill does **not** thread the Orca pool/swap
-/// legs in-process: **Orca Whirlpools cannot be forked/cloned hermetically**
-/// (see the maintainer note on #865), so those legs are driven by the shell
-/// driver `scripts/bridge-e2e-defi-solana.sh` against **live devnet** with the
-/// #870 TypeScript scripts (the operator step tracked by #1052 / #868). What
-/// this Rust drill owns is every leg that CAN be exercised through a real Rust
-/// transport against a cluster:
+/// Unlike the Ethereum driver, this drill does **not** thread the Orca
+/// pool/swap legs in-process: **Orca Whirlpools cannot be forked/cloned
+/// hermetically** (see the maintainer note on #865), so those legs are driven
+/// by the shell driver `scripts/bridge-e2e-defi-solana.sh` against **live
+/// devnet** with the #870 TypeScript scripts (the operator step tracked by
+/// #1052 / #868). What this Rust drill owns is every leg that CAN be exercised
+/// through a real Rust transport against a cluster:
 ///
 /// - **WRAP** — the Ed25519 t-of-n mint-submission transport
 ///   ([`crate::mint::solana::SolMinter`]) assembles + signs the hardened
-///   `bridge_mint` against live PDAs; broadcast (when `BRIDGE_SOLANA_BROADCAST=1`
-///   and the authority is funded) is exactly-once via the #850 per-order marker
-///   PDA. **No shortcut mint** — the wBTH mint's only authority is the federation
-///   key.
-/// - **PEG** — [`crate::reserve::SolSupplySource`] reads the outstanding wBTH SPL
-///   supply through the exact production path the reconciler runs (#853), and a
-///   full [`crate::reserve::Reconciler`] pass proves the Solana leg VERIFIES
-///   (`sol_supply` present, factor-1 12-decimal picocredits) — the peg invariant
-///   across the loop. On a broadcast run the supply delta equals the wrapped
-///   amount (factor-1, ADR 0003).
+///   `bridge_mint` against live PDAs; broadcast (when
+///   `BRIDGE_SOLANA_BROADCAST=1` and the authority is funded) is exactly-once
+///   via the #850 per-order marker PDA. **No shortcut mint** — the wBTH mint's
+///   only authority is the federation key.
+/// - **PEG** — [`crate::reserve::SolSupplySource`] reads the outstanding wBTH
+///   SPL supply through the exact production path the reconciler runs (#853),
+///   and a full [`crate::reserve::Reconciler`] pass proves the Solana leg
+///   VERIFIES (`sol_supply` present, factor-1 12-decimal picocredits) — the peg
+///   invariant across the loop. On a broadcast run the supply delta equals the
+///   wrapped amount (factor-1, ADR 0003).
 /// - **REPATRIATE** — the burn-watcher transport
 ///   ([`crate::watchers::solana::burns_from_logs`] over
 ///   `get_signatures_for_address` → `get_transaction_logs`) decodes a real
@@ -317,7 +317,10 @@ async fn solana_devnet_defi_round_trip_wrap_peg_burn() {
                 .check_confirmation(&order, &prepared.tx_id)
                 .await
                 .expect("poll confirmation");
-            eprintln!("round trip: wrap mint {} status {:?}", prepared.tx_id, status);
+            eprintln!(
+                "round trip: wrap mint {} status {:?}",
+                prepared.tx_id, status
+            );
 
             supply_after_wrap = supply_source
                 .wrapped_supply()
