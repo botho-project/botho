@@ -1188,6 +1188,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_guard_passes_with_distinct_squads_pda_authority_2of3() {
+        // The intended post-migration federated posture (#1052): a full
+        // 2-of-3 federation (`mint_signers` = 3, `mint_threshold` = 2) whose
+        // on-chain `mint_authority` is a distinct Squads-style PDA (off-curve,
+        // derived from a program id — NOT any member key and NOT the local
+        // relayer key). This pins that such a config BOOTS the custody guard
+        // cleanly in strict mode, i.e. the ADR-0002 posture the operator will
+        // stand up once the on-chain authority is rotated to the multisig.
+        //
+        // NOTE (per #1052 architectural finding): the guard passing does NOT
+        // by itself let a federated devnet mint *complete* — a Squads PDA can
+        // only satisfy the on-chain `mint_authority: Signer` constraint via a
+        // Squads `invoke_signed` CPI, which `prepare_mint` does not yet
+        // assemble. This test covers boot-time custody posture only.
+        let (sk, pk) = test_signer();
+
+        // A genuine off-curve PDA (Squads authority PDAs are program-derived),
+        // distinct from the local key and from every configured member.
+        let squads_program = Pubkey([0xABu8; 32]);
+        let (squads_pda_authority, _bump) =
+            Pubkey::find_program_address(&[b"squad", &[0u8; 32]], &squads_program)
+                .expect("derive a squads-shaped PDA authority");
+        assert_ne!(
+            squads_pda_authority.0, pk.0,
+            "the multisig PDA must differ from the local relayer key"
+        );
+
+        let rpc = Arc::new(MockRpc::with_authorities(
+            squads_pda_authority,
+            Pubkey([0x33u8; 32]),
+        ));
+
+        // A 2-of-3 federation posture: three distinct member signers, t = 2.
+        let members = [
+            Pubkey([0xA1u8; 32]),
+            Pubkey([0xA2u8; 32]),
+            Pubkey([0xA3u8; 32]),
+        ];
+        let mut config = test_config();
+        config.mint_signers = members.iter().map(|m| m.to_base58()).collect();
+        config.mint_threshold = 2;
+        assert!(config.requires_multisig_authority());
+
+        let minter = SolMinter::with_parts(config, rpc, Some((sk, pk))).unwrap();
+        assert!(
+            minter
+                .verify_mint_authority_is_not_local_key()
+                .await
+                .is_ok(),
+            "a distinct Squads-PDA mint authority must boot the guard cleanly \
+             in the 2-of-3 federated posture"
+        );
+    }
+
+    #[tokio::test]
     async fn test_guard_skips_in_watch_only_mode() {
         // No local signer: nothing to compare, guard is a no-op even if the
         // on-chain authority happens to match some key.
