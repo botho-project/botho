@@ -27,6 +27,7 @@ ADRs are immutable once accepted. If a decision changes, a new ADR supersedes th
 | [0008](0008-universal-pq-address-format-and-hybrid-stealth.md) | Universal PQ Address Format (v2) + Hybrid Stealth Preimage | Accepted | 2026-07-15 |
 | [0009](0009-confidential-amounts-economics.md) | Confidential-Amounts Economics — Value-Dependent Anti-Hoarding under Hidden Amounts | Proposed | 2026-07-16 |
 | [0010](0010-elected-bridge-multisig.md) | Bridge Custody — Small Elected Multisig, Decoupled from SCP Quorum Structure | Accepted | 2026-07-17 |
+| [0011](0011-metamask-snap-wallet.md) | MetaMask Snap Wallet — Onboard MetaMask Users Without EVM Compromise | Accepted | 2026-07-18 |
 
 ## ADR Statuses
 
