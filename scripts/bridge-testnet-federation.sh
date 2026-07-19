@@ -16,17 +16,24 @@
 # asserting exactly-once, factor-1 amounts (ADR 0003), and the live
 # proof-of-reserves invariant (Σ wBTH == locked reserve).
 #
-# TOPOLOGY (single-host federation). The N instances run on one host and
-# share ONE SQLite order store (WAL + busy-timeout, see
-# bridge/service/src/db.rs). Sharing the order store is what today's code
-# supports: order records do NOT replicate between instances over the network
-# (the #858 transport exchanges attestation envelopes only — an envelope for
-# an order a peer has never heard of is refused `unknown_order`). The
-# CRYPTOGRAPHIC custody is still genuinely t-of-n over the wire: each process
-# signs with only ITS key, envelopes travel through the real authenticated
-# HTTP endpoint, and no mint/release is prepared until `threshold` distinct
-# federation signatures verify. Cross-host order replication is the tracked
-# follow-up (see the #868 findings issue).
+# TOPOLOGY. The N instances run on one host. By default they share ONE SQLite
+# order store (WAL + busy-timeout, see bridge/service/src/db.rs) — the
+# historical topology that papered over cross-member order-record convergence.
+# The CRYPTOGRAPHIC custody is genuinely t-of-n over the wire either way: each
+# process signs with only ITS key, envelopes travel through the real
+# authenticated HTTP endpoint, and no mint/release is prepared until
+# `threshold` distinct federation signatures verify.
+#
+# SEPARATE-DB topology (BRIDGE_FED_SEPARATE_DB=1, #1050): each member gets its
+# OWN store ($RUN_DIR/member-<i>.db) — a genuinely distributed deployment with
+# NO shared store. The burn/release leg converges via deterministic order ids
+# (Phase 1). The mint leg now converges via signed order-record replication
+# (Phase 2): a mint order created on member 1's public API is signed with that
+# member's ed25519 federation key and pushed to every peer's `POST /api/order`,
+# which persists a trust-free AwaitingDeposit shell so each peer's OWN watcher
+# can independently confirm the deposit and attest. A record from a non-member
+# is refused; a replicated shell grants NO trust (no mint without independent
+# on-chain confirmation).
 #
 # SECRETS. Everything lives under .secrets/bridge-testnet/ (git-ignored,
 # testnet-disposable). NEVER point this at .secrets/bridge-mainnet.
@@ -60,6 +67,9 @@
 # ENV KNOBS (defaults target the LIVE testnet):
 #   BRIDGE_FED_NODES=3                 federation size n
 #   BRIDGE_FED_THRESHOLD=2             threshold t
+#   BRIDGE_FED_SEPARATE_DB=0           1 = per-member DBs, no shared store
+#                                      (#1050: exercises signed order-record
+#                                      replication for the mint leg)
 #   BRIDGE_BTH_RPC_URL=https://seed.botho.io/rpc
 #   SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
 #   SOLANA_RPC_URL=https://api.devnet.solana.com
@@ -127,6 +137,22 @@ RUN_DIR="${BRIDGE_FED_RUN_DIR:-$SECRETS_DIR/federation-run}"
 
 N="${BRIDGE_FED_NODES:-3}"
 T="${BRIDGE_FED_THRESHOLD:-2}"
+
+# Separate-DB topology (#1050 Phase 2). Default 0 = the historical single-host
+# topology where every instance shares one SQLite store ($RUN_DIR/shared.db),
+# which papered over cross-member order-record convergence. Set to 1 to give
+# each member its OWN database ($RUN_DIR/member-<i>.db): a genuinely
+# distributed deployment where a mint order created on one member must
+# REPLICATE (signed, over the wire) to the others' /api/order endpoints before
+# they can reach threshold. This exercises the real Phase-2 path. Burn/release
+# already converges via deterministic ids (Phase 1) with no shared store.
+SEPARATE_DB="${BRIDGE_FED_SEPARATE_DB:-0}"
+
+# The SQLite path for instance <i>: a shared store, or a per-member store in
+# the separate-DB topology.
+db_path_for() {
+    if [[ "$SEPARATE_DB" == "1" ]]; then echo "$RUN_DIR/member-$1.db"; else echo "$RUN_DIR/shared.db"; fi
+}
 
 BTH_RPC="${BRIDGE_BTH_RPC_URL:-https://seed.botho.io/rpc}"
 # Per-instance BTH RPC endpoints (comma-separated). Each federation member
@@ -374,7 +400,7 @@ $sol_block
 
 [bridge]
 mnemonic_file = "$RUN_DIR/unused-mnemonic"
-db_path = "$RUN_DIR/shared.db"
+db_path = "$(db_path_for "$i")"
 fee_bps = 10
 max_order_amount = $MAX_ORDER_PC
 daily_limit_per_address = $DAILY_LIMIT_PC
@@ -410,10 +436,19 @@ cmd_up() {
         render_config "$i"
     done
 
-    # Initialize the SHARED database once (schema + persistent WAL mode)
-    # before any instance races to create it.
-    "$BRIDGE_BIN" --config "$RUN_DIR/bridge-1.toml" --migrate >/dev/null 2>&1 ||
-        die "database migration failed (see $RUN_DIR/bridge-1.toml)"
+    # Initialize the database(s): the shared store once, or every member's
+    # own store in the separate-DB topology (#1050 Phase 2), before any
+    # instance races to create it.
+    if [[ "$SEPARATE_DB" == "1" ]]; then
+        log "separate-DB topology: each member gets its own store (order records replicate over /api/order)"
+        for i in $(seq 1 "$N"); do
+            "$BRIDGE_BIN" --config "$RUN_DIR/bridge-$i.toml" --migrate >/dev/null 2>&1 ||
+                die "database migration failed for member $i (see $RUN_DIR/bridge-$i.toml)"
+        done
+    else
+        "$BRIDGE_BIN" --config "$RUN_DIR/bridge-1.toml" --migrate >/dev/null 2>&1 ||
+            die "database migration failed (see $RUN_DIR/bridge-1.toml)"
+    fi
 
     # Staggered start: wait for each instance's /health before the next, so
     # concurrent first-boot writes never contend on the shared store.
@@ -490,9 +525,22 @@ cmd_order_status() {
     curl -sf "$(public_api)/api/bridge/orders/$id" | jq .
 }
 
-db_query() { sqlite3 -readonly "$RUN_DIR/shared.db" "$1"; }
+# db_query <sql> [member-index]. Reads the shared store, or a specific
+# member's store in the separate-DB topology (default member 1, the public-API
+# creator). Pass a member index to inspect a peer's own replicated view.
+db_query() { sqlite3 -readonly "$(db_path_for "${2:-1}")" "$1"; }
 
 cmd_orders() {
+    if [[ "$SEPARATE_DB" == "1" ]]; then
+        local i
+        for i in $(seq 1 "$N"); do
+            log "── member $i order table ($(db_path_for "$i")) ──"
+            db_query "SELECT id, order_type, source_chain || '->' || dest_chain, amount, fee, status,
+                             COALESCE(source_tx,'-'), COALESCE(dest_tx,'-')
+                      FROM bridge_orders ORDER BY created_at;" "$i" | column -t -s '|'
+        done
+        return
+    fi
     db_query "SELECT id, order_type, source_chain || '->' || dest_chain, amount, fee, status,
                      COALESCE(source_tx,'-'), COALESCE(dest_tx,'-')
               FROM bridge_orders ORDER BY created_at;" | column -t -s '|'

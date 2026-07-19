@@ -278,8 +278,29 @@ pub struct FederationAttestationProvider {
     peer_push: Option<Arc<dyn EnvelopePush>>,
 }
 
+/// Load this node's local Ed25519 attestation signing key from the configured
+/// key file, if any. Shared by the attestation provider and the #1050 order
+/// replication path (both authenticate as the same elected-member identity).
+pub(crate) fn load_local_ed25519(config: &BridgeConfig) -> Result<Option<SigningKey>, String> {
+    match config.bridge.attestation_ed25519_key_file.as_deref() {
+        Some(path) => {
+            let raw = std::fs::read_to_string(path)
+                .map_err(|e| format!("cannot read attestation_ed25519_key_file: {}", e))?;
+            let bytes: [u8; 32] = hex::decode(raw.trim())
+                .map_err(|e| format!("bad ed25519 attestation key hex: {}", e))?
+                .try_into()
+                .map_err(|_| "ed25519 attestation key is not 32 bytes".to_string())?;
+            Ok(Some(SigningKey::from_bytes(&bytes)))
+        }
+        None => Ok(None),
+    }
+}
+
 /// Parse a hex-encoded 32-byte Ed25519 public key list into verifying keys.
-fn parse_ed25519_federation(signers: &[String], what: &str) -> Result<Vec<VerifyingKey>, String> {
+pub(crate) fn parse_ed25519_federation(
+    signers: &[String],
+    what: &str,
+) -> Result<Vec<VerifyingKey>, String> {
     let mut keys = Vec::with_capacity(signers.len());
     for hex_key in signers {
         let bytes: [u8; 32] = hex::decode(hex_key.trim())
@@ -445,18 +466,7 @@ impl FederationAttestationProvider {
             return Ok(None);
         }
 
-        let local_ed25519 = match config.bridge.attestation_ed25519_key_file.as_deref() {
-            Some(path) => {
-                let raw = std::fs::read_to_string(path)
-                    .map_err(|e| format!("cannot read attestation_ed25519_key_file: {}", e))?;
-                let bytes: [u8; 32] = hex::decode(raw.trim())
-                    .map_err(|e| format!("bad ed25519 attestation key hex: {}", e))?
-                    .try_into()
-                    .map_err(|_| "ed25519 attestation key is not 32 bytes".to_string())?;
-                Some(SigningKey::from_bytes(&bytes))
-            }
-            None => None,
-        };
+        let local_ed25519 = load_local_ed25519(config)?;
         let local_secp256k1 = match config.bridge.attestation_secp256k1_key_file.as_deref() {
             Some(path) => {
                 let raw = std::fs::read_to_string(path)
