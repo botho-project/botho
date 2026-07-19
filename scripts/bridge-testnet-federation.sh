@@ -69,13 +69,27 @@
 #   BRIDGE_ETH_CONFIRMATIONS=2         Sepolia depth before Completed
 #   BRIDGE_SOLANA_PROGRAM=CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE
 #   BRIDGE_SOLANA_FEDERATION=0         1 wires the Solana ed25519 federation +
-#                                      mint keypair. BLOCKED today: the devnet
-#                                      wbth mint_authority is a single key, and
-#                                      the startup custody guard HARD-FAILS a
-#                                      federation posture with a single-key
-#                                      authority (mint/solana.rs). Flip to 1
-#                                      only after the devnet authority migrates
-#                                      to a real multisig (Squads).
+#                                      mint keypair. Default stays 0: the devnet
+#                                      wbth mint_authority is still a single key
+#                                      (97oZgGpd…), and the startup custody guard
+#                                      HARD-FAILS a federation posture with a
+#                                      single-key authority (mint/solana.rs).
+#                                      Migration = #1052; the flip to 1 is an
+#                                      OPERATOR action, only AFTER the on-chain
+#                                      mint_authority is rotated to a distinct
+#                                      2-of-3 multisig (contracts/solana/README.md
+#                                      "Devnet mint-multisig migration").
+#                                      Two milestones, do not conflate:
+#                                        path 2 (boot): rotate to a Squads PDA and
+#                                          the guard PASSES + the Solana leg BOOTS
+#                                          federated — but a mint cannot COMPLETE,
+#                                          because a PDA only signs via a Squads
+#                                          invoke_signed CPI that prepare_mint does
+#                                          not yet build.
+#                                        path 1 (complete): needs that Squads-gated
+#                                          mint-assembly code (separate issue)
+#                                          before an end-to-end federated devnet
+#                                          mint lands exactly-once/factor-1.
 #   BRIDGE_BTH_RESERVE_VIEW_KEY / _SPEND_KEY / _PQ_SEED / _ADDRESS
 #                                      the funded factor-1 reserve (file paths +
 #                                      address). Auto-loaded from

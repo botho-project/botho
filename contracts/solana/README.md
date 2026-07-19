@@ -114,6 +114,54 @@ off at deploy:
    below. This custody gate and the upgrade-authority gate are the two deploy
    gates that must both be closed before mainnet.
 
+### Devnet mint-multisig migration (#1052) — operator-fillable scaffold
+
+The devnet `mint_authority` above is a **single key** (`97oZgGpd…`), so the
+federated Solana leg cannot run in its ADR-0002 `t`-of-`n` posture: the bridge
+service's startup custody guard (`verify_mint_authority_is_not_local_key`, #879)
+hard-fails a federation posture whose on-chain authority is a lone key. Migrating
+devnet to a real multisig closes that gap. The code-buildable scaffold lands
+here; an **operator** fills in the real addresses once the multisig exists and
+the on-chain rotation is done (needs the current devnet mint-authority signer key
+— it cannot be automated by a Builder).
+
+**Target: a 2-of-3 mint multisig** (Squads PDA or SPL Token multisig), members =
+the federation's Ed25519 signers, threshold `t = 2`, distinct from the admin and
+pauser authorities. Members map to the SCP federation validators one-to-one:
+
+| Slot | Federation signer (SCP validator) | Member Ed25519 pubkey (operator fills) |
+|------|-----------------------------------|----------------------------------------|
+| 1 | `<validator-1>` | `<MEMBER_PUBKEY_1>` |
+| 2 | `<validator-2>` | `<MEMBER_PUBKEY_2>` |
+| 3 | `<validator-3>` | `<MEMBER_PUBKEY_3>` |
+
+**Devnet mint multisig (operator fills after creation + rotation):**
+
+| Field | Value |
+|-------|-------|
+| Multisig kind | `<Squads PDA \| SPL Token multisig>` |
+| Multisig address | `<MINT_MULTISIG_ADDRESS>` |
+| Threshold | `2-of-3` |
+| Created (tx sig) | `<CREATE_TX_SIG>` |
+| `mint_authority` rotation tx (`spl-token authorize … mint`) | `<ROTATE_TX_SIG>` |
+| Previous authority (single key) | `97oZgGpd71du52gguVkWEe1xkPvXh5PZPB2Jq3yvNRyU` |
+| New authority verified on-chain (`getAccountInfo`) | `<yes/no + date>` |
+
+Once filled, also update the per-deployment table above (replace the Devnet
+`Mint authority` cell with `<MINT_MULTISIG_ADDRESS>`). The rotation itself is the
+`[OPERATOR]` half of the deploy custody gate (step 4 above) — verify the new
+authority is a **distinct multisig**, not the relayer key and not the admin
+authority, before flipping `BRIDGE_SOLANA_FEDERATION=1` in the #868 drill.
+
+> **Guard-pass ≠ mint-complete (path-1 vs. path-2, per #1052).** Rotating
+> `mint_authority` to a Squads PDA makes the startup guard *pass* (PDA ≠ local
+> key) and lets the federation leg **boot** (path 2), but it does **not** let a
+> federated mint **complete**: `bridge_mint` takes `mint_authority` as a
+> transaction `Signer`, and a PDA can only sign via a Squads `invoke_signed`
+> CPI — which `prepare_mint` (`bridge/service/src/mint/solana.rs`) does not yet
+> assemble. Completing an end-to-end federated devnet mint (path 1) requires that
+> Squads-gated mint-assembly code, tracked as a separate issue.
+
 ### Replay-proof, order-bound minting
 
 `bridge_mint(amount, order_id)` takes a 32-byte `order_id` (the bridge order
