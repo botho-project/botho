@@ -48,7 +48,8 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
-use bth_bridge_core::{peek_order_id, AttestationEnvelope};
+use bth_bridge_core::{peek_order_id, AttestationEnvelope, OrderRecordEnvelope};
+use ed25519_dalek::VerifyingKey;
 use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, warn};
@@ -268,24 +269,225 @@ pub fn router(state: AttestState) -> axum::Router {
         .with_state(state)
 }
 
-/// Serve the inbound attestation endpoint until shutdown. Empty `addr`
-/// disables the endpoint (the caller checks this before spawning).
+/// Serve the inbound federation endpoints until shutdown. Empty `addr`
+/// disables the endpoint (the caller checks this before spawning). Mounts
+/// `POST /api/attest` always, and `POST /api/order` (mint order-record
+/// replication, #1050 Phase 2) when `order_sync` is configured.
 pub async fn serve(
     addr: String,
     state: AttestState,
+    order_sync: Option<OrderSyncState>,
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
 ) -> Result<(), String> {
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .map_err(|e| format!("bind {addr} (attest) failed: {e}"))?;
     tracing::info!("Bridge attestation endpoint listening on {addr}");
-    axum::serve(listener, router(state))
+    let app = match order_sync {
+        Some(os) => router(state).merge(order_router(os)),
+        None => router(state),
+    };
+    axum::serve(listener, app)
         .with_graceful_shutdown(async move {
             let _ = shutdown.recv().await;
             tracing::info!("Bridge attestation endpoint shutting down");
         })
         .await
         .map_err(|e| format!("attest server error: {e}"))
+}
+
+/// Shared state of the inbound `POST /api/order` endpoint (#1050 Phase 2:
+/// signed mint order-record replication).
+#[derive(Clone)]
+pub struct OrderSyncState {
+    /// The elected federation member set (Ed25519 verifying keys). A record
+    /// signed by a key not in this set is rejected as `unknown_signer` before
+    /// it is ever persisted — never accept an order record from an
+    /// unelected peer.
+    pub federation: Arc<Vec<VerifyingKey>>,
+    /// Local order store: a verified record is persisted only as an
+    /// `AwaitingDeposit` shell for THIS node's own watcher to confirm.
+    pub db: Database,
+    /// Shared bearer secret a peer must present (anti-DoS fence, same as the
+    /// attest endpoint). `None` disables the gate (trusted private network).
+    pub inbound_auth_token: Option<String>,
+}
+
+/// The JSON body returned by the inbound order-record endpoint.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrderSyncResponse {
+    /// Whether the shell was accepted (persisted, or already on record).
+    pub accepted: bool,
+    /// Stable machine tag: `accepted`, `accepted:already_present`, or
+    /// `refused:<reason-tag>`.
+    pub tag: String,
+    /// Human-facing detail (safe to return to the submitter).
+    pub message: String,
+}
+
+/// Inbound order-record replication endpoint: `POST /api/order`.
+///
+/// Authenticated, fail-closed transport that seeds an `AwaitingDeposit` mint
+/// **shell** so this node's own BTH watcher has an order to match a deposit
+/// against — closing the `refused:unknown_order` gap for a genuinely
+/// distributed (separate-DB) federation WITHOUT sharing a store.
+///
+/// The trust boundary is the whole point: a verified record grants NO trust.
+/// The wire type ([`bth_bridge_core::MintOrderShell`]) cannot carry a status,
+/// an authorization, or a dest tx, and the record is reconstituted only ever
+/// as a fresh `AwaitingDeposit` order. The signature authenticates only WHICH
+/// elected member proposed the order; this node still independently confirms
+/// the on-chain deposit before it will attest. A record whose id already
+/// exists locally is a no-op — an existing order (which may have already
+/// advanced) is NEVER overwritten or downgraded by a replicated shell.
+///
+/// Verdict → HTTP status: `200` accepted / already present, `401` bad bearer,
+/// `400` malformed / bad-signature / unknown-signer / invalid record, `503`
+/// an internal error.
+pub async fn receive_order(
+    State(state): State<OrderSyncState>,
+    headers: HeaderMap,
+    Json(envelope): Json<OrderRecordEnvelope>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    // 1. Bearer-auth gate (anti-DoS). Only enforced when configured.
+    if let Some(expected) = &state.inbound_auth_token {
+        match bearer(&headers) {
+            Some(presented) if token_matches(expected, &presented) => {}
+            _ => {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(OrderSyncResponse {
+                        accepted: false,
+                        tag: "refused:unauthorized".to_string(),
+                        message: "missing or invalid bearer token".to_string(),
+                    }),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    // 2. Verify the signature against the elected federation set, then
+    //    parse-after-verify into a trust-free shell.
+    let shell = match envelope.verify_ed25519(&state.federation) {
+        Ok(shell) => shell,
+        Err(reason) => {
+            let status = match reason {
+                bth_bridge_core::OrderRecordRejectReason::UnknownSigner
+                | bth_bridge_core::OrderRecordRejectReason::BadSignature
+                | bth_bridge_core::OrderRecordRejectReason::Malformed(_)
+                | bth_bridge_core::OrderRecordRejectReason::InvalidRecord(_) => {
+                    StatusCode::BAD_REQUEST
+                }
+            };
+            warn!(
+                "order-record replication refused: {} ({})",
+                reason.tag(),
+                reason.message()
+            );
+            return (
+                status,
+                Json(OrderSyncResponse {
+                    accepted: false,
+                    tag: format!("refused:{}", reason.tag()),
+                    message: reason.message(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    // 3. Idempotent, NON-destructive persist. If an order with this id already
+    //    exists locally we do nothing — a replicated shell must never overwrite
+    //    (and thus never downgrade) an order that may have already advanced through
+    //    this node's own pipeline.
+    let order_id = shell.id;
+    match state.db.get_order(&order_id) {
+        Ok(Some(_)) => {
+            debug!("order-record {order_id} already on record; replication is a no-op");
+            return (
+                StatusCode::OK,
+                Json(OrderSyncResponse {
+                    accepted: true,
+                    tag: "accepted:already_present".to_string(),
+                    message: format!("order {order_id} already on record"),
+                }),
+            )
+                .into_response();
+        }
+        Ok(None) => {}
+        Err(e) => {
+            warn!("order-record endpoint: order lookup failed: {e}");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(OrderSyncResponse {
+                    accepted: false,
+                    tag: "refused:internal".to_string(),
+                    message: "order lookup failed".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    }
+
+    let order = shell.into_awaiting_deposit_order();
+    if let Err(e) = state.db.insert_order(&order) {
+        // A racing insert of the same id (unique constraint) is benign: the
+        // order is now on record either way. Surface other errors as 503.
+        if state.db.get_order(&order_id).ok().flatten().is_some() {
+            return (
+                StatusCode::OK,
+                Json(OrderSyncResponse {
+                    accepted: true,
+                    tag: "accepted:already_present".to_string(),
+                    message: format!("order {order_id} already on record"),
+                }),
+            )
+                .into_response();
+        }
+        warn!("order-record endpoint: failed to persist replicated shell: {e}");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(OrderSyncResponse {
+                accepted: false,
+                tag: "refused:internal".to_string(),
+                message: "failed to persist order record".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    if let Err(e) = state.db.log_audit(
+        Some(&order_id),
+        "order_replicated",
+        &format!(
+            "replicated AwaitingDeposit mint shell from federation member {}",
+            envelope.signer_key_id
+        ),
+    ) {
+        warn!("order-record endpoint: audit log failed: {e}");
+    }
+
+    (
+        StatusCode::OK,
+        Json(OrderSyncResponse {
+            accepted: true,
+            tag: "accepted".to_string(),
+            message: format!(
+                "order {order_id} shell persisted (awaiting independent deposit confirmation)"
+            ),
+        }),
+    )
+        .into_response()
+}
+
+/// Build the inbound order-record router (`POST /api/order`).
+pub fn order_router(state: OrderSyncState) -> axum::Router {
+    axum::Router::new()
+        .route("/api/order", axum::routing::post(receive_order))
+        .with_state(state)
 }
 
 /// Outbound transport ([`EnvelopePush`]): pushes each accepted local envelope
@@ -463,11 +665,80 @@ impl EnvelopePush for PeerBroadcaster {
     }
 }
 
-/// Parse a peer base URL into a raw-socket target. Accepts `http://` and
-/// `https://` schemes (the scheme only informs the default port here — TLS
-/// termination for `https` peers is expected at a reverse proxy / mTLS layer
-/// in front of the plain endpoint for v1). Rejects anything without a host.
+/// Outbound order-record replication (#1050 Phase 2): pushes a signed mint
+/// order record to every configured peer's inbound `POST /api/order`
+/// endpoint. Fire-and-forget with the same guarantees as [`PeerBroadcaster`]:
+/// a slow or unreachable peer never wedges or fails the local order-create
+/// path. The record is self-authenticating (Ed25519 over the domain-separated
+/// bytes), so plain HTTP integrity + the bearer fence suffice for v1.
+pub struct OrderBroadcaster {
+    peers: Vec<PeerEndpoint>,
+    auth_token: Option<String>,
+    timeout: std::time::Duration,
+}
+
+impl OrderBroadcaster {
+    /// Build from configured peer base URLs. Unparseable peers are skipped
+    /// with a warning (a bad entry must not disable the whole outbound path).
+    /// Returns `None` when no peer parses (nothing to replicate to).
+    pub fn new(
+        peers: &[String],
+        auth_token: Option<String>,
+        timeout: std::time::Duration,
+    ) -> Option<Self> {
+        let parsed: Vec<PeerEndpoint> = peers
+            .iter()
+            .filter_map(|p| match parse_peer_to(p, "/api/order") {
+                Ok(ep) => Some(ep),
+                Err(e) => {
+                    warn!("federation order-sync peer `{p}` ignored: {e}");
+                    None
+                }
+            })
+            .collect();
+        if parsed.is_empty() {
+            return None;
+        }
+        Some(Self {
+            peers: parsed,
+            auth_token,
+            timeout,
+        })
+    }
+
+    /// Replicate one signed order record to every peer. Fire-and-forget: each
+    /// push is spawned and only its result logged.
+    pub fn broadcast(&self, envelope: &OrderRecordEnvelope) {
+        let body = match serde_json::to_string(envelope) {
+            Ok(b) => b,
+            Err(e) => {
+                warn!("cannot serialize order record for peer push: {e}");
+                return;
+            }
+        };
+        for peer in &self.peers {
+            let peer = peer.clone();
+            let body = body.clone();
+            let auth_token = self.auth_token.clone();
+            let timeout = self.timeout;
+            // Fire-and-forget: never block or fail the local order-create path.
+            tokio::spawn(PeerBroadcaster::push_one(peer, body, auth_token, timeout));
+        }
+    }
+}
+
+/// Parse a peer base URL into a raw-socket target for the attestation
+/// endpoint (`/api/attest`). Thin wrapper over [`parse_peer_to`].
 fn parse_peer(url: &str) -> Result<PeerEndpoint, String> {
+    parse_peer_to(url, "/api/attest")
+}
+
+/// Parse a peer base URL into a raw-socket target for `endpoint`. Accepts
+/// `http://` and `https://` schemes (the scheme only informs the default port
+/// here — TLS termination for `https` peers is expected at a reverse proxy /
+/// mTLS layer in front of the plain endpoint for v1). Rejects anything without
+/// a host.
+fn parse_peer_to(url: &str, endpoint: &str) -> Result<PeerEndpoint, String> {
     let url = url.trim();
     let (scheme, rest) = match url.split_once("://") {
         Some((s, r)) => (s, r),
@@ -493,7 +764,7 @@ fn parse_peer(url: &str) -> Result<PeerEndpoint, String> {
     } else {
         format!("{authority}:{default_port}")
     };
-    let path = format!("{base_path}/api/attest");
+    let path = format!("{base_path}{endpoint}");
     Ok(PeerEndpoint {
         authority: connect,
         host_header: authority.to_string(),
@@ -572,7 +843,9 @@ mod federation_transport_tests {
         signers::local::PrivateKeySigner,
     };
     use async_trait::async_trait;
-    use bth_bridge_core::{BridgeOrder, Chain, OrderStatus, OrderType};
+    use bth_bridge_core::{
+        sign_order_record_ed25519, BridgeOrder, Chain, OrderRecordEnvelope, OrderStatus, OrderType,
+    };
     use ed25519_dalek::SigningKey;
     use std::time::Duration;
     use tokio::sync::broadcast;
@@ -1285,5 +1558,480 @@ mod federation_transport_tests {
         let reader = std::io::Cursor::new(Vec::<u8>::new());
         let status = read_status_line(reader).await.unwrap();
         assert_eq!(status, 0);
+    }
+
+    // ── #1050 Phase 2: signed mint order-record replication ───────────────
+
+    /// An `AwaitingDeposit` mint order (with its deposit memo) that a public
+    /// API would create and then replicate to peers.
+    fn await_mint_order() -> BridgeOrder {
+        let mut order = BridgeOrder::new_mint(
+            Chain::Ethereum,
+            1_000_000_000_000,
+            1_000_000_000,
+            "bth_deposit_addr".to_string(),
+            format!("0x{}", hex::encode([0x11u8; 20])),
+        );
+        order.generate_memo();
+        order
+    }
+
+    /// A fresh, EMPTY in-memory DB (the separate-DB, no-shared-store topology).
+    fn empty_db() -> Database {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db
+    }
+
+    /// POST a raw JSON body to a node's `/api/order` and return (status, body).
+    async fn post_order(base_url: &str, auth: Option<&str>, body: &str) -> (u16, String) {
+        let addr = base_url.trim_start_matches("http://");
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let auth_hdr = match auth {
+            Some(t) => format!("Authorization: Bearer {t}\r\n"),
+            None => String::new(),
+        };
+        let request = format!(
+            "POST /api/order HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
+             {auth_hdr}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let text = String::from_utf8_lossy(&response).to_string();
+        let status: u16 = text
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let body = text
+            .split_once("\r\n\r\n")
+            .map(|(_, b)| b.to_string())
+            .unwrap_or_default();
+        (status, body)
+    }
+
+    /// Serve ONLY the order-record endpoint on an ephemeral port.
+    async fn spawn_order_endpoint(
+        state: OrderSyncState,
+    ) -> (String, broadcast::Sender<()>, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let (tx, rx) = broadcast::channel(1);
+        let app = order_router(state);
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    let mut rx = rx;
+                    let _ = rx.recv().await;
+                })
+                .await
+                .unwrap();
+        });
+        (url, tx, handle)
+    }
+
+    /// Serve BOTH the attest and order endpoints on a pre-bound listener.
+    fn serve_pending_combined(
+        node: PendingNode,
+        provider: Arc<FederationAttestationProvider>,
+        order_sync: OrderSyncState,
+    ) -> (broadcast::Sender<()>, tokio::task::JoinHandle<()>) {
+        let (tx, rx) = broadcast::channel(1);
+        let attest = AttestState {
+            provider,
+            db: node.db,
+            inbound_auth_token: Some(AUTH.to_string()),
+        };
+        let app = router(attest).merge(order_router(order_sync));
+        let handle = tokio::spawn(async move {
+            axum::serve(node.listener, app)
+                .with_graceful_shutdown(async move {
+                    let mut rx = rx;
+                    let _ = rx.recv().await;
+                })
+                .await
+                .unwrap();
+        });
+        (tx, handle)
+    }
+
+    /// A pending node with a pre-bound listener but an EMPTY db (the receiving
+    /// member that will learn an order only via replication).
+    async fn pending_empty_node() -> PendingNode {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        PendingNode {
+            listener,
+            url: format!("http://{addr}"),
+            db: empty_db(),
+        }
+    }
+
+    /// A valid record from an elected member seeds a SEPARATE (empty) db as a
+    /// trust-free `AwaitingDeposit` shell — the core of Phase 2.
+    #[tokio::test]
+    async fn order_record_replicates_to_a_separate_db_as_a_trust_free_shell() {
+        let (ka, kb) = (ed_key(11), ed_key(22));
+        let federation = Arc::new(vec![ka.verifying_key(), kb.verifying_key()]);
+        let order = await_mint_order();
+
+        let db_b = empty_db();
+        let state = OrderSyncState {
+            federation,
+            db: db_b.clone(),
+            inbound_auth_token: Some(AUTH.to_string()),
+        };
+        let (url, sd, srv) = spawn_order_endpoint(state).await;
+        assert!(
+            db_b.get_order(&order.id).unwrap().is_none(),
+            "receiver starts with no order (separate DB, no shared store)"
+        );
+
+        // An elected member (A) signs the record and replicates it over the wire.
+        let env = sign_order_record_ed25519(&order, &ka).unwrap();
+        let (status, body) =
+            post_order(&url, Some(AUTH), &serde_json::to_string(&env).unwrap()).await;
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("accepted"), "{body}");
+
+        // The receiver now has an AwaitingDeposit shell carrying NO trust.
+        let got = db_b.get_order(&order.id).unwrap().expect("shell persisted");
+        assert_eq!(got.id, order.id);
+        assert_eq!(got.status, OrderStatus::AwaitingDeposit);
+        assert_eq!(got.amount, order.amount);
+        assert_eq!(got.fee, order.fee);
+        assert_eq!(got.dest_address, order.dest_address);
+        assert!(
+            got.source_tx.is_none(),
+            "no deposit is trusted from a record"
+        );
+        assert!(got.mint_authorization.is_none());
+
+        let _ = sd.send(());
+        let _ = srv.await;
+    }
+
+    /// A record signed by a key that is NOT an elected member is rejected and
+    /// never persisted — the trust boundary at the network edge.
+    #[tokio::test]
+    async fn order_record_from_a_non_member_is_rejected_and_not_persisted() {
+        let (ka, kb) = (ed_key(11), ed_key(22));
+        let federation = Arc::new(vec![ka.verifying_key(), kb.verifying_key()]);
+        let outsider = ed_key(99);
+        let order = await_mint_order();
+
+        let db_b = empty_db();
+        let state = OrderSyncState {
+            federation,
+            db: db_b.clone(),
+            inbound_auth_token: Some(AUTH.to_string()),
+        };
+        let (url, sd, srv) = spawn_order_endpoint(state).await;
+
+        let env = sign_order_record_ed25519(&order, &outsider).unwrap();
+        let (status, body) =
+            post_order(&url, Some(AUTH), &serde_json::to_string(&env).unwrap()).await;
+        assert_eq!(status, 400, "{body}");
+        assert!(body.contains("unknown_signer"), "{body}");
+        assert!(
+            db_b.get_order(&order.id).unwrap().is_none(),
+            "an unelected peer's record must never be persisted"
+        );
+
+        let _ = sd.send(());
+        let _ = srv.await;
+    }
+
+    /// A record whose signed body was tampered after signing (mis-signed) is
+    /// rejected and never persisted.
+    #[tokio::test]
+    async fn order_record_tampered_body_is_rejected_and_not_persisted() {
+        let ka = ed_key(11);
+        let federation = Arc::new(vec![ka.verifying_key()]);
+        let order = await_mint_order();
+
+        let db_b = empty_db();
+        let state = OrderSyncState {
+            federation,
+            db: db_b.clone(),
+            inbound_auth_token: Some(AUTH.to_string()),
+        };
+        let (url, sd, srv) = spawn_order_endpoint(state).await;
+
+        // Keep the valid signature but inflate the amount in the signed body.
+        let env = sign_order_record_ed25519(&order, &ka).unwrap();
+        let tampered = OrderRecordEnvelope {
+            record: env
+                .record
+                .replace("\"amount\":1000000000000", "\"amount\":2000000000000"),
+            signer_key_id: env.signer_key_id.clone(),
+            signature_hex: env.signature_hex.clone(),
+        };
+        assert_ne!(tampered.record, env.record, "the body must actually change");
+        let (status, body) =
+            post_order(&url, Some(AUTH), &serde_json::to_string(&tampered).unwrap()).await;
+        assert_eq!(status, 400, "{body}");
+        assert!(body.contains("bad_signature"), "{body}");
+        assert!(db_b.get_order(&order.id).unwrap().is_none());
+
+        let _ = sd.send(());
+        let _ = srv.await;
+    }
+
+    /// The bearer fence gates the order endpoint exactly like `/api/attest`.
+    #[tokio::test]
+    async fn order_record_bad_bearer_is_rejected() {
+        let ka = ed_key(11);
+        let federation = Arc::new(vec![ka.verifying_key()]);
+        let order = await_mint_order();
+
+        let db_b = empty_db();
+        let state = OrderSyncState {
+            federation,
+            db: db_b.clone(),
+            inbound_auth_token: Some(AUTH.to_string()),
+        };
+        let (url, sd, srv) = spawn_order_endpoint(state).await;
+
+        let env = sign_order_record_ed25519(&order, &ka).unwrap();
+        let body = serde_json::to_string(&env).unwrap();
+        let (status, _) = post_order(&url, Some("wrong"), &body).await;
+        assert_eq!(status, 401);
+        let (status, _) = post_order(&url, None, &body).await;
+        assert_eq!(status, 401);
+        assert!(db_b.get_order(&order.id).unwrap().is_none());
+
+        let _ = sd.send(());
+        let _ = srv.await;
+    }
+
+    /// A replicated shell must NEVER overwrite (and thus never downgrade) an
+    /// order that already exists locally and may have advanced — the
+    /// exactly-once / no-double-mint guard.
+    #[tokio::test]
+    async fn order_record_does_not_overwrite_an_existing_advanced_order() {
+        let ka = ed_key(11);
+        let federation = Arc::new(vec![ka.verifying_key()]);
+        let order = await_mint_order();
+
+        // The receiver ALREADY has this order, independently advanced to
+        // DepositConfirmed with a real deposit tx.
+        let db_b = empty_db();
+        let mut advanced = order.clone();
+        advanced.source_tx = Some("bth_deposit_tx".to_string());
+        advanced.set_status(OrderStatus::DepositConfirmed);
+        db_b.insert_order(&advanced).unwrap();
+
+        let state = OrderSyncState {
+            federation,
+            db: db_b.clone(),
+            inbound_auth_token: Some(AUTH.to_string()),
+        };
+        let (url, sd, srv) = spawn_order_endpoint(state).await;
+
+        // A late AwaitingDeposit record for the same id is a benign no-op.
+        let env = sign_order_record_ed25519(&order, &ka).unwrap();
+        let (status, body) =
+            post_order(&url, Some(AUTH), &serde_json::to_string(&env).unwrap()).await;
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("already_present"), "{body}");
+
+        // The local order is UNCHANGED — never downgraded to AwaitingDeposit.
+        let got = db_b.get_order(&order.id).unwrap().unwrap();
+        assert_eq!(got.status, OrderStatus::DepositConfirmed);
+        assert_eq!(got.source_tx.as_deref(), Some("bth_deposit_tx"));
+
+        let _ = sd.send(());
+        let _ = srv.await;
+    }
+
+    /// Trust boundary: a replicated shell whose deposit the receiver has NOT
+    /// independently confirmed cannot authorize a mint — a valid federation
+    /// mint attestation binds against the on-record order and is refused
+    /// because the shell carries no confirmed source tx.
+    #[tokio::test]
+    async fn replicated_shell_without_independent_confirmation_does_not_authorize() {
+        use crate::attestation::sign_attestation_secp256k1;
+        use alloy::primitives::Address;
+
+        const NONCE: u64 = 7;
+        let (oa, ob) = (eth_key(11), eth_key(22));
+        let owners = vec![oa.address(), ob.address()];
+        let safe = Address::repeat_byte(0x5a);
+        let wbth = Address::repeat_byte(0xeb);
+        let chain_id = 1u64;
+        let ka = ed_key(11); // elected member identity for the record
+        let federation_ed = Arc::new(vec![ka.verifying_key()]);
+        let order = await_mint_order();
+
+        // Receiver B: eth-mint provider (owner ob) + order-sync, EMPTY db.
+        let provider_b = Arc::new(FederationAttestationProvider::new_eth_for_test(
+            &owners,
+            2,
+            chain_id,
+            safe,
+            wbth,
+            Arc::new(FixedNonce(NONCE)),
+            ob.clone(),
+        ));
+        let db_b = empty_db();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let node = PendingNode {
+            listener,
+            url: url.clone(),
+            db: db_b.clone(),
+        };
+        let os = OrderSyncState {
+            federation: federation_ed,
+            db: db_b.clone(),
+            inbound_auth_token: Some(AUTH.to_string()),
+        };
+        let (sd, srv) = serve_pending_combined(node, provider_b.clone(), os);
+
+        // Replicate the AwaitingDeposit shell (no source_tx on record).
+        let rec = sign_order_record_ed25519(&order, &ka).unwrap();
+        let (status, body) =
+            post_order(&url, Some(AUTH), &serde_json::to_string(&rec).unwrap()).await;
+        assert_eq!(status, 200, "{body}");
+
+        // A VALID owner attestation referencing a deposit tx the receiver never
+        // saw. It routes to the shell (no longer `unknown_order`) but binding
+        // fails: the shell has no independently-confirmed source tx.
+        let mut confirmed = order.clone();
+        confirmed.source_tx = Some("bth_deposit_tx".to_string());
+        let kind = eth_mint_kind(&confirmed, NONCE);
+        let now = chrono::Utc::now().timestamp().max(0) as u64;
+        let env = sign_attestation_secp256k1(
+            &kind,
+            &oa,
+            chain_id,
+            safe,
+            wbth,
+            "no-confirm",
+            now,
+            now + 120,
+        )
+        .unwrap();
+        let (status, body) =
+            post_attest(&url, Some(AUTH), &serde_json::to_string(&env).unwrap()).await;
+        assert_eq!(status, 409, "{body}");
+        assert!(body.contains("wrong_order"), "{body}");
+        // The shell never advanced and never collected a signer.
+        assert_eq!(
+            provider_b.distinct_signers_for_test(order.id, "bridge.mint_wbth"),
+            0
+        );
+        assert_eq!(
+            db_b.get_order(&order.id).unwrap().unwrap().status,
+            OrderStatus::AwaitingDeposit
+        );
+
+        let _ = sd.send(());
+        let _ = srv.await;
+    }
+
+    /// Headline acceptance: a two-instance federation with SEPARATE databases
+    /// completes a mint attestation to threshold OVER THE WIRE, where the
+    /// receiving instance learned the order ONLY via signed replication (no
+    /// shared store), then independently confirmed the deposit itself.
+    #[tokio::test]
+    async fn two_node_mint_reaches_threshold_across_separate_dbs_via_replication() {
+        use alloy::primitives::Address;
+
+        const NONCE: u64 = 7;
+        let (oa, ob) = (eth_key(11), eth_key(22));
+        let owners = vec![oa.address(), ob.address()];
+        let safe = Address::repeat_byte(0x5a);
+        let wbth = Address::repeat_byte(0xeb);
+        let chain_id = 1u64;
+        let (ka, kb) = (ed_key(11), ed_key(22));
+        let federation_ed = Arc::new(vec![ka.verifying_key(), kb.verifying_key()]);
+        let order_await = await_mint_order();
+
+        let mk = |local| {
+            FederationAttestationProvider::new_eth_for_test(
+                &owners,
+                2,
+                chain_id,
+                safe,
+                wbth,
+                Arc::new(FixedNonce(NONCE)),
+                local,
+            )
+        };
+
+        // Node A already has the order (its public API created it). Node B's
+        // db is EMPTY — it will learn the order only via replication.
+        let pending_a = pending_node(&order_await).await;
+        let pending_b = pending_empty_node().await;
+        let url_b = pending_b.url.clone();
+        let db_a = pending_a.db.clone();
+        let db_b = pending_b.db.clone();
+
+        let node_a = Arc::new(mk(oa).with_peer_push(push_to(&pending_b.url)));
+        let node_b = Arc::new(mk(ob).with_peer_push(push_to(&pending_a.url)));
+
+        let os_a = OrderSyncState {
+            federation: federation_ed.clone(),
+            db: db_a.clone(),
+            inbound_auth_token: Some(AUTH.to_string()),
+        };
+        let os_b = OrderSyncState {
+            federation: federation_ed.clone(),
+            db: db_b.clone(),
+            inbound_auth_token: Some(AUTH.to_string()),
+        };
+        let (sd_a, srv_a) = serve_pending_combined(pending_a, node_a.clone(), os_a);
+        let (sd_b, srv_b) = serve_pending_combined(pending_b, node_b.clone(), os_b);
+
+        assert!(
+            db_b.get_order(&order_await.id).unwrap().is_none(),
+            "B starts with no knowledge of the order"
+        );
+
+        // 1) A replicates the signed order record to B over the wire.
+        let rec = sign_order_record_ed25519(&order_await, &ka).unwrap();
+        let (status, body) =
+            post_order(&url_b, Some(AUTH), &serde_json::to_string(&rec).unwrap()).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(
+            db_b.get_order(&order_await.id).unwrap().unwrap().status,
+            OrderStatus::AwaitingDeposit
+        );
+
+        // 2) INDEPENDENT deposit confirmation on BOTH nodes (each node's own watcher
+        //    observes the same on-chain deposit).
+        for db in [&db_a, &db_b] {
+            assert!(db
+                .record_deposit_detected(&order_await.id, "bth_deposit_tx", order_await.amount)
+                .unwrap());
+            db.update_order_status(&order_await.id, &OrderStatus::DepositConfirmed, None)
+                .unwrap();
+        }
+
+        // 3) The confirmed order drives the mint attestation over the wire.
+        let mut order = order_await.clone();
+        order.source_tx = Some("bth_deposit_tx".to_string());
+        order.set_status(OrderStatus::DepositConfirmed);
+
+        assert!(
+            node_a.authorize_mint(&order).await.is_err(),
+            "A alone is 1/2"
+        );
+        wait_for(|| node_b.distinct_signers_for_test(order.id, "bridge.mint_wbth") == 1).await;
+        let auth = node_b
+            .authorize_mint(&order)
+            .await
+            .expect("B — which learned the order only via replication — reaches threshold");
+        assert_eq!(auth.signatures.len(), 2);
+        assert!(auth.meets_threshold());
+
+        let _ = sd_a.send(());
+        let _ = sd_b.send(());
+        let _ = srv_a.await;
+        let _ = srv_b.await;
     }
 }

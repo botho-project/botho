@@ -86,14 +86,21 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use bth_bridge_core::{BridgeConfig, BridgeOrder, Chain, ChainAddress, OrderStatus, OrderType};
+use bth_bridge_core::{
+    sign_order_record_ed25519, BridgeConfig, BridgeOrder, Chain, ChainAddress, OrderStatus,
+    OrderType,
+};
 use chrono::Utc;
+use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::db::{ActivityAggregate, ActivityBreakdown, Database, ReleaseIntent};
+use crate::{
+    db::{ActivityAggregate, ActivityBreakdown, Database, ReleaseIntent},
+    federation::OrderBroadcaster,
+};
 
 /// Runtime configuration snapshot for the public order API, derived from
 /// [`BridgeConfig`] at startup. Held behind an `Arc` in [`PublicApiState`].
@@ -184,6 +191,21 @@ pub struct PublicApiState {
     limiter: Arc<RateLimiter>,
     /// Cached `/api/bridge/stats` aggregate + when it was computed (#1054).
     stats_cache: Arc<Mutex<Option<(Instant, BridgeStatsResponse)>>>,
+    /// Optional signed mint order-record replication to the elected federation
+    /// peers (#1050 Phase 2). `None` (single-node dev, or no local signing
+    /// key / no peers configured) simply disables replication — order-create
+    /// still works, it just is not mirrored to peers.
+    order_replication: Option<Arc<OrderReplication>>,
+}
+
+/// The local signing key + peer broadcaster used to replicate a freshly
+/// created mint order to the elected federation members (#1050 Phase 2).
+pub(crate) struct OrderReplication {
+    /// This node's Ed25519 federation signing key (the elected-member
+    /// identity that authenticates the replicated record).
+    pub signing_key: SigningKey,
+    /// Fan-out to the peers' `POST /api/order` endpoints.
+    pub broadcaster: OrderBroadcaster,
 }
 
 impl PublicApiState {
@@ -194,7 +216,23 @@ impl PublicApiState {
             cfg: Arc::new(cfg),
             limiter: Arc::new(RateLimiter::new()),
             stats_cache: Arc::new(Mutex::new(None)),
+            order_replication: None,
         }
+    }
+
+    /// Enable #1050 Phase 2 order-record replication: every mint order created
+    /// through this API is signed with `signing_key` and pushed to the
+    /// elected peers via `broadcaster`.
+    pub fn with_order_replication(
+        mut self,
+        signing_key: SigningKey,
+        broadcaster: OrderBroadcaster,
+    ) -> Self {
+        self.order_replication = Some(Arc::new(OrderReplication {
+            signing_key,
+            broadcaster,
+        }));
+        self
     }
 }
 
@@ -653,6 +691,22 @@ async fn create_mint_order(
         &format!("public API mint order: dest={} amount={}", chain, amount),
     ) {
         warn!("public api: audit log failed: {}", e);
+    }
+
+    // #1050 Phase 2: replicate the AwaitingDeposit shell to the elected
+    // federation peers so their own watchers can independently confirm the
+    // deposit (closing the `refused:unknown_order` gap for a separate-DB
+    // federation). Signed with this node's federation identity; fire-and-forget
+    // (a slow/unreachable peer must never fail order-create). Peers gain NO
+    // trust from the record — see `federation::receive_order`.
+    if let Some(repl) = &state.order_replication {
+        match sign_order_record_ed25519(&order, &repl.signing_key) {
+            Ok(env) => repl.broadcaster.broadcast(&env),
+            Err(e) => warn!(
+                "public api: could not sign order record for replication: {}",
+                e
+            ),
+        }
     }
 
     (

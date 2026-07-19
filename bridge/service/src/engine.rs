@@ -10,11 +10,11 @@ use tracing::{debug, error, info, warn};
 use crate::{
     api,
     attestation::{
-        AttestationProvider, DisabledAttestationProvider, FederationAttestationProvider,
-        StubAttestationProvider,
+        load_local_ed25519, parse_ed25519_federation, AttestationProvider,
+        DisabledAttestationProvider, FederationAttestationProvider, StubAttestationProvider,
     },
     db::{Database, LimitCheck, LimitViolation},
-    federation::{self, AttestState, PeerBroadcaster},
+    federation::{self, AttestState, OrderBroadcaster, OrderSyncState, PeerBroadcaster},
     mint::{ethereum::EthMinter, solana::SolMinter, ConfirmationStatus, Minter},
     public_api::{self, PublicApiConfig, PublicApiState},
     release::{bth::BthReleaser, PreparedRelease, ReleaseConfirmation, Releaser},
@@ -357,8 +357,42 @@ impl BridgeEngine {
             None
         } else {
             let addr = self.config.public_api.listen.clone();
-            let state =
+            let mut state =
                 PublicApiState::new(self.db.clone(), PublicApiConfig::from_config(&self.config));
+
+            // #1050 Phase 2: replicate created mint orders (signed) to the
+            // elected federation peers so their own watchers can independently
+            // confirm the deposit. Enabled only when this node has a local
+            // Ed25519 federation key, an elected member set (bth.release_signers),
+            // AND peers to push to. Any missing piece just disables replication
+            // (single-node development is unaffected).
+            let local_ed25519 = match load_local_ed25519(&self.config) {
+                Ok(key) => key,
+                Err(e) => {
+                    warn!(
+                        "order replication disabled: cannot load local ed25519 key: {}",
+                        e
+                    );
+                    None
+                }
+            };
+            let order_broadcaster = OrderBroadcaster::new(
+                &self.config.federation.peers,
+                self.config.federation.peer_auth_token.clone(),
+                Duration::from_secs(self.config.federation.peer_push_timeout_secs.max(1)),
+            );
+            if let (Some(key), Some(broadcaster), false) = (
+                local_ed25519,
+                order_broadcaster,
+                self.config.bth.release_signers.is_empty(),
+            ) {
+                info!(
+                    "public order API: replicating mint orders to {} federation peer(s) (#1050 Phase 2)",
+                    self.config.federation.peers.len()
+                );
+                state = state.with_order_replication(key, broadcaster);
+            }
+
             let public_shutdown = self.shutdown_tx.subscribe();
             Some(tokio::spawn(async move {
                 if let Err(e) = public_api::serve_public(addr, state, public_shutdown).await {
@@ -384,9 +418,35 @@ impl BridgeEngine {
                     db: self.db.clone(),
                     inbound_auth_token: self.config.federation.inbound_auth_token.clone(),
                 };
+                // #1050 Phase 2: co-mount the signed order-record replication
+                // endpoint (`POST /api/order`) on the same federation listener.
+                // The elected member set that authenticates a mint order
+                // record is the BTH release-signer set (the Ed25519 identity of
+                // each elected machine). Disabled when no such set is
+                // configured (nothing could authenticate a record).
+                let order_sync = match parse_ed25519_federation(
+                    &self.config.bth.release_signers,
+                    "bth.release_signers",
+                ) {
+                    Ok(keys) if !keys.is_empty() => Some(OrderSyncState {
+                        federation: Arc::new(keys),
+                        db: self.db.clone(),
+                        inbound_auth_token: self.config.federation.inbound_auth_token.clone(),
+                    }),
+                    Ok(_) => None,
+                    Err(e) => {
+                        warn!(
+                            "order-record endpoint disabled: bad bth.release_signers: {}",
+                            e
+                        );
+                        None
+                    }
+                };
                 let attest_shutdown = self.shutdown_tx.subscribe();
                 Some(tokio::spawn(async move {
-                    if let Err(e) = federation::serve(addr, state, attest_shutdown).await {
+                    if let Err(e) =
+                        federation::serve(addr, state, order_sync, attest_shutdown).await
+                    {
                         error!("Bridge attestation endpoint error: {}", e);
                     }
                 }))

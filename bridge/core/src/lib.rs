@@ -18,6 +18,7 @@ pub mod election;
 mod happy_path_tests;
 pub mod nonce;
 pub mod order;
+pub mod order_sync;
 
 /// Adversarial / cross-domain attestation tests (bridge epic #816, Phase 3).
 #[cfg(test)]
@@ -46,3 +47,7 @@ pub use election::{
 };
 pub use nonce::{NonceStore, ReserveOutcome};
 pub use order::{derive_order_id, BridgeOrder, OrderStatus, OrderType};
+pub use order_sync::{
+    sign_order_record_ed25519, MintOrderShell, OrderRecordEnvelope, OrderRecordRejectReason,
+    ORDER_RECORD_DOMAIN_TAG,
+};
