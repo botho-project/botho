@@ -19,10 +19,14 @@
  *   - botho_getAddress  — the wallet's stealth receive address (silent read)
  *   - botho_getBalance  — spendable balance via scan (silent read)
  *   - botho_getHistory  — receive history projected from persisted scan state (silent read, #1092)
+ *   - botho_listContacts — saved address book (silent read, #1093)
+ *   - botho_addContact  — save a validated (label, address) contact (#1093)
+ *   - botho_removeContact — drop a saved contact by id (#1093)
  *   - botho_send        — build + sign + submit, behind a confirmation dialog
  *   - botho_showReceive — receive dialog (stealth address, copyable)
  *   - botho_showBalance — balance dialog
  *   - botho_showHistory — transaction-history dialog (#1092)
+ *   - botho_showContacts — contacts dialog (#1093)
  *   - botho_showMnemonic — reveal the derived recovery phrase (confirmed backup)
  *
  * Live-testnet send validation is deferred to a follow-up (betanet is frozen at
@@ -56,9 +60,16 @@ import {
   type HistoryEntry,
 } from './state';
 import {
+  addContact,
+  removeContact,
+  readContacts,
+  writeContacts,
+} from './contacts';
+import {
   receiveContent,
   balanceContent,
   historyContent,
+  contactsContent,
   sendConfirmContent,
   mnemonicBackupContent,
 } from './ui';
@@ -214,6 +225,34 @@ export const onRpcRequest: OnRpcRequestHandler = async ({ request }) => {
       return { entries } as unknown as Json;
     }
 
+    case 'botho_listContacts': {
+      // Silent read of the saved address book.
+      const contacts = await readContacts();
+      return { contacts } as unknown as Json;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Contacts: validated read-modify-write over the `contacts` namespace */
+    /* (spreads the persisted blob so `scan` is never clobbered — #1093).  */
+    /* ------------------------------------------------------------------ */
+    case 'botho_addContact': {
+      const label = requireString(params, 'label');
+      const address = requireString(params, 'address');
+      // `addContact` validates the address via `isValidAddress` and rejects an
+      // invalid address / empty / over-length label with InvalidParamsError.
+      const book = addContact(await readContacts(), { label, address });
+      await writeContacts(book);
+      const contact = book[book.length - 1];
+      return { contact, contacts: book } as unknown as Json;
+    }
+
+    case 'botho_removeContact': {
+      const id = requireString(params, 'id');
+      const book = removeContact(await readContacts(), id);
+      await writeContacts(book);
+      return { contacts: book } as unknown as Json;
+    }
+
     /* ------------------------------------------------------------------ */
     /* Dialog-driven flows                                                */
     /* ------------------------------------------------------------------ */
@@ -235,6 +274,12 @@ export const onRpcRequest: OnRpcRequestHandler = async ({ request }) => {
       const entries = await scanHistory(rpcUrl);
       await alert(historyContent(entries, rpcUrl));
       return { entries, count: entries.length } as unknown as Json;
+    }
+
+    case 'botho_showContacts': {
+      const contacts = await readContacts();
+      await alert(contactsContent(contacts));
+      return { contacts, count: contacts.length } as unknown as Json;
     }
 
     case 'botho_showMnemonic': {

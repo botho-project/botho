@@ -26,10 +26,14 @@ All params/results are JSON-safe; amounts are string-encoded `u64` picocredits
 | `botho_getAddress` | — | none | `{ address, derivation }` |
 | `botho_getBalance` | `{ rpcUrl }` | none | `{ spendablePicocredits }` |
 | `botho_getHistory` | `{ rpcUrl }` | none | `{ entries }` |
+| `botho_listContacts` | — | none | `{ contacts }` |
+| `botho_addContact` | `{ label, address }` | none | `{ contact, contacts }` |
+| `botho_removeContact` | `{ id }` | none | `{ contacts }` |
 | `botho_send` | `{ rpcUrl, recipientAddress, amountPicocredits, feePicocredits? }` | confirmation | `{ txHash, txBytes }` |
 | `botho_showReceive` | — | alert (address) | `{ address }` |
 | `botho_showBalance` | `{ rpcUrl }` | alert (balance) | `{ spendablePicocredits }` |
 | `botho_showHistory` | `{ rpcUrl }` | alert (history) | `{ entries, count }` |
+| `botho_showContacts` | — | alert (contacts) | `{ contacts, count }` |
 | `botho_showMnemonic` | — | confirm → alert | `{ revealed }` |
 
 `rpcUrl` is the **user-selected ingress node**, carrying over the web wallet's
@@ -141,6 +145,34 @@ blockHeight` (clamped at 0), so a shallow, reorg-prone receive near the tip is
 > of scope** here (it is balance-critical) and tracked as a dedicated follow-up.
 > The **non-destructive** half — surfacing per-entry `confirmations` so a shallow
 > receive is visible — is what this view ships.
+
+## Contacts / address book (#1093)
+
+`botho_addContact` / `botho_listContacts` / `botho_removeContact` (silent) and
+`botho_showContacts` (dialog) manage a small **address book** so a user does not
+have to re-paste an opaque `botho://2/…` stealth address every time they send to
+the same counterparty. Each entry is a validated `(label, address)` pair:
+
+```jsonc
+{
+  "id": "1a2b3c4d",              // stable id (FNV-1a hash of the normalized address)
+  "label": "My other wallet",   // trimmed, non-empty, ≤ 64 chars
+  "address": "tbotho://2/…"      // validated via @botho/core isValidAddress
+}
+```
+
+Contacts live under a **new `contacts` sibling key** in the *same* encrypted
+`snap_manageState` blob as `scan` (`{ version, scan, contacts }`). This is
+**purely additive**: `botho_addContact` validates the address with the shared
+`isValidAddress` (rejecting an invalid address / empty / over-length label with
+`InvalidParamsError`), then read-modify-writes the book while **spreading the
+persisted blob first** so it **never clobbers the `scan` checkpoint** — and
+symmetrically, a balance/history write preserves `contacts`. There is **no
+`STATE_VERSION` bump and no migration** (a bump would wrongly discard the scan
+checkpoint). Add/remove are dApp-driven; the dialog is view-only. This is the
+Snap analogue of the web wallet's `@botho/core` `EncryptedAddressBook` (#476) — a
+different runtime/storage surface, so it reuses only the address-validation
+utility, not the localStorage implementation.
 
 ## Key derivation: MetaMask SRP → Botho RootIdentity
 
