@@ -50,6 +50,13 @@ export const zh: Record<keyof typeof en, string> = {
   'claim.youReceive': '你将收到',
   'claim.hint': '链接提示：{amount}（仅供参考——以上方扫描到的金额为准）',
 
+  'request.heading': '付款请求',
+  'request.body': '有人正在请求付款。请核对下方的金额和收款人，然后确认以从你的钱包付款。',
+  'request.amount': '请求金额',
+  'request.amountAny': '任意金额（由你决定）',
+  'request.memo': '备注',
+  'request.payTo': '付款至',
+
   'mnemonic.heading': 'Botho 恢复助记词',
   'mnemonic.body':
     '这 24 个单词由你的 MetaMask 秘密恢复助记词派生而来，拥有此 Botho 钱包的全部支配权。' +

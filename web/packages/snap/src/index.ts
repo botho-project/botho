@@ -25,6 +25,8 @@
  *   - botho_send        — build + sign + submit, behind a confirmation dialog
  *   - botho_previewClaimLink — scan a claim link (parse → derive → scan → alert), pure read (#1094)
  *   - botho_claimLink   — sweep a claim link into this wallet, behind a confirmation (#1094)
+ *   - botho_previewPaymentRequest — parse + validate a /pay#… request link, pure read, no RPC (#1108)
+ *   - botho_showPaymentRequest — same parse behind an informational preview dialog (#1108)
  *   - botho_showReceive — receive dialog (stealth address, copyable)
  *   - botho_showBalance — balance dialog
  *   - botho_showHistory — transaction-history dialog (#1092)
@@ -75,9 +77,11 @@ import {
   sendConfirmContent,
   claimPreviewContent,
   claimConfirmContent,
+  paymentRequestContent,
   mnemonicBackupContent,
 } from './ui';
 import { parseClaimLink, scanClaimLink, buildSweep } from './claim';
+import { parsePaymentRequest, type ParsedPaymentRequest } from './request';
 import { resolveLocale, t } from './i18n';
 
 declare const snap: {
@@ -188,6 +192,24 @@ async function scanHistory(rpcUrl: string): Promise<HistoryEntry[]> {
     sendRpc: makeSendRpc(call),
   });
   return deriveHistory(ownedOutputs, spentTargetKeys(ownedOutputs, spendable), tip);
+}
+
+/**
+ * Shape a parsed payment request into a JSON-safe RPC result. `amountPicocredits`
+ * is a string-encoded picocredit amount (matching the rest of the Snap surface)
+ * and is OMITTED entirely when the link left the amount open, so the caller knows
+ * to prompt for it before threading the fields into `botho_send`. `memo` is
+ * likewise omitted when absent.
+ */
+function paymentRequestResult(parsed: ParsedPaymentRequest): Json {
+  const out: Record<string, Json> = { to: parsed.to };
+  if (parsed.amountPicocredits !== undefined) {
+    out.amountPicocredits = parsed.amountPicocredits.toString();
+  }
+  if (parsed.memo !== undefined) {
+    out.memo = parsed.memo;
+  }
+  return out;
 }
 
 /** Ask the user to approve/reject a confirmation dialog. */
@@ -404,6 +426,35 @@ export const onRpcRequest: OnRpcRequestHandler = async ({ request }) => {
 
       const { txHash } = await call<{ txHash: string }>('tx_submit', { tx_hex: txHex });
       return { txHash, netPicocredits: sweptScan.netPicocredits.toString() } as Json;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Payment-request (pull payment) ingress (#1108): parse -> validate.  */
+    /* A request link carries only the requester's PUBLIC address (+ an     */
+    /* optional amount/memo) — nothing secret — so the fields are echoed    */
+    /* freely (the payer must verify them). Preview is a PURE parse with no  */
+    /* node RPC, so it is not gated on betanet. To actually pay, the caller  */
+    /* threads the returned { to, amountPicocredits?, memo? } straight into  */
+    /* the existing param-driven `botho_send` — there is no new payer RPC,   */
+    /* and the live send inherits the #1051 gap unchanged.                  */
+    /* ------------------------------------------------------------------ */
+    case 'botho_previewPaymentRequest': {
+      const link = requireString(params, 'link');
+      // Pure parse + address-format validation. A malformed link / address fails
+      // with a typed InvalidParamsError; no node round-trip, no dialog.
+      return paymentRequestResult(parsePaymentRequest(link));
+    }
+
+    case 'botho_showPaymentRequest': {
+      const link = requireString(params, 'link');
+      const parsed = parsePaymentRequest(link);
+      await alert(
+        paymentRequestContent(
+          { to: parsed.to, amountPicocredits: parsed.amountPicocredits, memo: parsed.memo },
+          locale,
+        ),
+      );
+      return paymentRequestResult(parsed);
     }
 
     default:

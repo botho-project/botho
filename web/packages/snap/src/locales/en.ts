@@ -59,6 +59,16 @@ export const en = {
   'claim.youReceive': 'You receive',
   'claim.hint': 'Link hint: {amount} (cosmetic — the scanned amount above is authoritative)',
 
+  // Payment-request (pull payment) dialog (#1108)
+  'request.heading': 'Payment request',
+  'request.body':
+    'Someone is requesting a payment. Check the amount and the recipient below, ' +
+    'then confirm to pay from your wallet.',
+  'request.amount': 'Requested amount',
+  'request.amountAny': 'Any amount (you choose)',
+  'request.memo': 'Note',
+  'request.payTo': 'Pay to',
+
   // Mnemonic-backup dialog
   'mnemonic.heading': 'Botho recovery phrase',
   'mnemonic.body':

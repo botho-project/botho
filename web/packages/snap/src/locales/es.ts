@@ -57,6 +57,15 @@ export const es: Record<keyof typeof en, string> = {
   'claim.youReceive': 'Recibes',
   'claim.hint': 'Pista del enlace: {amount} (cosmética: el importe escaneado de arriba es el que manda)',
 
+  'request.heading': 'Solicitud de pago',
+  'request.body':
+    'Alguien está solicitando un pago. Revisa el importe y el destinatario a ' +
+    'continuación y confirma para pagar desde tu monedero.',
+  'request.amount': 'Importe solicitado',
+  'request.amountAny': 'Cualquier importe (tú eliges)',
+  'request.memo': 'Nota',
+  'request.payTo': 'Pagar a',
+
   'mnemonic.heading': 'Frase de recuperación de Botho',
   'mnemonic.body':
     'Estas 24 palabras se derivan de tu Frase de Recuperación Secreta de ' +
