@@ -25,6 +25,14 @@ export {
   type ClaimLinkSecret,
 } from './claim-link'
 
+// Payment-request (pull payment link) helpers (#470, promoted for the Snap #1108)
+export {
+  buildPaymentRequestFragment,
+  buildPaymentRequestLink,
+  parsePaymentRequestFragment,
+  type PaymentRequest,
+} from './payment-request'
+
 // Re-export address utilities
 export {
   deriveKeypairs,

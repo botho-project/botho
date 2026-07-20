@@ -263,6 +263,48 @@ export function claimConfirmContent(view: ClaimView, locale: Locale): JSXElement
   });
 }
 
+/** Fields rendered in the payment-request (pull payment) preview dialog. */
+export interface PaymentRequestView {
+  /** The requester's PUBLIC address to pay — echoed in full for verification. */
+  to: string;
+  /** Requested amount in picocredits, if the link carried one (payer chooses if absent). */
+  amountPicocredits?: bigint;
+  /** Optional human-readable note attached to the request. */
+  memo?: string;
+}
+
+/**
+ * Payment-request PREVIEW dialog (alert): shows who a `/pay#…` link asks the user
+ * to pay, the requested amount (or "any amount" when the link leaves it open),
+ * and an optional memo (`botho_showPaymentRequest`). A request link carries only
+ * the requester's PUBLIC address — nothing secret — so, unlike the claim dialogs,
+ * every field is shown in the clear (the payer must verify the address). The
+ * actual payment is a separate, param-driven `botho_send` prefilled from these
+ * fields; this dialog does not submit anything.
+ */
+export function paymentRequestContent(view: PaymentRequestView, locale: Locale): JSXElement {
+  const rows: JSXElement[] = [
+    Heading({ children: t('request.heading', locale) }),
+    Text({ children: t('request.body', locale) }),
+    Row({
+      label: t('request.amount', locale),
+      children: Text({
+        children:
+          view.amountPicocredits !== undefined
+            ? formatBTHWithUnit(view.amountPicocredits)
+            : t('request.amountAny', locale),
+      }),
+    }),
+  ];
+  if (view.memo !== undefined) {
+    rows.push(Row({ label: t('request.memo', locale), children: Text({ children: view.memo }) }));
+  }
+  rows.push(Divider({}));
+  rows.push(Text({ children: t('request.payTo', locale) }));
+  rows.push(Copyable({ value: view.to }));
+  return Box({ children: rows });
+}
+
 /** Mnemonic-backup dialog: the derived 24-word Botho recovery phrase. */
 export function mnemonicBackupContent(mnemonic: string, locale: Locale): JSXElement {
   return Box({

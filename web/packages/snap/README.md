@@ -32,6 +32,8 @@ All params/results are JSON-safe; amounts are string-encoded `u64` picocredits
 | `botho_send` | `{ rpcUrl, recipientAddress, amountPicocredits, feePicocredits? }` | confirmation | `{ txHash, txBytes }` |
 | `botho_previewClaimLink` | `{ rpcUrl, link }` | alert (claim) | `{ grossPicocredits, feePicocredits, netPicocredits }` |
 | `botho_claimLink` | `{ rpcUrl, link }` | confirmation | `{ txHash, netPicocredits }` |
+| `botho_previewPaymentRequest` | `{ link }` | none | `{ to, amountPicocredits?, memo? }` |
+| `botho_showPaymentRequest` | `{ link }` | alert (request) | `{ to, amountPicocredits?, memo? }` |
 | `botho_showReceive` | — | alert (address) | `{ address }` |
 | `botho_showBalance` | `{ rpcUrl }` | alert (balance) | `{ spendablePicocredits }` |
 | `botho_showHistory` | `{ rpcUrl }` | alert (history) | `{ entries, count }` |
@@ -219,14 +221,55 @@ result / error message**, and never logged. `snap.manifest.json` needs **no**
 permission change (`endowment:network-access` + `snap_dialog` + `snap_getEntropy`
 already cover it).
 
-> **Not built here (deferred siblings).** The **request-link / pull** flow
-> (`/pay#…`, where the payer keeps custody until they approve) is a *request*
-> feature, not receive ingress; its encoder lives in the web wallet
-> (`web-wallet/src/lib/payment-request.ts`), not `@botho/core`, and would need
-> promotion + an SES-safe base64 pass — filed as a separate follow-up. An
-> **address QR** is **infeasible**: Botho v2 post-quantum stealth addresses
+> **Note.** The **request-link / pull** flow (`/pay#…`) is now built — see
+> [Payment-request (pull payment) ingress](#payment-request-pull-payment-ingress-1108)
+> below. An **address QR** is **infeasible**: Botho v2 post-quantum stealth addresses
 > (`tbotho://2/…`) are too large for a scannable QR (see the web wallet's
 > `ReceiveModal.tsx`) — the `Copyable` field is the correct affordance.
+
+## Payment-request (pull payment) ingress (#1108)
+
+A Botho **payment-request link** (`/pay#…`) is the *pull* complement to the
+claim-link *push* flow above. Where a claim link is a **bearer instrument** (the
+fragment IS an ephemeral spending secret), a request link carries only the
+requester's **PUBLIC address** plus an optional amount and memo — it asks the
+holder to **pay** the requester, and the payer keeps custody until they approve a
+normal send.
+
+The encoder/parser was **promoted into `@botho/core`**
+(`wallet/payment-request.ts`) so the Snap can import it; the web wallet's
+`web-wallet/src/lib/payment-request.ts` is now a thin re-export, so `/pay#…` links
+minted by `RequestModal.tsx` keep working. The base64url step is **SES-safe**:
+`@scure/base` `base64urlnopad` + a pure-JS UTF-8 codec (no `btoa` / `atob` /
+`TextEncoder` / `TextDecoder`, which are not reliably endowed in the Snaps SES
+executor — the same casualty `src/format.ts` documents for `Intl`), with output
+**byte-identical** to the previous `btoa`-based encoder (regression-tested in
+`@botho/core`).
+
+Two methods surface it (`src/request.ts` + `src/ui.ts`):
+
+- `botho_previewPaymentRequest` — a **pure parse** (no node RPC): it parses the
+  link (full URL, bare fragment, or leading-`#`), **validates the recipient
+  address format** at the boundary via `@botho/core` `isValidAddress` (the same
+  gate `botho_send` applies), and returns `{ to, amountPicocredits?, memo? }`. A
+  malformed fragment or a malformed address fails with a typed
+  `InvalidParamsError` before any dialog. Because there is no node round-trip, it
+  is **fully deterministic and not gated on betanet**.
+- `botho_showPaymentRequest` — the same parse behind an informational **alert
+  dialog** showing who to pay, the requested amount (or "any amount" when the link
+  leaves it open), and the memo.
+
+**Security — push vs pull.** A request link carries **nothing secret** (the
+address is public), so — unlike the claim dialogs — every field is shown in the
+clear; the payer must *see* `to` / `amount` / `memo` to verify who they are
+paying. There is deliberately **no bearer-secret redaction** here.
+
+**Paying.** There is **no new payer RPC**: to complete the payment the caller
+threads the previewed `{ to, amountPicocredits?, memo? }` straight into the
+existing param-driven `botho_send` (supplying the amount itself when the link left
+it open). The live send therefore inherits the existing **`#1051`** betanet gate
+unchanged — parse/preview is not blocked by it. `snap.manifest.json` needs **no**
+permission change (preview touches neither the network nor state).
 
 ## Internationalization (i18n, #1095)
 
