@@ -78,6 +78,7 @@ import {
   mnemonicBackupContent,
 } from './ui';
 import { parseClaimLink, scanClaimLink, buildSweep } from './claim';
+import { resolveLocale, t } from './i18n';
 
 declare const snap: {
   request(args: { method: string; params?: unknown }): Promise<unknown>;
@@ -209,6 +210,13 @@ export const onRpcRequest: OnRpcRequestHandler = async ({ request }) => {
   ensureSigner();
   const params = (request.params ?? undefined) as Record<string, unknown> | undefined;
 
+  // Resolve the dialog locale once per invocation from the MetaMask user's
+  // preference (`snap_getPreferences.locale`, no extra manifest permission),
+  // narrowed to the Snap's supported set and defaulting to `en` (#1095). Threaded
+  // into every content builder and the user-facing rejection messages below.
+  // Silent-read methods simply don't use it.
+  const locale = await resolveLocale();
+
   switch (request.method) {
     /* ------------------------------------------------------------------ */
     /* Silent reads                                                       */
@@ -263,40 +271,40 @@ export const onRpcRequest: OnRpcRequestHandler = async ({ request }) => {
     /* ------------------------------------------------------------------ */
     case 'botho_showReceive': {
       const wallet = await deriveWallet();
-      await alert(receiveContent(wallet.address));
+      await alert(receiveContent(wallet.address, locale));
       return { address: wallet.address } as Json;
     }
 
     case 'botho_showBalance': {
       const rpcUrl = requireString(params, 'rpcUrl');
       const balance = await scanBalance(rpcUrl);
-      await alert(balanceContent(balance, rpcUrl));
+      await alert(balanceContent(balance, rpcUrl, locale));
       return { spendablePicocredits: balance.toString() } as Json;
     }
 
     case 'botho_showHistory': {
       const rpcUrl = requireString(params, 'rpcUrl');
       const entries = await scanHistory(rpcUrl);
-      await alert(historyContent(entries, rpcUrl));
+      await alert(historyContent(entries, rpcUrl, locale));
       return { entries, count: entries.length } as unknown as Json;
     }
 
     case 'botho_showContacts': {
       const contacts = await readContacts();
-      await alert(contactsContent(contacts));
+      await alert(contactsContent(contacts, locale));
       return { contacts, count: contacts.length } as unknown as Json;
     }
 
     case 'botho_showMnemonic': {
       // Full spending authority — always behind an explicit user confirmation.
       const proceed = await confirm(
-        mnemonicBackupContent('•••• •••• (revealed after you confirm) ••••'),
+        mnemonicBackupContent(t('mnemonic.placeholder', locale), locale),
       );
       if (!proceed) {
-        throw new UserRejectedRequestError('User declined to reveal the recovery phrase.');
+        throw new UserRejectedRequestError(t('error.rejectMnemonic', locale));
       }
       const mnemonic = await revealMnemonic();
-      await alert(mnemonicBackupContent(mnemonic));
+      await alert(mnemonicBackupContent(mnemonic, locale));
       return { revealed: true } as Json;
     }
 
@@ -317,15 +325,18 @@ export const onRpcRequest: OnRpcRequestHandler = async ({ request }) => {
       const { call } = await connectAndGuard(rpcUrl);
 
       const approved = await confirm(
-        sendConfirmContent({
-          recipientAddress,
-          amountPicocredits: amount,
-          feePicocredits: fee,
-          rpcUrl,
-        }),
+        sendConfirmContent(
+          {
+            recipientAddress,
+            amountPicocredits: amount,
+            feePicocredits: fee,
+            rpcUrl,
+          },
+          locale,
+        ),
       );
       if (!approved) {
-        throw new UserRejectedRequestError('User rejected the send.');
+        throw new UserRejectedRequestError(t('error.rejectSend', locale));
       }
 
       const wallet = await deriveWallet();
@@ -360,7 +371,7 @@ export const onRpcRequest: OnRpcRequestHandler = async ({ request }) => {
       const { call } = await connectAndGuard(rpcUrl);
       const scan = await scanClaimLink(mnemonic, makeSendRpc(call));
 
-      await alert(claimPreviewContent({ ...scan, amountHint, rpcUrl }));
+      await alert(claimPreviewContent({ ...scan, amountHint, rpcUrl }, locale));
       return {
         grossPicocredits: scan.grossPicocredits.toString(),
         feePicocredits: scan.feePicocredits.toString(),
@@ -381,9 +392,9 @@ export const onRpcRequest: OnRpcRequestHandler = async ({ request }) => {
       // Scan so the confirmation shows the authoritative claimable/net amount.
       const scan = await scanClaimLink(mnemonic, rpc);
 
-      const approved = await confirm(claimConfirmContent({ ...scan, amountHint, rpcUrl }));
+      const approved = await confirm(claimConfirmContent({ ...scan, amountHint, rpcUrl }, locale));
       if (!approved) {
-        throw new UserRejectedRequestError('User rejected the claim.');
+        throw new UserRejectedRequestError(t('error.rejectClaim', locale));
       }
 
       // Sweep into the user's OWN derived address. `buildSweep` re-scans and

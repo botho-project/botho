@@ -6,6 +6,11 @@
  * `Divider`) are `SnapComponent` factories — this module calls them directly as
  * functions (the "createElement" style) so no JSX build/transform is needed in
  * the SES bundle; each call returns a plain JSX element object.
+ *
+ * i18n (issue #1095): every user-facing string is sourced from the SES-safe
+ * message map via `t(key, locale, params?)` (see `src/i18n.ts`). Each content
+ * builder takes the resolved `locale`; `src/index.ts` resolves it once per RPC
+ * invocation from `snap_getPreferences.locale`.
  */
 
 import {
@@ -21,6 +26,7 @@ import {
 import { shortenAddress } from '@botho/core';
 
 import { formatBTHWithUnit } from './format';
+import { t, confirmationsPhrase, type Locale } from './i18n';
 import type { HistoryEntry } from './state';
 import type { ContactBook } from './contacts';
 
@@ -39,28 +45,31 @@ function shortHash(txHash: string): string {
 }
 
 /** Receive dialog: the wallet's stealth receive address. */
-export function receiveContent(address: string): JSXElement {
+export function receiveContent(address: string, locale: Locale): JSXElement {
   return Box({
     children: [
-      Heading({ children: 'Receive BTH' }),
-      Text({
-        children:
-          'Share this Botho stealth address to receive funds. A fresh one-time ' +
-          'output is created on-chain for every payment, so your balance stays private.',
-      }),
+      Heading({ children: t('receive.heading', locale) }),
+      Text({ children: t('receive.body', locale) }),
       Copyable({ value: address }),
     ],
   });
 }
 
 /** Balance dialog: the wallet's spendable balance and its ingress node. */
-export function balanceContent(spendablePicocredits: bigint, rpcUrl: string): JSXElement {
+export function balanceContent(
+  spendablePicocredits: bigint,
+  rpcUrl: string,
+  locale: Locale,
+): JSXElement {
   return Box({
     children: [
-      Heading({ children: 'Botho balance' }),
-      Row({ label: 'Spendable', children: Text({ children: formatBTHWithUnit(spendablePicocredits) }) }),
+      Heading({ children: t('balance.heading', locale) }),
+      Row({
+        label: t('balance.spendable', locale),
+        children: Text({ children: formatBTHWithUnit(spendablePicocredits) }),
+      }),
       Divider({}),
-      Row({ label: 'Node', children: Text({ children: hostOf(rpcUrl) }) }),
+      Row({ label: t('common.node', locale), children: Text({ children: hostOf(rpcUrl) }) }),
     ],
   });
 }
@@ -74,18 +83,24 @@ export interface SendConfirmView {
 }
 
 /** Send confirmation dialog: recipient, amount, fee, total, ingress node. */
-export function sendConfirmContent(view: SendConfirmView): JSXElement {
+export function sendConfirmContent(view: SendConfirmView, locale: Locale): JSXElement {
   const total = view.amountPicocredits + view.feePicocredits;
   return Box({
     children: [
-      Heading({ children: 'Confirm send' }),
-      Row({ label: 'Amount', children: Text({ children: formatBTHWithUnit(view.amountPicocredits) }) }),
-      Row({ label: 'Network fee', children: Text({ children: formatBTHWithUnit(view.feePicocredits) }) }),
-      Row({ label: 'Total', children: Text({ children: formatBTHWithUnit(total) }) }),
+      Heading({ children: t('send.heading', locale) }),
+      Row({
+        label: t('send.amount', locale),
+        children: Text({ children: formatBTHWithUnit(view.amountPicocredits) }),
+      }),
+      Row({
+        label: t('send.networkFee', locale),
+        children: Text({ children: formatBTHWithUnit(view.feePicocredits) }),
+      }),
+      Row({ label: t('send.total', locale), children: Text({ children: formatBTHWithUnit(total) }) }),
       Divider({}),
-      Text({ children: 'Recipient' }),
+      Text({ children: t('send.recipient', locale) }),
       Copyable({ value: view.recipientAddress }),
-      Row({ label: 'Node', children: Text({ children: hostOf(view.rpcUrl) }) }),
+      Row({ label: t('common.node', locale), children: Text({ children: hostOf(view.rpcUrl) }) }),
     ],
   });
 }
@@ -99,33 +114,42 @@ export function sendConfirmContent(view: SendConfirmView): JSXElement {
  * History is a PURE projection over the persisted scan state (#1091) plus a live
  * spent-check — no rescan, no persisted history record (see `src/state.ts`).
  */
-export function historyContent(entries: HistoryEntry[], rpcUrl: string): JSXElement {
+export function historyContent(
+  entries: HistoryEntry[],
+  rpcUrl: string,
+  locale: Locale,
+): JSXElement {
   if (entries.length === 0) {
     return Box({
       children: [
-        Heading({ children: 'Transaction history' }),
-        Text({ children: 'No transactions yet. Payments you receive will appear here.' }),
+        Heading({ children: t('history.heading', locale) }),
+        Text({ children: t('history.empty', locale) }),
         Divider({}),
-        Row({ label: 'Node', children: Text({ children: hostOf(rpcUrl) }) }),
+        Row({ label: t('common.node', locale), children: Text({ children: hostOf(rpcUrl) }) }),
       ],
     });
   }
   return Box({
     children: [
-      Heading({ children: 'Transaction history' }),
+      Heading({ children: t('history.heading', locale) }),
       ...entries.flatMap((entry) => [
         Row({
-          label: entry.direction === 'spent' ? 'Spent' : 'Received',
+          label:
+            entry.direction === 'spent'
+              ? t('history.spent', locale)
+              : t('history.received', locale),
           children: Text({ children: formatBTHWithUnit(BigInt(entry.amountPicocredits)) }),
         }),
         Text({
-          children:
-            `Block ${entry.blockHeight} · ${entry.confirmations} ` +
-            `confirmation${entry.confirmations === 1 ? '' : 's'} · ${shortHash(entry.txHash)}`,
+          children: t('history.line', locale, {
+            height: entry.blockHeight,
+            confirmations: confirmationsPhrase(entry.confirmations, locale),
+            hash: shortHash(entry.txHash),
+          }),
         }),
         Divider({}),
       ]),
-      Row({ label: 'Node', children: Text({ children: hostOf(rpcUrl) }) }),
+      Row({ label: t('common.node', locale), children: Text({ children: hostOf(rpcUrl) }) }),
     ],
   });
 }
@@ -137,18 +161,18 @@ export function historyContent(entries: HistoryEntry[], rpcUrl: string): JSXElem
  * remove are driven by the `botho_addContact` / `botho_removeContact` RPC methods
  * (dApp-driven); this dialog is view-only (#1093).
  */
-export function contactsContent(book: ContactBook): JSXElement {
+export function contactsContent(book: ContactBook, locale: Locale): JSXElement {
   if (book.length === 0) {
     return Box({
       children: [
-        Heading({ children: 'Contacts' }),
-        Text({ children: 'No saved contacts yet. Add one to reuse a Botho address without re-pasting it.' }),
+        Heading({ children: t('contacts.heading', locale) }),
+        Text({ children: t('contacts.empty', locale) }),
       ],
     });
   }
   return Box({
     children: [
-      Heading({ children: 'Contacts' }),
+      Heading({ children: t('contacts.heading', locale) }),
       ...book.flatMap((contact) => [
         Row({ label: contact.label, children: Text({ children: shortenAddress(contact.address) }) }),
         Copyable({ value: contact.address }),
@@ -180,34 +204,34 @@ export interface ClaimView {
  * (per `@botho/core` `claim-link.ts`). The bearer secret (mnemonic) is NEVER
  * rendered.
  */
-function claimBodyRows(view: ClaimView): JSXElement[] {
+function claimBodyRows(view: ClaimView, locale: Locale): JSXElement[] {
   const empty = view.grossPicocredits === 0n;
   const rows: JSXElement[] = [
     empty
-      ? Text({
-          children:
-            'Nothing to claim — this link is empty, already claimed, or not yet confirmed.',
-        })
-      : Text({
-          children:
-            'This claim link holds funds that will be swept into your wallet. The ' +
-            'sweep fee is paid from the link.',
-        }),
-    Row({ label: 'Claimable', children: Text({ children: formatBTHWithUnit(view.grossPicocredits) }) }),
-    Row({ label: 'Sweep fee', children: Text({ children: formatBTHWithUnit(view.feePicocredits) }) }),
-    Row({ label: 'You receive', children: Text({ children: formatBTHWithUnit(view.netPicocredits) }) }),
+      ? Text({ children: t('claim.empty', locale) })
+      : Text({ children: t('claim.body', locale) }),
+    Row({
+      label: t('claim.claimable', locale),
+      children: Text({ children: formatBTHWithUnit(view.grossPicocredits) }),
+    }),
+    Row({
+      label: t('claim.sweepFee', locale),
+      children: Text({ children: formatBTHWithUnit(view.feePicocredits) }),
+    }),
+    Row({
+      label: t('claim.youReceive', locale),
+      children: Text({ children: formatBTHWithUnit(view.netPicocredits) }),
+    }),
   ];
   if (view.amountHint !== undefined) {
     rows.push(
       Text({
-        children:
-          `Link hint: ${formatBTHWithUnit(view.amountHint)} ` +
-          '(cosmetic — the scanned amount above is authoritative)',
+        children: t('claim.hint', locale, { amount: formatBTHWithUnit(view.amountHint) }),
       }),
     );
   }
   rows.push(Divider({}));
-  rows.push(Row({ label: 'Node', children: Text({ children: hostOf(view.rpcUrl) }) }));
+  rows.push(Row({ label: t('common.node', locale), children: Text({ children: hostOf(view.rpcUrl) }) }));
   return rows;
 }
 
@@ -216,9 +240,12 @@ function claimBodyRows(view: ClaimView): JSXElement[] {
  * (`botho_previewClaimLink`). Renders the scanned claimable / fee / net and the
  * ingress node; does not submit anything.
  */
-export function claimPreviewContent(view: ClaimView): JSXElement {
+export function claimPreviewContent(view: ClaimView, locale: Locale): JSXElement {
   return Box({
-    children: [Heading({ children: 'Claim link' }), ...claimBodyRows(view)],
+    children: [
+      Heading({ children: t('claim.previewHeading', locale) }),
+      ...claimBodyRows(view, locale),
+    ],
   });
 }
 
@@ -227,23 +254,21 @@ export function claimPreviewContent(view: ClaimView): JSXElement {
  * gated behind an explicit approve/reject before the sweep is built + submitted
  * (`botho_claimLink`). Mirrors the `botho_send` confirmation.
  */
-export function claimConfirmContent(view: ClaimView): JSXElement {
+export function claimConfirmContent(view: ClaimView, locale: Locale): JSXElement {
   return Box({
-    children: [Heading({ children: 'Confirm claim' }), ...claimBodyRows(view)],
+    children: [
+      Heading({ children: t('claim.confirmHeading', locale) }),
+      ...claimBodyRows(view, locale),
+    ],
   });
 }
 
 /** Mnemonic-backup dialog: the derived 24-word Botho recovery phrase. */
-export function mnemonicBackupContent(mnemonic: string): JSXElement {
+export function mnemonicBackupContent(mnemonic: string, locale: Locale): JSXElement {
   return Box({
     children: [
-      Heading({ children: 'Botho recovery phrase' }),
-      Text({
-        children:
-          'These 24 words are derived from your MetaMask Secret Recovery Phrase ' +
-          'and are full spending authority for this Botho wallet. Write them down ' +
-          'and keep them offline. Anyone who sees them can spend your funds.',
-      }),
+      Heading({ children: t('mnemonic.heading', locale) }),
+      Text({ children: t('mnemonic.body', locale) }),
       Copyable({ value: mnemonic, sensitive: true }),
     ],
   });
