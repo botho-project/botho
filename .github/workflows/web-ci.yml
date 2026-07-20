@@ -6,6 +6,13 @@ name: Web CI
 # change to the BaaS provisioner/webhook/checkout/status code (or the wallet)
 # could ship a broken test suite with no red signal (#530).
 #
+# Also runs the MetaMask Snap suite (`web/packages/snap`, 76 `*.snap.ts` tests
+# via @metamask/snaps-jest). Those are NOT `*.test.ts` so the root vitest run
+# never collects them — without this job the whole Snap package ships with zero
+# CI coverage (#1105). The snap tests need the wasm-signer bundler artifact
+# built first (the snap bundle inlines `bth_wasm_signer` from pkg-bundler), so
+# this job installs a wasm Rust toolchain + wasm-pack and builds it in-job.
+#
 # Path-filtered so Rust-only PRs don't pay the pnpm install/test cost.
 # Everything here is offline/mocked and `--dry-run` only: NO secrets required.
 
@@ -32,9 +39,9 @@ permissions:
 
 jobs:
   web-ci:
-    name: typecheck + vitest + worker dry-run
+    name: typecheck + vitest + snap + worker dry-run
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     # The pnpm workspace is rooted at web/, not the repo root.
     defaults:
@@ -71,6 +78,42 @@ jobs:
       # ~195 @botho/baas-worker tests in a single run.
       - name: Run web + baas-worker tests
         run: pnpm test:run
+
+      # --- MetaMask Snap suite (@metamask/snaps-jest, web/packages/snap) --------
+      # These `*.snap.ts` tests are invisible to the root vitest run above, so
+      # they need their own step (#1105). The snap bundle inlines the
+      # `bth-wasm-signer` wasm, so we build a wasm Rust toolchain + wasm-pack and
+      # produce the bundler-target artifact (`pkg-bundler/`) before running them.
+      # Toolchain pin matches rust-toolchain.toml; the wasm32 target is not in
+      # that file's `targets`, so request it explicitly here.
+      - name: Install Rust (wasm32 target for the snap wasm-signer)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-03
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo (snap wasm build)
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: web-ci-wasm-signer
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: v0.13.1
+
+      # Bundler-target build: emits web/packages/wasm-signer/pkg-bundler, which
+      # the snap's `mm-snap build` inlines. Runs headless on ubuntu-latest — no
+      # browser, no network beyond crate/wasm-bindgen fetches.
+      - name: Build wasm-signer bundler artifact (prereq for snap tests)
+        run: pnpm --filter @botho/wasm-signer build:wasm:bundler
+
+      # test:snap = `mm-snap build && jest`; runs the 76 `*.snap.ts` tests inside
+      # the real Snaps SES executor with an in-process mocked node (no secrets,
+      # no live betanet).
+      - name: Run Snap tests (@metamask/snaps-jest)
+        run: pnpm --filter @botho/snap test:snap
+      # -------------------------------------------------------------------------
 
       # Validate the worker still bundles/deploys without actually shipping it.
       # --dry-run needs no Cloudflare token and contacts no network.
