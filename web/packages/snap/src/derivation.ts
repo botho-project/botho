@@ -79,10 +79,16 @@ export interface SnapWallet {
  */
 export function walletFromMnemonic(mnemonic: string): SnapWallet {
   const seed = mnemonicToSeedSync(mnemonic, '');
+  const seedHex = toHex(seed);
+  // Defense-in-depth (#1096, F1): wipe the transient 64-byte seed buffer now that
+  // its hex form is captured. The retained `keys.seed` hex IS the authoritative
+  // copy the signer consumes, so this only clears the extra raw-bytes copy off the
+  // heap — it does not (and must not) change the derived wallet.
+  seed.fill(0);
+
   const kp = deriveKeypairs(mnemonic, 0);
   const sub = deriveDefaultSubaddressPublicKeys(mnemonic, 0);
 
-  const seedHex = toHex(seed);
   const address = wasm.deriveAddressFromSeed(
     seedHex,
     toHex(sub.viewPublic),
@@ -106,22 +112,37 @@ export function walletFromMnemonic(mnemonic: string): SnapWallet {
 }
 
 let cachedWallet: SnapWallet | null = null;
-let cachedMnemonic: string | null = null;
 
-/** Fetch the SIP-6 entropy and turn it into the 24-word Botho mnemonic. */
+/**
+ * Fetch the SIP-6 entropy and turn it into the 24-word Botho mnemonic.
+ *
+ * DELIBERATELY NOT CACHED (#1096, F1): the raw 24-word phrase is full spending
+ * authority, so it is derived on demand and allowed to go out of scope after each
+ * use rather than being pinned at module scope for the whole execution context.
+ * `deriveWallet` consumes it once to build (and cache) the derived `SignerKeys`
+ * the signer actually needs; `revealMnemonic` re-derives it for the rare backup-
+ * export path. `snap_getEntropy` is deterministic in (SRP, snap id, salt), so
+ * re-derivation always yields the identical phrase — no functional change. The
+ * transient raw-entropy bytes are zeroized after use; the intermediate
+ * `entropyHex` string is immutable and cannot be wiped (inherent JS limitation,
+ * see audits/2026-07-20-snap-keyhandling.md).
+ */
 async function deriveMnemonic(): Promise<string> {
-  if (cachedMnemonic) return cachedMnemonic;
   // SIP-6 entropy: deterministic in (SRP, snap id, salt). 32 bytes.
   const entropyHex = (await snap.request({
     method: 'snap_getEntropy',
     params: { version: 1, salt: ENTROPY_SALT },
   })) as string;
   const entropy = hexToBytes(entropyHex);
-  if (entropy.length !== 32) {
-    throw new Error(`snap_getEntropy returned ${entropy.length} bytes, expected 32`);
+  try {
+    if (entropy.length !== 32) {
+      throw new Error(`snap_getEntropy returned ${entropy.length} bytes, expected 32`);
+    }
+    return entropyToMnemonic(entropy, wordlist);
+  } finally {
+    // Defense-in-depth: wipe the transient entropy bytes once consumed.
+    entropy.fill(0);
   }
-  cachedMnemonic = entropyToMnemonic(entropy, wordlist);
-  return cachedMnemonic;
 }
 
 /**
