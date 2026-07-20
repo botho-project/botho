@@ -36,8 +36,15 @@
  *
  *  - **Reorg safety.** betanet can reorg. On resume we conservatively re-scan a
  *    small trailing `REORG_BUFFER` of blocks below the checkpoint so a shallow
- *    reorg near the tip is picked up; merges dedupe by one-time target key so the
- *    overlap never double-counts.
+ *    reorg near the tip is picked up. Rather than only *adding* what the re-scan
+ *    finds (which can never remove a receive that was reorged out), we
+ *    **reconcile** the re-fetched range: the persisted contents of `[start, tip]`
+ *    are REPLACED wholesale by what the node currently reports, while everything
+ *    strictly below `start` (treated as final — never re-fetched) is retained
+ *    unchanged, and anything stranded above the reported `tip` is pruned. Pruning
+ *    is bounded to the range the node was authoritatively queried for, so a
+ *    still-returned output is never dropped (the dangerous under-report
+ *    direction). See {@link reconcileOwnedOutputs} for the safety invariant.
  */
 
 import type {
@@ -240,6 +247,12 @@ export function toOwnedOutput(p: PersistedOwnedOutput): OwnedOutput {
  * one-time target key (which is globally unique per output). Existing records
  * win, so a re-scanned reorg-buffer block never appends a duplicate. Returns a
  * new array (does not mutate `existing`).
+ *
+ * NOTE: this is **add-only** (monotonic) — it can never PRUNE a persisted output
+ * that has since been reorged out. The incremental scan therefore does NOT use it
+ * as the persist step; it reconciles the re-fetched range via
+ * {@link reconcileOwnedOutputs}. Retained only for its within-`discovered` /
+ * against-`existing` dedupe semantics and its historical unit contract.
  */
 export function mergeOwnedOutputs(
   existing: PersistedOwnedOutput[],
@@ -248,6 +261,63 @@ export function mergeOwnedOutputs(
   const byKey = new Map<string, PersistedOwnedOutput>();
   for (const o of existing) byKey.set(o.targetKey, o);
   for (const o of discovered) if (!byKey.has(o.targetKey)) byKey.set(o.targetKey, o);
+  return Array.from(byKey.values());
+}
+
+/**
+ * Reconcile the persisted owned set against a **rescanned** height range, so a
+ * reorged-out output is PRUNED instead of lingering forever (the add-only
+ * {@link mergeOwnedOutputs} can never remove one). Returns a new array (does not
+ * mutate `existing`).
+ *
+ * `start` is `scanStartHeight(lastScannedHeight)` and `tip` is the node's
+ * reported chain tip this scan; `[start, tip]` is exactly the range the scan
+ * re-fetched (window by window) and `discovered` is every owned output the node
+ * returned across ALL those windows. The re-fetched range is treated as
+ * AUTHORITATIVE: its persisted contents are replaced wholesale by `discovered`,
+ * while everything strictly below `start` (never re-fetched — assumed final) is
+ * retained unchanged. Anything stranded ABOVE the reported `tip` (a chain that
+ * shrank below an output's receive height) is provably gone and is pruned too.
+ *
+ * SAFETY INVARIANT — after every scan, for the re-fetched range `R = [start, tip]`
+ * (`R = ∅` when `tip < start`):
+ *
+ *   1. No phantom:  no persisted output with `blockHeight ∈ R` survives unless the
+ *      node returned it this scan; nor does any with `blockHeight > tip`.
+ *   2. No dropped:  every owned output the node returned in `R` is present.
+ *   3. No collateral prune:  every persisted output with `blockHeight < start`
+ *      (and `≤ tip`) is retained unchanged — a range NOT re-fetched is NEVER pruned.
+ *
+ * Equivalently `persisted ∩ R == node-reported-owned ∩ R` (exactly) and
+ * `persisted \ R` is untouched. Because pruning is bounded to a range the node
+ * was authoritatively queried for (plus the provably-empty region above the tip),
+ * a still-returned output is NEVER dropped — the dangerous under-report direction
+ * that would make funds appear lost.
+ *
+ * Prune keys on ON-CHAIN PRESENCE (membership in the node's `chain_getOutputs`
+ * response, i.e. `discovered`), NOT on live spent status. Spending an output does
+ * not remove it from `chain_getOutputs` — a spent output stays a mined output, so
+ * it is re-returned, RETAINED here, then split out of `spendable` by the live
+ * `chain_areKeyImagesSpent` check and rendered `direction: 'spent'`. Only a
+ * genuinely reorged-out output (absent from `discovered`, or above `tip`) is
+ * pruned.
+ */
+export function reconcileOwnedOutputs(
+  existing: PersistedOwnedOutput[],
+  discovered: PersistedOwnedOutput[],
+  start: number,
+  tip: number,
+): PersistedOwnedOutput[] {
+  const byKey = new Map<string, PersistedOwnedOutput>();
+  // Retain only outputs strictly BELOW the re-fetched range AND at/below the tip.
+  // `< start`  : not re-fetched, treated as final -> never pruned.
+  // `<= tip`   : guards the chain-shrank case (tip < start): anything above the
+  //              node's reported tip is provably gone and must not survive.
+  for (const o of existing) {
+    if (o.blockHeight < start && o.blockHeight <= tip) byKey.set(o.targetKey, o);
+  }
+  // The re-fetched range [start, tip] is replaced wholesale by node truth.
+  for (const o of discovered) byKey.set(o.targetKey, o);
   return Array.from(byKey.values());
 }
 
@@ -301,9 +371,15 @@ export async function incrementalScan(args: IncrementalScanArgs): Promise<Increm
 
   const persisted = await readState();
   const usable = usableScanState(persisted, network);
-  let ownedOutputs = usable ? usable.ownedOutputs : [];
+  const priorOwned = usable ? usable.ownedOutputs : [];
   const start = usable ? scanStartHeight(usable.lastScannedHeight) : 0;
 
+  // Accumulate every owned output the node reports across ALL windows of this
+  // scan's re-fetched range, then reconcile ONCE against `[start, tip]`. A single
+  // whole-range reconcile (rather than a per-window merge) is what makes the prune
+  // exact: an output at a low window boundary is never dropped by a later window's
+  // reconcile, because the whole `[start, tip]` set is compared together.
+  const allDiscovered: PersistedOwnedOutput[] = [];
   for (const [lo, hi] of windows(start, tip)) {
     const raw = await fetchWindow(lo, hi);
     if (raw.length === 0) continue;
@@ -324,15 +400,21 @@ export async function incrementalScan(args: IncrementalScanArgs): Promise<Increm
       })),
     });
 
-    const persistedDiscovered = discovered.map((o) => {
+    for (const o of discovered) {
       const meta = metaByTargetKey.get(o.targetKey);
-      return toPersistedOwnedOutput(o, {
-        blockHeight: meta?.height ?? 0,
-        txHash: meta?.txHash ?? o.targetKey,
-      });
-    });
-    ownedOutputs = mergeOwnedOutputs(ownedOutputs, persistedDiscovered);
+      allDiscovered.push(
+        toPersistedOwnedOutput(o, {
+          blockHeight: meta?.height ?? 0,
+          txHash: meta?.txHash ?? o.targetKey,
+        }),
+      );
+    }
   }
+
+  // Reconcile: replace the re-fetched `[start, tip]` range wholesale with node
+  // truth (dropping reorged-out receives), retaining everything below `start` and
+  // pruning anything stranded above `tip`. See `reconcileOwnedOutputs`.
+  const ownedOutputs = reconcileOwnedOutputs(priorOwned, allDiscovered, start, tip);
 
   await writeState({
     version: STATE_VERSION,
