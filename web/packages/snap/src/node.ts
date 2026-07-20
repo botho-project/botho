@@ -10,7 +10,12 @@
  * are exempt (local dev nodes may report other network names).
  */
 
-import type { ChainOutput, KeyImageSpentStatus, SendRpc } from '@botho/wasm-signer';
+import type {
+  ChainOutput,
+  ChainOutputWithMeta,
+  KeyImageSpentStatus,
+  SendRpc,
+} from '@botho/wasm-signer';
 
 /**
  * The network id a node must report (via `node_getStatus`'s `network` field) to
@@ -131,6 +136,11 @@ interface RawOutput {
   kemCiphertext?: string | null;
 }
 
+/** A `chain_getOutputs` output row that also carries its creating tx hash. */
+interface RawOutputWithMeta extends RawOutput {
+  txHash: string;
+}
+
 /** Decode a little-endian hex `u64` amount commitment into a bigint. */
 function leHexToBigInt(hex: string): bigint {
   let result = 0n;
@@ -168,5 +178,36 @@ export function makeSendRpc(call: NodeCall): SendRpc {
     },
     areKeyImagesSpent: (keyImages) =>
       call<KeyImageSpentStatus[]>('chain_areKeyImagesSpent', { keyImages }),
+  };
+}
+
+/**
+ * Fetch every output in the inclusive block range `[start, end]` WITH the
+ * metadata client-side history + the persisted scan-state need: each block's
+ * `height` and each output's creating `txHash`. This is the same
+ * `chain_getOutputs` RPC as {@link makeSendRpc}'s `getOutputs`, but preserves the
+ * per-block height + per-output txHash that the flat `getOutputs` drops. The
+ * windowed/incremental scanner (`state.ts`) calls this one window at a time.
+ */
+export function getOutputsWithMeta(call: NodeCall) {
+  return async (start: number, end: number): Promise<ChainOutputWithMeta[]> => {
+    const blocks = await call<Array<{ height: number; outputs: RawOutputWithMeta[] }>>(
+      'chain_getOutputs',
+      { start_height: start, end_height: end },
+    );
+    return blocks.flatMap((b) =>
+      b.outputs.map(
+        (o): ChainOutputWithMeta => ({
+          targetKey: o.targetKey,
+          publicKey: o.publicKey,
+          amount: leHexToBigInt(o.amountCommitment),
+          outputIndex:
+            o.outputIndex === COINBASE_OUTPUT_INDEX_SENTINEL ? 0 : o.outputIndex,
+          kemCiphertext: o.kemCiphertext ?? null,
+          txHash: o.txHash,
+          height: b.height,
+        }),
+      ),
+    );
   };
 }

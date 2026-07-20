@@ -38,14 +38,15 @@ import {
 } from '@metamask/snaps-sdk';
 import {
   buildSendTransaction,
-  spendableBalance,
+  loadSigner,
   type RecipientAddress,
 } from '@botho/wasm-signer';
 import { parseAddress } from '@botho/core';
 
 import { ensureSigner, wasm } from './signer';
 import { deriveWallet, revealMnemonic, DERIVATION_DESCRIPTION } from './derivation';
-import { connectAndGuard, makeSendRpc } from './node';
+import { connectAndGuard, getOutputsWithMeta, makeSendRpc, EXPECTED_NETWORK_ID } from './node';
+import { incrementalScanBalance } from './state';
 import {
   receiveContent,
   balanceContent,
@@ -116,6 +117,30 @@ function optionalFee(params: Record<string, unknown> | undefined): bigint {
   return fee;
 }
 
+/**
+ * Compute the wallet's spendable balance via the persisted-state, windowed
+ * incremental scan (#1091). Resumes from the last-scanned checkpoint in
+ * `snap_manageState` instead of re-scanning the whole chain from genesis; spent
+ * status is recomputed live on every read. Shared by `botho_getBalance` and
+ * `botho_showBalance`.
+ */
+async function scanBalance(rpcUrl: string): Promise<bigint> {
+  const { call, status } = await connectAndGuard(rpcUrl);
+  const wallet = await deriveWallet();
+  const signer = await loadSigner();
+  return incrementalScanBalance({
+    signer,
+    keys: wallet.keys,
+    // Bind persisted scan state to the node's reported network so a later read
+    // against a different network is invalidated (loopback dev nodes may not
+    // report one — fall back to the expected id to keep the binding stable).
+    network: status.network ?? EXPECTED_NETWORK_ID,
+    tip: status.chainHeight,
+    fetchWindow: getOutputsWithMeta(call),
+    sendRpc: makeSendRpc(call),
+  });
+}
+
 /** Ask the user to approve/reject a confirmation dialog. */
 async function confirm(content: unknown): Promise<boolean> {
   return (await snap.request({
@@ -147,9 +172,7 @@ export const onRpcRequest: OnRpcRequestHandler = async ({ request }) => {
 
     case 'botho_getBalance': {
       const rpcUrl = requireString(params, 'rpcUrl');
-      const { call } = await connectAndGuard(rpcUrl);
-      const wallet = await deriveWallet();
-      const balance = await spendableBalance(wallet.keys, makeSendRpc(call));
+      const balance = await scanBalance(rpcUrl);
       return { spendablePicocredits: balance.toString() } as Json;
     }
 
@@ -164,9 +187,7 @@ export const onRpcRequest: OnRpcRequestHandler = async ({ request }) => {
 
     case 'botho_showBalance': {
       const rpcUrl = requireString(params, 'rpcUrl');
-      const { call } = await connectAndGuard(rpcUrl);
-      const wallet = await deriveWallet();
-      const balance = await spendableBalance(wallet.keys, makeSendRpc(call));
+      const balance = await scanBalance(rpcUrl);
       await alert(balanceContent(balance, rpcUrl));
       return { spendablePicocredits: balance.toString() } as Json;
     }

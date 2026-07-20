@@ -26,8 +26,15 @@ export interface MockNodeOptions {
    * (an empty chain — a freshly-derived wallet then has a 0 balance and no
    * spendable outputs, which is the deterministic happy path the MVP tests
    * assert without needing real owned-output fixtures).
+   *
+   * A block MAY carry a `height`; when present, the mock honours the RPC's
+   * `start_height`/`end_height` range (returning only in-range blocks), so the
+   * Snap's windowed/incremental scan (#1091) can be exercised against real
+   * window boundaries. Blocks without a `height` are always returned (back-compat
+   * with the flat MVP fixtures). Each output MAY carry a `txHash` for the
+   * meta-carrying fetch history + persisted scan-state rely on.
    */
-  outputs?: Array<{ outputs: unknown[] }>;
+  outputs?: Array<{ height?: number; outputs: unknown[] }>;
   /** Extra / overriding method handlers (e.g. a custom `tx_submit`). */
   handlers?: Record<string, RpcHandler>;
 }
@@ -50,7 +57,19 @@ export async function startMockNode(options: MockNodeOptions = {}): Promise<Mock
 
   const defaults: Record<string, RpcHandler> = {
     node_getStatus: () => ({ chainHeight, network, synced: true, version: 'mock-1.0.0' }),
-    chain_getOutputs: () => outputs,
+    chain_getOutputs: (params) => {
+      // Honour the RPC's inclusive [start_height, end_height] window for blocks
+      // that declare a height, so the Snap's windowed scan sees real boundaries.
+      // Height-less blocks (flat MVP fixtures) are always returned.
+      const { start_height, end_height } = (params ?? {}) as {
+        start_height?: number;
+        end_height?: number;
+      };
+      if (start_height === undefined || end_height === undefined) return outputs;
+      return outputs.filter(
+        (b) => b.height === undefined || (b.height >= start_height && b.height <= end_height),
+      );
+    },
     chain_areKeyImagesSpent: (params) => {
       const keyImages = (params as { keyImages?: string[] })?.keyImages ?? [];
       return keyImages.map((keyImage) => ({
