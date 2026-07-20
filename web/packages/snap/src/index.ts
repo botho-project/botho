@@ -18,9 +18,11 @@
  * u64 picocredits):
  *   - botho_getAddress  — the wallet's stealth receive address (silent read)
  *   - botho_getBalance  — spendable balance via scan (silent read)
+ *   - botho_getHistory  — receive history projected from persisted scan state (silent read, #1092)
  *   - botho_send        — build + sign + submit, behind a confirmation dialog
  *   - botho_showReceive — receive dialog (stealth address, copyable)
  *   - botho_showBalance — balance dialog
+ *   - botho_showHistory — transaction-history dialog (#1092)
  *   - botho_showMnemonic — reveal the derived recovery phrase (confirmed backup)
  *
  * Live-testnet send validation is deferred to a follow-up (betanet is frozen at
@@ -46,10 +48,17 @@ import { parseAddress } from '@botho/core';
 import { ensureSigner, wasm } from './signer';
 import { deriveWallet, revealMnemonic, DERIVATION_DESCRIPTION } from './derivation';
 import { connectAndGuard, getOutputsWithMeta, makeSendRpc, EXPECTED_NETWORK_ID } from './node';
-import { incrementalScanBalance } from './state';
+import {
+  incrementalScan,
+  incrementalScanBalance,
+  deriveHistory,
+  spentTargetKeys,
+  type HistoryEntry,
+} from './state';
 import {
   receiveContent,
   balanceContent,
+  historyContent,
   sendConfirmContent,
   mnemonicBackupContent,
 } from './ui';
@@ -141,6 +150,29 @@ async function scanBalance(rpcUrl: string): Promise<bigint> {
   });
 }
 
+/**
+ * Derive the wallet's transaction history via the SAME persisted-state,
+ * incremental scan as {@link scanBalance} (#1091) — history is a pure projection
+ * over the already-persisted owned set (no rescan, no persisted history record).
+ * The receive facts come off persisted state; the spent annotation and the tip
+ * (for confirmations/finality depth) are recomputed live, exactly as the balance
+ * is. Shared by `botho_getHistory` and `botho_showHistory`.
+ */
+async function scanHistory(rpcUrl: string): Promise<HistoryEntry[]> {
+  const { call, status } = await connectAndGuard(rpcUrl);
+  const wallet = await deriveWallet();
+  const signer = await loadSigner();
+  const { ownedOutputs, spendable, tip } = await incrementalScan({
+    signer,
+    keys: wallet.keys,
+    network: status.network ?? EXPECTED_NETWORK_ID,
+    tip: status.chainHeight,
+    fetchWindow: getOutputsWithMeta(call),
+    sendRpc: makeSendRpc(call),
+  });
+  return deriveHistory(ownedOutputs, spentTargetKeys(ownedOutputs, spendable), tip);
+}
+
 /** Ask the user to approve/reject a confirmation dialog. */
 async function confirm(content: unknown): Promise<boolean> {
   return (await snap.request({
@@ -176,6 +208,12 @@ export const onRpcRequest: OnRpcRequestHandler = async ({ request }) => {
       return { spendablePicocredits: balance.toString() } as Json;
     }
 
+    case 'botho_getHistory': {
+      const rpcUrl = requireString(params, 'rpcUrl');
+      const entries = await scanHistory(rpcUrl);
+      return { entries } as unknown as Json;
+    }
+
     /* ------------------------------------------------------------------ */
     /* Dialog-driven flows                                                */
     /* ------------------------------------------------------------------ */
@@ -190,6 +228,13 @@ export const onRpcRequest: OnRpcRequestHandler = async ({ request }) => {
       const balance = await scanBalance(rpcUrl);
       await alert(balanceContent(balance, rpcUrl));
       return { spendablePicocredits: balance.toString() } as Json;
+    }
+
+    case 'botho_showHistory': {
+      const rpcUrl = requireString(params, 'rpcUrl');
+      const entries = await scanHistory(rpcUrl);
+      await alert(historyContent(entries, rpcUrl));
+      return { entries, count: entries.length } as unknown as Json;
     }
 
     case 'botho_showMnemonic': {

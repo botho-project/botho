@@ -19,6 +19,7 @@ import {
 } from '@metamask/snaps-sdk/jsx';
 
 import { formatBTHWithUnit } from './format';
+import type { HistoryEntry } from './state';
 
 /** Host component of an endpoint URL (for compact display), or the raw string. */
 function hostOf(rpcUrl: string): string {
@@ -27,6 +28,11 @@ function hostOf(rpcUrl: string): string {
   } catch {
     return rpcUrl;
   }
+}
+
+/** Abbreviate a long hex tx hash for compact dialog display (head…tail). */
+function shortHash(txHash: string): string {
+  return txHash.length > 20 ? `${txHash.slice(0, 10)}…${txHash.slice(-10)}` : txHash;
 }
 
 /** Receive dialog: the wallet's stealth receive address. */
@@ -77,6 +83,46 @@ export function sendConfirmContent(view: SendConfirmView): JSXElement {
       Text({ children: 'Recipient' }),
       Copyable({ value: view.recipientAddress }),
       Row({ label: 'Node', children: Text({ children: hostOf(view.rpcUrl) }) }),
+    ],
+  });
+}
+
+/**
+ * Transaction-history dialog: the wallet's receive history, newest first, each
+ * entry annotated with its live spent/received direction and its finality depth
+ * (`confirmations`). A low confirmation count flags a shallow, reorg-prone
+ * receive near the tip. Renders an explicit empty-state when there is no history.
+ *
+ * History is a PURE projection over the persisted scan state (#1091) plus a live
+ * spent-check — no rescan, no persisted history record (see `src/state.ts`).
+ */
+export function historyContent(entries: HistoryEntry[], rpcUrl: string): JSXElement {
+  if (entries.length === 0) {
+    return Box({
+      children: [
+        Heading({ children: 'Transaction history' }),
+        Text({ children: 'No transactions yet. Payments you receive will appear here.' }),
+        Divider({}),
+        Row({ label: 'Node', children: Text({ children: hostOf(rpcUrl) }) }),
+      ],
+    });
+  }
+  return Box({
+    children: [
+      Heading({ children: 'Transaction history' }),
+      ...entries.flatMap((entry) => [
+        Row({
+          label: entry.direction === 'spent' ? 'Spent' : 'Received',
+          children: Text({ children: formatBTHWithUnit(BigInt(entry.amountPicocredits)) }),
+        }),
+        Text({
+          children:
+            `Block ${entry.blockHeight} · ${entry.confirmations} ` +
+            `confirmation${entry.confirmations === 1 ? '' : 's'} · ${shortHash(entry.txHash)}`,
+        }),
+        Divider({}),
+      ]),
+      Row({ label: 'Node', children: Text({ children: hostOf(rpcUrl) }) }),
     ],
   });
 }

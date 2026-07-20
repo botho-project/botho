@@ -265,19 +265,32 @@ export interface IncrementalScanArgs {
   sendRpc: SendRpc;
 }
 
+/** The full result of one incremental scan — the shared core of balance + history. */
+export interface IncrementalScanResult {
+  /** The FULL persisted owned set after this scan (spent AND unspent). */
+  ownedOutputs: PersistedOwnedOutput[];
+  /** The live-checked spendable (unspent, non-pending) subset for this read. */
+  spendable: OwnedOutput[];
+  /** The chain tip this scan resolved against (for confirmations/finality depth). */
+  tip: number;
+}
+
 /**
- * The persisted-state, incremental-scan replacement for `spendableBalance`.
+ * The persisted-state, incremental-scan CORE shared by both the balance path and
+ * the transaction-history path (#1092).
  *
  *   read state -> (in)validate vs network/version -> windowed scan of the
  *   `(checkpoint - reorg buffer, tip]` tail -> merge + persist -> live
- *   spent-status filter over the FULL persisted owned set -> summed balance.
+ *   spent-status split over the FULL persisted owned set.
  *
  * The first read on a fresh wallet scans `[0, tip]` and persists a checkpoint; a
  * second read at the same tip fetches only the reorg-buffer window (or nothing)
- * and reuses the persisted outputs, yet returns the same balance — the
- * observable incremental win.
+ * and reuses the persisted outputs — the observable incremental win. Returning
+ * BOTH the full owned set and the live-spendable subset lets balance sum the
+ * subset while history projects the full set with a per-entry spent annotation,
+ * from a single scan (one tip, one live spent-check — no divergent scanner).
  */
-export async function incrementalScanBalance(args: IncrementalScanArgs): Promise<bigint> {
+export async function incrementalScan(args: IncrementalScanArgs): Promise<IncrementalScanResult> {
   const { signer, keys, network, tip, fetchWindow, sendRpc } = args;
 
   const persisted = await readState();
@@ -330,5 +343,85 @@ export async function incrementalScanBalance(args: IncrementalScanArgs): Promise
     ownedOutputs.map(toOwnedOutput),
     sendRpc,
   );
+  return { ownedOutputs, spendable, tip };
+}
+
+/**
+ * The persisted-state, incremental-scan replacement for `spendableBalance`. A
+ * thin sum over the shared {@link incrementalScan} core's live-spendable subset,
+ * so balance and history stay consistent (same tip, same live spent-check).
+ */
+export async function incrementalScanBalance(args: IncrementalScanArgs): Promise<bigint> {
+  const { spendable } = await incrementalScan(args);
   return spendable.reduce((sum, o) => sum + BigInt(o.amount), 0n);
+}
+
+/* ------------------------------------------------------------------ */
+/* Transaction history (#1092): a PURE projection over persisted state */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A single client-side transaction-history entry — a projection over one
+ * persisted owned output plus its LIVE spent status and the current tip. Every
+ * field is JSON-safe (bigint amounts as decimal strings) for the RPC surface.
+ */
+export interface HistoryEntry {
+  /** Creating transaction hash (hex). */
+  txHash: string;
+  /** Receive block height of the output. */
+  blockHeight: number;
+  /** JSON-safe u64 picocredits (bigint serialised as a decimal string). */
+  amountPicocredits: string;
+  /**
+   * `received` for an owned output still unspent on-chain; `spent` for one whose
+   * value has since left the wallet (live `chain_areKeyImagesSpent` check).
+   */
+  direction: 'received' | 'spent';
+  /**
+   * Finality depth: `max(0, tip - blockHeight)`. A small value flags a shallow,
+   * reorg-prone receive near the tip. Clamped at 0 so a post-reorg chain that
+   * shrank below an output's receive height never reports a negative depth.
+   */
+  confirmations: number;
+}
+
+/**
+ * Compute the set of owned-output target keys that are SPENT for this read: every
+ * persisted owned output whose target key is not in the live-spendable subset.
+ * (Spendable = unspent + non-pending; anything else is spent value that has left
+ * the wallet.) Never persisted — recomputed live each read, like the balance.
+ */
+export function spentTargetKeys(
+  ownedOutputs: PersistedOwnedOutput[],
+  spendable: OwnedOutput[],
+): Set<string> {
+  const spendableKeys = new Set(spendable.map((o) => o.targetKey));
+  const spent = new Set<string>();
+  for (const o of ownedOutputs) {
+    if (!spendableKeys.has(o.targetKey)) spent.add(o.targetKey);
+  }
+  return spent;
+}
+
+/**
+ * Project the persisted owned set + a live spent-set + the current tip into a
+ * transaction-history list, newest first. PURE (no `snap`, no network): the
+ * receive facts come straight off persisted state (no rescan), the spent
+ * annotation is supplied by the caller's live check, and confirmations are a
+ * clamped `tip - blockHeight`. Amounts stay decimal strings (JSON-safe).
+ */
+export function deriveHistory(
+  ownedOutputs: PersistedOwnedOutput[],
+  spentTargetKeySet: ReadonlySet<string>,
+  tip: number,
+): HistoryEntry[] {
+  return ownedOutputs
+    .map((o): HistoryEntry => ({
+      txHash: o.txHash,
+      blockHeight: o.blockHeight,
+      amountPicocredits: o.amount,
+      direction: spentTargetKeySet.has(o.targetKey) ? 'spent' : 'received',
+      confirmations: Math.max(0, tip - o.blockHeight),
+    }))
+    .sort((a, b) => b.blockHeight - a.blockHeight);
 }
