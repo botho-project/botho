@@ -49,6 +49,8 @@ import type {
 } from '@botho/wasm-signer';
 import { spendableOwnedOutputs } from '@botho/wasm-signer';
 
+import type { ContactBook } from './contacts';
+
 declare const snap: {
   request(args: { method: string; params?: unknown }): Promise<unknown>;
 };
@@ -126,8 +128,12 @@ export interface SnapState {
   version: number;
   /** Incremental-scan state (absent until the first balance read). */
   scan?: ScanState;
-  // Reserved for sibling consumers (do NOT implement here):
-  // contacts?: ContactBook;          // #1093
+  /**
+   * Saved `(label, address)` contacts (#1093). A sibling namespace independent
+   * of `scan` — additive, so it needs no `STATE_VERSION` bump. See `contacts.ts`.
+   */
+  contacts?: ContactBook;
+  // Reserved for a future sibling consumer (do NOT implement here):
   // settings?: { rpcUrl?: string };  // in-Snap ingress selection
 }
 

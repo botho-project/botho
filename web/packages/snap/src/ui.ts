@@ -18,8 +18,11 @@ import {
   type JSXElement,
 } from '@metamask/snaps-sdk/jsx';
 
+import { shortenAddress } from '@botho/core';
+
 import { formatBTHWithUnit } from './format';
 import type { HistoryEntry } from './state';
+import type { ContactBook } from './contacts';
 
 /** Host component of an endpoint URL (for compact display), or the raw string. */
 function hostOf(rpcUrl: string): string {
@@ -123,6 +126,34 @@ export function historyContent(entries: HistoryEntry[], rpcUrl: string): JSXElem
         Divider({}),
       ]),
       Row({ label: 'Node', children: Text({ children: hostOf(rpcUrl) }) }),
+    ],
+  });
+}
+
+/**
+ * Contacts dialog: the saved address book, each entry rendering its label, a
+ * compact shortened address line, and a `Copyable` of the full address for reuse
+ * in a send. Renders an explicit empty-state when no contacts are saved. Add /
+ * remove are driven by the `botho_addContact` / `botho_removeContact` RPC methods
+ * (dApp-driven); this dialog is view-only (#1093).
+ */
+export function contactsContent(book: ContactBook): JSXElement {
+  if (book.length === 0) {
+    return Box({
+      children: [
+        Heading({ children: 'Contacts' }),
+        Text({ children: 'No saved contacts yet. Add one to reuse a Botho address without re-pasting it.' }),
+      ],
+    });
+  }
+  return Box({
+    children: [
+      Heading({ children: 'Contacts' }),
+      ...book.flatMap((contact) => [
+        Row({ label: contact.label, children: Text({ children: shortenAddress(contact.address) }) }),
+        Copyable({ value: contact.address }),
+        Divider({}),
+      ]),
     ],
   });
 }
