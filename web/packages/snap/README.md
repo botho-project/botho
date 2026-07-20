@@ -25,9 +25,11 @@ All params/results are JSON-safe; amounts are string-encoded `u64` picocredits
 |---|---|---|---|
 | `botho_getAddress` | — | none | `{ address, derivation }` |
 | `botho_getBalance` | `{ rpcUrl }` | none | `{ spendablePicocredits }` |
+| `botho_getHistory` | `{ rpcUrl }` | none | `{ entries }` |
 | `botho_send` | `{ rpcUrl, recipientAddress, amountPicocredits, feePicocredits? }` | confirmation | `{ txHash, txBytes }` |
 | `botho_showReceive` | — | alert (address) | `{ address }` |
 | `botho_showBalance` | `{ rpcUrl }` | alert (balance) | `{ spendablePicocredits }` |
+| `botho_showHistory` | `{ rpcUrl }` | alert (history) | `{ entries, count }` |
 | `botho_showMnemonic` | — | confirm → alert | `{ revealed }` |
 
 `rpcUrl` is the **user-selected ingress node**, carrying over the web wallet's
@@ -97,6 +99,49 @@ Snap, so on resume the scan re-covers a small trailing `REORG_BUFFER` of blocks
 below the checkpoint; the target-key dedupe makes the overlap idempotent (never
 double-counts).
 
+## Transaction history (#1092)
+
+`botho_getHistory` (silent) and `botho_showHistory` (dialog) surface the wallet's
+**receive history**. History is a **pure projection over the persisted scan state
+above** — it reads `scan.ownedOutputs` (which already carry `blockHeight` +
+`txHash`, cached by #1091 for exactly this) and adds a **live** spent-check. There
+is **no rescan, no new persisted key, and no `STATE_VERSION` bump** — history is
+*derived*, not stored, so it extends the #1091 schema without a migration. Both
+methods run the same incremental scan as the balance path, so a history read at
+the same tip resumes from the persisted checkpoint (only the trailing
+reorg-buffer window is re-fetched) rather than re-scanning from genesis.
+
+Each entry is JSON-safe:
+
+```jsonc
+{
+  "txHash": "…",                 // creating tx hash
+  "blockHeight": 42,             // receive height
+  "amountPicocredits": "1500000000000",  // decimal-string u64
+  "direction": "received",       // or "spent" (live chain_areKeyImagesSpent check)
+  "confirmations": 160           // max(0, tip - blockHeight) — finality depth
+}
+```
+
+Entries are sorted newest-first (descending `blockHeight`). **`direction`** is
+recomputed **live** each read — an owned output the node reports as spent renders
+as `spent` (value that has left the wallet); spent status is **never persisted**,
+consistent with #1091. **`confirmations`** is the finality depth `tip -
+blockHeight` (clamped at 0), so a shallow, reorg-prone receive near the tip is
+*visibly* flagged without mutating persisted state.
+
+> **Scope.** Outgoing/"sent" transfer records (recipient + amount per `botho_send`)
+> are **deferred** — they need a new persisted namespace *and* live owned-output
+> fixtures to test (the same `#1051` betanet gate that blocks live-send
+> validation). History here is receive-history + a live spent annotation.
+>
+> The `mergeOwnedOutputs` merge is monotonic (add-only). A reorg that drops an
+> already-persisted owned output leaves it stale in **both** balance and history;
+> a **destructive** prune-on-rescan / finality-depth prune is deliberately **out
+> of scope** here (it is balance-critical) and tracked as a dedicated follow-up.
+> The **non-destructive** half — surfacing per-entry `confirmations` so a shallow
+> receive is visible — is what this view ships.
+
 ## Key derivation: MetaMask SRP → Botho RootIdentity
 
 ```
@@ -149,8 +194,8 @@ alternative:
 | `src/derivation.ts` | SIP-6 entropy → Botho `SnapWallet` (SLIP-10 + PQ keys + address) |
 | `src/signer.ts` | Inject the inlined bundler wasm into `@botho/wasm-signer` via `setSigner` |
 | `src/node.ts` | JSON-RPC node client, `isValidRpcUrl`, wrong-network guard, `SendRpc`, meta-carrying windowed fetch (`getOutputsWithMeta`) |
-| `src/state.ts` | Persisted `snap_manageState` blob (`{ version, scan }`) + windowed/incremental-scan orchestrator (#1091) |
-| `src/ui.ts` | Snaps custom-UI dialog content (receive / balance / send / mnemonic) |
+| `src/state.ts` | Persisted `snap_manageState` blob (`{ version, scan }`), shared windowed/incremental-scan core (#1091), and the pure `deriveHistory` projection (#1092) |
+| `src/ui.ts` | Snaps custom-UI dialog content (receive / balance / history / send / mnemonic) |
 | `src/format.ts` | SES-safe (Intl-free) picocredit → BTH formatting |
 
 The wasm is `wasm-pack build --target bundler` output, base64-inlined into the
@@ -192,6 +237,13 @@ Coverage:
   target-key dedupe, window boundaries, reorg-buffer resume, network/version
   invalidation) plus the incremental-scan win driven off `node.calls`: a second
   read at the same tip fetches no new windows beyond the reorg buffer.
+- `history.snap.ts` — transaction-history projection (#1092): pure-logic
+  `deriveHistory` / `spentTargetKeys` (descending block-height order, clamped
+  `confirmations`, decimal-string amounts, received-vs-spent from a spent-set,
+  empty scan) plus behavioural `botho_getHistory` (empty chain → `[]`),
+  `botho_showHistory` (empty-state dialog), and the persisted-reuse property
+  (history after a balance read issues no window below the reorg-buffer resume
+  point — no rescan).
 
 ## Deferred (out of scope for this MVP)
 
@@ -202,13 +254,17 @@ Coverage:
   live-send validation is a follow-up, **blocked on betanet resume (#1051)**.
   (The spike demonstrated a working real send against a throwaway solo node; that
   path relied on spike-only test hooks that are intentionally absent here.)
-- **Phase 2 parity** (per the issue): transaction history (#1092), contacts
-  (#1093), in-Snap ingress selection UX, i18n, and a dedicated **security pass**
-  for the new key-handling surface (cf. the web-wallet at-rest audit, #474/#475).
+- **Phase 2 parity** (per the issue): contacts (#1093), in-Snap ingress selection
+  UX, i18n, and a dedicated **security pass** for the new key-handling surface
+  (cf. the web-wallet at-rest audit, #474/#475).
   **Shipped:** incremental/windowed scanning with persisted, encrypted scan state
-  (`snap_manageState`) — the shared scaling concern with the web wallet — is now
-  live (#1091; see "Persisted state & incremental scanning" above). It is the
-  foundation #1092 (history) and #1093 (contacts) build on.
+  (`snap_manageState`) — the shared scaling concern with the web wallet (#1091) —
+  and the **transaction-history view** (#1092; see "Transaction history" above),
+  a pure projection over that persisted state with a live spent-check. Outgoing
+  "sent" records remain deferred (new persisted namespace + live owned-output
+  fixtures, gated on betanet resume #1051), as does a destructive
+  prune-on-rescan / finality-depth prune for `mergeOwnedOutputs` reorg staleness
+  (balance-critical — dedicated follow-up).
 - **Publishing / distribution** — npm publish + MetaMask allowlist, and pinning
   the production snap id (see the snap-id pinning trade-off above).
 
