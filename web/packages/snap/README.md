@@ -30,6 +30,8 @@ All params/results are JSON-safe; amounts are string-encoded `u64` picocredits
 | `botho_addContact` | `{ label, address }` | none | `{ contact, contacts }` |
 | `botho_removeContact` | `{ id }` | none | `{ contacts }` |
 | `botho_send` | `{ rpcUrl, recipientAddress, amountPicocredits, feePicocredits? }` | confirmation | `{ txHash, txBytes }` |
+| `botho_previewClaimLink` | `{ rpcUrl, link }` | alert (claim) | `{ grossPicocredits, feePicocredits, netPicocredits }` |
+| `botho_claimLink` | `{ rpcUrl, link }` | confirmation | `{ txHash, netPicocredits }` |
 | `botho_showReceive` | — | alert (address) | `{ address }` |
 | `botho_showBalance` | `{ rpcUrl }` | alert (balance) | `{ spendablePicocredits }` |
 | `botho_showHistory` | `{ rpcUrl }` | alert (history) | `{ entries, count }` |
@@ -173,6 +175,58 @@ checkpoint). Add/remove are dApp-driven; the dialog is view-only. This is the
 Snap analogue of the web wallet's `@botho/core` `EncryptedAddressBook` (#476) — a
 different runtime/storage surface, so it reuses only the address-validation
 utility, not the localStorage implementation.
+
+## Claim-link ingress (#1094)
+
+A Botho **claim link** is a *bearer instrument*: the link fragment IS an
+ephemeral 12-word BIP39 mnemonic that owns the funded output(s) — whoever holds
+the link owns the funds, so **treat it like cash**. Claiming is **100%
+client-side** and reuses the normal CLSAG scan/send path — **no new node RPC, no
+consensus change**. Two methods surface it inside MetaMask (`src/claim.ts` +
+`src/ui.ts`):
+
+1. **Parse** the fragment → ephemeral mnemonic (+ optional non-authoritative
+   amount hint) via `@botho/core` `parseClaimLinkFragment` (accepts a full URL, a
+   bare fragment, or a leading-`#` fragment). A malformed / unsupported-version /
+   empty fragment fails with a typed `InvalidParamsError` **before any network
+   call or dialog**.
+2. **Derive** the ephemeral keys (`deriveKeypairs` + `mnemonicToSeedHex`).
+3. **Scan** the ephemeral wallet's spendable balance (`spendableBalance` — the
+   same `chain_getOutputs` + `chain_areKeyImagesSpent` surface as
+   `botho_getBalance`), yielding gross / fee / net.
+4. **Sweep** (`botho_claimLink` only): build + submit a CLSAG send FROM the
+   ephemeral keys TO the user's OWN derived address, the sweep fee paid from the
+   funded output so the user nets `gross − fee`.
+
+- `botho_previewClaimLink` is a **pure read** (parse → derive → scan → alert). It
+  is fully deterministic against the mocked node (an empty chain → net `0` → the
+  "nothing to claim" state), exactly like `botho_getBalance` — **no #1051
+  caveat**.
+- `botho_claimLink` mirrors `botho_send`: parse → wrong-network guard → scan →
+  **confirmation dialog** → sweep. Its submit plumbing is mock-tested (confirm,
+  approve/reject, "nothing to claim" surfaced, never submits without funds), and
+  **live on-chain claim validation inherits the existing `#1051` betanet gate**
+  (a real funded ephemeral output needs a live minting node) — the same gate as
+  live-send, **not a new blocker**.
+
+The scanned amount is **always authoritative**; the link's optional `amountHint`
+is shown only as a pre-scan cosmetic and is explicitly labelled non-authoritative.
+
+**Bearer-secret hygiene (cf. #474/#475).** The ephemeral mnemonic lives only
+in-memory for the duration of the RPC call — it is **never persisted** (claim
+ingress adds no `snap_manageState` key), **never put in a dialog / returned
+result / error message**, and never logged. `snap.manifest.json` needs **no**
+permission change (`endowment:network-access` + `snap_dialog` + `snap_getEntropy`
+already cover it).
+
+> **Not built here (deferred siblings).** The **request-link / pull** flow
+> (`/pay#…`, where the payer keeps custody until they approve) is a *request*
+> feature, not receive ingress; its encoder lives in the web wallet
+> (`web-wallet/src/lib/payment-request.ts`), not `@botho/core`, and would need
+> promotion + an SES-safe base64 pass — filed as a separate follow-up. An
+> **address QR** is **infeasible**: Botho v2 post-quantum stealth addresses
+> (`tbotho://2/…`) are too large for a scannable QR (see the web wallet's
+> `ReceiveModal.tsx`) — the `Copyable` field is the correct affordance.
 
 ## Key derivation: MetaMask SRP → Botho RootIdentity
 

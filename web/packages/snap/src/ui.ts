@@ -158,6 +158,81 @@ export function contactsContent(book: ContactBook): JSXElement {
   });
 }
 
+/** Amounts + context rendered in the claim-link preview / confirm dialogs. */
+export interface ClaimView {
+  /** Gross spendable picocredits the ephemeral link wallet holds. */
+  grossPicocredits: bigint;
+  /** Sweep fee (network minimum) charged from the funded output. */
+  feePicocredits: bigint;
+  /** Net picocredits the user receives after the sweep fee. */
+  netPicocredits: bigint;
+  /** Optional cosmetic hint carried in the link (never authoritative). */
+  amountHint?: bigint;
+  /** The ingress node the scan / sweep runs against. */
+  rpcUrl: string;
+}
+
+/**
+ * Shared body rows for the claim-link dialogs: the scanned claimable / fee / net
+ * amounts, an optional cosmetic hint line, and the ingress node. The SCANNED
+ * amount is always authoritative; the `amountHint` (if present) is shown only as
+ * a secondary, pre-scan cosmetic and is explicitly labelled as non-authoritative
+ * (per `@botho/core` `claim-link.ts`). The bearer secret (mnemonic) is NEVER
+ * rendered.
+ */
+function claimBodyRows(view: ClaimView): JSXElement[] {
+  const empty = view.grossPicocredits === 0n;
+  const rows: JSXElement[] = [
+    empty
+      ? Text({
+          children:
+            'Nothing to claim — this link is empty, already claimed, or not yet confirmed.',
+        })
+      : Text({
+          children:
+            'This claim link holds funds that will be swept into your wallet. The ' +
+            'sweep fee is paid from the link.',
+        }),
+    Row({ label: 'Claimable', children: Text({ children: formatBTHWithUnit(view.grossPicocredits) }) }),
+    Row({ label: 'Sweep fee', children: Text({ children: formatBTHWithUnit(view.feePicocredits) }) }),
+    Row({ label: 'You receive', children: Text({ children: formatBTHWithUnit(view.netPicocredits) }) }),
+  ];
+  if (view.amountHint !== undefined) {
+    rows.push(
+      Text({
+        children:
+          `Link hint: ${formatBTHWithUnit(view.amountHint)} ` +
+          '(cosmetic — the scanned amount above is authoritative)',
+      }),
+    );
+  }
+  rows.push(Divider({}));
+  rows.push(Row({ label: 'Node', children: Text({ children: hostOf(view.rpcUrl) }) }));
+  return rows;
+}
+
+/**
+ * Claim-link PREVIEW dialog (alert): a read-only scan of what a claim link holds
+ * (`botho_previewClaimLink`). Renders the scanned claimable / fee / net and the
+ * ingress node; does not submit anything.
+ */
+export function claimPreviewContent(view: ClaimView): JSXElement {
+  return Box({
+    children: [Heading({ children: 'Claim link' }), ...claimBodyRows(view)],
+  });
+}
+
+/**
+ * Claim-link CONFIRM dialog (confirmation): the same figures as the preview, but
+ * gated behind an explicit approve/reject before the sweep is built + submitted
+ * (`botho_claimLink`). Mirrors the `botho_send` confirmation.
+ */
+export function claimConfirmContent(view: ClaimView): JSXElement {
+  return Box({
+    children: [Heading({ children: 'Confirm claim' }), ...claimBodyRows(view)],
+  });
+}
+
 /** Mnemonic-backup dialog: the derived 24-word Botho recovery phrase. */
 export function mnemonicBackupContent(mnemonic: string): JSXElement {
   return Box({

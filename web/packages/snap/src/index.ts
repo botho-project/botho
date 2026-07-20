@@ -23,6 +23,8 @@
  *   - botho_addContact  — save a validated (label, address) contact (#1093)
  *   - botho_removeContact — drop a saved contact by id (#1093)
  *   - botho_send        — build + sign + submit, behind a confirmation dialog
+ *   - botho_previewClaimLink — scan a claim link (parse → derive → scan → alert), pure read (#1094)
+ *   - botho_claimLink   — sweep a claim link into this wallet, behind a confirmation (#1094)
  *   - botho_showReceive — receive dialog (stealth address, copyable)
  *   - botho_showBalance — balance dialog
  *   - botho_showHistory — transaction-history dialog (#1092)
@@ -71,8 +73,11 @@ import {
   historyContent,
   contactsContent,
   sendConfirmContent,
+  claimPreviewContent,
+  claimConfirmContent,
   mnemonicBackupContent,
 } from './ui';
+import { parseClaimLink, scanClaimLink, buildSweep } from './claim';
 
 declare const snap: {
   request(args: { method: string; params?: unknown }): Promise<unknown>;
@@ -335,6 +340,59 @@ export const onRpcRequest: OnRpcRequestHandler = async ({ request }) => {
 
       const { txHash } = await call<{ txHash: string }>('tx_submit', { tx_hex: txHex });
       return { txHash, txBytes: txHex.length / 2 } as Json;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Claim-link ingress (#1094): parse -> derive -> scan -> [sweep]      */
+    /* A claim link is a bearer instrument (an ephemeral mnemonic); the    */
+    /* bearer secret lives only in-memory for this call — never persisted, */
+    /* never surfaced in a dialog / result / error.                        */
+    /* ------------------------------------------------------------------ */
+    case 'botho_previewClaimLink': {
+      const rpcUrl = requireString(params, 'rpcUrl');
+      const link = requireString(params, 'link');
+
+      // Parse BEFORE any network round-trip so a malformed link fails without
+      // a call or a dialog (typed InvalidParamsError).
+      const { mnemonic, amountHint } = parseClaimLink(link);
+
+      // Node-trust / wrong-network guard before we scan.
+      const { call } = await connectAndGuard(rpcUrl);
+      const scan = await scanClaimLink(mnemonic, makeSendRpc(call));
+
+      await alert(claimPreviewContent({ ...scan, amountHint, rpcUrl }));
+      return {
+        grossPicocredits: scan.grossPicocredits.toString(),
+        feePicocredits: scan.feePicocredits.toString(),
+        netPicocredits: scan.netPicocredits.toString(),
+      } as Json;
+    }
+
+    case 'botho_claimLink': {
+      const rpcUrl = requireString(params, 'rpcUrl');
+      const link = requireString(params, 'link');
+
+      const { mnemonic, amountHint } = parseClaimLink(link);
+
+      // Wrong-network guard fires first, before anything touches funds.
+      const { call } = await connectAndGuard(rpcUrl);
+      const rpc = makeSendRpc(call);
+
+      // Scan so the confirmation shows the authoritative claimable/net amount.
+      const scan = await scanClaimLink(mnemonic, rpc);
+
+      const approved = await confirm(claimConfirmContent({ ...scan, amountHint, rpcUrl }));
+      if (!approved) {
+        throw new UserRejectedRequestError('User rejected the claim.');
+      }
+
+      // Sweep into the user's OWN derived address. `buildSweep` re-scans and
+      // surfaces "nothing to claim" (never submitting) when the link is empty.
+      const wallet = await deriveWallet();
+      const { txHex, scan: sweptScan } = await buildSweep(mnemonic, wallet.address, rpc);
+
+      const { txHash } = await call<{ txHash: string }>('tx_submit', { tx_hex: txHex });
+      return { txHash, netPicocredits: sweptScan.netPicocredits.toString() } as Json;
     }
 
     default:
