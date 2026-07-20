@@ -3,7 +3,7 @@
   "description": "Manage a privacy-by-default Botho wallet from inside MetaMask. Keys are derived from your MetaMask Secret Recovery Phrase and never leave the Snap sandbox.",
   "proposedName": "Botho Wallet",
   "source": {
-    "shasum": "yRROti+nkaYaloq5kGQ8eLH/aGExMYVM2kcBplS3pB4=",
+    "shasum": "RmkO/QR5gGFhHOBcL2r8CM0ximLyjTyOtyasCPl0+lk=",
     "location": {
       "npm": {
         "filePath": "dist/bundle.js",
