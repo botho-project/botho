@@ -314,6 +314,39 @@ alternative:
   backup loses funds — reintroducing exactly the seed-management burden the Snap
   is meant to remove.
 
+## Key-handling & at-rest (#1096)
+
+A dedicated key-handling security pass audited the Snap's secret surface end-to-end
+(SIP-6 SRP → Botho keys, the ephemeral claim-link bearer secret, the wasm/SES
+boundary, and `snap_manageState` persistence). Full writeup:
+[`audits/2026-07-20-snap-keyhandling.md`](../../../audits/2026-07-20-snap-keyhandling.md).
+
+The two at-rest finding classes from the closed web-wallet audit structurally
+**cannot recur** here: claim-link secrets are never persisted (the **#474** class),
+and the Snap **never writes the seed or private keys to state at all** — MetaMask
+holds the SRP and the Snap re-derives on demand via `snap_getEntropy` (the **#475 /
+#476** class). `test/keyhandling.snap.ts` turns those promises into enforced
+regression invariants:
+
+- **No secret in any RPC result** — no mnemonic / private-key / seed hex appears in
+  any method's JSON result (`botho_showMnemonic` returns only `{ revealed: true }`).
+- **No secret in any dialog** — the bearer mnemonic is never rendered; the recovery
+  phrase surfaces only inside a `sensitive: true` `Copyable` **after** an explicit
+  confirm (the pre-confirm dialog shows a masked placeholder).
+- **No secret in any error** — parse / wrong-network / rejection errors interpolate
+  host / method, never key material.
+- **No secret in persisted state** — the `snap_manageState` blob holds only
+  public/derived data; the private `SignerKeys` are an *input* to the scan, never
+  written out (asserted at the write boundary — the SES simulation harness exposes
+  no state getter).
+- **No logging** — `src/` has zero `console.*` sinks (guarded by a test).
+
+Defense-in-depth hardening (F1): `src/derivation.ts` zeroizes the transient
+`entropy` / `seed` byte buffers after use and no longer caches the raw recovery
+phrase at module scope (re-derived on demand — deterministic in `(SRP, snap id,
+salt)`, so the derived wallet is unchanged). Residual limits (immutable JS strings
+for hex keys; the required in-memory `cachedWallet`) are documented in the audit.
+
 ## Architecture
 
 | File | Responsibility |
