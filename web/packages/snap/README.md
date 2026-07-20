@@ -228,6 +228,48 @@ already cover it).
 > (`tbotho://2/…`) are too large for a scannable QR (see the web wallet's
 > `ReceiveModal.tsx`) — the `Copyable` field is the correct affordance.
 
+## Internationalization (i18n, #1095)
+
+Every user-facing dialog string — headings, row labels, empty-states, the
+claim/receive/mnemonic body copy, the plural-sensitive confirmations line, and
+the user-facing `UserRejectedRequestError` messages / mnemonic placeholder in
+`index.ts` — is sourced from a locale message map, reaching parity with the web
+wallet's `en`/`es`/`zh` support.
+
+**Supported locales:** `en` (fallback) + `es` + `zh`, matching the web wallet's
+`SUPPORTED_LOCALES`. The `es`/`zh` wording **reuses the web wallet's already-
+reviewed translations** (`web-wallet/src/locales/{es,zh}/{wallet,pay,claim,contacts}.json`)
+for equivalent keys so the Snap does not fork a second, drifting translation.
+
+**Why a hand-rolled map, not `i18next`.** The Snap bundle runs inside the
+MetaMask Snaps **SES (hardened) executor**, where `Intl` is not reliably endowed
+— the same casualty `src/format.ts` documents for `Number#toLocaleString`.
+`i18next`/`react-i18next` pull in runtime plural/interpolation machinery
+(`Intl.PluralRules`) and a mutable global singleton, so they are fragile-to-broken
+under SES lockdown and would bloat the bundle for ~30 static strings. Instead the
+Snap ships a self-contained, dependency-free layer (`src/i18n.ts` +
+`src/locales/{en,es,zh}.ts`): a frozen `locale → key → string` map, an Intl-free
+`t(key, locale, params?)` doing `{placeholder}` substitution via plain
+`String#split`/`join`, and an Intl-free `confirmationsPhrase` (picks a singular vs
+plural key by count; Chinese ships one count-neutral form). This mirrors the
+re-implement-the-primitive pattern `format.ts` already established.
+
+**Locale selection.** The dialog language is read at runtime from the MetaMask
+user's UI-language preference via **`snap_getPreferences.locale`**, narrowed to
+the supported set (`zh-CN → zh`, case-insensitive) and defaulting to `en` for
+anything unsupported or on any failure (older host, denied request). This method
+is a **restricted permission** in the current Snaps platform, so the manifest
+declares `"snap_getPreferences": {}` in `initialPermissions` — it is granted at
+install with no separate runtime prompt. `onRpcRequest` resolves the locale once
+per invocation and threads it into every content builder. (The
+`snap.manifest.json` `locales`/`$t(...)` mechanism localizes only the
+*install-prompt metadata* and is out of scope here.)
+
+**Deliberate English boundary.** The `InvalidParamsError` validation strings in
+`requireString`/`requireAmount`/`optionalFee` are **developer-facing dapp-
+integration errors**, not end-user dialog copy, so they are intentionally left
+English in this pass.
+
 ## Key derivation: MetaMask SRP → Botho RootIdentity
 
 ```
