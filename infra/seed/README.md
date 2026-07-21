@@ -19,6 +19,8 @@ infra/seed/
 ├── botho-seed.service        # Systemd service file
 ├── reset-chain.sh            # Wipe chain data over SSH (--dry-run / --help)
 ├── reset-to-testnet.sh       # Local on-host reset to testnet (--dry-run / --help)
+├── gossip-firewall.sh        # Peer-allowlist :17100 firewall, persisted (--dry-run / --help)
+├── gossip-peers.conf         # Editable :17100 gossip allowlist (data for gossip-firewall.sh)
 ├── deploy-botho.sh           # Build + deploy node binary to host
 ├── deploy-web.sh             # Deploy web files to server
 ├── seed-nginx.conf           # Nginx configuration
