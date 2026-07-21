@@ -22,6 +22,8 @@ infra/seed/
 ├── reprovision-relay.sh      # Re-provision ONE relay after a consensus-breaking reset:
 │                             #   stop → wipe ledger → deploy pinned release → restart →
 │                             #   verify re-peering + tip convergence (--dry-run / --help)
+├── gossip-firewall.sh        # Peer-allowlist :17100 firewall, persisted (--dry-run / --help)
+├── gossip-peers.conf         # Editable :17100 gossip allowlist (data for gossip-firewall.sh)
 ├── deploy-botho.sh           # Build + deploy node binary to host
 ├── deploy-web.sh             # Deploy web files to server
 ├── seed-nginx.conf           # Nginx configuration

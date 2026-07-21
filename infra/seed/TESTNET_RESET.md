@@ -224,27 +224,58 @@ major mismatch), but their **connect-churn + height gossip stalls SCP first**,
 before the disconnect takes effect. Every reconnect (~every 5s) also churns a
 quorum reconfiguration.
 
-**Best practice: decommission the old nodes BEFORE the reset.** If you cannot
-(they are outside your control), firewall gossip (port `17100`) to the fleet's
-own IPs only, on **ALL** nodes, until #1000 lands:
+**Best practice: decommission the old nodes BEFORE the reset.** As a
+belt-and-suspenders measure, firewall gossip (port `17100`) to an explicit
+peer allowlist on **ALL** validators. This is now scripted and persisted —
+run `gossip-firewall.sh apply` on each validator host instead of hand-typing
+`iptables` commands (the old copy-paste block was never persisted and never
+updated for the eu/ap relays, which silently stranded them in #1114):
 
 ```bash
-# Run on EVERY fleet node. Replace <fleet-internal-IPs> with the space-
-# separated internal IPs of the other fleet nodes.
-for ip in <fleet-internal-IPs> 127.0.0.1; do
-  sudo iptables -A INPUT -p tcp --dport 17100 -s "$ip" -j ACCEPT
-done
-sudo iptables -A INPUT -p tcp --dport 17100 -j DROP
+# ON each validator host (seed / seed2 / faucet), as an OPERATOR with sudo.
+# Edit the allowlist first (see gossip-peers.conf), then apply + persist:
+sudo ./gossip-firewall.sh apply
+
+# Preview without touching iptables (no root needed, safe anywhere):
+./gossip-firewall.sh --dry-run apply
+
+# Is :17100 locked down AND durable across reboot?
+./gossip-firewall.sh status
+
+# Revert :17100 to the SG default (open), e.g. when decommissioning:
+sudo ./gossip-firewall.sh remove
 ```
 
-This drops all gossip from non-fleet peers so the zombies can no longer
-connect, churn, or gossip their stale height. Leave RPC (`17101`) alone.
+The allowlist lives in [`gossip-peers.conf`](./gossip-peers.conf) (edit that
+one file when topology changes) and currently covers:
 
-> **Tracking.** #998 is the wedge incident + operational root cause; #1000 is
-> the propose-gate hardening follow-up (exclude a consensus-incompatible peer's
-> height advertisement from the sync-complete / propose-gate determination).
-> Once #1000 ships, the firewall workaround is no longer required — the
-> zombies' height advertisements will simply be ignored.
+| Peer | IP | Notes |
+|------|----|----|
+| eu.seed.botho.io | `3.77.150.19` (public) | EU relay (Frankfurt), #613 — on a separate host, cannot reach the US validators over the VPC, so must be allowlisted by public IP |
+| ap.seed.botho.io | `3.0.209.59` (public) | AP relay (Singapore), #613 — same reasoning |
+| seed / seed2 / faucet | `172.31.x.y` (internal VPC) | The three US validators — internal IPs are VPC-private and rotation-prone, so they are **not** committed; the operator fills them into `gossip-peers.conf` before applying (see the file's comments) |
+
+`127.0.0.1` is always allowed by the script. This drops all gossip from
+non-allowlisted peers so zombies can no longer connect, churn, or gossip their
+stale height. Leave RPC (`17101`) alone.
+
+> **Scope.** Editing `gossip-peers.conf` and the script itself is repo work;
+> running `apply`/`remove` against a live validator mutates the kernel firewall
+> and is an **operator** action (SSH + sudo on the host), never done by CI —
+> the same split this runbook's header calls out for the reset scripts.
+
+> **Tracking / why keep it now that #1000 shipped.** #998 was the original
+> wedge incident; #1000 (the propose-gate hardening that excludes a
+> consensus-incompatible peer's height advertisement from the sync/propose
+> determination) **shipped on 2026-07-16**, so the *specific* propose-gate
+> wedge this firewall once mitigated is fixed in the node itself. The firewall
+> is **retained deliberately** as defense-in-depth: the validators are private
+> consensus infrastructure, so peer-allowlisting `:17100` keeps hostile/zombie
+> gossip and connect-churn off the fleet in general (not just the #998 bug),
+> and makes the iptables gate declarative + reboot-durable so it can no longer
+> silently drift from the AWS SG (the #1114 / #1117 failure mode). Do **not**
+> read "#1000 shipped" as "remove the firewall" — the policy is now
+> peer-allowlist by design.
 
 ## 6. Wedge recovery (chain stops producing after a reset)
 
@@ -260,7 +291,8 @@ producing blocks after a reset:
    `journalctl -u botho-seed | grep -i "peer_version=4.0.0"`; the tell is
    `peer_version=4.0.0 ... disconnecting` (consensus-incompatible) repeating
    every few seconds.
-3. **Firewall the zombies off on ALL nodes** using the §5 gossip firewall.
+3. **Firewall the zombies off on ALL validators** with the §5 gossip firewall
+   (`sudo ./gossip-firewall.sh apply` on each host).
 4. **Confirm no degenerate quorum** — verify no node has
    `[network.quorum] mode=explicit threshold=1 members=[]` (§4). A degenerate
    quorum wedges identically and will NOT be fixed by the firewall.
