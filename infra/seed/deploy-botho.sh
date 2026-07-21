@@ -11,8 +11,11 @@
 #   ./deploy-botho.sh [user@host] [--build-on-host]
 #
 # Environment:
-#   SSH_KEY      SSH key path (default: ~/.ssh/botho-nodes.pem)
-#   RELEASE_TAG  Release tag to deploy (default: latest GitHub release)
+#   SSH_KEY       SSH key path (default: ~/.ssh/botho-nodes.pem)
+#   RELEASE_TAG   Release tag to deploy (default: latest GitHub release)
+#   SERVICE_NAME  systemd unit to stop/restart (default: botho). Override when
+#                 the host runs the node under a different unit (e.g. a relay
+#                 installed as botho-seed). reprovision-relay.sh sets this.
 #
 # Example:
 #   ./deploy-botho.sh ubuntu@seed.botho.io
@@ -39,7 +42,10 @@ REPO="botho-project/botho"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/botho-nodes.pem}"
 BUILD_DIR="/tmp/botho-build"
 INSTALL_DIR="/usr/local/bin"
-SERVICE_NAME="botho"
+# SERVICE_NAME is overridable via the environment so this deploy path can be
+# shared by reprovision-relay.sh (which may target a botho-seed unit). Defaults
+# to "botho" to preserve the original behavior.
+SERVICE_NAME="${SERVICE_NAME:-botho}"
 
 # Parse arguments: optional host, optional --build-on-host
 HOST="$DEFAULT_HOST"

@@ -19,6 +19,9 @@ infra/seed/
 ├── botho-seed.service        # Systemd service file
 ├── reset-chain.sh            # Wipe chain data over SSH (--dry-run / --help)
 ├── reset-to-testnet.sh       # Local on-host reset to testnet (--dry-run / --help)
+├── reprovision-relay.sh      # Re-provision ONE relay after a consensus-breaking reset:
+│                             #   stop → wipe ledger → deploy pinned release → restart →
+│                             #   verify re-peering + tip convergence (--dry-run / --help)
 ├── deploy-botho.sh           # Build + deploy node binary to host
 ├── deploy-web.sh             # Deploy web files to server
 ├── seed-nginx.conf           # Nginx configuration
