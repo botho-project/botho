@@ -1192,13 +1192,40 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
     // loop has not yet published a snapshot, fall back to the caught-up
     // assumption — a lone node with no peers has nothing to sync against.
     let sync_snapshot = state.sync_status_snapshot();
-    let synced = sync_snapshot.as_ref().map(|s| s.synced).unwrap_or(true);
-    let sync_status: &str = sync_snapshot.as_ref().map(|s| s.status).unwrap_or("synced");
+    let raw_synced = sync_snapshot.as_ref().map(|s| s.synced).unwrap_or(true);
+    let raw_status: &str = sync_snapshot.as_ref().map(|s| s.status).unwrap_or("synced");
+
+    // Peer-isolation cross-check (#1118). `ChainSyncManager` has no isolation
+    // escape hatch: once it reaches `SyncState::Synced` it stays latched there
+    // even after its last peer disconnects (`best_peer()` then returns `None`
+    // and the `Synced` tick arm never re-evaluates), so a node stranded on a
+    // stale singleton fork keeps self-certifying as `synced` — the #1114 relay
+    // outage, where two 0-peer relays reported `synced: true` while days behind
+    // the live chain. Cross-check the raw snapshot against the live `peers`
+    // count here rather than trust it.
+    //
+    // Gated on a snapshot having been published (`sync_snapshot.is_some()`): a
+    // lone dev / single-node / genesis node that never wired or ran a sync loop
+    // returns `None` and is legitimately caught up — it has no live network to
+    // be isolated *from*. The bug is specifically a node that *was* connected,
+    // published sync state, then lost every peer. This stays grounded entirely
+    // in the real, live `peers` count — never a fabricated constant
+    // (anti-#541–#544).
+    let isolated = peers == 0 && sync_snapshot.is_some();
+    let synced = raw_synced && !isolated;
+    let sync_status: &str = if isolated { "isolated" } else { raw_status };
     // Real percentage when a best-known tip is available; 100.0 when synced or
-    // when we have no peer to compare against (nothing to catch up to).
-    let sync_progress: f64 = match sync_snapshot.as_ref() {
-        Some(s) => s.progress_percent().unwrap_or(100.0),
-        None => 100.0,
+    // when we have no peer to compare against (nothing to catch up to). An
+    // isolated node reports 0.0 — it has no peer to measure progress against, so
+    // claiming 100% (which `progress_percent()` returns whenever `synced`)
+    // would be the same lie as the latched `synced` flag.
+    let sync_progress: f64 = if isolated {
+        0.0
+    } else {
+        match sync_snapshot.as_ref() {
+            Some(s) => s.progress_percent().unwrap_or(100.0),
+            None => 100.0,
+        }
     };
 
     // Byzantine-fault-tolerance posture (#509). Participating node count
@@ -4806,6 +4833,12 @@ mod tests {
         )
         .with_sync_status(sync_handle.clone());
 
+        // A node that is downloading from / caught up with the network has live
+        // peers; set a realistic count so the #1118 isolation cross-check does
+        // not fire (that path is exercised separately in
+        // `test_node_status_reports_isolated_when_no_peers`).
+        *state.peer_count.write().unwrap() = 3;
+
         // --- Behind: downloading, local 50 of best-known 100. ---
         *sync_handle.write().unwrap() = Some(SyncStatusSnapshot {
             synced: false,
@@ -4856,6 +4889,72 @@ mod tests {
             Arc::new(WsBroadcaster::new(16)),
         );
 
+        let resp = handle_node_status(json!(1), &state).await;
+        let result = resp.result.unwrap();
+        assert_eq!(result["synced"], json!(true));
+        assert_eq!(result["syncStatus"], json!("synced"));
+        assert_eq!(result["syncProgress"].as_f64().unwrap(), 100.0);
+    }
+
+    /// #1118: a node whose `ChainSyncManager` is latched in `SyncState::Synced`
+    /// but has lost every peer must NOT keep reporting `synced: true`. This is
+    /// the #1114 relay-outage failure: a node stranded on a stale singleton
+    /// fork self-certifies as synced because the state machine has no
+    /// isolation escape hatch. `handle_node_status` cross-checks the
+    /// published snapshot against the live peer count and reports `synced:
+    /// false` / `syncStatus: "isolated"` / `syncProgress: 0` instead. A
+    /// node with the SAME snapshot but live peers is unaffected.
+    #[tokio::test]
+    async fn test_node_status_reports_isolated_when_no_peers() {
+        use crate::{ledger::Ledger, mempool::Mempool, network::SyncStatusSnapshot};
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+
+        let sync_handle = Arc::new(RwLock::new(None));
+        let state = RpcState::new(
+            ledger,
+            Mempool::new(),
+            Network::Testnet,
+            None,
+            None,
+            vec![],
+            Arc::new(WsBroadcaster::new(16)),
+        )
+        .with_sync_status(sync_handle.clone());
+
+        // The sync manager is latched in Synced (it published a synced snapshot
+        // before its peers dropped) and claims a full 100% progress.
+        *sync_handle.write().unwrap() = Some(SyncStatusSnapshot {
+            synced: true,
+            status: "synced",
+            local_height: 3233,
+            target_height: Some(3233),
+        });
+
+        // --- Isolated: 0 peers overrides the latched `synced` snapshot. ---
+        *state.peer_count.write().unwrap() = 0;
+        let resp = handle_node_status(json!(1), &state).await;
+        let result = resp.result.unwrap();
+        assert_eq!(
+            result["synced"],
+            json!(false),
+            "a 0-peer node must not report synced even when latched in SyncState::Synced"
+        );
+        assert_eq!(
+            result["syncStatus"],
+            json!("isolated"),
+            "syncStatus must be a distinct `isolated` value, not `synced`"
+        );
+        assert_eq!(
+            result["syncProgress"].as_f64().unwrap(),
+            0.0,
+            "an isolated node has no peer to measure progress against — must not claim 100%"
+        );
+        assert_eq!(result["peerCount"], json!(0));
+
+        // --- Regression guard: the SAME snapshot with live peers is healthy. ---
+        *state.peer_count.write().unwrap() = 3;
         let resp = handle_node_status(json!(1), &state).await;
         let result = resp.result.unwrap();
         assert_eq!(result["synced"], json!(true));
