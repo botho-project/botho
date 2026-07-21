@@ -84,6 +84,57 @@ via RPC on `localhost:17101`.
 ./reset-to-testnet.sh
 ```
 
+### `reprovision-relay.sh` — re-provision ONE relay after a consensus-breaking reset
+
+The composed operator command for the failure that stranded the eu/ap relays in
+**#1114**: after a coordinated, consensus-breaking reset, a single regional
+relay is left behind on the **old** chain. Its on-disk ledger is incompatible
+with the new protocol, so the freshly deployed binary boots against a chain it
+can never reconcile. `deploy-botho.sh` alone swaps the binary but never wipes
+the ledger; `reset-chain.sh` alone wipes the ledger but never upgrades/pins the
+binary. Neither verifies the relay actually re-peers and converges on the
+fleet's tip. This script does all of it, in the only order that works:
+
+1. stops the service,
+2. wipes **only** `ledger/` + `wallet/` (preserving `config.toml` **and**
+   `node_key` — see below),
+3. deploys the pinned release (delegates to `deploy-botho.sh`),
+4. restarts onto the fresh, empty ledger,
+5. polls the relay's **LOCAL** RPC (§7) until `peerCount > 0` **and** its
+   `tipHash` matches a known-good validator, with a bounded timeout.
+
+```bash
+./reprovision-relay.sh --dry-run ubuntu@eu.seed.botho.io          # preview, no SSH
+RELEASE_TAG=v0.6.0 ./reprovision-relay.sh ubuntu@eu.seed.botho.io
+RELEASE_TAG=v0.6.0 ./reprovision-relay.sh --service botho \
+    --validator-rpc https://seed.botho.io/rpc ubuntu@ap.seed.botho.io
+```
+
+> **`node_key` survives the wipe automatically.** The stable peer identity lives
+> at `~/.botho/<network>/node_key`, a **sibling** of `ledger/` and `wallet/`
+> (`botho/src/config.rs` `node_key_path_from_config`), so removing `ledger/` +
+> `wallet/` never touches it. The relay keeps its `PEER_ID` across the
+> re-provision — no acceptance-criterion code change was needed for this, only
+> verification.
+
+> **Service-name drift (verify before running).** `deploy-botho.sh` historically
+> hardcoded the `botho` unit, `reset-chain.sh` defaults to `botho-seed`, and
+> `reset-to-testnet.sh` installs `botho-seed.service` — yet the live regional
+> relays in #1114 were running under a `botho` unit. `reprovision-relay.sh`
+> defaults `--service` to `botho` but **preflights the unit's existence and
+> fails loudly** if the named unit is not installed (printing the actual
+> `botho*` units present), so it can never silently restart the wrong service.
+> Confirm the real unit first: `systemctl list-unit-files | grep botho`.
+
+> **Firewall prerequisite (#1117).** A relay cannot re-peer if the validators'
+> gossip port (`17100`) is dropping its IP. The validators carry an
+> **un-persisted** iptables lockdown on `:17100` (VPC-only) even while the
+> security group shows `0.0.0.0/0` — the SG lies, iptables is the real gate, and
+> it silently strands external relays. On a `peerCount == 0` timeout the script
+> explicitly points at #1117 as the most likely cause. Confirm the relay's
+> public IP is `ACCEPT`ed on **every** validator's `:17100` before blaming the
+> relay.
+
 ## 3. Deploy from the published release artifact (do NOT build on the seeds)
 
 The seeds are **t4g.small** (1.8 GiB RAM, 0 swap) and a release build **OOMs**
@@ -343,10 +394,21 @@ while all artifacts still publish (#996) — non-blocking for a testnet deploy.
 
 ## Operator steps remaining (NOT in this PR — require AWS/DNS/credentials)
 
+> **The fleet node list — enumerate EVERY host, including the regional relays.**
+> A coordinated reset must touch **all five** live nodes, not just "the seeds":
+> the two SCP validators/faucet **and** the two regional relays
+> `eu.seed.botho.io` and `ap.seed.botho.io`. In #1114 the eu/ap relays were left
+> behind on the old chain because the runbook spoke generically of "the fleet" /
+> "every host" without naming them — do not repeat that. If you only need to
+> bring a **single** stranded relay back onto the current chain (rather than
+> resetting the whole fleet), use `reprovision-relay.sh` (§2) instead of the
+> full sequence below.
+
 1. **Decommission any old-protocol nodes from the prior testnet BEFORE the
    reset** (§5). If you cannot, prepare the gossip firewall to apply on every
    fleet node at reset time — old zombies will otherwise wedge the fresh chain.
-2. **Deploy the current release binary** to every host from the published
+2. **Deploy the current release binary** to every host — the validators/faucet
+   **and** `eu.seed.botho.io` / `ap.seed.botho.io` — from the published
    artifact: `RELEASE_TAG=v0.6.0 ./infra/seed/deploy-botho.sh ubuntu@<host>`
    (§3). Do NOT `--build-on-host` on the t4g.small seeds (OOM).
 3. **Reset the chain** to fresh genesis on the current protocol version
