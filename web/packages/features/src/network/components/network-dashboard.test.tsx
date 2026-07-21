@@ -76,6 +76,23 @@ describe('NetworkDashboard', () => {
     expect(screen.getByText('2/3')).toBeDefined()
   })
 
+  it('flags peer-isolated relays and does not let their stale height poison consensus', () => {
+    // The live eu/ap drift: one connected validator at 202, two isolated
+    // relays stuck on the old pre-reset chain at 3233 with zero peers.
+    renderDash({
+      seed: live('seed', { chainHeight: 202, peerCount: 2 }),
+      eu: live('eu', { chainHeight: 3233, peerCount: 0 }),
+      ap: live('ap', { chainHeight: 3233, peerCount: 0 }),
+    })
+    // Consensus is the connected validator's height, not the isolated relays'.
+    expect(screen.getAllByText('202')).toHaveLength(2) // summary + seed card
+    // Both isolated relays are called out; the validator is NOT "behind".
+    expect(screen.getAllByText(/isolated — 0 peers/)).toHaveLength(2)
+    expect(screen.queryByText(/blocks behind/)).toBeNull()
+    expect(screen.getByText(/2 isolated/)).toBeDefined()
+    expect(screen.getByText('1/3')).toBeDefined() // only the validator in sync
+  })
+
   it('surfaces a stalled SCP slot as a warning badge', () => {
     renderDash({
       seed: live('seed', { slotStalled: true }),

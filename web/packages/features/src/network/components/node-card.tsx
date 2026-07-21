@@ -39,12 +39,19 @@ export function NodeCard({ node, status, consensusHeight, className }: NodeCardP
   }
 
   const height = status?.chainHeight
+  // A reachable node with zero peers is off the mesh: its height is a singleton
+  // view (possibly a stale/forked chain), so the "N blocks behind consensus"
+  // comparison is meaningless and misleading — surface isolation instead.
+  const isolated = status?.reachable === true && status.peerCount === 0
   const lagging =
-    consensusHeight !== null && typeof height === 'number' && consensusHeight - height > 1
+    !isolated &&
+    consensusHeight !== null &&
+    typeof height === 'number' &&
+    consensusHeight - height > 1
 
   return (
     <Card
-      className={`${lagging ? 'border-[--color-warning]/50' : ''} ${className ?? ''}`}
+      className={`${isolated ? 'border-[--color-danger]/40' : lagging ? 'border-[--color-warning]/50' : ''} ${className ?? ''}`}
       data-testid={`node-card-${node.id}`}
     >
       <CardContent className="p-4">
@@ -61,11 +68,20 @@ export function NodeCard({ node, status, consensusHeight, className }: NodeCardP
                 warn={lagging}
               />
               <Stat label="Mempool" value={status.mempoolSize?.toLocaleString() ?? '—'} />
-              <Stat label="Peers" value={status.peerCount?.toLocaleString() ?? '—'} />
+              <Stat
+                label="Peers"
+                value={status.peerCount?.toLocaleString() ?? '—'}
+                warn={isolated}
+              />
               <Stat label="SCP peers" value={status.scpPeerCount?.toLocaleString() ?? '—'} />
             </div>
 
             <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+              {isolated && (
+                <span className="inline-flex items-center gap-1 rounded bg-[--color-danger]/15 px-1.5 py-0.5 text-[--color-danger]">
+                  <WifiOff className="h-3 w-3" /> isolated — 0 peers, off consensus
+                </span>
+              )}
               {status.mintingActive && (
                 <span className="inline-flex items-center gap-1 rounded bg-[--color-pulse]/15 px-1.5 py-0.5 text-[--color-pulse]">
                   <Pickaxe className="h-3 w-3" /> minting

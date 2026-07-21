@@ -65,7 +65,21 @@ export async function fetchFleetStatus(nodes: FleetNode[]): Promise<FleetNodeSta
 /** Derive fleet-level facts from live snapshots. Pure. */
 export function deriveFleetSummary(statuses: FleetNodeStatus[]): FleetSummary {
   const reachable = statuses.filter((s) => s.reachable)
-  const heights = reachable
+
+  // A node reporting zero peers is not participating in the mesh: its height is
+  // a singleton view (possibly a stale pre-reset fork) and must neither define
+  // consensus nor count as in-sync. Without this, an isolated relay stuck on an
+  // old chain at a far-higher height wins `Math.max` and paints the real,
+  // connected validators as thousands of blocks behind. `peerCount === undefined`
+  // (a node predating the field) is given the benefit of the doubt and kept.
+  const participating = reachable.filter((s) => s.peerCount !== 0)
+  const nodesIsolated = reachable.length - participating.length
+
+  // Consensus comes from participating nodes; fall back to all reachable only
+  // when none are participating (e.g. a lone dev node with no peers) so the
+  // strip still shows a height rather than an em-dash.
+  const heightPool = participating.length > 0 ? participating : reachable
+  const heights = heightPool
     .map((s) => s.chainHeight)
     .filter((h): h is number => typeof h === 'number')
   const consensusHeight = heights.length > 0 ? Math.max(...heights) : null
@@ -75,10 +89,11 @@ export function deriveFleetSummary(statuses: FleetNodeStatus[]): FleetSummary {
     nodesInSync:
       consensusHeight === null
         ? 0
-        : reachable.filter(
+        : heightPool.filter(
             (s) => typeof s.chainHeight === 'number' && consensusHeight - s.chainHeight <= 1,
           ).length,
     nodesReachable: reachable.length,
+    nodesIsolated,
     nodesTotal: statuses.length,
     totalMempool: reachable.reduce((acc, s) => acc + (s.mempoolSize ?? 0), 0),
     anySlotStalled: reachable.some((s) => s.slotStalled === true),
