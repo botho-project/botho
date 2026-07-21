@@ -21,6 +21,38 @@ describe('deriveFleetSummary', () => {
     expect(s.totalMempool).toBe(3)
   })
 
+  it('excludes peer-isolated nodes from consensus so a stale fork cannot poison the tip', () => {
+    // The live eu/ap relay drift: two isolated relays stuck on the old
+    // pre-reset chain at height 3233, three connected validators at 202.
+    const s = deriveFleetSummary([
+      status({ nodeId: 'seed', chainHeight: 202, peerCount: 2 }),
+      status({ nodeId: 'seed2', chainHeight: 202, peerCount: 2 }),
+      status({ nodeId: 'faucet', chainHeight: 202, peerCount: 2 }),
+      status({ nodeId: 'eu', chainHeight: 3233, peerCount: 0 }),
+      status({ nodeId: 'ap', chainHeight: 3233, peerCount: 0 }),
+    ])
+    expect(s.consensusHeight).toBe(202) // NOT 3233
+    expect(s.nodesInSync).toBe(3) // the validators, not the isolated relays
+    expect(s.nodesReachable).toBe(5)
+    expect(s.nodesIsolated).toBe(2)
+  })
+
+  it('falls back to reachable heights when no node has peers (lone dev node)', () => {
+    const s = deriveFleetSummary([status({ chainHeight: 10, peerCount: 0 })])
+    expect(s.consensusHeight).toBe(10)
+    expect(s.nodesIsolated).toBe(1)
+  })
+
+  it('treats an undefined peerCount as participating (back-compat with older nodes)', () => {
+    const s = deriveFleetSummary([
+      status({ chainHeight: 220 }), // no peerCount field
+      status({ chainHeight: 219 }),
+    ])
+    expect(s.consensusHeight).toBe(220)
+    expect(s.nodesInSync).toBe(2)
+    expect(s.nodesIsolated).toBe(0)
+  })
+
   it('reports null consensus height when nothing is reachable', () => {
     const s = deriveFleetSummary([status({ reachable: false }), status({ reachable: false })])
     expect(s.consensusHeight).toBeNull()

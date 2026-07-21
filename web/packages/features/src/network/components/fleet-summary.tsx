@@ -33,12 +33,12 @@ export function FleetSummaryStrip({
           }
           label="Nodes in sync"
           value={`${summary.nodesInSync}/${summary.nodesTotal}`}
-          sub={
-            summary.nodesReachable < summary.nodesTotal
-              ? `${summary.nodesTotal - summary.nodesReachable} unreachable`
-              : undefined
+          sub={syncSub(summary)}
+          warn={
+            summary.nodesInSync < summary.nodesReachable ||
+            summary.nodesIsolated > 0 ||
+            summary.anySlotStalled
           }
-          warn={summary.nodesInSync < summary.nodesReachable || summary.anySlotStalled}
         />
         <Metric
           icon={<Layers className="h-4 w-4" />}
@@ -59,6 +59,19 @@ export function FleetSummaryStrip({
       </CardContent>
     </Card>
   )
+}
+
+/**
+ * Sub-label for the "Nodes in sync" metric: call out unreachable and
+ * peer-isolated (off-consensus) nodes so a stale/forked relay is visible
+ * rather than silently green.
+ */
+function syncSub(summary: FleetSummary): string | undefined {
+  const parts: string[] = []
+  const unreachable = summary.nodesTotal - summary.nodesReachable
+  if (unreachable > 0) parts.push(`${unreachable} unreachable`)
+  if (summary.nodesIsolated > 0) parts.push(`${summary.nodesIsolated} isolated`)
+  return parts.length > 0 ? parts.join(', ') : undefined
 }
 
 /**

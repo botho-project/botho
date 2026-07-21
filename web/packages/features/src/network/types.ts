@@ -43,12 +43,22 @@ export interface FleetNodeStatus {
 
 /** Fleet-level facts derived from the live snapshots (pure function). */
 export interface FleetSummary {
-  /** Highest height any reachable node reports (consensus tip). */
+  /**
+   * Consensus tip: the highest height among *connected* nodes (peerCount > 0).
+   * Peer-isolated nodes are excluded so a stale/forked singleton cannot define
+   * the tip. `null` when nothing reachable.
+   */
   consensusHeight: number | null
-  /** Reachable nodes at the consensus height (within 1 block). */
+  /** Connected nodes at the consensus height (within 1 block). */
   nodesInSync: number
   /** Reachable node count. */
   nodesReachable: number
+  /**
+   * Reachable but peer-isolated nodes (peerCount === 0). Not participating in
+   * the mesh — their height is a singleton view (possibly a stale pre-reset
+   * fork), so they are excluded from `consensusHeight`/`nodesInSync`.
+   */
+  nodesIsolated: number
   /** Total nodes watched. */
   nodesTotal: number
   /** Sum of mempool sizes across reachable nodes. */
