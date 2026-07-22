@@ -126,6 +126,14 @@ impl AccountMeta {
             is_writable: true,
         }
     }
+    /// A read-only signer.
+    pub fn readonly_signer(pubkey: Pubkey) -> Self {
+        Self {
+            pubkey,
+            is_signer: true,
+            is_writable: false,
+        }
+    }
 }
 
 /// A program instruction prior to message compilation.

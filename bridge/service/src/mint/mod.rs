@@ -19,6 +19,13 @@
 pub mod ethereum;
 mod keysource;
 pub mod solana;
+// Squads v4 vault-transaction mint assembly (ADR 0012, #1087). Tier-1 slice:
+// the assembly primitives + pinned byte-layout tests land first; wiring the
+// multi-step create→approve→execute flow through `SolMinter` is sequenced
+// with the operator Squads setup (#1086) and the Tier-2 harness, so nothing
+// outside the tests consumes this module yet.
+#[allow(dead_code)]
+pub mod squads;
 
 use async_trait::async_trait;
 use bth_bridge_core::{BridgeOrder, Chain, MintAuthorization};
