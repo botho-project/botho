@@ -164,7 +164,7 @@ static_assertions = "1"
 subtle = { version = "2", default-features = false }
 syn = "2"
 tempfile = "3"
-thiserror = "1"
+thiserror = "2"
 tiny-bip39 = "1"
 tokio = "1"
 tokio-stream = "0.1"
