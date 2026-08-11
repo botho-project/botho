@@ -30,7 +30,7 @@ bth-transaction-clsag = { path = "../../transaction/clsag" }
 bs58 = "0.4"
 
 # UniFFI for generating Swift/Kotlin bindings
-uniffi = { version = "0.28", features = ["cli"] }
+uniffi = { version = "0.32", features = ["cli"] }
 
 # Async runtime (minimal for mobile)
 tokio = { version = "1", features = ["rt", "sync"] }
@@ -65,7 +65,7 @@ tokio = { version = "1", features = ["full"] }
 bth-crypto-pq = { path = "../../crypto/pq" }
 
 [build-dependencies]
-uniffi = { version = "0.28", features = ["build"] }
+uniffi = { version = "0.32", features = ["build"] }
 
 [features]
 default = []
