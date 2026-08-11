@@ -15,34 +15,35 @@
   "jest": {
     "preset": "jest-expo",
     "transformIgnorePatterns": [
-      "node_modules/(?!\\.pnpm/)(?!((jest-)?react-native|@react-native(-community)?|@react-native/[^/]+|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules|sentry-expo|native-base|react-native-svg|zustand))"
+      "node_modules/(?!\\.pnpm/)(?!((jest-)?react-native|@react-native(-community)?|@react-native/[^/]+|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules|sentry-expo|native-base|react-native-svg|standard-navigation|zustand))"
     ]
   },
   "dependencies": {
     "@react-navigation/native": "^6.1.0",
     "@tanstack/react-query": "^5.101.4",
-    "expo": "~50.0.0",
-    "expo-local-authentication": "~14.0.0",
-    "expo-modules-core": "~1.11.0",
-    "expo-router": "~3.4.0",
-    "expo-secure-store": "~13.0.0",
-    "expo-status-bar": "~1.11.0",
-    "react": "18.3.1",
+    "expo": "~57.0.12",
+    "expo-constants": "~57.0.10",
+    "expo-linking": "~57.0.5",
+    "expo-local-authentication": "~57.0.2",
+    "expo-router": "~57.0.12",
+    "expo-secure-store": "~57.0.1",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
     "react-native": "0.86.2",
-    "react-native-safe-area-context": "4.8.2",
-    "react-native-screens": "~3.29.0",
+    "react-native-safe-area-context": "5.7.0",
+    "react-native-screens": "~4.26.2",
     "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",
     "@types/jest": "^29.5.14",
-    "babel-preset-expo": "~10.0.0",
-    "@types/react": "~18.2.0",
+    "@types/react": "~19.2.18",
+    "babel-preset-expo": "~57.0.6",
     "eslint": "^8.0.0",
-    "eslint-config-expo": "~7.0.0",
+    "eslint-config-expo": "~57.0.1",
     "jest": "^29.0.0",
-    "jest-expo": "~50.0.0",
-    "typescript": "^7.0.2"
+    "jest-expo": "~57.0.4",
+    "typescript": "^6.0.3"
   },
   "private": true
 }

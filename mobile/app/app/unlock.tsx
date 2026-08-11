@@ -56,24 +56,6 @@ export default function UnlockScreen() {
   const [mnemonic, setMnemonic] = useState("");
   const [isAuthenticating, setIsAuthenticating] = useState(false);
 
-  // Check biometric availability on mount
-  useEffect(() => {
-    const checkBiometrics = async () => {
-      const available = await isBiometricAvailable();
-      if (available) {
-        const type = await getBiometricType();
-        setBiometricType(type);
-        // Auto-trigger biometric auth on mount
-        handleBiometricAuth();
-      } else {
-        // No biometrics - show mnemonic input
-        setShowMnemonicInput(true);
-      }
-    };
-
-    checkBiometrics();
-  }, []);
-
   // Handle biometric authentication
   const handleBiometricAuth = async () => {
     if (isAuthenticating) return;
@@ -124,6 +106,27 @@ export default function UnlockScreen() {
       setIsAuthenticating(false);
     }
   };
+
+  // Check biometric availability on mount. Declared after
+  // `handleBiometricAuth` so the effect closes over the initialized binding
+  // (react-hooks/immutability flags access-before-declaration).
+  useEffect(() => {
+    const checkBiometrics = async () => {
+      const available = await isBiometricAvailable();
+      if (available) {
+        const type = await getBiometricType();
+        setBiometricType(type);
+        // Auto-trigger biometric auth on mount
+        handleBiometricAuth();
+      } else {
+        // No biometrics - show mnemonic input
+        setShowMnemonicInput(true);
+      }
+    };
+
+    checkBiometrics();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only
+  }, []);
 
   // Handle mnemonic unlock
   const handleMnemonicUnlock = async () => {

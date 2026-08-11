@@ -120,20 +120,12 @@ updates:
       interval: "weekly"
     labels: ["dependencies"]
     ignore:
-      # Expo packages are SDK-versioned lockstep (#1173): every expo-* /
-      # react-native-* major belongs to "upgrade the Expo SDK", done via
-      # `npx expo install --fix`, not per-package bumps — and mobile/ has no
-      # CI, so a green check here verifies nothing. Patches still flow.
-      - dependency-name: "expo*"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
-      - dependency-name: "babel-preset-expo"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
-      - dependency-name: "jest-expo"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
-      - dependency-name: "eslint-config-expo"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
-      - dependency-name: "react-native*"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      # react majors move with the Expo SDK's paired React Native release
+      # (React 19.2 <-> RN 0.86 <-> SDK 57), so a lone react major is
+      # guaranteed-red; expo-* / react-native-* majors flow again now that
+      # the app is on SDK 57 and mobile-ci.yml gates them (#1173) —
+      # `npx expo install --fix` remains the supported way to take an SDK
+      # upgrade when one of those majors goes red.
       - dependency-name: "react"
         update-types: ["version-update:semver-major"]
       - dependency-name: "react-dom"

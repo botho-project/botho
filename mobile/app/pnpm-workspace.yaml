@@ -1,0 +1,28 @@
+# Standalone pnpm project (no sub-packages) — this file carries pnpm settings.
+#
+# allowBuilds: unrs-resolver (napi binary used by eslint-config-expo's
+# import resolver) ships platform prebuilds as optionalDependencies; its
+# postinstall is only a download fallback, so we deny the arbitrary build
+# script (supply-chain conservative). Set to true if a platform without a
+# prebuild ever needs the fallback.
+#
+# minimumReleaseAgeExclude: pnpm's supply-chain release-age gate blocks
+# very fresh packages; the Expo SDK 57 set moves in lockstep, so these
+# exact versions are excluded rather than disabling the gate globally.
+allowBuilds:
+  unrs-resolver: false
+minimumReleaseAgeExclude:
+  - '@expo/cli@57.0.14'
+  - '@expo/fingerprint@0.20.7'
+  - '@expo/inline-modules@0.1.5'
+  - '@expo/local-build-cache-provider@57.0.6'
+  - '@expo/metro-config@57.0.8'
+  - '@expo/prebuild-config@57.0.11'
+  - expo-asset@57.0.10
+  - expo-constants@57.0.10
+  - expo-server@57.0.2
+  - expo@57.0.12
+  - '@expo/metro-runtime@57.0.9'
+  - '@expo/ui@57.0.10'
+  - expo-router@57.0.12
+  - jest-expo@57.0.4
