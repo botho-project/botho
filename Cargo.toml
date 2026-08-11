@@ -95,7 +95,7 @@ dashmap = "6"
 dirs = "5"
 displaydoc = { version = "0.2", default-features = false }
 dyn-clone = "1"
-ed25519 = { version = "2", default-features = false }
+ed25519 = { version = "3", default-features = false }
 ed25519-dalek = { version = "2", default-features = false }
 futures = "0.3"
 generic-array = { version = "0.14", default-features = false }
