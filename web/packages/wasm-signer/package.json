@@ -22,7 +22,7 @@
   },
   "dependencies": {
     "@botho/core": "workspace:*",
-    "@scure/bip39": "^2.2.0"
+    "@scure/bip39": "^2.3.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
