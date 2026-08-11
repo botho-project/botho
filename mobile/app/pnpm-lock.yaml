@@ -21,8 +21,8 @@ importers:
         specifier: ~14.0.0
         version: 14.0.1(expo@50.0.21(@babel/core@7.29.7)(@react-native/babel-preset@0.73.21(@babel/core@7.29.7)(@babel/preset-env@7.29.7(@babel/core@7.29.7)))(react-native@0.86.2(@babel/core@7.29.7)(@react-native-community/cli@12.1.1)(@types/react@18.2.79)(react@18.2.0))(react@18.2.0))
       expo-modules-core:
-        specifier: ~1.11.0
-        version: 1.11.14
+        specifier: ~57.0.10
+        version: 57.0.10(react-native@0.86.2(@babel/core@7.29.7)(@react-native-community/cli@12.1.1)(@types/react@18.2.79)(react@18.2.0))(react@18.2.0)
       expo-router:
         specifier: ~3.4.0
         version: 3.4.10(156cf3a327b95952e76870ca693c2b7b)
@@ -904,6 +904,9 @@ packages:
   '@expo/env@2.3.1':
     resolution: {integrity: sha512-JvBdZa5OkTd+dGEtt3fLW9OF6RlIp9SNu9VyMSiWPV5szMDTSAYbX8Uj3cRvZcU1zzaRbqnTSsHk2AE8WXHfxQ==}
     engines: {node: '>=20.12.0'}
+
+  '@expo/expo-modules-macros-plugin@0.6.1':
+    resolution: {integrity: sha512-cpsLZE4rqkc1Y3eZTkxB98jrqY1YXgetmtxFt8q89jBRmk3quRuk1BZo+VcnCSObZardjg99r1k5xijEMONFGA==}
 
   '@expo/fingerprint@0.6.1':
     resolution: {integrity: sha512-ggLn6unI6qowlA1FihdQwPpLn16VJulYkvYAEL50gaqVahfNEglRQMSH2giZzjD0d6xq2/EQuUdFyHaJfyJwOQ==}
@@ -2552,6 +2555,21 @@ packages:
 
   expo-modules-core@1.11.14:
     resolution: {integrity: sha512-+W+A/jYJdWzA43KEAixhoArEb0EzTsS6T3tObYkZ1EHk8LaBT3hnFant52CnFTeVY4pqv4mgutBua2UQQMAWFA==}
+
+  expo-modules-core@57.0.10:
+    resolution: {integrity: sha512-aRi3G8OctoyZl8x9CLTVpbPljClfKm2eqKRgBzhcGsrH3gS1t5Y2ye7+PIZK4XK2VVP5iGqygN2b1vtqRo3xVQ==}
+    peerDependencies:
+      react: '*'
+      react-native: '*'
+      react-native-worklets: ^0.7.4 || ^0.8.0 || ^0.9.0 || ^0.10.0
+    peerDependenciesMeta:
+      react-native-worklets:
+        optional: true
+
+  expo-modules-jsi@57.0.4:
+    resolution: {integrity: sha512-vt7FyqUqqFXiRVnBqYD7y+GSPTgeua5Ocoy0+SYt+RSHkZEA2Fyop7If3g1TYDzQObYybPRo7TG2Rle1XLaWFw==}
+    peerDependencies:
+      react-native: '*'
 
   expo-router@3.4.10:
     resolution: {integrity: sha512-3Ldhsva/EtfWFFTDaTl6PRuJFJWG0DTd3OOI3U9/tY+/S7oaNbIOO8yVJbbTbsymAreVZuDwrQsfCmw0xLsB7g==}
@@ -6426,6 +6444,8 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  '@expo/expo-modules-macros-plugin@0.6.1': {}
+
   '@expo/fingerprint@0.6.1':
     dependencies:
       '@expo/spawn-async': 1.8.0
@@ -8805,6 +8825,18 @@ snapshots:
   expo-modules-core@1.11.14:
     dependencies:
       invariant: 2.2.4
+
+  expo-modules-core@57.0.10(react-native@0.86.2(@babel/core@7.29.7)(@react-native-community/cli@12.1.1)(@types/react@18.2.79)(react@18.2.0))(react@18.2.0):
+    dependencies:
+      '@expo/expo-modules-macros-plugin': 0.6.1
+      expo-modules-jsi: 57.0.4(react-native@0.86.2(@babel/core@7.29.7)(@react-native-community/cli@12.1.1)(@types/react@18.2.79)(react@18.2.0))
+      invariant: 2.2.4
+      react: 18.2.0
+      react-native: 0.86.2(@babel/core@7.29.7)(@react-native-community/cli@12.1.1)(@types/react@18.2.79)(react@18.2.0)
+
+  expo-modules-jsi@57.0.4(react-native@0.86.2(@babel/core@7.29.7)(@react-native-community/cli@12.1.1)(@types/react@18.2.79)(react@18.2.0)):
+    dependencies:
+      react-native: 0.86.2(@babel/core@7.29.7)(@react-native-community/cli@12.1.1)(@types/react@18.2.79)(react@18.2.0)
 
   expo-router@3.4.10(156cf3a327b95952e76870ca693c2b7b):
     dependencies:
