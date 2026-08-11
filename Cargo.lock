@@ -2280,7 +2280,7 @@ dependencies = [
 name = "bth-crypto-keys"
 version = "7.1.0"
 dependencies = [
- "base64 0.21.7",
+ "base64 0.22.1",
  "bth-crypto-digestible",
  "bth-crypto-digestible-signature",
  "bth-crypto-hashes",
@@ -2642,7 +2642,7 @@ version = "7.1.0"
 name = "bth-util-uri"
 version = "7.1.0"
 dependencies = [
- "base64 0.21.7",
+ "base64 0.22.1",
  "bth-common",
  "bth-crypto-keys",
  "bth-util-from-random",
