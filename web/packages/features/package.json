@@ -30,7 +30,7 @@
     "@noble/curves": "^1.8.1",
     "@noble/hashes": "^2.3.0",
     "lucide-react": "^0.562.0",
-    "motion": "^12.23.26"
+    "motion": "^13.0.0"
   },
   "devDependencies": {
     "@types/react": "^19.2.18",
