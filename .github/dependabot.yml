@@ -1,0 +1,79 @@
+# Dependabot version updates (/repo:deps). Grouping policy: Actions fully
+# grouped (majors included — individually reviewing them is noise); package
+# ecosystems group minor+patch and leave majors ungrouped so each breaking
+# change gets its own reviewable PR. playwright* stays out of the web group
+# because it is coupled to a browser binary. Installer-owned manifests
+# (.anvil/pyproject.toml) are deliberately absent — /repo:update-tools owns
+# them. Security-fix PRs are governed by the repo-level flag, not this file.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies"]
+    groups:
+      github-actions:
+        patterns: ["*"]
+        update-types: ["major", "minor", "patch"]
+
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies"]
+    groups:
+      cargo-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/web"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies"]
+    groups:
+      web-minor-patch:
+        patterns: ["*"]
+        exclude-patterns: ["playwright*", "@playwright/*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/contracts/ethereum"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies"]
+    groups:
+      eth-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/contracts/solana"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies"]
+    groups:
+      sol-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/mobile/app"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies"]
+    groups:
+      mobile-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "pip"
+    directory: "/consensus/scp/viewer"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies"]
+    groups:
+      viewer-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
