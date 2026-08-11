@@ -79,6 +79,16 @@ updates:
     schedule:
       interval: "weekly"
     labels: ["dependencies"]
+    ignore:
+      # hardhat-3 toolchain moves as one migration (#1174): hardhat 3 (ESM,
+      # new config) + toolbox 7 (requires hardhat 3) + typescript 7 (breaks
+      # the hardhat-2 ts integration). Individual majors are guaranteed-red.
+      - dependency-name: "hardhat"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@nomicfoundation/hardhat-toolbox"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
     groups:
       eth-minor-patch:
         patterns: ["*"]
@@ -109,6 +119,23 @@ updates:
     schedule:
       interval: "weekly"
     labels: ["dependencies"]
+    ignore:
+      # Expo packages are SDK-versioned lockstep (#1173): every expo-* /
+      # react-native-* major belongs to "upgrade the Expo SDK", done via
+      # `npx expo install --fix`, not per-package bumps — and mobile/ has no
+      # CI, so a green check here verifies nothing. Patches still flow.
+      - dependency-name: "expo*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "babel-preset-expo"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "eslint-config-expo"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "react-native*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major"]
     groups:
       mobile-minor-patch:
         patterns: ["*"]
