@@ -14,7 +14,7 @@
     "@botho/core": "workspace:*",
     "@botho/wasm-signer": "workspace:*",
     "@metamask/snaps-sdk": "^11.2.0",
-    "@scure/bip39": "^2.0.1"
+    "@scure/bip39": "^2.2.0"
   },
   "devDependencies": {
     "@jest/globals": "^29.7.0",
@@ -22,7 +22,7 @@
     "@metamask/snaps-jest": "^10.2.0",
     "@types/node": "^22.10.0",
     "jest": "^29.7.0",
-    "ts-jest": "^29.4.11",
+    "ts-jest": "^29.4.12",
     "ts-node": "^10.9.2",
     "typescript": "~5.9.3"
   }
