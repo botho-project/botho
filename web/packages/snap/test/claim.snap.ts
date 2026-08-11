@@ -214,52 +214,49 @@ describe('botho snap: claim-link ingress against a mocked node (#1094)', () => {
   /* ================================================================== */
 
   it('never surfaces the ephemeral mnemonic in a dialog, result, or error', async () => {
-    const { mnemonic, fragment } = freshLink();
-
-    // The dialog/error templates legitimately share a few common English tokens
-    // with the BIP39 wordlist (e.g. "claim", "empty"); exclude those so a random
-    // mnemonic that happens to contain one does not false-fail. We then assert
-    // (a) no remaining secret word appears as a standalone token in the output,
-    // and (b) the whole mnemonic string never appears verbatim.
-    const templateVocab =
-      'claim link nothing to this is empty already claimed or not yet confirmed holds ' +
-      'funds that will be swept into your wallet the sweep fee is paid from claimable ' +
-      'you receive hint cosmetic scanned amount above authoritative node confirm invalid ' +
-      'bth does cover';
-    const templateTokens = new Set(templateVocab.match(/[a-z]+/g));
-    const secretWords = mnemonic.split(' ').filter((w) => !templateTokens.has(w));
-    expect(secretWords.length).toBeGreaterThan(0); // guard: filtering did not empty it
-
-    const assertNoLeak = (blob: string): void => {
-      const tokens = new Set((blob.toLowerCase().match(/[a-z]+/g) ?? []));
-      for (const w of secretWords) expect(tokens.has(w)).toBe(false);
-      expect(blob.includes(mnemonic)).toBe(false); // no verbatim secret
+    // Run the preview + claim flows for a link and return every output blob a
+    // secret could leak into: both dialog contents and both final responses.
+    const collectFlowBlobs = async (fragment: string): Promise<string[]> => {
+      const blobs: string[] = [];
+      for (const method of ['botho_previewClaimLink', 'botho_claimLink']) {
+        const { request } = await installSnap();
+        const response = request({
+          method,
+          params: { rpcUrl: node.url, link: fragment },
+        });
+        const ui = await response.getInterface();
+        blobs.push(JSON.stringify(ui.content));
+        await (ui as { ok(): Promise<void> }).ok();
+        blobs.push(JSON.stringify((await response).response));
+      }
+      return blobs;
     };
 
-    // Preview: check the dialog content AND the returned result.
-    {
-      const { request } = await installSnap();
-      const response = request({
-        method: 'botho_previewClaimLink',
-        params: { rpcUrl: node.url, link: fragment },
-      });
-      const ui = await response.getInterface();
-      assertNoLeak(JSON.stringify(ui.content));
-      await (ui as { ok(): Promise<void> }).ok();
-      assertNoLeak(JSON.stringify((await response).response));
-    }
+    // Self-calibrating leak check: first run the exact same flows with a
+    // DIFFERENT throwaway link and collect every token those outputs contain —
+    // dialog template copy plus serialization structure (Snap JSX component and
+    // prop names like "box"/"text"/"label"/"key", several of which are also
+    // BIP39 words). Any token that appears for a different secret is by
+    // construction not a leak of ours, so excluding the baseline set kills the
+    // ~2% false-failure rate a hand-maintained vocab list had (a random
+    // mnemonic colliding with an unlisted structural token) without ever
+    // masking a real leak: a genuinely leaked word of OUR mnemonic cannot be in
+    // the baseline unless it also leaked there — with different random words.
+    const baselineTokens = new Set(
+      (await collectFlowBlobs(freshLink().fragment))
+        .join(' ')
+        .toLowerCase()
+        .match(/[a-z]+/g) ?? [],
+    );
 
-    // Claim (approve → "nothing to claim" error): the error must not leak it.
-    {
-      const { request } = await installSnap();
-      const response = request({
-        method: 'botho_claimLink',
-        params: { rpcUrl: node.url, link: fragment },
-      });
-      const ui = await response.getInterface();
-      assertNoLeak(JSON.stringify(ui.content));
-      await (ui as { ok(): Promise<void> }).ok();
-      assertNoLeak(JSON.stringify((await response).response));
+    const { mnemonic, fragment } = freshLink();
+    const secretWords = mnemonic.split(' ').filter((w) => !baselineTokens.has(w));
+    expect(secretWords.length).toBeGreaterThan(0); // guard: filtering did not empty it
+
+    for (const blob of await collectFlowBlobs(fragment)) {
+      const tokens = new Set(blob.toLowerCase().match(/[a-z]+/g) ?? []);
+      for (const w of secretWords) expect(tokens.has(w)).toBe(false);
+      expect(blob.includes(mnemonic)).toBe(false); // no verbatim secret
     }
   });
 });
