@@ -22,11 +22,11 @@
   },
   "dependencies": {
     "@botho/core": "workspace:*",
-    "@scure/bip39": "^2.0.1"
+    "@scure/bip39": "^2.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "typescript": "~5.9.3",
-    "vitest": "^4.0.16"
+    "vitest": "^4.1.10"
   }
 }
