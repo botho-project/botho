@@ -12,6 +12,12 @@ updates:
     schedule:
       interval: "weekly"
     labels: ["dependencies"]
+    ignore:
+      # Its tag IS the Rust toolchain version to install
+      # (solana-contracts-ci pins 1.79.0 for the anchor/Solana build), so a
+      # "bump" changes which Rust gets installed — 1.100.0 doesn't exist and
+      # 404s the job. Toolchain pins are upgraded deliberately, not chased.
+      - dependency-name: "dtolnay/rust-toolchain"
     groups:
       github-actions:
         patterns: ["*"]
@@ -53,6 +59,16 @@ updates:
     schedule:
       interval: "weekly"
     labels: ["dependencies"]
+    ignore:
+      # Pre-1.0 Solana SDKs: 0.x "minors" are breaking-class (anchor 0.30
+      # changed the IDL format) and the TS client must match the anchor-0.29 /
+      # Solana-1.18 toolchain the on-chain program is built with. Upgrading is
+      # a deliberate toolchain migration, not a dependency bump ('_bn' errors
+      # in anchor test = this mismatch). Patches still flow.
+      - dependency-name: "@coral-xyz/*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "@orca-so/*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     groups:
       sol-minor-patch:
         patterns: ["*"]
