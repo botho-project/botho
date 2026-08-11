@@ -30,7 +30,7 @@
     "react": "18.2.0",
     "react-native": "0.86.2",
     "react-native-safe-area-context": "4.8.2",
-    "react-native-screens": "~3.29.0",
+    "react-native-screens": "~4.27.0",
     "zustand": "^5.0.14"
   },
   "devDependencies": {
