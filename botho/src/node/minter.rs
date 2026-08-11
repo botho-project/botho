@@ -972,8 +972,7 @@ fn build_mining_hasher(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bth_util_from_random::FromRandom;
-    use rand_core::OsRng;
+    use bth_util_from_random::{FromRandom, OsRng};
 
     // ----- Stuck-miner detector (#538) -----
 

@@ -112,7 +112,7 @@ fn validate_password_strength(password: &str) -> Result<()> {
 
 impl PendingWallet {
     fn new(keys: WalletKeys) -> Self {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut indices: Vec<usize> = (0..24).collect();
         indices.shuffle(&mut rng);
         let verify_indices = [indices[0], indices[1], indices[2]];

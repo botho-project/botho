@@ -18,6 +18,7 @@
 //! ```
 
 use libp2p::PeerId;
+use rand::RngExt;
 use std::{
     future::Future,
     sync::{
@@ -66,7 +67,7 @@ pub const DEFAULT_REBUILD_THRESHOLD: Duration = Duration::from_secs(120);
 /// use std::time::{Duration, Instant};
 ///
 /// // Create circuit components
-/// let mut rng = rand::thread_rng();
+/// let mut rng = rand::rng();
 /// let circuit_id = CircuitId::random(&mut rng);
 /// let hops = [PeerId::random(), PeerId::random(), PeerId::random()];
 /// let keys = [
@@ -330,7 +331,7 @@ impl CircuitPool {
         }
 
         // Use random selection for unlinkability
-        let index = rand::random::<usize>() % active_circuits.len();
+        let index = rand::rng().random_range(0..active_circuits.len());
         Some(active_circuits[index])
     }
 
@@ -693,7 +694,7 @@ mod tests {
     use super::*;
 
     fn make_test_circuit(lifetime: Duration) -> OutboundCircuit {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         OutboundCircuit::new(
             CircuitId::random(&mut rng),
             [PeerId::random(), PeerId::random(), PeerId::random()],
@@ -717,7 +718,7 @@ mod tests {
 
     #[test]
     fn test_circuit_hops() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let hops = [PeerId::random(), PeerId::random(), PeerId::random()];
         let circuit = OutboundCircuit::new(
             CircuitId::random(&mut rng),
@@ -737,7 +738,7 @@ mod tests {
 
     #[test]
     fn test_circuit_expiry() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         // Create circuit with very short lifetime (using exact lifetime for testing)
         let circuit = OutboundCircuit::new_exact_lifetime(
             CircuitId::random(&mut rng),
@@ -794,7 +795,7 @@ mod tests {
     #[test]
     fn test_pool_remove_expired() {
         let mut pool = CircuitPool::new(CircuitPoolConfig::default());
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         // Add short-lived circuit (exact lifetime for testing)
         let short_circuit = OutboundCircuit::new_exact_lifetime(
@@ -887,7 +888,7 @@ mod tests {
             ..Default::default()
         };
         let mut pool = CircuitPool::new(config);
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         // Add circuit expiring in 60 seconds (within threshold)
         let expiring_soon = OutboundCircuit::new_exact_lifetime(
@@ -933,7 +934,7 @@ mod tests {
             ..Default::default()
         };
         let mut pool = CircuitPool::new(config);
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         // Empty pool needs 3 circuits
         assert_eq!(pool.circuits_needed(), 3);
@@ -991,7 +992,7 @@ mod tests {
             ..Default::default()
         };
         let mut pool = CircuitPool::new(config);
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         // Add expired circuit
         let expired = OutboundCircuit::new_exact_lifetime(
@@ -1106,7 +1107,7 @@ mod tests {
         };
         let pool = new_shared_pool(config.clone());
         let metrics = Arc::new(CircuitPoolMetrics::new());
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         // Add short-lived circuits
         {

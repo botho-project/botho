@@ -82,7 +82,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use rand::{Rng, RngCore};
+use rand::{Rng, RngExt};
 use serde::{Deserialize, Serialize};
 
 /// Default messages per second (1 message every 500ms).
@@ -430,10 +430,10 @@ impl Default for ConstantRateTransmitter {
 /// transaction size distribution, making them indistinguishable from
 /// real messages to observers.
 fn generate_cover_message() -> OutgoingMessage {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     // Match typical transaction size distribution (200-600 bytes)
-    let size = rng.gen_range(200..600);
+    let size = rng.random_range(200..600);
     let mut payload = vec![0u8; size];
     rng.fill_bytes(&mut payload);
 

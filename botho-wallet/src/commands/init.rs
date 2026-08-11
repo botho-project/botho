@@ -95,7 +95,7 @@ fn generate_mnemonic() -> Result<String> {
     }
 
     // Verify by asking for a random word
-    let verify_index = rand::random::<usize>() % 24;
+    let verify_index = rand::random::<u32>() as usize % 24;
     println!();
     print!("Verify: Enter word #{}: ", verify_index + 1);
     io::stdout().flush()?;

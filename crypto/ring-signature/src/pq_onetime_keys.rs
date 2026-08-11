@@ -229,8 +229,7 @@ pub fn decapsulate_pq_shared_secret(
 mod tests {
     use super::*;
     use bth_crypto_pq::MlKem768KeyPair;
-    use bth_util_from_random::FromRandom;
-    use rand_core::OsRng;
+    use bth_util_from_random::{FromRandom, OsRng};
 
     #[test]
     fn test_pq_stealth_roundtrip() {

@@ -20,7 +20,7 @@
 //! - Issue #246: Privacy analysis (this module)
 //! - `docs/design/ring-signature-tag-propagation.md`
 
-use rand::Rng;
+use rand::{Rng, RngExt};
 use std::collections::HashMap;
 
 use super::privacy::{
@@ -204,7 +204,7 @@ pub fn simulate_constrained_ring<R: Rng>(
     }
 
     // Select a real signer randomly
-    let real_idx = rng.gen_range(0..pool.len());
+    let real_idx = rng.random_range(0..pool.len());
     let real_output = &pool[real_idx];
 
     // Filter eligible decoys
@@ -253,7 +253,7 @@ pub fn simulate_constrained_ring<R: Rng>(
     };
 
     // Form ring with real signer at random position
-    let real_position = rng.gen_range(0..config.ring_size);
+    let real_position = rng.random_range(0..config.ring_size);
     let mut ring = Vec::with_capacity(config.ring_size);
     let mut decoy_iter = decoys.iter();
 
@@ -315,12 +315,12 @@ fn select_weighted<'a, R: Rng>(
         let total: f64 = weights.iter().sum();
 
         if total <= 0.0 {
-            let idx = rng.gen_range(0..remaining.len());
+            let idx = rng.random_range(0..remaining.len());
             selected.push(remaining.remove(idx));
             continue;
         }
 
-        let sample = rng.gen::<f64>() * total;
+        let sample = rng.random::<f64>() * total;
         let mut cumulative = 0.0;
         let mut chosen_idx = 0;
 
@@ -991,7 +991,7 @@ mod tests {
             ..Default::default()
         };
         let mut gen = OutputPoolGenerator::new(config);
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         gen.generate_pool(&mut rng)
     }
 
@@ -1040,7 +1040,7 @@ mod tests {
     fn test_constrained_ring_simulation() {
         let pool = create_test_pool();
         let config = ConstraintConfig::default();
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         let result = simulate_constrained_ring(&pool, &config, &mut rng);
 
@@ -1057,7 +1057,7 @@ mod tests {
     fn test_comparative_analysis() {
         let pool = create_test_pool();
         let config = ConstraintConfig::default();
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         let analysis = run_comparative_analysis(&pool, &config, 100, &mut rng);
 
@@ -1078,7 +1078,7 @@ mod tests {
     #[test]
     fn test_parameter_sweep() {
         let pool = create_test_pool();
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         let results = parameter_sweep(&pool, 11, &[1.5, 2.0, 3.0], &[1.25, 1.5, 2.0], 50, &mut rng);
 
@@ -1113,7 +1113,7 @@ mod tests {
     #[test]
     fn test_age_similarity_band_privacy_cost() {
         let pool = create_test_pool();
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         let config = ConstraintConfig {
             ring_size: 11,
@@ -1169,7 +1169,7 @@ mod tests {
     fn test_ring_size_recommendation() {
         let pool = create_test_pool();
         let config = ConstraintConfig::default();
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         let rec = analyze_ring_sizes(&pool, &[7, 11, 16, 20], &config, 50, &mut rng);
 

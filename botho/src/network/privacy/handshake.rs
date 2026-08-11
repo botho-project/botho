@@ -165,7 +165,7 @@ impl CircuitHandshake {
         }
 
         // Generate fresh ephemeral keypair
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let ephemeral_private = X25519EphemeralPrivate::from_random(&mut rng);
         let ephemeral_public = X25519Public::from(&ephemeral_private);
 
@@ -254,7 +254,7 @@ impl CircuitHandshake {
         their_pubkey: &X25519Public,
     ) -> HandshakeResult<(CircuitHandshakeMsg, SymmetricKey)> {
         // Generate our ephemeral keypair
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let our_private = X25519EphemeralPrivate::from_random(&mut rng);
         let our_public = X25519Public::from(&our_private);
 
@@ -397,7 +397,7 @@ mod tests {
         let circuit_id = CircuitId::random();
 
         // Generate a dummy public key
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let dummy_private = X25519EphemeralPrivate::from_random(&mut rng);
         let dummy_public = X25519Public::from(&dummy_private);
 
@@ -414,7 +414,7 @@ mod tests {
         handshake.initiate_create(circuit_id1);
 
         // Generate a dummy public key
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let dummy_private = X25519EphemeralPrivate::from_random(&mut rng);
         let dummy_public = X25519Public::from(&dummy_private);
 
@@ -509,7 +509,7 @@ mod tests {
         let circuit_id = CircuitId::random();
 
         // Generate initiator's keypair
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let initiator_private = X25519EphemeralPrivate::from_random(&mut rng);
         let initiator_public = X25519Public::from(&initiator_private);
 

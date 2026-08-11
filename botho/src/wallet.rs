@@ -8,7 +8,8 @@ use bth_cluster_tax::{
 use bth_core::slip10::Slip10KeyGenerator;
 use bth_crypto_keys::RistrettoPrivate;
 use bth_transaction_types::{ClusterTagVector, TAG_WEIGHT_SCALE};
-use rand::{rngs::OsRng, seq::SliceRandom};
+use bth_util_from_random::OsRng;
+use rand::seq::SliceRandom;
 use std::collections::HashMap;
 use tracing::{debug, warn};
 use zeroize::Zeroizing;

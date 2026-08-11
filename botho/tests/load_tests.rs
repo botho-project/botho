@@ -599,8 +599,8 @@ fn create_test_wallet(seed: u8) -> WalletKeys {
 
 /// Generate a random transaction hash
 fn random_tx_hash() -> [u8; 32] {
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
+    use rand::RngExt;
+    let mut rng = rand::rng();
     let mut hash = [0u8; 32];
     rng.fill(&mut hash);
     hash

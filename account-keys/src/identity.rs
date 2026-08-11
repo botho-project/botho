@@ -29,7 +29,7 @@ use hkdf::SimpleHkdf;
 #[cfg(feature = "prost")]
 use prost::Message;
 
-use rand_core::{CryptoRng, RngCore};
+use rand_core::CryptoRng;
 use zeroize::Zeroize;
 
 /// A secret value used as input key material to derive private keys.
@@ -71,7 +71,7 @@ impl TryFrom<&[u8]> for RootEntropy {
 }
 
 impl FromRandom for RootEntropy {
-    fn from_random<T: RngCore + CryptoRng>(rng: &mut T) -> Self {
+    fn from_random<T: CryptoRng>(rng: &mut T) -> Self {
         let mut result = Self { bytes: [0u8; 32] };
         rng.fill_bytes(&mut result.bytes);
         result
@@ -105,7 +105,7 @@ impl From<&RootEntropy> for RootIdentity {
 
 /// Generate a random root identity
 impl FromRandom for RootIdentity {
-    fn from_random<T: RngCore + CryptoRng>(rng: &mut T) -> Self {
+    fn from_random<T: CryptoRng>(rng: &mut T) -> Self {
         Self::from(&RootEntropy::from_random(rng))
     }
 }

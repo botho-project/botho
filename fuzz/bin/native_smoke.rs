@@ -41,7 +41,7 @@ use std::{
 };
 
 use botho_fuzz::{run_target_from_bytes, NATIVE_SMOKE_TARGETS};
-use rand::{RngCore, SeedableRng};
+use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
 /// Default number of randomized inputs per target. ~100k is the "dev" budget

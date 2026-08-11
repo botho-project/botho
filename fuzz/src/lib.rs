@@ -103,7 +103,7 @@ mod native_smoke_tests {
         path::{Path, PathBuf},
     };
 
-    use rand::{RngCore, SeedableRng};
+    use rand::{Rng, SeedableRng};
     use rand_chacha::ChaCha8Rng;
 
     /// Randomized inputs per target for the `cargo test` path. Kept modest so

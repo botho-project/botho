@@ -1778,7 +1778,7 @@ dependencies = [
  "dirs 5.0.1",
  "ed25519-dalek 3.0.0",
  "futures",
- "getrandom 0.2.17",
+ "getrandom 0.4.3",
  "heed",
  "hex",
  "hickory-resolver",
@@ -1796,10 +1796,10 @@ dependencies = [
  "opentelemetry_sdk",
  "parking_lot",
  "prometheus",
- "rand 0.8.7",
- "rand_chacha 0.3.1",
- "rand_core 0.6.4",
- "rand_distr",
+ "rand 0.10.2",
+ "rand_chacha 0.10.0",
+ "rand_core 0.10.1",
+ "rand_distr 0.6.0",
  "randomx-rs",
  "rcgen",
  "reqwest 0.12.28",
@@ -1846,7 +1846,7 @@ dependencies = [
  "dirs 5.0.1",
  "hex",
  "log",
- "rand 0.8.7",
+ "rand 0.10.2",
  "serde",
  "tauri",
  "tauri-build",
@@ -1869,8 +1869,8 @@ dependencies = [
  "chrono",
  "clap",
  "hex",
- "rand 0.8.7",
- "rand_core 0.6.4",
+ "rand 0.10.2",
+ "rand_core 0.10.1",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -1915,7 +1915,7 @@ dependencies = [
  "bth-transaction-clsag",
  "bth-wasm-signer",
  "hex",
- "rand 0.8.7",
+ "rand 0.10.2",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -1942,13 +1942,14 @@ dependencies = [
  "bth-crypto-ring-signature",
  "bth-transaction-clsag",
  "bth-transaction-types",
+ "bth-util-from-random",
  "chacha20poly1305",
  "chrono",
  "clap",
  "dirs 5.0.1",
  "hex",
  "libc",
- "rand 0.8.7",
+ "rand 0.10.2",
  "reqwest 0.12.28",
  "rpassword",
  "serde",
@@ -2019,8 +2020,8 @@ dependencies = [
  "displaydoc",
  "hkdf",
  "prost 0.12.6",
- "rand 0.8.7",
- "rand_core 0.6.4",
+ "rand 0.10.2",
+ "rand_core 0.10.1",
  "rand_hc",
  "serde",
  "sha2 0.10.9",
@@ -2044,8 +2045,8 @@ dependencies = [
  "bth-crypto-keys",
  "bth-crypto-pq",
  "bth-util-from-random",
- "rand 0.8.7",
- "rand_core 0.6.4",
+ "rand 0.10.2",
+ "rand_core 0.10.1",
 ]
 
 [[package]]
@@ -2082,13 +2083,14 @@ dependencies = [
  "bth-crypto-ring-signature",
  "bth-transaction-clsag",
  "bth-transaction-types",
+ "bth-util-from-random",
  "chrono",
  "clap",
  "ed25519-dalek 3.0.0",
  "hex",
  "proptest",
- "rand 0.8.7",
- "rand_core 0.6.4",
+ "rand 0.10.2",
+ "rand_core 0.10.1",
  "reqwest 0.12.28",
  "rusqlite",
  "serde",
@@ -2107,14 +2109,15 @@ name = "bth-cluster-tax"
 version = "0.6.0"
 dependencies = [
  "bth-transaction-types",
+ "bth-util-from-random",
  "clap",
  "criterion",
  "curve25519-dalek 5.0.0",
  "indicatif",
- "rand 0.8.7",
- "rand_chacha 0.3.1",
- "rand_core 0.6.4",
- "rand_distr",
+ "rand 0.10.2",
+ "rand_chacha 0.10.0",
+ "rand_core 0.10.1",
+ "rand_distr 0.6.0",
  "rayon",
  "serde",
  "sha2 0.10.9",
@@ -2137,7 +2140,7 @@ dependencies = [
  "mc-rand",
  "proptest",
  "prost 0.12.6",
- "rand_core 0.6.4",
+ "rand_core 0.10.1",
  "sentry",
  "serde",
  "serde_json",
@@ -2163,7 +2166,7 @@ dependencies = [
  "maplit",
  "mockall",
  "primitive-types 0.14.0",
- "rand 0.8.7",
+ "rand 0.10.2",
  "serde",
  "serde_json",
  "serial_test",
@@ -2196,7 +2199,7 @@ dependencies = [
  "bth-util-serial",
  "bth-util-test-helper",
  "prost 0.12.6",
- "rand 0.8.7",
+ "rand 0.10.2",
  "rand_hc",
  "serde",
 ]
@@ -2214,7 +2217,7 @@ dependencies = [
  "curve25519-dalek 5.0.0",
  "hex",
  "hkdf",
- "rand_core 0.6.4",
+ "rand_core 0.10.1",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2232,7 +2235,7 @@ dependencies = [
  "bth-util-test-helper",
  "curve25519-dalek 5.0.0",
  "prost 0.12.6",
- "rand_core 0.6.4",
+ "rand_core 0.10.1",
  "rand_hc",
  "serde",
  "subtle",
@@ -2252,7 +2255,7 @@ dependencies = [
  "displaydoc",
  "hkdf",
  "mc-oblivious-aes-gcm",
- "rand_core 0.6.4",
+ "rand_core 0.10.1",
 ]
 
 [[package]]
@@ -2340,7 +2343,7 @@ dependencies = [
  "bth-util-from-random",
  "bth-util-serial",
  "prost 0.12.6",
- "rand_core 0.6.4",
+ "rand_core 0.10.1",
  "rand_hc",
  "serde",
 ]
@@ -2356,7 +2359,7 @@ dependencies = [
  "ml-dsa",
  "ml-kem",
  "proptest",
- "rand 0.8.7",
+ "rand 0.10.2",
  "rand 0.9.5",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
@@ -2386,8 +2389,8 @@ dependencies = [
  "displaydoc",
  "proptest",
  "prost 0.12.6",
- "rand 0.8.7",
- "rand_core 0.6.4",
+ "rand 0.10.2",
+ "rand_core 0.10.1",
  "rayon",
  "serde",
  "zeroize",
@@ -2404,8 +2407,8 @@ dependencies = [
  "displaydoc",
  "mc-rand",
  "proptest",
- "rand 0.8.7",
- "rand_core 0.6.4",
+ "rand 0.10.2",
+ "rand_core 0.10.1",
  "rand_hc",
  "serde",
  "zeroize",
@@ -2418,7 +2421,7 @@ dependencies = [
  "hex",
  "hmac",
  "k256",
- "rand 0.8.7",
+ "rand 0.10.2",
  "sha2 0.10.9",
  "sha3 0.10.9",
  "thiserror 2.0.20",
@@ -2449,7 +2452,7 @@ dependencies = [
  "clap",
  "hex",
  "libp2p",
- "rand 0.8.7",
+ "rand 0.10.2",
  "serde",
  "serde_json",
  "tokio",
@@ -2470,10 +2473,10 @@ dependencies = [
  "bth-util-serial",
  "displaydoc",
  "futures",
- "getrandom 0.2.17",
+ "getrandom 0.4.3",
  "hex",
  "libp2p",
- "rand 0.8.7",
+ "rand 0.10.2",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -2487,8 +2490,8 @@ name = "bth-quorum-sim"
 version = "0.1.0"
 dependencies = [
  "clap",
- "rand 0.8.7",
- "rand_chacha 0.3.1",
+ "rand 0.10.2",
+ "rand_chacha 0.10.0",
  "serde",
  "serde_json",
 ]
@@ -2505,10 +2508,10 @@ dependencies = [
  "bth-transaction-types",
  "bth-util-from-random",
  "ctr",
- "getrandom 0.2.17",
+ "getrandom 0.4.3",
  "hkdf",
- "rand 0.8.7",
- "rand_core 0.6.4",
+ "rand 0.10.2",
+ "rand_core 0.10.1",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2549,8 +2552,8 @@ dependencies = [
  "merlin",
  "proptest",
  "prost 0.12.6",
- "rand 0.8.7",
- "rand_core 0.6.4",
+ "rand 0.10.2",
+ "rand_core 0.10.1",
  "serde",
  "sha2 0.10.9",
  "subtle",
@@ -2572,8 +2575,8 @@ dependencies = [
  "clap",
  "hex",
  "log",
- "rand 0.8.7",
- "rand_core 0.6.4",
+ "rand 0.10.2",
+ "rand_core 0.10.1",
  "rand_hc",
  "serde",
  "serde_json",
@@ -2605,7 +2608,8 @@ dependencies = [
 name = "bth-util-from-random"
 version = "7.1.0"
 dependencies = [
- "rand_core 0.6.4",
+ "getrandom 0.4.3",
+ "rand_core 0.10.1",
 ]
 
 [[package]]
@@ -2651,7 +2655,7 @@ dependencies = [
  "bth-common",
  "clap",
  "itertools 0.14.0",
- "rand 0.8.7",
+ "rand 0.10.2",
  "rand_hc",
  "tracing",
 ]
@@ -2672,7 +2676,7 @@ dependencies = [
  "displaydoc",
  "hex",
  "percent-encoding",
- "rand 0.8.7",
+ "rand 0.10.2",
  "rand_hc",
  "serde",
  "url",
@@ -2696,12 +2700,13 @@ dependencies = [
  "bth-crypto-pq",
  "bth-crypto-ring-signature",
  "bth-transaction-clsag",
+ "bth-util-from-random",
  "getrandom 0.2.17",
  "getrandom 0.3.4",
  "getrandom 0.4.3",
  "hex",
- "rand 0.8.7",
- "rand_core 0.6.4",
+ "rand 0.10.2",
+ "rand_core 0.10.1",
  "serde",
  "serde-wasm-bindgen",
  "wasm-bindgen",
@@ -6860,7 +6865,7 @@ dependencies = [
  "num-rational",
  "num-traits",
  "rand 0.8.7",
- "rand_distr",
+ "rand_distr 0.4.3",
  "simba",
  "typenum",
 ]
@@ -8494,6 +8499,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand_chacha"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e6af7f3e25ded52c41df4e0b1af2d047e45896c2f3281792ed68a1c243daedb"
+dependencies = [
+ "ppv-lite86",
+ "rand_core 0.10.1",
+]
+
+[[package]]
 name = "rand_core"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8529,12 +8544,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "rand_hc"
-version = "0.3.2"
+name = "rand_distr"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b363d4f6370f88d62bf586c80405657bde0f0e1b8945d47d2ad59b906cb4f54"
+checksum = "4d431c2703ccf129de4d45253c03f49ebb22b97d6ad79ee3ecfc7e3f4862c1d8"
 dependencies = [
- "rand_core 0.6.4",
+ "num-traits",
+ "rand 0.10.2",
+]
+
+[[package]]
+name = "rand_hc"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6e972b1f070e2c6987ba6f630d2db62ab1bf54a613c6d66c3dd469a7d163d84"
+dependencies = [
+ "rand_core 0.10.1",
 ]
 
 [[package]]

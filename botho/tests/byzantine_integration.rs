@@ -456,7 +456,7 @@ fn run_byzantine_node(
 
     let mut pending_values: Vec<ConsensusValue> = Vec::new();
     let mut current_slot: SlotIndex = 1;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     loop {
         if shutdown.load(Ordering::SeqCst) {
@@ -497,8 +497,8 @@ fn run_byzantine_node(
 
                 // Check for random drop
                 if let ByzantineBehavior::RandomDrop(prob) = &current_behavior {
-                    use rand::Rng;
-                    if rng.gen::<f64>() < *prob {
+                    use rand::RngExt;
+                    if rng.random::<f64>() < *prob {
                         messages_dropped.fetch_add(1, Ordering::SeqCst);
                         continue;
                     }

@@ -206,10 +206,7 @@ impl ExtendedSignatureBuilder {
     }
 
     /// Build the extended signature.
-    pub fn build<R: rand_core::RngCore + rand_core::CryptoRng>(
-        self,
-        rng: &mut R,
-    ) -> Option<ExtendedTxSignature> {
+    pub fn build<R: rand_core::CryptoRng>(self, rng: &mut R) -> Option<ExtendedTxSignature> {
         let mut pseudo_tag_outputs = Vec::new();
         let mut pseudo_secrets = Vec::new();
 
@@ -243,7 +240,7 @@ impl ExtendedSignatureBuilder {
     }
 
     /// Create a pseudo-tag-output for one input.
-    fn create_pseudo_tag_output<R: rand_core::RngCore + rand_core::CryptoRng>(
+    fn create_pseudo_tag_output<R: rand_core::CryptoRng>(
         &self,
         input_idx: usize,
         _ring_data: &RingTagData,
@@ -461,7 +458,7 @@ impl ExtendedSignatureVerifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand_core::OsRng;
+    use bth_util_from_random::OsRng;
     use std::collections::HashMap;
 
     fn create_test_secret(value: u64, clusters: &[(u64, u32)]) -> CommittedTagVectorSecret {

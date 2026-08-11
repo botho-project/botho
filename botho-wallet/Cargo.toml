@@ -21,6 +21,7 @@ bth-address-codec = { path = "../address-codec" }
 bth-crypto-keys = { path = "../crypto/keys" }
 bth-crypto-pq = { path = "../crypto/pq", optional = true }
 bth-crypto-ring-signature = { path = "../crypto/ring-signature" }
+bth-util-from-random = { path = "../util/from-random" }
 bth-core = { path = "../core" }
 bth-cluster-tax = { path = "../cluster-tax", features = ["serde"] }
 # Real transaction format (CLSAG ring signatures + stealth-address outputs).

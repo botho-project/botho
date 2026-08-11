@@ -2353,7 +2353,7 @@ impl Ledger {
         }
 
         // Randomly sample from candidates
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         candidates.shuffle(&mut rng);
         candidates.truncate(count);
 
@@ -3627,7 +3627,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let ledger = Ledger::open(dir.path()).unwrap();
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let decoys_needed = 19;
 
         // get_decoy_outputs_for_input (used by create_private_transaction).

@@ -49,8 +49,8 @@ async-trait = "0.1"
 
 [dev-dependencies]
 tempfile = "3"
-rand = "0.8"
-rand_core = "0.6"
+rand = { workspace = true, features = ["std", "thread_rng"] }
+rand_core = { workspace = true }
 bth-util-from-random = { path = "../util/from-random" }
 # Build real hybrid outputs (send path) to assert the scanner detects them.
 bth-transaction-clsag = { path = "../transaction/clsag", features = ["pq"] }

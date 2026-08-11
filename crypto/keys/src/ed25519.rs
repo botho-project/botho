@@ -22,7 +22,7 @@ use ed25519_dalek::{
     SecretKey, Signature as DalekSignature, SigningKey, VerifyingKey as DalekPublicKey,
     PUBLIC_KEY_LENGTH,
 };
-use rand_core::{CryptoRng, RngCore};
+use rand_core::CryptoRng;
 use zeroize::Zeroize;
 
 /// Bridges a workspace (`digest` 0.10) hasher into the `digest` 0.11 `Digest`
@@ -341,7 +341,7 @@ impl PrivateKey for Ed25519Private {
 }
 
 impl FromRandom for Ed25519Private {
-    fn from_random<R: CryptoRng + RngCore>(csprng: &mut R) -> Self {
+    fn from_random<R: CryptoRng>(csprng: &mut R) -> Self {
         // ed25519-dalek 3's `SigningKey::generate` requires rand_core 0.10
         // traits; draw the 32 secret bytes directly instead (exactly what
         // `generate` does internally) to keep the workspace on rand_core 0.6
@@ -409,7 +409,7 @@ impl From<Ed25519Private> for Ed25519Pair {
 }
 
 impl FromRandom for Ed25519Pair {
-    fn from_random<R: CryptoRng + RngCore>(csprng: &mut R) -> Self {
+    fn from_random<R: CryptoRng>(csprng: &mut R) -> Self {
         // See `Ed25519Private::from_random` for why this draws bytes directly
         // instead of calling `SigningKey::generate`.
         let mut secret = SecretKey::default();

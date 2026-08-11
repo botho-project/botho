@@ -391,7 +391,7 @@ mod tests {
     use std::time::Duration;
 
     fn make_test_circuit() -> OutboundCircuit {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         OutboundCircuit::new(
             CircuitId::random(&mut rng),
             [PeerId::random(), PeerId::random(), PeerId::random()],

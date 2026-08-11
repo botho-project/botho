@@ -9,4 +9,5 @@ readme = "README.md"
 rust-version = { workspace = true }
 
 [dependencies]
+getrandom = { workspace = true }
 rand_core = { workspace = true }

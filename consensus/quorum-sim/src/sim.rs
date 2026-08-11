@@ -107,7 +107,7 @@
 //! called out at the relevant function.
 
 use crate::{model::Fbas, nodeset::NodeSet};
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt::Write as _};
@@ -449,7 +449,7 @@ pub fn run_tracked(config: &SimConfig, seed: u64) -> RunOutcome {
     let n = config.n;
     let fbas = config.build_fbas();
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
-    let vrf_seed = rng.gen::<u64>();
+    let vrf_seed = rng.random::<u64>();
 
     let faulty: NodeSet = NodeSet::from_indices(config.faulty.iter().copied().filter(|&i| i < n));
     let is_faulty = |i: usize| faulty.contains(i);
@@ -577,12 +577,12 @@ pub fn run_tracked(config: &SimConfig, seed: u64) -> RunOutcome {
                 let d = if max_delay == 0 {
                     1
                 } else {
-                    1 + rng.gen_range(0..=max_delay)
+                    1 + rng.random_range(0..=max_delay)
                 };
                 (d, drop_prob)
             }
         };
-        if drop_prob > 0.0 && rng.gen::<f64>() < drop_prob {
+        if drop_prob > 0.0 && rng.random::<f64>() < drop_prob {
             return;
         }
         bus.entry(cur + delay).or_default().push(Message {
@@ -645,7 +645,7 @@ pub fn run_tracked(config: &SimConfig, seed: u64) -> RunOutcome {
                     continue;
                 }
                 // Draw per node per round so the matrix is reproducible.
-                if rng.gen::<f64>() < config.churn_rate {
+                if rng.random::<f64>() < config.churn_rate {
                     let mined = next_churn_id;
                     next_churn_id += 1;
                     // `mined` is strictly higher priority (larger id) than any

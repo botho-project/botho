@@ -356,7 +356,7 @@ fn parse_stun_server(server: &str) -> Result<SocketAddr, StunError> {
 /// Generate a random 96-bit transaction ID.
 fn generate_transaction_id() -> [u8; 12] {
     let mut id = [0u8; 12];
-    getrandom::getrandom(&mut id).expect("failed to generate random transaction ID");
+    getrandom::fill(&mut id).expect("failed to generate random transaction ID");
     id
 }
 

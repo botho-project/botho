@@ -39,14 +39,14 @@ use bth_cluster_tax::{
     },
     ClusterId, TagVector, TagWeight, TAG_WEIGHT_SCALE,
 };
+use bth_util_from_random::OsRng;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use curve25519_dalek::scalar::Scalar;
-use rand_core::OsRng;
 use std::collections::HashMap;
 
 /// Byte-identical replacement for curve25519-dalek 4's `Scalar::random`
 /// (dalek 5's version requires rand_core 0.10 traits; see #1154).
-fn random_scalar<R: rand_core::RngCore + rand_core::CryptoRng>(rng: &mut R) -> Scalar {
+fn random_scalar<R: rand_core::CryptoRng>(rng: &mut R) -> Scalar {
     let mut bytes = [0u8; 64];
     rng.fill_bytes(&mut bytes);
     Scalar::from_bytes_mod_order_wide(&bytes)

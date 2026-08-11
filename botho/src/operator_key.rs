@@ -47,7 +47,7 @@ use chacha20poly1305::{
 };
 use digest::{generic_array::typenum::U32, Digest};
 use ed25519_dalek::SigningKey;
-use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
@@ -148,9 +148,9 @@ impl OperatorKeyFile {
         // the 32 secret bytes directly — exactly what `generate` does — to
         // stay on the workspace rand 0.8 stack until #1154.)
         let signing_key = {
-            use rand::RngCore as _;
+            use rand::Rng as _;
             let mut secret = [0u8; 32];
-            rand::thread_rng().fill_bytes(&mut secret);
+            rand::rng().fill_bytes(&mut secret);
             SigningKey::from_bytes(&secret)
         };
         let secret = Zeroizing::new(signing_key.to_bytes());
@@ -162,7 +162,7 @@ impl OperatorKeyFile {
         let derived = derive_key(passphrase, salt.as_str())?;
 
         let mut nonce_bytes = [0u8; 12];
-        rand::thread_rng().fill(&mut nonce_bytes);
+        rand::rng().fill(&mut nonce_bytes);
 
         let cipher = ChaCha20Poly1305::new_from_slice(derived.as_slice())
             .map_err(|_| anyhow!("failed to construct cipher"))?;

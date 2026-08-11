@@ -6,7 +6,8 @@
 //! with proper decoy selection.
 
 use bth_account_keys::PublicAddress;
-use rand::{rngs::OsRng, seq::SliceRandom};
+use bth_util_from_random::OsRng;
+use rand::seq::SliceRandom;
 
 use botho::{
     transaction::{ClsagRingInput, RingMember, Transaction, TxOutput, Utxo},

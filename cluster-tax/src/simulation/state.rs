@@ -253,11 +253,11 @@ impl SimulationState {
     }
 
     /// Get a random mixer ID if any exist.
-    pub fn random_mixer(&self, rng: &mut impl rand::Rng) -> Option<AgentId> {
+    pub fn random_mixer(&self, rng: &mut impl rand::RngExt) -> Option<AgentId> {
         if self.mixer_ids.is_empty() {
             None
         } else {
-            Some(self.mixer_ids[rng.gen_range(0..self.mixer_ids.len())])
+            Some(self.mixer_ids[rng.random_range(0..self.mixer_ids.len())])
         }
     }
 

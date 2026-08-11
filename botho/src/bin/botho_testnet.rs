@@ -881,7 +881,7 @@ fn cmd_gen_bridge_keys(node: usize, out: &Path) -> Result<()> {
     // USER = a freshly random wallet (only ever receives the released stealth
     // output). Never persisted anywhere but the disposable key dir.
     let mut entropy = [0u8; 16];
-    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut entropy);
+    rand::Rng::fill_bytes(&mut bth_util_from_random::OsRng, &mut entropy);
     let user_mnemonic = Mnemonic::from_entropy(&entropy, Language::English)
         .map_err(|e| anyhow!("generate user mnemonic: {e}"))?
         .phrase()

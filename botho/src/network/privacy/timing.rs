@@ -39,7 +39,7 @@
 //! let custom_jitter = TimingJitter::new(config);
 //! ```
 
-use rand::Rng;
+use rand::{Rng, RngExt};
 use std::time::Duration;
 
 /// Default minimum delay in milliseconds.
@@ -155,8 +155,8 @@ impl TimingJitter {
             return Duration::ZERO;
         }
 
-        let mut rng = rand::thread_rng();
-        let ms = rng.gen_range(self.config.min_delay_ms..=self.config.max_delay_ms);
+        let mut rng = rand::rng();
+        let ms = rng.random_range(self.config.min_delay_ms..=self.config.max_delay_ms);
         Duration::from_millis(ms)
     }
 
@@ -168,7 +168,7 @@ impl TimingJitter {
             return Duration::ZERO;
         }
 
-        let ms = rng.gen_range(self.config.min_delay_ms..=self.config.max_delay_ms);
+        let ms = rng.random_range(self.config.min_delay_ms..=self.config.max_delay_ms);
         Duration::from_millis(ms)
     }
 }

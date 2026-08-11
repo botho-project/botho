@@ -88,7 +88,7 @@ mod commitment_tests {
     };
     use bth_util_test_helper::run_with_several_seeds;
     use curve25519_dalek::ristretto::RistrettoPoint;
-    use rand_core::RngCore;
+    use rand_core::Rng;
 
     #[test]
     // Commitment::new should create the correct RistrettoPoint.

@@ -14,11 +14,11 @@ use libp2p::PeerId;
 use std::{sync::Arc, time::Duration};
 
 fn random_symmetric_key() -> SymmetricKey {
-    SymmetricKey::random(&mut rand::thread_rng())
+    SymmetricKey::random(&mut rand::rng())
 }
 
 fn make_test_circuit(lifetime: Duration) -> OutboundCircuit {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     OutboundCircuit::new(
         CircuitId::random(&mut rng),
         [PeerId::random(), PeerId::random(), PeerId::random()],

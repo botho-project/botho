@@ -55,7 +55,7 @@
 //! kernel itself is consensus-grade pure-integer; the surrounding sim uses
 //! `f64` only for ratios and reporting.
 
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
 use crate::{demurrage_charge, ring_elapsed_centroid, ring_elapsed_quantile};
@@ -242,7 +242,7 @@ fn build_ring(
                 let age = if span == 0 {
                     real_age
                 } else {
-                    let delta = rng.gen_range(0..=2 * span) as i64 - span as i64;
+                    let delta = rng.random_range(0..=2 * span) as i64 - span as i64;
                     (real_age as i64 + delta).max(0) as u64
                 };
                 let creation = current_height.saturating_sub(age);
@@ -251,7 +251,7 @@ fn build_ring(
                 let value = if vspan == 0 {
                     real_value
                 } else {
-                    let dv = rng.gen_range(0..=2 * vspan) as i64 - vspan as i64;
+                    let dv = rng.random_range(0..=2 * vspan) as i64 - vspan as i64;
                     (real_value as i64 + dv).max(1) as u64
                 };
                 members.push((value, creation));

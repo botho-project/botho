@@ -1747,12 +1747,12 @@ mod tests {
     /// Monotonicity (spec §3a): random u128 pairs, deterministic PRNG.
     #[test]
     fn test_factor_monotonic_random_pairs() {
-        use rand::{rngs::StdRng, Rng, SeedableRng};
+        use rand::{rngs::StdRng, RngExt, SeedableRng};
         let c = ClusterFactorCurve::default_params();
         let mut rng = StdRng::seed_from_u64(0x626_C0FFEE);
         for _ in 0..200_000 {
-            let a = ((rng.gen::<u64>() as u128) << 64) | rng.gen::<u64>() as u128;
-            let b = ((rng.gen::<u64>() as u128) << 64) | rng.gen::<u64>() as u128;
+            let a = ((rng.random::<u64>() as u128) << 64) | rng.random::<u64>() as u128;
+            let b = ((rng.random::<u64>() as u128) << 64) | rng.random::<u64>() as u128;
             let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
             assert!(
                 c.factor(lo) <= c.factor(hi),

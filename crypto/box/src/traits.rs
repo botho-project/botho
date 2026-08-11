@@ -11,7 +11,7 @@ use bth_crypto_keys::{Kex, KeyError};
 use core::ops::{Add, Sub};
 use displaydoc::Display;
 use mc_oblivious_aes_gcm::CtDecryptResult;
-use rand_core::{CryptoRng, RngCore};
+use rand_core::CryptoRng;
 
 /// Error type for decryption
 ///
@@ -40,7 +40,7 @@ pub trait CryptoBox<KexAlgo: Kex>: Default {
     /// Fails only if the underlying AEAD fails
     ///
     /// Meant to mirror aead::encrypt_in_place_detached
-    fn encrypt_in_place_detached<T: RngCore + CryptoRng>(
+    fn encrypt_in_place_detached<T: CryptoRng>(
         &self,
         rng: &mut T,
         key: &KexAlgo::Public,
@@ -73,7 +73,7 @@ pub trait CryptoBox<KexAlgo: Kex>: Default {
     /// Encrypt contents of a slice, returning the cryptogram in a Vec<u8>
     ///
     /// Meant to mirror aead::encrypt
-    fn encrypt<T: RngCore + CryptoRng>(
+    fn encrypt<T: CryptoRng>(
         &self,
         rng: &mut T,
         key: &KexAlgo::Public,
@@ -105,7 +105,7 @@ pub trait CryptoBox<KexAlgo: Kex>: Default {
     /// Meant to mirror aead::encrypt_in_place
     ///
     /// Fails if the underlying AEAD fails.
-    fn encrypt_in_place<T: RngCore + CryptoRng>(
+    fn encrypt_in_place<T: CryptoRng>(
         &self,
         rng: &mut T,
         key: &KexAlgo::Public,
@@ -159,7 +159,7 @@ pub trait CryptoBox<KexAlgo: Kex>: Default {
         buffer: &GenericArray<u8, L>,
     ) -> Result<GenericArray<u8, Sum<L, Self::FooterSize>>, AeadError>
     where
-        T: RngCore + CryptoRng,
+        T: CryptoRng,
         L: ArrayLength<u8> + Add<Self::FooterSize>,
         Sum<L, Self::FooterSize>: ArrayLength<u8>,
     {

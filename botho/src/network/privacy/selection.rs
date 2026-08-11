@@ -70,7 +70,7 @@
 
 use bth_gossip::RelayCapacity;
 use libp2p::PeerId;
-use rand::{seq::SliceRandom, Rng};
+use rand::{seq::IndexedRandom, Rng, RngExt};
 use std::{collections::HashSet, net::Ipv4Addr};
 use thiserror::Error;
 
@@ -262,7 +262,7 @@ impl CircuitSelector {
         let mut selected = Vec::with_capacity(count);
         let mut used_subnets: HashSet<Option<u16>> = HashSet::new();
         let mut used_peer_ids: HashSet<PeerId> = HashSet::new();
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut attempts = 0;
 
         while selected.len() < count && attempts < self.config.max_attempts {
@@ -378,7 +378,7 @@ fn weighted_random_select<'a, R: Rng>(
     }
 
     // Generate random value in [0, total_weight)
-    let mut value = rng.gen_range(0.0..total_weight);
+    let mut value = rng.random_range(0.0..total_weight);
 
     // Find the selected candidate
     for candidate in candidates {
@@ -635,7 +635,7 @@ mod tests {
         let candidates = vec![&high_score, &low_score];
 
         let mut high_count = 0;
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         for _ in 0..1000 {
             if let Some(selected) = weighted_random_select(&candidates, &mut rng) {

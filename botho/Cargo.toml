@@ -46,7 +46,7 @@ bth-crypto-ring-signature = { path = "../crypto/ring-signature" }
 bth-core = { path = "../core" }
 bth-util-from-random = { path = "../util/from-random" }
 bth-util-serial = { workspace = true }
-rand_core = "0.6"
+rand_core = { workspace = true }
 aes = { workspace = true }
 ctr = { workspace = true }
 hkdf = { workspace = true }
@@ -80,8 +80,8 @@ libp2p = { workspace = true, features = [
 ] }
 futures = "0.3"
 bip39 = { package = "tiny-bip39", version = "1" }
-rand = "0.8"
-rand_distr = "0.4"
+rand = { workspace = true, features = ["std", "thread_rng"] }
+rand_distr = { workspace = true }
 hex = "0.4"
 sha2 = "0.10"
 bs58 = "0.5"
@@ -170,7 +170,7 @@ hickory-resolver = { version = "0.25", features = ["tokio", "system-config"] }
 
 # WebRTC transport for NAT traversal
 webrtc = { workspace = true }
-getrandom = "0.2"
+getrandom = { workspace = true }
 
 # For botho-testnet harness
 chrono = "0.4"

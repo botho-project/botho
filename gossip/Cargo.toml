@@ -16,7 +16,7 @@ bth-util-serial = { workspace = true }
 
 # External dependencies
 bitflags = { workspace = true, features = ["serde"] }
-getrandom = "0.2"
+getrandom = { workspace = true }
 displaydoc = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true, features = ["serde"] }

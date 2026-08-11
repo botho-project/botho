@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 
 pub mod known_accounts;
 
-pub use rand::{seq::SliceRandom, CryptoRng, Rng, RngCore, SeedableRng};
+pub use rand::{seq::SliceRandom, CryptoRng, Rng, RngExt, SeedableRng};
 // re-export AccountKey and PublicAddress to save an import elsewhere
 pub use bth_account_keys::{AccountKey, PublicAddress};
 
@@ -44,16 +44,16 @@ pub fn get_seeded_rng() -> RngType {
     RngType::from_seed([7u8; 32])
 }
 
-pub fn random_bytes_vec(num_bytes: usize, csprng: &mut (impl CryptoRng + RngCore)) -> Vec<u8> {
+pub fn random_bytes_vec(num_bytes: usize, csprng: &mut impl CryptoRng) -> Vec<u8> {
     let mut result = Vec::with_capacity(num_bytes);
     csprng.fill_bytes(&mut result);
     result
 }
 
-pub fn random_str(len: usize, csprng: &mut (impl CryptoRng + RngCore)) -> String {
-    use rand::distributions::Alphanumeric;
+pub fn random_str(len: usize, csprng: &mut impl CryptoRng) -> String {
+    use rand::distr::Alphanumeric;
     csprng
-        .sample_iter(&Alphanumeric)
+        .sample_iter(Alphanumeric)
         .take(len)
         .map(char::from)
         .collect()

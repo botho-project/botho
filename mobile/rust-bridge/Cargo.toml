@@ -39,7 +39,7 @@ tokio = { version = "1", features = ["rt", "sync"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # RNG for ring decoy shuffling / CLSAG signing
-rand = "0.8"
+rand = { workspace = true, features = ["std", "thread_rng"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

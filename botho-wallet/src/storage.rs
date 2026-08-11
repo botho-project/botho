@@ -13,7 +13,7 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit},
     ChaCha20Poly1305, Nonce,
 };
-use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 use zeroize::{Zeroize, Zeroizing};
@@ -255,7 +255,7 @@ impl EncryptedWallet {
 
         // Generate random nonce
         let mut nonce_bytes = [0u8; 12];
-        rand::thread_rng().fill(&mut nonce_bytes);
+        rand::rng().fill(&mut nonce_bytes);
 
         // Encrypt the mnemonic
         let cipher = ChaCha20Poly1305::new_from_slice(&key)
@@ -460,7 +460,7 @@ impl EncryptedWallet {
 
         // Generate new nonce for discovery state
         let mut nonce_bytes = [0u8; 12];
-        rand::thread_rng().fill(&mut nonce_bytes);
+        rand::rng().fill(&mut nonce_bytes);
 
         let cipher = ChaCha20Poly1305::new_from_slice(&key)
             .map_err(|_| anyhow!("Failed to create cipher"))?;
@@ -554,7 +554,7 @@ impl EncryptedWallet {
 
         // Generate new nonce
         let mut nonce_bytes = [0u8; 12];
-        rand::thread_rng().fill(&mut nonce_bytes);
+        rand::rng().fill(&mut nonce_bytes);
 
         let cipher = ChaCha20Poly1305::new_from_slice(&key)
             .map_err(|_| anyhow!("Failed to create cipher"))?;

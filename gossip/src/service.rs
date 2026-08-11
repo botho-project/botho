@@ -693,7 +693,7 @@ mod tests {
 
     fn make_test_service() -> GossipService {
         // Create a keypair and use its public key for the NodeID
-        let signing_key = Ed25519Pair::from_random(&mut rand::thread_rng());
+        let signing_key = Ed25519Pair::from_random(&mut rand::rng());
         let public_key = signing_key.public_key();
 
         let node_id = NodeID {
@@ -808,7 +808,7 @@ mod tests {
 
     #[test]
     fn test_announcement_contains_correct_data() {
-        let signing_key = Ed25519Pair::from_random(&mut rand::thread_rng());
+        let signing_key = Ed25519Pair::from_random(&mut rand::rng());
         let public_key = signing_key.public_key();
 
         let node_id = NodeID {

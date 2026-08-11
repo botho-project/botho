@@ -269,7 +269,7 @@ mod tests {
     use super::*;
     use bth_util_from_random::FromRandom;
     use rand::rngs::StdRng;
-    use rand_core::{RngCore, SeedableRng};
+    use rand_core::{Rng, SeedableRng};
 
     /// Build a v2 address with deterministic (seeded) PQ payloads of the
     /// correct raw lengths. The bytes need not be valid PQ keys for the

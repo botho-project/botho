@@ -49,7 +49,7 @@
 //! assert_eq!(recovered, message);
 //! ```
 
-use rand::RngCore;
+use rand::Rng;
 use thiserror::Error;
 
 /// Length header size in bytes (u16 little-endian).
@@ -151,7 +151,7 @@ pub fn try_pad_to_bucket(payload: &[u8]) -> Result<Vec<u8>, PaddingError> {
     // Fill remaining space with random bytes
     let padding_len = bucket_size - padded.len();
     if padding_len > 0 {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let start = padded.len();
         padded.resize(bucket_size, 0);
         rng.fill_bytes(&mut padded[start..]);

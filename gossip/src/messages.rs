@@ -422,7 +422,7 @@ impl CircuitId {
     pub fn random() -> Self {
         let mut bytes = [0u8; 16];
         // Use getrandom for cryptographic randomness
-        getrandom::getrandom(&mut bytes).expect("Failed to generate random bytes");
+        getrandom::fill(&mut bytes).expect("Failed to generate random bytes");
         Self(bytes)
     }
 

@@ -1031,7 +1031,7 @@ mod tests {
                 build_and_sign_with_rng, DecoyOutput, RecipientAddress, SignRequest, SpendInput,
             };
             use rand_chacha::ChaCha20Rng;
-            use rand_core::{RngCore, SeedableRng};
+            use rand_core::{Rng, SeedableRng};
 
             let mut rng = ChaCha20Rng::from_seed([73u8; 32]);
 

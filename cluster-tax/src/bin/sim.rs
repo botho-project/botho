@@ -1122,7 +1122,7 @@ mod cli {
     }
 
     fn run_whale_diffusion(initial_wealth: u64, num_participants: usize, rounds: usize) {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let config = TransferConfig::default();
         let mut cluster_wealth = ClusterWealth::new();
 
@@ -1176,8 +1176,8 @@ mod cli {
         for round in 1..=rounds {
             // Whale sends to random participant
             if whale.balance > 1000 {
-                let amount = rng.gen_range(100..=whale.balance.min(10000));
-                let recipient_idx = rng.gen_range(0..participants.len());
+                let amount = rng.random_range(100..=whale.balance.min(10000));
+                let recipient_idx = rng.random_range(0..participants.len());
 
                 if let Ok(result) = execute_transfer(
                     &mut whale,
@@ -1192,10 +1192,10 @@ mod cli {
 
             // Participants trade among themselves
             for _ in 0..5 {
-                let sender_idx = rng.gen_range(0..participants.len());
-                let receiver_idx = rng.gen_range(0..participants.len());
+                let sender_idx = rng.random_range(0..participants.len());
+                let receiver_idx = rng.random_range(0..participants.len());
                 if sender_idx != receiver_idx && participants[sender_idx].balance > 100 {
-                    let amount = rng.gen_range(10..=participants[sender_idx].balance.min(1000));
+                    let amount = rng.random_range(10..=participants[sender_idx].balance.min(1000));
                     // Use split_at_mut to get two mutable references
                     let (lo, hi) = if sender_idx < receiver_idx {
                         let (left, right) = participants.split_at_mut(receiver_idx);
@@ -2170,7 +2170,7 @@ mod cli {
             eprintln!("(parallel execution not available; running single-threaded...)");
         }
         let results = {
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             run_monte_carlo(&config, &mut rng)
         };
 
@@ -2294,7 +2294,7 @@ mod cli {
                 };
 
                 let results = {
-                    let mut rng = rand::thread_rng();
+                    let mut rng = rand::rng();
                     run_monte_carlo(&config, &mut rng)
                 };
 

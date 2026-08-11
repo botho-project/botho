@@ -23,7 +23,7 @@ use digest::generic_array::typenum::U32;
 #[cfg(feature = "alloc")]
 use bth_util_repr_bytes::derive_into_vec_from_repr_bytes;
 
-use rand_core::{CryptoRng, RngCore};
+use rand_core::CryptoRng;
 #[cfg(feature = "serde")]
 use serde::{
     de::{Deserialize, Deserializer, Error as DeserializeError, Visitor},
@@ -33,35 +33,6 @@ use serde::{
 use sha2::Sha256;
 use x25519_dalek::{EphemeralSecret, PublicKey as DalekPublicKey, SharedSecret, StaticSecret};
 use zeroize::Zeroize;
-
-/// Bridges a workspace (rand_core 0.6) CSPRNG into the rand_core 0.10 traits
-/// that x25519-dalek 3's `random_from_rng` constructors expect.
-///
-/// `EphemeralSecret` deliberately has no byte-level constructor, so this is
-/// the only way to seed it from the workspace RNG generation. All methods
-/// forward directly, so the byte stream consumed (32 bytes via `fill_bytes`)
-/// is identical to the x25519-dalek 2.x era. The full rand-family migration
-/// is tracked in #1154.
-struct RngCompat<'a, R: RngCore + CryptoRng>(&'a mut R);
-
-impl<R: RngCore + CryptoRng> rand_core_v010::TryRng for RngCompat<'_, R> {
-    type Error = core::convert::Infallible;
-
-    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
-        Ok(self.0.next_u32())
-    }
-
-    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
-        Ok(self.0.next_u64())
-    }
-
-    fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
-        self.0.fill_bytes(dst);
-        Ok(())
-    }
-}
-
-impl<R: RngCore + CryptoRng> rand_core_v010::TryCryptoRng for RngCompat<'_, R> {}
 
 /// The length in bytes of canonical representation of x25519 (public and
 /// private keys)
@@ -407,8 +378,8 @@ impl KexEphemeralPrivate for X25519EphemeralPrivate {
 }
 
 impl FromRandom for X25519EphemeralPrivate {
-    fn from_random<R: CryptoRng + RngCore>(csprng: &mut R) -> X25519EphemeralPrivate {
-        X25519EphemeralPrivate(EphemeralSecret::random_from_rng(&mut RngCompat(csprng)))
+    fn from_random<R: CryptoRng>(csprng: &mut R) -> X25519EphemeralPrivate {
+        X25519EphemeralPrivate(EphemeralSecret::random_from_rng(csprng))
     }
 }
 
@@ -430,8 +401,8 @@ impl PrivateKey for X25519Private {
 }
 
 impl FromRandom for X25519Private {
-    fn from_random<R: CryptoRng + RngCore>(csprng: &mut R) -> X25519Private {
-        X25519Private(StaticSecret::random_from_rng(&mut RngCompat(csprng)))
+    fn from_random<R: CryptoRng>(csprng: &mut R) -> X25519Private {
+        X25519Private(StaticSecret::random_from_rng(csprng))
     }
 }
 

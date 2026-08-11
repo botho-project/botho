@@ -41,20 +41,6 @@ updates:
       # v4 pin is retired.
       - dependency-name: "curve25519-dalek"
         update-types: ["version-update:semver-major"]
-      # rand family (#1154): deterministic key derivation. Pre-1.0, so 0.x
-      # "minors" are the breaking axis — ignore those too; patches flow.
-      - dependency-name: "rand"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
-      - dependency-name: "rand_core"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
-      - dependency-name: "rand_chacha"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
-      - dependency-name: "rand_hc"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
-      - dependency-name: "rand_distr"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
-      - dependency-name: "getrandom"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     groups:
       cargo-minor-patch:
         patterns: ["*"]

@@ -26,7 +26,7 @@ use botho::network::privacy::{
     transmitter::{ConstantRateConfig, ConstantRateTransmitter, OutgoingMessage},
 };
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use rand::RngCore;
+use rand::Rng;
 
 // =============================================================================
 // Benchmark Helpers
@@ -34,7 +34,7 @@ use rand::RngCore;
 
 /// Generate a random payload of the specified size.
 fn random_payload(size: usize) -> Vec<u8> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut payload = vec![0u8; size];
     rng.fill_bytes(&mut payload);
     payload

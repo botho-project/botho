@@ -124,7 +124,7 @@ use bth_consensus_scp::{
 use clap::{Parser, Subcommand};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use dashmap::DashMap;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{rngs::StdRng, RngExt, SeedableRng};
 use serde::{Deserialize, Serialize};
 
 #[derive(Parser, Debug)]
@@ -852,7 +852,7 @@ fn run_simulation(config: &SimConfig) -> Result<MetricsReport, String> {
     let mut rng = StdRng::seed_from_u64(config.seed);
     let values: Vec<TxValue> = (0..config.txs)
         .map(|_| {
-            let s: String = (0..10).map(|_| rng.gen_range('a'..='z')).collect();
+            let s: String = (0..10).map(|_| rng.random_range('a'..='z')).collect();
             TxValue(s)
         })
         .collect();

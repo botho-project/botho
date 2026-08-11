@@ -194,7 +194,7 @@ mod tests {
     #[test]
     fn load_reconstructs_account_from_hex_files() {
         let dir = tempfile::tempdir().unwrap();
-        let account = AccountKey::random(&mut rand::rngs::OsRng);
+        let account = AccountKey::random(&mut bth_util_from_random::OsRng);
 
         let view_path = dir.path().join("view.hex");
         let spend_path = dir.path().join("spend.hex");
@@ -235,7 +235,7 @@ mod tests {
         std::fs::write(
             &ok,
             hex::encode(
-                AccountKey::random(&mut rand::rngs::OsRng)
+                AccountKey::random(&mut bth_util_from_random::OsRng)
                     .view_private_key()
                     .to_bytes(),
             ),
@@ -256,7 +256,7 @@ mod tests {
     #[test]
     fn load_derives_pq_keys_and_publishes_v2_address() {
         let dir = tempfile::tempdir().unwrap();
-        let account = AccountKey::random(&mut rand::rngs::OsRng);
+        let account = AccountKey::random(&mut bth_util_from_random::OsRng);
         let view_path = dir.path().join("view.hex");
         let spend_path = dir.path().join("spend.hex");
         write_key(&view_path, &account.view_private_key().to_bytes());
@@ -320,7 +320,7 @@ mod tests {
     #[test]
     fn load_rejects_malformed_pq_seed_file() {
         let dir = tempfile::tempdir().unwrap();
-        let account = AccountKey::random(&mut rand::rngs::OsRng);
+        let account = AccountKey::random(&mut bth_util_from_random::OsRng);
         let view_path = dir.path().join("view.hex");
         let spend_path = dir.path().join("spend.hex");
         write_key(&view_path, &account.view_private_key().to_bytes());
@@ -359,7 +359,7 @@ mod tests {
         use bth_transaction_types::ClusterTagVector;
 
         let dir = tempfile::tempdir().unwrap();
-        let account = AccountKey::random(&mut rand::rngs::OsRng);
+        let account = AccountKey::random(&mut bth_util_from_random::OsRng);
         let view_path = dir.path().join("view.hex");
         let spend_path = dir.path().join("spend.hex");
         write_key(&view_path, &account.view_private_key().to_bytes());

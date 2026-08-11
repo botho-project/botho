@@ -22,7 +22,8 @@ use std::{collections::HashMap, thread, time::Duration};
 use bth_account_keys::PublicAddress;
 use bth_cluster_tax::{FeeConfig, TransactionType, TAG_WEIGHT_SCALE};
 use bth_transaction_types::{ClusterId, ClusterTagVector};
-use rand::{rngs::OsRng, seq::SliceRandom};
+use bth_util_from_random::OsRng;
+use rand::seq::SliceRandom;
 use serial_test::serial;
 
 use botho::{

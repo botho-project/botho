@@ -55,9 +55,9 @@ bth-util-from-random = { workspace = true }
 bth-util-repr-bytes = { workspace = true }
 bth-util-serial = { workspace = true, optional = true }
 rand_core = { workspace = true }
-# rand_core 0.10 bridge for x25519-dalek 3 secret generation only (#1154
-# tracks the full rand-family migration).
-rand-core-v010 = { workspace = true }
+# rand_core 0.6 bridge for schnorrkel-og transcript signing only (schnorrkel-og
+# is still on the dalek-4-era rand_core 0.6 APIs).
+rand-core-v06 = { workspace = true }
 rand_hc = { workspace = true }
 schnorrkel-og = { workspace = true }
 serde = { workspace = true, features = ["derive"], optional = true }
@@ -73,7 +73,7 @@ bth-crypto-hashes = { workspace = true }
 bth-util-test-helper = { workspace = true }
 
 pem = { workspace = true }
-rand_core = { workspace = true, features = ["getrandom"] }
+rand_core = { workspace = true }
 rand_hc = { workspace = true }
 semver = { workspace = true }
 serde_json = { workspace = true }

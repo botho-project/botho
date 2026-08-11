@@ -25,7 +25,8 @@
 #![allow(dead_code)]
 
 use bth_account_keys::PublicAddress;
-use rand::{rngs::OsRng, RngCore};
+use bth_util_from_random::OsRng;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 

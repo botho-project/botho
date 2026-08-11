@@ -4,8 +4,8 @@
 //! in and out of the enclave.
 
 use core::hash::BuildHasher;
-use mc_rand::McRng;
-use rand_core::RngCore;
+// McRng is still on the rand_core 0.6 line; use mc-rand's own trait re-export.
+use mc_rand::{McRng, RngCore};
 use siphasher::sip::SipHasher13;
 
 /// A `no_std`-compatible [BuildHasher] using [McRng].

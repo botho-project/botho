@@ -27,7 +27,7 @@ use chacha20poly1305::{
     ChaCha20Poly1305, Nonce,
 };
 use libp2p::PeerId;
-use rand::RngCore;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -133,7 +133,7 @@ fn encrypt_layer_raw(key: &SymmetricKey, plaintext: &[u8]) -> Vec<u8> {
 
     // Generate random nonce
     let mut nonce_bytes = [0u8; NONCE_SIZE];
-    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    rand::rng().fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     // Encrypt with authentication
@@ -273,7 +273,7 @@ mod tests {
     use super::*;
 
     fn random_key() -> SymmetricKey {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         SymmetricKey::random(&mut rng)
     }
 
@@ -479,7 +479,7 @@ mod tests {
 
     #[test]
     fn test_circuit_id_random() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let id1 = CircuitId::random(&mut rng);
         let id2 = CircuitId::random(&mut rng);
 

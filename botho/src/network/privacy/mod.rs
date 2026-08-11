@@ -63,7 +63,7 @@
 //! let mut relay = RelayState::new(RelayStateConfig::default());
 //!
 //! // When we become a relay hop, store the circuit key
-//! let mut rng = rand::thread_rng();
+//! let mut rng = rand::rng();
 //! let circuit_id = CircuitId::random(&mut rng);
 //! let hop_key = CircuitHopKey::new_exit(SymmetricKey::random(&mut rng));
 //! relay.add_circuit_key(circuit_id, hop_key);

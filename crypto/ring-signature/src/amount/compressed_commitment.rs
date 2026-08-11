@@ -95,7 +95,7 @@ mod compressed_commitment_tests {
         ring_signature::{generators, Scalar},
         CompressedCommitment,
     };
-    use bth_util_test_helper::{run_with_several_seeds, RngCore};
+    use bth_util_test_helper::{run_with_several_seeds, Rng};
     use curve25519_dalek::ristretto::CompressedRistretto;
 
     #[test]
