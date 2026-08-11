@@ -1,0 +1,87 @@
+name: Mobile CI
+
+# Runs the Expo mobile-app checks (typecheck + jest + expo-doctor) on PRs that
+# touch mobile/app/**. Expo packages are SDK-versioned and move in lockstep
+# with the `expo` package and its paired React Native release — before this
+# workflow existed, mobile/ had NO CI, so a green check on a dependency bump
+# verified nothing and unmergeable single-package Expo bumps piled up (#1173).
+#
+# expo-doctor validates that every expo-* / react-native-* package matches the
+# installed SDK's expected version set, which is exactly the property a
+# lockstep-family bump can silently break. Its network-dependent checks (npm
+# registry metadata, api.expo.dev schema) run fine on hosted runners.
+#
+# Path-filtered so Rust-only PRs don't pay the pnpm install cost. The
+# rust-bridge crate (mobile/rust-bridge) is covered by the Rust workflows, not
+# here. Everything here is offline/mocked: NO secrets required.
+
+on:
+  pull_request:
+    paths:
+      - 'mobile/app/**'
+      - '.github/workflows/mobile-ci.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'mobile/app/**'
+      - '.github/workflows/mobile-ci.yml'
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref to keep the queue fast.
+concurrency:
+  group: mobile-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  mobile-ci:
+    name: typecheck + jest + expo-doctor
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # mobile/app is a standalone pnpm project (its own lockfile +
+    # pnpm-workspace.yaml settings), separate from the web/ workspace.
+    defaults:
+      run:
+        working-directory: mobile/app
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # pnpm must be installed before setup-node so its cache resolver can find
+      # the pnpm store. Pin to the major used locally — mobile/app's
+      # pnpm-workspace.yaml uses pnpm 11 settings (allowBuilds,
+      # minimumReleaseAgeExclude).
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11
+
+      - name: Install Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: mobile/app/pnpm-lock.yaml
+
+      # CI mode defaults to --frozen-lockfile, so a package.json /
+      # pnpm-lock.yaml drift (the classic single-package Expo bump) fails here.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # jest-expo preset: unit tests for keychain, config, store, and unlock
+      # flows (all mocked — no native modules, no network).
+      - name: Run tests
+        run: pnpm test
+
+      # Fails if any expo-* / react-native-* / react version drifts from the
+      # installed Expo SDK's expected set — the check that makes lockstep
+      # violations visible.
+      - name: expo-doctor (SDK version alignment)
+        run: npx expo-doctor

@@ -4,13 +4,7 @@
     "slug": "botho-wallet",
     "version": "0.1.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#1a1a2e"
-    },
     "assetBundlePatterns": [
       "**/*"
     ],
@@ -26,10 +20,6 @@
       }
     },
     "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#1a1a2e"
-      },
       "package": "com.botho.wallet",
       "permissions": [
         "USE_BIOMETRIC",

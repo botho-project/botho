@@ -21,7 +21,9 @@
  * that wires this module on a device or simulator.
  */
 
-import { requireOptionalNativeModule } from "expo-modules-core";
+// `requireOptionalNativeModule` is re-exported from the `expo` package (SDK
+// 52+); installing `expo-modules-core` directly is flagged by expo-doctor.
+import { requireOptionalNativeModule } from "expo";
 import type {
   WalletAddress,
   WalletBalance,
