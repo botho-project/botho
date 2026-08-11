@@ -8,14 +8,12 @@
 // Amounts MUST be multiples of 1e4 PeerToken wei (evmExtraWeiDecimals = 4) or
 // the non-round remainder is burned by the Core credit.
 //
-// Run: HL_TOKEN_INDEX=<idx> [HL_BRIDGE_WBTH=10] npx ts-node
-//   --compiler-options '{"module":"commonjs","target":"ES2020",
-//   "esModuleInterop":true,"skipLibCheck":true}' scripts/hl-12-bridge-in-wbth.ts
+// Run: HL_TOKEN_INDEX=<idx> [HL_BRIDGE_WBTH=10] npx tsx scripts/hl-12-bridge-in-wbth.ts
 import { ethers } from "ethers";
 import {
   CORE_TOKEN_NAME, DEPLOYER, HYPEREVM_RPC, loadWallet, PEER_TOKEN,
   spotBalances, systemAddress,
-} from "./hl-lib";
+} from "./hl-lib.js";
 
 const AMOUNT_WBTH = process.env.HL_BRIDGE_WBTH ?? "10"; // default: everything from the #1026 round trip
 

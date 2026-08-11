@@ -13,14 +13,12 @@
 // 4 extra EVM wei decimals or the remainder is burned — keep every amount
 // 8-decimal-aligned end to end.
 //
-// Run: HL_TOKEN_INDEX=<idx from hl-10> npx ts-node --compiler-options
-//   '{"module":"commonjs","target":"ES2020","esModuleInterop":true,
-//   "skipLibCheck":true}' scripts/hl-11-link-evm-wbth.ts
+// Run: HL_TOKEN_INDEX=<idx from hl-10> npx tsx scripts/hl-11-link-evm-wbth.ts
 import { ethers } from "ethers";
 import {
   CORE_TOKEN_NAME, DEPLOYER, EVM_EXTRA_WEI_DECIMALS, HYPEREVM_RPC, info,
   loadWallet, PEER_TOKEN, PEER_TOKEN_CREATE_NONCE, sendL1Action,
-} from "./hl-lib";
+} from "./hl-lib.js";
 
 async function resolveTokenIndex(): Promise<number> {
   if (process.env.HL_TOKEN_INDEX) return parseInt(process.env.HL_TOKEN_INDEX, 10);

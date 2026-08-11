@@ -8,7 +8,7 @@ import * as path from "path";
 const RPC = "https://rpc.hyperliquid-testnet.xyz/evm";
 const PEER_TOKEN = "0x230f154Ae33A53dcFFEDedB2d92cc1F32BcE7610";
 const HYPEREVM_MANAGER = "0x07F159042E9F89484dfdA37D09057c871dbCB475";
-const KEY = path.resolve(__dirname, "../../../.secrets/bridge-testnet/eth-deployer.key");
+const KEY = path.resolve(import.meta.dirname, "../../../.secrets/bridge-testnet/eth-deployer.key");
 const ABI = [
   "function minter() view returns (address)",
   "function owner() view returns (address)",

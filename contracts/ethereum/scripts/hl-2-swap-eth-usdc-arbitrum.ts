@@ -2,8 +2,7 @@
 // SwapRouter02 (0.05% tier). Pays with native ETH (msg.value) — SwapRouter02
 // wraps to WETH internally. Quotes first, sets a 1% min-out.
 //
-// Run: npx ts-node --compiler-options '{"module":"commonjs","target":"ES2020",
-//   "esModuleInterop":true,"skipLibCheck":true}' scripts/hl-2-swap-eth-usdc-arbitrum.ts
+// Run: npx tsx scripts/hl-2-swap-eth-usdc-arbitrum.ts
 
 import { ethers } from "ethers";
 import * as fs from "fs";
@@ -16,7 +15,7 @@ const WETH = "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1";
 const USDC = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"; // native USDC (verified: 6 dec)
 const FEE = 500; // 0.05%
 const AMOUNT_IN = ethers.parseEther("0.0038"); // leave ~0.0002 ETH for gas on this + the deposit tx
-const KEYFILE = path.resolve(__dirname, "../../../.secrets/bridge-mainnet/eth-botho.key");
+const KEYFILE = path.resolve(import.meta.dirname, "../../../.secrets/bridge-mainnet/eth-botho.key");
 
 const QUOTER_ABI = ["function quoteExactInputSingle((address tokenIn,address tokenOut,uint256 amountIn,uint24 fee,uint160 sqrtPriceLimitX96)) returns (uint256 amountOut,uint160,uint32,uint256)"];
 const ROUTER_ABI = ["function exactInputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 amountIn,uint256 amountOutMinimum,uint160 sqrtPriceLimitX96)) payable returns (uint256 amountOut)"];

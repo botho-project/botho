@@ -18,14 +18,13 @@
 // deployer first. claimDrip is UNSIGNED (plain info request) and is attempted
 // for the funder automatically. Run every drip cooldown until funded.
 //
-// Run: npx ts-node --compiler-options '{"module":"commonjs","target":"ES2020",
-//   "esModuleInterop":true,"skipLibCheck":true}' scripts/hl-9-fund-deploy-gas.ts
+// Run: npx tsx scripts/hl-9-fund-deploy-gas.ts
 import { ethers } from "ethers";
 import * as fs from "fs";
 import {
   DEPLOYER, HYPEREVM_RPC, fmt, info, loadWallet, perpUsdc, sendL1Action,
   spotBalances, usdClassTransfer, usdSend, wire,
-} from "./hl-lib";
+} from "./hl-lib.js";
 
 const HYPE_SYSTEM = "0x2222222222222222222222222222222222222222"; // EVM->Core HYPE bridge
 const HYPE_PAIR = "@1035"; // HYPE/USDC on testnet (tokens [1105, 0])

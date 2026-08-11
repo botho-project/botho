@@ -3,8 +3,7 @@
 // "deposited on mainnet with the same address" fact that unlocks the TESTNET
 // faucet for 0x8E90. Min deposit 5 USDC (below = lost forever); we send 6.
 //
-// Run: npx ts-node --compiler-options '{"module":"commonjs","target":"ES2020",
-//   "esModuleInterop":true,"skipLibCheck":true}' scripts/hl-3-deposit-hyperliquid.ts
+// Run: npx tsx scripts/hl-3-deposit-hyperliquid.ts
 
 import { ethers } from "ethers";
 import * as fs from "fs";
@@ -14,7 +13,7 @@ const ARB_RPC = "https://arb1.arbitrum.io/rpc";
 const USDC = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"; // native USDC (verified)
 const BRIDGE2 = "0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7"; // Hyperliquid Bridge2 (verified: 38.8KB code, official docs + Arbiscan)
 const DEPOSIT = 6_000_000n; // 6 USDC (6 decimals) — above the 5 USDC minimum
-const KEYFILE = path.resolve(__dirname, "../../../.secrets/bridge-mainnet/eth-botho.key");
+const KEYFILE = path.resolve(import.meta.dirname, "../../../.secrets/bridge-mainnet/eth-botho.key");
 
 const USDC_ABI = [
   "function balanceOf(address) view returns (uint256)",

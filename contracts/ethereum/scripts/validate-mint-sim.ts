@@ -28,7 +28,7 @@ const SAFE_ABI = [
   "function execTransaction(address to,uint256 value,bytes data,uint8 operation,uint256 safeTxGas,uint256 baseGas,uint256 gasPrice,address gasToken,address payable refundReceiver,bytes signatures) payable returns (bool)",
 ];
 
-const SECRETS = path.resolve(__dirname, "../../../.secrets/bridge-testnet");
+const SECRETS = path.resolve(import.meta.dirname, "../../../.secrets/bridge-testnet");
 const key = (n: string) => fs.readFileSync(path.join(SECRETS, `${n}.key`), "utf8").trim();
 
 async function main() {

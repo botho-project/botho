@@ -1,9 +1,14 @@
 import { expect } from "chai";
-import { ethers } from "hardhat";
-import {
-  loadFixture,
-  time,
-} from "@nomicfoundation/hardhat-toolbox/network-helpers";
+import { network } from "hardhat";
+
+// Hardhat 3 (#1174): ethers and the network helpers hang off an explicit
+// network connection instead of module-level `hardhat` exports. Connect to
+// the configured `hardhat` simulated network by name (the no-arg default is
+// an implicit "default" network that ignores networks.hardhat config);
+// getOrCreate caches, so every test file shares one in-process node like HH2.
+const { ethers, networkHelpers } = await network.getOrCreate("hardhat");
+const { time } = networkHelpers;
+const loadFixture = networkHelpers.loadFixture.bind(networkHelpers);
 
 /**
  * WrappedBTH unit + invariant tests (#826).

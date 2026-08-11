@@ -2,6 +2,8 @@ node_modules/
 artifacts/
 cache/
 typechain-types/
+# hardhat-typechain (hardhat 3) generates into types/
+types/
 coverage/
 coverage.json
 .env

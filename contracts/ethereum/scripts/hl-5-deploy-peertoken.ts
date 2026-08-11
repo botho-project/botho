@@ -6,8 +6,8 @@ import * as fs from "fs";
 import * as path from "path";
 
 const RPC = "https://rpc.hyperliquid-testnet.xyz/evm";
-const KEY = path.resolve(__dirname, "../../../.secrets/bridge-testnet/eth-deployer.key");
-const ART = path.resolve(__dirname, "../artifacts/contracts/WbthPeerToken.sol/WbthPeerToken.json");
+const KEY = path.resolve(import.meta.dirname, "../../../.secrets/bridge-testnet/eth-deployer.key");
+const ART = path.resolve(import.meta.dirname, "../artifacts/contracts/WbthPeerToken.sol/WbthPeerToken.json");
 
 async function main() {
   const p = new ethers.JsonRpcProvider(RPC);

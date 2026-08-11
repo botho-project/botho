@@ -3,13 +3,12 @@
 // against golden vectors generated with hyperliquid-python-sdk 0.x
 // (utils/signing.py) using the well-known throwaway hardhat key #0.
 // Run (no network, no secrets):
-//   npx ts-node --compiler-options '{"module":"commonjs","target":"ES2020",
-//     "esModuleInterop":true,"skipLibCheck":true}' scripts/hl-lib-selftest.ts
+//   npx tsx scripts/hl-lib-selftest.ts
 import { ethers } from "ethers";
 import {
   actionHash, signL1Action, signUserSignedAction,
   USD_CLASS_TRANSFER_SIGN_TYPES, USD_SEND_SIGN_TYPES, systemAddress, wire,
-} from "./hl-lib";
+} from "./hl-lib.js";
 
 const w = new ethers.Wallet("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"); // hardhat #0, throwaway
 const NONCE = 1784260000000;

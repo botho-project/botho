@@ -20,14 +20,12 @@
 // Decimals: szDecimals 2 + weiDecimals 8 (szDecimals+5 <= weiDecimals) and
 // evmExtraWeiDecimals = 12 - 8 = 4 against the 12-decimal HyperEVM PeerToken.
 //
-// Run: HL_CONFIRM=yes npx ts-node --compiler-options '{"module":"commonjs",
-//   "target":"ES2020","esModuleInterop":true,"skipLibCheck":true}' \
-//   scripts/hl-10-deploy-hip1-wbth.ts
+// Run: HL_CONFIRM=yes npx tsx scripts/hl-10-deploy-hip1-wbth.ts
 import {
   CORE_SZ_DECIMALS, CORE_TOKEN_NAME, CORE_WEI_DECIMALS, DEPLOYER, fmt, info,
   loadWallet, perpUsdc, sendL1Action, spotBalances, systemAddress,
   usdClassTransfer, wire,
-} from "./hl-lib";
+} from "./hl-lib.js";
 
 // supply plan (wei = 8 decimals)
 const MAX_SUPPLY_WEI = "100000000000000"; // 1,000,000 WBTH
