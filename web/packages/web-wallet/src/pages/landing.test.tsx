@@ -157,9 +157,10 @@ describe('LandingPage i18n', () => {
 
   it('locale switcher label reflects Spanish on a direct /es load', async () => {
     // Acceptance criterion (item 3): the switcher's displayed language must equal
-    // the actually-rendered language. `activeLocale` is derived purely from the
-    // URL, so `/es` → the <select value> is "es" (renders "Español"), matching
-    // the Spanish page content — no desync (#797).
+    // the actually-rendered language. `activeLocale` is derived from i18next's
+    // active language (URL-synced by `LocaleRoutes` in prod), so on `/es` the
+    // <select value> is "es" (renders "Español"), matching the Spanish page
+    // content — no desync (#797).
     await i18n.changeLanguage('es')
     render(
       <MemoryRouter initialEntries={['/es']}>
@@ -201,10 +202,14 @@ describe('LandingPage i18n', () => {
     expect(select.value).toBe('en')
   })
 
-  it('locale switcher navigates to the sibling locale path on an in-session switch', () => {
+  it('locale switcher navigates to the sibling locale path on an in-session switch', async () => {
     // es→en round-trip through the switcher control emits the UNPREFIXED path for
     // en (never `/en/...`), and vice versa — the mechanism that keeps the label
     // and the URL in agreement (#797, item 3 confirmed-correct).
+    // In prod `LocaleRoutes` syncs i18n's language to the /es URL; the switcher
+    // displays that language (NOT a parse of `useLocation()`, which is
+    // locale-stripped inside the app shell), so mirror the sync here.
+    await i18n.changeLanguage('es')
     let seen = ''
     function LocationProbe() {
       seen = useLocation().pathname
@@ -217,7 +222,7 @@ describe('LandingPage i18n', () => {
       </MemoryRouter>,
     )
     const select = screen.getAllByRole('combobox')[0] as HTMLSelectElement
-    // Reflects the /es URL.
+    // Reflects the active (URL-synced) language.
     expect(select.value).toBe('es')
     // Switch es → en: must land on the unprefixed /wallet, not /en/wallet.
     fireEvent.change(select, { target: { value: 'en' } })

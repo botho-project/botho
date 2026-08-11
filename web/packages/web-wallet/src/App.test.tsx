@@ -6,7 +6,7 @@
  * unprefixed default keeps every existing absolute route working.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import App from './App'
 
 // jsdom here lacks localStorage; provide a minimal mock for i18n persistence.
@@ -85,5 +85,46 @@ describe('App locale routing', () => {
     render(<App />)
     await waitFor(() => expect(window.location.pathname).toBe('/wallet'))
     expect(document.documentElement.lang).toBe('en')
+  })
+
+  // The switcher's <select> is identified by its locale-invariant option
+  // endonyms; the landing page renders one in the header and one in the footer,
+  // so take the first. (Same disambiguation pattern as the *.i18n tests.)
+  function localeSwitcherSelect(): HTMLSelectElement {
+    const match = screen
+      .getAllByRole('combobox')
+      .find((el) =>
+        Array.from((el as HTMLSelectElement).options).some(
+          (o) => o.textContent === 'Español',
+        ),
+      )
+    if (!match) throw new Error('LocaleSwitcher <select> not found')
+    return match as HTMLSelectElement
+  }
+
+  it('shows the active locale in the switcher under the /es prefix', async () => {
+    // Regression: under a non-default locale, pages render inside
+    // `<Routes location={strippedLocation}>`, so `useLocation()` in the subtree
+    // reports the locale-STRIPPED path. A path-derived switcher value therefore
+    // read "English" on /es while the page rendered Spanish.
+    window.history.pushState({}, '', '/es')
+    render(<App />)
+    expect(await screen.findByText('Era Cuántica')).toBeTruthy()
+    await waitFor(() => expect(localeSwitcherSelect().value).toBe('es'))
+  })
+
+  it('switches back to English from /es via the switcher', async () => {
+    // Regression: with the stale path-derived value ('en'), picking English was
+    // a no-op (`next === activeLocale` early-return) — the visitor was stuck.
+    window.history.pushState({}, '', '/es')
+    render(<App />)
+    expect(await screen.findByText('Era Cuántica')).toBeTruthy()
+    await waitFor(() => expect(localeSwitcherSelect().value).toBe('es'))
+
+    fireEvent.change(localeSwitcherSelect(), { target: { value: 'en' } })
+
+    expect(await screen.findByText('Quantum Era')).toBeTruthy()
+    await waitFor(() => expect(window.location.pathname).toBe('/'))
+    await waitFor(() => expect(document.documentElement.lang).toBe('en'))
   })
 })

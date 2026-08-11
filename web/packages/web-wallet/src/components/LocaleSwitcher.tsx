@@ -6,16 +6,28 @@
  * choice to localStorage. The actual `i18n.changeLanguage` + `<html lang>`
  * update is driven off the URL by `LocaleRoutes`, so navigation is the single
  * source of truth for the active language.
+ *
+ * The displayed value comes from i18next, NOT from `useLocation()`: under a
+ * non-default locale `LocaleRoutes` renders pages via
+ * `<Routes location={strippedLocation}>`, and React Router provides that
+ * locale-STRIPPED location to `useLocation()` in the subtree. Parsing it would
+ * always yield `en`, showing "English" on `/es/...` and making the "switch back
+ * to English" option a no-op. i18next's language is synced to the real URL by
+ * `LocaleRoutes`, so it is correct in both the default and prefixed subtrees.
+ * (`switchLocaleInPath` is unaffected — it strips any locale prefix itself, so
+ * it maps stripped and unstripped pathnames to the same target.)
  */
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Globe } from 'lucide-react'
 import {
+  DEFAULT_LOCALE,
+  isSupportedLocale,
   SUPPORTED_LOCALES,
   storeLocale,
   type SupportedLocale,
 } from '../lib/i18n'
-import { parseLocalePath, switchLocaleInPath } from '../lib/locale-path'
+import { switchLocaleInPath } from '../lib/locale-path'
 
 const LOCALE_LABELS: Record<SupportedLocale, string> = {
   en: 'English',
@@ -24,11 +36,14 @@ const LOCALE_LABELS: Record<SupportedLocale, string> = {
 }
 
 export function LocaleSwitcher({ className = '' }: { className?: string }) {
-  const { t } = useTranslation('landing')
+  const { t, i18n } = useTranslation('landing')
   const location = useLocation()
   const navigate = useNavigate()
 
-  const { locale: activeLocale } = parseLocalePath(location.pathname)
+  const language = i18n.resolvedLanguage ?? i18n.language
+  const activeLocale: SupportedLocale = isSupportedLocale(language)
+    ? language
+    : DEFAULT_LOCALE
 
   function handleChange(next: SupportedLocale) {
     if (next === activeLocale) return
