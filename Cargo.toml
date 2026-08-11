@@ -128,7 +128,7 @@ p256 = { version = "0.13", default-features = false }
 pem = "3"
 percent-encoding = "2"
 predicates = "3"
-primitive-types = "0.12"
+primitive-types = "0.14"
 proc-macro2 = "1"
 proptest = { version = "1", default-features = false }
 prost = { version = "0.12", default-features = false, features = ["derive"] }
