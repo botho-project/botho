@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use rand::{Rng, SeedableRng};
+use rand::{Rng, RngExt, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 
 use crate::{ClusterId, ClusterWealth, FeeCurve};
@@ -567,7 +567,7 @@ pub struct LotterySimulation {
     /// When `Some`, every randomized step forks a child RNG from this master
     /// stream (see [`LotterySimulation::fork_rng`]), making the entire
     /// simulation reproducible for a given seed. When `None` (the default),
-    /// randomness is drawn from system entropy via `thread_rng`, preserving
+    /// randomness is drawn from system entropy via `rng`, preserving
     /// the original non-deterministic behavior for callers that want it.
     seeded_rng: Option<ChaCha20Rng>,
 }
@@ -643,12 +643,11 @@ impl LotterySimulation {
     /// stream and forks a fresh child `ChaCha20Rng` from it, so each step is
     /// reproducible while avoiding any mutable-borrow conflict with the rest
     /// of `self`. When unseeded, it forks from system entropy, matching the
-    /// previous `thread_rng`-based behavior.
+    /// previous `rng`-based behavior.
     fn fork_rng(&mut self) -> ChaCha20Rng {
         match &mut self.seeded_rng {
-            Some(master) => ChaCha20Rng::seed_from_u64(master.gen::<u64>()),
-            None => ChaCha20Rng::from_rng(rand::thread_rng())
-                .expect("thread_rng should always seed a ChaCha20Rng"),
+            Some(master) => ChaCha20Rng::seed_from_u64(master.random::<u64>()),
+            None => ChaCha20Rng::from_rng(&mut rand::rng()),
         }
     }
 
@@ -908,7 +907,7 @@ impl LotterySimulation {
         let mut rng = self.fork_rng();
 
         // Uniform selection - each UTXO equally likely to be spender
-        let spender_idx = rng.gen_range(0..eligible_utxos.len());
+        let spender_idx = rng.random_range(0..eligible_utxos.len());
         let spender_utxo_id = eligible_utxos[spender_idx];
 
         // Random selection for remaining ring members (decoys)
@@ -923,7 +922,7 @@ impl LotterySimulation {
             if available.is_empty() {
                 break;
             }
-            let idx = rng.gen_range(0..available.len());
+            let idx = rng.random_range(0..available.len());
             selected.push(available.remove(idx));
         }
 
@@ -987,7 +986,7 @@ impl LotterySimulation {
             return;
         }
 
-        let spender_roll = rng.gen_range(0..total_value);
+        let spender_roll = rng.random_range(0..total_value);
         let mut cumulative = 0u64;
         let mut spender_utxo_id = eligible_utxos[0].0;
         for (id, value) in &eligible_utxos {
@@ -1010,7 +1009,7 @@ impl LotterySimulation {
             if available.is_empty() {
                 break;
             }
-            let idx = rng.gen_range(0..available.len());
+            let idx = rng.random_range(0..available.len());
             selected.push(available.remove(idx));
         }
 
@@ -1098,7 +1097,7 @@ impl LotterySimulation {
                 if total == 0 {
                     return;
                 }
-                let roll = rng.gen_range(0..total);
+                let roll = rng.random_range(0..total);
                 let mut cumulative = 0u64;
                 let mut selected = eligible[0].0;
                 for (id, value) in &eligible {
@@ -1120,7 +1119,7 @@ impl LotterySimulation {
                 if eligible.is_empty() {
                     return;
                 }
-                eligible[rng.gen_range(0..eligible.len())]
+                eligible[rng.random_range(0..eligible.len())]
             }
         };
 
@@ -1250,13 +1249,13 @@ impl LotterySimulation {
             let total: f64 = weights.iter().map(|(_, w)| w).sum();
             if total <= 0.0 {
                 return (0..n)
-                    .map(|_| utxo_ids[rng.gen_range(0..utxo_ids.len())])
+                    .map(|_| utxo_ids[rng.random_range(0..utxo_ids.len())])
                     .collect();
             }
 
             return (0..n)
                 .map(|_| {
-                    let roll = rng.gen::<f64>() * total;
+                    let roll = rng.random::<f64>() * total;
                     let mut cumulative = 0.0;
                     for (id, weight) in &weights {
                         cumulative += weight;
@@ -1372,7 +1371,7 @@ impl LotterySimulation {
         match self.config.selection_mode {
             SelectionMode::Uniform => {
                 // Each UTXO has equal chance
-                utxo_ids[rng.gen_range(0..utxo_ids.len())]
+                utxo_ids[rng.random_range(0..utxo_ids.len())]
             }
             SelectionMode::ValueWeighted => {
                 // Probability proportional to value
@@ -1382,9 +1381,9 @@ impl LotterySimulation {
                     .collect();
                 let total: u64 = weights.iter().map(|(_, v)| v).sum();
                 if total == 0 {
-                    return utxo_ids[rng.gen_range(0..utxo_ids.len())];
+                    return utxo_ids[rng.random_range(0..utxo_ids.len())];
                 }
-                let roll = rng.gen_range(0..total);
+                let roll = rng.random_range(0..total);
                 let mut cumulative = 0u64;
                 for (id, value) in weights {
                     cumulative += value;
@@ -1402,9 +1401,9 @@ impl LotterySimulation {
                     .collect();
                 let total: f64 = weights.iter().map(|(_, w)| w).sum();
                 if total <= 0.0 {
-                    return utxo_ids[rng.gen_range(0..utxo_ids.len())];
+                    return utxo_ids[rng.random_range(0..utxo_ids.len())];
                 }
-                let roll = rng.gen::<f64>() * total;
+                let roll = rng.random::<f64>() * total;
                 let mut cumulative = 0.0;
                 for (id, weight) in weights {
                     cumulative += weight;
@@ -1431,9 +1430,9 @@ impl LotterySimulation {
                     .collect();
                 let total: f64 = weights.iter().map(|(_, w)| w).sum();
                 if total <= 0.0 {
-                    return utxo_ids[rng.gen_range(0..utxo_ids.len())];
+                    return utxo_ids[rng.random_range(0..utxo_ids.len())];
                 }
-                let roll = rng.gen::<f64>() * total;
+                let roll = rng.random::<f64>() * total;
                 let mut cumulative = 0.0;
                 for (id, weight) in weights {
                     cumulative += weight;
@@ -1462,9 +1461,9 @@ impl LotterySimulation {
                     .copied()
                     .collect();
                 if eligible.is_empty() {
-                    return utxo_ids[rng.gen_range(0..utxo_ids.len())];
+                    return utxo_ids[rng.random_range(0..utxo_ids.len())];
                 }
-                eligible[rng.gen_range(0..eligible.len())]
+                eligible[rng.random_range(0..eligible.len())]
             }
             SelectionMode::Hybrid { alpha } => {
                 // weight = α + (1-α) × normalized_value
@@ -1488,9 +1487,9 @@ impl LotterySimulation {
 
                 let total: f64 = weights.iter().map(|(_, w)| w).sum();
                 if total <= 0.0 {
-                    return utxo_ids[rng.gen_range(0..utxo_ids.len())];
+                    return utxo_ids[rng.random_range(0..utxo_ids.len())];
                 }
-                let roll = rng.gen::<f64>() * total;
+                let roll = rng.random::<f64>() * total;
                 let mut cumulative = 0.0;
                 for (id, weight) in weights {
                     cumulative += weight;
@@ -1520,9 +1519,9 @@ impl LotterySimulation {
 
                 let total: f64 = weights.iter().map(|(_, w)| w).sum();
                 if total <= 0.0 {
-                    return utxo_ids[rng.gen_range(0..utxo_ids.len())];
+                    return utxo_ids[rng.random_range(0..utxo_ids.len())];
                 }
-                let roll = rng.gen::<f64>() * total;
+                let roll = rng.random::<f64>() * total;
                 let mut cumulative = 0.0;
                 for (id, weight) in weights {
                     cumulative += weight;
@@ -1549,9 +1548,9 @@ impl LotterySimulation {
 
                 let total: f64 = weights.iter().map(|(_, w)| w).sum();
                 if total <= 0.0 {
-                    return utxo_ids[rng.gen_range(0..utxo_ids.len())];
+                    return utxo_ids[rng.random_range(0..utxo_ids.len())];
                 }
-                let roll = rng.gen::<f64>() * total;
+                let roll = rng.random::<f64>() * total;
                 let mut cumulative = 0.0;
                 for (id, weight) in weights {
                     cumulative += weight;
@@ -1578,9 +1577,9 @@ impl LotterySimulation {
 
                 let total: f64 = weights.iter().map(|(_, w)| w).sum();
                 if total <= 0.0 {
-                    return utxo_ids[rng.gen_range(0..utxo_ids.len())];
+                    return utxo_ids[rng.random_range(0..utxo_ids.len())];
                 }
-                let roll = rng.gen::<f64>() * total;
+                let roll = rng.random::<f64>() * total;
                 let mut cumulative = 0.0;
                 for (id, weight) in weights {
                     cumulative += weight;
@@ -1619,9 +1618,9 @@ impl LotterySimulation {
 
                 let total: f64 = weights.iter().map(|(_, w)| w).sum();
                 if total <= 0.0 {
-                    return utxo_ids[rng.gen_range(0..utxo_ids.len())];
+                    return utxo_ids[rng.random_range(0..utxo_ids.len())];
                 }
-                let roll = rng.gen::<f64>() * total;
+                let roll = rng.random::<f64>() * total;
                 let mut cumulative = 0.0;
                 for (id, weight) in weights {
                     cumulative += weight;
@@ -2166,7 +2165,7 @@ mod tests {
         // ValueWeighted should be ~1x.
         //
         // The measurement is a Monte Carlo estimate over 10k blocks, so it carries
-        // simulation noise. Previously the simulation drew from `thread_rng` (system
+        // simulation noise. Previously the simulation drew from `rng` (system
         // entropy), making this run non-deterministic: the ratio sits near 1.15 in
         // expectation but the natural per-run spread occasionally crosses 1.20,
         // flaking the test (~1.22 observed). Determinism required two changes:

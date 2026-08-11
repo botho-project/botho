@@ -12,7 +12,7 @@ use libp2p::{
     request_response::{self, Codec, ProtocolSupport},
     PeerId, StreamProtocol,
 };
-use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -1051,7 +1051,7 @@ impl ChainSyncManager {
     fn jittered(base: Duration) -> Duration {
         let millis = base.as_millis() as f64;
         // Uniform factor in [0.75, 1.25].
-        let factor = rand::thread_rng().gen_range(0.75..=1.25);
+        let factor = rand::rng().random_range(0.75..=1.25);
         Duration::from_millis((millis * factor) as u64)
     }
 

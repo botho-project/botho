@@ -112,7 +112,7 @@ pub type TagSigningResult<T> = Result<T, TagSigningError>;
 /// # Returns
 /// The serialized extended tag signature bytes, suitable for inclusion
 /// in SignatureRctBulletproofs.extended_tag_signature.
-pub fn create_tag_signature<R: rand_core::RngCore + rand_core::CryptoRng>(
+pub fn create_tag_signature<R: rand_core::CryptoRng>(
     inputs: &[TagSigningInput],
     outputs: &[TagSigningOutput],
     config: &TagSigningConfig,
@@ -198,7 +198,7 @@ pub fn verify_tag_signature(
 mod tests {
     use super::*;
     use crate::{ClusterId, TAG_WEIGHT_SCALE};
-    use rand_core::OsRng;
+    use bth_util_from_random::OsRng;
     use std::collections::HashMap;
 
     fn create_test_secret(value: u64, clusters: &[(u64, u32)]) -> CommittedTagVectorSecret {

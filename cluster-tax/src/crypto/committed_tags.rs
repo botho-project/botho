@@ -199,7 +199,7 @@ impl CommittedTagVectorSecret {
     /// * `value` - The output value
     /// * `tags` - Map of cluster_id to weight (in TAG_WEIGHT_SCALE units)
     /// * `rng` - Random number generator for blinding factors
-    pub fn from_plaintext<R: rand_core::RngCore + rand_core::CryptoRng>(
+    pub fn from_plaintext<R: rand_core::CryptoRng>(
         value: u64,
         tags: &HashMap<ClusterId, TagWeight>,
         rng: &mut R,
@@ -240,11 +240,7 @@ impl CommittedTagVectorSecret {
     /// Apply decay to the tag masses.
     ///
     /// Returns a new secret with decayed masses and new blinding factors.
-    pub fn apply_decay<R: rand_core::RngCore + rand_core::CryptoRng>(
-        &self,
-        decay_rate: TagWeight,
-        rng: &mut R,
-    ) -> Self {
+    pub fn apply_decay<R: rand_core::CryptoRng>(&self, decay_rate: TagWeight, rng: &mut R) -> Self {
         let decay_factor = TAG_WEIGHT_SCALE - decay_rate;
 
         let entries: Vec<TagMassSecret> = self
@@ -274,10 +270,7 @@ impl CommittedTagVectorSecret {
     /// Merge multiple secrets into one (for combining inputs).
     ///
     /// Sums masses per cluster across all inputs.
-    pub fn merge<R: rand_core::RngCore + rand_core::CryptoRng>(
-        secrets: &[Self],
-        rng: &mut R,
-    ) -> Self {
+    pub fn merge<R: rand_core::CryptoRng>(secrets: &[Self], rng: &mut R) -> Self {
         let mut cluster_masses: HashMap<ClusterId, u64> = HashMap::new();
 
         for secret in secrets {
@@ -376,10 +369,7 @@ impl TagConservationProver {
     /// Generate the conservation proof.
     ///
     /// Returns None if conservation doesn't hold.
-    pub fn prove<R: rand_core::RngCore + rand_core::CryptoRng>(
-        &self,
-        rng: &mut R,
-    ) -> Option<TagConservationProof> {
+    pub fn prove<R: rand_core::CryptoRng>(&self, rng: &mut R) -> Option<TagConservationProof> {
         let decay_factor = TAG_WEIGHT_SCALE - self.decay_rate;
 
         // Collect all cluster IDs
@@ -728,10 +718,7 @@ impl CommittedFeeProver {
     /// Generate the complete fee proof.
     ///
     /// Returns `None` if the fee is insufficient for the wealth level.
-    pub fn prove<R: rand_core::RngCore + rand_core::CryptoRng>(
-        &self,
-        rng: &mut R,
-    ) -> Option<SegmentOrProof> {
+    pub fn prove<R: rand_core::CryptoRng>(&self, rng: &mut R) -> Option<SegmentOrProof> {
         // Check that fee is actually sufficient
         // fee = base_fee * factor(wealth) / FACTOR_SCALE
         let factor = self.curve.factor(self.wealth as u128);
@@ -783,7 +770,7 @@ impl CommittedFeeProver {
         })
     }
 
-    fn prove_segment_real<R: rand_core::RngCore + rand_core::CryptoRng>(
+    fn prove_segment_real<R: rand_core::CryptoRng>(
         &self,
         params: &SegmentParams,
         rng: &mut R,
@@ -841,7 +828,7 @@ impl CommittedFeeProver {
         }
     }
 
-    fn prove_segment_simulated<R: rand_core::RngCore + rand_core::CryptoRng>(
+    fn prove_segment_simulated<R: rand_core::CryptoRng>(
         &self,
         _params: &SegmentParams,
         _challenge: Scalar,
@@ -1034,10 +1021,7 @@ impl CommittedFeeProofBuilder {
     }
 
     /// Build the complete proof.
-    pub fn build<R: rand_core::RngCore + rand_core::CryptoRng>(
-        &self,
-        rng: &mut R,
-    ) -> Option<CommittedFeeProof> {
+    pub fn build<R: rand_core::CryptoRng>(&self, rng: &mut R) -> Option<CommittedFeeProof> {
         let (effective_wealth, wealth_blinding) = self.compute_effective_wealth();
 
         // Create fee proof
@@ -1130,11 +1114,7 @@ impl CommittedFeeProofVerifier {
 
 impl SchnorrProof {
     /// Create a Schnorr proof for knowledge of `x` where `P = x * G`.
-    pub fn prove<R: rand_core::RngCore + rand_core::CryptoRng>(
-        x: Scalar,
-        context: &[u8],
-        rng: &mut R,
-    ) -> Self {
+    pub fn prove<R: rand_core::CryptoRng>(x: Scalar, context: &[u8], rng: &mut R) -> Self {
         let g = blinding_generator();
         let p = x * g;
 
@@ -1218,7 +1198,7 @@ pub fn fee_generator() -> RistrettoPoint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand_core::OsRng;
+    use bth_util_from_random::OsRng;
 
     #[test]
     fn test_cluster_generators_unique() {

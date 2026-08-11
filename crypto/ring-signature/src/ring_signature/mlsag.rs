@@ -3,7 +3,7 @@
 use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 
 use alloc::vec::Vec;
-use rand_core::CryptoRngCore;
+use rand_core::CryptoRng;
 use zeroize::Zeroize;
 
 use bth_crypto_digestible::Digestible;
@@ -70,7 +70,7 @@ impl RingMLSAG {
         blinding: &Scalar,
         output_blinding: &Scalar,
         generator: &PedersenGens,
-        rng: &mut dyn CryptoRngCore,
+        rng: &mut dyn CryptoRng,
     ) -> Result<Self, Error> {
         RingMLSAG::sign_with_balance_check(
             message,
@@ -116,7 +116,7 @@ impl RingMLSAG {
         output_blinding: &Scalar,
         generator: &PedersenGens,
         check_value_is_preserved: bool,
-        rng: &mut dyn CryptoRngCore,
+        rng: &mut dyn CryptoRng,
     ) -> Result<Self, Error> {
         let ring_size = ring.len();
 
@@ -213,7 +213,7 @@ mod mlsag_tests {
     use bth_util_test_helper::{RngType, SeedableRng};
     use curve25519_dalek::ristretto::CompressedRistretto;
     use proptest::prelude::*;
-    use rand_core::RngCore;
+    use rand_core::Rng;
 
     #[derive(Clone)]
     struct RingMLSAGParameters {
@@ -228,7 +228,7 @@ mod mlsag_tests {
     }
 
     impl RingMLSAGParameters {
-        fn random<RNG: CryptoRngCore>(
+        fn random<RNG: CryptoRng>(
             num_mixins: usize,
             pseudo_output_blinding: Scalar,
             rng: &mut RNG,
@@ -285,7 +285,7 @@ mod mlsag_tests {
             }
         }
 
-        fn sign<RNG: CryptoRngCore>(&self, rng: &mut RNG) -> Result<RingMLSAG, Error> {
+        fn sign<RNG: CryptoRng>(&self, rng: &mut RNG) -> Result<RingMLSAG, Error> {
             RingMLSAG::sign(
                 &self.message,
                 &self.ring,
@@ -299,7 +299,7 @@ mod mlsag_tests {
             )
         }
 
-        fn sign_without_balance_check<RNG: CryptoRngCore>(
+        fn sign_without_balance_check<RNG: CryptoRng>(
             &self,
             rng: &mut RNG,
         ) -> Result<RingMLSAG, Error> {

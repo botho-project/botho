@@ -21,7 +21,7 @@ use std::{
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use dashmap::DashMap;
-use rand::Rng;
+use rand::RngExt;
 use tempfile::TempDir;
 
 use bth_common::NodeID;
@@ -449,7 +449,7 @@ fn run_chaos_node(
 
     let mut pending_values: Vec<ConsensusValue> = Vec::new();
     let mut current_slot: SlotIndex = 1;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     loop {
         if shutdown.load(Ordering::SeqCst) {
@@ -478,8 +478,8 @@ fn run_chaos_node(
 
         // Check for packet loss on receive
         let should_drop = match &current_behavior {
-            ChaosBehavior::PacketLoss(prob) => rng.gen::<f64>() < *prob,
-            ChaosBehavior::Combined { packet_loss, .. } => rng.gen::<f64>() < *packet_loss,
+            ChaosBehavior::PacketLoss(prob) => rng.random::<f64>() < *prob,
+            ChaosBehavior::Combined { packet_loss, .. } => rng.random::<f64>() < *packet_loss,
             _ => false,
         };
 
@@ -575,7 +575,7 @@ fn broadcast_with_chaos(
     messages_dropped: &Arc<AtomicU64>,
 ) {
     let msg = Arc::new(msg);
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     for peer_id in peers {
         // Check if we should drop this outgoing message
@@ -585,7 +585,7 @@ fn broadcast_with_chaos(
             _ => 0.0,
         };
 
-        if rng.gen::<f64>() < drop_prob {
+        if rng.random::<f64>() < drop_prob {
             messages_dropped.fetch_add(1, Ordering::SeqCst);
             continue;
         }

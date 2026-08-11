@@ -19,7 +19,8 @@
 use anyhow::{anyhow, Result};
 use bth_transaction_clsag::{RingMember, TxOutput};
 use bth_transaction_types::ClusterTagVector;
-use rand::{rngs::OsRng, seq::SliceRandom};
+use bth_util_from_random::OsRng;
+use rand::seq::SliceRandom;
 
 use crate::{
     decoy_selection::{age_similarity_band, MIN_DECOY_AGE_BLOCKS},

@@ -431,11 +431,11 @@ mod tests {
     use crate::network::privacy::{CircuitId, SymmetricKey};
 
     fn random_symmetric_key() -> SymmetricKey {
-        SymmetricKey::random(&mut rand::thread_rng())
+        SymmetricKey::random(&mut rand::rng())
     }
 
     fn random_circuit_id() -> CircuitId {
-        CircuitId::random(&mut rand::thread_rng())
+        CircuitId::random(&mut rand::rng())
     }
 
     #[test]

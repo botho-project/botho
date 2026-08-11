@@ -11,7 +11,7 @@
 //! All key material uses `zeroize` for secure memory handling to prevent
 //! sensitive data from persisting in memory after use.
 
-use rand::{CryptoRng, RngCore};
+use rand::CryptoRng;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -34,7 +34,7 @@ pub const SYMMETRIC_KEY_LEN: usize = 32;
 /// use botho::network::privacy::CircuitId;
 ///
 /// // Generate a random circuit ID
-/// let mut rng = rand::thread_rng();
+/// let mut rng = rand::rng();
 /// let circuit_id = CircuitId::random(&mut rng);
 ///
 /// // Convert to bytes for transmission
@@ -49,7 +49,7 @@ impl CircuitId {
     ///
     /// Uses the provided cryptographically secure random number generator
     /// to create a unique circuit identifier.
-    pub fn random<R: RngCore + CryptoRng>(rng: &mut R) -> Self {
+    pub fn random<R: CryptoRng>(rng: &mut R) -> Self {
         let mut bytes = [0u8; CIRCUIT_ID_LEN];
         rng.fill_bytes(&mut bytes);
         Self(bytes)
@@ -111,7 +111,7 @@ impl fmt::Display for CircuitId {
 /// use botho::network::privacy::SymmetricKey;
 ///
 /// // Generate a random key
-/// let mut rng = rand::thread_rng();
+/// let mut rng = rand::rng();
 /// let key = SymmetricKey::random(&mut rng);
 ///
 /// // Key is zeroed when dropped
@@ -124,7 +124,7 @@ impl SymmetricKey {
     /// Generate a new random symmetric key.
     ///
     /// Uses the provided cryptographically secure random number generator.
-    pub fn random<R: RngCore + CryptoRng>(rng: &mut R) -> Self {
+    pub fn random<R: CryptoRng>(rng: &mut R) -> Self {
         let mut bytes = [0u8; SYMMETRIC_KEY_LEN];
         rng.fill_bytes(&mut bytes);
         Self(bytes)
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn test_circuit_id_random_uniqueness() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let id1 = CircuitId::random(&mut rng);
         let id2 = CircuitId::random(&mut rng);
         assert_ne!(id1, id2);
@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn test_symmetric_key_random_uniqueness() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let key1 = SymmetricKey::random(&mut rng);
         let key2 = SymmetricKey::random(&mut rng);
         assert_ne!(key1.as_bytes(), key2.as_bytes());
@@ -264,7 +264,7 @@ mod tests {
     fn test_circuit_id_hash_impl() {
         use std::collections::HashSet;
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut set = HashSet::new();
 
         for _ in 0..100 {

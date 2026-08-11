@@ -32,7 +32,7 @@ use core::{
 use curve25519_dalek::{ristretto::RistrettoPoint, scalar::Scalar};
 #[cfg(feature = "prost")]
 use prost::Message;
-use rand_core::{CryptoRng, RngCore};
+use rand_core::CryptoRng;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
@@ -248,7 +248,7 @@ impl From<&PublicAddress> for bth_core::account::PublicSubaddress {
 }
 
 impl FromRandom for PublicAddress {
-    fn from_random<T: RngCore + CryptoRng>(rng: &mut T) -> Self {
+    fn from_random<T: CryptoRng>(rng: &mut T) -> Self {
         PublicAddress::new(
             &RistrettoPublic::from_random(rng),
             &RistrettoPublic::from_random(rng),
@@ -427,7 +427,7 @@ impl AccountKey {
     }
 
     /// Create an account key with random secret keys (intended for tests).
-    pub fn random<T: RngCore + CryptoRng>(rng: &mut T) -> Self {
+    pub fn random<T: CryptoRng>(rng: &mut T) -> Self {
         Self::new(
             &RistrettoPrivate::from_random(rng),
             &RistrettoPrivate::from_random(rng),
@@ -645,7 +645,7 @@ impl ViewAccountKey {
     }
 
     /// Create a view account key with random keys
-    pub fn random<T: RngCore + CryptoRng>(rng: &mut T) -> Self {
+    pub fn random<T: CryptoRng>(rng: &mut T) -> Self {
         Self::new(
             RistrettoPrivate::from_random(rng),
             RistrettoPublic::from_random(rng),
@@ -737,7 +737,7 @@ impl ViewAccountKey {
 #[cfg(test)]
 mod account_key_tests {
     use super::*;
-    use rand::prelude::StdRng;
+    use rand::{prelude::StdRng, Rng};
     use rand_core::SeedableRng;
 
     #[test]

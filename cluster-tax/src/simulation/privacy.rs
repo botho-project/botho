@@ -19,7 +19,7 @@
 //! - Background standard transactions: 50%
 //! - Gamma distribution for spend ages (k=19.28, θ=1.61 days)
 
-use rand::Rng;
+use rand::{Rng, RngExt};
 use rand_distr::{Distribution, Gamma};
 use std::collections::HashMap;
 
@@ -400,7 +400,7 @@ impl OutputPoolGenerator {
         self.next_output_id += 1;
 
         // Determine output type based on fractions
-        let r: f64 = rng.gen();
+        let r: f64 = rng.random();
         let output_type = if r < self.config.standard_fraction {
             OutputType::Standard
         } else if r < self.config.standard_fraction + self.config.exchange_fraction {
@@ -454,17 +454,17 @@ impl OutputPoolGenerator {
                 let hops = estimated_hops.clamp(3, 30);
 
                 // Start with a few clusters, weights decay over hops
-                let num_clusters = rng.gen_range(2..=5);
+                let num_clusters = rng.random_range(2..=5);
                 let mut tags = HashMap::new();
                 let mut remaining_weight = TAG_WEIGHT_SCALE;
 
                 for i in 0..num_clusters {
-                    let cluster_id = rng.gen_range(0..self.config.num_clusters);
+                    let cluster_id = rng.random_range(0..self.config.num_clusters);
                     // Each cluster gets decaying weight
                     let initial_share = if i == 0 {
-                        rng.gen_range(300_000..600_000)
+                        rng.random_range(300_000..600_000)
                     } else {
-                        rng.gen_range(50_000..200_000)
+                        rng.random_range(50_000..200_000)
                     };
                     let decayed = self.decay_weight(initial_share, hops);
                     let weight = decayed.min(remaining_weight);
@@ -478,8 +478,8 @@ impl OutputPoolGenerator {
             }
             OutputType::Exchange => {
                 // Exchange outputs: 1-3 hops from concentrated source
-                let hops = rng.gen_range(1..=3);
-                let cluster_id = rng.gen_range(0..self.config.num_clusters);
+                let hops = rng.random_range(1..=3);
+                let cluster_id = rng.random_range(0..self.config.num_clusters);
                 let mut tags = HashMap::new();
 
                 let weight = self.decay_weight(TAG_WEIGHT_SCALE, hops);
@@ -489,8 +489,8 @@ impl OutputPoolGenerator {
             }
             OutputType::Whale => {
                 // Whale movements: very concentrated, minimal hops
-                let hops = rng.gen_range(0..=2);
-                let cluster_id = rng.gen_range(0..self.config.num_clusters / 10); // Fewer whale clusters
+                let hops = rng.random_range(0..=2);
+                let cluster_id = rng.random_range(0..self.config.num_clusters / 10); // Fewer whale clusters
                 let mut tags = HashMap::new();
 
                 let weight = self.decay_weight(TAG_WEIGHT_SCALE, hops);
@@ -501,7 +501,7 @@ impl OutputPoolGenerator {
             OutputType::Coinbase => {
                 // Fresh mining reward: single cluster, 100% weight
                 let hops = 0;
-                let cluster_id = rng.gen_range(0..self.config.num_clusters);
+                let cluster_id = rng.random_range(0..self.config.num_clusters);
                 let mut tags = HashMap::new();
                 tags.insert(cluster_id, TAG_WEIGHT_SCALE);
 
@@ -509,13 +509,13 @@ impl OutputPoolGenerator {
             }
             OutputType::Mixed => {
                 // Intentionally mixed: many clusters with small weights
-                let hops = rng.gen_range(10..=30);
-                let num_clusters = rng.gen_range(5..=10);
+                let hops = rng.random_range(10..=30);
+                let num_clusters = rng.random_range(5..=10);
                 let mut tags = HashMap::new();
                 let weight_per = TAG_WEIGHT_SCALE / num_clusters;
 
                 for _ in 0..num_clusters {
-                    let cluster_id = rng.gen_range(0..self.config.num_clusters);
+                    let cluster_id = rng.random_range(0..self.config.num_clusters);
                     let decayed = self.decay_weight(weight_per, hops / 2);
                     if decayed > 5_000 {
                         *tags.entry(cluster_id).or_insert(0) += decayed;
@@ -887,7 +887,7 @@ impl RingSimulator {
         }
 
         // Select a real signer randomly from the pool
-        let real_signer_pool_index = rng.gen_range(0..pool.len());
+        let real_signer_pool_index = rng.random_range(0..pool.len());
         let real_signer = &pool[real_signer_pool_index];
 
         // Select decoys
@@ -902,7 +902,7 @@ impl RingSimulator {
         }
 
         // Form the ring (real signer at random position)
-        let real_position = rng.gen_range(0..self.config.ring_size);
+        let real_position = rng.random_range(0..self.config.ring_size);
         let mut ring_indices = Vec::with_capacity(self.config.ring_size);
         let mut decoy_iter = decoy_indices.iter();
 
@@ -1036,12 +1036,12 @@ impl RingSimulator {
 
             if total <= 0.0 {
                 // Fall back to uniform random
-                let idx = rng.gen_range(0..remaining.len());
+                let idx = rng.random_range(0..remaining.len());
                 selected.push(remaining.remove(idx).0);
                 continue;
             }
 
-            let sample = rng.gen::<f64>() * total;
+            let sample = rng.random::<f64>() * total;
             let mut cumulative = 0.0;
             let mut chosen_idx = 0;
 
@@ -1526,12 +1526,12 @@ fn weighted_sample_committed<R: rand::Rng>(
 
         if total <= 0.0 {
             // Fall back to uniform random
-            let idx = rng.gen_range(0..remaining.len());
+            let idx = rng.random_range(0..remaining.len());
             selected.push(remaining.remove(idx).0);
             continue;
         }
 
-        let sample = rng.gen::<f64>() * total;
+        let sample = rng.random::<f64>() * total;
         let mut cumulative = 0.0;
         let mut chosen_idx = 0;
 
@@ -1566,7 +1566,7 @@ pub fn form_committed_ring<'a, R: rand::Rng>(
     rng: &mut R,
 ) -> (Vec<&'a CommittedTagVector>, usize) {
     let ring_size = decoy_indices.len() + 1;
-    let real_position = rng.gen_range(0..ring_size);
+    let real_position = rng.random_range(0..ring_size);
 
     let mut ring = Vec::with_capacity(ring_size);
     let mut decoy_iter = decoy_indices.iter();
@@ -1598,7 +1598,7 @@ mod tests {
             ..Default::default()
         };
         let mut gen = OutputPoolGenerator::new(config);
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         let pool = gen.generate_pool(&mut rng);
         assert_eq!(pool.len(), 1000);
@@ -1709,7 +1709,7 @@ mod tests {
             ..Default::default()
         };
         let mut gen = OutputPoolGenerator::new(pool_config);
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let pool = gen.generate_pool(&mut rng);
 
         let ring_config = RingSimConfig::default();
@@ -1735,7 +1735,7 @@ mod tests {
             ring_config: RingSimConfig::default(),
         };
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let results = run_monte_carlo(&config, &mut rng);
 
         // Check we got results for all adversaries
@@ -1763,8 +1763,8 @@ mod tests {
     // ========================================================================
 
     use crate::crypto::{CommittedTagMass, CommittedTagVectorSecret};
+    use bth_util_from_random::OsRng;
     use curve25519_dalek::{ristretto::RistrettoPoint, traits::Identity};
-    use rand_core::OsRng;
 
     fn create_test_committed_vector(clusters: &[u64]) -> CommittedTagVector {
         let entries: Vec<CommittedTagMass> = clusters
@@ -1874,7 +1874,7 @@ mod tests {
 
     #[test]
     fn test_select_committed_decoys() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         // Create a pool of outputs with various cluster sets
         let pool: Vec<CommittedPoolOutput> = (0..100)
@@ -1926,7 +1926,7 @@ mod tests {
 
     #[test]
     fn test_form_committed_ring() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         let pool: Vec<CommittedPoolOutput> = (0..20)
             .map(|i| CommittedPoolOutput {

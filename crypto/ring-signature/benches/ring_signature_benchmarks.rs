@@ -11,7 +11,7 @@ use bth_crypto_ring_signature::{
 };
 use bth_util_from_random::FromRandom;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use rand::{rngs::StdRng, CryptoRng, RngCore, SeedableRng};
+use rand::{rngs::StdRng, CryptoRng, Rng, SeedableRng};
 
 /// Parameters for creating a test MLSAG
 struct TestRingParams {
@@ -80,7 +80,7 @@ impl TestRingParams {
         }
     }
 
-    fn sign<R: RngCore + CryptoRng>(&self, rng: &mut R) -> RingMLSAG {
+    fn sign<R: CryptoRng>(&self, rng: &mut R) -> RingMLSAG {
         RingMLSAG::sign(
             &self.message,
             &self.ring,

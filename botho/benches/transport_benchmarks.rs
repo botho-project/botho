@@ -45,7 +45,7 @@ use botho::network::transport::{
     PlainTransport, PluggableTransport, TransportType, WebRtcTransport,
 };
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use rand::RngCore;
+use rand::Rng;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 // =============================================================================
@@ -54,7 +54,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 /// Generate a random payload of the specified size.
 fn random_payload(size: usize) -> Vec<u8> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut payload = vec![0u8; size];
     rng.fill_bytes(&mut payload);
     payload

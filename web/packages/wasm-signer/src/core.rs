@@ -12,7 +12,7 @@ use bth_transaction_clsag::{
     ClsagRingInput, MemoPayload, RingMember, Transaction, TxOutput, DEFAULT_RING_SIZE,
     DUST_THRESHOLD, MIN_TX_FEE,
 };
-use rand_core::{CryptoRng, RngCore};
+use rand_core::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 
 /// A ring member (decoy or real output) the wallet sourced from the chain.
@@ -417,7 +417,7 @@ fn ring_member_from_parts(
 ///
 /// Separated from [`build_and_sign_inner`] so tests can pass a deterministic
 /// RNG for reproducible vectors.
-pub fn build_and_sign_with_rng<R: RngCore + CryptoRng>(
+pub fn build_and_sign_with_rng<R: CryptoRng>(
     req: &SignRequest,
     rng: &mut R,
 ) -> Result<Transaction, String> {
@@ -904,7 +904,7 @@ pub fn compute_owned_output_key_images_inner(
 /// The returned hex is the exact `tx_hex` payload accepted by the node's
 /// `tx_submit` RPC.
 pub fn build_and_sign_inner(req: &SignRequest) -> Result<String, String> {
-    let mut rng = rand_core::OsRng;
+    let mut rng = bth_util_from_random::OsRng;
     let tx = build_and_sign_with_rng(req, &mut rng)?;
     let bytes = bincode::serialize(&tx).map_err(|e| format!("serialization failed: {e}"))?;
     Ok(hex::encode(bytes))
@@ -912,7 +912,7 @@ pub fn build_and_sign_inner(req: &SignRequest) -> Result<String, String> {
 
 /// Fisher-Yates shuffle using the provided RNG (avoids pulling in `rand`'s
 /// `SliceRandom` so the wasm build stays lean).
-fn shuffle<T, R: RngCore>(items: &mut [T], rng: &mut R) {
+fn shuffle<T, R: Rng>(items: &mut [T], rng: &mut R) {
     let len = items.len();
     if len <= 1 {
         return;

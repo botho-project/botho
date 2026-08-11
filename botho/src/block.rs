@@ -2,8 +2,7 @@ use bth_account_keys::PublicAddress;
 use bth_crypto_keys::RistrettoPrivate;
 use bth_crypto_ring_signature::onetime_keys::{create_tx_out_public_key, create_tx_out_target_key};
 use bth_transaction_types::{ClusterId, ClusterTagVector, Network};
-use bth_util_from_random::FromRandom;
-use rand_core::OsRng;
+use bth_util_from_random::{FromRandom, OsRng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 

@@ -207,8 +207,8 @@ fn test_padding_size_indistinguishability() {
     // Generate padded messages from small payloads (100-300 bytes)
     let mut small_sizes: Vec<f64> = Vec::new();
     for _ in 0..500 {
-        let payload_size = rng.gen_range(100..=300);
-        let payload: Vec<u8> = (0..payload_size).map(|_| rng.gen()).collect();
+        let payload_size = rng.random_range(100..=300);
+        let payload: Vec<u8> = (0..payload_size).map(|_| rng.random()).collect();
         let prepared = normalizer.prepare_message(&payload);
         small_sizes.push(prepared.payload.len() as f64);
     }
@@ -216,8 +216,8 @@ fn test_padding_size_indistinguishability() {
     // Generate padded messages from medium payloads (300-500 bytes)
     let mut medium_sizes: Vec<f64> = Vec::new();
     for _ in 0..500 {
-        let payload_size = rng.gen_range(300..=500);
-        let payload: Vec<u8> = (0..payload_size).map(|_| rng.gen()).collect();
+        let payload_size = rng.random_range(300..=500);
+        let payload: Vec<u8> = (0..payload_size).map(|_| rng.random()).collect();
         let prepared = normalizer.prepare_message(&payload);
         medium_sizes.push(prepared.payload.len() as f64);
     }
@@ -253,8 +253,8 @@ fn test_padding_bucket_uniformity() {
 
     for _ in 0..1000 {
         // Generate payloads of varying sizes that should all fit in 512 bucket
-        let size = rng.gen_range(10..=500);
-        let payload: Vec<u8> = (0..size).map(|_| rng.gen()).collect();
+        let size = rng.random_range(10..=500);
+        let payload: Vec<u8> = (0..size).map(|_| rng.random()).collect();
         let prepared = normalizer.prepare_message(&payload);
 
         *bucket_counts
@@ -293,7 +293,7 @@ fn test_jitter_timing_uniformity() {
     // Generate uniform distribution for comparison
     let mut uniform_samples: Vec<f64> = Vec::new();
     for _ in 0..1000 {
-        uniform_samples.push(rng.gen_range(50.0..=200.0));
+        uniform_samples.push(rng.random_range(50.0..=200.0));
     }
 
     let result = kolmogorov_smirnov(&jitter_samples, &uniform_samples);
@@ -363,13 +363,13 @@ fn test_cover_traffic_size_distribution() {
     // 20% large (450-600)
     let mut real_sizes: Vec<f64> = Vec::new();
     for _ in 0..1000 {
-        let category: f64 = rng.gen();
+        let category: f64 = rng.random();
         let size = if category < 0.30 {
-            rng.gen_range(200..=300) // Small
+            rng.random_range(200..=300) // Small
         } else if category < 0.80 {
-            rng.gen_range(300..=450) // Medium
+            rng.random_range(300..=450) // Medium
         } else {
-            rng.gen_range(450..=600) // Large
+            rng.random_range(450..=600) // Large
         };
         real_sizes.push(size as f64);
     }
@@ -399,13 +399,13 @@ fn test_ks_can_detect_differences() {
     let mut rng = ChaCha8Rng::seed_from_u64(654);
 
     // Sample from uniform(0, 100)
-    let uniform: Vec<f64> = (0..500).map(|_| rng.gen_range(0.0..100.0)).collect();
+    let uniform: Vec<f64> = (0..500).map(|_| rng.random_range(0.0..100.0)).collect();
 
     // Sample from normal-like (centered around 50)
     let normal_like: Vec<f64> = (0..500)
         .map(|_| {
             // Simple approximation of normal using sum of uniforms
-            let sum: f64 = (0..12).map(|_| rng.gen::<f64>()).sum();
+            let sum: f64 = (0..12).map(|_| rng.random::<f64>()).sum();
             (sum - 6.0) * 15.0 + 50.0 // Approximately N(50, 15)
         })
         .collect();
@@ -431,8 +431,8 @@ fn test_ks_identical_distributions() {
     let mut rng = ChaCha8Rng::seed_from_u64(987);
 
     // Two samples from the same distribution
-    let sample1: Vec<f64> = (0..500).map(|_| rng.gen_range(0.0..100.0)).collect();
-    let sample2: Vec<f64> = (0..500).map(|_| rng.gen_range(0.0..100.0)).collect();
+    let sample1: Vec<f64> = (0..500).map(|_| rng.random_range(0.0..100.0)).collect();
+    let sample2: Vec<f64> = (0..500).map(|_| rng.random_range(0.0..100.0)).collect();
 
     let result = kolmogorov_smirnov(&sample1, &sample2);
 
@@ -455,13 +455,15 @@ fn test_padded_vs_unpadded_sizes() {
     let mut rng = ChaCha8Rng::seed_from_u64(111);
 
     // Unpadded: original payload sizes
-    let unpadded: Vec<f64> = (0..500).map(|_| rng.gen_range(100..=500) as f64).collect();
+    let unpadded: Vec<f64> = (0..500)
+        .map(|_| rng.random_range(100..=500) as f64)
+        .collect();
 
     // Padded: bucket sizes
     let padded: Vec<f64> = unpadded
         .iter()
         .map(|&size| {
-            let payload: Vec<u8> = (0..size as usize).map(|_| rng.gen()).collect();
+            let payload: Vec<u8> = (0..size as usize).map(|_| rng.random()).collect();
             pad_to_bucket(&payload).len() as f64
         })
         .collect();
@@ -490,8 +492,8 @@ fn test_padding_eliminates_variance() {
     // Generate messages that should all pad to 512 bytes
     let mut sizes: Vec<f64> = Vec::new();
     for _ in 0..100 {
-        let size = rng.gen_range(10..=500);
-        let payload: Vec<u8> = (0..size).map(|_| rng.gen()).collect();
+        let size = rng.random_range(10..=500);
+        let payload: Vec<u8> = (0..size).map(|_| rng.random()).collect();
         let prepared = normalizer.prepare_message(&payload);
         if prepared.bucket_size == Some(512) {
             sizes.push(prepared.payload.len() as f64);
@@ -563,8 +565,8 @@ fn test_traffic_pattern_analysis() {
     let mut normalized_pattern = TrafficPattern::new();
     for _ in 0..500 {
         // Random payload size
-        let size = rng.gen_range(100..=1000);
-        let payload: Vec<u8> = (0..size).map(|_| rng.gen()).collect();
+        let size = rng.random_range(100..=1000);
+        let payload: Vec<u8> = (0..size).map(|_| rng.random()).collect();
 
         // Apply normalization
         let prepared = normalizer.prepare_message(&payload);
@@ -655,8 +657,8 @@ fn test_ks_asymmetric_samples() {
     let mut rng = ChaCha8Rng::seed_from_u64(666);
 
     // Different sample sizes from same distribution
-    let large: Vec<f64> = (0..1000).map(|_| rng.gen_range(0.0..100.0)).collect();
-    let small: Vec<f64> = (0..100).map(|_| rng.gen_range(0.0..100.0)).collect();
+    let large: Vec<f64> = (0..1000).map(|_| rng.random_range(0.0..100.0)).collect();
+    let small: Vec<f64> = (0..100).map(|_| rng.random_range(0.0..100.0)).collect();
 
     let result = kolmogorov_smirnov(&large, &small);
 

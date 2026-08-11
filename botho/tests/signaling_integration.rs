@@ -73,7 +73,7 @@ async fn test_full_sdp_exchange() {
     let mut offerer = SignalingChannel::new(client);
     let mut answerer = SignalingChannel::new(server);
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let session_id = SessionId::random(&mut rng);
     let offer_sdp = sample_offer_sdp();
     let answer_sdp = sample_answer_sdp();
@@ -113,7 +113,7 @@ async fn test_full_signaling_flow_with_ice() {
     let mut offerer = SignalingChannel::new(client);
     let mut answerer = SignalingChannel::new(server);
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let session_id = SessionId::random(&mut rng);
     let offer_sdp = sample_offer_sdp();
     let answer_sdp = sample_answer_sdp();
@@ -185,7 +185,7 @@ async fn test_signaling_rejection() {
     let mut offerer = SignalingChannel::new(client);
     let mut answerer = SignalingChannel::new(server);
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let session_id = SessionId::random(&mut rng);
     let offer_sdp = sample_offer_sdp();
 
@@ -230,7 +230,7 @@ async fn test_signaling_rejection() {
 #[test]
 fn test_signaling_state_multi_peer() {
     let mut state = SignalingState::default();
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     let peer1 = PeerId::random();
     let peer2 = PeerId::random();
@@ -302,8 +302,8 @@ async fn test_concurrent_signaling_sessions() {
     let num_sessions = 4;
     let mut handles = Vec::new();
 
-    // Generate all session IDs upfront to avoid thread_rng() in async blocks
-    let mut rng = rand::thread_rng();
+    // Generate all session IDs upfront to avoid rng() in async blocks
+    let mut rng = rand::rng();
     let session_ids: Vec<SessionId> = (0..num_sessions)
         .map(|_| SessionId::random(&mut rng))
         .collect();
@@ -374,7 +374,7 @@ async fn test_signaling_timeout_behavior() {
 /// Test signaling message validation rejects invalid data.
 #[test]
 fn test_invalid_message_rejection() {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let session_id = SessionId::random(&mut rng);
 
     // Invalid SDP (doesn't start with v=)
@@ -410,7 +410,7 @@ fn test_invalid_message_rejection() {
 fn test_session_expiration() {
     let short_timeout = Duration::from_millis(10);
     let mut state = SignalingState::new(short_timeout);
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let peer = PeerId::random();
 
     // Create session

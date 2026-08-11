@@ -17,7 +17,7 @@ use core::{
 use digest::{core_api::BlockSizeUser, Digest};
 use hkdf::SimpleHkdf;
 use mc_oblivious_aes_gcm::{CtAeadDecrypt, CtDecryptResult};
-use rand_core::{CryptoRng, RngCore};
+use rand_core::CryptoRng;
 
 /// Represents a generic implementation of CryptoBox using Hkdf, a KexAlgo, and
 /// an Aead.
@@ -67,7 +67,7 @@ where
 {
     type FooterSize = Sum<<KexAlgo::Public as ReprBytes>::Size, AeadAlgo::TagSize>;
 
-    fn encrypt_in_place_detached<T: RngCore + CryptoRng>(
+    fn encrypt_in_place_detached<T: CryptoRng>(
         &self,
         rng: &mut T,
         key: &KexAlgo::Public,

@@ -228,7 +228,7 @@ mod tests {
         crypto::{CommittedTagVectorSecret, ExtendedSignatureBuilder},
         ClusterId, TAG_WEIGHT_SCALE,
     };
-    use rand_core::OsRng;
+    use bth_util_from_random::OsRng;
     use std::collections::HashMap;
 
     fn create_test_secret(value: u64, clusters: &[(u64, u32)]) -> CommittedTagVectorSecret {

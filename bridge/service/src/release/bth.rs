@@ -540,7 +540,7 @@ impl Releaser for BthReleaser {
             &inputs,
             created_at_height,
             reserve.kem_keypair(),
-            &mut rand_core::OsRng,
+            &mut bth_util_from_random::OsRng,
         )
         .map_err(|e| ReleaseError::Config(format!("release tx construction failed: {e}")))?;
 
@@ -938,7 +938,7 @@ mod tests {
         // engine record a nonexistent release tx). This is the fail-safe
         // posture the exactly-once guard depends on.
         let dir = tempfile::tempdir().unwrap();
-        let account = bth_account_keys::AccountKey::random(&mut rand::rngs::OsRng);
+        let account = bth_account_keys::AccountKey::random(&mut bth_util_from_random::OsRng);
         let view_path = dir.path().join("view.hex");
         let spend_path = dir.path().join("spend.hex");
         std::fs::write(
@@ -965,8 +965,8 @@ mod tests {
         // A decodable recipient address (view||spend base58) so the failure is
         // the RPC reach, not the recipient decode. Re-sign the auth to bind
         // this recipient.
-        let recipient =
-            bth_account_keys::AccountKey::random(&mut rand::rngs::OsRng).default_subaddress();
+        let recipient = bth_account_keys::AccountKey::random(&mut bth_util_from_random::OsRng)
+            .default_subaddress();
         let mut recipient_bytes = Vec::with_capacity(64);
         recipient_bytes.extend_from_slice(&recipient.view_public_key().to_bytes());
         recipient_bytes.extend_from_slice(&recipient.spend_public_key().to_bytes());

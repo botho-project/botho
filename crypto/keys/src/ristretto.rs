@@ -3,8 +3,9 @@
 #![allow(non_snake_case)]
 
 use crate::{
-    GenericArray, Kex, KexEphemeralPrivate, KexPrivate, KexPublic, KexReusablePrivate, KexSecret,
-    KeyError, PrivateKey, PublicKey, SignatureEncoding, SignatureError,
+    compat::Rng06Compat, GenericArray, Kex, KexEphemeralPrivate, KexPrivate, KexPublic,
+    KexReusablePrivate, KexSecret, KeyError, PrivateKey, PublicKey, SignatureEncoding,
+    SignatureError,
 };
 use bth_crypto_digestible::{Digestible, MerlinTranscript};
 use bth_crypto_digestible_signature::{DigestibleSigner, DigestibleVerifier};
@@ -25,7 +26,7 @@ use curve25519_dalek::{
 };
 use digest::generic_array::typenum::{U32, U64};
 use hex_fmt::HexFmt;
-use rand_core::{CryptoRng, RngCore, SeedableRng};
+use rand_core::{CryptoRng, SeedableRng};
 use rand_hc::Hc128Rng;
 use schnorrkel_og::{
     context::attach_rng, PublicKey as SchnorrkelPublic, SecretKey as SchnorrkelPrivate,
@@ -52,7 +53,7 @@ use zeroize::Zeroize;
 /// This is exactly what curve25519-dalek's `Scalar::random` does (64 bytes,
 /// reduced mod the group order); dalek 5's version requires rand_core 0.10
 /// traits, which the workspace does not use yet (#1154).
-fn random_scalar<R: CryptoRng + RngCore>(csprng: &mut R) -> Scalar {
+fn random_scalar<R: CryptoRng>(csprng: &mut R) -> Scalar {
     let mut bytes = [0u8; 64];
     csprng.fill_bytes(&mut bytes);
     Scalar::from_bytes_mod_order_wide(&bytes)
@@ -63,7 +64,7 @@ fn random_scalar<R: CryptoRng + RngCore>(csprng: &mut R) -> Scalar {
 /// This is exactly what curve25519-dalek's `RistrettoPoint::random` does
 /// (64 bytes through the one-way uniform map); dalek 5's version requires
 /// rand_core 0.10 traits, which the workspace does not use yet (#1154).
-fn random_ristretto_point<R: CryptoRng + RngCore>(csprng: &mut R) -> RistrettoPoint {
+fn random_ristretto_point<R: CryptoRng>(csprng: &mut R) -> RistrettoPoint {
     let mut bytes = [0u8; 64];
     csprng.fill_bytes(&mut bytes);
     RistrettoPoint::from_uniform_bytes(&bytes)
@@ -159,8 +160,8 @@ impl RistrettoPrivate {
         t.append_message(b"sign-bytes", message);
         // NOTE: This signature is deterministic due to using the above nonce as the rng
         // seed
-        let csprng = Hc128Rng::from_seed(nonce);
-        let transcript = attach_rng(t, csprng);
+        let mut csprng = Hc128Rng::from_seed(nonce);
+        let transcript = attach_rng(t, Rng06Compat(&mut csprng));
         RistrettoSignature::from(keypair.sign(transcript))
     }
 
@@ -211,7 +212,7 @@ impl<T: Digestible> DigestibleSigner<RistrettoSignature, T> for RistrettoPrivate
 }
 
 impl FromRandom for RistrettoPrivate {
-    fn from_random<R: CryptoRng + RngCore>(csprng: &mut R) -> RistrettoPrivate {
+    fn from_random<R: CryptoRng>(csprng: &mut R) -> RistrettoPrivate {
         Self(random_scalar(csprng))
     }
 }
@@ -272,7 +273,7 @@ impl KexEphemeralPrivate for RistrettoEphemeralPrivate {
 }
 
 impl FromRandom for RistrettoEphemeralPrivate {
-    fn from_random<R: CryptoRng + RngCore>(csprng: &mut R) -> Self {
+    fn from_random<R: CryptoRng>(csprng: &mut R) -> Self {
         Self(random_scalar(csprng))
     }
 }
@@ -299,7 +300,7 @@ impl AsRef<RistrettoPoint> for RistrettoPublic {
 }
 
 impl FromRandom for RistrettoPublic {
-    fn from_random<R: CryptoRng + RngCore>(csprng: &mut R) -> RistrettoPublic {
+    fn from_random<R: CryptoRng>(csprng: &mut R) -> RistrettoPublic {
         Self(random_ristretto_point(csprng))
     }
 }
@@ -576,7 +577,7 @@ impl From<CompressedRistretto> for CompressedRistrettoPublic {
 }
 
 impl FromRandom for CompressedRistrettoPublic {
-    fn from_random<R: CryptoRng + RngCore>(csprng: &mut R) -> CompressedRistrettoPublic {
+    fn from_random<R: CryptoRng>(csprng: &mut R) -> CompressedRistrettoPublic {
         Self::from(random_ristretto_point(csprng))
     }
 }
@@ -700,7 +701,7 @@ mod test {
     // Test private key generation is random
     #[test]
     fn test_private_key_random() {
-        let mut rng = rand_core::OsRng;
+        let mut rng = bth_util_from_random::OsRng;
         let key1 = RistrettoPrivate::from_random(&mut rng);
         let key2 = RistrettoPrivate::from_random(&mut rng);
         assert_ne!(key1, key2);
@@ -709,7 +710,7 @@ mod test {
     // Test public key derivation is deterministic
     #[test]
     fn test_public_from_private_deterministic() {
-        let mut rng = rand_core::OsRng;
+        let mut rng = bth_util_from_random::OsRng;
         let private = RistrettoPrivate::from_random(&mut rng);
         let public1 = RistrettoPublic::from(&private);
         let public2 = RistrettoPublic::from(&private);
@@ -719,7 +720,7 @@ mod test {
     // Test different private keys produce different public keys
     #[test]
     fn test_different_privates_different_publics() {
-        let mut rng = rand_core::OsRng;
+        let mut rng = bth_util_from_random::OsRng;
         let private1 = RistrettoPrivate::from_random(&mut rng);
         let private2 = RistrettoPrivate::from_random(&mut rng);
         let public1 = RistrettoPublic::from(&private1);

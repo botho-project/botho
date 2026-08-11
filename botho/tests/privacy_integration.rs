@@ -29,7 +29,7 @@ use botho::network::privacy::{
 };
 use bth_gossip::{InnerMessage, NatType, OnionRelayMessage, RelayCapacity};
 use libp2p::PeerId;
-use rand::Rng;
+use rand::RngExt;
 use std::{
     collections::{HashMap, HashSet},
     net::Ipv4Addr,
@@ -210,7 +210,7 @@ impl PrivacyTestNetwork {
             .select_diverse_hops(&available_peers, 3)
             .map_err(|e| e.to_string())?;
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let circuit = OutboundCircuit::new(
             CircuitId::random(&mut rng),
             [hops[0], hops[1], hops[2]],
@@ -281,7 +281,7 @@ impl PrivacyTestNetwork {
 }
 
 fn make_test_circuit(lifetime: Duration) -> OutboundCircuit {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     OutboundCircuit::new(
         CircuitId::random(&mut rng),
         [PeerId::random(), PeerId::random(), PeerId::random()],
@@ -315,7 +315,7 @@ fn low_capacity_relay() -> RelayCapacity {
 
 fn random_tx_hash() -> [u8; 32] {
     let mut hash = [0u8; 32];
-    rand::thread_rng().fill(&mut hash);
+    rand::rng().fill(&mut hash);
     hash
 }
 
@@ -617,8 +617,8 @@ fn test_rate_limiting_under_flood() {
     let mut relay_state = RelayState::new(config);
     let handler = RelayHandler::new();
 
-    let circuit_id = CircuitId::random(&mut rand::thread_rng());
-    let key = SymmetricKey::random(&mut rand::thread_rng());
+    let circuit_id = CircuitId::random(&mut rand::rng());
+    let key = SymmetricKey::random(&mut rand::rng());
     relay_state.add_circuit_key(circuit_id, CircuitHopKey::new_exit(key.duplicate()));
 
     let inner = InnerMessage::Cover;
@@ -662,10 +662,10 @@ fn test_multi_hop_relay_chain() {
     let hop2_handler = RelayHandler::new();
     let hop3_handler = RelayHandler::new();
 
-    let circuit_id = CircuitId::random(&mut rand::thread_rng());
-    let key1 = SymmetricKey::random(&mut rand::thread_rng());
-    let key2 = SymmetricKey::random(&mut rand::thread_rng());
-    let key3 = SymmetricKey::random(&mut rand::thread_rng());
+    let circuit_id = CircuitId::random(&mut rand::rng());
+    let key1 = SymmetricKey::random(&mut rand::rng());
+    let key2 = SymmetricKey::random(&mut rand::rng());
+    let key3 = SymmetricKey::random(&mut rand::rng());
 
     let hop2_peer = PeerId::random();
     let hop3_peer = PeerId::random();
@@ -744,8 +744,8 @@ fn test_malformed_message_handling() {
     let mut relay_state = RelayState::new(RelayStateConfig::default());
     let handler = RelayHandler::new();
 
-    let circuit_id = CircuitId::random(&mut rand::thread_rng());
-    let key = SymmetricKey::random(&mut rand::thread_rng());
+    let circuit_id = CircuitId::random(&mut rand::rng());
+    let key = SymmetricKey::random(&mut rand::rng());
     relay_state.add_circuit_key(circuit_id, CircuitHopKey::new_exit(key.duplicate()));
 
     let test_cases = vec![
@@ -895,10 +895,10 @@ fn test_adversarial_deanonymization_10_percent() {
         .map(|(i, _)| i)
         .collect();
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     for _ in 0..500 {
-        let sender_idx = honest_indices[rng.gen_range(0..honest_indices.len())];
+        let sender_idx = honest_indices[rng.random_range(0..honest_indices.len())];
         let sender_peer_id = network.peers[sender_idx].peer_id;
 
         if let Ok(circuit_idx) = network.build_circuit(sender_idx) {
@@ -1083,10 +1083,10 @@ fn test_first_hop_timing_resistance() {
     let mut total_circuits = 0;
 
     let honest_indices: Vec<_> = (10..50).collect();
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     for _ in 0..200 {
-        let origin_idx = honest_indices[rng.gen_range(0..honest_indices.len())];
+        let origin_idx = honest_indices[rng.random_range(0..honest_indices.len())];
 
         if let Ok(circuit_idx) = network.build_circuit(origin_idx) {
             total_circuits += 1;

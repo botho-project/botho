@@ -49,7 +49,7 @@
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use libp2p::PeerId;
-use rand::{CryptoRng, RngCore};
+use rand::CryptoRng;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -90,7 +90,7 @@ pub struct SessionId([u8; SESSION_ID_LEN]);
 
 impl SessionId {
     /// Generate a new random session ID.
-    pub fn random<R: RngCore + CryptoRng>(rng: &mut R) -> Self {
+    pub fn random<R: CryptoRng>(rng: &mut R) -> Self {
         let mut bytes = [0u8; SESSION_ID_LEN];
         rng.fill_bytes(&mut bytes);
         Self(bytes)
@@ -656,7 +656,7 @@ mod tests {
 
     #[test]
     fn test_session_id_random_uniqueness() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let id1 = SessionId::random(&mut rng);
         let id2 = SessionId::random(&mut rng);
         assert_ne!(id1, id2);
@@ -684,7 +684,7 @@ mod tests {
 
     #[test]
     fn test_signaling_message_offer_serialization() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let session_id = SessionId::random(&mut rng);
         let msg = SignalingMessage::Offer {
             sdp: sample_sdp(),
@@ -699,7 +699,7 @@ mod tests {
 
     #[test]
     fn test_signaling_message_answer_serialization() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let session_id = SessionId::random(&mut rng);
         let msg = SignalingMessage::Answer {
             sdp: sample_sdp(),
@@ -714,7 +714,7 @@ mod tests {
 
     #[test]
     fn test_signaling_message_ice_candidate_serialization() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let session_id = SessionId::random(&mut rng);
         let msg = SignalingMessage::IceCandidate {
             candidate: "candidate:1 1 UDP 2130706431 192.168.1.1 54400 typ host".to_string(),
@@ -731,7 +731,7 @@ mod tests {
 
     #[test]
     fn test_signaling_message_reject_serialization() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let session_id = SessionId::random(&mut rng);
         let msg = SignalingMessage::Reject {
             session_id,
@@ -746,7 +746,7 @@ mod tests {
 
     #[test]
     fn test_signaling_message_validation_valid_sdp() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let msg = SignalingMessage::Offer {
             sdp: sample_sdp(),
             session_id: SessionId::random(&mut rng),
@@ -756,7 +756,7 @@ mod tests {
 
     #[test]
     fn test_signaling_message_validation_invalid_sdp_prefix() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let msg = SignalingMessage::Offer {
             sdp: "invalid sdp content".to_string(),
             session_id: SessionId::random(&mut rng),
@@ -766,7 +766,7 @@ mod tests {
 
     #[test]
     fn test_signaling_message_validation_oversized_sdp() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let msg = SignalingMessage::Offer {
             sdp: format!("v={}", "x".repeat(MAX_SDP_SIZE + 1)),
             session_id: SessionId::random(&mut rng),
@@ -777,7 +777,7 @@ mod tests {
     #[test]
     fn test_signaling_state_create_session() {
         let mut state = SignalingState::default();
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let session_id = SessionId::random(&mut rng);
         let peer = PeerId::random();
 
@@ -789,7 +789,7 @@ mod tests {
     #[test]
     fn test_signaling_state_duplicate_session() {
         let mut state = SignalingState::default();
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let session_id = SessionId::random(&mut rng);
         let peer = PeerId::random();
 
@@ -803,7 +803,7 @@ mod tests {
     #[test]
     fn test_signaling_state_too_many_sessions() {
         let mut state = SignalingState::default();
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let peer = PeerId::random();
 
         // Create max sessions
@@ -823,7 +823,7 @@ mod tests {
     #[test]
     fn test_signaling_state_remove_session() {
         let mut state = SignalingState::default();
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let session_id = SessionId::random(&mut rng);
         let peer = PeerId::random();
 
@@ -840,7 +840,7 @@ mod tests {
     #[test]
     fn test_signaling_state_cleanup_expired() {
         let mut state = SignalingState::new(Duration::from_millis(1));
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let session_id = SessionId::random(&mut rng);
         let peer = PeerId::random();
 
@@ -888,7 +888,7 @@ mod tests {
         let mut client_channel = SignalingChannel::new(client);
         let mut server_channel = SignalingChannel::new(server);
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let session_id = SessionId::random(&mut rng);
         let msg = SignalingMessage::Offer {
             sdp: sample_sdp(),
@@ -914,7 +914,7 @@ mod tests {
         let mut offerer = SignalingChannel::new(client);
         let mut answerer = SignalingChannel::new(server);
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let session_id = SessionId::random(&mut rng);
         let offer_sdp = sample_sdp();
         let answer_sdp = sample_sdp();
@@ -960,7 +960,7 @@ mod tests {
         let mut sender = SignalingChannel::new(client);
         let mut receiver = SignalingChannel::new(server);
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let session_id = SessionId::random(&mut rng);
 
         // Spawn sender
@@ -989,7 +989,7 @@ mod tests {
         let mut sender = SignalingChannel::new(client);
         let mut receiver = SignalingChannel::new(server);
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let session_id = SessionId::random(&mut rng);
 
         // Spawn sender

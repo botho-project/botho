@@ -39,7 +39,7 @@
 //! Note: Ring size 20 is larger than Monero's 16, providing stronger sender
 //! privacy.
 
-use rand::Rng;
+use rand::{Rng, RngExt};
 use rand_distr::{Distribution, Gamma};
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -666,7 +666,7 @@ impl GammaDecoySelector {
             }
 
             // Sample from remaining candidates weighted by gamma PDF
-            let sample = rng.gen::<f64>() * current_total;
+            let sample = rng.random::<f64>() * current_total;
             let mut cumulative = 0.0;
             let mut selected_idx = 0;
 
@@ -689,7 +689,7 @@ impl GammaDecoySelector {
 
         // If we didn't get enough from weighted sampling (edge case), fill uniformly
         while selected.len() < count && !remaining_indices.is_empty() {
-            let idx = rng.gen_range(0..remaining_indices.len());
+            let idx = rng.random_range(0..remaining_indices.len());
             let original_idx = remaining_indices[idx];
             selected.push(eligible[original_idx].output.clone());
             remaining_indices.remove(idx);
@@ -1025,7 +1025,7 @@ impl GammaDecoySelector {
                 break;
             }
 
-            let sample = rng.gen::<f64>() * current_total;
+            let sample = rng.random::<f64>() * current_total;
             let mut cumulative = 0.0;
             let mut selected_idx = 0;
 
@@ -1100,7 +1100,7 @@ impl GammaDecoySelector {
                 break;
             }
 
-            let sample = rng.gen::<f64>() * current_total;
+            let sample = rng.random::<f64>() * current_total;
             let mut cumulative = 0.0;
             let mut selected_idx = 0;
 
@@ -1338,10 +1338,10 @@ mod tests {
         let mut dist = SpendDistribution::new();
 
         // Record 200 spends with known distribution
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for _ in 0..200 {
             // Simulate spends around 30 days (21600 blocks)
-            let age = 15000 + rng.gen_range(0..15000);
+            let age = 15000 + rng.random_range(0..15000);
             dist.record_spend(age);
         }
 
@@ -1364,7 +1364,7 @@ mod tests {
             })
             .collect();
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let exclude: Vec<[u8; 32]> = vec![];
 
         let decoys = selector.select_decoys(&candidates, 6, &exclude, current_height, &mut rng);
@@ -1386,7 +1386,7 @@ mod tests {
             })
             .collect();
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         // Exclude first 5 keys
         let exclude: Vec<[u8; 32]> = (0..5)
@@ -1421,7 +1421,7 @@ mod tests {
             })
             .collect();
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let exclude: Vec<[u8; 32]> = vec![];
 
         // Try to select 6 decoys
@@ -1603,7 +1603,7 @@ mod tests {
             ));
         }
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let exclude = vec![real_key];
 
         let result =
@@ -1689,7 +1689,7 @@ mod tests {
             demurrage_charge(VALUE, FACTOR, real_input_age, RATE_BPS, BLOCKS_PER_YEAR);
         assert!(true_charge > 0);
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut worst_overcharge = 1.0f64;
 
         for _ in 0..300 {
@@ -1754,7 +1754,7 @@ mod tests {
             candidates.push(make_candidate(key, age, current_height));
         }
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let exclude: Vec<[u8; 32]> = vec![];
 
         for _ in 0..100 {
@@ -1798,7 +1798,7 @@ mod tests {
             candidates.push(make_candidate(key, age, current_height));
         }
         let exclude: Vec<[u8; 32]> = vec![];
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         // AC-1 / AC-4: age 0 must not panic (degenerate band [10, 0]).
         // AC-2: phase 2 fills the full ring; every decoy is confirmed (age >= 10).
@@ -2020,7 +2020,7 @@ mod tests {
             );
         }
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let exclude = vec![real_key];
         let decoys = selector
             .select_decoys_cluster_aware(&candidates, 6, &real_input, &exclude, &mut rng)
@@ -2057,7 +2057,7 @@ mod tests {
             })
             .collect();
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let exclude = vec![real_key];
         let decoys = selector
             .select_decoys_cluster_aware(&candidates, 6, &real_input, &exclude, &mut rng)

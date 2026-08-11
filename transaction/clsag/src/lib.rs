@@ -75,9 +75,10 @@ use bth_crypto_ring_signature::onetime_keys::{
     create_tx_out_target_key_hybrid, recover_onetime_private_key_hybrid,
     recover_public_subaddress_spend_key_hybrid,
 };
+use bth_util_from_random::OsRng;
 use ctr::Ctr64BE;
 use hkdf::Hkdf;
-use rand_core::{CryptoRng, OsRng, RngCore};
+use rand_core::CryptoRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256, Sha512};
 use std::collections::HashSet;
@@ -1086,7 +1087,7 @@ impl ClsagRingInput {
     /// Note: the per-input balance proof asserts `real_input_amount == amount`.
     /// The transaction balance equation `sum(amount) == outputs + fee` is
     /// enforced separately in [`Transaction::verify_ring_signatures`].
-    pub fn new<R: RngCore + CryptoRng>(
+    pub fn new<R: CryptoRng>(
         ring: Vec<RingMember>,
         real_index: usize,
         onetime_private_key: &RistrettoPrivate,
@@ -1951,7 +1952,7 @@ mod tests {
     /// wallet constructs an input and lets us drive `verify` end-to-end.
     fn signed_clsag_input(amount: u64, message: &[u8; 32]) -> ClsagRingInput {
         use bth_crypto_keys::ReprBytes;
-        use rand::Rng;
+        use rand::RngExt;
 
         let mut rng = OsRng;
 
@@ -1981,7 +1982,7 @@ mod tests {
         for _ in 0..(MIN_RING_SIZE - 1) {
             let decoy_target = RistrettoPublic::from(&RistrettoPrivate::from_random(&mut rng));
             let decoy_public = RistrettoPublic::from(&RistrettoPrivate::from_random(&mut rng));
-            let decoy_amount: u64 = rng.gen_range(1..1_000_000);
+            let decoy_amount: u64 = rng.random_range(1..1_000_000);
             let g = generators(0);
             ring.push(RingMember {
                 target_key: CompressedRistrettoPublic::from(&decoy_target)
@@ -1998,7 +1999,7 @@ mod tests {
         }
 
         // Insert the real member at a random position.
-        let real_index = rng.gen_range(0..MIN_RING_SIZE);
+        let real_index = rng.random_range(0..MIN_RING_SIZE);
         ring.insert(real_index, real_member);
 
         ClsagRingInput::new(

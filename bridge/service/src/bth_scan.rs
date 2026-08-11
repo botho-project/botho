@@ -27,7 +27,7 @@ use bth_transaction_clsag::{
     DEFAULT_RING_SIZE, DUST_THRESHOLD, MIN_TX_FEE,
 };
 use bth_transaction_types::{ClusterId, ClusterTagVector};
-use rand_core::{CryptoRng, RngCore};
+use rand_core::{CryptoRng, Rng};
 
 use crate::bth_rpc::RpcOutput;
 
@@ -224,7 +224,7 @@ pub struct ReleaseInput {
 /// in `inputs` must be a reserve-owned output; `recover_spend_key` recovers the
 /// one-time key for each. The function self-verifies the signed tx before
 /// returning, so it never hands back a tx the node would reject.
-pub fn build_release_tx<R: RngCore + CryptoRng>(
+pub fn build_release_tx<R: CryptoRng>(
     account: &AccountKey,
     recipient: &PublicAddress,
     amount: u64,
@@ -414,7 +414,7 @@ pub fn destination_memo(message: &str) -> MemoPayload {
 
 /// Fisher-Yates shuffle (mirrors the wasm-signer core so the real-input
 /// position is hidden without pulling in `rand`'s `SliceRandom`).
-fn shuffle<T, R: RngCore>(items: &mut [T], rng: &mut R) {
+fn shuffle<T, R: Rng>(items: &mut [T], rng: &mut R) {
     let len = items.len();
     if len <= 1 {
         return;

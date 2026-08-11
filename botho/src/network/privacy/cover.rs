@@ -37,8 +37,8 @@
 //! ```
 
 use rand::{
-    distributions::{Distribution, WeightedIndex},
-    Rng,
+    distr::{weighted::WeightedIndex, Distribution},
+    Rng, RngExt,
 };
 use serde::{Deserialize, Serialize};
 
@@ -88,7 +88,7 @@ impl CoverMessage {
     /// The size is chosen using weighted random selection to match the
     /// typical distribution of real transaction sizes.
     pub fn generate() -> Self {
-        Self::generate_with_rng(&mut rand::thread_rng())
+        Self::generate_with_rng(&mut rand::rng())
     }
 
     /// Generate a cover message with a specific size.
@@ -97,7 +97,7 @@ impl CoverMessage {
     ///
     /// * `size` - The payload size in bytes (clamped to valid range)
     pub fn with_size(size: usize) -> Self {
-        Self::with_size_and_rng(size, &mut rand::thread_rng())
+        Self::with_size_and_rng(size, &mut rand::rng())
     }
 
     /// Generate a cover message using a provided RNG.
@@ -189,7 +189,7 @@ impl SizeCategory {
     /// Generate a random size within this category.
     pub fn random_size<R: Rng>(&self, rng: &mut R) -> usize {
         let (min, max) = self.range();
-        rng.gen_range(min..=max)
+        rng.random_range(min..=max)
     }
 }
 
@@ -272,7 +272,7 @@ impl CoverTrafficGenerator {
 
     /// Generate a cover message using the configured distribution.
     pub fn generate(&self) -> CoverMessage {
-        self.generate_with_rng(&mut rand::thread_rng())
+        self.generate_with_rng(&mut rand::rng())
     }
 
     /// Generate a cover message using a provided RNG.
@@ -290,7 +290,7 @@ impl CoverTrafficGenerator {
         let min = min.max(self.config.min_size);
         let max = max.min(self.config.max_size);
 
-        rng.gen_range(min..=max)
+        rng.random_range(min..=max)
     }
 
     /// Select a size category based on weights.
@@ -306,7 +306,7 @@ impl CoverTrafficGenerator {
 
     /// Generate multiple cover messages.
     pub fn generate_batch(&self, count: usize) -> Vec<CoverMessage> {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         (0..count)
             .map(|_| self.generate_with_rng(&mut rng))
             .collect()

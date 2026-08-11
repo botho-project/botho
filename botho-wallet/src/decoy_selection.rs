@@ -36,7 +36,8 @@
 use std::collections::HashMap;
 
 use bth_cluster_tax::{ClusterId, TAG_WEIGHT_SCALE};
-use rand::{rngs::OsRng, seq::SliceRandom};
+use bth_util_from_random::OsRng;
+use rand::seq::SliceRandom;
 
 use crate::fee_estimation::StoredTags;
 

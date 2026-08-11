@@ -362,7 +362,8 @@ fn create_signed_transaction(
     ledger: &Ledger,
 ) -> Transaction {
     use botho::transaction::{ClsagRingInput, RingMember};
-    use rand::{rngs::OsRng, seq::SliceRandom};
+    use bth_util_from_random::OsRng;
+    use rand::seq::SliceRandom;
 
     let mut rng = OsRng;
 

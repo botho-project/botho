@@ -82,7 +82,8 @@ bth-address-codec = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 
 # Deterministic-RNG signing in tests; OsRng in production.
-rand_core = { workspace = true, features = ["getrandom"] }
+bth-util-from-random = { workspace = true }
+rand_core = { workspace = true }
 
 # Recipient BTH address decoding (base58 view||spend, matching the node's
 # classical address layout).

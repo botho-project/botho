@@ -94,7 +94,7 @@ use crate::{
     },
     ClusterFactorCurve,
 };
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
 use super::settlement_horizon_sweep::{
@@ -370,16 +370,16 @@ fn build_ring(
         arch.spender_cluster_wealth_bth as u128 * PICO_PER_BTH,
     ));
     for _ in 1..params.ring_size {
-        let wealthy = rng.gen_range(0..10_000u32) < contamination_bps;
+        let wealthy = rng.random_range(0..10_000u32) < contamination_bps;
         if wealthy {
-            let dv =
-                rng.gen_range(params.wealthy_decoy_value_bth.0..=params.wealthy_decoy_value_bth.1);
+            let dv = rng
+                .random_range(params.wealthy_decoy_value_bth.0..=params.wealthy_decoy_value_bth.1);
             ring.push((
                 bth_to_pico_u64(dv),
                 params.wealthy_cluster_wealth_bth as u128 * PICO_PER_BTH,
             ));
         } else {
-            let dv = rng.gen_range(params.bg_decoy_value_bth.0..=params.bg_decoy_value_bth.1);
+            let dv = rng.random_range(params.bg_decoy_value_bth.0..=params.bg_decoy_value_bth.1);
             ring.push((bth_to_pico_u64(dv), 0));
         }
     }
@@ -389,7 +389,7 @@ fn build_ring(
 /// Draw one archetype index by weight.
 fn draw_archetype(archetypes: &[HonestArchetype], rng: &mut ChaCha8Rng) -> usize {
     let total: u32 = archetypes.iter().map(|a| a.weight).sum();
-    let mut pick = rng.gen_range(0..total);
+    let mut pick = rng.random_range(0..total);
     for (i, a) in archetypes.iter().enumerate() {
         if pick < a.weight {
             return i;
@@ -692,8 +692,8 @@ fn draw_wealthy_decoy(
     params: &HonestSweepParams,
     rng: &mut ChaCha8Rng,
 ) -> (u64, u128) {
-    let class = &classes[rng.gen_range(0..classes.len())];
-    let dv = rng.gen_range(params.wealthy_decoy_value_bth.0..=params.wealthy_decoy_value_bth.1);
+    let class = &classes[rng.random_range(0..classes.len())];
+    let dv = rng.random_range(params.wealthy_decoy_value_bth.0..=params.wealthy_decoy_value_bth.1);
     (
         bth_to_pico_u64(dv),
         class.cluster_wealth_bth as u128 * PICO_PER_BTH,
@@ -773,14 +773,15 @@ fn evaluate_factor_band(
         // Real background input.
         let mut ring: Vec<(u64, u128)> = Vec::with_capacity(params.ring_size);
         let bg_real_value =
-            rng.gen_range(params.bg_decoy_value_bth.0..=params.bg_decoy_value_bth.1);
+            rng.random_range(params.bg_decoy_value_bth.0..=params.bg_decoy_value_bth.1);
         ring.push((bth_to_pico_u64(bg_real_value), 0));
         for _ in 1..params.ring_size {
-            let wealthy = rng.gen_range(0..10_000u32) < FACTOR_BAND_CONTAMINATION_BPS;
+            let wealthy = rng.random_range(0..10_000u32) < FACTOR_BAND_CONTAMINATION_BPS;
             let (dv, dw) = if wealthy {
                 draw_wealthy_decoy(classes, params, &mut rng)
             } else {
-                let dv = rng.gen_range(params.bg_decoy_value_bth.0..=params.bg_decoy_value_bth.1);
+                let dv =
+                    rng.random_range(params.bg_decoy_value_bth.0..=params.bg_decoy_value_bth.1);
                 (bth_to_pico_u64(dv), 0u128)
             };
             let f = curve.factor(dw);
@@ -790,7 +791,8 @@ fn evaluate_factor_band(
             } else {
                 // Rejected by the band filter → the wallet substitutes an
                 // in-band (background) decoy, exactly as Part 3 does.
-                let sub = rng.gen_range(params.bg_decoy_value_bth.0..=params.bg_decoy_value_bth.1);
+                let sub =
+                    rng.random_range(params.bg_decoy_value_bth.0..=params.bg_decoy_value_bth.1);
                 ring.push((bth_to_pico_u64(sub), 0));
             }
         }

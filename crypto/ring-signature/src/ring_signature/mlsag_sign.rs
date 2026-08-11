@@ -5,7 +5,7 @@
 use core::fmt::Debug;
 
 use curve25519_dalek::ristretto::RistrettoPoint;
-use rand_core::CryptoRngCore;
+use rand_core::CryptoRng;
 use zeroize::Zeroize;
 
 use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
@@ -51,7 +51,7 @@ impl MlsagSignParams<'_> {
         ring: impl Ring,
         // Note: this `mut rng` can just be `rng` if this is merged upstream:
         // https://github.com/dalek-cryptography/curve25519-dalek/pull/394
-        rng: impl CryptoRngCore,
+        rng: impl CryptoRng,
         responses: &mut [CurveScalar],
     ) -> Result<(KeyImage, CurveScalar), Error> {
         let ring_size = ring.size();
@@ -128,7 +128,7 @@ impl<R: AsRef<[CurveScalar]> + AsMut<[CurveScalar]>> MlsagSignCtx<R> {
     /// buffers
     pub fn init<'a>(
         params: &'a MlsagSignParams<'a>,
-        mut rng: impl CryptoRngCore,
+        mut rng: impl CryptoRng,
         mut responses: R,
     ) -> Result<Self, Error> {
         let G = B_BLINDING;

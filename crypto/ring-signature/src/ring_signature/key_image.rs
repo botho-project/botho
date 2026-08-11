@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn test_key_image_from_private_key() {
-        let mut rng = rand_core::OsRng;
+        let mut rng = bth_util_from_random::OsRng;
         let private = RistrettoPrivate::from_random(&mut rng);
         let key_image = KeyImage::from(&private);
 
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn test_different_keys_different_images() {
-        let mut rng = rand_core::OsRng;
+        let mut rng = bth_util_from_random::OsRng;
         let private1 = RistrettoPrivate::from_random(&mut rng);
         let private2 = RistrettoPrivate::from_random(&mut rng);
 
@@ -147,7 +147,7 @@ mod tests {
 
     #[test]
     fn test_key_image_bytes_roundtrip() {
-        let mut rng = rand_core::OsRng;
+        let mut rng = bth_util_from_random::OsRng;
         let private = RistrettoPrivate::from_random(&mut rng);
         let key_image = KeyImage::from(&private);
 
@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn test_key_image_from_slice() {
-        let mut rng = rand_core::OsRng;
+        let mut rng = bth_util_from_random::OsRng;
         let private = RistrettoPrivate::from_random(&mut rng);
         let key_image = KeyImage::from(&private);
 

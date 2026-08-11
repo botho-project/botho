@@ -381,7 +381,7 @@ impl TrafficNormalizer {
         let padding_needed = bucket_size.saturating_sub(padded.len());
         if padding_needed > 0 {
             let mut padding = vec![0u8; padding_needed];
-            rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut padding);
+            rand::Rng::fill_bytes(&mut rand::rng(), &mut padding);
             padded.extend_from_slice(&padding);
         }
 
@@ -401,7 +401,7 @@ impl TrafficNormalizer {
         }
 
         let mut bytes = [0u8; 8];
-        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut bytes);
+        rand::Rng::fill_bytes(&mut rand::rng(), &mut bytes);
         let random = u64::from_le_bytes(bytes);
 
         let range = self.config.jitter_max_ms - self.config.jitter_min_ms;

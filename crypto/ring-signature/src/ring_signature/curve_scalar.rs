@@ -13,7 +13,7 @@ use bth_util_repr_bytes::{
     derive_try_from_slice_from_repr_bytes, typenum::U32, GenericArray, ReprBytes,
 };
 use curve25519_dalek::scalar::Scalar;
-use rand_core::{CryptoRng, RngCore};
+use rand_core::CryptoRng;
 use zeroize::Zeroize;
 
 #[cfg(feature = "prost")]
@@ -47,7 +47,7 @@ impl CurveScalar {
 }
 
 impl FromRandom for CurveScalar {
-    fn from_random<R: CryptoRng + RngCore>(csprng: &mut R) -> Self {
+    fn from_random<R: CryptoRng>(csprng: &mut R) -> Self {
         Self {
             scalar: crate::compat::random_scalar(csprng),
         }

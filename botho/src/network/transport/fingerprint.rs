@@ -578,10 +578,10 @@ fn erf(x: f64) -> f64 {
 /// for testing purposes when real capture data is not available.
 #[cfg(test)]
 pub fn generate_synthetic_webrtc_pattern(packet_count: usize) -> TrafficPattern {
-    use rand::Rng;
+    use rand::RngExt;
     use rand_distr::{Distribution, LogNormal, Normal};
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut pattern = TrafficPattern::new();
 
     // WebRTC video typically has bimodal packet sizes:
@@ -597,7 +597,7 @@ pub fn generate_synthetic_webrtc_pattern(packet_count: usize) -> TrafficPattern 
 
     for i in 0..packet_count {
         // 30% small packets (audio/control), 70% larger (video)
-        let size = if rng.gen_bool(0.3) {
+        let size = if rng.random_bool(0.3) {
             let sample: f64 = small_size_dist.sample(&mut rng);
             sample.max(50.0) as usize
         } else {
@@ -615,7 +615,7 @@ pub fn generate_synthetic_webrtc_pattern(packet_count: usize) -> TrafficPattern 
         };
 
         // Alternate direction roughly 60% outbound
-        if rng.gen_bool(0.6) {
+        if rng.random_bool(0.6) {
             pattern.record_outbound(size, iat);
         } else {
             pattern.record_inbound(size, iat);

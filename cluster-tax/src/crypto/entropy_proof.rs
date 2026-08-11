@@ -225,10 +225,7 @@ impl EntropyProofBuilder {
     /// Returns None if:
     /// - Entropy delta is below threshold
     /// - Cannot generate valid proof
-    pub fn prove<R: rand_core::RngCore + rand_core::CryptoRng>(
-        &self,
-        rng: &mut R,
-    ) -> Option<EntropyProof> {
+    pub fn prove<R: rand_core::CryptoRng>(&self, rng: &mut R) -> Option<EntropyProof> {
         // Compute entropy before and after
         let entropy_before = Self::compute_collision_entropy(&self.input_secrets);
         let entropy_after = Self::compute_collision_entropy(&self.output_secrets);
@@ -280,7 +277,7 @@ impl EntropyProofBuilder {
     }
 
     /// Generate linkage proof connecting entropy to tag commitments.
-    fn generate_linkage_proof<R: rand_core::RngCore + rand_core::CryptoRng>(
+    fn generate_linkage_proof<R: rand_core::CryptoRng>(
         &self,
         _entropy_before: u64,
         _entropy_after: u64,
@@ -646,7 +643,7 @@ impl EntropyLinkageProof {
 mod tests {
     use super::*;
     use crate::{crypto::CommittedTagVectorSecret, TagWeight, TAG_WEIGHT_SCALE};
-    use rand_core::OsRng;
+    use bth_util_from_random::OsRng;
     use std::collections::HashMap;
 
     /// Create a test secret with specified clusters and weights.

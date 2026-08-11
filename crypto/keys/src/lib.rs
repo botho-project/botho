@@ -53,6 +53,8 @@
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
+pub mod compat;
+
 mod ed25519;
 mod ristretto;
 mod traits;

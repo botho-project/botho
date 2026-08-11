@@ -6,9 +6,10 @@
 
 use std::path::Path;
 
+use bth_util_from_random::OsRng;
 use clap::Parser;
 use log::debug;
-use rand_core::{CryptoRng, OsRng, RngCore};
+use rand_core::CryptoRng;
 use serde::{de::DeserializeOwned, Serialize};
 
 use bth_core::keys::TxOutPublic;
@@ -247,7 +248,7 @@ pub fn write_output(file_name: &str, value: &impl Serialize) -> anyhow::Result<(
 impl TxSignReq {
     /// Get prepared (but unsigned) ringct bulletproofs for later signing,
     /// note only one instance of this must be used between operations.
-    pub fn get_signing_data<RNG: CryptoRng + RngCore>(
+    pub fn get_signing_data<RNG: CryptoRng>(
         &self,
         rng: &mut RNG,
     ) -> Result<

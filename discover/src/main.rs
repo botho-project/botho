@@ -171,9 +171,8 @@ async fn discover_network(
         public_key: bth_crypto_keys::Ed25519Public::default(),
     };
 
-    let signing_key = std::sync::Arc::new(bth_crypto_keys::Ed25519Pair::from_random(
-        &mut rand::thread_rng(),
-    ));
+    let signing_key =
+        std::sync::Arc::new(bth_crypto_keys::Ed25519Pair::from_random(&mut rand::rng()));
 
     let mut service = GossipService::new(
         node_id,

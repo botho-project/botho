@@ -11,7 +11,7 @@
 
 use alloc::vec::Vec;
 use curve25519_dalek::ristretto::RistrettoPoint;
-use rand_core::CryptoRngCore;
+use rand_core::CryptoRng;
 use zeroize::Zeroize;
 
 use bth_crypto_digestible::Digestible;
@@ -83,7 +83,7 @@ impl Clsag {
         blinding: &Scalar,
         output_blinding: &Scalar,
         generator: &PedersenGens,
-        rng: &mut dyn CryptoRngCore,
+        rng: &mut dyn CryptoRng,
     ) -> Result<Self, Error> {
         Self::sign_with_balance_check(
             message,
@@ -115,7 +115,7 @@ impl Clsag {
         output_blinding: &Scalar,
         generator: &PedersenGens,
         check_value_is_preserved: bool,
-        rng: &mut dyn CryptoRngCore,
+        rng: &mut dyn CryptoRng,
     ) -> Result<Self, Error> {
         let ring_size = ring.len();
 
@@ -392,7 +392,7 @@ mod clsag_tests {
     use bth_util_from_random::FromRandom;
     use bth_util_test_helper::{RngType, SeedableRng};
     use proptest::prelude::*;
-    use rand_core::RngCore;
+    use rand_core::Rng;
 
     #[derive(Clone)]
     struct ClsagTestParams {
@@ -407,7 +407,7 @@ mod clsag_tests {
     }
 
     impl ClsagTestParams {
-        fn random<RNG: CryptoRngCore>(
+        fn random<RNG: CryptoRng>(
             num_mixins: usize,
             pseudo_output_blinding: Scalar,
             rng: &mut RNG,
@@ -463,7 +463,7 @@ mod clsag_tests {
             }
         }
 
-        fn sign<RNG: CryptoRngCore>(&self, rng: &mut RNG) -> Result<Clsag, Error> {
+        fn sign<RNG: CryptoRng>(&self, rng: &mut RNG) -> Result<Clsag, Error> {
             Clsag::sign(
                 &self.message,
                 &self.ring,
@@ -633,7 +633,7 @@ mod clsag_tests {
 
     #[test]
     fn test_clsag_value_not_conserved() {
-        let mut rng = rand_core::OsRng;
+        let mut rng = bth_util_from_random::OsRng;
         let pseudo_output_blinding = crate::compat::random_scalar(&mut rng);
         let mut params = ClsagTestParams::random(5, pseudo_output_blinding, &mut rng);
 
@@ -648,7 +648,7 @@ mod clsag_tests {
 
     #[test]
     fn test_clsag_index_out_of_bounds() {
-        let mut rng = rand_core::OsRng;
+        let mut rng = bth_util_from_random::OsRng;
         let pseudo_output_blinding = crate::compat::random_scalar(&mut rng);
         let mut params = ClsagTestParams::random(5, pseudo_output_blinding, &mut rng);
 

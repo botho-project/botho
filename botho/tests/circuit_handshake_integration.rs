@@ -247,7 +247,7 @@ fn test_invalid_circuit_id_response() {
     alice.initiate_create(circuit_id1);
 
     // Try to complete with a different circuit ID
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let dummy_private = X25519EphemeralPrivate::from_random(&mut rng);
     let dummy_public = X25519Public::from(&dummy_private);
 
@@ -283,7 +283,7 @@ fn test_handshake_message_serialization() {
     let circuit_id = CircuitId::random();
 
     // Generate an ephemeral key for testing
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let ephemeral_private = X25519EphemeralPrivate::from_random(&mut rng);
     let ephemeral_pubkey = X25519Public::from(&ephemeral_private);
 

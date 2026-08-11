@@ -36,7 +36,7 @@ use bth_crypto_hashes::Blake2b512;
 use bth_crypto_keys::{Kex, Ristretto};
 use displaydoc::Display;
 use mc_oblivious_aes_gcm::{Aes256Gcm, CtDecryptResult};
-use rand_core::{CryptoRng, RngCore};
+use rand_core::CryptoRng;
 
 //
 // CONFIGURATION
@@ -119,7 +119,7 @@ impl CryptoBox<Ristretto> for VersionedCryptoBox {
     type FooterSize = U50;
 
     // Choose the algo based on self.selected_version
-    fn encrypt_in_place_detached<T: RngCore + CryptoRng>(
+    fn encrypt_in_place_detached<T: CryptoRng>(
         &self,
         rng: &mut T,
         key: &<Ristretto as Kex>::Public,

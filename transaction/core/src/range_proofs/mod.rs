@@ -16,12 +16,13 @@ use curve25519_dalek::{ristretto::CompressedRistretto, scalar::Scalar};
 // compressed points, and generators must be converted across the dalek 4/5
 // boundary. All conversions round-trip the canonical 32-byte encodings, so
 // they are bit-exact (proofs and commitments are unchanged).
+use bth_crypto_keys::compat::Rng06Compat;
 use curve25519_dalek_v4::{
     ristretto::{CompressedRistretto as CompressedRistrettoV4, RistrettoPoint as RistrettoPointV4},
     scalar::Scalar as ScalarV4,
 };
 use merlin::Transcript;
-use rand_core::{CryptoRng, RngCore};
+use rand_core::CryptoRng;
 
 pub mod error;
 use crate::domain_separators::BULLETPROOF_DOMAIN_TAG;
@@ -48,7 +49,7 @@ lazy_static! {
 /// # Returns
 /// The proof and the Pedersen commitments from `values` and `blindings` (padded
 /// to a power of 2).
-pub fn generate_range_proofs<T: RngCore + CryptoRng>(
+pub fn generate_range_proofs<T: CryptoRng>(
     values: &[u64],
     blindings: &[Scalar],
     pedersen_generators: &PedersenGens,
@@ -73,7 +74,8 @@ pub fn generate_range_proofs<T: RngCore + CryptoRng>(
         &values_padded,
         &blindings_padded,
         64,
-        rng,
+        // bulletproofs-og is still on the dalek-4-era rand_core 0.6 traits.
+        &mut Rng06Compat(rng),
     )?;
     let commitments = commitments
         .into_iter()
@@ -91,7 +93,7 @@ pub fn generate_range_proofs<T: RngCore + CryptoRng>(
 /// `commitments` - Commitments to secret values that lie in the range [0,2^64).
 /// `pedersen_generators` - Pedersen generators on which the commitments are
 /// based `rng` - Randomness.
-pub fn check_range_proofs<T: RngCore + CryptoRng>(
+pub fn check_range_proofs<T: CryptoRng>(
     range_proof: &RangeProof,
     commitments: &[CompressedRistretto],
     pedersen_generators: &PedersenGens,
@@ -110,7 +112,8 @@ pub fn check_range_proofs<T: RngCore + CryptoRng>(
             &mut Transcript::new(BULLETPROOF_DOMAIN_TAG.as_ref()),
             &resized_commitments,
             64,
-            rng,
+            // bulletproofs-og is still on the dalek-4-era rand_core 0.6 traits.
+            &mut Rng06Compat(rng),
         )
         .map_err(Error::from)
 }
@@ -169,7 +172,7 @@ fn scalar_to_v4(src: &Scalar) -> ScalarV4 {
 pub mod tests {
     use super::*;
     use crate::ring_signature::generators;
-    use bth_util_test_helper::get_seeded_rng;
+    use bth_util_test_helper::{get_seeded_rng, Rng};
     use curve25519_dalek::ristretto::RistrettoPoint;
 
     fn generate_and_check(values: Vec<u64>, blindings: Vec<Scalar>) {

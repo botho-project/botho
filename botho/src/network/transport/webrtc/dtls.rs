@@ -272,8 +272,8 @@ impl EphemeralCertificate {
         let mut private_key_der = vec![0u8; 121]; // PKCS#8 ECDSA key size
 
         // Use random bytes for uniqueness
-        use rand::RngCore;
-        let mut rng = rand::thread_rng();
+        use rand::Rng;
+        let mut rng = rand::rng();
         rng.fill_bytes(&mut certificate_der);
         rng.fill_bytes(&mut private_key_der);
 

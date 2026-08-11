@@ -34,11 +34,12 @@ bth-crypto-pq = { path = "../../../crypto/pq" }
 # compute owned-output key images so the wallet can query spent status via the
 # node's `chain_areKeyImagesSpent` RPC and exclude spent outputs.
 bth-crypto-ring-signature = { path = "../../../crypto/ring-signature" }
+bth-util-from-random = { path = "../../../util/from-random" }
 
 serde = { version = "1", features = ["derive"] }
 bincode = "1"
 hex = "0.4"
-rand_core = { version = "0.6", features = ["getrandom"] }
+rand_core = { workspace = true }
 
 # wasm-bindgen surface. These only compile/link for the wasm target; native
 # `cargo test` exercises the inner `core` module directly.
@@ -47,16 +48,16 @@ serde-wasm-bindgen = "0.6"
 
 # getrandom with the browser backend so OsRng works inside wasm.
 #
-# Three major versions are present: 0.2 (via the classical crypto stack) uses
-# the `js` feature; 0.3 (via rand 0.9) and 0.4 (via ml-dsa's digest stack, pulled
-# in by bth-crypto-pq for post-quantum key derivation) select their wasm backend
-# through the `getrandom_backend="wasm_js"` cfg set in the workspace
-# `.cargo/config.toml`, but that backend is only compiled when each crate's
-# `wasm_js` feature is on — enabled here via renamed direct deps.
+# Multiple major versions are present: 0.2 (via crypto/pq's rand_core-0.6
+# ml-kem boundary) uses the `js` feature; 0.3 (via rand 0.9 in crypto/pq) and
+# 0.4 (the workspace generation) select their wasm backend through the
+# `getrandom_backend="wasm_js"` cfg set in the workspace `.cargo/config.toml`,
+# but that backend is only compiled when each crate's `wasm_js` feature is
+# on — enabled here via renamed direct deps.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-getrandom = { version = "0.2", features = ["js"] }
+getrandom = { workspace = true, features = ["wasm_js"] }
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
 getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
-getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
-rand = "0.8"
+rand = { workspace = true, features = ["thread_rng"] }
