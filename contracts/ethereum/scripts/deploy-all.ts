@@ -1,5 +1,10 @@
-import { ethers } from "hardhat";
-import { deploySafe } from "./deploy-safe";
+import { network } from "hardhat";
+import { deploySafe } from "./deploy-safe.js";
+
+// Hardhat 3 (#1174): ethers hangs off an explicit network connection; the
+// no-arg default follows the `--network` flag passed to `hardhat run`.
+// getOrCreate shares the connection with the imported deploy-safe.ts.
+const { ethers } = await network.getOrCreate();
 
 /**
  * One-shot bridge custody + token bring-up (#1011, #866).

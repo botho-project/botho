@@ -1,4 +1,8 @@
-import { ethers } from "hardhat";
+import { network } from "hardhat";
+
+// Hardhat 3 (#1174): ethers hangs off an explicit network connection; the
+// no-arg default follows the `--network` flag passed to `hardhat run`.
+const { ethers } = await network.getOrCreate();
 
 /**
  * Deploy WrappedBTH.

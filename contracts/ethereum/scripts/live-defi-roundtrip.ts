@@ -92,7 +92,7 @@ const ROUTER_ABI = [
 ];
 
 // ---------------------------------------------------------------------------
-const SECRETS = path.resolve(__dirname, "../../../.secrets/bridge-testnet");
+const SECRETS = path.resolve(import.meta.dirname, "../../../.secrets/bridge-testnet");
 function loadKey(name: string): string {
   return fs.readFileSync(path.join(SECRETS, `${name}.key`), "utf8").trim();
 }
@@ -156,7 +156,7 @@ async function main() {
   // ---- Step 2: MINT via 2-of-3 Safe --------------------------------------
   console.log("\n[2/5] Mint wBTH via 2-of-3 Safe");
   const already = await wbth.processedOrders(ORDER_ID);
-  const lpWbth0 = await wbth.balanceOf(lp.address);
+  const lpWbth0: bigint = await wbth.balanceOf(lp.address);
   if (already) {
     console.log(`   orderId already processed; LP holds ${fmt(lpWbth0)} — skip mint`);
   } else {
@@ -188,7 +188,7 @@ async function main() {
         WBTH, 0n, data, 0, 0n, 0n, 0n, Z, Z, sigBlob,
       ),
     );
-    const lpWbth1 = await wbth.balanceOf(lp.address);
+    const lpWbth1: bigint = await wbth.balanceOf(lp.address);
     console.log(`   LP wBTH: ${fmt(lpWbth0)} -> ${fmt(lpWbth1)}`);
     if (lpWbth1 - lpWbth0 !== WBTH_LIQ)
       throw new Error(`mint delta mismatch: ${lpWbth1 - lpWbth0} != ${WBTH_LIQ}`);
@@ -253,23 +253,23 @@ async function main() {
   await waitTx("approve WETH->router",
     (weth.connect(lp) as ethers.Contract).approve(UNI.swapRouter, ethers.MaxUint256));
   const router = new ethers.Contract(UNI.swapRouter, ROUTER_ABI, lp);
-  const wbthBeforeSwap = await wbth.balanceOf(lp.address);
+  const wbthBeforeSwap: bigint = await wbth.balanceOf(lp.address);
   const swapParams = {
     tokenIn: UNI.weth, tokenOut: WBTH, fee: FEE, recipient: lp.address,
     amountIn: SWAP_IN, amountOutMinimum: SWAP_MIN_OUT, sqrtPriceLimitX96: 0n,
   };
   await waitTx("exactInputSingle", router.exactInputSingle(swapParams));
-  const wbthAfterSwap = await wbth.balanceOf(lp.address);
+  const wbthAfterSwap: bigint = await wbth.balanceOf(lp.address);
   const wbthOut = wbthAfterSwap - wbthBeforeSwap;
   console.log(`   swap produced ${fmt(wbthOut)} for ${ethers.formatEther(SWAP_IN)} WETH`);
   if (wbthOut <= 0n) throw new Error("swap produced no wBTH");
 
   // ---- Step 5: BURN (repatriate) -----------------------------------------
   console.log("\n[5/5] bridgeBurn swap proceeds (Ethereum-side repatriation)");
-  const supplyBefore = await wbth.totalSupply();
+  const supplyBefore: bigint = await wbth.totalSupply();
   await waitTx("bridgeBurn",
     (wbth.connect(lp) as ethers.Contract).bridgeBurn(wbthOut, "bth-testnet-repatriation-demo"));
-  const supplyAfter = await wbth.totalSupply();
+  const supplyAfter: bigint = await wbth.totalSupply();
   console.log(`   totalSupply: ${fmt(supplyBefore)} -> ${fmt(supplyAfter)}`);
   if (supplyBefore - supplyAfter !== wbthOut)
     throw new Error("burn did not reduce supply by the swap output");

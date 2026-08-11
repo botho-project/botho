@@ -5,13 +5,11 @@
 // Order sizes respect the 10 USDC exchange minimum order value (testnet
 // enforces it too — live-verified) and szDecimals 2.
 //
-// Run: HL_TOKEN_INDEX=<idx> npx ts-node --compiler-options
-//   '{"module":"commonjs","target":"ES2020","esModuleInterop":true,
-//   "skipLibCheck":true}' scripts/hl-13-swap-demo.ts
+// Run: HL_TOKEN_INDEX=<idx> npx tsx scripts/hl-13-swap-demo.ts
 import {
   CORE_TOKEN_NAME, DEPLOYER, info, loadWallet, perpUsdc, sendL1Action,
   spotBalances, usdClassTransfer, wire,
-} from "./hl-lib";
+} from "./hl-lib.js";
 
 const DEMO_SZ_WBTH = parseFloat(process.env.HL_DEMO_SZ ?? "11"); // ~$11 notional at the 1.0 anchor
 

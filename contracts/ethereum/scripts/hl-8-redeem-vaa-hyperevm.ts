@@ -11,7 +11,7 @@ const TRANSCEIVER = "0xC5652d52fBE4c41c91a65Ecd18304B20e58Df491"; // HyperEVM Wo
 const PEER_TOKEN = "0x230f154Ae33A53dcFFEDedB2d92cc1F32BcE7610";
 const RECIPIENT = "0x111018cfe4523097B7f651f3A06fA9a2956CF155";
 const VAA_URL = "https://api.testnet.wormholescan.io/api/v1/vaas/10002/000000000000000000000000bee886bcc887e96487c2103e46fda7ada6b89195/2";
-const KEY = path.resolve(__dirname, "../../../.secrets/bridge-testnet/eth-deployer.key");
+const KEY = path.resolve(import.meta.dirname, "../../../.secrets/bridge-testnet/eth-deployer.key");
 
 const XCVR_ABI = ["function receiveMessage(bytes encodedMessage)"];
 const ERC20_ABI = ["function balanceOf(address) view returns (uint256)"];

@@ -7,7 +7,7 @@ import * as path from "path";
 
 const RPC = "https://rpc.hyperliquid-testnet.xyz/evm";
 const TO = "0x111018cfe4523097B7f651f3A06fA9a2956CF155";
-const KEY = path.resolve(__dirname, "../../../.secrets/bridge-mainnet/eth-botho.key");
+const KEY = path.resolve(import.meta.dirname, "../../../.secrets/bridge-mainnet/eth-botho.key");
 
 async function main() {
   const p = new ethers.JsonRpcProvider(RPC);

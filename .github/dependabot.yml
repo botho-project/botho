@@ -79,16 +79,6 @@ updates:
     schedule:
       interval: "weekly"
     labels: ["dependencies"]
-    ignore:
-      # hardhat-3 toolchain moves as one migration (#1174): hardhat 3 (ESM,
-      # new config) + toolbox 7 (requires hardhat 3) + typescript 7 (breaks
-      # the hardhat-2 ts integration). Individual majors are guaranteed-red.
-      - dependency-name: "hardhat"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "@nomicfoundation/hardhat-toolbox"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "typescript"
-        update-types: ["version-update:semver-major"]
     groups:
       eth-minor-patch:
         patterns: ["*"]

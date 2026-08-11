@@ -20,7 +20,7 @@ export const HYPEREVM_RPC = "https://rpc.hyperliquid-testnet.xyz/evm";
 // #876/#1026 deployment (contracts/wbth-ntt/deployment.json)
 export const DEPLOYER = "0x111018cfe4523097B7f651f3A06fA9a2956CF155";
 export const DEPLOYER_KEYFILE =
-  process.env.HL_DEPLOYER_KEYFILE ?? path.resolve(__dirname, "../../../.secrets/bridge-testnet/eth-deployer.key");
+  process.env.HL_DEPLOYER_KEYFILE ?? path.resolve(import.meta.dirname, "../../../.secrets/bridge-testnet/eth-deployer.key");
 export const PEER_TOKEN = "0x230f154Ae33A53dcFFEDedB2d92cc1F32BcE7610"; // HyperEVM wBTH (12 dec)
 export const PEER_TOKEN_CREATE_NONCE = 0; // CREATE by 0x111018 at nonce 0 (verified via getCreateAddress)
 

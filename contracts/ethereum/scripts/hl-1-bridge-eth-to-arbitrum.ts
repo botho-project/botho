@@ -2,8 +2,7 @@
 // the CANONICAL Arbitrum Delayed Inbox (depositEth). Real mainnet value.
 // Threads the 0.08 Chainstack gate: moves only 0.004 ETH so 0x8E90 stays >=0.08.
 //
-// Run: npx ts-node --compiler-options '{"module":"commonjs","target":"ES2020",
-//   "esModuleInterop":true,"skipLibCheck":true}' scripts/hl-1-bridge-eth-to-arbitrum.ts
+// Run: npx tsx scripts/hl-1-bridge-eth-to-arbitrum.ts
 
 import { ethers } from "ethers";
 import * as fs from "fs";
@@ -13,7 +12,7 @@ const ETH_RPC = "https://ethereum-rpc.publicnode.com";
 const INBOX = "0x4Dbd4fc535Ac27206064B68FfCf827b0A60BAB3f"; // Arbitrum One Delayed Inbox (verified: has code)
 const BRIDGE_ETH = ethers.parseEther("0.004"); // ~$7.5 — enough for a 6 USDC deposit + Arbitrum gas
 const GATE = ethers.parseEther("0.08"); // Chainstack faucet balance gate — must stay >= this
-const KEYFILE = path.resolve(__dirname, "../../../.secrets/bridge-mainnet/eth-botho.key");
+const KEYFILE = path.resolve(import.meta.dirname, "../../../.secrets/bridge-mainnet/eth-botho.key");
 
 const INBOX_ABI = ["function depositEth() payable returns (uint256)"];
 

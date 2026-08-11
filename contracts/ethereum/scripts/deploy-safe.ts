@@ -1,4 +1,10 @@
-import { ethers } from "hardhat";
+import { network } from "hardhat";
+import { pathToFileURL } from "url";
+
+// Hardhat 3 (#1174): ethers hangs off an explicit network connection; the
+// no-arg default follows the `--network` flag passed to `hardhat run`.
+// getOrCreate shares the connection with deploy-all.ts when imported by it.
+const { ethers } = await network.getOrCreate();
 
 /**
  * Deploy ONE 2-of-3 Gnosis Safe for the wBTH bridge custody (#1011, #866).
@@ -187,8 +193,17 @@ export async function deploySafe(): Promise<string> {
 }
 
 // Only run as a standalone script when invoked directly (not when imported by
-// deploy-all.ts). Hardhat runs scripts via `require.main`.
-if (require.main === module) {
+// deploy-all.ts). ESM has no `require.main`, so compare this module's URL to
+// the script path in argv (`hardhat run scripts/deploy-safe.ts` puts the
+// script path there; when deploy-all.ts is the script, this won't match).
+const invokedDirectly = process.argv.slice(1).some((arg) => {
+  try {
+    return pathToFileURL(arg).href === import.meta.url;
+  } catch {
+    return false;
+  }
+});
+if (invokedDirectly) {
   deploySafe().catch((error) => {
     console.error(error);
     process.exitCode = 1;

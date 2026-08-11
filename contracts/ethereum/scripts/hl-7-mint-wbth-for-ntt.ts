@@ -9,7 +9,7 @@ const SAFE = "0x61274F558f9027e2D402d3340dE89152FA3F3947";
 const MINT_TO = "0x111018cfe4523097B7f651f3A06fA9a2956CF155"; // deployer
 const AMOUNT = 100_000_000_000_000n; // 100 wBTH (10^14 pico)
 const ORDER_ID = ethers.id("wbth-ntt-demo-2026-07-16");
-const SECRETS = path.resolve(__dirname, "../../../.secrets/bridge-testnet");
+const SECRETS = path.resolve(import.meta.dirname, "../../../.secrets/bridge-testnet");
 const key = (n: string) => fs.readFileSync(path.join(SECRETS, `${n}.key`), "utf8").trim();
 
 const WBTH_ABI = ["function bridgeMint(address to, uint256 amount, bytes32 orderId)", "function balanceOf(address) view returns (uint256)", "function processedOrders(bytes32) view returns (bool)"];
