@@ -17,7 +17,7 @@
     "@scure/bip39": "^2.2.0"
   },
   "devDependencies": {
-    "@jest/globals": "^29.7.0",
+    "@jest/globals": "^30.4.1",
     "@metamask/snaps-cli": "^8.4.1",
     "@metamask/snaps-jest": "^10.2.0",
     "@types/node": "^22.10.0",
