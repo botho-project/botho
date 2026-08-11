@@ -4,11 +4,18 @@ Monorepo for Botho's web apps:
 
 - **`packages/web-wallet`** (`@botho/web-wallet`) — the public web wallet and
   ledger browser / block explorer served at `https://botho.io`. Routes:
-  `/` (landing), `/wallet`, `/pay`, `/claim`, `/contacts`, `/explorer`,
-  `/explorer/block/:hash`, `/explorer/tx/:hash`, `/network` (stats dashboard),
-  `/node` + `/node/status` (managed node hosting), `/operator` (operator
-  dashboard), `/docs`, `/about`.
+  `/` (landing), `/home`, `/wallet`, `/pay`, `/claim`, `/contacts`,
+  `/explorer`, `/explorer/block/:hash`, `/explorer/tx/:hash`, `/network`
+  (stats dashboard), `/trade`, `/node` + `/node/status` + `/node/success`
+  (managed node hosting), `/operator` (operator dashboard), `/docs`, `/about`.
+  All routes are also served locale-prefixed (`/es/...`, `/zh/...`); English
+  is unprefixed.
 - **`packages/desktop`** (`@botho/desktop`) — the desktop (Tauri) wallet UI.
+- **`packages/snap`** (`@botho/snap`) — the MetaMask Snap wallet.
+- **`packages/wasm-signer`** (`@botho/wasm-signer`) — the WASM transaction
+  signer.
+- **`packages/baas-worker`** (`@botho/baas-worker`) — the Cloudflare billing
+  worker for managed node hosting.
 - **`packages/features`** — shared feature components, including the explorer
   (`src/explorer/*`).
 - **`packages/adapters`** — node adapters, including the JSON-RPC
@@ -17,7 +24,7 @@ Monorepo for Botho's web apps:
 
 ## Prerequisites
 
-- Node.js 20+
+- Node.js 22 (CI pins `node-version: 22`)
 - [pnpm](https://pnpm.io/) (the workspace uses pnpm workspaces)
 
 ## Install & build
@@ -60,7 +67,7 @@ latter is resolved against the page origin.
 
 ## End-to-end tests (Playwright)
 
-E2E specs live under `e2e/` (smoke, wallet, explorer, faucet).
+E2E specs live under `e2e/` (smoke, wallet, explorer, faucet, integration, node).
 
 The `web-wallet` Playwright project (`e2e/tests/wallet/**`) covers the recently
 shipped wallet flows: wallet create/import, **request → pay**, **share my

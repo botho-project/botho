@@ -168,7 +168,7 @@ Actual block production timing adjusts based on transaction rate:
 - Slower blocks when idle (reduced overhead)
 - Emission rate self-adjusts: idle network = lower effective inflation
 
-See [Architecture: Block Timing](architecture.md#block-timing-architecture) for detailed design.
+See [Architecture: Block Timing](concepts/architecture.md#block-timing-architecture) for detailed design.
 
 ## Difficulty Adjustment
 

@@ -471,7 +471,7 @@ This is not progressive wealth redistribution. It's closer to:
 
 ## Future Work: Provenance-Based Selection
 
-See [Provenance-Based Selection](provenance-based-selection.md) for a novel
+See [Provenance-Based Selection](archive/provenance-based-selection.md) for a novel
 approach that may escape the progressivity-Sybil trade-off by leveraging
 cluster tag **distributions** (entropy) rather than scalar factors.
 
@@ -481,7 +481,7 @@ with legitimate participation rather than gaming.
 
 ## References
 
-- [Provenance-Based Selection](provenance-based-selection.md) - Novel entropy-weighted approach for lottery
+- [Provenance-Based Selection](archive/provenance-based-selection.md) - Novel entropy-weighted approach for lottery
 - [Entropy-Weighted Decay](entropy-weighted-decay.md) - Entropy-weighted decay mechanism (parallel to lottery entropy weighting)
 - [Cluster Tag Decay](cluster-tag-decay.md) - How cluster factors decay through trade
 - [Progressive Fees](../concepts/progressive-fees.md) - Fee curve design

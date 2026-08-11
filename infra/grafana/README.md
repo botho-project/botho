@@ -226,7 +226,7 @@ For large time ranges, reduce panel query precision:
 
 ## Related Documentation
 
-- [Botho Monitoring Guide](../../docs/monitoring.md)
+- [Botho Monitoring Guide](../../docs/operations/monitoring.md)
 - [CloudWatch Monitoring](../monitoring/README.md)
 - [Prometheus Documentation](https://prometheus.io/docs/)
 - [Grafana Documentation](https://grafana.com/docs/)

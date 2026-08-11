@@ -40,7 +40,7 @@ botho init
 botho run
 ```
 
-See [Deployment Guide](deployment.md) for production setup.
+See [Deployment Guide](operations/deployment.md) for production setup.
 
 ### Option 2: Payment Processor
 
@@ -961,7 +961,7 @@ class BothoClient:
 
 - [API Reference](api.md) — Complete RPC documentation
 - [Developer Guide](developer-guide.md) — Integration examples
-- [Troubleshooting](troubleshooting.md) — Common issues
+- [Troubleshooting](operations/troubleshooting.md) — Common issues
 
 ### Getting Help
 
@@ -972,5 +972,5 @@ class BothoClient:
 ## Related Documentation
 
 - [Exchange Integration](exchange-integration.md) — For exchanges
-- [Security Guide](security.md) — Security best practices
-- [Deployment Guide](deployment.md) — Production deployment
+- [Security Guide](concepts/security.md) — Security best practices
+- [Deployment Guide](operations/deployment.md) — Production deployment

@@ -57,7 +57,7 @@ We prioritize PQ protection for recipient identity and amounts because these are
 2. **Compact transactions** — CLSAG (~700 bytes) keeps blockchain growth to ~100 GB/year, enabling desktop nodes
 3. **Larger anonymity sets** — More users can run nodes, improving privacy for everyone
 
-See [Why This Architecture?](privacy.md#why-this-architecture) for detailed rationale.
+See [Why This Architecture?](concepts/privacy.md#why-this-architecture) for detailed rationale.
 
 ---
 
@@ -138,7 +138,7 @@ Botho provides strong cryptographic privacy, but privacy is never absolute:
 - **IP tracking** is possible without Tor/VPN
 - **Exchange KYC** links your identity to addresses you deposit to/withdraw from
 
-For maximum privacy, follow the [privacy best practices](privacy.md#privacy-best-practices).
+For maximum privacy, follow the [privacy best practices](concepts/privacy.md#privacy-best-practices).
 
 ---
 

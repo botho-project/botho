@@ -452,9 +452,9 @@ meaningful Sybil resistance reduction without requiring identity.
 
 ## Related Documents
 
-- [Entropy-Weighted Decay](entropy-weighted-decay.md) - Uses same entropy primitive for decay mechanism
-- [Cluster Tag Decay](cluster-tag-decay.md) - Age-based decay (Phase 1) and entropy-weighted decay (Phase 2)
-- [Lottery Redistribution](lottery-redistribution.md) - Fee redistribution overview
+- [Entropy-Weighted Decay](../entropy-weighted-decay.md) - Uses same entropy primitive for decay mechanism
+- [Cluster Tag Decay](../cluster-tag-decay.md) - Age-based decay (Phase 1) and entropy-weighted decay (Phase 2)
+- [Lottery Redistribution](../lottery-redistribution.md) - Fee redistribution overview
 
 ## References
 

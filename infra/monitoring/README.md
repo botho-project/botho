@@ -22,4 +22,4 @@ sudo ./setup-monitoring.sh
 
 ## Documentation
 
-See [docs/monitoring.md](../../docs/monitoring.md) for full documentation.
+See [docs/monitoring.md](../../docs/operations/monitoring.md) for full documentation.

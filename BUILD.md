@@ -2,8 +2,10 @@
 
 ## Requirements
 
-- Rust (stable toolchain)
+- Rust (pinned nightly toolchain `nightly-2025-12-03`; see `rust-toolchain` — rustup selects it automatically)
 - Cargo
+- `cmake` (builds the vendored RandomX C++ library)
+- `pkg-config` (Tauri desktop crate native dependencies)
 
 ## Building
 

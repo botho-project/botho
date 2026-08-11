@@ -25,7 +25,7 @@ The amount of BTH created when a new block is mined. Botho starts at 50 BTH per 
 ### BTH
 The native currency unit of Botho. All amounts are denominated in a single base
 unit, the **picocredit**: 1 BTH = 1,000,000,000,000 picocredits (10^12). BTH is a
-human-facing formatting of picocredit amounts at the UI edge. See [Unit System](tokenomics.md#unit-system) for details.
+human-facing formatting of picocredit amounts at the UI edge. See [Unit System](concepts/tokenomics.md#unit-system) for details.
 
 ### Bulletproofs
 A type of zero-knowledge proof used for range proofs. Ensures transaction amounts are positive without revealing the actual values. Used in Private transactions to hide amounts (ratified design, in development — #904; amounts are public on the current testnet).
@@ -41,7 +41,7 @@ The ability of a system to continue operating correctly even if some participant
 In Botho's progressive fee system, a cluster represents a minting origin. All coins trace back to the block reward that created them. Cluster wealth determines fee rates.
 
 ### Cluster Fee
-A progressive transaction fee based on coin ancestry. Coins from wealthy clusters (those that haven't circulated) pay higher fees. See [Tokenomics](tokenomics.md#cluster-based-progressive-fees).
+A progressive transaction fee based on coin ancestry. Coins from wealthy clusters (those that haven't circulated) pay higher fees. See [Tokenomics](concepts/tokenomics.md#cluster-based-progressive-fees).
 
 ### Consensus
 The process by which network nodes agree on the current state of the blockchain. Botho uses SCP for consensus.
@@ -73,7 +73,7 @@ A lattice-based signature scheme now standardized as ML-DSA. In Botho, ML-DSA-65
 **Elliptic Curve Diffie-Hellman** — A key exchange protocol for establishing shared secrets. Used in stealth address derivation.
 
 ### Emission
-The creation of new coins through mining. See [Tokenomics](tokenomics.md#emission-schedule).
+The creation of new coins through mining. See [Tokenomics](concepts/tokenomics.md#emission-schedule).
 
 ---
 

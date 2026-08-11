@@ -518,10 +518,10 @@ This design acknowledges that **absolute privacy for concentrated wealth has soc
 
 ## References
 
-- [Progressive Fees](../concepts/progressive-fees.md) - Existing wealth-based fee system
-- [Cluster Tag Decay](cluster-tag-decay.md) - How source_wealth evolves over time
-- [Privacy](../concepts/privacy.md) - Current privacy architecture
-- [Tokenomics](../concepts/tokenomics.md) - Economic model context
+- [Progressive Fees](../../concepts/progressive-fees.md) - Existing wealth-based fee system
+- [Cluster Tag Decay](../cluster-tag-decay.md) - How source_wealth evolves over time
+- [Privacy](../../concepts/privacy.md) - Current privacy architecture
+- [Tokenomics](../../concepts/tokenomics.md) - Economic model context
 - MobileCoin Exchange Integration - Prior art for sidechannel KYC
 
 ## Changelog

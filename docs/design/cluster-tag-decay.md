@@ -446,7 +446,7 @@ Where:
 - `cluster-tax/src/block_decay.rs` - AND-based decay implementation (reference)
 - `experiments/ANALYSIS.md` - Experimental results
 - [Entropy-Weighted Decay](entropy-weighted-decay.md) - Phase 2 specification
-- [Provenance-Based Selection](provenance-based-selection.md) - Related entropy-based lottery mechanism
+- [Provenance-Based Selection](archive/provenance-based-selection.md) - Related entropy-based lottery mechanism
 - [Lottery Redistribution](lottery-redistribution.md) - Fee redistribution and entropy weighting
 - GitHub Issue #85 - Research tracking
 - GitHub Issue #91 - Privacy analysis and decision

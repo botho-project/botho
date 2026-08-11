@@ -60,7 +60,7 @@ journalctl -u botho-backup -n 50
 
 ## Restore Procedure
 
-See [docs/seed-node-backup.md](../../docs/seed-node-backup.md) for full restore documentation.
+See [docs/seed-node-backup.md](../../docs/operations/seed-node-backup.md) for full restore documentation.
 
 Quick restore:
 
@@ -84,7 +84,7 @@ sudo systemctl start botho
 
 ## Documentation
 
-See [docs/seed-node-backup.md](../../docs/seed-node-backup.md) for:
+See [docs/seed-node-backup.md](../../docs/operations/seed-node-backup.md) for:
 - Detailed restore procedures
 - RPO/RTO analysis
 - Disaster recovery scenarios

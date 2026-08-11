@@ -595,7 +595,7 @@ def is_block_recent(height, max_age_minutes=5):
 
 ### Prometheus Integration
 
-See [deployment.md](deployment.md) for Prometheus exporter setup.
+See [deployment.md](operations/deployment.md) for Prometheus exporter setup.
 
 ---
 
@@ -721,5 +721,5 @@ To list BTH on your exchange:
 
 - [API Reference](api.md) — Complete RPC documentation
 - [Developer Guide](developer-guide.md) — Integration examples
-- [Security Guide](security.md) — Security best practices
-- [Deployment Guide](deployment.md) — Production deployment
+- [Security Guide](concepts/security.md) — Security best practices
+- [Deployment Guide](operations/deployment.md) — Production deployment

@@ -2,7 +2,7 @@
 
 Botho implements a novel **provenance-based progressive fee system** that taxes wealth concentration without enabling Sybil attacks or compromising privacy.
 
-![System Overview](images/cluster-tax/system_overview.png)
+![System Overview](../images/cluster-tax/system_overview.png)
 
 ## The Problem
 
@@ -24,7 +24,7 @@ Any amount-based progressive fee can be gamed by splitting.
 
 Coins remember where they came from. The fee is based on **source wealth**, not current denomination.
 
-![Split Resistance](images/cluster-tax/split_resistance.png)
+![Split Resistance](../images/cluster-tax/split_resistance.png)
 
 ### How It Works
 
@@ -67,7 +67,7 @@ flowchart LR
 
 The **cluster factor** (1x to 6x) is derived from the sender's source wealth using the curve below:
 
-![Fee Curves Comparison](images/cluster-tax/fee_curves_comparison.png)
+![Fee Curves Comparison](../images/cluster-tax/fee_curves_comparison.png)
 
 ```
 cluster_factor(W) = 1 + 5 × sigmoid((log2(W) − log2(w_mid)) / width)
@@ -84,7 +84,7 @@ Working in the **logarithm** of wealth (integer-only fixed point, for consensus 
 
 ### Whale vs Poor: Same Transfer, Different Fees
 
-![Whale vs Poor](images/cluster-tax/whale_vs_poor.png)
+![Whale vs Poor](../images/cluster-tax/whale_vs_poor.png)
 
 The same ~4 KB transfer costs:
 - **Whale-origin coins** (cluster wealth 10M BTH): 6× the base size fee
@@ -125,7 +125,7 @@ Result: Minimal benefit from mixing
 
 As coins circulate through legitimate economic activity, their source_wealth naturally decays toward the population average:
 
-![Provenance Decay](images/cluster-tax/provenance_decay.png)
+![Provenance Decay](../images/cluster-tax/provenance_decay.png)
 
 Circulating through merchants diffuses attribution two ways at once:
 - Each **eligible hop** decays tags by 5%
@@ -137,7 +137,7 @@ Circulating through merchants diffuses attribution two ways at once:
 
 We validated the progressive fee system through extensive simulation:
 
-![Gini Reduction Comparison](images/cluster-tax/gini_reduction_comparison.png)
+![Gini Reduction Comparison](../images/cluster-tax/gini_reduction_comparison.png)
 
 | Model | Gini Reduction | Burn Rate |
 |-------|----------------|-----------|

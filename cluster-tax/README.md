@@ -69,7 +69,7 @@ The **entropy** of a tag vector measures provenance diversity:
 let entropy = tags.cluster_entropy(); // Decay-invariant
 ```
 
-**Important:** Use `cluster_entropy()` (excludes background) not `shannon_entropy()` (includes background) for lottery selection. See [Provenance-Based Selection](../docs/design/provenance-based-selection.md).
+**Important:** Use `cluster_entropy()` (excludes background) not `shannon_entropy()` (includes background) for lottery selection. See [Provenance-Based Selection](../docs/design/archive/provenance-based-selection.md).
 
 ## Fee Model
 
@@ -239,7 +239,7 @@ For detailed analysis and rationale:
 
 - **[Cluster Tag Decay](../docs/design/cluster-tag-decay.md)** - AND-based decay mechanism for wash trading resistance
 - **[Lottery Redistribution](../docs/design/lottery-redistribution.md)** - Lottery design and Sybil analysis
-- **[Provenance-Based Selection](../docs/design/provenance-based-selection.md)** - Entropy-weighted lottery selection
+- **[Provenance-Based Selection](../docs/design/archive/provenance-based-selection.md)** - Entropy-weighted lottery selection
 
 ## Configuration
 

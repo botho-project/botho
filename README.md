@@ -148,6 +148,11 @@ from source and verify the checksums match.
 
 ### Build from source
 
+Building requires the pinned Rust toolchain in
+[`rust-toolchain`](./rust-toolchain) (`nightly-2025-12-03`, selected
+automatically by rustup) plus `cmake` and `pkg-config` (see the
+[`Brewfile`](./Brewfile)).
+
 ```bash
 git clone https://github.com/botho-project/botho.git
 cd botho
@@ -178,6 +183,8 @@ cargo build --release
 | `botho balance` | Show wallet balance |
 | `botho address` | Show receiving address |
 | `botho send <addr> <amt>` | Send BTH |
+| `botho snapshot` | Manage UTXO snapshots for fast initial sync |
+| `botho operator` | Operator tooling (read-only dashboard links, signing keys) |
 
 ### Web Wallet
 
@@ -220,12 +227,10 @@ Current focus areas:
 ### Security Audits
 
 Botho is audited internally on a rolling cycle. The most recent cycle (cycle
-6, 2026-06) hardened the gossip/sync block-acceptance path against forged
-difficulty, inflated rewards, counterfeit ring members, and tx-list
-substitution under valid PoW, and migrated to ML-DSA 0.1.1
-(RUSTSEC-2025-0144 timing side-channel in the since-retired PQ
-transaction-authorization path; see
-[ADR 0006](./docs/decisions/0006-pq-architecture-ratification.md)). All audit
+8, 2026-07-12) covered the operator-signed quorum-curation write path,
+consensus deltas, and the BaaS status link, with no Critical or High
+findings. Dedicated audits also cover the BTH↔Ethereum wBTH bridge
+(2026-07-13) and the MetaMask Snap's key handling (2026-07-20). All audit
 reports live in [`audits/`](./audits/).
 
 ### Origins
@@ -238,12 +243,17 @@ Botho is derived from [MobileCoin](https://github.com/mobilecoinfoundation/mobil
 |:--|:--|
 | [botho](./botho) | Main node binary with RPC server |
 | [botho-wallet](./botho-wallet) | CLI wallet implementation |
+| [bridge](./bridge) | BTH bridge core and bridge service |
 | [cluster-tax](./cluster-tax) | Progressive fee mechanism and monetary policy |
 | [consensus/scp](./consensus/scp) | Stellar Consensus Protocol implementation |
+| [contracts](./contracts) | Ethereum and Solana bridge contracts |
+| [core](./core) | Core shared types |
 | [crypto](./crypto) | Cryptographic primitives (ring signatures, keys) |
 | [transaction](./transaction) | Private transaction construction and signing |
-| [ledger](./ledger) | Blockchain state and LMDB storage |
+| [botho/src/ledger](./botho/src/ledger) | Blockchain state and LMDB storage (inside the `botho` crate) |
 | [gossip](./gossip) | libp2p networking and peer discovery |
+| [infra](./infra) | Deployment and monitoring infrastructure |
+| [mobile](./mobile) | Mobile app and Rust bridge |
 | [web](./web) | Web wallet, landing page, and UI components |
 
 ## Links

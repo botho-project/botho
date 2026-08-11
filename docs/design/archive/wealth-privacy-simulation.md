@@ -1076,6 +1076,6 @@ cluster-tax-sim gaming-analysis \
 ## References
 
 - [Wealth-Conditional Privacy Design](wealth-conditional-privacy.md)
-- [Existing Privacy Simulation](../../cluster-tax/src/simulation/privacy.rs)
-- [Cluster Tag Decay](cluster-tag-decay.md)
-- [Progressive Fees](../concepts/progressive-fees.md)
+- [Existing Privacy Simulation](../../../cluster-tax/src/simulation/privacy.rs)
+- [Cluster Tag Decay](../cluster-tag-decay.md)
+- [Progressive Fees](../../concepts/progressive-fees.md)

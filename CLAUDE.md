@@ -25,7 +25,7 @@ This is especially important for:
 This is a Rust-based blockchain project with the following key components:
 - `botho/` - Main node binary
 - `botho-wallet/` - Wallet implementation
-- `blockchain/types/` - Core blockchain types
+- `core/types/` - Core blockchain types
 - `consensus/` - Consensus protocol (SCP-based)
 - `transaction/` - Transaction handling
 - `ledger/` - Ledger database

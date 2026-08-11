@@ -57,7 +57,7 @@ that PRG's exist if and only if one-way functions exist. This is a necessary ass
 
 In the `sign` function in this crate, we take as an assumption that a Merlin Transcript's [`challenge_bytes`](https://docs.rs/merlin/1.0.3/merlin/struct.Transcript.html#method.challenge_bytes) method is a PRF.
 
-The [ed25519 manuscript]((http://ed25519.cr.yp.to/ed25519-20110926.pdf)) from 2011-09-26 has remarks in the section "pseudorandom generation of r", where
+The [ed25519 manuscript](http://ed25519.cr.yp.to/ed25519-20110926.pdf) from 2011-09-26 has remarks in the section "pseudorandom generation of r", where
 `r` is the nonce, which support this idea:
 
 > This idea of generating random signatures in a secretly deterministic way, in particular obtaining

@@ -45,6 +45,7 @@ Security auditing is iterative. Each internal audit:
 
 | Date | Auditor | Scope | Critical | High | Medium | Low | Status |
 |------|---------|-------|----------|------|--------|-----|--------|
+| 2026-07-20 (snap) | Internal | Dedicated - MetaMask Snap key-handling (#1096) | **0** | **0** | 0 | 1 (fixed) | **Clean (internal)** |
 | 2026-07-13 (bridge) | Internal | Dedicated - BTH↔Ethereum wBTH bridge (#830) | **0** | **0** | 3 | 3 | **Clean (internal); external audit pending #616** |
 | 2026-07-12 (c8) | Internal | Delta - Operator write path + consensus/BaaS | **0** | **0** | 1 new | 3 | **Healthy** |
 | 2026-07-05 (c7) | Internal | Delta - Verification (block-acceptance + BaaS + u128) | **0** | **0** | 1 new | 3 | **Healthy** |
@@ -67,6 +68,7 @@ External audit will be commissioned when:
 
 ## Report Index
 
+- [2026-07-20 Snap key-handling](2026-07-20-snap-keyhandling.md) - Dedicated MetaMask Snap key-handling audit (#1096): SRP→Botho key derivation, claim-link bearer secrets, wasm signing under SES, `snap_manageState` persistence; 0 Critical/High, 1 Low (fixed)
 - [2026-07-13 Bridge](2026-07-13-bridge.md) - Dedicated BTH↔Ethereum wBTH bridge audit (#830): custody, attestation protocol, WrappedBTH.sol, watchers/engine exactly-once, reserve peg invariant, privacy boundary; 0 Critical/High, external audit + mainnet gate remain (operator, #616)
 - [2026-07-12 Cycle 8](2026-07-12-cycle8.md) - Operator-signed quorum-curation write path (P4.4), consensus deltas, BaaS status-link; cycle-7 findings closed
 - [2026-07-05 Cycle 7](2026-07-05-cycle7.md) - Verification cycle: block-acceptance C1–C7 confirmed, BaaS worker, u128 widening, dep advisories

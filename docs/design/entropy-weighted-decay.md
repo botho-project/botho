@@ -446,7 +446,7 @@ impl TagVector {
 ## Related Documents
 
 - [Cluster Tag Decay](cluster-tag-decay.md) - Phase 1 specification and vulnerability acknowledgment
-- [Provenance-Based Selection](provenance-based-selection.md) - Entropy-weighted lottery (parallel mechanism)
+- [Provenance-Based Selection](archive/provenance-based-selection.md) - Entropy-weighted lottery (parallel mechanism)
 - [Lottery Redistribution](lottery-redistribution.md) - Fee redistribution overview
 - [Progressive Fees](../concepts/progressive-fees.md) - Overall fee curve design
 

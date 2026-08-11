@@ -134,6 +134,6 @@ Store LION keys only while outputs are unspent, prune after spending.
 
 ## References
 
-- [Why This Architecture?](../privacy.md#why-this-architecture) - Detailed rationale
+- [Why This Architecture?](../concepts/privacy.md#why-this-architecture) - Detailed rationale
 - [ML-KEM (FIPS 203)](https://csrc.nist.gov/pubs/fips/203/final) - Post-quantum key encapsulation
 - [CLSAG Paper](https://eprint.iacr.org/2019/654.pdf) - Ring signature specification

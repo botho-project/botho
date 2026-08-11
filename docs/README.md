@@ -129,6 +129,8 @@ botho run --mint
 | `botho balance` | Show wallet balance |
 | `botho address` | Show receiving address |
 | `botho send <addr> <amt>` | Send BTH |
+| `botho snapshot` | Manage UTXO snapshots for fast initial sync |
+| `botho operator` | Operator tooling (read-only dashboard links, signing keys) |
 
 ## Documentation Structure
 
@@ -143,6 +145,7 @@ docs/
 ├── minting.md              # Mining setup
 ├── merchant-guide.md       # Accept payments
 ├── exchange-integration.md # Exchange listing
+├── CRYPTO_COVERAGE_BASELINE.md # Crypto test-coverage baseline
 │
 ├── concepts/               # Core concepts (what/why)
 │   ├── architecture.md
@@ -164,7 +167,10 @@ docs/
 │   └── runbooks/
 │
 ├── architecture/           # Component deep-dives
+├── benchmarks/             # Performance benchmarks
 ├── design/                 # Proposals and roadmaps
+├── images/                 # Documentation images
+├── primer/                 # "Botho from the Basics" primer
 ├── research/               # Analysis and comparisons
 ├── specification/          # Formal protocol spec
 ├── decisions/              # Architecture Decision Records
