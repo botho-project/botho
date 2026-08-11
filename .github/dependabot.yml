@@ -128,6 +128,8 @@ updates:
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "babel-preset-expo"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "jest-expo"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "eslint-config-expo"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "react-native*"
