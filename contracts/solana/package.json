@@ -20,7 +20,7 @@
     "@types/bn.js": "^5.1.0",
     "@types/chai": "^4.3.0",
     "@types/mocha": "^10.0.0",
-    "chai": "^4.3.4",
+    "chai": "^6.2.2",
     "mocha": "^11.8.0",
     "prettier": "^3.9.6",
     "ts-mocha": "^11.1.0",
