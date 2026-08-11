@@ -1135,7 +1135,7 @@ fn compute_pseudo_output_blindings<CSPRNG: RngCore + CryptoRng>(
                         // except this one.
                         sum_of_output_blindings - running_sum
                     } else {
-                        let random = Scalar::random(rng);
+                        let random = bth_crypto_ring_signature::compat::random_scalar(rng);
                         running_sum += random;
                         random
                     }
@@ -1240,7 +1240,7 @@ mod rct_bulletproofs_tests {
                     let generator = generator_cache.get(tx_prefix.fee_token_id.into());
                     let commitment = {
                         let value = rng.next_u64();
-                        let blinding = Scalar::random(rng);
+                        let blinding = bth_crypto_ring_signature::compat::random_scalar(rng);
                         CompressedCommitment::new(value, blinding, generator)
                     };
                     ring_members.push(ReducedTxOut {
@@ -1253,7 +1253,7 @@ mod rct_bulletproofs_tests {
                 let onetime_private_key = RistrettoPrivate::from_random(rng);
 
                 let value = rng.next_u64();
-                let blinding = Scalar::random(rng);
+                let blinding = bth_crypto_ring_signature::compat::random_scalar(rng);
 
                 let token_id = TokenId::from(token_ids[i % token_ids.len()]);
                 let generator = generator_cache.get(token_id);
@@ -1293,7 +1293,7 @@ mod rct_bulletproofs_tests {
             let output_secrets: Vec<_> = rings
                 .iter()
                 .map(|ring| {
-                    let blinding = Scalar::random(rng);
+                    let blinding = bth_crypto_ring_signature::compat::random_scalar(rng);
                     OutputSecret {
                         amount: ring.input_secret.amount,
                         blinding,
@@ -1578,7 +1578,7 @@ mod rct_bulletproofs_tests {
                 let values = [13; 6];
                 let blindings: Vec<Scalar> = values
                     .iter()
-                    .map(|_value| Scalar::random(&mut rng))
+                    .map(|_value| bth_crypto_ring_signature::compat::random_scalar(&mut rng))
                     .collect();
                 let (range_proof, _commitments) =
                     generate_range_proofs(&values, &blindings, &params.generator(), &mut rng).unwrap();
@@ -1617,7 +1617,7 @@ mod rct_bulletproofs_tests {
                 let values = [13; 6];
                 let blindings: Vec<Scalar> = values
                     .iter()
-                    .map(|_value| Scalar::random(&mut rng))
+                    .map(|_value| bth_crypto_ring_signature::compat::random_scalar(&mut rng))
                     .collect();
                 let (range_proof, _commitments) =
                     generate_range_proofs(&values, &blindings, &params.generator(), &mut rng).unwrap();

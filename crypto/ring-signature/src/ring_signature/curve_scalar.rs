@@ -49,7 +49,7 @@ impl CurveScalar {
 impl FromRandom for CurveScalar {
     fn from_random<R: CryptoRng + RngCore>(csprng: &mut R) -> Self {
         Self {
-            scalar: Scalar::random(csprng),
+            scalar: crate::compat::random_scalar(csprng),
         }
     }
 }

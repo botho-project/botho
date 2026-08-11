@@ -182,12 +182,12 @@ impl Clsag {
             alloc::vec![CurveScalar::from(Scalar::ZERO); ring_size];
         for i in 0..ring_size {
             if i != real_index {
-                responses[i] = CurveScalar::from(Scalar::random(rng));
+                responses[i] = CurveScalar::from(crate::compat::random_scalar(rng));
             }
         }
 
         // Random nonce for the real signer
-        let alpha = Scalar::random(rng);
+        let alpha = crate::compat::random_scalar(rng);
 
         // Compute initial L and R at real_index
         // L = alpha * G
@@ -350,7 +350,7 @@ fn compute_aggregation_coefficients(
     }
     hasher_p.update(key_image.as_bytes());
     hasher_p.update(commitment_key_image.as_bytes());
-    let mu_P = Scalar::from_hash(hasher_p);
+    let mu_P = crate::compat::scalar_from_hash(hasher_p);
 
     // mu_C = H("bth_clsag_agg_c" || ring || I || D)
     let mut hasher_c = Blake2b512::new();
@@ -361,7 +361,7 @@ fn compute_aggregation_coefficients(
     }
     hasher_c.update(key_image.as_bytes());
     hasher_c.update(commitment_key_image.as_bytes());
-    let mu_C = Scalar::from_hash(hasher_c);
+    let mu_C = crate::compat::scalar_from_hash(hasher_c);
 
     (mu_P, mu_C)
 }
@@ -381,7 +381,7 @@ fn compute_round_hash(
     hasher.update(commitment_key_image.as_bytes());
     hasher.update(L.compress().as_bytes());
     hasher.update(R.compress().as_bytes());
-    Scalar::from_hash(hasher)
+    crate::compat::scalar_from_hash(hasher)
 }
 
 #[cfg(test)]
@@ -423,7 +423,7 @@ mod clsag_tests {
                 let target_key = CompressedRistrettoPublic::from_random(rng);
                 let commitment = {
                     let value = rng.next_u64();
-                    let blinding = Scalar::random(rng);
+                    let blinding = crate::compat::random_scalar(rng);
                     CompressedCommitment::new(value, blinding, &generator)
                 };
                 ring.push(ReducedTxOut {
@@ -436,7 +436,7 @@ mod clsag_tests {
             // The real input
             let onetime_private_key = RistrettoPrivate::from_random(rng);
             let value = rng.next_u64();
-            let blinding = Scalar::random(rng);
+            let blinding = crate::compat::random_scalar(rng);
             let commitment = CompressedCommitment::new(value, blinding, &generator);
 
             let reduced_tx_out = ReducedTxOut {
@@ -487,7 +487,7 @@ mod clsag_tests {
             seed in any::<[u8; 32]>(),
         ) {
             let mut rng: RngType = SeedableRng::from_seed(seed);
-            let pseudo_output_blinding = Scalar::random(&mut rng);
+            let pseudo_output_blinding = crate::compat::random_scalar(&mut rng);
             let params = ClsagTestParams::random(num_mixins, pseudo_output_blinding, &mut rng);
 
             let signature = params.sign(&mut rng).unwrap();
@@ -508,7 +508,7 @@ mod clsag_tests {
             seed in any::<[u8; 32]>(),
         ) {
             let mut rng: RngType = SeedableRng::from_seed(seed);
-            let pseudo_output_blinding = Scalar::random(&mut rng);
+            let pseudo_output_blinding = crate::compat::random_scalar(&mut rng);
             let params = ClsagTestParams::random(num_mixins, pseudo_output_blinding, &mut rng);
 
             let signature = params.sign(&mut rng).unwrap();
@@ -522,7 +522,7 @@ mod clsag_tests {
             seed in any::<[u8; 32]>(),
         ) {
             let mut rng: RngType = SeedableRng::from_seed(seed);
-            let pseudo_output_blinding = Scalar::random(&mut rng);
+            let pseudo_output_blinding = crate::compat::random_scalar(&mut rng);
             let params = ClsagTestParams::random(num_mixins, pseudo_output_blinding, &mut rng);
 
             let signature = params.sign(&mut rng).unwrap();
@@ -542,7 +542,7 @@ mod clsag_tests {
             seed in any::<[u8; 32]>(),
         ) {
             let mut rng: RngType = SeedableRng::from_seed(seed);
-            let pseudo_output_blinding = Scalar::random(&mut rng);
+            let pseudo_output_blinding = crate::compat::random_scalar(&mut rng);
             let params = ClsagTestParams::random(num_mixins, pseudo_output_blinding, &mut rng);
 
             let signature = params.sign(&mut rng).unwrap();
@@ -568,7 +568,7 @@ mod clsag_tests {
             seed in any::<[u8; 32]>(),
         ) {
             let mut rng: RngType = SeedableRng::from_seed(seed);
-            let pseudo_output_blinding = Scalar::random(&mut rng);
+            let pseudo_output_blinding = crate::compat::random_scalar(&mut rng);
             let params = ClsagTestParams::random(num_mixins, pseudo_output_blinding, &mut rng);
 
             let mut signature = params.sign(&mut rng).unwrap();
@@ -592,7 +592,7 @@ mod clsag_tests {
             seed in any::<[u8; 32]>(),
         ) {
             let mut rng: RngType = SeedableRng::from_seed(seed);
-            let pseudo_output_blinding = Scalar::random(&mut rng);
+            let pseudo_output_blinding = crate::compat::random_scalar(&mut rng);
             let params = ClsagTestParams::random(num_mixins, pseudo_output_blinding, &mut rng);
 
             let signature = params.sign(&mut rng).unwrap();
@@ -616,7 +616,7 @@ mod clsag_tests {
             seed in any::<[u8; 32]>(),
         ) {
             let mut rng: RngType = SeedableRng::from_seed(seed);
-            let pseudo_output_blinding = Scalar::random(&mut rng);
+            let pseudo_output_blinding = crate::compat::random_scalar(&mut rng);
             let params = ClsagTestParams::random(num_mixins, pseudo_output_blinding, &mut rng);
 
             let signature = params.sign(&mut rng).unwrap();
@@ -634,7 +634,7 @@ mod clsag_tests {
     #[test]
     fn test_clsag_value_not_conserved() {
         let mut rng = rand_core::OsRng;
-        let pseudo_output_blinding = Scalar::random(&mut rng);
+        let pseudo_output_blinding = crate::compat::random_scalar(&mut rng);
         let mut params = ClsagTestParams::random(5, pseudo_output_blinding, &mut rng);
 
         // Change the value so it doesn't match
@@ -649,7 +649,7 @@ mod clsag_tests {
     #[test]
     fn test_clsag_index_out_of_bounds() {
         let mut rng = rand_core::OsRng;
-        let pseudo_output_blinding = Scalar::random(&mut rng);
+        let pseudo_output_blinding = crate::compat::random_scalar(&mut rng);
         let mut params = ClsagTestParams::random(5, pseudo_output_blinding, &mut rng);
 
         params.real_index = 100; // Out of bounds

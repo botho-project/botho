@@ -33,14 +33,14 @@ pub fn cluster_generator(cluster_id: ClusterId) -> RistrettoPoint {
     let mut hasher = Sha512::new();
     hasher.update(CLUSTER_GENERATOR_DOMAIN_TAG);
     hasher.update(cluster_id.0.to_le_bytes());
-    RistrettoPoint::from_hash(hasher)
+    crate::crypto::dalek_compat::point_from_hash(hasher)
 }
 
 /// Derive the generator for total mass commitments.
 pub fn total_mass_generator() -> RistrettoPoint {
     let mut hasher = Sha512::new();
     hasher.update(TOTAL_MASS_GENERATOR_DOMAIN_TAG);
-    RistrettoPoint::from_hash(hasher)
+    crate::crypto::dalek_compat::point_from_hash(hasher)
 }
 
 /// A Pedersen commitment to tag mass for a single cluster.
@@ -213,7 +213,7 @@ impl CommittedTagVectorSecret {
             // We keep mass in millionths for precision
             let mass = (value as u128 * weight as u128 / TAG_WEIGHT_SCALE as u128) as u64;
 
-            let blinding = Scalar::random(rng);
+            let blinding = crate::crypto::dalek_compat::random_scalar(rng);
 
             entries.push(TagMassSecret {
                 cluster_id,
@@ -256,7 +256,7 @@ impl CommittedTagVectorSecret {
                 TagMassSecret {
                     cluster_id: e.cluster_id,
                     mass: decayed_mass,
-                    blinding: Scalar::random(rng),
+                    blinding: crate::crypto::dalek_compat::random_scalar(rng),
                 }
             })
             .collect();
@@ -267,7 +267,7 @@ impl CommittedTagVectorSecret {
         Self {
             entries,
             total_mass,
-            total_blinding: Scalar::random(rng),
+            total_blinding: crate::crypto::dalek_compat::random_scalar(rng),
         }
     }
 
@@ -291,7 +291,7 @@ impl CommittedTagVectorSecret {
             .map(|(cluster_id, mass)| TagMassSecret {
                 cluster_id,
                 mass,
-                blinding: Scalar::random(rng),
+                blinding: crate::crypto::dalek_compat::random_scalar(rng),
             })
             .collect();
 
@@ -300,7 +300,7 @@ impl CommittedTagVectorSecret {
         Self {
             entries,
             total_mass,
-            total_blinding: Scalar::random(rng),
+            total_blinding: crate::crypto::dalek_compat::random_scalar(rng),
         }
     }
 }
@@ -753,7 +753,7 @@ impl CommittedFeeProver {
 
         for (i, challenge) in challenges.iter_mut().enumerate() {
             if i != real_segment {
-                *challenge = Scalar::random(rng);
+                *challenge = crate::crypto::dalek_compat::random_scalar(rng);
                 simulated_challenges_sum += *challenge;
             }
         }
@@ -802,8 +802,8 @@ impl CommittedFeeProver {
             .saturating_sub(self.wealth as u128 + 1)
             .min(u64::MAX as u128) as u64;
 
-        let lower_blinding = Scalar::random(rng);
-        let upper_blinding = Scalar::random(rng);
+        let lower_blinding = crate::crypto::dalek_compat::random_scalar(rng);
+        let upper_blinding = crate::crypto::dalek_compat::random_scalar(rng);
 
         let lower_commitment = (Scalar::from(lower_diff) * g + lower_blinding * g).compress();
         let upper_commitment = (Scalar::from(upper_diff) * g + upper_blinding * g).compress();
@@ -827,7 +827,7 @@ impl CommittedFeeProver {
         let required = (self.base_fee as u128 * expected_factor as u128) as u64;
         let excess = self.fee_paid.saturating_sub(required);
 
-        let excess_blinding = Scalar::random(rng);
+        let excess_blinding = crate::crypto::dalek_compat::random_scalar(rng);
         let excess_commitment = (Scalar::from(excess) * g + excess_blinding * g).compress();
 
         let linear_proof = LinearRelationProof {
@@ -852,19 +852,19 @@ impl CommittedFeeProver {
         // the OR-composition verification equation
         let g = blinding_generator();
 
-        let lower_blinding = Scalar::random(rng);
-        let upper_blinding = Scalar::random(rng);
+        let lower_blinding = crate::crypto::dalek_compat::random_scalar(rng);
+        let upper_blinding = crate::crypto::dalek_compat::random_scalar(rng);
 
         let range_proof = RangeProof {
-            lower_commitment: (Scalar::random(rng) * g).compress(),
-            upper_commitment: (Scalar::random(rng) * g).compress(),
+            lower_commitment: (crate::crypto::dalek_compat::random_scalar(rng) * g).compress(),
+            upper_commitment: (crate::crypto::dalek_compat::random_scalar(rng) * g).compress(),
             lower_proof: SchnorrProof::prove(lower_blinding, b"range_lower", rng),
             upper_proof: SchnorrProof::prove(upper_blinding, b"range_upper", rng),
         };
 
-        let excess_blinding = Scalar::random(rng);
+        let excess_blinding = crate::crypto::dalek_compat::random_scalar(rng);
         let linear_proof = LinearRelationProof {
-            excess_commitment: (Scalar::random(rng) * g).compress(),
+            excess_commitment: (crate::crypto::dalek_compat::random_scalar(rng) * g).compress(),
             excess_proof: SchnorrProof::prove(excess_blinding, b"linear_excess", rng),
         };
 
@@ -886,7 +886,7 @@ impl CommittedFeeProver {
             hasher.update(proof.linear_proof.excess_commitment.as_bytes());
         }
 
-        Scalar::from_hash(hasher)
+        crate::crypto::dalek_compat::scalar_from_hash(hasher)
     }
 }
 
@@ -975,7 +975,7 @@ impl CommittedFeeVerifier {
             hasher.update(segment_proof.linear_proof.excess_commitment.as_bytes());
         }
 
-        Scalar::from_hash(hasher)
+        crate::crypto::dalek_compat::scalar_from_hash(hasher)
     }
 }
 
@@ -1139,7 +1139,7 @@ impl SchnorrProof {
         let p = x * g;
 
         // Random nonce
-        let k = Scalar::random(rng);
+        let k = crate::crypto::dalek_compat::random_scalar(rng);
         let r = k * g;
 
         // Challenge (Fiat-Shamir)
@@ -1187,7 +1187,7 @@ impl SchnorrProof {
         hasher.update(context);
         hasher.update(r.as_bytes());
         hasher.update(p.as_bytes());
-        Scalar::from_hash(hasher)
+        crate::crypto::dalek_compat::scalar_from_hash(hasher)
     }
 }
 
@@ -1205,14 +1205,14 @@ const FEE_GENERATOR_DOMAIN_TAG: &[u8] = b"mc_zk_fee_fee_generator";
 pub fn wealth_generator() -> RistrettoPoint {
     let mut hasher = Sha512::new();
     hasher.update(WEALTH_GENERATOR_DOMAIN_TAG);
-    RistrettoPoint::from_hash(hasher)
+    crate::crypto::dalek_compat::point_from_hash(hasher)
 }
 
 /// Derive the generator for fee commitments in fee proofs.
 pub fn fee_generator() -> RistrettoPoint {
     let mut hasher = Sha512::new();
     hasher.update(FEE_GENERATOR_DOMAIN_TAG);
-    RistrettoPoint::from_hash(hasher)
+    crate::crypto::dalek_compat::point_from_hash(hasher)
 }
 
 #[cfg(test)]
@@ -1237,7 +1237,7 @@ mod tests {
     fn test_committed_tag_mass_creation() {
         let cluster = ClusterId(42);
         let mass = 500_000u64; // 50% weight on 1 unit value
-        let blinding = Scalar::random(&mut OsRng);
+        let blinding = crate::crypto::dalek_compat::random_scalar(&mut OsRng);
 
         let committed = CommittedTagMass::new(cluster, mass, blinding);
         assert_eq!(committed.cluster_id, cluster);
@@ -1249,8 +1249,8 @@ mod tests {
         let cluster = ClusterId(1);
         let mass1 = 300_000u64;
         let mass2 = 200_000u64;
-        let blinding1 = Scalar::random(&mut OsRng);
-        let blinding2 = Scalar::random(&mut OsRng);
+        let blinding1 = crate::crypto::dalek_compat::random_scalar(&mut OsRng);
+        let blinding2 = crate::crypto::dalek_compat::random_scalar(&mut OsRng);
 
         let c1 = CommittedTagMass::new(cluster, mass1, blinding1);
         let c2 = CommittedTagMass::new(cluster, mass2, blinding2);
@@ -1297,7 +1297,7 @@ mod tests {
 
     #[test]
     fn test_schnorr_proof() {
-        let x = Scalar::random(&mut OsRng);
+        let x = crate::crypto::dalek_compat::random_scalar(&mut OsRng);
         let p = (x * blinding_generator()).compress();
 
         let proof = SchnorrProof::prove(x, b"test_context", &mut OsRng);
@@ -1307,7 +1307,9 @@ mod tests {
         assert!(!proof.verify(&p, b"wrong_context"));
 
         // Wrong point should fail
-        let wrong_p = (Scalar::random(&mut OsRng) * blinding_generator()).compress();
+        let wrong_p = (crate::crypto::dalek_compat::random_scalar(&mut OsRng)
+            * blinding_generator())
+        .compress();
         assert!(!proof.verify(&wrong_p, b"test_context"));
     }
 
@@ -1430,7 +1432,7 @@ mod tests {
 
     #[test]
     fn test_schnorr_proof_size() {
-        let x = Scalar::random(&mut OsRng);
+        let x = crate::crypto::dalek_compat::random_scalar(&mut OsRng);
         let proof = SchnorrProof::prove(x, b"test", &mut OsRng);
         let bytes = proof.to_bytes();
 

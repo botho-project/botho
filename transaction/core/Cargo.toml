@@ -17,6 +17,7 @@ aes = { workspace = true }
 bulletproofs-og = { workspace = true }
 ctr = { workspace = true }
 curve25519-dalek = { workspace = true }
+curve25519-dalek-v4 = { workspace = true }
 displaydoc = { workspace = true }
 generic-array = { workspace = true, features = ["serde", "more_lengths"] }
 hex_fmt = { workspace = true }

@@ -33,16 +33,13 @@ updates:
       # bumps are guaranteed-red (two trait-incompatible majors in-tree) and
       # each family upgrade is a deliberate migration through
       # consensus-critical code, tracked as an issue:
-      # dalek-5 family (#1153): CLSAG / key code
-      - dependency-name: "ed25519"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "ed25519-dalek"
-        update-types: ["version-update:semver-major"]
+      # The dalek-5 family migrated in #1153, but the workspace keeps a
+      # deliberate curve25519-dalek 4 pin (`curve25519-dalek-v4`) for the
+      # bulletproofs-og interop boundary in transaction/core/src/range_proofs.
+      # A major bump of that pin is guaranteed-red until a bulletproofs
+      # release supports curve25519-dalek 5; remove this ignore when the
+      # v4 pin is retired.
       - dependency-name: "curve25519-dalek"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "signature"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "x25519-dalek"
         update-types: ["version-update:semver-major"]
       # rand family (#1154): deterministic key derivation. Pre-1.0, so 0.x
       # "minors" are the breaking axis — ignore those too; patches flow.

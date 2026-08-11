@@ -18,6 +18,8 @@ mod amount;
 mod domain_separators;
 mod ring_signature;
 
+pub mod compat;
+
 pub mod onetime_keys;
 #[cfg(feature = "pq")]
 pub mod pq_onetime_keys;

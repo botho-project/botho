@@ -142,7 +142,7 @@ fn create_test_ring(
         let public_key = CompressedRistrettoPublic::from_random(rng);
         let target_key = CompressedRistrettoPublic::from_random(rng);
         let mixin_value = rng.next_u64();
-        let mixin_blinding = Scalar::random(rng);
+        let mixin_blinding = bth_crypto_ring_signature::compat::random_scalar(rng);
         let commitment = CompressedCommitment::new(mixin_value, mixin_blinding, &generator);
         ring.push(ReducedTxOut {
             public_key,
@@ -154,7 +154,7 @@ fn create_test_ring(
     // Create the real input
     let onetime_private_key = RistrettoPrivate::from_random(rng);
     let value = rng.next_u64();
-    let blinding = Scalar::random(rng);
+    let blinding = bth_crypto_ring_signature::compat::random_scalar(rng);
     let commitment = CompressedCommitment::new(value, blinding, &generator);
 
     let reduced_tx_out = ReducedTxOut {
@@ -166,7 +166,7 @@ fn create_test_ring(
     let real_index = rng.next_u64() as usize % (num_mixins + 1);
     ring.insert(real_index, reduced_tx_out);
 
-    let pseudo_output_blinding = Scalar::random(rng);
+    let pseudo_output_blinding = bth_crypto_ring_signature::compat::random_scalar(rng);
 
     (
         ring,

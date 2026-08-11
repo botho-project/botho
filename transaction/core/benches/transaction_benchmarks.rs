@@ -66,7 +66,7 @@ impl SignatureParams {
                 let target_key = CompressedRistrettoPublic::from_random(&mut rng);
                 let commitment = {
                     let value = rng.next_u64();
-                    let blinding = Scalar::random(&mut rng);
+                    let blinding = bth_crypto_ring_signature::compat::random_scalar(&mut rng);
                     CompressedCommitment::new(value, blinding, &generator)
                 };
                 ring_members.push(ReducedTxOut {
@@ -79,7 +79,7 @@ impl SignatureParams {
             // The real input
             let onetime_private_key = RistrettoPrivate::from_random(&mut rng);
             let value = rng.next_u64();
-            let blinding = Scalar::random(&mut rng);
+            let blinding = bth_crypto_ring_signature::compat::random_scalar(&mut rng);
             let commitment = CompressedCommitment::new(value, blinding, &generator);
 
             let reduced_tx_out = ReducedTxOut {
@@ -112,7 +112,7 @@ impl SignatureParams {
         let output_secrets: Vec<_> = rings
             .iter()
             .map(|ring| {
-                let blinding = Scalar::random(&mut rng);
+                let blinding = bth_crypto_ring_signature::compat::random_scalar(&mut rng);
                 OutputSecret {
                     amount: ring.input_secret.amount,
                     blinding,
@@ -184,7 +184,9 @@ fn bench_range_proof_generate(c: &mut Criterion) {
         let generator = generators(0);
 
         let values: Vec<u64> = (0..num_outputs).map(|_| rng.next_u64()).collect();
-        let blindings: Vec<Scalar> = (0..num_outputs).map(|_| Scalar::random(&mut rng)).collect();
+        let blindings: Vec<Scalar> = (0..num_outputs)
+            .map(|_| bth_crypto_ring_signature::compat::random_scalar(&mut rng))
+            .collect();
 
         group.bench_with_input(
             BenchmarkId::new("num_outputs", num_outputs),
@@ -212,7 +214,9 @@ fn bench_range_proof_verify(c: &mut Criterion) {
         let generator = generators(0);
 
         let values: Vec<u64> = (0..num_outputs).map(|_| rng.next_u64()).collect();
-        let blindings: Vec<Scalar> = (0..num_outputs).map(|_| Scalar::random(&mut rng)).collect();
+        let blindings: Vec<Scalar> = (0..num_outputs)
+            .map(|_| bth_crypto_ring_signature::compat::random_scalar(&mut rng))
+            .collect();
 
         let (proof, commitments) =
             generate_range_proofs(&values, &blindings, &generator, &mut rng).unwrap();

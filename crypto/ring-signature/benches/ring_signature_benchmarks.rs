@@ -34,7 +34,7 @@ impl TestRingParams {
 
         // Use the generators function with a deterministic index
         let generator = generators(seed);
-        let pseudo_output_blinding = Scalar::random(&mut rng);
+        let pseudo_output_blinding = bth_crypto_ring_signature::compat::random_scalar(&mut rng);
 
         // Create mixin ring members
         let mut ring: Vec<ReducedTxOut> = Vec::with_capacity(num_mixins + 1);
@@ -43,7 +43,7 @@ impl TestRingParams {
             let target_key = CompressedRistrettoPublic::from_random(&mut rng);
             let commitment = {
                 let value = rng.next_u64();
-                let blinding = Scalar::random(&mut rng);
+                let blinding = bth_crypto_ring_signature::compat::random_scalar(&mut rng);
                 CompressedCommitment::new(value, blinding, &generator)
             };
             ring.push(ReducedTxOut {
@@ -56,7 +56,7 @@ impl TestRingParams {
         // The real input
         let onetime_private_key = RistrettoPrivate::from_random(&mut rng);
         let value = rng.next_u64();
-        let blinding = Scalar::random(&mut rng);
+        let blinding = bth_crypto_ring_signature::compat::random_scalar(&mut rng);
         let commitment = CompressedCommitment::new(value, blinding, &generator);
 
         let real_index = num_mixins; // Put real input at the end

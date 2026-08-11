@@ -121,7 +121,7 @@ chacha20poly1305 = { workspace = true }
 # Argon2id + ChaCha20-Poly1305 to encrypt the private key at rest under a
 # mandatory passphrase (the same at-rest recipe botho-wallet uses); blake2 for
 # the shared `blake2b-256(pubkey)[..8]` signerKeyId fingerprint.
-ed25519-dalek = { workspace = true, features = ["std", "rand_core"] }
+ed25519-dalek = { workspace = true }
 blake2 = { workspace = true, features = ["std"] }
 digest = { workspace = true }
 argon2 = "0.5"

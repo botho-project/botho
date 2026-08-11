@@ -12,6 +12,14 @@ use alloc::vec::Vec;
 use bth_crypto_ring_signature::PedersenGens;
 use bulletproofs_og::{BulletproofGens, PedersenGens as BPPedersenGens, RangeProof};
 use curve25519_dalek::{ristretto::CompressedRistretto, scalar::Scalar};
+// bulletproofs-og is still built against curve25519-dalek 4, so scalars,
+// compressed points, and generators must be converted across the dalek 4/5
+// boundary. All conversions round-trip the canonical 32-byte encodings, so
+// they are bit-exact (proofs and commitments are unchanged).
+use curve25519_dalek_v4::{
+    ristretto::{CompressedRistretto as CompressedRistrettoV4, RistrettoPoint as RistrettoPointV4},
+    scalar::Scalar as ScalarV4,
+};
 use merlin::Transcript;
 use rand_core::{CryptoRng, RngCore};
 
@@ -52,10 +60,13 @@ pub fn generate_range_proofs<T: RngCore + CryptoRng>(
     // Aggregated rangeproofs operate on sets of `m` values, where `m` must be a
     // power of 2. If the number of inputs is not a power of 2, pad them.
     let values_padded: Vec<u64> = resize_slice_to_pow2::<u64>(values)?;
-    let blindings_padded: Vec<Scalar> = resize_slice_to_pow2::<Scalar>(blindings)?;
+    let blindings_padded: Vec<ScalarV4> = resize_slice_to_pow2::<Scalar>(blindings)?
+        .iter()
+        .map(scalar_to_v4)
+        .collect();
 
     // Create a 64-bit RangeProof and corresponding commitments.
-    RangeProof::prove_multiple_with_rng(
+    let (proof, commitments) = RangeProof::prove_multiple_with_rng(
         &BP_GENERATORS,
         &convert_gens(pedersen_generators),
         &mut Transcript::new(BULLETPROOF_DOMAIN_TAG.as_ref()),
@@ -63,8 +74,12 @@ pub fn generate_range_proofs<T: RngCore + CryptoRng>(
         &blindings_padded,
         64,
         rng,
-    )
-    .map_err(Error::from)
+    )?;
+    let commitments = commitments
+        .into_iter()
+        .map(|c| CompressedRistretto(c.to_bytes()))
+        .collect();
+    Ok((proof, commitments))
 }
 
 /// Verifies an aggregated 64-bit RangeProof for the given value commitments.
@@ -83,7 +98,11 @@ pub fn check_range_proofs<T: RngCore + CryptoRng>(
     rng: &mut T,
 ) -> Result<(), Error> {
     // The length of `commitments` must be a power of 2. If not, resize it.
-    let resized_commitments = resize_slice_to_pow2::<CompressedRistretto>(commitments)?;
+    let resized_commitments: Vec<CompressedRistrettoV4> =
+        resize_slice_to_pow2::<CompressedRistretto>(commitments)?
+            .iter()
+            .map(|c| CompressedRistrettoV4(c.to_bytes()))
+            .collect();
     range_proof
         .verify_multiple_with_rng(
             &BP_GENERATORS,
@@ -120,12 +139,29 @@ fn resize_slice_to_pow2<T: Clone>(slice: &[T]) -> Result<Vec<T>, Error> {
 
 /// Convert from the bth_crypto_ring_signature::PedersenGens to BPPedersenGens.
 /// These types are identical, but we need a version of it in the lower-level
-/// crate to break dependency on the bulletproofs crate.
+/// crate to break dependency on the bulletproofs crate. The base points cross
+/// the dalek 4/5 boundary through their canonical compressed encodings.
 fn convert_gens(src: &PedersenGens) -> BPPedersenGens {
     BPPedersenGens {
-        B: src.B,
-        B_blinding: src.B_blinding,
+        B: point_to_v4(&src.B),
+        B_blinding: point_to_v4(&src.B_blinding),
     }
+}
+
+/// Convert a (dalek 5) `RistrettoPoint` into the dalek 4 equivalent that
+/// bulletproofs-og expects, via the canonical compressed encoding.
+fn point_to_v4(src: &curve25519_dalek::ristretto::RistrettoPoint) -> RistrettoPointV4 {
+    CompressedRistrettoV4(src.compress().to_bytes())
+        .decompress()
+        .expect("compressing a valid point always yields a decompressible encoding")
+}
+
+/// Convert a (dalek 5) `Scalar` into the dalek 4 equivalent that
+/// bulletproofs-og expects. The encoding of a `Scalar` is always canonical,
+/// so this conversion is infallible and bit-exact.
+fn scalar_to_v4(src: &Scalar) -> ScalarV4 {
+    Option::from(ScalarV4::from_canonical_bytes(src.to_bytes()))
+        .expect("Scalar encodings are always canonical")
 }
 
 /// Tests for the range_proofs module.
@@ -151,7 +187,10 @@ pub mod tests {
     fn test_pow2_number_of_inputs() {
         let mut rng = get_seeded_rng();
         let vals: Vec<u64> = (0..2).map(|_| rng.next_u64()).collect();
-        let blindings: Vec<Scalar> = vals.iter().map(|_| Scalar::random(&mut rng)).collect();
+        let blindings: Vec<Scalar> = vals
+            .iter()
+            .map(|_| bth_crypto_ring_signature::compat::random_scalar(&mut rng))
+            .collect();
         generate_and_check(vals, blindings);
     }
 
@@ -159,7 +198,10 @@ pub mod tests {
     fn test_not_pow2_number_of_inputs() {
         let mut rng = get_seeded_rng();
         let vals: Vec<u64> = (0..9).map(|_| rng.next_u64()).collect();
-        let blindings: Vec<Scalar> = vals.iter().map(|_| Scalar::random(&mut rng)).collect();
+        let blindings: Vec<Scalar> = vals
+            .iter()
+            .map(|_| bth_crypto_ring_signature::compat::random_scalar(&mut rng))
+            .collect();
         generate_and_check(vals, blindings);
     }
 
@@ -171,13 +213,15 @@ pub mod tests {
 
         let num_values: usize = 4;
         let values: Vec<u64> = (0..num_values).map(|_| rng.next_u64()).collect();
-        let blindings: Vec<Scalar> = (0..num_values).map(|_| Scalar::random(&mut rng)).collect();
+        let blindings: Vec<Scalar> = (0..num_values)
+            .map(|_| bth_crypto_ring_signature::compat::random_scalar(&mut rng))
+            .collect();
         let (proof, commitments) =
             generate_range_proofs(&values, &blindings, &generators(0), &mut rng).unwrap();
 
         // Modify a commitment.
         let mut wrong_commitments = commitments;
-        wrong_commitments[0] = RistrettoPoint::random(&mut rng).compress();
+        wrong_commitments[0] = bth_crypto_ring_signature::compat::random_point(&mut rng).compress();
 
         match check_range_proofs(&proof, &wrong_commitments, &generators(0), &mut rng) {
             Ok(_) => panic!(),

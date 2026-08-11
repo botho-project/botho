@@ -86,7 +86,7 @@ fn hash_to_scalar(point: RistrettoPoint) -> Scalar {
     let mut hasher = Blake2b512::new();
     hasher.update(HASH_TO_SCALAR_DOMAIN_TAG);
     hasher.update(point.compress().as_bytes());
-    Scalar::from_hash(hasher)
+    crate::compat::scalar_from_hash(hasher)
 }
 
 /// Creates target_key `Hs( r * C ) * G + D` for an output sent to
@@ -254,7 +254,7 @@ fn hybrid_stealth_scalar(
     hasher.update(dh_secret.compress().as_bytes());
     hasher.update(kem_shared_secret);
     hasher.update(output_index.to_le_bytes());
-    Scalar::from_hash(hasher)
+    crate::compat::scalar_from_hash(hasher)
 }
 
 /// Creates the hybrid `target_key = Hs(r * C || K || i) * G + D` for an output
@@ -419,8 +419,8 @@ mod tests {
     // Should return `r * D`.
     fn test_create_tx_public_key() {
         run_with_several_seeds(|mut rng| {
-            let r = Scalar::random(&mut rng);
-            let D = RistrettoPoint::random(&mut rng);
+            let r = crate::compat::random_scalar(&mut rng);
+            let D = crate::compat::random_point(&mut rng);
 
             let expected = RistrettoPublic::from(r * D);
 
@@ -691,7 +691,7 @@ mod tests {
     // The hybrid scalar is deterministic in its inputs.
     fn test_hybrid_scalar_deterministic() {
         run_with_several_seeds(|mut rng| {
-            let dh = RistrettoPoint::random(&mut rng);
+            let dh = crate::compat::random_point(&mut rng);
             let kem_secret = [0x44u8; KEM_SHARED_SECRET_LEN];
             let s1 = hybrid_stealth_scalar(dh, &kem_secret, 7);
             let s2 = hybrid_stealth_scalar(dh, &kem_secret, 7);
