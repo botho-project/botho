@@ -144,7 +144,15 @@ impl OperatorKeyFile {
 
         // Fresh Ed25519 keypair. `to_bytes()` is the 32-byte secret scalar;
         // wrap it in Zeroizing so it is wiped from memory after encryption.
-        let signing_key = SigningKey::generate(&mut rand::thread_rng());
+        // (ed25519-dalek 3's `generate` requires rand_core 0.10 traits; draw
+        // the 32 secret bytes directly — exactly what `generate` does — to
+        // stay on the workspace rand 0.8 stack until #1154.)
+        let signing_key = {
+            use rand::RngCore as _;
+            let mut secret = [0u8; 32];
+            rand::thread_rng().fill_bytes(&mut secret);
+            SigningKey::from_bytes(&secret)
+        };
         let secret = Zeroizing::new(signing_key.to_bytes());
         let public_key = signing_key.verifying_key().to_bytes();
 

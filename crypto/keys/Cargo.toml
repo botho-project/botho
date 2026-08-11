@@ -39,11 +39,13 @@ default = [
 [dependencies]
 
 base64 = { workspace = true }
-curve25519-dalek = { workspace = true, features = ["rand_core"] }
+curve25519-dalek = { workspace = true }
 digest = { workspace = true }
+# digest 0.11 bridge for ed25519-dalek 3's prehashed (Ed25519ph) API only.
+digest-v011 = { workspace = true }
 displaydoc = { workspace = true }
 ed25519 = { workspace = true }
-ed25519-dalek = { workspace = true, features = ["rand_core", "digest"] }
+ed25519-dalek = { workspace = true, features = ["digest"] }
 hex = { workspace = true }
 hex_fmt = { workspace = true }
 
@@ -53,11 +55,14 @@ bth-util-from-random = { workspace = true }
 bth-util-repr-bytes = { workspace = true }
 bth-util-serial = { workspace = true, optional = true }
 rand_core = { workspace = true }
+# rand_core 0.10 bridge for x25519-dalek 3 secret generation only (#1154
+# tracks the full rand-family migration).
+rand-core-v010 = { workspace = true }
 rand_hc = { workspace = true }
 schnorrkel-og = { workspace = true }
 serde = { workspace = true, features = ["derive"], optional = true }
 sha2 = { workspace = true }
-signature = { workspace = true, features = ["digest"] }
+signature = { workspace = true }
 static_assertions = { workspace = true }
 subtle = { workspace = true }
 x25519-dalek = { workspace = true, features = ["static_secrets"] }

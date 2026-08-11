@@ -17,6 +17,39 @@ use alloc::vec::Vec;
 #[cfg(feature = "serde")]
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
+/// Sign the given prehashed message [`Digest`], returning a signature.
+///
+/// This is the `signature` 2.x shape of `DigestSigner`, kept locally because
+/// `signature` 3 changed `DigestSigner` to a closure-based API generic over
+/// `digest` 0.11, while this workspace's hash stack remains on `digest` 0.10.
+/// Implementations bridge into the dalek 3.x prehashed APIs internally; the
+/// produced signatures are bit-identical to the `signature` 2.x era.
+pub trait DigestSigner<D: Digest, S> {
+    /// Sign the given prehashed message [`Digest`], returning a signature.
+    ///
+    /// # Panics
+    ///
+    /// Panics in the event of a signing error.
+    fn sign_digest(&self, digest: D) -> S {
+        self.try_sign_digest(digest)
+            .expect("signature operation failed")
+    }
+
+    /// Attempt to sign the given prehashed message [`Digest`], returning a
+    /// digital signature on success, or an error if something went wrong.
+    fn try_sign_digest(&self, digest: D) -> Result<S, signature::Error>;
+}
+
+/// Verify the provided signature for the given prehashed message [`Digest`]
+/// is authentic.
+///
+/// This is the `signature` 2.x shape of `DigestVerifier`, kept locally for the
+/// same reason as [`DigestSigner`] above.
+pub trait DigestVerifier<D: Digest, S> {
+    /// Verify the signature against the given [`Digest`] output.
+    fn verify_digest(&self, digest: D, signature: &S) -> Result<(), signature::Error>;
+}
+
 /// Marker trait for serialization when `serde` feature is enabled
 #[cfg(feature = "serde")]
 pub trait MaybeSerde: DeserializeOwned + Serialize {}

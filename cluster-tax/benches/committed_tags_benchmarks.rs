@@ -44,6 +44,14 @@ use curve25519_dalek::scalar::Scalar;
 use rand_core::OsRng;
 use std::collections::HashMap;
 
+/// Byte-identical replacement for curve25519-dalek 4's `Scalar::random`
+/// (dalek 5's version requires rand_core 0.10 traits; see #1154).
+fn random_scalar<R: rand_core::RngCore + rand_core::CryptoRng>(rng: &mut R) -> Scalar {
+    let mut bytes = [0u8; 64];
+    rng.fill_bytes(&mut bytes);
+    Scalar::from_bytes_mod_order_wide(&bytes)
+}
+
 /// Create a test secret for a given number of clusters.
 fn create_test_secret(num_clusters: usize, value: u64) -> CommittedTagVectorSecret {
     let mut tags = HashMap::new();
@@ -272,7 +280,7 @@ fn bench_commitment_creation(c: &mut Criterion) {
 
     c.bench_function("commitment_create", |b| {
         b.iter(|| {
-            let blinding = Scalar::random(&mut OsRng);
+            let blinding = random_scalar(&mut OsRng);
             black_box(CommittedTagMass::new(cluster, mass, blinding))
         })
     });
@@ -306,7 +314,7 @@ fn bench_vector_creation(c: &mut Criterion) {
 
 /// Benchmark Schnorr proof generation.
 fn bench_schnorr_prove(c: &mut Criterion) {
-    let x = Scalar::random(&mut OsRng);
+    let x = random_scalar(&mut OsRng);
 
     c.bench_function("schnorr_prove", |b| {
         b.iter(|| black_box(SchnorrProof::prove(x, b"test_context", &mut OsRng)))
@@ -315,7 +323,7 @@ fn bench_schnorr_prove(c: &mut Criterion) {
 
 /// Benchmark Schnorr proof verification.
 fn bench_schnorr_verify(c: &mut Criterion) {
-    let x = Scalar::random(&mut OsRng);
+    let x = random_scalar(&mut OsRng);
     let p = (x * blinding_generator()).compress();
     let proof = SchnorrProof::prove(x, b"test_context", &mut OsRng);
 

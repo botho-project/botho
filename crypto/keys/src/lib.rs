@@ -65,8 +65,9 @@ pub use crate::{
         RistrettoPublic, RistrettoSecret, RistrettoSignature,
     },
     traits::{
-        DistinguishedEncoding, Fingerprintable, Kex, KexEphemeralPrivate, KexPrivate, KexPublic,
-        KexReusablePrivate, KexSecret, KeyError, PrivateKey, PublicKey,
+        DigestSigner, DigestVerifier, DistinguishedEncoding, Fingerprintable, Kex,
+        KexEphemeralPrivate, KexPrivate, KexPublic, KexReusablePrivate, KexSecret, KeyError,
+        PrivateKey, PublicKey,
     },
     x25519::{
         X25519EphemeralPrivate, X25519Private, X25519Public, X25519Secret, X25519, X25519_LEN,
@@ -79,8 +80,6 @@ pub(crate) use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
 pub use bth_util_repr_bytes::{typenum::Unsigned, GenericArray, LengthMismatch, ReprBytes};
 pub use digest::Digest;
 pub use schnorrkel_og::SignatureError as SchnorrkelError;
-pub use signature::{
-    DigestSigner, DigestVerifier, Error as SignatureError, SignatureEncoding, Signer, Verifier,
-};
+pub use signature::{Error as SignatureError, SignatureEncoding, Signer, Verifier};
 
 pub use traits::DER_MAX_LEN;

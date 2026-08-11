@@ -38,7 +38,6 @@ use super::{
     entropy_validation::TransactionVersion,
 };
 use crate::{ClusterId, TagWeight};
-use curve25519_dalek::scalar::Scalar;
 
 // TAG_WEIGHT_SCALE is used in tests
 #[cfg(test)]
@@ -260,7 +259,7 @@ impl ExtendedSignatureBuilder {
 
         for entry in &real_secret.entries {
             // New blinding for pseudo-output
-            let pseudo_blinding = Scalar::random(rng);
+            let pseudo_blinding = crate::crypto::dalek_compat::random_scalar(rng);
 
             // Create pseudo commitment
             let pseudo_commitment =
@@ -287,7 +286,7 @@ impl ExtendedSignatureBuilder {
         }
 
         // Create pseudo total commitment
-        let pseudo_total_blinding = Scalar::random(rng);
+        let pseudo_total_blinding = crate::crypto::dalek_compat::random_scalar(rng);
 
         // Note: We could add a total inheritance proof here too, but since we
         // prove each cluster individually and the total is just a sum, it's

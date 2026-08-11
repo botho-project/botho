@@ -25,6 +25,38 @@ use ed25519_dalek::{
 use rand_core::{CryptoRng, RngCore};
 use zeroize::Zeroize;
 
+/// Bridges a workspace (`digest` 0.10) hasher into the `digest` 0.11 `Digest`
+/// trait that ed25519-dalek 3's prehashed (Ed25519ph) API expects.
+///
+/// The wrapper only forwards `update` calls and copies the finalized 64-byte
+/// output, so signatures produced/verified through it are bit-identical to
+/// the ed25519-dalek 2.x era.
+struct DigestCompat<D>(D);
+
+impl<D: Digest<OutputSize = U64>> digest_v011::Update for DigestCompat<D> {
+    fn update(&mut self, data: &[u8]) {
+        Digest::update(&mut self.0, data)
+    }
+}
+
+impl<D: Digest<OutputSize = U64>> digest_v011::OutputSizeUser for DigestCompat<D> {
+    type OutputSize = digest_v011::consts::U64;
+}
+
+impl<D: Digest<OutputSize = U64>> digest_v011::FixedOutput for DigestCompat<D> {
+    fn finalize_into(self, out: &mut digest_v011::Output<Self>) {
+        out.copy_from_slice(self.0.finalize().as_slice())
+    }
+}
+
+impl<D: Digest<OutputSize = U64>> digest_v011::HashMarker for DigestCompat<D> {}
+
+impl<D: Digest<OutputSize = U64>> Default for DigestCompat<D> {
+    fn default() -> Self {
+        Self(D::new())
+    }
+}
+
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
@@ -211,7 +243,7 @@ impl<D: Digest<OutputSize = U64>> DigestVerifier<D, Ed25519Signature> for Ed2551
     fn verify_digest(&self, digest: D, signature: &Ed25519Signature) -> Result<(), SignatureError> {
         let sig = DalekSignature::from(&signature.to_bytes());
         self.0
-            .verify_prehashed(digest, None, &sig)
+            .verify_prehashed(DigestCompat(digest), None, &sig)
             .map_err(|_e| SignatureError::new())
     }
 }
@@ -310,8 +342,13 @@ impl PrivateKey for Ed25519Private {
 
 impl FromRandom for Ed25519Private {
     fn from_random<R: CryptoRng + RngCore>(csprng: &mut R) -> Self {
-        let signing_key = SigningKey::generate(csprng);
-        Self(signing_key.to_bytes())
+        // ed25519-dalek 3's `SigningKey::generate` requires rand_core 0.10
+        // traits; draw the 32 secret bytes directly instead (exactly what
+        // `generate` does internally) to keep the workspace on rand_core 0.6
+        // until the rand-family migration (#1154).
+        let mut secret = SecretKey::default();
+        csprng.fill_bytes(&mut secret);
+        Self(secret)
     }
 }
 
@@ -350,7 +387,7 @@ impl Ed25519Pair {
 
 impl<D: Digest<OutputSize = U64>> DigestSigner<D, Ed25519Signature> for Ed25519Pair {
     fn try_sign_digest(&self, digest: D) -> Result<Ed25519Signature, SignatureError> {
-        let sig = self.0.sign_prehashed(digest, None)?;
+        let sig = self.0.sign_prehashed(DigestCompat(digest), None)?;
         Ok(Ed25519Signature::new(sig.to_bytes()))
     }
 }
@@ -359,7 +396,7 @@ impl<D: Digest<OutputSize = U64>> DigestVerifier<D, Ed25519Signature> for Ed2551
     fn verify_digest(&self, digest: D, signature: &Ed25519Signature) -> Result<(), SignatureError> {
         let sig = DalekSignature::from(&signature.to_bytes());
         self.0
-            .verify_prehashed(digest, None, &sig)
+            .verify_prehashed(DigestCompat(digest), None, &sig)
             .map_err(|_e| SignatureError::new())
     }
 }
@@ -373,7 +410,11 @@ impl From<Ed25519Private> for Ed25519Pair {
 
 impl FromRandom for Ed25519Pair {
     fn from_random<R: CryptoRng + RngCore>(csprng: &mut R) -> Self {
-        Self(SigningKey::generate(csprng))
+        // See `Ed25519Private::from_random` for why this draws bytes directly
+        // instead of calling `SigningKey::generate`.
+        let mut secret = SecretKey::default();
+        csprng.fill_bytes(&mut secret);
+        Self(SigningKey::from_bytes(&secret))
     }
 }
 

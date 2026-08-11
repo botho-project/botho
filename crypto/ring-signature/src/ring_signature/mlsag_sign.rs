@@ -164,8 +164,8 @@ impl<R: AsRef<[CurveScalar]> + AsMut<[CurveScalar]>> MlsagSignCtx<R> {
             if i == params.real_index {
                 continue;
             }
-            r[2 * i].scalar = Scalar::random(&mut rng);
-            r[2 * i + 1].scalar = Scalar::random(&mut rng);
+            r[2 * i].scalar = crate::compat::random_scalar(&mut rng);
+            r[2 * i + 1].scalar = crate::compat::random_scalar(&mut rng);
         }
 
         Ok(Self {
@@ -173,8 +173,8 @@ impl<R: AsRef<[CurveScalar]> + AsMut<[CurveScalar]>> MlsagSignCtx<R> {
             I,
             key_image,
             output_commitment,
-            alpha_0: Scalar::random(&mut rng),
-            alpha_1: Scalar::random(&mut rng),
+            alpha_0: crate::compat::random_scalar(&mut rng),
+            alpha_1: crate::compat::random_scalar(&mut rng),
             ring_count: 0,
             real_input: None,
             real_challenge: None,

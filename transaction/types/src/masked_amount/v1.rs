@@ -18,7 +18,9 @@ use crate::{
 use bth_crypto_digestible::Digestible;
 use bth_crypto_hashes::{Blake2b512, Digest};
 use bth_crypto_keys::RistrettoPublic;
-use bth_crypto_ring_signature::{generators, CompressedCommitment, Scalar};
+use bth_crypto_ring_signature::{
+    compat::scalar_from_hash, generators, CompressedCommitment, Scalar,
+};
 
 use crc::Crc;
 #[cfg(feature = "prost")]
@@ -218,7 +220,7 @@ fn get_value_mask(shared_secret: &RistrettoPublic) -> u64 {
     let mut hasher = Blake2b512::new();
     hasher.update(AMOUNT_VALUE_DOMAIN_TAG);
     hasher.update(shared_secret.to_bytes());
-    let scalar = Scalar::from_hash(hasher);
+    let scalar = scalar_from_hash(hasher);
     let mut temp = [0u8; 8];
     temp.copy_from_slice(&scalar.as_bytes()[0..8]);
     u64::from_le_bytes(temp)
@@ -245,7 +247,7 @@ fn get_blinding(shared_secret: &RistrettoPublic) -> Scalar {
     let mut hasher = Blake2b512::new();
     hasher.update(AMOUNT_BLINDING_DOMAIN_TAG);
     hasher.update(shared_secret.to_bytes());
-    Scalar::from_hash(hasher)
+    scalar_from_hash(hasher)
 }
 
 #[cfg(test)]

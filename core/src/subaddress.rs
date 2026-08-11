@@ -16,6 +16,18 @@ use crate::{
     keys::*,
 };
 
+/// Hash to a `Scalar` from a 512-bit digest.
+///
+/// Byte-identical replacement for curve25519-dalek 4's `Scalar::from_hash`
+/// (finalize the 64-byte digest, reduce mod the group order); dalek 5's
+/// version requires digest 0.11 hashers while this workspace remains on
+/// digest 0.10.
+fn scalar_from_hash(digest: Blake2b512) -> Scalar {
+    let mut output = [0u8; 64];
+    output.copy_from_slice(digest.finalize().as_slice());
+    Scalar::from_bytes_mod_order_wide(&output)
+}
+
 /// Generate a subaddress for a given input key set
 pub trait Subaddress {
     /// Subaddress type
@@ -41,7 +53,7 @@ impl Subaddress for (&RootViewPrivate, &RootSpendPrivate) {
             digest.update(SUBADDRESS_DOMAIN_TAG);
             digest.update(a.as_bytes());
             digest.update(n.as_bytes());
-            Scalar::from_hash(digest)
+            scalar_from_hash(digest)
         };
 
         // Return private subaddress keys
@@ -70,7 +82,7 @@ impl Subaddress for (&RootViewPrivate, &RootSpendPublic) {
             digest.update(SUBADDRESS_DOMAIN_TAG);
             digest.update(a.as_bytes());
             digest.update(n.as_bytes());
-            Scalar::from_hash(digest)
+            scalar_from_hash(digest)
         };
 
         let b = RistrettoPrivate::from(Hs);

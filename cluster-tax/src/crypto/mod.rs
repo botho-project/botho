@@ -21,6 +21,7 @@
 //! - Threshold range proofs for minimum entropy delta
 
 mod committed_tags;
+mod dalek_compat;
 mod entropy_proof;
 mod entropy_validation;
 mod extended_signature;

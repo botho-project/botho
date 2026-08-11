@@ -41,6 +41,7 @@ proptest = ["dep:proptest", "default"]
 curve25519-dalek = { workspace = true }
 
 # External dependencies
+digest = { workspace = true }
 displaydoc = { workspace = true }
 
 # Botho dependencies

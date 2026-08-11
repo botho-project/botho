@@ -43,7 +43,7 @@ alloy = { workspace = true, features = [
 
 # BTH release attestation verification (ADR 0002: federation Ed25519
 # signatures, mirroring the operator-signed-action machinery)
-ed25519-dalek = { workspace = true, features = ["std"] }
+ed25519-dalek = { workspace = true, features = ["alloc"] }
 
 # Live BTH node transports (#856): deposit view-key scan + release tx
 # construction / CLSAG signing. We REUSE the node-identical crypto and wire

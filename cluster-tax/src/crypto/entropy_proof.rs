@@ -52,7 +52,7 @@ pub const ENTROPY_SCALE: u64 = 1_000_000;
 pub fn entropy_generator() -> RistrettoPoint {
     let mut hasher = Sha512::new();
     hasher.update(ENTROPY_GENERATOR_DOMAIN_TAG);
-    RistrettoPoint::from_hash(hasher)
+    crate::crypto::dalek_compat::point_from_hash(hasher)
 }
 
 // ============================================================================
@@ -243,15 +243,15 @@ impl EntropyProofBuilder {
         let h_e = entropy_generator();
         let g = blinding_generator();
 
-        let r_before = Scalar::random(rng);
-        let r_after = Scalar::random(rng);
+        let r_before = crate::crypto::dalek_compat::random_scalar(rng);
+        let r_after = crate::crypto::dalek_compat::random_scalar(rng);
 
         let c_before = Scalar::from(entropy_before) * h_e + r_before * g;
         let c_after = Scalar::from(entropy_after) * h_e + r_after * g;
 
         // Generate threshold range proof
         let excess = entropy_delta - self.threshold;
-        let r_excess = Scalar::random(rng);
+        let r_excess = crate::crypto::dalek_compat::random_scalar(rng);
         let c_excess = Scalar::from(excess) * h_e + r_excess * g;
 
         // Schnorr proof for excess commitment blinding
@@ -259,7 +259,7 @@ impl EntropyProofBuilder {
 
         // Proof that excess is non-negative (simplified)
         // In production, this would be a Bulletproof range proof
-        let r_nn = Scalar::random(rng);
+        let r_nn = crate::crypto::dalek_compat::random_scalar(rng);
         let non_negative_proof = SchnorrProof::prove(r_nn, b"mc_entropy_non_negative", rng);
 
         let threshold_range_proof = EntropyRangeProof {
@@ -319,7 +319,7 @@ impl EntropyProofBuilder {
             };
 
             // Commit to contribution
-            let r_step = Scalar::random(rng);
+            let r_step = crate::crypto::dalek_compat::random_scalar(rng);
             let c_step = Scalar::from(contribution) * h_e + r_step * g;
             intermediate_commitments.push(c_step.compress());
 
@@ -331,7 +331,7 @@ impl EntropyProofBuilder {
 
         // Final aggregation proof
         // Links sum of intermediates to the entropy commitment
-        let r_agg = Scalar::random(rng);
+        let r_agg = crate::crypto::dalek_compat::random_scalar(rng);
         let aggregation_proof = SchnorrProof::prove(r_agg, b"mc_entropy_aggregation", rng);
 
         Some(EntropyLinkageProof {
@@ -857,7 +857,7 @@ mod tests {
     #[test]
     fn test_entropy_range_proof_serialization() {
         let g = blinding_generator();
-        let r = Scalar::random(&mut OsRng);
+        let r = crate::crypto::dalek_compat::random_scalar(&mut OsRng);
         let c = r * g;
 
         let range_proof = EntropyRangeProof {

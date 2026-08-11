@@ -292,7 +292,7 @@ dependencies = [
  "either",
  "serde",
  "serde_with",
- "sha2",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -1503,6 +1503,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c7f02d4ea65f2c1853089ffd8d2787bdbc63de2f0d29dedbcf8ccdfa0ccd4cf"
 
 [[package]]
+name = "base16ct"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd307490d624467aa6f74b0eabb77633d1f758a7b25f12bceb0b22e08d9726f6"
+
+[[package]]
 name = "base256emoji"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1770,7 +1776,7 @@ dependencies = [
  "dashmap",
  "digest 0.10.7",
  "dirs 5.0.1",
- "ed25519-dalek",
+ "ed25519-dalek 3.0.0",
  "futures",
  "getrandom 0.2.17",
  "heed",
@@ -1805,7 +1811,7 @@ dependencies = [
  "serde_json",
  "serial_test",
  "sha1",
- "sha2",
+ "sha2 0.10.9",
  "siphasher",
  "statrs",
  "tempfile",
@@ -1947,7 +1953,7 @@ dependencies = [
  "rpassword",
  "serde",
  "serde_json",
- "sha2",
+ "sha2 0.10.9",
  "tempfile",
  "tiny-bip39",
  "tokio",
@@ -2009,7 +2015,7 @@ dependencies = [
  "bth-util-serial",
  "bth-util-test-helper",
  "criterion",
- "curve25519-dalek",
+ "curve25519-dalek 5.0.0",
  "displaydoc",
  "hkdf",
  "prost 0.12.6",
@@ -2017,7 +2023,7 @@ dependencies = [
  "rand_core 0.6.4",
  "rand_hc",
  "serde",
- "sha2",
+ "sha2 0.10.9",
  "tiny-bip39",
  "zeroize",
 ]
@@ -2048,11 +2054,11 @@ version = "0.6.0"
 dependencies = [
  "bs58 0.4.0",
  "chrono",
- "ed25519-dalek",
+ "ed25519-dalek 3.0.0",
  "hex",
  "serde",
  "serde_json",
- "sha2",
+ "sha2 0.10.9",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "uuid",
@@ -2078,7 +2084,7 @@ dependencies = [
  "bth-transaction-types",
  "chrono",
  "clap",
- "ed25519-dalek",
+ "ed25519-dalek 3.0.0",
  "hex",
  "proptest",
  "rand 0.8.7",
@@ -2087,7 +2093,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "sha2",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
  "tracing",
@@ -2103,7 +2109,7 @@ dependencies = [
  "bth-transaction-types",
  "clap",
  "criterion",
- "curve25519-dalek",
+ "curve25519-dalek 5.0.0",
  "indicatif",
  "rand 0.8.7",
  "rand_chacha 0.3.1",
@@ -2111,7 +2117,7 @@ dependencies = [
  "rand_distr",
  "rayon",
  "serde",
- "sha2",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -2205,13 +2211,13 @@ dependencies = [
  "bth-crypto-keys",
  "bth-util-from-random",
  "clap",
- "curve25519-dalek",
+ "curve25519-dalek 5.0.0",
  "hex",
  "hkdf",
  "rand_core 0.6.4",
  "serde",
  "serde_json",
- "sha2",
+ "sha2 0.10.9",
  "slip10_ed25519",
  "tiny-bip39",
  "zeroize",
@@ -2224,7 +2230,7 @@ dependencies = [
  "bth-crypto-keys",
  "bth-util-from-random",
  "bth-util-test-helper",
- "curve25519-dalek",
+ "curve25519-dalek 5.0.0",
  "prost 0.12.6",
  "rand_core 0.6.4",
  "rand_hc",
@@ -2255,11 +2261,11 @@ version = "7.1.0"
 dependencies = [
  "bth-crypto-digestible-derive",
  "cfg-if",
- "curve25519-dalek",
- "ed25519-dalek",
+ "curve25519-dalek 5.0.0",
+ "ed25519-dalek 3.0.0",
  "generic-array",
  "merlin",
- "x25519-dalek",
+ "x25519-dalek 3.0.0",
 ]
 
 [[package]]
@@ -2276,7 +2282,7 @@ name = "bth-crypto-digestible-signature"
 version = "7.1.0"
 dependencies = [
  "bth-crypto-digestible",
- "signature 2.2.0",
+ "signature 3.0.0",
 ]
 
 [[package]]
@@ -2300,26 +2306,28 @@ dependencies = [
  "bth-util-repr-bytes",
  "bth-util-serial",
  "bth-util-test-helper",
- "curve25519-dalek",
+ "curve25519-dalek 5.0.0",
  "digest 0.10.7",
+ "digest 0.11.3",
  "displaydoc",
- "ed25519",
- "ed25519-dalek",
+ "ed25519 3.0.0",
+ "ed25519-dalek 3.0.0",
  "hex",
  "hex_fmt",
  "pem",
+ "rand_core 0.10.1",
  "rand_core 0.6.4",
  "rand_hc",
  "schnorrkel-og",
  "semver 1.0.28",
  "serde",
  "serde_json",
- "sha2",
- "signature 2.2.0",
+ "sha2 0.10.9",
+ "signature 3.0.0",
  "static_assertions",
  "subtle",
  "tempfile",
- "x25519-dalek",
+ "x25519-dalek 3.0.0",
  "zeroize",
 ]
 
@@ -2353,7 +2361,7 @@ dependencies = [
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "serde",
- "sha2",
+ "sha2 0.10.9",
  "thiserror 2.0.20",
  "zeroize",
 ]
@@ -2373,7 +2381,8 @@ dependencies = [
  "bth-util-serial",
  "bth-util-test-helper",
  "criterion",
- "curve25519-dalek",
+ "curve25519-dalek 5.0.0",
+ "digest 0.10.7",
  "displaydoc",
  "proptest",
  "prost 0.12.6",
@@ -2410,7 +2419,7 @@ dependencies = [
  "hmac",
  "k256",
  "rand 0.8.7",
- "sha2",
+ "sha2 0.10.9",
  "sha3 0.10.9",
  "thiserror 2.0.20",
  "tiny-bip39",
@@ -2502,7 +2511,7 @@ dependencies = [
  "rand_core 0.6.4",
  "serde",
  "serde_json",
- "sha2",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -2530,7 +2539,8 @@ dependencies = [
  "bulletproofs-og",
  "criterion",
  "ctr",
- "curve25519-dalek",
+ "curve25519-dalek 4.1.3",
+ "curve25519-dalek 5.0.0",
  "displaydoc",
  "generic-array",
  "hex_fmt",
@@ -2542,7 +2552,7 @@ dependencies = [
  "rand 0.8.7",
  "rand_core 0.6.4",
  "serde",
- "sha2",
+ "sha2 0.10.9",
  "subtle",
  "zeroize",
 ]
@@ -2586,7 +2596,7 @@ dependencies = [
  "proptest",
  "prost 0.12.6",
  "serde",
- "sha2",
+ "sha2 0.10.9",
  "subtle",
  "zeroize",
 ]
@@ -2704,7 +2714,7 @@ source = "git+https://github.com/mobilecoinfoundation/bulletproofs.git?rev=9abfd
 dependencies = [
  "byteorder",
  "clear_on_drop",
- "curve25519-dalek",
+ "curve25519-dalek 4.1.3",
  "merlin",
  "rand_core 0.6.4",
  "serde",
@@ -2825,7 +2835,7 @@ dependencies = [
  "semver 1.0.28",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -3502,8 +3512,25 @@ dependencies = [
  "cpufeatures 0.2.17",
  "curve25519-dalek-derive",
  "digest 0.10.7",
- "fiat-crypto",
+ "fiat-crypto 0.2.9",
  "rand_core 0.6.4",
+ "rustc_version 0.4.1",
+ "serde",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "curve25519-dalek"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5eed333089e2e1c1ac8c6c0398e5e2497b4c9926ca6d0365ed1e099afa5bc23"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.0",
+ "curve25519-dalek-derive",
+ "digest 0.11.3",
+ "fiat-crypto 0.3.0",
  "rustc_version 0.4.1",
  "serde",
  "subtle",
@@ -3895,11 +3922,11 @@ dependencies = [
  "sec1",
  "serde",
  "sha1",
- "sha2",
+ "sha2 0.10.9",
  "thiserror 1.0.69",
  "tokio",
  "webrtc-util",
- "x25519-dalek",
+ "x25519-dalek 2.0.1",
  "x509-parser 0.16.0",
 ]
 
@@ -3955,7 +3982,7 @@ dependencies = [
  "digest 0.10.7",
  "elliptic-curve",
  "rfc6979",
- "serdect",
+ "serdect 0.2.0",
  "signature 2.2.0",
  "spki 0.7.3",
 ]
@@ -3967,8 +3994,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "115531babc129696a58c64a4fef0a8bf9e9698629fb97e9e40767d235cfbcd53"
 dependencies = [
  "pkcs8 0.10.2",
- "serde",
  "signature 2.2.0",
+]
+
+[[package]]
+name = "ed25519"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "29fcf32e6c73d1079f83ab4d782de2d81620346a5f38c6237a86a22f8368980a"
+dependencies = [
+ "pkcs8 0.11.0",
+ "serdect 0.4.3",
+ "signature 3.0.0",
 ]
 
 [[package]]
@@ -3977,12 +4014,25 @@ version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "70e796c081cee67dc755e1a36a0a172b897fab85fc3f6bc48307991f64e4eca9"
 dependencies = [
- "curve25519-dalek",
- "ed25519",
- "rand_core 0.6.4",
+ "curve25519-dalek 4.1.3",
+ "ed25519 2.2.3",
  "serde",
- "sha2",
- "signature 2.2.0",
+ "sha2 0.10.9",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "ed25519-dalek"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ebaa1a2bf1290ab3bfe5a7b771d050ebffab2711c19a81691c683a5144a25de"
+dependencies = [
+ "curve25519-dalek 5.0.0",
+ "ed25519 3.0.0",
+ "serde",
+ "sha2 0.11.0",
+ "signature 3.0.0",
  "subtle",
  "zeroize",
 ]
@@ -4014,7 +4064,7 @@ version = "0.13.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5e6043086bf7973472e0c7dff2142ea0b680d30e18d9cc40f267efbf222bd47"
 dependencies = [
- "base16ct",
+ "base16ct 0.2.0",
  "crypto-bigint",
  "digest 0.10.7",
  "ff",
@@ -4025,7 +4075,7 @@ dependencies = [
  "pkcs8 0.10.2",
  "rand_core 0.6.4",
  "sec1",
- "serdect",
+ "serdect 0.2.0",
  "subtle",
  "zeroize",
 ]
@@ -4249,6 +4299,12 @@ name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
+
+[[package]]
+name = "fiat-crypto"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
 
 [[package]]
 name = "field-offset"
@@ -5852,8 +5908,8 @@ dependencies = [
  "ecdsa",
  "elliptic-curve",
  "once_cell",
- "serdect",
- "sha2",
+ "serdect 0.2.0",
+ "sha2 0.10.9",
  "signature 2.2.0",
 ]
 
@@ -6108,7 +6164,7 @@ dependencies = [
  "quick-protobuf-codec",
  "rand 0.8.7",
  "regex",
- "sha2",
+ "sha2 0.10.9",
  "tracing",
  "web-time 1.1.0",
 ]
@@ -6141,12 +6197,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9525f3831544f7ae497bde79adf114ef127b0fbbb97edbbf692a80408636421c"
 dependencies = [
  "bs58 0.5.1",
- "ed25519-dalek",
+ "ed25519-dalek 2.2.0",
  "hkdf",
  "multihash",
  "prost 0.14.4",
  "rand 0.8.7",
- "sha2",
+ "sha2 0.10.9",
  "thiserror 2.0.20",
  "tracing",
  "zeroize",
@@ -6171,7 +6227,7 @@ dependencies = [
  "quick-protobuf",
  "quick-protobuf-codec",
  "rand 0.8.7",
- "sha2",
+ "sha2 0.10.9",
  "smallvec",
  "thiserror 2.0.20",
  "tracing",
@@ -6235,7 +6291,7 @@ dependencies = [
  "static_assertions",
  "thiserror 2.0.20",
  "tracing",
- "x25519-dalek",
+ "x25519-dalek 2.0.1",
  "zeroize",
 ]
 
@@ -7452,7 +7508,7 @@ dependencies = [
  "ecdsa",
  "elliptic-curve",
  "primeorder",
- "sha2",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -7464,7 +7520,7 @@ dependencies = [
  "ecdsa",
  "elliptic-curve",
  "primeorder",
- "sha2",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -9162,10 +9218,10 @@ dependencies = [
  "arrayref",
  "arrayvec",
  "cfg-if",
- "curve25519-dalek",
+ "curve25519-dalek 4.1.3",
  "merlin",
  "rand_core 0.6.4",
- "sha2",
+ "sha2 0.10.9",
  "subtle",
  "zeroize",
 ]
@@ -9214,11 +9270,11 @@ version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3e97a565f76233a6003f9f5c54be1d9c5bdfa3eccfb189469f11ec4901c47dc"
 dependencies = [
- "base16ct",
+ "base16ct 0.2.0",
  "der 0.7.10",
  "generic-array",
  "pkcs8 0.10.2",
- "serdect",
+ "serdect 0.2.0",
  "subtle",
  "zeroize",
 ]
@@ -9599,7 +9655,17 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a84f14a19e9a014bb9f4512488d9829a68e04ecabffb0f9904cd1ace94598177"
 dependencies = [
- "base16ct",
+ "base16ct 0.2.0",
+ "serde",
+]
+
+[[package]]
+name = "serdect"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "66cf8fedced2fcf12406bcb34223dffb92eaf34908ede12fed414c82b7f00b3e"
+dependencies = [
+ "base16ct 1.0.0",
  "serde",
 ]
 
@@ -9679,6 +9745,17 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
  "digest 0.10.7",
+]
+
+[[package]]
+name = "sha2"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.0",
+ "digest 0.11.3",
 ]
 
 [[package]]
@@ -9856,11 +9933,11 @@ dependencies = [
  "aes-gcm",
  "blake2",
  "chacha20poly1305",
- "curve25519-dalek",
+ "curve25519-dalek 4.1.3",
  "rand_core 0.6.4",
  "ring",
  "rustc_version 0.4.1",
- "sha2",
+ "sha2 0.10.9",
  "subtle",
 ]
 
@@ -10335,7 +10412,7 @@ dependencies = [
  "semver 1.0.28",
  "serde",
  "serde_json",
- "sha2",
+ "sha2 0.10.9",
  "syn 2.0.118",
  "tauri-utils",
  "thiserror 2.0.20",
@@ -10635,7 +10712,7 @@ dependencies = [
  "pbkdf2",
  "rand 0.8.7",
  "rustc-hash 1.1.0",
- "sha2",
+ "sha2 0.10.9",
  "thiserror 1.0.69",
  "unicode-normalization",
  "wasm-bindgen",
@@ -11872,7 +11949,7 @@ dependencies = [
  "sdp",
  "serde",
  "serde_json",
- "sha2",
+ "sha2 0.10.9",
  "smol_str",
  "stun",
  "thiserror 1.0.69",
@@ -12724,7 +12801,7 @@ dependencies = [
  "once_cell",
  "percent-encoding",
  "raw-window-handle",
- "sha2",
+ "sha2 0.10.9",
  "soup3",
  "tao-macros",
  "thiserror 2.0.20",
@@ -12774,10 +12851,20 @@ version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7e468321c81fb07fa7f4c636c3972b9100f0346e5b6a9f2bd0603a52f7ed277"
 dependencies = [
- "curve25519-dalek",
+ "curve25519-dalek 4.1.3",
  "rand_core 0.6.4",
  "serde",
  "zeroize",
+]
+
+[[package]]
+name = "x25519-dalek"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7e8131a03190127fb2263afc72b322ecadae46b6ff8c6f399ff5d02f5559af6"
+dependencies = [
+ "curve25519-dalek 5.0.0",
+ "rand_core 0.10.1",
 ]
 
 [[package]]

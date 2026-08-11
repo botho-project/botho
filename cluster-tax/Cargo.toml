@@ -12,7 +12,7 @@ path = "src/bin/sim.rs"
 
 [dependencies]
 # Cryptographic primitives for committed tags
-curve25519-dalek = { workspace = true, features = ["alloc", "rand_core", "digest"] }
+curve25519-dalek = { workspace = true, features = ["alloc"] }
 sha2 = { workspace = true }
 rand_core = { workspace = true }
 
