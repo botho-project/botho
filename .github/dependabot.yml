@@ -28,6 +28,36 @@ updates:
     schedule:
       interval: "weekly"
     labels: ["dependencies"]
+    ignore:
+      # Lockstep families that cannot move one crate at a time. Individual
+      # bumps are guaranteed-red (two trait-incompatible majors in-tree) and
+      # each family upgrade is a deliberate migration through
+      # consensus-critical code, tracked as an issue:
+      # dalek-5 family (#1153): CLSAG / key code
+      - dependency-name: "ed25519"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "ed25519-dalek"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "curve25519-dalek"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "signature"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "x25519-dalek"
+        update-types: ["version-update:semver-major"]
+      # rand family (#1154): deterministic key derivation. Pre-1.0, so 0.x
+      # "minors" are the breaking axis — ignore those too; patches flow.
+      - dependency-name: "rand"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "rand_core"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "rand_chacha"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "rand_hc"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "rand_distr"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "getrandom"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     groups:
       cargo-minor-patch:
         patterns: ["*"]
