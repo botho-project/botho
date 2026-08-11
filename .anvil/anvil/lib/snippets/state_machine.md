@@ -61,8 +61,11 @@ mapping table.
 ## Convergence and iteration cap
 
 Each loop iteration is one revise pass. The default iteration cap is
-`max_iterations: 4` (terminal version is `<thread>.5/`). Exceeding the
-cap marks the thread `BLOCKED` and requires human review.
+`max_iterations: 4`. The reviser refuses to write `<thread>.{N+1}/` when
+`N + 1 > max_iterations`, so `<thread>.{max_iterations}/`
+(`<thread>.4/` at the default) is the worst-case terminal version dir —
+there is no `<thread>.5/` under a default cap. Exceeding the cap marks
+the thread `BLOCKED` and requires human review.
 
 The cap is configurable per-thread by writing
 `{ "max_iterations": <N> }` to `<thread>/.anvil.json` in the thread root.

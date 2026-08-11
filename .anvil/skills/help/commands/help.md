@@ -30,13 +30,26 @@ The repo root is the directory that contains `.anvil/` and/or `.claude/`
 
 ### 2. Run the introspection
 
-Load the skill lib (`anvil/skills/help/lib/`) and call the single entry
-point:
+Load the skill lib and call the single entry point. The skill's `lib/`
+directory (`anvil/skills/help/lib/` in the anvil source tree,
+`.anvil/skills/help/lib/` in a consumer install) is a package, not a
+loose module on `sys.path` — the same shared loader every utility skill
+uses (including the hyphenated ones, where a bare `sys.path.insert` +
+`import <module>` fails outright) keeps this doc consistent with the
+others. Use `anvil.lib.skill_lib_loader` (importable via `uv run
+--project .anvil` per the "Running anvil Python from a consumer"
+pattern):
 
 ```python
-from introspect import render_help
+from pathlib import Path
+from anvil.lib.skill_lib_loader import import_skill_lib_module
 
-text = render_help(repo_root, skill=skill_name_or_None)
+introspect = import_skill_lib_module(
+    "help", Path("anvil/skills/help/lib"), "introspect"
+)
+# .anvil/skills/help/lib in a consumer install.
+
+text = introspect.render_help(repo_root, skill=skill_name_or_None)
 print(text)
 ```
 

@@ -109,17 +109,18 @@ assert_contains "Skip: loom:operator-only PRs" 'loom:operator-only'
 echo
 echo "--- Load-bearing constraints (#3289, #3298, #3373) ---"
 
-# #3289: one level deep, never spawn /shepherd as subagent.
+# #3289: one level deep, never spawn a nested /loom:sweep as subagent.
 assert_contains "One-level-deep callout preserved" 'One level deep'
-assert_contains "Never-dispatch-/shepherd-as-subagent guard preserved (issue-side, original phrasing)" 'Do NOT, under any circumstances, dispatch `/shepherd` as a subagent'
-assert_contains "Never-invoke /shepherd/judge/doctor slash commands as subagents (Mode C constraints)" '`/shepherd`, `/judge`, or `/doctor` as a subagent'
+assert_contains "Never-dispatch-nested-orchestrator-as-subagent guard preserved (issue-side)" 'Do NOT, under any circumstances, dispatch a nested orchestrator skill (`/loom:sweep`) as a subagent from `/loom:sweep`'
+assert_contains "Never-invoke /loom:sweep, /loom:judge, or /loom:doctor as a subagent (Mode C constraints)" 'Never invoke `/loom:sweep`, `/loom:judge`, or `/loom:doctor` as a subagent from `/loom:sweep`'
 
 # Sequential per-PR Judge.
 assert_contains "Per-PR Judge sequential within wave" 'Per-PR Judge is sequential'
 
-# Single Doctor→Judge cycle cap.
-assert_contains "Single Doctor→Judge cycle cap (Mode C, C1b)" 'single inline Doctor → Judge cycle'
-assert_contains "Cap reached note" 'Cap reached'
+# Configurable Doctor→Judge cycle cap (#3668).
+assert_contains "Configurable Doctor→Judge cycle cap (Mode C, C1b)" 'up to `sweep.max_doctor_cycles`'
+assert_contains "Cap-reached block note (Mode C, C1b)" 'cap reached'
+assert_contains "Distinct-defect exception referenced (Mode C, C1b)" 'distinct defect'
 
 # #3373: checkpoint reuse via closingIssuesReferences.
 assert_contains "Checkpoint scope via closingIssuesReferences" 'closingIssuesReferences'
@@ -128,7 +129,7 @@ assert_contains "Checkpoint fallback for PRs without Closes #N" "lacks a Closes 
 echo
 echo "--- Dry-run output (PR-set format) ---"
 
-assert_contains "PR-set dry-run header" '/sweep --prs --dry-run plan'
+assert_contains "PR-set dry-run header" '/loom:sweep --prs --dry-run plan'
 assert_contains "PR-set dry-run shows would-Judge" 'would Judge'
 assert_contains "PR-set dry-run shows would-Doctor-then-Judge" 'would Doctor → Judge'
 assert_contains "PR-set dry-run shows would-merge" 'would merge'
@@ -149,10 +150,10 @@ assert_contains "--builders-per-wave ignored in Mode C" '`--builders-per-wave N`
 echo
 echo "--- Examples section coverage ---"
 
-assert_contains "Example: explicit numeric PR list with --prs" '/sweep --prs 100 101 102'
-assert_contains "Example: NL description with --prs" '/sweep --prs all open loom:pr'
-assert_contains "Example: NL trigger without --prs" '/sweep all open loom:pr PRs'
-assert_contains "Example: PR-set dry-run" '/sweep --prs 100 101 102 --dry-run'
+assert_contains "Example: explicit numeric PR list with --prs" '/loom:sweep --prs 100 101 102'
+assert_contains "Example: NL description with --prs" '/loom:sweep --prs all open loom:pr'
+assert_contains "Example: NL trigger without --prs" '/loom:sweep all open loom:pr PRs'
+assert_contains "Example: PR-set dry-run" '/loom:sweep --prs 100 101 102 --dry-run'
 
 echo
 echo "--- Constraints + Limitations updated ---"

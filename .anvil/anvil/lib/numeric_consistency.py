@@ -42,8 +42,18 @@ Deterministic subset (pure regex/arithmetic — no LLM, no new deps)
      (see Suppression below), which is the documented FP budget.
    - ``X% of`` (proportion claims): validated ONLY when the window
      contains an explicit fraction shape (``a of b``, ``a out of b``,
-     ``a/b``); valid iff some fraction computes ``a/b ≈ X%``. No
-     fraction shape in the window → silent skip (conservative).
+     ``a/b``); valid iff some fraction computes ``a/b ≈ X%`` (a
+     window-wide numeric match always silences the finding — matching
+     pairs are preferred over mismatching ones, regardless of subject).
+     Absent a numeric match, a mismatch is only reported against a
+     fraction that shares a **lexical anchor** with the claim — a
+     content word (subject noun, function words dropped) present in
+     both the claim's sentence and the fraction's sentence (issue
+     #854: "27.3% of readable cells" must not pair with an unrelated
+     "18/18 pages" fraction just because it is the nearest fraction in
+     the paragraph — they describe different subjects). No fraction
+     shape in the window, or no anchor-sharing fraction once a numeric
+     match has been ruled out → silent skip (conservative).
    - ``X% more/less/higher/lower/faster/slower/...`` (relative-change
      claims): validated ONLY when the window contains an explicit pair
      shape (``from A to B``, ``A vs B``, ``A → B``); valid iff some
@@ -302,6 +312,81 @@ def _line_of(offset: int, text: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Lexical-anchor gating (issue #854)
+# ---------------------------------------------------------------------------
+
+# Closed-class function words dropped from anchor tokens. Domain nouns
+# ("cells", "pages", "respondents", ...) are never filtered — only
+# generic connective/grammatical words too common to signal a shared
+# subject between a percent claim and a candidate fraction.
+_ANCHOR_STOPWORDS = frozenset({
+    "the", "a", "an", "of", "in", "on", "at", "to", "for", "with", "and",
+    "or", "is", "are", "was", "were", "this", "that", "these", "those",
+    "it", "its", "as", "by", "from", "we", "our", "be", "been", "being",
+    "than", "over", "under", "into", "out", "about", "which", "who",
+    "whom", "have", "has", "had", "will", "would", "can", "could",
+    "not", "but", "so", "if", "then", "also", "very", "some", "all",
+    "each", "any", "more", "most", "other", "such", "no", "only",
+    "same", "just", "per", "there", "here", "now", "when", "where",
+})
+
+_ANCHOR_WORD_RE = re.compile(r"[A-Za-z][A-Za-z\-]*")
+# Sentence terminator: '.', '!', or '?' followed by whitespace/EOF. Bounds
+# anchor windows to the enclosing sentence so a claim and an unrelated
+# fraction one sentence later never bleed tokens into each other's
+# window (the census-reader false positive this gate closes).
+_SENTENCE_END_RE = re.compile(r"[.!?](?=\s|$)")
+
+
+def _sentence_span(
+    masked: str, start: int, end: int, para_start: int, para_end: int
+) -> Tuple[int, int]:
+    """Bound ``[start, end)`` to its enclosing sentence within the paragraph.
+
+    Falls back to the full paragraph bounds when no sentence-terminating
+    punctuation is found on one side (e.g. a table row or heading with
+    no period).
+    """
+    before_region = masked[para_start:start]
+    s = para_start
+    last_end: Optional[int] = None
+    for m in _SENTENCE_END_RE.finditer(before_region):
+        last_end = m.end()
+    if last_end is not None:
+        s = para_start + last_end
+    after_region = masked[end:para_end]
+    m2 = _SENTENCE_END_RE.search(after_region)
+    e = para_end if m2 is None else end + m2.end()
+    return s, e
+
+
+def _anchor_tokens(
+    masked: str,
+    start: int,
+    end: int,
+    para_start: int,
+    para_end: int,
+    *,
+    window_words: int = 6,
+) -> frozenset:
+    """Content-word anchors near a claim/shape span (issue #854).
+
+    Extracts up to ``window_words`` content words (letters only, length
+    >= 3, closed-class function words dropped per ``_ANCHOR_STOPWORDS``)
+    immediately before and after ``[start, end)``, bounded to the
+    enclosing sentence (see :func:`_sentence_span`). Used to require a
+    shared subject between a percent claim and the fraction it is
+    validated against, instead of pairing with whatever fraction is
+    merely nearest.
+    """
+    s_start, s_end = _sentence_span(masked, start, end, para_start, para_end)
+    before_words = _ANCHOR_WORD_RE.findall(masked[s_start:start])[-window_words:]
+    after_words = _ANCHOR_WORD_RE.findall(masked[end:s_end])[:window_words]
+    tokens = {w.lower() for w in before_words + after_words}
+    return frozenset(t for t in tokens if len(t) >= 3 and t not in _ANCHOR_STOPWORDS)
+
+
+# ---------------------------------------------------------------------------
 # Number / shape extraction
 # ---------------------------------------------------------------------------
 
@@ -360,6 +445,44 @@ _FRACTION_RES: Tuple[re.Pattern, ...] = (
     ),
     re.compile(r"(?<![\w.])(?P<a>\d[\d,]*)\s*/\s*(?P<b>\d[\d,]*)(?![\w%])"),
 )
+
+# The bare slash-fraction pattern above (index 1) also matches
+# season/fiscal-year labels like "2018/19" or "2018/2019" — a=2018,
+# b=19 is NOT a fraction and must not become _PairShape evidence
+# (issue #836: "2018/19 baseline" sharing a paragraph with an
+# unrelated "40% of ..." claim produced a bogus 2018/19 = 10621%
+# percent_mismatch). Identity-checked against this specific pattern in
+# _extract_shapes so the "of"/"out of" pattern (index 0) and
+# _PAIR_RES are untouched — genuine fractions like "47 of 94" / "47/94"
+# keep working unchanged.
+_SLASH_FRACTION_RE = _FRACTION_RES[1]
+
+
+def _is_season_fiscal_year_label(a_raw: str, b_raw: str) -> bool:
+    """True when a slash pair looks like a season/fiscal-year label.
+
+    Two shapes, both anchored on the existing ``_YEAR_MIN``/``_YEAR_MAX``
+    calendar-year heuristic (module-level, reused rather than
+    duplicated):
+
+    - ``YYYY/YY`` (e.g. ``2018/19``): numerator is a bare 4-digit year,
+      denominator is a bare 1-2 digit integer.
+    - ``YYYY/YYYY`` (e.g. ``2018/2019``): both operands are bare 4-digit
+      years.
+
+    A comma anywhere in either operand (e.g. ``2,018``) disqualifies it
+    — ``str.isdigit()`` returns ``False`` for a comma-bearing string, so
+    that case falls through to "not a label" for free.
+    """
+
+    def _is_year(raw: str) -> bool:
+        return len(raw) == 4 and raw.isdigit() and _YEAR_MIN <= int(raw) <= _YEAR_MAX
+
+    if not _is_year(a_raw):
+        return False
+    if b_raw.isdigit() and len(b_raw) <= 2:
+        return True
+    return _is_year(b_raw)
 
 # Explicit pair shapes (ratio / relative-change evidence): "from 120 ms
 # to 15 ms", "120 vs 15", "120 → 15". Currency prefixes tolerated, and
@@ -469,6 +592,10 @@ class _PairShape:
     start: int
     end: int
     paragraph: int
+    anchors: frozenset = field(default_factory=frozenset)
+    """Nearby content-word tokens (issue #854 lexical-anchor gating).
+    Only consumed by proportion-claim validation today; computed for
+    every shape uniformly since it's cheap and position-derived."""
 
 
 def _shape_operand(m: "re.Match[str]", num_key: str, cur_key: str, scale_key: str) -> float:
@@ -493,13 +620,20 @@ def _extract_shapes(
     masked: str, spans: List[Tuple[int, int, int]], patterns: Tuple[re.Pattern, ...]
 ) -> List[_PairShape]:
     shapes: List[_PairShape] = []
+    para_bounds = {i: (s, e) for s, e, i in spans}
     for pattern in patterns:
         for m in pattern.finditer(masked):
+            if pattern is _SLASH_FRACTION_RE and _is_season_fiscal_year_label(
+                m.group("a"), m.group("b")
+            ):
+                continue
             try:
                 a = _shape_operand(m, "a", "ca", "sa")
                 b = _shape_operand(m, "b", "cb", "sb")
             except ValueError:
                 continue
+            paragraph = _paragraph_of(m.start(), spans)
+            p_start, p_end = para_bounds.get(paragraph, (0, len(masked)))
             shapes.append(
                 _PairShape(
                     a=a,
@@ -507,7 +641,8 @@ def _extract_shapes(
                     raw=m.group(0),
                     start=m.start(),
                     end=m.end(),
-                    paragraph=_paragraph_of(m.start(), spans),
+                    paragraph=paragraph,
+                    anchors=_anchor_tokens(masked, m.start(), m.end(), p_start, p_end),
                 )
             )
     return shapes
@@ -573,12 +708,19 @@ class Claim:
     end: int
     line: int
     paragraph: int
+    anchors: frozenset = field(default_factory=frozenset)
+    """Nearby content-word tokens (issue #854 lexical-anchor gating).
+    Only consumed by proportion-claim validation today; computed for
+    every claim uniformly since it's cheap and position-derived."""
 
 
 def _extract_claims(masked: str, spans: List[Tuple[int, int, int]]) -> List[Claim]:
     claims: List[Claim] = []
+    para_bounds = {i: (s, e) for s, e, i in spans}
 
     def add(kind: str, m: re.Match) -> None:
+        paragraph = _paragraph_of(m.start(), spans)
+        p_start, p_end = para_bounds.get(paragraph, (0, len(masked)))
         claims.append(
             Claim(
                 kind=kind,
@@ -588,7 +730,8 @@ def _extract_claims(masked: str, spans: List[Tuple[int, int, int]]) -> List[Clai
                 start=m.start(),
                 end=m.end(),
                 line=_line_of(m.start(), masked),
-                paragraph=_paragraph_of(m.start(), spans),
+                paragraph=paragraph,
+                anchors=_anchor_tokens(masked, m.start(), m.end(), p_start, p_end),
             )
         )
 
@@ -857,16 +1000,33 @@ def _check_diff_claim(
 def _check_proportion_claim(
     claim: Claim, fractions: List[_PairShape]
 ) -> Optional[Tuple[str, Optional[float], str]]:
-    """Validate an "X% of" claim against explicit fraction shapes."""
+    """Validate an "X% of" claim against explicit fraction shapes.
+
+    Issue #854: a percent claim only pairs with a fraction that shares a
+    lexical anchor with it (a subject content word present near both),
+    UNLESS some fraction in the window already numerically satisfies the
+    claim within tolerance — a matching pair is always preferred over a
+    mismatching one, regardless of subject, so this preserves the
+    pre-#854 "prefer match" behavior exactly. Absent any numeric match,
+    a mismatch is only reported against an anchor-sharing fraction; a
+    window that contains only unrelated-subject fractions (e.g. "27.3%
+    of readable cells" sharing a paragraph with an unrelated "18/18
+    pages" fraction) silently skips instead of flagging.
+    """
     in_window = [f for f in fractions if abs(f.paragraph - claim.paragraph) <= 1 and f.b != 0]
     if not in_window:
         return None  # no explicit fraction evidence — conservative silence
-    best: Optional[_PairShape] = None
-    best_pct = 0.0
     for f in in_window:
         pct = f.a / f.b * 100.0
         if within_tolerance(claim.value, pct):
             return None
+    anchored = [f for f in in_window if f.anchors & claim.anchors]
+    if not anchored:
+        return None  # no fraction shares the claim's subject — conservative silence
+    best: Optional[_PairShape] = None
+    best_pct = 0.0
+    for f in anchored:
+        pct = f.a / f.b * 100.0
         if best is None or abs(pct - claim.value) < abs(best_pct - claim.value):
             best, best_pct = f, pct
     assert best is not None

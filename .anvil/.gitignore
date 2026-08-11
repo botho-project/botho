@@ -6,3 +6,5 @@
 __pycache__/
 *.py[cod]
 .venv/
+*.egg-info/
+.install-local.json

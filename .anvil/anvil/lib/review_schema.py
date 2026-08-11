@@ -48,10 +48,11 @@ by the project and gives us validation + JSON Schema export for free.
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 # The pinned schema version. Bump only when the on-disk shape changes in a
@@ -205,6 +206,173 @@ class ToolCall(BaseModel):
     )
 
 
+def parse_timestamp(value: object) -> Optional[datetime]:
+    """Parse an ISO-8601 timestamp, tolerating a trailing ``Z``.
+
+    Returns ``None`` for anything unparseable. Python's
+    ``datetime.fromisoformat`` only learned ``Z`` in 3.11 and Anvil
+    supports 3.10 (see ``requires-python``), so the suffix is normalized
+    by hand.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+class Probe(BaseModel):
+    """One **perishable** external verification: what was probed, and when.
+
+    Issue #863. ``kind: tool_evidence`` conflates two materially different
+    verifications:
+
+    - **Durable** — BOM arithmetic, link budgets, internal consistency, a
+      subtotal that sums. Verified once, true forever unless the document
+      changes. These are recorded as ordinary claim rows / findings; they
+      need no ``Probe``.
+    - **Perishable** — a live URL, an HTTP status, a version pin, the SHA
+      of a served artifact, a price quote with an expiry. Verified once,
+      true *until the world moves*. A ``VERIFIED`` verdict on one of these
+      carries an implicit expiry the framework did not previously record,
+      so it read identically to a durable verification and silently rotted
+      between passes.
+
+    **The existence of a ``Probe`` row IS the perishability marker.** There
+    is no ``durable: true`` counterpart — durable verifications are simply
+    the ones with no ``Probe``. This keeps the marker additive: a critic
+    that records nothing is byte-identical to a pre-#863 critic.
+
+    The four required fields are the minimum a later pass needs to re-run
+    the verification *without re-deriving what to check*: ``target`` (what),
+    ``method`` (how), ``observed`` (what it said then), ``checked_at``
+    (when). ``recheck_command`` is the optional literal one-liner when the
+    probe is shell-reproducible.
+
+    Freshness is evaluated by ``anvil/lib/probe_freshness.py``. Like
+    ``evidence_drift`` (issue #857), that check is **advisory** — it never
+    gates, scores, or raises a critical flag.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    target: str = Field(
+        ...,
+        description=(
+            "What was probed, as a stable identifier a later pass can "
+            "re-address: a URL, a DOI, a vendor SKU, a host:port. Used as "
+            "the identity key when matching a re-probe against an earlier "
+            "one, so keep it byte-stable across passes."
+        ),
+    )
+    method: str = Field(
+        ...,
+        description=(
+            "How it was probed. Free-form tag; the lib enforces no "
+            "vocabulary. Observed values: 'http_status', 'sha256', "
+            "'version_string', 'content_match', 'quote_validity'."
+        ),
+    )
+    observed: str = Field(
+        ...,
+        description=(
+            "What the probe returned at 'checked_at', verbatim enough to "
+            "diff against a later re-probe: '200', 'HTTP 404', "
+            "'sha256:ab12...', 'working draft v8'."
+        ),
+    )
+    checked_at: str = Field(
+        ...,
+        description=(
+            "ISO-8601 timestamp of the probe (UTC, per "
+            "anvil/lib/snippets/timestamp.md). Validated as parseable — a "
+            "probe whose timestamp cannot be read is worse than no probe, "
+            "because it looks fresh to a reader and is uncheckable by a "
+            "tool."
+        ),
+    )
+    claim: Optional[str] = Field(
+        None,
+        description=(
+            "The artifact claim that depends on this probe, in one line. "
+            "Lets a staleness report name what would become false, not "
+            "just which URL went cold."
+        ),
+    )
+    evidence_span: Optional[str] = Field(
+        None, description="See Score.evidence_span for format."
+    )
+    recheck_command: Optional[str] = Field(
+        None,
+        description=(
+            "Literal command that re-runs this probe, e.g. "
+            "'curl -sI https://example.org/x | head -1'. Optional: not "
+            "every probe is shell-reproducible, and 'target' + 'method' "
+            "already say what to re-check."
+        ),
+    )
+    max_age_days: Optional[int] = Field(
+        None,
+        ge=0,
+        description=(
+            "Per-probe freshness budget, overriding the caller's default. "
+            "Set it when the claim has a known expiry (a 30-day vendor "
+            "quote) or decays unusually fast."
+        ),
+    )
+
+    @field_validator("checked_at")
+    @classmethod
+    def _validate_checked_at(cls, value: str) -> str:
+        if parse_timestamp(value) is None:
+            raise ValueError(
+                f"checked_at must be an ISO-8601 timestamp (got {value!r})"
+            )
+        return value
+
+
+class ProbeLog(BaseModel):
+    """The standalone ``probes.json`` re-probe list in a critic sibling dir.
+
+    Issue #863. ``Probe`` rows have **two** carriers, because the shipped
+    audit commands have not all migrated to ``_review.json`` (see
+    ``anvil/lib/snippets/audit.md`` §"Migration status"): a schema-era
+    critic puts them on ``Review.probes``; a prose-era critic — every
+    shipped auditor today — writes this file alongside its
+    ``findings.md`` / ``verdict.md``. ``anvil/lib/probe_freshness.py``
+    reads both and unions them, so the perishability contract does not
+    have to wait on the per-skill ``_review.json`` migration.
+
+    An **empty** ``probes`` list is meaningful and is NOT the same as an
+    absent file: it is the auditor stating "I looked; nothing in this
+    artifact is perishable." An absent file is unknown-freshness.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["1"] = Field(SCHEMA_VERSION)
+    version_dir: str = Field(
+        ..., description="Name of the version directory probed, e.g. 'memo.3'."
+    )
+    critic_id: str = Field(
+        ..., description="Stable identifier of the critic that probed."
+    )
+    probes: List[Probe] = Field(
+        default_factory=list,
+        description=(
+            "Every perishable verification this critic performed. Empty "
+            "declares 'no perishable claims in this artifact' — distinct "
+            "from an absent probes.json, which is unknown-freshness."
+        ),
+    )
+
+
 class Finding(BaseModel):
     """One actionable critique item beyond the per-dimension scorecard.
 
@@ -247,8 +415,26 @@ class CriticalFlag(BaseModel):
     """A top-level critical flag, short-circuiting the verdict.
 
     A critical flag indicates a defect severe enough that a sophisticated
-    reader would stop reading. Any critical flag forces ``Verdict.BLOCK``
+    reader would stop reading. Most critical flags force ``Verdict.BLOCK``
     regardless of total score.
+
+    Two ``type`` values are **specially resolved** (additive, no schema-
+    version bump — each carries its own priority tier in
+    ``anvil/lib/convergence.py``):
+
+    - ``"no_go"`` (issue #559) — a *stronger* terminator than a generic
+      critical flag: short-circuits to ``Verdict.NO_GO`` (thesis-failure
+      terminal sink).
+    - ``"pending_dependency"`` (issue #842) — a *weaker* signal than a
+      generic critical flag: an honestly-declared ``[PENDING <source>]``
+      value that is still outstanding. It is visible in
+      ``AggregatedReview.critical_flags`` for reporting, but it **never**
+      forces ``Verdict.BLOCK`` and **never** deducts a dimension score.
+      The terminal-state gate (READY / AUDITED) for an unresolved pending
+      marker is enforced *separately* by the consuming skill (via
+      ``convergence.has_pending_dependency_flag`` or a deterministic
+      re-run of ``anvil/lib/pending_marker.py``), decoupled from the
+      score/verdict path here.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -258,7 +444,12 @@ class CriticalFlag(BaseModel):
         description=(
             "Short tag, e.g. 'fabricated_traction', 'factual_error', "
             "'conflict_of_interest'. Skill-defined; the lib does not "
-            "enforce a vocabulary."
+            "enforce a vocabulary. Two values are specially resolved: "
+            "'no_go' (issue #559 — forces Verdict.NO_GO) and "
+            "'pending_dependency' (issue #842 — an outstanding "
+            "pending-measurement marker; visible for reporting but never "
+            "forces Verdict.BLOCK and never deducts a dimension score, "
+            "with the terminal-state gate enforced separately)."
         ),
     )
     justification: str = Field(
@@ -376,6 +567,19 @@ class Review(BaseModel):
             "Path (relative to version_dir) of the rendered artifact the "
             "critic reviewed. Required when kind='vision' (#30); optional "
             "otherwise."
+        ),
+    )
+    probes: Optional[List[Probe]] = Field(
+        None,
+        description=(
+            "Perishable external verifications performed by this critic "
+            "(issue #863) — the machine-readable re-probe list a later "
+            "pass re-runs instead of re-deriving what needs checking. "
+            "`None` (the default, and every pre-#863 review) means "
+            "unknown freshness, NOT 'nothing perishable'; an explicit "
+            "empty list is the auditor declaring the artifact "
+            "durable-only. Optional even for kind='tool_evidence' so "
+            "existing audit siblings keep validating unchanged."
         ),
     )
     unscored: bool = Field(
@@ -498,8 +702,11 @@ __all__ = [
     "Kind",
     "Score",
     "ToolCall",
+    "Probe",
+    "ProbeLog",
     "Finding",
     "CriticalFlag",
     "Review",
     "AggregatedReview",
+    "parse_timestamp",
 ]

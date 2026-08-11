@@ -25,7 +25,14 @@ following conditions are evaluated in order — the **first** match wins:
    override to resurrect. NO-GO is resolved BEFORE ``CRITICAL_FLAG``
    because a ``no_go``-typed flag is a stronger signal than a generic
    critical flag.
-2. ``CRITICAL_FLAG`` (``Verdict.BLOCK``) — any other critical flag is set.
+2. ``CRITICAL_FLAG`` (``Verdict.BLOCK``) — any other *blocking* critical
+   flag is set. ``pending_dependency``-typed flags (issue #842) are
+   explicitly EXCLUDED here: they are visible-but-non-blocking
+   outstanding-dependency markers, never a blocker verdict, and never
+   deduct a dimension score. The terminal-state gate (READY / AUDITED)
+   for an unresolved pending marker is enforced *separately* by the
+   consuming skill via :func:`has_pending_dependency_flag` — decoupled
+   from the score/verdict path here, exactly as #842 specifies.
 3. ``THRESHOLD_MET`` (``Verdict.ADVANCE``) — latest total meets threshold.
 4. ``MAX_ITERATIONS`` (``Verdict.REVISE``) — iteration cap exhausted. The
    verdict remains ``REVISE`` because the work did not converge; the
@@ -88,6 +95,31 @@ TERMINATION_NO_GO = "NO_GO"
 # ``anvil/lib/snippets/state_machine.md`` §"Terminal verdict: NO-GO".
 NO_GO_FLAG_TYPE = "no_go"
 
+# The additive critical-flag type for an outstanding pending-measurement
+# dependency (issue #842). Modeled on ``NO_GO_FLAG_TYPE``'s discipline —
+# additive, no schema-version bump — but with the OPPOSITE verdict
+# posture: where a ``no_go`` flag is a *stronger* terminator than a
+# generic critical flag (short-circuiting to ``NO_GO``), a
+# ``pending_dependency`` flag is a *weaker* signal than a generic
+# critical flag — it must **never** force ``Verdict.BLOCK`` and must
+# **never** deduct a dimension score. It surfaces in
+# ``AggregatedReview.critical_flags`` purely for visibility ("an
+# honestly-declared value is still outstanding"), while the terminal-
+# state gate (READY / AUDITED) is enforced *separately* by the consuming
+# skill via :func:`has_pending_dependency_flag` (or a deterministic
+# re-run of ``anvil/lib/pending_marker.py``). See that module and
+# ``anvil/lib/snippets/pending_marker.md`` for the full convention.
+PENDING_DEPENDENCY_FLAG_TYPE = "pending_dependency"
+
+
+def _flag_type(cf: Union[str, CriticalFlag]) -> Optional[str]:
+    """Return the ``type`` tag of a flag given either shape, else ``None``."""
+    if isinstance(cf, CriticalFlag):
+        return cf.type
+    if isinstance(cf, str):
+        return cf
+    return None
+
 
 def _has_no_go_flag(
     critical_flags: Optional[List[Union[str, CriticalFlag]]],
@@ -100,14 +132,48 @@ def _has_no_go_flag(
     """
     if not critical_flags:
         return False
-    for cf in critical_flags:
-        if isinstance(cf, CriticalFlag):
-            if cf.type == NO_GO_FLAG_TYPE:
-                return True
-        elif isinstance(cf, str):
-            if cf == NO_GO_FLAG_TYPE:
-                return True
-    return False
+    return any(_flag_type(cf) == NO_GO_FLAG_TYPE for cf in critical_flags)
+
+
+def has_pending_dependency_flag(
+    critical_flags: Optional[List[Union[str, CriticalFlag]]],
+) -> bool:
+    """Return True when ``critical_flags`` contains a ``pending_dependency`` entry.
+
+    The public query for the **terminal-state gate** (issue #842): a
+    consuming skill (paper first) calls this before promoting a thread to
+    a terminal state (READY / AUDITED) — independently of the score /
+    ordinary-critical-flag verdict path — so an artifact can never reach a
+    terminal state with an unresolved ``[PENDING <source>]`` marker still
+    in its body. Accepts either ``CriticalFlag`` instances or bare ``str``
+    type-tags (same lenient shape as :func:`_has_no_go_flag`).
+    """
+    if not critical_flags:
+        return False
+    return any(
+        _flag_type(cf) == PENDING_DEPENDENCY_FLAG_TYPE for cf in critical_flags
+    )
+
+
+def blocking_critical_flags(
+    critical_flags: Optional[List[Union[str, CriticalFlag]]],
+) -> List[Union[str, CriticalFlag]]:
+    """Filter ``critical_flags`` down to the ones that force ``Verdict.BLOCK``.
+
+    Excludes ``pending_dependency``-typed flags (issue #842): those are
+    visible-but-non-blocking outstanding-dependency markers, never a
+    blocker verdict. A ``no_go``-typed flag IS retained here (it is a
+    blocker, resolved to the stronger ``NO_GO`` verdict upstream). Used by
+    ``anvil/lib/critics.py`` to compute ``any_critical`` without letting a
+    pending-only review force BLOCK.
+    """
+    if not critical_flags:
+        return []
+    return [
+        cf
+        for cf in critical_flags
+        if _flag_type(cf) != PENDING_DEPENDENCY_FLAG_TYPE
+    ]
 
 
 def check_stable(
@@ -231,7 +297,15 @@ def decide_termination(
     # into ``any_critical`` without producing a top-level ``CriticalFlag``).
     # The composite contract is: NO-GO fires only from the typed list;
     # generic CRITICAL_FLAG fires from EITHER the typed list OR the bool.
-    derived_any_critical = bool(critical_flags) or bool(any_critical)
+    #
+    # ``pending_dependency``-typed flags (issue #842) are excluded from the
+    # generic-critical trigger: they are visible-but-non-blocking
+    # outstanding-dependency markers and must NEVER force ``Verdict.BLOCK``.
+    # The terminal-state gate is enforced separately by the consuming skill
+    # via :func:`has_pending_dependency_flag`.
+    derived_any_critical = (
+        bool(blocking_critical_flags(critical_flags)) or bool(any_critical)
+    )
 
     # 1. NO-GO short-circuits everything (issue #559). Highest priority:
     #    the evaluator has concluded the thesis itself fails. Only fires
@@ -267,6 +341,9 @@ __all__ = [
     "TERMINATION_MAX_ITERATIONS",
     "TERMINATION_NO_GO",
     "NO_GO_FLAG_TYPE",
+    "PENDING_DEPENDENCY_FLAG_TYPE",
+    "has_pending_dependency_flag",
+    "blocking_critical_flags",
     "check_stable",
     "decide_termination",
 ]

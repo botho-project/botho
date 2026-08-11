@@ -108,6 +108,56 @@ treating the promoted subset with sharper framing ("memo carried this
 substance; the deck dropped it — was that deliberate?") instead of the bulk
 "drift, reconcile" framing the v0 ``only_in_memo`` warnings carry.
 
+Quarantine corpus — BRIEF-mandated omissions (issue #914)
+-----------------------------------------------------------
+The load-bearingness filter above models memo↔deck divergence as
+*accidental* — every promoted ``only_in_memo_economic`` token is framed as
+a "should you port this?" decision. That framing is WRONG for a token a
+project's ``BRIEF.md`` has deliberately quarantined: a superseded or
+unverified figure (canary: a memo's ``$400M`` gross-revenue figure when
+the project's hard rule requires the ``$256M`` net figure instead; an
+unverified ``20-40%`` preferred-vs-standard spread) that is **correctly**
+absent from the deck, not accidentally dropped. Pre-#914, the lint's
+sharpest channel — the economic promotion — was recommending exactly the
+hard-rule violation the BRIEF forbids.
+
+``ProjectBrief.quarantine`` (``anvil/lib/project_brief.py``) is the fix: a
+project author lists the literal tokens a hard rule forbids porting
+(``quarantine: ["$400M", "20-40%"]``), separate from the free-form
+``hard_rules`` prose. ``lint_source()`` accepts the resulting token set as
+``quarantine_corpus: frozenset[str]``; the two file wrappers
+(``lint_deck_memo_parity`` / ``lint_memo_deck_parity``) load it
+automatically via :func:`_extract_quarantine_corpus` against the sibling
+``BRIEF.md`` at the project root (the thread root's parent, same
+discovery convention as ``load_rubric_overrides_for_slug``).
+
+**Two distinct effects, both additive**:
+
+- A quarantined token found in the memo (and therefore in ``only_in_memo``)
+  is **excluded from ``only_in_memo_economic`` promotion** and instead
+  gets its own ``side="only_in_memo_quarantined"`` finding layered on top
+  of the underlying ``only_in_memo`` finding (same additive-surfacing
+  shape as the economic promotion) — "correctly absent per BRIEF hard
+  rule — do not port," not a divergence awaiting a decision.
+- A quarantined token found **anywhere in the deck body** (whether or not
+  it is also memo-side) raises a NEW ``side="quarantine_violation"``
+  finding — a real hard-rule violation this lint did not previously
+  detect at all.
+
+An empty ``quarantine_corpus`` (the default, and every consumer that
+predates issue #914 or has no ``quarantine:`` key on its BRIEF) is a true
+no-op — byte-identical to pre-#914 behavior.
+
+**Derived-forms caveat (explicitly out of scope for this pass)**: the
+quarantine corpus matches **literal tokens only**. A quarantined
+percentage that reappears in the deck (or is absent-but-implied in the
+memo) as its arithmetic derivation — e.g. a quarantined ``20-40%`` rate
+surfacing as a derived ``$360-720/yr`` dollar range one division away —
+is NOT detected. This is a known gap, not an oversight: full derivation
+detection is a follow-on tracked against canary signal (see issue #914).
+A reviser porting content near a quarantined figure MUST manually check
+for derived forms; the lint only catches the literal figure.
+
 Phase A / Phase B (warning vs. error severity)
 ----------------------------------------------
 v0 ships at **`warning` severity** for every parity finding. The lint is
@@ -189,17 +239,20 @@ What v0 explicitly defers (remains queued against this lib module)
 
 Public API
 ----------
-``lint_source(deck_source, memo_source, *, rule="deck_memo_parity") -> LintResult``
+``lint_source(deck_source, memo_source, *, rule="deck_memo_parity", figure_corpus=frozenset(), quarantine_corpus=frozenset()) -> LintResult``
     Generic core that operates on two in-memory strings. The default
     ``rule`` preserves deck-side semantics so the existing deck-side
     ``lint_source(deck_source, memo_source)`` call is byte-compatible.
     Memo-side wrapper passes ``rule="memo_deck_parity"``.
+    ``quarantine_corpus`` (issue #914) is an optional set of literal
+    BRIEF-quarantined tokens; see "Quarantine corpus" above.
 ``lint_deck_memo_parity(deck_version_dir, memo_version_dir) -> LintResult``
     Deck-side file wrapper. Discovers the source files inside the
-    version dirs and handles the graceful-skip path.
+    version dirs, auto-loads the sibling project ``BRIEF.md``'s
+    quarantine corpus, and handles the graceful-skip path.
 ``lint_memo_deck_parity(memo_version_dir, deck_version_dir) -> LintResult``
     Memo-side file wrapper. Symmetric to ``lint_deck_memo_parity`` with
-    primary/sibling roles swapped.
+    primary/sibling roles swapped (including quarantine-corpus loading).
 ``lint_parity(primary_path, sibling_path, primary_kind, sibling_kind) -> LintResult``
     Unified wrapper dispatching to the deck-side or memo-side primary-
     artifact framing based on ``primary_kind``. Centralizes the
@@ -251,16 +304,26 @@ class Finding:
     - ``token``: the exact extracted token that diverged between the two
       bodies (e.g., ``"~50–60% completion"`` minus the leading qualifier,
       or ``"50–60%"`` from the percentage extractor).
-    - ``side``: ``"only_in_memo"``, ``"only_in_deck"``, or
-      ``"only_in_memo_economic"`` — which body contained the token that
+    - ``side``: ``"only_in_memo"``, ``"only_in_deck"``,
+      ``"only_in_memo_economic"``, ``"only_in_memo_quarantined"``, or
+      ``"quarantine_violation"`` — which body contained the token that
       the other did not, OR (the third value) a memo-only token that the
       load-bearingness classifier promoted to the economic subset per
-      issue #553. **Values preserved verbatim across both wrappers** —
-      they describe *which body the token came from*, independent of
-      which side is "primary". The ``"only_in_memo_economic"`` finding
-      is **always emitted alongside** an ``"only_in_memo"`` finding for
-      the same token; the economic side is the *additional* sharper
-      signal, not a replacement.
+      issue #553, OR (the fourth value) a memo-only token that a project
+      BRIEF's ``quarantine:`` list marks as deliberately not-ported per
+      issue #914, OR (the fifth value) a BRIEF-quarantined token that
+      appears in the deck body — a hard-rule violation, also issue #914.
+      **Values preserved verbatim across both wrappers** — they describe
+      *which body the token came from*, independent of which side is
+      "primary". The ``"only_in_memo_economic"`` and
+      ``"only_in_memo_quarantined"`` findings are **always emitted
+      alongside** an ``"only_in_memo"`` finding for the same token
+      (additive sharper signal, not a replacement); the two are mutually
+      exclusive per token (a quarantined token is never ALSO promoted to
+      ``"only_in_memo_economic"`` — see the module docstring's
+      "Quarantine corpus" section). ``"quarantine_violation"`` has no
+      required companion finding — it fires independently of whether the
+      same token is also ``only_in_deck`` or shared with the memo.
     """
 
     line: int
@@ -268,7 +331,7 @@ class Finding:
     severity: str  # "warning" | "info"  (v0 ships warning-only; info is the suppressed path)
     message: str
     token: str
-    side: str  # "only_in_memo" | "only_in_deck" | "only_in_memo_economic"
+    side: str  # "only_in_memo" | "only_in_deck" | "only_in_memo_economic" | "only_in_memo_quarantined" | "quarantine_violation"
 
     def to_dict(self) -> dict:
         return {
@@ -363,6 +426,50 @@ class LintResult:
                 seen.append(f.token)
         return seen
 
+    @property
+    def only_in_memo_quarantined(self) -> list[str]:
+        """Unique ``only_in_memo`` tokens reframed as BRIEF-quarantined
+        (issue #914) — deliberately, rule-mandated omissions rather than
+        drift awaiting a port decision.
+
+        **Invariant**: ``set(only_in_memo_quarantined) ⊆ set(only_in_memo)``.
+        A token in this list is **always** also recorded as an
+        ``only_in_memo`` finding; the quarantined side is the *additional*
+        reframing signal. **Mutually exclusive with
+        ``only_in_memo_economic``** — a quarantined token is NEVER also
+        promoted to the economic subset, even when it would otherwise
+        qualify (money/percent/unit_int near economic-context vocab); the
+        quarantine reframing takes precedence over the economic promotion
+        for the same token.
+
+        Always empty when ``quarantine_corpus`` is empty (the default) —
+        byte-identical to pre-#914 behavior — and always empty when the
+        lint skipped.
+        """
+        seen: list[str] = []
+        for f in self.warnings + self.infos:
+            if f.side == "only_in_memo_quarantined" and f.token not in seen:
+                seen.append(f.token)
+        return seen
+
+    @property
+    def quarantine_violations(self) -> list[str]:
+        """Unique tokens found in the **deck** body that a project BRIEF's
+        ``quarantine:`` list forbids porting (issue #914) — a real
+        hard-rule violation this lint did not previously detect.
+
+        Independent of ``only_in_deck`` / ``only_in_memo``: fires whenever
+        a quarantined token appears anywhere in the deck body, regardless
+        of whether the same token also appears in the memo. Always empty
+        when ``quarantine_corpus`` is empty (the default) and always
+        empty when the lint skipped.
+        """
+        seen: list[str] = []
+        for f in self.warnings + self.infos:
+            if f.side == "quarantine_violation" and f.token not in seen:
+                seen.append(f.token)
+        return seen
+
     def to_summary(self) -> dict:
         """Shape that fits cleanly into the review ``_summary.md`` ``lint`` block.
 
@@ -382,6 +489,8 @@ class LintResult:
             "only_in_memo": self.only_in_memo,
             "only_in_deck": self.only_in_deck,
             "only_in_memo_economic": self.only_in_memo_economic,
+            "only_in_memo_quarantined": self.only_in_memo_quarantined,
+            "quarantine_violations": self.quarantine_violations,
             "warnings_by_token": [f.to_dict() for f in self.warnings],
             "infos_by_token": [f.to_dict() for f in self.infos],
         }
@@ -673,6 +782,10 @@ def _build_message_deck_side(token: str, side: str, line_no: int) -> str:
     tokens to this side; the underlying ``only_in_memo`` finding for the
     same token is still emitted (the economic side is additional
     surfacing, not a replacement).
+
+    The fourth and fifth side values, ``"only_in_memo_quarantined"`` and
+    ``"quarantine_violation"`` (issue #914), are the BRIEF-quarantine
+    surface — see the module docstring's "Quarantine corpus" section.
     """
     if side == "only_in_memo_economic":
         return (
@@ -687,6 +800,27 @@ def _build_message_deck_side(token: str, side: str, line_no: int) -> str:
             f"dismiss as ordinary drift (warning only in v0, but the "
             f"reviser should consult this subset before accepting the "
             f"broader memo↔deck divergence)."
+        )
+    if side == "only_in_memo_quarantined":
+        return (
+            f"**Correctly absent per BRIEF hard rule — do not port.** Hard "
+            f"claim `{token}` appears in memo (line {line_no}) but is listed "
+            f"on the project BRIEF's `quarantine:` surface. This is NOT a "
+            f"'should you port this?' divergence — the omission from the "
+            f"deck is deliberate and rule-mandated. Do not port `{token}` "
+            f"into the deck on `deck-revise`. Note: quarantine matches "
+            f"literal tokens only — a derived form of this figure (e.g. an "
+            f"arithmetic product of a quarantined rate) is NOT caught by "
+            f"this lint; check derivations manually."
+        )
+    if side == "quarantine_violation":
+        return (
+            f"**BRIEF hard-rule violation: quarantined figure in deck.** "
+            f"Hard claim `{token}` appears in the deck (line {line_no}) but "
+            f"is listed on the project BRIEF's `quarantine:` surface — a "
+            f"hard rule forbids porting this figure. This is an actionable "
+            f"violation, not ordinary drift: remove or replace `{token}` on "
+            f"the next `deck-revise` with the BRIEF-mandated figure."
         )
     if side == "only_in_memo":
         return (
@@ -722,6 +856,11 @@ def _build_message_memo_side(token: str, side: str, line_no: int) -> str:
     rich, the deck is thin; from this POV no memo-revise action is
     required), but the schema-parity contract requires the side and the
     classifier output to surface symmetrically across both wrappers.
+
+    The fourth and fifth side values, ``"only_in_memo_quarantined"`` and
+    ``"quarantine_violation"`` (issue #914), likewise surface on the memo
+    side for schema parity — see the module docstring's "Quarantine
+    corpus" section.
     """
     if side == "only_in_memo_economic":
         return (
@@ -733,6 +872,26 @@ def _build_message_memo_side(token: str, side: str, line_no: int) -> str:
             f"the deck-revise reviser, not the memo-revise reviser. "
             f"Surfacing on both sides preserves schema parity (warning only "
             f"in v0)."
+        )
+    if side == "only_in_memo_quarantined":
+        return (
+            f"**Correctly absent per BRIEF hard rule — do not port.** Hard "
+            f"claim `{token}` appears in memo (line {line_no}) but is listed "
+            f"on the project BRIEF's `quarantine:` surface. From the "
+            f"memo-side POV this is informational — the memo is allowed to "
+            f"carry the quarantined figure; the rule forbids it on the "
+            f"deck. This is NOT a 'should you port this?' divergence. Note: "
+            f"quarantine matches literal tokens only — a derived form of "
+            f"this figure is NOT caught by this lint."
+        )
+    if side == "quarantine_violation":
+        return (
+            f"**BRIEF hard-rule violation: quarantined figure in deck.** "
+            f"Hard claim `{token}` appears in the sibling deck but is listed "
+            f"on the project BRIEF's `quarantine:` surface — a hard rule "
+            f"forbids porting this figure. From the memo-side POV this is "
+            f"actionable for the `deck-revise` reviser, not `memo-revise`; "
+            f"surfacing on both sides preserves schema parity."
         )
     if side == "only_in_deck":
         return (
@@ -835,6 +994,47 @@ def _strip_token_numeric(token: str) -> list[str]:
     are never promotion-eligible anyway, so the empty list is a safe no-op.
     """
     return _FIGURE_NUMERIC_RE.findall(token)
+
+
+# Quarantine corpus (issue #914) ------------------------------------------------
+
+
+def _extract_quarantine_corpus(project_dir: Path) -> frozenset[str]:
+    """Read the project ``BRIEF.md``'s ``quarantine:`` surface and return
+    it as a normalized token frozenset.
+
+    ``project_dir`` is the project root — the parent of the thread root,
+    i.e. the directory containing ``BRIEF.md`` (same discovery convention
+    as ``load_rubric_overrides_for_slug``; see the two ``*-review.md``
+    command files' project-root discovery prose). Each configured
+    quarantine entry is passed through :func:`_normalize_token` so it
+    matches the same normalized surface the extractors produce (dash
+    unification, uppercased money magnitude marker, trailing-period
+    strip) — a BRIEF author writing ``quarantine: ["$400m"]`` still
+    matches a memo token normalized to ``"$400M"``.
+
+    Graceful by contract, mirroring :func:`_extract_figure_corpus`:
+    returns an empty frozenset when ``project_dir`` has no ``BRIEF.md``,
+    the BRIEF fails to parse (malformed frontmatter/schema — a broken
+    project BRIEF must not sink the parity lint), or the BRIEF has no
+    ``quarantine:`` key. An empty corpus makes the downstream classifier
+    byte-identical to its pre-#914 behavior.
+    """
+    if not isinstance(project_dir, Path):
+        project_dir = Path(project_dir)
+    try:
+        from anvil.lib.project_brief import load_project_brief
+    except ImportError:
+        return frozenset()
+    try:
+        brief = load_project_brief(project_dir)
+    except ValueError:
+        return frozenset()
+    if brief is None or not brief.quarantine:
+        return frozenset()
+    return frozenset(
+        _normalize_token(t) for t in brief.quarantine if t and t.strip()
+    )
 
 
 # Load-bearingness classifier (issue #553) -------------------------------------
@@ -953,6 +1153,7 @@ def lint_source(
     *,
     rule: str = "deck_memo_parity",
     figure_corpus: frozenset[str] = frozenset(),
+    quarantine_corpus: frozenset[str] = frozenset(),
 ) -> LintResult:
     """Run the parity lint over two in-memory body strings.
 
@@ -969,6 +1170,18 @@ def lint_source(
     this call byte-identical to its pre-#623 form for every existing
     consumer (the citation-clear canary anchor calls this API directly with
     no figure corpus).
+
+    ``quarantine_corpus`` (issue #914) is an optional set of normalized
+    tokens a project BRIEF's ``quarantine:`` list forbids porting from
+    memo to deck (see :func:`_extract_quarantine_corpus`). It has two
+    effects, both additive to the v0 shape: (1) a quarantined
+    ``only_in_memo`` token is excluded from ``only_in_memo_economic``
+    promotion and instead surfaces under ``side="only_in_memo_quarantined"``
+    — "correctly absent per BRIEF hard rule," not a divergence awaiting a
+    port decision; (2) a quarantined token found anywhere in the deck body
+    raises a NEW ``side="quarantine_violation"`` finding — a real hard-rule
+    violation. Defaulting to an empty frozenset keeps this call
+    byte-identical to its pre-#914 form for every existing consumer.
 
     This is the unit-testable core; the wrappers
     (``lint_deck_memo_parity`` / ``lint_memo_deck_parity``) handle the
@@ -1012,6 +1225,12 @@ def lint_source(
     economic_promoted = _classify_economic_tokens(
         only_in_memo_tokens, memo_hits, memo_source, figure_corpus
     )
+    # Quarantine reframing (issue #914): a quarantined token is NEVER
+    # promoted to only_in_memo_economic, even when it would otherwise
+    # qualify — the quarantine reframe below takes precedence over the
+    # economic-substance framing for the same token.
+    if quarantine_corpus:
+        economic_promoted -= quarantine_corpus
 
     for token in sorted(only_in_memo_tokens):
         line_no = memo_first_line.get(token, 0)
@@ -1047,6 +1266,27 @@ def lint_source(
             else:
                 result.warnings.append(econ_finding)
 
+        # Quarantine reframing (issue #914): layer the reframed
+        # "correctly absent per BRIEF hard rule" finding on top instead
+        # of (never alongside) the economic promotion. Severity mirrors
+        # the underlying only_in_memo finding's severity — the two
+        # mechanisms compose, matching the economic-promotion contract.
+        if token in quarantine_corpus:
+            quarantine_finding = Finding(
+                line=line_no,
+                rule=rule,
+                severity="info" if suppressed else "warning",
+                message=_build_message(
+                    token, "only_in_memo_quarantined", line_no, rule
+                ),
+                token=token,
+                side="only_in_memo_quarantined",
+            )
+            if suppressed:
+                result.infos.append(quarantine_finding)
+            else:
+                result.warnings.append(quarantine_finding)
+
     # only_in_deck: symmetric — tokens present in deck but absent from memo.
     only_in_deck_tokens = deck_tokens - memo_tokens
     deck_first_line: dict[str, int] = {}
@@ -1069,6 +1309,33 @@ def lint_source(
             result.infos.append(finding)
         else:
             result.warnings.append(finding)
+
+    # Quarantine violation (issue #914): a quarantined token appearing
+    # ANYWHERE in the deck body — not just the only_in_deck subset — is a
+    # real hard-rule violation the lint did not previously detect. Fires
+    # independently of whether the same token also appears in the memo
+    # (a token can be both `only_in_deck` AND `quarantine_violation`, or
+    # shared with the memo AND `quarantine_violation`).
+    if quarantine_corpus:
+        deck_quarantine_first_line: dict[str, int] = {}
+        for h in deck_hits:
+            if h.token in quarantine_corpus and h.token not in deck_quarantine_first_line:
+                deck_quarantine_first_line[h.token] = h.line
+        for token in sorted(deck_quarantine_first_line):
+            line_no = deck_quarantine_first_line[token]
+            suppressed = token in deck_disabled
+            violation_finding = Finding(
+                line=line_no,
+                rule=rule,
+                severity="info" if suppressed else "warning",
+                message=_build_message(token, "quarantine_violation", line_no, rule),
+                token=token,
+                side="quarantine_violation",
+            )
+            if suppressed:
+                result.infos.append(violation_finding)
+            else:
+                result.warnings.append(violation_finding)
 
     return result
 
@@ -1133,11 +1400,18 @@ def lint_deck_memo_parity(
     # only_in_memo_economic. Graceful-empty when no figures/src/ exists.
     figure_corpus = _extract_figure_corpus(deck_version_dir)
 
+    # Issue #914: consult the project BRIEF.md's quarantine: surface —
+    # project root is the parent of the deck thread root (same discovery
+    # convention as load_rubric_overrides_for_slug). Graceful-empty when
+    # no BRIEF.md exists or it carries no quarantine: key.
+    quarantine_corpus = _extract_quarantine_corpus(deck_version_dir.parent.parent)
+
     result = lint_source(
         deck_source,
         memo_source,
         rule="deck_memo_parity",
         figure_corpus=figure_corpus,
+        quarantine_corpus=quarantine_corpus,
     )
     result.memo_sibling = str(memo_version_dir.resolve())
     return result
@@ -1196,10 +1470,21 @@ def lint_memo_deck_parity(
     memo_source = memo_path.read_text(encoding="utf-8")
     deck_source = deck_path.read_text(encoding="utf-8")
 
+    # Issue #914: consult the project BRIEF.md's quarantine: surface —
+    # project root is the parent of the memo thread root, symmetric to
+    # the deck-side wrapper's discovery. Graceful-empty when no BRIEF.md
+    # exists or it carries no quarantine: key.
+    quarantine_corpus = _extract_quarantine_corpus(memo_version_dir.parent.parent)
+
     # The memo-side wrapper passes the sources in deck/memo positional
     # order to the shared core, with ``rule="memo_deck_parity"`` to
     # select the memo-side rule label and diagnostic wording.
-    result = lint_source(deck_source, memo_source, rule="memo_deck_parity")
+    result = lint_source(
+        deck_source,
+        memo_source,
+        rule="memo_deck_parity",
+        quarantine_corpus=quarantine_corpus,
+    )
     result.deck_sibling = str(deck_version_dir.resolve())
     return result
 

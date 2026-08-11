@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "thread": "00-introduction",
+  "phases": {
+    "review": {
+      "state": "done",
+      "started": "2026-07-22T15:00:00Z",
+      "completed": "2026-07-22T15:12:00Z"
+    }
+  },
+  "metadata": {
+    "reviewed_version": "00-introduction.1",
+    "rubric_id": "anvil-memoir-v1",
+    "total": 41,
+    "rubric_total": 44,
+    "advance_threshold": 39,
+    "advance": true,
+    "critical_flags": []
+  }
+}

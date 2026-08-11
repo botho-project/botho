@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "thread": "00-introduction",
+  "phases": {
+    "draft": {
+      "state": "done",
+      "started": "2026-07-22T14:00:00Z",
+      "completed": "2026-07-22T14:20:00Z"
+    }
+  },
+  "metadata": {
+    "artifact_type": "memoir",
+    "iteration": 1,
+    "max_iterations": 4,
+    "iteration_cap_rationale": null,
+    "corpus_dirs_resolved": [
+      "transcripts",
+      "letters"
+    ],
+    "subject_voice_exemplars": {
+      "grani": [
+        "transcripts/grani-01.md"
+      ]
+    },
+    "self_check": {
+      "sourcing_note": "5 provenance.md rows written before prose; 4 traced to a corpus passage (2 VERIFIED-shaped, 2 PARAPHRASE_OK-shaped), 1 explicitly marked NOT_FOUND and softened in the prose rather than stated as fact",
+      "subject_voice_note": "1 quoted Grani line grounded in transcripts/grani-01.md:5-6 — short declaratives kept short, not smoothed into balanced prose"
+    },
+    "word_count": 190
+  }
+}

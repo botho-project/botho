@@ -188,8 +188,8 @@ class CrossThreadRef:
         and the operator can grep for it.
     other_slug
         The sibling thread slug (the directory name under the portfolio
-        root). E.g., ``"brasidas-synthesis"`` for
-        ``[[../brasidas-synthesis/brasidas-synthesis.latest]]``.
+        root). E.g., ``"meridian-synthesis"`` for
+        ``[[../meridian-synthesis/meridian-synthesis.latest]]``.
     version
         The version specifier — either the literal string ``"latest"``
         or a numeric string like ``"3"``. Kept as a string (not parsed

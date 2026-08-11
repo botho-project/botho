@@ -17,14 +17,16 @@ Both are consumed by non-Python callers (e.g., a future TypeScript
 orchestrator) for validation against the same contract as the Python
 models.
 
-The review-schema document is the union of two schemas:
+The review-schema document is the union of three schemas:
 
 - ``$defs.Review`` — the per-critic ``_review.json`` payload.
 - ``$defs.AggregatedReview`` — the merged result produced by
   ``anvil/lib/critics.py::aggregate``.
+- ``$defs.ProbeLog`` — the ``probes.json`` perishable-verification
+  re-probe list (issue #863).
 
-The top-level review schema accepts either shape (``oneOf``) so a single
-validator can be pointed at any file in a critic sibling dir.
+The top-level review schema accepts any of those shapes (``oneOf``) so a
+single validator can be pointed at any file in a critic sibling dir.
 
 The rubric-schema document is a single ``Rubric`` shape covering both
 generic and advisory venue overlays (discriminated by the ``advisory``
@@ -36,7 +38,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from anvil.lib.review_schema import AggregatedReview, Review
+from anvil.lib.review_schema import AggregatedReview, ProbeLog, Review
 from anvil.lib.rubric import Rubric
 
 
@@ -50,17 +52,19 @@ def build_schema() -> dict:
     agg_schema = AggregatedReview.model_json_schema(
         ref_template="#/$defs/{model}"
     )
+    probe_log_schema = ProbeLog.model_json_schema(ref_template="#/$defs/{model}")
 
     # pydantic emits a top-level "$defs" inside each schema; pull them up so
     # the combined document has a single shared "$defs" map.
     shared_defs: dict = {}
-    for sub_schema in (review_schema, agg_schema):
+    for sub_schema in (review_schema, agg_schema, probe_log_schema):
         sub_defs = sub_schema.pop("$defs", {})
         for name, defn in sub_defs.items():
             shared_defs.setdefault(name, defn)
 
     shared_defs["Review"] = review_schema
     shared_defs["AggregatedReview"] = agg_schema
+    shared_defs["ProbeLog"] = probe_log_schema
 
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -74,6 +78,7 @@ def build_schema() -> dict:
         "oneOf": [
             {"$ref": "#/$defs/Review"},
             {"$ref": "#/$defs/AggregatedReview"},
+            {"$ref": "#/$defs/ProbeLog"},
         ],
         "$defs": shared_defs,
     }

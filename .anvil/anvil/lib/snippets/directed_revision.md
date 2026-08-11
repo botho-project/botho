@@ -173,13 +173,19 @@ passed. The full set (12 skills): `memo`, `report`, `datasheet`,
   #691). Bypasses the step-2 combined-verdict pre-check; the
   report-family review+audit critic-completeness check (step 1) and
   the iteration cap (step 3) still apply.
+- **`proposal`** — the third consumer (issue #862). Bypasses the
+  step-4 combined-advance pre-check; the review+audit
+  critic-completeness check (step 1) and the iteration cap (step 3)
+  still apply. Composes with proposal's existing `--scope` severity
+  filter on the same terms `memo-revise.md` documents (the polish
+  bypass and the scope filter are independent, orthogonal flags).
 
 **Pending adoption** (each its own scoped follow-up PR, referencing
-this snippet): `report`, `datasheet`, `proposal`, `deck`, `paper`,
-`slides`, `installation`, `essay`, `ip-uspto`, `ip-uspto-provisional`.
-The `essay` and `installation` shapes are review-only (no audit), so
-their bypass is even simpler — skip the single-critic verdict
-pre-check step.
+this snippet): `report`, `datasheet`, `deck`, `paper`, `slides`,
+`installation`, `essay`, `ip-uspto`, `ip-uspto-provisional`. The
+`essay` and `installation` shapes are review-only (no audit), so their
+bypass is even simpler — skip the single-critic verdict pre-check
+step.
 
 ## Adoption step (the prose to put in a command file)
 
@@ -212,3 +218,6 @@ than re-deriving it), mirroring `memo/SKILL.md`.
   / `--plan` / `--apply` compositions.
 - `anvil/skills/primer/commands/primer-revise.md` §"CLI flags" — the
   report-family (review+audit) adoption.
+- `anvil/skills/proposal/commands/proposal-revise.md` §"CLI flags" —
+  the review+audit adoption that also composes with an existing
+  `--scope` severity filter.

@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "thread": "00-introduction",
+  "phases": {
+    "audit": {
+      "state": "done",
+      "started": "2026-07-22T15:00:00Z",
+      "completed": "2026-07-22T15:10:00Z"
+    }
+  },
+  "metadata": {
+    "audited_version": "00-introduction.1",
+    "rubric_id": "anvil-memoir-v1",
+    "audit_clean": true,
+    "critical_flags": []
+  }
+}

@@ -219,20 +219,32 @@ def load_review(critic_dir: Path) -> Review:
 
 # Match the markdown scoring table row format used by memo and paper:
 # | # | Dimension | Weight | Score | Justification |
+#
+# The weight/score cells tolerate surrounding markdown emphasis
+# (``**5**``, ``*5*``, ``__5__``) — a reviewer bolding the score column
+# for emphasis is natural markdown and must not silently drop the row
+# (issue #912). ``_strip_emphasis`` removes the markers once matched;
+# widening the digit alternation itself (rather than pre-stripping the
+# whole cell) keeps the header/separator-row rejection behavior intact.
 _MEMO_SCORE_ROW = re.compile(
     r"^\s*\|\s*(?P<num>\d+)\s*\|"
     r"\s*(?P<dim>[^|]+?)\s*\|"
-    r"\s*(?P<weight>\d+)\s*\|"
-    r"\s*(?P<score>\d+|null|N/A|n/a|-)\s*\|"
+    r"\s*(?P<weight>[*_]{0,2}\d+[*_]{0,2})\s*\|"
+    r"\s*(?P<score>[*_]{0,2}(?:\d+|null|N/A|n/a|-)[*_]{0,2})\s*\|"
     r"\s*(?P<just>.*?)\s*\|\s*$"
 )
 
-# Verdict.md fields we extract from prose:
+# Verdict.md fields we extract from prose. The label side already
+# tolerated emphasis (``\*?\*?Total\*?\*?``); the value side now does
+# too (``**Total**: **44**/44``, `` `advance: **true**` ``) — issue #912.
 _MEMO_TOTAL = re.compile(
-    r"\*?\*?Total\*?\*?:\s*`?(\d+)`?\s*/\s*(\d+)", re.IGNORECASE
+    r"\*?\*?Total\*?\*?:\s*`?[*_]{0,2}(\d+)[*_]{0,2}`?"
+    r"\s*/\s*[*_]{0,2}(\d+)[*_]{0,2}",
+    re.IGNORECASE,
 )
 _MEMO_DECISION = re.compile(
-    r"\*?\*?Decision\*?\*?:\s*`?advance:\s*(true|false)`?", re.IGNORECASE
+    r"\*?\*?Decision\*?\*?:\s*`?advance:\s*[*_]{0,2}(true|false)[*_]{0,2}`?",
+    re.IGNORECASE,
 )
 # NO-GO verdict line (issue #559) — surfaced when a memo-review writes the
 # NO-GO shape into verdict.md (see memo SKILL.md §"NO-GO terminal state").
@@ -397,14 +409,31 @@ def _parse_memo_critical_flags(text: str) -> List[CriticalFlag]:
     return flags
 
 
+def _strip_emphasis(cell: str) -> str:
+    """Strip surrounding markdown emphasis markers from a table cell.
+
+    Handles ``**5**``, ``*5*``, and ``__5__`` (issue #912) — a reviewer
+    bolding the Weight/Score column for visual emphasis is natural
+    markdown and must not prevent the numeric value underneath from
+    being parsed. ``str.strip`` removes any run of ``*``/``_`` from
+    either end, which is safe here because the capturing regex already
+    constrains the cell to at most a handful of leading/trailing
+    emphasis characters around a digit run or keyword.
+    """
+    return cell.strip().strip("*_")
+
+
 def parse_memo_scoring_table(text: str) -> List[Score]:
     """Parse the memo ``scoring.md`` markdown table into ``Score`` rows.
 
     Recognizes the ``| # | Dimension | Weight | Score | Justification |``
-    row shape. Raises ``pydantic.ValidationError`` when a parsed row
-    violates the ``Score`` bounds contract (score > weight, negative
-    score). Public per issue #392 — consumed by
-    ``anvil/lib/scorecard_check.py`` in addition to the legacy adapter.
+    row shape, tolerating markdown emphasis around the Weight/Score cells
+    (``**5**``, ``*5*``, ``__5__`` — issue #912) so a reviewer's natural
+    emphasis on the score column does not silently drop the row. Raises
+    ``pydantic.ValidationError`` when a parsed row violates the ``Score``
+    bounds contract (score > weight, negative score). Public per issue
+    #392 — consumed by ``anvil/lib/scorecard_check.py`` in addition to
+    the legacy adapter.
     """
     scores: List[Score] = []
     for line in text.splitlines():
@@ -417,8 +446,8 @@ def parse_memo_scoring_table(text: str) -> List[Score]:
         # because the cells are `---`, not digits/null).
         if dim.lower() == "dimension":
             continue
-        weight = int(m.group("weight"))
-        raw_score = m.group("score").strip().lower()
+        weight = int(_strip_emphasis(m.group("weight")))
+        raw_score = _strip_emphasis(m.group("score")).lower()
         if raw_score in {"null", "n/a", "-"}:
             score_val: Optional[int] = None
         else:
@@ -723,10 +752,15 @@ def aggregate(reviews: List[Review]) -> AggregatedReview:
     if threshold is None:
         threshold = sum(s.max for s in aggregated_scores)
 
+    # ``pending_dependency`` flags (issue #842) are visible in
+    # ``critical_flags`` for the terminal-state gate but must NOT force
+    # ``Verdict.BLOCK`` — exclude them from the generic-critical trigger.
+    from anvil.lib.convergence import blocking_critical_flags
+
     verdict = _compute_verdict_impl(
         total=total,
         threshold=threshold,
-        any_critical=bool(critical_flags)
+        any_critical=bool(blocking_critical_flags(critical_flags))
         or any(s.critical for s in aggregated_scores),
         critical_flags=critical_flags,
     )
@@ -834,7 +868,11 @@ def compute_verdict(
         provided.
     """
     eff_threshold = threshold if threshold is not None else agg.threshold
-    any_critical = bool(agg.critical_flags) or any(
+    # ``pending_dependency`` flags (issue #842) stay visible in
+    # ``agg.critical_flags`` but never contribute to the BLOCK trigger.
+    from anvil.lib.convergence import blocking_critical_flags
+
+    any_critical = bool(blocking_critical_flags(agg.critical_flags)) or any(
         s.critical for s in agg.scores
     )
 

@@ -219,9 +219,22 @@ from anvil.lib.rhetoric_lint import lint_rhetoric
 
 # Default placeholder patterns. Skills can extend via the placeholder_patterns
 # arg of ``gate``/``compile_and_gate``.
+#
+# NOTE (issue #855): ``[PENDING ...]`` / ``[PENDING: ...]`` markers are
+# INTENTIONALLY NOT matched here. They are a permitted honest-disclosure
+# convention (a value that does not exist yet — see
+# ``anvil/lib/snippets/pending_marker.md``) handled by the dedicated
+# ``anvil/lib/pending_marker.py`` gate, not by this generic placeholder scan.
+# ``_scan_placeholders`` below carves out well-formed pending-marker spans
+# (issue #842, ``_RENDER_GATE_PENDING_MARKER_RE``) so the two gates never
+# conflict. Do not add a ``[PENDING ...]`` pattern to this tuple — it would be
+# a no-op (the carve-out excludes it regardless) and risks confusing the two
+# gates' semantics (pending markers never block/penalize; generic
+# placeholders do).
 DEFAULT_PLACEHOLDER_PATTERNS: tuple[str, ...] = (
     r"\bTODO\b",
-    r"\[TBD\]",
+    r"\[TBD(?:[:\s][^\]]*)?\]",
+    r"\[FIXME(?:[:\s][^\]]*)?\]",
     r"\(figure\)",
     r"\\includegraphics\{[^}]*\.MISSING[^}]*\}",
     r"\.MISSING\b",
@@ -320,12 +333,21 @@ _MEMO_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg")
 # memo-author idioms (``_TKTKTK_`` is the canary's "to come" marker —
 # pronounced "tee-kay"). The ``<!--`` / ``-->`` delimiters are not
 # matched literally so a TODO outside an HTML comment also fires.
+#
+# NOTE (issue #855): as with ``DEFAULT_PLACEHOLDER_PATTERNS`` above, this
+# tuple intentionally carries no ``[PENDING ...]`` pattern. Well-formed
+# pending markers (see ``anvil/lib/snippets/pending_marker.md``) are the
+# dedicated ``anvil/lib/pending_marker.py`` gate's territory — for the memo
+# skill that gate runs as its own unconditional review step (see
+# ``anvil/skills/memo/commands/memo-review.md`` step 4n), independent of this
+# scan. Do not add a ``[PENDING ...]`` pattern here.
 DEFAULT_MEMO_PLACEHOLDER_PATTERNS: tuple[str, ...] = (
     r"<!--\s*TODO[^>]*-->",
     r"<!--\s*TBD[^>]*-->",
     r"<!--\s*FIXME[^>]*-->",
     r"\bTODO\b",
-    r"\[TBD\]",
+    r"\[TBD(?:[:\s][^\]]*)?\]",
+    r"\[FIXME(?:[:\s][^\]]*)?\]",
     r"\[TKTKTK\]",
     r"_TKTKTK_",
     r"\bTKTKTK\b",
@@ -391,20 +413,36 @@ _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _MD_LINK_TARGET_RE = re.compile(r"(!?\[[^\]]*\])\(([^)]*)\)")
 _AUTOLINK_RE = re.compile(r"<([a-zA-Z][a-zA-Z0-9+.-]*:[^>\s]*)>")
 
+# LaTeX-only: an unescaped ``%`` starts a comment that runs to end-of-line.
+# MUST NOT be applied to markdown sources — a bare ``%`` there is a percent
+# sign, not a comment opener. Mirrors ``numeric_consistency._LATEX_COMMENT_RE``
+# (issue #856): box-drawing / accented characters used purely for a comment
+# section rule (e.g. ``%% ── 4. The Item Pool ──``) never reach the rendered
+# PDF, so counting them source-side produces a false glyph-drop identical in
+# shape to a real missing-glyph defect.
+_LATEX_COMMENT_RE = re.compile(r"(?<!\\)%[^\n]*")
 
-def _strip_nonrendered_regions(text: str) -> str:
-    """Blank out markdown source regions that never reach the rendered body.
+
+def _strip_nonrendered_regions(text: str, *, latex: bool = False) -> str:
+    """Blank out source regions that never reach the rendered body.
 
     Removes HTML comments, inline link/image URL *targets* (keeping the
     visible link text), and angle-bracket autolink URLs. Used by the
     glyph-verification source sweep so non-ASCII inside a URL path
     (``[x](https://ex.com/café-page)``) or a comment (``<!-- café -->``) is
     not miscounted as a dropped body glyph (issue #692).
+
+    When ``latex=True`` (a ``.tex`` source body), also strips unescaped
+    ``%`` LaTeX comments — non-ASCII characters used only for a comment-only
+    section rule (e.g. box-drawing dashes) never reach the rendered PDF, so
+    counting them would false-flag a glyph drop (issue #856).
     """
     text = _HTML_COMMENT_RE.sub(" ", text)
     # Keep the link text (group 1), drop the URL target (group 2).
     text = _MD_LINK_TARGET_RE.sub(lambda m: m.group(1) + "( )", text)
     text = _AUTOLINK_RE.sub(" ", text)
+    if latex:
+        text = _LATEX_COMMENT_RE.sub(" ", text)
     return text
 
 
@@ -700,6 +738,23 @@ def _parse_overfull_boxes(log_text: str, threshold_pt: float) -> list[dict]:
     return hits
 
 
+# Well-formed pending-marker span (issue #842). A ``[PENDING <source>]`` /
+# ``[PENDING: <source>]`` placeholder is a *permitted* honest disclosure (a
+# value that does not exist yet), NOT a generic incompleteness placeholder —
+# so a placeholder-pattern hit that falls inside a well-formed pending marker
+# is excluded from Check 6. Kept as a local literal (rather than importing
+# ``pending_marker``) to avoid coupling the render gate's import graph to it;
+# the two regexes are documented to agree.
+_RENDER_GATE_PENDING_MARKER_RE = re.compile(
+    r"\[PENDING(?:\s*:\s*|\s+)[^\]\n]+?\s*\]"
+)
+
+
+def _pending_marker_spans(line: str) -> list[tuple[int, int]]:
+    """(start, end) offsets of every well-formed pending marker in ``line``."""
+    return [m.span() for m in _RENDER_GATE_PENDING_MARKER_RE.finditer(line)]
+
+
 def _scan_placeholders(
     source_paths: Iterable[Path],
     patterns: tuple[str, ...],
@@ -709,6 +764,11 @@ def _scan_placeholders(
     Each match: ``{pattern, path, line, match}``. Files that fail to read
     (binary, missing) are silently skipped — the gate's job is to surface
     matches, not to fail on a malformed input.
+
+    Well-formed ``[PENDING <source>]`` markers (issue #842) are carved out:
+    a placeholder hit whose span falls inside a pending marker on the same
+    line is skipped, so the generic placeholder scan never double-flags (and
+    hard-fails on) a marker this convention explicitly permits.
     """
     if not patterns:
         return []
@@ -722,17 +782,24 @@ def _scan_placeholders(
         except (UnicodeDecodeError, OSError):
             continue
         for lineno, line in enumerate(text.splitlines(), start=1):
+            pending_spans = _pending_marker_spans(line)
             for pattern_str, regex in compiled:
                 m = regex.search(line)
-                if m:
-                    hits.append(
-                        {
-                            "pattern": pattern_str,
-                            "path": str(path),
-                            "line": lineno,
-                            "match": m.group(0),
-                        }
-                    )
+                if not m:
+                    continue
+                # Carve-out: skip a hit that overlaps a well-formed pending
+                # marker (issue #842).
+                ms, me = m.span()
+                if any(ps <= ms and me <= pe for ps, pe in pending_spans):
+                    continue
+                hits.append(
+                    {
+                        "pattern": pattern_str,
+                        "path": str(path),
+                        "line": lineno,
+                        "match": m.group(0),
+                    }
+                )
     return hits
 
 
@@ -888,12 +955,14 @@ def _verify_source_glyphs(
     A strict ``==`` would false-positive on that legitimate noise; a short
     count is the only real failure mode.
 
-    Two classes of source non-ASCII are excluded before counting so the gate
-    does not false-block a valid document (issue #692): Unicode separator
-    spaces (``Zs`` — pdftotext normalizes them to ASCII space) and
+    Three classes of source non-ASCII are excluded before counting so the
+    gate does not false-block a valid document: Unicode separator spaces
+    (``Zs`` — pdftotext normalizes them to ASCII space, issue #692),
     non-rendered source regions (link/image URL targets, HTML comments,
-    autolinks — their glyphs never reach the rendered body). See
-    ``_sweep_nonascii_codepoints`` and ``_strip_nonrendered_regions``.
+    autolinks — their glyphs never reach the rendered body, issue #692), and,
+    for ``.tex`` sources, unescaped ``%`` LaTeX comments (issue #856 — e.g. a
+    comment-only box-drawing section rule). See ``_sweep_nonascii_codepoints``
+    and ``_strip_nonrendered_regions``.
 
     Each finding: ``{codepoint, name, source_count, pdf_count}`` where
     ``codepoint`` is the ``U+XXXX`` hex form and ``name`` the character
@@ -909,9 +978,10 @@ def _verify_source_glyphs(
         except (UnicodeDecodeError, OSError):
             continue
         # Exclude non-rendered source regions (link/image URL targets, HTML
-        # comments, autolinks) before the sweep — their non-ASCII never reaches
-        # the rendered body, so counting it would false-flag a glyph drop.
-        text = _strip_nonrendered_regions(text)
+        # comments, autolinks, and — for .tex sources — % LaTeX comments)
+        # before the sweep: their non-ASCII never reaches the rendered body,
+        # so counting it would false-flag a glyph drop.
+        text = _strip_nonrendered_regions(text, latex=path.suffix == ".tex")
         for ch, n in _sweep_nonascii_codepoints(text).items():
             source_counts[ch] = source_counts.get(ch, 0) + n
 

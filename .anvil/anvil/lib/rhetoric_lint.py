@@ -12,7 +12,7 @@ blocks: findings are warning severity at most, and the judgment call
 stays with the dim 9 critics.
 
 The rule-set SHAPE reimplements draftwell's ``packages/styleguide/``
-named-rule-set model in pure stdlib Python (no TypeScript port). Three
+named-rule-set model in pure stdlib Python (no TypeScript port). Five
 rule kinds:
 
 - ``phrase`` — a case-insensitive, word-boundary literal. Straight
@@ -20,11 +20,61 @@ rule kinds:
   (``'`` matches ``’``).
 - ``regex`` — compiled as written, with ``re.IGNORECASE`` applied
   (the lint is a vocabulary check; casing never changes the verdict).
-- ``frequency`` — a literal token counted per 1000 words of scanned
-  text against ``max_per_1000_words`` (e.g. the em-dash density rule:
-  more than 8 ``—`` per 1000 words is the documented AI-tell). A
-  ``min_words`` floor (default :data:`DEFAULT_FREQUENCY_MIN_WORDS`)
-  keeps density estimates from firing on statistically tiny texts.
+- ``frequency`` — a ``re.IGNORECASE`` pattern whose match count is
+  measured per 1000 words of scanned text against
+  ``max_per_1000_words``. A single-literal pattern behaves like a token
+  count (e.g. the em-dash density rule: more than 8 ``—`` per 1000 words
+  is the documented AI-tell); a span pattern counts spans (e.g. the
+  ``emphasis-density`` rule counts ``\\*\\*[^*]+\\*\\*`` bold spans, more
+  than ~20 per 1000 words being the bold-inflation tell). An optional
+  ``label`` supplies a human name for the counted unit in the finding's
+  diagnostic tail. A ``min_words`` floor (default
+  :data:`DEFAULT_FREQUENCY_MIN_WORDS`) keeps density estimates from
+  firing on statistically tiny texts.
+- ``long_sentence`` — a syntactic-complexity sibling of ``frequency``
+  (issue #750): naive sentence tokenization (split the scanned text on
+  ``[.!?]`` followed by whitespace — the same fidelity the lint already
+  accepts for word counts, so abbreviation noise like "Dr. Smith" is
+  tolerated rather than specially handled) counts sentences whose word
+  count exceeds ``sentence_word_threshold`` (default
+  :data:`DEFAULT_LONG_SENTENCE_WORD_THRESHOLD`, 40 words), then measures
+  that count per 1000 words against ``max_per_1000_words`` exactly like
+  ``frequency``. This exists because de-hedging/de-bolding a revision
+  can push qualifications out of markup (bold, parentheticals) and into
+  syntax (absorbed clauses) — a pathology no markup-density rule can
+  see. Deliberately **not** a mean-sentence-length cap: mean length is
+  style, the pathology is the tail of multi-clause sentences a reader
+  must re-parse, and the tail is what this rule measures. Shares
+  ``min_words`` (the frequency floor) with the ``frequency`` kind.
+- ``sentence_variance`` — a rhythm-uniformity sibling of
+  ``long_sentence`` (issue #921), reusing the same naive sentence
+  tokenization (:func:`_sentence_word_counts`, computed once per
+  document and shared with ``long_sentence`` when both are active).
+  Where ``long_sentence`` measures the *tail* (how many individual
+  sentences are pathologically long), ``sentence_variance`` measures
+  the *shape* of the whole distribution: the coefficient of variation
+  (population stdev / mean) of sentence word counts. A document can
+  pass ``long_sentence`` cleanly — no single sentence is too long —
+  while every sentence still runs a near-identical length, the
+  flattened-rhythm failure mode neither ``long_sentence`` nor any
+  markup-density rule can see. The rule fires when the CV falls
+  **below** ``min_cv`` (default :data:`DEFAULT_SENTENCE_VARIANCE_MIN_CV`)
+  — the inverse polarity of every other density rule in this module,
+  which fire above a ceiling. Two sample-size floors guard against a
+  degenerate statistic on small texts: ``min_words`` (shared with
+  ``frequency``/``long_sentence``) and ``min_sentences`` (default
+  :data:`DEFAULT_SENTENCE_VARIANCE_MIN_SENTENCES`) — a single sentence
+  makes the CV trivially zero (stdev of one value is zero), and a
+  handful of sentences makes it unstable, so both are required before
+  the rule evaluates. This is a **readability/rhythm** signal, the
+  same justification ``long_sentence``'s docstring already uses (a
+  reader who is handed sentence after sentence of identical shape
+  starts skimming, not reading) — it is deliberately **not** shipped,
+  documented, or tunable as an AI-detector-burstiness-evasion knob;
+  consumers who want to defeat a detector's "burstiness" heuristic get
+  no support for that from this module, and any patch that reframes
+  this rule (or its calibration) around detector evasion should be
+  rejected on sight.
 
 JSON rule-set schema (consumer files)
 -------------------------------------
@@ -43,7 +93,15 @@ self-documenting for consumer files)::
         {"id": "no-opening-emdash", "kind": "regex", "scope": "first-line",
          "pattern": "[—–]", "message": "..."},
         {"id": "em-dash-density", "kind": "frequency", "pattern": "—",
-         "max_per_1000_words": 8, "message": "..."}
+         "max_per_1000_words": 8, "message": "..."},
+        {"id": "long-sentence-density", "kind": "long_sentence",
+         "sentence_word_threshold": 40, "max_per_1000_words": 4,
+         "message": "..."},
+        {"id": "sentence-variance-floor", "kind": "sentence_variance",
+         "min_cv": 0.35, "message": "..."},
+        {"id": "no-internal-jargon", "kind": "regex",
+         "sources_block_exempt": True,
+         "pattern": "\\\\bTBD-INTERNAL\\\\b", "message": "..."}
       ],
       "disable": ["<default-rule-id>", "..."]
     }
@@ -61,12 +119,72 @@ Unknown or absent ``scope`` coerces to ``"body"``. ``scope`` is
 meaningless for ``frequency`` rules (frequency is always document-level)
 and is not stored on them.
 
+Sources-block exemption: ``phrase`` and ``regex`` rules accept an
+optional boolean ``sources_block_exempt`` key (default ``False``,
+issue #751). When ``True``, lines inside a ``Sources`` heading section
+(any ATX heading ``#``..``####`` whose text is exactly ``Sources``,
+case-insensitive — the memo apparatus convention documented in
+``anvil.skills.memo.lib.migrate``'s ``## Sources`` parser; the section
+runs to the next heading of equal or higher level) are excluded from
+that rule's matching, regardless of ``scope``. This lets a rule police
+body prose while treating a legitimate apparatus section — e.g. a
+Sources / references block that intentionally carries internal
+provenance-grade tags — as its documented home rather than a leak. The
+default ``no-grade-tags-in-body`` rule (below) is the first consumer.
+
 Merge semantics: consumer rules are appended to the framework defaults;
 a consumer rule whose ``id`` collides with a default **replaces** it;
 ``disable`` switches off rules by id. ``severity`` defaults to
 ``"warning"``; consumers may downgrade to ``"info"`` but never upgrade
 to ``"error"`` — an ``"error"`` (or any unknown severity) is coerced
 back to ``"warning"`` because the dimension is advisory by contract.
+
+Voice-sample precedence (a per-project override, not a framework
+default change)
+----------------------------------------------------------------
+
+The default rule set encodes a **generic** AI-tell prior: most AI-drafted
+prose over-uses certain patterns (em dashes among them), so
+``em-dash-density`` / ``no-opening-emdash`` fire by default. That prior
+is *wrong* for a specific author whose own writing genuinely favors the
+flagged pattern at a measurable frequency — a real human stylistic
+signature, not an AI tell, for that author. The documented resolution
+is the **voice-sample precedence** pattern: when a project's
+voice-grounding corpus (the ``values`` → ``style_guide`` → ``vocabulary``
+→ ``corpus`` resolution order documented in
+:mod:`anvil.lib.snippets.voice_grounding`, issue #461) shows the flagged
+pattern occurring at that frequency in the author's own published
+exemplars, the consumer supplies a project-local ``voice.rhetoric_rules``
+file (resolved by
+:func:`anvil.lib.project_brief.resolve_rhetoric_rules`, issue #468) that
+``disable``\\ s the specific default rule id(s) for that project.
+
+This is **not** a request to loosen the framework default — the default
+stays generically correct for every project that has not made this
+declaration. It is a **per-project opt-out**, scoped by the existing
+``disable`` merge semantics above, and it composes with the
+voice-grounding contract rather than duplicating it: the corpus already
+resolved for judgment-side voice calibration is the same evidence a
+consumer inspects before deciding to disable a lint rule for their own
+project.
+
+**Worked example (the canonical em-dash case, mirroring the
+``blader/humanizer`` one-sentence rule — "if a user's writing sample
+uses em dashes at a measured frequency, keep them at roughly that
+frequency instead of scrubbing them per the generic ban"):** a project
+whose ``voice.corpus`` exemplars show sustained em-dash use above the
+default 8-per-1000-words ceiling declares, in the file referenced by
+``voice.rhetoric_rules``::
+
+    {
+      "name": "project-rhetoric-overrides",
+      "rules": [],
+      "disable": ["em-dash-density", "no-opening-emdash"]
+    }
+
+With that file resolved, both em-dash rules are switched off for this
+project's lint runs; every other project consuming the framework
+defaults keeps scrubbing em dashes exactly as before.
 
 Graceful degradation: malformed consumer JSON (unparseable file, or a
 top-level shape that is not the documented object) produces a
@@ -83,6 +201,16 @@ Fenced code blocks (``` / ~~~), HTML comments (including multi-line),
 and inline code spans are excluded from the scan: code samples must not
 fire the lint, and the suppression directive must not self-match.
 
+Markdown link targets are also collapsed before word/sentence
+measurement (issue #889): ``[text](url)`` becomes ``text``. A reader
+never reads the URL, so a link-dense body must not move the
+word-count denominator or the ``long_sentence`` sentence-length
+measurement just because links were added or removed with no
+reader-visible prose change. The collapse runs across the whole
+document (not per line), so a link whose bracket text spans a hard
+line wrap — the normal shape of hard-wrapped prose these skills
+target — is collapsed too. See :func:`_collapse_markdown_links`.
+
 Suppression
 -----------
 
@@ -98,12 +226,26 @@ Default rule set
 ----------------
 
 :data:`DEFAULT_RHETORIC_RULES` is the in-module default set (the
-``DEFAULT_PLACEHOLDER_PATTERNS`` precedent): ~25 conservative,
-high-confidence AI-tells. Inclusion bar: the phrase must be (a) a
-documented LLM-overuse marker and (b) rare in competent human
-business/technical prose. Common discourse markers (``moreover``,
+``DEFAULT_PLACEHOLDER_PATTERNS`` precedent): conservative,
+high-confidence AI-tells (grown from ~30 to ~50 in issue #920, which
+adopted bucket (a) of the #919 AI-humanizer-corpus mining report by
+combining thematically related candidates under a shared id — see the
+issue #920 rules below for the full batch). Inclusion bar: the phrase
+must be (a) a documented LLM-overuse marker and (b) rare in competent
+human business/technical prose. Common discourse markers (``moreover``,
 ``furthermore``, ``however``) are explicitly excluded — too many false
 positives on good prose.
+
+The ``no-grade-tags-in-body`` default (issue #751) is a narrower,
+register-discipline rule rather than an AI-tell: it flags an internal
+evidence-grade taxonomy (``[SOLID]``, ``[DERIVED]``, ``[ASSUMPTION]``,
+``[ESTIMATE ...]``, ``[MEDIUM]``/``[HIGH]``/``[LOW]``) leaking into
+body prose — provenance metadata that belongs in the Sources block /
+an exhibit ledger / a ``refs/`` stub, never inline (see
+``anvil/skills/memo/rubric.md`` §"Dim 8 — voice-grounding calibration"
+§"Grade-tag leakage (issue #751)"). It sets ``sources_block_exempt:
+True`` so the Sources block itself — the tag's documented home — never
+self-triggers the rule.
 
 Public API
 ----------
@@ -122,6 +264,7 @@ from __future__ import annotations
 
 import json
 import re
+import statistics
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Sequence, Union
@@ -132,7 +275,18 @@ from typing import Optional, Sequence, Union
 RULE_KIND_PHRASE = "phrase"
 RULE_KIND_REGEX = "regex"
 RULE_KIND_FREQUENCY = "frequency"
-_VALID_KINDS = (RULE_KIND_PHRASE, RULE_KIND_REGEX, RULE_KIND_FREQUENCY)
+RULE_KIND_LONG_SENTENCE = "long_sentence"
+RULE_KIND_SENTENCE_VARIANCE = "sentence_variance"
+_VALID_KINDS = (
+    RULE_KIND_PHRASE,
+    RULE_KIND_REGEX,
+    RULE_KIND_FREQUENCY,
+    RULE_KIND_LONG_SENTENCE,
+    RULE_KIND_SENTENCE_VARIANCE,
+)
+# Kinds with no ``pattern`` key: they measure document-level statistics
+# (sentence-length tail / distribution shape) rather than matching text.
+_PATTERNLESS_KINDS = (RULE_KIND_LONG_SENTENCE, RULE_KIND_SENTENCE_VARIANCE)
 
 # Severities. The dimension is advisory by contract: ``warning`` is the
 # ceiling. Anything else (notably ``"error"``) is coerced to ``warning``.
@@ -155,6 +309,60 @@ DEFAULT_FREQUENCY_MIN_WORDS = 50
 # VOCABULARY.md): sustained density above 8 per 1000 words is the
 # documented AI-tell in business/technical prose.
 EMDASH_MAX_PER_1000_WORDS = 8
+
+# Bold-emphasis density ceiling for the default ``emphasis-density``
+# frequency rule (issue #745). Studio calibration: across 105 memo
+# bodies the median bold density runs ~10-12 spans/1000 words on healthy
+# memos; the revise loop was observed monotonically densifying one thread
+# to 35+ spans/1000 (25.5% of words bolded) with no existing lint able to
+# see it. 20 gives comfortable headroom above the healthy median while
+# flagging the pathological 35+ range where emphasis inverts (the reader
+# learns to ignore bold entirely).
+EMPHASIS_MAX_PER_1000_WORDS = 20
+
+# Long-sentence-density defaults (issue #750). The studio canary (sentinel
+# memo.4 -> memo.5) demonstrated that de-hedging/de-bolding a revision can
+# push qualifications out of markup and into syntax: deleting a
+# parenthetical caveat and absorbing its content into the host sentence
+# produces better prose AND a longer sentence, so every markup-density
+# rule improves while sentence complexity quietly worsens. 40 words is the
+# documented "forces a re-parse" bar; memo.5 (a genuinely improved rewrite)
+# ran ~4.5 such sentences per 1000 words, a readable memo runs 1-3, so 4
+# gives headroom above the healthy range while catching the pathological
+# tail. Deliberately not a mean-length cap — see the module docstring.
+DEFAULT_LONG_SENTENCE_WORD_THRESHOLD = 40
+LONG_SENTENCE_MAX_PER_1000_WORDS = 4
+
+# Sentence-variance-floor defaults (issue #921). Calibrated by computing the
+# coefficient of variation (population stdev / mean) of naive sentence word
+# counts over the repo's real anvil-authored worked-example bodies (the
+# `.N/` version-dir prose across essay, primer, memoir, spec,
+# ip-uspto-provisional, ip-uspto, installation, proposal, and datasheet
+# examples, plus the memo BRIEF templates and the clean-memo test fixture) —
+# NOT the humanizer-repo corpus mined in #919, which is uncalibrated
+# guidance, not a threshold. Every one of those genuine-prose documents with
+# >=50 words measured CV >= 0.413 (lowest: a short attribution memo body),
+# with most well above 0.5 and several long documents exceeding 1.0. A
+# document artificially flattened to the failure mode this rule targets —
+# every sentence landing in an 18-22 word band, the shape #919's mining
+# report calls out — measures CV ~0.08; even a looser 15-25 word band
+# measures ~0.16. 0.35 sits with clear headroom below the observed
+# real-prose floor (~18% below the lowest genuine sample) while sitting
+# well above the pathological-uniformity range, mirroring how
+# DEFAULT_LONG_SENTENCE_WORD_THRESHOLD was picked with headroom above a
+# healthy range and below an observed pathological one. Two sample-size
+# floors avoid a degenerate statistic on tiny texts: `min_words` (shared
+# with `frequency`/`long_sentence`) and `min_sentences` below — a
+# single-sentence text has stdev zero by construction (CV = 0), which
+# would otherwise always fire. `min_sentences` = 6 was picked directly
+# against this same corpus: a 5-sentence, 88-word test fixture (an
+# edge-case BRIEF.md, not representative prose at any meaningful scale)
+# measured CV 0.346 — inside noise distance of the 0.35 floor purely
+# because 5 data points is too small a sample for the statistic to be
+# stable — while every corpus document with >=6 sentences cleared the
+# floor with real margin.
+DEFAULT_SENTENCE_VARIANCE_MIN_CV = 0.35
+DEFAULT_SENTENCE_VARIANCE_MIN_SENTENCES = 6
 
 # Suppression-directive rule tokens honored by default. The memo gate's
 # dimension name is the documented consumer-facing token
@@ -351,6 +559,262 @@ DEFAULT_RHETORIC_RULES: tuple[dict, ...] = (
         "max_per_1000_words": EMDASH_MAX_PER_1000_WORDS,
         "message": "Em-dash density exceeds the AI-tell threshold; vary punctuation (commas, colons, parentheses, periods).",
     },
+    {
+        "id": "emphasis-density",
+        "kind": RULE_KIND_FREQUENCY,
+        # A bold span: ``**...**`` with at least one non-asterisk char
+        # inside. Frequency patterns are compiled as regex (case fold is
+        # irrelevant here), so this counts bold *spans*, not raw ``**``
+        # runs — one span == one finding-worthy unit of emphasis.
+        "pattern": r"\*\*[^*]+\*\*",
+        "label": "bold span",
+        "max_per_1000_words": EMPHASIS_MAX_PER_1000_WORDS,
+        "message": "Bold emphasis above ~20 spans/1000 words stops functioning as emphasis; reserve bold for decision-critical claims (gates, kill lines, the recommendation).",
+    },
+    {
+        "id": "no-meta-commentary",
+        "kind": RULE_KIND_REGEX,
+        # Reviewer-addressed meta-commentary: prose *about* the document
+        # (self-reference + a describing verb) plus the fixed
+        # rubric-compliance-performance phrases the studio canary
+        # surfaced ("argued here", "not re-argued here", "out of scope
+        # here", "stated plainly"). The self-reference arm deliberately
+        # covers both "this memo" and "the memo/document" against a broad
+        # verb set — the memo.8 escape (issue #745) was a narrower grep
+        # that missed "this memo proposes".
+        "pattern": (
+            r"\b(?:this|the) (?:memo|document) "
+            r"(?:does not|do not|is|are|argues?|proposes?|claims?|"
+            r"pretends?|assumes?|shows?|demonstrates?|contends?)\b"
+            r"|\b(?:argued|stated|confronted) here\b"
+            r"|\bre-argued here\b"
+            r"|\bout of scope here\b"
+            r"|\bstated plainly\b"
+        ),
+        "message": "Prose about the document is addressed to the reviewer, not the reader; delete the frame and keep the content.",
+    },
+    {
+        "id": "no-warning-emoji",
+        "kind": RULE_KIND_REGEX,
+        # Warning / alarm emoji in body prose. The variation selector
+        # (U+FE0F) rides with U+26A0 in the class; matching it alone is
+        # harmless (it never appears un-anchored in real prose).
+        "pattern": r"[⚠️🚨❗]",
+        "message": "Emoji alarm markers are emphasis inflation; if it's a kill condition, say so in words.",
+    },
+    {
+        "id": "long-sentence-density",
+        "kind": RULE_KIND_LONG_SENTENCE,
+        "sentence_word_threshold": DEFAULT_LONG_SENTENCE_WORD_THRESHOLD,
+        "max_per_1000_words": LONG_SENTENCE_MAX_PER_1000_WORDS,
+        "message": (
+            "Long-sentence density exceeds the readability ceiling; "
+            "multi-clause sentences over ~40 words force a re-parse — "
+            "split them or cut a clause instead of absorbing it into the "
+            "sentence."
+        ),
+    },
+    {
+        "id": "sentence-variance-floor",
+        "kind": RULE_KIND_SENTENCE_VARIANCE,
+        "min_cv": DEFAULT_SENTENCE_VARIANCE_MIN_CV,
+        "message": (
+            "Sentence-length variance is below the readability floor; "
+            "a run of near-identical sentence lengths flattens rhythm and "
+            "reads as monotonous — vary sentence length structurally, not "
+            "just its content."
+        ),
+    },
+    {
+        "id": "no-grade-tags-in-body",
+        "kind": RULE_KIND_REGEX,
+        # An internal evidence-grade taxonomy leaking into body prose
+        # (issue #751): a bracket opening on a grade keyword, optionally
+        # followed by elaboration (e.g. "ESTIMATE from SOLID inputs" or
+        # "MEDIUM: vendor research post ..."), closed by the next "]".
+        # ``[^\[\]]*`` stops at a nested/adjacent bracket so an ordinary
+        # citation marker like "[1]" or "[Smith 2020]" never matches (no
+        # grade keyword at the open) and this rule can't swallow past a
+        # real closing bracket into unrelated text.
+        "pattern": r"\[(?:SOLID|DERIVED|ASSUMPTION|ESTIMATE|MEDIUM|HIGH|LOW)\b[^\[\]]*\]",
+        "sources_block_exempt": True,
+        "message": "Evidence-grade tag leaked into body prose; preserve the grade in the Sources block / an exhibit ledger / a refs/ stub and use a plain-language hedge in prose instead (rubric.md §\"Grade-tag leakage (issue #751)\").",
+    },
+    # ------------------------------------------------------------------
+    # Issue #920 (bucket a of #919's AI-humanizer-corpus mining report,
+    # `docs/research/919-ai-humanizer-mining.md` §"(a) Drop-in additions"):
+    # 18 rules distilled from ~41 individually FP-checked candidate
+    # patterns. Several thematically related candidates are combined
+    # under one id via a single alternation regex — the same shape the
+    # module already uses (``no-crucial-role``, ``no-fast-paced``,
+    # ``no-unlock-potential`` above each cover multiple word forms under
+    # one id) — trading id-per-term granularity for a bounded rule-count
+    # growth (33 -> 51) rather than the 69-75 a literal one-id-per-term
+    # adoption would produce. See the PR description for the full
+    # count/threshold rationale.
+    {
+        "id": "no-copula-avoidance-cluster",
+        "kind": RULE_KIND_REGEX,
+        # Siblings of ``no-serves-as-a``: other copula-avoidance verbs
+        # the mining report found in the same family.
+        "pattern": r"\b(?:stands|functions) as (?:a|an)\b|\b(?:features|boasts) (?:a|an)\b",
+        "message": "'stands as a/an', 'functions as a/an', 'features a/an', 'boasts a/an' are copula-avoidance siblings of 'serves as a'; prefer 'is' or the concrete verb.",
+    },
+    {
+        "id": "no-align-with",
+        "kind": RULE_KIND_PHRASE,
+        "pattern": "align with",
+        "message": "'align with' is a documented AI-vocabulary marker; name the concrete relationship instead (match, support, follow).",
+    },
+    {
+        "id": "no-garner",
+        "kind": RULE_KIND_REGEX,
+        "pattern": r"\bgarner(?:s|ed|ing)?\b",
+        "message": "'garner(s/ed/ing)' is a documented AI-vocabulary marker; prefer 'earn', 'win', or 'get'.",
+    },
+    {
+        "id": "no-ai-buzzword-nouns",
+        "kind": RULE_KIND_REGEX,
+        # interplay / intricate(-acy/-acies) / cornerstone / paradigm /
+        # synergy — combined per the mining report's own clustering.
+        "pattern": r"\binterplay\b|\bintricat(?:e|acy|acies)\b|\bcornerstone\b|\bparadigm\b|\bsynergy\b",
+        "message": "AI-vocabulary noun ('interplay', 'intricate(-acy)', 'cornerstone', 'paradigm', 'synergy'); name the specific relationship or mechanism instead.",
+    },
+    {
+        "id": "no-ai-buzzword-adjectives",
+        "kind": RULE_KIND_REGEX,
+        # renowned / groundbreaking / nestled / robust / holistic.
+        "pattern": r"\brenowned\b|\bgroundbreaking\b|\bnestled\b|\brobust\b|\bholistic\b",
+        "message": "AI-vocabulary adjective ('renowned', 'groundbreaking', 'nestled', 'robust', 'holistic'); replace with a concrete, falsifiable descriptor.",
+    },
+    {
+        "id": "no-promo-triad",
+        "kind": RULE_KIND_REGEX,
+        # cutting-edge / state-of-the-art / world-class — the mining
+        # report's "promo triad".
+        "pattern": r"\bcutting-edge\b|\bstate-of-the-art\b|\bworld-class\b",
+        "message": "'cutting-edge' / 'state-of-the-art' / 'world-class' is marketing filler; name the specific capability instead.",
+    },
+    {
+        "id": "no-superficial-ing-padding",
+        "kind": RULE_KIND_REGEX,
+        # highlighting / showcas(e|es|ed|ing) / reflecting /
+        # symboliz(e|es|ed|ing) / foster(s|ed|ing)? — superficial
+        # "-ing"-analysis padding. ('underscoring' is deliberately
+        # excluded: it duplicates the existing no-underscores-verb rule
+        # above.)
+        "pattern": r"\bhighlighting\b|\bshowcas(?:e|es|ed|ing)\b|\breflecting\b|\bsymboliz(?:e|es|ed|ing)\b|\bfoster(?:s|ed|ing)?\b",
+        "message": "Superficial '-ing'-analysis padding ('highlighting', 'showcasing', 'reflecting', 'symbolizing', 'fostering'); state the claim directly instead of gesturing at it.",
+    },
+    {
+        "id": "no-negative-parallelism",
+        "kind": RULE_KIND_REGEX,
+        # "not only ... but", "not just ... but", "it's not X, it's Y" —
+        # span-capped to ~80 chars and to a single sentence (no
+        # terminator crossed) so the pattern cannot bridge two unrelated
+        # sentences.
+        "pattern": (
+            r"\bnot only\b[^.!?\n]{0,80}?\bbut\b"
+            r"|\bnot just\b[^.!?\n]{0,80}?\bbut\b"
+            r"|\bit(?:['’]s| is) not\b[^.!?\n]{0,80}?,\s*it(?:['’]s| is)\b"
+        ),
+        "message": "Negative-parallelism construction ('not only... but', 'not just... but', 'it's not X, it's Y') is an AI-tell rhetorical device; state the claim plainly.",
+    },
+    {
+        "id": "no-more-than-just",
+        "kind": RULE_KIND_PHRASE,
+        "pattern": "more than just",
+        "message": "'more than just' is a hedge-and-inflate construction; state what it actually is.",
+    },
+    {
+        "id": "no-fake-significance-cluster",
+        "kind": RULE_KIND_REGEX,
+        # indelible mark / turning point / focal point / deeply rooted /
+        # evolving landscape — the mining report's "fake-significance
+        # cluster".
+        "pattern": r"\bindelible mark\b|\bturning point\b|\bfocal point\b|\bdeeply rooted\b|\bevolving landscape\b",
+        "message": "Fake-significance phrase ('indelible mark', 'turning point', 'focal point', 'deeply rooted', 'evolving landscape') asserts importance instead of showing it; state the concrete claim.",
+    },
+    {
+        "id": "no-sets-the-stage",
+        "kind": RULE_KIND_REGEX,
+        "pattern": r"\bsett?ing the stage\b",
+        "message": "'setting the stage' is an AI-tell scene-setting metaphor; state what actually enables the next step.",
+    },
+    {
+        "id": "no-it-is-believed",
+        "kind": RULE_KIND_REGEX,
+        "pattern": r"\bit is (?:widely )?(?:believed|considered|known|thought)\b",
+        "message": "'it is (widely) believed/considered/known/thought' is unattributed weasel phrasing; name who believes it or cut the hedge.",
+    },
+    {
+        "id": "no-sycophantic-cluster",
+        "kind": RULE_KIND_REGEX,
+        # Chat/assistant-artifact leak: sycophantic filler that belongs
+        # in a chat transcript, not document body prose.
+        "pattern": r"\bi hope this helps\b|\bgreat question\b|\byou['’]re absolutely right\b",
+        "message": "Sycophantic chat-assistant artifact ('I hope this helps', 'great question', 'you're absolutely right') leaked into the document body; remove it.",
+    },
+    {
+        "id": "no-knowledge-cutoff",
+        "kind": RULE_KIND_REGEX,
+        # Chat/assistant-artifact leak: knowledge-cutoff disclaimer.
+        "pattern": r"\bup to my last training update\b|\bas of my (?:last|knowledge) (?:update|cutoff)\b",
+        "message": "Knowledge-cutoff disclaimer ('up to my last training update', 'as of my knowledge cutoff') is a chat-assistant artifact; remove it and date the claim in-document instead.",
+    },
+    {
+        "id": "no-copy-paste-artifact",
+        "kind": RULE_KIND_REGEX,
+        # Chat/assistant-artifact leak: vendor-specific citation/copy
+        # markers documented on Wikipedia's "Signs of AI writing" page.
+        "pattern": r"oaicite|contentReference|oai_citation|turn\d+search\d+|grok_card|attached_file",
+        "message": "Copy-paste chat/assistant citation artifact leaked into the document body; remove it and replace with a real citation.",
+    },
+    {
+        "id": "no-curly-quotes",
+        "kind": RULE_KIND_FREQUENCY,
+        # Typographic (curly) quote/apostrophe marks. Mirrors
+        # ``em-dash-density``'s shape: a low density ceiling rather than
+        # a hard ban, since a single quoted excerpt pasted from
+        # elsewhere should not fire the lint.
+        "pattern": r"[‘’“”]",
+        "label": "curly quote",
+        "max_per_1000_words": 2,
+        "message": "Curly (typographic) quote marks above a low density is a documented AI-writing-tool tell in plain-markdown house style; use straight quotes/apostrophes.",
+    },
+    {
+        "id": "no-weasel-attribution",
+        "kind": RULE_KIND_REGEX,
+        # Calibration fix (issue #920, found during the #919 FP check):
+        # the plural-only noun group avoids matching a singular
+        # "Critic" heading (e.g. "## Critic note -> change") against a
+        # following verb; "note" is also dropped from the verb
+        # alternation (too generic a verb to pair with a heading noun).
+        "pattern": (
+            r"\b(?:experts|studies|researchers|observers|critics) "
+            r"(?:say|says|show|shows|argue|argues|believe|believes|"
+            r"claim|claims|suggest|suggests)\b"
+        ),
+        "message": "Unattributed weasel attribution ('experts/studies/researchers/observers/critics say/show/argue/...'); name the actual source or cut the hedge.",
+    },
+    {
+        "id": "hyphen-pair-density",
+        "kind": RULE_KIND_FREQUENCY,
+        # Calibration fix (issue #920, found during the #919 FP check):
+        # end-to-end / real-time / long-term are domain-neutral
+        # engineering vocabulary (they fired on "## End-to-end smoke
+        # flow" dev-doc headings), not the marketing-register compounds
+        # this rule targets, so they are deliberately excluded from the
+        # word list.
+        "pattern": (
+            r"\b(?:data-driven|cross-functional|best-in-class|"
+            r"future-proof|value-add|client-facing|decision-making|"
+            r"third-party)\b"
+        ),
+        "label": "marketing-register hyphenated compound",
+        "max_per_1000_words": 3,
+        "message": "Marketing-register hyphenated-compound density is elevated; name the specific mechanism instead of the compound buzzword.",
+    },
 )
 
 
@@ -442,6 +906,44 @@ _FRONT_MATTER_FENCE_RE = re.compile(r"^---\s*$")
 # when locating the first prose line — a heading is not prose.
 _HEADING_RE = re.compile(r"^#{1,6}\s")
 
+# Naive sentence boundary for the ``long_sentence`` kind (issue #750): a
+# sentence terminator immediately followed by whitespace. Deliberately the
+# same fidelity the module already accepts for word counts — abbreviation
+# noise ("Dr. Smith", "e.g. foo") produces occasional over-splits, which is
+# tolerated rather than specially handled (see the module docstring).
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+# ATX heading line, depth-capturing variant. Used by
+# :func:`_sources_block_lines` to track section boundaries (needs the
+# ``#`` count; ``_HEADING_RE`` above only needs a yes/no match).
+_HEADING_DEPTH_RE = re.compile(r"^(#{1,6})\s")
+
+# Markdown link: ``[text](url)`` (optional leading ``!`` for image
+# links). Issue #889: a reader never reads the URL, so link targets
+# must not inflate the word-count denominator or the ``long_sentence``
+# word counts. The ``text`` group is allowed to contain newlines — a
+# link whose bracket text spans a hard line wrap (the normal shape of
+# the hard-wrapped prose these skills target) is still collapsed, not
+# just the subset that happens to fit on one line. Deliberately a
+# module-local pattern (not imported from ``hyperlink_resolver``) —
+# this lint has no other coupling to that critic and the shape is
+# small enough not to be worth a cross-module dependency.
+_MD_LINK_COLLAPSE_RE = re.compile(
+    r"""
+    !?                                  # optional ! prefix for images
+    \[(?P<text>[^\]]*)\]                # [text] -- text may span lines
+    \((?:[^\s)]+)\)                     # (url) -- discarded
+    """,
+    re.VERBOSE,
+)
+
+# A "Sources" heading (``#``..``####`` depth — matches the memo
+# apparatus convention in ``anvil.skills.memo.lib.migrate``'s
+# ``## Sources`` parser). Case-insensitive; the heading text must be
+# exactly "Sources" (no trailing prose) to avoid matching an unrelated
+# heading that merely contains the word.
+_SOURCES_HEADING_RE = re.compile(r"^#{1,4}\s+Sources\s*$", re.IGNORECASE)
+
 
 def _scannable_lines(text: str) -> list[str]:
     """Per-line scan text with exclusions blanked.
@@ -497,6 +999,49 @@ def _scannable_lines(text: str) -> list[str]:
     return out
 
 
+def _collapse_markdown_links(scan_lines: list[str]) -> list[str]:
+    """Collapse ``[text](url)`` -> ``text`` across the joined scan text.
+
+    Issue #889: a reader never reads the URL, so a link's target must
+    not count toward the word-count denominator or the
+    ``long_sentence`` sentence-length measurement. Operates on the
+    full joined blob (``"\\n".join(scan_lines)``), not per individual
+    line, so a link whose bracket text spans a hard line wrap is still
+    collapsed — the per-line scan in :func:`_scannable_lines` would
+    otherwise never see the still-open ``[`` on the first line and the
+    dangling ``](url)`` on the next. Only the surrounding markup
+    (``[``, ``]``, ``(url)``) is removed; any newline embedded in the
+    bracket text is part of the replacement, so the total newline
+    count — and therefore the line count and 1-based line numbering
+    used by ``lint_rhetoric``'s per-line phrase/regex rules — is
+    unchanged.
+    """
+    joined = "\n".join(scan_lines)
+    collapsed = _MD_LINK_COLLAPSE_RE.sub(lambda m: m.group("text"), joined)
+    return collapsed.split("\n")
+
+
+def _sentence_word_counts(scan_lines: list[str]) -> list[int]:
+    """Word count per naive sentence, computed once per document.
+
+    Joins the (already-excluded) scan lines into a single blob — so a
+    sentence wrapped across two source lines is not miscounted as two
+    short sentences — and splits on :data:`_SENTENCE_SPLIT_RE`. Each
+    resulting chunk (including a final chunk with no trailing
+    terminator) is one naive "sentence"; its word count is measured with
+    the same :data:`_WORD_RE` tokenizer used for the document's overall
+    word count, so the two counts are directly comparable.
+    """
+    blob = " ".join(line for line in scan_lines if line.strip())
+    if not blob.strip():
+        return []
+    return [
+        len(_WORD_RE.findall(chunk))
+        for chunk in _SENTENCE_SPLIT_RE.split(blob.strip())
+        if chunk.strip()
+    ]
+
+
 def _first_prose_lineno(
     scan_lines: list[str], raw_text: str
 ) -> Optional[int]:
@@ -541,6 +1086,39 @@ def _first_prose_lineno(
             continue
         return i + 1
     return None
+
+
+def _sources_block_lines(raw_text: str) -> set[int]:
+    """1-based line numbers inside a ``Sources`` heading section.
+
+    Mirrors the boundary rule from
+    ``anvil.skills.memo.lib.migrate``'s ``## Sources`` parser: a
+    ``Sources`` section runs from the line *after* the heading to the
+    next heading of **equal or higher level** (fewer or equal ``#``
+    characters), or end of document. The heading line itself is not
+    "inside" the section. A document with no ``Sources`` heading (or
+    with the word appearing only inside a longer heading, e.g. "##
+    Sources and Methods") returns an empty set — matched exactly
+    against ``anvil/lib/rhetoric_lint.py``'s ``_SOURCES_HEADING_RE``.
+
+    Used by rules declaring ``sources_block_exempt: true`` (issue
+    #751) to treat the Sources block as a legitimate apparatus home
+    rather than a body-prose leak.
+    """
+    inside: set[int] = set()
+    section_depth: Optional[int] = None
+    for i, raw_line in enumerate(raw_text.splitlines(), start=1):
+        depth_match = _HEADING_DEPTH_RE.match(raw_line)
+        if depth_match:
+            depth = len(depth_match.group(1))
+            if section_depth is not None and depth <= section_depth:
+                section_depth = None  # a same-or-shallower heading closes it
+            if _SOURCES_HEADING_RE.match(raw_line):
+                section_depth = depth
+                continue  # the heading line itself is not "inside"
+        if section_depth is not None:
+            inside.add(i)
+    return inside
 
 
 def _collect_disabled_lines(
@@ -612,19 +1190,98 @@ def _validate_rule(rule: object) -> tuple[Optional[dict], Optional[str]]:
             f"rule {rule_id!r}: invalid kind {kind!r} "
             f"(expected one of {', '.join(_VALID_KINDS)})",
         )
-    pattern = rule.get("pattern")
-    if not isinstance(pattern, str) or not pattern:
-        return (None, f"rule {rule_id!r}: missing string 'pattern'")
+    # ``long_sentence``/``sentence_variance`` rules have no regex pattern —
+    # they measure document-level sentence-length statistics, not matches —
+    # so ``pattern`` is required for every other kind only.
+    pattern: Optional[str] = None
+    if kind not in _PATTERNLESS_KINDS:
+        pattern = rule.get("pattern")
+        if not isinstance(pattern, str) or not pattern:
+            return (None, f"rule {rule_id!r}: missing string 'pattern'")
     normalized: dict = {
         "id": rule_id.strip(),
         "kind": kind,
-        "pattern": pattern,
         "message": rule.get("message")
         if isinstance(rule.get("message"), str)
         else f"rule {rule_id!r} matched",
         "severity": _coerce_severity(rule.get("severity")),
     }
-    if kind == RULE_KIND_FREQUENCY:
+    if pattern is not None:
+        normalized["pattern"] = pattern
+    if kind == RULE_KIND_LONG_SENTENCE:
+        threshold = rule.get("max_per_1000_words")
+        if (
+            isinstance(threshold, bool)
+            or not isinstance(threshold, (int, float))
+            or threshold <= 0
+        ):
+            return (
+                None,
+                f"rule {rule_id!r}: long_sentence kind requires numeric "
+                f"'max_per_1000_words' > 0 (got {threshold!r})",
+            )
+        normalized["max_per_1000_words"] = float(threshold)
+        min_words = rule.get("min_words", DEFAULT_FREQUENCY_MIN_WORDS)
+        if (
+            isinstance(min_words, bool)
+            or not isinstance(min_words, (int, float))
+            or min_words < 0
+        ):
+            min_words = DEFAULT_FREQUENCY_MIN_WORDS
+        normalized["min_words"] = int(min_words)
+        sentence_word_threshold = rule.get(
+            "sentence_word_threshold", DEFAULT_LONG_SENTENCE_WORD_THRESHOLD
+        )
+        if (
+            isinstance(sentence_word_threshold, bool)
+            or not isinstance(sentence_word_threshold, (int, float))
+            or sentence_word_threshold <= 0
+        ):
+            return (
+                None,
+                f"rule {rule_id!r}: long_sentence kind requires numeric "
+                f"'sentence_word_threshold' > 0 "
+                f"(got {sentence_word_threshold!r})",
+            )
+        normalized["sentence_word_threshold"] = int(sentence_word_threshold)
+    elif kind == RULE_KIND_SENTENCE_VARIANCE:
+        min_cv = rule.get("min_cv")
+        if (
+            isinstance(min_cv, bool)
+            or not isinstance(min_cv, (int, float))
+            or min_cv <= 0
+        ):
+            return (
+                None,
+                f"rule {rule_id!r}: sentence_variance kind requires numeric "
+                f"'min_cv' > 0 (got {min_cv!r})",
+            )
+        normalized["min_cv"] = float(min_cv)
+        min_words = rule.get("min_words", DEFAULT_FREQUENCY_MIN_WORDS)
+        if (
+            isinstance(min_words, bool)
+            or not isinstance(min_words, (int, float))
+            or min_words < 0
+        ):
+            min_words = DEFAULT_FREQUENCY_MIN_WORDS
+        normalized["min_words"] = int(min_words)
+        # Sample-size floor distinct from ``min_words``: a document could
+        # clear the word floor with very few sentences (e.g. one long run-on
+        # sentence), and a CV computed over fewer than a handful of
+        # sentences is a coin flip, not a rhythm measurement. Permissive
+        # coercion (like ``min_words``) — an invalid override falls back to
+        # the documented default rather than erroring the whole rule.
+        min_sentences = rule.get(
+            "min_sentences", DEFAULT_SENTENCE_VARIANCE_MIN_SENTENCES
+        )
+        if (
+            isinstance(min_sentences, bool)
+            or not isinstance(min_sentences, (int, float))
+            or min_sentences < 2
+        ):
+            min_sentences = DEFAULT_SENTENCE_VARIANCE_MIN_SENTENCES
+        normalized["min_sentences"] = int(min_sentences)
+    elif kind == RULE_KIND_FREQUENCY:
         threshold = rule.get("max_per_1000_words")
         if (
             isinstance(threshold, bool)
@@ -645,12 +1302,33 @@ def _validate_rule(rule: object) -> tuple[Optional[dict], Optional[str]]:
         ):
             min_words = DEFAULT_FREQUENCY_MIN_WORDS
         normalized["min_words"] = int(min_words)
+        # Frequency patterns are counted as regex matches (``findall``),
+        # so a rule can count spans like ``\*\*[^*]+\*\*`` (bold), not
+        # only single literal tokens. A single-char literal such as the
+        # em-dash ``—`` counts identically under either model. Compile
+        # now so a malformed pattern is a config finding, not a
+        # mid-scan crash.
+        try:
+            normalized["_compiled"] = _compile_rule_pattern(kind, pattern)
+        except re.error as exc:
+            return (None, f"rule {rule_id!r}: invalid regex pattern: {exc}")
+        # Optional human label used only in the frequency finding's
+        # diagnostic tail (so an opaque regex like the bold-span pattern
+        # reads as "bold span" instead of the raw source).
+        label = rule.get("label")
+        if isinstance(label, str) and label.strip():
+            normalized["label"] = label.strip()
     else:
         # Positional scope (phrase/regex only; frequency is always
         # document-level and never receives a ``scope`` key). Unknown or
         # absent values coerce to ``"body"`` — the original behavior.
         scope_raw = rule.get("scope", "body")
         normalized["scope"] = "first-line" if scope_raw == "first-line" else "body"
+        # Sources-block exemption (issue #751): opt-in bool, defaults
+        # False. Any non-``True`` value (missing key, non-bool) coerces
+        # to False rather than erroring — this is a permissive modifier,
+        # not a validated enum like ``scope``.
+        normalized["sources_block_exempt"] = rule.get("sources_block_exempt") is True
         # Compile now so a malformed regex is a config finding, not a
         # mid-scan crash.
         try:
@@ -814,6 +1492,27 @@ def _resolve_rules(
 # Public API ----------------------------------------------------------------------
 
 
+def scannable_lines(text: str) -> list[str]:
+    """Public entry point for the fenced-code / HTML-comment / inline-code
+    exclusion mask (issue #922).
+
+    Thin public wrapper around :func:`_scannable_lines`, whose docstring
+    documents the exact exclusion contract (fenced code blocks blanked
+    wholesale, HTML comments stripped including multi-line spans, inline
+    code spans removed — one output line per input line, so line numbers
+    stay anchored to the original source). Exists so a second consumer can
+    reuse the identical exclusion scope without re-implementing it or
+    reaching into a leading-underscore internal: `anvil:deslop`'s
+    deterministic no-fabrication gate
+    (`anvil/skills/deslop/lib/no_fabrication.py`) diffs iteration N against
+    N+1 over this same masked text so a fenced code sample pasted into
+    ingested prose can never register as an "introduced" numeral / proper
+    noun / citation token. Byte-identical output to
+    :func:`_scannable_lines` — this function does no additional work.
+    """
+    return _scannable_lines(text)
+
+
 def lint_rhetoric(
     text: str,
     *,
@@ -859,16 +1558,26 @@ def lint_rhetoric(
     """
     rules, findings = _resolve_rules(extra_rules, extra_rules_path)
     scan_lines = _scannable_lines(text)
+    scan_lines = _collapse_markdown_links(scan_lines)
     disabled_lines = _collect_disabled_lines(text, suppress_rules)
     words = sum(len(_WORD_RE.findall(line)) for line in scan_lines)
     # Computed once for all positional (``scope: "first-line"``) rules.
     first_prose_lineno = _first_prose_lineno(scan_lines, text)
+    # Computed lazily (only if a ``long_sentence`` or ``sentence_variance``
+    # rule is active) and cached across both kinds — the tokenization does
+    # not depend on any per-rule setting.
+    sentence_word_counts: Optional[list[int]] = None
+    # Computed once for all ``sources_block_exempt`` rules (issue #751).
+    sources_lines = _sources_block_lines(text)
 
     for rule in rules:
-        if rule["kind"] == RULE_KIND_FREQUENCY:
-            count = sum(line.count(rule["pattern"]) for line in scan_lines)
+        if rule["kind"] == RULE_KIND_LONG_SENTENCE:
             if words < rule["min_words"] or words == 0:
                 continue
+            if sentence_word_counts is None:
+                sentence_word_counts = _sentence_word_counts(scan_lines)
+            threshold = rule["sentence_word_threshold"]
+            count = sum(1 for wc in sentence_word_counts if wc > threshold)
             density = count / words * 1000.0
             if density > rule["max_per_1000_words"]:
                 findings.append(
@@ -877,7 +1586,61 @@ def lint_rhetoric(
                         severity=rule["severity"],
                         message=(
                             f"{rule['message']} "
-                            f"({count} occurrence(s) of {rule['pattern']!r} "
+                            f"({count} sentence(s) over {threshold} words "
+                            f"in {words} words = {density:.1f}/1000; "
+                            f"threshold {rule['max_per_1000_words']:g}/1000)."
+                        ),
+                        line=None,
+                        match=None,
+                    )
+                )
+            continue
+        if rule["kind"] == RULE_KIND_SENTENCE_VARIANCE:
+            if words < rule["min_words"] or words == 0:
+                continue
+            if sentence_word_counts is None:
+                sentence_word_counts = _sentence_word_counts(scan_lines)
+            # Zero-word "sentences" (e.g. a stray "..." run) are not a
+            # length observation; excluding them keeps the statistic about
+            # actual sentence rhythm, not tokenization artifacts.
+            counts = [wc for wc in sentence_word_counts if wc > 0]
+            if len(counts) < rule["min_sentences"]:
+                continue
+            mean = statistics.mean(counts)
+            if mean <= 0:
+                continue
+            cv = statistics.pstdev(counts) / mean
+            if cv < rule["min_cv"]:
+                findings.append(
+                    RhetoricFinding(
+                        rule_id=rule["id"],
+                        severity=rule["severity"],
+                        message=(
+                            f"{rule['message']} "
+                            f"(coefficient of variation {cv:.2f} across "
+                            f"{len(counts)} sentence(s), mean {mean:.1f} "
+                            f"words; floor {rule['min_cv']:g})."
+                        ),
+                        line=None,
+                        match=None,
+                    )
+                )
+            continue
+        if rule["kind"] == RULE_KIND_FREQUENCY:
+            freq_regex = rule["_compiled"]
+            count = sum(len(freq_regex.findall(line)) for line in scan_lines)
+            if words < rule["min_words"] or words == 0:
+                continue
+            density = count / words * 1000.0
+            if density > rule["max_per_1000_words"]:
+                label = rule.get("label") or rule["pattern"]
+                findings.append(
+                    RhetoricFinding(
+                        rule_id=rule["id"],
+                        severity=rule["severity"],
+                        message=(
+                            f"{rule['message']} "
+                            f"({count} occurrence(s) of {label!r} "
                             f"in {words} words = {density:.1f}/1000; "
                             f"threshold {rule['max_per_1000_words']:g}/1000)."
                         ),
@@ -888,10 +1651,16 @@ def lint_rhetoric(
             continue
         regex = rule["_compiled"]
         rule_scope = rule.get("scope", "body")
+        rule_sources_exempt = rule.get("sources_block_exempt", False)
         for lineno, line in enumerate(scan_lines, start=1):
             # Positional rules evaluate only the first prose line; when
             # there is none (empty / all-excluded doc), they never fire.
             if rule_scope == "first-line" and lineno != first_prose_lineno:
+                continue
+            # Sources-block exemption (issue #751): the block is the
+            # tag's documented home, not a leak — skip entirely (no
+            # finding at all, not even suppressed-info).
+            if rule_sources_exempt and lineno in sources_lines:
                 continue
             for m in regex.finditer(line):
                 if lineno in disabled_lines:
@@ -925,15 +1694,23 @@ def lint_rhetoric(
 __all__ = [
     "CONFIG_RULE_ID",
     "DEFAULT_FREQUENCY_MIN_WORDS",
+    "DEFAULT_LONG_SENTENCE_WORD_THRESHOLD",
     "DEFAULT_RHETORIC_RULES",
+    "DEFAULT_SENTENCE_VARIANCE_MIN_CV",
+    "DEFAULT_SENTENCE_VARIANCE_MIN_SENTENCES",
     "DEFAULT_SUPPRESS_RULES",
     "EMDASH_MAX_PER_1000_WORDS",
+    "EMPHASIS_MAX_PER_1000_WORDS",
+    "LONG_SENTENCE_MAX_PER_1000_WORDS",
     "RULE_KIND_FREQUENCY",
+    "RULE_KIND_LONG_SENTENCE",
     "RULE_KIND_PHRASE",
     "RULE_KIND_REGEX",
+    "RULE_KIND_SENTENCE_VARIANCE",
     "RhetoricFinding",
     "RhetoricLintResult",
     "SEVERITY_INFO",
     "SEVERITY_WARNING",
     "lint_rhetoric",
+    "scannable_lines",
 ]

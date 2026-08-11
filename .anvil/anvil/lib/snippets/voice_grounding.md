@@ -91,6 +91,21 @@ where the lint emits one warning finding naming the error and runs
 defaults-only (the same defect-to-surface posture as the grounding
 docs, with zero extra machinery).
 
+**Voice-sample precedence: when the resolved corpus contradicts a
+default lint rule, override the rule — not the corpus.** A project's
+`corpus` exemplars sometimes show a real authorial habit (the em-dash
+case is canonical) at a frequency the rhetoric lint's generic
+AI-tell defaults would flag. The documented fix lives on the lint side,
+not here: declare a project-local `voice.rhetoric_rules` file that
+`disable`s the specific default rule id(s) (e.g. `em-dash-density`,
+`no-opening-emdash`) rather than loosening the framework default for
+every project. See `anvil/lib/rhetoric_lint.py`'s module docstring,
+section "Voice-sample precedence (a per-project override, not a
+framework default change)", for the full worked example. A drafter or
+reviewer who has already loaded the `corpus` for judgment-side
+calibration is looking at exactly the evidence needed to decide whether
+this override applies.
+
 ## Activation pattern (the #428/#452 contract)
 
 - **No `voice:` block → byte-identical behavior.** No suffix, no
@@ -314,6 +329,74 @@ sub-steps like `summary_detail_consistency`. The difference: those
 sub-steps are always-on framework behavior whose skip needs
 explaining; this tier simply does not exist for projects that never
 declared it.
+
+## Self-published exclusion (issue #890)
+
+A `voice.corpus` glob is naturally the consumer's own published archive
+(the ground truth for "does this sound like the author"). That is
+correct when drafting a **new** thread, and **circular** when
+reviewing a **revision of an already-published one** — the thread's
+own prior published form sits inside its own calibration base, so a
+reviewer scoring dim-2-class deductions against it is partly grading
+the artifact against itself. `essay-review` is the shipped consumer of
+the fix (`anvil/skills/essay/commands/essay-review.md` step 4); any
+other reviewing skill in the same "revision of a previously-published
+thread" shape can adopt it identically.
+
+`resolve_voice_docs(project_dir, consumer_root=None, *,
+exclude_self_slug=None)` (issue #890) takes an optional keyword-only
+`exclude_self_slug`. When supplied with the slug of the thread
+currently under review, the resolved `corpus` entry has that thread's
+own published form dropped from `paths` before it reaches the reviewer
+— two exclusion sources, unioned and deduped:
+
+1. **Automatic inference.** A resolved corpus path whose filename
+   stem, after optionally stripping one leading `YYYY-MM-DD-` date
+   prefix, case-insensitively **equals** `exclude_self_slug` exactly.
+   Deliberately narrow (no substring/prefix/suffix matching) — a false
+   positive would silently exclude an unrelated thread's legitimate
+   exemplar with no operator-visible signal, which is worse than the
+   false negative the declared escape hatch below exists to close.
+2. **Declared `voice_corpus_exclude`** — an optional per-document field
+   on the matching `documents:` entry (`BriefDocument.voice_corpus_exclude`),
+   same scalar-or-list path/glob shape as `spec_ref` / `code_ref`,
+   resolved the same way (project-root first, then consumer-root):
+
+   ```yaml
+   documents:
+     - slug: the-loop-is-the-unit
+       artifact_type: essay
+       voice_corpus_exclude: writing-corpus/the-loop-is-the-unit-reprint.md
+   ```
+
+   This is the documented escape hatch for a publish-path convention
+   the automatic rule cannot infer (a title-cased filename, a
+   transliterated slug, a nested `index.md`-per-post layout). A pattern
+   that resolves to nothing is a silent no-op — this field only ever
+   *narrows* an already-resolved corpus, never widens or breaks it.
+
+`exclude_self_slug=None` (the default) is a **complete no-op** —
+every pre-#890 caller of `resolve_voice_docs` (memo, report, memoir,
+essay-draft) sees byte-identical output whether or not it upgrades.
+
+**Auditability.** A dropped path is never silent: the resolved
+`ResolvedVoiceDoc` carries `excluded` (the sorted list of dropped
+absolute paths) and `exclusion_reasons` (a `{path: reason}` map, e.g.
+`"published self (inferred from slug)"` or `"declared corpus_exclude:
+'<pattern>'"`). A reviewing skill's `_summary.md.voice_grounding` block
+should surface this as `corpus_excluded: [{path, reason}, …]` — see
+`anvil/skills/essay/commands/essay-review.md` step 9 for the shipped
+shape.
+
+**Thin-corpus guard.** Excluding the self-published form can leave very
+few (or zero) independent exemplars — a two-note corpus with one
+excluded leaves a single exemplar, which one reviewer in the session
+that motivated this issue noted post-dated the artifact under review by
+three days. `resolve_voice_docs` does not itself impose a minimum —
+that judgment call belongs to the consuming skill's review command
+(essay-review's documented threshold is **2**: fewer remaining paths
+after exclusion triggers a `corpus_thin: true` note rather than a
+silent full-confidence calibration).
 
 ## Reviser contract (one line)
 

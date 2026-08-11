@@ -1,0 +1,69 @@
+---
+project: grani-memoir
+audience:
+  - Family (primary — the descendants this memoir is written for)
+  - The subject herself, while living (secondary)
+hard_rules:
+  - Every reconstructed quote and every checkable factual claim traces to a
+    row in that chapter's provenance.md — cut the claim or mark it NOT_FOUND
+    rather than invent a source.
+  - Narrator framing prose stays in the author's own voice; reconstructed
+    dialogue stays in the speaker's own recorded cadence. Never conflate
+    the two within a scene.
+  - AUDITED is the terminal state for every chapter — no chapter ships
+    without a clean corpus-audit pass when the corpus tier is active.
+# Dual-corpus provenance (issue #597) — declared ONCE at the project level,
+# NOT per chapter. anvil/lib/project_brief.py::resolve_corpus_dirs already
+# resolves a list of N declared directories, in declared order.
+corpus:
+  - transcripts/
+  - letters/
+# Dual voice tiers (issue #461 author tier + issue #598 subject tier) —
+# also declared ONCE at the project level. Both tiers are independently
+# activated and may coexist: the author tier grounds narrator framing
+# prose; subjects ground reconstructed dialogue.
+voice:
+  style_guide: STYLE_GUIDE.md
+  values: VALUES.md
+  subjects:
+    - name: grani
+      corpus: transcripts/grani/**/*.md
+      voice_doc: planning/grani-voice.md
+    - name: aunt-jo
+      corpus: transcripts/aunt-jo/**/*.md
+# Optional: the manifest.json anvil:project-photos emits (SKILL.md
+# §Photo-placement contract). Absent -> memoir-figures reports "no
+# manifest.json resolved" for any \famphoto/\fullphoto/\marginphoto call
+# and skips photo resolution (diagrams + PDF still render).
+photos: manifest.json
+documents:
+  - slug: 00-introduction
+    artifact_type: memoir
+  - slug: 01-childhood
+    artifact_type: memoir
+  - slug: appendix
+    artifact_type: memoir
+---
+
+# Grani memoir — project brief
+
+A family memoir narrated by the author's grandmother's grandson, reconstructing
+scenes and dialogue from interview transcripts and collected family letters.
+Each chapter is its own thread under `anvil:memoir`; the corpus and voice
+tiers above are resolved once at this project level and inherited by every
+chapter.
+
+## Reference material
+
+- `transcripts/` — the declared corpus root for interview material (the
+  `corpus:` list above).
+- `letters/` — the declared corpus root for the collected family letters.
+- `research/` — optional shared background (dates, places, historical
+  context) that is NOT itself corpus ground truth but may inform framing.
+
+## Assembling the book
+
+This project's chapters are assembled into `book.pdf` via
+`/anvil:project-book <project-dir>` — see SKILL.md §"Relationship to
+`anvil:project-book`". Do not look for a portfolio command inside
+`anvil:memoir` itself.

@@ -151,10 +151,10 @@ For consumers running multiple brands through one anvil install, the
 Declare a theme in the project BRIEF:
 
 ```yaml
-# <consumer>/projects/brains-for-robots/BRIEF.md
+# <consumer>/projects/smart-actuators/BRIEF.md
 ---
-project: brains-for-robots
-theme: sphere-semi
+project: smart-actuators
+theme: acme-semi
 documents:
   - slug: investment-memo
     artifact_type: investment-memo
@@ -162,11 +162,11 @@ documents:
 ```
 
 Then provide the theme's asset overrides under
-`<consumer>/.anvil/themes/sphere-semi/memo/`:
+`<consumer>/.anvil/themes/acme-semi/memo/`:
 
 ```
 <consumer>/.anvil/themes/
-  sphere-semi/
+  acme-semi/
     theme.yml                # accent_color, studio, render_engine, …
     memo/
       styles.css             # branded typography

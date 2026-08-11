@@ -50,6 +50,131 @@ Each `ToolCall` records the tool invocation (tool name, args, optional
 result summary) so a downstream consumer can audit the auditor: every
 factual claim in an audit finding traces back to a specific tool call.
 
+## Perishable vs durable verifications
+
+`kind: tool_evidence` conflates two materially different things:
+
+- **Durable** — BOM arithmetic, link budgets, internal consistency, a
+  subtotal that sums, a reference numeral that matches. Verified once,
+  true forever unless the *document* changes.
+- **Perishable** — a live URL, an HTTP status, a version pin, the SHA
+  of a served artifact, a "verified live on `<date>`" claim, a price
+  quote with an expiry. Verified once, true until the *world* moves.
+
+A perishable claim's `VERIFIED` verdict has an implicit expiry. Before
+issue #863 the framework did not record it, so the two read identically
+on disk and every downstream consumer — the next auditor, the reviser,
+the operator deciding to send — inherited a verification whose freshness
+was unknowable without redoing the probe.
+
+This bites hardest exactly where the framework is strongest:
+audit-mandatory, customer-facing skills (`proposal`, `report`, the `ip-*`
+family) whose artifacts are *held* between the audit and the moment
+someone external reads them. The longer an artifact sits `READY` /
+`AUDITED` waiting on a human decision, the more its perishable claims
+decay.
+
+### The probe record
+
+An auditor records each perishable verification as a `Probe`
+(`anvil/lib/review_schema.py`). Four required fields — the minimum a
+later pass needs to re-run the check without re-deriving *what* to
+check:
+
+| Field | Meaning |
+|---|---|
+| `target` | What was probed, as a stable re-addressable identifier (URL, DOI, SKU, host:port). This is the identity key across passes — keep it byte-stable. |
+| `method` | How. Free-form tag; no enforced vocabulary. Observed values: `http_status`, `sha256`, `version_string`, `content_match`, `quote_validity`. |
+| `observed` | What it returned then, verbatim enough to diff against a re-probe (`200`, `sha256:ab12…`, `working draft v8`). |
+| `checked_at` | ISO-8601 UTC timestamp (see `timestamp.md`). Validated as parseable. |
+
+Optional: `claim` (the artifact claim that depends on it — so a staleness
+report can name what would become *false*, not just which URL went cold),
+`evidence_span`, `recheck_command` (the literal one-liner, when the probe
+is shell-reproducible), `max_age_days` (per-probe freshness budget, for a
+claim with a known expiry such as a 30-day vendor quote).
+
+**The existence of a `Probe` row IS the perishability marker.** There is
+no `durable: true` counterpart — durable verifications are simply the
+ones with no probe. This keeps the marker additive: a critic that records
+nothing is byte-identical to a pre-#863 critic.
+
+### Where probes live
+
+Two carriers, because the shipped audit commands have not all migrated to
+`_review.json` (see "Migration status" below):
+
+- **Schema-era critic** — populate `Review.probes[]` in `_review.json`.
+- **Prose-era critic** (every shipped auditor today) — write a standalone
+  `probes.json` next to `findings.md`:
+
+```json
+{
+  "schema_version": "1",
+  "version_dir": "gossamer-lan.2",
+  "critic_id": "proposal-audit",
+  "probes": [
+    {
+      "target": "https://example.org/papers/widget-draft.pdf",
+      "method": "sha256",
+      "observed": "sha256:9f2c…",
+      "checked_at": "2026-08-01T14:03:00Z",
+      "claim": "§3 cites this paper as 'working draft v8'",
+      "recheck_command": "curl -sL <url> | shasum -a 256"
+    }
+  ]
+}
+```
+
+Both are validated by the same `Probe` model and unioned by the reader,
+so the perishability contract does not wait on the per-skill
+`_review.json` migration.
+
+An **empty** `probes` list is meaningful and is NOT the same as an absent
+record: it is the auditor stating "I looked; nothing in this artifact is
+perishable." An absent record is unknown freshness.
+
+### Surfacing staleness
+
+`anvil/lib/probe_freshness.py` turns the recorded probes into a bounded
+re-probe checklist. A revise or audit pass over a version runs:
+
+```
+python -m anvil.lib.probe_freshness <thread>/<thread>.{N}
+```
+
+(prefix `uv run --project .anvil` in an installed consumer repo). It
+walks every critic sibling across **every** version under the thread
+root, keeps the newest probe per `target`, and classifies:
+
+- **`FRESH`** — probed within its freshness budget, against the version
+  under review.
+- **`STALE`** — the newest probe of this target is older than its budget
+  (`Probe.max_age_days`, else the caller's default of 14 days).
+- **`NOT-REPROBED`** — the target was verified against an *earlier*
+  version and no pass since has re-probed it. The claim was carried
+  forward on the strength of an older pass.
+
+`STALE` + `NOT-REPROBED` is the checklist: it turns "re-verify everything
+or trust it" into a bounded set. Resolving one of these is the same
+discipline as issue #749's "findings are leads, not evidence", extended
+across *time* rather than across siblings — re-run the probe, do not
+carry the earlier verdict forward on faith.
+
+**Backward compatibility.** An audit sibling with no probe record at all
+is reported under `unknown_freshness` — tolerated by design, never a
+defect, never an error, and never conflated with "nothing perishable".
+Every pre-#863 sibling lands there. Unknown is honest; silence dressed as
+`VERIFIED` was the bug.
+
+**Advisory only.** Like the `evidence_drift` check (issue #857), probe
+freshness never mutates on-disk state, never affects scoring, `advance`,
+or critical flags, and its CLI always exits `0`. A stale probe is not a
+scored defect — it is a verification that has expired and that the next
+pass must re-run before the artifact ships. Unlike the `pending_marker`
+gate (#841/#842), it is never wired through `convergence.py`'s
+`CriticalFlag` machinery.
+
 ## Aggregation
 
 The aggregator (see `critics.md` and `anvil/lib/critics.py::aggregate`)
@@ -170,6 +295,9 @@ To add a tool-augmented critic to a skill:
      the top level (or `Score.critical = true` for dim-scoped flags).
 3. Append the tag to the skill's default critic set in `critics.md` if
    the audit is mandatory.
+4. Record every **perishable** verification as a `Probe` — in
+   `Review.probes[]`, or in a sibling `probes.json` if the critic still
+   emits the prose shape. See "Perishable vs durable verifications".
 
 No reviser changes are required. The glob discovery picks up the
 sibling; the schema validator enforces `tool_calls` on every finding;
@@ -189,6 +317,13 @@ the aggregator merges via the standard rule.
   scorecard kind.
 - `anvil/lib/review_schema.py::Review._validate_kind_required_fields`
   — the validator that enforces this contract.
+- `anvil/lib/probe_freshness.py` — the perishable-claim freshness
+  advisory (issue #863) and its `probes.json` reader.
+- `anvil/lib/evidence_drift.py` — the sibling advisory for the *other*
+  half of the same problem: `BRIEF.md` / `refs/**` changing under a
+  frozen version (issue #857). Probe freshness covers claims that rot
+  because the outside world moved; evidence drift covers claims that
+  rot because the thread's own evidence base moved.
 
 ## Sources
 

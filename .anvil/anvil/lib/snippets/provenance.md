@@ -102,10 +102,10 @@ quote or factual claim to its supporting corpus passage:
 ```markdown
 # Claim provenance — <thread>.{N}
 
-| Claim | Source file | Line range | Notes |
-|-------|-------------|------------|-------|
-| "The factory burned down" | transcripts/nita3.txt | 412-415 | verbatim recall |
-| Journey took six weeks | letters/1940-aug.rtf | 3-7 | inferred from dates |
+| Claim | Source file | Line range | Anchor | Notes |
+|-------|-------------|------------|--------|-------|
+| "The factory burned down" | transcripts/nita3.txt | 412-415 | "the factory burned down in the summer of 1942" | verbatim recall |
+| Journey took six weeks | letters/1940-aug.rtf | 3-7 | "the crossing took nearly six full weeks" | inferred from dates |
 ```
 
 Column contract:
@@ -115,12 +115,68 @@ Column contract:
 - **Source file** — a path **relative to a declared corpus directory**
   (e.g. `transcripts/nita3.txt`), resolvable under one of the
   `resolve_corpus_dirs` roots.
-- **Line range** — a `start-end` line span (or a single line) locating
-  the supporting passage.
+- **Line range** — a `start-end` line span (or a single line) **hinting**
+  at the supporting passage's current location. This is a hint, not the
+  row's identity — see "Anchor: the stable identity" below.
+- **Anchor** (issue #868) — a short **verbatim quoted snippet** copied
+  exactly from the cited passage (curly-quote and whitespace differences
+  are tolerated; wording is not). This is the row's stable,
+  content-addressed identity — the thing a corpus audit actually
+  searches for. May be blank on a row migrated from a pre-#868 table (see
+  "Backward compatibility" below); MUST be populated on every row the
+  drafter writes going forward.
 - **Notes** — the drafter's brief characterization (`verbatim recall`,
   `inferred from dates`, `paraphrase`). The drafter fills `Notes`; the
   **audit critic** — not the drafter — assigns the five-way
   classification (Section 5).
+
+### Anchor: the stable identity
+
+A bare `Line range` is an address, not evidence: any edit to the corpus
+file that shifts lines above a cited row (an insertion, a reflow, an
+appended correction) silently moves what that row points at while it
+keeps resolving to *something* — the row still "works," it just now
+cites the wrong text. A spot-sampling reviewer reading plausible text at
+the stale range passes it; only an exhaustive audit that re-opens every
+range catches the drift, and only if it re-runs after the corpus
+changed. This is exactly the failure mode issue #868 documents (a
+six-line insertion silently invalidating three rows of a
+terminal-AUDITED chapter, discovered only because a full corpus audit
+happened to re-run).
+
+The **Anchor** column fixes this by making the citation content-
+addressed instead of position-addressed: the audit critic (Section 4)
+searches the WHOLE cited file for the anchor's exact text, not just the
+hinted range, and reports where it actually is. `Line range` becomes a
+cheap-to-read hint that is refreshed mechanically when it goes stale
+(Section 4a) — never the ground truth.
+
+**Anchor-writing discipline** (drafter and reviser, every row that has
+supporting text at all):
+
+- Copy the anchor **verbatim** from the passage the row cites — a
+  contiguous span, long enough to be unambiguous in the file (a full
+  clause or sentence fragment is typically enough; a two-word snippet is
+  not). Do not paraphrase the anchor — paraphrase belongs in `Notes`.
+- The anchor does not have to be the entire cited passage or match the
+  `Claim` cell's wording — it only has to be a verbatim substring of the
+  passage that the `Line range` currently points at.
+- A row recorded with an explicit `NOT_FOUND` source note (no corpus
+  passage supports the claim) has no anchor to give — leave the `Anchor`
+  cell blank; nothing here changes the existing "cut it or mark
+  `NOT_FOUND`, never fabricate" discipline below.
+
+### Backward compatibility
+
+A `provenance.md` table written before issue #868 has either no
+`Anchor` column at all (the legacy 4-column shape) or, row-by-row, an
+empty `Anchor` cell. Both are tolerated indefinitely — **never a defect,
+never coerced, never migrated in bulk.** A row with no anchor simply
+cannot be drift-checked (Section 4a reports it `NO_ANCHOR`, a distinct,
+non-error status — the same "unknown is honest" posture as
+`anvil/lib/evidence_drift.py`'s `NO-SNAPSHOT`). The very next revise
+pass that touches that row is expected to add its anchor; nothing forces
+a bulk migration of an otherwise-untouched thread.
 
 Drafter discipline:
 
@@ -151,6 +207,15 @@ range in the resolved corpus.
   finding — the same load-bearing evidence discipline as the voice
   corpus-quote rule. Vague back-check feedback without a quoted passage
   is itself a defective finding.
+- **When a sampled row has an `Anchor` value** (Section 2) and the text
+  at the cited `Line range` does not read as expected, check whether the
+  anchor text is present *elsewhere* in the file before concluding
+  `MISMATCH`/`NOT_FOUND` — a mismatch between the passage AT the hinted
+  line and an anchor found intact a few lines away is anchor drift
+  (Section 4a), not a content defect. The back-check is a sampling check
+  and MAY simply flag "hint looks stale, recommend a full audit" rather
+  than manually re-locating every drifted row; the exhaustive
+  drift-vs-content triage is the audit critic's job.
 
 The back-check is a **sampling** check (cheap, every review pass); the
 exhaustive verification is the audit critic's job (Section 4).
@@ -168,18 +233,97 @@ the schema validator already enforces `tool_calls` on every
    artifact, and every row in `provenance.md`. A claim in the artifact
    with **no `provenance.md` row is a finding in itself** (unmapped
    claim).
-2. For **each** map row, open the cited file + line range in the resolved
-   corpus and **classify** it with the five-way vocabulary (Section 5).
-3. Every `MISMATCH` / `NOT_FOUND` / `FABRICATED` row emits a finding with
+2. For **each** map row that has an `Anchor` value, run the **anchor-
+   resolution pre-pass** (Section 4a) FIRST — it decides which line(s)
+   to actually open before classification runs. For a row with no
+   anchor (Section 2 "Backward compatibility"), skip straight to opening
+   the cited `Line range` as-is, exactly as before issue #868.
+3. Open the resolved passage (the anchor's actual current location when
+   Section 4a found one; otherwise the cited `Line range`) in the
+   resolved corpus and **classify** it with the five-way vocabulary
+   (Section 5).
+4. Every `MISMATCH` / `NOT_FOUND` / `FABRICATED` row emits a finding with
    a non-empty **`tool_calls`** array recording the file-read operation
    that produced the evidence (the passage read, the lines inspected).
-4. Fabrication-class entries additionally emit **`critical_flags`**
+5. Fabrication-class entries additionally emit **`critical_flags`**
    (Section 6), which route through the existing verdict machinery
    (`anvil/lib/critics.py::_compute_verdict_impl` already short-circuits
    any `critical_flags` → `Verdict.BLOCK` — no change needed).
 
 `kind: tool_evidence` with `findings == []` is valid — a corpus whose
 every claim VERIFIED / PARAPHRASE_OK is a clean audit.
+
+## Section 4a — anchor-drift detection (pre-classification pass, #868)
+
+Before classifying a row against the five-way vocabulary, the audit
+critic resolves its `Anchor` (when present) against the WHOLE cited
+file — not just the hinted `Line range` — using
+`python -m anvil.lib.provenance_anchor check <provenance.md>
+<corpus_root> [<corpus_root> ...]` (prefix `uv run --project .anvil` in
+an installed consumer repo). This is a deterministic, advisory pre-
+check, the same posture as `anvil/lib/evidence_drift.py` (#857) and
+`anvil/lib/probe_freshness.py` (#863) — it never mutates on-disk state
+and its exit code is always `0`; the critic decides what to do with the
+report.
+
+Each row resolves to exactly one of:
+
+- **`NO_ANCHOR`** — the row has no `Anchor` value (legacy row, or a
+  `NOT_FOUND`-marked row with nothing to anchor). Classification proceeds
+  against the cited `Line range` exactly as before #868. Never a defect.
+- **`FILE_NOT_FOUND`** — `Source file` does not resolve under any
+  declared corpus root. Feeds the existing "row whose cited file does
+  not exist" finding path (Section 3's `major` precedent, applied at
+  audit scope).
+- **`NOT_FOUND`** — the anchor text is not present anywhere in the file
+  (deleted or rewritten, not merely moved). This is **not** a drift
+  finding — it degrades to the ordinary `NOT_FOUND` five-way
+  classification (Section 5); the passage is simply gone.
+- **`RESOLVED`** — the anchor text is present and its actual location
+  overlaps the cited `Line range` hint (or the row has no parseable
+  hint). No drift; classification proceeds against the hinted range.
+- **`DRIFTED`** — the anchor text is present **verbatim** elsewhere in
+  the file, not overlapping the cited hint. This is the signature case:
+  **the citation is genuine, only its address is stale.** The critic:
+  1. Emits a distinct `findings.md` row/finding — worded as **anchor
+     drift**, e.g. *"provenance.md row N: quoted text still present in
+     `<file>` but now at line `<X>` (row cites `<Y>`) — Line range hint
+     is stale"* — never phrased as `MISMATCH` or `NOT_FOUND`, and never
+     carrying a fabrication-class `critical_flags` entry. This is AC #2
+     from issue #868: a drifted anchor must read differently from an
+     unsupported claim to a human or a downstream reviser scanning
+     `findings.md`.
+  2. Then classifies the row against the vocabulary (Section 5) at the
+     anchor's ACTUAL resolved location, not the stale hint — a drifted
+     row whose relocated passage genuinely supports the claim is still
+     `VERIFIED`/`PARAPHRASE_OK` (drift and content-support are
+     orthogonal axes: a row can drift into staying `VERIFIED`, or drift
+     and independently turn out to be `MISMATCH` if the passage was also
+     edited in a way that changes its meaning).
+  3. Severity for the anchor-drift finding itself is `minor` — the
+     content classification (step 2) carries whatever severity the
+     five-way vocabulary implies; drift alone, once caught, is fully
+     mechanical to fix (Section 4b) and never a fabrication signal.
+
+When multiple occurrences of the anchor text exist in the file
+(coincidental duplication), the tool resolves to the occurrence nearest
+the cited hint — the mechanism issue #868's edge case (b) requires: a
+row whose anchor is genuinely un-drifted must not be misclassified as
+drifted merely because its exact wording happens to recur elsewhere.
+
+## Section 4b — mechanical repoint (reviser-side, #868)
+
+A reviser consuming `DRIFTED` findings repoints them mechanically rather
+than diagnosing each one by hand: `python -m anvil.lib.provenance_anchor
+repoint <provenance.md> <corpus_root> [<corpus_root> ...]` rewrites ONLY
+the `Line range` cell of every `DRIFTED` row to the anchor's resolved
+current location — `Claim` / `Source file` / `Anchor` / `Notes`, and
+every non-drifted row, are left byte-identical. This is explicitly **not**
+the "fabricating a source-line mapping" failure the drafter/reviser
+contract prohibits (Section 2): the anchor text itself already proves
+the citation is genuine; repoint only corrects a stale hint to match
+where that same, unchanged, verbatim evidence now lives. See each
+skill's `-revise` command for exactly where this runs in its procedure.
 
 ## Section 5 — five-way classification vocabulary
 
@@ -261,6 +405,46 @@ It is a normal critic sibling: immutable once written, discovered by the
 general `.audit/` sibling — the corpus audit is the substance-verification
 specialist, not a replacement for the general audit pass.
 
+## Section 9 — corpus-editing expectations for consumers (#868)
+
+The corpus is a project-level, human-owned evidence base — consumers
+hand-edit it between passes (correcting a transcription error, adding an
+explanatory note, appending a newly-transcribed letter). Before the
+`Anchor` column (Section 2), this required **line-count-neutral**
+editing discipline to avoid silently invalidating every
+`provenance.md` row citing text below the edit point: same-length
+substitutions only, new material appended at EOF, never an insertion
+mid-file. That discipline is no longer required to avoid *breakage* —
+an anchor-bearing citation survives a line-shifting edit; the next
+audit pass reports it `DRIFTED` (Section 4a) and the next revise pass
+repoints it mechanically (Section 4b). It is still good practice for
+*review noise*: an edit that shifts many rows produces many `DRIFTED`
+findings for the next audit to work through, even though none of them
+are defects.
+
+What consumers should still know:
+
+- **Editing the exact cited passage's wording** (not just its position)
+  is a content change, not a position change — the audit critic still
+  classifies the row against whatever text is now at the anchor's
+  resolved location (Section 4a step 2), and a rewritten passage that no
+  longer supports the claim correctly surfaces as `MISMATCH`, exactly as
+  today.
+- **Deleting the cited passage entirely** degrades to `NOT_FOUND`
+  (Section 4a), not `DRIFTED` — the citation genuinely has nothing left
+  to point at.
+- **Editing while an audit is in flight** (mid-sweep) is not a supported
+  concurrency mode for any part of this framework's filesystem-as-
+  coordination-layer model — finish or defer a corpus edit until between
+  passes, the same expectation as editing `BRIEF.md`/`refs/**` under a
+  frozen version (`anvil/lib/evidence_drift.py`, issue #857).
+- **Rows written before this feature** (no `Anchor` value) get none of
+  this protection until an anchor is added — see Section 2 "Backward
+  compatibility". A consumer who wants drift protection on an
+  already-AUDITED thread's existing corpus does not need to force a
+  revision: the next natural revise pass that touches a row is when its
+  anchor gets populated.
+
 ## Relationship to `<thread>/refs/` and `cite.py`
 
 This contract is deliberately separate from two existing surfaces:
@@ -274,3 +458,29 @@ This contract is deliberately separate from two existing surfaces:
   (DOI/arXiv → BibTeX). It knows nothing about local files or line-level
   citation maps. Claim provenance is local-corpus, line-range, and
   substance-verifying — an orthogonal concern.
+
+## Relationship to #863 (perishable-claim freshness)
+
+`anvil/lib/probe_freshness.py` (issue #863) and `anvil/lib/
+provenance_anchor.py` (issue #868, this contract's Section 4a/4b) are
+siblings that solve two different halves of "a verification that was
+correct when written and is not correct now":
+
+- **#863 is external.** The cited *evidence itself* is outside the
+  repo's control (a URL, an HTTP status, a live dataset) and can change
+  independently of anything the framework tracks. The fix is re-probing
+  on a freshness budget — there is no way to make an external address
+  permanently stable.
+- **#868 (this module) is internal.** The cited evidence — a corpus
+  file under a project-owned, version-controlled `corpus:` root — never
+  changed; only its *line address* did, because the file it lives in
+  was edited. The fix is a content-addressed anchor: once the anchor
+  format exists, the citation cannot go stale from a line shift, only
+  from an actual edit to the cited text (which correctly surfaces as a
+  content classification change, not a drift finding).
+
+Both are advisory, both are read-only over the artifact they check, and
+neither is wired through `anvil/lib/convergence.py`'s `CriticalFlag`
+machinery — see `anvil/lib/snippets/audit.md` §"Perishable vs durable
+verifications" for the full #863 design and its shared advisory
+posture.

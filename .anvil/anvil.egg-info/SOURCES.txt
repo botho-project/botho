@@ -11,6 +11,7 @@ anvil/lib/convergence.py
 anvil/lib/critics.py
 anvil/lib/cross_thread_refs.py
 anvil/lib/evidence_check.py
+anvil/lib/evidence_drift.py
 anvil/lib/export_schema.py
 anvil/lib/figure_content.py
 anvil/lib/hyperlink_resolver.py
@@ -20,9 +21,13 @@ anvil/lib/latex_render.py
 anvil/lib/marp_lint.py
 anvil/lib/numeric_consistency.py
 anvil/lib/parity.py
+anvil/lib/pending_marker.py
+anvil/lib/probe_freshness.py
 anvil/lib/project_brief.py
 anvil/lib/project_detect.py
 anvil/lib/project_discovery.py
+anvil/lib/prose_diff.py
+anvil/lib/provenance_anchor.py
 anvil/lib/render.py
 anvil/lib/render_gate.py
 anvil/lib/review_schema.py
@@ -32,6 +37,7 @@ anvil/lib/rubric.py
 anvil/lib/rubric_overrides_suffix.py
 anvil/lib/scorecard_check.py
 anvil/lib/sidecar.py
+anvil/lib/skill_lib_loader.py
 anvil/lib/tex_includes.py
 anvil/lib/theme.py
 anvil/lib/vision.py
@@ -54,6 +60,15 @@ anvil/skills/deck/lib/marp_lint.py
 anvil/skills/deck/lib/parity_lint.py
 anvil/skills/deck/lib/placeholder_backend.py
 anvil/skills/deck/lib/prompt_journal.py
+anvil/skills/deslop/lib/__init__.py
+anvil/skills/deslop/lib/ingest.py
+anvil/skills/deslop/lib/no_fabrication.py
+anvil/skills/deslop/lib/orchestrate.py
+anvil/skills/diff/lib/__init__.py
+anvil/skills/diff/lib/cli.py
+anvil/skills/diff/lib/overlay.py
+anvil/skills/diff/lib/server.py
+anvil/skills/diff/lib/sources.py
 anvil/skills/essay/__init__.py
 anvil/skills/help/lib/__init__.py
 anvil/skills/help/lib/introspect.py
@@ -80,6 +95,8 @@ anvil/skills/memo/lib/render_phase.py
 anvil/skills/memo/lib/rubric_overlays.py
 anvil/skills/memo/lib/rubric_overrides_suffix.py
 anvil/skills/memo/lib/theme_resolver.py
+anvil/skills/memo/lib/version_drift.py
+anvil/skills/memoir/__init__.py
 anvil/skills/paper/__init__.py
 anvil/skills/paper/lib/__init__.py
 anvil/skills/paper/lib/artifact_verify.py
@@ -114,6 +131,8 @@ anvil/skills/project-scout/lib/report.py
 anvil/skills/project-scout/lib/walk.py
 anvil/skills/project-share/lib/__init__.py
 anvil/skills/project-share/lib/apply.py
+anvil/skills/project-share/lib/citations.py
+anvil/skills/project-share/lib/cli.py
 anvil/skills/project-share/lib/collect.py
 anvil/skills/project-share/lib/config.py
 anvil/skills/project-share/lib/orchestrate.py

@@ -1,0 +1,86 @@
+% memoir chapter template — the slug-echo body filename (<slug>.tex, per
+% #295) lives at <thread>.{N}/<slug>.tex. A chapter's body is LaTeX
+% (SKILL.md §Output format) so anvil:project-book can \input it directly
+% into a master document. Delete these comments before authoring. Replace
+% bracketed placeholders.
+
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+
+% --- Photo-placement macros (SKILL.md §Photo-placement contract) ---------
+% project-photos (#599) deliberately scopes placement macros out of its own
+% surface ("consumer extension points via per-skill template preamble
+% overrides"). These three macro stubs are memoir-local. memoir-figures
+% resolves <stable-name> against project-photos' manifest.json at compile
+% time; a stable name absent from the manifest surfaces as a render-gate
+% finding, never a silent placeholder.
+%
+%   \famphoto{<stable-name>}{<caption>}    standard in-text family photo
+%   \fullphoto{<stable-name>}{<caption>}   full-page / plate photo
+%   \marginphoto{<stable-name>}{<caption>} small margin inset
+%
+% The consumer's own book-level preamble (anvil:project-book's
+% preamble.tex) may override the layout; these stubs give a chapter-local
+% default so a chapter renders standalone before assembly.
+\newcommand{\famphoto}[2]{%
+  \begin{figure}[h]
+    \centering
+    \includegraphics[width=0.7\linewidth]{photos/#1}
+    \caption{#2}
+  \end{figure}%
+}
+\newcommand{\fullphoto}[2]{%
+  \begin{figure}[p]
+    \centering
+    \includegraphics[width=\linewidth]{photos/#1}
+    \caption{#2}
+  \end{figure}%
+}
+\newcommand{\marginphoto}[2]{%
+  \marginpar{%
+    \includegraphics[width=\marginparwidth]{photos/#1}\\
+    \footnotesize #2%
+  }%
+}
+% ---------------------------------------------------------------------------
+
+\title{[Chapter title]}
+\author{[Author / narrator]}
+\date{}
+
+\begin{document}
+\maketitle
+
+% Sourcing discipline (SKILL.md §Dual-corpus provenance, rubric dim 1 —
+% the dominant dim): every reconstructed quote and every checkable factual
+% claim below traces to a row in this version's provenance.md when the
+% project declares a top-level corpus:. If the corpus tier is inactive for
+% this project, do not invent unverifiable specificity.
+
+\section*{[Scene / section heading]}
+% Narrator framing prose (rubric dim 2 — scored against the author-tier
+% voice: docs when declared) interleaved with reconstructed dialogue
+% (rubric dim 3 — scored against each subject's spoken corpus when
+% declared under voice.subjects:). Keep the two tiers distinct within the
+% scene: narration stays in the author's persona; dialogue stays in the
+% speaker's own recorded cadence.
+
+[Narration in the author's voice sets the scene...]
+
+\begin{quotation}
+``[Reconstructed dialogue line, grounded in the speaker's transcript
+corpus — cadence and register match the recording, not a polished
+paraphrase.]''
+\end{quotation}
+
+% \famphoto{example-stable-name}{A caption naming the moment or people
+%   pictured.}
+
+[Narration continues, resolving the scene rather than merely recounting
+it...]
+
+\end{document}

@@ -60,7 +60,9 @@ anvil/lib/
                                 harnesses with "no report files" guards).
     scorecard_kind.md          human-verdict | machine-summary discriminator.
     audit.md                   .review/ (judgment) vs .audit/ (tool-evidence)
-                                distinction; load-bearing tool_calls contract.
+                                distinction; load-bearing tool_calls contract;
+                                perishable-vs-durable verification contract
+                                (Probe / probes.json / freshness statuses, #863).
     git_sync.md                Opt-in, default-off per-phase git commit/sync
                                 hook for consumers running anvil under an
                                 external orchestrator (.anvil/config.json
@@ -287,6 +289,7 @@ separate per-skill PRs.
 | `threshold` | int | no | Echoed from the rubric. Required on `AggregatedReview`. |
 | `verdict` | `Verdict` enum | no | Per-critic verdict, optional and ignored by the aggregator (the aggregator recomputes from the merged scorecard). |
 | `rendered_artifact` | string | conditional | Required when `kind == "vision"`; path of the rendered artifact (relative to `version_dir`). |
+| `probes` | `Probe[]` or null | no | Perishable external verifications performed by this critic (#863). `null` (the default, and every pre-#863 review) means **unknown freshness**, not "nothing perishable"; an explicit `[]` declares the artifact durable-only. Optional even for `kind == "tool_evidence"`. |
 
 #### `Score` (one rubric dimension)
 
@@ -310,6 +313,38 @@ separate per-skill PRs.
 | `rationale` | string | yes | 1–2 sentences explaining the defect. |
 | `suggested_fix` | string | yes | One sentence: what the reviser should do. |
 | `tool_calls` | `ToolCall[]` | conditional | Required when parent `Review.kind == "tool_evidence"`. |
+
+#### `Probe` (one perishable external verification, #863)
+
+The existence of a `Probe` row **is** the perishability marker — durable
+verifications (BOM arithmetic, internal consistency) simply have none. The
+four required fields are the minimum a later pass needs to re-run the
+check without re-deriving what to check. See `snippets/audit.md`
+§"Perishable vs durable verifications" and `probe_freshness.py`.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `target` | string | yes | What was probed, as a stable re-addressable identifier (URL, DOI, SKU, `host:port`). The identity key across passes — keep it byte-stable. |
+| `method` | string | yes | How. Free-form tag; no enforced vocabulary. Observed: `http_status`, `sha256`, `version_string`, `content_match`, `quote_validity`. |
+| `observed` | string | yes | What it returned then, verbatim enough to diff against a re-probe (`"200"`, `"sha256:ab12…"`, `"working draft v8"`). |
+| `checked_at` | string | yes | ISO-8601 UTC timestamp. Validated as parseable — an unreadable timestamp looks fresh to a reader and is uncheckable by a tool. |
+| `claim` | string | no | The artifact claim that depends on this probe, in one line. Lets a staleness report name what would become false. |
+| `evidence_span` | string | no | Same format as `Score.evidence_span`. |
+| `recheck_command` | string | no | Literal command that re-runs the probe. Optional — not every probe is shell-reproducible. |
+| `max_age_days` | int (>= 0) | no | Per-probe freshness budget overriding the caller's default (14). Set it for a claim with a known expiry. |
+
+#### `ProbeLog` (the standalone `probes.json` re-probe list, #863)
+
+The second carrier for `Probe` rows, for the prose-era auditors that do
+not yet write `_review.json` (see `snippets/audit.md` §"Migration
+status"). `probe_freshness.py` reads both and unions them.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `schema_version` | `"1"` literal | yes | Pinned, same as `Review`. |
+| `version_dir` | string | yes | Name of the version dir probed. |
+| `critic_id` | string | yes | Stable identifier of the critic that probed. |
+| `probes` | `Probe[]` | yes (default `[]`) | An **empty** list declares "audited; nothing perishable" — materially different from an absent `probes.json`, which is unknown freshness. |
 
 #### `CriticalFlag` (verdict-blocking flag)
 

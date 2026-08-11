@@ -330,6 +330,28 @@ def _validation_error_findings(exc: ValidationError) -> List[ScorecardFinding]:
                     ),
                 )
             )
+        elif "scores must enumerate every rubric dimension" in msg:
+            # Sharpened detail for the empty-scores case (issue #912): the
+            # generic pydantic message doesn't point a reviewer at the
+            # actual cause, and an empty ``scores`` list is the exact
+            # shape a fully-bolded/malformed scoring.md table produces
+            # once ``parse_memo_scoring_table`` finds zero rows.
+            findings.append(
+                ScorecardFinding(
+                    code=PARSE_ERROR,
+                    severity=SEVERITY_ERROR,
+                    detail=detail,
+                    message=(
+                        "scoring table parsed to zero rows — the "
+                        "scorecard could not be built into a typed "
+                        "Review. Common cause: markdown emphasis (e.g. "
+                        "`**5**`) around a Weight or Score cell breaking "
+                        "the row shape; verify scoring.md matches the "
+                        "documented `| # | Dimension | Weight | Score | "
+                        "Justification |` table shape."
+                    ),
+                )
+            )
         else:
             findings.append(
                 ScorecardFinding(

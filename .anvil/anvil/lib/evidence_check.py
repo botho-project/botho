@@ -198,6 +198,7 @@ signal (the MIN_QUOTE_CHARS posture).
 # Finding codes (stable identifiers; consumers grep for these).
 FABRICATED_EVIDENCE = "fabricated_evidence"
 MISSING_EVIDENCE = "missing_evidence"
+EMPTY_SCORECARD = "empty_scorecard"
 
 # Finding severities. Fabricated evidence is a major finding (the gate
 # this module exists for); missing evidence is a minor advisory.
@@ -415,6 +416,67 @@ class EvidenceCheckResult:
 
 
 # ---------------------------------------------------------------------------
+# Empty-scorecard guard (issue #912)
+# ---------------------------------------------------------------------------
+
+# A ``## Dimension scores``-style heading, OR a markdown table header row
+# that carries both a "Weight" and a "Score" column. Either signal means
+# the text is *meant* to be a scorecard — so if the table parser below
+# comes back with zero rows, that is a parse failure, not "no scorecard
+# here" (a genuinely scorecard-free text — e.g. plain prose findings —
+# never matches either pattern).
+_SCORECARD_HEADING_RE = re.compile(
+    r"^#+\s*.*\b(?:dimension|scoring)\s+scores?\b", re.IGNORECASE | re.MULTILINE
+)
+_SCORECARD_HEADER_ROW_RE = re.compile(
+    r"^\s*\|.*\bWeight\b.*\|.*\bScore\b.*\|", re.IGNORECASE | re.MULTILINE
+)
+
+
+def _looks_like_scorecard(text: str) -> bool:
+    """True when ``text`` carries a scorecard heading or header row.
+
+    Used to distinguish "there is no scorecard in this text" (a clean
+    pass with zero dimensions checked) from "there IS a scorecard but it
+    failed to parse" (the vacuous-pass bug, issue #912) — only the
+    latter must surface as a finding.
+    """
+    return bool(
+        _SCORECARD_HEADING_RE.search(text) or _SCORECARD_HEADER_ROW_RE.search(text)
+    )
+
+
+def _empty_scorecard_finding(scoring_path: str) -> EvidenceFinding:
+    """Build the finding for a scorecard-shaped text that parsed to zero rows.
+
+    This is the load-bearing fix for issue #912: previously a fully
+    bolded (or otherwise malformed) scoring table parsed to ``[]`` and
+    every downstream check trivially "passed" against an empty list —
+    the scorecard-arithmetic gate reported clean results despite never
+    having checked anything. Emitting a major finding here means the
+    gate can no longer report success on an empty scorecard.
+    """
+    return EvidenceFinding(
+        code=EMPTY_SCORECARD,
+        severity=SEVERITY_MAJOR,
+        dimension="(scorecard)",
+        scoring_path=scoring_path,
+        score=None,
+        weight=0,
+        spans_extracted=0,
+        message=(
+            f"{scoring_path} carries a scorecard heading or a Weight/Score "
+            f"header row, but the scoring table parsed to ZERO rows — this "
+            f"is treated as a parse failure, not a clean pass. A common "
+            f"cause is markdown emphasis (e.g. `**5**`) around a Weight or "
+            f"Score cell breaking the row shape; verify the table renders "
+            f"as the documented `| # | Dimension | Weight | Score | "
+            f"Justification |` shape and re-run this check."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Classification
 # ---------------------------------------------------------------------------
 
@@ -507,12 +569,19 @@ def check_scoring_text(
 
     Pure function of the two texts (no filesystem). Returns
     ``(findings, dimensions_checked)`` where ``dimensions_checked``
-    counts the non-null-score rows examined.
+    counts the non-null-score rows examined. A text that carries a
+    scorecard heading or Weight/Score header row but parses to zero
+    rows raises an :data:`EMPTY_SCORECARD` finding rather than silently
+    returning ``([], 0)`` (issue #912).
     """
     normalized_body = normalize(body_text)
     findings: List[EvidenceFinding] = []
+    rows = parse_memo_scoring_table(scoring_text)
+    if not rows and _looks_like_scorecard(scoring_text):
+        findings.append(_empty_scorecard_finding(scoring_path))
+        return findings, 0
     checked = 0
-    for row in parse_memo_scoring_table(scoring_text):
+    for row in rows:
         if row.score is None:
             continue
         checked += 1
@@ -704,7 +773,11 @@ def check_summary_text(
     :func:`classify_justification` flow (the classifier, normalization,
     span+elision matching, and the by-absence marker are
     scorecard-source-agnostic). Pure function of the two texts (no
-    filesystem). Returns ``(findings, dimensions_checked)``.
+    filesystem). Returns ``(findings, dimensions_checked)``. A text that
+    carries a scorecard heading or Weight/Score header row but yields
+    zero rows from BOTH the JSON and table parsers raises an
+    :data:`EMPTY_SCORECARD` finding rather than silently returning
+    ``([], 0)`` (issue #912).
     """
     normalized_body = normalize(body_text)
     findings: List[EvidenceFinding] = []
@@ -728,7 +801,15 @@ def check_summary_text(
         # No JSON-block dimensions parsed (the table-shaped machine-summary
         # scorecard the commands/examples/snippet actually emit — issue
         # #536). Re-run over the markdown table so the self-check is live.
-        for trow in parse_memo_scoring_table(summary_text):
+        table_rows = parse_memo_scoring_table(summary_text)
+        if (
+            not json_rows
+            and not table_rows
+            and _looks_like_scorecard(summary_text)
+        ):
+            findings.append(_empty_scorecard_finding(scoring_path))
+            return findings, 0
+        for trow in table_rows:
             if trow.score is None:
                 continue
             checked += 1
@@ -1078,6 +1159,7 @@ __all__ = [
     "FABRICATED_EVIDENCE",
     "FIXED_BODY_NAMES",
     "MISSING_EVIDENCE",
+    "EMPTY_SCORECARD",
     "SEVERITY_MAJOR",
     "SEVERITY_MINOR",
     "EvidenceFinding",

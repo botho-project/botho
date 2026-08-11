@@ -156,6 +156,60 @@ reset_markers
 out=$(run_hook "please open an issue with rjwalters/loom about this")
 assert_no_output "report example 'open an issue with rjwalters/loom' -> no route" "$out"
 
+# --- Anti-route suppression: explicit declines near a route keyword (#5327) --
+# A prompt matching a route pattern (e.g. "fix") while explicitly declining
+# Loom usage must emit no AGENT_ROUTE at all.
+reset_markers
+out=$(run_hook "just fix it here and commit and push; we don't need to use loom for every tiny change")
+assert_no_output "anti-route: 'don't need to use loom' -> no route" "$out"
+
+reset_markers
+out=$(run_hook "don't use loom to fix this")
+assert_no_output "anti-route: 'don't use loom to fix this' -> no route" "$out"
+
+reset_markers
+out=$(run_hook "no need for a loom agent, just fix it inline")
+assert_no_output "anti-route: 'just fix it inline' -> no route" "$out"
+
+reset_markers
+out=$(run_hook "fix this yourself without loom")
+assert_no_output "anti-route: 'fix this yourself without loom' -> no route" "$out"
+
+# Positive control: a genuine fix request (no decline phrase) must still route.
+reset_markers
+out=$(run_hook "fix the failing test in tests/test_foo.py")
+ctx=$(context_of "$out")
+assert_contains "'fix the failing test in <file>' -> AGENT_ROUTE present" "$ctx" "AGENT_ROUTE:"
+assert_contains "'fix the failing test in <file>' -> routes to /loom:doctor" "$ctx" "/loom:doctor"
+
+# --- Anti-route must NOT over-suppress: bare adverbs are not declines --------
+# "myself" / "inline" / "directly" appear in plenty of ordinary prompts that
+# never decline Loom. They must not be anti-route phrases — every phrase in
+# ANTI_ROUTE_PHRASES has to mention "loom" explicitly.
+reset_markers
+out=$(run_hook "help me build this feature, I want to do the core logic myself")
+ctx=$(context_of "$out")
+assert_contains "no over-suppression: '...myself' -> AGENT_ROUTE present" "$ctx" "AGENT_ROUTE:"
+assert_contains "no over-suppression: '...myself' -> routes to /loom:builder" "$ctx" "/loom:builder"
+
+reset_markers
+out=$(run_hook "please clean up this code inline, no separate refactor commit")
+ctx=$(context_of "$out")
+assert_contains "no over-suppression: '...inline' -> AGENT_ROUTE present" "$ctx" "AGENT_ROUTE:"
+assert_contains "no over-suppression: '...inline' -> routes to /loom:hermit" "$ctx" "/loom:hermit"
+
+reset_markers
+out=$(run_hook "please review this PR directly, I want your feedback fast")
+ctx=$(context_of "$out")
+assert_contains "no over-suppression: 'review...directly' -> AGENT_ROUTE present" "$ctx" "AGENT_ROUTE:"
+assert_contains "no over-suppression: 'review...directly' -> routes to /loom:judge" "$ctx" "/loom:judge"
+
+reset_markers
+out=$(run_hook "fix the bug directly in the config file")
+ctx=$(context_of "$out")
+assert_contains "no over-suppression: 'fix...directly' -> AGENT_ROUTE present" "$ctx" "AGENT_ROUTE:"
+assert_contains "no over-suppression: 'fix...directly' -> routes to /loom:doctor" "$ctx" "/loom:doctor"
+
 # --- Per-session dedup of the agent table -----------------------------------
 reset_markers
 out1=$(run_hook "please implement the new feature" "session-abc")
@@ -181,6 +235,27 @@ assert_contains "no session_id -> table included (no dedup possible)" "$ctxA" "A
 outB=$(run_hook "please implement the new feature")
 ctxB=$(context_of "$outB")
 assert_contains "no session_id -> table included again (graceful)" "$ctxB" "Available Loom agents:"
+
+# --- Session-marker dir pruning (#3793) -------------------------------------
+# Stale markers (>7d) are pruned opportunistically on hook entry; fresh markers
+# survive. The prune runs inside the session-dedup branch (a route matched and
+# session_id is supplied).
+reset_markers
+SEEN_DIR_S="$TMPROOT/.loom/logs/skill-router-seen"
+mkdir -p "$SEEN_DIR_S"
+touch -t 202001010000 "$SEEN_DIR_S/stale-old-session"   # ~2020 -> older than 7d
+touch "$SEEN_DIR_S/fresh-session"                        # now -> within 7d
+run_hook "please implement the new feature" "sess-prune-s" >/dev/null
+if [[ ! -e "$SEEN_DIR_S/stale-old-session" ]]; then
+    pass "skill-router: stale (>7d) marker pruned on hook entry"
+else
+    fail "skill-router: stale (>7d) marker pruned on hook entry"
+fi
+if [[ -e "$SEEN_DIR_S/fresh-session" ]]; then
+    pass "skill-router: fresh marker survives prune"
+else
+    fail "skill-router: fresh marker survives prune"
+fi
 
 # --- Never non-zero / never invalid JSON ------------------------------------
 for probe in "the weather is quite nice today" "please implement the new feature" "review this PR" "/builder x y z"; do

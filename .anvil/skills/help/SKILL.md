@@ -130,14 +130,13 @@ threads. The deep-dive derives each skill's *real* phase sequence from its
 
 ## Procedure
 
-Load the skill lib (`anvil/skills/help/lib/`) and call the single entry
-point, passing the consumer repo root (the directory containing `.anvil/`
-and/or `.claude/`) and the optional skill name:
+Load the skill lib (via the shared `anvil.lib.skill_lib_loader` helper —
+see `commands/help.md` for the working incantation) and call the single
+entry point, passing the consumer repo root (the directory containing
+`.anvil/` and/or `.claude/`) and the optional skill name:
 
 ```python
-from introspect import render_help   # (loaded under a unique package name)
-
-text = render_help(repo_root, skill=skill_name_or_None)
+text = introspect.render_help(repo_root, skill=skill_name_or_None)
 print(text)
 ```
 

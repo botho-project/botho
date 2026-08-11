@@ -80,7 +80,7 @@
     },
     "CriticalFlag": {
       "additionalProperties": false,
-      "description": "A top-level critical flag, short-circuiting the verdict.\n\nA critical flag indicates a defect severe enough that a sophisticated\nreader would stop reading. Any critical flag forces ``Verdict.BLOCK``\nregardless of total score.",
+      "description": "A top-level critical flag, short-circuiting the verdict.\n\nA critical flag indicates a defect severe enough that a sophisticated\nreader would stop reading. Most critical flags force ``Verdict.BLOCK``\nregardless of total score.\n\nTwo ``type`` values are **specially resolved** (additive, no schema-\nversion bump \u2014 each carries its own priority tier in\n``anvil/lib/convergence.py``):\n\n- ``\"no_go\"`` (issue #559) \u2014 a *stronger* terminator than a generic\n  critical flag: short-circuits to ``Verdict.NO_GO`` (thesis-failure\n  terminal sink).\n- ``\"pending_dependency\"`` (issue #842) \u2014 a *weaker* signal than a\n  generic critical flag: an honestly-declared ``[PENDING <source>]``\n  value that is still outstanding. It is visible in\n  ``AggregatedReview.critical_flags`` for reporting, but it **never**\n  forces ``Verdict.BLOCK`` and **never** deducts a dimension score.\n  The terminal-state gate (READY / AUDITED) for an unresolved pending\n  marker is enforced *separately* by the consuming skill (via\n  ``convergence.has_pending_dependency_flag`` or a deterministic\n  re-run of ``anvil/lib/pending_marker.py``), decoupled from the\n  score/verdict path here.",
       "properties": {
         "evidence_span": {
           "anyOf": [
@@ -101,7 +101,7 @@
           "type": "string"
         },
         "type": {
-          "description": "Short tag, e.g. 'fabricated_traction', 'factual_error', 'conflict_of_interest'. Skill-defined; the lib does not enforce a vocabulary.",
+          "description": "Short tag, e.g. 'fabricated_traction', 'factual_error', 'conflict_of_interest'. Skill-defined; the lib does not enforce a vocabulary. Two values are specially resolved: 'no_go' (issue #559 \u2014 forces Verdict.NO_GO) and 'pending_dependency' (issue #842 \u2014 an outstanding pending-measurement marker; visible for reporting but never forces Verdict.BLOCK and never deducts a dimension score, with the terminal-state gate enforced separately).",
           "title": "Type",
           "type": "string"
         }
@@ -199,6 +199,129 @@
       "title": "Kind",
       "type": "string"
     },
+    "Probe": {
+      "additionalProperties": false,
+      "description": "One **perishable** external verification: what was probed, and when.\n\nIssue #863. ``kind: tool_evidence`` conflates two materially different\nverifications:\n\n- **Durable** \u2014 BOM arithmetic, link budgets, internal consistency, a\n  subtotal that sums. Verified once, true forever unless the document\n  changes. These are recorded as ordinary claim rows / findings; they\n  need no ``Probe``.\n- **Perishable** \u2014 a live URL, an HTTP status, a version pin, the SHA\n  of a served artifact, a price quote with an expiry. Verified once,\n  true *until the world moves*. A ``VERIFIED`` verdict on one of these\n  carries an implicit expiry the framework did not previously record,\n  so it read identically to a durable verification and silently rotted\n  between passes.\n\n**The existence of a ``Probe`` row IS the perishability marker.** There\nis no ``durable: true`` counterpart \u2014 durable verifications are simply\nthe ones with no ``Probe``. This keeps the marker additive: a critic\nthat records nothing is byte-identical to a pre-#863 critic.\n\nThe four required fields are the minimum a later pass needs to re-run\nthe verification *without re-deriving what to check*: ``target`` (what),\n``method`` (how), ``observed`` (what it said then), ``checked_at``\n(when). ``recheck_command`` is the optional literal one-liner when the\nprobe is shell-reproducible.\n\nFreshness is evaluated by ``anvil/lib/probe_freshness.py``. Like\n``evidence_drift`` (issue #857), that check is **advisory** \u2014 it never\ngates, scores, or raises a critical flag.",
+      "properties": {
+        "checked_at": {
+          "description": "ISO-8601 timestamp of the probe (UTC, per anvil/lib/snippets/timestamp.md). Validated as parseable \u2014 a probe whose timestamp cannot be read is worse than no probe, because it looks fresh to a reader and is uncheckable by a tool.",
+          "title": "Checked At",
+          "type": "string"
+        },
+        "claim": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The artifact claim that depends on this probe, in one line. Lets a staleness report name what would become false, not just which URL went cold.",
+          "title": "Claim"
+        },
+        "evidence_span": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "See Score.evidence_span for format.",
+          "title": "Evidence Span"
+        },
+        "max_age_days": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Per-probe freshness budget, overriding the caller's default. Set it when the claim has a known expiry (a 30-day vendor quote) or decays unusually fast.",
+          "title": "Max Age Days"
+        },
+        "method": {
+          "description": "How it was probed. Free-form tag; the lib enforces no vocabulary. Observed values: 'http_status', 'sha256', 'version_string', 'content_match', 'quote_validity'.",
+          "title": "Method",
+          "type": "string"
+        },
+        "observed": {
+          "description": "What the probe returned at 'checked_at', verbatim enough to diff against a later re-probe: '200', 'HTTP 404', 'sha256:ab12...', 'working draft v8'.",
+          "title": "Observed",
+          "type": "string"
+        },
+        "recheck_command": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Literal command that re-runs this probe, e.g. 'curl -sI https://example.org/x | head -1'. Optional: not every probe is shell-reproducible, and 'target' + 'method' already say what to re-check.",
+          "title": "Recheck Command"
+        },
+        "target": {
+          "description": "What was probed, as a stable identifier a later pass can re-address: a URL, a DOI, a vendor SKU, a host:port. Used as the identity key when matching a re-probe against an earlier one, so keep it byte-stable across passes.",
+          "title": "Target",
+          "type": "string"
+        }
+      },
+      "required": [
+        "target",
+        "method",
+        "observed",
+        "checked_at"
+      ],
+      "title": "Probe",
+      "type": "object"
+    },
+    "ProbeLog": {
+      "additionalProperties": false,
+      "description": "The standalone ``probes.json`` re-probe list in a critic sibling dir.\n\nIssue #863. ``Probe`` rows have **two** carriers, because the shipped\naudit commands have not all migrated to ``_review.json`` (see\n``anvil/lib/snippets/audit.md`` \u00a7\"Migration status\"): a schema-era\ncritic puts them on ``Review.probes``; a prose-era critic \u2014 every\nshipped auditor today \u2014 writes this file alongside its\n``findings.md`` / ``verdict.md``. ``anvil/lib/probe_freshness.py``\nreads both and unions them, so the perishability contract does not\nhave to wait on the per-skill ``_review.json`` migration.\n\nAn **empty** ``probes`` list is meaningful and is NOT the same as an\nabsent file: it is the auditor stating \"I looked; nothing in this\nartifact is perishable.\" An absent file is unknown-freshness.",
+      "properties": {
+        "critic_id": {
+          "description": "Stable identifier of the critic that probed.",
+          "title": "Critic Id",
+          "type": "string"
+        },
+        "probes": {
+          "description": "Every perishable verification this critic performed. Empty declares 'no perishable claims in this artifact' \u2014 distinct from an absent probes.json, which is unknown-freshness.",
+          "items": {
+            "$ref": "#/$defs/Probe"
+          },
+          "title": "Probes",
+          "type": "array"
+        },
+        "schema_version": {
+          "const": "1",
+          "default": "1",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "version_dir": {
+          "description": "Name of the version directory probed, e.g. 'memo.3'.",
+          "title": "Version Dir",
+          "type": "string"
+        }
+      },
+      "required": [
+        "version_dir",
+        "critic_id"
+      ],
+      "title": "ProbeLog",
+      "type": "object"
+    },
     "Review": {
       "additionalProperties": false,
       "description": "The canonical ``_review.json`` payload from one critic.\n\nWritten by every critic sibling in a versioned thread. The reviser reads\nevery ``_review.json`` across sibling critics and aggregates per\n``anvil/lib/critics.py::aggregate``.",
@@ -241,6 +364,22 @@
           "default": null,
           "description": "Model identifier that produced this review. Optional but strongly recommended for reproducibility.",
           "title": "Model"
+        },
+        "probes": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Probe"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Perishable external verifications performed by this critic (issue #863) \u2014 the machine-readable re-probe list a later pass re-runs instead of re-deriving what needs checking. `None` (the default, and every pre-#863 review) means unknown freshness, NOT 'nothing perishable'; an explicit empty list is the auditor declaring the artifact durable-only. Optional even for kind='tool_evidence' so existing audit siblings keep validating unchanged.",
+          "title": "Probes"
         },
         "rendered_artifact": {
           "anyOf": [
@@ -479,6 +618,9 @@
     },
     {
       "$ref": "#/$defs/AggregatedReview"
+    },
+    {
+      "$ref": "#/$defs/ProbeLog"
     }
   ],
   "title": "Anvil critic output schema"

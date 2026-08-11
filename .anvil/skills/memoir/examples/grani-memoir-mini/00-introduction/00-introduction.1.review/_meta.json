@@ -1,0 +1,12 @@
+{
+  "critic": "review",
+  "role": "memoir-review.md",
+  "started": "2026-07-22T15:00:00Z",
+  "finished": "2026-07-22T15:12:00Z",
+  "model": "claude-fable-5",
+  "schema_version": 1,
+  "scorecard_kind": "human-verdict",
+  "rubric_id": "anvil-memoir-v1",
+  "rubric_total": 44,
+  "advance_threshold": 39
+}

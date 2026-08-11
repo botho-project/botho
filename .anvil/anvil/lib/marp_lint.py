@@ -440,10 +440,15 @@ _CLASS_ASK_RE = re.compile(
 
 # Anchored variant of the image regex: matches a STANDALONE figure block —
 # a single `![alt](path)` reference that is the entire line (modulo
-# surrounding whitespace). Used as the trigger for the
-# ``figure-italic-supporting-line-too-long`` rule, where only a standalone
-# figure block (not an inline image in a paragraph) sets up the "figure +
-# italic supporting line" idiom.
+# surrounding whitespace), regardless of alt-text length. Used as the
+# trigger for the ``figure-italic-supporting-line-too-long`` rule, where
+# only a standalone figure block (not an inline image in a paragraph) sets
+# up the "figure + italic supporting line" idiom, and (since #905) as the
+# standalone-image gate in ``_accumulate_line_costs``'s
+# ``slide-content-overflow`` cost model — keyed on line *structure*, not
+# ``len(raw_line)``, so a long, accessible alt string can't push a
+# standalone image into the body-paragraph branch and get double-charged
+# (alt text is never rendered on the slide).
 _STANDALONE_FIGURE_RE = re.compile(r"^\s*!\[[^\]]*\]\([^)]*\)\s*$")
 
 # Single ``_..._`` or ``*...*`` italic delimiter spanning the WHOLE stripped
@@ -948,8 +953,11 @@ def _accumulate_line_costs(
             just_added_paragraph_break = False
             continue
 
-        # Image (standalone block — image on its own paragraph).
-        if _IMAGE_RE.search(raw_line) and len(raw_line.strip()) < 250:
+        # Image (standalone block — image on its own paragraph). Keyed on
+        # line *structure* (the whole line is exactly one image node), not
+        # on line length — a long alt string must not push a standalone
+        # image into the body-paragraph branch below (#905).
+        if _STANDALONE_FIGURE_RE.match(raw_line):
             # Parse the alt-string for Marp sizing keywords (`bg`, `h:N`,
             # `w:N`, …). `_image_cost_units` returns the vertical body-flow
             # cost; see its docstring for the keyword→cost mapping.

@@ -190,6 +190,9 @@ HYPERLINKS_SUFFIX = "hyperlinks"
 # Default external-probe timeout (seconds). Short by intent: a slow target
 # should fall through to the "uncheckable" bucket rather than stall the
 # critic. The test suite monkeypatches the curl call to avoid network.
+# A bare timeout (no response either way) gets exactly one retry before
+# it is reported as broken (issue #889) — see
+# ``_is_transient_timeout_reason`` / ``_validate_external``.
 DEFAULT_CURL_TIMEOUT_S = 5
 
 # Markdown link regex: matches `[text](url)`. The `text` group is allowed
@@ -460,6 +463,23 @@ def _suggested_fix_for(hf: HyperlinkFinding) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _line_of(text: str, offset: int) -> int:
+    """1-based source line containing byte ``offset`` into ``text``."""
+    return text.count("\n", 0, offset) + 1
+
+
+def _normalize_raw(raw: str) -> str:
+    """Collapse internal whitespace (incl. newlines) to single spaces.
+
+    A matched link's raw text may embed a hard line wrap when its
+    bracket text spans one (issue #889). The underlying match text is
+    unchanged for resolution purposes; this is purely a display
+    normalization so ``Finding.rationale`` / CLI JSON output reads as
+    one line instead of splitting mid-sentence.
+    """
+    return re.sub(r"\s+", " ", raw).strip()
+
+
 def _find_markdown_links(text: str) -> List[Tuple[int, str, str]]:
     """Return ``[(line, raw_text, url), ...]`` for every markdown link.
 
@@ -469,11 +489,25 @@ def _find_markdown_links(text: str) -> List[Tuple[int, str, str]]:
     existence specifically). The enumeration is permissive — the per-link
     validator decides classification (internal vs. external) and
     pass/fail.
+
+    Scans the **whole body in one pass**, not line-by-line (issue
+    #889). A link written with hard-wrapped bracket text —
+
+        gf180-bandgap's [target spec is
+        ratified](https://github.com/...):
+
+    — is invisible to a per-line scan, because neither line contains a
+    matching ``[...]`` pair on its own; the previous per-``splitlines()``
+    implementation missed every such link. ``_MD_LINK_RE``'s ``[^\\]]*``
+    text group already matches across newlines (character classes are
+    unaffected by ``re.DOTALL``), so applying it to the full text is
+    sufficient — only the enumeration loop needed to change. ``line``
+    reports the line on which the link *opens* (the ``[``).
     """
     out: List[Tuple[int, str, str]] = []
-    for line_idx, line in enumerate(text.splitlines(), start=1):
-        for m in _MD_LINK_RE.finditer(line):
-            out.append((line_idx, m.group(0), m.group("url")))
+    for m in _MD_LINK_RE.finditer(text):
+        line_idx = _line_of(text, m.start())
+        out.append((line_idx, _normalize_raw(m.group(0)), m.group("url")))
     return out
 
 
@@ -486,17 +520,20 @@ def _find_wiki_links(text: str) -> List[Tuple[int, str, str]]:
     if it slips through). The regex is the authoritative discriminator;
     edge cases that look like both fall to whichever pattern matches
     first.
+
+    Scans the whole body in one pass (not per line) for the same
+    hard-line-wrap reason as :func:`_find_markdown_links` (issue #889).
     """
     out: List[Tuple[int, str, str]] = []
-    for line_idx, line in enumerate(text.splitlines(), start=1):
-        for m in _WIKI_LINK_RE.finditer(line):
-            target = m.group("target")
-            # Defensive: skip shapes that look like version specifiers
-            # (e.g., "slug.3" — would be a cross-thread intra-thread
-            # shape, not handled by the wiki-link class).
-            if re.search(r"\.\d+$|\.latest$", target):
-                continue
-            out.append((line_idx, m.group(0), target))
+    for m in _WIKI_LINK_RE.finditer(text):
+        target = m.group("target")
+        # Defensive: skip shapes that look like version specifiers
+        # (e.g., "slug.3" — would be a cross-thread intra-thread
+        # shape, not handled by the wiki-link class).
+        if re.search(r"\.\d+$|\.latest$", target):
+            continue
+        line_idx = _line_of(text, m.start())
+        out.append((line_idx, _normalize_raw(m.group(0)), target))
     return out
 
 
@@ -563,24 +600,35 @@ def _validate_wiki_link(
     return False, "unknown document"
 
 
-def _validate_external(
-    url: str, *, timeout_s: int = DEFAULT_CURL_TIMEOUT_S
+def _is_transient_timeout_reason(reason: Optional[str]) -> bool:
+    """``True`` when a failed probe's reason looks like a bare timeout.
+
+    Covers both failure shapes a curl timeout can surface as: the
+    Python-side ``subprocess.TimeoutExpired`` (``--max-time`` didn't
+    save it, the outer ``timeout=`` fired) and curl's own on-the-wire
+    sentinel — ``%{http_code}`` prints ``000`` when the connection
+    never completed (a dead socket, DNS failure, or ``--max-time``
+    itself expiring), which surfaces here as ``"HTTP 0"``. Issue #889
+    reported exactly the latter shape: a URL that returned 200 on an
+    immediate re-probe with ``curl -sL`` was reported as failing with
+    ``HTTP 0`` here. Distinguishing a real 4xx/5xx (never retried) from
+    a transient no-response (retried once) is the point of this check.
+    """
+    if reason is None:
+        return False
+    return reason == "curl error: TimeoutExpired" or reason == "HTTP 0"
+
+
+def _curl_probe_once(
+    url: str, *, timeout_s: int
 ) -> Tuple[bool, Optional[str]]:
-    """Probe an external URL via ``curl -I``; return ``(resolved, reason)``.
+    """Run exactly one ``curl -I`` probe; return ``(resolved, reason)``.
 
     Treats HTTP 2xx and 3xx as resolved; 4xx and 5xx as broken; network
     errors / timeouts as broken with the curl exit code in the reason.
-    When ``curl`` is absent from PATH, returns ``(True, None)`` — the
-    link is recorded as **unverified** by the caller via a top-level
-    ``reasons`` note, not as a finding (mirrors the
-    ``check_*_available`` graceful-degrade contract in
-    ``anvil/lib/render.py``).
+    Factored out of :func:`_validate_external` so the retry wrapper can
+    call it twice without duplicating the subprocess invocation.
     """
-    if shutil.which("curl") is None:
-        # Caller surfaces this as a top-level reason; here we return
-        # resolved=True so the link is not flagged as broken (the
-        # critic cannot prove it broken without the tool).
-        return True, None
     try:
         proc = subprocess.run(
             ["curl", "-I", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", str(timeout_s), url],
@@ -598,6 +646,36 @@ def _validate_external(
     if 200 <= code < 400:
         return True, None
     return False, f"HTTP {code}"
+
+
+def _validate_external(
+    url: str, *, timeout_s: int = DEFAULT_CURL_TIMEOUT_S
+) -> Tuple[bool, Optional[str]]:
+    """Probe an external URL via ``curl -I``; return ``(resolved, reason)``.
+
+    When ``curl`` is absent from PATH, returns ``(True, None)`` — the
+    link is recorded as **unverified** by the caller via a top-level
+    ``reasons`` note, not as a finding (mirrors the
+    ``check_*_available`` graceful-degrade contract in
+    ``anvil/lib/render.py``).
+
+    A single retry (issue #889) fires when the *first* probe fails
+    with a bare-timeout shape (see :func:`_is_transient_timeout_reason`)
+    — two consecutive real-world sessions saw a live URL (HTTP 200 on
+    immediate manual re-probe) reported as broken here after one
+    ``--max-time``-bounded ``curl -I`` timed out. A genuine 4xx/5xx is
+    never retried — only the shape indistinguishable from "server
+    didn't answer in time".
+    """
+    if shutil.which("curl") is None:
+        # Caller surfaces this as a top-level reason; here we return
+        # resolved=True so the link is not flagged as broken (the
+        # critic cannot prove it broken without the tool).
+        return True, None
+    resolved, reason = _curl_probe_once(url, timeout_s=timeout_s)
+    if not resolved and _is_transient_timeout_reason(reason):
+        resolved, reason = _curl_probe_once(url, timeout_s=timeout_s)
+    return resolved, reason
 
 
 # ---------------------------------------------------------------------------

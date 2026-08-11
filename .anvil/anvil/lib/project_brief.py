@@ -52,9 +52,9 @@ enumerates per-document metadata in its YAML frontmatter::
 The project BRIEF frontmatter shape::
 
     ---
-    project: brains-for-robots
+    project: smart-actuators
     audience:
-      - Sphere internal leadership (primary)
+      - Acme internal leadership (primary)
       - VC investors (secondary)
     hard_rules:
       - Avoid speculative claims without an evidence anchor.
@@ -395,6 +395,7 @@ REGISTERED_ARTIFACT_TYPES: Tuple[str, ...] = (
     "datasheet",
     "primer",
     "spec",
+    "memoir",
 )
 
 
@@ -513,6 +514,19 @@ class ArtifactType(str, Enum):
         ``code_ref`` companion-input key (the mirror image of primer's
         ``spec_ref`` — the implementation the spec normatively describes)
         parses under the STRICT unknown-key rejection.
+    MEMOIR
+        Skill-identity value (#740): an ``anvil:memoir`` chaptered
+        narrative-nonfiction thread reconstructed from a private
+        evidentiary corpus (family memoirs, oral histories,
+        biography-from-archive). Not a memo subtype — selects no memo
+        rubric overlay. Registered per the
+        #386/#408/#432/#440/#460/#486/#686/#697 precedent so a shared
+        project BRIEF can declare which skill owns a chapter thread. The
+        already-general top-level ``corpus:`` (#597) and ``voice:``
+        ``subjects:`` (#598) keys need no memoir-specific BRIEF grammar —
+        both parse under the STRICT unknown-key rejection today; this
+        registration only adds the ``artifact_type: memoir`` value
+        itself.
     """
 
     INVESTMENT_MEMO = "investment-memo"
@@ -533,6 +547,7 @@ class ArtifactType(str, Enum):
     DATASHEET = "datasheet"
     PRIMER = "primer"
     SPEC = "spec"
+    MEMOIR = "memoir"
 
 
 # Populate the legacy input-alias map now that the enum exists (issue
@@ -565,7 +580,8 @@ MEMO_ARTIFACT_TYPES: frozenset = frozenset(
 # ``report`` added under #432;
 # ``ip-uspto`` / ``ip-uspto-provisional`` added under #440; ``essay``
 # added under #460; ``datasheet`` added under #486; ``primer`` added
-# under #686; ``spec`` added under #697/#706):
+# under #686; ``spec`` added under #697/#706; ``memoir`` added under
+# #740):
 # values that name which
 # NON-memo skill owns a thread in a
 # shared project BRIEF. Memo's overlay dispatch
@@ -588,6 +604,7 @@ SKILL_IDENTITY_ARTIFACT_TYPES: frozenset = frozenset(
         ArtifactType.DATASHEET,
         ArtifactType.PRIMER,
         ArtifactType.SPEC,
+        ArtifactType.MEMOIR,
     }
 )
 
@@ -661,6 +678,17 @@ _FRONTMATTER_DELIM = "---"
 # Words-per-page conversion factor. Mirrors the 600 wpm proxy
 # documented in ``anvil/skills/memo/SKILL.md`` §"Length targets".
 _WORDS_PER_PAGE = 600
+
+# Artifact types for which a ``target_length: { slides: [min, max] }``
+# unit is truthful (issue #742). A deck/slides thread is authored and
+# reviewed in slide count, not words or pages — there is no
+# words-per-page-style equivalence to convert through, so ``slides`` is
+# a TERMINAL unit, never converted. Declaring ``slides`` on any other
+# ``artifact_type`` is rejected at parse time (see
+# ``_normalize_target_length_range``).
+_SLIDES_UNIT_ARTIFACT_TYPES: frozenset = frozenset(
+    {ArtifactType.DECK, ArtifactType.SLIDES}
+)
 
 # Rubric dimension range for the ``dim_N_calibration`` / ``dim_N_waiver``
 # key families: the closed interval [1, 9]. Both shipped consumers (memo
@@ -746,6 +774,8 @@ _RECOGNIZED_DOCUMENT_KEYS = {
     "web_search",
     "spec_ref",
     "code_ref",
+    "recommendation_target",
+    "voice_corpus_exclude",
 }
 
 # Default iteration cap. The override floor mirrors the deck skill's
@@ -772,7 +802,7 @@ _VALID_RENDER_ENGINES = ("weasyprint", "xelatex", "wkhtmltopdf")
 
 
 class TargetLengthRange(BaseModel):
-    """Word-count range from a BRIEF document entry's ``target_length`` block.
+    """Word-count (or slide-count) range from a BRIEF ``target_length`` block.
 
     Used in two places:
 
@@ -784,16 +814,30 @@ class TargetLengthRange(BaseModel):
     enforced. A ``pages`` input is converted at
     :data:`_WORDS_PER_PAGE` (600 wpp) per the SKILL.md convention.
 
+    A ``slides`` input (issue #742; ``deck`` / ``slides``
+    ``artifact_type`` only — see :data:`_SLIDES_UNIT_ARTIFACT_TYPES`) is
+    the one exception to the words-based contract: slide count is a
+    TERMINAL unit for a deck, not a proxy for word/page length, so it is
+    passed through UNCONVERTED. For a ``source_key == "slides"`` range,
+    ``min_words`` / ``max_words`` hold the raw slide-count bounds
+    verbatim (the field names are the words/pages-era names; no
+    words-per-page-style conversion is ever applied to them) — always
+    check ``source_key`` before interpreting the bounds as a word count.
+
     Attributes
     ----------
     min_words
-        Minimum word count (inclusive).
+        Minimum word count (inclusive) — or, for ``source_key ==
+        "slides"``, the minimum slide count (inclusive), unconverted.
     max_words
-        Maximum word count (inclusive). Must be ``>= min_words``.
+        Maximum word count (inclusive). Must be ``>= min_words`` — or,
+        for ``source_key == "slides"``, the maximum slide count
+        (inclusive), unconverted.
     source_key
-        ``"words"`` or ``"pages"`` — which top-level key the on-disk
-        range used. Captured for the audit trail so a reader can see
-        whether the BRIEF author wrote in words or in pages.
+        ``"words"``, ``"pages"``, or ``"slides"`` — which top-level key
+        the on-disk range used. Captured for the audit trail so a
+        reader can see whether the BRIEF author wrote in words, pages,
+        or slides.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1304,6 +1348,31 @@ class ResolvedVoiceDoc(BaseModel):
             "when ``missing``."
         ),
     )
+    excluded: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Issue #890: absolute path strings dropped from ``paths`` "
+            "by :func:`resolve_voice_docs`'s ``exclude_self_slug`` "
+            "self-published-form exclusion and/or a document's declared "
+            "``voice_corpus_exclude``. Sorted; always empty for the "
+            "three non-``corpus`` doc kinds and for every caller that "
+            "does not pass ``exclude_self_slug``, so this field is "
+            "fully inert (empty list, byte-identical output) for every "
+            "pre-#890 consumer."
+        ),
+    )
+    exclusion_reasons: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Issue #890: maps each ``excluded`` path to a short "
+            "human-readable reason — ``'published self (inferred from "
+            "slug)'`` for the automatic exclusion, or ``\"declared "
+            "corpus_exclude: '<pattern>'\"`` for a path matched by the "
+            "document's ``voice_corpus_exclude``. Feeds "
+            "``_summary.md``'s ``voice_grounding.corpus_excluded`` "
+            "block so the calibration base stays auditable."
+        ),
+    )
 
 
 class ResolvedSubjectVoice(BaseModel):
@@ -1597,7 +1666,7 @@ class BriefDocument(BaseModel):
         documented in issue #349)::
 
             documents:
-              - slug: aldus
+              - slug: beacon
                 artifact_type: investment-memo
                 max_iterations: 5
                 iteration_cap_rationale: |
@@ -1690,6 +1759,67 @@ class BriefDocument(BaseModel):
               - slug: botho-consensus-spec
                 artifact_type: spec
                 code_ref: ../../src/**/*.rs
+    recommendation_target
+        Optional per-document declaration of the memo's decision
+        posture (issue #348, project-first fallback via issue #837):
+        one of ``"invest"``, ``"pass"``, ``"conditional"``, or
+        ``"undecided"``. Mirrors the thread-level ``<thread>/BRIEF.md``
+        informal frontmatter key of the same name (see
+        :func:`load_recommendation_target`) so a project migrated to
+        the canonical post-#295/#296 project-first layout — which has
+        no thread-level ``BRIEF.md`` at all — has a typed, on-disk
+        place to declare the same signal. :func:`load_recommendation_target_resolved`
+        is the dual-surface reader: it prefers a thread-level value
+        when present (byte-identical legacy behavior) and falls back
+        to this per-document field otherwise.
+
+        Deliberately **lenient**, the one exception to
+        ``BriefDocument``'s otherwise-STRICT per-field validation: an
+        unrecognized value (a typo like ``"Undecided"``, ``"tbd"``, a
+        non-string type) normalizes to ``None`` at parse time rather
+        than raising — mirroring the thread-level surface's closed-set
+        contract exactly, since this field is operator-declared
+        calibration posture, not structural configuration.
+
+        Example::
+
+            documents:
+              - slug: investment-memo
+                artifact_type: investment-memo
+                recommendation_target: undecided
+    voice_corpus_exclude
+        Optional per-document declaration of extra path/glob strings to
+        drop from this document's resolved ``voice.corpus`` when
+        **this** document is under review (issue #890). Companion to the
+        *automatic* published-self exclusion that
+        :func:`resolve_voice_docs` applies when called with
+        ``exclude_self_slug=<this slug>`` — that automatic rule infers a
+        thread's own published form from its slug (a filename stem
+        equal to the slug, optionally after stripping a leading
+        ``YYYY-MM-DD-`` date prefix) and cannot cover every consumer's
+        publish-path convention (a title-cased filename, a transliterated
+        slug, a nested `index.md`-per-post layout, …). This field is the
+        documented escape hatch for exactly those cases: declare the
+        published artifact's actual path/glob here and it is unioned
+        with the automatic exclusion (deduped) rather than replacing it.
+
+        Same on-disk shape as :attr:`spec_ref` / :attr:`code_ref`: a
+        scalar string (normalized to a single-element list) or a YAML
+        list of path/glob strings. Resolved the same way as the
+        ``voice.corpus`` glob itself — project-root first, then
+        consumer-root; absolute paths bypass the walk. A pattern that
+        resolves to nothing is a silent no-op (there is nothing to
+        exclude), never an error — this field only ever narrows an
+        already-resolved corpus, it cannot widen or break it.
+
+        Example (the consumer's blog archive keeps published posts under
+        a nested per-slug directory the automatic date-prefix rule
+        cannot infer)::
+
+            documents:
+              - slug: the-loop-is-the-unit
+                artifact_type: essay
+                voice_corpus_exclude: website/src/notes/posts/the-loop-is-the-unit/index.tsx
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1721,6 +1851,18 @@ class BriefDocument(BaseModel):
     # to a single-element list, so downstream code always sees a list.
     spec_ref: Optional[List[str]] = Field(default=None)
     code_ref: Optional[List[str]] = Field(default=None)
+    # Hardcoded Literal (not referencing _RECOGNIZED_RECOMMENDATION_TARGETS,
+    # defined later in this module in the thread-level BRIEF helpers
+    # section) mirrors the render_engine field's precedent above — the
+    # constant is only consumed by _validate_recommendation_target, which
+    # is called at load_project_brief() runtime, long after module import
+    # completes, so no forward-reference reordering is needed.
+    recommendation_target: Optional[
+        Literal["invest", "pass", "conditional", "undecided"]
+    ] = Field(default=None)
+    # Same scalar-or-list normalization as spec_ref / code_ref (issue #890),
+    # via _validate_voice_corpus_exclude / _validate_companion_ref.
+    voice_corpus_exclude: Optional[List[str]] = Field(default=None)
 
 
 class ProjectBrief(BaseModel):
@@ -1786,6 +1928,32 @@ class ProjectBrief(BaseModel):
         inactive (absent key, ``null``, or empty list) → byte-identical
         behavior. Path resolution is deferred to
         :func:`resolve_corpus_dirs`.
+    quarantine
+        Optional list of **literal** figure/range tokens (issue #914) that
+        a ``hard_rules`` entry forbids porting from the project's private
+        artifacts (e.g. a memo) into its customer-facing siblings (e.g. a
+        deck) — the classic shape is a superseded or unverified number
+        (``"$400M"`` when the correct disclosure is ``"$256M"``, or an
+        unverified ``"20-40%"`` spread). Distinct from ``hard_rules``:
+        ``hard_rules`` stays free-form discipline prose for the reviewer
+        (``"cite $256M net, not $400M gross"``); ``quarantine`` is the
+        machine-matchable token surface a lint can compare against —
+        the same split ``corpus`` already draws against ``voice.corpus``
+        (structured ground truth vs. prose guidance).
+
+        Consumed by ``anvil/lib/parity.py``'s deck↔memo parity lint via
+        the ``quarantine_corpus`` kwarg on ``lint_source()``: a listed
+        token found only in the memo body is reframed away from the
+        "should you port this?" promotion (``side="only_in_memo_quarantined"``)
+        rather than silently dropped, and the SAME token found anywhere
+        in the deck body raises a new ``side="quarantine_violation"``
+        finding — a real hard-rule violation. Entries are literal
+        strings; derived forms (e.g. a quarantined ``"20-40%"`` rate
+        reappearing as its arithmetic product) are NOT detected — see
+        the "Quarantine corpus" section of ``parity.py``'s module
+        docstring. Defaults to an empty list (tier inactive) →
+        byte-identical behavior for every BRIEF that does not declare
+        this key.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -1797,6 +1965,7 @@ class ProjectBrief(BaseModel):
     theme: Optional[str] = Field(default=None)
     voice: Optional[VoiceDocs] = Field(default=None)
     corpus: Optional[List[str]] = Field(default=None)
+    quarantine: List[str] = Field(default_factory=list)
 
     def document_for_slug(self, slug: str) -> Optional[BriefDocument]:
         """Return the ``BriefDocument`` whose ``slug`` matches, or ``None``.
@@ -2236,25 +2405,61 @@ def _normalize_audience(value: Any) -> List[str]:
     return flattened
 
 
+def _slides_unit_allowed(
+    artifact_type: Optional[Union["ArtifactType", str]],
+) -> bool:
+    """Return whether ``target_length: { slides: [...] }`` is truthful.
+
+    ``None`` (no artifact-type context available at the call site) fails
+    closed — see :func:`_normalize_target_length_range`.
+    """
+    if artifact_type is None:
+        return False
+    return artifact_type in _SLIDES_UNIT_ARTIFACT_TYPES
+
+
 def _normalize_target_length_range(
-    raw: Any, field_path: str
+    raw: Any,
+    field_path: str,
+    *,
+    artifact_type: Optional[Union["ArtifactType", str]] = None,
 ) -> TargetLengthRange:
     """Convert a raw ``{words: [...]}`` / ``{pages: [...]}`` to a typed range.
 
     Raises ``ValueError`` for any malformed shape — the BRIEF parser is
     STRICT (unlike the prior rubric_overrides loader, which warned).
 
-    Accepts the **flat shape** only — ``{"words": [min, max]}`` or
-    ``{"pages": [min, max]}``. Extended-shape keys (``default``,
-    ``overrides``) are rejected explicitly — the per-version surface
-    has moved to ``target_length_overrides`` per the #296
-    consolidation.
+    Accepts the **flat shape** only — ``{"words": [min, max]}``,
+    ``{"pages": [min, max]}``, or (issue #742, ``deck`` / ``slides``
+    ``artifact_type`` only) ``{"slides": [min, max]}``. Extended-shape
+    keys (``default``, ``overrides``) are rejected explicitly — the
+    per-version surface has moved to ``target_length_overrides`` per
+    the #296 consolidation.
+
+    Parameters
+    ----------
+    artifact_type
+        The owning document entry's ``artifact_type``, when known.
+        Gates the ``slides`` unit: it is only accepted when
+        ``artifact_type`` is ``deck`` or ``slides`` (see
+        :data:`_SLIDES_UNIT_ARTIFACT_TYPES`) — a slide deck is authored
+        and reviewed in slide count, not words or pages, so the
+        ``slides`` unit is rejected for every other artifact type
+        (there is no truthful words/pages-equivalent for a deck).
+        ``None`` (the default, used by callers with no artifact-type
+        context, e.g. the ``rubric_overrides.target_length`` and
+        ``target_length_overrides`` call sites) also rejects ``slides``
+        — fail closed rather than silently accepting an unvalidated
+        unit.
     """
     if not isinstance(raw, dict):
+        shape_hint = "`{ words: [min, max] }` or `{ pages: [min, max] }`"
+        if _slides_unit_allowed(artifact_type):
+            shape_hint += " (or `{ slides: [min, max] }` for a deck/slides thread)"
         raise ValueError(
             f"BRIEF.{field_path} must be a dict; got "
             f"{type(raw).__name__} — suggested fix: use the shape "
-            f'`{{ words: [min, max] }}` or `{{ pages: [min, max] }}`.'
+            f"{shape_hint}."
         )
 
     # Reject extended-shape keys explicitly so a copy-paste from the
@@ -2272,18 +2477,42 @@ def _normalize_target_length_range(
 
     has_words = "words" in raw
     has_pages = "pages" in raw
-    if has_words and has_pages:
+    has_slides = "slides" in raw
+
+    declared_keys = [
+        key
+        for key, present in (("words", has_words), ("pages", has_pages), ("slides", has_slides))
+        if present
+    ]
+
+    if len(declared_keys) > 1:
         raise ValueError(
-            f"BRIEF.{field_path} has both 'words' and 'pages' — "
-            f"ambiguous shape; pick exactly one key."
-        )
-    if not has_words and not has_pages:
-        raise ValueError(
-            f"BRIEF.{field_path} has neither 'words' nor 'pages' — "
-            f"suggested fix: add `words: [min, max]` or `pages: [min, max]`."
+            f"BRIEF.{field_path} has more than one of 'words' / 'pages' / "
+            f"'slides' ({declared_keys}) — ambiguous shape; pick exactly "
+            f"one key."
         )
 
-    source_key = "words" if has_words else "pages"
+    if not declared_keys:
+        raise ValueError(
+            f"BRIEF.{field_path} has none of 'words', 'pages', or "
+            f"'slides' — suggested fix: add `words: [min, max]` or "
+            f"`pages: [min, max]` (or, for a deck/slides thread, "
+            f"`slides: [min, max]`)."
+        )
+
+    source_key = declared_keys[0]
+
+    if source_key == "slides" and not _slides_unit_allowed(artifact_type):
+        artifact_type_display = getattr(artifact_type, "value", artifact_type)
+        raise ValueError(
+            f"BRIEF.{field_path}.slides is only accepted when the "
+            f"document's artifact_type is 'deck' or 'slides' (got "
+            f"{artifact_type_display!r}) — a slide deck is "
+            f"authored/reviewed in slide count, not words or pages, so "
+            f"'slides' is not a truthful unit here. Suggested fix: use "
+            f"`words: [min, max]` or `pages: [min, max]` instead."
+        )
+
     range_value = raw[source_key]
 
     if not isinstance(range_value, list) or len(range_value) != 2:
@@ -2323,6 +2552,12 @@ def _normalize_target_length_range(
         min_words = lo_raw * _WORDS_PER_PAGE
         max_words = hi_raw * _WORDS_PER_PAGE
     else:
+        # "words" passes through unchanged; "slides" is a TERMINAL unit
+        # (issue #742) — it is NEVER run through the words-per-page
+        # conversion. ``min_words`` / ``max_words`` hold the raw slide
+        # count verbatim in that case; ``source_key`` is the
+        # discriminator a consumer must check before treating the
+        # bounds as an actual word count.
         min_words = lo_raw
         max_words = hi_raw
 
@@ -2334,7 +2569,10 @@ def _normalize_target_length_range(
 
 
 def _normalize_target_length_overrides(
-    raw: Any, field_path: str
+    raw: Any,
+    field_path: str,
+    *,
+    artifact_type: Optional[Union["ArtifactType", str]] = None,
 ) -> Optional[TargetLengthOverrides]:
     """Convert a raw ``target_length_overrides`` dict to a typed model.
 
@@ -2342,6 +2580,10 @@ def _normalize_target_length_overrides(
     ``"2"``, …) and values are ``[min, max]``-style range dicts. Empty
     dict → returns a :class:`TargetLengthOverrides` with empty
     ``overrides``. Absent (``None``) → returns ``None``.
+
+    ``artifact_type`` (issue #742) is forwarded to each per-version
+    :func:`_normalize_target_length_range` call so a ``slides:``
+    override is gated the same way as the top-level ``target_length``.
 
     Raises ``ValueError`` for malformed shape (non-dict, non-integer-
     string key, malformed range).
@@ -2381,7 +2623,9 @@ def _normalize_target_length_overrides(
                 f'write the key as `"1"`, `"2"`, etc.'
             )
         range_typed = _normalize_target_length_range(
-            value, field_path=f"{field_path}[{key_str!r}]"
+            value,
+            field_path=f"{field_path}[{key_str!r}]",
+            artifact_type=artifact_type,
         )
         overrides[key_str] = range_typed
 
@@ -2411,7 +2655,10 @@ def _parse_dim_waiver_key(key: str) -> Optional[int]:
 
 
 def _normalize_rubric_overrides(
-    raw: Any, field_path: str
+    raw: Any,
+    field_path: str,
+    *,
+    artifact_type: Optional[Union["ArtifactType", str]] = None,
 ) -> Optional[RubricOverrides]:
     """Convert a raw ``rubric_overrides`` dict to a typed model.
 
@@ -2470,7 +2717,9 @@ def _normalize_rubric_overrides(
 
         if key == "target_length":
             target_length = _normalize_target_length_range(
-                value, field_path=f"{field_path}.target_length"
+                value,
+                field_path=f"{field_path}.target_length",
+                artifact_type=artifact_type,
             )
             continue
 
@@ -2869,6 +3118,31 @@ def _validate_code_ref(raw: Any, field_path: str) -> Optional[List[str]]:
     )
 
 
+def _validate_voice_corpus_exclude(raw: Any, field_path: str) -> Optional[List[str]]:
+    """Validate a raw ``voice_corpus_exclude`` value (issue #890).
+
+    Same scalar-or-list normalization as :func:`_validate_spec_ref` /
+    :func:`_validate_code_ref` — see :func:`_validate_companion_ref` for
+    the full contract. Unlike those two **companion-input** fields (which
+    each define their own activation tier, so a malformed declaration
+    must still ACTIVATE the tier and surface a ``major`` finding rather
+    than silently vanishing), a malformed ``voice_corpus_exclude`` is a
+    plain BRIEF parse-time error: this field only ever *narrows* an
+    already-resolved ``voice.corpus`` glob, it never defines a tier of
+    its own, so there is no "declared-but-broken, stay active" resolve
+    -time case to preserve — the ``CompanionRefTypeError`` it raises on a
+    malformed value (itself a ``ValueError``) propagates as an ordinary
+    BRIEF-parse failure.
+    """
+    return _validate_companion_ref(
+        raw,
+        field_path,
+        field="voice_corpus_exclude",
+        scalar_example="writing-corpus/my-post.md",
+        list_example="writing-corpus/a.md, writing-corpus/b.md",
+    )
+
+
 def _validate_render_lua_filters(
     raw: Any, field_path: str
 ) -> Optional[List[str]]:
@@ -3058,6 +3332,35 @@ def _validate_web_search(raw: Any, field_path: str) -> Optional[bool]:
     return raw
 
 
+def _validate_recommendation_target(
+    raw: Any, field_path: str
+) -> Optional[Literal["invest", "pass", "conditional", "undecided"]]:
+    """Validate a raw per-document ``recommendation_target`` value (issue #837).
+
+    Deliberately **lenient** — the one exception to ``BriefDocument``'s
+    otherwise-STRICT per-field validation (contrast :func:`_validate_web_search`,
+    :func:`_validate_max_iterations`, which raise on a malformed value).
+    Mirrors :func:`load_recommendation_target`'s thread-level closed-set
+    contract exactly: ``None`` and every value not in
+    :data:`_RECOGNIZED_RECOMMENDATION_TARGETS` (typos like ``"Undecided"``,
+    ``"tbd"``, non-string types) normalizes to ``None`` rather than
+    raising. This field is operator-declared calibration posture
+    metadata consumed by the reviewer's dim 1 calibration — a typo
+    should degrade to "no posture declared", not block the whole
+    project-level BRIEF from parsing.
+
+    ``field_path`` is accepted (unused in the body) to keep this
+    validator's signature consistent with its STRICT siblings in this
+    module — none of them are called positionally, so a future
+    behavior change here (e.g., a deprecation warning) can add a
+    field-path-qualified message without a call-site change.
+    """
+    del field_path  # unused — see docstring
+    if isinstance(raw, str) and raw in _RECOGNIZED_RECOMMENDATION_TARGETS:
+        return raw  # type: ignore[return-value]
+    return None
+
+
 def _validate_paired_iteration_cap_override(
     max_iterations: Optional[int],
     iteration_cap_rationale: Optional[str],
@@ -3196,7 +3499,9 @@ def _normalize_documents(
         raw_tl = entry.get("target_length")
         target_length = (
             _normalize_target_length_range(
-                raw_tl, field_path=f"documents[{i}].target_length"
+                raw_tl,
+                field_path=f"documents[{i}].target_length",
+                artifact_type=artifact_type,
             )
             if raw_tl is not None
             else None
@@ -3205,11 +3510,13 @@ def _normalize_documents(
         target_length_overrides = _normalize_target_length_overrides(
             entry.get("target_length_overrides"),
             field_path=f"documents[{i}].target_length_overrides",
+            artifact_type=artifact_type,
         )
 
         rubric_overrides = _normalize_rubric_overrides(
             entry.get("rubric_overrides"),
             field_path=f"documents[{i}].rubric_overrides",
+            artifact_type=artifact_type,
         )
 
         render_engine = _validate_render_engine(
@@ -3262,6 +3569,16 @@ def _normalize_documents(
             field_path=f"documents[{i}].code_ref",
         )
 
+        recommendation_target = _validate_recommendation_target(
+            entry.get("recommendation_target"),
+            field_path=f"documents[{i}].recommendation_target",
+        )
+
+        voice_corpus_exclude = _validate_voice_corpus_exclude(
+            entry.get("voice_corpus_exclude"),
+            field_path=f"documents[{i}].voice_corpus_exclude",
+        )
+
         # Paired-override validation runs after the per-field validators
         # so the cross-field error names both keys with already-normalized
         # values (e.g., whitespace-only rationale → None → "missing").
@@ -3288,6 +3605,8 @@ def _normalize_documents(
                 web_search=web_search,
                 spec_ref=spec_ref,
                 code_ref=code_ref,
+                recommendation_target=recommendation_target,
+                voice_corpus_exclude=voice_corpus_exclude,
             )
         except ValidationError as exc:
             raise ValueError(
@@ -3402,8 +3721,9 @@ def _parse_brief_body(
 
     Raises ``ValueError`` on any schema violation. Recognized top-level
     keys: ``project``, ``audience``, ``hard_rules``, ``documents``,
-    ``theme``, ``voice``, ``corpus``. Other keys are ignored (forward-
-    compat surface for project-level fields that may land later).
+    ``theme``, ``voice``, ``corpus``, ``quarantine``. Other keys are
+    ignored (forward-compat surface for project-level fields that may
+    land later).
 
     The consumer artifact-type set (issue #394) is discovered ONCE per
     parse here and threaded down to the per-entry ``artifact_type``
@@ -3434,6 +3754,9 @@ def _parse_brief_body(
     theme = _normalize_theme(frontmatter.get("theme"))
     voice = _normalize_voice(frontmatter.get("voice"))
     corpus = _normalize_corpus_dirs(frontmatter.get("corpus"))
+    quarantine = _normalize_string_list(
+        frontmatter.get("quarantine"), "quarantine"
+    )
 
     try:
         return ProjectBrief(
@@ -3444,6 +3767,7 @@ def _parse_brief_body(
             theme=theme,
             voice=voice,
             corpus=corpus,
+            quarantine=quarantine,
         )
     except ValidationError as exc:
         raise ValueError(
@@ -3740,9 +4064,99 @@ def _resolve_voice_corpus(
     return ResolvedVoiceDoc(kind=kind, declared=declared, missing=True)
 
 
+# A published filename that carries a leading calendar-date prefix
+# (``2026-05-27-the-loop-is-the-unit.tsx``) — the shape the rjwalters.info
+# blog pipeline that seeded issue #461/#890 actually publishes under.
+# Stripped before comparing a resolved corpus filename's stem to a
+# thread's slug (see :func:`_infer_self_published_paths`).
+_DATE_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-")
+
+
+def _infer_self_published_paths(paths: List[str], slug: str) -> List[str]:
+    """Infer which resolved ``voice.corpus`` paths are ``slug``'s own
+    published form (issue #890).
+
+    A deliberately **narrow, high-precision** heuristic — false
+    negatives (an un-inferred publish path a consumer must cover via
+    :attr:`BriefDocument.voice_corpus_exclude`) are the acceptable
+    failure mode here, false positives (excluding a *different*
+    thread's legitimate exemplar) are not: dropping the wrong file
+    would silently thin the calibration base for a reason no reviewer
+    could audit.
+
+    Matches a resolved path's filename **stem**, case-folded and with
+    one optional leading ``YYYY-MM-DD-`` date prefix stripped, against
+    ``slug`` (also case-folded) for an **exact** match — covering both
+    the plain-slug filename convention (``the-loop-is-the-unit.tsx``,
+    matching essay's own ``<slug>.md`` body-filename convention) and the
+    dated-post convention (``2026-05-27-the-loop-is-the-unit.tsx``).
+    Deliberately does NOT do substring/prefix/suffix matching (e.g.
+    ``the-loop-is-the-unit-revisited`` must NOT match slug
+    ``the-loop-is-the-unit``) — that would risk excluding an unrelated
+    published post that merely shares a slug fragment.
+    """
+    slug_norm = slug.strip().lower()
+    if not slug_norm:
+        return []
+    matches: List[str] = []
+    for p in paths:
+        stem = Path(p).stem.lower()
+        if _DATE_PREFIX_RE.sub("", stem) == slug_norm:
+            matches.append(p)
+    return matches
+
+
+def _apply_corpus_self_exclusion(
+    entry: ResolvedVoiceDoc,
+    slug: str,
+    declared_exclude: List[str],
+    roots: List[Tuple[str, Path]],
+) -> ResolvedVoiceDoc:
+    """Drop thread ``slug``'s own published form from a resolved
+    ``voice.corpus`` entry (issue #890).
+
+    Two exclusion sources, unioned and deduped (first reason wins when
+    both would match the same path):
+
+    1. **Automatic inference** — :func:`_infer_self_published_paths`.
+    2. **Declared** ``BriefDocument.voice_corpus_exclude`` — each
+       pattern resolved the same way as a ``spec_ref`` / ``code_ref``
+       element (:func:`_resolve_companion_element`, same ``roots``),
+       for publish-path shapes the automatic rule cannot infer.
+
+    A fully inert no-op when neither source matches anything: returns
+    ``entry`` unchanged (same object, no ``excluded``/``paths`` churn) —
+    a project that never triggers either exclusion path sees
+    byte-identical output.
+    """
+    reasons: Dict[str, str] = {}
+    for p in _infer_self_published_paths(entry.paths, slug):
+        reasons[p] = "published self (inferred from slug)"
+
+    for pattern in declared_exclude:
+        matches, _source = _resolve_companion_element(pattern, roots)
+        for m in matches:
+            if m in entry.paths and m not in reasons:
+                reasons[m] = f"declared corpus_exclude: {pattern!r}"
+
+    if not reasons:
+        return entry
+
+    remaining = [p for p in entry.paths if p not in reasons]
+    return entry.model_copy(
+        update={
+            "paths": remaining,
+            "excluded": sorted(reasons),
+            "exclusion_reasons": reasons,
+        }
+    )
+
+
 def resolve_voice_docs(
     project_dir: Path,
     consumer_root: Optional[Path] = None,
+    *,
+    exclude_self_slug: Optional[str] = None,
 ) -> List[ResolvedVoiceDoc]:
     """Resolve the project BRIEF's ``voice:`` block to on-disk paths (issue #461).
 
@@ -3787,6 +4201,39 @@ def resolve_voice_docs(
     defect for the reviewer to surface (``major`` finding), not an
     opt-out and not a crash (the ``customer_context.py`` posture).
 
+    Parameters
+    ----------
+    exclude_self_slug
+        Optional (issue #890): the slug of the thread currently under
+        review/draft. When supplied, the resolved ``corpus`` entry has
+        that thread's own published form dropped from ``paths`` — the
+        circular-calibration fix for reviewing a **revision of an
+        already-published** note (the note's own prior published form
+        would otherwise sit inside its own voice-fidelity calibration
+        base). Two exclusion sources are unioned (deduped):
+
+        1. **Automatic inference** (:func:`_infer_self_published_paths`)
+           — a resolved corpus path whose filename stem, after
+           optionally stripping one leading ``YYYY-MM-DD-`` date
+           prefix, case-insensitively equals ``exclude_self_slug``.
+        2. **Declared** ``BriefDocument.voice_corpus_exclude`` for the
+           document matching ``exclude_self_slug`` (when the BRIEF
+           declares one) — resolved the same way as a ``spec_ref`` /
+           ``code_ref`` element, for publish-path shapes the automatic
+           rule cannot infer.
+
+        Dropped paths are recorded on the returned entry's ``excluded``
+        / ``exclusion_reasons`` fields so a caller can surface the
+        exclusion in its own audit trail (e.g. essay-review's
+        ``_summary.md.voice_grounding.corpus_excluded``). ``None``
+        (the default) is a **complete no-op** — every pre-#890 caller
+        that never passes this kwarg gets byte-identical output, and
+        even a caller that does pass it sees no change unless the
+        corpus glob actually matches something excludable.
+    consumer_root
+        (unchanged) explicit consumer-root override for callers /
+        tests that already know the root.
+
     Returns
     -------
     List[ResolvedVoiceDoc]
@@ -3817,13 +4264,24 @@ def resolve_voice_docs(
     if resolved_consumer is not None:
         roots.append(("consumer", resolved_consumer))
 
+    declared_exclude: List[str] = []
+    if exclude_self_slug:
+        self_doc = brief.document_for_slug(exclude_self_slug)
+        if self_doc is not None and self_doc.voice_corpus_exclude:
+            declared_exclude = list(self_doc.voice_corpus_exclude)
+
     out: List[ResolvedVoiceDoc] = []
     for kind in VOICE_DOC_KINDS:
         declared = getattr(brief.voice, kind)
         if declared is None:
             continue
         if kind == "corpus":
-            out.append(_resolve_voice_corpus(declared, roots))
+            entry = _resolve_voice_corpus(declared, roots)
+            if exclude_self_slug and not entry.missing:
+                entry = _apply_corpus_self_exclusion(
+                    entry, exclude_self_slug, declared_exclude, roots
+                )
+            out.append(entry)
         else:
             out.append(_resolve_voice_path(declared, kind, roots))
     return out
@@ -4696,6 +5154,310 @@ def load_recommendation_target(
 
 
 # ---------------------------------------------------------------------------
+# Thread-level ``pending_sources`` frontmatter (issue #842)
+# ---------------------------------------------------------------------------
+#
+# The optional companion knob for ``anvil/lib/pending_marker.py``: a thread
+# MAY declare the pending-measurement sources it expects to resolve over its
+# lifetime in ``<thread>/BRIEF.md`` YAML frontmatter. This is a REPORTING AID
+# only — it has NO effect on the pending-marker gate itself (an undeclared
+# marker still gates; a declared-but-never-written source is not a defect).
+# The pending-marker critics use the declared source LABELS to report which
+# declared sources are already resolved vs. still outstanding.
+#
+# The validator/resolver are modeled on the ``spec_ref`` / ``code_ref``
+# companion-input pattern (:func:`_validate_companion_ref` /
+# :func:`resolve_spec_ref`) — the parsing/validation lives HERE (the module
+# that owns BRIEF frontmatter), not in a bespoke parser inside
+# ``pending_marker.py``. Unlike the companion-ref string/glob shape, a
+# pending source needs a small dedicated model — a bare label OR a
+# ``{source, expected_by}`` mapping — so it carries its own Pydantic type.
+
+
+class PendingSource(BaseModel):
+    """One declared pending-measurement source (issue #842).
+
+    A reporting-aid entry from a thread ``BRIEF.md``'s ``pending_sources``
+    frontmatter. ``source`` is the label a ``[PENDING <source>]`` body
+    marker names (a benchmark-run id, a vendor name, "Q3 earnings call");
+    ``expected_by`` is an optional free-form note on when it is expected to
+    resolve (a date, a milestone). Neither field gates anything.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: str = Field(
+        ...,
+        description=(
+            "The pending source label — matches the ``<source>`` of a "
+            "``[PENDING <source>]`` body marker. Non-empty."
+        ),
+    )
+    expected_by: Optional[str] = Field(
+        None,
+        description=(
+            "Optional free-form note on when the value is expected to "
+            "resolve (a date, a milestone). Purely informational."
+        ),
+    )
+
+
+class PendingSourcesTypeError(ValueError):
+    """Raised when ``pending_sources`` is declared with the wrong shape (issue #842).
+
+    A distinguishable ``ValueError`` subclass mirroring
+    :class:`CompanionRefTypeError`: it lets the lenient resolver
+    (:func:`resolve_pending_sources`) tell "the whole BRIEF is
+    structurally invalid" apart from "the ``pending_sources`` block itself
+    is malformed" (a declared-but-broken reporting knob). Because it
+    subclasses ``ValueError``, strict callers still treat a malformed
+    ``pending_sources`` as a hard schema error.
+    """
+
+
+def _validate_pending_sources(
+    raw: Any, field_path: str = "pending_sources"
+) -> Optional[List[PendingSource]]:
+    """Validate a raw ``pending_sources`` frontmatter value (issue #842).
+
+    Accepts a YAML list whose elements are each EITHER a bare non-empty
+    string (the common case — normalized to ``PendingSource(source=...)``)
+    OR a mapping with a required non-empty ``source`` and an optional
+    ``expected_by``. Normalizes to ``Optional[List[PendingSource]]``.
+
+    Normalization rules (mirroring :func:`_validate_companion_ref`'s
+    declared-but-broken posture):
+
+    - ``raw is None`` → ``None`` (undeclared; reporting tier silent-off).
+    - ``raw`` an empty list → ``None`` (declared-but-empty is off).
+    - ``raw`` a list → one :class:`PendingSource` per element, preserving
+      declaration order. A malformed element (empty string, a mapping with
+      no/empty ``source``, an unknown key, or any non-str/non-mapping
+      value) raises :class:`PendingSourcesTypeError` (the whole knob is
+      poisoned, not the single element skipped).
+    - ``raw`` any other type (string, int, dict, …) → raise
+      :class:`PendingSourcesTypeError`.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise PendingSourcesTypeError(
+            f"BRIEF.{field_path} must be a list of source labels or "
+            f"{{source, expected_by}} mappings; got "
+            f"{type(raw).__name__}: {raw!r} — suggested fix: write it as a "
+            f"YAML list, e.g. `pending_sources: [benchmark-run-2024-11, "
+            f"vendor-quote-acme]`."
+        )
+    if len(raw) == 0:
+        return None
+    out: List[PendingSource] = []
+    for j, item in enumerate(raw):
+        if isinstance(item, str):
+            if not item.strip():
+                raise PendingSourcesTypeError(
+                    f"BRIEF.{field_path}[{j}] is an empty source label — "
+                    f"every entry must name a non-empty pending source."
+                )
+            out.append(PendingSource(source=item.strip()))
+            continue
+        if isinstance(item, dict):
+            source = item.get("source")
+            if not isinstance(source, str) or not source.strip():
+                raise PendingSourcesTypeError(
+                    f"BRIEF.{field_path}[{j}] must have a non-empty string "
+                    f"`source` key; got {item!r}."
+                )
+            expected_by = item.get("expected_by")
+            # ``expected_by`` is a free-form informational note. YAML parses
+            # a bare date (``2026-08-15``) as a ``datetime.date`` and a bare
+            # number as an int/float — coerce any scalar to its string form
+            # rather than rejecting it; reject only collection types (a list
+            # or mapping is a shape error, not a note).
+            if isinstance(expected_by, (list, dict)):
+                raise PendingSourcesTypeError(
+                    f"BRIEF.{field_path}[{j}].expected_by must be a scalar "
+                    f"note (a date, milestone, or string) when present; got "
+                    f"{type(expected_by).__name__}."
+                )
+            unknown = set(item) - {"source", "expected_by"}
+            if unknown:
+                raise PendingSourcesTypeError(
+                    f"BRIEF.{field_path}[{j}] has unknown key(s) "
+                    f"{sorted(unknown)}; only `source` and `expected_by` "
+                    f"are recognized."
+                )
+            out.append(
+                PendingSource(
+                    source=source.strip(),
+                    expected_by=(
+                        str(expected_by).strip()
+                        if expected_by is not None
+                        else None
+                    ),
+                )
+            )
+            continue
+        raise PendingSourcesTypeError(
+            f"BRIEF.{field_path}[{j}] must be a source label string or a "
+            f"{{source, expected_by}} mapping; got "
+            f"{type(item).__name__}: {item!r}."
+        )
+    return out
+
+
+def resolve_pending_sources(thread_dir: Path) -> List[PendingSource]:
+    """Read the optional ``pending_sources`` declarations for ``thread_dir``.
+
+    The companion-input resolver for ``anvil/lib/pending_marker.py`` (issue
+    #842), modeled on :func:`resolve_spec_ref`'s lenient posture. Reads
+    ``<thread_dir>/BRIEF.md`` (the thread-level freeform-prose surface, the
+    same one :func:`load_recommendation_target` reads), extracts its YAML
+    frontmatter via the shared :func:`_extract_frontmatter`, and validates
+    the ``pending_sources`` block via :func:`_validate_pending_sources`.
+
+    Lenient by design — never raises. Returns ``[]`` on EVERY absence /
+    malformed path (no BRIEF file, no frontmatter, no ``pending_sources``
+    key, an empty list, OR a malformed declaration): ``pending_sources`` is
+    a pure reporting aid, so a broken declaration degrades to "no declared
+    sources" rather than crashing the pending-marker gate (which functions
+    identically with or without declared sources). The distinguishable
+    :class:`PendingSourcesTypeError` is still raised by
+    :func:`_validate_pending_sources` for any strict caller that wants to
+    surface a malformed knob.
+    """
+    if not isinstance(thread_dir, Path):
+        try:
+            thread_dir = Path(thread_dir)
+        except Exception:
+            return []
+    brief_path = thread_dir / BRIEF_FILENAME
+    if not brief_path.is_file():
+        return []
+    try:
+        text = brief_path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    fm = _extract_frontmatter(text)
+    if fm is None:
+        return []
+    try:
+        parsed = _validate_pending_sources(fm.get("pending_sources"))
+    except PendingSourcesTypeError:
+        # Declared-but-broken reporting knob — degrade to "no declared
+        # sources" (the gate is unaffected either way).
+        return []
+    return parsed or []
+
+
+def load_recommendation_target_resolved(
+    thread_dir: Path,
+    project_dir: Optional[Path] = None,
+    slug: Optional[str] = None,
+) -> Tuple[
+    Optional[Literal["invest", "pass", "conditional", "undecided"]],
+    Literal["thread", "project", "default"],
+]:
+    """Resolve ``recommendation_target`` across BOTH BRIEF surfaces (issue #837).
+
+    :func:`load_recommendation_target` reads ONLY the legacy thread-level
+    ``<thread_dir>/BRIEF.md`` surface. Under the post-#295/#296
+    project-first layout there IS no thread-level ``BRIEF.md`` — per-
+    thread config lives entirely in the project-root ``BRIEF.md``'s
+    ``documents:`` frontmatter — so that helper unconditionally returns
+    ``None`` for a migrated project and the #348 dim-1 calibration never
+    fires. This resolver tries both surfaces, in precedence order, and
+    reports WHICH surface (if any) supplied the value so the caller can
+    record it for debuggability (the ``source`` half of the return
+    tuple; see ``memo-review.md``'s ``_summary.md.recommendation_target_resolved.source``
+    field).
+
+    Precedence
+    ----------
+    1. **Thread** — ``<thread_dir>/BRIEF.md`` (the legacy freeform-prose
+       surface read by :func:`load_recommendation_target`). Checked
+       FIRST so a project still using the legacy per-thread shape
+       resolves byte-identically to pre-#837 behavior — a value here
+       always wins over a project-level declaration, even if both are
+       present. This preserves the historical single-surface contract
+       for any thread that hasn't migrated.
+    2. **Project** — the project-root ``BRIEF.md``'s matching
+       ``documents:`` entry (:func:`load_project_brief` +
+       :meth:`ProjectBrief.document_for_slug`), read only when the
+       thread-level surface resolved to ``None`` (absent file, no
+       frontmatter, missing key, or an unrecognized value).
+    3. **Default** — neither surface supplied a recognized value.
+       Byte-identical to the pre-#837 "no calibration" behavior.
+
+    Parameters
+    ----------
+    thread_dir
+        The thread root directory (holds the thread-level ``BRIEF.md``,
+        if any, and the ``<slug>.{N}/`` version dirs) — NOT a version
+        subdirectory and NOT the project root.
+    project_dir
+        The project root (the directory containing the project-level
+        ``BRIEF.md`` with the typed ``documents:`` schema). Defaults to
+        ``thread_dir.parent`` — the standard project-first layout
+        convention (mirrors ``load_rubric_overrides_for_slug``'s
+        call-site convention documented in ``memo-review.md`` step 4i).
+        Pass explicitly only when the on-disk layout diverges from this
+        default.
+    slug
+        The document slug used to look up the matching ``documents:``
+        entry. Defaults to ``thread_dir.name`` — the directory-name-
+        echoes-slug convention enforced by
+        :func:`_validate_slug_directory_divergence`. Pass explicitly
+        only when the slug diverges from the thread directory name.
+
+    Returns
+    -------
+    Tuple[Optional[str], str]
+        ``(value, source)`` where ``value`` is one of ``"invest"`` /
+        ``"pass"`` / ``"conditional"`` / ``"undecided"`` / ``None``, and
+        ``source`` is one of ``"thread"`` / ``"project"`` / ``"default"``
+        naming which surface (if any) supplied ``value``.
+
+    Notes
+    -----
+    **Never raises** — mirrors the lenient contract of both underlying
+    readers. A structurally invalid project-level BRIEF (the ONLY path
+    that can raise inside :func:`load_project_brief`) degrades to
+    ``(None, "default")`` for THIS resolver rather than propagating,
+    the same "degrade to empty/default rather than break the reviewer"
+    posture as :func:`load_rubric_overrides_for_slug`.
+    """
+    if not isinstance(thread_dir, Path):
+        try:
+            thread_dir = Path(thread_dir)
+        except Exception:
+            return None, "default"
+
+    thread_value = load_recommendation_target(thread_dir)
+    if thread_value is not None:
+        return thread_value, "thread"
+
+    resolved_project_dir = project_dir if project_dir is not None else thread_dir.parent
+    resolved_slug = slug if slug is not None else thread_dir.name
+
+    try:
+        brief = load_project_brief(resolved_project_dir)
+    except ValueError:
+        # Structurally invalid project BRIEF. Lenient degrade — same
+        # posture as load_rubric_overrides_for_slug: a malformed BRIEF
+        # must not break the reviewer's dim-1 calibration lookup.
+        return None, "default"
+
+    if brief is None:
+        return None, "default"
+
+    doc = brief.document_for_slug(resolved_slug)
+    if doc is None or doc.recommendation_target is None:
+        return None, "default"
+
+    return doc.recommendation_target, "project"
+
+
+# ---------------------------------------------------------------------------
 # Body-filename helper (issue #295)
 # ---------------------------------------------------------------------------
 
@@ -4751,6 +5513,8 @@ __all__ = [
     "MAX_DIM",
     "MEMO_ARTIFACT_TYPES",
     "MIN_DIM",
+    "PendingSource",
+    "PendingSourcesTypeError",
     "ProjectBrief",
     "REGISTERED_ARTIFACT_TYPES",
     "ResolvedCodeRef",
@@ -4772,9 +5536,11 @@ __all__ = [
     "load_project_brief",
     "load_project_brief_strict",
     "load_recommendation_target",
+    "load_recommendation_target_resolved",
     "load_rubric_overrides_for_slug",
     "resolve_code_ref",
     "resolve_corpus_dirs",
+    "resolve_pending_sources",
     "resolve_rhetoric_rules",
     "resolve_spec_ref",
     "resolve_subject_voice_docs",

@@ -1,6 +1,8 @@
 {
-  "version": "0.4.3",
-  "commit": "a4962b3",
+  "version": "0.10.0",
+  "commit": "301104c",
+  "layout_version": 1,
   "dev": false,
-  "commands": ["all","audit","branches","docs","followups","gitignore","help","links","orphans","readme","release","remote","reset","tidy","update-tools"]
+  "filtered": false,
+  "commands": ["all","audit","branches","deps","docs","followups","gitignore","handoff","help","host-optimize","links","orphans","readme","release","remote","reset","scrub","sudo","tidy","update-tools"]
 }

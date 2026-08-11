@@ -87,7 +87,7 @@ class Theme(BaseModel):
     Attributes
     ----------
     name
-        The theme's directory basename (e.g. ``"sphere-semi"``). Filled
+        The theme's directory basename (e.g. ``"acme-semi"``). Filled
         in by :func:`load_theme`; not a YAML key the consumer writes.
     accent_color
         Cross-skill brand accent (LaTeX, CSS, Marp themes all consume
@@ -246,7 +246,7 @@ def load_theme(
 
     Examples
     --------
-    >>> theme = load_theme(Path("/repo"), "sphere-semi")
+    >>> theme = load_theme(Path("/repo"), "acme-semi")
     >>> theme.accent_color
     '#0066CC'
     >>> theme.skill_block("memo").get("signature_color")
