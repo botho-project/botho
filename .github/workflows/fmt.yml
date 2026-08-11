@@ -35,7 +35,7 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Pin to the same nightly as rust-toolchain (channel = nightly-2025-12-03).
       # We pin explicitly here -- NOT @stable -- because the unstable rustfmt

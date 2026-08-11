@@ -48,7 +48,7 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # rust-toolchain.toml at the repo root pins the channel; rustup honors it
       # automatically for cargo invocations run from the repo. Install matching
@@ -98,7 +98,7 @@ jobs:
           - fuzz_ring_signature
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -110,7 +110,7 @@ jobs:
         run: cargo install cargo-fuzz --version 0.13.1 --locked
 
       - name: Cache fuzz corpus
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.sha }}
@@ -126,7 +126,7 @@ jobs:
 
       - name: Upload crash artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: crash-${{ matrix.target }}
           path: fuzz/artifacts/${{ matrix.target }}/
@@ -148,7 +148,7 @@ jobs:
           - fuzz_network_messages
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -160,7 +160,7 @@ jobs:
         run: cargo install cargo-fuzz --version 0.13.1 --locked
 
       - name: Cache fuzz corpus
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.sha }}
@@ -176,7 +176,7 @@ jobs:
 
       - name: Upload crash artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: crash-${{ matrix.target }}
           path: fuzz/artifacts/${{ matrix.target }}/
@@ -198,7 +198,7 @@ jobs:
           - fuzz_mlkem_decapsulation
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -210,7 +210,7 @@ jobs:
         run: cargo install cargo-fuzz --version 0.13.1 --locked
 
       - name: Cache fuzz corpus
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.sha }}
@@ -226,7 +226,7 @@ jobs:
 
       - name: Upload crash artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: crash-${{ matrix.target }}
           path: fuzz/artifacts/${{ matrix.target }}/
@@ -250,7 +250,7 @@ jobs:
           - fuzz_cluster_tax_math
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -262,7 +262,7 @@ jobs:
         run: cargo install cargo-fuzz --version 0.13.1 --locked
 
       - name: Cache fuzz corpus
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.sha }}
@@ -278,7 +278,7 @@ jobs:
 
       - name: Upload crash artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: crash-${{ matrix.target }}
           path: fuzz/artifacts/${{ matrix.target }}/
@@ -304,7 +304,7 @@ jobs:
           - fuzz_federation_status_line
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -316,7 +316,7 @@ jobs:
         run: cargo install cargo-fuzz --version 0.13.1 --locked
 
       - name: Cache fuzz corpus
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.sha }}
@@ -332,7 +332,7 @@ jobs:
 
       - name: Upload crash artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: crash-${{ matrix.target }}
           path: fuzz/artifacts/${{ matrix.target }}/
