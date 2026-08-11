@@ -9,8 +9,8 @@
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.29.0",
-    "@orca-so/common-sdk": "^0.6.4",
-    "@orca-so/whirlpools-sdk": "^0.13.12",
+    "@orca-so/common-sdk": "^0.6.11",
+    "@orca-so/whirlpools-sdk": "^0.13.21",
     "@solana/spl-token": "^0.4.0",
     "@solana/web3.js": "^1.90.0",
     "bn.js": "^5.2.5",
@@ -22,7 +22,7 @@
     "@types/mocha": "^10.0.0",
     "chai": "^4.3.4",
     "mocha": "^10.0.0",
-    "prettier": "^3.0.0",
+    "prettier": "^3.9.6",
     "ts-mocha": "^10.0.0",
     "typescript": "^5.3.0"
   }
