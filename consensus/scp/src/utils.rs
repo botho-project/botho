@@ -33,5 +33,34 @@ pub fn slot_round_salted_keccak(
     concatenation.extend(round_index_bytes.iter());
     concatenation.extend(bytes.iter());
 
-    U256::from(fast_hash(&concatenation))
+    // Big-endian by construction: primitive-types < 0.13 implemented
+    // `From<[u8; 32]>` as a big-endian read, and SCP round priorities derived
+    // from this value are consensus-relevant, so the byte order must never
+    // change (see the golden test below).
+    U256::from_big_endian(&fast_hash(&concatenation))
+}
+
+#[cfg(test)]
+mod utils_tests {
+    use super::*;
+
+    /// Golden vector: pins the hash-to-U256 byte order across dependency
+    /// upgrades. The expected value is `keccak(concatenation)` read as a
+    /// big-endian integer, exactly what `U256::from([u8; 32])` produced on
+    /// primitive-types 0.12 — a silent endianness flip here would fork SCP
+    /// round priorities.
+    #[test]
+    fn slot_round_salted_keccak_is_big_endian_stable() {
+        let value = slot_round_salted_keccak(1, 2, 3, b"golden");
+        let hash = fast_hash(
+            &[
+                1u64.to_be_bytes().as_slice(),
+                &[2u8],
+                3u32.to_be_bytes().as_slice(),
+                b"golden",
+            ]
+            .concat(),
+        );
+        assert_eq!(value.to_big_endian(), hash);
+    }
 }
