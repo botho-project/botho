@@ -59,10 +59,10 @@ Verified in this design pass against the sources named:
 | Capability | Status | Evidence |
 |---|---|---|
 | Encrypted-blob secure storage (iOS Keychain / Android Keystore) | Present | `saveEncryptedWallet` / `loadEncryptedWallet` in `app/src/native/keychain.ts` |
-| Biometric / device-credential gating primitives | Present | `isBiometricAvailable`, `authenticateWithBiometrics`, `isSecureStorageAvailable` (`expo-local-authentication ~14.0.0`) |
+| Biometric / device-credential gating primitives | Present | `isBiometricAvailable`, `authenticateWithBiometrics`, `isSecureStorageAvailable` (`expo-local-authentication ~57.0.2`) |
 | Typed no-enrollment failure mode | Present | `SecureStoreUnavailableError` in `keychain.ts` (from #791/#800) |
 | Headless jest test precedent under pnpm | Present | `app/src/native/keychain.test.ts`, `app/app/unlock.test.ts` (run via `pnpm -C mobile/app test`, mocked `expo-secure-store`/`expo-local-authentication`) |
-| iCloud-synchronizable Keychain item via `expo-secure-store` | **Absent — architecturally** | `expo-secure-store@13.0.x` `SecureStoreOptions` has no `kSecAttrSynchronizable` field; the Swift module never sets it (see §5) |
+| iCloud-synchronizable Keychain item via `expo-secure-store` | **Absent — architecturally** | `expo-secure-store@~57.0.1` `SecureStoreOptions` has no `kSecAttrSynchronizable` field; the Swift module never sets it (see §5) |
 | Passkey / WebAuthn library | **Absent** | `mobile/app/package.json` has no `expo-passkeys` / `react-native-passkey` / WebAuthn dependency |
 | Seed/mnemonic export FFI (post-creation) | **Absent — by design** | `mobile/rust-bridge/src/lib.rs` exports only `generate_wallet` (returns mnemonic once at creation) and `unlock_with_mnemonic` (consumes one); no `export`/`reveal` method exists |
 | `BothoWallet` native bridge module | **Absent** | `NATIVE_INTEGRATION.md` "What is NOT done"; every `walletModule.ts` path throws `NativeModuleUnavailableError` in Expo Go on both platforms |
@@ -159,7 +159,9 @@ catchable failure mode (its stated design intent).
 **This replaces the original issue's "Decision on iCloud Keychain sync opt-in"
 acceptance criterion, which is moot.** There is no such opt-in to make.
 
-Verified directly against the installed package (`expo-secure-store@13.0.x`):
+Verified directly against the installed package (originally
+`expo-secure-store@13.0.x`; re-verified against the SDK 57 typings,
+`expo-secure-store@~57.0.1` — the conclusion is unchanged):
 
 - `SecureStoreOptions` exposes exactly four fields — `keychainService`,
   `requireAuthentication`, `authenticationPrompt`, and `keychainAccessible`

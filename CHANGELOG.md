@@ -12,6 +12,17 @@ bumps (`0.X.Y`) are backwards-compatible.
 
 ## [Unreleased]
 
+### Changed
+- contracts/ethereum migrated to the Hardhat 3 toolchain (#1185).
+- Mobile app migrated to Expo SDK 57, with a first mobile CI workflow
+  (typecheck + jest + expo-doctor) gating `mobile/app/**` (#1184).
+- Workspace crypto migrated to the dalek-5 family (curve25519 / ed25519 /
+  x25519); a bridged `curve25519-dalek-v4` alias survives only for the
+  bulletproofs-og range-proof boundary (#1188).
+- rand family migrated to the rand_core 0.10 line;
+  `bth_util_from_random::OsRng` replaces the retired `rand_core::OsRng`
+  (#1193).
+
 ## [0.3.2] - 2026-07-07
 
 ### Added

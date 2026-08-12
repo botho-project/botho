@@ -259,7 +259,7 @@ bth-crypto-keys = { path = "../crypto/keys" }
 use bth_account_keys::AccountKey;
 
 // Generate new account from random seed
-let account = AccountKey::random(&mut rand::thread_rng());
+let account = AccountKey::random(&mut bth_util_from_random::OsRng);
 
 // Or from BIP39 mnemonic
 use bip39::{Mnemonic, Language};

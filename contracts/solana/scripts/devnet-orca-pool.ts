@@ -3,8 +3,8 @@
 // position funded from the bridge-minted wBTH + wrapped SOL, then swaps to
 // prove the pool trades. Uses @orca-so/whirlpools-sdk 0.13 (anchor 0.29 line).
 //
-// Run: npx ts-node --compiler-options '{"module":"commonjs","target":"ES2020",
-//        "esModuleInterop":true,"skipLibCheck":true}' scripts/devnet-orca-pool.ts
+// Run: npx tsx scripts/devnet-orca-pool.ts
+// (tsx is not a declared dependency — npx fetches it on demand)
 
 import * as anchor from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";

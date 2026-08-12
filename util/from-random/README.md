@@ -6,16 +6,16 @@ This provides a common API for types which can be initialized from random number
 
 ```rust
 use bth_util_from_random::FromRandom;
-use rand_core::{CryptoRng, RngCore};
+use rand_core::CryptoRng;
 
 struct MyStruct {
     pub bytes: [u8; 32],
 }
 
 impl FromRandom for MyStruct {
-    fn from_random<R: CryptoRng + RngCore>(csprng: &mut R) -> Self {
+    fn from_random<R: CryptoRng>(csprng: &mut R) -> Self {
         let mut bytes = [0u8; 32];
-        csprng.fill_bytes(&bytes);
+        csprng.fill_bytes(&mut bytes);
         MyStruct {
             bytes,
         }

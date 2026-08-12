@@ -99,8 +99,12 @@ both bridge entrypoints, so the property survives future edits.
 
 ## Development
 
+Requires Node.js 22 (CI pins `node-version: 22`). Prefer `npm ci` over
+`npm install` for reproducible installs from the committed lockfile
+(matches `contracts-ci.yml`).
+
 ```bash
-npm install
+npm ci
 npm run compile
 npm test
 ```

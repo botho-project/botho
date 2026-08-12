@@ -422,11 +422,14 @@ let env = unsafe {
 
 | Crate | Version | Purpose | Action |
 |-------|---------|---------|--------|
-| `curve25519-dalek` | 4 | Ristretto points | Verify no CVEs |
+| `curve25519-dalek` | 5 | Ristretto points (a bridged `curve25519-dalek-v4` alias survives only for the bulletproofs-og boundary) | Verify no CVEs |
+| `ed25519-dalek` | 3 | Ed25519 signatures | Verify no CVEs |
+| `x25519-dalek` | 3 | X25519 key exchange | Verify no CVEs |
+| `signature` | 3 | Signature traits | Verify no CVEs |
 | `blake2` | 0.10 | BLAKE2 hashing | Verify no CVEs |
 | `sha2` | 0.10 | SHA-256 | Verify no CVEs |
 | `aes` | 0.8 | AES-256-CTR | Verify no CVEs |
-| `rand_core` | 0.6 | CSPRNG | Verify no CVEs |
+| `rand_core` | 0.10 | CSPRNG (a `rand-core-v06` bridge alias remains for external crates still on the 0.6 API) | Verify no CVEs |
 | `zeroize` | 1 | Secure clear | Verify no CVEs |
 
 ### 9.2 Dependency Audit

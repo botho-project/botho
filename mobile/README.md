@@ -13,26 +13,27 @@ mobile/
 │   └── src/
 │       ├── lib.rs           # Rust implementation
 │       └── botho_mobile.udl # UniFFI interface definition
-├── app/                     # React Native app (Expo)
-│   ├── app/                 # Expo Router screens
-│   ├── src/
-│   │   ├── components/      # Reusable UI components
-│   │   ├── hooks/           # Custom React hooks
-│   │   ├── native/          # Native module bridges
-│   │   ├── screens/         # Screen components
-│   │   ├── store/           # Zustand state management
-│   │   └── types/           # TypeScript types
-│   └── package.json
-└── ios/                     # iOS native code (after prebuild)
+└── app/                     # React Native app (Expo)
+    ├── app/                 # Expo Router screens
+    ├── src/
+    │   ├── components/      # Reusable UI components
+    │   ├── hooks/           # Custom React hooks
+    │   ├── native/          # Native module bridges
+    │   ├── screens/         # Screen components
+    │   ├── store/           # Zustand state management
+    │   └── types/           # TypeScript types
+    ├── ios/                 # iOS native code (after prebuild)
+    ├── android/             # Android native code (after prebuild)
+    └── package.json
 ```
 
 ## Getting Started
 
 ### Prerequisites
 
-- Node.js 18+
-- pnpm
-- Rust 1.75+
+- Node.js 22 (CI pins `node-version: 22`)
+- pnpm 11
+- Rust (pinned nightly toolchain `nightly-2025-12-03`; see `rust-toolchain` — rustup selects it automatically)
 - Xcode 15+ (for iOS)
 - iOS Simulator or device
 
@@ -63,6 +64,20 @@ pnpm start
 ```bash
 cd mobile/app
 pnpm ios
+```
+
+## Checks
+
+CI (`.github/workflows/mobile-ci.yml`) gates changes under `mobile/app/**` with
+typecheck, jest, and an Expo SDK version-alignment check. Run the same checks
+locally before pushing:
+
+```bash
+cd mobile/app
+pnpm install
+pnpm typecheck
+pnpm test
+npx expo-doctor
 ```
 
 ## Security Model

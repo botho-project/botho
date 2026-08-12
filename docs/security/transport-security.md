@@ -171,9 +171,9 @@ pub const SESSION_ID_LEN: usize = 16;
 pub struct SessionId([u8; SESSION_ID_LEN]);
 
 impl SessionId {
-    pub fn generate() -> Self {
+    pub fn random<R: CryptoRng>(rng: &mut R) -> Self {
         let mut bytes = [0u8; SESSION_ID_LEN];
-        rand::thread_rng().fill_bytes(&mut bytes);
+        rng.fill_bytes(&mut bytes);
         Self(bytes)
     }
 }

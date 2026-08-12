@@ -278,7 +278,7 @@ impl CircuitPool {
 
     /// Get a random circuit for sending
     fn get_circuit(&self) -> Option<&OutboundCircuit> {
-        self.active.choose(&mut rand::thread_rng())
+        self.active.choose(&mut rand::rng())
     }
 
     /// Background task: maintain circuit pool
@@ -344,7 +344,7 @@ impl CircuitBuilder {
 
         // Calculate expiry with jitter
         let base_lifetime = Duration::from_secs(600);
-        let jitter = Duration::from_secs(rand::thread_rng().gen_range(0..180));
+        let jitter = Duration::from_secs(rand::rng().random_range(0..180));
         let expires_at = Instant::now() + base_lifetime + jitter;
 
         Ok(OutboundCircuit {
@@ -379,7 +379,7 @@ impl CircuitBuilder {
             let hop = candidates
                 .iter()
                 .filter(|p| !used_subnets.contains(&p.subnet_prefix()))
-                .choose_weighted(&mut rand::thread_rng(), |p| p.relay_score())
+                .choose_weighted(&mut rand::rng(), |p| p.relay_score())
                 .ok_or(CircuitError::InsufficientDiversity)?;
 
             selected.push(hop.peer_id.clone());
@@ -713,9 +713,9 @@ fn pad_to_bucket(payload: &[u8]) -> Vec<u8> {
 
     // Random padding (not zeros - distinguishable)
     let padding_len = bucket_size - padded.len();
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     for _ in 0..padding_len {
-        padded.push(rng.gen());
+        padded.push(rng.random());
     }
 
     padded
@@ -826,12 +826,12 @@ struct CoverMessage {
 
 impl CoverMessage {
     fn generate() -> Self {
-        let mut rng = rand::thread_rng();
-        let size = rng.gen_range(200..600); // Match transaction size distribution
+        let mut rng = rand::rng();
+        let size = rng.random_range(200..600); // Match transaction size distribution
 
         Self {
             msg_type: MessageType::Cover,
-            payload: (0..size).map(|_| rng.gen()).collect(),
+            payload: (0..size).map(|_| rng.random()).collect(),
         }
     }
 }
@@ -858,8 +858,8 @@ impl TimingJitter {
 
     /// Calculate delay for a message
     pub fn delay(&self) -> Duration {
-        let mut rng = rand::thread_rng();
-        let ms = rng.gen_range(self.base_range.0..=self.base_range.1);
+        let mut rng = rand::rng();
+        let ms = rng.random_range(self.base_range.0..=self.base_range.1);
         Duration::from_millis(ms)
     }
 }

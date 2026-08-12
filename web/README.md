@@ -67,7 +67,7 @@ latter is resolved against the page origin.
 
 ## End-to-end tests (Playwright)
 
-E2E specs live under `e2e/` (smoke, wallet, explorer, faucet, integration, node).
+E2E specs live under `e2e/` (smoke, wallet, explorer, faucet, node).
 
 The `web-wallet` Playwright project (`e2e/tests/wallet/**`) covers the recently
 shipped wallet flows: wallet create/import, **request → pay**, **share my

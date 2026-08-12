@@ -205,7 +205,7 @@ pub mod test_helpers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::rngs::OsRng;
+    use bth_util_from_random::OsRng;
 
     #[test]
     fn test_key_generation() {

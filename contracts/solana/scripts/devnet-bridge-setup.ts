@@ -9,7 +9,8 @@
 // devnet we use three distinct single-key authorities (role separation
 // preserved) so we can iterate — documented in contracts/solana/README.md.
 //
-// Run: npx ts-node scripts/devnet-bridge-setup.ts   (or via ts-mocha's tsx)
+// Run: npx tsx scripts/devnet-bridge-setup.ts
+// (tsx is not a declared dependency — npx fetches it on demand)
 
 import {
   Connection, Keypair, PublicKey, SystemProgram, Transaction,
