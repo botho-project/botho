@@ -23,7 +23,7 @@
     "@botho/wasm-signer": "workspace:*",
     "i18next": "^26.3.6",
     "lucide-react": "^0.562.0",
-    "motion": "^12.23.26",
+    "motion": "^13.0.0",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
