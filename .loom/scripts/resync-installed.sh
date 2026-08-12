@@ -13,9 +13,11 @@
 # it. The intended flow is: "freshness warning says you're stale -> run resync."
 #
 # It is idempotent (a no-op when already in sync), reports per-file
-# updated/created/unchanged/skipped, only ever touches files that exist in the
-# source tree (repo-specific files with no source counterpart are left alone),
-# never clobbers a symlinked install target, and supports --dry-run.
+# updated/created/removed/unchanged/skipped, only ever touches files that
+# either exist in the source tree or are explicitly declared retired (see
+# "RETIRED PAYLOAD FILES" below) — repo-specific files with no source
+# counterpart and no retirement entry are left alone — never clobbers a
+# symlinked install target, and supports --dry-run.
 #
 # Surfaces resynced (#4239 widened this from hooks+scripts to the full pure-copy
 # surface map — note the asymmetric source->target mapping):
@@ -36,6 +38,10 @@
 #   .claude/commands/loom/  <- defaults/.claude/commands/loom/ (recursive)
 #   .claude/README.md       <- defaults/.claude/README.md      (single file, #5264)
 #   .github/CONFIGURATION.md <- defaults/.github/CONFIGURATION.md (single file, #5264)
+#   .loom/biome.jsonc       <- defaults/.loom/biome.jsonc      (single file, BACKFILLED
+#                                                              if absent, #6031)
+#   .claude/biome.jsonc     <- defaults/.claude/biome.jsonc    (single file, BACKFILLED
+#                                                              if absent, #6031)
 #
 # It also applies one targeted field edit outside the pure-copy model (#4285):
 # a root package.json whose "name" is exactly "loom-workspace" (the Loom
@@ -95,6 +101,35 @@
 # (staging happens off to the side), so re-running after fixing the cause
 # completes the refresh — a partial refresh is never silent.
 #
+# CRASH-DETECTION MARKER (#5980): #4669 above protects individual files from
+# being torn mid-write, but it does not protect the RUN as a whole from dying
+# outright — e.g. hitting a bug in the OLD installed copy of this script
+# (before the fixed copy has been synced in) aborts bash entirely, with an
+# arbitrary number of surfaces already refreshed and the rest still stale.
+# Before #5980, nothing recorded that a run was ever in progress, so a
+# crashed run left the working tree silently half-updated while
+# .loom/install-metadata.json kept reporting the OLD loom_version — the
+# install looked simply "never updated" rather than "partially updated".
+#
+# `.loom/.resync-in-progress` (gitignored) closes that gap: it is written with
+# the target version BEFORE any surface is touched (non-dry-run only) and
+# removed only once the run reaches a full, non-partial success. On EVERY
+# invocation (including --dry-run, so it doubles as a zero-side-effect
+# detector) a leftover marker from a prior run is reported as a loud WARN
+# naming the target version and start time it never finished. No separate
+# "resume from where it left off" bookkeeping is needed: the whole script is
+# already idempotent (see above), so a fresh restart after a crash converges
+# on exactly the state a completed run would have reached — files the crashed
+# run already finished are simply re-verified as unchanged, not re-copied.
+#
+# Not done here (left as a follow-up, #5980): inverting the self-update order
+# so the script resyncs ITSELF and re-execs into the fixed copy before
+# touching any other surface, which would keep a buggy OLD script off the
+# critical path entirely instead of only detecting after the fact that it ran
+# into one. The marker is the tractable, low-risk half of the fix; the
+# reordering is a larger, riskier restructuring of the self-update deferral
+# #4669 established.
+#
 # EXPLICITLY OUT OF SCOPE (never touched by resync — updated by other mechanisms):
 #   .loom/config.json       - operator-owned; needs merge-semantics design
 #   CLAUDE.md               - repo-customized at install; needs managed-section markers
@@ -142,6 +177,23 @@
 # files are reported as `skipped` and never overwritten. Blank lines and `#`
 # comments are ignored.
 #
+# RETIRED PAYLOAD FILES (#5981): the walk above only ever visits files that
+# CURRENTLY exist under defaults/, so a file retired upstream (deleted from
+# defaults/ entirely, e.g. defaults/scripts/status.sh in #5710) has no
+# source to walk from and is therefore never noticed, let alone removed —
+# it survives indefinitely in every already-installed repo. `defaults/.loom-retired.list`
+# is the declarative fix: one target-relative path per line (same
+# report-relative form as the per-file report and `.loom/resync-ignore`,
+# e.g. `scripts/status.sh`), naming a file that WAS Loom payload and has
+# since been deleted from defaults/. Every run, `remove_retired_files()`
+# removes each listed path that is still present in the installed tree,
+# reporting it with the `removed` verb — honoring the same `.loom/resync-ignore`
+# pin and destination-symlink guard the update path uses, so a consumer who
+# deliberately kept a fork of a retired file is never touched. A file with
+# no retirement entry and no source counterpart is untouched, exactly as
+# before — this is additive, not a general directory diff, so it can never
+# guess-delete an unrelated repo-specific file.
+#
 # Usage:
 #   ./.loom/scripts/resync-installed.sh            # sync; report what changed
 #   ./.loom/scripts/resync-installed.sh --dry-run  # preview only; make no changes
@@ -162,7 +214,9 @@
 #   1 - Error (not in a git repo, the source tree could not be located,
 #       invoked from a linked worktree without --allow-worktree, or one or more
 #       files could not be synced — see the PARTIAL summary block, #4669).
-#   2 - --dry-run only: drift detected (one or more files WOULD be updated).
+#   2 - --dry-run only: drift detected (one or more files WOULD be updated,
+#       created, or removed as a retired payload file, see RETIRED PAYLOAD
+#       FILES above).
 #       Lets callers (e.g. the #3770 warning) use --dry-run as a cheap check.
 #
 # See also: check-main-freshness.sh (#3770) — the advisory that suggests this.
@@ -349,6 +403,17 @@ if ! resolve_defaults; then
 fi
 SOURCE_ROOT="$(dirname "$DEFAULTS_DIR")"
 
+# Current source version (from the resolved SOURCE_ROOT's package.json). Used
+# by restamp_metadata() / resync_claude_md_version_header() below AND by the
+# #5980 crash-detection marker, so it is defined here — as soon as
+# SOURCE_ROOT is known — rather than down by its other callers.
+read_source_version() {
+    local pj="$SOURCE_ROOT/package.json" v
+    [[ -f "$pj" ]] || { echo "unknown"; return 0; }
+    v="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$pj" | head -1)"
+    [[ -n "$v" ]] && echo "$v" || echo "unknown"
+}
+
 INSTALLED_HOOKS="$REPO_ROOT/.loom/hooks"
 INSTALLED_SCRIPTS="$REPO_ROOT/.loom/scripts"
 
@@ -396,6 +461,8 @@ is_loom_internal() {
 N_UPDATED=0
 N_UNCHANGED=0
 N_SKIPPED=0
+# #5981: retired payload files removed this run (see remove_retired_files()).
+N_REMOVED=0
 # #4669: files that could not be staged/renamed into place. A non-empty list
 # means the refresh is PARTIAL and must be reported as such (exit 1), never
 # swallowed into a "success" summary.
@@ -645,6 +712,90 @@ resync_tree() {
     done < <(find -L "$src_dir" -type f -print0 2>/dev/null | sort -z)
 }
 
+# ---------- retired payload files (#5981) ----------
+#
+# The walks above (sync_one/resync_tree) only ever visit files that exist
+# under defaults/ TODAY — a file retired upstream (deleted from defaults/
+# entirely) has no source counterpart to walk from, so it is silently never
+# noticed and survives forever in every already-installed repo. This is the
+# delete-side counterpart: defaults/.loom-retired.list declaratively names
+# every target-relative path (report-relative form, e.g. "scripts/status.sh")
+# that WAS Loom payload and has since been removed from defaults/.
+#
+# retired_target_path() maps a retired-list entry back to its destination
+# path using EXACTLY the same report_prefix -> destination directory mapping
+# the walks above use (hooks -> .loom/hooks, scripts -> .loom/scripts,
+# roles -> .loom/roles, docs -> .loom/docs, runtimes -> .loom/runtimes,
+# bin -> .loom/bin, commands/loom -> .claude/commands/loom, plus the two
+# single-file consumer-install docs, #5264). An entry that matches none of
+# these prefixes maps to "" and is skipped rather than guessed at.
+retired_target_path() {
+    local rel="$1"
+    case "$rel" in
+        hooks/*)                  printf '%s/%s' "$INSTALLED_HOOKS" "${rel#hooks/}" ;;
+        scripts/*)                printf '%s/%s' "$INSTALLED_SCRIPTS" "${rel#scripts/}" ;;
+        roles/*)                  printf '%s/.loom/roles/%s' "$REPO_ROOT" "${rel#roles/}" ;;
+        docs/*)                   printf '%s/.loom/docs/%s' "$REPO_ROOT" "${rel#docs/}" ;;
+        runtimes/*)                printf '%s/.loom/runtimes/%s' "$REPO_ROOT" "${rel#runtimes/}" ;;
+        bin/*)                    printf '%s/.loom/bin/%s' "$REPO_ROOT" "${rel#bin/}" ;;
+        commands/loom/*)          printf '%s/.claude/commands/loom/%s' "$REPO_ROOT" "${rel#commands/loom/}" ;;
+        .claude/README.md)        printf '%s/.claude/README.md' "$REPO_ROOT" ;;
+        .github/CONFIGURATION.md) printf '%s/.github/CONFIGURATION.md' "$REPO_ROOT" ;;
+        *)                        printf '' ;;
+    esac
+}
+
+# remove_retired_files: reads defaults/.loom-retired.list (if present) and
+# removes each listed path that is still present in the installed tree,
+# reporting it with the `removed` verb. A missing/absent-here destination is
+# a silent no-op (nothing to remove — the common steady state once a repo
+# has caught up). Honors the SAME `.loom/resync-ignore` pin and
+# destination-symlink guard sync_one applies, so a consumer that
+# deliberately kept a fork of a retired file is never touched, and a
+# dogfood-style symlinked install target is never unlinked out from under
+# its source of truth.
+remove_retired_files() {
+    local list="$DEFAULTS_DIR/.loom-retired.list"
+    [[ -f "$list" ]] || return 0
+    local line rel dst
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -z "$line" ]] && continue
+        rel="$line"
+        dst="$(retired_target_path "$rel")"
+        [[ -n "$dst" ]] || continue
+        [[ -e "$dst" || -L "$dst" ]] || continue
+
+        if is_ignored "$rel"; then
+            note "  ${YELLOW}skipped${NC}   $rel ${YELLOW}(pinned in .loom/resync-ignore)${NC}"
+            N_SKIPPED=$((N_SKIPPED + 1))
+            continue
+        fi
+
+        if [[ -L "$dst" ]]; then
+            note "  ${YELLOW}skipped${NC}   $rel ${YELLOW}(symlink -> $(readlink "$dst" 2>/dev/null), not removed)${NC}"
+            N_SKIPPED=$((N_SKIPPED + 1))
+            continue
+        fi
+
+        if [[ "$DRY_RUN" -eq 1 ]]; then
+            printf '%b\n' "  ${BOLD}would remove${NC} $rel ${YELLOW}(retired from defaults/, #5981)${NC}"
+            N_REMOVED=$((N_REMOVED + 1))
+            continue
+        fi
+
+        if rm -f "$dst" 2>/dev/null; then
+            printf '%b\n' "  ${GREEN}removed${NC}   $rel ${YELLOW}(retired from defaults/, #5981)${NC}"
+            N_REMOVED=$((N_REMOVED + 1))
+        else
+            err "failed to remove retired file $rel"
+            record_failure "$rel"
+        fi
+    done < "$list"
+}
+
 # ---------- canonical Repo Skills guard detection (#4041, #4894, #5916) ----------
 #
 # When the canonical generic guard is installed in this repo AND passes ALL
@@ -693,6 +844,57 @@ if [[ -r "$REPO_ROOT/.claude/skills/repo/hooks/guard-destructive.sh" ]] && \
    grep -qF -- '--arg|--argjson' "$REPO_ROOT/.claude/skills/repo/hooks/guard-destructive.sh" 2>/dev/null; then
     CANONICAL_GUARD_PRESENT=1
 fi
+
+# ---------- crash-detection marker (#5980) ----------
+#
+# See the "CRASH-DETECTION MARKER" header comment above for the full
+# rationale. Everything above this point only ever READS (git/file-system
+# probes, arg parsing) — this is the first point in the script where a write
+# is about to happen, so it is where the in-progress marker is written, and
+# where a leftover marker from a run that never got this far is reported.
+
+RESYNC_MARKER="$REPO_ROOT/.loom/.resync-in-progress"
+
+# Detects (and reports) a marker left behind by a run that crashed before
+# reaching clear_resync_marker(). Runs on EVERY invocation, including
+# --dry-run, so `resync-installed.sh --dry-run` doubles as a side-effect-free
+# way to check "did the last resync actually finish?" per #5980's suggested
+# acceptance criteria.
+check_resync_marker() {
+    [[ -f "$RESYNC_MARKER" ]] || return 0
+    local prior_version prior_started
+    prior_version="$(sed -n 's/^target_version=//p' "$RESYNC_MARKER" 2>/dev/null | head -1)"
+    prior_started="$(sed -n 's/^started_at=//p' "$RESYNC_MARKER" 2>/dev/null | head -1)"
+    warn "A previous resync did not complete (targeting v${prior_version:-unknown}, started ${prior_started:-an unknown time}) — .loom/ may be left half-updated while install-metadata.json still reports the OLD version (#5980)."
+    warn "  This run will restart from scratch; resync-installed.sh is idempotent, so already-current files are simply reported unchanged, not redone."
+}
+check_resync_marker
+
+# Writes the marker with the version this run is targeting, before the first
+# sync_one call below. --dry-run never writes it (a preview makes no claim to
+# be "in progress"). A write failure degrades crash detection for this run
+# only — it must never block the sync itself.
+write_resync_marker() {
+    [[ "$DRY_RUN" -eq 1 ]] && return 0
+    local version
+    version="$(read_source_version)"
+    if ! {
+        printf 'target_version=%s\n' "$version"
+        printf 'started_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf 'pid=%s\n' "$$"
+    } > "$RESYNC_MARKER" 2>/dev/null; then
+        warn "Could not write the resync-in-progress marker at $RESYNC_MARKER (crash detection for this run is degraded; the sync itself still proceeds)."
+    fi
+}
+write_resync_marker
+
+# Cleared as soon as a full, non-partial success is known (right after
+# N_FAILED is finalized, before the .gitignore refresh / untracked-path audit
+# run — see the call site below) — never on a PARTIAL refresh or a crash.
+clear_resync_marker() {
+    [[ "$DRY_RUN" -eq 1 ]] && return 0
+    rm -f "$RESYNC_MARKER" 2>/dev/null || true
+}
 
 # ---------- walk hooks (top-level *.sh, matching the installer) ----------
 
@@ -790,11 +992,61 @@ if [[ -f "$REPO_ROOT/.github/CONFIGURATION.md" ]]; then
     sync_one "$DEFAULTS_DIR/.github/CONFIGURATION.md" "$REPO_ROOT/.github/CONFIGURATION.md" ".github/CONFIGURATION.md"
 fi
 
+# ---------- single-file nested Biome configs (#6031) ----------
+#
+# `.loom/biome.jsonc` and `.claude/biome.jsonc` take the Loom-managed paths out
+# of a consumer's repo-wide `biome check .` — without them the shipped
+# Workflow-tool experiment script is a hard PARSE error and the installer's JSON
+# stamps are perpetual format diffs, in files the consumer never wrote.
+#
+# Deliberately UNCONDITIONAL (like `.loom/runtimes/` above, #4688) rather than
+# gated on the destination already existing: these are NEW payload files, so
+# every repo installed before #6031 has no copy and would never obtain one from
+# a destination-gated sync. `sync_one` still honors `.loom/resync-ignore` and
+# still refuses to clobber a symlinked target, so a consumer who deliberately
+# forked or pinned either file is untouched.
+#
+# Each call is gated on the SOURCE existing (not the destination) so a resync
+# run against an older `defaults/` checkout is a clean no-op rather than a
+# `cp`-failure.
+if [[ -f "$DEFAULTS_DIR/.loom/biome.jsonc" ]]; then
+    sync_one "$DEFAULTS_DIR/.loom/biome.jsonc" "$REPO_ROOT/.loom/biome.jsonc" ".loom/biome.jsonc"
+fi
+if [[ -f "$DEFAULTS_DIR/.claude/biome.jsonc" ]]; then
+    sync_one "$DEFAULTS_DIR/.claude/biome.jsonc" "$REPO_ROOT/.claude/biome.jsonc" ".claude/biome.jsonc"
+fi
+
+# ---------- remove retired payload files (#5981) ----------
+#
+# Every surface above has now been walked, so it's safe to prune files that
+# no longer have ANY source counterpart because they were deliberately
+# retired (see "RETIRED PAYLOAD FILES" in the header and remove_retired_files()
+# above) — as opposed to a repo-specific file with no source counterpart,
+# which the walks above already leave untouched by construction.
+remove_retired_files
+
 # ---------- install the deferred self-copy, now that every surface settled ----
 #
 # The scripts walk above records (rather than applies) a sync of the script this
 # process is executing; apply it here, last, via the same atomic staging path.
 apply_deferred_self_sync
+
+# ---------- clear the #5980 crash-detection marker (as soon as it is safe) ----
+#
+# N_FAILED is now fully determined — every sync_one/remove_retired_files call
+# that could ever record a failure has already run above, and nothing below
+# this point writes a payload file. Clear the marker HERE, before
+# refresh_gitignore_block()/audit_untracked_loom_paths() run, rather than
+# waiting for the very end of the script: those two read the CURRENT
+# untracked-and-unignored state of .loom/, and the marker itself is
+# untracked-and-unignored by construction until a consumer's installed
+# .gitignore has caught up to this fix — leaving it in place through the
+# audit would make a routine, fully successful run spuriously warn about its
+# own transient control file. A PARTIAL refresh (N_FAILED > 0) intentionally
+# skips this — the marker must survive so the crash/partial state stays
+# detectable, exactly as the final summary block does at the bottom of the
+# script.
+[[ "$DRY_RUN" -eq 1 || "$N_FAILED" -gt 0 ]] || clear_resync_marker
 
 # ---------- targeted field edit: loom-workspace package.json version (#4285) ----------
 #
@@ -859,13 +1111,9 @@ resync_workspace_stub_version
 # last_resync date. install_date and installed_files are left to the installer.
 # jq or python3 is required for a safe in-place JSON edit; if neither is present
 # we warn and skip — the surface sync above still succeeded.
-
-read_source_version() {
-    local pj="$SOURCE_ROOT/package.json" v
-    [[ -f "$pj" ]] || { echo "unknown"; return 0; }
-    v="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$pj" | head -1)"
-    [[ -n "$v" ]] && echo "$v" || echo "unknown"
-}
+#
+# (read_source_version() moved up to right after SOURCE_ROOT is resolved,
+# #5980 — the crash-detection marker needs it before this section runs.)
 
 # ---------- targeted field edit: .loom/CLAUDE.md version header (#5559) ----------
 #
@@ -947,7 +1195,7 @@ restamp_metadata() {
 
     if command -v jq >/dev/null 2>&1; then
         if jq --arg v "$version" --arg c "$commit" --arg r "$today" \
-              '.loom_version=$v | .loom_commit=$c | .last_resync=$r' \
+              '.loom_version=$v | .loom_commit=$c | .last_resync=$r | del(.loom_source)' \
               "$meta" > "$tmp" 2>/dev/null && [[ -s "$tmp" ]]; then
             mv "$tmp" "$meta"
             note "  ${GREEN}re-stamped${NC} install-metadata.json (loom_version=$version, loom_commit=$commit, last_resync=$today)"
@@ -965,6 +1213,7 @@ with open(os.environ["META"]) as f:
 data["loom_version"] = os.environ["VERSION"]
 data["loom_commit"] = os.environ["COMMIT"]
 data["last_resync"] = os.environ["TODAY"]
+data.pop("loom_source", None)
 with open(sys.argv[1], "w") as f:
     json.dump(data, f, indent=2)
     f.write("\n")
@@ -1076,18 +1325,74 @@ _gitignore_source_ephemeral_patterns() {
         | sed -n -E 's/^[[:space:]]*"([^"]*)",?[[:space:]]*$/\1/p'
 }
 
-# #5294: verify the managed block `$bin update-gitignore` just wrote actually
-# contains every pattern the CURRENT source declares. A `loom-daemon` binary
-# older than the just-pulled source has EPHEMERAL_PATTERNS compiled in from
-# whenever it was built — if that predates a pattern addition (e.g. #5280's
-# `.claude/worktrees/`), `update-gitignore` exits 0 having *silently* dropped
-# that pattern from the regenerated block. That is precisely how 05cf67e8
-# reintroduced #5267's gitlink hazard 34 minutes after #5280 fixed it, entirely
-# undetected until this issue. Never trust the exit code alone: name any
-# dropped pattern in a loud warning instead of a silent no-op.
+# #5991: rewrite the Loom-managed `.gitignore` block in place from the given
+# SOURCE pattern list (ground truth, independent of whichever loom-daemon
+# binary wrote the block), preserving everything outside the block untouched.
+# $1 is the block as previously extracted by the caller (used only to locate
+# the exact begin/end marker lines and the header comment already present in
+# the file -- NOT its pattern lines, which are fully replaced); the remaining
+# args are the correct pattern list, in source declaration order. Returns 1
+# (no write performed) if the markers can't be located in $1 or no patterns
+# were given, so the caller can fall back to a coarser recovery.
+_gitignore_restore_managed_block() {
+    local block="$1"; shift
+    local gitignore="$REPO_ROOT/.gitignore"
+    local begin_marker end_marker header
+    begin_marker="$(head -n1 <<<"$block")"
+    end_marker="$(tail -n1 <<<"$block")"
+    header="$(sed -n '2p' <<<"$block")"
+    [[ -n "$begin_marker" && -n "$end_marker" && -n "$header" ]] || return 1
+    [[ "$#" -gt 0 ]] || return 1
+    [[ -f "$gitignore" ]] || return 1
+
+    local tmp
+    tmp="$(mktemp "${gitignore}.XXXXXX")" || return 1
+    local in_block=0 replaced=0 line pattern
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if [[ "$in_block" -eq 0 && "$line" == "$begin_marker" ]]; then
+            in_block=1
+            replaced=1
+            printf '%s\n' "$begin_marker" >>"$tmp"
+            printf '%s\n' "$header" >>"$tmp"
+            for pattern in "$@"; do
+                printf '%s\n' "$pattern" >>"$tmp"
+            done
+            continue
+        fi
+        if [[ "$in_block" -eq 1 ]]; then
+            if [[ "$line" == "$end_marker" ]]; then
+                in_block=0
+                printf '%s\n' "$end_marker" >>"$tmp"
+            fi
+            continue
+        fi
+        printf '%s\n' "$line" >>"$tmp"
+    done <"$gitignore"
+
+    if [[ "$replaced" -eq 1 ]]; then
+        mv "$tmp" "$gitignore"
+        return 0
+    fi
+    rm -f "$tmp"
+    return 1
+}
+
+# #5294 / #5991: verify the managed block `$bin update-gitignore` just wrote
+# actually contains every pattern the CURRENT source declares. A `loom-daemon`
+# binary older than the just-pulled source has EPHEMERAL_PATTERNS compiled in
+# from whenever it was built — if that predates a pattern addition (e.g.
+# #5280's `.claude/worktrees/`), `update-gitignore` exits 0 having *silently*
+# dropped that pattern from the regenerated block. That is precisely how
+# 05cf67e8 reintroduced #5267's gitlink hazard 34 minutes after #5280 fixed
+# it, and how 94fa30f2 reintroduced it a THIRD time (#5985) even after this
+# function existed — because it only warned, never fixed. Detection without
+# enforcement has now demonstrably failed once; never trust the exit code
+# alone, and never leave the regression for a human to notice in the warning
+# scroll: restore the dropped pattern(s) directly from source, or (if that
+# isn't possible) revert the whole file, so the regression cannot land.
 _gitignore_warn_if_stale() {
     local bin="$1" post_init="$SOURCE_ROOT/loom-daemon/src/init/post_init.rs"
-    local -a missing=()
+    local -a missing=() source_patterns=()
     local pattern block
 
     [[ -f "$post_init" ]] || return 0
@@ -1098,16 +1403,25 @@ _gitignore_warn_if_stale() {
 
     while IFS= read -r pattern; do
         [[ -n "$pattern" ]] || continue
+        source_patterns+=("$pattern")
         grep -qxF -- "$pattern" <<<"$block" || missing+=("$pattern")
     done < <(_gitignore_source_ephemeral_patterns)
 
-    if [[ "${#missing[@]}" -gt 0 ]]; then
-        warn "The resolved loom-daemon binary ($bin) regenerated .gitignore WITHOUT ${#missing[@]} pattern(s) that $post_init currently declares:"
-        for pattern in "${missing[@]}"; do
-            warn "    $pattern"
-        done
-        warn "  '$bin' is likely older than the source just synced (#5294) — rebuild loom-daemon"
-        warn "  (cargo build --release -p loom-daemon under $SOURCE_ROOT) and re-run resync-installed.sh."
+    [[ "${#missing[@]}" -gt 0 ]] || return 0
+
+    warn "The resolved loom-daemon binary ($bin) regenerated .gitignore WITHOUT ${#missing[@]} pattern(s) that $post_init currently declares:"
+    for pattern in "${missing[@]}"; do
+        warn "    $pattern"
+    done
+    warn "  '$bin' is likely older than the source just synced (#5294) — rebuild loom-daemon"
+    warn "  (cargo build --release -p loom-daemon under $SOURCE_ROOT) and re-run resync-installed.sh."
+
+    if _gitignore_restore_managed_block "$block" "${source_patterns[@]}"; then
+        warn "  ${GREEN}restored${NC} the missing pattern(s) directly from $post_init so the regression cannot land (#5991)."
+    elif git -C "$REPO_ROOT" checkout -- .gitignore 2>/dev/null; then
+        warn "  Could not rewrite the block in place — ${GREEN}reverted${NC} .gitignore to its last-committed state instead (#5991)."
+    else
+        warn "  ${RED}Could not restore or revert .gitignore${NC} — the regressed rewrite is still in place; fix manually before committing (#5991)."
     fi
 }
 
@@ -1165,28 +1479,75 @@ refresh_gitignore_block() {
 }
 refresh_gitignore_block
 
-# ---------- audit: untracked-and-unignored paths under .loom/ (#4280) ----------
+# ---------- shared: pure-copy-surface path classifier (#5983) ----------
+#
+# Both audit_untracked_loom_paths() (below) and suggest_commit_if_resync_only_dirt()
+# (further down) need to tell shipped-payload paths -- pure copies of
+# defaults/{hooks,scripts,roles,docs,runtimes,bin}/ -- apart from genuine
+# runtime state living elsewhere under .loom/. Single-source the glob list
+# here so the two call sites can never drift out of sync with each other.
+_is_loom_pure_copy_surface_path() {
+    case "$1" in
+        .loom/hooks/*|.loom/scripts/*|.loom/roles/*|.loom/docs/*|.loom/runtimes/*|.loom/bin/*)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# ---------- audit: untracked-and-unignored paths under .loom/ (#4280, #5983) ----------
 #
 # After the block refresh, anything STILL surfacing as untracked-and-unignored
-# under .loom/ is a Loom-owned runtime path the pattern list does not yet cover
-# (an enumerated list always trails reality). Surface it as a warning so it can
-# be added to EPHEMERAL_PATTERNS, instead of silently dirtying the consumer's
-# `git status` (or being swept into a commit by `git add -A`). `git status
-# --porcelain` already excludes ignored files, so every `??` entry here is by
-# definition untracked-and-unignored; tracked install-owned files never appear.
+# under .loom/ needs a remedy -- but which remedy depends on what the path IS.
+# A path under a pure-copy surface (.loom/hooks|scripts|roles|docs|runtimes|bin/)
+# is shipped payload: it arrived via resync from defaults/, so the fix is simply
+# to commit it. Anything else is presumed genuine Loom runtime state the
+# EPHEMERAL_PATTERNS list does not yet cover (an enumerated list always trails
+# reality) -- surface it as a warning so it can be added there, instead of
+# silently dirtying the consumer's `git status` (or being swept into a commit
+# by `git add -A`). `git status --porcelain` already excludes ignored files, so
+# every `??` entry here is by definition untracked-and-unignored; tracked
+# install-owned files never appear, and a path already shadowed by an
+# overbroad gitignore pattern (the installer's separate OVERBROAD_LOOM_PATTERNS
+# hard-fail, loom-daemon/src/init/post_init.rs) is ignored rather than
+# untracked, so `git status` excludes it here too -- it is never double-reported.
 
 audit_untracked_loom_paths() {
     [[ -d "$REPO_ROOT/.loom" ]] || return 0
     local out
     out="$(git -C "$REPO_ROOT" status --porcelain -- .loom/ 2>/dev/null | sed -n 's/^?? //p')"
     [[ -z "$out" ]] && return 0
-    warn "Untracked-and-unignored path(s) under .loom/ (not covered by the managed .gitignore block):"
+
+    # Classify every path up front -- each one lands in exactly one bucket --
+    # before printing anything, so the two remedy sections below never overlap.
     local p
+    local -a payload_paths=()
+    local -a runtime_paths=()
     while IFS= read -r p; do
         [[ -z "$p" ]] && continue
-        printf '%b\n' "${YELLOW}    $p${NC}" >&2
+        if _is_loom_pure_copy_surface_path "$p"; then
+            payload_paths+=("$p")
+        else
+            runtime_paths+=("$p")
+        fi
     done <<< "$out"
-    warn "If these are Loom runtime state, add them to EPHEMERAL_PATTERNS (loom-daemon/src/init/post_init.rs)."
+
+    if [[ "${#payload_paths[@]}" -gt 0 ]]; then
+        warn "Untracked-and-unignored shipped Loom file(s) under .loom/ (these are payload, not runtime state -- commit them):"
+        for p in "${payload_paths[@]}"; do
+            printf '%b\n' "${YELLOW}    $p${NC}" >&2
+        done
+    fi
+
+    if [[ "${#runtime_paths[@]}" -gt 0 ]]; then
+        warn "Untracked-and-unignored path(s) under .loom/ (not covered by the managed .gitignore block):"
+        for p in "${runtime_paths[@]}"; do
+            printf '%b\n' "${YELLOW}    $p${NC}" >&2
+        done
+        warn "If these are Loom runtime state, add them to EPHEMERAL_PATTERNS (loom-daemon/src/init/post_init.rs)."
+    fi
 }
 audit_untracked_loom_paths
 
@@ -1216,8 +1577,12 @@ suggest_commit_if_resync_only_dirt() {
         [[ "$path" == *" -> "* ]] && path="${path##* -> }"
         path="${path%\"}"
         path="${path#\"}"
+        if _is_loom_pure_copy_surface_path "$path"; then
+            resync_paths+=("$path")
+            continue
+        fi
         case "$path" in
-            .loom/hooks/*|.loom/scripts/*|.loom/roles/*|.loom/docs/*|.loom/runtimes/*|.loom/bin/*|.claude/commands/loom/*|.claude/README.md|.github/CONFIGURATION.md|.loom/install-metadata.json|.loom/CLAUDE.md|.gitattributes)
+            .claude/commands/loom/*|.claude/README.md|.github/CONFIGURATION.md|.loom/install-metadata.json|.loom/CLAUDE.md|.gitattributes)
                 resync_paths+=("$path")
                 ;;
             *)
@@ -1239,8 +1604,8 @@ suggest_commit_if_resync_only_dirt() {
 
 echo ""
 if [[ "$DRY_RUN" -eq 1 ]]; then
-    if [[ "$N_UPDATED" -gt 0 ]]; then
-        printf '%b\n' "${YELLOW}${BOLD}[resync] DRY RUN: ${N_UPDATED} file(s) would be updated, ${N_UNCHANGED} unchanged, ${N_SKIPPED} skipped.${NC}"
+    if [[ "$N_UPDATED" -gt 0 || "$N_REMOVED" -gt 0 ]]; then
+        printf '%b\n' "${YELLOW}${BOLD}[resync] DRY RUN: ${N_UPDATED} file(s) would be updated, ${N_REMOVED} would be removed, ${N_UNCHANGED} unchanged, ${N_SKIPPED} skipped.${NC}"
         printf '%b\n' "${YELLOW}Run without --dry-run to apply.${NC}"
         exit 2
     fi
@@ -1253,7 +1618,7 @@ fi
 # half-written (every copy is staged off to the side and renamed), so the
 # recovery is simply "fix the cause, re-run".
 if [[ "$N_FAILED" -gt 0 ]]; then
-    printf '%b\n' "${RED}${BOLD}[resync] PARTIAL REFRESH: ${N_FAILED} file(s) could NOT be synced (${N_UPDATED} updated, ${N_UNCHANGED} unchanged, ${N_SKIPPED} skipped).${NC}"
+    printf '%b\n' "${RED}${BOLD}[resync] PARTIAL REFRESH: ${N_FAILED} file(s) could NOT be synced (${N_UPDATED} updated, ${N_REMOVED} removed, ${N_UNCHANGED} unchanged, ${N_SKIPPED} skipped).${NC}"
     printf '%b\n' "${RED}Failed to sync:${NC}"
     for failed_rel in "${FAILED_RELS[@]}"; do
         printf '%b\n' "${RED}    $failed_rel${NC}"
@@ -1264,8 +1629,13 @@ if [[ "$N_FAILED" -gt 0 ]]; then
     exit 1
 fi
 
-if [[ "$N_UPDATED" -gt 0 ]]; then
-    printf '%b\n' "${GREEN}${BOLD}[resync] ${N_UPDATED} file(s) updated, ${N_UNCHANGED} unchanged, ${N_SKIPPED} skipped.${NC}"
+# (the #5980 crash-detection marker was already cleared, right after N_FAILED
+# was finalized, above — this is just a defensive no-op re-assertion in case a
+# future refactor adds another early-return path between the two)
+clear_resync_marker
+
+if [[ "$N_UPDATED" -gt 0 || "$N_REMOVED" -gt 0 ]]; then
+    printf '%b\n' "${GREEN}${BOLD}[resync] ${N_UPDATED} file(s) updated, ${N_REMOVED} removed, ${N_UNCHANGED} unchanged, ${N_SKIPPED} skipped.${NC}"
 else
     printf '%b\n' "${GREEN}[resync] Already in sync (${N_UNCHANGED} unchanged, ${N_SKIPPED} skipped).${NC}"
 fi

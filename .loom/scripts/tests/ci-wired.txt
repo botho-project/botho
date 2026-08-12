@@ -49,6 +49,7 @@ test-clean-stale-binary.sh
 test-cleanup-branches-pr-review-branch.sh
 test-config-resolver.sh
 test-config-tiers-cli-migration.sh
+test-cpu-budget.sh
 test-default-branch.sh
 test-dependency-parse.sh
 test-detect-dependency-cycle.sh
@@ -148,6 +149,11 @@ test-worktree-stash-baseline.sh
 tests/hooks/test-guard-destructive-dispatcher.sh
 tests/hooks/test-guard-destructive.sh
 tests/hooks/test-guard-loom-workflow.sh
+# Not a Claude-path guard, but the same repo-root tests/hooks/ location and
+# hermetic-fixture pattern (throwaway `git worktree add` trees, fake binaries,
+# no network/forge calls) — covers .loom/hooks/post-worktree.sh's redirected-
+# CARGO_TARGET_DIR resolution, wired since #6013.
+tests/hooks/test-post-worktree-target-dir.sh
 
 # defaults/hooks/tests/ — remaining unwired guard-hook suites, wired since #4451.
 defaults/hooks/tests/test-guard-background-subagents.sh
@@ -164,9 +170,11 @@ tests/install/test-daemon-build-shortcut.sh
 tests/install/test-forge-detect.sh
 tests/install/test-git-repo-detection.sh
 tests/install/test-hooks-preserve.sh
+tests/install/test-lint-ignore-configs.sh
 tests/install/test-manifest-freshness-after-hook-wiring.sh
 tests/install/test-pnpm-runnable-check.sh
 tests/install/test-provision-daemon.sh
+tests/install/test-uninstall-clean-hooks-ownership.sh
 tests/install/test-uninstall-labels-block.sh
 tests/install/test-uninstall-preserve-siblings.sh
 tests/install/test-uninstall-shim-cleanup.sh

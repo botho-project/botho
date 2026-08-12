@@ -21,6 +21,9 @@
 #        symlink protection (l) is unaffected (#5222)
 #   (m) recorded loom_source gone -> clear error, exit 1
 #   (n) metadata re-stamp -> loom_version/loom_commit/last_resync present after apply
+#   (#6032) re-stamp also STRIPS a legacy loom_source field, on both the jq
+#       and (jq-unavailable) python3 fallback code paths; a fixture with no
+#       loom_source field to begin with is a no-op (none is added)
 # Canonical-guard-defer (#4041, #4403, #4566):
 #   (o) canonical guard + git-TRACKED vendored guard -> preserved, tree clean, and
 #       reported as an informational note (NOT a WARN) that --quiet suppresses
@@ -36,6 +39,28 @@
 #   (u) an updated file gets a new inode (staged + renamed, not truncated) with
 #       its permissions preserved, and leaves no .resync-stage.* dirt
 #   (v) an unsyncable file -> explicit PARTIAL REFRESH report + exit 1
+# Retired payload files (#5981):
+#   (x) a file listed in defaults/.loom-retired.list but with no defaults/
+#       counterpart is REMOVED from the installed tree and reported with the
+#       "removed" verb; --dry-run previews it (exit 2, "would remove") without
+#       deleting; .loom/resync-ignore can pin it against removal exactly like
+#       an update; a retired entry with no installed counterpart is a no-op
+# Untracked-.loom/-path remedy classification (#5983):
+#   (y) an untracked-and-unignored path under a pure-copy surface
+#       (.loom/hooks|scripts|roles|docs|runtimes|bin/) is shipped payload ->
+#       audit_untracked_loom_paths() recommends committing it directly, not
+#       adding it to EPHEMERAL_PATTERNS
+#   (z) an untracked-and-unignored path outside any pure-copy surface is
+#       genuine runtime state -> the existing EPHEMERAL_PATTERNS remedy is
+#       unchanged
+# Crash-detection marker (#5980):
+#   a successful apply leaves no .loom/.resync-in-progress marker behind;
+#   --dry-run never writes one; a leftover marker (simulating a crashed prior
+#   run) is reported by BOTH --dry-run (untouched, pure detector) and a real
+#   apply (which then restarts from scratch, idempotently, and clears the
+#   marker on full success); a PARTIAL refresh leaves the marker in place
+#   (recording the real target version + a timestamp/pid) until a later
+#   successful retry clears it.
 # Plus contract checks:
 #   - --help prints usage (documenting --allow-worktree), exit 0
 #   - unknown arg exits 1
@@ -521,6 +546,90 @@ else
     fail "(n) --dry-run re-stamped metadata (should be preview-only)"
 fi
 
+# --- (#6032) legacy loom_source field is stripped on re-stamp (jq path) -----
+echo "Test group 12p: re-stamp strips a legacy loom_source field (jq path, #6032)"
+REPO="$(make_fixture)"
+if grep -q '"loom_source"' "$REPO/.loom/install-metadata.json"; then
+    pass "(#6032) fixture starts with a loom_source field to strip"
+else
+    fail "(#6032) fixture is missing loom_source — test precondition not met"
+fi
+(cd "$REPO" && bash "$SCRIPT" >/dev/null 2>&1)
+META="$REPO/.loom/install-metadata.json"
+if ! grep -q '"loom_source"' "$META"; then
+    pass "(#6032) loom_source stripped from install-metadata.json (jq path)"
+else
+    fail "(#6032) loom_source still present after re-stamp (jq path)"
+fi
+if grep -q '"loom_version": *"9.9.9"' "$META"; then
+    pass "(#6032) other fields still re-stamped alongside the loom_source strip (jq path)"
+else
+    fail "(#6032) re-stamp regressed while stripping loom_source (jq path)"
+fi
+
+# --- (#6032) no-op: a fixture with no loom_source field stays that way -----
+echo "Test group 12q: re-stamp is a no-op re: loom_source when it was never present (#6032)"
+REPO="$(make_fixture)"
+python3 -c '
+import json
+p = "'"$REPO"'/.loom/install-metadata.json"
+with open(p) as f:
+    data = json.load(f)
+data.pop("loom_source", None)
+with open(p, "w") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+'
+if ! grep -q '"loom_source"' "$REPO/.loom/install-metadata.json"; then
+    pass "(#6032) fixture precondition: no loom_source field before apply"
+else
+    fail "(#6032) fixture still has loom_source — precondition not met"
+fi
+(cd "$REPO" && bash "$SCRIPT" >/dev/null 2>&1)
+if ! grep -q '"loom_source"' "$REPO/.loom/install-metadata.json"; then
+    pass "(#6032) re-stamp does not add a loom_source field when absent"
+else
+    fail "(#6032) re-stamp introduced a loom_source field that was not there before"
+fi
+
+# --- (#6032) legacy loom_source field is stripped on re-stamp (python3 fallback) --
+echo "Test group 12r: re-stamp strips a legacy loom_source field (python3 fallback, jq unavailable, #6032)"
+# Build a PATH that resolves every currently-available command EXCEPT jq, so
+# the script's own "command -v jq" probe genuinely fails and it falls through
+# to the python3 code path in restamp_metadata() -- rather than merely
+# narrowing PATH to "/usr/bin:/bin" (which still contains jq on most hosts).
+NOJQ_BIN="$WORKDIR/nojq-bin"
+mkdir -p "$NOJQ_BIN"
+IFS=':' read -r -a _path_dirs <<< "$PATH"
+for _d in "${_path_dirs[@]}"; do
+    [[ -d "$_d" ]] || continue
+    for _f in "$_d"/*; do
+        [[ -x "$_f" ]] || continue
+        _name="$(basename "$_f")"
+        [[ "$_name" == "jq" ]] && continue
+        [[ -e "$NOJQ_BIN/$_name" ]] && continue
+        ln -s "$_f" "$NOJQ_BIN/$_name" 2>/dev/null
+    done
+done
+if [[ ! -e "$NOJQ_BIN/jq" ]] && [[ -e "$NOJQ_BIN/python3" ]]; then
+    pass "(#6032) constructed a PATH with python3 but no jq"
+else
+    fail "(#6032) could not construct a jq-less PATH with python3 (precondition not met)"
+fi
+REPO="$(make_fixture)"
+(cd "$REPO" && PATH="$NOJQ_BIN" bash "$SCRIPT" >/dev/null 2>&1)
+META="$REPO/.loom/install-metadata.json"
+if ! grep -q '"loom_source"' "$META"; then
+    pass "(#6032) loom_source stripped from install-metadata.json (python3 fallback)"
+else
+    fail "(#6032) loom_source still present after re-stamp (python3 fallback)"
+fi
+if grep -q '"loom_version": *"9.9.9"' "$META"; then
+    pass "(#6032) other fields still re-stamped alongside the loom_source strip (python3 fallback)"
+else
+    fail "(#6032) re-stamp regressed while stripping loom_source (python3 fallback)"
+fi
+
 # --- (#4528) install-metadata.json merge=ours driver wiring -----------------
 echo "Test group 12g: resync wires the install-metadata.json merge=ours driver (#4528)"
 REPO="$(make_fixture)"
@@ -696,6 +805,51 @@ else
     fail "(#4280) missing binary did not produce the expected warning"
 fi
 
+# --- (#5983) audit classifies untracked .loom/ paths before choosing remedy text --
+echo "Test group 12n: audit classifies untracked .loom/ paths before choosing remedy text (#5983)"
+
+# (a) An untracked path under a pure-copy surface (.loom/scripts/) is shipped
+# payload -- the remedy should say to commit it, not point at EPHEMERAL_PATTERNS.
+# The new file is placed directly inside the already-tracked .loom/scripts/
+# directory (a sibling of the fixture's tracked foo.sh) rather than a brand-new
+# subdirectory, so `git status --porcelain` reports it as its own path rather
+# than folding it into a single untracked-directory line.
+REPO="$(make_fixture)"
+printf 'NEW-TEST\n' > "$REPO/.loom/scripts/check-defaults-version-bump.sh"   # untracked, unignored, pure-copy surface
+OUT="$(cd "$REPO" && bash "$SCRIPT" 2>&1)"
+if grep -qi "commit them" <<<"$OUT" && grep -q '.loom/scripts/check-defaults-version-bump.sh' <<<"$OUT"; then
+    pass "(#5983) untracked payload path under .loom/scripts/ gets 'commit it' guidance"
+else
+    fail "(#5983) untracked payload path did not get 'commit it' guidance"
+fi
+if grep -qi "add them to EPHEMERAL_PATTERNS" <<<"$OUT"; then
+    fail "(#5983) untracked payload-only path incorrectly suggested the EPHEMERAL_PATTERNS remedy"
+else
+    pass "(#5983) untracked payload-only path does not suggest the EPHEMERAL_PATTERNS remedy"
+fi
+
+# (b) An untracked path OUTSIDE any pure-copy surface (genuine runtime state)
+# keeps today's EPHEMERAL_PATTERNS remedy, unchanged. The full fixture already
+# exercises several widened-surface creations (roles/, docs/, bin/, commands/)
+# that legitimately land in the payload bucket on their own -- so this case
+# checks the runtime-state marker is scoped to the EPHEMERAL_PATTERNS block
+# specifically, rather than asserting the payload block is empty.
+REPO="$(make_fixture)"
+printf 'RUNTIME\n' > "$REPO/.loom/some-new-runtime-dir-marker"   # untracked, unignored, not a pure-copy surface
+OUT="$(cd "$REPO" && bash "$SCRIPT" 2>&1)"
+runtime_block="$(sed -n '/not covered by the managed \.gitignore block/,/If these are Loom runtime state/p' <<<"$OUT")"
+payload_block="$(sed -n '/commit them):/,/not covered by the managed \.gitignore block/p' <<<"$OUT")"
+if grep -q '.loom/some-new-runtime-dir-marker' <<<"$runtime_block"; then
+    pass "(#5983) untracked runtime-state path keeps the EPHEMERAL_PATTERNS remedy"
+else
+    fail "(#5983) untracked runtime-state path did not get the EPHEMERAL_PATTERNS remedy"
+fi
+if grep -q '.loom/some-new-runtime-dir-marker' <<<"$payload_block"; then
+    fail "(#5983) untracked runtime-only path incorrectly suggested the shipped-payload remedy"
+else
+    pass "(#5983) untracked runtime-only path does not suggest the shipped-payload remedy"
+fi
+
 # --- (#5294) stale-binary regression: a loom-daemon binary compiled before a
 # given EPHEMERAL_PATTERNS entry existed, resolved ahead of a fresher
 # repo-local build under default (no LOOM_PREFER_REPO_BUILD) resolver
@@ -807,6 +961,62 @@ if grep -qi "regenerated .gitignore WITHOUT" <<<"$OUT" && grep -qF ".fake-newly-
     pass "(#5294) the dropped pattern is named in a loud warning instead of being silently lost"
 else
     fail "(#5294) stale-binary warning did not name the missing pattern"
+fi
+
+# #5991: the guard above (#5294) only ever WARNED about a dropped pattern; it
+# never fixed it, so the regressed .gitignore still landed whenever the
+# warning scrolled past unread -- which is exactly what happened a third time
+# in 94fa30f2 (#5985). Assert the enforcement half directly: a deliberately
+# stale pattern list must not be able to produce a committed .gitignore
+# missing a source-declared pattern -- the guard must restore it in place.
+echo "Test group 12o: gitignore refresh RESTORES a pattern dropped by a stale binary, not just warns about it (#5991)"
+REPO="$(make_fixture)"
+write_fake_post_init "$REPO"
+STALE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/fake-path.XXXXXX")"
+make_fake_daemon_bin "$STALE_DIR/loom-daemon" ".loom-in-use"
+NO_BIN_HOME="$(mktemp -d)"
+OUT="$(cd "$REPO" && env -u LOOM_DAEMON_BIN PATH="$STALE_DIR:/usr/bin:/bin" HOME="$NO_BIN_HOME" \
+    LOOM_DAEMON_BIN_DIR="/nonexistent" bash "$SCRIPT" 2>&1)"
+RC=$?
+rm -rf "$NO_BIN_HOME" "$STALE_DIR"
+if [[ $RC -eq 0 ]]; then
+    pass "(#5991) apply still exits 0 when the stale-binary guard has to restore a pattern"
+else
+    fail "(#5991) apply exits 0 when the guard restores a pattern (got $RC)"
+fi
+GI_BLOCK="$(sed -n '/# >>> loom-managed/,/# <<< loom-managed/p' "$REPO/.gitignore")"
+if grep -qxF ".fake-newly-added-pattern/" <<<"$GI_BLOCK"; then
+    pass "(#5991) the pattern dropped by the stale binary was restored into .gitignore, not just named in a warning"
+else
+    fail "(#5991) .gitignore is still missing the source-declared pattern after the guard ran"
+fi
+if [[ "$(grep -c '>>> loom-managed' "$REPO/.gitignore")" -eq 1 && \
+      "$(grep -c '<<< loom-managed' "$REPO/.gitignore")" -eq 1 ]]; then
+    pass "(#5991) restore left exactly one well-formed managed block (markers not duplicated/corrupted)"
+else
+    fail "(#5991) restore left a malformed/duplicated managed block"
+fi
+if grep -qi "restored the missing pattern" <<<"$OUT"; then
+    pass "(#5991) the restore is itself reported, not silent"
+else
+    fail "(#5991) restore happened without a corresponding report line"
+fi
+# Idempotent OUTPUT: the same stale binary drops the pattern and gets
+# corrected again on every run, so a second resync still ends up with a
+# byte-identical, fully-restored .gitignore (the stale binary itself never
+# self-heals -- only rebuilding it does; see the warning's own guidance).
+cp "$REPO/.gitignore" "$WORKDIR/gi-before-2nd-5991"
+STALE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/fake-path.XXXXXX")"
+make_fake_daemon_bin "$STALE_DIR/loom-daemon" ".loom-in-use"
+NO_BIN_HOME="$(mktemp -d)"
+(cd "$REPO" && env -u LOOM_DAEMON_BIN PATH="$STALE_DIR:/usr/bin:/bin" HOME="$NO_BIN_HOME" \
+    LOOM_DAEMON_BIN_DIR="/nonexistent" bash "$SCRIPT") >/dev/null 2>&1
+RC2=$?
+rm -rf "$NO_BIN_HOME" "$STALE_DIR"
+if [[ $RC2 -eq 0 ]] && diff -q "$WORKDIR/gi-before-2nd-5991" "$REPO/.gitignore" >/dev/null 2>&1; then
+    pass "(#5991) a second run with the same stale binary leaves .gitignore byte-identical (still fully restored)"
+else
+    fail "(#5991) second run with the same stale binary left .gitignore in a different (still-regressed?) state (rc=$RC2)"
 fi
 
 # --- (#4285) targeted loom-workspace package.json version field edit --------
@@ -1355,8 +1565,17 @@ echo "Test group 21: .loom/runtimes/ is backfilled when absent (#4688)"
 # .loom/runtimes/ was never provisioned by any prior install/resync.
 RUNTIMES_REPO="$WORKDIR/runtimes-repo"
 rm -rf "$RUNTIMES_REPO"
-mkdir -p "$RUNTIMES_REPO/defaults/roles" "$RUNTIMES_REPO/defaults/runtimes" \
-         "$RUNTIMES_REPO/.loom/roles"
+# #6032: defaults/hooks/ is included (empty) purely so resolve_defaults()
+# resolves this fixture via priority 1 (co-located defaults/ tree) on every
+# run, not via the install-metadata.json "loom_source" compatibility fallback
+# (priority 3) -- otherwise the second (idempotency) run below would lose its
+# only source-tree resolution path the moment restamp_metadata() strips the
+# legacy loom_source field on the first run, which is an accurate reflection
+# of a real dogfood/consumer install (always has EITHER a co-located
+# defaults/ tree OR the .loom/loom-source-path sidecar) rather than a
+# regression in the fix itself.
+mkdir -p "$RUNTIMES_REPO/defaults/hooks" "$RUNTIMES_REPO/defaults/roles" \
+         "$RUNTIMES_REPO/defaults/runtimes" "$RUNTIMES_REPO/.loom/roles"
 git -C "$RUNTIMES_REPO" init -q
 printf 'ROLE\n' > "$RUNTIMES_REPO/defaults/roles/builder.md"
 printf 'ROLE\n' > "$RUNTIMES_REPO/.loom/roles/builder.md"
@@ -1410,6 +1629,231 @@ if [[ $RC -eq 0 ]] && grep -q "Already in sync" <<<"$OUT"; then
     pass "(w) runtimes backfill is idempotent (second run already in sync)"
 else
     fail "(w) runtimes backfill is not idempotent (rc=$RC)"
+fi
+
+# --- (x) retired payload files are removed on resync (#5981) ----------------
+echo "Test group 22: retired payload files are removed (#5981)"
+# Builds its own throwaway repo so it can install a file at
+# .loom/scripts/retired-tool.sh with NO defaults/scripts/retired-tool.sh
+# counterpart at all — the exact live-incident shape (defaults/scripts/status.sh
+# deleted upstream in #5710, but the installed copy survives every resync
+# forever because the walk never visits a file that no longer has a source).
+RETIRED_REPO="$WORKDIR/retired-repo"
+rm -rf "$RETIRED_REPO"
+mkdir -p "$RETIRED_REPO/defaults/scripts" "$RETIRED_REPO/.loom/scripts"
+git -C "$RETIRED_REPO" init -q
+printf 'scripts/retired-tool.sh   # #5981 test fixture\n' > "$RETIRED_REPO/defaults/.loom-retired.list"
+printf '#!/usr/bin/env bash\necho retired\n' > "$RETIRED_REPO/.loom/scripts/retired-tool.sh"
+printf '{\n  "loom_version": "0.0.0",\n  "loom_commit": "old",\n  "install_date": "2020-01-01",\n  "loom_source": "%s",\n  "installed_files": []\n}\n' \
+    "$RETIRED_REPO" > "$RETIRED_REPO/.loom/install-metadata.json"
+git -C "$RETIRED_REPO" add -A >/dev/null 2>&1
+git -C "$RETIRED_REPO" commit -qm "fixture" >/dev/null 2>&1
+
+# --dry-run must report the removal (as drift, exit 2) without deleting.
+OUT="$(cd "$RETIRED_REPO" && bash "$SCRIPT" --dry-run 2>&1)"
+RC=$?
+if [[ $RC -eq 2 ]]; then
+    pass "(x) --dry-run with a retired file present exits 2 (drift)"
+else
+    fail "(x) --dry-run with a retired file present exits 2 (got $RC)"
+fi
+if grep -q "would remove.*scripts/retired-tool.sh" <<<"$OUT"; then
+    pass "(x) --dry-run reports 'would remove' for the retired file"
+else
+    fail "(x) --dry-run did not report the retired file as 'would remove'"
+fi
+if [[ -f "$RETIRED_REPO/.loom/scripts/retired-tool.sh" ]]; then
+    pass "(x) --dry-run left the retired file in place"
+else
+    fail "(x) --dry-run deleted the retired file (should only preview)"
+fi
+
+# apply: the retired file must actually be removed and reported.
+OUT="$(cd "$RETIRED_REPO" && bash "$SCRIPT" 2>&1)"
+RC=$?
+if [[ $RC -eq 0 ]]; then
+    pass "(x) apply exits 0"
+else
+    fail "(x) apply did not exit 0 (got $RC)"
+fi
+if [[ ! -e "$RETIRED_REPO/.loom/scripts/retired-tool.sh" ]]; then
+    pass "(x) apply removed the retired file"
+else
+    fail "(x) apply did not remove the retired file"
+fi
+if grep -q "removed.*scripts/retired-tool.sh" <<<"$OUT"; then
+    pass "(x) apply reports 'removed' for the retired file"
+else
+    fail "(x) apply did not report the retired file as 'removed'"
+fi
+
+# idempotent rerun: nothing left to remove, clean no-op.
+OUT="$(cd "$RETIRED_REPO" && bash "$SCRIPT" 2>&1)"
+RC=$?
+if [[ $RC -eq 0 ]] && grep -q "Already in sync" <<<"$OUT"; then
+    pass "(x) retired-file removal is idempotent (second run already in sync)"
+else
+    fail "(x) retired-file removal is not idempotent (rc=$RC)"
+fi
+
+# .loom/resync-ignore pins a retired file against removal.
+RETIRED_REPO2="$WORKDIR/retired-repo-pinned"
+rm -rf "$RETIRED_REPO2"
+mkdir -p "$RETIRED_REPO2/defaults/scripts" "$RETIRED_REPO2/.loom/scripts"
+git -C "$RETIRED_REPO2" init -q
+printf 'scripts/retired-tool.sh\n' > "$RETIRED_REPO2/defaults/.loom-retired.list"
+printf 'KEEP-MY-FORK\n' > "$RETIRED_REPO2/.loom/scripts/retired-tool.sh"
+printf 'scripts/retired-tool.sh  # I still use this locally\n' > "$RETIRED_REPO2/.loom/resync-ignore"
+printf '{\n  "loom_version": "0.0.0",\n  "loom_commit": "old",\n  "install_date": "2020-01-01",\n  "loom_source": "%s",\n  "installed_files": []\n}\n' \
+    "$RETIRED_REPO2" > "$RETIRED_REPO2/.loom/install-metadata.json"
+git -C "$RETIRED_REPO2" add -A >/dev/null 2>&1
+git -C "$RETIRED_REPO2" commit -qm "fixture" >/dev/null 2>&1
+
+OUT="$(cd "$RETIRED_REPO2" && bash "$SCRIPT" 2>&1)"
+RC=$?
+if [[ $RC -eq 0 ]] && grep -q "skipped.*scripts/retired-tool.sh" <<<"$OUT"; then
+    pass "(x) .loom/resync-ignore pin reports the retired file as skipped"
+else
+    fail "(x) .loom/resync-ignore pin did not report the retired file as skipped (rc=$RC)"
+fi
+if [[ "$(cat "$RETIRED_REPO2/.loom/scripts/retired-tool.sh" 2>/dev/null)" == "KEEP-MY-FORK" ]]; then
+    pass "(x) .loom/resync-ignore pin preserved the retired file's local fork"
+else
+    fail "(x) .loom/resync-ignore pin did not preserve the retired file's local fork"
+fi
+
+# a retired-list entry naming a file that was never installed is a no-op.
+RETIRED_REPO3="$WORKDIR/retired-repo-absent"
+rm -rf "$RETIRED_REPO3"
+mkdir -p "$RETIRED_REPO3/defaults/scripts" "$RETIRED_REPO3/.loom/scripts"
+git -C "$RETIRED_REPO3" init -q
+printf 'scripts/never-installed.sh\n' > "$RETIRED_REPO3/defaults/.loom-retired.list"
+printf '{\n  "loom_version": "0.0.0",\n  "loom_commit": "old",\n  "install_date": "2020-01-01",\n  "loom_source": "%s",\n  "installed_files": []\n}\n' \
+    "$RETIRED_REPO3" > "$RETIRED_REPO3/.loom/install-metadata.json"
+git -C "$RETIRED_REPO3" add -A >/dev/null 2>&1
+git -C "$RETIRED_REPO3" commit -qm "fixture" >/dev/null 2>&1
+
+OUT="$(cd "$RETIRED_REPO3" && bash "$SCRIPT" 2>&1)"
+RC=$?
+if [[ $RC -eq 0 ]] && grep -q "Already in sync" <<<"$OUT"; then
+    pass "(x) a retired entry with no installed counterpart is a silent no-op"
+else
+    fail "(x) a retired entry with no installed counterpart was not a clean no-op (rc=$RC)"
+fi
+
+# --- (#5980) crash-detection marker -------------------------------------------
+echo "Test group 23: crash-detection marker (#5980)"
+MARKER_REL=".loom/.resync-in-progress"
+
+# (a) a clean, fully-successful apply never leaves the marker behind.
+REPO="$(make_fixture)"
+(cd "$REPO" && bash "$SCRIPT" >/dev/null 2>&1)
+if [[ ! -e "$REPO/$MARKER_REL" ]]; then
+    pass "(#5980) a successful apply leaves no marker behind"
+else
+    fail "(#5980) a successful apply left the marker file behind"
+fi
+
+# (b) --dry-run never writes the marker, even with drift present.
+REPO="$(make_fixture)"
+(cd "$REPO" && bash "$SCRIPT" --dry-run >/dev/null 2>&1)
+if [[ ! -e "$REPO/$MARKER_REL" ]]; then
+    pass "(#5980) --dry-run never writes the marker"
+else
+    fail "(#5980) --dry-run wrote the marker (should be preview-only)"
+fi
+
+# (c) a leftover marker (simulating a crashed prior run) is detected and
+# reported by --dry-run WITHOUT being touched (pure, side-effect-free detector).
+REPO="$(make_fixture)"
+printf 'target_version=0.1.2\nstarted_at=2020-01-01T00:00:00Z\npid=99999\n' > "$REPO/$MARKER_REL"
+OUT="$(cd "$REPO" && bash "$SCRIPT" --dry-run 2>&1)"
+if grep -qi "previous resync did not complete" <<<"$OUT" && grep -q "0.1.2" <<<"$OUT"; then
+    pass "(#5980) --dry-run reports a leftover marker naming the stale target version"
+else
+    fail "(#5980) --dry-run did not report the leftover marker with its target version"
+fi
+if [[ "$(cat "$REPO/$MARKER_REL")" == "target_version=0.1.2
+started_at=2020-01-01T00:00:00Z
+pid=99999" ]]; then
+    pass "(#5980) --dry-run leaves the leftover marker byte-identical (preview-only)"
+else
+    fail "(#5980) --dry-run modified the leftover marker"
+fi
+
+# (d) the SAME leftover marker is also detected (and reported) by a real,
+# non-dry-run apply — and since the run completes successfully this time, the
+# marker is overwritten and then cleared, leaving the install fully synced.
+OUT="$(cd "$REPO" && bash "$SCRIPT" 2>&1)"
+RC=$?
+if grep -qi "previous resync did not complete" <<<"$OUT" && grep -q "0.1.2" <<<"$OUT"; then
+    pass "(#5980) a real apply also detects and reports the leftover marker"
+else
+    fail "(#5980) a real apply did not report the leftover marker"
+fi
+if [[ $RC -eq 0 ]]; then
+    pass "(#5980) the run restarts from scratch and completes successfully despite the leftover marker"
+else
+    fail "(#5980) the run did not complete successfully (rc=$RC)"
+fi
+if [[ ! -e "$REPO/$MARKER_REL" ]]; then
+    pass "(#5980) the marker is cleared once this run reaches a full success"
+else
+    fail "(#5980) the marker was not cleared after a full success"
+fi
+if [[ "$(cat "$REPO/.loom/hooks/guard.sh")" == "A" ]]; then
+    pass "(#5980) the restart-from-scratch run still fully resynced (idempotent recovery)"
+else
+    fail "(#5980) the restart-from-scratch run did not actually resync"
+fi
+
+# (e) the marker records the CURRENT run's target version (from source
+# package.json, "9.9.9" in the fixture), not a placeholder.
+REPO="$(make_fixture)"
+# Make the .loom/scripts/lib directory unwritable so the run partially fails
+# (mirrors Test group 20's unsyncable-file fixture) -- this lets us inspect
+# the marker WHILE it is still present, right after a real (non-dry-run) run
+# started but before it reached the success path.
+if [[ "$(id -u)" -eq 0 ]]; then
+    skip "(#5980) running as root — an unwritable destination cannot be simulated"
+else
+    chmod 500 "$REPO/.loom/scripts/lib"
+    RC=0; OUT="$(cd "$REPO" && bash "$SCRIPT" 2>&1)" || RC=$?
+    chmod 700 "$REPO/.loom/scripts/lib"
+    if [[ $RC -eq 1 ]]; then
+        pass "(#5980) a partial refresh still exits 1 (unchanged from #4669)"
+    else
+        fail "(#5980) a partial refresh did not exit 1 (got $RC)"
+    fi
+    if [[ -f "$REPO/$MARKER_REL" ]]; then
+        pass "(#5980) a PARTIAL refresh leaves the marker in place (never cleared on partial success)"
+    else
+        fail "(#5980) a PARTIAL refresh incorrectly cleared the marker"
+    fi
+    if grep -q '^target_version=9\.9\.9$' "$REPO/$MARKER_REL"; then
+        pass "(#5980) the marker records the run's actual target version from source package.json"
+    else
+        fail "(#5980) the marker does not record the expected target version"
+    fi
+    if grep -q '^started_at=[0-9]' "$REPO/$MARKER_REL" && grep -q '^pid=[0-9]' "$REPO/$MARKER_REL"; then
+        pass "(#5980) the marker records a started_at timestamp and a pid"
+    else
+        fail "(#5980) the marker is missing started_at/pid fields"
+    fi
+    # Re-running after fixing the cause (same recovery path #4669 documents)
+    # completes the refresh AND finally clears the marker.
+    OUT="$(cd "$REPO" && bash "$SCRIPT" 2>&1)"
+    RC=$?
+    if grep -qi "previous resync did not complete" <<<"$OUT"; then
+        pass "(#5980) the retry detects and reports the marker the partial run left behind"
+    else
+        fail "(#5980) the retry did not report the marker from the prior partial run"
+    fi
+    if [[ $RC -eq 0 && ! -e "$REPO/$MARKER_REL" ]]; then
+        pass "(#5980) fixing the cause and re-running completes the refresh and clears the marker"
+    else
+        fail "(#5980) re-running after fixing the cause did not clear the marker (rc=$RC)"
+    fi
 fi
 
 # --- contract checks ---------------------------------------------------------
