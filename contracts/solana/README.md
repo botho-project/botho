@@ -243,8 +243,14 @@ redirect minted wBTH to an arbitrary token account.
 ```bash
 npm install        # or: yarn
 anchor build       # compiles the program + generates target/types/wbth.ts
-anchor test        # spins up a local validator and runs the ts-mocha suite
+anchor test        # spins up a local validator and runs the mocha suite
 ```
+
+The suite runs through `npx mocha --import=tsx` (Anchor.toml `[scripts] test`).
+`tsx` replaced `ts-mocha`/`ts-node` when this workspace moved to TypeScript 7
+(#1203): TS 7 is the Go-native compiler and no longer exposes the JavaScript
+compiler API `ts-node` drives, so `ts-mocha` crashed before collecting a single
+test. Like `ts-mocha`, `tsx` is transpile-only — it does not type-check.
 
 The `tests/wbth.ts` suite covers: `initialize` (PDA mint authority + 12
 decimals + distinct roles), multisig-gated `bridge_mint`, order-id replay

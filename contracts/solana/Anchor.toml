@@ -22,5 +22,14 @@ wallet = "~/.config/solana/id.json"
 
 [scripts]
 # npm-consistent with the rest of the repo (no yarn): `anchor test` runs this
-# after building. `npx` resolves the locally-installed ts-mocha binary.
-test = "npx ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+# after building. `npx` resolves the locally-installed mocha binary.
+#
+# `tsx`, NOT `ts-mocha`/`ts-node` (#1203): ts-node drives the TypeScript
+# *JavaScript* compiler API, which TypeScript 7 (the Go-native compiler) no
+# longer ships, so under TS 7 the suite died before collecting a single test
+# with "Cannot read properties of undefined (reading 'readFile')". tsx
+# transpiles TS with esbuild and needs no compiler API. Same swap
+# `contracts/ethereum` made in its hardhat-3 migration (#1185). Like ts-mocha
+# (which ran ts-node in transpile-only mode), this does not type-check — type
+# errors surface at `anchor build` / review, not here.
+test = "npx mocha --import=tsx -t 1000000 tests/**/*.ts"
