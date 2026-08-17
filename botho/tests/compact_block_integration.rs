@@ -14,7 +14,7 @@ use std::time::SystemTime;
 use sha2::{Digest, Sha256};
 
 use botho::{
-    block::{Block, BlockHeader, BlockLotterySummary, MintingTx},
+    block::{Block, BlockHeader, BlockLotterySummary, LotteryOutput, MintingTx},
     mempool::Mempool,
     network::{BlockTxn, CompactBlock, GetBlockTxn, ReconstructionResult},
     transaction::{ClsagRingInput, RingMember, Transaction, TxOutput, PICOCREDITS_PER_CREDIT},
@@ -574,6 +574,83 @@ fn test_compact_block_estimated_size_accuracy() {
             tx_count
         );
     }
+}
+
+/// Regression test for issue #1187.
+///
+/// `estimated_size()` used to budget `MintingTx` at a flat ~300 bytes and
+/// ignore `lottery_outputs` / `lottery_summary` plus the 8-byte bincode length
+/// prefix each `Vec` carries, so it reported 568 bytes for a block that
+/// serialized to 1,609. The estimate is now derived from the live wire format,
+/// so it must match the real serialized length for every component — including
+/// the 1,088-byte ML-KEM ciphertexts on hybrid coinbases and lottery payouts.
+#[test]
+fn test_compact_block_estimated_size_tracks_wire_format() {
+    let wallet = create_test_wallet(1);
+    let address = wallet.account_key().default_subaddress();
+
+    let transactions: Vec<Transaction> = (0..10).map(create_mock_transaction).collect();
+    let mut block = create_block_with_transactions(&address, [0u8; 32], 1, transactions);
+
+    // A freshly minted coinbase carries the hybrid ML-KEM stealth envelope.
+    assert!(
+        block.minting_tx.kem_ciphertext.is_some(),
+        "MintingTx::new should produce a hybrid (ML-KEM) coinbase"
+    );
+
+    // Exercise the lottery fields, with and without a hybrid stealth envelope.
+    block.lottery_outputs = vec![
+        LotteryOutput {
+            winner_tx_hash: [1u8; 32],
+            winner_output_index: 0,
+            payout: 4_000,
+            target_key: [2u8; 32],
+            public_key: [3u8; 32],
+            kem_ciphertext: Some(vec![7u8; 1088]),
+        },
+        LotteryOutput {
+            winner_tx_hash: [4u8; 32],
+            winner_output_index: 1,
+            payout: 4_000,
+            target_key: [5u8; 32],
+            public_key: [6u8; 32],
+            kem_ciphertext: None,
+        },
+    ];
+    block.lottery_summary = BlockLotterySummary {
+        total_fees: 10_000,
+        pool_distributed: 8_000,
+        amount_burned: 2_000,
+        lottery_seed: [9u8; 32],
+    };
+
+    // Prefilled transactions exercise the variable-size component too.
+    let hybrid = CompactBlock::from_block_with_prefilled(&block, &[1, 3]);
+    let hybrid_actual = bincode::serialize(&hybrid).unwrap().len();
+    assert_eq!(
+        hybrid.estimated_size(),
+        hybrid_actual,
+        "estimated_size() must track the bincode wire format for a hybrid coinbase \
+         with lottery outputs and prefilled transactions"
+    );
+
+    // Classical (pre-6.0.0) coinbase: `kem_ciphertext: None` is a 1-byte tag, so
+    // the estimate must shrink rather than keep charging for a ciphertext.
+    let mut classical_block = block.clone();
+    classical_block.minting_tx.kem_ciphertext = None;
+    let classical = CompactBlock::from_block_with_prefilled(&classical_block, &[1, 3]);
+    let classical_actual = bincode::serialize(&classical).unwrap().len();
+    assert_eq!(
+        classical.estimated_size(),
+        classical_actual,
+        "estimated_size() must not over-estimate a classical coinbase"
+    );
+    assert!(
+        classical.estimated_size() < hybrid.estimated_size(),
+        "classical coinbase ({}) should estimate smaller than hybrid ({})",
+        classical.estimated_size(),
+        hybrid.estimated_size()
+    );
 }
 
 // ============================================================================
