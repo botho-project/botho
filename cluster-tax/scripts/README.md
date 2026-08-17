@@ -112,7 +112,7 @@ is a sigmoid in cluster wealth parameterised by `(r_min_bps, r_max_bps, w_mid,
 steepness)` — the same shape as the deployed curve.
 
 Sweeps flat 1% against progressive 0.1%–30%, 0.1%–50% and 0.1%–70% curves over
-500 agents × 5,000 rounds (fewer rounds than the account model because the
+500 agents × 5,000 rounds (fewer rounds than `botho_fee_model.py` because the
 cluster-wealth recomputation is expensive).
 
 ![Cluster-based progressive fee model](../gini_10yr/gini_cluster_model.png)
