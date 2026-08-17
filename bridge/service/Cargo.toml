@@ -93,7 +93,7 @@ bs58 = { workspace = true }
 bincode = { workspace = true }
 
 # Proof-of-reserves HTTP API (#825; same axum line as the metrics-daemon)
-axum = { version = "0.7", features = ["json"] }
+axum = { version = "0.8", features = ["json"] }
 
 # Solana wBTH transport (#857): a lightweight raw JSON-RPC client
 # (reqwest) plus a self-contained legacy-message/transaction assembler.
