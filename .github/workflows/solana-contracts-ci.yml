@@ -2,7 +2,7 @@ name: Solana Contracts CI
 
 # Builds and tests the wBTH Anchor program (contracts/solana) on every PR that
 # can affect the Solana side or the Rust minter whose instruction-data /
-# account-meta / seed / Bridge-layout assumptions the ts-mocha suite pins
+# account-meta / seed / Bridge-layout assumptions the mocha suite pins
 # (#883, orphaned by the #872 partial close). The hardened mint-authority
 # program (#850) previously had NO CI proving it even compiles as an SBF
 # program, and tests/wbth.ts (#850) was never executed anywhere — this runs
@@ -18,7 +18,7 @@ on:
     paths:
       - 'contracts/solana/**'
       # The Rust minter whose (discriminator, account-meta order, seeds,
-      # Bridge mint offset) assumptions the ts-mocha suite validates against a
+      # Bridge mint offset) assumptions the mocha suite validates against a
       # built program: changes here should re-run the Anchor suite.
       - 'bridge/service/src/mint/solana.rs'
       - '.github/workflows/solana-contracts-ci.yml'
@@ -146,8 +146,10 @@ jobs:
       - name: Assert Cargo.lock unchanged by build
         run: git diff --exit-code -- Cargo.lock
 
-      # Spawns solana-test-validator and runs the ts-mocha suite (via the
-      # npm-consistent `npx ts-mocha` [scripts] test line in Anchor.toml). The
+      # Spawns solana-test-validator and runs the mocha suite (via the
+      # npm-consistent `npx mocha --import=tsx` [scripts] test line in
+      # Anchor.toml — tsx, not ts-mocha/ts-node, since TypeScript 7 dropped the
+      # JavaScript compiler API ts-node needs, #1203). The
       # suite's successful bridge_mint proves the account-meta order the Rust
       # minter (bridge/service/src/mint/solana.rs) builds is accepted by the
       # built program.
