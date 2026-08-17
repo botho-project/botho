@@ -1,5 +1,5 @@
 #!/bin/bash
-# Convenient fuzzing script for Cadence/Botho
+# Convenient fuzzing script for Botho
 # Usage: ./scripts/fuzz.sh [command] [target] [options]
 
 set -e
@@ -31,7 +31,7 @@ DURATION_OVERNIGHT=28800 # 8 hours
 
 usage() {
     cat <<EOF
-Fuzzing helper for Cadence
+Fuzzing helper for Botho
 
 Usage: $0 <command> [target] [options]
 

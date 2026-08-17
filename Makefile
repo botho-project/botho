@@ -1,4 +1,4 @@
-# Cadence/Botho Makefile
+# Botho Makefile
 # Convenient aliases for common development tasks
 
 .PHONY: build test clean fuzz-% fuzz-quick fuzz-overnight fuzz-parallel fuzz-status fuzz-stop fuzz-coverage
