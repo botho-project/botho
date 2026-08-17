@@ -56,10 +56,17 @@ routes = [{ pattern = "baas.botho.io", custom_domain = true }]
 [triggers]
 crons = ["*/15 * * * *"]
 
-# D1 — the user<->node mapping (#458 §3 step 4). Apply schema.sql before first
-# use. The `database_id` below is a PLACEHOLDER: replace it with the real id from
-# `wrangler d1 create botho-baas` (the id is an account-scoped uuid, not a
-# secret, but is environment-specific so it is left blank here).
+# D1 — the user<->node mapping (#458 §3 step 4). NOT a placeholder: the
+# `database_id` below is the LIVE, deployed id for the `botho-baas` database
+# (created + wired 2026-07-07 per #721; the baas.botho.io worker is bound to it
+# today, schema.sql already applied) — do not replace or rotate it. Repointing
+# this at a freshly created database silently breaks node lookup/status/portal
+# for every existing subscriber, with no error at deploy time. Like
+# NODE_AMI_ID/NODE_SECURITY_GROUP_ID below, the id is a non-secret,
+# account-scoped identifier, safe to commit. A future distinct environment
+# needing its own D1 database should mint a new id via
+# `wrangler d1 create botho-baas` for that environment rather than editing this
+# one.
 [[d1_databases]]
 binding = "DB"
 database_name = "botho-baas"
