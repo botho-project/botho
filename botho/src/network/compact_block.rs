@@ -105,6 +105,16 @@ pub enum ReconstructionResult {
     },
 }
 
+/// Measure the bincode-serialized size of a value without allocating a buffer.
+///
+/// Returns `fallback` if the value cannot be measured (not possible for the
+/// plain data structs used here, but avoids panicking in a size heuristic).
+fn serialized_size_or<T: Serialize>(value: &T, fallback: usize) -> usize {
+    bincode::serialized_size(value)
+        .map(|size| size as usize)
+        .unwrap_or(fallback)
+}
+
 /// Compute a 6-byte short ID for a transaction.
 ///
 /// Uses SipHash-2-4 with keys derived from the transaction hash and block
@@ -255,17 +265,63 @@ impl CompactBlock {
     }
 
     /// Estimate the serialized size of this compact block in bytes.
+    ///
+    /// The estimate is used for logging and relay heuristics, not as a
+    /// wire-protocol contract. It is derived from the *current* bincode
+    /// encoding of each component rather than from hand-tuned constants, so it
+    /// stays accurate as `BlockHeader` / `MintingTx` / `LotteryOutput` gain
+    /// fields.
+    ///
+    /// This matters: the previous flat "`MintingTx` is ~300 bytes" budget
+    /// predated the ML-KEM-768 hybrid stealth envelope (issue #958), whose
+    /// 1,088-byte `kem_ciphertext` makes a real coinbase ~1,300 bytes. The
+    /// estimate also omitted `lottery_outputs` / `lottery_summary` entirely and
+    /// the 8-byte bincode length prefix each `Vec` carries, so a 10-tx compact
+    /// block was estimated at 568 bytes against an actual 1,609 (issue #1187).
+    ///
+    /// The `*_FALLBACK` constants below are only reached if bincode fails to
+    /// measure a component (which cannot happen for these plain data structs);
+    /// they are order-of-magnitude backstops, not the primary estimate.
     pub fn estimated_size(&self) -> usize {
-        // Header: ~200 bytes
-        // MintingTx: ~300 bytes
-        // Nonce: 8 bytes
-        // Short IDs: 6 bytes each
-        // Prefilled: variable
-        let base_size = 200 + 300 + 8;
-        let short_ids_size = self.short_ids.len() * 6;
-        let prefilled_size: usize = self.prefilled_txs.iter().map(|_| 2 + 500).sum(); // estimate
+        /// bincode encodes every `Vec` length as a fixed-width u64.
+        const VEC_LEN_PREFIX: usize = 8;
+        /// `nonce: u64`
+        const NONCE_SIZE: usize = 8;
+        /// `BlockHeader`: 9 fixed-width fields.
+        const HEADER_FALLBACK: usize = 164;
+        /// `MintingTx`: fixed fields plus a 1,088-byte ML-KEM ciphertext.
+        const MINTING_TX_FALLBACK: usize = 1_300;
+        /// `BlockLotterySummary`: 3 × u64 + a 32-byte seed.
+        const LOTTERY_SUMMARY_FALLBACK: usize = 56;
+        /// `LotteryOutput`: fixed fields plus an optional ML-KEM ciphertext.
+        const LOTTERY_OUTPUT_FALLBACK: usize = 1_216;
+        /// A prefilled `Transaction` (highly variable: simple vs. ring spend).
+        const PREFILLED_TX_FALLBACK: usize = 500;
 
-        base_size + short_ids_size + prefilled_size
+        let header_size = serialized_size_or(&self.header, HEADER_FALLBACK);
+        let minting_tx_size = serialized_size_or(&self.minting_tx, MINTING_TX_FALLBACK);
+        let lottery_summary_size =
+            serialized_size_or(&self.lottery_summary, LOTTERY_SUMMARY_FALLBACK);
+
+        // Vec fields: bincode charges a length prefix even when empty.
+        let short_ids_size = VEC_LEN_PREFIX + self.short_ids.len() * std::mem::size_of::<ShortId>();
+        let lottery_outputs_size = serialized_size_or(
+            &self.lottery_outputs,
+            VEC_LEN_PREFIX + self.lottery_outputs.len() * LOTTERY_OUTPUT_FALLBACK,
+        );
+        let prefilled_size = serialized_size_or(
+            &self.prefilled_txs,
+            VEC_LEN_PREFIX
+                + self.prefilled_txs.len() * (std::mem::size_of::<u16>() + PREFILLED_TX_FALLBACK),
+        );
+
+        header_size
+            + minting_tx_size
+            + NONCE_SIZE
+            + short_ids_size
+            + prefilled_size
+            + lottery_outputs_size
+            + lottery_summary_size
     }
 }
 
