@@ -447,8 +447,6 @@ The Grafana dashboard visualizes metrics from the Prometheus endpoint exposed by
 - Consensus round performance
 - Alert rules for critical conditions
 
-![Botho Grafana Dashboard](../infra/grafana/screenshots/dashboard-overview.png)
-
 ### Quick Setup
 
 ```bash
