@@ -5,13 +5,35 @@ on:
     branches: [main]
     paths:
       - 'whitepaper/**'
+      - 'web/packages/web-wallet/public/botho-whitepaper.pdf'
   pull_request:
     branches: [main]
     paths:
       - 'whitepaper/**'
+      - 'web/packages/web-wallet/public/botho-whitepaper.pdf'
   workflow_dispatch:
 
 jobs:
+  web-copy-sync:
+    # The landing page serves web/packages/web-wallet/public/botho-whitepaper.pdf.
+    # It is a manual copy of whitepaper/botho-whitepaper.pdf and has drifted
+    # before (2 months stale on the live site, found 2026-08-17). Fail loudly
+    # whenever the two diverge.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Check web copy matches whitepaper/
+        run: |
+          if ! cmp -s whitepaper/botho-whitepaper.pdf \
+                      web/packages/web-wallet/public/botho-whitepaper.pdf; then
+            echo "::error::web/packages/web-wallet/public/botho-whitepaper.pdf is out of sync with whitepaper/botho-whitepaper.pdf."
+            echo "Fix: cp whitepaper/botho-whitepaper.pdf web/packages/web-wallet/public/botho-whitepaper.pdf"
+            exit 1
+          fi
+          echo "Web copy is in sync."
+
   build:
     runs-on: ubuntu-latest
 
