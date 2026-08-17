@@ -55,7 +55,7 @@ We consider security research conducted in good faith to be authorized. We will 
 
 ### Recognition
 
-We maintain a [HALL_OF_FAME.md](./HALL_OF_FAME.md) to recognize security researchers who help improve Botho. With your permission, we'll add your name after the vulnerability is resolved.
+We publicly recognize security researchers who help improve Botho. With your permission, we'll credit you by name once the vulnerability is resolved and the fix is released.
 
 ### Bug Bounty
 
