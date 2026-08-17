@@ -147,13 +147,13 @@ This ensures fees stay low during normal operation while providing strong conges
 
 Botho implements a novel **provenance-based progressive fee system** that taxes wealth concentration without enabling Sybil attacks.
 
-![Progressive Fee System](../images/cluster-tax/system_overview.png)
+![Progressive Fee System](../../cluster-tax/docs/figures/system_overview.png)
 
 **The Problem**: Traditional wealth taxes fail in cryptocurrency because users can split holdings across unlimited addresses.
 
 **The Solution**: Tax based on coin *ancestry* (source_wealth), not account identity. Splitting doesn't help because provenance tags persist.
 
-![Split Resistance](../images/cluster-tax/split_resistance.png)
+![Split Resistance](../../cluster-tax/docs/figures/split_resistance.png)
 
 #### How It Works
 
@@ -162,7 +162,7 @@ Botho implements a novel **provenance-based progressive fee system** that taxes 
 3. **Blending**: Combining UTXOs creates a value-weighted average source_wealth
 4. **Progressive Multiplier**: The cluster factor rises with source_wealth along a sigmoid in log-wealth
 
-![Fee Curves](../images/cluster-tax/fee_curves_comparison.png)
+![Fee Curves](../../cluster-tax/docs/figures/fee_curves_comparison.png)
 
 #### Fee Parameters
 
@@ -186,7 +186,7 @@ This means a wash trader executing 100 rapid self-transfers gets 0% decay (all o
 
 #### Simulation Results
 
-![Gini Reduction](../images/cluster-tax/gini_reduction_comparison.png)
+![Gini Reduction](../../cluster-tax/docs/figures/gini_reduction_comparison.png)
 
 The deployed log-domain cluster-factor curve was calibrated against agent-based simulation sweeps (see `experiments/ANALYSIS.md` and [Cluster-Tilted Redistribution](../design/cluster-tilted-redistribution.md)); the full mechanism (progressive fees + tilted lottery + emission routing + demurrage) passes its Gini-reduction criterion with a 4–11x margin.
 
@@ -200,7 +200,7 @@ Splitting coins across addresses doesn't reduce fees because:
 
 #### Natural Decay Through Commerce
 
-![Provenance Decay](../images/cluster-tax/provenance_decay.png)
+![Provenance Decay](../../cluster-tax/docs/figures/provenance_decay.png)
 
 Tags decay through legitimate commerce:
 

@@ -92,6 +92,14 @@ All figures are in `docs/figures/` and can be regenerated with:
 .venv/bin/python scripts/generate_figures.py
 ```
 
+`cluster-tax/docs/figures/` is the **single canonical copy** of these PNGs —
+`scripts/generate_figures.py` writes only here (`OUTPUT_DIR = "docs/figures"`).
+The repo-level concept docs (`docs/concepts/progressive-fees.md`,
+`docs/concepts/tokenomics.md`, `docs/concepts/privacy.md`) embed these same files
+by relative path rather than keeping their own copies, so regenerating the
+figures updates every consumer at once. Do not re-introduce a second copy under
+`docs/images/` — it has no regeneration path and will silently go stale.
+
 | Figure | Description |
 |--------|-------------|
 | `system_overview.png` | High-level system diagram |
