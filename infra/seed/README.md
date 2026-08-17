@@ -27,6 +27,7 @@ infra/seed/
 ├── deploy-botho.sh           # Build + deploy node binary to host
 ├── deploy-web.sh             # Deploy web files to server
 ├── seed-nginx.conf           # Nginx configuration
+├── regional-rpc-nginx.conf.tmpl # Regional relay RPC ingress (TLS, no status page)
 └── web/
     ├── index.html            # Main status page
     ├── css/
@@ -37,7 +38,7 @@ infra/seed/
 
 ## Testnet Reset & Multi-Seed Bootstrap
 
-For the coordinated reset onto current `main` (protocol 4.0.0), the
+For the coordinated reset onto current `main` (protocol 6.0.0), the
 genesis/network-parameter reconciliation table, single-seed vs multi-seed
 quorum config, the regional-seed scaffolding, and the operator deploy steps,
 see **[`TESTNET_RESET.md`](./TESTNET_RESET.md)**.

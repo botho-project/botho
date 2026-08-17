@@ -87,13 +87,6 @@ Cargo.lock
 __pycache__/
 *.pyc
 
-# css files (should not be committed)
-*.css
-# except Tailwind source files
-!web/packages/ui/src/styles/theme.css
-# except static CSS for faucet web UI
-!infra/faucet/web/css/style.css
-
 # build automation tmp
 .tmp
 **/charts/*.tgz
@@ -104,6 +97,8 @@ go_build_artifacts/
 
 .env
 *.private
+# Cloudflare wrangler local state at repo root (web/.gitignore covers only web/)
+/.wrangler/
 # >>> loom-managed (do not edit) >>>
 # Loom runtime state (don't commit these)
 .loom-in-use

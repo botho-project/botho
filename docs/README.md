@@ -155,15 +155,23 @@ docs/
 │   ├── monetary-policy.md
 │   ├── progressive-fees.md
 │   ├── security.md
-│   └── comparison.md
+│   ├── comparison.md
+│   ├── bridge.md
+│   └── pq-migration.md     # (deprecated)
 │
 ├── operations/             # Running nodes (how)
 │   ├── configuration.md
 │   ├── deployment.md
 │   ├── monitoring.md
 │   ├── backup.md
+│   ├── seed-node-backup.md
 │   ├── disaster-recovery.md
 │   ├── troubleshooting.md
+│   ├── memory-budget.md
+│   ├── phase2_performance.md
+│   ├── protocol-obfuscation.md
+│   ├── reproducible-builds.md
+│   ├── self-hosted-operator-dashboard.md
 │   └── runbooks/
 │
 ├── architecture/           # Component deep-dives

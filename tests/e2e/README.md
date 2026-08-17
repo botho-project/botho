@@ -13,7 +13,7 @@ This directory contains comprehensive end-to-end tests for the Botho consensus s
 | `network_integration.rs` | P2P networking | Peer discovery, message routing |
 | `ledger_consistency_integration.rs` | Ledger state consistency | UTXO tracking, chain state |
 
-### Extended Tests (in `tests/e2e/`)
+### Extended Tests (also in `botho/tests/`)
 
 | Test File | Description | Trigger |
 |-----------|-------------|---------|

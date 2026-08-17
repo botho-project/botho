@@ -9,6 +9,8 @@ This section covers running, maintaining, and operating Botho nodes.
 | [Configuration](configuration.md) | Complete configuration reference |
 | [Deployment](deployment.md) | Production deployment (systemd, Docker) |
 | [Reproducible Builds](reproducible-builds.md) | Verify binary integrity |
+| [Protocol Obfuscation](protocol-obfuscation.md) | Pluggable transports for DPI resistance |
+| [Self-Hosted Operator Dashboard](self-hosted-operator-dashboard.md) | Build, verify, and self-host the `/operator` dashboard |
 
 ## Monitoring & Performance
 
@@ -37,6 +39,8 @@ Emergency response procedures:
 | [Database Corruption](runbooks/database-corruption.md) | LMDB corruption | High |
 | [Key Compromise](runbooks/key-compromise.md) | Suspected key leak | Critical |
 | [Network Partition](runbooks/network-partition.md) | Network isolation | High |
+| [Quorum Edit Recovery](runbooks/quorum-edit-recovery.md) | Liveness stall after an operator-signed quorum edit; key rotation/revocation | High |
+| [Bridge Order Engine Recovery](runbooks/bridge-order-engine-recovery.md) | Bridge service outages, stuck orders, peg drift, signer/key incidents | High |
 
 ## Related
 

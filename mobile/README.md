@@ -7,6 +7,8 @@ Mobile wallet for Botho cryptocurrency with post-quantum cryptography support.
 ```
 mobile/
 ├── FRAMEWORK_DECISION.md    # Framework selection rationale
+├── MOBILE_BACKUP_DESIGN.md  # Wallet backup/restore design
+├── NATIVE_INTEGRATION.md    # Native module integration notes
 ├── rust-bridge/             # Rust FFI crate (UniFFI bindings)
 │   ├── Cargo.toml
 │   ├── build.rs
@@ -16,10 +18,8 @@ mobile/
 └── app/                     # React Native app (Expo)
     ├── app/                 # Expo Router screens
     ├── src/
-    │   ├── components/      # Reusable UI components
-    │   ├── hooks/           # Custom React hooks
+    │   ├── config/          # Network identity / trust config
     │   ├── native/          # Native module bridges
-    │   ├── screens/         # Screen components
     │   ├── store/           # Zustand state management
     │   └── types/           # TypeScript types
     ├── ios/                 # iOS native code (after prebuild)
