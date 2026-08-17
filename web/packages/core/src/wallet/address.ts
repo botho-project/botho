@@ -30,7 +30,7 @@ import { hmac } from '@noble/hashes/hmac.js'
 import { sha512 } from '@noble/hashes/sha2.js'
 import { blake2b } from '@noble/hashes/blake2.js'
 import { base58 } from '@scure/base'
-import { ristretto255 } from '@noble/curves/ed25519'
+import { ristretto255 } from '@noble/curves/ed25519.js'
 
 const encoder = new TextEncoder()
 
