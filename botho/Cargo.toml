@@ -166,7 +166,7 @@ dashmap = "6"
 parking_lot = "0.12"
 
 # DNS seed discovery
-hickory-resolver = { version = "0.25", features = ["tokio", "system-config"] }
+hickory-resolver = { version = "0.26", features = ["tokio", "system-config"] }
 
 # WebRTC transport for NAT traversal
 webrtc = { workspace = true }
