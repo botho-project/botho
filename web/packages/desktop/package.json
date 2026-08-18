@@ -16,9 +16,9 @@
     "@botho/features": "workspace:*",
     "@botho/ui": "workspace:*",
     "@tauri-apps/api": "^2.11.1",
-    "@xyflow/react": "^12.11.2",
+    "@xyflow/react": "^12.11.3",
     "lucide-react": "^0.511.0",
-    "motion": "^13.0.0",
+    "motion": "^13.1.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.2"
