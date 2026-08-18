@@ -100,7 +100,7 @@ All subaddresses derive from the same mnemonic but are cryptographically unlinka
 
 Botho implements a novel **provenance-based progressive fee** system designed to reduce wealth concentration without sacrificing privacy or enabling Sybil attacks.
 
-![Whale vs Poor Fees](../images/cluster-tax/whale_vs_poor.png)
+![Whale vs Poor Fees](../../cluster-tax/docs/figures/whale_vs_poor.png)
 
 ### How It Works
 

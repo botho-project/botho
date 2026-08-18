@@ -177,7 +177,6 @@ docs/
 ├── architecture/           # Component deep-dives
 ├── benchmarks/             # Performance benchmarks
 ├── design/                 # Proposals and roadmaps
-├── images/                 # Documentation images
 ├── primer/                 # "Botho from the Basics" primer
 ├── research/               # Analysis and comparisons
 ├── specification/          # Formal protocol spec
