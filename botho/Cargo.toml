@@ -97,7 +97,7 @@ ctrlc = "3"
 num_cpus = "1"
 
 # Storage
-heed = "0.20"
+heed = "0.22"
 bincode = "1"
 zstd = "0.13"
 
