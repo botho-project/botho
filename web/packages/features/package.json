@@ -29,7 +29,7 @@
     "@botho/ui": "workspace:*",
     "@noble/curves": "^2.3.0",
     "@noble/hashes": "^2.3.0",
-    "lucide-react": "^0.562.0",
+    "lucide-react": "^1.31.0",
     "motion": "^13.0.0"
   },
   "devDependencies": {
