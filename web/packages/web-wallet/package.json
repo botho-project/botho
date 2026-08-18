@@ -23,7 +23,7 @@
     "@botho/wasm-signer": "workspace:*",
     "i18next": "^26.3.6",
     "lucide-react": "^0.562.0",
-    "motion": "^13.0.0",
+    "motion": "^13.1.0",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
@@ -42,6 +42,6 @@
     "vite": "^7.2.4",
     "vite-plugin-pwa": "^1.3.0",
     "workbox-window": "^7.4.1",
-    "wrangler": "^4.120.0"
+    "wrangler": "^4.123.0"
   }
 }
