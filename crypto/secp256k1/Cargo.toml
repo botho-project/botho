@@ -14,7 +14,7 @@ default = ["std"]
 std = ["k256/std"]
 
 [dependencies]
-k256 = { version = "0.13", default-features = false, features = ["ecdsa", "schnorr", "alloc"] }
+k256 = { version = "0.14", default-features = false, features = ["ecdsa", "schnorr", "alloc"] }
 sha3 = { workspace = true }
 sha2 = { workspace = true }
 hmac = { workspace = true }

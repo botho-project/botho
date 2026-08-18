@@ -29,7 +29,7 @@ use bip39::{Language, Mnemonic, Seed};
 use hmac::{Hmac, Mac};
 use k256::{
     ecdsa::{RecoveryId, Signature as K256Signature, SigningKey},
-    elliptic_curve::bigint::{Encoding, Limb},
+    elliptic_curve::bigint::Limb,
     SecretKey, U256,
 };
 use sha2::Sha512;
@@ -140,7 +140,7 @@ impl Secp256k1Keypair {
     /// Get the public key as uncompressed bytes (65 bytes: 0x04 || x || y).
     pub fn public_key_uncompressed(&self) -> [u8; 65] {
         let verifying_key = self.signing_key.verifying_key();
-        let point = verifying_key.to_encoded_point(false);
+        let point = verifying_key.to_sec1_point(false);
         let mut result = [0u8; 65];
         result.copy_from_slice(point.as_bytes());
         result
@@ -149,7 +149,7 @@ impl Secp256k1Keypair {
     /// Get the public key as compressed bytes (33 bytes: 0x02/0x03 || x).
     pub fn public_key_compressed(&self) -> [u8; 33] {
         let verifying_key = self.signing_key.verifying_key();
-        let point = verifying_key.to_encoded_point(true);
+        let point = verifying_key.to_sec1_point(true);
         let mut result = [0u8; 33];
         result.copy_from_slice(point.as_bytes());
         result
@@ -197,10 +197,10 @@ impl Secp256k1Keypair {
     /// Returns a 65-byte signature: r (32) || s (32) || v (1)
     /// where v is the recovery ID + 27.
     pub fn sign_hash(&self, hash: &[u8; 32]) -> [u8; 65] {
-        let (signature, recovery_id) = self
-            .signing_key
-            .sign_prehash_recoverable(hash)
-            .expect("signing should not fail with valid key");
+        // `sign_prehash_recoverable` is infallible under ecdsa 0.17 (k256 0.14):
+        // RFC 6979 deterministic signing over an already-valid key cannot fail,
+        // so it returns the tuple directly rather than a `Result`.
+        let (signature, recovery_id) = self.signing_key.sign_prehash_recoverable(hash);
 
         let mut result = [0u8; 65];
         result[..64].copy_from_slice(&signature.to_bytes());
@@ -271,7 +271,7 @@ fn derive_child(
         let secret = SecretKey::from_bytes(parent_key.into())
             .map_err(|_| "Invalid parent key".to_string())?;
         let signing = SigningKey::from(secret);
-        let pubkey = signing.verifying_key().to_encoded_point(true);
+        let pubkey = signing.verifying_key().to_sec1_point(true);
         mac.update(pubkey.as_bytes());
     }
 
@@ -290,14 +290,14 @@ fn derive_child(
     let n = U256::from_be_hex("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141");
 
     // Add and reduce mod n
-    let (sum, overflow) = parent_u256.adc(&derived_u256, Limb::ZERO);
+    let (sum, overflow) = parent_u256.carrying_add(&derived_u256, Limb::ZERO);
     let new_key_u256 = if overflow.0 != 0 || sum >= n {
         sum.wrapping_sub(&n)
     } else {
         sum
     };
 
-    let new_key: [u8; 32] = new_key_u256.to_be_bytes();
+    let new_key: [u8; 32] = new_key_u256.to_be_bytes().into();
 
     let mut new_chain = [0u8; 32];
     new_chain.copy_from_slice(&result[32..]);
@@ -322,7 +322,7 @@ pub fn recover_public_key(hash: &[u8; 32], signature: &[u8; 65]) -> Option<[u8; 
     let sig = K256Signature::from_slice(&r_s).ok()?;
     let verifying_key = VerifyingKey::recover_from_prehash(hash, &sig, recovery_id).ok()?;
 
-    let point = verifying_key.to_encoded_point(false);
+    let point = verifying_key.to_sec1_point(false);
     let mut result = [0u8; 65];
     result.copy_from_slice(point.as_bytes());
     Some(result)
