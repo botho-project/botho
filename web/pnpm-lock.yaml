@@ -70,8 +70,8 @@ importers:
   packages/core:
     dependencies:
       '@noble/curves':
-        specifier: ^1.8.1
-        version: 1.9.7
+        specifier: ^2.3.0
+        version: 2.3.0
       '@noble/hashes':
         specifier: ^2.3.0
         version: 2.3.0
@@ -159,8 +159,8 @@ importers:
         specifier: workspace:*
         version: link:../ui
       '@noble/curves':
-        specifier: ^1.8.1
-        version: 1.9.7
+        specifier: ^2.3.0
+        version: 2.3.0
       '@noble/hashes':
         specifier: ^2.3.0
         version: 2.3.0
