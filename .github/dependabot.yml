@@ -99,10 +99,45 @@ updates:
       # the app is on SDK 57 and mobile-ci.yml gates them (#1173) —
       # `npx expo install --fix` remains the supported way to take an SDK
       # upgrade when one of those majors goes red.
+      #
+      # The minor/patch ignores below exist for the same lockstep reason, one
+      # level down. mobile-ci.yml's final step, `npx expo-doctor`, checks every
+      # package against the *exact* version set the installed Expo SDK expects
+      # (Expo's own compatibility table — NOT the semver ranges in
+      # package.json). These three are pinned exactly or loosely-tilde'd in
+      # mobile/app/package.json, so Dependabot is free to widen them past SDK
+      # 57's expected set, and every such bump is guaranteed-red: PR #1191
+      # (react 19.2.3->19.2.8, react-native-safe-area-context 5.7.0->5.8.1,
+      # react-native-screens 4.26.2->4.27.0) passed typecheck + jest and still
+      # failed expo-doctor on exactly these three (#1205). expo / expo-* need
+      # no entry — they are tilde-pinned to ~57.0.x, which already confines
+      # Dependabot to patch bumps inside the current SDK.
+      #
+      # expo-doctor fails in BOTH directions — ahead of the expected set (the
+      # case above) and behind it, which is what happens when Expo ships new
+      # SDK-57 patches and nothing bumps our pins (#1220). So these ignores
+      # trade "never red from a bot bump" for "must be moved by hand".
+      #
+      # REVISIT ON THE NEXT EXPO SDK BUMP: these versions are not frozen
+      # forever, they are owned by `npx expo install --fix` as part of the SDK
+      # migration. When mobile/app leaves SDK 57 — or when expo-doctor reports
+      # any of these three as *behind* the expected set — run that command and
+      # re-pin, rather than deleting the ignore and letting Dependabot guess.
       - dependency-name: "react"
-        update-types: ["version-update:semver-major"]
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
       - dependency-name: "react-dom"
         update-types: ["version-update:semver-major"]
+      - dependency-name: "react-native-safe-area-context"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
+      - dependency-name: "react-native-screens"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
     groups:
       mobile-minor-patch:
         patterns: ["*"]
