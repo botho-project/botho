@@ -13,7 +13,7 @@
   "dependencies": {
     "@botho/core": "workspace:*",
     "@botho/wasm-signer": "workspace:*",
-    "@metamask/snaps-sdk": "^11.2.0",
+    "@metamask/snaps-sdk": "^12.0.0",
     "@scure/bip39": "^2.3.0"
   },
   "devDependencies": {
