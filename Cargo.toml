@@ -192,7 +192,7 @@ x509-cert = { version = "0.2", default-features = false }
 x509-signature = "0.5"
 yare = "2"
 zeroize = { version = "1", default-features = false }
-webrtc = "0.14"
+webrtc = "0.20"
 
 bth-account-keys = { path = "account-keys", default-features = false }
 bth-account-keys-types = { path = "account-keys/types" }
