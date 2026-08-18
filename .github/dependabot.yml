@@ -113,10 +113,16 @@ updates:
       # no entry — they are tilde-pinned to ~57.0.x, which already confines
       # Dependabot to patch bumps inside the current SDK.
       #
+      # expo-doctor fails in BOTH directions — ahead of the expected set (the
+      # case above) and behind it, which is what happens when Expo ships new
+      # SDK-57 patches and nothing bumps our pins (#1220). So these ignores
+      # trade "never red from a bot bump" for "must be moved by hand".
+      #
       # REVISIT ON THE NEXT EXPO SDK BUMP: these versions are not frozen
       # forever, they are owned by `npx expo install --fix` as part of the SDK
-      # migration. When mobile/app leaves SDK 57, re-run that, re-pin, and
-      # re-check whether each ignore is still needed.
+      # migration. When mobile/app leaves SDK 57 — or when expo-doctor reports
+      # any of these three as *behind* the expected set — run that command and
+      # re-pin, rather than deleting the ignore and letting Dependabot guess.
       - dependency-name: "react"
         update-types:
           - "version-update:semver-major"
