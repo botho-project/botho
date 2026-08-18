@@ -49,7 +49,8 @@ ADRs are numbered sequentially. Check the highest existing number and increment 
 
 Create a new file: `docs/decisions/NNNN-short-title.md`
 
-Example: `docs/decisions/0002-adopt-mlkem-stealth-addresses.md`
+Example (placeholder — substitute the next sequential number from step 1, not
+`9999`): `docs/decisions/9999-example-short-title.md`
 
 ### 3. Use the Template
 
