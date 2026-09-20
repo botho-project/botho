@@ -110,8 +110,12 @@ fi
 
 export BRIDGE_BTH_RPC_URL="${BRIDGE_BTH_RPC_URL:-http://127.0.0.1:27200}"
 
-echo "==> Starting local Botho node (botho-testnet)"
+echo "==> Building local Botho node and testnet harness"
 cd "$REPO_ROOT"
+# cargo run --bin botho-testnet alone does not build the separate node process.
+cargo build --release -p botho --bin botho --bin botho-testnet
+
+echo "==> Starting local Botho node (botho-testnet)"
 # TWO nodes (reserve = node 0). A lone `--nodes 1` node cannot externalize on
 # this harness: the testnet config sets `min_peers = 1`, so the #428
 # participation gate (should_propose_this_round) blocks a peerless node from

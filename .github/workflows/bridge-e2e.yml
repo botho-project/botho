@@ -92,6 +92,9 @@ jobs:
         with:
           key: bridge-e2e-full-loop
 
+      - name: Check local-node build prerequisites
+        run: ./scripts/tests/bridge-local-node-build.sh
+
       - name: Run full-loop e2e
         run: ./scripts/bridge-e2e-full-loop.sh
 
