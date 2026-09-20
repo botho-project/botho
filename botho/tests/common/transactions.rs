@@ -63,9 +63,12 @@ pub fn create_signed_transaction(
     let signing_hash = preliminary_tx.signing_hash();
 
     // Recover the one-time private key for signing
-    let onetime_private = sender_utxo
-        .output
-        .recover_spend_key(sender_wallet.account_key(), subaddress_index)
+    let onetime_private = sender_wallet
+        .recover_output_spend_key(
+            &sender_utxo.output,
+            subaddress_index,
+            sender_utxo.id.output_index,
+        )
         .ok_or("Failed to recover spend key")?;
 
     // Get decoys (excluding our real input)
@@ -171,9 +174,8 @@ pub fn create_multi_input_transaction(
     // Create ring input for each UTXO
     let mut ring_inputs = Vec::new();
     for (utxo, subaddr_idx) in utxos_to_spend {
-        let onetime_private = utxo
-            .output
-            .recover_spend_key(sender_wallet.account_key(), *subaddr_idx)
+        let onetime_private = sender_wallet
+            .recover_output_spend_key(&utxo.output, *subaddr_idx, utxo.id.output_index)
             .ok_or("Failed to recover spend key")?;
 
         let decoys = ledger
@@ -271,9 +273,12 @@ pub fn create_split_payment_transaction(
     let preliminary_tx = Transaction::new_clsag(Vec::new(), outputs.clone(), fee, current_height);
     let signing_hash = preliminary_tx.signing_hash();
 
-    let onetime_private = sender_utxo
-        .output
-        .recover_spend_key(sender_wallet.account_key(), subaddress_index)
+    let onetime_private = sender_wallet
+        .recover_output_spend_key(
+            &sender_utxo.output,
+            subaddress_index,
+            sender_utxo.id.output_index,
+        )
         .ok_or("Failed to recover spend key")?;
 
     let exclude_keys = vec![sender_utxo.output.target_key];

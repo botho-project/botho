@@ -34,7 +34,7 @@ pub fn scan_wallet_utxos(network: &TestNetwork, wallet: &Wallet) -> Vec<(Utxo, u
         if let Ok(block) = ledger.get_block(height) {
             // Check coinbase output
             let coinbase_output = block.minting_tx.to_tx_output();
-            if let Some(subaddr_idx) = coinbase_output.belongs_to(wallet.account_key()) {
+            if let Some(subaddr_idx) = wallet.scan_output(&coinbase_output, 0) {
                 let block_hash = block.hash();
                 let utxo_id = UtxoId::new(block_hash, 0);
                 if let Ok(Some(utxo)) = ledger.get_utxo(&utxo_id) {
@@ -46,7 +46,7 @@ pub fn scan_wallet_utxos(network: &TestNetwork, wallet: &Wallet) -> Vec<(Utxo, u
             for tx in &block.transactions {
                 let tx_hash = tx.hash();
                 for (idx, output) in tx.outputs.iter().enumerate() {
-                    if let Some(subaddr_idx) = output.belongs_to(wallet.account_key()) {
+                    if let Some(subaddr_idx) = wallet.scan_output(output, idx as u32) {
                         let utxo_id = UtxoId::new(tx_hash, idx as u32);
                         if let Ok(Some(utxo)) = ledger.get_utxo(&utxo_id) {
                             owned_utxos.push((utxo, subaddr_idx));
@@ -77,10 +77,7 @@ pub fn scan_wallet_utxos(network: &TestNetwork, wallet: &Wallet) -> Vec<(Utxo, u
     // The owner, however, can derive each UTXO's key image from its one-time
     // private key and drop the ones the ledger has seen spent.
     owned_utxos.retain(|(utxo, subaddr_idx)| {
-        match utxo
-            .output
-            .recover_spend_key(wallet.account_key(), *subaddr_idx)
-        {
+        match wallet.recover_output_spend_key(&utxo.output, *subaddr_idx, utxo.id.output_index) {
             Some(onetime_private) => {
                 let key_image = *KeyImage::from(&onetime_private).as_bytes();
                 // Keep the UTXO only if its key image is NOT spent.
