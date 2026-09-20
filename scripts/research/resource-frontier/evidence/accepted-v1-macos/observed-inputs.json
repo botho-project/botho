@@ -1,0 +1,343 @@
+{
+  "status": "partially_measured_ordinary_v1_not_network_cost",
+  "observations": [
+    {
+      "payments": 0,
+      "apply_cpu_us": 17704,
+      "apply_wall_ns": 21333833,
+      "cpu_us_per_payment": null,
+      "objects": {
+        "block_bytes": 1533,
+        "block_sha256": "1c3df2102dc4442d963d932be1417c0c80e407ebe12e4d7fba3cec161ead077b",
+        "transaction_bytes": []
+      },
+      "storage": {
+        "after_files": {
+          "data.mdb": {
+            "allocated_bytes": 540672,
+            "logical_bytes": 540672
+          },
+          "lock.mdb": {
+            "allocated_bytes": 0,
+            "logical_bytes": 8192
+          }
+        },
+        "after_selected_records": {
+          "encoded_key_value_bytes": 5354,
+          "rows": 4,
+          "rows_sha256": "4f05fd3f3e14ab33cd520342bde4c58d78eb0900e6f0467640390f13ba440217",
+          "scope": "selected_blocks_and_utxos_only"
+        },
+        "before_files": {
+          "data.mdb": {
+            "allocated_bytes": 540672,
+            "logical_bytes": 540672
+          },
+          "lock.mdb": {
+            "allocated_bytes": 0,
+            "logical_bytes": 8192
+          }
+        },
+        "before_selected_records": {
+          "encoded_key_value_bytes": 2542,
+          "rows": 2,
+          "rows_sha256": "e55387dca7ec1762c2c76a8cdc376d068517fd849c36c5c732ef72af618f3729",
+          "scope": "selected_blocks_and_utxos_only"
+        },
+        "selected_block_height": 21,
+        "selected_utxo_ids": [
+          "1b5223bfdf7baec3b7f4db07f4f72af26d6309685e97aa3522669bf7a90e3d4900000000",
+          "a9e48b7c589f9a31a3d808d5b9ec55686acb926decf5273a9ed4ee582be9360a00000000",
+          "b59242d322b1f0924952a623a4ec4924a43d28d683974627d5c71b01976285b900000000"
+        ]
+      }
+    },
+    {
+      "payments": 0,
+      "apply_cpu_us": 21279,
+      "apply_wall_ns": 26198917,
+      "cpu_us_per_payment": null,
+      "objects": {
+        "block_bytes": 1533,
+        "block_sha256": "57bdf0eefe01c948ea84990964d070fa5f91e204ce950c6cd87d36044de298f7",
+        "transaction_bytes": []
+      },
+      "storage": {
+        "after_files": {
+          "data.mdb": {
+            "allocated_bytes": 540672,
+            "logical_bytes": 540672
+          },
+          "lock.mdb": {
+            "allocated_bytes": 0,
+            "logical_bytes": 8192
+          }
+        },
+        "after_selected_records": {
+          "encoded_key_value_bytes": 5354,
+          "rows": 4,
+          "rows_sha256": "fae11eedbd016321b1de056df965c2dbc26c01de6d5cd80cdca409e9194c16a4",
+          "scope": "selected_blocks_and_utxos_only"
+        },
+        "before_files": {
+          "data.mdb": {
+            "allocated_bytes": 540672,
+            "logical_bytes": 524288
+          },
+          "lock.mdb": {
+            "allocated_bytes": 0,
+            "logical_bytes": 8192
+          }
+        },
+        "before_selected_records": {
+          "encoded_key_value_bytes": 2542,
+          "rows": 2,
+          "rows_sha256": "694c18d1edc96a693d4037f38e81b050d371cdd741794149920c40fa943d843b",
+          "scope": "selected_blocks_and_utxos_only"
+        },
+        "selected_block_height": 21,
+        "selected_utxo_ids": [
+          "35d5968c7d3a2a1ce74cd36cc0e45d33f31dd704b85119b89b242496d2c6072b00000000",
+          "7c746605a06de81d25016f815241c53988a7bd0147aec1c6115cda061aa6ea0700000000",
+          "dbcd1180205b020efc52903378fb812787640433c4f296305189713ef3457c6500000000"
+        ]
+      }
+    },
+    {
+      "payments": 1,
+      "apply_cpu_us": 28357,
+      "apply_wall_ns": 32518792,
+      "cpu_us_per_payment": "28357",
+      "objects": {
+        "block_bytes": 4412,
+        "block_sha256": "87e33643e6425674ff4bd8802544bef2ce23759cdde0a44be0239300f2159a83",
+        "transaction_bytes": [
+          2879
+        ]
+      },
+      "storage": {
+        "after_files": {
+          "data.mdb": {
+            "allocated_bytes": 622592,
+            "logical_bytes": 589824
+          },
+          "lock.mdb": {
+            "allocated_bytes": 0,
+            "logical_bytes": 8192
+          }
+        },
+        "after_selected_records": {
+          "encoded_key_value_bytes": 8559,
+          "rows": 6,
+          "rows_sha256": "d08ee4f015782a39b05dcee09d29d776a3481367a3d64bfba36da8f77b2650d3",
+          "scope": "selected_blocks_and_utxos_only"
+        },
+        "before_files": {
+          "data.mdb": {
+            "allocated_bytes": 557056,
+            "logical_bytes": 524288
+          },
+          "lock.mdb": {
+            "allocated_bytes": 0,
+            "logical_bytes": 8192
+          }
+        },
+        "before_selected_records": {
+          "encoded_key_value_bytes": 2542,
+          "rows": 2,
+          "rows_sha256": "65644732cb3ed6c96827b6b1b930635d69c78fa0c0e712f2943944241bc4f397",
+          "scope": "selected_blocks_and_utxos_only"
+        },
+        "selected_block_height": 21,
+        "selected_utxo_ids": [
+          "118e0e23959b4f5db3021a5cd782e05be71c3fee5d8ab2bb6bff6ab15cb680c300000000",
+          "81e7b3ffb76796d1196ebf50a0ba3d7813fcb132e2e291e21fdd6ab30a7b141900000000",
+          "bc4257a7ca662b268830b31f31c68dd724cf1aa2999bbba8dc2302b228aa532300000000",
+          "cf689ebab984551226dfa4d209a040ab1b193b357688671e90f179ed7161dcca00000000",
+          "cf689ebab984551226dfa4d209a040ab1b193b357688671e90f179ed7161dcca01000000"
+        ]
+      }
+    },
+    {
+      "payments": 1,
+      "apply_cpu_us": 26425,
+      "apply_wall_ns": 30897250,
+      "cpu_us_per_payment": "26425",
+      "objects": {
+        "block_bytes": 4412,
+        "block_sha256": "584a12ba4415ee9087bbcea1fc4bdab87ce10b910168a4c5920f1e2efb323e9f",
+        "transaction_bytes": [
+          2879
+        ]
+      },
+      "storage": {
+        "after_files": {
+          "data.mdb": {
+            "allocated_bytes": 606208,
+            "logical_bytes": 557056
+          },
+          "lock.mdb": {
+            "allocated_bytes": 0,
+            "logical_bytes": 8192
+          }
+        },
+        "after_selected_records": {
+          "encoded_key_value_bytes": 8559,
+          "rows": 6,
+          "rows_sha256": "53f626557b12ae7ae86ea8b8ee2025ea64f1750646a4b8d804d65ffa2444ee31",
+          "scope": "selected_blocks_and_utxos_only"
+        },
+        "before_files": {
+          "data.mdb": {
+            "allocated_bytes": 540672,
+            "logical_bytes": 524288
+          },
+          "lock.mdb": {
+            "allocated_bytes": 0,
+            "logical_bytes": 8192
+          }
+        },
+        "before_selected_records": {
+          "encoded_key_value_bytes": 2542,
+          "rows": 2,
+          "rows_sha256": "4a74fc5477177025a24f6a6fcadc9481a68627ea0e941d1ec231d3a1b272fc98",
+          "scope": "selected_blocks_and_utxos_only"
+        },
+        "selected_block_height": 21,
+        "selected_utxo_ids": [
+          "50834338d9607c44c0ceec3dfc5892c7532de460abf80a7d971248a8fbe5eeba00000000",
+          "7ccfa9077b91547b08cfb511105e327cdfa65a150624312fa60f49f1973ae46e00000000",
+          "a155d0a53d124ac6a1ea3a6b76e906222ed1454c6863f4d2dfef567cf9ffa11800000000",
+          "f1460fc62c5176eb9f562a6da67f4d1381c863936695addeab2f026b07e6c7d100000000",
+          "f1460fc62c5176eb9f562a6da67f4d1381c863936695addeab2f026b07e6c7d101000000"
+        ]
+      }
+    },
+    {
+      "payments": 2,
+      "apply_cpu_us": 29137,
+      "apply_wall_ns": 34073750,
+      "cpu_us_per_payment": "14568.5",
+      "objects": {
+        "block_bytes": 7291,
+        "block_sha256": "717dadbfd69c5886c3de88fdd3a5f9317b8fe0fa569da7d557e3fc4e3afd8343",
+        "transaction_bytes": [
+          2879,
+          2879
+        ]
+      },
+      "storage": {
+        "after_files": {
+          "data.mdb": {
+            "allocated_bytes": 606208,
+            "logical_bytes": 573440
+          },
+          "lock.mdb": {
+            "allocated_bytes": 0,
+            "logical_bytes": 8192
+          }
+        },
+        "after_selected_records": {
+          "encoded_key_value_bytes": 11764,
+          "rows": 8,
+          "rows_sha256": "8aaee2a75667166a0895e00804ded4ba1e2bf0d881f278dee6c9e4d9bd25844e",
+          "scope": "selected_blocks_and_utxos_only"
+        },
+        "before_files": {
+          "data.mdb": {
+            "allocated_bytes": 540672,
+            "logical_bytes": 524288
+          },
+          "lock.mdb": {
+            "allocated_bytes": 0,
+            "logical_bytes": 8192
+          }
+        },
+        "before_selected_records": {
+          "encoded_key_value_bytes": 2542,
+          "rows": 2,
+          "rows_sha256": "eabab8c81dc6213db46c4a738d4f5f9632037701a59abab6d4d85017b48678e0",
+          "scope": "selected_blocks_and_utxos_only"
+        },
+        "selected_block_height": 21,
+        "selected_utxo_ids": [
+          "043047662d1b0802bb8c1e608b0d0763fe60bd8bd9c88eea9d1bbcc9a7455a6700000000",
+          "55d1d283176f98cd856aecdeac9cc3584cee218e1bb715bed3e0ef6a70569ad100000000",
+          "9ff6e557b51865afa739a68e642721d75fa7403eb8bfef88a99550c061e1e3bc00000000",
+          "dfccb8d615b3aaa4f8d919c26412b9421ca36966708872a60a59778b59e4cc1d00000000",
+          "dfccb8d615b3aaa4f8d919c26412b9421ca36966708872a60a59778b59e4cc1d01000000",
+          "e461f8d79e527e721023fd80004b2f40c2618ff4598cda1c755cb2e53301706300000000",
+          "e461f8d79e527e721023fd80004b2f40c2618ff4598cda1c755cb2e53301706301000000"
+        ]
+      }
+    },
+    {
+      "payments": 2,
+      "apply_cpu_us": 32387,
+      "apply_wall_ns": 37138000,
+      "cpu_us_per_payment": "16193.5",
+      "objects": {
+        "block_bytes": 7291,
+        "block_sha256": "e7fdb4275ccd8543316e83c48fc95b5e841402eb1bd6d36e148e78b720d8e075",
+        "transaction_bytes": [
+          2879,
+          2879
+        ]
+      },
+      "storage": {
+        "after_files": {
+          "data.mdb": {
+            "allocated_bytes": 606208,
+            "logical_bytes": 589824
+          },
+          "lock.mdb": {
+            "allocated_bytes": 0,
+            "logical_bytes": 8192
+          }
+        },
+        "after_selected_records": {
+          "encoded_key_value_bytes": 11764,
+          "rows": 8,
+          "rows_sha256": "1c8a3a9ad7000d1166bdedb93ba5e3b6d0b1a4621023ec40a34a58cdf5a365e4",
+          "scope": "selected_blocks_and_utxos_only"
+        },
+        "before_files": {
+          "data.mdb": {
+            "allocated_bytes": 540672,
+            "logical_bytes": 540672
+          },
+          "lock.mdb": {
+            "allocated_bytes": 0,
+            "logical_bytes": 8192
+          }
+        },
+        "before_selected_records": {
+          "encoded_key_value_bytes": 2542,
+          "rows": 2,
+          "rows_sha256": "5b0a8e3b288e48ded001b7780e3c3437084201c6e2ef10549d041a3c3ab534a8",
+          "scope": "selected_blocks_and_utxos_only"
+        },
+        "selected_block_height": 21,
+        "selected_utxo_ids": [
+          "5aee2ace5a73a6878c21cb9dd2b78efa298bd8d5c76a5bcb0d33cb1e064fac5700000000",
+          "5aee2ace5a73a6878c21cb9dd2b78efa298bd8d5c76a5bcb0d33cb1e064fac5701000000",
+          "9a960ee3973d389f9b0a1098c32587e00b84280f0eb36bfc1ec442e9c7058d5d00000000",
+          "9a960ee3973d389f9b0a1098c32587e00b84280f0eb36bfc1ec442e9c7058d5d01000000",
+          "cca5bcc81c43fa27e8dd8be04135ffd21d8c0711a0d20aabd8cfd6c19bce885500000000",
+          "e5b0dbedb4b96dfd20646d81e4b3779db30dfc9761557c21eaf86478e7f6889900000000",
+          "e6006fa055e5c7c0ea20ba4000153d79da8c9402b2a1c15bf8d37b88ee3bbf9700000000"
+        ]
+      }
+    }
+  ],
+  "electricity_kwh": null,
+  "full_wire_bytes": null,
+  "ct1_cpu_seconds": null,
+  "fee_recommendation_bth": null,
+  "limits": [
+    "CPU is not energy; wall is not CPU",
+    "Selected records are not the full database",
+    "No throughput or marginal-cost guarantee",
+    "Numeric swaps cannot be detected without trusted collector provenance"
+  ]
+}
