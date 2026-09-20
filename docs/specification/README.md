@@ -28,6 +28,12 @@ authoritative sources are the code and the concept docs.
 | Block timing | Dynamic block timing (3-40s range) | [`botho/src/block.rs`](../../botho/src/block.rs) |
 | Prose documentation | Concept-level descriptions of the current design | [`docs/concepts/`](../concepts/README.md) |
 
+## Inactive research
+
+- [Exact CT demurrage constraints](ct-demurrage-exact-constraints.md): integer
+  construction, Rust differential checker, and R1CS allocation census. This is
+  not an active protocol specification or an accepted ADR.
+
 ## Historical documents
 
 | Version | Status | Date | Description |

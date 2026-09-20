@@ -1,0 +1,14 @@
+[package]
+name = "bth-ct-demurrage-reference"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+description = "Inactive exact-integer CT demurrage constraint research"
+
+[dev-dependencies]
+bth-cluster-tax = { path = "../../../cluster-tax" }
+num-bigint = "0.4"
+curve25519-dalek-v4 = { workspace = true }
+bulletproofs-og = { workspace = true, features = ["std", "yoloproofs"] }
+merlin = { workspace = true, features = ["std"] }
