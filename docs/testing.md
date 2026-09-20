@@ -127,6 +127,10 @@ The workspace PR job also executes eight protocol/privacy integration suites.
 See [protocol integration coverage](protocol-integration-tests.md) for the exact
 command, measured runtimes, environmental requirements, and validation limits.
 
+The workspace PR job also executes six stateful ledger/RPC integration targets.
+See [ledger and RPC execution](ledger-rpc-integration-tests.md) for the command,
+measured runtimes and environment requirements.
+
 ---
 
 ## Test Organization
