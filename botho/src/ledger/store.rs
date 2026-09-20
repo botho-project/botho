@@ -508,6 +508,10 @@ impl Ledger {
         }
         .map_err(|e| LedgerError::Database(format!("Failed to open environment: {}", e)))?;
 
+        // Reject marked experimental/unknown stores before ordinary initialization
+        // writes.
+        super::experimental::require_v1_schema(&env)?;
+
         // Create/open databases
         let mut wtxn = env
             .write_txn()
