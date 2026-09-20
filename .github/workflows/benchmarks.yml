@@ -98,13 +98,13 @@ jobs:
       - name: Run MLSAG benchmarks (quick)
         id: mlsag_quick
         if: ${{ github.event_name == 'pull_request' || github.event.inputs.full_run != 'true' }}
-        run: cargo bench -p bth-crypto-ring-signature -- --quick --noplot
+        run: cargo bench -p bth-crypto-ring-signature --bench ring_signature_benchmarks -- --quick --noplot
         continue-on-error: true
 
       - name: Run MLSAG benchmarks (full)
         id: mlsag_full
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.full_run == 'true' }}
-        run: cargo bench -p bth-crypto-ring-signature -- --noplot
+        run: cargo bench -p bth-crypto-ring-signature --bench ring_signature_benchmarks -- --noplot
 
       - name: Collect benchmark evidence
         if: always()
@@ -234,13 +234,13 @@ jobs:
       - name: Run transaction benchmarks (quick)
         id: transaction_quick
         if: ${{ github.event_name == 'pull_request' || github.event.inputs.full_run != 'true' }}
-        run: cargo bench -p bth-transaction-core -- --quick --noplot
+        run: cargo bench -p bth-transaction-core --bench transaction_benchmarks -- --quick --noplot
         continue-on-error: true
 
       - name: Run transaction benchmarks (full)
         id: transaction_full
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.full_run == 'true' }}
-        run: cargo bench -p bth-transaction-core -- --noplot
+        run: cargo bench -p bth-transaction-core --bench transaction_benchmarks -- --noplot
 
       - name: Collect benchmark evidence
         if: always()

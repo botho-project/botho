@@ -39,3 +39,10 @@ python3 -m unittest discover -s scripts/benchmarks -v
 ```
 
 No cryptographic benchmarks need to be repeated to test evidence handling.
+
+Explicit `--bench` target selection is required when forwarding Criterion CLI
+flags. Hosted run 35538870413 exposed `Unrecognized option: 'quick'` when the
+package-wide command dispatched a libtest harness before Criterion. Crypto and
+transaction steps now name their Criterion targets in both quick and full modes.
+Local `--test` smoke validates target selection without repeating full benchmark
+measurements; retained hosted measurements still require a successful fresh run.
