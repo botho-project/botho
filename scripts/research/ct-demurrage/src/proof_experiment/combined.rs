@@ -1,6 +1,7 @@
-//! Inactive arithmetic composition only: no transaction codec or ownership
-//! proof.
+//! Inactive arithmetic core, with a private synthetic ownership experiment.
+//! Neither is a transaction codec or production verifier.
 use super::*;
+mod ownership;
 
 const MAX_COUNT: usize = 16;
 const DOMAIN_COMBINED: &[u8] = b"botho/inactive/combined-charge-v1";
@@ -286,6 +287,16 @@ fn prove_control(
     bp: &BulletproofGens,
     c: Controls,
 ) -> Result<(Vec<u8>, Metrics), String> {
+    prove_control_with_transcript(s, w, bp, c, s.transcript(c))
+}
+
+fn prove_control_with_transcript(
+    s: &Statement,
+    w: &CombinedWitness,
+    bp: &BulletproofGens,
+    c: Controls,
+    mut t: Transcript,
+) -> Result<(Vec<u8>, Metrics), String> {
     s.audit()?;
     if w.inputs.len() != s.inputs.len()
         || w.outputs.len() != s.outputs.len()
@@ -307,7 +318,6 @@ fn prove_control(
         }
     }
     let gens = s.inputs[0].gens();
-    let mut t = s.transcript(c);
     let mut p = Prover::new(&gens, &mut t);
     let mut amounts = Vec::new();
     let mut charges = Vec::new();
@@ -339,12 +349,21 @@ fn verify_control(
     bp: &BulletproofGens,
     c: Controls,
 ) -> Result<Metrics, String> {
+    verify_control_with_transcript(s, bytes, bp, c, s.transcript(c))
+}
+
+fn verify_control_with_transcript(
+    s: &Statement,
+    bytes: &[u8],
+    bp: &BulletproofGens,
+    c: Controls,
+    mut t: Transcript,
+) -> Result<Metrics, String> {
     s.audit()?;
     if c.group_balance {
         s.group_balance()?;
     }
     let proof = R1CSProof::from_bytes(bytes).map_err(|e| e.to_string())?;
-    let mut t = s.transcript(c);
     let mut v = Verifier::new(&mut t);
     let mut amounts = Vec::new();
     let mut charges = Vec::new();

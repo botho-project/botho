@@ -1,0 +1,50 @@
+{
+  "scope": "Inactive synthetic library composition only; single sample, no transport size/admission/memory/security proof claim",
+  "base_commit": "e7d595bd7fd8720d775d9be47a2642ddbf48b606",
+  "environment": {
+    "cpu": "Apple M3 Ultra",
+    "architecture": "arm64",
+    "macos": "27.0",
+    "rustc": "rustc 1.93.0-nightly (646a3f8c1 2025-12-02)",
+    "profile": "workspace release"
+  },
+  "command": "RUSTC_WRAPPER= CARGO_TARGET_DIR=/tmp/botho-1346-target cargo test --locked --release -p bth-ct-demurrage-reference ownership -- --nocapture --test-threads=1",
+  "source_sha256": {
+    "Cargo.lock": "0163413813517346e5de8b6a55ddbcff426c48e1a59be040dac628774a7434a3",
+    "Cargo.toml": "5ebf46d21ad6ba09c2d7aa4a4f733b473f842a92ac1b94de7aa194396714d95d",
+    "rust-toolchain": "f506172db062e96158404259ac7a857a8422d530837c4fdbd44fe4a0ce15a8f2",
+    "scripts/research/ct-demurrage/Cargo.toml": "69b64520079922027cec8456c1709442c0dae8d39476fb3117ed060afa794627",
+    "scripts/research/ct-demurrage/src/lib.rs": "2187d6e51d476f96bd8bb7830ff6a457130bd590ce59210306c37fc422bf67aa",
+    "scripts/research/ct-demurrage/src/proof_experiment.rs": "c4e3ffa3f8ddf45b6680ad483015c75c8666e70066e92f462b4d6c03796e6585",
+    "scripts/research/ct-demurrage/src/proof_experiment/combined.rs": "f1624b63e8557616d2f0c192380dbe22701147bdb469995973636cf4889423f0",
+    "scripts/research/ct-demurrage/src/proof_experiment/combined/ownership.rs": "328d5d92aac56d01d71ca172baf1b81cf4f483eb165a1b593440780e7542b350",
+    "crypto/ring-signature/src/ring_signature/clsag.rs": "0e598832571a88857e782a1a445a6c0677a9280c85820dcd177d65f18b8ada20",
+    "crypto/ring-signature/src/amount/commitment.rs": "03285e810af06c9ff38fe2c12c2108d2c5f00e162ac29dd49c45cf4d353b441a",
+    "crypto/ring-signature/src/amount/compressed_commitment.rs": "84666080892ff717f468a8d8d33ebf2122a6fdeb8a663c110bb4d5470a0936af",
+    "vendor/bulletproofs-og/src/r1cs/prover.rs": "e38d670c95974e64608ca8d72f136bb4d03c33819356ed4618e504a26937447e",
+    "vendor/bulletproofs-og/src/r1cs/verifier.rs": "bd07ee4bed98e0e1ddce7314e2da77fd8a0e43c1ded552c25acc77c696878396"
+  },
+  "focused_output": "running 4 tests\ntest proof_experiment::combined::ownership::ownership_one_and_sixteen_round_trips ... ownership generator_setup=346.58875ms\nownership inputs=1 ring=20 arithmetic_bytes=1121 clsag_field_bytes=736 prove=213.713792ms verify=19.89025ms\nownership inputs=16 ring=20 arithmetic_bytes=1377 clsag_field_bytes=11776 prove=3.174431542s verify=302.493959ms\nok\ntest proof_experiment::combined::ownership::ownership_public_binding_and_detached_pseudo_rejections ... ok\ntest proof_experiment::combined::ownership::ownership_statement_field_coverage ... ok\ntest proof_experiment::combined::ownership::ownership_two_valid_proofs_require_resigning ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 5.36s\n\n",
+  "focused_output_sha256": "81252082d7fb1e663cc60e258ff6490978aa02125c9f7168b6d62ec73114e4e4",
+  "samples": [
+    {
+      "inputs": 1,
+      "outputs": 1,
+      "ring_size": 20,
+      "arithmetic_proof_bytes": 1121,
+      "clsag_field_bytes": 736,
+      "composed_generation_ms": 213.713792,
+      "composed_verification_ms": 19.89025
+    },
+    {
+      "inputs": 16,
+      "outputs": 16,
+      "ring_size": 20,
+      "arithmetic_proof_bytes": 1377,
+      "clsag_field_bytes": 11776,
+      "composed_generation_ms": 3174.4315420000003,
+      "composed_verification_ms": 302.493959
+    }
+  ],
+  "generator_setup_ms": 346.58875
+}
