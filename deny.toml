@@ -52,12 +52,12 @@ ignore = [
     # monitored there.
 
     # hickory-proto 0.25.2 - node-reachable DNS resolver (libp2p-dns / mdns).
-    # Fix requires hickory >=0.26.1, blocked on the libp2p 0.56 -> 0.57 upgrade
-    # (rust-libp2p master is already on hickory 0.26.1; 0.57 not yet released
-    # as of 2026-07-13). Blast radius capped by the query_dns_seeds() timeout
-    # (#668).
+    # Direct seed discovery uses hickory 0.26; libp2p still resolves 0.25.2.
+    # Removing these exceptions requires the libp2p 0.56 -> 0.57 upgrade
+    # tracked by #813. The seed-discovery timeout does not wrap libp2p
+    # DNS/mdns and cannot preempt synchronous CPU work.
     "RUSTSEC-2026-0119",  # hickory-proto O(n^2) CPU exhaustion on name compression (#813)
-    "RUSTSEC-2026-0118",  # hickory-proto NSEC3 unbounded loop - no fixed version exists; monitor (#813)
+    "RUSTSEC-2026-0118",  # hickory-proto 0.25 NSEC3 unbounded loop; libp2p upgrade pending (#813)
 
     # quick-xml 0.38.4 - desktop-wallet only (tauri/plist), not node-reachable.
     "RUSTSEC-2026-0194",  # quick-xml quadratic duplicate-attribute check (desktop-only)
