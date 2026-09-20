@@ -47,7 +47,7 @@ RUSTC_WRAPPER= CARGO_TARGET_DIR=/tmp/botho-clsag-bench \
   --measurement-time 3 --noplot
 ```
 
-The existing package-wide benchmark workflow naturally discovers this target;
+The benchmark workflow explicitly selects both MLSAG and CLSAG targets;
 its retained evidence identifies MLSAG and CLSAG separately. Compilation success
 or a tolerated failed quick step is not a timing observation. Local recording
 uses the pinned nightly; workflow uses stable and must identify its actual

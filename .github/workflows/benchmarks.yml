@@ -98,13 +98,13 @@ jobs:
       - name: Run MLSAG and CLSAG benchmarks (quick)
         id: mlsag_quick
         if: ${{ github.event_name == 'pull_request' || github.event.inputs.full_run != 'true' }}
-        run: cargo bench -p bth-crypto-ring-signature --bench ring_signature_benchmarks -- --quick --noplot
+        run: cargo bench -p bth-crypto-ring-signature --bench ring_signature_benchmarks --bench clsag_benchmarks -- --quick --noplot
         continue-on-error: true
 
       - name: Run MLSAG and CLSAG benchmarks (full)
         id: mlsag_full
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.full_run == 'true' }}
-        run: cargo bench -p bth-crypto-ring-signature --bench ring_signature_benchmarks -- --noplot
+        run: cargo bench -p bth-crypto-ring-signature --bench ring_signature_benchmarks --bench clsag_benchmarks -- --noplot
 
       - name: Collect benchmark evidence
         if: always()
