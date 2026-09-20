@@ -1,3 +1,4 @@
+pub(super) mod writer;
 use bth_account_keys::{AccountKey, PublicAddress};
 use bth_cluster_tax::{LotteryCandidate, LotteryDrawConfig, TagVector};
 use bth_transaction_types::{ClusterTagVector, Network, TAG_WEIGHT_SCALE};
@@ -392,6 +393,19 @@ fn checked_block_fees(block: &Block) -> Result<u64, LedgerError> {
 }
 
 impl Ledger {
+    fn write_tables(&self) -> writer::WriteTables {
+        writer::WriteTables {
+            blocks_db: self.blocks_db,
+            meta_db: self.meta_db,
+            utxo_db: self.utxo_db,
+            address_index_db: self.address_index_db,
+            key_images_db: self.key_images_db,
+            tx_index_db: self.tx_index_db,
+            cluster_wealth_db: self.cluster_wealth_db,
+            bridge_import_clusters_db: self.bridge_import_clusters_db,
+        }
+    }
+
     /// Open or create a ledger at the given path (defaults to Testnet for
     /// backward compatibility)
     pub fn open(path: &Path) -> Result<Self, LedgerError> {
@@ -1164,214 +1178,19 @@ impl Ledger {
 
         let block_bytes =
             bincode::serialize(block).map_err(|e| LedgerError::Serialization(e.to_string()))?;
-
-        self.blocks_db
-            .put(&mut wtxn, &block.height(), &block_bytes)
-            .map_err(|e| LedgerError::Database(format!("Failed to put block: {}", e)))?;
-
+        self.write_tables().block_effects(
+            &mut wtxn,
+            block,
+            &state,
+            new_lottery_pool,
+            emission,
+            &block_bytes,
+            writer::Representation::Legacy,
+            &mut |tx| self.verify_transaction(tx),
+            &mut || Ok(()),
+        )?;
         let new_hash = block.hash();
         let new_height = block.height();
-        let new_total_mined = state.total_mined + block.minting_tx.reward as u128;
-
-        // Fee accounting. Only the burn share of fees is actually destroyed;
-        // the remainder flows to the redistribution lottery pool (and is paid
-        // back out as lottery UTXOs). `total_fees_burned` therefore tracks the
-        // validated burn amount, NOT the gross fee total — counting the full
-        // fee would overstate destroyed supply 5x and break conservation
-        // (audit cycle 6, M4). The lottery summary's burn amount was verified
-        // against the pool accounting by `validate_block_lottery` above.
-        //
-        // `block_fees` was already validated overflow-free by the fee-sum
-        // overflow guard up front (#599, #663 — mirrors the #340 balance
-        // guard).
-        let actually_burned = block.lottery_summary.amount_burned;
-        let new_total_fees_burned = state.total_fees_burned + actually_burned as u128;
-
-        // Create UTXO from minting reward (coinbase)
-        let coinbase_utxo_id = UtxoId::new(new_hash, 0);
-        let coinbase_utxo = Utxo {
-            id: coinbase_utxo_id,
-            output: block.minting_tx.to_tx_output(),
-            created_at: new_height,
-        };
-        let coinbase_bytes = bincode::serialize(&coinbase_utxo)
-            .map_err(|e| LedgerError::Serialization(e.to_string()))?;
-        self.utxo_db
-            .put(&mut wtxn, &coinbase_utxo_id.to_bytes(), &coinbase_bytes)
-            .map_err(|e| LedgerError::Database(format!("Failed to put coinbase utxo: {}", e)))?;
-        // Add to address index
-        self.add_to_address_index(&mut wtxn, &coinbase_utxo)?;
-        // Update cluster wealth tracking
-        self.update_cluster_wealth_for_output(&mut wtxn, &coinbase_utxo.output)?;
-        debug!("Created coinbase UTXO at height {}", new_height);
-
-        // Verify and process regular transactions
-        for (tx_idx, tx) in block.transactions.iter().enumerate() {
-            // Verify transaction signatures before processing
-            self.verify_transaction(tx)?;
-
-            let tx_hash = tx.hash();
-
-            // Index transaction for fast lookups (exchange integration)
-            self.add_tx_to_index(&mut wtxn, &tx_hash, new_height, tx_idx as u32)?;
-
-            // Process spent inputs - record key images to prevent double-spend
-            for input in tx.inputs.clsag() {
-                self.record_key_image(&mut wtxn, &input.key_image, new_height)?;
-            }
-
-            // Add new UTXOs (outputs)
-            for (idx, output) in tx.outputs.iter().enumerate() {
-                let utxo_id = UtxoId::new(tx_hash, idx as u32);
-                let utxo = Utxo {
-                    id: utxo_id,
-                    output: output.clone(),
-                    created_at: new_height,
-                };
-                let utxo_bytes = bincode::serialize(&utxo)
-                    .map_err(|e| LedgerError::Serialization(e.to_string()))?;
-                self.utxo_db
-                    .put(&mut wtxn, &utxo_id.to_bytes(), &utxo_bytes)
-                    .map_err(|e| LedgerError::Database(format!("Failed to put utxo: {}", e)))?;
-                // Add to address index
-                self.add_to_address_index(&mut wtxn, &utxo)?;
-                // Update cluster wealth tracking
-                self.update_cluster_wealth_for_output(&mut wtxn, output)?;
-                // ADR 0007 (#938): if this output carries this-epoch's
-                // bridge-import tag (an unwrap's minted output), record the
-                // import cluster so the ≥F floor is enforceable at spend time.
-                self.record_bridge_import_clusters_for_output(&mut wtxn, output, new_height)?;
-            }
-        }
-
-        // Mint lottery payout UTXOs.
-        //
-        // Each payout creates a new spendable UTXO for the winner. The stealth
-        // keys, cluster tags, and hybrid ML-KEM ciphertext are taken from the
-        // WINNING UTXO (looked up by its id), not from the proposer-supplied
-        // fields on the LotteryOutput — trusting those fields would let a
-        // proposer redirect payouts to themselves. `validate_block_lottery`
-        // confirms winner eligibility and payout accounting; the
-        // `validate_lottery_output_bindings` check above additionally binds the
-        // committed LotteryOutput's stealth envelope to this same winning UTXO,
-        // so the block's on-chain payout data is trustworthy to scanners.
-        //
-        // Deterministic id scheme: (block_hash, 1 + lottery_index). The
-        // coinbase occupies (block_hash, 0); transaction outputs use the tx
-        // hash (never the block hash), so payout ids cannot collide.
-        for (lottery_idx, lottery_output) in block.lottery_outputs.iter().enumerate() {
-            let winner_id = lottery_output.winner_utxo_id();
-            let winner_bytes = self
-                .utxo_db
-                .get(&wtxn, &winner_id)
-                .map_err(|e| LedgerError::Database(format!("Failed to read winning utxo: {}", e)))?
-                .ok_or_else(|| {
-                    LedgerError::InvalidBlock(format!(
-                        "Lottery winner UTXO {} not found in set",
-                        hex::encode(&winner_id[..8])
-                    ))
-                })?;
-            let winner_utxo: Utxo = bincode::deserialize(winner_bytes)
-                .map_err(|e| LedgerError::Serialization(e.to_string()))?;
-
-            let payout_output = TxOutput {
-                amount: lottery_output.payout,
-                target_key: winner_utxo.output.target_key,
-                public_key: winner_utxo.output.public_key,
-                e_memo: None,
-                cluster_tags: winner_utxo.output.cluster_tags.clone(),
-                // Inherit the winning UTXO's hybrid ML-KEM envelope so the winner
-                // recovers the payout with the exact hybrid derivation (same
-                // shared secret, same output index) they used for the original
-                // UTXO (#958/#973). `None` for a classical winning UTXO. The
-                // binding check above guarantees this equals the committed
-                // `lottery_output.kem_ciphertext`.
-                kem_ciphertext: winner_utxo.output.kem_ciphertext.clone(),
-            };
-
-            let payout_utxo_id = UtxoId::new(new_hash, (lottery_idx as u32) + 1);
-            let payout_utxo = Utxo {
-                id: payout_utxo_id,
-                output: payout_output,
-                created_at: new_height,
-            };
-            let payout_bytes = bincode::serialize(&payout_utxo)
-                .map_err(|e| LedgerError::Serialization(e.to_string()))?;
-            self.utxo_db
-                .put(&mut wtxn, &payout_utxo_id.to_bytes(), &payout_bytes)
-                .map_err(|e| {
-                    LedgerError::Database(format!("Failed to put lottery payout utxo: {}", e))
-                })?;
-            self.add_to_address_index(&mut wtxn, &payout_utxo)?;
-            self.update_cluster_wealth_for_output(&mut wtxn, &payout_utxo.output)?;
-        }
-
-        self.meta_db
-            .put(&mut wtxn, META_HEIGHT, &new_height.to_le_bytes())
-            .map_err(|e| LedgerError::Database(format!("Failed to put height: {}", e)))?;
-        self.meta_db
-            .put(&mut wtxn, META_TIP_HASH, &new_hash)
-            .map_err(|e| LedgerError::Database(format!("Failed to put tip_hash: {}", e)))?;
-        self.meta_db
-            .put(&mut wtxn, META_TOTAL_MINED, &new_total_mined.to_le_bytes())
-            .map_err(|e| LedgerError::Database(format!("Failed to put total_mined: {}", e)))?;
-        self.meta_db
-            .put(
-                &mut wtxn,
-                META_FEES_BURNED,
-                &new_total_fees_burned.to_le_bytes(),
-            )
-            .map_err(|e| LedgerError::Database(format!("Failed to put fees_burned: {}", e)))?;
-        self.meta_db
-            .put(
-                &mut wtxn,
-                META_LOTTERY_POOL,
-                &new_lottery_pool.to_le_bytes(),
-            )
-            .map_err(|e| LedgerError::Database(format!("Failed to put lottery_pool: {}", e)))?;
-
-        // H3 (#558): fold the emission-controller state into the SAME write txn
-        // as the block. These are the difficulty/reward/epoch counters that are
-        // a pure function of the applied block; writing them here (rather than
-        // in a separate `update_emission_state` commit) makes block + emission
-        // state crash-atomic. Mirrors `update_emission_state` exactly — same
-        // keys, same encoding — so a no-crash node persists identical values.
-        if let Some(e) = emission {
-            self.meta_db
-                .put(&mut wtxn, META_DIFFICULTY, &e.difficulty.to_le_bytes())
-                .map_err(|err| {
-                    LedgerError::Database(format!("Failed to put difficulty: {}", err))
-                })?;
-            self.meta_db
-                .put(&mut wtxn, META_TOTAL_TX, &e.total_tx.to_le_bytes())
-                .map_err(|err| LedgerError::Database(format!("Failed to put total_tx: {}", err)))?;
-            self.meta_db
-                .put(&mut wtxn, META_EPOCH_TX, &e.epoch_tx.to_le_bytes())
-                .map_err(|err| LedgerError::Database(format!("Failed to put epoch_tx: {}", err)))?;
-            self.meta_db
-                .put(
-                    &mut wtxn,
-                    META_EPOCH_EMISSION,
-                    &e.epoch_emission.to_le_bytes(),
-                )
-                .map_err(|err| {
-                    LedgerError::Database(format!("Failed to put epoch_emission: {}", err))
-                })?;
-            self.meta_db
-                .put(&mut wtxn, META_EPOCH_BURNS, &e.epoch_burns.to_le_bytes())
-                .map_err(|err| {
-                    LedgerError::Database(format!("Failed to put epoch_burns: {}", err))
-                })?;
-            self.meta_db
-                .put(
-                    &mut wtxn,
-                    META_CURRENT_REWARD,
-                    &e.current_reward.to_le_bytes(),
-                )
-                .map_err(|err| {
-                    LedgerError::Database(format!("Failed to put current_reward: {}", err))
-                })?;
-        }
 
         wtxn.commit()
             .map_err(|e| LedgerError::Database(format!("Failed to commit: {}", e)))?;
@@ -1683,30 +1502,8 @@ impl Ledger {
 
     /// Add a UTXO ID to the address index
     fn add_to_address_index(&self, wtxn: &mut RwTxn, utxo: &Utxo) -> Result<(), LedgerError> {
-        // Index by target_key for UTXO retrieval after stealth detection
-        let target_key = &utxo.output.target_key;
-
-        // Get existing IDs or empty vec
-        let existing = match self.address_index_db.get(wtxn, target_key.as_slice()) {
-            Ok(Some(bytes)) => bytes.to_vec(),
-            Ok(None) => Vec::new(),
-            Err(e) => {
-                return Err(LedgerError::Database(format!(
-                    "Failed to get address index: {}",
-                    e
-                )))
-            }
-        };
-
-        // Append the new UTXO ID
-        let mut ids = existing;
-        ids.extend_from_slice(&utxo.id.to_bytes());
-
-        self.address_index_db
-            .put(wtxn, target_key.as_slice(), &ids)
-            .map_err(|e| LedgerError::Database(format!("Failed to put address index: {}", e)))?;
-
-        Ok(())
+        self.write_tables()
+            .add_to_address_index(wtxn, utxo, &mut || Ok(()))
     }
 
     /// Remove a UTXO ID from the address index
@@ -2266,34 +2063,8 @@ impl Ledger {
         key_image: &[u8; 32],
         height: u64,
     ) -> Result<(), LedgerError> {
-        // Check if already exists.
-        //
-        // As with `verify_transaction`, distinguish a DB failure (node-local,
-        // propagate via `?`) from an actual collision (consensus-invalid). The
-        // previous `if let Ok(Some(..))` swallowed a DB `Err` and fell through to
-        // the `put` below, which would record the key image and let a
-        // double-spend through on a transient read error (fail-open, M7).
-        let existing = self
-            .key_images_db
-            .get(wtxn, key_image.as_slice())
-            .map_err(|e| LedgerError::Database(format!("Failed to get key image: {}", e)))?;
-        if let Some(existing_height_bytes) = existing {
-            let existing_height =
-                u64::from_le_bytes(existing_height_bytes.try_into().unwrap_or([0u8; 8]));
-            warn!(
-                "Key image collision: {} already spent at height {}, trying to spend at height {}",
-                hex::encode(&key_image[0..8]),
-                existing_height,
-                height
-            );
-            return Err(LedgerError::InvalidBlock(
-                "Key image already spent (double-spend)".to_string(),
-            ));
-        }
-
-        self.key_images_db
-            .put(wtxn, key_image.as_slice(), &height.to_le_bytes())
-            .map_err(|e| LedgerError::Database(format!("Failed to put key image: {}", e)))
+        self.write_tables()
+            .record_key_image(wtxn, key_image, height, &mut || Ok(()))
     }
 
     /// Test-only helper: record a key image as spent at the given height in a
@@ -2527,6 +2298,7 @@ impl Ledger {
     // ========================================================================
 
     /// Add a transaction to the index.
+    #[cfg(test)]
     fn add_tx_to_index(
         &self,
         wtxn: &mut RwTxn,
@@ -2534,14 +2306,8 @@ impl Ledger {
         block_height: u64,
         tx_index: u32,
     ) -> Result<(), LedgerError> {
-        // Encode location as 12 bytes: height (8) + tx_index (4)
-        let mut location_bytes = [0u8; 12];
-        location_bytes[0..8].copy_from_slice(&block_height.to_le_bytes());
-        location_bytes[8..12].copy_from_slice(&tx_index.to_le_bytes());
-
-        self.tx_index_db
-            .put(wtxn, tx_hash.as_slice(), &location_bytes)
-            .map_err(|e| LedgerError::Database(format!("Failed to index transaction: {}", e)))
+        self.write_tables()
+            .add_tx_to_index(wtxn, tx_hash, block_height, tx_index, &mut || Ok(()))
     }
 
     /// Get the location of a transaction by its hash.
@@ -2660,45 +2426,14 @@ impl Ledger {
     ///
     /// Adds the output's weighted cluster contributions to the global wealth
     /// tracker.
+    #[cfg(test)]
     fn update_cluster_wealth_for_output(
         &self,
         wtxn: &mut RwTxn,
         output: &TxOutput,
     ) -> Result<(), LedgerError> {
-        for entry in &output.cluster_tags.entries {
-            // Contribution = output_amount × tag_weight / TAG_WEIGHT_SCALE.
-            // Kept in full u128 (no down-cast): the accumulator is now u128 so
-            // cumulative wealth can exceed the former u64::MAX pico ceiling.
-            let contribution =
-                (output.amount as u128) * (entry.weight as u128) / (TAG_WEIGHT_SCALE as u128);
-
-            if contribution > 0 {
-                let cluster_key = entry.cluster_id.0.to_le_bytes();
-
-                // Get current wealth (16-byte LE u128, reject-legacy).
-                let current = match self
-                    .cluster_wealth_db
-                    .get(wtxn, cluster_key.as_slice())
-                    .map_err(|e| {
-                        LedgerError::Database(format!("Failed to get cluster wealth: {}", e))
-                    })? {
-                    Some(bytes) => decode_cluster_wealth(bytes)?,
-                    None => 0u128,
-                };
-
-                // Add contribution. saturating_add on u128 keeps byte-identical
-                // semantics with the rebuild path (`rebuild_cluster_wealth_index`);
-                // saturation at u128::MAX is astronomically unreachable but the
-                // discipline is preserved (M3 lesson, #604/#607).
-                let new_wealth = current.saturating_add(contribution);
-                self.cluster_wealth_db
-                    .put(wtxn, cluster_key.as_slice(), &new_wealth.to_le_bytes())
-                    .map_err(|e| {
-                        LedgerError::Database(format!("Failed to update cluster wealth: {}", e))
-                    })?;
-            }
-        }
-        Ok(())
+        self.write_tables()
+            .update_cluster_wealth_for_output(wtxn, output, &mut || Ok(()))
     }
 
     /// Record any bridge-import cluster tags carried by an output created at
@@ -2714,27 +2449,15 @@ impl Ledger {
     /// exact epoch's hash-derived import id (cryptographically negligible),
     /// and even then the id *is* that epoch's import cluster, so treating
     /// it as one is consistent.
+    #[cfg(test)]
     fn record_bridge_import_clusters_for_output(
         &self,
         wtxn: &mut RwTxn,
         output: &TxOutput,
         height: u64,
     ) -> Result<(), LedgerError> {
-        let epoch_import_id = bth_cluster_tax::import_cluster_id_for_height(height).0;
-        for entry in &output.cluster_tags.entries {
-            if entry.cluster_id.0 == epoch_import_id {
-                let key = epoch_import_id.to_le_bytes();
-                self.bridge_import_clusters_db
-                    .put(wtxn, key.as_slice(), &[])
-                    .map_err(|e| {
-                        LedgerError::Database(format!(
-                            "Failed to record bridge-import cluster: {}",
-                            e
-                        ))
-                    })?;
-            }
-        }
-        Ok(())
+        self.write_tables()
+            .record_bridge_import_clusters_for_output(wtxn, output, height, &mut || Ok(()))
     }
 
     /// Whether `cluster_id` is a recorded bridge-import cluster (ADR 0007).
@@ -6277,3 +6000,6 @@ mod tests {
             .is_err());
     }
 }
+
+#[cfg(test)]
+mod writer_golden;

@@ -1,6 +1,6 @@
 # Inactive LotteryV2 persistence boundary
 
-Part of #1286; storage checkpoint #1349. This private infrastructure persists
+Part of #1286; storage checkpoints #1349 and #1352. This private infrastructure persists
 ordinary synthetic block/output fixtures in actual LMDB. It is **not a usable
 V2 ledger, validated consensus state, wallet balance, or independent-spend
 result**. No production caller can construct its handle. No network protocol
@@ -16,9 +16,9 @@ called on incomplete experimental state.
 ## Representation
 
 The test-only fresh constructor requires an empty directory. It initializes
-four actual heed tables and the exact schema marker in one transaction. Reopen
-requires an existing `data.mdb`, the exact marker and all four tables; it creates
-nothing. The marker is `botho.experimental.lottery-v2.storage.1`, a storage
+nine actual heed tables and the exact schema marker in one transaction. Reopen
+requires an existing `data.mdb`, the exact marker and all nine tables; it creates
+nothing. The marker is `botho.experimental.lottery-v2.storage.2`, a storage
 schema identifier **not** a consensus version. Successful database-handle opens
 commit their read transaction before returning the handles.
 
@@ -36,7 +36,10 @@ commit their read transaction before returning the handles.
   ordinal u32. Integers are little-endian. Tag 0 is Direct and requires zero
   tweak; tag 2 is Lottery. Unknown tags, truncation and trailing bytes error.
 - `meta`: schema marker and experimental checkpoint (height u64 followed by
-  block hash[32]). This is not production ChainState or monetary accounting.
+  block hash[32]), plus the existing chain/accounting/emission metadata encodings.
+  The other five production tables retain address, key-image, transaction,
+  cluster-wealth and bridge-import indexes. These are fixture effects, not
+  proof of a validated chain state.
 
 The envelope rejects disagreements between its ordered Records and the legacy
 Block payout fields. Context reads check actual outpoint, creating envelope,
@@ -49,18 +52,25 @@ PoW and signatures are intentionally not established here.
 
 ## Atomicity and remaining integration
 
-One private write transaction inserts the envelope, all coinbase/ordinary/payout
-output and context rows, and the checkpoint. It requires sequential fixture
+One private write transaction calls the same effects writer as V1 Ledger,
+inserting the envelope, all coinbase/ordinary/payout outputs and contexts,
+indexes, monetary/emission metadata, and the experimental checkpoint. It requires sequential fixture
 heights/parent hashes and rejects existing blocks or outpoints. Missing sources
 and inconsistent contexts fail. A test callback aborts after each write stage;
-all table contents must match the prior snapshot immediately and after reopen.
+all nine table contents must match the prior snapshot immediately and after reopen.
 Iteration returns every row or an explicit error, never a partial balance.
 
-No address index, cluster wealth, transaction index, key-image state, emission,
-burn or pool accounting is updated. There is no public `ValidatedV2Block` token
-that a caller can manufacture from these fixtures. The next producer/validator
-checkpoint must recompute the actual draw and commitments, produce validated
-transitions, and integrate all normal ledger accounting/index effects before
+`store/writer.rs` now shares the actual V1 effects, including optional emission
+updates, with the private experimental handle. See
+[the extraction/equivalence record](lottery-v2-shared-writer.md). The earlier
+storage-only schema 1 is explicitly rejected; there is no automatic upgrade.
+Only an empty, owned test directory can initialize schema 2.
+
+Experimental fixture callers supply accounting and skip signature validation;
+production V1 always supplies its existing verification callback. These fixture
+inputs are not a validated transition token. The next producer/validator
+checkpoint must recompute the actual draw and commitments, preserve all normal
+block/transaction checks and bind validation to the applied pre-state before
 exposing any real writer. Native wallet discovery/recovery and independently
 accepted spends remain subsequent work, as do snapshots, RPC, compact sync,
 WASM/mobile clients and legacy disposition. CT transaction encryption codecs
