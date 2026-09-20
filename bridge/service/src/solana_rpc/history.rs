@@ -3,6 +3,18 @@
 use super::*;
 use serde::{Deserialize, Serialize};
 
+pub const MAX_RESPONSE_BYTES: usize = 256 * 1024;
+pub fn append_bounded(bytes: &mut Vec<u8>, chunk: &[u8], limit: usize) -> Result<(), String> {
+    if bytes
+        .len()
+        .checked_add(chunk.len())
+        .is_none_or(|n| n > limit)
+    {
+        return Err("historical RPC response exceeds byte limit".into());
+    }
+    bytes.extend_from_slice(chunk);
+    Ok(())
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HistorySignature {
     pub signature: String,
@@ -49,6 +61,9 @@ fn signature(value: &str) -> Result<(), String> {
 }
 pub fn parse_page(v: &Value) -> Result<Vec<HistorySignature>, String> {
     let rows = v.as_array().ok_or("history page not an array")?;
+    if rows.len() > 1000 {
+        return Err("historical signature count exceeds bound".into());
+    }
     rows.iter()
         .map(|r| {
             let s = string(r, "signature")?;
@@ -96,11 +111,20 @@ pub fn parse_transaction(
         .iter()
         .map(|k| Pubkey::from_base58(k.as_str().ok_or("invalid account key")?))
         .collect::<Result<_, String>>()?;
+    if keys.is_empty() || keys.len() > 256 {
+        return Err("historical key count exceeds bound".into());
+    }
     let h = m.get("header").ok_or("missing header")?;
     let ns = number(h, "numRequiredSignatures")?;
     let rs = number(h, "numReadonlySignedAccounts")?;
     let ru = number(h, "numReadonlyUnsignedAccounts")?;
-    if ns == 0 || ns > keys.len() || rs > ns || ru > keys.len() - ns || signatures.len() != ns {
+    if ns > 255
+        || ns == 0
+        || ns > keys.len()
+        || rs > ns
+        || ru > keys.len() - ns
+        || signatures.len() != ns
+    {
         return Err("invalid history header".into());
     }
     if keys.iter().enumerate().any(|(i, k)| keys[..i].contains(k)) {
@@ -135,6 +159,9 @@ pub fn parse_transaction(
         let program = *keys
             .get(number(x, "programIdIndex")?)
             .ok_or("invalid program index")?;
+        if array(x, "accounts")?.len() > 256 || string(x, "data")?.len() > 1800 {
+            return Err("historical instruction exceeds bound".into());
+        }
         let accounts = array(x, "accounts")?
             .iter()
             .map(|i| {
@@ -160,6 +187,31 @@ pub fn parse_transaction(
             data,
         })
     };
+    if array(m, "instructions")?.len() > 64
+        || array(meta, "innerInstructions")?.len() > 64
+        || array(meta, "logMessages")?.len() > 512
+    {
+        return Err("historical evidence count exceeds bound".into());
+    }
+    let mut inner_count = 0usize;
+    for group in array(meta, "innerInstructions")? {
+        inner_count = inner_count.saturating_add(array(group, "instructions")?.len());
+    }
+    if inner_count > 512 {
+        return Err("historical inner instruction count exceeds bound".into());
+    }
+    let log_bytes = array(meta, "logMessages")?
+        .iter()
+        .try_fold(0usize, |sum, l| {
+            let s = l.as_str().ok_or("invalid log")?;
+            if s.len() > 16 * 1024 {
+                return Err("historical log line exceeds bound");
+            }
+            Ok(sum.saturating_add(s.len()))
+        })?;
+    if log_bytes > 64 * 1024 {
+        return Err("historical logs exceed byte bound".into());
+    }
     let instructions = array(m, "instructions")?
         .iter()
         .map(decode)
@@ -212,6 +264,55 @@ pub fn parse_transaction(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn streaming_and_parsed_evidence_caps_reject_before_unbounded_allocation() {
+        let mut bytes = vec![1; 8];
+        assert!(append_bounded(&mut bytes, &[2; 3], 10).is_err());
+        assert_eq!(bytes.len(), 8);
+        append_bounded(&mut bytes, &[2; 2], 10).unwrap();
+        let (sig, mut v) = transaction();
+        v["meta"]["logMessages"] = json!(vec!["x"; 513]);
+        assert!(parse_transaction(&v, &sig).is_err());
+        let (_, mut v) = transaction();
+        v["meta"]["logMessages"] = json!(["x".repeat(16 * 1024 + 1)]);
+        assert!(parse_transaction(&v, &sig).is_err());
+        let (_, mut v) = transaction();
+        v["transaction"]["message"]["accountKeys"] = json!(vec![Pubkey([2; 32]).to_base58(); 257]);
+        assert!(parse_transaction(&v, &sig).is_err());
+    }
+    #[tokio::test]
+    async fn http_body_limit_applies_with_and_without_content_length() {
+        use std::io::{Read, Write};
+        for chunked in [false, true] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut request = [0; 2048];
+                let _ = stream.read(&mut request);
+                if chunked {
+                    let body = "x".repeat(2048);
+                    let _=write!(stream,"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n800\r\n{body}\r\n0\r\n\r\n");
+                } else {
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: 2048\r\nConnection: close\r\n\r\n"
+                    );
+                }
+            });
+            let client = HttpSolanaRpc::new(format!("http://{address}")).unwrap();
+            let error = client
+                .call_bounded("getTransaction", json!([]), 1024)
+                .await
+                .unwrap_err();
+            assert!(error.contains("byte limit"), "{error}");
+            server.join().unwrap();
+        }
+    }
     fn transaction() -> (String, Value) {
         let sig = bs58::encode([1; 64]).into_string();
         let key = Pubkey([2; 32]).to_base58();

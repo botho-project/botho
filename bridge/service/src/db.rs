@@ -3,6 +3,7 @@
 //! SQLite database for bridge order tracking.
 
 mod solana_history;
+pub use solana_history::MAX_SOLANA_HISTORY_BYTES;
 mod solana_intents;
 pub use solana_intents::{SolanaAction, SolanaIntent};
 

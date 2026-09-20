@@ -97,11 +97,14 @@ An existing verified binding with a visible Executed proposal/event retains the
 ordinary completion path. Otherwise, a finalized owned order marker triggers
 read-only historical recovery. Each newly prepared order pins its genesis,
 exact payload, multisig, proposer, membership and threshold in a separate
-immutable policy journal. Restart preserves that policy and the scan cursor.
+immutable policy journal. Version 2 also pins the already-authorized source
+record: order UUID, nonempty source transaction/address, BTH-to-Solana mint route,
+gross amount, fee and recipient. Recovery compares both the caller and current
+database record with that original binding. It does not re-verify the BTH chain. Restart preserves that policy and the scan cursor.
 
 Recovery requires the successful original `multisig_create_v2` transaction to
 match the pinned policy, the exact canonical vault creation/proposal bundle,
-actual successful votes from at least the pinned threshold of distinct members,
+actual successful top-level votes from at least the pinned threshold of distinct members,
 and the successful Squads execute with its exact wbth CPI/event and owned marker.
 A closed account is acceptable only with this positive history; a still-present
 account must agree. Completion atomically records the actual execution signature,
@@ -128,8 +131,13 @@ Finalized evidence uses the configured RPC trust boundary; this is not an
 independent consensus or archive-availability proof.
 
 Each recovery tick fetches at most one ordinary page and one unresolved
-transaction, with a newest-signature probe every 16 ticks. Work has a 15-second
-overall deadline (10 seconds for the scan). Scans preserve same-slot signature
+transaction, with a newest-signature probe every 16 ticks. Async I/O has a 15-second
+tick timeout (10 seconds for the scan). This is not a preemptive CPU deadline:
+synchronous verification uses PDA indexes and explicitly checks a 200,000-step /
+250-millisecond cooperative budget between bounded operations. Historical HTTP
+bodies are capped at 256 KiB before JSON parsing (account metadata at 4 MiB),
+with separate instruction/account/log/data count bounds. Each journal is capped
+at 8 MiB and policy data at 64 KiB. Exceeding any limit is inconclusive. Scans preserve same-slot signature
 ordering, deduplicate overlap, and refresh through an explicit prior-anchor
 overlap before using newer history. Null/error responses retain the unresolved
 queue; exhausted search never becomes evidence of failure. Configure bounds in
@@ -137,7 +145,7 @@ queue; exhausted search never becomes evidence of failure. Configure bounds in
 
 ```toml
 history_page_size = 32 # 1..100 signatures per page
-history_capacity = 4096 # retained transactions and signatures per scan
+history_capacity = 4096 # 1..16384 retained transactions/signatures per scan
 ```
 
 Raise an exhausted capacity deliberately when using an archive RPC. Increasing a
@@ -205,4 +213,5 @@ executes through two independent engine databases, verifies retained account
 bytes, closes both eligible accounts, generates real marker history across
 multiple pages and recovers through fresh member databases. It checks restart,
 one explicitly injected null RPC response, paused/local-policy-drift recovery,
-zero recovery broadcasts and a hold for a real later governance epoch.
+zero recovery broadcasts, wrong-genesis and changed-source rejection, mixed-order
+history, and a hold for a real later governance epoch.

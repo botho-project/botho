@@ -1,5 +1,6 @@
 //! Historical recovery journal. Policy never changes once an order is claimed.
 use super::*;
+pub const MAX_SOLANA_HISTORY_BYTES: usize = 8 * 1024 * 1024;
 #[derive(Clone, Debug)]
 pub struct SolanaHistory {
     pub policy: String,
@@ -29,6 +30,9 @@ impl Database {
         policy: &str,
         progress: &str,
     ) -> Result<(), String> {
+        if policy.len() > 64 * 1024 || progress.len() > MAX_SOLANA_HISTORY_BYTES {
+            return Err("historical journal byte capacity exhausted".into());
+        }
         let c = self.conn.lock().map_err(|e| e.to_string())?;
         c.execute(
             "INSERT OR IGNORE INTO solana_history(order_id,policy,progress) VALUES (?1,?2,?3)",
@@ -43,6 +47,9 @@ impl Database {
         expected: &SolanaHistory,
         progress: &str,
     ) -> Result<bool, String> {
+        if progress.len() > MAX_SOLANA_HISTORY_BYTES {
+            return Err("historical journal byte capacity exhausted".into());
+        }
         let c = self.conn.lock().map_err(|e| e.to_string())?;
         Ok(c.execute("UPDATE solana_history SET progress=?1,revision=revision+1 WHERE order_id=?2 AND revision=?3 AND policy=?4",params![progress,order.to_string(),expected.revision,expected.policy]).map_err(|e|e.to_string())?==1)
     }
@@ -58,6 +65,18 @@ impl Database {
         signature: &str,
         evidence: &str,
     ) -> Result<bool, String> {
+        if order.order_type != OrderType::Mint
+            || order.source_chain != Chain::Bth
+            || order.dest_chain != Chain::Solana
+            || order
+                .source_tx
+                .as_deref()
+                .is_none_or(|s| s.trim().is_empty())
+            || order.source_address.trim().is_empty()
+            || order.amount <= order.fee
+        {
+            return Err("invalid historical mint source route".into());
+        }
         let mut c = self.conn.lock().map_err(|e| e.to_string())?;
         let tx = c
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -86,6 +105,9 @@ impl Database {
         progress["completed_signature"] = serde_json::json!(signature);
         progress["diagnostic"] = serde_json::json!("historical mint completed");
         let progress = serde_json::to_string(&progress).map_err(|e| e.to_string())?;
+        if progress.len() > MAX_SOLANA_HISTORY_BYTES {
+            return Err("historical journal byte capacity exhausted".into());
+        }
         if tx.execute("UPDATE solana_history SET progress=?1,revision=revision+1 WHERE order_id=?2 AND revision=?3 AND policy=?4",params![progress,order.id.to_string(),history.revision,history.policy]).map_err(|e|e.to_string())?!=1{return Err("historical evidence CAS failed".into());}
         let now = Utc::now().timestamp();
         if tx.execute("UPDATE mints SET dest_tx=?1,confirmed_at=?2 WHERE order_id=?3 AND confirmed_at IS NULL",params![signature,now,order.id.to_string()]).map_err(|e|e.to_string())?!=1{return Err("historical completion missing pending mint".into());}

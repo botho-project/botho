@@ -20,6 +20,7 @@ struct Policy {
     version: u8,
     genesis: String,
     binding: String,
+    source_binding: String,
     multisig: Pubkey,
     proposer: Pubkey,
     members: Vec<Pubkey>,
@@ -50,6 +51,59 @@ struct Progress {
     ticks: u64,
     #[serde(default)]
     refresh: bool,
+}
+/// This binds the already-authorized service source record, not a new BTH
+/// chain proof. Only the normal confirmed-deposit prepare path pins it.
+fn source_binding(order: &BridgeOrder) -> Result<String, MintError> {
+    if order.order_type != bth_bridge_core::OrderType::Mint
+        || order.source_chain != Chain::Bth
+        || order.dest_chain != Chain::Solana
+        || order
+            .source_tx
+            .as_deref()
+            .is_none_or(|s| s.trim().is_empty())
+        || order.source_address.trim().is_empty()
+        || order.amount <= order.fee
+    {
+        return Err(invalid(
+            "historical recovery requires a valid BTH-to-Solana mint source record",
+        ));
+    }
+    Ok(serde_json::json!({"version":1,"order_id":order.id,"source_tx":order.source_tx,"source_address":order.source_address,"amount":order.amount,"fee":order.fee,"recipient":order.dest_address}).to_string())
+}
+fn encode_progress(progress: &Progress) -> Result<String, MintError> {
+    struct Bounded(Vec<u8>);
+    impl std::io::Write for Bounded {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            crate::solana_rpc::history::append_bounded(
+                &mut self.0,
+                b,
+                crate::db::MAX_SOLANA_HISTORY_BYTES,
+            )
+            .map_err(std::io::Error::other)?;
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut out = Bounded(Vec::new());
+    serde_json::to_writer(&mut out, progress)
+        .map_err(|_| invalid("historical journal byte capacity exhausted"))?;
+    String::from_utf8(out.0).map_err(invalid)
+}
+struct VerificationBudget {
+    started: std::time::Instant,
+    remaining: usize,
+}
+impl VerificationBudget {
+    fn check(&mut self) -> Result<(), String> {
+        if self.remaining == 0 || self.started.elapsed() > std::time::Duration::from_millis(250) {
+            return Err("historical verification work budget exhausted; retain backing".into());
+        }
+        self.remaining -= 1;
+        Ok(())
+    }
 }
 fn disc(name: &str) -> [u8; 8] {
     Sha256::digest(format!("global:{name}"))[..8]
@@ -140,11 +194,35 @@ fn verify(
     if !progress.marker.done || !progress.multisig.done || progress.refresh {
         return Ok(None);
     }
+    if progress.transactions.len() > 16384 {
+        return Err("historical transaction count exceeds maximum".into());
+    }
+    let mut budget = VerificationBudget {
+        started: std::time::Instant::now(),
+        remaining: 200_000,
+    };
     let mut origins = vec![];
+    type Indexed<'a> =
+        std::collections::HashMap<Pubkey, Vec<(&'a HistoricalTransaction, &'a Instruction)>>;
+    let mut proposals: Indexed = Default::default();
+    let mut creations: Indexed = Default::default();
     for t in &progress.transactions {
+        budget.check()?;
         for ix in &t.instructions {
+            budget.check()?;
             if deployment(ix, p)? {
                 origins.push(t);
+            }
+            if ix.program_id != SQUADS_V4_PROGRAM_ID {
+                continue;
+            }
+            if let Some(account) = ix.accounts.get(1) {
+                if ix.data.starts_with(&disc("proposal_create")) {
+                    proposals.entry(account.pubkey).or_default().push((t, ix));
+                }
+                if ix.data.starts_with(&disc("vault_transaction_create")) {
+                    creations.entry(account.pubkey).or_default().push((t, ix));
+                }
             }
         }
     }
@@ -154,6 +232,7 @@ fn verify(
     let origin = origins[0];
     let mut proofs = vec![];
     for execution in &progress.transactions {
+        budget.check()?;
         // Current engine emits exactly one top-level execute. Reject compound
         // outer actions rather than attributing another invocation's event.
         if execution.instructions.len() != 1 {
@@ -174,104 +253,114 @@ fn verify(
         if !p.members.contains(&actor) {
             continue;
         }
+        // Reject unrelated order executions before constructing PDA contexts.
+        let Some(inner) = execution.inner.iter().find(|g| g.0 == 0) else {
+            continue;
+        };
+        if !inner.1.iter().any(|ix| {
+            ix.program_id == program
+                && ix.data == base.inner.data
+                && ix.accounts.iter().map(|a| a.pubkey).eq(base
+                    .inner
+                    .accounts
+                    .iter()
+                    .map(|a| a.pubkey))
+        }) {
+            continue;
+        }
         let mut candidate = None;
-        for t in &progress.transactions {
-            if t.slot > execution.slot {
+        for (t, ix) in proposals.get(&ex.accounts[1].pubkey).into_iter().flatten() {
+            budget.check()?;
+            if t.slot > execution.slot || ix.data.len() != 17 {
                 continue;
             }
-            for ix in &t.instructions {
-                if ix.program_id != SQUADS_V4_PROGRAM_ID
-                    || !ix.data.starts_with(&disc("proposal_create"))
-                    || ix.data.len() != 17
-                {
-                    continue;
+            let index = u64::from_le_bytes(ix.data[8..16].try_into().unwrap());
+            let mut ctx = SquadsMintContext::resolve(
+                p.multisig,
+                base.vault_index,
+                index,
+                p.proposer,
+                base.inner.clone(),
+            )
+            .map_err(|e| e.to_string())?;
+            if ctx.transaction_pda != ex.accounts[2].pubkey
+                || ctx.proposal_pda != ex.accounts[1].pubkey
+                || !matches(ix, &ctx.build_proposal_create())
+            {
+                continue;
+            }
+            let create = ctx.build_vault_transaction_create();
+            let mut creates = vec![];
+            for (t, ix) in creations.get(&ctx.transaction_pda).into_iter().flatten() {
+                budget.check()?;
+                if t.slot <= execution.slot && matches(ix, &create) {
+                    creates.push(*t);
                 }
-                let index = u64::from_le_bytes(ix.data[8..16].try_into().unwrap());
-                let mut ctx = SquadsMintContext::resolve(
-                    p.multisig,
-                    base.vault_index,
-                    index,
-                    p.proposer,
-                    base.inner.clone(),
-                )
-                .map_err(|e| e.to_string())?;
-                if ctx.transaction_pda != ex.accounts[2].pubkey
-                    || ctx.proposal_pda != ex.accounts[1].pubkey
-                    || !matches(ix, &ctx.build_proposal_create())
-                {
-                    continue;
-                }
-                let create = ctx.build_vault_transaction_create();
-                let creates: Vec<_> = progress
-                    .transactions
+            }
+            if creates.is_empty() {
+                continue;
+            }
+            if creates.len() != 1 {
+                return Err("historical exact create lineage missing/ambiguous".into());
+            }
+            ctx.member = actor;
+            if !matches(ex, &ctx.build_vault_transaction_execute())
+                || !ex
+                    .accounts
                     .iter()
-                    .filter(|c| {
-                        c.slot <= execution.slot
-                            && c.instructions.iter().any(|i| matches(i, &create))
+                    .zip(ctx.build_vault_transaction_execute().accounts)
+                    .all(|(a, b)| {
+                        a.is_signer == b.is_signer
+                            && a.is_writable == (b.is_writable || b.pubkey == actor)
                     })
-                    .collect();
-                if creates.len() != 1 {
-                    return Err("historical exact create lineage missing/ambiguous".into());
-                }
-                ctx.member = actor;
-                if !matches(ex, &ctx.build_vault_transaction_execute())
-                    || !ex
-                        .accounts
-                        .iter()
-                        .zip(ctx.build_vault_transaction_execute().accounts)
-                        .all(|(a, b)| {
-                            a.is_signer == b.is_signer
-                                && a.is_writable == (b.is_writable || b.pubkey == actor)
-                        })
-                    || execution.logs.first()
-                        != Some(&format!(
-                            "Program {} invoke [1]",
-                            SQUADS_V4_PROGRAM_ID.to_base58()
-                        ))
-                    || execution.logs.last()
-                        != Some(&format!(
-                            "Program {} success",
-                            SQUADS_V4_PROGRAM_ID.to_base58()
-                        ))
-                {
-                    continue;
-                }
-                // The inner mint must belong to this outer execute and carry the
-                // exact account order/data. CPI signer privileges are provided by
-                // Squads and are not represented in the outer RPC header.
-                let inner = execution
-                    .inner
+                || execution.logs.first()
+                    != Some(&format!(
+                        "Program {} invoke [1]",
+                        SQUADS_V4_PROGRAM_ID.to_base58()
+                    ))
+                || execution.logs.last()
+                    != Some(&format!(
+                        "Program {} success",
+                        SQUADS_V4_PROGRAM_ID.to_base58()
+                    ))
+            {
+                continue;
+            }
+            // The inner mint must belong to this outer execute and carry the
+            // exact account order/data. CPI signer privileges are provided by
+            // Squads and are not represented in the outer RPC header.
+            let inner = execution
+                .inner
+                .iter()
+                .find(|g| g.0 == 0)
+                .ok_or("execute inner instructions unavailable")?;
+            let mint: Vec<_> = inner.1.iter().filter(|i| i.program_id == program).collect();
+            if mint.len() != 1
+                || mint[0].data != ctx.inner.data
+                || mint[0]
+                    .accounts
                     .iter()
-                    .find(|g| g.0 == 0)
-                    .ok_or("execute inner instructions unavailable")?;
-                let mint: Vec<_> = inner.1.iter().filter(|i| i.program_id == program).collect();
-                if mint.len() != 1
-                    || mint[0].data != ctx.inner.data
-                    || mint[0]
+                    .map(|a| a.pubkey)
+                    .collect::<Vec<_>>()
+                    != ctx
+                        .inner
                         .accounts
                         .iter()
                         .map(|a| a.pubkey)
                         .collect::<Vec<_>>()
-                        != ctx
-                            .inner
-                            .accounts
-                            .iter()
-                            .map(|a| a.pubkey)
-                            .collect::<Vec<_>>()
-                {
-                    continue;
-                }
-                if !bound_mint_event(
-                    &execution.logs,
-                    program,
-                    ctx.inner.accounts[4].pubkey,
-                    amount,
-                    order_bytes,
-                ) {
-                    continue;
-                }
-                candidate = Some((ctx, creates[0]));
+            {
+                continue;
             }
+            if !bound_mint_event(
+                &execution.logs,
+                program,
+                ctx.inner.accounts[4].pubkey,
+                amount,
+                order_bytes,
+            ) {
+                continue;
+            }
+            candidate = Some((ctx, creates[0]));
         }
         let Some((ctx, creation)) = candidate else {
             continue;
@@ -282,6 +371,7 @@ fn verify(
         // or vote revocation has been silently omitted. Same-slot uncertainty
         // is conservative: an unsupported mutation holds even if ordered later.
         for t in &progress.transactions {
+            budget.check()?;
             if t.slot < origin.slot || t.slot > execution.slot {
                 continue;
             }
@@ -289,6 +379,7 @@ fn verify(
                 i.program_id == SQUADS_V4_PROGRAM_ID
                     && i.accounts.iter().any(|a| a.pubkey == p.multisig)
             }) {
+                budget.check()?;
                 let known = [
                     "multisig_create_v2",
                     "vault_transaction_create",
@@ -304,7 +395,10 @@ fn verify(
                             .into(),
                     );
                 }
-                if ix.data.starts_with(&disc("proposal_approve"))
+                // Only a successful top-level vote is supported. A caller may
+                // catch failed approval CPI; its inner trace is not a vote.
+                if t.instructions.iter().any(|top| std::ptr::eq(top, ix))
+                    && ix.data.starts_with(&disc("proposal_approve"))
                     && ix.accounts.len() == 3
                     && ix.accounts[2].pubkey == ctx.proposal_pda
                 {
@@ -325,6 +419,9 @@ fn verify(
         if votes.len() < p.threshold as usize {
             return Err("historical threshold approvals unavailable".into());
         }
+        if !proofs.is_empty() {
+            return Err("ambiguous historical successful execution".into());
+        }
         proofs.push(Proof{index:ctx.transaction_index,signature:execution.signature.clone(),evidence:serde_json::json!({"version":1,"genesis":p.genesis,"execute":execution.signature,"deployment":origin.signature,"create":creation.signature,"transaction_index":ctx.transaction_index,"evidence_hashes":progress.transactions.iter().map(|t|(&t.signature,&t.evidence_hash)).collect::<Vec<_>>()}).to_string()});
     }
     if proofs.len() > 1 {
@@ -339,12 +436,18 @@ impl SolMinter {
         order: &BridgeOrder,
         ctx: &SquadsMintContext,
     ) -> Result<(), MintError> {
-        if self
-            .store()?
-            .solana_history(&order.id)
-            .map_err(invalid)?
-            .is_some()
-        {
+        let source_binding = source_binding(order)?;
+        if order.status != bth_bridge_core::OrderStatus::DepositConfirmed {
+            return Err(invalid(
+                "historical policy may only be pinned during confirmed-deposit preparation",
+            ));
+        }
+        if let Some(saved) = self.store()?.solana_history(&order.id).map_err(invalid)? {
+            let old: Policy = serde_json::from_str(&saved.policy)
+                .map_err(|_| invalid("legacy historical policy requires reviewed migration"))?;
+            if old.source_binding != source_binding {
+                return Err(invalid("immutable source provenance changed"));
+            }
             return Ok(());
         }
         let (_, proposer, _) = self.identity()?;
@@ -362,7 +465,8 @@ impl SolMinter {
             .collect::<Result<Vec<_>, MintError>>()?;
         members.sort();
         let policy = Policy {
-            version: 1,
+            version: 2,
+            source_binding,
             genesis: self.rpc.genesis_hash().await.map_err(MintError::Rpc)?,
             binding: self.binding(ctx),
             multisig: ctx.multisig,
@@ -374,7 +478,7 @@ impl SolMinter {
             .claim_solana_history(
                 &order.id,
                 &serde_json::to_string(&policy).map_err(invalid)?,
-                &serde_json::to_string(&Progress::default()).map_err(invalid)?,
+                &encode_progress(&Progress::default())?,
             )
             .map_err(invalid)
     }
@@ -413,12 +517,22 @@ impl SolMinter {
         ctx: &SquadsMintContext,
     ) -> Result<ConfirmationStatus, MintError> {
         let db = self.store()?;
-        if db
+        let stored = db
             .get_order(&order.id)
             .map_err(invalid)?
-            .is_some_and(|o| o.status == bth_bridge_core::OrderStatus::Completed)
+            .ok_or_else(|| invalid("historical order missing"))?;
+        let source = source_binding(order)?;
+        if source != source_binding(&stored)?
+            || !matches!(
+                order.status,
+                bth_bridge_core::OrderStatus::MintPending | bth_bridge_core::OrderStatus::Completed
+            )
+            || !matches!(
+                stored.status,
+                bth_bridge_core::OrderStatus::MintPending | bth_bridge_core::OrderStatus::Completed
+            )
         {
-            return Ok(ConfirmationStatus::Confirmed);
+            return Err(invalid("historical caller/current source order mismatch"));
         }
         let saved = db
             .solana_history(&order.id)
@@ -426,8 +540,17 @@ impl SolMinter {
             .ok_or_else(|| {
                 invalid("legacy intent lacks pinned historical policy; explicit migration required")
             })?;
-        let policy: Policy = serde_json::from_str(&saved.policy).map_err(invalid)?;
-        if policy.version != 1
+        if saved.policy.len() > 64 * 1024
+            || saved.progress.len() > crate::db::MAX_SOLANA_HISTORY_BYTES
+        {
+            return Err(invalid("historical journal exceeds byte capacity"));
+        }
+        let policy: Policy = serde_json::from_str(&saved.policy)
+            .map_err(|_| invalid("legacy historical policy requires reviewed migration"))?;
+        if policy.source_binding != source {
+            return Err(invalid("immutable historical source provenance changed"));
+        }
+        if policy.version != 2
             || policy.threshold < 2
             || policy.binding != row.binding
             || row.binding != self.binding(ctx)
@@ -435,6 +558,29 @@ impl SolMinter {
             || policy.genesis != self.rpc.genesis_hash().await.map_err(MintError::Rpc)?
         {
             return Err(invalid("historical policy/network/binding mismatch"));
+        }
+        if stored.status == bth_bridge_core::OrderStatus::Completed {
+            if order.status == bth_bridge_core::OrderStatus::Completed
+                && order.dest_tx != stored.dest_tx
+            {
+                return Err(invalid("completed caller execution signature mismatch"));
+            }
+            let mint = db
+                .get_mint_by_order(&order.id)
+                .map_err(invalid)?
+                .ok_or_else(|| invalid("completed historical mint row missing"))?;
+            let action = row
+                .action
+                .as_ref()
+                .filter(|a| a.kind == "completed" && row.verified)
+                .ok_or_else(|| invalid("completed historical action missing"))?;
+            if mint.confirmed_at.is_none()
+                || mint.dest_tx != action.signature
+                || stored.dest_tx.as_deref() != Some(action.signature.as_str())
+            {
+                return Err(invalid("completed historical execution signature mismatch"));
+            }
+            return Ok(ConfirmationStatus::Confirmed);
         }
         let marker = self
             .account(ctx.inner.accounts[1].pubkey, "finalized")
@@ -447,7 +593,9 @@ impl SolMinter {
         }
         let mut progress: Progress = serde_json::from_str(&saved.progress).map_err(invalid)?;
         let config = self.config.squads.as_ref().unwrap();
-        if !(1..=100).contains(&config.history_page_size) || config.history_capacity == 0 {
+        if !(1..=100).contains(&config.history_page_size)
+            || !(1..=16384).contains(&config.history_capacity)
+        {
             return Err(invalid("invalid historical recovery bounds"));
         }
         let outcome = tokio::time::timeout(
@@ -467,12 +615,8 @@ impl SolMinter {
         });
         if let Err(e) = outcome {
             progress.diagnostic = e.to_string();
-            db.update_solana_history(
-                &order.id,
-                &saved,
-                &serde_json::to_string(&progress).map_err(invalid)?,
-            )
-            .map_err(invalid)?;
+            db.update_solana_history(&order.id, &saved, &encode_progress(&progress)?)
+                .map_err(invalid)?;
             return Err(e);
         }
         let proof = verify(
@@ -549,12 +693,8 @@ impl SolMinter {
                 progress.diagnostic = e;
             }
         }
-        db.update_solana_history(
-            &order.id,
-            &saved,
-            &serde_json::to_string(&progress).map_err(invalid)?,
-        )
-        .map_err(invalid)?;
+        db.update_solana_history(&order.id, &saved, &encode_progress(&progress)?)
+            .map_err(invalid)?;
         Ok(ConfirmationStatus::Pending { confirmations: 0 })
     }
     async fn scan_history(
@@ -772,6 +912,84 @@ mod tests {
         assert!(refresh.done && refresh.reached_stop);
         assert_eq!(refresh.anchor.as_deref(), Some("new-execution"));
     }
+
+    #[test]
+    fn source_route_binding_rejects_missing_and_mutated_provenance() {
+        let mut order = BridgeOrder::new_mint(
+            Chain::Solana,
+            10,
+            1,
+            "reserve".into(),
+            Pubkey([1; 32]).to_base58(),
+        );
+        order.source_tx = Some("confirmed-source".into());
+        let bound = source_binding(&order).unwrap();
+        for n in 0..5 {
+            let mut changed = order.clone();
+            match n {
+                0 => changed.source_tx = None,
+                1 => changed.dest_chain = Chain::Ethereum,
+                2 => changed.source_chain = Chain::Solana,
+                3 => changed.order_type = bth_bridge_core::OrderType::Burn,
+                _ => changed.fee = changed.amount,
+            };
+            assert!(source_binding(&changed).is_err());
+        }
+        order.source_tx = Some("different-source".into());
+        assert_ne!(source_binding(&order).unwrap(), bound);
+    }
+    #[test]
+    fn byte_and_synchronous_work_caps_are_explicit() {
+        let p = Progress {
+            diagnostic: "x".repeat(crate::db::MAX_SOLANA_HISTORY_BYTES),
+            ..Progress::default()
+        };
+        assert!(encode_progress(&p).is_err());
+        assert!(VerificationBudget {
+            started: std::time::Instant::now(),
+            remaining: 0
+        }
+        .check()
+        .is_err());
+        assert!(VerificationBudget {
+            started: std::time::Instant::now() - std::time::Duration::from_secs(1),
+            remaining: 200_000
+        }
+        .check()
+        .is_err());
+    }
+    #[test]
+    fn unrelated_orders_do_not_hide_matching_execution_in_either_iteration_order() {
+        let (p, mut progress, ctx, program, order, amount) = sample();
+        let mut inner = ctx.inner.clone();
+        inner.data[16] ^= 1;
+        let other = SquadsMintContext::resolve(ctx.multisig, ctx.vault_index, 2, p.proposer, inner)
+            .unwrap();
+        let slot = execution(&mut progress).slot;
+        progress.transactions.push(HistoricalTransaction {
+            signature: "unrelated-create".into(),
+            slot: slot - 1,
+            instructions: vec![
+                other.build_vault_transaction_create(),
+                other.build_proposal_create(),
+            ],
+            inner: vec![],
+            logs: vec![],
+            evidence_hash: "mutation".into(),
+        });
+        // Keep the queried-order CPI shape in this fault-injected outer record:
+        // even an inconsistent unrelated candidate must not hide valid evidence.
+        let mut unrelated = execution(&mut progress).clone();
+        unrelated.signature = "unrelated-execute".into();
+        unrelated.instructions = vec![other.build_vault_transaction_execute()];
+        progress.transactions.push(unrelated);
+        for _ in 0..2 {
+            assert!(verify(&p, &progress, &ctx, program, order, amount)
+                .unwrap()
+                .is_some());
+            progress.transactions.reverse();
+        }
+    }
     fn sample() -> (Policy, Progress, SquadsMintContext, Pubkey, [u8; 32], u64) {
         let fixture: serde_json::Value = serde_json::from_str(include_str!(
             "../../../tests/fixtures/squads-history-transactions.json"
@@ -813,7 +1031,8 @@ mod tests {
             .collect::<Vec<_>>();
         members.sort();
         let p = Policy {
-            version: 1,
+            version: 2,
+            source_binding: "unit source provenance".into(),
             genesis: fixture["genesis"].as_str().unwrap().into(),
             binding: "test".into(),
             multisig: ctx.multisig,

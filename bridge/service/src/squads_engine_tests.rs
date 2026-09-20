@@ -26,6 +26,7 @@ struct ControlledRpc {
     send_calls: std::sync::atomic::AtomicUsize,
     history_null_once: std::sync::atomic::AtomicBool,
     history_pages: std::sync::atomic::AtomicUsize,
+    genesis_override: std::sync::Mutex<Option<String>>,
     lost_responses: std::sync::atomic::AtomicUsize,
     signatures: std::sync::Mutex<Vec<String>>,
     accepted_raw: std::sync::Mutex<Vec<Vec<u8>>>,
@@ -39,6 +40,7 @@ impl ControlledRpc {
             send_calls: 0.into(),
             history_null_once: false.into(),
             history_pages: 0.into(),
+            genesis_override: Default::default(),
             lost_responses: 0.into(),
             signatures: Default::default(),
             accepted_raw: Default::default(),
@@ -49,6 +51,9 @@ impl ControlledRpc {
 #[async_trait::async_trait]
 impl SolanaRpc for ControlledRpc {
     async fn genesis_hash(&self) -> Result<String, String> {
+        if let Some(hash) = self.genesis_override.lock().unwrap().clone() {
+            return Ok(hash);
+        }
         self.inner.genesis_hash().await
     }
     async fn history_page(
@@ -1403,6 +1408,14 @@ async fn squads_history_localnet() {
     minter = SolMinter::with_parts(drifted.clone(), history_rpc.clone(), Some((key(2), pk(2))))
         .unwrap()
         .with_store(late.clone());
+    *history_rpc.genesis_override.lock().unwrap() = Some(Pubkey([99; 32]).to_base58());
+    assert!(minter
+        .reconcile_squads_history(&pending_order)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("network"));
+    *history_rpc.genesis_override.lock().unwrap() = None;
     assert!(minter
         .reconcile_squads_history(&pending_order)
         .await
@@ -1532,6 +1545,59 @@ async fn squads_history_localnet() {
         .progress
         .contains("unsupported historical governance"));
     assert_eq!(epoch.locked_reserve_total().unwrap(), newer.net_amount());
+    let mut wrong_source = pending_order.clone();
+    wrong_source.source_tx = Some("different-confirmed-source".into());
+    assert!(minter
+        .reconcile_squads_history(&wrong_source)
+        .await
+        .is_err());
+    let mut wrong_recipient = pending_order.clone();
+    wrong_recipient.dest_address = pk(3).to_base58();
+    assert!(minter
+        .reconcile_squads_history(&wrong_recipient)
+        .await
+        .is_err());
+    let mut stale_completed = pending_order.clone();
+    stale_completed.status = OrderStatus::Completed;
+    stale_completed.dest_tx = Some("wrong-completed-signature".into());
+    assert!(minter
+        .reconcile_squads_history(&stale_completed)
+        .await
+        .is_err());
+    // Mixed-order real history must still recover the older supported mint.
+    let mixed =
+        Database::open(dir.path().join("mixed-order-history.db").to_str().unwrap()).unwrap();
+    mixed.migrate().unwrap();
+    mixed.insert_order(&order).unwrap();
+    let mixedp = processor(&configs[1], &mixed, std::slice::from_ref(&order));
+    tick(&mixedp).await;
+    mixed
+        .set_paused(true, Some("mixed-order recovery"))
+        .unwrap();
+    let mixedminter = SolMinter::new(configs[1].solana.clone())
+        .unwrap()
+        .with_store(mixed.clone());
+    let mixedorder = mixed.get_order(&order.id).unwrap().unwrap();
+    for _ in 0..150 {
+        mixedminter
+            .reconcile_squads_history(&mixedorder)
+            .await
+            .unwrap();
+        if mixed.get_order(&order.id).unwrap().unwrap().status == OrderStatus::Completed {
+            break;
+        }
+    }
+    assert_eq!(
+        mixed.get_order(&order.id).unwrap().unwrap().status,
+        OrderStatus::Completed,
+        "{:?}",
+        mixed.solana_history(&order.id).unwrap()
+    );
+    assert_eq!(
+        mixed.get_mint_by_order(&order.id).unwrap().unwrap().dest_tx,
+        execution
+    );
+    assert_eq!(mixed.locked_reserve_total().unwrap(), backing);
     let final_supply = rpc.get_token_supply(mint, "finalized").await.unwrap();
     assert_eq!(final_supply, supply * 2);
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -1576,7 +1642,7 @@ async fn squads_history_localnet() {
         .unwrap();
     let recipient_balance = u64::from_le_bytes(recipient_data[64..72].try_into().unwrap());
     assert_eq!(u128::from(recipient_balance), final_supply);
-    let evidence = serde_json::json!({"recipient_balance":recipient_balance,"unsupported_epoch_execution":db1.get_mint_by_order(&newer.id).unwrap().unwrap().dest_tx,"unsupported_epoch_progress":epoch.solana_history(&newer.id).unwrap().unwrap().progress,"source_sha256":hashes,"final_supply":final_supply.to_string(),"unsupported_epoch_order":newer.id,"history_rpc_pages":history_rpc.history_pages.load(std::sync::atomic::Ordering::SeqCst),"recovery_send_calls":0,"null_transaction_fault":"one response withheld; durable queue retained then retried","fixture":fixture,"execution":execution,"close":close_sig,"marker_noise":spam,"supply":supply.to_string(),"locked_backing":backing,"progress":late.solana_history(&order.id).unwrap().unwrap().progress});
+    let evidence = serde_json::json!({"mixed_order_recovered_signature":mixed.get_mint_by_order(&order.id).unwrap().unwrap().dest_tx,"recipient_balance":recipient_balance,"unsupported_epoch_execution":db1.get_mint_by_order(&newer.id).unwrap().unwrap().dest_tx,"unsupported_epoch_progress":epoch.solana_history(&newer.id).unwrap().unwrap().progress,"source_sha256":hashes,"final_supply":final_supply.to_string(),"unsupported_epoch_order":newer.id,"history_rpc_pages":history_rpc.history_pages.load(std::sync::atomic::Ordering::SeqCst),"recovery_send_calls":0,"null_transaction_fault":"one response withheld; durable queue retained then retried","fixture":fixture,"execution":execution,"close":close_sig,"marker_noise":spam,"supply":supply.to_string(),"locked_backing":backing,"progress":late.solana_history(&order.id).unwrap().unwrap().progress});
     std::fs::write(
         std::env::var("SQUADS_ENGINE_EVIDENCE").unwrap(),
         serde_json::to_vec_pretty(&evidence).unwrap(),

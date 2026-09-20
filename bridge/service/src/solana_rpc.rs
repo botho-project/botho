@@ -492,6 +492,39 @@ impl HttpSolanaRpc {
         })
     }
 
+    /// History and account metadata use bounded response bodies before JSON
+    /// allocation. Other existing RPC methods retain their existing transport.
+    async fn call_bounded(
+        &self,
+        method: &str,
+        params: Value,
+        limit: usize,
+    ) -> Result<Value, String> {
+        let mut response = self
+            .client
+            .post(&self.url)
+            .json(&json!({"jsonrpc":"2.0","id":1,"method":method,"params":params}))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .error_for_status()
+            .map_err(|e| e.to_string())?;
+        if response.content_length().is_some_and(|n| n > limit as u64) {
+            return Err("historical RPC response exceeds byte limit".into());
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+            history::append_bounded(&mut bytes, &chunk, limit)?;
+        }
+        let mut value: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        if let Some(error) = value.get("error") {
+            return Err(format!("{method} RPC error: {error}"));
+        }
+        value
+            .get_mut("result")
+            .map(Value::take)
+            .ok_or_else(|| format!("{method} response missing result"))
+    }
     async fn call(&self, method: &str, params: Value) -> Result<Value, String> {
         let body = json!({
             "jsonrpc": "2.0",
@@ -523,7 +556,7 @@ impl HttpSolanaRpc {
 #[async_trait]
 impl SolanaRpc for HttpSolanaRpc {
     async fn genesis_hash(&self) -> Result<String, String> {
-        let v = self.call("getGenesisHash", json!([])).await?;
+        let v = self.call_bounded("getGenesisHash", json!([]), 4096).await?;
         let hash = v.as_str().ok_or("missing genesis hash")?;
         Pubkey::from_base58(hash)?;
         Ok(hash.into())
@@ -547,7 +580,11 @@ impl SolanaRpc for HttpSolanaRpc {
         }
         history::parse_page(
             &self
-                .call("getSignaturesForAddress", json!([address, opts]))
+                .call_bounded(
+                    "getSignaturesForAddress",
+                    json!([address, opts]),
+                    history::MAX_RESPONSE_BYTES,
+                )
                 .await?,
         )
     }
@@ -555,7 +592,7 @@ impl SolanaRpc for HttpSolanaRpc {
         &self,
         signature: &str,
     ) -> Result<Option<HistoricalTransaction>, String> {
-        history::parse_transaction(&self.call("getTransaction",json!([signature,{"commitment":"finalized","encoding":"json","maxSupportedTransactionVersion":0}])).await?,signature)
+        history::parse_transaction(&self.call_bounded("getTransaction",json!([signature,{"commitment":"finalized","encoding":"json","maxSupportedTransactionVersion":0}]),history::MAX_RESPONSE_BYTES).await?,signature)
     }
 
     async fn get_account_info(
@@ -564,9 +601,10 @@ impl SolanaRpc for HttpSolanaRpc {
         commitment: &str,
     ) -> Result<Option<SolanaAccount>, String> {
         let result = self
-            .call(
+            .call_bounded(
                 "getAccountInfo",
                 json!([address,{"commitment":commitment,"encoding":"base64"}]),
+                4 * 1024 * 1024,
             )
             .await?;
         parse_account_info(&result)
