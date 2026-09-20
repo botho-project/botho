@@ -25,7 +25,7 @@ cleanup() {
 trap cleanup EXIT
 config_pda="$(node --import tsx localnet/squads.ts genesis "$run_dir/config.json")"
 solana-test-validator --reset --quiet --ledger "$run_dir/ledger" \
-    --bind-address 127.0.0.1 --rpc-port 18899 --faucet-port 18925 \
+    --bind-address 127.0.0.1 --ticks-per-slot 8 --rpc-port 18899 --faucet-port 18925 \
     --gossip-port 18901 --dynamic-port-range 18902-18922 \
     --mint AKnL4NNf3DGWZJS6cPknBuEGnVsV4A4m5tgebLHaRSZ9 \
     --account "$config_pda" "$run_dir/config.json" \
@@ -43,4 +43,12 @@ for _ in $(seq 1 60); do
     sleep 1
 done
 [[ "$ready" == 1 ]] || { cat "$run_dir/validator.log" >&2; exit 1; }
-node --import tsx localnet/squads.ts test "${SQUADS_EVIDENCE_PATH:-$run_dir/evidence.json}"
+if [[ "${SQUADS_ENGINE_TEST:-0}" == 1 ]]; then
+    node --import tsx localnet/squads.ts engine-setup "$run_dir/engine.json"
+    SQUADS_ENGINE_FIXTURE="$run_dir/engine.json" SQUADS_ENGINE_RPC=http://127.0.0.1:18899 \
+        SQUADS_ENGINE_EVIDENCE="${SQUADS_ENGINE_EVIDENCE:-$run_dir/engine-execution.json}" \
+        cargo test --manifest-path ../../Cargo.toml -p bth-bridge-service --lib -- \
+        --ignored --exact squads_engine_tests::squads_engine_localnet --nocapture
+else
+    node --import tsx localnet/squads.ts test "${SQUADS_EVIDENCE_PATH:-$run_dir/evidence.json}"
+fi

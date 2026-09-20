@@ -20,8 +20,9 @@ on:
       # The Rust minter whose (discriminator, account-meta order, seeds,
       # Bridge mint offset) assumptions the mocha suite validates against a
       # built program: changes here should re-run the Anchor suite.
-      - 'bridge/service/src/mint/solana.rs'
-      - 'bridge/service/src/mint/squads.rs'
+      - 'bridge/**'
+      - 'Cargo.lock'
+      - 'Cargo.toml'
       - '.github/workflows/solana-contracts-ci.yml'
   workflow_dispatch:
 
@@ -189,4 +190,31 @@ jobs:
         with:
           name: squads-execution
           path: contracts/solana/squads-execution.json
+          if-no-files-found: warn
+
+      - name: Install engine Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-03
+
+      - name: Cache engine cargo build
+        uses: Swatinem/rust-cache@v2
+        env:
+          RUSTUP_TOOLCHAIN: nightly-2025-12-03
+        with:
+          key: squads-engine
+
+      - name: Execute real Squads OrderProcessor integration
+        env:
+          RUSTUP_TOOLCHAIN: nightly-2025-12-03
+          SQUADS_ENGINE_TEST: '1'
+          SQUADS_ENGINE_EVIDENCE: engine-execution.json
+        run: ./localnet/run-squads.sh
+
+      - name: Preserve Squads engine execution evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: squads-engine-execution
+          path: contracts/solana/engine-execution.json
           if-no-files-found: warn

@@ -49,6 +49,8 @@ mod reserve;
 mod solana_devnet_tests;
 mod solana_rpc;
 #[cfg(test)]
+mod squads_engine_tests;
+#[cfg(test)]
 mod uniswap_fork_tests;
 mod watchers;
 

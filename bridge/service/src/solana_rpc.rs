@@ -369,8 +369,37 @@ pub enum SignatureState {
 }
 
 /// A minimal Solana JSON-RPC surface, abstracted for testability.
+/// Metadata retained for custody validation; bytes alone do not prove
+/// ownership.
+#[derive(Clone, Debug)]
+pub struct SolanaAccount {
+    pub owner: Pubkey,
+    pub executable: bool,
+    pub lamports: u64,
+    pub data: Vec<u8>,
+}
+
 #[async_trait]
 pub trait SolanaRpc: Send + Sync {
+    async fn get_account_info(
+        &self,
+        _address: &str,
+        _commitment: &str,
+    ) -> Result<Option<SolanaAccount>, String> {
+        Err("getAccountInfo metadata unsupported".into())
+    }
+    async fn get_program_accounts(
+        &self,
+        _program: &str,
+        _multisig: &str,
+        _commitment: &str,
+    ) -> Result<Vec<(Pubkey, SolanaAccount)>, String> {
+        Err("getProgramAccounts unsupported".into())
+    }
+    async fn get_block_height(&self) -> Result<u64, String> {
+        Err("getBlockHeight unsupported".into())
+    }
+
     /// `getLatestBlockhash` -> (blockhash bytes, last_valid_block_height).
     async fn get_latest_blockhash(&self) -> Result<([u8; 32], u64), String>;
 
@@ -469,6 +498,54 @@ impl HttpSolanaRpc {
 
 #[async_trait]
 impl SolanaRpc for HttpSolanaRpc {
+    async fn get_account_info(
+        &self,
+        address: &str,
+        commitment: &str,
+    ) -> Result<Option<SolanaAccount>, String> {
+        let result = self
+            .call(
+                "getAccountInfo",
+                json!([address,{"commitment":commitment,"encoding":"base64"}]),
+            )
+            .await?;
+        parse_account_info(&result)
+    }
+    async fn get_program_accounts(
+        &self,
+        program: &str,
+        multisig: &str,
+        commitment: &str,
+    ) -> Result<Vec<(Pubkey, SolanaAccount)>, String> {
+        let result = self
+            .call(
+                "getProgramAccounts",
+                json!([program,{"commitment":commitment,"encoding":"base64",
+            "filters":[{"memcmp":{"offset":8,"bytes":multisig}}]}]),
+            )
+            .await?;
+        let rows = result
+            .as_array()
+            .ok_or("invalid getProgramAccounts response")?;
+        if rows.len() > 10000 {
+            return Err("Squads discovery exceeds account bound".into());
+        }
+        rows.iter()
+            .map(|r| {
+                Ok((
+                    Pubkey::from_base58(r["pubkey"].as_str().ok_or("missing pubkey")?)?,
+                    parse_account_info(&json!({"value":r["account"]}))?.ok_or("missing account")?,
+                ))
+            })
+            .collect()
+    }
+    async fn get_block_height(&self) -> Result<u64, String> {
+        self.call("getBlockHeight", json!([{"commitment":"finalized"}]))
+            .await?
+            .as_u64()
+            .ok_or_else(|| "missing block height".into())
+    }
+
     async fn get_latest_blockhash(&self) -> Result<([u8; 32], u64), String> {
         let result = self
             .call("getLatestBlockhash", json!([{"commitment": "finalized"}]))
@@ -602,7 +679,7 @@ pub fn parse_latest_blockhash(result: &Value) -> Result<([u8; 32], u64), String>
     let last_valid = value
         .get("lastValidBlockHeight")
         .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+        .ok_or("getLatestBlockhash missing lastValidBlockHeight")?;
     Ok((arr, last_valid))
 }
 
@@ -661,27 +738,32 @@ pub fn parse_transaction_logs(result: &Value) -> Result<Option<(Vec<String>, u64
     if result.is_null() {
         return Ok(None);
     }
-    let slot = result.get("slot").and_then(|v| v.as_u64()).unwrap_or(0);
-    // A transaction that executed with an error emitted no trustworthy burn
-    // event; drop it.
-    if result
+    let slot = result
+        .get("slot")
+        .and_then(Value::as_u64)
+        .ok_or("transaction missing slot")?;
+    let meta = result
         .get("meta")
-        .and_then(|m| m.get("err"))
-        .map(|e| !e.is_null())
-        .unwrap_or(false)
-    {
+        .and_then(Value::as_object)
+        .ok_or("transaction missing metadata")?;
+    let error = meta
+        .get("err")
+        .ok_or("transaction missing execution outcome")?;
+    // Only explicitly successful transaction metadata can carry mint evidence.
+    if !error.is_null() {
         return Ok(Some((Vec::new(), slot)));
     }
-    let logs = result
-        .get("meta")
-        .and_then(|m| m.get("logMessages"))
-        .and_then(|v| v.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect()
+    let logs = meta
+        .get("logMessages")
+        .and_then(Value::as_array)
+        .ok_or("transaction logs unavailable")?
+        .iter()
+        .map(|line| {
+            line.as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| "invalid transaction log line".to_string())
         })
-        .unwrap_or_default();
+        .collect::<Result<Vec<_>, String>>()?;
     Ok(Some((logs, slot)))
 }
 
@@ -779,6 +861,23 @@ pub fn base64_encode(input: &[u8]) -> String {
         }
     }
     out
+}
+
+fn parse_account_info(result: &Value) -> Result<Option<SolanaAccount>, String> {
+    let value = result
+        .get("value")
+        .ok_or("missing account response value")?;
+    if value.is_null() {
+        return Ok(None);
+    }
+    Ok(Some(SolanaAccount {
+        owner: Pubkey::from_base58(value["owner"].as_str().ok_or("missing account owner")?)?,
+        executable: value["executable"]
+            .as_bool()
+            .ok_or("missing executable flag")?,
+        lamports: value["lamports"].as_u64().ok_or("missing lamports")?,
+        data: parse_account_data(result)?.ok_or("missing account data")?,
+    }))
 }
 
 #[cfg(test)]
@@ -1031,5 +1130,23 @@ mod tests {
         let (logs, slot) = parse_transaction_logs(&failed).unwrap().unwrap();
         assert_eq!(slot, 7);
         assert!(logs.is_empty());
+    }
+    #[test]
+    fn malformed_rpc_evidence_is_not_success_or_expiry() {
+        let blockhash = bs58::encode([1u8; 32]).into_string();
+        assert!(parse_latest_blockhash(&json!({"value":{"blockhash":blockhash}})).is_err());
+        for response in [
+            json!({"slot":1,"meta":{"logMessages":[]}}),
+            json!({"slot":1,"meta":null}),
+            json!({"meta":{"err":null,"logMessages":[]}}),
+            json!({"slot":1,"meta":{"err":null,"logMessages":[7]}}),
+        ] {
+            assert!(parse_transaction_logs(&response).is_err());
+        }
+        assert!(parse_account_info(&json!({})).is_err());
+        assert!(parse_account_info(
+            &json!({"value":{"data":["","base64"],"lamports":1,"executable":false}})
+        )
+        .is_err());
     }
 }

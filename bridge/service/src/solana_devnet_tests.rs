@@ -59,6 +59,8 @@ fn config_from_env() -> Option<SolanaConfig> {
         enforce_key_permissions: false,
         commitment: SolanaCommitment::Finalized,
         mint_signers: Vec::new(),
+        squads: None,
+        development_direct_mint: true,
         mint_threshold: 0,
     })
 }

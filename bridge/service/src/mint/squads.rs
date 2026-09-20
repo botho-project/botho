@@ -52,6 +52,8 @@
 //! [ADR 0002]: ../../../../docs/decisions/0002-bridge-custody-scp-validator-federation.md
 //! [ADR 0012]: ../../../../docs/decisions/0012-solana-squads-pda-mint-execution.md
 
+pub mod state;
+
 use crate::solana_rpc::{AccountMeta, Instruction, Pubkey, SYSTEM_PROGRAM_ID};
 
 use super::{solana::anchor_discriminator, MintError};

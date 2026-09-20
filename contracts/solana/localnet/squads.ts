@@ -58,7 +58,7 @@ if (mode === "genesis") {
     }),
   );
   console.log(configPda.toBase58());
-} else if (mode === "test") {
+} else if (mode === "test" || mode === "engine-setup") {
   run()
     .then(() => process.exit(0))
     .catch((error) => {
@@ -131,20 +131,21 @@ async function run() {
     // web3 can reject confirmation for a landed program error instead of
     // returning status.value.err. Only the confirmed transaction receipt below
     // establishes the expected rejection; a thrown RPC error alone never does.
+    const commitment = mode === "engine-setup" ? "finalized" : "confirmed";
     let confirmationError: unknown;
     try {
-      await connection.confirmTransaction({ ...bh, signature }, "confirmed");
+      await connection.confirmTransaction({ ...bh, signature }, commitment);
     } catch (error) {
       confirmationError = error;
     }
     let receipt = await connection.getTransaction(signature, {
-      commitment: "confirmed",
+      commitment,
       maxSupportedTransactionVersion: 0,
     });
     for (let i = 0; !receipt && i < 30; i++) {
       await new Promise((r) => setTimeout(r, 100));
       receipt = await connection.getTransaction(signature, {
-        commitment: "confirmed",
+        commitment,
         maxSupportedTransactionVersion: 0,
       });
     }
@@ -269,6 +270,33 @@ async function run() {
   const bridgeState: any = await program.account.bridge.fetch(bridge);
   assert.ok(bridgeState.mintAuthority.equals(vault));
 
+  if (mode === "engine-setup") {
+    await send(
+      "fund independent engine member fee accounts",
+      [second, third, recipient].map((k) =>
+        SystemProgram.transfer({
+          fromPubkey: payer.publicKey,
+          toPubkey: k.publicKey,
+          lamports: 1_000_000_000,
+        }),
+      ),
+    );
+    writeFileSync(
+      output,
+      JSON.stringify({
+        genesisHash: await connection.getGenesisHash(),
+        solanaVersion: await connection.getVersion(),
+        nodeVersion: process.version,
+        multisig: multisig.toBase58(),
+        vault: vault.toBase58(),
+        mint: mint.publicKey.toBase58(),
+        recipient: recipient.publicKey.toBase58(),
+        ata: ata.toBase58(),
+      }),
+    );
+    console.log("Engine fixture initialized; no mint has occurred");
+    return;
+  }
   const squadsIdl = JSON.parse(readFileSync(`${fixtureDir}/idl.json`, "utf8"));
   const squadsCoder = new anchor.BorshInstructionCoder(squadsIdl);
   async function create(vector: any) {

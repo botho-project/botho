@@ -66,6 +66,7 @@ impl BridgeEngine {
     /// without downcasting the `Arc<dyn Minter>`.
     fn build_minters(
         config: &BridgeConfig,
+        db: &Database,
     ) -> (HashMap<Chain, Arc<dyn Minter>>, Option<Arc<SolMinter>>) {
         let mut minters: HashMap<Chain, Arc<dyn Minter>> = HashMap::new();
 
@@ -78,7 +79,7 @@ impl BridgeEngine {
 
         let sol_minter = match SolMinter::new(config.solana.clone()) {
             Ok(minter) => {
-                let handle = Arc::new(minter);
+                let handle = Arc::new(minter.with_store(db.clone()));
                 minters.insert(Chain::Solana, handle.clone());
                 Some(handle)
             }
@@ -205,7 +206,7 @@ impl BridgeEngine {
             warn!("Bridge starting PAUSED (bridge.paused = true in config)");
         }
 
-        let (minters, sol_minter) = Self::build_minters(&self.config);
+        let (minters, sol_minter) = Self::build_minters(&self.config, &self.db);
         let releaser = Self::build_releaser(&self.config);
         let (attestation, federation_provider, attestation_ok, attestation_detail) =
             Self::build_attestation_provider(&self.config);
@@ -982,6 +983,13 @@ impl OrderProcessor {
                     ));
                 }
                 self.db.mark_mint_confirmed(&order.id)?;
+                // Squads replaces its operation handle atomically at completion.
+                // Audit the persisted execute signature, not the pre-poll handle.
+                let dest_tx = self
+                    .db
+                    .get_mint_by_order(&order.id)?
+                    .ok_or("confirmed mint row missing")?
+                    .dest_tx;
                 self.db.log_audit(
                     Some(&order.id),
                     "mint_confirmed",
