@@ -9,6 +9,7 @@ on:
       - 'transaction/**'
       - '**/benches/**'
       - '.github/workflows/benchmarks.yml'
+      - 'scripts/benchmarks/**'
   # Manual trigger for full benchmark runs
   workflow_dispatch:
     inputs:
@@ -54,6 +55,9 @@ jobs:
       # `std`"). Neither crate has benchmarks, so scoping to the benched crates
       # keeps full benchmark coverage while sidestepping both failures and
       # removing the need for the GTK/glib apt install.
+      - name: Check evidence collector
+        run: python3 -m unittest discover -s scripts/benchmarks -v
+
       - name: Compile benchmarks (bench-bearing crates)
         run: >
           cargo bench --no-run
@@ -87,14 +91,39 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-bench-
 
-      - name: Run CLSAG benchmarks (quick)
+      - name: Remove restored Criterion reports
+        id: clear_reports
+        run: rm -rf -- target/criterion
+
+      - name: Run MLSAG benchmarks (quick)
+        id: mlsag_quick
         if: ${{ github.event_name == 'pull_request' || github.event.inputs.full_run != 'true' }}
-        run: cargo bench -p bth-crypto-ring-signature -- --quick --noplot
+        run: cargo bench -p bth-crypto-ring-signature --bench ring_signature_benchmarks -- --quick --noplot
         continue-on-error: true
 
-      - name: Run CLSAG benchmarks (full)
+      - name: Run MLSAG benchmarks (full)
+        id: mlsag_full
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.full_run == 'true' }}
-        run: cargo bench -p bth-crypto-ring-signature -- --noplot
+        run: cargo bench -p bth-crypto-ring-signature --bench ring_signature_benchmarks -- --noplot
+
+      - name: Collect benchmark evidence
+        if: always()
+        env:
+          BENCH_OUTCOMES: '{"clear_reports":"${{ steps.clear_reports.outcome }}","mlsag_quick":"${{ steps.mlsag_quick.outcome }}","mlsag_full":"${{ steps.mlsag_full.outcome }}"}'
+          BENCH_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          BENCH_MODE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.full_run == 'true' && 'full' || 'quick' }}
+        run: python3 scripts/benchmarks/evidence.py
+
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            benchmark-evidence/manifest.json
+            target/criterion/
+          retention-days: 14
+          if-no-files-found: warn
 
   run-node-benchmarks:
     name: Node Benchmarks
@@ -119,32 +148,61 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-bench-
 
+      - name: Remove restored Criterion reports
+        id: clear_reports
+        run: rm -rf -- target/criterion
+
       - name: Run block benchmarks (quick)
+        id: block_quick
         if: ${{ github.event_name == 'pull_request' || github.event.inputs.full_run != 'true' }}
         run: cargo bench -p botho --bench block_benchmarks -- --quick --noplot
         continue-on-error: true
 
       - name: Run mempool benchmarks (quick)
+        id: mempool_quick
         if: ${{ github.event_name == 'pull_request' || github.event.inputs.full_run != 'true' }}
         run: cargo bench -p botho --bench mempool_benchmarks -- --quick --noplot
         continue-on-error: true
 
       - name: Run traffic normalization benchmarks (quick)
+        id: traffic_quick
         if: ${{ github.event_name == 'pull_request' || github.event.inputs.full_run != 'true' }}
         run: cargo bench -p botho --bench traffic_normalization -- --quick --noplot
         continue-on-error: true
 
       - name: Run block benchmarks (full)
+        id: block_full
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.full_run == 'true' }}
         run: cargo bench -p botho --bench block_benchmarks -- --noplot
 
       - name: Run mempool benchmarks (full)
+        id: mempool_full
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.full_run == 'true' }}
         run: cargo bench -p botho --bench mempool_benchmarks -- --noplot
 
       - name: Run traffic normalization benchmarks (full)
+        id: traffic_full
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.full_run == 'true' }}
         run: cargo bench -p botho --bench traffic_normalization -- --noplot
+
+      - name: Collect benchmark evidence
+        if: always()
+        env:
+          BENCH_OUTCOMES: '{"clear_reports":"${{ steps.clear_reports.outcome }}","block_quick":"${{ steps.block_quick.outcome }}","mempool_quick":"${{ steps.mempool_quick.outcome }}","traffic_quick":"${{ steps.traffic_quick.outcome }}","block_full":"${{ steps.block_full.outcome }}","mempool_full":"${{ steps.mempool_full.outcome }}","traffic_full":"${{ steps.traffic_full.outcome }}"}'
+          BENCH_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          BENCH_MODE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.full_run == 'true' && 'full' || 'quick' }}
+        run: python3 scripts/benchmarks/evidence.py
+
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            benchmark-evidence/manifest.json
+            target/criterion/
+          retention-days: 14
+          if-no-files-found: warn
 
   run-transaction-benchmarks:
     name: Transaction Benchmarks
@@ -169,14 +227,39 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-bench-
 
+      - name: Remove restored Criterion reports
+        id: clear_reports
+        run: rm -rf -- target/criterion
+
       - name: Run transaction benchmarks (quick)
+        id: transaction_quick
         if: ${{ github.event_name == 'pull_request' || github.event.inputs.full_run != 'true' }}
-        run: cargo bench -p bth-transaction-core -- --quick --noplot
+        run: cargo bench -p bth-transaction-core --bench transaction_benchmarks -- --quick --noplot
         continue-on-error: true
 
       - name: Run transaction benchmarks (full)
+        id: transaction_full
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.full_run == 'true' }}
-        run: cargo bench -p bth-transaction-core -- --noplot
+        run: cargo bench -p bth-transaction-core --bench transaction_benchmarks -- --noplot
+
+      - name: Collect benchmark evidence
+        if: always()
+        env:
+          BENCH_OUTCOMES: '{"clear_reports":"${{ steps.clear_reports.outcome }}","transaction_quick":"${{ steps.transaction_quick.outcome }}","transaction_full":"${{ steps.transaction_full.outcome }}"}'
+          BENCH_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          BENCH_MODE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.full_run == 'true' && 'full' || 'quick' }}
+        run: python3 scripts/benchmarks/evidence.py
+
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            benchmark-evidence/manifest.json
+            target/criterion/
+          retention-days: 14
+          if-no-files-found: warn
 
   summary:
     name: Benchmark Summary
@@ -186,25 +269,29 @@ jobs:
     steps:
       - name: Generate summary
         run: |
-          echo "## Benchmark Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Benchmark Suite | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----------------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Compile | ${{ needs.compile-benchmarks.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Crypto (CLSAG) | ${{ needs.run-crypto-benchmarks.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Node (Block/Mempool/Traffic) | ${{ needs.run-node-benchmarks.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Transaction | ${{ needs.run-transaction-benchmarks.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Performance Targets" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "#### Cryptography (CLSAG Ring Signatures)" >> $GITHUB_STEP_SUMMARY
-          echo "- CLSAG sign: <10ms" >> $GITHUB_STEP_SUMMARY
-          echo "- CLSAG verify: <5ms" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "#### Traffic Normalization (Phase 2)" >> $GITHUB_STEP_SUMMARY
-          echo "- Standard: <200ms p99 latency, <50% bandwidth overhead" >> $GITHUB_STEP_SUMMARY
-          echo "- Maximum: <1s p99 latency, <2x bandwidth overhead" >> $GITHUB_STEP_SUMMARY
-          echo "- CPU overhead: <5% (standard), <10% (maximum)" >> $GITHUB_STEP_SUMMARY
-          echo "- Memory overhead: <10MB (standard), <50MB (maximum)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "> **Note**: Benchmarks run in quick mode on PRs. Use workflow_dispatch with full_run=true for detailed results." >> $GITHUB_STEP_SUMMARY
+          {
+          echo "## Benchmark Results"
+          echo ""
+          echo "| Benchmark Suite | Status |"
+          echo "|-----------------|--------|"
+          echo "| Compile | ${{ needs.compile-benchmarks.result }} |"
+          echo "| Crypto (MLSAG) | ${{ needs.run-crypto-benchmarks.result }} |"
+          echo "| Node (Block/Mempool/Traffic) | ${{ needs.run-node-benchmarks.result }} |"
+          echo "| Transaction | ${{ needs.run-transaction-benchmarks.result }} |"
+          echo ""
+          echo "### Performance Targets"
+          echo ""
+          echo "#### Cryptography coverage"
+          echo "- Actual suite: MLSAG at ring sizes 11/16/32, not CLSAG."
+          echo "- Job success is not benchmark success: inspect raw step outcomes and Criterion artifacts."
+          echo "- Compile-only jobs have no timing evidence. Canceled jobs may leave no artifact."
+          echo ""
+          echo "#### Traffic Normalization (Phase 2)"
+          echo "- Standard: <200ms p99 latency, <50% bandwidth overhead"
+          echo "- Maximum: <1s p99 latency, <2x bandwidth overhead"
+          echo "- CPU overhead: <5% (standard), <10% (maximum)"
+          echo "- Memory overhead: <10MB (standard), <50MB (maximum)"
+          echo ""
+          echo "> **Note**: Benchmarks run in quick mode on PRs. Use workflow_dispatch with full_run=true for detailed results."
+
+          } >> "$GITHUB_STEP_SUMMARY"
