@@ -8,6 +8,19 @@
 This section describes the reference implementation of \Botho and its
 performance characteristics.
 
+\paragraph{Confidential-amount implementation status.}
+The confidential-amount target remains under implementation. Production CLSAG
+transactions still publish amounts; the inactive single-input integer/R1CS
+experiments in issues \#1284/\#1288 do not supply a complete confidential
+transaction. They exercise exact staged floors, saturation and statement binding,
+but not the final multi-input commitment linkage, conservation, fee quantization,
+wire format or client migration. ADR0009 remains Proposed. The candidate contract
+in \texttt{docs/design/ct-transaction-contract.md} preserves ratified EpochOrigin
+while identifying remaining circulation-policy and fee-bucket decisions.
+Its arithmetic vectors and source inventory are specification evidence, not
+activation, an audited protocol or a mainnet-readiness claim. Timings below must
+not be interpreted as measurements of that unimplemented combined CT proof.
+
 \subsection{Reference Implementation}
 
 \subsubsection{Architecture Overview}
