@@ -87,3 +87,28 @@ source/program/IDL/lockfile hashes. Run with
 `SQUADS_ENGINE_TEST=1 SQUADS_HISTORY_TEST=1 ./localnet/run-squads.sh`.
 The ordinary test suite deliberately ignores this infrastructure test; the
 explicit driver and CI invoke it without a skip path.
+
+
+## Retry and marker funding result (#1299)
+
+`retry-2026-09-20.json` records actual local Squads/wbth execution through two
+independent member databases with finite signing/fee policies. A real vault with
+positive but insufficient marker rent blocks sends. Explicit stale-positive RPC
+metadata plus test-only preflight bypass reproduces a real finalized failed
+execute and exactly 5,000 lamports of member fee debit; production preflight
+remains enabled. Packet loss and accepted-response loss are also explicit faults.
+
+The fixture proves no further sends at exhaustion, including after actual local
+funding, then applies an audited finite extension. Two identical dropped sends
+consume one signature allowance; real expiry consumes that allowance permanently.
+A reopened database and competing worker retain the ledger. Both exhausted
+members complete read-only while paused after the successful execute response is
+lost. Exactly one 1,000,000,000,000-picocredit mint occurs, and each member retains
+that amount of locked source backing. The fee budget excludes account rent and
+transfers; unknown pre-migration exposure is never represented as bounded.
+
+The artifact includes both ledgers, failed logs and fee debit, successful
+finalized execution evidence, local genesis/runtime and source/program/IDL/lock
+hashes. Invoke the dedicated non-skipping driver with `SQUADS_ENGINE_TEST=1
+SQUADS_RETRY_TEST=1 ./localnet/run-squads.sh`. This uses local source-confirmation
+fixtures, not live BTH consensus or external funds.

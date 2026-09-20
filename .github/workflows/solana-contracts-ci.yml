@@ -234,3 +234,19 @@ jobs:
           name: squads-history-execution
           path: contracts/solana/history-execution.json
           if-no-files-found: warn
+
+      - name: Execute bounded retry and rent integration
+        env:
+          RUSTUP_TOOLCHAIN: nightly-2025-12-03
+          SQUADS_ENGINE_TEST: '1'
+          SQUADS_RETRY_TEST: '1'
+          SQUADS_ENGINE_EVIDENCE: retry-execution.json
+        run: ./localnet/run-squads.sh
+
+      - name: Preserve bounded retry execution evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: squads-retry-execution
+          path: contracts/solana/retry-execution.json
+          if-no-files-found: warn

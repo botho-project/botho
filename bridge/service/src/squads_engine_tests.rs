@@ -30,6 +30,7 @@ struct ControlledRpc {
     lost_responses: std::sync::atomic::AtomicUsize,
     signatures: std::sync::Mutex<Vec<String>>,
     accepted_raw: std::sync::Mutex<Vec<Vec<u8>>>,
+    attempted_raw: std::sync::Mutex<Vec<Vec<u8>>>,
     account_overrides: std::sync::Mutex<HashMap<String, Option<crate::solana_rpc::SolanaAccount>>>,
 }
 impl ControlledRpc {
@@ -44,12 +45,20 @@ impl ControlledRpc {
             lost_responses: 0.into(),
             signatures: Default::default(),
             accepted_raw: Default::default(),
+            attempted_raw: Default::default(),
             account_overrides: Default::default(),
         }
     }
 }
 #[async_trait::async_trait]
 impl SolanaRpc for ControlledRpc {
+    async fn minimum_rent(&self, bytes: usize) -> Result<u64, String> {
+        self.inner.minimum_rent(bytes).await
+    }
+    async fn message_fee(&self, message: &[u8]) -> Result<u64, String> {
+        self.inner.message_fee(message).await
+    }
+
     async fn genesis_hash(&self) -> Result<String, String> {
         if let Some(hash) = self.genesis_override.lock().unwrap().clone() {
             return Ok(hash);
@@ -107,6 +116,18 @@ impl SolanaRpc for ControlledRpc {
     async fn send_transaction(&self, raw: &[u8]) -> Result<String, String> {
         use std::sync::atomic::Ordering::SeqCst;
         self.send_calls.fetch_add(1, SeqCst);
+        self.attempted_raw.lock().unwrap().push(raw.to_vec());
+        if self.send_mode.load(SeqCst) == 3 {
+            // Test-only bypass of preflight to prove a real landed failed execute
+            // under a stale positive funding read. Production never skips preflight.
+            let v:serde_json::Value=reqwest::Client::new().post(std::env::var("SQUADS_ENGINE_RPC").unwrap()).json(&serde_json::json!({"jsonrpc":"2.0","id":1,"method":"sendTransaction","params":[crate::solana_rpc::base64_encode(raw),{"encoding":"base64","skipPreflight":true}]})).send().await.map_err(|e|e.to_string())?.json().await.map_err(|e|e.to_string())?;
+            let signature = v["result"]
+                .as_str()
+                .ok_or_else(|| v.to_string())?
+                .to_string();
+            self.signatures.lock().unwrap().push(signature.clone());
+            return Ok(signature);
+        }
         if self.send_mode.load(SeqCst) == 2 {
             return Err("injected outbound packet loss".into());
         }
@@ -508,6 +529,7 @@ async fn squads_engine_localnet() {
         config.solana.mint_signers = (1..=3).map(|i| hex::encode(pk(i).0)).collect();
         config.solana.mint_threshold = 2;
         config.solana.squads = Some(SquadsConfig {
+            retry: Default::default(),
             history_page_size: 2,
             history_capacity: 4096,
             multisig: multisig.to_base58(),
@@ -1195,6 +1217,7 @@ async fn squads_history_localnet() {
         config.solana.mint_signers = (1..=3).map(|i| hex::encode(pk(i).0)).collect();
         config.solana.mint_threshold = 2;
         config.solana.squads = Some(SquadsConfig {
+            retry: Default::default(),
             history_page_size: 2,
             history_capacity: 4096,
             multisig: multisig.to_base58(),
@@ -1649,4 +1672,443 @@ async fn squads_history_localnet() {
     )
     .unwrap();
     println!("HISTORY PASS: retained payload, live and closed accounts, paginated marker history, fresh independent DB, restart, paused read-only completion, unchanged supply/backing");
+}
+
+#[tokio::test]
+#[ignore = "requires explicit pinned local validator driver"]
+async fn squads_retry_localnet() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("bth_bridge_service=warn")
+        .with_test_writer()
+        .try_init();
+    let fixture: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            std::env::var("SQUADS_ENGINE_FIXTURE").expect("driver fixture required; no skip"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let url = std::env::var("SQUADS_ENGINE_RPC").expect("local RPC required");
+    assert!(url.starts_with("http://127.0.0.1:"));
+    let rpc = HttpSolanaRpc::new(url.clone()).unwrap();
+    let multisig = Pubkey::from_base58(fixture["multisig"].as_str().unwrap()).unwrap();
+    let mint = fixture["mint"].as_str().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut configs = vec![];
+    for n in [1, 2] {
+        let mut config = BridgeConfig::default();
+        config.solana.rpc_url = url.clone();
+        config.solana.wbth_program = "CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE".into();
+        config.solana.commitment = SolanaCommitment::Finalized;
+        config.solana.mint_signers = (1..=3).map(|i| hex::encode(pk(i).0)).collect();
+        config.solana.mint_threshold = 2;
+        config.solana.squads = Some(SquadsConfig {
+            retry: bth_bridge_core::SquadsRetryPolicy {
+                max_attempts: if n == 1 { 2 } else { 1 },
+                max_fee_lamports: if n == 1 { 10_000 } else { 5_000 },
+                send_interval_seconds: 1,
+                max_broadcasts_per_signature: 2,
+            },
+            history_page_size: 2,
+            history_capacity: 4096,
+            multisig: multisig.to_base58(),
+            vault_index: 0,
+            proposer: pk(1).to_base58(),
+        });
+        config.solana.development_direct_mint = false;
+        let path = dir.path().join(format!("member{n}.seed"));
+        std::fs::write(&path, hex::encode(key(n).to_bytes())).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        config.solana.keypair_file = Some(path.to_str().unwrap().into());
+        config.bridge.db_path = dir
+            .path()
+            .join(format!("member{n}.db"))
+            .to_str()
+            .unwrap()
+            .into();
+        config.bridge.attestation_nonce_file = Some(
+            dir.path()
+                .join(format!("nonce{n}.json"))
+                .to_str()
+                .unwrap()
+                .into(),
+        );
+        configs.push(config);
+    }
+
+    use crate::solana_rpc::{AccountMeta, Instruction, SignatureState, SYSTEM_PROGRAM_ID};
+    use std::sync::atomic::Ordering::SeqCst;
+    let mut order = BridgeOrder::new_mint(
+        Chain::Solana,
+        1_000_000_000_000,
+        0,
+        "local-retry-reserve".into(),
+        fixture["recipient"].as_str().unwrap().into(),
+    );
+    order.source_tx = Some("local-retry-confirmed-source".into());
+    order.set_status(OrderStatus::DepositConfirmed);
+    let db1 = Database::open(&configs[0].bridge.db_path).unwrap();
+    db1.migrate().unwrap();
+    db1.insert_order(&order).unwrap();
+    let db2 = Database::open(&configs[1].bridge.db_path).unwrap();
+    db2.migrate().unwrap();
+    db2.insert_order(&order).unwrap();
+    let transport = Arc::new(ControlledRpc::new(url.clone()));
+    transport.send_mode.store(0, SeqCst);
+    let mut p1 = processor_with_rpc(
+        &configs[0],
+        &db1,
+        std::slice::from_ref(&order),
+        Some((transport.clone(), 1)),
+    );
+    let p2 = processor(&configs[1], &db2, std::slice::from_ref(&order));
+    for _ in 0..160 {
+        tick(&p1).await;
+        if db1
+            .solana_intent(&order.id)
+            .unwrap()
+            .is_some_and(|r| r.verified)
+        {
+            break;
+        }
+    }
+    let index = db1
+        .solana_intent(&order.id)
+        .unwrap()
+        .unwrap()
+        .index
+        .unwrap();
+    let ctx = context(&fixture, &order, index, 1);
+    let vault = ctx.inner.accounts[5].pubkey;
+    for _ in 0..160 {
+        tick(&p2).await;
+        if proposal(&rpc, multisig, index)
+            .await
+            .is_some_and(|p| p.status == 3)
+        {
+            break;
+        }
+    }
+    assert_eq!(proposal(&rpc, multisig, index).await.unwrap().status, 3);
+    let minimum = rpc
+        .minimum_rent(40)
+        .await
+        .unwrap()
+        .checked_add(rpc.minimum_rent(0).await.unwrap())
+        .unwrap();
+    let actual = rpc
+        .get_account_info(&vault.to_base58(), "finalized")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(actual.lamports > 0 && actual.lamports < minimum);
+    let before = transport.send_calls.load(SeqCst);
+    for _ in 0..3 {
+        tick(&p1).await;
+    }
+    assert_eq!(transport.send_calls.load(SeqCst), before);
+    assert_eq!(
+        db1.solana_budget(&order.id, &pk(1).to_base58())
+            .unwrap()
+            .unwrap()
+            .attempts
+            .len(),
+        1
+    );
+    let mut zero = actual.clone();
+    zero.lamports = 0;
+    transport
+        .account_overrides
+        .lock()
+        .unwrap()
+        .insert(vault.to_base58(), Some(zero));
+    tick(&p1).await;
+    assert_eq!(transport.send_calls.load(SeqCst), before);
+    // Explicit stale funding metadata fault: the actual chain remains underfunded.
+    let mut stale = actual.clone();
+    stale.lamports = minimum;
+    transport
+        .account_overrides
+        .lock()
+        .unwrap()
+        .insert(vault.to_base58(), Some(stale));
+    let balance_before_failure = rpc
+        .get_account_info(&pk(1).to_base58(), "finalized")
+        .await
+        .unwrap()
+        .unwrap()
+        .lamports;
+    transport.send_mode.store(3, SeqCst);
+    for _ in 0..40 {
+        tick(&p1).await;
+        if transport.send_calls.load(SeqCst) > before {
+            break;
+        }
+    }
+    let failed = db1
+        .solana_intent(&order.id)
+        .unwrap()
+        .unwrap()
+        .action
+        .unwrap();
+    assert_eq!(failed.kind, "execute");
+    for _ in 0..160 {
+        if matches!(rpc.get_signature_status(&failed.signature).await.unwrap(),SignatureState::Landed{err:Some(_),confirmation_status:Some(ref c),..} if c=="finalized")
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        matches!(rpc.get_signature_status(&failed.signature).await.unwrap(),SignatureState::Landed{err:Some(_),confirmation_status:Some(ref c),..} if c=="finalized")
+    );
+    assert!(rpc
+        .get_account_info(&ctx.inner.accounts[1].pubkey.to_base58(), "finalized")
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(rpc.get_token_supply(mint, "finalized").await.unwrap(), 0);
+    let balance_after_failure = rpc
+        .get_account_info(&pk(1).to_base58(), "finalized")
+        .await
+        .unwrap()
+        .unwrap()
+        .lamports;
+    assert_eq!(
+        balance_before_failure
+            .checked_sub(balance_after_failure)
+            .unwrap(),
+        5_000
+    );
+    let full = db1
+        .solana_budget(&order.id, &pk(1).to_base58())
+        .unwrap()
+        .unwrap();
+    assert_eq!(full.attempts.len(), 2);
+    assert_eq!(full.reserved_fees().unwrap(), 10_000);
+    transport.send_mode.store(0, SeqCst);
+    let count = transport.send_calls.load(SeqCst);
+    for _ in 0..8 {
+        tick(&p1).await;
+    }
+    assert_eq!(transport.send_calls.load(SeqCst), count);
+    assert_eq!(db1.locked_reserve_total().unwrap(), order.net_amount());
+    // Real local funding recovery. Member-funded system transfer; no mint action.
+    let mut data = 2u32.to_le_bytes().to_vec();
+    data.extend_from_slice(&10_000_000u64.to_le_bytes());
+    let funding = send(
+        &rpc,
+        1,
+        Instruction {
+            program_id: SYSTEM_PROGRAM_ID,
+            accounts: vec![
+                AccountMeta::writable_signer(pk(1)),
+                AccountMeta::writable(vault),
+            ],
+            data,
+        },
+    )
+    .await;
+    transport.account_overrides.lock().unwrap().clear();
+    for _ in 0..3 {
+        tick(&p1).await;
+    }
+    assert_eq!(transport.send_calls.load(SeqCst), count);
+    let ledger = db1
+        .solana_budget(&order.id, &pk(1).to_base58())
+        .unwrap()
+        .unwrap();
+    db1.extend_solana_budget(
+        &order.id,
+        &pk(1).to_base58(),
+        ledger.revision,
+        2,
+        10_000,
+        "local test: reviewed failed execute and funded vault",
+    )
+    .unwrap();
+    transport.send_mode.store(2, SeqCst);
+    for _ in 0..30 {
+        tick(&p1).await;
+        if transport.send_calls.load(SeqCst) > count {
+            break;
+        }
+    }
+    let dropped = db1
+        .solana_intent(&order.id)
+        .unwrap()
+        .unwrap()
+        .action
+        .unwrap();
+    let saved = db1
+        .solana_budget(&order.id, &pk(1).to_base58())
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.attempts.len(), 3);
+    // A second DB connection/worker cannot bypass persisted spacing or allowances.
+    let reopened = Database::open(&configs[0].bridge.db_path).unwrap();
+    reopened.migrate().unwrap();
+    assert_eq!(
+        reopened
+            .solana_budget(&order.id, &pk(1).to_base58())
+            .unwrap()
+            .unwrap()
+            .reserved_fees()
+            .unwrap(),
+        15_000
+    );
+    let peer = processor_with_rpc(
+        &configs[0],
+        &reopened,
+        std::slice::from_ref(&order),
+        Some((transport.clone(), 1)),
+    );
+    let (first, second) = tokio::join!(p1.process_pending_orders(), peer.process_pending_orders());
+    first.unwrap();
+    second.unwrap();
+    drop(p1);
+    p1 = processor_with_rpc(
+        &configs[0],
+        &reopened,
+        std::slice::from_ref(&order),
+        Some((transport.clone(), 1)),
+    );
+    for _ in 0..30 {
+        tick(&p1).await;
+        let b = reopened
+            .solana_budget(&order.id, &pk(1).to_base58())
+            .unwrap()
+            .unwrap();
+        if b.attempts.last().unwrap().broadcasts == 2 {
+            break;
+        }
+    }
+    let count = transport.send_calls.load(SeqCst);
+    for _ in 0..8 {
+        tick(&p1).await;
+    }
+    assert_eq!(transport.send_calls.load(SeqCst), count);
+    let attempts = transport.attempted_raw.lock().unwrap().clone();
+    assert_eq!(
+        attempts.iter().filter(|raw| *raw == &dropped.raw).count(),
+        2
+    );
+    for _ in 0..400 {
+        if rpc.get_block_height().await.unwrap() > dropped.last_valid_height {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(rpc.get_block_height().await.unwrap() > dropped.last_valid_height);
+    // Expiry consumes its allowance permanently. Last permitted replacement lands,
+    // then the response is lost; paused/exhausted members still reconcile it.
+    transport.send_mode.store(1, SeqCst);
+    for _ in 0..80 {
+        tick(&p1).await;
+        if transport.lost_responses.load(SeqCst) > 0 {
+            break;
+        }
+    }
+    assert_eq!(transport.lost_responses.load(SeqCst), 1);
+    reopened
+        .set_paused(true, Some("after accepted execute"))
+        .unwrap();
+    db2.set_paused(true, Some("exhausted member read-only completion"))
+        .unwrap();
+    for _ in 0..160 {
+        tick(&p1).await;
+        tick(&p2).await;
+        if reopened.get_order(&order.id).unwrap().unwrap().status == OrderStatus::Completed
+            && db2.get_order(&order.id).unwrap().unwrap().status == OrderStatus::Completed
+        {
+            break;
+        }
+    }
+    assert_eq!(
+        reopened.get_order(&order.id).unwrap().unwrap().status,
+        OrderStatus::Completed
+    );
+    assert_eq!(
+        db2.get_order(&order.id).unwrap().unwrap().status,
+        OrderStatus::Completed
+    );
+    let final_budget = reopened
+        .solana_budget(&order.id, &pk(1).to_base58())
+        .unwrap()
+        .unwrap();
+    assert_eq!(final_budget.attempts.len(), 4);
+    assert_eq!(final_budget.reserved_fees().unwrap(), 20_000);
+    assert_eq!(
+        db2.solana_budget(&order.id, &pk(2).to_base58())
+            .unwrap()
+            .unwrap()
+            .attempts
+            .len(),
+        1
+    );
+    let count = transport.send_calls.load(SeqCst);
+    for _ in 0..3 {
+        tick(&p1).await;
+        tick(&p2).await;
+    }
+    assert_eq!(transport.send_calls.load(SeqCst), count);
+    assert_eq!(
+        rpc.get_token_supply(mint, "finalized").await.unwrap(),
+        order.net_amount() as u128
+    );
+    assert_eq!(reopened.locked_reserve_total().unwrap(), order.net_amount());
+    assert_eq!(db2.locked_reserve_total().unwrap(), order.net_amount());
+    let executed = reopened
+        .get_mint_by_order(&order.id)
+        .unwrap()
+        .unwrap()
+        .dest_tx;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut hashes = serde_json::Map::new();
+    for path in [
+        "Cargo.lock",
+        "bridge/core/src/config.rs",
+        "bridge/core/src/lib.rs",
+        "bridge/service/src/db/solana_budget.rs",
+        ".github/workflows/solana-contracts-ci.yml",
+        "bridge/service/src/lib.rs",
+        "bridge/service/src/mint/solana.rs",
+        "bridge/service/src/mint/squads/state.rs",
+        "bridge/service/tests/fixtures/squads-history-transactions.json",
+        "bridge/service/src/db.rs",
+        "bridge/service/src/db/solana_history.rs",
+        "bridge/service/src/db/solana_intents.rs",
+        "bridge/service/src/mint/solana/history.rs",
+        "bridge/service/src/mint/solana/squads_backend.rs",
+        "bridge/service/src/solana_rpc.rs",
+        "bridge/service/src/solana_rpc/history.rs",
+        "bridge/service/src/squads_engine_tests.rs",
+        "bridge/service/src/main.rs",
+        "contracts/solana/localnet/squads.ts",
+        "contracts/solana/localnet/run-squads.sh",
+        "contracts/solana/package-lock.json",
+        "contracts/solana/target/deploy/wbth.so",
+        "contracts/solana/fixtures/squads-v4/squads_multisig_program.so",
+        "contracts/solana/fixtures/squads-v4/idl.json",
+    ] {
+        use sha2::Digest;
+        hashes.insert(
+            path.into(),
+            hex::encode(sha2::Sha256::digest(
+                std::fs::read(root.join(path)).unwrap(),
+            ))
+            .into(),
+        );
+    }
+    let evidence = serde_json::json!({"source_sha256":hashes,"fixture":fixture,"order":order.id,"funding":funding,"failed_execute":failed.signature,"expired_attempt":dropped.signature,"executed":executed,"member1_budget":final_budget,"member2_budget":db2.solana_budget(&order.id,&pk(2).to_base58()).unwrap(),"failed_fee_lamports":balance_before_failure-balance_after_failure,"failed_receipt":rpc.get_transaction_logs(&failed.signature,"finalized").await.unwrap(),"executed_receipt":rpc.historical_transaction(&executed).await.unwrap(),"supply":rpc.get_token_supply(mint,"finalized").await.unwrap().to_string(),"locked_backing_each":order.net_amount().to_string(),"send_calls":count,"faults":["stale positive funding metadata plus test-only skipPreflight yielded real failed landed execute","outbound packet loss","accepted execute with lost response"]});
+    std::fs::write(
+        std::env::var("SQUADS_ENGINE_EVIDENCE").unwrap(),
+        serde_json::to_vec_pretty(&evidence).unwrap(),
+    )
+    .unwrap();
+    println!("RETRY PASS: actual insufficient rent, failed landed fee, exhausted/reopened budget, bounded rebroadcast, expiry, funding and exactly-once paused recovery");
 }

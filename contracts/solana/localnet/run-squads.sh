@@ -47,6 +47,7 @@ if [[ "${SQUADS_ENGINE_TEST:-0}" == 1 ]]; then
     node --import tsx localnet/squads.ts engine-setup "$run_dir/engine.json"
     engine_test=squads_engine_tests::squads_engine_localnet
     if [[ "${SQUADS_HISTORY_TEST:-0}" == 1 ]]; then engine_test=squads_engine_tests::squads_history_localnet; fi
+    if [[ "${SQUADS_RETRY_TEST:-0}" == 1 ]]; then engine_test=squads_engine_tests::squads_retry_localnet; fi
     SQUADS_ENGINE_FIXTURE="$run_dir/engine.json" SQUADS_ENGINE_RPC=http://127.0.0.1:18899 \
         SQUADS_ENGINE_EVIDENCE="${SQUADS_ENGINE_EVIDENCE:-$run_dir/engine-execution.json}" \
         cargo test --manifest-path ../../Cargo.toml -p bth-bridge-service --lib -- \

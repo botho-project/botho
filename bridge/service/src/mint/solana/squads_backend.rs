@@ -67,6 +67,13 @@ impl SolMinter {
         }
     }
     pub(super) async fn validate_squads_custody(&self) -> Result<MultisigState, MintError> {
+        self.config
+            .squads
+            .as_ref()
+            .ok_or_else(|| invalid("Squads config missing"))?
+            .retry
+            .validate()
+            .map_err(invalid)?;
         let (multisig, proposer, member) = self.identity()?;
         if self.config.mint_threshold < 2 {
             return Err(invalid("Squads threshold must be at least two"));
@@ -513,6 +520,29 @@ impl SolMinter {
                 _ => return Ok(pending()),
             }
         };
+        if kind == "execute" {
+            // Existing markers are positive completion candidates, never rent absence.
+            if self
+                .account(ctx.inner.accounts[1].pubkey, "finalized")
+                .await?
+                .is_some()
+            {
+                return self.recover_history(order, &row, &ctx).await;
+            }
+            let vault = self
+                .account(ctx.inner.accounts[5].pubkey, "finalized")
+                .await?
+                .ok_or_else(|| invalid("execute vault funding missing"))?;
+            if vault.owner != SYSTEM_PROGRAM_ID || vault.executable || !vault.data.is_empty() {
+                return Err(invalid("execute vault must be an empty system account"));
+            }
+            let marker_rent = self.rpc.minimum_rent(40).await.map_err(MintError::Rpc)?;
+            let vault_remainder = self.rpc.minimum_rent(0).await.map_err(MintError::Rpc)?;
+            let required = execute_rent_requirement(marker_rent, vault_remainder)?;
+            if vault.lamports < required {
+                return Err(invalid(format!("execute vault needs {required} lamports for 40-byte marker plus vault rent remainder; funding hold, backing retained")));
+            }
+        }
         self.advance_action(&row, kind, instructions).await?;
         Ok(pending())
     }
@@ -526,6 +556,8 @@ impl SolMinter {
         if db.is_paused().map_err(invalid)?.is_some() {
             return Ok(());
         }
+        let (_, _, member) = self.identity()?;
+        let member = member.to_base58();
         if let Some(action) = &row.action {
             if action.kind == kind {
                 let state = self
@@ -549,7 +581,16 @@ impl SolMinter {
                     }
                     SignatureState::Unknown => {}
                 }
-                if db.is_paused().map_err(invalid)?.is_none() {
+                if db.is_paused().map_err(invalid)?.is_none()
+                    && db
+                        .reserve_solana_rebroadcast(
+                            row,
+                            &member,
+                            action,
+                            chrono::Utc::now().timestamp_millis(),
+                        )
+                        .map_err(invalid)?
+                {
                     self.rpc
                         .send_transaction(&action.raw)
                         .await
@@ -565,6 +606,17 @@ impl SolMinter {
                 return Ok(());
             }
         }
+        if !db
+            .solana_attempt_available(
+                &row.order_id,
+                &member,
+                0,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .map_err(invalid)?
+        {
+            return Ok(());
+        }
         let (hash, height) = self
             .rpc
             .get_latest_blockhash()
@@ -577,7 +629,30 @@ impl SolMinter {
             .signer
             .as_ref()
             .ok_or_else(|| invalid("member signing key missing"))?;
+        // Only the canonical Squads/ATA bundle is permitted. In particular no
+        // ComputeBudget price/limit instruction can add an unquoted priority fee.
+        if instructions.iter().any(|i| {
+            i.program_id != SQUADS_V4_PROGRAM_ID && i.program_id != ASSOCIATED_TOKEN_PROGRAM_ID
+        }) {
+            return Err(invalid("unexpected action/priority-fee instruction"));
+        }
         let message = LegacyMessage::compile(*member, &instructions, hash);
+        let fee = self
+            .rpc
+            .message_fee(&message.serialize())
+            .await
+            .map_err(MintError::Rpc)?;
+        if !db
+            .solana_attempt_available(
+                &row.order_id,
+                &member.to_base58(),
+                fee,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .map_err(invalid)?
+        {
+            return Ok(());
+        }
         let transaction = Transaction {
             signatures: vec![sk.sign(&message.serialize()).to_bytes()],
             message,
@@ -591,7 +666,14 @@ impl SolMinter {
             last_valid_height: height,
         };
         if db
-            .update_solana_intent(row, row.index, row.verified, Some(&action))
+            .reserve_solana_attempt(
+                row,
+                &member.to_base58(),
+                &self.config.squads.as_ref().unwrap().retry,
+                &action,
+                fee,
+                chrono::Utc::now().timestamp_millis(),
+            )
             .map_err(invalid)?
             && db.is_paused().map_err(invalid)?.is_none()
         {
@@ -609,6 +691,15 @@ impl SolMinter {
         }
         Ok(())
     }
+}
+
+fn execute_rent_requirement(marker: u64, remainder: u64) -> Result<u64, MintError> {
+    if marker == 0 || remainder == 0 {
+        return Err(invalid("invalid zero rent quote"));
+    }
+    marker
+        .checked_add(remainder)
+        .ok_or_else(|| invalid("execute rent sum overflow"))
 }
 
 pub(super) fn bound_mint_event(
@@ -673,6 +764,13 @@ pub(super) fn bound_mint_event(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn execute_rent_rejects_overflow_and_zero() {
+        assert!(super::execute_rent_requirement(u64::MAX, 1).is_err());
+        assert!(super::execute_rent_requirement(0, 1).is_err());
+        assert_eq!(super::execute_rent_requirement(100, 20).unwrap(), 120);
+    }
+
     use super::*;
     #[test]
     fn untrusted_counter_and_timelock_bounds_fail_closed() {
