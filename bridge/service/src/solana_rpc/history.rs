@@ -59,6 +59,101 @@ fn signature(value: &str) -> Result<(), String> {
     }
     Ok(())
 }
+/// Unknown failure shapes cannot silently remove a governance transaction
+/// from the authorization timeline. Only known transaction-error encodings
+/// are negative (rolled-back) evidence; all others remain inconclusive.
+fn failed_error(err: &Value) -> Result<bool, String> {
+    if err.is_null() {
+        return Ok(false);
+    }
+    if let Some(name) = err.as_str() {
+        let known = [
+            "AccountInUse",
+            "AccountLoadedTwice",
+            "AccountNotFound",
+            "ProgramAccountNotFound",
+            "InsufficientFundsForFee",
+            "InvalidAccountForFee",
+            "AlreadyProcessed",
+            "BlockhashNotFound",
+            "CallChainTooDeep",
+            "MissingSignatureForFee",
+            "InvalidAccountIndex",
+            "SignatureFailure",
+            "InvalidProgramForExecution",
+            "SanitizeFailure",
+            "ClusterMaintenance",
+            "AccountBorrowOutstanding",
+            "WouldExceedMaxBlockCostLimit",
+            "UnsupportedVersion",
+            "InvalidWritableAccount",
+            "WouldExceedMaxAccountCostLimit",
+            "WouldExceedAccountDataBlockLimit",
+            "TooManyAccountLocks",
+            "AddressLookupTableNotFound",
+            "InvalidAddressLookupTableOwner",
+            "InvalidAddressLookupTableData",
+            "InvalidAddressLookupTableIndex",
+            "InvalidRentPayingAccount",
+            "WouldExceedMaxVoteCostLimit",
+            "WouldExceedAccountDataTotalLimit",
+            "MaxLoadedAccountsDataSizeExceeded",
+            "InvalidLoadedAccountsDataSizeLimit",
+            "ResanitizationNeeded",
+            "UnbalancedTransaction",
+            "ProgramCacheHitMaxLimit",
+        ];
+        if known.contains(&name) {
+            return Ok(true);
+        }
+    }
+    if let Some(object) = err.as_object().filter(|o| o.len() == 1) {
+        if let Some(pair) = object
+            .get("InstructionError")
+            .and_then(Value::as_array)
+            .filter(|p| p.len() == 2)
+        {
+            let index = pair[0].as_u64().is_some_and(|i| i <= 255);
+            let instruction = pair[1].as_str().is_some_and(|s| !s.is_empty())
+                || pair[1].as_object().is_some_and(|o| {
+                    o.len() == 1
+                        && (o
+                            .get("Custom")
+                            .and_then(Value::as_u64)
+                            .is_some_and(|n| n <= u32::MAX as u64)
+                            || o.get("BorshIoError").is_some_and(Value::is_string))
+                });
+            if index && instruction {
+                return Ok(true);
+            }
+        }
+        if object
+            .get("DuplicateInstruction")
+            .and_then(Value::as_u64)
+            .is_some_and(|i| i <= 255)
+        {
+            return Ok(true);
+        }
+        for name in [
+            "InsufficientFundsForRent",
+            "ProgramExecutionTemporarilyRestricted",
+        ] {
+            if object
+                .get(name)
+                .and_then(Value::as_object)
+                .is_some_and(|o| {
+                    o.len() == 1
+                        && o.get("account_index")
+                            .and_then(Value::as_u64)
+                            .is_some_and(|i| i <= 255)
+                })
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Err("unknown or malformed historical transaction error; history inconclusive".into())
+}
 pub fn parse_page(v: &Value) -> Result<Vec<HistorySignature>, String> {
     let rows = v.as_array().ok_or("history page not an array")?;
     if rows.len() > 1000 {
@@ -72,16 +167,14 @@ pub fn parse_page(v: &Value) -> Result<Vec<HistorySignature>, String> {
                 return Err("history is not finalized".into());
             }
             let err = r.get("err").ok_or("missing history err")?;
-            if !(err.is_null() || err.is_object() || err.is_string()) {
-                return Err("malformed historical error field".into());
-            }
+
             Ok(HistorySignature {
                 signature: s.into(),
                 slot: r
                     .get("slot")
                     .and_then(Value::as_u64)
                     .ok_or("missing history slot")?,
-                failed: !err.is_null(),
+                failed: failed_error(err)?,
             })
         })
         .collect()
@@ -312,6 +405,22 @@ mod tests {
             assert!(error.contains("byte limit"), "{error}");
             server.join().unwrap();
         }
+    }
+
+    #[test]
+    fn unknown_failure_cannot_hide_governance_history() {
+        for err in [
+            json!({}),
+            json!({"UnknownError":1}),
+            json!(false),
+            json!("UnknownError"),
+            json!({"InstructionError":[0,{}]}),
+        ] {
+            assert!(failed_error(&err).is_err());
+        }
+        assert!(failed_error(&json!({"InstructionError":[0,{"Custom":6008}]})).unwrap());
+        assert!(failed_error(&json!("BlockhashNotFound")).unwrap());
+        assert!(!failed_error(&Value::Null).unwrap());
     }
     fn transaction() -> (String, Value) {
         let sig = bs58::encode([1; 64]).into_string();

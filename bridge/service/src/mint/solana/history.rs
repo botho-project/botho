@@ -660,11 +660,13 @@ impl SolMinter {
                         return Err(invalid("live proposal contradicts historical proof"));
                     }
                 }
+                let mut completed_history = saved.clone();
+                completed_history.progress = encode_progress(&progress)?;
                 if db
                     .complete_solana_history(
                         order,
                         row,
-                        &saved,
+                        &completed_history,
                         proof.index,
                         &proof.signature,
                         &proof.evidence,

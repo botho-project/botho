@@ -160,9 +160,16 @@ mod tests {
         assert!(!db
             .complete_solana_history(&wrong, &row, &h, 1, "execute", "proof")
             .unwrap());
+        let mut newest = h.clone();
+        newest.progress = r#"{"cursor":"last","receipts":["newest-finalized-receipt"]}"#.into();
         assert!(db
-            .complete_solana_history(&o, &row, &h, 1, "execute", "proof")
+            .complete_solana_history(&o, &row, &newest, 1, "execute", "proof")
             .unwrap());
+        let persisted: serde_json::Value =
+            serde_json::from_str(&db.solana_history(&o.id).unwrap().unwrap().progress).unwrap();
+        assert_eq!(persisted["cursor"], "last");
+        assert_eq!(persisted["receipts"][0], "newest-finalized-receipt");
+        assert_eq!(persisted["completed_signature"], "execute");
         assert!(!db
             .complete_solana_history(&o, &row, &h, 1, "execute", "proof")
             .unwrap());
