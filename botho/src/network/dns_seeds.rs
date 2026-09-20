@@ -62,21 +62,17 @@ const DEFAULT_TTL: Duration = Duration::from_secs(300);
 
 /// Upper bound on a single DNS seed lookup.
 ///
-/// Mitigation for RUSTSEC-2026-0118/-0119 (hickory-proto 0.25: DNS-response
-/// triggered CPU exhaustion / unbounded loop). A hostile or hanging DNS
-/// response must not stall node bootstrap: on timeout the caller falls back
-/// to hardcoded seeds via the existing [`DnsSeedError::DnsQuery`] path.
+/// Keeps bootstrap responsive when the resolver awaits an unresponsive server;
+/// on timeout the caller falls back to hardcoded seeds through
+/// [`DnsSeedError::DnsQuery`]. Tokio cancellation occurs at await points and
+/// cannot preempt synchronous CPU work.
 ///
-/// Note: `tokio::time::timeout` cancels at await points, so this bounds the
-/// hang and caps the blast radius but cannot preempt a purely synchronous CPU
-/// spin between awaits. Tracking note (#659): the full fix is the
-/// libp2p 0.57+ / hickory-proto 0.26 upgrade — when libp2p ships a release on
-/// hickory 0.26, bump it, drop the direct `hickory-resolver = "0.25"` pin in
-/// `botho/Cargo.toml`, and remove the RUSTSEC-2026-0118/-0119 ignores from
-/// `deny.toml`.
+/// Direct seed discovery uses Hickory 0.26. The separate libp2p DNS dependency
+/// still uses Hickory 0.25, so its RUSTSEC-2026-0118/-0119 tracking and the
+/// corresponding `deny.toml` exceptions remain until #813 is resolved.
 const DNS_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Drive a DNS lookup future with a hard upper bound.
+/// Drive a DNS lookup future with a timeout at cooperative await points.
 ///
 /// Production callers pass [`DNS_QUERY_TIMEOUT`]; the duration is a parameter
 /// so tests can prove the bound with a tiny timeout instead of sleeping.
@@ -189,20 +185,31 @@ impl DnsSeedDiscovery {
 
     /// Query DNS TXT records for seeds
     async fn query_dns_seeds(&self) -> Result<(Vec<String>, Duration), DnsSeedError> {
-        use hickory_resolver::{config::ResolverConfig, name_server::TokioConnectionProvider};
+        use hickory_resolver::{
+            config::{ResolverConfig, GOOGLE},
+            net::runtime::TokioRuntimeProvider,
+        };
 
         let domain = self.seed_domain();
         debug!("Querying DNS TXT records for {}", domain);
 
-        // Create resolver using default configuration with tokio provider
+        // Preserve the pre-0.26 default upstreams; 0.26 Default has no servers.
         let resolver = Resolver::builder_with_config(
-            ResolverConfig::default(),
-            TokioConnectionProvider::default(),
+            ResolverConfig::udp_and_tcp(&GOOGLE),
+            TokioRuntimeProvider::default(),
         )
-        .build();
+        .build()
+        .map_err(|e| DnsSeedError::DnsQuery(format!("DNS resolver setup failed: {}", e)))?;
 
         let response = lookup_with_timeout(DNS_QUERY_TIMEOUT, resolver.txt_lookup(domain)).await?;
 
+        Ok(self.parse_dns_response(&response))
+    }
+
+    fn parse_dns_response(
+        &self,
+        response: &hickory_resolver::lookup::Lookup,
+    ) -> (Vec<String>, Duration) {
         let mut peers = Vec::new();
 
         // Calculate TTL from valid_until
@@ -216,8 +223,11 @@ impl DnsSeedDiscovery {
         .min(MAX_CACHE_TTL);
 
         // Parse TXT records
-        for txt in response.iter() {
-            for txt_data in txt.txt_data() {
+        for record in response.answers() {
+            let hickory_resolver::proto::rr::RData::TXT(txt) = &record.data else {
+                continue;
+            };
+            for txt_data in &txt.txt_data {
                 let txt_str = String::from_utf8_lossy(txt_data);
                 match self.parse_seed_record(&txt_str) {
                     Ok(multiaddr) => {
@@ -231,7 +241,7 @@ impl DnsSeedDiscovery {
             }
         }
 
-        Ok((peers, ttl))
+        (peers, ttl)
     }
 
     /// Parse a seed record in format `PEER_ID@ADDRESS:PORT`
@@ -319,6 +329,36 @@ pub enum DnsSeedError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_hickory_answer_records_preserve_txt_seeds_and_ttl() {
+        use hickory_resolver::{
+            lookup::Lookup,
+            proto::{
+                op::Query,
+                rr::{rdata::TXT, Name, RData, Record},
+            },
+        };
+
+        let seed = "12D3KooWBrjTYjNrEwi9MM3AKFenmymyWVXtXbQiSx7eDnDwv9qQ@98.95.2.200:7100";
+        let name = Name::from_ascii("seeds.testnet.botho.io.").unwrap();
+        let response = Lookup::new_with_deadline(
+            Query::default(),
+            [
+                Record::from_rdata(
+                    name.clone(),
+                    7200,
+                    RData::TXT(TXT::new(vec![seed.into(), "invalid".into()])),
+                ),
+                Record::from_rdata(name, 7200, RData::A("127.0.0.1".parse().unwrap())),
+            ],
+            Instant::now() + Duration::from_secs(7200),
+        );
+        let discovery = DnsSeedDiscovery::new(Network::Testnet);
+        let (peers, ttl) = discovery.parse_dns_response(&response);
+        assert_eq!(peers, vec![discovery.parse_seed_record(seed).unwrap()]);
+        assert_eq!(ttl, MAX_CACHE_TTL);
+    }
 
     #[test]
     fn test_parse_seed_record_ipv4() {
