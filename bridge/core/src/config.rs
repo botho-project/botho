@@ -451,9 +451,23 @@ pub struct SolanaConfig {
 /// members independently validate and approve that canonical proposal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SquadsConfig {
+    /// Bounded finalized history work per recovery tick (1..=100).
+    #[serde(default = "default_squads_history_page_size")]
+    pub history_page_size: usize,
+    /// Maximum successful transactions retained per order (raise explicitly for
+    /// archives).
+    #[serde(default = "default_squads_history_capacity")]
+    pub history_capacity: usize,
     pub multisig: String,
     pub vault_index: u8,
     pub proposer: String,
+}
+
+fn default_squads_history_page_size() -> usize {
+    32
+}
+fn default_squads_history_capacity() -> usize {
+    4096
 }
 
 impl SolanaConfig {

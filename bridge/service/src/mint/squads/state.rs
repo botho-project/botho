@@ -26,6 +26,9 @@ impl<'a> Reader<'a> {
     pub fn new(data: &'a [u8]) -> Self {
         Self(data)
     }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
     pub fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
         if self.0.len() < n {
             return Err("truncated Squads account".into());

@@ -211,7 +211,8 @@ async function run() {
         configAuthority: null,
         threshold: 2,
         timeLock: 0,
-        rentCollector: null,
+        rentCollector:
+          process.env.SQUADS_HISTORY_TEST === "1" ? payer.publicKey : null,
         members: [payer, second, third].map((k) => ({
           key: k.publicKey,
           permissions: squads.types.Permissions.all(),
