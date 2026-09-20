@@ -84,7 +84,9 @@ consensus/mining costs. The available budget is separately derived from the conf
 actual block interval: tail height 31,536,000, assumed supply 611,010,000 BTH, and
 40-second blocks in this grid. Assignments exceeding that derived miner issuance
 are rejected; available, assigned and unassigned BTH are reported. This is a
-conditional source-transcribed budget, not a prediction of actual issuance, a
+conditional source-transcribed budget. Height and supply are held constant across
+the reporting period; this does not sum evolving per-block rewards. It is not a
+prediction of actual issuance, a
 verified operator entitlement, or measured sustainable assignment. Unused consensus support cannot
 silently subsidize verifier costs. The fee-only case sets support to zero. Source
 transcriptions separately show initial/halving/tail rewards and miner-versus-pool
