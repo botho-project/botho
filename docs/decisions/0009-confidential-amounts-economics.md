@@ -1,6 +1,13 @@
 # ADR 0009: Confidential-Amounts Economics — Reconciling Value-Dependent Anti-Hoarding with Hidden Amounts
 
 **Status**: Proposed
+
+**Implementation review (2026-09-19, #1264):** the construction below remains a
+design sketch. The [integer specification review](../specification/confidential-amounts-implementation-gates.md)
+records concrete rounding and proof-width gaps that must be resolved before
+implementation or acceptance. The two-scalar size estimate is provisional;
+this review does not change the ratified high-level privacy target or D2 choice.
+
 **Date**: 2026-07-16
 **Decision Makers**: Core Team
 **Related**: ADR 0006 (PQ + confidential-amounts target — the decision this ADR discharges the open design work for), ADR 0007 (bridge-import cluster tagging — the value-free provenance precedent generalized here), ADR 0003 (factor-1 wrap + demurrage-settlement), ADR 0004 (bridge amount revelation); issues #902 (CT↔economics spec epic), #904 (CT-implementation epic), #925/#831 (reset-charge doors), #955/#980 (Path C lottery implementation), #985 (D2 calibration), #577 (value-free elapsed wiring)
@@ -119,7 +126,7 @@ Recorded honestly, in the spirit of ADR 0007's residual disclosure:
 
 Two citation nits from the CT-gadgets research must **not** be reintroduced when the normative `anvil:spec` authoring proceeds:
 
-- The value-free `ring_elapsed_quantile` order statistic (the intended CT-clean `elapsed` signal) is **not yet wired** — the live path still uses the value-weighted `ring_elapsed_centroid` (#577). `elapsed` is *designed* value-free but is not CT-clean until #577 lands.
+- The value-free `ring_elapsed_quantile` order statistic is now wired into `Ledger::consensus_fee_floor` (#577 closed). The **age** signal is value-independent; the separate `ring_centroid_floored_factor` and output/import factor calculations still consume values and need the CT migration. Do not confuse the age kernel with the factor kernel.
 - The tag-mass inflation error variant is **`ClusterTagInflation`** (not `MassInflation`).
 
 ## References
