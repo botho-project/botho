@@ -1,0 +1,9 @@
+
+running 1 test
+test proof_experiment::combined::ownership::resources::ownership_resource_case ... RESOURCE_SETUP case=both-caps-cancel capacity=32768 setup_ns=343574250
+RESOURCE_FIXTURE case=both-caps-cancel fixture_ns=1596583
+RESOURCE_SAMPLE case=both-caps-cancel sample=0 inputs=1 outputs=1 ring=20 significant_bits=2 multipliers=1612 constraints=3248 arithmetic_bytes=1121 clsag_field_bytes=736 signatures=1 prove_ns=211081458 verify_ns=19746916
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.58s
+

@@ -1,0 +1,11 @@
+
+running 1 test
+test proof_experiment::combined::ownership::resources::ownership_resource_case ... RESOURCE_SETUP case=ordinary-4 capacity=32768 setup_ns=353125166
+RESOURCE_FIXTURE case=ordinary-4 fixture_ns=6497292
+RESOURCE_SAMPLE case=ordinary-4 sample=0 inputs=4 outputs=4 ring=20 significant_bits=2 multipliers=6040 constraints=12167 arithmetic_bytes=1249 clsag_field_bytes=2944 signatures=4 prove_ns=826234166 verify_ns=80134667
+RESOURCE_SAMPLE case=ordinary-4 sample=1 inputs=4 outputs=4 ring=20 significant_bits=2 multipliers=6040 constraints=12167 arithmetic_bytes=1249 clsag_field_bytes=2944 signatures=4 prove_ns=821229542 verify_ns=77750583
+RESOURCE_SAMPLE case=ordinary-4 sample=2 inputs=4 outputs=4 ring=20 significant_bits=2 multipliers=6040 constraints=12167 arithmetic_bytes=1249 clsag_field_bytes=2944 signatures=4 prove_ns=823117584 verify_ns=79083875
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 3.07s
+
