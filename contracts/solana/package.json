@@ -7,7 +7,8 @@
     "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
     "test": "anchor test",
     "test:tooling": "node --test tests-tooling/*.test.cjs",
-    "typecheck": "node scripts/prepare-typecheck.cjs && tsc --noEmit"
+    "typecheck": "node scripts/prepare-typecheck.cjs && tsc --noEmit",
+    "test:squads": "bash localnet/run-squads.sh"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.29.0",
@@ -20,6 +21,7 @@
     "bigint-buffer": "file:vendor/bigint-buffer-js"
   },
   "devDependencies": {
+    "@sqds/multisig": "2.1.2",
     "@types/bn.js": "^5.1.0",
     "@types/chai": "^5.2.3",
     "@types/mocha": "^10.0.0",

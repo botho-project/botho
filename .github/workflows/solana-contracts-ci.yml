@@ -21,6 +21,7 @@ on:
       # Bridge mint offset) assumptions the mocha suite validates against a
       # built program: changes here should re-run the Anchor suite.
       - 'bridge/service/src/mint/solana.rs'
+      - 'bridge/service/src/mint/squads.rs'
       - '.github/workflows/solana-contracts-ci.yml'
   workflow_dispatch:
 
@@ -171,3 +172,21 @@ jobs:
       # built program.
       - name: anchor test
         run: anchor test
+
+      # Separate fresh ledger: wbth has a singleton bridge PDA, so this must
+      # not share state with the direct-authority Anchor suite above.
+      - name: Type-check Squads harness
+        run: npx tsc --ignoreConfig --noEmit --skipLibCheck --target es2020 --module commonjs --esModuleInterop localnet/squads.ts
+
+      - name: Execute Squads threshold mint CPI
+        env:
+          SQUADS_EVIDENCE_PATH: squads-execution.json
+        run: ./localnet/run-squads.sh
+
+      - name: Preserve Squads execution evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: squads-execution
+          path: contracts/solana/squads-execution.json
+          if-no-files-found: warn

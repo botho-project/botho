@@ -21,6 +21,7 @@ on:
       # BridgeMint/BridgeBurn topic layout, SafeTx digest vector), so
       # contract changes must re-run it too.
       - 'contracts/ethereum/contracts/**'
+      - 'contracts/solana/fixtures/squads-v4/mint-vectors.json'
       - '.github/workflows/bridge-ci.yml'
   workflow_dispatch:
 

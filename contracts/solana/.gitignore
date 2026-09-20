@@ -9,3 +9,9 @@ test-ledger/
 # gitignored). The program keypair (target/deploy/wbth-keypair.json) is backed
 # up to .secrets/bridge-testnet/solana-program-keypair.json.
 *-keypair.json
+
+# Generated local execution receipts
+squads-execution.json
+
+# Reviewed, hash-pinned localnet program fixture (ADR 0012 Tier 2)
+!fixtures/squads-v4/squads_multisig_program.so
