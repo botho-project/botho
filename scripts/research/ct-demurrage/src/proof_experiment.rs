@@ -1,4 +1,5 @@
 //! Actual randomized proof experiment. All of this module is test-only.
+mod combined;
 use super::*;
 use bth_crypto_ring_signature::{generators, CompressedCommitment};
 use bulletproofs_og::{r1cs::R1CSProof, BulletproofGens};
