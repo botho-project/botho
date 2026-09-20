@@ -13,6 +13,15 @@ proposed decisions nor waives a requirement. **Incomplete** means required
 work remains; **unproven** means the required execution/sign-off evidence is
 missing here; **implemented** describes code, not production verification.
 
+**Current work scope (2026-09-20): audit preparation, without commissioning
+an external audit.** Complete implementation, independent internal review,
+adversarial testing, wallet interoperability and launch/recovery rehearsals
+before investing in an engagement. Resolve known substantive findings and
+retain reproducible evidence against an exact release candidate. Firm
+selection, engagement and spending are deferred; the external assessment
+remains a later launch gate. Internal testing cannot guarantee that an
+external reviewer will find no further defects.
+
 ## Core protocol release
 
 | Gate and requirement | Current evidence/status | Evidence needed to close; owner/action |
