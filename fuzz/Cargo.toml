@@ -47,9 +47,9 @@ native-smoke = []
 # Fuzz crate must be in its own workspace to resolve git dependencies correctly
 [workspace]
 
-# Required git patches (same as parent workspace)
+# Required patches (same as parent workspace)
 [patch.crates-io]
-bulletproofs-og = { git = "https://github.com/mobilecoinfoundation/bulletproofs.git", rev = "9abfdc054d9ba65f1e185ea1e6eff3947ce879dc" }
+bulletproofs-og = { path = "../vendor/bulletproofs-og" }
 schnorrkel-og = { git = "https://github.com/mobilecoinfoundation/schnorrkel.git", rev = "049bf9d30f3bbe072e2ad1b5eefdf0f3c851215e" }
 
 [dependencies]
