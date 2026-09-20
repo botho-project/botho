@@ -34,6 +34,9 @@ def charge(value, factor, elapsed, rate, year):
 
 
 def reset(value, factor, output_factor, rate, year=YEAR, horizon=HORIZON):
+    for n in (value, factor, output_factor, year, horizon):
+        uint(n, 64)
+    uint(rate, 32)
     if output_factor >= factor:
         return 0
     return max(0, charge(value, factor, horizon, rate, year)
@@ -47,6 +50,7 @@ def spend(value, factor, output_factor, elapsed, rate):
 
 def bucket(value, bits=2):
     uint(value, 68)  # 16 input charge sum fits; no u64 clamp here.
+    uint(bits, 8)
     if bits not in (2, 3, 4):
         raise ValueError('unratified bucket policy')
     if value == 0:
@@ -57,6 +61,11 @@ def bucket(value, bits=2):
 
 def preimage(q, bits=2, upper=16 * U):
     """Exact bounded inverse, not an assumed q/2..q inequality."""
+    uint(q, 69)
+    uint(bits, 8)
+    uint(upper, 68)
+    if upper > 16 * U or bits not in (2, 3, 4):
+        raise ValueError('invalid inverse domain')
     def first_above(limit):
         low, high = 0, upper + 1
         while low < high:
@@ -73,6 +82,7 @@ def preimage(q, bits=2, upper=16 * U):
 
 
 def aggregate_fee(charges, outputs):
+    uint(outputs, 8)
     if not 1 <= len(charges) <= 16 or not 1 <= outputs <= 16:
         raise ValueError('transaction count bounds')
     for d in charges:
@@ -82,6 +92,13 @@ def aggregate_fee(charges, outputs):
 
 
 def tags(entries, bases):
+    # Toy numeric IDs exercise weight arithmetic, NOT the 41-byte origin codec.
+    for c, b in bases.items():
+        uint(c, 64)
+        uint(b, 16)
+    for c, w in entries:
+        uint(c, 64)
+        uint(w, 32)
     if len(entries) > 32 or entries != sorted(entries):
         raise ValueError('noncanonical tags')
     if len({c for c, _ in entries}) != len(entries):
@@ -105,7 +122,9 @@ def inherit(outputs, rings, bases):
 
 def age(heights, current):
     uint(current, 64)
-    if len(heights) != 20 or any(not 0 <= h < current for h in heights):
+    for h in heights:
+        uint(h, 64)
+    if len(heights) != 20 or any(h >= current for h in heights):
         raise ValueError('invalid ring heights')
     return max(current - h for h in heights)
 
@@ -259,6 +278,36 @@ class ContractVectors(unittest.TestCase):
         fee = aggregate_fee([0], 1)
         self.assertEqual((10**12 - fee) + fee, 10**12)
         self.assertNotEqual((10**12 - fee + 1) + fee, 10**12)
+
+    def test_noncanonical_types_and_early_return_validation(self):
+        for bad in (True, False, 1.0, -1, 1 << 64):
+            for pos in range(5):
+                args = [1, 1000, 0, 0, YEAR]
+                args[pos] = bad
+                with self.assertRaises(ValueError):
+                    charge(*args)
+            for pos in range(6):
+                args = [1, 1000, 6000, 0, YEAR, HORIZON]
+                args[pos] = bad
+                with self.assertRaises(ValueError):
+                    reset(*args)  # no-downgrade branch still validates all args
+            with self.assertRaises(ValueError):
+                age([bad] + [1] * 19, 2)
+            with self.assertRaises(ValueError):
+                tags([(1, bad)], {1: 1500})
+            with self.assertRaises(ValueError):
+                tags([(1, 1)], {1: bad})
+        for bad in (True, 2.0, -1, 1 << 68):
+            with self.assertRaises(ValueError):
+                bucket(bad)
+        for bad in (True, 2.0, -1, 1 << 8):
+            with self.assertRaises(ValueError):
+                bucket(1, bad)
+            with self.assertRaises(ValueError):
+                aggregate_fee([0], bad)
+        for bad in (True, 2.0, -1, 1 << 69):
+            with self.assertRaises(ValueError):
+                preimage(bad)
 
     def test_source_inventory(self):
         inventory = json.loads((FIXTURES / 'ct-contract-inventory.json').read_text())

@@ -294,7 +294,8 @@ magic ASCII `BCT1`, network:u32, genesis32, policyhash32, parent32, spendheight:
 expiry:u64 (equal spendheight), token:u64(0), fee:u64, input_count:u8(1..16),
 output_count:u8(1..16). Each input has exactly20 ordered outpoints(hash32,indexu32),
 key_image32, pseudo_commitment32. Output record: spendpoint32, ephemeralpoint32,
-amountcommitment32, ML-KEM ciphertext1088, amount_box72, tag_count:u8(0..32),
+amountcommitment32, ML-KEM ciphertext1088, amount_box72,
+memo_mode:u8 and memo_ciphertext (absent or82bytes as below), tag_count:u8(0..32),
 then ordered(origin41,weightu32) entries, and context_length:u16 plus context bytes
 (max128). Normal context has fixed discriminator0 and original output indexu32;
 lottery context is discriminator2, base_index:u32 and canonical cumulative
@@ -336,7 +337,9 @@ spendpoint32||index:u32LE); unique ephemeral/key material per output mandatory.
 ChaCha20-Poly1305 encrypts 56-byte plaintext: token:u64(0), amount:u64,
 blinding:canonical_scalar32, original_index:u32, context_version:u32(CT1=1).
 Result is72bytes (includes16-byte authentication tag). Associated data is the
-canonical output excluding amount_box, prefixed with network:u32LE and genesis32.
+canonical output core excluding BOTH amount_box and memo_ciphertext, but including
+memo_mode, prefixed with network:u32LE, genesis32 and output_index:u32LE. This core has no ciphertext
+dependency cycle.
 Commitment is computed before encryption and included in AD; no ciphertext hash
 feeds its own key/AD. Index is body position and must match recovery plaintext.
 Recipient decapsulates/decrypts, checks canonical scalar, token/index/context and
@@ -348,6 +351,52 @@ broadcast; AEAD failure must not trigger a classical fallback. Existing hybrid
 KDF must expose a separately reviewed domain-separated derivation interface; do
 not repurpose a scalar or log the shared secret. This exact new box is proposed,
 not a claim that today's clients implement it.
+
+### Optional authenticated hybrid memo (candidate, not live behavior)
+
+Current `transaction/clsag/src/lib.rs::apply_memo_keystream` / `decrypt_memo`
+uses HKDF-SHA512 (salt `mc-memo-okm`, empty info) and AES256-CTR over66bytes
+from ECDH alone, even on hybrid outputs. `assemble_hybrid` passes only the ECDH
+shared point to memo encryption; `decrypt_memo` accepts AccountKey without ML-KEM
+secret/index. Decryption can return a payload for a wrong key because there is no
+authentication tag. These observations concern the live legacy path. Hybrid
+stealth target-key protection does not make this memo post-quantum confidential.
+[The July #904 migration discussion](https://github.com/botho-project/botho/issues/904#issuecomment-4998236075)
+already called for a PQ memo KDF; CT1 must not
+omit the memo used for bridge order matching.
+
+Wire modes:0 means absent and consumes zero ciphertext bytes;1 identifies the
+legacy ECDH66-byte memo **only in legacy output versions**, and REJECTS in BCT1;
+2 is the CT1 hybrid AEAD memo and consumes exactly82bytes. Other modes or lengths
+REJECT. Its66-byte plaintext preserves existing two raw type bytes and64 raw
+payload bytes, including binary bridge order identifiers, without UTF-8 coercion.
+Unknown memo type values are authenticated opaque application data; bridge
+watchers require the exact destination type `[0x02,0x00]` and64-byte order format.
+Presence is public metadata; this proposal does not claim to hide memo usage.
+
+Use the full hybrid secret, salt genesis32 and HKDF-SHA256 info
+`BOTHO_CT1_MEMO_KEY\0`||ephemeral32||spendpoint32||index:u32LE.
+Nonce is first12bytes SHA256(`BOTHO_CT1_MEMO_NONCE\0`||ephemeral32||
+spendpoint32||index:u32LE). The memo key and nonce domains are distinct from both
+amount domains; never reuse the amount subkey/nonce pair. Encrypt with
+ChaCha20-Poly1305 after producing amount_box; memo AD is
+`BOTHO_CT1_MEMO_AD\0`||output_core_AD||amount_box72. No memo ciphertext enters
+its own key or AD. Amount AEAD binds memo_mode; memo AEAD binds its amount box,
+core fields and mode; the canonical full output (both ciphertexts) is bound by
+the transaction transcript/CLSAG signature. Changing/removing a memo therefore
+invalidates the transaction signature and/or decryption; rewrapping a legacy memo
+as mode2 must fail authentication. No classical fallback on ML-KEM or AEAD failure.
+
+Clients must dispatch by authenticated output version/mode, retain legacy read
+support without calling it PQ protection, and use mode2 for every newly created
+nonempty BCT1 memo. Bridge order creation, watcher decryption, history display,
+RPC/protobuf/snapshot codecs and native/WASM/mobile clients must agree on the raw
+66-byte payload and error semantics. A bridge transfer without a valid expected
+order memo must not be credited to a guessed order. Cross-runtime tests in #1308
+must mutate ECDH, ML-KEM secret, key/nonce domains, mode, AD, payload and amount
+box independently, and prove legacy-vs-CT1 unambiguous decoding. This82-byte field
+counts in the102400-byte limit; candidate count-based base adds no separate memo
+surcharge (at most16 memos), another explicit fee-policy review item.
 
 Limits: transaction<=102400 bytes, inputs/outputs<=16, rings exactly20,
 proof<=32768 bytes, tags<=32/output, context<=128/output; max combined R1CS
@@ -408,6 +457,9 @@ engagement is outside this task.
 Run `python3 scripts/research/ct_contract_vectors.py`. It checks committed golden
 boundary vectors, bucket preimages/monotonicity/overpayment, dilution examples,
 tag bounds, aggregation, candidate integer relations and SHA-bound source inventory.
+The tag arithmetic tests use toy numeric origin IDs; they do not test the41-byte
+origin codec or canonical transaction serialization. Strict integer arguments
+reject booleans/floats/out-of-range values even on early-return branches.
 It is a dependency-free **integer reference**, not an independent cryptographic
 implementation, Rust differential runner, full wire codec or activation test.
 The inventory's symbol/hash checks detect missing/drifted references; they do not

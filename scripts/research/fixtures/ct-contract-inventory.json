@@ -73,6 +73,15 @@
         "pub const MAX_OUTPUTS:",
         "pub const RING_SIZE:"
       ]
+    },
+    {
+      "path": "transaction/clsag/src/lib.rs",
+      "sha256": "69cac0d8c7ca74e7bde64fde186f0a0aefec56e88979dda44b669515f2c1d44f",
+      "symbols": [
+        "fn apply_memo_keystream(",
+        "pub fn decrypt_memo(",
+        "fn assemble_hybrid("
+      ]
     }
   ],
   "experiments": [

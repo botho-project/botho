@@ -11,6 +11,7 @@ on:
       - 'crypto/ring-signature/src/amount/commitment.rs'
       - 'crypto/ring-signature/src/ring_signature/mod.rs'
       - 'transaction/types/src/constants.rs'
+      - 'transaction/clsag/src/lib.rs'
       - '.github/workflows/ct-contract.yml'
   workflow_dispatch:
 permissions:
