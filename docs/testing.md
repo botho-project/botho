@@ -123,6 +123,10 @@ or relax assertions to obtain a green gate. No external-service suite is inferre
 from its name: ICE/STUN here is local, and RPC uses loopback; actual public-network
 coverage would require its own explicit environment and job.
 
+The workspace PR job also executes eight protocol/privacy integration suites.
+See [protocol integration coverage](protocol-integration-tests.md) for the exact
+command, measured runtimes, environmental requirements, and validation limits.
+
 ---
 
 ## Test Organization
