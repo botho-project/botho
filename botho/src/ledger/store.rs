@@ -413,7 +413,7 @@ impl Ledger {
     /// exhausts the reader table so subsequent lookups fail closed (used by
     /// M7 tests in sibling modules such as the mempool).
     #[cfg(test)]
-    pub fn read_txn_for_test(&self) -> Result<heed::RoTxn<'_>, LedgerError> {
+    pub fn read_txn_for_test(&self) -> Result<heed::RoTxn<'_, heed::WithTls>, LedgerError> {
         self.env
             .read_txn()
             .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))
