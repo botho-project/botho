@@ -40,16 +40,17 @@ def manifest(outcomes, files):
     selected=[v for v in normalized.values() if v!='skipped']
     estimates=[f for f in files if f['path'].endswith('/new/estimates.json') and f['valid_json']]
     samples=[f for f in files if f['path'].endswith('/new/sample.json') and f['valid_json']]
+    pairs={str(Path(f['path']).parent) for f in estimates} & {str(Path(f['path']).parent) for f in samples}
     if not files:
         status='missing_measurements'
     elif not selected or any(v!='success' for v in selected) or any(not f['valid_json'] for f in files):
         status='partial_or_unsuccessful_measurements'
-    elif not estimates or not samples:
+    elif not pairs or len(pairs) != len(estimates) or len(pairs) != len(samples):
         status='incomplete_criterion_files'
     else:
         status='successful_steps_with_measurements_not_coverage_attestation'
     return dict(status=status,step_outcomes=normalized,criterion_json=files,
-                current_estimate_files=len(estimates),current_sample_files=len(samples),
+                current_estimate_files=len(estimates),current_sample_files=len(samples),matched_current_pairs=len(pairs),
                 coverage_note='Counts do not prove every intended benchmark ran; inspect benchmark identities and outcomes. No CLSAG or full transaction coverage inferred.')
 
 
@@ -73,7 +74,7 @@ def main():
         raise ValueError('cannot inventory tracked benchmark source')
     sources.extend(ROOT/p for p in tracked['stdout'].splitlines())
     result['source_sha256']={str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest()
-                              for p in sources if '.loom' not in p.parts and 'target' not in p.parts}
+                              for p in sources if '.loom' not in p.relative_to(ROOT).parts and 'target' not in p.relative_to(ROOT).parts}
     out=ROOT/'benchmark-evidence';out.mkdir(exist_ok=True)
     (out/'manifest.json').write_text(json.dumps(result,indent=2)+'\n')
     summary=os.environ.get('GITHUB_STEP_SUMMARY')

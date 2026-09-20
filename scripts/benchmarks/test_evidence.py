@@ -35,6 +35,16 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(manifest({'quick':'success'},inventory(Path(d)))['status'],
                              'incomplete_criterion_files')
 
+    def test_split_directories_are_not_complete_pairs(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)
+            for group,name in [('a','estimates.json'),('b','sample.json')]:
+                p=root/group/'new';p.mkdir(parents=True)
+                (p/name).write_text('{}')
+            result=manifest({'quick':'success'},inventory(root))
+            self.assertEqual(result['status'],'incomplete_criterion_files')
+            self.assertEqual(result['matched_current_pairs'],0)
+
     def test_invalid_outcomes_and_symlink(self):
         for value in [{},{'x':'green'},[]]:
             with self.assertRaises(ValueError):manifest(value,[])
