@@ -85,6 +85,7 @@ validation scope and limitations; none establishes launch readiness alone.
   [#1330](https://github.com/botho-project/botho/pull/1330): reviewed network
   dependency updates and real local WebRTC connection/teardown tests. Public
   STUN/TURN and browser interoperability are not established by loopback tests.
+  WebRTC remains inactive in the transport manager.
 - [#1328](https://github.com/botho-project/botho/pull/1328): restored desktop
   release builds. Declared platform minimums still need reconciliation and actual
   minimum-runtime acceptance under [#1327](https://github.com/botho-project/botho/issues/1327).
