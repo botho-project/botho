@@ -1,0 +1,91 @@
+{
+  "source_commit": "4dd5452fa6eedf2f80b0bea369657bc182bd504c",
+  "documentation_base_commit": "baa193b1a705dfbf1ecf28690375639cbc18df3c",
+  "sources": [
+    {
+      "path": "scripts/research/ct-demurrage/Cargo.toml",
+      "sha256": "69b64520079922027cec8456c1709442c0dae8d39476fb3117ed060afa794627",
+      "documentation_base_sha256": "69b64520079922027cec8456c1709442c0dae8d39476fb3117ed060afa794627",
+      "identical_at_documentation_base": true
+    },
+    {
+      "path": "scripts/research/ct-demurrage/src/lib.rs",
+      "sha256": "2187d6e51d476f96bd8bb7830ff6a457130bd590ce59210306c37fc422bf67aa",
+      "documentation_base_sha256": "2187d6e51d476f96bd8bb7830ff6a457130bd590ce59210306c37fc422bf67aa",
+      "identical_at_documentation_base": true
+    },
+    {
+      "path": "scripts/research/ct-demurrage/src/proof_experiment.rs",
+      "sha256": "c4e3ffa3f8ddf45b6680ad483015c75c8666e70066e92f462b4d6c03796e6585",
+      "documentation_base_sha256": "c4e3ffa3f8ddf45b6680ad483015c75c8666e70066e92f462b4d6c03796e6585",
+      "identical_at_documentation_base": true
+    },
+    {
+      "path": "scripts/research/ct-demurrage/src/proof_experiment/combined.rs",
+      "sha256": "f1624b63e8557616d2f0c192380dbe22701147bdb469995973636cf4889423f0",
+      "documentation_base_sha256": "f1624b63e8557616d2f0c192380dbe22701147bdb469995973636cf4889423f0",
+      "identical_at_documentation_base": true
+    },
+    {
+      "path": "scripts/research/ct-demurrage/src/proof_experiment/combined/ownership.rs",
+      "sha256": "7bfedfbe6422501ebb7bdc0599ade1cbfe1517ddba9a879ee687c8b578dfc63d",
+      "documentation_base_sha256": "328d5d92aac56d01d71ca172baf1b81cf4f483eb165a1b593440780e7542b350",
+      "identical_at_documentation_base": false
+    },
+    {
+      "path": "scripts/research/ct-demurrage/src/proof_experiment/combined/ownership/resources.rs",
+      "sha256": "b356ea8d042b7593921e50507de868335603d2dfc8e1facdbf384e11156aef89",
+      "documentation_base_sha256": null,
+      "identical_at_documentation_base": false
+    },
+    {
+      "path": "crypto/ring-signature/src/ring_signature/clsag.rs",
+      "sha256": "0e598832571a88857e782a1a445a6c0677a9280c85820dcd177d65f18b8ada20",
+      "documentation_base_sha256": "0e598832571a88857e782a1a445a6c0677a9280c85820dcd177d65f18b8ada20",
+      "identical_at_documentation_base": true
+    },
+    {
+      "path": "crypto/ring-signature/src/amount/commitment.rs",
+      "sha256": "03285e810af06c9ff38fe2c12c2108d2c5f00e162ac29dd49c45cf4d353b441a",
+      "documentation_base_sha256": "03285e810af06c9ff38fe2c12c2108d2c5f00e162ac29dd49c45cf4d353b441a",
+      "identical_at_documentation_base": true
+    },
+    {
+      "path": "cluster-tax/src/demurrage.rs",
+      "sha256": "ecc44061e1c82b19b49c9e6c2a05329168ae3a4877eeba0bda438a3e3cc63f34",
+      "documentation_base_sha256": "ecc44061e1c82b19b49c9e6c2a05329168ae3a4877eeba0bda438a3e3cc63f34",
+      "identical_at_documentation_base": true
+    },
+    {
+      "path": "vendor/bulletproofs-og/src/r1cs/prover.rs",
+      "sha256": "e38d670c95974e64608ca8d72f136bb4d03c33819356ed4618e504a26937447e",
+      "documentation_base_sha256": "e38d670c95974e64608ca8d72f136bb4d03c33819356ed4618e504a26937447e",
+      "identical_at_documentation_base": true
+    },
+    {
+      "path": "vendor/bulletproofs-og/src/r1cs/verifier.rs",
+      "sha256": "bd07ee4bed98e0e1ddce7314e2da77fd8a0e43c1ded552c25acc77c696878396",
+      "documentation_base_sha256": "bd07ee4bed98e0e1ddce7314e2da77fd8a0e43c1ded552c25acc77c696878396",
+      "identical_at_documentation_base": true
+    },
+    {
+      "path": "vendor/bulletproofs-og/src/transcript.rs",
+      "sha256": "95e3313038e591405381f6aed8d3c6a1532271a33fd90b3cc8af7a1a59a3ae6d",
+      "documentation_base_sha256": "95e3313038e591405381f6aed8d3c6a1532271a33fd90b3cc8af7a1a59a3ae6d",
+      "identical_at_documentation_base": true
+    }
+  ],
+  "primary_reference_snapshots": [
+    {
+      "url": "https://eprint.iacr.org/2019/654.pdf",
+      "retrieved_date": "2026-09-20",
+      "sha256": "c38699c9a235a70285165ff8cce0bf3e48989de8092c15514116ca4c95d41e3f"
+    },
+    {
+      "url": "https://eprint.iacr.org/2017/1066.pdf",
+      "retrieved_date": "2026-09-20",
+      "sha256": "2204cf02c3818543adcdd4325b5d4ca205e43d428701300214f198d19e86de61"
+    }
+  ],
+  "scope": "Source identity and reference provenance only; not evidence of cryptographic soundness or production activation."
+}
