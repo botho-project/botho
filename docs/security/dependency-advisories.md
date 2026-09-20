@@ -1,6 +1,7 @@
 # September 2026 dependency advisory remediation
 
-Tracking: [issue #1254](https://github.com/botho-project/botho/issues/1254).
+Tracking: [issue #1254](https://github.com/botho-project/botho/issues/1254) and
+[issue #1261](https://github.com/botho-project/botho/issues/1261).
 
 The all-features Security gate is `cargo deny --all-features check`.
 The September 19 baseline reports three additional advisories:
@@ -16,13 +17,14 @@ The September 19 baseline reports three additional advisories:
   boundaries. Version 0.23.45 fixes this for the node's direct TLS dependency
   and its shared reqwest, WebRTC, and other TLS consumers.
 - [RUSTSEC-2026-0283](https://rustsec.org/advisories/RUSTSEC-2026-0283):
-  clear_on_drop is unmaintained. This remains unresolved, with no policy
-  exception added. The gate must continue to fail until it is resolved.
+  clear_on_drop is unmaintained. The exact pinned Bulletproofs fork is now
+  vendored with its secret cleanup migrated to zeroize. No policy exception
+  was added, and the all-features Security gate passes with these changes.
 
-## Remaining clear_on_drop migration
+## Pinned Bulletproofs cleanup migration
 
-`cargo tree --locked --all-features -i clear_on_drop` identifies only this
-introducing dependency:
+The original `cargo tree --locked --all-features -i clear_on_drop` identified
+only this introducing dependency:
 
 ```text
 clear_on_drop 0.2.5
@@ -40,12 +42,19 @@ the upstream `sam/fix` branch. The upstream default branch also uses
 clear_on_drop and is an older, incompatible package. RustSec lists no
 patched clear_on_drop release and recommends zeroize instead.
 
-Resolving this requires a reviewed zeroize migration of the pinned fork,
-or a proof-compatible replacement validated against existing range proofs.
-It cannot be fixed by a compatible lockfile update. Replacing the
-cryptographic fork solely to suppress an unmaintained advisory is outside
-this bounded HTTP/TLS dependency update.
+The local migration preserves the pinned proof algorithms, encodings,
+transcripts, and generators. All old cleanup sites, including optional R1CS
+witness vectors, now overwrite their scalar/value storage with zeroize.
+Deterministic fixtures captured from the unmodified fork prove byte-for-byte
+compatibility for individual, aggregated, and padded range proofs through
+transaction-core. Original proofs still verify; invalid proofs are rejected.
+See the [exact upstream diff, cleanup inventory, licenses, and validation
+record](../../vendor/bulletproofs-og/BOTHO-PATCH.md).
 
-After the remaining migration passes Security, rerun or rebase the blocked
-dependency PRs (#1239, #1243, #1248, and #1251) against the fixed baseline;
-their security gates must not be bypassed.
+`cargo tree --locked --all-features -i clear_on_drop` now reports that the
+package is absent. `cargo deny --all-features check` passes advisories, bans,
+licenses, and sources on the combined HTTP/TLS and cleanup branch. This does
+not replace independent review or external cryptographic audit #616.
+
+After this reviewed baseline merges, rerun or rebase the blocked dependency
+PRs (#1239, #1243, #1248, and #1251); their security gates must not be bypassed.
