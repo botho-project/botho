@@ -125,6 +125,9 @@ jobs:
       # compile-only checks cannot detect changed cryptographic output (#1218).
       - name: Run bth-crypto-secp256k1 unit and golden tests
         run: cargo test -p bth-crypto-secp256k1
+      - name: Check inactive CT demurrage integer constraints
+        timeout-minutes: 5
+        run: cargo test --locked -p bth-ct-demurrage-reference
 
       # The `cluster-tax`-gated code in `bth-transaction-core` only compiles —
       # and its tests only run — under `--all-features`. The default workspace

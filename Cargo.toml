@@ -6,6 +6,7 @@ members = [
     "bridge/core",
     "bridge/service",
     "cluster-tax",
+    "scripts/research/ct-demurrage",
     "discover",
     "account-keys",
     "address-codec",
