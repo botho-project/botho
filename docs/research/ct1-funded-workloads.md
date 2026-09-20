@@ -1,7 +1,8 @@
 # Inactive CT1 funded payments and public ticket lifecycles
 
 This is a bounded follow-up to [the fixed-capital controls](ct1-fixed-capital.md),
-part of #1306 and implemented by #1323. It connects honest payment fees to output
+part of #1306 and implemented by #1323, with individual-owner reporting added
+by #1359. It connects honest payment fees to output
 creation and private spending, then includes lottery payout outputs in future
 eligibility. It changes no production rule, wallet policy, protocol or price.
 It is **synthetic fixed-stock workload evidence**, not observed calibration,
@@ -73,7 +74,19 @@ tickets can themselves win later. The model checks conservation each block:
 
 `honest spendable + attacker spendable + all locked payout claims + reserve + burn = initial stock`
 
-and independently:
+For each of the 101 modeled owners, the report also checks:
+
+`accounted + fees + payments sent = initial principal + payments received + capture`
+
+where `accounted = spendable + locked` and `locked = capture`. Fees count only
+successful payments/refreshes, and capture counts actual awards. Owners 0–99 are
+honest senders and owner 100 is the attacker. Canonical decimal-string amounts
+retain exact pico-BTH values. Summing the individual rows must reproduce every
+existing honest/attacker fee and balance aggregate and total awards; payment
+flows sum to zero across owners. These are modeled identities, not observations
+of real owners.
+
+The model independently checks:
 
 `gross fees = cumulative lottery awards + reserve + burn`.
 
@@ -151,20 +164,47 @@ population; this is not a one-variable counterfactual estimate or policy result.
 
 The committed earlier sampler and fixed-capital manifests remain historical
 snapshots of their own measured sources. Their hashes are not refreshed to
-claim those older numerical observations were rerun here. This checkpoint
-updates only the genuinely rerun workload summary and its fifteen source hashes.
+claim those older numerical observations were rerun here. That checkpoint
+updated only the genuinely rerun workload summary and its fifteen source hashes.
 Fresh CI runs may produce additional current-base artifacts independently.
+
+## Individual-owner reporting rerun (#1359)
+
+On 2026-09-20, the same sixteen configurations were rerun from main baseline
+`3b1b580357b8915cc56f8d42c2292b3da97ee5d5` with observational per-owner counters.
+All eight workload tests passed in 76.95 seconds on the local macOS host; scoped
+compilation took 28.70 seconds. The regenerated raw SHA256 is
+`f88a58c6ebe872045cca93b54870e363aaa909f2024d69d1c3599c14819344e5`.
+
+All pre-existing raw fields in all sixteen histories exactly match the previous
+Linux artifact (run `35539754231`, artifact `10614183692`, raw SHA256
+`98b34600349b24ce55a8ecc2213a7cea2de26e6d8a8dabdd537ad83f2c49325e`).
+Only the ordered `owners` array was added: 101 owners per history, 1,616 records
+in total. Numerical observations, transcript digests, failure denominators and
+model configuration did not change. The added payment-flow counters make each
+owner's accounting check meaningful even when transfers redistribute principal.
+
+The fresh summary records eighteen current source hashes, including the merged
+shared ledger writer, the existing validation callers in `store.rs`, and the
+new independent owner-accounting checker and tests. Five focused Python tests
+cover exact balances, malformed/missing/duplicate owners, invalid amount types,
+aggregate mismatch and a reassignment of fees that preserves aggregate totals
+but violates individual balances. Historical sampler and fixed-capital evidence
+remains unchanged. This local result is not a substitute for the follow-up's
+Linux CI execution, nor evidence of payout spendability or policy acceptance.
 
 ## Reproduction and remaining work
 
 ```sh
 CT_ECONOMICS_WRITE_REPORT=1 cargo test --locked -p botho --test ct_economics_workload -- --nocapture
+python3 -m unittest discover -s scripts/research/ct-economics -p 'test_workload_owner_accounts.py'
 python3 scripts/research/ct-economics/workload_summary.py
 ```
 
 The suite runs all sixteen distinct histories and exactly replays one complete
 history. `workload-config.json` records every workload axis;
-`workload-summary.json` preserves compact rows, failure denominators, spendable/locked value and
+`workload-summary.json` preserves compact rows, ordered per-owner fees, capture,
+payment flows and balances, failure denominators, spendable/locked value and
 fee accounting, ticket snapshots, per-block metric transcript digests (height, fees, payout,
 eligible count and attacker accounted value), exact input/source hashes
 and runtime provenance. `checkout_commit` identifies the checkout when

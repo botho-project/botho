@@ -318,6 +318,12 @@ fn history(seed: u64, cadence: u64, strategy: &str) -> Value {
     let mut snapshots = vec![];
     let (mut max_eligible, mut max_spent_eligible, mut max_payout_eligible, mut cap_blocks) =
         (0usize, 0usize, 0usize, 0u64);
+    // Observations only: these counters never select an input, change a fee,
+    // fund a transfer, select a winner or advance an RNG.
+    let mut owner_fees = [0u128; ATTACKER + 1];
+    let mut owner_capture = [0u128; ATTACKER + 1];
+    let mut payments_sent = [0u128; ATTACKER + 1];
+    let mut payments_received = [0u128; ATTACKER + 1];
     let mut transcript = Sha256::new();
     for offset in 0..blocks {
         let height = start + offset;
@@ -344,6 +350,9 @@ fn history(seed: u64, cadence: u64, strategy: &str) -> Value {
                 Ok((fee, _)) => {
                     honest_success += 1;
                     honest_fees += fee as u128;
+                    owner_fees[sender] += fee as u128;
+                    payments_sent[sender] += payment as u128;
+                    payments_received[recipient] += payment as u128;
                     block_fees += fee;
                     *fee_histogram.entry(fee.to_string()).or_default() += 1;
                 }
@@ -361,6 +370,7 @@ fn history(seed: u64, cadence: u64, strategy: &str) -> Value {
                     refresh_success += 1;
                     position = ids;
                     attacker_fees += fee as u128;
+                    owner_fees[ATTACKER] += fee as u128;
                     block_fees += fee;
                 }
                 Err(e) => *failures.entry(format!("attacker:{e}")).or_default() += 1,
@@ -406,6 +416,7 @@ fn history(seed: u64, cadence: u64, strategy: &str) -> Value {
             for winner in draw.winners {
                 let owner = model.coins[&winner.utxo_id].owner;
                 distributed += winner.payout;
+                owner_capture[owner] += winner.payout as u128;
                 if owner == ATTACKER {
                     capture += winner.payout as u128;
                 }
@@ -461,7 +472,34 @@ fn history(seed: u64, cadence: u64, strategy: &str) -> Value {
         model.accounted(ATTACKER) as i128 - initial as i128,
         capture as i128 - attacker_fees as i128
     );
-    json!({"seed":seed,"honest_cadence":cadence,"strategy":strategy,"honest_attempts":honest_attempts,"honest_success":honest_success,"attacker_attempts":refresh_attempts,"attacker_success":refresh_success,"failures":failures,"honest_fee_histogram":fee_histogram,"honest_fees":honest_fees.to_string(),"attacker_fees":attacker_fees.to_string(),"attacker_capture":capture.to_string(),"conditional_uniform_capture":format!("{expected:.3}"),"attacker_accounted_value":model.accounted(ATTACKER).to_string(),"attacker_spendable":model.spendable(ATTACKER).to_string(),"attacker_locked_payouts":model.locked(ATTACKER).to_string(),"max_eligible":max_eligible,"max_spent_public_eligible":max_spent_eligible,"max_payout_eligible":max_payout_eligible,"public_outputs":model.coins.len(),"honest_accounted_value":(0..100).map(|owner|model.accounted(owner)).sum::<u128>().to_string(),"honest_spendable":(0..100).map(|owner|model.spendable(owner)).sum::<u128>().to_string(),"honest_locked_payouts":(0..100).map(|owner|model.locked(owner)).sum::<u128>().to_string(),"awarded":awarded.to_string(),"burn":burn.to_string(),"reserve":reserve.to_string(),"cap_bound_blocks":cap_blocks,"snapshots":snapshots,"transcript_sha256":hex::encode(transcript.finalize())})
+    let owners: Vec<Value> = (0..=ATTACKER)
+        .map(|owner| {
+            let spendable = model.spendable(owner);
+            let locked = model.locked(owner);
+            let accounted = model.accounted(owner);
+            assert_eq!(accounted, spendable + locked);
+            assert_eq!(locked, owner_capture[owner]);
+            assert_eq!(
+                accounted + owner_fees[owner] + payments_sent[owner],
+                initial as u128 + payments_received[owner] + owner_capture[owner]
+            );
+            json!({"owner":owner,"fees":owner_fees[owner].to_string(),
+            "capture":owner_capture[owner].to_string(),
+            "payments_sent":payments_sent[owner].to_string(),
+            "payments_received":payments_received[owner].to_string(),
+            "spendable":spendable.to_string(),"locked":locked.to_string(),
+            "accounted":accounted.to_string()})
+        })
+        .collect();
+    assert_eq!(owner_fees[..ATTACKER].iter().sum::<u128>(), honest_fees);
+    assert_eq!(owner_fees[ATTACKER], attacker_fees);
+    assert_eq!(owner_capture.iter().sum::<u128>(), awarded);
+    assert_eq!(owner_capture[ATTACKER], capture);
+    assert_eq!(
+        payments_sent.iter().sum::<u128>(),
+        payments_received.iter().sum::<u128>()
+    );
+    json!({"owners":owners,"seed":seed,"honest_cadence":cadence,"strategy":strategy,"honest_attempts":honest_attempts,"honest_success":honest_success,"attacker_attempts":refresh_attempts,"attacker_success":refresh_success,"failures":failures,"honest_fee_histogram":fee_histogram,"honest_fees":honest_fees.to_string(),"attacker_fees":attacker_fees.to_string(),"attacker_capture":capture.to_string(),"conditional_uniform_capture":format!("{expected:.3}"),"attacker_accounted_value":model.accounted(ATTACKER).to_string(),"attacker_spendable":model.spendable(ATTACKER).to_string(),"attacker_locked_payouts":model.locked(ATTACKER).to_string(),"max_eligible":max_eligible,"max_spent_public_eligible":max_spent_eligible,"max_payout_eligible":max_payout_eligible,"public_outputs":model.coins.len(),"honest_accounted_value":(0..100).map(|owner|model.accounted(owner)).sum::<u128>().to_string(),"honest_spendable":(0..100).map(|owner|model.spendable(owner)).sum::<u128>().to_string(),"honest_locked_payouts":(0..100).map(|owner|model.locked(owner)).sum::<u128>().to_string(),"awarded":awarded.to_string(),"burn":burn.to_string(),"reserve":reserve.to_string(),"cap_bound_blocks":cap_blocks,"snapshots":snapshots,"transcript_sha256":hex::encode(transcript.finalize())})
 }
 #[test]
 fn funded_payment_workloads() {

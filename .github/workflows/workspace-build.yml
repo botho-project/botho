@@ -100,6 +100,7 @@ jobs:
         timeout-minutes: 3
         run: |
           CT_ECONOMICS_WRITE_REPORT=1 cargo test --locked -p botho --test ct_economics_workload -- --nocapture
+          python3 -m unittest discover -s scripts/research/ct-economics -p 'test_workload_owner_accounts.py'
           python3 scripts/research/ct-economics/workload_summary.py
 
       - name: Upload CT1 economics evidence
