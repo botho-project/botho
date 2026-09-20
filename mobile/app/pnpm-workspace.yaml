@@ -11,6 +11,10 @@
 # exact versions are excluded rather than disabling the gate globally.
 allowBuilds:
   unrs-resolver: false
+# expo-router's optional DOM peers must use the same React version as SDK 57.
+# Otherwise automatic peer resolution can install a newer, incompatible renderer.
+overrides:
+  react-dom: 19.2.3
 minimumReleaseAgeExclude:
   - '@expo/cli@57.0.14'
   - '@expo/fingerprint@0.20.7'

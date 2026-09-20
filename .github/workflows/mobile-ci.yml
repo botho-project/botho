@@ -27,6 +27,9 @@ on:
       - 'mobile/app/**'
       - '.github/workflows/mobile-ci.yml'
   workflow_dispatch:
+  # Expo compatibility metadata can change without a repository commit.
+  schedule:
+    - cron: '23 9 * * 1'
 
 # Cancel superseded runs on the same ref to keep the queue fast.
 concurrency:
