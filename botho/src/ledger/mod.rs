@@ -1,3 +1,7 @@
+// Inactive durable infrastructure; no production constructors until validation
+// integration.
+#[allow(dead_code)]
+mod experimental;
 mod snapshot;
 mod store;
 
@@ -9,6 +13,14 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum LedgerError {
+    #[error("Unsupported ledger storage schema: {0}")]
+    UnsupportedSchema(String),
+    #[error("Experimental storage encoding: {0}")]
+    StorageEncoding(String),
+    #[error("Missing derivation context: {0}")]
+    MissingContext(String),
+    #[error("Inconsistent experimental record: {0}")]
+    InconsistentRecord(String),
     #[error("Database error: {0}")]
     Database(String),
 
