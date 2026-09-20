@@ -152,6 +152,11 @@ jobs:
       - name: anchor build
         run: anchor build
 
+      # Generated target/types/wbth.ts is required by tests/wbth.ts. tsx itself
+      # only transpiles; run the compiler separately with declaration checking.
+      - name: Typecheck Solana operator scripts and tests
+        run: npm run typecheck
+
       # Guard: fail loudly if any step rewrote the committed lockfile — that
       # would mean the pinned-toolchain assumptions above have drifted.
       - name: Assert Cargo.lock unchanged by build

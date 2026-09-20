@@ -6,7 +6,8 @@
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
     "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
     "test": "anchor test",
-    "test:tooling": "node --test tests-tooling/*.test.cjs"
+    "test:tooling": "node --test tests-tooling/*.test.cjs",
+    "typecheck": "node scripts/prepare-typecheck.cjs && tsc --noEmit"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.29.0",
