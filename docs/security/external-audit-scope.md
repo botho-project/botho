@@ -146,7 +146,15 @@ is clear. Current follow-up tracking includes #813 and #1254.
 ### 4.8 Bridge proof-of-reserve under confidential amounts (forward flag)
 
 The BTH↔wBTH bridge audit is scoped separately (#830) and remains the first
-call on the external-audit budget. One item is flagged here because it
+call on the external-audit budget. Its Solana custody inventory must distinguish
+`squads.rs` assembly primitives from the missing production lifecycle:
+`SolMinter::prepare_mint`/`check_confirmation` still do not call them, and
+Squads configuration plus durable order→proposal mapping remain unimplemented.
+[#1267](https://github.com/botho-project/botho/issues/1267) supplies the real-program
+local CPI harness; [#1268](https://github.com/botho-project/botho/issues/1268)
+supplies minter/engine integration and retry persistence. These are code
+prerequisites before #1086 authority rotation/drill, not operator-only setup.
+Review the implemented lifecycle and execution evidence at the freeze. One item is flagged here because it
 couples to the core-protocol roadmap: once confidential amounts land
 (ADR 0006 Decision 1, epics #902/#904), third parties can no longer read the
 bridge reserve balance from public ledger amounts, and proof-of-reserve
