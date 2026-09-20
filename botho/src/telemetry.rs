@@ -19,7 +19,7 @@
 //! ```
 
 use anyhow::{Context, Result};
-use opentelemetry::KeyValue;
+use opentelemetry::{trace::TracerProvider as _, KeyValue};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{
     runtime,
@@ -116,7 +116,7 @@ fn init_otlp_tracer(config: &TelemetryConfig) -> Result<Tracer> {
         Sampler::TraceIdRatioBased(config.sampling_rate)
     };
 
-    let tracer = opentelemetry_otlp::new_pipeline()
+    let provider = opentelemetry_otlp::new_pipeline()
         .tracing()
         .with_exporter(exporter)
         .with_trace_config(
@@ -131,6 +131,8 @@ fn init_otlp_tracer(config: &TelemetryConfig) -> Result<Tracer> {
         .install_batch(runtime::Tokio)
         .context("Failed to install OTLP tracer")?;
 
+    let tracer = provider.tracer("botho");
+    opentelemetry::global::set_tracer_provider(provider);
     Ok(tracer)
 }
 
@@ -164,6 +166,25 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_otlp_installs_global_provider() {
+        use opentelemetry::trace::{Span as _, Tracer as _};
+
+        // Disabled sampling avoids sending spans to an external collector.
+        let config = TelemetryConfig {
+            sampling_rate: 0.0,
+            ..Default::default()
+        };
+        let tracer = init_otlp_tracer(&config).expect("OTLP provider initializes");
+        let guard = TelemetryGuard;
+        assert!(tracer.start("local").span_context().is_valid());
+        assert!(opentelemetry::global::tracer("test")
+            .start("global")
+            .span_context()
+            .is_valid());
+        drop(guard);
+    }
 
     #[test]
     fn test_telemetry_config_default() {
