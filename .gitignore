@@ -46,7 +46,7 @@ lock.mdb
 # NEVER commit key material. See scripts/bridge-testnet-accounts.sh (#1008).
 .secrets/
 
-# Dockerfile-build output
+# Build output
 dist/
 
 # Per-crate lock files
