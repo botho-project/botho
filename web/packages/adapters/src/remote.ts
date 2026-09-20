@@ -181,12 +181,23 @@ export class RemoteNodeAdapter implements NodeAdapter {
   private peerCallbacks: Set<(status: PeerStatus) => void> = new Set()
   private wsStatusCallbacks: Set<(status: WsConnectionStatus) => void> = new Set()
   private rpcId = 0
+  private connectionGeneration = 0
 
   constructor(config: Partial<RemoteNodeConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config }
   }
 
   async connect(): Promise<void> {
+    const generation = ++this.connectionGeneration
+    // A new attempt supersedes both an in-flight lookup and an old transport.
+    if (this.wsReconnectTimer) clearTimeout(this.wsReconnectTimer)
+    this.wsReconnectTimer = null
+    const previousSocket = this.ws
+    this.ws = null
+    previousSocket?.close()
+    this.connected = false
+    this.currentNode = null
+    this.currentSeedUrl = null
     // Try each seed node until one works
     for (const seedUrl of this.config.seedNodes) {
       try {
@@ -197,6 +208,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
           peerCount: number
         }>(seedUrl, 'node_getStatus', {})
 
+        if (generation !== this.connectionGeneration) throw new Error('Connection cancelled')
         if (result) {
           this.currentSeedUrl = seedUrl
           const resolvedUrl = resolveUrl(seedUrl)
@@ -219,6 +231,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
           return
         }
       } catch {
+        if (generation !== this.connectionGeneration) throw new Error('Connection cancelled')
         // Try next node
         continue
       }
@@ -228,6 +241,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
   }
 
   disconnect(): void {
+    ++this.connectionGeneration
     this.connected = false
     this.currentNode = null
     this.currentSeedUrl = null
@@ -236,8 +250,9 @@ export class RemoteNodeAdapter implements NodeAdapter {
       this.wsReconnectTimer = null
     }
     if (this.ws) {
-      this.ws.close()
+      const socket = this.ws
       this.ws = null
+      socket.close()
     }
     this.setWsStatus('disconnected')
     this.blockCallbacks.clear()
@@ -778,9 +793,13 @@ export class RemoteNodeAdapter implements NodeAdapter {
     this.setWsStatus(this.wsReconnectAttempt > 0 ? 'reconnecting' : 'connecting')
 
     try {
-      this.ws = new WebSocket(wsUrl)
+      const generation = this.connectionGeneration
+      const socket = new WebSocket(wsUrl)
+      this.ws = socket
+      const isCurrent = () => this.ws === socket && generation === this.connectionGeneration
 
       this.ws.onopen = () => {
+        if (!isCurrent()) return
         // Reset reconnection state on successful connection
         this.wsReconnectAttempt = 0
         this.setWsStatus('connected')
@@ -793,6 +812,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
       }
 
       this.ws.onmessage = (event) => {
+        if (!isCurrent()) return
         try {
           const msg = JSON.parse(event.data)
           if (msg.type === 'event') {
@@ -822,6 +842,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
       }
 
       this.ws.onclose = () => {
+        if (!isCurrent()) return
         this.ws = null
         if (this.connected) {
           this.setWsStatus('reconnecting')
@@ -837,7 +858,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
           this.wsReconnectAttempt++
           this.wsReconnectTimer = setTimeout(() => {
             this.wsReconnectTimer = null
-            if (this.connected) {
+            if (this.connected && generation === this.connectionGeneration) {
               this.setupWebSocket(seedUrl)
             }
           }, finalDelay)

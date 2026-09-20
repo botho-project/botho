@@ -465,3 +465,74 @@ describe('u128 / u64 wire-format round-trips', () => {
     expect(String(parseInt(id, 10))).not.toBe(id)
   })
 })
+
+describe('RemoteNodeAdapter connection cancellation', () => {
+  function deferred<T>() {
+    let resolve!: (value: T) => void
+    const promise = new Promise<T>((done) => { resolve = done })
+    return { promise, resolve }
+  }
+  function response(version: string): Response {
+    return { ok: true, json: async () => ({ ...nodeStatus, result: { ...nodeStatus.result, version } }) } as Response
+  }
+  function sockets() {
+    const instances: Array<{ close: ReturnType<typeof vi.fn>; onclose: (() => void) | null }> = []
+    vi.stubGlobal('WebSocket', class {
+      static OPEN = 1
+      readyState = 0
+      close = vi.fn()
+      send = vi.fn()
+      onclose = null
+      constructor() { instances.push(this) }
+    })
+    return instances
+  }
+  it('does not open a socket or try another seed after disconnect during RPC', async () => {
+    const pending = deferred<Response>()
+    const fetch = vi.fn().mockReturnValue(pending.promise)
+    vi.stubGlobal('fetch', fetch)
+    const opened = sockets()
+    const adapter = new RemoteNodeAdapter({ seedNodes: ['https://one.test/rpc', 'https://two.test/rpc'] })
+    const connecting = adapter.connect()
+    const rejected = expect(connecting).rejects.toThrow('Connection cancelled')
+    adapter.disconnect()
+    pending.resolve(response('old'))
+    await rejected
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(opened).toHaveLength(0)
+    expect(adapter.isConnected()).toBe(false)
+    expect(adapter.getNodeInfo()).toBeNull()
+  })
+  it('keeps the newer connection when an older RPC finishes last', async () => {
+    const old = deferred<Response>()
+    const latest = deferred<Response>()
+    vi.stubGlobal('fetch', vi.fn().mockReturnValueOnce(old.promise).mockReturnValueOnce(latest.promise))
+    const opened = sockets()
+    const adapter = new RemoteNodeAdapter({ seedNodes: ['https://seed.test/rpc'] })
+    const stale = adapter.connect()
+    const rejected = expect(stale).rejects.toThrow('Connection cancelled')
+    const current = adapter.connect()
+    latest.resolve(response('current'))
+    await current
+    old.resolve(response('old'))
+    await rejected
+    expect(adapter.getNodeInfo()?.version).toBe('current')
+    expect(opened).toHaveLength(1)
+    adapter.disconnect()
+    expect(opened[0].close).toHaveBeenCalledOnce()
+  })
+  it('ignores a closed socket callback after explicit reconnect', async () => {
+    installFetch({ node_getStatus: nodeStatus })
+    const opened = sockets()
+    const adapter = new RemoteNodeAdapter({ seedNodes: ['https://seed.test/rpc'] })
+    await adapter.connect()
+    const oldClose = opened[0].onclose!
+    adapter.disconnect()
+    await adapter.connect()
+    expect(opened).toHaveLength(2)
+    oldClose()
+    expect(adapter.isConnected()).toBe(true)
+    adapter.disconnect()
+    expect(opened[1].close).toHaveBeenCalledOnce()
+  })
+})
