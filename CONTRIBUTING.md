@@ -27,8 +27,8 @@ Run the complete ledger unit suite with the platform-aware launcher:
 ./scripts/test-ledger.sh --binary /absolute/path/to/botho-lib-test
 ```
 
-The Cargo path uses `--locked -p botho --lib ledger::`. Neither mode skips tests
-or retries failures. Non-macOS platforms retain their existing libtest concurrency;
+The Cargo path uses `--locked -p botho --lib ledger::`. Neither mode adds skip filters or retries failures; normal libtest ignored-test
+semantics still apply. Non-macOS platforms retain their existing libtest concurrency;
 the Linux CI gate remains unchanged. A supplied binary must be the intended
 checkout's compiled library test target; the launcher does not establish provenance.
 
