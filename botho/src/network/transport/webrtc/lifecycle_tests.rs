@@ -2,7 +2,7 @@
 //! Real UDP/DTLS/SCTP tests: loopback only, no public STUN, TURN, DNS or
 //! signaling.
 use super::*;
-use std::{net::UdpSocket, time::Duration};
+use std::{net::UdpSocket, sync::Mutex as StdMutex, time::Duration};
 use tokio::time::{sleep, timeout};
 use webrtc::data_channel::RTCDataChannelState;
 
@@ -147,13 +147,7 @@ async fn local_delivery_disconnect_and_fresh_reconnect() {
 #[tokio::test]
 async fn drop_connection_stops_receiver_and_releases_socket() {
     let (left, right, left_addr, right_addr) = pair().await;
-    let receiver = left
-        .receiver
-        .lock()
-        .unwrap()
-        .as_ref()
-        .unwrap()
-        .abort_handle();
+    let receiver = left.receiver_abort.clone();
     drop(left);
     until(async || receiver.is_finished()).await;
     released(left_addr).await;
@@ -243,4 +237,50 @@ async fn close_wakes_pending_gathering_without_waiting_for_its_deadline() {
         result,
         Err(TransportError::Ice(IceError::NoCandidates))
     ));
+}
+
+#[tokio::test]
+async fn concurrent_close_waits_for_the_first_teardown_and_notifies_remote() {
+    let (left, right, left_addr, right_addr) = pair().await;
+    let mut first = Box::pin(left.close());
+    assert!(futures::poll!(first.as_mut()).is_pending());
+    // Leave the first caller suspended after starting teardown. A second caller
+    // must not stop its driver while that caller is awaiting the SCTP close event.
+    let mut second = Box::pin(left.close());
+    assert!(
+        timeout(Duration::from_millis(100), second.as_mut())
+            .await
+            .is_err(),
+        "second close bypassed the pending first teardown"
+    );
+    timeout(Duration::from_secs(2), first)
+        .await
+        .unwrap()
+        .unwrap();
+    timeout(Duration::from_secs(2), second)
+        .await
+        .unwrap()
+        .unwrap();
+    until(async || right.recv_buffer.lock().await.closed).await;
+    released(left_addr).await;
+    let _ = right.close().await;
+    released(right_addr).await;
+}
+
+#[tokio::test]
+async fn cancelled_close_then_drop_aborts_receiver_and_releases_socket() {
+    let (left, right, left_addr, right_addr) = pair().await;
+    let receiver = left.receiver_abort.clone();
+    let mut closing = Box::pin(left.close());
+    assert!(futures::poll!(closing.as_mut()).is_pending());
+    assert!(
+        !receiver.is_finished(),
+        "exercise cancellation before receiver completion"
+    );
+    drop(closing);
+    drop(left);
+    until(async || receiver.is_finished()).await;
+    released(left_addr).await;
+    drop(right);
+    released(right_addr).await;
 }

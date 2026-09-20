@@ -76,11 +76,7 @@ pub use ice::{
 };
 pub use stun::{NatType, StunClient, StunConfig, StunError};
 
-use std::{
-    collections::VecDeque,
-    net::SocketAddr,
-    sync::{Arc, Mutex as StdMutex},
-};
+use std::{collections::VecDeque, net::SocketAddr, sync::Arc};
 use tokio::sync::{mpsc, watch, Mutex};
 use webrtc::{
     data_channel::{DataChannel, DataChannelEvent},
@@ -405,8 +401,8 @@ pub struct WebRtcConnection {
     peer_connection: Arc<WebRtcPeer>,
     data_channel: Arc<dyn DataChannel>,
     recv_buffer: Arc<Mutex<ReceiveBuffer>>,
-    receiver: StdMutex<Option<tokio::task::JoinHandle<()>>>,
-    // Retain cancellation even if a close future took the join handle then was dropped.
+    receiver: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    // Drop must abort the task even when an in-flight close future is cancelled.
     receiver_abort: tokio::task::AbortHandle,
 }
 
@@ -450,7 +446,7 @@ impl WebRtcConnection {
             data_channel,
             recv_buffer,
             receiver_abort: receiver.abort_handle(),
-            receiver: StdMutex::new(Some(receiver)),
+            receiver: Mutex::new(Some(receiver)),
         }
     }
 
@@ -494,22 +490,29 @@ impl WebRtcConnection {
     /// Stop the receiver and always attempt peer cleanup, including after
     /// channel errors.
     pub async fn close(&self) -> Result<(), TransportError> {
+        // Serialize the entire teardown, including peer shutdown. Keep the task in
+        // the slot while awaiting it: cancellation lets a later close resume the
+        // same wait instead of bypassing the SCTP close grace period.
+        let mut receiver = self.receiver.lock().await;
         self.recv_buffer.lock().await.closed = true;
-        let receiver = self.receiver.lock().expect("receiver lock").take();
-        let channel_result = self.data_channel.close().await;
-        if let Some(mut receiver) = receiver {
+        let channel_result = if receiver.is_some() {
+            self.data_channel.close().await
+        } else {
+            Ok(())
+        };
+        if let Some(task) = receiver.as_mut() {
             // ready_state becomes Closed before SCTP's reset is flushed in 0.20.2.
             // Wait for the actual close event, keeping the driver alive, but bound
             // teardown when the remote disappears or the channel never opened.
-            if channel_result.is_err()
-                || tokio::time::timeout(std::time::Duration::from_secs(1), &mut receiver)
-                    .await
-                    .is_err()
+            if tokio::time::timeout(std::time::Duration::from_secs(1), &mut *task)
+                .await
+                .is_err()
             {
-                receiver.abort();
-                let _ = receiver.await;
+                task.abort();
+                let _ = task.await;
             }
         }
+        receiver.take();
         let peer_result = self.peer_connection.close().await;
         peer_result.map_err(|_| TransportError::ConnectionClosed)?;
         channel_result.map_err(|e| TransportError::DataChannel(e.to_string()))
