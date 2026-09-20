@@ -13,19 +13,25 @@ name: Web CI
 # built first (the snap bundle inlines `bth_wasm_signer` from pkg-bundler), so
 # this job installs a wasm Rust toolchain + wasm-pack and builds it in-job.
 #
-# Path-filtered so Rust-only PRs don't pay the pnpm install/test cost.
+# Root Cargo manifest/lock changes can change the WASM binding versions even
+# when no web source changes (for example libp2p's shared WASM dependencies).
+# Include those inputs so the actual signer and Snap artifacts remain checked.
 # Everything here is offline/mocked and `--dry-run` only: NO secrets required.
 
 on:
   pull_request:
     paths:
       - 'web/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - '.github/workflows/web-ci.yml'
   push:
     branches:
       - main
     paths:
       - 'web/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - '.github/workflows/web-ci.yml'
   workflow_dispatch:
 

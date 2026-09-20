@@ -82,94 +82,66 @@ impl Codec for TopologySyncCodec {
     type Request = TopologySyncRequest;
     type Response = TopologySyncResponse;
 
-    fn read_request<'life0, 'life1, 'life2, 'async_trait, T>(
-        &'life0 mut self,
-        _protocol: &'life1 Self::Protocol,
-        io: &'life2 mut T,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = io::Result<Self::Request>> + Send + 'async_trait>,
-    >
+    async fn read_request<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+    ) -> io::Result<Self::Request>
     where
-        T: futures::AsyncRead + Unpin + Send + 'async_trait,
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        'life2: 'async_trait,
-        Self: 'async_trait,
+        T: futures::AsyncRead + Unpin + Send,
     {
-        Box::pin(async move {
-            use futures::AsyncReadExt;
-            let mut buf = Vec::new();
-            io.read_to_end(&mut buf).await?;
-            serde_json::from_slice(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-        })
+        use futures::AsyncReadExt;
+        let mut buf = Vec::new();
+        io.read_to_end(&mut buf).await?;
+        serde_json::from_slice(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
-    fn read_response<'life0, 'life1, 'life2, 'async_trait, T>(
-        &'life0 mut self,
-        _protocol: &'life1 Self::Protocol,
-        io: &'life2 mut T,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = io::Result<Self::Response>> + Send + 'async_trait>,
-    >
+    async fn read_response<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+    ) -> io::Result<Self::Response>
     where
-        T: futures::AsyncRead + Unpin + Send + 'async_trait,
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        'life2: 'async_trait,
-        Self: 'async_trait,
+        T: futures::AsyncRead + Unpin + Send,
     {
-        Box::pin(async move {
-            use futures::AsyncReadExt;
-            let mut buf = Vec::new();
-            io.read_to_end(&mut buf).await?;
-            serde_json::from_slice(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-        })
+        use futures::AsyncReadExt;
+        let mut buf = Vec::new();
+        io.read_to_end(&mut buf).await?;
+        serde_json::from_slice(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
-    fn write_request<'life0, 'life1, 'life2, 'async_trait, T>(
-        &'life0 mut self,
-        _protocol: &'life1 Self::Protocol,
-        io: &'life2 mut T,
+    async fn write_request<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
         req: Self::Request,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>> + Send + 'async_trait>>
+    ) -> io::Result<()>
     where
-        T: futures::AsyncWrite + Unpin + Send + 'async_trait,
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        'life2: 'async_trait,
-        Self: 'async_trait,
+        T: futures::AsyncWrite + Unpin + Send,
     {
-        Box::pin(async move {
-            use futures::AsyncWriteExt;
-            let bytes = serde_json::to_vec(&req)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            io.write_all(&bytes).await?;
-            io.close().await?;
-            Ok(())
-        })
+        use futures::AsyncWriteExt;
+        let bytes =
+            serde_json::to_vec(&req).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        io.write_all(&bytes).await?;
+        io.close().await?;
+        Ok(())
     }
 
-    fn write_response<'life0, 'life1, 'life2, 'async_trait, T>(
-        &'life0 mut self,
-        _protocol: &'life1 Self::Protocol,
-        io: &'life2 mut T,
+    async fn write_response<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
         resp: Self::Response,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>> + Send + 'async_trait>>
+    ) -> io::Result<()>
     where
-        T: futures::AsyncWrite + Unpin + Send + 'async_trait,
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        'life2: 'async_trait,
-        Self: 'async_trait,
+        T: futures::AsyncWrite + Unpin + Send,
     {
-        Box::pin(async move {
-            use futures::AsyncWriteExt;
-            let bytes = serde_json::to_vec(&resp)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            io.write_all(&bytes).await?;
-            io.close().await?;
-            Ok(())
-        })
+        use futures::AsyncWriteExt;
+        let bytes =
+            serde_json::to_vec(&resp).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        io.write_all(&bytes).await?;
+        io.close().await?;
+        Ok(())
     }
 }
 

@@ -125,7 +125,7 @@ itertools = "0.14"
 json = "0.12"
 lazy_static = "1"
 libc = "0.2"
-libp2p = { version = "0.56", default-features = false }
+libp2p = { version = "0.57", default-features = false }
 log = "0.4"
 maplit = "1"
 mc-oblivious-aes-gcm = { version = "0.10", default-features = false }
