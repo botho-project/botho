@@ -256,156 +256,128 @@ impl Codec for SyncCodec {
     type Request = SyncRequest;
     type Response = SyncResponse;
 
-    fn read_request<'life0, 'life1, 'life2, 'async_trait, T>(
-        &'life0 mut self,
-        _protocol: &'life1 Self::Protocol,
-        io: &'life2 mut T,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = io::Result<Self::Request>> + Send + 'async_trait>,
-    >
+    async fn read_request<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+    ) -> io::Result<Self::Request>
     where
-        T: AsyncRead + Unpin + Send + 'async_trait,
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        'life2: 'async_trait,
-        Self: 'async_trait,
+        T: AsyncRead + Unpin + Send,
     {
-        Box::pin(async move {
-            // Bounded read to prevent memory exhaustion
-            let mut buf = vec![0u8; MAX_REQUEST_SIZE as usize];
-            let mut total_read = 0;
+        // Bounded read to prevent memory exhaustion
+        let mut buf = vec![0u8; MAX_REQUEST_SIZE as usize];
+        let mut total_read = 0;
 
-            loop {
-                match io.read(&mut buf[total_read..]).await {
-                    Ok(0) => break, // EOF
-                    Ok(n) => {
-                        total_read += n;
-                        if total_read >= MAX_REQUEST_SIZE as usize {
-                            return Err(io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                "Request too large",
-                            ));
-                        }
+        loop {
+            match io.read(&mut buf[total_read..]).await {
+                Ok(0) => break, // EOF
+                Ok(n) => {
+                    total_read += n;
+                    if total_read >= MAX_REQUEST_SIZE as usize {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "Request too large",
+                        ));
                     }
-                    Err(e) => return Err(e),
                 }
+                Err(e) => return Err(e),
             }
+        }
 
-            buf.truncate(total_read);
-            // Account for the received request payload (#549). The bytes have
-            // already crossed the wire, so they count regardless of whether
-            // deserialization below succeeds.
-            self.record_received(total_read as u64);
-            bincode::deserialize(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-        })
+        buf.truncate(total_read);
+        // Account for the received request payload (#549). The bytes have
+        // already crossed the wire, so they count regardless of whether
+        // deserialization below succeeds.
+        self.record_received(total_read as u64);
+        bincode::deserialize(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
-    fn read_response<'life0, 'life1, 'life2, 'async_trait, T>(
-        &'life0 mut self,
-        _protocol: &'life1 Self::Protocol,
-        io: &'life2 mut T,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = io::Result<Self::Response>> + Send + 'async_trait>,
-    >
+    async fn read_response<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
+    ) -> io::Result<Self::Response>
     where
-        T: AsyncRead + Unpin + Send + 'async_trait,
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        'life2: 'async_trait,
-        Self: 'async_trait,
+        T: AsyncRead + Unpin + Send,
     {
-        Box::pin(async move {
-            // Bounded read to prevent memory exhaustion
-            let mut buf = vec![0u8; MAX_RESPONSE_SIZE as usize];
-            let mut total_read = 0;
+        // Bounded read to prevent memory exhaustion
+        let mut buf = vec![0u8; MAX_RESPONSE_SIZE as usize];
+        let mut total_read = 0;
 
-            loop {
-                match io.read(&mut buf[total_read..]).await {
-                    Ok(0) => break, // EOF
-                    Ok(n) => {
-                        total_read += n;
-                        if total_read >= MAX_RESPONSE_SIZE as usize {
-                            return Err(io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                "Response too large",
-                            ));
-                        }
+        loop {
+            match io.read(&mut buf[total_read..]).await {
+                Ok(0) => break, // EOF
+                Ok(n) => {
+                    total_read += n;
+                    if total_read >= MAX_RESPONSE_SIZE as usize {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "Response too large",
+                        ));
                     }
-                    Err(e) => return Err(e),
                 }
+                Err(e) => return Err(e),
             }
+        }
 
-            buf.truncate(total_read);
-            // Account for the received response payload (#549); see the note in
-            // `read_request`.
-            self.record_received(total_read as u64);
-            bincode::deserialize(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-        })
+        buf.truncate(total_read);
+        // Account for the received response payload (#549); see the note in
+        // `read_request`.
+        self.record_received(total_read as u64);
+        bincode::deserialize(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
-    fn write_request<'life0, 'life1, 'life2, 'async_trait, T>(
-        &'life0 mut self,
-        _protocol: &'life1 Self::Protocol,
-        io: &'life2 mut T,
+    async fn write_request<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
         req: Self::Request,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>> + Send + 'async_trait>>
+    ) -> io::Result<()>
     where
-        T: AsyncWrite + Unpin + Send + 'async_trait,
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        'life2: 'async_trait,
-        Self: 'async_trait,
+        T: AsyncWrite + Unpin + Send,
     {
-        Box::pin(async move {
-            let bytes = bincode::serialize(&req)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            // Account for the sent request payload (#549); the serialized length
-            // is already in hand here, so no extra serialization pass is added.
-            self.record_sent(bytes.len() as u64);
-            io.write_all(&bytes).await?;
-            // NOTE: do NOT call `io.close()` here. Under libp2p 0.56's
-            // request-response handler, the *handler* (not the codec) is
-            // responsible for half-closing the substream after the codec
-            // returns (it calls `stream.close()` right after
-            // `write_request`/`write_response`). Closing inside the codec
-            // races with libp2p's optimistic multistream-select negotiation:
-            // tearing the substream down before the remote confirms the
-            // protocol surfaces as "Stream closed. Confirmation from remote
-            // for optimistic protocol negotiation still pending." On loopback
-            // this cascades into the whole connection being dropped and
-            // redialed (issue #411). The peer's read side still observes EOF
-            // because the handler half-closes the write direction once we
-            // return.
-            Ok(())
-        })
+        let bytes =
+            bincode::serialize(&req).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        // Account for the sent request payload (#549); the serialized length
+        // is already in hand here, so no extra serialization pass is added.
+        self.record_sent(bytes.len() as u64);
+        io.write_all(&bytes).await?;
+        // NOTE: do NOT call `io.close()` here. Under libp2p 0.56's
+        // request-response handler, the *handler* (not the codec) is
+        // responsible for half-closing the substream after the codec
+        // returns (it calls `stream.close()` right after
+        // `write_request`/`write_response`). Closing inside the codec
+        // races with libp2p's optimistic multistream-select negotiation:
+        // tearing the substream down before the remote confirms the
+        // protocol surfaces as "Stream closed. Confirmation from remote
+        // for optimistic protocol negotiation still pending." On loopback
+        // this cascades into the whole connection being dropped and
+        // redialed (issue #411). The peer's read side still observes EOF
+        // because the handler half-closes the write direction once we
+        // return.
+        Ok(())
     }
 
-    fn write_response<'life0, 'life1, 'life2, 'async_trait, T>(
-        &'life0 mut self,
-        _protocol: &'life1 Self::Protocol,
-        io: &'life2 mut T,
+    async fn write_response<T>(
+        &mut self,
+        _protocol: &Self::Protocol,
+        io: &mut T,
         resp: Self::Response,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<()>> + Send + 'async_trait>>
+    ) -> io::Result<()>
     where
-        T: AsyncWrite + Unpin + Send + 'async_trait,
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        'life2: 'async_trait,
-        Self: 'async_trait,
+        T: AsyncWrite + Unpin + Send,
     {
-        Box::pin(async move {
-            let bytes = bincode::serialize(&resp)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            // Account for the sent response payload (#549); see `write_request`.
-            self.record_sent(bytes.len() as u64);
-            io.write_all(&bytes).await?;
-            // See the note in `write_request`: the libp2p request-response
-            // handler half-closes the substream after this returns, so the
-            // codec must not call `io.close()` itself (it races with
-            // optimistic protocol negotiation and destabilizes the
-            // connection — issue #411).
-            Ok(())
-        })
+        let bytes =
+            bincode::serialize(&resp).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        // Account for the sent response payload (#549); see `write_request`.
+        self.record_sent(bytes.len() as u64);
+        io.write_all(&bytes).await?;
+        // See the note in `write_request`: the libp2p request-response
+        // handler half-closes the substream after this returns, so the
+        // codec must not call `io.close()` itself (it races with
+        // optimistic protocol negotiation and destabilizes the
+        // connection — issue #411).
+        Ok(())
     }
 }
 
