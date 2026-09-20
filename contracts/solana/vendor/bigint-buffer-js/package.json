@@ -1,0 +1,13 @@
+{
+  "name": "@botho/bigint-buffer-js",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Bounded unsigned integer codecs for Solana tooling without native addons",
+  "main": "index.cjs",
+  "browser": "browser.cjs",
+  "types": "index.d.ts",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "buffer": "6.0.3"
+  }
+}

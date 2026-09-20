@@ -5,7 +5,8 @@
   "scripts": {
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
     "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
-    "test": "anchor test"
+    "test": "anchor test",
+    "test:tooling": "node --test tests-tooling/*.test.cjs"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.29.0",
@@ -14,7 +15,8 @@
     "@solana/spl-token": "^0.4.0",
     "@solana/web3.js": "^1.99.0",
     "bn.js": "^5.2.5",
-    "decimal.js": "^10.6.0"
+    "decimal.js": "^10.6.0",
+    "bigint-buffer": "file:vendor/bigint-buffer-js"
   },
   "devDependencies": {
     "@types/bn.js": "^5.1.0",
@@ -25,5 +27,16 @@
     "prettier": "^3.9.6",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2"
+  },
+  "overrides": {
+    "@coral-xyz/anchor@^0.29.0": {
+      "toml": "4.2.0"
+    },
+    "@solana/web3.js@^1.99.0": {
+      "jayson": "5.0.0"
+    },
+    "@solana/buffer-layout-utils@0.2.0 || 0.3.0": {
+      "bigint-buffer": "$bigint-buffer"
+    }
   }
 }
