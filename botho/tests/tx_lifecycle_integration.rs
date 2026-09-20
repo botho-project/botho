@@ -19,6 +19,10 @@
 //! transaction type. They need to be rewritten to use CLSAG ring signatures
 //! with proper decoy selection from the UTXO set.
 
+use botho as node;
+#[path = "common/positive_transfer.rs"]
+mod positive_transfer;
+
 use std::time::SystemTime;
 
 use serial_test::serial;
@@ -361,100 +365,19 @@ fn create_signed_transaction(
     current_height: u64,
     ledger: &Ledger,
 ) -> Transaction {
-    use botho::transaction::{ClsagRingInput, RingMember};
-    use bth_util_from_random::OsRng;
-    use rand::seq::SliceRandom;
-
-    let mut rng = OsRng;
-
-    // Create outputs: recipient + change
-    let change = sender_utxo.output.amount - amount - fee;
-    let mut outputs = vec![TxOutput::new(amount, recipient)];
-    if change > 0 {
-        outputs.push(TxOutput::new(change, &sender_wallet.public_address()));
-    }
-
-    // Build preliminary transaction to get signing hash
-    let preliminary_tx = Transaction::new_clsag(Vec::new(), outputs.clone(), fee, current_height);
-    let signing_hash = preliminary_tx.signing_hash();
-
-    // Recover the one-time private key for the real input.
-    //
-    // Protocol 6.0.0: a coinbase UTXO is a hybrid ML-KEM stealth output whose
-    // one-time key folds in the ML-KEM shared secret bound to the output index,
-    // so the classical `recover_spend_key` returns the wrong scalar and the
-    // resulting CLSAG signature fails to verify. Route through the unified
-    // `recover_spend_key_for` (#970) at the UTXO's own output index — it uses
-    // the hybrid recovery for ciphertext-bearing outputs (coinbases) and the
-    // classical path for the classical change/received outputs these tests mint.
-    let output_index = sender_utxo.id.output_index;
-    #[cfg(feature = "pq")]
-    let onetime_private = {
-        let pq = sender_wallet.pq_account_key();
-        sender_utxo
-            .output
-            .recover_spend_key_for(
-                sender_wallet.account_key(),
-                pq.pq_kem_keypair(),
-                subaddress_index,
-                output_index,
-            )
-            .expect("Failed to recover spend key - UTXO doesn't belong to wallet")
-    };
-    #[cfg(not(feature = "pq"))]
-    let onetime_private = {
-        let _ = output_index;
-        sender_utxo
-            .output
-            .recover_spend_key(sender_wallet.account_key(), subaddress_index)
-            .expect("Failed to recover spend key - UTXO doesn't belong to wallet")
-    };
-
-    // Get decoys from the ledger
-    let exclude_keys = vec![sender_utxo.output.target_key];
-    let decoys_needed = MIN_RING_SIZE - 1;
-
     let decoys = ledger
-        .get_decoy_outputs(decoys_needed, &exclude_keys, 0) // 0 confirmations for tests
+        .get_decoy_outputs(MIN_RING_SIZE - 1, &[sender_utxo.output.target_key], 0)
         .expect("Failed to get decoy outputs - need at least 20 UTXOs in ledger");
-
-    assert!(
-        decoys.len() >= decoys_needed,
-        "Not enough decoys: need {}, got {}. Mine more blocks first.",
-        decoys_needed,
-        decoys.len()
-    );
-
-    // Build ring: real output + decoys
-    let mut ring: Vec<RingMember> = Vec::with_capacity(MIN_RING_SIZE);
-    ring.push(RingMember::from_output(&sender_utxo.output));
-    for decoy in &decoys {
-        ring.push(RingMember::from_output(decoy));
-    }
-
-    // Shuffle ring and find real input position
-    let real_target_key = sender_utxo.output.target_key;
-    let mut indices: Vec<usize> = (0..ring.len()).collect();
-    indices.shuffle(&mut rng);
-    let shuffled_ring: Vec<RingMember> = indices.iter().map(|&i| ring[i].clone()).collect();
-    let real_index = shuffled_ring
-        .iter()
-        .position(|m| m.target_key == real_target_key)
-        .expect("Real input not found in ring after shuffle");
-
-    // Create CLSAG ring input
-    let ring_input = ClsagRingInput::new(
-        shuffled_ring,
-        real_index,
-        &onetime_private,
-        sender_utxo.output.amount,
-        &signing_hash,
-        &mut rng,
+    positive_transfer::with_decoys(
+        sender_wallet,
+        sender_utxo,
+        subaddress_index,
+        recipient,
+        amount,
+        fee,
+        current_height,
+        &decoys,
     )
-    .expect("Failed to create CLSAG ring signature");
-
-    // Create final transaction
-    Transaction::new_clsag(vec![ring_input], outputs, fee, current_height)
 }
 
 // ============================================================================

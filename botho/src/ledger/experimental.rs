@@ -2,8 +2,9 @@
 //!
 //! This is NOT a validated Ledger. It shares production accounting/index
 //! writes, but receives unvalidated fixture transitions. Only tests can open
-//! it. Future consensus integration must validate transitions before any real
-//! caller exposure.
+//! it. The separate `validated` child owns an inactive accepted local chain;
+//! fixture storage is never converted into that handle. No real caller
+//! exposure.
 use super::{
     store::writer::{Representation, WriteTables},
     EmissionStateUpdate, LedgerError,
@@ -31,13 +32,16 @@ const MAX_STORED_BLOCK: usize = 16 * 1024 * 1024;
 fn db(e: heed::Error) -> LedgerError {
     LedgerError::Database(e.to_string())
 }
+fn db_operation(operation: &'static str) -> impl FnOnce(heed::Error) -> LedgerError {
+    move |error| LedgerError::Database(format!("{operation}: {error}"))
+}
 fn encoding(s: impl ToString) -> LedgerError {
     LedgerError::StorageEncoding(s.to_string())
 }
 fn inconsistent(s: impl ToString) -> LedgerError {
     LedgerError::InconsistentRecord(s.to_string())
 }
-fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, LedgerError> {
+pub(super) fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, LedgerError> {
     bincode::DefaultOptions::new()
         .with_fixint_encoding()
         .with_limit(MAX_STORED_BLOCK as u64)
@@ -48,14 +52,21 @@ fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, LedgerError> {
 
 /// Must run before create_database, genesis or metadata initialization.
 pub(super) fn require_v1_schema(env: &Env) -> Result<(), LedgerError> {
-    let txn = env.read_txn().map_err(db)?;
-    let meta: Option<Database<Bytes, Bytes>> = env.open_database(&txn, Some("meta")).map_err(db)?;
+    let txn = env
+        .read_txn()
+        .map_err(db_operation("V1 schema read transaction"))?;
+    let meta: Option<Database<Bytes, Bytes>> = env
+        .open_database(&txn, Some("meta"))
+        .map_err(db_operation("V1 schema open metadata"))?;
     if let Some(meta) = meta {
-        if let Some(marker) = meta.get(&txn, SCHEMA_KEY).map_err(db)? {
+        if let Some(marker) = meta
+            .get(&txn, SCHEMA_KEY)
+            .map_err(db_operation("V1 schema read marker"))?
+        {
             return Err(LedgerError::UnsupportedSchema(hex::encode(marker)));
         }
     }
-    txn.commit().map_err(db)
+    txn.commit().map_err(db_operation("V1 schema read commit"))
 }
 
 #[derive(Clone)]
@@ -239,6 +250,19 @@ struct ExperimentalStore {
 impl ExperimentalStore {
     #[cfg(test)]
     fn open_fixture(path: &std::path::Path, fresh: bool) -> Result<Self, LedgerError> {
+        Self::open_local(path, fresh, SCHEMA, |_, _, _| Ok(()))
+    }
+    #[cfg(test)]
+    fn open_local(
+        path: &std::path::Path,
+        fresh: bool,
+        schema: &[u8],
+        initialize: impl FnOnce(
+            &Env,
+            &mut heed::RwTxn<'_>,
+            Database<Bytes, Bytes>,
+        ) -> Result<(), LedgerError>,
+    ) -> Result<Self, LedgerError> {
         if fresh {
             if path.exists() && std::fs::read_dir(path).map_err(encoding)?.next().is_some() {
                 return Err(LedgerError::UnsupportedSchema(
@@ -258,22 +282,30 @@ impl ExperimentalStore {
                 .map_size(1024 * 1024 * 1024)
                 .open(path)
         }
-        .map_err(db)?;
+        .map_err(db_operation("experimental environment open"))?;
         if fresh {
-            let mut txn = env.write_txn().map_err(db)?;
-            let meta: Database<Bytes, Bytes> =
-                env.create_database(&mut txn, Some("meta")).map_err(db)?;
+            let mut txn = env.write_txn().map_err(db_operation(
+                "experimental initialization write transaction",
+            ))?;
+            let meta: Database<Bytes, Bytes> = env
+                .create_database(&mut txn, Some("meta"))
+                .map_err(db_operation("experimental create metadata table"))?;
             // Check again under the exclusive writer before any schema creation commits.
-            if meta.len(&txn).map_err(db)? != 0 {
+            if meta
+                .len(&txn)
+                .map_err(db_operation("experimental metadata length"))?
+                != 0
+            {
                 return Err(inconsistent("fresh metadata not empty"));
             }
-            meta.put(&mut txn, SCHEMA_KEY, SCHEMA).map_err(db)?;
+            meta.put(&mut txn, SCHEMA_KEY, schema)
+                .map_err(db_operation("experimental write schema marker"))?;
             env.create_database::<U64<heed::byteorder::LE>, Bytes>(&mut txn, Some("blocks"))
-                .map_err(db)?;
+                .map_err(db_operation("experimental create blocks table"))?;
             env.create_database::<Bytes, Bytes>(&mut txn, Some("utxos"))
-                .map_err(db)?;
+                .map_err(db_operation("experimental create UTXO table"))?;
             env.create_database::<Bytes, Bytes>(&mut txn, Some("derivation_contexts"))
-                .map_err(db)?;
+                .map_err(db_operation("experimental create contexts table"))?;
             for name in [
                 "address_index",
                 "key_images",
@@ -282,36 +314,44 @@ impl ExperimentalStore {
                 "bridge_import_clusters",
             ] {
                 env.create_database::<Bytes, Bytes>(&mut txn, Some(name))
-                    .map_err(db)?;
+                    .map_err(db_operation("experimental create index table"))?;
             }
             WriteTables::initialize_fixture_metadata(meta, &mut txn)?;
-            txn.commit().map_err(db)?;
+            initialize(&env, &mut txn, meta)?;
+            txn.commit()
+                .map_err(db_operation("experimental initialization commit"))?;
         }
-        let txn = env.read_txn().map_err(db)?;
+        let txn = env
+            .read_txn()
+            .map_err(db_operation("experimental handles read transaction"))?;
         let meta: Database<Bytes, Bytes> = env
             .open_database(&txn, Some("meta"))
-            .map_err(db)?
+            .map_err(db_operation("experimental open metadata table"))?
             .ok_or_else(|| LedgerError::UnsupportedSchema("missing marker".into()))?;
-        if meta.get(&txn, SCHEMA_KEY).map_err(db)? != Some(SCHEMA) {
+        if meta
+            .get(&txn, SCHEMA_KEY)
+            .map_err(db_operation("experimental read schema marker"))?
+            != Some(schema)
+        {
             return Err(LedgerError::UnsupportedSchema(
                 "exact experimental marker required".into(),
             ));
         }
         let blocks = env
             .open_database(&txn, Some("blocks"))
-            .map_err(db)?
+            .map_err(db_operation("experimental open blocks table"))?
             .ok_or_else(|| inconsistent("missing blocks table"))?;
         let utxos = env
             .open_database(&txn, Some("utxos"))
-            .map_err(db)?
+            .map_err(db_operation("experimental open UTXO table"))?
             .ok_or_else(|| inconsistent("missing utxos table"))?;
         let contexts = env
             .open_database(&txn, Some("derivation_contexts"))
-            .map_err(db)?
+            .map_err(db_operation("experimental open contexts table"))?
             .ok_or_else(|| inconsistent("missing contexts table"))?;
         let open_bytes = |name| {
             env.open_database(&txn, Some(name))
-                .map_err(db)?
+                .map_err(db_operation("experimental open index table"))?
                 .ok_or_else(|| inconsistent(format!("missing {name} table")))
         };
         let tables = WriteTables {
@@ -326,7 +366,8 @@ impl ExperimentalStore {
         };
         // LMDB database handles opened in this read transaction survive only
         // when it commits (dropping/aborting invalidates newly opened handles).
-        txn.commit().map_err(db)?;
+        txn.commit()
+            .map_err(db_operation("experimental handles read commit"))?;
         Ok(Self {
             env,
             blocks,
@@ -474,12 +515,24 @@ impl ExperimentalStore {
         mut after_write: impl FnMut() -> Result<(), LedgerError>,
     ) -> Result<(), LedgerError> {
         let bytes = e.encode()?;
-        let mut txn = self.env.write_txn().map_err(db)?;
+        let mut txn = self
+            .env
+            .write_txn()
+            .map_err(db_operation("fixture write transaction"))?;
         let height = e.block.height();
-        if self.blocks.get(&txn, &height).map_err(db)?.is_some() {
+        if self
+            .blocks
+            .get(&txn, &height)
+            .map_err(db_operation("fixture existing block lookup"))?
+            .is_some()
+        {
             return Err(inconsistent("existing block"));
         }
-        if let Some(checkpoint) = self.meta.get(&txn, CHECKPOINT).map_err(db)? {
+        if let Some(checkpoint) = self
+            .meta
+            .get(&txn, CHECKPOINT)
+            .map_err(db_operation("fixture checkpoint lookup"))?
+        {
             let mut r = Reader(checkpoint);
             let previous = r.u64()?;
             let hash = r.take(32)?;
@@ -522,11 +575,13 @@ impl ExperimentalStore {
         checkpoint.extend(e.block.hash());
         self.meta
             .put(&mut txn, CHECKPOINT, &checkpoint)
-            .map_err(db)?;
+            .map_err(db_operation("fixture checkpoint write"))?;
         after_write()?;
-        txn.commit().map_err(db)
+        txn.commit().map_err(db_operation("fixture commit"))
     }
 }
 
 #[cfg(test)]
 mod tests;
+
+mod validated;

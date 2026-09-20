@@ -1,0 +1,46 @@
+botho-1354-open-isolated.log [isolated failing test]
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1325 filtered out; finished in 0.04s
+
+botho-1354-open-cohort-1.log [current before precise operation context]
+test result: ok. 92 passed; 0 failed; 0 ignored; 0 measured; 1234 filtered out; finished in 3.26s
+
+botho-1354-open-cohort-2.log [current before precise operation context]
+test result: ok. 92 passed; 0 failed; 0 ignored; 0 measured; 1234 filtered out; finished in 3.26s
+
+botho-1354-open-cohort-3.log [current before precise operation context]
+thread 'ledger::experimental::tests::persisted_nonzero_repeated_and_nested_contexts_reopen' (68803208) panicked at botho/src/ledger/experimental/tests.rs:128:38:
+called `Result::unwrap()` on an `Err` value: Database("Invalid argument (os error 22)")
+thread 'ledger::experimental::tests::single_payout_reads_check_immediate_source_context_without_recursion' (68803210) panicked at botho/src/ledger/experimental/tests.rs:343:67:
+called `Result::unwrap()` on an `Err` value: Database("Invalid argument (os error 22)")
+test result: FAILED. 90 passed; 2 failed; 0 ignored; 0 measured; 1234 filtered out; finished in 3.23s
+
+botho-1354-parent-cohort-1.log [unchanged rebased parent4cb36]
+test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 1233 filtered out; finished in 3.35s
+
+botho-1354-parent-cohort-2.log [unchanged rebased parent4cb36]
+test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 1233 filtered out; finished in 3.52s
+
+botho-1354-parent-cohort-3.log [unchanged rebased parent4cb36]
+test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 1233 filtered out; finished in 3.58s
+
+botho-1354-diag-new92-1.log [current with precise operation context]
+test result: ok. 92 passed; 0 failed; 0 ignored; 0 measured; 1234 filtered out; finished in 4.10s
+
+botho-1354-diag-new92-2.log [current with precise operation context]
+test result: ok. 92 passed; 0 failed; 0 ignored; 0 measured; 1234 filtered out; finished in 3.75s
+
+botho-1354-diag-new92-3.log [current with precise operation context]
+test result: ok. 92 passed; 0 failed; 0 ignored; 0 measured; 1234 filtered out; finished in 3.80s
+
+botho-1354-diag-old86-1.log [current with precise operation context]
+test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 1240 filtered out; finished in 4.45s
+
+botho-1354-diag-old86-2.log [current with precise operation context]
+test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 1240 filtered out; finished in 3.27s
+
+botho-1354-diag-old86-3.log [current with precise operation context]
+test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 1240 filtered out; finished in 5.09s
+
+botho-1354-churn.log [local environment lifecycle diagnostic]
+CHURN completed=400 elapsed_ms=6121 errors=[]
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1326 filtered out; finished in 6.12s

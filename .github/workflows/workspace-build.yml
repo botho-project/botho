@@ -160,9 +160,48 @@ jobs:
             --test rpc_integration \
             --test e2e_faucet_workflow
 
-      - name: Run ledger and inactive LotteryV2 writer regression tests
-        timeout-minutes: 3
-        run: 'cargo test --locked -p botho --lib ledger::'
+      - name: Compile ledger and inactive LotteryV2 validation tests
+        id: ledger_tests
+        timeout-minutes: 15
+        run: |
+          cargo test --locked -p botho --lib --no-run --message-format=json > "$RUNNER_TEMP/ledger-compile.jsonl"
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          messages = [json.loads(line) for line in Path(os.environ["RUNNER_TEMP"], "ledger-compile.jsonl").read_text().splitlines()]
+          binaries = {m["executable"] for m in messages if m.get("reason") == "compiler-artifact"
+                      and m.get("target", {}).get("name") == "botho"
+                      and "lib" in m.get("target", {}).get("kind", [])
+                      and m.get("profile", {}).get("test") and m.get("executable")}
+          assert len(binaries) == 1, f"expected exactly one botho lib test binary, got {binaries}"
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"executable={binaries.pop()}\n")
+          PYTHON
+
+      - name: Run all ledger and inactive LotteryV2 validation tests
+        timeout-minutes: 12
+        env:
+          LEDGER_TEST_EXECUTABLE: ${{ steps.ledger_tests.outputs.executable }}
+        run: |
+          set -o pipefail
+          {
+            git rev-parse HEAD
+            rustc -vV
+            uname -a
+            sha256sum botho/src/ledger/store.rs botho/src/ledger/store/validation.rs botho/src/ledger/store/writer.rs botho/src/ledger/experimental.rs botho/src/ledger/experimental/validated.rs botho/src/ledger/experimental/validated/tests.rs botho/tests/common/positive_transfer.rs
+            timeout 600s "$LEDGER_TEST_EXECUTABLE" ledger:: --nocapture
+          } 2>&1 | tee "$RUNNER_TEMP/ledger-validation.log"
+
+      - name: Retain ledger validation evidence (including failures)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ledger-validation-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/ledger-compile.jsonl
+            ${{ runner.temp }}/ledger-validation.log
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Run read-only legacy lottery inventory tests
         timeout-minutes: 5

@@ -1,5 +1,5 @@
-// Inactive durable infrastructure; no production constructors until validation
-// integration.
+// Inactive durable infrastructure and local validation; all open constructors
+// remain test-only. No network or ordinary Ledger rule selection.
 #[allow(dead_code)]
 mod experimental;
 mod snapshot;
