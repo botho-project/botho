@@ -109,3 +109,12 @@ Recheck the retained capture without executing Rust:
 python3 scripts/research/resource-frontier/accepted_v1.py \
   scripts/research/resource-frontier/evidence/accepted-v1-macos
 ```
+
+Historical captures must be checked against their matching source snapshot. This
+macOS capture's 32 measured source files are present at commit
+`64d2afc92eb97f0879e9fd3139f6563d796823b4`. The command above compares them with
+the current checkout and is expected to reject later changes, including ledger
+changes from #1357. Such a mismatch means the capture is stale for that checkout,
+not that its raw observations are invalid. To review it later, use that matching
+checkout, or call `load_evidence(evidence_directory, root=matching_checkout)`.
+Never rehash an old measurement against new code to make the check pass.
