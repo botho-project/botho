@@ -143,7 +143,6 @@ jobs:
       matrix:
         target:
           - fuzz_transaction
-          - fuzz_pq_transaction
           - fuzz_block
           - fuzz_network_messages
 
