@@ -100,6 +100,21 @@ const KNOWN_SECRETS = [
   KNOWN_KEYS.seed as string,
 ];
 
+// Public BIP39 test vectors, never funded. Fixed words make nondisclosure
+// failures reproducible: random words can collide with ordinary UI copy or
+// serialized field names. Keep every fixture word under assertion, without a
+// template-vocabulary exclusion list.
+const CLAIM_SECRET_FIXTURES = [
+  'ozone drill grab fiber curtain grace pudding thank cruise elder eight picnic',
+  'legal winner thank year wave sausage worth useful legal winner thank yellow',
+];
+
+function assertNoClaimSecret(blob: string, mnemonic: string): void {
+  const tokens = new Set(blob.toLowerCase().match(/[a-z]+/g) ?? []);
+  for (const word of mnemonic.split(' ')) expect(tokens.has(word)).toBe(false);
+  expect(blob.includes(mnemonic)).toBe(false);
+}
+
 /* ================================================================== */
 /* A. Write-boundary: no secret is ever written to persisted state    */
 /*    (#475/#476 class — proven at the snap_manageState boundary)      */
@@ -235,29 +250,17 @@ describe('key-handling: no secret in RPC result / dialog / error (#1096, F2/F3)'
     }
   });
 
-  it('claim link: the ephemeral bearer mnemonic never appears in a result, dialog, or error (F2)', async () => {
+  it.each(CLAIM_SECRET_FIXTURES)('claim-secret detector rejects full and partial disclosure (fixture %#)', (mnemonic) => {
+    expect(() => assertNoClaimSecret(JSON.stringify({ text: mnemonic }), mnemonic)).toThrow();
+    for (const word of new Set(mnemonic.split(' '))) {
+      expect(() => assertNoClaimSecret(JSON.stringify({ text: word.toUpperCase() }), mnemonic)).toThrow();
+    }
+  });
+
+  it.each(CLAIM_SECRET_FIXTURES)('claim link: bearer words never appear in a result, dialog, or error (F2, fixture %#)', async (mnemonic) => {
     node = await startMockNode();
-    const mnemonic = createClaimLinkMnemonic();
     const fragment = encodeClaimLinkFragment(mnemonic);
-
-    // Dialog/error templates legitimately share a few English tokens with the
-    // BIP39 wordlist; exclude those so a random mnemonic that happens to contain
-    // one does not false-fail. We then assert no remaining secret word appears as
-    // a standalone token, and the whole phrase never appears verbatim.
-    const templateVocab =
-      'claim link nothing to this is empty already claimed or not yet confirmed holds ' +
-      'funds that will be swept into your wallet the sweep fee is paid from claimable ' +
-      'you receive hint cosmetic scanned amount above authoritative node confirm invalid ' +
-      'bth does cover reject user rejected the';
-    const templateTokens = new Set(templateVocab.match(/[a-z]+/g));
-    const secretWords = mnemonic.split(' ').filter((w) => !templateTokens.has(w));
-    expect(secretWords.length).toBeGreaterThan(0); // filtering did not empty it
-
-    const assertNoLeak = (blob: string): void => {
-      const tokens = new Set(blob.toLowerCase().match(/[a-z]+/g) ?? []);
-      for (const w of secretWords) expect(tokens.has(w)).toBe(false);
-      expect(blob.includes(mnemonic)).toBe(false);
-    };
+    const assertNoLeak = (blob: string): void => assertNoClaimSecret(blob, mnemonic);
 
     const { request } = await installSnap();
 
