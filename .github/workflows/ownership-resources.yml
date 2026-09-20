@@ -1,0 +1,52 @@
+name: Inactive Ownership Resources
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/research/ct-demurrage/**'
+      - 'crypto/**'
+      - 'vendor/bulletproofs-og/**'
+      - 'util/from-random/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain'
+      - '.github/workflows/ownership-resources.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  resource-matrix:
+    name: Bounded composition resources (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    env:
+      CARGO_TERM_COLOR: never
+      RUSTC_WRAPPER: ''
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-03
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: inactive-ownership-resources
+      - name: Check resource collector
+        run: python3 -m unittest discover -s scripts/research/ct-demurrage -p 'test_measure_ownership.py'
+      - name: Compile only the research tests
+        timeout-minutes: 15
+        run: cargo test --locked --release -p bth-ct-demurrage-reference --no-run --message-format=json > ownership-build.jsonl
+      - name: Measure exact bounded cases in fresh processes
+        timeout-minutes: 5
+        run: python3 scripts/research/ct-demurrage/measure_ownership.py --cargo-messages ownership-build.jsonl --output-dir ownership-resources
+      - name: Preserve raw outcomes and provenance
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ownership-resources-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ownership-build.jsonl
+            ownership-resources/
+          retention-days: 14
+          if-no-files-found: error

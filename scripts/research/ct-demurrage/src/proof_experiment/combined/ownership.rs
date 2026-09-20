@@ -1,5 +1,6 @@
 //! Ordinary library composition on synthetic data only. No transaction codec.
 use super::*;
+mod resources;
 use bth_crypto_keys::{CompressedRistrettoPublic, RistrettoPrivate, RistrettoPublic};
 use bth_crypto_ring_signature::{compat::random_scalar, Clsag, ReducedTxOut};
 use bth_util_from_random::FromRandom;
@@ -220,7 +221,14 @@ fn verify_ownership(public: &Public, e: &Envelope) -> Result<(), String> {
     Ok(())
 }
 fn prove(public: &Public, secret: &Secret, bp: &BulletproofGens) -> Result<Envelope, String> {
-    let (arithmetic_proof, _) = prove_control_with_transcript(
+    prove_measured(public, secret, bp).map(|(envelope, _)| envelope)
+}
+fn prove_measured(
+    public: &Public,
+    secret: &Secret,
+    bp: &BulletproofGens,
+) -> Result<(Envelope, Metrics), String> {
+    let (arithmetic_proof, metrics) = prove_control_with_transcript(
         &public.arithmetic,
         &secret.arithmetic,
         bp,
@@ -228,40 +236,54 @@ fn prove(public: &Public, secret: &Secret, bp: &BulletproofGens) -> Result<Envel
         public.arithmetic_transcript()?,
     )?;
     let signatures = sign_proof(public, secret, &arithmetic_proof)?;
-    Ok(Envelope {
-        arithmetic_proof,
-        signatures,
-    })
+    Ok((
+        Envelope {
+            arithmetic_proof,
+            signatures,
+        },
+        metrics,
+    ))
 }
 fn verify(public: &Public, e: &Envelope, bp: &BulletproofGens) -> Result<(), String> {
+    verify_measured(public, e, bp).map(|_| ())
+}
+fn verify_measured(public: &Public, e: &Envelope, bp: &BulletproofGens) -> Result<Metrics, String> {
     // Cheap public shape checks before expensive proof verification.
     public.check_shape()?;
     if e.signatures.len() != public.rings.len() {
         return Err("ownership signature count".into());
     }
-    verify_control_with_transcript(
+    let metrics = verify_control_with_transcript(
         &public.arithmetic,
         &e.arithmetic_proof,
         bp,
         Controls::COMPLETE,
         public.arithmetic_transcript()?,
     )?;
-    verify_ownership(public, e)
+    verify_ownership(public, e)?;
+    Ok(metrics)
 }
 
 fn fixture(count: usize) -> (Public, Secret) {
     let values: Vec<_> = (0..count)
         .map(|i| 1_000_000_000_000 + 1000 * i as u64)
         .collect();
-    let (arithmetic, witness) = fixture_combined(
+    let (public, secret) = fixture_parameters(
         &values,
-        count,
         3,
         250_000_000_000,
         (6000, 3500, 1_234_567, 200, 6_307_200, 31_536_000),
-    )
-    .unwrap();
-    assert!(witness.inputs.iter().all(|w| w.charge > 0));
+    );
+    assert!(secret.arithmetic.inputs.iter().all(|w| w.charge > 0));
+    (public, secret)
+}
+fn fixture_parameters(
+    values: &[u64],
+    bits: u8,
+    base: u64,
+    params: (u64, u64, u64, u32, u64, u64),
+) -> (Public, Secret) {
+    let (arithmetic, witness) = fixture_combined(values, values.len(), bits, base, params).unwrap();
     assert_eq!(
         arithmetic.inputs[0].gens().B.compress().to_bytes(),
         generators(0).B.compress().to_bytes()
@@ -290,7 +312,10 @@ fn fixture(count: usize) -> (Public, Secret) {
                 public_key: CompressedRistrettoPublic::from_random(&mut rng),
                 target_key: CompressedRistrettoPublic::from_random(&mut rng),
                 commitment: CompressedCommitment::new(
-                    value + j as u64,
+                    // Preserve earlier ordinary fixtures; stay in u64 for MAX cases.
+                    value
+                        .checked_add(j as u64)
+                        .unwrap_or_else(|| value - j as u64),
                     random_scalar(&mut rng),
                     &generators(0),
                 ),
