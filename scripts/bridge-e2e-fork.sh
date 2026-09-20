@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Bridge Ethereum-leg end-to-end driver against a SEPOLIA FORK (#992).
 #
-# Runs the exact same #[ignore]d Rust fork test as scripts/bridge-e2e-local.sh
-# (bridge/service/src/fork_tests.rs), but against a local node that FORKS real
+# Runs the Ethereum bridge test from scripts/bridge-e2e-local.sh plus the
+# Uniswap pool/liquidity/swap test against a local node that FORKS real
 # Sepolia state over a public RPC. This is the closest-to-real-testnet
 # demonstration achievable with NO funded account, NO deployed contract, and
 # NO secret:
@@ -102,6 +102,12 @@ export BRIDGE_FORK_FUND_ACCOUNTS=1
 echo "==> Running Rust fork test against forked Sepolia at $BRIDGE_FORK_RPC_URL"
 echo "    (expected chain id: $BRIDGE_FORK_EXPECTED_CHAIN_ID; dev accounts funded via *_setBalance)"
 cd "$REPO_ROOT"
-cargo test -p bth-bridge-service -- --ignored fork_ --nocapture
+# The fork supplies the real Uniswap periphery as well as the bridge's
+# dependencies. Both tests use the same dev signers with independent nonce
+# fillers, so run them serially against this shared node.
+cargo test -p bth-bridge-service --lib -- --ignored --exact \
+    fork_tests::fork_eth_mint_and_burn_round_trip \
+    uniswap_fork_tests::uniswap_fork_pool_create_add_liquidity_and_swap \
+    --test-threads=1 --nocapture
 
 echo "==> Bridge Ethereum-leg Sepolia-fork e2e passed"

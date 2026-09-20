@@ -46,6 +46,9 @@ jobs:
         with:
           key: bridge-e2e
 
+      - name: Check E2E driver test selection
+        run: python3 scripts/tests/test-bridge-e2e-selection.py
+
       - name: Run Ethereum-leg e2e
         run: ./scripts/bridge-e2e-local.sh
 

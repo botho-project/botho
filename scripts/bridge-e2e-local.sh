@@ -69,6 +69,9 @@ fi
 
 echo "==> Running Rust fork tests against $BRIDGE_FORK_RPC_URL"
 cd "$REPO_ROOT"
-cargo test -p bth-bridge-service -- --ignored fork_ --nocapture
+# Empty Hardhat state has no Sepolia Uniswap periphery. Select only the
+# Ethereum bridge test; a broad fork_ filter also runs Uniswap and BTH tests.
+cargo test -p bth-bridge-service --lib -- --ignored --exact \
+    fork_tests::fork_eth_mint_and_burn_round_trip --nocapture
 
 echo "==> Bridge Ethereum-leg e2e passed"

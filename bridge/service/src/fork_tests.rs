@@ -25,7 +25,7 @@
 //!
 //! ```text
 //! (cd contracts/ethereum && npm install && npx hardhat compile && npx hardhat node &)
-//! cargo test -p bth-bridge-service -- --ignored fork_
+//! cargo test -p bth-bridge-service --lib -- --ignored --exact fork_tests::fork_eth_mint_and_burn_round_trip
 //! ```
 //!
 //! `BRIDGE_FORK_RPC_URL` overrides the RPC endpoint (default
