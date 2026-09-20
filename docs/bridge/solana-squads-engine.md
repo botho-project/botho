@@ -32,7 +32,11 @@ The engine requires the canonical Squads program, correctly owned executable
 program/accounts, the expected multisig PDA, exact membership with all three
 permissions, a threshold of at least two, and no external `config_authority`.
 It verifies the derived vault equals wbth's mint authority, validates the SPL
-mint, and checks the vault has rent funding. Missing or mismatched state blocks
+mint, and checks the vault has a positive lamport balance. This does not prove
+sufficient marker rent; exact rent preflight and bounded action retry/fee policy
+are tracked in [#1299](https://github.com/botho-project/botho/issues/1299).
+RPC transaction preflight is enabled, but funding can change before execution.
+Missing or mismatched state blocks
 new contributions. Keep fee funding on each member and marker-rent funding on
 the vault. This document does not deploy, rotate or fund any live authority.
 
@@ -87,6 +91,8 @@ accounts. A late member without a verified pre-execution binding, a closed
 proposal, or execution history unavailable in the newest bounded RPC page
 requires historical reconciliation. The engine emits a diagnostic and retains
 backing rather than interpreting absence as failure or minting a replacement.
+Historical reconstruction and backwards pagination are tracked in
+[#1295](https://github.com/botho-project/botho/issues/1295).
 There is no automated history import/refund command in this change. Preserve
 RPC receipts and database backups for explicit recovery; do not delete the
 journal or unlock backing to clear a stuck order.

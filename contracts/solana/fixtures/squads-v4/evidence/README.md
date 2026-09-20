@@ -42,8 +42,9 @@ not deferred bridge-engine integration or production readiness.
 
 `engine-2026-09-20.json` adds a separate fresh-ledger execution through actual
 Rust `OrderProcessor`/`SolMinter`, real federation attestations and independent
-file-backed member databases. It preserves finalized successful transaction
-logs plus the exact source/program hashes. Negative vote/execute submissions
+file-backed member databases. The final run passed in 71.06 seconds and
+preserves 13 finalized successful transaction logs plus 17 exact
+source/program/IDL/lockfile hashes. Negative vote/execute submissions
 are checked against real RPC preflight rejection; metadata/packet-loss fault
 injection is distinguished from successful on-chain execution in the harness.
 
