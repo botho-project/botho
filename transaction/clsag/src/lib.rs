@@ -49,6 +49,8 @@
 //! - Check key image hasn't been used before (prevents double-spend)
 //! - Cannot determine which ring member is the real input
 
+pub mod lottery_v2;
+
 use aes::{
     cipher::{KeyIvInit, StreamCipher},
     Aes256,

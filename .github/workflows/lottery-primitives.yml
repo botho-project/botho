@@ -1,0 +1,51 @@
+name: Inactive Lottery Primitives
+on:
+  pull_request:
+    paths:
+      - 'transaction/clsag/**'
+      - 'transaction/types/**'
+      - 'crypto/**'
+      - 'account-keys/**'
+      - 'core/**'
+      - 'util/**'
+      - 'botho/src/block.rs'
+      - 'botho/tests/lottery_v1_hash_golden.rs'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain*'
+      - '.cargo/config.toml'
+      - '.github/workflows/lottery-primitives.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  vectors:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-03
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: inactive-lottery-primitives
+      - name: Native CLSAG and candidate primitive tests
+        timeout-minutes: 15
+        run: cargo test --locked -p bth-transaction-clsag --features pq
+      - name: Clippy including test-only vector runners
+        run: cargo clippy --locked -p bth-transaction-clsag --features pq --all-targets -- -D warnings
+      - name: Freeze actual V1 kernel hashing
+        timeout-minutes: 25
+        run: cargo test --locked -p botho --test lottery_v1_hash_golden
+      - name: Independent vector hash and scalar checks
+        run: python3 transaction/clsag/tests/scripts/check-lottery-vector-hashes.py
+      - name: Build detached test-only WASM vector runner
+        timeout-minutes: 10
+        run: cargo build --locked -p bth-transaction-clsag --example lottery_v2_wasm --target wasm32-unknown-unknown
+      - name: Execute vectors in actual WASM runtime
+        run: node transaction/clsag/tests/scripts/run-lottery-wasm.mjs target/wasm32-unknown-unknown/debug/examples/lottery_v2_wasm.wasm
