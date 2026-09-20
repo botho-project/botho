@@ -25,8 +25,10 @@ class EvidenceTests(unittest.TestCase):
                              'partial_or_unsuccessful_measurements')
             self.assertEqual(manifest({'quick':'success'},files)['status'],
                              'partial_or_unsuccessful_measurements')
+            self.assertEqual(manifest({'clear_reports':'failure','quick':'success'},files)['status'],
+                             'partial_or_unsuccessful_measurements')
             for outcome in ['failure','cancelled','unknown']:
-                self.assertEqual(manifest({'quick':outcome,'full':'skipped'},files)['status'],
+                self.assertEqual(manifest({'clear_reports':'success','quick':outcome,'full':'skipped'},files)['status'],
                                  'partial_or_unsuccessful_measurements')
             (new/'sample.json').write_text('broken')
             self.assertEqual(manifest({'clear_reports':'success','quick':'success'},inventory(root))['status'],
