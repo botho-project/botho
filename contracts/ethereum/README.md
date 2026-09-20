@@ -109,6 +109,13 @@ npm run compile
 npm test
 ```
 
+The Solidity configuration uses solc 0.8.20's WebAssembly build on every
+platform (`preferWasm: true`), including Linux CI. This avoids native compiler
+spawn failures on macOS ARM without requiring Rosetta or modifying shared
+compiler caches. Optimizer settings remain enabled with 200 runs. Hardhat
+documents the portability/reproducibility benefit and compilation-speed
+tradeoff in its [compiler configuration reference](https://hardhat.org/docs/reference/configuration#solidity-configuration).
+
 The test suite covers access control (Safe-only mint, no deployer
 roles), order-id replay, rate limits + daily reset boundaries, pause +
 auto-pause breaker, decimals/unit pinning against the Rust bindings, and
