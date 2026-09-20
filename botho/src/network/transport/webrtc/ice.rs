@@ -27,17 +27,12 @@
 //!   │═══════════════[4. Selected Pair]═══════════════════│
 //! ```
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use super::WebRtcPeer;
+use std::{sync::Arc, time::Duration};
 use thiserror::Error;
-use tokio::{
-    sync::{mpsc, Mutex},
-    time::timeout,
-};
-use tracing::{debug, info, warn};
-use webrtc::{
-    ice_transport::{ice_candidate::RTCIceCandidate, ice_gathering_state::RTCIceGatheringState},
-    peer_connection::RTCPeerConnection,
-};
+use tokio::time::timeout;
+use tracing::{info, warn};
+use webrtc::peer_connection::{RTCIceCandidate, RTCIceGatheringState};
 
 /// Errors that can occur during ICE operations.
 #[derive(Debug, Error)]
@@ -377,106 +372,104 @@ impl IceConfig {
     }
 }
 
-/// ICE gatherer for collecting candidates.
+type CandidateCallback = Arc<dyn Fn(IceCandidate) + Send + Sync>;
+
+#[derive(Default)]
+pub(super) struct CandidateEvents(std::sync::Mutex<(Vec<IceCandidate>, Vec<CandidateCallback>)>);
+
+impl CandidateEvents {
+    pub(super) fn record(&self, candidate: &RTCIceCandidate) {
+        if let Ok(candidate) = convert_rtc_candidate(candidate) {
+            let callbacks = {
+                let mut state = self.0.lock().expect("candidate lock");
+                state.0.push(candidate.clone());
+                state.1.clone()
+            };
+            for callback in callbacks {
+                callback(candidate.clone());
+            }
+        }
+    }
+
+    fn subscribe(&self, callback: CandidateCallback) {
+        let previous = {
+            let mut state = self.0.lock().expect("candidate lock");
+            state.1.push(callback.clone());
+            state.0.clone()
+        };
+        // Late subscriptions replay gathered candidates without replacing collection.
+        for candidate in previous {
+            callback(candidate);
+        }
+    }
+}
+
+/// ICE gatherer using the peer's handler, installed before gathering starts.
 pub struct IceGatherer {
-    /// Configuration
     config: IceConfig,
-    /// Gathered candidates
-    candidates: Arc<Mutex<Vec<IceCandidate>>>,
 }
 
 impl IceGatherer {
-    /// Create a new ICE gatherer with the given configuration.
     pub fn new(config: IceConfig) -> Self {
-        Self {
-            config,
-            candidates: Arc::new(Mutex::new(Vec::new())),
-        }
+        Self { config }
     }
 
-    /// Gather ICE candidates from a peer connection.
-    ///
-    /// This waits for gathering to complete or timeout, returning
-    /// all gathered candidates.
+    /// Wait for completion, preserving partial candidates on gathering timeout.
     pub async fn gather_candidates(
         &self,
-        peer_connection: &RTCPeerConnection,
+        peer_connection: &WebRtcPeer,
     ) -> Result<Vec<IceCandidate>, IceError> {
-        let candidates = Arc::new(Mutex::new(Vec::new()));
-        let candidates_clone = candidates.clone();
-
-        // Set up candidate handler
-        peer_connection.on_ice_candidate(Box::new(move |candidate: Option<RTCIceCandidate>| {
-            let candidates = candidates_clone.clone();
-            Box::pin(async move {
-                if let Some(c) = candidate {
-                    if let Ok(ice_candidate) = convert_rtc_candidate(&c) {
-                        debug!(
-                            "Gathered ICE candidate: {} {} {}:{}",
-                            ice_candidate.candidate_type,
-                            ice_candidate.protocol,
-                            ice_candidate.address,
-                            ice_candidate.port
-                        );
-                        let mut locked = candidates.lock().await;
-                        locked.push(ice_candidate);
-                    }
-                }
-            })
-        }));
-
-        // Wait for gathering complete with timeout
-        let gathering_complete = async {
+        let mut gathering = peer_connection.events.gathering.subscribe();
+        let mut connection = peer_connection.events.connection.subscribe();
+        let complete = async {
             loop {
-                if peer_connection.ice_gathering_state() == RTCIceGatheringState::Complete {
+                if *gathering.borrow_and_update() == RTCIceGatheringState::Complete
+                    || *connection.borrow_and_update()
+                        == webrtc::peer_connection::RTCPeerConnectionState::Closed
+                {
                     break;
                 }
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                tokio::select! {
+                    result = gathering.changed() => { if result.is_err() { break; } },
+                    result = connection.changed() => { if result.is_err() { break; } },
+                }
             }
         };
-
-        match timeout(self.config.gathering_timeout, gathering_complete).await {
-            Ok(_) => {
-                info!("ICE gathering completed");
-            }
-            Err(_) => {
-                warn!(
-                    "ICE gathering timed out after {:?}",
-                    self.config.gathering_timeout
-                );
-            }
+        if timeout(self.config.gathering_timeout, complete)
+            .await
+            .is_err()
+        {
+            warn!(
+                "ICE gathering timed out after {:?}",
+                self.config.gathering_timeout
+            );
         }
-
-        let gathered = candidates.lock().await;
-        if gathered.is_empty() {
+        let candidates = peer_connection
+            .events
+            .ice
+            .0
+            .lock()
+            .expect("candidate lock")
+            .0
+            .clone();
+        if candidates.is_empty() {
             return Err(IceError::NoCandidates);
         }
-
-        info!("Gathered {} ICE candidates", gathered.len());
-        Ok(gathered.clone())
+        info!("Gathered {} ICE candidates", candidates.len());
+        Ok(candidates)
     }
 
-    /// Get the current configuration.
     pub fn config(&self) -> &IceConfig {
         &self.config
     }
 
-    /// Set up trickle ICE callback for sending candidates as they're gathered.
-    pub fn on_candidate<F>(&self, peer_connection: &RTCPeerConnection, callback: F)
+    /// Subscribe without replacing candidate collection; already gathered
+    /// candidates replay.
+    pub fn on_candidate<F>(&self, peer_connection: &WebRtcPeer, callback: F)
     where
         F: Fn(IceCandidate) + Send + Sync + 'static,
     {
-        let callback = Arc::new(callback);
-        peer_connection.on_ice_candidate(Box::new(move |candidate: Option<RTCIceCandidate>| {
-            let cb = callback.clone();
-            Box::pin(async move {
-                if let Some(c) = candidate {
-                    if let Ok(ice_candidate) = convert_rtc_candidate(&c) {
-                        cb(ice_candidate);
-                    }
-                }
-            })
-        }));
+        peer_connection.events.ice.subscribe(Arc::new(callback));
     }
 }
 
