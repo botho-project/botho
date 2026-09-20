@@ -57,3 +57,33 @@ Late discovery without the original verified binding deliberately remains a
 recovery hold. See the [engine runbook](../../../../../docs/bridge/solana-squads-engine.md)
 for limits and the explicit command. The original Tier-2 record above is kept
 as historical evidence; its source hashes identify that earlier revision.
+
+## Historical recovery result (#1295)
+
+`history-2026-09-20.json` records a separate fresh local genesis with real
+Squads execution through two independent engine databases. It verifies that the
+complete VaultTransaction bytes survive execution, then closes both eligible
+accounts through the actual Squads instruction. Five successful marker-related
+transfers force the original execute beyond a two-signature page.
+
+Fresh member databases recover the live and closed-account cases while keeping
+backing unchanged. The closed case reopens its SQLite database mid-scan, retries
+one deliberately withheld transaction RPC response, and completes while paused
+with current local threshold settings different from its pinned policy. The
+instrumented recovery transport records zero calls to sendTransaction. All
+successful chain evidence is real; the null response is explicitly fault injection.
+
+A real governance transaction after the first execution does not invalidate it.
+A second engine mint after that governance change executes successfully, but a
+fresh historical verifier holds that later, unsupported authorization epoch in
+MintPending with locked backing. The final supply and recipient balance are
+2,000,000,000,000 from those two explicit engine mints; historical recovery adds
+nothing. The first recovered member and the later held member each retain
+1,000,000,000,000 of source backing.
+
+The record includes finalized transaction/instruction/log evidence, local genesis
+and runtime versions, scan progress, actual execute/close signatures and exact
+source/program/IDL/lockfile hashes. Run with
+`SQUADS_ENGINE_TEST=1 SQUADS_HISTORY_TEST=1 ./localnet/run-squads.sh`.
+The ordinary test suite deliberately ignores this infrastructure test; the
+explicit driver and CI invoke it without a skip path.
