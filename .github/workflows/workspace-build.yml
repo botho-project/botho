@@ -160,9 +160,9 @@ jobs:
             --test rpc_integration \
             --test e2e_faucet_workflow
 
-      - name: Run inactive LotteryV2 persistence boundary tests
+      - name: Run ledger and inactive LotteryV2 writer regression tests
         timeout-minutes: 3
-        run: cargo test --locked -p botho --lib ledger::experimental::tests
+        run: 'cargo test --locked -p botho --lib ledger::'
 
       - name: Run read-only legacy lottery inventory tests
         timeout-minutes: 5

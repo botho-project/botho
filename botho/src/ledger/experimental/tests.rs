@@ -88,22 +88,32 @@ fn lookup(store: &ExperimentalStore, id: UtxoId) -> (Utxo, StoredContext) {
 }
 fn snapshot(store: &ExperimentalStore) -> Vec<(String, Vec<(Vec<u8>, Vec<u8>)>)> {
     let txn = store.env.read_txn().unwrap();
-    ["blocks", "meta", "utxos", "derivation_contexts"]
-        .into_iter()
-        .map(|name| {
-            let db: Database<Bytes, Bytes> =
-                store.env.open_database(&txn, Some(name)).unwrap().unwrap();
-            let rows = db
-                .iter(&txn)
-                .unwrap()
-                .map(|r| {
-                    let (k, v) = r.unwrap();
-                    (k.to_vec(), v.to_vec())
-                })
-                .collect();
-            (name.to_string(), rows)
-        })
-        .collect()
+    [
+        "blocks",
+        "meta",
+        "utxos",
+        "derivation_contexts",
+        "address_index",
+        "key_images",
+        "tx_index",
+        "cluster_wealth",
+        "bridge_import_clusters",
+    ]
+    .into_iter()
+    .map(|name| {
+        let db: Database<Bytes, Bytes> =
+            store.env.open_database(&txn, Some(name)).unwrap().unwrap();
+        let rows = db
+            .iter(&txn)
+            .unwrap()
+            .map(|r| {
+                let (k, v) = r.unwrap();
+                (k.to_vec(), v.to_vec())
+            })
+            .collect();
+        (name.to_string(), rows)
+    })
+    .collect()
 }
 
 #[test]
@@ -144,9 +154,19 @@ fn abort_every_write_stage_and_conflicts_leave_all_tables_unchanged() {
     let (source, c) = lookup(&store, direct_id(&base));
     let next = next(&base, &source, c.derivation(), 2);
     let before = snapshot(&store);
-    // Block + three outputs/contexts (coinbase, two awards) + checkpoint = eight
-    // writes.
-    for stop in 1..=8 {
+    // Count actual shared writes using a separate successful fixture store.
+    let probe_dir = TempDir::new().unwrap();
+    let probe = ExperimentalStore::open_fixture(probe_dir.path(), true).unwrap();
+    probe.persist(&base, || Ok(())).unwrap();
+    let mut stages = 0;
+    probe
+        .persist(&next, || {
+            stages += 1;
+            Ok(())
+        })
+        .unwrap();
+    assert!(stages > 8); // Includes address/accounting effects beyond the old storage-only path.
+    for stop in 1..=stages {
         let mut writes = 0;
         assert!(store
             .persist(&next, || {
@@ -488,4 +508,253 @@ fn marked_but_incomplete_schema_does_not_get_repaired_on_reopen() {
         Err(LedgerError::InconsistentRecord(_))
     ));
     assert_eq!(std::fs::read(dir.path().join("data.mdb")).unwrap(), before);
+}
+
+fn full_effects_fixture(
+    store: &ExperimentalStore,
+) -> (Envelope, Envelope, u128, EmissionStateUpdate) {
+    use crate::transaction::ClsagRingInput;
+    let mut base = base();
+    let origin =
+        bth_transaction_types::ClusterId(bth_cluster_tax::import_cluster_id_for_height(1).0);
+    base.block.transactions[0].outputs[2].cluster_tags =
+        bth_transaction_types::ClusterTagVector::single(origin);
+    base.block.header.tx_root = Block::compute_tx_root(&base.block.transactions);
+    store.persist(&base, || Ok(())).unwrap();
+    let (source, c) = lookup(store, direct_id(&base));
+    let mut e = next(&base, &source, c.derivation(), 2);
+    e.block.minting_tx.reward = 1000;
+    let mut tx = Transaction::new_stub_with_fee(50);
+    // Raw storage-only input identity: never signed, verified, submitted, or
+    // described as a valid consensus transaction. Exercises index writes only.
+    tx.inputs = crate::transaction::TxInputs::new(vec![ClsagRingInput {
+        ring: vec![],
+        key_image: [0x62; 32],
+        commitment_key_image: [0; 32],
+        clsag_signature: vec![],
+        pseudo_output_amount: 0,
+    }]);
+    let mut output = source.output.clone();
+    output.amount = 50;
+    tx.outputs = vec![output];
+    e.block.transactions = vec![tx];
+    e.block.lottery_summary.total_fees = 50;
+    e.block.lottery_summary.amount_burned = 10;
+    e.block.lottery_summary.pool_distributed = 10;
+    let pool = u128::from(e.block.minting_tx.lottery_emission_share()) + 40 - 10;
+    let emission = EmissionStateUpdate {
+        difficulty: 77,
+        total_tx: 123,
+        epoch_tx: 8,
+        epoch_emission: 999,
+        epoch_burns: 10,
+        current_reward: 1000,
+    };
+    (base, e, pool, emission)
+}
+fn meta_u128(store: &ExperimentalStore, key: &[u8]) -> u128 {
+    let txn = store.env.read_txn().unwrap();
+    u128::from_le_bytes(
+        store
+            .meta
+            .get(&txn, key)
+            .unwrap()
+            .unwrap()
+            .try_into()
+            .unwrap(),
+    )
+}
+#[test]
+fn all_nine_tables_and_emission_are_atomic_at_every_actual_shared_write() {
+    let probe_dir = TempDir::new().unwrap();
+    let probe = ExperimentalStore::open_fixture(probe_dir.path(), true).unwrap();
+    let (_, e, pool, emission) = full_effects_fixture(&probe);
+    let mut count = 0;
+    probe
+        .persist_fixture_effects(&e, pool, Some(emission), || {
+            count += 1;
+            Ok(())
+        })
+        .unwrap();
+    let accepted = snapshot(&probe);
+    assert_eq!(accepted.len(), 9);
+    assert!(accepted.iter().all(|(_, rows)| !rows.is_empty()));
+    assert_eq!(meta_u128(&probe, b"total_mined"), 1000);
+    assert_eq!(meta_u128(&probe, b"fees_burned"), 10);
+    assert_eq!(meta_u128(&probe, b"lottery_pool"), pool);
+    assert_eq!(
+        pool + u128::from(e.block.lottery_summary.pool_distributed),
+        u128::from(e.block.minting_tx.lottery_emission_share()) + 50 - 10
+    );
+    let txn = probe.env.read_txn().unwrap();
+    for (key, value) in [
+        (b"difficulty".as_slice(), 77u64),
+        (b"total_tx", 123),
+        (b"epoch_tx", 8),
+        (b"epoch_emission", 999),
+        (b"epoch_burns", 10),
+        (b"current_reward", 1000),
+    ] {
+        assert_eq!(
+            probe.meta.get(&txn, key).unwrap().unwrap(),
+            value.to_le_bytes()
+        );
+    }
+    assert_eq!(
+        probe
+            .tables
+            .key_images_db
+            .get(&txn, &[0x62; 32])
+            .unwrap()
+            .unwrap(),
+        1u64.to_le_bytes()
+    );
+    let tx = e.block.transactions[0].hash();
+    let mut location = 1u64.to_le_bytes().to_vec();
+    location.extend(0u32.to_le_bytes());
+    assert_eq!(
+        probe.tables.tx_index_db.get(&txn, &tx).unwrap().unwrap(),
+        location
+    );
+    let import = bth_cluster_tax::import_cluster_id_for_height(1)
+        .0
+        .to_le_bytes();
+    assert_eq!(
+        probe
+            .tables
+            .bridge_import_clusters_db
+            .get(&txn, &import)
+            .unwrap(),
+        Some(&[][..])
+    );
+    // Tagged principal100 + ordinary50 + two inherited-tag payouts5 each.
+    assert_eq!(
+        probe
+            .tables
+            .cluster_wealth_db
+            .get(&txn, &import)
+            .unwrap()
+            .unwrap(),
+        160u128.to_le_bytes()
+    );
+    for ordinal in 0..2 {
+        let id = UtxoId::new(e.block.hash(), ordinal + 1);
+        assert_eq!(
+            probe
+                .tables
+                .address_index_db
+                .get(&txn, &e.records[ordinal as usize].target)
+                .unwrap()
+                .unwrap(),
+            id.to_bytes()
+        );
+    }
+    drop(txn);
+    drop(probe);
+    let reopened = ExperimentalStore::open_fixture(probe_dir.path(), false).unwrap();
+    assert_eq!(snapshot(&reopened), accepted);
+    drop(reopened);
+    assert!(count > 25);
+    eprintln!("full experimental shared-write stages: {count}");
+    let dir = TempDir::new().unwrap();
+    let mut store = ExperimentalStore::open_fixture(dir.path(), true).unwrap();
+    let (_, e, pool, emission) = full_effects_fixture(&store);
+    let before = snapshot(&store);
+    for stop in 1..=count {
+        let mut calls = 0;
+        let result = store.persist_fixture_effects(&e, pool, Some(emission), || {
+            calls += 1;
+            if calls == stop {
+                Err(inconsistent("injected shared write abort"))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(result.is_err());
+        assert_eq!(calls, stop);
+        assert_eq!(snapshot(&store), before);
+        drop(store);
+        store = ExperimentalStore::open_fixture(dir.path(), false).unwrap();
+        assert_eq!(snapshot(&store), before);
+    }
+    store
+        .persist_fixture_effects(&e, pool, Some(emission), || Ok(()))
+        .unwrap();
+    assert_eq!(snapshot(&store), accepted);
+    // A later storage fixture reusing the key image must fail and roll back.
+    let mut duplicate = e.clone();
+    duplicate.block.header.height += 1;
+    duplicate.block.header.prev_block_hash = e.block.hash();
+    let before = snapshot(&store);
+    assert!(
+        matches!(store.persist_fixture_effects(&duplicate, pool, None, || Ok(())),
+        Err(LedgerError::InvalidBlock(message)) if message == "Key image already spent (double-spend)")
+    );
+    assert_eq!(snapshot(&store), before);
+}
+
+#[test]
+fn previous_storage_only_schema_is_not_upgraded() {
+    let dir = TempDir::new().unwrap();
+    let store = ExperimentalStore::open_fixture(dir.path(), true).unwrap();
+    let mut txn = store.env.write_txn().unwrap();
+    store
+        .meta
+        .put(
+            &mut txn,
+            SCHEMA_KEY,
+            b"botho.experimental.lottery-v2.storage.1",
+        )
+        .unwrap();
+    txn.commit().unwrap();
+    drop(store);
+    let before = std::fs::read(dir.path().join("data.mdb")).unwrap();
+    assert!(matches!(
+        ExperimentalStore::open_fixture(dir.path(), false),
+        Err(LedgerError::UnsupportedSchema(_))
+    ));
+    assert_eq!(std::fs::read(dir.path().join("data.mdb")).unwrap(), before);
+}
+
+#[test]
+fn optional_emission_none_preserves_supplied_counters_after_next_commit() {
+    let dir = TempDir::new().unwrap();
+    let store = ExperimentalStore::open_fixture(dir.path(), true).unwrap();
+    let (_, e, pool, emission) = full_effects_fixture(&store);
+    store
+        .persist_fixture_effects(&e, pool, Some(emission), || Ok(()))
+        .unwrap();
+    let keys = [
+        b"difficulty".as_slice(),
+        b"total_tx",
+        b"epoch_tx",
+        b"epoch_emission",
+        b"epoch_burns",
+        b"current_reward",
+    ];
+    let values = |s: &ExperimentalStore| {
+        let txn = s.env.read_txn().unwrap();
+        keys.iter()
+            .map(|key| s.meta.get(&txn, key).unwrap().unwrap().to_vec())
+            .collect::<Vec<_>>()
+    };
+    let before = values(&store);
+    let mut next = e.clone();
+    next.block.header.height += 1;
+    next.block.header.prev_block_hash = e.block.hash();
+    next.block.minting_tx.block_height = next.block.height();
+    next.block.transactions.clear();
+    next.block.lottery_outputs.clear();
+    next.records.clear();
+    next.block.lottery_summary = Default::default();
+    store
+        .persist_fixture_effects(&next, pool, None, || Ok(()))
+        .unwrap();
+    assert_eq!(values(&store), before);
+    assert_eq!(meta_u128(&store, b"total_mined"), 2000);
+    assert_eq!(meta_u128(&store, b"fees_burned"), 10);
+    assert_eq!(meta_u128(&store, b"lottery_pool"), pool);
+    drop(store);
+    let reopened = ExperimentalStore::open_fixture(dir.path(), false).unwrap();
+    assert_eq!(values(&reopened), before);
 }

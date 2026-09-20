@@ -1,9 +1,13 @@
 //! Private, inactive durable LotteryV2 infrastructure (#1349).
 //!
-//! This is NOT a validated Ledger: it has no accounting, spent-image, address,
-//! wealth or transaction indexes. Only tests can open it. Future consensus
-//! integration must validate transitions before making any caller reachable.
-use super::LedgerError;
+//! This is NOT a validated Ledger. It shares production accounting/index
+//! writes, but receives unvalidated fixture transitions. Only tests can open
+//! it. Future consensus integration must validate transitions before any real
+//! caller exposure.
+use super::{
+    store::writer::{Representation, WriteTables},
+    EmissionStateUpdate, LedgerError,
+};
 use crate::{
     block::Block,
     transaction::{Utxo, UtxoId},
@@ -18,7 +22,7 @@ use heed::{
 use serde::de::DeserializeOwned;
 
 const SCHEMA_KEY: &[u8] = b"storage_schema";
-const SCHEMA: &[u8] = b"botho.experimental.lottery-v2.storage.1";
+const SCHEMA: &[u8] = b"botho.experimental.lottery-v2.storage.2";
 const BLOCK_TAG: &[u8; 8] = b"BLV2\0\0\0\x01";
 const CHECKPOINT: &[u8] = b"experimental_checkpoint";
 // Local storage allocation bound, NOT a proposed network block-size limit.
@@ -159,7 +163,7 @@ impl<'a> Reader<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum StoredContext {
+pub(super) enum StoredContext {
     Direct {
         height: u64,
         base_index: u32,
@@ -185,7 +189,7 @@ impl StoredContext {
             Self::Lottery { context, .. } => context.clone(),
         }
     }
-    fn encode(&self) -> Result<Vec<u8>, LedgerError> {
+    pub(super) fn encode(&self) -> Result<Vec<u8>, LedgerError> {
         let mut out = vec![match self {
             Self::Direct { .. } => 0,
             Self::Lottery { .. } => 2,
@@ -230,6 +234,7 @@ struct ExperimentalStore {
     meta: Database<Bytes, Bytes>,
     utxos: Database<Bytes, Bytes>,
     contexts: Database<Bytes, Bytes>,
+    tables: WriteTables,
 }
 impl ExperimentalStore {
     #[cfg(test)]
@@ -249,7 +254,7 @@ impl ExperimentalStore {
         // SAFETY: test owns the directory for the Env lifetime; no overlapping opens.
         let env = unsafe {
             heed::EnvOpenOptions::new()
-                .max_dbs(8)
+                .max_dbs(9)
                 .map_size(1024 * 1024 * 1024)
                 .open(path)
         }
@@ -269,6 +274,17 @@ impl ExperimentalStore {
                 .map_err(db)?;
             env.create_database::<Bytes, Bytes>(&mut txn, Some("derivation_contexts"))
                 .map_err(db)?;
+            for name in [
+                "address_index",
+                "key_images",
+                "tx_index",
+                "cluster_wealth",
+                "bridge_import_clusters",
+            ] {
+                env.create_database::<Bytes, Bytes>(&mut txn, Some(name))
+                    .map_err(db)?;
+            }
+            WriteTables::initialize_fixture_metadata(meta, &mut txn)?;
             txn.commit().map_err(db)?;
         }
         let txn = env.read_txn().map_err(db)?;
@@ -293,6 +309,21 @@ impl ExperimentalStore {
             .open_database(&txn, Some("derivation_contexts"))
             .map_err(db)?
             .ok_or_else(|| inconsistent("missing contexts table"))?;
+        let open_bytes = |name| {
+            env.open_database(&txn, Some(name))
+                .map_err(db)?
+                .ok_or_else(|| inconsistent(format!("missing {name} table")))
+        };
+        let tables = WriteTables {
+            blocks_db: blocks,
+            meta_db: meta,
+            utxo_db: utxos,
+            address_index_db: open_bytes("address_index")?,
+            key_images_db: open_bytes("key_images")?,
+            tx_index_db: open_bytes("tx_index")?,
+            cluster_wealth_db: open_bytes("cluster_wealth")?,
+            bridge_import_clusters_db: open_bytes("bridge_import_clusters")?,
+        };
         // LMDB database handles opened in this read transaction survive only
         // when it commits (dropping/aborting invalidates newly opened handles).
         txn.commit().map_err(db)?;
@@ -302,6 +333,7 @@ impl ExperimentalStore {
             meta,
             utxos,
             contexts,
+            tables,
         })
     }
     fn envelope(&self, txn: &RoTxn<'_>, height: u64) -> Result<Envelope, LedgerError> {
@@ -429,6 +461,16 @@ impl ExperimentalStore {
     fn persist(
         &self,
         e: &Envelope,
+        after_write: impl FnMut() -> Result<(), LedgerError>,
+    ) -> Result<(), LedgerError> {
+        self.persist_fixture_effects(e, 0, None, after_write)
+    }
+    // Explicitly fixture-only supplied accounting, not consensus-derived state.
+    fn persist_fixture_effects(
+        &self,
+        e: &Envelope,
+        new_pool: u128,
+        emission: Option<EmissionStateUpdate>,
         mut after_write: impl FnMut() -> Result<(), LedgerError>,
     ) -> Result<(), LedgerError> {
         let bytes = e.encode()?;
@@ -448,74 +490,34 @@ impl ExperimentalStore {
         } else if height != 0 {
             return Err(inconsistent("first fixture height must be zero"));
         }
-        let mut rows = vec![(
-            Utxo {
-                id: UtxoId::new(e.block.hash(), 0),
-                output: e.block.minting_tx.to_tx_output(),
-                created_at: height,
-            },
-            StoredContext::Direct {
-                height,
-                base_index: 0,
-            },
-        )];
-        for t in &e.block.transactions {
-            for (index, output) in t.outputs.iter().enumerate() {
-                let index = u32::try_from(index).map_err(encoding)?;
-                rows.push((
-                    Utxo {
-                        id: UtxoId::new(t.hash(), index),
-                        output: output.clone(),
-                        created_at: height,
-                    },
-                    StoredContext::Direct {
-                        height,
-                        base_index: index,
-                    },
-                ));
-            }
-        }
-        for (ordinal, r) in e.records.iter().enumerate() {
-            let source_id = UtxoId::new(r.winner.hash, r.winner.index);
-            let (source, source_context) = self.read(&txn, &source_id)?;
+        // Source consistency remains an experimental precondition, not validation.
+        for r in &e.records {
+            let (source, source_context) =
+                self.read(&txn, &UtxoId::new(r.winner.hash, r.winner.index))?;
             if source_context.derivation().base_index != r.context.base_index {
                 return Err(inconsistent("inherited base index"));
             }
             if source.created_at >= height {
                 return Err(inconsistent("source must precede payout"));
             }
-            rows.push((
-                Utxo {
-                    id: UtxoId::new(e.block.hash(), ordinal as u32 + 1),
-                    output: e.block.lottery_outputs[ordinal]
-                        .to_tx_output(source.output.cluster_tags),
-                    created_at: height,
-                },
-                StoredContext::Lottery {
-                    height,
-                    ordinal: ordinal as u32,
-                    context: r.context.clone(),
-                },
-            ));
         }
-        self.blocks.put(&mut txn, &height, &bytes).map_err(db)?;
-        after_write()?;
-        for (u, c) in rows {
-            let key = u.id.to_bytes();
-            if self.utxos.get(&txn, &key).map_err(db)?.is_some()
-                || self.contexts.get(&txn, &key).map_err(db)?.is_some()
-            {
-                return Err(inconsistent("existing outpoint"));
-            }
-            self.utxos
-                .put(&mut txn, &key, &bincode::serialize(&u).map_err(encoding)?)
-                .map_err(db)?;
-            after_write()?;
-            self.contexts
-                .put(&mut txn, &key, &c.encode()?)
-                .map_err(db)?;
-            after_write()?;
-        }
+        let state = self.tables.fixture_accounting_state(&txn)?;
+        self.tables.block_effects(
+            &mut txn,
+            &e.block,
+            &state,
+            new_pool,
+            emission,
+            &bytes,
+            Representation::Experimental {
+                contexts: self.contexts,
+                records: &e.records,
+            },
+            // This private fixture store does NOT authenticate transfer signatures.
+            // Production V1 always supplies Ledger::verify_transaction instead.
+            &mut |_| Ok(()),
+            &mut after_write,
+        )?;
         let mut checkpoint = height.to_le_bytes().to_vec();
         checkpoint.extend(e.block.hash());
         self.meta
