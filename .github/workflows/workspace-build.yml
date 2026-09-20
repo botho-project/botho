@@ -79,6 +79,22 @@ jobs:
       - name: Compile-check all test targets (no run)
         run: cargo test --workspace --no-run
 
+      # These protocol/privacy suites use in-process simulations and duplex
+      # streams, not public relays or STUN servers. Compile-only coverage missed
+      # their assertions (#1272); reuse this job's build for actual execution.
+      - name: Run protocol and privacy integration tests
+        timeout-minutes: 10
+        run: |
+          cargo test --locked -p botho \
+            --test circuit_handshake_integration \
+            --test relay_handler_integration \
+            --test onion_broadcast_integration \
+            --test ice_stun_integration \
+            --test signaling_integration \
+            --test transport_negotiation_integration \
+            --test traffic_indistinguishability \
+            --test privacy_integration
+
       # Doctests are NOT compiled by `--no-run` above and no other workflow
       # runs them, so documentation examples rotted silently (#670). They are
       # fast (seconds) and deterministic, so run them for real.

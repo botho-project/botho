@@ -62,6 +62,10 @@ cargo test -p botho --test e2e_consensus_integration
 cargo test -p botho --test pq_integration
 ```
 
+The workspace PR job also executes eight protocol/privacy integration suites.
+See [protocol integration coverage](protocol-integration-tests.md) for the exact
+command, measured runtimes, environmental requirements, and validation limits.
+
 ---
 
 ## Test Organization
