@@ -1,15 +1,20 @@
 # External Security Audit — Engagement Scope
 
-**Status**: DRAFT for firm selection (issue #616, mainnet blocker 2).
-**Prepared**: 2026-07-08. All four "settle the audit surface" preconditions
-cleared 2026-07-07 (#581 cluster-tag bound, #532 view-change decision,
-RandomX ratification, H4 disposition #715).
+**Status**: DRAFT for firm selection (issue #616, core mainnet gate).
+**Prepared**: 2026-07-08; implementation inventory refreshed 2026-09-19.
+The four original "settle the audit surface" preconditions cleared in July
+(#581, #532, RandomX, H4/#715). Subsequent changes and pending confidential
+amounts require a new freeze-specific scope reconciliation; that historical
+milestone does not freeze the current code.
 **Audience**: candidate audit firms (shortlist per #50: Trail of Bits,
 NCC Group, Cure53) and the engaging operator (2amlogic).
 
 This document defines what is in and out of scope, the freeze artifact, the
 prior-work package auditors receive, and the known/accepted findings we are
-explicitly NOT asking to be rediscovered.
+asking auditors to reassess against the freeze. The
+[mainnet readiness checklist](../operations/mainnet-readiness.md) separates
+implemented code, historical/live evidence and missing sign-offs. This draft
+is not an engagement agreement or a finding of mainnet fitness.
 
 ---
 
@@ -20,19 +25,23 @@ explicitly NOT asking to be rediscovered.
 | Firm | TBD (shortlist: Trail of Bits, NCC Group, Cure53) |
 | Budget | TBD (2amlogic) |
 | Audit window | TBD (firm lead time 4–8+ weeks expected) |
-| Freeze artifact | A tagged reproducible release — `v0.3.2` or a fresh `v0.3.x` cut for the engagement (`release.yml` produces the artifacts; see §3) |
+| Freeze artifact | TBD: exact tagged release, commit, build features and checksums; record any CT rollout and subsequent review window explicitly (`release.yml`, §3) |
 | Point of contact | TBD |
-| Test environment | Live public testnet (5 nodes, 3 continents, protocol 4.0.0) + dedicated audit nodes on request; everything pre-mainnet is disposable, so destructive testing on provided infrastructure is acceptable by prior arrangement |
+| Test environment | Operator to inventory deployed versions, hosts, genesis and permissions at freeze. Source advertises protocol 6.0.0; no current fleet observation is asserted here. Dedicated/destructive testing requires prior arrangement on designated disposable infrastructure. |
 
 ## 2. Project summary for auditors
 
 Botho is a Rust CPU-mineable (RandomX) cryptocurrency with SCP-based
 federated consensus and a novel anti-concentration economic mechanism:
-cluster-tilted lottery redistribution, demurrage, and a deterministic
-consensus fee floor, all enforced at block acceptance. Privacy uses CLSAG
-ring signatures with RingCT/Bulletproofs and Pedersen commitments, extended
-with cluster tags for the economic mechanism. Mining is economically coupled
-but consensus-decoupled: PoW earns rewards, SCP quorums decide finality, and
+redistribution, demurrage, and a deterministic consensus fee floor, enforced
+at block acceptance. The active transaction format uses CLSAG ring signatures
+and hybrid ML-KEM recipient outputs, but **amounts remain public**.
+`transaction/clsag/src/lib.rs` publishes `TxOutput.amount` and
+`ClsagRingInput.pseudo_output_amount`, using zero-blinded amount commitments.
+Amount matching can eliminate decoys: do not infer sender anonymity from ring
+size. RingCT/Bulletproof helpers exist, but confidential amounts are a pending
+integration under #902/#904, not a shipped property of this transaction path.
+Mining is economically coupled but consensus-decoupled: PoW earns rewards, SCP quorums decide finality, and
 PoW weight never influences consensus.
 
 Design pillar the audit should stress: **no hard forks, ever**. Every
@@ -43,11 +52,13 @@ Critical.
 
 ## 3. Freeze artifact and build
 
-- Audit a **tagged release**, not a moving branch. `release.yml` builds
-  reproducible artifacts (verified dry-run + real tags `v0.3.0`–`v0.3.2`).
+- Audit a **tagged release**, not a moving branch. Attach build features,
+  checksums and independent reproducibility results for that tag. Historical
+  release work (#615 and RandomX follow-up #640) is closed; it does not prove
+  the selected future artifact reproduces. See [release verification](../operations/reproducible-builds.md).
 - Workspace layout: `botho/` (node), `botho-wallet/` (wallet lib + CLI),
-  `blockchain/types/`, `consensus/{scp,quorum-sim}/`, `transaction/{clsag,
-  core,signer,types}/`, `ledger/`, `web/packages/*` (web wallet, BaaS
+  `consensus/{scp,quorum-sim}/`, `transaction/{clsag,
+  core,signer,types}/`, `botho/src/ledger/`, `web/packages/*` (web wallet, BaaS
   worker), `infra/`.
 - Release profile ships `overflow-checks = true` with one documented
   exemption (`curve25519-dalek`, upstream-audited constant-time limb math;
@@ -55,18 +66,16 @@ Critical.
 
 ## 4. In-scope areas
 
-### 4.1 Cryptography
-- CLSAG ring signatures: `transaction/clsag/`.
-- RingCT / Bulletproofs / Pedersen commitments: `transaction/core/src/ring_ct/`
-  (incl. `rct_bulletproofs.rs`, generator cache).
-- Cluster-tag commitments and conservation proofs (Botho-specific extension —
-  highest-value crypto target: it is novel, consensus-enforced, and has no
-  external prior art).
-- Domain separation: `transaction/types/src/domain_separators.rs`.
-- Key hierarchies: BIP39 wallet derivation, one-time output keys, Ed25519
-  libp2p node identity.
-- RandomX integration (parameterization and verification path only; RandomX
-  itself is externally audited upstream).
+### 4.1 Cryptography: active path versus target
+
+| Surface | Inventory and audit treatment |
+|---|---|
+| CLSAG and public amounts | `transaction/clsag/src/lib.rs`: active ring inputs/outputs, signing and amount balance checks. Audit amount-matching and public-tag leakage; do not describe current amounts as confidential. |
+| Hybrid recipient outputs | Same crate plus `botho/src/consensus/validation.rs`: ML-KEM ciphertext support and enforcement at protocol major ≥6 with `pq` enabled. Pin release features and audit wallet scanning/decapsulation. #904 records the shipped rollout; encrypted-memo confidentiality has a separate classical-only caveat. |
+| CT target and supporting primitives | `transaction/core/src/ring_ct/` (including `rct_bulletproofs.rs` and generator cache) and `transaction/core/src/range_proofs/` contain supporting code. Their existence is not proof of active-path integration. #902/#904 and proposed ADR 0009 govern the pending economics specification and rollout. Scope the final integration, proof soundness/conservation, public-fee leakage budget and CT-compatible factor/demurrage verification explicitly. |
+| Cluster tags/economics | Review actual enforcement in `botho/src/ledger/store.rs` and `transaction/core/src/validation/validate.rs`, distinguishing public tags/bounds from any target commitment/proof scheme. Do not assume hidden amounts or exact blend proofs are consensus-enforced today. |
+| Domain separation and keys | `transaction/types/src/domain_separators.rs`, BIP39 account derivation, hybrid one-time output keys and Ed25519 node identity. |
+| RandomX integration | Parameterization, PoW attribution binding and verification; upstream RandomX internals are separately audited. |
 
 ### 4.2 Consensus
 - SCP implementation and integration: `consensus/scp/`, node-side driving
@@ -87,11 +96,15 @@ difficulty, reward recompute + timestamp bounds, ring-member/UTXO binding,
 tx_root recompute, integer difficulty controller, cluster-tag inheritance
 bound (per-ring maxima, #581/PR #713), and the deterministic consensus fee
 floor. Plus:
-- Lottery redistribution: seed-rotated candidate window (#573), tilted
-  selection, payout accounting; H4 grindability disposition (#715) —
-  accepted as economically inert, auditors should test that acceptance.
+- Lottery redistribution: candidate eligibility, current selection mode,
+  reward cap/carry-forward and payout accounting. #902/ADR 0009 record
+  Path C work (#955/#980); do not use the historical tilted-selection model
+  as a substitute for reading the freeze. Reassess H4's historical accepted
+  disposition (#715) against the actual mechanism.
 - Demurrage: max-quantile ring age + centroid-floored cluster factor
-  (decoy-resistant, #596/#582).
+  (decoy-resistant, #596/#582). `consensus_fee_floor` uses
+  `ring_elapsed_quantile` for age, while the factor path still uses
+  `ring_centroid_floored_factor`; distinguish those from proposed CT economics.
 - u64→u128 cluster-wealth widening: fail-closed on-disk decoding, saturating
   math pinned to the conservative consensus direction (#626).
 - Emission schedule (5yr/2%/~611M, #351) and crash-atomicity: block +
@@ -106,9 +119,10 @@ mempool but rejected at acceptance must never split the network).
 libp2p stack (gossipsub, DNS seeds, mdns), peer discovery and reconnect
 logic, message parsing on untrusted input (no-panic posture), rate limiting
 and connection caps, transport security (see `docs/security/
-transport-security.md` and the phase-1 onion-gossip audit). Known
-node-reachable dependency advisories are already tracked (#659 hickory,
-#661 sentry/rustls) — status at freeze time will be stated in the handoff.
+transport-security.md` and the phase-1 onion-gossip audit). Record dependency
+advisories and justified ignores at the actual freeze;
+closed historical dependency issues do not prove the frozen dependency graph
+is clear. Current follow-up tracking includes #813 and #1254.
 
 ### 4.6 Wallet stacks
 - Web wallet (`web/packages/`): vault at-rest crypto (AES-256-GCM +
@@ -124,11 +138,10 @@ node-reachable dependency advisories are already tracked (#659 hickory,
   billing is out of scope, gated separately on #722.)
 - Operator dashboard read surface (#707): read-token verification,
   per-peer quorum classification exposure.
-- Quorum write path: the security design is
-  `docs/security/quorum-write-path.md` (review-gated on #708). If the
-  implementation (#709) lands before freeze, it is in scope as the highest-
-  privilege remote surface; if not, the design doc itself is offered for
-  review comment.
+- Quorum write path: `docs/security/quorum-write-path.md`,
+  `botho/src/operator_action.rs` and the application/gating path in
+  `botho/src/commands/run.rs` are in scope. Cycle 8 reviewed this surface;
+  include subsequent changes in the freeze assessment.
 
 ### 4.8 Bridge proof-of-reserve under confidential amounts (forward flag)
 
@@ -148,9 +161,11 @@ constrains how the reserve address is structured today.
 
 - `docs/security/threat-model.md` — refreshed through cycle 7 + the
   2026-07-07 hardening; every behavioral claim code-verified at review time.
-- `audits/` — seven internal audit cycles (2025-12-30 → 2026-07-05), with
-  per-finding disposition. Cycle 6 (`2026-06-11-cycle6.md`) is the deepest
-  single document; cycle 7 (`2026-07-05-cycle7.md`) verifies its closures.
+- `audits/` — internal cycles through cycle 8, plus dedicated bridge and
+  Snap reports; see `audits/README.md` for dates/scopes. Cycle 6 captures the
+  block-acceptance findings, cycle 7 verifies closures, and cycle 8 covers
+  the operator write path. They are prior-work records, not reviews of all
+  later commits.
 - `docs/design/` — mechanism design docs (lottery redistribution,
   cluster-tilted redistribution, ring-signature tag propagation and privacy
   analysis, asymmetric fees, entropy-proof analyses).
@@ -159,16 +174,20 @@ constrains how the reserve address is structured today.
 - Transport security audits (`docs/security/transport-security-audit-2024.md`,
   `onion-gossip-phase1-audit.md`).
 
-## 6. Known findings and accepted risks (do not re-report as new)
+## 6. Historical findings and accepted risks: reconcile at freeze
+
+The following dispositions came from earlier reports. Validate applicability
+and issue status against the freeze, especially after CT/economic changes;
+"accepted" is not a request to exclude a material risk from the assessment.
 
 | Item | Disposition |
 |---|---|
 | H4 lottery candidate-cap grindability | **Accepted** as economically inert (#715, analysis in threat model). In scope to *challenge the acceptance*, not to rediscover. |
 | M2 cluster wealth = cumulative volume, not holdings | **Ratified design decision** (#605/#630, 4–11× dGini margin without decay). |
-| Cycle-6 M3–M6, L1, L3 | Open, tracked, low-priority; list in cycle-6 report. |
+| Cycle-6 M3–M6, L1, L3 | Historical report entries; reconcile each closure/residual at freeze rather than treating this row as a current open count. |
 | Lottery payout privacy (winners visible on-chain) | Known testnet watch item; phase-2 (Pedersen payout blinding) not yet scheduled. |
-| "Everyone parks" demurrage drift | Countermeasure designed (eligibility decay), not yet implemented; watch item. |
-| Node-reachable dep advisories | Tracked #659 (hickory 0.26 via libp2p), #661 (sentry → rustls 0.23). CI `cargo deny` gate active with justified ignores. |
+| "Everyone parks" demurrage drift | Historical watch item; reassess against the current circulation window and reward-cap mechanism, rather than carrying forward an old implementation claim. |
+| Dependency advisories | Inventory the frozen lockfile, `deny.toml` exceptions and actual check results; see current follow-up #813/#1254. No blanket clean-dependency assertion. |
 | `curve25519-dalek` overflow-checks exemption | Documented, benchmarked (#663). |
 
 ## 7. Out of scope
@@ -185,9 +204,10 @@ constrains how the reserve address is structured today.
 ## 8. Deliverables requested from the firm
 
 1. Findings report with severity ratings and per-finding reproduction.
-2. Explicit verdicts on the two Botho-novel surfaces: the cluster-tag
-   commitment scheme (§4.1) and the economic-consensus gates (§4.3),
-   including determinism/fork-risk review of both.
+2. Explicit verdicts on Botho's actual cluster-tag/economic-consensus
+   enforcement (§4.1/§4.3), including determinism/fork risk; separately
+   identify any pending CT design reviewed and which implementation was
+   tested. Do not certify an unimplemented target as deployed behavior.
 3. A statement on fitness of the quorum promotion gate as the sole
    constructor of SCP quorum sets (§4.2).
 4. Re-test pass after remediation of Critical/High findings.

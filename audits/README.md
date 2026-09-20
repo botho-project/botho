@@ -1,6 +1,11 @@
 # Internal Security Audit Process
 
-This directory contains internal security audit reports. External audits will be commissioned once internal audits consistently return clean results.
+This directory contains internal security audit reports. Internal reviews are
+prior-work evidence, not external audit sign-off. External engagement remains
+open in [#616](https://github.com/botho-project/botho/issues/616); bridge
+activation separately requires [#830](https://github.com/botho-project/botho/issues/830).
+See the [mainnet readiness checklist](../docs/operations/mainnet-readiness.md)
+for current gates, evidence requirements and owners.
 
 ## Philosophy
 
@@ -58,13 +63,24 @@ Security auditing is iterative. Each internal audit:
 
 ## Path to External Audit
 
-External audit will be commissioned when:
+**Evidence review: 2026-09-19.** The historical preparation checklist below
+records earlier audit-cycle planning. It is not a current count of unresolved
+findings or a substitute for checking the code and the selected freeze commit.
 
-- [x] 3+ consecutive full audits with no Critical/High findings (**3/3 achieved: Cycles 3-5**)
-- [ ] All Medium findings from previous audits resolved (6 remaining)
-- [ ] Test coverage > 80% on crypto code
-- [ ] Fuzz testing infrastructure operational
-- [ ] Documentation complete (architecture, threat model) - Whitepaper added
+| Historical prerequisite | Evidence and current interpretation |
+|---|---|
+| Three consecutive full audits without Critical/High findings | Cycles 3–5 recorded this milestone; later delta/bridge/Snap reviews have their own scopes and dates. This does not audit subsequent changes. |
+| Resolve Medium findings | The old checklist said six remained. Reconcile each finding and issue at the freeze; do not carry that number forward as current. Accepted residuals need an explicit disposition. |
+| Crypto test coverage >80% | Preparation baseline tracked in closed #115 per #616. Attach a measurement for the actual audit commit; no current percentage is asserted here. |
+| Operational fuzz infrastructure | [fuzz/README.md](../fuzz/README.md) and [.github/workflows/fuzz.yml](../.github/workflows/fuzz.yml) describe the harness. Record targets actually run, duration, corpus and results for the freeze; existence is not run evidence. |
+| Architecture and threat model | Preparation #117/#118 closed; [threat model](../docs/security/threat-model.md) and [engagement scope](../docs/security/external-audit-scope.md) exist. Reconcile live versus target privacy and subsequent changes before handoff. |
+
+The four “settle the audit surface” conditions on #616 were cleared in July
+(#581, #532, RandomX/#441, H4/#715). Firm selection, budget, dates, point of
+contact and a tagged freeze remain operator actions. The pending CT rollout
+(#902/#904) changes the surface again: the engagement must explicitly identify
+which implementation it covers and how later changes are reviewed. No external
+completion or mainnet fitness is asserted by this index.
 
 ## Report Index
 

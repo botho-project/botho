@@ -1,19 +1,33 @@
 # Botho - Work In Progress & Roadmap
 
-## Current Status: v0.1.0-beta (Pre-Mainnet Validation)
+## Current Status: Pre-Mainnet — Launch Gates Remain Open
 
-Core functionality complete. Internal security audits completed 5 cycles. See `audits/` for full reports.
+**Evidence review: 2026-09-19.** The current source advertises protocol
+**6.0.0**; this is a source inventory, not a fresh observation of the public
+fleet. The authoritative launch evidence and outstanding actions are in the
+[Mainnet readiness checklist](docs/operations/mainnet-readiness.md).
 
-**Current (2026-07-02):** Live 3-node testnet on protocol **3.0.0** (coordinated reset #606, fresh genesis 2026-07-02) running `main` with the full cycle-6 consensus hardening enforced: H1 deterministic consensus fee floor (#602), fee-sum overflow rejection (#601), fail-closed double-spend checks (#600), H2 cluster-tag inheritance + demurrage quantile (#580/#602), M3 rebuild/incremental parity (#607). Fee floor verified live: under-floor tx rejected, at-floor tx confirmed, all nodes converged. Gini mechanism re-validated with spend-time accrual (#314, closed). Web-wallet at-rest security issues closed (#474/#475/#476). Internal audit cycle 6 complete (`audits/2026-06-11-cycle6.md`) — all Criticals and Highs closed and deployed.
+The core launch gates are **confidential amounts and their economics
+specification** (#902/#904), plus **external security review and remediation**
+(#616). Universal ML-KEM output support has shipped, but the active CLSAG
+transaction format still publishes output and pseudo-input amounts. Existing
+ring signatures and internal clean audits do not close those launch gates.
 
-**Remaining mainnet blockers:**
-1. **Seed node SPOF** — all three testnet nodes in one region; needs ≥3 regional seeds + DNS failover (scaffolding exists behind `BOTHO_REGIONAL_SEEDS=1`; DNS TXT path preferred — see `infra/seed/TESTNET_RESET.md` §4)
-2. **External security audit** — internal cycles clean; external audit gates v1.0 (operator engagement)
-3. **M2 economic decision (#605)** — cluster-wealth decay schedule vs accept-and-document; consensus-breaking if decay chosen, so it must be decided BEFORE mainnet genesis (no-hard-forks policy)
-4. **CLI wallet tx-format port (#610 follow-up)** — CLI thin wallet still builds legacy pre-CLSAG transactions; users cannot transact from the CLI until ported (web/mobile paths unaffected)
-5. **Release engineering** — cut a reproducible tagged release (current deploys are build-on-host); `release.yml` dry-run path verified, needs a real `v0.3.x` tag + published artifacts
+Bridge activation has additional gates: the external bridge audit (#830),
+mainnet custody configuration/ceremony (#1019), and completed threshold
+federation round trips with live evidence (#868). Optional hosting and DeFi
+venue launches have separate acceptance criteria; see the checklist.
 
-**Testnet watch items:** "everyone parks" demurrage drift (countermeasure designed: eligibility decay on tilted payout); lottery payout privacy (winners visible on-chain); decoy-sourced tag inflation bound (#581, phase-2 Pedersen tags).
+The July five-blocker list is historical: regional seed expansion (#613),
+the cumulative-wealth decision (#605), CLI transaction port (#614, following
+#610), and release engineering (#615, followed by #640) are closed. Their
+completion is not evidence that the eventual launch candidate or mainnet
+infrastructure has been verified. External engagement (#616) remains open.
+
+**Historical roadmap below:** preserved task checkboxes and audit notes record
+prior planning snapshots, not current acceptance evidence. Reconcile them
+with source, issue dispositions and the readiness checklist before scheduling
+work; do not treat an old unchecked item as a newly discovered blocker.
 
 ---
 
