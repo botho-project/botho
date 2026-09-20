@@ -170,6 +170,8 @@ hickory-resolver = { version = "0.26.1", features = ["tokio", "system-config"] }
 
 # WebRTC transport for NAT traversal
 webrtc = { workspace = true }
+# webrtc 0.20 requires explicit interface bindings for usable host ICE candidates.
+if-addrs = "0.15"
 getrandom = { workspace = true }
 
 # For botho-testnet harness

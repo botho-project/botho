@@ -122,6 +122,16 @@ or relax assertions to obtain a green gate. No external-service suite is inferre
 from its name: ICE/STUN here is local, and RPC uses loopback; actual public-network
 coverage would require its own explicit environment and job.
 
+The workspace PR job also runs `cargo test --locked -p botho --lib
+network::transport::webrtc::`. Its real peer tests bind loopback UDP sockets and
+exercise SDP exchange, bidirectional DTLS/SCTP delivery, partial reads, candidate
+fanout, bounded receive overflow, close/drop cleanup and fresh-peer reconnect.
+They use no public STUN/TURN service. WebRTC remains inactive in the transport
+manager; browser interoperability and real NAT/TURN traversal are not established
+by these tests. The wrapper uses concrete interface bindings (excluding scoped
+IPv6 link-local addresses), a 1 MiB unread-byte limit, and a one-second bounded
+channel-close grace period before stopping the driver.
+
 The workspace PR job also executes eight protocol/privacy integration suites.
 See [protocol integration coverage](protocol-integration-tests.md) for the exact
 command, measured runtimes, environmental requirements, and validation limits.

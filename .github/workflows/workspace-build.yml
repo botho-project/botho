@@ -102,6 +102,12 @@ jobs:
             --test traffic_indistinguishability \
             --test privacy_integration
 
+      # Exercise actual UDP/DTLS/SCTP delivery and teardown; loopback only,
+      # with no public STUN/TURN servers or manager activation (#1237).
+      - name: Run WebRTC wrapper and local lifecycle tests
+        timeout-minutes: 5
+        run: cargo test --locked -p botho --lib "network::transport::webrtc::"
+
       # Execute real temporary-ledger and loopback RPC assertions (#1273).
       # These tests require no public node, faucet, credentials or live funds.
       - name: Run ledger and RPC integration tests

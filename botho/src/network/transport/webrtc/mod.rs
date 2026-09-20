@@ -76,20 +76,91 @@ pub use ice::{
 };
 pub use stun::{NatType, StunClient, StunConfig, StunError};
 
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::{collections::VecDeque, net::SocketAddr, sync::Arc};
+use tokio::sync::{mpsc, watch, Mutex};
 use webrtc::{
-    api::{
-        interceptor_registry::register_default_interceptors, media_engine::MediaEngine, APIBuilder,
-    },
-    data_channel::{data_channel_message::DataChannelMessage, RTCDataChannel},
-    ice_transport::{ice_connection_state::RTCIceConnectionState, ice_server::RTCIceServer},
-    interceptor::registry::Registry,
+    data_channel::{DataChannel, DataChannelEvent},
     peer_connection::{
-        configuration::RTCConfiguration, peer_connection_state::RTCPeerConnectionState,
-        sdp::session_description::RTCSessionDescription, RTCPeerConnection,
+        PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler, RTCConfigurationBuilder,
+        RTCIceConnectionState, RTCIceGatheringState, RTCIceServer, RTCPeerConnectionIceEvent,
+        RTCPeerConnectionState, RTCSessionDescription,
     },
 };
+
+/// Per-peer state is installed before the driver starts, so early ICE events
+/// are retained.
+pub struct WebRtcPeer {
+    inner: Arc<dyn PeerConnection>,
+    events: Arc<PeerEvents>,
+    incoming: Mutex<mpsc::Receiver<Arc<dyn DataChannel>>>,
+}
+
+impl std::ops::Deref for WebRtcPeer {
+    type Target = dyn PeerConnection;
+    fn deref(&self) -> &Self::Target {
+        self.inner.as_ref()
+    }
+}
+
+impl WebRtcPeer {
+    /// Receive a remotely opened channel. Cancellation does not consume a
+    /// channel.
+    pub async fn accept_data_channel(&self) -> Option<Arc<dyn DataChannel>> {
+        let mut state = self.events.connection.subscribe();
+        loop {
+            if *state.borrow_and_update() == RTCPeerConnectionState::Closed {
+                return None;
+            }
+            tokio::select! {
+                channel = async { self.incoming.lock().await.recv().await } => return channel,
+                _ = state.changed() => {}
+            }
+        }
+    }
+
+    /// Close the driver and wake pending channel acceptors.
+    pub async fn close(&self) -> webrtc::error::Result<()> {
+        self.events
+            .connection
+            .send_replace(RTCPeerConnectionState::Closed);
+        self.events
+            .ice_connection
+            .send_replace(RTCIceConnectionState::Closed);
+        self.inner.close().await
+    }
+}
+
+struct PeerEvents {
+    ice: ice::CandidateEvents,
+    gathering: watch::Sender<RTCIceGatheringState>,
+    connection: watch::Sender<RTCPeerConnectionState>,
+    ice_connection: watch::Sender<RTCIceConnectionState>,
+    incoming: mpsc::Sender<Arc<dyn DataChannel>>,
+}
+
+#[async_trait::async_trait]
+impl PeerConnectionEventHandler for PeerEvents {
+    async fn on_ice_candidate(&self, event: RTCPeerConnectionIceEvent) {
+        self.ice.record(&event.candidate);
+    }
+    async fn on_ice_gathering_state_change(&self, state: RTCIceGatheringState) {
+        self.gathering.send_replace(state);
+    }
+    async fn on_connection_state_change(&self, state: RTCPeerConnectionState) {
+        self.connection.send_replace(state);
+    }
+    async fn on_ice_connection_state_change(&self, state: RTCIceConnectionState) {
+        self.ice_connection.send_replace(state);
+    }
+    async fn on_data_channel(&self, channel: Arc<dyn DataChannel>) {
+        if let Err(error) = self.incoming.try_send(channel) {
+            let channel = error.into_inner();
+            // DataChannel::close only updates the core and wakes writes; unlike
+            // PeerConnection::close, it does not wait on this event-handler task.
+            let _ = channel.close().await;
+        }
+    }
+}
 
 use super::{TransportError, WebRtcError};
 
@@ -136,21 +207,45 @@ impl WebRtcTransport {
     }
 
     /// Create a new peer connection with ICE configuration.
-    pub async fn create_peer_connection(&self) -> Result<Arc<RTCPeerConnection>, TransportError> {
-        // Create a MediaEngine (required even for data-only connections)
-        let mut media_engine = MediaEngine::default();
+    pub async fn create_peer_connection(&self) -> Result<Arc<WebRtcPeer>, TransportError> {
+        // 0.20.2 publishes bound addresses verbatim; wildcard binds would advertise
+        // 0.0.0.0.
+        let addresses = if_addrs::get_if_addrs()
+            .map_err(|e| WebRtcError::peer_connection_create(e.to_string()))?
+            .into_iter()
+            .filter(|interface| interface.is_oper_up() && !interface.is_loopback())
+            // Scoped IPv6 link-local candidates are not representable by this ICE wrapper.
+            .filter(|interface| !matches!(interface.ip(), std::net::IpAddr::V6(ip) if ip.is_unicast_link_local()))
+            .map(|interface| SocketAddr::new(interface.ip(), 0))
+            .filter(|address| !address.ip().is_unspecified())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        self.create_peer_connection_bound(addresses).await
+    }
 
-        // Create interceptor registry
-        let mut registry = Registry::new();
-        registry = register_default_interceptors(registry, &mut media_engine)
-            .map_err(|e| WebRtcError::peer_connection_create(e.to_string()))?;
+    /// Bind a concrete local address (also permits isolated loopback tests).
+    pub async fn create_peer_connection_on(
+        &self,
+        address: SocketAddr,
+    ) -> Result<Arc<WebRtcPeer>, TransportError> {
+        self.create_peer_connection_bound(vec![address]).await
+    }
 
-        // Build the API
-        let api = APIBuilder::new()
-            .with_media_engine(media_engine)
-            .with_interceptor_registry(registry)
-            .build();
-
+    async fn create_peer_connection_bound(
+        &self,
+        addresses: Vec<SocketAddr>,
+    ) -> Result<Arc<WebRtcPeer>, TransportError> {
+        if addresses.is_empty()
+            || addresses
+                .iter()
+                .any(|address| address.ip().is_unspecified())
+        {
+            return Err(WebRtcError::peer_connection_create(
+                "concrete local interface address required",
+            )
+            .into());
+        }
         // Convert our ICE config to WebRTC config
         let ice_servers = self
             .ice_config
@@ -168,30 +263,43 @@ impl WebRtcTransport {
                         urls: vec![turn.url.clone()],
                         username: turn.username.clone(),
                         credential: turn.credential.clone(),
-                        ..Default::default()
                     }),
             )
             .collect();
 
-        let config = RTCConfiguration {
-            ice_servers,
-            ..Default::default()
-        };
-
-        // Create peer connection
-        let peer_connection = api
-            .new_peer_connection(config)
+        let config = RTCConfigurationBuilder::default()
+            .with_ice_servers(ice_servers)
+            .build();
+        let (incoming_tx, incoming_rx) = mpsc::channel(8);
+        let events = Arc::new(PeerEvents {
+            ice: ice::CandidateEvents::default(),
+            gathering: watch::channel(RTCIceGatheringState::New).0,
+            connection: watch::channel(RTCPeerConnectionState::New).0,
+            ice_connection: watch::channel(RTCIceConnectionState::New).0,
+            incoming: incoming_tx,
+        });
+        let peer = PeerConnectionBuilder::new()
+            .with_configuration(config)
+            .with_handler(events.clone())
+            .with_udp_addrs(addresses)
+            // Upstream only guarantees driver shutdown on Drop for its bounded reactor pool.
+            .with_dedicated_reactor_thread(true)
+            .with_data_channel_send_buffer_limit(MAX_RECEIVE_BYTES)
+            .build()
             .await
             .map_err(|e| WebRtcError::peer_connection_create(e.to_string()))?;
-
-        Ok(Arc::new(peer_connection))
+        Ok(Arc::new(WebRtcPeer {
+            inner: Arc::new(peer),
+            events,
+            incoming: Mutex::new(incoming_rx),
+        }))
     }
 
     /// Create a data channel for botho traffic.
     pub async fn create_data_channel(
-        peer_connection: &RTCPeerConnection,
+        peer_connection: &WebRtcPeer,
         label: &str,
-    ) -> Result<Arc<RTCDataChannel>, TransportError> {
+    ) -> Result<Arc<dyn DataChannel>, TransportError> {
         let data_channel = peer_connection
             .create_data_channel(label, None)
             .await
@@ -202,7 +310,7 @@ impl WebRtcTransport {
 
     /// Create an SDP offer for initiating a connection.
     pub async fn create_offer(
-        peer_connection: &RTCPeerConnection,
+        peer_connection: &WebRtcPeer,
     ) -> Result<RTCSessionDescription, TransportError> {
         let offer = peer_connection
             .create_offer(None)
@@ -219,7 +327,7 @@ impl WebRtcTransport {
 
     /// Create an SDP answer in response to an offer.
     pub async fn create_answer(
-        peer_connection: &RTCPeerConnection,
+        peer_connection: &WebRtcPeer,
         offer: RTCSessionDescription,
     ) -> Result<RTCSessionDescription, TransportError> {
         peer_connection
@@ -242,7 +350,7 @@ impl WebRtcTransport {
 
     /// Set the remote SDP answer.
     pub async fn set_remote_answer(
-        peer_connection: &RTCPeerConnection,
+        peer_connection: &WebRtcPeer,
         answer: RTCSessionDescription,
     ) -> Result<(), TransportError> {
         peer_connection
@@ -256,7 +364,7 @@ impl WebRtcTransport {
     /// Wait for ICE gathering to complete.
     pub async fn wait_for_ice_gathering(
         &self,
-        peer_connection: &RTCPeerConnection,
+        peer_connection: &WebRtcPeer,
     ) -> Result<Vec<IceCandidate>, TransportError> {
         self.gatherer
             .gather_candidates(peer_connection)
@@ -275,80 +383,145 @@ impl WebRtcTransport {
     }
 }
 
+/// Maximum unread application bytes retained per connection. Overflow closes
+/// the channel.
+pub const MAX_RECEIVE_BYTES: usize = 1024 * 1024;
+
+#[derive(Default)]
+struct ReceiveBuffer {
+    bytes: VecDeque<u8>,
+    failed: bool,
+    closed: bool,
+}
+
 /// WebRTC connection wrapper providing async read/write.
+/// `recv` retains its nonblocking polling contract: zero can mean temporarily
+/// empty.
 pub struct WebRtcConnection {
-    /// The underlying peer connection
-    peer_connection: Arc<RTCPeerConnection>,
-    /// The data channel for botho traffic
-    data_channel: Arc<RTCDataChannel>,
-    /// Receive buffer for incoming messages
-    recv_buffer: Arc<Mutex<Vec<u8>>>,
+    peer_connection: Arc<WebRtcPeer>,
+    data_channel: Arc<dyn DataChannel>,
+    recv_buffer: Arc<Mutex<ReceiveBuffer>>,
+    receiver: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    // Drop must abort the task even when an in-flight close future is cancelled.
+    receiver_abort: tokio::task::AbortHandle,
 }
 
 impl WebRtcConnection {
-    /// Create a new WebRTC connection.
-    pub fn new(peer_connection: Arc<RTCPeerConnection>, data_channel: Arc<RTCDataChannel>) -> Self {
-        let recv_buffer = Arc::new(Mutex::new(Vec::new()));
-        let buffer_clone = recv_buffer.clone();
-
-        // Set up message handler
-        data_channel.on_message(Box::new(move |msg: DataChannelMessage| {
-            let buffer = buffer_clone.clone();
-            Box::pin(async move {
-                let mut buf = buffer.lock().await;
-                buf.extend_from_slice(&msg.data);
-            })
-        }));
-
+    /// Own the channel's single event consumer until close or drop.
+    pub fn new(peer_connection: Arc<WebRtcPeer>, data_channel: Arc<dyn DataChannel>) -> Self {
+        let recv_buffer = Arc::new(Mutex::new(ReceiveBuffer::default()));
+        let buffer = recv_buffer.clone();
+        let channel = data_channel.clone();
+        let receiver = tokio::spawn(async move {
+            while let Some(event) = channel.poll().await {
+                match event {
+                    DataChannelEvent::OnMessage(message) => {
+                        let mut buffer = buffer.lock().await;
+                        if message.data.len() > MAX_RECEIVE_BYTES - buffer.bytes.len() {
+                            buffer.failed = true;
+                            buffer.closed = true;
+                            drop(buffer);
+                            let _ = channel.close().await;
+                            return;
+                        }
+                        buffer.bytes.extend(message.data);
+                    }
+                    DataChannelEvent::OnError => {
+                        let mut buffer = buffer.lock().await;
+                        buffer.failed = true;
+                        buffer.closed = true;
+                        break;
+                    }
+                    DataChannelEvent::OnClose => break,
+                    DataChannelEvent::OnClosing => {
+                        buffer.lock().await.closed = true;
+                    }
+                    _ => {}
+                }
+            }
+            buffer.lock().await.closed = true;
+        });
         Self {
             peer_connection,
             data_channel,
             recv_buffer,
+            receiver_abort: receiver.abort_handle(),
+            receiver: Mutex::new(Some(receiver)),
         }
     }
 
-    /// Send data over the WebRTC data channel.
+    /// Send binary data; upstream applies bounded send backpressure.
     pub async fn send(&self, data: &[u8]) -> Result<(), TransportError> {
+        if self.recv_buffer.lock().await.closed {
+            return Err(TransportError::ConnectionClosed);
+        }
         self.data_channel
-            .send(&bytes::Bytes::copy_from_slice(data))
+            .send(bytes::BytesMut::from(data))
             .await
             .map_err(|e| WebRtcError::send_failed(e.to_string()))?;
         Ok(())
     }
 
-    /// Receive data from the WebRTC data channel.
+    /// Drain available bytes, preserving the previous polling and partial-read
+    /// behavior.
     pub async fn recv(&self, buf: &mut [u8]) -> Result<usize, TransportError> {
-        let mut recv_buf = self.recv_buffer.lock().await;
-        let len = std::cmp::min(buf.len(), recv_buf.len());
-        buf[..len].copy_from_slice(&recv_buf[..len]);
-        recv_buf.drain(..len);
+        let mut received = self.recv_buffer.lock().await;
+        if received.failed {
+            return Err(TransportError::DataChannel(
+                "receive channel failed or exceeded capacity".into(),
+            ));
+        }
+        let len = buf.len().min(received.bytes.len());
+        for byte in &mut buf[..len] {
+            *byte = received.bytes.pop_front().expect("length checked");
+        }
         Ok(len)
     }
 
-    /// Check if the connection is still active.
     pub fn is_connected(&self) -> bool {
-        matches!(
-            self.peer_connection.connection_state(),
-            RTCPeerConnectionState::Connected
-        )
+        *self.peer_connection.events.connection.borrow() == RTCPeerConnectionState::Connected
+            && !self.receiver_abort.is_finished()
     }
 
-    /// Get the current ICE connection state.
     pub fn ice_state(&self) -> RTCIceConnectionState {
-        self.peer_connection.ice_connection_state()
+        *self.peer_connection.events.ice_connection.borrow()
     }
 
-    /// Close the connection.
+    /// Stop the receiver and always attempt peer cleanup, including after
+    /// channel errors.
     pub async fn close(&self) -> Result<(), TransportError> {
-        self.data_channel
-            .close()
-            .await
-            .map_err(|e| TransportError::DataChannel(e.to_string()))?;
-        self.peer_connection
-            .close()
-            .await
-            .map_err(|e| TransportError::ConnectionClosed)?;
-        Ok(())
+        // Serialize the entire teardown, including peer shutdown. Keep the task in
+        // the slot while awaiting it: cancellation lets a later close resume the
+        // same wait instead of bypassing the SCTP close grace period.
+        let mut receiver = self.receiver.lock().await;
+        self.recv_buffer.lock().await.closed = true;
+        let channel_result = if receiver.is_some() {
+            self.data_channel.close().await
+        } else {
+            Ok(())
+        };
+        if let Some(task) = receiver.as_mut() {
+            // ready_state becomes Closed before SCTP's reset is flushed in 0.20.2.
+            // Wait for the actual close event, keeping the driver alive, but bound
+            // teardown when the remote disappears or the channel never opened.
+            if tokio::time::timeout(std::time::Duration::from_secs(1), &mut *task)
+                .await
+                .is_err()
+            {
+                task.abort();
+                let _ = task.await;
+            }
+        }
+        receiver.take();
+        let peer_result = self.peer_connection.close().await;
+        peer_result.map_err(|_| TransportError::ConnectionClosed)?;
+        channel_result.map_err(|e| TransportError::DataChannel(e.to_string()))
+    }
+}
+
+impl Drop for WebRtcConnection {
+    fn drop(&mut self) {
+        self.receiver_abort.abort();
     }
 }
 
@@ -372,3 +545,6 @@ mod tests {
         assert_eq!(transport.ice_config.stun_servers, ice_config.stun_servers);
     }
 }
+
+#[cfg(test)]
+mod lifecycle_tests;
