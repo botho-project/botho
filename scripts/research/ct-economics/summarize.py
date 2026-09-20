@@ -39,11 +39,18 @@ paths = [
     'scripts/research/ct-economics/pools.json', 'scripts/research/ct-economics/web-selection.json',
     'scripts/research/ct-economics/summarize.py',
 ]
+# CI checks out a shallow merge commit and may have no origin/main ref. The
+# measured files are bound by hashes below; do not invent a base when Git cannot
+# establish it, or discard otherwise valid observations for missing history.
+base = subprocess.run(['git', 'merge-base', 'HEAD', 'origin/main'], cwd=ROOT,
+                      text=True, capture_output=True, check=False)
 summary = {
     'scope': data['scope'], 'seeds': data['seeds'], 'draws_per_seed': data['draws_per_seed'],
     'runtime': platform.platform(),
     'rustc': subprocess.check_output(['rustc', '--version'], text=True).strip(),
-    'base_commit': subprocess.check_output(['git', 'merge-base', 'HEAD', 'origin/main'], cwd=ROOT, text=True).strip(),
+    'checkout_commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+    'base_commit': base.stdout.strip() if base.returncode == 0 else None,
+    'base_commit_status': 'resolved' if base.returncode == 0 else 'unavailable in checkout',
     'source_sha256': {p: hashlib.sha256((ROOT / p).read_bytes()).hexdigest() for p in paths},
     'full_results_sha256': hashlib.sha256(raw).hexdigest(),
     'path_c_sha256': hashlib.sha256((HERE / 'path-c.json').read_bytes()).hexdigest(),

@@ -9,7 +9,9 @@
   "draws_per_seed": 128,
   "runtime": "macOS-27.0-arm64-arm-64bit-Mach-O",
   "rustc": "rustc 1.93.0-nightly (646a3f8c1 2025-12-02)",
-  "base_commit": "2e79acf2aee956dbc27903878c7dda74e4615213",
+  "checkout_commit": "58cb0345aa23fda047d23f4474fb2562bfe3f6a9",
+  "base_commit": "a9b207f5433d47ab74c6894624242d425585464c",
+  "base_commit_status": "resolved",
   "source_sha256": {
     "botho/tests/ct_economics_simulation.rs": "4f2058f0ddc5ad0550630c36e11876043521f2985cf7968829eb80857b3f9666",
     "botho/src/decoy_selection.rs": "c49cccee17472768f3f220807877263ecccab8fb22ca08cdbdad078e7169fcf9",
@@ -29,7 +31,7 @@
     "scripts/research/ct-economics/scenarios.json": "61a38cb959b3d0cb5482e96c1dc6ed330765a7cc6a6b60ff304c0ed419ab96a4",
     "scripts/research/ct-economics/pools.json": "37b038468a3fd9a87d2f518a42cab81db0500289b9ed9e30ab1f094dc131d26b",
     "scripts/research/ct-economics/web-selection.json": "aa5a751c8478409311999c83584c87f40fbcc54039d7ed0e4a7eb9860698e560",
-    "scripts/research/ct-economics/summarize.py": "31bf384c2e06ea32997b285de571f368428ed00f3cd293bfff26fa571d8fe96e"
+    "scripts/research/ct-economics/summarize.py": "5eb963e2ac36ca3cb695f472d8e4e5a2ed320e3b9b66944a121f353730aa0358"
   },
   "full_results_sha256": "b04847ab789bc7c9e2010beff5a3369081aae37f121601b0e36c1938c98a8524",
   "path_c_sha256": "a23a63a193f6044115647998ffbc5d5804f5b7e503dfbe4ed59429ae8786dc22",
