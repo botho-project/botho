@@ -553,10 +553,10 @@ mod tests {
             .iter()
             .map(|e| (e.node.as_str(), e.height_stale))
             .collect();
-        assert_eq!(stale_map["stuck"], true);
-        assert_eq!(stale_map["moving"], false);
-        assert_eq!(stale_map["young"], false);
-        assert_eq!(stale_map["recovered"], false);
+        assert!(stale_map["stuck"]);
+        assert!(!stale_map["moving"]);
+        assert!(!stale_map["young"]);
+        assert!(!stale_map["recovered"]);
     }
 
     #[test]

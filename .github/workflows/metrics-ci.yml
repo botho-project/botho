@@ -1,0 +1,37 @@
+name: Metrics Daemon CI
+
+on:
+  pull_request:
+    paths:
+      - 'infra/faucet/metrics-daemon/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain*'
+      - '.cargo/**'
+      - '.github/workflows/metrics-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: metrics-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  metrics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-03
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: metrics-ci
+      - name: Test metrics daemon
+        run: cargo test --locked -p botho-metrics-daemon
+      - name: Clippy metrics daemon
+        run: cargo clippy --locked -p botho-metrics-daemon --all-targets -- -D warnings
