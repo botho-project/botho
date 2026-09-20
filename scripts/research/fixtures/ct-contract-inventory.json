@@ -44,7 +44,8 @@
     },
     {
       "path": "botho/src/ledger/store.rs",
-      "sha256": "dd5a5978e26b95d4b40ff85355c7edf46595c944dca1e4db37ec6115106b19db",
+      "sha256": "68fe49af879d681a79013a0f6028c99d26f032c330d99ff9a9945077ef5feb67",
+      "reviewed_change": "22162c2d22d0c5f11816facad8718f4d7d2c0270: test-only read_txn_for_test explicitly selects heed::WithTls; production CT arithmetic unchanged",
       "symbols": [
         "ring_elapsed_quantile(",
         "pub fn ring_centroid_floored_factor("
@@ -76,7 +77,8 @@
     },
     {
       "path": "transaction/clsag/src/lib.rs",
-      "sha256": "69cac0d8c7ca74e7bde64fde186f0a0aefec56e88979dda44b669515f2c1d44f",
+      "sha256": "48555fbaadc8c6cf5ea2768a8bae0b9127f09f0f8d4a46073dbbc2d4b2e077ad",
+      "reviewed_change": "40e39a7d7741d094660d658c31ea9d5cd254d4ed: exports inactive lottery_v2 module; existing CT and legacy codec functions unchanged",
       "symbols": [
         "fn apply_memo_keystream(",
         "pub fn decrypt_memo(",
