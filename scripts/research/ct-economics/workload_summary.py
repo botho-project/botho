@@ -5,6 +5,7 @@ import json
 import platform
 from pathlib import Path
 import subprocess
+from workload_owner_accounts import validate_owner_accounts
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
@@ -19,6 +20,7 @@ assert len(rows) == len(expected) == 16
 assert {(r['seed'], r['honest_cadence'], r['strategy']) for r in rows} == expected
 initial = config['initial_bth_per_owner'] * 10**12
 for row in rows:
+    validate_owner_accounts(row, initial, config['honest_owners'])
     assert row['honest_attempts'] == (config['blocks'] - 1) // row['honest_cadence'] + 1
     for who in ('honest', 'attacker'):
         failed = sum(n for reason, n in row['failures'].items() if reason.startswith(who + ':'))
@@ -37,7 +39,7 @@ for row in rows:
     baseline = next(r for r in rows if r['seed'] == row['seed'] and r['honest_cadence'] == row['honest_cadence'] and r['strategy'] == 'hold_one')
     row['accounted_delta_idle'] = str(int(row['attacker_accounted_value']) - initial)
     row['accounted_delta_hold_one'] = str(int(row['attacker_accounted_value']) - int(baseline['attacker_accounted_value']))
-paths = ['Cargo.lock', 'botho/tests/ct_economics_workload.rs', 'scripts/research/ct-economics/workload-config.json', 'scripts/research/ct-economics/workload_summary.py', 'scripts/research/ct-economics/reference.rs', 'botho/src/ledger/store.rs', 'botho/src/ledger/snapshot.rs', 'botho/src/wallet.rs', 'botho/src/decoy_selection.rs', 'botho/src/consensus/lottery.rs', 'botho/src/block.rs', 'cluster-tax/src/lottery.rs', 'cluster-tax/src/demurrage.rs', 'cluster-tax/src/monetary.rs', '.github/workflows/workspace-build.yml']
+paths = ['Cargo.lock', 'botho/tests/ct_economics_workload.rs', 'scripts/research/ct-economics/workload-config.json', 'scripts/research/ct-economics/workload_summary.py', 'scripts/research/ct-economics/workload_owner_accounts.py', 'scripts/research/ct-economics/test_workload_owner_accounts.py', 'scripts/research/ct-economics/reference.rs', 'botho/src/ledger/store.rs', 'botho/src/ledger/store/writer.rs', 'botho/src/ledger/snapshot.rs', 'botho/src/wallet.rs', 'botho/src/decoy_selection.rs', 'botho/src/consensus/lottery.rs', 'botho/src/block.rs', 'cluster-tax/src/lottery.rs', 'cluster-tax/src/demurrage.rs', 'cluster-tax/src/monetary.rs', '.github/workflows/workspace-build.yml']
 result = dict(schema=1, scope='Inactive synthetic fixed-stock funded-payment histories; node gamma membership only, not full wallet construction, observed calibration, equilibrium, or ratification',
     checkout_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
     runtime=dict(platform=platform.platform(), rustc=subprocess.check_output(['rustc', '--version'], text=True).strip()),
