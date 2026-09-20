@@ -141,7 +141,25 @@ jobs:
       # (#1057) and two latent RUNTIME fee-gaming test failures (#1068) sat
       # green for a long time. `cargo check --all-features` alone was not
       # enough to catch #1068 (the module compiled but its tests failed), so we
-      # RUN the crate's `--all-features` tests here. Scoped to the one crate to
-      # stay fast and deterministic (~seconds).
+      # RUN every all-features test here. Unoptimized cryptographic arithmetic
+      # took over 15 minutes in run 35499453189. Optimize without disabling
+      # debug assertions or overflow checks (including the dalek exemption in
+      # the production release profile). These overrides apply only to this gate.
+      - name: Compile bth-transaction-core --all-features tests
+        timeout-minutes: 15
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: "true"
+          CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS: "true"
+        run: >-
+          cargo test --locked --release -p bth-transaction-core --all-features
+          --config 'profile.release.package.curve25519-dalek.overflow-checks=true'
+          --no-run
+
       - name: Run bth-transaction-core --all-features tests (cluster-tax path)
-        run: cargo test -p bth-transaction-core --all-features
+        timeout-minutes: 5
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: "true"
+          CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS: "true"
+        run: >-
+          cargo test --locked --release -p bth-transaction-core --all-features
+          --config 'profile.release.package.curve25519-dalek.overflow-checks=true'
