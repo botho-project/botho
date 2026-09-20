@@ -250,7 +250,17 @@ fn production_routes_and_candidate_fee_report() {
                                     fees.push(actual);
                                 }
                                 fees.sort_unstable();
-                                charges.push(json!({"value":value.to_string(),"rate":rate,"output_factor":g,"outputs":outputs,"bits":bits,"selection_failures":failures,"selected":selected.len(),"unaffordable":unaffordable,"affordable":selected.len() as u64-unaffordable,"direct_fee":direct.to_string(),"mean_overcharge":if fees.is_empty(){Value::Null}else{json!((overcharge/fees.len() as u128).to_string())},"fee_p50":fees.get(fees.len()/2).map(u64::to_string),"fee_p95":fees.get(fees.len().saturating_mul(95)/100).map(u64::to_string),"fee_max":fees.last().map(u64::to_string),"higher_factor_than_real":high_floor}));
+                                let mut fee_histogram = BTreeMap::<u64, u64>::new();
+                                if bits == 2 && rate == 200 && outputs == 2 && g == 1000 {
+                                    for &observed_fee in &fees {
+                                        *fee_histogram.entry(observed_fee).or_default() += 1;
+                                    }
+                                    assert_eq!(
+                                        fee_histogram.values().sum::<u64>(),
+                                        selected.len() as u64
+                                    );
+                                }
+                                charges.push(json!({"fee_histogram":fee_histogram,"value":value.to_string(),"rate":rate,"output_factor":g,"outputs":outputs,"bits":bits,"selection_failures":failures,"selected":selected.len(),"unaffordable":unaffordable,"affordable":selected.len() as u64-unaffordable,"direct_fee":direct.to_string(),"mean_overcharge":if fees.is_empty(){Value::Null}else{json!((overcharge/fees.len() as u128).to_string())},"fee_p50":fees.get(fees.len()/2).map(u64::to_string),"fee_p95":fees.get(fees.len().saturating_mul(95)/100).map(u64::to_string),"fee_max":fees.last().map(u64::to_string),"higher_factor_than_real":high_floor}));
                             }
                         }
                     }
