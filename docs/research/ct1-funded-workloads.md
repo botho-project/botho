@@ -90,9 +90,9 @@ The 100-block cadence funds 113 honest payments (56.5 BTH gross fees); the
 500-block cadence funds 23 (11.5 BTH). All scheduled main-grid payments select
 and fund successfully. Separate tests deliberately reject unaffordable payments
 and insufficient decoy pools with unchanged inventory. Refresh strategies
-complete 16/14/10/9 of their 16 scheduled attempts (cadence 100 seed 1306/902,
-then cadence 500 seed 1306/902); the other attempts fail membership validation
-and pay no modeled fee. These are unsigned construction attempts, not submitted
+now complete all 16 scheduled attempts in each history on the refreshed merged
+selector. All failure denominators remain recorded, including empty failure
+maps in these successful main-grid histories. These are unsigned construction attempts, not submitted
 transaction rejections. Full denominators are preserved.
 
 The final **accounted-value** differences below include unavailable payout
@@ -102,9 +102,9 @@ profit or spendable gains:
 | Honest cadence | Seed | Hold one | Hold two | Refresh two |
 |---|---:|---:|---:|---:|
 | 100 blocks | 1306 | +0.15 BTH | +0.30 BTH | −6.00 BTH |
-| 100 blocks | 902 | +0.15 BTH | −0.10 BTH | −5.20 BTH |
-| 500 blocks | 1306 | −0.05 BTH | −0.10 BTH | −4.10 BTH |
-| 500 blocks | 902 | +0.05 BTH | −0.30 BTH | −4.10 BTH |
+| 100 blocks | 902 | +0.15 BTH | −0.10 BTH | −6.20 BTH |
+| 500 blocks | 1306 | −0.05 BTH | −0.10 BTH | −6.50 BTH |
+| 500 blocks | 902 | +0.05 BTH | −0.30 BTH | −7.00 BTH |
 
 These are paired sampled observations, not confidence intervals. The compact
 artifact separately stores a conditional uniform-ticket capture benchmark,
@@ -116,7 +116,7 @@ Fresh payout tickets and retained spent public records materially populate these
 histories; neither is treated as an external fee faucet. The refresh strategy
 pays a half-BTH fee only on a successful attempt. Final spendable attacker
 principal is 31.75 BTH for hold one, 31.5 BTH for hold two, and
-24/25/27/27.5 BTH for refresh in the order above; all awarded value is locked.
+24 BTH for refresh in each of the four histories; all awarded value is locked.
 Any successful final scheduled refresh has not matured by the finite endpoint;
 unearned future capture is not credited. Private principal remains included at face value. No stationary claim
 or universal splitting-resistance conclusion follows from this terminal window.
@@ -125,6 +125,35 @@ The earlier #1320 funded-fee example used 2.5 BTH of external gross fees **each
 block**. These payment workloads have much smaller fee flow. Their results are
 not a controlled estimate of the effect of population coupling alone, and do
 not invalidate or replace the earlier conditional observations.
+
+## Dated rerun after merged selector update
+
+This numerical refresh used main baseline
+`94f579a20a5d4e29f7e268f830823fdae975218e` (merged #1317/#1320 and selector
+update #1338), with workload checkout
+`abf24ecaa3161fcbe39d6dbea8390fbcb9a3acec`. Both workload implementation
+commits rebased unchanged; exact selected-record ages and locked payout funding
+rules remain intact. The eight-test suite passed in 67.03 seconds, including
+all sixteen histories and exact replay. New raw SHA256:
+`98b34600349b24ce55a8ecc2213a7cea2de26e6d8a8dabdd537ad83f2c49325e`.
+This is an actual rerun, not a relabeling of previous observations.
+
+The earlier raw SHA256 was
+`7b9224d4a831baa0ca6ee7ea25acfb336b7d010d824560a5f29fcd479cb39218`.
+Thirteen rows are unchanged; three refresh rows changed. In cadence/seed order
+100/902, 500/1306, 500/902, successful refreshes rose from 14/10/9 to 16 each.
+Their accounted deltas versus idle changed from −5.20/−4.10/−4.10 BTH to
+−6.20/−6.50/−7.00 BTH; spendable principal changed from 25/27/27.5 BTH to
+24 BTH each. The 100/1306 refresh row remained at 16 successes and −6.00 BTH.
+Honest successes/fees and hold-one/hold-two observations are unchanged. Extra
+successful attempts pay their modeled fees and change the subsequent ticket
+population; this is not a one-variable counterfactual estimate or policy result.
+
+The committed earlier sampler and fixed-capital manifests remain historical
+snapshots of their own measured sources. Their hashes are not refreshed to
+claim those older numerical observations were rerun here. This checkpoint
+updates only the genuinely rerun workload summary and its fifteen source hashes.
+Fresh CI runs may produce additional current-base artifacts independently.
 
 ## Reproduction and remaining work
 
