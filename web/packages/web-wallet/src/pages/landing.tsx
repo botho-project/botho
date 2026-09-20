@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Button, Logo } from '@botho/ui'
-import {Activity, Shield, Scale, Atom, Zap, ArrowRight, ArrowLeftRight, Github, Menu, X, FileText, Blocks, Server} from 'lucide-react'
+import {Activity, Shield, Scale, Atom, Zap, ArrowRight, ArrowLeftRight, Menu, X, FileText, Blocks, Server} from 'lucide-react'
+import { GithubIcon } from '../components/GithubIcon'
 import { LocaleSwitcher } from '../components/LocaleSwitcher'
 
 // Feature/stat metadata is locale-agnostic (icons + translation keys). The
@@ -75,7 +76,7 @@ export function LandingPage() {
               rel="noopener noreferrer"
               className="text-ghost hover:text-light transition-colors flex items-center gap-2 whitespace-nowrap"
             >
-              <Github size={18} />
+              <GithubIcon size={18} />
               {t('nav.github')}
             </a>
             <LocaleSwitcher className="whitespace-nowrap" />
@@ -146,7 +147,7 @@ export function LandingPage() {
                 onClick={() => setMobileMenuOpen(false)}
                 className="flex items-center gap-2 px-4 py-3 rounded-lg text-ghost hover:text-light hover:bg-steel/50 transition-colors"
               >
-                <Github size={18} />
+                <GithubIcon size={18} />
                 {t('nav.github')}
               </a>
               <div className="px-4 py-3">
