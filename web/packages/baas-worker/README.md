@@ -72,10 +72,20 @@ network/AWS/Cloudflare call ever runs in a test code path**.
 ### D1 schema
 
 `schema.sql` defines the `nodes` table (`subscription_id` UNIQUE = the idempotency
-anchor). Apply it before first use:
+anchor). The existing deployment's database ID is already configured in
+`wrangler.toml`; keep that ID when working with the existing environment.
+
+For a new environment only, create a separate database and put its ID in that
+environment's Wrangler configuration:
 
 ```bash
-wrangler d1 create botho-baas          # copy the id into wrangler.toml
+wrangler d1 create <new-environment-database-name>
+```
+
+Apply the schema to the intended database before first use (the command below
+targets the existing `botho-baas` database):
+
+```bash
 wrangler d1 execute botho-baas --remote --file=schema.sql
 ```
 
