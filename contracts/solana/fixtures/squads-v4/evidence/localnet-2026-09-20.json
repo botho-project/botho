@@ -5,7 +5,7 @@
     "feature-set": 3241752014,
     "solana-core": "1.18.26"
   },
-  "genesisHash": "cKRXKhr6CjT8kUrVtiRWqVmBRamKjWe8tzQGfrpZ3BP",
+  "genesisHash": "CMpJkDDNeSuWSrvEUwKjDuXnhkSthSnJxTgFr2UrJRoP",
   "node": "v26.9.0",
   "squadsProgramId": "SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf",
   "wbthProgramId": "CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE",
@@ -15,8 +15,8 @@
     "vectors": "4b74f97b8fc0c5c27a25409304d7e3dc19974efa7c1df85132bceca7693e7095",
     "wbth": "4dfcf4fcfe32e9b97b98069c0212e3f7b873ae3214f1d2abdce56200075c3140",
     "wbthSource": "38e864cb166fa1bd31510491fc609aa77cc386fceb84c21ac0f9ffd4b5f10119",
-    "assembler": "9a8901219ccca5fa6e72aa51255441b33ed2ff6a8a25277adc8609af3ae0cf7a",
-    "harness": "523f9a9ea2f9e0a35ed0a05c1313c6c7b5bfbdfc7790a8a2308ec4c096cef269",
+    "assembler": "e3b59b3455ef4e5c15775de0af71bf37cc22081000da2d560926882057c3f024",
+    "harness": "e6d73146bf52c703023cb1b846195eb470a95628dba297ba186805f6343c5f77",
     "packageLock": "450daa7936f07127e6664386bc4f5ab84ca60ba405ba3b8a41d7588f4b5e7a07"
   },
   "balances": {
@@ -26,8 +26,8 @@
   "events": [
     {
       "label": "create immutable 2-of-3 multisig",
-      "signature": "4e2Tv4qtrda4FJoXJ2z7dTjhab4KATpwfQbaaCUDCe8TZoVU8VAc7pgyQdzbxNcvTbYHQPPc6uK8mu9GzPmZgXYv",
-      "slot": 2,
+      "signature": "2rBfSTamchSHi57dnW2GtupJeGDTnjs4wWX9BUt4NyU1LDq2CqJoXDjZNSPnkgLKfsRgFt2NYUxkUHoWneZaTGgu",
+      "slot": 3,
       "error": null,
       "logs": [
         "Program ComputeBudget111111111111111111111111111111 invoke [1]",
@@ -42,8 +42,8 @@
     },
     {
       "label": "fund vault rent locally",
-      "signature": "3WjReMLwZMUTSRDRB9YmXRcG3DZ53gZy4HB6G2P1wGzHjs9Hs2LdHcx9Mch6EGshRhfwz8cXe99n7M1owTnQuqPN",
-      "slot": 3,
+      "signature": "3As3MGGpRDUSGH7pQRwSJ3UrxjVZgPQrcaeequss8AweWFRY5CTiWrGcQ2dZGtGRUp4n5cuS7cPKwrnLoXnQPkVc",
+      "slot": 4,
       "error": null,
       "logs": [
         "Program ComputeBudget111111111111111111111111111111 invoke [1]",
@@ -54,8 +54,8 @@
     },
     {
       "label": "initialize wbth with vault authority",
-      "signature": "39uL3HWk7AfLAJVF6qAtSGYPZga4cto4pV23vXBAHFheU8HUbT3GqEXJsEyuZZUsRbceFggcaoUEckzBbLfgLYbG",
-      "slot": 4,
+      "signature": "2fvFfmr1FKcMW63ABL4neeZnMyb4xHzhdBYeNM8D44w5MVoN6NeyPBq6dThkq6bCqVkt1Gi8H2KNPTvh2iZqPKs3",
+      "slot": 5,
       "error": null,
       "logs": [
         "Program ComputeBudget111111111111111111111111111111 invoke [1]",
@@ -78,8 +78,8 @@
     },
     {
       "label": "create destination ATA",
-      "signature": "2P3dAkDmPQPRu9G4Bd5gKADAfwHnfh9bK1qrqcBBAnBxd94m81Sb7dJCeDiJXEvdtPiNyBkL9MLUANnv7hBvWoZz",
-      "slot": 5,
+      "signature": "665CMpBPdGvnXU7ydYgBH57gSRhoN1RGKFfqUKsDme7Eyfxv8TiuWYRUE3cAMWKSetrHjjJbpJqMoBNmeXDeDMaB",
+      "slot": 6,
       "error": null,
       "logs": [
         "Program ComputeBudget111111111111111111111111111111 invoke [1]",
@@ -109,8 +109,8 @@
     },
     {
       "label": "create proposal 1 from Rust bytes",
-      "signature": "37Z79KoQfwcszDiFVHT4RVQ9Q9HprQnAFrpGoFhrFh52PpjfZLGWKrkvTmvKkofB481cCreRuXcyEzLtXzphuUgj",
-      "slot": 6,
+      "signature": "3VVduJphzX6pW7ivM6wfN4N4GdaLSpJDDjiPbWi9VzPw5eKa4i3U3YWyrhctcqDb8TVenag6hurdH43DxBGWozCZ",
+      "slot": 7,
       "error": null,
       "logs": [
         "Program ComputeBudget111111111111111111111111111111 invoke [1]",
@@ -132,8 +132,8 @@
     },
     {
       "label": "nonmember approval",
-      "signature": "y7Q3czehNvwEDTj41wzyWoCXbwaH6aqyiq7xYNXRaufwzcjtr3FVC5Y7sTPA9zfuw8C2CPc83RvY2VSqVKBoEKB",
-      "slot": 7,
+      "signature": "25Emn5hdCXXyKBPGxqATN3oz4KY3JKw5jDgzrbhfksXbs4pySjJkxZ6LHxi4irXJtzJnDCHT1HaMFK8H57UgcYwm",
+      "slot": 8,
       "error": {
         "InstructionError": [
           1,
@@ -154,8 +154,8 @@
     },
     {
       "label": "first distinct approval",
-      "signature": "2e5i5o6RDBskaYr9uxXWVJTKbBtgGaa9E7DuntsKkg3xDmbaSoZWx59Q74Gy6e7xLcRPNs6tJxcJZbvAuYRgdc2R",
-      "slot": 8,
+      "signature": "4gVAAEv4k3FZ9NqiGUeaCojEvYitA1hBZDzgt4YQ9BooQDQux8ArYJvKtPEu5p9jraJewVg5abFRy6JSFh6RsaTN",
+      "slot": 9,
       "error": null,
       "logs": [
         "Program ComputeBudget111111111111111111111111111111 invoke [1]",
@@ -168,8 +168,8 @@
     },
     {
       "label": "one approval cannot execute",
-      "signature": "5D1vXVUgND7tKnNDFWmwhbyfFPQzJLY4sAbskMnPF8afbpbzVu1FWKWnAZoeRydMBEdvZTpP7MTx255WCpRF9BrZ",
-      "slot": 9,
+      "signature": "29BDZZLVqDve4R5ViCCWYxixikvy2ZXxcGGmvRs3Ti19dtTurWkZhCzKGrQpmSiVWdV2fzHWVZfuJpTjK45iFPNg",
+      "slot": 10,
       "error": {
         "InstructionError": [
           1,
@@ -190,8 +190,8 @@
     },
     {
       "label": "same member cannot count twice",
-      "signature": "JhCzetu31zBnPTRMTGsnfYNpeCbp5LiKs5gsFQNt5p4ZRpRadKgjhaCURPqRXbfSo1rRBgHErgBppeW5MU3d8Qo",
-      "slot": 10,
+      "signature": "3hbqTnhugRKkv974FgNzpMs4xSLLmRmFaHjGXdwMPYU68WmhCkNogbiPmop8fJbSsFTunaqkiKTfdua5QHUffHvU",
+      "slot": 11,
       "error": {
         "InstructionError": [
           1,
@@ -212,8 +212,8 @@
     },
     {
       "label": "second distinct approval",
-      "signature": "3zkm44VXqM9uyMLY3ZKRprsfugoV3mLskrimqGXjh4wLBDkQPasstxQyoKLb3jQ2osvYCnutLuiUGt4KayMjmxya",
-      "slot": 11,
+      "signature": "4sBZCBx8EHNbRnAbUnyoKkzTFbRMcpU89NoeMdaCyhLvyNgnpwD3SLNP5cjGzG6vLRTn3bejCGgkcVryDhdsie4Q",
+      "slot": 12,
       "error": null,
       "logs": [
         "Program ComputeBudget111111111111111111111111111111 invoke [1]",
@@ -226,8 +226,8 @@
     },
     {
       "label": "substituted execution account",
-      "signature": "34n6y8kcPwaSBcreszb9MmLeX9vFwgUJjWL22CgHYZ4ofueyYu53UaCjCErN1Jqj3XLvmoe9YAkE9GkQxSGQncj8",
-      "slot": 12,
+      "signature": "5F9pBtjB7afLQuvv6ufbuuStcmtETeXCReZsZ8SN7BUnkuwP3kBLZUdbZ6vL7yEcL1DJ4NDQxRhHZhrKdmG6fWng",
+      "slot": 13,
       "error": {
         "InstructionError": [
           1,
@@ -252,8 +252,8 @@
     },
     {
       "label": "vault invoke_signed bridge_mint",
-      "signature": "42zunK22SyftdxhpW9rDRPQ23HZdGyQ4X4wnx6owRX7YXjwZc2BJkXYaB9ogg1FvUsdkaJTtMkzzKX2UKs2JG9iF",
-      "slot": 13,
+      "signature": "BDUnhqnmA5cnCxMqRNc5HW8AaejAzCyVpNtk5fwStsWHdgBAG8aajeR9zV9FFE5eUKaDUQFbHm8HFkmzmCrLmLf",
+      "slot": 14,
       "error": null,
       "logs": [
         "Program ComputeBudget111111111111111111111111111111 invoke [1]",
@@ -268,7 +268,7 @@
         "Program log: Instruction: MintTo",
         "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA consumed 4538 of 450045 compute units",
         "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA success",
-        "Program data: 5c3Z45TGvA0LUTrZtJJAFcoJAu0HkETTrF2+wjBvBpSMENqOtuOfLQBQOSeMBAAAAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQGHhq9qAAAAAA==",
+        "Program data: 5c3Z45TGvA0LUTrZtJJAFcoJAu0HkETTrF2+wjBvBpSMENqOtuOfLQBQOSeMBAAAAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQFbh69qAAAAAA==",
         "Program log: Minted 5000000000000 wBTH to mBKqcnGotbsSb5vNrdyhzZ5EhqZdids9QYiTRckvi7v (order: 0101010101010101)",
         "Program CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE consumed 41710 of 472549 compute units",
         "Program CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE success",
@@ -278,8 +278,8 @@
     },
     {
       "label": "same proposal cannot execute twice",
-      "signature": "3mVZiao1Ar9i53HciZrEPBYPqzSwFCoohGHdDeiivP8uY4Gmd6PudwWMFf5cXshr7F6yC5XGkcWTBM5DYYpVyRj5",
-      "slot": 14,
+      "signature": "XaSdoczWjxW6FEg9T6MqdSnDHQPbRDnaL1BhLxTVQATMw1PcuQJuAh3Z8GC6XmVkktkf4DZb1s2DPMbemtCaQ3W",
+      "slot": 15,
       "error": {
         "InstructionError": [
           1,
@@ -300,8 +300,8 @@
     },
     {
       "label": "create proposal 2 from Rust bytes",
-      "signature": "S5SfbB2pkcbV9VEk2A2UiJbNVts9P5bmov83tuzyCyENc5PXpGczLHJz378WqMGkSpL8iNwgNSBnxLhz8U4Qt9Z",
-      "slot": 15,
+      "signature": "61gP19zz3FZvBtFPjo5Eq7pY3HeJeJksKmZc9BMVYgFjYLCEB2MZ6DDbrvv6PW7LgafLRHGXNKahEHBt9ww9jvdR",
+      "slot": 16,
       "error": null,
       "logs": [
         "Program ComputeBudget111111111111111111111111111111 invoke [1]",
@@ -323,8 +323,8 @@
     },
     {
       "label": "approve duplicate order with quorum",
-      "signature": "64282f49DE1qq4BkygdmHjRT7Fsvehei76FjMxQ934DAc7Fuh9fvkuF4QdqUiLbSw9RxCRxWi75mGYbZfDKWvND5",
-      "slot": 16,
+      "signature": "4ubpqeVt7WUjwYbTqKqStRDuSDSGsAyoZiW6SHqAYbcSPnBTEToLsUFYJcbx9o43fJt1FDuDrsEN2ryuMUZHFvxo",
+      "slot": 17,
       "error": null,
       "logs": [
         "Program ComputeBudget111111111111111111111111111111 invoke [1]",
@@ -341,8 +341,8 @@
     },
     {
       "label": "fresh proposal cannot mint duplicate order",
-      "signature": "2WPTuBXHgDYFZELECMb1gdjmynutSQ57ZovanzDASXPKTAf3ZTYGaXvYJP51t928SfW1hguSzKSZmEZF59pm9eZm",
-      "slot": 17,
+      "signature": "2m1eaAmTiApfx25pF9YYZREFs6v11TwZ39ZrNJDsBrSDHrXbtQUNRqqSeDSP9bFbP7rQCPSm5cfUWNWGuepPh1pe",
+      "slot": 18,
       "error": {
         "InstructionError": [
           1,
@@ -369,8 +369,8 @@
     },
     {
       "label": "create proposal 3 from Rust bytes",
-      "signature": "4JKZQxt9Kh8TfcWwNi24jRhCMMcR13LYT4MxPbYYSwB97aDVAkp5qwxgC2hLYAGXGVQku83fhWxAQF19gQgZw7Pb",
-      "slot": 18,
+      "signature": "3jcmXQ6AEw93TQT3EAvxbGd9rVWPhCiQrVV43cJKjRFnZwX43K4ELyGdvLHfdCVf7PWgrhCcpvYqLq6jYrh29nMb",
+      "slot": 19,
       "error": null,
       "logs": [
         "Program ComputeBudget111111111111111111111111111111 invoke [1]",
@@ -392,8 +392,8 @@
     },
     {
       "label": "approve wrong-authority payload",
-      "signature": "2uHaPfsVzGCo39DCGd7AoDEbrNRY4uCky9xShy83PuLLoKPLUCHGG5SjXNwuR9fyEG79TQPMxwpM96Az9ZUyYJLc",
-      "slot": 19,
+      "signature": "215txkGUcS7EYqrcvxNNkReaL9eRkARJMJmjkf9QN5xBUvCR9DvjNXUN1fafJFnXokz4efnzoXQZfdCX1DNmeMj8",
+      "slot": 20,
       "error": null,
       "logs": [
         "Program ComputeBudget111111111111111111111111111111 invoke [1]",
@@ -410,8 +410,8 @@
     },
     {
       "label": "quorum cannot bypass wbth authority",
-      "signature": "3D1rG5usnnXniRpCjXztLbYQa3Yi9X7tthvBA3w32HFvStDhF1kAEs1qY7RSbxmZHYfiCWzwqB4SVmiVQkKx7xsL",
-      "slot": 20,
+      "signature": "3MPd1G2DsiPLrUyd4B6ePMHRHgvrzepodLqcs53FNdR5S3E9SNUMkHRgKJE2eejFnMDUyVhd9pAoqqsBZ5rXz32Y",
+      "slot": 21,
       "error": {
         "InstructionError": [
           1,

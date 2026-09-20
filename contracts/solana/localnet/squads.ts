@@ -439,6 +439,20 @@ async function run() {
     ix(first.inner).keys[1].pubkey,
   );
   assert.ok(marker && marker.owner.equals(programId));
+  const decodedMarker: any = program.coder.accounts.decode(
+    "OrderMarker",
+    marker.data,
+  );
+  assert.deepEqual(
+    Buffer.from(decodedMarker.orderId),
+    Buffer.from(first.order, "hex"),
+  );
+  const executedProposal = await squads.accounts.Proposal.fromAccountAddress(
+    connection,
+    squads.getProposalPda({ multisigPda: multisig, transactionIndex: 1n })[0],
+  );
+  assert.equal(executedProposal.status.__kind, "Executed");
+
   assert.equal(
     vaultBefore - (await connection.getBalance(vault)),
     marker.lamports,
@@ -472,6 +486,11 @@ async function run() {
     "quorum cannot bypass wbth authority",
     [ix(wrong.execute)],
     /ConstraintHasOne/,
+  );
+  assert.equal(
+    await connection.getAccountInfo(ix(wrong.inner).keys[1].pubkey),
+    null,
+    "rejected wrong-authority mint must not leave an order marker",
   );
   assert.deepEqual(await balances(), {
     supply: "5000000000000",

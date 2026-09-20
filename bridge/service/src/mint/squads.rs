@@ -914,7 +914,7 @@ mod tests {
             .any(|a| a.pubkey == ctx.member && a.is_signer));
     }
 
-    /// These bytes are executed by contracts/solana/tests/squads-localnet.ts.
+    /// These bytes are executed by contracts/solana/localnet/squads.ts.
     /// Updating them requires re-running the real CPI harness, not just this
     /// test.
     #[test]
