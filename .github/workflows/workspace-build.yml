@@ -27,6 +27,7 @@ on:
       - 'crypto/**'
       - 'web/packages/desktop/**'
       - '.github/workflows/workspace-build.yml'
+      - 'scripts/research/ct-economics/**'
   workflow_dispatch:
 
 env:
@@ -78,6 +79,32 @@ jobs:
       # and links the follow-ups for their missing execution coverage.
       - name: Compile-check all test targets (no run)
         run: cargo test --workspace --no-run
+
+      # Inactive CT1 economics evidence uses the actual node/CLI selectors.
+      # Compile once above, execute with a separate bounded budget; retain every
+      # failed selection/fee affordability denominator and upload raw evidence.
+      - name: Compile scoped CT1 economics and ledger test binaries
+        timeout-minutes: 15
+        run: cargo test --locked -p botho --lib --test ct_economics_simulation --no-run
+
+      - name: Run inactive CT1 economics and ledger adapter checks
+        timeout-minutes: 3
+        run: |
+          CT_ECONOMICS_WRITE_REPORT=1 cargo test --locked -p botho --test ct_economics_simulation -- --nocapture
+          cargo test --locked -p botho --lib ct1_research_ledger_decoy_adapter_parity
+          python3 scripts/research/ct-economics/summarize.py
+
+      - name: Upload CT1 economics evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ct1-economics-${{ github.sha }}
+          path: |
+            scripts/research/ct-economics/results.json
+            scripts/research/ct-economics/summary.json
+            scripts/research/ct-economics/path-c.json
+            scripts/research/ct-economics/web-selection.json
+          if-no-files-found: warn
 
       # The compact-block suite caught serialized-size drift (#1187/#1212), but
       # --no-run never exercised its assertions. It needs no external services

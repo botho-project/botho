@@ -21,12 +21,14 @@ on:
     paths:
       - 'web/**'
       - '.github/workflows/web-ci.yml'
+      - 'scripts/research/ct-economics/**'
   push:
     branches:
       - main
     paths:
       - 'web/**'
       - '.github/workflows/web-ci.yml'
+      - 'scripts/research/ct-economics/**'
   workflow_dispatch:
 
 # Cancel superseded runs on the same ref to keep the queue fast.
