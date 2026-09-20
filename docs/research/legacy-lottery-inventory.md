@@ -24,7 +24,8 @@ responsible for provenance and completeness.
 
 The deterministic report includes the copied data digest, tool source digest,
 checkpoint height/hash, available genesis hash, four table digests and record
-counts. It strictly enumerates `blocks`, `meta`, `utxos` and `key_images` in one
+counts. All metadata entries are enumerated and hashed, but only the required
+height and tip hash receive semantic validation. It strictly enumerates `blocks`, `meta`, `utxos` and `key_images` in one
 read transaction, with errors rather than skipped malformed records. Other
 indexes are not checked or repaired. Existing V1 serializers are used unchanged;
 unsupported block versions fail. Structural identity, adjacent history links,

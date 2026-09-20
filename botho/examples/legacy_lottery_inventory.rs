@@ -250,7 +250,7 @@ fn inventory(source: &Path) -> Result<Value> {
                     );
                 }
             } else {
-                missing.push(json!({"id":hex::encode(id),"nominal_value":p.payout.to_string(),"reason":"payout_missing_from_inventory"}));
+                missing.push(json!({"id":hex::encode(id),"winner":hex::encode(source),"nominal_value":p.payout.to_string(),"reason":"payout_missing_from_inventory"}));
             }
         }
     }
@@ -522,6 +522,10 @@ mod tests {
         let r = inventory(dir.path()).unwrap();
         assert_eq!(r["missing_payout_records"].as_array().unwrap().len(), 1);
         assert_eq!(r["missing_payout_records"][0]["nominal_value"], "10");
+        assert_eq!(
+            r["missing_payout_records"][0]["winner"],
+            hex::encode(b[3].lottery_outputs[0].winner_utxo_id())
+        );
     }
     #[test]
     fn corrupt_records_fail_and_source_remains_unchanged() {
