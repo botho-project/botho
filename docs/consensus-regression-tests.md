@@ -52,15 +52,19 @@ transfer scenarios do not establish mature hybrid lottery payout spendability.
 
 ## Evidence and limits
 
-Local results use the pinned nightly on macOS. The shared compile took 20.40
+Local results use the pinned nightly on macOS. The final shared compile took 22.87
 seconds with a populated compatible cache (not a cold-build benchmark).
 
 | Target | Passed | Ignored | Test-harness seconds |
 | --- | ---: | ---: | ---: |
-| `consensus_cluster_convergence` | 4 | 0 | 18.92 |
+| `consensus_cluster_convergence` | 4 | 0 | 19.13 |
 | `chaos_tests` | 1 | 4 | 3.09 |
-| `load_tests` | 1 | 4 | 3.57 |
-| `e2e_transfer_patterns` after the harness correction | 6 | 0 | 96.83 |
+| `load_tests` | 1 | 4 | 4.45 |
+| `e2e_transfer_patterns` after the harness correction | 6 | 0 | 107.40 |
+
+The final combined command passed all twelve ordinary tests (eight intentional
+ignored cases, zero filtered), taking 157.15 seconds including compilation after
+rebasing onto security fix `a9874f59`.
 
 Linux CI on the final published
 head must pass before this is treated as verified Linux coverage. A green local
