@@ -86,8 +86,9 @@ not automatically refunded. An Approved proposal remains executable even when
 its index becomes stale after a Squads configuration transaction. Neither stale
 indices nor membership changes prove it safe to release backing.
 
-Squads empties transaction payloads after execution and permits closing proposal
-accounts. A late member without a verified pre-execution binding, a closed
+Squads permits closing eligible proposal and transaction accounts. Execution
+moves the transaction payload in memory; the immutable transaction account is
+not serialized by Anchor, so this does not erase its persisted payload. A late member without a verified pre-execution binding, a closed
 proposal, or execution history unavailable in the newest bounded RPC page
 requires historical reconciliation. The engine emits a diagnostic and retains
 backing rather than interpreting absence as failure or minting a replacement.
