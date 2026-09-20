@@ -2,6 +2,7 @@
 
 //! SQLite database for bridge order tracking.
 
+mod solana_history;
 mod solana_intents;
 pub use solana_intents::{SolanaAction, SolanaIntent};
 
@@ -370,6 +371,12 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_audit_order ON audit_log(order_id);
             CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
 
+            CREATE TABLE IF NOT EXISTS solana_history (
+                order_id TEXT PRIMARY KEY,
+                policy TEXT NOT NULL,
+                progress TEXT NOT NULL,
+                revision INTEGER NOT NULL DEFAULT 0
+            );
             CREATE TABLE IF NOT EXISTS solana_mint_intents (
                 order_id TEXT PRIMARY KEY,
                 binding TEXT NOT NULL,

@@ -12,7 +12,7 @@ use tracing_subscriber::FmtSubscriber;
 
 // The module tree lives in the library target (`src/lib.rs`, #897); the
 // binary is a thin wire-up shim over the `#[doc(hidden)]` entry-point facade.
-use bth_bridge_service::bin_support::{BridgeEngine, Database};
+use bth_bridge_service::bin_support::{BridgeEngine, Database, SolMinter};
 
 use bth_bridge_core::BridgeConfig;
 
@@ -28,6 +28,12 @@ struct Args {
     /// Enable verbose logging
     #[arg(short, long)]
     verbose: bool,
+
+    /// Perform one bounded read-only Squads history reconciliation tick for an
+    /// existing order. Repeat to resume its durable cursor; this never
+    /// signs or sends transactions.
+    #[arg(long, conflicts_with = "migrate")]
+    reconcile_solana: Option<uuid::Uuid>,
 
     /// Run database migrations only
     #[arg(long)]
@@ -72,6 +78,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if args.migrate {
         info!("Database migration complete");
+        return Ok(());
+    }
+
+    if let Some(id) = args.reconcile_solana {
+        let order = db.get_order(&id)?.ok_or("unknown bridge order")?;
+        if order.status != bth_bridge_core::OrderStatus::MintPending {
+            return Err("reconciliation requires a MintPending order".into());
+        }
+        let minter = SolMinter::new(config.solana.clone())?.with_store(db.clone());
+        let result = minter.reconcile_squads_history(&order).await?;
+        let diagnostic = db
+            .solana_history(&id)?
+            .and_then(|h| serde_json::from_str::<serde_json::Value>(&h.progress).ok())
+            .and_then(|p| {
+                p.get("diagnostic")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned)
+            });
+        info!(
+            ?result,
+            ?diagnostic,
+            "Read-only Solana history reconciliation tick complete"
+        );
         return Ok(());
     }
 

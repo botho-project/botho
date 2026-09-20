@@ -11,7 +11,7 @@ use crate::{
     solana_rpc::SolanaAccount,
 };
 
-fn invalid(e: impl ToString) -> MintError {
+pub(super) fn invalid(e: impl ToString) -> MintError {
     MintError::Config(e.to_string())
 }
 fn next_index(index: u64) -> Result<u64, MintError> {
@@ -29,12 +29,12 @@ fn pending() -> ConfirmationStatus {
 }
 
 impl SolMinter {
-    fn store(&self) -> Result<&Database, MintError> {
+    pub(super) fn store(&self) -> Result<&Database, MintError> {
         self.store
             .as_ref()
             .ok_or_else(|| invalid("Squads minting requires a durable database"))
     }
-    fn identity(&self) -> Result<(Pubkey, Pubkey, Pubkey), MintError> {
+    pub(super) fn identity(&self) -> Result<(Pubkey, Pubkey, Pubkey), MintError> {
         let c = self
             .config
             .squads
@@ -49,7 +49,7 @@ impl SolMinter {
             .1;
         Ok((multisig, proposer, member))
     }
-    async fn account(
+    pub(super) async fn account(
         &self,
         key: Pubkey,
         commitment: &str,
@@ -153,7 +153,7 @@ impl SolMinter {
         }
         Ok(state)
     }
-    async fn context(
+    pub(super) async fn context(
         &self,
         order: &BridgeOrder,
         index: u64,
@@ -188,7 +188,7 @@ impl SolMinter {
         );
         SquadsMintContext::resolve(multisig, c.vault_index, index, member, inner)
     }
-    fn binding(&self, ctx: &SquadsMintContext) -> String {
+    pub(super) fn binding(&self, ctx: &SquadsMintContext) -> String {
         format!(
             "{}:{}:{}",
             self.program_id.to_base58(),
@@ -205,6 +205,7 @@ impl SolMinter {
         self.store()?
             .claim_solana_intent(&order.id, &self.binding(&ctx), &ctx.multisig.to_base58())
             .map_err(invalid)?;
+        self.pin_history_policy(order, &ctx).await?;
         // Explicit durable asynchronous operation handle, never treated as chain
         // evidence.
         Ok(PreparedMint {
@@ -334,7 +335,16 @@ impl SolMinter {
         }
         // Read-only reconciliation still works after pause or custody-config drift.
         if row.index.is_some() {
-            if let Some(signature) = self.completed(order, &row, &ctx).await? {
+            let completion = self.completed(order, &row, &ctx).await;
+            if completion.is_err()
+                && self
+                    .account(ctx.inner.accounts[1].pubkey, "finalized")
+                    .await?
+                    .is_some()
+            {
+                return self.recover_history(order, &row, &ctx).await;
+            }
+            if let Some(signature) = completion? {
                 let completed = SolanaAction {
                     kind: "completed".into(),
                     signature,
@@ -357,7 +367,7 @@ impl SolMinter {
                 .await?
                 .is_some()
         {
-            return Err(invalid("mint marker predates local verified binding; historical reconciliation required, backing retained"));
+            return self.recover_history(order, &row, &ctx).await;
         }
         let state = self.validate_squads_custody().await?;
         let (_, proposer, member) = self.identity()?;
@@ -601,7 +611,7 @@ impl SolMinter {
     }
 }
 
-fn bound_mint_event(
+pub(super) fn bound_mint_event(
     logs: &[String],
     program: Pubkey,
     user: Pubkey,

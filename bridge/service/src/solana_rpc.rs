@@ -21,6 +21,9 @@
 //! The [`SolanaRpc`] trait abstracts the transport so the mint/watcher logic
 //! is unit-testable against mocked JSON-RPC responses without a live cluster.
 
+pub mod history;
+use history::{HistoricalTransaction, HistorySignature};
+
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -36,7 +39,9 @@ pub const TOKEN_PROGRAM_ID: Pubkey = Pubkey([
 ]);
 
 /// A Solana Ed25519 public key / account address (raw 32 bytes).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct Pubkey(pub [u8; 32]);
 
 impl Pubkey {
@@ -91,7 +96,7 @@ fn is_on_ed25519_curve(bytes: &[u8; 32]) -> bool {
 }
 
 /// One account reference in a compiled instruction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AccountMeta {
     /// The account address.
     pub pubkey: Pubkey,
@@ -137,7 +142,7 @@ impl AccountMeta {
 }
 
 /// A program instruction prior to message compilation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Instruction {
     /// The program that executes this instruction.
     pub program_id: Pubkey,
@@ -381,6 +386,25 @@ pub struct SolanaAccount {
 
 #[async_trait]
 pub trait SolanaRpc: Send + Sync {
+    async fn genesis_hash(&self) -> Result<String, String> {
+        Err("genesis history unsupported".into())
+    }
+    async fn history_page(
+        &self,
+        _address: &str,
+        _before: Option<&str>,
+        _until: Option<&str>,
+        _limit: usize,
+    ) -> Result<Vec<HistorySignature>, String> {
+        Err("finalized history pagination unsupported".into())
+    }
+    async fn historical_transaction(
+        &self,
+        _signature: &str,
+    ) -> Result<Option<HistoricalTransaction>, String> {
+        Err("full historical transaction unsupported".into())
+    }
+
     async fn get_account_info(
         &self,
         _address: &str,
@@ -498,6 +522,42 @@ impl HttpSolanaRpc {
 
 #[async_trait]
 impl SolanaRpc for HttpSolanaRpc {
+    async fn genesis_hash(&self) -> Result<String, String> {
+        let v = self.call("getGenesisHash", json!([])).await?;
+        let hash = v.as_str().ok_or("missing genesis hash")?;
+        Pubkey::from_base58(hash)?;
+        Ok(hash.into())
+    }
+    async fn history_page(
+        &self,
+        address: &str,
+        before: Option<&str>,
+        until: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<HistorySignature>, String> {
+        if !(1..=1000).contains(&limit) {
+            return Err("history page limit out of range".into());
+        }
+        let mut opts = json!({"commitment":"finalized","limit":limit});
+        if let Some(s) = before {
+            opts["before"] = json!(s);
+        }
+        if let Some(s) = until {
+            opts["until"] = json!(s);
+        }
+        history::parse_page(
+            &self
+                .call("getSignaturesForAddress", json!([address, opts]))
+                .await?,
+        )
+    }
+    async fn historical_transaction(
+        &self,
+        signature: &str,
+    ) -> Result<Option<HistoricalTransaction>, String> {
+        history::parse_transaction(&self.call("getTransaction",json!([signature,{"commitment":"finalized","encoding":"json","maxSupportedTransactionVersion":0}])).await?,signature)
+    }
+
     async fn get_account_info(
         &self,
         address: &str,

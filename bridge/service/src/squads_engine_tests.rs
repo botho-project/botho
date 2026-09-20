@@ -23,6 +23,9 @@ struct ControlledRpc {
     inner: HttpSolanaRpc,
     // 1 = accept send then lose response once; 2 = drop all outbound sends.
     send_mode: std::sync::atomic::AtomicU8,
+    send_calls: std::sync::atomic::AtomicUsize,
+    history_null_once: std::sync::atomic::AtomicBool,
+    history_pages: std::sync::atomic::AtomicUsize,
     lost_responses: std::sync::atomic::AtomicUsize,
     signatures: std::sync::Mutex<Vec<String>>,
     accepted_raw: std::sync::Mutex<Vec<Vec<u8>>>,
@@ -33,6 +36,9 @@ impl ControlledRpc {
         Self {
             inner: HttpSolanaRpc::new(url).unwrap(),
             send_mode: 1.into(),
+            send_calls: 0.into(),
+            history_null_once: false.into(),
+            history_pages: 0.into(),
             lost_responses: 0.into(),
             signatures: Default::default(),
             accepted_raw: Default::default(),
@@ -42,6 +48,33 @@ impl ControlledRpc {
 }
 #[async_trait::async_trait]
 impl SolanaRpc for ControlledRpc {
+    async fn genesis_hash(&self) -> Result<String, String> {
+        self.inner.genesis_hash().await
+    }
+    async fn history_page(
+        &self,
+        address: &str,
+        before: Option<&str>,
+        until: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<crate::solana_rpc::history::HistorySignature>, String> {
+        self.history_pages
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.history_page(address, before, until, limit).await
+    }
+    async fn historical_transaction(
+        &self,
+        signature: &str,
+    ) -> Result<Option<crate::solana_rpc::history::HistoricalTransaction>, String> {
+        if self
+            .history_null_once
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(None);
+        }
+        self.inner.historical_transaction(signature).await
+    }
+
     async fn get_account_info(
         &self,
         a: &str,
@@ -68,6 +101,7 @@ impl SolanaRpc for ControlledRpc {
     }
     async fn send_transaction(&self, raw: &[u8]) -> Result<String, String> {
         use std::sync::atomic::Ordering::SeqCst;
+        self.send_calls.fetch_add(1, SeqCst);
         if self.send_mode.load(SeqCst) == 2 {
             return Err("injected outbound packet loss".into());
         }
@@ -469,6 +503,8 @@ async fn squads_engine_localnet() {
         config.solana.mint_signers = (1..=3).map(|i| hex::encode(pk(i).0)).collect();
         config.solana.mint_threshold = 2;
         config.solana.squads = Some(SquadsConfig {
+            history_page_size: 2,
+            history_capacity: 4096,
             multisig: multisig.to_base58(),
             vault_index: 0,
             proposer: pk(1).to_base58(),
@@ -1123,4 +1159,428 @@ async fn squads_engine_localnet() {
     )
     .unwrap();
     println!("ENGINE PASS: independent DBs, real federation attestations, one proposal, 2 votes, pause/restart, exactly-once completion with execution signature");
+}
+
+#[tokio::test]
+#[ignore = "requires explicit pinned local validator driver"]
+async fn squads_history_localnet() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("bth_bridge_service=warn")
+        .with_test_writer()
+        .try_init();
+    let fixture: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            std::env::var("SQUADS_ENGINE_FIXTURE").expect("driver fixture required; no skip"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let url = std::env::var("SQUADS_ENGINE_RPC").expect("local RPC required");
+    assert!(url.starts_with("http://127.0.0.1:"));
+    let rpc = HttpSolanaRpc::new(url.clone()).unwrap();
+    let multisig = Pubkey::from_base58(fixture["multisig"].as_str().unwrap()).unwrap();
+    let mint = fixture["mint"].as_str().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut configs = vec![];
+    for n in [1, 2] {
+        let mut config = BridgeConfig::default();
+        config.solana.rpc_url = url.clone();
+        config.solana.wbth_program = "CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE".into();
+        config.solana.commitment = SolanaCommitment::Finalized;
+        config.solana.mint_signers = (1..=3).map(|i| hex::encode(pk(i).0)).collect();
+        config.solana.mint_threshold = 2;
+        config.solana.squads = Some(SquadsConfig {
+            history_page_size: 2,
+            history_capacity: 4096,
+            multisig: multisig.to_base58(),
+            vault_index: 0,
+            proposer: pk(1).to_base58(),
+        });
+        config.solana.development_direct_mint = false;
+        let path = dir.path().join(format!("member{n}.seed"));
+        std::fs::write(&path, hex::encode(key(n).to_bytes())).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        config.solana.keypair_file = Some(path.to_str().unwrap().into());
+        config.bridge.db_path = dir
+            .path()
+            .join(format!("member{n}.db"))
+            .to_str()
+            .unwrap()
+            .into();
+        config.bridge.attestation_nonce_file = Some(
+            dir.path()
+                .join(format!("nonce{n}.json"))
+                .to_str()
+                .unwrap()
+                .into(),
+        );
+        configs.push(config);
+    }
+
+    use crate::solana_rpc::{AccountMeta, Instruction, SYSTEM_PROGRAM_ID};
+    let mut order = BridgeOrder::new_mint(
+        Chain::Solana,
+        1_000_000_000_000,
+        0,
+        "historical-confirmed-reserve".into(),
+        fixture["recipient"].as_str().unwrap().into(),
+    );
+    order.source_tx = Some("local-history-confirmed-deposit".into());
+    order.set_status(OrderStatus::DepositConfirmed);
+    let db1 = Database::open(&configs[0].bridge.db_path).unwrap();
+    db1.migrate().unwrap();
+    db1.insert_order(&order).unwrap();
+    let db2 = Database::open(&configs[1].bridge.db_path).unwrap();
+    db2.migrate().unwrap();
+    db2.insert_order(&order).unwrap();
+    let p1 = processor(&configs[0], &db1, std::slice::from_ref(&order));
+    let p2 = processor(&configs[1], &db2, std::slice::from_ref(&order));
+    for _ in 0..160 {
+        tick(&p1).await;
+        if let Some(r) = db1.solana_intent(&order.id).unwrap() {
+            if r.verified {
+                break;
+            }
+        }
+    }
+    let index = db1
+        .solana_intent(&order.id)
+        .unwrap()
+        .unwrap()
+        .index
+        .unwrap();
+    let ctx = context(&fixture, &order, index, 1);
+    let before = rpc
+        .get_account_info(&ctx.transaction_pda.to_base58(), "finalized")
+        .await
+        .unwrap()
+        .unwrap()
+        .data;
+    for _ in 0..160 {
+        tick(&p1).await;
+        tick(&p2).await;
+        if db1.get_order(&order.id).unwrap().unwrap().status == OrderStatus::Completed
+            && db2.get_order(&order.id).unwrap().unwrap().status == OrderStatus::Completed
+        {
+            break;
+        }
+    }
+    assert_eq!(
+        db1.get_order(&order.id).unwrap().unwrap().status,
+        OrderStatus::Completed
+    );
+    assert_eq!(
+        db2.get_order(&order.id).unwrap().unwrap().status,
+        OrderStatus::Completed
+    );
+    assert_eq!(
+        rpc.get_account_info(&ctx.transaction_pda.to_base58(), "finalized")
+            .await
+            .unwrap()
+            .unwrap()
+            .data,
+        before
+    );
+    let execution = db1.get_mint_by_order(&order.id).unwrap().unwrap().dest_tx;
+    let supply = rpc.get_token_supply(mint, "finalized").await.unwrap();
+    assert_eq!(supply, order.net_amount() as u128);
+    // A fresh independent member with no pre-execution binding must recover
+    // from history, even while paused after its ordinary claim locks backing.
+    let late_path = dir.path().join("history-late.db");
+    let mut late = Database::open(late_path.to_str().unwrap()).unwrap();
+    late.migrate().unwrap();
+    late.insert_order(&order).unwrap();
+    let latep = processor(&configs[1], &late, std::slice::from_ref(&order));
+    tick(&latep).await;
+    assert!(late
+        .solana_intent(&order.id)
+        .unwrap()
+        .unwrap()
+        .index
+        .is_none());
+    late.set_paused(true, Some("historical read-only recovery"))
+        .unwrap();
+    let backing = late.locked_reserve_total().unwrap();
+    assert_eq!(backing, order.net_amount());
+    let mut minter = SolMinter::new(configs[1].solana.clone())
+        .unwrap()
+        .with_store(late.clone());
+    let mut pending_order = late.get_order(&order.id).unwrap().unwrap();
+    for _ in 0..100 {
+        minter
+            .reconcile_squads_history(&pending_order)
+            .await
+            .unwrap();
+        if late.get_order(&order.id).unwrap().unwrap().status == OrderStatus::Completed {
+            break;
+        }
+    }
+    assert_eq!(
+        late.get_order(&order.id).unwrap().unwrap().status,
+        OrderStatus::Completed,
+        "{:?}",
+        late.solana_history(&order.id).unwrap()
+    );
+    assert_eq!(
+        late.get_mint_by_order(&order.id).unwrap().unwrap().dest_tx,
+        execution
+    );
+    assert_eq!(late.locked_reserve_total().unwrap(), backing);
+    // Close through the actual Squads program (collector fixed at creation).
+    let close = Instruction {
+        program_id: squads::SQUADS_V4_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::readonly(multisig),
+            AccountMeta::writable(ctx.proposal_pda),
+            AccountMeta::writable(ctx.transaction_pda),
+            AccountMeta::writable(pk(1)),
+            AccountMeta::readonly(SYSTEM_PROGRAM_ID),
+        ],
+        data: instruction_tag("vault_transaction_accounts_close"),
+    };
+    let close_sig = send_many(&rpc, 1, vec![close]).await.unwrap();
+    assert!(rpc
+        .get_account_info(&ctx.proposal_pda.to_base58(), "finalized")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(rpc
+        .get_account_info(&ctx.transaction_pda.to_base58(), "finalized")
+        .await
+        .unwrap()
+        .is_none());
+    let marker = ctx.inner.accounts[1].pubkey;
+    let mut spam = vec![];
+    for _ in 0..5 {
+        let mut data = 2u32.to_le_bytes().to_vec();
+        data.extend(1u64.to_le_bytes());
+        spam.push(
+            send_many(
+                &rpc,
+                1,
+                vec![Instruction {
+                    program_id: SYSTEM_PROGRAM_ID,
+                    accounts: vec![
+                        AccountMeta::writable_signer(pk(1)),
+                        AccountMeta::writable(marker),
+                    ],
+                    data,
+                }],
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    // New DB again: no imported journal or pre-execution binding.
+    drop(minter);
+    drop(latep);
+    drop(late);
+    let closed_path = dir.path().join("history-closed.db");
+    late = Database::open(closed_path.to_str().unwrap()).unwrap();
+    late.migrate().unwrap();
+    late.insert_order(&order).unwrap();
+    let closedp = processor(&configs[1], &late, std::slice::from_ref(&order));
+    tick(&closedp).await;
+    drop(closedp);
+    late.set_paused(true, Some("closed-account recovery"))
+        .unwrap();
+    pending_order = late.get_order(&order.id).unwrap().unwrap();
+    // Post-execution real governance does not invalidate earlier execution.
+    advance_stale_index(&rpc, &context(&fixture, &order, index + 1, 1)).await;
+    let history_rpc = Arc::new(ControlledRpc::new(url.clone()));
+    history_rpc
+        .send_mode
+        .store(2, std::sync::atomic::Ordering::SeqCst);
+    history_rpc
+        .history_null_once
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut drifted = configs[1].solana.clone();
+    drifted.mint_threshold = 3;
+    minter = SolMinter::with_parts(drifted.clone(), history_rpc.clone(), Some((key(2), pk(2))))
+        .unwrap()
+        .with_store(late.clone());
+    assert!(minter
+        .reconcile_squads_history(&pending_order)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("unavailable"));
+    let unavailable: serde_json::Value =
+        serde_json::from_str(&late.solana_history(&order.id).unwrap().unwrap().progress).unwrap();
+    assert!(!unavailable["marker"]["queue"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        late.get_order(&order.id).unwrap().unwrap().status,
+        OrderStatus::MintPending
+    );
+    assert_eq!(late.locked_reserve_total().unwrap(), backing);
+    for _ in 0..3 {
+        minter
+            .reconcile_squads_history(&pending_order)
+            .await
+            .unwrap();
+    }
+    let saved = late.solana_history(&order.id).unwrap().unwrap();
+    assert!(saved.progress.contains("before"));
+    drop(minter);
+    drop(late);
+    late = Database::open(closed_path.to_str().unwrap()).unwrap();
+    late.migrate().unwrap();
+    assert_eq!(
+        late.solana_history(&order.id).unwrap().unwrap().progress,
+        saved.progress
+    );
+    minter = SolMinter::with_parts(drifted, history_rpc.clone(), Some((key(2), pk(2))))
+        .unwrap()
+        .with_store(late.clone());
+    for _ in 0..150 {
+        minter
+            .reconcile_squads_history(&pending_order)
+            .await
+            .unwrap();
+        if late.get_order(&order.id).unwrap().unwrap().status == OrderStatus::Completed {
+            break;
+        }
+    }
+    assert_eq!(
+        late.get_order(&order.id).unwrap().unwrap().status,
+        OrderStatus::Completed,
+        "{:?}",
+        late.solana_history(&order.id).unwrap()
+    );
+    assert_eq!(
+        late.get_mint_by_order(&order.id).unwrap().unwrap().dest_tx,
+        execution
+    );
+    assert_eq!(late.locked_reserve_total().unwrap(), backing);
+    for _ in 0..3 {
+        minter
+            .reconcile_squads_history(&pending_order)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        rpc.get_token_supply(mint, "finalized").await.unwrap(),
+        supply
+    );
+    assert_eq!(
+        history_rpc
+            .send_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+    assert!(
+        history_rpc
+            .history_pages
+            .load(std::sync::atomic::Ordering::SeqCst)
+            > 2
+    );
+    // A later mint belongs to an unsupported governance epoch. Its successful
+    // on-chain quorum is real, but deployment policy is not silently universal.
+    let mut newer = order.clone();
+    newer.id = uuid::Uuid::new_v4();
+    newer.source_tx = Some("newer-confirmed-deposit".into());
+    db1.insert_order(&newer).unwrap();
+    db2.insert_order(&newer).unwrap();
+    let newer1 = processor(&configs[0], &db1, std::slice::from_ref(&newer));
+    let newer2 = processor(&configs[1], &db2, std::slice::from_ref(&newer));
+    for _ in 0..160 {
+        tick(&newer1).await;
+        tick(&newer2).await;
+        if db1.get_order(&newer.id).unwrap().unwrap().status == OrderStatus::Completed
+            && db2.get_order(&newer.id).unwrap().unwrap().status == OrderStatus::Completed
+        {
+            break;
+        }
+    }
+    assert_eq!(
+        db1.get_order(&newer.id).unwrap().unwrap().status,
+        OrderStatus::Completed
+    );
+    let epoch = Database::open(dir.path().join("unsupported-epoch.db").to_str().unwrap()).unwrap();
+    epoch.migrate().unwrap();
+    epoch.insert_order(&newer).unwrap();
+    let epochp = processor(&configs[1], &epoch, std::slice::from_ref(&newer));
+    tick(&epochp).await;
+    epoch
+        .set_paused(true, Some("unsupported governance epoch"))
+        .unwrap();
+    let epochminter = SolMinter::new(configs[1].solana.clone())
+        .unwrap()
+        .with_store(epoch.clone());
+    let epochorder = epoch.get_order(&newer.id).unwrap().unwrap();
+    for _ in 0..100 {
+        epochminter
+            .reconcile_squads_history(&epochorder)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        epoch.get_order(&newer.id).unwrap().unwrap().status,
+        OrderStatus::MintPending
+    );
+    assert!(epoch
+        .solana_history(&newer.id)
+        .unwrap()
+        .unwrap()
+        .progress
+        .contains("unsupported historical governance"));
+    assert_eq!(epoch.locked_reserve_total().unwrap(), newer.net_amount());
+    let final_supply = rpc.get_token_supply(mint, "finalized").await.unwrap();
+    assert_eq!(final_supply, supply * 2);
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut hashes = serde_json::Map::new();
+    for path in [
+        "Cargo.lock",
+        "bridge/core/src/config.rs",
+        ".github/workflows/solana-contracts-ci.yml",
+        "bridge/service/src/lib.rs",
+        "bridge/service/src/mint/solana.rs",
+        "bridge/service/src/mint/squads/state.rs",
+        "bridge/service/tests/fixtures/squads-history-transactions.json",
+        "bridge/service/src/db.rs",
+        "bridge/service/src/db/solana_history.rs",
+        "bridge/service/src/db/solana_intents.rs",
+        "bridge/service/src/mint/solana/history.rs",
+        "bridge/service/src/mint/solana/squads_backend.rs",
+        "bridge/service/src/solana_rpc.rs",
+        "bridge/service/src/solana_rpc/history.rs",
+        "bridge/service/src/squads_engine_tests.rs",
+        "bridge/service/src/main.rs",
+        "contracts/solana/localnet/squads.ts",
+        "contracts/solana/localnet/run-squads.sh",
+        "contracts/solana/package-lock.json",
+        "contracts/solana/target/deploy/wbth.so",
+        "contracts/solana/fixtures/squads-v4/squads_multisig_program.so",
+        "contracts/solana/fixtures/squads-v4/idl.json",
+    ] {
+        use sha2::Digest;
+        hashes.insert(
+            path.into(),
+            hex::encode(sha2::Sha256::digest(
+                std::fs::read(root.join(path)).unwrap(),
+            ))
+            .into(),
+        );
+    }
+    let recipient_data = rpc
+        .get_account_data(fixture["ata"].as_str().unwrap(), "finalized")
+        .await
+        .unwrap()
+        .unwrap();
+    let recipient_balance = u64::from_le_bytes(recipient_data[64..72].try_into().unwrap());
+    assert_eq!(u128::from(recipient_balance), final_supply);
+    let evidence = serde_json::json!({"recipient_balance":recipient_balance,"unsupported_epoch_execution":db1.get_mint_by_order(&newer.id).unwrap().unwrap().dest_tx,"unsupported_epoch_progress":epoch.solana_history(&newer.id).unwrap().unwrap().progress,"source_sha256":hashes,"final_supply":final_supply.to_string(),"unsupported_epoch_order":newer.id,"history_rpc_pages":history_rpc.history_pages.load(std::sync::atomic::Ordering::SeqCst),"recovery_send_calls":0,"null_transaction_fault":"one response withheld; durable queue retained then retried","fixture":fixture,"execution":execution,"close":close_sig,"marker_noise":spam,"supply":supply.to_string(),"locked_backing":backing,"progress":late.solana_history(&order.id).unwrap().unwrap().progress});
+    std::fs::write(
+        std::env::var("SQUADS_ENGINE_EVIDENCE").unwrap(),
+        serde_json::to_vec_pretty(&evidence).unwrap(),
+    )
+    .unwrap();
+    println!("HISTORY PASS: retained payload, live and closed accounts, paginated marker history, fresh independent DB, restart, paused read-only completion, unchanged supply/backing");
 }

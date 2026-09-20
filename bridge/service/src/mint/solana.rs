@@ -19,6 +19,7 @@
 //! Direct local-key minting requires the explicit non-federated development
 //! flag. Failed Squads validation never falls back to direct minting.
 
+mod history;
 mod squads_backend;
 
 use async_trait::async_trait;

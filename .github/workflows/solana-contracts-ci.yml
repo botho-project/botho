@@ -218,3 +218,19 @@ jobs:
           name: squads-engine-execution
           path: contracts/solana/engine-execution.json
           if-no-files-found: warn
+
+      - name: Execute closed-account historical recovery integration
+        env:
+          RUSTUP_TOOLCHAIN: nightly-2025-12-03
+          SQUADS_ENGINE_TEST: '1'
+          SQUADS_HISTORY_TEST: '1'
+          SQUADS_ENGINE_EVIDENCE: history-execution.json
+        run: ./localnet/run-squads.sh
+
+      - name: Preserve historical recovery execution evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: squads-history-execution
+          path: contracts/solana/history-execution.json
+          if-no-files-found: warn
