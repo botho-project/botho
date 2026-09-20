@@ -1,0 +1,156 @@
+{
+  "seeds": [
+    1306,
+    577,
+    902,
+    17280
+  ],
+  "draws": 128,
+  "height": 20000,
+  "scenarios": [
+    {
+      "name": "background",
+      "size": 512,
+      "real_age": 100,
+      "real_factor": 1000,
+      "high_percent": 0,
+      "age_pattern": "flat",
+      "reverse": false
+    },
+    {
+      "name": "wealthy",
+      "size": 512,
+      "real_age": 100,
+      "real_factor": 6000,
+      "high_percent": 100,
+      "age_pattern": "flat",
+      "reverse": false
+    },
+    {
+      "name": "mixed-1",
+      "size": 512,
+      "real_age": 100,
+      "real_factor": 1000,
+      "high_percent": 1,
+      "age_pattern": "flat",
+      "reverse": false
+    },
+    {
+      "name": "mixed-10",
+      "size": 512,
+      "real_age": 100,
+      "real_factor": 1000,
+      "high_percent": 10,
+      "age_pattern": "flat",
+      "reverse": false
+    },
+    {
+      "name": "mixed-50",
+      "size": 512,
+      "real_age": 100,
+      "real_factor": 1000,
+      "high_percent": 50,
+      "age_pattern": "flat",
+      "reverse": false
+    },
+    {
+      "name": "high-young-tail",
+      "size": 512,
+      "real_age": 100,
+      "real_factor": 1000,
+      "high_percent": 10,
+      "age_pattern": "high-young",
+      "reverse": false
+    },
+    {
+      "name": "high-old-tail",
+      "size": 512,
+      "real_age": 100,
+      "real_factor": 1000,
+      "high_percent": 10,
+      "age_pattern": "high-old",
+      "reverse": false
+    },
+    {
+      "name": "minimum-age",
+      "size": 512,
+      "real_age": 10,
+      "real_factor": 1000,
+      "high_percent": 10,
+      "age_pattern": "flat",
+      "reverse": false
+    },
+    {
+      "name": "old-input",
+      "size": 512,
+      "real_age": 10000,
+      "real_factor": 1000,
+      "high_percent": 10,
+      "age_pattern": "flat",
+      "reverse": false
+    },
+    {
+      "name": "sparse-age",
+      "size": 512,
+      "real_age": 100,
+      "real_factor": 1000,
+      "high_percent": 10,
+      "age_pattern": "sparse",
+      "reverse": false
+    },
+    {
+      "name": "sparse-factor",
+      "size": 512,
+      "real_age": 100,
+      "real_factor": 6000,
+      "high_percent": 1,
+      "age_pattern": "flat",
+      "reverse": false
+    },
+    {
+      "name": "eighteen-decoys",
+      "size": 18,
+      "real_age": 100,
+      "real_factor": 1000,
+      "high_percent": 50,
+      "age_pattern": "flat",
+      "reverse": false
+    },
+    {
+      "name": "nineteen-decoys",
+      "size": 19,
+      "real_age": 100,
+      "real_factor": 1000,
+      "high_percent": 50,
+      "age_pattern": "flat",
+      "reverse": false
+    },
+    {
+      "name": "rpc-reversed",
+      "size": 512,
+      "real_age": 100,
+      "real_factor": 1000,
+      "high_percent": 10,
+      "age_pattern": "flat",
+      "reverse": true
+    },
+    {
+      "name": "self-hop",
+      "size": 512,
+      "real_age": 10,
+      "real_factor": 6000,
+      "high_percent": 10,
+      "age_pattern": "flat",
+      "reverse": false
+    },
+    {
+      "name": "batch-splits",
+      "size": 512,
+      "real_age": 100,
+      "real_factor": 1000,
+      "high_percent": 50,
+      "age_pattern": "staggered",
+      "reverse": false
+    }
+  ]
+}

@@ -25,6 +25,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/web-ci.yml'
+      - 'scripts/research/ct-economics/**'
   push:
     branches:
       - main
@@ -33,6 +34,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/web-ci.yml'
+      - 'scripts/research/ct-economics/**'
   workflow_dispatch:
 
 # Cancel superseded runs on the same ref to keep the queue fast.

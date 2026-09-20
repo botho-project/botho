@@ -20,11 +20,11 @@ use anyhow::{anyhow, Result};
 use bth_transaction_clsag::{RingMember, TxOutput};
 use bth_transaction_types::ClusterTagVector;
 use bth_util_from_random::OsRng;
-use rand::seq::SliceRandom;
+use rand::{seq::SliceRandom, Rng};
 
 use crate::{
     decoy_selection::{age_similarity_band, MIN_DECOY_AGE_BLOCKS},
-    rpc_pool::{RpcPool, TxOutput as RpcTxOutput},
+    rpc_pool::{BlockOutputs, RpcPool, TxOutput as RpcTxOutput},
 };
 
 /// Parse a 32-byte key from a hex string, returning `None` on malformed input.
@@ -124,9 +124,44 @@ pub async fn fetch_decoy_ring_members(
         .get_outputs(start_height, end_height.saturating_add(1))
         .await?;
 
+    select_rpc_decoy_pool(&blocks, exclude_keys, count, min_age, max_age, &mut OsRng)
+}
+
+/// Apply the live CLI ring pool preparation with an explicit RNG.
+///
+/// The RPC wrapper above supplies the age-bounded response and OsRng. This
+/// small extraction also permits deterministic research replay; it changes
+/// neither filtering, error behavior nor production randomness. It does not
+/// fetch/filter heights itself: callers must provide exactly the requested RPC
+/// window.
+#[doc(hidden)]
+pub fn select_rpc_decoy_pool<R: Rng + ?Sized>(
+    blocks: &[BlockOutputs],
+    exclude_keys: &[[u8; 32]],
+    count: usize,
+    min_age: u64,
+    max_age: u64,
+    rng: &mut R,
+) -> Result<Vec<RingMember>> {
+    sample_prepared_rpc_decoy_pool(
+        prepare_rpc_decoy_pool(blocks, exclude_keys),
+        count,
+        min_age,
+        max_age,
+        rng,
+    )
+}
+
+/// Decode, exclude and deduplicate exactly as the live CLI RPC path does.
+/// No height filter is applied: the RPC request defines the age window.
+#[doc(hidden)]
+pub fn prepare_rpc_decoy_pool(
+    blocks: &[BlockOutputs],
+    exclude_keys: &[[u8; 32]],
+) -> Vec<RingMember> {
     // Flatten to ring members, excluding our own inputs and malformed outputs.
     let mut pool: Vec<RingMember> = Vec::new();
-    for block in &blocks {
+    for block in blocks {
         for out in &block.outputs {
             let member = match rpc_output_to_ring_member(out) {
                 Some(m) => m,
@@ -144,6 +179,18 @@ pub async fn fetch_decoy_ring_members(
     pool.sort_by(|a, b| a.target_key.cmp(&b.target_key));
     pool.dedup_by(|a, b| a.target_key == b.target_key);
 
+    pool
+}
+
+/// Sample a pool prepared by `prepare_rpc_decoy_pool`; production uses OsRng.
+#[doc(hidden)]
+pub fn sample_prepared_rpc_decoy_pool<R: Rng + ?Sized>(
+    mut pool: Vec<RingMember>,
+    count: usize,
+    min_age: u64,
+    max_age: u64,
+    rng: &mut R,
+) -> Result<Vec<RingMember>> {
     if pool.len() < count {
         return Err(anyhow!(
             "Not enough age-similar decoy outputs on-chain to build a ring. \
@@ -157,8 +204,7 @@ pub async fn fetch_decoy_ring_members(
     }
 
     // Shuffle before taking N so ring membership is not a deterministic slice.
-    let mut rng = OsRng;
-    pool.shuffle(&mut rng);
+    pool.shuffle(rng);
     pool.truncate(count);
     Ok(pool)
 }

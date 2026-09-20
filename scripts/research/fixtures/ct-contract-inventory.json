@@ -44,12 +44,13 @@
     },
     {
       "path": "botho/src/ledger/store.rs",
-      "sha256": "68fe49af879d681a79013a0f6028c99d26f032c330d99ff9a9945077ef5feb67",
-      "reviewed_change": "22162c2d22d0c5f11816facad8718f4d7d2c0270: test-only read_txn_for_test explicitly selects heed::WithTls; production CT arithmetic unchanged",
+      "sha256": "656902092d8dfbfa398185338a496e5810b66ded17aa17b6c864e678b4bb4036",
+      "reviewed_change": "22162c2d: test-only heed::WithTls helper; 58cb0345: cfg(test) CT1 ledger/decoy adapter parity fixture; production CT arithmetic unchanged",
       "symbols": [
         "ring_elapsed_quantile(",
         "pub fn ring_centroid_floored_factor("
-      ]
+      ],
+      "reviewed_change": "PR #1291 heed test read transaction type, then #1306 cfg(test) ledger-selector parity fixture only; consensus age/factor functions unchanged. SHA refreshed after source review against main 22162c2d."
     },
     {
       "path": "crypto/ring-signature/src/amount/commitment.rs",
