@@ -79,6 +79,22 @@ jobs:
       - name: Run web + baas-worker tests
         run: pnpm test:run
 
+      # Exercise the real release bundler for both existing desktop targets.
+      # Typechecking and a dev server do not run production target lowering.
+      # BigInt minimum-runtime compatibility remains tracked in #1327; these
+      # are frontend build checks, not execution on the oldest supported OS.
+      - name: Build desktop frontend (Safari 13)
+        timeout-minutes: 5
+        env:
+          TAURI_PLATFORM: macos
+        run: pnpm build:desktop
+
+      - name: Build desktop frontend (Chrome 105)
+        timeout-minutes: 5
+        env:
+          TAURI_PLATFORM: windows
+        run: pnpm build:desktop
+
       # --- MetaMask Snap suite (@metamask/snaps-jest, web/packages/snap) --------
       # These `*.snap.ts` tests are invisible to the root vitest run above, so
       # they need their own step (#1105). The snap bundle inlines the
