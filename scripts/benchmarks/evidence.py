@@ -37,13 +37,13 @@ def manifest(outcomes, files):
     normalized={name:(outcome or 'unknown') for name,outcome in outcomes.items()}
     if any(not isinstance(name,str) or outcome not in OUTCOMES for name,outcome in normalized.items()):
         raise ValueError('invalid step outcome')
-    selected=[v for v in normalized.values() if v!='skipped']
+    selected=[v for name,v in normalized.items() if name!='clear_reports' and v!='skipped']
     estimates=[f for f in files if f['path'].endswith('/new/estimates.json') and f['valid_json']]
     samples=[f for f in files if f['path'].endswith('/new/sample.json') and f['valid_json']]
     pairs={str(Path(f['path']).parent) for f in estimates} & {str(Path(f['path']).parent) for f in samples}
     if not files:
         status='missing_measurements'
-    elif not selected or any(v!='success' for v in selected) or any(not f['valid_json'] for f in files):
+    elif normalized.get('clear_reports') != 'success' or not selected or any(v!='success' for v in selected) or any(not f['valid_json'] for f in files):
         status='partial_or_unsuccessful_measurements'
     elif not pairs or len(pairs) != len(estimates) or len(pairs) != len(samples):
         status='incomplete_criterion_files'
