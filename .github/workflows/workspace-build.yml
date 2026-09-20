@@ -85,7 +85,7 @@ jobs:
       # failed selection/fee affordability denominator and upload raw evidence.
       - name: Compile scoped CT1 economics and ledger test binaries
         timeout-minutes: 15
-        run: cargo test --locked -p botho --lib --test ct_economics_simulation --test ct_economics_marginal --no-run
+        run: cargo test --locked -p botho --lib --test ct_economics_simulation --test ct_economics_marginal --test ct_economics_workload --no-run
 
       - name: Run inactive CT1 economics and ledger adapter checks
         timeout-minutes: 3
@@ -95,6 +95,12 @@ jobs:
           CT_ECONOMICS_WRITE_REPORT=1 cargo test --locked -p botho --test ct_economics_marginal -- --nocapture
           python3 scripts/research/ct-economics/summarize.py
           python3 scripts/research/ct-economics/marginal_summary.py
+
+      - name: Run bounded funded-payment and public-ticket workload
+        timeout-minutes: 3
+        run: |
+          CT_ECONOMICS_WRITE_REPORT=1 cargo test --locked -p botho --test ct_economics_workload -- --nocapture
+          python3 scripts/research/ct-economics/workload_summary.py
 
       - name: Upload CT1 economics evidence
         if: always()
@@ -108,6 +114,8 @@ jobs:
             scripts/research/ct-economics/web-selection.json
             scripts/research/ct-economics/marginal.json
             scripts/research/ct-economics/marginal-summary.json
+            scripts/research/ct-economics/workload-results.json
+            scripts/research/ct-economics/workload-summary.json
           if-no-files-found: warn
 
       # The compact-block suite caught serialized-size drift (#1187/#1212), but
