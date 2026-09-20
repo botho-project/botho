@@ -2,6 +2,9 @@
 
 //! SQLite database for bridge order tracking.
 
+mod solana_intents;
+pub use solana_intents::{SolanaAction, SolanaIntent};
+
 use bth_bridge_core::{BridgeOrder, Chain, MintAuthorization, OrderStatus, OrderType};
 use chrono::{DateTime, TimeZone, Utc};
 use rusqlite::{params, Connection, Result as SqliteResult, TransactionBehavior};
@@ -366,6 +369,17 @@ impl Database {
 
             CREATE INDEX IF NOT EXISTS idx_audit_order ON audit_log(order_id);
             CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
+
+            CREATE TABLE IF NOT EXISTS solana_mint_intents (
+                order_id TEXT PRIMARY KEY,
+                binding TEXT NOT NULL,
+                multisig TEXT NOT NULL,
+                transaction_index INTEGER,
+                verified INTEGER NOT NULL DEFAULT 0,
+                revision INTEGER NOT NULL,
+                action TEXT,
+                UNIQUE(multisig, transaction_index)
+            );
 
             CREATE TABLE IF NOT EXISTS mints (
                 order_id TEXT PRIMARY KEY REFERENCES bridge_orders(id),
@@ -1334,24 +1348,45 @@ impl Database {
         let now = Utc::now().timestamp();
 
         let tx = conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| format!("Transaction failed: {}", e))?;
 
-        tx.execute(
-            "UPDATE mints SET confirmed_at = ?1 WHERE order_id = ?2 AND confirmed_at IS NULL",
-            params![now, order_id.to_string()],
-        )
-        .map_err(|e| format!("Update mints failed: {}", e))?;
-
-        tx.execute(
-            r#"
-            UPDATE bridge_orders
-            SET status = 'completed', dest_confirmed_at = ?1, updated_at = ?1
-            WHERE id = ?2 AND status = 'mint_pending'
-            "#,
-            params![now, order_id.to_string()],
-        )
-        .map_err(|e| format!("Update order failed: {}", e))?;
+        let status: String = tx
+            .query_row(
+                "SELECT status FROM bridge_orders WHERE id=?1",
+                [order_id.to_string()],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if status == "completed" {
+            return Ok(());
+        }
+        if status != "mint_pending" {
+            return Err("mint completion lost its pending-state claim".into());
+        }
+        let execution = if let Some(intent) = Self::read_solana_intent(&tx, order_id)? {
+            let action = intent
+                .action
+                .filter(|a| a.kind == "completed" && intent.verified)
+                .ok_or("Squads completion lacks verified execution evidence")?;
+            Some(action.signature)
+        } else {
+            None
+        };
+        let updated = tx.execute(
+            "UPDATE mints SET confirmed_at=?1, dest_tx=COALESCE(?3,dest_tx) WHERE order_id=?2 AND confirmed_at IS NULL",
+            params![now, order_id.to_string(), execution],
+        ).map_err(|e|e.to_string())?;
+        if updated != 1 {
+            return Err("mint completion missing unconfirmed mint row".into());
+        }
+        let updated = tx.execute(
+            "UPDATE bridge_orders SET status='completed', dest_confirmed_at=?1, updated_at=?1, dest_tx=COALESCE(?3,dest_tx) WHERE id=?2 AND status='mint_pending'",
+            params![now, order_id.to_string(), execution],
+        ).map_err(|e|e.to_string())?;
+        if updated != 1 {
+            return Err("mint completion order CAS failed".into());
+        }
 
         tx.commit().map_err(|e| format!("Commit failed: {}", e))
     }

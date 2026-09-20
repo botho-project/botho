@@ -1,43 +1,25 @@
 // Copyright (c) 2024 The Botho Foundation
 
-//! Solana wBTH minting (Anchor program `wbth`).
+//! Solana wBTH minting through Squads v4 vault-PDA CPI (ADR 0012).
 //!
-//! Per ADR 0002, Solana mint authorizations are signed natively by the
-//! validators' Ed25519 keys — no secp256k1 detour is needed. The on-chain
-//! program (`contracts/solana/programs/wbth`) exposes
-//! `bridge_mint(amount: u64, order_id: [u8; 32])` gated on the `Bridge` PDA
-//! (`seeds = [b"bridge"]`) authority. NOTE: the program currently names the
-//! second argument `bth_tx_hash`; #826 renames it to `order_id` and adds the
-//! duplicate-order guard. The Anchor discriminator is unchanged by that
-//! rename (it hashes the instruction NAME, `bridge_mint`).
+//! Federated configuration verifies domain-separated Ed25519 consent and
+//! requires separately signed on-chain Squads votes. The local key is one
+//! member; it cannot sign for the vault. A durable database journal binds each
+//! order to the complete inner instruction and one canonical proposal index.
+//! Confirmation advances create/approve/execute stages, checks the local pause
+//! before signing or sending, and completes only from a matching wbth event,
+//! order marker and executed proposal. It records the actual execute signature.
 //!
-//! ## Implementation status (#857)
+//! One configured proposer creates proposals; other members independently
+//! discover and approve its exact payload. Proposer processes share SQLite;
+//! different members may use independent stores. Ambiguous or rejected state
+//! retains reserve backing and requires reconciliation. There is no automatic
+//! proposer failover. See `docs/bridge/solana-squads-engine.md`.
 //!
-//! Live-wired: recent-blockhash fetch, `bridge_mint` transaction assembly
-//! (PDA derivations, account metas matching the hardened program #850),
-//! local Ed25519 signing, `sendTransaction` with idempotent re-broadcast,
-//! and `getSignatureStatuses` polling honoring [`SolanaConfig::commitment`].
-//! The RPC transport is a lightweight raw JSON-RPC client
-//! ([`crate::solana_rpc`]); the heavy `solana-sdk`/`solana-client` stack is
-//! deliberately NOT pulled (see that module's docs).
-//!
-//! ## Custody model (ADR 0002)
-//!
-//! The #824 Ed25519 threshold attestation is verified here as the OFF-CHAIN
-//! federation authorization gate (scheme, order-id binding, `t`-of-`n`
-//! threshold): those signatures sign the domain-separated attestation
-//! payload, not the Solana transaction message, so they are the federation's
-//! proof-of-consent rather than native transaction signatures. The
-//! transaction itself is signed by the local mint-authority key
-//! (`solana.keypair_file`), which the program checks equals
-//! `bridge.mint_authority`. In production that authority is an SPL/Squads
-//! multisig whose members are the validators' keys (ADR 0002); the local key
-//! is then the member/relayer that assembles the multisig transaction. This
-//! mirrors the Ethereum side, where a relayer EOA submits the Safe
-//! `execTransaction` carrying the threshold owner signatures. The on-chain
-//! per-order marker PDA (`seeds = [b"order", order_id]`, #850) is the
-//! exactly-once backstop: a duplicate order id fails at `init` regardless of
-//! how many times a transaction is re-broadcast.
+//! Direct local-key minting requires the explicit non-federated development
+//! flag. Failed Squads validation never falls back to direct minting.
+
+mod squads_backend;
 
 use async_trait::async_trait;
 use bth_bridge_core::{
@@ -231,6 +213,7 @@ pub fn mint_authority_is_local_key(mint_authority: &Pubkey, local_signer: &Pubke
 
 /// Solana minting backend. Live-wired per #857 (see module docs).
 pub struct SolMinter {
+    store: Option<crate::db::Database>,
     config: SolanaConfig,
     program_id: Pubkey,
     /// The bridge state PDA (mint authority for the SPL `MintTo`).
@@ -243,8 +226,27 @@ pub struct SolMinter {
 }
 
 impl SolMinter {
+    pub fn with_store(mut self, store: crate::db::Database) -> Self {
+        self.store = Some(store);
+        self
+    }
+
     /// Build a minter from configuration. Does not perform network I/O.
     pub fn new(config: SolanaConfig) -> Result<Self, MintError> {
+        if config.squads.is_some()
+            && (!config.requires_multisig_authority() || config.mint_threshold < 2)
+        {
+            return Err(MintError::Config(
+                "Squads requires a federation threshold of at least two".into(),
+            ));
+        }
+        if config.squads.is_none()
+            && (!config.mint_signers.is_empty() || config.mint_threshold != 0)
+        {
+            return Err(MintError::Config(
+                "federated Solana minting requires explicit Squads configuration".into(),
+            ));
+        }
         if config.wbth_program.is_empty() {
             return Err(MintError::Config(
                 "solana.wbth_program is empty".to_string(),
@@ -277,6 +279,7 @@ impl SolMinter {
         );
 
         Ok(Self {
+            store: None,
             config,
             program_id,
             bridge_pda,
@@ -297,6 +300,7 @@ impl SolMinter {
         let (bridge_pda, _bump) = Pubkey::find_program_address(&[BRIDGE_PDA_SEED], &program_id)
             .ok_or_else(|| MintError::Config("could not derive bridge PDA".to_string()))?;
         Ok(Self {
+            store: None,
             config,
             program_id,
             bridge_pda,
@@ -338,16 +342,15 @@ impl SolMinter {
     /// the `t`-of-`n` threshold lives inside the multisig. In production the
     /// authority must be a distinct SPL/Squads multisig.
     ///
-    /// Behavior:
-    /// - Watch-only mode (no local signer) → nothing to compare, returns `Ok`.
-    /// - RPC/parse failure → non-fatal: the guarded property is a static
-    ///   mis-init, re-checkable next boot, so a transient RPC blip must not
-    ///   wedge startup. Logs a warning and returns `Ok`.
-    /// - Authority == local key → single-key authority detected. In a
-    ///   production posture ([`SolanaConfig::requires_multisig_authority`])
-    ///   this is a HARD error; otherwise a prominent warning.
-    /// - Authority != local key → the safe path, returns `Ok` silently.
+    /// Configured Squads custody performs the full fail-closed metadata,
+    /// authority and membership validation, including on RPC errors. The
+    /// legacy development-only path below warns for unavailable accounts and
+    /// compares local-key equality; it never enables a federated fallback.
     pub async fn verify_mint_authority_is_not_local_key(&self) -> Result<(), MintError> {
+        if self.config.squads.is_some() {
+            self.validate_squads_custody().await?;
+            return Ok(());
+        }
         let local_signer = match self.signer.as_ref().map(|(_, pk)| pk) {
             Some(pk) => pk,
             None => {
@@ -481,6 +484,47 @@ impl Minter for SolMinter {
         // authorization gate (see module docs): validate scheme, order-id
         // binding, and t-of-n threshold before assembling anything.
         validate_solana_attestation(order, auth)?;
+        if self.config.squads.is_some() {
+            if auth.threshold != self.config.mint_threshold
+                || auth
+                    .signatures
+                    .iter()
+                    .any(|sig| !self.config.mint_signers.contains(&hex::encode(&sig.signer)))
+            {
+                return Err(MintError::Attestation(
+                    "Squads authorization threshold/member mismatch".into(),
+                ));
+            }
+            let digest = bth_bridge_core::mint_payload_digest(
+                Chain::Solana,
+                &order.order_id_bytes(),
+                order.net_amount(),
+                &order.dest_address,
+            )
+            .map_err(MintError::Attestation)?;
+            for signature in &auth.signatures {
+                let key: [u8; 32] = signature
+                    .signer
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| MintError::Attestation("invalid signer".into()))?;
+                let key = ed25519_dalek::VerifyingKey::from_bytes(&key)
+                    .map_err(|e| MintError::Attestation(e.to_string()))?;
+                let sig = ed25519_dalek::Signature::from_slice(&signature.signature)
+                    .map_err(|e| MintError::Attestation(e.to_string()))?;
+                key.verify_strict(&digest, &sig)
+                    .map_err(|e| MintError::Attestation(e.to_string()))?;
+            }
+            return self.prepare_squads(order).await;
+        }
+        if !self.config.development_direct_mint
+            || !self.config.mint_signers.is_empty()
+            || self.config.mint_threshold != 0
+        {
+            return Err(MintError::Config(
+                "direct minting requires explicit non-federated development mode".into(),
+            ));
+        }
 
         let (signing_key, mint_authority) = self.signer.as_ref().ok_or_else(|| {
             MintError::Config(
@@ -555,6 +599,13 @@ impl Minter for SolMinter {
     }
 
     async fn broadcast(&self, prepared: &PreparedMint) -> Result<(), MintError> {
+        if self.config.squads.is_some() {
+            if !prepared.raw.is_empty() || !prepared.tx_id.starts_with("squads:") {
+                return Err(MintError::Config("invalid Squads intent handle".into()));
+            }
+            return Ok(()); // The durable intent advances during confirmation,
+                           // under the kill switch.
+        }
         match self.rpc.send_transaction(&prepared.raw).await {
             Ok(sig) => {
                 debug!("broadcast Solana tx {}", sig);
@@ -576,9 +627,12 @@ impl Minter for SolMinter {
 
     async fn check_confirmation(
         &self,
-        _order: &BridgeOrder,
+        order: &BridgeOrder,
         dest_tx: &str,
     ) -> Result<ConfirmationStatus, MintError> {
+        if self.config.squads.is_some() {
+            return self.advance_squads(order).await;
+        }
         let state = self
             .rpc
             .get_signature_status(dest_tx)
@@ -932,6 +986,8 @@ mod tests {
             enforce_key_permissions: false,
             commitment: SolanaCommitment::Finalized,
             mint_signers: Vec::new(),
+            squads: None,
+            development_direct_mint: true,
             mint_threshold: 0,
         }
     }
@@ -1272,5 +1328,18 @@ mod tests {
             .verify_mint_authority_is_not_local_key()
             .await
             .is_ok());
+    }
+    #[test]
+    fn federated_configuration_cannot_select_direct_mode() {
+        let mut config = test_config();
+        config.development_direct_mint = true;
+        config.mint_signers = vec![hex::encode([1u8; 32])];
+        config.mint_threshold = 0;
+        assert!(SolMinter::new(config.clone()).is_err());
+        config.mint_signers.clear();
+        config.mint_threshold = 2;
+        assert!(SolMinter::new(config.clone()).is_err());
+        config.mint_signers = vec![hex::encode([1u8; 32])];
+        assert!(SolMinter::new(config).is_err());
     }
 }

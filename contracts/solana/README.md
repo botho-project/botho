@@ -153,14 +153,13 @@ Once filled, also update the per-deployment table above (replace the Devnet
 authority is a **distinct multisig**, not the relayer key and not the admin
 authority, before flipping `BRIDGE_SOLANA_FEDERATION=1` in the #868 drill.
 
-> **Guard-pass ≠ mint-complete (path-1 vs. path-2, per #1052).** Rotating
-> `mint_authority` to a Squads PDA makes the startup guard *pass* (PDA ≠ local
-> key) and lets the federation leg **boot** (path 2), but it does **not** let a
-> federated mint **complete**: `bridge_mint` takes `mint_authority` as a
-> transaction `Signer`, and a PDA can only sign via a Squads `invoke_signed`
-> CPI — which `prepare_mint` (`bridge/service/src/mint/solana.rs`) does not yet
-> assemble. Completing an end-to-end federated devnet mint (path 1) requires that
-> Squads-gated mint-assembly code, tracked as a separate issue.
+The federated engine now assembles and executes the Squads vault CPI path.
+Configure the multisig identity and canonical proposer, and preserve the durable
+proposal journal as described in the [Squads engine runbook](../../docs/bridge/solana-squads-engine.md).
+A distinct authority address alone is insufficient: the engine verifies owner,
+PDA, membership, threshold, vault authority and the exact proposal payload.
+Live custody rotation and the devnet federation drill remain separate operator
+work; the local harness does not perform them.
 
 ### Replay-proof, order-bound minting
 

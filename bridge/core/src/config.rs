@@ -438,6 +438,22 @@ pub struct SolanaConfig {
     /// is non-empty.
     #[serde(default)]
     pub mint_threshold: u32,
+
+    #[serde(default)]
+    pub squads: Option<SquadsConfig>,
+
+    /// Explicit opt-in for non-federated direct-key local/test deployments.
+    #[serde(default)]
+    pub development_direct_mint: bool,
+}
+
+/// Squads custody identity. Only this member creates new proposals; all other
+/// members independently validate and approve that canonical proposal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SquadsConfig {
+    pub multisig: String,
+    pub vault_index: u8,
+    pub proposer: String,
 }
 
 impl SolanaConfig {
@@ -659,6 +675,8 @@ impl Default for BridgeConfig {
                 enforce_key_permissions: false,
                 commitment: SolanaCommitment::default(),
                 mint_signers: Vec::new(),
+                squads: None,
+                development_direct_mint: false,
                 mint_threshold: 0,
             },
             bridge: BridgeSettings {

@@ -550,6 +550,8 @@ mod tests {
             enforce_key_permissions: false,
             commitment: SolanaCommitment::Finalized,
             mint_signers: Vec::new(),
+            squads: None,
+            development_direct_mint: true,
             mint_threshold: 0,
         };
         let (_tx, rx) = broadcast::channel(1);

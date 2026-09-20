@@ -1138,6 +1138,13 @@ mod tests {
         eth.set(900);
         db.update_order_status(&order.id, &OrderStatus::MintPending, Some("0xtx"))
             .unwrap();
+        db.record_mint_submitted(
+            &order.id,
+            &hex::encode(order.order_id_bytes()),
+            Chain::Ethereum,
+            "0xtx",
+        )
+        .unwrap();
         db.mark_mint_confirmed(&order.id).unwrap();
         let proof = reconciler.reconcile_once().await.unwrap();
         assert_eq!(proof.drift, 0);

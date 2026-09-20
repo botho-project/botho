@@ -1,5 +1,14 @@
 # ADR 0012: Solana wBTH Mint Execution — Squads-PDA `invoke_signed`, Assembly-Only
 
+> Implementation update (#1267/#1268): the real pinned-program CPI harness and
+> durable SolMinter/OrderProcessor integration now implement this decision.
+> The original assembly-only rollout below is historical. See the
+> [engine runbook](../bridge/solana-squads-engine.md) for the canonical single
+> proposer, independent member databases, pause semantics and conservative
+> recovery holds. An Approved stale proposal can still execute; stale state
+> never authorizes automatic reserve release.
+
+
 **Status**: Accepted (addendum to [ADR 0002](0002-bridge-custody-scp-validator-federation.md); custody-identity model per [ADR 0010](0010-elected-bridge-multisig.md))
 **Date**: 2026-07-20
 **Decision Makers**: Core Team

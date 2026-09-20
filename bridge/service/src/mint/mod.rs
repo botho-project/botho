@@ -61,13 +61,16 @@ impl std::fmt::Display for MintError {
 
 impl std::error::Error for MintError {}
 
-/// A fully signed, ready-to-broadcast mint transaction.
+/// A prepared mint: signed transaction bytes, or a durable Squads operation
+/// handle.
 #[derive(Debug, Clone)]
 pub struct PreparedMint {
     /// Destination-chain transaction id (0x-prefixed hash on Ethereum,
-    /// base58 signature on Solana). Known before broadcast.
+    /// base58 signature on direct Solana). Squads uses `squads:<order UUID>`
+    /// until confirmation atomically records the actual execution signature.
     pub tx_id: String,
-    /// The exact signed bytes to (re)broadcast.
+    /// The exact signed bytes to (re)broadcast; empty for a durable Squads
+    /// handle.
     pub raw: Vec<u8>,
 }
 

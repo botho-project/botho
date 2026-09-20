@@ -37,3 +37,23 @@ The protected Squads program-config initializer is not exercised: matching
 config state is supplied at local genesis, with owner/discriminator/fields
 asserted before multisig creation. This record proves Tier-2 interoperability,
 not deferred bridge-engine integration or production readiness.
+
+## Engine integration result (#1268)
+
+`engine-2026-09-20.json` adds a separate fresh-ledger execution through actual
+Rust `OrderProcessor`/`SolMinter`, real federation attestations and independent
+file-backed member databases. The final run passed in 71.06 seconds and
+preserves 13 finalized successful transaction logs plus 17 exact
+source/program/IDL/lockfile hashes. Negative vote/execute submissions
+are checked against real RPC preflight rejection; metadata/packet-loss fault
+injection is distinguished from successful on-chain execution in the harness.
+
+The final supply and recipient balance remain 5,000,000,000,000. Only the first
+order completes. Rejected, competing and ambiguous orders retain backing. The
+record covers paused quorum/restart, actual expired blockhash refresh, accepted
+send with dropped response, shared-index contention, real stale Approved
+execution, strict custody rejection and read-only recovery with config drift.
+Late discovery without the original verified binding deliberately remains a
+recovery hold. See the [engine runbook](../../../../../docs/bridge/solana-squads-engine.md)
+for limits and the explicit command. The original Tier-2 record above is kept
+as historical evidence; its source hashes identify that earlier revision.
