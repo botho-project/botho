@@ -115,8 +115,19 @@ jobs:
       # `contracts/solana/package-lock.json` is committed (#1014), so use
       # `npm ci` for a deterministic, lockfile-pinned install that never
       # rewrites the lock (parity with contracts-ci.yml, #861/#1016).
+      - name: Verify runtime-only JS codecs
+        run: |
+          npm ci --omit=dev
+          npm run test:tooling
+
       - name: Install JS dependencies
         run: npm ci
+
+      - name: Verify JS dependency compatibility and advisories
+        run: |
+          npm run test:tooling
+          npm audit --audit-level=moderate
+          git diff --exit-code -- package-lock.json
 
       # `anchor test` uses ~/.config/solana/id.json as the provider wallet
       # (Anchor.toml [provider].wallet) and funds it from the spawned validator.

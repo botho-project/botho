@@ -1,0 +1,177 @@
+{
+  "source": "bigint-buffer@1.1.5; captured before replacement, native and browser outputs compared",
+  "sourceSha256": {
+    "dist/node.js": "6882e3d44987bbb7c47580928fd5e3be126bdae26a448f8a31228cf879a85210",
+    "dist/browser.js": "52233e36e5a854477a3f43f255e68474a9e4e46f51107d53320ad38ee5dff47c"
+  },
+  "vectors": [
+    {
+      "width": 1,
+      "decimal": "0",
+      "le": "00",
+      "be": "00"
+    },
+    {
+      "width": 1,
+      "decimal": "1",
+      "le": "01",
+      "be": "01"
+    },
+    {
+      "width": 1,
+      "decimal": "255",
+      "le": "ff",
+      "be": "ff"
+    },
+    {
+      "width": 1,
+      "decimal": "227",
+      "le": "e3",
+      "be": "e3"
+    },
+    {
+      "width": 2,
+      "decimal": "0",
+      "le": "0000",
+      "be": "0000"
+    },
+    {
+      "width": 2,
+      "decimal": "1",
+      "le": "0100",
+      "be": "0001"
+    },
+    {
+      "width": 2,
+      "decimal": "65535",
+      "le": "ffff",
+      "be": "ffff"
+    },
+    {
+      "width": 2,
+      "decimal": "60657",
+      "le": "f1ec",
+      "be": "ecf1"
+    },
+    {
+      "width": 4,
+      "decimal": "0",
+      "le": "00000000",
+      "be": "00000000"
+    },
+    {
+      "width": 4,
+      "decimal": "1",
+      "le": "01000000",
+      "be": "00000001"
+    },
+    {
+      "width": 4,
+      "decimal": "4294967295",
+      "le": "ffffffff",
+      "be": "ffffffff"
+    },
+    {
+      "width": 4,
+      "decimal": "3610781308",
+      "le": "7c2638d7",
+      "be": "d738267c"
+    },
+    {
+      "width": 8,
+      "decimal": "0",
+      "le": "0000000000000000",
+      "be": "0000000000000000"
+    },
+    {
+      "width": 8,
+      "decimal": "1",
+      "le": "0100000000000000",
+      "be": "0000000000000001"
+    },
+    {
+      "width": 8,
+      "decimal": "18446744073709551615",
+      "le": "ffffffffffffffff",
+      "be": "ffffffffffffffff"
+    },
+    {
+      "width": 8,
+      "decimal": "12999013676126955115",
+      "le": "6be6fd1311c665b4",
+      "be": "b465c61113fde66b"
+    },
+    {
+      "width": 16,
+      "decimal": "0",
+      "le": "00000000000000000000000000000000",
+      "be": "00000000000000000000000000000000"
+    },
+    {
+      "width": 16,
+      "decimal": "1",
+      "le": "01000000000000000000000000000000",
+      "be": "00000000000000000000000000000001"
+    },
+    {
+      "width": 16,
+      "decimal": "340282366920938463463374607431768211455",
+      "le": "ffffffffffffffffffffffffffffffff",
+      "be": "ffffffffffffffffffffffffffffffff"
+    },
+    {
+      "width": 16,
+      "decimal": "213872922015145114737548577962584425493",
+      "le": "15c4977246345e4e70a761cf2d6de6a0",
+      "be": "a0e66d2dcf61a7704e5e34467297c415"
+    },
+    {
+      "width": 24,
+      "decimal": "0",
+      "le": "000000000000000000000000000000000000000000000000",
+      "be": "000000000000000000000000000000000000000000000000"
+    },
+    {
+      "width": 24,
+      "decimal": "1",
+      "le": "010000000000000000000000000000000000000000000000",
+      "be": "000000000000000000000000000000000000000000000001"
+    },
+    {
+      "width": 24,
+      "decimal": "6277101735386680763835789423207666416102355444464034512895",
+      "le": "ffffffffffffffffffffffffffffffffffffffffffffffff",
+      "be": "ffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "width": 24,
+      "decimal": "434809541586560412938987612604787418980624046820356970625",
+      "le": "81d8a679818cf94472864b27332cd75617cb602e999fbb11",
+      "be": "11bb9f992e60cb1756d72c33274b867244f98c8179a6d881"
+    },
+    {
+      "width": 32,
+      "decimal": "0",
+      "le": "0000000000000000000000000000000000000000000000000000000000000000",
+      "be": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "width": 32,
+      "decimal": "1",
+      "le": "0100000000000000000000000000000000000000000000000000000000000000",
+      "be": "0000000000000000000000000000000000000000000000000000000000000001"
+    },
+    {
+      "width": 32,
+      "decimal": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+      "le": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "be": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    {
+      "width": 32,
+      "decimal": "84657462443523132625947696302514904759099917747699032976025014643256316666125",
+      "le": "0d21e03defd1d3621557770fa55c76ccc06976c06667459793fb96f8fb6c2abb",
+      "be": "bb2a6cfbf896fb9397456766c07669c0cc765ca50f77571562d3d1ef3de0210d"
+    }
+  ]
+}
