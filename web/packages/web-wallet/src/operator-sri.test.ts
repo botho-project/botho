@@ -108,3 +108,29 @@ describe('operator entry Subresource Integrity', () => {
     expect(html).not.toMatch(/\bintegrity\s*=/i)
   })
 })
+
+// A local asset omitted by another build hook must fail the build, rather than
+// silently publishing an unpinned operator dependency.
+it('rejects an unresolved same-origin operator asset', async () => {
+  const dist = mkdtempSync(path.join(tmpdir(), 'operator-sri-missing-'))
+  try {
+    await expect(build({
+      root: PKG_ROOT,
+      logLevel: 'silent',
+      build: { outDir: dist, emptyOutDir: true, sourcemap: false },
+      plugins: [{
+        name: 'test-missing-operator-asset',
+        enforce: 'post',
+        generateBundle(_options, bundle) {
+          const html = bundle['operator.html']
+          if (html?.type !== 'asset') throw new Error('operator entry missing')
+          html.source = String(html.source).replace(
+            '</head>', '<link rel="modulepreload" href="/assets/missing-sri.js"></head>',
+          )
+        },
+      }],
+    })).rejects.toThrow('Operator SRI cannot resolve local asset: /assets/missing-sri.js')
+  } finally {
+    rmSync(dist, { recursive: true, force: true })
+  }
+}, 120_000)

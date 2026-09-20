@@ -4,7 +4,7 @@ import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
 import { createHash } from 'node:crypto'
-import { cpSync, existsSync, readFileSync } from 'node:fs'
+import { cpSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 // Target for the same-origin `/rpc` proxy. Defaults to the live seed node for
@@ -91,16 +91,12 @@ const SRI_ENTRY_HTML = new Set(['operator.html'])
  * `<script src>` and `<link rel="stylesheet" href>` tags of the operator entry's
  * emitted HTML document (#772, §8.3.1 option (a)).
  *
- * Runs in Rollup's `generateBundle` (build only), after the entry's chunks and
- * CSS have been emitted, so every referenced asset is present in the bundle and
- * its final (hashed) filename is known. For each same-origin, root-relative
- * asset reference in a targeted HTML file we compute the sha384 of the emitted
- * asset's exact bytes and rewrite the tag to pin it. A tampered chunk on the
- * host then fails the browser's integrity check and is never executed — no
- * operator action required.
- *
- * Modeled on the post-build file-manipulation pattern `wasmSignerPkgPlugin`
- * already uses in this file; hand-rolled (no new dependency) for one hash fn.
+ * Runs in a final sequential `writeBundle` hook and hashes the bytes actually
+ * written to disk. Vite 8/Rolldown can finalize chunk code after generateBundle
+ * hooks; hashing the earlier bundle object can pin stale bytes. The operator
+ * document is excluded from PWA precaching, and the main SPA stays unpinned.
+ * This plugin applies to written builds (including custom outDir), not
+ * in-memory build({ write: false }) results.
  */
 function sriHashPlugin(): Plugin {
   const sri = (bytes: string | Uint8Array): string =>
@@ -110,67 +106,61 @@ function sriHashPlugin(): Plugin {
     name: 'botho-operator-sri',
     apply: 'build',
     enforce: 'post',
-    generateBundle(_options, bundle) {
-      // Index emitted assets/chunks by their root-absolute path (`/assets/x.js`)
-      // so we can resolve an HTML `src`/`href` to the emitted bytes.
-      const byPath = new Map<string, string | Uint8Array>()
-      for (const [fileName, output] of Object.entries(bundle)) {
-        const bytes =
-          output.type === 'chunk'
-            ? output.code
-            : typeof output.source === 'string'
-              ? output.source
-              : output.source
-        byPath.set('/' + fileName, bytes)
-      }
+    writeBundle: {
+      order: 'post',
+      sequential: true,
+      handler(options, bundle) {
+        if (!options.dir) this.error('Operator SRI requires an output directory')
+        const outDir = path.resolve(options.dir)
+        for (const fileName of Object.keys(bundle)) {
+          if (!SRI_ENTRY_HTML.has(fileName)) continue
+          const htmlPath = path.join(outDir, fileName)
+          const html = readFileSync(htmlPath, 'utf8')
 
-      for (const [fileName, output] of Object.entries(bundle)) {
-        if (output.type !== 'asset') continue
-        if (!SRI_ENTRY_HTML.has(fileName)) continue
-        const html =
-          typeof output.source === 'string'
-            ? output.source
-            : Buffer.from(output.source).toString('utf8')
+          // Rewrite <script src="…">, <link rel="stylesheet" href="…"> and
+          // <link rel="modulepreload" href="…">, adding integrity (+ crossorigin
+          // where absent) for each root-relative asset we can resolve. The browser
+          // enforces integrity on all three, including modulepreloaded chunks the
+          // operator entry statically imports (e.g. the shared framework chunk).
+          const rewritten = html.replace(
+            /<(script|link)\b[^>]*>/gi,
+            (tag: string) => {
+              const isScript = /^<script/i.test(tag)
+              const isStyle =
+                /^<link/i.test(tag) && /rel\s*=\s*["']stylesheet["']/i.test(tag)
+              const isModulePreload =
+                /^<link/i.test(tag) && /rel\s*=\s*["']modulepreload["']/i.test(tag)
+              if (!isScript && !isStyle && !isModulePreload) return tag
 
-        // Rewrite <script src="…">, <link rel="stylesheet" href="…"> and
-        // <link rel="modulepreload" href="…">, adding integrity (+ crossorigin
-        // where absent) for each root-relative asset we can resolve. The browser
-        // enforces integrity on all three, including modulepreloaded chunks the
-        // operator entry statically imports (e.g. the shared framework chunk).
-        const rewritten = html.replace(
-          /<(script|link)\b[^>]*>/gi,
-          (tag: string) => {
-            const isScript = /^<script/i.test(tag)
-            const isStyle =
-              /^<link/i.test(tag) && /rel\s*=\s*["']stylesheet["']/i.test(tag)
-            const isModulePreload =
-              /^<link/i.test(tag) && /rel\s*=\s*["']modulepreload["']/i.test(tag)
-            if (!isScript && !isStyle && !isModulePreload) return tag
-            if (/\bintegrity\s*=/i.test(tag)) return tag // already pinned
+              const attr = isScript ? 'src' : 'href'
+              const m = tag.match(new RegExp(`\\b${attr}\\s*=\\s*["']([^"']+)["']`, 'i'))
+              if (!m) return tag
+              const ref = m[1]
+              if (!ref.startsWith('/') || ref.startsWith('//')) return tag
+              const assetName = ref.slice(1)
+              if (!Object.hasOwn(bundle, assetName)) {
+                this.error(`Operator SRI cannot resolve local asset: ${ref}`)
+              }
+              const bytes = readFileSync(path.join(outDir, assetName))
+              // Recompute any existing pin too; never preserve a stale local hash.
+              tag = tag.replace(/\s+integrity\s*=\s*["'][^"']*["']/gi, '')
+              const integrity = sri(bytes)
+              const closeIdx = tag.lastIndexOf('>')
+              const selfClosing = tag[closeIdx - 1] === '/'
+              const insertAt = selfClosing ? closeIdx - 1 : closeIdx
+              // Vite already emits a bare `crossorigin` on its own tags; only add
+              // one when the tag lacks it, to avoid a duplicate attribute.
+              const needsCrossorigin = !/\bcrossorigin\b/i.test(tag)
+              const injected =
+                ` integrity="${integrity}"` +
+                (needsCrossorigin ? ' crossorigin="anonymous"' : '')
+              return tag.slice(0, insertAt) + injected + tag.slice(insertAt)
+            },
+          )
 
-            const attr = isScript ? 'src' : 'href'
-            const m = tag.match(new RegExp(`\\b${attr}\\s*=\\s*["']([^"']+)["']`, 'i'))
-            if (!m) return tag
-            const ref = m[1]
-            const bytes = byPath.get(ref)
-            if (bytes === undefined) return tag // external / unresolved — skip
-
-            const integrity = sri(bytes)
-            const closeIdx = tag.lastIndexOf('>')
-            const selfClosing = tag[closeIdx - 1] === '/'
-            const insertAt = selfClosing ? closeIdx - 1 : closeIdx
-            // Vite already emits a bare `crossorigin` on its own tags; only add
-            // one when the tag lacks it, to avoid a duplicate attribute.
-            const needsCrossorigin = !/\bcrossorigin\b/i.test(tag)
-            const injected =
-              ` integrity="${integrity}"` +
-              (needsCrossorigin ? ' crossorigin="anonymous"' : '')
-            return tag.slice(0, insertAt) + injected + tag.slice(insertAt)
-          },
-        )
-
-        output.source = rewritten
-      }
+          writeFileSync(htmlPath, rewritten)
+        }
+      },
     },
   }
 }
