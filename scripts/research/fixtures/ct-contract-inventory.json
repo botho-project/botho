@@ -1,0 +1,98 @@
+{
+  "production_base": "51476fda",
+  "semantics": "SHA/symbol consistency only, not proof of equivalence",
+  "production": [
+    {
+      "path": "cluster-tax/src/demurrage.rs",
+      "sha256": "ecc44061e1c82b19b49c9e6c2a05329168ae3a4877eeba0bda438a3e3cc63f34",
+      "symbols": [
+        "pub fn demurrage_charge(",
+        "pub fn capitalized_reset_charge(",
+        "pub fn ring_elapsed_quantile("
+      ]
+    },
+    {
+      "path": "cluster-tax/src/fee_curve.rs",
+      "sha256": "d8b649fac7999cb175a23e13b10f167c742b00584452e844ee25452d492591b8",
+      "symbols": [
+        "pub fn factor(",
+        "const fn log2_fp(",
+        "fn lut_sigmoid("
+      ]
+    },
+    {
+      "path": "cluster-tax/src/tag.rs",
+      "sha256": "8efe5ba3c50cf0b683fcec2ac4ef1f1cb9086bd7cff31f9907443c7d39ae078c",
+      "symbols": [
+        "pub fn mix(",
+        "pub const MAX_TAGS:"
+      ]
+    },
+    {
+      "path": "cluster-tax/src/monetary.rs",
+      "sha256": "b80cff28f1d4f4c07cb4717536e1f883e7b5cbe5731fa2b93813bc11aad60ea7",
+      "symbols": [
+        "pub fn demurrage_rate_bps("
+      ]
+    },
+    {
+      "path": "cluster-tax/src/simulation/provenance_factor_sweep.rs",
+      "sha256": "8a92538e6a9988b95ab15b6d9bab03192882b6201ca17b79cee5340f4b1aff96",
+      "symbols": [
+        "pub fn epoch_origin_factor("
+      ]
+    },
+    {
+      "path": "botho/src/ledger/store.rs",
+      "sha256": "dd5a5978e26b95d4b40ff85355c7edf46595c944dca1e4db37ec6115106b19db",
+      "symbols": [
+        "ring_elapsed_quantile(",
+        "pub fn ring_centroid_floored_factor("
+      ]
+    },
+    {
+      "path": "crypto/ring-signature/src/amount/commitment.rs",
+      "sha256": "03285e810af06c9ff38fe2c12c2108d2c5f00e162ac29dd49c45cf4d353b441a",
+      "symbols": [
+        "pub fn new(value: u64"
+      ]
+    },
+    {
+      "path": "crypto/ring-signature/src/ring_signature/mod.rs",
+      "sha256": "b6e969e943eaa52f5906c932da740fc2d27487d4e521b3def17f126c96f5d1dd",
+      "symbols": [
+        "pub fn generators(",
+        "pub const B_BLINDING:"
+      ]
+    },
+    {
+      "path": "transaction/types/src/constants.rs",
+      "sha256": "0c70f1abdacca7ce5f48433bc9ec8b081b5b84e46a9af5897f7b244c5f85fe34",
+      "symbols": [
+        "pub const MAX_INPUTS:",
+        "pub const MAX_OUTPUTS:",
+        "pub const RING_SIZE:"
+      ]
+    }
+  ],
+  "experiments": [
+    {
+      "pr": 1266,
+      "commit": "e944f140b407f0945188f574c6fd38dda67c264b",
+      "path": "scripts/research/ct_demurrage_integer_audit.py",
+      "scope": "integer audit, not production Rust parity"
+    },
+    {
+      "pr": 1284,
+      "commit": "765445cd4543dc71347f6da060ba4f84d694b186",
+      "path": "scripts/research/ct-demurrage/src/lib.rs",
+      "scope": "single input differential/reference"
+    },
+    {
+      "pr": 1288,
+      "commit": "a00e05015d924e8f21f7c40fb03add0ce032867f",
+      "path": "scripts/research/ct-demurrage/src/proof_experiment.rs",
+      "scope": "inactive R1CS actual proofs"
+    }
+  ]
+}

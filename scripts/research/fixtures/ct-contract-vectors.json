@@ -1,0 +1,285 @@
+{
+  "status": "inactive candidate CT1; manually specified expected integer results",
+  "charge": [
+    {
+      "name": "zero rate",
+      "args": [
+        18446744073709551615,
+        6000,
+        18446744073709551615,
+        0,
+        6307200
+      ],
+      "expected": 0
+    },
+    {
+      "name": "zero time",
+      "args": [
+        18446744073709551615,
+        6000,
+        0,
+        200,
+        6307200
+      ],
+      "expected": 0
+    },
+    {
+      "name": "zero year kernel branch",
+      "args": [
+        18446744073709551615,
+        6000,
+        18446744073709551615,
+        200,
+        0
+      ],
+      "expected": 0
+    },
+    {
+      "name": "factor lower clamp",
+      "args": [
+        18446744073709551615,
+        0,
+        18446744073709551615,
+        200,
+        6307200
+      ],
+      "expected": 0
+    },
+    {
+      "name": "annual floor",
+      "args": [
+        49,
+        6000,
+        31536000,
+        200,
+        6307200
+      ],
+      "expected": 0
+    },
+    {
+      "name": "first annual unit",
+      "args": [
+        50,
+        6000,
+        31536000,
+        200,
+        6307200
+      ],
+      "expected": 5
+    },
+    {
+      "name": "upper clamp",
+      "args": [
+        50,
+        18446744073709551615,
+        31536000,
+        200,
+        6307200
+      ],
+      "expected": 5
+    },
+    {
+      "name": "time floor",
+      "args": [
+        1000000000000,
+        6000,
+        1,
+        200,
+        6307200
+      ],
+      "expected": 0
+    },
+    {
+      "name": "overflow and cap",
+      "args": [
+        18446744073709551615,
+        6000,
+        18446744073709551615,
+        4294967295,
+        1
+      ],
+      "expected": 18446744073709551615
+    },
+    {
+      "name": "first nonzero time fraction",
+      "args": [
+        1000000000000,
+        6000,
+        7,
+        200,
+        6307200
+      ],
+      "expected": 20000
+    }
+  ],
+  "reset": [
+    {
+      "name": "staged difference",
+      "args": [
+        51,
+        6000,
+        3500,
+        200,
+        6307200,
+        31536000
+      ],
+      "expected": 5
+    },
+    {
+      "name": "both caps cancel",
+      "args": [
+        18446744073709551615,
+        6000,
+        5999,
+        4294967295,
+        1,
+        31536000
+      ],
+      "expected": 0
+    },
+    {
+      "name": "one cap difference one",
+      "args": [
+        100,
+        6000,
+        3500,
+        200,
+        1,
+        18446744073709551614
+      ],
+      "expected": 1
+    },
+    {
+      "name": "no downgrade",
+      "args": [
+        18446744073709551615,
+        1000,
+        6000,
+        200,
+        6307200,
+        31536000
+      ],
+      "expected": 0
+    }
+  ],
+  "bucket": [
+    {
+      "input": 0,
+      "bits": 2,
+      "expected": 0
+    },
+    {
+      "input": 1,
+      "bits": 2,
+      "expected": 1
+    },
+    {
+      "input": 3,
+      "bits": 2,
+      "expected": 3
+    },
+    {
+      "input": 4,
+      "bits": 2,
+      "expected": 4
+    },
+    {
+      "input": 5,
+      "bits": 2,
+      "expected": 6
+    },
+    {
+      "input": 6,
+      "bits": 2,
+      "expected": 6
+    },
+    {
+      "input": 7,
+      "bits": 2,
+      "expected": 8
+    },
+    {
+      "input": 8,
+      "bits": 2,
+      "expected": 8
+    },
+    {
+      "input": 9,
+      "bits": 2,
+      "expected": 12
+    },
+    {
+      "input": 12,
+      "bits": 2,
+      "expected": 12
+    },
+    {
+      "input": 13,
+      "bits": 2,
+      "expected": 16
+    },
+    {
+      "input": 18446744073709551615,
+      "bits": 2,
+      "expected": 18446744073709551616
+    }
+  ],
+  "preimage": [
+    {
+      "q": 0,
+      "bits": 2,
+      "expected": [
+        0,
+        0
+      ]
+    },
+    {
+      "q": 1,
+      "bits": 2,
+      "expected": [
+        1,
+        1
+      ]
+    },
+    {
+      "q": 4,
+      "bits": 2,
+      "expected": [
+        4,
+        4
+      ]
+    },
+    {
+      "q": 6,
+      "bits": 2,
+      "expected": [
+        5,
+        6
+      ]
+    },
+    {
+      "q": 8,
+      "bits": 2,
+      "expected": [
+        7,
+        8
+      ]
+    },
+    {
+      "q": 12,
+      "bits": 2,
+      "expected": [
+        9,
+        12
+      ]
+    },
+    {
+      "q": 16,
+      "bits": 2,
+      "expected": [
+        13,
+        16
+      ]
+    }
+  ]
+}

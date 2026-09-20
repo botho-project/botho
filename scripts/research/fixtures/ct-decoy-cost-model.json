@@ -1,0 +1,30 @@
+{
+  "scope": "toy independent 19-decoy model, low-factor real input v=1e12 age0 outputs factor1000; not production sampler/Gini simulation",
+  "rows": [
+    {
+      "high_factor_decoy_percent": 0,
+      "probability_high_max": "0.000000000",
+      "expected_reset_picocredits": "0"
+    },
+    {
+      "high_factor_decoy_percent": 1,
+      "probability_high_max": "0.173831376",
+      "expected_reset_picocredits": "17383137616"
+    },
+    {
+      "high_factor_decoy_percent": 10,
+      "probability_high_max": "0.864914828",
+      "expected_reset_picocredits": "86491482823"
+    },
+    {
+      "high_factor_decoy_percent": 50,
+      "probability_high_max": "0.999998093",
+      "expected_reset_picocredits": "99999809265"
+    },
+    {
+      "high_factor_decoy_percent": 100,
+      "probability_high_max": "1.000000000",
+      "expected_reset_picocredits": "100000000000"
+    }
+  ]
+}
