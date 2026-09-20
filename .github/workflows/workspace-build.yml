@@ -121,6 +121,10 @@ jobs:
             --test rpc_integration \
             --test e2e_faucet_workflow
 
+      - name: Run read-only legacy lottery inventory tests
+        timeout-minutes: 5
+        run: cargo test --locked -p botho --example legacy_lottery_inventory
+
       # Doctests are NOT compiled by `--no-run` above and no other workflow
       # runs them, so documentation examples rotted silently (#670). They are
       # fast (seconds) and deterministic, so run them for real.
