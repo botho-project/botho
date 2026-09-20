@@ -1,7 +1,9 @@
 # Benchmark evidence
 
-The Benchmarks workflow's crypto suite measures **RingMLSAG**, ring sizes
-11/16/32 plus batches. It does not measure the current ring-20 CLSAG path.
+The Benchmarks workflow runs separate **RingMLSAG** (11/16/32 plus batches)
+and **Clsag** valid-library signing/verification (2/20/32) targets. Ring 20 is
+the current transaction default/minimum; 2 is library-only and 32 a scaling
+case, not an asserted protocol maximum. See [CLSAG measurements](clsag.md).
 Transaction-core benches exercise range proofs and legacy RctBulletproofs
 fixtures; no complete CT1 cost or network energy estimate is implied.
 

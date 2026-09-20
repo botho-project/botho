@@ -95,13 +95,13 @@ jobs:
         id: clear_reports
         run: rm -rf -- target/criterion
 
-      - name: Run MLSAG benchmarks (quick)
+      - name: Run MLSAG and CLSAG benchmarks (quick)
         id: mlsag_quick
         if: ${{ github.event_name == 'pull_request' || github.event.inputs.full_run != 'true' }}
         run: cargo bench -p bth-crypto-ring-signature --bench ring_signature_benchmarks -- --quick --noplot
         continue-on-error: true
 
-      - name: Run MLSAG benchmarks (full)
+      - name: Run MLSAG and CLSAG benchmarks (full)
         id: mlsag_full
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.full_run == 'true' }}
         run: cargo bench -p bth-crypto-ring-signature --bench ring_signature_benchmarks -- --noplot
@@ -275,14 +275,14 @@ jobs:
           echo "| Benchmark Suite | Status |"
           echo "|-----------------|--------|"
           echo "| Compile | ${{ needs.compile-benchmarks.result }} |"
-          echo "| Crypto (MLSAG) | ${{ needs.run-crypto-benchmarks.result }} |"
+          echo "| Crypto (MLSAG + CLSAG) | ${{ needs.run-crypto-benchmarks.result }} |"
           echo "| Node (Block/Mempool/Traffic) | ${{ needs.run-node-benchmarks.result }} |"
           echo "| Transaction | ${{ needs.run-transaction-benchmarks.result }} |"
           echo ""
           echo "### Performance Targets"
           echo ""
           echo "#### Cryptography coverage"
-          echo "- Actual suite: MLSAG at ring sizes 11/16/32, not CLSAG."
+          echo "- Actual suites: MLSAG 11/16/32; valid CLSAG library 2/20/32 (20 is current default)."
           echo "- Job success is not benchmark success: inspect raw step outcomes and Criterion artifacts."
           echo "- Compile-only jobs have no timing evidence. Canceled jobs may leave no artifact."
           echo ""

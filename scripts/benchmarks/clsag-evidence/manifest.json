@@ -1,0 +1,100 @@
+{
+  "parent_commit": "5ad82c4a1cd8194954961f9b2634926a19bc7523",
+  "command": "RUSTC_WRAPPER= CARGO_TARGET_DIR=/tmp/botho-1270-target cargo bench --locked -p bth-crypto-ring-signature --bench clsag_benchmarks -- --sample-size 20 --warm-up-time 1 --measurement-time 3 --noplot",
+  "exit_code": 0,
+  "rustc": "rustc 1.93.0-nightly (646a3f8c1 2025-12-02)\nbinary: rustc\ncommit-hash: 646a3f8c15baefb98dc6e0c1c1ba3356db702d2a\ncommit-date: 2025-12-02\nhost: aarch64-apple-darwin\nrelease: 1.93.0-nightly\nLLVM version: 21.1.5",
+  "host": "Apple M3 Ultra / aarch64 macOS 27.0 (26A428), not isolated",
+  "profile": "workspace bench (inherits release)",
+  "scope": "warm valid CLSAG library only; no transaction/CPU/energy measurement",
+  "provenance_note": "Measurements precede only a comment correction: ring2 is a small-ring case, not minimum library boundary. Executable Rust unchanged.",
+  "source_sha256": {
+    "crypto/ring-signature/benches/clsag_benchmarks.rs": "e4481a2a1579afde411ca26f1b1448789c7ffd5528310570bfb040c6fac622ed",
+    "crypto/ring-signature/src/ring_signature/clsag.rs": "0e598832571a88857e782a1a445a6c0677a9280c85820dcd177d65f18b8ada20",
+    "crypto/ring-signature/Cargo.toml": "32e3d4c75f95177c48e668ca4123e8eac60edc8e5bf421db003d3d60b053c264",
+    "Cargo.lock": "cb685bd8393638ace0c39606611b2d08014afe615aa92a7201905c0202cc97f1",
+    "Cargo.toml": "5ebf46d21ad6ba09c2d7aa4a4f733b473f842a92ac1b94de7aa194396714d95d"
+  },
+  "raw_file_sha256": {
+    "sign-2/benchmark.json": "4d41f873c204fdb1f1f1d75e1a130e0e692a7b7d17936768db653002a2e26468",
+    "sign-2/estimates.json": "4c69d0c38cf7c033c080ad2aeaef3afa3b5b5c49b1250a2b21a7e5b3bedec103",
+    "sign-2/sample.json": "c4279b1d18044f4854e93042466276d6ce608fec76d5fdb02c23e57d019db004",
+    "sign-20/benchmark.json": "c83d108dee6892f75c1f5d0b3a167b2e0f18a1feba6f263dfa2a4d124b6274ae",
+    "sign-20/estimates.json": "4c4f6a2c91fba5483f2aa82d20603ef2d6bc022d84840ed0448bfa0e4fe01b95",
+    "sign-20/sample.json": "2ed047b3ed811a3ad730a01250ea2f6938b52a8c73bcea0639f81e708f52b5ed",
+    "sign-32/benchmark.json": "baf4f17669be287ec75480921423f6fc5b1c20c011ea7b7fdd8447a77bf01066",
+    "sign-32/estimates.json": "9b2cecd4db834e75b046e8bcefcb5f98a0b8bb8e89013e5b8524f90e7a930856",
+    "sign-32/sample.json": "bbcd62d397074e940210f1b16308c5f0a42380966d57246b609373e61a2b317e",
+    "verify-2/benchmark.json": "ea22a4bc3976396847271472e720b9f559e48df32276ec046c833acf8dc3516a",
+    "verify-2/estimates.json": "47aa2fa2ab3ee2d0e2ce2e463ffe833da4965952008fa5efab03d7bc2dcd8cc8",
+    "verify-2/sample.json": "fcbc2c017bfd18da74c9ac2256420b871c5488505e4f108b9d535935e12eed8c",
+    "verify-20/benchmark.json": "a9cf3553261a2dbf8ff34f73dfb20cf1daa47ed8102acc79fba7b3a5e82b0889",
+    "verify-20/estimates.json": "6f4a798d1c3d6099eebede74e57d31b17508f25a2ecab707274107289da8e45b",
+    "verify-20/sample.json": "a4ca5d694943d72a7f8393a684b3f71ceb890dd61ce2cba62a40f62d44ca81ab",
+    "verify-32/benchmark.json": "4c21abfd04e109bd3d77aec8850931fdc4135763fc3d0fa92ebaa0b84ef20ad8",
+    "verify-32/estimates.json": "2cee0a2560b2e4f06ac211b3cf8aaf949ed98545179b7cb93bdd2b80ac5301b6",
+    "verify-32/sample.json": "ef79b60f479c9c430bb8b77d4080cf25e2558f7822bf38a5d48f6f78477faca2"
+  },
+  "results": [
+    {
+      "operation": "sign",
+      "ring_size": 2,
+      "median_ns": 418671.08539731684,
+      "confidence_interval": {
+        "confidence_level": 0.95,
+        "lower_bound": 416401.65563725494,
+        "upper_bound": 422152.77777777775
+      }
+    },
+    {
+      "operation": "sign",
+      "ring_size": 20,
+      "median_ns": 4140019.994444445,
+      "confidence_interval": {
+        "confidence_level": 0.95,
+        "lower_bound": 4132910.74375,
+        "upper_bound": 4151478.3125
+      }
+    },
+    {
+      "operation": "sign",
+      "ring_size": 32,
+      "median_ns": 6620177.111111111,
+      "confidence_interval": {
+        "confidence_level": 0.95,
+        "lower_bound": 6611704.188888889,
+        "upper_bound": 6640835.791666667
+      }
+    },
+    {
+      "operation": "verify",
+      "ring_size": 2,
+      "median_ns": 423947.87745098036,
+      "confidence_interval": {
+        "confidence_level": 0.95,
+        "lower_bound": 423155.77032871975,
+        "upper_bound": 425176.57664027147
+      }
+    },
+    {
+      "operation": "verify",
+      "ring_size": 20,
+      "median_ns": 4192904.764423077,
+      "confidence_interval": {
+        "confidence_level": 0.95,
+        "lower_bound": 4175938.3125,
+        "upper_bound": 4207415.274064171
+      }
+    },
+    {
+      "operation": "verify",
+      "ring_size": 32,
+      "median_ns": 6681942.277777778,
+      "confidence_interval": {
+        "confidence_level": 0.95,
+        "lower_bound": 6672823.062745098,
+        "upper_bound": 6737726.611111111
+      }
+    }
+  ],
+  "log_sha256": "6a415ab2c8ae784f614e5d0259f844e7825dd87611bf681f5665dc597a3b9804"
+}
