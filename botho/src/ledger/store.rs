@@ -6201,4 +6201,35 @@ mod tests {
              plain={floor_rich_plain}"
         );
     }
+    /// CT1 research adapter check: use the actual ledger filtering/ordering path,
+    /// then compare the same seeded selector over its mature, nonexcluded pool.
+    /// This is a storage fixture, not an accepted-chain/signature rehearsal.
+    #[test]
+    fn ct1_research_ledger_decoy_adapter_parity() {
+        use rand::{rngs::StdRng, SeedableRng};
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let account = bth_account_keys::AccountKey::random(&mut StdRng::seed_from_u64(1306));
+        let mut utxos: Vec<_> = (0..24).map(|i| {
+            let mut u = eligible_test_utxo(i);
+            u.output = TxOutput::new(1_000_000_000_000, &account.default_subaddress());
+            u.created_at = if i == 23 { 91 } else { 90 };
+            u
+        }).collect();
+        utxos.sort_by_key(|u| u.id.to_bytes());
+        insert_test_utxos(&ledger, &utxos);
+        let mut wtxn = ledger.env.write_txn().unwrap();
+        ledger.meta_db.put(&mut wtxn, META_HEIGHT, &100u64.to_le_bytes()).unwrap();
+        wtxn.commit().unwrap();
+        let excluded = [utxos[0].output.target_key];
+        let selected = ledger.get_decoy_outputs_for_input(19, &excluded, 10, 10, None, &mut StdRng::seed_from_u64(902)).unwrap();
+        let candidates: Vec<_> = utxos.iter().filter(|u|u.created_at <= 90 && !excluded.contains(&u.output.target_key)).map(|u|OutputCandidate::from_utxo(u,100)).collect();
+        let direct = GammaDecoySelector::new().select_decoys_for_input(&candidates,19,&excluded,10,&mut StdRng::seed_from_u64(902)).unwrap();
+        assert_eq!(selected.iter().map(|o|o.target_key).collect::<Vec<_>>(), direct.iter().map(|o|o.target_key).collect::<Vec<_>>());
+        assert!(selected.iter().all(|o| !excluded.contains(&o.target_key)));
+        let immature = utxos.iter().find(|u|u.created_at==91).unwrap();
+        assert!(selected.iter().all(|o|o.target_key!=immature.output.target_key));
+        assert!(ledger.get_decoy_outputs_for_input(24,&excluded,10,10,None,&mut StdRng::seed_from_u64(902)).is_err());
+    }
+
 }
