@@ -12,6 +12,10 @@ const config: HardhatUserConfig = {
   plugins: [hardhatToolboxMochaEthers],
   solidity: {
     version: "0.8.20",
+    // Use the same portable compiler on ARM development hosts and Linux CI.
+    // The native macOS 0.8.20 binary requires an unavailable CPU translation
+    // layer on some ARM hosts and fails with spawn error -86 (#1271).
+    preferWasm: true,
     settings: {
       optimizer: {
         enabled: true,
