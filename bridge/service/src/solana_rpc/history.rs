@@ -101,7 +101,6 @@ fn failed_error(err: &Value) -> Result<bool, String> {
             "InvalidLoadedAccountsDataSizeLimit",
             "ResanitizationNeeded",
             "UnbalancedTransaction",
-            "ProgramCacheHitMaxLimit",
         ];
         if known.contains(&name) {
             return Ok(true);
@@ -114,7 +113,64 @@ fn failed_error(err: &Value) -> Result<bool, String> {
             .filter(|p| p.len() == 2)
         {
             let index = pair[0].as_u64().is_some_and(|i| i <= 255);
-            let instruction = pair[1].as_str().is_some_and(|s| !s.is_empty())
+            // Unit variants of solana-program 1.18.26 InstructionError.
+            let known_instruction_errors = [
+                "GenericError",
+                "InvalidArgument",
+                "InvalidInstructionData",
+                "InvalidAccountData",
+                "AccountDataTooSmall",
+                "InsufficientFunds",
+                "IncorrectProgramId",
+                "MissingRequiredSignature",
+                "AccountAlreadyInitialized",
+                "UninitializedAccount",
+                "UnbalancedInstruction",
+                "ModifiedProgramId",
+                "ExternalAccountLamportSpend",
+                "ExternalAccountDataModified",
+                "ReadonlyLamportChange",
+                "ReadonlyDataModified",
+                "DuplicateAccountIndex",
+                "ExecutableModified",
+                "RentEpochModified",
+                "NotEnoughAccountKeys",
+                "AccountDataSizeChanged",
+                "AccountNotExecutable",
+                "AccountBorrowFailed",
+                "AccountBorrowOutstanding",
+                "DuplicateAccountOutOfSync",
+                "InvalidError",
+                "ExecutableDataModified",
+                "ExecutableLamportChange",
+                "ExecutableAccountNotRentExempt",
+                "UnsupportedProgramId",
+                "CallDepth",
+                "MissingAccount",
+                "ReentrancyNotAllowed",
+                "MaxSeedLengthExceeded",
+                "InvalidSeeds",
+                "InvalidRealloc",
+                "ComputationalBudgetExceeded",
+                "PrivilegeEscalation",
+                "ProgramEnvironmentSetupFailure",
+                "ProgramFailedToComplete",
+                "ProgramFailedToCompile",
+                "Immutable",
+                "IncorrectAuthority",
+                "AccountNotRentExempt",
+                "InvalidAccountOwner",
+                "ArithmeticOverflow",
+                "UnsupportedSysvar",
+                "IllegalOwner",
+                "MaxAccountsDataAllocationsExceeded",
+                "MaxAccountsExceeded",
+                "MaxInstructionTraceLengthExceeded",
+                "BuiltinProgramsMustConsumeComputeUnits",
+            ];
+            let instruction = pair[1]
+                .as_str()
+                .is_some_and(|s| known_instruction_errors.contains(&s))
                 || pair[1].as_object().is_some_and(|o| {
                     o.len() == 1
                         && (o
@@ -415,6 +471,7 @@ mod tests {
             json!(false),
             json!("UnknownError"),
             json!({"InstructionError":[0,{}]}),
+            json!({"InstructionError":[0,"UnknownError"]}),
         ] {
             assert!(failed_error(&err).is_err());
         }
