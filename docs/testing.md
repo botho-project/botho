@@ -82,27 +82,28 @@ existing size assertion was correct, but CI only compiled it.
 The inventory below covers all 24 top-level `botho/tests/*.rs` targets as of
 September 2026. `common/` contains shared helpers, not another integration target.
 The seven targets named in `e2e-tests.yml` are **manual-dispatch only**, not PR
-execution gates. Classifications describe source requirements; only the compact
-suite's runtime was measured for #1212. Do not infer that an unmeasured suite is
-fast or reliable solely from its name.
+execution gates. The 15 workspace-gated targets below passed 245 local tests;
+their measured runtimes are recorded here and in the linked suite reports.
+Do not infer that the remaining unmeasured suites are fast or reliable from
+their names.
 
 | Target | Execution owner | Runtime / environment classification |
 | --- | --- | --- |
 | `compact_block_integration` | Workspace PR job | Local block/protocol operations; measured in seconds after build |
-| `circuit_handshake_integration` | Pending [#1272](https://github.com/botho-project/botho/issues/1272) | In-process cryptographic circuit handshakes; benchmark first |
-| `ice_stun_integration` | Pending #1272 | ICE/STUN configuration, candidate and encoding checks; no public STUN requests |
-| `onion_broadcast_integration` | Pending #1272 | Simulated local circuit pools and broadcast pipeline |
-| `privacy_integration` | Pending #1272 | Randomized simulated relays, adversaries, load and privacy assertions; check repeatability |
-| `relay_handler_integration` | Pending #1272 | In-process relay pipeline; one 1.1-second key-expiry sleep |
-| `signaling_integration` | Pending #1272 | Local signaling state/encoding; 50-ms expiry sleep |
-| `traffic_indistinguishability` | Pending #1272 | Seeded statistical sampling; measure runtime and reliability |
-| `transport_negotiation_integration` | Pending #1272 | In-memory duplex streams with negotiation timeouts |
-| `chain_sync_catchup_integration` | Pending [#1273](https://github.com/botho-project/botho/issues/1273) | Production sync state machine, simulated messages, temporary LMDB ledgers |
-| `issue_998_fresh_genesis_liveness` | Pending #1273 | Repeated hybrid-coinbase block application in a temporary ledger |
-| `ledger_consistency_integration` | Pending #1273 | Temporary LMDB persistence/concurrency and invalid-block checks |
-| `tx_lifecycle_integration` | Pending #1273 | Ledger/transaction validation plus ephemeral loopback RPC |
-| `rpc_integration` | Pending #1273 | Real HTTP/WebSocket requests to ephemeral loopback servers |
-| `e2e_faucet_workflow` | Pending #1273 | Local faucet/RPC servers, funded temporary ledgers and rate-limit sleeps |
+| `circuit_handshake_integration` | Workspace PR job | In-process cryptographic circuit handshakes |
+| `ice_stun_integration` | Workspace PR job | ICE/STUN configuration, candidate and encoding checks; no public STUN requests |
+| `onion_broadcast_integration` | Workspace PR job | Simulated local circuit pools and broadcast pipeline |
+| `privacy_integration` | Workspace PR job | Randomized simulated relays, adversaries, load and privacy assertions |
+| `relay_handler_integration` | Workspace PR job | In-process relay pipeline; one 1.1-second key-expiry sleep |
+| `signaling_integration` | Workspace PR job | Local signaling state/encoding; 50-ms expiry sleep |
+| `traffic_indistinguishability` | Workspace PR job | Seeded statistical sampling |
+| `transport_negotiation_integration` | Workspace PR job | In-memory duplex streams with negotiation timeouts |
+| `chain_sync_catchup_integration` | Workspace PR job | Production sync state machine, simulated messages, temporary LMDB ledgers |
+| `issue_998_fresh_genesis_liveness` | Workspace PR job | Repeated hybrid-coinbase block application in a temporary ledger |
+| `ledger_consistency_integration` | Workspace PR job | Temporary LMDB persistence/concurrency and invalid-block checks |
+| `tx_lifecycle_integration` | Workspace PR job | Ledger/transaction validation plus ephemeral loopback RPC |
+| `rpc_integration` | Workspace PR job | Real HTTP/WebSocket requests to ephemeral loopback servers |
+| `e2e_faucet_workflow` | Workspace PR job | Local faucet/RPC servers, funded temporary ledgers and rate-limit sleeps |
 | `consensus_cluster_convergence` | Pending [#1274](https://github.com/botho-project/botho/issues/1274) | Multi-node in-process consensus; 30-second per-block no-stall deadlines |
 | `e2e_transfer_patterns` | Pending #1274 | Multi-node transfer, mining and stress/load scenarios |
 | `byzantine_integration` | Manual E2E `byzantine` / `all` | Adversarial multi-node consensus and wall-clock deadlines |
@@ -113,12 +114,10 @@ fast or reliable solely from its name.
 | `chaos_tests` | Manual E2E `chaos` / `all`, ignored opt-in | Four ignored long cases; ordinary non-ignored smoke case is omitted by that job |
 | `load_tests` | Manual E2E `load` / `all`, ignored opt-in | Four ignored long cases; ordinary non-ignored smoke case is omitted by that job |
 
-[#1272](https://github.com/botho-project/botho/issues/1272) tracks protocol/privacy
-execution; [#1273](https://github.com/botho-project/botho/issues/1273) tracks
-stateful/loopback execution; [#1274](https://github.com/botho-project/botho/issues/1274)
-tracks the consensus/E2E execution policy, including the ordinary chaos/load
-smoke cases. Each follow-up requires measured runtime and investigation of real
-failures before choosing a PR or scheduled job. Do not enable every ignored test
+[#1274](https://github.com/botho-project/botho/issues/1274) tracks the remaining
+consensus/E2E execution policy, including the ordinary chaos/load smoke cases.
+It requires measured runtime and investigation of real failures before choosing
+a PR or scheduled job. Do not enable every ignored test
 or relax assertions to obtain a green gate. No external-service suite is inferred
 from its name: ICE/STUN here is local, and RPC uses loopback; actual public-network
 coverage would require its own explicit environment and job.

@@ -62,9 +62,7 @@ platform. Timing/randomness failures should be investigated, not hidden by
 weakening assertions or silently dropping targets.
 
 This workflow change does not run every Botho integration target. Compact-block
-execution is tracked separately by [#1212 / #1276](https://github.com/botho-project/botho/pull/1276).
-The other uncovered suites remain tracked by
-[#1273](https://github.com/botho-project/botho/issues/1273) (ledger/lifecycle/RPC)
-and [#1274](https://github.com/botho-project/botho/issues/1274) (consensus/E2E
-execution policy). Long ignored chaos/load tests retain their separate manual
+execution and [ledger/RPC execution](ledger-rpc-integration-tests.md) run in
+adjacent workspace steps. The remaining consensus/E2E execution policy is
+tracked by [#1274](https://github.com/botho-project/botho/issues/1274). Long ignored chaos/load tests retain their separate manual
 opt-in; no blanket ignored-test execution is introduced here.
