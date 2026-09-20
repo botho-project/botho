@@ -33,6 +33,9 @@ authoritative sources are the code and the concept docs.
 - [Exact CT demurrage constraints](ct-demurrage-exact-constraints.md): integer
   construction, Rust differential checker, and R1CS allocation census. This is
   not an active protocol specification or an accepted ADR.
+- [Inactive CT proof experiment](ct-demurrage-proof-experiment.md): actual
+  randomized R1CS proofs, project commitment parity, and statement-binding
+  rejection tests; not a production protocol or security audit.
 
 ## Historical documents
 

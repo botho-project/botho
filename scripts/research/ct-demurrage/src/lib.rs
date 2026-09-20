@@ -1,7 +1,10 @@
 //! Inactive arithmetic research: integer witness checker and R1CS allocation
-//! census. This is NOT a proof implementation, consensus validation, or an
+//! census. The companion proof_experiment module exercises actual randomized
+//! proofs. Neither is production proof code, consensus validation, or an
 //! accepted ADR.
 #![cfg(test)]
+
+mod proof_experiment;
 use bulletproofs_og::{
     r1cs::{ConstraintSystem, LinearCombination, Metrics, Prover, Verifier},
     PedersenGens,
@@ -36,7 +39,7 @@ struct Wire {
     value: BigUint,
     bits: usize,
 }
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Expr {
     terms: Vec<(usize, BigUint)>,
     constant: BigUint,
@@ -82,13 +85,13 @@ impl Expr {
         )
     }
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Equation {
     name: String,
     left: Expr,
     right: Expr,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Product {
     name: String,
     left: Expr,
