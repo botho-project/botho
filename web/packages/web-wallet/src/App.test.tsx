@@ -5,9 +5,29 @@
  * which language renders and the document's `<html lang>` attribute, while the
  * unprefixed default keeps every existing absolute route working.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import App from './App'
+
+// Locale routing does not require a node. Keep the provider mounted but replace
+// its transport boundary; accidental direct networking remains a test failure.
+vi.mock('@botho/adapters', () => ({
+  RemoteNodeAdapter: class {
+    connect = vi.fn().mockResolvedValue(undefined)
+    disconnect = vi.fn()
+    getNodeInfo = vi.fn().mockReturnValue(null)
+    getWsStatus = vi.fn().mockReturnValue('disconnected')
+    onWsStatusChange = vi.fn().mockReturnValue(() => {})
+    onNewBlock = vi.fn().mockReturnValue(() => {})
+    isConnected = vi.fn().mockReturnValue(false)
+  },
+}))
+vi.mock('./config/networks', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./config/networks')>(),
+  fetchNodeHealth: vi.fn().mockResolvedValue({ status: 'offline' }),
+}))
+const forbiddenFetch = vi.fn(() => { throw new Error('Unexpected locale-test fetch') })
+const forbiddenWebSocket = vi.fn(function () { throw new Error('Unexpected locale-test WebSocket') })
 
 // jsdom here lacks localStorage; provide a minimal mock for i18n persistence.
 const localStorageMock = (() => {
@@ -29,11 +49,18 @@ Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock })
 
 beforeEach(() => {
   localStorage.clear()
+  forbiddenFetch.mockClear()
+  forbiddenWebSocket.mockClear()
+  vi.stubGlobal('fetch', forbiddenFetch)
+  vi.stubGlobal('WebSocket', forbiddenWebSocket)
 })
 
 afterEach(() => {
   cleanup()
   window.history.pushState({}, '', '/')
+  expect(forbiddenFetch).not.toHaveBeenCalled()
+  expect(forbiddenWebSocket).not.toHaveBeenCalled()
+  vi.unstubAllGlobals()
 })
 
 describe('App locale routing', () => {

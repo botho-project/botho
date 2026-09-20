@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { render, screen, waitFor, act, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { WalletProvider, useWallet } from './wallet'
-import { buildSendTransaction } from '@botho/wasm-signer'
+import { buildSendTransaction, spendableBalance, buildOwnedHistory } from '@botho/wasm-signer'
 
 // Mock @botho/wasm-signer so these context tests never depend on the generated
 // wasm artifact (`packages/wasm-signer/pkg/`, produced by `build:wasm` and
@@ -58,10 +58,20 @@ const localStorageMock = (() => {
 
 Object.defineProperty(globalThis, 'localStorage', { value: localStorageMock })
 
+const lifecycle = vi.hoisted(() => ({
+  connect: undefined as (() => Promise<void>) | undefined,
+  instances: [] as Array<{
+    connect: ReturnType<typeof vi.fn>
+    disconnect: ReturnType<typeof vi.fn>
+    getNodeInfo: ReturnType<typeof vi.fn>
+  }>,
+}))
+
 // Mock the RemoteNodeAdapter
 vi.mock('@botho/adapters', () => ({
   RemoteNodeAdapter: class MockRemoteNodeAdapter {
-    connect = vi.fn().mockResolvedValue(undefined)
+    constructor() { lifecycle.instances.push(this) }
+    connect = vi.fn(() => lifecycle.connect?.() ?? Promise.resolve())
     disconnect = vi.fn()
     isConnected = vi.fn().mockReturnValue(true)
     getNodeInfo = vi.fn().mockReturnValue({ version: '1.0.0', network: 'testnet' })
@@ -146,6 +156,8 @@ function TestConsumer({ onMount }: { onMount?: (wallet: ReturnType<typeof useWal
 describe('WalletContext', () => {
   beforeEach(() => {
     localStorageMock.clear()
+    lifecycle.connect = undefined
+    lifecycle.instances.length = 0
     vi.clearAllMocks()
   })
 
@@ -157,6 +169,80 @@ describe('WalletContext', () => {
     // and screen.getByTestId('address') throws a "multiple elements" error.
     cleanup()
     vi.clearAllMocks()
+  })
+
+  describe('connection lifecycle', () => {
+    function deferred() {
+      let resolve!: () => void
+      const promise = new Promise<void>(done => { resolve = done })
+      return { promise, resolve }
+    }
+
+    it('disconnects on unmount and ignores a late connection result', async () => {
+      const pending = deferred()
+      lifecycle.connect = () => pending.promise
+      const view = render(<WalletProvider><TestConsumer /></WalletProvider>)
+      const adapter = lifecycle.instances.find(a => a.connect.mock.calls.length > 0)!
+      view.unmount()
+      expect(adapter.disconnect).toHaveBeenCalledOnce()
+      await act(async () => { pending.resolve(); await pending.promise })
+      expect(adapter.getNodeInfo).not.toHaveBeenCalled()
+    })
+
+    it.each(['disconnect', 'switch'] as const)('ignores manual refreshes completed after %s', async (action) => {
+      let wallet!: ReturnType<typeof useWallet>
+      render(<WalletProvider><TestConsumer onMount={value => { wallet = value }} /></WalletProvider>)
+      await waitFor(() => expect(wallet.isConnected).toBe(true))
+      await act(async () => { await wallet.createWallet(TEST_MNEMONIC_12) })
+
+      let resolveBalance!: (value: bigint) => void
+      let resolveHistory!: (value: []) => void
+      vi.mocked(spendableBalance).mockReturnValueOnce(new Promise(done => { resolveBalance = done }))
+      vi.mocked(buildOwnedHistory).mockReturnValueOnce(new Promise(done => { resolveHistory = done }))
+      let balanceRefresh!: Promise<void>
+      let historyRefresh!: Promise<void>
+      act(() => {
+        balanceRefresh = wallet.refreshBalance()
+        historyRefresh = wallet.refreshTransactions()
+      })
+      await act(async () => {
+        if (action === 'disconnect') wallet.disconnect()
+        else window.dispatchEvent(new CustomEvent('network-changed', {
+          detail: { network: { rpcEndpoint: 'https://replacement.test/rpc', networkId: 'testnet' } },
+        }))
+      })
+      const currentBalance = wallet.balance
+      const currentTransactions = wallet.transactions
+      await act(async () => {
+        resolveBalance(999n)
+        resolveHistory([])
+        await Promise.all([balanceRefresh, historyRefresh])
+      })
+      expect(wallet.balance).toBe(currentBalance)
+      expect(wallet.transactions).toBe(currentTransactions)
+      expect(wallet.isConnected).toBe(action === 'switch')
+    })
+
+    it('keeps the fast network switch when the previous connection finishes last', async () => {
+      const old = deferred()
+      const current = deferred()
+      lifecycle.connect = vi.fn().mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise)
+      let wallet!: ReturnType<typeof useWallet>
+      render(<WalletProvider><TestConsumer onMount={value => { wallet = value }} /></WalletProvider>)
+      const first = lifecycle.instances.find(a => a.connect.mock.calls.length > 0)!
+      act(() => window.dispatchEvent(new CustomEvent('network-changed', {
+        detail: { network: { rpcEndpoint: 'https://replacement.test/rpc', networkId: 'testnet' } },
+      })))
+      const second = lifecycle.instances.find(a => a !== first && a.connect.mock.calls.length > 0)!
+      expect(first.disconnect).toHaveBeenCalledOnce()
+      await act(async () => { current.resolve(); await current.promise })
+      expect(wallet.isConnected).toBe(true)
+      await act(async () => { old.resolve(); await old.promise })
+      expect(first.getNodeInfo).not.toHaveBeenCalled()
+      expect(second.getNodeInfo).toHaveBeenCalledOnce()
+      expect(wallet.isConnected).toBe(true)
+      expect(wallet.connectionError).toBeNull()
+    })
   })
 
   describe('Initial State', () => {

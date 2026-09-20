@@ -431,6 +431,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   // Store adapter in ref so we can recreate it when network changes
   const adapterRef = useRef<RemoteNodeAdapter>(createAdapterFromNetwork(getInitialNetwork()))
 
+  const mountedRef = useRef(false)
+  const connectionGeneration = useRef(0)
+  const [adapterVersion, setAdapterVersion] = useState(0)
+
   // Store mnemonic in memory after unlock (cleared on page refresh)
   const mnemonicRef = useRef<string | null>(null)
 
@@ -489,9 +493,15 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
-  // Auto-connect on mount
+  // Invalidate pending connections before disconnecting on unmount.
   useEffect(() => {
+    mountedRef.current = true
     connect()
+    return () => {
+      mountedRef.current = false
+      ++connectionGeneration.current
+      adapterRef.current.disconnect()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -501,11 +511,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       const customEvent = event as CustomEvent<{ network: NetworkConfig }>
       const newNetwork = customEvent.detail.network
 
-      // Disconnect from current network
+      // Invalidate the previous attempt before replacing the adapter.
+      ++connectionGeneration.current
       adapterRef.current.disconnect()
 
       // Create new adapter for new network
       adapterRef.current = createAdapterFromNetwork(newNetwork)
+      setAdapterVersion(v => v + 1)
 
       // Reset connection state
       setState(s => ({
@@ -532,18 +544,21 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const adapter = adapterRef.current
     const unsubscribe = adapter.onWsStatusChange((wsStatus) => {
+      if (!mountedRef.current || adapter !== adapterRef.current) return
       setState(s => ({ ...s, wsStatus }))
     })
     // Initialize with current status
     setState(s => ({ ...s, wsStatus: adapter.getWsStatus() }))
     return unsubscribe
-  }, [])
+  }, [adapterVersion, state.isConnecting])
 
   // Subscribe to real-time block updates for balance refresh
   useEffect(() => {
-    if (!state.isConnected || !state.address || state.isLocked) return
+    if (!state.isConnected || state.isConnecting || !state.address || state.isLocked) return
 
     const adapter = adapterRef.current
+    const generation = connectionGeneration.current
+    let active = true
     const unsubscribe = adapter.onNewBlock(async () => {
       // Refresh balance and transactions when new block arrives
       try {
@@ -551,43 +566,51 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           fetchBalance(adapter, state.address!, mnemonicRef.current),
           fetchHistory(adapter, mnemonicRef.current),
         ])
+        if (!active || !mountedRef.current || generation !== connectionGeneration.current) return
         setState(s => ({ ...s, balance, transactions }))
       } catch {
         // Ignore refresh errors - will retry on next block
       }
     })
 
-    return unsubscribe
-  }, [state.isConnected, state.address, state.isLocked])
+    return () => { active = false; unsubscribe() }
+  }, [state.isConnected, state.isConnecting, state.address, state.isLocked, adapterVersion])
 
   // Fallback polling when WebSocket is disconnected
   useEffect(() => {
     // Only poll if connected to node but WebSocket is down
-    if (!state.isConnected || !state.address || state.isLocked) return
+    if (!state.isConnected || state.isConnecting || !state.address || state.isLocked) return
     if (state.wsStatus === 'connected') return // Use WebSocket instead
 
     const adapter = adapterRef.current
+    const generation = connectionGeneration.current
+    let active = true
     const pollInterval = setInterval(async () => {
       try {
         const [balance, transactions] = await Promise.all([
           fetchBalance(adapter, state.address!, mnemonicRef.current),
           fetchHistory(adapter, mnemonicRef.current),
         ])
+        if (!active || !mountedRef.current || generation !== connectionGeneration.current) return
         setState(s => ({ ...s, balance, transactions }))
       } catch {
         // Ignore polling errors
       }
     }, FALLBACK_POLL_INTERVAL)
 
-    return () => clearInterval(pollInterval)
-  }, [state.isConnected, state.address, state.isLocked, state.wsStatus])
+    return () => { active = false; clearInterval(pollInterval) }
+  }, [state.isConnected, state.isConnecting, state.address, state.isLocked, state.wsStatus, adapterVersion])
 
   const connect = useCallback(async () => {
+    if (!mountedRef.current) return
     const adapter = adapterRef.current
+    const generation = ++connectionGeneration.current
+    const isCurrent = () => mountedRef.current && generation === connectionGeneration.current && adapter === adapterRef.current
     setState(s => ({ ...s, isConnecting: true, connectionError: null }))
 
     try {
       await adapter.connect()
+      if (!isCurrent()) return
       setState(s => ({
         ...s,
         isConnected: true,
@@ -611,16 +634,19 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         if (!walletInfo.isEncrypted && walletInfo.address) {
           if (!mnemonicRef.current) {
             const stored = await loadWallet()
+            if (!isCurrent()) return
             if (stored) mnemonicRef.current = stored.mnemonic
           }
           const [balance, transactions] = await Promise.all([
             fetchBalance(adapter, walletInfo.address, mnemonicRef.current),
             fetchHistory(adapter, mnemonicRef.current),
           ])
+          if (!isCurrent()) return
           setState(s => ({ ...s, balance, transactions }))
         }
       }
     } catch (err) {
+      if (!isCurrent()) return
       setState(s => ({
         ...s,
         isConnecting: false,
@@ -630,10 +656,13 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const disconnect = useCallback(() => {
+    ++connectionGeneration.current
     adapterRef.current.disconnect()
     setState(s => ({
       ...s,
       isConnected: false,
+      isConnecting: false,
+      wsStatus: 'disconnected',
       nodeInfo: null,
     }))
   }, [])
@@ -1034,6 +1063,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // bridge deposit order memo (64-byte hex) is embedded on-chain.
     const bridgeDepositMemo = options?.bridgeDepositMemo
     const adapter = adapterRef.current
+    const generation = connectionGeneration.current
+    const isCurrent = () => mountedRef.current && generation === connectionGeneration.current && adapter === adapterRef.current
     if (!adapter.isConnected()) {
       throw new Error('Not connected to a node')
     }
@@ -1150,7 +1181,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // Refresh balance/history opportunistically; ignore failures.
     if (state.address) {
       fetchBalance(adapter, state.address, mnemonicRef.current)
-        .then((balance) => setState((s) => ({ ...s, balance })))
+        .then((balance) => { if (isCurrent()) setState((s) => ({ ...s, balance })) })
         .catch(() => {})
     }
 
@@ -1205,22 +1236,28 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   const refreshBalance = useCallback(async () => {
     const adapter = adapterRef.current
-    if (!state.address || !adapter.isConnected()) return
+    const generation = connectionGeneration.current
+    const isCurrent = () => mountedRef.current && generation === connectionGeneration.current && adapter === adapterRef.current
+    if (!isCurrent() || !state.address || !adapter.isConnected()) return
     const balance = await fetchBalance(adapter, state.address, mnemonicRef.current)
-    setState(s => ({ ...s, balance }))
+    if (isCurrent()) setState(s => ({ ...s, balance }))
   }, [state.address])
 
   const refreshTransactions = useCallback(async () => {
     const adapter = adapterRef.current
-    if (!state.address || !adapter.isConnected()) return
+    const generation = connectionGeneration.current
+    const isCurrent = () => mountedRef.current && generation === connectionGeneration.current && adapter === adapterRef.current
+    if (!isCurrent() || !state.address || !adapter.isConnected()) return
     const transactions = await fetchHistory(adapter, mnemonicRef.current)
-    setState(s => ({ ...s, transactions }))
+    if (isCurrent()) setState(s => ({ ...s, transactions }))
   }, [state.address])
 
   // Claimable payment link methods (#460) ---------------------------------
 
   const sendViaLink = useCallback(async (amount: bigint): Promise<CreatedClaimLink> => {
     const adapter = adapterRef.current
+    const generation = connectionGeneration.current
+    const isCurrent = () => mountedRef.current && generation === connectionGeneration.current && adapter === adapterRef.current
     if (!adapter.isConnected()) throw new Error('Not connected to a node')
     const mnemonic = mnemonicRef.current
     if (!mnemonic) throw new Error('Wallet is locked. Unlock it before sending.')
@@ -1271,7 +1308,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // Refresh the sender's balance opportunistically.
     if (state.address) {
       fetchBalance(adapter, state.address, mnemonicRef.current)
-        .then((balance) => setState((s) => ({ ...s, balance })))
+        .then((balance) => { if (isCurrent()) setState((s) => ({ ...s, balance })) })
         .catch(() => {})
     }
 
@@ -1302,6 +1339,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   const refundClaimLink = useCallback(async (id: string): Promise<string> => {
     const adapter = adapterRef.current
+    const generation = connectionGeneration.current
+    const isCurrent = () => mountedRef.current && generation === connectionGeneration.current && adapter === adapterRef.current
     if (!adapter.isConnected()) throw new Error('Not connected to a node')
     if (!state.address) throw new Error('No wallet address to refund to')
     const record = claimLinkStore.getAll().find((r) => r.id === id)
@@ -1314,7 +1353,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     if (state.address) {
       fetchBalance(adapter, state.address, mnemonicRef.current)
-        .then((balance) => setState((s) => ({ ...s, balance })))
+        .then((balance) => { if (isCurrent()) setState((s) => ({ ...s, balance })) })
         .catch(() => {})
     }
     return txHash
