@@ -8,7 +8,11 @@ description = "Inactive exact-integer CT demurrage constraint research"
 
 [dev-dependencies]
 bth-cluster-tax = { path = "../../../cluster-tax" }
+bth-crypto-ring-signature = { path = "../../../crypto/ring-signature", features = ["alloc"] }
 num-bigint = "0.4"
 curve25519-dalek-v4 = { workspace = true }
+curve25519-dalek = { workspace = true }
+rand_chacha_fixture = { package = "rand_chacha", version = "0.3" }
+rand_core_fixture = { package = "rand_core", version = "0.6" }
 bulletproofs-og = { workspace = true, features = ["std", "yoloproofs"] }
 merlin = { workspace = true, features = ["std"] }

@@ -5,8 +5,11 @@ This document neither accepts ADR-0009 nor activates confidential amounts. The
 [test-only Rust artifact](../../scripts/research/ct-demurrage/src/lib.rs) checks
 integer witnesses against the **actual**
 [demurrage kernel](../../cluster-tax/src/demurrage.rs), and allocates constraints
-through the existing Bulletproofs R1CS API. It does **not** generate or verify a
-proof, implement a CT transaction format, or establish protocol security.
+through the existing Bulletproofs R1CS API. This integer reference portion does
+**not** generate or verify a proof, implement a CT transaction format, or
+establish protocol security. The subsequent [inactive proof experiment](ct-demurrage-proof-experiment.md)
+adds real proof round trips and binding controls in a separate test-only module;
+the derivation and census below describe the original reference portion.
 
 Recommendation: carry the quotient/remainder construction below into a separately
 reviewed experimental R1CS gadget. Its nonlinear cap/subtract/max constraints
