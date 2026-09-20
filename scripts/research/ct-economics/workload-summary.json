@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "scope": "Inactive synthetic fixed-stock funded-payment histories; node gamma membership only, not full wallet construction, observed calibration, equilibrium, or ratification",
-  "base_commit": "fb5c9e38ad4a1f94d739e3440d25260eef294cba",
+  "checkout_commit": "5deb55814797842344b8526af1794c102cced821",
   "runtime": {
     "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
     "rustc": "rustc 1.93.0-nightly (646a3f8c1 2025-12-02)"
@@ -10,9 +10,9 @@
   "config_sha256": "a38ebb82c146f3096f09a3949477ed23dee126720647f90f209e1ec7f3248ad7",
   "source_sha256": {
     "Cargo.lock": "beed316f357e0c5ac866383cdba77b546d2b4a2726b8418541850ac6e40b1eb7",
-    "botho/tests/ct_economics_workload.rs": "c48284d53ea5f271f75069f098ae3d60d94b02e229b0a6be0ac2f164f4ea2a52",
+    "botho/tests/ct_economics_workload.rs": "576e47e9013b8c4fed7d891a9de42adb545ed4f709e9c8bf56e129f03ebf990a",
     "scripts/research/ct-economics/workload-config.json": "a38ebb82c146f3096f09a3949477ed23dee126720647f90f209e1ec7f3248ad7",
-    "scripts/research/ct-economics/workload_summary.py": "c617d67feee8a076250bf4e98d3c51ea38f5fac3aa3afca9e7983e8d3608b6de",
+    "scripts/research/ct-economics/workload_summary.py": "35fc2589fd310dfbc0f53be0893163a3f83187249417400b4cc195892d659832",
     "scripts/research/ct-economics/reference.rs": "beec9718a254faa37e8c93be4a5f9ae03cc0dc0da77e34c6a606d74ede38fa10",
     "botho/src/ledger/store.rs": "656902092d8dfbfa398185338a496e5810b66ded17aa17b6c864e678b4bb4036",
     "botho/src/ledger/snapshot.rs": "c202f8a0dd43e39eb5d8ba47c6dde71c1523add575c58be5e37ae3095b09027b",

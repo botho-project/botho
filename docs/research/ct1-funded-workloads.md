@@ -29,7 +29,9 @@ remain locked and cannot fund payments or refreshes pending #1286.
 Ring membership invokes the actual node
 `GammaDecoySelector::select_decoys_for_input` with 19 decoys, mature public
 outputs in ledger key order and all selected real input keys excluded. Synthetic
-point bytes identify outputs; no signature, WASM, RPC wallet orchestration or
+point bytes identify outputs; fixture-only memo bytes preserve distinct record
+identity through the selector so inherited keys cannot substitute an older
+record’s age. These bytes do not represent encrypted wallet memos; no signature, WASM, RPC wallet orchestration or
 accepted transaction is claimed. The pool retains historical outputs after
 private spending, matching the source path. Lottery candidate keyspace rotation
 is a source-parity adapter checked against the real ledger API in exact order.
@@ -136,7 +138,10 @@ history. `workload-config.json` records every workload axis;
 `workload-summary.json` preserves compact rows, failure denominators, spendable/locked value and
 fee accounting, ticket snapshots, per-block metric transcript digests (height, fees, payout,
 eligible count and attacker accounted value), exact input/source hashes
-and runtime provenance. The larger raw file is generated locally and uploaded
+and runtime provenance. `checkout_commit` identifies the checkout when
+summarization runs; resummarizing historical raw results updates metadata only
+and does not constitute a numerical rerun. Exact source hashes identify the
+measured source files. The larger raw file is generated locally and uploaded
 by CI. The summarizer independently checks totals and paired comparisons.
 Compilation has a separate CI allowance; execution and summarization have a
 three-minute limit. Local execution is not substituted for Linux CI.

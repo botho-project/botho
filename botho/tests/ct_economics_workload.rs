@@ -11,7 +11,7 @@ use botho::{
 use bth_cluster_tax::{
     count_eligible, draw_winners, LotteryCandidate, LotteryDrawConfig, TagVector,
 };
-use bth_transaction_clsag::TxOutput;
+use bth_transaction_clsag::{EncryptedMemo, TxOutput};
 use bth_transaction_types::ClusterTagVector;
 use rand::{rngs::StdRng, SeedableRng};
 use serde_json::{json, Value};
@@ -33,13 +33,17 @@ impl Coin {
     fn utxo(&self) -> Utxo {
         let mut hash = [0; 32];
         hash.copy_from_slice(&self.id[..32]);
+        // Synthetic record identity only; no encrypted memo or signed transaction is
+        // claimed.
+        let mut identity = [0u8; 66];
+        identity[..36].copy_from_slice(&self.id);
         Utxo {
             id: UtxoId::new(hash, u32::from_le_bytes(self.id[32..].try_into().unwrap())),
             output: TxOutput {
                 amount: self.value,
                 target_key: self.target_key,
                 public_key: self.target_key,
-                e_memo: None,
+                e_memo: EncryptedMemo::from_bytes(&identity),
                 cluster_tags: ClusterTagVector::empty(),
                 kem_ciphertext: None,
             },
@@ -193,11 +197,7 @@ impl Model {
             }
             let age = selected
                 .iter()
-                .map(|o| {
-                    let mut selected_id = [0; 36];
-                    selected_id[..32].copy_from_slice(&o.target_key);
-                    height - self.coins[&selected_id].created
-                })
+                .map(|output| selected_record_age(output, &pool))
                 .max()
                 .unwrap()
                 .max(height - c.created);
@@ -232,6 +232,46 @@ impl Model {
         Ok((fee, ids))
     }
 }
+// The production selector returns outputs without record metadata. Fixture-only
+// memo identities preserve the exact selected record, including inherited keys.
+fn selected_record_age(output: &TxOutput, pool: &[OutputCandidate]) -> u64 {
+    let mut matches = pool
+        .iter()
+        .filter(|candidate| candidate.output.e_memo == output.e_memo);
+    let candidate = matches.next().expect("selected fixture record must exist");
+    assert!(matches.next().is_none(), "fixture identity must be unique");
+    assert_eq!(
+        &candidate.output, output,
+        "selected output must match its tagged record"
+    );
+    candidate.age_blocks
+}
+
+#[test]
+fn inherited_keys_preserve_selected_record_age() {
+    let mut model = Model::default();
+    let old = model.add(0, BTH, 1000, false);
+    let payout = model.add(0, BTH, 2000, true);
+    model.coins.get_mut(&payout).unwrap().target_key = model.coins[&old].target_key;
+    let pool: Vec<_> = [old, payout]
+        .iter()
+        .map(|id| OutputCandidate::from_utxo(&model.coins[id].utxo(), 3000))
+        .collect();
+    assert_eq!(pool[0].output.target_key, pool[1].output.target_key);
+    for (candidate, expected) in pool.iter().zip([2000, 1000]) {
+        let selected = GammaDecoySelector::new()
+            .select_decoys_for_input(
+                std::slice::from_ref(candidate),
+                1,
+                &[],
+                expected,
+                &mut StdRng::seed_from_u64(1323),
+            )
+            .unwrap();
+        assert_eq!(selected_record_age(&selected[0], &pool), expected);
+    }
+}
+
 fn config() -> Value {
     serde_json::from_slice(
         &std::fs::read(
@@ -469,9 +509,10 @@ fn failed_payment_leaves_all_inventory_unchanged() {
     }
     let input = model.largest(0, 20000).unwrap();
     let before = model.coins.clone();
-    assert!(model
-        .transfer(&[input], 0, 1, Some(BTH), 2, 20000, 1306)
-        .is_err());
+    assert_eq!(
+        model.transfer(&[input], 0, 1, Some(BTH), 2, 20000, 1306),
+        Err("unaffordable")
+    );
     assert_eq!(model.coins, before);
 }
 #[test]

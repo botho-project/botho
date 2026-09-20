@@ -39,7 +39,7 @@ for row in rows:
     row['accounted_delta_hold_one'] = str(int(row['attacker_accounted_value']) - int(baseline['attacker_accounted_value']))
 paths = ['Cargo.lock', 'botho/tests/ct_economics_workload.rs', 'scripts/research/ct-economics/workload-config.json', 'scripts/research/ct-economics/workload_summary.py', 'scripts/research/ct-economics/reference.rs', 'botho/src/ledger/store.rs', 'botho/src/ledger/snapshot.rs', 'botho/src/wallet.rs', 'botho/src/decoy_selection.rs', 'botho/src/consensus/lottery.rs', 'botho/src/block.rs', 'cluster-tax/src/lottery.rs', 'cluster-tax/src/demurrage.rs', 'cluster-tax/src/monetary.rs', '.github/workflows/workspace-build.yml']
 result = dict(schema=1, scope='Inactive synthetic fixed-stock funded-payment histories; node gamma membership only, not full wallet construction, observed calibration, equilibrium, or ratification',
-    base_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+    checkout_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
     runtime=dict(platform=platform.platform(), rustc=subprocess.check_output(['rustc', '--version'], text=True).strip()),
     raw_sha256=hashlib.sha256(raw).hexdigest(), config_sha256=hashlib.sha256(config_raw).hexdigest(),
     source_sha256={path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest() for path in paths}, config=config, rows=rows)
