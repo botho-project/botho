@@ -128,10 +128,15 @@ async function run() {
     const signature = await connection.sendRawTransaction(tx.serialize(), {
       skipPreflight: true,
     });
-    const status = await connection.confirmTransaction(
-      { ...bh, signature },
-      "confirmed",
-    );
+    // web3 can reject confirmation for a landed program error instead of
+    // returning status.value.err. Only the confirmed transaction receipt below
+    // establishes the expected rejection; a thrown RPC error alone never does.
+    let confirmationError: unknown;
+    try {
+      await connection.confirmTransaction({ ...bh, signature }, "confirmed");
+    } catch (error) {
+      confirmationError = error;
+    }
     let receipt = await connection.getTransaction(signature, {
       commitment: "confirmed",
       maxSupportedTransactionVersion: 0,
@@ -143,19 +148,23 @@ async function run() {
         maxSupportedTransactionVersion: 0,
       });
     }
-    assert.ok(receipt?.meta, `missing receipt: ${label}`);
+    assert.ok(
+      receipt?.meta,
+      `missing confirmed receipt: ${label}; confirmation=${String(confirmationError)}`,
+    );
+    assert.equal(receipt.transaction.signatures[0], signature);
     const logs = receipt.meta.logMessages ?? [];
     if (failure) {
-      assert.ok(status.value.err, `${label}: unexpectedly succeeded`);
+      assert.ok(receipt.meta.err, `${label}: unexpectedly succeeded`);
       assert.match(logs.join("\n"), failure, `${label}: wrong failure`);
     } else {
-      assert.equal(status.value.err, null, `${label}: ${logs.join("\n")}`);
+      assert.equal(receipt.meta.err, null, `${label}: ${logs.join("\n")}`);
     }
     events.push({
       label,
       signature,
       slot: receipt.slot,
-      error: status.value.err,
+      error: receipt.meta.err,
       logs,
     });
     console.log(`${failure ? "REJECTED" : "EXECUTED"}: ${label}`);
