@@ -67,9 +67,8 @@ const DEFAULT_TTL: Duration = Duration::from_secs(300);
 /// [`DnsSeedError::DnsQuery`]. Tokio cancellation occurs at await points and
 /// cannot preempt synchronous CPU work.
 ///
-/// Direct seed discovery uses Hickory 0.26. The separate libp2p DNS dependency
-/// still uses Hickory 0.25, so its RUSTSEC-2026-0118/-0119 tracking and the
-/// corresponding `deny.toml` exceptions remain until #813 is resolved.
+/// Direct seed discovery and libp2p DNS/mDNS use Hickory 0.26 after the
+/// #813 migration. The timeout is still useful for ordinary network stalls.
 const DNS_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Drive a DNS lookup future with a timeout at cooperative await points.
