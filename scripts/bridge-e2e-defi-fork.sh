@@ -135,8 +135,12 @@ export BRIDGE_FORK_EXPECTED_CHAIN_ID="${BRIDGE_FORK_EXPECTED_CHAIN_ID:-11155111}
 export BRIDGE_FORK_FUND_ACCOUNTS=1
 export BRIDGE_BTH_RPC_URL="${BRIDGE_BTH_RPC_URL:-http://127.0.0.1:27200}"
 
-echo "==> Starting local Botho node (botho-testnet)"
+echo "==> Building local Botho node and testnet harness"
 cd "$REPO_ROOT"
+# cargo run --bin botho-testnet alone does not build the separate node process.
+cargo build --release -p botho --bin botho --bin botho-testnet
+
+echo "==> Starting local Botho node (botho-testnet)"
 # A single node externalizes blocks under SCP with an n=1 quorum. --clean
 # guarantees a fresh chain each run.
 cargo run --release --bin botho-testnet -- start --nodes 1 --clean --wait-consensus

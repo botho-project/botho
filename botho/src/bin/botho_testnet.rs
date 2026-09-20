@@ -1100,8 +1100,16 @@ fn start_node_process(node: &NodeState, config_path: &Path, verbose: bool) -> Re
     Ok(child)
 }
 
-/// Find the botho binary (either in target/release or target/debug)
+/// Prefer the node built beside this harness, including custom Cargo target
+/// dirs.
 fn find_botho_binary() -> Result<PathBuf> {
+    if let Ok(harness) = std::env::current_exe() {
+        if let Some(node) = sibling_botho_binary(&harness) {
+            return Ok(node);
+        }
+    }
+
+    // Legacy fallbacks for a standalone/copied harness.
     // Try release first
     let release_bin = PathBuf::from("target/release/botho");
     if release_bin.exists() {
@@ -1122,6 +1130,13 @@ fn find_botho_binary() -> Result<PathBuf> {
     Err(anyhow!(
         "Could not find botho binary. Run 'cargo build --release' first."
     ))
+}
+
+fn sibling_botho_binary(harness: &Path) -> Option<PathBuf> {
+    let node = harness
+        .parent()?
+        .join(format!("botho{}", std::env::consts::EXE_SUFFIX));
+    node.is_file().then_some(node)
 }
 
 /// Read PID from file
@@ -1239,6 +1254,21 @@ fn wait_for_consensus(nodes: &[NodeState], timeout_secs: u64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn node_lookup_follows_harness_into_custom_target_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let profile = tmp.path().join("custom artifacts").join("release");
+        std::fs::create_dir_all(&profile).unwrap();
+        let harness = profile.join(format!("botho-testnet{}", std::env::consts::EXE_SUFFIX));
+        let node = profile.join(format!("botho{}", std::env::consts::EXE_SUFFIX));
+        assert_eq!(super::sibling_botho_binary(&harness), None);
+        std::fs::write(&node, []).unwrap();
+        assert_eq!(super::sibling_botho_binary(&harness), Some(node.clone()));
+        std::fs::remove_file(&node).unwrap();
+        std::fs::create_dir(&node).unwrap();
+        assert_eq!(super::sibling_botho_binary(&harness), None);
+    }
 
     /// The derived key files have the exact on-disk shape the bridge loader
     /// (`bth-bridge-service`'s `ReserveKeys::load`) expects: 32-byte-hex
