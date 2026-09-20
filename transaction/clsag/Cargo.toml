@@ -48,3 +48,8 @@ getrandom = { workspace = true, features = ["wasm_js"] }
 [dev-dependencies]
 rand = { workspace = true, features = ["thread_rng"] }
 serde_json = "1"
+
+# A test-only actual-WASM vector runner, not a production wallet export.
+[[example]]
+name = "lottery_v2_wasm"
+crate-type = ["cdylib"]
