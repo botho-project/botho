@@ -215,6 +215,46 @@ mod tests {
         );
     }
 
+    /// Captured with libp2p-identity 0.2.14 from the PUBLIC TEST seed [42; 32].
+    /// Pins compatibility across the 0.3 migration; never use this key on a
+    /// node.
+    #[test]
+    fn legacy_ed25519_file_preserves_bytes_peer_id_and_signatures() {
+        let encoded = hex::decode(concat!(
+            "08011240",
+            "2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+            "197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d61"
+        ))
+        .unwrap();
+        let public =
+            hex::decode("08011220197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d61")
+                .unwrap();
+        let signature = hex::decode(concat!(
+            "07411862ff428f00475b9c187c24a2f2b9b4bf3f14dcc8aaf0d1cf49b2becc3fa",
+            "15bd3803b5e020796ee1c4c3857413b18fd7a372a65ff759e0e386e523aa50d"
+        ))
+        .unwrap();
+        let message = b"Botho node identity compatibility #813";
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("node_key");
+        write_private_file(&path, &encoded).unwrap();
+
+        for _ in 0..2 {
+            let loaded = load_or_create_keypair(&path).unwrap();
+            assert_eq!(std::fs::read(&path).unwrap(), encoded);
+            assert_eq!(loaded.to_protobuf_encoding().unwrap(), encoded);
+            assert_eq!(loaded.public().encode_protobuf(), public);
+            assert_eq!(
+                PeerId::from(loaded.public()).to_string(),
+                "12D3KooWBXu3uGPMkjjxViK6autSnFH5QaKJgTwW8CaSxYSD6yYL"
+            );
+            assert_eq!(loaded.sign(message).unwrap(), signature);
+            let decoded = libp2p::identity::PublicKey::try_decode_protobuf(&public).unwrap();
+            assert!(decoded.verify(message, &signature));
+            assert!(!decoded.verify(b"different message", &signature));
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn persisted_key_has_0600_permissions() {
