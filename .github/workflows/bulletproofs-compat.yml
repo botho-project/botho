@@ -1,0 +1,33 @@
+name: Bulletproofs compatibility
+
+on:
+  pull_request:
+    paths:
+      - 'vendor/bulletproofs-og/**'
+      - 'transaction/core/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/bulletproofs-compat.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-03
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bulletproofs-compat
+      - name: Check original-fork proof and commitment fixtures
+        run: cargo test --locked -p bth-transaction-core --test bulletproofs_compat
+      - name: Upstream cleanup, range proof, and optional R1CS tests
+        run: cargo test --manifest-path vendor/bulletproofs-og/Cargo.toml --features yoloproofs
+      - name: Check no_std without workspace feature unification
+        run: cargo check --manifest-path vendor/bulletproofs-og/Cargo.toml --no-default-features --target wasm32-unknown-unknown

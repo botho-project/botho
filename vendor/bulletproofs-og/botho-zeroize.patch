@@ -1,0 +1,339 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index f6d968dc..baeb2c6d 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -18,7 +18,7 @@ description = "A pure-Rust implementation of Bulletproofs using Ristretto"
+ edition = "2018"
+ 
+ [dependencies]
+-curve25519-dalek = { version = "4.0.0-rc.1", default-features = false, features = ["digest", "rand_core", "serde", "alloc"] }
++curve25519-dalek = { version = "4.0.0-rc.1", default-features = false, features = ["digest", "rand_core", "serde", "alloc", "zeroize"] }
+ subtle = { version = "2", default-features = false }
+ sha3 = { version = "0.10", default-features = false }
+ rand_core = { version = "0.6", default-features = false, features = ["alloc"] }
+@@ -28,7 +28,7 @@ serde = { version = "1", default-features = false, features = ["alloc"] }
+ serde_derive = { version = "1", default-features = false }
+ thiserror = { version = "1", optional = true }
+ merlin = { version = "3", default-features = false }
+-clear_on_drop = { version = "0.2", default-features = false }
++zeroize = { version = "1", default-features = false, features = ["alloc"] }
+ 
+ [dev-dependencies]
+ hex = "0.4"
+@@ -40,7 +40,7 @@ rand_chacha = "0.3.1"
+ default = ["std"]
+ yoloproofs = []
+ std = ["rand", "rand/std", "rand/std_rng", "thiserror"]
+-nightly = ["curve25519-dalek/alloc", "subtle/nightly", "clear_on_drop/nightly"]
++nightly = ["curve25519-dalek/alloc", "subtle/nightly"]
+ docs = ["nightly"]
+ 
+ [[test]]
+@@ -68,3 +68,6 @@ required-features = ["yoloproofs"]
+ name = "linear_proof"
+ harness = false
+ 
++
++# Keep upstream tests independently runnable, including inside Loom worktrees.
++[workspace]
+diff --git a/src/util.rs b/src/util.rs
+index 7bbbf593..a27dbbc0 100644
+--- a/src/util.rs
++++ b/src/util.rs
+@@ -5,8 +5,8 @@ extern crate alloc;
+ 
+ use alloc::vec;
+ use alloc::vec::Vec;
+-use clear_on_drop::clear::Clear;
+ use curve25519_dalek::scalar::Scalar;
++use zeroize::Zeroize;
+ 
+ use crate::inner_product_proof::inner_product;
+ 
+@@ -170,19 +170,19 @@ impl Poly6 {
+ impl Drop for VecPoly1 {
+     fn drop(&mut self) {
+         for e in self.0.iter_mut() {
+-            e.clear();
++            e.zeroize();
+         }
+         for e in self.1.iter_mut() {
+-            e.clear();
++            e.zeroize();
+         }
+     }
+ }
+ 
+ impl Drop for Poly2 {
+     fn drop(&mut self) {
+-        self.0.clear();
+-        self.1.clear();
+-        self.2.clear();
++        self.0.zeroize();
++        self.1.zeroize();
++        self.2.zeroize();
+     }
+ }
+ 
+@@ -190,16 +190,16 @@ impl Drop for Poly2 {
+ impl Drop for VecPoly3 {
+     fn drop(&mut self) {
+         for e in self.0.iter_mut() {
+-            e.clear();
++            e.zeroize();
+         }
+         for e in self.1.iter_mut() {
+-            e.clear();
++            e.zeroize();
+         }
+         for e in self.2.iter_mut() {
+-            e.clear();
++            e.zeroize();
+         }
+         for e in self.3.iter_mut() {
+-            e.clear();
++            e.zeroize();
+         }
+     }
+ }
+@@ -207,12 +207,12 @@ impl Drop for VecPoly3 {
+ #[cfg(feature = "yoloproofs")]
+ impl Drop for Poly6 {
+     fn drop(&mut self) {
+-        self.t1.clear();
+-        self.t2.clear();
+-        self.t3.clear();
+-        self.t4.clear();
+-        self.t5.clear();
+-        self.t6.clear();
++        self.t1.zeroize();
++        self.t2.zeroize();
++        self.t3.zeroize();
++        self.t4.zeroize();
++        self.t5.zeroize();
++        self.t6.zeroize();
+     }
+ }
+ 
+@@ -309,7 +309,7 @@ mod tests {
+ 
+     #[test]
+     fn test_scalar_exp() {
+-        let x = Scalar::from_bits(
++        let x = Scalar::from_bytes_mod_order(
+             *b"\x84\xfc\xbcOx\x12\xa0\x06\xd7\x91\xd9z:'\xdd\x1e!CE\xf7\xb1\xb9Vz\x810sD\x96\x85\xb5\x07",
+         );
+         assert_eq!(scalar_exp_vartime(&x, 0), Scalar::ONE);
+@@ -355,7 +355,7 @@ mod tests {
+         let mut v = vec![Scalar::from(24u64), Scalar::from(42u64)];
+ 
+         for e in v.iter_mut() {
+-            e.clear();
++            e.zeroize();
+         }
+ 
+         fn flat_slice<T>(x: &[T]) -> &[u8] {
+@@ -378,9 +378,9 @@ mod tests {
+             Scalar::from(255u64),
+         );
+ 
+-        v.0.clear();
+-        v.1.clear();
+-        v.2.clear();
++        v.0.zeroize();
++        v.1.zeroize();
++        v.2.zeroize();
+ 
+         fn as_bytes<T>(x: &T) -> &[u8] {
+             use core::mem;
+diff --git a/src/range_proof/party.rs b/src/range_proof/party.rs
+index e2d5ffe8..636a3fab 100644
+--- a/src/range_proof/party.rs
++++ b/src/range_proof/party.rs
+@@ -13,12 +13,12 @@
+ extern crate alloc;
+ 
+ use alloc::vec::Vec;
+-use clear_on_drop::clear::Clear;
+ use core::iter;
+ use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
+ use curve25519_dalek::scalar::Scalar;
+ use curve25519_dalek::traits::MultiscalarMul;
+ use rand_core::{CryptoRng, RngCore};
++use zeroize::Zeroize;
+ 
+ use crate::errors::MPCError;
+ use crate::generators::{BulletproofGens, PedersenGens};
+@@ -147,8 +147,8 @@ impl<'a> PartyAwaitingPosition<'a> {
+ /// Overwrite secrets with null bytes when they go out of scope.
+ impl<'a> Drop for PartyAwaitingPosition<'a> {
+     fn drop(&mut self) {
+-        self.v.clear();
+-        self.v_blinding.clear();
++        self.v.zeroize();
++        self.v_blinding.zeroize();
+     }
+ }
+ 
+@@ -240,21 +240,17 @@ impl<'a> PartyAwaitingBitChallenge<'a> {
+ /// Overwrite secrets with null bytes when they go out of scope.
+ impl<'a> Drop for PartyAwaitingBitChallenge<'a> {
+     fn drop(&mut self) {
+-        self.v.clear();
+-        self.v_blinding.clear();
+-        self.a_blinding.clear();
+-        self.s_blinding.clear();
+-
+-        // Important: due to how ClearOnDrop auto-implements InitializableFromZeroed
+-        // for T: Default, calling .clear() on Vec compiles, but does not
+-        // clear the content. Instead, it only clears the Vec's header.
+-        // Clearing the underlying buffer item-by-item will do the job, but will
+-        // keep the header as-is, which is fine since the header does not contain secrets.
++        self.v.zeroize();
++        self.v_blinding.zeroize();
++        self.a_blinding.zeroize();
++        self.s_blinding.zeroize();
++
++        // Wipe scalar storage in place, retaining the non-secret vector headers.
+         for e in self.s_L.iter_mut() {
+-            e.clear();
++            e.zeroize();
+         }
+         for e in self.s_R.iter_mut() {
+-            e.clear();
++            e.zeroize();
+         }
+     }
+ }
+@@ -308,11 +304,11 @@ impl PartyAwaitingPolyChallenge {
+ /// Overwrite secrets with null bytes when they go out of scope.
+ impl Drop for PartyAwaitingPolyChallenge {
+     fn drop(&mut self) {
+-        self.v_blinding.clear();
+-        self.a_blinding.clear();
+-        self.s_blinding.clear();
+-        self.t_1_blinding.clear();
+-        self.t_2_blinding.clear();
++        self.v_blinding.zeroize();
++        self.a_blinding.zeroize();
++        self.s_blinding.zeroize();
++        self.t_1_blinding.zeroize();
++        self.t_2_blinding.zeroize();
+ 
+         // Note: polynomials r_poly, l_poly and t_poly
+         // are cleared within their own Drop impls.
+diff --git a/src/r1cs/prover.rs b/src/r1cs/prover.rs
+index f1e027be..c5b1d73b 100644
+--- a/src/r1cs/prover.rs
++++ b/src/r1cs/prover.rs
+@@ -1,12 +1,12 @@
+ #![allow(non_snake_case)]
+ 
+-use clear_on_drop::clear::Clear;
+ use core::borrow::BorrowMut;
+ use core::mem;
+ use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
+ use curve25519_dalek::scalar::Scalar;
+ use curve25519_dalek::traits::{Identity, MultiscalarMul};
+ use merlin::Transcript;
++use zeroize::Zeroize;
+ 
+ use super::{
+     ConstraintSystem, LinearCombination, R1CSProof, RandomizableConstraintSystem,
+@@ -74,24 +74,29 @@ pub struct RandomizingProver<'g, T: BorrowMut<Transcript>> {
+ /// Overwrite secrets with null bytes when they go out of scope.
+ impl Drop for Secrets {
+     fn drop(&mut self) {
+-        self.v.clear();
+-        self.v_blinding.clear();
+-
+-        // Important: due to how ClearOnDrop auto-implements InitializableFromZeroed
+-        // for T: Default, calling .clear() on Vec compiles, but does not
+-        // clear the content. Instead, it only clears the Vec's header.
+-        // Clearing the underlying buffer item-by-item will do the job, but will
+-        // keep the header as-is, which is fine since the header does not contain secrets.
++        self.clear_secrets();
++    }
++}
++
++impl Secrets {
++    fn clear_secrets(&mut self) {
++        for e in self.v.iter_mut() {
++            e.zeroize();
++        }
++        for e in self.v_blinding.iter_mut() {
++            e.zeroize();
++        }
++
++        // Wipe scalar storage in place, retaining the non-secret vector headers.
+         for e in self.a_L.iter_mut() {
+-            e.clear();
++            e.zeroize();
+         }
+         for e in self.a_R.iter_mut() {
+-            e.clear();
++            e.zeroize();
+         }
+         for e in self.a_O.iter_mut() {
+-            e.clear();
++            e.zeroize();
+         }
+-        // XXX use ClearOnDrop instead of doing the above
+     }
+ }
+ 
+@@ -697,16 +702,14 @@ impl<'g, T: BorrowMut<Transcript>> Prover<'g, T> {
+             r_vec,
+         );
+ 
+-        // We do not yet have a ClearOnDrop wrapper for Vec<Scalar>.
+-        // When PR 202 [1] is merged, we can simply wrap s_L and s_R at the point of creation.
+-        // [1] https://github.com/dalek-cryptography/curve25519-dalek/pull/202
++        // Wipe the temporary blinding vectors after constructing the proof.
+         for scalar in s_L1
+             .iter_mut()
+             .chain(s_L2.iter_mut())
+             .chain(s_R1.iter_mut())
+             .chain(s_R2.iter_mut())
+         {
+-            scalar.clear();
++            scalar.zeroize();
+         }
+         let proof = R1CSProof {
+             A_I1,
+@@ -728,3 +731,35 @@ impl<'g, T: BorrowMut<Transcript>> Prover<'g, T> {
+         Ok((proof, self.transcript))
+     }
+ }
++
++#[cfg(test)]
++mod cleanup_tests {
++    use super::*;
++
++    #[test]
++    fn secrets_cleanup_overwrites_every_live_scalar() {
++        let secret = vec![Scalar::from(17u64), Scalar::from(29u64)];
++        let mut secrets = Secrets {
++            a_L: secret.clone(),
++            a_R: secret.clone(),
++            a_O: secret.clone(),
++            v: secret.clone(),
++            v_blinding: secret,
++        };
++        // Exercise the exact cleanup called by Drop before the allocations are freed.
++        // Keeping length two makes Vec::clear (which does not wipe storage) fail.
++        secrets.clear_secrets();
++        for values in [
++            &secrets.a_L,
++            &secrets.a_R,
++            &secrets.a_O,
++            &secrets.v,
++            &secrets.v_blinding,
++        ] {
++            assert_eq!(values.len(), 2);
++            for scalar in values {
++                assert_eq!(scalar.to_bytes(), [0u8; 32]);
++            }
++        }
++    }
++}
