@@ -74,3 +74,7 @@ rand_core = { workspace = true }
 [[bench]]
 name = "ring_signature_benchmarks"
 harness = false
+
+[[bench]]
+name = "clsag_benchmarks"
+harness = false
