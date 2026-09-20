@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { render, screen, waitFor, act, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { WalletProvider, useWallet } from './wallet'
-import { buildSendTransaction } from '@botho/wasm-signer'
+import { buildSendTransaction, spendableBalance, buildOwnedHistory } from '@botho/wasm-signer'
 
 // Mock @botho/wasm-signer so these context tests never depend on the generated
 // wasm artifact (`packages/wasm-signer/pkg/`, produced by `build:wasm` and
@@ -187,6 +187,40 @@ describe('WalletContext', () => {
       expect(adapter.disconnect).toHaveBeenCalledOnce()
       await act(async () => { pending.resolve(); await pending.promise })
       expect(adapter.getNodeInfo).not.toHaveBeenCalled()
+    })
+
+    it.each(['disconnect', 'switch'] as const)('ignores manual refreshes completed after %s', async (action) => {
+      let wallet!: ReturnType<typeof useWallet>
+      render(<WalletProvider><TestConsumer onMount={value => { wallet = value }} /></WalletProvider>)
+      await waitFor(() => expect(wallet.isConnected).toBe(true))
+      await act(async () => { await wallet.createWallet(TEST_MNEMONIC_12) })
+
+      let resolveBalance!: (value: bigint) => void
+      let resolveHistory!: (value: []) => void
+      vi.mocked(spendableBalance).mockReturnValueOnce(new Promise(done => { resolveBalance = done }))
+      vi.mocked(buildOwnedHistory).mockReturnValueOnce(new Promise(done => { resolveHistory = done }))
+      let balanceRefresh!: Promise<void>
+      let historyRefresh!: Promise<void>
+      act(() => {
+        balanceRefresh = wallet.refreshBalance()
+        historyRefresh = wallet.refreshTransactions()
+      })
+      await act(async () => {
+        if (action === 'disconnect') wallet.disconnect()
+        else window.dispatchEvent(new CustomEvent('network-changed', {
+          detail: { network: { rpcEndpoint: 'https://replacement.test/rpc', networkId: 'testnet' } },
+        }))
+      })
+      const currentBalance = wallet.balance
+      const currentTransactions = wallet.transactions
+      await act(async () => {
+        resolveBalance(999n)
+        resolveHistory([])
+        await Promise.all([balanceRefresh, historyRefresh])
+      })
+      expect(wallet.balance).toBe(currentBalance)
+      expect(wallet.transactions).toBe(currentTransactions)
+      expect(wallet.isConnected).toBe(action === 'switch')
     })
 
     it('keeps the fast network switch when the previous connection finishes last', async () => {

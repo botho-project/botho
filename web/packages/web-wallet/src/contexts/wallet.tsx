@@ -1063,6 +1063,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // bridge deposit order memo (64-byte hex) is embedded on-chain.
     const bridgeDepositMemo = options?.bridgeDepositMemo
     const adapter = adapterRef.current
+    const generation = connectionGeneration.current
+    const isCurrent = () => mountedRef.current && generation === connectionGeneration.current && adapter === adapterRef.current
     if (!adapter.isConnected()) {
       throw new Error('Not connected to a node')
     }
@@ -1179,7 +1181,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // Refresh balance/history opportunistically; ignore failures.
     if (state.address) {
       fetchBalance(adapter, state.address, mnemonicRef.current)
-        .then((balance) => setState((s) => ({ ...s, balance })))
+        .then((balance) => { if (isCurrent()) setState((s) => ({ ...s, balance })) })
         .catch(() => {})
     }
 
@@ -1234,22 +1236,28 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   const refreshBalance = useCallback(async () => {
     const adapter = adapterRef.current
-    if (!state.address || !adapter.isConnected()) return
+    const generation = connectionGeneration.current
+    const isCurrent = () => mountedRef.current && generation === connectionGeneration.current && adapter === adapterRef.current
+    if (!isCurrent() || !state.address || !adapter.isConnected()) return
     const balance = await fetchBalance(adapter, state.address, mnemonicRef.current)
-    setState(s => ({ ...s, balance }))
+    if (isCurrent()) setState(s => ({ ...s, balance }))
   }, [state.address])
 
   const refreshTransactions = useCallback(async () => {
     const adapter = adapterRef.current
-    if (!state.address || !adapter.isConnected()) return
+    const generation = connectionGeneration.current
+    const isCurrent = () => mountedRef.current && generation === connectionGeneration.current && adapter === adapterRef.current
+    if (!isCurrent() || !state.address || !adapter.isConnected()) return
     const transactions = await fetchHistory(adapter, mnemonicRef.current)
-    setState(s => ({ ...s, transactions }))
+    if (isCurrent()) setState(s => ({ ...s, transactions }))
   }, [state.address])
 
   // Claimable payment link methods (#460) ---------------------------------
 
   const sendViaLink = useCallback(async (amount: bigint): Promise<CreatedClaimLink> => {
     const adapter = adapterRef.current
+    const generation = connectionGeneration.current
+    const isCurrent = () => mountedRef.current && generation === connectionGeneration.current && adapter === adapterRef.current
     if (!adapter.isConnected()) throw new Error('Not connected to a node')
     const mnemonic = mnemonicRef.current
     if (!mnemonic) throw new Error('Wallet is locked. Unlock it before sending.')
@@ -1300,7 +1308,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     // Refresh the sender's balance opportunistically.
     if (state.address) {
       fetchBalance(adapter, state.address, mnemonicRef.current)
-        .then((balance) => setState((s) => ({ ...s, balance })))
+        .then((balance) => { if (isCurrent()) setState((s) => ({ ...s, balance })) })
         .catch(() => {})
     }
 
@@ -1331,6 +1339,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   const refundClaimLink = useCallback(async (id: string): Promise<string> => {
     const adapter = adapterRef.current
+    const generation = connectionGeneration.current
+    const isCurrent = () => mountedRef.current && generation === connectionGeneration.current && adapter === adapterRef.current
     if (!adapter.isConnected()) throw new Error('Not connected to a node')
     if (!state.address) throw new Error('No wallet address to refund to')
     const record = claimLinkStore.getAll().find((r) => r.id === id)
@@ -1343,7 +1353,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     if (state.address) {
       fetchBalance(adapter, state.address, mnemonicRef.current)
-        .then((balance) => setState((s) => ({ ...s, balance })))
+        .then((balance) => { if (isCurrent()) setState((s) => ({ ...s, balance })) })
         .catch(() => {})
     }
     return txHash
