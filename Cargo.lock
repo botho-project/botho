@@ -2359,7 +2359,6 @@ dependencies = [
  "ml-kem",
  "proptest",
  "rand 0.10.2",
- "rand 0.9.5",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "serde",
