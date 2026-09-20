@@ -113,12 +113,12 @@ legacy disposition and activation remain outstanding. #1308 codecs are outside
 this change. No legacy credits, migration, activation, live reset or audit
 engagement is performed; #1286 remains open.
 
-## Local execution status (2026-09-20)
+## Execution evidence and gate disposition (2026-09-20)
 
 [Raw ledger run](../../botho/tests/fixtures/lottery-v2-validation/local-ledger.txt),
 [metrics and source identities](../../botho/tests/fixtures/lottery-v2-validation/local-evidence.json),
 and [diagnostic excerpts](../../botho/tests/fixtures/lottery-v2-validation/diagnostic-excerpts.txt)
-retain both success and failure. The complete parallel ledger run was **92 passed,
+retain both success and failure. The original complete parallel ledger run was **92 passed,
 1 failed**, in 258.43 seconds. The funded test passed, including 33 actual write
 aborts/reopens: 721 maturity blocks, two payouts, and exactly 1 BTH fee = 0.2 BTH
 burn + 0.5 BTH distribution + 0.3 BTH reserve.
@@ -127,8 +127,47 @@ One existing test failed at fresh `Ledger::open` with OS `EINVAL`, before its fe
 calculation. A bounded current-code follow-up cohort reproduced raw `EINVAL` in
 two existing fixture open/persist operations. The isolated original test passed;
 three unchanged-parent cohorts passed; later controlled cohorts and a bounded
-8-worker/400-cycle open/read/close/reopen diagnostic also passed. This **does not
-establish a baseline issue or resolve the cause**. Operation-specific error
-context is retained; no production retry, serialization workaround, skipped
-acceptance test or suppressed assertion was added. Fresh Linux evidence and
-resolution adequate for review remain gates; this change is a draft until then.
+8-worker/400-cycle open/read/close/reopen diagnostic also passed. Those passing
+repetitions did not establish a baseline issue or resolve the cause. The original
+failure log and comparison hashes above remain unchanged.
+
+Subsequent tracing attributed two parallel-suite failures to LMDB's System V
+`semop` at first-reader allocation, rather than proving invalid semaphore IDs.
+A separate direct project diagnostic then opened ten real Ledger environments,
+held their ten write transactions, and observed EINVAL when normally opening an
+eleventh on a host with `kern.sysv.semume=10`. This demonstrates a resource
+boundary; no kernel undo-entry count was captured at the historical failures,
+so it does not prove each failure's precise cause.
+
+Merged [#1362](https://github.com/botho-project/botho/pull/1362) provides a scoped
+macOS ledger-test launcher. It reads the kernel limit and budgets two entries per
+active ledger test plus two entries of headroom, capped at four workers. It adds
+no skip filters or retries; ordinary ignored-test semantics still apply. The
+production System V backend remains unchanged: the POSIX alternative was rejected
+because it loses automatic stale-writer recovery. The normal Node opens one shared
+Ledger environment, contributing two semaphore numbers; this is not a global
+bound on custom embeddings or other semaphore users.
+
+The exact implementation at `5127d4c2cc59e9f5b842517717a95566dadebfd2` now has both
+complete execution results, including canonical maturity and all funded rollback
+assertions:
+
+| Platform and execution policy | Complete ledger result | Raw evidence |
+|---|---|---|
+| macOS, merged launcher, four workers, no interposer/debugger | **93 passed, 0 failed**, 271.24 seconds | [macOS log](../../botho/tests/fixtures/lottery-v2-validation/macos-bounded-ledger.txt) |
+| Linux, existing default parallel execution | **93 passed, 0 failed**, 388.10 seconds | [Linux log](../../botho/tests/fixtures/lottery-v2-validation/linux-ledger.txt) |
+
+The macOS run used the preserved exact-source binary (SHA256 `e599a15bdc9ea32ccf89169d762265092316fe1efc7df9daa0f54581c9dcb5f9`)
+and launcher SHA256 `e8e491103bb7881469f56fd7ee437485ed6c05beab608f83526d73376ad7bccc`.
+Linux evidence is from [run 35543628003](https://github.com/botho-project/botho/actions/runs/35543628003),
+artifact `10616326753`, synthetic merge checkout
+`e751d6354aa48ef897a5b5d67c197c0cbaade74b`. Its recorded implementation hashes
+match the tested PR source. Both execution deadlines were 600 seconds; neither
+run weakened the funded acceptance assertions. Exact raw hashes, provenance and
+limits are recorded in `local-evidence.json`.
+
+This evidence addresses the execution gate under the documented test resource
+policy while retaining the historical failures and diagnostic uncertainty. This
+amendment changes no implementation. Independent Judge review and current-head CI
+remain required; the PR stays draft until that review. No production retry,
+locking change, activation or payout-spendability claim follows from these runs.

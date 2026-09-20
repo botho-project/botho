@@ -2,7 +2,7 @@
   "issue": 1354,
   "date": "2026-09-20",
   "implementation_parent": "85a57e19426fcac24298b84faf80c6013bb83742",
-  "status": "funded transition passed; complete parallel ledger suite failed; local EINVAL cause unresolved",
+  "status": "complete 93-test ledger suite passed on Linux and uninstrumented macOS under supported test resource policy; original failures retained; review pending",
   "command": "botho lib-test binary ledger:: --nocapture; subprocess timeout600s; debug profile",
   "host": {
     "cpu": "Apple M3 Ultra",
@@ -153,8 +153,9 @@
     "No wallet payout spend/discovery proof.",
     "Optional emission counters retain trusted local caller semantics.",
     "No production activation or migration.",
-    "Baseline comparison passed; no claim that EINVAL is pre-existing or resolved.",
-    "Fresh Linux CI required; draft is not approval."
+    "Historical semop EINVAL was not accompanied by a kernel undo-entry count; direct resource-boundary reproduction is not proof of each historical failure cause.",
+    "macOS validation uses the merged test-only concurrency launcher; production System V locking and its owner-death recovery are unchanged.",
+    "Evidence amendment does not itself approve the draft; current-head CI and independent Judge review remain required."
   ],
   "other_checks": {
     "ledger_consistency_integration": {
@@ -174,5 +175,50 @@
     "actionlint": "passed",
     "fmt": "passed",
     "diff_check": "passed"
+  },
+  "gate_disposition": {
+    "date": "2026-09-20",
+    "tested_source_head": "5127d4c2cc59e9f5b842517717a95566dadebfd2",
+    "implementation_changes_since_tests": "none; evidence/docs only",
+    "policy_pr": 1362,
+    "policy_merge_commit": "a38f0109b4fb88140a502321c900e34e9ce350e3",
+    "macos": {
+      "passed": 93,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": "271.24",
+      "instrumented": false,
+      "test_threads": 4,
+      "observed_semume": 10,
+      "timeout_seconds": 600,
+      "binary_sha256": "e599a15bdc9ea32ccf89169d762265092316fe1efc7df9daa0f54581c9dcb5f9",
+      "wrapper_sha256": "e8e491103bb7881469f56fd7ee437485ed6c05beab608f83526d73376ad7bccc",
+      "command": "scripts/test-ledger.sh --binary <preserved exact-head lib test executable>",
+      "raw_log": "macos-bounded-ledger.txt",
+      "raw_sha256": "6123a9116da02bdb81239efc542af1e3ef099ca0d1e68081252fab29589f05de"
+    },
+    "linux": {
+      "passed": 93,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": "388.10",
+      "run_id": 35543628003,
+      "artifact_id": 10616326753,
+      "checkout_commit": "e751d6354aa48ef897a5b5d67c197c0cbaade74b",
+      "checkout_kind": "GitHub synthetic merge of tested PR head",
+      "test_threads": "default; no macOS launcher",
+      "timeout_seconds": 600,
+      "raw_log": "linux-ledger.txt",
+      "raw_sha256": "0e1609c65f8c863a3f0eb4dc8facbfa0c0b294f13940d993fbd7702ee35dd1b5"
+    },
+    "resource_boundary": {
+      "issue": 1361,
+      "operation": "ten distinct real Ledger environments with held write transactions; normal eleventh Ledger open",
+      "observed_semume": 10,
+      "result": "eleventh open returned Database(Invalid argument (os error22)); initial ten opens and writers succeeded",
+      "diagnostic_sha256": "85628c4e1eebd158caab0bae483603c782cfce1836cec0a7566fe831288f6283",
+      "interpretation": "demonstrated per-process resource boundary; not proof of instantaneous kernel count at historical parallel failures"
+    },
+    "production_scope": "Default Node opens one shared Ledger environment with two semaphore numbers; arbitrary embeddings and other linked semaphore users are not globally bounded."
   }
 }
