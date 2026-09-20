@@ -32,9 +32,10 @@ The engine requires the canonical Squads program, correctly owned executable
 program/accounts, the expected multisig PDA, exact membership with all three
 permissions, a threshold of at least two, and no external `config_authority`.
 It verifies the derived vault equals wbth's mint authority, validates the SPL
-mint, and checks the vault has a positive lamport balance. This does not prove
-sufficient marker rent; exact rent preflight and bounded action retry/fee policy
-are tracked in [#1299](https://github.com/botho-project/botho/issues/1299).
+mint, and checks the vault has a positive lamport balance. Before each execute
+send, finalized rent quotes must cover the exact 40-byte OrderMarker plus the
+zero-data system vault rent exemption remainder. Checked arithmetic and account
+owner/data checks fail closed. An existing marker takes the completion path.
 RPC transaction preflight is enabled, but funding can change before execution.
 Missing or mismatched state blocks
 new contributions. Keep fee funding on each member and marker-rent funding on
@@ -215,3 +216,88 @@ multiple pages and recovers through fresh member databases. It checks restart,
 one explicitly injected null RPC response, paused/local-policy-drift recovery,
 zero recovery broadcasts, wrong-genesis and changed-source rejection, mixed-order
 history, and a hold for a real later governance epoch.
+
+
+## Persistent retry and transaction-fee allowance
+
+Each order/member has an independent versioned SQLite budget ledger, separate
+from its transient action. The default `solana.squads.retry` policy is:
+
+```toml
+[solana.squads.retry]
+max_attempts = 12
+max_fee_lamports = 100000
+send_interval_seconds = 10
+max_broadcasts_per_signature = 6
+```
+
+The lamport limit covers **transaction fees only, excluding rent and transfers**.
+Before signing, the engine obtains `getFeeForMessage` for the exact serialized
+legacy message at finalized commitment. Null, malformed or zero quotes hold.
+The canonical action builder permits only Squads and ATA instructions; it rejects
+ComputeBudget instructions, so no priority price is configured. If priority fees
+are added later, the quote and instruction validation must include them before
+retaining this monetary-bound claim. RPC fee/rent quotes use the configured
+trusted node; they are not independent consensus proofs.
+
+An immediate SQLite transaction atomically reserves the entire quoted fee,
+new signature/raw bytes/expiry, first broadcast and intent revision before send.
+Ambiguous responses, simulation rejection, landed failure and expiry never
+refund that allowance. An advisory pre-signing check avoids work on exhausted
+budgets; the atomic reservation remains authoritative for competing workers.
+Identical-byte rebroadcast consumes no new signature/fee allocation but reserves
+another persisted broadcast count and next-send time first. Limits include the
+initial send. All action kinds share one lifetime budget for this order/member.
+Action clearing, candidate changes, generic rollback and restart retain it.
+
+The policy is pinned on first reservation; loosening configuration does not
+replenish existing ledgers. Valid hard bounds are 1–128 lifetime signatures,
+1–10,000,000 fee lamports, 1–3,600 seconds between sends and 1–32 broadcasts per
+signature. Arithmetic overflow holds. Clock rollback holds until the persisted
+next-send timestamp is reached; no clock-based budget reset occurs. Exhaustion
+never unlocks backing or creates a replacement proposal. Read-only verified
+completion/history recovery runs before signing/funding/budget checks and stays
+available while paused, exhausted or after marker funding has been consumed.
+
+Inspect a member's local ledger without starting watchers or accessing RPC:
+
+```sh
+bth-bridge --config bridge.toml --solana-budget ORDER_UUID --budget-member MEMBER_BASE58
+```
+
+After reviewing the ledger, chain state and funding, a deliberate finite
+extension uses the displayed SQL revision and records an audit reason:
+
+```sh
+bth-bridge --config bridge.toml --solana-budget ORDER_UUID --budget-member MEMBER_BASE58 \
+  --budget-revision REVISION --budget-add-attempts 2 --budget-add-fees 10000 \
+  --budget-reason 'Reviewed failed action and corrected funding'
+```
+
+Both additions must be positive and the resulting totals remain under the hard
+bounds. A stale revision fails atomically. Consumed attempts/fees and retry times
+are unchanged; this does not extend an individual signature's broadcast count.
+No automated budget extension, funding, reserve release or refund is performed.
+
+Migration marks pre-existing intents as having unknown prior fee exposure. They
+may reconcile read-only, but cannot obtain an implicit fresh signing allowance.
+An explicit `--budget-revision -1` import grants only the stated finite allowance
+from migration forward and preserves `legacy_prior_exposure_unknown=true`; it
+makes no lifetime monetary claim about older sends. Existing unallocated raw
+bytes cannot be rebroadcast. Reconcile their landed/expired state first. Never
+clear budget tables to restart an exhausted order.
+
+The dedicated local fixture uses a real positive-but-insufficient vault, exact
+rent quotes, real quorum and an actual failed landed execute. A clearly identified
+stale funding read plus test-only preflight bypass reproduces a fee-charging race;
+production preflight remains enabled. It verifies persistent exhaustion, local
+funding recovery, explicit extension, packet loss, bounded identical-byte sends,
+real blockhash expiry, competing DB connections, restart, accepted-response loss
+and paused/exhausted exactly-once completion with backing retained. Run:
+
+```sh
+SQUADS_ENGINE_TEST=1 SQUADS_RETRY_TEST=1 ./contracts/solana/localnet/run-squads.sh
+```
+
+RPC contracts: [getFeeForMessage](https://solana.com/docs/rpc/http/getfeeformessage)
+and [getMinimumBalanceForRentExemption](https://solana.com/docs/rpc/http/getminimumbalanceforrentexemption).

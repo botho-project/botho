@@ -35,6 +35,22 @@ struct Args {
     #[arg(long, conflicts_with = "migrate")]
     reconcile_solana: Option<uuid::Uuid>,
 
+    /// Inspect a persisted per-member Squads signing/fee ledger; no RPC or
+    /// signing.
+    #[arg(long, conflicts_with_all=["migrate","reconcile_solana"])]
+    solana_budget: Option<uuid::Uuid>,
+    #[arg(long, requires = "solana_budget")]
+    budget_member: Option<String>,
+    /// Expected revision for an explicit bounded extension (-1: legacy import).
+    #[arg(long, requires_all=["solana_budget","budget_member","budget_add_attempts","budget_add_fees","budget_reason"], allow_hyphen_values=true)]
+    budget_revision: Option<i64>,
+    #[arg(long, requires = "budget_revision")]
+    budget_add_attempts: Option<u32>,
+    #[arg(long, requires = "budget_revision")]
+    budget_add_fees: Option<u64>,
+    #[arg(long, requires = "budget_revision")]
+    budget_reason: Option<String>,
+
     /// Run database migrations only
     #[arg(long)]
     migrate: bool,
@@ -81,6 +97,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    if let Some(id) = args.solana_budget {
+        let member = args
+            .budget_member
+            .as_deref()
+            .ok_or("--budget-member is required")?;
+        if let Some(revision) = args.budget_revision {
+            db.extend_solana_budget(
+                &id,
+                member,
+                revision,
+                args.budget_add_attempts.unwrap(),
+                args.budget_add_fees.unwrap(),
+                args.budget_reason.as_deref().unwrap(),
+            )?;
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&db.solana_budget(&id, member)?)?
+        );
+        return Ok(());
+    }
     if let Some(id) = args.reconcile_solana {
         let order = db.get_order(&id)?.ok_or("unknown bridge order")?;
         if order.status != bth_bridge_core::OrderStatus::MintPending {

@@ -204,11 +204,13 @@ jobs:
         with:
           key: squads-engine
 
+      # Cargo tests run from the bridge-service package directory. Absolute paths
+      # keep their evidence destinations identical to upload-artifact inputs.
       - name: Execute real Squads OrderProcessor integration
         env:
           RUSTUP_TOOLCHAIN: nightly-2025-12-03
           SQUADS_ENGINE_TEST: '1'
-          SQUADS_ENGINE_EVIDENCE: engine-execution.json
+          SQUADS_ENGINE_EVIDENCE: ${{ github.workspace }}/contracts/solana/engine-execution.json
         run: ./localnet/run-squads.sh
 
       - name: Preserve Squads engine execution evidence
@@ -216,15 +218,15 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: squads-engine-execution
-          path: contracts/solana/engine-execution.json
-          if-no-files-found: warn
+          path: ${{ github.workspace }}/contracts/solana/engine-execution.json
+          if-no-files-found: error
 
       - name: Execute closed-account historical recovery integration
         env:
           RUSTUP_TOOLCHAIN: nightly-2025-12-03
           SQUADS_ENGINE_TEST: '1'
           SQUADS_HISTORY_TEST: '1'
-          SQUADS_ENGINE_EVIDENCE: history-execution.json
+          SQUADS_ENGINE_EVIDENCE: ${{ github.workspace }}/contracts/solana/history-execution.json
         run: ./localnet/run-squads.sh
 
       - name: Preserve historical recovery execution evidence
@@ -232,5 +234,21 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: squads-history-execution
-          path: contracts/solana/history-execution.json
-          if-no-files-found: warn
+          path: ${{ github.workspace }}/contracts/solana/history-execution.json
+          if-no-files-found: error
+
+      - name: Execute bounded retry and rent integration
+        env:
+          RUSTUP_TOOLCHAIN: nightly-2025-12-03
+          SQUADS_ENGINE_TEST: '1'
+          SQUADS_RETRY_TEST: '1'
+          SQUADS_ENGINE_EVIDENCE: ${{ github.workspace }}/contracts/solana/retry-execution.json
+        run: ./localnet/run-squads.sh
+
+      - name: Preserve bounded retry execution evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: squads-retry-execution
+          path: ${{ github.workspace }}/contracts/solana/retry-execution.json
+          if-no-files-found: error

@@ -62,7 +62,14 @@ impl Database {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|e| e.to_string())?;
-        tx.execute("INSERT OR IGNORE INTO solana_mint_intents(order_id,binding,multisig,revision) VALUES (?1,?2,?3,0)",params![order.to_string(),binding,multisig]).map_err(|e|e.to_string())?;
+        let inserted = tx.execute("INSERT OR IGNORE INTO solana_mint_intents(order_id,binding,multisig,revision) VALUES (?1,?2,?3,0)",params![order.to_string(),binding,multisig]).map_err(|e|e.to_string())?;
+        if inserted == 1 {
+            tx.execute(
+                "INSERT INTO solana_budget_origins(order_id,legacy) VALUES(?1,0)",
+                [order.to_string()],
+            )
+            .map_err(|e| e.to_string())?;
+        }
         let intent = Self::read_solana_intent(&tx, order)?.ok_or("missing Squads intent")?;
         if intent.binding != binding || intent.multisig != multisig {
             return Err("Squads order binding changed".into());

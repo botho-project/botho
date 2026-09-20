@@ -420,6 +420,12 @@ pub trait SolanaRpc: Send + Sync {
     ) -> Result<Vec<(Pubkey, SolanaAccount)>, String> {
         Err("getProgramAccounts unsupported".into())
     }
+    async fn minimum_rent(&self, _bytes: usize) -> Result<u64, String> {
+        Err("rent quote unsupported".into())
+    }
+    async fn message_fee(&self, _message: &[u8]) -> Result<u64, String> {
+        Err("message fee quote unsupported".into())
+    }
     async fn get_block_height(&self) -> Result<u64, String> {
         Err("getBlockHeight unsupported".into())
     }
@@ -637,6 +643,28 @@ impl SolanaRpc for HttpSolanaRpc {
             })
             .collect()
     }
+    async fn minimum_rent(&self, bytes: usize) -> Result<u64, String> {
+        let v = self
+            .call_bounded(
+                "getMinimumBalanceForRentExemption",
+                json!([bytes,{"commitment":"finalized"}]),
+                4096,
+            )
+            .await?;
+        v.as_u64()
+            .filter(|v| *v > 0)
+            .ok_or("invalid/zero finalized rent quote".into())
+    }
+    async fn message_fee(&self, message: &[u8]) -> Result<u64, String> {
+        let v = self
+            .call_bounded(
+                "getFeeForMessage",
+                json!([base64_encode(message),{"commitment":"finalized"}]),
+                4096,
+            )
+            .await?;
+        parse_message_fee(&v)
+    }
     async fn get_block_height(&self) -> Result<u64, String> {
         self.call("getBlockHeight", json!([{"commitment":"finalized"}]))
             .await?
@@ -743,6 +771,16 @@ impl SolanaRpc for HttpSolanaRpc {
             .await?;
         parse_token_supply(&result)
     }
+}
+
+fn parse_message_fee(v: &Value) -> Result<u64, String> {
+    if v.pointer("/context/slot").and_then(Value::as_u64).is_none() {
+        return Err("fee quote context missing".into());
+    }
+    v.get("value")
+        .and_then(Value::as_u64)
+        .filter(|v| *v > 0)
+        .ok_or("fee quote null/invalid; retain pending".into())
 }
 
 /// Marker string used to signal an idempotent "already processed" broadcast
@@ -980,6 +1018,25 @@ fn parse_account_info(result: &Value) -> Result<Option<SolanaAccount>, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fee_quote_rejects_null_missing_negative_and_overflow() {
+        use super::parse_message_fee;
+        for value in [
+            serde_json::json!(null),
+            serde_json::json!({"value":5000}),
+            serde_json::json!({"context":{"slot":1},"value":null}),
+            serde_json::json!({"context":{"slot":1},"value":-1}),
+            serde_json::json!({"context":{"slot":1},"value":"18446744073709551616"}),
+            serde_json::json!({"context":{"slot":1},"value":0}),
+        ] {
+            assert!(parse_message_fee(&value).is_err());
+        }
+        assert_eq!(
+            parse_message_fee(&serde_json::json!({"context":{"slot":1},"value":5000})).unwrap(),
+            5000
+        );
+    }
+
     use super::*;
     use serde_json::json;
 

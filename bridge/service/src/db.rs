@@ -4,6 +4,8 @@
 
 mod solana_history;
 pub use solana_history::MAX_SOLANA_HISTORY_BYTES;
+mod solana_budget;
+
 mod solana_intents;
 pub use solana_intents::{SolanaAction, SolanaIntent};
 
@@ -387,6 +389,16 @@ impl Database {
                 revision INTEGER NOT NULL,
                 action TEXT,
                 UNIQUE(multisig, transaction_index)
+            );
+
+            CREATE TABLE IF NOT EXISTS solana_budget_origins (
+                order_id TEXT PRIMARY KEY, legacy INTEGER NOT NULL
+            );
+            INSERT OR IGNORE INTO solana_budget_origins SELECT order_id,1 FROM solana_mint_intents;
+            CREATE TABLE IF NOT EXISTS solana_budgets (
+                order_id TEXT NOT NULL, member TEXT NOT NULL,
+                revision INTEGER NOT NULL, payload TEXT NOT NULL,
+                PRIMARY KEY(order_id,member)
             );
 
             CREATE TABLE IF NOT EXISTS mints (

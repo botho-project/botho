@@ -235,7 +235,10 @@ async function run() {
     SystemProgram.transfer({
       fromPubkey: payer.publicKey,
       toPubkey: vault,
-      lamports: 100_000_000,
+      lamports:
+        process.env.SQUADS_RETRY_TEST === "1"
+          ? await connection.getMinimumBalanceForRentExemption(0)
+          : 100_000_000,
     }),
   ]);
   const bump = PublicKey.findProgramAddressSync(

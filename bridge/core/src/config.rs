@@ -451,6 +451,8 @@ pub struct SolanaConfig {
 /// members independently validate and approve that canonical proposal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SquadsConfig {
+    #[serde(default)]
+    pub retry: SquadsRetryPolicy,
     /// Bounded finalized history work per recovery tick (1..=100).
     #[serde(default = "default_squads_history_page_size")]
     pub history_page_size: usize,
@@ -461,6 +463,38 @@ pub struct SquadsConfig {
     pub multisig: String,
     pub vault_index: u8,
     pub proposer: String,
+}
+
+/// Lifetime per-order/member transaction-fee allowance, excluding account rent.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct SquadsRetryPolicy {
+    pub max_attempts: u32,
+    pub max_fee_lamports: u64,
+    pub send_interval_seconds: u32,
+    pub max_broadcasts_per_signature: u32,
+}
+impl Default for SquadsRetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_attempts: 12,
+            max_fee_lamports: 100_000,
+            send_interval_seconds: 10,
+            max_broadcasts_per_signature: 6,
+        }
+    }
+}
+impl SquadsRetryPolicy {
+    pub fn validate(&self) -> Result<(), String> {
+        if !(1..=128).contains(&self.max_attempts)
+            || !(1..=10_000_000).contains(&self.max_fee_lamports)
+            || !(1..=3600).contains(&self.send_interval_seconds)
+            || !(1..=32).contains(&self.max_broadcasts_per_signature)
+        {
+            return Err("Squads retry policy outside finite bounds".into());
+        }
+        Ok(())
+    }
 }
 
 fn default_squads_history_page_size() -> usize {

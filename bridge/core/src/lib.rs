@@ -38,6 +38,7 @@ pub use chains::{Chain, ChainAddress};
 pub use config::{
     BridgeConfig, BthConfig, EthereumConfig, FederationSettings, GasPriceStrategy,
     PublicApiSettings, ReserveSettings, SolanaCommitment, SolanaConfig, SquadsConfig,
+    SquadsRetryPolicy,
 };
 pub use election::{
     assemble_elected_term_doc, canonical_ballot_memo, canonical_nomination_memo,
