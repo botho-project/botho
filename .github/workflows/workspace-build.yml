@@ -79,6 +79,19 @@ jobs:
       - name: Compile-check all test targets (no run)
         run: cargo test --workspace --no-run
 
+      # Execute real temporary-ledger and loopback RPC assertions (#1273).
+      # These tests require no public node, faucet, credentials or live funds.
+      - name: Run ledger and RPC integration tests
+        timeout-minutes: 15
+        run: |
+          cargo test --locked -p botho \
+            --test chain_sync_catchup_integration \
+            --test issue_998_fresh_genesis_liveness \
+            --test ledger_consistency_integration \
+            --test tx_lifecycle_integration \
+            --test rpc_integration \
+            --test e2e_faucet_workflow
+
       # Doctests are NOT compiled by `--no-run` above and no other workflow
       # runs them, so documentation examples rotted silently (#670). They are
       # fast (seconds) and deterministic, so run them for real.

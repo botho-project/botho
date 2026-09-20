@@ -62,6 +62,10 @@ cargo test -p botho --test e2e_consensus_integration
 cargo test -p botho --test pq_integration
 ```
 
+The workspace PR job also executes six stateful ledger/RPC integration targets.
+See [ledger and RPC execution](ledger-rpc-integration-tests.md) for the command,
+measured runtimes and environment requirements.
+
 ---
 
 ## Test Organization
