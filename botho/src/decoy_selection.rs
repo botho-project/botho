@@ -833,6 +833,10 @@ impl GammaDecoySelector {
                 if selected.len() >= count {
                     break;
                 }
+                // Earlier fallback entries may have added this target key.
+                if used_keys.contains(&candidate.output.target_key) {
+                    continue;
+                }
                 selected.push(candidate.output.clone());
                 used_keys.push(candidate.output.target_key);
             }
@@ -1772,6 +1776,66 @@ mod tests {
                     "decoy age {age} outside band [{min_age}, {max_age}]"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn test_age_fallback_uses_each_target_key_once() {
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        let candidates = vec![
+            make_candidate([9; 32], 10, 1000), // Explicitly excluded.
+            make_candidate([8; 32], 9, 1000),  // Not mature.
+            make_candidate([1; 32], 100, 1000),
+            make_candidate([1; 32], 100, 1000),
+            make_candidate([2; 32], 120, 1000),
+            make_candidate([2; 32], 121, 1000),
+            make_candidate([3; 32], 130, 1000),
+        ];
+        // Exercise both fallback-only and partially filled in-band selection.
+        for real_age in [0, 100] {
+            let selected = GammaDecoySelector::new()
+                .select_decoys_for_input(
+                    &candidates,
+                    3,
+                    &[[9; 32]],
+                    real_age,
+                    &mut ChaCha8Rng::seed_from_u64(7),
+                )
+                .unwrap();
+            let keys: Vec<_> = selected.iter().map(|output| output.target_key).collect();
+            assert_eq!(keys, vec![[1; 32], [2; 32], [3; 32]]);
+        }
+    }
+
+    #[test]
+    fn test_age_fallback_reports_insufficient_unique_targets() {
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha8Rng;
+
+        let candidates = vec![
+            make_candidate([1; 32], 100, 1000),
+            make_candidate([1; 32], 100, 1000),
+            make_candidate([2; 32], 120, 1000),
+            make_candidate([2; 32], 121, 1000),
+            make_candidate([3; 32], 130, 1000),
+        ];
+        for real_age in [0, 100] {
+            let result = GammaDecoySelector::new().select_decoys_for_input(
+                &candidates,
+                4,
+                &[],
+                real_age,
+                &mut ChaCha8Rng::seed_from_u64(7),
+            );
+            assert!(matches!(
+                result,
+                Err(DecoySelectionError::InsufficientCandidates {
+                    required: 4,
+                    available: 3,
+                })
+            ));
         }
     }
 
