@@ -1,0 +1,85 @@
+{
+  "base_commit": "4ef0af75603ec6c6fb58ec06031a8c38823bccad",
+  "input_status": "All cost/power/price/capacity values illustrative and unmeasured; currency is an abstract purchasing-power unit.",
+  "common": {
+    "period_hours": "24",
+    "capacity_tx_s": "10",
+    "work_multiplier": "1.2",
+    "verify_seconds": "0.25",
+    "verify_incremental_kw": "0.05",
+    "electricity_currency_kwh": "0.15",
+    "cpu_currency_second": "0.000002",
+    "transaction_bytes": "10000",
+    "bandwidth_currency_gb": "0.05",
+    "storage_currency_gb_hour": "0.00003",
+    "issuance_height": 31536000,
+    "issuance_supply_pico": 611010000000000000000,
+    "actual_block_seconds": "40"
+  },
+  "presets": [
+    {
+      "name": "small",
+      "replicas": "10",
+      "cores_per_replica": "8",
+      "consensus_network_kw": "10",
+      "consensus_fixed_currency_hour": "1.0",
+      "verifier_base_kw": "0.02",
+      "verifier_fixed_currency_hour": "0.01",
+      "delivery_copies": "20",
+      "fixed_stock_gb": "100",
+      "additional_security_currency_hour": "10",
+      "assigned_consensus_issuance_bth_hour": "1"
+    },
+    {
+      "name": "medium",
+      "replicas": "100",
+      "cores_per_replica": "8",
+      "consensus_network_kw": "100",
+      "consensus_fixed_currency_hour": "10.0",
+      "verifier_base_kw": "0.02",
+      "verifier_fixed_currency_hour": "0.01",
+      "delivery_copies": "200",
+      "fixed_stock_gb": "1000",
+      "additional_security_currency_hour": "100",
+      "assigned_consensus_issuance_bth_hour": "1"
+    },
+    {
+      "name": "high",
+      "replicas": "1000",
+      "cores_per_replica": "8",
+      "consensus_network_kw": "1000",
+      "consensus_fixed_currency_hour": "100.0",
+      "verifier_base_kw": "0.02",
+      "verifier_fixed_currency_hour": "0.01",
+      "delivery_copies": "2000",
+      "fixed_stock_gb": "10000",
+      "additional_security_currency_hour": "1000",
+      "assigned_consensus_issuance_bth_hour": "1"
+    }
+  ],
+  "prices_currency_per_bth": [
+    "0.01",
+    "1",
+    "100"
+  ],
+  "utilizations": [
+    "0",
+    "0.01",
+    "0.1",
+    "0.8"
+  ],
+  "retention_days": [
+    "30",
+    "365"
+  ],
+  "payment_sizes_bth": [
+    "0.01",
+    "1",
+    "100"
+  ],
+  "payment_fractions": [
+    "0.001",
+    "0.01",
+    "0.1"
+  ]
+}
