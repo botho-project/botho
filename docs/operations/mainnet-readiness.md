@@ -1,0 +1,71 @@
+# Mainnet readiness: requirements and evidence
+
+**Status: not ready. Evidence review: 2026-09-19.** This inventory compares
+repository source at `65687275d394eec0265dc7f2a59566d47ca2bd87` with issue bodies
+and comments. It does not report new tests, live probes, deployments, audit
+engagements or maintainer approvals. Issue closure records historical work;
+it does not prove a later launch candidate has passed the same checks.
+
+This is the current launch checklist linked from [PLAN](../../PLAN.md) and
+[the external audit scope](../security/external-audit-scope.md). Existing
+acceptance criteria and ADRs govern the gates; this document neither ratifies
+proposed decisions nor waives a requirement. **Incomplete** means required
+work remains; **unproven** means the required execution/sign-off evidence is
+missing here; **implemented** describes code, not production verification.
+
+**Current work scope (2026-09-20): audit preparation, without commissioning
+an external audit.** Complete implementation, independent internal review,
+adversarial testing, wallet interoperability and launch/recovery rehearsals
+before investing in an engagement. Resolve known substantive findings and
+retain reproducible evidence against an exact release candidate. Firm
+selection, engagement and spending are deferred; the external assessment
+remains a later launch gate. Internal testing cannot guarantee that an
+external reviewer will find no further defects.
+
+## Core protocol release
+
+| Gate and requirement | Current evidence/status | Evidence needed to close; owner/action |
+|---|---|---|
+| CT economics specification ([#902](https://github.com/botho-project/botho/issues/902)) | **Incomplete.** [ADR 0006](../decisions/0006-pq-architecture-ratification.md) requires confidential amounts. [ADR 0009](../decisions/0009-confidential-amounts-economics.md) remains Proposed. [#902](https://github.com/botho-project/botho/issues/902) records D2/EpochOrigin ratification and resolved gadget research, but its latest status still requires ADR acceptance and normative authoring with a code-consistency audit. | Maintainer: ratify the complete ADR, including explicit policy/residual decisions. Protocol authors: specify commitments, bounds, public-fee quantization/leakage budget and economics verification consistently; [#902](https://github.com/botho-project/botho/issues/902)'s normative-authoring requirement remains. Design research alone is not an accepted protocol specification. |
+| Confidential transaction implementation ([#904](https://github.com/botho-project/botho/issues/904)) | **Incomplete.** [Active CLSAG types](../../transaction/clsag/src/lib.rs) publish `TxOutput.amount` and `ClsagRingInput.pseudo_output_amount`, with zero-blinded amount commitments. The [#902](https://github.com/botho-project/botho/issues/902) escalation documents amount-matching elimination of decoys; sender anonymity cannot be inferred from ring size alone. RingCT helpers existing elsewhere are not integration evidence. | Protocol/wallet engineers: after the governing specification, implement hidden amounts, balance/range/demurrage proofs and value-free economics across validation, ledger, RPC and wallet stacks; test conservation, invalid proofs, overflow, double spending, fee leakage and cross-wallet compatibility. Record the coordinated testnet reset and confirmed private spends; submit the resulting implementation for security review. |
+| Universal ML-KEM recipient outputs ([#904](https://github.com/botho-project/botho/issues/904) completed half) | **Implemented; historical live rollout recorded on [#904](https://github.com/botho-project/botho/issues/904).** [CLSAG outputs](../../transaction/clsag/src/lib.rs) implement hybrid outputs; [consensus validation](../../botho/src/consensus/validation.rs) enforces ciphertext presence/length for protocol major ≥6 with the `pq` feature. [Source protocol](../../botho/src/network/discovery.rs) is 6.0.0. This review has not queried the live fleet. | Release owner: pin build features and verify enforcement plus send/scan/spend on every supported wallet for the launch artifact. Preserve hybrid privacy through CT. [#904](https://github.com/botho-project/botho/issues/904) also records a classical-only encrypted-memo caveat; review its confidentiality claims and disposition explicitly. |
+| External security assessment ([#616](https://github.com/botho-project/botho/issues/616)) | **Incomplete.** [Scope draft](../security/external-audit-scope.md), [threat model](../security/threat-model.md) and [internal reports](../../audits/README.md) exist. [#616](https://github.com/botho-project/botho/issues/616)'s four original settle-surface conditions cleared in July; no external completion is evidenced. | Operator: firm, budget, scope, dates, contact and tagged freeze. Security/release owners: include subsequent CT and bridge changes as applicable, publish findings/dispositions, remediate and obtain retest evidence for Critical/High findings. Internal clean reports and green CI do not substitute for external review. |
+| Release and operational acceptance | **Historical delivery exists; launch candidate unproven.** [#613](https://github.com/botho-project/botho/issues/613) (regional seeds), [#605](https://github.com/botho-project/botho/issues/605) (economic disposition), [#614](https://github.com/botho-project/botho/issues/614) (CLI port), [#615](https://github.com/botho-project/botho/issues/615)/[#640](https://github.com/botho-project/botho/issues/640) (release/reproducibility) are closed. [Release verification](reproducible-builds.md), [disaster recovery](disaster-recovery.md) and [reset runbook](../../infra/seed/TESTNET_RESET.md) exist. | Release/operator owners: identify the actual genesis/configuration and frozen artifact, attach independent reproducibility results and wallet/consensus/sync validation; verify seed diversity/discovery, monitoring, recovery and rollback against that deployment. Carry forward documented residual decisions rather than silently reopening or waiving historical work. |
+
+The CT implementation inventory must distinguish the age and factor inputs:
+`consensus_fee_floor` in [ledger/store.rs](../../botho/src/ledger/store.rs)
+already uses the value-free `ring_elapsed_quantile` ([#577](https://github.com/botho-project/botho/issues/577) closed), while the
+factor path still calls `ring_centroid_floored_factor`. ADR 0009's statement
+that the age path still uses `ring_elapsed_centroid` is stale; its proposed
+EpochOrigin factor must not be described as deployed merely because the
+calibration simulation exists.
+
+## Bridge activation: no mainnet value until its gates close
+
+These requirements apply when activating the bridge, independently of whether
+optional DeFi demonstrations or hosting products launch with the core network.
+
+| Gate and requirement | Current evidence/status | Evidence needed to close; owner/action |
+|---|---|---|
+| Internal and external bridge audits ([#830](https://github.com/botho-project/botho/issues/830)) | **Internal completed for its dated scope; external incomplete.** [July bridge report](../../audits/2026-07-13-bridge.md) records 0 Critical/High and the [threat model](../security/bridge-threat-model.md) is published. The reopening comment explicitly preserves the external audit and sign-off gate. Later transports/custody changes need coverage. | Operator/security owners: commission contract **and protocol** assessment, reconcile findings and later changes, publish report/retest and explicit sign-off. [#1246](https://github.com/botho-project/botho/issues/1246) is a provider inquiry, not an engagement or completed audit. [#830](https://github.com/botho-project/botho/issues/830) requires no mainnet bridge value until closure. |
+| Threshold custody configuration ([#1019](https://github.com/botho-project/botho/issues/1019)) | **Incomplete.** Tasks require distinct Solana mint/admin/pauser Squads authorities, program upgrade-authority revocation, Ethereum single-Safe versus separated-role decision, nonzero slippage bounds and external sign-off. Testnet deployment is not the mainnet ceremony. | Maintainer: document role separation and thresholds. Operators: review/fund keys and vaults, execute/record ceremony and deployed configuration; revoke upgrade authority only at the approved final step. Verify limits, rotation/recovery and deployed authorities against [custody ADR](../decisions/0002-bridge-custody-scp-validator-federation.md) and [elected federation ADR](../decisions/0010-elected-bridge-multisig.md). |
+| Both-chain real threshold round trips ([#868](https://github.com/botho-project/botho/issues/868)) | **Unproven.** July drill reached 2-of-3 release authorization but failed safely on an invalid destination; it did not complete a value-moving loop. It detected bootstrap supply drift. [#1050](https://github.com/botho-project/botho/issues/1050) is now closed; [federation.rs](../../bridge/service/src/federation.rs) includes signed order replication and separate-store tests. That former code blocker is not live execution evidence. | Operators: resolve live BTH funding/block-production prerequisites ([#1051](https://github.com/botho-project/botho/issues/1051)) and Solana setup ([#1052](https://github.com/botho-project/botho/issues/1052)/[#1086](https://github.com/botho-project/botho/issues/1086)), then run [the federation driver](../../scripts/bridge-testnet-federation.sh) and [runbook](../bridge/testnet-e2e-runbook.md). Publish deposit→mint→burn→release tx links on **both** chains with independent federation stores, threshold evidence, factor-1 amounts, exactly-once assertions and live reserve/combined-supply accounting. Explicitly reconcile bootstrap supply; an allowed tolerance is not proof of full backing. |
+| Squads mint execution ([#1087](https://github.com/botho-project/botho/issues/1087) assembly slice) | **Code integration incomplete; real CPI execution unproven.** [squads.rs](../../bridge/service/src/mint/squads.rs) contains Tier-1 assembly primitives and warns that its layout/account-meta assumptions have not executed against the real program. They are **not wired into** `SolMinter::prepare_mint` or `check_confirmation` in [solana.rs](../../bridge/service/src/mint/solana.rs), Squads configuration, or a durable order→proposal mapping. The current mint path still signs a direct `bridge_mint` with the local key; rotating authority to a vault PDA cannot make that path work. [ADR 0012](../decisions/0012-solana-squads-pda-mint-execution.md) defines the missing lifecycle; [Anchor.toml](../../contracts/solana/Anchor.toml) contains no Squads test genesis deployment. | **Code prerequisites before operator rotation/drill:** engineers complete [#1267](https://github.com/botho-project/botho/issues/1267), the pinned real-program local CPI harness with threshold/replay/rent-payer evidence, then [#1268](https://github.com/botho-project/botho/issues/1268), validated configuration, durable order→proposal mapping and retry-safe create/approve/poll/execute integration through the minter/engine. Only then proceed with [#1086](https://github.com/botho-project/botho/issues/1086) authority rotation and the devnet drill. Guard success or assembly tests close neither code prerequisite. |
+| Proof of reserves after CT | **Design handoff required.** [Post-CT analytics](../design/post-ct-analytics.md) describes the disclosure problem: public ledger amounts will no longer provide reserve balances. | Protocol/bridge authors and auditor: specify and validate view-key/attested-opening disclosure, freshness, rotation and revocation with the final CT design; demonstrate that stale or spoofed disclosures cannot establish solvency. Carry this into both audit scopes. |
+
+## Separate service and venue launches
+
+| Workstream | Current evidence/status | Acceptance/owner |
+|---|---|---|
+| Multi-venue testnet DeFi ([#865](https://github.com/botho-project/botho/issues/865)) | **Incomplete.** Issue records completed Uniswap/Orca and NTT work, with [#868](https://github.com/botho-project/botho/issues/868) and [#877](https://github.com/botho-project/botho/issues/877) outstanding. | Bridge/operators: satisfy [#865](https://github.com/botho-project/botho/issues/865)'s real-federation trading and return-flow evidence across all three venues. This is its own demo acceptance, not a replacement for core or bridge safety gates. |
+| Hosted node service ([#721](https://github.com/botho-project/botho/issues/721)/[#722](https://github.com/botho-project/botho/issues/722)) | **Open service gates.** Test-mode rollout and live/legal review are tracked separately. | Service operator: complete their acceptance and business decisions before activating the corresponding service. Do not infer authorization or readiness from a core release. |
+| Snap distribution ([#1089](https://github.com/botho-project/botho/issues/1089)) | **Open product acceptance.** [Internal key-handling audit](../../audits/2026-07-20-snap-keyhandling.md) is dated/scoped evidence, not distribution or live-send completion. | Wallet owner: record parity, live-send and publishing acceptance on [#1089](https://github.com/botho-project/botho/issues/1089); supported-wallet claims must match tested releases. |
+
+## Recording a launch decision
+
+For each applicable gate, record the responsible owner, immutable source/tag,
+build features, configuration, test/audit artifacts, execution date and explicit
+residual disposition in its linked issue. Recheck issue status at handoff.
+Historical reports remain unchanged; update this inventory when new evidence
+supersedes it. A final go decision needs those artifacts and the required
+operator/auditor sign-offs, not simply a count of closed issues.
