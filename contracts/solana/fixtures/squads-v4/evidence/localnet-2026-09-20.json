@@ -1,0 +1,444 @@
+{
+  "result": "PASS",
+  "endpoint": "http://127.0.0.1:18899",
+  "validator": {
+    "feature-set": 3241752014,
+    "solana-core": "1.18.26"
+  },
+  "genesisHash": "CMpJkDDNeSuWSrvEUwKjDuXnhkSthSnJxTgFr2UrJRoP",
+  "node": "v26.9.0",
+  "squadsProgramId": "SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf",
+  "wbthProgramId": "CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE",
+  "hashes": {
+    "squads": "dec8d3e0fae58c7c8f2416e5f67c25e673f047afd6dd2bba4a47e0b29a01d34c",
+    "idl": "cb9a0a29040ec3853a5105c547ffc608bb0e3175d78dacf30d463aff939f9b9b",
+    "vectors": "4b74f97b8fc0c5c27a25409304d7e3dc19974efa7c1df85132bceca7693e7095",
+    "wbth": "4dfcf4fcfe32e9b97b98069c0212e3f7b873ae3214f1d2abdce56200075c3140",
+    "wbthSource": "38e864cb166fa1bd31510491fc609aa77cc386fceb84c21ac0f9ffd4b5f10119",
+    "assembler": "e3b59b3455ef4e5c15775de0af71bf37cc22081000da2d560926882057c3f024",
+    "harness": "e6d73146bf52c703023cb1b846195eb470a95628dba297ba186805f6343c5f77",
+    "packageLock": "450daa7936f07127e6664386bc4f5ab84ca60ba405ba3b8a41d7588f4b5e7a07"
+  },
+  "balances": {
+    "supply": "5000000000000",
+    "recipient": "5000000000000"
+  },
+  "events": [
+    {
+      "label": "create immutable 2-of-3 multisig",
+      "signature": "2rBfSTamchSHi57dnW2GtupJeGDTnjs4wWX9BUt4NyU1LDq2CqJoXDjZNSPnkgLKfsRgFt2NYUxkUHoWneZaTGgu",
+      "slot": 3,
+      "error": null,
+      "logs": [
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf invoke [1]",
+        "Program log: Instruction: MultisigCreateV2",
+        "Program 11111111111111111111111111111111 invoke [2]",
+        "Program 11111111111111111111111111111111 success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf consumed 18114 of 499851 compute units",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf success"
+      ]
+    },
+    {
+      "label": "fund vault rent locally",
+      "signature": "3As3MGGpRDUSGH7pQRwSJ3UrxjVZgPQrcaeequss8AweWFRY5CTiWrGcQ2dZGtGRUp4n5cuS7cPKwrnLoXnQPkVc",
+      "slot": 4,
+      "error": null,
+      "logs": [
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program 11111111111111111111111111111111 invoke [1]",
+        "Program 11111111111111111111111111111111 success"
+      ]
+    },
+    {
+      "label": "initialize wbth with vault authority",
+      "signature": "2fvFfmr1FKcMW63ABL4neeZnMyb4xHzhdBYeNM8D44w5MVoN6NeyPBq6dThkq6bCqVkt1Gi8H2KNPTvh2iZqPKs3",
+      "slot": 5,
+      "error": null,
+      "logs": [
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE invoke [1]",
+        "Program log: Instruction: Initialize",
+        "Program 11111111111111111111111111111111 invoke [2]",
+        "Program 11111111111111111111111111111111 success",
+        "Program 11111111111111111111111111111111 invoke [2]",
+        "Program 11111111111111111111111111111111 success",
+        "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA invoke [2]",
+        "Program log: Instruction: InitializeMint2",
+        "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA consumed 2828 of 483241 compute units",
+        "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA success",
+        "Program log: Bridge initialized with mint: 7v54NWdBtkjuAFJrLGsS2SXnuk8nKam81mZJeeYxVFi9",
+        "Program log: Authorities — mint: BcSeToE4dyJcCo3Pq1sPNudjDpaFbWK1DHJUPUPRRrSE, admin: GyGKxMyg1p9SsHfm15MkNUu1u9TN2JtTspcdmrtGUdse, pauser: EdmxWPmx2WH6WgFfTdu9xfkYf3k1g5wD1zccTVySEEh1",
+        "Program CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE consumed 68924 of 499853 compute units",
+        "Program CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE success"
+      ]
+    },
+    {
+      "label": "create destination ATA",
+      "signature": "665CMpBPdGvnXU7ydYgBH57gSRhoN1RGKFfqUKsDme7Eyfxv8TiuWYRUE3cAMWKSetrHjjJbpJqMoBNmeXDeDMaB",
+      "slot": 6,
+      "error": null,
+      "logs": [
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL invoke [1]",
+        "Program log: Create",
+        "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA invoke [2]",
+        "Program log: Instruction: GetAccountDataSize",
+        "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA consumed 1622 of 492909 compute units",
+        "Program return: TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA pQAAAAAAAAA=",
+        "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA success",
+        "Program 11111111111111111111111111111111 invoke [2]",
+        "Program 11111111111111111111111111111111 success",
+        "Program log: Initialize the associated token account",
+        "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA invoke [2]",
+        "Program log: Instruction: InitializeImmutableOwner",
+        "Program log: Please upgrade to SPL Token 2022 for immutable owner support",
+        "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA consumed 1405 of 486269 compute units",
+        "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA success",
+        "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA invoke [2]",
+        "Program log: Instruction: InitializeAccount3",
+        "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA consumed 4241 of 482385 compute units",
+        "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA success",
+        "Program ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL consumed 22014 of 499854 compute units",
+        "Program ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL success"
+      ]
+    },
+    {
+      "label": "create proposal 1 from Rust bytes",
+      "signature": "3VVduJphzX6pW7ivM6wfN4N4GdaLSpJDDjiPbWi9VzPw5eKa4i3U3YWyrhctcqDb8TVenag6hurdH43DxBGWozCZ",
+      "slot": 7,
+      "error": null,
+      "logs": [
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf invoke [1]",
+        "Program log: Instruction: VaultTransactionCreate",
+        "Program 11111111111111111111111111111111 invoke [2]",
+        "Program 11111111111111111111111111111111 success",
+        "Program log: transaction index: 1",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf consumed 27221 of 499855 compute units",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf invoke [1]",
+        "Program log: Instruction: ProposalCreate",
+        "Program 11111111111111111111111111111111 invoke [2]",
+        "Program 11111111111111111111111111111111 success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf consumed 13171 of 472634 compute units",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf success"
+      ]
+    },
+    {
+      "label": "nonmember approval",
+      "signature": "25Emn5hdCXXyKBPGxqATN3oz4KY3JKw5jDgzrbhfksXbs4pySjJkxZ6LHxi4irXJtzJnDCHT1HaMFK8H57UgcYwm",
+      "slot": 8,
+      "error": {
+        "InstructionError": [
+          1,
+          {
+            "Custom": 6005
+          }
+        ]
+      },
+      "logs": [
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf invoke [1]",
+        "Program log: Instruction: ProposalApprove",
+        "Program log: AnchorError thrown in programs/squads_multisig_program/src/instructions/proposal_vote.rs:54. Error Code: NotAMember. Error Number: 6005. Error Message: Provided pubkey is not a member of multisig.",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf consumed 9780 of 499856 compute units",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf failed: custom program error: 0x1775"
+      ]
+    },
+    {
+      "label": "first distinct approval",
+      "signature": "4gVAAEv4k3FZ9NqiGUeaCojEvYitA1hBZDzgt4YQ9BooQDQux8ArYJvKtPEu5p9jraJewVg5abFRy6JSFh6RsaTN",
+      "slot": 9,
+      "error": null,
+      "logs": [
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf invoke [1]",
+        "Program log: Instruction: ProposalApprove",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf consumed 8562 of 499857 compute units",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf success"
+      ]
+    },
+    {
+      "label": "one approval cannot execute",
+      "signature": "29BDZZLVqDve4R5ViCCWYxixikvy2ZXxcGGmvRs3Ti19dtTurWkZhCzKGrQpmSiVWdV2fzHWVZfuJpTjK45iFPNg",
+      "slot": 10,
+      "error": {
+        "InstructionError": [
+          1,
+          {
+            "Custom": 6008
+          }
+        ]
+      },
+      "logs": [
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf invoke [1]",
+        "Program log: Instruction: VaultTransactionExecute",
+        "Program log: AnchorError thrown in programs/squads_multisig_program/src/instructions/vault_transaction_execute.rs:75. Error Code: InvalidProposalStatus. Error Number: 6008. Error Message: Invalid proposal status.",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf consumed 19745 of 499858 compute units",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf failed: custom program error: 0x1778"
+      ]
+    },
+    {
+      "label": "same member cannot count twice",
+      "signature": "3hbqTnhugRKkv974FgNzpMs4xSLLmRmFaHjGXdwMPYU68WmhCkNogbiPmop8fJbSsFTunaqkiKTfdua5QHUffHvU",
+      "slot": 11,
+      "error": {
+        "InstructionError": [
+          1,
+          {
+            "Custom": 6010
+          }
+        ]
+      },
+      "logs": [
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf invoke [1]",
+        "Program log: Instruction: ProposalApprove",
+        "Program log: AnchorError thrown in programs/squads_multisig_program/src/state/proposal.rs:52. Error Code: AlreadyApproved. Error Number: 6010. Error Message: Member already approved the transaction.",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf consumed 10398 of 499859 compute units",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf failed: custom program error: 0x177a"
+      ]
+    },
+    {
+      "label": "second distinct approval",
+      "signature": "4sBZCBx8EHNbRnAbUnyoKkzTFbRMcpU89NoeMdaCyhLvyNgnpwD3SLNP5cjGzG6vLRTn3bejCGgkcVryDhdsie4Q",
+      "slot": 12,
+      "error": null,
+      "logs": [
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf invoke [1]",
+        "Program log: Instruction: ProposalApprove",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf consumed 9493 of 499860 compute units",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf success"
+      ]
+    },
+    {
+      "label": "substituted execution account",
+      "signature": "5F9pBtjB7afLQuvv6ufbuuStcmtETeXCReZsZ8SN7BUnkuwP3kBLZUdbZ6vL7yEcL1DJ4NDQxRhHZhrKdmG6fWng",
+      "slot": 13,
+      "error": {
+        "InstructionError": [
+          1,
+          {
+            "Custom": 6014
+          }
+        ]
+      },
+      "logs": [
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf invoke [1]",
+        "Program log: Instruction: VaultTransactionExecute",
+        "Program log: AnchorError thrown in programs/squads_multisig_program/src/utils/executable_transaction_message.rs:79. Error Code: InvalidAccount. Error Number: 6014. Error Message: Invalid account provided.",
+        "Program log: Left:",
+        "Program log: EdmxWPmx2WH6WgFfTdu9xfkYf3k1g5wD1zccTVySEEh1",
+        "Program log: Right:",
+        "Program log: CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf consumed 23613 of 499861 compute units",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf failed: custom program error: 0x177e"
+      ]
+    },
+    {
+      "label": "vault invoke_signed bridge_mint",
+      "signature": "BDUnhqnmA5cnCxMqRNc5HW8AaejAzCyVpNtk5fwStsWHdgBAG8aajeR9zV9FFE5eUKaDUQFbHm8HFkmzmCrLmLf",
+      "slot": 14,
+      "error": null,
+      "logs": [
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf invoke [1]",
+        "Program log: Instruction: VaultTransactionExecute",
+        "Program CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE invoke [2]",
+        "Program log: Instruction: BridgeMint",
+        "Program 11111111111111111111111111111111 invoke [3]",
+        "Program 11111111111111111111111111111111 success",
+        "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA invoke [3]",
+        "Program log: Instruction: MintTo",
+        "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA consumed 4538 of 450045 compute units",
+        "Program TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA success",
+        "Program data: 5c3Z45TGvA0LUTrZtJJAFcoJAu0HkETTrF2+wjBvBpSMENqOtuOfLQBQOSeMBAAAAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQFbh69qAAAAAA==",
+        "Program log: Minted 5000000000000 wBTH to mBKqcnGotbsSb5vNrdyhzZ5EhqZdids9QYiTRckvi7v (order: 0101010101010101)",
+        "Program CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE consumed 41710 of 472549 compute units",
+        "Program CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf consumed 70482 of 499862 compute units",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf success"
+      ]
+    },
+    {
+      "label": "same proposal cannot execute twice",
+      "signature": "XaSdoczWjxW6FEg9T6MqdSnDHQPbRDnaL1BhLxTVQATMw1PcuQJuAh3Z8GC6XmVkktkf4DZb1s2DPMbemtCaQ3W",
+      "slot": 15,
+      "error": {
+        "InstructionError": [
+          1,
+          {
+            "Custom": 6008
+          }
+        ]
+      },
+      "logs": [
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf invoke [1]",
+        "Program log: Instruction: VaultTransactionExecute",
+        "Program log: AnchorError thrown in programs/squads_multisig_program/src/instructions/vault_transaction_execute.rs:75. Error Code: InvalidProposalStatus. Error Number: 6008. Error Message: Invalid proposal status.",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf consumed 20091 of 499863 compute units",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf failed: custom program error: 0x1778"
+      ]
+    },
+    {
+      "label": "create proposal 2 from Rust bytes",
+      "signature": "61gP19zz3FZvBtFPjo5Eq7pY3HeJeJksKmZc9BMVYgFjYLCEB2MZ6DDbrvv6PW7LgafLRHGXNKahEHBt9ww9jvdR",
+      "slot": 16,
+      "error": null,
+      "logs": [
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf invoke [1]",
+        "Program log: Instruction: VaultTransactionCreate",
+        "Program 11111111111111111111111111111111 invoke [2]",
+        "Program 11111111111111111111111111111111 success",
+        "Program log: transaction index: 2",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf consumed 27221 of 499864 compute units",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf invoke [1]",
+        "Program log: Instruction: ProposalCreate",
+        "Program 11111111111111111111111111111111 invoke [2]",
+        "Program 11111111111111111111111111111111 success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf consumed 14671 of 472643 compute units",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf success"
+      ]
+    },
+    {
+      "label": "approve duplicate order with quorum",
+      "signature": "4ubpqeVt7WUjwYbTqKqStRDuSDSGsAyoZiW6SHqAYbcSPnBTEToLsUFYJcbx9o43fJt1FDuDrsEN2ryuMUZHFvxo",
+      "slot": 17,
+      "error": null,
+      "logs": [
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf invoke [1]",
+        "Program log: Instruction: ProposalApprove",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf consumed 8562 of 499865 compute units",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf invoke [1]",
+        "Program log: Instruction: ProposalApprove",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf consumed 9493 of 491303 compute units",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf success"
+      ]
+    },
+    {
+      "label": "fresh proposal cannot mint duplicate order",
+      "signature": "2m1eaAmTiApfx25pF9YYZREFs6v11TwZ39ZrNJDsBrSDHrXbtQUNRqqSeDSP9bFbP7rQCPSm5cfUWNWGuepPh1pe",
+      "slot": 18,
+      "error": {
+        "InstructionError": [
+          1,
+          {
+            "Custom": 0
+          }
+        ]
+      },
+      "logs": [
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf invoke [1]",
+        "Program log: Instruction: VaultTransactionExecute",
+        "Program CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE invoke [2]",
+        "Program log: Instruction: BridgeMint",
+        "Program 11111111111111111111111111111111 invoke [3]",
+        "Allocate: account Address { address: 3PgtFvXF3dS5u2XUkX51QXzKf28XjyhJSw9Aik3oLeyX, base: None } already in use",
+        "Program 11111111111111111111111111111111 failed: custom program error: 0x0",
+        "Program CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE consumed 12325 of 472553 compute units",
+        "Program CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE failed: custom program error: 0x0",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf consumed 39638 of 499866 compute units",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf failed: custom program error: 0x0"
+      ]
+    },
+    {
+      "label": "create proposal 3 from Rust bytes",
+      "signature": "3jcmXQ6AEw93TQT3EAvxbGd9rVWPhCiQrVV43cJKjRFnZwX43K4ELyGdvLHfdCVf7PWgrhCcpvYqLq6jYrh29nMb",
+      "slot": 19,
+      "error": null,
+      "logs": [
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf invoke [1]",
+        "Program log: Instruction: VaultTransactionCreate",
+        "Program 11111111111111111111111111111111 invoke [2]",
+        "Program 11111111111111111111111111111111 success",
+        "Program log: transaction index: 3",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf consumed 28010 of 499867 compute units",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf invoke [1]",
+        "Program log: Instruction: ProposalCreate",
+        "Program 11111111111111111111111111111111 invoke [2]",
+        "Program 11111111111111111111111111111111 success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf consumed 19171 of 471857 compute units",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf success"
+      ]
+    },
+    {
+      "label": "approve wrong-authority payload",
+      "signature": "215txkGUcS7EYqrcvxNNkReaL9eRkARJMJmjkf9QN5xBUvCR9DvjNXUN1fafJFnXokz4efnzoXQZfdCX1DNmeMj8",
+      "slot": 20,
+      "error": null,
+      "logs": [
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf invoke [1]",
+        "Program log: Instruction: ProposalApprove",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf consumed 8562 of 499868 compute units",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf invoke [1]",
+        "Program log: Instruction: ProposalApprove",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf consumed 9493 of 491306 compute units",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf success"
+      ]
+    },
+    {
+      "label": "quorum cannot bypass wbth authority",
+      "signature": "3MPd1G2DsiPLrUyd4B6ePMHRHgvrzepodLqcs53FNdR5S3E9SNUMkHRgKJE2eejFnMDUyVhd9pAoqqsBZ5rXz32Y",
+      "slot": 21,
+      "error": {
+        "InstructionError": [
+          1,
+          {
+            "Custom": 2001
+          }
+        ]
+      },
+      "logs": [
+        "Program ComputeBudget111111111111111111111111111111 invoke [1]",
+        "Program ComputeBudget111111111111111111111111111111 success",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf invoke [1]",
+        "Program log: Instruction: VaultTransactionExecute",
+        "Program CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE invoke [2]",
+        "Program log: Instruction: BridgeMint",
+        "Program 11111111111111111111111111111111 invoke [3]",
+        "Program 11111111111111111111111111111111 success",
+        "Program log: AnchorError caused by account: bridge. Error Code: ConstraintHasOne. Error Number: 2001. Error Message: A has one constraint was violated.",
+        "Program log: Left:",
+        "Program log: BcSeToE4dyJcCo3Pq1sPNudjDpaFbWK1DHJUPUPRRrSE",
+        "Program log: Right:",
+        "Program log: AKnL4NNf3DGWZJS6cPknBuEGnVsV4A4m5tgebLHaRSZ9",
+        "Program CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE consumed 16976 of 472067 compute units",
+        "Program CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE failed: custom program error: 0x7d1",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf consumed 44778 of 499869 compute units",
+        "Program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf failed: custom program error: 0x7d1"
+      ]
+    }
+  ]
+}

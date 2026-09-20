@@ -36,26 +36,18 @@
 //! `bridge_mint` (a Squads CPI instead of a lone key); it does not touch the
 //! replay guard.
 //!
-//! ## ⚠️ Byte-layout provenance — MUST be verified before Tier-2/3
+//! ## Executed byte-layout provenance
 //!
-//! ADR 0012 is explicit that it is **not** the byte-layout source of truth:
-//! *"Verify the Squads v4 program id and all discriminators against the live
-//! program / published v4 IDL before pinning."* Accordingly:
+//! ADR 0012 Tier-2 coverage lives in `contracts/solana/localnet/`. It executes
+//! this module's pinned vectors against the real audited Squads v4 binary
+//! (source `dcac867070a3073929e2240a053780c324f4c29f`) and the built wbth
+//! program. The official SDK checks the instruction account flags and reads
+//! back the stored message before execution. Artifact/source/IDL provenance
+//! and hashes are in `contracts/solana/fixtures/squads-v4/PROVENANCE.md`.
 //!
-//! - **Instruction discriminators** are the deterministic Anchor
-//!   `sha256("global:<name>")[..8]` (Squads v4 is an Anchor program). These are
-//!   self-verifying and pinned as known vectors in the tests — a rename or a
-//!   drift in the derivation breaks CI, not a mainnet mint.
-//! - **The Squads program id, the borsh argument layouts, the account-meta
-//!   orders, and the wrapped `TransactionMessage` wire format** are implemented
-//!   to the published Squads v4 program structure and pinned by the Tier-1 unit
-//!   tests below, but they have **NOT** been executed against a live Squads v4
-//!   program in this change (no Squads program is loaded in the Solana test
-//!   harness yet — ADR 0012 §3 Tier-2/3, sequenced with the operator Squads
-//!   setup #1086/#1052). Before the Tier-2 localnet e2e and any mainnet use,
-//!   re-confirm every value in this module against the deployed Squads v4
-//!   program / its published IDL. The Tier-1 tests here are drift detectors,
-//!   not proof the CPI executes.
+//! The ordinary unit suite recomputes the vectors used by that harness. This
+//! proves assembly/CPI interoperability, not SolMinter engine integration or
+//! production readiness; those remain separate work.
 //!
 //! [ADR 0002]: ../../../../docs/decisions/0002-bridge-custody-scp-validator-federation.md
 //! [ADR 0012]: ../../../../docs/decisions/0012-solana-squads-pda-mint-execution.md
@@ -461,14 +453,14 @@ impl SquadsMintContext {
 
     /// Build a `proposal_approve` [`Instruction`] for the local member.
     ///
-    /// Accounts (Squads v4 `ProposalVote` order): multisig, member (signer),
-    /// proposal PDA (mut).
+    /// Accounts (Squads v4 `ProposalVote` order): multisig, member (mut,
+    /// signer), proposal PDA (mut).
     pub fn build_proposal_approve(&self) -> Instruction {
         Instruction {
             program_id: SQUADS_V4_PROGRAM_ID,
             accounts: vec![
                 AccountMeta::readonly(self.multisig),
-                AccountMeta::readonly_signer(self.member),
+                AccountMeta::writable_signer(self.member),
                 AccountMeta::writable(self.proposal_pda),
             ],
             data: encode_proposal_approve_data(None),
@@ -502,15 +494,14 @@ impl SquadsMintContext {
             // writable-non-signer band of the partition.
             let is_writable = idx < writable_signers
                 || (idx >= signer_count && idx < signer_count + writable_non_signers);
-            // The vault PDA (and any inner signer) is program-signed via
-            // invoke_signed, so every remaining account is passed as a
-            // NON-signer of the outer execute transaction (only `member`
-            // signs it).
-            if is_writable {
-                accounts.push(AccountMeta::writable(*key));
-            } else {
-                accounts.push(AccountMeta::readonly(*key));
-            }
+            // Only the vault is signed by Squads here (this assembler does
+            // not request ephemeral signers). Other inner signers must
+            // remain signers on the outer transaction, as in the v4 SDK.
+            accounts.push(AccountMeta {
+                pubkey: *key,
+                is_signer: idx < signer_count && *key != self.vault,
+                is_writable,
+            });
         }
         Instruction {
             program_id: SQUADS_V4_PROGRAM_ID,
@@ -820,7 +811,7 @@ mod tests {
         let ix = ctx.build_proposal_approve();
         assert_eq!(ix.accounts.len(), 3);
         assert_eq!(ix.accounts[0], AccountMeta::readonly(ctx.multisig));
-        assert_eq!(ix.accounts[1], AccountMeta::readonly_signer(ctx.member));
+        assert_eq!(ix.accounts[1], AccountMeta::writable_signer(ctx.member));
         assert_eq!(ix.accounts[2], AccountMeta::writable(ctx.proposal_pda));
     }
 
@@ -910,5 +901,92 @@ mod tests {
         assert_eq!(parse_multisig_transaction_index(&data).unwrap(), 42);
         // Truncated -> error, never a partial read.
         assert!(parse_multisig_transaction_index(&[0u8; 10]).is_err());
+    }
+    #[test]
+    fn test_execute_preserves_non_vault_signer_requirement() {
+        let mut ctx = sample_ctx();
+        ctx.inner
+            .accounts
+            .push(AccountMeta::readonly_signer(ctx.member));
+        let execute = ctx.build_vault_transaction_execute();
+        assert!(execute.accounts[4..]
+            .iter()
+            .any(|a| a.pubkey == ctx.member && a.is_signer));
+    }
+
+    /// These bytes are executed by contracts/solana/localnet/squads.ts.
+    /// Updating them requires re-running the real CPI harness, not just this
+    /// test.
+    #[test]
+    fn test_localnet_execution_vectors() {
+        use super::super::solana::{
+            build_bridge_mint_instruction, derive_associated_token_account,
+        };
+        use serde_json::{json, Value};
+        fn key(seed: u8) -> Pubkey {
+            Pubkey(
+                ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+                    .verifying_key()
+                    .to_bytes(),
+            )
+        }
+        fn ix_json(ix: Instruction) -> Value {
+            json!({"programId": ix.program_id.to_base58(), "data": hex::encode(ix.data),
+                "keys": ix.accounts.iter().map(|a| json!({"pubkey": a.pubkey.to_base58(),
+                    "isSigner": a.is_signer, "isWritable": a.is_writable})).collect::<Vec<_>>()})
+        }
+        let program = Pubkey::from_base58("CZDnzeywrqEM5ereWJmtYKUQ9uJXxX2PydqqKTQStxxE").unwrap();
+        let multisig = derive_multisig_pda(&key(10)).unwrap();
+        let vault = derive_vault_pda(&multisig, 0).unwrap();
+        let bridge = Pubkey::find_program_address(&[b"bridge"], &program)
+            .unwrap()
+            .0;
+        let ata = derive_associated_token_account(&key(12), &key(11)).unwrap();
+        let mut vectors = vec![];
+        for index in 1..=3 {
+            let order = if index == 3 { [3u8; 32] } else { [1u8; 32] };
+            let marker = Pubkey::find_program_address(&[b"order", &order], &program)
+                .unwrap()
+                .0;
+            let authority = if index == 3 { key(1) } else { vault };
+            let inner = build_bridge_mint_instruction(
+                program,
+                bridge,
+                marker,
+                key(11),
+                ata,
+                key(12),
+                authority,
+                5_000_000_000_000,
+                order,
+            );
+            let ctx =
+                SquadsMintContext::resolve(multisig, 0, index, key(1), inner.clone()).unwrap();
+            let ctx2 =
+                SquadsMintContext::resolve(multisig, 0, index, key(2), inner.clone()).unwrap();
+            vectors.push(json!({"index": index, "order": hex::encode(order),
+                "inner": ix_json(inner), "create": ix_json(ctx.build_vault_transaction_create()),
+                "proposal": ix_json(ctx.build_proposal_create()),
+                "approve1": ix_json(ctx.build_proposal_approve()),
+                "approve2": ix_json(ctx2.build_proposal_approve()),
+                "execute": ix_json(ctx.build_vault_transaction_execute())}));
+        }
+        let actual = json!({"multisig": multisig.to_base58(), "vault": vault.to_base58(),
+            "bridge": bridge.to_base58(), "mint": key(11).to_base58(),
+            "recipient": key(12).to_base58(), "ata": ata.to_base58(), "vectors": vectors});
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../contracts/solana/fixtures/squads-v4/mint-vectors.json");
+        if std::env::var_os("UPDATE_SQUADS_LOCALNET_VECTORS").is_some() {
+            std::fs::write(
+                &path,
+                format!("{}\n", serde_json::to_string_pretty(&actual).unwrap()),
+            )
+            .unwrap();
+        }
+        let expected: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(
+            actual, expected,
+            "Rust Squads bytes differ from the executed localnet vectors"
+        );
     }
 }
