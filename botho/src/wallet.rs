@@ -25,6 +25,50 @@ use crate::{
     transaction::{ClsagRingInput, RingMember, Transaction, TxOutput, Utxo, MIN_RING_SIZE},
 };
 
+/// Narrow internal read seam. The ordinary Ledger adapter retains direct-index
+/// recovery and its existing decoy selection/errors. No network format changes.
+pub(crate) trait WalletRead {
+    fn recover_input(&self, wallet: &Wallet, utxo: &Utxo) -> Result<RistrettoPrivate> {
+        let output_index = utxo.id.output_index;
+        let subaddress_index = wallet
+            .scan_output(&utxo.output, output_index)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "UTXO does not belong to this wallet: {}",
+                    hex::encode(&utxo.id.tx_hash[0..8])
+                )
+            })?;
+        wallet
+            .recover_output_spend_key(&utxo.output, subaddress_index, output_index)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Failed to recover spend key for UTXO {}",
+                    hex::encode(&utxo.id.tx_hash[0..8])
+                )
+            })
+    }
+    fn decoys(
+        &self,
+        count: usize,
+        exclude: &[[u8; 32]],
+        real_age: u64,
+        selector: &GammaDecoySelector,
+        rng: &mut OsRng,
+    ) -> std::result::Result<Vec<TxOutput>, crate::ledger::LedgerError>;
+}
+impl WalletRead for Ledger {
+    fn decoys(
+        &self,
+        count: usize,
+        exclude: &[[u8; 32]],
+        real_age: u64,
+        selector: &GammaDecoySelector,
+        rng: &mut OsRng,
+    ) -> std::result::Result<Vec<TxOutput>, crate::ledger::LedgerError> {
+        self.get_decoy_outputs_for_input(count, exclude, 10, real_age, Some(selector), rng)
+    }
+}
+
 /// Default decay rate for cluster tags when transferring coins.
 /// 5% decay per transaction (50,000 / 1,000,000 = 5%).
 pub const DEFAULT_CLUSTER_DECAY_RATE: u32 = 50_000;
@@ -573,13 +617,13 @@ impl Wallet {
     ///   (empty/background) tags the caller set and the tx is stamped
     ///   `new_settlement(.., v)`. The settlement flag is bound into the signing
     ///   hash, so the preliminary tx used for signing must carry it too.
-    fn create_private_transaction_impl(
+    pub(crate) fn create_private_transaction_impl<R: WalletRead>(
         &self,
         utxos_to_spend: &[Utxo],
         outputs: Vec<TxOutput>,
         fee: u64,
         current_height: u64,
-        ledger: &Ledger,
+        ledger: &R,
         settlement_value: Option<u64>,
     ) -> Result<Transaction> {
         if utxos_to_spend.is_empty() {
@@ -630,28 +674,7 @@ impl Wallet {
         let mut ring_inputs = Vec::with_capacity(utxos_to_spend.len());
 
         for utxo in utxos_to_spend {
-            // Verify ownership and recover the one-time private key on the
-            // unified hybrid scan/spend path (issue #970). Hybrid UTXOs bind the
-            // output's position within its creating transaction into the
-            // one-time key, so scan and recover with `utxo.id.output_index`.
-            let output_index = utxo.id.output_index;
-            let subaddress_index =
-                self.scan_output(&utxo.output, output_index)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "UTXO does not belong to this wallet: {}",
-                            hex::encode(&utxo.id.tx_hash[0..8])
-                        )
-                    })?;
-
-            let onetime_private = self
-                .recover_output_spend_key(&utxo.output, subaddress_index, output_index)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Failed to recover spend key for UTXO {}",
-                        hex::encode(&utxo.id.tx_hash[0..8])
-                    )
-                })?;
+            let onetime_private = ledger.recover_input(self, utxo)?;
 
             // Calculate age of the real input for OSPEAD selection
             let real_input_age = current_height.saturating_sub(utxo.created_at);
@@ -659,12 +682,11 @@ impl Wallet {
             // Get OSPEAD-selected decoys for this input
             // Uses gamma distribution to match expected spending patterns
             let decoys = ledger
-                .get_decoy_outputs_for_input(
+                .decoys(
                     decoys_needed,
                     &exclude_keys,
-                    10, // min confirmations
                     real_input_age,
-                    Some(&selector),
+                    &selector,
                     &mut rng,
                 )
                 // Preserve the typed `LedgerError` as the anyhow source (via

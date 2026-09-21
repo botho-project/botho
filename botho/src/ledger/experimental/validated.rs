@@ -467,3 +467,5 @@ impl ValidationReads for PinnedView<'_, '_> {
 
 #[cfg(test)]
 mod tests;
+
+mod wallet;

@@ -1,0 +1,20 @@
+{"base_commit": "5127d4c2cc59e9f5b842517717a95566dadebfd2", "dirty_worktree": true, "sources": {"Cargo.lock": "0163413813517346e5de8b6a55ddbcff426c48e1a59be040dac628774a7434a3", "botho/src/wallet.rs": "475585b2330377deab301f6330be64f95945485388b0237d0cad1b59220f0ed3", "botho/src/ledger/experimental.rs": "40499b16db56f4f3dcee7a01d30e9874dbe7a5438c1ec900cfb1113d55d37e3b", "botho/src/ledger/experimental/validated.rs": "e8ee9b60591920103869d8fc6b3f278c09ba32c0739aae5531aa667d8a09f9db", "botho/src/ledger/experimental/validated/wallet.rs": "937b643692223902aecc7a22a02ee31e670ab824491132c15cd5db5624da39ad", "botho/src/ledger/experimental/validated/wallet/tests.rs": "dd403c171ae4d5cb759a4aba81021abd02d534980c0fbc778ab2a6ff8336e76e", "botho/src/ledger/store/validation.rs": "d89ae59068318ce044afb932cf7498ce710027df5e8efbc2bcc9e2f2076f358c", "botho/src/ledger/store/writer.rs": "573c0699359989c864b95543ab81ab4426e2a5bf740133d60f5b43ba2d124b31", "botho/src/consensus/block_builder.rs": "520ed1b5b44824939795009035914c5eff37f22874fdd35bd5365de531e687ea", "transaction/clsag/src/lib.rs": "48555fbaadc8c6cf5ea2768a8bae0b9127f09f0f8d4a46073dbbc2d4b2e077ad", "transaction/clsag/src/lottery_v2.rs": "78551581d6e9a1eca42b0ca628fdb0d2aaf84282682f8b8e2854278693f6d432", "cluster-tax/src/lottery.rs": "bb862abc436488f42c9453518811af1ac4884977cbdce2c5f0b0683c4f110179"}, "binary": "/tmp/botho-1254-target/debug/deps/botho-3fce83e5b04869b5", "binary_sha256": "2149c13941a6e89fa44f7e859996d18010f387b16bd61e9ff86824243979e6c8", "runtime_limit_seconds": 1800, "test": "ledger::experimental::validated::wallet::tests::native_wallet_accepted_repeated_nested_payout_spends"}
+
+running 1 test
+WALLET_V2 phase=generate max_height=1700 deadline_seconds=1800 funding_every=10 fee=10000000000000
+WALLET_V2 phase=generate height=100 families=0 elapsed_ms=21029
+WALLET_V2 phase=generate height=200 families=0 elapsed_ms=52709
+test ledger::experimental::validated::wallet::tests::native_wallet_accepted_repeated_nested_payout_spends has been running for over 60 seconds
+WALLET_V2 phase=generate height=300 families=0 elapsed_ms=92433
+WALLET_V2 phase=generate height=400 families=0 elapsed_ms=143693
+WALLET_V2 phase=generate height=500 families=0 elapsed_ms=199868
+WALLET_V2 phase=generate height=600 families=0 elapsed_ms=267219
+WALLET_V2 phase=generate height=700 families=0 elapsed_ms=347321
+WALLET_V2 phase=generate height=800 families=31 elapsed_ms=605303
+WALLET_V2 phase=generate height=900 families=60 elapsed_ms=881013
+WALLET_V2 phase=generate height=1000 families=86 elapsed_ms=1173914
+WALLET_V2 phase=generate height=1100 families=111 elapsed_ms=1524786
+
+EXTERNAL_1800_SECOND_DEADLINE
+
+PROFILE_EXIT=124 WALL_SECONDS=1800.012
