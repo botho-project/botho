@@ -31,6 +31,7 @@ Welcome to the Botho documentation. Botho is a privacy-preserving, mined cryptoc
 | [Deployment](operations/deployment.md) | Production deployment (systemd, Docker) |
 | [Monitoring](operations/monitoring.md) | Metrics, alerting, and dashboards |
 | [Troubleshooting](operations/troubleshooting.md) | Common issues and solutions |
+| [Full Testnet Showcase](operations/testnet-showcase-punchlist.md) | Readiness review, privacy findings, and demonstration acceptance gates |
 
 ### Backup & Recovery
 | Document | Description |
