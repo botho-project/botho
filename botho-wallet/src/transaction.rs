@@ -1044,28 +1044,44 @@ mod tests {
         {
             let recipient_scanner = WalletScanner::new(&recipient_keys);
             assert_eq!(
-                recipient_scanner.check_ownership(&out.target_key, &out.public_key),
+                recipient_scanner.check_ownership(
+                    &out.target_key,
+                    &out.public_key,
+                    out.kem_ciphertext.as_deref(),
+                    0,
+                ),
                 Some(0),
                 "recipient must detect the output on their default subaddress"
             );
 
             let sender_scanner = WalletScanner::new(&keys);
             assert_eq!(
-                sender_scanner.check_ownership(&out.target_key, &out.public_key),
+                sender_scanner.check_ownership(
+                    &out.target_key,
+                    &out.public_key,
+                    out.kem_ciphertext.as_deref(),
+                    0,
+                ),
                 None,
                 "sender must not own the recipient's output"
             );
 
             if let Some(change_key) = result.change_output_public_key {
-                let change_out = result
+                let (idx, change_out) = result
                     .transaction
                     .outputs
                     .iter()
-                    .find(|o| o.public_key == change_key)
+                    .enumerate()
+                    .find(|(_, o)| o.public_key == change_key)
                     .expect("change output present");
                 assert!(
                     sender_scanner
-                        .check_ownership(&change_out.target_key, &change_out.public_key)
+                        .check_ownership(
+                            &change_out.target_key,
+                            &change_out.public_key,
+                            change_out.kem_ciphertext.as_deref(),
+                            idx as u32,
+                        )
                         .is_some(),
                     "sender must detect their own change output"
                 );
