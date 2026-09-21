@@ -91,6 +91,12 @@ The source findings below describe the pinned review baseline. These subsequent 
 
 These fixes reduce client failure modes. The CT integration, privacy/claims review and identified deployed release candidate remain full-showcase requirements.
 
+### Deployment follow-up — 2026-09-21
+
+The owner-authorized node redeployment is complete; [PR #1382](https://github.com/botho-project/botho/pull/1382) records the operation and sanitized evidence. All five hosts now run clean main `6dbcb92463214694f3122a05c9c48986d4f4f1b7`, preserving the existing ledger, configuration and keys. Seed2 HTTPS renewal was repaired. A native 1-BTH faucet payment confirmed in block 2635 and all five nodes agreed on height 2636. The final sample at 23:24:26 UTC showed every node synced with zero process swap; no automatic restarts were recorded in the roughly ten-minute post-rollout window, though the faucet needed one additional manual restart after peer rollout. Idle mining pauses intentionally above the faucet balance cap.
+
+This updates the earlier deployed-network baseline without closing D1's full acceptance gate: the first payment took roughly two minutes including cold miner warmup, with temporary sync-response failures. [#1381](https://github.com/botho-project/botho/issues/1381) tracks pause/warmup responsiveness. Sustained and repeated-payment stability, funded web/Snap acceptance, and the CT/LotteryV2 candidate remain open. The wallet PRs above were not deployed.
+
 ## 4. Client review: what exists and what is missing
 
 ### Web wallet
