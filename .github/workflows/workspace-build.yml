@@ -222,6 +222,57 @@ jobs:
         timeout-minutes: 5
         run: cargo test --locked -p botho --example legacy_lottery_inventory
 
+      - name: Compile inactive native-wallet profile with checked arithmetic
+        id: native_wallet_tests
+        timeout-minutes: 15
+        env:
+          CARGO_PROFILE_CI_DEBUG_ASSERTIONS: 'true'
+          CARGO_PROFILE_CI_OVERFLOW_CHECKS: 'true'
+        run: |
+          cargo test --locked --profile ci -p botho --lib --no-run --message-format=json > "$RUNNER_TEMP/native-wallet-compile.jsonl"
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          messages = [json.loads(line) for line in Path(os.environ["RUNNER_TEMP"], "native-wallet-compile.jsonl").read_text().splitlines()]
+          artifacts = [m for m in messages if m.get("reason") == "compiler-artifact"
+                       and m.get("target", {}).get("name") == "botho"
+                       and "lib" in m.get("target", {}).get("kind", [])
+                       and m.get("profile", {}).get("test") and m.get("executable")]
+          assert len(artifacts) == 1, f"expected one botho lib test artifact, got {len(artifacts)}"
+          artifact = artifacts[0]
+          profile = artifact["profile"]
+          assert profile["opt_level"] == "2" and profile["debug_assertions"] is True and profile["overflow_checks"] is True, profile
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"executable={artifact['executable']}\n")
+          PYTHON
+
+      - name: Run inactive native-wallet discovery and accepted payout spends
+        timeout-minutes: 32
+        env:
+          NATIVE_WALLET_TEST_EXECUTABLE: ${{ steps.native_wallet_tests.outputs.executable }}
+        run: |
+          set -o pipefail
+          {
+            git rev-parse HEAD
+            rustc -vV
+            cargo --version
+            uname -a
+            sha256sum "$NATIVE_WALLET_TEST_EXECUTABLE" Cargo.toml Cargo.lock botho/src/wallet.rs botho/src/ledger/experimental.rs botho/src/ledger/experimental/validated.rs botho/src/ledger/experimental/validated/wallet.rs botho/src/ledger/experimental/validated/wallet/tests.rs botho/src/ledger/store/validation.rs botho/src/ledger/store/writer.rs botho/src/consensus/block_builder.rs transaction/clsag/src/lib.rs transaction/clsag/src/lottery_v2.rs cluster-tax/src/lottery.rs
+            timeout 60s "$NATIVE_WALLET_TEST_EXECUTABLE" wallet::tests:: --nocapture || exit "$?"
+            timeout 1800s "$NATIVE_WALLET_TEST_EXECUTABLE" ledger::experimental::validated::wallet::tests::native_wallet_accepted_repeated_nested_payout_spends --exact --ignored --nocapture || exit "$?"
+          } 2>&1 | tee "$RUNNER_TEMP/native-wallet-validation.log"
+
+      - name: Retain native-wallet validation evidence (including failures)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-wallet-validation-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/native-wallet-compile.jsonl
+            ${{ runner.temp }}/native-wallet-validation.log
+          retention-days: 14
+          if-no-files-found: error
+
       # Doctests are NOT compiled by `--no-run` above and no other workflow
       # runs them, so documentation examples rotted silently (#670). They are
       # fast (seconds) and deterministic, so run them for real.

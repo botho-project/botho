@@ -1,0 +1,139 @@
+{
+  "scope": "inactive private native wallet; actual producer/validator/writer; no network activation or legacy repair",
+  "capture_base_commit": "5127d4c2cc59e9f5b842517717a95566dadebfd2",
+  "capture_had_uncommitted_reviewed_source": true,
+  "sources": {
+    "Cargo.lock": "0163413813517346e5de8b6a55ddbcff426c48e1a59be040dac628774a7434a3",
+    "botho/src/wallet.rs": "475585b2330377deab301f6330be64f95945485388b0237d0cad1b59220f0ed3",
+    "botho/src/ledger/experimental.rs": "40499b16db56f4f3dcee7a01d30e9874dbe7a5438c1ec900cfb1113d55d37e3b",
+    "botho/src/ledger/experimental/validated.rs": "e8ee9b60591920103869d8fc6b3f278c09ba32c0739aae5531aa667d8a09f9db",
+    "botho/src/ledger/experimental/validated/wallet.rs": "937b643692223902aecc7a22a02ee31e670ab824491132c15cd5db5624da39ad",
+    "botho/src/ledger/experimental/validated/wallet/tests.rs": "dd403c171ae4d5cb759a4aba81021abd02d534980c0fbc778ab2a6ff8336e76e",
+    "botho/src/ledger/store/validation.rs": "d89ae59068318ce044afb932cf7498ce710027df5e8efbc2bcc9e2f2076f358c",
+    "botho/src/ledger/store/writer.rs": "573c0699359989c864b95543ab81ab4426e2a5bf740133d60f5b43ba2d124b31",
+    "botho/src/consensus/block_builder.rs": "520ed1b5b44824939795009035914c5eff37f22874fdd35bd5365de531e687ea",
+    "transaction/clsag/src/lib.rs": "48555fbaadc8c6cf5ea2768a8bae0b9127f09f0f8d4a46073dbbc2d4b2e077ad",
+    "transaction/clsag/src/lottery_v2.rs": "78551581d6e9a1eca42b0ca628fdb0d2aaf84282682f8b8e2854278693f6d432",
+    "cluster-tax/src/lottery.rs": "bb862abc436488f42c9453518811af1ac4884977cbdce2c5f0b0683c4f110179"
+  },
+  "environment": {
+    "rustc": "rustc 1.93.0-nightly (646a3f8c1 2025-12-02)\nbinary: rustc\ncommit-hash: 646a3f8c15baefb98dc6e0c1c1ba3356db702d2a\ncommit-date: 2025-12-02\nhost: aarch64-apple-darwin\nrelease: 1.93.0-nightly\nLLVM version: 21.1.5\n",
+    "cargo": "cargo 1.93.0-nightly (2a7c49606 2025-11-25)",
+    "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+    "regression_log": "/tmp/1358-wallet-regressions.log",
+    "regression_result": "19 passed; 1 long profile ignored; 3.40 seconds",
+    "test_command": "botho-3fce83e5b04869b5 ledger::experimental::validated::wallet::tests::native_wallet_accepted_repeated_nested_payout_spends --exact --ignored --nocapture",
+    "first_profile": true,
+    "automatic_retry": false
+  },
+  "preflight": {
+    "wallet_and_focused_tests_passed": 19,
+    "long_profile_explicitly_ignored": 1,
+    "elapsed_seconds": 3.4
+  },
+  "debug_timeout": {
+    "exit_code": 124,
+    "wall_seconds": 1800.012,
+    "last_reported_height": 1100,
+    "last_reported_families": 111,
+    "last_reported_elapsed_ms": 1524786,
+    "accepted_family_spends": 0,
+    "binary_sha256": "2149c13941a6e89fa44f7e859996d18010f387b16bd61e9ff86824243979e6c8",
+    "raw_log": "debug_timeout.txt",
+    "raw_log_sha256": "dbbafc3c907558e8d496852c4ef3f140472f84bacdbcdb3637ac70e0fee7f861",
+    "outcome": "incomplete acceptance; no automatic retry"
+  },
+  "optimized_pass": {
+    "exit_code": 0,
+    "wall_seconds": 445.121,
+    "compile_seconds": 85.07396379200509,
+    "profile": {
+      "opt_level": "2",
+      "debuginfo": 2,
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": true
+    },
+    "binary_sha256": "466417a7ad895f6f1264a8972f6dc286d04ecb08411218a88455128169d3aefe",
+    "compile_cargo_json_sha256": "76d643da081cd4e9bda5e19d314fce29ec1f1ac36bdcf1a53554d7fd03132c08",
+    "raw_log": "optimized_pass.txt",
+    "raw_log_sha256": "014271057124c64d2db84cfa24d24bb48dcdf3faf51c8006651ab9d6b95f0618",
+    "result": {
+      "height": 1498,
+      "transactions": 131,
+      "accepted_family_spends": 7,
+      "receiver_value_pico": 6937500000000,
+      "fees_pico": 1247000000000000,
+      "burned_pico": 249400000000000,
+      "distributed_pico": 997600000000000,
+      "pool_pico": 0,
+      "test_elapsed_ms": 445054
+    },
+    "accepted_spends": [
+      {
+        "height": 1492,
+        "source": "fda8e58dc99b3e53fe287eba374d377fe53966676f005a495f24e41b4081fb4c07000000",
+        "transaction": "de270ff057be4fba91865cced4d056062811be6b130d130f94b165db37e296cd",
+        "key_image": "8c9879ac2c17482a09eda79b5c151795138e5efa5ad2e9522fe5bbf3b80bb854",
+        "role": "hybrid_nonzero_source"
+      },
+      {
+        "height": 1493,
+        "source": "5bc8500358ec0b1a3647c3f838600e39d698feeb5299193b1b402b44f396da7104000000",
+        "transaction": "1fd520b5a1488ee45347676bed9930a3cf9c7e3320e8ac8df188ddc40abb914a",
+        "key_image": "8299ce7f0d2fa205c593488ca4a2ceb18dcb9bfa8eb84131c5c9841338410b46",
+        "role": "first_repeated_award"
+      },
+      {
+        "height": 1494,
+        "source": "11b60e85f89d05393ae9ffd18c37133b5e5ed3fb9118f7da8a8f721e837297eb03000000",
+        "transaction": "e90dfa2ef1af5076364b478402bc562e139e0924c0855f8266fd8690d9f7fc61",
+        "key_image": "a6d34593f5408303873085be58c355353ed0926095e23ef7f674e357fe6e992b",
+        "role": "second_repeated_award"
+      },
+      {
+        "height": 1495,
+        "source": "00a847f0d7fbee91664bc0fbfd12d3fe9bd0ba9cfc067ecf1609b2f743e3a9fc02000000",
+        "transaction": "b0ef2a51830d720cecf04cbbd20446e32f04370e218176337c25577afa65fe55",
+        "key_image": "422d1ddc3293d95524cf5a13893df5ac975c7f4c88150ac07a1bf97322178726",
+        "role": "classical_award_before_source"
+      },
+      {
+        "height": 1496,
+        "source": "fda8e58dc99b3e53fe287eba374d377fe53966676f005a495f24e41b4081fb4c00000000",
+        "transaction": "8de22878af119f8e04f3e7a01b6e46685b24c8ea7f92edd6fafb72a6435223cd",
+        "key_image": "aeccad666d5d5e8364efe6f223435ec7addddcccbc7a701e0167187f05c40f1a",
+        "role": "classical_source"
+      },
+      {
+        "height": 1497,
+        "source": "88987c94a3460876661868d193321913c728562a249fff07f4702bbb0cf3cb3e02000000",
+        "transaction": "b3622010c5ddc6e03c744e6d7e7298449f096ed3739122591f88bd21026bfa12",
+        "key_image": "3e0a1b26849e81b05bca08ee75e5aaecdaa0a24e5e63add1bcdc50bf65c2ce38",
+        "role": "award_that_won_again"
+      },
+      {
+        "height": 1498,
+        "source": "143c8b903f086fd341d3c1665305c64a19d16e6984e17d133f5d4ef27ac656a702000000",
+        "transaction": "16bac7539855aaf0e0068797988a9e75bb6ab8414c3bda14622af23919622218",
+        "key_image": "0ec2ea66568a20187c64d020f76e3d1a961baa9a0c09e3542fe416fde37c935e",
+        "role": "nested_award"
+      }
+    ],
+    "assertions": [
+      "distinct final key images for all7selected source/repeated/nested outputs",
+      "nonzero original hybrid index differs from payout outpoint index",
+      "wallet-owned unspent selection and actual wallet construction",
+      "actual consensus fee floor and producer/validator/writer acceptance",
+      "unspent siblings remain discoverable after each spend",
+      "receiver discovers each new payment including immature outputs",
+      "reopen/rescan before signing and after all spends",
+      "recipient exactly7outputs and sum matchespaid",
+      "actual key-image heights and transaction-index records",
+      "sender unspent + receiver + burn + pool = mined",
+      "all fees = burned + distributed + pool",
+      "optional emission-controller total_tx remains0; actual tx-index rowcount131"
+    ]
+  },
+  "interpretation": "Only explicitly authorized runs; same frozen Rust source and same1700height/1800s/all7spends bounds. Natural keys/draws differ; this is functionality evidence, not deterministic winner or stationary economics proof."
+}
