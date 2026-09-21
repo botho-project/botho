@@ -1,0 +1,224 @@
+{
+  "issue": 1354,
+  "date": "2026-09-20",
+  "implementation_parent": "85a57e19426fcac24298b84faf80c6013bb83742",
+  "status": "complete 93-test ledger suite passed on Linux and uninstrumented macOS under supported test resource policy; original failures retained; review pending",
+  "command": "botho lib-test binary ledger:: --nocapture; subprocess timeout600s; debug profile",
+  "host": {
+    "cpu": "Apple M3 Ultra",
+    "target": "aarch64-apple-darwin",
+    "os": "Darwin27.0.0",
+    "rustc": "1.93.0-nightly (646a3f8c1 2025-12-02)",
+    "isolation": "ordinary workstation; not isolated; no Linux/energy/network timing claim"
+  },
+  "full_suite": {
+    "passed": 92,
+    "failed": 1,
+    "ignored": 0,
+    "seconds": "258.43",
+    "failed_test": "ledger::store::tests::consensus_fee_floor_is_deterministic_recomputation",
+    "failure": "Ledger::open: Database(Invalid argument (os error22)); operation was unlocalized in that binary"
+  },
+  "funded_metrics": {
+    "aborted_stages": 33,
+    "maturity_blocks": 721,
+    "maturity_ms": 243610,
+    "produce_ms": 110192,
+    "validate_ms": 127844,
+    "persist_ms": 5305,
+    "sign_ms": 94,
+    "funded_produce_ms": 330,
+    "funded_validate_ms": 333,
+    "funded_persist_ms": 60,
+    "total_ms": 258427,
+    "payouts": 2,
+    "fee": 1000000000000,
+    "burn": 200000000000,
+    "pool": 300000000000,
+    "distributed": 500000000000
+  },
+  "raw_log_sha256": "279037510ccb7f88469730230c380cdee74ba241a5f03faf6c32f5c42fecd143",
+  "measured_source_hashes": {
+    "botho/src/ledger/store.rs": "e81ab5b0db1860e416d11799ce7d373efcd5106f19bfa3d31a2e8a9581b539af",
+    "botho/src/ledger/store/validation.rs": "d89ae59068318ce044afb932cf7498ce710027df5e8efbc2bcc9e2f2076f358c",
+    "botho/src/ledger/store/writer.rs": "573c0699359989c864b95543ab81ab4426e2a5bf740133d60f5b43ba2d124b31",
+    "botho/src/ledger/experimental/validated.rs": "c43d23aeb84383dc5919299c9446566f2dc3e4386b2037af67e3a2427b461e7f",
+    "botho/src/ledger/experimental/validated/tests.rs": "a01a410749f3a3b75ee0aefd37dd8a462508e52117d4a71179106de8e47e7a3d",
+    "botho/tests/common/positive_transfer.rs": "4a2e2d458529aef27ca2aafb1ad1450f78ccd26f719c82c8a9ca259e3e5b4acb"
+  },
+  "post_measurement_changes": [
+    "Comments and operation-specific database error messages; successful validation/write semantics unchanged.",
+    "Progress reporting uses equivalent is_multiple_of(120) expression; acceptance assertions unchanged.",
+    "Temporary ignored lifecycle diagnostic was compiled/run then removed; never acceptance coverage."
+  ],
+  "diagnostic_comparisons": [
+    {
+      "label": "isolated failing test",
+      "log_name": "botho-1354-open-isolated.log",
+      "raw_log_sha256": "72350abb24c25b5a8cf5bdbb7743fda1f083baf895c4c8086feb02f4061e9f02",
+      "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1325 filtered out; finished in 0.04s"
+    },
+    {
+      "label": "current before precise operation context",
+      "log_name": "botho-1354-open-cohort-1.log",
+      "raw_log_sha256": "89b7679f6f3bbddae039359be187bb6b9f60dc1fc457c6d8f4856c2c4d701a83",
+      "result": "test result: ok. 92 passed; 0 failed; 0 ignored; 0 measured; 1234 filtered out; finished in 3.26s"
+    },
+    {
+      "label": "current before precise operation context",
+      "log_name": "botho-1354-open-cohort-2.log",
+      "raw_log_sha256": "51293cfede76a8a350f1eb3fb95e49216fba1eee869957c40592ac0ddc6adc9b",
+      "result": "test result: ok. 92 passed; 0 failed; 0 ignored; 0 measured; 1234 filtered out; finished in 3.26s"
+    },
+    {
+      "label": "current before precise operation context",
+      "log_name": "botho-1354-open-cohort-3.log",
+      "raw_log_sha256": "0a575917f0b2b86ec7313163291baa2c3ea1ba670e3663df997cd77ca16121e5",
+      "result": "test result: FAILED. 90 passed; 2 failed; 0 ignored; 0 measured; 1234 filtered out; finished in 3.23s"
+    },
+    {
+      "label": "unchanged rebased parent4cb36",
+      "log_name": "botho-1354-parent-cohort-1.log",
+      "raw_log_sha256": "1d8ba5e1c3d65423bdb6a54eb6dc73c0d8d37ecfb127c597b4b6d9d26978231b",
+      "result": "test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 1233 filtered out; finished in 3.35s"
+    },
+    {
+      "label": "unchanged rebased parent4cb36",
+      "log_name": "botho-1354-parent-cohort-2.log",
+      "raw_log_sha256": "77c8ae460a9f82aa896aa9e8c0517f77451b506326ebb3a35c484e1440c6b4b9",
+      "result": "test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 1233 filtered out; finished in 3.52s"
+    },
+    {
+      "label": "unchanged rebased parent4cb36",
+      "log_name": "botho-1354-parent-cohort-3.log",
+      "raw_log_sha256": "3cc7c62abaee844460bbe50db98b264c41c0bb9efe1e168caff8c47a532b740b",
+      "result": "test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 1233 filtered out; finished in 3.58s"
+    },
+    {
+      "label": "current with precise operation context",
+      "log_name": "botho-1354-diag-new92-1.log",
+      "raw_log_sha256": "ca98085c6383dad941b1301eab9582f298d8522add54cc5483eeb503c7f9d675",
+      "result": "test result: ok. 92 passed; 0 failed; 0 ignored; 0 measured; 1234 filtered out; finished in 4.10s"
+    },
+    {
+      "label": "current with precise operation context",
+      "log_name": "botho-1354-diag-new92-2.log",
+      "raw_log_sha256": "61b24679cf1902bad56c8b4b097af6aea35c7032c1c304933b647d43fc722970",
+      "result": "test result: ok. 92 passed; 0 failed; 0 ignored; 0 measured; 1234 filtered out; finished in 3.75s"
+    },
+    {
+      "label": "current with precise operation context",
+      "log_name": "botho-1354-diag-new92-3.log",
+      "raw_log_sha256": "7d3ef7753de3cd0a5a22ea825b709dd257f9775562a1f8923ab14e58bcb26c21",
+      "result": "test result: ok. 92 passed; 0 failed; 0 ignored; 0 measured; 1234 filtered out; finished in 3.80s"
+    },
+    {
+      "label": "current with precise operation context",
+      "log_name": "botho-1354-diag-old86-1.log",
+      "raw_log_sha256": "44d809e9c116034b6d2f7e20ceb8b7321a0977fea59d66ed7f6318f553e95293",
+      "result": "test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 1240 filtered out; finished in 4.45s"
+    },
+    {
+      "label": "current with precise operation context",
+      "log_name": "botho-1354-diag-old86-2.log",
+      "raw_log_sha256": "ec1fa00b4fa4158501458ebbf70a4124c954c8d9b5fbb5d27fd1228ffabe159b",
+      "result": "test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 1240 filtered out; finished in 3.27s"
+    },
+    {
+      "label": "current with precise operation context",
+      "log_name": "botho-1354-diag-old86-3.log",
+      "raw_log_sha256": "a981469296770de19d0cbc5855160780c61fdaeb6acba6ad0200c742b3fe7249",
+      "result": "test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 1240 filtered out; finished in 5.09s"
+    },
+    {
+      "label": "local environment lifecycle diagnostic",
+      "log_name": "botho-1354-churn.log",
+      "raw_log_sha256": "4bc4c87d35c4ea5addf9fde2b7879b2befbdb28c52a9d4ddf8403d97b96de119",
+      "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1326 filtered out; finished in 6.12s"
+    }
+  ],
+  "current_source_hashes": {
+    "botho/src/ledger/store.rs": "e81ab5b0db1860e416d11799ce7d373efcd5106f19bfa3d31a2e8a9581b539af",
+    "botho/src/ledger/store/validation.rs": "d89ae59068318ce044afb932cf7498ce710027df5e8efbc2bcc9e2f2076f358c",
+    "botho/src/ledger/store/writer.rs": "573c0699359989c864b95543ab81ab4426e2a5bf740133d60f5b43ba2d124b31",
+    "botho/src/ledger/experimental.rs": "40499b16db56f4f3dcee7a01d30e9874dbe7a5438c1ec900cfb1113d55d37e3b",
+    "botho/src/ledger/experimental/validated.rs": "c43d23aeb84383dc5919299c9446566f2dc3e4386b2037af67e3a2427b461e7f",
+    "botho/src/ledger/experimental/validated/tests.rs": "f9078f40a35d76453cc7c80ac7eb1c156d0a7b93573913ce189ab267b1131701",
+    "botho/tests/common/positive_transfer.rs": "4a2e2d458529aef27ca2aafb1ad1450f78ccd26f719c82c8a9ca259e3e5b4acb",
+    "botho/src/consensus/lottery.rs": "1e2c5bf2925cf2c83466b95df0fa425faab9204515db408239f46d0d39da693f",
+    "botho/src/block.rs": "f2e2323d1346c70ea5d234933b1990d1c0e6221366aed1c37e084c97052ec5cc",
+    "transaction/clsag/src/lottery_v2.rs": "78551581d6e9a1eca42b0ca628fdb0d2aaf84282682f8b8e2854278693f6d432"
+  },
+  "scope_limits": [
+    "No wallet payout spend/discovery proof.",
+    "Optional emission counters retain trusted local caller semantics.",
+    "No production activation or migration.",
+    "Historical semop EINVAL was not accompanied by a kernel undo-entry count; direct resource-boundary reproduction is not proof of each historical failure cause.",
+    "macOS validation uses the merged test-only concurrency launcher; production System V locking and its owner-death recovery are unchanged.",
+    "Evidence amendment does not itself approve the draft; current-head CI and independent Judge review remain required."
+  ],
+  "other_checks": {
+    "ledger_consistency_integration": {
+      "passed": 26,
+      "seconds": "25.52"
+    },
+    "tx_lifecycle_integration": {
+      "passed": 14,
+      "seconds": "37.71"
+    },
+    "ct_vectors": {
+      "passed": 9,
+      "bucket_cases": 2752,
+      "source_hashes": 12
+    },
+    "clippy": "cargo clippy --locked -p botho --lib --tests passed with warnings; no -D warnings claim",
+    "actionlint": "passed",
+    "fmt": "passed",
+    "diff_check": "passed"
+  },
+  "gate_disposition": {
+    "date": "2026-09-20",
+    "tested_source_head": "5127d4c2cc59e9f5b842517717a95566dadebfd2",
+    "implementation_changes_since_tests": "none; evidence/docs only",
+    "policy_pr": 1362,
+    "policy_merge_commit": "a38f0109b4fb88140a502321c900e34e9ce350e3",
+    "macos": {
+      "passed": 93,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": "271.24",
+      "instrumented": false,
+      "test_threads": 4,
+      "observed_semume": 10,
+      "timeout_seconds": 600,
+      "binary_sha256": "e599a15bdc9ea32ccf89169d762265092316fe1efc7df9daa0f54581c9dcb5f9",
+      "wrapper_sha256": "e8e491103bb7881469f56fd7ee437485ed6c05beab608f83526d73376ad7bccc",
+      "command": "scripts/test-ledger.sh --binary <preserved exact-head lib test executable>",
+      "raw_log": "macos-bounded-ledger.txt",
+      "raw_sha256": "6123a9116da02bdb81239efc542af1e3ef099ca0d1e68081252fab29589f05de"
+    },
+    "linux": {
+      "passed": 93,
+      "failed": 0,
+      "ignored": 0,
+      "seconds": "388.10",
+      "run_id": 35543628003,
+      "artifact_id": 10616326753,
+      "checkout_commit": "e751d6354aa48ef897a5b5d67c197c0cbaade74b",
+      "checkout_kind": "GitHub synthetic merge of tested PR head",
+      "test_threads": "default; no macOS launcher",
+      "timeout_seconds": 600,
+      "raw_log": "linux-ledger.txt",
+      "raw_sha256": "0e1609c65f8c863a3f0eb4dc8facbfa0c0b294f13940d993fbd7702ee35dd1b5"
+    },
+    "resource_boundary": {
+      "issue": 1361,
+      "operation": "ten distinct real Ledger environments with held write transactions; normal eleventh Ledger open",
+      "observed_semume": 10,
+      "result": "eleventh open returned Database(Invalid argument (os error22)); initial ten opens and writers succeeded",
+      "diagnostic_sha256": "85628c4e1eebd158caab0bae483603c782cfce1836cec0a7566fe831288f6283",
+      "interpretation": "demonstrated per-process resource boundary; not proof of instantaneous kernel count at historical parallel failures"
+    },
+    "production_scope": "Default Node opens one shared Ledger environment with two semaphore numbers; arbitrary embeddings and other linked semaphore users are not globally bounded."
+  }
+}

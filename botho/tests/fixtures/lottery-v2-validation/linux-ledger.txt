@@ -1,0 +1,124 @@
+e751d6354aa48ef897a5b5d67c197c0cbaade74b
+rustc 1.93.0-nightly (646a3f8c1 2025-12-02)
+binary: rustc
+commit-hash: 646a3f8c15baefb98dc6e0c1c1ba3356db702d2a
+commit-date: 2025-12-02
+host: x86_64-unknown-linux-gnu
+release: 1.93.0-nightly
+LLVM version: 21.1.5
+Linux runnervmlun5p 6.17.0-1022-azure #22-Ubuntu SMP Mon Jul 27 17:24:03 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+e81ab5b0db1860e416d11799ce7d373efcd5106f19bfa3d31a2e8a9581b539af  botho/src/ledger/store.rs
+d89ae59068318ce044afb932cf7498ce710027df5e8efbc2bcc9e2f2076f358c  botho/src/ledger/store/validation.rs
+573c0699359989c864b95543ab81ab4426e2a5bf740133d60f5b43ba2d124b31  botho/src/ledger/store/writer.rs
+40499b16db56f4f3dcee7a01d30e9874dbe7a5438c1ec900cfb1113d55d37e3b  botho/src/ledger/experimental.rs
+c43d23aeb84383dc5919299c9446566f2dc3e4386b2037af67e3a2427b461e7f  botho/src/ledger/experimental/validated.rs
+f9078f40a35d76453cc7c80ac7eb1c156d0a7b93573913ce189ab267b1131701  botho/src/ledger/experimental/validated/tests.rs
+4a2e2d458529aef27ca2aafb1ad1450f78ccd26f719c82c8a9ca259e3e5b4acb  botho/tests/common/positive_transfer.rs
+
+running 93 tests
+test ledger::experimental::tests::marked_but_incomplete_schema_does_not_get_repaired_on_reopen ... ok
+test ledger::experimental::tests::default_and_experimental_opens_cannot_cross_schemas ... ok
+test ledger::experimental::tests::mismatched_envelope_or_context_reference_is_rejected ... ok
+test ledger::experimental::tests::missing_corrupt_and_inconsistent_rows_are_never_skipped ... ok
+full experimental shared-write stages: 32
+test ledger::experimental::tests::optional_emission_none_preserves_supplied_counters_after_next_commit ... ok
+test ledger::experimental::tests::abort_every_write_stage_and_conflicts_leave_all_tables_unchanged ... ok
+test ledger::experimental::tests::previous_storage_only_schema_is_not_upgraded ... ok
+test ledger::experimental::tests::strict_envelope_and_context_decoders ... ok
+test ledger::experimental::tests::unknown_marker_and_missing_tables_fail_without_initialization ... ok
+test ledger::experimental::tests::persisted_nonzero_repeated_and_nested_contexts_reopen ... ok
+test ledger::experimental::tests::single_payout_reads_check_immediate_source_context_without_recursion ... ok
+test ledger::experimental::validated::tests::fresh_schema_reopen_and_ordinary_v1_refusal ... ok
+test ledger::experimental::tests::all_nine_tables_and_emission_are_atomic_at_every_actual_shared_write ... ok
+test ledger::experimental::validated::tests::strict_creating_commitment_and_positive_wealth_are_required ... ok
+test ledger::experimental::validated::tests::strict_metadata_identities_fail_reopen_without_writes ... ok
+test ledger::experimental::validated::tests::empty_summary_and_rule_root_are_always_checked ... ok
+test ledger::snapshot::tests::test_compression_roundtrip ... ok
+test ledger::snapshot::tests::test_invalid_magic_bytes ... ok
+test ledger::snapshot::tests::test_merkle_root_empty ... ok
+test ledger::snapshot::tests::test_merkle_root_odd ... ok
+test ledger::snapshot::tests::test_merkle_root_single ... ok
+test ledger::snapshot::tests::test_merkle_root_two ... ok
+test ledger::snapshot::tests::test_snapshot_creation ... ok
+test ledger::snapshot::tests::test_snapshot_file_roundtrip ... ok
+test ledger::snapshot::tests::test_snapshot_merkle_verification ... ok
+test ledger::snapshot::tests::test_snapshot_roundtrip_total_mined_past_u64_max ... ok
+test ledger::snapshot::tests::test_snapshot_utxo_roundtrip ... ok
+test ledger::store::tests::check_cluster_tag_inheritance_per_ring_max_bound ... ok
+test ledger::store::tests::check_cluster_tag_inheritance_rejects_inflation_accepts_decay ... ok
+test ledger::store::tests::consensus_fee_floor_consults_cluster_wealth ... ok
+test ledger::store::tests::consensus_fee_floor_demurrage_at_max_resists_fresh_decoy_dilution ... ok
+test ledger::store::tests::consensus_fee_floor_factor_floor_binds_background_outputs ... ok
+test ledger::experimental::validated::tests::strict_state_and_candidate_errors_do_not_change_draw ... ok
+test ledger::store::tests::consensus_fee_floor_honest_background_spend_has_zero_downgrade_charge ... ok
+test ledger::store::tests::consensus_fee_floor_is_congestion_independent ... ok
+test ledger::experimental::validated::tests::mint_transition_same_state_stale_and_all_write_rollback ... ok
+test ledger::store::tests::consensus_fee_floor_honest_inclass_wealthy_pays_accrued_not_capitalized ... ok
+test ledger::store::tests::consensus_fee_floor_is_deterministic_recomputation ... ok
+test ledger::store::tests::consensus_fee_floor_rejects_under_fee_accepts_at_floor ... ok
+test ledger::store::tests::consensus_fee_floor_rejects_underpaid_settlement ... ok
+test ledger::store::tests::consensus_fee_floor_settlement_of_background_is_free ... ok
+test ledger::store::tests::consensus_fee_floor_prices_settlement_at_capitalized_charge ... ok
+test ledger::store::tests::fuzz_wiring_add_block_rejects_malformed_and_conserves_supply ... ok
+test ledger::store::tests::import_different_epochs_distinct_clusters ... ok
+test ledger::store::tests::consensus_fee_floor_prices_young_wealthy_to_background_downgrade ... ok
+test ledger::store::tests::import_floor_decays_with_tag_blend_toward_background ... ok
+test ledger::store::tests::import_floor_small_lands_at_f_flood_lands_at_curve ... ok
+test ledger::store::tests::import_floor_composes_with_ring_centroid_no_double_floor ... ok
+test ledger::store::tests::import_pure_external_hold_stays_at_f ... ok
+test ledger::store::tests::lottery_candidate_offset_key_is_pure_and_sensitive ... ok
+test ledger::store::tests::import_two_unwraps_same_epoch_share_cluster ... ok
+test ledger::store::tests::lottery_candidates_deterministic_and_full_under_cap ... ok
+test ledger::store::tests::lottery_candidates_full_set_independent_of_seed_under_cap ... ok
+test ledger::store::tests::test_add_block_rejects_fee_overflow_block ... ok
+test ledger::store::tests::test_add_block_with_emission_is_atomic_on_reject ... ok
+test ledger::store::tests::test_block_wire_format_amounts_stay_u64 ... ok
+test ledger::store::tests::test_checked_block_fees_normal_sum ... ok
+test ledger::store::tests::test_checked_block_fees_rejects_overflow ... ok
+test ledger::store::tests::test_cluster_wealth_for_utxos_uses_global_wealth ... ok
+test ledger::store::tests::test_cluster_wealth_rejects_legacy_8_byte_value ... ok
+test ledger::store::tests::test_cluster_wealth_serialization_is_16_byte_le_u128 ... ok
+test ledger::store::tests::test_cold_start_decoy_gather_returns_typed_insufficient_decoys ... ok
+test ledger::store::tests::test_emission_state_encoding_roundtrip ... ok
+test ledger::store::tests::test_first_stale_transfer_tx_backstop ... ok
+test ledger::store::tests::test_get_utxo ... ok
+test ledger::store::tests::test_get_utxo_by_target_key ... ok
+test ledger::store::tests::test_get_utxo_by_target_key_not_found ... ok
+test ledger::store::tests::test_incremental_saturates_at_u128_max ... ok
+test ledger::store::tests::test_key_image_double_spend_rejected ... ok
+test ledger::store::tests::test_key_image_tracking ... ok
+test ledger::store::tests::test_ledger_open_and_genesis ... ok
+test ledger::store::tests::test_ledger_tip ... ok
+test ledger::store::tests::test_lottery_pool_u128_persist_reload_roundtrip ... ok
+test ledger::store::tests::test_rebuild_matches_incremental_cluster_wealth_past_u64_max ... ok
+test ledger::store::tests::test_ring_centroid_floor_leaves_background_unchanged ... ok
+test ledger::store::tests::test_ring_centroid_floor_never_lowers_claim ... ok
+test ledger::store::tests::test_ring_centroid_floor_raises_understated_factor ... ok
+test ledger::store::tests::test_ring_centroid_floor_saturates_at_max_wealth_no_panic ... ok
+test ledger::store::tests::test_set_difficulty ... ok
+test ledger::store::tests::test_supply_metadata_u128_persist_reload ... ok
+test ledger::store::tests::test_utxo_exists ... ok
+test ledger::store::tests::test_verify_transaction_propagates_db_error_fail_closed ... ok
+test ledger::store::tests::test_verify_transaction_rejects_truly_spent_key_image ... ok
+test ledger::store::tests::verify_cluster_tag_inheritance_resolves_ring_and_rejects_inflation ... ok
+test ledger::store::tests::verify_settlement_accepts_wellformed_and_ignores_transfers ... ok
+test ledger::store::tests::verify_settlement_rejects_nonbackground_output ... ok
+test ledger::store::tests::verify_settlement_rejects_wrong_certified_value ... ok
+test ledger::store::tests::wrap_eligible_requires_settlement_flag_and_background ... ok
+test ledger::store::writer_golden::legacy_shared_writer_keeps_callback_after_coinbase_and_rolls_back_error ... ok
+V1 writer fixture sha256=1f7084834d96b9927b31c17d4a244af9e541420f86d19d3dd75d7d2f475714ea
+test ledger::store::writer_golden::v1_writer_pre_extraction_bytes_and_helper_effects ... ok
+test ledger::store::tests::ct1_research_ledger_decoy_adapter_parity ... ok
+test ledger::store::tests::lottery_candidate_window_degrinds_low_hash_and_covers_all ... ok
+V2_MATURITY height=120 elapsed_ms=20149
+V2_MATURITY height=240 elapsed_ms=50665
+test ledger::experimental::validated::tests::canonical_maturity_fee_funded_payout_accepts_and_reopens has been running for over 60 seconds
+V2_MATURITY height=360 elapsed_ms=96953
+V2_MATURITY height=480 elapsed_ms=159137
+V2_MATURITY height=600 elapsed_ms=235960
+V2_MATURITY height=720 elapsed_ms=328363
+V2_ACCEPTED aborted_stages=33 maturity_blocks=721 maturity_ms=329192 produce_ms=169089 validate_ms=157102 persist_ms=2799 sign_ms=1526 funded_produce_ms=439 funded_validate_ms=637 funded_persist_ms=1203 total_ms=387968 payouts=2 fee=1000000000000 burn=200000000000 pool=300000000000 distributed=500000000000
+test ledger::experimental::validated::tests::canonical_maturity_fee_funded_payout_accepts_and_reopens ... ok
+
+test result: ok. 93 passed; 0 failed; 0 ignored; 0 measured; 1233 filtered out; finished in 388.10s
+

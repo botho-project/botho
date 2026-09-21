@@ -44,10 +44,10 @@
     },
     {
       "path": "botho/src/ledger/store.rs",
-      "sha256": "3c79d8873141d5165021ad783d1bc1513c6e9650ea4ef7dff8eaec388353c131",
-      "reviewed_change": "#1291/22162c2d: test-only heed::WithTls helper; #1306/58cb0345: cfg(test) CT1 ledger/decoy parity fixture; #1349: schema guard before ordinary initialization writes. Consensus CT age/factor arithmetic unchanged; guard reviewed against main e7d595bd. #1352: production writes extracted into shared store/writer.rs; existing V1 validation and CT age/factor arithmetic preserved, reviewed against parent c4ac0f0d.",
+      "sha256": "e81ab5b0db1860e416d11799ce7d373efcd5106f19bfa3d31a2e8a9581b539af",
+      "reviewed_change": "#1291/22162c2d: test-only heed::WithTls helper; #1306/58cb0345: cfg(test) CT1 ledger/decoy parity fixture; #1349: schema guard before ordinary initialization writes. Consensus CT age/factor arithmetic unchanged; guard reviewed against main e7d595bd. #1352: production writes extracted into shared store/writer.rs; existing V1 validation and CT age/factor arithmetic preserved, reviewed against parent c4ac0f0d. #1354: identical V1 ordinary validation/fee method bodies extracted to store/validation.rs, original getters retained; private test-only adapter wrappers gated cfg(test). Reviewed against 85a57e19. Historical measurements not regenerated.",
       "symbols": [
-        "ring_elapsed_quantile(",
+        "pub fn consensus_fee_floor(",
         "pub fn ring_centroid_floored_factor("
       ]
     },
@@ -93,6 +93,16 @@
         "fn apply_memo_keystream(",
         "pub fn decrypt_memo(",
         "fn assemble_hybrid("
+      ]
+    },
+    {
+      "path": "botho/src/ledger/store/validation.rs",
+      "sha256": "d89ae59068318ce044afb932cf7498ce710027df5e8efbc2bcc9e2f2076f358c",
+      "reviewed_change": "#1354: shared actual V1 validation and candidate algorithms extracted from 85a57e19; default trait bodies preserve fee/age/factor arithmetic and order. Legacy candidate row skip/error behavior retained; strict private experimental policy adds record/context checks. Current source inventory, not a rerun of historical economics.",
+      "symbols": [
+        "ring_elapsed_quantile(",
+        "fn ring_centroid_floored_factor(",
+        "fn lottery_candidates("
       ]
     }
   ],
