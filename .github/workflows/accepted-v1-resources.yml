@@ -1,0 +1,44 @@
+name: Ordinary V1 Apply Resources
+on:
+  pull_request:
+    paths:
+      - 'botho/src/ledger/**'
+      - 'botho/src/block.rs'
+      - 'botho/src/consensus/lottery.rs'
+      - 'botho/tests/tx_lifecycle_integration*'
+      - 'botho/tests/tx_lifecycle_integration/**'
+      - 'transaction/clsag/**'
+      - 'scripts/research/resource-frontier/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'botho/Cargo.toml'
+      - 'rust-toolchain'
+      - '.github/workflows/accepted-v1-resources.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  apply-resources:
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-03
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ordinary-v1-apply-resources
+      - name: Check strict observation importer
+        run: python3 -m unittest discover -s scripts/research/resource-frontier -p 'test_accepted_v1.py'
+      - name: Compile and capture six bounded fresh processes
+        timeout-minutes: 19
+        run: python3 scripts/research/resource-frontier/measure_accepted_v1.py --target-dir target --output accepted-v1-resources
+      - name: Preserve outcomes including failures
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: accepted-v1-resources-${{ github.run_id }}-${{ github.run_attempt }}
+          path: accepted-v1-resources/
+          retention-days: 14
+          if-no-files-found: error

@@ -1,0 +1,203 @@
+{
+  "schema": 1,
+  "status": "complete",
+  "sources": {
+    "Cargo.toml": "5ebf46d21ad6ba09c2d7aa4a4f733b473f842a92ac1b94de7aa194396714d95d",
+    "Cargo.lock": "0163413813517346e5de8b6a55ddbcff426c48e1a59be040dac628774a7434a3",
+    "rust-toolchain": "f506172db062e96158404259ac7a857a8422d530837c4fdbd44fe4a0ce15a8f2",
+    "botho/Cargo.toml": "8ebe680b166f7bafa88425c6461fde0dd22cfdd22d672890ea701d05836a3654",
+    ".github/workflows/accepted-v1-resources.yml": "6fdca7b3879e2990521f994a4236cbf0945780d01da7d4d005b495b07a4302a3",
+    "botho/tests/tx_lifecycle_integration.rs": "ba0a063e81a5d33317af2dd14d82afe04d621dab104f93d0655b6e4b8a395de8",
+    "botho/tests/tx_lifecycle_integration/resources.rs": "33ed0b7fc884ea03cf7fdb3f88402ad6dfdfd594ed7100e7c40cd311e4e5117e",
+    "botho/src/ledger/store.rs": "3c79d8873141d5165021ad783d1bc1513c6e9650ea4ef7dff8eaec388353c131",
+    "botho/src/ledger/store/writer.rs": "573c0699359989c864b95543ab81ab4426e2a5bf740133d60f5b43ba2d124b31",
+    "botho/src/block.rs": "f2e2323d1346c70ea5d234933b1990d1c0e6221366aed1c37e084c97052ec5cc",
+    "botho/src/consensus/lottery.rs": "1e2c5bf2925cf2c83466b95df0fa425faab9204515db408239f46d0d39da693f",
+    "transaction/clsag/src/lib.rs": "48555fbaadc8c6cf5ea2768a8bae0b9127f09f0f8d4a46073dbbc2d4b2e077ad",
+    "botho/src/transaction.rs": "e151e5114dafba8f758da0ec466c9fee63e4029f7928b973b91db32072b8fc2e",
+    "botho/src/monetary.rs": "27209a44471a894bc9cce00360802cabafa1e73c34f9731fa006510b4ec5948d",
+    "botho/src/decoy_selection.rs": "9aea0fa89897b3d6d1fcee364a821962ca8c624d2d455bc578ac0df9a99417cb",
+    "botho-wallet/src/keys.rs": "fe8587950b25a93b2d5b8a6e4b1ba5406054e76e6c143b01bd99e887e3c2f251",
+    "account-keys/src/account_keys.rs": "5cf1133de4fd8b895d255d613ca4c5917db587d10740576e85cbb2f487c22a4d",
+    "crypto/keys/src/ristretto.rs": "85ec27c0f36989e2b170666d2957bbf1bef739380f6387cea3e31559a041d921",
+    "crypto/keys/src/compat.rs": "f1237d2bf1c2108733dd2b6920b1b340cfc97b82174a5edc620df07760164fa8",
+    "crypto/ring-signature/src/ring_signature/clsag.rs": "0e598832571a88857e782a1a445a6c0677a9280c85820dcd177d65f18b8ada20",
+    "crypto/ring-signature/src/ring_signature/mod.rs": "b6e969e943eaa52f5906c932da740fc2d27487d4e521b3def17f126c96f5d1dd",
+    "crypto/ring-signature/src/compat.rs": "5c8090ec6eaf4bd7366741c5bd195fe96033152ed0403049918c36821d8369cf",
+    "cluster-tax/src/monetary.rs": "b80cff28f1d4f4c07cb4717536e1f883e7b5cbe5731fa2b93813bc11aad60ea7",
+    "cluster-tax/src/fee_curve.rs": "d8b649fac7999cb175a23e13b10f167c742b00584452e844ee25452d492591b8",
+    "cluster-tax/src/dynamic_fee.rs": "8efea9a1bd0745864196fa9bce8b2234b82ce67e84407312a99e1685381c0419",
+    "cluster-tax/src/demurrage.rs": "ecc44061e1c82b19b49c9e6c2a05329168ae3a4877eeba0bda438a3e3cc63f34",
+    "cluster-tax/src/lottery.rs": "bb862abc436488f42c9453518811af1ac4884977cbdce2c5f0b0683c4f110179",
+    "cluster-tax/src/tag.rs": "8efe5ba3c50cf0b683fcec2ac4ef1f1cb9086bd7cff31f9907443c7d39ae078c",
+    "cluster-tax/src/bridge_import.rs": "2058c89c6bb1954b7d471b0e8a2be5f6272f4cf8df16e47daff15faa9ed9630c",
+    "cluster-tax/src/age_decay.rs": "2b380d4c407fa40bb3d620af7eada2ef1ab6320f6202b5cfd93b9b8e0b53c534",
+    "scripts/research/resource-frontier/accepted_v1.py": "785823bdc0f12ed0885d4eb24c6ecc12815e6ae16d1c0e6d2706bf6e60381c1d",
+    "scripts/research/resource-frontier/measure_accepted_v1.py": "c97827d14fe9d79979e41e0bcaa1ddc32080be8ab19bcb7da62be960e9019889"
+  },
+  "checkout_commit": "104aa463ff38e804229f85f47d503a458746ae2a",
+  "dirty_status": "M botho/tests/tx_lifecycle_integration.rs\n?? .github/workflows/accepted-v1-resources.yml\n?? botho/tests/tx_lifecycle_integration/\n?? scripts/research/resource-frontier/ACCEPTED-V1.md\n?? scripts/research/resource-frontier/accepted_v1.py\n?? scripts/research/resource-frontier/measure_accepted_v1.py\n?? scripts/research/resource-frontier/test_accepted_v1.py",
+  "tracked_diff_sha256": "e7eedfd3f9185cdf418dfa1ed9723ef360a0998cd4eb2cd63acc78569db2af62",
+  "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "cpu_identity": {
+    "source": "sysctl machdep.cpu.brand_string",
+    "model": "Apple M3 Ultra"
+  },
+  "host_id_sha256": "ab0fff0a473029cdb3f44e76c57abdf4d26d3c871c27a6944edaff1db3a83b46",
+  "build_environment": {
+    "CARGO_ENCODED_RUSTFLAGS": null,
+    "RUSTC_WRAPPER": "",
+    "RUSTFLAGS": null
+  },
+  "logical_cpus": 28,
+  "rustc": "rustc 1.93.0-nightly (646a3f8c1 2025-12-02)\nbinary: rustc\ncommit-hash: 646a3f8c15baefb98dc6e0c1c1ba3356db702d2a\ncommit-date: 2025-12-02\nhost: aarch64-apple-darwin\nrelease: 1.93.0-nightly\nLLVM version: 21.1.5",
+  "cargo": "cargo 1.93.0-nightly (2a7c49606 2025-11-25)",
+  "target_dir": "/private/tmp/botho-1346-target",
+  "ci": {
+    "GITHUB_SHA": null,
+    "GITHUB_HEAD_REF": null,
+    "GITHUB_RUN_ID": null,
+    "GITHUB_RUN_ATTEMPT": null,
+    "GITHUB_JOB": null
+  },
+  "runs": [
+    {
+      "case": "payments-0-sample-0",
+      "command": [
+        "/private/tmp/botho-1346-target/release/deps/tx_lifecycle_integration-3de99ca49d135eac",
+        "resources::accepted_v1_apply_resource_sample",
+        "--exact",
+        "--ignored",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 1.4076606250018813,
+      "log": "payments-0-sample-0.log",
+      "sha256": "84be684fd88ef7b2115f09f38685ef7f01524a4303f2804f9e96a0ee3c88da39"
+    },
+    {
+      "case": "payments-0-sample-1",
+      "command": [
+        "/private/tmp/botho-1346-target/release/deps/tx_lifecycle_integration-3de99ca49d135eac",
+        "resources::accepted_v1_apply_resource_sample",
+        "--exact",
+        "--ignored",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 1.4542832919978537,
+      "log": "payments-0-sample-1.log",
+      "sha256": "dc8f384e8c45124c8b0057e42e6202915bc6a30300cc1b55638f1c63d2d95d17"
+    },
+    {
+      "case": "payments-1-sample-0",
+      "command": [
+        "/private/tmp/botho-1346-target/release/deps/tx_lifecycle_integration-3de99ca49d135eac",
+        "resources::accepted_v1_apply_resource_sample",
+        "--exact",
+        "--ignored",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 1.5055347079760395,
+      "log": "payments-1-sample-0.log",
+      "sha256": "abc576f29f2b3006e6431918af3601ae75caab7bbd5f0b3ef924d73e20b77d96"
+    },
+    {
+      "case": "payments-1-sample-1",
+      "command": [
+        "/private/tmp/botho-1346-target/release/deps/tx_lifecycle_integration-3de99ca49d135eac",
+        "resources::accepted_v1_apply_resource_sample",
+        "--exact",
+        "--ignored",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 1.4189519999781623,
+      "log": "payments-1-sample-1.log",
+      "sha256": "c2cc47f64011254fb6fc302f8118ee427cc1a7e561f6be9793f114cb2081cec9"
+    },
+    {
+      "case": "payments-2-sample-0",
+      "command": [
+        "/private/tmp/botho-1346-target/release/deps/tx_lifecycle_integration-3de99ca49d135eac",
+        "resources::accepted_v1_apply_resource_sample",
+        "--exact",
+        "--ignored",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 1.423095416976139,
+      "log": "payments-2-sample-0.log",
+      "sha256": "b4f5a04b7dedd657a082637f1411a541c61dbd9605df76ddd1781f77b8de9c69"
+    },
+    {
+      "case": "payments-2-sample-1",
+      "command": [
+        "/private/tmp/botho-1346-target/release/deps/tx_lifecycle_integration-3de99ca49d135eac",
+        "resources::accepted_v1_apply_resource_sample",
+        "--exact",
+        "--ignored",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 1.4278885839739814,
+      "log": "payments-2-sample-1.log",
+      "sha256": "0e841cb43f1bf140819361a4b7d7381b3d2a2bfd87ad249fcf8d65576759fb65"
+    }
+  ],
+  "limits": "Non-isolated host; setup excluded; no energy/full-wire/CT1-cost measurement",
+  "compile_command": [
+    "cargo",
+    "test",
+    "--locked",
+    "--release",
+    "-p",
+    "botho",
+    "--test",
+    "tx_lifecycle_integration",
+    "--no-run",
+    "--message-format=json"
+  ],
+  "compile_exit": 0,
+  "compile_seconds": 15.120309749967419,
+  "cargo_json_sha256": "f5cf941ea455848f20b4777e2d551e49bee9ff3a2c41302630c8f23d9de01625",
+  "artifact": {
+    "reason": "compiler-artifact",
+    "package_id": "path+file:///Users/rwalters/GitHub/botho/.loom/worktrees/issue-1363/botho#0.6.0",
+    "manifest_path": "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1363/botho/Cargo.toml",
+    "target": {
+      "kind": [
+        "test"
+      ],
+      "crate_types": [
+        "bin"
+      ],
+      "name": "tx_lifecycle_integration",
+      "src_path": "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1363/botho/tests/tx_lifecycle_integration.rs",
+      "edition": "2021",
+      "doc": false,
+      "doctest": false,
+      "test": true
+    },
+    "profile": {
+      "opt_level": "3",
+      "debuginfo": 0,
+      "debug_assertions": false,
+      "overflow_checks": true,
+      "test": true
+    },
+    "features": [
+      "bth-crypto-pq",
+      "default",
+      "pq"
+    ],
+    "filenames": [
+      "/private/tmp/botho-1346-target/release/deps/tx_lifecycle_integration-3de99ca49d135eac"
+    ],
+    "executable": "/private/tmp/botho-1346-target/release/deps/tx_lifecycle_integration-3de99ca49d135eac",
+    "fresh": false
+  },
+  "executable_sha256": "7867ca0267cd74175c1d2ef6502bc7cb39b093542082e913c172ddd343366a40"
+}

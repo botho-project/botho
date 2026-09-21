@@ -1362,3 +1362,7 @@ async fn test_rpc_tx_submit_relays_accepted_tx() {
         "rejected tx must NOT reach the relay channel"
     );
 }
+
+#[cfg(unix)]
+#[path = "tx_lifecycle_integration/resources.rs"]
+mod resources;

@@ -12,3 +12,6 @@ Cargo.lock merge=theirs
 # fully re-derived by the next resync regardless of which side "wins".
 .loom/install-metadata.json merge=ours
 # END LOOM-MANAGED (merge drivers, #4528)
+
+# Preserve byte-exact libtest output, including its final blank line.
+scripts/research/resource-frontier/evidence/accepted-v1-macos/*.log whitespace=-blank-at-eof
