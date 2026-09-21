@@ -7,7 +7,7 @@
  * default and `/es`-prefixed paths.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 
 const useWalletMock = vi.fn()
@@ -26,6 +26,9 @@ vi.mock('../components/CustomRpcTrustGate', () => ({
   CustomRpcTrustGate: () => null,
   CustomNodeBanner: () => null,
 }))
+
+vi.mock('../components/OfflineBanner', () => ({ OfflineBanner: () => null }))
+vi.mock('../components/OutstandingLinks', () => ({ OutstandingLinks: () => null }))
 
 // Imported AFTER the mocks are registered.
 import { WalletPage } from './wallet'
@@ -131,5 +134,57 @@ describe('WalletPage i18n', () => {
     const select = localeSwitcherSelect()
     expect(select.value).toBe('es')
     expect(select.options[select.selectedIndex].textContent).toBe('Español')
+  })
+})
+
+
+describe('WalletPage scan errors', () => {
+  const refreshBalance = vi.fn(ASYNC_NOOP)
+  const refreshTransactions = vi.fn(ASYNC_NOOP)
+
+  beforeEach(async () => {
+    refreshBalance.mockClear()
+    refreshTransactions.mockClear()
+    await i18n.changeLanguage('en')
+    useWalletMock.mockReturnValue(noWallet({
+      hasWallet: true,
+      isConnected: true,
+      isEncrypted: true,
+      balance: null,
+      transactions: [],
+      balanceUnavailable: true,
+      historyUnavailable: true,
+      contacts: [],
+      autoLockMinutes: 5,
+      refreshBalance,
+      refreshTransactions,
+    }))
+  })
+  afterEach(() => cleanup())
+
+  it.each(['en', 'es', 'zh'])('shows localized unavailable states and distinct retries in %s', async locale => {
+    await i18n.changeLanguage(locale)
+    renderAt('/wallet')
+    expect(screen.getByText(i18n.t('dashboard.balanceUnavailable', { ns: 'wallet' }))).toBeTruthy()
+    expect(screen.getByText(i18n.t('dashboard.historyUnavailable', { ns: 'wallet' }))).toBeTruthy()
+    expect(screen.queryByText('No transactions yet')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('dashboard.retryBalance', { ns: 'wallet' }) }))
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('dashboard.retryHistory', { ns: 'wallet' }) }))
+    expect(refreshBalance).toHaveBeenCalledOnce()
+    expect(refreshTransactions).toHaveBeenCalledOnce()
+  })
+
+  it('returns to the normal empty state after a successful empty scan', () => {
+    const state = useWalletMock()
+    const view = renderAt('/wallet')
+    useWalletMock.mockReturnValue({
+      ...state,
+      balance: { available: 0n, pending: 0n, total: 0n },
+      balanceUnavailable: false,
+      historyUnavailable: false,
+    })
+    view.rerender(<MemoryRouter initialEntries={['/wallet']}><WalletPage /></MemoryRouter>)
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByText('No transactions yet')).toBeTruthy()
   })
 })

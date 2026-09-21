@@ -48,6 +48,10 @@
     "close": "Close"
   },
   "dashboard": {
+    "balanceUnavailable": "Balance unavailable. Your wallet could not check its funds. Retry when connected.",
+    "historyUnavailable": "Transaction history unavailable. Retry to check your activity.",
+    "retryBalance": "Retry balance",
+    "retryHistory": "Retry history",
     "send": "Send",
     "receive": "Receive",
     "sendViaLink": "Send via Link",

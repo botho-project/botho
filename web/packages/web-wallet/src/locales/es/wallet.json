@@ -48,6 +48,10 @@
     "close": "Cerrar"
   },
   "dashboard": {
+    "balanceUnavailable": "Saldo no disponible. Tu cartera no pudo comprobar sus fondos. Reintenta cuando tengas conexión.",
+    "historyUnavailable": "Historial de transacciones no disponible. Reintenta para consultar tu actividad.",
+    "retryBalance": "Reintentar saldo",
+    "retryHistory": "Reintentar historial",
     "send": "Enviar",
     "receive": "Recibir",
     "sendViaLink": "Enviar por enlace",

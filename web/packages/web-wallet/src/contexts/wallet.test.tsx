@@ -30,8 +30,7 @@ vi.mock('@botho/wasm-signer', () => ({
     }
     return 'tbotho://2/' + (acc || '11111')
   }),
-  // No owned outputs => zero spendable balance; the context falls back to the
-  // mocked adapter balance, which is what the tests assert against.
+  // A successful scan with no owned outputs is a genuine zero balance.
   spendableBalance: vi.fn().mockResolvedValue(0n),
   // No owned outputs => empty client-side history.
   buildOwnedHistory: vi.fn().mockResolvedValue([]),
@@ -64,6 +63,9 @@ const lifecycle = vi.hoisted(() => ({
     connect: ReturnType<typeof vi.fn>
     disconnect: ReturnType<typeof vi.fn>
     getNodeInfo: ReturnType<typeof vi.fn>
+    getBalance: ReturnType<typeof vi.fn>
+    getBlockHeight: ReturnType<typeof vi.fn>
+    onNewBlock: ReturnType<typeof vi.fn>
   }>,
 }))
 
@@ -242,6 +244,132 @@ describe('WalletContext', () => {
       expect(second.getNodeInfo).toHaveBeenCalledOnce()
       expect(wallet.isConnected).toBe(true)
       expect(wallet.connectionError).toBeNull()
+    })
+  })
+
+  describe('wallet data availability', () => {
+    async function mountWallet(password?: string) {
+      let wallet!: ReturnType<typeof useWallet>
+      render(<WalletProvider><TestConsumer onMount={value => { wallet = value }} /></WalletProvider>)
+      await waitFor(() => expect(wallet.isConnected).toBe(true))
+      await act(async () => { await wallet.createWallet(TEST_MNEMONIC_12, password) })
+      const adapter = lifecycle.instances.find(a => a.connect.mock.calls.length > 0)!
+      return { current: () => wallet, adapter }
+    }
+
+    it('reports failed balance scans without reading the node wallet, then recovers', async () => {
+      const { current, adapter } = await mountWallet()
+      vi.mocked(spendableBalance).mockResolvedValueOnce(7n)
+      await act(async () => { await current().refreshBalance() })
+      expect(current().balance?.available).toBe(7n)
+      // The node owns a different wallet (the adapter mock reports 1 BTH).
+      vi.mocked(spendableBalance).mockRejectedValueOnce(new Error('WASM unavailable'))
+      await act(async () => { await current().refreshBalance() })
+      expect(current().balance).toBeNull()
+      expect(current().balanceUnavailable).toBe(true)
+      expect(adapter.getBalance).not.toHaveBeenCalled()
+      vi.mocked(spendableBalance).mockResolvedValueOnce(9n)
+      await act(async () => { await current().refreshBalance() })
+      expect(current().balance?.available).toBe(9n)
+      expect(current().balanceUnavailable).toBe(false)
+    })
+
+    it('reports an RPC read failure without falling back to the node wallet', async () => {
+      const { current, adapter } = await mountWallet()
+      adapter.getBlockHeight.mockRejectedValueOnce(new Error('RPC unavailable'))
+      vi.mocked(spendableBalance).mockImplementationOnce(async (_keys, rpc) => {
+        await rpc.getChainHeight()
+        return 7n
+      })
+      await act(async () => { await current().refreshBalance() })
+      expect(current().balance).toBeNull()
+      expect(current().balanceUnavailable).toBe(true)
+      expect(adapter.getBalance).not.toHaveBeenCalled()
+    })
+
+    it('distinguishes unavailable history from a successful empty history', async () => {
+      const { current } = await mountWallet()
+      vi.mocked(buildOwnedHistory).mockRejectedValueOnce(new Error('scan failed'))
+      await act(async () => { await current().refreshTransactions() })
+      expect(current().historyUnavailable).toBe(true)
+      expect(current().transactions).toEqual([])
+      await act(async () => {
+        await Promise.all([current().refreshBalance(), current().refreshTransactions()])
+      })
+      expect(current().historyUnavailable).toBe(false)
+      expect(current().transactions).toEqual([])
+      expect(current().balance).toEqual({ available: 0n, pending: 0n, total: 0n })
+      expect(current().balanceUnavailable).toBe(false)
+    })
+
+    it('keeps an unlocked wallet usable when the initial scan fails', async () => {
+      const { current, adapter } = await mountWallet('testpassword')
+      act(() => current().lockWallet())
+      vi.mocked(spendableBalance).mockRejectedValueOnce(new Error('scan failed'))
+      vi.mocked(buildOwnedHistory).mockRejectedValueOnce(new Error('history failed'))
+      await act(async () => { await current().unlockWallet('testpassword') })
+      expect(current().isLocked).toBe(false)
+      expect(current().hasWallet).toBe(true)
+      expect(current().balanceUnavailable).toBe(true)
+      expect(current().historyUnavailable).toBe(true)
+      expect(adapter.getBalance).not.toHaveBeenCalled()
+    })
+
+    it('does not read balances or history while locked', async () => {
+      const { current, adapter } = await mountWallet('testpassword')
+      act(() => current().lockWallet())
+      vi.mocked(spendableBalance).mockClear()
+      vi.mocked(buildOwnedHistory).mockClear()
+      await act(async () => {
+        await Promise.all([current().refreshBalance(), current().refreshTransactions()])
+      })
+      expect(spendableBalance).not.toHaveBeenCalled()
+      expect(buildOwnedHistory).not.toHaveBeenCalled()
+      expect(adapter.getBalance).not.toHaveBeenCalled()
+      expect(current().balance).toBeNull()
+    })
+
+    it('surfaces block-triggered refresh failures independently', async () => {
+      const { current, adapter } = await mountWallet()
+      const onBlock = adapter.onNewBlock.mock.calls.at(-1)![0] as () => void
+      vi.mocked(spendableBalance).mockRejectedValueOnce(new Error('balance failed'))
+      await act(async () => { onBlock() })
+      expect(current().balanceUnavailable).toBe(true)
+      expect(current().historyUnavailable).toBe(false)
+    })
+
+    it.each(['lock', 'reset', 'replace'] as const)('discards a scan completed after wallet %s', async action => {
+      const { current, adapter } = await mountWallet('testpassword')
+      let resolve!: (amount: bigint) => void
+      let rejectHistory!: (error: Error) => void
+      vi.mocked(spendableBalance).mockReturnValueOnce(new Promise(done => { resolve = done }))
+      vi.mocked(buildOwnedHistory).mockReturnValueOnce(new Promise((_done, fail) => { rejectHistory = fail }))
+      let pending!: Promise<unknown>
+      act(() => { pending = Promise.all([current().refreshBalance(), current().refreshTransactions()]) })
+      await act(async () => {
+        if (action === 'lock') current().lockWallet()
+        else if (action === 'reset') current().resetWallet()
+        else await current().createWallet(TEST_MNEMONIC_12)
+      })
+      const balance = current().balance
+      await act(async () => { resolve(999n); rejectHistory(new Error('old history')); await pending })
+      expect(current().balance).toBe(balance)
+      expect(current().balanceUnavailable).toBe(false)
+      expect(current().historyUnavailable).toBe(false)
+      expect(adapter.getBalance).not.toHaveBeenCalled()
+    })
+
+    it('discards an older failure after a newer refresh succeeds', async () => {
+      const { current } = await mountWallet()
+      let reject!: (error: Error) => void
+      vi.mocked(spendableBalance).mockReturnValueOnce(new Promise((_done, fail) => { reject = fail }))
+      let old!: Promise<void>
+      act(() => { old = current().refreshBalance() })
+      vi.mocked(spendableBalance).mockResolvedValueOnce(11n)
+      await act(async () => { await current().refreshBalance() })
+      await act(async () => { reject(new Error('old failure')); await old })
+      expect(current().balance?.available).toBe(11n)
+      expect(current().balanceUnavailable).toBe(false)
     })
   })
 
