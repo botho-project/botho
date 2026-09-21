@@ -62,7 +62,8 @@ hex = { workspace = true, features = ["std"] }
 
 # Utils
 anyhow = { workspace = true }
-rand = { workspace = true }
+# Storage nonce generation and CLI verification use rand::rng/random directly.
+rand = { workspace = true, features = ["thread_rng"] }
 dirs = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

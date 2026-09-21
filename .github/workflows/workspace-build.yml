@@ -66,6 +66,12 @@ jobs:
             librsvg2-dev \
             libayatana-appindicator3-dev
 
+      # Keep this a separate package-only invocation: workspace feature unification
+      # can hide missing direct features used by the thin wallet (#1368).
+      - name: Check standalone wallet without default features
+        timeout-minutes: 15
+        run: cargo check --locked -p botho-wallet --lib --no-default-features
+
       - name: Build workspace
         run: cargo build --workspace
 
