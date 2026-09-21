@@ -181,7 +181,7 @@ export function createCustomNetwork(rpcEndpoint: string, name?: string): Network
     name: name || 'Custom',
     rpcEndpoint,
     faucetEndpoint: FAUCET_ENDPOINT,
-    networkId: 'botho-custom',
+    networkId: EXPECTED_NETWORK_ID,
     isTestnet: false,
   }
 }
@@ -273,11 +273,12 @@ export type RpcEndpointValidation = { ok: true } | { ok: false; error: string }
  * Validate a custom RPC endpoint before adopting it as the wallet's ingress.
  *
  * Applied identically to the manually-pasted picker path and the accepted `?rpc=`
- * deep link (#587). Three gates, cheapest first:
+ * deep link (#587). Gates, cheapest first:
  *   1. HTTPS-shape: must be `https://` (or `http://localhost` for dev) — reuses
  *      `isValidRpcUrl` so both entry paths share the deep link's scheme check.
  *   2. Reachability: `node_getStatus` must answer.
- *   3. Network match: the reported `network` must equal `EXPECTED_NETWORK_ID`
+ *   3. Identity: every endpoint must report a nonempty network name.
+ *   4. Network match: the reported `network` must equal `EXPECTED_NETWORK_ID`
  *      (`botho-testnet`), so a wrong-network node is rejected instead of silently
  *      connecting. Loopback hosts are exempt (local dev nodes may report other
  *      network names).
@@ -294,7 +295,14 @@ export async function validateRpcEndpointForNetwork(
     return { ok: false, error: 'Could not connect to endpoint' }
   }
 
-  if (!isLoopbackHost(endpoint) && health.network && health.network !== EXPECTED_NETWORK_ID) {
+  if (
+    typeof health.network !== 'string' || !health.network.trim() ||
+    health.network !== health.network.trim()
+  ) {
+    return { ok: false, error: 'This node did not report a valid network identity' }
+  }
+
+  if (!isLoopbackHost(endpoint) && health.network !== EXPECTED_NETWORK_ID) {
     return {
       ok: false,
       error: `This node is on a different network (${health.network})`,

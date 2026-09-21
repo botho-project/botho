@@ -62,13 +62,20 @@ function isLoopbackHost(endpoint: string): boolean {
 /**
  * Enforce the wrong-network guard for a resolved node: throw a user-facing error
  * if a non-loopback node reports a network id other than {@link EXPECTED_NETWORK_ID}.
- * Loopback hosts are exempt (local dev nodes may report other network names),
- * matching the web wallet's `validateRpcEndpointForNetwork` (#811). Pure and
+ * Every node must report an identity. Loopback hosts may report a different
+ * network name for local development, matching the web wallet's
+ * `validateRpcEndpointForNetwork` (#811). Pure and
  * network-free so it is directly unit-testable.
  */
-export function assertNetworkAllowed(rpcUrl: string, reportedNetwork: string | undefined): void {
+export function assertNetworkAllowed(rpcUrl: string, reportedNetwork: unknown): asserts reportedNetwork is string {
+  if (
+    typeof reportedNetwork !== 'string' || !reportedNetwork.trim() ||
+    reportedNetwork !== reportedNetwork.trim()
+  ) {
+    throw new Error('This node did not report a valid network identity.');
+  }
   if (isLoopbackHost(rpcUrl)) return;
-  if (reportedNetwork && reportedNetwork !== EXPECTED_NETWORK_ID) {
+  if (reportedNetwork !== EXPECTED_NETWORK_ID) {
     throw new Error(
       `This node is on a different network (${reportedNetwork}); expected ` +
         `${EXPECTED_NETWORK_ID}. Refusing to use it as an ingress.`,
@@ -79,7 +86,7 @@ export function assertNetworkAllowed(rpcUrl: string, reportedNetwork: string | u
 /** The node's `node_getStatus` result fields the Snap relies on. */
 export interface NodeStatus {
   chainHeight: number;
-  network?: string;
+  network: string;
   synced?: boolean;
   version?: string;
 }
@@ -124,7 +131,7 @@ export async function connectAndGuard(rpcUrl: string): Promise<{ call: NodeCall;
         `${err instanceof Error ? err.message : String(err)}`,
     );
   }
-  assertNetworkAllowed(rpcUrl, status.network);
+  assertNetworkAllowed(rpcUrl, status?.network);
   return { call, status };
 }
 

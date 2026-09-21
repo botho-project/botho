@@ -110,4 +110,19 @@ describe('botho snap: send against a mocked node', () => {
     });
     expect(errorOf(response)?.message).toMatch(/greater than 0/i);
   });
+
+  it('rejects an unidentified node before confirmation, scanning, or submission', async () => {
+    await node.close();
+    node = await startMockNode({
+      handlers: { node_getStatus: () => ({ chainHeight: 100, network: null }) },
+    });
+    const { request } = await installSnap();
+    const to = await ownAddress(request as never);
+    const response = await request({
+      method: 'botho_send',
+      params: { rpcUrl: node.url, recipientAddress: to, amountPicocredits: ONE_BTH },
+    });
+    expect(errorOf(response)?.message).toMatch(/valid network identity/i);
+    expect(node.calls.map((call) => call.method)).toEqual(['node_getStatus']);
+  });
 });

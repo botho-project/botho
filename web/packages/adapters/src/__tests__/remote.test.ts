@@ -466,6 +466,74 @@ describe('u128 / u64 wire-format round-trips', () => {
   })
 })
 
+describe('RemoteNodeAdapter ingress identity', () => {
+  const seed = 'https://seed.test/rpc'
+  function adapterFor(seedNodes = [seed], networkId = 'botho-testnet') {
+    return new RemoteNodeAdapter({ seedNodes, networkId, useWebSocket: false })
+  }
+  function statusWith(network: unknown) {
+    return { ...nodeStatus, result: { ...nodeStatus.result, network } }
+  }
+
+  it.each([undefined, null, '', ' ', 42, {}, ['botho-testnet'], ' botho-testnet ', 'botho-mainnet'])(
+    'rejects network %j before enabling wallet RPCs', async (network) => {
+      installFetch({ node_getStatus: statusWith(network) })
+      const adapter = adapterFor()
+      await expect(adapter.connect()).rejects.toThrow('Failed to connect')
+      expect(adapter.isConnected()).toBe(false)
+      expect(adapter.getNodeInfo()).toBeNull()
+      await expect(adapter.getBlockHeight()).rejects.toThrow()
+      expect(captured.map((call) => call.method)).toEqual(['node_getStatus'])
+    },
+  )
+
+  it('accepts the configured network and preserves the reported identity', async () => {
+    installFetch({ node_getStatus: statusWith('botho-mainnet') })
+    const adapter = adapterFor([seed], 'botho-mainnet')
+    await adapter.connect()
+    expect(adapter.isConnected()).toBe(true)
+    expect(adapter.getNodeInfo()?.networkId).toBe('botho-mainnet')
+    adapter.disconnect()
+  })
+
+  it.each(['http://localhost:17101/rpc', 'http://127.0.0.1:17101/rpc'])(
+    'allows a named development chain at %s but requires its identity', async (endpoint) => {
+      installFetch({ node_getStatus: statusWith('botho-dev') })
+      const adapter = adapterFor([endpoint])
+      await adapter.connect()
+      expect(adapter.getNodeInfo()?.networkId).toBe('botho-dev')
+      installFetch({ node_getStatus: statusWith(undefined) })
+      await expect(adapter.connect()).rejects.toThrow('Failed to connect')
+      expect(adapter.isConnected()).toBe(false)
+      expect(adapter.getNodeInfo()).toBeNull()
+    },
+  )
+
+  it('continues to a valid fallback seed after rejecting an unidentified one', async () => {
+    const fallback = 'https://fallback.test/rpc'
+    const fetch = vi.fn(async (url: string) => ({
+      ok: true,
+      json: async () => statusWith(url === fallback ? 'botho-testnet' : undefined),
+    }))
+    vi.stubGlobal('fetch', fetch)
+    const adapter = adapterFor([seed, fallback])
+    await adapter.connect()
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual([seed, fallback])
+    expect(adapter.getNodeInfo()?.id).toBe(fallback)
+    adapter.disconnect()
+  })
+
+  it('revalidates a previously connected endpoint when reconnecting', async () => {
+    installFetch({ node_getStatus: nodeStatus })
+    const adapter = adapterFor()
+    await adapter.connect()
+    installFetch({ node_getStatus: statusWith('botho-mainnet') })
+    await expect(adapter.connect()).rejects.toThrow('Failed to connect')
+    expect(adapter.isConnected()).toBe(false)
+    expect(adapter.getNodeInfo()).toBeNull()
+  })
+})
+
 describe('RemoteNodeAdapter connection cancellation', () => {
   function deferred<T>() {
     let resolve!: (value: T) => void

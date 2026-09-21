@@ -95,7 +95,7 @@ describe('custom-RPC deep link is gated by the NetworkProvider (#587)', () => {
       'fetch',
       vi.fn(async () => ({
         ok: true,
-        json: async () => ({ jsonrpc: '2.0', id: 1, result: { chainHeight: 1, synced: true } }),
+        json: async () => ({ jsonrpc: '2.0', id: 1, result: { chainHeight: 1, synced: true, network: 'botho-testnet' } }),
       })),
     )
   })
@@ -164,7 +164,7 @@ describe('custom-RPC deep link is gated by the NetworkProvider (#587)', () => {
     expect(localStorage.getItem('botho_custom_node_from_link')).toBe('node-x.testnet.botho.io')
   })
 
-  it('accept rejects a wrong-network node and leaves the prior node intact (#806)', async () => {
+  it.each(['botho-mainnet', undefined, null, ''])('accept rejects network %j and leaves the prior node intact', async (network) => {
     // The link's node answers node_getStatus but reports a different network.
     vi.stubGlobal(
       'fetch',
@@ -173,7 +173,7 @@ describe('custom-RPC deep link is gated by the NetworkProvider (#587)', () => {
         json: async () => ({
           jsonrpc: '2.0',
           id: 1,
-          result: { chainHeight: 1, synced: true, network: 'botho-mainnet' },
+          result: { chainHeight: 1, synced: true, network },
         }),
       })),
     )
@@ -197,6 +197,7 @@ describe('custom-RPC deep link is gated by the NetworkProvider (#587)', () => {
     expect(screen.getByTestId('ingress').textContent).toBe('seed')
     expect(screen.getByTestId('from-link').textContent).toBe('none')
     expect(localStorage.getItem('botho_custom_node_from_link')).toBeNull()
+    expect(localStorage.getItem('botho_custom_endpoint')).toBeNull()
   })
 
   it('revert returns to the default node and clears the marker', async () => {

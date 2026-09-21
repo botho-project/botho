@@ -32,6 +32,14 @@ describe('node ingress guard', () => {
     ).not.toThrow();
   });
 
+  it.each([undefined, null, '', ' ', 42, {}, ['botho-testnet'], ' botho-testnet '])(
+    'rejects invalid network identity %j on both remote and loopback nodes', (network) => {
+      for (const url of ['https://seed.botho.io/rpc', 'http://127.0.0.1:17101/rpc']) {
+        expect(() => assertNetworkAllowed(url, network)).toThrow(/valid network identity/i);
+      }
+    },
+  );
+
   it('exempts loopback hosts from the network match (local dev)', () => {
     expect(() =>
       assertNetworkAllowed('http://127.0.0.1:8545', 'botho-devnet'),
