@@ -70,7 +70,15 @@ jobs:
       # can hide missing direct features used by the thin wallet (#1368).
       - name: Check standalone wallet without default features
         timeout-minutes: 15
-        run: cargo check --locked -p botho-wallet --lib --no-default-features
+        run: |
+          cargo check --locked -p botho-wallet --lib --no-default-features
+          cargo test --locked -p botho-wallet --lib --no-default-features --no-run
+
+      - name: Run standalone wallet storage and recipient detection
+        timeout-minutes: 5
+        run: |
+          cargo test --locked -p botho-wallet --lib --no-default-features storage::tests::
+          cargo test --locked -p botho-wallet --lib --no-default-features transaction::tests::test_output_is_detectable_by_recipient -- --exact
 
       - name: Build workspace
         run: cargo build --workspace
