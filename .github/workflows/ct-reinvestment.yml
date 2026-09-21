@@ -1,0 +1,71 @@
+name: Inactive Payout Reinvestment
+
+on:
+  pull_request:
+    paths:
+      - 'botho/**'
+      - 'cluster-tax/**'
+      - 'crypto/**'
+      - 'transaction/**'
+      - 'scripts/research/ct-economics/**'
+      - 'scripts/research/ct-reinvestment/**'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain'
+      - '.github/workflows/ct-reinvestment.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fixed-histories:
+    runs-on: ubuntu-latest
+    timeout-minutes: 38
+    env:
+      RUSTC_WRAPPER: ''
+      CARGO_TERM_COLOR: never
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: 'true'
+      CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS: 'true'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-03
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: inactive-reinvestment
+      - name: Independent accounting checker controls
+        run: python3 -m unittest discover -s scripts/research/ct-reinvestment -p 'test_check.py'
+      - name: One bounded fixed matrix and controls
+        timeout-minutes: 19
+        run: python3 scripts/research/ct-reinvestment/collect.py --target-dir "$CARGO_TARGET_DIR" --output reinvestment-capture
+      - name: Verify current capture independently
+        run: python3 scripts/research/ct-reinvestment/check.py reinvestment-capture
+      # The shared extraction must also compile and execute the original target;
+      # its historical checked-in observations are not relabeled as this run.
+      - name: Compile original workload regression
+        timeout-minutes: 15
+        run: cargo test --locked --release -p botho --test ct_economics_workload --no-run --message-format=json > original-workload-build.jsonl
+      - name: Execute original workload and owner checker
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -o pipefail
+          CT_ECONOMICS_WRITE_REPORT=1 timeout 150s cargo test --locked --release -p botho --test ct_economics_workload -- --nocapture 2>&1 | tee original-workload.log
+          python3 -m unittest discover -s scripts/research/ct-economics -p 'test_workload_owner_accounts.py'
+          python3 scripts/research/ct-economics/workload_summary.py
+      - name: Preserve outcomes including failures
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: reinvestment-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            reinvestment-capture/
+            original-workload-build.jsonl
+            original-workload.log
+            scripts/research/ct-economics/workload-results.json
+            scripts/research/ct-economics/workload-summary.json

@@ -1,0 +1,16 @@
+REINVEST_BEGIN seed=1306 mode=legacy_locked
+REINVEST_DONE seed=1306 mode=legacy_locked
+REINVEST_BEGIN seed=1306 mode=candidate_locked
+REINVEST_DONE seed=1306 mode=candidate_locked
+REINVEST_BEGIN seed=1306 mode=candidate_age720
+REINVEST_DONE seed=1306 mode=candidate_age720
+REINVEST_BEGIN seed=1306 mode=candidate_age10001
+REINVEST_DONE seed=1306 mode=candidate_age10001
+REINVEST_BEGIN seed=902 mode=legacy_locked
+REINVEST_DONE seed=902 mode=legacy_locked
+REINVEST_BEGIN seed=902 mode=candidate_locked
+REINVEST_DONE seed=902 mode=candidate_locked
+REINVEST_BEGIN seed=902 mode=candidate_age720
+REINVEST_DONE seed=902 mode=candidate_age720
+REINVEST_BEGIN seed=902 mode=candidate_age10001
+REINVEST_DONE seed=902 mode=candidate_age10001
