@@ -1,0 +1,32 @@
+[
+  {
+    "host": "seed.botho.io",
+    "configAndNodeKeyUnchanged": true,
+    "backupMetadata": "700 root root 4096 /var/backups/botho-redeploy-20260921\n600 root root 12239686 /var/backups/botho-redeploy-20260921/testnet.tar.gz",
+    "error": ""
+  },
+  {
+    "host": "seed2.botho.io",
+    "configAndNodeKeyUnchanged": true,
+    "backupMetadata": "700 root root 4096 /var/backups/botho-redeploy-20260921\n600 root root 12239686 /var/backups/botho-redeploy-20260921/testnet.tar.gz",
+    "error": ""
+  },
+  {
+    "host": "faucet.botho.io",
+    "configAndNodeKeyUnchanged": true,
+    "backupMetadata": "700 root root 4096 /var/backups/botho-redeploy-20260921\n600 root root 12249194 /var/backups/botho-redeploy-20260921/testnet.tar.gz",
+    "error": ""
+  },
+  {
+    "host": "eu.seed.botho.io",
+    "configAndNodeKeyUnchanged": true,
+    "backupMetadata": "700 root root 4096 /var/backups/botho-redeploy-20260921\n600 root root 12249019 /var/backups/botho-redeploy-20260921/testnet.tar.gz",
+    "error": ""
+  },
+  {
+    "host": "ap.seed.botho.io",
+    "configAndNodeKeyUnchanged": true,
+    "backupMetadata": "700 root root 4096 /var/backups/botho-redeploy-20260921\n600 root root 12245131 /var/backups/botho-redeploy-20260921/testnet.tar.gz",
+    "error": ""
+  }
+]

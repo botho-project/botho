@@ -1,0 +1,60 @@
+{
+  "observedAt": "2026-09-21T23:15:20.970082+00:00",
+  "certificate": {
+    "notBefore": "Sep 21 22:16:18 2026 GMT",
+    "notAfter": "Dec 20 22:16:17 2026 GMT",
+    "serialNumber": "067B8CAB201C89069FAAB039A5316A8DCEC0",
+    "subjectAltName": [
+      [
+        "DNS",
+        "seed2.botho.io"
+      ]
+    ]
+  },
+  "status": {
+    "jsonrpc": "2.0",
+    "result": {
+      "buildTime": "2026-09-21T22:01:34Z",
+      "chainHeight": 2634,
+      "effectiveSlotDurationSecs": 20,
+      "gitCommit": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+      "gitCommitShort": "6dbcb92",
+      "lastExternalizedSecondsAgo": null,
+      "lastExternalizedSlot": null,
+      "mempoolSize": 0,
+      "minerStalled": false,
+      "mintingActive": false,
+      "mintingThreads": 0,
+      "network": "botho-testnet",
+      "nodeVersion": "0.6.0",
+      "operatorRejectedRequests": 0,
+      "peerCount": 4,
+      "quorumAutoMembers": 4,
+      "quorumCuratedMembers": 0,
+      "quorumDegenerate": false,
+      "quorumFaultTolerant": true,
+      "quorumGateIntersectionRefused": false,
+      "quorumGateMaxAutoMembers": 8,
+      "quorumGateSuppressedPeers": 0,
+      "scpAcceptedNominated": 0,
+      "scpBallotCounter": 0,
+      "scpConfirmedNominated": 0,
+      "scpNominationRound": 1,
+      "scpPeerCount": 4,
+      "scpSlotActive": false,
+      "scpSlotIndex": 2635,
+      "scpSlotPhase": "NominatePrepare",
+      "scpVotedNominated": 0,
+      "slotStallSeconds": 0,
+      "slotStalled": false,
+      "syncProgress": 100.0,
+      "syncStatus": "synced",
+      "synced": true,
+      "tipHash": "616f30244d10e591144159a77cea8fe68628b05f73bfa3dbfbac31912d37ecd6",
+      "totalTransactions": 0,
+      "uptimeSeconds": 68,
+      "version": "0.6.0"
+    },
+    "id": 1
+  }
+}

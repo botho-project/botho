@@ -1,0 +1,176 @@
+[
+  {
+    "host": "seed.botho.io",
+    "result": {
+      "genesis": {
+        "hash": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+        "height": 0,
+        "prevHash": "424f54484f5f544553544e45545f47454e455349535f56310000000000000000",
+        "timestamp": 0
+      },
+      "minting_getStatus": {
+        "jsonrpc": "2.0",
+        "result": {
+          "active": false,
+          "blocksFound": 0,
+          "currentDifficulty": 13824000000000000000,
+          "hashrate": 0.0,
+          "stalled": false,
+          "threads": 2,
+          "totalHashes": 0,
+          "uptimeSeconds": 529918
+        },
+        "id": 1
+      },
+      "faucet_getStatus": {
+        "jsonrpc": "2.0",
+        "result": {
+          "enabled": false,
+          "message": "Faucet is not configured on this node"
+        },
+        "id": 1
+      }
+    }
+  },
+  {
+    "host": "seed2.botho.io",
+    "result": {
+      "genesis": {
+        "hash": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+        "height": 0,
+        "prevHash": "424f54484f5f544553544e45545f47454e455349535f56310000000000000000",
+        "timestamp": 0
+      },
+      "minting_getStatus": {
+        "jsonrpc": "2.0",
+        "result": {
+          "active": false,
+          "blocksFound": 0,
+          "currentDifficulty": 13824000000000000000,
+          "hashrate": 0.0,
+          "stalled": false,
+          "threads": 2,
+          "totalHashes": 0,
+          "uptimeSeconds": 581685
+        },
+        "id": 1
+      },
+      "faucet_getStatus": {
+        "jsonrpc": "2.0",
+        "result": {
+          "enabled": false,
+          "message": "Faucet is not configured on this node"
+        },
+        "id": 1
+      }
+    }
+  },
+  {
+    "host": "faucet.botho.io",
+    "result": {
+      "genesis": {
+        "hash": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+        "height": 0,
+        "prevHash": "424f54484f5f544553544e45545f47454e455349535f56310000000000000000",
+        "timestamp": 0
+      },
+      "minting_getStatus": {
+        "jsonrpc": "2.0",
+        "result": {
+          "active": true,
+          "blocksFound": 0,
+          "currentDifficulty": 13824000000000000000,
+          "hashrate": 201.45784609491912,
+          "stalled": false,
+          "threads": 2,
+          "totalHashes": 186020000,
+          "uptimeSeconds": 924428
+        },
+        "id": 1
+      },
+      "faucet_getStatus": {
+        "jsonrpc": "2.0",
+        "result": {
+          "amountPerRequest": 1000000000000,
+          "amountPerRequestFormatted": "1.000000 BTH",
+          "dailyDispensed": 0,
+          "dailyDispensedFormatted": "0.000000 BTH",
+          "dailyLimit": 10000000000000000,
+          "dailyLimitFormatted": "10000.000000 BTH",
+          "enabled": true,
+          "lifetimeDispensed": 0,
+          "lifetimeDispensedFormatted": "0.000000 BTH",
+          "trackedAddresses": 0,
+          "trackedIps": 0
+        },
+        "id": 1
+      }
+    }
+  },
+  {
+    "host": "eu.seed.botho.io",
+    "result": {
+      "genesis": {
+        "hash": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+        "height": 0,
+        "prevHash": "424f54484f5f544553544e45545f47454e455349535f56310000000000000000",
+        "timestamp": 0
+      },
+      "minting_getStatus": {
+        "jsonrpc": "2.0",
+        "result": {
+          "active": false,
+          "blocksFound": 0,
+          "currentDifficulty": 13824000000000000000,
+          "hashrate": 0.0,
+          "stalled": false,
+          "threads": 2,
+          "totalHashes": 0,
+          "uptimeSeconds": 585708
+        },
+        "id": 1
+      },
+      "faucet_getStatus": {
+        "jsonrpc": "2.0",
+        "result": {
+          "enabled": false,
+          "message": "Faucet is not configured on this node"
+        },
+        "id": 1
+      }
+    }
+  },
+  {
+    "host": "ap.seed.botho.io",
+    "result": {
+      "genesis": {
+        "hash": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+        "height": 0,
+        "prevHash": "424f54484f5f544553544e45545f47454e455349535f56310000000000000000",
+        "timestamp": 0
+      },
+      "minting_getStatus": {
+        "jsonrpc": "2.0",
+        "result": {
+          "active": false,
+          "blocksFound": 0,
+          "currentDifficulty": 13824000000000000000,
+          "hashrate": 0.0,
+          "stalled": false,
+          "threads": 2,
+          "totalHashes": 0,
+          "uptimeSeconds": 536335
+        },
+        "id": 1
+      },
+      "faucet_getStatus": {
+        "jsonrpc": "2.0",
+        "result": {
+          "enabled": false,
+          "message": "Faucet is not configured on this node"
+        },
+        "id": 1
+      }
+    }
+  }
+]

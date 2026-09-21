@@ -1,0 +1,35 @@
+{
+  "observedAt": "2026-09-21T23:20:28.027205+00:00",
+  "nodes": [
+    {
+      "host": "seed.botho.io",
+      "valid": true,
+      "notAfter": "Dec  8 13:52:33 2026 GMT",
+      "serialNumber": "069017F014AD90D4655F90EFAE41EA43133C"
+    },
+    {
+      "host": "seed2.botho.io",
+      "valid": true,
+      "notAfter": "Dec 20 22:16:17 2026 GMT",
+      "serialNumber": "067B8CAB201C89069FAAB039A5316A8DCEC0"
+    },
+    {
+      "host": "faucet.botho.io",
+      "valid": true,
+      "notAfter": "Nov 13 00:29:20 2026 GMT",
+      "serialNumber": "065DD9BD68C15FAE0195A6C058F32CD3305F"
+    },
+    {
+      "host": "eu.seed.botho.io",
+      "valid": true,
+      "notAfter": "Dec  4 15:39:00 2026 GMT",
+      "serialNumber": "06090CD4A8E1C5D010B19E37BAC896B703B0"
+    },
+    {
+      "host": "ap.seed.botho.io",
+      "valid": true,
+      "notAfter": "Dec  4 15:30:41 2026 GMT",
+      "serialNumber": "056D0FE0FBDA886762789334F8506BD076A3"
+    }
+  ]
+}

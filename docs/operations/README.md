@@ -8,6 +8,7 @@ This section covers running, maintaining, and operating Botho nodes.
 |----------|-------------|
 | [Configuration](configuration.md) | Complete configuration reference |
 | [Deployment](deployment.md) | Production deployment (systemd, Docker) |
+| [Testnet redeployment, 2026-09-21](testnet-redeployment-2026-09-21.md) | Pinned fleet rollout, TLS renewal repair and live payment evidence |
 | [Reproducible Builds](reproducible-builds.md) | Verify binary integrity |
 | [Protocol Obfuscation](protocol-obfuscation.md) | Pluggable transports for DPI resistance |
 | [Self-Hosted Operator Dashboard](self-hosted-operator-dashboard.md) | Build, verify, and self-host the `/operator` dashboard |
