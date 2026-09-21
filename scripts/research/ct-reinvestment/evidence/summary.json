@@ -1,0 +1,218 @@
+{
+  "scope": "Observed inactive finite-model local capture; hosted evidence pending",
+  "raw_sha256": "15becae3468cffbca2f2faecdd749416e98e310ae4dabfadfd98187dc85f7ab6",
+  "rows": [
+    {
+      "seed": 1306,
+      "mode": "legacy_locked",
+      "fees": "56500000000000",
+      "capture": "45200000000000",
+      "burn": "11300000000000",
+      "reserve": "0",
+      "payment_attempts": 113,
+      "payment_success": 113,
+      "payment_failures": {},
+      "consolidation_opportunities": 11413,
+      "consolidation_attempts": 0,
+      "consolidation_success": 0,
+      "public_outputs": 779,
+      "max_eligible": 598,
+      "consolidation_failures": {},
+      "owner_totals": {
+        "ordinary": "3175500000000000",
+        "award_unspent": "45200000000000",
+        "award_consumed": "0",
+        "award_immature": "0",
+        "award_deferred": "45200000000000",
+        "award_ready": "0"
+      }
+    },
+    {
+      "seed": 1306,
+      "mode": "candidate_locked",
+      "fees": "56500000000000",
+      "capture": "45200000000000",
+      "burn": "11300000000000",
+      "reserve": "0",
+      "payment_attempts": 113,
+      "payment_success": 113,
+      "payment_failures": {},
+      "consolidation_opportunities": 11413,
+      "consolidation_attempts": 0,
+      "consolidation_success": 0,
+      "public_outputs": 779,
+      "max_eligible": 598,
+      "consolidation_failures": {},
+      "owner_totals": {
+        "ordinary": "3175500000000000",
+        "award_unspent": "45200000000000",
+        "award_consumed": "0",
+        "award_immature": "0",
+        "award_deferred": "45200000000000",
+        "award_ready": "0"
+      }
+    },
+    {
+      "seed": 1306,
+      "mode": "candidate_age720",
+      "fees": "56500000000000",
+      "capture": "45200000000000",
+      "burn": "11300000000000",
+      "reserve": "0",
+      "payment_attempts": 113,
+      "payment_success": 113,
+      "payment_failures": {},
+      "consolidation_opportunities": 11413,
+      "consolidation_attempts": 11413,
+      "consolidation_success": 0,
+      "public_outputs": 779,
+      "max_eligible": 598,
+      "consolidation_failures": {
+        "no_private_input": 4577,
+        "unaffordable": 6836
+      },
+      "owner_totals": {
+        "ordinary": "3175500000000000",
+        "award_unspent": "45200000000000",
+        "award_consumed": "0",
+        "award_immature": "0",
+        "award_deferred": "2800000000000",
+        "award_ready": "42400000000000"
+      }
+    },
+    {
+      "seed": 1306,
+      "mode": "candidate_age10001",
+      "fees": "56500000000000",
+      "capture": "45200000000000",
+      "burn": "11300000000000",
+      "reserve": "0",
+      "payment_attempts": 113,
+      "payment_success": 113,
+      "payment_failures": {},
+      "consolidation_opportunities": 11413,
+      "consolidation_attempts": 11413,
+      "consolidation_success": 0,
+      "public_outputs": 779,
+      "max_eligible": 598,
+      "consolidation_failures": {
+        "no_private_input": 11141,
+        "unaffordable": 272
+      },
+      "owner_totals": {
+        "ordinary": "3175500000000000",
+        "award_unspent": "45200000000000",
+        "award_consumed": "0",
+        "award_immature": "0",
+        "award_deferred": "40000000000000",
+        "award_ready": "5200000000000"
+      }
+    },
+    {
+      "seed": 902,
+      "mode": "legacy_locked",
+      "fees": "56500000000000",
+      "capture": "45200000000000",
+      "burn": "11300000000000",
+      "reserve": "0",
+      "payment_attempts": 113,
+      "payment_success": 113,
+      "payment_failures": {},
+      "consolidation_opportunities": 11413,
+      "consolidation_attempts": 0,
+      "consolidation_success": 0,
+      "public_outputs": 779,
+      "max_eligible": 598,
+      "consolidation_failures": {},
+      "owner_totals": {
+        "ordinary": "3175500000000000",
+        "award_unspent": "45200000000000",
+        "award_consumed": "0",
+        "award_immature": "0",
+        "award_deferred": "45200000000000",
+        "award_ready": "0"
+      }
+    },
+    {
+      "seed": 902,
+      "mode": "candidate_locked",
+      "fees": "56500000000000",
+      "capture": "45200000000000",
+      "burn": "11300000000000",
+      "reserve": "0",
+      "payment_attempts": 113,
+      "payment_success": 113,
+      "payment_failures": {},
+      "consolidation_opportunities": 11413,
+      "consolidation_attempts": 0,
+      "consolidation_success": 0,
+      "public_outputs": 779,
+      "max_eligible": 598,
+      "consolidation_failures": {},
+      "owner_totals": {
+        "ordinary": "3175500000000000",
+        "award_unspent": "45200000000000",
+        "award_consumed": "0",
+        "award_immature": "0",
+        "award_deferred": "45200000000000",
+        "award_ready": "0"
+      }
+    },
+    {
+      "seed": 902,
+      "mode": "candidate_age720",
+      "fees": "56500000000000",
+      "capture": "45200000000000",
+      "burn": "11300000000000",
+      "reserve": "0",
+      "payment_attempts": 113,
+      "payment_success": 113,
+      "payment_failures": {},
+      "consolidation_opportunities": 11413,
+      "consolidation_attempts": 11413,
+      "consolidation_success": 0,
+      "public_outputs": 779,
+      "max_eligible": 598,
+      "consolidation_failures": {
+        "no_private_input": 4748,
+        "unaffordable": 6665
+      },
+      "owner_totals": {
+        "ordinary": "3175500000000000",
+        "award_unspent": "45200000000000",
+        "award_consumed": "0",
+        "award_immature": "0",
+        "award_deferred": "2800000000000",
+        "award_ready": "42400000000000"
+      }
+    },
+    {
+      "seed": 902,
+      "mode": "candidate_age10001",
+      "fees": "56500000000000",
+      "capture": "45200000000000",
+      "burn": "11300000000000",
+      "reserve": "0",
+      "payment_attempts": 113,
+      "payment_success": 113,
+      "payment_failures": {},
+      "consolidation_opportunities": 11413,
+      "consolidation_attempts": 11413,
+      "consolidation_success": 0,
+      "public_outputs": 779,
+      "max_eligible": 598,
+      "consolidation_failures": {
+        "no_private_input": 11143,
+        "unaffordable": 270
+      },
+      "owner_totals": {
+        "ordinary": "3175500000000000",
+        "award_unspent": "45200000000000",
+        "award_consumed": "0",
+        "award_immature": "0",
+        "award_deferred": "40000000000000",
+        "award_ready": "5200000000000"
+      }
+    }
+  ]
+}
