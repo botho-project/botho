@@ -84,7 +84,7 @@ class Controller:
 
     async def observer(self, host):
         proc = await asyncio.create_subprocess_exec('ssh','-F','/dev/null','-i',self.config['observer_key'],
-            '-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=5',
+            '-o','BatchMode=yes','-o','IdentitiesOnly=yes','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=5',
             '-o','UserKnownHostsFile='+self.config['known_hosts'],'ubuntu@'+host,
             stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
         try:

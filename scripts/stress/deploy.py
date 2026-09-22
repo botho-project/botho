@@ -18,7 +18,7 @@ from runtime import HOSTS
 
 SOURCE=Path(__file__).parent
 LOCAL=Path.home()/'.local/state/botho-stress-1404'
-STATE='/var/lib/botho-stress-1404'
+STATE='/home/ubuntu/.local/share/botho-stress-1404'
 OBS='/var/lib/botho-stress-observer-1404'
 
 
@@ -115,8 +115,8 @@ systemctl is-active botho-stress-observer-1404.service
 def controller(binary,source_commit):
     binary=Path(binary)
     sha=hashlib.sha256(binary.read_bytes()).hexdigest()
-    # Deliberately unique root-owned code path; never replace a running package.
-    package='/opt/botho-stress-1404-'+source_commit[:12]
+    # Unique package, read-only inside the service's private mount namespace.
+    package='/home/ubuntu/.local/lib/botho-stress-1404-'+source_commit[:12]
     start=time.time()+60
     config={'run_id':'stress-1404-'+time.strftime('%Y%m%dT%H%M%SZ',time.gmtime(start)),
         'setup_start':start,'signer':package+'/botho-stress-wallet','signer_sha256':sha,
@@ -145,8 +145,6 @@ StartLimitIntervalSec=600
 StartLimitBurst=3
 [Service]
 Type=simple
-User=botho-stress-1404
-Group=botho-stress-1404
 UMask=0077
 ExecStart=/usr/bin/python3 {package}/controller.py run --state {STATE}
 Restart=on-failure
@@ -158,37 +156,40 @@ TasksMax=64
 LimitCORE=0
 NoNewPrivileges=yes
 ProtectSystem=strict
-ProtectHome=yes
+ProtectHome=tmpfs
+PrivateUsers=yes
 PrivateTmp=yes
+BindReadOnlyPaths={package}
+BindPaths={STATE}
 ReadWritePaths={STATE}
+UnsetEnvironment=SSH_AUTH_SOCK SSH_AGENT_PID
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
 '''
     (LOCAL/'controller.service').write_text(unit)
     upload('loom-worker-1',archive)
     script=f'''set -euo pipefail
+umask 077
 if test -e {STATE}/journal.sqlite; then
     echo 'Existing experiment journal: refuse overwrite' >&2
     exit 1
 fi
-sudo useradd --system --home-dir {STATE} --shell /usr/sbin/nologin botho-stress-1404 2>/dev/null || id botho-stress-1404 >/dev/null
-sudo install -d -m 700 /var/lib/botho-stress-1404-staging
-sudo tar -xf /home/ubuntu/controller-package.tar -C /var/lib/botho-stress-1404-staging
-sudo install -d -m 755 {package}
-sudo cp -a /var/lib/botho-stress-1404-staging/code/. {package}/
-sudo chown -R root:root {package}
-sudo install -d -o botho-stress-1404 -g botho-stress-1404 -m 700 {STATE}
-sudo cp -a /var/lib/botho-stress-1404-staging/state/. {STATE}/
-sudo install -d -m 700 {STATE}/wallets {STATE}/artifacts {STATE}/probes {STATE}/reports
-sudo chown -R botho-stress-1404:botho-stress-1404 {STATE}
-sudo chmod 700 {STATE}/wallets
-sudo rm -rf /var/lib/botho-stress-1404-staging
+install -d -m 700 {STATE}-staging
+tar -xf /home/ubuntu/controller-package.tar -C {STATE}-staging
+install -d -m 700 {package}
+cp -a {STATE}-staging/code/. {package}/
+install -d -m 700 {STATE}
+cp -a {STATE}-staging/state/. {STATE}/
+install -d -m 700 {STATE}/wallets {STATE}/artifacts {STATE}/probes {STATE}/reports
+chmod 700 {STATE}/wallets
+rm -rf {STATE}-staging
 rm /home/ubuntu/controller-package.tar
-sudo tee /etc/systemd/system/botho-stress-1404.service >/dev/null <<'UNIT'
+install -d -m 700 /home/ubuntu/.config/systemd/user
+cat > /home/ubuntu/.config/systemd/user/botho-stress-1404.service <<'UNIT'
 {unit}UNIT
-sudo systemctl daemon-reload
-sudo systemctl enable --now botho-stress-1404.service
-systemctl is-active botho-stress-1404.service
+systemctl --user daemon-reload
+systemctl --user enable --now botho-stress-1404.service
+systemctl --user is-active botho-stress-1404.service
 '''
     ssh('loom-worker-1',script)
     print(json.dumps({'run_id':config['run_id'],'setup_start':start,'signer_sha256':sha}))
