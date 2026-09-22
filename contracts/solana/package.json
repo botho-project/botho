@@ -21,13 +21,13 @@
     "bigint-buffer": "file:vendor/bigint-buffer-js"
   },
   "devDependencies": {
-    "@sqds/multisig": "2.1.2",
+    "@sqds/multisig": "2.1.4",
     "@types/bn.js": "^5.1.0",
     "@types/chai": "^5.2.3",
     "@types/mocha": "^10.0.0",
     "chai": "^6.2.2",
-    "mocha": "^12.0.0",
-    "prettier": "^3.9.6",
+    "mocha": "^12.0.2",
+    "prettier": "^3.9.8",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2"
   },
