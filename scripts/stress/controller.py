@@ -451,6 +451,7 @@ class Controller:
                     self.report()
                 if not self.j.pending() and self.blocks:
                     self.accounting()
+                    self.report()
             except Quota as error:
                 self.j.event(None,'reconcile_quota',str(error))
             except Exception as error:
