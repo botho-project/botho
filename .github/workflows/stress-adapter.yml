@@ -25,9 +25,9 @@ jobs:
           key: stress-wallet-linux
       - run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
       - name: Isolated native acceptance
-        run: cargo test --locked -p botho-wallet --test stress_node
+        run: cargo test --locked --release -p botho-wallet --test stress_node
       - name: Artifact safety tests
-        run: cargo test --locked -p botho-wallet --lib stress::tests
+        run: cargo test --locked --release -p botho-wallet --lib stress::tests
       - name: Build Linux signer
         run: |
           cargo build --locked --release -p botho-wallet --bin botho-stress-wallet

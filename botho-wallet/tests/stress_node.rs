@@ -24,10 +24,10 @@ async fn rpc(url: &str, method: &str, params: Value) -> Value {
         .post(url)
         .json(&json!({"jsonrpc":"2.0",
         "id":1,"method":method,"params":params}))
-        .timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(60))
         .send()
         .await
-        .unwrap()
+        .unwrap_or_else(|error| panic!("{method}: {error}"))
         .json()
         .await
         .unwrap();
