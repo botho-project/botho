@@ -197,14 +197,20 @@ class Controller:
                     raise Gate('wallet identity differs from allowlist')
                 scans.append(scanned['owned'])
             all_images = list(dict.fromkeys(o['key_image'] for owned in scans for o in owned))
-            spent = []
-            for first in range(0,len(all_images),64):
-                images = all_images[first:first+64]
-                found = await self.rpc.call(HOSTS[0],'chain_areKeyImagesSpent',{'keyImages':images})
+            # Finalized spent images stay spent. Phase/full scans independently
+            # recheck them; routine scans reserve RPC capacity for live inputs.
+            cached = {} if full else {s['keyImage']:s for s in self.spent if s['spent']}
+            query_images = [image for image in all_images if image not in cached]
+            checked = dict(cached)
+            for first in range(0,len(query_images),256):
+                images = query_images[first:first+256]
+                host=HOSTS[(first//256+height)%len(HOSTS)]
+                found = await self.rpc.call(host,'chain_areKeyImagesSpent',{'keyImages':images})
                 if ([s.get('keyImage') for s in found] != images or any('error' in s or
                     type(s.get('spent')) is not bool or type(s.get('pending')) is not bool for s in found)):
                     raise Gate('malformed spent-image response')
-                spent.extend(found)
+                checked.update((s['keyImage'],s) for s in found)
+            spent=[checked[image] for image in all_images]
             self.inventory, self.spent = scans, spent
             atomic(self.state/'inventory.json',{'at':time.time(),'height':height,'owned':scans,'spent':spent})
             return height
@@ -262,6 +268,8 @@ class Controller:
             'reason':self.j.get('reason'),'setup_start':self.j.get('setup_start'),
             'start':self.j.get('start'),'end':self.j.get('end'),'plan_sha256':digest(self.plan),
             'counts':counts,'submitted_to_reconciled_seconds':latency('submitted'),
+            'nominal_campaign_offers':692,
+            'not_yet_offered':692-sum(r['kind']=='campaign' for r in rows),
             'offered_to_reconciled_seconds':latency('offered'),
             'signed_fees':sum(r['fee'] for r in rows if r['prepared']),
             'faucet_fees':sum(json.loads(r['info']).get('faucet_fee',0) for r in rows if r['kind']=='funding'),
@@ -660,6 +668,12 @@ class Controller:
             reconciler=asyncio.create_task(self.reconcile())
             while True:
                 status=self.j.get('status')
+                if status in ('complete','incomplete'):
+                    break
+                if status=='running' and time.time()>=self.j.get('end'):
+                    self.j.set('status','draining')
+                    self.j.set('stopped_at',self.j.get('end'))
+                    status='draining'
                 if (self.state/'STOP').exists():
                     self.halt('operator stop marker')
                 if status in ('held','draining') and time.time()>self.j.get('stopped_at',time.time())+1800:
