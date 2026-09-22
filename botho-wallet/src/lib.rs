@@ -18,6 +18,8 @@ pub mod ring_builder;
 pub mod rpc_pool;
 pub mod secmem;
 pub mod storage;
+#[cfg(all(unix, feature = "pq"))]
+pub mod stress;
 pub mod transaction;
 /// Legacy `botho-tx-v1` transaction types, quarantined (see module docs).
 pub mod transaction_legacy;

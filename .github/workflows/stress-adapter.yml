@@ -1,0 +1,43 @@
+name: Stress wallet adapter
+on:
+  pull_request:
+    paths:
+      - 'botho-wallet/src/stress.rs'
+      - 'botho-wallet/src/bin/botho-stress-wallet.rs'
+      - 'botho-wallet/tests/stress_node.rs'
+      - '.github/workflows/stress-adapter.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-03
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: stress-wallet-linux
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+      - name: Isolated native acceptance
+        run: cargo test --locked -p botho-wallet --test stress_node
+      - name: Artifact safety tests
+        run: cargo test --locked -p botho-wallet --lib stress::tests
+      - name: Build Linux signer
+        run: |
+          cargo build --locked --release -p botho-wallet --bin botho-stress-wallet
+          mkdir -p dist
+          cp target/release/botho-stress-wallet dist/
+          git rev-parse HEAD > dist/source.txt
+          cd dist
+          sha256sum botho-stress-wallet > checksums.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: botho-stress-wallet-linux-x86_64
+          path: dist/
+          retention-days: 7
