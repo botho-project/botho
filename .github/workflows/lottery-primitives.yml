@@ -28,7 +28,7 @@ jobs:
         with:
           toolchain: nightly-2025-12-03
           targets: wasm32-unknown-unknown
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
       - uses: Swatinem/rust-cache@v2
