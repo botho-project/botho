@@ -41,3 +41,7 @@ The manual live-testnet procedure these scripts rehearse is
 | [`fuzz.sh`](fuzz.sh) | Wrapper around the [`../fuzz/`](../fuzz/) targets — `list`, plus timed runs (quick/medium/long/overnight) with corpus and log management. |
 | [`test-ledger.sh`](test-ledger.sh) | Runs the node's ledger unit tests (`cargo test --locked -p botho --lib ledger::`). On macOS, bounds test concurrency using the current SysV semaphore undo budget; accepts `--binary /absolute/path/to/botho-lib-test` to reuse a built test executable. |
 | [`join-betanet.sh`](join-betanet.sh) | Smoke test: launches a throwaway local node, points it at the live betanet seed over the public internet, and verifies it peers and syncs. Ops/manual only — it depends on live infrastructure and must not be wired into PR CI. |
+
+## Testnet campaign design
+
+[`stress/plan.py`](stress/plan.py) validates and expands the bounded [72-hour design](../docs/operations/testnet-stress-program.md) offline. Run `python3 scripts/stress/plan.py`; it does not connect to the network, sign transactions or activate a schedule. The manifest and runtime implementation gates are documented with the design.
