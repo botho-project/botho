@@ -1,6 +1,29 @@
 # Overnight testnet payments — September 21–22, 2026
 
-Tracker: [#1383](https://github.com/botho-project/botho/issues/1383). The owner requested payments every six hours overnight after the [node redeployment](https://github.com/botho-project/botho/pull/1382). This is a bounded native-faucet experiment. Its scheduled payments are **not yet evidence of successful overnight operation**.
+Tracker: [#1383](https://github.com/botho-project/botho/issues/1383). The owner requested payments every six hours overnight after the [node redeployment](https://github.com/botho-project/botho/pull/1382). This bounded native-faucet experiment is complete: **all three 1-BTH payments confirmed on all five nodes without an overnight node restart**. Morning evidence was collected at **09:22 PDT / 16:22 UTC September 22**.
+
+## Overnight results
+
+| Scheduled time (PDT) | Payment block | All five reported confirmed | All five confirmed and synced |
+|---|---|---|---|
+| September 21, 7 PM | 2637 | 2m 02s | 2m 02s |
+| September 22, 1 AM | 2639 | 1m 46s | 1m 46s |
+| September 22, 7 AM | 2641 | 2m 02s | 3m 09s |
+
+Times run from the HTTPS grant request to the first qualifying fleet observation, including polling granularity. Each transfer delivered 1 BTH with a 0.0001-BTH transaction fee. Three distinct receipts account for 3 BTH delivered and 0.0003 BTH in fees. Morning RPC checks on every host still reported all three transactions confirmed, with 6, 4 and 2 confirmations respectively.
+
+All five nodes currently agree at **height 2642**, tip `57c3e0f9b6b475c8757340d3c4f59290dedfe9c28de67997274d64c5a53f0430`, and retain the deployed clean source and original process IDs. Public HTTPS responds successfully on every host. Their processes have been up for roughly 17 hours since rollout.
+
+### Stability and remaining findings
+
+- **815 local health samples** (163 per host) cover approximately 13.5 hours through 07:55 PDT. Every sample succeeded; PIDs/start times stayed fixed, automatic restart counts stayed zero, and recorded process/service swap stayed zero. The maximum interval between samples was approximately 302 seconds.
+- **The 7 AM transition had a brief sync problem.** Seed logged a sync-response timeout at 14:01:56 UTC, and four payment polling samples from 14:02:07 through 14:02:58 reported it unsynced. The transaction was already confirmed across all five by the first of those samples. All nodes were synced by 14:03:14 without intervention. The five-minute health series missed this short interval; the more frequent payment polling captured it.
+- **Idle memory increased modestly after payments.** Faucet RSS went from 326.8 to 342.5 MiB (+15.7 MiB), with flat readings between payments; its service high-water mark reached 2.60 GiB during mining. AP RSS rose about 12.7 MiB. There was no observed recurrence of the previous multi-GiB swap condition. These three payments do not establish long-term leak freedom.
+- **Warmup/stall diagnostics still need work.** Journals contain fifteen SCP stall warnings (one per host per payment), four faucet miner-stall warnings during the first/third transitions, and three warning lines for the same seed sync failure. The reported SCP ages roughly match the preceding idle intervals, suggesting the warning clock includes idle time. No panic, process-exit or full-gossip-queue event was found in the captured warning/error scan. [#1381](https://github.com/botho-project/botho/issues/1381) remains open for responsiveness, cold initialization cost and the related diagnostics.
+
+The result supports stability for **three low-rate payments separated by idle periods**. It does not establish load capacity, a full web/Snap round trip, or CT/LotteryV2 demonstration readiness. Payment and observation timers have exhausted their dated schedules: all report `elapsed`, with no next firing. No extra payments, node restarts or configuration changes were made during the morning review.
+
+The [results evidence](testnet-overnight-evidence/2026-09-22-results/) contains the three receipts, payment polling, all five complete local health series, morning RPC/timer/journal checks, machine-readable summaries and SHA-256 digests. Recipient keys and configuration contents are excluded. The original setup evidence below remains a historical record of activation.
 
 ## Schedule and budget
 
@@ -34,7 +57,7 @@ The experiment does not restart nodes or change mining/quorum/network configurat
 
 Before activation: eight local tests cover fixed windows, at-most-once submission including ambiguous timeouts, three-request budget, wrong amount/identity, late preflight, and fleet confirmation criteria. `systemd-analyze verify` validates units; `systemd-analyze calendar --iterations=4` shows precisely the three payment events. A live read-only preflight and real service invocations validate connectivity and the service sandbox without submitting an early payment.
 
-**Activation verified:** all five observation timers and seed's payment timer are enabled, active and waiting. All installed runner checksums match the source; all five real local samples succeeded, and no payment attempt existed at setup time. The [installation evidence](testnet-overnight-evidence/2026-09-21/) records the checks, activation timestamps, next timer events and source digest. The first payment is scheduled for 02:00 UTC.
+**Activation verified at setup:** all five observation timers and seed's payment timer were enabled, active and waiting. All installed runner checksums matched the source; all five real local samples succeeded, and no payment attempt existed at setup time. The [installation evidence](testnet-overnight-evidence/2026-09-21/) records the checks, activation timestamps, next timer events and source digest. The first payment was scheduled for 02:00 UTC.
 
 ## Morning review and stopping
 

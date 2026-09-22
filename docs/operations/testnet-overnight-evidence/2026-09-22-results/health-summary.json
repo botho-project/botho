@@ -1,0 +1,282 @@
+[
+  {
+    "host": "seed.botho.io",
+    "samples": 163,
+    "first": "2026-09-22T01:25:19.392758+00:00",
+    "last": "2026-09-22T14:55:00.902266+00:00",
+    "errors": [],
+    "pids": [
+      "1048413"
+    ],
+    "restarts": [
+      "0"
+    ],
+    "startTimes": [
+      "Mon 2026-09-21 23:14:10 UTC"
+    ],
+    "MemoryCurrent": {
+      "first": 295997440,
+      "last": 301342720,
+      "min": 295993344,
+      "max": 301350912
+    },
+    "MemoryPeak": {
+      "first": 296521728,
+      "last": 301608960,
+      "min": 296521728,
+      "max": 301608960
+    },
+    "MemorySwapCurrent": {
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    "VmRSSKiB": {
+      "first": 313604,
+      "last": 315640,
+      "min": 312656,
+      "max": 315640
+    },
+    "VmHWMKiB": {
+      "first": 313604,
+      "last": 315640,
+      "min": 313388,
+      "max": 315640
+    },
+    "VmSwapKiB": {
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    "unsynced": [],
+    "maxSlotStallSeconds": 0,
+    "lastHeight": 2642,
+    "maxSampleGapSeconds": 301.64584
+  },
+  {
+    "host": "seed2.botho.io",
+    "samples": 163,
+    "first": "2026-09-22T01:26:39.481122+00:00",
+    "last": "2026-09-22T14:55:00.798056+00:00",
+    "errors": [],
+    "pids": [
+      "28164"
+    ],
+    "restarts": [
+      "0"
+    ],
+    "startTimes": [
+      "Mon 2026-09-21 23:14:12 UTC"
+    ],
+    "MemoryCurrent": {
+      "first": 296083456,
+      "last": 299171840,
+      "min": 296083456,
+      "max": 299171840
+    },
+    "MemoryPeak": {
+      "first": 296611840,
+      "last": 299442176,
+      "min": 296611840,
+      "max": 299442176
+    },
+    "MemorySwapCurrent": {
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    "VmRSSKiB": {
+      "first": 314668,
+      "last": 317492,
+      "min": 314668,
+      "max": 317492
+    },
+    "VmHWMKiB": {
+      "first": 314668,
+      "last": 317492,
+      "min": 314668,
+      "max": 317492
+    },
+    "VmSwapKiB": {
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    "unsynced": [],
+    "maxSlotStallSeconds": 0,
+    "lastHeight": 2642,
+    "maxSampleGapSeconds": 300.767082
+  },
+  {
+    "host": "faucet.botho.io",
+    "samples": 163,
+    "first": "2026-09-22T01:26:43.409518+00:00",
+    "last": "2026-09-22T14:55:00.630407+00:00",
+    "errors": [],
+    "pids": [
+      "326617"
+    ],
+    "restarts": [
+      "0"
+    ],
+    "startTimes": [
+      "Mon 2026-09-21 23:15:32 UTC"
+    ],
+    "MemoryCurrent": {
+      "first": 315330560,
+      "last": 332365824,
+      "min": 315330560,
+      "max": 332365824
+    },
+    "MemoryPeak": {
+      "first": 2758713344,
+      "last": 2786594816,
+      "min": 2758713344,
+      "max": 2786594816
+    },
+    "MemorySwapCurrent": {
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    "VmRSSKiB": {
+      "first": 334652,
+      "last": 350752,
+      "min": 334652,
+      "max": 350752
+    },
+    "VmHWMKiB": {
+      "first": 2713840,
+      "last": 2742572,
+      "min": 2713840,
+      "max": 2742572
+    },
+    "VmSwapKiB": {
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    "unsynced": [],
+    "maxSlotStallSeconds": 0,
+    "lastHeight": 2642,
+    "maxSampleGapSeconds": 301.01398
+  },
+  {
+    "host": "eu.seed.botho.io",
+    "samples": 163,
+    "first": "2026-09-22T01:26:54.257331+00:00",
+    "last": "2026-09-22T14:55:00.977202+00:00",
+    "errors": [],
+    "pids": [
+      "334005"
+    ],
+    "restarts": [
+      "0"
+    ],
+    "startTimes": [
+      "Mon 2026-09-21 23:13:43 UTC"
+    ],
+    "MemoryCurrent": {
+      "first": 306536448,
+      "last": 309207040,
+      "min": 306536448,
+      "max": 309211136
+    },
+    "MemoryPeak": {
+      "first": 307068928,
+      "last": 309477376,
+      "min": 307068928,
+      "max": 309477376
+    },
+    "MemorySwapCurrent": {
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    "VmRSSKiB": {
+      "first": 323704,
+      "last": 321784,
+      "min": 320888,
+      "max": 325136
+    },
+    "VmHWMKiB": {
+      "first": 323704,
+      "last": 324840,
+      "min": 323704,
+      "max": 325136
+    },
+    "VmSwapKiB": {
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    "unsynced": [],
+    "maxSlotStallSeconds": 0,
+    "lastHeight": 2642,
+    "maxSampleGapSeconds": 301.104823
+  },
+  {
+    "host": "ap.seed.botho.io",
+    "samples": 163,
+    "first": "2026-09-22T01:27:07.104679+00:00",
+    "last": "2026-09-22T14:55:00.961604+00:00",
+    "errors": [],
+    "pids": [
+      "331909"
+    ],
+    "restarts": [
+      "0"
+    ],
+    "startTimes": [
+      "Mon 2026-09-21 23:14:16 UTC"
+    ],
+    "MemoryCurrent": {
+      "first": 295858176,
+      "last": 309608448,
+      "min": 295854080,
+      "max": 309870592
+    },
+    "MemoryPeak": {
+      "first": 296386560,
+      "last": 310140928,
+      "min": 296386560,
+      "max": 310140928
+    },
+    "MemorySwapCurrent": {
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    "VmRSSKiB": {
+      "first": 313808,
+      "last": 326816,
+      "min": 313808,
+      "max": 326816
+    },
+    "VmHWMKiB": {
+      "first": 313808,
+      "last": 326816,
+      "min": 313808,
+      "max": 326816
+    },
+    "VmSwapKiB": {
+      "first": 0,
+      "last": 0,
+      "min": 0,
+      "max": 0
+    },
+    "unsynced": [],
+    "maxSlotStallSeconds": 0,
+    "lastHeight": 2642,
+    "maxSampleGapSeconds": 301.550742
+  }
+]

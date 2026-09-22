@@ -1,0 +1,19 @@
+{
+  "description": "Overnight results; payments and observations are complete. Setup evidence remains in the 2026-09-21 sibling directory.",
+  "files": {
+    "ap.seed.botho.io/health.jsonl": "ecf232ab21255dec44e1ceb0a635aeb72853f9a1bf378345b242cf6042318ffd",
+    "eu.seed.botho.io/health.jsonl": "b03c84eab1d5843992019d11a2f4de072fcf6d2da7eecf9a203a018c535e559c",
+    "faucet.botho.io/health.jsonl": "da4d11397b77ad407b9885961ed13f0b5937b5bbda1ecf58ae42f5469d3364a2",
+    "health-summary.json": "58a8f9a4426f18c56150d13b246f397895438483ee199b2aa7c62b4d2258ad27",
+    "morning-current.json": "59571cc844711be26af2514be91d8067831ae013ffde7812525289553e216bba",
+    "seed.botho.io/fleet-20260922T020000Z.jsonl": "96c9b697693d9db703f79236836c92305f81df47bfe2a000f26dc91a3b7a92d4",
+    "seed.botho.io/fleet-20260922T080000Z.jsonl": "618b2adb8a7038547d16aa2333a5f1a8e370789fa067602ce7ec7a020ed0ba1d",
+    "seed.botho.io/fleet-20260922T140000Z.jsonl": "9b30f6fc74f7148811a12ecea02baa450165176c4eb320b72b09f2ebe6b0bc16",
+    "seed.botho.io/health.jsonl": "d8a0d3f02299906f9551c786801c9f4085bf3bf15c1c82751c9297b34ad9c858",
+    "seed.botho.io/payment-20260922T020000Z.json": "2b8e1ff7dde599d7e894c11b9cc79f572ac0bf5744fb8ee14e3ff233d19a661c",
+    "seed.botho.io/payment-20260922T080000Z.json": "3ca55b7f4521072f56bb2171a51e3ed5dac7a874423b531fb1bd933f3a965621",
+    "seed.botho.io/payment-20260922T140000Z.json": "55ac0c541fef6df8daef4dff206c6426d07531d9d7fc91936fe900a0cb095553",
+    "seed2.botho.io/health.jsonl": "f6551b72e6773961c7554e5e040907bfc2ca929b1fc2bf7bac71dcb350ebece0",
+    "summary.json": "ecc4c40d4ca64313eccb06453c96c3673274bed41473e380fbcacc5c1a58583f"
+  }
+}
