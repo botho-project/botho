@@ -39,7 +39,7 @@ botho = { path = "../botho", optional = true }
 tiny-bip39 = { workspace = true }
 
 # Encryption
-argon2 = "0.5"
+argon2 = "0.6"
 chacha20poly1305 = "0.10"
 
 # Async runtime

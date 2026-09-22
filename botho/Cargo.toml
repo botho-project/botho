@@ -124,7 +124,7 @@ chacha20poly1305 = { workspace = true }
 ed25519-dalek = { workspace = true }
 blake2 = { workspace = true, features = ["std"] }
 digest = { workspace = true }
-argon2 = "0.5"
+argon2 = "0.6"
 # Hidden passphrase prompt for `botho operator keygen` (same crate the wallet
 # CLI uses for password entry).
 rpassword = "7"
