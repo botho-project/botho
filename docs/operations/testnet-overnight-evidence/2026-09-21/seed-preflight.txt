@@ -1,0 +1,8 @@
+Read-only preflight passed: recipient, five HTTPS ingresses, chain/build and 1-BTH faucet.
+Result=success
+ExecMainStatus=0
+Id=botho-overnight-1383-pay.service
+
+Result=success
+ExecMainStatus=0
+Id=botho-overnight-1383-observe.service
