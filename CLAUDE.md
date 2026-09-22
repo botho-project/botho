@@ -28,7 +28,7 @@ This is a Rust-based blockchain project with the following key components:
 - `core/types/` - Core blockchain types
 - `consensus/` - Consensus protocol (SCP-based)
 - `transaction/` - Transaction handling
-- `ledger/` - Ledger database
+- `botho/src/ledger/` - Ledger database and UTXO snapshots (`ledger/` is a historical pointer)
 
 <!-- BEGIN ANVIL -->
 This repository uses [Anvil](https://github.com/rjwalters/anvil) for AI-powered artifact creation. See `.anvil/CLAUDE.md` for the full guide (skills, rubric, state machine). To upgrade Anvil, re-run `install-anvil.sh .` from the anvil checkout without `--skills=` to pick up newly-shipped skills; pass `--skills=...` only to install a strict subset.
