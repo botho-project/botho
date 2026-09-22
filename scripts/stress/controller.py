@@ -344,6 +344,7 @@ class Controller:
             if result.get('txHash') != row['hash']:
                 raise Gate('submitted hash differs from canonical saved hash')
             self.j.transition(identifier,'accepted',info={**info,'response_at':time.time()})
+            self.report()
             if info.get('crash')=='accepted' and not self.j.get('crash:accepted'):
                 self.j.set('crash:accepted',identifier)
                 self.report()
@@ -377,6 +378,7 @@ class Controller:
             if not result.get('success') or int(result.get('amount',0)) != row['amount'] or not re.fullmatch(r'[0-9a-f]{64}',result.get('txHash','')):
                 raise Gate('faucet reply rejected or unexpected')
             self.j.transition(identifier,'accepted',hash=result['txHash'],info={'response_at':time.time()})
+            self.report()
         except Exception as error:
             self.j.transition(identifier,'unknown',str(error))
             self.halt('faucet reply uncertain; funding slot consumed without retry')
@@ -438,6 +440,7 @@ class Controller:
                         info['faucet_fee'] = receipts[0]['fee']
                     info['recipient_verified_at'] = time.time()
                     self.j.finish(row['id'],info)
+                    self.report()
                 if not self.j.pending() and self.blocks:
                     self.accounting()
             except Quota as error:
@@ -673,9 +676,10 @@ class Controller:
                     self.j.event(None,'admission_quota',str(error))
                 except Exception as error:
                     self.halt(str(error))
-                if time.time()-self.j.get('report_at',0)>21600:
+                if time.time()-self.j.get('last_summary_at',0)>21600:
                     self.report()
                     atomic(self.state/'reports'/str(int(time.time())),self.report())
+                    self.j.set('last_summary_at',time.time())
                 await asyncio.sleep(1)
             if self.fresh and not self.j.pending():
                 await self.sync(full=True)
