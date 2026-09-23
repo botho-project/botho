@@ -1,0 +1,117 @@
+{
+  "schema": 3,
+  "status": "complete",
+  "sources": {
+    "Cargo.toml": "5ebf46d21ad6ba09c2d7aa4a4f733b473f842a92ac1b94de7aa194396714d95d",
+    "Cargo.lock": "0163413813517346e5de8b6a55ddbcff426c48e1a59be040dac628774a7434a3",
+    "rust-toolchain": "f506172db062e96158404259ac7a857a8422d530837c4fdbd44fe4a0ce15a8f2",
+    "botho/Cargo.toml": "8ebe680b166f7bafa88425c6461fde0dd22cfdd22d672890ea701d05836a3654",
+    "botho/tests/ct_payout_policy.rs": "70b48b2b06a8200d8f1767470e5f9dc81f670e01cbc6753fbee8b68be1dc9abe",
+    "botho/tests/common/reinvestment_model.rs": "4574f230d8f1b9e38b38f29d53eefc98a825478bb0a8f46560d6da4814a51ba2",
+    "botho/tests/common/funded_model.rs": "819dfbe347ec56f5ca2ec9215060b5c806a179a26c7272de848a1ffa59cc629f",
+    "botho/tests/ct_economics_reinvestment.rs": "ff176e25587f4ca9f4042a62bac913a0a9f515e5f7061494f480397f2ccf2659",
+    "scripts/research/ct-economics/reference.rs": "beec9718a254faa37e8c93be4a5f9ae03cc0dc0da77e34c6a606d74ede38fa10",
+    "scripts/research/ct-reinvestment/check.py": "506441d6938663243545b585c034d10a70606b81b15c1fc025140f4769eac3c0",
+    "scripts/research/ct-reinvestment/evidence/raw.json.gz": "f92c8c8180d2df545ca2cb4f822009b35489bdf6ce4b113266eb9b07916afdab",
+    "botho/src/decoy_selection.rs": "9aea0fa89897b3d6d1fcee364a821962ca8c624d2d455bc578ac0df9a99417cb",
+    "botho/src/block.rs": "f2e2323d1346c70ea5d234933b1990d1c0e6221366aed1c37e084c97052ec5cc",
+    "botho/src/monetary.rs": "27209a44471a894bc9cce00360802cabafa1e73c34f9731fa006510b4ec5948d",
+    "botho/src/consensus/lottery.rs": "1e2c5bf2925cf2c83466b95df0fa425faab9204515db408239f46d0d39da693f",
+    "cluster-tax/src/lottery.rs": "bb862abc436488f42c9453518811af1ac4884977cbdce2c5f0b0683c4f110179",
+    "cluster-tax/src/monetary.rs": "b80cff28f1d4f4c07cb4717536e1f883e7b5cbe5731fa2b93813bc11aad60ea7",
+    "cluster-tax/src/demurrage.rs": "ecc44061e1c82b19b49c9e6c2a05329168ae3a4877eeba0bda438a3e3cc63f34",
+    "scripts/research/payout-policy/policy.rs": "49fa7fdf107dd0f51387df8613c4102ee90bf1ce162e5eb9b133b3f2ff525e91",
+    "scripts/research/payout-policy/config.json": "1b45cb520d221db543b9d3a5824680bf9d7303b01d602eb36620f96a374200af",
+    "scripts/research/payout-policy/check.py": "393a7bb5b61e1b612587445e19d1b32e426d408ddd1ad7a5adbd88da18aec202",
+    "scripts/research/payout-policy/collect.py": "6548cc2d84c2d0f0ec3145b06627009d4bd25734b669f0daabe7b772e0af09f4",
+    "scripts/research/payout-policy/test_check.py": "7ef725eafa3858ed8fe2977d9b9d4c72813bd6775317cd1b6ce606bdda046dce",
+    "scripts/research/payout-policy/source_regression.py": "1a1cff12444689736eec96bab298b94b6c20b469dc9a63f011f31ff242beb740"
+  },
+  "compile_command": [
+    "cargo",
+    "test",
+    "--locked",
+    "--release",
+    "-p",
+    "botho",
+    "--test",
+    "ct_payout_policy",
+    "--no-run",
+    "--message-format=json"
+  ],
+  "checkout_commit": "df09a41d6944d955b979b3b0cb4688297c6c8a3a",
+  "dirty_status": " M botho/tests/ct_economics_reinvestment.rs\n M scripts/research/ct-reinvestment/check.py\n?? botho/tests/common/reinvestment_model.rs\n?? botho/tests/ct_payout_policy.rs\n?? scripts/research/payout-policy/\n",
+  "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
+  "rustc": "rustc 1.93.0-nightly (646a3f8c1 2025-12-02)\nbinary: rustc\ncommit-hash: 646a3f8c15baefb98dc6e0c1c1ba3356db702d2a\ncommit-date: 2025-12-02\nhost: aarch64-apple-darwin\nrelease: 1.93.0-nightly\nLLVM version: 21.1.5\n",
+  "environment": {
+    "CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS": "true",
+    "CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS": "true",
+    "CARGO_TARGET_DIR": "/private/tmp/botho-1346-target",
+    "RUSTC_WRAPPER": ""
+  },
+  "ci": {
+    "GITHUB_SHA": null,
+    "GITHUB_RUN_ID": null,
+    "GITHUB_RUN_ATTEMPT": null
+  },
+  "compile_bound_seconds": 900,
+  "matrix_bound_seconds": 180,
+  "compile_exit": 0,
+  "compile_seconds": 41.807356041972525,
+  "artifact": {
+    "reason": "compiler-artifact",
+    "package_id": "path+file:///Users/rwalters/GitHub/botho/.loom/worktrees/issue-1372/botho#0.6.0",
+    "manifest_path": "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1372/botho/Cargo.toml",
+    "target": {
+      "kind": [
+        "test"
+      ],
+      "crate_types": [
+        "bin"
+      ],
+      "name": "ct_payout_policy",
+      "src_path": "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1372/botho/tests/ct_payout_policy.rs",
+      "edition": "2021",
+      "doc": false,
+      "doctest": false,
+      "test": true
+    },
+    "profile": {
+      "opt_level": "3",
+      "debuginfo": 0,
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": true
+    },
+    "features": [
+      "bth-crypto-pq",
+      "default",
+      "pq"
+    ],
+    "filenames": [
+      "/private/tmp/botho-1346-target/release/deps/ct_payout_policy-facaa6e357eba9a0"
+    ],
+    "executable": "/private/tmp/botho-1346-target/release/deps/ct_payout_policy-facaa6e357eba9a0",
+    "fresh": false
+  },
+  "executable_sha256": "97b98bfeb3e234e86d59457456d9b05f0c1c1b7940ce4090c4c51ec9271dd93f",
+  "matrix_command": [
+    "/private/tmp/botho-1346-target/release/deps/ct_payout_policy-facaa6e357eba9a0",
+    "fixed_six_histories_source_review_draft",
+    "--exact",
+    "--nocapture"
+  ],
+  "matrix_exit": 0,
+  "matrix_seconds": 7.412741999956779,
+  "histories": 6,
+  "replays": 1,
+  "raw_hashes": {
+    "cargo.jsonl": "9d7f07c48e4ac6453bfaadfc496a221cf66b57cb51cd8f4587e165881719385c",
+    "raw.json": "9cbb2e9f1efa5ed177f1951a755454f73df0906bd86f6bad5766fd8aede88365",
+    "compile.log": "3ba51d450ac24e6dde86c9c1f714c50f364bf83de199590f8fa6312e313a9bc0",
+    "baseline.json": "15becae3468cffbca2f2faecdd749416e98e310ae4dabfadfd98187dc85f7ab6",
+    "matrix.log": "3dce4a21efe39382a3cfd19081b054a6c501b34abe694b3f64669c1279d0b6c7",
+    "fifo-summary.json": "bf70c89269fd65b951a4c2a7f96573cc87c2f9d6700763212385933ced0009b0",
+    "matrix-stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}
