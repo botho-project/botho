@@ -1,0 +1,30 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Botho Runtime Smoke",
+  "version": "0.1.0",
+  "identifier": "com.botho.desktop.runtime-smoke",
+  "build": {
+    "devUrl": null,
+    "frontendDist": "../smoke-dist"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'",
+      "capabilities": [
+        {
+          "identifier": "runtime-smoke",
+          "windows": [
+            "runtime-smoke"
+          ],
+          "permissions": [
+            "core:default"
+          ]
+        }
+      ]
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

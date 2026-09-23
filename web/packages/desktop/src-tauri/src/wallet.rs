@@ -551,23 +551,12 @@ async fn send_transaction_internal(
     // 1. Get wallet keys from session (SECURITY: keys never leave Rust)
     let (keys, session_generation) = state.operation_keys().await?;
 
-    // 2. Parse recipient address
-    let (recipient, recipient_network) = bth_address_codec::decode_address(&params.recipient)
-        .map_err(|e| anyhow!("Invalid v2 recipient: {e}"))?;
+    // 2–3. Pure preflight shared with the isolated native smoke binary.
+    let (recipient, recipient_network, amount) = prepare_send(&params.recipient, &params.amount)?;
     anyhow::ensure!(
         recipient_network == params.network.codec(),
         "Recipient belongs to another network"
     );
-
-    // 3. Parse amount
-    let amount: u64 = params
-        .amount
-        .parse()
-        .map_err(|_| anyhow!("Invalid amount format"))?;
-
-    if amount == 0 {
-        return Err(anyhow!("Amount must be greater than 0"));
-    }
 
     // 4. Connect to node
     let mut rpc = RpcPool::connect_endpoint(&params.endpoint, params.network.id()).await?;
@@ -770,6 +759,25 @@ async fn get_balance_internal(
         utxo_count: cache.utxos.len(),
         error: None,
     })
+}
+
+/// Pure send preflight: parse the canonical recipient and amount without
+/// discovery, synchronization, signing, or submission.
+pub(crate) fn prepare_send(
+    recipient: &str,
+    amount: &str,
+) -> Result<(
+    bth_account_keys::PublicAddress,
+    bth_address_codec::Network,
+    u64,
+)> {
+    let (recipient, network) = bth_address_codec::decode_address(recipient)
+        .map_err(|e| anyhow!("Invalid v2 recipient: {e}"))?;
+    let amount: u64 = amount
+        .parse()
+        .map_err(|_| anyhow!("Invalid amount format"))?;
+    anyhow::ensure!(amount > 0, "Amount must be greater than 0");
+    Ok((recipient, network, amount))
 }
 
 /// Parse a recipient address from various formats

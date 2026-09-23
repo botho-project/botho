@@ -1,5 +1,6 @@
 [package]
 name = "botho-desktop"
+default-run = "botho-desktop"
 version = "0.6.0"
 description = "Botho Desktop Wallet"
 authors = ["Botho"]
@@ -40,6 +41,24 @@ log = { workspace = true }
 anyhow = { workspace = true }
 dirs = { workspace = true }
 rand = { workspace = true }
+
+# Explicitly selected test binary only; app_lib::run never registers automation.
+[features]
+runtime-smoke = ["dep:tauri-plugin-wdio-webdriver", "dep:tempfile"]
+
+[[bin]]
+name = "botho-runtime-smoke"
+path = "src/bin/runtime_smoke.rs"
+required-features = ["runtime-smoke"]
+
+[dependencies.tauri-plugin-wdio-webdriver]
+version = "=1.4.0"
+default-features = false
+optional = true
+
+[dependencies.tempfile]
+version = "3"
+optional = true
 
 [dev-dependencies]
 serde_json = { workspace = true }
