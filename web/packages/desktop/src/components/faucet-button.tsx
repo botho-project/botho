@@ -7,6 +7,7 @@
 
 import { useState, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import type { WalletNetwork } from '../config/wallet-network'
 import { Button } from '@botho/ui'
 import { motion, AnimatePresence } from 'motion/react'
 import { Droplets, Check, AlertCircle, Loader2 } from 'lucide-react'
@@ -22,10 +23,9 @@ interface FaucetRequestResult {
 }
 
 interface FaucetButtonProps {
-  /** Faucet server host */
-  faucetHost: string
-  /** Faucet server port */
-  faucetPort: number
+  network: WalletNetwork | null
+  /** Exact selected testnet RPC endpoint, not a hostname-derived faucet. */
+  endpoint: string
   /** Called when faucet request succeeds (to refresh balance) */
   onSuccess?: () => void
   /** Whether the wallet is unlocked (required for faucet requests) */
@@ -37,8 +37,8 @@ interface FaucetButtonProps {
 type FaucetStatus = 'idle' | 'loading' | 'success' | 'error'
 
 export function FaucetButton({
-  faucetHost,
-  faucetPort,
+  network,
+  endpoint,
   onSuccess,
   isUnlocked,
   onUnlockRequired,
@@ -48,6 +48,11 @@ export function FaucetButton({
   const [retryAfter, setRetryAfter] = useState<number | null>(null)
 
   const handleRequest = useCallback(async () => {
+    if (network !== 'botho-testnet') {
+      setStatus('error')
+      setMessage('Faucet is available only on testnet')
+      return
+    }
     // Require wallet unlock for faucet requests
     if (!isUnlocked) {
       onUnlockRequired?.()
@@ -61,8 +66,8 @@ export function FaucetButton({
     try {
       const result = await invoke<FaucetRequestResult>('request_faucet', {
         params: {
-          faucetHost,
-          faucetPort,
+          network,
+          endpoint,
         },
       })
 
@@ -101,7 +106,7 @@ export function FaucetButton({
         setMessage(null)
       }, 10000)
     }
-  }, [faucetHost, faucetPort, isUnlocked, onSuccess, onUnlockRequired])
+  }, [network, endpoint, isUnlocked, onSuccess, onUnlockRequired])
 
   // Countdown timer for rate limiting
   const formatRetryTime = (secs: number): string => {

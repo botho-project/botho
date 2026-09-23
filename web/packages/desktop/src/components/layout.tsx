@@ -31,7 +31,8 @@ interface LayoutProps {
 
 export function Layout({ children, title, subtitle }: LayoutProps) {
   const { connectedNode } = useConnection()
-  const isTestnet = !connectedNode?.networkId || connectedNode.networkId.includes('testnet')
+  const isTestnet = connectedNode?.networkId === 'botho-testnet'
+  const unknownNetwork = connectedNode?.networkId !== 'botho-mainnet' && !isTestnet
 
   return (
     <div className="min-h-screen">
@@ -40,6 +41,7 @@ export function Layout({ children, title, subtitle }: LayoutProps) {
       <div className={cn('pl-64', isTestnet && 'pt-7')}>
         <Header title={title} subtitle={subtitle} isTestnet={isTestnet} />
         <main className="grid-pattern min-h-[calc(100vh-4rem)] p-6">
+          {unknownNetwork && <p role="status">Network unknown — wallet actions unavailable</p>}
           {children}
         </main>
       </div>

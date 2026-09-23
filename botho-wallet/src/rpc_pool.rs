@@ -57,7 +57,7 @@ pub struct JsonRpcError {
 /// Single RPC client connection
 #[derive(Debug)]
 struct RpcClient {
-    addr: SocketAddr,
+    addr: Option<SocketAddr>,
     client: reqwest::Client,
     base_url: String,
 }
@@ -70,10 +70,31 @@ impl RpcClient {
             .expect("Failed to create HTTP client");
 
         Self {
-            addr,
+            addr: Some(addr),
             client,
             base_url: format!("http://{}", addr),
         }
+    }
+
+    fn pinned(endpoint: &str) -> Result<Self> {
+        let url = reqwest::Url::parse(endpoint)?;
+        anyhow::ensure!(
+            matches!(url.scheme(), "http" | "https") && url.host_str().is_some(),
+            "RPC endpoint must be an absolute HTTP(S) URL"
+        );
+        anyhow::ensure!(
+            url.username().is_empty() && url.password().is_none() && url.fragment().is_none(),
+            "RPC endpoint must not contain userinfo or a fragment"
+        );
+        let client = reqwest::Client::builder()
+            .timeout(RPC_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?;
+        Ok(Self {
+            addr: None,
+            client,
+            base_url: url.to_string(),
+        })
     }
 
     async fn call<T: DeserializeOwned>(&self, method: &str, params: Value) -> Result<(T, u32)> {
@@ -115,6 +136,9 @@ impl RpcClient {
 
 /// Pool of RPC connections with failover
 pub struct RpcPool {
+    /// Explicit endpoint mode never discovers, fails over, or repopulates
+    /// clients.
+    pinned: Option<(RpcClient, String)>,
     /// Node discovery for finding new nodes
     discovery: NodeDiscovery,
 
@@ -132,6 +156,7 @@ impl RpcPool {
     /// Create a new RPC pool
     pub fn new(discovery: NodeDiscovery) -> Self {
         Self {
+            pinned: None,
             discovery,
             clients: HashMap::new(),
             primary_addr: None,
@@ -139,8 +164,32 @@ impl RpcPool {
         }
     }
 
+    /// Connect only to the selected endpoint and require its reported network.
+    /// This checks trusted-node metadata, not authenticated chain headers.
+    /// Existing discovery-based CLI pools retain their previous behavior.
+    pub async fn connect_endpoint(endpoint: &str, expected_network: &str) -> Result<Self> {
+        anyhow::ensure!(
+            matches!(expected_network, "botho-mainnet" | "botho-testnet"),
+            "Unrecognized wallet network"
+        );
+        let mut pool = Self::new(NodeDiscovery::new());
+        pool.pinned = Some((RpcClient::pinned(endpoint)?, expected_network.to_owned()));
+        pool.connect().await?;
+        Ok(pool)
+    }
+
     /// Initialize connections to nodes
     pub async fn connect(&mut self) -> Result<()> {
+        if let Some((client, network)) = &self.pinned {
+            let (status, _) = client
+                .call::<NodeStatus>("node_getStatus", json!({}))
+                .await?;
+            anyhow::ensure!(
+                status.network == *network,
+                "RPC node reported a different network"
+            );
+            return Ok(());
+        }
         let nodes = self.discovery.discover().await;
 
         if nodes.is_empty() {
@@ -182,6 +231,9 @@ impl RpcPool {
 
     /// Execute an RPC call with automatic failover
     pub async fn call<T: DeserializeOwned>(&mut self, method: &str, params: Value) -> Result<T> {
+        if let Some((client, _)) = &self.pinned {
+            return client.call(method, params).await.map(|(result, _)| result);
+        }
         // Try primary node first
         if let Some(primary) = self.primary_addr {
             if let Some(client) = self.clients.get(&primary) {
@@ -231,6 +283,10 @@ impl RpcPool {
     where
         T: DeserializeOwned + PartialEq + Clone,
     {
+        anyhow::ensure!(
+            self.pinned.is_none(),
+            "A pinned endpoint cannot provide multi-node verification"
+        );
         let mut results: Vec<(SocketAddr, T)> = Vec::new();
 
         let addrs: Vec<_> = self.clients.keys().cloned().collect();
@@ -377,11 +433,18 @@ impl RpcPool {
 
     /// Get number of connected clients
     pub fn connected_count(&self) -> usize {
-        self.clients.len()
+        if self.pinned.is_some() {
+            1
+        } else {
+            self.clients.len()
+        }
     }
 
     /// Ensure we have enough connections
     pub async fn maintain_connections(&mut self) -> Result<()> {
+        if self.pinned.is_some() {
+            return self.connect().await;
+        }
         // Remove dead clients
         let dead: Vec<_> = self
             .clients
@@ -631,6 +694,91 @@ pub struct AddressValidation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pinned_endpoint_rejects_ambiguous_urls() {
+        for endpoint in [
+            "file:///tmp/rpc",
+            "http://user:password@localhost/rpc",
+            "https://localhost/rpc#fragment",
+            "localhost:17101",
+        ] {
+            assert!(RpcClient::pinned(endpoint).is_err(), "{endpoint}");
+        }
+        let client = RpcClient::pinned("https://example.invalid/custom/rpc?route=wallet").unwrap();
+        assert_eq!(
+            client.base_url,
+            "https://example.invalid/custom/rpc?route=wallet"
+        );
+        assert!(client.addr.is_none());
+    }
+
+    // One disposable loopback response, never a live node or transaction
+    // submission.
+    async fn fixture_endpoint(response: String) -> (String, tokio::task::JoinHandle<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut bytes = vec![0; 8192];
+            let count = stream.read(&mut bytes).await.unwrap();
+            let request = String::from_utf8_lossy(&bytes[..count]).into_owned();
+            stream.write_all(response.as_bytes()).await.unwrap();
+            request
+        });
+        (format!("http://{addr}/explicit/rpc"), task)
+    }
+
+    fn status_response(network: &str) -> String {
+        let body = json!({"jsonrpc":"2.0", "id":1, "result": {
+            "version":"fixture", "network":network, "uptimeSeconds":0,
+            "syncStatus":"synced", "chainHeight":0, "tipHash":"00",
+            "peerCount":0,"mempoolSize":0,"mintingActive":false
+        }})
+        .to_string();
+        format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len())
+    }
+
+    #[tokio::test]
+    async fn pinned_endpoint_matches_network_and_never_fails_over() {
+        let (url, server) = fixture_endpoint(status_response("botho-testnet")).await;
+        let mut pool = RpcPool::connect_endpoint(&url, "botho-testnet")
+            .await
+            .unwrap();
+        let request = server.await.unwrap();
+        assert!(request.starts_with("POST /explicit/rpc HTTP/1.1"));
+        assert_eq!(pool.connected_count(), 1);
+        assert!(pool.clients.is_empty());
+        assert!(pool.get_node_status().await.is_err()); // fixture listener is gone
+        assert!(pool.connect().await.is_err());
+        assert!(pool.maintain_connections().await.is_err());
+        assert!(pool.clients.is_empty());
+        assert!(pool
+            .call_verified::<Value>("node_getStatus", json!({}))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn pinned_endpoint_rejects_other_reported_network() {
+        let (url, server) = fixture_endpoint(status_response("botho-mainnet")).await;
+        assert!(RpcPool::connect_endpoint(&url, "botho-testnet")
+            .await
+            .is_err());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn pinned_endpoint_does_not_follow_redirects() {
+        let (url, server) = fixture_endpoint("HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/never\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into()).await;
+        let error = RpcPool::connect_endpoint(&url, "botho-testnet")
+            .await
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("302"));
+        server.await.unwrap();
+    }
 
     #[test]
     fn test_rpc_pool_new() {

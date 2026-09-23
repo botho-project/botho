@@ -1,12 +1,4 @@
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useState,
-  useCallback,
-  useRef,
-  type ReactNode,
-} from 'react'
+import { createContext, useContext, useEffect, useState, useCallback, useRef, type ReactNode } from 'react'
 import { LocalNodeAdapter, RemoteNodeAdapter } from '@botho/adapters'
 import type { NodeAdapter } from '@botho/adapters'
 import type { NodeInfo } from '@botho/core'
@@ -15,244 +7,140 @@ interface ConnectionState {
   isScanning: boolean
   discoveredNodes: NodeInfo[]
   connectedNode: NodeInfo | null
+  /** Exact URL used by this adapter, including scheme and RPC path. */
+  endpoint: string | null
   error: string | null
 }
-
 interface ConnectionContextValue extends ConnectionState {
   scanForNodes: () => Promise<void>
   connectToNode: (node: NodeInfo) => Promise<void>
   disconnect: () => void
   addCustomNode: (host: string, port: number) => Promise<void>
-  /** The connected adapter for making API calls */
   adapter: NodeAdapter | null
 }
-
 const ConnectionContext = createContext<ConnectionContextValue | null>(null)
-
-const localScanAdapter = new LocalNodeAdapter()
-
-// Remote seed nodes to try when no local nodes are found
 const SEED_NODES = ['https://seed.botho.io/rpc']
 
+function explicitEndpoint(value: unknown): string {
+  if (typeof value !== 'string') throw new Error('Select an explicit RPC endpoint')
+  const url = new URL(value)
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.hash) {
+    throw new Error('RPC endpoint must be HTTP(S) without credentials or fragment')
+  }
+  return url.href
+}
+
 export function ConnectionProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<ConnectionState>({
-    isScanning: false,
-    discoveredNodes: [],
-    connectedNode: null,
-    error: null,
-  })
+  const [state, setState] = useState<ConnectionState>({ isScanning: false, discoveredNodes: [], connectedNode: null, endpoint: null, error: null })
   const adapterRef = useRef<NodeAdapter | null>(null)
+  const generation = useRef(0)
+  const mounted = useRef(false)
+  const probes = useRef(new Set<NodeAdapter>())
 
   const scanForNodes = useCallback(async () => {
-    setState((s) => ({ ...s, isScanning: true, error: null }))
-
+    const token = generation.current
+    setState(s => ({ ...s, isScanning: true, error: null }))
     try {
-      // First, scan for local nodes
-      const localNodes = await localScanAdapter.scanForNodes()
-
-      // If no local nodes, try remote seed nodes
-      if (localNodes.length === 0) {
-        const remoteNodes: NodeInfo[] = []
-
-        for (const seedUrl of SEED_NODES) {
+      const local = new LocalNodeAdapter()
+      const nodes = await local.scanForNodes()
+      // Local scanning explicitly uses http://host:port/rpc. Store that exact route as ID.
+      const found = nodes.map(node => ({ ...node, id: new URL('/rpc', `http://${node.host.includes(':') ? `[${node.host}]` : node.host}:${node.port}`).href }))
+      if (!found.length) {
+        for (const endpoint of SEED_NODES) {
+          const probe = new RemoteNodeAdapter({ seedNodes: [endpoint], useWebSocket: false })
+          probes.current.add(probe)
           try {
-            const remoteAdapter = new RemoteNodeAdapter({ seedNodes: [seedUrl] })
-            await remoteAdapter.connect()
-            const nodeInfo = remoteAdapter.getNodeInfo()
-            if (nodeInfo) {
-              // Mark as remote node
-              remoteNodes.push({
-                ...nodeInfo,
-                id: seedUrl,
-                host: new URL(seedUrl).hostname,
-                port: 443,
-              })
-            }
-            remoteAdapter.disconnect()
-          } catch {
-            // Seed node not reachable, continue
-          }
+            await probe.connect()
+            const info = probe.getNodeInfo()
+            if (info) found.push({ ...info, id: explicitEndpoint(endpoint) })
+          } catch { /* An unavailable candidate is not a selected connection. */ }
+          finally { probe.disconnect(); probes.current.delete(probe) }
         }
-
-        setState((s) => ({
-          ...s,
-          isScanning: false,
-          discoveredNodes: remoteNodes,
-        }))
-      } else {
-        setState((s) => ({
-          ...s,
-          isScanning: false,
-          discoveredNodes: localNodes,
-        }))
       }
-    } catch (err) {
-      setState((s) => ({
-        ...s,
-        isScanning: false,
-        error: err instanceof Error ? err.message : 'Scan failed',
-      }))
+      if (mounted.current && token === generation.current) setState(s => ({ ...s, isScanning: false, discoveredNodes: found }))
+    } catch (error) {
+      if (mounted.current && token === generation.current) setState(s => ({ ...s, isScanning: false, error: String(error) }))
     }
   }, [])
 
   const connectToNode = useCallback(async (node: NodeInfo) => {
-    setState((s) => ({
-      ...s,
-      error: null,
-      connectedNode: { ...node, status: 'connecting' },
-    }))
-
+    const token = ++generation.current
+    adapterRef.current?.disconnect()
+    adapterRef.current = null
+    setState(s => ({ ...s, connectedNode: null, endpoint: null, error: null }))
+    let candidate: RemoteNodeAdapter | null = null
     try {
-      // Disconnect existing adapter if any
-      if (adapterRef.current) {
-        adapterRef.current.disconnect()
-      }
-
-      let nodeAdapter: NodeAdapter
-
-      // Check if this is a remote node (port 443 or hostname is a seed)
-      const isRemote = node.port === 443 || SEED_NODES.some((s) => s.includes(node.host))
-
-      if (isRemote) {
-        // Use RemoteNodeAdapter for seed nodes
-        const seedUrl = `https://${node.host}`
-        nodeAdapter = new RemoteNodeAdapter({ seedNodes: [seedUrl] })
-      } else {
-        // Use LocalNodeAdapter for local nodes
-        nodeAdapter = new LocalNodeAdapter({
-          host: node.host,
-          port: node.port,
-        })
-      }
-
-      await nodeAdapter.connect()
-
-      adapterRef.current = nodeAdapter
-      const connectedNode = nodeAdapter.getNodeInfo()
-      setState((s) => ({
-        ...s,
-        connectedNode,
-      }))
-
-      // Store last connected node
-      localStorage.setItem('botho-last-node', JSON.stringify(connectedNode))
-    } catch (err) {
-      adapterRef.current = null
-      setState((s) => ({
-        ...s,
-        connectedNode: null,
-        error: err instanceof Error ? err.message : 'Connection failed',
-      }))
-    }
+      // Discovery/custom entry supplies an explicit URL. Never reconstruct a selected URL from a hostname.
+      const endpoint = explicitEndpoint(node.id)
+      candidate = new RemoteNodeAdapter({ seedNodes: [endpoint] })
+      probes.current.add(candidate)
+      await candidate.connect()
+      if (!mounted.current || token !== generation.current) { candidate.disconnect(); return }
+      const info = candidate.getNodeInfo()
+      if (!info) throw new Error('Node returned no status')
+      const connectedNode = { ...info, id: endpoint }
+      adapterRef.current = candidate
+      setState(s => ({ ...s, connectedNode, endpoint }))
+      localStorage.setItem('botho-last-node', JSON.stringify({ ...connectedNode, endpoint }))
+    } catch (error) {
+      candidate?.disconnect()
+      if (mounted.current && token === generation.current) setState(s => ({ ...s, connectedNode: null, endpoint: null, error: String(error) }))
+    } finally { if (candidate) probes.current.delete(candidate) }
   }, [])
 
   const disconnect = useCallback(() => {
-    if (adapterRef.current) {
-      adapterRef.current.disconnect()
-      adapterRef.current = null
-    }
-    setState((s) => ({
-      ...s,
-      connectedNode: null,
-    }))
+    generation.current += 1
+    adapterRef.current?.disconnect()
+    adapterRef.current = null
+    for (const candidate of probes.current) candidate.disconnect()
+    setState(s => ({ ...s, connectedNode: null, endpoint: null, isScanning: false }))
     localStorage.removeItem('botho-last-node')
   }, [])
 
   const addCustomNode = useCallback(async (host: string, port: number) => {
-    setState((s) => ({ ...s, isScanning: true, error: null }))
-
+    const token = generation.current
+    setState(s => ({ ...s, isScanning: true, error: null }))
+    let probe: RemoteNodeAdapter | null = null
     try {
-      // Determine if custom node is remote (port 443) or local
-      const isRemote = port === 443
-
-      let nodeAdapter: NodeAdapter
-      if (isRemote) {
-        nodeAdapter = new RemoteNodeAdapter({ seedNodes: [`https://${host}`] })
-      } else {
-        nodeAdapter = new LocalNodeAdapter({ host, port })
-      }
-
-      await nodeAdapter.connect()
-      const node = nodeAdapter.getNodeInfo()
-
-      if (node) {
-        setState((s) => ({
-          ...s,
-          isScanning: false,
-          discoveredNodes: [...s.discoveredNodes.filter((n) => n.id !== node.id), node],
-        }))
-      } else {
-        setState((s) => ({
-          ...s,
-          isScanning: false,
-          error: `Could not connect to ${host}:${port}`,
-        }))
-      }
-    } catch (err) {
-      setState((s) => ({
-        ...s,
-        isScanning: false,
-        error: err instanceof Error ? err.message : 'Connection failed',
-      }))
-    }
+      // A full URL explicitly selects HTTPS/path; bare host+port is the local HTTP entry contract.
+      const endpoint = explicitEndpoint(host.includes('://') ? host : `http://${host.includes(':') ? `[${host}]` : host}:${port}/rpc`)
+      probe = new RemoteNodeAdapter({ seedNodes: [endpoint], useWebSocket: false })
+      probes.current.add(probe)
+      await probe.connect()
+      const info = probe.getNodeInfo()
+      if (!info) throw new Error('Node returned no status')
+      if (mounted.current && token === generation.current) setState(s => ({ ...s, isScanning: false,
+        discoveredNodes: [...s.discoveredNodes.filter(n => n.id !== endpoint), { ...info, id: endpoint }] }))
+    } catch (error) {
+      if (mounted.current && token === generation.current) setState(s => ({ ...s, isScanning: false, error: String(error) }))
+    } finally { if (probe) { probe.disconnect(); probes.current.delete(probe) } }
   }, [])
 
-  // On mount, try to reconnect to last node or scan
   useEffect(() => {
-    const init = async () => {
-      const lastNode = localStorage.getItem('botho-last-node')
-      if (lastNode) {
-        try {
-          const node = JSON.parse(lastNode) as NodeInfo
-          const isRemote = node.port === 443 || SEED_NODES.some((s) => s.includes(node.host))
-
-          let nodeAdapter: NodeAdapter
-          if (isRemote) {
-            nodeAdapter = new RemoteNodeAdapter({ seedNodes: [`https://${node.host}`] })
-          } else {
-            nodeAdapter = new LocalNodeAdapter({
-              host: node.host,
-              port: node.port,
-            })
-          }
-
-          await nodeAdapter.connect()
-          const connectedNode = nodeAdapter.getNodeInfo()
-          if (connectedNode) {
-            adapterRef.current = nodeAdapter
-            setState((s) => ({ ...s, connectedNode }))
-            return
-          }
-        } catch {
-          // Invalid stored data or node not reachable, ignore
-        }
-      }
-      // No stored node or it's not reachable, scan for nodes
-      await scanForNodes()
+    mounted.current = true
+    let saved: NodeInfo | null = null
+    try {
+      const value = JSON.parse(localStorage.getItem('botho-last-node') ?? 'null')
+      // Older host-only cache entries are not authoritative endpoint selections.
+      if (value?.endpoint && value.id === explicitEndpoint(value.endpoint)) saved = value
+      else localStorage.removeItem('botho-last-node')
+    } catch { localStorage.removeItem('botho-last-node') }
+    if (saved) void connectToNode(saved)
+    else void scanForNodes()
+    return () => {
+      mounted.current = false
+      generation.current += 1
+      adapterRef.current?.disconnect()
+      adapterRef.current = null
+      for (const probe of probes.current) probe.disconnect()
     }
-    init()
-  }, [scanForNodes])
+  }, [connectToNode, scanForNodes])
 
-  return (
-    <ConnectionContext.Provider
-      value={{
-        ...state,
-        scanForNodes,
-        connectToNode,
-        disconnect,
-        addCustomNode,
-        adapter: adapterRef.current,
-      }}
-    >
-      {children}
-    </ConnectionContext.Provider>
-  )
+  return <ConnectionContext.Provider value={{ ...state, adapter: adapterRef.current,
+    scanForNodes, connectToNode, disconnect, addCustomNode }}>{children}</ConnectionContext.Provider>
 }
-
 export function useConnection() {
   const context = useContext(ConnectionContext)
-  if (!context) {
-    throw new Error('useConnection must be used within a ConnectionProvider')
-  }
+  if (!context) throw new Error('useConnection must be used within a ConnectionProvider')
   return context
 }
