@@ -1,9 +1,15 @@
 # Fixed candidate reinvestment observations
 
-This local capture ran eight prescribed 11,232-block histories, one exact replay,
-and two accounting/boundary controls. All three selected tests passed (two unrelated
-reference tests were filtered out). Compile took 14.64 seconds and the selected
-process took 7.71 seconds on the host recorded in `evidence/manifest.json`.
+This current-source capture ran eight prescribed 11,232-block histories, one exact
+replay, and two accounting/boundary controls at checkout
+`8a02b08f6f04d6730dce9ea7d51658e9f2c0d5cd`. All three selected tests passed (two
+unrelated reference tests were filtered out). Compile took 38.42 seconds and the
+selected process took 7.42 seconds on the host recorded in
+`evidence/manifest.json`; the executable SHA256 is
+`c3b5c70e3debefe7e19a202a8deb141e79a2398a7ba1074af85f7235159dc30c` and the raw
+observation SHA256 is
+`15becae3468cffbca2f2faecdd749416e98e310ae4dabfadfd98187dc85f7ab6`.
+The independent checker passes against the committed evidence after decompression.
 Hosted Linux evidence is pending. These are finite synthetic model observations,
 not accepted wallet transactions, V2 deployment, CT ratification or steady state.
 
