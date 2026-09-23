@@ -10,6 +10,12 @@ use sha2::{Digest, Sha256, Sha512};
 /// maximum. The V2 protocol must ratify this bound before any activation.
 pub const CANDIDATE_MAX_AWARDS: usize = 4;
 pub const KEM_BYTES: usize = 1088;
+/// Version tag for the inactive payout derivation-context encoding.
+///
+/// This is deliberately not a live wire or storage version. A future V2
+/// integration must authenticate the context through the chain commitment
+/// before using it for ownership or signing.
+pub const CONTEXT_VERSION: u8 = 2;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
     Encoding,
@@ -30,6 +36,43 @@ pub struct Outpoint {
 pub struct Context {
     pub base_index: u32,
     pub tweak: Hash,
+}
+
+impl Context {
+    /// Encode the context with an explicit version and fixed-width fields.
+    /// Zero is valid here because an ordinary output starts a lineage with no
+    /// accumulated payout tweak; payout records reject zero below.
+    pub fn encode(&self) -> Result<Vec<u8>, Error> {
+        scalar(self.tweak)?;
+        let mut out = Vec::with_capacity(1 + 4 + 32);
+        out.push(CONTEXT_VERSION);
+        out.extend(self.base_index.to_le_bytes());
+        out.extend(self.tweak);
+        Ok(out)
+    }
+
+    /// Decode exactly one canonical context. The bytes are syntax only; they
+    /// do not authenticate provenance or chain membership.
+    pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
+        let mut reader = Reader(bytes);
+        let context = Self::decode_reader(&mut reader)?;
+        if !reader.0.is_empty() {
+            return Err(Error::Encoding);
+        }
+        Ok(context)
+    }
+
+    fn decode_reader(reader: &mut Reader<'_>) -> Result<Self, Error> {
+        if reader.take::<1>()?[0] != CONTEXT_VERSION {
+            return Err(Error::Encoding);
+        }
+        let context = Self {
+            base_index: u32::from_le_bytes(reader.take()?),
+            tweak: reader.take()?,
+        };
+        context.encode()?;
+        Ok(context)
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Source {
@@ -213,9 +256,7 @@ impl Record {
             }
             Some(_) => return Err(Error::Encoding),
         }
-        out.push(2);
-        out.extend(self.context.base_index.to_le_bytes());
-        out.extend(self.context.tweak);
+        out.extend(self.context.encode()?);
         Ok(out)
     }
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
@@ -233,13 +274,7 @@ impl Record {
             1 => Some(r.take::<KEM_BYTES>()?.to_vec()),
             _ => return Err(Error::Encoding),
         };
-        if r.take::<1>()?[0] != 2 {
-            return Err(Error::Encoding);
-        }
-        let context = Context {
-            base_index: u32::from_le_bytes(r.take()?),
-            tweak: r.take()?,
-        };
+        let context = Context::decode_reader(&mut r)?;
         if !r.0.is_empty() {
             return Err(Error::Encoding);
         }
