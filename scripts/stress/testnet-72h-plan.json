@@ -1,0 +1,239 @@
+{
+  "schema_version": 1,
+  "status": "design_only",
+  "run_id": null,
+  "start_utc": null,
+  "duration_hours": 72,
+  "setup_deadline_hours": 8,
+  "drain_minutes": 30,
+  "node_commit": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+  "network": "botho-testnet",
+  "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+  "protocol": "6.0.0",
+  "endpoints": [
+    "https://seed.botho.io/rpc",
+    "https://seed2.botho.io/rpc",
+    "https://faucet.botho.io/rpc",
+    "https://eu.seed.botho.io/rpc",
+    "https://ap.seed.botho.io/rpc"
+  ],
+  "wallets": {
+    "count": 8,
+    "min_mature_utxos_per_wallet": 4,
+    "min_input_age_blocks": 10,
+    "max_inflight_per_wallet": 1,
+    "transfer_amounts_picocredits": [
+      "10000000000",
+      "30000000000",
+      "100000000000"
+    ]
+  },
+  "funding": {
+    "max_grants": 24,
+    "max_grants_per_wallet_24h": 3,
+    "grant_interval_seconds": 900,
+    "grant_picocredits": "1000000000000",
+    "max_principal_picocredits": "24000000000000",
+    "max_bootstrap_transfers": 64,
+    "faucet_fees": "record_separately; faucet_request cannot impose a caller fee limit"
+  },
+  "limits": {
+    "max_unique_chain_writes": 800,
+    "max_signed_fee_picocredits": "500000000000",
+    "max_single_signed_fee_picocredits": "5000000000",
+    "max_inflight": 8,
+    "max_normal_submissions_per_minute": 4,
+    "max_burst_size": 8,
+    "max_rpc_per_endpoint_per_minute": 50,
+    "max_automatic_rebroadcasts": 0,
+    "start_slot_grace_seconds": 120,
+    "max_queued_intents": 8,
+    "max_signed_transaction_bytes": 262144,
+    "max_wire_submission_bytes_per_minute": 2097152
+  },
+  "observation": {
+    "idle_local_interval_seconds": 60,
+    "active_local_interval_seconds": 5,
+    "active_tail_seconds": 300,
+    "fleet_status_interval_seconds": 15,
+    "transaction_poll_interval_seconds": 30,
+    "max_rpc_poll_concurrency_per_endpoint": 2,
+    "max_observation_staleness_seconds": 60,
+    "summary_every_hours": 6,
+    "publish_mnemonics_or_secret_keys": false
+  },
+  "breakers": {
+    "confirmation_pause_seconds": 300,
+    "unresolved_stop_seconds": 900,
+    "unsynced_pause_seconds": 120,
+    "unexpected_node_restart": "stop",
+    "confirmed_accounting_mismatch": "stop",
+    "conflicting_finalized_block_hash": "stop_and_verify",
+    "network_or_build_change": "stop",
+    "min_mem_available_percent": 15,
+    "min_mem_available_mib": 256,
+    "resource_low_samples": 2,
+    "max_process_swap_mib": 64,
+    "swap_duration_seconds": 120,
+    "min_disk_available_percent": 20,
+    "min_disk_available_gib": 2,
+    "idle_rss_growth_mib": 64,
+    "idle_rss_growth_percent": 20,
+    "idle_rss_growth_cycles": 3,
+    "breaker_recovery": "explicit_resume; no automatic catch_up"
+  },
+  "faults": {
+    "public_automatic_node_stops": false,
+    "public_miner_changes": false,
+    "public_partitions": false,
+    "public_disk_faults": false,
+    "invalid_transaction_destination": "isolated_cluster_only",
+    "operator_recovery_drill": "disabled_until_quorum_plan_and_explicit_activation"
+  },
+  "phases": [
+    {
+      "id": "correctness",
+      "start_hour": 0,
+      "end_hour": 6,
+      "max_inflight": 1,
+      "gate": "funding_inventory_and_signer_verified",
+      "segments": [
+        {
+          "start_hour": 0,
+          "count": 12,
+          "interval_seconds": 1800,
+          "scenario": "wallet_correctness"
+        }
+      ]
+    },
+    {
+      "id": "cold_cycles",
+      "start_hour": 6,
+      "end_hour": 24,
+      "max_inflight": 1,
+      "gate": "correctness_passed",
+      "segments": [
+        {
+          "start_hour": 6,
+          "count": 3,
+          "interval_seconds": 21600,
+          "scenario": "cold_payment"
+        }
+      ]
+    },
+    {
+      "id": "steady",
+      "start_hour": 24,
+      "end_hour": 36,
+      "max_inflight": 4,
+      "gate": "cold_cycles_passed",
+      "segments": [
+        {
+          "start_hour": 24,
+          "count": 24,
+          "interval_seconds": 900,
+          "scenario": "circulate"
+        },
+        {
+          "start_hour": 30,
+          "count": 72,
+          "interval_seconds": 300,
+          "scenario": "circulate"
+        }
+      ]
+    },
+    {
+      "id": "ramp",
+      "start_hour": 36,
+      "end_hour": 48,
+      "max_inflight": 8,
+      "gate": "steady_passed_and_resource_headroom",
+      "segments": [
+        {
+          "start_hour": 36,
+          "count": 2,
+          "interval_seconds": 1,
+          "scenario": "burst"
+        },
+        {
+          "start_hour": 38,
+          "count": 4,
+          "interval_seconds": 1,
+          "scenario": "burst"
+        },
+        {
+          "start_hour": 40,
+          "count": 8,
+          "interval_seconds": 1,
+          "scenario": "burst"
+        },
+        {
+          "start_hour": 42,
+          "count": 60,
+          "interval_seconds": 60,
+          "scenario": "rate_1_per_minute"
+        },
+        {
+          "start_hour": 44,
+          "count": 120,
+          "interval_seconds": 30,
+          "scenario": "rate_2_per_minute"
+        },
+        {
+          "start_hour": 46,
+          "count": 240,
+          "interval_seconds": 15,
+          "scenario": "rate_4_per_minute"
+        }
+      ]
+    },
+    {
+      "id": "recovery",
+      "start_hour": 48,
+      "end_hour": 60,
+      "max_inflight": 2,
+      "gate": "ramp_passed_or_explicit_lower_rate_manifest",
+      "segments": [
+        {
+          "start_hour": 48,
+          "count": 24,
+          "interval_seconds": 1800,
+          "scenario": "ingress_and_wallet_recovery"
+        }
+      ]
+    },
+    {
+      "id": "repeat_and_reconcile",
+      "start_hour": 60,
+      "end_hour": 72,
+      "max_inflight": 4,
+      "gate": "recovery_passed",
+      "segments": [
+        {
+          "start_hour": 60,
+          "count": 120,
+          "interval_seconds": 60,
+          "scenario": "repeat_1_per_minute"
+        },
+        {
+          "start_hour": 64,
+          "count": 1,
+          "interval_seconds": 1,
+          "scenario": "cold_payment"
+        },
+        {
+          "start_hour": 68,
+          "count": 1,
+          "interval_seconds": 1,
+          "scenario": "cold_payment"
+        },
+        {
+          "start_hour": 71,
+          "count": 1,
+          "interval_seconds": 1,
+          "scenario": "final_payment"
+        }
+      ]
+    }
+  ]
+}

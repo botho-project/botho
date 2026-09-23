@@ -1,0 +1,52 @@
+{
+  "status": "DESIGN ONLY \u2014 nothing scheduled or submitted",
+  "plan_sha256": "75525bacd3ec80bb76f3b7cba8f67d604dceb9b16c456b6fa13af4f272e9c3fc",
+  "duration_hours": 72,
+  "phases": [
+    {
+      "phase": "correctness",
+      "start_hour": 0,
+      "end_hour": 6,
+      "payments": 12
+    },
+    {
+      "phase": "cold_cycles",
+      "start_hour": 6,
+      "end_hour": 24,
+      "payments": 3
+    },
+    {
+      "phase": "steady",
+      "start_hour": 24,
+      "end_hour": 36,
+      "payments": 96
+    },
+    {
+      "phase": "ramp",
+      "start_hour": 36,
+      "end_hour": 48,
+      "payments": 434
+    },
+    {
+      "phase": "recovery",
+      "start_hour": 48,
+      "end_hour": 60,
+      "payments": 24
+    },
+    {
+      "phase": "repeat_and_reconcile",
+      "start_hour": 60,
+      "end_hour": 72,
+      "payments": 123
+    }
+  ],
+  "nominal_campaign_payments": 692,
+  "max_funding_grants": 24,
+  "max_bootstrap_transfers": 64,
+  "total_planned_chain_write_ceiling": 780,
+  "absolute_chain_write_cap": 800,
+  "min_initial_mature_outputs": 32,
+  "max_principal_picocredits": "24000000000000",
+  "max_signed_fees_picocredits": "500000000000",
+  "limitations": "Static budget/window validation only; runtime gates, signing, accounting, rate limiting and enforcement remain to be implemented."
+}
