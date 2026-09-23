@@ -3,14 +3,15 @@
   "status": "complete",
   "sources": {
     "Cargo.toml": "5ebf46d21ad6ba09c2d7aa4a4f733b473f842a92ac1b94de7aa194396714d95d",
-    "Cargo.lock": "0163413813517346e5de8b6a55ddbcff426c48e1a59be040dac628774a7434a3",
+    "Cargo.lock": "8a65d08d9df5b863ddaecfbaabe413448f13a4fe95c65567b661300370e6cd6a",
     "rust-toolchain": "f506172db062e96158404259ac7a857a8422d530837c4fdbd44fe4a0ce15a8f2",
-    "botho/Cargo.toml": "8ebe680b166f7bafa88425c6461fde0dd22cfdd22d672890ea701d05836a3654",
+    "botho/Cargo.toml": "7116106727ed78af1dd2640ad6224cf746fb8382e306e398f9549d2571738d65",
     "botho/tests/common/funded_model.rs": "819dfbe347ec56f5ca2ec9215060b5c806a179a26c7272de848a1ffa59cc629f",
-    "botho/tests/ct_economics_reinvestment.rs": "4b602b168fd7f216cca206bf5df34ae2b13ad7ecaa91ec55652400d5fadea8a3",
+    "botho/tests/common/reinvestment_model.rs": "4574f230d8f1b9e38b38f29d53eefc98a825478bb0a8f46560d6da4814a51ba2",
+    "botho/tests/ct_economics_reinvestment.rs": "ff176e25587f4ca9f4042a62bac913a0a9f515e5f7061494f480397f2ccf2659",
     "scripts/research/ct-economics/reference.rs": "beec9718a254faa37e8c93be4a5f9ae03cc0dc0da77e34c6a606d74ede38fa10",
     "scripts/research/ct-reinvestment/config.json": "c7306685b850291d19604ff8c4efbe36605139f771271b2319c7f8346c58e54a",
-    "scripts/research/ct-reinvestment/check.py": "449b2f844978b0f5f0b9fb1089bd1b677cd3f66dbbf922aeb73fecbe1bea7f13",
+    "scripts/research/ct-reinvestment/check.py": "506441d6938663243545b585c034d10a70606b81b15c1fc025140f4769eac3c0",
     "scripts/research/ct-reinvestment/collect.py": "6bc192f4c9f00d9a3f14b82f07c9cd16a045653ac40a5fe868319c68530926dd",
     "scripts/research/ct-reinvestment/test_check.py": "a9ab66688bd33330cfa40f8fba71313f7842f03b966a7f20341bc5e00cd991ff",
     "botho/src/decoy_selection.rs": "9aea0fa89897b3d6d1fcee364a821962ca8c624d2d455bc578ac0df9a99417cb",
@@ -24,8 +25,8 @@
     "cluster-tax/src/demurrage.rs": "ecc44061e1c82b19b49c9e6c2a05329168ae3a4877eeba0bda438a3e3cc63f34",
     "cluster-tax/src/monetary.rs": "b80cff28f1d4f4c07cb4717536e1f883e7b5cbe5731fa2b93813bc11aad60ea7"
   },
-  "checkout_commit": "608042cabbc63dc05d6286f0073d4fd973397402",
-  "dirty_status": " M botho/tests/ct_economics_workload.rs\n M scripts/research/ct-economics/workload_summary.py\n?? botho/tests/common/funded_model.rs\n?? botho/tests/ct_economics_reinvestment.rs\n?? scripts/research/ct-reinvestment/\n",
+  "checkout_commit": "8a02b08f6f04d6730dce9ea7d51658e9f2c0d5cd",
+  "dirty_status": "",
   "platform": "macOS-27.0-arm64-arm-64bit-Mach-O",
   "machine": "arm64",
   "rustc": "rustc 1.93.0-nightly (646a3f8c1 2025-12-02)\nbinary: rustc\ncommit-hash: 646a3f8c15baefb98dc6e0c1c1ba3356db702d2a\ncommit-date: 2025-12-02\nhost: aarch64-apple-darwin\nrelease: 1.93.0-nightly\nLLVM version: 21.1.5\n",
@@ -57,11 +58,11 @@
   "compile_bound_seconds": 900,
   "matrix_bound_seconds": 180,
   "compile_exit": 0,
-  "compile_seconds": 14.640363624959718,
+  "compile_seconds": 39.176553915953264,
   "artifact": {
     "reason": "compiler-artifact",
-    "package_id": "path+file:///Users/rwalters/GitHub/botho/.loom/worktrees/issue-1366/botho#0.6.0",
-    "manifest_path": "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1366/botho/Cargo.toml",
+    "package_id": "path+file:///Users/rwalters/GitHub/botho/.loom/worktrees/issue-1306/botho#0.6.0",
+    "manifest_path": "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1306/botho/Cargo.toml",
     "target": {
       "kind": [
         "test"
@@ -70,7 +71,7 @@
         "bin"
       ],
       "name": "ct_economics_reinvestment",
-      "src_path": "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1366/botho/tests/ct_economics_reinvestment.rs",
+      "src_path": "/Users/rwalters/GitHub/botho/.loom/worktrees/issue-1306/botho/tests/ct_economics_reinvestment.rs",
       "edition": "2021",
       "doc": false,
       "doctest": false,
@@ -89,25 +90,25 @@
       "pq"
     ],
     "filenames": [
-      "/private/tmp/botho-1346-target/release/deps/ct_economics_reinvestment-6ae432b82e308956"
+      "/private/tmp/botho-ct-target-1306-current-0923-clean/release/deps/ct_economics_reinvestment-15689e653fe1e7f0"
     ],
-    "executable": "/private/tmp/botho-1346-target/release/deps/ct_economics_reinvestment-6ae432b82e308956",
+    "executable": "/private/tmp/botho-ct-target-1306-current-0923-clean/release/deps/ct_economics_reinvestment-15689e653fe1e7f0",
     "fresh": false
   },
-  "executable_sha256": "cd6d2a64e68b90a4646dd69e17bfa51bb8d5103880e19165ffd1e0c754d4e3c1",
+  "executable_sha256": "c3b5c70e3debefe7e19a202a8deb141e79a2398a7ba1074af85f7235159dc30c",
   "matrix_command": [
-    "/private/tmp/botho-1346-target/release/deps/ct_economics_reinvestment-6ae432b82e308956",
+    "/private/tmp/botho-ct-target-1306-current-0923-clean/release/deps/ct_economics_reinvestment-15689e653fe1e7f0",
     "reinvestment::",
     "--nocapture"
   ],
   "matrix_exit": 0,
-  "matrix_seconds": 7.711470208014362,
+  "matrix_seconds": 7.5305198749993,
   "histories": 8,
   "deterministic_replays": 1,
   "raw_hashes": {
-    "cargo.jsonl": "5805e8b365381f117d4f03f6b4702e29b1ade87564f3e2774ab1c10905f6dfe7",
-    "compile.log": "83fa3ab2e454e7bba9ae6882720c20e4eed2798912c5947f0bf609707ee9f6ed",
-    "matrix.log": "a070863e018657bd73e3d643f6d7966859690b0b3bab8e86aae71ef167104f60",
+    "cargo.jsonl": "1358f8a935cd8d883e7bc70b8d15331305b94766eeba26dd85d53b64845f8129",
+    "compile.log": "c70abfeac4a08dbf7d2dea9bff8cc6be6276faeb9a333893aab3a73ea6ac9d5c",
+    "matrix.log": "7ddd275d9b511fc9b67db8203898ec5f33025587378bfad7ef4be45bb5965186",
     "matrix-stderr.log": "ae332959ba7acbdad0052e62c0c0a05b4a93bc0ee1d2a60563ec0c1acd589ff9",
     "raw.json": "15becae3468cffbca2f2faecdd749416e98e310ae4dabfadfd98187dc85f7ab6"
   }
