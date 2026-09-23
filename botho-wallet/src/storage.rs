@@ -5,10 +5,7 @@
 //! - ChaCha20-Poly1305 for authenticated encryption
 
 use anyhow::{anyhow, Result};
-use argon2::{
-    password_hash::{rand_core::OsRng, SaltString},
-    Argon2, PasswordHasher,
-};
+use argon2::{password_hash::phc::SaltString, Argon2, PasswordHasher};
 use chacha20poly1305::{
     aead::{Aead, KeyInit},
     ChaCha20Poly1305, Nonce,
@@ -248,10 +245,10 @@ impl EncryptedWallet {
     /// Create a new encrypted wallet from a mnemonic phrase
     pub fn encrypt(mnemonic: &str, password: &str) -> Result<Self> {
         // Generate random salt for Argon2
-        let salt = SaltString::generate(&mut OsRng);
+        let salt = SaltString::generate();
 
         // Derive encryption key from password
-        let key = derive_key(password, salt.as_str())?;
+        let key = derive_key(password, salt.as_ref())?;
 
         // Generate random nonce
         let mut nonce_bytes = [0u8; 12];
@@ -628,8 +625,9 @@ fn derive_key(password: &str, salt: &str) -> Result<[u8; 32]> {
         .map_err(|_| anyhow!("Invalid Argon2 parameters"))?,
     );
 
+    let salt_bytes = salt.to_salt();
     let hash = argon2
-        .hash_password(password.as_bytes(), &salt)
+        .hash_password_with_salt(password.as_bytes(), salt_bytes.as_ref())
         .map_err(|_| anyhow!("Key derivation failed"))?;
 
     let hash_output = hash.hash.ok_or_else(|| anyhow!("No hash output"))?;

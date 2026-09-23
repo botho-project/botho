@@ -36,10 +36,7 @@
 //! operator then provisions by hand.
 
 use anyhow::{anyhow, Result};
-use argon2::{
-    password_hash::{rand_core::OsRng as ArgonOsRng, SaltString},
-    Argon2, PasswordHasher,
-};
+use argon2::{password_hash::phc::SaltString, Argon2, PasswordHasher};
 use blake2::Blake2b;
 use chacha20poly1305::{
     aead::{Aead, KeyInit},
@@ -158,8 +155,8 @@ impl OperatorKeyFile {
 
         // Derive a 32-byte key from the passphrase (Argon2id) and encrypt the
         // secret scalar (ChaCha20-Poly1305), exactly as botho-wallet does.
-        let salt = SaltString::generate(&mut ArgonOsRng);
-        let derived = derive_key(passphrase, salt.as_str())?;
+        let salt = SaltString::generate();
+        let derived = derive_key(passphrase, salt.as_ref())?;
 
         let mut nonce_bytes = [0u8; 12];
         rand::rng().fill(&mut nonce_bytes);
@@ -293,8 +290,9 @@ fn derive_key(passphrase: &str, salt: &str) -> Result<Zeroizing<[u8; 32]>> {
         .map_err(|_| anyhow!("invalid Argon2 parameters"))?,
     );
 
+    let salt_bytes = salt.to_salt();
     let hash = argon2
-        .hash_password(passphrase.as_bytes(), &salt)
+        .hash_password_with_salt(passphrase.as_bytes(), salt_bytes.as_ref())
         .map_err(|_| anyhow!("key derivation failed"))?;
     let hash_output = hash.hash.ok_or_else(|| anyhow!("no hash output"))?;
     let hash_bytes = hash_output.as_bytes();
