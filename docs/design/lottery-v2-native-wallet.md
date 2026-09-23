@@ -2,9 +2,11 @@
 
 Part of #1286, implemented under #1358 on the private validated local chain.
 This does not activate LotteryV2, migrate legacy payouts, add RPC proofs, or
-complete the web/mobile/WASM wallet and cache obligations. Parent #1357 records
+complete the web/mobile/WASM wallet and cache obligations. Merged [#1357](https://github.com/botho-project/botho/pull/1357) records
 a supported macOS-launcher pass of all 93 ledger tests and retains the earlier
-EINVAL history; this child still requires its parent merge and final-head CI.
+EINVAL history. The native slice merged in
+[#1360](https://github.com/botho-project/botho/pull/1360); these historical results
+do not establish production activation or current-platform acceptance.
 
 The crate-private `WalletRead` seam preserves ordinary Ledger direct-index
 recovery, errors, and decoy parameters. The original wallet tag inheritance,
@@ -26,6 +28,33 @@ Discovery returns owned unspent outputs, including immature outputs. Constructio
 requires ten confirmations. The canonical 720-block age is lottery eligibility,
 not the wallet's spend-confirmation threshold. Source and independently derived
 awards retain different final key images even when they share ownership ancestry.
+
+## Implemented layers and remaining interfaces
+
+This table reconciles the merged local layers for #1286. Each has a different
+trust boundary; a storage fixture is not an accepted transaction, and a local
+accepted spend is not authenticated remote-wallet support.
+
+| Layer | Existing implementation and evidence | Boundary |
+|---|---|---|
+| Pure candidate key/context and commitments | [Primitives](lottery-v2-primitives.md), [Rust vectors](../../transaction/clsag/tests/lottery_v2.rs), and [native/WASM workflow](../../.github/workflows/lottery-primitives.yml) | Candidate library operations, not production rule selection or client integration. |
+| Storage-only fixtures and shared effects | [Persistence](lottery-v2-persistence.md), [shared writer](lottery-v2-shared-writer.md), and [experimental store](../../botho/src/ledger/experimental.rs) | Unvalidated `storage.2` fixtures intentionally differ from the validated schema. Their supplied accounting is not accepted consensus evidence. |
+| Accepted local producer/validator/writer | Merged [#1357](https://github.com/botho-project/botho/pull/1357); [validated boundary](../../botho/src/ledger/experimental/validated.rs) and [retained ledger results](lottery-v2-validated-transition.md#execution-evidence-and-gate-disposition-2026-09-20) | Private `ValidatedStore::open` is test-only. Actual shared validation/effects operate on local accepted database provenance, not an RPC proof or network-selectable version. |
+| Native discovery and independent accepted spends | Merged [#1360](https://github.com/botho-project/botho/pull/1360); [private wallet bridge](../../botho/src/ledger/experimental/validated/wallet.rs), [positive tests](../../botho/src/ledger/experimental/validated/wallet/tests.rs), and [historical evidence](../research/lottery-v2-native-wallet/evidence.json) | The bounded repeated/nested workload records seven accepted spends. It does not expose the private context as a trusted serialized wallet input. |
+
+The positive test is `native_wallet_accepted_repeated_nested_payout_spends`;
+`authenticated_discovery_separates_maturity_and_checkpoint` covers the local
+checkpoint/maturity boundary. [Workspace CI](../../.github/workflows/workspace-build.yml)
+selects the long profile explicitly, with its external 1,800-second limit.
+A passing past run is not a substitute for checking a subsequent source revision.
+
+Production integration remains open: version/rule selection and authenticated
+remote context/header proofs; full/compact sync and snapshot/import formats;
+RPC, WASM, web and mobile wallet propagation/recovery/cache handling; explicit
+legacy payout disposition; independent final review and activation policy.
+The primitive WASM runner is not a WASM wallet acceptance test. No field may be
+silently appended to legacy storage, and no ordinary network configuration
+selects the local experimental rules. These layers do not close #1286.
 
 ## Bounded positive workload
 
@@ -66,8 +95,8 @@ CARGO_PROFILE_CI_DEBUG_ASSERTIONS=true CARGO_PROFILE_CI_OVERFLOW_CHECKS=true \
   cargo test --locked --profile ci -p botho --lib native_wallet_accepted_repeated_nested_payout_spends -- --ignored --nocapture
 ```
 
-Remaining gates include final PR review, exact-head Linux evidence,
-parent merge, authenticated remote context/header propagation,
+The original implementation review/merge is historical. Remaining integration
+gates include authenticated remote context/header propagation,
 other wallet clients and snapshots, explicit legacy disposition, and activation
 policy. This child does not close #1286.
 
@@ -105,4 +134,5 @@ CI preserves the existing default-profile ledger suite. A dedicated compilation
 uses the checked `ci` profile and verifies its emitted settings; a separate step
 runs the 19 wallet/focused regressions and the exact ignored long test once with
 an external 1,800-second limit. Compile/runtime logs and source/binary hashes
-are uploaded even on failure. Final-head Linux evidence is still required.
+are uploaded even on failure. Those per-run artifacts must be checked against
+their exact source; the retained local observations alone make no Linux claim.

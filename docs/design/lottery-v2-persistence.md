@@ -68,12 +68,14 @@ Only an empty, owned test directory can initialize schema 2.
 
 Experimental fixture callers supply accounting and skip signature validation;
 production V1 always supplies its existing verification callback. These fixture
-inputs are not a validated transition token. The next producer/validator
-checkpoint must recompute the actual draw and commitments, preserve all normal
-block/transaction checks and bind validation to the applied pre-state before
-exposing any real writer. Native wallet discovery/recovery and independently
-accepted spends remain subsequent work, as do snapshots, RPC, compact sync,
-WASM/mobile clients and legacy disposition. CT transaction encryption codecs
+inputs are not a validated transition token. The separate merged
+[validated local boundary](lottery-v2-validated-transition.md) now recomputes the
+actual draw and commitments, preserves ordinary block/transaction checks and
+binds validation to the applied pre-state. The merged
+[native wallet slice](lottery-v2-native-wallet.md#implemented-layers-and-remaining-interfaces)
+adds local discovery/recovery and independently accepted spends. Neither turns
+this storage-only schema into validated state. Snapshots, RPC, compact sync,
+WASM/mobile wallet integration and legacy disposition remain open. CT transaction encryption codecs
 are outside this change.
 
 Run the focused storage tests with:
