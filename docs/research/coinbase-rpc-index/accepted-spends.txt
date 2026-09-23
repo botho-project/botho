@@ -1,0 +1,11 @@
+
+running 1 test
+COINBASE_RPC_ACCEPTED round=1 height=221 tx=40df111b3aad67965c4f302d1b94e385b6b44ec456c0dd843057bb7b657899fb image=aa9a9c3d3b3f83d1f643c8a89e420307abf5409de2dfbaf8c311e8d76e74112e change=39000000000000 recipient=1000000000000 fees=10000000000000
+COINBASE_RPC_ACCEPTED round=2 height=342 tx=e1f7dcfe96bde75ae8cc1812c68d5fe5f2c85686e4bac7a256956e87f3074318 image=8c748aae5863afe0f3d346d9789db1e31854d1ad820dfae2b4f8927615f8af42 change=28000000000000 recipient=2000000000000 fees=20000000000000
+COINBASE_RPC_PASS elapsed_ms=18151 canonical=28dd4973095533179632caddd1192c093f93cd0ec2fb49c16b6fd982e016d316 legacy=2b0425ce33c2667a9dbb2dae01835820af96266aa01ba186ef935afaca10e216 index=4294967295
+test hybrid_coinbase_rpc_scan_spend_filter_restore ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.15s
+
+
+BOUNDED_EXIT=0 WALL_SECONDS=18.197

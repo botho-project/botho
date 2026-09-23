@@ -61,6 +61,14 @@ pub struct OwnedUtxo {
     pub tx_hash: [u8; 32],
     /// Output index in the transaction
     pub output_index: u32,
+    /// Separately retained crypto index. Legacy cache identifiers stay
+    /// unchanged.
+    #[serde(default)]
+    pub crypto_output_index: Option<u32>,
+    /// Older caches without this discriminator require a rescan for MAX
+    /// records.
+    #[serde(default)]
+    pub coinbase: bool,
     /// Amount in picocredits
     pub amount: u64,
     /// Block height where created
@@ -121,6 +129,11 @@ impl OwnedUtxo {
     /// view-key path. Both dispatch through
     /// [`TxOutput::recover_spend_key_for`].
     pub fn recover_spend_key(&self, keys: &WalletKeys) -> Option<RistrettoPrivate> {
+        let crypto_index = crate::rpc_pool::crypto_output_index(
+            self.output_index,
+            self.coinbase,
+            self.crypto_output_index,
+        )?;
         let output = self.as_tx_output();
         #[cfg(feature = "pq")]
         {
@@ -128,11 +141,12 @@ impl OwnedUtxo {
                 keys.account_key(),
                 keys.pq_account_key().pq_kem_keypair(),
                 self.subaddress_index,
-                self.output_index,
+                crypto_index,
             )
         }
         #[cfg(not(feature = "pq"))]
         {
+            let _ = crypto_index;
             output.recover_spend_key(keys.account_key(), self.subaddress_index)
         }
     }
@@ -544,6 +558,14 @@ impl<'a> WalletScanner<'a> {
 
         for block in block_outputs {
             for output in &block.outputs {
+                let Some(crypto_index) = crate::rpc_pool::crypto_output_index(
+                    output.output_index,
+                    output.coinbase,
+                    output.crypto_output_index,
+                ) else {
+                    tracing::warn!("Skipping output with inconsistent crypto-index metadata");
+                    continue;
+                };
                 // Parse all required keys
                 let target_key = match Self::parse_key(&output.target_key) {
                     Some(k) => k,
@@ -574,7 +596,7 @@ impl<'a> WalletScanner<'a> {
                     &target_key,
                     &public_key,
                     kem_ciphertext.as_deref(),
-                    output.output_index,
+                    crypto_index,
                 ) {
                     // Convert cluster tags from RPC format to StoredTags
                     let cluster_tags = Self::parse_cluster_tags(&output.cluster_tags);
@@ -582,6 +604,8 @@ impl<'a> WalletScanner<'a> {
                     owned.push(OwnedUtxo {
                         tx_hash,
                         output_index: output.output_index,
+                        crypto_output_index: output.crypto_output_index,
+                        coinbase: output.coinbase,
                         amount,
                         created_at: block.height,
                         target_key,
@@ -830,6 +854,8 @@ mod tests {
             OwnedUtxo {
                 tx_hash: [1u8; 32],
                 output_index: 0,
+                crypto_output_index: None,
+                coinbase: false,
                 amount: 1_000_000_000_000, // 1 CAD
                 created_at: 1,
                 target_key: [0u8; 32],
@@ -841,6 +867,8 @@ mod tests {
             OwnedUtxo {
                 tx_hash: [2u8; 32],
                 output_index: 0,
+                crypto_output_index: None,
+                coinbase: false,
                 amount: 500_000_000_000, // 0.5 CAD
                 created_at: 2,
                 target_key: [0u8; 32],
@@ -876,6 +904,8 @@ mod tests {
         let utxo = OwnedUtxo {
             tx_hash: [9u8; 32],
             output_index: 0,
+            crypto_output_index: None,
+            coinbase: false,
             amount,
             created_at,
             target_key: out.target_key,
@@ -1144,6 +1174,9 @@ mod tests {
             RpcTxOutput {
                 tx_hash: hex::encode([9u8; 32]),
                 output_index,
+                crypto_output_index: None,
+                coinbase: false,
+                ledger_outpoint: None,
                 target_key: hex::encode(out.target_key),
                 public_key: hex::encode(out.public_key),
                 amount_commitment: hex::encode(out.amount.to_le_bytes()),

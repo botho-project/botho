@@ -39,6 +39,8 @@ fn owned_utxo(keys: &WalletKeys, amount: u64, created_at: u64, seed: u8) -> Owne
     OwnedUtxo {
         tx_hash: [seed; 32],
         output_index: 0,
+        crypto_output_index: None,
+        coinbase: false,
         amount,
         created_at,
         target_key: out.target_key,
@@ -436,6 +438,8 @@ mod utxo_selection {
             OwnedUtxo {
                 tx_hash: [1u8; 32],
                 output_index: 0,
+                crypto_output_index: None,
+                coinbase: false,
                 amount: 3 * PICOCREDITS_PER_CAD,
                 created_at: 100,
                 target_key: [0u8; 32],
@@ -447,6 +451,8 @@ mod utxo_selection {
             OwnedUtxo {
                 tx_hash: [2u8; 32],
                 output_index: 0,
+                crypto_output_index: None,
+                coinbase: false,
                 amount: 2 * PICOCREDITS_PER_CAD,
                 created_at: 101,
                 target_key: [0u8; 32],
@@ -473,6 +479,8 @@ mod utxo_selection {
             OwnedUtxo {
                 tx_hash: [1u8; 32],
                 output_index: 0,
+                crypto_output_index: None,
+                coinbase: false,
                 amount: 10 * PICOCREDITS_PER_CAD,
                 created_at: 100,
                 target_key: [0u8; 32],
@@ -484,6 +492,8 @@ mod utxo_selection {
             OwnedUtxo {
                 tx_hash: [2u8; 32],
                 output_index: 0,
+                crypto_output_index: None,
+                coinbase: false,
                 amount: 5 * PICOCREDITS_PER_CAD,
                 created_at: 101,
                 target_key: [0u8; 32],
@@ -495,6 +505,8 @@ mod utxo_selection {
             OwnedUtxo {
                 tx_hash: [3u8; 32],
                 output_index: 0,
+                crypto_output_index: None,
+                coinbase: false,
                 amount: 2 * PICOCREDITS_PER_CAD,
                 created_at: 102,
                 target_key: [0u8; 32],
@@ -891,6 +903,8 @@ mod cluster_tags {
         let utxo = OwnedUtxo {
             tx_hash: [1u8; 32],
             output_index: 0,
+            crypto_output_index: None,
+            coinbase: false,
             amount: 10 * PICOCREDITS_PER_CAD,
             created_at: 100,
             target_key: [0u8; 32],
@@ -917,6 +931,8 @@ mod cluster_tags {
         let utxo = OwnedUtxo {
             tx_hash: [1u8; 32],
             output_index: 0,
+            crypto_output_index: None,
+            coinbase: false,
             amount: PICOCREDITS_PER_CAD,
             created_at: 100,
             target_key: [0u8; 32],
@@ -937,6 +953,8 @@ mod cluster_tags {
         let utxo = OwnedUtxo {
             tx_hash: [1u8; 32],
             output_index: 0,
+            crypto_output_index: None,
+            coinbase: false,
             amount: PICOCREDITS_PER_CAD,
             created_at: 100,
             target_key: [0u8; 32],
@@ -975,6 +993,8 @@ mod cluster_tags {
         let utxo = OwnedUtxo {
             tx_hash: [0xAB; 32],
             output_index: 5,
+            crypto_output_index: None,
+            coinbase: false,
             amount: 5 * PICOCREDITS_PER_CAD,
             created_at: 12345,
             target_key: [0xCD; 32],

@@ -98,6 +98,9 @@ fn production_routes_and_candidate_fee_report() {
                 outputs: vec![RpcOutput {
                     tx_hash: hex::encode(key(i)),
                     output_index: 0,
+                    crypto_output_index: None,
+                    coinbase: false,
+                    ledger_outpoint: None,
                     target_key: hex::encode(key(i)),
                     public_key: hex::encode(key(i + 40000)),
                     amount_commitment: hex::encode(1_000_000_000_000u64.to_le_bytes()),
@@ -291,6 +294,9 @@ fn cli_pool_preserves_dedup_exclusion_and_seed_replay() {
     let make = |i| RpcOutput {
         tx_hash: hex::encode(key(i)),
         output_index: 0,
+        crypto_output_index: None,
+        coinbase: false,
+        ledger_outpoint: None,
         target_key: hex::encode(key(i)),
         public_key: hex::encode(key(i + 1000)),
         amount_commitment: hex::encode(1u64.to_le_bytes()),

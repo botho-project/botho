@@ -1,0 +1,17 @@
+
+running 1 test
+
+thread 'hybrid_coinbase_rpc_scan_spend_filter_restore' (136202780) panicked at botho/tests/hybrid_coinbase_rpc.rs:78:30:
+called `Result::unwrap()` on an `Err` value: InvalidBlock("Block difficulty 0xffffffffffffffff does not match expected 0xbfd8b6c1df0000")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test hybrid_coinbase_rpc_scan_spend_filter_restore ... FAILED
+
+failures:
+
+failures:
+    hybrid_coinbase_rpc_scan_spend_filter_restore
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+
+BOUNDED_EXIT=101 WALL_SECONDS=0.440

@@ -1,0 +1,16 @@
+
+running 9 tests
+test rpc_pool::tests::crypto_index_contract_preserves_identity_and_requires_coinbase ... ok
+test rpc_pool::tests::test_submit_tx_result_deserializes_from_node_json ... ok
+test rpc_pool::tests::test_chain_info_deserializes_with_string_total_mined ... ok
+test rpc_pool::tests::test_node_status_deserializes_from_node_json ... ok
+test rpc_pool::tests::test_fee_estimate_deserializes_from_node_json ... ok
+test rpc_pool::tests::test_tx_output_deserializes_from_node_json ... ok
+test rpc_pool::tests::test_rpc_pool_new ... ok
+test rpc_pool::tests::test_tx_output_coinbase_shape_deserializes ... ok
+test rpc_pool::tests::additive_output_metadata_keeps_legacy_decoder_and_lottery_identity ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 104 filtered out; finished in 0.00s
+
+
+BOUNDED_EXIT=0 WALL_SECONDS=0.012
