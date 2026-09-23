@@ -24,7 +24,6 @@ Public API
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -32,13 +31,13 @@ from dataclasses import dataclass, field, replace as _dc_replace
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from anvil.lib.atomic_write import atomic_write_text
+
 from .detect import Shape
 from .plan import (
     BriefMergeOp,
-    ContentRewrite,
     DocumentPlan,
     Plan,
-    Rename,
 )
 
 
@@ -646,9 +645,7 @@ def _write_project_brief(
     )
     if existing_text is not None and final_text == existing_text:
         return notes
-    tmp_path = project_brief_path.with_suffix(".md.tmp")
-    tmp_path.write_text(final_text, encoding="utf-8")
-    os.replace(str(tmp_path), str(project_brief_path))
+    atomic_write_text(project_brief_path, final_text)
     return notes
 
 
@@ -1213,10 +1210,8 @@ def _write_enroll_brief(plan: Plan, result: ApplyResult) -> None:
         result.notes.append(f"BRIEF append failed: {exc}")
         return
 
-    tmp_path = plan.project_brief_path.with_suffix(".md.tmp")
     try:
-        tmp_path.write_text(final_text, encoding="utf-8")
-        os.replace(str(tmp_path), str(plan.project_brief_path))
+        atomic_write_text(plan.project_brief_path, final_text)
     except OSError as exc:
         result.notes.append(f"BRIEF write failed: {exc}")
         return

@@ -40,9 +40,8 @@ Two halves
    result into the version dir's ``_progress.json`` as
    ``metadata.evidence_snapshot`` — a read-merge-write over the *file*
    only (the version dir itself is otherwise untouched), atomic via
-   tmp-then-``os.replace`` (the same primitive as
-   ``anvil/lib/cite.py::_cache_write``). This is the baseline a later
-   review/audit pass compares against.
+   the shared :func:`anvil.lib.atomic_write.atomic_write_json` helper.
+   This is the baseline a later review/audit pass compares against.
 
 2. **Drift checking** (:func:`check_evidence_drift`,
    :func:`check_thread_evidence_drift`): called by a reviewer/auditor
@@ -100,11 +99,12 @@ CLI entry-point
 from __future__ import annotations
 
 import json
-import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from anvil.lib.atomic_write import atomic_write_json
 
 BRIEF_FILENAME = "BRIEF.md"
 """Thread-root brief filename whose mtime is tracked."""
@@ -124,6 +124,19 @@ version's recorded evidence snapshot."""
 STATUS_NO_SNAPSHOT = "NO-SNAPSHOT"
 """Bootstrap case: no prior snapshot recorded. Reported as clean/not-
 drifted — never a false-positive drift signal (see module docstring)."""
+
+DRIFT_TOLERANCE_SECONDS = 1e-3
+"""Minimum mtime delta (seconds) treated as real drift, not float-precision
+noise (issue #1018). A hand-recorded snapshot (a `record` invocation typed
+by hand rather than run through the tool, e.g. under a Bash-write-blocking
+hook) can lose sub-microsecond precision when the mtime float is
+transcribed, which previously surfaced as a false-positive `EVIDENCE-DRIFT`
+on a delta as small as 2e-7 seconds. 1ms is comfortably above that noise
+floor and above common filesystem mtime granularity (e.g. 1-second
+resolution on some filesystems truncated by intermediate tooling), while
+staying far below the elapsed time of any real edit — the same "false
+positive costs a sentence, not a blocked pipeline" tradeoff already
+accepted for mtime-vs-content-hash above."""
 
 
 # ---------------------------------------------------------------------------
@@ -192,12 +205,6 @@ def _read_progress(progress_path: Path) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _atomic_write_json(path: Path, data: Dict[str, Any]) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
-
-
 def record_evidence_snapshot(
     thread_dir: Path, version_dir: Path
 ) -> Dict[str, Optional[float]]:
@@ -206,12 +213,11 @@ def record_evidence_snapshot(
     Merges ``metadata.evidence_snapshot`` into
     ``<version_dir>/_progress.json``, preserving every other top-level
     and ``metadata`` field (the shallow-merge convention documented in
-    ``anvil/lib/snippets/progress.md``). Atomic via tmp-then-
-    ``os.replace`` (the same primitive as
-    ``anvil/lib/cite.py::_cache_write``). Creates ``_progress.json`` with
-    the minimal shape if it does not already exist (defensive — in the
-    normal flow the calling draft/revise command has already initialized
-    it before this runs).
+    ``anvil/lib/snippets/progress.md``). Atomic via the shared
+    :func:`anvil.lib.atomic_write.atomic_write_json` helper. Creates
+    ``_progress.json`` with the minimal shape if it does not already
+    exist (defensive — in the normal flow the calling draft/revise
+    command has already initialized it before this runs).
 
     Returns the recorded snapshot dict.
     """
@@ -230,7 +236,7 @@ def record_evidence_snapshot(
     progress["metadata"] = metadata
 
     version_dir.mkdir(parents=True, exist_ok=True)
-    _atomic_write_json(progress_path, progress)
+    atomic_write_json(progress_path, progress)
     return snapshot
 
 
@@ -339,10 +345,12 @@ def check_evidence_drift(
     prior_refs = snapshot.get("refs_mtime")
 
     brief_drifted = current["brief_mtime"] is not None and (
-        prior_brief is None or current["brief_mtime"] > prior_brief
+        prior_brief is None
+        or current["brief_mtime"] - prior_brief > DRIFT_TOLERANCE_SECONDS
     )
     refs_drifted = current["refs_mtime"] is not None and (
-        prior_refs is None or current["refs_mtime"] > prior_refs
+        prior_refs is None
+        or current["refs_mtime"] - prior_refs > DRIFT_TOLERANCE_SECONDS
     )
 
     if not brief_drifted and not refs_drifted:
@@ -469,6 +477,7 @@ __all__ = [
     "STATUS_CLEAN",
     "STATUS_DRIFT",
     "STATUS_NO_SNAPSHOT",
+    "DRIFT_TOLERANCE_SECONDS",
     "EvidenceDriftResult",
     "compute_evidence_snapshot",
     "record_evidence_snapshot",

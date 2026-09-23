@@ -13,9 +13,33 @@ The priorart sibling is **read-only once written**. Critical flags short-circuit
 
 ## Scope and important non-scope
 
-This critic evaluates the application against prior art the **operator has supplied** in `<thread>/prior-art/`. It does **not** perform its own patent search. Patent searching is a distinct discipline (USPTO classification, Boolean queries, Espacenet/Google Patents/PatBase, IPC/CPC classes) that requires dedicated tooling and time budget. A future skill (potentially `anvil:ip-search`) may address it.
+This critic evaluates the application against prior art the **operator has supplied** in `<thread>/prior-art/`. It does **not** perform its own patent search. Patent searching is a distinct discipline (USPTO classification, Boolean queries, Espacenet/Google Patents/PatBase, IPC/CPC classes) that requires dedicated tooling and time budget.
+
+**To collect art before running this critic**, use `anvil:ip-search` (issue #957) — it derives queries from the thread's `BRIEF.md` inventive-feature inventory, queries a live corpus (PatentsView / USPTO Open Data Portal, with Google Patents as a documented manual fallback when no API key is configured), and writes reference summaries into `<thread>/prior-art/` in exactly the frontmatter shape this critic parses. It is a drafting aid, not a clearance search, and it renders no positioning verdict — dimension 5 remains entirely this critic's to score. Running `ip-search` first is a separate operator step by default; **issue #958** adds an **opt-in** shortcut (the `--search` flag / `<thread>/.anvil.json` `prior_art_search.auto` knob documented below) that runs it automatically as step 1a of this critic, immediately before the supply check in step 2 — see "Opt-in pre-search" below.
 
 If `<thread>/prior-art/` is empty or absent, this critic produces a `_summary.md` noting that no prior art was supplied and recommending operator supply some before re-running. It does NOT score Dimension 5 in that case (leaves score `null`).
+
+## Opt-in pre-search (issue #958) — off by default
+
+**A knob, not a default.** Absent both triggers below, this critic behaves exactly as it did before issue #958: no network call, no `ip-search` invocation, byte-identical output. Two equivalent triggers, either one is sufficient:
+
+- **CLI flag**: `ip-uspto-prior-art <thread> --search`
+- **`<thread>/.anvil.json`** (the same per-thread override file `max_iterations` / `critics` already use):
+
+  ```json
+  {
+    "prior_art_search": {
+      "auto": true,
+      "corpus": "auto",
+      "max": 8,
+      "min_score": 1
+    }
+  }
+  ```
+
+  Only `auto: true` is required to opt in; `corpus` / `max` / `min_score` are optional pass-throughs to `ip-search`'s own `--corpus` / `--max` / `--min-score` flags (same defaults as `ip-search` itself — `auto` / 8 / 1 — when omitted).
+
+When either trigger is present, **step 1a** below runs `anvil:ip-search <thread>` before step 2's supply check — see the Procedure. The step never passes `ip-search`'s `--force` flag, so it never overwrites an operator-authored reference; it inherits `ip-search`'s own graceful degradation (no API key → writes nothing, prints manual URLs, exits 0) with no change to this critic's behavior on that path. A `degraded` or zero-hit search leaves `<thread>/prior-art/` exactly as it would have been without this knob, so the pre-existing "no prior art supplied → Dimension 5 `null`" path in step 2 is unaffected — this knob only ever *adds* candidate art before that check runs, never removes or replaces it.
 
 ## Rubric dimension owned
 
@@ -35,6 +59,7 @@ This critic evaluates each independent claim against each supplied prior-art ref
 ## Inputs
 
 - **Thread slug** (positional argument).
+- **`--search` (optional flag, issue #958)**: opts this run into the pre-search step (see "Opt-in pre-search" above). Equivalent to setting `prior_art_search.auto: true` in `<thread>/.anvil.json` for this one invocation.
 - **Latest version directory**: highest `N` with `<thread>.{N}/claims.tex`.
 - **Prior art**: `<thread>/prior-art/**`. Accepted formats:
   - Markdown files describing the reference (preferred): one file per reference, frontmatter with `title`, `inventors`, `publication_date`, `kind` (patent | publication | product), `summary`, `claim_text` (if a patent).
@@ -66,9 +91,10 @@ This critic evaluates each independent claim against each supplied prior-art ref
       - The stale-staging sweep of step 1 has an exact CLI analog: `uv run --project .anvil python -m anvil.lib.sidecar cleanup <thread>.{N}.priorart` (the parallel-safe per-critic sweep, issue #376).
    2. **Last resort — manual `mv`-based staging** when even `python`/`uv` is unavailable. Reproduce the staging contract by hand: (a) at entry, sweep any leftover `rm -rf .<thread>.{N}.priorart.tmp/` (the `cleanup_one_staging` analog); (b) `mkdir .<thread>.{N}.priorart.tmp/` and write **every** required file into it — writing `_progress.json` **last**, so a mid-write interrupt is caught by the missing-manifest check rather than producing a final-named partial; (c) confirm the staging dir holds the full required set — use a count check (`[ "$(ls -1 .<staging-dir> | wc -l)" -eq <N> ]`) or an `ls`-based presence check rather than per-file `[ -f ]`, which can false-negative under a restricted-`stat` sandbox — **then** `mv .<thread>.{N}.priorart.tmp <thread>.{N}.priorart` as the **last** step (POSIX `mv` on a same-filesystem dir-to-dir rename is atomic, matching `Path.rename`). Do NOT create `<thread>.{N}.priorart/` before all files are staged. **Record the fallback durably** so a reader can tell atomicity was reproduced by hand rather than tool-verified: stamp `_meta.json` with `"atomicity_fallback": "manual-mv"` (e.g. `sidecar: staged_sidecar CLI unavailable (uv/python not on PATH); atomicity reproduced via manual mv this pass`). Absent this note the manual staging is indistinguishable from an unsafe direct write.
 
-   The two tiers land a byte-identical on-disk result to the `staged_sidecar` context-manager path; they exist only to give a Python-less session a code-enforced (tier 1) or contract-faithful (tier 2) route to the same atomicity guarantee. When an orchestrating Python driver IS present, use `staged_sidecar` directly as documented above — the CLI shim is not needed.
+   The two tiers land a byte-identical on-disk result to the `staged_sidecar` context-manager path; they exist only to give a Python-less session a code-enforced (tier 1) or contract-faithful (tier 2) route to the same atomicity guarantee. When an orchestrating Python driver IS present, use `staged_sidecar` directly as documented above — the CLI shim is not needed. (If your agent harness pattern-matches and rejects the `findings.md` filename on a `Write`, a Bash-heredoc write into the staging dir is an accepted fallback — see `anvil/lib/snippets/critics.md` §"Orchestrator output-file guard collisions".)
 
-2. **Check prior art supply**: enumerate `<thread>/prior-art/**`. If empty, write a `_summary.md` noting "no prior art supplied; Dim 5 unscored" plus `findings.md`, `_meta.json`, and `_progress.json` (all four required-files inside the staging dir), then exit the staged_sidecar context (which atomically renames the staging dir to its final name — this is a `done` state, not an error — operator may legitimately have no prior art at hand for the first review pass).
+1a. **Opt-in pre-search** (issue #958, code-enforced since issue #978 — skip unless triggered): delegate to `anvil/skills/ip-search/lib/prior_art_step.py`'s `run_step(thread_dir, cli_enable=<True if --search else None>)` — load it via `anvil.lib.skill_lib_loader.import_skill_lib_module("ip-search", Path("anvil/skills/ip-search/lib"), "prior_art_step")` (`.anvil/skills/ip-search/lib` in a consumer install). `run_step` resolves the same two triggers as above (`--search` → `cli_enable=True`, or `<thread>/.anvil.json`'s `prior_art_search.auto` set to `true`) and, only when one fires, runs `anvil:ip-search <thread>` now — before the supply check in step 2 — passing through `corpus` / `max` / `min_score` from the `.anvil.json` block when present (defaults `auto` / 8 / 1 otherwise) and **never** passing `--force` (pinned `False` in code, not just documented). Report `result.report` (or the one-line `prior_art_step.summary_line(result, "ip-uspto")`) as part of this critic's own report; every terminal state (`ok`, `degraded`, `error`, `unavailable`) is non-fatal — `result.blocking` is always `False` — proceed to step 2 regardless. When neither trigger is present (the pre-#958 default), `run_step` returns `state="disabled"` **without calling the search runner at all** — no corpus query, no API-key read, no network call — and this step is skipped entirely, with no report line at all.
+2. **Check prior art supply**: enumerate `<thread>/prior-art/**` (now possibly topped up by step 1a). If empty, write a `_summary.md` noting "no prior art supplied; Dim 5 unscored" plus `findings.md`, `_meta.json`, and `_progress.json` (all four required-files inside the staging dir), then exit the staged_sidecar context (which atomically renames the staging dir to its final name — this is a `done` state, not an error — operator may legitimately have no prior art at hand for the first review pass).
 3. **Read inputs**: parse each prior-art reference into a structured form (title, date, summary, claim text if applicable). Read all claims from `claims.tex`.
 
 ### Anticipation analysis (§102)
@@ -132,7 +158,7 @@ This critic evaluates each independent claim against each supplied prior-art ref
 
 ## Idempotence and resumability
 
-Standard. Note that re-running this critic after the operator adds more prior art is expected — the critic should re-evaluate against the expanded set.
+Standard. Note that re-running this critic after the operator adds more prior art is expected — the critic should re-evaluate against the expanded set. When the opt-in pre-search (step 1a) is active, re-runs stay safe by construction: `ip-search` never overwrites an existing reference file without `--force` (which this step never passes), so a second `--search` run either adds newly-found references or writes nothing at all — it never clobbers a prior `ip-search` pass or hand-authored `prior-art/*.md` the operator has annotated.
 
 ## Notes for the priorart agent
 

@@ -28,7 +28,6 @@ only when that flag is passed. The default behavior (serve, or
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -44,13 +43,13 @@ _MODULES = ["sources", "overlay", "server"]
 def _bootstrap_sys_path() -> None:
     """Make ``import anvil`` resolvable when run as a bare script.
 
-    Walks up from this file's location and inserts the first ancestor
-    directory that contains ``anvil/__init__.py``. Resolves both the
-    source repo (``<repo>/anvil/skills/diff/lib/cli.py`` -> inserts
-    ``<repo>``) and a consumer install
-    (``<consumer>/.anvil/anvil/skills/diff/lib/cli.py`` -> inserts
-    ``<consumer>/.anvil``). Mirrors ``project-share/lib/cli.py`` /
-    ``memo/lib/render_phase.py``'s bootstrap.
+    Byte-identical, intentionally duplicated copy of the algorithm in
+    ``anvil.lib.skill_lib_loader.bootstrap_sys_path`` — a bootstrap that
+    makes ``anvil`` importable can't itself import from ``anvil`` yet, so
+    this can't just delegate to it (issue #1100). See that function's
+    docstring for the full layout-resolution explanation, and
+    ``tests/lib/test_bootstrap_sys_path_consistency.py`` for the check
+    that keeps this copy honest.
     """
 
     here = Path(__file__).resolve()

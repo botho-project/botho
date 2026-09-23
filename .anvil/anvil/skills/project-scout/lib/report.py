@@ -18,8 +18,7 @@ operator glob) is named; the coverage table carries the identity
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import List, Sequence
+from typing import List
 
 from .cluster import (
     BUCKET_ALREADY_MIGRATED,

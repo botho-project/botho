@@ -72,7 +72,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
-from anvil.skills.report.lib.audit_flags import CriticalFlag
+from anvil.skills.report.lib.audit_flags import AuditCriticalFlag
 
 
 # --------------------------------------------------------------------------
@@ -96,10 +96,6 @@ LEDGER_FILENAME = "disclosures.jsonl"
 #: The only context.yaml schema version this module understands
 #: (version-stamped like the #428 manifest).
 CONTEXT_VERSION = 1
-
-#: The ONE optional ``_project.md`` frontmatter key that activates the
-#: tier for a project.
-PROJECT_CUSTOMER_KEY = "customer"
 
 #: Closed audience-class vocabulary (issue #450). The knob selects
 #: consumer-supplied house-style boilerplate + render metadata in
@@ -127,20 +123,6 @@ CRITICAL_FLAG_AUDIT_DISCLOSURE_TOPIC_VIOLATION = (
     "audit_disclosure_topic_violation"
 )
 
-#: The ledger-record keys, in canonical write order. ``project`` /
-#: ``thread`` / ``version`` triple is the idempotency key.
-DISCLOSURE_RECORD_KEYS = (
-    "ts",
-    "customer",
-    "engagement_id",
-    "project",
-    "thread",
-    "version",
-    "summary",
-    "report_sha256",
-)
-
-
 # --------------------------------------------------------------------------
 # Structured errors (never crash — the data_contract.py posture)
 # --------------------------------------------------------------------------
@@ -165,25 +147,6 @@ class ContextError:
 # --------------------------------------------------------------------------
 # Repo-root + customers-dir resolution
 # --------------------------------------------------------------------------
-
-
-def find_repo_root(start: Path) -> Optional[Path]:
-    """Walk up from ``start`` for a dir containing ``.anvil/`` or ``.git``.
-
-    ``.git`` may be a directory (normal clone) or a file (worktree).
-    Returns ``None`` when no marker is found before the filesystem
-    root — callers then surface a structured error rather than
-    guessing.
-    """
-    current = Path(start).resolve()
-    if current.is_file():
-        current = current.parent
-    while True:
-        if (current / ".anvil").is_dir() or (current / ".git").exists():
-            return current
-        if current.parent == current:
-            return None
-        current = current.parent
 
 
 @dataclass(frozen=True)
@@ -979,7 +942,7 @@ def detect_disclosure_topic_violations(
     rows: Iterable[TopicViolationRow],
     *,
     context_active: bool,
-) -> Optional[CriticalFlag]:
+) -> Optional[AuditCriticalFlag]:
     """Detect ``audit_disclosure_topic_violation`` (aggregated).
 
     Fires iff the customer-context tier is **active** (the project
@@ -1013,7 +976,7 @@ def detect_disclosure_topic_violations(
         "the topic restriction no longer applies, the OPERATOR (not "
         "the agent) must update the customer's context.yaml."
     )
-    return CriticalFlag(
+    return AuditCriticalFlag(
         type=CRITICAL_FLAG_AUDIT_DISCLOSURE_TOPIC_VIOLATION,
         justification=justification,
         originating_rows=tuple(r.row_number for r in offending),

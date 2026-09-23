@@ -14,8 +14,11 @@ contexts. It carries a structured ``ack:`` token:
 The skill rejects the prior substring-quoting contract (v0.0.1+ hard
 break; anvil is alpha with no shipped consumers). See
 ``anvil/skills/report/commands/report-promote.md`` step 6 for the full
-contract, including the eight enumerated failure modes — this module
-is the executable specification of those modes.
+contract, including the nine enumerated ``AckError.mode`` failure
+modes — this module is the executable specification of those modes
+(the command doc's prose names eight top-level checks; ``sha256``
+mismatch splits into a fresh-file and a stale-file variant, and a
+ninth mode covers a stale ack file whose ``sha256`` still matches).
 
 Top-level keys other than ``ack`` are ignored (operators MAY add
 workflow fields like ``signature:``, ``signed_by:``, ``notes:`` without
@@ -24,15 +27,23 @@ schema churn). Unknown keys *under* ``ack:`` are rejected (typos like
 
 Each failure mode raises :class:`AckError` with a specific message —
 the operator must see *which* check failed without guessing.
+
+``report-promote`` invokes this module via its CLI shim (``python -m
+anvil.skills.report.lib.ack``, see ``main`` below) rather than
+re-deriving the algorithm in prose — see ``report-promote.md`` step 6
+for the exact invocation and its documented last-resort manual
+fallback.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import yaml
 
@@ -42,12 +53,15 @@ _MAX_ACK_AGE_SECONDS: int = 24 * 60 * 60  # 24h defense-in-depth window
 
 
 class AckError(Exception):
-    """Raised when the ack file fails any of the eight contract checks.
+    """Raised when the ack file fails any of the nine contract checks.
 
     Each instance carries a ``mode`` attribute naming the failure mode
-    (one of the eight enumerated in ``report-promote.md`` step 6) so
-    callers (the promoter command, tests, and any future structured-log
-    consumer) can dispatch on the mode without parsing the message.
+    (one of the nine values this module raises — see the module
+    docstring — corresponding to the eight checks enumerated in
+    ``report-promote.md`` step 6, with the ``sha256`` mismatch check
+    split into fresh-file and stale-file variants) so callers (the
+    promoter command, tests, and any future structured-log consumer)
+    can dispatch on the mode without parsing the message.
     """
 
     def __init__(self, mode: str, message: str) -> None:
@@ -97,7 +111,7 @@ def parse_ack_file(
         The validated :class:`Ack` on success.
 
     Raises:
-        AckError: On any of the eight enumerated failure modes. The
+        AckError: On any of the nine enumerated failure modes. The
             instance's ``mode`` attribute names the mode; the message
             is operator-facing.
     """
@@ -256,3 +270,118 @@ def _as_str(value: Any) -> str:
     contract is a string, so we coerce defensively rather than crash.
     """
     return value if isinstance(value, str) else str(value)
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point (non-Python-driver sessions — issue #1098)
+# ---------------------------------------------------------------------------
+#
+# Mirrors the ``if __name__ == "__main__":`` precedent shipped by the other
+# ``anvil/lib/*.py`` / ``anvil/skills/*/lib/*.py`` modules (e.g.
+# ``anvil/lib/pending_marker.py``, ``anvil/lib/sidecar.py``,
+# ``anvil/skills/report/lib/claim_figure_grounding.py``). A manual or agent
+# promotion session with no orchestrating Python driver can shell out to
+# ``python -m anvil.skills.report.lib.ack`` and get the exact same
+# nine-mode validation this module's Python API enforces, rather than
+# re-deriving the algorithm in prose each run. ``report-promote.md`` step 6
+# is the sole documented caller.
+
+
+def _build_cli_parser():
+    import argparse
+
+    p = argparse.ArgumentParser(
+        prog="python -m anvil.skills.report.lib.ack",
+        description=(
+            "Parse and validate a report-promote ack file against the "
+            "expected promotion context. Exit 0 with the validated "
+            "report_title/recipient/sha256 as JSON on stdout when the ack "
+            "file passes all nine checks; exit 1 with a mode-specific "
+            "error on stderr (`error (mode=<mode>): <message>`) on the "
+            "first failing check. See report-promote.md step 6 for the "
+            "full contract."
+        ),
+    )
+    p.add_argument(
+        "ack_file",
+        help="Path to the operator-authored YAML ack file.",
+    )
+    p.add_argument(
+        "--expected-title",
+        required=True,
+        help="The exact H1 heading read from report.md.",
+    )
+    p.add_argument(
+        "--expected-recipient",
+        required=True,
+        help="The exact recipient field from _project.md.",
+    )
+    p.add_argument(
+        "--expected-sha256",
+        required=True,
+        help="The sha256 (lowercase hex) of report.pdf at promotion time.",
+    )
+    p.add_argument(
+        "--max-age-seconds",
+        type=int,
+        default=_MAX_ACK_AGE_SECONDS,
+        help=(
+            "Defense-in-depth mtime window for the ack file, in seconds "
+            "(default: 24h)."
+        ),
+    )
+    return p
+
+
+def main(argv: "Sequence[str] | None" = None) -> int:
+    """CLI entry point. Returns the process exit code.
+
+    Exit codes:
+
+    - ``0``: the ack file passed all nine checks. The validated
+      ``report_title`` / ``recipient`` / ``sha256`` are printed to
+      stdout as JSON.
+    - ``1``: the ack file failed one of the nine checks. The specific
+      ``AckError.mode`` and its operator-facing message are printed to
+      stderr as ``error (mode=<mode>): <message>``.
+
+    Invocation errors (missing required flags) are handled by
+    ``argparse`` itself, which exits ``2``.
+    """
+    parser = _build_cli_parser()
+    args = parser.parse_args(argv)
+    try:
+        ack = parse_ack_file(
+            Path(args.ack_file),
+            expected_title=args.expected_title,
+            expected_recipient=args.expected_recipient,
+            expected_sha256=args.expected_sha256,
+            max_age_seconds=args.max_age_seconds,
+        )
+    except AckError as exc:
+        print(f"error (mode={exc.mode}): {exc}", file=sys.stderr)
+        return 1
+    print(
+        json.dumps(
+            {
+                "report_title": ack.report_title,
+                "recipient": ack.recipient,
+                "sha256": ack.sha256,
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
+__all__ = [
+    "AckError",
+    "Ack",
+    "compute_pdf_sha256",
+    "parse_ack_file",
+    "main",
+]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

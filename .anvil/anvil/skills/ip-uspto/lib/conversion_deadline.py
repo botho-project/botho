@@ -112,17 +112,6 @@ def conversion_deadline(filing_date: object) -> date:
     return add_months(parse_filing_date(filing_date), CONVERSION_WINDOW_MONTHS)
 
 
-def days_until_deadline(filing_date: object, today: date | None = None) -> int:
-    """Days from ``today`` until the conversion deadline (negative = past).
-
-    ``today`` defaults to :meth:`date.today`. Returns a signed integer so callers
-    can distinguish "due soon" (small positive) from "already past" (negative).
-    """
-    if today is None:
-        today = date.today()
-    return (conversion_deadline(filing_date) - today).days
-
-
 def deadline_status(
     filing_date: object,
     today: date | None = None,

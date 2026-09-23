@@ -53,6 +53,6 @@ registration, and a minimal synthetic worked example. See SKILL.md
 ## Deferred (see SKILL.md §Scope guard)
 
 Cross-chapter consistency checking; a dedicated structured facts register;
-a full `nitas-mama` dogfood worked example; voice-grounding wiring beyond
+a full `example-memoir` dogfood worked example; voice-grounding wiring beyond
 what #598 already generalizes; LaTeX/TikZ figure paths beyond the
 photo-placement macros.

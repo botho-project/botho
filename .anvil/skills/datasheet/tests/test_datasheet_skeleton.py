@@ -19,47 +19,19 @@ collection collision documented in issue #58.
 from __future__ import annotations
 
 import re
+import sys
 import unittest
 from pathlib import Path
 
 _SKILL_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = _SKILL_ROOT.parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
+from anvil.lib.testing import parse_frontmatter as _parse_frontmatter  # noqa: E402
+from anvil.lib.testing import read_text
 
-def _read(rel: str) -> str:
-    return (_SKILL_ROOT / rel).read_text(encoding="utf-8")
-
-
-def _parse_frontmatter(text: str) -> dict:
-    """Parse a leading ``---``-delimited YAML frontmatter block.
-
-    Uses PyYAML when available; falls back to a minimal ``key: value`` parser
-    so the test does not hard-depend on PyYAML being installed.
-    """
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return {}
-    end = None
-    for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
-            end = i
-            break
-    if end is None:
-        return {}
-    block = "\n".join(lines[1:end])
-    try:
-        import yaml  # type: ignore
-
-        data = yaml.safe_load(block)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        result: dict = {}
-        for line in block.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or ":" not in line:
-                continue
-            key, _, value = line.partition(":")
-            result[key.strip()] = value.strip().strip('"').strip("'")
-        return result
+_read = lambda rel: read_text(_SKILL_ROOT / rel)
 
 
 class TestFilesExist(unittest.TestCase):
@@ -150,9 +122,7 @@ class TestCommandFrontmatter(unittest.TestCase):
             with self.subTest(path=rel):
                 fm = _parse_frontmatter(_read(rel))
                 self.assertEqual(fm.get("name"), expected_name)
-                self.assertTrue(
-                    fm.get("description"), f"{rel} missing a description"
-                )
+                self.assertTrue(fm.get("description"), f"{rel} missing a description")
 
     def test_critic_commands_stamp_rubric_version(self):
         # Both critic-writing commands stamp rubric_id / rubric_total /
@@ -204,9 +174,7 @@ class TestRubric(unittest.TestCase):
             self.text,
             flags=re.MULTILINE,
         )
-        self.assertEqual(
-            len(rows), 9, f"expected 9 dimension rows, found {len(rows)}"
-        )
+        self.assertEqual(len(rows), 9, f"expected 9 dimension rows, found {len(rows)}")
         indices = sorted(int(i) for i, _ in rows)
         self.assertEqual(indices, [1, 2, 3, 4, 5, 6, 7, 8, 9])
         total = sum(int(w) for _, w in rows)

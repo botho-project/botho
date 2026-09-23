@@ -4,11 +4,12 @@ The atomic file-rewrite primitives that the apply step calls when in
 ``--stamp-only`` mode. Each function takes one of the edit-primitive
 dataclasses from :mod:`plan` and performs the rewrite on disk.
 
-All writes are atomic (temp file + ``os.replace``). On any I/O failure
-the original file is left intact and the function raises ``OSError``;
-the apply step's per-review snapshot is the rollback safety net for
-multi-file rewrites (e.g., stamp + progress row + summary block where
-the second write fails).
+All writes are atomic (temp file + ``os.replace``, via the shared
+:mod:`anvil.lib.atomic_write` helper). On any I/O failure the original
+file is left intact and the function raises ``OSError``; the apply
+step's per-review snapshot is the rollback safety net for multi-file
+rewrites (e.g., stamp + progress row + summary block where the second
+write fails).
 
 Subprocess-free. Stdlib-only.
 """
@@ -16,37 +17,16 @@ Subprocess-free. Stdlib-only.
 from __future__ import annotations
 
 import json
-import os
 import re
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+from anvil.lib.atomic_write import atomic_write_json, atomic_write_text
 
 from .plan import (
     ProgressRowStamp,
     StampOp,
     SummaryRubricBlock,
 )
-
-
-_TMP_SUFFIX = ".rebackport.tmp"
-
-
-def _atomic_write_text(path: Path, text: str) -> None:
-    """Write ``text`` to ``path`` atomically (temp file + os.replace)."""
-    tmp = path.with_name(path.name + _TMP_SUFFIX)
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(str(tmp), str(path))
-
-
-def _atomic_write_json(path: Path, data: Dict[str, object]) -> None:
-    """Serialize ``data`` to JSON and atomic-write to ``path``.
-
-    Uses ``indent=2`` + trailing newline to match the existing on-disk
-    convention used by the per-skill review-writers (a glance at any of
-    the canary fixtures shows this shape).
-    """
-    text = json.dumps(data, indent=2) + "\n"
-    _atomic_write_text(path, text)
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +73,7 @@ def apply_stamp_meta(op: StampOp) -> Tuple[bool, Optional[str]]:
     if not changed:
         return False, None
     try:
-        _atomic_write_json(op.meta_path, meta)
+        atomic_write_json(op.meta_path, meta)
     except OSError as exc:
         return False, f"write failed: {exc}"
     return True, None
@@ -145,7 +125,7 @@ def apply_stamp_progress_rows(
         return 0, None
 
     try:
-        _atomic_write_json(op.progress_path, progress)
+        atomic_write_json(op.progress_path, progress)
     except OSError as exc:
         return 0, f"write failed: {exc}"
     return stamped, None
@@ -227,7 +207,7 @@ def apply_summary_rubric_block(
                 return False, None
             parsed["rubric"] = rubric_block_data
             try:
-                _atomic_write_json(block.summary_path, parsed)
+                atomic_write_json(block.summary_path, parsed)
             except OSError as exc:
                 return False, f"write failed: {exc}"
             return True, None
@@ -238,7 +218,7 @@ def apply_summary_rubric_block(
     if not changed:
         return False, None
     try:
-        _atomic_write_text(block.summary_path, new_text)
+        atomic_write_text(block.summary_path, new_text)
     except OSError as exc:
         return False, f"write failed: {exc}"
     return True, None

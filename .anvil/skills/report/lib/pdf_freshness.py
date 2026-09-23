@@ -54,10 +54,6 @@ from typing import Optional
 DIM7_CAP_WHEN_MISSING_OR_STALE = 2
 
 
-# The Dimension 7 weight (mirrors ``rubric.md`` row 7).
-DIM7_WEIGHT = 4
-
-
 # The dimension name for the finding. Mirrors the rubric row label and
 # the conventions used by other report-skill findings.
 DIM7_NAME = "format_presentation_quality"

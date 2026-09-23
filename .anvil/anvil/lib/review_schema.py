@@ -409,6 +409,32 @@ class Finding(BaseModel):
             "Reserved for #29; v1 leaves this None for judgment reviews."
         ),
     )
+    downstream_risk: Optional[str] = Field(
+        None,
+        description=(
+            "Issue #1197. Free-text note naming a *predicted consequence* "
+            "of applying `suggested_fix` literally, elsewhere in the body "
+            "— NOT a restatement of the defect itself. Populated only when "
+            "the critic can foresee a specific knock-on effect; absent "
+            "(the default, and every pre-#1197 finding) means either "
+            "'no foreseeable downstream effect' or 'not evaluated', which "
+            "are indistinguishable by design (this is advisory, not a "
+            "coverage guarantee). Two effect classes are common enough to "
+            "name explicitly, though the field is free text (matching "
+            "`evidence_span` / `CriticalFlag.type`'s precedent of an "
+            "opaque, skill-defined string rather than a closed enum — a "
+            "fixed vocabulary would force every future consequence class "
+            "through a schema change, exactly what #1197 wants to avoid): "
+            "'cross-reference-dangle' (fixing this finding as stated would "
+            "orphan a sentence elsewhere in the body that refers back to "
+            "the text being changed — name the referring location) and "
+            "'envelope-breach' (the fix's likely size would push the body "
+            "past a declared word/line ceiling — name the ceiling and the "
+            "expected delta). A reviser MUST address the named consequence "
+            "in the same revision pass that addresses the finding itself, "
+            "not defer it to the next review cycle."
+        ),
+    )
 
 
 class CriticalFlag(BaseModel):

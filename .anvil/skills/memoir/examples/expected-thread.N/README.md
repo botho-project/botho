@@ -12,7 +12,7 @@ their examples).
 Per issue #740's own "Scope guard — v1 / deferred" section, v1 ships a
 **minimal synthetic worked example** — one project, one chapter thread,
 one terminal `AUDITED` version — sufficient to exercise the skeleton
-tests. It is explicitly **NOT** a full `nitas-mama` dogfood (the `spec`
+tests. It is explicitly **NOT** a full `example-memoir` dogfood (the `spec`
 Phase 4 / #709 precedent): that vendored example is a deferred follow-up
 issue once this skeleton lands, the same sequencing `primer` and `spec`
 both used.

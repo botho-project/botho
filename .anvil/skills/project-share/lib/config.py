@@ -56,13 +56,13 @@ import re
 from pathlib import Path
 from typing import Any, List, Optional
 
-import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-# The BRIEF filename and frontmatter delimiter mirror
-# ``anvil/lib/project_brief.py`` (single on-disk convention).
+from anvil.lib.frontmatter import extract_frontmatter as _extract_frontmatter
+
+# The BRIEF filename mirrors ``anvil/lib/project_brief.py`` (single
+# on-disk convention).
 BRIEF_FILENAME = "BRIEF.md"
-_FRONTMATTER_DELIM = "---"
 
 # The top-level BRIEF frontmatter key this skill owns.
 EXPORT_FRONTMATTER_KEY = "export"
@@ -246,44 +246,11 @@ class ExportConfig(BaseModel):
         return value
 
 
-def _extract_frontmatter(text: str) -> Optional[dict]:
-    """Extract the YAML frontmatter from ``text`` and return it as a dict.
-
-    Mirrors ``anvil/lib/project_brief.py::_extract_frontmatter`` (which
-    itself mirrors ``project_discovery``'s copy) so all three parsers
-    accept exactly the same on-disk delimiter convention. Kept local
-    rather than importing the shared private helper — per-skill libs do
-    not reach into another module's underscore namespace.
-    """
-    lines = text.splitlines()
-    if lines and lines[0].startswith("﻿"):
-        lines[0] = lines[0][1:]
-
-    first_idx = 0
-    while first_idx < len(lines) and lines[first_idx].strip() == "":
-        first_idx += 1
-    if first_idx >= len(lines):
-        return None
-    if lines[first_idx].strip() != _FRONTMATTER_DELIM:
-        return None
-
-    body_start = first_idx + 1
-    close_idx = None
-    for i in range(body_start, len(lines)):
-        if lines[i].strip() == _FRONTMATTER_DELIM:
-            close_idx = i
-            break
-    if close_idx is None:
-        return None
-
-    yaml_text = "\n".join(lines[body_start:close_idx])
-    try:
-        parsed = yaml.safe_load(yaml_text)
-    except yaml.YAMLError:
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    return parsed
+# ``_extract_frontmatter`` used to be defined here (a local copy mirroring
+# ``anvil/lib/project_brief.py``'s); it is now the shared
+# ``anvil/lib/frontmatter.py::extract_frontmatter`` primitive (issue
+# #1075), imported above and aliased to the historical private name so
+# every call site in this module is unchanged.
 
 
 def load_export_config(project_dir: Path) -> ExportConfig:

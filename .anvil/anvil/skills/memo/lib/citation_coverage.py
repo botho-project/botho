@@ -130,6 +130,7 @@ from anvil.lib.review_schema import (
     Review,
     Score,
 )
+from anvil.lib.sidecar import write_critic_review_dir
 
 # ---------------------------------------------------------------------------
 # Public constants
@@ -1047,29 +1048,28 @@ def scan_version_dir(
 def _write_review_dir(version_dir: Path, result: "CoverageResult") -> Path:
     """Write ``<version_dir>.citations/_review.json`` (+ ``_findings.json``).
 
-    Mirrors the convention used by
-    :func:`anvil.skills.memo.lib.hyperlink_resolver.write_review_dir`
-    (Phase 2, #338): a typed ``_review.json`` for the critics aggregator
+    Delegates to the shared :func:`anvil.lib.sidecar.write_critic_review_dir`
+    (issue #1086): a typed ``_review.json`` for the critics aggregator
     plus a ``_findings.json`` companion with the structured payload from
-    :meth:`CoverageResult.to_json`. Auto-discovery happens via the
-    ``<version_dir>.<tag>/`` pattern in
+    :meth:`CoverageResult.to_json`, staged + atomically renamed via
+    ``staged_sidecar`` (issue #350) — a mid-write interrupt never leaves a
+    partial ``<version_dir>.citations/`` at the final name. This is a
+    behavior change from the pre-#1086 plain ``mkdir`` + ``write_text``
+    shape (called out explicitly in the #1086 PR body); ``memo-citations.md``
+    already mandated ``staged_sidecar`` for this critic, so the change
+    closes a doc/code drift rather than introducing a new contract.
+    Auto-discovery happens via the ``<version_dir>.<tag>/`` pattern in
     :func:`anvil.lib.critics.discover_critics` — no aggregator change.
 
     Returns the path to the written ``_review.json``.
     """
-    import json
-
-    out_dir = version_dir.parent / f"{version_dir.name}.{CRITIC_ID}"
-    out_dir.mkdir(parents=True, exist_ok=True)
     review = result.to_review(version_dir=version_dir.name)
-    review_path = out_dir / "_review.json"
-    review_path.write_text(
-        review.model_dump_json(indent=2) + "\n", encoding="utf-8"
+    return write_critic_review_dir(
+        version_dir,
+        CRITIC_ID,
+        review,
+        findings_json=result.to_json(),
     )
-    (out_dir / "_findings.json").write_text(
-        json.dumps(result.to_json(), indent=2) + "\n", encoding="utf-8"
-    )
-    return review_path
 
 
 def _cli_main(argv: Optional[list[str]] = None) -> int:

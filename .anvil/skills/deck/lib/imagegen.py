@@ -61,12 +61,20 @@ from __future__ import annotations
 
 import importlib
 import json
-import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Mapping
+
+# Canonical ``.latest`` resolver (issue #948): promoted to ``anvil/lib/``
+# and already consumed the same way — a direct module-level import —
+# by ``anvil/skills/deck/lib/parity_lint.py`` and
+# ``anvil/skills/deck/lib/marp_lint.py`` (both re-export from
+# ``anvil.lib.*`` at import time). See ``_latest_version_dir`` below for
+# how it composes with the pre-#382 flat-layout fallback.
+from anvil.lib.atomic_write import atomic_write_json
+from anvil.lib.latest_resolution import resolve_latest
 
 # Import the prompt-journal primitive from the sibling module. The
 # fallback path mirrors the test-import convention in
@@ -102,6 +110,7 @@ __all__ = (
     "compose_prompt",
     "enumerate_imagery_slots",
     "resolve_default_policy",
+    "resolve_effective_imagery_policy",
     "resolve_slot_prompt",
     "run_imagegen",
 )
@@ -491,6 +500,83 @@ def resolve_default_policy(config_path: Path | str | None) -> str | None:
     return candidate
 
 
+def resolve_effective_imagery_policy(
+    thread_dir: Path | str,
+    portfolio_path: Path | str,
+    config_path: Path | str | None = None,
+) -> tuple[str, str]:
+    """Resolve the effective ``imagery_policy`` for one thread.
+
+    This is the single source of truth for the documented resolution
+    order (issue #547; see ``commands/deck-imagegen-adapter.md`` §
+    "Optional: deck.imagegen.default_policy"):
+
+    1. ``<thread_dir>/BRIEF.md`` frontmatter ``imagery_policy:``
+       (per-thread, explicit) — the **thread-level** BRIEF, NOT the
+       project-level ``BRIEF.md`` one directory up. The two files share
+       the literal name ``BRIEF.md`` but are distinct: the project-root
+       file carries a ``documents:`` list, the thread-root file carries
+       ``imagery_policy:``. Callers MUST pass the thread root
+       (``<portfolio>/<thread>/``), never the project root.
+    2. ``.anvil/config.json`` ``deck.imagegen.default_policy``
+       (consumer-level fallback) — resolved at ``config_path`` when
+       given, else ``<portfolio_path>/.anvil/config.json``.
+    3. Built-in ``deterministic-only`` default.
+
+    Extracted (issue #984) from the inline resolution block that used
+    to live only inside :func:`run_imagegen`, so every command-surface
+    resolver (``deck-design`` step 7b's additive-ness gate,
+    ``deck-audit``'s generative-imagery audit) can call one function
+    instead of re-deriving the order in prose. Prior to this extraction,
+    ``deck-design.md`` step 7b named its resolution source as bare
+    "BRIEF.md" — ambiguous at the project root, where a *project-level*
+    ``BRIEF.md`` also exists and has no ``imagery_policy`` key, causing
+    the additive-ness gate to silently fall through to
+    ``deterministic-only`` even when the thread BRIEF declared
+    ``generative-eligible``.
+
+    Args:
+        thread_dir: The **thread root** directory containing the
+            thread-level ``BRIEF.md`` (i.e. ``<portfolio>/<thread>/``).
+        portfolio_path: The project root — used only to compute the
+            default ``.anvil/config.json`` location when
+            ``config_path`` is not given.
+        config_path: Optional override for ``.anvil/config.json``.
+            Defaults to ``<portfolio_path>/.anvil/config.json``.
+
+    Returns:
+        A ``(policy, policy_source)`` tuple. ``policy`` is one of
+        ``generative-eligible | consumer-provided | deterministic-only``.
+        ``policy_source`` is a human-readable provenance string
+        (``"BRIEF.md"``, ``"<config path> deck.imagegen.default_policy"``,
+        or ``"built-in default"``) — load-bearing for an operator
+        surprised by a resolved value.
+
+    Raises:
+        ImagegenError: When ``.anvil/config.json`` is malformed, or
+            ``deck.imagegen.default_policy`` is outside the closed
+            enum (delegated to :func:`resolve_default_policy`).
+    """
+    thread_dir = Path(thread_dir)
+    portfolio_path = Path(portfolio_path)
+    brief = load_brief_frontmatter(thread_dir / "BRIEF.md")
+    raw_policy = brief.get("imagery_policy")
+    brief_has_policy = raw_policy is not None and raw_policy.strip() != ""
+    if brief_has_policy:
+        return raw_policy.strip().lower(), "BRIEF.md"
+
+    # BRIEF omitted the field. Consult the consumer-level override.
+    cfg_path_for_resolve = (
+        Path(config_path)
+        if config_path is not None
+        else portfolio_path / ".anvil" / "config.json"
+    )
+    override = resolve_default_policy(cfg_path_for_resolve)
+    if override is not None:
+        return override, f"{cfg_path_for_resolve} deck.imagegen.default_policy"
+    return _BUILTIN_DEFAULT_POLICY, "built-in default"
+
+
 # ---------------------------------------------------------------------------
 # Adapter loader
 # ---------------------------------------------------------------------------
@@ -705,14 +791,17 @@ def _extract_field_block(body: str, field_name: str) -> str | None:
     """Extract the body of a ``**<field_name>**:`` block from preset prose.
 
     The block runs from the ``**<field>**:`` marker to the next
-    ``**<other>**:`` marker, the next H3 heading, or end-of-chunk.
+    ``**<other>**:`` marker, the next H3 heading, or end-of-chunk. The
+    terminator marker may be multi-word (e.g. ``**Worked example**:``) —
+    any non-empty bold span immediately followed by a colon terminates the
+    block, not just single-word markers like ``**Suffix**:``.
 
     Blockquote prefixes (``> ``) are stripped. Surrounding whitespace is
     collapsed. The italic ``*(empty…)*`` marker becomes the empty string.
     Returns ``None`` when the field is not present in this chunk.
     """
     pattern = re.compile(
-        rf"\*\*{re.escape(field_name)}\*\*\s*:\s*(.*?)(?=\n\s*\*\*[A-Z][A-Za-z]+\*\*\s*:|\n###|\Z)",
+        rf"\*\*{re.escape(field_name)}\*\*\s*:\s*(.*?)(?=\n\s*\*\*[^*\n]+\*\*\s*:|\n###|\Z)",
         re.DOTALL,
     )
     m = pattern.search(body)
@@ -869,13 +958,20 @@ def resolve_slot_prompt(
 ) -> str:
     """Resolve the slide-specific prompt body for a slot.
 
-    Resolution order (per ``deck-imagegen.md`` § "Procedure" step 4):
+    Resolution order (per ``deck-imagegen.md`` § "Procedure" step 8):
 
     1. Sibling file ``<version_dir>/assets/generated/<slot>.prompt.md``
        — wins if present. Whole file content is the prompt (with
        leading/trailing whitespace stripped).
     2. ``speaker-notes.md`` section ``## Imagery prompt: <slot>`` —
-       the body after the heading until the next H2 or EOF.
+       ONLY the first blank-line-separated paragraph after the
+       heading is the prompt. Anything after the first blank line
+       (a second paragraph, a trailing aside, etc.) is treated as a
+       human-facing note and is NOT included in the resolved prompt —
+       drafters may leave a note there (e.g. an on-slide caption
+       reminder) without it leaking into the dispatched prompt and
+       being rendered as visible text by the image backend. A section
+       with no blank line at all resolves in full (no truncation).
 
     Args:
         slot: The slot name.
@@ -904,9 +1000,16 @@ def resolve_slot_prompt(
         )
         m = pattern.search(speaker_notes_text)
         if m:
-            body = m.group("body").strip()
-            if body:
-                return body
+            section_body = m.group("body").strip()
+            if section_body:
+                # Only the first blank-line-separated paragraph is the
+                # prompt; anything after the first blank line is a
+                # human-facing aside and must not reach the backend.
+                first_paragraph = re.split(r"\n\s*\n", section_body, maxsplit=1)[
+                    0
+                ].strip()
+                if first_paragraph:
+                    return first_paragraph
     raise ImagegenError(
         f"no prompt source for slot {slot!r}: expected either "
         f"``{sidecar.relative_to(version_dir.parent) if sidecar.is_relative_to(version_dir.parent) else sidecar}`` "
@@ -922,6 +1025,35 @@ def resolve_slot_prompt(
 # Match ``<slug>.<N>`` where N is one or more digits and there is no
 # trailing tag (so we skip critic siblings like ``<slug>.1.review``).
 def _latest_version_dir(portfolio: Path, thread: str) -> Path | None:
+    """Resolve the latest ``<thread>.{N}/`` version directory.
+
+    Nested-layout-first (issue #948): the documented artifact contract
+    (``commands/deck-imagegen.md`` § "Inputs") nests version dirs under
+    the thread root — ``<portfolio>/<thread>/<thread>.{N}/`` — so the
+    first attempt delegates to the framework's canonical resolver,
+    :func:`anvil.lib.latest_resolution.resolve_latest`, called against
+    ``<portfolio>/<thread>`` (the thread dir). That resolver also
+    honors a pinned ``<thread>.latest`` symlink (or real directory),
+    taking precedence over walk-to-highest when present.
+
+    Falls back to the pre-#382 **flat** layout —
+    ``<portfolio>/<thread>.{N}/`` directly under ``portfolio``, with no
+    nested ``<thread>/`` wrapper — when the nested lookup finds nothing.
+    This preserves un-migrated consumer repos (``anvil:project-migrate``
+    exists precisely because not every consumer has moved to the nested
+    layout yet); dropping flat support would be a regression, not a fix.
+
+    Returns the resolved directory (which may itself be a ``.latest``
+    symlink — callers only ever read ``version_dir / "deck.md"``
+    afterward, which follows the symlink transparently via the
+    filesystem), or ``None`` if neither layout resolves.
+    """
+    thread_dir = portfolio / thread
+    nested = resolve_latest(thread_dir, thread)
+    if nested is not None:
+        return nested
+
+    # Flat-layout fallback: <slug>.<N>/ directly under ``portfolio``.
     pattern = re.compile(rf"^{re.escape(thread)}\.(\d+)$")
     best: tuple[int, Path] | None = None
     for entry in portfolio.iterdir():
@@ -969,7 +1101,8 @@ def _write_progress_phase(
 
     The recipe is in ``anvil/lib/snippets/progress.md`` § "Read-merge-write
     recipe": preserve all other phases and top-level fields the caller
-    does not own.
+    does not own. Atomic write via the shared
+    :func:`anvil.lib.atomic_write.atomic_write_json` helper.
     """
     progress = _read_progress(path)
     if "version" not in progress:
@@ -979,13 +1112,7 @@ def _write_progress_phase(
     progress.setdefault("metadata", {})
     existing = progress["phases"].get(phase, {})
     progress["phases"][phase] = {**existing, **fields}
-    text = json.dumps(progress, indent=2, sort_keys=False)
-    if not text.endswith("\n"):
-        text += "\n"
-    # Atomic write via a temp file in the same dir then rename.
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    atomic_write_json(path, progress)
 
 
 # ---------------------------------------------------------------------------
@@ -1009,10 +1136,6 @@ def _write_progress_phase(
 # Pillow available.
 
 _PNG_SIGNATURE: bytes = b"\x89PNG\r\n\x1a\n"
-
-
-def _is_png(data: bytes) -> bool:
-    return data[: len(_PNG_SIGNATURE)] == _PNG_SIGNATURE
 
 
 def _sniff_image_format(data: bytes) -> str | None:
@@ -1185,9 +1308,17 @@ def run_imagegen(
 
     Args:
         thread: Thread slug (positional argument from the command).
-        portfolio: The directory that contains both ``<thread>/`` and
-            ``<thread>.{N}/`` (typically the current working directory of
-            the command).
+        portfolio: The project root that contains the thread root
+            ``<thread>/`` (typically the current working directory of
+            the command). The latest version dir is resolved as
+            ``<portfolio>/<thread>/<thread>.{N}/`` per the nested
+            artifact contract (``commands/deck-imagegen.md`` §
+            "Inputs") — including a pinned ``<thread>.latest`` symlink,
+            when present, via
+            :func:`anvil.lib.latest_resolution.resolve_latest`. A
+            pre-#382 flat layout, ``<portfolio>/<thread>.{N}/`` with no
+            nested ``<thread>/`` wrapper, is still resolved as a
+            fallback for un-migrated consumer repos.
         config_path: Optional override for ``.anvil/config.json`` path.
             Defaults to ``<portfolio>/.anvil/config.json``. When
             ``adapter`` is supplied, the config file is NOT read (tests
@@ -1236,41 +1367,21 @@ def run_imagegen(
 
     # --- Precondition 1: imagery_policy opt-in (with default_policy resolution) ---
     #
-    # Resolution order (highest priority first; issue #547):
-    #   1. BRIEF.md frontmatter ``imagery_policy`` (per-thread, explicit).
-    #   2. ``.anvil/config.json`` ``deck.imagegen.default_policy``
-    #      (consumer-level proactive override).
-    #   3. Built-in ``deterministic-only`` (existing behavior, unchanged).
+    # Delegates to resolve_effective_imagery_policy (issue #984), the
+    # single source of truth for the BRIEF ∪ config ∪ built-in
+    # resolution order (issue #547). The ``policy_source`` field is
+    # load-bearing for an operator surprised by a ``skipped`` run: they
+    # need to see whether the BRIEF or the config-level override
+    # supplied the effective value.
     #
-    # The ``policy_source`` field is load-bearing for an operator
-    # surprised by a ``skipped`` run: they need to see whether the BRIEF
-    # or the config-level override supplied the effective value.
-    raw_policy = brief.get("imagery_policy")
-    brief_has_policy = raw_policy is not None and raw_policy.strip() != ""
-    if brief_has_policy:
-        policy = raw_policy.strip().lower()
-        policy_source = "BRIEF.md"
-    else:
-        # BRIEF omitted the field. Consult the consumer-level override.
-        # When ``adapter`` is injected (test path) AND no explicit
-        # ``config_path`` is provided, the config lookup still happens
-        # at the conventional location — this lets the
-        # default_policy-override tests inject an adapter while still
-        # validating the resolver pipeline.
-        cfg_path_for_resolve = (
-            Path(config_path)
-            if config_path is not None
-            else portfolio_path / ".anvil" / "config.json"
-        )
-        override = resolve_default_policy(cfg_path_for_resolve)
-        if override is not None:
-            policy = override
-            policy_source = (
-                f"{cfg_path_for_resolve} deck.imagegen.default_policy"
-            )
-        else:
-            policy = _BUILTIN_DEFAULT_POLICY
-            policy_source = "built-in default"
+    # Note: when ``adapter`` is injected (test path) AND no explicit
+    # ``config_path`` is provided, the config lookup still happens at
+    # the conventional location — this lets the default_policy-override
+    # tests inject an adapter while still validating the resolver
+    # pipeline.
+    policy, policy_source = resolve_effective_imagery_policy(
+        thread_dir, portfolio_path, config_path
+    )
 
     if policy != "generative-eligible":
         # Surface as a clean skip; deck-imagegen.md's failure-modes

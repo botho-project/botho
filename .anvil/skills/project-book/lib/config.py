@@ -26,6 +26,7 @@ Config surface (all fields optional; ``master_doc`` required for compile)::
       chapters_dir: book/chapters   # where to stage per-thread chapter files
       chapter_filename: chapter.tex # per-thread filename to stage
       out_pdf: book/book.pdf        # output PDF path
+      relocate_title: false         # move \title{...} past \begin{document}
 
 ``chapter_filename`` is a **template**: the literal token ``{slug}`` is
 substituted with each thread's own slug when the chapter file is located
@@ -64,13 +65,13 @@ from __future__ import annotations
 from pathlib import PurePosixPath
 from typing import Any, List, Optional
 
-import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-# The BRIEF filename and frontmatter delimiter mirror
-# ``anvil/lib/project_brief.py`` (single on-disk convention).
+from anvil.lib.frontmatter import extract_frontmatter as _extract_frontmatter
+
+# The BRIEF filename mirrors ``anvil/lib/project_brief.py`` (single
+# on-disk convention).
 BRIEF_FILENAME = "BRIEF.md"
-_FRONTMATTER_DELIM = "---"
 
 # The top-level BRIEF frontmatter key this skill owns.
 BUILD_FRONTMATTER_KEY = "build"
@@ -166,6 +167,16 @@ class BookConfig(BaseModel):
         Output PDF path (project-root-relative). When ``None`` it
         defaults to ``<chapters_dir>/../book.pdf`` (see
         :meth:`resolved_out_pdf`).
+    relocate_title
+        Opt-in hook (issue #1205) for consumers whose master document
+        ``\\input``s each staged chapter via LaTeX's ``docmute`` package.
+        ``docmute`` discards a chapter's standalone preamble up to
+        ``\\begin{document}`` — including its ``\\title{...}`` — so when
+        this is ``True``, staging moves each chapter's ``\\title{...}``
+        (if present) from the preamble to immediately after
+        ``\\begin{document}`` instead of byte-copying the file verbatim.
+        Defaults to ``False``, which preserves the original byte-copy
+        behavior exactly.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -175,6 +186,7 @@ class BookConfig(BaseModel):
     chapters_dir: str = Field(default=DEFAULT_CHAPTERS_DIR)
     chapter_filename: str = Field(default=DEFAULT_CHAPTER_FILENAME)
     out_pdf: Optional[str] = Field(default=None)
+    relocate_title: bool = Field(default=False)
 
     @field_validator("order")
     @classmethod
@@ -285,44 +297,11 @@ class BookConfig(BaseModel):
         return str(parent / "book.pdf")
 
 
-def _extract_frontmatter(text: str) -> Optional[dict]:
-    """Extract the YAML frontmatter from ``text`` and return it as a dict.
-
-    Mirrors ``anvil/lib/project_brief.py::_extract_frontmatter`` (and
-    ``project-share``'s copy) so all parsers accept the same on-disk
-    delimiter convention. Kept local rather than importing the shared
-    private helper — per-skill libs do not reach into another module's
-    underscore namespace.
-    """
-    lines = text.splitlines()
-    if lines and lines[0].startswith("﻿"):
-        lines[0] = lines[0][1:]
-
-    first_idx = 0
-    while first_idx < len(lines) and lines[first_idx].strip() == "":
-        first_idx += 1
-    if first_idx >= len(lines):
-        return None
-    if lines[first_idx].strip() != _FRONTMATTER_DELIM:
-        return None
-
-    body_start = first_idx + 1
-    close_idx = None
-    for i in range(body_start, len(lines)):
-        if lines[i].strip() == _FRONTMATTER_DELIM:
-            close_idx = i
-            break
-    if close_idx is None:
-        return None
-
-    yaml_text = "\n".join(lines[body_start:close_idx])
-    try:
-        parsed = yaml.safe_load(yaml_text)
-    except yaml.YAMLError:
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    return parsed
+# ``_extract_frontmatter`` used to be defined here (a local copy mirroring
+# ``anvil/lib/project_brief.py``'s and ``project-share``'s); it is now the
+# shared ``anvil/lib/frontmatter.py::extract_frontmatter`` primitive
+# (issue #1075), imported above and aliased to the historical private
+# name so every call site in this module is unchanged.
 
 
 def load_book_config(project_dir) -> BookConfig:

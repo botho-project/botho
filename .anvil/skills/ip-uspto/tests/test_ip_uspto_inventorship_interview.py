@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pytest
 
+from anvil.lib.testing import read_text
+
 _HERE = Path(__file__).resolve().parent
 _SKILL_ROOT = _HERE.parent
 _LIB_FILE = _SKILL_ROOT / "lib" / "inventorship_interview.py"
@@ -111,9 +113,7 @@ class TestPacketStructure:
     def test_at_least_one_q_block_per_element(self, inv_map, evidence):
         packet = _packet_for("Alice Author", inv_map, evidence)
         # 3 elements in the fixture map -> exactly 3 Q1 markers.
-        assert packet.count("**Q1 (conception moment).**") == len(
-            inv_map["elements"]
-        )
+        assert packet.count("**Q1 (conception moment).**") == len(inv_map["elements"])
         # Each block is the full Q1-Q7 set.
         for q in ("**Q2", "**Q3", "**Q4", "**Q5", "**Q6", "**Q7"):
             assert packet.count(q) == len(inv_map["elements"])
@@ -427,9 +427,7 @@ class TestEdgeCases:
         )
         assert packets == []
 
-    def test_candidate_with_no_conception_evidence_full_q_blocks(
-        self, inv_map
-    ):
+    def test_candidate_with_no_conception_evidence_full_q_blocks(self, inv_map):
         # A named inventor with no anchors still gets every element's full
         # Q1-Q7 block (empty anchors, not a skipped element).
         packets = dict(
@@ -443,9 +441,7 @@ class TestEdgeCases:
             )
         )
         packet = packets[ii.slug("Dave Designer")]
-        assert packet.count("**Q1 (conception moment).**") == len(
-            inv_map["elements"]
-        )
+        assert packet.count("**Q1 (conception moment).**") == len(inv_map["elements"])
         assert "No git-history anchors attributed to you" in packet
 
     def test_conception_committer_not_named_becomes_candidate(self, inv_map):
@@ -487,9 +483,7 @@ class TestEdgeCases:
 # 9. command-file + lib structure
 # ---------------------------------------------------------------------------
 
-
-def _read(rel: str) -> str:
-    return (_SKILL_ROOT / rel).read_text(encoding="utf-8")
+_read = lambda rel: read_text(_SKILL_ROOT / rel)
 
 
 class TestCommandFileStructure:

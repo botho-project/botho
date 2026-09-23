@@ -27,11 +27,17 @@ avoid the cross-skill pytest collection collision.
 from __future__ import annotations
 
 import re
+import sys
 import unittest
 from pathlib import Path
 
 _SKILL_ROOT = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _SKILL_ROOT.parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from anvil.lib.testing import parse_frontmatter as _parse_frontmatter  # noqa: E402
+from anvil.lib.testing import read_text
 
 RUBRIC_ID = "anvil-memoir-v1"
 
@@ -47,9 +53,7 @@ FABRICATION_FLAGS = (
     "unattributed_paraphrase",
 )
 
-
-def _read(rel: str) -> str:
-    return (_SKILL_ROOT / rel).read_text(encoding="utf-8")
+_read = lambda rel: read_text(_SKILL_ROOT / rel)
 
 
 def _flat(rel: str) -> str:
@@ -60,39 +64,6 @@ def _flat(rel: str) -> str:
     flattened text lets a phrase assertion span a line break.
     """
     return re.sub(r"\s+", " ", _read(rel))
-
-
-def _parse_frontmatter(text: str) -> dict:
-    """Parse a leading ``---``-delimited YAML frontmatter block.
-
-    Uses PyYAML when available; falls back to a minimal ``key: value``
-    parser so the test does not hard-depend on PyYAML being installed.
-    """
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return {}
-    end = None
-    for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
-            end = i
-            break
-    if end is None:
-        return {}
-    block = "\n".join(lines[1:end])
-    try:
-        import yaml  # type: ignore
-
-        data = yaml.safe_load(block)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        result: dict = {}
-        for line in block.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or ":" not in line:
-                continue
-            key, _, value = line.partition(":")
-            result[key.strip()] = value.strip().strip('"').strip("'")
-        return result
 
 
 class TestFilesExist(unittest.TestCase):
@@ -132,7 +103,7 @@ class TestFilesExist(unittest.TestCase):
                 )
 
     def test_minimal_worked_example_vendored(self):
-        # A minimal SYNTHETIC worked example (NOT the full nitas-mama
+        # A minimal SYNTHETIC worked example (NOT the full example-memoir
         # dogfood — that is deferred, SKILL.md §Scope guard).
         examples = _SKILL_ROOT / "examples"
         self.assertTrue(examples.is_dir(), "a minimal worked example must be vendored")
@@ -243,9 +214,7 @@ class TestCommandFrontmatter(unittest.TestCase):
             with self.subTest(path=rel):
                 fm = _parse_frontmatter(_read(rel))
                 self.assertEqual(fm.get("name"), expected_name)
-                self.assertTrue(
-                    fm.get("description"), f"{rel} missing a description"
-                )
+                self.assertTrue(fm.get("description"), f"{rel} missing a description")
 
 
 class TestCriticCommandStamping(unittest.TestCase):
@@ -295,9 +264,9 @@ class TestDualCorpusWiring(unittest.TestCase):
                 self.assertIn(classification, text)
 
     def test_revise_never_fabricates_mapping(self):
-        text = _read("commands/memoir-revise.md")
-        self.assertIn("provenance.md", text)
-        self.assertIn("Never invent a new source-line mapping", text)
+        flat = _flat("commands/memoir-revise.md")
+        self.assertIn("provenance.md", flat)
+        self.assertIn("Never invent a new source-line mapping", flat)
 
     def test_byte_identical_when_absent_documented(self):
         for rel in (
@@ -343,9 +312,9 @@ class TestAnchorDriftWiring(unittest.TestCase):
         self.assertIn("anchor drift", text.lower())
 
     def test_shared_snippet_documents_anchor_contract(self):
-        text = (
-            _REPO_ROOT / "anvil" / "lib" / "snippets" / "provenance.md"
-        ).read_text(encoding="utf-8")
+        text = (_REPO_ROOT / "anvil" / "lib" / "snippets" / "provenance.md").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("Anchor", text)
         self.assertIn("NO_ANCHOR", text)
         self.assertIn("DRIFTED", text)
@@ -444,19 +413,43 @@ class TestIterationCapContract(unittest.TestCase):
 
     def test_revise_states_the_cap_predicate(self):
         text = _read("commands/memoir-revise.md")
-        self.assertIn("N + 1 > effective_max_iterations", text)
-        # The off-by-one the issue complains about: under the predicate
-        # the terminal dir is <thread>.{max_iterations}/, not .5/.
-        self.assertIn("<thread>.{max_iterations}/", text)
-        self.assertNotIn("worst-case terminal version `<thread>.5/`", text)
+        # issue #933: the cap is checked against revisions consumed, not
+        # the raw version-dir number, so the free initial draft
+        # (`<thread>.1/`) no longer counts against the budget.
+        self.assertIn("N > effective_max_iterations", text)
+        # The worst-case terminal dir is one past the cap (`<thread>.5/`
+        # at the default), not `<thread>.{max_iterations}/` — a revision
+        # is always permitted a validating critic pass.
+        self.assertIn("<thread>.{max_iterations + 1}/", text)
+        self.assertIn("counts REVISIONS, not version dirs", text)
 
     def test_revise_documents_behavior_at_the_ceiling(self):
         flat = _flat("commands/memoir-revise.md")
         self.assertIn("iteration == max_iterations", flat)
-        # Refuse / warn / proceed must be answered unambiguously.
-        self.assertIn("refuses; it never warns-and-proceeds", flat)
+        # Refuse / warn / proceed must be answered unambiguously: warn
+        # once (pre-write budget notice, #933), then refuse once the
+        # budget is truly exhausted — never warn-and-proceed past it.
+        self.assertIn("it never warns-and-proceeds *past* the cap", flat)
         # A clean terminus at the ceiling is NOT blocked.
         self.assertIn("was never the *terminating condition*", flat)
+
+    def test_revise_states_the_prewrite_budget_notice(self):
+        """issue #933: the budget consequence is stated BEFORE the write
+        that exhausts it, not only after (the BLOCKED notice / step-10
+        report)."""
+        flat = _flat("commands/memoir-revise.md")
+        self.assertIn("Pre-write budget notice", flat)
+        self.assertIn("Budget notice:", flat)
+        self.assertIn("consumes the FINAL revision", flat)
+        self.assertIn("This is advisory, not a refusal", flat)
+
+    def test_blocked_notice_names_final_version_unvalidatable(self):
+        """issue #933: the BLOCKED report must distinguish "converged,
+        slot unspent" from "final version written and unvalidatable" —
+        they are very different states for a human to inherit."""
+        flat = _flat("commands/memoir-revise.md")
+        self.assertIn("final version written and unvalidatable", flat)
+        self.assertIn("Converged", flat)
 
     def test_revise_documents_the_blocked_notice_contract(self):
         flat = _flat("commands/memoir-revise.md")
@@ -551,9 +544,19 @@ class TestIterationCapContract(unittest.TestCase):
 
     def test_orchestrator_distinguishes_clean_terminus_from_blocked(self):
         flat = _flat("commands/memoir.md")
-        self.assertIn("N + 1 > max_iterations", flat)
+        # issue #933: the predicate is checked against revisions
+        # consumed (`N`), not the raw version-dir count (`N + 1`).
+        self.assertIn("N > effective_max_iterations", flat)
         self.assertIn("is `AUDITED` is terminal and healthy", flat)
         self.assertIn("revision_class", flat)
+
+    def test_orchestrator_iter_column_reports_revisions_not_versions(self):
+        """issue #933: the `Iter` column reports revisions consumed
+        (`metadata.iteration - 1`), not the raw version-dir number — a
+        thread at `<slug>.4/` under the default cap shows `Iter 3/4`."""
+        text = _read("commands/memoir.md")
+        self.assertIn("revisions consumed", text)
+        self.assertIn("metadata.iteration - 1", text)
 
 
 class TestRubric(unittest.TestCase):
@@ -569,9 +572,7 @@ class TestRubric(unittest.TestCase):
             self.text,
             flags=re.MULTILINE,
         )
-        self.assertEqual(
-            len(rows), 9, f"expected 9 dimension rows, found {len(rows)}"
-        )
+        self.assertEqual(len(rows), 9, f"expected 9 dimension rows, found {len(rows)}")
         indices = sorted(int(i) for i, _ in rows)
         self.assertEqual(indices, [1, 2, 3, 4, 5, 6, 7, 8, 9])
         total = sum(int(w) for _, w in rows)
@@ -737,9 +738,7 @@ class TestCorpusResolver(unittest.TestCase):
         pb = self._import_registry()
         with tempfile.TemporaryDirectory() as d:
             project_dir = Path(d)
-            self._write_brief(
-                project_dir, corpus_block="corpus:\n  - no-such-dir/\n"
-            )
+            self._write_brief(project_dir, corpus_block="corpus:\n  - no-such-dir/\n")
             resolved = pb.resolve_corpus_dirs(project_dir, consumer_root=project_dir)
             self.assertEqual(len(resolved), 1)
             self.assertTrue(resolved[0].missing)

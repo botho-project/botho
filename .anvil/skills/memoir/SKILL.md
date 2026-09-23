@@ -12,8 +12,7 @@ The `memoir` skill produces **long-form narrative nonfiction told in book
 chapters, reconstructing scenes and dialogue from a private evidentiary
 corpus rather than published sources**: family memoirs, oral histories,
 biography-from-archive, journalistic long-form profiles built on recorded
-interviews. The canary is `nitas-mama` — a family memoir of Mattie Lee Greer
-Fraker narrated by her grandson from ~4,600 lines of interview transcripts
+interviews. The canary is `example-memoir` — a family memoir narrated by a grandchild from ~4,600 lines of interview transcripts
 and nine collected family letters, structured as an introduction + six
 chapters + appendix, each independently drafted/reviewed/revised/audited and
 assembled into one `book.pdf`. Consistent with "skill identity = artifact identity"
@@ -179,23 +178,40 @@ see §"Iteration cap and override contract" below for the full semantics.
 
 ## Iteration cap and override contract
 
-The cap bounds **how many version dirs a chapter thread may accumulate**,
-and `metadata.iteration` always equals the version-dir number. The
-governing predicate lives in `commands/memoir-revise.md` step 3:
-`memoir-revise` refuses to write `<thread>.{N+1}/` when
-`N + 1 > effective_max_iterations`. At the default cap of 4 the
-worst-case terminal version dir is `<thread>.4/` — there is no
-`<thread>.5/` under a default cap.
+**`max_iterations` counts REVISIONS, not version dirs (issue #933).**
+`metadata.iteration` always equals the version-dir number (the
+framework-wide convention), but the cap is checked against
+`iteration - 1` — the initial draft (`<thread>.1/`, `memoir-draft`'s
+output) is never charged against the budget, only `memoir-revise`'s own
+writes are. The governing predicate lives in `commands/memoir-revise.md`
+step 3: `memoir-revise` refuses to write `<thread>.{N+1}/` when
+`N > effective_max_iterations`. At the default cap of 4 a chapter
+therefore gets one free draft plus 4 revision opportunities, and the
+worst-case terminal version dir is `<thread>.5/` — there is no
+`<thread>.6/` under a default cap.
 
-**At `iteration == max_iterations` (issue #869)** the thread is not
-"capped," "blocked," or "at risk." The combined-verdict pre-check runs
-*before* the cap check, so a chapter that satisfies §Combined verdict at
-exactly the cap reports `AUDITED` and terminates normally — the cap was
-reached but was never the terminating condition. The refusal fires only
-on the **next** invocation, and only if a critic still blocks. Reports
-(`memoir-revise`'s status line, `memoir`'s `Iter` column and `Operator
-notes`) MUST distinguish these two cases; describing a clean `4/4`
-terminus as capped is a reporting bug.
+This is a deliberate correction to the original #869 predicate
+(`N + 1 > effective_max_iterations`, which counted the draft as a
+chargeable iteration): a fabrication fix or any other framework-mandated
+repair discovered on the LAST revision a chapter could otherwise afford
+had nowhere to be validated — the write that fixed the defect was itself
+the write that exhausted the budget. See
+`commands/memoir-revise.md` §"Iteration-cap check" for the full
+predicate and §"Convergence" for the two ceiling outcomes.
+
+**At the ceiling (issues #869, #933)** the thread is not "capped,"
+"blocked," or "at risk" merely because it has consumed every revision
+slot. The combined-verdict pre-check runs *before* the cap check, so a
+chapter that satisfies §Combined verdict at (or before) the ceiling
+reports `AUDITED` and terminates normally — the cap was reached but was
+never the terminating condition. The refusal fires only on the **next**
+invocation, and only if a critic still blocks. Reports (`memoir-revise`'s
+status line, `memoir`'s `Iter` column and `Operator notes`) MUST
+distinguish two very different states: **converged** (`AUDITED`, whether
+or not the last slot was spent) versus **final version written and
+unvalidatable** (`BLOCKED`, the last slot was spent and the version it
+produced is not clean) — describing a clean terminus as capped, or a
+capped-and-blocked thread as merely "at the ceiling," is a reporting bug.
 
 **Raising the ceiling is an explicit, recorded operator decision.** It is
 never a silent edit and never something a command does on its own
@@ -357,8 +373,11 @@ weight 7, the same "owned dominant dimension" shape as primer's pedagogy
 and spec's normative correctness), and the critical-flag set: #597's five
 fabrication-class flags (`fabricated_quote`, `fabricated_fact`,
 `misattribution_of_substance`, `anachronism`, `unattributed_paraphrase` —
-reused **verbatim**, not reinvented) plus #598's `misattribution`
-voice-identity flag (conditional on >=2 subjects declared).
+reused **verbatim**, not reinvented) plus #1032's sixth fabrication-class
+flag (`scope_overreach` — a claim's quantifier/superlative/negated-
+existential scope exceeding its cited `provenance.md` row's scope) plus
+#598's `misattribution` voice-identity flag (conditional on >=2 subjects
+declared).
 
 Every critic-writing command stamps `_meta.json` with
 `scorecard_kind: "human-verdict"`, `rubric_id: "anvil-memoir-v1"`,
@@ -397,7 +416,7 @@ minimal synthetic worked example under `examples/`.
 - **A dedicated structured facts register** (names/dates/relationships) as
   a companion input, mirroring primer's `spec_ref`/spec's `code_ref`
   pattern — worth its own follow-up issue.
-- **A full `nitas-mama` dogfood / vendored worked example** (the `spec`
+- **A full `example-memoir` dogfood / vendored worked example** (the `spec`
   Phase 4 / #709 precedent) — worth its own follow-up issue once the
   skeleton lands, the same sequencing `primer` and `spec` both used.
 - **Any voice-grounding wiring beyond what #598 already generalizes**

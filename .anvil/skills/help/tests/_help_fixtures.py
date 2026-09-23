@@ -102,6 +102,19 @@ def write_shim(repo_root: Path, name: str) -> None:
     )
 
 
+def write_codex_shim(repo_root: Path, name: str) -> None:
+    """Create a ``.agents/skills/anvil-<name>/SKILL.md`` shim (issue #1004).
+
+    Mirrors ``write_shim`` above, but at Codex CLI's repo-root registration
+    path (``write_codex_shim()`` in ``install-anvil.sh`` since #1003).
+    """
+    shim_dir = repo_root / ".agents" / "skills" / f"anvil-{name}"
+    shim_dir.mkdir(parents=True, exist_ok=True)
+    (shim_dir / "SKILL.md").write_text(
+        f"---\nname: anvil-{name}\n---\nshim\n", encoding="utf-8"
+    )
+
+
 def build_repo(
     repo_root: Path,
     *,

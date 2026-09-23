@@ -43,10 +43,31 @@ Anvil-specific design choices vs. upstream
   theme: 16:9, 1280×720, padding 56/72, base font 26px, line-height 1.45.
   These constants live at module scope so a consumer with a custom theme can
   override them via the public API (``lint_deck(path, geometry=...)``).
+- **Consumer-theme capacity contract (issue #1150).** The constants above
+  are calibrated against the *shipped* ``anvil-deck`` theme only — a
+  registered consumer theme (``--theme-set`` / frontmatter ``theme:``) with
+  different padding, base font size, or ``_class: ask`` treatment silently
+  diverges from this model, producing false-positive (or mis-calibrated)
+  ``slide-content-overflow`` findings. Rather than parse the theme's CSS
+  wholesale, a consumer theme states its own geometry via a structured
+  ``/* @anvil-capacity ... */`` comment block in the theme's own CSS file;
+  :func:`geometry_from_theme_css` / :func:`geometry_from_theme_contract`
+  parse that block into a :class:`Geometry` override, and the caller passes
+  it to ``lint_deck(path, geometry=...)``. A theme with no such block (or
+  the shipped theme itself) is unaffected — the default :class:`Geometry`
+  is used exactly as before. See ``anvil/lib/snippets/brand-theme-porting.md``
+  §"Declaring capacity geometry" for the consumer-facing contract
+  documentation.
 - **Escape hatch.** A per-slide HTML comment of the form
   ``<!-- anvil-lint-disable: slide-content-overflow -->`` suppresses the
   rule for that one slide; the finding is downgraded to ``info`` so the
   reviser still sees that the slide is dense but ``advance`` is not blocked.
+  The deck skill documents when applying it is sanctioned (issue #965):
+  a singleton-``_class:`` slide — typically the one ``title`` slide, which
+  the post-render ``auto_shrink_detector`` peer-relative rule structurally
+  cannot cross-check — may be suppressed only after ``deck-vision``'s v1
+  ``vertical_overflow`` reads the rendered PNG clean, with that citation
+  recorded. See ``anvil/skills/deck/commands/deck-revise.md`` step 7c.
 - **Aspect- and CSS-aware capacity model (issue #622).** Two refinements
   brought the source-side estimate into agreement with the rendered PDF on
   keyword-less decks (the default drafter output), where the flat charges
@@ -115,7 +136,7 @@ from __future__ import annotations
 
 import re
 import struct
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 
 
@@ -254,6 +275,146 @@ class Geometry:
 
 
 _DEFAULT_GEOMETRY = Geometry()
+
+
+# Consumer-theme capacity-override contract (issue #1150) ----------------------
+#
+# A registered consumer theme (see ``anvil/lib/snippets/brand-theme-porting.md``)
+# can declare its own capacity geometry via a structured comment block
+# anywhere in its CSS file:
+#
+#     /* @anvil-capacity
+#        top_padding_px: 72
+#        bottom_padding_px: 72
+#        body_line_height_px: 44
+#        capacity_units: 12.0
+#        ask_class_capacity_penalty_units: 1.8
+#     */
+#
+# Any :class:`Geometry` field name is a valid key — the block is a sparse
+# override, not a full re-specification: fields the block omits keep their
+# shipped ``anvil-deck`` default. This lets a consumer state only the few
+# properties their brand port actually changed (padding, base font/line
+# height, the `_class: ask` capacity delta) without reproducing every
+# per-element cost constant.
+#
+# The contract is deliberately declarative-and-forgiving, matching the
+# framework's "graceful degrade for opt-in overrides" pattern
+# (``anvil/lib/theme.py``'s ``load_theme`` docstring names the same
+# convention): an unknown key, an unparseable value, or a missing block
+# entirely all fall back to the shipped default rather than raising —
+# a malformed contract must never crash the lint, only under-calibrate it
+# back to the shipped-theme baseline.
+
+_CAPACITY_CONTRACT_RE = re.compile(
+    r"/\*\s*@anvil-capacity\b(?P<body>.*?)\*/",
+    re.DOTALL,
+)
+
+#: Maps each ``Geometry`` field name to its declared type (``int`` or
+#: ``float``), derived once from the dataclass so the contract parser never
+#: hardcodes the field list separately from ``Geometry`` itself.
+_GEOMETRY_FIELD_TYPES: dict[str, type] = {
+    f.name: (int if f.type == "int" else float) for f in fields(Geometry)
+}
+
+
+@dataclass(frozen=True)
+class ThemeCapacityContract:
+    """Result of resolving a consumer theme's ``@anvil-capacity`` contract.
+
+    ``geometry`` is always usable directly as ``lint_deck(path,
+    geometry=result.geometry)`` — it equals ``Geometry()`` (the shipped
+    default) whenever no contract block was found, the block was empty, or
+    every key in it was unrecognized/unparseable.
+    """
+
+    geometry: Geometry
+    found: bool
+    overrides: dict = field(default_factory=dict)
+    warnings: tuple[str, ...] = ()
+
+
+def geometry_from_theme_css(css_source: str) -> ThemeCapacityContract:
+    """Parse a consumer theme's ``/* @anvil-capacity ... */`` block.
+
+    Scans ``css_source`` (the full text of a theme CSS file) for the first
+    ``@anvil-capacity`` comment block and parses ``key: value`` lines from
+    its body (block-comment ``*`` continuation prefixes and trailing ``;``
+    are tolerated). Each key must name a :class:`Geometry` field; unknown
+    keys and unparseable values are recorded in ``warnings`` and skipped —
+    they never raise and never invalidate the other keys in the same block.
+
+    Returns a :class:`ThemeCapacityContract` whose ``geometry`` is the
+    shipped default :class:`Geometry` with the parsed overrides applied
+    (``found=False`` and ``geometry == Geometry()`` when no block exists).
+    """
+    match = _CAPACITY_CONTRACT_RE.search(css_source)
+    if not match:
+        return ThemeCapacityContract(geometry=_DEFAULT_GEOMETRY, found=False)
+
+    overrides: dict[str, int | float] = {}
+    warnings: list[str] = []
+    for raw_line in match.group("body").splitlines():
+        line = raw_line.strip()
+        if line.startswith("*"):
+            line = line[1:].strip()
+        line = line.rstrip(";").strip()
+        if not line:
+            continue
+        if ":" not in line:
+            warnings.append(f"ignored malformed line (no ':'): {line!r}")
+            continue
+        key, _, raw_value = line.partition(":")
+        key = key.strip()
+        raw_value = raw_value.strip().rstrip(";").strip()
+        field_type = _GEOMETRY_FIELD_TYPES.get(key)
+        if field_type is None:
+            warnings.append(f"ignored unknown geometry field {key!r}")
+            continue
+        try:
+            overrides[key] = field_type(raw_value)
+        except (TypeError, ValueError):
+            warnings.append(
+                f"ignored {key!r}: could not parse {raw_value!r} as "
+                f"{field_type.__name__}"
+            )
+            continue
+
+    if not overrides:
+        return ThemeCapacityContract(
+            geometry=_DEFAULT_GEOMETRY, found=True, warnings=tuple(warnings)
+        )
+
+    geometry = replace(_DEFAULT_GEOMETRY, **overrides)
+    return ThemeCapacityContract(
+        geometry=geometry,
+        found=True,
+        overrides=overrides,
+        warnings=tuple(warnings),
+    )
+
+
+def geometry_from_theme_contract(
+    css_path: Path | str | None,
+) -> ThemeCapacityContract:
+    """Resolve capacity geometry from a consumer theme CSS file on disk.
+
+    Absence-tolerant, per the framework's graceful-degrade convention: a
+    ``None`` path, a missing file, or an unreadable file all return the
+    shipped default (``found=False``) rather than raising. Pass the result's
+    ``geometry`` straight to ``lint_deck(path, geometry=...)``.
+    """
+    if css_path is None:
+        return ThemeCapacityContract(geometry=_DEFAULT_GEOMETRY, found=False)
+    path = css_path if isinstance(css_path, Path) else Path(css_path)
+    if not path.is_file():
+        return ThemeCapacityContract(geometry=_DEFAULT_GEOMETRY, found=False)
+    try:
+        css_source = path.read_text(encoding="utf-8")
+    except OSError:
+        return ThemeCapacityContract(geometry=_DEFAULT_GEOMETRY, found=False)
+    return geometry_from_theme_css(css_source)
 
 
 # Result types -----------------------------------------------------------------
@@ -1390,7 +1551,10 @@ __all__ = [
     "Geometry",
     "LintResult",
     "PORTED_RULES",
+    "ThemeCapacityContract",
     "UPSTREAM_SHA",
+    "geometry_from_theme_contract",
+    "geometry_from_theme_css",
     "lint_deck",
     "lint_source",
 ]

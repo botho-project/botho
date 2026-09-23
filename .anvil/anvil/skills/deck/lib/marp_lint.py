@@ -4,7 +4,10 @@ from anvil.lib.marp_lint import (
     Geometry,
     LintResult,
     PORTED_RULES,
+    ThemeCapacityContract,
     UPSTREAM_SHA,
+    geometry_from_theme_contract,
+    geometry_from_theme_css,
     lint_deck,
     lint_source,
 )
@@ -14,7 +17,10 @@ __all__ = [
     "Geometry",
     "LintResult",
     "PORTED_RULES",
+    "ThemeCapacityContract",
     "UPSTREAM_SHA",
+    "geometry_from_theme_contract",
+    "geometry_from_theme_css",
     "lint_deck",
     "lint_source",
 ]

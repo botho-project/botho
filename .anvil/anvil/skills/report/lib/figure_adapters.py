@@ -69,13 +69,14 @@ datasheet adopter). Stdlib only: ``json``, ``glob`` (via ``pathlib``),
 from __future__ import annotations
 
 import json
-import os
 import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from anvil.lib.atomic_write import atomic_replace
 
 __all__ = (
     "OUTPUT_KINDS",
@@ -668,7 +669,7 @@ def run_figure_adapters(
                 )
                 continue
 
-            os.replace(tmp_path, output_path)
+            atomic_replace(tmp_path, output_path)
             # Success clears any prior FAILED stub for this output.
             old_stub = output_path.parent / (output_path.name + ".FAILED.md")
             if old_stub.exists():

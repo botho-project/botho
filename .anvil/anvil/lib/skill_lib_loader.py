@@ -54,11 +54,56 @@ from types import ModuleType, SimpleNamespace
 from typing import Iterable
 
 __all__ = [
+    "bootstrap_sys_path",
     "default_package_name",
     "import_skill_lib_module",
     "load_skill_lib",
     "load_skill_lib_package",
 ]
+
+
+def bootstrap_sys_path(anchor: Path | str) -> None:
+    """Make ``import anvil`` resolvable from a bare-script's own file path.
+
+    Walks up from `anchor` (typically a script's own ``Path(__file__)``)
+    and inserts the first ancestor directory that contains
+    ``anvil/__init__.py`` at the front of ``sys.path`` (a no-op if that
+    ancestor is already present). Resolves every supported layout without
+    needing to know up front which one applies:
+
+    - source repo: ``<repo>/anvil/skills/<skill>/lib/<file>.py``
+      -> inserts ``<repo>``;
+    - consumer canonical copy:
+      ``<consumer>/.anvil/skills/<skill>/lib/<file>.py``
+      -> inserts ``<consumer>/.anvil`` (contains ``anvil/__init__.py``
+      post-#230);
+    - consumer importable mirror:
+      ``<consumer>/.anvil/anvil/skills/<skill>/lib/<file>.py``
+      -> inserts ``<consumer>/.anvil``.
+
+    **Not directly callable from the scripts it exists to document**
+    (issue #1100). Every bare-script CLI that needs this
+    (``anvil/skills/diff/lib/cli.py``, ``anvil/skills/memo/lib/render_phase.py``,
+    ``anvil/skills/memo/lib/latest_phase.py``,
+    ``anvil/skills/project-share/lib/cli.py``) runs this exact algorithm
+    *before* ``anvil`` is importable at all — a bootstrap whose whole job
+    is making ``import anvil`` work cannot itself begin with ``from
+    anvil.lib.skill_lib_loader import bootstrap_sys_path`` (nothing would
+    be on ``sys.path`` yet to resolve that import). Each of those scripts
+    therefore keeps its own local, byte-identical copy of this algorithm
+    (as ``_bootstrap_sys_path()``) rather than importing it; this function
+    is the single canonical, unit-tested reference implementation those
+    copies are required to match — drift is caught by
+    ``tests/lib/test_bootstrap_sys_path_consistency.py``, not by hand
+    cross-referencing docstrings.
+    """
+
+    here = Path(anchor).resolve()
+    for ancestor in here.parents:
+        if (ancestor / "anvil" / "__init__.py").is_file():
+            if str(ancestor) not in sys.path:
+                sys.path.insert(0, str(ancestor))
+            return
 
 
 def default_package_name(skill_name: str) -> str:

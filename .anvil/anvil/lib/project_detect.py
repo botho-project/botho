@@ -64,7 +64,6 @@ Public API
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from enum import Enum
@@ -842,14 +841,7 @@ def _classify(inv: ProjectInventory) -> Shape:
         # `speaker-notes.md` is artifact content, not a body) must
         # classify as fully migrated once nested. Only the filenames in
         # `_SKILL_FIXED_BODY_FILENAMES` are pre-#295 evidence.
-        fully = True
-        for t in nested_threads:
-            for body in t.body_filenames:
-                if body in _SKILL_FIXED_BODY_FILENAMES:
-                    fully = False
-                    break
-            if not fully:
-                break
+        fully = not has_skill_fixed_body
         if fully:
             return Shape.FULLY_MIGRATED
         # Else fall through.

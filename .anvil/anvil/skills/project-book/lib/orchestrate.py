@@ -244,7 +244,9 @@ def run(
 
     # --- Apply -------------------------------------------------------------
     chapters_dir = project_dir / config.chapters_dir
-    stage_result = stage_chapters(chapters_dir, result.threads)
+    stage_result = stage_chapters(
+        chapters_dir, result.threads, relocate_title=config.relocate_title
+    )
     result.stage_result = stage_result
 
     compile_result: Optional[CompileResult] = None

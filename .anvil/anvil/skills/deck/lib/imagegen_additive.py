@@ -46,7 +46,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
 
 # Import the prompt-journal primitive from the sibling module. The
 # fallback path mirrors the test-import convention in
@@ -118,10 +117,14 @@ def gate_should_run(
     The gate runs only when both:
 
     1. The thread's *effective* ``imagery_policy`` (after the
-       :func:`anvil.skills.deck.lib.imagegen.resolve_default_policy`
-       resolution) is ``"generative-eligible"``. Deterministic-only
-       and consumer-provided threads see byte-identical output (the
-       gate is a no-op).
+       :func:`anvil.skills.deck.lib.imagegen.resolve_effective_imagery_policy`
+       resolution — the single source of truth for the BRIEF ∪ config
+       ∪ built-in resolution order, issue #984) is
+       ``"generative-eligible"``. Deterministic-only and
+       consumer-provided threads see byte-identical output (the gate
+       is a no-op). This function does NOT re-resolve the policy
+       itself — callers MUST resolve it first and pass the result in
+       via ``effective_policy``.
     2. The prompt journal at ``<version_dir>/assets/_prompts.json``
        exists AND parses cleanly AND has at least one entry. A missing
        or empty journal is tolerated — a thread whose drafter has not

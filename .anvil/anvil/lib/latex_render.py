@@ -222,7 +222,13 @@ def render_brief_to_pdf(
             str(tex_file),
         ]
 
-        # First pass
+        # First pass. In a two-pass LaTeX compile the first invocation
+        # routinely reports errors/warnings (missing .aux data, unresolved
+        # cross-references) that the second pass silently resolves, so its
+        # exit code is not a reliable success/failure signal on its own —
+        # only proc2's result (after both passes have run) is checked below.
+        # We still capture output/exit code here (rather than discarding
+        # it) so it is available if a future diagnostic path wants it.
         proc1 = subprocess.run(
             xelatex_cmd,
             capture_output=True,
@@ -247,6 +253,7 @@ def render_brief_to_pdf(
             log_content = ""
             if log_file.exists():
                 log_content = log_file.read_text(encoding="utf-8", errors="replace")
+            log_tail = log_content.strip()[-500:] if log_content.strip() else ""
             return GateResult(
                 pdf_path=str(out_pdf),
                 log_path=None,
@@ -259,9 +266,14 @@ def render_brief_to_pdf(
                 placeholders=[],
                 passed=False,
                 reasons=[
-                    f"xelatex compile failed (exit {exit_code}). "
+                    f"xelatex compile failed (exit {exit_code}, first pass exit "
+                    f"{proc1.returncode}). "
                     f"Stderr: {proc2.stderr.strip()[:500] if proc2.stderr else '(none)'}. "
-                    f"See log for details."
+                    + (
+                        f"Log tail: {log_tail}"
+                        if log_tail
+                        else "See log for details."
+                    )
                 ],
             )
 

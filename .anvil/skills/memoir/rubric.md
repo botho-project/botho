@@ -24,7 +24,7 @@ clarity / rhetorical economy) per the primer/spec/essay precedent.
 
 | # | Dimension | Weight | What it measures |
 |---|---|---|---|
-| 1 | **Sourcing fidelity** | 7 | (dominant) Every reconstructed quote and every checkable factual claim traces to the declared `corpus:` via `provenance.md`. Deductions quote the claim AND the `provenance.md` row (or its absence). Critical-flag twin: #597's five fabrication-class flags (see §Critical flags). When the corpus tier is inactive, scored on the chapter alone AND a `major` finding recommends declaring `corpus:` — the class's defining constraint is otherwise unenforceable. |
+| 1 | **Sourcing fidelity** | 7 | (dominant) Every reconstructed quote and every checkable factual claim traces to the declared `corpus:` via `provenance.md`. Deductions quote the claim AND the `provenance.md` row (or its absence). Critical-flag twin: #597/#1032's six fabrication-class flags (see §Critical flags). When the corpus tier is inactive, scored on the chapter alone AND a `major` finding recommends declaring `corpus:` — the class's defining constraint is otherwise unenforceable. |
 | 2 | **Narrator voice fidelity** | 5 | The narrating author's own persona prose (#461/essay precedent) scored against the resolved author-tier `voice:` docs where declared. Every deduction quotes a corpus exemplar showing what the target voice sounds like (the convergence-with-Claude adversarial check applies). Scored uncalibrated, with a `major` finding, when the author tier is undeclared. |
 | 3 | **Subject voice fidelity** | 5 | Reconstructed dialogue scored against each declared subject's spoken transcript corpus (#598) — does the line sound like how THIS speaker would say it (cadence, register, characteristic openers), not merely a polished version of the substance. Every deduction quotes the transcript alongside the drifting reconstructed line. Critical-flag twin: #598's `misattribution` flag, conditional on >=2 subjects declared. Inactive (no `voice.subjects`) → not scored against any corpus; the chapter's prose-craft alone informs this dim. |
 | 4 | **Narrative arc & scene craft** | 5 | Chapter-level and book-level throughline; scenes resolve rather than merely recount; the chapter earns its place in the assembled book's arc (ties to `project-book`'s `order`). |
@@ -76,7 +76,7 @@ contract it violates. **This class reuses the existing critical-flag
 vocabulary verbatim — it does NOT invent memoir-specific flag types for
 v1.**
 
-### Fabrication-class flags (#597, five-way — corpus-audit-side, conditional on an active `corpus:`)
+### Fabrication-class flags (#597/#1032, six-way — corpus-audit-side, conditional on an active `corpus:`)
 
 Per `anvil/lib/snippets/provenance.md` §Section 6, raised by the exhaustive
 `kind: tool_evidence` corpus-audit critic (`memoir-audit`'s
@@ -93,6 +93,13 @@ Per `anvil/lib/snippets/provenance.md` §Section 6, raised by the exhaustive
    corpus chronology.
 5. **`unattributed_paraphrase`** — authorial invention presented as a
    subject's memory without any corpus grounding.
+6. **`scope_overreach`** (#1032) — a claim's universal quantifier
+   ("anyone"/"every"/"all"), superlative ("first"/"only"/"most"), or
+   negated existential ("no other X anywhere/exists") asserts wider
+   scope than its cited `provenance.md` row supports (e.g. row says
+   "the project has", claim says "anyone has"), per
+   `provenance.md` §Section 5a — a finding even when the row otherwise
+   `VERIFIED`s or `PARAPHRASE_OK`s the underlying fact.
 
 **Inactive when `corpus:` is undeclared or unresolvable** — no false
 critical flag, no crash; `resolve_corpus_dirs` never raises, and an

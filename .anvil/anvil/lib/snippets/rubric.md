@@ -71,6 +71,48 @@ paper/slides/installation at ≥35/44; deck/report at ≥39/44, the
 customer-facing tier). The /45 ip-uspto threshold (≥39/45 ≈ 0.87) is
 proportionally bumped from its prior ≥35/40 customer-facing tier.
 
+## Dim 9 — teaching-oriented length is not padding
+
+Dim 9 *Rhetorical economy* (weight 4, the /44 skills' shared bloat-
+pressure dimension) exists to catch a document that could say the same
+thing in fewer words — repeated hedging, restated conclusions,
+throat-clearing, decorative elaboration. It does **not** exist to
+penalize a document for being long because it is teaching something. A
+passage that walks a reader from an ordinary-language statement of an
+idea to a precise technical one — per the plain-language-first framework
+in `anvil/lib/snippets/plain_language.md` (issue #1042/#1043) — is doing
+the artifact's job, not padding it.
+
+**The distinction a dim 9 critic applies:**
+
+- **Padding (deduct):** the same claim restated in different words
+  without adding information; a caveat repeated at every point of use
+  after it was already labeled and ledgered (see `anvil/skills/memo/
+  rubric.md` §"Redundant hedging" for the shipped worked example of this
+  specific sub-pattern); decorative elaboration that could be deleted
+  with no loss of meaning; hedging disproportionate to genuine
+  uncertainty.
+- **Teaching (do not deduct):** an ordinary-language explanation that
+  precedes a technical term's first load-bearing use; a concrete example
+  that makes an abstract claim legible; a plain restatement that survives
+  alongside a newly introduced label (`plain_language.md` point 4); a
+  worked example illustrating a claim a terser draft would have left as
+  an assertion.
+
+A useful test: **would deleting this passage remove information the
+reader needs, or only remove words?** If deleting it removes
+information — even if that information is "here is what this term
+means in plain language" — it is teaching, not padding, and dim 9 should
+not deduct for it. If deleting it changes nothing the reader could not
+already infer from the surrounding text, it is padding, and dim 9
+should deduct.
+
+This calibration is a clarification of existing dim 9 scoring, not a new
+sub-dimension or a change to the weight — a skill's `rubric.md` dim 9 row
+already reads "does every paragraph carry weight the argument needs?"
+(or equivalent per-skill wording); this section states explicitly that
+"weight the argument needs" includes weight the *explanation* needs.
+
 ## Per-review version stamping
 
 A rubric the skill ships today (`anvil-memo-v2`, `anvil-pub-v1`, …) is

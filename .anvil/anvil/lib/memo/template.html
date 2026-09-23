@@ -25,8 +25,15 @@
     $css$      — stylesheet path(s) from the pandoc --css flag; emitted as
                  <link rel="stylesheet"> tags. render_gate.py passes the
                  absolute path to styles.css here (issue #470).
+    $ai_byline$ — opt-in AI-authorship disclosure line (issue #941), passed
+                 via `-M ai_byline=<rendered text>` when the project BRIEF
+                 declares an active `ai_byline:` block (`anvil.lib.ai_byline`
+                 / `anvil.lib.project_brief.resolve_ai_byline`). Absent
+                 unless the consumer opted in — see the module docstring
+                 in `anvil/lib/ai_byline.py` and
+                 `anvil/skills/memo/lib/render_phase.py`.
 
-  All four are optional; the template degrades to "untitled" / hidden
+  All five are optional; the template degrades to "untitled" / hidden
   author/date rows when the values are absent. This matches the
   reality of in-progress memos where the YAML block may not be complete.
 -->
@@ -57,5 +64,8 @@ $endif$
 $endif$
 
 $body$
+$if(ai_byline)$
+<p class="ai-byline"><em>$ai_byline$</em></p>
+$endif$
 </body>
 </html>

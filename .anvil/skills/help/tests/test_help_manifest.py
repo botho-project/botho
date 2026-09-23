@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from _help_fixtures import build_repo, write_manifest
+from _help_fixtures import build_repo, write_codex_shim, write_manifest, write_shim
 from _help_skill_lib import introspect
 
 
@@ -53,6 +53,45 @@ def test_shim_enumeration_fallback(tmp_path):
 
 def test_shim_enumeration_no_claude_dir(tmp_path):
     assert introspect.enumerate_shim_skills(tmp_path) == ()
+
+
+def test_shim_enumeration_codex_only(tmp_path):
+    """Issue #1004: a Codex-only install (no `.claude/` at all) still
+    reports the correct skill list from `.agents/skills/anvil-*/`."""
+    write_codex_shim(tmp_path, "memo")
+    write_codex_shim(tmp_path, "essay")
+    assert introspect.enumerate_shim_skills(tmp_path) == ("essay", "memo")
+
+
+def test_shim_enumeration_unions_claude_and_codex(tmp_path):
+    """Claude-only, Codex-only, and both-registered skills all surface —
+    the two shim globs are unioned, not one preferred over the other."""
+    write_shim(tmp_path, "memo")
+    write_codex_shim(tmp_path, "memo")
+    write_shim(tmp_path, "essay")
+    write_codex_shim(tmp_path, "project-scout")
+    assert introspect.enumerate_shim_skills(tmp_path) == (
+        "essay",
+        "memo",
+        "project-scout",
+    )
+
+
+def test_build_model_degraded_uses_codex_shims_only(tmp_path):
+    """`build_model` in degraded mode works from Codex registrations alone
+    (issue #1004) — a Codex-only session sees the same install state a
+    Claude-only session would."""
+    for name in ("memo", "essay"):
+        write_codex_shim(tmp_path, name)
+    # Reuse build_repo's skill-dir builder indirectly via a minimal manifest-
+    # free repo: enumerate_shim_skills only needs the shim dirs, and
+    # build_model degrades to unknown_skills when the .anvil/skills/<name>
+    # body is absent -- so assert on the enumerated names directly instead
+    # of constructing full skill bodies here.
+    assert introspect.enumerate_shim_skills(tmp_path) == ("essay", "memo")
+    model = introspect.build_model(tmp_path)
+    assert model.degraded is True
+    assert set(model.unknown_skills) == {"essay", "memo"}
 
 
 def test_build_model_degraded_uses_shims(tmp_path):

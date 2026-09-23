@@ -69,8 +69,19 @@ class FindingsRow:
 
 
 @dataclass(frozen=True)
-class CriticalFlag:
-    """An audit-owned critical flag emitted from ``findings.md``."""
+class AuditCriticalFlag:
+    """An audit-owned critical flag emitted from ``findings.md``.
+
+    Not to be confused with :class:`anvil.lib.review_schema.CriticalFlag`,
+    the canonical pydantic schema for a ``_review.json`` entry (fields
+    ``type``/``justification``/``evidence_span``). This dataclass is a
+    detector-only return type: its ``originating_rows`` (which findings.md
+    rows triggered the flag) and ``tool_calls`` (the fetch attempts that
+    established unreachability) are provenance fields consumed by
+    ``report-audit.md`` step 10 before the flag is mapped into the final
+    ``_review.json``'s ``CriticalFlag`` shape — they are dropped/reshaped
+    at that point, not carried through verbatim.
+    """
 
     type: str
     justification: str
@@ -92,11 +103,11 @@ def is_external_url(cited_source: str) -> bool:
 
 def detect_unreachable_external_citations(
     rows: Iterable[FindingsRow],
-) -> CriticalFlag | None:
+) -> AuditCriticalFlag | None:
     """Scan ``findings.md`` rows; return one aggregated flag or ``None``.
 
     Returns ``None`` when no row matches. Otherwise returns a single
-    :class:`CriticalFlag` whose ``originating_rows`` lists every
+    :class:`AuditCriticalFlag` whose ``originating_rows`` lists every
     matching row number (in encounter order) and whose ``tool_calls``
     records the failed URL fetches in encounter order.
     """
@@ -133,7 +144,7 @@ def detect_unreachable_external_citations(
         }
         for r in offending
     )
-    return CriticalFlag(
+    return AuditCriticalFlag(
         type=CRITICAL_FLAG_AUDIT_UNREACHABLE_EXTERNAL_CITATION,
         justification=justification,
         originating_rows=tuple(r.row_number for r in offending),

@@ -10,8 +10,12 @@ Introspection sources, in priority order:
    list plus ``anvil_version`` / ``skill_versions``. Parsed defensively; a
    missing or malformed manifest is a soft-fail (``ManifestResult.ok`` is
    ``False``), not an exception.
-2. ``.claude/skills/anvil-*/`` — fallback skill enumeration when the manifest
-   is unavailable (degraded mode).
+2. ``.claude/skills/anvil-*/`` and ``.agents/skills/anvil-*/`` — fallback
+   skill enumeration when the manifest is unavailable (degraded mode). The
+   former is Claude Code's registration shim glob; the latter is Codex
+   CLI's (issue #1004, produced by ``write_codex_shim()`` in
+   ``install-anvil.sh`` since #1003). Both are unioned so a Codex-only
+   install (no ``.claude/`` at all) still reports accurately.
 3. ``.anvil/skills/<name>/SKILL.md`` frontmatter — per-skill description +
    the artifact-vs-utility classification.
 4. ``.anvil/skills/<name>/commands/*.md`` — the real command set.
@@ -101,18 +105,28 @@ def read_manifest(repo_root: Path) -> ManifestResult:
 
 
 def enumerate_shim_skills(repo_root: Path) -> tuple[str, ...]:
-    """Fallback skill list from ``.claude/skills/anvil-*/`` shim dirs.
+    """Fallback skill list from ``.claude/skills/anvil-*/`` and
+    ``.agents/skills/anvil-*/`` shim dirs (issue #1004).
+
+    ``.claude/skills/`` is Claude Code's registration-shim glob;
+    ``.agents/skills/`` is Codex CLI's equivalent (produced by
+    ``write_codex_shim()`` in ``install-anvil.sh`` since #1003). Both are
+    scanned and unioned so a Codex-only install (no ``.claude/`` directory
+    at all) still reports the correct skill list, not an empty one.
 
     Strips the ``anvil-`` prefix. Sorted, deduplicated. Used only when the
     manifest is unavailable (degraded mode).
     """
-    shim_root = repo_root / ".claude" / "skills"
-    if not shim_root.is_dir():
-        return ()
     names: set[str] = set()
-    for child in shim_root.iterdir():
-        if child.is_dir() and child.name.startswith("anvil-"):
-            names.add(child.name[len("anvil-") :])
+    for shim_root in (
+        repo_root / ".claude" / "skills",
+        repo_root / ".agents" / "skills",
+    ):
+        if not shim_root.is_dir():
+            continue
+        for child in shim_root.iterdir():
+            if child.is_dir() and child.name.startswith("anvil-"):
+                names.add(child.name[len("anvil-") :])
     return tuple(sorted(names))
 
 
@@ -383,7 +397,8 @@ def render_overview(model: InstallModel) -> str:
         lines.append(
             "Anvil version: unknown "
             f"(degraded mode — {model.degraded_reason}; "
-            "skill list recovered from .claude/skills/anvil-* directory scan)"
+            "skill list recovered from a .claude/skills/anvil-* / "
+            ".agents/skills/anvil-* directory scan)"
         )
     else:
         lines.append("Anvil version: unknown")

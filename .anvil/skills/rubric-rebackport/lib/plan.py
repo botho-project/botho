@@ -46,7 +46,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from .detect import (
-    REQUIRED_STAMP_FIELDS,
     ProjectInventory,
     ReviewSnapshot,
 )
@@ -208,15 +207,6 @@ class StampOp:
     rubric_id: str
     rubric_total: Optional[int] = None
     advance_threshold: Optional[int] = None
-
-    @property
-    def applies_full_triple(self) -> bool:
-        """True iff every required stamping field has a non-null value."""
-        return (
-            self.rubric_id != ""
-            and self.rubric_total is not None
-            and self.advance_threshold is not None
-        )
 
 
 @dataclass

@@ -21,7 +21,7 @@ documents:
 # Grani memoir (minimal synthetic example) — project brief
 
 A **minimal synthetic worked example** (issue #740 v1 scope — NOT the full
-`nitas-mama` dogfood; that vendored example is deferred to a follow-up
+`example-memoir` dogfood; that vendored example is deferred to a follow-up
 issue per SKILL.md §Scope guard). One chapter thread (`00-introduction`)
 demonstrates the dual-corpus (#597) and subject-voice (#598) tiers
 composed in a single `anvil:memoir` document, through a terminal

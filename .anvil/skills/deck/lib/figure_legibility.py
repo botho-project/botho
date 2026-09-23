@@ -19,7 +19,7 @@ Design
 For each ``![alt](figures/<name>.png)`` reference in ``deck.md``:
 
 1. Resolve the intrinsic PNG dimensions from the IHDR chunk (stdlib
-   ``struct.unpack`` — no Pillow). Mirrors the precedent in
+   ``struct.unpack`` — no Pillow), via
    ``anvil/lib/render_gate.py::_read_png_dimensions``. The PNG's
    physical density (``pHYs`` chunk, when present) is read the same
    way — see "DPI awareness" below.
@@ -36,12 +36,21 @@ For each ``![alt](figures/<name>.png)`` reference in ``deck.md``:
      height-limited scales down by the width ratio.
 
 3. Estimate the displayed text-glyph height. For mermaid PNGs produced
-   by our pinned theme, the source font is 18 px tall (after issue #563
-   B.2) — a literal raster pixel count, independent of any embedded
-   density metadata. For matplotlib PNGs, the source label size is a
-   **point** size (matplotlib's default ``font.size`` is 10 pt), which
-   only becomes a pixel count once rasterized at a given DPI — see
-   "DPI awareness" below. The displayed glyph height is
+   by our pinned theme, the *source SVG* font is 18 px tall (after
+   issue #563 B.2) — a literal raster pixel count, independent of any
+   embedded density metadata. But the documented ``mmdc --scale 2``
+   invocation (load-bearing per issue #545, see ``deck-figures.md``)
+   doubles every rendered SVG dimension — including glyph height —
+   before rasterizing to PNG, so the *intrinsic PNG* glyph height is
+   actually ``18 * mermaid_render_scale`` (default scale ``2.0`` →
+   36 px), not the bare source value — see "Render-scale awareness"
+   below (issue #964). For matplotlib PNGs, the source label size is a
+   **point** size — read from the sibling ``figures/src/<name>.py``
+   source when possible (a regex scan for the smallest explicit
+   ``fontsize=`` value, falling back to matplotlib's default
+   ``font.size`` of 10 pt — issue #964), which only becomes a pixel
+   count once rasterized at a given DPI — see "DPI awareness" below.
+   The displayed glyph height is
    ``intrinsic_text_h_px * (H_disp / intrinsic_png_h)``.
 
 4. Threshold: ``< 14 px`` displayed → warning; ``< 11 px`` displayed →
@@ -80,13 +89,47 @@ value (the theme's ``fontSize: "18px"`` knob) — so mermaid is
 deliberately **not** in the DPI-scaled type set and is unaffected by
 this section.
 
+Render-scale awareness (issue #964)
+------------------------------------
+
+Mermaid PNGs are rendered by ``mmdc --scale 2`` (load-bearing per
+issue #545 — see ``deck-figures.md``'s "``--scale 2`` is load-bearing"
+note), which doubles every dimension of the rendered SVG — page size
+*and* glyph height — before rasterizing to PNG. The mermaid theme's
+``themeVariables.fontSize`` (``anvil/lib/figures/mermaid-theme.json``)
+is ``18px``, but that is the *source* SVG font size, not the size
+actually baked into the output raster. Pre-#964, the gate compared the
+un-scaled ``18px`` against the displayed height, under-estimating every
+mermaid glyph by exactly the render-scale factor (~2x) and firing false
+errors on figures that were in fact legible. ``Geometry.mermaid_render_scale``
+(default ``2.0``, mirroring the pinned ``mmdc --scale 2`` invocation) is
+multiplied into the mermaid intrinsic-text-height lookup so the gate
+reasons about the *rasterized* glyph height, not the source-SVG one. The
+``18.0`` source-font-size constant is kept separate from the scale
+factor (rather than folding both into one opaque ``36.0``) so the render
+scale stays visible and independently testable — see
+``Geometry.intrinsic_text_h_for_diagram``.
+
 Escalation hooks (NOT shipped in v1)
 ------------------------------------
 
 This module ships **Option 1** from the curator's plan: a no-deps
 heuristic. The intrinsic text height is approximated from the diagram
-type, not measured. False positives on diagrams with intentionally tiny
-labels are mitigated via the escape hatch.
+type (mermaid) or read via a source-text regex heuristic (matplotlib),
+not measured from the rendered raster. False positives on diagrams with
+intentionally tiny labels are mitigated via the escape hatch.
+
+The matplotlib fontsize-from-source heuristic (``_matplotlib_source_fontsize_pt``,
+issue #964) is a plain-text regex scan over the sibling
+``figures/src/<name>.py`` script for ``fontsize=<N>`` and
+``rcParams['font.size'] = <N>`` occurrences — it is **not** a Python AST
+walk or a rendered-glyph measurement. It will miss a fontsize computed
+at runtime (e.g. ``fontsize=BASE_SIZE * 1.2``), one set via a helper
+function rather than a literal, or one set through ``plt.rc(...)``
+instead of ``rcParams[...] =``. Those cases silently fall through to
+the matplotlib rcParam default (10 pt) rather than raising — consistent
+with this module's "conservative, no-deps heuristic" design, but worth
+knowing when triaging a surprising verdict.
 
 If empirical false-positive rate is unacceptable, the curator's plan
 documents two escalations, both kept out of v1:
@@ -133,6 +176,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from anvil.lib.marp_lint import Finding, LintResult
+from anvil.lib.render_gate import _read_png_dimensions
 
 
 # Module-level metadata --------------------------------------------------------
@@ -162,8 +206,15 @@ class Geometry:
     the ``dpi_reference_px`` (72) reference density — and is scaled by
     the PNG's actual embedded DPI (see the module docstring "DPI
     awareness", issue #904) before being compared against the
-    thresholds below. Other diagram types (``mermaid``, ``unknown``)
-    store a literal rendered-pixel value and are not DPI-scaled.
+    thresholds below; the matplotlib entry is also only the *fallback*
+    used when no explicit ``fontsize=`` is found in the figure's
+    sibling source script (see ``intrinsic_text_h_for_diagram``'s
+    ``base_override`` parameter and the module docstring "Render-scale
+    awareness" / "Escalation hooks", issue #964). ``mermaid`` stores the
+    literal *source SVG* font size (``18px``) and is additionally
+    scaled by ``mermaid_render_scale`` — the ``mmdc --scale 2`` render
+    scale baked into the rasterized PNG (issue #964) — not by DPI.
+    ``unknown`` stores a literal rendered-pixel value with no scaling.
     """
 
     # Slide geometry (mirrors the deck Marp config + CSS).
@@ -217,12 +268,23 @@ class Geometry:
         ("matplotlib", 200.0),
     )
 
+    # Render-scale factor mermaid's intrinsic source-font-size constant
+    # is multiplied by (issue #964). Mirrors the load-bearing
+    # `mmdc --scale 2` invocation (issue #545, `deck-figures.md`), which
+    # doubles every rendered SVG dimension — including glyph height —
+    # before rasterizing to PNG. See the module docstring "Render-scale
+    # awareness".
+    mermaid_render_scale: float = 2.0
+
     def intrinsic_text_h_for(self, diagram_type: str) -> float:
         """Return the heuristic intrinsic text-glyph constant.
 
         For DPI-scaled types this is a **point** size, not yet scaled
         to actual render density — use `intrinsic_text_h_for_diagram`
-        for the DPI-aware displayed value.
+        for the DPI-aware displayed value. For ``mermaid`` this is the
+        *source SVG* font size, not yet scaled by
+        ``mermaid_render_scale`` — same caveat, use
+        `intrinsic_text_h_for_diagram`.
         """
         for key, value in self.intrinsic_text_h_px_by_diagram_type:
             if key == diagram_type:
@@ -240,22 +302,36 @@ class Geometry:
         return self.dpi_reference_px  # no scaling if unconfigured
 
     def intrinsic_text_h_for_diagram(
-        self, diagram_type: str, png_dpi: float | None
+        self,
+        diagram_type: str,
+        png_dpi: float | None,
+        *,
+        base_override: float | None = None,
     ) -> float:
-        """Return the DPI-aware intrinsic text-glyph height, in px.
+        """Return the DPI/render-scale-aware intrinsic text-glyph height, in px.
 
-        Non-DPI-scaled types (mermaid, unknown) return the constant
-        unchanged — it is already a literal pixel value. DPI-scaled
-        types (matplotlib) scale the point-size constant by
+        ``base_override`` lets the caller substitute a per-figure value
+        (e.g. a fontsize read from the sibling matplotlib source
+        script, issue #964) for the type-level default from
+        ``intrinsic_text_h_for``; when omitted, the type-level default
+        is used.
+
+        DPI-scaled types (matplotlib) scale the point-size base by
         ``actual_dpi / dpi_reference_px``, using ``png_dpi`` when the
         caller resolved one from the PNG's `pHYs` chunk, else the
-        type's configured fallback DPI (issue #904).
+        type's configured fallback DPI (issue #904). ``mermaid`` scales
+        its base by ``mermaid_render_scale`` instead — the render
+        (not physical-density) scale factor `mmdc --scale 2` bakes into
+        the raster (issue #964). ``unknown`` returns the base unchanged
+        — it is already a literal, unscaled pixel value.
         """
-        base = self.intrinsic_text_h_for(diagram_type)
-        if diagram_type not in self.dpi_scaled_diagram_types:
-            return base
-        dpi = png_dpi if png_dpi is not None and png_dpi > 0 else self._default_dpi_for(diagram_type)
-        return base * (dpi / self.dpi_reference_px)
+        base = base_override if base_override is not None else self.intrinsic_text_h_for(diagram_type)
+        if diagram_type in self.dpi_scaled_diagram_types:
+            dpi = png_dpi if png_dpi is not None and png_dpi > 0 else self._default_dpi_for(diagram_type)
+            return base * (dpi / self.dpi_reference_px)
+        if diagram_type == "mermaid":
+            return base * self.mermaid_render_scale
+        return base
 
 
 _DEFAULT_GEOMETRY = Geometry()
@@ -263,25 +339,14 @@ _DEFAULT_GEOMETRY = Geometry()
 
 # PNG header parsing -----------------------------------------------------------
 #
-# Bytes 16-24 of a signature-verified PNG carry big-endian u32
-# width/height (the IHDR chunk is mandated first by the PNG spec).
-# Mirrors ``anvil/lib/render_gate.py::_read_png_dimensions``; promotion
-# to a shared helper waits for the second consumer per #58 / #318
-# convention.
+# ``_read_png_dimensions`` (bytes 16-24 of a signature-verified PNG carry
+# big-endian u32 width/height; the IHDR chunk is mandated first by the PNG
+# spec) is promoted to ``anvil/lib/render_gate.py`` and imported above —
+# see that module for the implementation. ``_PNG_SIGNATURE`` stays local:
+# ``_read_png_dpi`` below (a related-but-not-identical ``pHYs``-chunk
+# parser, not promoted) still needs it.
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
-
-
-def _read_png_dimensions(data: bytes) -> tuple[int, int] | None:
-    """Return ``(width, height)`` from a PNG IHDR, or ``None``."""
-    if len(data) < 24 or not data.startswith(_PNG_SIGNATURE):
-        return None
-    if data[12:16] != b"IHDR":
-        return None
-    width, height = struct.unpack(">II", data[16:24])
-    if width <= 0 or height <= 0:
-        return None
-    return (int(width), int(height))
 
 
 def _read_png_dpi(data: bytes) -> float | None:
@@ -459,6 +524,58 @@ def _classify_diagram_type(figure_path: Path) -> str:
     return "unknown"
 
 
+def _matplotlib_source_path(figure_path: Path) -> Path:
+    """Return the sibling matplotlib source-script path for a figure PNG.
+
+    Mirrors the sibling-lookup path ``_classify_diagram_type`` already
+    checks for existence (``figures/src/<name>.py``); this is a plain
+    path-join, existence is the caller's concern.
+    """
+    return figure_path.parent / "src" / f"{figure_path.stem}.py"
+
+
+# A regex heuristic — not a Python AST walk or a rendered-glyph
+# measurement (see module docstring "Escalation hooks", issue #964).
+# Matches the smallest explicit `fontsize=<N>` literal (any matplotlib
+# call site: `ax.set_title(..., fontsize=12)`, `plt.annotate(...,
+# fontsize=8)`, etc.) and an explicit global
+# `rcParams['font.size'] = <N>` / `rcParams["font.size"] = <N>`
+# override. A computed fontsize (`fontsize=BASE * 1.2`), one set via a
+# helper function, or one set through `plt.rc(...)` is not matched and
+# silently falls through to the rcParam default.
+_FONTSIZE_RE = re.compile(r"fontsize\s*=\s*(\d+(?:\.\d+)?)")
+_RC_FONT_SIZE_RE = re.compile(
+    r"rcParams\[\s*['\"]font\.size['\"]\s*\]\s*=\s*(\d+(?:\.\d+)?)"
+)
+
+def _matplotlib_source_fontsize_pt(src_path: Path, default_pt: float) -> float:
+    """Return the smallest explicit fontsize (pt) found in a matplotlib
+    figure source script, or ``default_pt`` when none is found (issue #964).
+
+    ``default_pt`` is the caller's matplotlib rcParam default (the
+    ``Geometry.intrinsic_text_h_px_by_diagram_type`` ``"matplotlib"``
+    entry — single source of truth, confirmed empirically: no
+    ``font.size`` line in the shipped
+    ``anvil/lib/figures/anvil.mplstyle``, so a figure that never sets
+    ``fontsize=`` explicitly renders at matplotlib's own 10 pt
+    default).
+
+    Regex-heuristic over source text, not true rendered-glyph
+    measurement — see the module docstring "Escalation hooks" for the
+    known misses (computed fontsizes, helper-function-set fontsizes,
+    ``plt.rc(...)`` calls).
+    """
+    try:
+        text = src_path.read_text(encoding="utf-8")
+    except OSError:
+        return default_pt
+    sizes = [float(m.group(1)) for m in _FONTSIZE_RE.finditer(text)]
+    sizes += [float(m.group(1)) for m in _RC_FONT_SIZE_RE.finditer(text)]
+    if not sizes:
+        return default_pt
+    return min(sizes)
+
+
 # Slide model ------------------------------------------------------------------
 
 
@@ -616,6 +733,8 @@ def _displayed_text_height_px(
     diagram_type: str,
     geo: Geometry,
     png_dpi: float | None = None,
+    *,
+    base_override: float | None = None,
 ) -> float:
     """Estimate the displayed text-glyph height, in px.
 
@@ -623,12 +742,18 @@ def _displayed_text_height_px(
     scaled isotropically by ``object-fit: contain``), so the displayed
     glyph height is ``intrinsic_text_h_for_diagram(...) * scale_ratio``
     — DPI-aware for diagram types in ``Geometry.dpi_scaled_diagram_types``
-    (issue #904).
+    (issue #904) and render-scale-aware for ``mermaid`` (issue #964).
+    ``base_override`` (issue #964) lets the caller substitute a
+    per-figure source-read value (matplotlib fontsize) for the
+    type-level default.
     """
     if intrinsic_h <= 0:
         return 0.0
     scale = displayed_h_px / intrinsic_h
-    return geo.intrinsic_text_h_for_diagram(diagram_type, png_dpi) * scale
+    return (
+        geo.intrinsic_text_h_for_diagram(diagram_type, png_dpi, base_override=base_override)
+        * scale
+    )
 
 
 # Public API -------------------------------------------------------------------
@@ -656,7 +781,8 @@ def lint_figures(
     geometry
         Optional geometry override. Defaults to the shipped deck
         geometry (1280x720, ``max-height: 75vh``, mermaid 18 px source
-        font).
+        font scaled by ``mermaid_render_scale`` (default 2.0, matching
+        the pinned ``mmdc --scale 2`` invocation — issue #964)).
 
     Returns
     -------
@@ -694,6 +820,7 @@ def lint_figures(
     by_path_text: dict[str, float] = {}
     by_path_type: dict[str, str] = {}
     by_path_dpi: dict[str, float | None] = {}
+    by_path_base_override: dict[str, float | None] = {}
 
     figures_root = figures_dir if figures_dir is not None else deck_md_path.parent / "figures"
 
@@ -727,11 +854,29 @@ def lint_figures(
         png_dpi = _read_png_dpi(data)
 
         diagram_type = _classify_diagram_type(candidate)
+
+        # For matplotlib figures, read the actual fontsize out of the
+        # sibling source script (issue #964) rather than trusting a
+        # fixed per-type constant that a source-side fontsize change
+        # can never move.
+        base_override: float | None = None
+        if diagram_type == "matplotlib":
+            src_path = _matplotlib_source_path(candidate)
+            base_override = _matplotlib_source_fontsize_pt(
+                src_path, geo.intrinsic_text_h_for("matplotlib")
+            )
+
         displayed_h = _displayed_height_px(
             intrinsic_w, intrinsic_h, occ.h_clamp_px, occ.w_clamp_px, geo
         )
         displayed_text = _displayed_text_height_px(
-            intrinsic_w, intrinsic_h, displayed_h, diagram_type, geo, png_dpi
+            intrinsic_w,
+            intrinsic_h,
+            displayed_h,
+            diagram_type,
+            geo,
+            png_dpi,
+            base_override=base_override,
         )
 
         # Worst-case across references: keep the occurrence with the
@@ -745,6 +890,7 @@ def lint_figures(
             by_path_text[ref_path] = displayed_text
             by_path_type[ref_path] = diagram_type
             by_path_dpi[ref_path] = png_dpi
+            by_path_base_override[ref_path] = base_override
 
     result = LintResult()
     for ref_path, occ in by_path.items():
@@ -766,7 +912,10 @@ def lint_figures(
             severity = "warning"
 
         png_dpi = by_path_dpi[ref_path]
-        intrinsic_text = geo.intrinsic_text_h_for_diagram(diagram_type, png_dpi)
+        base_override = by_path_base_override[ref_path]
+        intrinsic_text = geo.intrinsic_text_h_for_diagram(
+            diagram_type, png_dpi, base_override=base_override
+        )
         if diagram_type in geo.dpi_scaled_diagram_types:
             dpi_used = png_dpi if png_dpi is not None and png_dpi > 0 else geo._default_dpi_for(diagram_type)
             dpi_note = f" at {dpi_used:.0f} dpi"

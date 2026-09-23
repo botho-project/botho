@@ -145,7 +145,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-import yaml
+from anvil.lib.frontmatter import extract_frontmatter as _extract_frontmatter
 
 
 # On-disk filename for the brief. Surfaced as a constant so the layout
@@ -170,12 +170,6 @@ LAYOUT_PROJECT_BRIEF = "project-brief"
 # directory's basename when identifying a version dir. The pattern
 # anchors the dot-N at the end so e.g. "thread.draft" doesn't match.
 _VERSION_DIR_RE = re.compile(r"^(?P<stem>.+)\.(?P<num>\d+)$")
-
-# Frontmatter delimiter — three hyphens on their own line, per the
-# standard YAML frontmatter convention (Jekyll / Hugo / pandoc /
-# Marp / etc.). The opener is the first non-empty line of the file;
-# the closer is the next ``---`` line.
-_FRONTMATTER_DELIM = "---"
 
 
 @dataclass(frozen=True)
@@ -211,53 +205,12 @@ class DiscoveryResult:
 # ---------------------------------------------------------------------------
 # YAML frontmatter helpers
 # ---------------------------------------------------------------------------
-
-
-def _extract_frontmatter(text: str) -> Optional[dict]:
-    """Extract the YAML frontmatter from ``text`` and return it as a dict.
-
-    Returns ``None`` when the text has no frontmatter, the frontmatter
-    is malformed, or the parsed value isn't a dict. This module is
-    intentionally **tolerant** — the layout-dispatch gate degrades to
-    "not a project root" when the frontmatter is unparseable, matching
-    the absence-tolerant convention shared by ``project_brief.py`` and
-    ``refs_resolver.py``.
-    """
-    # The opener must be the first non-empty line. Leading blank lines
-    # and BOM are tolerated, mirroring how most frontmatter consumers
-    # (pandoc, Jekyll, Marp) parse the marker.
-    lines = text.splitlines()
-    # Strip a leading UTF-8 BOM if present on the first line.
-    if lines and lines[0].startswith("﻿"):
-        lines[0] = lines[0][1:]
-
-    # Find first non-empty line; must be the delimiter.
-    first_idx = 0
-    while first_idx < len(lines) and lines[first_idx].strip() == "":
-        first_idx += 1
-    if first_idx >= len(lines):
-        return None
-    if lines[first_idx].strip() != _FRONTMATTER_DELIM:
-        return None
-
-    # Find the closing delimiter starting from the line after the opener.
-    body_start = first_idx + 1
-    close_idx = None
-    for i in range(body_start, len(lines)):
-        if lines[i].strip() == _FRONTMATTER_DELIM:
-            close_idx = i
-            break
-    if close_idx is None:
-        return None
-
-    yaml_text = "\n".join(lines[body_start:close_idx])
-    try:
-        parsed = yaml.safe_load(yaml_text)
-    except yaml.YAMLError:
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    return parsed
+#
+# ``_extract_frontmatter`` used to be defined here; it is now the shared
+# ``anvil/lib/frontmatter.py::extract_frontmatter`` primitive (issue #1075),
+# imported above and aliased to the historical private name so every call
+# site in this module (and this module's own downstream re-exporters,
+# e.g. ``project_brief.py``) is unchanged.
 
 
 def has_project_brief(directory: Path) -> bool:

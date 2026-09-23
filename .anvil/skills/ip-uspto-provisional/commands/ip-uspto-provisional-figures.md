@@ -51,6 +51,10 @@ In `anvil:ip-uspto` the figurer is downstream of claims: a figure exists because
 
 When TikZ mode renders figures (`fig-*.pdf`/`fig-*.svg`), those rendered drawings become the input to the **`ip-uspto-provisional-vision`** critic (the pixels-side half of rubric Dim 4). A stub-only thread produces no rendered drawings, and the vision critic degrades gracefully (skipped, no Dim-4 deduction). See `commands/ip-uspto-provisional-vision.md`.
 
+### Numeral-drift verification is NOT visual verification (issue #982)
+
+TikZ mode's own success signal — "the figure compiled" — and the source-side `review` critic's Dimension-4 text-source check — "every `\refnum{N}` in `spec.tex` appears in a drawing/stub, and vice versa" — are both **text/compile-level** checks. Neither one looks at the *rendered pixels*. A `\refnum{14}` invocation being present in `spec.tex` and a node labeled `14` being emitted into `fig-2.tex` tells you nothing about whether that `14` renders legibly, unobstructed, and un-collided with the lead line for `16` on the actual rendered page — a real provisional filing shipped exactly that defect shape (struck-through numerals, overlapping labels) with a clean numeral-drift pass. **A figure that compiles and whose numerals are all textually present is "compiles + numerals present," not "layout verified."** Do not describe a TikZ render as "clean" or "rendered-clean" — that phrasing conflates the two. Only a pixels-side pass — the `ip-uspto-provisional-vision` critic, or a human visually reviewing `fig-*.pdf` — verifies layout (label/lead-line collision, legibility, clipping). See "Visual QA marker" below for how the figurer records this gap so a downstream reader (finalize, a human, the reviser) doesn't mistake one for the other.
+
 ## Procedure (stub mode — default)
 
 1. **Discover state, idempotence check, init `_progress.json`**.
@@ -98,9 +102,20 @@ When TikZ mode renders figures (`fig-*.pdf`/`fig-*.svg`), those rendered drawing
    - Emit `<thread>.{N}/drawings/fig-<i>.tex` as a standalone LaTeX file (with its own `\documentclass{standalone}` preamble) that can be compiled to PDF independently.
 3. **For figures NOT amenable to TikZ** (cross-sections, perspective views, schematics with complex layouts), leave the stub in `drawing-descriptions.md` for the human illustrator.
 4. **Render** each `fig-<i>.tex` to PDF via `pdflatex` (if available in the environment — same `render.py` graceful-degradation precedent the `check_*_available()` family establishes). On render failure (or `pdflatex` unavailable on CI), emit a `fig-<i>.pdf.error.txt` with the LaTeX error and leave the stub in place — do NOT silently produce a broken reference. The thread degrades to stub-only for that figure, which is a valid provisional posture.
-5. **Update `drawing-descriptions.md`**: mark TikZ-rendered figures with a `**Rendered**: fig-<i>.pdf (TikZ)` line; unrendered stubs remain as stubs.
-6. **Update `_progress.json`** with `metadata.mode = "tikz"`, `metadata.rendered = <N>`, `metadata.stub_remaining = <M>`.
-7. **Report**: e.g., `Figures (TikZ mode): acme-widget-prov.2/drawings/ → 2 rendered (fig-1, fig-3), 2 stubs remain (fig-2 cross-section, fig-4 perspective).`
+5. **Update `drawing-descriptions.md`**: mark TikZ-rendered figures with a `**Rendered**: fig-<i>.pdf (TikZ) — compiles, numerals present; layout NOT visually verified` line; unrendered stubs remain as stubs. Do NOT write a bare "Rendered" / "clean" line with no qualifier — a successful compile confirms the figure exists and every `\refnum{N}` textually round-trips (per the source-side `review` critic's Dimension-4 check), not that the rendered layout is collision-free.
+6. **Update `_progress.json`** with `metadata.mode = "tikz"`, `metadata.rendered = <N>`, `metadata.stub_remaining = <M>`, and, **when `metadata.rendered > 0`, `metadata.visual_qa = "not-run"`** (issue #982 — see "Visual QA marker" below). This figurer never runs the vision critic itself, so a `visual_qa` value other than `"not-run"` would be a false claim; the marker exists so a downstream reader never mistakes this phase's own numeral-drift-adjacent, compile-only signal for a pixels-side layout pass.
+7. **Report**: e.g., `Figures (TikZ mode): acme-widget-prov.2/drawings/ → 2 rendered (fig-1, fig-3; compiles + numerals present, layout NOT visually verified — visual_qa: not-run), 2 stubs remain (fig-2 cross-section, fig-4 perspective). Run ip-uspto-provisional-vision <thread> or visually review fig-*.pdf before finalize.`
+
+## Visual QA marker (issue #982)
+
+TikZ mode's only quality signal is mechanical: did `pdflatex` compile, and does every spec `\refnum{N}` textually appear in the rendered figure's stub/drawing metadata (the source-side `review` critic's Dimension-4 check, run separately). Neither check can catch a numeral that renders but is visually collided with another label, struck through by a lead line, or clipped at the drawing border — that class of defect is invisible until someone (a human, or the opt-in `ip-uspto-provisional-vision` VLM critic) actually looks at the rendered pixels.
+
+To prevent a downstream reader (the finalizer, the reviser, a human skimming `_progress.json`) from mistaking "TikZ mode reported N figures rendered" for "someone visually confirmed the layout is clean":
+
+- Whenever TikZ mode renders at least one figure (`metadata.rendered > 0`), this figurer writes `phases.figures.metadata.visual_qa = "not-run"` into `<thread>.{N}/_progress.json`. This is the figurer's own honest self-report — it has not looked at the rendered pixels, so it does not claim to have verified them.
+- The figurer never flips this value to anything else — it is not the figurer's job to certify a visual pass. The marker is cleared (in the sense of being superseded) only by evidence that a pixels-side pass actually ran: the presence of `<thread>.{N}.vision/_review.json` (the `ip-uspto-provisional-vision` critic's output) is the load-bearing signal downstream commands check for, not a value this figurer writes.
+- A stub-only thread (no rendered `fig-*`) writes **no** `visual_qa` field — there is nothing rendered to visually verify, and the field's absence is not a finding (mirrors the "drawings-as-stubs is a valid provisional posture" invariant elsewhere in this doc).
+- See `commands/ip-uspto-provisional-finalize.md` §"Visual QA check" for the finalize-time consumer of this signal (a non-blocking warning, not a gate).
 
 ## Reuse of `anvil/lib/render.py` (reference only — no lib changes)
 
@@ -123,6 +138,7 @@ This command reuses `anvil/lib/render.py` **unchanged**, exactly as the `anvil:i
 - **TikZ mode is for the right shape of invention.** Software methods with flowcharts, system-level block diagrams — TikZ shines. Mechanical inventions with cross-sections, optical systems with ray traces — TikZ struggles; leave for human.
 - **Never invent components.** If a stub requires a reference numeral that doesn't appear in the spec, surface the gap to the reviser. The figurer is downstream of the drafter and reviser.
 - **Informal-drawings-acceptable.** Do not raise 37 CFR 1.84 formality (black-on-white contrast, FIG.-label presence) as a provisional figure requirement. Document the conventions in the brief to ease conversion; do not enforce them.
+- **Numeral-drift verification is NOT visual verification (issue #982).** A TikZ figure that compiles and whose `\refnum{N}` numerals all textually round-trip through the `review` critic's Dimension-4 check has NOT been shown to be visually correct — a numeral can be present in the source yet rendered struck-through, clipped, or collided with another label on the actual page. Never describe a compiled TikZ figure as "clean" or "rendered-clean"; report it as "compiles + numerals present, layout not visually verified" and write the `visual_qa: "not-run"` marker (see "Visual QA marker" above). Recommend the operator run `ip-uspto-provisional-vision <thread>` or perform a manual visual pass over `fig-*.pdf` before the thread reaches finalize.
 
 ## `_progress.json` snippet (version dir)
 
@@ -134,6 +150,26 @@ This command reuses `anvil/lib/render.py` **unchanged**, exactly as the `anvil:i
       "started": "<ISO>",
       "completed": "<ISO>",
       "metadata": { "mode": "stub", "figures": 4 }
+    }
+  }
+}
+```
+
+TikZ mode with rendered figures additionally carries the `visual_qa` marker (issue #982):
+
+```json
+{
+  "phases": {
+    "figures": {
+      "state": "done",
+      "started": "<ISO>",
+      "completed": "<ISO>",
+      "metadata": {
+        "mode": "tikz",
+        "rendered": 2,
+        "stub_remaining": 2,
+        "visual_qa": "not-run"
+      }
     }
   }
 }

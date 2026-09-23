@@ -2,7 +2,7 @@
 (issue #740).
 
 ``anvil/skills/memoir/examples/grani-memoir-mini/`` is a **minimal
-synthetic worked example** (NOT the full ``nitas-mama`` dogfood — that
+synthetic worked example** (NOT the full ``example-memoir`` dogfood — that
 vendored example is deferred to a follow-up issue per SKILL.md §Scope
 guard, the same sequencing ``primer``/``spec`` used before their own
 Phase-4 dogfood examples landed). It declares ``artifact_type: memoir``,

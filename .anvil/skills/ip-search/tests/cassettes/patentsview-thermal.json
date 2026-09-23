@@ -1,0 +1,61 @@
+{
+  "error": false,
+  "count": 3,
+  "total_hits": 3,
+  "patents": [
+    {
+      "patent_id": "10261234",
+      "patent_title": "Split-path excitation network for a piezoresistive bridge sensor",
+      "patent_date": "2019-04-16",
+      "patent_type": "utility",
+      "patent_abstract": "A pressure sensor includes a piezoresistive bridge driven by a split-path excitation network having a constant-current leg and a proportional-to-absolute-temperature leg whose ratio is set by a single ratio resistor, flattening the span versus temperature curve.",
+      "inventors": [
+        {
+          "inventor_name_first": "Marion",
+          "inventor_name_last": "Smith"
+        },
+        {
+          "inventor_name_first": "Kai",
+          "inventor_name_last": "Nakamura"
+        }
+      ],
+      "assignees": [
+        {
+          "assignee_organization": "Northline Sensors Inc"
+        }
+      ]
+    },
+    {
+      "patent_id": "9876543",
+      "patent_title": "Dummy half-bridge offset cancellation for MEMS pressure dies",
+      "patent_date": "2018-01-23",
+      "patent_type": "utility",
+      "patent_abstract": "A matched dummy half-bridge fabricated adjacent to a sense bridge on the same die supplies a compensation tap that is summed into the bridge output through a fixed divider, cancelling common-mode offset drift without a per-unit trim.",
+      "inventors": [
+        {
+          "inventor_name_first": "Priya",
+          "inventor_name_last": "Jones"
+        }
+      ],
+      "assignees": [
+        {
+          "assignee_organization": "Halberd Microsystems LLC"
+        }
+      ]
+    },
+    {
+      "patent_id": "8123456",
+      "patent_title": "Digital calibration of a transducer using a stored lookup table",
+      "patent_date": "2012-02-28",
+      "patent_type": "utility",
+      "patent_abstract": "A microcontroller reads a temperature sensor and applies a stored lookup table to correct transducer output over a soak-characterized range.",
+      "inventors": [
+        {
+          "inventor_name_first": "Ada",
+          "inventor_name_last": "Okafor"
+        }
+      ],
+      "assignees": []
+    }
+  ]
+}

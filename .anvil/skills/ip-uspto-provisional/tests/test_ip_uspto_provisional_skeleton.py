@@ -26,50 +26,22 @@ the same shape).
 from __future__ import annotations
 
 import re
+import sys
 import unittest
 from pathlib import Path
 
 _SKILL_ROOT = Path(__file__).resolve().parent.parent
 _IP_USPTO_ROOT = _SKILL_ROOT.parent / "ip-uspto"
+_REPO_ROOT = _SKILL_ROOT.parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from anvil.lib.testing import parse_frontmatter as _parse_frontmatter  # noqa: E402
+from anvil.lib.testing import read_text
 
 RUBRIC_ID = "anvil-ip-provisional-v1"
 
-
-def _read(rel: str) -> str:
-    return (_SKILL_ROOT / rel).read_text(encoding="utf-8")
-
-
-def _parse_frontmatter(text: str) -> dict:
-    """Parse a leading ``---``-delimited YAML frontmatter block.
-
-    Uses PyYAML when available; falls back to a minimal ``key: value``
-    parser so the test does not hard-depend on PyYAML being installed.
-    """
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return {}
-    end = None
-    for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
-            end = i
-            break
-    if end is None:
-        return {}
-    block = "\n".join(lines[1:end])
-    try:
-        import yaml  # type: ignore
-
-        data = yaml.safe_load(block)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        result: dict = {}
-        for line in block.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or ":" not in line:
-                continue
-            key, _, value = line.partition(":")
-            result[key.strip()] = value.strip().strip('"').strip("'")
-        return result
+_read = lambda rel: read_text(_SKILL_ROOT / rel)
 
 
 class TestFilesExist(unittest.TestCase):
@@ -194,9 +166,7 @@ class TestCommandFrontmatter(unittest.TestCase):
             with self.subTest(path=rel):
                 fm = _parse_frontmatter(_read(rel))
                 self.assertEqual(fm.get("name"), expected_name)
-                self.assertTrue(
-                    fm.get("description"), f"{rel} missing a description"
-                )
+                self.assertTrue(fm.get("description"), f"{rel} missing a description")
 
     CRITIC_COMMANDS = (
         "commands/ip-uspto-provisional-review.md",
@@ -215,8 +185,8 @@ class TestCommandFrontmatter(unittest.TestCase):
             with self.subTest(path=rel):
                 text = _read(rel)
                 self.assertIn(RUBRIC_ID, text)
-                self.assertIn('rubric_total: 45', text)
-                self.assertIn('advance_threshold: 39', text)
+                self.assertIn("rubric_total: 45", text)
+                self.assertIn("advance_threshold: 39", text)
                 self.assertIn("staged_sidecar", text)
                 self.assertIn("cleanup_one_staging", text)
                 self.assertIn("machine-summary", text)
@@ -297,6 +267,7 @@ class TestFinalizeCommand(unittest.TestCase):
 
     def setUp(self):
         self.text = _read("commands/ip-uspto-provisional-finalize.md")
+        self.lowered = self.text.lower()
 
     def test_frontmatter_role_finalizer(self):
         fm = _parse_frontmatter(self.text)
@@ -336,9 +307,7 @@ class TestFinalizeCommand(unittest.TestCase):
         # _manifest.json artifact-row examples.
         self.assertIn("NO abstract.txt", self.text)
         manifest_block = self.text[
-            self.text.index('"artifacts": [') : self.text.index(
-                '"claim_seed_present"'
-            )
+            self.text.index('"artifacts": [') : self.text.index('"claim_seed_present"')
         ]
         self.assertNotIn("abstract.txt", manifest_block)
         self.assertNotIn("inventorship-attestation", manifest_block)
@@ -361,10 +330,33 @@ class TestFinalizeCommand(unittest.TestCase):
 
     def test_git_sync_terminal_token(self):
         self.assertIn(
-            "anvil(ip-uspto-provisional/finalize): <thread>.counsel "
-            "[COUNSEL-READY]",
+            "anvil(ip-uspto-provisional/finalize): <thread>.counsel [COUNSEL-READY]",
             self.text,
         )
+
+    def test_visual_qa_check_present_and_non_blocking(self):
+        # Issue #982 AC #2: finalize checks for a vision pass on rendered
+        # (non-stub) figures and warns — non-blocking — when absent.
+        self.assertIn("Visual QA check", self.text)
+        self.assertIn(".vision/_review.json", self.text)
+        self.assertIn("warning only", self.lowered)
+        self.assertIn("NOT a gate", self.text)
+
+    def test_visual_qa_warning_language_distinguishes_numeral_drift(self):
+        # Assert on a whitespace-normalized copy so markdown line-wrapping
+        # inside the warning prose can't make an otherwise-present phrase
+        # look absent.
+        normalized = re.sub(r"\s+", " ", self.lowered)
+        self.assertIn("never visually verified", normalized)
+        self.assertIn("dimension-4 check", normalized)
+        self.assertIn("not visual verification", normalized)
+        self.assertIn("ip-uspto-provisional-vision <thread>", self.text)
+
+    def test_manifest_records_visual_verification_flag(self):
+        self.assertIn('"rendered_drawings_visually_verified"', self.text)
+
+    def test_failure_handling_notes_visual_qa_is_non_blocking(self):
+        self.assertIn("rendered drawings never visually verified", self.lowered)
 
 
 class TestPreFlightCommand(unittest.TestCase):
@@ -443,9 +435,7 @@ class TestPreFlightCommand(unittest.TestCase):
         self.assertIn("_gate.json", self.text)
 
     def test_git_sync_token(self):
-        self.assertIn(
-            "anvil(ip-uspto-provisional/pre-flight): <thread>.{N}", self.text
-        )
+        self.assertIn("anvil(ip-uspto-provisional/pre-flight): <thread>.{N}", self.text)
 
 
 class TestClaimsSeedCommand(unittest.TestCase):
@@ -554,9 +544,7 @@ class TestSkillCommandDispatch(unittest.TestCase):
     def test_skill_line108_claim_seed_critic_exists(self):
         text = _read("SKILL.md")
         # The stale "claim-seed critic is a tracked follow-up" sentence gone.
-        self.assertNotIn(
-            "The claim-seed critic is a tracked follow-up.", text
-        )
+        self.assertNotIn("The claim-seed critic is a tracked follow-up.", text)
         self.assertIn("ip-uspto-provisional-claims-seed", text)
 
     def test_skill_multicritic_opt_in_claimseed_tag(self):
@@ -608,9 +596,7 @@ class TestRubric(unittest.TestCase):
             self.text,
             flags=re.MULTILINE,
         )
-        self.assertEqual(
-            len(rows), 9, f"expected 9 dimension rows, found {len(rows)}"
-        )
+        self.assertEqual(len(rows), 9, f"expected 9 dimension rows, found {len(rows)}")
         indices = sorted(int(i) for i, _ in rows)
         self.assertEqual(indices, [1, 2, 3, 4, 5, 6, 7, 8, 9])
         total = sum(int(w) for _, w in rows)
@@ -713,9 +699,30 @@ class TestFiguresCommand(unittest.TestCase):
         self.assertIn("1.84", self.text)
 
     def test_git_sync_token(self):
-        self.assertIn(
-            "anvil(ip-uspto-provisional/figures): <thread>.{N}", self.text
-        )
+        self.assertIn("anvil(ip-uspto-provisional/figures): <thread>.{N}", self.text)
+
+    def test_numeral_drift_is_not_visual_verification(self):
+        # Issue #982: the figurer must not self-report a TikZ render as
+        # "rendered-clean" — that conflates a text/compile-level check
+        # (numeral round-trip + pdflatex success) with a pixels-side
+        # layout verification.
+        self.assertIn("NOT visual verification", self.text)
+        self.assertIn("compiles + numerals present", self.lowered)
+        self.assertIn("layout not visually verified", self.lowered)
+        self.assertIn("rendered-clean", self.lowered)
+
+    def test_visual_qa_not_run_marker(self):
+        # Issue #982 AC #2: the figurer writes an explicit visual_qa
+        # marker into _progress.json when it renders real (non-stub)
+        # TikZ figures, so a downstream reader never mistakes a
+        # numeral-drift pass for a visual pass.
+        self.assertIn('"visual_qa": "not-run"', self.text)
+        self.assertIn("visual_qa", self.text)
+        self.assertIn("metadata.rendered > 0", self.text)
+
+    def test_recommends_vision_or_manual_review_before_finalize(self):
+        self.assertIn("ip-uspto-provisional-vision <thread>", self.text)
+        self.assertIn("before finalize", self.lowered)
 
 
 class TestVisionCommand(unittest.TestCase):
@@ -798,9 +805,7 @@ class TestVisionCommand(unittest.TestCase):
         self.assertIn(".vision.tmp", self.text)
 
     def test_git_sync_token(self):
-        self.assertIn(
-            "anvil(ip-uspto-provisional/vision): <thread>.{N}", self.text
-        )
+        self.assertIn("anvil(ip-uspto-provisional/vision): <thread>.{N}", self.text)
 
 
 class TestVisionRubricBehavior(unittest.TestCase):
@@ -837,9 +842,7 @@ class TestVisionRubricBehavior(unittest.TestCase):
                 description="Drawn numerals correspond to spec; pixels-side.",
             ),
         )
-        return VisionRubric(
-            dimensions=dims, rubric_id="anvil-ip-provisional-vision-v1"
-        )
+        return VisionRubric(dimensions=dims, rubric_id="anvil-ip-provisional-vision-v1")
 
     def test_rubric_owns_three_dims_scored_out_of_fifteen(self):
         rubric = self._rubric()

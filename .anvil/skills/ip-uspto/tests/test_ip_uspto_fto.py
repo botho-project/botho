@@ -51,6 +51,9 @@ _REPO_ROOT = _HERE.parents[3]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from anvil.lib.testing import parse_frontmatter as _parse_frontmatter  # noqa: E402
+from anvil.lib.testing import read_text
+
 RUBRIC_ID = "anvil-ip-uspto-v2"
 
 BOILERPLATE = (
@@ -62,42 +65,7 @@ BOILERPLATE = (
     "before any business reliance."
 )
 
-
-def _read(rel: str) -> str:
-    return (_SKILL_ROOT / rel).read_text(encoding="utf-8")
-
-
-def _parse_frontmatter(text: str) -> dict:
-    """Parse a leading ``---``-delimited YAML frontmatter block.
-
-    Uses PyYAML when available; falls back to a minimal ``key: value``
-    parser so the test does not hard-depend on PyYAML being installed.
-    """
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return {}
-    end = None
-    for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
-            end = i
-            break
-    if end is None:
-        return {}
-    block = "\n".join(lines[1:end])
-    try:
-        import yaml  # type: ignore
-
-        data = yaml.safe_load(block)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        result: dict = {}
-        for line in block.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or ":" not in line:
-                continue
-            key, _, value = line.partition(":")
-            result[key.strip()] = value.strip().strip('"').strip("'")
-        return result
+_read = lambda rel: read_text(_SKILL_ROOT / rel)
 
 
 class TestCommandFile(unittest.TestCase):
@@ -196,7 +164,13 @@ class TestCommandFile(unittest.TestCase):
         # charts are mandatory at scores 3/4.
         self.assertIn("0–4", self.text)
         lowered = self.text.lower()
-        for term in ("not relevant", "weak overlap", "adjacent", "near-miss", "likely overlap"):
+        for term in (
+            "not relevant",
+            "weak overlap",
+            "adjacent",
+            "near-miss",
+            "likely overlap",
+        ):
             self.assertIn(term, lowered)
         self.assertIn("claim chart", lowered)
         self.assertIn("mandatory", lowered)
@@ -262,16 +236,16 @@ class TestSkillMd(unittest.TestCase):
         # like .adversary/ and .vision/.
         self.assertIn("<thread>.{N}.fto/", self.text)
         line = next(
-            ln
-            for ln in self.text.splitlines()
-            if ln.startswith("<thread>.{N}.fto/")
+            ln for ln in self.text.splitlines() if ln.startswith("<thread>.{N}.fto/")
         )
         self.assertIn("opt", line.lower())  # "optional" / "on-demand"
         self.assertIn("never flags", line.lower())
 
     def test_fto_refs_in_thread_layout(self):
         line = next(
-            ln for ln in self.text.splitlines() if "fto-refs/" in ln and "Operator" in ln
+            ln
+            for ln in self.text.splitlines()
+            if "fto-refs/" in ln and "Operator" in ln
         )
         self.assertIn("distinct from prior-art/", line)
 

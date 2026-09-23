@@ -86,12 +86,12 @@ Design notes
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
+from anvil.lib.atomic_write import atomic_write_json
 from anvil.skills.proposal.lib.synthesis_schema import (
     SCHEMA_VERSION,
     ContributingFinding,
@@ -116,7 +116,6 @@ DEFAULT_MODEL = "claude-opus-4-7-20251022"
 # additional ``<thread>.{N}.<critic>/`` siblings via the glob path in
 # ``discover_siblings`` — this list is just the documented v0 set.
 REQUIRED_SIBLINGS: Sequence[str] = ("review", "audit")
-KNOWN_OPTIONAL_SIBLINGS: Sequence[str] = ("perspective",)
 
 
 @dataclass(frozen=True)
@@ -778,19 +777,13 @@ class Synthesizer:
             target.mkdir(parents=True, exist_ok=True)
             out = target / "gaps.json"
 
-        tmp = out.with_suffix(out.suffix + ".tmp")
-        tmp.write_text(
-            json.dumps(gaps.model_dump(mode="json"), indent=2) + "\n",
-            encoding="utf-8",
-        )
-        tmp.replace(out)
+        atomic_write_json(out, gaps.model_dump(mode="json"))
         return out
 
 
 __all__ = [
     "DEFAULT_MODEL",
     "REQUIRED_SIBLINGS",
-    "KNOWN_OPTIONAL_SIBLINGS",
     "AUDIT_FINDINGS_ALIASES",
     "SiblingPaths",
     "RawFinding",

@@ -63,7 +63,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # v1 lib reuse — ``inventorship_evidence.py`` was promoted to ``anvil/lib/``
