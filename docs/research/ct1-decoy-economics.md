@@ -153,6 +153,40 @@ adaptive ownership strategies, stationary equilibrium, authentic traffic trace
 or whole-network Gini calculation. Repeated self-hop charge arithmetic is tested
 separately; the lottery history does not claim to simulate every churn strategy.
 
+## Subsequent funded-payment and reinvestment controls
+
+The later funded-workload capture adds a useful control without changing the
+candidate policy. The checked-in
+[`workload-summary.json`](../../scripts/research/ct-economics/workload-summary.json)
+contains two seeds, four ownership strategies and 11,232-block finite histories.
+Each history completes 113 ordinary payments; the captured background histories
+produce 56.5 BTH gross fees, 45.2 BTH of lottery capture and 11.3 BTH burned,
+with the owner-level accounting checker reconciling all 808 owner records. This
+is still a fixed synthetic population and the native gamma membership boundary,
+not an observed traffic trace or a complete wallet construction.
+
+The separate
+[`ct-reinvestment` capture](../../scripts/research/ct-reinvestment/RESULTS.md)
+tests eight histories over the same 11,232-block horizon, comparing locked
+awards with oldest-first consolidation at ages 720 and 10,001. Every history
+completes its 113 ordinary payments. The enabled consolidation modes make 11,413
+attempts each and have zero successful reinvestments: attempts fail through
+missing policy-aged inputs or unaffordability, while no payment or selector
+failure is hidden. The fixed background fee is 0.25 BTH per input, so a batch of
+0.1 BTH awards cannot fund its own consolidation under this strategy. A separate
+positive accounting control uses existing ordinary principal to verify the
+conservation and draw arithmetic; it is not evidence that the main-grid strategy
+is affordable.
+
+This result is useful evidence for the fee-policy decision: a static candidate
+base can make small lottery awards unusable even when the BTH purchasing power
+changes. It is not a universal impossibility result because the histories do not
+search adaptive strategies, ordinary-principal financing, observed ownership,
+or long-run reinvestment equilibria. The captures preserve source/configuration
+hashes and are run by the bounded Linux workflow; the source and raw-result
+identities remain tied to their recorded checkout commits rather than being
+presented as a rerun on every later main commit.
+
 ## Decision implication
 
 **Do not ratify D3 or the proposed base from these tests.** They demonstrate
