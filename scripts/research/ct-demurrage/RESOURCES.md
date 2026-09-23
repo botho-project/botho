@@ -90,10 +90,11 @@ Each case has a 120-second deadline, and the matrix has a 300-second deadline.
 Timeout kills and waits for the whole process group, including the timing
 wrapper's child. Compilation is separately bounded in CI. The Linux workflow
 runs only this matrix and the fast collector checks, preserves outcomes even on
-failure, and labels artifacts with run ID/attempt. **Linux measurements remain
-pending until the new workflow runs successfully on the published head**; this
-local report makes no Linux performance claim. CI artifacts expire after 14 days
-and should be downloaded for a reviewed cross-platform report.
+failure, and labels artifacts with run ID/attempt. The original local capture made no Linux performance claim. The later successful
+Linux run and its raw files are now retained in the
+[cross-platform checkpoint](../../../docs/research/ct1-rehearsal-acceptance.md).
+CI artifacts expire after 14 days; that checkpoint preserves historical evidence
+without treating it as current integrated CT1 acceptance.
 
 Reproduce from the repository root, using a new output directory:
 

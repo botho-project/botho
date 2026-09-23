@@ -1,0 +1,30 @@
+{
+  "run_url": "https://github.com/botho-project/botho/actions/runs/35541918241",
+  "run_id": "35541918241",
+  "run_attempt": "1",
+  "head_sha": "4dd5452fa6eedf2f80b0bea369657bc182bd504c",
+  "checkout_merge_sha": "76371455280163fa01e5299c68b305e2adf6f57e",
+  "conclusion": "success",
+  "source_snapshot_note": "All fourteen measured source hashes match the PR head. Snapshot reconstructed from that commit; it is not a binary build attestation.",
+  "files_sha256": {
+    "both-caps-cancel.log": "6d7076d54137c49b5073daefe28f21c39564e1680402a86519e963b4886c8418",
+    "both-caps-cancel.rss.txt": "40835cfe12cea07099b7b5c1556c726919ac2ea819457da0db3dc5effa27c2b0",
+    "cargo.jsonl.gz": "ea9f55c5b4c08a2ebc9f0ed7736844747690dc1acc0e3aed5e5efe3a358317e0",
+    "generators.log": "f9336f66314b5ea0d3f55efe815708d09e991cf0da7fc6a2e5300b167c7489dc",
+    "generators.rss.txt": "becdfa64279f8f07f9b6a8f759f31dae4623f8b70f06904c6429c991beac8ed1",
+    "maximum-sum.log": "51819a50e21262459c9a50bbe6f8b62f11ca0a9cbb96cbb4baafe4541e1a697a",
+    "maximum-sum.rss.txt": "520af345ee55067d018be10e8a916c7b0b82bfcd88c71d27c3f02fa64f9ea0e9",
+    "one-cap-difference.log": "d76e4132294e9faac98edbe649fa506447926f7d1de74a2eaa0253067c90b8a3",
+    "one-cap-difference.rss.txt": "e379734898129c7db433a792e451d99dd2ca92dd70c586c62a69dd2652ef55c1",
+    "ordinary-1.log": "4c2c2166e329ec1c6d5add919eaae38bf5e6cddc12aec90da5078f33be53eb67",
+    "ordinary-1.rss.txt": "8cba0c01ffed7959b9ee95637885dcd28a8ad25a59510c2e2277e3d083eb7c9e",
+    "ordinary-16.log": "5c3ed002fdf168628d04fa0322c8b4d012e2431bb0273658966b1b6c49912c91",
+    "ordinary-16.rss.txt": "e053bfede2112f8e5ff83a5562f42f6ec73d67c7b4ea074e2bcd04dc6d4f8a91",
+    "ordinary-4.log": "0c53967084d393c5ee63c9b049aaeeff3539340e756a46fe06661cb6fe4b72de",
+    "ordinary-4.rss.txt": "92ca80fbe180d6b1a09483d3c6e7343bc905f06c1fd1ea54708217d2f9d4df7b",
+    "sources.tar.gz": "8702b7aa1273dd8fff8058d1289c34385c2ca802c9e8650c4d0dbcaaab19b2ad",
+    "summary.json": "48dc7fa520f7bbc21546961aafb6cc0824363cb968f7f4d3c1007365e4b23d4a",
+    "zero.log": "986205ae03e5694119818fce7a5b2c30e616074f9f079acbf8a4e8e255f977da",
+    "zero.rss.txt": "2edc4f4068732e48f9bcea09efbff9e350c1a2d39dab7b926991cdc8beb328f1"
+  }
+}
