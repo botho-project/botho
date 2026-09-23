@@ -4,6 +4,7 @@ use anyhow::Result;
 use std::{
     path::{Path, PathBuf},
     sync::{mpsc::Receiver, Arc, RwLock},
+    thread::JoinHandle,
 };
 use tracing::{info, warn};
 
@@ -37,6 +38,10 @@ pub struct Node {
     ledger: SharedLedger,
     mempool: SharedMempool,
     minter: Option<Minter>,
+    /// Worker joins requested by a non-blocking minting stop. Keeping these
+    /// handles lets restart refuse to overlap two minting generations and
+    /// ensures final node teardown still waits for every worker.
+    pending_minter_stops: Vec<JoinHandle<()>>,
     /// Stable, shared health handle for the *current* minter, used by the RPC
     /// layer and the periodic status loop for stuck-miner detection (#538).
     /// `None` until minting first starts; the inner handle is replaced on each
@@ -95,6 +100,7 @@ impl Node {
             ledger,
             mempool,
             minter: None,
+            pending_minter_stops: Vec::new(),
             minter_health: Arc::new(RwLock::new(None)),
             minting_tx_receiver: None,
             config_dir,
@@ -164,6 +170,13 @@ impl Node {
     }
 
     fn start_minting(&mut self) -> Result<()> {
+        self.reap_minter_stops();
+        if !self.pending_minter_stops.is_empty() {
+            return Err(anyhow::anyhow!(
+                "previous minting workers are still shutting down"
+            ));
+        }
+
         // Minting requires a wallet to receive rewards
         let wallet = self.wallet.as_ref().ok_or_else(|| {
             anyhow::anyhow!("Cannot mine without a wallet. Run 'botho init' to create one.")
@@ -228,10 +241,25 @@ impl Node {
 
     fn stop_minting(&mut self) {
         if let Some(minter) = self.minter.take() {
-            // `Minter::stop` marks its health inactive; the handle published in
-            // `minter_health` shares the same state, so the flag flips to
-            // inactive (and unstalled) for RPC readers too.
-            minter.stop();
+            // Signal shutdown and mark health inactive immediately, but move
+            // potentially expensive worker joins off the network event loop.
+            self.pending_minter_stops.push(minter.stop_async());
+        }
+    }
+
+    fn reap_minter_stops(&mut self) {
+        let mut pending = std::mem::take(&mut self.pending_minter_stops);
+        pending.retain(|handle| !handle.is_finished());
+        self.pending_minter_stops = pending;
+    }
+
+    /// Wait for all detached minting workers during final node shutdown.
+    pub fn finish_minting_shutdown(&mut self) {
+        if let Some(minter) = self.minter.take() {
+            self.pending_minter_stops.push(minter.stop_async());
+        }
+        for handle in self.pending_minter_stops.drain(..) {
+            let _ = handle.join();
         }
     }
 
@@ -556,5 +584,11 @@ impl Node {
                 Ok(Vec::new())
             }
         }
+    }
+}
+
+impl Drop for Node {
+    fn drop(&mut self) {
+        self.finish_minting_shutdown();
     }
 }
