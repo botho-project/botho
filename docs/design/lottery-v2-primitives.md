@@ -28,10 +28,13 @@ subtracts `TG`, delegates original classical/hybrid recovery to the existing
 wallet derivation, then requires `xG=P` before returning the final key. It does
 not return ownership based on a callback's assertion alone.
 
-`Record` encodes the proposed payout fields with canonical points/scalars,
-explicit KEM/context tags, exact 1088-byte optional ML-KEM ciphertext and no
-trailing bytes. `validate` additionally checks it against supplied source data
-and the complete derivation domain. Four awards is an explicit candidate codec bound matching
+`Context` exposes the same explicit versioned fixed-width encoding used by a
+future payout record: version, original derivation index and cumulative tweak.
+Its decoder is syntax-only and does not authenticate lineage. `Record` encodes
+the proposed payout fields with canonical points/scalars, explicit KEM/context
+tags, exact 1088-byte optional ML-KEM ciphertext and no trailing bytes.
+`validate` additionally checks it against supplied source data and the complete
+derivation domain. Four awards is an explicit candidate codec bound matching
 `LotteryDrawConfig::default().winners_per_draw`; current configuration exposes
 that parameter and does not establish a hard consensus maximum of four. Future
 V2 consensus integration must ratify or revise this bound explicitly. The

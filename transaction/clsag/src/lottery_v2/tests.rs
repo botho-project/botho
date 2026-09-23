@@ -189,6 +189,37 @@ fn canonical_codec_rejects_malformed_trailing_and_unknown_fields() {
     assert_eq!(r.encode(), Err(Error::Count));
     assert_eq!(payout_root(&vec![record(); 5]), Err(Error::Count));
 }
+
+#[test]
+fn context_codec_is_versioned_canonical_and_syntax_only() {
+    let context = Context {
+        base_index: 19,
+        tweak: [0; 32],
+    };
+    let bytes = context.encode().unwrap();
+    assert_eq!(bytes.len(), 1 + 4 + 32);
+    assert_eq!(bytes[0], CONTEXT_VERSION);
+    assert_eq!(Context::decode(&bytes).unwrap(), context);
+
+    for n in 0..bytes.len() {
+        assert!(Context::decode(&bytes[..n]).is_err());
+    }
+    let mut trailing = bytes.clone();
+    trailing.push(0);
+    assert_eq!(Context::decode(&trailing), Err(Error::Encoding));
+
+    let mut unknown = bytes.clone();
+    unknown[0] = CONTEXT_VERSION + 1;
+    assert_eq!(Context::decode(&unknown), Err(Error::Encoding));
+
+    let mut malformed = bytes;
+    malformed[5] = 0xff;
+    malformed[6] = 0xff;
+    malformed[7] = 0xff;
+    malformed[8] = 0xff;
+    malformed[9..].fill(0xff);
+    assert_eq!(Context::decode(&malformed), Err(Error::Scalar));
+}
 #[test]
 fn ordered_records_bind_every_field_and_body_component() {
     let r = record();
