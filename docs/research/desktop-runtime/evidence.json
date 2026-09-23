@@ -1,0 +1,38 @@
+{
+  "source_commit": "1fb1c567ab521babdf369950e345de4b1a0c348a",
+  "host": {
+    "os": "macOS 27.0",
+    "build": "26A428",
+    "node": "22.23.2",
+    "pnpm": "9.15.9"
+  },
+  "native_execution": false,
+  "minimum_host_verified": false,
+  "source_sha256": {
+    "web/packages/desktop/vite.config.ts": "d14aeecda696a74d15270c8e2cc17085b238eccd8856ddf32cf476d7231b974f",
+    "web/packages/desktop/src-tauri/tauri.conf.json": "2d2b3cbaca88e3743093398b146221b55abaefd7d4e34ad68752bb11378314d8",
+    "web/packages/desktop/src/contexts/wallet.tsx": "0210b5d8339460e0091d3cfae09eabb1d31fe8b6e1d14d72da0b2967acf441f9",
+    "web/packages/desktop/src-tauri/src/wallet.rs": "4087f039c330b50d7541bbc0b94565b51d7deaf1b970c110d8c9b1b1712788a4",
+    "web/packages/core/src/format.ts": "d5212b04e3b1126da372b8ac66c504f8e1f59986c726edce760099f968371a20",
+    "web/pnpm-lock.yaml": "72ae5c5f467503f00c1945944466b65bb8e9705a03c525a62f0260bf3be2ce89"
+  },
+  "local_log_sha256": {
+    "/tmp/1327-install.log": "603d71592fd125945e4b15a0391621a617f393da1fe0cf9977b3e7855167bdc0",
+    "/tmp/1327-macos-build.log": "f91cf5e4e8ac8bf392d9816e3bd3e009da4a3c0ec7cda41ceed67f020b6fe026",
+    "/tmp/1327-windows-build.log": "29fcdffee1c3626568f094ae0b0390934cb110e7a21aeaffeb04920a3323129b",
+    "/tmp/1327-format-tests.log": "6df56a3a61d56a2a3f0ab9eed8dfbfd4411162f1a92d5943a679220b457c8e75",
+    "/tmp/1327-isolation-tests.log": "feabb4add9e2ca3374e538560634d1ec97dc4f4ce89aab12f3d726e36ea9b2f6"
+  },
+  "results": {
+    "macos_frontend": {
+      "exit": 0,
+      "tolerated_transform_count": 34
+    },
+    "windows_frontend_on_macos": {
+      "exit": 0,
+      "tolerated_transform_count": 0
+    },
+    "amount_tests_passed": 9,
+    "isolation_tests_passed": 4
+  }
+}
