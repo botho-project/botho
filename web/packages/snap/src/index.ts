@@ -55,7 +55,7 @@ import { parseAddress } from '@botho/core';
 
 import { ensureSigner, wasm } from './signer';
 import { deriveWallet, revealMnemonic, DERIVATION_DESCRIPTION } from './derivation';
-import { connectAndGuard, getOutputsWithMeta, makeSendRpc, EXPECTED_NETWORK_ID } from './node';
+import { connectAndGuard, getOutputsWithMeta, makeSendRpc } from './node';
 import {
   incrementalScan,
   incrementalScanBalance,
@@ -162,9 +162,9 @@ async function scanBalance(rpcUrl: string): Promise<bigint> {
     signer,
     keys: wallet.keys,
     // Bind persisted scan state to the node's reported network so a later read
-    // against a different network is invalidated (loopback dev nodes may not
-    // report one — fall back to the expected id to keep the binding stable).
-    network: status.network ?? EXPECTED_NETWORK_ID,
+    // against a different network is invalidated. connectAndGuard requires a
+    // reported identity even for loopback development nodes.
+    network: status.network,
     tip: status.chainHeight,
     fetchWindow: getOutputsWithMeta(call),
     sendRpc: makeSendRpc(call),
@@ -186,7 +186,7 @@ async function scanHistory(rpcUrl: string): Promise<HistoryEntry[]> {
   const { ownedOutputs, spendable, tip } = await incrementalScan({
     signer,
     keys: wallet.keys,
-    network: status.network ?? EXPECTED_NETWORK_ID,
+    network: status.network,
     tip: status.chainHeight,
     fetchWindow: getOutputsWithMeta(call),
     sendRpc: makeSendRpc(call),

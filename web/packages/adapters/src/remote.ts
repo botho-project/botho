@@ -210,15 +210,27 @@ export class RemoteNodeAdapter implements NodeAdapter {
 
         if (generation !== this.connectionGeneration) throw new Error('Connection cancelled')
         if (result) {
-          this.currentSeedUrl = seedUrl
           const resolvedUrl = resolveUrl(seedUrl)
+          if (
+            typeof result.network !== 'string' || !result.network.trim() ||
+            result.network !== result.network.trim()
+          ) {
+            throw new Error('Node did not report a valid network identity')
+          }
+          // Match the wallet/Snap's explicit local-development exception. A
+          // loopback node may name its own dev chain, but must still identify it.
+          const loopback = resolvedUrl?.hostname === 'localhost' || resolvedUrl?.hostname === '127.0.0.1'
+          if (!loopback && result.network !== this.config.networkId) {
+            throw new Error(`Node is on ${result.network}; expected ${this.config.networkId}`)
+          }
+          this.currentSeedUrl = seedUrl
           this.currentNode = {
             id: seedUrl,
             host: resolvedUrl?.hostname ?? seedUrl,
             port: resolvedUrl ? Number(resolvedUrl.port) || (resolvedUrl.protocol === 'http:' ? 80 : 443) : 443,
             version: result.version,
             blockHeight: result.chainHeight,
-            networkId: result.network || this.config.networkId,
+            networkId: result.network,
             status: 'online',
           }
           this.connected = true

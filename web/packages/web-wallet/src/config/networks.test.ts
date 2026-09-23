@@ -9,8 +9,10 @@
  * reachability / network-match gates in `validateRpcEndpointForNetwork`.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { RemoteNodeAdapter } from '@botho/adapters'
 import {
   EXPECTED_NETWORK_ID,
+  createCustomNetwork,
   fetchNodeHealth,
   saveSelectedNetwork,
   loadSelectedNetwork,
@@ -124,11 +126,57 @@ describe('validateRpcEndpointForNetwork', () => {
     expect(result.ok).toBe(true)
   })
 
-  it('accepts an https endpoint that omits the network field (older node)', async () => {
+  it.each([undefined, null, '', ' ', 42, {}, ['botho-testnet'], ' botho-testnet '])(
+    'rejects an https endpoint with invalid network identity %j', async (network) => {
+      stubStatus({ chainHeight: 5, synced: true, network })
+      const result = await validateRpcEndpointForNetwork('https://node-x.testnet.botho.io/rpc')
+      expect(result).toEqual({ ok: false, error: 'This node did not report a valid network identity' })
+    },
+  )
+
+  it('requires an identity even from loopback', async () => {
     stubStatus({ chainHeight: 5, synced: true })
-    const result = await validateRpcEndpointForNetwork('https://node-x.testnet.botho.io/rpc')
-    expect(result.ok).toBe(true)
+    const result = await validateRpcEndpointForNetwork('http://localhost:17101/rpc')
+    expect(result.ok).toBe(false)
   })
+
+  it('configures custom endpoints with the same expected chain as validation', () => {
+    expect(createCustomNetwork('https://node.example/rpc').networkId).toBe(EXPECTED_NETWORK_ID)
+  })
+})
+
+describe('saved custom endpoint connection', () => {
+  afterEach(() => {
+    localStorage.clear()
+    vi.unstubAllGlobals()
+  })
+
+  it.each([undefined, 'botho-mainnet', EXPECTED_NETWORK_ID])(
+    'checks network %j again when restoring a previously accepted endpoint', async (network) => {
+      const endpoint = 'https://node-x.testnet.botho.io/rpc'
+      stubStatus({ chainHeight: 5, network: EXPECTED_NETWORK_ID })
+      expect((await validateRpcEndpointForNetwork(endpoint)).ok).toBe(true)
+      saveSelectedNetwork('custom', endpoint)
+
+      const saved = loadSelectedNetwork()
+      expect(saved.networkId).toBe('custom')
+      const config = createCustomNetwork(saved.customEndpoint!)
+      const adapter = new RemoteNodeAdapter({
+        seedNodes: [config.rpcEndpoint], networkId: config.networkId, useWebSocket: false,
+      })
+      // The endpoint can change chains between being saved and being restored.
+      stubStatus({ chainHeight: 5, network })
+      if (network === EXPECTED_NETWORK_ID) {
+        await adapter.connect()
+        expect(adapter.getNodeInfo()?.networkId).toBe(EXPECTED_NETWORK_ID)
+        adapter.disconnect()
+      } else {
+        await expect(adapter.connect()).rejects.toThrow('Failed to connect')
+        expect(adapter.isConnected()).toBe(false)
+        expect(adapter.getNodeInfo()).toBeNull()
+      }
+    },
+  )
 })
 
 describe('fetchNodeHealth captures the reported network', () => {

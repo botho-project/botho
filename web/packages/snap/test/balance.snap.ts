@@ -79,4 +79,17 @@ describe('botho snap: balance + receive against a mocked node', () => {
     });
     expect(errorOf(response)?.message).toMatch(/valid https/i);
   });
+
+  it.each(['botho_getBalance', 'botho_getHistory'])(
+    '%s rejects an unidentified node before scanning or reading cached funds', async (method) => {
+      await node.close();
+      node = await startMockNode({
+        handlers: { node_getStatus: () => ({ chainHeight: 100, synced: true }) },
+      });
+      const { request } = await installSnap();
+      const response = await request({ method, params: { rpcUrl: node.url } });
+      expect(errorOf(response)?.message).toMatch(/valid network identity/i);
+      expect(node.calls.map((call) => call.method)).toEqual(['node_getStatus']);
+    },
+  );
 });
