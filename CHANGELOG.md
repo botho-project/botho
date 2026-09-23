@@ -12,6 +12,36 @@ bumps (`0.X.Y`) are backwards-compatible.
 
 ## [Unreleased]
 
+### Added
+- Inactive LotteryV2 primitives, durable storage and validated atomic ledger
+  transitions, with native/WASM primitive evidence and native payout
+  discovery/spend tests (#1302, #1351, #1353, #1357, #1365). These are candidate
+  components; LotteryV2 is not activated on the current network.
+- Proposed confidential-transaction contract and integer-proof gates, bounded
+  composition experiments, and resource/economic measurements (#1266, #1284,
+  #1288, #1311, #1335, #1347, #1350, #1356). This is design and research
+  evidence; current testnet amounts remain public.
+- Durable Squads mint intents through the bridge engine, finalized execution
+  recovery, and bounded retries with marker-rent validation (#1300, #1317,
+  #1322), backed by a real localnet vault-mint CPI test (#1279).
+- PR CI executes 15 Botho integration suites and the consensus regression
+  suites; secp256k1 tests and metrics-daemon checks also run in CI (#1259,
+  #1276, #1282, #1287).
+
+### Fixed
+- Wallet decoy fallback preserves unique targets; standalone wallet feature
+  builds work again (#1338, #1369).
+- Web wallet connection changes cancel stale work; the desktop production
+  build uses Vite 8's native minifier (#1321, #1328).
+- Ledger test concurrency respects the macOS SysV semaphore undo budget
+  without changing host limits (`scripts/test-ledger.sh`, #1362).
+
+### Security
+- Remediated HTTP/TLS and Bulletproofs dependency advisories, removed the
+  vulnerable Solana native bigint conversion, and migrated DNS/libp2p/WebRTC
+  dependencies with bounded connection cleanup (#1269, #1303, #1312, #1316,
+  #1330).
+
 ### Changed
 - contracts/ethereum migrated to the Hardhat 3 toolchain (#1185).
 - Mobile app migrated to Expo SDK 57, with a first mobile CI workflow
@@ -22,6 +52,36 @@ bumps (`0.X.Y`) are backwards-compatible.
 - rand family migrated to the rand_core 0.10 line;
   `bth_util_from_random::OsRng` replaces the retired `rand_core::OsRng`
   (#1193).
+
+## [0.6.0] - 2026-07-16
+
+### Changed (consensus-breaking — requires a coordinated testnet reset)
+- Ships protocol 6.0.0 with universal hybrid ML-KEM output enforcement and
+  bound lottery payouts (#974), plus value-free Path C lottery selection
+  (#980).
+- Address-format v2 and hybrid output construction/scanning are shared across
+  native and browser wallet paths (#964, #967, #969, #971, #977, #984, #989).
+  Transaction amounts remain public in this release.
+- Added demurrage class-transition charging and the demurrage-settlement
+  operation used by the bridge wrap on-ramp (#953, #956).
+
+See the [published release notes](https://github.com/botho-project/botho/releases/tag/v0.6.0)
+for the complete release diff.
+
+## [0.4.0] - 2026-07-15
+
+### Changed (consensus-breaking — requires a coordinated testnet reset)
+- Ships protocol 5.0.0 (#949), including epoch-keyed bridge-import cluster
+  tagging with the ADR 0007 factor floor (#942).
+
+### Added
+- Bridge reserve release with exactly-once claims and threshold attestation,
+  federation envelope transport, and equivocation detection (#840, #847,
+  #873, #891).
+
+See the [published release notes](https://github.com/botho-project/botho/releases/tag/v0.4.0)
+for the complete release diff. Dates above use the GitHub release publication
+date in UTC.
 
 ## [0.3.2] - 2026-07-07
 
@@ -274,4 +334,3 @@ code) remains open and will be addressed in 0.2.0.
 - Cycle 6 finding C5 (float-based live difficulty controller) is open
 - 6 `cargo audit` advisories remain (DoS / cert-validation in DNS &
   telemetry paths, gated behind upstream `libp2p` and `sentry` bumps)
-
