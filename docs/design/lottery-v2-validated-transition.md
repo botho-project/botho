@@ -105,9 +105,10 @@ not a Linux throughput, network latency or energy measurement.
 
 ## Remaining integration
 
-This demonstrates accepted local experimental payouts, not independent wallet
-discovery or accepted payout spending. Repeated/nested derivation primitives and
-storage regressions remain separate evidence. Public envelope/version selection,
+This layer demonstrates accepted local experimental payouts. The subsequent
+merged [native wallet slice](lottery-v2-native-wallet.md#implemented-layers-and-remaining-interfaces)
+adds independent local discovery and accepted repeated/nested payout spending;
+its evidence is separate from the producer/validator results below. Public envelope/version selection,
 full/compact/snapshot/import/membership-proof handling, clients and trust models,
 legacy disposition and activation remain outstanding. #1308 codecs are outside
 this change. No legacy credits, migration, activation, live reset or audit
@@ -168,6 +169,8 @@ limits are recorded in `local-evidence.json`.
 
 This evidence addresses the execution gate under the documented test resource
 policy while retaining the historical failures and diagnostic uncertainty. This
-amendment changes no implementation. Independent Judge review and current-head CI
-remain required; the PR stays draft until that review. No production retry,
+amendment changes no implementation. The implementation subsequently merged as
+[#1357](https://github.com/botho-project/botho/pull/1357). The measurements remain
+bound to the recorded historical source; later changes require their own review
+and CI. No production retry,
 locking change, activation or payout-spendability claim follows from these runs.
