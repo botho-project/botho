@@ -179,7 +179,14 @@ jobs:
             --test ledger_consistency_integration \
             --test tx_lifecycle_integration \
             --test rpc_integration \
+            --test hybrid_coinbase_rpc \
             --test e2e_faucet_workflow
+
+      - name: Check thin-wallet output-index compatibility and signing
+        timeout-minutes: 5
+        run: |
+          cargo test --locked -p botho-wallet --lib rpc_pool::tests::
+          cargo test --locked -p botho-wallet --lib transaction::tests::
 
       - name: Compile ledger and inactive LotteryV2 validation tests
         id: ledger_tests

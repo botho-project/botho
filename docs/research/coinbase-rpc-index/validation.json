@@ -1,0 +1,72 @@
+{
+  "commit": "a7a4295140ba5380bba3f9a305a65d7434a70910",
+  "sources": {
+    "botho-wallet/src/ring_builder.rs": "053b99d761f15a3dd82ca37cfd1c806273159de652ef40878b5cbf99ed09339d",
+    "botho-wallet/src/rpc_pool.rs": "af7d5c9809c9593432be5948a53a9b245fdb4707b38fafed7d28033e356fef10",
+    "botho-wallet/src/transaction.rs": "9656e8c895d21147c67d6d713d0dc3bf70c70b6d33b9c704396b28cb2567646d",
+    "botho-wallet/tests/integration_tests.rs": "00eb19e7e1b3c8bcb917970d32606c5c118390b1c10295b30a053a80759dfc3f",
+    "botho/src/rpc/mod.rs": "53ba87cabebb4be3c7e57cee303c393cd8e460da1773f17b45b251d1674ba0d0",
+    "botho/tests/hybrid_coinbase_rpc.rs": "2afdba27f0f9b01317d73ac99d43a38bd8918313200c2451e992367d89f65303",
+    "docs/design/rpc-output-index-contract.md": "1d9d667a8eba4969b15be792d1d1b37164124cdf933af116d70eb0459255aaf9"
+  },
+  "artifacts": {
+    "integration_tests": {
+      "path": "/tmp/botho-1254-target/ci/deps/integration_tests-8526739472324e27",
+      "profile": {
+        "opt_level": "2",
+        "debuginfo": 2,
+        "debug_assertions": true,
+        "overflow_checks": true,
+        "test": true
+      },
+      "sha256": "b54db8ef6392129103fcab13f5f52616f1de9ff9f3b0810060e7c80c49d4a343"
+    },
+    "botho_wallet": {
+      "path": "/tmp/botho-1254-target/ci/deps/botho_wallet-8f1c61d3729d74b2",
+      "profile": {
+        "opt_level": "2",
+        "debuginfo": 2,
+        "debug_assertions": true,
+        "overflow_checks": true,
+        "test": true
+      },
+      "sha256": "daeaf7124e4b9ad392fa79a627491d051bc0ba424882ed6c5308a322b7ed48eb"
+    },
+    "hybrid_coinbase_rpc": {
+      "path": "/tmp/botho-1254-target/ci/deps/hybrid_coinbase_rpc-05438d8285a6be4c",
+      "profile": {
+        "opt_level": "2",
+        "debuginfo": 2,
+        "debug_assertions": true,
+        "overflow_checks": true,
+        "test": true
+      },
+      "sha256": "ef099db9e84c07f3aa80726d92280c531e8f8e89f9525193794c34e4240e0617"
+    },
+    "botho": {
+      "path": "/tmp/botho-1254-target/ci/deps/botho-7431a8af77ee804a",
+      "profile": {
+        "opt_level": "2",
+        "debuginfo": 2,
+        "debug_assertions": true,
+        "overflow_checks": true,
+        "test": true
+      },
+      "sha256": "e43381c054b8762bcaf13106975c3b6d7ec880553f49ee43cd89e664a794413f"
+    }
+  },
+  "rustc": "rustc 1.93.0-nightly (646a3f8c1 2025-12-02)\nbinary: rustc\ncommit-hash: 646a3f8c15baefb98dc6e0c1c1ba3356db702d2a\ncommit-date: 2025-12-02\nhost: aarch64-apple-darwin\nrelease: 1.93.0-nightly\nLLVM version: 21.1.5\n",
+  "target": "/tmp/botho-1254-target",
+  "profile_overrides": {
+    "debug_assertions": true,
+    "overflow_checks": true
+  },
+  "files_sha256": {
+    "setup-failure.txt": "37752e338e844b781b7be71f687e4aac87a34317ad55299c39e6d0b4b4888d10",
+    "accepted-spends.txt": "f4a7f56778d88c1c276d49ef3cedb6b1619b3d7c3f5386dfc86a16ba7b792efa",
+    "rpc-units.txt": "2cc45d623d61e25075e36ce19de4e31e3444c88c8ae8babe10e2707da21bebd3",
+    "wallet-units.txt": "41406a411a6267db4e74401843162d896865e4fc2c1503f02df19e23db41f307"
+  },
+  "interpretation": "First setup failure retained; exact existing isolated ledger difficulty initialization fixed, actual production-path fixture passed18.15s. RPC/transaction9+9unit tests were captured before fixture-only correction; production source unchanged. No live network/funds or deployment.",
+  "setup_failure_commit": "8d7d0324b50b9b2d9cf94b1f9c444215eb132663"
+}

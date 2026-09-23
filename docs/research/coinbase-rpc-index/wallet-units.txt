@@ -1,0 +1,16 @@
+
+running 9 tests
+test transaction::tests::test_format_amount ... ok
+test transaction::tests::test_parse_amount ... ok
+test transaction::tests::test_utxo_selection ... ok
+test transaction::tests::test_young_input_rejected_cleanly ... ok
+test transaction::tests::hybrid_scan_tests::classical_none_ciphertext_still_scans ... ok
+test transaction::tests::hybrid_scan_tests::hybrid_output_is_scanned_and_spendable ... ok
+test transaction::tests::hybrid_scan_tests::hybrid_output_for_stranger_not_detected ... ok
+test transaction::tests::test_output_is_detectable_by_recipient ... ok
+test transaction::tests::test_build_signed_transaction_roundtrips_and_verifies ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 104 filtered out; finished in 0.03s
+
+
+BOUNDED_EXIT=0 WALL_SECONDS=0.038
