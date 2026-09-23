@@ -1,0 +1,21 @@
+[Unit]
+Description=Botho bounded overnight experiment 1383 (pay)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+ExecStart=/usr/bin/python3 /opt/botho-overnight-1383/runner.py pay
+TimeoutStartSec=20min
+Restart=no
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/botho-overnight-1383
+MemoryMax=128M
+CPUQuota=20%
+TasksMax=32

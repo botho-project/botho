@@ -1,0 +1,1019 @@
+{
+  "observedAt": "2026-09-22T16:22:44.538568+00:00",
+  "nodes": [
+    {
+      "host": "seed.botho.io",
+      "observedAt": "2026-09-22T16:22:41.882825+00:00",
+      "status": {
+        "jsonrpc": "2.0",
+        "result": {
+          "buildTime": "2026-09-21T22:01:34Z",
+          "chainHeight": 2642,
+          "effectiveSlotDurationSecs": 40,
+          "gitCommit": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "gitCommitShort": "6dbcb92",
+          "lastExternalizedSecondsAgo": 8421,
+          "lastExternalizedSlot": 2642,
+          "mempoolSize": 0,
+          "minerStalled": false,
+          "mintingActive": false,
+          "mintingThreads": 0,
+          "network": "botho-testnet",
+          "nodeVersion": "0.6.0",
+          "operatorRejectedRequests": 0,
+          "peerCount": 4,
+          "quorumAutoMembers": 4,
+          "quorumCuratedMembers": 0,
+          "quorumDegenerate": false,
+          "quorumFaultTolerant": true,
+          "quorumGateIntersectionRefused": false,
+          "quorumGateMaxAutoMembers": 8,
+          "quorumGateSuppressedPeers": 0,
+          "scpAcceptedNominated": 0,
+          "scpBallotCounter": 0,
+          "scpConfirmedNominated": 0,
+          "scpNominationRound": 1,
+          "scpPeerCount": 4,
+          "scpSlotActive": false,
+          "scpSlotIndex": 2643,
+          "scpSlotPhase": "NominatePrepare",
+          "scpVotedNominated": 0,
+          "slotStallSeconds": 0,
+          "slotStalled": false,
+          "syncProgress": 100.0,
+          "syncStatus": "synced",
+          "synced": true,
+          "tipHash": "57c3e0f9b6b475c8757340d3c4f59290dedfe9c28de67997274d64c5a53f0430",
+          "totalTransactions": 4,
+          "uptimeSeconds": 61711,
+          "version": "0.6.0"
+        },
+        "id": 1383
+      },
+      "transactions": [
+        {
+          "jsonrpc": "2.0",
+          "result": {
+            "confirmations": 6,
+            "confirmed": true,
+            "entropyProofRequired": false,
+            "entropyValidationResult": "not_provided",
+            "status": "confirmed",
+            "txHash": "3cc9afac2a439f02b7ec8a9c8bb6a6a6891d40ba1a6f5491ca91795415e74d7e"
+          },
+          "id": 1383
+        },
+        {
+          "jsonrpc": "2.0",
+          "result": {
+            "confirmations": 4,
+            "confirmed": true,
+            "entropyProofRequired": false,
+            "entropyValidationResult": "not_provided",
+            "status": "confirmed",
+            "txHash": "4f3f00cfdc7490d8cd22f6c256ecc55005d49f061d7f912bc43fad85194c7537"
+          },
+          "id": 1383
+        },
+        {
+          "jsonrpc": "2.0",
+          "result": {
+            "confirmations": 2,
+            "confirmed": true,
+            "entropyProofRequired": false,
+            "entropyValidationResult": "not_provided",
+            "status": "confirmed",
+            "txHash": "f79215caf61fabf3f84e65ac8a3b69a0a75b6ef2e586da0afa094e4379d64faa"
+          },
+          "id": 1383
+        }
+      ],
+      "service": {
+        "MainPID": "1048413",
+        "NRestarts": "0",
+        "ExecMainStartTimestamp": "Mon 2026-09-21 23:14:10 UTC",
+        "MemoryCurrent": "301346816",
+        "MemoryPeak": "301608960",
+        "MemorySwapCurrent": "0",
+        "ActiveState": "active"
+      },
+      "process": {
+        "VmRSS": "315640 kB",
+        "VmHWM": "315640 kB",
+        "VmSwap": "0 kB",
+        "Threads": "5"
+      },
+      "timers": {
+        "botho-overnight-1383-observe.timer": {
+          "NextElapseUSecRealtime": "",
+          "LastTriggerUSec": "Tue 2026-09-22 14:55:00 UTC",
+          "ActiveState": "active",
+          "SubState": "elapsed"
+        },
+        "botho-overnight-1383-pay.timer": {
+          "NextElapseUSecRealtime": "",
+          "LastTriggerUSec": "Tue 2026-09-22 14:00:00 UTC",
+          "ActiveState": "active",
+          "SubState": "elapsed"
+        }
+      },
+      "journal": {
+        "exitCode": 0,
+        "stderr": "",
+        "entries": 6,
+        "counts": {
+          "warning": 6,
+          "timeout": 3
+        },
+        "events": [
+          {
+            "at": "1790042513724987",
+            "flags": [
+              "warning"
+            ],
+            "message": "2026-09-22T02:01:53.724936Z  WARN SCP slot is ACTIVE but has not externalized past the stall threshold \u2014 possible jammed round (#532 Phase 0 signal) slot=2637 stall_seconds=9749 phase=NominatePrepare ballot_counter=0"
+          },
+          {
+            "at": "1790064093224820",
+            "flags": [
+              "warning"
+            ],
+            "message": "2026-09-22T08:01:33.224765Z  WARN SCP slot is ACTIVE but has not externalized past the stall threshold \u2014 possible jammed round (#532 Phase 0 signal) slot=2639 stall_seconds=21542 phase=NominatePrepare ballot_counter=0"
+          },
+          {
+            "at": "1790085700724915",
+            "flags": [
+              "warning"
+            ],
+            "message": "2026-09-22T14:01:40.724628Z  WARN SCP slot is ACTIVE but has not externalized past the stall threshold \u2014 possible jammed round (#532 Phase 0 signal) slot=2641 stall_seconds=21548 phase=NominatePrepare ballot_counter=0"
+          },
+          {
+            "at": "1790085716725344",
+            "flags": [
+              "warning",
+              "timeout"
+            ],
+            "message": "2026-09-22T14:01:56.725284Z  WARN Sync request failed peer=12D3KooWPwhv3LhL7xTDbsNSraN4d6cnW4veZrGgFhALS2qPd1z9 request_id=OutboundRequestId(1729) error=Timeout while waiting for a response"
+          },
+          {
+            "at": "1790085716725344",
+            "flags": [
+              "warning",
+              "timeout"
+            ],
+            "message": "2026-09-22T14:01:56.725325Z  WARN Sync error from peer PeerId(\"12D3KooWPwhv3LhL7xTDbsNSraN4d6cnW4veZrGgFhALS2qPd1z9\"): Timeout while waiting for a response"
+          },
+          {
+            "at": "1790085716725344",
+            "flags": [
+              "warning",
+              "timeout"
+            ],
+            "message": "2026-09-22T14:01:56.725340Z  WARN Sync failed from peer reason=Timeout while waiting for a response p=12D3KooWPwhv3LhL7xTDbsNSraN4d6cnW4veZrGgFhALS2qPd1z9"
+          }
+        ]
+      },
+      "https": {
+        "code": 200,
+        "response": {
+          "jsonrpc": "2.0",
+          "result": {
+            "buildTime": "2026-09-21T22:01:34Z",
+            "chainHeight": 2642,
+            "effectiveSlotDurationSecs": 40,
+            "gitCommit": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+            "gitCommitShort": "6dbcb92",
+            "lastExternalizedSecondsAgo": 8422,
+            "lastExternalizedSlot": 2642,
+            "mempoolSize": 0,
+            "minerStalled": false,
+            "mintingActive": false,
+            "mintingThreads": 0,
+            "network": "botho-testnet",
+            "nodeVersion": "0.6.0",
+            "operatorRejectedRequests": 0,
+            "peerCount": 4,
+            "quorumAutoMembers": 4,
+            "quorumCuratedMembers": 0,
+            "quorumDegenerate": false,
+            "quorumFaultTolerant": true,
+            "quorumGateIntersectionRefused": false,
+            "quorumGateMaxAutoMembers": 8,
+            "quorumGateSuppressedPeers": 0,
+            "scpAcceptedNominated": 0,
+            "scpBallotCounter": 0,
+            "scpConfirmedNominated": 0,
+            "scpNominationRound": 1,
+            "scpPeerCount": 4,
+            "scpSlotActive": false,
+            "scpSlotIndex": 2643,
+            "scpSlotPhase": "NominatePrepare",
+            "scpVotedNominated": 0,
+            "slotStallSeconds": 0,
+            "slotStalled": false,
+            "syncProgress": 100.0,
+            "syncStatus": "synced",
+            "synced": true,
+            "tipHash": "57c3e0f9b6b475c8757340d3c4f59290dedfe9c28de67997274d64c5a53f0430",
+            "totalTransactions": 4,
+            "uptimeSeconds": 61711,
+            "version": "0.6.0"
+          },
+          "id": 1383
+        }
+      }
+    },
+    {
+      "host": "seed2.botho.io",
+      "observedAt": "2026-09-22T16:22:41.892726+00:00",
+      "status": {
+        "jsonrpc": "2.0",
+        "result": {
+          "buildTime": "2026-09-21T22:01:34Z",
+          "chainHeight": 2642,
+          "effectiveSlotDurationSecs": 40,
+          "gitCommit": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "gitCommitShort": "6dbcb92",
+          "lastExternalizedSecondsAgo": 8421,
+          "lastExternalizedSlot": 2642,
+          "mempoolSize": 0,
+          "minerStalled": false,
+          "mintingActive": false,
+          "mintingThreads": 0,
+          "network": "botho-testnet",
+          "nodeVersion": "0.6.0",
+          "operatorRejectedRequests": 0,
+          "peerCount": 4,
+          "quorumAutoMembers": 4,
+          "quorumCuratedMembers": 0,
+          "quorumDegenerate": false,
+          "quorumFaultTolerant": true,
+          "quorumGateIntersectionRefused": false,
+          "quorumGateMaxAutoMembers": 8,
+          "quorumGateSuppressedPeers": 0,
+          "scpAcceptedNominated": 0,
+          "scpBallotCounter": 0,
+          "scpConfirmedNominated": 0,
+          "scpNominationRound": 1,
+          "scpPeerCount": 4,
+          "scpSlotActive": false,
+          "scpSlotIndex": 2643,
+          "scpSlotPhase": "NominatePrepare",
+          "scpVotedNominated": 0,
+          "slotStallSeconds": 0,
+          "slotStalled": false,
+          "syncProgress": 100.0,
+          "syncStatus": "synced",
+          "synced": true,
+          "tipHash": "57c3e0f9b6b475c8757340d3c4f59290dedfe9c28de67997274d64c5a53f0430",
+          "totalTransactions": 4,
+          "uptimeSeconds": 61709,
+          "version": "0.6.0"
+        },
+        "id": 1383
+      },
+      "transactions": [
+        {
+          "jsonrpc": "2.0",
+          "result": {
+            "confirmations": 6,
+            "confirmed": true,
+            "entropyProofRequired": false,
+            "entropyValidationResult": "not_provided",
+            "status": "confirmed",
+            "txHash": "3cc9afac2a439f02b7ec8a9c8bb6a6a6891d40ba1a6f5491ca91795415e74d7e"
+          },
+          "id": 1383
+        },
+        {
+          "jsonrpc": "2.0",
+          "result": {
+            "confirmations": 4,
+            "confirmed": true,
+            "entropyProofRequired": false,
+            "entropyValidationResult": "not_provided",
+            "status": "confirmed",
+            "txHash": "4f3f00cfdc7490d8cd22f6c256ecc55005d49f061d7f912bc43fad85194c7537"
+          },
+          "id": 1383
+        },
+        {
+          "jsonrpc": "2.0",
+          "result": {
+            "confirmations": 2,
+            "confirmed": true,
+            "entropyProofRequired": false,
+            "entropyValidationResult": "not_provided",
+            "status": "confirmed",
+            "txHash": "f79215caf61fabf3f84e65ac8a3b69a0a75b6ef2e586da0afa094e4379d64faa"
+          },
+          "id": 1383
+        }
+      ],
+      "service": {
+        "MainPID": "28164",
+        "NRestarts": "0",
+        "ExecMainStartTimestamp": "Mon 2026-09-21 23:14:12 UTC",
+        "MemoryCurrent": "299175936",
+        "MemoryPeak": "299442176",
+        "MemorySwapCurrent": "0",
+        "ActiveState": "active"
+      },
+      "process": {
+        "VmRSS": "317492 kB",
+        "VmHWM": "317492 kB",
+        "VmSwap": "0 kB",
+        "Threads": "5"
+      },
+      "timers": {
+        "botho-overnight-1383-observe.timer": {
+          "NextElapseUSecRealtime": "",
+          "LastTriggerUSec": "Tue 2026-09-22 14:55:00 UTC",
+          "ActiveState": "active",
+          "SubState": "elapsed"
+        }
+      },
+      "journal": {
+        "exitCode": 0,
+        "stderr": "",
+        "entries": 3,
+        "counts": {
+          "warning": 3
+        },
+        "events": [
+          {
+            "at": "1790042513612479",
+            "flags": [
+              "warning"
+            ],
+            "message": "2026-09-22T02:01:53.612408Z  WARN SCP slot is ACTIVE but has not externalized past the stall threshold \u2014 possible jammed round (#532 Phase 0 signal) slot=2637 stall_seconds=9749 phase=NominatePrepare ballot_counter=0"
+          },
+          {
+            "at": "1790064093113149",
+            "flags": [
+              "warning"
+            ],
+            "message": "2026-09-22T08:01:33.113019Z  WARN SCP slot is ACTIVE but has not externalized past the stall threshold \u2014 possible jammed round (#532 Phase 0 signal) slot=2639 stall_seconds=21542 phase=NominatePrepare ballot_counter=0"
+          },
+          {
+            "at": "1790085700612131",
+            "flags": [
+              "warning"
+            ],
+            "message": "2026-09-22T14:01:40.612017Z  WARN SCP slot is ACTIVE but has not externalized past the stall threshold \u2014 possible jammed round (#532 Phase 0 signal) slot=2641 stall_seconds=21548 phase=NominatePrepare ballot_counter=0"
+          }
+        ]
+      },
+      "https": {
+        "code": 200,
+        "response": {
+          "jsonrpc": "2.0",
+          "result": {
+            "buildTime": "2026-09-21T22:01:34Z",
+            "chainHeight": 2642,
+            "effectiveSlotDurationSecs": 40,
+            "gitCommit": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+            "gitCommitShort": "6dbcb92",
+            "lastExternalizedSecondsAgo": 8421,
+            "lastExternalizedSlot": 2642,
+            "mempoolSize": 0,
+            "minerStalled": false,
+            "mintingActive": false,
+            "mintingThreads": 0,
+            "network": "botho-testnet",
+            "nodeVersion": "0.6.0",
+            "operatorRejectedRequests": 0,
+            "peerCount": 4,
+            "quorumAutoMembers": 4,
+            "quorumCuratedMembers": 0,
+            "quorumDegenerate": false,
+            "quorumFaultTolerant": true,
+            "quorumGateIntersectionRefused": false,
+            "quorumGateMaxAutoMembers": 8,
+            "quorumGateSuppressedPeers": 0,
+            "scpAcceptedNominated": 0,
+            "scpBallotCounter": 0,
+            "scpConfirmedNominated": 0,
+            "scpNominationRound": 1,
+            "scpPeerCount": 4,
+            "scpSlotActive": false,
+            "scpSlotIndex": 2643,
+            "scpSlotPhase": "NominatePrepare",
+            "scpVotedNominated": 0,
+            "slotStallSeconds": 0,
+            "slotStalled": false,
+            "syncProgress": 100.0,
+            "syncStatus": "synced",
+            "synced": true,
+            "tipHash": "57c3e0f9b6b475c8757340d3c4f59290dedfe9c28de67997274d64c5a53f0430",
+            "totalTransactions": 4,
+            "uptimeSeconds": 61709,
+            "version": "0.6.0"
+          },
+          "id": 1383
+        }
+      }
+    },
+    {
+      "host": "faucet.botho.io",
+      "observedAt": "2026-09-22T16:22:41.905810+00:00",
+      "status": {
+        "jsonrpc": "2.0",
+        "result": {
+          "buildTime": "2026-09-21T22:01:34Z",
+          "chainHeight": 2642,
+          "effectiveSlotDurationSecs": 40,
+          "gitCommit": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "gitCommitShort": "6dbcb92",
+          "lastExternalizedSecondsAgo": 8421,
+          "lastExternalizedSlot": 2642,
+          "mempoolSize": 0,
+          "minerStalled": false,
+          "mintingActive": false,
+          "mintingThreads": 0,
+          "network": "botho-testnet",
+          "nodeVersion": "0.6.0",
+          "operatorRejectedRequests": 0,
+          "peerCount": 4,
+          "quorumAutoMembers": 4,
+          "quorumCuratedMembers": 0,
+          "quorumDegenerate": false,
+          "quorumFaultTolerant": true,
+          "quorumGateIntersectionRefused": false,
+          "quorumGateMaxAutoMembers": 8,
+          "quorumGateSuppressedPeers": 0,
+          "scpAcceptedNominated": 0,
+          "scpBallotCounter": 0,
+          "scpConfirmedNominated": 0,
+          "scpNominationRound": 1,
+          "scpPeerCount": 4,
+          "scpSlotActive": false,
+          "scpSlotIndex": 2643,
+          "scpSlotPhase": "NominatePrepare",
+          "scpVotedNominated": 0,
+          "slotStallSeconds": 0,
+          "slotStalled": false,
+          "syncProgress": 100.0,
+          "syncStatus": "synced",
+          "synced": true,
+          "tipHash": "57c3e0f9b6b475c8757340d3c4f59290dedfe9c28de67997274d64c5a53f0430",
+          "totalTransactions": 4,
+          "uptimeSeconds": 61629,
+          "version": "0.6.0"
+        },
+        "id": 1383
+      },
+      "transactions": [
+        {
+          "jsonrpc": "2.0",
+          "result": {
+            "confirmations": 6,
+            "confirmed": true,
+            "entropyProofRequired": false,
+            "entropyValidationResult": "not_provided",
+            "status": "confirmed",
+            "txHash": "3cc9afac2a439f02b7ec8a9c8bb6a6a6891d40ba1a6f5491ca91795415e74d7e"
+          },
+          "id": 1383
+        },
+        {
+          "jsonrpc": "2.0",
+          "result": {
+            "confirmations": 4,
+            "confirmed": true,
+            "entropyProofRequired": false,
+            "entropyValidationResult": "not_provided",
+            "status": "confirmed",
+            "txHash": "4f3f00cfdc7490d8cd22f6c256ecc55005d49f061d7f912bc43fad85194c7537"
+          },
+          "id": 1383
+        },
+        {
+          "jsonrpc": "2.0",
+          "result": {
+            "confirmations": 2,
+            "confirmed": true,
+            "entropyProofRequired": false,
+            "entropyValidationResult": "not_provided",
+            "status": "confirmed",
+            "txHash": "f79215caf61fabf3f84e65ac8a3b69a0a75b6ef2e586da0afa094e4379d64faa"
+          },
+          "id": 1383
+        }
+      ],
+      "service": {
+        "MainPID": "326617",
+        "NRestarts": "0",
+        "ExecMainStartTimestamp": "Mon 2026-09-21 23:15:32 UTC",
+        "MemoryCurrent": "332107776",
+        "MemoryPeak": "2786594816",
+        "MemorySwapCurrent": "0",
+        "ActiveState": "active"
+      },
+      "process": {
+        "VmRSS": "350752 kB",
+        "VmHWM": "2742572 kB",
+        "VmSwap": "0 kB",
+        "Threads": "5"
+      },
+      "timers": {
+        "botho-overnight-1383-observe.timer": {
+          "NextElapseUSecRealtime": "",
+          "LastTriggerUSec": "Tue 2026-09-22 14:55:00 UTC",
+          "ActiveState": "active",
+          "SubState": "elapsed"
+        }
+      },
+      "journal": {
+        "exitCode": 0,
+        "stderr": "",
+        "entries": 9944,
+        "counts": {
+          "warning": 7
+        },
+        "events": [
+          {
+            "at": "1790042509641874",
+            "flags": [
+              "warning"
+            ],
+            "message": "2026-09-22T02:01:49.641849Z  WARN SCP slot is ACTIVE but has not externalized past the stall threshold \u2014 possible jammed round (#532 Phase 0 signal) slot=2637 stall_seconds=9740 phase=NominatePrepare ballot_counter=0"
+          },
+          {
+            "at": "1790042519466303",
+            "flags": [
+              "warning"
+            ],
+            "message": "2026-09-22T02:01:59.466259Z  WARN RandomX miner stalled: active but 0 H/s for 90s \u2014 chain will halt; worker appears wedged (see #538). NOT auto-restarting (operator policy). uptime_secs=99 total_hashes=0 stuck_secs=90"
+          },
+          {
+            "at": "1790042522289285",
+            "flags": [
+              "warning"
+            ],
+            "message": "2026-09-22T02:02:02.289258Z  WARN RandomX miner stalled: active but 0 H/s for 90s \u2014 chain will halt; worker appears wedged (see #538). NOT auto-restarting (operator policy). uptime_secs=102 total_hashes=0 stuck_secs=90"
+          },
+          {
+            "at": "1790064089542950",
+            "flags": [
+              "warning"
+            ],
+            "message": "2026-09-22T08:01:29.542912Z  WARN SCP slot is ACTIVE but has not externalized past the stall threshold \u2014 possible jammed round (#532 Phase 0 signal) slot=2639 stall_seconds=21538 phase=NominatePrepare ballot_counter=0"
+          },
+          {
+            "at": "1790085689653159",
+            "flags": [
+              "warning"
+            ],
+            "message": "2026-09-22T14:01:29.653113Z  WARN SCP slot is ACTIVE but has not externalized past the stall threshold \u2014 possible jammed round (#532 Phase 0 signal) slot=2641 stall_seconds=21537 phase=NominatePrepare ballot_counter=0"
+          },
+          {
+            "at": "1790085719650446",
+            "flags": [
+              "warning"
+            ],
+            "message": "2026-09-22T14:01:59.650429Z  WARN RandomX miner stalled: active but 0 H/s for 90s \u2014 chain will halt; worker appears wedged (see #538). NOT auto-restarting (operator policy). uptime_secs=100 total_hashes=0 stuck_secs=90"
+          },
+          {
+            "at": "1790085722352875",
+            "flags": [
+              "warning"
+            ],
+            "message": "2026-09-22T14:02:02.352857Z  WARN RandomX miner stalled: active but 0 H/s for 90s \u2014 chain will halt; worker appears wedged (see #538). NOT auto-restarting (operator policy). uptime_secs=102 total_hashes=0 stuck_secs=90"
+          }
+        ]
+      },
+      "https": {
+        "code": 200,
+        "response": {
+          "jsonrpc": "2.0",
+          "result": {
+            "buildTime": "2026-09-21T22:01:34Z",
+            "chainHeight": 2642,
+            "effectiveSlotDurationSecs": 40,
+            "gitCommit": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+            "gitCommitShort": "6dbcb92",
+            "lastExternalizedSecondsAgo": 8421,
+            "lastExternalizedSlot": 2642,
+            "mempoolSize": 0,
+            "minerStalled": false,
+            "mintingActive": false,
+            "mintingThreads": 0,
+            "network": "botho-testnet",
+            "nodeVersion": "0.6.0",
+            "operatorRejectedRequests": 0,
+            "peerCount": 4,
+            "quorumAutoMembers": 4,
+            "quorumCuratedMembers": 0,
+            "quorumDegenerate": false,
+            "quorumFaultTolerant": true,
+            "quorumGateIntersectionRefused": false,
+            "quorumGateMaxAutoMembers": 8,
+            "quorumGateSuppressedPeers": 0,
+            "scpAcceptedNominated": 0,
+            "scpBallotCounter": 0,
+            "scpConfirmedNominated": 0,
+            "scpNominationRound": 1,
+            "scpPeerCount": 4,
+            "scpSlotActive": false,
+            "scpSlotIndex": 2643,
+            "scpSlotPhase": "NominatePrepare",
+            "scpVotedNominated": 0,
+            "slotStallSeconds": 0,
+            "slotStalled": false,
+            "syncProgress": 100.0,
+            "syncStatus": "synced",
+            "synced": true,
+            "tipHash": "57c3e0f9b6b475c8757340d3c4f59290dedfe9c28de67997274d64c5a53f0430",
+            "totalTransactions": 4,
+            "uptimeSeconds": 61631,
+            "version": "0.6.0"
+          },
+          "id": 1383
+        }
+      }
+    },
+    {
+      "host": "eu.seed.botho.io",
+      "observedAt": "2026-09-22T16:22:43.460691+00:00",
+      "status": {
+        "jsonrpc": "2.0",
+        "result": {
+          "buildTime": "2026-09-21T22:01:34Z",
+          "chainHeight": 2642,
+          "effectiveSlotDurationSecs": 40,
+          "gitCommit": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "gitCommitShort": "6dbcb92",
+          "lastExternalizedSecondsAgo": 8423,
+          "lastExternalizedSlot": 2642,
+          "mempoolSize": 0,
+          "minerStalled": false,
+          "mintingActive": false,
+          "mintingThreads": 0,
+          "network": "botho-testnet",
+          "nodeVersion": "0.6.0",
+          "operatorRejectedRequests": 0,
+          "peerCount": 3,
+          "quorumAutoMembers": 3,
+          "quorumCuratedMembers": 0,
+          "quorumDegenerate": false,
+          "quorumFaultTolerant": true,
+          "quorumGateIntersectionRefused": false,
+          "quorumGateMaxAutoMembers": 8,
+          "quorumGateSuppressedPeers": 0,
+          "scpAcceptedNominated": 0,
+          "scpBallotCounter": 0,
+          "scpConfirmedNominated": 0,
+          "scpNominationRound": 1,
+          "scpPeerCount": 3,
+          "scpSlotActive": false,
+          "scpSlotIndex": 2643,
+          "scpSlotPhase": "NominatePrepare",
+          "scpVotedNominated": 0,
+          "slotStallSeconds": 0,
+          "slotStalled": false,
+          "syncProgress": 100.0,
+          "syncStatus": "synced",
+          "synced": true,
+          "tipHash": "57c3e0f9b6b475c8757340d3c4f59290dedfe9c28de67997274d64c5a53f0430",
+          "totalTransactions": 4,
+          "uptimeSeconds": 61740,
+          "version": "0.6.0"
+        },
+        "id": 1383
+      },
+      "transactions": [
+        {
+          "jsonrpc": "2.0",
+          "result": {
+            "confirmations": 6,
+            "confirmed": true,
+            "entropyProofRequired": false,
+            "entropyValidationResult": "not_provided",
+            "status": "confirmed",
+            "txHash": "3cc9afac2a439f02b7ec8a9c8bb6a6a6891d40ba1a6f5491ca91795415e74d7e"
+          },
+          "id": 1383
+        },
+        {
+          "jsonrpc": "2.0",
+          "result": {
+            "confirmations": 4,
+            "confirmed": true,
+            "entropyProofRequired": false,
+            "entropyValidationResult": "not_provided",
+            "status": "confirmed",
+            "txHash": "4f3f00cfdc7490d8cd22f6c256ecc55005d49f061d7f912bc43fad85194c7537"
+          },
+          "id": 1383
+        },
+        {
+          "jsonrpc": "2.0",
+          "result": {
+            "confirmations": 2,
+            "confirmed": true,
+            "entropyProofRequired": false,
+            "entropyValidationResult": "not_provided",
+            "status": "confirmed",
+            "txHash": "f79215caf61fabf3f84e65ac8a3b69a0a75b6ef2e586da0afa094e4379d64faa"
+          },
+          "id": 1383
+        }
+      ],
+      "service": {
+        "MainPID": "334005",
+        "NRestarts": "0",
+        "ExecMainStartTimestamp": "Mon 2026-09-21 23:13:43 UTC",
+        "MemoryCurrent": "309190656",
+        "MemoryPeak": "309477376",
+        "MemorySwapCurrent": "0",
+        "ActiveState": "active"
+      },
+      "process": {
+        "VmRSS": "321784 kB",
+        "VmHWM": "324840 kB",
+        "VmSwap": "0 kB",
+        "Threads": "5"
+      },
+      "timers": {
+        "botho-overnight-1383-observe.timer": {
+          "NextElapseUSecRealtime": "",
+          "LastTriggerUSec": "Tue 2026-09-22 14:55:00 UTC",
+          "ActiveState": "active",
+          "SubState": "elapsed"
+        }
+      },
+      "journal": {
+        "exitCode": 0,
+        "stderr": "",
+        "entries": 3,
+        "counts": {
+          "warning": 3
+        },
+        "events": [
+          {
+            "at": "1790042513833569",
+            "flags": [
+              "warning"
+            ],
+            "message": "2026-09-22T02:01:53.833487Z  WARN SCP slot is ACTIVE but has not externalized past the stall threshold \u2014 possible jammed round (#532 Phase 0 signal) slot=2637 stall_seconds=9749 phase=NominatePrepare ballot_counter=0"
+          },
+          {
+            "at": "1790064093333465",
+            "flags": [
+              "warning"
+            ],
+            "message": "2026-09-22T08:01:33.333389Z  WARN SCP slot is ACTIVE but has not externalized past the stall threshold \u2014 possible jammed round (#532 Phase 0 signal) slot=2639 stall_seconds=21542 phase=NominatePrepare ballot_counter=0"
+          },
+          {
+            "at": "1790085700833273",
+            "flags": [
+              "warning"
+            ],
+            "message": "2026-09-22T14:01:40.833198Z  WARN SCP slot is ACTIVE but has not externalized past the stall threshold \u2014 possible jammed round (#532 Phase 0 signal) slot=2641 stall_seconds=21548 phase=NominatePrepare ballot_counter=1"
+          }
+        ]
+      },
+      "https": {
+        "code": 200,
+        "response": {
+          "jsonrpc": "2.0",
+          "result": {
+            "buildTime": "2026-09-21T22:01:34Z",
+            "chainHeight": 2642,
+            "effectiveSlotDurationSecs": 40,
+            "gitCommit": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+            "gitCommitShort": "6dbcb92",
+            "lastExternalizedSecondsAgo": 8423,
+            "lastExternalizedSlot": 2642,
+            "mempoolSize": 0,
+            "minerStalled": false,
+            "mintingActive": false,
+            "mintingThreads": 0,
+            "network": "botho-testnet",
+            "nodeVersion": "0.6.0",
+            "operatorRejectedRequests": 0,
+            "peerCount": 3,
+            "quorumAutoMembers": 3,
+            "quorumCuratedMembers": 0,
+            "quorumDegenerate": false,
+            "quorumFaultTolerant": true,
+            "quorumGateIntersectionRefused": false,
+            "quorumGateMaxAutoMembers": 8,
+            "quorumGateSuppressedPeers": 0,
+            "scpAcceptedNominated": 0,
+            "scpBallotCounter": 0,
+            "scpConfirmedNominated": 0,
+            "scpNominationRound": 1,
+            "scpPeerCount": 3,
+            "scpSlotActive": false,
+            "scpSlotIndex": 2643,
+            "scpSlotPhase": "NominatePrepare",
+            "scpVotedNominated": 0,
+            "slotStallSeconds": 0,
+            "slotStalled": false,
+            "syncProgress": 100.0,
+            "syncStatus": "synced",
+            "synced": true,
+            "tipHash": "57c3e0f9b6b475c8757340d3c4f59290dedfe9c28de67997274d64c5a53f0430",
+            "totalTransactions": 4,
+            "uptimeSeconds": 61740,
+            "version": "0.6.0"
+          },
+          "id": 1383
+        }
+      }
+    },
+    {
+      "host": "ap.seed.botho.io",
+      "observedAt": "2026-09-22T16:22:43.783754+00:00",
+      "status": {
+        "jsonrpc": "2.0",
+        "result": {
+          "buildTime": "2026-09-21T22:01:34Z",
+          "chainHeight": 2642,
+          "effectiveSlotDurationSecs": 40,
+          "gitCommit": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "gitCommitShort": "6dbcb92",
+          "lastExternalizedSecondsAgo": 8423,
+          "lastExternalizedSlot": 2642,
+          "mempoolSize": 0,
+          "minerStalled": false,
+          "mintingActive": false,
+          "mintingThreads": 0,
+          "network": "botho-testnet",
+          "nodeVersion": "0.6.0",
+          "operatorRejectedRequests": 0,
+          "peerCount": 3,
+          "quorumAutoMembers": 3,
+          "quorumCuratedMembers": 0,
+          "quorumDegenerate": false,
+          "quorumFaultTolerant": true,
+          "quorumGateIntersectionRefused": false,
+          "quorumGateMaxAutoMembers": 8,
+          "quorumGateSuppressedPeers": 0,
+          "scpAcceptedNominated": 0,
+          "scpBallotCounter": 0,
+          "scpConfirmedNominated": 0,
+          "scpNominationRound": 1,
+          "scpPeerCount": 3,
+          "scpSlotActive": false,
+          "scpSlotIndex": 2643,
+          "scpSlotPhase": "NominatePrepare",
+          "scpVotedNominated": 0,
+          "slotStallSeconds": 0,
+          "slotStalled": false,
+          "syncProgress": 100.0,
+          "syncStatus": "synced",
+          "synced": true,
+          "tipHash": "57c3e0f9b6b475c8757340d3c4f59290dedfe9c28de67997274d64c5a53f0430",
+          "totalTransactions": 4,
+          "uptimeSeconds": 61707,
+          "version": "0.6.0"
+        },
+        "id": 1383
+      },
+      "transactions": [
+        {
+          "jsonrpc": "2.0",
+          "result": {
+            "confirmations": 6,
+            "confirmed": true,
+            "entropyProofRequired": false,
+            "entropyValidationResult": "not_provided",
+            "status": "confirmed",
+            "txHash": "3cc9afac2a439f02b7ec8a9c8bb6a6a6891d40ba1a6f5491ca91795415e74d7e"
+          },
+          "id": 1383
+        },
+        {
+          "jsonrpc": "2.0",
+          "result": {
+            "confirmations": 4,
+            "confirmed": true,
+            "entropyProofRequired": false,
+            "entropyValidationResult": "not_provided",
+            "status": "confirmed",
+            "txHash": "4f3f00cfdc7490d8cd22f6c256ecc55005d49f061d7f912bc43fad85194c7537"
+          },
+          "id": 1383
+        },
+        {
+          "jsonrpc": "2.0",
+          "result": {
+            "confirmations": 2,
+            "confirmed": true,
+            "entropyProofRequired": false,
+            "entropyValidationResult": "not_provided",
+            "status": "confirmed",
+            "txHash": "f79215caf61fabf3f84e65ac8a3b69a0a75b6ef2e586da0afa094e4379d64faa"
+          },
+          "id": 1383
+        }
+      ],
+      "service": {
+        "MainPID": "331909",
+        "NRestarts": "0",
+        "ExecMainStartTimestamp": "Mon 2026-09-21 23:14:16 UTC",
+        "MemoryCurrent": "309874688",
+        "MemoryPeak": "310140928",
+        "MemorySwapCurrent": "0",
+        "ActiveState": "active"
+      },
+      "process": {
+        "VmRSS": "326816 kB",
+        "VmHWM": "326816 kB",
+        "VmSwap": "0 kB",
+        "Threads": "5"
+      },
+      "timers": {
+        "botho-overnight-1383-observe.timer": {
+          "NextElapseUSecRealtime": "",
+          "LastTriggerUSec": "Tue 2026-09-22 14:55:00 UTC",
+          "ActiveState": "active",
+          "SubState": "elapsed"
+        }
+      },
+      "journal": {
+        "exitCode": 0,
+        "stderr": "",
+        "entries": 3,
+        "counts": {
+          "warning": 3
+        },
+        "events": [
+          {
+            "at": "1790042513708904",
+            "flags": [
+              "warning"
+            ],
+            "message": "2026-09-22T02:01:53.708692Z  WARN SCP slot is ACTIVE but has not externalized past the stall threshold \u2014 possible jammed round (#532 Phase 0 signal) slot=2637 stall_seconds=9749 phase=NominatePrepare ballot_counter=0"
+          },
+          {
+            "at": "1790064093208605",
+            "flags": [
+              "warning"
+            ],
+            "message": "2026-09-22T08:01:33.208550Z  WARN SCP slot is ACTIVE but has not externalized past the stall threshold \u2014 possible jammed round (#532 Phase 0 signal) slot=2639 stall_seconds=21542 phase=NominatePrepare ballot_counter=0"
+          },
+          {
+            "at": "1790085700209030",
+            "flags": [
+              "warning"
+            ],
+            "message": "2026-09-22T14:01:40.208974Z  WARN SCP slot is ACTIVE but has not externalized past the stall threshold \u2014 possible jammed round (#532 Phase 0 signal) slot=2641 stall_seconds=21547 phase=NominatePrepare ballot_counter=0"
+          }
+        ]
+      },
+      "https": {
+        "code": 200,
+        "response": {
+          "jsonrpc": "2.0",
+          "result": {
+            "buildTime": "2026-09-21T22:01:34Z",
+            "chainHeight": 2642,
+            "effectiveSlotDurationSecs": 40,
+            "gitCommit": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+            "gitCommitShort": "6dbcb92",
+            "lastExternalizedSecondsAgo": 8423,
+            "lastExternalizedSlot": 2642,
+            "mempoolSize": 0,
+            "minerStalled": false,
+            "mintingActive": false,
+            "mintingThreads": 0,
+            "network": "botho-testnet",
+            "nodeVersion": "0.6.0",
+            "operatorRejectedRequests": 0,
+            "peerCount": 3,
+            "quorumAutoMembers": 3,
+            "quorumCuratedMembers": 0,
+            "quorumDegenerate": false,
+            "quorumFaultTolerant": true,
+            "quorumGateIntersectionRefused": false,
+            "quorumGateMaxAutoMembers": 8,
+            "quorumGateSuppressedPeers": 0,
+            "scpAcceptedNominated": 0,
+            "scpBallotCounter": 0,
+            "scpConfirmedNominated": 0,
+            "scpNominationRound": 1,
+            "scpPeerCount": 3,
+            "scpSlotActive": false,
+            "scpSlotIndex": 2643,
+            "scpSlotPhase": "NominatePrepare",
+            "scpVotedNominated": 0,
+            "slotStallSeconds": 0,
+            "slotStalled": false,
+            "syncProgress": 100.0,
+            "syncStatus": "synced",
+            "synced": true,
+            "tipHash": "57c3e0f9b6b475c8757340d3c4f59290dedfe9c28de67997274d64c5a53f0430",
+            "totalTransactions": 4,
+            "uptimeSeconds": 61707,
+            "version": "0.6.0"
+          },
+          "id": 1383
+        }
+      }
+    }
+  ]
+}

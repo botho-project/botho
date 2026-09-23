@@ -1,0 +1,12 @@
+[Unit]
+Description=Botho experiment 1383 dated pay schedule (expires Sep 22)
+
+[Timer]
+OnCalendar=2026-09-22 02,08,14:00:00 UTC
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=false
+Unit=botho-overnight-1383-pay.service
+
+[Install]
+WantedBy=timers.target

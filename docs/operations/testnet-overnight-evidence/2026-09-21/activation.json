@@ -1,0 +1,32 @@
+[
+  {
+    "host": "seed.botho.io",
+    "timer": "botho-overnight-1383-observe.timer",
+    "enabledAt": "2026-09-22T01:27:34.409930+00:00"
+  },
+  {
+    "host": "seed2.botho.io",
+    "timer": "botho-overnight-1383-observe.timer",
+    "enabledAt": "2026-09-22T01:27:35.424991+00:00"
+  },
+  {
+    "host": "faucet.botho.io",
+    "timer": "botho-overnight-1383-observe.timer",
+    "enabledAt": "2026-09-22T01:27:36.649160+00:00"
+  },
+  {
+    "host": "eu.seed.botho.io",
+    "timer": "botho-overnight-1383-observe.timer",
+    "enabledAt": "2026-09-22T01:27:39.057694+00:00"
+  },
+  {
+    "host": "ap.seed.botho.io",
+    "timer": "botho-overnight-1383-observe.timer",
+    "enabledAt": "2026-09-22T01:27:41.903273+00:00"
+  },
+  {
+    "host": "seed.botho.io",
+    "timer": "botho-overnight-1383-pay.timer",
+    "enabledAt": "2026-09-22T01:27:42.806690+00:00"
+  }
+]

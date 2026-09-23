@@ -18,6 +18,7 @@ This section covers running, maintaining, and operating Botho nodes.
 | Document | Description |
 |----------|-------------|
 | [Monitoring](monitoring.md) | Metrics, alerting, and dashboards |
+| [Overnight Payments — 2026-09-21](testnet-overnight-2026-09-21.md) | Bounded six-hour payment schedule and fleet stability evidence |
 | [Memory Budget](memory-budget.md) | Memory tuning and optimization |
 | [Performance](phase2_performance.md) | Performance benchmarks and tuning |
 

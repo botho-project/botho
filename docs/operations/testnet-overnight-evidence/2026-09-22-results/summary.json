@@ -1,0 +1,75 @@
+{
+  "collectedAt": "2026-09-22T16:22:44.538568+00:00",
+  "payments": [
+    {
+      "slot": "2026-09-22T02:00:00+00:00",
+      "outcome": "confirmed_on_all_five",
+      "requestStartedAt": "2026-09-22T02:00:05.588826+00:00",
+      "responseAt": "2026-09-22T02:00:13.082264+00:00",
+      "confirmedAt": "2026-09-22T02:02:07.409067+00:00",
+      "confirmationSeconds": 121.815,
+      "txHash": "3cc9afac2a439f02b7ec8a9c8bb6a6a6891d40ba1a6f5491ca91795415e74d7e",
+      "firstObservedConfirmedOnAllFiveAt": "2026-09-22T02:02:07.405321+00:00",
+      "firstObservedConfirmedOnAllFiveSeconds": 121.816,
+      "blockHeight": 2637,
+      "amountPicocredits": "1000000000000",
+      "feePicocredits": 100000000
+    },
+    {
+      "slot": "2026-09-22T08:00:00+00:00",
+      "outcome": "confirmed_on_all_five",
+      "requestStartedAt": "2026-09-22T08:00:04.857045+00:00",
+      "responseAt": "2026-09-22T08:00:12.289501+00:00",
+      "confirmedAt": "2026-09-22T08:01:50.455198+00:00",
+      "confirmationSeconds": 105.592,
+      "txHash": "4f3f00cfdc7490d8cd22f6c256ecc55005d49f061d7f912bc43fad85194c7537",
+      "firstObservedConfirmedOnAllFiveAt": "2026-09-22T08:01:50.451967+00:00",
+      "firstObservedConfirmedOnAllFiveSeconds": 105.595,
+      "blockHeight": 2639,
+      "amountPicocredits": "1000000000000",
+      "feePicocredits": 100000000
+    },
+    {
+      "slot": "2026-09-22T14:00:00+00:00",
+      "outcome": "confirmed_on_all_five",
+      "requestStartedAt": "2026-09-22T14:00:05.662901+00:00",
+      "responseAt": "2026-09-22T14:00:13.072644+00:00",
+      "confirmedAt": "2026-09-22T14:03:14.710379+00:00",
+      "confirmationSeconds": 189.042,
+      "txHash": "f79215caf61fabf3f84e65ac8a3b69a0a75b6ef2e586da0afa094e4379d64faa",
+      "firstObservedConfirmedOnAllFiveAt": "2026-09-22T14:02:07.908168+00:00",
+      "firstObservedConfirmedOnAllFiveSeconds": 122.245,
+      "blockHeight": 2641,
+      "amountPicocredits": "1000000000000",
+      "feePicocredits": 100000000
+    }
+  ],
+  "healthSamples": 815,
+  "healthSamplesPerHost": {
+    "seed.botho.io": 163,
+    "seed2.botho.io": 163,
+    "faucet.botho.io": 163,
+    "eu.seed.botho.io": 163,
+    "ap.seed.botho.io": 163
+  },
+  "automaticRestartsObserved": 0,
+  "processChangesObserved": 0,
+  "sampledProcessSwapKiBMax": 0,
+  "currentHeight": 2642,
+  "currentTip": "57c3e0f9b6b475c8757340d3c4f59290dedfe9c28de67997274d64c5a53f0430",
+  "allFiveCurrentlySynced": true,
+  "paymentScheduleComplete": true,
+  "observationScheduleComplete": true,
+  "latePaymentSyncRecovery": {
+    "host": "seed.botho.io",
+    "firstUnsyncedObservation": "2026-09-22T14:02:07.908168+00:00",
+    "lastUnsyncedObservation": "2026-09-22T14:02:58.007517+00:00",
+    "nextAllSyncedObservation": "2026-09-22T14:03:14.706551+00:00"
+  },
+  "faucetIdleRssMiB": {
+    "first": 326.80859375,
+    "last": 342.53125,
+    "growth": 15.72265625
+  },
+  "faucetServicePeakGiB": 2.5952186584472656
+}

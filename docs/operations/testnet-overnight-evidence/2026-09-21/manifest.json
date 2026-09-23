@@ -1,0 +1,23 @@
+{
+  "issue": 1383,
+  "deployedNodeCommit": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+  "runnerSha256": "bd4166aea4d00448422e82ad07c331949527760a01e57a6a34cb7629367aafb8",
+  "scheduledUtc": [
+    "2026-09-22T02:00:00Z",
+    "2026-09-22T08:00:00Z",
+    "2026-09-22T14:00:00Z"
+  ],
+  "scheduledPacific": [
+    "2026-09-21T19:00:00-07:00",
+    "2026-09-22T01:00:00-07:00",
+    "2026-09-22T07:00:00-07:00"
+  ],
+  "maxRequests": 3,
+  "amountPerGrantPicocredits": "1000000000000",
+  "recipientAddressSha256": "7fa9f604c2d993890ed2e10af848787d6bae6d01865fb2b0ff50b828554903bf",
+  "runnerHost": "seed.botho.io",
+  "healthIntervalSeconds": 300,
+  "lastHealthScheduledUtc": "2026-09-22T14:55:00Z",
+  "testsPassed": 8,
+  "paymentResults": "pending; scheduling evidence only"
+}
