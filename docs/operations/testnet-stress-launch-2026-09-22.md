@@ -1,8 +1,10 @@
 # Stress campaign launch — September 22, 2026
 
-**Running stage: bounded wallet setup. The 72-hour workload clock has not started.**
+**Disposition: incomplete setup run. The 72-hour workload clock never started.**
 
-Run `stress-1404-20260922T190609Z` is active on `loom-worker-1` as the lingering user service `botho-stress-1404.service`. Setup began **19:06:09 UTC / 12:06:09 PDT**. Its fixed deadline is **September 23, 03:06:09 UTC / September 22, 20:06:09 PDT**. Setup automatically selects T0 and the immutable 72-hour end only after all wallet inventory, signer, restore and accounting gates pass. It otherwise stops incomplete.
+Run `stress-1404-20260922T190609Z` was launched on `loom-worker-1` as the lingering user service `botho-stress-1404.service`. Setup began **19:06:09 UTC / 12:06:09 PDT**. Its fixed deadline was **September 23, 03:06:09 UTC / September 22, 20:06:09 PDT**. Setup would select T0 and the immutable 72-hour end only after all wallet inventory, signer, restore and accounting gates passed. It otherwise stops incomplete.
+
+The fixed setup deadline passed without a recorded T0 or `activated.json`. The run is therefore retained as an incomplete setup attempt, not as a 72-hour stress acceptance. The first funding receipt below remains valid setup evidence; it does not establish the workload, spend, load, browser, Snap or confidential-amount gates. The disposition is recorded in [`2026-09-23-incomplete.json`](testnet-stress-evidence/2026-09-23-incomplete.json).
 
 ## First live result
 
