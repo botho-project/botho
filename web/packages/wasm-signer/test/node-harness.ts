@@ -53,6 +53,8 @@ export interface HarnessOptions {
     /** Minimum UTXO value (picocredits) to be lottery-eligible. */
     minUtxoValue?: bigint | number
   }
+  /** Enable the node's ordinary testnet faucet for downstream acceptance tests. */
+  faucet?: boolean
 }
 
 // A fixed valid 24-word BIP39 phrase for the minting (sender) wallet. This is
@@ -150,6 +152,8 @@ export async function startNodeBackedHarness(opts: HarnessOptions): Promise<Node
       'threads = 1',
       '',
       '[faucet]',
+      `enabled = ${opts.faucet === true}`,
+      ...(opts.faucet === true ? ['cooldown_secs = 0'] : []),
       '',
     ].join('\n'),
   )
