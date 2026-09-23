@@ -10,7 +10,8 @@ ROOT = Path(__file__).resolve().parents[3]
 HERE = Path(__file__).resolve().parent
 SOURCES = [
     'Cargo.toml', 'Cargo.lock', 'rust-toolchain', 'botho/Cargo.toml',
-    'botho/tests/common/funded_model.rs', 'botho/tests/ct_economics_reinvestment.rs',
+    'botho/tests/common/funded_model.rs', 'botho/tests/common/reinvestment_model.rs',
+    'botho/tests/ct_economics_reinvestment.rs',
     'scripts/research/ct-economics/reference.rs',
     'scripts/research/ct-reinvestment/config.json', 'scripts/research/ct-reinvestment/check.py',
     'scripts/research/ct-reinvestment/collect.py', 'scripts/research/ct-reinvestment/test_check.py',

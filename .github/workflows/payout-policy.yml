@@ -1,0 +1,47 @@
+name: Inactive Payout Policy
+on:
+  pull_request:
+    paths:
+      - 'botho/**'
+      - 'cluster-tax/**'
+      - 'scripts/research/payout-policy/**'
+      - 'scripts/research/ct-reinvestment/**'
+      - 'scripts/research/ct-economics/**'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain'
+      - '.github/workflows/payout-policy.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-03
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: inactive-payout-policy
+      - name: Source equivalence and independent edge checks
+        run: |
+          python3 scripts/research/payout-policy/source_regression.py
+          python3 -m unittest discover -s scripts/research/payout-policy -p 'test_check.py'
+      - name: Fixed six histories and baseline replay
+        timeout-minutes: 19
+        run: python3 scripts/research/payout-policy/collect.py --target-dir "$GITHUB_WORKSPACE/target" --output payout-policy-capture
+      - name: Independent captured accounting
+        run: python3 scripts/research/payout-policy/check.py payout-policy-capture
+      - name: Preserve all outcomes
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: payout-policy-${{ github.run_id }}-${{ github.run_attempt }}
+          path: payout-policy-capture/
+          retention-days: 14
+          if-no-files-found: error
