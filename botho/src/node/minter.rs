@@ -601,6 +601,23 @@ impl Minter {
         }
     }
 
+    /// Request shutdown and join workers outside the node's event loop.
+    ///
+    /// A worker can be inside RandomX dataset construction when shutdown is
+    /// requested. Joining it synchronously would stall network and RPC event
+    /// processing for the duration of that construction. The shutdown signal
+    /// and health transition are still immediate; only the worker joins move
+    /// to this dedicated thread.
+    pub fn stop_async(self) -> thread::JoinHandle<()> {
+        self.health.set_active(false);
+        self.shutdown.store(true, Ordering::SeqCst);
+        thread::spawn(move || {
+            for handle in self.handles {
+                let _ = handle.join();
+            }
+        })
+    }
+
     /// Clone the shared health handle for stall detection / RPC reporting.
     ///
     /// The handle observes live worker progress and outlives a single
