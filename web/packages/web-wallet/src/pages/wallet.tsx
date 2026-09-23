@@ -318,7 +318,7 @@ function SettingsModal({
 
 function WalletDashboard() {
   const { t } = useTranslation('wallet')
-  const { address, balance, transactions, isConnecting, isConnected, refreshBalance, refreshTransactions, resetWallet, send, estimateFee, contacts, searchContacts, isEncrypted, setPassword, changePassword, lockWallet, autoLockMinutes, setAutoLockMinutes } = useWallet()
+  const { address, balance, balanceUnavailable, transactions, historyUnavailable, isConnecting, isConnected, refreshBalance, refreshTransactions, resetWallet, send, estimateFee, contacts, searchContacts, isEncrypted, setPassword, changePassword, lockWallet, autoLockMinutes, setAutoLockMinutes } = useWallet()
 
   // Resolve a counterparty address to a saved contact name for the transaction
   // history. We auto-create blank-name "previously paid" entries when sending,
@@ -433,6 +433,15 @@ function WalletDashboard() {
         actions={actionButtons}
       />
 
+      {balanceUnavailable && (
+        <Card className="p-4 flex items-center justify-between gap-3" role="alert">
+          <p className="text-sm text-warning">{t('dashboard.balanceUnavailable')}</p>
+          <Button variant="secondary" size="sm" onClick={refreshBalance} disabled={!isConnected}>
+            {t('dashboard.retryBalance')}
+          </Button>
+        </Card>
+      )}
+
       {hasFaucet && <FaucetButton />}
 
       <Card className="p-4 sm:p-5">
@@ -463,12 +472,22 @@ function WalletDashboard() {
 
       <OutstandingLinks />
 
-      <TransactionList
-        transactions={transactions}
-        title={t('dashboard.recentTransactions')}
-        showChevron={false}
-        resolveName={resolveName}
-      />
+      {historyUnavailable ? (
+        <Card className="p-4 sm:p-5" role="alert">
+          <h2 className="font-display font-semibold mb-3">{t('dashboard.recentTransactions')}</h2>
+          <p className="text-sm text-warning mb-3">{t('dashboard.historyUnavailable')}</p>
+          <Button variant="secondary" size="sm" onClick={refreshTransactions} disabled={!isConnected}>
+            {t('dashboard.retryHistory')}
+          </Button>
+        </Card>
+      ) : (
+        <TransactionList
+          transactions={transactions}
+          title={t('dashboard.recentTransactions')}
+          showChevron={false}
+          resolveName={resolveName}
+        />
+      )}
 
       <SecurityModelFooter isEncrypted={isEncrypted} />
 

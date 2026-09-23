@@ -48,6 +48,10 @@
     "close": "关闭"
   },
   "dashboard": {
+    "balanceUnavailable": "余额暂不可用。钱包未能查询资金，请在连接后重试。",
+    "historyUnavailable": "交易记录暂不可用，请重试以查看交易。",
+    "retryBalance": "重试查询余额",
+    "retryHistory": "重试查询记录",
     "send": "发送",
     "receive": "接收",
     "sendViaLink": "通过链接发送",

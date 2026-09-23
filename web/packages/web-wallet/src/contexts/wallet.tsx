@@ -31,7 +31,11 @@ interface WalletState {
   isLocked: boolean
   address: string | null
   balance: Balance | null
+  /** The latest local balance read failed; balance is unavailable, not zero. */
+  balanceUnavailable: boolean
   transactions: Transaction[]
+  /** The latest owned-output history read failed; an empty list is not authoritative. */
+  historyUnavailable: boolean
 
   // Address book
   contacts: Contact[]
@@ -214,38 +218,28 @@ function hexToBytes(hex: string): Uint8Array {
  * is unlocked (mnemonic available), we instead compute the true SPENDABLE
  * balance entirely client-side: derive owned-output key images in wasm and ask
  * the node's `chain_areKeyImagesSpent` RPC which are spent. If the wallet is
- * locked (no mnemonic), fall back to the node RPC balance.
+ * locked, reads are skipped. Failures are handled explicitly by the provider;
+ * the remote node's own wallet is never a source of browser-wallet balances.
  */
 async function fetchBalance(
   adapter: RemoteNodeAdapter,
-  address: string,
-  mnemonic: string | null,
+  mnemonic: string,
 ): Promise<Balance> {
-  if (!mnemonic) {
-    return adapter.getBalance([address])
-  }
-  try {
-    const kp = deriveKeypairs(mnemonic, 0)
-    const available = await spendableBalance(
-      {
-        spendPrivateKey: toHex(kp.spendPrivate),
-        viewPrivateKey: toHex(kp.viewPrivate),
-        // Seed so the scan detects 6.0.0 hybrid incoming payments + change (#988).
-        seed: mnemonicToSeedHex(mnemonic),
-      },
-      {
-        getChainHeight: () => adapter.getBlockHeight(),
-        getOutputs: (start, end) => adapter.getRawOutputs(start, end),
-        areKeyImagesSpent: (keyImages) => adapter.areKeyImagesSpent(keyImages),
-      },
-    )
-    return { available, pending: 0n, total: available }
-  } catch {
-    // If the client-side spendable computation is unavailable (e.g. the wasm
-    // artifact failed to load), fall back to the node RPC balance rather than
-    // surfacing no balance at all.
-    return adapter.getBalance([address])
-  }
+  const kp = deriveKeypairs(mnemonic, 0)
+  const available = await spendableBalance(
+    {
+      spendPrivateKey: toHex(kp.spendPrivate),
+      viewPrivateKey: toHex(kp.viewPrivate),
+      // Seed so the scan detects 6.0.0 hybrid incoming payments + change (#988).
+      seed: mnemonicToSeedHex(mnemonic),
+    },
+    {
+      getChainHeight: () => adapter.getBlockHeight(),
+      getOutputs: (start, end) => adapter.getRawOutputs(start, end),
+      areKeyImagesSpent: (keyImages) => adapter.areKeyImagesSpent(keyImages),
+    },
+  )
+  return { available, pending: 0n, total: available }
 }
 
 /**
@@ -258,57 +252,50 @@ async function fetchBalance(
  * path: fetch outputs (with block height) and let the wasm signer keep only the
  * ones this wallet owns, with their REAL decoded amounts, then map each owned
  * output to a `receive` (and a `spend` if its key image is spent). Requires the
- * mnemonic (unlocked wallet); when locked we return an empty history rather than
- * the old spam.
+ * mnemonic (unlocked wallet); failed reads are distinct from an empty history.
  */
 async function fetchHistory(
   adapter: RemoteNodeAdapter,
-  mnemonic: string | null,
+  mnemonic: string,
 ): Promise<Transaction[]> {
-  if (!mnemonic) return []
-  try {
-    const kp = deriveKeypairs(mnemonic, 0)
-    const entries = await buildOwnedHistory(
-      {
-        spendPrivateKey: toHex(kp.spendPrivate),
-        viewPrivateKey: toHex(kp.viewPrivate),
-        // Seed so hybrid receives + change appear in history (#988).
-        seed: mnemonicToSeedHex(mnemonic),
-      },
-      {
-        getChainHeight: () => adapter.getBlockHeight(),
-        getOutputsWithMeta: (start, end) => adapter.getRawOutputsWithMeta(start, end),
-        areKeyImagesSpent: (keyImages) => adapter.areKeyImagesSpent(keyImages),
-      },
-    )
-    // Collapse per-output entries into per-event rows (#675): unique ids (no
-    // duplicate React keys), sends netted against same-block change, and a
-    // real pending/confirmed status instead of a hardcoded one.
-    const chainHeight = await adapter.getBlockHeight()
-    return netOwnedHistory(entries).map((e) => ({
-      id: e.id,
-      type: e.type,
-      amount: e.amount,
-      // Fee is not knowable client-side (the ring hides the consuming tx);
-      // 0n is the type's "unknown" and the row does not render it.
-      fee: 0n,
-      privacyLevel: 'private' as const,
-      cryptoType: 'clsag' as const,
-      status: e.status,
-      // Block timestamps are not exposed by the outputs RPC. 0 marks "no
-      // wall-clock time known": the row falls back to showing the block
-      // height instead of fabricating "just now" on every refresh (#675).
-      timestamp: 0,
-      blockHeight: e.blockHeight > 0 ? e.blockHeight : undefined,
-      confirmations:
-        e.status === 'confirmed' && e.blockHeight > 0
-          ? Math.max(0, chainHeight - e.blockHeight + 1)
-          : 0,
-    }))
-  } catch {
-    // wasm artifact missing or scan failed: show no history rather than spam.
-    return []
-  }
+  const kp = deriveKeypairs(mnemonic, 0)
+  const entries = await buildOwnedHistory(
+    {
+      spendPrivateKey: toHex(kp.spendPrivate),
+      viewPrivateKey: toHex(kp.viewPrivate),
+      // Seed so hybrid receives + change appear in history (#988).
+      seed: mnemonicToSeedHex(mnemonic),
+    },
+    {
+      getChainHeight: () => adapter.getBlockHeight(),
+      getOutputsWithMeta: (start, end) => adapter.getRawOutputsWithMeta(start, end),
+      areKeyImagesSpent: (keyImages) => adapter.areKeyImagesSpent(keyImages),
+    },
+  )
+  // Collapse per-output entries into per-event rows (#675): unique ids (no
+  // duplicate React keys), sends netted against same-block change, and a
+  // real pending/confirmed status instead of a hardcoded one.
+  const chainHeight = await adapter.getBlockHeight()
+  return netOwnedHistory(entries).map((e) => ({
+    id: e.id,
+    type: e.type,
+    amount: e.amount,
+    // Fee is not knowable client-side (the ring hides the consuming tx);
+    // 0n is the type's "unknown" and the row does not render it.
+    fee: 0n,
+    privacyLevel: 'private' as const,
+    cryptoType: 'clsag' as const,
+    status: e.status,
+    // Block timestamps are not exposed by the outputs RPC. 0 marks "no
+    // wall-clock time known": the row falls back to showing the block
+    // height instead of fabricating "just now" on every refresh (#675).
+    timestamp: 0,
+    blockHeight: e.blockHeight > 0 ? e.blockHeight : undefined,
+    confirmations:
+      e.status === 'confirmed' && e.blockHeight > 0
+        ? Math.max(0, chainHeight - e.blockHeight + 1)
+        : 0,
+  }))
 }
 
 /**
@@ -423,7 +410,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     isLocked: false,
     address: null,
     balance: null,
+    balanceUnavailable: false,
     transactions: [],
+    historyUnavailable: false,
     contacts: [],
     claimLinks: [],
   })
@@ -437,6 +426,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   // Store mnemonic in memory after unlock (cleared on page refresh)
   const mnemonicRef = useRef<string | null>(null)
+  const walletGeneration = useRef(0)
+  const readRequests = useRef({ balance: 0, history: 0 })
 
   // Store the unlocked vault key in memory for the session so sibling features
   // (#474 claim-link secrets, #476 address book) can encrypt under the same
@@ -476,6 +467,43 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       ...s,
       claimLinks: claimLinkStore.getAll(),
       contacts: addressBook.getAll(),
+    }))
+  }, [])
+
+  // All wallet reads share the same error and lifecycle handling. A remote
+  // node's wallet balance is never a substitute for a failed local scan.
+  const refreshWalletData = useCallback(async (parts: Array<'balance' | 'history'> = ['balance', 'history']) => {
+    const adapter = adapterRef.current
+    const mnemonic = mnemonicRef.current
+    if (!mountedRef.current || !mnemonic || !adapter.isConnected()) return
+    const connection = connectionGeneration.current
+    const wallet = walletGeneration.current
+
+    await Promise.all(parts.map(async (part) => {
+      const request = ++readRequests.current[part]
+      const isCurrent = () => mountedRef.current
+        && connection === connectionGeneration.current
+        && wallet === walletGeneration.current
+        && adapter === adapterRef.current
+        && request === readRequests.current[part]
+      try {
+        if (part === 'balance') {
+          const balance = await fetchBalance(adapter, mnemonic)
+          if (isCurrent()) setState(s => ({ ...s, balance, balanceUnavailable: false }))
+        } else {
+          const transactions = await fetchHistory(adapter, mnemonic)
+          if (isCurrent()) setState(s => ({ ...s, transactions, historyUnavailable: false }))
+        }
+      } catch {
+        // Do not expose arbitrary RPC/crypto exception text in wallet UI.
+        // Clear unverified values so they cannot appear current after a failure.
+        if (!isCurrent()) return
+        if (part === 'balance') {
+          setState(s => ({ ...s, balance: null, balanceUnavailable: true }))
+        } else {
+          setState(s => ({ ...s, transactions: [], historyUnavailable: true }))
+        }
+      }
     }))
   }, [])
 
@@ -528,7 +556,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         connectionError: null,
         wsStatus: 'disconnected',
         balance: null,
+        balanceUnavailable: false,
         transactions: [],
+        historyUnavailable: false,
       }))
 
       // Reconnect
@@ -552,54 +582,19 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     return unsubscribe
   }, [adapterVersion, state.isConnecting])
 
-  // Subscribe to real-time block updates for balance refresh
+  // Subscribe to real-time block updates for balance refresh.
   useEffect(() => {
     if (!state.isConnected || state.isConnecting || !state.address || state.isLocked) return
+    return adapterRef.current.onNewBlock(() => { void refreshWalletData() })
+  }, [state.isConnected, state.isConnecting, state.address, state.isLocked, adapterVersion, refreshWalletData])
 
-    const adapter = adapterRef.current
-    const generation = connectionGeneration.current
-    let active = true
-    const unsubscribe = adapter.onNewBlock(async () => {
-      // Refresh balance and transactions when new block arrives
-      try {
-        const [balance, transactions] = await Promise.all([
-          fetchBalance(adapter, state.address!, mnemonicRef.current),
-          fetchHistory(adapter, mnemonicRef.current),
-        ])
-        if (!active || !mountedRef.current || generation !== connectionGeneration.current) return
-        setState(s => ({ ...s, balance, transactions }))
-      } catch {
-        // Ignore refresh errors - will retry on next block
-      }
-    })
-
-    return () => { active = false; unsubscribe() }
-  }, [state.isConnected, state.isConnecting, state.address, state.isLocked, adapterVersion])
-
-  // Fallback polling when WebSocket is disconnected
+  // Fallback polling when WebSocket is disconnected.
   useEffect(() => {
-    // Only poll if connected to node but WebSocket is down
     if (!state.isConnected || state.isConnecting || !state.address || state.isLocked) return
-    if (state.wsStatus === 'connected') return // Use WebSocket instead
-
-    const adapter = adapterRef.current
-    const generation = connectionGeneration.current
-    let active = true
-    const pollInterval = setInterval(async () => {
-      try {
-        const [balance, transactions] = await Promise.all([
-          fetchBalance(adapter, state.address!, mnemonicRef.current),
-          fetchHistory(adapter, mnemonicRef.current),
-        ])
-        if (!active || !mountedRef.current || generation !== connectionGeneration.current) return
-        setState(s => ({ ...s, balance, transactions }))
-      } catch {
-        // Ignore polling errors
-      }
-    }, FALLBACK_POLL_INTERVAL)
-
-    return () => { active = false; clearInterval(pollInterval) }
-  }, [state.isConnected, state.isConnecting, state.address, state.isLocked, state.wsStatus, adapterVersion])
+    if (state.wsStatus === 'connected') return
+    const pollInterval = setInterval(() => { void refreshWalletData() }, FALLBACK_POLL_INTERVAL)
+    return () => { clearInterval(pollInterval) }
+  }, [state.isConnected, state.isConnecting, state.address, state.isLocked, state.wsStatus, adapterVersion, refreshWalletData])
 
   const connect = useCallback(async () => {
     if (!mountedRef.current) return
@@ -637,12 +632,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
             if (!isCurrent()) return
             if (stored) mnemonicRef.current = stored.mnemonic
           }
-          const [balance, transactions] = await Promise.all([
-            fetchBalance(adapter, walletInfo.address, mnemonicRef.current),
-            fetchHistory(adapter, mnemonicRef.current),
-          ])
-          if (!isCurrent()) return
-          setState(s => ({ ...s, balance, transactions }))
+          await refreshWalletData()
         }
       }
     } catch (err) {
@@ -653,7 +643,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         connectionError: err instanceof Error ? err.message : 'Connection failed',
       }))
     }
-  }, [])
+  }, [refreshWalletData])
 
   const disconnect = useCallback(() => {
     ++connectionGeneration.current
@@ -679,6 +669,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     await saveWallet(mnemonic, password, address)
 
     // Store mnemonic in memory
+    ++walletGeneration.current
     mnemonicRef.current = mnemonic
     // Derive + hold the session vault key (bound to the seed blob's salt) so
     // sibling data can be encrypted under the same key (#474/#476). Null for
@@ -692,7 +683,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       isLocked: false,
       address,
       balance: { available: 0n, pending: 0n, total: 0n },
+      balanceUnavailable: false,
       transactions: [],
+      historyUnavailable: false,
     }))
   }, [])
 
@@ -716,6 +709,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     await saveWallet(normalized, password, address)
 
     // Store mnemonic in memory
+    ++walletGeneration.current
     mnemonicRef.current = normalized
     await applyVaultKey(password ? await deriveSessionVaultKey(password) : null)
 
@@ -725,16 +719,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       isEncrypted: !!password,
       isLocked: false,
       address,
+      balance: null,
+      balanceUnavailable: false,
+      transactions: [],
+      historyUnavailable: false,
     }))
 
-    // Fetch balance
-    const adapter = adapterRef.current
-    if (adapter.isConnected()) {
-      const balance = await fetchBalance(adapter, address, mnemonicRef.current)
-      const transactions = await fetchHistory(adapter, mnemonicRef.current)
-      setState(s => ({ ...s, balance, transactions }))
-    }
-  }, [])
+    await refreshWalletData()
+  }, [applyVaultKey, refreshWalletData])
 
   const unlockWallet = useCallback(async (password: string) => {
     // loadWalletWithKey decrypts the seed AND returns the session vault key,
@@ -747,21 +739,15 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     // Store mnemonic + session vault key in memory. Publishing the key loads +
     // migrates outstanding claim links now that we can decrypt them (#474).
+    ++walletGeneration.current
     mnemonicRef.current = stored.mnemonic
     await applyVaultKey(stored.vaultKey)
 
     setState(s => ({ ...s, isLocked: false }))
 
-    // Fetch balance now that we're unlocked
-    const adapter = adapterRef.current
-    if (adapter.isConnected() && stored.address) {
-      const [balance, transactions] = await Promise.all([
-        fetchBalance(adapter, stored.address, mnemonicRef.current),
-        fetchHistory(adapter, mnemonicRef.current),
-      ])
-      setState(s => ({ ...s, balance, transactions }))
-    }
-  }, [])
+    // A scan failure is a data error, not a password/decryption failure.
+    await refreshWalletData()
+  }, [applyVaultKey, refreshWalletData])
 
   const lockWallet = useCallback(() => {
     // SAFETY (#490): never lock a wallet that cannot be unlocked. A plaintext
@@ -772,6 +758,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       return
     }
     // Wipe the decrypted seed from memory.
+    ++walletGeneration.current
     mnemonicRef.current = null
     // Wipe the session vault key (vaultKeyRef + module-scope sessionVaultKey).
     // Passing null also makes the encrypted claim-link store + address book read
@@ -784,7 +771,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       ...s,
       isLocked: true,
       balance: null,
+      balanceUnavailable: false,
       transactions: [],
+      historyUnavailable: false,
     }))
   }, [applyVaultKey])
 
@@ -865,6 +854,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     clearWallet()
     // Clear mnemonic + vault key from memory (also clears the module-scope key
     // the encrypted claim-link store reads).
+    ++walletGeneration.current
     mnemonicRef.current = null
     vaultKeyRef.current = null
     setSessionVaultKey(null)
@@ -876,7 +866,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       isLocked: false,
       address: null,
       balance: null,
+      balanceUnavailable: false,
       transactions: [],
+      historyUnavailable: false,
     }))
   }, [])
 
@@ -1178,15 +1170,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       // Address-book persistence is non-critical; ignore failures.
     }
 
-    // Refresh balance/history opportunistically; ignore failures.
-    if (state.address) {
-      fetchBalance(adapter, state.address, mnemonicRef.current)
-        .then((balance) => { if (isCurrent()) setState((s) => ({ ...s, balance })) })
-        .catch(() => {})
-    }
+    // Refresh after submission; a failed read is reported without failing the send.
+    if (isCurrent()) void refreshWalletData(['balance'])
 
     return result.txHash
-  }, [state.address])
+  }, [state.address, refreshWalletData])
 
   // Pre-send fee estimate for the send modal (#635). Mirrors the cluster-wealth
   // derivation in `send` above so the displayed fee — and the node-computed
@@ -1234,23 +1222,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  const refreshBalance = useCallback(async () => {
-    const adapter = adapterRef.current
-    const generation = connectionGeneration.current
-    const isCurrent = () => mountedRef.current && generation === connectionGeneration.current && adapter === adapterRef.current
-    if (!isCurrent() || !state.address || !adapter.isConnected()) return
-    const balance = await fetchBalance(adapter, state.address, mnemonicRef.current)
-    if (isCurrent()) setState(s => ({ ...s, balance }))
-  }, [state.address])
-
-  const refreshTransactions = useCallback(async () => {
-    const adapter = adapterRef.current
-    const generation = connectionGeneration.current
-    const isCurrent = () => mountedRef.current && generation === connectionGeneration.current && adapter === adapterRef.current
-    if (!isCurrent() || !state.address || !adapter.isConnected()) return
-    const transactions = await fetchHistory(adapter, mnemonicRef.current)
-    if (isCurrent()) setState(s => ({ ...s, transactions }))
-  }, [state.address])
+  const refreshBalance = useCallback(() => refreshWalletData(['balance']), [refreshWalletData])
+  const refreshTransactions = useCallback(() => refreshWalletData(['history']), [refreshWalletData])
 
   // Claimable payment link methods (#460) ---------------------------------
 
@@ -1306,14 +1279,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     const url = buildClaimLink(origin, ephMnemonic, amount)
 
     // Refresh the sender's balance opportunistically.
-    if (state.address) {
-      fetchBalance(adapter, state.address, mnemonicRef.current)
-        .then((balance) => { if (isCurrent()) setState((s) => ({ ...s, balance })) })
-        .catch(() => {})
-    }
+    if (isCurrent()) void refreshWalletData(['balance'])
 
     return { url, ephAddress, amount, fundingTxHash, id: record.id }
-  }, [state.address])
+  }, [state.address, refreshWalletData])
 
   const refreshClaimLinks = useCallback(async () => {
     const adapter = adapterRef.current
@@ -1351,13 +1320,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     await claimLinkStore.setStatus(id, 'refunded')
     setState(s => ({ ...s, claimLinks: claimLinkStore.getAll() }))
 
-    if (state.address) {
-      fetchBalance(adapter, state.address, mnemonicRef.current)
-        .then((balance) => { if (isCurrent()) setState((s) => ({ ...s, balance })) })
-        .catch(() => {})
-    }
+    if (isCurrent()) void refreshWalletData(['balance'])
     return txHash
-  }, [state.address])
+  }, [state.address, refreshWalletData])
 
   const forgetClaimLink = useCallback(async (id: string) => {
     await claimLinkStore.delete(id)
