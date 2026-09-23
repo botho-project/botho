@@ -127,6 +127,9 @@ async fn hybrid_coinbase_rpc_scan_spend_filter_restore() {
     let recipient = WalletKeys::generate().unwrap();
     let sink = WalletKeys::generate().unwrap();
     let ledger = Ledger::open(dir.path()).unwrap();
+    // Match the isolated positive tx_lifecycle fixture's PoW target; block
+    // acceptance still checks the header against this initialized ledger state.
+    ledger.set_difficulty(u64::MAX).unwrap();
     let mut reward = None;
     for h in 1..=220 {
         let b = mine(
