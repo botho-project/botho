@@ -530,6 +530,33 @@ pub struct BlockOutputs {
     pub outputs: Vec<TxOutput>,
 }
 
+/// Canonical ledger location, separate from the legacy RPC identifier.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerOutpoint {
+    pub tx_hash: String,
+    pub output_index: u32,
+}
+
+/// Resolve only the supported coinbase/ordinary index contracts. Old nodes
+/// already mark coinbases explicitly; a bare MAX is not proof of coinbase.
+pub(crate) fn crypto_output_index(
+    index: u32,
+    coinbase: bool,
+    explicit: Option<u32>,
+) -> Option<u32> {
+    if coinbase {
+        if index != u32::MAX || explicit.is_some_and(|value| value != 0) {
+            return None;
+        }
+        Some(0)
+    } else if index == u32::MAX || explicit.is_some_and(|value| value != index) {
+        None
+    } else {
+        Some(index)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TxOutput {
@@ -537,6 +564,16 @@ pub struct TxOutput {
     pub tx_hash: String,
     // Node emits `outputIndex`.
     pub output_index: u32,
+    /// Optional derivation index; absent on older nodes and legacy lottery
+    /// rows.
+    #[serde(default)]
+    pub crypto_output_index: Option<u32>,
+    /// Explicit existing RPC discriminator, needed for old-node compatibility.
+    #[serde(default)]
+    pub coinbase: bool,
+    /// Additive canonical ledger identity. Never substitutes for crypto index.
+    #[serde(default)]
+    pub ledger_outpoint: Option<LedgerOutpoint>,
     /// One-time target key (stealth spend key)
     pub target_key: String,
     /// Ephemeral public key (for DH derivation)
@@ -923,7 +960,70 @@ mod tests {
         let out: TxOutput = serde_json::from_value(fixture)
             .expect("coinbase TxOutput should deserialize camelCase JSON");
         assert_eq!(out.output_index, u32::MAX);
+        assert!(out.coinbase);
+        assert_eq!(out.crypto_output_index, None);
+        assert_eq!(
+            crypto_output_index(out.output_index, out.coinbase, out.crypto_output_index),
+            Some(0)
+        );
+        assert!(out.ledger_outpoint.is_none());
         assert!(out.cluster_tags.is_empty());
+    }
+
+    #[test]
+    fn additive_output_metadata_keeps_legacy_decoder_and_lottery_identity() {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct LegacyId {
+            tx_hash: String,
+            output_index: u32,
+        }
+        let mut row = json!({"txHash":"aa", "outputIndex":u32::MAX,
+            "targetKey":"bb", "publicKey":"cc", "amountCommitment":"dd",
+            "coinbase":true, "cryptoOutputIndex":0,
+            "ledgerOutpoint":{"txHash":"ee", "outputIndex":0}});
+        let legacy: LegacyId = serde_json::from_value(row.clone()).unwrap();
+        let decoded: TxOutput = serde_json::from_value(row.clone()).unwrap();
+        assert_eq!(legacy.tx_hash, decoded.tx_hash);
+        assert_eq!(legacy.output_index, decoded.output_index);
+        assert_eq!(
+            decoded.ledger_outpoint.unwrap(),
+            LedgerOutpoint {
+                tx_hash: "ee".into(),
+                output_index: 0
+            }
+        );
+        row.as_object_mut().unwrap().remove("coinbase");
+        row.as_object_mut().unwrap().remove("cryptoOutputIndex");
+        row["lottery"] = json!(true);
+        row["outputIndex"] = json!(3);
+        row["ledgerOutpoint"] = json!({"txHash":"aa", "outputIndex":3});
+        let lottery: TxOutput = serde_json::from_value(row).unwrap();
+        assert!(!lottery.coinbase);
+        assert_eq!(lottery.output_index, 3);
+        assert_eq!(lottery.crypto_output_index, None);
+        assert_eq!(
+            crypto_output_index(
+                lottery.output_index,
+                lottery.coinbase,
+                lottery.crypto_output_index
+            ),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn crypto_index_contract_preserves_identity_and_requires_coinbase() {
+        assert_eq!(crypto_output_index(u32::MAX, true, None), Some(0));
+        assert_eq!(crypto_output_index(u32::MAX, true, Some(0)), Some(0));
+        assert_eq!(crypto_output_index(u32::MAX, false, None), None);
+        assert_eq!(crypto_output_index(3, false, None), Some(3));
+        assert_eq!(crypto_output_index(3, false, Some(3)), Some(3));
+        assert_eq!(crypto_output_index(3, false, Some(0)), None);
+        assert_eq!(crypto_output_index(u32::MAX, true, Some(1)), None);
+        assert_eq!(crypto_output_index(1, true, Some(0)), None);
+        // Legacy lottery index is retained, not reinterpreted as a source index.
+        assert_eq!(crypto_output_index(2, false, None), Some(2));
     }
 
     /// Mirrors `tx_submit` success (botho/src/rpc/mod.rs).

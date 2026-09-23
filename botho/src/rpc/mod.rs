@@ -1714,7 +1714,8 @@ async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> Json
             // freshly-mined chain see no outputs at all — they cannot find their
             // own (coinbase) UTXOs to spend, nor build a decoy ring. The
             // `outputIndex` is encoded as u32::MAX to distinguish coinbase from
-            // regular transaction outputs.
+            // regular transaction outputs. Preserve this legacy RPC identity; the
+            // additive fields separately expose crypto derivation and ledger identity.
             let coinbase = block.minting_tx.to_tx_output();
             let coinbase_tags: Vec<[u64; 2]> = coinbase
                 .cluster_tags
@@ -1725,6 +1726,8 @@ async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> Json
             outputs.push(json!({
                 "txHash": hex::encode(block.minting_tx.hash()),
                 "outputIndex": u32::MAX,
+                "cryptoOutputIndex": crate::block::MINTING_OUTPUT_INDEX,
+                "ledgerOutpoint": {"txHash": hex::encode(block.hash()), "outputIndex": 0},
                 "targetKey": hex::encode(coinbase.target_key),
                 "publicKey": hex::encode(coinbase.public_key),
                 "amountCommitment": hex::encode(coinbase.amount.to_le_bytes()),
@@ -1759,6 +1762,8 @@ async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> Json
                     outputs.push(json!({
                         "txHash": hex::encode(tx.hash()),
                         "outputIndex": idx,
+                        "cryptoOutputIndex": idx,
+                        "ledgerOutpoint": {"txHash": hex::encode(tx.hash()), "outputIndex": idx},
                         "targetKey": hex::encode(output.target_key),
                         "publicKey": hex::encode(output.public_key),
                         "amountCommitment": hex::encode(output.amount.to_le_bytes()),
@@ -1786,6 +1791,7 @@ async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> Json
                 outputs.push(json!({
                     "txHash": hex::encode(block_hash),
                     "outputIndex": (lottery_idx as u32) + 1,
+                    "ledgerOutpoint": {"txHash": hex::encode(block_hash), "outputIndex": (lottery_idx as u32) + 1},
                     "targetKey": hex::encode(lottery_output.target_key),
                     "publicKey": hex::encode(lottery_output.public_key),
                     "amountCommitment": hex::encode(lottery_output.payout.to_le_bytes()),

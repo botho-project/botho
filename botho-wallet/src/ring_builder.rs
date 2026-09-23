@@ -224,6 +224,9 @@ mod tests {
         RpcTxOutput {
             tx_hash: hex::encode([0u8; 32]),
             output_index: 0,
+            crypto_output_index: None,
+            coinbase: false,
+            ledger_outpoint: None,
             target_key: hex::encode(out.target_key),
             public_key: hex::encode(out.public_key),
             amount_commitment: hex::encode(amount.to_le_bytes()),
