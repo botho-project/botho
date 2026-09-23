@@ -27,14 +27,14 @@
   "dependencies": {
     "@botho/core": "workspace:*",
     "@botho/ui": "workspace:*",
-    "@noble/curves": "^2.3.0",
-    "@noble/hashes": "^2.3.0",
+    "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
     "lucide-react": "^1.31.0",
-    "motion": "^13.1.0"
+    "motion": "^13.4.0"
   },
   "devDependencies": {
-    "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "typescript": "~7.0.2"
   }
 }
