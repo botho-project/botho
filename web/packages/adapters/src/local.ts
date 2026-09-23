@@ -381,7 +381,7 @@ export class LocalNodeAdapter implements NodeAdapter {
         port,
         version: data.nodeVersion || data.version || 'unknown',
         blockHeight: data.chainHeight || data.blockHeight,
-        networkId: data.network || 'botho-mainnet',
+        networkId: typeof data.network === 'string' && data.network.trim() ? data.network : '',
         latency,
         status: 'online',
       }

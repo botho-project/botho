@@ -4,13 +4,15 @@ import {
   useEffect,
   useState,
   useCallback,
+  useRef,
+  useLayoutEffect,
   type ReactNode,
 } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { LocalNodeAdapter } from '@botho/adapters'
 import type { FeeEstimate } from '@botho/adapters'
 import type { Balance, Transaction, Address } from '@botho/core'
 import { useConnection } from './connection'
+import { walletNetwork, validWalletAddress, addressCacheKey } from '../config/wallet-network'
 
 interface WalletState {
   address: Address | null
@@ -116,8 +118,25 @@ interface WalletFileExistsResult {
 const WalletContext = createContext<WalletContextValue | null>(null)
 
 export function WalletProvider({ children }: { children: ReactNode }) {
-  const { connectedNode } = useConnection()
-  const [adapter, setAdapter] = useState<LocalNodeAdapter | null>(null)
+  const { connectedNode, adapter, endpoint } = useConnection()
+  const network = walletNetwork(connectedNode?.networkId)
+  const generation = useRef(0)
+  const mounted = useRef(false)
+  const current = (token: number) => mounted.current && generation.current === token
+
+  // A selected-node/network change invalidates pending IPC and read completions.
+  useLayoutEffect(() => {
+    mounted.current = true
+    generation.current += 1
+    const cache = network ? localStorage.getItem(addressCacheKey(network)) : null
+    const address = cache && validWalletAddress(cache, network) ? cache : null
+    if (network && cache && !address) localStorage.removeItem(addressCacheKey(network))
+    // This key contains public display/watch data only, never wallet material.
+    localStorage.removeItem('botho-wallet-address')
+    setState(s => ({ ...s, address, balance: null, transactions: [], isLoading: false,
+      isSending: false, error: null, isUnlocked: false, sessionExpiresIn: null }))
+    return () => { mounted.current = false; generation.current += 1 }
+  }, [adapter, endpoint, connectedNode?.id, network])
 
   // SECURITY: Mnemonic is NEVER stored in JavaScript.
   // All key material stays in Rust memory and is accessed via session.
@@ -135,38 +154,20 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     sessionExpiresIn: null,
   })
 
-  // Create adapter when connected
-  useEffect(() => {
-    if (connectedNode) {
-      const newAdapter = new LocalNodeAdapter({
-        host: connectedNode.host,
-        port: connectedNode.port,
-      })
-      newAdapter.connect().then(() => {
-        setAdapter(newAdapter)
-      }).catch(console.error)
-    } else {
-      setAdapter(null)
-    }
-  }, [connectedNode])
-
   const setAddress = useCallback((address: Address) => {
-    setState(s => ({ ...s, address }))
-    localStorage.setItem('botho-wallet-address', address)
-  }, [])
-
-  // Load saved address on mount
-  useEffect(() => {
-    const saved = localStorage.getItem('botho-wallet-address')
-    if (saved) {
-      setState(s => ({ ...s, address: saved }))
+    if (!network || !validWalletAddress(address, network)) {
+      throw new Error('A complete v2 address for the connected network is required')
     }
-  }, [])
+    setState(s => ({ ...s, address }))
+    localStorage.setItem(addressCacheKey(network), address)
+  }, [network])
 
   // Check for wallet file on mount
   const checkWalletFile = useCallback(async () => {
+    const token = generation.current
     try {
       const result = await invoke<WalletFileExistsResult>('wallet_file_exists', { path: null })
+      if (!current(token)) return
       setState(s => ({
         ...s,
         hasWalletFile: result.exists,
@@ -183,8 +184,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   // Check session status from Rust
   const checkSessionStatus = useCallback(async () => {
+    if (!network) return
+    const token = generation.current
     try {
-      const result = await invoke<SessionStatusResult>('get_session_status')
+      const result = await invoke<SessionStatusResult>('get_session_status', { network })
+      if (!current(token)) return
+      if (result.address && !validWalletAddress(result.address, network)) throw new Error('Native wallet returned an incompatible address')
       setState(s => ({
         ...s,
         isUnlocked: result.isUnlocked,
@@ -194,15 +199,21 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     } catch {
       // Ignore errors - session check is optional
     }
-  }, [])
+  }, [network, adapter, connectedNode?.id])
 
   // Unlock wallet from file (mnemonic stays in Rust)
   const unlockWallet = useCallback(async (password: string, path?: string) => {
+    if (!network) return { success: false, error: 'Connect to a recognized network first' }
+    const token = generation.current
     try {
       const result = await invoke<UnlockWalletResult>('unlock_wallet', {
-        params: { password, path: path || null }
+        params: { network, password, path: path || null }
       })
 
+      if (!current(token)) return { success: false, error: 'Network changed while wallet operation completed' }
+      if (result.success && (!result.address || !validWalletAddress(result.address, network))) {
+        return { success: false, error: 'Native wallet returned an incompatible address' }
+      }
       if (result.success) {
         setState(s => ({
           ...s,
@@ -216,7 +227,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : 'Failed to unlock wallet' }
     }
-  }, [])
+  }, [network, adapter, connectedNode?.id])
 
   // Generate mnemonic in Rust (SECURE - never accept mnemonic from JS for new wallets)
   const generateMnemonic = useCallback(async (): Promise<GenerateMnemonicResult> => {
@@ -230,11 +241,17 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   // Confirm new wallet using verification words (SECURE flow)
   const confirmNewWallet = useCallback(async (password: string, verifyWords: string[], path?: string) => {
+    if (!network) return { success: false, error: 'Connect to a recognized network first' }
+    const token = generation.current
     try {
       const result = await invoke<CreateWalletResult>('confirm_new_wallet', {
-        params: { password, verifyWords, path: path || null }
+        params: { network, password, verifyWords, path: path || null }
       })
 
+      if (!current(token)) return { success: false, error: 'Network changed while wallet operation completed' }
+      if (result.success && (!result.address || !validWalletAddress(result.address, network))) {
+        return { success: false, error: 'Native wallet returned an incompatible address' }
+      }
       if (result.success) {
         // Update state to reflect that wallet file now exists and is unlocked
         setState(s => ({
@@ -251,7 +268,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : 'Failed to create wallet' }
     }
-  }, [])
+  }, [network, adapter, connectedNode?.id])
 
   // Cancel pending wallet creation
   const cancelPendingWallet = useCallback(async () => {
@@ -264,11 +281,17 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   // Import existing wallet from mnemonic (mnemonic crosses JS/Rust boundary - unavoidable for restore)
   const importWallet = useCallback(async (mnemonic: string, password: string, path?: string) => {
+    if (!network) return { success: false, error: 'Connect to a recognized network first' }
+    const token = generation.current
     try {
       const result = await invoke<CreateWalletResult>('import_wallet', {
-        params: { mnemonic, password, path: path || null }
+        params: { network, mnemonic, password, path: path || null }
       })
 
+      if (!current(token)) return { success: false, error: 'Network changed while wallet operation completed' }
+      if (result.success && (!result.address || !validWalletAddress(result.address, network))) {
+        return { success: false, error: 'Native wallet returned an incompatible address' }
+      }
       if (result.success) {
         // Update state to reflect that wallet file now exists and is unlocked
         setState(s => ({
@@ -285,49 +308,68 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : 'Failed to import wallet' }
     }
-  }, [])
+  }, [network, adapter, connectedNode?.id])
 
   // Lock wallet (keys are zeroized in Rust)
   const lockWallet = useCallback(async () => {
+    generation.current += 1
+    const token = generation.current
     try {
       await invoke<boolean>('lock_wallet')
     } catch {
       // Ignore errors
     }
-    setState(s => ({ ...s, isUnlocked: false, sessionExpiresIn: null }))
+    if (current(token)) setState(s => ({ ...s, isUnlocked: false, sessionExpiresIn: null }))
   }, [])
 
   const refreshBalance = useCallback(async () => {
-    if (!adapter || !state.address) return
+    if (!adapter || !network || !validWalletAddress(state.address ?? '', network) || !state.address) return
+    const token = generation.current
 
     setState(s => ({ ...s, isLoading: true, error: null }))
     try {
-      const balance = await adapter.getBalance([state.address])
+      let balance: Balance
+      if (state.isUnlocked) {
+        if (!endpoint) return
+        const result = await invoke<{ success: boolean; balance: string; error?: string }>('get_balance', {
+          params: { network, endpoint },
+        })
+        if (!result.success) throw new Error(result.error ?? 'Native balance sync failed')
+        const amount = BigInt(result.balance)
+        balance = { available: amount, pending: 0n, total: amount }
+      } else {
+        balance = await adapter.getBalance([state.address])
+      }
+      if (!current(token)) return
       setState(s => ({ ...s, balance, isLoading: false }))
     } catch (err) {
+      if (!current(token)) return
       setState(s => ({
         ...s,
         isLoading: false,
         error: err instanceof Error ? err.message : 'Failed to fetch balance',
       }))
     }
-  }, [adapter, state.address])
+  }, [adapter, endpoint, state.address, state.isUnlocked, network])
 
   const refreshTransactions = useCallback(async () => {
-    if (!adapter || !state.address) return
+    if (!adapter || !network || !validWalletAddress(state.address ?? '', network) || !state.address) return
+    const token = generation.current
 
     setState(s => ({ ...s, isLoading: true, error: null }))
     try {
       const transactions = await adapter.getTransactionHistory([state.address], { limit: 50 })
+      if (!current(token)) return
       setState(s => ({ ...s, transactions, isLoading: false }))
     } catch (err) {
+      if (!current(token)) return
       setState(s => ({
         ...s,
         isLoading: false,
         error: err instanceof Error ? err.message : 'Failed to fetch transactions',
       }))
     }
-  }, [adapter, state.address])
+  }, [adapter, endpoint, state.address, state.isUnlocked, network])
 
   const estimateFee = useCallback(async (_amount: bigint, privacyLevel: 'standard' | 'private'): Promise<FeeEstimate> => {
     if (!adapter) return { fee: BigInt(0), clusterFactorDisplay: '1.00x' }
@@ -347,10 +389,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, [adapter])
 
   const sendTransaction = useCallback(async (params: SendTxParams) => {
-    if (!connectedNode) {
-      return { success: false, error: 'Not connected to node' }
+    if (!connectedNode || !network || !endpoint) {
+      return { success: false, error: 'Not connected to a recognized network' }
     }
 
+    const token = generation.current
     // SECURITY: No mnemonic is passed - Rust uses the cached session
     setState(s => ({ ...s, isSending: true, error: null }))
 
@@ -359,16 +402,17 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       // Keys are retrieved from the session in Rust - never exposed to JS
       const result = await invoke<SendTransactionResult>('send_transaction', {
         params: {
+          network,
           recipient: params.recipient,
           amount: params.amount.toString(),
           privacyLevel: params.privacyLevel,
           memo: params.memo,
           customFee: params.customFee?.toString(),
-          nodeHost: connectedNode.host,
-          nodePort: connectedNode.port,
+          endpoint,
         }
       })
 
+      if (!current(token)) return { success: result.success, txHash: result.txHash, error: result.error }
       setState(s => ({ ...s, isSending: false }))
 
       if (result.success) {
@@ -382,10 +426,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       }
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Transaction failed'
-      setState(s => ({ ...s, isSending: false, error }))
+      if (current(token)) setState(s => ({ ...s, isSending: false, error }))
       return { success: false, error }
     }
-  }, [connectedNode, refreshBalance, refreshTransactions])
+  }, [connectedNode, endpoint, network, refreshBalance, refreshTransactions])
 
   // Auto-refresh when address changes
   useEffect(() => {

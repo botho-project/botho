@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { Layout, FaucetButton } from '../components'
 import { Card, CardContent, Button, Input } from '@botho/ui'
 import {
@@ -13,7 +13,7 @@ import { Check, FileKey, Key, Lock, Plus, RefreshCw, Save, Send, Timer, Unlock, 
 import { useWallet } from '../contexts/wallet'
 import { useConnection } from '../contexts/connection'
 import { isValidMnemonic } from '@botho/core'
-import { NETWORKS, hasFaucetSupport, type NetworkConfig } from '../config/networks'
+import { walletNetwork, validWalletAddress } from '../config/wallet-network'
 
 // SECURITY NOTE: For NEW wallets, the mnemonic is generated in Rust and only displayed
 // to the user for backup. The mnemonic is NEVER sent from JS back to Rust.
@@ -22,6 +22,8 @@ import { NETWORKS, hasFaucetSupport, type NetworkConfig } from '../config/networ
 
 // Address setup component
 function AddressSetup({ onComplete }: { onComplete: (address: string) => void }) {
+  const { connectedNode } = useConnection()
+  const network = walletNetwork(connectedNode?.networkId)
   const [address, setAddress] = useState('')
   const [error, setError] = useState<string | null>(null)
 
@@ -30,9 +32,9 @@ function AddressSetup({ onComplete }: { onComplete: (address: string) => void })
       setError('Please enter your wallet address')
       return
     }
-    // Accept tbotho://1/ (testnet) or botho://1/ (mainnet) formats
-    if (!address.startsWith('tbotho://1/') && !address.startsWith('botho://1/')) {
-      setError('Invalid address format. Should start with tbotho://1/...')
+    // Parse the complete v2 address and require the selected node network.
+    if (!validWalletAddress(address, network)) {
+      setError('Enter a complete v2 address for the recognized connected network')
       return
     }
     onComplete(address)
@@ -58,7 +60,7 @@ function AddressSetup({ onComplete }: { onComplete: (address: string) => void })
 
         <div className="mt-6 w-full max-w-md space-y-4">
           <Input
-            placeholder="tbotho://1/..."
+            placeholder="tbotho://2/..."
             value={address}
             onChange={(e) => setAddress(e.target.value)}
             error={error || undefined}
@@ -690,37 +692,10 @@ function WalletUnlock({
 
 // Main wallet page
 export function WalletPage() {
-  const { connectedNode } = useConnection()
+  const { connectedNode, endpoint } = useConnection()
 
-  // Determine current network configuration based on connected node
-  const networkConfig = useMemo<NetworkConfig | null>(() => {
-    if (!connectedNode) return null
-
-    // Check if connected to a known network
-    for (const network of Object.values(NETWORKS)) {
-      if (
-        connectedNode.host === network.rpcHost ||
-        connectedNode.host.includes(network.rpcHost)
-      ) {
-        return network
-      }
-    }
-
-    // Default to testnet config if connected to seed.botho.io
-    if (connectedNode.host.includes('botho.io')) {
-      return NETWORKS.testnet
-    }
-
-    // Default to local if localhost
-    if (connectedNode.host === '127.0.0.1' || connectedNode.host === 'localhost') {
-      return NETWORKS.local
-    }
-
-    return null
-  }, [connectedNode])
-
-  // Check if faucet is available for current network
-  const faucetAvailable = networkConfig && hasFaucetSupport(networkConfig)
+  // The selected testnet RPC may offer a faucet; disabled nodes return their normal error.
+  const faucetAvailable = connectedNode?.networkId === 'botho-testnet' && !!endpoint
 
   const {
     address,
@@ -865,10 +840,10 @@ export function WalletPage() {
                 <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
                 Refresh
               </Button>
-              {faucetAvailable && networkConfig && (
+              {faucetAvailable && endpoint && (
                 <FaucetButton
-                  faucetHost={networkConfig.faucetHost!}
-                  faucetPort={networkConfig.faucetPort!}
+                  network={walletNetwork(connectedNode?.networkId)}
+                  endpoint={endpoint}
                   isUnlocked={isUnlocked}
                   onUnlockRequired={() => setShowUnlockModal(true)}
                   onSuccess={() => {

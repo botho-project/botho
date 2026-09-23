@@ -28,7 +28,6 @@ use tauri::State;
 use std::path::PathBuf;
 
 use botho_wallet::{
-    discovery::NodeDiscovery,
     keys::WalletKeys,
     rpc_pool::RpcPool,
     storage::EncryptedWallet,
@@ -37,6 +36,45 @@ use botho_wallet::{
         PICOCREDITS_PER_CAD,
     },
 };
+
+/// Node-reported IDs (node_getStatus uses `botho-{NetworkType::name()}`).
+/// Missing/unknown IDs fail serde parsing; hostnames never choose an address
+/// prefix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub enum WalletNetwork {
+    #[serde(rename = "botho-mainnet")]
+    Mainnet,
+    #[serde(rename = "botho-testnet")]
+    Testnet,
+}
+
+impl WalletNetwork {
+    fn id(self) -> &'static str {
+        match self {
+            Self::Mainnet => "botho-mainnet",
+            Self::Testnet => "botho-testnet",
+        }
+    }
+
+    fn codec(self) -> bth_address_codec::Network {
+        match self {
+            Self::Mainnet => bth_address_codec::Network::Mainnet,
+            Self::Testnet => bth_address_codec::Network::Testnet,
+        }
+    }
+}
+
+fn shareable_address(keys: &WalletKeys, network: WalletNetwork) -> Result<String> {
+    keys.public_address_string(network.codec())
+}
+
+fn faucet_address(keys: &WalletKeys, network: WalletNetwork) -> Result<String> {
+    anyhow::ensure!(
+        network == WalletNetwork::Testnet,
+        "Faucet is available only on testnet"
+    );
+    shareable_address(keys, network)
+}
 
 /// Picocredits per BTH (same as CAD internally)
 const PICOCREDITS_PER_BTH: u64 = PICOCREDITS_PER_CAD;
@@ -290,12 +328,48 @@ impl UnlockRateLimiter {
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
+struct CacheBinding {
+    network: WalletNetwork,
+    endpoint: String,
+    address: String,
+}
+
+#[derive(Default)]
+struct WalletCache {
+    binding: Option<CacheBinding>,
+    generation: u64,
+    utxos: Vec<OwnedUtxo>,
+    height: u64,
+}
+impl WalletCache {
+    fn invalidate(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.binding = None;
+        self.utxos.clear();
+        self.height = 0;
+    }
+    fn bind(&mut self, binding: CacheBinding) -> (u64, u64) {
+        if self.binding.as_ref() != Some(&binding) {
+            self.invalidate();
+            self.binding = Some(binding);
+        }
+        (self.generation, self.height)
+    }
+    fn require_generation(&self, generation: u64) -> Result<()> {
+        anyhow::ensure!(
+            self.generation == generation,
+            "Wallet/network changed during RPC operation"
+        );
+        Ok(())
+    }
+}
+
 /// Wallet state managed by Tauri
 pub struct WalletCommands {
-    /// Cached UTXOs from last sync
-    utxos: Arc<Mutex<Vec<OwnedUtxo>>>,
-    /// Last synced block height
-    sync_height: Arc<Mutex<u64>>,
+    /// Only in-memory state is chain scoped; persisted legacy heights are
+    /// unbound.
+    cache: Arc<Mutex<WalletCache>>,
     /// Active wallet session (unlocked keys held in Rust memory only)
     session: Arc<Mutex<Option<WalletSession>>>,
     /// Pending wallet for secure creation flow (mnemonic generated in Rust)
@@ -307,12 +381,38 @@ pub struct WalletCommands {
 impl WalletCommands {
     pub fn new() -> Self {
         Self {
-            utxos: Arc::new(Mutex::new(Vec::new())),
-            sync_height: Arc::new(Mutex::new(0)),
+            cache: Arc::new(Mutex::new(WalletCache::default())),
             session: Arc::new(Mutex::new(None)),
             pending_wallet: Arc::new(Mutex::new(None)),
             unlock_rate_limiter: Arc::new(Mutex::new(UnlockRateLimiter::new())),
         }
+    }
+
+    async fn operation_keys(&self) -> Result<(WalletKeys, u64)> {
+        let mut session = self.session.lock().await;
+        let active = session
+            .as_mut()
+            .ok_or_else(|| anyhow!("Wallet is locked"))?;
+        anyhow::ensure!(!active.is_expired(), "Wallet session expired");
+        active.touch();
+        let generation = self.cache.lock().await.generation;
+        Ok((active.keys.clone(), generation))
+    }
+
+    async fn begin_cache(
+        &self,
+        keys: &WalletKeys,
+        session_generation: u64,
+        network: WalletNetwork,
+        endpoint: &str,
+    ) -> Result<(u64, u64)> {
+        let mut cache = self.cache.lock().await;
+        cache.require_generation(session_generation)?;
+        Ok(cache.bind(CacheBinding {
+            network,
+            endpoint: endpoint.to_owned(),
+            address: shareable_address(keys, network)?,
+        }))
     }
 
     /// Get wallet keys if session is active and not expired.
@@ -353,7 +453,9 @@ pub enum PrivacyLevel {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendTransactionParams {
-    /// Recipient address (view:hex\nspend:hex format or cad:view:spend)
+    pub network: WalletNetwork,
+    pub endpoint: String,
+    /// Complete v2 recipient address on the explicitly selected network
     pub recipient: String,
     /// Amount in picocredits (as string to handle bigint from JS)
     pub amount: String,
@@ -363,10 +465,6 @@ pub struct SendTransactionParams {
     pub memo: Option<String>,
     /// Optional custom fee in picocredits (as string)
     pub custom_fee: Option<String>,
-    /// Node host to connect to
-    pub node_host: String,
-    /// Node port
-    pub node_port: u16,
 }
 
 /// Result of sending a transaction
@@ -385,12 +483,8 @@ pub struct SendTransactionResult {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncWalletParams {
-    /// Node host to connect to
-    pub node_host: String,
-    /// Node port
-    pub node_port: u16,
-    /// Height to sync from (0 for full sync)
-    pub from_height: Option<u64>,
+    pub network: WalletNetwork,
+    pub endpoint: String,
 }
 
 /// Result of wallet sync
@@ -411,10 +505,8 @@ pub struct SyncWalletResult {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetBalanceParams {
-    /// Node host to connect to
-    pub node_host: String,
-    /// Node port
-    pub node_port: u16,
+    pub network: WalletNetwork,
+    pub endpoint: String,
 }
 
 /// Balance result
@@ -457,10 +549,15 @@ async fn send_transaction_internal(
     params: SendTransactionParams,
 ) -> Result<SendTransactionResult> {
     // 1. Get wallet keys from session (SECURITY: keys never leave Rust)
-    let keys = state.get_session_keys().await?;
+    let (keys, session_generation) = state.operation_keys().await?;
 
     // 2. Parse recipient address
-    let recipient = parse_recipient_address(&params.recipient)?;
+    let (recipient, recipient_network) = bth_address_codec::decode_address(&params.recipient)
+        .map_err(|e| anyhow!("Invalid v2 recipient: {e}"))?;
+    anyhow::ensure!(
+        recipient_network == params.network.codec(),
+        "Recipient belongs to another network"
+    );
 
     // 3. Parse amount
     let amount: u64 = params
@@ -473,24 +570,23 @@ async fn send_transaction_internal(
     }
 
     // 4. Connect to node
-    let mut discovery = NodeDiscovery::new();
-    discovery.add_bootstrap_node(format!("{}:{}", params.node_host, params.node_port).parse()?);
-
-    let mut rpc = RpcPool::new(discovery);
-    rpc.connect()
-        .await
-        .map_err(|e| anyhow!("Failed to connect to node: {}", e))?;
+    let mut rpc = RpcPool::connect_endpoint(&params.endpoint, params.network.id()).await?;
+    let (generation, cached_height) = state
+        .begin_cache(&keys, session_generation, params.network, &params.endpoint)
+        .await?;
 
     // 5. Sync wallet to get UTXOs
-    let from_height = *state.sync_height.lock().await;
+    let from_height = cached_height;
     let (utxos, sync_height) = do_sync_wallet(&mut rpc, &keys, from_height)
         .await
         .map_err(|e| anyhow!("Failed to sync wallet: {}", e))?;
 
     // Combine with cached UTXOs
-    let mut all_utxos = state.utxos.lock().await;
-    all_utxos.extend(utxos);
-    *state.sync_height.lock().await = sync_height;
+    let mut cache = state.cache.lock().await;
+    cache.require_generation(generation)?;
+    cache.utxos.extend(utxos);
+    cache.height = sync_height;
+    cache.generation = cache.generation.wrapping_add(1);
 
     // 6. Estimate or use custom fee
     let fee = if let Some(custom_fee_str) = params.custom_fee {
@@ -509,7 +605,7 @@ async fn send_transaction_internal(
     };
 
     // 7. Build and sign transaction
-    let builder = TransactionBuilder::new(keys.clone(), all_utxos.clone(), sync_height);
+    let builder = TransactionBuilder::new(keys.clone(), cache.utxos.clone(), sync_height);
 
     // Check balance
     let balance = builder.balance();
@@ -553,7 +649,8 @@ async fn send_transaction_internal(
     log::info!("Transaction submitted: {}", tx_hash);
 
     // 9. Clear spent UTXOs from cache (simplified - clear all and resync next time)
-    all_utxos.clear();
+    cache.utxos.clear();
+    cache.height = 0;
 
     Ok(SendTransactionResult {
         success: true,
@@ -585,19 +682,16 @@ async fn sync_wallet_internal(
     params: SyncWalletParams,
 ) -> Result<SyncWalletResult> {
     // Get wallet keys from session (SECURITY: keys never leave Rust)
-    let keys = state.get_session_keys().await?;
+    let (keys, session_generation) = state.operation_keys().await?;
 
     // Connect to node
-    let mut discovery = NodeDiscovery::new();
-    discovery.add_bootstrap_node(format!("{}:{}", params.node_host, params.node_port).parse()?);
+    let mut rpc = RpcPool::connect_endpoint(&params.endpoint, params.network.id()).await?;
+    let (generation, _cached_height) = state
+        .begin_cache(&keys, session_generation, params.network, &params.endpoint)
+        .await?;
 
-    let mut rpc = RpcPool::new(discovery);
-    rpc.connect()
-        .await
-        .map_err(|e| anyhow!("Failed to connect to node: {}", e))?;
-
-    // Sync from specified height
-    let from_height = params.from_height.unwrap_or(0);
+    // A full scan is required for replacement; no unbound caller height is reused.
+    let from_height = 0;
     let (utxos, sync_height) = do_sync_wallet(&mut rpc, &keys, from_height)
         .await
         .map_err(|e| anyhow!("Failed to sync wallet: {}", e))?;
@@ -606,9 +700,11 @@ async fn sync_wallet_internal(
     let balance: u64 = utxos.iter().map(|u| u.amount).sum();
 
     // Update state
-    let mut cached_utxos = state.utxos.lock().await;
-    *cached_utxos = utxos.clone();
-    *state.sync_height.lock().await = sync_height;
+    let mut cache = state.cache.lock().await;
+    cache.require_generation(generation)?;
+    cache.utxos = utxos.clone();
+    cache.height = sync_height;
+    cache.generation = cache.generation.wrapping_add(1);
 
     Ok(SyncWalletResult {
         success: true,
@@ -642,37 +738,36 @@ async fn get_balance_internal(
     params: GetBalanceParams,
 ) -> Result<BalanceResult> {
     // Get wallet keys from session (SECURITY: keys never leave Rust)
-    let keys = state.get_session_keys().await?;
+    let (keys, session_generation) = state.operation_keys().await?;
 
     // Connect to node
-    let mut discovery = NodeDiscovery::new();
-    discovery.add_bootstrap_node(format!("{}:{}", params.node_host, params.node_port).parse()?);
-
-    let mut rpc = RpcPool::new(discovery);
-    rpc.connect()
-        .await
-        .map_err(|e| anyhow!("Failed to connect to node: {}", e))?;
+    let mut rpc = RpcPool::connect_endpoint(&params.endpoint, params.network.id()).await?;
+    let (generation, cached_height) = state
+        .begin_cache(&keys, session_generation, params.network, &params.endpoint)
+        .await?;
 
     // Sync from last known height
-    let from_height = *state.sync_height.lock().await;
+    let from_height = cached_height;
     let (utxos, sync_height) = do_sync_wallet(&mut rpc, &keys, from_height)
         .await
         .map_err(|e| anyhow!("Failed to sync wallet: {}", e))?;
 
     // Merge with cached UTXOs
-    let mut cached_utxos = state.utxos.lock().await;
-    cached_utxos.extend(utxos);
-    *state.sync_height.lock().await = sync_height;
+    let mut cache = state.cache.lock().await;
+    cache.require_generation(generation)?;
+    cache.utxos.extend(utxos);
+    cache.height = sync_height;
+    cache.generation = cache.generation.wrapping_add(1);
 
     // Calculate balance
-    let balance: u64 = cached_utxos.iter().map(|u| u.amount).sum();
+    let balance: u64 = cache.utxos.iter().map(|u| u.amount).sum();
     let bth = balance as f64 / PICOCREDITS_PER_BTH as f64;
 
     Ok(BalanceResult {
         success: true,
         balance: balance.to_string(),
         formatted: format!("{:.6} BTH", bth),
-        utxo_count: cached_utxos.len(),
+        utxo_count: cache.utxos.len(),
         error: None,
     })
 }
@@ -763,6 +858,7 @@ fn parse_recipient_address(address: &str) -> Result<bth_account_keys::PublicAddr
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UnlockWalletParams {
+    pub network: WalletNetwork,
     /// Password to decrypt the wallet file
     pub password: String,
     /// Optional path to wallet file (uses default if not provided)
@@ -885,14 +981,16 @@ async fn unlock_wallet_internal(
         .map_err(|e| anyhow!("Invalid mnemonic in wallet file: {}", e))?;
 
     // Get public address BEFORE moving keys into session
-    let address = keys.address_string();
+    let address = shareable_address(&keys, params.network)?;
 
     // Create session and cache keys in Rust memory
     let session = WalletSession::new(keys, Some(path.clone()));
-    *state.session.lock().await = Some(session);
+    let mut session_guard = state.session.lock().await;
+    state.cache.lock().await.invalidate();
+    *session_guard = Some(session);
 
-    // Also update sync height from wallet file
-    *state.sync_height.lock().await = wallet.sync_height;
+    // wallet.sync_height has no chain identity; preserve it on disk but do not
+    // reuse it.
 
     log::info!("Wallet unlocked from {}", path.display());
 
@@ -915,6 +1013,7 @@ async fn unlock_wallet_internal(
 pub async fn lock_wallet(state: State<'_, WalletCommands>) -> Result<bool, String> {
     let mut session_guard = state.session.lock().await;
 
+    state.cache.lock().await.invalidate();
     if session_guard.is_some() {
         // Drop the session - this triggers zeroization of the mnemonic
         *session_guard = None;
@@ -931,6 +1030,7 @@ pub async fn lock_wallet(state: State<'_, WalletCommands>) -> Result<bool, Strin
 #[tauri::command]
 pub async fn get_session_status(
     state: State<'_, WalletCommands>,
+    network: WalletNetwork,
 ) -> Result<SessionStatusResult, String> {
     let mut session_guard = state.session.lock().await;
 
@@ -951,7 +1051,9 @@ pub async fn get_session_status(
 
                 Ok(SessionStatusResult {
                     is_unlocked: true,
-                    address: Some(session.keys.address_string()),
+                    address: Some(
+                        shareable_address(&session.keys, network).map_err(|e| e.to_string())?,
+                    ),
                     expires_in_secs: Some(remaining.as_secs()),
                 })
             }
@@ -1040,6 +1142,7 @@ async fn generate_mnemonic_internal(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfirmNewWalletParams {
+    pub network: WalletNetwork,
     /// Password to encrypt the wallet
     pub password: String,
     /// Verification words at the positions returned by generate_mnemonic
@@ -1166,11 +1269,13 @@ async fn confirm_new_wallet_internal(
         .map_err(|e| anyhow!("Failed to save wallet file: {}", e))?;
 
     // Get address before moving keys into session
-    let address = keys.address_string();
+    let address = shareable_address(&keys, params.network)?;
 
     // Auto-unlock after creation
     let session = WalletSession::new(keys, Some(path.clone()));
-    *state.session.lock().await = Some(session);
+    let mut session_guard = state.session.lock().await;
+    state.cache.lock().await.invalidate();
+    *session_guard = Some(session);
 
     log::info!(
         "New wallet created at {} and unlocked (secure flow)",
@@ -1206,6 +1311,7 @@ pub async fn cancel_pending_wallet(state: State<'_, WalletCommands>) -> Result<b
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportWalletParams {
+    pub network: WalletNetwork,
     /// 24-word BIP39 mnemonic phrase from user input
     pub mnemonic: String,
     /// Password to encrypt the wallet
@@ -1269,11 +1375,13 @@ async fn import_wallet_internal(
         .map_err(|e| anyhow!("Failed to save wallet file: {}", e))?;
 
     // Get address before moving keys
-    let address = keys.address_string();
+    let address = shareable_address(&keys, params.network)?;
 
     // Auto-unlock after import
     let session = WalletSession::new(keys, Some(path.clone()));
-    *state.session.lock().await = Some(session);
+    let mut session_guard = state.session.lock().await;
+    state.cache.lock().await.invalidate();
+    *session_guard = Some(session);
 
     log::info!("Wallet imported to {} and unlocked", path.display());
 
@@ -1329,10 +1437,8 @@ pub async fn get_wallet_path() -> Result<String, String> {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FaucetRequestParams {
-    /// Faucet server host
-    pub faucet_host: String,
-    /// Faucet server port
-    pub faucet_port: u16,
+    pub network: WalletNetwork,
+    pub endpoint: String,
 }
 
 /// Result of a faucet request
@@ -1387,20 +1493,10 @@ async fn request_faucet_internal(
 ) -> Result<FaucetRequestResult> {
     // 1. Get wallet keys from session to get the address
     let keys = state.get_session_keys().await?;
-    let address = keys.address_string();
+    let address = faucet_address(&keys, params.network)?;
 
     // 2. Connect to faucet server
-    let mut discovery = NodeDiscovery::new();
-    discovery.add_bootstrap_node(
-        format!("{}:{}", params.faucet_host, params.faucet_port)
-            .parse()
-            .map_err(|e| anyhow!("Invalid faucet address: {}", e))?,
-    );
-
-    let mut rpc = RpcPool::new(discovery);
-    rpc.connect()
-        .await
-        .map_err(|e| anyhow!("Failed to connect to faucet: {}", e))?;
+    let mut rpc = RpcPool::connect_endpoint(&params.endpoint, params.network.id()).await?;
 
     // 3. Request faucet coins
     let result = rpc
@@ -1427,6 +1523,76 @@ async fn request_faucet_internal(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn desktop_shareable_addresses_have_real_pq_keys_and_network_prefixes() {
+        let keys = WalletKeys::from_mnemonic("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art").unwrap();
+        for network in [WalletNetwork::Mainnet, WalletNetwork::Testnet] {
+            let encoded = shareable_address(&keys, network).unwrap();
+            let (decoded, actual) = bth_address_codec::decode_address(&encoded).unwrap();
+            assert_eq!(actual, network.codec());
+            assert_eq!(decoded.kem_public_key().len(), 1184);
+            assert_eq!(decoded.dsa_public_key().len(), 1952);
+            assert_eq!(
+                decoded.view_public_key(),
+                keys.public_address().view_public_key()
+            );
+            assert_eq!(
+                decoded.spend_public_key(),
+                keys.public_address().spend_public_key()
+            );
+        }
+        assert!(faucet_address(&keys, WalletNetwork::Mainnet).is_err());
+        assert_eq!(
+            faucet_address(&keys, WalletNetwork::Testnet).unwrap(),
+            shareable_address(&keys, WalletNetwork::Testnet).unwrap()
+        );
+    }
+
+    #[test]
+    fn rpc_parameters_require_explicit_network_and_endpoint() {
+        for network in [
+            serde_json::Value::Null,
+            serde_json::json!("mainnet"),
+            serde_json::json!("unknown"),
+            serde_json::json!(42),
+        ] {
+            assert!(serde_json::from_value::<GetBalanceParams>(
+                serde_json::json!({"network":network,"endpoint":"http://localhost:1/rpc"})
+            )
+            .is_err());
+        }
+        assert!(serde_json::from_value::<GetBalanceParams>(
+            serde_json::json!({"network":"botho-mainnet"})
+        )
+        .is_err());
+        let params: GetBalanceParams = serde_json::from_value(serde_json::json!({"network":"botho-testnet","endpoint":"https://example.invalid/custom/rpc"})).unwrap();
+        assert_eq!(params.network, WalletNetwork::Testnet);
+        assert_eq!(params.endpoint, "https://example.invalid/custom/rpc");
+    }
+
+    #[test]
+    fn memory_cache_binding_invalidates_stale_completion_without_persisted_height() {
+        let mut cache = WalletCache::default();
+        let binding = CacheBinding {
+            network: WalletNetwork::Testnet,
+            endpoint: "http://localhost:1/rpc".into(),
+            address: "public fixture identity".into(),
+        };
+        let (first, height) = cache.bind(binding.clone());
+        assert_eq!(height, 0);
+        cache.height = 42;
+        assert_eq!(cache.bind(binding.clone()), (first, 42));
+        let (next, height) = cache.bind(CacheBinding {
+            network: WalletNetwork::Mainnet,
+            ..binding
+        });
+        assert_ne!(next, first);
+        assert_eq!(height, 0);
+        assert!(cache.require_generation(first).is_err());
+        cache.invalidate();
+        assert!(cache.binding.is_none());
+        assert!(cache.require_generation(next).is_err());
+    }
 
     #[test]
     fn test_parse_view_spend_address() {

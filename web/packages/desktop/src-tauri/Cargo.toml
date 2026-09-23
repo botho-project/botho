@@ -23,7 +23,7 @@ tauri = { version = "2.9.5", features = [] }
 tauri-plugin-log = "2"
 
 # Botho wallet crates
-botho-wallet = { path = "../../../../botho-wallet", default-features = false, features = [] }
+botho-wallet = { path = "../../../../botho-wallet", default-features = false, features = ["pq"] }
 bth-account-keys = { workspace = true }
 bth-address-codec = { workspace = true }
 bth-crypto-keys = { workspace = true }
@@ -40,3 +40,7 @@ log = { workspace = true }
 anyhow = { workspace = true }
 dirs = { workspace = true }
 rand = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = { workspace = true }
