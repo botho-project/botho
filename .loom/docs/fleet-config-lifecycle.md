@@ -32,10 +32,10 @@ window, each caught only by an out-of-band check hours to days later:
 - **loom#5874** — a prompt change shipped with no `VERSION` bump, so every
   "is the fleet current" currency check kept reporting green while behaviour
   differed host to host.
-- **2AMLogic/2am#239** — a scheduled cleaner timer was installed recording an
+- **example-org/fleet-repo#302** — a scheduled cleaner timer was installed recording an
   interpreter it would itself refuse to run under — "installed" but doomed to
   fail on every fire.
-- **2AMLogic/2am#156** — the sharpest case: `doctor` was added to the
+- **example-org/fleet-repo#303** — the sharpest case: `doctor` was added to the
   role-runner default set, the PR closed COMPLETED, and the machine-level
   `defaults.json` on disk genuinely contained the change — yet zero doctor
   activity appeared on any host for 2.5 hours, until a manual daemon restart,
@@ -61,6 +61,7 @@ this doc, verified against source:
 | `autonomous.hostBreaker.*` | **Requires a daemon restart** — resolved once at startup, registered as a process-global handle | `loom-daemon/src/daemon_service.rs`: "resolve its config once at startup ... and register the process-global handle" |
 | `autonomous.rateLimitBreaker.*` | **Requires a daemon restart** — resolved once at startup, before any loop is spawned | `loom-daemon/src/daemon_service.rs`, registered unconditionally ahead of the work-finder branch |
 | `autonomous.mainHealthGate.suppressDispatchDuringGate` | **Requires a daemon restart** — resolved once at startup from the primary workspace config | `loom-daemon/src/daemon_service.rs` comment: "Resolved once at startup from the same primary workspace config as the gate's master switch" |
+| `autonomous.transcriptIngest.*` (`enabled`, `intervalSecs`, `windowHours`) | **Requires a daemon restart** — resolved once before the ingestion thread is spawned, then frozen for the life of that thread | `read_transcript_ingest_config` + `resolve_settings` are called inside `try_init_transcript_ingest` (`loom-daemon/src/activity/transcript_ingest.rs`), which `daemon_service.rs` invokes once at bring-up; the spawned thread's `loop` body reads only the already-resolved `interval`/`window_hours` locals |
 
 The full, authoritative per-knob table (env override, default, notes) lives
 in [`daemon-reference.md`](daemon-reference.md) → "Config surface
@@ -112,6 +113,48 @@ that blocks a close lacking this evidence yet. Building one (a Judge/Champion
 checklist item, or a bot that requires a linked host observation before
 auto-closing a fleet-config issue) is deliberately left as follow-up, not
 attempted here.
+
+## Host-specific absolute paths never belong in the tracked tier (#6504)
+
+A related, distinct failure shape: `.loom/config.json` is **tracked and
+shared**, but some keys are inherently true of exactly one host — a
+filesystem path, a socket, an on/off switch that depends on how that
+specific machine is provisioned (`safehouse.socket`, `observability.ingestKeyFile`,
+`worktree.root`). Committing one of these bakes one host's local truth into
+every other host's `git pull`, and it has recurred repeatedly: #5354 and
+#5464 each fixed one committed instance reactively, and #6499 showed the
+sharpest failure mode — an abandoned `git stash pop` left live conflict
+markers straddling a host's local patch and the tracked file, which then got
+**committed**, making `.loom/config.json` invalid JSON and silently dropping
+`observability`/`safehouse`/`autonomous.roleRunner` config to built-in
+defaults for ~70 minutes.
+
+**The fix is structural, not a one-time cleanup:**
+
+- **The documented home for a host-specific value is the gitignored
+  `.loom-local/local.json` tier** (or, for the subset of knobs that already
+  have a correct `$HOME`-relative built-in default — `observability.ingestKeyFile`
+  is the example — simply not committing a value at all and letting the
+  default resolve per host). Both tiers are read through the same
+  `resolve_effective_config`/`loom_resolve_config` chain documented in
+  [`docs/design/config-resolution-tiers.md`](https://github.com/rjwalters/loom/blob/main/docs/design/config-resolution-tiers.md),
+  which also carries §5's step-by-step runbook for moving an already-dirty
+  key onto the local tier by hand.
+- **A CI guard rejects a newly-committed offender** before it lands:
+  `defaults/scripts/check-config-no-host-paths.sh` scans every tracked
+  config tier (`.loom/config.json`, `.loom-project/project.json`) for any
+  string value that is an absolute path under a home directory
+  (`/home/<user>/…`, `/Users/<user>/…`, `/root/…`), independent of which key
+  carries it — the structural counterpart to the conflict-marker gate
+  (`check-conflict-markers.sh`, #6499) that stops the *other* half of this
+  failure class (a corrupted, unparseable tracked file). A key that is
+  genuinely repo/host-specific by design (`daemon.delegatedTo`, #5345) is
+  allowlisted by exact key, not by loosening the path pattern.
+
+This complements, but is distinct from, "landed != effective" above: a
+host-specific path committed to the tracked tier is not a caching problem —
+every host that pulls it sees the *wrong* value immediately and consistently,
+not a stale one.
 
 ## The real fix, left as follow-up
 

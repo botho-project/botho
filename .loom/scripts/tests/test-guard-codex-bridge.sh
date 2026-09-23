@@ -31,8 +31,22 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-SRC_HOOKS="$REPO_ROOT/defaults/hooks"
-SRC_LIB="$REPO_ROOT/defaults/scripts/lib"
+# Hooks and the guard lib are both shipped (installed at .loom/hooks and
+# .loom/scripts/lib respectively), so resolve each the way each layout
+# actually lays it out: the installed path first (consumer repos, and
+# Loom's own dogfooded checkout), falling back to the defaults/
+# source-tree path (a bare source checkout with no installed copy yet).
+# See issue #6194 / #6241.
+if [[ -d "$REPO_ROOT/.loom/hooks" ]]; then
+    SRC_HOOKS="$REPO_ROOT/.loom/hooks"
+else
+    SRC_HOOKS="$REPO_ROOT/defaults/hooks"
+fi
+if [[ -d "$REPO_ROOT/.loom/scripts/lib" ]]; then
+    SRC_LIB="$REPO_ROOT/.loom/scripts/lib"
+else
+    SRC_LIB="$REPO_ROOT/defaults/scripts/lib"
+fi
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -45,6 +59,15 @@ pass() { PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1)); printf "${GREEN}PASS${NC} %s\
 fail() { FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1)); printf "${RED}FAIL${NC} %s\n" "$1"; }
 
 command -v jq >/dev/null 2>&1 || { echo "jq is required for this suite"; exit 1; }
+
+if [[ ! -d "$SRC_HOOKS" ]]; then
+    echo -e "${RED}FATAL${NC}: hooks directory not found at $SRC_HOOKS"
+    exit 1
+fi
+if [[ ! -d "$SRC_LIB" ]]; then
+    echo -e "${RED}FATAL${NC}: scripts/lib directory not found at $SRC_LIB"
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Fixture: an isolated git repo with the installed hook layout and ONE managed
@@ -536,8 +559,17 @@ else
 fi
 crash_out=""
 crash_code=0
-crash_out="$(printf '%s' "$(codex_event shell '{"command":["bash","-lc","ls"]}' "$TMPROOT")" \
-    | bash "$CRASH_ROOT/hooks/guard-codex-bridge.sh" 2>/dev/null)" || crash_code=$?
+#     The payload is fed via process substitution rather than a pipe so the
+#     writer (printf) never participates in this command's exit status: under
+#     `set -o pipefail`, a `printf | bash` pipe lets a writer-side EPIPE (the
+#     crashing bridge copy can exit near-instantly, before it starts reading
+#     stdin) "win" over the bridge's own real exit 0 from its EXIT trap,
+#     since pipefail reports the rightmost non-zero exit in the pipeline
+#     (issue #7060). Process substitution runs printf outside the pipeline
+#     entirely, so only the bridge's own exit status can reach crash_code.
+crash_out="$(bash "$CRASH_ROOT/hooks/guard-codex-bridge.sh" \
+    < <(printf '%s' "$(codex_event shell '{"command":["bash","-lc","ls"]}' "$TMPROOT")") \
+    2>/dev/null)" || crash_code=$?
 assert_bridge "the bridge crashing before a decision -> deny (fail closed)" deny "$crash_code|$crash_out"
 assert_wire_conformance "wire: bridge crash deny" "$crash_code|$crash_out"
 
@@ -553,9 +585,17 @@ printf '#!/usr/bin/env bash\nexit 0\n' > "$CRASH_ROOT/slow/guard-destructive.sh"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$CRASH_ROOT/slow/guard-worktree-paths.sh"
 chmod +x "$CRASH_ROOT/slow/"*.sh
 SLOW_OUT="$CRASH_ROOT/slow-stdout.txt"
-printf '%s' "$(codex_event shell '{"command":["bash","-lc","ls"]}' "$TMPROOT")" \
-    | LOOM_CODEX_BRIDGE_GUARD_DIR="$CRASH_ROOT/slow" \
-      bash "$CRASH_ROOT/slow/guard-codex-bridge.sh" > "$SLOW_OUT" 2>/dev/null &
+# Same writer-out-of-the-pipeline fix as the crash case above (#7060): under
+# `set -o pipefail`, backgrounding a `printf | bash ... &` pipe and later
+# `wait`-ing on its `$!` still yields the pipefail-computed pipeline exit
+# status, not just the bridge process's own exit — so a printf EPIPE from the
+# TERM-killed reader can shadow slow_code exactly like the crash case
+# (verified: this shape shares the identical exposure). Process substitution
+# removes printf from the pipeline so only the bridge's own exit reaches it.
+LOOM_CODEX_BRIDGE_GUARD_DIR="$CRASH_ROOT/slow" \
+  bash "$CRASH_ROOT/slow/guard-codex-bridge.sh" \
+  < <(printf '%s' "$(codex_event shell '{"command":["bash","-lc","ls"]}' "$TMPROOT")") \
+  > "$SLOW_OUT" 2>/dev/null &
 slow_pid=$!
 sleep 1
 kill -TERM "$slow_pid" 2>/dev/null || true

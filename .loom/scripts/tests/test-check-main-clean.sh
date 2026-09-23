@@ -36,6 +36,13 @@
 #     LOOM_QUARANTINE_COMMENT=0 opt-out, and a failing `gh` call are all
 #     no-ops or best-effort failures that never change the check's exit code
 #     (#5691)
+#   - the breadcrumb comment never contains the raw machine hostname — it is
+#     redacted behind a short, stable, non-reversible `host-<hash>` identifier
+#     (#6189)
+#   - the host-local config overlay `.loom-local/local.json` is Loom-owned: a
+#     tree whose only untracked path is that overlay reports clean and survives
+#     `--quarantine` untouched, even in a repo whose .gitignore predates the fix
+#     (#8075)
 #
 # Usage:
 #   ./.loom/scripts/tests/test-check-main-clean.sh
@@ -905,6 +912,204 @@ else
     fail "expected exit 4 with both a quarantined and a failed-comment event logged, got rc=$RC; out=$out"
 fi
 rm -rf "$GHDIR" "$REPO"
+
+# ========================================================================
+# Abandoned-conflict detection (#6162 AC3)
+# ========================================================================
+
+# make_repo_with_conflicted_stash_pop <dir> -> leaves the working tree with
+# an unmerged index entry (UU) and NO merge/rebase in progress: pushes a
+# stash, commits a conflicting change on top, then pops the stash so it
+# collides — the exact `git stash pop` conflict shape from the #6162
+# incident (`Updated upstream` / `Stashed changes` markers).
+make_repo_with_conflicted_stash_pop() {
+    local dir
+    dir=$(mktemp -d)
+    git -C "$dir" init -q
+    git -C "$dir" config user.email t@t.t
+    git -C "$dir" config user.name test
+    printf '.loom/worktrees/\n' > "$dir/.gitignore"
+    printf 'echo original\n' > "$dir/script.sh"
+    git -C "$dir" add .gitignore script.sh
+    git -C "$dir" commit -q -m init
+    printf 'echo modified-in-worktree\n' > "$dir/script.sh"
+    git -C "$dir" stash push -q -m wip
+    printf 'echo modified-on-disk\n' > "$dir/script.sh"
+    git -C "$dir" commit -aq -m "modify on disk"
+    git -C "$dir" stash pop >/dev/null 2>&1 || true
+    echo "$dir"
+}
+
+echo "Test 39: an abandoned stash-pop conflict (UU, no merge in progress) exits 3 with a distinct message"
+REPO=$(make_repo_with_conflicted_stash_pop)
+out=$( cd "$REPO" && "$SCRIPT" 2>&1 ); RC=$?
+if [[ "$RC" -eq 3 ]] \
+   && [[ "$out" == *"ABANDONED CONFLICT STATE"* ]] \
+   && [[ "$out" == *"UU script.sh"* ]] \
+   && [[ "$out" == *"#6162"* ]]; then
+    pass "exit 3 with the abandoned-conflict-specific message naming the unmerged path"
+else
+    fail "expected exit 3 + ABANDONED CONFLICT STATE message naming UU script.sh, got rc=$RC; out=$out"
+fi
+
+echo "Test 40: an abandoned conflict is reported the same way from inside a worktree"
+git -C "$REPO" worktree add -q .loom/worktrees/issue-6162test -b feature/issue-6162test HEAD 2>/dev/null || true
+out=$( cd "$REPO/.loom/worktrees/issue-6162test" && "$SCRIPT" 2>&1 ); RC=$?
+if [[ "$RC" -eq 3 && "$out" == *"ABANDONED CONFLICT STATE"* ]]; then
+    pass "detects the abandoned conflict in main from inside a worktree"
+else
+    fail "expected exit 3 + ABANDONED CONFLICT STATE from inside a worktree, got rc=$RC; out=$out"
+fi
+git -C "$REPO" worktree remove --force .loom/worktrees/issue-6162test 2>/dev/null || true
+
+echo "Test 41: an abandoned conflict is never --quarantine'd — refuses even when --quarantine is passed"
+out=$( cd "$REPO" && "$SCRIPT" --quarantine --label "run=RUNID-CONFLICT issue=9004" 2>&1 ); RC=$?
+if [[ "$RC" -eq 3 ]] \
+   && [[ "$out" == *"ABANDONED CONFLICT STATE"* ]] \
+   && [[ "$out" != *'"event":"main-clean.quarantine"'* ]]; then
+    pass "--quarantine does not attempt to stash an abandoned conflict; still exits 3"
+else
+    fail "expected --quarantine to refuse (exit 3, no quarantine event), got rc=$RC; out=$out"
+fi
+
+echo "Test 42: an abandoned conflict is never --baseline'd away, even matching itself"
+SNAP="$REPO/.loom/sweep-checkpoint/main-clean-baseline-conflict.txt"
+mkdir -p "$(dirname "$SNAP")"
+git -C "$REPO" status --porcelain > "$SNAP"    # baseline that already contains the UU line
+out=$( cd "$REPO" && "$SCRIPT" --baseline "$SNAP" 2>&1 ); RC=$?
+if [[ "$RC" -eq 3 && "$out" == *"ABANDONED CONFLICT STATE"* ]]; then
+    pass "--baseline does not suppress an abandoned conflict even if pre-recorded"
+else
+    fail "expected --baseline to still hard-fail on the conflict, got rc=$RC; out=$out"
+fi
+rm -rf "$REPO"
+
+echo "Test 43: an ORDINARY merge conflict (merge actually in progress) falls back to the generic dirty message"
+REPO=$(make_repo)
+printf 'echo original\n' > "$REPO/script.sh"
+git -C "$REPO" add script.sh
+git -C "$REPO" commit -q -m "add script"
+git -C "$REPO" checkout -qb other
+printf 'echo other-branch\n' > "$REPO/script.sh"
+git -C "$REPO" commit -aq -m "other change"
+git -C "$REPO" checkout -q main 2>/dev/null || git -C "$REPO" checkout -q master
+printf 'echo main-branch\n' > "$REPO/script.sh"
+git -C "$REPO" commit -aq -m "main change"
+git -C "$REPO" merge other -q >/dev/null 2>&1 || true
+out=$( cd "$REPO" && "$SCRIPT" 2>&1 ); RC=$?
+if [[ "$RC" -eq 3 ]] \
+   && [[ "$out" != *"ABANDONED CONFLICT STATE"* ]] \
+   && [[ "$out" == *"MAIN worktree is dirty"* ]]; then
+    pass "a live in-progress merge conflict uses the generic dirty message, not the abandoned-conflict one"
+else
+    fail "expected the generic dirty message (MERGE_HEAD present), got rc=$RC; out=$out"
+fi
+rm -rf "$REPO"
+
+echo "Test 44: quarantine breadcrumb comment never leaks the raw machine hostname (#6189)"
+REPO=$(make_repo_with_source)
+SNAP="$REPO/.loom/sweep-checkpoint/main-clean-baseline-hostleak.txt"
+( cd "$REPO" && "$SCRIPT" --snapshot "$SNAP" >/dev/null 2>&1 )
+printf 'original tracked content\ncontaminating edit\n' > "$REPO/tracked_source.py"
+
+GHDIR=$(mktemp -d)
+make_gh_shim "$GHDIR" success
+
+out1=$( cd "$REPO" && PATH="$GHDIR:$PATH" "$SCRIPT" --baseline "$SNAP" --quarantine \
+        --label "run=RUNID-HOSTLEAK1 issue=9005" 2>&1 ); RC1=$?
+BODY1=$(cat "$GHDIR/gh-body" 2>/dev/null || echo "")
+
+RAW_HOST=$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo "")
+
+# Run a second quarantine (fresh contamination) to confirm the redacted
+# identifier is stable across invocations on the same host.
+printf 'original tracked content\nsecond contaminating edit\n' > "$REPO/tracked_source.py"
+out2=$( cd "$REPO" && PATH="$GHDIR:$PATH" "$SCRIPT" --baseline "$SNAP" --quarantine \
+        --label "run=RUNID-HOSTLEAK2 issue=9005" 2>&1 ); RC2=$?
+BODY2=$(cat "$GHDIR/gh-body" 2>/dev/null || echo "")
+
+HOST_ID_1=$(printf '%s' "$BODY1" | grep -o 'host-[0-9a-f]\{8\}' || echo "")
+HOST_ID_2=$(printf '%s' "$BODY2" | grep -o 'host-[0-9a-f]\{8\}' || echo "")
+
+if [[ "$RC1" -eq 4 && "$RC2" -eq 4 ]] \
+   && [[ -n "$RAW_HOST" ]] \
+   && [[ "$BODY1" != *"$RAW_HOST"* ]] \
+   && [[ "$BODY2" != *"$RAW_HOST"* ]] \
+   && [[ -n "$HOST_ID_1" ]] \
+   && [[ "$HOST_ID_1" == "$HOST_ID_2" ]] \
+   && [[ "$BODY1" == *"stash@{0}"* ]]; then
+    pass "posted comment body redacts the raw hostname behind a stable host-<hash> identifier"
+else
+    fail "expected no raw hostname in the posted body and a stable host-<hash> id, got rc1=$RC1 rc2=$RC2 raw_host='$RAW_HOST' body1='$BODY1' body2='$BODY2' out1='$out1' out2='$out2'"
+fi
+rm -rf "$GHDIR" "$REPO"
+
+# ========================================================================
+# The host-local config overlay is Loom-owned, never quarantine fodder (#8075)
+# ========================================================================
+# `.loom-local/local.json` is the highest-precedence config tier and is ungitted
+# by design. In a consumer repo whose installed loom-managed .gitignore block
+# predates #8075 it surfaces as `?? .loom-local/` — untracked dirt that
+# `--quarantine` would stash away between sweep waves, silently reverting
+# whatever the operator overrode there (e.g. a per-repo model pin) with no
+# signal anywhere. The internal LOOM_OWNED_PREFIXES filter must exclude it
+# regardless of the consumer's .gitignore currency, exactly as it does for
+# `.loom/sweep-checkpoint/` above.
+
+echo "Test 45: .loom-local/ overlay survives --quarantine and reports clean (#8075)"
+# make_repo_stale_gitignore's .gitignore ignores ONLY .loom/worktrees/, so this
+# fixture reproduces a consumer repo that has not yet re-synced the fixed block.
+REPO=$(make_repo_stale_gitignore)
+SNAP="$REPO/.loom/sweep-checkpoint/main-clean-baseline-loomlocal.txt"
+( cd "$REPO" && "$SCRIPT" --snapshot "$SNAP" >/dev/null 2>&1 ); RC=$?
+if [[ "$RC" -ne 0 ]]; then fail "Test 45 setup: --snapshot expected 0, got $RC"; fi
+
+# The operator writes the overlay AFTER the baseline snapshot — i.e. it is new
+# dirt as far as the baseline is concerned, which is the dangerous case.
+mkdir -p "$REPO/.loom-local"
+OVERLAY="$REPO/.loom-local/local.json"
+printf '{"autonomous":{"model":"opus"}}\n' > "$OVERLAY"
+OVERLAY_CONTENT=$(cat "$OVERLAY")
+
+# Sanity: git really does see it as untracked dirt in this fixture.
+RAW_STATUS=$(git -C "$REPO" status --porcelain)
+if ! grep -q '\.loom-local' <<<"$RAW_STATUS"; then
+    fail "Test 45 setup: expected an untracked .loom-local/ in a stale-gitignore repo"
+fi
+
+out=$( cd "$REPO" && "$SCRIPT" --baseline "$SNAP" --quarantine \
+       --label "run=RUNID-8075 issue=8075" 2>&1 ); RC=$?
+STASH_COUNT=$(git -C "$REPO" stash list | wc -l | tr -d ' ')
+
+if [[ "$RC" -eq 0 ]] \
+   && [[ -f "$OVERLAY" ]] \
+   && [[ "$(cat "$OVERLAY")" == "$OVERLAY_CONTENT" ]] \
+   && [[ "$STASH_COUNT" -eq 0 ]] \
+   && ! grep -q '\.loom-local' <<<"$out"; then
+    pass "--quarantine reports clean and leaves .loom-local/local.json in place"
+else
+    fail "expected rc=0, overlay intact, no stash; got rc=$RC exists=$([[ -f "$OVERLAY" ]] && echo y || echo n) stashes=$STASH_COUNT out=$out"
+fi
+
+# The same must hold for plain detection mode (no baseline, no quarantine).
+( cd "$REPO" && "$SCRIPT" >/dev/null 2>&1 ); RC=$?
+if [[ "$RC" -eq 0 && -f "$OVERLAY" ]]; then
+    pass "plain detection also treats .loom-local/ as Loom-owned (exit 0)"
+else
+    fail "expected 0 from plain detection with the overlay still present, got rc=$RC overlay_exists=$([[ -f "$OVERLAY" ]] && echo y || echo n)"
+fi
+
+# ...and a real stray alongside the overlay is still caught, naming only itself.
+echo "def widget(): return 42" > "$REPO/leaked_module.py"
+out=$( cd "$REPO" && "$SCRIPT" 2>&1 ); RC=$?
+if [[ "$RC" -eq 3 ]] \
+   && grep -q "leaked_module.py" <<<"$out" \
+   && ! grep -q '\.loom-local' <<<"$out"; then
+    pass "a real stray beside the overlay is still flagged, the overlay is not"
+else
+    fail "expected 3 naming only leaked_module.py, got rc=$RC; out=$out"
+fi
+rm -rf "$REPO"
 
 # -------- Summary --------
 echo ""
