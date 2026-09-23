@@ -137,3 +137,8 @@ __pycache__/
 .claude/skills/repo/.install-local.json
 **/*.vision/pages/
 **/*.vision/slides/
+
+# Squad's local collaboration database and SQLite WAL sidecars
+/.squad/squad.db
+/.squad/squad.db-shm
+/.squad/squad.db-wal
