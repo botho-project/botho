@@ -12,6 +12,7 @@ import {
   AlertCircle,
 } from 'lucide-react'
 import type { NodeInfo } from '@botho/core'
+import { walletNetwork, type WalletNetwork } from '../config/wallet-network'
 
 export function SplashScreen() {
   const {
@@ -26,9 +27,11 @@ export function SplashScreen() {
   const [showCustom, setShowCustom] = useState(false)
   const [customHost, setCustomHost] = useState('localhost')
   const [customPort, setCustomPort] = useState('8080')
+  const [customNetwork, setCustomNetwork] = useState<WalletNetwork | ''>('')
 
   const handleAddCustom = async () => {
-    await addCustomNode(customHost, parseInt(customPort, 10))
+    if (!customNetwork) return
+    await addCustomNode(customHost, parseInt(customPort, 10), customNetwork)
     setShowCustom(false)
   }
 
@@ -38,7 +41,7 @@ export function SplashScreen() {
       <div className="fixed top-0 left-0 right-0 z-[60] flex h-7 items-center justify-center gap-2 bg-[--color-warning] text-[--color-void]">
         <AlertTriangle className="h-3.5 w-3.5" />
         <span className="text-xs font-bold uppercase tracking-wider">
-          Testnet — Coins have no real value
+          Choose a node and verify its network before using the wallet
         </span>
       </div>
 
@@ -110,6 +113,15 @@ export function SplashScreen() {
             {/* Add custom node */}
             {showCustom ? (
               <div className="space-y-3 border-t border-[--color-steel] pt-4">
+                <label className="block text-sm">
+                  Network
+                  <select aria-label="Network" value={customNetwork}
+                    onChange={event => setCustomNetwork(walletNetwork(event.target.value) ?? '')}>
+                    <option value="">Choose network</option>
+                    <option value="botho-mainnet">Mainnet</option>
+                    <option value="botho-testnet">Testnet</option>
+                  </select>
+                </label>
                 <div className="flex gap-2">
                   <Input
                     value={customHost}
@@ -132,7 +144,7 @@ export function SplashScreen() {
                   >
                     Cancel
                   </Button>
-                  <Button className="flex-1" onClick={handleAddCustom}>
+                  <Button className="flex-1" disabled={!customNetwork} onClick={handleAddCustom}>
                     Add Node
                   </Button>
                 </div>
