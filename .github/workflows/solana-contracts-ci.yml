@@ -186,7 +186,7 @@ jobs:
 
       - name: Preserve Squads execution evidence
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: squads-execution
           path: contracts/solana/squads-execution.json
@@ -215,7 +215,7 @@ jobs:
 
       - name: Preserve Squads engine execution evidence
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: squads-engine-execution
           path: ${{ github.workspace }}/contracts/solana/engine-execution.json
@@ -231,7 +231,7 @@ jobs:
 
       - name: Preserve historical recovery execution evidence
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: squads-history-execution
           path: ${{ github.workspace }}/contracts/solana/history-execution.json
@@ -247,7 +247,7 @@ jobs:
 
       - name: Preserve bounded retry execution evidence
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: squads-retry-execution
           path: ${{ github.workspace }}/contracts/solana/retry-execution.json
