@@ -1,0 +1,509 @@
+{
+  "schema": 1,
+  "status": "passed",
+  "cases": [
+    {
+      "case": "generators",
+      "command": [
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/home/runner/work/botho/botho/ownership-resources/generators.rss.txt",
+        "/home/runner/work/botho/botho/target/release/deps/bth_ct_demurrage_reference-0ca14a21d09cd5d7",
+        "proof_experiment::combined::ownership::resources::ownership_resource_case",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "exit_code": 0,
+      "timed_out": false,
+      "output_sha256": "f9336f66314b5ea0d3f55efe815708d09e991cf0da7fc6a2e5300b167c7489dc",
+      "setup": [
+        {
+          "capacity": 32768,
+          "setup_ns": 678730499
+        }
+      ],
+      "fixture": [],
+      "samples": [],
+      "whole_case_peak_rss_bytes": 14004224,
+      "rss_raw_sha256": "becdfa64279f8f07f9b6a8f759f31dae4623f8b70f06904c6429c991beac8ed1"
+    },
+    {
+      "case": "ordinary-1",
+      "command": [
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/home/runner/work/botho/botho/ownership-resources/ordinary-1.rss.txt",
+        "/home/runner/work/botho/botho/target/release/deps/bth_ct_demurrage_reference-0ca14a21d09cd5d7",
+        "proof_experiment::combined::ownership::resources::ownership_resource_case",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "exit_code": 0,
+      "timed_out": false,
+      "output_sha256": "4c2c2166e329ec1c6d5add919eaae38bf5e6cddc12aec90da5078f33be53eb67",
+      "setup": [
+        {
+          "capacity": 32768,
+          "setup_ns": 677824872
+        }
+      ],
+      "fixture": [
+        {
+          "fixture_ns": 2601321
+        }
+      ],
+      "samples": [
+        {
+          "sample": 0,
+          "inputs": 1,
+          "outputs": 1,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 1612,
+          "constraints": 3248,
+          "arithmetic_bytes": 1121,
+          "clsag_field_bytes": 736,
+          "signatures": 1,
+          "prove_ns": 296270899,
+          "verify_ns": 30147509
+        },
+        {
+          "sample": 1,
+          "inputs": 1,
+          "outputs": 1,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 1612,
+          "constraints": 3248,
+          "arithmetic_bytes": 1121,
+          "clsag_field_bytes": 736,
+          "signatures": 1,
+          "prove_ns": 293020640,
+          "verify_ns": 30073100
+        },
+        {
+          "sample": 2,
+          "inputs": 1,
+          "outputs": 1,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 1612,
+          "constraints": 3248,
+          "arithmetic_bytes": 1121,
+          "clsag_field_bytes": 736,
+          "signatures": 1,
+          "prove_ns": 292890267,
+          "verify_ns": 30201829
+        }
+      ],
+      "whole_case_peak_rss_bytes": 19841024,
+      "rss_raw_sha256": "8cba0c01ffed7959b9ee95637885dcd28a8ad25a59510c2e2277e3d083eb7c9e"
+    },
+    {
+      "case": "ordinary-4",
+      "command": [
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/home/runner/work/botho/botho/ownership-resources/ordinary-4.rss.txt",
+        "/home/runner/work/botho/botho/target/release/deps/bth_ct_demurrage_reference-0ca14a21d09cd5d7",
+        "proof_experiment::combined::ownership::resources::ownership_resource_case",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "exit_code": 0,
+      "timed_out": false,
+      "output_sha256": "0c53967084d393c5ee63c9b049aaeeff3539340e756a46fe06661cb6fe4b72de",
+      "setup": [
+        {
+          "capacity": 32768,
+          "setup_ns": 679330804
+        }
+      ],
+      "fixture": [
+        {
+          "fixture_ns": 9596721
+        }
+      ],
+      "samples": [
+        {
+          "sample": 0,
+          "inputs": 4,
+          "outputs": 4,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 6040,
+          "constraints": 12167,
+          "arithmetic_bytes": 1249,
+          "clsag_field_bytes": 2944,
+          "signatures": 4,
+          "prove_ns": 1129223183,
+          "verify_ns": 115501413
+        },
+        {
+          "sample": 1,
+          "inputs": 4,
+          "outputs": 4,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 6040,
+          "constraints": 12167,
+          "arithmetic_bytes": 1249,
+          "clsag_field_bytes": 2944,
+          "signatures": 4,
+          "prove_ns": 1122680497,
+          "verify_ns": 115418980
+        },
+        {
+          "sample": 2,
+          "inputs": 4,
+          "outputs": 4,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 6040,
+          "constraints": 12167,
+          "arithmetic_bytes": 1249,
+          "clsag_field_bytes": 2944,
+          "signatures": 4,
+          "prove_ns": 1144174702,
+          "verify_ns": 115148347
+        }
+      ],
+      "whole_case_peak_rss_bytes": 34947072,
+      "rss_raw_sha256": "92ca80fbe180d6b1a09483d3c6e7343bc905f06c1fd1ea54708217d2f9d4df7b"
+    },
+    {
+      "case": "ordinary-16",
+      "command": [
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/home/runner/work/botho/botho/ownership-resources/ordinary-16.rss.txt",
+        "/home/runner/work/botho/botho/target/release/deps/bth_ct_demurrage_reference-0ca14a21d09cd5d7",
+        "proof_experiment::combined::ownership::resources::ownership_resource_case",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "exit_code": 0,
+      "timed_out": false,
+      "output_sha256": "5c3ed002fdf168628d04fa0322c8b4d012e2431bb0273658966b1b6c49912c91",
+      "setup": [
+        {
+          "capacity": 32768,
+          "setup_ns": 677376228
+        }
+      ],
+      "fixture": [
+        {
+          "fixture_ns": 37874549
+        }
+      ],
+      "samples": [
+        {
+          "sample": 0,
+          "inputs": 16,
+          "outputs": 16,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 23752,
+          "constraints": 47843,
+          "arithmetic_bytes": 1377,
+          "clsag_field_bytes": 11776,
+          "signatures": 16,
+          "prove_ns": 4478763800,
+          "verify_ns": 456814493
+        },
+        {
+          "sample": 1,
+          "inputs": 16,
+          "outputs": 16,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 23752,
+          "constraints": 47843,
+          "arithmetic_bytes": 1377,
+          "clsag_field_bytes": 11776,
+          "signatures": 16,
+          "prove_ns": 4456237186,
+          "verify_ns": 456255543
+        },
+        {
+          "sample": 2,
+          "inputs": 16,
+          "outputs": 16,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 23752,
+          "constraints": 47843,
+          "arithmetic_bytes": 1377,
+          "clsag_field_bytes": 11776,
+          "signatures": 16,
+          "prove_ns": 4447101313,
+          "verify_ns": 455430750
+        }
+      ],
+      "whole_case_peak_rss_bytes": 147435520,
+      "rss_raw_sha256": "e053bfede2112f8e5ff83a5562f42f6ec73d67c7b4ea074e2bcd04dc6d4f8a91"
+    },
+    {
+      "case": "zero",
+      "command": [
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/home/runner/work/botho/botho/ownership-resources/zero.rss.txt",
+        "/home/runner/work/botho/botho/target/release/deps/bth_ct_demurrage_reference-0ca14a21d09cd5d7",
+        "proof_experiment::combined::ownership::resources::ownership_resource_case",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "exit_code": 0,
+      "timed_out": false,
+      "output_sha256": "986205ae03e5694119818fce7a5b2c30e616074f9f079acbf8a4e8e255f977da",
+      "setup": [
+        {
+          "capacity": 32768,
+          "setup_ns": 679165351
+        }
+      ],
+      "fixture": [
+        {
+          "fixture_ns": 2525109
+        }
+      ],
+      "samples": [
+        {
+          "sample": 0,
+          "inputs": 1,
+          "outputs": 1,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 1612,
+          "constraints": 3248,
+          "arithmetic_bytes": 1121,
+          "clsag_field_bytes": 736,
+          "signatures": 1,
+          "prove_ns": 296605444,
+          "verify_ns": 30170762
+        }
+      ],
+      "whole_case_peak_rss_bytes": 19898368,
+      "rss_raw_sha256": "2edc4f4068732e48f9bcea09efbff9e350c1a2d39dab7b926991cdc8beb328f1"
+    },
+    {
+      "case": "both-caps-cancel",
+      "command": [
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/home/runner/work/botho/botho/ownership-resources/both-caps-cancel.rss.txt",
+        "/home/runner/work/botho/botho/target/release/deps/bth_ct_demurrage_reference-0ca14a21d09cd5d7",
+        "proof_experiment::combined::ownership::resources::ownership_resource_case",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "exit_code": 0,
+      "timed_out": false,
+      "output_sha256": "6d7076d54137c49b5073daefe28f21c39564e1680402a86519e963b4886c8418",
+      "setup": [
+        {
+          "capacity": 32768,
+          "setup_ns": 677692250
+        }
+      ],
+      "fixture": [
+        {
+          "fixture_ns": 2537923
+        }
+      ],
+      "samples": [
+        {
+          "sample": 0,
+          "inputs": 1,
+          "outputs": 1,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 1612,
+          "constraints": 3248,
+          "arithmetic_bytes": 1121,
+          "clsag_field_bytes": 736,
+          "signatures": 1,
+          "prove_ns": 297723394,
+          "verify_ns": 30312326
+        }
+      ],
+      "whole_case_peak_rss_bytes": 19841024,
+      "rss_raw_sha256": "40835cfe12cea07099b7b5c1556c726919ac2ea819457da0db3dc5effa27c2b0"
+    },
+    {
+      "case": "one-cap-difference",
+      "command": [
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/home/runner/work/botho/botho/ownership-resources/one-cap-difference.rss.txt",
+        "/home/runner/work/botho/botho/target/release/deps/bth_ct_demurrage_reference-0ca14a21d09cd5d7",
+        "proof_experiment::combined::ownership::resources::ownership_resource_case",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "exit_code": 0,
+      "timed_out": false,
+      "output_sha256": "d76e4132294e9faac98edbe649fa506447926f7d1de74a2eaa0253067c90b8a3",
+      "setup": [
+        {
+          "capacity": 32768,
+          "setup_ns": 677831069
+        }
+      ],
+      "fixture": [
+        {
+          "fixture_ns": 2555416
+        }
+      ],
+      "samples": [
+        {
+          "sample": 0,
+          "inputs": 1,
+          "outputs": 1,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 1612,
+          "constraints": 3248,
+          "arithmetic_bytes": 1121,
+          "clsag_field_bytes": 736,
+          "signatures": 1,
+          "prove_ns": 297223064,
+          "verify_ns": 30177375
+        }
+      ],
+      "whole_case_peak_rss_bytes": 19935232,
+      "rss_raw_sha256": "e379734898129c7db433a792e451d99dd2ca92dd70c586c62a69dd2652ef55c1"
+    },
+    {
+      "case": "maximum-sum",
+      "command": [
+        "/usr/bin/time",
+        "-v",
+        "-o",
+        "/home/runner/work/botho/botho/ownership-resources/maximum-sum.rss.txt",
+        "/home/runner/work/botho/botho/target/release/deps/bth_ct_demurrage_reference-0ca14a21d09cd5d7",
+        "proof_experiment::combined::ownership::resources::ownership_resource_case",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "status": "passed",
+      "exit_code": 0,
+      "timed_out": false,
+      "output_sha256": "51819a50e21262459c9a50bbe6f8b62f11ca0a9cbb96cbb4baafe4541e1a697a",
+      "setup": [
+        {
+          "capacity": 32768,
+          "setup_ns": 677964066
+        }
+      ],
+      "fixture": [
+        {
+          "fixture_ns": 37838553
+        }
+      ],
+      "samples": [
+        {
+          "sample": 0,
+          "inputs": 16,
+          "outputs": 16,
+          "ring": 20,
+          "significant_bits": 2,
+          "multipliers": 23752,
+          "constraints": 47843,
+          "arithmetic_bytes": 1377,
+          "clsag_field_bytes": 11776,
+          "signatures": 16,
+          "prove_ns": 4473556090,
+          "verify_ns": 460783383
+        }
+      ],
+      "whole_case_peak_rss_bytes": 93425664,
+      "rss_raw_sha256": "520af345ee55067d018be10e8a916c7b0b82bfcd88c71d27c3f02fa64f9ea0e9"
+    }
+  ],
+  "checkout_commit": "76371455280163fa01e5299c68b305e2adf6f57e",
+  "source_sha256": {
+    "scripts/research/ct-demurrage/src/lib.rs": "2187d6e51d476f96bd8bb7830ff6a457130bd590ce59210306c37fc422bf67aa",
+    "scripts/research/ct-demurrage/src/proof_experiment/combined/ownership/resources.rs": "b356ea8d042b7593921e50507de868335603d2dfc8e1facdbf384e11156aef89",
+    "scripts/research/ct-demurrage/src/proof_experiment/combined/ownership.rs": "7bfedfbe6422501ebb7bdc0599ade1cbfe1517ddba9a879ee687c8b578dfc63d",
+    "scripts/research/ct-demurrage/src/proof_experiment/combined.rs": "f1624b63e8557616d2f0c192380dbe22701147bdb469995973636cf4889423f0",
+    "scripts/research/ct-demurrage/src/proof_experiment.rs": "c4e3ffa3f8ddf45b6680ad483015c75c8666e70066e92f462b4d6c03796e6585",
+    "Cargo.lock": "0163413813517346e5de8b6a55ddbcff426c48e1a59be040dac628774a7434a3",
+    "Cargo.toml": "5ebf46d21ad6ba09c2d7aa4a4f733b473f842a92ac1b94de7aa194396714d95d",
+    "rust-toolchain": "f506172db062e96158404259ac7a857a8422d530837c4fdbd44fe4a0ce15a8f2",
+    "scripts/research/ct-demurrage/measure_ownership.py": "5eec9e58759b6010cb29b38779f27304c16db3b681c148c6a170d888c07f04ab",
+    "scripts/research/ct-demurrage/Cargo.toml": "69b64520079922027cec8456c1709442c0dae8d39476fb3117ed060afa794627",
+    ".github/workflows/ownership-resources.yml": "76b4c87ecc1615993e75d9a1861d09863e895fa1016f5cea1455dc06411f1227",
+    "crypto/ring-signature/src/ring_signature/clsag.rs": "0e598832571a88857e782a1a445a6c0677a9280c85820dcd177d65f18b8ada20",
+    "vendor/bulletproofs-og/src/r1cs/prover.rs": "e38d670c95974e64608ca8d72f136bb4d03c33819356ed4618e504a26937447e",
+    "vendor/bulletproofs-og/src/r1cs/verifier.rs": "bd07ee4bed98e0e1ddce7314e2da77fd8a0e43c1ded552c25acc77c696878396"
+  },
+  "git_status_porcelain": "?? ownership-build.jsonl\n",
+  "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "compile_recipe": [
+    "cargo",
+    "test",
+    "--locked",
+    "--release",
+    "-p",
+    "bth-ct-demurrage-reference",
+    "--no-run",
+    "--message-format=json"
+  ],
+  "build_evidence_note": "Recipe used by workflow/reproduction command; Cargo stdout selects executable. Hashes identify supplied output/binary/source, not a hermetic build attestation.",
+  "executable": "/home/runner/work/botho/botho/target/release/deps/bth_ct_demurrage_reference-0ca14a21d09cd5d7",
+  "executable_sha256": "1e215d00d240d99be9fe710a30ec0d5ade2ebfc0b220cb51c8b70d6223887b44",
+  "cargo_messages": "/home/runner/work/botho/botho/ownership-build.jsonl",
+  "cargo_messages_sha256": "5df6fbca8228f1e92e8aa8ead9fd117db95eaf1cbb2ba9c192b6235be772227c",
+  "environment": {
+    "system": "Linux",
+    "release": "6.17.0-1022-azure",
+    "machine": "x86_64",
+    "processor": "AMD EPYC 7763 64-Core Processor",
+    "python": "3.12.3",
+    "rustc": "rustc 1.93.0-nightly (646a3f8c1 2025-12-02)"
+  },
+  "ci": {
+    "GITHUB_REPOSITORY": "botho-project/botho",
+    "GITHUB_SHA": "76371455280163fa01e5299c68b305e2adf6f57e",
+    "GITHUB_RUN_ID": "35541918241",
+    "GITHUB_RUN_ATTEMPT": "1"
+  },
+  "limits_seconds": {
+    "per_case": 120,
+    "matrix": 300
+  },
+  "scope": "Whole-case peak RSS includes generators, fixtures and all samples; no per-proof subtraction. Field bytes are not a wire envelope.",
+  "elapsed_seconds": 31.099906941000086
+}

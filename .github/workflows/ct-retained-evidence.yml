@@ -1,0 +1,23 @@
+name: CT historical evidence integrity
+on:
+  pull_request:
+    paths:
+      - 'scripts/research/ct-demurrage/**'
+      - 'docs/research/ct1-rehearsal-acceptance.md'
+      - '.github/workflows/ct-retained-evidence.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Validate historical raw evidence and checker regressions
+        run: |
+          python3 scripts/research/ct-demurrage/check_retained_resources.py
+          python3 -m unittest discover -s scripts/research/ct-demurrage -p 'test_retained_resources.py'

@@ -1,0 +1,7 @@
+
+running 1 test
+test proof_experiment::combined::ownership::resources::ownership_resource_case ... RESOURCE_SETUP case=generators capacity=32768 setup_ns=678730499
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.68s
+
