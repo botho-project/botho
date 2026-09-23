@@ -1866,9 +1866,11 @@ dependencies = [
  "log",
  "rand 0.10.2",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-log",
+ "tempfile",
  "tokio",
 ]
 

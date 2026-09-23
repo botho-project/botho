@@ -80,6 +80,12 @@ jobs:
           cargo test --locked -p botho-wallet --lib --no-default-features storage::tests::
           cargo test --locked -p botho-wallet --lib --no-default-features transaction::tests::test_output_is_detectable_by_recipient -- --exact
 
+      # Compile the ordinary desktop feature set in its own invocation; another
+      # workspace package must not supply the PQ features its wallet requires.
+      - name: Check standalone desktop hybrid wallet
+        timeout-minutes: 15
+        run: cargo check --locked -p botho-desktop --lib --tests
+
       - name: Build workspace
         run: cargo build --workspace
 

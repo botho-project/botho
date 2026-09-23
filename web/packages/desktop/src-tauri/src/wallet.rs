@@ -1523,6 +1523,76 @@ async fn request_faucet_internal(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn desktop_shareable_addresses_have_real_pq_keys_and_network_prefixes() {
+        let keys = WalletKeys::from_mnemonic("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art").unwrap();
+        for network in [WalletNetwork::Mainnet, WalletNetwork::Testnet] {
+            let encoded = shareable_address(&keys, network).unwrap();
+            let (decoded, actual) = bth_address_codec::decode_address(&encoded).unwrap();
+            assert_eq!(actual, network.codec());
+            assert_eq!(decoded.kem_public_key().len(), 1184);
+            assert_eq!(decoded.dsa_public_key().len(), 1952);
+            assert_eq!(
+                decoded.view_public_key(),
+                keys.public_address().view_public_key()
+            );
+            assert_eq!(
+                decoded.spend_public_key(),
+                keys.public_address().spend_public_key()
+            );
+        }
+        assert!(faucet_address(&keys, WalletNetwork::Mainnet).is_err());
+        assert_eq!(
+            faucet_address(&keys, WalletNetwork::Testnet).unwrap(),
+            shareable_address(&keys, WalletNetwork::Testnet).unwrap()
+        );
+    }
+
+    #[test]
+    fn rpc_parameters_require_explicit_network_and_endpoint() {
+        for network in [
+            serde_json::Value::Null,
+            serde_json::json!("mainnet"),
+            serde_json::json!("unknown"),
+            serde_json::json!(42),
+        ] {
+            assert!(serde_json::from_value::<GetBalanceParams>(
+                serde_json::json!({"network":network,"endpoint":"http://localhost:1/rpc"})
+            )
+            .is_err());
+        }
+        assert!(serde_json::from_value::<GetBalanceParams>(
+            serde_json::json!({"network":"botho-mainnet"})
+        )
+        .is_err());
+        let params: GetBalanceParams = serde_json::from_value(serde_json::json!({"network":"botho-testnet","endpoint":"https://example.invalid/custom/rpc"})).unwrap();
+        assert_eq!(params.network, WalletNetwork::Testnet);
+        assert_eq!(params.endpoint, "https://example.invalid/custom/rpc");
+    }
+
+    #[test]
+    fn memory_cache_binding_invalidates_stale_completion_without_persisted_height() {
+        let mut cache = WalletCache::default();
+        let binding = CacheBinding {
+            network: WalletNetwork::Testnet,
+            endpoint: "http://localhost:1/rpc".into(),
+            address: "public fixture identity".into(),
+        };
+        let (first, height) = cache.bind(binding.clone());
+        assert_eq!(height, 0);
+        cache.height = 42;
+        assert_eq!(cache.bind(binding.clone()), (first, 42));
+        let (next, height) = cache.bind(CacheBinding {
+            network: WalletNetwork::Mainnet,
+            ..binding
+        });
+        assert_ne!(next, first);
+        assert_eq!(height, 0);
+        assert!(cache.require_generation(first).is_err());
+        cache.invalidate();
+        assert!(cache.binding.is_none());
+        assert!(cache.require_generation(next).is_err());
+    }
 
     #[test]
     fn test_parse_view_spend_address() {

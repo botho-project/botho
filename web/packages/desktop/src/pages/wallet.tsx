@@ -32,7 +32,7 @@ function AddressSetup({ onComplete }: { onComplete: (address: string) => void })
       setError('Please enter your wallet address')
       return
     }
-    // Accept tbotho://1/ (testnet) or botho://1/ (mainnet) formats
+    // Parse the complete v2 address and require the selected node network.
     if (!validWalletAddress(address, network)) {
       setError('Enter a complete v2 address for the recognized connected network')
       return
