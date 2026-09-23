@@ -1,0 +1,17 @@
+{
+  "startedAt": "2026-09-21T23:17:32.461527+00:00",
+  "addressSha256": "60ed707e50a979dd793cf5ff0ef64a92533984f57cb0c9b1370c88ec0eb607f5",
+  "requestedGrants": 1,
+  "endpoint": "https://faucet.botho.io/rpc",
+  "response": {
+    "jsonrpc": "2.0",
+    "result": {
+      "amount": "1000000000000",
+      "amountFormatted": "1.000000 BTH",
+      "success": true,
+      "txHash": "8266cff6334770633e127e5964603528992a2b66eda8bb2e36968fad6a4dc8e3"
+    },
+    "id": 1380
+  },
+  "finishedAt": "2026-09-21T23:17:43.331371+00:00"
+}

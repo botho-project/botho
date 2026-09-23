@@ -1,0 +1,44 @@
+{
+  "sourceCommit": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+  "workflowRun": "https://github.com/botho-project/botho/actions/runs/35666070877",
+  "successfulArm64Job": 106551998546,
+  "dryRun": true,
+  "artifactName": "binaries-linux-aarch64",
+  "binarySha256": "88c169423fdc003a5dbc6d688852fdbcda26b78f85cd371de29d9192571c674f",
+  "protocolVersion": "6.0.0",
+  "localTests": {
+    "consensus_cluster_convergence": 4,
+    "e2e_transfer_patterns": 6
+  },
+  "manualRestartsAfterRollout": [
+    {
+      "host": "faucet.botho.io",
+      "timeApproxUtc": "2026-09-21T23:15:38Z",
+      "reason": "Release initial sync gate after other peers settled"
+    }
+  ],
+  "limits": [
+    "One funded faucet payment; not a load test",
+    "No web or Snap payment exercised",
+    "No reset or CT/LotteryV2 activation",
+    "Matching old/new tip and genesis does not constitute a full ledger audit",
+    "Comparison spans a long-stalled previous process and a freshly restarted process; no memory-leak cure established"
+  ],
+  "observationWindow": {
+    "rolloutCompletedApproxUtc": "2026-09-21T23:14:15Z",
+    "lastFleetSampleUtc": "2026-09-21T23:24:26.702231+00:00",
+    "totalFleetSamplesIncludingBaseline": 14,
+    "consecutiveFinalSamplesAllSynced": 7,
+    "finalHeight": 2636,
+    "finalTip": "f268ec1b77def04fef6b19d9004e103c12787bd61389ee87a896cd3b569bed99",
+    "automaticRestartsRecordedAfterRollout": 0,
+    "finalAllProcessesSwapKiB": 0,
+    "failedObservations": [
+      {
+        "label": "minting-policy-check",
+        "host": "faucet.botho.io",
+        "error": "SSH banner timeout"
+      }
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+Build Information
+=================
+
+Git Commit: 6dbcb92463214694f3122a05c9c48986d4f4f1b7
+Git Tag: v0.6.0-208-g6dbcb924
+Build Date: 2026-09-21T23:11:34Z
+SOURCE_DATE_EPOCH: 1790028094
+
+Rust Version:
+rustc 1.93.0-nightly (646a3f8c1 2025-12-02)
+cargo 1.93.0-nightly (2a7c49606 2025-11-25)
+
+Target: aarch64-unknown-linux-gnu
+
+Cargo Profile: release
+
+Checksums (SHA256):
+88c169423fdc003a5dbc6d688852fdbcda26b78f85cd371de29d9192571c674f  botho
+2600d061ac20b3d8f75563b9830d502163cddf74b1be91aa8c2d81b429946b81  botho-exchange-scanner
+43361fd5b55cf9d7107f6f8492a2a4118ada0251da4c84a9fee9f18a500a9896  botho-wallet
