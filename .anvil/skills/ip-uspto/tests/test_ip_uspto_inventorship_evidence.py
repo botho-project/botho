@@ -41,6 +41,8 @@ from pathlib import Path
 
 import pytest
 
+from anvil.lib.testing import read_text
+
 _HERE = Path(__file__).resolve().parent
 _SKILL_ROOT = _HERE.parent
 # ``inventorship_evidence.py`` was promoted to ``anvil/lib/`` in issue #516
@@ -257,9 +259,7 @@ class TestCollectEvidence:
             assert row["rationale"] == ""
 
     def test_blame_summary_for_lines_entry(self, scratch_repo):
-        data = _map_data(
-            {"F1": [("src/core.py", "primary", {"lines": [1, 2]})]}
-        )
+        data = _map_data({"F1": [("src/core.py", "primary", {"lines": [1, 2]})]})
         result = ie.collect_evidence(scratch_repo, data)
         assert len(result["blame"]) == 1
         summary = result["blame"][0]
@@ -279,9 +279,7 @@ class TestCollectEvidence:
         assert "pstream history" in result["findings"][0]["detail"]
 
     def test_vendored_role_blocked(self, scratch_repo):
-        data = _map_data(
-            {"F1": [("third_party/blob/f2.txt", "vendored-primary", {})]}
-        )
+        data = _map_data({"F1": [("third_party/blob/f2.txt", "vendored-primary", {})]})
         result = ie.collect_evidence(scratch_repo, data)
         assert [f["type"] for f in result["findings"]] == [ie.FINDING_VENDORED]
 
@@ -386,9 +384,7 @@ class TestAppendOnly:
         classified = dict(
             self.ROW, classification="implementation", rationale="diff-read"
         )
-        out.write_text(
-            json.dumps(classified, sort_keys=True) + "\n", encoding="utf-8"
-        )
+        out.write_text(json.dumps(classified, sort_keys=True) + "\n", encoding="utf-8")
         # Re-mining yields the unclassified twin; append must be a no-op.
         assert ie.append_evidence(out, [self.ROW]) == 0
         kept = json.loads(out.read_text(encoding="utf-8"))
@@ -417,9 +413,7 @@ class TestCli:
         assert payload["findings"] == []
         assert len(payload["evidence"]) == 2
 
-    def test_exit_1_vendored_only_map_all_blocked(
-        self, scratch_repo, tmp_path, capsys
-    ):
+    def test_exit_1_vendored_only_map_all_blocked(self, scratch_repo, tmp_path, capsys):
         map_path = _write_map(
             tmp_path,
             _map_data(
@@ -437,9 +431,7 @@ class TestCli:
         assert payload["evidence"] == []
 
     def test_exit_2_missing_map(self, scratch_repo, tmp_path, capsys):
-        rc = ie.main(
-            [str(tmp_path / "nope.json"), "--repo", str(scratch_repo)]
-        )
+        rc = ie.main([str(tmp_path / "nope.json"), "--repo", str(scratch_repo)])
         assert rc == 2
         assert "error:" in capsys.readouterr().err
 
@@ -453,16 +445,12 @@ class TestCli:
     def test_exit_2_not_a_repo(self, tmp_path, capsys):
         plain = tmp_path / "plain"
         plain.mkdir()
-        map_path = _write_map(
-            tmp_path, _map_data({"F1": [("x.py", "primary", {})]})
-        )
+        map_path = _write_map(tmp_path, _map_data({"F1": [("x.py", "primary", {})]}))
         rc = ie.main([str(map_path), "--repo", str(plain)])
         assert rc == 2
         assert "not a git repository" in capsys.readouterr().err
 
-    def test_write_evidence_appends_and_reports(
-        self, scratch_repo, tmp_path, capsys
-    ):
+    def test_write_evidence_appends_and_reports(self, scratch_repo, tmp_path, capsys):
         map_path = _write_map(
             tmp_path, _map_data({"F1": [("src/core.py", "primary", {})]})
         )
@@ -518,12 +506,8 @@ class TestCli:
 
 
 class TestNoGitDegradation:
-    def test_check_git_available_false_and_exit_2(
-        self, tmp_path, monkeypatch, capsys
-    ):
-        map_path = _write_map(
-            tmp_path, _map_data({"F1": [("x.py", "primary", {})]})
-        )
+    def test_check_git_available_false_and_exit_2(self, tmp_path, monkeypatch, capsys):
+        map_path = _write_map(tmp_path, _map_data({"F1": [("x.py", "primary", {})]}))
         monkeypatch.setattr(ie, "GIT", str(tmp_path / "no-such-git"))
         assert ie.check_git_available() is False
         rc = ie.main([str(map_path), "--repo", str(tmp_path)])
@@ -535,9 +519,7 @@ class TestNoGitDegradation:
 # structure tests: command file + SKILL.md contracts
 # ---------------------------------------------------------------------------
 
-
-def _read(rel: str) -> str:
-    return (_SKILL_ROOT / rel).read_text(encoding="utf-8")
+_read = lambda rel: read_text(_SKILL_ROOT / rel)
 
 
 class TestCommandFileStructure:

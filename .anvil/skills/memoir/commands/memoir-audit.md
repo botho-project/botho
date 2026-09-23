@@ -1,6 +1,6 @@
 ---
 name: memoir-audit
-description: Auditor for the memoir skill. Always writes a general factual/narrative-consistency sibling. When the corpus tier (#597) is active, ALSO writes the exhaustive kind:tool_evidence corpus-audit critic per anvil/lib/snippets/provenance.md §Section 4 as a <thread>.{N}.corpus-audit/ sibling — running the anchor-drift pre-pass (§Section 4a, #868) before inventorying every claim, classifying every provenance.md row VERIFIED/PARAPHRASE_OK/MISMATCH/NOT_FOUND/FABRICATED, and raising the five fabrication-class critical flags. Runs parallel with memoir-review. DRAFTED/REVISED → AUDITED transition.
+description: Auditor for the memoir skill. Always writes a general factual/narrative-consistency sibling. When the corpus tier (#597) is active, ALSO writes the exhaustive kind:tool_evidence corpus-audit critic per anvil/lib/snippets/provenance.md §Section 4 as a <thread>.{N}.corpus-audit/ sibling — running the anchor-drift pre-pass (§Section 4a, #868) before inventorying every claim, classifying every provenance.md row VERIFIED/PARAPHRASE_OK/MISMATCH/NOT_FOUND/FABRICATED, running the scope-widening check (§Section 5a, #1032) against every row, and raising the six fabrication-class critical flags. Runs parallel with memoir-review. DRAFTED/REVISED → AUDITED transition.
 ---
 
 # memoir-audit — Auditor
@@ -79,7 +79,11 @@ interrupt of EACH critic removed by `cleanup_one_staging(...)` at entry
    (write every required file into the `.tmp/` dir, `_progress.json`
    last, then `mv` as the last step; stamp `_meta.json` with
    `"atomicity_fallback": "manual-mv"`). Never write straight into either
-   final sibling name.
+   final sibling name. (If your agent harness pattern-matches and rejects
+   filenames like `verdict.md` / `findings.md` / `comments.md` on a
+   `Write`, a Bash-heredoc write into the staging dir is an accepted
+   fallback — see `anvil/lib/snippets/critics.md` §"Orchestrator
+   output-file guard collisions".)
 
 2. **Read inputs**: the body, the matching BRIEF `documents:` entry,
    `<thread>.{N}/_progress.json` (the drafter's self-check +
@@ -180,8 +184,8 @@ interrupt of EACH critic removed by `cleanup_one_staging(...)` at entry
    `<thread>.{N}.corpus-audit/verdict.md`, conditional on the active
    sweep at step 4) — each with a one-paragraph justification quoting
    the offending chapter text and the corpus evidence (or its absence).
-   These are the **five #597 flags, reused verbatim — no memoir-specific
-   flag types for v1**:
+   These are the **six #597/#1032 flags, reused verbatim — no
+   memoir-specific flag types for v1**:
    - **`fabricated_quote`** — verbatim-quoted text absent from the
      corpus.
    - **`fabricated_fact`** — a named date/name/event not traceable to
@@ -194,6 +198,12 @@ interrupt of EACH critic removed by `cleanup_one_staging(...)` at entry
      corpus chronology.
    - **`unattributed_paraphrase`** — authorial invention presented as a
      subject's memory without any corpus grounding.
+   - **`scope_overreach`** (#1032) — a claim's universal quantifier
+     ("anyone"/"every"/"all"), superlative ("first"/"only"/"most"), or
+     negated existential ("no other X anywhere/exists") asserts wider
+     scope than its cited `provenance.md` row supports, per the §Section
+     5a scope-widening check — raised even when the row otherwise
+     `VERIFIED`s or `PARAPHRASE_OK`s the underlying fact.
 
    If none (and the corpus tier is active): "Critical flags: none." If
    the corpus tier is inactive, the corpus-audit sibling does not exist
@@ -222,7 +232,7 @@ interrupt of EACH critic removed by `cleanup_one_staging(...)` at entry
   `resolve_corpus_dirs` never raises; the broken declaration is a
   `major` finding and the exhaustive sweep is skipped.
 - **Never invents a memoir-specific critical-flag vocabulary** — reuses
-  the five #597 fabrication-class flags verbatim.
+  the six #597/#1032 fabrication-class flags verbatim.
 - **Never populates or edits `provenance.md`** — that is the
   drafter's/reviser's job; the auditor reads and classifies it.
 

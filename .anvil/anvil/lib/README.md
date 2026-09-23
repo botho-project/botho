@@ -69,13 +69,25 @@ anvil/lib/
                                 `git.commit_per_phase` / `git.push` knobs,
                                 commit-message shape, staging scope,
                                 warn-and-continue failure semantics). (#426)
+    brand-theme-porting.md     Brand-theme porting: LaTeX beamer .sty → Marp CSS.
+    cite.md                    Citation primitive — on-disk shape and convention.
+    directed_revision.md       Operator-directed revision (`--polish "<reason>"`).
+    pending_marker.md          Pending-measurement placeholder convention.
+    perspective.md             Perspective phase: pre-draft external-substrate sibling.
+    provenance.md              Claim provenance: local-corpus ground-truth verification.
+    voice_grounding.md         Voice grounding: persona docs as drafting/review substrate.
+  figures/                     Figure conventions: palette.py + palette.json +
+                                anvil.mplstyle + mermaid-theme.json.
+  latex/                       Shared LaTeX substrate for LaTeX-source skills
+                                (anvil-doc.cls + anvil-doc.tex.j2).
   marp/                        Marp renderer pin shared by deck + slides (#32).
     config.yml                 Canonical Marp config consumed via
                                 `marp --config-file <path>` by both skills.
   memo/                        anvil:memo PDF render-chain substrate
                                 (Epic #158 Phase 1). Pinned default styles +
                                 pandoc HTML / xelatex templates consumed by
-                                the (future) memo-render command.
+                                the memo-render command
+                                (anvil/skills/memo/commands/memo-render.md).
     styles.css                 Pinned default theme (Helvetica/Arial, 11pt,
                                 0.75in margins, @page footer page numbers).
     template.html              Pandoc HTML template (loads $title$,
@@ -113,6 +125,57 @@ anvil/lib/
                                 `kind=Kind.VISION`. (#30)
   export_schema.py             One-shot exporter for review_schema.json AND
                                 rubric_schema.json.
+  ai_byline.py                 Opt-in AI-authorship byline renderer. (#941)
+  cross_thread_refs.py         Cross-thread reference resolver. (#287)
+  evidence_check.py            Quoted-evidence verifier for critic scoring
+                                tables. (#464)
+  evidence_drift.py            Deterministic BRIEF/refs evidence-drift
+                                advisory. (#857)
+  figure_content.py            Figure-content VLM critic. (#340)
+  hyperlink_resolver.py        Hyperlink resolver critic. (#335, promoted
+                                under #460)
+  inventorship_evidence.py     Deterministic git-history evidence mining for
+                                inventorship. (#445)
+  latest_resolution.py         Canonical `.latest` resolution for thread
+                                version directories.
+  latex_render.py              Shared XeLaTeX render primitive for
+                                Markdown-substrate skills.
+  marp_lint.py                 Static lint mirroring the marp-vscode
+                                slide-content-overflow diagnostic.
+  numeric_consistency.py       Deterministic numeric-consistency gate. (#462)
+  parity.py                    Pre-flight lint: shared hard claims between
+                                sibling deck.md and memo.md.
+  pending_marker.py            Deterministic pending-measurement placeholder
+                                gate. (#841/#842)
+  probe_freshness.py           Perishable-claim freshness advisory for audit
+                                siblings. (#863)
+  project_brief/               Typed parser for the project-level BRIEF.md
+                                (package: loader/models/voice/…). (#285, #1124)
+  project_detect.py            Project shape detection. (#297, #407)
+  project_discovery.py         Project-as-thread-root discovery. (#284, #295)
+  prose_diff.py                Word-level prose diff engine + self-contained
+                                HTML renderer. (#925)
+  provenance_anchor.py         Deterministic provenance.md anchor-drift
+                                advisory. (#868)
+  render_gate/                 Deterministic render-gate for paginated
+                                artifacts (LaTeX-skill analog of marp_lint).
+                                (#1129)
+  revise_consistency.py        Deterministic stale-token sweep for the
+                                *-revise lifecycle.
+  rhetoric_lint.py             Deterministic rhetoric lint (anti-trope /
+                                banned-phrase / AI-tell scan).
+  rubric_overrides_suffix.py   Calibration-suffix attachment for
+                                rubric_overrides reviewer integration.
+  scorecard_check.py           Deterministic scorecard arithmetic validation.
+                                (#392)
+  sidecar.py                   staged_sidecar context manager + atomic rename
+                                for crash-safe critic-sibling writes. (#350)
+  skill_lib_loader.py          Shared loader for a skill's hyphenated lib/
+                                package. (#879)
+  tex_includes.py              Recursive \input/\include resolver for
+                                multi-file LaTeX threads.
+  theme.py                     Per-company theme primitive. (#322)
+  vocab_reminder.py            Precision-vocabulary REMINDER tool. (#579)
   examples/
     review-example.json        Fully-populated worked example fixture.
     vision-review-example.json Fully-populated `kind: vision` example. (#30)
@@ -233,10 +296,12 @@ markdown snippets and the Python modules land alongside each other; the
 consumer repo's commands reference them by the `.anvil/anvil/lib/snippets/<name>.md`
 relative path.
 
-## Why these 8 snippets?
+## Why the original 8 snippets?
 
-Each snippet corresponds to one source of duplication observed across
-the six v0 skill implementations. The short version per file:
+Each of the original v0 snippets corresponds to one source of duplication
+observed across the six v0 skill implementations (later snippets — cite,
+audit, git_sync, provenance, voice_grounding, … — were added by their own
+issues and documented above). The short version per file:
 
 | Snippet | Why |
 |---|---|

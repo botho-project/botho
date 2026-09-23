@@ -301,30 +301,6 @@ def load_theme(
         return None
 
 
-# ---------------------------------------------------------------------------
-# Convenience: resolve theme from a path
-# ---------------------------------------------------------------------------
-
-
-def resolve_theme_for_path(
-    start: Path, theme_name: Optional[str]
-) -> Optional[Theme]:
-    """Locate the consumer root from ``start`` and load the named theme.
-
-    Combines :func:`find_consumer_root` + :func:`load_theme` in one
-    call — the common case for asset resolvers called from inside a
-    skill's render path (where the starting point is a version_dir or
-    thread_root, not a pre-computed consumer root).
-
-    Returns ``None`` when either step fails. See the underlying
-    functions for the absence-tolerant contract.
-    """
-    consumer_root = find_consumer_root(start)
-    if consumer_root is None:
-        return None
-    return load_theme(consumer_root, theme_name)
-
-
 __all__ = [
     "ANVIL_DIRNAME",
     "THEMES_DIRNAME",
@@ -332,5 +308,4 @@ __all__ = [
     "Theme",
     "find_consumer_root",
     "load_theme",
-    "resolve_theme_for_path",
 ]

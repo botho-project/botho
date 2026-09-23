@@ -88,12 +88,14 @@ If `<slug>/.anvil.json` exists, read it for thread-level overrides:
 ```json
 {
   "max_iterations": 7,
-  "critics": ["review", "s101", "s112", "claims"]
+  "critics": ["review", "s101", "s112", "claims"],
+  "prior_art_search": { "auto": true }
 }
 ```
 
 - `max_iterations` overrides the default of 5.
 - `critics` overrides the default critic set. The orchestrator uses this set to compute "critics done" and to detect missing critics.
+- `prior_art_search.auto` (issue #958, default `false`) — when `true`, `ip-uspto-prior-art` runs `anvil:ip-search` on its own before its supply check, instead of the operator running it as a separate step; equivalent to always passing that command's `--search` flag. Optional `corpus` / `max` / `min_score` keys pass through to `ip-search`. This orchestrator does not itself invoke `ip-search` — it is read-only — but a per-thread `prior_art_search.auto: true` is worth surfacing so an operator scanning the portfolio knows a thread's `priorart` critic will reach out to the network when next run.
 
 ## Notes
 

@@ -12,13 +12,15 @@ slip through: e.g., a directory with ``_review.json`` only (no
 ``_progress.json``, no ``_meta.json``) IS discovered and IS aggregated,
 silently producing under-specified sidecars.
 
-The file-level ``tmp + os.replace`` precedent (see
-:func:`anvil.lib.cite._cache_write`,
+The file-level ``tmp + os.replace`` precedent — now consolidated in
+:mod:`anvil.lib.atomic_write` (issue #1104; previously reimplemented
+independently across :func:`anvil.lib.cite._cache_write`,
 :mod:`anvil.skills.proposal.lib.synthesizer`,
 :mod:`anvil.skills.project-migrate.lib.apply`,
-:mod:`anvil.skills.deck.lib.imagegen`) gives correctness at the **file**
-boundary; the studio failure mode is at the **directory** boundary,
-where a fan-in of N file writes can be interrupted after K files.
+:mod:`anvil.skills.deck.lib.imagegen`, and others) — gives correctness
+at the **file** boundary; the studio failure mode is at the
+**directory** boundary, where a fan-in of N file writes can be
+interrupted after K files.
 
 This module provides the directory-level analog:
 
@@ -88,6 +90,47 @@ API
     # safe to call from a per-critic entry step in a parallel fan-out
     # workflow (see issue #376).
     cleanup_stale_staging(Path("output"))
+
+Binary/bulk-asset copy primitive (issue #1017)
+-----------------------------------------------
+
+A consumer hook that blocks every Bash-channel write into the checkout
+(redirection, ``tee``, ``cp``, ``mv``, ``sed -i`` — a worktree-isolation
+guard) leaves a manual/agent session with **no** sanctioned way to place
+bytes it did not itself compose: a prior version's ``figures/*.pdf``
+carried forward unchanged, a compiled ``main.pdf``, or the raw stdout/
+stderr of a ``pdflatex`` compile pass destined for ``compile-log.txt``.
+The agent's own editing tool is text-only and cannot hold a binary file's
+bytes; re-typing a "summary" of a compile log or reconstructing a PDF by
+hand is a fabrication risk, not a copy.
+
+:func:`copy_bytes` is the byte-safe analog of the ``stage``/``commit`` CLI
+shim above, extended from text to arbitrary bytes: a single file OR a
+directory tree, landed via the same stage-then-atomic-rename shape
+:func:`staged_sidecar` uses (so a crash mid-copy of a multi-file
+``figures/`` tree never leaves ``dst`` partially written), with an
+optional post-copy byte-identity verification (``(size, sha256)``
+fingerprint per file, reusing :func:`_file_content_key`) rather than
+trusting the underlying ``shutil`` copy silently. CLI shim::
+
+    # Copy a single file (e.g. a scratch-captured compile log) into a
+    # sidecar's staging dir:
+    python -m anvil.lib.sidecar copy /tmp/compile.log \
+        output/.thread.3.audit.tmp/compile-log.txt
+
+    # Copy a whole directory (e.g. carrying figures/ forward unchanged
+    # between versions):
+    python -m anvil.lib.sidecar copy output/thread.2/figures \
+        output/thread.3/figures
+
+Refuses (nonzero exit) if the source is missing or the destination
+already exists (``--force`` to overwrite deliberately) — the same
+immutability-first default every other write primitive in this module
+uses. This is a general-purpose byte-copy primitive, not scoped to
+sidecar directories specifically: ``dst`` may be a version-dir path
+(``figures/``) or a path inside an open sidecar staging dir
+(``compile-log.txt``) — the caller decides, this function only guarantees
+the copy itself is atomic and byte-verified.
 
 CLI shim (issue #645)
 ---------------------
@@ -250,25 +293,66 @@ Subprocess-only by default
 --------------------------
 
 This module uses only :mod:`os`, :mod:`pathlib`, :mod:`shutil`,
-:mod:`contextlib`, and :mod:`logging` from the standard library. No new
-``pyproject.toml`` dependency is introduced — the
+:mod:`contextlib`, :mod:`json`, and :mod:`logging` from the standard
+library. :func:`write_critic_review_dir` (issue #1086) accepts an
+already-built ``Review`` duck-typed on ``model_dump(mode="json")`` rather
+than importing :class:`anvil.lib.review_schema.Review` at runtime — the
+type is referenced only under ``TYPE_CHECKING`` — so this module still
+introduces no new ``pyproject.toml`` dependency and the
 "subprocess-only-by-default" contract documented at the top of
 ``CLAUDE.md`` is preserved.
+
+Critic-sidecar writer consolidation (issue #1086)
+--------------------------------------------------
+
+Seven near-duplicate ``write_review_dir()`` / ``_write_review_dir()``
+copies (``anvil/lib/pending_marker.py``, ``anvil/lib/numeric_consistency.py``,
+``anvil/lib/hyperlink_resolver.py``, ``anvil/lib/figure_content.py``,
+``anvil/skills/memo/lib/image_accessibility.py``,
+``anvil/skills/memo/lib/citation_coverage.py``,
+``anvil/skills/report/lib/claim_figure_grounding.py``) did the same three
+steps in the same order — compute the sibling dir, build a typed
+``Review`` via that critic's own ``to_review(...)``, write it (and, for
+three of the seven, a ``_findings.json`` companion) into the sibling dir
+— but had drifted into two behavioral camps: two used
+:func:`staged_sidecar` (crash-safe), five used a plain
+``mkdir(parents=True, exist_ok=True)`` + ``write_text`` (not crash-safe).
+:func:`write_critic_review_dir` is the single canonical implementation
+both camps now call: it takes the already-built ``Review`` (and optional
+findings payload) rather than a critic-specific ``result`` object, so it
+stays decoupled from each critic's ``to_review()``/``to_json()`` call
+shape, and it defaults to the atomic (``staged_sidecar``) path — the five
+previously-non-atomic writers gain crash-safety as a deliberate,
+called-out side effect of the consolidation rather than a silent
+behavior change.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
-import os
 import shutil
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterable, Iterator, List, Sequence
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Sequence,
+)
+
+if TYPE_CHECKING:  # pragma: no cover - typing only, no runtime import
+    from anvil.lib.review_schema import Review
 
 __all__ = [
     "STAGING_SUFFIX",
     "SidecarIncompleteError",
+    "SidecarCopyVerificationError",
     "staged_sidecar",
     "stage_enter",
     "commit_staged",
@@ -276,10 +360,12 @@ __all__ = [
     "commit_replace",
     "abort_replace",
     "recover_interrupted_replace",
+    "copy_bytes",
     "staging_path_for",
     "backup_path_for",
     "cleanup_one_staging",
     "cleanup_stale_staging",
+    "write_critic_review_dir",
     "main",
 ]
 
@@ -311,6 +397,14 @@ class SidecarIncompleteError(RuntimeError):
     """The staged sidecar dir is missing one or more declared
     ``required_files`` at context exit. The staging directory is left in
     place so a forensic check can inspect what WAS produced.
+    """
+
+
+class SidecarCopyVerificationError(RuntimeError):
+    """:func:`copy_bytes` completed a copy but post-copy byte-identity
+    verification found the destination does not match the source. The
+    staged copy is left in place (unrenamed) for forensic inspection; the
+    caller must not treat the destination as landed.
     """
 
 
@@ -442,6 +536,154 @@ def _unpreserved_backup_entries(backup: Path, final_dir: Path) -> List[str]:
         if _file_content_key(path) != _file_content_key(counterpart):
             unpreserved.append(str(rel))
     return unpreserved
+
+
+# ---------------------------------------------------------------------------
+# Binary/bulk-asset copy primitive (issue #1017)
+# ---------------------------------------------------------------------------
+
+
+def _content_manifest(path: Path) -> dict:
+    """Return a ``{relative-posix-path: (size, sha256)}`` content manifest
+    for ``path`` — a single ``{"": key}`` entry when ``path`` is a file, or
+    one entry per contained file (keyed by its path relative to ``path``,
+    POSIX-separated for platform-stable comparison) when ``path`` is a
+    directory. Shared verification helper for :func:`copy_bytes`.
+    """
+    if path.is_dir():
+        return {
+            str(p.relative_to(path).as_posix()): _file_content_key(p)
+            for p in sorted(path.rglob("*"))
+            if p.is_file()
+        }
+    return {"": _file_content_key(path)}
+
+
+def copy_bytes(
+    src: Path,
+    dst: Path,
+    *,
+    overwrite: bool = False,
+    verify: bool = True,
+    parents: bool = True,
+) -> Path:
+    """Byte-safe copy of ``src`` to ``dst`` (issue #1017).
+
+    The binary/bulk-asset analog of the ``stage``/``commit`` CLI shim: a
+    manual/agent session whose editing tool is text-only (and whose Bash
+    channel may be blocked by a consumer's worktree-isolation hook) has no
+    other sanctioned way to place bytes it did not itself compose — a
+    prior version's unchanged ``figures/*.pdf``, a compiled ``main.pdf``,
+    or a raw compile-log capture destined for a sidecar's
+    ``compile-log.txt``.
+
+    Supports both a single file and a directory tree (recursively). The
+    copy is staged into a same-parent leading-dot sibling
+    (:func:`staging_path_for`) and landed with a single atomic
+    ``Path.rename`` — the same stage-then-rename shape :func:`staged_sidecar`
+    uses for critic directories — so a crash mid-copy of a large or
+    multi-file payload never leaves ``dst`` partially written.
+
+    Parameters
+    ----------
+    src:
+        The source path (file or directory). Must exist.
+    dst:
+        The destination path. Its parent is created if missing (when
+        ``parents`` is ``True``, the default).
+    overwrite:
+        When ``False`` (default), refuse (:class:`FileExistsError`) if
+        ``dst`` already exists — the same immutability-first default every
+        other write primitive in this module uses. When ``True``, the
+        existing ``dst`` is removed immediately before the staged copy is
+        renamed into place (CLI: ``--force``).
+    verify:
+        When ``True`` (default), after staging the copy, compare a
+        ``(size, sha256)`` content manifest (:func:`_content_manifest`) of
+        the staged copy against ``src``. Any mismatch or missing file
+        raises :class:`SidecarCopyVerificationError` and leaves the
+        staged (unrenamed) copy in place for forensic inspection — ``dst``
+        is never landed with unverified content. This should be
+        unreachable in practice (the underlying copy is either exact or
+        raises), but exists as defense-in-depth for the "byte-identity
+        verified" contract rather than trusting the copy silently.
+    parents:
+        Forwarded to ``dst.parent``'s :meth:`pathlib.Path.mkdir`.
+
+    Returns
+    -------
+    ``dst`` on success.
+
+    Raises
+    ------
+    FileNotFoundError
+        If ``src`` does not exist.
+    FileExistsError
+        If ``dst`` already exists and ``overwrite`` is ``False``.
+    SidecarCopyVerificationError
+        If ``verify`` is ``True`` and the post-copy manifest does not match
+        ``src``.
+    """
+    src = Path(src)
+    dst = Path(dst)
+
+    if not src.exists():
+        raise FileNotFoundError(
+            f"copy_bytes: source {src!s} does not exist; nothing to copy."
+        )
+    if dst.exists() and not overwrite:
+        raise FileExistsError(
+            f"copy_bytes: refusing to overwrite existing destination "
+            f"{dst!s}. Pass overwrite=True (CLI: `--force`) if replacing "
+            f"it is intended."
+        )
+
+    dst.parent.mkdir(parents=parents, exist_ok=True)
+
+    # Stage into a same-parent leading-dot sibling of dst, then land with a
+    # single atomic rename — mirrors staged_sidecar's contract so a crash
+    # mid-copy (e.g. a multi-file figures/ tree) never leaves dst partially
+    # written.
+    staging = staging_path_for(dst)
+    if staging.exists():
+        if staging.is_dir():
+            shutil.rmtree(staging)
+        else:
+            staging.unlink()
+
+    if src.is_dir():
+        shutil.copytree(src, staging)
+    else:
+        shutil.copy2(src, staging)
+
+    if verify:
+        src_manifest = _content_manifest(src)
+        staged_manifest = _content_manifest(staging)
+        if src_manifest != staged_manifest:
+            missing = sorted(set(src_manifest) - set(staged_manifest))
+            mismatched = sorted(
+                rel
+                for rel in set(src_manifest) & set(staged_manifest)
+                if src_manifest[rel] != staged_manifest[rel]
+            )
+            raise SidecarCopyVerificationError(
+                f"copy_bytes: post-copy verification of {dst!s} (staged at "
+                f"{staging!s}) did not match source {src!s}. "
+                f"missing={missing or 'none'} mismatched={mismatched or 'none'}. "
+                f"The staged copy is left in place, unrenamed, for forensic "
+                f"inspection."
+            )
+
+    if dst.exists():
+        # Only reachable when overwrite=True (the exists-check above already
+        # refused otherwise).
+        if dst.is_dir():
+            shutil.rmtree(dst)
+        else:
+            dst.unlink()
+
+    staging.rename(dst)
+    return dst
 
 
 # ---------------------------------------------------------------------------
@@ -1290,6 +1532,144 @@ def recover_interrupted_replace(final_dir: Path) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Critic-sidecar writer consolidation (issue #1086)
+# ---------------------------------------------------------------------------
+
+
+def write_critic_review_dir(
+    version_dir: Path,
+    suffix: str,
+    review: "Review",
+    *,
+    findings_json: Optional[Dict[str, Any]] = None,
+    atomic: bool = True,
+    regenerate: bool = True,
+) -> Path:
+    """Write a critic's ``<version_dir>.<suffix>/_review.json`` (+ optional
+    ``_findings.json``) sidecar — the single canonical implementation the
+    seven pre-#1086 ``write_review_dir()``/``_write_review_dir()`` copies
+    now share (``pending_marker``, ``numeric_consistency``,
+    ``hyperlink_resolver``, ``figure_content``, ``image_accessibility``,
+    ``citation_coverage``, ``claim_figure_grounding``).
+
+    Every one of the seven did the same three things in the same order:
+    compute the sibling dir name, build a typed ``Review`` via that
+    critic's own ``to_review(...)`` call (whose keyword arguments differ
+    slightly per critic — e.g. ``figure_content`` passes ``model=``,
+    ``numeric_consistency`` passes ``blocking=``), then write it (and, for
+    three of the seven, a ``_findings.json`` companion built from that
+    critic's own ``result.to_json()``) into the sibling dir. This function
+    takes the already-built ``review`` (and, optionally, an already-built
+    ``findings_json`` payload) rather than a critic-specific ``result``
+    object, so it stays decoupled from each critic's
+    ``to_review()``/``to_json()`` call shape — every call site keeps its
+    own ``to_review(...)``/``to_json()`` call locally and passes the
+    outputs in here.
+
+    Parameters
+    ----------
+    version_dir:
+        The version directory being reviewed, e.g.
+        ``Path("output/acme-seed.1")``. The sibling dir is computed as
+        ``version_dir.parent / f"{version_dir.name}.{suffix}"`` — the
+        same ``<version_dir>.<tag>/`` shape
+        :func:`anvil.lib.critics.discover_critics` recognizes without
+        code changes.
+    suffix:
+        The critic's sibling-dir tag, e.g. ``"hyperlinks"``,
+        ``"citations"``, ``"claim-figure-grounding"`` — matches each
+        critic's own ``*_SUFFIX`` / ``CRITIC_ID`` constant.
+    review:
+        An already-built :class:`anvil.lib.review_schema.Review` instance
+        — or any duck-typed object exposing ``model_dump(mode="json")``,
+        so this module does not need to import ``review_schema`` (and
+        transitively ``pydantic``) at runtime. Dumped via
+        ``json.dumps(review.model_dump(mode="json"), indent=2) + "\\n"``
+        — byte-identical to every pre-#1086 copy's own dump: five of the
+        seven already used exactly this call; the other two
+        (``citation_coverage``, ``claim_figure_grounding``) used
+        ``review.model_dump_json(indent=2)`` instead, which is
+        byte-identical to ``json.dumps(model_dump(mode="json"), ...)``
+        for the ASCII-only content this schema ever carries (verified by
+        round-trip diff in the #1086 PR body — pydantic's own JSON
+        encoder and stdlib ``json.dumps`` agree on key order, separators,
+        and escaping for this payload shape).
+    findings_json:
+        Optional structured findings payload (a plain ``dict``,
+        typically the critic's own ``result.to_json()``). When given, an
+        additional ``_findings.json`` companion is written alongside
+        ``_review.json`` — the three-of-seven companion-file convention
+        (``image_accessibility``, ``citation_coverage``,
+        ``claim_figure_grounding``). When omitted (the default), only
+        ``_review.json`` is written — the four-of-seven single-file
+        convention (``pending_marker``, ``numeric_consistency``,
+        ``hyperlink_resolver``, ``figure_content``).
+    atomic:
+        When ``True`` (the default), stages every file into a leading-dot
+        sibling via :func:`staged_sidecar` and lands the complete set with
+        a single atomic ``Path.rename`` (issue #350) — crash-safe: a
+        mid-write interrupt never leaves a partially-written sidecar at
+        the final name. Two of the seven pre-#1086 copies
+        (``pending_marker``, ``numeric_consistency``) already used this
+        path; the other five (``hyperlink_resolver``, ``figure_content``,
+        ``image_accessibility``, ``citation_coverage``,
+        ``claim_figure_grounding``) gain crash-safety as a deliberate,
+        called-out side effect of the #1086 consolidation — every
+        consuming command's own markdown doc already mandates
+        ``staged_sidecar`` for these critics, so this closes a doc/code
+        drift, not just a dedup. ``atomic=False`` reproduces the old
+        plain ``mkdir(parents=True, exist_ok=...)`` + ``write_text``
+        shape; no call site in this repo passes it as of #1086.
+    regenerate:
+        When ``True`` (the default), an existing sibling dir from a prior
+        run of THIS critic on THIS version is replaced by the fresh
+        write — the deterministic-critic-rerun carve-out to the
+        sidecar-immutability convention that ``pending_marker`` and
+        ``numeric_consistency`` already documented pre-#1086 (a later
+        deterministic pass supersedes an earlier one; the five
+        previously-non-atomic writers had the same effective behavior via
+        their ``exist_ok=True`` overwrite-in-place). Under
+        ``atomic=True`` this also sweeps any leftover staging dir from a
+        prior interrupted run (:func:`cleanup_one_staging`, issue #376)
+        before staging fresh. When ``False``, a pre-existing sibling dir
+        is left alone under ``atomic=False`` (mirroring
+        ``exist_ok=False``) or raises :class:`FileExistsError` under
+        ``atomic=True`` (:func:`staged_sidecar`'s own immutability
+        default) — one-shot semantics for a caller that wants a rerun to
+        be a hard error rather than a silent overwrite.
+
+    Returns
+    -------
+    The path to the written ``_review.json`` (NOT the sibling dir itself)
+    — matches every pre-#1086 copy's return contract.
+    """
+    version_dir = Path(version_dir)
+    final = version_dir.parent / f"{version_dir.name}.{suffix}"
+
+    files: Dict[str, str] = {
+        "_review.json": json.dumps(review.model_dump(mode="json"), indent=2)
+        + "\n"
+    }
+    if findings_json is not None:
+        files["_findings.json"] = json.dumps(findings_json, indent=2) + "\n"
+
+    if atomic:
+        # Per-critic entry-step sweep (parallel-safe; issue #376).
+        cleanup_one_staging(final)
+        if regenerate and final.exists():
+            shutil.rmtree(final)
+        with staged_sidecar(final, required_files=list(files.keys())) as staging:
+            for name, text in files.items():
+                (staging / name).write_text(text, encoding="utf-8")
+    else:
+        final.mkdir(parents=True, exist_ok=regenerate)
+        for name, text in files.items():
+            (final / name).write_text(text, encoding="utf-8")
+
+    return final / "_review.json"
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point (non-Python-driver sessions — issue #645)
 # ---------------------------------------------------------------------------
 #
@@ -1436,6 +1816,39 @@ def _build_cli_parser():
         help="The intended final sidecar path, e.g. output/thread.3.review",
     )
 
+    p_copy = sub.add_parser(
+        "copy",
+        help=(
+            "Byte-safe copy of SRC to DST (issue #1017) — a single file or "
+            "a directory tree, staged then atomically renamed into place, "
+            "with post-copy byte-identity verification by default. The "
+            "sanctioned binary/bulk-asset channel for a session whose "
+            "editing tool is text-only (compile logs, carried-forward "
+            "figures/, compiled PDFs)."
+        ),
+    )
+    p_copy.add_argument("src", help="Source path (file or directory). Must exist.")
+    p_copy.add_argument(
+        "dst",
+        help=(
+            "Destination path. Refused if it already exists unless --force "
+            "is given."
+        ),
+    )
+    p_copy.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite DST if it already exists (default: refuse).",
+    )
+    p_copy.add_argument(
+        "--no-verify",
+        action="store_true",
+        help=(
+            "Skip the post-copy byte-identity verification (default: "
+            "verify)."
+        ),
+    )
+
     return p
 
 
@@ -1470,6 +1883,13 @@ def main(argv: "Sequence[str] | None" = None) -> int:
       Restores FINAL_DIR when a prior ``replace``'s session died before
       ``commit-replace``; drops a provably-redundant backup when the swap
       already landed; leaves an ambiguous backup alone. Exit ``0`` always.
+    - ``copy SRC DST [--force] [--no-verify]`` — byte-safe copy of a file
+      or directory tree (issue #1017), staged then atomically renamed into
+      DST, with post-copy byte-identity verification by default. Exit
+      ``0`` on success (prints DST); ``3`` if SRC is missing or DST
+      already exists without ``--force``; ``1`` if ``--no-verify`` was NOT
+      passed and post-copy verification finds a mismatch (staged copy left
+      unrenamed for forensics).
 
     Exit-code contract mirrors the sibling ``anvil/lib/*.py`` CLIs: ``0``
     clean, ``1`` a contract failure the caller must act on
@@ -1480,7 +1900,8 @@ def main(argv: "Sequence[str] | None" = None) -> int:
 
     parser = _build_cli_parser()
     args = parser.parse_args(argv)
-    final_dir = Path(args.final_dir)
+    # `copy` takes src/dst, not final_dir — every other subcommand does.
+    final_dir = Path(args.final_dir) if args.subcommand != "copy" else None
 
     if args.subcommand == "stage":
         try:
@@ -1563,6 +1984,23 @@ def main(argv: "Sequence[str] | None" = None) -> int:
             )
         else:
             print(f"nothing to recover for {final_dir}")
+        return 0
+
+    if args.subcommand == "copy":
+        try:
+            landed = copy_bytes(
+                Path(args.src),
+                Path(args.dst),
+                overwrite=args.force,
+                verify=not args.no_verify,
+            )
+        except (FileNotFoundError, FileExistsError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 3
+        except SidecarCopyVerificationError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(str(landed))
         return 0
 
     # argparse's required=True on the subparser guarantees we never fall

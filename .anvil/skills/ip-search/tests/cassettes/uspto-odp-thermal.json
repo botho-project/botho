@@ -1,0 +1,42 @@
+{
+  "count": 2,
+  "patentFileWrapperDataBag": [
+    {
+      "applicationNumberText": "16123456",
+      "applicationMetaData": {
+        "inventionTitle": "Passive thermal compensation network for a bridge transducer",
+        "patentNumber": "10555111",
+        "grantDate": "2020-02-04",
+        "filingDate": "2018-05-30",
+        "abstractText": "A passive compensation network drives a piezoresistive bridge from a split excitation path and sums a dummy half-bridge tap into the bridge output, holding accuracy across an automotive temperature range without digital calibration.",
+        "inventorBag": [
+          {
+            "inventorNameText": "Lena Vasquez"
+          }
+        ],
+        "applicantBag": [
+          {
+            "applicantNameText": "Corvid Instruments Corp"
+          }
+        ]
+      }
+    },
+    {
+      "applicationNumberText": "17222333",
+      "applicationMetaData": {
+        "inventionTitle": "Ratio-resistor trimmed excitation supply",
+        "earliestPublicationNumber": "20220123456",
+        "earliestPublicationDate": "2022-04-21",
+        "filingDate": "2021-04-06",
+        "abstractText": "An excitation supply for a resistive bridge uses a single ratio resistor to set the balance between a constant-current leg and a temperature-proportional leg.",
+        "inventorBag": [
+          {
+            "firstName": "Tomas",
+            "lastName": "Bergstrom"
+          }
+        ],
+        "applicantBag": []
+      }
+    }
+  ]
+}

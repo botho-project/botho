@@ -94,6 +94,12 @@ The `anvil-uspto.cls` LaTeX class and spec scaffold are reused from `anvil:ip-us
    - For each rendered figure in `<thread>.{N}/drawings/*.pdf`, concatenate (via `pdfunite` or equivalent) in figure order.
    - For stub-only figures (no rendered PDF), include a placeholder page noting "FIG. N — pending illustrator. See drawing-descriptions.md."
    - If ALL figures are stubs (no PDFs at all), emit a WARNING in the package README: "All drawings are stubs pending illustrator. Provisional filing is permissible without formal drawings, but a thin drawing set weakens the §112(a) disclosure the conversion will rely on." This is a warning, NOT a blocker — finalize still produces the package, and counsel decides whether to wait.
+
+6b. **Visual QA check** (issue #982, warning only — NOT a gate):
+   - If `<thread>.{N}/drawings/` contains at least one rendered, non-stub figure (`fig-*.pdf`), check whether a pixels-side visual pass ever ran on this version: does `<thread>.{N}.vision/_review.json` exist?
+   - **If rendered figures exist AND no `<thread>.{N}.vision/_review.json` is present**, emit a WARNING in the package README (added to the `## Warnings` section) and in `_manifest.json`'s `warnings` array: `"N rendered figure(s) (fig-1, fig-3, ...) were never visually verified — no ip-uspto-provisional-vision pass found (<thread>.{N}.vision/_review.json absent). The review critic's Dimension-4 check and TikZ mode's own compile success are text/compile-level signals ONLY: they confirm every \refnum{N} textually round-trips and the figure compiled, NOT that the rendered layout is free of label/lead-line collisions, struck-through numerals, or clipped text. Run ip-uspto-provisional-vision <thread>, or have counsel/the inventor visually review drawings.pdf, before relying on these drawings' §119(e) disclosure scope."` This mirrors the existing stub-drawings warning pattern: a non-blocking signal in the counsel-facing artifacts, not a refusal to assemble the package — counsel decides whether to wait for a visual pass.
+   - **If a `<thread>.{N}.vision/_review.json` exists**, no warning is emitted regardless of the `<thread>.{N}/_progress.json` `phases.figures.metadata.visual_qa` marker's value — the vision sibling's presence is the load-bearing evidence a pixels-side pass actually happened; the figurer's own `visual_qa: "not-run"` marker is never overwritten (it is a static self-report from the figurer, not a live status), so finalize checks the vision sibling directly rather than re-reading the figurer's marker.
+   - **If ALL figures are stubs** (the step-6 all-stub case), this check is a no-op — there is nothing rendered to visually verify, and the step-6 stub warning already covers that thread's disclosure-thinness risk.
 7. **Copy the claim-seed IFF present**: if `<thread>.{N}/claims.tex` exists, copy it verbatim into the staging dir as `claims.tex`. If it does not exist, write NO `claims.tex` (and it is absent from the required-files manifest per step 3).
 8. **Generate `cover-sheet-placeholder.txt`** — the **provisional** cover sheet (USPTO form **SB/16**, NOT the ADS / SB/14):
 
@@ -214,6 +220,11 @@ The `anvil-uspto.cls` LaTeX class and spec scaffold are reused from `anvil:ip-us
 
     - <conditional> All drawings are stubs pending illustrator. A thin drawing set weakens the §112(a)
       disclosure the conversion relies on.
+    - <conditional> N rendered figure(s) were never visually verified — no ip-uspto-provisional-vision pass
+      found. Numeral-drift verification (review critic Dim 4) and TikZ compile success are NOT
+      visual verification; they cannot catch collided/overlapping labels or clipped, struck-through
+      numerals. Run ip-uspto-provisional-vision <thread>, or visually review drawings.pdf, before relying
+      on these figures' §119(e) disclosure scope. (issue #982)
     - <conditional> Audit had N major findings (non-blocker); review counsel_memo.md "Open enablement gaps".
     - This package is a drafting aid. Final responsibility for the filing decision rests with the licensed
       human attorney/counsel.
@@ -237,11 +248,12 @@ The `anvil-uspto.cls` LaTeX class and spec scaffold are reused from `anvil:ip-us
       "claim_seed_present": false,
       "warnings": [],
       "stub_drawings_count": 0,
+      "rendered_drawings_visually_verified": true,
       "audit_passed": true
     }
     ```
 
-    When a claim-seed exists, add its row and set `"claim_seed_present": true`. Note there are **no** `abstract.txt` or `inventorship-attestation.md` rows — the provisional package has neither.
+    When a claim-seed exists, add its row and set `"claim_seed_present": true`. Note there are **no** `abstract.txt` or `inventorship-attestation.md` rows — the provisional package has neither. `"rendered_drawings_visually_verified"` (issue #982) is `true` when either no figures are rendered (stub-only — nothing to verify) or `<thread>.{N}.vision/_review.json` exists for the finalized version; it is `false` when step 6b's visual-QA check found rendered figures with no vision pass — in that case the step-6b warning string is also appended to the `warnings` array.
 12. **Update `_progress.json`** inside the staging dir: `phases.finalize.state = done`, `phases.finalize.completed = <ISO>`. This is the LAST file write before the context manager exits — the manifest verification + atomic rename at exit (issue #350) requires `_progress.json` to be present. Then **exit the `staged_sidecar` context block**: the primitive verifies every name in the required-files manifest (the base set, plus `claims.tex` only when a claim-seed exists, plus `_progress.json`) exists in the staging dir, then atomically renames `.<thread>.counsel.tmp/` → `<thread>.counsel/`. The final-named dir only ever exists in **complete** form — a partial counsel package can never reach a human attorney.
 13. **Write the authoritative filing-record `<thread>/_filing.json`** (conversion linkage, issue #501) AFTER the package atomic-rename lands. This is the structured, machine-readable producer copy of the data the eventual `anvil:ip-uspto` non-provisional conversion reads into its BRIEF `converts_provisional` block — replacing the prior "save these in the thread root" prose instruction (step 5 of the README) with a real file the consumer can parse:
 
@@ -267,6 +279,7 @@ The `anvil-uspto.cls` LaTeX class and spec scaffold are reused from `anvil:ip-us
 - **Gate failure** (audit not done or audit not passed) — exit with a `BLOCKED` notice + remedial action. No partial package.
 - **LaTeX build failure** — exit with build log written but no package (the staged-sidecar manifest check enforces "all-or-nothing"). No partial package.
 - **Stub drawings present** — emit warning, produce package with placeholder drawings pages. Counsel decides whether to file as-is.
+- **Rendered drawings never visually verified** (issue #982) — emit warning (step 6b), produce the package normally. This is NOT a gate: a numeral-drift-clean, uninspected TikZ render is a valid (if riskier) provisional posture, and finalize's job is to surface the risk to counsel, not to block on it.
 
 ## Idempotence
 

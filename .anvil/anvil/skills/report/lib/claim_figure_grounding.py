@@ -164,6 +164,7 @@ from anvil.lib.review_schema import (
     Review,
     Score,
 )
+from anvil.lib.sidecar import write_critic_review_dir
 
 
 # ---------------------------------------------------------------------------
@@ -1061,25 +1062,28 @@ def scan_version_dir(
 def _write_review_dir(version_dir: Path, result: GroundingResult) -> Path:
     """Write ``<version_dir>.claim-figure-grounding/_review.json``.
 
-    Mirrors the convention used by
-    :func:`anvil.skills.memo.lib.citation_coverage._write_review_dir`
-    and :func:`anvil.skills.memo.lib.hyperlink_resolver.write_review_dir`:
-    a typed ``_review.json`` for the critics aggregator plus a
-    ``_findings.json`` companion with the structured payload.
+    Delegates to the shared :func:`anvil.lib.sidecar.write_critic_review_dir`
+    (issue #1086): a typed ``_review.json`` for the critics aggregator
+    plus a ``_findings.json`` companion with the structured payload,
+    staged + atomically renamed via ``staged_sidecar`` (issue #350) — a
+    mid-write interrupt never leaves a partial
+    ``<version_dir>.claim-figure-grounding/`` at the final name. This is
+    a behavior change from the pre-#1086 plain ``mkdir`` + ``write_text``
+    shape (called out explicitly in the #1086 PR body); the consuming
+    ``report-claim-figure-grounding.md`` doc already mandated
+    ``staged_sidecar`` for this critic (see its own "Atomicity" section),
+    so the change closes a doc/code drift rather than introducing a new
+    contract.
 
     Returns the path to the written ``_review.json``.
     """
-    out_dir = version_dir.parent / f"{version_dir.name}.{GROUNDING_SUFFIX}"
-    out_dir.mkdir(parents=True, exist_ok=True)
     review = result.to_review(version_dir=version_dir.name)
-    review_path = out_dir / "_review.json"
-    review_path.write_text(
-        review.model_dump_json(indent=2) + "\n", encoding="utf-8"
+    return write_critic_review_dir(
+        version_dir,
+        GROUNDING_SUFFIX,
+        review,
+        findings_json=result.to_json(),
     )
-    (out_dir / "_findings.json").write_text(
-        json.dumps(result.to_json(), indent=2) + "\n", encoding="utf-8"
-    )
-    return review_path
 
 
 def _cli_main(argv: Optional[List[str]] = None) -> int:

@@ -26,7 +26,6 @@ from typing import List, Optional, Union
 # File suffixes this v1 ingester knows how to extract prose from.
 MARKDOWN_SUFFIXES = {".md", ".markdown", ".mdx"}
 HTML_SUFFIXES = {".html", ".htm"}
-PLAIN_TEXT_SUFFIXES = {".txt"}
 
 # Explicitly out of scope for v1 (issue #898 curator scope note): source
 # files whose prose lives in string literals require a JSX/TS-aware
@@ -226,7 +225,6 @@ def ingest_inputs(inputs: List[str]) -> List[IngestedItem]:
 __all__ = [
     "MARKDOWN_SUFFIXES",
     "HTML_SUFFIXES",
-    "PLAIN_TEXT_SUFFIXES",
     "UNSUPPORTED_SUFFIXES",
     "UnsupportedInputError",
     "IngestedItem",

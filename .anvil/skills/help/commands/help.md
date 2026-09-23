@@ -58,8 +58,11 @@ print(text)
 1. `.anvil/install-metadata.json` — authoritative `installed_skills`,
    `anvil_version`, per-skill `skill_versions`. Parsed defensively; a
    missing/malformed manifest is a soft-fail.
-2. `.claude/skills/anvil-*/` — fallback skill enumeration (degraded mode,
-   noted in output) when the manifest is unavailable.
+2. `.claude/skills/anvil-*/` and `.agents/skills/anvil-*/` — fallback skill
+   enumeration (degraded mode, noted in output) when the manifest is
+   unavailable. The former is Claude Code's shim glob, the latter Codex
+   CLI's (issue #1004); both are unioned so a Codex-only install still
+   reports accurately.
 3. `.anvil/skills/<name>/SKILL.md` frontmatter — per-skill description +
    artifact-vs-utility classification.
 4. `.anvil/skills/<name>/commands/*.md` — the real command set (the source
@@ -93,8 +96,9 @@ print(text)
 ## Failure modes
 
 - **Missing / malformed manifest** → degraded mode: the skill list is
-  recovered from the `.claude/skills/anvil-*/` shim glob and the output says
-  so; version info is omitted. Not a hard error.
+  recovered from the `.claude/skills/anvil-*/` and `.agents/skills/anvil-*/`
+  shim globs and the output says so; version info is omitted. Not a hard
+  error.
 - **`<skill>` not installed** → an explicit not-installed message listing
   what *is* installed. No crash, no silent upstream read.
 - **A `rubric.md` whose Total line doesn't match the expected pattern** →

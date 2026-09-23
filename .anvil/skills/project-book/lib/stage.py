@@ -38,6 +38,11 @@ CHAPTERS_FOREIGN = "foreign"
 # placeholder apart from a real chapter.
 PLACEHOLDER_MARKER = "% anvil:project-book placeholder chapter"
 
+# Anchor LaTeX uses to open the document body; the relocation point for a
+# chapter's ``\title{...}`` when ``relocate_title`` is set (issue #1205).
+_BEGIN_DOCUMENT_RE = re.compile(r"\\begin\{document\}")
+_TITLE_OPEN_RE = re.compile(r"\\title\s*\{")
+
 
 @dataclass
 class StageResult:
@@ -85,6 +90,99 @@ def placeholder_chapter(slug: str) -> str:
     )
 
 
+def _find_matching_brace(text: str, open_brace_idx: int) -> int:
+    """Return the index of the ``}`` matching the ``{`` at ``open_brace_idx``.
+
+    Walks forward tracking nesting depth so a ``\\title{Foo \\textbf{Bar}}``
+    argument with nested braces resolves correctly. Returns ``-1`` when no
+    matching close brace is found (unbalanced input — the caller treats
+    this as "leave the text untouched" rather than raising).
+    """
+    depth = 0
+    for i in range(open_brace_idx, len(text)):
+        char = text[i]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
+
+
+def relocate_title_after_begin_document(text: str) -> str:
+    """Move a chapter's ``\\title{...}`` from the preamble to just after
+    ``\\begin{document}`` (issue #1205).
+
+    Used when the consumer's master document assembles chapters via
+    LaTeX's ``docmute`` package, which discards a standalone chapter's
+    preamble — including its ``\\title{...}`` — up to
+    ``\\begin{document}``. Relocating the title past that anchor lets it
+    survive ``docmute``'s preamble discard.
+
+    Byte-preserving over everything except the relocated ``\\title{...}``
+    itself, which is reinserted verbatim immediately after
+    ``\\begin{document}``. When ``\\title{...}`` occupies its own whole
+    line, that line is removed including its trailing newline so no blank
+    line is left behind; when it shares a line with other preamble
+    content, only the ``\\title{...}`` text itself is removed and the
+    line's own newline stays put. Handles a ``\\title`` argument that
+    spans multiple lines or contains nested braces via explicit
+    brace-depth matching (not a regex on the argument body).
+
+    No-ops (returns ``text`` unchanged) when there is no
+    ``\\begin{document}`` anchor, no ``\\title{...}`` in the preamble, or
+    the ``\\title{...}`` brace is unbalanced — never raises.
+    """
+    begin_match = _BEGIN_DOCUMENT_RE.search(text)
+    if begin_match is None:
+        return text
+
+    preamble = text[: begin_match.start()]
+    rest = text[begin_match.start() :]
+
+    title_match = _TITLE_OPEN_RE.search(preamble)
+    if title_match is None:
+        return text
+
+    open_brace_idx = title_match.end() - 1
+    close_brace_idx = _find_matching_brace(preamble, open_brace_idx)
+    if close_brace_idx == -1:
+        return text
+
+    title_start = title_match.start()
+    title_end = close_brace_idx + 1
+    title_text = preamble[title_start:title_end]
+
+    # Extend the removal span to swallow a purely-whitespace line prefix
+    # (so no dangling indentation is left behind) and exactly one trailing
+    # newline (so no blank line is left behind), without touching any
+    # other byte in the preamble.
+    #
+    # The trailing newline is swallowed ONLY in the whole-line-removal
+    # case — when nothing but whitespace precedes ``\title{...}`` on its
+    # line AND nothing but whitespace follows it before the newline. When
+    # the title shares its line with other preamble content (a
+    # ``\newcommand`` before it, a ``%`` comment prefix, …), that line's
+    # own newline is left intact: swallowing it would merge the following
+    # line onto the remainder, which silently corrupts the preamble and,
+    # for a commented-out title, comments out the very
+    # ``\begin{document}`` anchor this function relies on.
+    line_start = preamble.rfind("\n", 0, title_start) + 1
+    whole_line = preamble[line_start:title_start].strip() == ""
+    remove_start = line_start if whole_line else title_start
+    trailing = preamble[title_end:]
+    newline_match = re.match(r"[ \t]*\n", trailing) if whole_line else None
+    remove_end = title_end + newline_match.end() if newline_match else title_end
+
+    new_preamble = preamble[:remove_start] + preamble[remove_end:]
+
+    begin_doc_end = _BEGIN_DOCUMENT_RE.match(rest).end()
+    new_rest = rest[:begin_doc_end] + "\n" + title_text + rest[begin_doc_end:]
+
+    return new_preamble + new_rest
+
+
 def inspect_chapters_dir(chapters_dir: Path) -> str:
     """Classify the chapters dir for the marker guard.
 
@@ -108,12 +206,26 @@ def inspect_chapters_dir(chapters_dir: Path) -> str:
     return CHAPTERS_FOREIGN
 
 
-def stage_chapters(chapters_dir: Path, threads: List[ThreadInfo]) -> StageResult:
+def stage_chapters(
+    chapters_dir: Path,
+    threads: List[ThreadInfo],
+    *,
+    relocate_title: bool = False,
+) -> StageResult:
     """Marker-guarded blow-away rebuild of ``chapters_dir``.
 
     Writes one ``<slug>.tex`` per thread (in list order), copying the
     resolved chapter file or generating a placeholder. Refuses (no
     deletion) when the chapters dir is non-empty and unmarked.
+
+    ``relocate_title`` (issue #1205, default ``False``): when ``True``,
+    a real (non-placeholder) chapter is staged via a read-transform-write
+    that moves its ``\\title{...}`` past ``\\begin{document}`` instead of
+    the plain ``shutil.copy2`` byte-copy — see
+    :func:`relocate_title_after_begin_document`. Placeholder chapters
+    (which have no preamble at all) are never transformed. When
+    ``False`` (the default), staging is unchanged from before this flag
+    existed: an exact ``shutil.copy2``.
     """
     chapters_dir = Path(chapters_dir)
     result = StageResult(chapters_dir=chapters_dir)
@@ -151,6 +263,11 @@ def stage_chapters(chapters_dir: Path, threads: List[ThreadInfo]) -> StageResult
         if info.needs_placeholder or info.chapter_source is None:
             target.write_text(placeholder_chapter(info.slug), encoding="utf-8")
             result.placeholders.append(info.slug)
+        elif relocate_title:
+            source_text = info.chapter_source.read_text(encoding="utf-8")
+            target.write_text(
+                relocate_title_after_begin_document(source_text), encoding="utf-8"
+            )
         else:
             shutil.copy2(info.chapter_source, target)
         result.staged.append(target)
@@ -224,6 +341,7 @@ __all__ = [
     "gitignore_suggestion",
     "inspect_chapters_dir",
     "placeholder_chapter",
+    "relocate_title_after_begin_document",
     "slug_title",
     "stage_chapters",
 ]

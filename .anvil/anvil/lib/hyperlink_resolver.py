@@ -150,6 +150,7 @@ from anvil.lib.cross_thread_refs import (
 )
 from anvil.lib.project_brief import load_project_brief
 from anvil.lib.project_discovery import discover_thread_root
+from anvil.lib.sidecar import write_critic_review_dir
 
 
 # ---------------------------------------------------------------------------
@@ -960,8 +961,16 @@ def write_review_dir(
 ) -> Path:
     """Write ``<version_dir>.hyperlinks/_review.json`` for auto-discovery.
 
-    Creates the sibling critic dir if needed and writes the canonical
-    review JSON. Returns the path to the written ``_review.json``.
+    Delegates to the shared :func:`anvil.lib.sidecar.write_critic_review_dir`
+    (issue #1086), which stages + atomically renames the sidecar via
+    ``staged_sidecar`` (issue #350) — a mid-write interrupt never leaves a
+    partial ``<version_dir>.hyperlinks/`` at the final name. This is a
+    behavior change from the pre-#1086 plain ``mkdir`` + ``write_text``
+    shape (called out explicitly in the #1086 PR body); every consuming
+    command's own markdown doc (e.g. ``memo-hyperlinks.md``) already
+    mandated ``staged_sidecar`` for this critic, so the change closes a
+    doc/code drift rather than introducing a new contract. Returns the
+    path to the written ``_review.json``.
 
     The naming convention (``<version_dir>.hyperlinks/``) is the
     coordination point with the Phase 3 citation-coverage critic
@@ -970,15 +979,8 @@ def write_review_dir(
     the ``<version_dir>.<tag>/`` pattern without code changes.
     """
     version_dir = Path(version_dir)
-    sibling = version_dir.parent / f"{version_dir.name}.{HYPERLINKS_SUFFIX}"
-    sibling.mkdir(parents=True, exist_ok=True)
     review = result.to_review(version_dir=version_dir.name, critic_id=critic_id)
-    out = sibling / "_review.json"
-    out.write_text(
-        json.dumps(review.model_dump(mode="json"), indent=2) + "\n",
-        encoding="utf-8",
-    )
-    return out
+    return write_critic_review_dir(version_dir, HYPERLINKS_SUFFIX, review)
 
 
 # ---------------------------------------------------------------------------

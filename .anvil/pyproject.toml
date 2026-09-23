@@ -19,7 +19,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "anvil"
-version = "0.10.1"
+version = "0.11.6"
 description = "AI-orchestrated artifact creation using the filesystem as the coordination layer (consumer-side install)."
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -54,6 +54,15 @@ dependencies = [
 auto_shrink = [
     "Pillow>=12.3.0",
     "numpy>=1.24",
+]
+# `anvil:deck` deck-imagegen JPEG/WebP-to-PNG transcode (issue #564).
+# Real image backends (Flux, DALL-E, SDXL, etc.) often default to JPEG or
+# WebP rather than PNG; the deck-imagegen dispatcher transcodes those to PNG
+# via Pillow before writing to disk. PNG-native adapters need no extras —
+# this only fires when the adapter actually returns non-PNG bytes. Pillow
+# floor matches `[auto_shrink]` — see #744.
+deck_imagegen = [
+    "Pillow>=12.3.0",
 ]
 
 [tool.uv]

@@ -53,6 +53,8 @@ from xml.etree import ElementTree as ET
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from anvil.lib.atomic_write import atomic_write_text
+
 
 # ---------------------------------------------------------------------------
 # Types
@@ -304,9 +306,7 @@ def _cache_write(identifier: Identifier, record: BibRecord) -> None:
         return
     path = _cache_path(identifier)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(record.model_dump_json(), encoding="utf-8")
-    os.replace(tmp, path)
+    atomic_write_text(path, record.model_dump_json())
 
 
 # ---------------------------------------------------------------------------

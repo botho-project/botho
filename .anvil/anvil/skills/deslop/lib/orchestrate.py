@@ -75,11 +75,6 @@ from .no_fabrication import NoFabricationResult, diff_no_fabrication
 # as a fixed constant rather than a venue-pinned rubric overlay.
 RHETORICAL_ECONOMY_DIM = "rhetorical_economy"
 VOICE_ADHERENCE_DIM = "voice_adherence"
-DESLOP_DIMENSIONS: Tuple[Tuple[str, int], ...] = (
-    (RHETORICAL_ECONOMY_DIM, 10),
-    (VOICE_ADHERENCE_DIM, 10),
-)
-DESLOP_MAX_TOTAL = sum(max_ for _, max_ in DESLOP_DIMENSIONS)  # 20
 
 # 16/20 = 80%, matching essay's 35/44 (~80%) general-tier advance bar. This
 # is the default when BOTH dims are active (a critic scored voice_adherence
@@ -481,8 +476,6 @@ def emit(
 __all__ = [
     "RHETORICAL_ECONOMY_DIM",
     "VOICE_ADHERENCE_DIM",
-    "DESLOP_DIMENSIONS",
-    "DESLOP_MAX_TOTAL",
     "DEFAULT_THRESHOLD",
     "RHETORICAL_ECONOMY_ONLY_THRESHOLD",
     "DEFAULT_MAX_ITERATIONS",

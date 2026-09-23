@@ -49,11 +49,15 @@ repo.
    Parsed **defensively** — the manifest is hand-emitted JSON via a bash
    heredoc, not schema-validated, so a missing or malformed manifest is a
    **soft-fail**, not a hard error.
-2. **`.claude/skills/anvil-*/`** (fallback) — the registration shims. When
-   the manifest is absent (very old pre-manifest installs) or unparseable,
-   the skill list is recovered by globbing these directories and stripping
-   the `anvil-` prefix. The command's output notes the **degraded mode**
-   (no version info, list is a directory scan) so the reader knows.
+2. **`.claude/skills/anvil-*/`** and **`.agents/skills/anvil-*/`** (fallback)
+   — the registration shims. The former is Claude Code's; the latter is
+   Codex CLI's (issue #1004, produced by `write_codex_shim()` in
+   `install-anvil.sh` since #1003). When the manifest is absent (very old
+   pre-manifest installs) or unparseable, the skill list is recovered by
+   globbing **both** directories and stripping the `anvil-` prefix, so a
+   Codex-only install (no `.claude/` at all) still reports accurately. The
+   command's output notes the **degraded mode** (no version info, list is a
+   directory scan) so the reader knows.
 3. **`.anvil/skills/<name>/SKILL.md`** frontmatter (`name`, `description`,
    `type`, `user-invocable`) — the per-skill one-line description shown in
    both tiers, and the signal that classifies a skill as artifact-class vs

@@ -72,7 +72,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
-from anvil.skills.report.lib.audit_flags import CriticalFlag
+from anvil.skills.report.lib.audit_flags import AuditCriticalFlag
 
 
 # --------------------------------------------------------------------------
@@ -88,15 +88,8 @@ MANIFEST_VERSION = 1
 
 # Claim-level verdict vocabulary — identical strings to the datasheet
 # skill's refs back-check (datasheet/rubric.md §"Refs back-check").
-VERDICT_VERIFIED = "VERIFIED"
-VERDICT_UNVERIFIED = "UNVERIFIED"
 VERDICT_CONTRADICTED = "CONTRADICTED"
 VERDICT_NOT_IN_REFS = "NOT-IN-REFS"
-
-#: The findings-row spelling for the escalated NOT-IN-REFS case under
-#: an active contract. Keeps the datasheet vocabulary canonical while
-#: keeping sphere's term greppable.
-VERDICT_NOT_IN_REFS_FABRICATED = "NOT-IN-REFS (FABRICATED)"
 
 # Entry-level freshness statuses (NOT claim verdicts).
 FRESHNESS_FRESH = "FRESH"
@@ -595,7 +588,7 @@ def detect_fabricated_numeric_claims(
     rows: Iterable[DataClaimRow],
     *,
     contract_active: bool,
-) -> Optional[CriticalFlag]:
+) -> Optional[AuditCriticalFlag]:
     """Detect ``audit_fabricated_numeric_claim`` (aggregated).
 
     Fires iff the data contract is **active** and at least one row
@@ -627,7 +620,7 @@ def detect_fabricated_numeric_claims(
         "Reviser MUST add the claim's source as a manifest entry "
         "under refs/data/ or remove the claim."
     )
-    return CriticalFlag(
+    return AuditCriticalFlag(
         type=CRITICAL_FLAG_AUDIT_FABRICATED_NUMERIC_CLAIM,
         justification=justification,
         originating_rows=tuple(r.row_number for r in offending),
@@ -636,7 +629,7 @@ def detect_fabricated_numeric_claims(
 
 def detect_contradicted_data_claims(
     rows: Iterable[DataClaimRow],
-) -> Optional[CriticalFlag]:
+) -> Optional[AuditCriticalFlag]:
     """Detect ``audit_contradicted_data_claim`` (aggregated).
 
     Fires iff at least one row carries verdict ``CONTRADICTED`` — a
@@ -663,7 +656,7 @@ def detect_contradicted_data_claims(
         "MUST correct the claim to match the entry or re-export the "
         "entry from its source."
     )
-    return CriticalFlag(
+    return AuditCriticalFlag(
         type=CRITICAL_FLAG_AUDIT_CONTRADICTED_DATA_CLAIM,
         justification=justification,
         originating_rows=tuple(r.row_number for r in offending),

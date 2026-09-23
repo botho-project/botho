@@ -25,7 +25,7 @@ Design notes
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
@@ -36,7 +36,6 @@ from .apply import (
     render_migrate_brief,
 )
 from .detect import (
-    ProjectInventory,
     Shape,
     inventory_project,
     _classify,
@@ -52,12 +51,8 @@ from .adopt_review import (
 from .adopt_vn import AdoptVnError, build_adopt_vn_plan
 from .enroll import EnrollError, build_enroll_plan
 from .plan import (
-    BriefMergeOp,
-    ContentRewrite,
-    DocumentPlan,
     Plan,
     PlanError,
-    Rename,
     build_plan,
 )
 from .verify import VerifyResult, verify_migration

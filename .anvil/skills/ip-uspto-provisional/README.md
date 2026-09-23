@@ -56,4 +56,4 @@ Tracked follow-ups: inventorship-lite pass; snippet-promotion of prose duplicate
 
 ## Important caveats
 
-This skill does not file anything and does not replace a licensed patent attorney. The prior-art critic only evaluates operator-supplied art. See `SKILL.md` for the full contract.
+This skill does not file anything and does not replace a licensed patent attorney. The prior-art critic only evaluates operator-supplied art; collecting that art is a separate concern — run `anvil:ip-search` to populate `<thread>/prior-art/` from a live corpus, or opt the critic into running it automatically first via `--search` / `<thread>/.anvil.json`'s `prior_art_search.auto` (off by default). See `SKILL.md` for the full contract.

@@ -30,6 +30,25 @@
 # can't collide with a same-named suite in this directory.
 #
 # Exit 0 = invariant holds; exit 1 = violation (details printed to stderr).
+#
+# NOTE for suite authors (#6194/#6241): this manifest check does NOT detect a
+# hardcoded source-tree-only subject path. If your new suite resolves a
+# subject under $REPO_ROOT, classify it before wiring it in:
+#   - Subject is SHIPPED (installed into a consumer repo, e.g. anything under
+#     defaults/.claude/, defaults/docs/, defaults/hooks/, or defaults/scripts/
+#     other than scripts/install/) -> resolve the installed path first
+#     (.claude/commands/loom/<x>, .loom/docs/<x>, .loom/hooks/<x>,
+#     .loom/scripts/<x>), falling back to the defaults/ source-tree path, so
+#     the suite genuinely runs in both layouts. Prefer a self-relative
+#     resolution (off $SCRIPT_DIR) when the subject ships alongside the test
+#     itself (see test-merge-pr-*.sh, test-sweep-experiment.sh).
+#   - Subject is SOURCE-TREE-ONLY (lives at the repo root outside defaults/,
+#     e.g. scripts/install/*.sh, scripts/install-loom.sh, scripts/loom) ->
+#     guard with `echo "SKIP: source-tree-only test, <path> not found (not
+#     shipped into an installed repo)" >&2; exit 0` rather than a hard
+#     `exit 1`/`FATAL` (see test-gitignore-guard.sh, test-loom-dispatcher.sh).
+# A suite with neither treatment silently breaks in every installed consumer
+# repo instead of running (or SKIPping) cleanly.
 
 set -euo pipefail
 
@@ -58,7 +77,20 @@ manifest_names() { # <manifest-file>
 }
 
 # --- Collect the three sets --------------------------------------------------
-mapfile -t actual_local < <(cd "$SCRIPT_DIR" && for f in test-*.sh; do [[ -e "$f" ]] && printf '%s\n' "$f"; done)
+# `mapfile` is bash 4+; this runs on developer machines and macOS ships 3.2
+# (#7751), so every bulk read below is a `while read` loop instead. The
+# actual_external loop further down already used this idiom -- these now match.
+read_into_lines() { # reads stdin, prints one non-empty line per entry
+    while IFS= read -r _rl_line; do
+        [[ -n "$_rl_line" ]] || continue
+        printf '%s\n' "$_rl_line"
+    done
+}
+
+actual_local=()
+while IFS= read -r name; do
+    actual_local+=("$name")
+done < <(cd "$SCRIPT_DIR" && for f in test-*.sh; do [[ -e "$f" ]] && printf '%s\n' "$f"; done | read_into_lines)
 actual_external=()
 for rel_dir in "${EXTERNAL_TEST_DIRS[@]}"; do
     ext_dir="$REPO_ROOT/$rel_dir"
@@ -68,9 +100,23 @@ for rel_dir in "${EXTERNAL_TEST_DIRS[@]}"; do
         actual_external+=("$rel_dir/$name")
     done < <(cd "$ext_dir" && for f in test-*.sh; do [[ -e "$f" ]] && printf '%s\n' "$f"; done)
 done
-mapfile -t actual < <(printf '%s\n' "${actual_local[@]}" "${actual_external[@]}" | sort)
-mapfile -t wired < <(manifest_names "$WIRED_MANIFEST" | sort)
-mapfile -t excluded < <(manifest_names "$EXCLUDED_MANIFEST" | sort)
+# `${arr[@]+"${arr[@]}"}` rather than a bare `"${arr[@]}"`: under `set -u`,
+# bash 3.2 treats an EMPTY indexed array's expansion as an unbound variable and
+# aborts (fixed upstream in 4.4). Both of these can legitimately be empty.
+actual=()
+while IFS= read -r name; do
+    actual+=("$name")
+done < <(printf '%s\n' ${actual_local[@]+"${actual_local[@]}"} ${actual_external[@]+"${actual_external[@]}"} | read_into_lines | sort)
+
+wired=()
+while IFS= read -r name; do
+    wired+=("$name")
+done < <(manifest_names "$WIRED_MANIFEST" | read_into_lines | sort)
+
+excluded=()
+while IFS= read -r name; do
+    excluded+=("$name")
+done < <(manifest_names "$EXCLUDED_MANIFEST" | read_into_lines | sort)
 
 # --- Every excluded entry must carry a non-empty reason ----------------------
 while IFS= read -r line; do
@@ -84,19 +130,19 @@ while IFS= read -r line; do
 done < "$EXCLUDED_MANIFEST"
 
 # --- No duplicates within either manifest ------------------------------------
-dup_wired="$(printf '%s\n' "${wired[@]}" | sort | uniq -d)"
+dup_wired="$(printf '%s\n' ${wired[@]+"${wired[@]}"} | sort | uniq -d)"
 [[ -z "$dup_wired" ]] || err "duplicate entries in ci-wired.txt: $(tr '\n' ' ' <<<"$dup_wired")"
-dup_excluded="$(printf '%s\n' "${excluded[@]}" | sort | uniq -d)"
+dup_excluded="$(printf '%s\n' ${excluded[@]+"${excluded[@]}"} | sort | uniq -d)"
 [[ -z "$dup_excluded" ]] || err "duplicate entries in ci-excluded.txt: $(tr '\n' ' ' <<<"$dup_excluded")"
 
 # --- No suite may appear in BOTH manifests -----------------------------------
-both="$(comm -12 <(printf '%s\n' "${wired[@]}") <(printf '%s\n' "${excluded[@]}"))"
+both="$(comm -12 <(printf '%s\n' ${wired[@]+"${wired[@]}"}) <(printf '%s\n' ${excluded[@]+"${excluded[@]}"}))"
 [[ -z "$both" ]] || err "suite(s) listed in BOTH manifests: $(tr '\n' ' ' <<<"$both")"
 
 # --- No manifest entry may reference a nonexistent file ----------------------
 # A `/`-containing entry is a path relative to the repo root (tests/hooks/…,
 # #4769); a bare filename is resolved against this directory as before.
-listed="$(printf '%s\n' "${wired[@]}" "${excluded[@]}" | sort -u)"
+listed="$(printf '%s\n' ${wired[@]+"${wired[@]}"} ${excluded[@]+"${excluded[@]}"} | sort -u)"
 while IFS= read -r name; do
     [[ -n "$name" ]] || continue
     if [[ "$name" == */* ]]; then
@@ -108,7 +154,7 @@ while IFS= read -r name; do
 done <<<"$listed"
 
 # --- Every actual test-*.sh must be listed in exactly one manifest -----------
-unlisted="$(comm -23 <(printf '%s\n' "${actual[@]}") <(printf '%s\n' "$listed"))"
+unlisted="$(comm -23 <(printf '%s\n' ${actual[@]+"${actual[@]}"}) <(printf '%s\n' "$listed"))"
 if [[ -n "$unlisted" ]]; then
     while IFS= read -r name; do
         [[ -n "$name" ]] || continue

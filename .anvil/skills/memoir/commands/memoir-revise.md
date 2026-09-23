@@ -82,31 +82,69 @@ combined verdict pre-check passes.
    actionable error: the operator fixes the BRIEF or removes the
    override.
 
-   **Predicate**: if `N + 1 > effective_max_iterations`, exit with the
+   **`max_iterations` counts REVISIONS, not version dirs (issue #933).**
+   `<thread>.1/` is `memoir-draft`'s output, not a revision — a draft
+   consumes no revision budget (it still occupies a version-dir slot; it
+   is simply not chargeable against the cap). Writing `<thread>.{N+1}/`
+   is revision number `N` (`v2` is revision 1, `v3` is revision 2, ...,
+   `v{N+1}` is revision `N`), so the cap is checked against `N`, not
+   `N + 1`. This corrects the original #869 predicate
+   (`N + 1 > effective_max_iterations`), which charged the free initial
+   draft against the same budget as every framework-mandated repair —
+   see issue #933 for the two canary threads (`05-quebec`, `03-garrard`)
+   that motivated the change: a chapter now gets `effective_max_iterations`
+   *revision* opportunities on top of its one free draft, so the revision
+   that fixes the last defect always has a slot to be scored, not just
+   written.
+
+   **Predicate**: if `N > effective_max_iterations`, exit with the
    **BLOCKED notice** per §"BLOCKED notice" below, writing nothing.
    Otherwise proceed to step 4.
 
-   **What happens at `iteration == max_iterations` (issue #869).** The
-   cap bounds *how many version dirs may exist*, not what a thread
-   sitting at the ceiling is worth. `metadata.iteration` equals the
-   version-dir number, so at the default `max_iterations: 4`:
+   **Pre-write budget notice (issue #933).** Before proceeding past this
+   check, when the write about to happen (`<thread>.{N+1}/`) would land
+   exactly ON the cap — i.e. `N == effective_max_iterations` — print to
+   stdout, BEFORE writing anything:
+
+   > Budget notice: writing `<thread>.{N+1}` consumes the FINAL revision
+   > slot under the current cap (`max_iterations=<cap>`). If
+   > `<thread>.{N+1}`'s critic pass does not clear all active verdicts,
+   > this thread will BLOCK with no further repair slot for the version
+   > about to be produced. Raise `max_iterations` in `<project>/BRIEF.md`
+   > now (see SKILL.md §"Iteration cap and override contract") if this
+   > chapter is trending toward needing more passes.
+
+   This is advisory, not a refusal — the write still proceeds after it.
+   The point is sequencing: the operator (or the next automated pass)
+   learns the consequence **before** the version that would exhaust the
+   budget exists, not only afterward in the step-10 completion report.
+
+   **What happens at the ceiling (issue #869, corrected by #933).** The
+   cap bounds *how many revisions a thread may consume*, not what a
+   thread sitting at the ceiling is worth. `metadata.iteration` still
+   equals the version-dir number (the framework-wide convention,
+   `anvil/lib/snippets/progress.md`), but the number compared against
+   `max_iterations` is `iteration - 1` (revisions consumed — the `v1`
+   draft is never counted). At the default `max_iterations: 4`:
 
    | Latest version on disk | `memoir-revise` behavior |
    |---|---|
-   | `<thread>.1/` … `<thread>.3/` | **proceeds** — `N+1 <= 4`; writes `<thread>.{N+1}/` |
-   | `<thread>.4/`, combined verdict clean | **terminates `AUDITED` at step 2** — the cap check at step 3 is never reached |
-   | `<thread>.4/`, a critic still blocks | **refuses** — `5 > 4`; prints the BLOCKED notice and writes nothing |
+   | `<thread>.1/` (draft) … `<thread>.4/` (revisions 1-3) | **proceeds** — `N <= 4`; writes `<thread>.{N+1}/`. Writing `<thread>.5/` from `<thread>.4/` fires the pre-write budget notice above (`N == 4 == effective_max_iterations`). |
+   | `<thread>.5/` (revision 4 — the final one), combined verdict clean | **terminates `AUDITED` at step 2** — the cap check at step 3 is never reached |
+   | `<thread>.5/`, a critic still blocks | **refuses** — `5 > 4`; prints the BLOCKED notice and writes nothing |
 
-   So: `memoir-revise` **refuses; it never warns-and-proceeds** — but the
-   refusal lands on the invocation *after* the one that produced the
-   at-the-cap version, and only when step 2's combined verdict has not
-   already terminated the thread. A chapter that lands `AUDITED`
-   at exactly `iteration == max_iterations` is a normal, healthy terminus
-   — the cap was *reached* but was never the *terminating condition*, and
-   the report MUST NOT describe it as blocked, capped, or a near-miss.
-   `<thread>.{max_iterations}/` (`<thread>.4/` at the default) is the
-   worst-case terminal version dir; there is no `<thread>.5/` under a
-   default cap.
+   So: `memoir-revise` warns before the write that would consume the
+   final revision slot, then still refuses once the budget is truly
+   exhausted — it never warns-and-proceeds *past* the cap, only *up to*
+   it. The refusal lands on the invocation *after* the one that produced
+   the at-the-cap version, and only when step 2's combined verdict has
+   not already terminated the thread. A chapter that lands `AUDITED`
+   at exactly `iteration == max_iterations + 1` is a normal, healthy
+   terminus — the cap was *reached* but was never the *terminating
+   condition*, and the report MUST NOT describe it as blocked, capped, or
+   a near-miss. `<thread>.{max_iterations + 1}/` (`<thread>.5/` at the
+   default) is the worst-case terminal version dir; there is no
+   `<thread>.6/` under a default cap.
 4. **Read all critic input**: from the review — `verdict.md` (top
    revision priorities first), `scoring.md` (per-dim deductions; dim 1
    sourcing gaps lead), `comments.md`, and the "What's working" list.
@@ -131,13 +169,17 @@ combined verdict pre-check passes.
    from ANY critic MUST be addressed:
    - **Fabrication-class flags** (`fabricated_quote`,
      `fabricated_fact`, `misattribution_of_substance`, `anachronism`,
-     `unattributed_paraphrase` — corpus-audit-side): cut or correct the
-     offending claim so it is either removed, or replaced with a claim
-     the corpus actually supports (with an updated `provenance.md` row).
-     **Never invent a new source-line mapping to paper over the
-     finding** — a MISMATCH/NOT_FOUND/FABRICATED classification is
-     resolved by changing the CLAIM to match the evidence, never by
-     changing the CITATION to match the claim.
+     `unattributed_paraphrase`, `scope_overreach` (#1032) —
+     corpus-audit-side): cut or correct the offending claim so it is
+     either removed, or replaced with a claim the corpus actually
+     supports (with an updated `provenance.md` row). **Never invent a
+     new source-line mapping to paper over the finding** — a
+     MISMATCH/NOT_FOUND/FABRICATED classification is resolved by
+     changing the CLAIM to match the evidence, never by changing the
+     CITATION to match the claim. A `scope_overreach` finding is
+     resolved by **narrowing the claim's wording** to match the row's
+     own scope (e.g. "anyone has" → "the project has") — never by
+     widening the cited row or fabricating a broader source.
    - **`misattribution`** (voice-identity, review-side): rewrite the
      dialogue line in the correctly-attributed speaker's own cadence, or
      re-attribute it to the speaker whose corpus actually supports it.
@@ -210,29 +252,34 @@ combined verdict pre-check passes.
      line reports `v1` as a separate `v1 draft` term. Readers likewise
      tolerate an absent key on pre-#869 version dirs.
 10. **Report**: e.g., `Revised 00-introduction.1 → 00-introduction.2
-    (addressed 1 corpus-audit critical flag [NOT_FOUND -> claim cut] + 2
-    major comments; 1 declined with reason). Next: memoir-review +
-    memoir-audit 00-introduction`.
+    (revision 1/4; addressed 1 corpus-audit critical flag [NOT_FOUND ->
+    claim cut] + 2 major comments; 1 declined with reason). Next:
+    memoir-review + memoir-audit 00-introduction`.
 
-    The status line MUST name the iteration budget consumed and, when
-    `metadata.revision_class == "map_only"`, carry the `map-only` tag —
-    the cheap operator signal that this pass spent an iteration on
+    The status line MUST name the revision budget consumed — `revision
+    <k>/<max_iterations>`, where `<k>` is the version just written
+    (`<thread>.{N+1}/`) minus its draft, i.e. `k = N` (`v1` the draft is
+    never a `<k>`; `v2` is revision 1) — and, when
+    `metadata.revision_class == "map_only"`, carry the `map-only` tag:
+    the cheap operator signal that this pass spent a revision on
     provenance bookkeeping rather than prose. Examples:
 
-    - `Revised 00-introduction.2 → 00-introduction.3 (iteration 3/4;
+    - `Revised 00-introduction.2 → 00-introduction.3 (revision 2/4;
       map-only — provenance repoint, .tex byte-identical; addressed 1
       corpus-audit critical flag [MISMATCH -> row repointed]). Next:
       memoir-review + memoir-audit 00-introduction`
-    - `Revised 00-introduction.3 → 00-introduction.4 (iteration 4/4 —
-      final pass under the current cap; addressed 2 major comments).
+    - `Revised 00-introduction.4 → 00-introduction.5 (revision 4/4 —
+      final revision under the current cap; addressed 2 major comments).
       Next: memoir-review + memoir-audit 00-introduction`
 
-    When the written version lands at `iteration == max_iterations`, the
-    report MUST append the `final pass under the current cap` clause so
-    the operator learns the ceiling is one pass away **before** the
-    BLOCKED notice, not at it. This is advisory only — it does not refuse
-    and does not pre-empt step 2's normal `AUDITED` terminus on the next
-    critic pass.
+    When the written version consumes the LAST revision slot (`k ==
+    max_iterations`), the report MUST append the `final revision under
+    the current cap` clause — but this is the confirmation, not the
+    first notice: step 3's pre-write budget notice (issue #933) already
+    told the operator this write would exhaust the budget **before** the
+    write happened, not only here after the fact. This clause is
+    advisory only — it does not refuse and does not pre-empt step 2's
+    normal `AUDITED` terminus on the next critic pass.
 
 ## What memoir-revise does NOT do
 
@@ -269,60 +316,100 @@ version (in parallel). The cycle continues until:
 
 - the combined verdict of step 2 holds (thread reaches `AUDITED` —
   terminal), OR
-- `N + 1 > effective_max_iterations` (thread is `BLOCKED` for human
+- `N > effective_max_iterations` (thread is `BLOCKED` for human
   review — see §"BLOCKED notice" below), OR
 - stable-score termination fires (`STALLED`) per
   `anvil/lib/snippets/rubric.md` §"Termination resolution order" over
   `score_history`.
 
-Reaching `iteration == max_iterations` is **not** one of these
-terminating conditions. A thread whose latest version number equals the
-cap is in exactly one of two states: terminal on the combined verdict
-(`AUDITED` — the good outcome), or one blocked pass away from the
-BLOCKED notice. Both are reported honestly; neither is "capped."
+Reaching the ceiling (the latest version is `<thread>.{max_iterations +
+1}/`) is **not**, on its own, one of these terminating conditions. A
+thread whose latest version has consumed every revision slot is in
+exactly one of two states, and they are NOT the same report (issue
+#933 — a report that just says "hit the cap" conflates a healthy
+terminus with a stuck one):
+
+- **Converged — the good outcome, whether or not the last slot was
+  spent.** The combined verdict clears on the version at (or before) the
+  ceiling: the thread reaches `AUDITED` — terminal, healthy, nothing to
+  fix. A chapter that never needed all its revisions reaches `AUDITED`
+  with slots left unspent; one that needed exactly `max_iterations`
+  revisions reaches `AUDITED` on the very last one, fully spent but spent
+  well. Either way this is reported as `AUDITED` (the step-2 publish-
+  handoff summary), never as blocked, capped, or a near-miss.
+- **Final version written and unvalidatable — the bad outcome.** The
+  combined verdict does NOT clear on `<thread>.{max_iterations + 1}/`,
+  and there is no revision slot left to fix it. This is the BLOCKED
+  notice below, and it is the ONLY thing the BLOCKED notice ever reports
+  — it never fires for the converged case above.
+
+`memoir-revise`'s two possible ceiling-adjacent reports (the `AUDITED`
+publish-handoff summary at step 2, and the BLOCKED notice below) are
+structurally distinct code paths, so they cannot literally be confused
+for each other — but the wording inside each MUST keep naming which one
+it is (`AUDITED` / `BLOCKED`), never a bare "capped."
 
 ### BLOCKED notice
 
-When step 3's predicate fires (`N + 1 > effective_max_iterations`), the
+When step 3's predicate fires (`N > effective_max_iterations`), the
 reviser exits **without** writing `<thread>.{N+1}/` and prints a BLOCKED
-notice to stdout. The notice surfaces the override pointer (or, when an
-elevated cap is already active, the prior rationale) at **the moment the
-operator needs it** — the discoverability failure recorded in issue #349
-was "I didn't know the override existed," and issue #869 is its memoir
-recurrence. This contract mirrors `anvil/skills/memo/commands/memo-revise.md`
-§"BLOCKED notice" line-by-line, substituting memoir's three-critic verdict
-shape. Required lines:
+notice to stdout. Because the predicate can only fire once every revision
+slot is spent, this notice is ALWAYS the **final version written and
+unvalidatable** case (issue #933): a version exists (`<thread>.{N}/`, at
+`N == max_iterations + 1`), a full critic pass already ran on it, it is
+not clean, and there is no revision slot left to fix it. It is never
+printed for the **converged, slot(s) unspent** case — a thread reaching
+`AUDITED` with revision budget to spare never reaches step 3 at all (step
+2's combined-verdict pre-check exits first) — see §"Convergence" above
+for the full contrast. The notice surfaces the override pointer (or, when
+an elevated cap is already active, the prior rationale) at **the moment
+the operator needs it** — the discoverability failure recorded in issue
+#349 was "I didn't know the override existed," issue #869 was its memoir
+recurrence, and issue #933 is the follow-up that made the final revision
+itself always reach this notice with an actual critic verdict attached
+rather than being silently unwritable. This contract mirrors
+`anvil/skills/memo/commands/memo-revise.md` §"BLOCKED notice" line-by-line
+(modulo the #933 revision-vs-version predicate correction), substituting
+memoir's three-critic verdict shape. Required lines:
 
-1. **State line**: `BLOCKED — <thread>.{N} hit the iteration cap
-   (max_iterations=<cap>). Human review required.`
+1. **State line**: `BLOCKED — <thread>.{N} is a final version written and
+   unvalidatable under the current cap (max_iterations=<cap>). Human
+   review required.` This phrasing (issue #933) is deliberate: it names
+   what happened — a version was written, a critic pass ran on it, it is
+   not clean — rather than just "hit the cap," which does not distinguish
+   this from the healthy "converged" case that never reaches this notice.
 2. **Trajectory line** (when `score_history` / verdict data is
    available): per-iteration totals plus the latest critical-flag state
-   across all active critics, e.g. `Trajectory: v1=34/44, v2=37/44,
-   v3=38/44, v4=38/44 (advance=false, 1 unresolved corpus-audit critical
-   flag); gap to advance threshold ≥39.` This frames the decision:
-   well-conditioned (monotonic improvement, a named small gap) → consider
-   the override; ill-conditioned (oscillating totals, a persistent
-   fabrication-class flag) → the cap is doing its job, escalate to a
-   human rather than buying more passes.
+   across all active critics, e.g. `Trajectory: v1=34/44 (draft), v2=37/44,
+   v3=38/44, v4=38/44, v5=38/44 (advance=false, 1 unresolved corpus-audit
+   critical flag); gap to advance threshold ≥39.` This frames the
+   decision: well-conditioned (monotonic improvement, a named small gap)
+   → consider the override; ill-conditioned (oscillating totals, a
+   persistent fabrication-class flag) → the cap is doing its job,
+   escalate to a human rather than buying more passes.
 3. **Budget-composition line** (issue #869; REQUIRED when any consumed
-   iteration carries `metadata.revision_class == "map_only"`): name how
+   version carries `metadata.revision_class == "map_only"`): name how
    much of the budget went to bookkeeping rather than prose, e.g.
-   `Budget composition: 4/4 consumed — v1 draft, 1 substantive (v2),
+   `Budget composition: 5/5 consumed — v1 draft, 2 substantive (v2, v5),
    2 map-only (v3 corpus-drift repair, v4 provenance repoint; .tex
    byte-identical).`
 
    **How `v1` participates in the tally.** The `X/Y consumed` numerator is
    the version-dir count (`metadata.iteration` of the latest version), so
    `v1` — the `memoir-draft` output — is always one of the consumed
-   iterations. But `v1` carries **no `metadata.revision_class`**: a draft
+   versions. But `v1` carries **no `metadata.revision_class`**: a draft
    is not a revision, and `memoir-draft` deliberately mirrors only
    `metadata.max_iterations` / `metadata.iteration_cap_rationale`. So `v1`
    is reported as the standalone `v1 draft` term and is **never** counted
-   as substantive or map-only. The classified terms cover `v2..v{N}` only,
-   every classified version appears in exactly one group, and the line
-   must balance: `1 (draft) + substantive + map-only == X`. At the default
-   cap of 4 a fully-consumed budget therefore has exactly **three**
-   classified revision passes, never four.
+   as substantive or map-only, and — since issue #933 — is also never
+   counted against `max_iterations` itself (only `v2..v{N}` are). The
+   classified terms cover `v2..v{N}` only, every classified version
+   appears in exactly one group, and the line must balance:
+   `1 (draft) + substantive + map-only == X`, where `X = max_iterations +
+   1` whenever the BLOCKED notice fires (it can only fire on a fully-
+   consumed budget). At the default cap of 4 a fully-consumed budget
+   therefore has exactly **four** classified revision passes (`v2..v5`),
+   never five.
 
    A thread that spent half its budget on framework-detected provenance
    repairs is a materially different override case from one that spent it
@@ -362,11 +449,14 @@ parent's counterpart and the only substantive change is to
 fixes bookkeeping without touching a word of prose. `memoir-revise`
 records these as `metadata.revision_class = "map_only"` and surfaces the
 count in the BLOCKED notice's budget-composition line, but they **do
-consume an iteration** exactly like a substantive pass. (Classification
-applies to revision passes only — `<thread>.1/` is a draft and carries no
-`revision_class`; it is still one consumed iteration, reported as the
-composition line's `v1 draft` term.) That is a
-deliberate design decision (issue #869), not an oversight:
+consume a revision slot** exactly like a substantive pass — issue #933
+changed whether the `v1` *draft* counts against `max_iterations` (it no
+longer does), not whether a map-only *revision* does (it still does).
+(Classification applies to revision passes only — `<thread>.1/` is a
+draft and carries no `revision_class`; it still occupies one version-dir
+slot, reported as the composition line's `v1 draft` term.) Charging
+map-only revisions against the cap remains a deliberate design decision
+(issue #869), not an oversight:
 
 - **`iteration` is derived from the version-dir number, and version dirs
   are immutable.** Exempting a class of revision from the budget would

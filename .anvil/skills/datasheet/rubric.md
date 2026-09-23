@@ -18,7 +18,7 @@ A datasheet is the document a customer designs against: a wrong number costs a b
 | 6 | **Usability / application guidance** | 5 | A customer can design the part in from this sheet alone: typical-application circuit / system diagram, interface descriptions concrete enough to integrate against, boot/configuration guidance where applicable. |
 | 7 | **Customer-facing layout & typography** | 4 | The sheet "looks right": two-column first page (Key Features \| Applications), major sections starting on a fresh page, balanced columns, consistent rev/footer block, professional table typography (booktabs). The render-gate pre-flight catches the mechanical half (compile, overfull boxes); this dim scores the judgment half. |
 | 8 | **Provenance & legal** | 4 | Preliminary/production status notices present and correct for the declared `status`; disclaimers, IP/license, and trademark hygiene appropriate for external distribution; revision-history table present and current. |
-| 9 | **Rhetorical economy** | 4 | Is every paragraph load-bearing? Datasheets are reference documents — descriptive prose that restates a table, hedging that isn't a provenance label, marketing filler in the General Description: all penalized. A busy customer extracts the part's identity from page 1 in 90 seconds. |
+| 9 | **Rhetorical economy** | 4 | Does every paragraph carry weight the datasheet needs? Datasheets are reference documents — descriptive prose that restates a table, hedging that isn't a provenance label, marketing filler in the General Description: all penalized. A busy customer extracts the part's identity from page 1 in 90 seconds. |
 | | **Total** | **44** | Advance threshold: ≥39 |
 
 ## Refs back-check (dim 1)

@@ -17,13 +17,12 @@ markdown report.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
 from .apply import ApplyResult, apply_plan
 from .detect import (
-    ProjectInventory,
     inventory_tree,
 )
 from .plan import (

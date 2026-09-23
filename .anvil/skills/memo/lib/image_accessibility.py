@@ -127,6 +127,7 @@ from anvil.lib.review_schema import (
     Score,
     ToolCall,
 )
+from anvil.lib.sidecar import write_critic_review_dir
 
 # Sibling-module imports follow the cross_thread_refs / hyperlink_resolver
 # precedent of sys.path bootstrap so this module is loadable as either
@@ -139,7 +140,6 @@ if str(_HERE) not in sys.path:
 from memo_image_refs import (  # noqa: E402
     LintResult,
     _URL_SCHEMES,
-    lint_memo_image_refs,
     lint_source,
 )
 
@@ -1082,29 +1082,27 @@ def write_review_dir(
 ) -> Path:
     """Write ``<version_dir>.image-accessibility/_review.json`` (+ _findings.json).
 
-    Mirrors :func:`anvil.skills.memo.lib.citation_coverage._write_review_dir`
-    and :func:`anvil.skills.memo.lib.hyperlink_resolver.write_review_dir`:
-    a typed ``_review.json`` for the critics aggregator plus a
-    ``_findings.json`` companion with the structured payload from
-    :meth:`ImageAccessibilityResult.to_json`. Returns the path to the
-    written ``_review.json``.
+    Delegates to the shared :func:`anvil.lib.sidecar.write_critic_review_dir`
+    (issue #1086): a typed ``_review.json`` for the critics aggregator
+    plus a ``_findings.json`` companion with the structured payload from
+    :meth:`ImageAccessibilityResult.to_json`, staged + atomically renamed
+    via ``staged_sidecar`` (issue #350) — a mid-write interrupt never
+    leaves a partial ``<version_dir>.image-accessibility/`` at the final
+    name. This is a behavior change from the pre-#1086 plain ``mkdir`` +
+    ``write_text`` shape (called out explicitly in the #1086 PR body);
+    ``memo-image-accessibility.md`` already mandated ``staged_sidecar``
+    for this critic, so the change closes a doc/code drift rather than
+    introducing a new contract. Returns the path to the written
+    ``_review.json``.
     """
     version_dir = Path(version_dir)
-    sibling = version_dir.parent / f"{version_dir.name}.{IMAGE_ACCESSIBILITY_SUFFIX}"
-    sibling.mkdir(parents=True, exist_ok=True)
-    review = result.to_review(
-        version_dir=version_dir.name, critic_id=critic_id
+    review = result.to_review(version_dir=version_dir.name, critic_id=critic_id)
+    return write_critic_review_dir(
+        version_dir,
+        IMAGE_ACCESSIBILITY_SUFFIX,
+        review,
+        findings_json=result.to_json(),
     )
-    out = sibling / "_review.json"
-    out.write_text(
-        json.dumps(review.model_dump(mode="json"), indent=2) + "\n",
-        encoding="utf-8",
-    )
-    (sibling / "_findings.json").write_text(
-        json.dumps(result.to_json(), indent=2) + "\n",
-        encoding="utf-8",
-    )
-    return out
 
 
 # ---------------------------------------------------------------------------

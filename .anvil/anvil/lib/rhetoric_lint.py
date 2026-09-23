@@ -75,6 +75,56 @@ rule kinds:
   no support for that from this module, and any patch that reframes
   this rule (or its calibration) around detector evasion should be
   rejected on sight.
+- ``comma_stack`` — a per-sentence structural sibling of
+  ``long_sentence``/``sentence_variance`` (issue #1182), reusing the
+  same sentence tokenization (:func:`_sentence_chunks`, the text-
+  preserving generalization ``_sentence_word_counts`` now delegates
+  to). Detects "comma role-stacking": a single sentence whose commas
+  are doing more than one grammatical job at once (coordinating
+  clauses, opening a subordinate clause, *and* bracketing an
+  appositive) — the predictable failure mode of demoting a
+  dash-bracketed appositive to a comma pair under an
+  em-dash-avoidance policy (see the issue for the real published
+  sentence that motivated this rule). Two deterministic tiers, no
+  parser required:
+
+  1. **Hard** — a blunt ceiling, structurally identical to
+     ``long_sentence``: a sentence with ``max_commas`` or more commas
+     (default :data:`DEFAULT_COMMA_STACK_MAX_COMMAS`) *and*
+     ``min_words`` or more words (default
+     :data:`DEFAULT_COMMA_STACK_MIN_WORDS`) fires on its own, no
+     pattern match required. NOTE: unlike every other kind's
+     ``min_words`` (a document-level floor gating whether the rule
+     evaluates at all), ``comma_stack``'s ``min_words`` is a
+     **per-sentence** word count — there is no document-level floor
+     for this kind, since each sentence is judged independently.
+  2. **Refined** — fires at a lower comma count (``refined_min_commas``,
+     default :data:`DEFAULT_COMMA_STACK_REFINED_MIN_COMMAS`) when the
+     sentence, split on commas into spans, has an *interior* span (not
+     the sentence-initial or sentence-final span) of 3-12 words that
+     either opens with an appositive-opener token (``how``, ``what``,
+     ``whether``, ``that is``, ``i.e.``, ``namely``, ``say``) or is
+     immediately followed by a finite-verb candidate (``is``, ``are``,
+     ``seems``, ...) — the shape of an appositive wedged between a
+     subject and its verb — *and* the sentence carries a subordinator
+     (``because``, ``which``, ``although``, ``while``, ``so that``)
+     somewhere outside that span. A serial-list guard skips sentences
+     whose interior spans are 3+ and near-uniform in length with no
+     subordinator present, so ``a, b, c, and d`` never fires the
+     refined tier on span shape alone.
+
+  Quoted dialogue and code spans are excluded the same way every other
+  kind is: this rule runs over the already-``_scannable_lines``-masked,
+  link-collapsed text, with no additional quote-specific logic (none of
+  the sibling patternless kinds have one either). Like its siblings,
+  findings are document-level (``line=None`` — a sentence can wrap
+  multiple source lines and per-line suppression has no defined meaning
+  here); the finding's ``match`` field carries a truncated excerpt of
+  the offending sentence instead. This is a **lint only** (surface +
+  message), never an auto-fix — the correct repair (promote the
+  appositive to its own sentence, subject position, or parentheses) is
+  structural and belongs to the writer/reviewing skill, not this
+  module.
 
 JSON rule-set schema (consumer files)
 -------------------------------------
@@ -99,6 +149,9 @@ self-documenting for consumer files)::
          "message": "..."},
         {"id": "sentence-variance-floor", "kind": "sentence_variance",
          "min_cv": 0.35, "message": "..."},
+        {"id": "comma-role-stacking", "kind": "comma_stack",
+         "max_commas": 5, "min_words": 25, "refined_min_commas": 4,
+         "message": "..."},
         {"id": "no-internal-jargon", "kind": "regex",
          "sources_block_exempt": True,
          "pattern": "\\\\bTBD-INTERNAL\\\\b", "message": "..."}
@@ -277,16 +330,23 @@ RULE_KIND_REGEX = "regex"
 RULE_KIND_FREQUENCY = "frequency"
 RULE_KIND_LONG_SENTENCE = "long_sentence"
 RULE_KIND_SENTENCE_VARIANCE = "sentence_variance"
+RULE_KIND_COMMA_STACK = "comma_stack"
 _VALID_KINDS = (
     RULE_KIND_PHRASE,
     RULE_KIND_REGEX,
     RULE_KIND_FREQUENCY,
     RULE_KIND_LONG_SENTENCE,
     RULE_KIND_SENTENCE_VARIANCE,
+    RULE_KIND_COMMA_STACK,
 )
 # Kinds with no ``pattern`` key: they measure document-level statistics
-# (sentence-length tail / distribution shape) rather than matching text.
-_PATTERNLESS_KINDS = (RULE_KIND_LONG_SENTENCE, RULE_KIND_SENTENCE_VARIANCE)
+# (sentence-length tail / distribution shape / per-sentence comma
+# structure) rather than matching text.
+_PATTERNLESS_KINDS = (
+    RULE_KIND_LONG_SENTENCE,
+    RULE_KIND_SENTENCE_VARIANCE,
+    RULE_KIND_COMMA_STACK,
+)
 
 # Severities. The dimension is advisory by contract: ``warning`` is the
 # ceiling. Anything else (notably ``"error"``) is coerced to ``warning``.
@@ -363,6 +423,18 @@ LONG_SENTENCE_MAX_PER_1000_WORDS = 4
 # floor with real margin.
 DEFAULT_SENTENCE_VARIANCE_MIN_CV = 0.35
 DEFAULT_SENTENCE_VARIANCE_MIN_SENTENCES = 6
+
+# Comma-role-stacking defaults (issue #1182), literally from the Proposal
+# spec text: the hard tier's ceiling ("max_commas or more commas ... and
+# min_words or more words") and the refined tier's lower comma floor
+# ("fires at lower comma counts"). NOTE: unlike the document-level
+# `min_words` shared by `frequency`/`long_sentence`/`sentence_variance`,
+# DEFAULT_COMMA_STACK_MIN_WORDS gates a single sentence's own word count —
+# there is no document-level floor for this kind (see the module
+# docstring's `comma_stack` bullet).
+DEFAULT_COMMA_STACK_MAX_COMMAS = 5
+DEFAULT_COMMA_STACK_MIN_WORDS = 25
+DEFAULT_COMMA_STACK_REFINED_MIN_COMMAS = 4
 
 # Suppression-directive rule tokens honored by default. The memo gate's
 # dimension name is the documented consumer-facing token
@@ -623,6 +695,24 @@ DEFAULT_RHETORIC_RULES: tuple[dict, ...] = (
             "a run of near-identical sentence lengths flattens rhythm and "
             "reads as monotonous — vary sentence length structurally, not "
             "just its content."
+        ),
+    },
+    {
+        "id": "comma-role-stacking",
+        "kind": RULE_KIND_COMMA_STACK,
+        "max_commas": DEFAULT_COMMA_STACK_MAX_COMMAS,
+        "min_words": DEFAULT_COMMA_STACK_MIN_WORDS,
+        "refined_min_commas": DEFAULT_COMMA_STACK_REFINED_MIN_COMMAS,
+        # The leading count is prepended at finding time (not part of
+        # this template) so the finding reads "N commas doing multiple
+        # grammatical jobs ..." — see the ``comma_stack`` branch in
+        # ``lint_rhetoric``.
+        "message": (
+            "commas doing multiple grammatical jobs in one sentence; if "
+            "a comma pair is bracketing an interjection, fix by "
+            "promotion (own sentence, subject position, or "
+            "parentheses), not re-punctuation. A comma pair is not a "
+            "drop-in replacement for a dash pair."
         ),
     },
     {
@@ -1021,25 +1111,183 @@ def _collapse_markdown_links(scan_lines: list[str]) -> list[str]:
     return collapsed.split("\n")
 
 
-def _sentence_word_counts(scan_lines: list[str]) -> list[int]:
-    """Word count per naive sentence, computed once per document.
+def _sentence_chunks(scan_lines: list[str]) -> list[str]:
+    """Naive per-sentence text chunks, computed once per document.
 
     Joins the (already-excluded) scan lines into a single blob — so a
     sentence wrapped across two source lines is not miscounted as two
     short sentences — and splits on :data:`_SENTENCE_SPLIT_RE`. Each
     resulting chunk (including a final chunk with no trailing
-    terminator) is one naive "sentence"; its word count is measured with
-    the same :data:`_WORD_RE` tokenizer used for the document's overall
-    word count, so the two counts are directly comparable.
+    terminator) is one naive "sentence". Text-preserving generalization
+    of the word-count-only helper this module originally shipped
+    (``_sentence_word_counts`` now delegates here) — the ``comma_stack``
+    kind (issue #1182) needs the actual sentence text, not just its
+    word count, to inspect comma structure.
     """
     blob = " ".join(line for line in scan_lines if line.strip())
     if not blob.strip():
         return []
     return [
-        len(_WORD_RE.findall(chunk))
+        chunk.strip()
         for chunk in _SENTENCE_SPLIT_RE.split(blob.strip())
         if chunk.strip()
     ]
+
+
+def _sentence_word_counts(scan_lines: list[str]) -> list[int]:
+    """Word count per naive sentence, computed once per document.
+
+    See :func:`_sentence_chunks` for the tokenization contract. Word
+    counts are measured with the same :data:`_WORD_RE` tokenizer used
+    for the document's overall word count, so the two counts are
+    directly comparable.
+    """
+    return [len(_WORD_RE.findall(chunk)) for chunk in _sentence_chunks(scan_lines)]
+
+
+# Comma-role-stacking detection (issue #1182) -------------------------------
+
+# Appositive-opener tokens: a word/phrase that, opening an interior
+# comma-bracketed span, marks the span as renaming/explaining the noun
+# phrase just before it (an appositive) rather than continuing a list or
+# an absolute phrase. Checked against the start of the span only.
+_COMMA_STACK_APPOSITIVE_OPENERS: tuple[str, ...] = (
+    "how",
+    "what",
+    "whether",
+    "that is",
+    "i.e.",
+    "namely",
+    "say",
+)
+
+# Finite-verb candidates: a linking/copula verb that, appearing as the
+# first word immediately AFTER an interior span's closing comma, marks
+# the span as sitting between a subject and its verb (the "X, span, is
+# Y" appositive shape) rather than e.g. a serial-list item.
+_COMMA_STACK_FINITE_VERBS: frozenset[str] = frozenset(
+    {
+        "is", "are", "was", "were",
+        "seems", "seem", "remains", "remain",
+        "becomes", "become", "appears", "appear",
+        "looks", "look", "sounds", "sound",
+        "feels", "feel", "stays", "stay",
+        "proves", "prove",
+    }
+)
+
+# Subordinators the refined tier requires OUTSIDE the qualifying
+# appositive span — the second grammatical job the sentence's commas are
+# doing (coordinating/opening a subordinate clause) beyond bracketing the
+# appositive itself.
+_COMMA_STACK_SUBORDINATOR_RE = re.compile(
+    r"\b(?:because|which|although|while|so that)\b", re.IGNORECASE
+)
+
+# Interior-span word-count band for the refined tier's appositive check.
+_COMMA_STACK_SPAN_MIN_WORDS = 3
+_COMMA_STACK_SPAN_MAX_WORDS = 12
+
+# Serial-list guard: 3+ interior spans whose word counts fall within this
+# spread (max - min) are treated as list items ("a, b, c, and d"), not an
+# appositive-bracketed span — regardless of whether one of them happens
+# to start with an appositive-opener token.
+_COMMA_STACK_SERIAL_LIST_MIN_SPANS = 3
+_COMMA_STACK_SERIAL_LIST_MAX_SPREAD = 2
+
+
+def _comma_stack_starts_with_opener(span: str) -> bool:
+    """Whether ``span`` opens with an appositive-opener token."""
+    low = span.strip().lower()
+    for token in _COMMA_STACK_APPOSITIVE_OPENERS:
+        if low == token or low.startswith(token + " ") or low.startswith(token + ","):
+            return True
+    return False
+
+
+def _comma_stack_first_word(text: str) -> str:
+    """Lowercased first :data:`_WORD_RE` token of ``text``, or ``""``."""
+    m = _WORD_RE.match(text.strip())
+    return m.group(0).lower() if m else ""
+
+
+def _comma_stack_looks_like_serial_list(interior_word_counts: list[int]) -> bool:
+    """Serial-list guard: 3+ near-uniform-length interior spans.
+
+    ``interior_word_counts`` is the word count of every interior span
+    (sentence-initial and sentence-final spans excluded), regardless of
+    whether any individual span falls inside the appositive-check word
+    band. A near-identical spread across 3+ items is the shape of a
+    comma-separated list ("a, b, c, and d"), not a single bracketed
+    appositive.
+    """
+    if len(interior_word_counts) < _COMMA_STACK_SERIAL_LIST_MIN_SPANS:
+        return False
+    spread = max(interior_word_counts) - min(interior_word_counts)
+    return spread <= _COMMA_STACK_SERIAL_LIST_MAX_SPREAD
+
+
+def _comma_stack_refined_signal(spans: list[str]) -> bool:
+    """Refined-tier check over one sentence's comma-split spans.
+
+    ``spans`` is ``sentence.split(",")`` with each fragment stripped
+    (length == comma count + 1). Returns ``True`` when an interior span
+    (a) sits in the 3-12 word band, (b) opens with an appositive-opener
+    token or is immediately followed by a finite-verb candidate, and (c)
+    the sentence carries a subordinator outside that span. The
+    serial-list guard (:func:`_comma_stack_looks_like_serial_list`)
+    short-circuits to ``False`` first when the sentence's shape is a
+    comma-separated list with no subordinator anywhere.
+    """
+    if len(spans) < 3:
+        return False
+    interior_indices = range(1, len(spans) - 1)
+    interior_word_counts = [
+        len(_WORD_RE.findall(spans[i])) for i in interior_indices
+    ]
+    has_subordinator_anywhere = any(
+        _COMMA_STACK_SUBORDINATOR_RE.search(s) for s in spans
+    )
+    if (
+        _comma_stack_looks_like_serial_list(interior_word_counts)
+        and not has_subordinator_anywhere
+    ):
+        return False
+    for i in interior_indices:
+        word_count = len(_WORD_RE.findall(spans[i]))
+        if not (
+            _COMMA_STACK_SPAN_MIN_WORDS <= word_count <= _COMMA_STACK_SPAN_MAX_WORDS
+        ):
+            continue
+        opens_with_appositive = _comma_stack_starts_with_opener(spans[i])
+        next_word = _comma_stack_first_word(spans[i + 1]) if i + 1 < len(spans) else ""
+        followed_by_finite_verb = next_word in _COMMA_STACK_FINITE_VERBS
+        if not (opens_with_appositive or followed_by_finite_verb):
+            continue
+        subordinator_outside = any(
+            _COMMA_STACK_SUBORDINATOR_RE.search(spans[j])
+            for j in range(len(spans))
+            if j != i
+        )
+        if subordinator_outside:
+            return True
+    return False
+
+
+def _comma_stack_fires(
+    sentence: str, *, max_commas: int, min_words: int, refined_min_commas: int
+) -> bool:
+    """Whether ``sentence`` trips the comma-role-stacking hard OR refined tier."""
+    comma_count = sentence.count(",")
+    if comma_count == 0:
+        return False
+    word_count = len(_WORD_RE.findall(sentence))
+    if comma_count >= max_commas and word_count >= min_words:
+        return True
+    if comma_count < refined_min_commas:
+        return False
+    spans = [s.strip() for s in sentence.split(",")]
+    return _comma_stack_refined_signal(spans)
 
 
 def _first_prose_lineno(
@@ -1281,6 +1529,50 @@ def _validate_rule(rule: object) -> tuple[Optional[dict], Optional[str]]:
         ):
             min_sentences = DEFAULT_SENTENCE_VARIANCE_MIN_SENTENCES
         normalized["min_sentences"] = int(min_sentences)
+    elif kind == RULE_KIND_COMMA_STACK:
+        max_commas = rule.get("max_commas", DEFAULT_COMMA_STACK_MAX_COMMAS)
+        if (
+            isinstance(max_commas, bool)
+            or not isinstance(max_commas, (int, float))
+            or max_commas <= 0
+        ):
+            return (
+                None,
+                f"rule {rule_id!r}: comma_stack kind requires numeric "
+                f"'max_commas' > 0 (got {max_commas!r})",
+            )
+        normalized["max_commas"] = int(max_commas)
+        # NOTE: a per-sentence word floor for the hard tier, NOT the
+        # document-level ``min_words`` floor used by
+        # frequency/long_sentence/sentence_variance — see the module
+        # docstring's ``comma_stack`` bullet.
+        min_words = rule.get("min_words", DEFAULT_COMMA_STACK_MIN_WORDS)
+        if (
+            isinstance(min_words, bool)
+            or not isinstance(min_words, (int, float))
+            or min_words <= 0
+        ):
+            return (
+                None,
+                f"rule {rule_id!r}: comma_stack kind requires numeric "
+                f"'min_words' > 0 (got {min_words!r})",
+            )
+        normalized["min_words"] = int(min_words)
+        refined_min_commas = rule.get(
+            "refined_min_commas", DEFAULT_COMMA_STACK_REFINED_MIN_COMMAS
+        )
+        if (
+            isinstance(refined_min_commas, bool)
+            or not isinstance(refined_min_commas, (int, float))
+            or refined_min_commas <= 0
+        ):
+            return (
+                None,
+                f"rule {rule_id!r}: comma_stack kind requires numeric "
+                f"'refined_min_commas' > 0 "
+                f"(got {refined_min_commas!r})",
+            )
+        normalized["refined_min_commas"] = int(refined_min_commas)
     elif kind == RULE_KIND_FREQUENCY:
         threshold = rule.get("max_per_1000_words")
         if (
@@ -1563,9 +1855,14 @@ def lint_rhetoric(
     words = sum(len(_WORD_RE.findall(line)) for line in scan_lines)
     # Computed once for all positional (``scope: "first-line"``) rules.
     first_prose_lineno = _first_prose_lineno(scan_lines, text)
-    # Computed lazily (only if a ``long_sentence`` or ``sentence_variance``
-    # rule is active) and cached across both kinds — the tokenization does
-    # not depend on any per-rule setting.
+    # Computed lazily (only if a ``long_sentence``, ``sentence_variance``,
+    # or ``comma_stack`` rule is active) and cached across all three
+    # kinds — the tokenization does not depend on any per-rule setting.
+    # ``sentence_word_counts`` derives from ``sentence_chunks`` (see
+    # :func:`_sentence_word_counts`), so caching the chunks once lets
+    # ``comma_stack`` (which needs the text, not just the counts) reuse
+    # the same split without re-running it.
+    sentence_chunks: Optional[list[str]] = None
     sentence_word_counts: Optional[list[int]] = None
     # Computed once for all ``sources_block_exempt`` rules (issue #751).
     sources_lines = _sources_block_lines(text)
@@ -1574,8 +1871,12 @@ def lint_rhetoric(
         if rule["kind"] == RULE_KIND_LONG_SENTENCE:
             if words < rule["min_words"] or words == 0:
                 continue
+            if sentence_chunks is None:
+                sentence_chunks = _sentence_chunks(scan_lines)
             if sentence_word_counts is None:
-                sentence_word_counts = _sentence_word_counts(scan_lines)
+                sentence_word_counts = [
+                    len(_WORD_RE.findall(c)) for c in sentence_chunks
+                ]
             threshold = rule["sentence_word_threshold"]
             count = sum(1 for wc in sentence_word_counts if wc > threshold)
             density = count / words * 1000.0
@@ -1598,8 +1899,12 @@ def lint_rhetoric(
         if rule["kind"] == RULE_KIND_SENTENCE_VARIANCE:
             if words < rule["min_words"] or words == 0:
                 continue
+            if sentence_chunks is None:
+                sentence_chunks = _sentence_chunks(scan_lines)
             if sentence_word_counts is None:
-                sentence_word_counts = _sentence_word_counts(scan_lines)
+                sentence_word_counts = [
+                    len(_WORD_RE.findall(c)) for c in sentence_chunks
+                ]
             # Zero-word "sentences" (e.g. a stray "..." run) are not a
             # length observation; excluding them keeps the statistic about
             # actual sentence rhythm, not tokenization artifacts.
@@ -1623,6 +1928,29 @@ def lint_rhetoric(
                         ),
                         line=None,
                         match=None,
+                    )
+                )
+            continue
+        if rule["kind"] == RULE_KIND_COMMA_STACK:
+            if sentence_chunks is None:
+                sentence_chunks = _sentence_chunks(scan_lines)
+            for sentence in sentence_chunks:
+                if not _comma_stack_fires(
+                    sentence,
+                    max_commas=rule["max_commas"],
+                    min_words=rule["min_words"],
+                    refined_min_commas=rule["refined_min_commas"],
+                ):
+                    continue
+                comma_count = sentence.count(",")
+                excerpt = sentence if len(sentence) <= 120 else sentence[:117] + "..."
+                findings.append(
+                    RhetoricFinding(
+                        rule_id=rule["id"],
+                        severity=rule["severity"],
+                        message=f"{comma_count} {rule['message']}",
+                        line=None,
+                        match=excerpt,
                     )
                 )
             continue
@@ -1693,6 +2021,9 @@ def lint_rhetoric(
 
 __all__ = [
     "CONFIG_RULE_ID",
+    "DEFAULT_COMMA_STACK_MAX_COMMAS",
+    "DEFAULT_COMMA_STACK_MIN_WORDS",
+    "DEFAULT_COMMA_STACK_REFINED_MIN_COMMAS",
     "DEFAULT_FREQUENCY_MIN_WORDS",
     "DEFAULT_LONG_SENTENCE_WORD_THRESHOLD",
     "DEFAULT_RHETORIC_RULES",
@@ -1702,6 +2033,7 @@ __all__ = [
     "EMDASH_MAX_PER_1000_WORDS",
     "EMPHASIS_MAX_PER_1000_WORDS",
     "LONG_SENTENCE_MAX_PER_1000_WORDS",
+    "RULE_KIND_COMMA_STACK",
     "RULE_KIND_FREQUENCY",
     "RULE_KIND_LONG_SENTENCE",
     "RULE_KIND_PHRASE",

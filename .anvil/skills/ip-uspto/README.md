@@ -100,7 +100,7 @@ See `rubric.md` for the dimension-by-dimension ownership map and the `_summary.m
 
 - **This is a drafting aid, not a substitute for a licensed patent attorney.** Inventorship attestation (37 CFR 1.63), assignment, and prosecution strategy require qualified human review.
 - **The skill does not file an application.** It produces a submission-ready package. Filing is a human action via USPTO Patent Center.
-- **Prior-art search is not in scope.** Operator supplies prior art in `<thread>/prior-art/`. The `priorart` critic only evaluates against what is supplied.
+- **Prior-art search is not in scope for the critic's own judgment.** The `priorart` critic only evaluates against what is supplied in `<thread>/prior-art/`, and never renders a search itself. Collecting that art is a separate concern: run `anvil:ip-search` (a drafting aid, not a clearance search) to populate `<thread>/prior-art/` from a live corpus, or opt the critic into running it automatically first via `--search` / `<thread>/.anvil.json`'s `prior_art_search.auto` (off by default — see `commands/ip-uspto-prior-art.md`).
 - **AIA scope only.** v0 assumes post-March-2013 first-inventor-to-file. Pre-AIA applications are out of scope.
 - **Non-provisional utility only.** Provisional applications and design patents are out of scope; track as separate issues if needed.
 
@@ -114,7 +114,7 @@ Place these in the consumer repo at `.anvil/skills/ip-uspto/`:
 | `rubric.overrides.md` | Additional critical-flag examples; never reduces the base rubric. |
 | `BRIEF.md.example` | Reference brief shape; intake produces this shape from a disclosure. |
 | `critics/*.md` | Custom critic command files (pick up automatically by orchestrator glob). |
-| `.anvil.json` | Per-thread overrides: `max_iterations`, `critics` subset. |
+| `.anvil.json` | Per-thread overrides: `max_iterations`, `critics` subset, `prior_art_search.auto` (opt-in `anvil:ip-search` pre-search before the `priorart` critic, issue #958). |
 
 ## Iteration economics
 

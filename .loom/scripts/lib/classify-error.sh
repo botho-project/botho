@@ -14,7 +14,14 @@
 #       SUCCESS         — exit 0 (regardless of output content)
 #       TIMEOUT         — exit 124/137 (productive cycle, not a failure)
 #       CWD_DELETED     — working directory was removed
-#       TOKEN_EXPIRED   — 401 / OAuth token expired (skip this token)
+#       TOKEN_EXPIRED   — 401 / OAuth token expired (skip this token). Also
+#                         covers two account-level death phrasings folded in
+#                         by issue #6424 rather than a new category (identical
+#                         remedy: mark bad, rotate, needs human
+#                         re-authorization): "organization has disabled
+#                         [Claude subscription access]" and "Failed to
+#                         authenticate ... socket connection was closed
+#                         unexpectedly".
 #       TOKEN_EXHAUSTED — quota/weekly/per-model limit hit (rotate). Covers
 #                         both the "hit your … limit" family (#3738) and the
 #                         per-model "reached your <model> limit" ceiling the
@@ -183,7 +190,64 @@ _classify_error_claude() {
     # spawn could select the SAME auth-dead account again with no memory of
     # the failure — this is the mechanism behind the issue's "most died within
     # minutes" observation on a wave dispatch.
-    if echo "$output" | grep -qiE "401[^a-z]*authentication_error|invalid bearer token|OAuth token has expired|token has expired"; then
+    #
+    # Issue #6424: two more account-level death phrasings hit the same gap.
+    # "Your organization has disabled Claude subscription access for Claude
+    # Code" (a billing/authorization fault, resolved by the operator) and
+    # "Failed to authenticate. API Error: 403 The socket connection was closed
+    # unexpectedly" (observed as the sibling death-tail on the same incident)
+    # both matched none of the patterns above and fell through to the generic
+    # RECOVERABLE catch-all — measured on one host's logs, 37 of 43 permanent
+    # deaths carried the first phrase and the remaining 6 carried the second.
+    # Folded into TOKEN_EXPIRED rather than a new distinct category: the
+    # remedy is identical in kind (mark this account bad, rotate, needs human
+    # re-authorization, never blind-retried), and `claude-wrapper.sh`'s
+    # `is_account_auth_dead()` already dispatches on exactly this
+    # classification, so no daemon-side enum change is required. Only the
+    # substring "organization has disabled" is matched (not the full sentence)
+    # so minor wording drift in the CLI's own phrasing still classifies. The
+    # socket-closed phrase is deliberately anchored to "failed to
+    # authenticate ... socket connection was closed unexpectedly" (not a bare
+    # "socket connection was closed") so an unrelated transient network drop
+    # mid-session — which legitimately belongs in the generic RECOVERABLE
+    # table — is not swept into this terminal, account-marked-bad branch.
+    # Issue #6614: a token REVOKED mid-flight (an operator running `/login` on
+    # the host invalidates the pooled OAuth credential the fleet is riding on)
+    # produced a third variant this pattern missed, verbatim:
+    #   Failed to authenticate. API Error: 401 {"type":"authentication_error",
+    #   "message":"OAuth access token has been revoked."}
+    # Two independent gaps let it through:
+    #   * `401[^a-z]*authentication_error` cannot bridge the JSON envelope. The
+    #     `[^a-z]*` gap between "401" and "authentication_error" excludes
+    #     LETTERS, and the real payload puts `{"type":"` (and, in the nested
+    #     `{"type":"error","error":{...}}` form the API also serves, the word
+    #     "error" too) in between — so the alternation dies before it reaches
+    #     "authentication_error".
+    #   * Neither "revoked" nor "access token" appeared anywhere in this file.
+    # So the death fell through to the generic RECOVERABLE catch-all and
+    # `claude-wrapper.sh` retried the SAME revoked credential MAX_RETRIES (5)
+    # times before dying — a revoked token cannot recover, so every one of
+    # those retries was pure latency plus a duplicated 401 in the logs.
+    #
+    # Both gaps are closed with anchored phrases rather than a blanket
+    # `401.*authentication_error`: marking an account bad carries reason `auth`
+    # (persists until a manual `loom-daemon tokens unblock`), so the
+    # false-positive direction is the expensive one, and a bare `.*` would let
+    # any non-zero-exit output that merely MENTIONS both tokens on one line
+    # (an agent quoting this very incident, say) condemn a healthy account.
+    #   * `"type":"authentication_error"` — the JSON field itself, whitespace-
+    #     tolerant. Unambiguous, and matches the nested envelope too, which no
+    #     "401-then-gap" pattern can.
+    #   * `token (has been|was) revoked` — requires the word "token" directly
+    #     before the revocation verb, so an unrelated "revoked" (a revoked
+    #     approval, a revoked branch ruleset) cannot fire it. Covers "OAuth
+    #     access token has been revoked" as a substring, so no separate
+    #     "access token" alternation is needed.
+    # Kept in TOKEN_EXPIRED (not a new category) for the #6424 reason: the
+    # remedy is identical in kind — mark this account bad, rotate, never
+    # blind-retry — and `claude-wrapper.sh::is_account_auth_dead` already
+    # dispatches on exactly this classification.
+    if echo "$output" | grep -qiE "401[^a-z]*authentication_error|\"type\"[[:space:]]*:[[:space:]]*\"?authentication_error|token (has been|was) revoked|invalid bearer token|OAuth token has expired|token has expired|organization has disabled|failed to authenticate.*socket connection was closed unexpectedly"; then
         echo "TOKEN_EXPIRED"
         return
     fi
@@ -582,3 +646,19 @@ classification_is_transient() {
             ;;
     esac
 }
+
+# `loom_model_class_marker` -- how NARROW a `.bad_tokens` mark may be (#8058) --
+# used to live here. It is now `loom-daemon retry-classify model-class`
+# (loom_daemon::retry_classify::model_class_marker), ported out of shell by
+# #8138 under epic #7810's shell budget.
+#
+# It moved rather than shrank because the boundary was already drawn: #8037 put
+# every one of claude-wrapper.sh's OTHER rotation predicates behind
+# `retry-classify`, and this is the remedy-shaping half of one of them
+# (is_account_exhaustion decides to rotate and mark; model-class decides how
+# much of the account the mark takes out). The classifier it consults --
+# `classify_error` / `classification_is_transient`, above -- deliberately did
+# NOT move, for the reason in #4501: it is the fleet's single source of truth
+# for what a failure IS, and a second copy of it in Rust could disagree with
+# this one. Shell still says what the failure is; the daemon owns what the
+# wrapper does about it.

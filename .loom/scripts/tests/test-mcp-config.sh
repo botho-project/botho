@@ -276,6 +276,15 @@ rm -rf "$_pf_dir"
 # ============================================================
 # Section 6: DEMOTED setup-mcp.sh — no `loom` entry, shadowing migration (#4230)
 # ============================================================
+# scripts/setup-mcp.sh lives at the repo root, not under defaults/, so it is
+# never shipped into an installed consumer repo. Section 6 exercises it
+# directly and is therefore source-tree-only by design (#6194/#6241) — it
+# SKIPs (rather than errors) when run outside Loom's own checkout, while the
+# rest of this suite (which exercises the shipped mcp-config.sh lib) still
+# runs normally.
+if [[ ! -f "$REPO_ROOT/scripts/setup-mcp.sh" ]]; then
+    echo -e "  ${YELLOW}SKIP${NC}: Section 6 (setup-mcp.sh demotion tests) — $REPO_ROOT/scripts/setup-mcp.sh not found (not shipped into an installed repo)"
+else
 echo "Testing setup-mcp.sh demotion: no loom entry + shadowing migration (#4230)..."
 
 _seed_setup_mcp_ws() {
@@ -376,6 +385,7 @@ JSON
 else
     echo -e "  ${YELLOW}SKIP${NC}: setup-mcp.sh enabled test (jq not installed)"
 fi
+fi
 
 rm -rf "$_empty_repo"
 
@@ -396,12 +406,30 @@ command -v node >/dev/null 2>&1 && HAVE_NODE=true
 HAVE_GIT=false
 command -v git >/dev/null 2>&1 && HAVE_GIT=true
 
-# Healthy mcp-loom stub: writes the exact startup line check_mcp_server greps for.
+# Healthy mcp-loom stub: prints the historical startup banner (kept, so a
+# banner-printing server is still exercised) AND responds to the
+# protocol-level `initialize` handshake _mcp_smoke_test now performs (#143 /
+# 2am#307) — the health check no longer greps for the banner string, it
+# validates a JSON-RPC response on stdout.
 _write_healthy_mcp_stub() {
     local dir="$1" # e.g. .../mcp-loom
     mkdir -p "$dir/dist"
     cat >"$dir/dist/index.js" <<'JS'
 process.stderr.write("Loom MCP server running on stdio\n");
+let buf = "";
+process.stdin.on("data", (chunk) => {
+    buf += chunk;
+    if (buf.includes("\n")) {
+        process.stdout.write(
+            JSON.stringify({
+                jsonrpc: "2.0",
+                id: 1,
+                result: { protocolVersion: "2024-11-05", capabilities: {}, serverInfo: { name: "stub", version: "0.0.0" } },
+            }) + "\n"
+        );
+        process.exit(0);
+    }
+});
 JS
 }
 
@@ -482,7 +510,7 @@ fi
 # ("continuing with existing bundle") and fell through to a smoke test against
 # the very same known-broken dist — guaranteed to fail, with no actionable
 # message. And _try_mcp_rebuild only ever ran `npm run build`, so a
-# missing/half-installed node_modules (the robb-pro root cause: an EMPTY
+# missing/half-installed node_modules (the laptop-host root cause: an EMPTY
 # node_modules/@modelcontextprotocol/sdk directory) was indistinguishable from
 # a genuine build-source error and needed an operator to run `npm ci` by hand.
 # ============================================================
@@ -533,7 +561,23 @@ case "${1:-}" in
             exit 1
         fi
         mkdir -p dist
-        printf 'process.stderr.write("Loom MCP server running on stdio\\n");\n' >dist/index.js
+        cat >dist/index.js <<'JSEOF'
+process.stderr.write("Loom MCP server running on stdio\n");
+let buf = "";
+process.stdin.on("data", (chunk) => {
+    buf += chunk;
+    if (buf.includes("\n")) {
+        process.stdout.write(
+            JSON.stringify({
+                jsonrpc: "2.0",
+                id: 1,
+                result: { protocolVersion: "2024-11-05", capabilities: {}, serverInfo: { name: "stub", version: "0.0.0" } },
+            }) + "\n"
+        );
+        process.exit(0);
+    }
+});
+JSEOF
         exit 0
         ;;
 esac
@@ -568,7 +612,7 @@ JSON
             echo '{"name":"typescript"}' >"$pkg/node_modules/typescript/package.json"
             ;;
         empty-shell)
-            # The robb-pro shape: node_modules exists and is non-empty, but the
+            # The laptop-host shape: node_modules exists and is non-empty, but the
             # sdk package directory is an empty husk.
             mkdir -p "$pkg/node_modules/@modelcontextprotocol/sdk" "$pkg/node_modules/typescript"
             echo '{"name":"typescript"}' >"$pkg/node_modules/typescript/package.json"
@@ -787,7 +831,7 @@ done
 assert_eq "ok" "$(_deps_unusable_rc "$_cls/complete/mcp-loom")" \
     "complete node_modules is usable (a build failure there is a real source error)"
 assert_eq "unusable" "$(_deps_unusable_rc "$_cls/empty-shell/mcp-loom")" \
-    "an EMPTY dependency directory is classified unusable (robb-pro root cause, #5032)"
+    "an EMPTY dependency directory is classified unusable (laptop-host root cause, #5032)"
 assert_eq "unusable" "$(_deps_unusable_rc "$_cls/absent/mcp-loom")" \
     "a missing node_modules is classified unusable (#5032)"
 mkdir -p "$_cls/emptydir/mcp-loom/node_modules"
@@ -811,7 +855,7 @@ HAVE_PYTHON3=false
 command -v python3 >/dev/null 2>&1 && HAVE_PYTHON3=true
 
 if $HAVE_PYTHON3; then
-    # 11a. No mcpServers key at all (the robb-pro incident case) -> warns.
+    # 11a. No mcpServers key at all (the laptop-host incident case) -> warns.
     _home_missing_key="$(mktemp -d)"
     cat >"$_home_missing_key/.claude.json" <<'JSON'
 { "other": "stuff" }
@@ -965,7 +1009,7 @@ fi
 # #5457 removed the safehouse.socket default with nothing taking its place as
 # a *check*: an unresolved socket with safehouse.enabled=true degraded to a
 # `log_warn` buried in a per-role sweep log, unnoticed for 11 hours while the
-# public 2amlogic.com fleet pulse went stale. This section covers:
+# public fleet pulse went stale. This section covers:
 #   13a. spawn-claude.sh's warning text names the consequence, not just the
 #        mechanism (a static source check -- exercising the live injection
 #        block needs a real loom-daemon binary for token selection, which
@@ -985,7 +1029,7 @@ if [[ -f "$_spawn_claude_src" ]]; then
         "spawn-claude.sh's unresolved-socket warning is visually loud (#5523)"
     assert_contains "no safehouse narration" "$_warn_line" \
         "spawn-claude.sh's warning names the narration consequence, not just the mechanism (#5523)"
-    assert_contains "2amlogic.com" "$_warn_line" \
+    assert_contains "public fleet pulse" "$_warn_line" \
         "spawn-claude.sh's warning names the downstream public-pulse consequence (#5523)"
     assert_contains "check-safehouse-socket.sh" "$_warn_line" \
         "spawn-claude.sh's warning points at the standalone drift check (#5523)"

@@ -129,6 +129,7 @@ from anvil.lib.review_schema import (
     Review,
     Score,
 )
+from anvil.lib.sidecar import write_critic_review_dir
 from anvil.lib.vision import (
     VisionCallback,
     VisionCritic,
@@ -1007,8 +1008,16 @@ def write_review_dir(
 ) -> Path:
     """Write ``<version_dir>.figure-content/_review.json`` for auto-discovery.
 
-    Creates the sibling critic dir if needed and writes the canonical
-    review JSON. Returns the path to the written ``_review.json``.
+    Delegates to the shared :func:`anvil.lib.sidecar.write_critic_review_dir`
+    (issue #1086), which stages + atomically renames the sidecar via
+    ``staged_sidecar`` (issue #350) — a mid-write interrupt never leaves a
+    partial ``<version_dir>.figure-content/`` at the final name. This is a
+    behavior change from the pre-#1086 plain ``mkdir`` + ``write_text``
+    shape (called out explicitly in the #1086 PR body); the consuming
+    ``memo-figure-content.md`` / ``report-figure-content.md`` docs already
+    mandated ``staged_sidecar`` for this critic, so the change closes a
+    doc/code drift rather than introducing a new contract. Returns the
+    path to the written ``_review.json``.
 
     The naming convention (``<version_dir>.figure-content/``) follows the
     same ``<version_dir>.<tag>/`` pattern that
@@ -1017,17 +1026,10 @@ def write_review_dir(
     Phase 3's ``.citations/`` siblings).
     """
     version_dir = Path(version_dir)
-    sibling = version_dir.parent / f"{version_dir.name}.{SIBLING_SUFFIX}"
-    sibling.mkdir(parents=True, exist_ok=True)
     review = result.to_review(
         version_dir=version_dir.name, critic_id=critic_id, model=model
     )
-    out = sibling / "_review.json"
-    out.write_text(
-        json.dumps(review.model_dump(mode="json"), indent=2) + "\n",
-        encoding="utf-8",
-    )
-    return out
+    return write_critic_review_dir(version_dir, SIBLING_SUFFIX, review)
 
 
 # ---------------------------------------------------------------------------

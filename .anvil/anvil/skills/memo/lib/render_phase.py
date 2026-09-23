@@ -34,17 +34,21 @@ What it does — the full memo-render procedure (steps 1–7 of
    (step 4c / issue #320), ``latex_header_includes_resolved`` (step 4d
    / issue #347), the #391 passthrough trio
    (``render_template_requested`` / ``render_lua_filters_requested`` /
-   ``render_metadata_requested``, step 4e), and the consumer rhetoric
+   ``render_metadata_requested``, step 4e), the consumer rhetoric
    rules via ``anvil.lib.project_brief.resolve_rhetoric_rules`` (step
-   4g / issues #463/#468). Absent knobs are omitted from the call so
-   the gate defaults apply.
+   4g / issues #463/#468), and the opt-in AI-authorship byline via
+   ``anvil.lib.project_brief.resolve_ai_byline`` (step 4h / issue
+   #941) — merged into ``render_metadata["ai_byline"]`` when active.
+   Absent knobs are omitted from the call so the gate defaults apply.
 5. Invokes ``anvil.lib.render_gate.gate(kind="memo", ...)`` — the gate
    owns the render chain (pandoc → weasyprint/wkhtmltopdf/xelatex) plus
    the seven deterministic memo checks.
 6. Persists ``render_gate = result.to_json()`` plus the
    ``phases.render`` outcome (``done`` / ``failed`` + optional
-   ``reason = "renderer_unavailable"``) and the #391 provenance keys
-   (``phases.render.engine`` / ``phases.render.template``) via shallow
+   ``reason = "renderer_unavailable"``), the #391 provenance keys
+   (``phases.render.engine`` / ``phases.render.template``), and — when
+   the AI-byline tier is active — ``phases.render.ai_byline_text`` /
+   ``ai_byline_placement`` (issue #941) via shallow
    merge.
 7. Prints the one-line operator status from ``memo-render.md``
    §Procedure step 7.
@@ -106,19 +110,13 @@ def _now_iso() -> str:
 def _bootstrap_sys_path() -> None:
     """Make ``import anvil`` resolvable when run as a bare script.
 
-    Walks up from this file's location and inserts the first ancestor
-    directory that contains ``anvil/__init__.py``. Resolves the three
-    supported layouts:
-
-    - source repo: ``<repo>/anvil/skills/memo/lib/render_phase.py``
-      → inserts ``<repo>`` (contains ``anvil/__init__.py``);
-    - consumer canonical copy:
-      ``<consumer>/.anvil/skills/memo/lib/render_phase.py``
-      → inserts ``<consumer>/.anvil`` (contains ``anvil/__init__.py``
-      post-#230);
-    - consumer importable mirror:
-      ``<consumer>/.anvil/anvil/skills/memo/lib/render_phase.py``
-      → inserts ``<consumer>/.anvil``.
+    Byte-identical, intentionally duplicated copy of the algorithm in
+    ``anvil.lib.skill_lib_loader.bootstrap_sys_path`` — a bootstrap that
+    makes ``anvil`` importable can't itself import from ``anvil`` yet, so
+    this can't just delegate to it (issue #1100). See that function's
+    docstring for the full layout-resolution explanation, and
+    ``tests/lib/test_bootstrap_sys_path_consistency.py`` for the check
+    that keeps this copy honest.
     """
     here = Path(__file__).resolve()
     for ancestor in here.parents:
@@ -128,18 +126,19 @@ def _bootstrap_sys_path() -> None:
             return
 
 
-def _import_framework() -> tuple[Callable, Callable]:
-    """Lazily import the gate + rhetoric-rules resolver.
+def _import_framework() -> tuple[Callable, Callable, Callable]:
+    """Lazily import the gate + rhetoric-rules resolver + AI-byline resolver.
 
-    Returns ``(gate, resolve_rhetoric_rules)``. Raises ``ImportError``
-    when the framework (or its pydantic base dep) is unavailable — the
-    caller converts that into the non-blocking exit-0 path.
+    Returns ``(gate, resolve_rhetoric_rules, resolve_ai_byline)``. Raises
+    ``ImportError`` when the framework (or its pydantic base dep) is
+    unavailable — the caller converts that into the non-blocking exit-0
+    path.
     """
     _bootstrap_sys_path()
-    from anvil.lib.project_brief import resolve_rhetoric_rules
+    from anvil.lib.project_brief import resolve_ai_byline, resolve_rhetoric_rules
     from anvil.lib.render_gate import gate
 
-    return gate, resolve_rhetoric_rules
+    return gate, resolve_rhetoric_rules, resolve_ai_byline
 
 
 def _read_progress(path: Path) -> dict:
@@ -187,10 +186,31 @@ def _resolve_target_length(metadata: dict) -> Optional[dict]:
     return {"words": [int(min_words), int(max_words)]}
 
 
+def _resolve_ai_byline_metadata(
+    version_dir: Path, resolve_ai_byline_fn: Callable
+):
+    """Resolve the opt-in AI-authorship byline for this version dir
+    (issue #941).
+
+    ``project_dir`` is ``version_dir.parent.parent`` — the same
+    ``BRIEF.md`` root the #463/#468 rhetoric-rules resolution (step 4g)
+    uses. Never raises: a resolver crash (or a caller-supplied stub
+    that misbehaves) degrades to inactive, matching the non-blocking
+    render contract — a byline resolution failure must not abort the
+    render.
+    """
+    project_dir = version_dir.parent.parent
+    try:
+        return resolve_ai_byline_fn(project_dir)
+    except Exception:  # noqa: BLE001 — non-blocking contract
+        return None
+
+
 def _build_gate_kwargs(
     metadata: dict,
     version_dir: Path,
     resolve_rhetoric_rules_fn: Callable,
+    ai_byline_resolved=None,
 ) -> dict:
     """Thread the ``_progress.json.metadata`` knobs into gate kwargs.
 
@@ -200,6 +220,20 @@ def _build_gate_kwargs(
     ``words_per_page`` (step 4b) and ``image_max_px`` (step 4f) are
     deliberately not threaded: their BRIEF.md carrier is queued for
     migration and the gate defaults (400 wpp / 6000 px) apply.
+
+    ``ai_byline_resolved`` (issue #941, step 4h) is the already-resolved
+    ``ResolvedAiByline`` (or ``None`` when the tier is inactive), passed
+    in rather than re-resolved here so the caller can reuse the same
+    resolution for post-gate ``_progress.json`` provenance. When active
+    with ``placement != "frontmatter-only"``, the rendered line is
+    merged into ``render_metadata["ai_byline"]`` — reusing the existing
+    #391 pandoc-metadata passthrough plumbing rather than adding a new
+    gate kwarg. Composes with an operator-declared ``render_metadata``
+    knob: every other key is preserved; an operator-declared
+    ``ai_byline`` key (unlikely, but possible) is overwritten by the
+    resolved value. ``placement == "frontmatter-only"`` never touches
+    ``render_metadata`` — the resolved text is provenance-only (see
+    ``main()`` step 6).
     """
     kwargs: dict = {"target_length": _resolve_target_length(metadata)}
 
@@ -245,6 +279,19 @@ def _build_gate_kwargs(
             kwargs["rhetoric_rules_path"] = (
                 declared if declared.is_absolute() else project_dir / declared
             )
+
+    # Step 4h — opt-in AI-authorship byline (issue #941). Inactive tier
+    # (``ai_byline_resolved is None``) or ``placement ==
+    # "frontmatter-only"`` → render_metadata is untouched (byte-identical
+    # to pre-#941 behavior in both cases).
+    if (
+        ai_byline_resolved is not None
+        and getattr(ai_byline_resolved, "placement", None) != "frontmatter-only"
+    ):
+        merged_metadata = dict(kwargs.get("render_metadata") or {})
+        merged_metadata["ai_byline"] = ai_byline_resolved.text
+        kwargs["render_metadata"] = merged_metadata
+
     return kwargs
 
 
@@ -281,12 +328,13 @@ def main(
     *,
     gate_fn: Optional[Callable] = None,
     resolve_rhetoric_rules_fn: Optional[Callable] = None,
+    resolve_ai_byline_fn: Optional[Callable] = None,
 ) -> int:
     """Run the render phase over one version directory. Always returns 0.
 
-    ``gate_fn`` / ``resolve_rhetoric_rules_fn`` are test seams: when
-    ``None`` (the CLI path) the real framework callables are imported
-    lazily via :func:`_import_framework`.
+    ``gate_fn`` / ``resolve_rhetoric_rules_fn`` / ``resolve_ai_byline_fn``
+    are test seams: when ``None`` (the CLI path) the real framework
+    callables are imported lazily via :func:`_import_framework`.
     """
     parser = argparse.ArgumentParser(
         prog="render_phase.py",
@@ -354,9 +402,15 @@ def main(
         )
         return 0
 
-    if gate_fn is None or resolve_rhetoric_rules_fn is None:
+    if (
+        gate_fn is None
+        or resolve_rhetoric_rules_fn is None
+        or resolve_ai_byline_fn is None
+    ):
         try:
-            imported_gate, imported_resolver = _import_framework()
+            imported_gate, imported_resolver, imported_byline_resolver = (
+                _import_framework()
+            )
         except ImportError:
             print(FRAMEWORK_IMPORT_REMEDIATION, file=sys.stderr)
             return 0
@@ -364,18 +418,24 @@ def main(
         resolve_rhetoric_rules_fn = (
             resolve_rhetoric_rules_fn or imported_resolver
         )
+        resolve_ai_byline_fn = resolve_ai_byline_fn or imported_byline_resolver
 
     # Step 3 — mark in_progress (shallow merge: only phases.render and,
     # later, the top-level render_gate key are touched).
     phases["render"] = {"state": "in_progress", "started": _now_iso()}
     _write_progress(progress_path, progress)
 
-    # Steps 4–4g — knob threading.
+    # Steps 4–4g — knob threading. Step 4h (issue #941) resolves the
+    # opt-in AI-authorship byline once here so both the gate kwargs and
+    # the post-gate provenance write (step 6) share one resolution.
     metadata = progress.get("metadata")
     if not isinstance(metadata, dict):
         metadata = {}
+    ai_byline_resolved = _resolve_ai_byline_metadata(
+        version_dir, resolve_ai_byline_fn
+    )
     gate_kwargs = _build_gate_kwargs(
-        metadata, version_dir, resolve_rhetoric_rules_fn
+        metadata, version_dir, resolve_rhetoric_rules_fn, ai_byline_resolved
     )
 
     # Step 5 — invoke the gate. An unexpected exception is recorded as a
@@ -407,6 +467,14 @@ def main(
     if result.engine_used is not None:
         render_block["engine"] = result.engine_used
         render_block["template"] = result.template_used
+    # Step 6 — AI-authorship byline provenance (issue #941). Written
+    # whenever the tier resolved active, independent of compile outcome
+    # (mirrors the report skill's audience-class provenance contract) —
+    # the resolution is config-driven, not a render-time fact. Inactive
+    # tier → neither key is written (byte-identical to pre-#941).
+    if ai_byline_resolved is not None:
+        render_block["ai_byline_text"] = ai_byline_resolved.text
+        render_block["ai_byline_placement"] = ai_byline_resolved.placement
     if result.compile_status in ("ok", "skipped"):
         render_block["state"] = "done"
     elif result.compile_status == "unavailable":

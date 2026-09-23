@@ -71,7 +71,6 @@ BUCKET_LEGACY_MIGRATABLE = "LEGACY_MIGRATABLE"
 BUCKET_BARE_THREADS = "BARE_THREADS"
 BUCKET_LOOSE_DOCUMENTS = "LOOSE_DOCUMENTS"
 BUCKET_FOREIGN_GRAMMAR = "FOREIGN_GRAMMAR"
-BUCKET_NOT_DOCUMENT = "NOT_DOCUMENT"
 
 # Directory parts that mark a file as CLAIMED by its enclosing cluster:
 # version dirs (`<stem>.<N>`) and critic sidecars (`<stem>.<N>.<tag>`,
@@ -529,7 +528,6 @@ __all__ = [
     "BUCKET_FOREIGN_GRAMMAR",
     "BUCKET_LEGACY_MIGRATABLE",
     "BUCKET_LOOSE_DOCUMENTS",
-    "BUCKET_NOT_DOCUMENT",
     "Classification",
     "Cluster",
     "Coverage",

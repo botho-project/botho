@@ -37,6 +37,10 @@ source "$SCRIPT_DIR/lib/bg-proc-trap.sh"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
+# Used by retired() below. A review pass removed this as unused, correctly for
+# the state of the file at the time: retired() was being CALLED four times but
+# had never actually been defined, so nothing referenced YELLOW.
+YELLOW='\033[0;33m'
 NC='\033[0m'
 
 TESTS_RUN=0
@@ -45,6 +49,23 @@ TESTS_FAILED=0
 
 pass() { TESTS_RUN=$((TESTS_RUN + 1)); TESTS_PASSED=$((TESTS_PASSED + 1)); echo -e "${GREEN}✓${NC} $1"; }
 fail() { TESTS_RUN=$((TESTS_RUN + 1)); TESTS_FAILED=$((TESTS_FAILED + 1)); echo -e "${RED}✗${NC} $1"; }
+
+# An assertion that CANNOT survive the port to Rust, retired under the
+# three-part test in defaults/docs/verification-recipes.md §6. Printed, not
+# deleted: a reader of this suite must be able to see that something was
+# removed, why, and what proves the property now. Counted as run so the totals
+# stay honest about how many assertions this file still carries.
+TESTS_RETIRED=0
+retired() { # <what> <property> <why-structural> <successor>
+    # Counted in its OWN bucket, not as a pass. A retirement is a record that
+    # an assertion was removed and why — calling it a pass inflates the figure
+    # a reader uses to judge how much this suite still proves.
+    TESTS_RETIRED=$((TESTS_RETIRED + 1))
+    echo -e "${YELLOW}⊘${NC} RETIRED: $1"
+    echo "      property:   $2"
+    echo "      structural: $3"
+    echo "      successor:  $4"
+}
 
 assert_rc() { # <expected> <actual> <msg>
     if [[ "$1" == "$2" ]]; then pass "$3"; else fail "$3 (expected rc=$1, got rc=$2)"; fi
@@ -60,6 +81,37 @@ WORKDIR="$(mktemp -d)"
 # running every remaining test case.
 trap 'bg_proc_reap; rm -rf "$WORKDIR"' EXIT
 trap 'bg_proc_reap; rm -rf "$WORKDIR"; exit 1' INT TERM
+
+# Pin the binary that IMPLEMENTS the stub (#8134). $WATCHDOG is now a 77-line
+# stub over `loom-daemon daemon-watchdog`, so every case below only tests the
+# port if that stub execs the binary built from THIS working tree.
+#
+# --self-only is mandatory here, and this suite is the case that flag was built
+# for (see lib/require-daemon-bin.sh's header): it exports LOOM_DAEMON_SELF_BIN
+# and leaves $LOOM_DAEMON_BIN alone. Dozens of cases below pin $LOOM_DAEMON_BIN
+# to a make_daemon_stub mock to drive the #4398 IPC probe -- that is the
+# "daemon this caller probes" meaning, and it has to survive untouched.
+#
+# Without this pin lib/script-helper.sh resolves the IMPLEMENTATION through
+# $LOOM_DAEMON_BIN as well, so cases 13/13b/14/14b/14c/14d/15/20/21 exec the
+# `hang` mock (`while true; do sleep 1; done`) AS THE WATCHDOG and never
+# return. That wedges the suite until run-ci-suites.sh's 1200s per-suite
+# timeout -- twice, counting the #7791 retry -- which is exactly how the
+# 30-minute "Shell Test Suites (hermetic)" job budget was blown with zero
+# suite output. Every remaining case would have exec'd its own (non-hanging)
+# mock as the watchdog instead, which is no better, just louder.
+#
+# Called AFTER the traps above so the harness sees this suite's own EXIT trap
+# and declines to clobber it; its snapshots are bounded by the pid-keyed
+# reaper instead.
+#
+# It is FATAL, not a skip, when no binary resolves: these assertions are the
+# equivalence evidence for the port, and a suite that skipped itself would
+# report green while proving nothing. That is why this suite moved out of
+# ci-wired.txt into the "Native Port Suites" CI job, which builds one first.
+# shellcheck source=lib/require-daemon-bin.sh
+source "$SCRIPT_DIR/lib/require-daemon-bin.sh"
+loom_test_require_daemon_bin --self-only "$(cd "$SCRIPT_DIR/.." && pwd)" daemon-watchdog
 
 MARKER="$WORKDIR/autonomy-desired"
 HEARTBEAT="$WORKDIR/daemon.heartbeat"
@@ -214,7 +266,10 @@ make_daemon_stub() { # <mode> [sleep_secs]
         slow-ok)
             printf '#!/usr/bin/env bash\nsleep %s\necho "no active quarantines"\nexit 0\n' "$secs" > "$dir/loom-daemon-mock" ;;
         hang)
-            printf '#!/usr/bin/env bash\nwhile true; do sleep 1; done\n' > "$dir/loom-daemon-mock" ;;
+            # Records its own invocation (touch "$dir/was-invoked") before
+            # blocking forever, so callers can assert "never invoked" by the
+            # marker's absence rather than by a wall-clock budget (#8168).
+            printf '#!/usr/bin/env bash\ntouch "%s/was-invoked"\nwhile true; do sleep 1; done\n' "$dir" > "$dir/loom-daemon-mock" ;;
         unreachable)
             printf '#!/usr/bin/env bash\necho "Could not reach loom-daemon at /tmp/x.sock: round-trip timed out after 5s" >&2\nexit 1\n' > "$dir/loom-daemon-mock" ;;
         usage)
@@ -223,6 +278,79 @@ make_daemon_stub() { # <mode> [sleep_secs]
             printf '#!/usr/bin/env bash\necho "Daemon error: workspace not registered" >&2\nexit 1\n' > "$dir/loom-daemon-mock" ;;
         *) echo "unknown stub mode $mode" >&2; return 1 ;;
     esac
+    chmod +x "$dir/loom-daemon-mock"
+    echo "$dir"
+}
+
+# A recovery-command stub that appends one line per invocation to <log>.
+#   noop    records the call and changes nothing (recovery keeps failing)
+#   revive  records the call and writes a LIVE pid into <pidfile> (recovery works)
+#   hang    never returns — only the watchdog's own budget can end it
+make_recover_stub() { # <mode> <log> [pidfile] [pid]
+    local mode="$1" log="$2" pidfile="${3:-}" pid="${4:-}" dir
+    dir="$(mktemp -d)"
+    case "$mode" in
+        noop)
+            printf '#!/usr/bin/env bash\necho "recover $*" >> %s\nexit 1\n' "$log" > "$dir/recover.sh" ;;
+        revive)
+            printf '#!/usr/bin/env bash\necho "recover $*" >> %s\necho %s > %s\nexit 0\n' \
+                "$log" "$pid" "$pidfile" > "$dir/recover.sh" ;;
+        hang)
+            printf '#!/usr/bin/env bash\necho "recover $*" >> %s\nwhile true; do sleep 1; done\n' "$log" > "$dir/recover.sh" ;;
+        *) echo "unknown recover stub mode $mode" >&2; return 1 ;;
+    esac
+    chmod +x "$dir/recover.sh"
+    echo "$dir/recover.sh"
+}
+
+# ---------------------------------------------------------------------------
+# #6222 (Layer 3 of #6157) peer-coordination-alert fixtures.
+#
+# Unlike make_daemon_stub() above (whose stubs answer identically regardless
+# of argv), the peer-coordination check needs the SAME binary to answer TWO
+# distinct subcommands differently within one tick: `quarantine list` (the
+# ordinary IPC probe, always healthy here so `probe_verdict == healthy` and
+# the peer-coordination gate is actually reached) and `peer-claims --json`
+# (what the new alert reads). The JSON shape mirrors
+# `loom_daemon::types::PeerClaimStatus` exactly (`coordination.degraded`,
+# `.degraded_for_secs`, `.consecutive_receives_toward_recovery`,
+# `.recovery_threshold`, top-level `.advertised`/`.received`).
+#
+#   green        coordination.degraded=false (healthy/recovered)
+#   degraded     coordination.degraded=true, with the given fields
+#   malformed    `peer-claims --json` "succeeds" but the body is not JSON at
+#                all (a corrupted/unexpected reply) — must degrade to "could
+#                not determine", never a crash or a fabricated verdict
+#   unsupported  this build's CLI does not know the `peer-claims` subcommand
+#                (clap usage error, exit 2) — an older loom-daemon binary
+make_peer_coord_stub() { # <state: green|degraded|malformed|unsupported> [degraded_for] [consecutive] [threshold] [advertised] [received]
+    local state="$1" degraded_for="${2:-120}" consecutive="${3:-1}" threshold="${4:-3}" advertised="${5:-10}" received="${6:-10}"
+    local dir
+    dir="$(mktemp -d)"
+    case "$state" in
+        green)
+            printf '{"self_host":"test-host","ttl_secs":300,"entries":[],"advertised":%s,"received":%s,"expired":0,"dispatch_skipped":0,"coordination":{"degraded":false,"degraded_for_secs":null,"consecutive_receives_toward_recovery":0,"recovery_threshold":%s}}' \
+                "$advertised" "$received" "$threshold" > "$dir/peer-claims.json"
+            ;;
+        degraded)
+            printf '{"self_host":"test-host","ttl_secs":300,"entries":[],"advertised":%s,"received":%s,"expired":0,"dispatch_skipped":0,"coordination":{"degraded":true,"degraded_for_secs":%s,"consecutive_receives_toward_recovery":%s,"recovery_threshold":%s}}' \
+                "$advertised" "$received" "$degraded_for" "$consecutive" "$threshold" > "$dir/peer-claims.json"
+            ;;
+        malformed)
+            printf 'not json at all' > "$dir/peer-claims.json"
+            ;;
+        unsupported)
+            : ;; # loom-daemon-mock below special-cases this — no json file needed
+        *) echo "unknown peer-coord stub state $state" >&2; return 1 ;;
+    esac
+
+    if [[ "$state" == "unsupported" ]]; then
+        printf '#!/usr/bin/env bash\nif [[ "$1" == "peer-claims" ]]; then\n  echo "error: unrecognized subcommand" >&2\n  exit 2\nfi\necho "no active quarantines"\nexit 0\n' \
+            > "$dir/loom-daemon-mock"
+    else
+        printf '#!/usr/bin/env bash\nif [[ "$1" == "peer-claims" ]]; then\n  cat "%s/peer-claims.json"\n  exit 0\nfi\necho "no active quarantines"\nexit 0\n' \
+            "$dir" > "$dir/loom-daemon-mock"
+    fi
     chmod +x "$dir/loom-daemon-mock"
     echo "$dir"
 }
@@ -575,9 +703,14 @@ else
 fi
 
 # ===================================================================
-# 10. Every OTHER divergence stays report-only: job LOADED + NOT running but
-#     last exit status 143 (a SIGTERM'd operator stop) must NEVER trigger the
-#     auto-kickstart — narrow-gate proof that this is not a crash-loop reviver.
+# 10. #6388: job LOADED + NOT running + last exit status 143 (SIGTERM) with
+#     the autonomy-desired marker PRESENT is NOT an operator stop — only
+#     marker ABSENCE means that (see 10c below). The narrow #4232 exit-0
+#     'launchctl kickstart' gate must still never fire (last exit isn't 0),
+#     but the general bounded-recovery path (#5391) now DOES run for this
+#     signature, exactly like any other confirmed-down signature. Before this
+#     fix, exit 143 here forced `recover_possible=false` and refused to
+#     recover for up to 11h in production (#6388).
 # ===================================================================
 if [[ "$(uname -s)" == "Darwin" ]]; then
     STUB10="$WORKDIR/stub10"
@@ -585,7 +718,8 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     STATE10="$WORKDIR/state10"
     : > "$STATE10"
     LOG10="$WORKDIR/launchctl10.log"
-    : > "$LOG10"
+    REC10LOG="$WORKDIR/recover10.log"
+    : > "$LOG10" "$REC10LOG"
     cat > "$STUB10/launchctl" <<EOF
 #!/usr/bin/env bash
 echo "\$*" >> "$LOG10"
@@ -602,9 +736,10 @@ case "\${1:-}" in
     exit 0
     ;;
   kickstart)
-    # If this were ever wrongly invoked it WOULD bring the job "up" (proving a
-    # false positive would be caught) — the assertion below is that it is
-    # simply never called.
+    # If the NARROW #4232 exit-0 gate were ever wrongly invoked here it WOULD
+    # bring the job "up" (proving a false positive would be caught) — the
+    # assertion below is that it is simply never called (last exit is 143,
+    # not 0), independent of whether general bounded recovery runs.
     echo "999999" > "$STATE10"
     exit 0
     ;;
@@ -614,25 +749,85 @@ EOF
     chmod +x "$STUB10/launchctl"
     cat > "$MARKER" <<EOF
 started_at=2026-07-27T00:00:00Z
+repo_root=$WORKDIR
 heartbeat_file=$HEARTBEAT
 heartbeat_interval_secs=60
 use_launchd=true
 launchd_label=com.example.loom-sandbox-noremediate-$$
 socket_path=$WORKDIR/loom-daemon.sock
 EOF
+    REC10="$(make_recover_stub noop "$REC10LOG")"
     : > "$WDLOG" "$OUT"
+    rm -f "$WORKDIR/.watchdog-recovery-state" "$WORKDIR/.watchdog-outage-escalated"
     env PATH="$STUB10:$PATH" "${SUPERVISOR_CASE_ENV[@]}" \
+        LOOM_WATCHDOG_AUTO_RECOVER=1 LOOM_WATCHDOG_RECOVER_CMD="$REC10" \
+        LOOM_WATCHDOG_KICKSTART_RECHECK_ATTEMPTS=1 LOOM_WATCHDOG_KICKSTART_RECHECK_INTERVAL=0.1 \
         LOOM_AUTONOMY_MARKER="$MARKER" LOOM_WATCHDOG_LOG="$WDLOG" \
         bash "$WATCHDOG" > "$OUT" 2>&1
     rc10=$?
-    assert_rc 1 "$rc10" "exit-143-and-down: stays report-only (no auto-kickstart) -> exits 1"
+    assert_rc 1 "$rc10" "#6388 exit-143-marker-present: recovery attempted but daemon still down -> exits 1"
     if grep -q 'kickstart' "$LOG10"; then
-        fail "exit-143-and-down: kickstart is NEVER invoked (no crash-loop revival of an operator stop)"
+        fail "#6388 exit-143-marker-present: the narrow #4232 exit-0 gate must still never fire kickstart"
     else
-        pass "exit-143-and-down: kickstart is NEVER invoked (no crash-loop revival of an operator stop)"
+        pass "#6388 exit-143-marker-present: the narrow #4232 exit-0 gate still never fires (last exit isn't 0)"
+    fi
+    if [[ -s "$REC10LOG" ]]; then
+        pass "#6388 exit-143-marker-present: general bounded recovery (#5391) DOES run — marker present overrides the signal"
+    else
+        fail "#6388 exit-143-marker-present: expected the bounded-recovery command to run ($(cat "$REC10LOG" 2>/dev/null))"
+    fi
+    if log_hasi 'stray signal' && log_hasi 'AUTO-RECOVERING'; then
+        pass "#6388 exit-143-marker-present: the report names the rule that fired (stray signal, recovering)"
+    else
+        fail "#6388 exit-143-marker-present: expected the report to name the stray-signal rule ($(cat "$WDLOG"))"
+    fi
+    rm -rf "$(dirname "$REC10")"
+else
+    pass "#6388 exit-143-marker-present test skipped (non-Darwin host)"
+fi
+
+# ===================================================================
+# 10c. #6388 sibling of Test 10: exit 143 with the marker ABSENT preserves
+#      the ORIGINAL "never revive a deliberate stop" behavior — it is marker
+#      ABSENCE, not the exit code, that makes a stop deliberate. The stubbed
+#      launchctl still records "last exit status = 143" so a regression that
+#      reintroduces exit-code reasoning into the marker-absent branch would
+#      be caught too, but the current (correct) code path never even reads
+#      it: the marker-absent branch exits quietly before consulting the
+#      supervisor at all.
+# ===================================================================
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    STUB10C="$WORKDIR/stub10c"
+    mkdir -p "$STUB10C"
+    cat > "$STUB10C/launchctl" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+  print)
+    echo "	state = not running"
+    echo "	last exit status = 143"
+    exit 0
+    ;;
+  *) exit 0 ;;
+esac
+EOF
+    chmod +x "$STUB10C/launchctl"
+    rm -f "$MARKER"
+    : > "$WDLOG" "$OUT"
+    env PATH="$STUB10C:$PATH" LOOM_WATCHDOG_IPC_PROBE=0 LOOM_PID_FILE= LOOM_WORKSPACE= \
+        LOOM_MACHINE_CHECKOUT= LOOM_SOCKET_PATH="$WORKDIR/loom-daemon-10c.sock" \
+        LOOM_WATCHDOG_AUTO_RECOVER=0 LOOM_WATCHDOG_ESCALATE=0 \
+        LOOM_WATCHDOG_RECOVERY_STATE="$WORKDIR/.watchdog-recovery-state" \
+        LOOM_AUTONOMY_MARKER="$MARKER" LOOM_WATCHDOG_LOG="$WDLOG" \
+        bash "$WATCHDOG" > "$OUT" 2>&1
+    rc10c=$?
+    assert_rc 0 "$rc10c" "#6388 exit-143-marker-absent: no daemon expected -> stays quiet (exit 0)"
+    if log_hasi 'deliberate stop, not reviving'; then
+        pass "#6388 exit-143-marker-absent: the report names the rule that fired (marker absent -> deliberate stop)"
+    else
+        fail "#6388 exit-143-marker-absent: expected the marker-absent rule to be named ($(cat "$WDLOG"))"
     fi
 else
-    pass "exit-143-and-down report-only test skipped (non-Darwin host)"
+    pass "#6388 exit-143-marker-absent test skipped (non-Darwin host)"
 fi
 
 # ===================================================================
@@ -761,21 +956,36 @@ fi
 
 # ===================================================================
 # 11. --help works and documents the marker + StartInterval design.
+#
+# #6341: these checks pipe a large (~32KB) $help_out into `grep -q`, which
+# is DELIBERATELY a here-string (`<<<`), never `echo "$help_out" | grep -q`.
+# With `set -o pipefail` (line 27) active, `echo "$var" | grep -q PATTERN`
+# is racy for a large $var: `grep -q` may find its match and exit(0) before
+# `echo` has finished writing the rest of the string to the pipe, which
+# sends `echo` a SIGPIPE (exit 141). pipefail then reports the pipeline's
+# status as the SIGPIPE'd echo's 141 instead of grep's 0 — a real match is
+# misreported as absent, nondeterministically (host-load/scheduling
+# dependent), and — since which of the several greps below races depends on
+# scheduling — a DIFFERENT check fails each time this reproduces. A
+# here-string has no live writer process to receive SIGPIPE (bash feeds it
+# via a temp file), so it can't race. This mirrors the pattern already used
+# safely at the other two `--help` capture sites in this suite (search
+# `<<< "$help_out`).
 # ===================================================================
 help_out=$(bash "$WATCHDOG" --help 2>/dev/null)
-if echo "$help_out" | grep -qi 'autonomy-desired' && echo "$help_out" | grep -qi 'StartInterval'; then
+if grep -qi 'autonomy-desired' <<< "$help_out" && grep -qi 'StartInterval' <<< "$help_out"; then
     pass "--help documents the marker + StartInterval rationale"
 else
     fail "--help missing marker/StartInterval documentation"
 fi
-if echo "$help_out" | grep -q 'LOOM_WATCHDOG_STATUS_PROBE_TIMEOUT_SECS' \
-    && echo "$help_out" | grep -q 'LOOM_WATCHDOG_IPC_PROBE_FAIL_THRESHOLD'; then
+if grep -q 'LOOM_WATCHDOG_STATUS_PROBE_TIMEOUT_SECS' <<< "$help_out" \
+    && grep -q 'LOOM_WATCHDOG_IPC_PROBE_FAIL_THRESHOLD' <<< "$help_out"; then
     pass "--help documents the #4398 IPC-probe knobs"
 else
     fail "--help missing the #4398 IPC-probe knob documentation"
 fi
-if echo "$help_out" | grep -q 'LOOM_WATCHDOG_IPC_PROBE_WINDOW_TICKS' \
-    && echo "$help_out" | grep -q 'LOOM_WATCHDOG_IPC_PROBE_WINDOW_FAIL_THRESHOLD'; then
+if grep -q 'LOOM_WATCHDOG_IPC_PROBE_WINDOW_TICKS' <<< "$help_out" \
+    && grep -q 'LOOM_WATCHDOG_IPC_PROBE_WINDOW_FAIL_THRESHOLD' <<< "$help_out"; then
     pass "--help documents the #5944 windowed/rate IPC-probe knobs"
 else
     fail "--help missing the #5944 windowed/rate IPC-probe knob documentation"
@@ -1244,10 +1454,10 @@ run_watchdog PATH="$PS_STUB_DIR:$PATH" LOOM_WATCHDOG_IPC_PROBE=0 \
 elapsed=$(( $(date +%s) - t0 ))
 kill "$LIVE_PID" 2>/dev/null || true
 assert_rc 0 "$RC" "LOOM_WATCHDOG_IPC_PROBE=0: probe disabled, exits 0"
-if (( elapsed < 2 )); then
-    pass "LOOM_WATCHDOG_IPC_PROBE=0: the probe binary is never invoked (${elapsed}s)"
+if [[ -f "$STUB20/was-invoked" ]]; then
+    fail "LOOM_WATCHDOG_IPC_PROBE=0: the probe binary was invoked (${elapsed}s)"
 else
-    fail "LOOM_WATCHDOG_IPC_PROBE=0: took ${elapsed}s — the probe appears to have run"
+    pass "LOOM_WATCHDOG_IPC_PROBE=0: the probe binary is never invoked (${elapsed}s)"
 fi
 rm -rf "$PS_STUB_DIR" "$STUB20"
 
@@ -1276,39 +1486,22 @@ else
 fi
 rm -rf "$PS_STUB_DIR" "$STUB21"
 
-# ===================================================================
-# 22. #4832: a missing/unreadable lib/bounded-run.sh must degrade to a
-#     clearly-diagnosed skip, never a raw "command not found" (rc 127) on a
-#     scheduled tick. Simulate by temporarily renaming the shared lib file
-#     the watchdog sources bounded_run() from.
-# ===================================================================
-# NOTE: deliberately does NOT register its own EXIT trap for the restore —
-# the suite already owns a single combined EXIT trap (line ~56, `bg_proc_reap;
-# rm -rf "$WORKDIR"`), and `trap ... EXIT` REPLACES rather than stacks, so
-# adding a second one here would silently disable that cleanup for every test
-# after this one. Restore inline instead, immediately after the probing run.
-BOUNDED_RUN_LIB="$(cd "$SCRIPT_DIR/../lib" && pwd)/bounded-run.sh"
-BOUNDED_RUN_LIB_BAK="${BOUNDED_RUN_LIB}.test-disabled-4832"
-mv "$BOUNDED_RUN_LIB" "$BOUNDED_RUN_LIB_BAK"
+# ---- 22. RETIRED (#8086): #4832's missing-lib/bounded-run.sh case.
+#          Its MECHANISM was `mv`-ing defaults/scripts/lib/bounded-run.sh out
+#          of the way. The port sources no lib: the bound is
+#          crate::sweep_registry::output_with_timeout, a compiled-in call.
+#          There is nothing to move, so the case cannot run -- and note its
+#          third assertion ("no raw 'command not found' surfaced") would now
+#          pass VACUOUSLY, which is the #7834 failure one step earlier.
+#
+#          Retired under the three-part test in
+#          defaults/docs/verification-recipes.md §6.
 
-STUB22="$(make_daemon_stub unreachable)"
-start_alive_and_fresh 22
-run_watchdog_verbose PATH="$PS_STUB_DIR:$PATH" LOOM_WATCHDOG_IPC_PROBE=1 \
-    LOOM_DAEMON_BIN="$STUB22/loom-daemon-mock"
-kill "$LIVE_PID" 2>/dev/null || true
-mv "$BOUNDED_RUN_LIB_BAK" "$BOUNDED_RUN_LIB"
-assert_rc 0 "$RC" "missing lib/bounded-run.sh: degrades to a skip, not a hard failure (exit 0)"
-if log_hasi 'bounded_run is undefined'; then
-    pass "missing lib/bounded-run.sh: clearly-diagnosed skip in the log"
-else
-    fail "missing lib/bounded-run.sh: expected a clear diagnostic ($(cat "$WDLOG" 2>/dev/null))"
-fi
-if grep -qi 'command not found' "$OUT" "$WDLOG" 2>/dev/null; then
-    fail "missing lib/bounded-run.sh: raw 'command not found' leaked instead of the diagnosed skip"
-else
-    pass "missing lib/bounded-run.sh: no raw 'command not found' surfaced"
-fi
-rm -rf "$PS_STUB_DIR" "$STUB22"
+retired "#4832: a missing lib/bounded-run.sh degrades to a diagnosed skip, not rc 127" \
+    "an absent optional helper must never turn a scheduled, unattended tick into a raw 'command not found' -- the watchdog failing is strictly worse than the watchdog reporting it cannot probe" \
+    "there is no optional helper. The bound is a compiled-in function call; its absence is a compile error, not a runtime state, so no tick can ever encounter it" \
+    "the IpcVerdict::Skipped path carries the whole property and is still exercised BEHAVIOURALLY by two cases above -- 'probe disabled' and 'no resolvable loom-daemon binary' -- each asserting exit 0 plus a diagnosed skip. Case 21 separately proves the bound holds with no external timeout(1) on PATH."
+
 
 # ===================================================================
 # #5118 — SOCKET-FIRST LIVENESS. Everything below drives the state the fleet
@@ -1323,7 +1516,7 @@ rm -rf "$PS_STUB_DIR" "$STUB22"
 # ===================================================================
 
 # ---- 23. pid file ABSENT + socket ANSWERS ⇒ healthy, NOT a divergence ----
-# The exact worker-1 / robb-studio false alarm.
+# The exact worker-1 / studio-host false alarm.
 STUB23="$(make_daemon_stub ok)"
 rm -f "$WORKDIR/pid23"
 write_marker "$WORKDIR/pid23" 60            # marker names a pid file that does not exist
@@ -1503,27 +1696,6 @@ fi
 
 RECOVERY_STATE="$WORKDIR/.watchdog-recovery-state"
 OUTAGE_SENTINEL="$WORKDIR/.watchdog-outage-escalated"
-
-# A recovery-command stub that appends one line per invocation to <log>.
-#   noop    records the call and changes nothing (recovery keeps failing)
-#   revive  records the call and writes a LIVE pid into <pidfile> (recovery works)
-#   hang    never returns — only the watchdog's own budget can end it
-make_recover_stub() { # <mode> <log> [pidfile] [pid]
-    local mode="$1" log="$2" pidfile="${3:-}" pid="${4:-}" dir
-    dir="$(mktemp -d)"
-    case "$mode" in
-        noop)
-            printf '#!/usr/bin/env bash\necho "recover $*" >> %s\nexit 1\n' "$log" > "$dir/recover.sh" ;;
-        revive)
-            printf '#!/usr/bin/env bash\necho "recover $*" >> %s\necho %s > %s\nexit 0\n' \
-                "$log" "$pid" "$pidfile" > "$dir/recover.sh" ;;
-        hang)
-            printf '#!/usr/bin/env bash\necho "recover $*" >> %s\nwhile true; do sleep 1; done\n' "$log" > "$dir/recover.sh" ;;
-        *) echo "unknown recover stub mode $mode" >&2; return 1 ;;
-    esac
-    chmod +x "$dir/recover.sh"
-    echo "$dir/recover.sh"
-}
 
 # Stand up "a daemon is expected and is CONFIRMED down" on the pid-file tier:
 # the marker names a pid file holding a dead pid, and the in-band socket probe
@@ -1719,14 +1891,16 @@ fi
 rm -rf "$DOWN_STUB" "$(dirname "$REC33")" "$WORKDIR/.loom"
 rm -f "$OUTAGE_SENTINEL"
 
-# ---- 34. An operator stop is NEVER revived, even with recovery enabled ----
-#          The #4232/#4862 narrow-gate guarantee, preserved verbatim under the
-#          new policy: a unit whose main process was killed by SIGTERM is intent,
-#          not a fault. Uses the systemd stub (platform-independent) with
-#          ExecMainCode=killed/TERM — which also cannot trip the exit-0 gate.
+# ---- 34. #6388: a signal-shaped exit (systemd killed/TERM) with the marker ----
+#          PRESENT is NOT an operator stop -- it now gets the SAME general
+#          bounded recovery (#5391) as any other confirmed-down signature,
+#          exactly like Test 35's ExecMainStatus=1 crash case below. Before
+#          this fix this exact signature forced `recover_possible=false` and
+#          the recovery command was NEVER invoked -- the systemd mirror of the
+#          11h outage #6388 reports on the launchd side (Test 10).
 STUB34="$WORKDIR/stub34"; mkdir -p "$STUB34"
 LOG34="$WORKDIR/recover34.log"; : > "$LOG34"
-UNIT34="loom-daemon-test-operator-stop-$$.service"
+UNIT34="loom-daemon-test-signal-exit-$$.service"
 cat > "$STUB34/systemctl" <<EOF
 #!/usr/bin/env bash
 if [[ "\${1:-}" == "--user" ]]; then shift; fi
@@ -1764,16 +1938,21 @@ env PATH="$STUB34:$PATH" LOOM_PID_FILE= LOOM_WORKSPACE= LOOM_MACHINE_CHECKOUT= \
     LOOM_AUTONOMY_MARKER="$MARKER" LOOM_WATCHDOG_LOG="$WDLOG" \
     bash "$WATCHDOG" > "$OUT" 2>&1
 rc34=$?
-assert_rc 1 "$rc34" "#5391 operator-stop signature: reported (exit 1), not revived"
+assert_rc 1 "$rc34" "#6388 signal-exit-marker-present: recovery attempted but daemon still down -> exits 1"
 if [[ -s "$LOG34" ]]; then
-    fail "#5391 operator-stop signature: the recovery command must NEVER run ($(cat "$LOG34"))"
+    pass "#6388 signal-exit-marker-present: general bounded recovery (#5391) DOES run — marker present overrides the signal"
 else
-    pass "#5391 operator-stop signature: the recovery command is never invoked"
+    fail "#6388 signal-exit-marker-present: expected the bounded-recovery command to run ($(cat "$LOG34"))"
+fi
+if log_hasi 'stray signal' && log_hasi 'AUTO-RECOVERING'; then
+    pass "#6388 signal-exit-marker-present: the report names the rule that fired (stray signal, recovering)"
+else
+    fail "#6388 signal-exit-marker-present: expected the report to name the stray-signal rule ($(cat "$WDLOG"))"
 fi
 if log_hasi 'operator-initiated stop'; then
-    pass "#5391 operator-stop signature: the report names it as a deliberate stop"
+    fail "#6388 signal-exit-marker-present: must NOT be labelled a deliberate operator stop while the marker is present ($(cat "$WDLOG"))"
 else
-    fail "#5391 operator-stop signature: expected the deliberate-stop explanation ($(cat "$WDLOG"))"
+    pass "#6388 signal-exit-marker-present: not mislabelled as a deliberate operator stop"
 fi
 rm -rf "$(dirname "$REC34")"
 
@@ -1912,6 +2091,585 @@ else
     fail "--help should state the recover-vs-report-only decision explicitly"
 fi
 
+# ===================================================================
+# 40-45. Peer-coordination out-of-band alert (#6222, Layer 3 of #6157).
+#
+#         Distinct from every #5391 outage case above: the daemon here is
+#         FULLY ALIVE and answering (a fresh pid + fresh heartbeat, and the
+#         ordinary `quarantine list` IPC probe always succeeds) — peer
+#         coordination degrading is orthogonal to liveness, which is exactly
+#         why #6157 needed its own health section rather than folding into
+#         the existing liveness/heartbeat contract. All cases pin
+#         LOOM_WATCHDOG_ESCALATE=1 (the harness default is 0, mirroring the
+#         #5391 cases' own reason for pinning it) and a fresh
+#         PEER_COORD_SENTINEL path so no case can dedupe against another's
+#         leftover state. Every case also pins a fresh PEER_COORD_COOLDOWN_STATE
+#         path (#7258) for the identical reason: without it, cases 40-49 would
+#         share ONE cooldown-state file (defaulting to <loom dir>, i.e.
+#         $WORKDIR here) and test 42's recovery would poison every later
+#         "expect a fresh filing" case with a cooldown it never asked for.
+#         The dedicated cooldown-hysteresis cases live in 50-52 below.
+# ===================================================================
+PEER_COORD_SENTINEL="$WORKDIR/.watchdog-peer-coordination-escalated"
+PEER_COORD_COOLDOWN_STATE="$WORKDIR/.watchdog-peer-coordination-cooldown"
+start_alive_and_fresh 40
+
+# ---- 40. First degraded tick ⇒ files EXACTLY ONE forge issue, self- ----
+#          describing (embeds degraded_for/consecutive/threshold from
+#          PeerCoordinationHealth so the alert needs no second `gh` round-trip
+#          to be actionable).
+ISSUE40="$WORKDIR/create-issue40.log"; : > "$ISSUE40"
+BODY40="$WORKDIR/create-issue40-body.txt"; : > "$BODY40"
+mkdir -p "$WORKDIR/.loom/scripts"
+cat > "$WORKDIR/.loom/scripts/create-issue.sh" <<EOF
+#!/usr/bin/env bash
+title=""; labels=""
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    --title|-t) title="\$2"; shift 2 ;;
+    --label|-l) labels="\$labels \$2"; shift 2 ;;
+    --body|-b)  printf '%s\n' "\$2" >> "$BODY40"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+echo "create-issue title=\$title labels=\$labels" >> "$ISSUE40"
+echo "https://example.invalid/repo/issues/4001"
+exit 0
+EOF
+chmod +x "$WORKDIR/.loom/scripts/create-issue.sh"
+
+STUB40="$(make_peer_coord_stub degraded 300 1 3 10 7)"
+rm -f "$PEER_COORD_SENTINEL" "$PEER_COORD_COOLDOWN_STATE"
+run_watchdog PATH="$PS_STUB_DIR:$PATH" LOOM_WATCHDOG_IPC_PROBE=1 LOOM_DAEMON_BIN="$STUB40/loom-daemon-mock" \
+    LOOM_WATCHDOG_ESCALATE=1 LOOM_WATCHDOG_PEER_COORD_SENTINEL="$PEER_COORD_SENTINEL" \
+    LOOM_WATCHDOG_PEER_COORD_COOLDOWN_STATE="$PEER_COORD_COOLDOWN_STATE"
+assert_rc 0 "$RC" "#6222 peer-coordination degraded: liveness itself stays healthy (exit 0)"
+if [[ "$(wc -l < "$ISSUE40" | tr -d ' ')" == "1" ]]; then
+    pass "#6222 peer-coordination degraded: files exactly ONE forge issue"
+else
+    fail "#6222 peer-coordination degraded: expected one create-issue.sh call, got $(wc -l < "$ISSUE40") ($(cat "$ISSUE40"))"
+fi
+if grep -q 'loom:triage' "$ISSUE40"; then
+    pass "#6222 peer-coordination degraded: the filed issue carries a triage label"
+else
+    fail "#6222 peer-coordination degraded: expected a labelled filing ($(cat "$ISSUE40"))"
+fi
+if grep -qi 'DEGRADED' "$BODY40" && grep -q '1/3' "$BODY40" && grep -q '300s' "$BODY40"; then
+    pass "#6222 peer-coordination degraded: the issue body is self-describing (degraded-for + recovery progress)"
+else
+    fail "#6222 peer-coordination degraded: issue body should embed degraded_for/consecutive/threshold ($(cat "$BODY40"))"
+fi
+if [[ -f "$PEER_COORD_SENTINEL" ]]; then
+    pass "#6222 peer-coordination degraded: a dedupe sentinel is written"
+else
+    fail "#6222 peer-coordination degraded: expected a dedupe sentinel at $PEER_COORD_SENTINEL"
+fi
+if log_hasi 'ESCALATED out-of-band' && log_hasi 'peer-claim coordination is DEGRADED'; then
+    pass "#6222 peer-coordination degraded: the log records the escalation"
+else
+    fail "#6222 peer-coordination degraded: expected an ESCALATED out-of-band note ($(cat "$WDLOG"))"
+fi
+
+# ---- 41. Repeated degraded ticks do NOT re-file (dedup across ticks) ----
+: > "$WDLOG"
+run_watchdog PATH="$PS_STUB_DIR:$PATH" LOOM_WATCHDOG_IPC_PROBE=1 LOOM_DAEMON_BIN="$STUB40/loom-daemon-mock" \
+    LOOM_WATCHDOG_ESCALATE=1 LOOM_WATCHDOG_PEER_COORD_SENTINEL="$PEER_COORD_SENTINEL" \
+    LOOM_WATCHDOG_PEER_COORD_COOLDOWN_STATE="$PEER_COORD_COOLDOWN_STATE"
+if [[ "$(wc -l < "$ISSUE40" | tr -d ' ')" == "1" ]]; then
+    pass "#6222 peer-coordination degraded: a second degraded tick does NOT file a duplicate issue"
+else
+    fail "#6222 peer-coordination degraded: duplicate filing on the next tick ($(cat "$ISSUE40"))"
+fi
+if log_hasi 'already escalated out-of-band'; then
+    pass "#6222 peer-coordination degraded: the repeat tick notes the degradation is already escalated"
+else
+    fail "#6222 peer-coordination degraded: expected an already-escalated note ($(cat "$WDLOG"))"
+fi
+rm -rf "$STUB40"
+
+# ---- 42. Recovery: comments on + closes the EXACT filed issue, clears the ----
+#          sentinel — the behavior #5391's own outage escalation never needed
+#          (that episode still requires an operator to act; this one heals
+#          itself the moment a later tick observes Green again).
+GHLOG42="$WORKDIR/gh42.log"; : > "$GHLOG42"
+GHSTUB42="$(mktemp -d)"
+cat > "$GHSTUB42/gh" <<EOF
+#!/usr/bin/env bash
+echo "gh \$*" >> "$GHLOG42"
+exit 0
+EOF
+chmod +x "$GHSTUB42/gh"
+STUB42="$(make_peer_coord_stub green)"
+: > "$WDLOG"
+run_watchdog PATH="$GHSTUB42:$PS_STUB_DIR:$PATH" LOOM_WATCHDOG_IPC_PROBE=1 LOOM_DAEMON_BIN="$STUB42/loom-daemon-mock" \
+    LOOM_WATCHDOG_ESCALATE=1 LOOM_WATCHDOG_PEER_COORD_SENTINEL="$PEER_COORD_SENTINEL" \
+    LOOM_WATCHDOG_PEER_COORD_COOLDOWN_STATE="$PEER_COORD_COOLDOWN_STATE"
+assert_rc 0 "$RC" "#6222 peer-coordination recovered: exits 0"
+if grep -q 'issue comment https://example.invalid/repo/issues/4001' "$GHLOG42"; then
+    pass "#6222 peer-coordination recovered: the tracking issue is commented on"
+else
+    fail "#6222 peer-coordination recovered: expected a gh issue comment call ($(cat "$GHLOG42"))"
+fi
+if grep -q 'issue close https://example.invalid/repo/issues/4001' "$GHLOG42"; then
+    pass "#6222 peer-coordination recovered: the tracking issue is closed"
+else
+    fail "#6222 peer-coordination recovered: expected a gh issue close call ($(cat "$GHLOG42"))"
+fi
+if [[ -f "$PEER_COORD_SENTINEL" ]]; then
+    fail "#6222 peer-coordination recovered: the escalation sentinel must be cleared"
+else
+    pass "#6222 peer-coordination recovered: the escalation sentinel is cleared"
+fi
+if log_hasi 'RECOVERED' && log_hasi 'cleared the escalation sentinel'; then
+    pass "#6222 peer-coordination recovered: the log records the recovery"
+else
+    fail "#6222 peer-coordination recovered: expected a RECOVERED note ($(cat "$WDLOG"))"
+fi
+rm -rf "$STUB42" "$GHSTUB42"
+
+# ---- 43. Best-effort: create-issue.sh fails (no forge auth / offline host) ----
+#          degrades to a log line, never a failed tick (mirrors
+#          escalate_daemon_outage()'s own best-effort contract, #5391).
+#
+#          Deliberately a FAILING stub, never a REMOVED file: both
+#          escalate_daemon_outage() and escalate_peer_coordination_degraded()
+#          fall back to "$_LOOM_WATCHDOG_CLI_DIR/../create-issue.sh" when
+#          $repo_root has none — which resolves relative to wherever the
+#          watchdog SCRIPT ITSELF lives on disk, not this test's sandboxed
+#          $WORKDIR. Since this suite runs the watchdog from its real in-repo
+#          path (see $WATCHDOG above), removing $WORKDIR/.loom/scripts/
+#          create-issue.sh here would silently fall through to THIS REPO'S
+#          OWN real defaults/scripts/create-issue.sh and file a genuine forge
+#          issue — exactly what happened once during this test's own
+#          development. Keeping the stub present (branch 1 of the resolution
+#          order) but failing exercises the identical best-effort contract
+#          without ever reaching that fallback.
+cat > "$WORKDIR/.loom/scripts/create-issue.sh" <<'STUBEOF'
+#!/usr/bin/env bash
+echo "create-issue.sh: no forge auth available (simulated)" >&2
+exit 1
+STUBEOF
+chmod +x "$WORKDIR/.loom/scripts/create-issue.sh"
+rm -f "$PEER_COORD_SENTINEL" "$PEER_COORD_COOLDOWN_STATE"
+STUB43="$(make_peer_coord_stub degraded)"
+: > "$WDLOG"
+run_watchdog PATH="$PS_STUB_DIR:$PATH" LOOM_WATCHDOG_IPC_PROBE=1 LOOM_DAEMON_BIN="$STUB43/loom-daemon-mock" \
+    LOOM_WATCHDOG_ESCALATE=1 LOOM_WATCHDOG_PEER_COORD_SENTINEL="$PEER_COORD_SENTINEL" \
+    LOOM_WATCHDOG_PEER_COORD_COOLDOWN_STATE="$PEER_COORD_COOLDOWN_STATE"
+assert_rc 0 "$RC" "#6222 peer-coordination degraded, create-issue.sh fails: liveness tick still exits 0 (best-effort, never fatal)"
+if [[ -f "$PEER_COORD_SENTINEL" ]]; then
+    fail "#6222 peer-coordination degraded, create-issue.sh fails: no sentinel should be written (nothing was filed)"
+else
+    pass "#6222 peer-coordination degraded, create-issue.sh fails: no sentinel written"
+fi
+if log_hasi 'NOT possible' && log_hasi 'THIS LOGFILE IS THE ONLY SIGNAL'; then
+    pass "#6222 peer-coordination degraded, create-issue.sh fails: degrades to a log line, exactly like escalate_daemon_outage()"
+else
+    fail "#6222 peer-coordination degraded, create-issue.sh fails: expected a best-effort degrade note ($(cat "$WDLOG"))"
+fi
+rm -rf "$STUB43"
+
+# ---- 44. An unparseable/unsupported `peer-claims` answer is "could not ----
+#          determine", never a fabricated verdict and never a crash — the
+#          same discipline every other best-effort probe in this file follows.
+rm -f "$PEER_COORD_SENTINEL" "$PEER_COORD_COOLDOWN_STATE"
+STUB44="$(make_peer_coord_stub unsupported)"
+: > "$WDLOG"
+run_watchdog PATH="$PS_STUB_DIR:$PATH" LOOM_WATCHDOG_IPC_PROBE=1 LOOM_DAEMON_BIN="$STUB44/loom-daemon-mock" \
+    LOOM_WATCHDOG_ESCALATE=1 LOOM_WATCHDOG_PEER_COORD_SENTINEL="$PEER_COORD_SENTINEL" \
+    LOOM_WATCHDOG_PEER_COORD_COOLDOWN_STATE="$PEER_COORD_COOLDOWN_STATE"
+assert_rc 0 "$RC" "#6222 peer-claims unsupported by this binary: still exits 0 (not a hang, not a divergence)"
+if [[ -f "$PEER_COORD_SENTINEL" ]]; then
+    fail "#6222 peer-claims unsupported: no sentinel should be written (nothing observed)"
+else
+    pass "#6222 peer-claims unsupported: no sentinel written"
+fi
+if log_hasi 'peer-claim coordination is DEGRADED'; then
+    fail "#6222 peer-claims unsupported: must not fabricate a DEGRADED report from an unparseable answer"
+else
+    pass "#6222 peer-claims unsupported: no fabricated DEGRADED report"
+fi
+rm -rf "$STUB44"
+
+kill "$LIVE_PID" 2>/dev/null || true
+
+# ---- 45. --help documents the #6222 peer-coordination alert knobs, plus ----
+#          the #7258 cooldown knobs layered on top.
+help_out_6222=$(bash "$WATCHDOG" --help 2>/dev/null)
+if grep -q 'LOOM_WATCHDOG_PEER_COORD_CHECK' <<< "$help_out_6222" \
+    && grep -q 'LOOM_WATCHDOG_PEER_COORD_SENTINEL' <<< "$help_out_6222"; then
+    pass "--help documents the #6222 peer-coordination alert knobs"
+else
+    fail "--help missing the #6222 peer-coordination alert knob documentation"
+fi
+if grep -q 'LOOM_WATCHDOG_PEER_COORD_COOLDOWN_SECS' <<< "$help_out_6222" \
+    && grep -q 'LOOM_WATCHDOG_PEER_COORD_COOLDOWN_STATE' <<< "$help_out_6222"; then
+    pass "--help documents the #7258 peer-coordination cooldown knobs"
+else
+    fail "--help missing the #7258 peer-coordination cooldown knob documentation"
+fi
+
+# ---------------------------------------------------------------------------
+# #6272 regression suite: both escalation functions' create-issue.sh
+# resolution has a THIRD branch — "$_LOOM_WATCHDOG_CLI_DIR/../create-issue.sh"
+# — that is NOT sandboxable via $repo_root: it resolves relative to wherever
+# the watchdog SCRIPT ITSELF lives on disk. Because this suite invokes the
+# watchdog from its real in-repo path, that branch, unguarded, resolves to
+# THIS repo's own real, gh-authenticated defaults/scripts/create-issue.sh —
+# which already filed one spurious live issue during this suite's own
+# development (#6271, closed). LOOM_WATCHDOG_CREATE_ISSUE_FALLBACK_DIR (added
+# by #6272) is the seam that lets these cases redirect branch 3 to a sandbox
+# location instead, so none of the tests below can ever reach the real path.
+# ---------------------------------------------------------------------------
+
+# ---- 46. #6272: branch 3 is never reached — proven by EXECUTION, not just ----
+#          if/elif ordering — when a repo-scoped create-issue.sh exists, for
+#          escalate_daemon_outage(). LOOM_WATCHDOG_CREATE_ISSUE_FALLBACK_DIR
+#          points at a "poison" script that records itself being called; if
+#          branch 1's repo-scoped stub were not strictly preferred, the
+#          poison script would fire and this test would catch it.
+mkdir -p "$WORKDIR/.loom/scripts"
+LOG46="$WORKDIR/recover46.log"; : > "$LOG46"
+ISSUE46="$WORKDIR/create-issue46.log"; : > "$ISSUE46"
+cat > "$WORKDIR/.loom/scripts/create-issue.sh" <<EOF
+#!/usr/bin/env bash
+echo "repo-scoped create-issue.sh called" >> "$ISSUE46"
+echo "https://example.invalid/issues/46"
+exit 0
+EOF
+chmod +x "$WORKDIR/.loom/scripts/create-issue.sh"
+POISON46="$(mktemp -d)"
+POISON_LOG46="$WORKDIR/poison46.log"; : > "$POISON_LOG46"
+cat > "$POISON46/create-issue.sh" <<EOF
+#!/usr/bin/env bash
+echo "POISON: branch 3 fallback dir was reached despite a repo-scoped create-issue.sh existing" >> "$POISON_LOG46"
+exit 1
+EOF
+chmod +x "$POISON46/create-issue.sh"
+start_confirmed_down 46
+REC46="$(make_recover_stub noop "$LOG46")"
+rec46_env=$(recover_env "$REC46" LOOM_WATCHDOG_RECOVER_MAX_ATTEMPTS=1 \
+    LOOM_WATCHDOG_RECOVER_BACKOFF_SECS=0 LOOM_WATCHDOG_ESCALATE=1 \
+    LOOM_WATCHDOG_ESCALATION_SENTINEL="$OUTAGE_SENTINEL" \
+    LOOM_WATCHDOG_CREATE_ISSUE_FALLBACK_DIR="$POISON46")
+# shellcheck disable=SC2086,SC2046
+run_watchdog $rec46_env; rc46=$RC
+assert_rc 1 "$rc46" "#6272 branch-3 skipped when repo-scoped exists: the breaker-trip tick still exits 1"
+if [[ -s "$POISON_LOG46" ]]; then
+    fail "#6272 branch-3 skipped when repo-scoped exists: the fallback-dir script was invoked ($(cat "$POISON_LOG46")) even though a repo-scoped create-issue.sh existed"
+else
+    pass "#6272 branch-3 skipped when repo-scoped exists: the fallback-dir script was never invoked"
+fi
+if [[ "$(wc -l < "$ISSUE46" | tr -d ' ')" == "1" ]]; then
+    pass "#6272 branch-3 skipped when repo-scoped exists: the repo-scoped create-issue.sh was used instead"
+else
+    fail "#6272 branch-3 skipped when repo-scoped exists: expected the repo-scoped stub to be called exactly once ($(cat "$ISSUE46"))"
+fi
+rm -rf "$DOWN_STUB" "$POISON46" "$(dirname "$REC46")"
+
+# ---- 47. #6272: identical branch-3-skipped proof for ----
+#          escalate_peer_coordination_degraded() (#6222) — same landmine,
+#          same fix, shared verbatim by both escalation functions.
+rm -f "$PEER_COORD_SENTINEL" "$PEER_COORD_COOLDOWN_STATE"
+ISSUE47="$WORKDIR/create-issue47.log"; : > "$ISSUE47"
+cat > "$WORKDIR/.loom/scripts/create-issue.sh" <<EOF
+#!/usr/bin/env bash
+echo "repo-scoped create-issue.sh called" >> "$ISSUE47"
+echo "https://example.invalid/issues/47"
+exit 0
+EOF
+chmod +x "$WORKDIR/.loom/scripts/create-issue.sh"
+POISON47="$(mktemp -d)"
+POISON_LOG47="$WORKDIR/poison47.log"; : > "$POISON_LOG47"
+cat > "$POISON47/create-issue.sh" <<EOF
+#!/usr/bin/env bash
+echo "POISON: branch 3 fallback dir was reached despite a repo-scoped create-issue.sh existing" >> "$POISON_LOG47"
+exit 1
+EOF
+chmod +x "$POISON47/create-issue.sh"
+STUB47="$(make_peer_coord_stub degraded)"
+run_watchdog PATH="$PS_STUB_DIR:$PATH" LOOM_WATCHDOG_IPC_PROBE=1 LOOM_DAEMON_BIN="$STUB47/loom-daemon-mock" \
+    LOOM_WATCHDOG_ESCALATE=1 LOOM_WATCHDOG_PEER_COORD_SENTINEL="$PEER_COORD_SENTINEL" \
+    LOOM_WATCHDOG_PEER_COORD_COOLDOWN_STATE="$PEER_COORD_COOLDOWN_STATE" \
+    LOOM_WATCHDOG_CREATE_ISSUE_FALLBACK_DIR="$POISON47"
+assert_rc 0 "$RC" "#6272 branch-3 skipped (#6222 path): liveness itself stays healthy (exit 0)"
+if [[ -s "$POISON_LOG47" ]]; then
+    fail "#6272 branch-3 skipped (#6222 path): the fallback-dir script was invoked ($(cat "$POISON_LOG47")) even though a repo-scoped create-issue.sh existed"
+else
+    pass "#6272 branch-3 skipped (#6222 path): the fallback-dir script was never invoked"
+fi
+if [[ "$(wc -l < "$ISSUE47" | tr -d ' ')" == "1" ]]; then
+    pass "#6272 branch-3 skipped (#6222 path): the repo-scoped create-issue.sh was used instead"
+else
+    fail "#6272 branch-3 skipped (#6222 path): expected the repo-scoped stub to be called exactly once ($(cat "$ISSUE47"))"
+fi
+rm -rf "$STUB47" "$POISON47"
+
+# ---- 48. #6272: the original landmine, closed — with NO repo-scoped ----
+#          create-issue.sh anywhere and LOOM_WATCHDOG_CREATE_ISSUE_FALLBACK_DIR
+#          redirected to an empty sandbox dir, escalate_daemon_outage()
+#          degrades to a best-effort log line instead of falling through to
+#          $_LOOM_WATCHDOG_CLI_DIR/../create-issue.sh — this repo's own real,
+#          gh-authenticated script (the exact fallthrough that filed a
+#          spurious live issue, #6271). This is the scenario a test could not
+#          previously simulate safely.
+rm -f "$WORKDIR/.loom/scripts/create-issue.sh"
+EMPTY48="$(mktemp -d)"
+LOG48="$WORKDIR/recover48.log"; : > "$LOG48"
+start_confirmed_down 48
+REC48="$(make_recover_stub noop "$LOG48")"
+rec48_env=$(recover_env "$REC48" LOOM_WATCHDOG_RECOVER_MAX_ATTEMPTS=1 \
+    LOOM_WATCHDOG_RECOVER_BACKOFF_SECS=0 LOOM_WATCHDOG_ESCALATE=1 \
+    LOOM_WATCHDOG_ESCALATION_SENTINEL="$OUTAGE_SENTINEL" \
+    LOOM_WATCHDOG_CREATE_ISSUE_FALLBACK_DIR="$EMPTY48")
+# shellcheck disable=SC2086,SC2046
+run_watchdog $rec48_env; rc48=$RC
+assert_rc 1 "$rc48" "#6272 landmine closed: the breaker-trip tick still exits 1"
+if [[ -f "$OUTAGE_SENTINEL" ]]; then
+    fail "#6272 landmine closed: no sentinel should exist — nothing could have been filed with no create-issue.sh reachable anywhere"
+else
+    pass "#6272 landmine closed: no sentinel written — no create-issue.sh reachable anywhere"
+fi
+if log_hasi 'THIS LOGFILE IS THE ONLY SIGNAL'; then
+    pass "#6272 landmine closed: degrades to the standard best-effort log line"
+else
+    fail "#6272 landmine closed: expected a best-effort degrade note ($(cat "$WDLOG"))"
+fi
+rm -rf "$DOWN_STUB" "$EMPTY48" "$(dirname "$REC48")"
+
+# ---- 49. #6272: identical landmine-closed proof for ----
+#          escalate_peer_coordination_degraded() (#6222).
+rm -f "$WORKDIR/.loom/scripts/create-issue.sh" "$PEER_COORD_SENTINEL" "$PEER_COORD_COOLDOWN_STATE"
+EMPTY49="$(mktemp -d)"
+STUB49="$(make_peer_coord_stub degraded)"
+: > "$WDLOG"
+run_watchdog PATH="$PS_STUB_DIR:$PATH" LOOM_WATCHDOG_IPC_PROBE=1 LOOM_DAEMON_BIN="$STUB49/loom-daemon-mock" \
+    LOOM_WATCHDOG_ESCALATE=1 LOOM_WATCHDOG_PEER_COORD_SENTINEL="$PEER_COORD_SENTINEL" \
+    LOOM_WATCHDOG_PEER_COORD_COOLDOWN_STATE="$PEER_COORD_COOLDOWN_STATE" \
+    LOOM_WATCHDOG_CREATE_ISSUE_FALLBACK_DIR="$EMPTY49"
+assert_rc 0 "$RC" "#6272 landmine closed (#6222 path): liveness itself stays healthy (exit 0)"
+if [[ -f "$PEER_COORD_SENTINEL" ]]; then
+    fail "#6272 landmine closed (#6222 path): no sentinel should exist — nothing could have been filed"
+else
+    pass "#6272 landmine closed (#6222 path): no sentinel written"
+fi
+if log_hasi 'NOT possible' && log_hasi 'THIS LOGFILE IS THE ONLY SIGNAL'; then
+    pass "#6272 landmine closed (#6222 path): degrades to the standard best-effort log line"
+else
+    fail "#6272 landmine closed (#6222 path): expected a best-effort degrade note ($(cat "$WDLOG"))"
+fi
+rm -rf "$STUB49" "$EMPTY49"
+
+# ===================================================================
+# 50-53. #7258: post-recovery cooldown/hysteresis for the #6222 peer-
+#         coordination alert — a host flapping degraded/healthy every 1-2
+#         hours must not file a brand-new tracking issue on every flap. All
+#         cases reuse make_peer_coord_stub/PS_STUB_DIR exactly like 46-49
+#         above: the #4398 in-band IPC probe alone establishes liveness, so
+#         these don't need a live LIVE_PID (already reaped after case 44).
+# ===================================================================
+
+# ---- 50. A repeat degradation shortly after a clean recovery is SUPPRESSED ----
+#          (no new tracking issue) — the cooldown window's whole reason to
+#          exist. Drives a full degrade -> recover -> degrade cycle so the
+#          suppression is exercised via the real clear_peer_coordination_
+#          escalation() cooldown-stamp write, not a hand-crafted fixture.
+rm -f "$PEER_COORD_SENTINEL" "$PEER_COORD_COOLDOWN_STATE"
+ISSUE50="$WORKDIR/create-issue50.log"; : > "$ISSUE50"
+mkdir -p "$WORKDIR/.loom/scripts"
+cat > "$WORKDIR/.loom/scripts/create-issue.sh" <<EOF
+#!/usr/bin/env bash
+echo "create-issue.sh called" >> "$ISSUE50"
+echo "https://example.invalid/repo/issues/5001"
+exit 0
+EOF
+chmod +x "$WORKDIR/.loom/scripts/create-issue.sh"
+
+# 50a. First degraded tick: files the initial tracking issue as usual.
+STUB50="$(make_peer_coord_stub degraded)"
+run_watchdog PATH="$PS_STUB_DIR:$PATH" LOOM_WATCHDOG_IPC_PROBE=1 LOOM_DAEMON_BIN="$STUB50/loom-daemon-mock" \
+    LOOM_WATCHDOG_ESCALATE=1 LOOM_WATCHDOG_PEER_COORD_SENTINEL="$PEER_COORD_SENTINEL" \
+    LOOM_WATCHDOG_PEER_COORD_COOLDOWN_STATE="$PEER_COORD_COOLDOWN_STATE"
+if [[ "$(wc -l < "$ISSUE50" | tr -d ' ')" == "1" ]]; then
+    pass "#7258 cooldown: the initial degraded tick still files a tracking issue"
+else
+    fail "#7258 cooldown: expected exactly one initial filing ($(cat "$ISSUE50"))"
+fi
+
+# 50b. Recovery: comments on + closes the issue, clears the sentinel, and
+#      (the behavior under test) stamps the cooldown-state file.
+GHSTUB50="$(mktemp -d)"
+cat > "$GHSTUB50/gh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$GHSTUB50/gh"
+STUB50G="$(make_peer_coord_stub green)"
+run_watchdog PATH="$GHSTUB50:$PS_STUB_DIR:$PATH" LOOM_WATCHDOG_IPC_PROBE=1 LOOM_DAEMON_BIN="$STUB50G/loom-daemon-mock" \
+    LOOM_WATCHDOG_ESCALATE=1 LOOM_WATCHDOG_PEER_COORD_SENTINEL="$PEER_COORD_SENTINEL" \
+    LOOM_WATCHDOG_PEER_COORD_COOLDOWN_STATE="$PEER_COORD_COOLDOWN_STATE"
+if [[ -f "$PEER_COORD_COOLDOWN_STATE" ]]; then
+    pass "#7258 cooldown: a clean recovery stamps the cooldown-state file"
+else
+    fail "#7258 cooldown: expected recovery to write $PEER_COORD_COOLDOWN_STATE"
+fi
+rm -rf "$STUB50G" "$GHSTUB50"
+
+# 50c. A repeat degraded tick immediately afterward (well within the default
+#      6h cooldown) must NOT file a second issue.
+: > "$WDLOG"
+run_watchdog PATH="$PS_STUB_DIR:$PATH" LOOM_WATCHDOG_IPC_PROBE=1 LOOM_DAEMON_BIN="$STUB50/loom-daemon-mock" \
+    LOOM_WATCHDOG_ESCALATE=1 LOOM_WATCHDOG_PEER_COORD_SENTINEL="$PEER_COORD_SENTINEL" \
+    LOOM_WATCHDOG_PEER_COORD_COOLDOWN_STATE="$PEER_COORD_COOLDOWN_STATE"
+assert_rc 0 "$RC" "#7258 cooldown: a suppressed repeat degradation still exits 0 (liveness itself is healthy)"
+if [[ "$(wc -l < "$ISSUE50" | tr -d ' ')" == "1" ]]; then
+    pass "#7258 cooldown: a repeat degradation within the cooldown window does NOT file a new issue"
+else
+    fail "#7258 cooldown: expected the cooldown to suppress a second filing ($(cat "$ISSUE50"))"
+fi
+if [[ -f "$PEER_COORD_SENTINEL" ]]; then
+    fail "#7258 cooldown: a suppressed escalation must not write a fresh sentinel"
+else
+    pass "#7258 cooldown: no sentinel is written for a suppressed escalation"
+fi
+if log_hasi 'cooldown window' && log_hasi 'DEGRADED'; then
+    pass "#7258 cooldown: the log records the cooldown suppression"
+else
+    fail "#7258 cooldown: expected a cooldown-suppression note ($(cat "$WDLOG"))"
+fi
+rm -rf "$STUB50"
+
+# ---- 51. Once the cooldown window has elapsed, a repeat degradation files ----
+#          fresh again, exactly like today. Simulated by backdating the
+#          cooldown-state timestamp well past the default window rather than
+#          actually sleeping for hours.
+rm -f "$PEER_COORD_SENTINEL"
+ISSUE51="$WORKDIR/create-issue51.log"; : > "$ISSUE51"
+cat > "$WORKDIR/.loom/scripts/create-issue.sh" <<EOF
+#!/usr/bin/env bash
+echo "create-issue.sh called" >> "$ISSUE51"
+echo "https://example.invalid/repo/issues/5101"
+exit 0
+EOF
+chmod +x "$WORKDIR/.loom/scripts/create-issue.sh"
+echo "$(( $(date -u +%s) - 100000 ))" > "$PEER_COORD_COOLDOWN_STATE"   # ~27.8h ago > default 6h
+STUB51="$(make_peer_coord_stub degraded)"
+: > "$WDLOG"
+run_watchdog PATH="$PS_STUB_DIR:$PATH" LOOM_WATCHDOG_IPC_PROBE=1 LOOM_DAEMON_BIN="$STUB51/loom-daemon-mock" \
+    LOOM_WATCHDOG_ESCALATE=1 LOOM_WATCHDOG_PEER_COORD_SENTINEL="$PEER_COORD_SENTINEL" \
+    LOOM_WATCHDOG_PEER_COORD_COOLDOWN_STATE="$PEER_COORD_COOLDOWN_STATE"
+if [[ "$(wc -l < "$ISSUE51" | tr -d ' ')" == "1" ]]; then
+    pass "#7258 cooldown: a repeat degradation AFTER the cooldown elapses files fresh again"
+else
+    fail "#7258 cooldown: expected a fresh filing once the cooldown elapsed ($(cat "$ISSUE51"))"
+fi
+if [[ -f "$PEER_COORD_SENTINEL" ]]; then
+    pass "#7258 cooldown: the fresh filing writes its own dedupe sentinel"
+else
+    fail "#7258 cooldown: expected a fresh sentinel to be written"
+fi
+if log_hasi 'ESCALATED out-of-band'; then
+    pass "#7258 cooldown: the log records the fresh escalation, not a suppression"
+else
+    fail "#7258 cooldown: expected an ESCALATED note, not a suppression ($(cat "$WDLOG"))"
+fi
+rm -rf "$STUB51"
+
+# ---- 52. A corrupt (non-numeric) cooldown-state file FAILS OPEN: treated as ----
+#          no cooldown in effect, not an error and not a reason to suppress a
+#          genuine degradation.
+rm -f "$PEER_COORD_SENTINEL"
+ISSUE52="$WORKDIR/create-issue52.log"; : > "$ISSUE52"
+cat > "$WORKDIR/.loom/scripts/create-issue.sh" <<EOF
+#!/usr/bin/env bash
+echo "create-issue.sh called" >> "$ISSUE52"
+echo "https://example.invalid/repo/issues/5201"
+exit 0
+EOF
+chmod +x "$WORKDIR/.loom/scripts/create-issue.sh"
+printf 'not-a-timestamp\n' > "$PEER_COORD_COOLDOWN_STATE"
+STUB52="$(make_peer_coord_stub degraded)"
+: > "$WDLOG"
+run_watchdog PATH="$PS_STUB_DIR:$PATH" LOOM_WATCHDOG_IPC_PROBE=1 LOOM_DAEMON_BIN="$STUB52/loom-daemon-mock" \
+    LOOM_WATCHDOG_ESCALATE=1 LOOM_WATCHDOG_PEER_COORD_SENTINEL="$PEER_COORD_SENTINEL" \
+    LOOM_WATCHDOG_PEER_COORD_COOLDOWN_STATE="$PEER_COORD_COOLDOWN_STATE"
+if [[ "$(wc -l < "$ISSUE52" | tr -d ' ')" == "1" ]]; then
+    pass "#7258 cooldown: a corrupt cooldown-state file fails open (files fresh, not an error)"
+else
+    fail "#7258 cooldown: a corrupt cooldown-state file should fail open, not suppress ($(cat "$ISSUE52"))"
+fi
+rm -rf "$STUB52"
+
+# ---- 53. Boundary: an excursion landing exactly AT the cooldown window ----
+#          (elapsed == LOOM_WATCHDOG_PEER_COORD_COOLDOWN_SECS) is treated as
+#          cooldown-ELAPSED (strict `<` comparison) and files fresh — proves
+#          the documented boundary choice by execution, not just comment.
+rm -f "$PEER_COORD_SENTINEL"
+ISSUE53="$WORKDIR/create-issue53.log"; : > "$ISSUE53"
+cat > "$WORKDIR/.loom/scripts/create-issue.sh" <<EOF
+#!/usr/bin/env bash
+echo "create-issue.sh called" >> "$ISSUE53"
+echo "https://example.invalid/repo/issues/5301"
+exit 0
+EOF
+chmod +x "$WORKDIR/.loom/scripts/create-issue.sh"
+echo "$(( $(date -u +%s) - 100 ))" > "$PEER_COORD_COOLDOWN_STATE"   # exactly 100s ago
+STUB53="$(make_peer_coord_stub degraded)"
+: > "$WDLOG"
+run_watchdog PATH="$PS_STUB_DIR:$PATH" LOOM_WATCHDOG_IPC_PROBE=1 LOOM_DAEMON_BIN="$STUB53/loom-daemon-mock" \
+    LOOM_WATCHDOG_ESCALATE=1 LOOM_WATCHDOG_PEER_COORD_SENTINEL="$PEER_COORD_SENTINEL" \
+    LOOM_WATCHDOG_PEER_COORD_COOLDOWN_STATE="$PEER_COORD_COOLDOWN_STATE" \
+    LOOM_WATCHDOG_PEER_COORD_COOLDOWN_SECS=100
+if [[ "$(wc -l < "$ISSUE53" | tr -d ' ')" == "1" ]]; then
+    pass "#7258 cooldown: elapsed == cooldown window is treated as elapsed (strict <), files fresh"
+else
+    fail "#7258 cooldown: expected the exact-boundary tick to escalate fresh ($(cat "$ISSUE53"))"
+fi
+rm -rf "$STUB53"
+
+# ===================================================================
+# #7508: STATIC guard against the bash-3.2 heredoc-in-command-substitution
+#        parser bug that silently dropped escalate_peer_coordination_degraded()'s
+#        issue body 1099x on a host whose launchd plist hardcodes /bin/bash
+#        (macOS's stock, pre-GPLv3 3.2.57) instead of resolving a modern bash
+#        off PATH. Confirmed (against a locally built bash 3.2.0 release,
+#        outside this suite -- 3.2 is not assumed present in CI) that
+#        wrapping a heredoc in `$(...)` trips bash 3.2's lexer whenever the
+#        heredoc body contains EITHER a bare (unescaped) apostrophe anywhere,
+#        OR a `#` sharing a physical line with a backtick -- producing
+#        `bad substitution: no closing )` / `unexpected EOF` and an empty
+#        body. These cases are dynamic-test-suite-independent (no daemon
+#        stub, no forge stub) precisely because the bug is a PARSE-TIME
+#        failure under bash 3.2 -- something this suite's bash (whatever
+#        runs it) cannot reproduce at runtime. They instead statically assert
+#        the two structural properties that make each function safe.
+# ===================================================================
+
+# ---- 54/55. RETIRED (#8086): the #7508 static scans read the SHELL's source.
+#             $WATCHDOG is now a 69-line stub; the bodies they scanned live in
+#             loom-daemon/src/watchdog/{escalate,peer_coord}.rs as Rust string
+#             literals. These greps cannot pass, and making them pass would
+#             mean asserting something about a file the port deleted.
+#
+#             Retired under the three-part test in
+#             defaults/docs/verification-recipes.md §6.
+
+retired "#7508: escalate_daemon_outage() builds its body safely (#5391)" \
+    "an unescaped backtick or bare apostrophe in a heredoc wrapped in \$(...) trips bash 3.2's lexer and silently files an EMPTY issue body -- 1099 times from 2026-08-16" \
+    "there is no shell, no heredoc and no command substitution: the body is a Rust string literal, so no punctuation in the prose can change how it parses" \
+    "watchdog::escalate::shell_differential -- asserts the body is BYTE-IDENTICAL (1314 bytes) to the shell's own rendered output. A scan checks the body was BUILT safely; this checks it IS the same body, which subsumes it."
+
+retired "#7508: escalate_peer_coordination_degraded() builds its body via read -d '' (#6222)" \
+    "same hazard, and this body is the one that actually contains the trigger: a bare apostrophe in \"This host's ... path\"" \
+    "same -- a Rust string literal, and the apostrophe is now inert prose rather than a lexer input" \
+    "watchdog::peer_coord::shell_differential -- BYTE-IDENTICAL (1415 bytes), plus an explicit assertion that the backticks and the apostrophe are CARRIED, so the port cannot have dodged the hazard by rewording instead of porting."
+
+retired "#7508/#7834: the scan locates each heredoc body rather than passing vacuously" \
+    "a scan whose opener pattern stops matching passes without reading anything -- the failure one step earlier than the one it guards" \
+    "there is no opener to locate; the differential either matches the exact bytes or fails" \
+    "the two differentials above assert an exact 1314/1415-byte match, which cannot pass vacuously: there is no pattern to stop matching, only bytes to differ."
+
+
 echo
-echo "Ran $TESTS_RUN tests: $TESTS_PASSED passed, $TESTS_FAILED failed"
+echo "Ran $TESTS_RUN tests: $TESTS_PASSED passed, $TESTS_FAILED failed, $TESTS_RETIRED retired"
 [[ "$TESTS_FAILED" -eq 0 ]]

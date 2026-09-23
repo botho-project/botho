@@ -9,7 +9,7 @@ the failure mode a grounded artifact fears most: an LLM drafting pass
 hallucinating plausible dates, quotes, and attributions that no source
 supports.
 
-The canary is `nitas-mama` (a family memoir): every quote and every
+The canary is `example-memoir` (a family memoir): every quote and every
 factual claim must trace to a local ground-truth corpus — seven
 interview transcripts and nine family letters. But the contract
 generalizes to any artifact grounded in a private evidence base:
@@ -37,6 +37,34 @@ it — is **this contract's** `misattribution_of_substance` flag;
 voice-identity misattribution — right substance, rendered in the wrong
 voice — is #598's flag. The two tiers are independent and a memoir may
 declare both.
+
+## Scope boundary (vs. the AI-authorship byline, #941)
+
+A third, unrelated tier lives beside this one: the opt-in `ai_byline:`
+BRIEF block (`anvil/lib/project_brief.py::AiByline` /
+`resolve_ai_byline`, rendered by `anvil/lib/ai_byline.py`). Where this
+contract (`corpus:`) verifies **substance** — does a claim trace to a
+real source passage? — the AI-byline tier discloses **authorship**: a
+short, consumer-configured line an artifact's drafter/reviser can append
+to a rendered deliverable stating it was drafted with AI assistance.
+
+The two are independent and unrelated: a project may declare `corpus:`
+without `ai_byline:` (verified substance, no authorship disclosure), or
+`ai_byline:` without `corpus:` (authorship disclosed, no local-corpus
+verification applies — e.g. an essay with no evidentiary corpus), or
+both, or neither. Neither tier implies the other.
+
+The AI-authorship byline is **also** distinct from — and not a
+substitute for — the intrinsic, server-side, token-level model-output
+watermark (the green-list logit-bias mechanism mandated for EU AI Act
+transparency). That watermark targets the *adversarial* case (detecting
+AI text passed off as human) and is entirely out of a consumer's
+control. The byline is the *honest-actor* complement: a self-publisher's
+own, detachable, discretionary editorial choice to disclose AI
+assistance on their own terms. It carries no tamper-resistance claim and
+makes no claim to be a watermark. See `anvil/lib/ai_byline.py` and the
+per-skill `ai_byline:` integration (e.g. `essay`'s SKILL.md
+§"AI-authorship byline") for the rendering contract.
 
 ## Section 1 — BRIEF activation
 
@@ -117,7 +145,13 @@ Column contract:
   `resolve_corpus_dirs` roots.
 - **Line range** — a `start-end` line span (or a single line) **hinting**
   at the supporting passage's current location. This is a hint, not the
-  row's identity — see "Anchor: the stable identity" below.
+  row's identity — see "Anchor: the stable identity" below. The cell MAY
+  hold **several comma-separated ranges** (`61-63, 1, 37-39`) when a claim
+  draws on more than one place in the cited file, or a reviser has left a
+  prior hint in place alongside a new one — every range in the cell is a
+  candidate location, in no particular priority order (issue #1204: the
+  anchor-bearing range does NOT need to be listed first). See "Anchor: the
+  stable identity" below for how a multi-range cell resolves.
 - **Anchor** (issue #868) — a short **verbatim quoted snippet** copied
   exactly from the cited passage (curly-quote and whitespace differences
   are tolerated; wording is not). This is the row's stable,
@@ -150,6 +184,17 @@ searches the WHOLE cited file for the anchor's exact text, not just the
 hinted range, and reports where it actually is. `Line range` becomes a
 cheap-to-read hint that is refreshed mechanically when it goes stale
 (Section 4a) — never the ground truth.
+
+**Multi-range cells** (issue #1204): when `Line range` cites several
+comma-separated ranges, the anchor is considered RESOLVED if its actual
+location overlaps **any** of them — not only the first. Order within the
+cell carries no meaning; a corpus audit tool that only checked the first
+range (as `anvil/lib/provenance_anchor.py` did before #1204) produced a
+false `DRIFTED` on a correct row whenever the anchor's true location fell
+in a later range. If the anchor's location overlaps none of the cell's
+cited ranges, the row is genuinely `DRIFTED`; a mechanical `repoint`
+collapses the whole cell to the anchor's single corrected location rather
+than appending it to the (now all equally stale) old ranges.
 
 **Anchor-writing discipline** (drafter and reviser, every row that has
 supporting text at all):
@@ -241,12 +286,16 @@ the schema validator already enforces `tool_calls` on every
 3. Open the resolved passage (the anchor's actual current location when
    Section 4a found one; otherwise the cited `Line range`) in the
    resolved corpus and **classify** it with the five-way vocabulary
-   (Section 5).
-4. Every `MISMATCH` / `NOT_FOUND` / `FABRICATED` row emits a finding with
-   a non-empty **`tool_calls`** array recording the file-read operation
-   that produced the evidence (the passage read, the lines inspected).
-5. Fabrication-class entries additionally emit **`critical_flags`**
-   (Section 6), which route through the existing verdict machinery
+   (Section 5), then run the **scope-widening check** (Section 5a)
+   against the same passage regardless of which five-way classification
+   it received.
+4. Every `MISMATCH` / `NOT_FOUND` / `FABRICATED` row, and every row that
+   fails the Section 5a scope check, emits a finding with a non-empty
+   **`tool_calls`** array recording the file-read operation that
+   produced the evidence (the passage read, the lines inspected).
+5. Fabrication-class entries — including a `scope_overreach` finding —
+   additionally emit **`critical_flags`** (Section 6), which route
+   through the existing verdict machinery
    (`anvil/lib/critics.py::_compute_verdict_impl` already short-circuits
    any `critical_flags` → `Verdict.BLOCK` — no change needed).
 
@@ -281,9 +330,13 @@ Each row resolves to exactly one of:
   classification (Section 5); the passage is simply gone.
 - **`RESOLVED`** — the anchor text is present and its actual location
   overlaps the cited `Line range` hint (or the row has no parseable
-  hint). No drift; classification proceeds against the hinted range.
+  hint). When the cell cites several comma-separated ranges (#1204),
+  overlapping **any one of them** is enough — no priority is given to
+  the first-listed range. No drift; classification proceeds against the
+  hinted range.
 - **`DRIFTED`** — the anchor text is present **verbatim** elsewhere in
-  the file, not overlapping the cited hint. This is the signature case:
+  the file, not overlapping any of the cited hint range(s). This is the
+  signature case:
   **the citation is genuine, only its address is stale.** The critic:
   1. Emits a distinct `findings.md` row/finding — worded as **anchor
      drift**, e.g. *"provenance.md row N: quoted text still present in
@@ -345,6 +398,53 @@ The audit critic classifies each `provenance.md` row as exactly one of:
 and `NOT_FOUND` are findings. `FABRICATED` is a finding **and** a
 critical flag.
 
+## Section 5a — the scope-widening check (issue #1032)
+
+Content support and grammatical **scope** are independent axes. A
+`provenance.md` row can genuinely support a claim's underlying fact and
+the claim can still be wrong, because the artifact clause asserts
+something *broader* than the row established. "Is this fact supported
+at all?" (Section 5's five-way vocabulary) does not ask "*is the fact
+supported at the scope the artifact claims it at?*" — this check does.
+
+Run this check on every row, **in addition to** (not instead of) the
+five-way classification, whenever the artifact clause contains any of:
+
+- a **universal quantifier** — "anyone", "everyone", "every", "all",
+  "always", "everywhere";
+- a **superlative** — "first", "only", "most", "best", "biggest",
+  "last";
+- a **negated existential** — "no other X anywhere/exists", "nothing
+  else", "nowhere else".
+
+Compare the quantifier/superlative/negation's scope in the artifact
+clause against the *same construct's scope* in the cited row's own
+language (not the row's general subject matter — its actual
+quantifying words):
+
+- **Row scope matches or is wider than the claim's scope** → the
+  quantifier/superlative/negation is supported as written; the
+  five-way classification stands unchanged.
+- **Row scope is narrower than the claim's scope** → raise
+  `scope_overreach` (Section 6), **regardless of whether the
+  underlying fact would otherwise classify `VERIFIED` or
+  `PARAPHRASE_OK`.** A row that supports a narrower claim does not
+  license a wider one — this is a finding, not a pass.
+
+**Calibration examples** (field evidence, issue #1032 / #888):
+
+| Artifact clause | Cited row | Verdict |
+|---|---|---|
+| "It is the only picture of the brothers **anyone has**" | "the first photograph of Gustav's parents **the project has**" | `scope_overreach` — "the project has" (this corpus) narrows to "anyone has" (all of humanity) |
+| "the only thing **anyone in this family holds** that Ella wrote in her own hand" | "no other document written by Ella **anywhere in this repository**" | `scope_overreach` — "in this repository" narrows to "anyone in this family holds" |
+| "the first photograph **the project has**" | "the first photograph of Gustav's parents **the project has**" | Not flagged — the claim quotes the row's own scope verbatim; row scope matches claim scope |
+
+A row cited for "the first photograph the project has" against a row
+that itself says "the project has" is correctly scoped — the check
+fires only when the claim's scope-bearing language reaches *beyond*
+what the row's own scope-bearing language covers, never merely because
+a quantifier or superlative is present.
+
 ## Section 6 — fabrication-class critical flag types
 
 These are the `CriticalFlag.type` strings the audit critic (and, at the
@@ -364,6 +464,18 @@ boundary, the reviewer) raises. They are **skill-defined vocabulary**
   corpus chronology.
 - **`unattributed_paraphrase`** — authorial invention presented as a
   subject's memory without any corpus grounding.
+- **`scope_overreach`** (issue #1032) — a claim's universal quantifier
+  ("anyone"/"every"/"all"), superlative ("first"/"only"/"most"), or
+  negated existential ("no other X anywhere/exists") asserts wider
+  scope than its cited `provenance.md` row supports, per the Section 5a
+  scope-widening check — even when the row otherwise `VERIFIED`s or
+  `PARAPHRASE_OK`s the underlying fact. `justification` MUST quote
+  **both** the offending artifact clause and the cited row's own
+  scope-bearing language (not just the row's subject matter), so the
+  narrower-vs-wider mismatch is visible without re-deriving it — e.g.
+  *"artifact: 'the only picture of the brothers anyone has'; row: 'the
+  first photograph of Gustav's parents the project has' — row scope is
+  'the project has', not 'anyone has'."*
 
 Each flag's `justification` quotes the offending artifact text and the
 corpus evidence (or its absence). The flag is *additive* — it uses the

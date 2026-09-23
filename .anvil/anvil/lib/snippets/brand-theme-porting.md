@@ -173,6 +173,66 @@ use the shipped theme exactly as before — the key is purely additive.
 The key names the theme; registering the CSS (steps 1 and 3 above) is
 still the consumer's job.
 
+## Declaring capacity geometry (issue #1150)
+
+`anvil:deck`'s pre-render `slide-content-overflow` lint
+(`anvil/lib/marp_lint.py`) estimates each slide's vertical content cost
+against a fixed capacity budget — but that budget is calibrated against
+the **shipped `anvil-deck` theme's** geometry (padding, base font size,
+line height, the `_class: ask` padding delta). A ported brand theme with
+different geometry silently diverges from that model: the canary failure
+mode is a false-positive `slide-content-overflow` finding on a slide the
+vision critic then confirms is fully visible, or a mis-modeled `_class:`
+capacity residual — both of which the per-slide
+`<!-- anvil-lint-disable: slide-content-overflow -->` escape hatch can
+suppress, but only at the cost of per-slide ceremony every future revision
+must carry.
+
+**The fix is a declared contract, not a CSS parser.** Add a structured
+`/* @anvil-capacity ... */` comment block anywhere in your ported theme's
+CSS file, naming only the fields your port actually changed:
+
+```css
+/* @anvil-capacity
+   top_padding_px: 72
+   bottom_padding_px: 72
+   body_line_height_px: 44
+   capacity_units: 12.0
+   ask_class_capacity_penalty_units: 1.8
+*/
+```
+
+- **Any field of `anvil.lib.marp_lint.Geometry` is a valid key.** The
+  fields worth setting for a typical brand port are the same ones this
+  guide's mapping table already tells you your `.sty` changes:
+  `top_padding_px` / `bottom_padding_px` (the `section` padding —
+  `anvil-deck.css` ships 56px), `body_line_height_px` (derived from your
+  base font-size × line-height), `capacity_units` (the resulting vertical
+  line-unit budget — raise it for a roomier theme, lower it for a denser
+  one), and `ask_class_capacity_penalty_units` (the extra padding
+  `_class: ask` slides subtract from the budget, if your `_class: ask`
+  treatment differs from the shipped theme's).
+- **The block is sparse.** Fields you omit keep the shipped `anvil-deck`
+  default — you don't need to restate the whole `Geometry` dataclass, just
+  what changed.
+- **Absence-tolerant, by design.** No block at all, an empty block, or a
+  block where every key is unrecognized/unparseable all resolve back to
+  the shipped default geometry — `deck-review` behaves exactly as it does
+  for the shipped theme. A theme with no contract is not an error; it is
+  simply un-calibrated (the pre-#1150 status quo).
+- **How it gets consumed.** `deck-review.md` step 5b reads your theme's
+  `theme:` frontmatter value, locates the registered CSS, and calls
+  `anvil.lib.marp_lint.geometry_from_theme_contract(<css path>)` to build
+  a `Geometry` override before invoking `lint_deck(path, geometry=...)`.
+  You do not call this yourself — declaring the block in your registered
+  theme CSS is the whole consumer-facing contract.
+
+The full CSS-parsing alternative — deriving geometry directly from your
+theme's `section { padding: ...; }` / font-size rules instead of a
+declared contract — is an explicit non-goal here; a declared contract is
+simpler to validate and does not silently break when a future theme
+revision restructures selectors the parser depended on.
+
 ## Validating the port
 
 Run the two existing gates in order — mechanical first, judgment second:
@@ -212,6 +272,10 @@ Run the two existing gates in order — mechanical first, judgment second:
 - [ ] Four-slot smoke deck renders to a non-empty PDF (mechanical gate)
 - [ ] Vision critic run with the brand palette stated in `BRIEF.md`
       (judgment gate, palette caveat above)
+- [ ] `/* @anvil-capacity ... */` block declared if your port changed
+      padding, base font size, line height, or `_class: ask` treatment
+      (see "Declaring capacity geometry" above) — skip this only if your
+      port left `anvil-deck.css`'s geometry-relevant properties unchanged
 - [ ] Anything TikZ/overlay-shaped re-authored, not ported
 
 ## Out of scope
@@ -239,3 +303,9 @@ Run the two existing gates in order — mechanical first, judgment second:
 - `anvil/skills/deck/commands/deck-vision.md`,
   `anvil/skills/slides/commands/slides-vision.md` — the judgment gate and
   the v4 palette dimension.
+- `anvil/lib/marp_lint.py`'s `Geometry`, `geometry_from_theme_css`, and
+  `geometry_from_theme_contract` — the capacity-override contract parser
+  ("Declaring capacity geometry" above).
+- `anvil/skills/deck/commands/deck-review.md` step 5b — where the
+  `@anvil-capacity` contract is read and wired into the pre-flight
+  overflow lint.

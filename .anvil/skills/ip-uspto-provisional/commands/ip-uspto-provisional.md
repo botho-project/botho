@@ -77,12 +77,14 @@ Follow with `## Anomalies` (if any) and `## Operator notes` (iteration cap reach
 ```json
 {
   "max_iterations": 7,
-  "critics": ["review", "s112", "priorart"]
+  "critics": ["review", "s112", "priorart"],
+  "prior_art_search": { "auto": true }
 }
 ```
 
 - `max_iterations` overrides the default of 5.
 - `critics` overrides the default set; a set omitting `s112` is invalid (report as an anomaly, do not honor it).
+- `prior_art_search.auto` (issue #958, default `false`) — when `true`, `ip-uspto-provisional-prior-art` runs `anvil:ip-search` on its own before its supply check, instead of the operator running it as a separate step; equivalent to always passing that command's `--search` flag. Optional `corpus` / `max` / `min_score` keys pass through to `ip-search`. This orchestrator does not itself invoke `ip-search` — it is read-only — but a per-thread `prior_art_search.auto: true` is worth surfacing so an operator scanning the portfolio knows a thread's `priorart` critic will reach out to the network when next run.
 
 ## Notes
 
