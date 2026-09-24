@@ -5,6 +5,7 @@ use bth_common::{NodeID, ResponderId};
 use bth_consensus_scp::QuorumSet;
 use bth_crypto_keys::Ed25519Public;
 use bth_gossip::{GossipConfig, PeerRateLimitConfig};
+use bth_transaction_types::constants::Network;
 use futures::StreamExt;
 use std::{
     net::SocketAddr,
@@ -14,7 +15,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, RwLock,
     },
-    time::Duration,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tracing::{debug, error, info, warn};
 
@@ -45,6 +46,89 @@ use crate::{
 
 /// Timeout for initial peer discovery (seconds)
 const DISCOVERY_TIMEOUT_SECS: u64 = 30;
+
+/// Maximum operator-requested testnet window: eight-hour setup, 72-hour
+/// workload, and two hours for bounded observation/draining. Not persisted.
+const MAX_TESTNET_MINT_WINDOW_SECS: u64 = 82 * 60 * 60;
+
+/// A CLI-only exception to local balance pausing, never to consensus rules.
+/// Keep the original absolute deadline across restarts. A monotonic bound and
+/// latched expiry also prevent wall-clock changes from extending a live run.
+struct TestnetMintWindow {
+    deadline: Option<(u64, Instant)>,
+}
+
+impl TestnetMintWindow {
+    fn new(network: Network, until: Option<u64>, now: u64, clock: Instant) -> Result<Self> {
+        let Some(until) = until else {
+            return Ok(Self { deadline: None });
+        };
+        anyhow::ensure!(
+            network == Network::Testnet,
+            "--testnet-mint-until is available only on testnet"
+        );
+        let remaining = until.checked_sub(now).filter(|seconds| *seconds > 0);
+        anyhow::ensure!(
+            remaining.is_some_and(|seconds| seconds <= MAX_TESTNET_MINT_WINDOW_SECS),
+            "--testnet-mint-until must be in the future and no more than 82 hours ahead"
+        );
+        Ok(Self {
+            deadline: Some((until, clock + Duration::from_secs(remaining.unwrap()))),
+        })
+    }
+
+    fn active(&mut self, now: Option<u64>, clock: Instant) -> bool {
+        let Some((until, expires)) = self.deadline else {
+            return false;
+        };
+        if now.is_some_and(|now| now < until) && clock < expires {
+            return true;
+        }
+        self.deadline = None;
+        info!("Testnet continuous-minting window expired; normal balance pause restored");
+        false
+    }
+}
+
+/// Expiry must stop an override-backed producer before fallible wallet work.
+/// Otherwise a failed balance scan could leave it mining without a deadline.
+fn expired_window_requires_pause(was_enabled: bool, active: bool, minting: bool) -> bool {
+    was_enabled && !active && minting
+}
+
+/// Peer/sync changes cannot override a balance pause (including expiry).
+/// Only the balance-control path may clear that pause after its own checks.
+fn should_recheck_minting(mint_requested: bool, minting: bool, balance_paused: bool) -> bool {
+    mint_requested && !minting && !balance_paused
+}
+
+/// A running bounded producer does not need expensive balance/UTXO scans.
+/// Expiry is enforced before calling this, and normal policy still scans.
+fn balance_scan_required(continuous: bool, minting: bool) -> bool {
+    !(continuous && minting)
+}
+
+fn unix_seconds() -> Option<u64> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs())
+}
+
+/// Preserve the original hysteresis/pending-transaction policy outside the
+/// bounded window. Callers retain mint-request, quorum, and sync gates.
+fn balance_minting_policy(
+    balance: u64,
+    high: u64,
+    low: u64,
+    pending: usize,
+    window: bool,
+) -> (bool, bool) {
+    (
+        !window && should_pause_for_balance(balance, high, pending),
+        window || should_resume_from_balance_pause(balance, low, pending),
+    )
+}
 
 /// Helper to get connected peer IDs as strings
 fn get_connected_peer_ids(discovery: &NetworkDiscovery) -> Vec<String> {
@@ -284,9 +368,28 @@ pub fn run(
     mint: bool,
     mint_threads: Option<u32>,
     metrics_port_override: Option<u16>,
+    testnet_mint_until: Option<u64>,
 ) -> Result<()> {
     let mut config =
         Config::load(config_path).context("Config not found. Run 'botho init' first.")?;
+
+    let mut mint_window = TestnetMintWindow::new(
+        config.network_type,
+        testnet_mint_until,
+        if testnet_mint_until.is_some() {
+            unix_seconds().context("System clock is before the Unix epoch")?
+        } else {
+            0
+        },
+        Instant::now(),
+    )?;
+    // Expiry is checked again in the live control loop after initialization.
+    if mint_window.active(unix_seconds(), Instant::now()) {
+        info!(
+            until = testnet_mint_until,
+            "Bounded testnet balance-pause override enabled"
+        );
+    }
 
     // Apply CLI overrides
     if let Some(port) = metrics_port_override {
@@ -318,10 +421,15 @@ pub fn run(
 
     // Create tokio runtime for async networking
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async { run_async(config, config_path, mint).await })
+    rt.block_on(async { run_async(config, config_path, mint, mint_window).await })
 }
 
-async fn run_async(mut config: Config, config_path: &Path, mint: bool) -> Result<()> {
+async fn run_async(
+    mut config: Config,
+    config_path: &Path,
+    mint: bool,
+    mut mint_window: TestnetMintWindow,
+) -> Result<()> {
     // Set up shutdown signal
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_clone = shutdown.clone();
@@ -1137,7 +1245,7 @@ async fn run_async(mut config: Config, config_path: &Path, mint: bool) -> Result
                             // even if quorum is now reachable, a node still
                             // behind the fleet tip must not arm minting until it
                             // has caught up (`initial_sync_complete`).
-                            if mint && !minting_enabled {
+                            if should_recheck_minting(mint, minting_enabled, minting_paused_for_balance) {
                                 let connected = get_connected_peer_ids(&discovery);
                                 let (can_mint_now, msg) = check_minting_eligibility(&config, &connected, mint);
                                 if should_arm_minting(can_mint_now, initial_sync_complete) {
@@ -2123,7 +2231,7 @@ async fn run_async(mut config: Config, config_path: &Path, mint: bool) -> Result
                     // Arm minting now if it was deferred purely on the sync gate
                     // at startup (quorum was already reachable). Mirrors the
                     // peer-connect arm's eligibility check.
-                    if mint && !minting_enabled {
+                    if should_recheck_minting(mint, minting_enabled, minting_paused_for_balance) {
                         let connected = get_connected_peer_ids(&discovery);
                         let (can_mint_now, msg) =
                             check_minting_eligibility(&config, &connected, mint);
@@ -2263,6 +2371,25 @@ async fn run_async(mut config: Config, config_path: &Path, mint: bool) -> Result
 
             // Check faucet balance and control minting accordingly
             _ = faucet_balance_interval.tick() => {
+                // Evaluate and enforce expiry BEFORE any fallible balance scan.
+                // A ledger/scan error must not leave override-backed mining alive.
+                let window_was_enabled = mint_window.deadline.is_some();
+                let continuous = mint_window.active(unix_seconds(), Instant::now());
+                if expired_window_requires_pause(window_was_enabled, continuous, minting_enabled) {
+                    node.stop_minting_public();
+                    minting_enabled = false;
+                    minting_paused_for_balance = true;
+                    if let Ok(mut active) = minting_active.write() {
+                        *active = false;
+                    }
+                    metrics_updater.set_minting_active(false);
+                    ws_broadcaster.minting_status(false, 0.0, 0);
+                }
+                if !balance_scan_required(continuous, minting_enabled) {
+                    continue;
+                }
+                // Normal policy can resume only after a successful scan and the
+                // existing quorum/sync checks. Failed scans leave mining stopped.
                 // Only check balance if faucet is configured with a wallet
                 if let Some(wallet) = &rpc_state.wallet {
                     // Get wallet balance by scanning UTXOs
@@ -2322,11 +2449,15 @@ async fn run_async(mut config: Config, config_path: &Path, mint: bool) -> Result
                         .map(|mp| mp.len())
                         .unwrap_or(0);
 
+                    let (pause_for_balance, resume_from_balance) = balance_minting_policy(
+                        balance, FAUCET_BALANCE_HIGH, FAUCET_BALANCE_LOW, mempool_len, continuous,
+                    );
+
                     // Check if we should pause minting due to high balance.
                     // Only pause when the mempool is empty (nothing to mine).
                     if minting_enabled
                         && !minting_paused_for_balance
-                        && should_pause_for_balance(balance, FAUCET_BALANCE_HIGH, mempool_len)
+                        && pause_for_balance
                     {
                         info!(
                             "Faucet balance ({:.2} BTH) exceeds threshold ({:.2} BTH) and mempool is empty - pausing minting",
@@ -2349,7 +2480,7 @@ async fn run_async(mut config: Config, config_path: &Path, mint: bool) -> Result
                     // mine (which forces a block even at high balance, breaking
                     // the sole-minter deadlock).
                     if minting_paused_for_balance
-                        && should_resume_from_balance_pause(balance, FAUCET_BALANCE_LOW, mempool_len)
+                        && resume_from_balance
                     {
                         // Check quorum AND initial-sync completion before
                         // resuming (issue #770): a node still catching up to the
@@ -2357,7 +2488,9 @@ async fn run_async(mut config: Config, config_path: &Path, mint: bool) -> Result
                         let connected = get_connected_peer_ids(&discovery);
                         let (can_mint, _) = check_minting_eligibility(&config, &connected, mint);
                         if should_arm_minting(can_mint, initial_sync_complete) {
-                            let reason = if mempool_len > 0 {
+                            let reason = if continuous {
+                                "bounded testnet continuous-minting window".to_string()
+                            } else if mempool_len > 0 {
                                 format!("{} pending transaction(s) to mine", mempool_len)
                             } else {
                                 format!(
@@ -3184,6 +3317,146 @@ mod tests {
     // Mirror the production faucet thresholds used in `run`.
     const HIGH: u64 = 10_000_000_000_000_000; // 10,000 BTH
     const LOW: u64 = 5_000_000_000_000_000; // 5,000 BTH
+
+    #[test]
+    fn testnet_mint_window_is_disabled_by_default_on_both_networks() {
+        let clock = Instant::now();
+        for network in [Network::Mainnet, Network::Testnet] {
+            let mut window = TestnetMintWindow::new(network, None, 100, clock).unwrap();
+            assert!(!window.active(Some(100), clock));
+        }
+    }
+
+    #[test]
+    fn testnet_mint_window_rejects_mainnet_and_invalid_deadlines() {
+        let clock = Instant::now();
+        assert!(TestnetMintWindow::new(Network::Mainnet, Some(101), 100, clock).is_err());
+        for until in [0, 99, 100, 101 + MAX_TESTNET_MINT_WINDOW_SECS, u64::MAX] {
+            assert!(TestnetMintWindow::new(Network::Testnet, Some(until), 100, clock).is_err());
+        }
+    }
+
+    #[test]
+    fn testnet_mint_window_accepts_maximum_and_expires_at_exact_deadline() {
+        let clock = Instant::now();
+        let until = 100 + MAX_TESTNET_MINT_WINDOW_SECS;
+        let mut window = TestnetMintWindow::new(Network::Testnet, Some(until), 100, clock).unwrap();
+        assert!(window.active(Some(until - 1), clock));
+        assert!(!window.active(Some(until), clock));
+        // An observed wall-clock expiry stays expired after a backward adjustment.
+        assert!(!window.active(Some(100), clock));
+    }
+
+    #[test]
+    fn testnet_mint_window_restart_preserves_absolute_expiry() {
+        let clock = Instant::now();
+        let mut first = TestnetMintWindow::new(Network::Testnet, Some(110), 100, clock).unwrap();
+        let mut restarted = TestnetMintWindow::new(
+            Network::Testnet,
+            Some(110),
+            105,
+            clock + Duration::from_secs(5),
+        )
+        .unwrap();
+        for window in [&mut first, &mut restarted] {
+            assert!(window.active(Some(109), clock + Duration::from_secs(9)));
+            assert!(!window.active(Some(110), clock + Duration::from_secs(10)));
+        }
+        assert!(TestnetMintWindow::new(Network::Testnet, Some(110), 110, clock).is_err());
+    }
+
+    #[test]
+    fn testnet_mint_window_clock_regression_cannot_extend_monotonic_bound() {
+        let clock = Instant::now();
+        let mut window = TestnetMintWindow::new(Network::Testnet, Some(110), 100, clock).unwrap();
+        assert!(!window.active(Some(90), clock + Duration::from_secs(10)));
+        assert!(!window.active(Some(100), clock + Duration::from_secs(11)));
+    }
+
+    #[test]
+    fn testnet_mint_window_clock_failure_expires_closed() {
+        let clock = Instant::now();
+        let mut window = TestnetMintWindow::new(Network::Testnet, Some(110), 100, clock).unwrap();
+        assert!(!window.active(None, clock));
+        assert!(!window.active(Some(100), clock));
+    }
+
+    #[test]
+    fn testnet_mint_window_bypasses_only_balance_pause_until_expiry() {
+        let clock = Instant::now();
+        let mut window = TestnetMintWindow::new(Network::Testnet, Some(110), 100, clock).unwrap();
+        assert_eq!(
+            balance_minting_policy(HIGH + 1, HIGH, LOW, 0, window.active(Some(109), clock)),
+            (false, true),
+        );
+        assert_eq!(
+            balance_minting_policy(HIGH + 1, HIGH, LOW, 0, window.active(Some(110), clock)),
+            (true, false),
+        );
+        // Normal pending work can still resume after expiry (#386).
+        assert_eq!(
+            balance_minting_policy(HIGH + 1, HIGH, LOW, 1, false),
+            (false, true)
+        );
+        assert_eq!(
+            balance_minting_policy(LOW - 1, HIGH, LOW, 0, false),
+            (false, true)
+        );
+        assert_eq!(
+            balance_minting_policy(LOW, HIGH, LOW, 0, false),
+            (false, false)
+        );
+        // The window is not a mint request or a quorum/sync override.
+        assert!(!want_to_mint(false, false));
+        assert!(!should_arm_minting(false, true));
+        assert!(!should_arm_minting(true, false));
+    }
+
+    #[test]
+    fn testnet_mint_expiry_requires_stop_before_a_failed_balance_scan() {
+        let clock = Instant::now();
+        let mut window = TestnetMintWindow::new(Network::Testnet, Some(110), 100, clock).unwrap();
+        let was_enabled = window.deadline.is_some();
+        let active = window.active(Some(110), clock + Duration::from_secs(10));
+        // The control loop applies this stop before reading the ledger: even a
+        // failed scan cannot skip the expiry transition or authorize a resume.
+        assert!(expired_window_requires_pause(was_enabled, active, true));
+        assert!(!expired_window_requires_pause(was_enabled, active, false));
+        assert!(!expired_window_requires_pause(true, true, true));
+        assert!(!expired_window_requires_pause(false, false, true));
+        // A later scan failure cannot revive the already-expired window.
+        assert!(!window.active(Some(100), clock + Duration::from_secs(11)));
+    }
+
+    #[test]
+    fn testnet_mint_expiry_pause_cannot_be_bypassed_by_peer_or_sync_reentry() {
+        // Expiry stops the worker and latches balance-paused before any scan.
+        let minting = false;
+        let balance_paused = true;
+        assert!(!should_recheck_minting(true, minting, balance_paused));
+        // Even healthy quorum/sync cannot skip the balance-control resume path.
+        assert!(should_arm_minting(true, true));
+        assert_eq!(
+            balance_minting_policy(HIGH + 1, HIGH, LOW, 0, false),
+            (true, false)
+        );
+        // Ordinary quorum-only deferral remains eligible for re-evaluation.
+        assert!(should_recheck_minting(true, false, false));
+        assert!(!should_recheck_minting(false, false, false));
+        assert!(!should_recheck_minting(true, true, false));
+    }
+
+    #[test]
+    fn testnet_mint_window_skips_balance_scans_only_while_actively_minting() {
+        let clock = Instant::now();
+        let mut window = TestnetMintWindow::new(Network::Testnet, Some(110), 100, clock).unwrap();
+        let continuous = window.active(Some(109), clock);
+        assert!(!balance_scan_required(continuous, true));
+        assert!(balance_scan_required(continuous, false));
+        let continuous = window.active(Some(110), clock);
+        assert!(balance_scan_required(continuous, true));
+        assert!(balance_scan_required(continuous, false));
+    }
 
     // ---- Issue #767: `[minting] enabled = true` must arm minting, not just
     // the --mint CLI flag ----
