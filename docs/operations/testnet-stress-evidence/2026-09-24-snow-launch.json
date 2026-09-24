@@ -1,0 +1,267 @@
+{
+  "activation": {
+    "at": 1790211216.6087058,
+    "cgroup": {
+      "cpu.max": "100000 100000",
+      "memory.current": "73797632",
+      "memory.max": "1073741824",
+      "pids.current": "7",
+      "pids.max": "64"
+    },
+    "checkpoint_hash": "890b9a542bcfbf21110f506c636015e8f037b1928c93771696e2b3cc3984e965",
+    "checkpoint_height": 2656,
+    "counts": {},
+    "end": null,
+    "reason": null,
+    "service": {
+      "ActiveState": "active",
+      "CPUQuotaPerSecUSec": "1s",
+      "MainPID": "3577294",
+      "MemoryMax": "1073741824",
+      "NRestarts": "0",
+      "RuntimeMaxUSec": "3d 10h",
+      "SubState": "running",
+      "TasksMax": "64"
+    },
+    "setup_deadline": 1790240069.2350128,
+    "setup_start": 1790211269.2350128,
+    "start": null,
+    "status": "setup",
+    "stopped_at": null,
+    "workload_activation_recorded": false
+  },
+  "adapter": {
+    "sha256": "23ba0ef227697d40970f3d7b55669635b617d8317a66f2a39e8ad1fe627f6c93",
+    "source": "57d647597b5d438ac281ae66cc3593ca7ebcc259"
+  },
+  "build": {
+    "minter_tests_ignored": 2,
+    "minter_tests_passed": 11,
+    "network_tests_passed": 18,
+    "url": "https://github.com/botho-project/botho/actions/runs/35939330921"
+  },
+  "captured_at": 1790211443.403836,
+  "disposition": "setup_in_progress; 72-hour workload not started",
+  "first_grant": {
+    "all_confirmed_at": 1790211405.007688,
+    "block_hash": "76d17f39626a27ff3bd5a22ec1ac4844d6491e5a2e7ec7bb089e8ad49c662457",
+    "block_height": 2657,
+    "captured_at": 1790211436.2524836,
+    "faucet_fee": 100000000,
+    "finished_at": 1790211414.1852896,
+    "offered_at": 1790211269.2350128,
+    "recipient_verified_at": 1790211414.18526,
+    "state": "reconciled",
+    "submitted_at": 1790211275.8656118,
+    "submitted_to_reconciled_seconds": 138.31967782974243,
+    "tx_hash": "5136ad79a97634e819e64ff4a949814e480154ae0ba7b76b7e9b09588e839a07"
+  },
+  "latest": {
+    "accounting": {
+      "at": 1790211433.6025162,
+      "difference": 0,
+      "ending": 1000000000000,
+      "grants": 1000000000000,
+      "lottery_receipts": 0,
+      "opening": 0,
+      "signed_fees": 0
+    },
+    "at": 1790211443.403836,
+    "cgroup": {
+      "cpu.max": "100000 100000",
+      "memory.current": "148819968",
+      "memory.max": "1073741824",
+      "pids.current": "8",
+      "pids.max": "64"
+    },
+    "checkpoint_hash": "5ade93fcd3be85292d9bfcfd53c6fbb0df7f73583975dbb09684118db9185204",
+    "checkpoint_height": 2658,
+    "counts": {
+      "funding:reconciled": 1
+    },
+    "end": null,
+    "fleet": {
+      "at": 1790211438.360215,
+      "nodes": {
+        "ap.seed.botho.io": {
+          "chainHeight": 2658,
+          "gitCommit": "c4a8fa5ae38a0cb0702daa1d29caadfb5f132d23",
+          "mempoolSize": 0,
+          "mintingActive": false,
+          "peerCount": 3,
+          "synced": true,
+          "tipHash": "5ade93fcd3be85292d9bfcfd53c6fbb0df7f73583975dbb09684118db9185204"
+        },
+        "eu.seed.botho.io": {
+          "chainHeight": 2658,
+          "gitCommit": "c4a8fa5ae38a0cb0702daa1d29caadfb5f132d23",
+          "mempoolSize": 0,
+          "mintingActive": false,
+          "peerCount": 3,
+          "synced": true,
+          "tipHash": "5ade93fcd3be85292d9bfcfd53c6fbb0df7f73583975dbb09684118db9185204"
+        },
+        "faucet.botho.io": {
+          "chainHeight": 2658,
+          "gitCommit": "c4a8fa5ae38a0cb0702daa1d29caadfb5f132d23",
+          "mempoolSize": 0,
+          "mintingActive": false,
+          "peerCount": 4,
+          "synced": true,
+          "tipHash": "5ade93fcd3be85292d9bfcfd53c6fbb0df7f73583975dbb09684118db9185204"
+        },
+        "seed.botho.io": {
+          "chainHeight": 2658,
+          "gitCommit": "c4a8fa5ae38a0cb0702daa1d29caadfb5f132d23",
+          "mempoolSize": 0,
+          "mintingActive": false,
+          "peerCount": 4,
+          "synced": true,
+          "tipHash": "5ade93fcd3be85292d9bfcfd53c6fbb0df7f73583975dbb09684118db9185204"
+        },
+        "seed2.botho.io": {
+          "chainHeight": 2658,
+          "gitCommit": "c4a8fa5ae38a0cb0702daa1d29caadfb5f132d23",
+          "mempoolSize": 0,
+          "mintingActive": false,
+          "peerCount": 4,
+          "synced": true,
+          "tipHash": "5ade93fcd3be85292d9bfcfd53c6fbb0df7f73583975dbb09684118db9185204"
+        }
+      }
+    },
+    "inventory_counts": {
+      "at": 1790211423.815593,
+      "height": 2658,
+      "mature_with_decoys": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "reason": null,
+    "service": {
+      "ActiveState": "active",
+      "CPUQuotaPerSecUSec": "1s",
+      "MainPID": "3577294",
+      "MemoryMax": "1073741824",
+      "NRestarts": "0",
+      "RuntimeMaxUSec": "3d 10h",
+      "SubState": "running",
+      "TasksMax": "64"
+    },
+    "setup_start": 1790211269.2350128,
+    "start": null,
+    "status": "setup",
+    "stopped_at": null,
+    "workload_activation_recorded": false
+  },
+  "limitations": [
+    "Setup only; no 72-hour workload T0 or end recorded.",
+    "One funding receipt does not establish native spending or load coverage.",
+    "Browser, Snap, confidential-amount, and external-audit acceptance not established.",
+    "Preexisting stale-sync issue #1431 remains open."
+  ],
+  "observers": {
+    "end": 1790506314.258979,
+    "lifetime_hours": 82,
+    "start": 1790211114.258979
+  },
+  "preflight": {
+    "accounting": {
+      "at": 1790211180.1469865,
+      "difference": 0,
+      "ending": 0,
+      "grants": 0,
+      "lottery_receipts": 0,
+      "opening": 0,
+      "signed_fees": 0
+    },
+    "at": 1790211180.1742709,
+    "block_count": 2657,
+    "common_hash": "890b9a542bcfbf21110f506c636015e8f037b1928c93771696e2b3cc3984e965",
+    "common_height": 2656,
+    "genesis_verified": true,
+    "height": 2656,
+    "launch_template_digest": "d5250861ff5d51dfe3afae6b5e863fe7d519d6b52d4e0b32a5454a73565fe7e8",
+    "native_scan_request_bytes": 7400628,
+    "plan_digest": "1b3ea76645274d95424c6092e31dfd22370f86dd731c1dad91a4df433d14f4af",
+    "wallet_count": 8,
+    "zero_opening_balance": true
+  },
+  "rollout": {
+    "common_hash": "f17e584ffd7529554cd2813d4d1c7bca356b52dcd9352100babc49e9fdea6b8a",
+    "common_height": 2655,
+    "completed_at": 1790211107.2205272,
+    "nodes": {
+      "ap.seed.botho.io": {
+        "active_rollback_timers": [],
+        "height": 2656,
+        "installed_sha256": "cbb521b49b3682ff0b3fd8eecc3b815157f36ff345036eea659c6648d5117630",
+        "peer_count": 3,
+        "running_sha256": "cbb521b49b3682ff0b3fd8eecc3b815157f36ff345036eea659c6648d5117630",
+        "source": "c4a8fa5ae38a0cb0702daa1d29caadfb5f132d23",
+        "synced": true
+      },
+      "eu.seed.botho.io": {
+        "active_rollback_timers": [],
+        "height": 2656,
+        "installed_sha256": "cbb521b49b3682ff0b3fd8eecc3b815157f36ff345036eea659c6648d5117630",
+        "peer_count": 3,
+        "running_sha256": "cbb521b49b3682ff0b3fd8eecc3b815157f36ff345036eea659c6648d5117630",
+        "source": "c4a8fa5ae38a0cb0702daa1d29caadfb5f132d23",
+        "synced": true
+      },
+      "faucet.botho.io": {
+        "active_rollback_timers": [],
+        "height": 2656,
+        "installed_sha256": "cbb521b49b3682ff0b3fd8eecc3b815157f36ff345036eea659c6648d5117630",
+        "peer_count": 4,
+        "running_sha256": "cbb521b49b3682ff0b3fd8eecc3b815157f36ff345036eea659c6648d5117630",
+        "source": "c4a8fa5ae38a0cb0702daa1d29caadfb5f132d23",
+        "synced": true
+      },
+      "seed.botho.io": {
+        "active_rollback_timers": [],
+        "height": 2656,
+        "installed_sha256": "cbb521b49b3682ff0b3fd8eecc3b815157f36ff345036eea659c6648d5117630",
+        "peer_count": 4,
+        "running_sha256": "cbb521b49b3682ff0b3fd8eecc3b815157f36ff345036eea659c6648d5117630",
+        "source": "c4a8fa5ae38a0cb0702daa1d29caadfb5f132d23",
+        "synced": true
+      },
+      "seed2.botho.io": {
+        "active_rollback_timers": [],
+        "height": 2656,
+        "installed_sha256": "cbb521b49b3682ff0b3fd8eecc3b815157f36ff345036eea659c6648d5117630",
+        "peer_count": 4,
+        "running_sha256": "cbb521b49b3682ff0b3fd8eecc3b815157f36ff345036eea659c6648d5117630",
+        "source": "c4a8fa5ae38a0cb0702daa1d29caadfb5f132d23",
+        "synced": true
+      }
+    }
+  },
+  "run_id": "botho-stress-snow-20260924",
+  "schema_version": 1,
+  "snow": {
+    "commit": "8192d73c676ecdc93f91c5621caaa95245969ccc",
+    "repository": "https://github.com/rjwalters/snow",
+    "upstream_pr": "https://github.com/mcginty/snow/pull/219"
+  },
+  "software": {
+    "controller_source": "3e6dc9cb7dfb674fc3f6bd7bbbb32f5ce1ca277a",
+    "node_commit": "c4a8fa5ae38a0cb0702daa1d29caadfb5f132d23",
+    "node_sha256": "cbb521b49b3682ff0b3fd8eecc3b815157f36ff345036eea659c6648d5117630",
+    "plan_digest": "1b3ea76645274d95424c6092e31dfd22370f86dd731c1dad91a4df433d14f4af",
+    "source_hashes": {
+      "controller.py": "9743ff4af353f28008d7eb785b9ca4dfdab4a7901b04414aa274c638e3ce54f8",
+      "plan.py": "dc96e36863ff7cb80a714c706d4f6336c5ecd08828a3250f09d73e9157a65655",
+      "runtime.py": "a7c28f9adeec606aa3f859ea7fb7d81ecfedffa0a4870191554bd04a8e905a36"
+    }
+  }
+}
