@@ -369,10 +369,17 @@ class Controller:
         faucet = await self.rpc.call('faucet.botho.io','faucet_getStatus')
         if not faucet.get('enabled') or int(faucet.get('amountPerRequest',0)) != 1_000_000_000_000:
             raise Gate('unexpected faucet configuration')
+        self.gate()
+        if time.time()>row['offered']+120:
+            return
         with self.j.transaction():
             rows = self.j.rows("kind='funding' AND submitted IS NOT NULL")
-            if len(rows)>=24 or any(r['submitted']>time.time()-900 for r in rows):
-                raise Gate('funding pacing or count cap')
+            if len(rows)>=24:
+                raise Gate('funding count cap')
+            # Fixed offer times can precede the previous actual submission + 900
+            # seconds. Wait within this offer's original slot; never replay it.
+            if any(r['submitted']>time.time()-900 for r in rows):
+                return
             if sum(r['recipient']==row['recipient'] and r['submitted']>time.time()-86400 for r in rows)>=3:
                 raise Gate('recipient daily funding cap')
             attempted = self.j.db.execute("SELECT COUNT(*) FROM intents WHERE submitted IS NOT NULL OR prepared IS NOT NULL").fetchone()[0]
