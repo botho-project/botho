@@ -1,16 +1,10 @@
 //! One structured request on stdin; one response on stdout. Never broadcasts.
 #[cfg(all(unix, feature = "pq"))]
 fn main() {
-    use botho_wallet::stress::{execute, Request, MAX_REQUEST};
-    use std::io::{self, Read};
+    use botho_wallet::stress::{execute, read_request};
+    use std::io;
     let result = (|| -> anyhow::Result<serde_json::Value> {
-        let mut input = Vec::new();
-        io::stdin().take(MAX_REQUEST + 1).read_to_end(&mut input)?;
-        anyhow::ensure!(
-            input.len() as u64 <= MAX_REQUEST,
-            "request exceeds byte limit"
-        );
-        let request: Request = serde_json::from_slice(&input)?;
+        let request = read_request(io::stdin().lock())?;
         execute(request)
     })();
     match result {
