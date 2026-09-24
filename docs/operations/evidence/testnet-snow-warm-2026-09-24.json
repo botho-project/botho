@@ -1,0 +1,268 @@
+{
+  "run_id": "botho-stress-snow-warm-20260924",
+  "deployed": {
+    "at": 1790221006.0924191,
+    "source": "9e671836940bafd5a14d64ffa99eec03932db735",
+    "sha256": "815a08968390ee00540098fbdb05fdb595b0be95101833bd6cc64fc91e83e159"
+  },
+  "mining_policy": {
+    "argvVerified": true,
+    "deadline": 1790516196,
+    "threads": 1
+  },
+  "capacity": {
+    "signer_sha256": "0f5a6cfb2ba52c00ee130672c0690d234f9ef5ea0d35c1c37a1db17f2645eaf6",
+    "synthetic": true,
+    "chain_writes": 0,
+    "request_bytes": 67109753,
+    "block_count": 24452,
+    "scans": 8,
+    "scan_seconds": [
+      6.7400710719957715,
+      6.7424399270094,
+      7.1115250419970835,
+      6.700758948005387,
+      7.178155461006099,
+      6.701693775001331,
+      6.798502386009204,
+      7.16400577899185
+    ],
+    "eight_scan_seconds": 55.14021878200583,
+    "within_120_second_slot": true,
+    "cgroup": {
+      "cpu.max": "100000 100000",
+      "memory.max": "1073741824",
+      "pids.max": "64"
+    },
+    "memory_peak": "429498368",
+    "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+    "finished_at": 1790220589.7599742
+  },
+  "incremental_regression": {
+    "controller_commit": "55c09a7998b4eb819ea0035290775d473600558f",
+    "signer_sha256": "0f5a6cfb2ba52c00ee130672c0690d234f9ef5ea0d35c1c37a1db17f2645eaf6",
+    "at": 1790221299.3413804,
+    "passed": true,
+    "elapsed_seconds": 14.155266825007857,
+    "wallet_count": 8,
+    "chain_writes": 0,
+    "appended_blocks": 6,
+    "independent_full_restore_equal": true,
+    "old_source_files_unchanged": true,
+    "empty_delta_native_calls": 0,
+    "spent_queries_include_empty_delta": true,
+    "total_balance_picocredits": 3000000000000
+  },
+  "warm_qualification": {
+    "qualified": true,
+    "started_at": 1790221746.293331,
+    "at": 1790222066.0842712,
+    "node_commit": "9e671836940bafd5a14d64ffa99eec03932db735",
+    "node_sha256": "815a08968390ee00540098fbdb05fdb595b0be95101833bd6cc64fc91e83e159",
+    "mining_end": 1790516196.0,
+    "initial_height": 2679,
+    "final_height": 2687,
+    "common_hash": "cf3c39d3eb90e93ecc8ec707e47c2a4e613bbb929fd94c5762dcca5683a001b6",
+    "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+    "initial_total_hashes": 120000,
+    "final_total_hashes": 180000,
+    "producer_rpc_reported_threads": 2,
+    "producer_thread_metadata_note": "RPC reports CPU count, issue #1436; actual one-thread argv and same-PID startup log independently verified",
+    "windows": {
+      "seed.botho.io": {
+        "seconds": 302.07628107070923,
+        "samples": 21,
+        "rss_min": 331784192,
+        "rss_max": 336461824,
+        "hashes_first": null,
+        "hashes_last": null,
+        "mode": "idle"
+      },
+      "seed2.botho.io": {
+        "seconds": 302.07628107070923,
+        "samples": 21,
+        "rss_min": 331534336,
+        "rss_max": 336322560,
+        "hashes_first": null,
+        "hashes_last": null,
+        "mode": "idle"
+      },
+      "faucet.botho.io": {
+        "seconds": 122.08716225624084,
+        "samples": 9,
+        "rss_min": 2786222080,
+        "rss_max": 2788052992,
+        "hashes_first": 150000,
+        "hashes_last": 180000,
+        "mode": "active"
+      },
+      "eu.seed.botho.io": {
+        "seconds": 302.07628107070923,
+        "samples": 21,
+        "rss_min": 330629120,
+        "rss_max": 335433728,
+        "hashes_first": null,
+        "hashes_last": null,
+        "mode": "idle"
+      },
+      "ap.seed.botho.io": {
+        "seconds": 302.07628107070923,
+        "samples": 21,
+        "rss_min": 331767808,
+        "rss_max": 336519168,
+        "hashes_first": null,
+        "hashes_last": null,
+        "mode": "idle"
+      }
+    },
+    "resource_limits": "unchanged check_resources guards; plateau range<=64MiB and<=20%",
+    "producer_process": {
+      "at": 1790221748.2235672,
+      "pid": 409393,
+      "start": "5176726901476",
+      "threads": 1,
+      "mining_end": 1790516196,
+      "binary_sha256": "815a08968390ee00540098fbdb05fdb595b0be95101833bd6cc64fc91e83e159",
+      "startup_log_verified": true,
+      "startup_log_at": 1790221070.992614
+    }
+  },
+  "preflight": {
+    "at": 1790222167.2631457,
+    "run_id": "botho-stress-snow-warm-20260924",
+    "controller_source": "55c09a7998b4eb819ea0035290775d473600558f",
+    "node_commit": "9e671836940bafd5a14d64ffa99eec03932db735",
+    "node_sha256": "815a08968390ee00540098fbdb05fdb595b0be95101833bd6cc64fc91e83e159",
+    "height": 2688,
+    "block_count": 2689,
+    "native_scan_request_bytes": 7536444,
+    "native_request_limit_bytes": 134217728,
+    "wallet_count": 8,
+    "zero_opening_balance": true,
+    "genesis_verified": true,
+    "common_height": 2689,
+    "common_hash": "5b96be8f66d1d0b8b59e9320930f7494387a4447a45ff3df4aa84be30a3e11ed"
+  },
+  "launch_status": {
+    "at": 1790222375.0531802,
+    "service": {
+      "RuntimeMaxUSec": "3d 10h",
+      "MainPID": "2192518",
+      "Result": "success",
+      "NRestarts": "0",
+      "ExecMainStatus": "0",
+      "ControlGroup": "/user.slice/user-1000.slice/user@1000.service/app.slice/botho-stress-snow-warm-20260924.service",
+      "MemoryCurrent": "82210816",
+      "TasksCurrent": "7",
+      "CPUQuotaPerSecUSec": "1s",
+      "MemoryMax": "1073741824",
+      "TasksMax": "64",
+      "ActiveState": "active",
+      "SubState": "running"
+    },
+    "cgroup": {
+      "cpu.max": "100000 100000",
+      "memory.max": "1073741824",
+      "memory.current": "82210816",
+      "pids.max": "64",
+      "pids.current": "7"
+    },
+    "activated": false,
+    "journal_exists": true,
+    "status": "setup",
+    "reason": null,
+    "setup_start": 1790222247.3488483,
+    "start": null,
+    "end": null,
+    "stopped_at": null,
+    "inventory_counts": {
+      "at": 1790222354.6180193,
+      "height": 2694,
+      "mature_with_decoys": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "checkpoint_height": 2694,
+    "checkpoint_hash": "b4350212e8968e2e45805aa517ffb90faf38b9500333be21c049749ea0a0e93b",
+    "counts": {
+      "funding:reconciled": 1
+    },
+    "funding": [
+      {
+        "id": "funding-00",
+        "state": "reconciled",
+        "offered_at": 1790222247.3488483,
+        "submitted_at": 1790222254.6316552,
+        "finished_at": 1790222322.6311033,
+        "tx_hash": "ff51209d1733ea5167c6455229a068c90c737f1ab9e0e371993611cab2ad7b68",
+        "reason": null
+      }
+    ],
+    "accounting": {
+      "at": 1790222354.6174757,
+      "opening": 0,
+      "grants": 1000000000000,
+      "lottery_receipts": 0,
+      "ending": 1000000000000,
+      "signed_fees": 0,
+      "difference": 0
+    },
+    "fleet": {
+      "at": 1790222371.6188328,
+      "nodes": {
+        "seed.botho.io": {
+          "gitCommit": "9e671836940bafd5a14d64ffa99eec03932db735",
+          "chainHeight": 2694,
+          "tipHash": "b4350212e8968e2e45805aa517ffb90faf38b9500333be21c049749ea0a0e93b",
+          "synced": true,
+          "peerCount": 4,
+          "mempoolSize": 0,
+          "mintingActive": false
+        },
+        "seed2.botho.io": {
+          "gitCommit": "9e671836940bafd5a14d64ffa99eec03932db735",
+          "chainHeight": 2694,
+          "tipHash": "b4350212e8968e2e45805aa517ffb90faf38b9500333be21c049749ea0a0e93b",
+          "synced": true,
+          "peerCount": 4,
+          "mempoolSize": 0,
+          "mintingActive": false
+        },
+        "faucet.botho.io": {
+          "gitCommit": "9e671836940bafd5a14d64ffa99eec03932db735",
+          "chainHeight": 2694,
+          "tipHash": "b4350212e8968e2e45805aa517ffb90faf38b9500333be21c049749ea0a0e93b",
+          "synced": true,
+          "peerCount": 4,
+          "mempoolSize": 0,
+          "mintingActive": true
+        },
+        "eu.seed.botho.io": {
+          "gitCommit": "9e671836940bafd5a14d64ffa99eec03932db735",
+          "chainHeight": 2694,
+          "tipHash": "b4350212e8968e2e45805aa517ffb90faf38b9500333be21c049749ea0a0e93b",
+          "synced": true,
+          "peerCount": 3,
+          "mempoolSize": 0,
+          "mintingActive": false
+        },
+        "ap.seed.botho.io": {
+          "gitCommit": "9e671836940bafd5a14d64ffa99eec03932db735",
+          "chainHeight": 2694,
+          "tipHash": "b4350212e8968e2e45805aa517ffb90faf38b9500333be21c049749ea0a0e93b",
+          "synced": true,
+          "peerCount": 3,
+          "mempoolSize": 0,
+          "mintingActive": false
+        }
+      }
+    }
+  }
+}
