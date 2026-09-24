@@ -43,6 +43,8 @@ class Controller:
         if len(self.wallets) != 8 or len({w['address'] for w in self.wallets}) != 8:
             raise Gate('eight distinct dedicated wallets required')
         self.inventory = [[] for _ in self.wallets]
+        # Never trust persisted wallet inventory after a process restart.
+        self.inventory_initialized = False
         self.spent = []
         self.scan_lock = asyncio.Lock()
         self.admission_lock = asyncio.Lock()
@@ -211,19 +213,36 @@ class Controller:
             if full:
                 if previous and new[:len(previous)] != previous:
                     raise Gate('full rescan disagrees with checkpointed output history')
-                self.blocks = new
+                blocks = new
             else:
-                self.blocks.extend(new)
-            atomic(self.state/'blocks.json',self.blocks)
+                blocks = previous+new
+            incremental = self.inventory_initialized and not full
+            scan_blocks = new if incremental else blocks
+            if incremental:
+                # The native scanner rejects duplicate output IDs within its
+                # request. Preserve that rule across separate append requests.
+                seen = {(o['txHash'],o['outputIndex']) for b in previous for o in b['outputs']}
+                for block in new:
+                    for output in block['outputs']:
+                        identifier = (output['txHash'],output['outputIndex'])
+                        if identifier in seen:
+                            raise Gate('duplicate output id across incremental history')
+                        seen.add(identifier)
             scans = []
             # Separate signer processes and derivations: restores never reuse key state.
-            for wallet in self.wallets:
-                scanned = await self.native({'operation':'restore_check' if full else 'scan',
-                    'wallet':wallet['key'], 'blocks':self.blocks,
-                    **({'expected_address':wallet['address']} if full else {})})
-                if scanned['address'] != wallet['address']:
-                    raise Gate('wallet identity differs from allowlist')
-                scans.append(scanned['owned'])
+            for index,wallet in enumerate(self.wallets):
+                owned = {o['id']:o for o in self.inventory[index]} if incremental else {}
+                if scan_blocks or not incremental:
+                    scanned = await self.native({'operation':'restore_check' if full else 'scan',
+                        'wallet':wallet['key'], 'blocks':scan_blocks,
+                        **({'expected_address':wallet['address']} if full else {})})
+                    if scanned['address'] != wallet['address']:
+                        raise Gate('wallet identity differs from allowlist')
+                    for output in scanned['owned']:
+                        if output['id'] in owned:
+                            raise Gate('duplicate owned output across incremental scans')
+                        owned[output['id']] = output
+                scans.append(list(owned.values()))
             all_images = list(dict.fromkeys(o['key_image'] for owned in scans for o in owned))
             # Finalized spent images stay spent. Phase/full scans independently
             # recheck them; routine scans reserve RPC capacity for live inputs.
@@ -239,8 +258,13 @@ class Controller:
                     raise Gate('malformed spent-image response')
                 checked.update((s['keyImage'],s) for s in found)
             spent=[checked[image] for image in all_images]
-            self.inventory, self.spent = scans, spent
+            # Do not advance in-memory scan progress on a failed native/RPC
+            # check: retry must scan the same new outputs, never skip them.
+            if full or new:
+                atomic(self.state/'blocks.json',blocks)
             atomic(self.state/'inventory.json',{'at':time.time(),'height':height,'owned':scans,'spent':spent})
+            self.blocks, self.inventory, self.spent = blocks, scans, spent
+            self.inventory_initialized = True
             return height
 
     def spendable(self, wallet, height, amount=0, count=1):
