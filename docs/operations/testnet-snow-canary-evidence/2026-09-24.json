@@ -1,0 +1,668 @@
+{
+  "experiment": {
+    "artifactSha256": "920c65de319c1378de81655b7eaf3843d5287e4c1de09cc21f15d2a4940c0a62",
+    "deadline": "2026-09-24 00:59:11 UTC",
+    "expectedBase": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+    "host": "eu.seed.botho.io",
+    "originalSha256": "88c169423fdc003a5dbc6d688852fdbcda26b78f85cd371de29d9192571c674f",
+    "runId": "snow-20260924T002911Z",
+    "source": "340cf303814e5ac82f5deb0b6d1e9dd24ceba9b2"
+  },
+  "build_run": "https://github.com/botho-project/botho/actions/runs/35938080677",
+  "snow_commit": "8192d73c676ecdc93f91c5621caaa95245969ccc",
+  "network_tests_passed": 18,
+  "payment": {
+    "submitted_at": 1790209808.150809,
+    "amount": 1000000000000,
+    "ingress": "faucet.botho.io",
+    "canary_commit": "340cf303814e5ac82f5deb0b6d1e9dd24ceba9b2",
+    "accepted_at": null,
+    "recovered_at": 1790209891.498048,
+    "tx_hash": "aa9aa3c44139347188f7e862d7531cf2fc36592f03c4eb9548e311787afd3dd1",
+    "source": "read-only log-prefix and mempool recovery; original response unavailable",
+    "confirmed_at": 1790209955.528573,
+    "height": 2646,
+    "block_hash": "1a4f2e7d8e4dc4d85d29d21a1d605b1e8b9bc45e5617ccb5861090cbd013abd2",
+    "fee": 100000000,
+    "statuses": {
+      "seed.botho.io": {
+        "confirmations": 1,
+        "confirmed": true,
+        "entropyProofRequired": false,
+        "entropyValidationResult": "not_provided",
+        "status": "confirmed",
+        "txHash": "aa9aa3c44139347188f7e862d7531cf2fc36592f03c4eb9548e311787afd3dd1"
+      },
+      "seed2.botho.io": {
+        "confirmations": 1,
+        "confirmed": true,
+        "entropyProofRequired": false,
+        "entropyValidationResult": "not_provided",
+        "status": "confirmed",
+        "txHash": "aa9aa3c44139347188f7e862d7531cf2fc36592f03c4eb9548e311787afd3dd1"
+      },
+      "faucet.botho.io": {
+        "confirmations": 1,
+        "confirmed": true,
+        "entropyProofRequired": false,
+        "entropyValidationResult": "not_provided",
+        "status": "confirmed",
+        "txHash": "aa9aa3c44139347188f7e862d7531cf2fc36592f03c4eb9548e311787afd3dd1"
+      },
+      "eu.seed.botho.io": {
+        "confirmations": 1,
+        "confirmed": true,
+        "entropyProofRequired": false,
+        "entropyValidationResult": "not_provided",
+        "status": "confirmed",
+        "txHash": "aa9aa3c44139347188f7e862d7531cf2fc36592f03c4eb9548e311787afd3dd1"
+      },
+      "ap.seed.botho.io": {
+        "confirmations": 1,
+        "confirmed": true,
+        "entropyProofRequired": false,
+        "entropyValidationResult": "not_provided",
+        "status": "confirmed",
+        "txHash": "aa9aa3c44139347188f7e862d7531cf2fc36592f03c4eb9548e311787afd3dd1"
+      }
+    },
+    "receipts": {
+      "seed.botho.io": {
+        "blockHeight": 2646,
+        "fee": 100000000,
+        "outputCount": 2,
+        "totalOutput": 49999900000000
+      },
+      "seed2.botho.io": {
+        "blockHeight": 2646,
+        "fee": 100000000,
+        "outputCount": 2,
+        "totalOutput": 49999900000000
+      },
+      "faucet.botho.io": {
+        "blockHeight": 2646,
+        "fee": 100000000,
+        "outputCount": 2,
+        "totalOutput": 49999900000000
+      },
+      "eu.seed.botho.io": {
+        "blockHeight": 2646,
+        "fee": 100000000,
+        "outputCount": 2,
+        "totalOutput": 49999900000000
+      },
+      "ap.seed.botho.io": {
+        "blockHeight": 2646,
+        "fee": 100000000,
+        "outputCount": 2,
+        "totalOutput": 49999900000000
+      }
+    },
+    "coverage": "fleet confirmation only; recipient ownership/spend not proven"
+  },
+  "ownership": {
+    "at": 1790209966.870757,
+    "tx_hash": "aa9aa3c44139347188f7e862d7531cf2fc36592f03c4eb9548e311787afd3dd1",
+    "received_amount": 1000000000000,
+    "height": 2646,
+    "ownership_verified": true,
+    "restore_check": true,
+    "scope": "one inclusion block; no full-chain rescan or spend"
+  },
+  "response_recovery": {
+    "at": 1790209891.497422,
+    "tx_hash": "aa9aa3c44139347188f7e862d7531cf2fc36592f03c4eb9548e311787afd3dd1",
+    "method": "unique transaction prefix from faucet dispense log matched full mempool hashes",
+    "fleet_mempools": {
+      "seed.botho.io": {
+        "size": 1,
+        "totalFees": 100000000,
+        "txHashes": [
+          "aa9aa3c44139347188f7e862d7531cf2fc36592f03c4eb9548e311787afd3dd1"
+        ]
+      },
+      "seed2.botho.io": {
+        "size": 1,
+        "totalFees": 100000000,
+        "txHashes": [
+          "aa9aa3c44139347188f7e862d7531cf2fc36592f03c4eb9548e311787afd3dd1"
+        ]
+      },
+      "faucet.botho.io": {
+        "size": 1,
+        "totalFees": 100000000,
+        "txHashes": [
+          "aa9aa3c44139347188f7e862d7531cf2fc36592f03c4eb9548e311787afd3dd1"
+        ]
+      },
+      "eu.seed.botho.io": {
+        "size": 1,
+        "totalFees": 100000000,
+        "txHashes": [
+          "aa9aa3c44139347188f7e862d7531cf2fc36592f03c4eb9548e311787afd3dd1"
+        ]
+      },
+      "ap.seed.botho.io": {
+        "size": 1,
+        "totalFees": 100000000,
+        "txHashes": [
+          "aa9aa3c44139347188f7e862d7531cf2fc36592f03c4eb9548e311787afd3dd1"
+        ]
+      }
+    },
+    "harness_bug": "Successful faucet amount is a decimal string; original integer-only comparison discarded response. No retry performed. Original uncertainty marker retained."
+  },
+  "restored_service": {
+    "active": "active",
+    "executable": "/usr/local/bin/botho",
+    "pid": "387178",
+    "runningSha256": "88c169423fdc003a5dbc6d688852fdbcda26b78f85cd371de29d9192571c674f",
+    "sha256": "88c169423fdc003a5dbc6d688852fdbcda26b78f85cd371de29d9192571c674f"
+  },
+  "snapshots": [
+    {
+      "phase": "evidence/before.json",
+      "at": 1790209748.456823,
+      "common_height": 2644,
+      "nodes": {
+        "ap.seed.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWRubuvzRNxbxHH5BdzgxQNqMoWyQtdxKXUdNWJt5huTpk",
+          "peers": 3,
+          "synced": true
+        },
+        "eu.seed.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWBDKQDQQkK5rLmSnke2hiWVaZ9qNGuuBhxFdxyqxaTvwK",
+          "peers": 3,
+          "synced": true
+        },
+        "faucet.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWPwhv3LhL7xTDbsNSraN4d6cnW4veZrGgFhALS2qPd1z9",
+          "peers": 4,
+          "synced": true
+        },
+        "seed.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWATfTARQ9A5BryHhpFPAjdW5ydhdoTZC1uqXrJWb9UPbG",
+          "peers": 4,
+          "synced": true
+        },
+        "seed2.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWJ5U2gk6Pe9ehZb6aHng2zu7RnUwAKzEYxHbaM6VRo592",
+          "peers": 4,
+          "synced": true
+        }
+      }
+    },
+    {
+      "phase": "evidence/after.json",
+      "at": 1790209781.244137,
+      "common_height": 2644,
+      "nodes": {
+        "ap.seed.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWRubuvzRNxbxHH5BdzgxQNqMoWyQtdxKXUdNWJt5huTpk",
+          "peers": 3,
+          "synced": true
+        },
+        "eu.seed.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "340cf303814e5ac82f5deb0b6d1e9dd24ceba9b2",
+          "peer_id": "12D3KooWBDKQDQQkK5rLmSnke2hiWVaZ9qNGuuBhxFdxyqxaTvwK",
+          "peers": 3,
+          "synced": true
+        },
+        "faucet.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWPwhv3LhL7xTDbsNSraN4d6cnW4veZrGgFhALS2qPd1z9",
+          "peers": 4,
+          "synced": true
+        },
+        "seed.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWATfTARQ9A5BryHhpFPAjdW5ydhdoTZC1uqXrJWb9UPbG",
+          "peers": 4,
+          "synced": true
+        },
+        "seed2.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWJ5U2gk6Pe9ehZb6aHng2zu7RnUwAKzEYxHbaM6VRo592",
+          "peers": 4,
+          "synced": true
+        }
+      }
+    },
+    {
+      "phase": "evidence/snapshot-1790209825.json",
+      "at": 1790209825.468257,
+      "common_height": 2644,
+      "nodes": {
+        "ap.seed.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWRubuvzRNxbxHH5BdzgxQNqMoWyQtdxKXUdNWJt5huTpk",
+          "peers": 3,
+          "synced": true
+        },
+        "eu.seed.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "340cf303814e5ac82f5deb0b6d1e9dd24ceba9b2",
+          "peer_id": "12D3KooWBDKQDQQkK5rLmSnke2hiWVaZ9qNGuuBhxFdxyqxaTvwK",
+          "peers": 3,
+          "synced": true
+        },
+        "faucet.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWPwhv3LhL7xTDbsNSraN4d6cnW4veZrGgFhALS2qPd1z9",
+          "peers": 4,
+          "synced": true
+        },
+        "seed.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWATfTARQ9A5BryHhpFPAjdW5ydhdoTZC1uqXrJWb9UPbG",
+          "peers": 4,
+          "synced": true
+        },
+        "seed2.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWJ5U2gk6Pe9ehZb6aHng2zu7RnUwAKzEYxHbaM6VRo592",
+          "peers": 4,
+          "synced": true
+        }
+      }
+    },
+    {
+      "phase": "evidence/snapshot-1790209866.json",
+      "at": 1790209866.62303,
+      "common_height": 2644,
+      "nodes": {
+        "ap.seed.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWRubuvzRNxbxHH5BdzgxQNqMoWyQtdxKXUdNWJt5huTpk",
+          "peers": 3,
+          "synced": true
+        },
+        "eu.seed.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "340cf303814e5ac82f5deb0b6d1e9dd24ceba9b2",
+          "peer_id": "12D3KooWBDKQDQQkK5rLmSnke2hiWVaZ9qNGuuBhxFdxyqxaTvwK",
+          "peers": 3,
+          "synced": true
+        },
+        "faucet.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWPwhv3LhL7xTDbsNSraN4d6cnW4veZrGgFhALS2qPd1z9",
+          "peers": 4,
+          "synced": true
+        },
+        "seed.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWATfTARQ9A5BryHhpFPAjdW5ydhdoTZC1uqXrJWb9UPbG",
+          "peers": 4,
+          "synced": true
+        },
+        "seed2.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWJ5U2gk6Pe9ehZb6aHng2zu7RnUwAKzEYxHbaM6VRo592",
+          "peers": 4,
+          "synced": true
+        }
+      }
+    },
+    {
+      "phase": "evidence/snapshot-1790209895.json",
+      "at": 1790209895.264674,
+      "common_height": 2644,
+      "nodes": {
+        "ap.seed.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWRubuvzRNxbxHH5BdzgxQNqMoWyQtdxKXUdNWJt5huTpk",
+          "peers": 3,
+          "synced": true
+        },
+        "eu.seed.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "340cf303814e5ac82f5deb0b6d1e9dd24ceba9b2",
+          "peer_id": "12D3KooWBDKQDQQkK5rLmSnke2hiWVaZ9qNGuuBhxFdxyqxaTvwK",
+          "peers": 3,
+          "synced": true
+        },
+        "faucet.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWPwhv3LhL7xTDbsNSraN4d6cnW4veZrGgFhALS2qPd1z9",
+          "peers": 4,
+          "synced": true
+        },
+        "seed.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWATfTARQ9A5BryHhpFPAjdW5ydhdoTZC1uqXrJWb9UPbG",
+          "peers": 4,
+          "synced": true
+        },
+        "seed2.botho.io": {
+          "height": 2645,
+          "tip_hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+          "common_block": {
+            "hash": "d2dbfa36a68f65ef5fb2b1a6c7fde83c11986f4222c8f5234e64afb2ec809693",
+            "height": 2644
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWJ5U2gk6Pe9ehZb6aHng2zu7RnUwAKzEYxHbaM6VRo592",
+          "peers": 4,
+          "synced": true
+        }
+      }
+    },
+    {
+      "phase": "evidence/snapshot-1790209970.json",
+      "at": 1790209970.949475,
+      "common_height": 2645,
+      "nodes": {
+        "ap.seed.botho.io": {
+          "height": 2646,
+          "tip_hash": "1a4f2e7d8e4dc4d85d29d21a1d605b1e8b9bc45e5617ccb5861090cbd013abd2",
+          "common_block": {
+            "hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+            "height": 2645
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWRubuvzRNxbxHH5BdzgxQNqMoWyQtdxKXUdNWJt5huTpk",
+          "peers": 3,
+          "synced": true
+        },
+        "eu.seed.botho.io": {
+          "height": 2646,
+          "tip_hash": "1a4f2e7d8e4dc4d85d29d21a1d605b1e8b9bc45e5617ccb5861090cbd013abd2",
+          "common_block": {
+            "hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+            "height": 2645
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "340cf303814e5ac82f5deb0b6d1e9dd24ceba9b2",
+          "peer_id": "12D3KooWBDKQDQQkK5rLmSnke2hiWVaZ9qNGuuBhxFdxyqxaTvwK",
+          "peers": 3,
+          "synced": true
+        },
+        "faucet.botho.io": {
+          "height": 2646,
+          "tip_hash": "1a4f2e7d8e4dc4d85d29d21a1d605b1e8b9bc45e5617ccb5861090cbd013abd2",
+          "common_block": {
+            "hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+            "height": 2645
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWPwhv3LhL7xTDbsNSraN4d6cnW4veZrGgFhALS2qPd1z9",
+          "peers": 4,
+          "synced": true
+        },
+        "seed.botho.io": {
+          "height": 2646,
+          "tip_hash": "1a4f2e7d8e4dc4d85d29d21a1d605b1e8b9bc45e5617ccb5861090cbd013abd2",
+          "common_block": {
+            "hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+            "height": 2645
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWATfTARQ9A5BryHhpFPAjdW5ydhdoTZC1uqXrJWb9UPbG",
+          "peers": 4,
+          "synced": true
+        },
+        "seed2.botho.io": {
+          "height": 2646,
+          "tip_hash": "1a4f2e7d8e4dc4d85d29d21a1d605b1e8b9bc45e5617ccb5861090cbd013abd2",
+          "common_block": {
+            "hash": "dd59a70632aa20049014cd08351ec12f106e03b7ecbf4428d5df406fb3997e18",
+            "height": 2645
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWJ5U2gk6Pe9ehZb6aHng2zu7RnUwAKzEYxHbaM6VRo592",
+          "peers": 4,
+          "synced": true
+        }
+      }
+    },
+    {
+      "phase": "restored/snapshot-1790210004.json",
+      "at": 1790210004.073694,
+      "common_height": 2646,
+      "nodes": {
+        "ap.seed.botho.io": {
+          "height": 2647,
+          "tip_hash": "d642accfa20f8653f9fb3d885ea66b670d1e06239ad62262b7981080ad20bb31",
+          "common_block": {
+            "hash": "1a4f2e7d8e4dc4d85d29d21a1d605b1e8b9bc45e5617ccb5861090cbd013abd2",
+            "height": 2646
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWRubuvzRNxbxHH5BdzgxQNqMoWyQtdxKXUdNWJt5huTpk",
+          "peers": 3,
+          "synced": true
+        },
+        "eu.seed.botho.io": {
+          "height": 2647,
+          "tip_hash": "d642accfa20f8653f9fb3d885ea66b670d1e06239ad62262b7981080ad20bb31",
+          "common_block": {
+            "hash": "1a4f2e7d8e4dc4d85d29d21a1d605b1e8b9bc45e5617ccb5861090cbd013abd2",
+            "height": 2646
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWBDKQDQQkK5rLmSnke2hiWVaZ9qNGuuBhxFdxyqxaTvwK",
+          "peers": 3,
+          "synced": true
+        },
+        "faucet.botho.io": {
+          "height": 2647,
+          "tip_hash": "d642accfa20f8653f9fb3d885ea66b670d1e06239ad62262b7981080ad20bb31",
+          "common_block": {
+            "hash": "1a4f2e7d8e4dc4d85d29d21a1d605b1e8b9bc45e5617ccb5861090cbd013abd2",
+            "height": 2646
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWPwhv3LhL7xTDbsNSraN4d6cnW4veZrGgFhALS2qPd1z9",
+          "peers": 4,
+          "synced": true
+        },
+        "seed.botho.io": {
+          "height": 2647,
+          "tip_hash": "d642accfa20f8653f9fb3d885ea66b670d1e06239ad62262b7981080ad20bb31",
+          "common_block": {
+            "hash": "1a4f2e7d8e4dc4d85d29d21a1d605b1e8b9bc45e5617ccb5861090cbd013abd2",
+            "height": 2646
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWATfTARQ9A5BryHhpFPAjdW5ydhdoTZC1uqXrJWb9UPbG",
+          "peers": 4,
+          "synced": true
+        },
+        "seed2.botho.io": {
+          "height": 2647,
+          "tip_hash": "d642accfa20f8653f9fb3d885ea66b670d1e06239ad62262b7981080ad20bb31",
+          "common_block": {
+            "hash": "1a4f2e7d8e4dc4d85d29d21a1d605b1e8b9bc45e5617ccb5861090cbd013abd2",
+            "height": 2646
+          },
+          "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+          "source": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+          "peer_id": "12D3KooWJ5U2gk6Pe9ehZb6aHng2zu7RnUwAKzEYxHbaM6VRo592",
+          "peers": 4,
+          "synced": true
+        }
+      }
+    }
+  ]
+}
