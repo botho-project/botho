@@ -26,9 +26,26 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-pub const MAX_REQUEST: u64 = 32 * 1024 * 1024;
+// A full three-day testnet history can exceed 32 MiB. Keep the offline
+// adapter bounded while allowing the controller's independently capped run.
+pub const MAX_REQUEST: u64 = 128 * 1024 * 1024;
 pub const MAX_TX: usize = 256 * 1024;
 pub const MAX_FEE: u64 = 5_000_000_000;
+
+fn read_bounded_input(reader: impl Read, limit: u64) -> Result<Vec<u8>> {
+    let mut input = Vec::new();
+    reader.take(limit + 1).read_to_end(&mut input)?;
+    ensure!(input.len() as u64 <= limit, "request exceeds byte limit");
+    Ok(input)
+}
+
+/// Read one offline request without consuming an unbounded input stream.
+pub fn read_request(reader: impl Read) -> Result<Request> {
+    Ok(serde_json::from_slice(&read_bounded_input(
+        reader,
+        MAX_REQUEST,
+    )?)?)
+}
 
 #[derive(Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
@@ -370,6 +387,46 @@ pub fn execute(request: Request) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn request_reader_enforces_inclusive_boundary_and_bounded_read() {
+        use std::io::Cursor;
+        assert_eq!(read_bounded_input(&b"1234567"[..], 8).unwrap().len(), 7);
+        assert_eq!(read_bounded_input(&b"12345678"[..], 8).unwrap().len(), 8);
+        let mut oversized = Cursor::new(b"123456789more unread bytes");
+        assert!(read_bounded_input(&mut oversized, 8)
+            .unwrap_err()
+            .to_string()
+            .contains("request exceeds byte limit"));
+        assert_eq!(oversized.position(), 9);
+    }
+
+    #[test]
+    fn request_reader_accepts_history_sized_payload_above_old_limit() {
+        let json = br#"{"operation":"scan","wallet":"unused","blocks":[]}"#;
+        let mut input = vec![b' '; 33 * 1024 * 1024];
+        input[..json.len()].copy_from_slice(json);
+        assert!(matches!(
+            read_request(input.as_slice()).unwrap(),
+            Request::Scan { .. }
+        ));
+    }
+
+    #[test]
+    fn request_reader_preserves_json_validation_and_io_errors() {
+        assert!(read_request(&b"not json"[..]).is_err());
+        struct Broken;
+        impl Read for Broken {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("reader failed"))
+            }
+        }
+        assert!(read_request(Broken)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("reader failed"));
+    }
     #[test]
     fn protected_publication_never_overwrites_or_accepts_partial_files() {
         let dir = tempfile::tempdir().unwrap();
