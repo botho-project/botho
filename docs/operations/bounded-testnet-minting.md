@@ -26,9 +26,11 @@ behavior. Blocks generate normal rewards; enabling continuous production
 therefore increases actual issuance and resource consumption compared with an
 idle producer. This option does not request faucet grants or submit payments.
 
-At expiry the next balance-control tick (normally ten seconds) restores the
-normal policy. High balance plus an empty mempool pauses; pending transactions
-can still resume minting. Expiry does not stop the node or prevent ordinary
+At expiry the next balance-control tick (normally ten seconds) stops mining
+before any fallible balance scan. After a successful scan, the normal policy
+applies: high balance plus an empty mempool stays paused; pending transactions
+or a low balance can resume mining subject to the existing quorum/sync guards.
+A failed scan leaves the expired producer stopped. Expiry does not stop the node or prevent ordinary
 payments. A monotonic timer bounds the running process even if the wall clock
 moves backward; an observed expiry or clock failure cannot reactivate the
 window. Keep the host clock synchronized, including across restarts.

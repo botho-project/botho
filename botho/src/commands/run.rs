@@ -90,6 +90,12 @@ impl TestnetMintWindow {
     }
 }
 
+/// Expiry must stop an override-backed producer before fallible wallet work.
+/// Otherwise a failed balance scan could leave it mining without a deadline.
+fn expired_window_requires_pause(was_enabled: bool, active: bool, minting: bool) -> bool {
+    was_enabled && !active && minting
+}
+
 fn unix_seconds() -> Option<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2353,6 +2359,22 @@ async fn run_async(
 
             // Check faucet balance and control minting accordingly
             _ = faucet_balance_interval.tick() => {
+                // Evaluate and enforce expiry BEFORE any fallible balance scan.
+                // A ledger/scan error must not leave override-backed mining alive.
+                let window_was_enabled = mint_window.deadline.is_some();
+                let continuous = mint_window.active(unix_seconds(), Instant::now());
+                if expired_window_requires_pause(window_was_enabled, continuous, minting_enabled) {
+                    node.stop_minting_public();
+                    minting_enabled = false;
+                    minting_paused_for_balance = true;
+                    if let Ok(mut active) = minting_active.write() {
+                        *active = false;
+                    }
+                    metrics_updater.set_minting_active(false);
+                    ws_broadcaster.minting_status(false, 0.0, 0);
+                }
+                // Normal policy can resume only after a successful scan and the
+                // existing quorum/sync checks. Failed scans leave mining stopped.
                 // Only check balance if faucet is configured with a wallet
                 if let Some(wallet) = &rpc_state.wallet {
                     // Get wallet balance by scanning UTXOs
@@ -2412,7 +2434,6 @@ async fn run_async(
                         .map(|mp| mp.len())
                         .unwrap_or(0);
 
-                    let continuous = mint_window.active(unix_seconds(), Instant::now());
                     let (pause_for_balance, resume_from_balance) = balance_minting_policy(
                         balance, FAUCET_BALANCE_HIGH, FAUCET_BALANCE_LOW, mempool_len, continuous,
                     );
@@ -3374,6 +3395,22 @@ mod tests {
         assert!(!want_to_mint(false, false));
         assert!(!should_arm_minting(false, true));
         assert!(!should_arm_minting(true, false));
+    }
+
+    #[test]
+    fn testnet_mint_expiry_requires_stop_before_a_failed_balance_scan() {
+        let clock = Instant::now();
+        let mut window = TestnetMintWindow::new(Network::Testnet, Some(110), 100, clock).unwrap();
+        let was_enabled = window.deadline.is_some();
+        let active = window.active(Some(110), clock + Duration::from_secs(10));
+        // The control loop applies this stop before reading the ledger: even a
+        // failed scan cannot skip the expiry transition or authorize a resume.
+        assert!(expired_window_requires_pause(was_enabled, active, true));
+        assert!(!expired_window_requires_pause(was_enabled, active, false));
+        assert!(!expired_window_requires_pause(true, true, true));
+        assert!(!expired_window_requires_pause(false, false, true));
+        // A later scan failure cannot revive the already-expired window.
+        assert!(!window.active(Some(100), clock + Duration::from_secs(11)));
     }
 
     // ---- Issue #767: `[minting] enabled = true` must arm minting, not just
