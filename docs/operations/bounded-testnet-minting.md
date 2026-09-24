@@ -18,7 +18,9 @@ a new deadline in `ExecStart` would silently extend the experiment. Once the
 original deadline has passed, remove the option before restarting the service;
 startup with an expired option fails instead of renewing it.
 
-During the window, only the local high-balance pause is bypassed. A previously
+During the window, only the local high-balance pause is bypassed. While the
+producer is actively minting, the balance loop skips unnecessary full-wallet
+UTXO scans; expiry is enforced before this shortcut. A previously
 balance-paused producer may resume subject to the existing mint-request,
 quorum, and initial-sync guards. Wallet, identity, ledger, transaction limits,
 block validation, difficulty, and reward calculations retain their normal
@@ -30,7 +32,8 @@ At expiry the next balance-control tick (normally ten seconds) stops mining
 before any fallible balance scan. After a successful scan, the normal policy
 applies: high balance plus an empty mempool stays paused; pending transactions
 or a low balance can resume mining subject to the existing quorum/sync guards.
-A failed scan leaves the expired producer stopped. Expiry does not stop the node or prevent ordinary
+A failed scan leaves the expired producer stopped. Peer reconnection and
+initial-sync completion cannot bypass the latched balance pause. Expiry does not stop the node or prevent ordinary
 payments. A monotonic timer bounds the running process even if the wall clock
 moves backward; an observed expiry or clock failure cannot reactivate the
 window. Keep the host clock synchronized, including across restarts.
