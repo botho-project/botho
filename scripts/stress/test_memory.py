@@ -1,7 +1,7 @@
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from controller import Controller
 from runtime import HOSTS, Journal
@@ -186,6 +186,52 @@ class IdleMemoryTests(unittest.TestCase):
         self.j.set('memory_cycle:'+host, 1000)
         self.sample(1300)
         self.c.halt.assert_called_once_with('post-idle RSS growth across three cycles: '+host)
+
+
+class QualifiedBaselineTests(unittest.IsolatedAsyncioTestCase):
+    async def monitor_once(self, changed_pid=False):
+        with tempfile.TemporaryDirectory() as name:
+            reference = {'at':900,'pid':1,'start':'fixed','restarts':0,'binary':'hash',
+                         'config':'config-digest','node_key':'peer-key-digest',
+                         'disk_free':10*1024**3,'disk_total':20*1024**3,
+                         'mem_available':1024**3,'mem_total':4*1024**3,'swap':0,'rss':350*MIB}
+            observed = {**reference,'at':1000,'rss':450*MIB,'pid':2 if changed_pid else 1}
+            c = Controller.__new__(Controller)
+            c.j = Journal(Path(name)/'journal.sqlite')
+            try:
+                c.config = {'node_sha256':'hash','resource_baselines':{h:reference for h in HOSTS}}
+                c.plan = {'network':'botho-testnet','node_commit':'commit','genesis':'block'}
+                c.closed = False
+                c.fresh = 0
+                c.state = Path(name)
+                status = {'network':'botho-testnet','gitCommit':'commit','version':'0.6.0',
+                          'synced':True,'chainHeight':100}
+                async def rpc(host, method, params=None):
+                    return status if method=='node_getStatus' else {'hash':'block'}
+                c.rpc = Mock(call=AsyncMock(side_effect=rpc))
+                c.observer = AsyncMock(return_value=[observed])
+                def finish(*args):c.closed=True
+                c.memory_cycle = Mock(side_effect=finish)
+                c.halt = Mock(side_effect=finish)
+                with patch('controller.time.time',return_value=1000), patch('controller.asyncio.sleep',new_callable=AsyncMock):
+                    await c.monitor()
+                if changed_pid:
+                    c.halt.assert_called_once()
+                    self.assertIn('unexpected node restart',str(c.halt.call_args.args[0]))
+                    c.memory_cycle.assert_not_called()
+                else:
+                    c.halt.assert_not_called()
+                    for host in HOSTS:
+                        self.assertEqual(c.j.get('baseline:'+host),reference)
+                        self.assertEqual(c.j.get('latest:'+host)['rss'],450*MIB)
+            finally:
+                c.j.db.close()
+
+    async def test_supplied_qualified_rss_is_retained_instead_of_latest_sample(self):
+        await self.monitor_once()
+
+    async def test_supplied_reference_rejects_changed_pid_instead_of_rebasing(self):
+        await self.monitor_once(changed_pid=True)
 
 
 if __name__ == '__main__':

@@ -109,7 +109,7 @@ class Controller:
                     if baseline is None:
                         if not observed or observed[-1].get('error'):
                             raise Gate('observer baseline unavailable')
-                        baseline = observed[-1]
+                        baseline = self.config.get('resource_baselines',{}).get(host,observed[-1])
                         if baseline['binary'] != self.config['node_sha256']:
                             raise Gate('deployed binary differs from launch pin')
                         self.j.set('baseline:'+host,baseline)
