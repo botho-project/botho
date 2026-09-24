@@ -156,15 +156,43 @@ class Controller:
 
     def memory_cycle(self):
         last = self.j.get('last_write',0)
-        if last and time.time()-last >= 300 and self.j.get('memory_cycle',0) < last and not self.j.pending():
-            for host in HOSTS:
-                row,base = self.j.get('latest:'+host), self.j.get('baseline:'+host)
-                high = row['rss']-base['rss'] > 64*1024**2 and row['rss'] > base['rss']*1.2
-                count = self.j.get('rss_cycles:'+host,0)+1 if high else 0
+        now = time.time()
+        pending = bool(self.j.pending())
+        for host in HOSTS:
+            if self.j.get('rss_cycles:'+host,0) >= 3:
+                self.halt('post-idle RSS growth across three cycles: '+host)
+            row,base = self.j.get('latest:'+host), self.j.get('baseline:'+host)
+            status = self.statuses.get(host,{})
+            state = self.j.get('rss_idle:'+host,{})
+            # Only continuously observed idle time qualifies. New writes and
+            # observation gaps cannot inherit an earlier five-minute window.
+            if (state.get('write') != last or state.get('sample_at') is None
+                    or not 0 <= now-state['sample_at'] <= 60):
+                state['since'] = None
+            state.update(write=last,sample_at=now)
+            idle = (not pending and 0 <= now-self.fresh <= 60 and row and base
+                    and 0 <= now-row['at'] <= 60 and status.get('synced') is True
+                    and status.get('mintingActive') is False
+                    and type(status.get('mempoolSize')) is int and status['mempoolSize']==0)
+            if not idle:
+                state['since'] = None
+            elif state.get('since') is None:
+                state['since'] = now
+            self.j.set('rss_idle:'+host,state)
+            # Each host completes a write cycle independently: an active
+            # producer must not consume a passive peer's idle observation, or
+            # be compared against its own fixed idle RSS baseline while mining.
+            completed = self.j.get('memory_cycle:'+host,self.j.get('memory_cycle',0))
+            if (not last or state['since'] is None or now-state['since'] < 300
+                    or completed >= last):
+                continue
+            high = row['rss']-base['rss'] > 64*1024**2 and row['rss'] > base['rss']*1.2
+            count = self.j.get('rss_cycles:'+host,0)+1 if high else 0
+            with self.j.transaction():
                 self.j.set('rss_cycles:'+host,count)
-                if count >= 3:
-                    self.halt('post-idle RSS growth across three cycles: '+host)
-            self.j.set('memory_cycle',last)
+                self.j.set('memory_cycle:'+host,last)
+            if count >= 3:
+                self.halt('post-idle RSS growth across three cycles: '+host)
 
     async def sync(self, full=False):
         async with self.scan_lock:
