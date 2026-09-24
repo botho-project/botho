@@ -30,6 +30,8 @@ jobs:
         run: |
           cargo test --locked --release -p botho --test network_integration
           cargo test --locked --release -p botho --lib node::minter::tests
+          cargo test --locked --release -p botho --lib commands::run::tests
+          cargo test --locked --release -p botho --bin botho cli_tests
       - name: Record identity
         run: |
           mkdir -p dist
@@ -42,4 +44,34 @@ jobs:
         with:
           name: snow-testnet-linux-aarch64
           path: dist/
+          retention-days: 7
+
+  signer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-12-03
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: stress-signer-x86_64
+      - name: Native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+      - name: Build and validate offline signer
+        run: |
+          cargo build --locked --release -p botho-wallet --bin botho-stress-wallet
+          cargo test --locked --release -p botho-wallet --lib stress::tests
+          cargo test --locked --release -p botho-wallet --test stress_node
+      - name: Record signer identity
+        run: |
+          mkdir -p dist-signer
+          cp target/release/botho-stress-wallet dist-signer/
+          git rev-parse HEAD > dist-signer/source-commit.txt
+          sha256sum dist-signer/botho-stress-wallet > dist-signer/signer.sha256
+      - uses: actions/upload-artifact@v7
+        with:
+          name: stress-signer-linux-x86_64
+          path: dist-signer/
           retention-days: 7
