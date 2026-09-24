@@ -43,6 +43,8 @@ class Controller:
         if len(self.wallets) != 8 or len({w['address'] for w in self.wallets}) != 8:
             raise Gate('eight distinct dedicated wallets required')
         self.inventory = [[] for _ in self.wallets]
+        # Never trust persisted wallet inventory after a process restart.
+        self.inventory_initialized = False
         self.spent = []
         self.scan_lock = asyncio.Lock()
         self.admission_lock = asyncio.Lock()
@@ -109,7 +111,7 @@ class Controller:
                     if baseline is None:
                         if not observed or observed[-1].get('error'):
                             raise Gate('observer baseline unavailable')
-                        baseline = observed[-1]
+                        baseline = self.config.get('resource_baselines',{}).get(host,observed[-1])
                         if baseline['binary'] != self.config['node_sha256']:
                             raise Gate('deployed binary differs from launch pin')
                         self.j.set('baseline:'+host,baseline)
@@ -156,15 +158,43 @@ class Controller:
 
     def memory_cycle(self):
         last = self.j.get('last_write',0)
-        if last and time.time()-last >= 300 and self.j.get('memory_cycle',0) < last and not self.j.pending():
-            for host in HOSTS:
-                row,base = self.j.get('latest:'+host), self.j.get('baseline:'+host)
-                high = row['rss']-base['rss'] > 64*1024**2 and row['rss'] > base['rss']*1.2
-                count = self.j.get('rss_cycles:'+host,0)+1 if high else 0
+        now = time.time()
+        pending = bool(self.j.pending())
+        for host in HOSTS:
+            if self.j.get('rss_cycles:'+host,0) >= 3:
+                self.halt('post-idle RSS growth across three cycles: '+host)
+            row,base = self.j.get('latest:'+host), self.j.get('baseline:'+host)
+            status = self.statuses.get(host,{})
+            state = self.j.get('rss_idle:'+host,{})
+            # Only continuously observed idle time qualifies. New writes and
+            # observation gaps cannot inherit an earlier five-minute window.
+            if (state.get('write') != last or state.get('sample_at') is None
+                    or not 0 <= now-state['sample_at'] <= 60):
+                state['since'] = None
+            state.update(write=last,sample_at=now)
+            idle = (not pending and 0 <= now-self.fresh <= 60 and row and base
+                    and 0 <= now-row['at'] <= 60 and status.get('synced') is True
+                    and status.get('mintingActive') is False
+                    and type(status.get('mempoolSize')) is int and status['mempoolSize']==0)
+            if not idle:
+                state['since'] = None
+            elif state.get('since') is None:
+                state['since'] = now
+            self.j.set('rss_idle:'+host,state)
+            # Each host completes a write cycle independently: an active
+            # producer must not consume a passive peer's idle observation, or
+            # be compared against its own fixed idle RSS baseline while mining.
+            completed = self.j.get('memory_cycle:'+host,self.j.get('memory_cycle',0))
+            if (not last or state['since'] is None or now-state['since'] < 300
+                    or completed >= last):
+                continue
+            high = row['rss']-base['rss'] > 64*1024**2 and row['rss'] > base['rss']*1.2
+            count = self.j.get('rss_cycles:'+host,0)+1 if high else 0
+            with self.j.transaction():
                 self.j.set('rss_cycles:'+host,count)
-                if count >= 3:
-                    self.halt('post-idle RSS growth across three cycles: '+host)
-            self.j.set('memory_cycle',last)
+                self.j.set('memory_cycle:'+host,last)
+            if count >= 3:
+                self.halt('post-idle RSS growth across three cycles: '+host)
 
     async def sync(self, full=False):
         async with self.scan_lock:
@@ -183,19 +213,36 @@ class Controller:
             if full:
                 if previous and new[:len(previous)] != previous:
                     raise Gate('full rescan disagrees with checkpointed output history')
-                self.blocks = new
+                blocks = new
             else:
-                self.blocks.extend(new)
-            atomic(self.state/'blocks.json',self.blocks)
+                blocks = previous+new
+            incremental = self.inventory_initialized and not full
+            scan_blocks = new if incremental else blocks
+            if incremental:
+                # The native scanner rejects duplicate output IDs within its
+                # request. Preserve that rule across separate append requests.
+                seen = {(o['txHash'],o['outputIndex']) for b in previous for o in b['outputs']}
+                for block in new:
+                    for output in block['outputs']:
+                        identifier = (output['txHash'],output['outputIndex'])
+                        if identifier in seen:
+                            raise Gate('duplicate output id across incremental history')
+                        seen.add(identifier)
             scans = []
             # Separate signer processes and derivations: restores never reuse key state.
-            for wallet in self.wallets:
-                scanned = await self.native({'operation':'restore_check' if full else 'scan',
-                    'wallet':wallet['key'], 'blocks':self.blocks,
-                    **({'expected_address':wallet['address']} if full else {})})
-                if scanned['address'] != wallet['address']:
-                    raise Gate('wallet identity differs from allowlist')
-                scans.append(scanned['owned'])
+            for index,wallet in enumerate(self.wallets):
+                owned = {o['id']:o for o in self.inventory[index]} if incremental else {}
+                if scan_blocks or not incremental:
+                    scanned = await self.native({'operation':'restore_check' if full else 'scan',
+                        'wallet':wallet['key'], 'blocks':scan_blocks,
+                        **({'expected_address':wallet['address']} if full else {})})
+                    if scanned['address'] != wallet['address']:
+                        raise Gate('wallet identity differs from allowlist')
+                    for output in scanned['owned']:
+                        if output['id'] in owned:
+                            raise Gate('duplicate owned output across incremental scans')
+                        owned[output['id']] = output
+                scans.append(list(owned.values()))
             all_images = list(dict.fromkeys(o['key_image'] for owned in scans for o in owned))
             # Finalized spent images stay spent. Phase/full scans independently
             # recheck them; routine scans reserve RPC capacity for live inputs.
@@ -211,8 +258,13 @@ class Controller:
                     raise Gate('malformed spent-image response')
                 checked.update((s['keyImage'],s) for s in found)
             spent=[checked[image] for image in all_images]
-            self.inventory, self.spent = scans, spent
+            # Do not advance in-memory scan progress on a failed native/RPC
+            # check: retry must scan the same new outputs, never skip them.
+            if full or new:
+                atomic(self.state/'blocks.json',blocks)
             atomic(self.state/'inventory.json',{'at':time.time(),'height':height,'owned':scans,'spent':spent})
+            self.blocks, self.inventory, self.spent = blocks, scans, spent
+            self.inventory_initialized = True
             return height
 
     def spendable(self, wallet, height, amount=0, count=1):
@@ -369,10 +421,17 @@ class Controller:
         faucet = await self.rpc.call('faucet.botho.io','faucet_getStatus')
         if not faucet.get('enabled') or int(faucet.get('amountPerRequest',0)) != 1_000_000_000_000:
             raise Gate('unexpected faucet configuration')
+        self.gate()
+        if time.time()>row['offered']+120:
+            return
         with self.j.transaction():
             rows = self.j.rows("kind='funding' AND submitted IS NOT NULL")
-            if len(rows)>=24 or any(r['submitted']>time.time()-900 for r in rows):
-                raise Gate('funding pacing or count cap')
+            if len(rows)>=24:
+                raise Gate('funding count cap')
+            # Fixed offer times can precede the previous actual submission + 900
+            # seconds. Wait within this offer's original slot; never replay it.
+            if any(r['submitted']>time.time()-900 for r in rows):
+                return
             if sum(r['recipient']==row['recipient'] and r['submitted']>time.time()-86400 for r in rows)>=3:
                 raise Gate('recipient daily funding cap')
             attempted = self.j.db.execute("SELECT COUNT(*) FROM intents WHERE submitted IS NOT NULL OR prepared IS NOT NULL").fetchone()[0]
