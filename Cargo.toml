@@ -282,6 +282,8 @@ opt-level = 2
 lto = "thin"
 
 [patch.crates-io]
+# Testnet candidate for the AEAD 0.11 migration (mcginty/snow#219).
+snow = { git = "https://github.com/rjwalters/snow.git", rev = "8192d73c676ecdc93f91c5621caaa95245969ccc" }
 bulletproofs-og = { path = "vendor/bulletproofs-og" }
 schnorrkel-og = { git = "https://github.com/mobilecoinfoundation/schnorrkel.git", rev = "049bf9d30f3bbe072e2ad1b5eefdf0f3c851215e" }
 # Vendored fork of randomx-rs 1.4.1 (issue #640). Upstream's build.rs hardcodes
