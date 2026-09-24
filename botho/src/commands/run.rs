@@ -96,6 +96,18 @@ fn expired_window_requires_pause(was_enabled: bool, active: bool, minting: bool)
     was_enabled && !active && minting
 }
 
+/// Peer/sync changes cannot override a balance pause (including expiry).
+/// Only the balance-control path may clear that pause after its own checks.
+fn should_recheck_minting(mint_requested: bool, minting: bool, balance_paused: bool) -> bool {
+    mint_requested && !minting && !balance_paused
+}
+
+/// A running bounded producer does not need expensive balance/UTXO scans.
+/// Expiry is enforced before calling this, and normal policy still scans.
+fn balance_scan_required(continuous: bool, minting: bool) -> bool {
+    !(continuous && minting)
+}
+
 fn unix_seconds() -> Option<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1233,7 +1245,7 @@ async fn run_async(
                             // even if quorum is now reachable, a node still
                             // behind the fleet tip must not arm minting until it
                             // has caught up (`initial_sync_complete`).
-                            if mint && !minting_enabled {
+                            if should_recheck_minting(mint, minting_enabled, minting_paused_for_balance) {
                                 let connected = get_connected_peer_ids(&discovery);
                                 let (can_mint_now, msg) = check_minting_eligibility(&config, &connected, mint);
                                 if should_arm_minting(can_mint_now, initial_sync_complete) {
@@ -2219,7 +2231,7 @@ async fn run_async(
                     // Arm minting now if it was deferred purely on the sync gate
                     // at startup (quorum was already reachable). Mirrors the
                     // peer-connect arm's eligibility check.
-                    if mint && !minting_enabled {
+                    if should_recheck_minting(mint, minting_enabled, minting_paused_for_balance) {
                         let connected = get_connected_peer_ids(&discovery);
                         let (can_mint_now, msg) =
                             check_minting_eligibility(&config, &connected, mint);
@@ -2372,6 +2384,9 @@ async fn run_async(
                     }
                     metrics_updater.set_minting_active(false);
                     ws_broadcaster.minting_status(false, 0.0, 0);
+                }
+                if !balance_scan_required(continuous, minting_enabled) {
+                    continue;
                 }
                 // Normal policy can resume only after a successful scan and the
                 // existing quorum/sync checks. Failed scans leave mining stopped.
@@ -3411,6 +3426,36 @@ mod tests {
         assert!(!expired_window_requires_pause(false, false, true));
         // A later scan failure cannot revive the already-expired window.
         assert!(!window.active(Some(100), clock + Duration::from_secs(11)));
+    }
+
+    #[test]
+    fn testnet_mint_expiry_pause_cannot_be_bypassed_by_peer_or_sync_reentry() {
+        // Expiry stops the worker and latches balance-paused before any scan.
+        let minting = false;
+        let balance_paused = true;
+        assert!(!should_recheck_minting(true, minting, balance_paused));
+        // Even healthy quorum/sync cannot skip the balance-control resume path.
+        assert!(should_arm_minting(true, true));
+        assert_eq!(
+            balance_minting_policy(HIGH + 1, HIGH, LOW, 0, false),
+            (true, false)
+        );
+        // Ordinary quorum-only deferral remains eligible for re-evaluation.
+        assert!(should_recheck_minting(true, false, false));
+        assert!(!should_recheck_minting(false, false, false));
+        assert!(!should_recheck_minting(true, true, false));
+    }
+
+    #[test]
+    fn testnet_mint_window_skips_balance_scans_only_while_actively_minting() {
+        let clock = Instant::now();
+        let mut window = TestnetMintWindow::new(Network::Testnet, Some(110), 100, clock).unwrap();
+        let continuous = window.active(Some(109), clock);
+        assert!(!balance_scan_required(continuous, true));
+        assert!(balance_scan_required(continuous, false));
+        let continuous = window.active(Some(110), clock);
+        assert!(balance_scan_required(continuous, true));
+        assert!(balance_scan_required(continuous, false));
     }
 
     // ---- Issue #767: `[minting] enabled = true` must arm minting, not just
