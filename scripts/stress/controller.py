@@ -253,11 +253,42 @@ class Controller:
             atomic(self.state/'inventory.json',{'at':time.time(),'height':height,'owned':scans,'spent':spent})
             return height
 
+    def canonical_history(self):
+        # Match target-only ledger resolution before any maturity/age filtering.
+        # History and inventory retain unsupported receipts for accounting.
+        canonical = {}
+        for block in sorted(self.blocks, key=lambda block: block['height']):
+            for output in block['outputs']:
+                key = output['targetKey'].lower()
+                if not output.get('lottery', False) and key not in canonical:
+                    canonical[key] = (block['height'], output)
+        return canonical
+
+    def canonical_inventory(self, wallet, canonical=None):
+        canonical = self.canonical_history() if canonical is None else canonical
+        seen = set()
+        outputs = []
+        for output in self.inventory[wallet]:
+            utxo = output['utxo']
+            key = bytes(utxo['target_key']).hex()
+            original = canonical.get(key)
+            if utxo.get('lottery', False) or original is None or key in seen:
+                continue
+            created, row = original
+            if (created != utxo['created_at'] or
+                    row['txHash'].lower() != bytes(utxo['tx_hash']).hex() or
+                    row['outputIndex'] != utxo['output_index']):
+                continue
+            seen.add(key)
+            outputs.append(output)
+        return outputs
+
     def spendable(self, wallet, height, amount=0, count=1):
         state = {s['keyImage']:s for s in self.spent}
         reserved = {r[0] for r in self.j.db.execute('SELECT input FROM reservations')}
+        canonical = self.canonical_history()
         outputs = []
-        for output in self.inventory[wallet]:
+        for output in self.canonical_inventory(wallet, canonical):
             status = state.get(output['key_image'])
             utxo = output['utxo']
             if (not status or status['spent'] or status['pending'] or output['id'] in reserved
@@ -267,8 +298,8 @@ class Controller:
             # Match production age_similarity_band: integer +/-10%, ten-block floor.
             delta = age//10
             low,high = max(10,age-delta),age+delta
-            keys = {o['targetKey'] for block in self.blocks if low <= height-block['height'] <= high
-                    for o in block['outputs']}
+            keys = {key for key, (created, _) in canonical.items()
+                    if low <= height-created <= high and key != '0'*64}
             keys.discard(bytes(utxo['target_key']).hex())
             if len(keys) >= 19:
                 outputs.append(output)

@@ -412,6 +412,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
       amount: bigint
       outputIndex: number
       kemCiphertext: string | null
+      lottery: boolean
     }>
   > {
     const result = await this.call<Array<{
@@ -423,6 +424,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
         publicKey: string
         amountCommitment: string
         kemCiphertext?: string | null
+        lottery?: boolean
       }>
     }>>('chain_getOutputs', {
       start_height: startHeight,
@@ -440,6 +442,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
         outputIndex: normalizeOutputIndex(output.outputIndex),
         // ML-KEM ciphertext (hex) or null for a classical/legacy output (#970).
         kemCiphertext: output.kemCiphertext ?? null,
+        lottery: output.lottery === true,
       })),
     )
   }
@@ -464,6 +467,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
       amount: bigint
       outputIndex: number
       kemCiphertext: string | null
+      lottery: boolean
     }>
   > {
     const result = await this.call<Array<{
@@ -475,6 +479,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
         publicKey: string
         amountCommitment: string
         kemCiphertext?: string | null
+        lottery?: boolean
       }>
     }>>('chain_getOutputs', {
       start_height: startHeight,
@@ -491,6 +496,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
         // Hybrid-detection metadata (#988), coinbase sentinel normalized.
         outputIndex: normalizeOutputIndex(output.outputIndex),
         kemCiphertext: output.kemCiphertext ?? null,
+        lottery: output.lottery === true,
       })),
     )
   }

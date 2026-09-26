@@ -28,6 +28,9 @@ use crate::{
 /// Narrow internal read seam. The ordinary Ledger adapter retains direct-index
 /// recovery and its existing decoy selection/errors. No network format changes.
 pub(crate) trait WalletRead {
+    fn validate_input(&self, _utxo: &Utxo) -> Result<()> {
+        Ok(())
+    }
     fn recover_input(&self, wallet: &Wallet, utxo: &Utxo) -> Result<RistrettoPrivate> {
         let output_index = utxo.id.output_index;
         let subaddress_index = wallet
@@ -57,6 +60,17 @@ pub(crate) trait WalletRead {
     ) -> std::result::Result<Vec<TxOutput>, crate::ledger::LedgerError>;
 }
 impl WalletRead for Ledger {
+    fn validate_input(&self, utxo: &Utxo) -> Result<()> {
+        let canonical = self
+            .get_utxo_by_target_key(&utxo.output.target_key)?
+            .ok_or_else(|| anyhow::anyhow!("Selected input has no canonical ledger output"))?;
+        if canonical.id != utxo.id {
+            return Err(anyhow::anyhow!(
+                "Legacy lottery payouts cannot be spent independently yet"
+            ));
+        }
+        Ok(())
+    }
     fn decoys(
         &self,
         count: usize,
@@ -191,6 +205,23 @@ pub struct Wallet {
 }
 
 impl Wallet {
+    /// Select independently usable outpoints without changing accounting scans.
+    /// All native producers share this filter before balances/fees are
+    /// selected.
+    pub fn canonical_inputs(utxos: &[Utxo], ledger: &Ledger) -> Result<Vec<Utxo>> {
+        let mut seen = std::collections::HashSet::new();
+        let mut canonical = Vec::new();
+        for utxo in utxos {
+            let original = ledger.get_utxo_by_target_key(&utxo.output.target_key)?;
+            if original.is_some_and(|original| original.id == utxo.id)
+                && seen.insert(utxo.output.target_key)
+            {
+                canonical.push(utxo.clone());
+            }
+        }
+        Ok(canonical)
+    }
+
     /// Create a wallet from a mnemonic phrase
     ///
     /// All keys (classical and post-quantum) derive from the same mnemonic,
@@ -673,7 +704,12 @@ impl Wallet {
         // Build ring inputs
         let mut ring_inputs = Vec::with_capacity(utxos_to_spend.len());
 
+        let mut input_keys = std::collections::HashSet::new();
         for utxo in utxos_to_spend {
+            if !input_keys.insert(utxo.output.target_key) {
+                return Err(anyhow::anyhow!("Duplicate input target"));
+            }
+            ledger.validate_input(utxo)?;
             let onetime_private = ledger.recover_input(self, utxo)?;
 
             // Calculate age of the real input for OSPEAD selection

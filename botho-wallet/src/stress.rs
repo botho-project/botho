@@ -3,10 +3,10 @@
 //! operation. Requests and responses contain wallet-linked data and must stay
 //! protected.
 use crate::{
-    decoy_selection::{age_similarity_band, MIN_DECOY_AGE_BLOCKS},
+    decoy_selection::MIN_DECOY_AGE_BLOCKS,
     fee_estimation::FeeEstimator,
     keys::WalletKeys,
-    ring_builder::select_rpc_decoy_pool,
+    ring_builder::{canonical_rpc_history, select_rpc_decoys_from_history},
     rpc_pool::BlockOutputs,
     transaction::{OwnedUtxo, TransactionBuilder, WalletScanner, DUST_THRESHOLD, MIN_TX_FEE},
 };
@@ -268,6 +268,8 @@ pub fn execute(request: Request) -> Result<Value> {
             ensure!(base_rate > 0, "missing network fee rate");
             let keys = read_keys(Path::new(&wallet))?;
             let owned = scan(&keys, &blocks)?;
+            let canonical = scan(&keys, &canonical_rpc_history(&blocks))?;
+            let mut input_keys = HashSet::new();
             let mut inputs = Vec::new();
             let mut input_metadata = Vec::new();
             for id in &selected {
@@ -276,6 +278,14 @@ pub fn execute(request: Request) -> Result<Value> {
                     .find(|o| &o.id == id)
                     .context("selected input is not owned")?;
                 ensure!(!reserved.contains(id), "input already reserved");
+                ensure!(
+                    canonical.iter().any(|o| o.id == *id),
+                    "input is not canonical"
+                );
+                ensure!(
+                    input_keys.insert(output.utxo.target_key),
+                    "duplicate input target"
+                );
                 let matches: Vec<_> = spent
                     .iter()
                     .filter(|s| s.key_image == output.key_image)
@@ -290,6 +300,10 @@ pub fn execute(request: Request) -> Result<Value> {
                 ensure!(
                     height.saturating_sub(output.utxo.created_at) >= MIN_DECOY_AGE_BLOCKS,
                     "immature input"
+                );
+                ensure!(
+                    !output.utxo.lottery,
+                    "Legacy lottery payouts cannot be spent independently yet"
                 );
                 inputs.push(output.utxo.clone());
                 input_metadata.push(
@@ -314,23 +328,12 @@ pub fn execute(request: Request) -> Result<Value> {
             let excluded: Vec<_> = inputs.iter().map(|u| u.target_key).collect();
             let mut rings = Vec::new();
             for input in &inputs {
-                let (min_age, max_age) = age_similarity_band(height - input.created_at);
-                // RPC ranges are inclusive. Filter locally as well to prevent the
-                // existing wrapper's end+1 convention from admitting young decoys.
-                let window: Vec<BlockOutputs> = blocks
-                    .iter()
-                    .filter(|b| {
-                        let age = height - b.height;
-                        age >= min_age && age <= max_age
-                    })
-                    .cloned()
-                    .collect();
-                rings.push(select_rpc_decoy_pool(
-                    &window,
+                rings.push(select_rpc_decoys_from_history(
+                    &blocks,
+                    height,
+                    height - input.created_at,
                     &excluded,
                     MIN_RING_SIZE - 1,
-                    min_age,
-                    max_age,
                     &mut OsRng,
                 )?);
             }
