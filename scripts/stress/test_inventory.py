@@ -13,8 +13,17 @@ class CanonicalDecoyInventoryTests(unittest.TestCase):
         db.execute('CREATE TABLE reservations (input TEXT)')
         self.addCleanup(db.close)
         self.c.j = SimpleNamespace(db=db)
-        self.owned = {'id':'grant:0','key_image':'image',
-                      'utxo':{'target_key':[1]*32,'amount':10**12,'created_at':100,'tx_hash':[7]*32,'output_index':0}}
+        self.owned = {
+            'id': bytes([7] * 32).hex() + ':0',
+            'key_image': 'image',
+            'utxo': {
+                'target_key': [1] * 32,
+                'amount': 10**12,
+                'created_at': 100,
+                'tx_hash': [7] * 32,
+                'output_index': 0,
+            },
+        }
         self.c.inventory = [[self.owned]]
         self.c.spent = [{'keyImage':'image','spent':False,'pending':False}]
         # At height 170, the selected age window is heights 93..107.
@@ -43,7 +52,8 @@ class CanonicalDecoyInventoryTests(unittest.TestCase):
 
     def test_owned_unflagged_alias_never_replaces_canonical_input(self):
         alias = copy.deepcopy(self.owned)
-        alias['id'] = 'alias:0'
+        alias['id'] = bytes([8] * 32).hex() + ':0'
+        alias['utxo']['tx_hash'] = [8] * 32
         alias['utxo']['created_at'] = 101
         alias['utxo']['amount'] *= 2
         self.c.inventory[0] = [alias, self.owned, copy.deepcopy(self.owned)]
@@ -55,7 +65,8 @@ class CanonicalDecoyInventoryTests(unittest.TestCase):
 
     def test_alias_with_equal_height_and_amount_requires_canonical_outpoint(self):
         alias = copy.deepcopy(self.owned)
-        alias['utxo']['tx_hash'] = [8]*32
+        alias['id'] = bytes([8] * 32).hex() + ':0'
+        alias['utxo']['tx_hash'] = [8] * 32
         self.c.inventory[0] = [alias]
         self.assertEqual(self.c.canonical_inventory(0), [])
 

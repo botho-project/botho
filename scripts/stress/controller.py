@@ -269,30 +269,84 @@ class Controller:
         seen = set()
         outputs = []
         for output in self.inventory[wallet]:
+            # The signer inventory is also retained verbatim for accounting.
+            # Reject malformed entries here without rewriting that evidence.
+            if not isinstance(output, dict) or not isinstance(output.get('utxo'), dict):
+                continue
             utxo = output['utxo']
+            if (
+                not isinstance(output.get('id'), str)
+                or not isinstance(output.get('key_image'), str)
+                or not output['key_image']
+                or utxo.get('lottery', False) is not False
+                or any(
+                    type(utxo.get(field)) is not int or utxo[field] < 0
+                    for field in ('created_at', 'output_index', 'amount')
+                )
+            ):
+                continue
+            if any(
+                not isinstance(utxo.get(field), list)
+                or len(utxo[field]) != 32
+                or any(
+                    type(byte) is not int or not 0 <= byte <= 255
+                    for byte in utxo[field]
+                )
+                for field in ('target_key', 'tx_hash')
+            ):
+                continue
             key = bytes(utxo['target_key']).hex()
+            tx_hash = bytes(utxo['tx_hash']).hex()
+            if key == '0' * 64 or output['id'] != tx_hash + ':' + str(
+                utxo['output_index']
+            ):
+                continue
             original = canonical.get(key)
             if utxo.get('lottery', False) or original is None or key in seen:
                 continue
             created, row = original
-            if (created != utxo['created_at'] or
-                    row['txHash'].lower() != bytes(utxo['tx_hash']).hex() or
-                    row['outputIndex'] != utxo['output_index']):
+            if (
+                created != utxo['created_at']
+                or row.get('txHash', '').lower() != tx_hash
+                or row.get('outputIndex') != utxo['output_index']
+            ):
                 continue
             seen.add(key)
             outputs.append(output)
         return outputs
 
-    def spendable(self, wallet, height, amount=0, count=1):
-        state = {s['keyImage']:s for s in self.spent}
+    def unspent_setup_inputs(self, wallet, canonical=None):
+        """Existing distinct inputs, including those awaiting maturity or decoys.
+
+        This count only prevents redundant splits; admission still requires
+        spendable's eligibility checks and every wallet's four-input signer probe.
+        """
+        state = {s['keyImage']: s for s in self.spent}
         reserved = {r[0] for r in self.j.db.execute('SELECT input FROM reservations')}
-        canonical = self.canonical_history()
-        outputs = []
+        outputs, seen_ids, seen_images = [], set(), set()
         for output in self.canonical_inventory(wallet, canonical):
             status = state.get(output['key_image'])
+            if (
+                not status
+                or status.get('spent') is not False
+                or status.get('pending') is not False
+                or 'error' in status
+                or output['id'] in reserved
+                or output['id'] in seen_ids
+                or output['key_image'] in seen_images
+            ):
+                continue
+            outputs.append(output)
+            seen_ids.add(output['id'])
+            seen_images.add(output['key_image'])
+        return outputs
+
+    def spendable(self, wallet, height, amount=0, count=1):
+        canonical = self.canonical_history()
+        outputs = []
+        for output in self.unspent_setup_inputs(wallet, canonical):
             utxo = output['utxo']
-            if (not status or status['spent'] or status['pending'] or output['id'] in reserved
-                    or height-utxo['created_at'] < 10):
+            if height-utxo['created_at'] < 10:
                 continue
             age = height-utxo['created_at']
             # Match production age_similarity_band: integer +/-10%, ten-block floor.
@@ -602,17 +656,23 @@ class Controller:
             self.report()
             return
         bootstrap = self.j.rows("kind='bootstrap'")
-        if len(bootstrap)>=64:
-            raise Gate('setup inventory exhausted after sixty-four bootstrap offers')
         next_grant=start+(int((time.time()-start)//900)+1)*900
         if next_grant<=start+23*900 and next_grant-time.time()<240:
             return
         # Self-transfers split mature value while preserving all principal in the
         # allowlist. Start as soon as eligible funding outputs exist, interleaving
         # with the immutable 15-minute faucet schedule.
-        for w in sorted(range(8),key=lambda i:counts[i]):
-            if self.spendable(w,height,100_000_000_000,1):
-                identifier='bootstrap-'+str(len(bootstrap)).zfill(2)
+        for w in sorted(range(8), key=lambda i: counts[i]):
+            if len(self.unspent_setup_inputs(w)) >= 4:
+                # More splits consume fees and reset ages while these inputs
+                # are waiting for maturity or age-matched decoys.
+                continue
+            if self.spendable(w, height, 100_000_000_000, 1):
+                if len(bootstrap) >= 64:
+                    raise Gate(
+                        'setup inventory exhausted after sixty-four bootstrap offers'
+                    )
+                identifier = 'bootstrap-' + str(len(bootstrap)).zfill(2)
                 self.j.offer(identifier,'bootstrap',time.time(),w,w,100_000_000_000)
                 await self.prepare(identifier,1,1)
                 return
