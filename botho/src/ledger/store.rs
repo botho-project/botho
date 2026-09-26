@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "store/ring_admission_tests.rs"]
+mod ring_admission_tests;
+
 pub(super) mod validation;
 pub(super) mod writer;
 use bth_account_keys::{AccountKey, PublicAddress};
@@ -1239,18 +1243,27 @@ impl Ledger {
             }
         };
 
-        // Get the first UTXO ID (there should typically be only one per target_key)
-        if id_bytes.len() >= 36 {
-            if let Some(utxo_id) = UtxoId::from_bytes(&id_bytes[0..36]) {
-                if let Ok(Some(utxo_bytes)) = self.utxo_db.get(&rtxn, &utxo_id.to_bytes()) {
-                    if let Ok(utxo) = bincode::deserialize::<Utxo>(utxo_bytes) {
-                        return Ok(Some(utxo));
-                    }
-                }
-            }
+        // Preserve canonical first-index resolution, including legacy lottery
+        // aliases. An existing but malformed/dangling index is a storage error,
+        // never an absent output that callers may silently skip.
+        if id_bytes.is_empty() || id_bytes.len() % 36 != 0 {
+            return Err(LedgerError::Database(
+                "Malformed target-key UTXO index".to_string(),
+            ));
         }
-
-        Ok(None)
+        let utxo_id = UtxoId::from_bytes(&id_bytes[..36])
+            .ok_or_else(|| LedgerError::Database("Invalid first target-key UTXO id".to_string()))?;
+        let utxo_bytes = self
+            .utxo_db
+            .get(&rtxn, &utxo_id.to_bytes())
+            .map_err(|e| LedgerError::Database(format!("Failed to get indexed UTXO: {}", e)))?
+            .ok_or_else(|| {
+                LedgerError::Database("Target-key index references missing UTXO".to_string())
+            })?;
+        let utxo = bincode::deserialize::<Utxo>(utxo_bytes).map_err(|e| {
+            LedgerError::Serialization(format!("Failed to decode indexed UTXO: {}", e))
+        })?;
+        Ok(Some(utxo))
     }
 
     /// Compute address key from view and spend keys for index lookup
@@ -1317,10 +1330,9 @@ impl Ledger {
     /// producer can include ring members with a target_key they control and
     /// an arbitrary amount-commitment: the signature still verifies and the
     /// balance check passes against the fabricated amount, minting value.
-    /// The mempool does the equivalent check at admission, but blocks bypass
-    /// the mempool — so this check is the block-level analogue.
-    #[cfg(test)]
-    fn verify_ring_members(&self, tx: &BothoTransaction) -> Result<(), LedgerError> {
+    /// Shared by mempool admission and block validation so a valid signature
+    /// cannot admit a ring that block application will reject.
+    pub(crate) fn verify_ring_members(&self, tx: &BothoTransaction) -> Result<(), LedgerError> {
         validation::ValidationReads::verify_ring_members(self, tx)
     }
 
