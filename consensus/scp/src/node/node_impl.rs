@@ -300,7 +300,23 @@ impl<V: Value, ValidationError: Clone + Display + 'static> ScpNode<V> for Node<V
 
     /// Process pending timeouts.
     fn process_timeouts(&mut self) -> Vec<Msg<V>> {
-        self.current_slot.process_timeouts()
+        let messages = self.current_slot.process_timeouts();
+        // Timeouts drive the same ballot protocol as incoming messages. Publish
+        // its decision and retain the completed slot before the application
+        // considers another proposal, just as handle_messages/propose_values do.
+        for message in &messages {
+            if let Topic::Externalize(payload) = &message.topic {
+                if let Err(error) = self.externalize(payload) {
+                    log::error!(
+                        self.logger,
+                        "Failed to record timeout externalization: {}",
+                        error
+                    );
+                }
+                break;
+            }
+        }
+        messages
     }
 
     /// Get the current slot's index.
@@ -311,6 +327,14 @@ impl<V: Value, ValidationError: Clone + Display + 'static> ScpNode<V> for Node<V
     /// Get metrics for the current slot.
     fn get_current_slot_metrics(&self) -> SlotMetrics {
         self.current_slot.get_metrics()
+    }
+
+    fn get_retained_values(&self) -> BTreeSet<V> {
+        let mut values = self.current_slot.get_validated_values();
+        for slot in &self.externalized_slots {
+            values.extend(slot.get_validated_values());
+        }
+        values
     }
 
     /// Get the slot internal state (for debug purposes).
@@ -733,6 +757,73 @@ mod tests {
         node.push_externalized_slot(Box::new(externalized_slot));
 
         assert_eq!(node.process_timeouts(), messages);
+    }
+
+    #[test_with_logger]
+    fn test_real_timeout_externalization_advances_and_retains_values(logger: Logger) {
+        let mut node = get_node(7, logger.clone());
+        let mut slot = Slot::new(
+            node.ID.clone(),
+            node.Q.clone(),
+            7,
+            node.validity_fn.clone(),
+            node.combine_fn.clone(),
+            logger,
+        );
+        // A real Commit-phase slot with a quorum's matching commit evidence.
+        // Its expired ballot timer drives the protocol to Externalize.
+        let ballot = Ballot::new(1, &["transfer"]);
+        slot.phase = crate::slot::Phase::Commit;
+        slot.B = ballot.clone();
+        slot.P = Some(ballot.clone());
+        slot.C = Some(ballot.clone());
+        slot.H = Some(ballot);
+        slot.valid_values.insert("transfer");
+        let peer = Msg::new(
+            test_node_id(2),
+            QuorumSet::new_with_node_ids(1, vec![node.ID.clone()]),
+            7,
+            Topic::Commit(CommitPayload {
+                B: Ballot::new(1, &["transfer"]),
+                PN: 1,
+                CN: 1,
+                HN: 1,
+            }),
+        );
+        slot.M.insert(peer.sender_id.clone(), peer);
+        slot.next_ballot_at = Some(std::time::Instant::now() - Duration::from_secs(1));
+        node.current_slot = Box::new(slot);
+
+        let messages = node.process_timeouts();
+        assert_eq!(messages.len(), 1);
+        assert!(matches!(messages[0].topic, Topic::Externalize(_)));
+        assert_eq!(
+            node.current_slot_index(),
+            8,
+            "timeout must publish the new slot"
+        );
+        assert_eq!(node.get_externalized_values(7), Some(vec!["transfer"]));
+        assert!(node.get_retained_values().contains("transfer"));
+        assert!(node.process_timeouts().is_empty());
+        assert_eq!(
+            node.current_slot_index(),
+            8,
+            "decision surfaces exactly once"
+        );
+        node.propose_values(btreeset!["next"]).unwrap();
+        let next_decision = Msg::new(
+            test_node_id(2),
+            QuorumSet::new_with_node_ids(1, vec![node.ID.clone()]),
+            8,
+            Topic::Externalize(ExternalizePayload {
+                C: Ballot::new(1, &["next"]),
+                HN: 1,
+            }),
+        );
+        node.handle_message(&next_decision).unwrap();
+        assert_eq!(node.current_slot_index(), 9);
+        assert_eq!(node.get_externalized_values(8), Some(vec!["next"]));
+        assert!(!node.get_retained_values().contains("transfer"));
     }
 
     #[test_with_logger]
