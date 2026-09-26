@@ -166,16 +166,52 @@ class Controller:
                     self.halt('post-idle RSS growth across three cycles: '+host)
             self.j.set('memory_cycle',last)
 
-    async def sync(self, full=False):
+    async def sync(self, full=False, *, draining=False):
         async with self.scan_lock:
             if not self.statuses:
                 raise Gate('fleet status unavailable')
             height = min(s['chainHeight'] for s in self.statuses.values())
             start = 0 if full else (self.blocks[-1]['height']+1 if self.blocks else 0)
             new = []
+            waited = 0.0
+
+            async def read(host, method, params, timeout=10):
+                nonlocal waited
+                # Only these idempotent reads wait for the shared durable quota.
+                # Reserve ten requests/minute for monitoring (or all but one
+                # slot when the advertised endpoint quota is smaller).
+                while True:
+                    # STOP closes admission, not read-only receipt/final scans.
+                    # Shutdown and the quota wait bound still apply to drains.
+                    if self.closed or (not draining and (self.state / "STOP").exists()):
+                        raise Gate("scan stopped during quota wait")
+                    try:
+                        now = self.j.clock()
+                        count = self.j.db.execute(
+                            "SELECT COUNT(*) FROM requests WHERE host=? AND at>?",
+                            (host, now - 60),
+                        ).fetchone()[0]
+                        limit = min(50, self.j.get("quota:" + host, 100) // 2)
+                        if count >= max(1, limit - 10):
+                            raise Quota("scan reserves monitoring headroom")
+                        return await self.rpc.call(
+                            host, method, params, timeout=timeout
+                        )
+                    except Quota:
+                        if waited >= 300:
+                            raise Gate("scan quota wait exceeded five minutes")
+                        before = time.monotonic()
+                        await asyncio.sleep(min(1, 300 - waited))
+                        waited += time.monotonic() - before
+
             for first in range(start,height+1,50):
                 last = min(height,first+49)
-                blocks = await self.rpc.call(HOSTS[(first//50)%5],'chain_getOutputs',{'start_height':first,'end_height':last},timeout=20)
+                blocks = await read(
+                    HOSTS[(first // 50) % 5],
+                    "chain_getOutputs",
+                    {"start_height": first, "end_height": last},
+                    timeout=20,
+                )
                 if [b['height'] for b in blocks] != list(range(first,last+1)):
                     raise Gate('incomplete or unordered output range')
                 new.extend(blocks)
@@ -205,7 +241,9 @@ class Controller:
             for first in range(0,len(query_images),256):
                 images = query_images[first:first+256]
                 host=HOSTS[(first//256+height)%len(HOSTS)]
-                found = await self.rpc.call(host,'chain_areKeyImagesSpent',{'keyImages':images})
+                found = await read(
+                    host, "chain_areKeyImagesSpent", {"keyImages": images}
+                )
                 if ([s.get('keyImage') for s in found] != images or any('error' in s or
                     type(s.get('spent')) is not bool or type(s.get('pending')) is not bool for s in found)):
                     raise Gate('malformed spent-image response')
@@ -427,7 +465,7 @@ class Controller:
                     # Wait for monitor to expose the inclusion height to wallet scanning.
                     if not self.statuses or min(s['chainHeight'] for s in self.statuses.values()) < info['block_height']:
                         continue
-                    await self.sync()
+                    await self.sync(draining=True)
                     recipient = self.inventory[row['recipient']]
                     received = [o for o in recipient if bytes(o['utxo']['tx_hash']).hex()==row['hash'] and o['utxo']['output_index']==0]
                     if len(received)!=1 or received[0]['utxo']['amount']!=row['amount']:
@@ -665,7 +703,7 @@ class Controller:
             while not self.fresh and time.time()-startup<55 and self.j.get('status') in ('setup','running'):
                 await asyncio.sleep(1)
             if self.fresh:
-                await self.sync()
+                await self.sync(draining=True)
             reconciler=asyncio.create_task(self.reconcile())
             while True:
                 status=self.j.get('status')
@@ -697,7 +735,7 @@ class Controller:
                     self.j.set('last_summary_at',time.time())
                 await asyncio.sleep(1)
             if self.fresh and not self.j.pending():
-                await self.sync(full=True)
+                await self.sync(full=True, draining=True)
                 self.accounting()
             rows=self.j.rows("kind='campaign'")
             success=len(rows)==692 and all(r['state']=='reconciled' for r in rows)
