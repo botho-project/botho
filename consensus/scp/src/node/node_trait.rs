@@ -55,6 +55,11 @@ pub trait ScpNode<V: Value>: Send {
     /// progress without exclusive access.
     fn get_current_slot_metrics(&self) -> SlotMetrics;
 
+    /// Values validated by the current and retained externalized slots. This
+    /// read-only union lets applications retain referenced transaction
+    /// payloads.
+    fn get_retained_values(&self) -> BTreeSet<V>;
+
     /// Additional debug info, e.g. a JSON representation of the Slot's state.
     fn get_slot_debug_snapshot(&mut self, slot_index: SlotIndex) -> Option<String>;
 
