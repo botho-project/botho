@@ -265,6 +265,85 @@ class ScanQuotaTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(self.c.rpc.calls), 1)
         self.assertEqual(self.sleeps, [])
 
+    async def test_stop_allows_pending_receipt_reconciliation_without_admission(self):
+        (self.state / "STOP").touch()
+        self.c.j.set("status", "held")
+        self.c.j.set("reason", "operator stop marker")
+        self.c.j.offer("grant", "funding", self.now, None, 0, 1000)
+        tx_hash = "12" * 32
+        self.c.j.transition("grant", "accepted", hash=tx_hash, submitted=self.now)
+        self.c.native = AsyncMock(
+            return_value={
+                "address": "wallet",
+                "owned": [
+                    {
+                        "key_image": "image",
+                        "utxo": {
+                            "tx_hash": list(bytes.fromhex(tx_hash)),
+                            "output_index": 0,
+                            "amount": 1000,
+                        },
+                    }
+                ],
+            }
+        )
+        self.c.report = lambda: None
+        scan_rpc = self.c.rpc.call
+
+        async def receipt_rpc(host, method, params=None, **kwargs):
+            result = await scan_rpc(host, method, params, **kwargs)
+            if method == "getTransactionStatus":
+                return {"confirmed": True, "txHash": tx_hash}
+            if method == "getTransaction":
+                return {
+                    "blockHeight": 0,
+                    "fee": 1,
+                    "outputCount": 1,
+                    "totalOutput": 1000,
+                }
+            return result
+
+        async def finish_iteration(delay):
+            self.assertEqual(delay, 30)
+            self.c.closed = True
+
+        self.c.rpc.call = receipt_rpc
+        with (
+            patch("controller.asyncio.sleep", finish_iteration),
+            patch("controller.time.time", lambda: self.now),
+        ):
+            await self.c.reconcile()
+        self.assertEqual(self.c.j.intent("grant")["state"], "reconciled")
+        self.assertEqual(self.c.j.get("accounting")["difference"], 0)
+        self.assertEqual(self.c.j.get("status"), "held")
+        with self.assertRaisesRegex(Gate, "run is held"):
+            self.c.gate()
+        self.assertFalse(any(call[3] for call in self.c.rpc.calls))
+
+    async def test_stopped_final_scan_can_replenish_but_closed_still_interrupts(self):
+        (self.state / "STOP").touch()
+        self.c.j.set("status", "held")
+        self.fill(50)
+        await self.c.sync(full=True, draining=True)
+        self.assertEqual(sum(self.sleeps), 60)
+        self.c.j.set("backoff:" + HOSTS[0], self.now + 600)
+
+        async def close():
+            self.c.closed = True
+
+        self.on_sleep = close
+        with self.assertRaisesRegex(Gate, "stopped"):
+            await self.c.sync(full=True, draining=True)
+        self.assertEqual(sum(self.sleeps), 61)
+
+    async def test_stopped_drain_quota_wait_is_still_bounded(self):
+        (self.state / "STOP").touch()
+        self.c.j.set("backoff:" + HOSTS[0], self.now + 600)
+        with self.assertRaisesRegex(Gate, "five minutes"):
+            await self.c.sync(draining=True)
+        self.assertEqual(sum(self.sleeps), 300)
+        self.assertEqual(self.c.rpc.calls, [])
+
     async def test_submission_quota_failure_is_not_retried_or_rebroadcast(self):
         artifact = self.state / "synthetic.bin"
         artifact.write_bytes(b"offline test fixture")

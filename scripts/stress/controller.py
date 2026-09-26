@@ -166,7 +166,7 @@ class Controller:
                     self.halt('post-idle RSS growth across three cycles: '+host)
             self.j.set('memory_cycle',last)
 
-    async def sync(self, full=False):
+    async def sync(self, full=False, *, draining=False):
         async with self.scan_lock:
             if not self.statuses:
                 raise Gate('fleet status unavailable')
@@ -181,7 +181,9 @@ class Controller:
                 # Reserve ten requests/minute for monitoring (or all but one
                 # slot when the advertised endpoint quota is smaller).
                 while True:
-                    if self.closed or (self.state / "STOP").exists():
+                    # STOP closes admission, not read-only receipt/final scans.
+                    # Shutdown and the quota wait bound still apply to drains.
+                    if self.closed or (not draining and (self.state / "STOP").exists()):
                         raise Gate("scan stopped during quota wait")
                     try:
                         now = self.j.clock()
@@ -463,7 +465,7 @@ class Controller:
                     # Wait for monitor to expose the inclusion height to wallet scanning.
                     if not self.statuses or min(s['chainHeight'] for s in self.statuses.values()) < info['block_height']:
                         continue
-                    await self.sync()
+                    await self.sync(draining=True)
                     recipient = self.inventory[row['recipient']]
                     received = [o for o in recipient if bytes(o['utxo']['tx_hash']).hex()==row['hash'] and o['utxo']['output_index']==0]
                     if len(received)!=1 or received[0]['utxo']['amount']!=row['amount']:
@@ -701,7 +703,7 @@ class Controller:
             while not self.fresh and time.time()-startup<55 and self.j.get('status') in ('setup','running'):
                 await asyncio.sleep(1)
             if self.fresh:
-                await self.sync()
+                await self.sync(draining=True)
             reconciler=asyncio.create_task(self.reconcile())
             while True:
                 status=self.j.get('status')
@@ -733,7 +735,7 @@ class Controller:
                     self.j.set('last_summary_at',time.time())
                 await asyncio.sleep(1)
             if self.fresh and not self.j.pending():
-                await self.sync(full=True)
+                await self.sync(full=True, draining=True)
                 self.accounting()
             rows=self.j.rows("kind='campaign'")
             success=len(rows)==692 and all(r['state']=='reconciled' for r in rows)
