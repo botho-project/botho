@@ -109,28 +109,72 @@ pub async fn fetch_decoy_ring_members(
         ));
     }
 
-    // Compute the ±10% age band and translate it into an inclusive block-height
-    // window. Older age => lower height.
+    // Resolve target identity from history before narrowing the age window.
+    // A later equal-target output is not a new independently spendable output.
+    let history = rpc.get_outputs(0, current_height).await?;
+    select_rpc_decoys_from_history(
+        &history,
+        current_height,
+        real_input_age,
+        exclude_keys,
+        count,
+        &mut OsRng,
+    )
+}
+
+/// Canonical ordinary outputs in validated chain order. Keep the first target
+/// across the entire supplied history, not the first target in an age window.
+/// Lottery receipts remain in scans/accounting but are never independently
+/// usable.
+pub fn canonical_rpc_history(blocks: &[BlockOutputs]) -> Vec<BlockOutputs> {
+    let mut ordered: Vec<_> = blocks.iter().collect();
+    ordered.sort_by_key(|block| block.height);
+    let mut seen = std::collections::HashSet::new();
+    ordered
+        .into_iter()
+        .map(|block| BlockOutputs {
+            height: block.height,
+            outputs: block
+                .outputs
+                .iter()
+                .filter(|output| {
+                    !output.lottery
+                        && parse_key32(&output.target_key).is_some_and(|key| seen.insert(key))
+                })
+                .cloned()
+                .collect(),
+        })
+        .collect()
+}
+
+/// Prepare the live age band only after resolving canonical target identities.
+pub fn select_rpc_decoys_from_history<R: Rng + ?Sized>(
+    blocks: &[BlockOutputs],
+    current_height: u64,
+    real_input_age: u64,
+    exclude_keys: &[[u8; 32]],
+    count: usize,
+    rng: &mut R,
+) -> Result<Vec<RingMember>> {
+    if real_input_age < MIN_DECOY_AGE_BLOCKS {
+        return Err(anyhow!("Input is too new to spend privately"));
+    }
     let (min_age, max_age) = age_similarity_band(real_input_age);
-    let start_height = current_height.saturating_sub(max_age);
-    // end_height is the youngest allowed decoy height; min_age >= MIN_DECOY_AGE
-    // guarantees it is at least MIN_DECOY_AGE_BLOCKS deep.
-    let end_height = current_height.saturating_sub(min_age);
-
-    // Fetch the candidate pool. `get_outputs` scans the [start, end] window.
-    // We add 1 to end to make the window inclusive of the youngest in-band
-    // height.
-    let blocks = rpc
-        .get_outputs(start_height, end_height.saturating_add(1))
-        .await?;
-
-    select_rpc_decoy_pool(&blocks, exclude_keys, count, min_age, max_age, &mut OsRng)
+    let window: Vec<_> = canonical_rpc_history(blocks)
+        .into_iter()
+        .filter(|block| {
+            current_height
+                .checked_sub(block.height)
+                .is_some_and(|age| age >= min_age && age <= max_age)
+        })
+        .collect();
+    select_rpc_decoy_pool(&window, exclude_keys, count, min_age, max_age, rng)
 }
 
 /// Apply the live CLI ring pool preparation with an explicit RNG.
 ///
-/// The RPC wrapper above supplies the age-bounded response and OsRng. This
-/// small extraction also permits deterministic research replay; it changes
+/// The full-history wrapper above supplies the canonical age window and OsRng.
+/// This small extraction also permits deterministic research replay; it changes
 /// neither filtering, error behavior nor production randomness. It does not
 /// fetch/filter heights itself: callers must provide exactly the requested RPC
 /// window.
@@ -152,8 +196,10 @@ pub fn select_rpc_decoy_pool<R: Rng + ?Sized>(
     )
 }
 
-/// Decode, exclude and deduplicate exactly as the live CLI RPC path does.
-/// No height filter is applied: the RPC request defines the age window.
+/// Decode an already canonical age window (or a complete research fixture).
+/// Live callers must resolve full history before age selection using
+/// `select_rpc_decoys_from_history`; this helper cannot recover omitted
+/// history.
 #[doc(hidden)]
 pub fn prepare_rpc_decoy_pool(
     blocks: &[BlockOutputs],
@@ -161,8 +207,14 @@ pub fn prepare_rpc_decoy_pool(
 ) -> Vec<RingMember> {
     // Flatten to ring members, excluding our own inputs and malformed outputs.
     let mut pool: Vec<RingMember> = Vec::new();
-    for block in blocks {
+    for block in canonical_rpc_history(blocks) {
         for out in &block.outputs {
+            // The original winner can be outside this requested age window.
+            // Deduplicating this window by target key cannot make a legacy
+            // payout agree with the ledger's canonical first-target lookup.
+            if out.lottery {
+                continue;
+            }
             let member = match rpc_output_to_ring_member(out) {
                 Some(m) => m,
                 None => continue,
@@ -226,6 +278,7 @@ mod tests {
             output_index: 0,
             crypto_output_index: None,
             coinbase: false,
+            lottery: false,
             ledger_outpoint: None,
             target_key: hex::encode(out.target_key),
             public_key: hex::encode(out.public_key),
@@ -261,5 +314,101 @@ mod tests {
         let mut out = random_rpc_output(1);
         out.target_key = hex::encode([0u8; 4]); // too short
         assert!(rpc_output_to_ring_member(&out).is_none());
+    }
+    #[test]
+    fn full_history_resolves_equal_targets_before_age_selection() {
+        use rand::{rngs::StdRng, SeedableRng};
+        let original = random_rpc_output(50_000_000_000_000);
+        let mut alias = original.clone();
+        alias.amount_commitment = hex::encode(20_000_000u64.to_le_bytes());
+        alias.output_index = 1; // deliberately not flagged as a lottery receipt
+        let mut outputs: Vec<_> = (0..19).map(|_| random_rpc_output(1_000_000)).collect();
+        outputs.extend([alias.clone(), alias]);
+        let blocks = vec![
+            BlockOutputs {
+                height: 90,
+                outputs,
+            },
+            BlockOutputs {
+                height: 1,
+                outputs: vec![original.clone()],
+            },
+        ];
+        let pool = select_rpc_decoys_from_history(
+            &blocks,
+            100,
+            10,
+            &[],
+            19,
+            &mut StdRng::seed_from_u64(1443),
+        )
+        .unwrap();
+        assert!(pool
+            .iter()
+            .all(|member| hex::encode(member.target_key) != original.target_key));
+        assert!(select_rpc_decoys_from_history(
+            &blocks,
+            100,
+            10,
+            &[],
+            20,
+            &mut StdRng::seed_from_u64(1443),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("Need 20, found 19"));
+        let all = prepare_rpc_decoy_pool(&blocks, &[]);
+        assert_eq!(all.len(), 20);
+        assert!(all.contains(&rpc_output_to_ring_member(&original).unwrap()));
+    }
+
+    #[test]
+    fn lottery_only_alias_is_not_a_decoy_when_original_is_outside_window() {
+        use rand::{rngs::StdRng, SeedableRng};
+        let mut payout = random_rpc_output(20_000_000);
+        payout.lottery = true;
+        let payout_key = parse_key32(&payout.target_key).unwrap();
+        let mut outputs: Vec<_> = (0..19)
+            .map(|_| random_rpc_output(50_000_000_000_000))
+            .collect();
+        outputs.push(payout);
+        // The original winner is much older and absent from this age window.
+        let blocks = vec![BlockOutputs {
+            height: 90,
+            outputs,
+        }];
+        let pool = prepare_rpc_decoy_pool(&blocks, &[]);
+        assert_eq!(pool.len(), 19);
+        assert!(pool.iter().all(|member| member.target_key != payout_key));
+        assert!(
+            select_rpc_decoy_pool(&blocks, &[], 19, 10, 11, &mut StdRng::seed_from_u64(1286))
+                .is_ok()
+        );
+        let error =
+            select_rpc_decoy_pool(&blocks, &[], 20, 10, 11, &mut StdRng::seed_from_u64(1286))
+                .unwrap_err();
+        assert!(error.to_string().contains("Need 20, found 19"));
+    }
+
+    #[test]
+    fn lottery_alias_does_not_replace_original_decoy_regardless_of_order() {
+        let original = random_rpc_output(50_000_000_000_000);
+        let expected = rpc_output_to_ring_member(&original).unwrap();
+        let mut payout = original.clone();
+        payout.lottery = true;
+        payout.amount_commitment = hex::encode(20_000_000u64.to_le_bytes());
+        for outputs in [
+            vec![payout.clone(), original.clone()],
+            vec![original.clone(), payout.clone()],
+        ] {
+            let pool = prepare_rpc_decoy_pool(
+                &[BlockOutputs {
+                    height: 90,
+                    outputs,
+                }],
+                &[],
+            );
+            assert_eq!(pool, vec![expected.clone()]);
+        }
     }
 }

@@ -571,6 +571,10 @@ pub struct TxOutput {
     /// Explicit existing RPC discriminator, needed for old-node compatibility.
     #[serde(default)]
     pub coinbase: bool,
+    /// Legacy lottery payouts reuse a winner's target key with a different
+    /// amount. They cannot be decoys for the ledger's first-target lookup.
+    #[serde(default)]
+    pub lottery: bool,
     /// Additive canonical ledger identity. Never substitutes for crypto index.
     #[serde(default)]
     pub ledger_outpoint: Option<LedgerOutpoint>,
@@ -941,6 +945,7 @@ mod tests {
         assert_eq!(out.cluster_tags, vec![[1, 1_000_000], [2, 500_000]]);
         // The unified ML-KEM ciphertext field defaults to None when absent.
         assert!(out.kem_ciphertext.is_none());
+        assert!(!out.lottery);
     }
 
     /// Mirrors the coinbase output shape emitted by `chain_getOutputs`
@@ -1000,6 +1005,7 @@ mod tests {
         row["ledgerOutpoint"] = json!({"txHash":"aa", "outputIndex":3});
         let lottery: TxOutput = serde_json::from_value(row).unwrap();
         assert!(!lottery.coinbase);
+        assert!(lottery.lottery);
         assert_eq!(lottery.output_index, 3);
         assert_eq!(lottery.crypto_output_index, None);
         assert_eq!(
