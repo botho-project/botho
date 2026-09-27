@@ -142,3 +142,50 @@ class StagingTests(unittest.TestCase):
         self.assertEqual(result['config'],hashlib.sha256(b'newconfig').hexdigest())
         with self.assertRaises(Gate):observer.node_config({'node_unit':'only-one-field.service'})
         self.assertEqual(observer.node_config({'end':10}),observer.DEFAULT_NODE)
+
+    def test_installer_under_private_umask_keeps_package_traversable_and_state_private(self):
+        results=staging.stage(self.profile,self.root/'prepared')
+        archive=Path(results[0]['archive'])
+        with tarfile.open(archive) as tar:
+            entries={m.name:tar.extractfile(m).read() for m in tar.getmembers()}
+        meta=json.loads(entries['install.json'])
+        package=self.root.resolve()/'opt'/'campaign-test'
+        state=self.root.resolve()/'var'/'campaign-test'
+        units=self.root.resolve()/'systemd';units.mkdir()
+        meta['item'].update(package=str(package),state=str(state))
+        entries['install.json']=json.dumps(meta).encode()
+        with tarfile.open(archive,'w') as tar:
+            for name,data in entries.items():
+                info=tarfile.TarInfo(name);info.size=len(data);tar.addfile(info,io.BytesIO(data))
+        env={'ARCHIVE':str(archive),'SHA':hashlib.sha256(archive.read_bytes()).hexdigest()}
+        installer=staging.INSTALL.replace("pathlib.Path('/etc/systemd/system')",'pathlib.Path('+repr(str(units))+')')
+        account=types.SimpleNamespace(pw_uid=12345,pw_gid=12345)
+        real_stat=Path.stat
+        def root_owned_parent(path,*args,**kwargs):
+            # Model protected root-owned system parents without requiring root.
+            fields=list(real_stat(path,*args,**kwargs));fields[4]=0;fields[0]&=~0o022
+            return os.stat_result(fields)
+        def systemctl(args,**kwargs):
+            output={'show':'LoadState=not-found','is-active':'inactive','is-enabled':'static'}
+            return types.SimpleNamespace(stdout=output.get(args[1],''),returncode=0)
+        inherited=os.umask(0o077)
+        try:
+            with patch('pwd.getpwnam',return_value=account),patch('os.chown') as chown, \
+                 patch.object(Path,'stat',root_owned_parent),patch('subprocess.run',side_effect=systemctl) as command, \
+                 patch('builtins.print'):
+                exec(installer,env)
+        finally:
+            os.umask(inherited)
+        # The controller is not the root owner of package paths: other-user
+        # read/search bits must permit traversal to its source and executable.
+        for path in (package.parent,package):
+            self.assertEqual(path.stat().st_mode & 0o777,0o755,str(path))
+        for path in package.rglob('*'):
+            self.assertEqual(path.stat().st_mode & 0o004,0o004,str(path))
+        self.assertEqual((package/'botho-stress-wallet').stat().st_mode & 0o777,0o755)
+        for path in (state,*state.rglob('*')):
+            self.assertEqual(path.stat().st_mode & 0o777,0o700 if path.is_dir() else 0o600,str(path))
+        self.assertIn(unittest.mock.call(state,12345,12345),chown.call_args_list)
+        self.assertEqual([call.args[0][1] for call in command.call_args_list],
+                         ['show','daemon-reload','is-active','is-enabled'])
+        self.assertFalse(archive.exists())
