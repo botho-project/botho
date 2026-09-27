@@ -359,7 +359,15 @@ def inspect_node(plan, node, observations, failures, incomplete):
                     f"{name}: {phase} mining state does not match fixed schedule"
                 )
         if phase == "idle" or phase.endswith("_idle"):
-            quiet = [r for r in segment if left + gap < r["observed_at_unix_s"] < right]
+            # Minting already has an explicit settling phase. A further grace
+            # interval here would hide blocks committed after idle began.
+            quiet = (
+                segment
+                if plan["workload_kind"] == "minting"
+                else [
+                    r for r in segment if left + gap < r["observed_at_unix_s"] < right
+                ]
+            )
             field = (
                 "chain_height"
                 if plan["workload_kind"] == "minting"

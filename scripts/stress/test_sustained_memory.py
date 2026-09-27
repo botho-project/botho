@@ -208,6 +208,23 @@ class SustainedMemoryTests(unittest.TestCase):
             row["mining"] = True
         self.assertEqual(analyze(plan, rows)["status"], "incomplete")
 
+    def test_minting_height_advance_after_settling_is_not_idle(self):
+        plan = manifest("minting")
+        idle_start = next(left for phase, left, _ in windows(plan) if phase == "idle")
+        for delay in (5, 10, 15, 120):
+            with self.subTest(seconds_into_idle=delay):
+                rows = samples(plan)
+                for row in rows:
+                    if row["observed_at_unix_s"] >= idle_start + delay:
+                        row["chain_height"] += 1
+                        row["chain_hash"] = f"{row['chain_height']:064x}"
+                result = analyze(plan, rows)
+                self.assertEqual(result["status"], "incomplete")
+                self.assertIn(
+                    "n1: idle workload did not become idle",
+                    result["incomplete_reasons"],
+                )
+
     def test_explicit_settling_allows_control_tick_but_not_late_idle(self):
         plan = manifest("minting")
         rows = samples(plan)
