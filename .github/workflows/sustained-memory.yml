@@ -1,0 +1,26 @@
+name: Sustained memory analyzer
+on:
+  pull_request:
+    paths:
+      - 'scripts/stress/*sustained_memory.py'
+      - 'scripts/stress/sustained-memory-manifest.example.json'
+      - 'docs/operations/sustained-memory-qualification.md'
+      - '.github/workflows/sustained-memory.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/stress/*sustained_memory.py'
+      - '.github/workflows/sustained-memory.yml'
+permissions:
+  contents: read
+jobs:
+  offline-controls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.10'
+      - name: Exercise synthetic controls and Linux sampling fixtures
+        run: python3 -m unittest discover -s scripts/stress -p '*sustained_memory.py'

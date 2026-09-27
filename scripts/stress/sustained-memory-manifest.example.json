@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "campaign_id": "REPLACE_WITH_DISTINCT_CAMPAIGN",
+  "source_revision": "REPLACE_WITH_REVIEWED_SOURCE_COMMIT",
+  "artifact_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "started_at_unix_s": 1000000,
+  "phases": [
+    {
+      "name": "warmup",
+      "duration_s": 1800
+    },
+    {
+      "name": "sustained",
+      "duration_s": 14400
+    },
+    {
+      "name": "settling",
+      "duration_s": 30
+    },
+    {
+      "name": "idle",
+      "duration_s": 1800
+    }
+  ],
+  "sample_interval_s": 5,
+  "max_gap_s": 15,
+  "active_window_s": 300,
+  "min_blocks_per_active_window": 10,
+  "min_confirmed_transfers_per_active_window": 0,
+  "workload_kind": "minting",
+  "nodes": [
+    {
+      "node_id": "n1",
+      "host_id": "REPLACE_WITH_MACHINE_ID",
+      "pid": 42,
+      "process_start_id": "REPLACE_WITH_BOOT_ID:START_TICKS",
+      "chain_id": "isolated-control",
+      "producer": true,
+      "cgroup_path": "/sys/fs/cgroup/REPLACE_WITH_NODE_UNIT"
+    }
+  ]
+}

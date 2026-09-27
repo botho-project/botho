@@ -45,3 +45,5 @@ The manual live-testnet procedure these scripts rehearse is
 ## Testnet campaign design
 
 [`stress/plan.py`](stress/plan.py) validates and expands the bounded [72-hour design](../docs/operations/testnet-stress-program.md) offline. Run `python3 scripts/stress/plan.py`; it does not connect to the network, sign transactions or activate a schedule. The manifest and runtime implementation gates are documented with the design.
+
+[`stress/sample_sustained_memory.py`](stress/sample_sustained_memory.py) samples existing Linux production processes without mutating them. [`stress/sustained_memory.py`](stress/sustained_memory.py) evaluates immutable JSONL evidence against fixed sustained-growth windows. See the [isolated qualification runbook](../docs/operations/sustained-memory-qualification.md) for the limited minting profile, payment profile, integration contract and inference limits.
