@@ -11,6 +11,8 @@
 mod compact_block;
 mod connection_limiter;
 mod discovery;
+#[cfg(test)]
+pub(crate) use discovery::BothoBehaviourEvent;
 mod dns_seeds;
 mod node_key;
 mod pex;

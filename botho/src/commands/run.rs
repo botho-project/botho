@@ -84,6 +84,27 @@ fn build_peer_snapshot(discovery: &NetworkDiscovery) -> Vec<PeerInfoSnapshot> {
         .collect()
 }
 
+/// Refresh only the RPC projection; this must not produce connection/quorum
+/// effects.
+fn refresh_peer_snapshot_for_event(
+    event: &NetworkEvent,
+    discovery: &NetworkDiscovery,
+    snapshot: &RwLock<Vec<PeerInfoSnapshot>>,
+) {
+    if matches!(
+        event,
+        NetworkEvent::PeerDiscovered(_)
+            | NetworkEvent::PeerDisconnected(_)
+            | NetworkEvent::PeerMetadataUpdated(_)
+            | NetworkEvent::PeerVersionWarning { .. }
+            | NetworkEvent::PeerVersionIncompatible { .. }
+    ) {
+        if let Ok(mut snapshot) = snapshot.write() {
+            *snapshot = build_peer_snapshot(discovery);
+        }
+    }
+}
+
 /// Helper to get connected peers as libp2p `PeerId`s.
 ///
 /// Used to drive the chain-sync state machine, which needs the typed peer
@@ -1004,6 +1025,7 @@ async fn run_async_with_shutdown(
             // Network events
             event = swarm.select_next_some() => {
                 if let Some(net_event) = discovery.process_event(event) {
+                    refresh_peer_snapshot_for_event(&net_event, &discovery, &peers_snapshot);
                     match net_event {
                         NetworkEvent::NewBlock(block) => {
                             info!("Received block {} from network", block.height());
@@ -1135,6 +1157,10 @@ async fn run_async_with_shutdown(
                                 warn!("Failed to handle SCP message: {}", e);
                             }
                         }
+                        NetworkEvent::PeerMetadataUpdated(_) => {
+                            // The RPC projection was refreshed above. Identify
+                            // does not change connection counts or quorum membership.
+                        }
                         NetworkEvent::PeerDiscovered(peer_id) => {
                             info!("Peer connected: {}", peer_id);
                             let new_peer_count = discovery.peer_count();
@@ -1151,12 +1177,6 @@ async fn run_async_with_shutdown(
                                 *count = new_peer_count;
                             }
                             metrics_updater.set_peer_count(new_peer_count);
-
-                            // Refresh the connected-peer snapshot surfaced by
-                            // `network_getPeers` (#544).
-                            if let Ok(mut snap) = peers_snapshot.write() {
-                                *snap = build_peer_snapshot(&discovery);
-                            }
 
                             // Broadcast peer event to WebSocket clients
                             ws_broadcaster.peer_connected(new_peer_count, &peer_id.to_string());
@@ -1236,12 +1256,6 @@ async fn run_async_with_shutdown(
                                 *count = new_peer_count;
                             }
                             metrics_updater.set_peer_count(new_peer_count);
-
-                            // Refresh the connected-peer snapshot surfaced by
-                            // `network_getPeers` (#544).
-                            if let Ok(mut snap) = peers_snapshot.write() {
-                                *snap = build_peer_snapshot(&discovery);
-                            }
 
                             // Broadcast peer event to WebSocket clients
                             ws_broadcaster.peer_disconnected(new_peer_count, &peer_id.to_string());
@@ -3279,6 +3293,133 @@ fn apply_lottery_to_block(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn peer_endpoint() -> libp2p::core::ConnectedPoint {
+        libp2p::core::ConnectedPoint::Listener {
+            local_addr: "/ip4/127.0.0.1/tcp/17110".parse().unwrap(),
+            send_back_addr: "/ip4/127.0.0.1/tcp/17111".parse().unwrap(),
+        }
+    }
+
+    fn connect_peer(
+        discovery: &mut NetworkDiscovery,
+        peer_id: libp2p::PeerId,
+        count: u32,
+    ) -> Option<NetworkEvent> {
+        discovery.process_event(libp2p::swarm::SwarmEvent::ConnectionEstablished {
+            peer_id,
+            connection_id: libp2p::swarm::ConnectionId::new_unchecked(count as usize),
+            endpoint: peer_endpoint(),
+            num_established: count.try_into().unwrap(),
+            concurrent_dial_errors: None,
+            established_in: Duration::ZERO,
+        })
+    }
+
+    fn identify_peer(
+        discovery: &mut NetworkDiscovery,
+        key: &libp2p::identity::Keypair,
+        agent: &str,
+    ) -> Option<NetworkEvent> {
+        discovery.process_event(libp2p::swarm::SwarmEvent::Behaviour(
+            crate::network::BothoBehaviourEvent::Identify(libp2p::identify::Event::Received {
+                connection_id: libp2p::swarm::ConnectionId::new_unchecked(1),
+                peer_id: key.public().to_peer_id(),
+                info: libp2p::identify::Info {
+                    public_key: key.public(),
+                    protocol_version: "/botho/1.0.0".into(),
+                    agent_version: agent.into(),
+                    listen_addrs: vec![],
+                    protocols: vec![],
+                    observed_addr: "/ip4/127.0.0.1/tcp/17111".parse().unwrap(),
+                    signed_peer_record: None,
+                },
+            }),
+        ))
+    }
+
+    #[test]
+    fn peer_metadata_identify_refreshes_rpc_without_reconnect() {
+        let mut discovery = NetworkDiscovery::new(0, vec![]);
+        let key = libp2p::identity::Keypair::generate_ed25519();
+        let peer = key.public().to_peer_id();
+        let snapshot = RwLock::new(vec![]);
+        let connected = connect_peer(&mut discovery, peer, 1).unwrap();
+        assert!(matches!(connected, NetworkEvent::PeerDiscovered(p) if p == peer));
+        refresh_peer_snapshot_for_event(&connected, &discovery, &snapshot);
+        assert!(snapshot.read().unwrap()[0].protocol_version.is_none());
+
+        let identified = identify_peer(
+            &mut discovery,
+            &key,
+            "botho/6.0.0/5/transport-caps/1/webrtc,plain/open",
+        )
+        .expect("Identify must notify the RPC snapshot consumer");
+        assert!(matches!(identified, NetworkEvent::PeerMetadataUpdated(p) if p == peer));
+        refresh_peer_snapshot_for_event(&identified, &discovery, &snapshot);
+        assert_eq!(
+            snapshot.read().unwrap()[0].protocol_version.as_deref(),
+            Some("6.0.0 (block v5)")
+        );
+        assert!(!snapshot.read().unwrap()[0].version_warning);
+        assert_eq!(discovery.peer_count(), 1);
+        assert_eq!(discovery.stats_ref().inbound_count(), 1);
+
+        assert!(
+            connect_peer(&mut discovery, peer, 2).is_none(),
+            "redundant connections are not new peers"
+        );
+        assert_eq!(
+            build_peer_snapshot(&discovery)[0]
+                .protocol_version
+                .as_deref(),
+            Some("6.0.0 (block v5)")
+        );
+        assert!(discovery.peer_table()[0].transport_capabilities.is_some());
+        for remaining in [1, 0] {
+            let event = discovery.process_event(libp2p::swarm::SwarmEvent::ConnectionClosed {
+                peer_id: peer,
+                connection_id: libp2p::swarm::ConnectionId::new_unchecked(remaining as usize + 1),
+                endpoint: peer_endpoint(),
+                num_established: remaining,
+                cause: None,
+            });
+            if remaining == 1 {
+                assert!(event.is_none());
+                assert_eq!(discovery.peer_count(), 1);
+                assert!(discovery.peer_table()[0].protocol_version.is_some());
+                assert_eq!(discovery.stats_ref().inbound_count(), 1);
+            } else {
+                let event = event.unwrap();
+                assert!(matches!(event, NetworkEvent::PeerDisconnected(p) if p == peer));
+                refresh_peer_snapshot_for_event(&event, &discovery, &snapshot);
+                assert!(snapshot.read().unwrap().is_empty());
+                assert_eq!(discovery.stats_ref().inbound_count(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn peer_metadata_missing_or_incompatible_identify_removes_rpc_entry() {
+        for agent in ["", "not-a-version", "botho/5.0.0/5", "botho/7.0.0/5"] {
+            let mut discovery = NetworkDiscovery::new(0, vec![]);
+            let key = libp2p::identity::Keypair::generate_ed25519();
+            let peer = key.public().to_peer_id();
+            let snapshot = RwLock::new(vec![]);
+            let connected = connect_peer(&mut discovery, peer, 1).unwrap();
+            refresh_peer_snapshot_for_event(&connected, &discovery, &snapshot);
+            let event = identify_peer(&mut discovery, &key, agent).unwrap();
+            assert!(
+                matches!(event, NetworkEvent::PeerVersionIncompatible { peer: p, .. } if p == peer)
+            );
+            refresh_peer_snapshot_for_event(&event, &discovery, &snapshot);
+            assert_eq!(discovery.peer_count(), 0);
+            assert!(
+                snapshot.read().unwrap().is_empty(),
+                "stale RPC entry for {agent:?}"
+            );
+        }
+    }
 
     // Mirror the production faucet thresholds used in `run`.
     const HIGH: u64 = 10_000_000_000_000_000; // 10,000 BTH
