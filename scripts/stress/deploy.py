@@ -198,10 +198,21 @@ systemctl --user is-active botho-stress-1404.service
 if __name__=='__main__':
     os.umask(0o077)
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode',choices=['observers','controller'])
+    parser.add_argument('mode',choices=['observers','controller','stage'])
     parser.add_argument('--binary')
     parser.add_argument('--source-commit')
+    parser.add_argument('--profile', type=Path)
+    parser.add_argument('--output', type=Path)
+    parser.add_argument('--execute', action='store_true', help='install fresh staged units INACTIVE')
     args=parser.parse_args()
+    if args.mode == 'stage':
+        if not args.profile or not args.output:
+            parser.error('stage requires --profile and a fresh --output directory')
+        from staging import stage
+        stage(args.profile, args.output, args.execute)
+        raise SystemExit(0)
+    if args.profile or args.output or args.execute:
+        parser.error('explicit deployment profile requires stage mode; no legacy fallback')
     if args.mode=='observers':observers()
     elif args.binary and args.source_commit:controller(args.binary,args.source_commit)
     else:parser.error('controller requires --binary and --source-commit')

@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+from runtime import Gate, validate_rpc_url
 
 DEFAULT_PLAN = Path(__file__).with_name("testnet-72h-plan.json")
 
@@ -35,8 +36,12 @@ def expand(plan):
     require(re.fullmatch(r"[0-9a-f]{64}", plan["genesis"]), "invalid genesis")
     require(re.fullmatch(r"[0-9a-f]{40}", plan["node_commit"]), "invalid source pin")
     endpoints = plan["endpoints"]
-    require(len(endpoints) == 5 and len(set(endpoints)) == 5
-            and all(re.fullmatch(r"https://[a-z0-9.-]+/rpc", e) for e in endpoints),
+    try:
+        for endpoint in endpoints:
+            validate_rpc_url(endpoint)
+    except Gate as error:
+        raise ValueError(str(error)) from error
+    require(len(endpoints) == 5 and len(set(endpoints)) == 5,
             "five distinct TLS ingresses required")
     duration = integer(plan["duration_hours"], "duration") * 3600
     require(duration == 72 * 3600, "this design is a 72-hour campaign")

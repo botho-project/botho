@@ -6,11 +6,14 @@ import email.utils
 import hashlib
 import json
 import os
+import re
+import ssl
 from pathlib import Path
 import sqlite3
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 
 HOSTS = ('seed.botho.io', 'seed2.botho.io', 'faucet.botho.io',
          'eu.seed.botho.io', 'ap.seed.botho.io')
@@ -20,6 +23,63 @@ PENDING = ('prepared', 'submitting', 'accepted', 'unknown', 'confirmed', 'recipi
 
 class Gate(Exception):
     """A fail-closed admission decision, retained for explicit operator review."""
+
+
+def validate_rpc_url(value):
+    """A canonical HTTPS RPC destination; no URL credentials or extra routing."""
+    if not isinstance(value, str) or not re.fullmatch(
+            r'https://[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[1-9][0-9]{0,4})?/rpc', value):
+        raise Gate('invalid HTTPS RPC URL')
+    parsed = urllib.parse.urlsplit(value)
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise Gate('invalid RPC port') from error
+    if port is not None and not 1 <= port <= 65535:
+        raise Gate('invalid RPC port')
+    return value
+
+
+def validate_ssh_target(value):
+    if not isinstance(value, str) or not re.fullmatch(
+            r'[a-z_][a-z0-9_-]*@[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?', value):
+        raise Gate('invalid explicit user@host SSH target')
+    return value
+
+
+def campaign_targets(config, plan):
+    """Legacy launches stay bound to legacy endpoints; new maps are all-or-nothing."""
+    legacy = [{'role': h, 'rpc_url': 'https://'+h+'/rpc',
+               'observer_ssh_target': 'ubuntu@'+h} for h in HOSTS]
+    rows = config.get('targets', legacy)
+    if not isinstance(rows, list) or len(rows) != len(HOSTS):
+        raise Gate('complete five-target profile required')
+    if any(not isinstance(row, dict) or set(row) != {'role','rpc_url','observer_ssh_target'}
+           for row in rows):
+        raise Gate('target fields must be explicit')
+    if [row['role'] for row in rows] != list(HOSTS):
+        raise Gate('target roles must match the fixed logical role order')
+    urls = [validate_rpc_url(row['rpc_url']) for row in rows]
+    ssh = [validate_ssh_target(row['observer_ssh_target']) for row in rows]
+    if len(set(urls)) != 5 or len(set(ssh)) != 5 or urls != plan.get('endpoints'):
+        raise Gate('five distinct targets must exactly match plan endpoints in order')
+    return {row['role']: dict(row) for row in rows}
+
+
+def pinned_file(path, expected, name):
+    if not isinstance(path, str) or not Path(path).is_absolute() or not re.fullmatch(r'[0-9a-f]{64}', str(expected)):
+        raise Gate(name+' requires an absolute path and SHA256 pin')
+    if hashlib.sha256(Path(path).read_bytes()).hexdigest() != expected:
+        raise Gate(name+' differs from launch pin')
+    return path
+
+
+def campaign_tls_context(config):
+    has_file, has_pin = 'tls_ca_file' in config, 'tls_ca_sha256' in config
+    if has_file != has_pin:
+        raise Gate('private CA requires both file and SHA256 pin')
+    cafile = pinned_file(config['tls_ca_file'],config['tls_ca_sha256'],'TLS CA') if has_file else None
+    return ssl.create_default_context(cafile=cafile)
 
 
 class Quota(Exception):
@@ -170,10 +230,12 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class Rpc:
-    def __init__(self, journal):
+    def __init__(self, journal, targets=None, tls_context=None, allow_env_proxy=True):
         self.journal = journal
+        self.targets = targets or campaign_targets({}, {"endpoints": ["https://"+h+"/rpc" for h in HOSTS]})
         self.locks = {h: asyncio.Semaphore(2) for h in HOSTS}
-        self.opener = urllib.request.build_opener(NoRedirect())
+        self.opener = urllib.request.build_opener(NoRedirect(), urllib.request.HTTPSHandler(context=tls_context),
+            *([] if allow_env_proxy else [urllib.request.ProxyHandler({})]))
 
     def reserve(self, host, method, bytes_count):
         if host not in HOSTS:
@@ -194,7 +256,7 @@ class Rpc:
             request_id = self.reserve(host, method, len(payload))
             start = time.monotonic()
             def send():
-                request = urllib.request.Request('https://'+host+'/rpc', payload,
+                request = urllib.request.Request(self.targets[host]['rpc_url'], payload,
                                                  {'Content-Type':'application/json'})
                 with self.opener.open(request, timeout=timeout) as response:
                     data = response.read(8*1024*1024+1)

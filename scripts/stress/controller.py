@@ -14,7 +14,7 @@ import subprocess
 import time
 from plan import expand
 from runtime import (Gate, HOSTS, Journal, PENDING, Quota, Rpc, atomic,
-                     check_identity, check_resources, digest)
+                     check_identity, check_resources, digest, campaign_targets, campaign_tls_context, pinned_file)
 
 
 class Controller:
@@ -23,6 +23,12 @@ class Controller:
         self.config = json.loads((state/'launch.json').read_text())
         self.plan = json.loads((state/'plan.json').read_text())
         _, self.events = expand(self.plan)
+        self.targets = campaign_targets(self.config, self.plan)
+        tls_context = campaign_tls_context(self.config)
+        if 'targets' in self.config:
+            pinned_file(self.config.get('known_hosts'), self.config.get('known_hosts_sha256'), 'observer known_hosts')
+        if 'hosts_file' in self.config or 'hosts_sha256' in self.config:
+            pinned_file(self.config.get('hosts_file'), self.config.get('hosts_sha256'), 'hosts file')
         self.j = Journal(state/'journal.sqlite')
         if self.j.get('plan_digest',digest(self.plan)) != digest(self.plan):
             raise Gate('manifest changed after initialization')
@@ -35,7 +41,7 @@ class Controller:
                 raise Gate('controller source differs from launch pin')
         if hashlib.sha256(Path(self.config['signer']).read_bytes()).hexdigest() != self.config['signer_sha256']:
             raise Gate('signer artifact changed')
-        self.rpc = Rpc(self.j)
+        self.rpc = Rpc(self.j, self.targets, tls_context, allow_env_proxy='targets' not in self.config)
         self.statuses = {}
         self.fresh = 0
         self.blocks = json.loads((state/'blocks.json').read_text()) if (state/'blocks.json').exists() else []
@@ -87,7 +93,7 @@ class Controller:
     async def observer(self, host):
         proc = await asyncio.create_subprocess_exec('ssh','-F','/dev/null','-i',self.config['observer_key'],
             '-o','BatchMode=yes','-o','IdentitiesOnly=yes','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=5',
-            '-o','UserKnownHostsFile='+self.config['known_hosts'],'ubuntu@'+host,
+            '-o','UserKnownHostsFile='+self.config['known_hosts'],self.targets[host]['observer_ssh_target'],
             stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE)
         try:
             out, _ = await asyncio.wait_for(proc.communicate(),10)
@@ -444,6 +450,8 @@ class Controller:
             'start':self.j.get('start'),'end':self.j.get('end'),'plan_sha256':digest(self.plan),
             'counts':counts,'submitted_to_reconciled_seconds':latency('submitted'),
             'nominal_campaign_offers':692,
+            'targets':list(self.targets.values()) if hasattr(self,'targets') else None,
+            'infrastructure_end':self.config.get('infrastructure_end'),
             'not_yet_offered':692-sum(r['kind']=='campaign' for r in rows),
             'offered_to_reconciled_seconds':latency('offered'),
             'signed_fees':sum(r['fee'] for r in rows if r['prepared']),
