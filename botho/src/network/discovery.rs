@@ -370,6 +370,9 @@ pub enum NetworkEvent {
     BlockTxn(BlockTxn),
     /// A new peer was discovered
     PeerDiscovered(PeerId),
+    /// Identify refreshed a connected peer's metadata, without changing
+    /// membership.
+    PeerMetadataUpdated(PeerId),
     /// A peer disconnected
     PeerDisconnected(PeerId),
     /// A sync request was received (need to respond)
@@ -1598,7 +1601,9 @@ impl NetworkDiscovery {
                     );
                 }
 
-                None
+                self.peers
+                    .contains_key(&peer_id)
+                    .then_some(NetworkEvent::PeerMetadataUpdated(peer_id))
             }
 
             SwarmEvent::Behaviour(BothoBehaviourEvent::Identify(
@@ -1627,6 +1632,11 @@ impl NetworkDiscovery {
                 // inbound.
                 if num_established.get() == 1 {
                     self.stats.record_connection_opened(!endpoint.is_dialer());
+                } else {
+                    // A second connection is not a new peer. Keep Identify's
+                    // version/capabilities and avoid replaying connection-driven
+                    // quorum, minting and WebSocket effects in the runtime.
+                    return None;
                 }
                 self.peers.insert(
                     peer_id,
@@ -1702,6 +1712,48 @@ impl NetworkDiscovery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn peer_metadata_redundant_connection_preserves_all_fields() {
+        let mut discovery = NetworkDiscovery::new(0, vec![]);
+        let peer_id = PeerId::random();
+        let address = "/ip4/127.0.0.1/tcp/17111".parse().unwrap();
+        let prior = PeerTableEntry {
+            peer_id,
+            address: Some(address),
+            last_seen: std::time::Instant::now(),
+            protocol_version: ProtocolVersion::parse("botho/6.0.0/5"),
+            version_warning: true,
+            transport_capabilities:
+                super::super::transport::TransportCapabilities::from_agent_version(
+                    "botho/6.0.0/5/transport-caps/1/webrtc,plain/open",
+                ),
+        };
+        discovery.peers.insert(peer_id, prior.clone());
+        discovery.stats.record_connection_opened(true);
+        let event = discovery.process_event(SwarmEvent::ConnectionEstablished {
+            peer_id,
+            connection_id: libp2p::swarm::ConnectionId::new_unchecked(2),
+            endpoint: libp2p::core::ConnectedPoint::Listener {
+                local_addr: "/ip4/127.0.0.1/tcp/17110".parse().unwrap(),
+                send_back_addr: "/ip4/127.0.0.1/tcp/17112".parse().unwrap(),
+            },
+            num_established: 2.try_into().unwrap(),
+            concurrent_dial_errors: None,
+            established_in: std::time::Duration::ZERO,
+        });
+        assert!(
+            event.is_none(),
+            "metadata must not generate connection/quorum effects"
+        );
+        let entry = &discovery.peer_table()[0];
+        assert_eq!(entry.address, prior.address);
+        assert_eq!(entry.protocol_version, prior.protocol_version);
+        assert_eq!(entry.version_warning, prior.version_warning);
+        assert_eq!(entry.transport_capabilities, prior.transport_capabilities);
+        assert_eq!(entry.last_seen, prior.last_seen);
+        assert_eq!(discovery.stats.inbound_count(), 1);
+    }
 
     // ========================================================================
     // NetworkStats tests (#542)
