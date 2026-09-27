@@ -64,6 +64,12 @@ enum Commands {
         #[arg(long)]
         mint_threads: Option<u32>,
 
+        /// Keep testnet minting past the balance pause until this Unix
+        /// timestamp (at most 82 hours ahead; still requires --mint or
+        /// config enablement)
+        #[arg(long, value_name = "UNIX_SECONDS")]
+        testnet_mint_until: Option<u64>,
+
         /// Port for Prometheus metrics endpoint (overrides config, 0 to
         /// disable)
         #[arg(long)]
@@ -228,8 +234,15 @@ fn main() -> Result<()> {
         Commands::Run {
             mint,
             mint_threads,
+            testnet_mint_until,
             metrics_port,
-        } => commands::run::run(&config_path, mint, mint_threads, metrics_port),
+        } => commands::run::run(
+            &config_path,
+            mint,
+            mint_threads,
+            metrics_port,
+            testnet_mint_until,
+        ),
         Commands::Status => commands::status::run(&config_path),
         Commands::Balance => commands::balance::run(&config_path),
         Commands::Address { save } => commands::address::run(&config_path, save.as_deref()),
@@ -269,4 +282,30 @@ fn init_basic_tracing(verbose: bool) {
         .with_max_level(level)
         .with_target(false)
         .init();
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    fn bounded_testnet_minting_flag_parses_without_implicitly_enabling_minting() {
+        let cli = Cli::try_parse_from([
+            "botho",
+            "--testnet",
+            "run",
+            "--testnet-mint-until",
+            "1234567890",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Run {
+                mint: false,
+                testnet_mint_until: Some(1234567890),
+                ..
+            }
+        ));
+        assert!(Cli::try_parse_from(["botho", "run", "--testnet-mint-until", "-1"]).is_err());
+    }
 }

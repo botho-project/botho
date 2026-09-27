@@ -197,6 +197,7 @@ fn exercise_failure(application_failure: bool, persistence_failure: bool) {
                     config,
                     &worker_config_path,
                     false,
+                    TestnetMintWindow::new(Network::Testnet, None, 0, Instant::now()).unwrap(),
                     worker_shutdown,
                     Some(FailureTestHooks {
                         decisions: decision_rx,
@@ -312,7 +313,7 @@ fn exercise_failure(application_failure: bool, persistence_failure: bool) {
             assert!(evidence["rejected_block"].is_null());
         }
         // Exercise production restart refusal, before any socket/signal setup.
-        let error = run(&config_path, false, None, None).unwrap_err();
+        let error = run(&config_path, false, None, None, None).unwrap_err();
         assert!(error.to_string().contains("Consensus failure marker"));
     }
     worker.join().unwrap();

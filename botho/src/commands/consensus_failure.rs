@@ -310,7 +310,7 @@ mod tests {
             if let Some(contents) = contents {
                 fs::write(&config, contents).unwrap();
             }
-            let error = super::super::run::run(&config, false, None, None).unwrap_err();
+            let error = super::super::run::run(&config, false, None, None, None).unwrap_err();
             assert!(error.to_string().contains("Consensus failure marker"));
             assert!(!error.to_string().contains("Config not found"));
         }
