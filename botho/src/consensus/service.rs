@@ -263,6 +263,9 @@ struct TxCacheEntry {
     data: Vec<u8>,
     /// Whether this is a minting transaction
     is_minting_tx: bool,
+    /// Applied values may remain referenced by SCP. Reclaim their payload once
+    /// those references disappear, including completed regular transfers.
+    retired: bool,
 }
 
 /// Recent block info for dynamic timing calculation
@@ -911,6 +914,7 @@ impl ConsensusService {
                 TxCacheEntry {
                     data: tx_data,
                     is_minting_tx: false,
+                    retired: false,
                 },
             );
         }
@@ -921,6 +925,12 @@ impl ConsensusService {
 
     /// Submit a minting transaction for consensus
     pub fn submit_minting_tx(&mut self, tx_hash: [u8; 32], pow_priority: u64, tx_data: Vec<u8>) {
+        // SCP advances before the run loop applies its decision. The local
+        // miner still works on the old tip during that gap; do not enqueue its
+        // candidates for the next slot. Peer payload registration stays open.
+        if self.externalized.is_some() {
+            return;
+        }
         let value = ConsensusValue::from_minting_tx(tx_hash, pow_priority);
 
         // Add to shared cache for validation callback
@@ -930,6 +940,7 @@ impl ConsensusService {
                 TxCacheEntry {
                     data: tx_data,
                     is_minting_tx: true,
+                    retired: false,
                 },
             );
         }
@@ -952,6 +963,7 @@ impl ConsensusService {
             state.tx_cache.entry(tx_hash).or_insert(TxCacheEntry {
                 data: tx_data,
                 is_minting_tx: true,
+                retired: false,
             });
         }
     }
@@ -975,6 +987,7 @@ impl ConsensusService {
             state.tx_cache.entry(tx_hash).or_insert(TxCacheEntry {
                 data: tx_data,
                 is_minting_tx: false,
+                retired: false,
             });
         }
     }
@@ -1049,6 +1062,10 @@ impl ConsensusService {
             }
         }
 
+        // Timeouts can externalize and advance SCP too. Publish the pending
+        // application boundary before considering proposals for the new slot.
+        self.check_externalized();
+
         // Get current slot duration (dynamic or fixed)
         let slot_duration = self.current_slot_duration();
 
@@ -1098,6 +1115,11 @@ impl ConsensusService {
         )
     )]
     fn propose_pending_values(&mut self) {
+        // The next nomination must use the committed ledger/miner state. Keep
+        // queued transfers, but do not start another slot before application.
+        if self.externalized.is_some() {
+            return;
+        }
         if self.pending_values.is_empty() {
             return;
         }
@@ -1395,16 +1417,16 @@ impl ConsensusService {
 
     /// Advance to next slot (called after processing externalized values)
     pub fn advance_slot(&mut self) {
-        // Clean up externalized transactions from cache
-        if let Some(ref values) = self.externalized {
-            if let Ok(mut state) = self.shared_state.write() {
-                for v in values {
-                    state.tx_cache.remove(&v.tx_hash);
-                }
-            }
-        }
-
-        self.externalized = None;
+        // Application succeeded (or proved the height already committed). On a
+        // terminal build/apply failure the caller never reaches this boundary.
+        let completed = self.externalized.take().unwrap_or_default();
+        // A miner tick may have re-submitted an externalized transfer from the
+        // mempool before ledger application removed it. Retire that local work
+        // by transaction identity, preserving unrelated transfers queued in the
+        // gap and payloads still referenced by retained SCP slots.
+        let completed_hashes: BTreeSet<_> = completed.iter().map(|value| value.tx_hash).collect();
+        self.pending_values
+            .retain(|value| !completed_hashes.contains(&value.tx_hash));
         self.proposed_values.clear();
 
         // For solo mode, we need to explicitly advance the SCP slot
@@ -1428,6 +1450,76 @@ impl ConsensusService {
             if self.quorum_set != pending {
                 self.apply_quorum_set(pending);
             }
+        }
+        self.prune_tx_cache(&completed);
+    }
+
+    /// Reclaim obsolete payloads only at an application-completed boundary.
+    /// SCP can already be working on a later slot when its prior decision is
+    /// applied, so retain its actual references rather than assuming slot ==
+    /// block height or treating empty local proposal sets as an idle protocol.
+    fn prune_tx_cache(&mut self, completed: &[ConsensusValue]) {
+        let mut retained: BTreeSet<_> = self
+            .scp_node
+            .get_retained_values()
+            .into_iter()
+            .map(|value| value.tx_hash)
+            .collect();
+        retained.extend(
+            self.pending_values
+                .iter()
+                .chain(self.proposed_values.iter())
+                .map(|value| value.tx_hash),
+        );
+        if let Some(values) = &self.externalized {
+            retained.extend(values.iter().map(|value| value.tx_hash));
+        }
+        let mut readable_events = true;
+        for event in &self.events {
+            match event {
+                ConsensusEvent::SlotExternalized { values, .. } => {
+                    retained.extend(values.iter().map(|value| value.tx_hash));
+                }
+                ConsensusEvent::BroadcastMessage(message) => {
+                    match bincode::deserialize::<ScpMsg<ConsensusValue>>(&message.payload) {
+                        Ok(message) => {
+                            retained.extend(message.values().into_iter().map(|value| value.tx_hash))
+                        }
+                        // Preserve everything if an event cannot be inspected.
+                        Err(_) => readable_events = false,
+                    }
+                }
+                ConsensusEvent::Progress { .. } => {}
+            }
+        }
+        if let Ok(mut state) = self.shared_state.write() {
+            for value in completed {
+                if let Some(entry) = state.tx_cache.get_mut(&value.tx_hash) {
+                    entry.retired = true;
+                }
+            }
+            if !readable_events {
+                return;
+            }
+            let committed_height = state.chain_state.height;
+            state.tx_cache.retain(|hash, entry| {
+                if retained.contains(hash) {
+                    return true;
+                }
+                if entry.retired {
+                    return false;
+                }
+                if entry.is_minting_tx {
+                    // Future-tip candidates remain available. Never guess a
+                    // lifetime from SCP slot numbers, nor discard unreadable
+                    // bytes that may still be needed for failure evidence.
+                    bincode::deserialize::<crate::block::MintingTx>(&entry.data)
+                        .map(|mint| mint.block_height > committed_height)
+                        .unwrap_or(true)
+                } else {
+                    true
+                }
+            });
         }
     }
 
@@ -2304,6 +2396,7 @@ mod tests {
                 TxCacheEntry {
                     data: tx_bytes,
                     is_minting_tx: false,
+                    retired: false,
                 },
             );
         }
@@ -2530,6 +2623,413 @@ mod tests {
         }
 
         (a_ext, b_ext)
+    }
+
+    /// Real federated rounds reproduce the losing-coinbase accumulation. Keep
+    /// current/retained SCP bytes, but bound both entries and serialized
+    /// payloads across many completed heights. A completed transfer must
+    /// also eventually leave the cache after its retained SCP slot is
+    /// evicted.
+    #[test]
+    fn tx_cache_many_rounds_bound_losers_and_release_retired_transfer() {
+        let cfg = ConsensusConfig::fixed_timing(0);
+        let qs = recommended_quorum(&[1, 2]);
+        let mut a = ConsensusService::new(node(1), qs.clone(), cfg.clone(), genesis_chain_state());
+        let mut b = ConsensusService::new(node(2), qs, cfg, genesis_chain_state());
+        let transfer = valid_transfer_tx();
+        let transfer_hash = [0xAB; 32];
+        let transfer_bytes = bincode::serialize(&transfer).unwrap();
+        let mut tip = [0; 32];
+        for height in 1..=24 {
+            let a_tx = intrinsic_valid_minting_tx(1, tip, height);
+            let b_tx = intrinsic_valid_minting_tx(50, tip, height);
+            submit_and_register(&mut a, &mut b, &a_tx);
+            submit_and_register(&mut b, &mut a, &b_tx);
+            // Gossip candidates that lose before nomination: this was the
+            // production leak even when every ledger/SCP round progressed.
+            let mut losers = Vec::new();
+            for tag in 100..164 {
+                let loser = intrinsic_valid_minting_tx(tag, tip, height);
+                let bytes = bincode::serialize(&loser).unwrap();
+                a.register_minting_tx(loser.hash(), bytes.clone());
+                b.register_minting_tx(loser.hash(), bytes);
+                losers.push(loser.hash());
+            }
+            if height == 1 {
+                a.submit_transaction(transfer_hash, transfer.fee, transfer_bytes.clone());
+                b.submit_transaction(transfer_hash, transfer.fee, transfer_bytes.clone());
+            }
+            let (a_values, b_values) = run_two_services(&mut a, &mut b, 4000);
+            let values = a_values.expect("A externalizes each round");
+            assert_eq!(Some(values.clone()), b_values);
+            if height == 1 {
+                assert!(values.iter().any(|value| value.tx_hash == transfer_hash));
+            }
+            for value in &values {
+                let bytes = a.get_tx_data(&value.tx_hash).expect("application payload");
+                assert_eq!(Some(bytes.clone()), b.get_tx_data(&value.tx_hash));
+                if value.is_minting_tx {
+                    let mint: MintingTx = bincode::deserialize(&bytes).unwrap();
+                    assert_eq!(mint.hash(), value.tx_hash);
+                } else {
+                    assert_eq!(bytes, transfer_bytes);
+                }
+            }
+            tip = values
+                .iter()
+                .find(|value| value.is_minting_tx)
+                .unwrap()
+                .tx_hash;
+            for svc in [&mut a, &mut b] {
+                svc.update_chain_state(ChainState {
+                    height,
+                    tip_hash: tip,
+                    ..ChainState::default()
+                });
+                // Publishing a chain state alone cannot discard failure evidence.
+                assert!(svc.get_tx_data(&losers[0]).is_some());
+                svc.advance_slot();
+                for loser in &losers {
+                    assert!(svc.get_tx_data(loser).is_none());
+                }
+                for value in svc.scp_node.get_retained_values() {
+                    assert!(
+                        svc.get_tx_data(&value.tx_hash).is_some(),
+                        "retained SCP payload"
+                    );
+                }
+                let state = svc.shared_state.read().unwrap();
+                assert!(state.tx_cache.len() <= 5, "cache grew at height {height}");
+                let bytes: usize = state.tx_cache.values().map(|entry| entry.data.len()).sum();
+                assert!(
+                    bytes <= 4 * bincode::serialize(&a_tx).unwrap().len() + transfer_bytes.len()
+                );
+                if height == 1 {
+                    assert!(state.tx_cache.get(&transfer_hash).unwrap().retired);
+                } else if height >= 3 {
+                    assert!(
+                        !state.tx_cache.contains_key(&transfer_hash),
+                        "retired transfer leaked"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The network handler can externalize a slot before the run loop drains
+    /// its application event. A miner tick in that interval still has work for
+    /// the old ledger tip. Never carry that candidate into the next SCP slot:
+    /// peers legitimately reclaim its unreferenced bytes after applying.
+    #[test]
+    fn tx_cache_externalized_apply_gap_cannot_pin_stale_mint_next_round() {
+        let cfg = ConsensusConfig::fixed_timing(0);
+        let qs = recommended_quorum(&[1, 2]);
+        let mut a = ConsensusService::new(node(1), qs.clone(), cfg.clone(), genesis_chain_state());
+        let mut b = ConsensusService::new(node(2), qs, cfg, genesis_chain_state());
+        let first = intrinsic_valid_minting_tx(1, [0; 32], 1);
+        submit_and_register(&mut a, &mut b, &first);
+        submit_and_register(&mut b, &mut a, &first);
+        let (a_values, b_values) = run_two_services(&mut a, &mut b, 4000);
+        assert_eq!(a_values, b_values);
+        assert!(a_values.is_some() && a.externalized.is_some() && b.externalized.is_some());
+        assert_eq!(a.current_slot(), 2);
+
+        // Same production ordering as the incident: externalized event queued,
+        // old-tip miner tick, then eventual ledger apply/advance. Artificially
+        // high priority makes choosing this obsolete mint deterministic.
+        let stale = intrinsic_valid_minting_tx(50, [0; 32], 1);
+        let stale_bytes = bincode::serialize(&stale).unwrap();
+        a.submit_minting_tx(stale.hash(), u64::MAX, stale_bytes.clone());
+        b.register_minting_tx(stale.hash(), stale_bytes);
+        let transfer = valid_transfer_tx();
+        let transfer_hash = [0xAB; 32];
+        a.submit_transaction(
+            transfer_hash,
+            transfer.fee,
+            bincode::serialize(&transfer).unwrap(),
+        );
+        a.propose_pending_values();
+        assert!(a
+            .scp_node
+            .get_retained_values()
+            .iter()
+            .all(|v| v.tx_hash != stale.hash()));
+        assert_eq!(
+            a.scp_node.get_current_slot_metrics().num_voted_nominated,
+            0,
+            "nothing may be proposed while the prior decision awaits application"
+        );
+        for svc in [&mut a, &mut b] {
+            svc.update_chain_state(ChainState {
+                height: 1,
+                tip_hash: first.hash(),
+                ..ChainState::default()
+            });
+            svc.advance_slot();
+            assert!(svc.pending_values.iter().all(|v| v.tx_hash != stale.hash()));
+            assert!(svc.get_tx_data(&stale.hash()).is_none());
+        }
+        assert!(a.pending_values.iter().any(|v| v.tx_hash == transfer_hash));
+        b.submit_transaction(
+            transfer_hash,
+            transfer.fee,
+            bincode::serialize(&transfer).unwrap(),
+        );
+        let next = intrinsic_valid_minting_tx(2, first.hash(), 2);
+        submit_and_register(&mut a, &mut b, &next);
+        submit_and_register(&mut b, &mut a, &next);
+        let (a_values, b_values) = run_two_services(&mut a, &mut b, 4000);
+        let values = a_values.expect("next height must externalize after application gap");
+        assert_eq!(Some(values.clone()), b_values);
+        assert!(values.iter().any(|v| v.tx_hash == next.hash()));
+        assert!(values.iter().any(|v| v.tx_hash == transfer_hash));
+        assert!(values.iter().all(|v| v.tx_hash != stale.hash()));
+    }
+
+    /// A mempool snapshot taken after SCP externalizes still contains its
+    /// transfer until the ledger application removes it. Re-submission in that
+    /// gap must not nominate a committed spend in the following block.
+    #[test]
+    fn tx_cache_apply_gap_transfer_requeue_does_not_repeat_committed_spend() {
+        let cfg = ConsensusConfig::fixed_timing(0);
+        let qs = recommended_quorum(&[1, 2]);
+        let mut a = ConsensusService::new(node(1), qs.clone(), cfg.clone(), genesis_chain_state());
+        let mut b = ConsensusService::new(node(2), qs, cfg, genesis_chain_state());
+        let committed = valid_transfer_tx();
+        let committed_hash = committed.hash();
+        let committed_bytes = bincode::serialize(&committed).unwrap();
+        let first = intrinsic_valid_minting_tx(1, [0; 32], 1);
+        submit_and_register(&mut a, &mut b, &first);
+        submit_and_register(&mut b, &mut a, &first);
+        for svc in [&mut a, &mut b] {
+            svc.submit_transaction(committed_hash, committed.fee, committed_bytes.clone());
+        }
+        let (a_values, b_values) = run_two_services(&mut a, &mut b, 4000);
+        let first_values = a_values.expect("first transfer externalizes");
+        assert_eq!(Some(first_values.clone()), b_values);
+        assert!(first_values.iter().any(|v| v.tx_hash == committed_hash));
+
+        let mut unrelated = valid_transfer_tx();
+        unrelated.inputs.0[0].key_image = [10; 32];
+        let unrelated_hash = unrelated.hash();
+        let unrelated_bytes = bincode::serialize(&unrelated).unwrap();
+        for svc in [&mut a, &mut b] {
+            assert!(svc.externalized.is_some());
+            // The run loop's next mint tick re-submits the unchanged mempool.
+            svc.submit_transaction(committed_hash, committed.fee, committed_bytes.clone());
+            svc.submit_transaction(unrelated_hash, unrelated.fee, unrelated_bytes.clone());
+            svc.update_chain_state(ChainState {
+                height: 1,
+                tip_hash: first.hash(),
+                ..ChainState::default()
+            });
+            svc.advance_slot();
+            // Keep completed bytes while retained SCP still references them.
+            assert_eq!(
+                svc.get_tx_data(&committed_hash),
+                Some(committed_bytes.clone())
+            );
+            assert!(svc.shared_state.read().unwrap().tx_cache[&committed_hash].retired);
+            assert!(svc
+                .pending_values
+                .iter()
+                .any(|v| v.tx_hash == unrelated_hash));
+        }
+        let next = intrinsic_valid_minting_tx(2, first.hash(), 2);
+        submit_and_register(&mut a, &mut b, &next);
+        submit_and_register(&mut b, &mut a, &next);
+        let (a_values, b_values) = run_two_services(&mut a, &mut b, 4000);
+        let second_values = a_values.expect("unrelated transfer progresses next round");
+        assert_eq!(Some(second_values.clone()), b_values);
+        assert!(second_values.iter().any(|v| v.tx_hash == unrelated_hash));
+        assert!(
+            second_values.iter().all(|v| v.tx_hash != committed_hash),
+            "a previously committed spend must never be nominated again from the apply gap"
+        );
+        for svc in [&mut a, &mut b] {
+            svc.update_chain_state(ChainState {
+                height: 2,
+                tip_hash: next.hash(),
+                ..ChainState::default()
+            });
+            svc.advance_slot();
+            assert!(
+                svc.get_tx_data(&committed_hash).is_none(),
+                "retired payload releases once SCP ages out"
+            );
+        }
+    }
+
+    #[test]
+    fn tx_cache_unreadable_events_and_payloads_are_conservative() {
+        let mut svc = peered_service(&[1, 2]);
+        let stale = intrinsic_valid_minting_tx(1, [0; 32], 1);
+        svc.register_minting_tx(stale.hash(), bincode::serialize(&stale).unwrap());
+        let unreadable = [0xEE; 32];
+        svc.register_minting_tx(unreadable, vec![0xFF]);
+        let transfer = [0xAA; 32];
+        svc.register_transfer_tx(transfer, vec![0xAB]);
+        svc.events
+            .push_back(ConsensusEvent::BroadcastMessage(ScpMessage {
+                sender: vec![],
+                slot_index: 1,
+                payload: vec![0xFF],
+            }));
+        svc.update_chain_state(ChainState {
+            height: 1,
+            ..ChainState::default()
+        });
+        svc.prune_tx_cache(&[ConsensusValue::from_transaction(transfer, 1)]);
+        assert!(svc.get_tx_data(&stale.hash()).is_some());
+        assert!(svc.get_tx_data(&transfer).is_some());
+        assert!(svc.shared_state.read().unwrap().tx_cache[&transfer].retired);
+        svc.events.clear();
+        svc.prune_tx_cache(&[]);
+        assert!(svc.get_tx_data(&stale.hash()).is_none());
+        assert!(svc.get_tx_data(&transfer).is_none());
+        assert_eq!(svc.get_tx_data(&unreadable), Some(vec![0xFF]));
+    }
+
+    #[test]
+    fn tick_surfaces_scp_decision_before_proposing_next_slot() {
+        let cfg = ConsensusConfig::fixed_timing(0);
+        let qs = recommended_quorum(&[1, 2]);
+        let mut a = ConsensusService::new(node(1), qs.clone(), cfg.clone(), genesis_chain_state());
+        let mut b = ConsensusService::new(node(2), qs, cfg, genesis_chain_state());
+        let first = intrinsic_valid_minting_tx(1, [0; 32], 1);
+        submit_and_register(&mut a, &mut b, &first);
+        submit_and_register(&mut b, &mut a, &first);
+        // Drive the real SCP nodes directly. As after process_timeouts, their
+        // slot may advance before the service has observed the decision.
+        let value = ConsensusValue::from_minting_tx(first.hash(), first.pow_priority());
+        let mut to_b = a
+            .scp_node
+            .propose_values([value].into())
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let mut to_a = b
+            .scp_node
+            .propose_values([value].into())
+            .unwrap()
+            .into_iter()
+            .collect::<Vec<_>>();
+        for _ in 0..100 {
+            let a_responses = a
+                .scp_node
+                .handle_messages(std::mem::take(&mut to_a))
+                .unwrap();
+            let b_responses = b
+                .scp_node
+                .handle_messages(std::mem::take(&mut to_b))
+                .unwrap();
+            to_b.extend(a_responses);
+            to_a.extend(b_responses);
+            if a.current_slot() == 2 && b.current_slot() == 2 {
+                break;
+            }
+        }
+        assert_eq!(a.current_slot(), 2);
+        assert_eq!(b.current_slot(), 2);
+        assert!(a.externalized.is_none());
+        let transfer = valid_transfer_tx();
+        a.submit_transaction(
+            transfer.hash(),
+            transfer.fee,
+            bincode::serialize(&transfer).unwrap(),
+        );
+        a.tick();
+        assert!(a.externalized.is_some());
+        assert!(
+            a.proposed_values.is_empty(),
+            "no proposal may enter SCP before application"
+        );
+        assert_eq!(
+            a.scp_node.get_current_slot_metrics().num_voted_nominated,
+            0,
+            "tick must detect the decision before nominating queued work"
+        );
+        assert!(a.get_tx_data(&first.hash()).is_some());
+        assert!(a
+            .pending_values
+            .iter()
+            .any(|v| v.tx_hash == transfer.hash()));
+    }
+
+    #[test]
+    fn tx_cache_preserves_current_scp_pending_future_and_queued_payloads() {
+        let mut svc = peered_service(&[1, 2]);
+        let current = intrinsic_valid_minting_tx(1, [0; 32], 1);
+        let bytes = bincode::serialize(&current).unwrap();
+        svc.register_minting_tx(current.hash(), bytes.clone());
+        let value = ConsensusValue::from_minting_tx(current.hash(), current.pow_priority());
+        let message = peer_nominate_prepare(
+            node(2),
+            recommended_quorum(&[1, 2]),
+            svc.current_slot(),
+            value,
+        );
+        svc.scp_node.handle_message(&message).unwrap();
+        assert!(svc.scp_node.get_retained_values().contains(&value));
+        assert!(svc.pending_values.is_empty() && svc.proposed_values.is_empty());
+
+        let queued = intrinsic_valid_minting_tx(2, [0; 32], 1);
+        let future = intrinsic_valid_minting_tx(3, [0; 32], 2);
+        let pending = intrinsic_valid_minting_tx(4, [0; 32], 1);
+        let broadcast = intrinsic_valid_minting_tx(5, [0; 32], 1);
+        for tx in [&queued, &future, &broadcast] {
+            svc.register_minting_tx(tx.hash(), bincode::serialize(tx).unwrap());
+        }
+        svc.submit_minting_tx(
+            pending.hash(),
+            pending.pow_priority(),
+            bincode::serialize(&pending).unwrap(),
+        );
+        svc.events.push_back(ConsensusEvent::SlotExternalized {
+            slot_index: svc.current_slot(),
+            values: vec![ConsensusValue::from_minting_tx(
+                queued.hash(),
+                queued.pow_priority(),
+            )],
+        });
+        let broadcast_msg = peer_nominate_prepare(
+            node(2),
+            recommended_quorum(&[1, 2]),
+            svc.current_slot(),
+            ConsensusValue::from_minting_tx(broadcast.hash(), broadcast.pow_priority()),
+        );
+        svc.events
+            .push_back(ConsensusEvent::BroadcastMessage(ScpMessage {
+                sender: vec![],
+                slot_index: svc.current_slot(),
+                payload: bincode::serialize(&broadcast_msg).unwrap(),
+            }));
+        let transfer_hash = [0xAA; 32];
+        let transfer_bytes = bincode::serialize(&valid_transfer_tx()).unwrap();
+        svc.register_transfer_tx(transfer_hash, transfer_bytes.clone());
+        svc.update_chain_state(ChainState {
+            height: 1,
+            ..ChainState::default()
+        });
+        svc.prune_tx_cache(&[]);
+        assert_eq!(svc.get_tx_data(&current.hash()), Some(bytes));
+        for tx in [&queued, &future, &pending, &broadcast] {
+            assert_eq!(
+                svc.get_tx_data(&tx.hash()),
+                Some(bincode::serialize(tx).unwrap())
+            );
+        }
+        // Once the real current-slot and queue references are gone, stale
+        // candidates release; future candidates and untouched transfers remain.
+        svc.scp_node.reset_slot_index(2);
+        svc.events.clear();
+        svc.pending_values.clear();
+        svc.prune_tx_cache(&[]);
+        for tx in [&current, &queued, &pending, &broadcast] {
+            assert!(svc.get_tx_data(&tx.hash()).is_none());
+        }
+        assert!(svc.get_tx_data(&future.hash()).is_some());
+        assert_eq!(svc.get_tx_data(&transfer_hash), Some(transfer_bytes));
     }
 
     /// SAFETY: two `ConsensusService` instances (real validity/combine fns) in
@@ -4200,6 +4700,7 @@ mod tests {
                 TxCacheEntry {
                     data: tx_bytes,
                     is_minting_tx: false,
+                    retired: false,
                 },
             );
         }

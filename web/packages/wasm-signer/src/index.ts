@@ -132,6 +132,8 @@ export interface SignRequest {
 
 /** A chain output (as returned by `chain_getOutputs`) to test for ownership. */
 export interface ChainOutput {
+  /** Legacy payout envelope; retain in history, exclude from independent inputs and decoys. */
+  lottery?: boolean
   /** Hex-encoded 32-byte one-time target key of the output. */
   targetKey: string
   /** Hex-encoded 32-byte ephemeral public key of the output. */

@@ -305,6 +305,10 @@ impl<V: Value, N: ScpNode<V>> ScpNode<V> for LoggingScpNode<V, N> {
         self.node.get_current_slot_metrics()
     }
 
+    fn get_retained_values(&self) -> BTreeSet<V> {
+        self.node.get_retained_values()
+    }
+
     fn get_slot_debug_snapshot(&mut self, slot_index: SlotIndex) -> Option<String> {
         self.node.get_slot_debug_snapshot(slot_index)
     }
