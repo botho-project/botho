@@ -186,6 +186,7 @@ def prepare(profile):
 # Installed through sudo with a digest-checked in-memory archive. No shell, tar
 # extraction paths, service activation, existing-file replacement or migration.
 INSTALL = '''import hashlib,io,json,os,pathlib,pwd,subprocess,tarfile
+os.umask(0o022)
 archive=pathlib.Path(ARCHIVE)
 data=archive.read_bytes()
 assert hashlib.sha256(data).hexdigest()==SHA
