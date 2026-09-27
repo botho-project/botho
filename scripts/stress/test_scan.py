@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock
 
 from controller import Controller
-from runtime import Gate, HOSTS
+from runtime import Gate, HOSTS, Journal
 
 
 class IncrementalScanTests(unittest.IsolatedAsyncioTestCase):
@@ -15,6 +15,8 @@ class IncrementalScanTests(unittest.IsolatedAsyncioTestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.c = Controller.__new__(Controller)
         self.c.state = Path(self.tmp.name)
+        self.c.j = Journal(self.c.state/'journal.sqlite')
+        self.c.closed = False
         self.c.wallets = [{'key':str(i),'address':'address-'+str(i)} for i in range(8)]
         self.c.inventory = [[] for _ in self.c.wallets]
         self.c.inventory_initialized = False
@@ -28,6 +30,7 @@ class IncrementalScanTests(unittest.IsolatedAsyncioTestCase):
         self.c.rpc = Mock(call=AsyncMock(side_effect=self.rpc))
 
     def tearDown(self):
+        self.c.j.db.close()
         self.tmp.cleanup()
 
     def block(self, height):

@@ -55,11 +55,13 @@ class ScanQuotaTests(unittest.IsolatedAsyncioTestCase):
         self.c.closed = False
         self.c.scan_lock = asyncio.Lock()
         self.c.blocks = []
+        self.c.inventory = [[]]
+        self.c.inventory_initialized = False
         self.c.spent = []
         self.c.wallets = [{"key": "offline", "address": "wallet"}]
         self.c.statuses = {h: {"chainHeight": 0, "synced": True} for h in HOSTS}
         self.c.native = AsyncMock(
-            return_value={"address": "wallet", "owned": [{"key_image": "image"}]}
+            return_value={"address": "wallet", "owned": [{"id": "output:0", "key_image": "image"}]}
         )
         self.c.j.set("setup_start", 900.0)
         self.c.j.set("start", 950.0)
@@ -211,7 +213,7 @@ class ScanQuotaTests(unittest.IsolatedAsyncioTestCase):
 
         async def signer(request):
             self.c.j.set("backoff:" + HOSTS[0], self.now + 180)
-            return {"address": "wallet", "owned": [{"key_image": "image"}]}
+            return {"address": "wallet", "owned": [{"id": "output:0", "key_image": "image"}]}
 
         self.c.native = signer
         with self.assertRaisesRegex(Gate, "five minutes"):
@@ -277,6 +279,7 @@ class ScanQuotaTests(unittest.IsolatedAsyncioTestCase):
                 "address": "wallet",
                 "owned": [
                     {
+                        "id": tx_hash + ":0",
                         "key_image": "image",
                         "utxo": {
                             "tx_hash": list(bytes.fromhex(tx_hash)),
