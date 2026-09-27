@@ -50,7 +50,9 @@ export interface SendRpc {
   /**
    * Fetch every output on the chain in `[startHeight, endHeight]` as raw
    * `{ targetKey, publicKey, amount }`. The amount is the transparent value
-   * recovered from the output's commitment.
+   * recovered from the output's commitment. Preserve validated chain order
+   * (height, then ledger insertion order) so the first occurrence of a target
+   * is its canonical output. The RemoteNodeAdapter preserves this RPC order.
    */
   getOutputs(startHeight: number, endHeight: number): Promise<ChainOutput[]>
   /**
@@ -565,11 +567,31 @@ export async function buildSendTransaction(
     throw new Error('No spendable outputs found for this wallet (all spent)')
   }
 
-  // 2. Select inputs covering amount + fee.
+  // Resolve each target once in chain order before selecting inputs or decoys.
+  // Preserve the complete scan for accounting, including unsupported receipts.
+  const canonical = new Map<string, ChainOutput>()
+  for (const candidate of candidates) {
+    if (candidate.lottery !== true && !canonical.has(candidate.targetKey)) {
+      canonical.set(candidate.targetKey, candidate)
+    }
+  }
+  const seenInputs = new Set<string>()
+  const supported = spendable.filter((input) => {
+    const original = canonical.get(input.targetKey)
+    if (!original || original.publicKey !== input.publicKey ||
+        toBigInt(original.amount) !== toBigInt(input.amount) ||
+        (original.outputIndex ?? 0) !== (input.outputIndex ?? 0) ||
+        seenInputs.has(input.targetKey)) return false
+    seenInputs.add(input.targetKey)
+    return true
+  })
   const target = amount + fee
-  const inputs = selectInputs(spendable, target)
+  const inputs = selectInputs(supported, target)
   if (!inputs) {
-    const have = spendable.reduce((s, o) => s + toBigInt(o.amount), 0n)
+    if (supported.length !== spendable.length) {
+      throw new Error('Legacy lottery payouts cannot be spent independently yet')
+    }
+    const have = supported.reduce((s, o) => s + toBigInt(o.amount), 0n)
     throw new Error(
       `Insufficient funds: need ${target} picocredits (amount + fee), have ${have}`,
     )
@@ -585,8 +607,8 @@ export async function buildSendTransaction(
   // traffic chain unspendable. We still drop the all-zero genesis placeholder.
   const inputKeys = new Set(inputs.map((o) => o.targetKey))
   const isZeroKey = (k: string) => /^0+$/.test(k)
-  const decoyPool = candidates.filter(
-    (c) => !inputKeys.has(c.targetKey) && !isZeroKey(c.targetKey),
+  const decoyPool = [...canonical.values()].filter(
+    (c) => c.lottery !== true && !inputKeys.has(c.targetKey) && !isZeroKey(c.targetKey),
   )
   if (decoyPool.length < decoysPerInput) {
     throw new Error(

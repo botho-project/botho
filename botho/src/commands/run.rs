@@ -21,6 +21,14 @@ use tracing::{debug, error, info, warn};
 
 use std::collections::HashMap;
 
+use super::consensus_failure::{self, FailureEvidence};
+
+#[cfg(test)]
+#[path = "consensus_failure_tests.rs"]
+mod consensus_failure_tests;
+#[cfg(test)]
+use consensus_failure_tests::FailureTestHooks;
+
 use crate::{
     block::MintingTx,
     config::{is_dev_rpc_enabled, Config, QuorumConfig, QuorumMode},
@@ -370,6 +378,8 @@ pub fn run(
     metrics_port_override: Option<u16>,
     testnet_mint_until: Option<u64>,
 ) -> Result<()> {
+    // Refuse even a partial marker before starting RPC, networking or minting.
+    consensus_failure::refuse_marked_startup(config_path)?;
     let mut config =
         Config::load(config_path).context("Config not found. Run 'botho init' first.")?;
 
@@ -421,14 +431,38 @@ pub fn run(
 
     // Create tokio runtime for async networking
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async { run_async(config, config_path, mint, mint_window).await })
+    let result = rt.block_on(async { run_async(config, config_path, mint, mint_window).await });
+    finish_runtime(
+        rt,
+        result,
+        #[cfg(test)]
+        || {},
+    )
+}
+
+fn finish_runtime(
+    rt: tokio::runtime::Runtime,
+    result: Result<()>,
+    #[cfg(test)] before_persist: impl FnOnce(),
+) -> Result<()> {
+    // Stop detached handlers before any evidence write/flush can block.
+    drop(rt);
+    #[cfg(test)]
+    before_persist();
+    match result {
+        Err(error) => match error.downcast::<consensus_failure::TerminalFailure>() {
+            Ok(failure) => failure.finish(),
+            Err(error) => Err(error),
+        },
+        Ok(()) => Ok(()),
+    }
 }
 
 async fn run_async(
-    mut config: Config,
+    config: Config,
     config_path: &Path,
     mint: bool,
-    mut mint_window: TestnetMintWindow,
+    mint_window: TestnetMintWindow,
 ) -> Result<()> {
     // Set up shutdown signal
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -436,7 +470,26 @@ async fn run_async(
     ctrlc::set_handler(move || {
         shutdown_clone.store(true, Ordering::SeqCst);
     })?;
+    run_async_with_shutdown(
+        config,
+        config_path,
+        mint,
+        mint_window,
+        shutdown,
+        #[cfg(test)]
+        None,
+    )
+    .await
+}
 
+async fn run_async_with_shutdown(
+    mut config: Config,
+    config_path: &Path,
+    mint: bool,
+    mut mint_window: TestnetMintWindow,
+    shutdown: Arc<AtomicBool>,
+    #[cfg(test)] mut test_hooks: Option<FailureTestHooks>,
+) -> Result<()> {
     // Get network type for port/peer defaults
     let network_type = config.network_type();
 
@@ -783,7 +836,7 @@ async fn run_async(
 
     // Spawn RPC server task
     let rpc_state_clone = rpc_state.clone();
-    tokio::spawn(async move {
+    let rpc_task = tokio::spawn(async move {
         if let Err(e) = start_rpc_server(rpc_addr, rpc_state_clone).await {
             error!("RPC server error: {}", e);
         }
@@ -793,6 +846,14 @@ async fn run_async(
 
     // Initialize and start Prometheus metrics server
     let metrics_updater = MetricsUpdater::new();
+    // The binary starts one node. Unit tests exercise several isolated node
+    // lifetimes in one process, sharing Prometheus's process-wide registry.
+    #[cfg(test)]
+    {
+        static METRICS_INIT: std::sync::Once = std::sync::Once::new();
+        METRICS_INIT.call_once(init_metrics);
+    }
+    #[cfg(not(test))]
     init_metrics();
 
     // Update data directory size metric (initial + periodic updates every 60s)
@@ -1041,8 +1102,9 @@ async fn run_async(
     // stall verdict flips true, not on every 500ms consensus tick while it
     // stays jammed (the metric/RPC snapshot keeps reporting continuously).
     let mut slot_stall_warned = false;
+    let mut terminal_consensus_failure = None;
 
-    loop {
+    'node_loop: loop {
         if shutdown.load(Ordering::SeqCst) {
             info!("Shutting down...");
             break;
@@ -1826,7 +1888,17 @@ async fn run_async(
                 consensus.tick();
 
                 // Process any consensus events
-                while let Some(event) = consensus.next_event() {
+                while let Some(event) = {
+                    // Fault injection exists only in unit-test builds. The injected
+                    // decision uses the production cache, build/apply branch and
+                    // shutdown path below, without a synthetic cleanup replica.
+                    #[cfg(test)]
+                    let injected = test_hooks.as_mut()
+                        .and_then(|hooks| hooks.next_event(&mut consensus));
+                    #[cfg(not(test))]
+                    let injected = None;
+                    injected.or_else(|| consensus.next_event())
+                } {
                     match event {
                         ConsensusEvent::SlotExternalized { slot_index, values } => {
                             info!(slot = slot_index, count = values.len(), "Slot externalized!");
@@ -1869,15 +1941,14 @@ async fn run_async(
                                         // failure — we must NOT mask real
                                         // validation failures, and we must NOT drop
                                         // a real winning block.
-                                        let ledger_height = node
+                                        let checkpoint = node
                                             .shared_ledger()
                                             .read()
                                             .ok()
-                                            .and_then(|l| l.get_chain_state().ok())
-                                            .map(|s| s.height);
-                                        let height_already_filled = matches!(
-                                            ledger_height,
-                                            Some(h) if block.height() <= h
+                                            .and_then(|l| l.get_chain_state().ok());
+                                        let ledger_height = checkpoint.as_ref().map(|s| s.height);
+                                        let height_already_filled = consensus_failure::height_already_applied(
+                                            block.height(), ledger_height,
                                         );
                                         if height_already_filled {
                                             debug!(
@@ -1888,7 +1959,16 @@ async fn run_async(
                                                 e
                                             );
                                         } else {
-                                            warn!("Failed to add consensus block: {}", e);
+                                            error!(slot = slot_index, height = block.height(), error = %e,
+                                                "Terminal consensus failure: externalized block could not be applied");
+                                            terminal_consensus_failure = Some(FailureEvidence::capture(
+                                                slot_index, consensus.current_slot(), checkpoint.as_ref(),
+                                                format!("Externalized block application failed: {}", e),
+                                                &values, Some(block), |hash| consensus.get_tx_entry(hash),
+                                            ));
+                                            // Do not clear the externalized decision/cache or process
+                                            // any more queued broadcasts, proposals or peer events.
+                                            break 'node_loop;
                                         }
                                     } else {
                                         // Count toward blocksFound if this node
@@ -1928,7 +2008,16 @@ async fn run_async(
                                     }
                                 }
                                 Err(e) => {
-                                    warn!("Failed to build block from consensus: {}", e);
+                                    error!(slot = slot_index, error = %e,
+                                        "Terminal consensus failure: externalized block could not be built");
+                                    let checkpoint = node.shared_ledger().read().ok()
+                                        .and_then(|ledger| ledger.get_chain_state().ok());
+                                    terminal_consensus_failure = Some(FailureEvidence::capture(
+                                        slot_index, consensus.current_slot(), checkpoint.as_ref(),
+                                        format!("Externalized block construction failed: {}", e),
+                                        &values, None, |hash| consensus.get_tx_entry(hash),
+                                    ));
+                                    break 'node_loop;
                                 }
                             }
 
@@ -2524,6 +2613,18 @@ async fn run_async(
         *active = false;
     }
     metrics_updater.set_minting_active(false);
+    ws_broadcaster.minting_status(false, 0.0, 0);
+    rpc_task.abort();
+    drop(swarm);
+    #[cfg(test)]
+    if let Some(hooks) = test_hooks {
+        hooks.observe_stop(&consensus, &node);
+    }
+    if let Some(evidence) = terminal_consensus_failure {
+        // Node drop joins minting workers; finish_runtime drops all detached
+        // RPC tasks before the evidence write (or undurable-failure parking).
+        return Err(evidence.terminal(config_path, shutdown));
+    }
     Ok(())
 }
 

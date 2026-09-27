@@ -59,6 +59,10 @@ pub trait ScpSlot<V: Value>: Send {
     /// Get metrics about the slot.
     fn get_metrics(&self) -> SlotMetrics;
 
+    /// Values successfully validated by this retained slot. Applications must
+    /// keep their payloads available while the slot can still refer to them.
+    fn get_validated_values(&self) -> BTreeSet<V>;
+
     /// The slot index.
     fn get_index(&self) -> SlotIndex;
 
@@ -198,6 +202,10 @@ pub struct SlotMetrics {
 }
 
 impl<V: Value, ValidationError: Display> ScpSlot<V> for Slot<V, ValidationError> {
+    fn get_validated_values(&self) -> BTreeSet<V> {
+        self.valid_values.clone()
+    }
+
     /// Get some metrics/information about the slot for debugging purposes.
     fn get_metrics(&self) -> SlotMetrics {
         SlotMetrics {

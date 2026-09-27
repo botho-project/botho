@@ -5,6 +5,7 @@
 
 pub mod address;
 pub mod balance;
+mod consensus_failure;
 pub mod init;
 pub mod operator;
 pub mod run;

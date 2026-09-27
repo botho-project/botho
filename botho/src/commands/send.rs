@@ -71,6 +71,8 @@ pub fn run(
         .get_utxos_for_address(&our_address)
         .map_err(|e| anyhow::anyhow!("Failed to get UTXOs: {}", e))?;
 
+    let utxos = Wallet::canonical_inputs(&utxos, &ledger)?;
+
     // Calculate fee using the cluster-tax fee curve
     // All transactions are private (CLSAG ring signatures)
     let fee_config = FeeConfig::default();

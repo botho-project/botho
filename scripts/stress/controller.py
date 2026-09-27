@@ -166,16 +166,52 @@ class Controller:
                     self.halt('post-idle RSS growth across three cycles: '+host)
             self.j.set('memory_cycle',last)
 
-    async def sync(self, full=False):
+    async def sync(self, full=False, *, draining=False):
         async with self.scan_lock:
             if not self.statuses:
                 raise Gate('fleet status unavailable')
             height = min(s['chainHeight'] for s in self.statuses.values())
             start = 0 if full else (self.blocks[-1]['height']+1 if self.blocks else 0)
             new = []
+            waited = 0.0
+
+            async def read(host, method, params, timeout=10):
+                nonlocal waited
+                # Only these idempotent reads wait for the shared durable quota.
+                # Reserve ten requests/minute for monitoring (or all but one
+                # slot when the advertised endpoint quota is smaller).
+                while True:
+                    # STOP closes admission, not read-only receipt/final scans.
+                    # Shutdown and the quota wait bound still apply to drains.
+                    if self.closed or (not draining and (self.state / "STOP").exists()):
+                        raise Gate("scan stopped during quota wait")
+                    try:
+                        now = self.j.clock()
+                        count = self.j.db.execute(
+                            "SELECT COUNT(*) FROM requests WHERE host=? AND at>?",
+                            (host, now - 60),
+                        ).fetchone()[0]
+                        limit = min(50, self.j.get("quota:" + host, 100) // 2)
+                        if count >= max(1, limit - 10):
+                            raise Quota("scan reserves monitoring headroom")
+                        return await self.rpc.call(
+                            host, method, params, timeout=timeout
+                        )
+                    except Quota:
+                        if waited >= 300:
+                            raise Gate("scan quota wait exceeded five minutes")
+                        before = time.monotonic()
+                        await asyncio.sleep(min(1, 300 - waited))
+                        waited += time.monotonic() - before
+
             for first in range(start,height+1,50):
                 last = min(height,first+49)
-                blocks = await self.rpc.call(HOSTS[(first//50)%5],'chain_getOutputs',{'start_height':first,'end_height':last},timeout=20)
+                blocks = await read(
+                    HOSTS[(first // 50) % 5],
+                    "chain_getOutputs",
+                    {"start_height": first, "end_height": last},
+                    timeout=20,
+                )
                 if [b['height'] for b in blocks] != list(range(first,last+1)):
                     raise Gate('incomplete or unordered output range')
                 new.extend(blocks)
@@ -205,7 +241,9 @@ class Controller:
             for first in range(0,len(query_images),256):
                 images = query_images[first:first+256]
                 host=HOSTS[(first//256+height)%len(HOSTS)]
-                found = await self.rpc.call(host,'chain_areKeyImagesSpent',{'keyImages':images})
+                found = await read(
+                    host, "chain_areKeyImagesSpent", {"keyImages": images}
+                )
                 if ([s.get('keyImage') for s in found] != images or any('error' in s or
                     type(s.get('spent')) is not bool or type(s.get('pending')) is not bool for s in found)):
                     raise Gate('malformed spent-image response')
@@ -215,22 +253,107 @@ class Controller:
             atomic(self.state/'inventory.json',{'at':time.time(),'height':height,'owned':scans,'spent':spent})
             return height
 
-    def spendable(self, wallet, height, amount=0, count=1):
-        state = {s['keyImage']:s for s in self.spent}
-        reserved = {r[0] for r in self.j.db.execute('SELECT input FROM reservations')}
+    def canonical_history(self):
+        # Match target-only ledger resolution before any maturity/age filtering.
+        # History and inventory retain unsupported receipts for accounting.
+        canonical = {}
+        for block in sorted(self.blocks, key=lambda block: block['height']):
+            for output in block['outputs']:
+                key = output['targetKey'].lower()
+                if not output.get('lottery', False) and key not in canonical:
+                    canonical[key] = (block['height'], output)
+        return canonical
+
+    def canonical_inventory(self, wallet, canonical=None):
+        canonical = self.canonical_history() if canonical is None else canonical
+        seen = set()
         outputs = []
         for output in self.inventory[wallet]:
-            status = state.get(output['key_image'])
+            # The signer inventory is also retained verbatim for accounting.
+            # Reject malformed entries here without rewriting that evidence.
+            if not isinstance(output, dict) or not isinstance(output.get('utxo'), dict):
+                continue
             utxo = output['utxo']
-            if (not status or status['spent'] or status['pending'] or output['id'] in reserved
-                    or height-utxo['created_at'] < 10):
+            if (
+                not isinstance(output.get('id'), str)
+                or not isinstance(output.get('key_image'), str)
+                or not output['key_image']
+                or utxo.get('lottery', False) is not False
+                or any(
+                    type(utxo.get(field)) is not int or utxo[field] < 0
+                    for field in ('created_at', 'output_index', 'amount')
+                )
+            ):
+                continue
+            if any(
+                not isinstance(utxo.get(field), list)
+                or len(utxo[field]) != 32
+                or any(
+                    type(byte) is not int or not 0 <= byte <= 255
+                    for byte in utxo[field]
+                )
+                for field in ('target_key', 'tx_hash')
+            ):
+                continue
+            key = bytes(utxo['target_key']).hex()
+            tx_hash = bytes(utxo['tx_hash']).hex()
+            if key == '0' * 64 or output['id'] != tx_hash + ':' + str(
+                utxo['output_index']
+            ):
+                continue
+            original = canonical.get(key)
+            if utxo.get('lottery', False) or original is None or key in seen:
+                continue
+            created, row = original
+            if (
+                created != utxo['created_at']
+                or row.get('txHash', '').lower() != tx_hash
+                or row.get('outputIndex') != utxo['output_index']
+            ):
+                continue
+            seen.add(key)
+            outputs.append(output)
+        return outputs
+
+    def unspent_setup_inputs(self, wallet, canonical=None):
+        """Existing distinct inputs, including those awaiting maturity or decoys.
+
+        This count only prevents redundant splits; admission still requires
+        spendable's eligibility checks and every wallet's four-input signer probe.
+        """
+        state = {s['keyImage']: s for s in self.spent}
+        reserved = {r[0] for r in self.j.db.execute('SELECT input FROM reservations')}
+        outputs, seen_ids, seen_images = [], set(), set()
+        for output in self.canonical_inventory(wallet, canonical):
+            status = state.get(output['key_image'])
+            if (
+                not status
+                or status.get('spent') is not False
+                or status.get('pending') is not False
+                or 'error' in status
+                or output['id'] in reserved
+                or output['id'] in seen_ids
+                or output['key_image'] in seen_images
+            ):
+                continue
+            outputs.append(output)
+            seen_ids.add(output['id'])
+            seen_images.add(output['key_image'])
+        return outputs
+
+    def spendable(self, wallet, height, amount=0, count=1):
+        canonical = self.canonical_history()
+        outputs = []
+        for output in self.unspent_setup_inputs(wallet, canonical):
+            utxo = output['utxo']
+            if height-utxo['created_at'] < 10:
                 continue
             age = height-utxo['created_at']
             # Match production age_similarity_band: integer +/-10%, ten-block floor.
             delta = age//10
             low,high = max(10,age-delta),age+delta
-            keys = {o['targetKey'] for block in self.blocks if low <= height-block['height'] <= high
-                    for o in block['outputs']}
+            keys = {key for key, (created, _) in canonical.items()
+                    if low <= height-created <= high and key != '0'*64}
             keys.discard(bytes(utxo['target_key']).hex())
             if len(keys) >= 19:
                 outputs.append(output)
@@ -427,7 +550,7 @@ class Controller:
                     # Wait for monitor to expose the inclusion height to wallet scanning.
                     if not self.statuses or min(s['chainHeight'] for s in self.statuses.values()) < info['block_height']:
                         continue
-                    await self.sync()
+                    await self.sync(draining=True)
                     recipient = self.inventory[row['recipient']]
                     received = [o for o in recipient if bytes(o['utxo']['tx_hash']).hex()==row['hash'] and o['utxo']['output_index']==0]
                     if len(received)!=1 or received[0]['utxo']['amount']!=row['amount']:
@@ -533,17 +656,23 @@ class Controller:
             self.report()
             return
         bootstrap = self.j.rows("kind='bootstrap'")
-        if len(bootstrap)>=64:
-            raise Gate('setup inventory exhausted after sixty-four bootstrap offers')
         next_grant=start+(int((time.time()-start)//900)+1)*900
         if next_grant<=start+23*900 and next_grant-time.time()<240:
             return
         # Self-transfers split mature value while preserving all principal in the
         # allowlist. Start as soon as eligible funding outputs exist, interleaving
         # with the immutable 15-minute faucet schedule.
-        for w in sorted(range(8),key=lambda i:counts[i]):
-            if self.spendable(w,height,100_000_000_000,1):
-                identifier='bootstrap-'+str(len(bootstrap)).zfill(2)
+        for w in sorted(range(8), key=lambda i: counts[i]):
+            if len(self.unspent_setup_inputs(w)) >= 4:
+                # More splits consume fees and reset ages while these inputs
+                # are waiting for maturity or age-matched decoys.
+                continue
+            if self.spendable(w, height, 100_000_000_000, 1):
+                if len(bootstrap) >= 64:
+                    raise Gate(
+                        'setup inventory exhausted after sixty-four bootstrap offers'
+                    )
+                identifier = 'bootstrap-' + str(len(bootstrap)).zfill(2)
                 self.j.offer(identifier,'bootstrap',time.time(),w,w,100_000_000_000)
                 await self.prepare(identifier,1,1)
                 return
@@ -665,7 +794,7 @@ class Controller:
             while not self.fresh and time.time()-startup<55 and self.j.get('status') in ('setup','running'):
                 await asyncio.sleep(1)
             if self.fresh:
-                await self.sync()
+                await self.sync(draining=True)
             reconciler=asyncio.create_task(self.reconcile())
             while True:
                 status=self.j.get('status')
@@ -697,7 +826,7 @@ class Controller:
                     self.j.set('last_summary_at',time.time())
                 await asyncio.sleep(1)
             if self.fresh and not self.j.pending():
-                await self.sync(full=True)
+                await self.sync(full=True, draining=True)
                 self.accounting()
             rows=self.j.rows("kind='campaign'")
             success=len(rows)==692 and all(r['state']=='reconciled' for r in rows)
