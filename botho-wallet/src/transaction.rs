@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     fee_estimation::StoredTags,
     keys::WalletKeys,
-    ring_builder::fetch_decoy_ring_members,
+    ring_builder::{canonical_rpc_history, select_rpc_decoys_from_history},
     rpc_pool::{BlockOutputs, RpcPool},
 };
 
@@ -69,6 +69,10 @@ pub struct OwnedUtxo {
     /// records.
     #[serde(default)]
     pub coinbase: bool,
+    /// Preserve the discriminator for scanned legacy receipts. Accounting
+    /// records do not imply an independently spendable payout (#1286).
+    #[serde(default)]
+    pub lottery: bool,
     /// Amount in picocredits
     pub amount: u64,
     /// Block height where created
@@ -314,22 +318,37 @@ impl TransactionBuilder {
         // Exclude our own inputs from every ring's decoy pool.
         let exclude_keys: Vec<[u8; 32]> = selected.iter().map(|u| u.target_key).collect();
 
-        // Fetch an age-similar decoy ring for each selected input. This is the
-        // only asynchronous step; the CLSAG assembly below is deterministic
-        // given the fetched rings, which keeps it unit-testable in isolation.
+        if selected.iter().any(|utxo| {
+            self.sync_height.saturating_sub(utxo.created_at)
+                < crate::decoy_selection::MIN_DECOY_AGE_BLOCKS
+        }) {
+            return Err(anyhow!("Input is too new to spend privately"));
+        }
+
+        // The full history also rejects stale cached aliases whose old cache
+        // predates the additive lottery discriminator. Fetch once for all rings.
+        let history = rpc.get_outputs(0, self.sync_height).await?;
+        let canonical = canonical_rpc_history(&history);
         let decoys_needed = MIN_RING_SIZE - 1;
-        let mut decoy_rings: Vec<Vec<RingMember>> = Vec::with_capacity(selected.len());
+        let mut decoy_rings = Vec::with_capacity(selected.len());
         for utxo in &selected {
-            let real_age = self.sync_height.saturating_sub(utxo.created_at);
-            let decoys = fetch_decoy_ring_members(
-                rpc,
-                real_age,
+            if !canonical.iter().flat_map(|b| &b.outputs).any(|out| {
+                out.tx_hash == hex::encode(utxo.tx_hash)
+                    && out.output_index == utxo.output_index
+                    && out.target_key == hex::encode(utxo.target_key)
+            }) {
+                return Err(anyhow!(
+                    "Selected input is not canonical; rescan wallet history"
+                ));
+            }
+            decoy_rings.push(select_rpc_decoys_from_history(
+                &history,
                 self.sync_height,
+                self.sync_height.saturating_sub(utxo.created_at),
                 &exclude_keys,
                 decoys_needed,
-            )
-            .await?;
-            decoy_rings.push(decoys);
+                &mut OsRng,
+            )?);
         }
 
         self.build_signed_transaction(
@@ -359,6 +378,18 @@ impl TransactionBuilder {
         total_selected: u64,
         decoy_rings: Vec<Vec<RingMember>>,
     ) -> Result<TransferResult> {
+        if selected.iter().any(|utxo| utxo.lottery) {
+            return Err(anyhow!(
+                "Legacy lottery payouts cannot be spent independently yet"
+            ));
+        }
+        let mut input_keys = std::collections::HashSet::new();
+        if selected
+            .iter()
+            .any(|utxo| !input_keys.insert(utxo.target_key))
+        {
+            return Err(anyhow!("Duplicate input target"));
+        }
         if decoy_rings.len() != selected.len() {
             return Err(anyhow!(
                 "internal error: {} decoy rings for {} inputs",
@@ -500,8 +531,18 @@ impl TransactionBuilder {
             return Err(anyhow!("No UTXOs available"));
         }
 
-        // Sort by amount descending
-        let mut sorted: Vec<_> = self.utxos.clone();
+        // Keep payout receipts in balances while preferring independently
+        // spendable inputs. If those cannot fund the payment, explain why.
+        let has_legacy_payouts = self.utxos.iter().any(|utxo| utxo.lottery);
+        let mut sorted: Vec<_> = self
+            .utxos
+            .iter()
+            .filter(|utxo| !utxo.lottery)
+            .cloned()
+            .collect();
+        sorted.sort_by_key(|utxo| utxo.created_at);
+        let mut seen = std::collections::HashSet::new();
+        sorted.retain(|utxo| seen.insert(utxo.target_key));
         sorted.sort_by(|a, b| b.amount.cmp(&a.amount));
 
         let mut selected = Vec::new();
@@ -516,6 +557,11 @@ impl TransactionBuilder {
         }
 
         if total < target {
+            if has_legacy_payouts {
+                return Err(anyhow!(
+                    "Legacy lottery payouts cannot be spent independently yet"
+                ));
+            }
             return Err(anyhow!(
                 "Insufficient funds: have {} picocredits, need {}",
                 total,
@@ -606,6 +652,7 @@ impl<'a> WalletScanner<'a> {
                         output_index: output.output_index,
                         crypto_output_index: output.crypto_output_index,
                         coinbase: output.coinbase,
+                        lottery: output.lottery,
                         amount,
                         created_at: block.height,
                         target_key,
@@ -856,6 +903,7 @@ mod tests {
                 output_index: 0,
                 crypto_output_index: None,
                 coinbase: false,
+                lottery: false,
                 amount: 1_000_000_000_000, // 1 CAD
                 created_at: 1,
                 target_key: [0u8; 32],
@@ -869,6 +917,7 @@ mod tests {
                 output_index: 0,
                 crypto_output_index: None,
                 coinbase: false,
+                lottery: false,
                 amount: 500_000_000_000, // 0.5 CAD
                 created_at: 2,
                 target_key: [0u8; 32],
@@ -906,6 +955,7 @@ mod tests {
             output_index: 0,
             crypto_output_index: None,
             coinbase: false,
+            lottery: false,
             amount,
             created_at,
             target_key: out.target_key,
@@ -931,6 +981,77 @@ mod tests {
                 RingMember::from_output(&out)
             })
             .collect()
+    }
+
+    #[test]
+    fn duplicate_targets_never_count_as_independent_inputs() {
+        let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+        let recipient = WalletKeys::from_mnemonic(RECIPIENT_MNEMONIC).unwrap();
+        let original = owned_fixture_utxo(&keys, 500_000_000_000, 1);
+        let mut alias = original.clone();
+        alias.created_at = 90;
+        alias.amount = 1_000_000_000_000;
+        alias.output_index = 1;
+        let builder = TransactionBuilder::new(keys, vec![alias.clone(), original.clone()], 100);
+        let (selected, total) = builder.select_inputs(1).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(total, original.amount);
+        assert!(builder.select_inputs(original.amount + 1).is_err());
+        assert!(builder
+            .build_signed_transaction(
+                &recipient.public_address(),
+                1,
+                1,
+                vec![original.clone(), alias],
+                1_500_000_000_000,
+                vec![],
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("Duplicate input target"));
+        assert_eq!(builder.balance(), 1_500_000_000_000); // history retained
+    }
+
+    #[test]
+    fn legacy_lottery_balance_is_retained_but_cannot_be_selected_or_signed() {
+        let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+        let recipient = WalletKeys::from_mnemonic(RECIPIENT_MNEMONIC).unwrap();
+        let mut payout = owned_fixture_utxo(&keys, 1_000_000_000_000, 90);
+        payout.lottery = true;
+        let builder = TransactionBuilder::new(keys, vec![payout.clone()], 100);
+        assert_eq!(builder.balance(), payout.amount);
+        assert!(builder
+            .select_inputs(1)
+            .unwrap_err()
+            .to_string()
+            .contains("Legacy lottery payouts"));
+        assert!(builder
+            .build_signed_transaction(
+                &recipient.public_address(),
+                1,
+                1,
+                vec![payout.clone()],
+                payout.amount,
+                vec![]
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("Legacy lottery payouts"));
+        let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+        let ordinary = owned_fixture_utxo(&keys, 500_000_000_000, 90);
+        let mixed = TransactionBuilder::new(keys, vec![payout.clone(), ordinary.clone()], 100);
+        assert_eq!(mixed.balance(), payout.amount + ordinary.amount);
+        let (selected, total) = mixed.select_inputs(1).unwrap();
+        assert_eq!(total, ordinary.amount);
+        assert!(selected.iter().all(|utxo| !utxo.lottery));
+        // Older ordinary caches remain compatible when the additive flag is absent.
+        let mut encoded = serde_json::to_value(&payout).unwrap();
+        encoded.as_object_mut().unwrap().remove("lottery");
+        assert!(
+            !serde_json::from_value::<OwnedUtxo>(encoded)
+                .unwrap()
+                .lottery
+        );
     }
 
     #[test]
@@ -1125,7 +1246,6 @@ mod tests {
         // user-facing error (no panic) before any ring is built. We reach the
         // young-input guard via the fetch path without needing a live node by
         // constructing the decoy fetch directly.
-        use crate::ring_builder::fetch_decoy_ring_members;
 
         // real_age = 5 (< 10) — guard must fire before any RPC call, so passing
         // a placeholder RpcPool is never dereferenced. We assert the guard by
@@ -1138,9 +1258,15 @@ mod tests {
         // before touching `rpc`, but Rust still requires a &mut RpcPool. Build a
         // disconnected pool; the guard returns first.
         let mut rpc = RpcPool::new(crate::discovery::NodeDiscovery::new());
-        let err = fetch_decoy_ring_members(&mut rpc, 5, 1_000, &[], MIN_RING_SIZE - 1)
-            .await
-            .expect_err("young input must error");
+        let err = crate::ring_builder::fetch_decoy_ring_members(
+            &mut rpc,
+            5,
+            1_000,
+            &[],
+            MIN_RING_SIZE - 1,
+        )
+        .await
+        .expect_err("young input must error");
         let msg = err.to_string();
         assert!(
             msg.contains("too new") && msg.contains("confirmations"),
@@ -1176,6 +1302,7 @@ mod tests {
                 output_index,
                 crypto_output_index: None,
                 coinbase: false,
+                lottery: false,
                 ledger_outpoint: None,
                 target_key: hex::encode(out.target_key),
                 public_key: hex::encode(out.public_key),

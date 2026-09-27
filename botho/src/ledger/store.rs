@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "store/ring_admission_tests.rs"]
+mod ring_admission_tests;
+
 pub(super) mod validation;
 pub(super) mod writer;
 use bth_account_keys::{AccountKey, PublicAddress};
@@ -1239,18 +1243,27 @@ impl Ledger {
             }
         };
 
-        // Get the first UTXO ID (there should typically be only one per target_key)
-        if id_bytes.len() >= 36 {
-            if let Some(utxo_id) = UtxoId::from_bytes(&id_bytes[0..36]) {
-                if let Ok(Some(utxo_bytes)) = self.utxo_db.get(&rtxn, &utxo_id.to_bytes()) {
-                    if let Ok(utxo) = bincode::deserialize::<Utxo>(utxo_bytes) {
-                        return Ok(Some(utxo));
-                    }
-                }
-            }
+        // Preserve canonical first-index resolution, including legacy lottery
+        // aliases. An existing but malformed/dangling index is a storage error,
+        // never an absent output that callers may silently skip.
+        if id_bytes.is_empty() || id_bytes.len() % 36 != 0 {
+            return Err(LedgerError::Database(
+                "Malformed target-key UTXO index".to_string(),
+            ));
         }
-
-        Ok(None)
+        let utxo_id = UtxoId::from_bytes(&id_bytes[..36])
+            .ok_or_else(|| LedgerError::Database("Invalid first target-key UTXO id".to_string()))?;
+        let utxo_bytes = self
+            .utxo_db
+            .get(&rtxn, &utxo_id.to_bytes())
+            .map_err(|e| LedgerError::Database(format!("Failed to get indexed UTXO: {}", e)))?
+            .ok_or_else(|| {
+                LedgerError::Database("Target-key index references missing UTXO".to_string())
+            })?;
+        let utxo = bincode::deserialize::<Utxo>(utxo_bytes).map_err(|e| {
+            LedgerError::Serialization(format!("Failed to decode indexed UTXO: {}", e))
+        })?;
+        Ok(Some(utxo))
     }
 
     /// Compute address key from view and spend keys for index lookup
@@ -1317,10 +1330,9 @@ impl Ledger {
     /// producer can include ring members with a target_key they control and
     /// an arbitrary amount-commitment: the signature still verifies and the
     /// balance check passes against the fabricated amount, minting value.
-    /// The mempool does the equivalent check at admission, but blocks bypass
-    /// the mempool — so this check is the block-level analogue.
-    #[cfg(test)]
-    fn verify_ring_members(&self, tx: &BothoTransaction) -> Result<(), LedgerError> {
+    /// Shared by mempool admission and block validation so a valid signature
+    /// cannot admit a ring that block application will reject.
+    pub(crate) fn verify_ring_members(&self, tx: &BothoTransaction) -> Result<(), LedgerError> {
         validation::ValidationReads::verify_ring_members(self, tx)
     }
 
@@ -1578,6 +1590,26 @@ impl Ledger {
         Ok(())
     }
 
+    /// Only the first indexed outpoint is resolved by ring validation. Legacy
+    /// lottery payouts reuse the winner's target key, so later aliases must
+    /// never enter a decoy pool, even when the original is outside its age
+    /// band.
+    fn is_canonical_decoy(&self, rtxn: &heed::RoTxn, utxo: &Utxo) -> Result<bool, LedgerError> {
+        let ids = self
+            .address_index_db
+            .get(rtxn, utxo.output.target_key.as_slice())
+            .map_err(|error| {
+                LedgerError::Database(format!("Failed to read decoy address index: {}", error))
+            })?;
+        match ids {
+            Some(ids) if ids.is_empty() || ids.len() % 36 != 0 => Err(LedgerError::Database(
+                "Malformed target-key UTXO index".to_string(),
+            )),
+            Some(ids) => Ok(ids[..36] == utxo.id.to_bytes()),
+            None => Ok(false),
+        }
+    }
+
     /// Get a random sample of UTXOs for use as decoys in ring signatures.
     pub fn get_decoy_outputs(
         &self,
@@ -1610,7 +1642,9 @@ impl Ledger {
                     // Check confirmations
                     if utxo.created_at <= max_height {
                         // Check exclusion list
-                        if !exclude.contains(&utxo.output.target_key) {
+                        if !exclude.contains(&utxo.output.target_key)
+                            && self.is_canonical_decoy(&rtxn, &utxo)?
+                        {
                             candidates.push(utxo.output);
                         }
                     }
@@ -1672,7 +1706,9 @@ impl Ledger {
                     // Check confirmations
                     if utxo.created_at <= max_height {
                         // Check exclusion list
-                        if !exclude.contains(&utxo.output.target_key) {
+                        if !exclude.contains(&utxo.output.target_key)
+                            && self.is_canonical_decoy(&rtxn, &utxo)?
+                        {
                             candidates.push(OutputCandidate::from_utxo(&utxo, current_height));
                         }
                     }
@@ -1746,7 +1782,9 @@ impl Ledger {
             if let Ok((_, value)) = result {
                 if let Ok(utxo) = bincode::deserialize::<Utxo>(value) {
                     if utxo.created_at <= max_height {
-                        if !exclude.contains(&utxo.output.target_key) {
+                        if !exclude.contains(&utxo.output.target_key)
+                            && self.is_canonical_decoy(&rtxn, &utxo)?
+                        {
                             candidates.push(OutputCandidate::from_utxo(&utxo, current_height));
                         }
                     }
@@ -5274,6 +5312,98 @@ mod tests {
              plain={floor_rich_plain}"
         );
     }
+    #[test]
+    fn legacy_lottery_aliases_never_enter_native_decoy_pools() {
+        use rand::{rngs::StdRng, SeedableRng};
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let account = bth_account_keys::AccountKey::random(&mut StdRng::seed_from_u64(1286));
+        let mut utxos: Vec<_> = (0..20)
+            .map(|i| {
+                let mut utxo = eligible_test_utxo(i);
+                utxo.output = TxOutput::new(50_000_000_000_000, &account.default_subaddress());
+                utxo.created_at = 90;
+                utxo
+            })
+            .collect();
+        let mut original = eligible_test_utxo(20);
+        original.output = TxOutput::new(50_000_000_000_000, &account.default_subaddress());
+        original.created_at = 10; // Outside the new payout's age band.
+        let mut payout = original.clone();
+        payout.id = eligible_test_utxo(21).id;
+        payout.output.amount = 20_000_000;
+        payout.created_at = 90;
+        utxos.extend([original.clone(), payout.clone()]);
+        insert_test_utxos(&ledger, &utxos);
+        let mut wtxn = ledger.env.write_txn().unwrap();
+        for utxo in &utxos {
+            ledger.add_to_address_index(&mut wtxn, utxo).unwrap();
+        }
+        ledger
+            .meta_db
+            .put(&mut wtxn, META_HEIGHT, &100u64.to_le_bytes())
+            .unwrap();
+        wtxn.commit().unwrap();
+        let expected = RingMember::from_output(&original.output);
+        assert_ne!(expected, RingMember::from_output(&payout.output));
+        use crate::wallet::WalletRead;
+        assert_eq!(
+            crate::wallet::Wallet::canonical_inputs(
+                &[payout.clone(), original.clone(), original.clone()],
+                &ledger,
+            )
+            .unwrap()
+            .iter()
+            .map(|utxo| utxo.id)
+            .collect::<Vec<_>>(),
+            vec![original.id]
+        );
+        ledger.validate_input(&original).unwrap();
+        assert!(ledger
+            .validate_input(&payout)
+            .unwrap_err()
+            .to_string()
+            .contains("Legacy lottery payouts"));
+        let uniform = ledger.get_decoy_outputs(22, &[], 10).unwrap();
+        assert_eq!(uniform.len(), 21);
+        for output in uniform {
+            let canonical = ledger
+                .get_utxo_by_target_key(&output.target_key)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                RingMember::from_output(&output),
+                RingMember::from_output(&canonical.output)
+            );
+        }
+        assert!(ledger
+            .get_decoy_outputs_ospead(22, &[], 10, None, &mut StdRng::seed_from_u64(1))
+            .is_err());
+        let selected = ledger
+            .get_decoy_outputs_for_input(20, &[], 10, 10, None, &mut StdRng::seed_from_u64(2))
+            .unwrap();
+        assert_eq!(selected.len(), 20);
+        assert!(selected
+            .iter()
+            .all(|out| out.target_key != original.output.target_key));
+        // Preserve the native selector's existing nearest-age fallback, but
+        // every fallback must still resolve to the canonical ledger output.
+        let fallback = ledger
+            .get_decoy_outputs_for_input(21, &[], 10, 10, None, &mut StdRng::seed_from_u64(3))
+            .unwrap();
+        assert_eq!(
+            fallback
+                .iter()
+                .filter(|out| out.target_key == original.output.target_key)
+                .map(RingMember::from_output)
+                .collect::<Vec<_>>(),
+            vec![expected]
+        );
+        assert!(ledger
+            .get_decoy_outputs_for_input(22, &[], 10, 10, None, &mut StdRng::seed_from_u64(4))
+            .is_err());
+    }
+
     /// CT1 research adapter check: use the actual ledger filtering/ordering
     /// path, then compare the same seeded selector over its mature,
     /// nonexcluded pool. This is a storage fixture, not an
@@ -5295,6 +5425,9 @@ mod tests {
         utxos.sort_by_key(|u| u.id.to_bytes());
         insert_test_utxos(&ledger, &utxos);
         let mut wtxn = ledger.env.write_txn().unwrap();
+        for utxo in &utxos {
+            ledger.add_to_address_index(&mut wtxn, utxo).unwrap();
+        }
         ledger
             .meta_db
             .put(&mut wtxn, META_HEIGHT, &100u64.to_le_bytes())

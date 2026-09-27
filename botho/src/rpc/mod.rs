@@ -3590,6 +3590,14 @@ async fn handle_faucet_request(
         }
     };
 
+    let all_utxos = match Wallet::canonical_inputs(&all_utxos, &ledger) {
+        Ok(utxos) => utxos,
+        Err(error) => {
+            error!("Failed to resolve canonical wallet inputs: {}", error);
+            return JsonRpcResponse::error(id, -32000, "Failed to resolve canonical wallet inputs");
+        }
+    };
+
     // Filter out spent UTXOs by checking key images in both ledger and mempool
     // We need to check the mempool to avoid double-spend errors when a previous
     // faucet transaction is still pending (not yet confirmed in a block)
@@ -3889,6 +3897,14 @@ async fn handle_dev_settle_to_background(
         Err(e) => {
             error!("dev_settleToBackground: failed to scan UTXOs: {}", e);
             return JsonRpcResponse::error(id, -32000, "Failed to scan wallet UTXOs");
+        }
+    };
+
+    let all_utxos = match Wallet::canonical_inputs(&all_utxos, &ledger) {
+        Ok(utxos) => utxos,
+        Err(error) => {
+            error!("Failed to resolve canonical wallet inputs: {}", error);
+            return JsonRpcResponse::error(id, -32000, "Failed to resolve canonical wallet inputs");
         }
     };
 

@@ -40,7 +40,8 @@ fn adapter(value: Value) -> Value {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn receive_prepare_submit_restore_and_respend() {
-    tokio::time::timeout(Duration::from_secs(240),async {
+    // The real 720-block lottery maturity fixture needs headroom on CI runners.
+    tokio::time::timeout(Duration::from_secs(480),async {
         let dir=tempfile::tempdir().unwrap();
         std::fs::set_permissions(dir.path(),std::fs::Permissions::from_mode(0o700)).unwrap();
         let a=dir.path().join("a.mnemonic"); let b=dir.path().join("b.mnemonic");
@@ -51,7 +52,14 @@ async fn receive_prepare_submit_restore_and_respend() {
         let sink=botho_wallet::WalletKeys::generate().unwrap();
         let ledger=Ledger::open(&dir.path().join("ledger")).unwrap();
         ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
-        for height in 1..=220 {
+        // Use the production 720-block lottery maturity threshold. The first
+        // 21 sink coinbases are eligible when the grant is mined at height 741,
+        // while the faucet's height-100 coinbase is still outside the draw.
+        // Neither payment wallet has an old output, so later lottery receipts
+        // cannot change the two-wallet transfer accounting below.
+        assert_eq!(LotteryFeeConfig::default().draw_config.min_utxo_age, 720,
+            "run this fixture without a lottery-age environment override");
+        for height in 1..=740 {
             let address=if height==100 {faucet_keys.public_address()} else {sink.public_address()};
             mine_block(&ledger,&address,vec![]);
         }
@@ -69,6 +77,8 @@ async fn receive_prepare_submit_restore_and_respend() {
         let grant_hash: [u8;32]=hex::decode(grant["txHash"].as_str().unwrap()).unwrap().try_into().unwrap();
         let grant_tx=state.mempool.read().unwrap().get(&grant_hash).unwrap().clone();
         mine_block(&state.ledger.read().unwrap(),&sink.public_address(),vec![grant_tx]);
+        assert!(!state.ledger.read().unwrap().get_tip().unwrap().lottery_outputs.is_empty(),
+            "funding must create actual legacy lottery payouts for this regression");
         state.mempool.write().unwrap().remove_tx(&grant_hash);
         for _ in 0..120 {mine_block(&state.ledger.read().unwrap(),&sink.public_address(),vec![]);}
         let mut fees=0u64;
@@ -77,6 +87,49 @@ async fn receive_prepare_submit_restore_and_respend() {
             let blocks=rpc(&url,"chain_getOutputs",json!({"start_height":0,"end_height":height})).await;
             let scan=adapter(json!({"operation":"scan","wallet":sender,"blocks":blocks}));
             let owned=scan["owned"].as_array().unwrap(); assert!(!owned.is_empty());
+            if round == 0 {
+                // Synthetic owned alias: real legacy payout envelopes omit the
+                // hybrid recovery context (#1286), so do not pretend they are
+                // independently scannable. Retain the real grant's recovery
+                // context to exercise the offline signer's explicit boundary.
+                let mut aliased_blocks = blocks.clone();
+                let original = blocks.as_array().unwrap().iter()
+                    .flat_map(|block| block["outputs"].as_array().unwrap())
+                    .find(|out| out["txHash"] == hex::encode(grant_hash) && out["outputIndex"] == 0)
+                    .unwrap();
+                let mut alias = original.clone();
+                alias["lottery"] = json!(true);
+                alias["txHash"] = json!("aa".repeat(32));
+                aliased_blocks.as_array_mut().unwrap().last_mut().unwrap()["outputs"]
+                    .as_array_mut().unwrap().push(alias);
+                let alias_scan = adapter(json!({"operation":"scan","wallet":sender,"blocks":aliased_blocks}));
+                let payout = alias_scan["owned"].as_array().unwrap().iter()
+                    .find(|output| output["utxo"]["lottery"] == true).expect("synthetic owned alias retained");
+                let rejected = dir.path().join("unsupported-payout.bin");
+                let request = serde_json::from_value(json!({"operation":"prepare","wallet":sender,
+                    "blocks":aliased_blocks,"height":height,"selected":[payout["id"]],"spent":[],"reserved":[],
+                    "recipient":recipient,"allowed_recipients":[address_a,address_b],
+                    "amount":10_000_000_000u64,"base_rate":1,"artifact":rejected})).unwrap();
+                assert!(botho_wallet::stress::execute(request).unwrap_err().to_string().contains("not canonical"));
+                assert!(!rejected.exists());
+            }
+            if round == 0 {
+                use botho_wallet::{decoy_selection::age_similarity_band, ring_builder::prepare_rpc_decoy_pool, rpc_pool::BlockOutputs};
+                let real_age = height - owned[0]["utxo"]["created_at"].as_u64().unwrap();
+                let (min_age, max_age) = age_similarity_band(real_age);
+                let window: Vec<BlockOutputs> = serde_json::from_value::<Vec<BlockOutputs>>(blocks.clone()).unwrap()
+                    .into_iter().filter(|block| (min_age..=max_age).contains(&(height-block.height))).collect();
+                assert!(window.iter().flat_map(|b| &b.outputs).any(|out| out.lottery),
+                    "RPC must preserve real payout discriminator inside the input age window");
+                let pool = prepare_rpc_decoy_pool(&window, &[]);
+                assert!(pool.len() >= bth_transaction_clsag::MIN_RING_SIZE);
+                let ledger = state.ledger.read().unwrap();
+                for member in pool {
+                    let canonical = ledger.get_utxo_by_target_key(&member.target_key).unwrap().unwrap();
+                    assert_eq!(member, bth_transaction_clsag::RingMember::from_output(&canonical.output),
+                        "RPC decoys must match canonical ledger output after payout creation");
+                }
+            }
             let images:Vec<_>=owned.iter().map(|u|u["key_image"].clone()).collect();
             let spent=rpc(&url,"chain_areKeyImagesSpent",json!({"keyImages":images})).await;
             let restored=dir.path().join(format!("restore-{round}.mnemonic"));
@@ -132,7 +185,7 @@ async fn receive_prepare_submit_restore_and_respend() {
             if round==0 {for _ in 0..120 {mine_block(&state.ledger.read().unwrap(),&sink.public_address(),vec![]);}}
         }
         server.abort();
-    }).await.expect("fixture exceeded four minute deadline");
+    }).await.expect("fixture exceeded eight minute deadline");
 }
 const TEST_BLOCK_REWARD: u64 = 50 * PICOCREDITS_PER_CREDIT;
 const TRIVIAL_DIFFICULTY: u64 = u64::MAX;

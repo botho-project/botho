@@ -604,3 +604,20 @@ describe('RemoteNodeAdapter connection cancellation', () => {
     expect(opened[1].close).toHaveBeenCalledOnce()
   })
 })
+
+
+describe('RemoteNodeAdapter legacy lottery metadata', () => {
+  it('preserves the discriminator in both output methods and defaults old outputs to false', async () => {
+    const ordinary = { txHash: 'ab', outputIndex: 0, targetKey: 'cd', publicKey: 'ef', amountCommitment: '0100000000000000' }
+    const payout = { ...ordinary, outputIndex: 1, lottery: true }
+    const adapter = await connectedAdapter({
+      chain_getOutputs: { jsonrpc: '2.0', id: 1, result: [{ height: 90, outputs: [ordinary, payout] }] },
+    })
+    const raw = await adapter.getRawOutputs(90, 90)
+    const withMeta = await adapter.getRawOutputsWithMeta(90, 90)
+    expect(raw.map((output) => output.lottery)).toEqual([false, true])
+    expect(withMeta.map((output) => output.lottery)).toEqual([false, true])
+    expect(raw).toHaveLength(2)
+    expect(withMeta.map((output) => output.amount)).toEqual([1n, 1n])
+  })
+})

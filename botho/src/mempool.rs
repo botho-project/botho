@@ -1004,6 +1004,18 @@ impl Mempool {
         tx.verify_ring_signatures()
             .map_err(|_| MempoolError::InvalidSignature)?;
 
+        // A valid CLSAG signature authenticates the supplied ring, not its
+        // correspondence to the ledger. Use the exact block-validation check
+        // before collecting amounts/tags: legacy lottery aliases can share a
+        // target key while committing to a different amount than its canonical
+        // first-index UTXO. Such a ring must never enter relay/nomination.
+        ledger.verify_ring_members(tx).map_err(|e| match e {
+            crate::ledger::LedgerError::InvalidBlock(message) => {
+                MempoolError::InvalidTransaction(message)
+            }
+            error => MempoolError::LedgerError(error.to_string()),
+        })?;
+
         // Validate potential input amounts from ring members
         // Also collect ring tags for plausibility validation and public
         // (value, creation height) pairs for the demurrage centroid
@@ -1013,27 +1025,20 @@ impl Mempool {
 
         for input in clsag_inputs {
             let mut max_ring_amount: u64 = 0;
-            let mut found_any = false;
-
             for member in &input.ring {
-                if let Ok(Some(utxo)) = ledger.get_utxo_by_target_key(&member.target_key) {
-                    max_ring_amount = max_ring_amount.max(utxo.output.amount);
-                    found_any = true;
-                    // Collect ring member tags and amounts for plausibility check
-                    all_ring_tags.push((utxo.output.cluster_tags.clone(), utxo.output.amount));
-                    ring_members.push((utxo.output.amount, utxo.created_at));
-                }
-            }
-
-            if !found_any {
-                warn!(
-                    "Could not lookup ring member amounts for CLSAG key image {}",
-                    hex::encode(&input.key_image[0..8])
-                );
-                return Err(MempoolError::InvalidTransaction(
-                    "Cannot verify CLSAG input amounts - no ring members found in UTXO set"
-                        .to_string(),
-                ));
+                // Fail closed even if this second lookup fails after shared
+                // validation: silently skipping a member changes fee inputs.
+                let utxo = ledger
+                    .get_utxo_by_target_key(&member.target_key)
+                    .map_err(|e| MempoolError::LedgerError(e.to_string()))?
+                    .ok_or_else(|| {
+                        MempoolError::InvalidTransaction(
+                            "Validated ring member no longer resolves to a UTXO".to_string(),
+                        )
+                    })?;
+                max_ring_amount = max_ring_amount.max(utxo.output.amount);
+                all_ring_tags.push((utxo.output.cluster_tags.clone(), utxo.output.amount));
+                ring_members.push((utxo.output.amount, utxo.created_at));
             }
 
             potential_input_sum = potential_input_sum
