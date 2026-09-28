@@ -10,6 +10,18 @@ The launch configuration pins the node and signer hashes, controller source file
 
 Setup has eight hours, at most 24 ordinary one-BTH grants spaced 15 minutes apart, and at most 64 bootstrap self-transfers. The first grant is not a proof of wallet spending. Bootstrap transactions split wallet outputs as eligible inputs become available. Setup must establish four mature outputs per wallet, production decoy availability, successful native four-input preparation probes, full rescan agreement and exact accounting. It then records immutable T0/end timestamps and automatically starts the 692-offer, 72-hour schedule. If these gates cannot be met, the run stops as incomplete.
 
+Input selection uses the largest-value eligible outputs in deterministic order.
+For a payment or four-input readiness probe, every ring must retain at least 19
+canonical, age-matched decoys after excluding **all selected real target keys**.
+The per-wallet inventory count describes individually eligible outputs; it does
+not establish that a four-input selection is feasible. Setup checks all eight
+complete selections before any probe and repeats that check after its full
+rescan, using the refreshed height. An insufficient pool waits within the
+original eight-hour deadline without signing or paying for redundant splits.
+This deliberately conservative policy does not search alternative input
+combinations if the largest-value prefix is infeasible. The native signer
+remains the final gate; unrelated signer failures still stop the run.
+
 No missed-slot replay or automatic transaction rebroadcast occurs. A crash after the submission marker retains the hash, inputs and fee reservation and reconciles by hash. A crash before the marker can make its first submission only after querying all five nodes and only within its original slot. Orphaned/partial prepared files cause a hold. Uncertain grant responses consume their funding slot.
 
 The public recovery stage restores a clean wallet profile and exercises controller exits after durable preparation and after recorded acceptance. The latter keeps acceptance evidence; an actually lost HTTP response is tested in the journal recovery tests and remains a hold during public operation. No public node outage, partition, miner change, CT activation, wallet application deployment or chain reset is performed.

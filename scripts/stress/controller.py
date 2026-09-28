@@ -402,6 +402,7 @@ class Controller:
     def spendable(self, wallet, height, amount=0, count=1):
         canonical = self.canonical_history()
         outputs = []
+        decoys = {}
         for output in self.unspent_setup_inputs(wallet, canonical):
             utxo = output['utxo']
             if height-utxo['created_at'] < 10:
@@ -415,6 +416,7 @@ class Controller:
             keys.discard(bytes(utxo['target_key']).hex())
             if len(keys) >= 19:
                 outputs.append(output)
+                decoys[output['id']] = keys
         outputs.sort(key=lambda u:u['utxo']['amount'],reverse=True)
         # Lottery history can reuse a target key. Distinct RPC IDs do not make
         # two independently spendable inputs when their key images coincide.
@@ -428,6 +430,12 @@ class Controller:
         if amount:
             selected = outputs[:count]
             if len(selected)<count or sum(o['utxo']['amount'] for o in selected) < amount+5_000_000_000:
+                return []
+            # Match the native signer: no selected real target may be a decoy
+            # in any ring. Keep the deterministic largest-value prefix; wait
+            # if it is infeasible rather than searching alternative input sets.
+            excluded = {bytes(o['utxo']['target_key']).hex() for o in selected}
+            if any(len(decoys[o['id']] - excluded) < 19 for o in selected):
                 return []
             return selected
         return outputs
@@ -694,8 +702,17 @@ class Controller:
         counts = [len(self.spendable(w,height)) for w in range(8)]
         self.j.set('inventory_counts',{'at':time.time(),'height':height,'mature_with_decoys':counts})
         if min(counts)>=4:
-            await self.sync(full=True)
+            selections = [self.spendable(w,height,10_000_000_000,4) for w in range(8)]
+            if not all(selections):
+                return
+            height = await self.sync(full=True)
             self.accounting()
+            # Recheck every complete selection at the refreshed height before
+            # creating any protected probe artifact. Insufficient inventory is
+            # a wait within the existing setup deadline, not a signer failure.
+            selections = [self.spendable(w,height,10_000_000_000,4) for w in range(8)]
+            if not all(selections):
+                return
             # Readiness probes must use the actual signer, including every wallet's
             # four-input shape. Probe artifacts remain protected and never submitted.
             fee_rate = await self.rpc.call(HOSTS[0],'fee_getRate')
@@ -703,9 +720,7 @@ class Controller:
                 probe = self.state/'probes'/('wallet-'+str(w)+'.bin')
                 if probe.exists():
                     raise Gate('setup probe already exists; operator review required')
-                selected = self.spendable(w,height,10_000_000_000,4)
-                if not selected:
-                    raise Gate('four-input readiness amount unavailable')
+                selected = selections[w]
                 await self.native({'operation':'prepare','wallet':self.wallets[w]['key'],'blocks':self.blocks,
                     'height':height,'selected':[o['id'] for o in selected],'spent':self.spent,'reserved':[],
                     'recipient':self.wallets[(w+1)%8]['address'],'allowed_recipients':[x['address'] for x in self.wallets],
