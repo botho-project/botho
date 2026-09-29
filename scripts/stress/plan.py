@@ -28,6 +28,9 @@ def pico(value, name):
 
 
 def expand(plan):
+    if plan.get("schema_version") == 2:
+        from discovery_plan import expand_discovery
+        return expand_discovery(plan)
     require(plan["schema_version"] == 1, "unsupported schema")
     require(plan["status"] == "design_only", "this tool supports design manifests only")
     require(plan["start_utc"] is None and plan["run_id"] is None,

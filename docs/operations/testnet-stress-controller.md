@@ -147,3 +147,142 @@ results must identify the new endpoints and effective quorum. Continuous mining
 does not establish idle-memory coverage; the existing observer/controller checks
 must actually observe mining stopped. No unrelated issue-closure requirement is
 introduced by this profile.
+
+## Opt-in discovery campaign (schema 2)
+
+`testnet-discovery-v2.json` replaces sparse endurance scheduling for **fresh,
+isolated** campaigns. It does not alter, migrate, resume, or reinterpret retained
+schema-1 journals. The purpose is finding failures under repeated work, mixed
+transaction shapes, restored wallets, and changing load. A nominal schedule is
+not a measured capacity result.
+
+| Hours after T0 | Work |
+| --- | --- |
+| 0–1 | 4 payments/minute; explicit 1-, 2-, and 4-input probes at 1x/2x/4x fees |
+| 1–24 | Continuous 4 payments/minute |
+| 24–30 | The one long idle window; monitoring and receipt reconciliation continue |
+| 30–42 | 12 payments/minute, with the final five minutes of each hour at 30/minute |
+| 42–48 | 4 payments/minute after an independent wallet restore check |
+| 48–72 | Repeat at 4 payments/minute, then final reconciliation |
+
+The default expands to **22,680 campaign offers**, plus **540 rehearsal offers**.
+A pinned integer seed chooses wallet order, recipients, amounts, and submission
+ingresses reproducibly. Three adjacent fee-tier offers share their amount;
+the first nine cover matched 1/2/4-input cohorts. Subsequent payments can combine
+up to four inputs. The selector searches at most 2,516 combinations among the
+largest sixteen canonical eligible outputs. It excludes the entire selected
+set from every ring and preserves the production ten-block age floor and 19
+decoys. Structured selection evidence distinguishes maturity, unavailable or
+reserved inputs, insufficient decoys, and value/complete-set failures. The seed,
+intent, selected inputs, native artifact, and failure transition preserve a
+counterexample for replay **offline**, never resubmission.
+
+Phase boundaries allow up to 120 seconds for the preceding phase's natural
+inflight tail to reconcile. Offers keep their original times and deadlines;
+there is no catch-up or clock shift. Missed offers, accounting differences,
+unresolved spends, node identity changes, and disagreeing receipts still prevent
+escalation. Existing journal crash/ambiguous-submit checks apply to both profiles.
+V2 restores a wallet but does not automatically kill validators or restart a
+controller; those fault semantics continue to have offline fault-injection tests.
+
+### Inventory and short rehearsal prerequisites
+
+Use the existing explicit `deploy.py stage --profile ... --output ...` path,
+with the new plan file, `isolated_discovery: true`, and `opening_balances` containing
+one exact integer balance per wallet. Provision **32 separate isolated wallets**
+and their funds before launch. The controller scans the real chain, verifies the
+pinned opening balances, includes them in exact accounting, and never invokes
+the public faucet or manufactures funding outputs. All campaign packages,
+including the new Python modules, are pinned by staging. Install a signer that
+implements #1474's `fee_multiplier`, `baseline_fee`, and actual signed-fee
+response before attempting this profile.
+
+Every wallet needs at least sixteen mature, independently spendable canonical
+outputs and a feasible four-input selection with **four spare decoys in every
+ring after excluding all four real inputs**. This is initial headroom, not a
+claim that a finite inventory can sustain 72 hours. Funding distribution must
+also cover amounts plus the maximum signed fee; large balances alone do not
+establish suitable denominations or age-band liquidity.
+
+Before T0, the controller actually signs, submits, and reconciles 18 minutes at
+30 offers/minute, followed by two minutes with no new offers and at most five
+additional minutes of bounded receipt drain. All 540 offers must reconcile;
+the controller then performs a full rescan, exact accounting, fresh fee reads
+from all five nodes, and the inventory/headroom checks again. A failed rehearsal
+records `generator_limited` and cannot activate a 72-hour clock. Signed artifacts
+and reservations remain preserved. Setup still has an absolute eight-hour limit,
+and the 72-hour run plus final drain must fit the original infrastructure cutoff.
+
+This synchronous, subprocess-based scanner/signer has **not been qualified at
+30/minute on the dedicated hosts**. RPC quotas include all observation, scan,
+receipt, and submission calls, using at most half each endpoint's advertised
+quota. The old default of 50 calls/minute can therefore be the rehearsal's
+limiting factor. A rehearsal failure is useful evidence about the generator,
+inventory, or configured quotas; it is not evidence of network saturation.
+
+Profile ceilings are enforced in expansion, admission, durable preparation,
+submission, and RPC reservation: 64 wallets/inflight, 128 queued offers,
+60 ordinary offers/minute, 100,000 signed attempts, 600 RPC calls per endpoint
+per minute, 256 KiB per signed artifact, and 32 MiB wire bytes/minute. Actual
+profile limits can be lower. Rehearsal consumes the same immutable write and fee
+budgets; the planner reserves the worst-case fee for every offer. The shipped
+profile caps individual fees at 1,000,000,000 picocredits, total fees at
+100,000,000,000,000, and opening principal at 200,000,000,000,000.
+Increasing workload requires a separately pinned profile, sufficient isolated
+infrastructure and wallet inventory, and a successful rehearsal at its peak rate.
+It cannot retrofit a stopped campaign or raise an existing journal's limits.
+
+### Fee evidence and honest coverage
+
+The signer receives a 1x, 2x, or 4x multiplier **after** the production minimum
+fee is applied. Reports distinguish the baseline, multiplier, actual signed and
+paid fee (which can absorb dust), and raw serialized-byte density. Raw wire
+fee/byte is **not** production mempool priority density: production also uses
+estimated size and the cluster factor. The controller quotes the actual chosen
+ingress before signing, observes `fee_getRate` on all five nodes, and journals
+per-block transaction counts/hashes and bounded observation gaps. Receipts verify
+the signed fee, recipient, change, and spent inputs on every node.
+
+These are separate claims:
+
+- Signed fee tiers require reconciled matched input/output-shape cohorts.
+- Dynamic activation requires observed 3-second slots, EMA fullness above 75%,
+  active adjustment, and a quote above its floor.
+- Quote recovery requires a later block on the **same node**, reduced fullness,
+  and the baseline quote. One hot node and a different cold node cannot pass it.
+- Priority remains **not exercised** without a trace proving that competing
+  transactions were available in the same proposal opportunity. Different fees
+  or different confirmation latencies do not establish priority.
+
+Default production capacity is 100 transactions/slot. Sustaining >75% fullness
+at three seconds requires roughly **25+ transactions/second**. Even this
+controller's 60/minute hard ceiling is insufficient. Raising the JSON rate does
+not solve it: a separately reviewed, parallel generator and enough mature
+age-matched inventory, proposer-side contention/selection instrumentation, RPC
+capacity, and resource headroom are required. Production integration coverage
+in #1476 complements these observations but cannot establish live coverage.
+Fee quotes can also rise without changing signed fees because `MIN_TX_FEE`
+(100,000,000 picocredits) masks the change.
+
+Reports separate workload delivery, discovery coverage, and node health. If all
+22,680 payments finish but required production fee behavior is unexercised, the
+workload delivery says complete while overall coverage and run status remain
+**incomplete**, with the missing behavior explained. A healthy fleet or a larger
+signed fee never silently passes unexercised fee tests. A new report derives
+planned/offered/submitted/reconciled/skipped counts from the actual manifest and
+journal, including separate rehearsal results; it does not use the legacy 692
+constant.
+
+Run all offline checks with:
+
+```sh
+python3 -m unittest discover -s scripts/stress -p 'test_*.py'
+python3 scripts/stress/plan.py --plan scripts/stress/testnet-discovery-v2.json
+```
+
+CI runs this entire suite. It includes sparse-decoy/value starvation replay,
+complete-selection exclusion, input reuse and crash-marker faults, quota and
+fee-budget overruns, skipped-offer and inflight phase boundaries, seeded
+reproducibility, stale/missing fee evidence, and one-picocredit accounting faults.
+No live rehearsal, fee activation, or new 72-hour campaign is established by
+these offline checks.

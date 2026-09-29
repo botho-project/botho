@@ -8,7 +8,6 @@ import json
 import os
 from pathlib import Path
 import re
-import resource
 import shutil
 import subprocess
 import time
@@ -29,7 +28,7 @@ class Controller:
             pinned_file(self.config.get('known_hosts'), self.config.get('known_hosts_sha256'), 'observer known_hosts')
         if 'hosts_file' in self.config or 'hosts_sha256' in self.config:
             pinned_file(self.config.get('hosts_file'), self.config.get('hosts_sha256'), 'hosts file')
-        self.j = Journal(state/'journal.sqlite')
+        self.j = Journal(state/'journal.sqlite', limits=self.plan['limits'] if self.plan.get('schema_version') == 2 else None)
         if self.j.get('plan_digest',digest(self.plan)) != digest(self.plan):
             raise Gate('manifest changed after initialization')
         self.j.set('plan_digest',digest(self.plan))
@@ -46,8 +45,9 @@ class Controller:
         self.fresh = 0
         self.blocks = json.loads((state/'blocks.json').read_text()) if (state/'blocks.json').exists() else []
         self.wallets = self.config['wallets']
-        if len(self.wallets) != 8 or len({w['address'] for w in self.wallets}) != 8:
-            raise Gate('eight distinct dedicated wallets required')
+        wallet_count = self.plan['wallets']['count'] if self.plan.get('schema_version') == 2 else 8
+        if len(self.wallets) != wallet_count or len({w['address'] for w in self.wallets}) != wallet_count:
+            raise Gate('manifest requires distinct dedicated wallets')
         self.inventory = [[] for _ in self.wallets]
         # Never trust persisted wallet inventory after a process restart.
         self.inventory_initialized = False
@@ -227,7 +227,7 @@ class Controller:
                             "SELECT COUNT(*) FROM requests WHERE host=? AND at>?",
                             (host, now - 60),
                         ).fetchone()[0]
-                        limit = min(50, self.j.get("quota:" + host, 100) // 2)
+                        limit = min(self.j.limits["max_rpc_per_endpoint_per_minute"], self.j.get("quota:" + host, 100) // 2)
                         if count >= max(1, limit - 10):
                             raise Quota("scan reserves monitoring headroom")
                         return await self.rpc.call(
@@ -441,39 +441,13 @@ class Controller:
         return outputs
 
     def report(self):
-        rows = self.j.rows()
-        counts = {}
-        for row in rows:
-            label = row['kind']+':'+row['state']
-            counts[label] = counts.get(label,0)+1
-        complete = [r for r in rows if r['state']=='reconciled' and r['submitted']]
-        def latency(field):
-            values = sorted(r['finished']-r[field] for r in complete)
-            if not values:
-                return {'count':0}
-            return {'count':len(values),'median':values[len(values)//2],
-                    'p95':values[min(len(values)-1,int(len(values)*.95))],'max':values[-1]}
-        report = {'at':time.time(),'run_id':self.config['run_id'],'status':self.j.get('status'),
-            'reason':self.j.get('reason'),'setup_start':self.j.get('setup_start'),
-            'start':self.j.get('start'),'end':self.j.get('end'),'plan_sha256':digest(self.plan),
-            'counts':counts,'submitted_to_reconciled_seconds':latency('submitted'),
-            'nominal_campaign_offers':692,
-            'targets':list(self.targets.values()) if hasattr(self,'targets') else None,
-            'infrastructure_end':self.config.get('infrastructure_end'),
-            'not_yet_offered':692-sum(r['kind']=='campaign' for r in rows),
-            'offered_to_reconciled_seconds':latency('offered'),
-            'signed_fees':sum(r['fee'] for r in rows if r['prepared']),
-            'faucet_fees':sum(json.loads(r['info']).get('faucet_fee',0) for r in rows if r['kind']=='funding'),
-            'accounting':self.j.get('accounting'),'fleet':self.j.get('fleet_latest'),
-            'resources':{h:self.j.get('latest:'+h) for h in HOSTS},
-            'controller':{'max_rss':resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
-                          'user_cpu':resource.getrusage(resource.RUSAGE_SELF).ru_utime},
-            'coverage':{'web':False,'snap':False,'confidential_amounts':False,'public_node_faults':False}}
-        atomic(self.state/'report.json',report)
-        self.j.set('report_at',time.time())
-        return report
+        from reporting import controller_report
+        return controller_report(self)
 
-    async def prepare(self, identifier, count, phase_limit, burst=False, crash=None):
+    def intent_deadline(self, row):
+        return row['offered']+self.j.limits['start_slot_grace_seconds']
+
+    async def prepare(self, identifier, count, phase_limit, burst=False, crash=None, fee_multiplier=1, cohort=None):
         row = self.j.intent(identifier)
         self.gate()
         if any(r['sender']==row['sender'] for r in self.j.pending()):
@@ -481,32 +455,41 @@ class Controller:
         height = await self.sync()
         selected = self.spendable(row['sender'],height,row['amount'],count)
         if not selected:
-            self.j.event(identifier,'inventory_wait',{'wallet':row['sender'],'height':height})
+            self.j.event(identifier,'inventory_wait',{'wallet':row['sender'],'height':height,
+                **self.j.get('selection_latest',{})})
             return False
         self.gate()
-        if time.time() > row['offered']+120:
+        if time.time() > self.intent_deadline(row):
             return False
         self.j.transition(identifier,'eligible')
         charged=self.j.db.execute('SELECT COALESCE(SUM(fee),0) FROM intents WHERE prepared IS NOT NULL').fetchone()[0]
-        if charged+5_000_000_000>500_000_000_000:
+        if charged+self.j.limits['max_single_signed_fee_picocredits']>self.j.limits['max_signed_fee_picocredits']:
             raise Gate('insufficient remaining fee budget to prepare')
         writes=self.j.db.execute('SELECT COUNT(*) FROM intents WHERE prepared IS NOT NULL OR submitted IS NOT NULL').fetchone()[0]
-        if writes>=800:
+        if writes>=self.j.limits['max_unique_chain_writes']:
             raise Gate('chain write budget reached before signing')
         artifact = self.state/'artifacts'/(identifier+'.bin')
         if artifact.exists() or artifact.with_suffix('.partial').exists():
             raise Gate('orphaned prepared artifact needs reconciliation: '+identifier)
-        fee_rate = await self.rpc.call(HOSTS[0],'fee_getRate')
+        ingress = HOSTS[0]
+        if self.plan.get('schema_version') == 2:
+            ingress = HOSTS[int(hashlib.sha256((str(self.plan['seed'])+identifier).encode()).hexdigest(),16)%len(HOSTS)]
+        fee_rate = await self.rpc.call(ingress,'fee_getRate')
         info = await self.native({'operation':'prepare','wallet':self.wallets[row['sender']]['key'],
             'blocks':self.blocks,'height':height,'selected':[o['id'] for o in selected],
             'spent':self.spent,'reserved':[r[0] for r in self.j.db.execute('SELECT input FROM reservations')],
             'recipient':self.wallets[row['recipient']]['address'],
             'allowed_recipients':[w['address'] for w in self.wallets],
-            'amount':row['amount'],'base_rate':int(fee_rate['baseRate']),'artifact':str(artifact)})
+            'amount':row['amount'],'base_rate':int(fee_rate['baseRate']),'artifact':str(artifact),
+            **({'fee_multiplier':fee_multiplier} if self.plan.get('schema_version') == 2 else {})})
+        if self.plan.get('schema_version') == 2:
+            from fee_evidence import signed_fee_evidence
+            info.update(fee_evidence=signed_fee_evidence(info, fee_multiplier), cohort=cohort,
+                        fee_quote=fee_rate, ingress_role=ingress)
         info.update(burst=burst,phase_limit=phase_limit,crash=crash,
                     scan_height=height,prepared_at=time.time())
         self.gate()
-        self.j.prepare(identifier,info,phase_limit,row['offered']+120)
+        self.j.prepare(identifier,info,phase_limit,self.intent_deadline(row))
         if crash=='prepared' and not self.j.get('crash:prepared'):
             self.j.set('crash:prepared',identifier)
             self.report()
@@ -523,14 +506,14 @@ class Controller:
         for key in ('hash','fee','bytes','outputs','key_images'):
             if inspected[key] != info[key]:
                 raise Gate('saved artifact does not match durable journal')
-        if time.time() >= row['offered']+120:
+        if time.time() >= self.intent_deadline(row):
             self.j.transition(identifier,'expired','prepared intent exceeded original slot',finished=time.time())
             # Retain the signed input reservations: a signed artifact still exists.
             self.halt('prepared intent expired; review reserved inputs')
             return
-        host = HOSTS[(sum(identifier.encode()) % len(HOSTS))]
+        host = info.get('ingress_role', HOSTS[(sum(identifier.encode()) % len(HOSTS))])
         wire = len(json.dumps({'jsonrpc':'2.0','id':1404,'method':'tx_submit','params':{'tx_hex':data.hex()}}).encode())
-        self.j.begin_submit(identifier,host,wire,info['burst'],row['offered']+120)
+        self.j.begin_submit(identifier,host,wire,info['burst'],self.intent_deadline(row))
         self.j.set('last_write',time.time())
         if info.get('crash')=='submitting' and not self.j.get('crash:submitting'):
             # Crash after the durable marker. No retry is possible on recovery;
@@ -555,13 +538,13 @@ class Controller:
     async def fund(self, identifier):
         row = self.j.intent(identifier)
         self.gate()
-        if row['state'] != 'planned' or time.time()>row['offered']+120:
+        if row['state'] != 'planned' or time.time()>self.intent_deadline(row):
             return
         faucet = await self.rpc.call('faucet.botho.io','faucet_getStatus')
         if not faucet.get('enabled') or int(faucet.get('amountPerRequest',0)) != 1_000_000_000_000:
             raise Gate('unexpected faucet configuration')
         self.gate()
-        if time.time()>row['offered']+120:
+        if time.time()>self.intent_deadline(row):
             return
         with self.j.transaction():
             rows = self.j.rows("kind='funding' AND submitted IS NOT NULL")
@@ -668,9 +651,10 @@ class Controller:
                    for b in self.blocks for o in b['outputs'] if o.get('lottery')}
         awards = sum(lottery.get((bytes(o['utxo']['tx_hash']).hex(),o['utxo']['output_index']),0)
                      for owned in self.inventory for o in owned)
-        report = {'at':time.time(),'opening':0,'grants':grants,'lottery_receipts':awards,
+        opening = self.j.get('opening_balance',0)
+        report = {'at':time.time(),'opening':opening,'grants':grants,'lottery_receipts':awards,
                   'balances':balances,'ending':sum(balances),'signed_fees':fees,
-                  'difference':grants+awards-sum(balances)-fees}
+                  'difference':opening+grants+awards-self.j.get('opening_lottery',0)-sum(balances)-fees}
         self.j.set('accounting',report)
         if report['difference'] != 0:
             raise Gate('exact integer accounting mismatch')
@@ -910,8 +894,8 @@ class Controller:
             if self.fresh and not self.j.pending():
                 await self.sync(full=True, draining=True)
                 self.accounting()
-            rows=self.j.rows("kind='campaign'")
-            success=len(rows)==692 and all(r['state']=='reconciled' for r in rows)
+            from reporting import workload_complete
+            success=workload_complete(self.j,self.events,self.plan['phases'])
             self.j.set('status','complete' if success else 'incomplete')
         finally:
             self.closed=True
@@ -929,7 +913,11 @@ def main():
     os.umask(0o077)
     with (args.state/'controller.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        controller=Controller(args.state)
+        controller_type = Controller
+        if json.loads((args.state/'plan.json').read_text()).get('schema_version') == 2:
+            from discovery import DiscoveryController
+            controller_type = DiscoveryController
+        controller=controller_type(args.state)
         if args.mode=='report':
             print(json.dumps(controller.report(),indent=2))
         else:

@@ -1,0 +1,24 @@
+name: Stress controller
+on:
+  pull_request:
+    paths:
+      - 'scripts/stress/**'
+      - '.github/workflows/stress-controller.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/stress/**'
+      - '.github/workflows/stress-controller.yml'
+permissions:
+  contents: read
+jobs:
+  controller:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python3 -m unittest discover -s scripts/stress -p 'test_*.py'
+      - run: python3 scripts/stress/plan.py --plan scripts/stress/testnet-discovery-v2.json

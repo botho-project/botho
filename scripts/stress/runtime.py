@@ -107,7 +107,9 @@ def digest(value):
 
 
 class Journal:
-    def __init__(self, path, clock=time.time):
+    def __init__(self, path, clock=time.time, limits=None):
+        from bounds import LEGACY, checked_limits
+        self.limits = checked_limits(limits) if limits is not None else dict(LEGACY)
         self.clock = clock
         self.db = sqlite3.connect(path, isolation_level=None)
         self.db.row_factory = sqlite3.Row
@@ -129,6 +131,15 @@ class Journal:
                 method TEXT NOT NULL, bytes INTEGER NOT NULL, latency REAL, status TEXT);
             CREATE INDEX IF NOT EXISTS requests_window ON requests(host,at);
         ''')
+        if limits is not None:
+            existing = self.get('limits_digest')
+            if existing is None and (self.db.execute('SELECT COUNT(*) FROM intents').fetchone()[0] or self.get('plan_digest') is not None):
+                self.db.close()
+                raise Gate('cannot migrate historical journal to new limits')
+            if existing not in (None, digest(self.limits)):
+                self.db.close()
+                raise Gate('journal limits changed')
+            self.set('limits_digest', digest(self.limits))
 
     def get(self, key, default=None):
         row = self.db.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()
@@ -183,18 +194,20 @@ class Journal:
             if intent['state'] != 'eligible' or self.clock() >= deadline:
                 raise Gate('preparation expired or intent already consumed')
             pending = self.pending()
-            if len(pending) >= min(8, phase_limit):
+            if len(pending) >= min(self.limits['max_inflight'], phase_limit):
                 raise Gate('inflight limit')
             if any(r['sender'] == intent['sender'] for r in pending if r['sender'] is not None):
                 raise Gate('wallet already reserved')
             attempted = self.db.execute("SELECT COUNT(*) FROM intents WHERE prepared IS NOT NULL OR submitted IS NOT NULL").fetchone()[0]
-            if attempted >= 800:
+            if attempted >= self.limits['max_unique_chain_writes']:
                 raise Gate('chain write budget')
             fees = self.db.execute('SELECT COALESCE(SUM(fee),0) FROM intents WHERE prepared IS NOT NULL').fetchone()[0]
-            if not 0 < artifact['fee'] <= 5_000_000_000 or fees + artifact['fee'] > 500_000_000_000:
+            if not 0 < artifact['fee'] <= self.limits['max_single_signed_fee_picocredits'] or fees + artifact['fee'] > self.limits['max_signed_fee_picocredits']:
                 raise Gate('signed fee budget')
-            if artifact['bytes'] > 262144:
+            if artifact['bytes'] > self.limits['max_signed_transaction_bytes']:
                 raise Gate('signed byte budget')
+            if not artifact['selected'] or len({item['id'] for item in artifact['selected']}) != len(artifact['selected']):
+                raise Gate('duplicate or missing selected inputs')
             for item in artifact['selected']:
                 self.db.execute('INSERT INTO reservations VALUES(?,?,?)',
                                 (item['id'], identifier, intent['sender']))
@@ -209,10 +222,10 @@ class Journal:
             if self.clock() >= deadline:
                 raise Gate('submission deadline')
             recent = self.rows('submitted > ?', (self.clock()-60,))
-            if len(recent) >= (8 if burst else 4):
+            if len(recent) >= (self.limits['max_burst_size'] if burst else self.limits['max_normal_submissions_per_minute']):
                 raise Quota('submission rate budget')
             recent_bytes = sum(json.loads(r['info']).get('wire_bytes', 0) for r in recent)
-            if recent_bytes + wire_bytes > 2097152:
+            if recent_bytes + wire_bytes > self.limits['max_wire_submission_bytes_per_minute']:
                 raise Quota('wire byte budget')
             info = json.loads(row['info'])
             info['wire_bytes'] = wire_bytes
@@ -245,7 +258,7 @@ class Rpc:
             raise Quota('endpoint Retry-After')
         count = self.journal.db.execute('SELECT COUNT(*) FROM requests WHERE host=? AND at>?',
                                         (host, now-60)).fetchone()[0]
-        if count >= min(50, self.journal.get('quota:'+host, 100)//2):
+        if count >= min(self.journal.limits['max_rpc_per_endpoint_per_minute'], self.journal.get('quota:'+host, 100)//2):
             raise Quota('shared endpoint request budget')
         return self.journal.db.execute('INSERT INTO requests(at,host,method,bytes) VALUES(?,?,?,?)',
                                       (now, host, method, bytes_count)).lastrowid
