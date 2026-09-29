@@ -43,15 +43,35 @@ class DiscoveryTests(unittest.TestCase):
         from discovery import rehearsal_result
 
         rows = [
-            {"state": "reconciled", "submitted": 101 + i * 2, "finished": 103 + i * 2}
+            {
+                "state": "reconciled",
+                "offered": 100 + i * 2,
+                "submitted": 101 + i * 2,
+                "finished": 103 + i * 2,
+            }
             for i in range(30)
         ]
-        self.assertEqual(rehearsal_result(rows, 30, 60)["status"], "passed")
+        self.assertEqual(
+            rehearsal_result(
+                rows, 30, 60, start=100, cutoff=280, receipt_deadline=340, now=340
+            )["status"],
+            "passed",
+        )
         rows[4]["state"] = "skipped"
-        self.assertEqual(rehearsal_result(rows, 30, 60)["status"], "generator_limited")
+        self.assertEqual(
+            rehearsal_result(
+                rows, 30, 60, start=100, cutoff=280, receipt_deadline=340, now=340
+            )["status"],
+            "generator_limited",
+        )
         rows[4]["state"] = "reconciled"
         rows[5]["submitted"] = None
-        self.assertEqual(rehearsal_result(rows, 30, 60)["status"], "generator_limited")
+        self.assertEqual(
+            rehearsal_result(
+                rows, 30, 60, start=100, cutoff=280, receipt_deadline=340, now=340
+            )["status"],
+            "generator_limited",
+        )
 
     def test_missing_or_mutated_fee_evidence_does_not_pass(self):
         from fee_evidence import signed_fee_evidence, summarize_fees

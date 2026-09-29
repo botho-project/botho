@@ -209,7 +209,21 @@ Before T0, the controller actually signs, submits, and reconciles 18 minutes at
 additional minutes of bounded receipt drain. All 540 offers must reconcile;
 the controller then performs a full rescan, exact accounting, fresh fee reads
 from all five nodes, and the inventory/headroom checks again. A failed rehearsal
-records `generator_limited` and cannot activate a 72-hour clock. Signed artifacts
+records `generator_limited` and cannot activate a 72-hour clock. Calibration
+checks the original offer timestamps and finite, ordered submission/receipt
+records. Each submission must follow its offer by at most four seconds at the
+default two-second cadence (in general, twice the interval, bounded to 1–5
+seconds and never beyond offer grace). Every rolling approximately 60-second
+submission span and the whole trial must match their nominal span within **one
+second** of absolute jitter. This tolerance accommodates small RPC/scheduler
+jitter; it cannot accumulate into a percentage throughput allowance. Reports
+calculate achieved rate from actual first/last submission times and provide
+rolling-window rates, maximum offer lag, cutoffs, and specific failure reasons.
+A 2.2-second generator is measured at 27.27/minute and rejected even if every
+receipt eventually arrives. Catch-up batches, changed offer times, non-finite
+or future timestamps, and submissions beyond the immutable cutoff also fail.
+Receipt drain time never enters the achieved generation-rate denominator.
+Signed artifacts
 and reservations remain preserved. Setup still has an absolute eight-hour limit,
 and the 72-hour run plus final drain must fit the original infrastructure cutoff.
 

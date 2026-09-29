@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import math
 import time
 from controller import Controller
 from runtime import Gate, HOSTS, Quota, atomic, digest
@@ -9,24 +10,97 @@ from selection import choose
 from fee_evidence import quote_evidence, summarize_fees
 
 
-def rehearsal_result(rows, expected, duration):
-    submitted = sum(r.get("submitted") is not None for r in rows)
+def rehearsal_result(
+    rows, expected, duration, *, start, cutoff, receipt_deadline, now, offer_grace=120
+):
+    """Validate the observed cadence against the original immutable offer clock.
+
+    One second of span jitter is absolute, not a throughput percentage: a long
+    trial cannot accumulate slippage. Startup lag is bounded separately. Every
+    rolling ~60-second span and the whole trial must sustain the offered cadence;
+    a late batch cannot use confirmation drain to masquerade as peak generation.
+    """
+
+    def timestamp(value):
+        return type(value) in (int, float) and math.isfinite(value)
+
+    interval = duration / expected
+    span_jitter = 1.0
+    max_lag = min(offer_grace, max(1.0, min(5.0, 2 * interval)))
+    submitted = sum(timestamp(r.get("submitted")) for r in rows)
     reconciled = sum(
         r["state"] == "reconciled"
-        and r.get("submitted") is not None
-        and r.get("finished") is not None
+        and timestamp(r.get("submitted"))
+        and timestamp(r.get("finished"))
         for r in rows
     )
-    passed = len(rows) == expected and reconciled == expected
+    failures = set()
+    if len(rows) != expected or reconciled != expected:
+        failures.add("missing_reconciled_offers")
+    valid = all(
+        timestamp(r.get(k)) for r in rows for k in ("offered", "submitted", "finished")
+    )
+    actual_rate, actual_span, maximum_lag = None, None, None
+    rolling = {"count": 0, "min_per_minute": None, "max_per_minute": None}
+    if not valid or not rows:
+        failures.add("missing_or_invalid_timestamps")
+    else:
+        ordered = sorted(rows, key=lambda r: r["offered"])
+        times = [r["submitted"] for r in ordered]
+        lags = [r["submitted"] - r["offered"] for r in ordered]
+        maximum_lag = max(lags)
+        for i, row in enumerate(ordered):
+            if abs(row["offered"] - (start + i * interval)) > 1e-6:
+                failures.add("offer_clock_changed")
+            if not 0 <= lags[i] <= max_lag:
+                failures.add("submission_offer_lag")
+            if not row["submitted"] < min(cutoff, row["offered"] + offer_grace):
+                failures.add("submission_cutoff")
+            if not row["submitted"] <= row["finished"] <= min(receipt_deadline, now):
+                failures.add("receipt_timestamps")
+        if len(times) > 1:
+            actual_span = times[-1] - times[0]
+            if actual_span > 0:
+                actual_rate = (len(times) - 1) * 60 / actual_span
+            if any(b <= a for a, b in zip(times, times[1:])):
+                failures.add("non_monotonic_submissions")
+            nominal_span = (expected - 1) * interval
+            if abs(actual_span - nominal_span) > span_jitter:
+                failures.add("overall_cadence")
+            step = min(len(times) - 1, max(1, math.ceil(60 / interval)))
+            spans = [times[i + step] - times[i] for i in range(len(times) - step)]
+            if any(abs(span - step * interval) > span_jitter for span in spans):
+                failures.add("rolling_cadence")
+            rates = [step * 60 / span for span in spans if span > 0]
+            rolling = {
+                "count": len(spans),
+                "intervals_per_window": step,
+                "nominal_span_seconds": step * interval,
+                "min_per_minute": min(rates) if rates else None,
+                "max_per_minute": max(rates) if rates else None,
+            }
+        else:
+            failures.add("insufficient_submission_span")
     return {
-        "status": "passed" if passed else "generator_limited",
+        "status": "generator_limited" if failures else "passed",
+        "failures": sorted(failures),
         "offered": len(rows),
         "expected": expected,
         "submitted": submitted,
         "reconciled": reconciled,
         "offered_per_minute": expected * 60 / duration,
-        "submitted_per_minute": submitted * 60 / duration,
-        "coverage": "rehearsal delivery only; not network capacity or 72-hour sustainability",
+        "submitted_per_minute": actual_rate,
+        "submission_span_seconds": actual_span,
+        "max_offer_lag_seconds": maximum_lag,
+        "rolling_windows": rolling,
+        "timing_tolerance": {
+            "span_jitter_seconds": span_jitter,
+            "max_offer_lag_seconds": max_lag,
+        },
+        "offer_start": start,
+        "submission_cutoff": cutoff,
+        "receipt_deadline": receipt_deadline,
+        "coverage": "observed rehearsal delivery/cadence only; not network capacity or 72-hour sustainability",
     }
 
 
@@ -222,7 +296,18 @@ class DiscoveryController(Controller):
             and now < start + settings["duration_seconds"] + settings["drain_seconds"]
         ):
             return
-        result = rehearsal_result(self.j.rows("kind='rehearsal'"), total, offer_seconds)
+        result = rehearsal_result(
+            self.j.rows("kind='rehearsal'"),
+            total,
+            offer_seconds,
+            start=start,
+            cutoff=start + settings["duration_seconds"],
+            receipt_deadline=start
+            + settings["duration_seconds"]
+            + settings["drain_seconds"],
+            now=time.time(),
+            offer_grace=self.j.limits["start_slot_grace_seconds"],
+        )
         self.j.set("rehearsal_result", result)
         latest = self.j.get("fee_latest", {})
         if set(latest) != set(HOSTS) or any(
