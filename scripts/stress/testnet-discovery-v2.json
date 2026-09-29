@@ -1,0 +1,327 @@
+{
+  "schema_version": 2,
+  "status": "design_only",
+  "run_id": null,
+  "start_utc": null,
+  "duration_hours": 72,
+  "setup_deadline_hours": 8,
+  "drain_minutes": 30,
+  "node_commit": "6dbcb92463214694f3122a05c9c48986d4f4f1b7",
+  "network": "botho-testnet",
+  "genesis": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df",
+  "protocol": "6.0.0",
+  "endpoints": [
+    "https://n1.discovery.internal/rpc",
+    "https://n2.discovery.internal/rpc",
+    "https://n3.discovery.internal/rpc",
+    "https://n4.discovery.internal/rpc",
+    "https://n5.discovery.internal/rpc"
+  ],
+  "wallets": {
+    "count": 32,
+    "min_mature_utxos_per_wallet": 16,
+    "min_input_age_blocks": 10,
+    "max_inflight_per_wallet": 1,
+    "transfer_amounts_picocredits": [
+      "1000000000",
+      "3000000000",
+      "10000000000"
+    ],
+    "max_payment_inputs": 4,
+    "decoy_headroom": 4
+  },
+  "funding": {
+    "max_grants": 0,
+    "max_grants_per_wallet_24h": 3,
+    "grant_interval_seconds": 900,
+    "grant_picocredits": "1000000000000",
+    "max_principal_picocredits": "200000000000000",
+    "max_bootstrap_transfers": 0,
+    "faucet_fees": "record_separately; faucet_request cannot impose a caller fee limit",
+    "mode": "prefunded_isolated"
+  },
+  "limits": {
+    "max_unique_chain_writes": 30000,
+    "max_signed_fee_picocredits": "100000000000000",
+    "max_single_signed_fee_picocredits": "1000000000",
+    "max_inflight": 32,
+    "max_normal_submissions_per_minute": 30,
+    "max_burst_size": 32,
+    "max_rpc_per_endpoint_per_minute": 300,
+    "max_automatic_rebroadcasts": 0,
+    "start_slot_grace_seconds": 120,
+    "max_queued_intents": 64,
+    "max_signed_transaction_bytes": 262144,
+    "max_wire_submission_bytes_per_minute": 16777216
+  },
+  "observation": {
+    "idle_local_interval_seconds": 60,
+    "active_local_interval_seconds": 5,
+    "active_tail_seconds": 300,
+    "fleet_status_interval_seconds": 15,
+    "transaction_poll_interval_seconds": 30,
+    "max_rpc_poll_concurrency_per_endpoint": 2,
+    "max_observation_staleness_seconds": 60,
+    "summary_every_hours": 6,
+    "publish_mnemonics_or_secret_keys": false
+  },
+  "breakers": {
+    "confirmation_pause_seconds": 300,
+    "unresolved_stop_seconds": 900,
+    "unsynced_pause_seconds": 120,
+    "unexpected_node_restart": "stop",
+    "confirmed_accounting_mismatch": "stop",
+    "conflicting_finalized_block_hash": "stop_and_verify",
+    "network_or_build_change": "stop",
+    "min_mem_available_percent": 15,
+    "min_mem_available_mib": 256,
+    "resource_low_samples": 2,
+    "max_process_swap_mib": 64,
+    "swap_duration_seconds": 120,
+    "min_disk_available_percent": 20,
+    "min_disk_available_gib": 2,
+    "idle_rss_growth_mib": 64,
+    "idle_rss_growth_percent": 20,
+    "idle_rss_growth_cycles": 3,
+    "breaker_recovery": "explicit_resume; no automatic catch_up"
+  },
+  "faults": {
+    "public_automatic_node_stops": false,
+    "public_miner_changes": false,
+    "public_partitions": false,
+    "public_disk_faults": false,
+    "invalid_transaction_destination": "isolated_cluster_only",
+    "operator_recovery_drill": "disabled_until_quorum_plan_and_explicit_activation"
+  },
+  "phases": [
+    {
+      "id": "correctness",
+      "start_hour": 0,
+      "end_hour": 1,
+      "max_inflight": 32,
+      "gate": "previous_phase_reconciled_and_exact_accounting",
+      "segments": [
+        {
+          "start_hour": 0,
+          "count": 240,
+          "interval_seconds": 15,
+          "scenario": "correctness"
+        }
+      ]
+    },
+    {
+      "id": "sustained",
+      "start_hour": 1,
+      "end_hour": 24,
+      "max_inflight": 32,
+      "gate": "previous_phase_reconciled_and_exact_accounting",
+      "segments": [
+        {
+          "start_hour": 1,
+          "count": 5520,
+          "interval_seconds": 15,
+          "scenario": "sustained"
+        }
+      ]
+    },
+    {
+      "id": "idle",
+      "start_hour": 24,
+      "end_hour": 30,
+      "max_inflight": 32,
+      "gate": "previous_phase_reconciled_and_exact_accounting",
+      "segments": []
+    },
+    {
+      "id": "ramp",
+      "start_hour": 30,
+      "end_hour": 42,
+      "max_inflight": 32,
+      "gate": "previous_phase_reconciled_and_exact_accounting",
+      "segments": [
+        {
+          "start_hour": 30,
+          "count": 660,
+          "interval_seconds": 5,
+          "scenario": "ramp"
+        },
+        {
+          "start_hour": 30.916666666666668,
+          "count": 150,
+          "interval_seconds": 2,
+          "scenario": "burst"
+        },
+        {
+          "start_hour": 31,
+          "count": 660,
+          "interval_seconds": 5,
+          "scenario": "ramp"
+        },
+        {
+          "start_hour": 31.916666666666668,
+          "count": 150,
+          "interval_seconds": 2,
+          "scenario": "burst"
+        },
+        {
+          "start_hour": 32,
+          "count": 660,
+          "interval_seconds": 5,
+          "scenario": "ramp"
+        },
+        {
+          "start_hour": 32.916666666666664,
+          "count": 150,
+          "interval_seconds": 2,
+          "scenario": "burst"
+        },
+        {
+          "start_hour": 33,
+          "count": 660,
+          "interval_seconds": 5,
+          "scenario": "ramp"
+        },
+        {
+          "start_hour": 33.916666666666664,
+          "count": 150,
+          "interval_seconds": 2,
+          "scenario": "burst"
+        },
+        {
+          "start_hour": 34,
+          "count": 660,
+          "interval_seconds": 5,
+          "scenario": "ramp"
+        },
+        {
+          "start_hour": 34.916666666666664,
+          "count": 150,
+          "interval_seconds": 2,
+          "scenario": "burst"
+        },
+        {
+          "start_hour": 35,
+          "count": 660,
+          "interval_seconds": 5,
+          "scenario": "ramp"
+        },
+        {
+          "start_hour": 35.916666666666664,
+          "count": 150,
+          "interval_seconds": 2,
+          "scenario": "burst"
+        },
+        {
+          "start_hour": 36,
+          "count": 660,
+          "interval_seconds": 5,
+          "scenario": "ramp"
+        },
+        {
+          "start_hour": 36.916666666666664,
+          "count": 150,
+          "interval_seconds": 2,
+          "scenario": "burst"
+        },
+        {
+          "start_hour": 37,
+          "count": 660,
+          "interval_seconds": 5,
+          "scenario": "ramp"
+        },
+        {
+          "start_hour": 37.916666666666664,
+          "count": 150,
+          "interval_seconds": 2,
+          "scenario": "burst"
+        },
+        {
+          "start_hour": 38,
+          "count": 660,
+          "interval_seconds": 5,
+          "scenario": "ramp"
+        },
+        {
+          "start_hour": 38.916666666666664,
+          "count": 150,
+          "interval_seconds": 2,
+          "scenario": "burst"
+        },
+        {
+          "start_hour": 39,
+          "count": 660,
+          "interval_seconds": 5,
+          "scenario": "ramp"
+        },
+        {
+          "start_hour": 39.916666666666664,
+          "count": 150,
+          "interval_seconds": 2,
+          "scenario": "burst"
+        },
+        {
+          "start_hour": 40,
+          "count": 660,
+          "interval_seconds": 5,
+          "scenario": "ramp"
+        },
+        {
+          "start_hour": 40.916666666666664,
+          "count": 150,
+          "interval_seconds": 2,
+          "scenario": "burst"
+        },
+        {
+          "start_hour": 41,
+          "count": 660,
+          "interval_seconds": 5,
+          "scenario": "ramp"
+        },
+        {
+          "start_hour": 41.916666666666664,
+          "count": 150,
+          "interval_seconds": 2,
+          "scenario": "burst"
+        }
+      ]
+    },
+    {
+      "id": "recovery",
+      "start_hour": 42,
+      "end_hour": 48,
+      "max_inflight": 32,
+      "gate": "previous_phase_reconciled_and_exact_accounting",
+      "segments": [
+        {
+          "start_hour": 42,
+          "count": 1440,
+          "interval_seconds": 15,
+          "scenario": "recovery"
+        }
+      ]
+    },
+    {
+      "id": "repeat",
+      "start_hour": 48,
+      "end_hour": 72,
+      "max_inflight": 32,
+      "gate": "previous_phase_reconciled_and_exact_accounting",
+      "segments": [
+        {
+          "start_hour": 48,
+          "count": 5760,
+          "interval_seconds": 15,
+          "scenario": "repeat"
+        }
+      ]
+    }
+  ],
+  "profile": "isolated-discovery-v2",
+  "isolated_only": true,
+  "rehearsal": {
+    "duration_seconds": 1200,
+    "interval_seconds": 2,
+    "drain_seconds": 300
+  },
+  "seed": 1475
+}

@@ -19,7 +19,7 @@ from plan import expand
 from runtime import Gate, HOSTS, campaign_targets, campaign_tls_context, validate_ssh_target
 
 SOURCE = Path(__file__).parent
-CODE = ('controller.py', 'runtime.py', 'plan.py')
+CODE = ('controller.py', 'runtime.py', 'plan.py', 'bounds.py', 'discovery.py', 'discovery_plan.py', 'fee_evidence.py', 'selection.py', 'reporting.py')
 
 
 def need(condition, message):
@@ -145,9 +145,10 @@ def prepare(profile):
     need(ipaddress.ip_address(profile['controller_ip']).is_private, 'private controller address required')
     signer = read_file(profile['signer'])
     wallets = profile['wallets']
-    need(len(wallets)==8 and len({w['address'] for w in wallets})==8 and len({w['key'] for w in wallets})==8, 'eight distinct wallet addresses and files required')
+    wallet_count = plan['wallets']['count']
+    need(len(wallets)==wallet_count and len({w['address'] for w in wallets})==wallet_count and len({w['key'] for w in wallets})==wallet_count, 'manifest requires distinct wallet addresses and files')
     wallet_files = [read_file(w['key'], private=True) for w in wallets]
-    need(len(set(wallet_files))==8, 'wallet files must be distinct')
+    need(len(set(wallet_files))==wallet_count, 'wallet files must be distinct')
     code = {name: (SOURCE/name).read_bytes() for name in CODE}
     package, state = controller['package'], controller['state']
     launch = {'run_id':run_id, 'setup_start':profile['setup_start'], 'infrastructure_end':profile['end'],
@@ -158,6 +159,12 @@ def prepare(profile):
               'known_hosts_sha256':hashlib.sha256(known_hosts).hexdigest(),
               'hosts_file':package+'/hosts', 'hosts_sha256':hashlib.sha256(hosts).hexdigest(),
               'wallets':[{'address':w['address'], 'key':state+f'/wallets/wallet-{i}.mnemonic'} for i,w in enumerate(wallets)]}
+    if plan.get('schema_version') == 2:
+        need(profile.get('isolated_discovery') is True, 'explicit isolated discovery opt-in required')
+        balances = profile.get('opening_balances')
+        need(isinstance(balances,list) and len(balances)==wallet_count and all(type(x) is int and x>0 for x in balances), 'exact opening balances required')
+        need(sum(balances)<=int(plan['funding']['max_principal_picocredits']), 'opening principal cap')
+        launch.update(isolated_discovery=True, opening_balances=balances)
     files = {'package/'+n:(b,0o644) for n,b in code.items()}
     files.update({'package/botho-stress-wallet':(signer,0o755), 'package/hosts':(hosts,0o644),
                   'package/known_hosts':(known_hosts,0o644), 'state/observer_key':(observer_key,0o600),
