@@ -3,7 +3,9 @@
 Run `cargo test --locked -p botho --test adversarial_fee_cycles`. These four
 non-ignored tests complement the live stress controller; they do not measure
 network throughput or replace the 72-hour campaign. Workspace Build executes
-this suite after its compile checks, with a five-minute execution budget.
+this suite after its compile checks, with separate fifteen-minute compile and execution budgets. The package-scoped feature
+graph can rebuild after workspace compilation; Linux debug signature checks
+are substantially slower than local macOS runs.
 
 The fixture uses production CLSAG signatures, persisted snapshot UTXOs, ledger
 signature verification, consensus fee-floor calculation, mempool admission,

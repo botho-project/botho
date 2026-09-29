@@ -4,7 +4,7 @@
 use botho::{
     block::{dynamic_timing::compute_block_time, Block},
     consensus::ConsensusConfig,
-    ledger::{ChainState, Ledger, UtxoSnapshot},
+    ledger::{ChainState, Ledger, LedgerError, UtxoSnapshot},
     mempool::{Mempool, MempoolError},
     transaction::{
         ClsagRingInput, RingMember, Transaction, TxOutput, Utxo, UtxoId, MIN_RING_SIZE, MIN_TX_FEE,
@@ -184,12 +184,53 @@ fn shuffled_signed_fee_cohorts_compete_for_slots_without_loss_or_duplicate_reser
         cohort.shuffle(&mut f.rng);
         let mut pool = Mempool::new();
         // A forged high-fee offer must not buy priority or poison the valid
-        // payment's reservation. Change a signed field without re-signing.
+        // payment's reservation. Preserve structure and exact conservation so
+        // neither can mask a regression that skips signature authentication.
         let mut forged = cohort[0].clone();
+        let original_fee = forged.fee;
         forged.fee *= 8;
-        assert!(f.ledger.verify_transaction(&forged).is_err(), "seed={seed}");
-        assert!(pool.add_tx(forged, &f.ledger).is_err(), "seed={seed}");
+        forged.outputs[1].amount -= forged.fee - original_fee;
+        assert!(forged.is_valid_structure().is_ok(), "seed={seed}");
+        let input_total: u128 = forged
+            .inputs
+            .clsag()
+            .iter()
+            .map(|input| u128::from(input.pseudo_output_amount))
+            .sum();
+        let output_total: u128 = forged
+            .outputs
+            .iter()
+            .map(|output| u128::from(output.amount))
+            .sum();
+        assert_eq!(
+            input_total,
+            output_total + u128::from(forged.fee),
+            "seed={seed}"
+        );
+        assert_eq!(
+            forged.verify_ring_signatures(),
+            Err("Invalid CLSAG signature"),
+            "seed={seed}"
+        );
+        match f.ledger.verify_transaction(&forged) {
+            Err(LedgerError::InvalidBlock(reason)) => {
+                assert_eq!(
+                    reason, "Invalid ring signature: Invalid CLSAG signature",
+                    "seed={seed}"
+                );
+            }
+            result => panic!("seed={seed}, expected ledger signature failure: {result:?}"),
+        }
+        let forged_key_image = forged.inputs.clsag()[0].key_image;
+        assert!(
+            matches!(
+                pool.add_tx(forged, &f.ledger),
+                Err(MempoolError::InvalidSignature)
+            ),
+            "seed={seed}"
+        );
         assert!(pool.is_empty(), "seed={seed}");
+        assert!(!pool.is_key_image_pending(&forged_key_image), "seed={seed}");
         for tx in &cohort {
             pool.add_tx(tx.clone(), &f.ledger).unwrap();
         }
