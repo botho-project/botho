@@ -12,7 +12,7 @@ bth-util-from-random = { path = "../../../util/from-random" }
 rand = { workspace = true }
 bth-cluster-tax = { path = "../../../cluster-tax" }
 bth-crypto-ring-signature = { path = "../../../crypto/ring-signature", features = ["alloc"] }
-num-bigint = "0.4"
+num-bigint = "0.5"
 curve25519-dalek-v4 = { workspace = true }
 curve25519-dalek = { workspace = true }
 rand_chacha_fixture = { package = "rand_chacha", version = "0.3" }
