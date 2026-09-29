@@ -13,15 +13,15 @@
   "dependencies": {
     "@botho/core": "workspace:*",
     "@botho/wasm-signer": "workspace:*",
-    "@metamask/snaps-sdk": "^12.0.0",
-    "@scure/bip39": "^2.3.0"
+    "@metamask/snaps-sdk": "^12.1.0",
+    "@scure/bip39": "^2.4.0"
   },
   "devDependencies": {
-    "@jest/globals": "^30.4.1",
+    "@jest/globals": "^30.5.2",
     "@metamask/snaps-cli": "^8.4.1",
     "@metamask/snaps-jest": "^10.2.1",
     "@swc/jest": "^0.2.39",
-    "@types/node": "^26.6.2",
+    "@types/node": "^26.6.3",
     "jest": "^30.5.2",
     "typescript": "~7.0.2"
   }
