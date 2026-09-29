@@ -1809,7 +1809,7 @@ dependencies = [
  "hex",
  "hickory-resolver",
  "hkdf 0.12.4",
- "hmac 0.12.1",
+ "hmac 0.13.0",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -2448,7 +2448,7 @@ name = "bth-crypto-secp256k1"
 version = "0.6.0"
 dependencies = [
  "hex",
- "hmac 0.12.1",
+ "hmac 0.13.0",
  "k256 0.14.0",
  "rand 0.10.2",
  "sha2 0.10.9",
@@ -3762,7 +3762,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccc2776f0c61eca1ca32528f85548abd1a4be8fb53d1b21c013e4f18da1e7090"
 dependencies = [
  "data-encoding",
- "syn 2.0.118",
+ "syn 1.0.109",
 ]
 
 [[package]]
