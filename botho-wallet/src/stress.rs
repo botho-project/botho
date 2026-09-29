@@ -32,6 +32,36 @@ pub const MAX_REQUEST: u64 = 128 * 1024 * 1024;
 pub const MAX_TX: usize = 256 * 1024;
 pub const MAX_FEE: u64 = 5_000_000_000;
 
+fn default_fee_multiplier() -> u64 {
+    1
+}
+
+fn deserialize_fee_multiplier<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<u64, D::Error> {
+    let multiplier = u64::deserialize(deserializer)?;
+    if matches!(multiplier, 1 | 2 | 4) {
+        Ok(multiplier)
+    } else {
+        Err(serde::de::Error::custom(
+            "fee_multiplier must be 1, 2, or 4",
+        ))
+    }
+}
+
+fn bounded_fee(estimate: u64, multiplier: u64) -> Result<(u64, u64)> {
+    ensure!(
+        matches!(multiplier, 1 | 2 | 4),
+        "fee_multiplier must be 1, 2, or 4"
+    );
+    let baseline = estimate.max(MIN_TX_FEE);
+    let fee = baseline
+        .checked_mul(multiplier)
+        .context("fee multiplication overflow")?;
+    ensure!(fee <= MAX_FEE, "estimated fee exceeds program bound");
+    Ok((baseline, fee))
+}
+
 fn read_bounded_input(reader: impl Read, limit: u64) -> Result<Vec<u8>> {
     let mut input = Vec::new();
     reader.take(limit + 1).read_to_end(&mut input)?;
@@ -73,6 +103,11 @@ pub enum Request {
         allowed_recipients: Vec<String>,
         amount: u64,
         base_rate: u64,
+        #[serde(
+            default = "default_fee_multiplier",
+            deserialize_with = "deserialize_fee_multiplier"
+        )]
+        fee_multiplier: u64,
         artifact: String,
     },
     Inspect {
@@ -258,6 +293,7 @@ pub fn execute(request: Request) -> Result<Value> {
             allowed_recipients,
             amount,
             base_rate,
+            fee_multiplier,
             artifact,
         } => {
             ensure!(amount >= DUST_THRESHOLD, "amount is below dust");
@@ -333,11 +369,10 @@ pub fn execute(request: Request) -> Result<Value> {
                 .context("input sum overflow")?;
             let fee_inputs: Vec<_> = inputs.iter().map(|u| (u.amount, u.tags())).collect();
             let fee_refs: Vec<_> = fee_inputs.iter().map(|(v, t)| (*v, t)).collect();
-            let fee = FeeEstimator::with_base_rate(base_rate)
+            let estimate = FeeEstimator::with_base_rate(base_rate)
                 .estimate_fee(&fee_refs, 2)
-                .total_fee
-                .max(MIN_TX_FEE);
-            ensure!(fee <= MAX_FEE, "estimated fee exceeds program bound");
+                .total_fee;
+            let (baseline_fee, fee) = bounded_fee(estimate, fee_multiplier)?;
             ensure!(
                 amount.checked_add(fee).is_some_and(|need| need <= total),
                 "insufficient funds"
@@ -380,6 +415,8 @@ pub fn execute(request: Request) -> Result<Value> {
                 "recipient amount differs"
             );
             publish(Path::new(&artifact), &bytes)?;
+            info["baseline_fee"] = json!(baseline_fee);
+            info["fee_multiplier"] = json!(fee_multiplier);
             info["selected"] = json!(input_metadata);
             info["artifact"] = json!(artifact);
             Ok(info)
@@ -390,6 +427,175 @@ pub fn execute(request: Request) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fee_tiers_apply_after_floor_and_reject_overflow_or_budget_excess() {
+        assert_eq!(bounded_fee(1, 4).unwrap(), (MIN_TX_FEE, 4 * MIN_TX_FEE));
+        assert_eq!(
+            bounded_fee(2 * MIN_TX_FEE, 2).unwrap(),
+            (2 * MIN_TX_FEE, 4 * MIN_TX_FEE)
+        );
+        assert_eq!(bounded_fee(MAX_FEE / 4, 4).unwrap().1, MAX_FEE);
+        assert!(bounded_fee(MAX_FEE / 4 + 1, 4).is_err());
+        assert!(bounded_fee(u64::MAX, 4)
+            .unwrap_err()
+            .to_string()
+            .contains("overflow"));
+        assert!(bounded_fee(MIN_TX_FEE, 3).is_err());
+    }
+
+    fn prepare_fixture(dir: &Path) -> Value {
+        use bth_transaction_clsag::TxOutput;
+        use bth_transaction_types::ClusterTagVector;
+
+        let keys = WalletKeys::from_mnemonic("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art").unwrap();
+        let sink = WalletKeys::from_mnemonic("legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title").unwrap();
+        let wallet = dir.join("wallet.mnemonic");
+        publish(&wallet, keys.mnemonic_phrase().as_bytes()).unwrap();
+        let mut outputs = Vec::new();
+        // One owned input and exactly enough age-matched canonical decoys.
+        for index in 0..MIN_RING_SIZE {
+            let owner = if index == 0 { &keys } else { &sink };
+            let out = TxOutput::new_hybrid_to_address(
+                20_000_000_000,
+                &owner.public_address(),
+                index as u32,
+                None,
+                ClusterTagVector::empty(),
+            )
+            .unwrap();
+            outputs.push(json!({
+                "txHash": hex::encode([9u8; 32]), "outputIndex": index,
+                "targetKey": hex::encode(out.target_key),
+                "publicKey": hex::encode(out.public_key),
+                "amountCommitment": hex::encode(out.amount.to_le_bytes()),
+                "clusterTags": [], "kemCiphertext": out.kem_ciphertext.map(hex::encode),
+            }));
+        }
+        let blocks = json!([{"height":100,"outputs":outputs}]);
+        let owned = scan(
+            &keys,
+            &serde_json::from_value::<Vec<BlockOutputs>>(blocks.clone()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(owned.len(), 1);
+        let recipient = sink.public_address_string(Network::Testnet).unwrap();
+        json!({"operation":"prepare", "wallet":wallet, "blocks":blocks,
+            "height":120, "selected":[owned[0].id],
+            "spent":[{"keyImage":owned[0].key_image,"spent":false,"pending":false,"spentHeight":null}],
+            "reserved":[], "recipient":recipient, "allowed_recipients":[recipient],
+            "amount":10_000_000_000u64,"base_rate":1,"artifact":dir.join("signed.bin")})
+    }
+
+    #[test]
+    fn prepare_fee_tiers_are_signed_and_dust_is_reported_exactly() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let request = prepare_fixture(dir.path());
+        // Missing multiplier retains the legacy tier; explicit tiers affect
+        // the serialized transaction, not just response metadata.
+        for multiplier in [1u64, 2, 4] {
+            let mut value = request.clone();
+            if multiplier != 1 {
+                value["fee_multiplier"] = json!(multiplier);
+            }
+            let artifact = dir.path().join(format!("tier-{multiplier}.bin"));
+            value["artifact"] = json!(artifact);
+            let prepared = execute(serde_json::from_value(value).unwrap()).unwrap();
+            assert_eq!(prepared["baseline_fee"], MIN_TX_FEE);
+            assert_eq!(prepared["fee_multiplier"], multiplier);
+            assert_eq!(prepared["fee"], MIN_TX_FEE * multiplier);
+            let inspected = inspect(&fs::read(&artifact).unwrap()).unwrap();
+            assert_eq!(inspected["fee"], prepared["fee"]);
+            assert_eq!(inspected["hash"], prepared["hash"]);
+            let output_sum: u64 = inspected["outputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|o| o["amount"].as_u64().unwrap())
+                .sum();
+            assert_eq!(
+                output_sum + inspected["fee"].as_u64().unwrap(),
+                20_000_000_000
+            );
+        }
+        let mut increased_base = request.clone();
+        increased_base["base_rate"] = json!(100_000);
+        increased_base["fee_multiplier"] = json!(2);
+        increased_base["artifact"] = json!(dir.path().join("increased-base.bin"));
+        let prepared = execute(serde_json::from_value(increased_base).unwrap()).unwrap();
+        let baseline = prepared["baseline_fee"].as_u64().unwrap();
+        assert!(baseline > MIN_TX_FEE);
+        assert_eq!(prepared["fee"], baseline * 2);
+
+        let mut insufficient = request.clone();
+        insufficient["amount"] = json!(20_000_000_000u64 - MIN_TX_FEE);
+        insufficient["fee_multiplier"] = json!(2);
+        assert!(execute(serde_json::from_value(insufficient).unwrap())
+            .unwrap_err()
+            .to_string()
+            .contains("insufficient funds"));
+        assert!(!dir.path().join("signed.bin").exists());
+
+        let mut dust = request.clone();
+        dust["fee_multiplier"] = json!(2);
+        dust["amount"] = json!(20_000_000_000u64 - 2 * MIN_TX_FEE - (DUST_THRESHOLD - 1));
+        dust["artifact"] = json!(dir.path().join("dust.bin"));
+        let prepared = execute(serde_json::from_value(dust).unwrap()).unwrap();
+        assert_eq!(prepared["baseline_fee"], MIN_TX_FEE);
+        assert_eq!(prepared["fee_multiplier"], 2);
+        assert_eq!(prepared["fee"], 2 * MIN_TX_FEE + DUST_THRESHOLD - 1);
+        assert_eq!(prepared["outputs"].as_array().unwrap().len(), 1);
+
+        let mut over_cap_dust = request.clone();
+        over_cap_dust["base_rate"] = json!(MAX_FEE * 100_000 / baseline);
+        over_cap_dust["amount"] = json!(20_000_000_000u64 - MAX_FEE - 1);
+        let error = execute(serde_json::from_value(over_cap_dust).unwrap()).unwrap_err();
+        assert!(
+            error.to_string().contains("fee outside program bounds"),
+            "{error:#}"
+        );
+        assert!(!dir.path().join("signed.bin").exists());
+        assert!(!dir.path().join("signed.partial").exists());
+
+        let mut excessive = request;
+        excessive["base_rate"] = json!(u64::MAX);
+        excessive["fee_multiplier"] = json!(4);
+        assert!(execute(serde_json::from_value(excessive).unwrap())
+            .unwrap_err()
+            .to_string()
+            .contains("program bound"));
+        assert!(!dir.path().join("signed.bin").exists());
+        assert!(!dir.path().join("signed.partial").exists());
+    }
+
+    #[test]
+    fn prepare_fee_multiplier_rejects_invalid_json_types_and_values() {
+        let mut request = json!({"operation":"prepare","wallet":"unused","blocks":[],
+            "height":0,"selected":[],"spent":[],"reserved":[],"recipient":"unused",
+            "allowed_recipients":[],"amount":1,"base_rate":1,"artifact":"unused"});
+        for multiplier in [json!(1), json!(2), json!(4)] {
+            request["fee_multiplier"] = multiplier;
+            assert!(serde_json::from_value::<Request>(request.clone()).is_ok());
+        }
+        for invalid in [
+            json!(0),
+            json!(3),
+            json!(5),
+            json!(-1),
+            json!(1.0),
+            json!(true),
+            json!(null),
+            json!("2"),
+            json!(u64::MAX),
+        ] {
+            request["fee_multiplier"] = invalid.clone();
+            assert!(
+                serde_json::from_value::<Request>(request.clone()).is_err(),
+                "accepted {invalid}"
+            );
+        }
+    }
 
     #[test]
     fn request_reader_enforces_inclusive_boundary_and_bounded_read() {
