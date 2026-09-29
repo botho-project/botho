@@ -100,6 +100,10 @@ jobs:
       - name: Compile-check all test targets (no run)
         run: cargo test --workspace --no-run
 
+      - name: Run adversarial fee cycles and signed priority cohorts
+        timeout-minutes: 5
+        run: cargo test --locked -p botho --test adversarial_fee_cycles
+
       # Inactive CT1 economics evidence uses the actual node/CLI selectors.
       # Compile once above, execute with a separate bounded budget; retain every
       # failed selection/fee affordability denominator and upload raw evidence.
