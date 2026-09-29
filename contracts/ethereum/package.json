@@ -13,7 +13,7 @@
     "deploy:all:sepolia": "hardhat run scripts/deploy-all.ts --network sepolia"
   },
   "devDependencies": {
-    "@nomicfoundation/hardhat-toolbox-mocha-ethers": "^3.0.7",
+    "@nomicfoundation/hardhat-toolbox-mocha-ethers": "^4.0.0",
     "@openzeppelin/contracts": "^5.0.0",
     "@types/chai": "^5.2.0",
     "@types/mocha": "^10.0.10",
