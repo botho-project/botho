@@ -54,6 +54,7 @@ class Controller:
         self.spent = []
         self.scan_lock = asyncio.Lock()
         self.admission_lock = asyncio.Lock()
+        self.reconcile_wakeup = asyncio.Event()
         self.signed_tasks = set()
         self.closed = False
 
@@ -143,6 +144,7 @@ class Controller:
                     if any(b.get('hash') != self.plan['genesis'] for b in genesis):
                         raise Gate('genesis differs from manifest')
                     self.j.set('genesis_verified',True)
+                previous_height = min((s['chainHeight'] for s in self.statuses.values()),default=-1)
                 self.statuses = dict(zip(HOSTS,statuses))
                 self.fresh = time.time()
                 self.j.set('fleet_latest',{'at':self.fresh,'nodes':self.statuses})
@@ -152,6 +154,8 @@ class Controller:
                 # state volume approaches exhaustion or its evidence grows too far.
                 if shutil.disk_usage(self.state).free < 2*1024**3:
                     raise Gate('controller disk headroom')
+                if minimum > previous_height:
+                    self.reconcile_wakeup.set()
             except Quota as error:
                 self.j.event(None,'monitor_quota',str(error))
             except Gate as error:
@@ -574,37 +578,69 @@ class Controller:
             self.j.transition(identifier,'unknown',str(error))
             self.halt('faucet reply uncertain; funding slot consumed without retry')
 
+    async def wait_for_reconcile(self, delay):
+        try:
+            await asyncio.wait_for(self.reconcile_wakeup.wait(), timeout=delay)
+        except asyncio.TimeoutError:
+            pass
+
     async def reconcile(self):
+        next_poll = 0
         while not self.closed:
-            started = time.monotonic()
+            # Height wakes only complete saved confirmations. Keep the ordinary
+            # receipt/status polling deadline independent of monitor cadence.
+            poll = time.monotonic() >= next_poll
+            if poll:
+                next_poll = time.monotonic()+30
+            self.reconcile_wakeup.clear()
             try:
                 for row in self.j.pending():
                     # Admission alone owns first submission of prepared work.
                     # Quota pressure must not interrupt unrelated receipt reads.
                     if row['state']=='prepared':
                         continue
-                    if row['hash']:
-                        statuses = await asyncio.gather(*(self.rpc.call(h,'getTransactionStatus',{'hash':row['hash']}) for h in HOSTS))
-                    else:
-                        statuses = []
-                    age = time.time()-(row['submitted'] or row['prepared'])
-                    if not statuses or not all(s.get('confirmed') and s.get('txHash')==row['hash'] for s in statuses):
-                        if age>900:
-                            self.j.transition(row['id'],'unresolved','not reconciled within fifteen minutes')
-                            self.halt('unresolved payment exceeded fifteen minutes')
-                        elif age>300:
-                            self.halt('payment unconfirmed after five minutes')
-                        continue
-                    receipts = await asyncio.gather(*(self.rpc.call(h,'getTransaction',{'hash':row['hash']}) for h in HOSTS))
+                    info = json.loads(row['info'])
+                    saved = info.get('confirmed_receipts') if row['state']=='confirmed' else None
+                    fetch_receipts = saved is None
+                    if fetch_receipts:
+                        if not poll:
+                            continue
+                        if row['hash']:
+                            statuses = await asyncio.gather(*(self.rpc.call(h,'getTransactionStatus',{'hash':row['hash']}) for h in HOSTS))
+                        else:
+                            statuses = []
+                        age = time.time()-(row['submitted'] or row['prepared'])
+                        if not statuses or not all(s.get('confirmed') and s.get('txHash')==row['hash'] for s in statuses):
+                            if age>900:
+                                self.j.transition(row['id'],'unresolved','not reconciled within fifteen minutes')
+                                self.halt('unresolved payment exceeded fifteen minutes')
+                            elif age>300:
+                                self.halt('payment unconfirmed after five minutes')
+                            continue
+                        receipts = await asyncio.gather(*(self.rpc.call(h,'getTransaction',{'hash':row['hash']}) for h in HOSTS))
+                        saved = dict(zip(HOSTS,receipts))
+                    if set(saved) != set(HOSTS):
+                        raise Gate('incomplete saved confirmation receipts')
+                    receipts = [saved[h] for h in HOSTS]
                     if len({(r.get('blockHeight'),r.get('fee'),r.get('outputCount'),r.get('totalOutput')) for r in receipts}) != 1:
                         raise Gate('fleet transaction receipt disagreement')
-                    info = json.loads(row['info'])
-                    info.update(all_confirmed_at=time.time(),block_height=receipts[0]['blockHeight'])
-                    self.j.transition(row['id'],'confirmed',info=info)
-                    # Wait for monitor to expose the inclusion height to wallet scanning.
-                    if not self.statuses or min(s['chainHeight'] for s in self.statuses.values()) < info['block_height']:
+                    if any(r.get('txHash',row['hash']) != row['hash'] for r in receipts):
+                        raise Gate('fleet transaction receipt hash mismatch')
+                    if fetch_receipts:
+                        info.update(all_confirmed_at=time.time(),block_height=receipts[0]['blockHeight'],
+                                    confirmed_receipts=saved)
+                        self.j.transition(row['id'],'confirmed',info=info)
+                    if info['block_height'] != receipts[0]['blockHeight']:
+                        raise Gate('saved confirmation height mismatch')
+                    # Monitor wakeups cannot authorize scans from stale or
+                    # incomplete fleet state, including after a process restart.
+                    if (set(self.statuses) != set(HOSTS) or time.time()-self.fresh > 60
+                        or any(not s.get('synced') for s in self.statuses.values())
+                        or min(s['chainHeight'] for s in self.statuses.values()) < info['block_height']):
                         continue
                     await self.sync(draining=True)
+                    if time.time()-self.fresh > 60:
+                        raise Gate('fleet data stale during reconciliation')
                     recipient = self.inventory[row['recipient']]
                     received = [o for o in recipient if bytes(o['utxo']['tx_hash']).hex()==row['hash'] and o['utxo']['output_index']==0]
                     if len(received)!=1 or received[0]['utxo']['amount']!=row['amount']:
@@ -633,7 +669,8 @@ class Controller:
                 self.j.event(None,'reconcile_quota',str(error))
             except Exception as error:
                 self.halt('reconciliation: '+str(error))
-            await asyncio.sleep(max(.2,30-(time.monotonic()-started)))
+            if not self.closed:
+                await self.wait_for_reconcile(max(.2,next_poll-time.monotonic()))
 
     def accounting(self):
         state = {s['keyImage']:s for s in self.spent}
