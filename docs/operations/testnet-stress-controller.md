@@ -34,6 +34,17 @@ The controller holds only a dedicated SSH key restricted to the fixed observer e
 
 A health/accounting/identity failure pauses admission and requires explicit investigation. A signed payment unresolved for 15 minutes, the eight-hour setup deadline, or the 72-hour end stops admission. Read-only reconciliation is bounded to another 30 minutes. A stopped run cannot silently move its end or refill missed events. The service itself has an 82-hour runtime ceiling and bounded CPU/memory; the controller also checks its own disk headroom.
 
+Accounting records `legacy_lottery` evidence when distinct owned outpoints share
+a key image and at least one is a lottery award in the checked output history.
+It reports affected outpoints, award amounts, spent status and the subtotal of
+awards whose shared image is already spent. The original exact `difference`
+remains unchanged. Aliased awards block qualification even when that difference
+is zero, because their values are not independently spendable. Reports containing
+this evidence cannot mark final reconciliation verified. Archived reports without
+the new field retain their existing interpretation; absence is not proof that
+legacy payouts were checked. This diagnostic does not repair legacy claims or
+activate LotteryV2 (#1286).
+
 To stop admission, create an owner-readable `STOP` file in the state directory. Do not delete the journal, edit the launch manifest, rebuild a transaction, or restart the service as a means of clearing a hold. Review the evidence and create a separately identified decision/run if continuation is warranted.
 
 ## Results

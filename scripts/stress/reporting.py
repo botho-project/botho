@@ -11,6 +11,50 @@ from plan import expand
 from runtime import HOSTS, atomic, digest
 
 
+def legacy_lottery_evidence(inventory, lottery_amounts, spent_by_image):
+    """Classify checked history/ownership receipts without changing balances.
+
+    A different outpoint sharing the same image is not independently spendable,
+    even before that image is spent. The presence of a lottery award alone does
+    not classify a unique-key payout as legacy. This is evidence processing,
+    not RPC authentication or a repair of the historical claims.
+    """
+    by_image = {}
+    for owned in inventory:
+        for output in owned:
+            utxo = output["utxo"]
+            outpoint = (bytes(utxo["tx_hash"]).hex(), utxo["output_index"])
+            by_image.setdefault(output["key_image"], set()).add(outpoint)
+
+    groups = []
+    for image, outpoints in sorted(by_image.items()):
+        awards = sorted(outpoints.intersection(lottery_amounts))
+        if len(outpoints) < 2 or not awards:
+            continue
+        state = spent_by_image[image]
+        groups.append({
+            "key_image": image,
+            "outpoints": [f"{tx}:{index}" for tx, index in sorted(outpoints)],
+            "awards": [
+                {"outpoint": f"{tx}:{index}", "amount_picocredits": lottery_amounts[(tx, index)]}
+                for tx, index in awards
+            ],
+            "spent": state["spent"],
+            "spent_height": state.get("spentHeight"),
+        })
+    return {
+        "groups": groups,
+        "award_count": sum(len(group["awards"]) for group in groups),
+        "aliased_awards_picocredits": sum(
+            award["amount_picocredits"] for group in groups for award in group["awards"]
+        ),
+        "spent_image_awards_picocredits": sum(
+            award["amount_picocredits"]
+            for group in groups if group["spent"] for award in group["awards"]
+        ),
+    }
+
+
 def artifact_evidence(state, rows, byte_limit):
     """Audit only controller publications; never inspect signatures or infer sends.
 
@@ -137,6 +181,8 @@ def accounting_status(journal, rows, now, artifacts=None):
             reasons.append("snapshot does not account for reconciled signed fees")
         if snapshot.get("difference") != 0:
             reasons.append("accounting difference is nonzero or missing")
+        if snapshot.get("legacy_lottery", {}).get("award_count", 0):
+            reasons.append("unsupported legacy lottery payouts")
     if unresolved:
         reasons.append("signed or submitted work remains unreconciled")
     if reserved:
