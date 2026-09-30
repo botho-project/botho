@@ -773,6 +773,7 @@ async fn run_async_with_shutdown(
         config.network.cors_origins.clone(),
         ws_broadcaster.clone(),
     )
+    .with_rpc_rate_limit(&config.rpc)
     .with_quorum(config.network.quorum.clone())
     // Operator read surface (#707, P4.2). Absent [rpc.operator] ⇒ None ⇒ the
     // operator_* RPCs stay OFF and the node behaves exactly as today.
@@ -843,7 +844,7 @@ async fn run_async_with_shutdown(
     // vector (M1). Gate the lift on Testnet AND the explicit dev-RPC opt-in
     // (`BOTHO_ENABLE_DEV_RPC`, which the `botho-testnet` harness sets on the
     // nodes it spawns) — off by default. A normal public testnet node keeps the
-    // standard 100/min anonymous limit; mainnet is unchanged.
+    // configured quota (100/min by default); mainnet never gets this override.
     if !config.network_type.is_production() && is_dev_rpc_enabled() {
         info!(
             "Dev RPC enabled (BOTHO_ENABLE_DEV_RPC): lifting the anonymous RPC rate limit \

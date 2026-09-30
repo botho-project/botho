@@ -270,6 +270,25 @@ quota. The old default of 50 calls/minute can therefore be the rehearsal's
 limiting factor. A rehearsal failure is useful evidence about the generator,
 inventory, or configured quotas; it is not evidence of network saturation.
 
+For an isolated qualification deployment, each node can explicitly provision a
+larger ordinary RPC quota in its `config.toml`:
+
+```toml
+[rpc]
+requests_per_minute = 600
+```
+
+The default remains 100. Values must be integers in `1..=10000`; invalid values
+fail configuration loading. This sets the actual default per-API-key bucket
+quota, including the shared anonymous bucket, and the HTTP handler advertises
+that same enforced value in `X-RateLimit-Limit`. It does not enable dev RPC or
+change authentication. The existing explicit testnet dev-RPC override still
+takes precedence when enabled; leave it disabled for qualification. Restart the
+node to apply configuration and verify its response headers before rehearsal.
+With 600 advertised, the controller still uses at most 300 calls/minute per
+endpoint, subject to its own pinned profile limit. Increasing this quota does
+not establish transaction throughput or congestion coverage.
+
 Profile ceilings are enforced in expansion, admission, durable preparation,
 submission, and RPC reservation: 64 wallets/inflight, 128 queued offers,
 60 ordinary offers/minute, 100,000 signed attempts, 600 RPC calls per endpoint

@@ -480,6 +480,17 @@ impl RpcState {
         }
     }
 
+    /// Apply the operator-configured default quota without changing
+    /// authentication or request bucket selection. The HTTP handler
+    /// enforces and advertises this same limiter. Production startup calls
+    /// this for both networks.
+    pub fn with_rpc_rate_limit(mut self, config: &crate::config::RpcConfig) -> Self {
+        self.rate_limiter = Arc::new(RateLimiter::with_default_tier(KeyTier::Custom(
+            config.requests_per_minute(),
+        )));
+        self
+    }
+
     /// Set the faucet state and wallet for signing faucet transactions
     pub fn with_faucet(mut self, faucet: FaucetState, wallet: Wallet) -> Self {
         self.faucet = Some(Arc::new(faucet));
