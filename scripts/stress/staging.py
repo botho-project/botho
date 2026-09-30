@@ -71,7 +71,7 @@ UMask=0077
 ExecStart=/usr/bin/python3 {command}
 Restart=on-failure
 RestartSec=5
-RuntimeMaxSec=295200
+RuntimeMaxSec={item.get('runtime_max_seconds',295200)}
 CPUQuota={'5%' if observer else '100%'}
 MemoryMax={'64M' if observer else '1G'}
 MemorySwapMax=0
@@ -101,14 +101,13 @@ def prepare(profile):
          'fresh profile must not target historical public ingresses')
     for field in ('adapter_source', 'node_sha256'):
         need(re.fullmatch(r'[0-9a-f]{'+('40' if field=='adapter_source' else '64')+'}', profile[field]), 'invalid source/artifact pin')
-    need(type(profile['setup_start']) in (int,float) and type(profile['end']) in (int,float)
-         and 0 < profile['setup_start'] < profile['end']
-         and 80.5*3600 <= profile['end']-profile['setup_start'] <= 82*3600,
-         'fixed lifetime must cover setup, 72 hours and drain within 82 hours')
-    controller = profile['controller']
+    from discovery_plan import validate_lifetime
+    validate_lifetime(plan, {**profile, 'infrastructure_end':profile['end']})
+    runtime_limit = int(profile['end']-profile['setup_start'])
+    controller = dict(profile['controller'], runtime_max_seconds=runtime_limit)
     component(controller, run_id)
     need(controller['deploy_ssh_target'] != 'loom-worker-1', 'dedicated deployment target required')
-    observers = profile['observers']
+    observers = [dict(item, runtime_max_seconds=runtime_limit) for item in profile['observers']]
     need(len(observers)==5 and [o['role'] for o in observers]==list(HOSTS), 'five ordered observer deployments required')
     for item in observers:
         component(item, run_id)
@@ -165,6 +164,8 @@ def prepare(profile):
         need(isinstance(balances,list) and len(balances)==wallet_count and all(type(x) is int and x>0 for x in balances), 'exact opening balances required')
         need(sum(balances)<=int(plan['funding']['max_principal_picocredits']), 'opening principal cap')
         launch.update(isolated_discovery=True, opening_balances=balances)
+        if 'execution_mode' in profile:
+            launch['execution_mode'] = profile['execution_mode']
     files = {'package/'+n:(b,0o644) for n,b in code.items()}
     files.update({'package/botho-stress-wallet':(signer,0o755), 'package/hosts':(hosts,0o644),
                   'package/known_hosts':(known_hosts,0o644), 'state/observer_key':(observer_key,0o600),

@@ -6,7 +6,31 @@ import re
 import random
 from collections import deque
 from bounds import checked_limits
-from runtime import HOSTS, validate_rpc_url
+from runtime import Gate, HOSTS, validate_rpc_url
+import math
+
+
+def execution_mode(plan):
+    mode = plan.get("execution_mode", "campaign")
+    if mode not in ("campaign", "rehearsal_only") or (
+        mode != "campaign" and plan.get("schema_version") != 2
+    ):
+        raise ValueError("unsupported execution mode")
+    return mode
+
+
+def validate_lifetime(plan, config):
+    mode = execution_mode(plan)
+    if config.get("execution_mode", "campaign") != mode:
+        raise Gate("deployment execution mode differs from plan")
+    start, end = config["setup_start"], config["infrastructure_end"]
+    low, high = (1.5, 2) if mode == "rehearsal_only" else (80.5, 82)
+    if (
+        any(type(v) not in (int, float) or not math.isfinite(v) for v in (start, end))
+        or not 0 < start < end
+        or not low * 3600 <= end - start <= high * 3600
+    ):
+        raise Gate(f"fixed {mode} infrastructure lifetime must be {low}–{high} hours")
 
 
 def expand_discovery(plan):
@@ -26,8 +50,10 @@ def expand_discovery(plan):
         and plan["run_id"] is None,
         "fresh design required",
     )
+    mode = execution_mode(plan)
     require(
-        plan["duration_hours"] == 72 and plan["setup_deadline_hours"] == 8,
+        plan["duration_hours"] == 72
+        and plan["setup_deadline_hours"] == (1 if mode == "rehearsal_only" else 8),
         "immutable campaign/setup durations",
     )
     require(plan["network"] == "botho-testnet", "testnet required")
@@ -182,6 +208,8 @@ def expand_discovery(plan):
             len(window) <= limits["max_normal_submissions_per_minute"],
             "combined offered rate exceeds cap",
         )
+    if mode == "rehearsal_only":
+        events, phases = [], []
     rehearsal_count = (rehearsal["duration_seconds"] - 120) // rehearsal[
         "interval_seconds"
     ]
@@ -200,7 +228,8 @@ def expand_discovery(plan):
         "plan_sha256": hashlib.sha256(
             json.dumps(plan, sort_keys=True).encode()
         ).hexdigest(),
-        "duration_hours": 72,
+        "execution_mode": mode,
+        "duration_hours": 0 if mode == "rehearsal_only" else 72,
         "phases": phases,
         "nominal_campaign_payments": len(events),
         "rehearsal_payments": rehearsal_count,
