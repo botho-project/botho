@@ -40,6 +40,7 @@ class AdmissionTests(unittest.IsolatedAsyncioTestCase):
         self.c.statuses = {h: {"synced": True, "chainHeight": 100} for h in HOSTS}
         self.c.admission_lock = asyncio.Lock()
         self.c.closed = False
+        self.c.reconcile_wakeup = asyncio.Event()
         self.c.blocks = []
         self.c.inventory = [[], []]
         self.c.monitor = AsyncMock()
@@ -161,7 +162,7 @@ class AdmissionTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("controller.time.time", lambda: self.now),
-            patch("controller.asyncio.sleep", side_effect=end_pass),
+            patch.object(self.c, "wait_for_reconcile", side_effect=end_pass),
         ):
             await self.c.reconcile()
         self.assertEqual(self.c.j.intent("received")["state"], "reconciled")
