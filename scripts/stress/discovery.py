@@ -480,7 +480,12 @@ class DiscoveryController(Controller):
         # Dense workloads must not rewrite a growing report on each confirmation.
         status = self.j.get("status")
         cached = getattr(self, "_report", None)
-        if cached and cached["status"] == status and time.time() - cached["at"] < 60:
+        if (
+            status in ("setup", "running")
+            and cached
+            and cached["status"] == status
+            and time.time() - cached["at"] < 60
+        ):
             return cached
         report = super().report()
         quotes = [
@@ -490,7 +495,9 @@ class DiscoveryController(Controller):
             )
         ]
         report["fee_coverage"] = summarize_fees(self.j.rows(), quotes)
-        report["rehearsal"] = self.j.get("rehearsal_result")
+        from reporting import rehearsal_summary
+
+        report["rehearsal"] = rehearsal_summary(self.j, self.plan)
         report["seed"] = self.plan["seed"]
         rows = self.j.rows("kind='campaign'")
         delivered = len(rows) == len(self.events) and all(
@@ -504,6 +511,7 @@ class DiscoveryController(Controller):
             else "in_progress"
         )
         if self.plan.get("execution_mode") == "rehearsal_only":
+            report["not_yet_offered"] = report["rehearsal"]["not_yet_offered"]
             delivery = "not_requested"
             report["qualification_status"] = (
                 "passed"
