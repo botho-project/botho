@@ -1716,6 +1716,13 @@ async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> Json
 
     for height in start_height..=end_height {
         if let Ok(block) = ledger.get_block(height) {
+            // Genesis initializes block metadata only; its placeholder mint
+            // never creates a ledger output. Keep the requested block envelope
+            // without advertising a nonexistent coinbase to wallet ring pools.
+            if height == 0 {
+                blocks.push(json!({"height": height, "outputs": []}));
+                continue;
+            }
             let mut outputs = Vec::new();
 
             // Coinbase (minting reward) output. This is a real stealth TxOutput

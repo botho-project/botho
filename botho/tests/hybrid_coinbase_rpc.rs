@@ -120,6 +120,42 @@ impl Drop for Server {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn genesis_rpc_envelope_has_no_nonexistent_coinbase() {
+    let dir = tempfile::tempdir().unwrap();
+    let ledger = Ledger::open(dir.path()).unwrap();
+    let genesis = ledger.get_block(0).unwrap();
+    assert!(ledger
+        .get_utxo_by_target_key(&genesis.minting_tx.target_key)
+        .unwrap()
+        .is_none());
+    assert!(ledger
+        .get_utxo(&UtxoId::new(genesis.hash(), 0))
+        .unwrap()
+        .is_none());
+    let state = Arc::new(RpcState::new(
+        ledger,
+        Mempool::new(),
+        Network::Testnet,
+        None,
+        None,
+        vec!["*".into()],
+        Arc::new(WsBroadcaster::new(100)),
+    ));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let _server = Server(tokio::spawn(async move {
+        botho::rpc::start_rpc_server(addr, state).await.unwrap();
+    }));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let (raw, decoded) = outputs(&format!("http://{addr}"), 0).await;
+    assert_eq!(raw, json!([{"height":0,"outputs":[]}]));
+    assert_eq!(decoded.len(), 1);
+    assert_eq!(decoded[0].height, 0);
+    assert!(decoded[0].outputs.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hybrid_coinbase_rpc_scan_spend_filter_restore() {
     let began = Instant::now();
     let dir = tempfile::tempdir().unwrap();
