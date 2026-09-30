@@ -32,16 +32,50 @@ pub struct Config {
 
 /// RPC-server configuration.
 ///
-/// Today this only carries the optional `[rpc.operator]` block. When the whole
-/// `[rpc]` section is absent from `config.toml`, this deserializes to its
-/// default (operator surface OFF) and the node behaves exactly as before.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// An absent `[rpc]` section preserves the 100 requests/minute default and
+/// leaves the operator surface disabled.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RpcConfig {
+    /// Default quota per API-key bucket (including the shared anonymous
+    /// bucket). Must be an integer in 1..=10_000; this does not grant
+    /// authentication.
+    #[serde(
+        default = "default_rpc_requests_per_minute",
+        deserialize_with = "deserialize_rpc_requests_per_minute"
+    )]
+    requests_per_minute: u32,
+
     /// Operator read-surface configuration (#707). Absent ⇒ the whole
     /// operator feature is OFF: `operator_*` RPCs return a clean "not enabled"
     /// error and the `botho operator mint-read-link` CLI refuses to mint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operator: Option<OperatorConfig>,
+}
+
+fn default_rpc_requests_per_minute() -> u32 {
+    100
+}
+
+fn deserialize_rpc_requests_per_minute<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = u32::deserialize(deserializer)?;
+    if !(1..=10_000).contains(&value) {
+        return Err(serde::de::Error::custom(
+            "rpc.requests_per_minute must be an integer in 1..=10000",
+        ));
+    }
+    Ok(value)
+}
+
+impl Default for RpcConfig {
+    fn default() -> Self {
+        Self {
+            requests_per_minute: default_rpc_requests_per_minute(),
+            operator: None,
+        }
+    }
 }
 
 /// Operator read-surface configuration (`[rpc.operator]`, #707).
@@ -110,6 +144,11 @@ impl OperatorConfig {
 }
 
 impl RpcConfig {
+    /// Validated default RPC quota per minute, including anonymous requests.
+    pub fn requests_per_minute(&self) -> u32 {
+        self.requests_per_minute
+    }
+
     /// The effective operator read-token secret, or `None` when the operator
     /// surface is not configured (absent section OR empty secret). When this
     /// is `None` the operator RPCs are OFF and the node behaves as today.
@@ -976,6 +1015,49 @@ pub fn validate_network(network: Network) -> Result<()> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn test_rpc_quota_config_admission() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut base = toml::Value::try_from(Config::new_relay(Network::Testnet)).unwrap();
+        base.as_table_mut().unwrap().remove("rpc");
+        let base = toml::to_string(&base).unwrap();
+        fs::write(&path, &base).unwrap();
+        assert_eq!(Config::load(&path).unwrap().rpc.requests_per_minute(), 100);
+        for (section, expected) in [
+            ("[rpc]".to_string(), 100),
+            ("[rpc]\nrequests_per_minute = 1".to_string(), 1),
+            ("[rpc]\nrequests_per_minute = 600".to_string(), 600),
+            ("[rpc]\nrequests_per_minute = 10000".to_string(), 10000),
+        ] {
+            fs::write(&path, format!("{base}\n{section}\n")).unwrap();
+            let config = Config::load(&path).unwrap();
+            assert_eq!(config.rpc.requests_per_minute(), expected);
+            config.save(&path).unwrap();
+            assert_eq!(
+                Config::load(&path).unwrap().rpc.requests_per_minute(),
+                expected
+            );
+        }
+        for invalid in [
+            "0",
+            "10001",
+            "-1",
+            "4294967296",
+            "600.0",
+            "true",
+            "\"600\"",
+            "[600]",
+        ] {
+            fs::write(
+                &path,
+                format!("{base}\n[rpc]\nrequests_per_minute = {invalid}\n"),
+            )
+            .unwrap();
+            assert!(Config::load(&path).is_err(), "accepted {invalid}");
+        }
+    }
 
     #[test]
     fn test_config_roundtrip() {
