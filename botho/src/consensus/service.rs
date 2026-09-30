@@ -6,8 +6,9 @@ use super::{validation::TransactionValidator, value::ConsensusValue};
 use crate::ledger::ChainState;
 use bth_common::NodeID;
 use bth_consensus_scp::{
+    ballot::Ballot,
     create_null_logger,
-    msg::Msg as ScpMsg,
+    msg::{Msg as ScpMsg, Topic},
     node::Node,
     slot::{Phase as ScpPhase, SlotMetrics},
     QuorumSet, ScpNode, SlotIndex,
@@ -441,6 +442,13 @@ impl ConsensusService {
                     format!("Transaction not in cache: {:?}", &value.tx_hash[0..8])
                 })?;
 
+                // Ballot composition uses the advertised kind. Bind it to the
+                // cached payload so a transfer cannot masquerade as the mint
+                // required to build a block (or hide a mint as a transfer).
+                if value.is_minting_tx != entry.is_minting_tx {
+                    return Err("Consensus value kind does not match cached transaction".into());
+                }
+
                 // Create a temporary validator for the (tip-agnostic) check.
                 // BOTH the minting-tx and transfer-tx intrinsic paths are now
                 // fully tip-agnostic (issue #451 removed the transfer staleness
@@ -472,6 +480,16 @@ impl ConsensusService {
                 .filter(|v| !v.is_minting_tx)
                 .cloned()
                 .collect();
+
+            // Nomination confirms individual values, not complete blocks.
+            // Transfers can reach Z before any mint, even when proposed with
+            // one. Leave the ballot unstarted until a mint is confirmed too;
+            // never externalize a set that the block builder cannot construct.
+            if minting_txs.is_empty() {
+                return Err(
+                    "Confirmed nominations do not yet include a minting transaction".into(),
+                );
+            }
 
             // Sort minting txs by priority (highest first) - best PoW wins
             minting_txs.sort_by(|a, b| {
@@ -1007,6 +1025,13 @@ impl ConsensusService {
         let scp_msg: ScpMsg<ConsensusValue> = bincode::deserialize(&msg.payload)
             .map_err(|e| format!("Failed to deserialize SCP message: {}", e))?;
 
+        // Validate composite ballot shape before any peer-slot anchoring or
+        // SCP state mutation. Individual-value validity cannot express the
+        // exactly-one-mint invariant; peer ballots can otherwise bypass our
+        // combiner through prepared/committed ballot adoption. Nomination
+        // sets remain unrestricted because they contain independent values.
+        Self::validate_ballot_mints(&scp_msg)?;
+
         // Record message type in current span
         let msg_type = crate::telemetry::msg_type_name(&scp_msg.topic);
         Span::current().record("msg_type", msg_type);
@@ -1041,6 +1066,35 @@ impl ConsensusService {
         self.check_externalized();
 
         Ok(())
+    }
+
+    /// Check the block-level invariant on every ballot a peer can cause SCP
+    /// to adopt. The zero Prepare ballot is an unstarted protocol sentinel.
+    fn validate_ballot_mints(message: &ScpMsg<ConsensusValue>) -> Result<(), String> {
+        let check = |ballot: &Ballot<ConsensusValue>, allow_zero: bool| {
+            if !(allow_zero && ballot.is_zero())
+                && ballot.X.iter().filter(|value| value.is_minting_tx).count() != 1
+            {
+                Err("Consensus ballot must contain exactly one minting transaction".to_string())
+            } else {
+                Ok(())
+            }
+        };
+        match &message.topic {
+            Topic::Nominate(_) => Ok(()),
+            Topic::NominatePrepare(_, payload) | Topic::Prepare(payload) => {
+                check(&payload.B, true)?;
+                if let Some(ballot) = &payload.P {
+                    check(ballot, false)?;
+                }
+                if let Some(ballot) = &payload.PP {
+                    check(ballot, false)?;
+                }
+                Ok(())
+            }
+            Topic::Commit(payload) => check(&payload.B, false),
+            Topic::Externalize(payload) => check(&payload.C, false),
+        }
     }
 
     /// Process timeouts and periodic tasks
@@ -1195,9 +1249,12 @@ impl ConsensusService {
                 .cloned()
         };
 
-        if let Some(minting_tx) = minting_tx {
-            to_propose.insert(minting_tx);
-        }
+        let Some(minting_tx) = minting_tx else {
+            // Keep transfers queued while the miner prepares the next mint.
+            // This also guards the solo path, which bypasses the combiner.
+            return;
+        };
+        to_propose.insert(minting_tx);
 
         // Fill remaining slots with transfer txs
         let remaining_slots = self
@@ -1924,6 +1981,256 @@ mod tests {
     use bth_consensus_scp_types::test_utils::test_node_id;
     use bth_transaction_types::ClusterTagVector;
 
+    #[test]
+    fn mint_invariant_solo_waits_for_mint_without_losing_transfers() {
+        let mut svc = solo_service();
+        let transfer = valid_transfer_tx();
+        svc.submit_transaction(
+            transfer.hash(),
+            transfer.fee,
+            bincode::serialize(&transfer).unwrap(),
+        );
+        svc.propose_pending_values();
+        assert!(
+            svc.externalized.is_none(),
+            "transfer-only work is not a block"
+        );
+        assert_eq!(svc.pending_count(), 1);
+        let mint = intrinsic_valid_minting_tx(1, [0; 32], 1);
+        svc.submit_minting_tx(
+            mint.hash(),
+            mint.pow_priority(),
+            bincode::serialize(&mint).unwrap(),
+        );
+        svc.propose_pending_values();
+        let values = svc.externalized.as_ref().unwrap();
+        assert_eq!(values.len(), 2);
+        assert_eq!(values.iter().filter(|v| v.is_minting_tx).count(), 1);
+        assert!(values.iter().any(|v| v.tx_hash == transfer.hash()));
+    }
+
+    #[test]
+    fn mint_invariant_federated_local_proposal_waits_for_mint() {
+        let mut svc = peered_service(&[1, 2]);
+        let tx = valid_transfer_tx();
+        svc.submit_transaction(tx.hash(), tx.fee, bincode::serialize(&tx).unwrap());
+        svc.propose_pending_values();
+        assert!(svc.proposed_values.is_empty());
+        assert!(!svc.slot_status().scp_slot_active);
+        assert_eq!(svc.pending_count(), 1);
+    }
+
+    #[test]
+    fn mint_invariant_confirmed_transfers_wait_for_delayed_mint() {
+        let cfg = ConsensusConfig::fixed_timing(0);
+        let qs = recommended_quorum(&[1, 2]);
+        let mut a = ConsensusService::new(node(1), qs.clone(), cfg.clone(), genesis_chain_state());
+        let mut b = ConsensusService::new(node(2), qs, cfg, genesis_chain_state());
+        let tx = valid_transfer_tx();
+        let value = ConsensusValue::from_transaction(tx.hash(), tx.fee);
+        for svc in [&mut a, &mut b] {
+            svc.register_transfer_tx(tx.hash(), bincode::serialize(&tx).unwrap());
+        }
+        // Drive the real SCP nodes directly so a local-proposal guard cannot
+        // hide a combiner bug. Nomination confirms VALUES independently; a
+        // peer may nominate transfers before the mint reaches its Z set.
+        let mut to_b: Vec<_> = a
+            .scp_node
+            .propose_values([value].into())
+            .unwrap()
+            .into_iter()
+            .collect();
+        let mut to_a: Vec<_> = b
+            .scp_node
+            .propose_values([value].into())
+            .unwrap()
+            .into_iter()
+            .collect();
+        for _ in 0..100 {
+            to_b.extend(
+                a.scp_node
+                    .handle_messages(std::mem::take(&mut to_a))
+                    .unwrap(),
+            );
+            to_a.extend(
+                b.scp_node
+                    .handle_messages(std::mem::take(&mut to_b))
+                    .unwrap(),
+            );
+        }
+        for svc in [&a, &b] {
+            assert_eq!(
+                svc.current_slot(),
+                1,
+                "mintless values must not externalize"
+            );
+            let m = svc.scp_node.get_current_slot_metrics();
+            assert_eq!(m.bN, 0, "confirmed transfers cannot seed a ballot");
+            assert_eq!(
+                m.num_confirmed_nominated, 1,
+                "transfer nomination remains valid"
+            );
+        }
+        // Only A submits the new mint locally; B receives its payload and
+        // follows nomination. This models the dedicated one-producer fleet.
+        let mint = intrinsic_valid_minting_tx(1, [0; 32], 1);
+        submit_and_register(&mut a, &mut b, &mint);
+        // A single proposer may need a nomination-leader timeout before its
+        // new mint is adopted; give real SCP time to run those timeouts.
+        let (av, bv) = run_two_services_with_pause(&mut a, &mut b, 120, Duration::from_millis(50));
+        let values = av.expect("delayed mint must unblock the same slot");
+        assert_eq!(Some(values.clone()), bv);
+        assert_eq!(values.iter().filter(|v| v.is_minting_tx).count(), 1);
+        assert!(values.iter().any(|v| v.tx_hash == tx.hash()));
+    }
+
+    #[test]
+    fn mint_invariant_rejects_mintless_peer_ballots_in_every_field() {
+        use bth_consensus_scp::msg::{CommitPayload, ExternalizePayload};
+        let tx = valid_transfer_tx();
+        let transfer = ConsensusValue::from_transaction(tx.hash(), tx.fee);
+        let mint = intrinsic_valid_minting_tx(1, [0; 32], 1);
+        let mint_value = ConsensusValue::from_minting_tx(mint.hash(), mint.pow_priority());
+        let good = Ballot::new(2, &[mint_value]);
+        let bad = Ballot::new(1, &[transfer]);
+        let nom = NominatePayload {
+            X: [mint_value].into(),
+            Y: [transfer].into(),
+        };
+        let payloads = [
+            PreparePayload {
+                B: bad.clone(),
+                P: None,
+                PP: None,
+                CN: 0,
+                HN: 0,
+            },
+            PreparePayload {
+                B: good.clone(),
+                P: Some(bad.clone()),
+                PP: None,
+                CN: 0,
+                HN: 0,
+            },
+            PreparePayload {
+                B: Ballot::new(3, &good.X),
+                P: Some(good),
+                PP: Some(bad.clone()),
+                CN: 0,
+                HN: 0,
+            },
+        ];
+        let mut topics = Vec::new();
+        for p in payloads {
+            topics.push(Topic::Prepare(p.clone()));
+            topics.push(Topic::NominatePrepare(nom.clone(), p));
+        }
+        topics.push(Topic::Commit(CommitPayload {
+            B: bad.clone(),
+            PN: 1,
+            CN: 1,
+            HN: 1,
+        }));
+        topics.push(Topic::Externalize(ExternalizePayload { C: bad, HN: 1 }));
+        for topic in topics {
+            let qs = recommended_quorum(&[1, 2]);
+            let mut svc = peered_service(&[1, 2]);
+            svc.register_transfer_tx(tx.hash(), bincode::serialize(&tx).unwrap());
+            svc.register_minting_tx(mint.hash(), bincode::serialize(&mint).unwrap());
+            let msg = Msg::new(node(2), qs, svc.current_slot(), topic);
+            assert!(
+                msg.validate().is_ok(),
+                "valid SCP shape isolates application invariant: {:?}",
+                msg.topic
+            );
+            let result = svc.handle_message(wire(&node(2), &msg));
+            assert!(result.is_err(), "accepted mintless ballot: {:?}", msg.topic);
+            assert!(!svc.slot_status().scp_slot_active);
+        }
+    }
+
+    #[test]
+    fn mint_invariant_rejects_empty_and_multiple_mint_ballots() {
+        use bth_consensus_scp::msg::ExternalizePayload;
+        let first = ConsensusValue::from_minting_tx([1; 32], 10);
+        let second = ConsensusValue::from_minting_tx([2; 32], 20);
+        for ballot in [
+            Ballot::new(1, &[]),
+            Ballot::new(1, &[first, second]),
+            Ballot::new(0, &[]),
+        ] {
+            let mut svc = peered_service(&[1, 2]);
+            let msg = Msg::new(
+                node(2),
+                recommended_quorum(&[1, 2]),
+                100,
+                Topic::Externalize(ExternalizePayload { C: ballot, HN: 1 }),
+            );
+            assert!(svc.handle_message(wire(&node(2), &msg)).is_err());
+            assert_eq!(
+                svc.current_slot(),
+                1,
+                "invalid composition must not anchor to a future slot"
+            );
+            assert!(svc.peer_advertised_slots.is_empty());
+        }
+    }
+
+    #[test]
+    fn mint_invariant_transfer_only_nomination_and_zero_ballot_remain_valid() {
+        let tx = valid_transfer_tx();
+        let value = ConsensusValue::from_transaction(tx.hash(), tx.fee);
+        let nom = NominatePayload {
+            X: [value].into(),
+            Y: BTreeSet::new(),
+        };
+        for topic in [
+            Topic::Nominate(nom.clone()),
+            Topic::NominatePrepare(
+                nom,
+                PreparePayload {
+                    B: Ballot::new(0, &[]),
+                    P: None,
+                    PP: None,
+                    CN: 0,
+                    HN: 0,
+                },
+            ),
+        ] {
+            let mut svc = peered_service(&[1, 2]);
+            svc.register_transfer_tx(tx.hash(), bincode::serialize(&tx).unwrap());
+            let msg = Msg::new(
+                node(2),
+                recommended_quorum(&[1, 2]),
+                svc.current_slot(),
+                topic,
+            );
+            assert!(msg.validate().is_ok());
+            svc.handle_message(wire(&node(2), &msg)).unwrap();
+            assert_eq!(svc.slot_status().ballot_counter, 0);
+            assert!(svc.externalized.is_none());
+        }
+    }
+
+    #[test]
+    fn mint_invariant_advertised_kind_must_match_cached_payload() {
+        let tx = valid_transfer_tx();
+        let forged = ConsensusValue::from_minting_tx(tx.hash(), tx.fee);
+        let mut svc = peered_service(&[1, 2]);
+        svc.register_transfer_tx(tx.hash(), bincode::serialize(&tx).unwrap());
+        let msg = peer_nominate_prepare(
+            node(2),
+            recommended_quorum(&[1, 2]),
+            svc.current_slot(),
+            forged,
+        );
+        svc.handle_message(wire(&node(2), &msg)).unwrap();
+        assert!(
+            !svc.slot_status().scp_slot_active,
+            "transfer payload cannot impersonate a mint"
+        );
+    }
+
     /// A NodeID for each numeric id; node 1 is "us".
     fn node(n: u32) -> NodeID {
         test_node_id(n)
@@ -2041,7 +2348,7 @@ mod tests {
         let mut svc = solo_service();
 
         // Drive a solo round: submit a tx and externalize it directly.
-        svc.submit_transaction([7u8; 32], 0, vec![1, 2, 3]);
+        svc.submit_minting_tx([7u8; 32], 0, vec![1, 2, 3]);
         svc.propose_pending_values();
         assert!(
             svc.externalized.is_some(),
@@ -2078,7 +2385,7 @@ mod tests {
             solo.should_propose_this_round(),
             "min_peers==0 node must always be eligible to mint solo"
         );
-        solo.submit_transaction([7u8; 32], 0, vec![1, 2, 3]);
+        solo.submit_minting_tx([7u8; 32], 0, vec![1, 2, 3]);
         solo.propose_pending_values();
         assert!(
             solo.externalized.is_some(),
@@ -2199,7 +2506,7 @@ mod tests {
         let mut svc = solo_service();
         svc.set_initial_sync_complete(sync.is_synced());
         assert!(svc.should_propose_this_round());
-        svc.submit_transaction([7u8; 32], 0, vec![1, 2, 3]);
+        svc.submit_minting_tx([7u8; 32], 0, vec![1, 2, 3]);
         svc.propose_pending_values();
         assert!(
             svc.externalized.is_some(),
@@ -2571,6 +2878,15 @@ mod tests {
         b: &mut ConsensusService,
         max_rounds: usize,
     ) -> (Option<Vec<ConsensusValue>>, Option<Vec<ConsensusValue>>) {
+        run_two_services_with_pause(a, b, max_rounds, Duration::ZERO)
+    }
+
+    fn run_two_services_with_pause(
+        a: &mut ConsensusService,
+        b: &mut ConsensusService,
+        max_rounds: usize,
+        pause: Duration,
+    ) -> (Option<Vec<ConsensusValue>>, Option<Vec<ConsensusValue>>) {
         let a_id = a.node_id().clone();
         let b_id = b.node_id().clone();
         let mut a_ext: Option<Vec<ConsensusValue>> = None;
@@ -2620,6 +2936,9 @@ mod tests {
             // Keep node ids referenced (they double as identity for routing in a
             // real network; here routing is by inbox).
             let _ = (&a_id, &b_id);
+            if !pause.is_zero() {
+                std::thread::sleep(pause);
+            }
         }
 
         (a_ext, b_ext)
@@ -3567,7 +3886,7 @@ mod tests {
         {
             let mut svc = peered_service(&[1, 2]);
             let slot = svc.scp_node.current_slot_index();
-            let peer_msg = peer_nominate_prepare(node(2), slot_qs.clone(), slot, value);
+            let peer_msg = peer_nominate_only(node(2), slot_qs.clone(), slot, value);
             // The message is dropped at the validity gate; the slot must not pick
             // up any peer nominate state.
             let _ = svc.scp_node.handle_message(&peer_msg);
@@ -3586,7 +3905,7 @@ mod tests {
             let mut svc = peered_service(&[1, 2]);
             let slot = svc.scp_node.current_slot_index();
             svc.register_transfer_tx(tx_hash, tx_bytes);
-            let peer_msg = peer_nominate_prepare(node(2), slot_qs, slot, value);
+            let peer_msg = peer_nominate_only(node(2), slot_qs, slot, value);
             svc.scp_node
                 .handle_message(&peer_msg)
                 .expect("peer message must be accepted once the tx is in the cache");
@@ -4809,7 +5128,7 @@ mod tests {
         assert!(svc.last_externalized_at.is_none());
         assert_eq!(svc.slot_status().last_externalized_seconds_ago, None);
 
-        svc.submit_transaction([7u8; 32], 0, vec![1, 2, 3]);
+        svc.submit_minting_tx([7u8; 32], 0, vec![1, 2, 3]);
         svc.propose_pending_values();
         assert!(
             svc.externalized.is_some(),
