@@ -514,6 +514,8 @@ class Controller:
         host = info.get('ingress_role', HOSTS[(sum(identifier.encode()) % len(HOSTS))])
         wire = len(json.dumps({'jsonrpc':'2.0','id':1404,'method':'tx_submit','params':{'tx_hex':data.hex()}}).encode())
         self.j.begin_submit(identifier,host,wire,info['burst'],self.intent_deadline(row))
+        # Retain the durable marker's byte charge through receipt transitions.
+        info = json.loads(self.j.intent(identifier)['info'])
         self.j.set('last_write',time.time())
         if info.get('crash')=='submitting' and not self.j.get('crash:submitting'):
             # Crash after the durable marker. No retry is possible on recovery;
@@ -577,20 +579,14 @@ class Controller:
             started = time.monotonic()
             try:
                 for row in self.j.pending():
-                    # A persisted prepared intent has never acquired a submit marker.
-                    # Query its hash on every ingress before allowing its first submit.
+                    # Admission alone owns first submission of prepared work.
+                    # Quota pressure must not interrupt unrelated receipt reads.
+                    if row['state']=='prepared':
+                        continue
                     if row['hash']:
                         statuses = await asyncio.gather(*(self.rpc.call(h,'getTransactionStatus',{'hash':row['hash']}) for h in HOSTS))
                     else:
                         statuses = []
-                    if row['state']=='prepared':
-                        if any(s.get('status')!='unknown' for s in statuses):
-                            self.halt('unsubmitted prepared hash unexpectedly exists on chain')
-                        elif self.j.get('status') in ('setup','running') and not self.admission_lock.locked():
-                            async with self.admission_lock:
-                                if self.j.intent(row['id'])['state']=='prepared':
-                                    await self.submit_prepared(row['id'])
-                        continue
                     age = time.time()-(row['submitted'] or row['prepared'])
                     if not statuses or not all(s.get('confirmed') and s.get('txHash')==row['hash'] for s in statuses):
                         if age>900:
@@ -839,6 +835,28 @@ class Controller:
         self.j.set('wallet_paths',[w['key'] for w in self.wallets])
         self.j.event(None,'wallet_restored',{'wallet':wallet})
 
+    async def admission_tick(self):
+        async with self.admission_lock:
+            self.gate()
+            waiting = self.j.rows("state='prepared' ORDER BY prepared, offered, id")
+            if waiting:
+                row = waiting[0]
+                # Persisted signatures have no submit marker. Require every
+                # ingress to report unknown before their one allowed attempt.
+                statuses = await asyncio.gather(*(self.rpc.call(
+                    h,'getTransactionStatus',{'hash':row['hash']}) for h in HOSTS))
+                if any(s.get('status')!='unknown' for s in statuses):
+                    self.halt('unsubmitted prepared hash unexpectedly exists on chain')
+                else:
+                    await self.submit_prepared(row['id'])
+                # Even when quota defers this signature, never let new signing
+                # steal its next capacity slot or reserve more wallet inputs.
+                return
+            if self.j.get('status')=='setup':
+                await self.setup_tick()
+            else:
+                await self.campaign_tick()
+
     async def run(self):
         if not self.j.get('status'):
             self.j.set('setup_start',self.config['setup_start'])
@@ -876,12 +894,7 @@ class Controller:
                     break
                 try:
                     if status in ('setup','running'):
-                        self.gate()
-                        async with self.admission_lock:
-                            if status=='setup':
-                                await self.setup_tick()
-                            else:
-                                await self.campaign_tick()
+                        await self.admission_tick()
                 except Quota as error:
                     self.j.event(None,'admission_quota',str(error))
                 except Exception as error:
