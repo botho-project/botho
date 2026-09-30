@@ -1,14 +1,93 @@
 """Durable campaign reporting shared by legacy and discovery profiles."""
 
+import hashlib
 import json
 import math
+import os
 import resource
+import stat
 import time
 from plan import expand
 from runtime import HOSTS, atomic, digest
 
 
-def accounting_status(journal, rows, now):
+def artifact_evidence(state, rows, byte_limit):
+    """Audit only controller publications; never inspect signatures or infer sends.
+
+    Missing archives are unavailable evidence, not an empty artifact directory.
+    Hash only disagreements, keeping ordinary reporting independent of total
+    signed bytes. SHA256 identifies file contents, not the transaction hash.
+    """
+    directory = state / "artifacts"
+    result = {
+        "status": "unavailable",
+        "directory": str(directory),
+        "orphaned_signed": None,
+        "ambiguous_signed": None,
+        "findings": [],
+        "signature_validation": "not_performed",
+        "submission_evidence": "journal_only",
+    }
+    try:
+        if not stat.S_ISDIR(directory.lstat().st_mode):
+            raise OSError("artifact directory is not a regular directory")
+        paths = sorted(directory.iterdir())
+    except OSError as error:
+        result["reason"] = str(error)
+        return result
+    intents = {row["id"]: row for row in rows}
+    for path in paths:
+        row = intents.get(path.stem)
+        if (
+            path.suffix == ".bin"
+            and row
+            and row["prepared"] is not None
+            and row["hash"]
+        ):
+            continue
+        finding = {
+            "path": str(path),
+            "intent_id": row["id"] if row else None,
+            "kind": row["kind"] if row else None,
+            "classification": "orphaned_signed"
+            if path.suffix == ".bin"
+            else "ambiguous_signed",
+            "reason": "published artifact lacks a journal preparation record"
+            if path.suffix == ".bin"
+            else "partial or unexpected artifact",
+            "journal_transaction_hash": row["hash"] if row else None,
+            "sha256": None,
+            "bytes": None,
+        }
+        try:
+            # No symlinks, special files, or unbounded reads of malformed files.
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, "rb") as stream:
+                before = os.fstat(stream.fileno())
+                if not stat.S_ISREG(before.st_mode) or before.st_size > byte_limit:
+                    raise OSError("not a bounded regular artifact")
+                data = stream.read(byte_limit + 1)
+                after = os.fstat(stream.fileno())
+                if len(data) != before.st_size or (
+                    before.st_size,
+                    before.st_mtime_ns,
+                ) != (after.st_size, after.st_mtime_ns):
+                    raise OSError("artifact changed during inspection")
+                finding.update(sha256=hashlib.sha256(data).hexdigest(), bytes=len(data))
+        except OSError as error:
+            finding.update(classification="ambiguous_signed", reason=str(error))
+        result["findings"].append(finding)
+    result.update(
+        status="checked",
+        **{
+            kind: sum(f["classification"] == kind for f in result["findings"])
+            for kind in ("orphaned_signed", "ambiguous_signed")
+        },
+    )
+    return result
+
+
+def accounting_status(journal, rows, now, artifacts=None):
     """Describe retained evidence without inferring balances or releasing inputs."""
     snapshot = journal.get("accounting")
     writes = [
@@ -62,6 +141,8 @@ def accounting_status(journal, rows, now):
         reasons.append("signed or submitted work remains unreconciled")
     if reserved:
         reasons.append("retained input reservations")
+    if artifacts and artifacts["findings"]:
+        reasons.append("artifact/journal disagreement")
     terminal = journal.get("status") in (
         "held",
         "incomplete",
@@ -87,7 +168,7 @@ def accounting_status(journal, rows, now):
     }
 
 
-def rehearsal_summary(journal, plan):
+def rehearsal_summary(journal, plan, artifacts=None):
     settings = plan["rehearsal"]
     expected = (settings["duration_seconds"] - 120) // settings["interval_seconds"]
     rows = journal.rows("kind='rehearsal'")
@@ -99,6 +180,11 @@ def rehearsal_summary(journal, plan):
         if journal.get("status") in ("held", "incomplete")
         else "in_progress"
     }
+    findings = [
+        f for f in (artifacts or {}).get("findings", []) if f["kind"] == "rehearsal"
+    ]
+    uncertain = {f["intent_id"] for f in findings}
+    checked = artifacts is not None and artifacts["status"] == "checked"
     return {
         **result,
         "expected": expected,
@@ -108,7 +194,25 @@ def rehearsal_summary(journal, plan):
         "signed_unsubmitted": sum(
             r["prepared"] is not None and r["submitted"] is None for r in rows
         ),
-        "unsigned": sum(r["prepared"] is None and r["submitted"] is None for r in rows),
+        "orphaned_signed_artifacts": sum(
+            f["classification"] == "orphaned_signed" for f in findings
+        )
+        if checked
+        else None,
+        "ambiguous_signed_artifacts": sum(
+            f["classification"] == "ambiguous_signed" for f in findings
+        )
+        if checked
+        else None,
+        "unsigned": sum(
+            r["prepared"] is None
+            and r["submitted"] is None
+            and r["id"] not in uncertain
+            for r in rows
+        ),
+        "unsigned_basis": "journal_and_artifact_presence"
+        if checked
+        else "journal_only",
         "reconciled": counts.get("reconciled", 0),
         "state_counts": counts,
     }
@@ -116,6 +220,9 @@ def rehearsal_summary(journal, plan):
 
 def controller_report(self):
     rows = self.j.rows()
+    artifacts = artifact_evidence(
+        self.state, rows, self.j.limits["max_signed_transaction_bytes"]
+    )
     nominal = (
         len(self.events)
         if hasattr(self, "events")
@@ -163,7 +270,8 @@ def controller_report(self):
             if r["kind"] == "funding"
         ),
         "accounting": self.j.get("accounting"),
-        "accounting_status": accounting_status(self.j, rows, time.time()),
+        "artifact_evidence": artifacts,
+        "accounting_status": accounting_status(self.j, rows, time.time(), artifacts),
         "fleet": self.j.get("fleet_latest"),
         "resources": {h: self.j.get("latest:" + h) for h in HOSTS},
         "controller": {
@@ -178,7 +286,6 @@ def controller_report(self):
         },
     }
     atomic(self.state / "report.json", report)
-    self.j.set("report_at", time.time())
     return report
 
 
