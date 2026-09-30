@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import time
 from plan import expand
+from reporting import legacy_lottery_evidence
 from runtime import (Gate, HOSTS, Journal, PENDING, Quota, Rpc, atomic,
                      check_identity, check_resources, digest, campaign_targets, campaign_tls_context, pinned_file)
 
@@ -687,8 +688,11 @@ class Controller:
         opening = self.j.get('opening_balance',0)
         report = {'at':time.time(),'opening':opening,'grants':grants,'lottery_receipts':awards,
                   'balances':balances,'ending':sum(balances),'signed_fees':fees,
-                  'difference':opening+grants+awards-self.j.get('opening_lottery',0)-sum(balances)-fees}
+                  'difference':opening+grants+awards-self.j.get('opening_lottery',0)-sum(balances)-fees,
+                  'legacy_lottery':legacy_lottery_evidence(self.inventory,lottery,state)}
         self.j.set('accounting',report)
+        if report['legacy_lottery']['award_count']:
+            raise Gate('unsupported legacy lottery payouts share a key image; see accounting evidence')
         if report['difference'] != 0:
             raise Gate('exact integer accounting mismatch')
 
