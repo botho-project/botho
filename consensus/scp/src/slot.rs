@@ -326,10 +326,11 @@ impl<V: Value, ValidationError: Display> ScpSlot<V> for Slot<V, ValidationError>
         )
     )]
     fn propose_values(&mut self, values: &BTreeSet<V>) -> Result<Option<Msg<V>>, String> {
-        // Only accept values during the Nominate phase and if no other values have been
-        // confirmed nominated.
-        if !(self.phase == Phase::NominatePrepare && self.Z.is_empty()) {
-            trace!("Rejecting proposal: not in NominatePrepare or Z is not empty");
+        // A nonempty Z may still be incomplete for the application combiner.
+        // Until a ballot starts, accept the additional nominations needed to
+        // form a composite value. Once it starts, keep the existing freeze.
+        if !(self.phase == Phase::NominatePrepare && (self.Z.is_empty() || self.B.is_zero())) {
+            trace!("Rejecting proposal: nomination complete and ballot started");
             return Ok(self.out_msg());
         }
 
@@ -614,9 +615,10 @@ impl<V: Value, ValidationError: Display> Slot<V, ValidationError> {
         // Schedule a round if one is not already scheduled.
         self.schedule_next_nomination_round();
 
-        // If no values have been confirmed nominated, the node may add new values to
-        // its voted set.
-        if self.Z.is_empty() {
+        // Keep adopting leader values while the combiner cannot yet form the
+        // first ballot. Otherwise an incomplete confirmed Z could never gain
+        // the missing values, even through later nomination rounds.
+        if self.Z.is_empty() || self.B.is_zero() {
             // Gather all nominate payloads from other nodes.
             let mut nominate_payloads: HashMap<NodeID, &NominatePayload<V>> = Default::default();
             for (node_id, msg) in &self.M {
