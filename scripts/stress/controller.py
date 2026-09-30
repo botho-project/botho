@@ -918,6 +918,7 @@ class Controller:
                 await self.sync(draining=True)
             reconciler=asyncio.create_task(self.reconcile())
             while True:
+                started=time.monotonic()
                 status=self.j.get('status')
                 if status in ('complete','incomplete','rehearsal_complete'):
                     break
@@ -940,7 +941,9 @@ class Controller:
                     self.report()
                     atomic(self.state/'reports'/str(int(time.time())),self.report())
                     self.j.set('last_summary_at',time.time())
-                await asyncio.sleep(1)
+                # Include admission/report work in the cadence, but always
+                # yield so monitoring and reconciliation can make progress.
+                await asyncio.sleep(max(.2,1-(time.monotonic()-started)))
             if self.j.get('status') == 'rehearsal_complete':
                 return
             if self.fresh and not self.j.pending():
