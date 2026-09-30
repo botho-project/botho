@@ -28,6 +28,8 @@ def pico(value, name):
 
 
 def expand(plan):
+    from discovery_plan import execution_mode
+    execution_mode(plan)
     if plan.get("schema_version") == 2:
         from discovery_plan import expand_discovery
         return expand_discovery(plan)

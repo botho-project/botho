@@ -66,7 +66,7 @@ class Controller:
             raise Gate('fleet or observer data stale')
         if any(not s.get('synced') for s in self.statuses.values()):
             raise Quota('fleet is recovering sync')
-        deadline = self.j.get('end',self.j.get('setup_start')+8*3600)
+        deadline = self.j.get('end',self.j.get('setup_start')+self.plan.get('setup_deadline_hours',8)*3600)
         if time.time() >= deadline:
             raise Gate('immutable admission deadline')
 
@@ -864,7 +864,7 @@ class Controller:
             reconciler=asyncio.create_task(self.reconcile())
             while True:
                 status=self.j.get('status')
-                if status in ('complete','incomplete'):
+                if status in ('complete','incomplete','rehearsal_complete'):
                     break
                 if status=='running' and time.time()>=self.j.get('end'):
                     self.j.set('status','draining')
@@ -891,6 +891,8 @@ class Controller:
                     atomic(self.state/'reports'/str(int(time.time())),self.report())
                     self.j.set('last_summary_at',time.time())
                 await asyncio.sleep(1)
+            if self.j.get('status') == 'rehearsal_complete':
+                return
             if self.fresh and not self.j.pending():
                 await self.sync(full=True, draining=True)
                 self.accounting()

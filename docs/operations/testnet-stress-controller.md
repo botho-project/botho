@@ -185,6 +185,42 @@ escalation. Existing journal crash/ambiguous-submit checks apply to both profile
 V2 restores a wallet but does not automatically kill validators or restart a
 controller; those fault semantics continue to have offline fault-injection tests.
 
+### Rehearsal-only live qualification
+
+Before committing to a new 72-hour campaign, use a **fresh** isolated v2 plan
+and deployment profile with `"execution_mode": "rehearsal_only"` in both.
+Set the plan's `setup_deadline_hours` to **1**. Keep the 72-hour phase blueprint
+for validation; the planner returns **zero campaign events** in this mode and
+budgets only the rehearsal's writes (540 with the default cadence).
+Omitting `execution_mode` preserves the existing full-campaign behavior.
+Unknown modes, a mode mismatch between documents, legacy rehearsal-only plans,
+and the wrong setup duration are rejected.
+
+Set the deployment profile's absolute `end` to **1.5–2 hours after `setup_start`**.
+This allows at most one hour for admission/setup and a 30-minute failure drain;
+controller and observer units receive that short runtime ceiling. Install an
+independent absolute host shutdown deadline at the same infrastructure cutoff;
+systemd runtime ceilings alone reset on a service restart and do not stop EC2
+billing. Complete provisioning, prefunding, output maturity, signer installation,
+RPC/observer access and artifact pinning **before** this short qualification
+window. Stage into new run-specific paths/accounts, never an old journal.
+
+All ordinary rehearsal gates remain: measured submission cadence and receipts,
+exact full-scan accounting, post-rehearsal input/decoy inventory, fresh fee
+observations from all five nodes, and the final health/admission gate. A pass
+ends with `status: rehearsal_complete` and `qualification_status: passed`.
+It creates no `start`, `end`, or `activated.json` and makes no campaign offers.
+The controller exits cleanly; restarting it remains terminal. Reported campaign
+`workload_delivery` is `not_requested`, and fee/72-hour `coverage_status` remains
+`incomplete`. A failure remains held/incomplete and cannot become a qualification
+pass merely because its payments later reconcile.
+
+Promotion is a separate fresh full-campaign launch with its own fixed deadlines,
+opening inventory and required rehearsal. Changing either document in a persisted
+qualification journal fails its immutable digest check. A qualification pass is
+initial generator evidence, not proof of sustained 72-hour capacity or production
+congestion/priority coverage.
+
 ### Inventory and short rehearsal prerequisites
 
 Use the existing explicit `deploy.py stage --profile ... --output ...` path,

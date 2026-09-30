@@ -120,6 +120,9 @@ class DiscoveryController(Controller):
             raise Gate("exact positive prefunded opening balances required")
         if sum(balances) > int(plan["funding"]["max_principal_picocredits"]):
             raise Gate("opening principal exceeds budget")
+        from discovery_plan import validate_lifetime
+
+        validate_lifetime(plan, config)
         super().__init__(state)
         self.fee_task = None
 
@@ -214,8 +217,10 @@ class DiscoveryController(Controller):
         return True
 
     async def setup_tick(self):
+        if self.j.get("status") != "setup":
+            raise Gate("setup is not active")
         now = time.time()
-        if now >= self.j.get("setup_start") + 8 * 3600:
+        if now >= self.j.get("setup_start") + self.plan["setup_deadline_hours"] * 3600:
             raise Gate(
                 "generator_limited: setup deadline before sustainable inventory/rehearsal"
             )
@@ -309,17 +314,26 @@ class DiscoveryController(Controller):
             offer_grace=self.j.limits["start_slot_grace_seconds"],
         )
         self.j.set("rehearsal_result", result)
-        latest = self.j.get("fee_latest", {})
-        if set(latest) != set(HOSTS) or any(
-            not 0 <= time.time() - q["at"] <= 60 for q in latest.values()
-        ):
-            raise Gate("rehearsal fee observations missing or stale")
         if result["status"] != "passed":
             raise Gate("generator_limited: short peak-rate rehearsal incomplete")
         height = await self.sync(full=True)
         self.accounting()
         if not self.inventory_ready(height):
             raise Gate("generator_limited: inventory depleted by rehearsal")
+        # Full scans yield to the monitor; a safety hold must survive completion.
+        self.gate()
+        latest = self.j.get("fee_latest", {})
+        if set(latest) != set(HOSTS) or any(
+            not 0 <= time.time() - q["at"] <= 60 for q in latest.values()
+        ):
+            raise Gate("rehearsal fee observations missing or stale")
+        if self.plan.get("execution_mode") == "rehearsal_only":
+            with self.j.transaction():
+                self.j.set("status", "rehearsal_complete")
+                self.j.set("stopped_at", time.time())
+                self.j.set("reason", "qualification passed; campaign not requested")
+            self.report()
+            return
         start = time.time() + 60
         if start + 72 * 3600 + 1800 > self.config["infrastructure_end"]:
             raise Gate("rehearsal left insufficient fixed infrastructure lifetime")
@@ -401,6 +415,8 @@ class DiscoveryController(Controller):
                 return
 
     async def campaign_tick(self):
+        if self.plan.get("execution_mode") == "rehearsal_only":
+            raise Gate("campaign forbidden in rehearsal-only mode")
         now = time.time()
         start = self.j.get("start")
         self.materialize(self.events, start, "campaign", now)
@@ -487,6 +503,16 @@ class DiscoveryController(Controller):
             if status in ("held", "incomplete")
             else "in_progress"
         )
+        if self.plan.get("execution_mode") == "rehearsal_only":
+            delivery = "not_requested"
+            report["qualification_status"] = (
+                "passed"
+                if status == "rehearsal_complete"
+                else "failed"
+                if status in ("held", "incomplete")
+                else "in_progress"
+            )
+        report["execution_mode"] = self.plan.get("execution_mode", "campaign")
         report["workload_delivery"] = delivery
         report["coverage_status"] = "incomplete"
         report["discovery"] = {
@@ -508,6 +534,10 @@ class DiscoveryController(Controller):
         return report
 
     async def run(self):
+        if self.j.get("status") in ("rehearsal_complete", "complete", "incomplete"):
+            self.report()
+            return
+
         async def fees_when_ready():
             while not self.closed and not self.statuses:
                 await asyncio.sleep(0.2)
