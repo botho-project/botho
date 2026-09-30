@@ -174,7 +174,13 @@ pub fn publish(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-pub fn scan(keys: &WalletKeys, blocks: &[BlockOutputs]) -> Result<Vec<Scanned>> {
+#[cfg(test)]
+thread_local! {
+    // Count the outputs handed to real ownership crypto, not elapsed time.
+    static OWNERSHIP_OUTPUTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn validate_history(blocks: &[BlockOutputs]) -> Result<()> {
     let mut heights = HashSet::new();
     let mut ids = HashSet::new();
     for block in blocks {
@@ -196,6 +202,21 @@ pub fn scan(keys: &WalletKeys, blocks: &[BlockOutputs]) -> Result<Vec<Scanned>> 
             }
         }
     }
+    Ok(())
+}
+
+pub fn scan(keys: &WalletKeys, blocks: &[BlockOutputs]) -> Result<Vec<Scanned>> {
+    validate_history(blocks)?;
+    scan_validated(keys, blocks)
+}
+
+/// Ownership crypto is separated from structural checks so Prepare can validate
+/// the entire request before limiting crypto work to caller-selected outputs.
+fn scan_validated(keys: &WalletKeys, blocks: &[BlockOutputs]) -> Result<Vec<Scanned>> {
+    #[cfg(test)]
+    OWNERSHIP_OUTPUTS.with(|count| {
+        count.set(count.get() + blocks.iter().map(|b| b.outputs.len()).sum::<usize>());
+    });
     WalletScanner::new(keys)
         .scan_outputs(blocks)
         .into_iter()
@@ -210,6 +231,50 @@ pub fn scan(keys: &WalletKeys, blocks: &[BlockOutputs]) -> Result<Vec<Scanned>> 
             })
         })
         .collect()
+}
+
+fn selected_ownership(
+    keys: &WalletKeys,
+    blocks: &[BlockOutputs],
+    selected: &[String],
+) -> Result<(Vec<Scanned>, HashSet<String>)> {
+    validate_history(blocks)?;
+    // RPC hex is case-insensitive; WalletScanner emits lowercase output IDs.
+    let output_id = |output: &crate::rpc_pool::TxOutput| {
+        format!(
+            "{}:{}",
+            output.tx_hash.to_ascii_lowercase(),
+            output.output_index
+        )
+    };
+    let mut ids = HashSet::new();
+    for output in blocks.iter().flat_map(|block| &block.outputs) {
+        ensure!(ids.insert(output_id(output)), "duplicate output id");
+    }
+    // Resolve first-target identity BEFORE slicing. An older original outside
+    // the selected set must still disqualify a later owned alias.
+    let canonical = canonical_rpc_history(blocks)
+        .iter()
+        .flat_map(|block| &block.outputs)
+        .map(output_id)
+        .filter(|id| selected.contains(id))
+        .collect();
+    let selected_blocks: Vec<_> = blocks
+        .iter()
+        .filter_map(|block| {
+            let outputs: Vec<_> = block
+                .outputs
+                .iter()
+                .filter(|output| selected.contains(&output_id(output)))
+                .cloned()
+                .collect();
+            (!outputs.is_empty()).then_some(BlockOutputs {
+                height: block.height,
+                outputs,
+            })
+        })
+        .collect();
+    Ok((scan_validated(keys, &selected_blocks)?, canonical))
 }
 
 pub fn inspect(bytes: &[u8]) -> Result<Value> {
@@ -320,8 +385,7 @@ pub fn execute(request: Request) -> Result<Value> {
             );
             ensure!(base_rate > 0, "missing network fee rate");
             let keys = read_keys(Path::new(&wallet))?;
-            let owned = scan(&keys, &blocks)?;
-            let canonical = scan(&keys, &canonical_rpc_history(&blocks))?;
+            let (owned, canonical) = selected_ownership(&keys, &blocks, &selected)?;
             let mut input_keys = HashSet::new();
             let mut inputs = Vec::new();
             let mut input_metadata = Vec::new();
@@ -331,10 +395,7 @@ pub fn execute(request: Request) -> Result<Value> {
                     .find(|o| &o.id == id)
                     .context("selected input is not owned")?;
                 ensure!(!reserved.contains(id), "input already reserved");
-                ensure!(
-                    canonical.iter().any(|o| o.id == *id),
-                    "input is not canonical"
-                );
+                ensure!(canonical.contains(id), "input is not canonical");
                 ensure!(
                     input_keys.insert(output.utxo.target_key),
                     "duplicate input target"
@@ -445,6 +506,10 @@ mod tests {
     }
 
     fn prepare_fixture(dir: &Path) -> Value {
+        prepare_shape_fixture(dir, 1)
+    }
+
+    fn prepare_shape_fixture(dir: &Path, input_count: usize) -> Value {
         use bth_transaction_clsag::TxOutput;
         use bth_transaction_types::ClusterTagVector;
 
@@ -453,9 +518,9 @@ mod tests {
         let wallet = dir.join("wallet.mnemonic");
         publish(&wallet, keys.mnemonic_phrase().as_bytes()).unwrap();
         let mut outputs = Vec::new();
-        // One owned input and exactly enough age-matched canonical decoys.
-        for index in 0..MIN_RING_SIZE {
-            let owner = if index == 0 { &keys } else { &sink };
+        // Selected real inputs plus exactly enough age-matched canonical decoys.
+        for index in 0..input_count + MIN_RING_SIZE - 1 {
+            let owner = if index < input_count { &keys } else { &sink };
             let out = TxOutput::new_hybrid_to_address(
                 20_000_000_000,
                 &owner.public_address(),
@@ -478,13 +543,268 @@ mod tests {
             &serde_json::from_value::<Vec<BlockOutputs>>(blocks.clone()).unwrap(),
         )
         .unwrap();
-        assert_eq!(owned.len(), 1);
+        assert_eq!(owned.len(), input_count);
         let recipient = sink.public_address_string(Network::Testnet).unwrap();
         json!({"operation":"prepare", "wallet":wallet, "blocks":blocks,
-            "height":120, "selected":[owned[0].id],
-            "spent":[{"keyImage":owned[0].key_image,"spent":false,"pending":false,"spentHeight":null}],
+            "height":120, "selected":owned.iter().map(|o| &o.id).collect::<Vec<_>>(),
+            "spent":owned.iter().map(|o| json!({"keyImage":o.key_image,"spent":false,"pending":false,"spentHeight":null})).collect::<Vec<_>>(),
             "reserved":[], "recipient":recipient, "allowed_recipients":[recipient],
             "amount":10_000_000_000u64,"base_rate":1,"artifact":dir.join("signed.bin")})
+    }
+
+    #[test]
+    fn prepare_ownership_work_is_bounded_by_selected_inputs() {
+        for inputs in [1, 2, 4] {
+            let dir = tempfile::tempdir().unwrap();
+            fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+            let request = prepare_shape_fixture(dir.path(), inputs);
+            for history_copies in [0, 64] {
+                let mut value = request.clone();
+                // Additional well-formed, unselected aliases increase history
+                // size without requiring costly fixture key generation.
+                let extra = value["blocks"][0]["outputs"][inputs].clone();
+                for index in 0..history_copies {
+                    let mut output = extra.clone();
+                    output["txHash"] = json!(hex::encode([index as u8 + 32; 32]));
+                    value["blocks"][0]["outputs"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(output);
+                }
+                value["artifact"] = json!(dir.path().join(format!("shape-{history_copies}.bin")));
+                OWNERSHIP_OUTPUTS.with(|count| count.set(0));
+                execute(serde_json::from_value(value).unwrap()).unwrap();
+                assert_eq!(
+                    OWNERSHIP_OUTPUTS.with(|count| count.get()),
+                    inputs,
+                    "ownership work grew with unselected history: {history_copies} copies"
+                );
+            }
+        }
+    }
+
+    fn prepare_error(value: Value) -> String {
+        execute(serde_json::from_value(value).unwrap())
+            .unwrap_err()
+            .to_string()
+    }
+
+    #[test]
+    fn scan_and_restore_still_discover_all_owned_outputs() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let value = prepare_shape_fixture(dir.path(), 4);
+        let keys = read_keys(Path::new(value["wallet"].as_str().unwrap())).unwrap();
+        let address = keys.public_address_string(Network::Testnet).unwrap();
+        let outputs = value["blocks"][0]["outputs"].as_array().unwrap().len();
+        let mut responses = Vec::new();
+        for operation in ["scan", "restore_check"] {
+            let mut request =
+                json!({"operation":operation,"wallet":value["wallet"],"blocks":value["blocks"]});
+            if operation == "restore_check" {
+                request["expected_address"] = json!(address);
+            }
+            OWNERSHIP_OUTPUTS.with(|count| count.set(0));
+            let response = execute(serde_json::from_value(request).unwrap()).unwrap();
+            assert_eq!(OWNERSHIP_OUTPUTS.with(|count| count.get()), outputs);
+            assert_eq!(response["owned"].as_array().unwrap().len(), 4);
+            responses.push(response);
+        }
+        assert_eq!(responses[0], responses[1]);
+    }
+
+    #[test]
+    fn prepare_rejects_invalid_unselected_history_before_ownership_crypto() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let request = prepare_fixture(dir.path());
+        for (field, invalid, expected) in [
+            ("txHash", "aa", "invalid output key length"),
+            ("targetKey", "aa", "invalid output key length"),
+            ("publicKey", "aa", "invalid output key length"),
+            ("amountCommitment", "aa", "invalid amount"),
+            ("kemCiphertext", "aa", "invalid KEM ciphertext"),
+            ("targetKey", "zz", "Invalid character"),
+        ] {
+            let mut value = request.clone();
+            value["blocks"][0]["outputs"][1][field] = json!(invalid);
+            OWNERSHIP_OUTPUTS.with(|count| count.set(0));
+            let error = prepare_error(value);
+            assert!(error.contains(expected), "{field}: {error}");
+            assert_eq!(OWNERSHIP_OUTPUTS.with(|count| count.get()), 0);
+        }
+        let mut duplicate_id = request.clone();
+        let output = duplicate_id["blocks"][0]["outputs"][1].clone();
+        duplicate_id["blocks"][0]["outputs"]
+            .as_array_mut()
+            .unwrap()
+            .push(output);
+        assert!(prepare_error(duplicate_id).contains("duplicate output id"));
+        let mut duplicate_height = request.clone();
+        duplicate_height["blocks"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"height":100,"outputs":[]}));
+        assert!(prepare_error(duplicate_height).contains("duplicate block height"));
+        assert!(!dir.path().join("signed.bin").exists());
+    }
+
+    #[test]
+    fn prepare_rejects_older_target_alias_outside_selected_history() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let mut value = prepare_fixture(dir.path());
+        let mut original = value["blocks"][0]["outputs"][0].clone();
+        original["txHash"] = json!(hex::encode([0xabu8; 32]).to_uppercase());
+        // An unrelated public key makes the original not owned. Canonicality
+        // is target-only, independent of ownership and supplied block order.
+        original["publicKey"] = value["blocks"][0]["outputs"][1]["publicKey"].clone();
+        value["blocks"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"height":1,"outputs":[original]}));
+        assert!(prepare_error(value).contains("input is not canonical"));
+        assert!(!dir.path().join("signed.bin").exists());
+    }
+
+    #[test]
+    fn prepare_keeps_selected_ownership_and_spend_guards() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let request = prepare_fixture(dir.path());
+        let mut unowned = request.clone();
+        unowned["selected"] = json!([format!("{}:1", hex::encode([9u8; 32]))]);
+        assert!(prepare_error(unowned).contains("not owned"));
+        let mut reserved = request.clone();
+        reserved["reserved"] = reserved["selected"].clone();
+        assert!(prepare_error(reserved).contains("already reserved"));
+        for field in ["spent", "pending"] {
+            let mut value = request.clone();
+            value["spent"][0][field] = json!(true);
+            assert!(prepare_error(value).contains("missing, spent or pending"));
+        }
+        let mut immature = request.clone();
+        immature["height"] = json!(101);
+        assert!(prepare_error(immature).contains("immature input"));
+        let mut lottery = request.clone();
+        lottery["blocks"][0]["outputs"][0]["lottery"] = json!(true);
+        assert!(prepare_error(lottery).contains("not canonical"));
+        let mut duplicate = request.clone();
+        duplicate["selected"]
+            .as_array_mut()
+            .unwrap()
+            .push(request["selected"][0].clone());
+        assert!(prepare_error(duplicate).contains("duplicate input"));
+        assert!(!dir.path().join("signed.bin").exists());
+    }
+
+    #[test]
+    fn prepare_normalizes_rpc_hex_ids_and_rejects_case_duplicate_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let mut value = prepare_fixture(dir.path());
+        let tx_hash = hex::encode([0xabu8; 32]);
+        value["blocks"][0]["outputs"][0]["txHash"] = json!(tx_hash.to_uppercase());
+        value["selected"] = json!([format!("{tx_hash}:0")]);
+        let mut duplicate = value.clone();
+        let mut output = duplicate["blocks"][0]["outputs"][0].clone();
+        output["txHash"] = json!(tx_hash);
+        duplicate["blocks"][0]["outputs"]
+            .as_array_mut()
+            .unwrap()
+            .push(output);
+        assert!(prepare_error(duplicate).contains("duplicate output id"));
+        let prepared = execute(serde_json::from_value(value).unwrap()).unwrap();
+        assert_eq!(prepared["selected"][0]["id"], format!("{tx_hash}:0"));
+    }
+
+    #[cfg(feature = "pq")]
+    #[test]
+    fn prepare_selected_shapes_pass_ledger_and_exclude_other_reals_from_every_ring() {
+        use botho::{
+            ledger::{ChainState, Ledger, UtxoSnapshot},
+            transaction::{TxOutput, Utxo, UtxoId},
+        };
+        use bth_transaction_types::ClusterTagVector;
+        for inputs in [1, 2, 4] {
+            let dir = tempfile::tempdir().unwrap();
+            fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+            let value = prepare_shape_fixture(dir.path(), inputs);
+            let blocks: Vec<BlockOutputs> =
+                serde_json::from_value(value["blocks"].clone()).unwrap();
+            let utxos: Vec<_> = blocks
+                .iter()
+                .flat_map(|block| {
+                    block.outputs.iter().map(|o| Utxo {
+                        id: UtxoId::new(
+                            hex::decode(&o.tx_hash).unwrap().try_into().unwrap(),
+                            o.output_index,
+                        ),
+                        output: TxOutput {
+                            amount: u64::from_le_bytes(
+                                hex::decode(&o.amount_commitment)
+                                    .unwrap()
+                                    .try_into()
+                                    .unwrap(),
+                            ),
+                            target_key: hex::decode(&o.target_key).unwrap().try_into().unwrap(),
+                            public_key: hex::decode(&o.public_key).unwrap().try_into().unwrap(),
+                            e_memo: None,
+                            cluster_tags: ClusterTagVector::empty(),
+                            kem_ciphertext: o
+                                .kem_ciphertext
+                                .as_ref()
+                                .map(|k| hex::decode(k).unwrap()),
+                        },
+                        created_at: block.height,
+                    })
+                })
+                .collect();
+            let reals: HashSet<_> = utxos[..inputs]
+                .iter()
+                .map(|u| u.output.target_key)
+                .collect();
+            let ledger = Ledger::open(&dir.path().join("ledger")).unwrap();
+            let snapshot = UtxoSnapshot::new(
+                120,
+                [0; 32],
+                ChainState {
+                    height: 120,
+                    ..Default::default()
+                },
+                utxos,
+                vec![],
+                vec![],
+            )
+            .unwrap();
+            ledger.load_from_snapshot(&snapshot, None).unwrap();
+            let prepared = execute(serde_json::from_value(value).unwrap()).unwrap();
+            let bytes = fs::read(dir.path().join("signed.bin")).unwrap();
+            let tx: Transaction = bincode::deserialize(&bytes).unwrap();
+            ledger.verify_transaction(&tx).unwrap();
+            assert_eq!(tx.inputs.len(), inputs);
+            let mut seen = HashSet::new();
+            for input in tx.inputs.clsag() {
+                let members: Vec<_> = input
+                    .ring
+                    .iter()
+                    .filter(|m| reals.contains(&m.target_key))
+                    .collect();
+                assert_eq!(
+                    members.len(),
+                    1,
+                    "another selected real leaked into a decoy ring"
+                );
+                assert!(seen.insert(members[0].target_key));
+                assert_eq!(input.ring.len(), MIN_RING_SIZE);
+            }
+            assert_eq!(seen, reals);
+            assert_eq!(
+                tx.outputs.iter().map(|o| o.amount).sum::<u64>() + tx.fee,
+                inputs as u64 * 20_000_000_000
+            );
+            assert_eq!(prepared["input_count"], inputs);
+        }
     }
 
     #[test]
