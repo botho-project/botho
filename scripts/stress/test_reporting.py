@@ -1,14 +1,16 @@
 """Early safety holds must retain the full denominator and accounting limits."""
 
+import asyncio
+import hashlib
 import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from controller import Controller
 from discovery import DiscoveryController
-from runtime import Journal
+from runtime import Gate, Journal
 
 
 class TerminalReportingTests(unittest.TestCase):
@@ -198,3 +200,136 @@ class TerminalReportingTests(unittest.TestCase):
         self.assertEqual(report["nominal_campaign_offers"], 7)
         self.assertEqual(report["not_yet_offered"], 6)
         self.assertEqual(report["rehearsal"]["not_yet_offered"], 540)
+
+    def test_published_native_artifact_survives_expired_prepare_and_report_is_read_only(
+        self,
+    ):
+        self.row(0, "reconciled")
+        self.c.j.offer("rehearsal-00411", "rehearsal", 1000, 0, 1, 1)
+        self.c.j.offer("rehearsal-00412", "rehearsal", 1002, 1, 0, 1)
+        (self.c.state / "artifacts").mkdir()
+        self.c.gate = Mock()
+        self.c.sync = AsyncMock(return_value=100)
+        self.c.spendable = Mock(return_value=[{"id": "owned-input"}])
+        self.c.blocks, self.c.spent = [], []
+        self.c.wallets = [{"key": "not-read", "address": "a"}, {"address": "b"}]
+        self.c.rpc = Mock(call=AsyncMock(return_value={"baseRate": 1}))
+        self.c.submit_prepared = AsyncMock()
+        now = [1001]
+        self.c.j.clock = lambda: now[0]
+        payload = b"native publication before journal preparation"
+
+        async def publish_before_deadline(request):
+            # Emulate only the native subprocess boundary, including its durable
+            # file side effect. Real Controller.prepare and Journal.prepare run.
+            Path(request["artifact"]).write_bytes(payload)
+            now[0] = 1120
+            return {
+                "artifact": request["artifact"],
+                "hash": "ab" * 32,
+                "fee": 100_000_000,
+                "baseline_fee": 100_000_000,
+                "fee_multiplier": 1,
+                "bytes": len(payload),
+                "input_count": 1,
+                "selected": [{"id": "owned-input"}],
+            }
+
+        self.c.native = AsyncMock(side_effect=publish_before_deadline)
+        with patch("controller.time.time", side_effect=lambda: now[0]):
+            with self.assertRaisesRegex(Gate, "preparation expired"):
+                asyncio.run(self.c.prepare("rehearsal-00411", 1, 8))
+            self.c.halt("preparation expired or intent already consumed")
+            before = list(self.c.j.db.iterdump())
+            report = self.c.report()
+        self.c.submit_prepared.assert_not_awaited()
+        self.assertEqual(list(self.c.j.db.iterdump()), before)
+        row = self.c.j.intent("rehearsal-00411")
+        self.assertEqual(row["state"], "eligible")
+        self.assertIsNone(row["prepared"])
+        self.assertIsNone(row["submitted"])
+        self.assertIsNone(row["hash"])
+        rehearsal = report["rehearsal"]
+        self.assertEqual(rehearsal["submitted"], 1)
+        self.assertEqual(rehearsal["signed_unsubmitted"], 0)
+        self.assertEqual(rehearsal["orphaned_signed_artifacts"], 1)
+        self.assertEqual(rehearsal["ambiguous_signed_artifacts"], 0)
+        self.assertEqual(rehearsal["unsigned"], 1)
+        self.assertEqual(report["qualification_status"], "failed")
+        artifact = report["artifact_evidence"]["findings"][0]
+        self.assertEqual(
+            artifact["path"], str(self.c.state / "artifacts/rehearsal-00411.bin")
+        )
+        self.assertEqual(artifact["sha256"], hashlib.sha256(payload).hexdigest())
+        self.assertEqual(artifact["bytes"], len(payload))
+        self.assertIsNone(artifact["journal_transaction_hash"])
+        self.assertIn(
+            "artifact/journal disagreement", report["accounting_status"]["reasons"]
+        )
+
+    def test_unavailable_artifact_directory_preserves_historical_journal_counts(self):
+        report = self.early_hold()
+        self.assertEqual(report["artifact_evidence"]["status"], "unavailable")
+        self.assertIsNone(report["rehearsal"]["orphaned_signed_artifacts"])
+        self.assertIsNone(report["rehearsal"]["ambiguous_signed_artifacts"])
+        self.assertEqual(report["rehearsal"]["unsigned_basis"], "journal_only")
+        self.assertEqual(report["rehearsal"]["unsigned"], 20)
+
+    def test_partial_unmatched_and_symlink_artifacts_are_ambiguous_without_replay(self):
+        self.row(0, "planned")
+        directory = self.c.state / "artifacts"
+        directory.mkdir()
+        (directory / "rehearsal-00000.partial").write_bytes(b"partial")
+        (directory / "no-journal-row.bin").write_bytes(b"published")
+        (directory / "unsafe.bin").symlink_to(self.c.state / "journal.sqlite")
+        (self.c.state / "readiness-probe.bin").write_bytes(b"outside scope")
+        self.c.j.set("status", "held")
+        before = list(self.c.j.db.iterdump())
+        report = self.c.report()
+        self.assertEqual(list(self.c.j.db.iterdump()), before)
+        evidence = report["artifact_evidence"]
+        self.assertEqual(evidence["orphaned_signed"], 1)
+        self.assertEqual(evidence["ambiguous_signed"], 2)
+        self.assertEqual(len(evidence["findings"]), 3)
+        unsafe = next(
+            x for x in evidence["findings"] if x["path"].endswith("unsafe.bin")
+        )
+        self.assertIsNone(unsafe["sha256"])
+        self.assertEqual(report["rehearsal"]["unsigned"], 0)
+        self.assertEqual(report["rehearsal"]["ambiguous_signed_artifacts"], 1)
+
+    def test_completed_report_keeps_journal_status_and_disclaims_fee_coverage(self):
+        self.c.j.set("status", "complete")
+        before = list(self.c.j.db.iterdump())
+        report = self.c.report()
+        self.assertEqual(list(self.c.j.db.iterdump()), before)
+        self.assertEqual(report["status"], "incomplete")
+        self.assertEqual(self.c.j.get("status"), "complete")
+
+    def test_checked_empty_and_journaled_artifacts_do_not_create_orphans(self):
+        directory = self.c.state / "artifacts"
+        directory.mkdir()
+        self.c.j.set("status", "held")
+        self.assertEqual(self.c.report()["artifact_evidence"]["orphaned_signed"], 0)
+        self.row(0, "prepared")
+        self.c.j.transition("rehearsal-00000", "prepared", hash="ab" * 32)
+        (directory / "rehearsal-00000.bin").write_bytes(b"journaled")
+        report = self.c.report()
+        self.assertEqual(report["artifact_evidence"]["findings"], [])
+        self.assertEqual(report["rehearsal"]["signed_unsubmitted"], 1)
+        self.assertEqual(report["rehearsal"]["orphaned_signed_artifacts"], 0)
+
+    def test_unreadable_directory_and_oversized_artifact_are_not_empty_evidence(self):
+        directory = self.c.state / "artifacts"
+        directory.mkdir()
+        self.c.j.set("status", "held")
+        with patch.object(Path, "iterdir", side_effect=PermissionError("unreadable")):
+            evidence = self.c.report()["artifact_evidence"]
+        self.assertEqual(evidence["status"], "unavailable")
+        self.assertIsNone(evidence["orphaned_signed"])
+        (directory / "oversized.bin").write_bytes(
+            b"x" * (self.c.j.limits["max_signed_transaction_bytes"] + 1)
+        )
+        evidence = self.c.report()["artifact_evidence"]
+        self.assertEqual(evidence["ambiguous_signed"], 1)
+        self.assertIsNone(evidence["findings"][0]["sha256"])

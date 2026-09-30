@@ -497,7 +497,9 @@ class DiscoveryController(Controller):
         report["fee_coverage"] = summarize_fees(self.j.rows(), quotes)
         from reporting import rehearsal_summary
 
-        report["rehearsal"] = rehearsal_summary(self.j, self.plan)
+        report["rehearsal"] = rehearsal_summary(
+            self.j, self.plan, report["artifact_evidence"]
+        )
         report["seed"] = self.plan["seed"]
         rows = self.j.rows("kind='campaign'")
         delivered = len(rows) == len(self.events) and all(
@@ -531,12 +533,10 @@ class DiscoveryController(Controller):
             "fee_capacity_gap": "Production activation needs 3s slots and >75% EMA fullness (~25+ tx/s); this generator does not establish that capacity.",
         }
         if status == "complete":
-            self.j.set("status", "incomplete")
-            self.j.set(
-                "reason",
-                "workload completed; production fee activation/priority coverage not established",
+            report.update(
+                status="incomplete",
+                reason="workload completed; production fee activation/priority coverage not established",
             )
-            report.update(status="incomplete", reason=self.j.get("reason"))
         atomic(self.state / "report.json", report)
         self._report = report
         return report
