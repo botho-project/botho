@@ -366,3 +366,36 @@ fee-budget overruns, skipped-offer and inflight phase boundaries, seeded
 reproducibility, stale/missing fee evidence, and one-picocredit accounting faults.
 No live rehearsal, fee activation, or new 72-hour campaign is established by
 these offline checks.
+
+### Retaining evidence without retaining whole EC2 disks
+
+Stopped EC2 instances still incur EBS storage charges. For disposable
+qualification fleets, use `scripts/stress/cloud_retention.py` after archival.
+Its default mode writes a plan; `--apply` terminates eligible stopped instances
+and deletes their released disks. It requires an explicit AWS account, profile,
+region, local state directory, backup directory, and a new output directory:
+
+```sh
+python3 scripts/stress/cloud_retention.py \
+  --profile "$AWS_PROFILE" --region "$AWS_REGION" --account-id "$AWS_ACCOUNT_ID" \
+  --state-root "$BOTHO_RUN_STATES" --backup-root "$BOTHO_ARCHIVE_BACKUP" \
+  --output "$BOTHO_RETENTION_RESULT" --min-age-hours 24
+```
+
+Only fleets tagged `Project=botho-qualification` are eligible. Every instance
+must be stopped and match a six-role local inventory, terminal evidence, and
+six verified archives. A second archive copy is verified before termination.
+Cloud state, tags, roles, disk attachments, and archive identity are rechecked
+before each fleet is removed. The newest cloud fleet is always retained for
+diagnosis, even if it failed. Public nodes, other projects, snapshots, and
+fleets with missing evidence are excluded. The default archive retention
+window is 24 hours; reducing it to zero is for reviewed one-time cleanup.
+
+For periodic operation, run the same command with `--apply` from the operator
+host, using a unique output directory each time. A shared local lock prevents
+overlapping cleanup processes. The operator must be awake and have working AWS
+credentials. Archive checks or unavailable credentials stop deletion; review
+`plan.json`, `execution.json`, and `result.json` in each output directory. If
+execution stops partway through, inspect the recorded instances and disks;
+do not assume that the entire plan completed. Do not delete local archives
+when releasing AWS disks.
