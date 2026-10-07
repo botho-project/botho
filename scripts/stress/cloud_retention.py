@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Retire archived, stopped qualification fleets; never infer safety from age alone.
+"""Retire archived or verified unused qualification fleets; age alone is insufficient.
 
 Default: write a reviewable plan. --apply also executes it. The newest cloud
 fleet is always retained, and automatic use should retain archives for 24h.
 Only the explicit botho-qualification project is eligible. No snapshots,
 public nodes, build machines, or untagged resources are removed.
+An undeployed fleet needs complete remote retirement proof instead of archives.
 """
 import argparse
 import collections
+import datetime
 import fcntl
 import hashlib
 import json
@@ -58,7 +60,27 @@ def evidence(root):
     final = read(root / 'fleet-final-state.json')
     need(set(final) == set(identities) and set(final.values()) <= {'stopped', 'terminated'},
          'Recorded fleet not retired')
-    manifest = read(root / 'final-evidence-manifest.json')
+    manifest_path = root / 'final-evidence-manifest.json'
+    if not manifest_path.exists():
+        retirement = read(root / 'retirement.json')
+        need(retirement.get('state') == 'aborted_before_deployment', 'Missing workload archives')
+        infra = read(root / 'infrastructure-plan.json')
+        checks = retirement.get('remote_verification', {})
+        need(set(checks) == ROLES, 'Incomplete unused-host verification')
+        need(all(v.get('run') == infra['run_id'] and v.get('bootstrap') is True
+                 and v.get('node_unit') is False and v.get('controller_data') is False
+                 for v in checks.values()), 'Unused-host verification failed')
+        need(not any((root / name).exists() for name in
+                     ('preparation.intent', 'node-start.intent', 'warmup-start.intent',
+                      'wallet-backup', 'common', 'result.json')), 'Deployment evidence exists')
+        need(type(retirement.get('at')) in (int, float) and retirement['at'] > infra['created_at'],
+             'Invalid unused-host verification time')
+        return {'root': str(root), 'identities': identities, 'sha256': {},
+                'unused_verified_at': retirement['at'], 'run': infra['run_id'],
+                'proof_sha256': {name: digest(root / name) for name in
+                                 ('retirement.json', 'infrastructure-plan.json', 'inventory.json', 'fleet-final-state.json')},
+                'archived_at': (root / 'retirement.json').stat().st_mtime}
+    manifest = read(manifest_path)
     need(set(manifest) == ROLES, 'Incomplete evidence manifest')
     for role, expected in manifest.items():
         need(digest(root / 'final-evidence' / (role + '.tar.gz')) == expected,
@@ -97,6 +119,10 @@ def make_plan(instances, volumes, candidates, now, min_age_hours):
                 reason = 'Archive retention window'
             elif any(e['identities'][n['InstanceId']] != tags(n)['Role'] for n in nodes):
                 reason = 'Archive role mismatch'
+            elif 'unused_verified_at' in e and (e['run'] != run or any(
+                    datetime.datetime.fromisoformat(n['LaunchTime'].replace('Z', '+00:00')).timestamp()
+                    > e['unused_verified_at'] for n in nodes)):
+                reason = 'Unused-host proof predates last instance launch or has wrong run'
             else:
                 vs = [v for v in volumes if any(a['InstanceId'] in ids for a in v['Attachments'])]
                 expected_volumes = {b['Ebs']['VolumeId'] for n in nodes for b in n.get('BlockDeviceMappings', []) if 'Ebs' in b}
@@ -139,6 +165,7 @@ def backup(fleet, destination):
     original = evidence(fleet['evidence']['root'])
     need(original['sha256'] == fleet['evidence']['sha256'], 'Evidence changed since planning')
     need(original['identities'] == fleet['evidence']['identities'], 'Archive identity changed')
+    need(original.get('proof_sha256') == fleet['evidence'].get('proof_sha256'), 'Retirement proof changed')
     source = Path(original['root'])
     dest = Path(destination) / source.name
     need(dest.resolve() != source.resolve(), 'Backup must be independent of original directory')
@@ -158,6 +185,7 @@ def backup(fleet, destination):
         if (source / name).is_file():
             shutil.copyfile(source / name, dest / name)
     need(evidence(dest)['sha256'] == original['sha256'], 'Independent archive verification failed')
+    need(evidence(dest).get('proof_sha256') == original.get('proof_sha256'), 'Independent retirement proof mismatch')
     return str(dest)
 
 
@@ -239,7 +267,7 @@ def main():
     candidates = []
     errors = []
     for root in sorted(args.state_root.glob('botho-live-*')):
-        if not (root / 'final-evidence-manifest.json').is_file():
+        if not any((root / name).is_file() for name in ('final-evidence-manifest.json', 'retirement.json')):
             continue
         try:
             candidates.append(evidence(root))
