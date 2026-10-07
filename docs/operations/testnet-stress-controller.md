@@ -399,3 +399,10 @@ credentials. Archive checks or unavailable credentials stop deletion; review
 execution stops partway through, inspect the recorded instances and disks;
 do not assume that the entire plan completed. Do not delete local archives
 when releasing AWS disks.
+
+A fleet aborted before deployment may instead provide `retirement.json` with
+remote verification of all six hosts: matching run IDs, completed bootstrap,
+no node service, and no controller data. Local deployment markers must also
+be absent. That proof is copied and verified before deletion, and a later EC2
+launch invalidates it. This exception cannot substitute for archives once a
+workload has been deployed.

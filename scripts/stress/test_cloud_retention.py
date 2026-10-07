@@ -28,7 +28,7 @@ class RetentionTests(unittest.TestCase):
             identity = 'i-' + role
             volume = 'vol-' + role
             tag = tagged(Project=PROJECT, Run='q20261001-a', Role=role)
-            self.nodes.append({'InstanceId': identity, 'Tags': tag, 'LaunchTime': '2026-10-01',
+            self.nodes.append({'InstanceId': identity, 'Tags': tag, 'LaunchTime': '2026-10-01T00:00:00+00:00',
                                'State': {'Name': 'stopped'}, 'BlockDeviceMappings': [{'Ebs': {'VolumeId': volume}}]})
             self.volumes.append({'VolumeId': volume, 'Size': 40, 'State': 'in-use', 'Tags': tag,
                                  'Attachments': [{'InstanceId': identity}]})
@@ -42,7 +42,7 @@ class RetentionTests(unittest.TestCase):
         self.put('final-evidence-manifest.json', manifests)
         self.e = evidence(self.root)
         self.nodes.append({'InstanceId': 'i-protected', 'Tags': tagged(Project=PROJECT, Run='q20261002-b', Role='controller'),
-                           'LaunchTime': '2026-10-02', 'State': {'Name': 'stopped'}, 'BlockDeviceMappings': []})
+                           'LaunchTime': '2026-10-02T00:00:00+00:00', 'State': {'Name': 'stopped'}, 'BlockDeviceMappings': []})
         self.now = self.e['archived_at'] + 90000
 
     def put(self, name, value):
@@ -112,6 +112,40 @@ class RetentionTests(unittest.TestCase):
         (result / 'final-evidence/n1.tar.gz').write_bytes(b'corrupt')
         with self.assertRaisesRegex(RuntimeError, 'backup checksum'):
             backup(fleet, dest)
+
+    def unused(self):
+        (self.root / 'final-evidence-manifest.json').unlink()
+        self.put('infrastructure-plan.json', {'run_id': 'q20261001-a', 'created_at': 1790812800})
+        self.put('retirement.json', {'state': 'aborted_before_deployment', 'at': 1790816400,
+                 'remote_verification': {role: {'run': 'q20261001-a', 'bootstrap': True,
+                                               'node_unit': False, 'controller_data': False} for role in ROLES}})
+        self.e = evidence(self.root)
+        self.now = self.e['archived_at'] + 90000
+
+    def test_unused_bootstrap_fleet_can_retire_with_backed_up_proof(self):
+        self.unused()
+        self.assertEqual(self.plan()['volume_count'], 6)
+        dest = backup(self.plan()['fleets'][0], Path(self.tmp.name) / 'unused-backup')
+        self.assertEqual(evidence(dest)['proof_sha256'], self.e['proof_sha256'])
+
+    def test_unused_claim_cannot_override_deployment_marker(self):
+        self.unused()
+        (self.root / 'node-start.intent').write_text('{}')
+        with self.assertRaisesRegex(RuntimeError, 'Deployment evidence'):
+            evidence(self.root)
+
+    def test_unused_claim_requires_remote_checks_for_all_roles(self):
+        self.unused()
+        raw = json.loads((self.root / 'retirement.json').read_text())
+        raw['remote_verification']['n3']['node_unit'] = True
+        self.put('retirement.json', raw)
+        with self.assertRaisesRegex(RuntimeError, 'Unused-host verification failed'):
+            evidence(self.root)
+
+    def test_unused_claim_invalid_after_instance_relaunch(self):
+        self.unused()
+        self.nodes[0]['LaunchTime'] = '2026-10-01T02:00:00+00:00'
+        self.assertEqual(self.plan()['volume_count'], 0)
 
     def test_cloud_change_before_apply_never_terminates(self):
         plan = self.plan()
