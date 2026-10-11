@@ -8,6 +8,7 @@ Mobile wallet for Botho cryptocurrency with post-quantum cryptography support.
 mobile/
 ├── FRAMEWORK_DECISION.md    # Framework selection rationale
 ├── MOBILE_BACKUP_DESIGN.md  # Wallet backup/restore design
+├── MATRIX_PAYMENTS_DESIGN.md # Matrix chat and private payments proposal
 ├── NATIVE_INTEGRATION.md    # Native module integration notes
 ├── rust-bridge/             # Rust FFI crate (UniFFI bindings)
 │   ├── Cargo.toml
@@ -26,6 +27,13 @@ mobile/
     ├── android/             # Android native code (after prebuild)
     └── package.json
 ```
+
+## Design Documents
+
+- [Framework selection](FRAMEWORK_DECISION.md): React Native and Rust/UniFFI rationale.
+- [Wallet backup and recovery](MOBILE_BACKUP_DESIGN.md): proposed recovery UX and prerequisites.
+- [Matrix chat and private payments](MATRIX_PAYMENTS_DESIGN.md): existing Matrix identities, segmented payment contexts, and a combined mobile experience with separate server systems.
+- [Native integration](NATIVE_INTEGRATION.md): current bridge status and remaining device work.
 
 ## Getting Started
 

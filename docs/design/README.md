@@ -43,6 +43,7 @@ This section contains design proposals, roadmaps, and technical specifications f
 | Document | Status | Description |
 |----------|--------|-------------|
 | [Address Format](address-format.md) | Implemented | URI scheme, key derivation, encoding |
+| [Mobile Matrix Chat & Private Payments](../../mobile/MATRIX_PAYMENTS_DESIGN.md) | Proposed | Combined chat/payment client, existing Matrix identities, payment segmentation, and independent wallet authority |
 
 ## Network & Security
 
