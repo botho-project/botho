@@ -26,13 +26,13 @@
 //! ```
 
 use bip39::{Language, Mnemonic, Seed};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use k256::{
     ecdsa::{RecoveryId, Signature as K256Signature, SigningKey},
     elliptic_curve::bigint::Limb,
     SecretKey, U256,
 };
-use sha2::Sha512;
+use sha2_v011::Sha512;
 use sha3::{Digest, Keccak256};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
