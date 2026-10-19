@@ -118,7 +118,7 @@ hex = { version = "0.4", default-features = false, features = ["alloc"] }
 hex-literal = "0.4"
 hex_fmt = "0.3"
 hkdf = "0.12"
-hmac = "0.12"
+hmac = "0.13"
 hostname = "0.3"
 indicatif = "0.18"
 itertools = "0.14"
@@ -171,6 +171,8 @@ serde_json = { version = "1", default-features = false, features = ["alloc"] }
 serde_with = { version = "3", default-features = false }
 serial_test = "3"
 sha2 = { version = "0.10", default-features = false }
+# HMAC 0.13 uses digest 0.11; keep protocol hashers on their existing version.
+sha2-v011 = { package = "sha2", version = "0.11", default-features = false }
 sha3 = { version = "0.10", default-features = false }
 signal-hook = "0.3"
 signature = { version = "3", default-features = false }

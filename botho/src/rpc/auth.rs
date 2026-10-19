@@ -10,8 +10,8 @@
 //! - Optional IP whitelisting
 //! - Rate limiting per API key
 
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
+use hmac::{Hmac, KeyInit, Mac};
+use sha2_v011::Sha256;
 use std::{
     collections::HashMap,
     net::IpAddr,
