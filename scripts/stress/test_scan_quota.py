@@ -53,6 +53,8 @@ class ScanQuotaTests(unittest.IsolatedAsyncioTestCase):
         self.c.j = Journal(self.state / "journal.sqlite", lambda: self.now)
         self.c.rpc = LocalRpc(self.c.j)
         self.c.closed = False
+        self.c.reconcile_wakeup = asyncio.Event()
+        self.c.fresh = self.now
         self.c.scan_lock = asyncio.Lock()
         self.c.blocks = []
         self.c.inventory = [[]]
@@ -312,7 +314,7 @@ class ScanQuotaTests(unittest.IsolatedAsyncioTestCase):
 
         self.c.rpc.call = receipt_rpc
         with (
-            patch("controller.asyncio.sleep", finish_iteration),
+            patch.object(self.c, "wait_for_reconcile", side_effect=finish_iteration),
             patch("controller.time.time", lambda: self.now),
         ):
             await self.c.reconcile()
