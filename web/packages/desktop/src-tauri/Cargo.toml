@@ -52,7 +52,7 @@ path = "src/bin/runtime_smoke.rs"
 required-features = ["runtime-smoke"]
 
 [dependencies.tauri-plugin-wdio-webdriver]
-version = "=1.4.0"
+version = "=1.5.0"
 default-features = false
 optional = true
 
