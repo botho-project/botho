@@ -8,22 +8,14 @@ publish = false
 # ============================================================================
 # Toolchain watch (#920)
 # ============================================================================
-# This crate is pinned, via the repo-root `rust-toolchain`, to
-# `nightly-2025-12-03`. Do NOT bump that pin casually: a replacement nightly
-# must satisfy BOTH of these constraints, or `cargo fuzz` breaks somewhere:
-#
-#   1. Its rustc must still COMPILE the pinned dep tree. Rolling nightlies past
-#      ~2026-06 fail to build the transitive `hashbrown 0.14.5`
-#      ("cannot specialize on trait Copy"); a bump likely needs coordinated dep
-#      updates (e.g. hashbrown) and a fresh `fuzz/Cargo.lock`.
-#   2. Its shipped AddressSanitizer runtime must not DEADLOCK on the local dyld.
-#      The 2025-12-03 ASan runtime hangs in `__asan::InitializeShadowMemory`
-#      before `main` on macOS 26.5 (arm64) — the root cause of #920. A bump that
-#      fixes (1) but not (2) still leaves macOS devs unable to `cargo fuzz run`.
-#
-# Until a nightly satisfies both, macOS developers use the native-smoke path
-# (the `native-smoke` feature + `native_smoke` bin below); coverage-guided runs
-# happen in ubuntu CI (`.github/workflows/fuzz.yml`). See `fuzz/README.md`.
+# This crate follows the repo-root `rust-toolchain` (nightly-2026-06-09).
+# The common crate uses hashbrown's stable implementation: its optional nightly
+# specialization is incompatible with this compiler (specialization on Copy).
+# Validate both dependency compilation and the local sanitizer runtime when
+# advancing this pin. The historical macOS 26.5 ASan startup hang (#920) is
+# separate from dependency compatibility; native-smoke remains the supported
+# macOS fallback until coverage-guided startup is verified on that host.
+# Coverage-guided runs execute in Ubuntu CI. See fuzz/README.md.
 
 [package.metadata]
 cargo-fuzz = true

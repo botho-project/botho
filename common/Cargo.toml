@@ -40,7 +40,8 @@ backtrace = { workspace = true, optional = true }
 cfg-if = { workspace = true }
 chrono = { workspace = true, optional = true }
 displaydoc = { workspace = true }
-hashbrown = { workspace = true, features = ["serde", "nightly"] }
+# HashMap/HashSet use the global allocator and do not need nightly specialization.
+hashbrown = { workspace = true, features = ["serde"] }
 hostname = { workspace = true, optional = true }
 prost = { workspace = true, features = ["prost-derive"] }
 rand_core = { workspace = true }
