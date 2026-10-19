@@ -195,12 +195,12 @@ jobs:
       - name: Install engine Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-03
+          toolchain: nightly-2026-06-09
 
       - name: Cache engine cargo build
         uses: Swatinem/rust-cache@v2
         env:
-          RUSTUP_TOOLCHAIN: nightly-2025-12-03
+          RUSTUP_TOOLCHAIN: nightly-2026-06-09
         with:
           key: squads-engine
 
@@ -208,7 +208,7 @@ jobs:
       # keep their evidence destinations identical to upload-artifact inputs.
       - name: Execute real Squads OrderProcessor integration
         env:
-          RUSTUP_TOOLCHAIN: nightly-2025-12-03
+          RUSTUP_TOOLCHAIN: nightly-2026-06-09
           SQUADS_ENGINE_TEST: '1'
           SQUADS_ENGINE_EVIDENCE: ${{ github.workspace }}/contracts/solana/engine-execution.json
         run: ./localnet/run-squads.sh
@@ -223,7 +223,7 @@ jobs:
 
       - name: Execute closed-account historical recovery integration
         env:
-          RUSTUP_TOOLCHAIN: nightly-2025-12-03
+          RUSTUP_TOOLCHAIN: nightly-2026-06-09
           SQUADS_ENGINE_TEST: '1'
           SQUADS_HISTORY_TEST: '1'
           SQUADS_ENGINE_EVIDENCE: ${{ github.workspace }}/contracts/solana/history-execution.json
@@ -239,7 +239,7 @@ jobs:
 
       - name: Execute bounded retry and rent integration
         env:
-          RUSTUP_TOOLCHAIN: nightly-2025-12-03
+          RUSTUP_TOOLCHAIN: nightly-2026-06-09
           SQUADS_ENGINE_TEST: '1'
           SQUADS_RETRY_TEST: '1'
           SQUADS_ENGINE_EVIDENCE: ${{ github.workspace }}/contracts/solana/retry-execution.json

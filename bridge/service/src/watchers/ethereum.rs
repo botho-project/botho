@@ -83,7 +83,7 @@ pub fn burn_source_key(tx_hash: &str, ordinal: u32) -> String {
 /// Pair each event with its per-transaction ordinal, ordered by
 /// (block, log index) so processing and key assignment are deterministic.
 pub fn with_tx_ordinals(mut events: Vec<BurnEvent>) -> Vec<(BurnEvent, u32)> {
-    events.sort_by(|a, b| (a.block_number, a.log_index).cmp(&(b.block_number, b.log_index)));
+    events.sort_by_key(|event| (event.block_number, event.log_index));
     let mut per_tx: HashMap<String, u32> = HashMap::new();
     events
         .into_iter()

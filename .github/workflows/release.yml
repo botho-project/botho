@@ -23,7 +23,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   # Pinned nightly version - must match rust-toolchain
-  RUST_TOOLCHAIN: nightly-2025-12-03
+  RUST_TOOLCHAIN: nightly-2026-06-09
 
 jobs:
   # ==========================================================================

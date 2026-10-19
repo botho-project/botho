@@ -314,7 +314,7 @@ impl ClusterTagVector {
             .collect();
 
         // Sort by weight descending
-        entries.sort_by(|a, b| b.weight.cmp(&a.weight));
+        entries.sort_by_key(|entry| core::cmp::Reverse(entry.weight));
 
         // Truncate to max
         entries.truncate(MAX_CLUSTER_TAGS);

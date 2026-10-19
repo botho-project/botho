@@ -501,11 +501,7 @@ pub fn ring_centroid_implied_factor(
         total_value = total_value.saturating_add(value as u128);
     }
 
-    let centroid_wealth = if total_value == 0 {
-        0
-    } else {
-        weighted / total_value
-    };
+    let centroid_wealth = weighted.checked_div(total_value).unwrap_or(0);
 
     curve.factor(centroid_wealth)
 }

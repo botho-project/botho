@@ -447,7 +447,7 @@ fn release_input_key_image(
 /// Greedily select reserve outputs covering `amount + fee`, largest first (so
 /// the fewest inputs — hence rings — are used).
 fn select_inputs(mut owned: Vec<OwnedOutput>, required: u64) -> Option<Vec<OwnedOutput>> {
-    owned.sort_by(|a, b| b.amount.cmp(&a.amount));
+    owned.sort_by_key(|entry| std::cmp::Reverse(entry.amount));
     let mut selected = Vec::new();
     let mut total = 0u64;
     for o in owned {

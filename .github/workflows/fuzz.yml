@@ -56,11 +56,16 @@ jobs:
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-03
+          toolchain: nightly-2026-06-09
           components: rust-src,llvm-tools-preview
 
+      # Build the CLI with stable Rust: its locked rustix dependency probes
+      # compiler-internal attributes that are incompatible with newer nightlies.
+      # Fuzz target instrumentation still uses the repository's pinned nightly.
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --version 0.13.1 --locked
+        run: |
+          rustup toolchain install 1.93.1 --profile minimal
+          cargo +1.93.1 install cargo-fuzz --version 0.13.1 --locked
 
       - name: Build all fuzz targets (no run)
         working-directory: fuzz
@@ -103,11 +108,16 @@ jobs:
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-03
+          toolchain: nightly-2026-06-09
           components: rust-src,llvm-tools-preview
 
+      # Build the CLI with stable Rust: its locked rustix dependency probes
+      # compiler-internal attributes that are incompatible with newer nightlies.
+      # Fuzz target instrumentation still uses the repository's pinned nightly.
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --version 0.13.1 --locked
+        run: |
+          rustup toolchain install 1.93.1 --profile minimal
+          cargo +1.93.1 install cargo-fuzz --version 0.13.1 --locked
 
       - name: Cache fuzz corpus
         uses: actions/cache@v6
@@ -152,11 +162,16 @@ jobs:
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-03
+          toolchain: nightly-2026-06-09
           components: rust-src,llvm-tools-preview
 
+      # Build the CLI with stable Rust: its locked rustix dependency probes
+      # compiler-internal attributes that are incompatible with newer nightlies.
+      # Fuzz target instrumentation still uses the repository's pinned nightly.
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --version 0.13.1 --locked
+        run: |
+          rustup toolchain install 1.93.1 --profile minimal
+          cargo +1.93.1 install cargo-fuzz --version 0.13.1 --locked
 
       - name: Cache fuzz corpus
         uses: actions/cache@v6
@@ -202,11 +217,16 @@ jobs:
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-03
+          toolchain: nightly-2026-06-09
           components: rust-src,llvm-tools-preview
 
+      # Build the CLI with stable Rust: its locked rustix dependency probes
+      # compiler-internal attributes that are incompatible with newer nightlies.
+      # Fuzz target instrumentation still uses the repository's pinned nightly.
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --version 0.13.1 --locked
+        run: |
+          rustup toolchain install 1.93.1 --profile minimal
+          cargo +1.93.1 install cargo-fuzz --version 0.13.1 --locked
 
       - name: Cache fuzz corpus
         uses: actions/cache@v6
@@ -254,11 +274,16 @@ jobs:
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-03
+          toolchain: nightly-2026-06-09
           components: rust-src,llvm-tools-preview
 
+      # Build the CLI with stable Rust: its locked rustix dependency probes
+      # compiler-internal attributes that are incompatible with newer nightlies.
+      # Fuzz target instrumentation still uses the repository's pinned nightly.
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --version 0.13.1 --locked
+        run: |
+          rustup toolchain install 1.93.1 --profile minimal
+          cargo +1.93.1 install cargo-fuzz --version 0.13.1 --locked
 
       - name: Cache fuzz corpus
         uses: actions/cache@v6
@@ -308,11 +333,16 @@ jobs:
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-03
+          toolchain: nightly-2026-06-09
           components: rust-src,llvm-tools-preview
 
+      # Build the CLI with stable Rust: its locked rustix dependency probes
+      # compiler-internal attributes that are incompatible with newer nightlies.
+      # Fuzz target instrumentation still uses the repository's pinned nightly.
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --version 0.13.1 --locked
+        run: |
+          rustup toolchain install 1.93.1 --profile minimal
+          cargo +1.93.1 install cargo-fuzz --version 0.13.1 --locked
 
       - name: Cache fuzz corpus
         uses: actions/cache@v6
