@@ -51,6 +51,7 @@ aes = { workspace = true }
 ctr = { workspace = true }
 hkdf = { workspace = true }
 hmac = { workspace = true }
+sha2-v011 = { workspace = true }
 
 # Monetary Policy
 bth-cluster-tax = { path = "../cluster-tax" }

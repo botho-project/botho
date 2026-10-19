@@ -151,7 +151,7 @@ export default function TransactionsScreen() {
           <View style={styles.loadingMore}>
             <ActivityIndicator color="#00d9ff" />
           </View>
-        ) : null
+        ) : undefined
       }
       ItemSeparatorComponent={() => <View style={styles.separator} />}
       contentContainerStyle={styles.listContent}
