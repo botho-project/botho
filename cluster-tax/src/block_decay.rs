@@ -376,7 +376,7 @@ impl BlockAwareTagVector {
 
         if self.tags.len() > Self::MAX_TAGS {
             let mut entries: Vec<_> = self.tags.drain().collect();
-            entries.sort_by(|a, b| b.1.cmp(&a.1));
+            entries.sort_by_key(|entry| std::cmp::Reverse(entry.1));
             self.tags = entries.into_iter().take(Self::MAX_TAGS).collect();
         }
     }
@@ -606,7 +606,7 @@ impl RateLimitedTagVector {
 
         if self.tags.len() > Self::MAX_TAGS {
             let mut entries: Vec<_> = self.tags.drain().collect();
-            entries.sort_by(|a, b| b.1.cmp(&a.1));
+            entries.sort_by_key(|entry| std::cmp::Reverse(entry.1));
             self.tags = entries.into_iter().take(Self::MAX_TAGS).collect();
         }
     }
@@ -939,7 +939,7 @@ impl AndTagVector {
 
         if self.tags.len() > Self::MAX_TAGS {
             let mut entries: Vec<_> = self.tags.drain().collect();
-            entries.sort_by(|a, b| b.1.cmp(&a.1));
+            entries.sort_by_key(|entry| std::cmp::Reverse(entry.1));
             self.tags = entries.into_iter().take(Self::MAX_TAGS).collect();
         }
     }

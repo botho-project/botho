@@ -160,7 +160,7 @@ impl TagVector {
         // If still too many, keep only top weights
         if self.tags.len() > Self::MAX_TAGS {
             let mut entries: Vec<_> = self.tags.drain().collect();
-            entries.sort_by(|a, b| b.1.cmp(&a.1)); // Sort descending by weight
+            entries.sort_by_key(|entry| std::cmp::Reverse(entry.1)); // Sort descending by weight
 
             self.tags = entries.into_iter().take(Self::MAX_TAGS).collect();
         }
