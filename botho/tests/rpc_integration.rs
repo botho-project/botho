@@ -21,6 +21,7 @@ use tokio::{
 };
 
 use botho::{
+    config::RpcConfig,
     ledger::Ledger,
     mempool::Mempool,
     rpc::{RpcState, WsBroadcaster},
@@ -34,6 +35,12 @@ use bth_transaction_types::constants::Network;
 /// Spawn an RPC server on a random available port.
 /// Returns the server task handle and the bound address.
 async fn spawn_test_rpc_server() -> (TempDir, SocketAddr, tokio::task::JoinHandle<()>) {
+    spawn_test_rpc_server_with_config(&RpcConfig::default()).await
+}
+
+async fn spawn_test_rpc_server_with_config(
+    config: &RpcConfig,
+) -> (TempDir, SocketAddr, tokio::task::JoinHandle<()>) {
     // Create temporary directory for ledger
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let ledger_path = temp_dir.path().join("ledger");
@@ -48,15 +55,18 @@ async fn spawn_test_rpc_server() -> (TempDir, SocketAddr, tokio::task::JoinHandl
     let ws_broadcaster = Arc::new(WsBroadcaster::new(100));
 
     // Create RPC state
-    let state = Arc::new(RpcState::new(
-        ledger,
-        mempool,
-        Network::Testnet,      // Use testnet for tests
-        None,                  // No wallet view key
-        None,                  // No wallet spend key
-        vec!["*".to_string()], // Allow all CORS origins for testing
-        ws_broadcaster,
-    ));
+    let state = Arc::new(
+        RpcState::new(
+            ledger,
+            mempool,
+            Network::Testnet,      // Use testnet for tests
+            None,                  // No wallet view key
+            None,                  // No wallet spend key
+            vec!["*".to_string()], // Allow all CORS origins for testing
+            ws_broadcaster,
+        )
+        .with_rpc_rate_limit(config),
+    );
 
     // Find a random available port
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -106,6 +116,68 @@ async fn rpc_call(client: &Client, addr: SocketAddr, method: &str, params: Value
         .json::<Value>()
         .await
         .expect("Failed to parse response")
+}
+
+/// Exercise the real HTTP handler, including the first denied request. A header
+/// override alone or a limiter still hard-coded to 100 must fail this test.
+#[tokio::test]
+async fn test_configured_rpc_quota_enforced_and_advertised() {
+    for (config, limit) in [
+        (RpcConfig::default(), 100_u32),
+        (toml::from_str("requests_per_minute = 600").unwrap(), 600),
+    ] {
+        let (_dir, addr, handle) = spawn_test_rpc_server_with_config(&config).await;
+        let result = tokio::time::timeout(Duration::from_secs(30), async {
+            let client = Client::new();
+            for request_number in 1..=limit + 1 {
+                let response = client
+                    .post(format!("http://{addr}"))
+                    .json(&rpc_request("node_getStatus", json!({})))
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(response.headers()["X-RateLimit-Limit"], limit.to_string());
+                assert_eq!(
+                    response.headers()["X-RateLimit-Remaining"],
+                    limit.saturating_sub(request_number).to_string()
+                );
+                assert!(
+                    response.headers()["X-RateLimit-Reset"]
+                        .to_str()
+                        .unwrap()
+                        .parse::<u64>()
+                        .unwrap()
+                        > 0
+                );
+                if request_number <= limit {
+                    assert_eq!(response.status(), reqwest::StatusCode::OK);
+                    assert!(response
+                        .json::<Value>()
+                        .await
+                        .unwrap()
+                        .get("result")
+                        .is_some());
+                } else {
+                    assert_eq!(response.status(), reqwest::StatusCode::TOO_MANY_REQUESTS);
+                    assert!(
+                        response.headers()["Retry-After"]
+                            .to_str()
+                            .unwrap()
+                            .parse::<u64>()
+                            .unwrap()
+                            > 0
+                    );
+                    assert_eq!(
+                        response.json::<Value>().await.unwrap()["error"]["code"],
+                        -32029
+                    );
+                }
+            }
+        })
+        .await;
+        handle.abort();
+        result.expect("quota test must finish inside the 60-second window");
+    }
 }
 
 // ============================================================================

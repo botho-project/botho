@@ -32,6 +32,36 @@ pub const MAX_REQUEST: u64 = 128 * 1024 * 1024;
 pub const MAX_TX: usize = 256 * 1024;
 pub const MAX_FEE: u64 = 5_000_000_000;
 
+fn default_fee_multiplier() -> u64 {
+    1
+}
+
+fn deserialize_fee_multiplier<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<u64, D::Error> {
+    let multiplier = u64::deserialize(deserializer)?;
+    if matches!(multiplier, 1 | 2 | 4) {
+        Ok(multiplier)
+    } else {
+        Err(serde::de::Error::custom(
+            "fee_multiplier must be 1, 2, or 4",
+        ))
+    }
+}
+
+fn bounded_fee(estimate: u64, multiplier: u64) -> Result<(u64, u64)> {
+    ensure!(
+        matches!(multiplier, 1 | 2 | 4),
+        "fee_multiplier must be 1, 2, or 4"
+    );
+    let baseline = estimate.max(MIN_TX_FEE);
+    let fee = baseline
+        .checked_mul(multiplier)
+        .context("fee multiplication overflow")?;
+    ensure!(fee <= MAX_FEE, "estimated fee exceeds program bound");
+    Ok((baseline, fee))
+}
+
 fn read_bounded_input(reader: impl Read, limit: u64) -> Result<Vec<u8>> {
     let mut input = Vec::new();
     reader.take(limit + 1).read_to_end(&mut input)?;
@@ -73,6 +103,11 @@ pub enum Request {
         allowed_recipients: Vec<String>,
         amount: u64,
         base_rate: u64,
+        #[serde(
+            default = "default_fee_multiplier",
+            deserialize_with = "deserialize_fee_multiplier"
+        )]
+        fee_multiplier: u64,
         artifact: String,
     },
     Inspect {
@@ -139,7 +174,13 @@ pub fn publish(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-pub fn scan(keys: &WalletKeys, blocks: &[BlockOutputs]) -> Result<Vec<Scanned>> {
+#[cfg(test)]
+thread_local! {
+    // Count the outputs handed to real ownership crypto, not elapsed time.
+    static OWNERSHIP_OUTPUTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn validate_history(blocks: &[BlockOutputs]) -> Result<()> {
     let mut heights = HashSet::new();
     let mut ids = HashSet::new();
     for block in blocks {
@@ -161,6 +202,21 @@ pub fn scan(keys: &WalletKeys, blocks: &[BlockOutputs]) -> Result<Vec<Scanned>> 
             }
         }
     }
+    Ok(())
+}
+
+pub fn scan(keys: &WalletKeys, blocks: &[BlockOutputs]) -> Result<Vec<Scanned>> {
+    validate_history(blocks)?;
+    scan_validated(keys, blocks)
+}
+
+/// Ownership crypto is separated from structural checks so Prepare can validate
+/// the entire request before limiting crypto work to caller-selected outputs.
+fn scan_validated(keys: &WalletKeys, blocks: &[BlockOutputs]) -> Result<Vec<Scanned>> {
+    #[cfg(test)]
+    OWNERSHIP_OUTPUTS.with(|count| {
+        count.set(count.get() + blocks.iter().map(|b| b.outputs.len()).sum::<usize>());
+    });
     WalletScanner::new(keys)
         .scan_outputs(blocks)
         .into_iter()
@@ -175,6 +231,50 @@ pub fn scan(keys: &WalletKeys, blocks: &[BlockOutputs]) -> Result<Vec<Scanned>> 
             })
         })
         .collect()
+}
+
+fn selected_ownership(
+    keys: &WalletKeys,
+    blocks: &[BlockOutputs],
+    selected: &[String],
+) -> Result<(Vec<Scanned>, HashSet<String>)> {
+    validate_history(blocks)?;
+    // RPC hex is case-insensitive; WalletScanner emits lowercase output IDs.
+    let output_id = |output: &crate::rpc_pool::TxOutput| {
+        format!(
+            "{}:{}",
+            output.tx_hash.to_ascii_lowercase(),
+            output.output_index
+        )
+    };
+    let mut ids = HashSet::new();
+    for output in blocks.iter().flat_map(|block| &block.outputs) {
+        ensure!(ids.insert(output_id(output)), "duplicate output id");
+    }
+    // Resolve first-target identity BEFORE slicing. An older original outside
+    // the selected set must still disqualify a later owned alias.
+    let canonical = canonical_rpc_history(blocks)
+        .iter()
+        .flat_map(|block| &block.outputs)
+        .map(output_id)
+        .filter(|id| selected.contains(id))
+        .collect();
+    let selected_blocks: Vec<_> = blocks
+        .iter()
+        .filter_map(|block| {
+            let outputs: Vec<_> = block
+                .outputs
+                .iter()
+                .filter(|output| selected.contains(&output_id(output)))
+                .cloned()
+                .collect();
+            (!outputs.is_empty()).then_some(BlockOutputs {
+                height: block.height,
+                outputs,
+            })
+        })
+        .collect();
+    Ok((scan_validated(keys, &selected_blocks)?, canonical))
 }
 
 pub fn inspect(bytes: &[u8]) -> Result<Value> {
@@ -258,6 +358,7 @@ pub fn execute(request: Request) -> Result<Value> {
             allowed_recipients,
             amount,
             base_rate,
+            fee_multiplier,
             artifact,
         } => {
             ensure!(amount >= DUST_THRESHOLD, "amount is below dust");
@@ -284,8 +385,7 @@ pub fn execute(request: Request) -> Result<Value> {
             );
             ensure!(base_rate > 0, "missing network fee rate");
             let keys = read_keys(Path::new(&wallet))?;
-            let owned = scan(&keys, &blocks)?;
-            let canonical = scan(&keys, &canonical_rpc_history(&blocks))?;
+            let (owned, canonical) = selected_ownership(&keys, &blocks, &selected)?;
             let mut input_keys = HashSet::new();
             let mut inputs = Vec::new();
             let mut input_metadata = Vec::new();
@@ -295,10 +395,7 @@ pub fn execute(request: Request) -> Result<Value> {
                     .find(|o| &o.id == id)
                     .context("selected input is not owned")?;
                 ensure!(!reserved.contains(id), "input already reserved");
-                ensure!(
-                    canonical.iter().any(|o| o.id == *id),
-                    "input is not canonical"
-                );
+                ensure!(canonical.contains(id), "input is not canonical");
                 ensure!(
                     input_keys.insert(output.utxo.target_key),
                     "duplicate input target"
@@ -333,11 +430,10 @@ pub fn execute(request: Request) -> Result<Value> {
                 .context("input sum overflow")?;
             let fee_inputs: Vec<_> = inputs.iter().map(|u| (u.amount, u.tags())).collect();
             let fee_refs: Vec<_> = fee_inputs.iter().map(|(v, t)| (*v, t)).collect();
-            let fee = FeeEstimator::with_base_rate(base_rate)
+            let estimate = FeeEstimator::with_base_rate(base_rate)
                 .estimate_fee(&fee_refs, 2)
-                .total_fee
-                .max(MIN_TX_FEE);
-            ensure!(fee <= MAX_FEE, "estimated fee exceeds program bound");
+                .total_fee;
+            let (baseline_fee, fee) = bounded_fee(estimate, fee_multiplier)?;
             ensure!(
                 amount.checked_add(fee).is_some_and(|need| need <= total),
                 "insufficient funds"
@@ -380,6 +476,8 @@ pub fn execute(request: Request) -> Result<Value> {
                 "recipient amount differs"
             );
             publish(Path::new(&artifact), &bytes)?;
+            info["baseline_fee"] = json!(baseline_fee);
+            info["fee_multiplier"] = json!(fee_multiplier);
             info["selected"] = json!(input_metadata);
             info["artifact"] = json!(artifact);
             Ok(info)
@@ -390,6 +488,434 @@ pub fn execute(request: Request) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fee_tiers_apply_after_floor_and_reject_overflow_or_budget_excess() {
+        assert_eq!(bounded_fee(1, 4).unwrap(), (MIN_TX_FEE, 4 * MIN_TX_FEE));
+        assert_eq!(
+            bounded_fee(2 * MIN_TX_FEE, 2).unwrap(),
+            (2 * MIN_TX_FEE, 4 * MIN_TX_FEE)
+        );
+        assert_eq!(bounded_fee(MAX_FEE / 4, 4).unwrap().1, MAX_FEE);
+        assert!(bounded_fee(MAX_FEE / 4 + 1, 4).is_err());
+        assert!(bounded_fee(u64::MAX, 4)
+            .unwrap_err()
+            .to_string()
+            .contains("overflow"));
+        assert!(bounded_fee(MIN_TX_FEE, 3).is_err());
+    }
+
+    fn prepare_fixture(dir: &Path) -> Value {
+        prepare_shape_fixture(dir, 1)
+    }
+
+    fn prepare_shape_fixture(dir: &Path, input_count: usize) -> Value {
+        use bth_transaction_clsag::TxOutput;
+        use bth_transaction_types::ClusterTagVector;
+
+        let keys = WalletKeys::from_mnemonic("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art").unwrap();
+        let sink = WalletKeys::from_mnemonic("legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title").unwrap();
+        let wallet = dir.join("wallet.mnemonic");
+        publish(&wallet, keys.mnemonic_phrase().as_bytes()).unwrap();
+        let mut outputs = Vec::new();
+        // Selected real inputs plus exactly enough age-matched canonical decoys.
+        for index in 0..input_count + MIN_RING_SIZE - 1 {
+            let owner = if index < input_count { &keys } else { &sink };
+            let out = TxOutput::new_hybrid_to_address(
+                20_000_000_000,
+                &owner.public_address(),
+                index as u32,
+                None,
+                ClusterTagVector::empty(),
+            )
+            .unwrap();
+            outputs.push(json!({
+                "txHash": hex::encode([9u8; 32]), "outputIndex": index,
+                "targetKey": hex::encode(out.target_key),
+                "publicKey": hex::encode(out.public_key),
+                "amountCommitment": hex::encode(out.amount.to_le_bytes()),
+                "clusterTags": [], "kemCiphertext": out.kem_ciphertext.map(hex::encode),
+            }));
+        }
+        let blocks = json!([{"height":100,"outputs":outputs}]);
+        let owned = scan(
+            &keys,
+            &serde_json::from_value::<Vec<BlockOutputs>>(blocks.clone()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(owned.len(), input_count);
+        let recipient = sink.public_address_string(Network::Testnet).unwrap();
+        json!({"operation":"prepare", "wallet":wallet, "blocks":blocks,
+            "height":120, "selected":owned.iter().map(|o| &o.id).collect::<Vec<_>>(),
+            "spent":owned.iter().map(|o| json!({"keyImage":o.key_image,"spent":false,"pending":false,"spentHeight":null})).collect::<Vec<_>>(),
+            "reserved":[], "recipient":recipient, "allowed_recipients":[recipient],
+            "amount":10_000_000_000u64,"base_rate":1,"artifact":dir.join("signed.bin")})
+    }
+
+    #[test]
+    fn prepare_ownership_work_is_bounded_by_selected_inputs() {
+        for inputs in [1, 2, 4] {
+            let dir = tempfile::tempdir().unwrap();
+            fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+            let request = prepare_shape_fixture(dir.path(), inputs);
+            for history_copies in [0, 64] {
+                let mut value = request.clone();
+                // Additional well-formed, unselected aliases increase history
+                // size without requiring costly fixture key generation.
+                let extra = value["blocks"][0]["outputs"][inputs].clone();
+                for index in 0..history_copies {
+                    let mut output = extra.clone();
+                    output["txHash"] = json!(hex::encode([index as u8 + 32; 32]));
+                    value["blocks"][0]["outputs"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(output);
+                }
+                value["artifact"] = json!(dir.path().join(format!("shape-{history_copies}.bin")));
+                OWNERSHIP_OUTPUTS.with(|count| count.set(0));
+                execute(serde_json::from_value(value).unwrap()).unwrap();
+                assert_eq!(
+                    OWNERSHIP_OUTPUTS.with(|count| count.get()),
+                    inputs,
+                    "ownership work grew with unselected history: {history_copies} copies"
+                );
+            }
+        }
+    }
+
+    fn prepare_error(value: Value) -> String {
+        execute(serde_json::from_value(value).unwrap())
+            .unwrap_err()
+            .to_string()
+    }
+
+    #[test]
+    fn scan_and_restore_still_discover_all_owned_outputs() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let value = prepare_shape_fixture(dir.path(), 4);
+        let keys = read_keys(Path::new(value["wallet"].as_str().unwrap())).unwrap();
+        let address = keys.public_address_string(Network::Testnet).unwrap();
+        let outputs = value["blocks"][0]["outputs"].as_array().unwrap().len();
+        let mut responses = Vec::new();
+        for operation in ["scan", "restore_check"] {
+            let mut request =
+                json!({"operation":operation,"wallet":value["wallet"],"blocks":value["blocks"]});
+            if operation == "restore_check" {
+                request["expected_address"] = json!(address);
+            }
+            OWNERSHIP_OUTPUTS.with(|count| count.set(0));
+            let response = execute(serde_json::from_value(request).unwrap()).unwrap();
+            assert_eq!(OWNERSHIP_OUTPUTS.with(|count| count.get()), outputs);
+            assert_eq!(response["owned"].as_array().unwrap().len(), 4);
+            responses.push(response);
+        }
+        assert_eq!(responses[0], responses[1]);
+    }
+
+    #[test]
+    fn prepare_rejects_invalid_unselected_history_before_ownership_crypto() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let request = prepare_fixture(dir.path());
+        for (field, invalid, expected) in [
+            ("txHash", "aa", "invalid output key length"),
+            ("targetKey", "aa", "invalid output key length"),
+            ("publicKey", "aa", "invalid output key length"),
+            ("amountCommitment", "aa", "invalid amount"),
+            ("kemCiphertext", "aa", "invalid KEM ciphertext"),
+            ("targetKey", "zz", "Invalid character"),
+        ] {
+            let mut value = request.clone();
+            value["blocks"][0]["outputs"][1][field] = json!(invalid);
+            OWNERSHIP_OUTPUTS.with(|count| count.set(0));
+            let error = prepare_error(value);
+            assert!(error.contains(expected), "{field}: {error}");
+            assert_eq!(OWNERSHIP_OUTPUTS.with(|count| count.get()), 0);
+        }
+        let mut duplicate_id = request.clone();
+        let output = duplicate_id["blocks"][0]["outputs"][1].clone();
+        duplicate_id["blocks"][0]["outputs"]
+            .as_array_mut()
+            .unwrap()
+            .push(output);
+        assert!(prepare_error(duplicate_id).contains("duplicate output id"));
+        let mut duplicate_height = request.clone();
+        duplicate_height["blocks"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"height":100,"outputs":[]}));
+        assert!(prepare_error(duplicate_height).contains("duplicate block height"));
+        assert!(!dir.path().join("signed.bin").exists());
+    }
+
+    #[test]
+    fn prepare_rejects_older_target_alias_outside_selected_history() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let mut value = prepare_fixture(dir.path());
+        let mut original = value["blocks"][0]["outputs"][0].clone();
+        original["txHash"] = json!(hex::encode([0xabu8; 32]).to_uppercase());
+        // An unrelated public key makes the original not owned. Canonicality
+        // is target-only, independent of ownership and supplied block order.
+        original["publicKey"] = value["blocks"][0]["outputs"][1]["publicKey"].clone();
+        value["blocks"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"height":1,"outputs":[original]}));
+        assert!(prepare_error(value).contains("input is not canonical"));
+        assert!(!dir.path().join("signed.bin").exists());
+    }
+
+    #[test]
+    fn prepare_keeps_selected_ownership_and_spend_guards() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let request = prepare_fixture(dir.path());
+        let mut unowned = request.clone();
+        unowned["selected"] = json!([format!("{}:1", hex::encode([9u8; 32]))]);
+        assert!(prepare_error(unowned).contains("not owned"));
+        let mut reserved = request.clone();
+        reserved["reserved"] = reserved["selected"].clone();
+        assert!(prepare_error(reserved).contains("already reserved"));
+        for field in ["spent", "pending"] {
+            let mut value = request.clone();
+            value["spent"][0][field] = json!(true);
+            assert!(prepare_error(value).contains("missing, spent or pending"));
+        }
+        let mut immature = request.clone();
+        immature["height"] = json!(101);
+        assert!(prepare_error(immature).contains("immature input"));
+        let mut lottery = request.clone();
+        lottery["blocks"][0]["outputs"][0]["lottery"] = json!(true);
+        assert!(prepare_error(lottery).contains("not canonical"));
+        let mut duplicate = request.clone();
+        duplicate["selected"]
+            .as_array_mut()
+            .unwrap()
+            .push(request["selected"][0].clone());
+        assert!(prepare_error(duplicate).contains("duplicate input"));
+        assert!(!dir.path().join("signed.bin").exists());
+    }
+
+    #[test]
+    fn prepare_normalizes_rpc_hex_ids_and_rejects_case_duplicate_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let mut value = prepare_fixture(dir.path());
+        let tx_hash = hex::encode([0xabu8; 32]);
+        value["blocks"][0]["outputs"][0]["txHash"] = json!(tx_hash.to_uppercase());
+        value["selected"] = json!([format!("{tx_hash}:0")]);
+        let mut duplicate = value.clone();
+        let mut output = duplicate["blocks"][0]["outputs"][0].clone();
+        output["txHash"] = json!(tx_hash);
+        duplicate["blocks"][0]["outputs"]
+            .as_array_mut()
+            .unwrap()
+            .push(output);
+        assert!(prepare_error(duplicate).contains("duplicate output id"));
+        let prepared = execute(serde_json::from_value(value).unwrap()).unwrap();
+        assert_eq!(prepared["selected"][0]["id"], format!("{tx_hash}:0"));
+    }
+
+    #[cfg(feature = "pq")]
+    #[test]
+    fn prepare_selected_shapes_pass_ledger_and_exclude_other_reals_from_every_ring() {
+        use botho::{
+            ledger::{ChainState, Ledger, UtxoSnapshot},
+            transaction::{TxOutput, Utxo, UtxoId},
+        };
+        use bth_transaction_types::ClusterTagVector;
+        for inputs in [1, 2, 4] {
+            let dir = tempfile::tempdir().unwrap();
+            fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+            let value = prepare_shape_fixture(dir.path(), inputs);
+            let blocks: Vec<BlockOutputs> =
+                serde_json::from_value(value["blocks"].clone()).unwrap();
+            let utxos: Vec<_> = blocks
+                .iter()
+                .flat_map(|block| {
+                    block.outputs.iter().map(|o| Utxo {
+                        id: UtxoId::new(
+                            hex::decode(&o.tx_hash).unwrap().try_into().unwrap(),
+                            o.output_index,
+                        ),
+                        output: TxOutput {
+                            amount: u64::from_le_bytes(
+                                hex::decode(&o.amount_commitment)
+                                    .unwrap()
+                                    .try_into()
+                                    .unwrap(),
+                            ),
+                            target_key: hex::decode(&o.target_key).unwrap().try_into().unwrap(),
+                            public_key: hex::decode(&o.public_key).unwrap().try_into().unwrap(),
+                            e_memo: None,
+                            cluster_tags: ClusterTagVector::empty(),
+                            kem_ciphertext: o
+                                .kem_ciphertext
+                                .as_ref()
+                                .map(|k| hex::decode(k).unwrap()),
+                        },
+                        created_at: block.height,
+                    })
+                })
+                .collect();
+            let reals: HashSet<_> = utxos[..inputs]
+                .iter()
+                .map(|u| u.output.target_key)
+                .collect();
+            let ledger = Ledger::open(&dir.path().join("ledger")).unwrap();
+            let snapshot = UtxoSnapshot::new(
+                120,
+                [0; 32],
+                ChainState {
+                    height: 120,
+                    ..Default::default()
+                },
+                utxos,
+                vec![],
+                vec![],
+            )
+            .unwrap();
+            ledger.load_from_snapshot(&snapshot, None).unwrap();
+            let prepared = execute(serde_json::from_value(value).unwrap()).unwrap();
+            let bytes = fs::read(dir.path().join("signed.bin")).unwrap();
+            let tx: Transaction = bincode::deserialize(&bytes).unwrap();
+            ledger.verify_transaction(&tx).unwrap();
+            assert_eq!(tx.inputs.len(), inputs);
+            let mut seen = HashSet::new();
+            for input in tx.inputs.clsag() {
+                let members: Vec<_> = input
+                    .ring
+                    .iter()
+                    .filter(|m| reals.contains(&m.target_key))
+                    .collect();
+                assert_eq!(
+                    members.len(),
+                    1,
+                    "another selected real leaked into a decoy ring"
+                );
+                assert!(seen.insert(members[0].target_key));
+                assert_eq!(input.ring.len(), MIN_RING_SIZE);
+            }
+            assert_eq!(seen, reals);
+            assert_eq!(
+                tx.outputs.iter().map(|o| o.amount).sum::<u64>() + tx.fee,
+                inputs as u64 * 20_000_000_000
+            );
+            assert_eq!(prepared["input_count"], inputs);
+        }
+    }
+
+    #[test]
+    fn prepare_fee_tiers_are_signed_and_dust_is_reported_exactly() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let request = prepare_fixture(dir.path());
+        // Missing multiplier retains the legacy tier; explicit tiers affect
+        // the serialized transaction, not just response metadata.
+        for multiplier in [1u64, 2, 4] {
+            let mut value = request.clone();
+            if multiplier != 1 {
+                value["fee_multiplier"] = json!(multiplier);
+            }
+            let artifact = dir.path().join(format!("tier-{multiplier}.bin"));
+            value["artifact"] = json!(artifact);
+            let prepared = execute(serde_json::from_value(value).unwrap()).unwrap();
+            assert_eq!(prepared["baseline_fee"], MIN_TX_FEE);
+            assert_eq!(prepared["fee_multiplier"], multiplier);
+            assert_eq!(prepared["fee"], MIN_TX_FEE * multiplier);
+            let inspected = inspect(&fs::read(&artifact).unwrap()).unwrap();
+            assert_eq!(inspected["fee"], prepared["fee"]);
+            assert_eq!(inspected["hash"], prepared["hash"]);
+            let output_sum: u64 = inspected["outputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|o| o["amount"].as_u64().unwrap())
+                .sum();
+            assert_eq!(
+                output_sum + inspected["fee"].as_u64().unwrap(),
+                20_000_000_000
+            );
+        }
+        let mut increased_base = request.clone();
+        increased_base["base_rate"] = json!(100_000);
+        increased_base["fee_multiplier"] = json!(2);
+        increased_base["artifact"] = json!(dir.path().join("increased-base.bin"));
+        let prepared = execute(serde_json::from_value(increased_base).unwrap()).unwrap();
+        let baseline = prepared["baseline_fee"].as_u64().unwrap();
+        assert!(baseline > MIN_TX_FEE);
+        assert_eq!(prepared["fee"], baseline * 2);
+
+        let mut insufficient = request.clone();
+        insufficient["amount"] = json!(20_000_000_000u64 - MIN_TX_FEE);
+        insufficient["fee_multiplier"] = json!(2);
+        assert!(execute(serde_json::from_value(insufficient).unwrap())
+            .unwrap_err()
+            .to_string()
+            .contains("insufficient funds"));
+        assert!(!dir.path().join("signed.bin").exists());
+
+        let mut dust = request.clone();
+        dust["fee_multiplier"] = json!(2);
+        dust["amount"] = json!(20_000_000_000u64 - 2 * MIN_TX_FEE - (DUST_THRESHOLD - 1));
+        dust["artifact"] = json!(dir.path().join("dust.bin"));
+        let prepared = execute(serde_json::from_value(dust).unwrap()).unwrap();
+        assert_eq!(prepared["baseline_fee"], MIN_TX_FEE);
+        assert_eq!(prepared["fee_multiplier"], 2);
+        assert_eq!(prepared["fee"], 2 * MIN_TX_FEE + DUST_THRESHOLD - 1);
+        assert_eq!(prepared["outputs"].as_array().unwrap().len(), 1);
+
+        let mut over_cap_dust = request.clone();
+        over_cap_dust["base_rate"] = json!(MAX_FEE * 100_000 / baseline);
+        over_cap_dust["amount"] = json!(20_000_000_000u64 - MAX_FEE - 1);
+        let error = execute(serde_json::from_value(over_cap_dust).unwrap()).unwrap_err();
+        assert!(
+            error.to_string().contains("fee outside program bounds"),
+            "{error:#}"
+        );
+        assert!(!dir.path().join("signed.bin").exists());
+        assert!(!dir.path().join("signed.partial").exists());
+
+        let mut excessive = request;
+        excessive["base_rate"] = json!(u64::MAX);
+        excessive["fee_multiplier"] = json!(4);
+        assert!(execute(serde_json::from_value(excessive).unwrap())
+            .unwrap_err()
+            .to_string()
+            .contains("program bound"));
+        assert!(!dir.path().join("signed.bin").exists());
+        assert!(!dir.path().join("signed.partial").exists());
+    }
+
+    #[test]
+    fn prepare_fee_multiplier_rejects_invalid_json_types_and_values() {
+        let mut request = json!({"operation":"prepare","wallet":"unused","blocks":[],
+            "height":0,"selected":[],"spent":[],"reserved":[],"recipient":"unused",
+            "allowed_recipients":[],"amount":1,"base_rate":1,"artifact":"unused"});
+        for multiplier in [json!(1), json!(2), json!(4)] {
+            request["fee_multiplier"] = multiplier;
+            assert!(serde_json::from_value::<Request>(request.clone()).is_ok());
+        }
+        for invalid in [
+            json!(0),
+            json!(3),
+            json!(5),
+            json!(-1),
+            json!(1.0),
+            json!(true),
+            json!(null),
+            json!("2"),
+            json!(u64::MAX),
+        ] {
+            request["fee_multiplier"] = invalid.clone();
+            assert!(
+                serde_json::from_value::<Request>(request.clone()).is_err(),
+                "accepted {invalid}"
+            );
+        }
+    }
 
     #[test]
     fn request_reader_enforces_inclusive_boundary_and_bounded_read() {

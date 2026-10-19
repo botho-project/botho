@@ -8,11 +8,11 @@ import json
 import os
 from pathlib import Path
 import re
-import resource
 import shutil
 import subprocess
 import time
 from plan import expand
+from reporting import legacy_lottery_evidence
 from runtime import (Gate, HOSTS, Journal, PENDING, Quota, Rpc, atomic,
                      check_identity, check_resources, digest, campaign_targets, campaign_tls_context, pinned_file)
 
@@ -29,7 +29,7 @@ class Controller:
             pinned_file(self.config.get('known_hosts'), self.config.get('known_hosts_sha256'), 'observer known_hosts')
         if 'hosts_file' in self.config or 'hosts_sha256' in self.config:
             pinned_file(self.config.get('hosts_file'), self.config.get('hosts_sha256'), 'hosts file')
-        self.j = Journal(state/'journal.sqlite')
+        self.j = Journal(state/'journal.sqlite', limits=self.plan['limits'] if self.plan.get('schema_version') == 2 else None)
         if self.j.get('plan_digest',digest(self.plan)) != digest(self.plan):
             raise Gate('manifest changed after initialization')
         self.j.set('plan_digest',digest(self.plan))
@@ -46,14 +46,16 @@ class Controller:
         self.fresh = 0
         self.blocks = json.loads((state/'blocks.json').read_text()) if (state/'blocks.json').exists() else []
         self.wallets = self.config['wallets']
-        if len(self.wallets) != 8 or len({w['address'] for w in self.wallets}) != 8:
-            raise Gate('eight distinct dedicated wallets required')
+        wallet_count = self.plan['wallets']['count'] if self.plan.get('schema_version') == 2 else 8
+        if len(self.wallets) != wallet_count or len({w['address'] for w in self.wallets}) != wallet_count:
+            raise Gate('manifest requires distinct dedicated wallets')
         self.inventory = [[] for _ in self.wallets]
         # Never trust persisted wallet inventory after a process restart.
         self.inventory_initialized = False
         self.spent = []
         self.scan_lock = asyncio.Lock()
         self.admission_lock = asyncio.Lock()
+        self.reconcile_wakeup = asyncio.Event()
         self.signed_tasks = set()
         self.closed = False
 
@@ -66,7 +68,7 @@ class Controller:
             raise Gate('fleet or observer data stale')
         if any(not s.get('synced') for s in self.statuses.values()):
             raise Quota('fleet is recovering sync')
-        deadline = self.j.get('end',self.j.get('setup_start')+8*3600)
+        deadline = self.j.get('end',self.j.get('setup_start')+self.plan.get('setup_deadline_hours',8)*3600)
         if time.time() >= deadline:
             raise Gate('immutable admission deadline')
 
@@ -143,6 +145,7 @@ class Controller:
                     if any(b.get('hash') != self.plan['genesis'] for b in genesis):
                         raise Gate('genesis differs from manifest')
                     self.j.set('genesis_verified',True)
+                previous_height = min((s['chainHeight'] for s in self.statuses.values()),default=-1)
                 self.statuses = dict(zip(HOSTS,statuses))
                 self.fresh = time.time()
                 self.j.set('fleet_latest',{'at':self.fresh,'nodes':self.statuses})
@@ -152,6 +155,8 @@ class Controller:
                 # state volume approaches exhaustion or its evidence grows too far.
                 if shutil.disk_usage(self.state).free < 2*1024**3:
                     raise Gate('controller disk headroom')
+                if minimum > previous_height:
+                    self.reconcile_wakeup.set()
             except Quota as error:
                 self.j.event(None,'monitor_quota',str(error))
             except Gate as error:
@@ -227,7 +232,7 @@ class Controller:
                             "SELECT COUNT(*) FROM requests WHERE host=? AND at>?",
                             (host, now - 60),
                         ).fetchone()[0]
-                        limit = min(50, self.j.get("quota:" + host, 100) // 2)
+                        limit = min(self.j.limits["max_rpc_per_endpoint_per_minute"], self.j.get("quota:" + host, 100) // 2)
                         if count >= max(1, limit - 10):
                             raise Quota("scan reserves monitoring headroom")
                         return await self.rpc.call(
@@ -441,39 +446,13 @@ class Controller:
         return outputs
 
     def report(self):
-        rows = self.j.rows()
-        counts = {}
-        for row in rows:
-            label = row['kind']+':'+row['state']
-            counts[label] = counts.get(label,0)+1
-        complete = [r for r in rows if r['state']=='reconciled' and r['submitted']]
-        def latency(field):
-            values = sorted(r['finished']-r[field] for r in complete)
-            if not values:
-                return {'count':0}
-            return {'count':len(values),'median':values[len(values)//2],
-                    'p95':values[min(len(values)-1,int(len(values)*.95))],'max':values[-1]}
-        report = {'at':time.time(),'run_id':self.config['run_id'],'status':self.j.get('status'),
-            'reason':self.j.get('reason'),'setup_start':self.j.get('setup_start'),
-            'start':self.j.get('start'),'end':self.j.get('end'),'plan_sha256':digest(self.plan),
-            'counts':counts,'submitted_to_reconciled_seconds':latency('submitted'),
-            'nominal_campaign_offers':692,
-            'targets':list(self.targets.values()) if hasattr(self,'targets') else None,
-            'infrastructure_end':self.config.get('infrastructure_end'),
-            'not_yet_offered':692-sum(r['kind']=='campaign' for r in rows),
-            'offered_to_reconciled_seconds':latency('offered'),
-            'signed_fees':sum(r['fee'] for r in rows if r['prepared']),
-            'faucet_fees':sum(json.loads(r['info']).get('faucet_fee',0) for r in rows if r['kind']=='funding'),
-            'accounting':self.j.get('accounting'),'fleet':self.j.get('fleet_latest'),
-            'resources':{h:self.j.get('latest:'+h) for h in HOSTS},
-            'controller':{'max_rss':resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
-                          'user_cpu':resource.getrusage(resource.RUSAGE_SELF).ru_utime},
-            'coverage':{'web':False,'snap':False,'confidential_amounts':False,'public_node_faults':False}}
-        atomic(self.state/'report.json',report)
-        self.j.set('report_at',time.time())
-        return report
+        from reporting import controller_report
+        return controller_report(self)
 
-    async def prepare(self, identifier, count, phase_limit, burst=False, crash=None):
+    def intent_deadline(self, row):
+        return row['offered']+self.j.limits['start_slot_grace_seconds']
+
+    async def prepare(self, identifier, count, phase_limit, burst=False, crash=None, fee_multiplier=1, cohort=None):
         row = self.j.intent(identifier)
         self.gate()
         if any(r['sender']==row['sender'] for r in self.j.pending()):
@@ -481,32 +460,41 @@ class Controller:
         height = await self.sync()
         selected = self.spendable(row['sender'],height,row['amount'],count)
         if not selected:
-            self.j.event(identifier,'inventory_wait',{'wallet':row['sender'],'height':height})
+            self.j.event(identifier,'inventory_wait',{'wallet':row['sender'],'height':height,
+                **self.j.get('selection_latest',{})})
             return False
         self.gate()
-        if time.time() > row['offered']+120:
+        if time.time() > self.intent_deadline(row):
             return False
         self.j.transition(identifier,'eligible')
         charged=self.j.db.execute('SELECT COALESCE(SUM(fee),0) FROM intents WHERE prepared IS NOT NULL').fetchone()[0]
-        if charged+5_000_000_000>500_000_000_000:
+        if charged+self.j.limits['max_single_signed_fee_picocredits']>self.j.limits['max_signed_fee_picocredits']:
             raise Gate('insufficient remaining fee budget to prepare')
         writes=self.j.db.execute('SELECT COUNT(*) FROM intents WHERE prepared IS NOT NULL OR submitted IS NOT NULL').fetchone()[0]
-        if writes>=800:
+        if writes>=self.j.limits['max_unique_chain_writes']:
             raise Gate('chain write budget reached before signing')
         artifact = self.state/'artifacts'/(identifier+'.bin')
         if artifact.exists() or artifact.with_suffix('.partial').exists():
             raise Gate('orphaned prepared artifact needs reconciliation: '+identifier)
-        fee_rate = await self.rpc.call(HOSTS[0],'fee_getRate')
+        ingress = HOSTS[0]
+        if self.plan.get('schema_version') == 2:
+            ingress = HOSTS[int(hashlib.sha256((str(self.plan['seed'])+identifier).encode()).hexdigest(),16)%len(HOSTS)]
+        fee_rate = await self.rpc.call(ingress,'fee_getRate')
         info = await self.native({'operation':'prepare','wallet':self.wallets[row['sender']]['key'],
             'blocks':self.blocks,'height':height,'selected':[o['id'] for o in selected],
             'spent':self.spent,'reserved':[r[0] for r in self.j.db.execute('SELECT input FROM reservations')],
             'recipient':self.wallets[row['recipient']]['address'],
             'allowed_recipients':[w['address'] for w in self.wallets],
-            'amount':row['amount'],'base_rate':int(fee_rate['baseRate']),'artifact':str(artifact)})
+            'amount':row['amount'],'base_rate':int(fee_rate['baseRate']),'artifact':str(artifact),
+            **({'fee_multiplier':fee_multiplier} if self.plan.get('schema_version') == 2 else {})})
+        if self.plan.get('schema_version') == 2:
+            from fee_evidence import signed_fee_evidence
+            info.update(fee_evidence=signed_fee_evidence(info, fee_multiplier), cohort=cohort,
+                        fee_quote=fee_rate, ingress_role=ingress)
         info.update(burst=burst,phase_limit=phase_limit,crash=crash,
                     scan_height=height,prepared_at=time.time())
         self.gate()
-        self.j.prepare(identifier,info,phase_limit,row['offered']+120)
+        self.j.prepare(identifier,info,phase_limit,self.intent_deadline(row))
         if crash=='prepared' and not self.j.get('crash:prepared'):
             self.j.set('crash:prepared',identifier)
             self.report()
@@ -523,14 +511,16 @@ class Controller:
         for key in ('hash','fee','bytes','outputs','key_images'):
             if inspected[key] != info[key]:
                 raise Gate('saved artifact does not match durable journal')
-        if time.time() >= row['offered']+120:
+        if time.time() >= self.intent_deadline(row):
             self.j.transition(identifier,'expired','prepared intent exceeded original slot',finished=time.time())
             # Retain the signed input reservations: a signed artifact still exists.
             self.halt('prepared intent expired; review reserved inputs')
             return
-        host = HOSTS[(sum(identifier.encode()) % len(HOSTS))]
+        host = info.get('ingress_role', HOSTS[(sum(identifier.encode()) % len(HOSTS))])
         wire = len(json.dumps({'jsonrpc':'2.0','id':1404,'method':'tx_submit','params':{'tx_hex':data.hex()}}).encode())
-        self.j.begin_submit(identifier,host,wire,info['burst'],row['offered']+120)
+        self.j.begin_submit(identifier,host,wire,info['burst'],self.intent_deadline(row))
+        # Retain the durable marker's byte charge through receipt transitions.
+        info = json.loads(self.j.intent(identifier)['info'])
         self.j.set('last_write',time.time())
         if info.get('crash')=='submitting' and not self.j.get('crash:submitting'):
             # Crash after the durable marker. No retry is possible on recovery;
@@ -555,13 +545,13 @@ class Controller:
     async def fund(self, identifier):
         row = self.j.intent(identifier)
         self.gate()
-        if row['state'] != 'planned' or time.time()>row['offered']+120:
+        if row['state'] != 'planned' or time.time()>self.intent_deadline(row):
             return
         faucet = await self.rpc.call('faucet.botho.io','faucet_getStatus')
         if not faucet.get('enabled') or int(faucet.get('amountPerRequest',0)) != 1_000_000_000_000:
             raise Gate('unexpected faucet configuration')
         self.gate()
-        if time.time()>row['offered']+120:
+        if time.time()>self.intent_deadline(row):
             return
         with self.j.transaction():
             rows = self.j.rows("kind='funding' AND submitted IS NOT NULL")
@@ -589,43 +579,69 @@ class Controller:
             self.j.transition(identifier,'unknown',str(error))
             self.halt('faucet reply uncertain; funding slot consumed without retry')
 
+    async def wait_for_reconcile(self, delay):
+        try:
+            await asyncio.wait_for(self.reconcile_wakeup.wait(), timeout=delay)
+        except asyncio.TimeoutError:
+            pass
+
     async def reconcile(self):
+        next_poll = 0
         while not self.closed:
-            started = time.monotonic()
+            # Height wakes only complete saved confirmations. Keep the ordinary
+            # receipt/status polling deadline independent of monitor cadence.
+            poll = time.monotonic() >= next_poll
+            if poll:
+                next_poll = time.monotonic()+30
+            self.reconcile_wakeup.clear()
             try:
                 for row in self.j.pending():
-                    # A persisted prepared intent has never acquired a submit marker.
-                    # Query its hash on every ingress before allowing its first submit.
-                    if row['hash']:
-                        statuses = await asyncio.gather(*(self.rpc.call(h,'getTransactionStatus',{'hash':row['hash']}) for h in HOSTS))
-                    else:
-                        statuses = []
+                    # Admission alone owns first submission of prepared work.
+                    # Quota pressure must not interrupt unrelated receipt reads.
                     if row['state']=='prepared':
-                        if any(s.get('status')!='unknown' for s in statuses):
-                            self.halt('unsubmitted prepared hash unexpectedly exists on chain')
-                        elif self.j.get('status') in ('setup','running') and not self.admission_lock.locked():
-                            async with self.admission_lock:
-                                if self.j.intent(row['id'])['state']=='prepared':
-                                    await self.submit_prepared(row['id'])
                         continue
-                    age = time.time()-(row['submitted'] or row['prepared'])
-                    if not statuses or not all(s.get('confirmed') and s.get('txHash')==row['hash'] for s in statuses):
-                        if age>900:
-                            self.j.transition(row['id'],'unresolved','not reconciled within fifteen minutes')
-                            self.halt('unresolved payment exceeded fifteen minutes')
-                        elif age>300:
-                            self.halt('payment unconfirmed after five minutes')
-                        continue
-                    receipts = await asyncio.gather(*(self.rpc.call(h,'getTransaction',{'hash':row['hash']}) for h in HOSTS))
+                    info = json.loads(row['info'])
+                    saved = info.get('confirmed_receipts') if row['state']=='confirmed' else None
+                    fetch_receipts = saved is None
+                    if fetch_receipts:
+                        if not poll:
+                            continue
+                        if row['hash']:
+                            statuses = await asyncio.gather(*(self.rpc.call(h,'getTransactionStatus',{'hash':row['hash']}) for h in HOSTS))
+                        else:
+                            statuses = []
+                        age = time.time()-(row['submitted'] or row['prepared'])
+                        if not statuses or not all(s.get('confirmed') and s.get('txHash')==row['hash'] for s in statuses):
+                            if age>900:
+                                self.j.transition(row['id'],'unresolved','not reconciled within fifteen minutes')
+                                self.halt('unresolved payment exceeded fifteen minutes')
+                            elif age>300:
+                                self.halt('payment unconfirmed after five minutes')
+                            continue
+                        receipts = await asyncio.gather(*(self.rpc.call(h,'getTransaction',{'hash':row['hash']}) for h in HOSTS))
+                        saved = dict(zip(HOSTS,receipts))
+                    if set(saved) != set(HOSTS):
+                        raise Gate('incomplete saved confirmation receipts')
+                    receipts = [saved[h] for h in HOSTS]
                     if len({(r.get('blockHeight'),r.get('fee'),r.get('outputCount'),r.get('totalOutput')) for r in receipts}) != 1:
                         raise Gate('fleet transaction receipt disagreement')
-                    info = json.loads(row['info'])
-                    info.update(all_confirmed_at=time.time(),block_height=receipts[0]['blockHeight'])
-                    self.j.transition(row['id'],'confirmed',info=info)
-                    # Wait for monitor to expose the inclusion height to wallet scanning.
-                    if not self.statuses or min(s['chainHeight'] for s in self.statuses.values()) < info['block_height']:
+                    if any(r.get('txHash',row['hash']) != row['hash'] for r in receipts):
+                        raise Gate('fleet transaction receipt hash mismatch')
+                    if fetch_receipts:
+                        info.update(all_confirmed_at=time.time(),block_height=receipts[0]['blockHeight'],
+                                    confirmed_receipts=saved)
+                        self.j.transition(row['id'],'confirmed',info=info)
+                    if info['block_height'] != receipts[0]['blockHeight']:
+                        raise Gate('saved confirmation height mismatch')
+                    # Monitor wakeups cannot authorize scans from stale or
+                    # incomplete fleet state, including after a process restart.
+                    if (set(self.statuses) != set(HOSTS) or time.time()-self.fresh > 60
+                        or any(not s.get('synced') for s in self.statuses.values())
+                        or min(s['chainHeight'] for s in self.statuses.values()) < info['block_height']):
                         continue
                     await self.sync(draining=True)
+                    if time.time()-self.fresh > 60:
+                        raise Gate('fleet data stale during reconciliation')
                     recipient = self.inventory[row['recipient']]
                     received = [o for o in recipient if bytes(o['utxo']['tx_hash']).hex()==row['hash'] and o['utxo']['output_index']==0]
                     if len(received)!=1 or received[0]['utxo']['amount']!=row['amount']:
@@ -654,7 +670,8 @@ class Controller:
                 self.j.event(None,'reconcile_quota',str(error))
             except Exception as error:
                 self.halt('reconciliation: '+str(error))
-            await asyncio.sleep(max(.2,30-(time.monotonic()-started)))
+            if not self.closed:
+                await self.wait_for_reconcile(max(.2,next_poll-time.monotonic()))
 
     def accounting(self):
         state = {s['keyImage']:s for s in self.spent}
@@ -668,10 +685,14 @@ class Controller:
                    for b in self.blocks for o in b['outputs'] if o.get('lottery')}
         awards = sum(lottery.get((bytes(o['utxo']['tx_hash']).hex(),o['utxo']['output_index']),0)
                      for owned in self.inventory for o in owned)
-        report = {'at':time.time(),'opening':0,'grants':grants,'lottery_receipts':awards,
+        opening = self.j.get('opening_balance',0)
+        report = {'at':time.time(),'opening':opening,'grants':grants,'lottery_receipts':awards,
                   'balances':balances,'ending':sum(balances),'signed_fees':fees,
-                  'difference':grants+awards-sum(balances)-fees}
+                  'difference':opening+grants+awards-self.j.get('opening_lottery',0)-sum(balances)-fees,
+                  'legacy_lottery':legacy_lottery_evidence(self.inventory,lottery,state)}
         self.j.set('accounting',report)
+        if report['legacy_lottery']['award_count']:
+            raise Gate('unsupported legacy lottery payouts share a key image; see accounting evidence')
         if report['difference'] != 0:
             raise Gate('exact integer accounting mismatch')
 
@@ -855,6 +876,28 @@ class Controller:
         self.j.set('wallet_paths',[w['key'] for w in self.wallets])
         self.j.event(None,'wallet_restored',{'wallet':wallet})
 
+    async def admission_tick(self):
+        async with self.admission_lock:
+            self.gate()
+            waiting = self.j.rows("state='prepared' ORDER BY prepared, offered, id")
+            if waiting:
+                row = waiting[0]
+                # Persisted signatures have no submit marker. Require every
+                # ingress to report unknown before their one allowed attempt.
+                statuses = await asyncio.gather(*(self.rpc.call(
+                    h,'getTransactionStatus',{'hash':row['hash']}) for h in HOSTS))
+                if any(s.get('status')!='unknown' for s in statuses):
+                    self.halt('unsubmitted prepared hash unexpectedly exists on chain')
+                else:
+                    await self.submit_prepared(row['id'])
+                # Even when quota defers this signature, never let new signing
+                # steal its next capacity slot or reserve more wallet inputs.
+                return
+            if self.j.get('status')=='setup':
+                await self.setup_tick()
+            else:
+                await self.campaign_tick()
+
     async def run(self):
         if not self.j.get('status'):
             self.j.set('setup_start',self.config['setup_start'])
@@ -879,8 +922,9 @@ class Controller:
                 await self.sync(draining=True)
             reconciler=asyncio.create_task(self.reconcile())
             while True:
+                started=time.monotonic()
                 status=self.j.get('status')
-                if status in ('complete','incomplete'):
+                if status in ('complete','incomplete','rehearsal_complete'):
                     break
                 if status=='running' and time.time()>=self.j.get('end'):
                     self.j.set('status','draining')
@@ -892,12 +936,7 @@ class Controller:
                     break
                 try:
                     if status in ('setup','running'):
-                        self.gate()
-                        async with self.admission_lock:
-                            if status=='setup':
-                                await self.setup_tick()
-                            else:
-                                await self.campaign_tick()
+                        await self.admission_tick()
                 except Quota as error:
                     self.j.event(None,'admission_quota',str(error))
                 except Exception as error:
@@ -906,12 +945,16 @@ class Controller:
                     self.report()
                     atomic(self.state/'reports'/str(int(time.time())),self.report())
                     self.j.set('last_summary_at',time.time())
-                await asyncio.sleep(1)
+                # Include admission/report work in the cadence, but always
+                # yield so monitoring and reconciliation can make progress.
+                await asyncio.sleep(max(.2,1-(time.monotonic()-started)))
+            if self.j.get('status') == 'rehearsal_complete':
+                return
             if self.fresh and not self.j.pending():
                 await self.sync(full=True, draining=True)
                 self.accounting()
-            rows=self.j.rows("kind='campaign'")
-            success=len(rows)==692 and all(r['state']=='reconciled' for r in rows)
+            from reporting import workload_complete
+            success=workload_complete(self.j,self.events,self.plan['phases'])
             self.j.set('status','complete' if success else 'incomplete')
         finally:
             self.closed=True
@@ -929,7 +972,11 @@ def main():
     os.umask(0o077)
     with (args.state/'controller.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        controller=Controller(args.state)
+        controller_type = Controller
+        if json.loads((args.state/'plan.json').read_text()).get('schema_version') == 2:
+            from discovery import DiscoveryController
+            controller_type = DiscoveryController
+        controller=controller_type(args.state)
         if args.mode=='report':
             print(json.dumps(controller.report(),indent=2))
         else:

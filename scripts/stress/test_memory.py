@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 import tempfile
 import unittest
@@ -202,10 +203,14 @@ class QualifiedBaselineTests(unittest.IsolatedAsyncioTestCase):
                 c.config = {'node_sha256':'hash','resource_baselines':{h:reference for h in HOSTS}}
                 c.plan = {'network':'botho-testnet','node_commit':'commit','genesis':'block'}
                 c.closed = False
+                c.reconcile_wakeup = asyncio.Event()
                 c.fresh = 0
+                c.statuses = {}
                 c.state = Path(name)
                 status = {'network':'botho-testnet','gitCommit':'commit','version':'0.6.0',
                           'synced':True,'chainHeight':100}
+                # A persisted fleet height is not fresh in-memory state after restart.
+                c.j.set('fleet_latest', {'at': 900, 'nodes': {h: status for h in HOSTS}})
                 async def rpc(host, method, params=None):
                     return status if method=='node_getStatus' else {'hash':'block'}
                 c.rpc = Mock(call=AsyncMock(side_effect=rpc))
@@ -219,8 +224,10 @@ class QualifiedBaselineTests(unittest.IsolatedAsyncioTestCase):
                     c.halt.assert_called_once()
                     self.assertIn('unexpected node restart',str(c.halt.call_args.args[0]))
                     c.memory_cycle.assert_not_called()
+                    self.assertFalse(c.reconcile_wakeup.is_set())
                 else:
                     c.halt.assert_not_called()
+                    self.assertTrue(c.reconcile_wakeup.is_set())
                     for host in HOSTS:
                         self.assertEqual(c.j.get('baseline:'+host),reference)
                         self.assertEqual(c.j.get('latest:'+host)['rss'],450*MIB)

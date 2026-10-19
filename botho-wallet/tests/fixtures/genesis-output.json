@@ -1,0 +1,25 @@
+{
+  "height": 0,
+  "outputs": [
+    {
+      "amountCommitment": "0000000000000000",
+      "clusterTags": [
+        [
+          10496878372401138775,
+          1000000
+        ]
+      ],
+      "coinbase": true,
+      "cryptoOutputIndex": 0,
+      "kemCiphertext": null,
+      "ledgerOutpoint": {
+        "outputIndex": 0,
+        "txHash": "9ba39a7a724ce1c954d9cbf9b83c019e898a5129ef5f485c0488a3fad6d396df"
+      },
+      "outputIndex": 4294967295,
+      "publicKey": "0000000000000000000000000000000000000000000000000000000000000000",
+      "targetKey": "0000000000000000000000000000000000000000000000000000000000000000",
+      "txHash": "574c73cd4367ac9127805cb4c61b27609e9f8fa70992ed669fae66c50746574d"
+    }
+  ]
+}

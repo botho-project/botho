@@ -138,7 +138,10 @@ pub fn canonical_rpc_history(blocks: &[BlockOutputs]) -> Vec<BlockOutputs> {
                 .outputs
                 .iter()
                 .filter(|output| {
-                    !output.lottery
+                    // Older RPC servers/caches include a synthetic genesis
+                    // mint, but genesis creates no ledger outputs.
+                    block.height > 0
+                        && !output.lottery
                         && parse_key32(&output.target_key).is_some_and(|key| seen.insert(key))
                 })
                 .cloned()
@@ -286,6 +289,41 @@ mod tests {
             cluster_tags: vec![],
             kem_ciphertext: None,
         }
+    }
+
+    /// Captured from the fresh testnet RPC in #1485. Genesis has no ledger
+    /// output, even though older servers advertised this zero-value
+    /// placeholder.
+    #[test]
+    fn cached_genesis_output_is_never_a_canonical_decoy() {
+        use rand::{rngs::StdRng, SeedableRng};
+        let genesis: BlockOutputs =
+            serde_json::from_str(include_str!("../tests/fixtures/genesis-output.json")).unwrap();
+        assert_eq!(genesis.height, 0);
+        assert_eq!(genesis.outputs[0].target_key, hex::encode([0u8; 32]));
+        let mut blocks = vec![genesis];
+        // Nineteen real outputs plus the old genesis placeholder: requesting
+        // twenty decoys must fail, not silently fill the ring with genesis.
+        for height in 1..=19 {
+            blocks.push(BlockOutputs {
+                height,
+                outputs: vec![random_rpc_output(50_000_000_000_000)],
+            });
+        }
+        let canonical = canonical_rpc_history(&blocks);
+        assert_eq!(canonical[0].height, 0);
+        assert!(canonical[0].outputs.is_empty());
+        assert_eq!(canonical.iter().map(|b| b.outputs.len()).sum::<usize>(), 19);
+        let mut rng = StdRng::seed_from_u64(1485);
+        let ring = select_rpc_decoys_from_history(&blocks, 220, 219, &[], 19, &mut rng).unwrap();
+        assert_eq!(ring.len(), 19);
+        assert!(ring.iter().all(|member| member.target_key != [0u8; 32]));
+        assert!(
+            select_rpc_decoys_from_history(&blocks, 220, 219, &[], 20, &mut rng)
+                .unwrap_err()
+                .to_string()
+                .contains("Need 20, found 19")
+        );
     }
 
     #[test]
