@@ -113,7 +113,7 @@ jobs:
       - name: Install Rust (wasm32 target for the snap wasm-signer)
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-03
+          toolchain: nightly-2026-06-09
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo (snap wasm build)

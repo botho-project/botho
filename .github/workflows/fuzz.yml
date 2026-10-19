@@ -56,7 +56,7 @@ jobs:
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-03
+          toolchain: nightly-2026-06-09
           components: rust-src,llvm-tools-preview
 
       - name: Install cargo-fuzz
@@ -103,7 +103,7 @@ jobs:
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-03
+          toolchain: nightly-2026-06-09
           components: rust-src,llvm-tools-preview
 
       - name: Install cargo-fuzz
@@ -152,7 +152,7 @@ jobs:
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-03
+          toolchain: nightly-2026-06-09
           components: rust-src,llvm-tools-preview
 
       - name: Install cargo-fuzz
@@ -202,7 +202,7 @@ jobs:
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-03
+          toolchain: nightly-2026-06-09
           components: rust-src,llvm-tools-preview
 
       - name: Install cargo-fuzz
@@ -254,7 +254,7 @@ jobs:
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-03
+          toolchain: nightly-2026-06-09
           components: rust-src,llvm-tools-preview
 
       - name: Install cargo-fuzz
@@ -308,7 +308,7 @@ jobs:
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-03
+          toolchain: nightly-2026-06-09
           components: rust-src,llvm-tools-preview
 
       - name: Install cargo-fuzz

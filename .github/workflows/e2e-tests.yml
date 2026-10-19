@@ -53,7 +53,7 @@ jobs:
       - name: Install pinned Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-03
+          toolchain: nightly-2026-06-09
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -92,7 +92,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-03
+          toolchain: nightly-2026-06-09
           components: clippy
 
       - name: Cache cargo
@@ -126,7 +126,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-03
+          toolchain: nightly-2026-06-09
 
       - name: Cache cargo
         uses: actions/cache@v6
@@ -158,7 +158,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-03
+          toolchain: nightly-2026-06-09
 
       - name: Cache cargo
         uses: actions/cache@v6
@@ -191,7 +191,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-03
+          toolchain: nightly-2026-06-09
 
       - name: Cache cargo
         uses: actions/cache@v6
@@ -221,7 +221,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-03
+          toolchain: nightly-2026-06-09
 
       - name: Cache cargo
         uses: actions/cache@v6

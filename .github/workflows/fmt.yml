@@ -37,32 +37,32 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Pin to the same nightly as rust-toolchain (channel = nightly-2025-12-03).
+      # Pin to the same nightly as rust-toolchain (channel = nightly-2026-06-09).
       # We pin explicitly here -- NOT @stable -- because the unstable rustfmt
       # options only take effect on nightly. Keep this in sync with
       # rust-toolchain when bumping the channel.
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-03
+          toolchain: nightly-2026-06-09
           components: rustfmt
 
       # Workspace members (root Cargo.toml). `--all` honors the rustfmt.toml
       # `ignore` list (sgx/types, sgx/urts, sgx/sync) automatically.
       - name: Check workspace formatting
-        run: cargo +nightly-2025-12-03 fmt --all -- --check
+        run: cargo +nightly-2026-06-09 fmt --all -- --check
 
       # Members listed under `exclude` in the root Cargo.toml are not reached by
       # `--all`, so check them individually. fuzz especially: the strict fuzz
       # build guard compiles every target, and drift there is otherwise invisible.
       - name: Check fuzz crate formatting
         working-directory: fuzz
-        run: cargo +nightly-2025-12-03 fmt -- --check
+        run: cargo +nightly-2026-06-09 fmt -- --check
 
       - name: Check util/serial crate formatting
         working-directory: util/serial
-        run: cargo +nightly-2025-12-03 fmt -- --check
+        run: cargo +nightly-2026-06-09 fmt -- --check
 
       - name: Check contracts/solana crate formatting
         working-directory: contracts/solana
-        run: cargo +nightly-2025-12-03 fmt -- --check
+        run: cargo +nightly-2026-06-09 fmt -- --check
