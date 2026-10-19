@@ -52,7 +52,7 @@ def observers():
     restriction='restrict,command="/usr/bin/python3 /opt/botho-stress-observer-1404/observer.py export" '+key
     archive=LOCAL/'observer-package.tar'
     with tarfile.open(archive,'w') as tar:
-        for name in ('observer.py','runtime.py'):tar_add(tar,name,(SOURCE/name).read_bytes(),0o644)
+        for name in ('observer.py','runtime.py','bounds.py'):tar_add(tar,name,(SOURCE/name).read_bytes(),0o644)
     unit='''[Unit]
 Description=Bounded Botho stress resource observer 1404
 After=network.target
@@ -122,14 +122,14 @@ def controller(binary,source_commit):
         'setup_start':start,'signer':package+'/botho-stress-wallet','signer_sha256':sha,
         'adapter_source':source_commit,'node_sha256':'88c169423fdc003a5dbc6d688852fdbcda26b78f85cd371de29d9192571c674f',
         'controller_files':{name:hashlib.sha256((SOURCE/name).read_bytes()).hexdigest()
-                            for name in ('controller.py','runtime.py','plan.py')},
+                            for name in ('controller.py','runtime.py','plan.py','bounds.py','reporting.py')},
         'observer_key':STATE+'/observer_key','known_hosts':STATE+'/known_hosts',
         'wallets':[{'address':address,'key':STATE+f'/wallets/wallet-{i}.mnemonic'}
             for i,address in enumerate(json.loads((LOCAL/'addresses.json').read_text()))]}
     (LOCAL/'launch.json').write_text(json.dumps(config,indent=2)+'\n')
     archive=LOCAL/'controller-package.tar'
     with tarfile.open(archive,'w') as tar:
-        for name in ('controller.py','runtime.py','plan.py'):
+        for name in ('controller.py','runtime.py','plan.py','bounds.py','reporting.py'):
             tar_add(tar,'code/'+name,(SOURCE/name).read_bytes(),0o644)
         tar_add(tar,'code/botho-stress-wallet',binary.read_bytes(),0o755)
         tar_add(tar,'state/plan.json',(SOURCE/'testnet-72h-plan.json').read_bytes())

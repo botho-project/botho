@@ -480,6 +480,17 @@ impl RpcState {
         }
     }
 
+    /// Apply the operator-configured default quota without changing
+    /// authentication or request bucket selection. The HTTP handler
+    /// enforces and advertises this same limiter. Production startup calls
+    /// this for both networks.
+    pub fn with_rpc_rate_limit(mut self, config: &crate::config::RpcConfig) -> Self {
+        self.rate_limiter = Arc::new(RateLimiter::with_default_tier(KeyTier::Custom(
+            config.requests_per_minute(),
+        )));
+        self
+    }
+
     /// Set the faucet state and wallet for signing faucet transactions
     pub fn with_faucet(mut self, faucet: FaucetState, wallet: Wallet) -> Self {
         self.faucet = Some(Arc::new(faucet));
@@ -1705,6 +1716,13 @@ async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> Json
 
     for height in start_height..=end_height {
         if let Ok(block) = ledger.get_block(height) {
+            // Genesis initializes block metadata only; its placeholder mint
+            // never creates a ledger output. Keep the requested block envelope
+            // without advertising a nonexistent coinbase to wallet ring pools.
+            if height == 0 {
+                blocks.push(json!({"height": height, "outputs": []}));
+                continue;
+            }
             let mut outputs = Vec::new();
 
             // Coinbase (minting reward) output. This is a real stealth TxOutput
