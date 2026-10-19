@@ -4,12 +4,13 @@
   "production": [
     {
       "path": "cluster-tax/src/demurrage.rs",
-      "sha256": "ecc44061e1c82b19b49c9e6c2a05329168ae3a4877eeba0bda438a3e3cc63f34",
+      "sha256": "11697079c69c8f648654f7da6df02271a0dac2cd41ca8b5ead35c2395cae182b",
       "symbols": [
         "pub fn demurrage_charge(",
         "pub fn capitalized_reset_charge(",
         "pub fn ring_elapsed_quantile("
-      ]
+      ],
+      "reviewed_change": "#1471/5d3384e2: replace the explicit zero-denominator branch with u128 checked_div(...).unwrap_or(0) for the newer compiler Clippy lint. Zero still returns zero; nonzero integer division is unchanged. Current source provenance only; historical measurements not rerun."
     },
     {
       "path": "cluster-tax/src/fee_curve.rs",
@@ -22,11 +23,12 @@
     },
     {
       "path": "cluster-tax/src/tag.rs",
-      "sha256": "8efe5ba3c50cf0b683fcec2ac4ef1f1cb9086bd7cff31f9907443c7d39ae078c",
+      "sha256": "6eff73055f6c9a3ff426228819196d007e00e279f8f771da6a76d37563efebc7",
       "symbols": [
         "pub fn mix(",
         "pub const MAX_TAGS:"
-      ]
+      ],
+      "reviewed_change": "#1471/5d3384e2: express stable descending weight sorting with sort_by_key(Reverse(weight)) for the newer compiler Clippy lint. Ordering, including stable equal-weight ties, is unchanged. Current source provenance only; historical measurements not rerun."
     },
     {
       "path": "cluster-tax/src/monetary.rs",
