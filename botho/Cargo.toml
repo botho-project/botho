@@ -99,7 +99,7 @@ num_cpus = "1"
 
 # Storage
 heed = "0.22"
-bincode = "1"
+bincode = "3"
 zstd = "0.13"
 
 # Logging & Telemetry
