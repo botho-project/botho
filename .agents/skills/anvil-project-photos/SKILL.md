@@ -1,6 +1,6 @@
 ---
 name: anvil-project-photos
-description: Anvil skill registration for 'project-photos' (canonical body at .anvil/skills/project-photos/SKILL.md)
+description: "Strictly read-only provenance manifest for a scanned-photo archive — reads a human-authored numbering doc and emits a deterministic manifest.json mapping each original capture to its stable name, archive item IDs, rotation hint, and multi-item flag, plus a missing-captures list."
 ---
 
 See `.anvil/skills/project-photos/SKILL.md` for the canonical skill body.

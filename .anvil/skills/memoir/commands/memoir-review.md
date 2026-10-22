@@ -71,7 +71,7 @@ interrupt of THIS critic removed by
    `metadata.voice_exemplars` / `metadata.subject_voice_exemplars`), and
    any previous review for this slug.
 3. **Provenance back-check (conditional — #597)**: invoke
-   `anvil/lib/project_brief.py::resolve_corpus_dirs(<project_dir>)`
+   `anvil/lib/project_brief/voice.py::resolve_corpus_dirs(<project_dir>)`
    (project-level, per SKILL.md §Dual-corpus provenance) per
    `anvil/lib/snippets/provenance.md` §Section 1.
    - **When active** (>=1 resolved dir): read
@@ -104,7 +104,7 @@ interrupt of THIS critic removed by
      `resolve_corpus_dirs` returns `missing: true` entries (never raises) —
      surface the broken declaration as a `major` finding.
 4. **Load author voice grounding (conditional — #461, narrator tier)**:
-   invoke `anvil/lib/project_brief.py::resolve_voice_docs(<project_dir>)`
+   invoke `anvil/lib/project_brief/voice.py::resolve_voice_docs(<project_dir>)`
    per `anvil/lib/snippets/voice_grounding.md`.
    - **When active**: read the resolved docs; read
      `metadata.voice_exemplars` to verify the drafter's grounding
@@ -115,7 +115,7 @@ interrupt of THIS critic removed by
      uncalibrated.
 5. **Load subject voice grounding (conditional — #598, dialogue
    tier)**: invoke
-   `anvil/lib/project_brief.py::resolve_subject_voice_docs(<project_dir>)`
+   `anvil/lib/project_brief/voice.py::resolve_subject_voice_docs(<project_dir>)`
    (same `<project_dir>`; activates independently of the author tier)
    per `anvil/lib/snippets/voice_grounding.md` §"Subject voice tier".
    - **When active** (>=1 declared subject): read each subject's

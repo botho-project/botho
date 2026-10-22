@@ -31,7 +31,7 @@ premature at the time).
 
 Commit ``dba8ba1`` (#382, the same day) then promoted *memo's* entire
 ``project_brief.py`` — including its ``load_recommendation_target`` —
-wholesale into ``anvil/lib/project_brief.py`` (memo's skill-local file
+wholesale into ``anvil/lib/project_brief/`` (memo's skill-local file
 became a back-compat shim). That move's scope was rolling the #295/#296
 project-org nesting out to deck/slides/proposal, not a deliberate dedup
 sweep, so it never touched proposal's already-diverged copy — leaving
@@ -39,7 +39,7 @@ proposal silently duplicating a reader function that was, by then,
 already centralized.
 
 Issue #1092 closes that gap: the reader function's *body* was verified
-byte-identical to the promoted ``anvil/lib/project_brief.py`` version
+byte-identical to the promoted ``anvil/lib/project_brief/`` version
 (the calibrated dimension and rubric prose live in ``rubric.md`` /
 ``proposal-review.md``, not in the helper, so nothing dimension-specific
 was lost). This module now imports the shared implementation instead of

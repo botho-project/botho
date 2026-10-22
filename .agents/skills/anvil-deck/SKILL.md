@@ -1,6 +1,6 @@
 ---
 name: anvil-deck
-description: Anvil skill registration for 'deck' (canonical body at .anvil/skills/deck/SKILL.md)
+description: "Draft, review, and revise pitch decks (fundraising and business pitches) using the standard anvil lifecycle plus deck-specific brief intake and four parallel critics (narrative, market, design, economics)."
 ---
 
 See `.anvil/skills/deck/SKILL.md` for the canonical skill body.

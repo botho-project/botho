@@ -69,7 +69,7 @@ Why deck-local (not ``anvil/lib/``)
 
 Marp's CSS ``fit-to-frame`` behaviour is structurally absent from LaTeX
 skills — they emit overfull-box warnings instead of silently scaling, and
-``anvil/lib/render_gate.py`` already catches those. Lifting this detector
+``anvil/lib/render_gate/`` already catches those. Lifting this detector
 into ``anvil/lib/`` would force LaTeX skills to optionally depend on
 ``Pillow``/``numpy`` for a check that can never fire there. The
 ``slides`` skill adopting this later follows the ``marp_lint.py``

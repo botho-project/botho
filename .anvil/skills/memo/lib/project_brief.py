@@ -1,4 +1,4 @@
-"""Back-compat shim (issue #382): canonical module is ``anvil/lib/project_brief.py``.
+"""Back-compat shim (issue #382): canonical module is ``anvil/lib/project_brief/``.
 
 Promoted from memo-skill-local to the shared framework lib when
 ``anvil:deck`` / ``anvil:slides`` / ``anvil:proposal`` became the

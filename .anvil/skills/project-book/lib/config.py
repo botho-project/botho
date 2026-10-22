@@ -3,7 +3,7 @@
 Parses the optional ``build:`` block out of the project ``BRIEF.md``
 frontmatter into a typed :class:`BookConfig`. Per the curator's design
 the parser is **skill-local** — the shared
-``anvil/lib/project_brief.py::ProjectBrief`` model is NOT extended
+``anvil/lib/project_brief/models.py::ProjectBrief`` model is NOT extended
 (``ProjectBrief`` is ``extra="forbid"`` on the model but its parse path
 explicitly ignores unknown top-level frontmatter keys, so a ``build:``
 block is safe to add to a BRIEF today with zero changes to the shared
@@ -69,7 +69,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from anvil.lib.frontmatter import extract_frontmatter as _extract_frontmatter
 
-# The BRIEF filename mirrors ``anvil/lib/project_brief.py`` (single
+# The BRIEF filename mirrors ``anvil/lib/project_brief/`` (single
 # on-disk convention).
 BRIEF_FILENAME = "BRIEF.md"
 
@@ -298,7 +298,7 @@ class BookConfig(BaseModel):
 
 
 # ``_extract_frontmatter`` used to be defined here (a local copy mirroring
-# ``anvil/lib/project_brief.py``'s and ``project-share``'s); it is now the
+# ``anvil/lib/project_brief/``'s and ``project-share``'s); it is now the
 # shared ``anvil/lib/frontmatter.py::extract_frontmatter`` primitive
 # (issue #1075), imported above and aliased to the historical private
 # name so every call site in this module is unchanged.

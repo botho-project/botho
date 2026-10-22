@@ -476,6 +476,7 @@ _RECOGNIZED_DOCUMENT_KEYS = {
     "code_ref",
     "recommendation_target",
     "voice_corpus_exclude",
+    "editorial_overrides",
 }
 
 # Default iteration cap. The override floor mirrors the deck skill's

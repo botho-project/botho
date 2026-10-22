@@ -1128,7 +1128,7 @@ def _write_progress_phase(
 # PNG-native adapter see zero behavior change.
 #
 # The format sniff is stdlib-only (modelled on
-# ``anvil/lib/render_gate.py``'s ``_read_png_dimensions`` /
+# ``anvil/lib/render_gate/``'s ``_read_png_dimensions`` /
 # ``_read_jpeg_dimensions`` — no new base deps). The transcode lives behind
 # the optional ``[deck_imagegen]`` extra (Pillow), gated by lazy import:
 # stock-venv installs still work; the dispatcher hard-fails with a clear
@@ -1142,7 +1142,7 @@ def _sniff_image_format(data: bytes) -> str | None:
     """Return ``'png'`` / ``'jpeg'`` / ``'webp'`` for known headers, else None.
 
     Stdlib-only byte-prefix sniffing, modelled directly on the
-    PNG/JPEG header parsing in ``anvil/lib/render_gate.py``.
+    PNG/JPEG header parsing in ``anvil/lib/render_gate/``.
 
     - PNG: 8-byte signature ``\\x89PNG\\r\\n\\x1a\\n``.
     - JPEG: starts with ``\\xff\\xd8\\xff`` (SOI + APPn marker prefix).

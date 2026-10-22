@@ -1,6 +1,6 @@
 ---
 name: anvil-ip-uspto-provisional
-description: Anvil skill registration for 'ip-uspto-provisional' (canonical body at .anvil/skills/ip-uspto-provisional/SKILL.md)
+description: "Draft, review, and revise USPTO provisional patent applications (specification + drawings, claims optional, enablement-depth-first) through the canonical anvil lifecycle. The conversion seed for a later anvil:ip-uspto non-provisional filing."
 ---
 
 See `.anvil/skills/ip-uspto-provisional/SKILL.md` for the canonical skill body.

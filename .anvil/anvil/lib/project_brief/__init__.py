@@ -348,6 +348,7 @@ from __future__ import annotations
 
 from anvil.lib.project_brief.fields import CompanionRefTypeError as CompanionRefTypeError
 from anvil.lib.project_brief.loader import (
+    load_editorial_overrides_for_slug,
     load_project_brief,
     load_project_brief_strict,
     load_rubric_overrides_for_slug,
@@ -356,6 +357,7 @@ from anvil.lib.project_brief.models import (
     AiByline,
     BriefDocument,
     CalibrationOverride,
+    EditorialOverride,
     ProjectBrief,
     ResolvedCorpusDir,
     ResolvedSubjectVoice,
@@ -434,6 +436,7 @@ __all__ = [
     "ResolvedSpecRef",
     "ResolvedSubjectVoice",
     "ResolvedVoiceDoc",
+    "EditorialOverride",
     "RubricOverrides",
     "SKILL_IDENTITY_ARTIFACT_TYPES",
     "SubjectVoiceEntry",
@@ -449,6 +452,7 @@ __all__ = [
     "load_project_brief_strict",
     "load_recommendation_target",
     "load_recommendation_target_resolved",
+    "load_editorial_overrides_for_slug",
     "load_rubric_overrides_for_slug",
     "resolve_ai_byline",
     "resolve_code_ref",
