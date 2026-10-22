@@ -65,6 +65,13 @@ ignore = [
     # helper, transitive via alloy-sol-macro (bridge-service #821). Never in
     # the runtime dependency graph. No fixed alloy release exists yet.
     "RUSTSEC-2026-0173",  # proc-macro-error2 unmaintained (alloy-sol-macro, build-time only)
+
+    # basic-toml 0.1.10 - INFO/unmaintained, no patched version. Used by
+    # askama_derive's compile-time template configuration through UniFFI's
+    # mobile binding tooling; absent from the metrics daemon graph. Askama
+    # 0.16.1 still depends on it. Replace this path and remove the exception
+    # in #1533; do not suppress any runtime vulnerability advisory.
+    "RUSTSEC-2026-0374",
 ]
 
 [licenses]
