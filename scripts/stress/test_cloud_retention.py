@@ -6,11 +6,15 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from cloud_retention import PROJECT, ROLES, apply_plan, backup, evidence, make_plan
+from cloud_retention import PROJECT, ROLES, apply_plan, backup, evidence, evidence_roots, inventory, make_plan
 
 
 def tagged(**values):
     return [{'Key': k, 'Value': v} for k, v in values.items()]
+
+
+def tags_of(row):
+    return {t['Key']: t['Value'] for t in row['Tags']}
 
 
 class RetentionTests(unittest.TestCase):
@@ -60,6 +64,51 @@ class RetentionTests(unittest.TestCase):
     def test_newest_fleet_retained_even_with_valid_archive(self):
         self.nodes.pop()
         self.assertEqual(self.plan()['volume_count'], 0)
+
+    def retag(self, **values):
+        for row in self.nodes[:-1] + self.volumes:
+            row['Tags'] = tagged(**values, Run='q20261001-a', Role=tags_of(row)['Role'])
+
+    def test_current_tag_scheme_selected(self):
+        self.retag(project='botho', Purpose='qualification', SideProject='botho')
+        self.assertEqual(self.plan()['volume_count'], 6)
+
+    def test_public_botho_project_without_qualification_purpose_excluded(self):
+        self.retag(project='botho', SideProject='botho')
+        plan = self.plan()
+        self.assertEqual(plan['volume_count'], 0)
+        self.assertEqual(plan['retained'], [{'run': 'q20261002-b', 'reason': 'Newest fleet retained for diagnosis'}])
+
+    def test_newest_fleet_protected_across_tag_schemes(self):
+        self.nodes[-1]['Tags'] = tagged(project='botho', Purpose='qualification', Run='q20261002-b', Role='controller')
+        self.assertEqual(self.plan()['protected_latest_run'], 'q20261002-b')
+        self.assertEqual(self.plan()['volume_count'], 6)
+
+    def test_inventory_merges_both_tag_schemes(self):
+        queries = []
+
+        def aws(*args):
+            if args[1] == 'describe-volumes':
+                return {'Volumes': []}
+            queries.append(args[3:])
+            return {'Reservations': [{'Instances': [n]} for n in self.nodes[:2]]}
+
+        nodes, _ = inventory(aws)
+        self.assertEqual(len(queries), 2)
+        self.assertIn(('Name=tag:project,Values=botho', 'Name=tag:Purpose,Values=qualification'), queries)
+        self.assertEqual(sorted(n['InstanceId'] for n in nodes), sorted(n['InstanceId'] for n in self.nodes[:2]))
+
+    def test_evidence_roots_span_locations_and_names(self):
+        base = Path(self.tmp.name)
+        other = base / 'runs'
+        other.mkdir()
+        run = other / 'live-endurance-w12'
+        run.mkdir()
+        (run / 'final-evidence-manifest.json').write_text('{}')
+        (other / 'live-endurance-w12-archives').mkdir()
+        (other / 'alias').symlink_to(self.root)
+        found = list(evidence_roots([base, other, run]))
+        self.assertEqual(sorted(p.resolve() for p in found), sorted([self.root.resolve(), run.resolve()]))
 
     def test_running_node_blocks_entire_fleet(self):
         self.nodes[0]['State']['Name'] = 'running'

@@ -373,16 +373,23 @@ Stopped EC2 instances still incur EBS storage charges. For disposable
 qualification fleets, use `scripts/stress/cloud_retention.py` after archival.
 Its default mode writes a plan; `--apply` terminates eligible stopped instances
 and deletes their released disks. It requires an explicit AWS account, profile,
-region, local state directory, backup directory, and a new output directory:
+region, local state directories, backup directory, and a new output directory.
+Repeat `--state-root` for each place run directories are kept. Each may be a
+run directory or a directory of runs; any child holding
+`final-evidence-manifest.json` or `retirement.json` is checked, whatever its
+name:
 
 ```sh
 python3 scripts/stress/cloud_retention.py \
   --profile "$AWS_PROFILE" --region "$AWS_REGION" --account-id "$AWS_ACCOUNT_ID" \
-  --state-root "$BOTHO_RUN_STATES" --backup-root "$BOTHO_ARCHIVE_BACKUP" \
+  --state-root "$BOTHO_RUN_STATES" --state-root "$BOTHO_RUN_ARCHIVES" \
+  --backup-root "$BOTHO_ARCHIVE_BACKUP" \
   --output "$BOTHO_RETENTION_RESULT" --min-age-hours 24
 ```
 
-Only fleets tagged `Project=botho-qualification` are eligible. Every instance
+Only qualification fleets are eligible: those tagged `project=botho` with
+`Purpose=qualification`, or the legacy `Project=botho-qualification`. Testnet
+nodes tagged `project=botho` without that purpose are never selected. Every instance
 must be stopped and match a six-role local inventory, terminal evidence, and
 six verified archives. A second archive copy is verified before termination.
 Cloud state, tags, roles, disk attachments, and archive identity are rechecked
@@ -392,8 +399,8 @@ fleets with missing evidence are excluded. The default archive retention
 window is 24 hours; reducing it to zero is for reviewed one-time cleanup.
 
 For periodic operation, run the same command with `--apply` from the operator
-host, using a unique output directory each time. A shared local lock prevents
-overlapping cleanup processes. The operator must be awake and have working AWS
+host, using a unique output directory each time. A lock in each state root
+prevents overlapping cleanup processes. The operator must be awake and have working AWS
 credentials. Archive checks or unavailable credentials stop deletion; review
 `plan.json`, `execution.json`, and `result.json` in each output directory. If
 execution stops partway through, inspect the recorded instances and disks;

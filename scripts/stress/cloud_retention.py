@@ -3,7 +3,8 @@
 
 Default: write a reviewable plan. --apply also executes it. The newest cloud
 fleet is always retained, and automatic use should retain archives for 24h.
-Only the explicit botho-qualification project is eligible. No snapshots,
+Only qualification fleets are eligible: the legacy Project=botho-qualification
+tag, or project=botho with Purpose=qualification. No snapshots,
 public nodes, build machines, or untagged resources are removed.
 An undeployed fleet needs complete remote retirement proof instead of archives.
 """
@@ -22,6 +23,9 @@ import time
 
 PROJECT = 'botho-qualification'
 ROLES = {'controller', 'n1', 'n2', 'n3', 'n4', 'n5'}
+# EC2 tag filters for each supported scheme; all filters in a row must match.
+SCHEMES = (('Name=tag:Project,Values=' + PROJECT,),
+           ('Name=tag:project,Values=botho', 'Name=tag:Purpose,Values=qualification'))
 
 
 def need(value, reason):
@@ -47,6 +51,10 @@ def digest(path):
 
 def tags(value):
     return {t['Key']: t['Value'] for t in value.get('Tags', [])}
+
+
+def qualification(t):
+    return t.get('Project') == PROJECT or (t.get('project') == 'botho' and t.get('Purpose') == 'qualification')
 
 
 def evidence(root):
@@ -94,7 +102,7 @@ def make_plan(instances, volumes, candidates, now, min_age_hours):
     grouped = collections.defaultdict(list)
     for node in instances:
         t = tags(node)
-        if t.get('Project') == PROJECT and node['State']['Name'] != 'terminated':
+        if qualification(t) and node['State']['Name'] != 'terminated':
             need(re.fullmatch(r'q[0-9]{8}-[a-z0-9-]+', t.get('Run', '')), 'Invalid run tag')
             grouped[t['Run']].append(node)
     # LaunchTime is refreshed by an EC2 restart: a restarted fleet is also protected.
@@ -127,7 +135,7 @@ def make_plan(instances, volumes, candidates, now, min_age_hours):
                 vs = [v for v in volumes if any(a['InstanceId'] in ids for a in v['Attachments'])]
                 expected_volumes = {b['Ebs']['VolumeId'] for n in nodes for b in n.get('BlockDeviceMappings', []) if 'Ebs' in b}
                 if (len(vs) != 6 or {v['VolumeId'] for v in vs} != expected_volumes
-                        or any(tags(v).get('Project') != PROJECT or tags(v).get('Run') != run
+                        or any(not qualification(tags(v)) or tags(v).get('Run') != run
                                or len(v['Attachments']) != 1 or v['State'] != 'in-use'
                                or tags(v).get('Role') != e['identities'].get(v['Attachments'][0]['InstanceId']) for v in vs)):
                     reason = 'Disk identity, attachment, or tag mismatch'
@@ -156,9 +164,22 @@ class Aws:
 
 
 def inventory(aws):
-    raw = aws('ec2', 'describe-instances', '--filters', 'Name=tag:Project,Values=' + PROJECT)
-    return ([n for r in raw['Reservations'] for n in r['Instances']],
-            aws('ec2', 'describe-volumes')['Volumes'])
+    nodes = {}
+    for filters in SCHEMES:
+        raw = aws('ec2', 'describe-instances', '--filters', *filters)
+        nodes.update((n['InstanceId'], n) for r in raw['Reservations'] for n in r['Instances'])
+    return list(nodes.values()), aws('ec2', 'describe-volumes')['Volumes']
+
+
+def evidence_roots(state_roots):
+    # Runs live in several operator directories; contents, not names, decide eligibility.
+    seen = set()
+    for base in state_roots:
+        for root in [base, *sorted(base.iterdir())]:
+            if (root.is_dir() and root.resolve() not in seen and any(
+                    (root / name).is_file() for name in ('final-evidence-manifest.json', 'retirement.json'))):
+                seen.add(root.resolve())
+                yield root
 
 
 def backup(fleet, destination):
@@ -226,7 +247,7 @@ def apply_plan(plan, aws, backup_root, output):
                     break
                 need(len(rows) == 1, 'Ambiguous volume identity')
                 v = rows[0]
-                need(tags(v).get('Project') == PROJECT and tags(v).get('Run') == fleet['run']
+                need(qualification(tags(v)) and tags(v).get('Run') == fleet['run']
                      and tags(v).get('Role') == volume['role'] and v['Size'] == volume['gib'], 'Volume changed')
                 if v['State'] == 'available' and not v['Attachments']:
                     aws('ec2', 'delete-volume', '--volume-id', volume['id'])
@@ -251,7 +272,8 @@ def main():
     parser.add_argument('--profile', required=True)
     parser.add_argument('--region', required=True)
     parser.add_argument('--account-id', required=True)
-    parser.add_argument('--state-root', type=Path, required=True)
+    parser.add_argument('--state-root', type=Path, action='append', required=True,
+                        help='Run directory or a directory of runs; repeat for each location')
     parser.add_argument('--backup-root', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--min-age-hours', type=float, default=24)
@@ -259,16 +281,15 @@ def main():
     args = parser.parse_args()
     os.umask(0o077)
     # All invocations on this operator share a lock, including scheduled runs.
-    lock = (args.state_root / '.botho-cloud-retention.lock').open('a')
-    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    locks = [(root / '.botho-cloud-retention.lock').open('a') for root in sorted(set(args.state_root))]
+    for lock in locks:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     args.output.mkdir(parents=True, exist_ok=False, mode=0o700)
     aws = Aws(args.profile, args.region)
     need(aws('sts', 'get-caller-identity')['Account'] == args.account_id, 'Wrong AWS account')
     candidates = []
     errors = []
-    for root in sorted(args.state_root.glob('botho-live-*')):
-        if not any((root / name).is_file() for name in ('final-evidence-manifest.json', 'retirement.json')):
-            continue
+    for root in evidence_roots(args.state_root):
         try:
             candidates.append(evidence(root))
         except (RuntimeError, OSError, ValueError, KeyError, TypeError) as exc:
