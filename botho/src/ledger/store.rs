@@ -1,4 +1,7 @@
 #[cfg(test)]
+#[path = "store/map_full_tests.rs"]
+mod map_full_tests;
+#[cfg(test)]
 #[path = "store/ring_admission_tests.rs"]
 mod ring_admission_tests;
 
@@ -24,6 +27,10 @@ use crate::{
     decoy_selection::{DecoySelectionError, GammaDecoySelector, OutputCandidate},
     transaction::{RingMember, Transaction as BothoTransaction, TxOutput, Utxo, UtxoId},
 };
+
+/// Fixed LMDB map size for the ledger. LMDB does not grow the map on its own:
+/// once the data file reaches this size, writes fail with `MDB_MAP_FULL`.
+const LEDGER_MAP_SIZE: usize = 1024 * 1024 * 1024; // 1GB
 
 /// Maximum allowed clock skew for a block timestamp relative to local time.
 ///
@@ -424,7 +431,15 @@ impl Ledger {
     /// error on the consensus double-spend check.
     #[cfg(test)]
     pub fn open_single_reader(path: &Path) -> Result<Self, LedgerError> {
-        Self::open_internal(path, Network::Testnet, Some(1))
+        Self::open_internal(path, Network::Testnet, Some(1), LEDGER_MAP_SIZE)
+    }
+
+    /// Test-only: open a ledger with a small LMDB map so tests can drive it to
+    /// `MDB_MAP_FULL` without writing a gigabyte. `map_size` must be a multiple
+    /// of the OS page size.
+    #[cfg(test)]
+    pub fn open_with_map_size(path: &Path, map_size: usize) -> Result<Self, LedgerError> {
+        Self::open_internal(path, Network::Testnet, None, map_size)
     }
 
     /// Test-only: open a read transaction against the private LMDB environment.
@@ -490,7 +505,7 @@ impl Ledger {
     /// The ledger will be initialized with the appropriate genesis block
     /// for the specified network if it's empty.
     pub fn open_for_network(path: &Path, network: Network) -> Result<Self, LedgerError> {
-        Self::open_internal(path, network, None)
+        Self::open_internal(path, network, None, LEDGER_MAP_SIZE)
     }
 
     /// Internal constructor shared by `open_for_network` and test helpers.
@@ -504,6 +519,7 @@ impl Ledger {
         path: &Path,
         network: Network,
         max_readers: Option<u32>,
+        map_size: usize,
     ) -> Result<Self, LedgerError> {
         // Create directory if needed
         fs::create_dir_all(path)
@@ -519,7 +535,7 @@ impl Ledger {
         let env = unsafe {
             let mut opts = EnvOpenOptions::new();
             opts.max_dbs(8) // +bridge_import_clusters_db (ADR 0007, #938)
-                .map_size(1024 * 1024 * 1024); // 1GB
+                .map_size(map_size);
             if let Some(readers) = max_readers {
                 opts.max_readers(readers);
             }
