@@ -1790,7 +1790,7 @@ dependencies = [
  "bincode",
  "blake2 0.10.6",
  "botho-wallet",
- "bs58 0.5.1",
+ "bs58",
  "bth-account-keys",
  "bth-address-codec",
  "bth-cluster-tax",
@@ -1957,7 +1957,7 @@ dependencies = [
  "anyhow",
  "bip39",
  "botho-wallet",
- "bs58 0.4.0",
+ "bs58",
  "bth-account-keys",
  "bth-address-codec",
  "bth-crypto-keys",
@@ -2037,12 +2037,6 @@ dependencies = [
 
 [[package]]
 name = "bs58"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "771fe0050b883fcc3ea2359b1a96bcfbc090b7116eae7c3c512c7a083fdf23d3"
-
-[[package]]
-name = "bs58"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf88ba1141d185c399bee5288d850d63b8369520c1eafc32a0430b5b6c287bf4"
@@ -2054,7 +2048,7 @@ dependencies = [
 name = "bth-account-keys"
 version = "7.1.0"
 dependencies = [
- "bs58 0.4.0",
+ "bs58",
  "bth-account-keys-types",
  "bth-core",
  "bth-crypto-digestible",
@@ -2090,7 +2084,7 @@ dependencies = [
 name = "bth-address-codec"
 version = "0.1.0"
 dependencies = [
- "bs58 0.4.0",
+ "bs58",
  "bth-account-keys",
  "bth-crypto-keys",
  "bth-crypto-pq",
@@ -2103,7 +2097,7 @@ dependencies = [
 name = "bth-bridge-core"
 version = "0.6.0"
 dependencies = [
- "bs58 0.4.0",
+ "bs58",
  "chrono",
  "ed25519-dalek",
  "hex",
@@ -2123,7 +2117,7 @@ dependencies = [
  "async-trait",
  "axum 0.8.9",
  "bincode",
- "bs58 0.4.0",
+ "bs58",
  "bth-account-keys",
  "bth-address-codec",
  "bth-bridge-core",
@@ -6467,7 +6461,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d77f16caa4f4d2667a1fad5bb1a3a4a4556967c1bff93525ebb2975847fa3de"
 dependencies = [
- "bs58 0.5.1",
+ "bs58",
  "ed25519-dalek",
  "hkdf 0.13.0",
  "multihash",
@@ -10361,7 +10355,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df9adc193c780ef8f159aee8b61e2d5801aaa555e6eb0947fe45530ec506296f"
 dependencies = [
  "base64 0.23.1",
- "bs58 0.5.1",
+ "bs58",
  "chrono",
  "hex",
  "indexmap 1.9.3",
