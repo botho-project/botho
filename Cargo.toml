@@ -76,7 +76,7 @@ async-trait = "0.1"
 backtrace = "0.3"
 balanced-tree-index = "2"
 base64 = { version = "0.22", default-features = false }
-bincode = "1"
+bincode = "3"
 bitflags = { version = "2", default-features = false }
 blake2 = { version = "0.10", default-features = false }
 bs58 = "0.4"
