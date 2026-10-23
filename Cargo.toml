@@ -284,6 +284,8 @@ opt-level = 2
 lto = "thin"
 
 [patch.crates-io]
+# Backport upstream pop panic-safety fix without changing Alloy 1.x requirements (#1539).
+lru = { path = "vendor/lru" }
 bulletproofs-og = { path = "vendor/bulletproofs-og" }
 schnorrkel-og = { git = "https://github.com/mobilecoinfoundation/schnorrkel.git", rev = "049bf9d30f3bbe072e2ad1b5eefdf0f3c851215e" }
 # Vendored fork of randomx-rs 1.4.1 (issue #640). Upstream's build.rs hardcodes
