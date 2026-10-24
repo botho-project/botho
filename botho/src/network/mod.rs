@@ -18,6 +18,8 @@ mod node_key;
 mod pex;
 pub mod privacy;
 mod quorum;
+mod rate_limit_log;
+pub mod rebroadcast;
 mod reputation;
 mod seeds;
 mod sync;

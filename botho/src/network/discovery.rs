@@ -31,7 +31,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -49,6 +49,7 @@ use crate::{
     network::{
         compact_block::{BlockTxn, CompactBlock, GetBlockTxn},
         pex::{PeerSource, PexManager, PexMessage, MAX_PEX_MESSAGE_SIZE},
+        rate_limit_log::RateLimitLogSummary,
         sync::{create_sync_behaviour, SyncCodec, SyncRequest, SyncResponse},
     },
     transaction::Transaction,
@@ -597,6 +598,9 @@ pub struct NetworkDiscovery {
     pex_manager: PexManager,
     /// Per-peer rate limiter for gossipsub messages (DoS protection)
     rate_limiter: PeerRateLimiter,
+    /// Per-peer summary of rate-limit drops, so a flood logs one `warn!`
+    /// per peer per minute instead of one per message (#1547).
+    rate_limit_log: RateLimitLogSummary<PeerId>,
     /// Live traffic / connection-direction counters surfaced by
     /// `network_getInfo` (#542). Shared (cheap [`Arc`] clone) with the RPC
     /// layer via [`stats`](Self::stats); incremented on the send/receive
@@ -675,6 +679,7 @@ impl NetworkDiscovery {
             compact_block_peers: HashSet::new(),
             pex_manager: PexManager::new(),
             rate_limiter: PeerRateLimiter::new(rate_limit_config),
+            rate_limit_log: RateLimitLogSummary::default(),
             stats: Arc::new(NetworkStats::new()),
         }
     }
@@ -1244,13 +1249,30 @@ impl NetworkDiscovery {
                             remaining,
                             message_type,
                         } => {
-                            warn!(
+                            // #1547: per-message line is debug; a per-peer
+                            // summary warns at most once per minute and the
+                            // drop is counted on /metrics.
+                            debug!(
                                 %peer,
                                 ?message_type,
                                 violations,
                                 remaining,
                                 "Rate limited message from peer"
                             );
+                            crate::rpc::metrics::record_gossip_rate_limited(message_type);
+                            if let Some(summary) = self.rate_limit_log.record_drop(
+                                &peer,
+                                crate::rpc::metrics::gossip_message_type_label(message_type),
+                                Instant::now(),
+                            ) {
+                                warn!(
+                                    %peer,
+                                    dropped = summary.total(),
+                                    by_type = %summary,
+                                    violations,
+                                    "Rate limited messages from peer (dropped since last summary)"
+                                );
+                            }
                             return None;
                         }
                         RateLimitResult::Disconnect => {
@@ -1736,6 +1758,7 @@ impl NetworkDiscovery {
                 self.compact_block_peers.remove(&peer_id);
                 // Clean up rate limiter state for disconnected peer
                 self.rate_limiter.remove_peer(&peer_id);
+                self.rate_limit_log.remove_peer(&peer_id);
                 Some(NetworkEvent::PeerDisconnected(peer_id))
             }
             _ => None,
