@@ -1305,6 +1305,37 @@ mod tests {
         }
     }
 
+    /// DNS enabled with a private domain and `fallback_seeds = false`: the
+    /// flag must reach `DnsSeedDiscovery` (`.with_fallback(..)`), so a DNS
+    /// miss resolves to nothing instead of the hardcoded public seeds.
+    ///
+    /// Offline and deterministic: `.invalid` is an RFC 6761 special-use name,
+    /// which hickory's caching client answers locally with NXDOMAIN without
+    /// sending a query, so the lookup always misses and reaches the miss
+    /// branch. The `fallback_seeds = true` half proves the miss branch is
+    /// what is being exercised.
+    #[tokio::test]
+    async fn test_dns_private_domain_without_fallback_resolves_no_peers() {
+        for network in [Network::Testnet, Network::Mainnet] {
+            let isolated = network_from_toml(
+                "bootstrap_peers = []\nfallback_seeds = false\n[dns_seeds]\nenabled = true\n\
+                 domain = \"seeds.botho-test.invalid\"\n",
+            );
+            let resolved = isolated.resolve_bootstrap_peers_async(network).await;
+            assert!(resolved.peers.is_empty(), "got {:?}", resolved.peers);
+            assert_eq!(resolved.source, BootstrapSource::None);
+            assert!(isolated.bootstrap_peers_async(network).await.is_empty());
+
+            let public = network_from_toml(
+                "bootstrap_peers = []\n[dns_seeds]\nenabled = true\n\
+                 domain = \"seeds.botho-test.invalid\"\n",
+            );
+            let resolved = public.resolve_bootstrap_peers_async(network).await;
+            assert_eq!(resolved.peers, crate::network::fallback_seeds(network));
+            assert_eq!(resolved.source, BootstrapSource::FallbackSeeds);
+        }
+    }
+
     #[test]
     fn test_bootstrap_source_labels() {
         assert_eq!(BootstrapSource::Configured.as_str(), "configured");
