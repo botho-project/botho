@@ -14,10 +14,19 @@ import time
 from plan import expand
 from reporting import legacy_lottery_evidence
 from runtime import (Gate, HOSTS, Journal, PENDING, Quota, Rpc, atomic,
-                     check_identity, check_resources, digest, campaign_targets, campaign_tls_context, pinned_file)
+                     RESTART_ACTIONS, check_identity, loop_delta, check_resources, digest, campaign_targets, campaign_tls_context, pinned_file)
 
 
 _NO_VIEW = object()
+# Offer states that mean a payment inside a step window was missed (#1591).
+MISSED = ('skipped', 'unresolved', 'expired', 'rejected', 'aborted')
+# The record must start within this long of fault_start, or the controller
+# did not observe the step's start (e.g. it was down) and cannot pass it.
+DEGRADE_START_SLACK = 60
+# Loop metrics are re-read on every tick this close to window_end, so a host
+# the next step stops at the same instant still has an end sample.
+DEGRADE_END_LEAD = 45
+MILESTONES = ('first_reachable_at', 'synced_at_tip_at', 'first_ballot_at', 'first_coinbase_at')
 
 
 class Controller:
@@ -171,6 +180,283 @@ class Controller:
             self.j.set('rejoin:'+window['step'], {'at': now, 'heights': {
                 h: statuses[h]['chainHeight'] for h in window['expected_down']}})
 
+    # -- degrade-step recovery verdict and measurements (#1591) --------------
+    # Journal key degrade:<step>. Times are absolute; reporting converts them
+    # to seconds from the planned restore_at (the controller cannot read the
+    # runner's faults.jsonl, so the plan is the only restore clock it has).
+
+    async def degrade_evidence(self, now, statuses, prior=None):
+        """Record one monitor tick of step evidence; take verdicts at window_end.
+
+        ``statuses`` is this tick's node_getStatus per HOSTS entry (None if
+        unreachable); ``prior`` the previous tick's ``self.statuses``. A
+        failed criterion stores the failing verdict and raises
+        ``Gate('<step>: recovery check failed: <which>')``.
+        """
+        windows = self.degrade_windows()
+        if not windows:
+            return
+        status = dict(zip(HOSTS, statuses))
+        view = self.fault_view(now)
+        down = view['expected_down'] if view else ()
+        cache = {}
+
+        async def metrics(host, tolerated, step):
+            # One read per host per tick. A tolerated failure is None; the
+            # same failure re-raises wherever the host is not tolerated.
+            if host not in cache:
+                try:
+                    cache[host] = await self.rpc.metrics(host)
+                except Quota:
+                    raise
+                except Exception as error:
+                    cache[host] = error
+            value = cache[host]
+            if isinstance(value, Exception):
+                if not tolerated:
+                    raise value
+                self.j.event(None, 'expected_down_unreachable',
+                             {'step': step, 'host': host, 'error': 'metrics: '+str(value)})
+                return None
+            return value
+
+        for window in windows:
+            if now < window['fault_start']:
+                break
+            key = 'degrade:'+window['step']
+            record = self.j.get(key)
+            if record is None and now > window['fault_start']+DEGRADE_START_SLACK:
+                # The controller did not see this step start (it was down):
+                # its evidence cannot exist, so it is never a pass. Not a
+                # halt either; workload_complete() and coverage stay false.
+                record = self.degrade_unobserved(window, now)
+            if record is None:
+                record = await self.degrade_open(window, now, status, prior or {}, metrics)
+            if record.get('verdict') is not None:
+                continue
+            if record.get('closed_at') is None:
+                await self.degrade_track(record, window, now, status, metrics)
+                if now >= window['window_end']:
+                    await self.degrade_close(record, window, now, status, down, metrics)
+                else:
+                    self.j.set(key, record)
+            if record.get('closed_at') is not None and record.get('verdict') is None:
+                self.degrade_settle(record, window, now)
+
+    def live_tip(self, statuses, named):
+        """Live-fleet height: min chainHeight over reachable hosts a step does not name."""
+        heights = [s['chainHeight'] for h,s in statuses.items()
+                   if s is not None and h not in named and 'chainHeight' in s]
+        return min(heights) if heights else None
+
+    def degrade_unobserved(self, window, now):
+        record = {'step': window['step'], 'action': window['action'],
+                  'expect': window['expect'], 'targets': list(window['expected_down']),
+                  'fault_start': window['fault_start'], 'restore_at': window['restore_at'],
+                  'window_end': window['window_end'], 'opened_at': now, 'hosts': {},
+                  'closed_at': now, 'verdict': {'status': 'unobserved', 'at': now,
+                                                'failures': ['step start not observed']}}
+        self.j.set('degrade:'+window['step'], record)
+        self.j.event(None, 'degrade_verdict', {'step': window['step'], **record['verdict']})
+        return record
+
+    async def degrade_open(self, window, now, status, prior, metrics):
+        named = window['expected_down']
+        # Live hosts must answer; a failure retries the whole record next tick.
+        start = {h: await metrics(h, h in named, window['step']) for h in HOSTS}
+        record = {
+            'step': window['step'], 'action': window['action'],
+            'expect': window['expect'], 'targets': list(named),
+            'fault_start': window['fault_start'], 'restore_at': window['restore_at'],
+            'window_end': window['window_end'], 'opened_at': now,
+            'metrics_start': start, 'metrics_end': {},
+            'tip_fault_start': self.live_tip(status, named),
+            'tip_restore': None, 'tip_resumed_at': None, 'tips': {}, 'conflict': None,
+            'hosts': {h: {'last_slot': (prior.get(h) or {}).get('lastExternalizedSlot'),
+                          'peer_zero': False, **dict.fromkeys(MILESTONES),
+                          'reachable_height': None, 'synced_height': None}
+                      for h in named},
+            'closed_at': None, 'verdict': None,
+        }
+        self.j.set('degrade:'+window['step'], record)
+        return record
+
+    async def degrade_track(self, record, window, now, status, metrics):
+        named = window['expected_down']
+        tip = self.live_tip(status, named)
+        if window['expect'] == 'safe_halt':
+            for s in status.values():
+                if s is None or type(s.get('chainHeight')) is not int or not s.get('tipHash'):
+                    continue
+                seen = record['tips'].setdefault(str(s['chainHeight']), s['tipHash'])
+                if seen != s['tipHash'] and record['conflict'] is None:
+                    record['conflict'] = {'height': s['chainHeight'], 'hashes': [seen, s['tipHash']]}
+        if now < window['restore_at']:
+            # Start samples a named host missed while already down.
+            for host in named:
+                if record['metrics_start'].get(host) is None:
+                    record['metrics_start'][host] = await metrics(host, True, window['step'])
+        elif record['tip_restore'] is None:
+            record['tip_restore'] = tip
+        elif (record['tip_resumed_at'] is None and tip is not None
+                and tip > record['tip_restore']):
+            record['tip_resumed_at'] = now
+        for host in named:
+            s, track = status.get(host), record['hosts'][host]
+            if now < window['restore_at']:
+                if s is None:
+                    continue
+                if s.get('lastExternalizedSlot') is not None:
+                    track['last_slot'] = s['lastExternalizedSlot']
+                if s.get('scpPeerCount') == 0 or s.get('peerCount') == 0:
+                    track['peer_zero'] = True
+                continue
+            if s is None:
+                continue
+            height = s.get('chainHeight')
+            if track['first_reachable_at'] is None:
+                track.update(first_reachable_at=now, reachable_height=height)
+            if (track['synced_at_tip_at'] is None and s.get('synced') is True
+                    and type(height) is int and tip is not None and height >= tip):
+                track.update(synced_at_tip_at=now, synced_height=height)
+            slot = s.get('lastExternalizedSlot')
+            index = s.get('scpSlotIndex')
+            if track['first_ballot_at'] is None and (
+                    (type(slot) is int and (track['last_slot'] is None or slot > track['last_slot']))
+                    or ((s.get('scpBallotCounter') or 0) > 0 and type(index) is int
+                        and record['tip_restore'] is not None and index > record['tip_restore'])):
+                track['first_ballot_at'] = now
+            # Only the producer mints and decision 4 never names it (x1).
+            track['first_coinbase_at'] = None
+        if now >= window['window_end']-DEGRADE_END_LEAD:
+            for host in HOSTS:
+                sample = await metrics(host, True, window['step'])
+                if sample is not None:
+                    record['metrics_end'][host] = sample
+
+    def fault_observed(self, record, window):
+        """True/False from controller observations; 'unknown' for netem."""
+        if window['action'] in RESTART_ACTIONS:
+            return all((self.j.get('baseline:'+h) or {}).get('rebased_step') == window['step']
+                       for h in window['expected_down'])
+        if window['action'] == 'isolate':
+            return all(record['hosts'][h]['peer_zero'] for h in window['expected_down'])
+        return 'unknown'  # netem: operator reconciles faults.jsonl post-run
+
+    async def degrade_close(self, record, window, now, status, down, metrics):
+        """The window_end verdict: every criterion observable at this tick."""
+        step, named = window['step'], window['expected_down']
+        failures = []
+        observed = self.fault_observed(record, window)
+        record['fault_observed'] = observed
+        if observed is False:
+            failures.append('fault not exercised')
+        # One tip: every reachable host agrees at the common minimum height.
+        # Only a host a later, active step names may be absent here.
+        reachable = [h for h in HOSTS if status.get(h) is not None]
+        missing = [h for h in HOSTS if h not in reachable and h not in down]
+        if missing:
+            failures.append('one tip: no status from '+', '.join(missing))
+        elif reachable:
+            height = min(status[h]['chainHeight'] for h in reachable)
+            blocks = await asyncio.gather(*(self.tolerate(h, down, self.rpc.call(
+                h, 'getBlockByHeight', {'height': height}), step) for h in reachable))
+            hashes = {b.get('hash') for b in blocks if b is not None}
+            record['tip_check'] = {'height': height, 'hosts': [h for h,b in zip(reachable,blocks) if b is not None]}
+            if len(hashes) != 1:
+                failures.append('one tip: conflicting hashes at height '+str(height))
+        # Loop stalls: over-1 s recorded only; any >= 5 s delta fails.
+        loops = {}
+        for host in HOSTS:
+            sample = await metrics(host, host in down, step)
+            if sample is not None:
+                record['metrics_end'][host] = sample
+            end = record['metrics_end'].get(host)
+            restarted = (host in named and window['action'] in RESTART_ACTIONS
+                         and (self.j.get('baseline:'+host) or {}).get('rebased_step') == step)
+            start = record['metrics_start'].get(host)
+            if end is None or (start is None and not restarted):
+                loops[host] = None
+                failures.append('loop metrics unavailable: '+host)
+                continue
+            loops[host] = loop_delta(start, end, restarted)
+            if loops[host]['delayed'] > 0:
+                failures.append('node_loop_delayed on '+host)
+        record['loops'] = loops
+        if window['expect'] == 'safe_halt':
+            if record['conflict'] is not None:
+                failures.append('conflicting hash at height '+str(record['conflict']['height']))
+            if record['tip_resumed_at'] is None:
+                failures.append('tip did not advance after restore')
+        record['closed_at'] = now
+        # Missed payments, deferred receipts and accounting are checked by
+        # degrade_settle(), which runs straight after this in the same tick.
+        if failures:
+            self.degrade_verdict(record, failures, now)
+        # Passed at window_end; degrade_settle closes the after-window part.
+        self.j.set('degrade:'+step, record)
+
+    def missed_offers(self, window):
+        return self.j.rows("kind='campaign' AND offered>=? AND offered<? AND state IN ("
+                           + ','.join('?' for _ in MISSED)+") ORDER BY offered, id",
+                           (window['fault_start'], window['window_end'], *MISSED))
+
+    def degrade_settle(self, record, window, now):
+        """Close an open verdict once its after-window evidence exists.
+
+        Payments, deferred receipts and exact accounting resolve after
+        window_end: the in-window offers must all reconcile, the step's
+        deferred receipts verify (#1587), and the first accounting snapshot
+        at or after window_end show difference 0. Until then it stays open.
+        """
+        missed = self.missed_offers(window)
+        if missed:
+            return self.degrade_verdict(record, ['missed payment '+missed[0]['id']], now)
+        unfinished = self.j.rows("kind='campaign' AND offered>=? AND offered<? AND state!='reconciled'",
+                                 (window['fault_start'], window['window_end']))
+        deferred = [r for r in self.deferred_rows()
+                    if json.loads(r['info']).get('deferred_step') == window['step']]
+        snapshot = self.j.get('accounting')
+        if (snapshot is None or snapshot.get('at', 0) < window['window_end']) \
+                and not self.j.pending() and self.blocks:
+            try:
+                self.accounting()
+            except Gate as error:
+                return self.degrade_verdict(record, ['accounting: '+str(error)], now)
+            snapshot = self.j.get('accounting')
+        if snapshot is not None and snapshot.get('at', 0) >= window['window_end'] \
+                and snapshot.get('difference') != 0:
+            return self.degrade_verdict(
+                record, ['accounting difference '+str(snapshot.get('difference'))], now)
+        record['awaiting'] = [*(['payments'] if unfinished else []),
+                              *(['deferred receipts'] if deferred else []),
+                              *(['accounting'] if snapshot is None
+                                or snapshot.get('at', 0) < window['window_end'] else [])]
+        if record['awaiting']:
+            self.j.set('degrade:'+window['step'], record)
+            return None
+        return self.degrade_verdict(record, [], now)
+
+    def degrade_verdict(self, record, failures, now):
+        step = record['step']
+        if failures:
+            record['verdict'] = {'status': 'fail', 'at': now, 'failures': failures}
+            self.j.set('degrade:'+step, record)
+            self.j.event(None, 'degrade_verdict', {'step': step, **record['verdict']})
+            raise Gate(step+': recovery check failed: '+'; '.join(failures))
+        record['verdict'] = {'status': 'pass', 'at': now, 'failures': []}
+        self.j.set('degrade:'+step, record)
+        self.j.event(None, 'degrade_verdict', {'step': step, **record['verdict']})
+        return record['verdict']
+
+    def settle_degrade_verdicts(self, now=None):
+        """Settle open verdicts outside the monitor (final drain)."""
+        now = time.time() if now is None else now
+        for window in self.degrade_windows():
+            record = self.j.get('degrade:'+window['step'])
+            if record and record.get('closed_at') is not None and record.get('verdict') is None:
+                self.degrade_settle(record, window, now)
+
     def gate(self):
         if self.j.get('status') not in ('setup','running'):
             raise Gate('run is held: '+str(self.j.get('reason')))
@@ -287,6 +573,8 @@ class Controller:
                     # Verified only once every host has answered.
                     if None not in genesis and len(genesis) == len(HOSTS):
                         self.j.set('genesis_verified',True)
+                # Per-step recovery evidence and window_end verdicts (#1591).
+                await self.degrade_evidence(now,statuses,self.statuses)
                 previous_height = self.fleet_height(default=-1)
                 self.statuses = {h: {'expected_down': True} if s is None
                                  else {**s,'expected_down': True} if h in down else s
@@ -1185,8 +1473,13 @@ class Controller:
             if self.fresh and not self.j.pending():
                 await self.sync(full=True, draining=True)
                 self.accounting()
+            try:
+                self.settle_degrade_verdicts()
+            except Gate as error:
+                self.j.event(None,'degrade_verdict_failed',str(error))
             from reporting import workload_complete
-            success=workload_complete(self.j,self.events,self.plan['phases'])
+            success=workload_complete(self.j,self.events,self.plan['phases'],
+                                      getattr(self,'degrade_steps',None) or [])
             self.j.set('status','complete' if success else 'incomplete')
         finally:
             self.closed=True
