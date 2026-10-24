@@ -263,6 +263,12 @@ Botho is derived from [MobileCoin](https://github.com/mobilecoinfoundation/mobil
 | [whitepaper](./whitepaper) | Whitepaper and executive summary LaTeX sources |
 | [experiments](./experiments) | Economic simulation outputs and findings |
 | [fuzz](./fuzz) | Fuzz targets for crypto and deserialization code |
+| [discover](./discover) | CLI for discovering network topology and generating node configs |
+| [tests](./tests) | End-to-end test suites |
+| [docs](./docs) | Guides, design notes, decisions, and operations runbooks |
+| [audits](./audits) | Internal security audit reports |
+| [hooks](./hooks) | Optional git pre-commit and pre-push hooks |
+| [vendor](./vendor) | Vendored, patched third-party crates |
 | [scripts](./scripts) | Bridge, testnet, and stress-test drivers |
 | [tools](./tools) | Repository setup scripts, including git hook installation |
 
