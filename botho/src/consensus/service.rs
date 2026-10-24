@@ -3455,11 +3455,6 @@ mod tests {
         );
     }
 
-    /// REPRODUCTION (issue #998): a fresh 6.0.0 genesis externalizes a few
-    /// blocks then wedges — the single minter re-proposes its coinbase forever
-    /// but the slot never externalizes. This drives the exact fleet topology
-    /// (a 2-of-2 quorum where only ONE node mints — the faucet) across many
-    /// successive slots and asserts the slot index advances past height 5.
     /// Run a 2-of-2 slot in which every message A sends after it externalizes
     /// is lost for `outage_rounds` rounds (the w12 halt: the minter's Commit
     /// and Externalize were dropped while its event loop was blocked).
@@ -3535,6 +3530,11 @@ mod tests {
         );
     }
 
+    /// REPRODUCTION (issue #998): a fresh 6.0.0 genesis externalizes a few
+    /// blocks then wedges — the single minter re-proposes its coinbase forever
+    /// but the slot never externalizes. This drives the exact fleet topology
+    /// (a 2-of-2 quorum where only ONE node mints — the faucet) across many
+    /// successive slots and asserts the slot index advances past height 5.
     #[test]
     fn single_minter_federated_advances_past_height_5() {
         let cfg = ConsensusConfig::fixed_timing(0);
