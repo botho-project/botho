@@ -54,6 +54,7 @@ class Fleet:
         self.receipt_fee = {h: 10 for h in HOSTS}
         self.unsubmitted = set()
         self.unconfirmed = set()
+        self.unspent = set()  # chain_areKeyImagesSpent reports spent: False
         self.calls = []
 
     def advance(self):
@@ -96,7 +97,7 @@ class Fleet:
             return {"txHash": params["hash"], "blockHeight": 100,
                     "fee": self.receipt_fee[host], "outputCount": 1, "totalOutput": 1000}
         if method == "chain_areKeyImagesSpent":
-            return [{"keyImage": k, "spent": True, "pending": False}
+            return [{"keyImage": k, "spent": host not in self.unspent, "pending": False}
                     for k in params["keyImages"]]
         if method == "chain_getOutputs":
             return [{"height": i, "outputs": []}
@@ -276,6 +277,19 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.observe_fees_once()
         self.assertTrue(self.held())
         self.assertIn("fee evidence", self.reason())
+
+    async def test_d1_unnamed_host_unsynced_still_halts(self):
+        # The unsynced timer is suspended for the named host only; a
+        # progress step (D1-D4) does not suspend it for anyone else.
+        self.now = at("D1", "fault_start") - 30
+        await self.monitor(at("D1", "fault_start") + 600,
+                           {at("D1", "fault_start"): lambda: self.fleet.stop(A),
+                            at("D1", "fault_start") + 60:
+                                lambda: self.fleet.synced.update({N3: False})})
+        self.assertTrue(self.held())
+        self.assertEqual(self.reason(), "node unsynced for two minutes: " + N3)
+        self.assertGreater(self.now, at("D1", "fault_start") + 180)
+        self.assertLess(self.now, at("D1", "fault_start") + 240)
 
     # -- D1: named host stopped, then restarted -----------------------------
 
@@ -458,6 +472,37 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.reconcile(1)
         self.assertTrue(self.held())
         self.assertIn("fleet transaction receipt disagreement", self.reason())
+
+    async def test_d1_unconfirmed_payment_halts_after_five_minutes(self):
+        # Only safe_halt time is excluded from the 300 s clock; D1 is a
+        # progress step, so its window still counts.
+        self.now = at("D1", "fault_start") + 60
+        submitted = self.now
+        self.fleet.stop(A)
+        self.accepted_row(submitted=submitted)
+        self.fleet.unconfirmed.add(HASH)
+        await self.reconcile(40)
+        self.assertTrue(self.held())
+        self.assertEqual(self.reason(), "payment unconfirmed after five minutes")
+        self.assertGreater(self.now, submitted + 300)
+        self.assertLessEqual(self.now, submitted + 390)  # one 30 s poll late at most
+        self.assertLess(self.now, at("D1", "window_end"))
+
+    async def test_spent_state_disagreement_on_rejoined_host_halts(self):
+        self.now = at("D1", "fault_start") + 60
+        self.fleet.stop(A)
+        self.accepted_row()
+        await self.reconcile(2)
+        self.assertEqual(self.c.j.intent("pay")["state"], "reconciled")
+        self.now = at("D1", "window_end") + 1
+        self.fleet.start(A)
+        self.settle()
+        self.fleet.unspent.add(A)
+        self.c.closed = False
+        await self.reconcile(1)
+        self.assertTrue(self.held())
+        self.assertIn("spent-input state disagreement", self.reason())
+        self.assertIn("deferred_hosts", json.loads(self.c.j.intent("pay")["info"]))
 
     async def test_spent_check_during_step_defers_the_named_host(self):
         # Confirmed on all five before D1, scanned during it: the spent
