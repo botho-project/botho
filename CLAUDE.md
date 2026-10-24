@@ -36,7 +36,7 @@ In Claude Code, invoke an installed skill via `/anvil:<skill>` (e.g. `/anvil:pap
 <!-- END ANVIL -->
 
 <!-- BEGIN REPO-SKILLS -->
-This repository has [Repo Skills](https://github.com/rjwalters/repo) v0.12.2 installed —
+This repository has [Repo Skills](https://github.com/rjwalters/repo) v0.24.9 installed —
 general repository hygiene and environment commands invoked as `/repo:<command>`. Run
 `/repo:help` for the command list, or see `.claude/skills/repo/SKILL.md` for the full
 guide. Hygiene commands apply safe, reversible fixes by default and report each
