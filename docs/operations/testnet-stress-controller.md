@@ -312,6 +312,32 @@ Increasing workload requires a separately pinned profile, sufficient isolated
 infrastructure and wallet inventory, and a successful rehearsal at its peak rate.
 It cannot retrofit a stopped campaign or raise an existing journal's limits.
 
+### In-flight accounting and measured ramp ceiling
+
+`max_inflight` counts only work that is not yet confirmed on every host:
+`prepared`, `submitting`, `accepted`, and `unknown` (`Journal.inflight()`). A
+payment that is `confirmed` or `recipient_verified` but not yet `reconciled` is
+waiting on the batched wallet scan. It no longer occupies the cap, but it stays
+pending for every other purpose: phase-boundary gates, accounting, drain, its
+input reservations, and the per-sender guard. That wallet is therefore not chosen
+as a sender again until its change has been scanned. Before #1551, those rows
+did count against the cap. Bursts filled it between the 2.5-3 minute reconcile
+batches and skipped offers (`generator_slot_expired` / `generator_queue_limit`,
+or `queue budget` on the legacy plan).
+
+**Measured ceiling (pending re-measurement).** The w12 qualification run
+(`q20261022-w12-endurance`) sustained about **797 confirmed payments/hour**
+during the 30–42 h ramp phase. The nominal target is 810/hour: 660 offers at
+5-second spacing plus 150 at 2-second spacing in the final five minutes of each
+hour. 160 offers were skipped. Measurement conditions: discovery-v2 ramp
+profile, `max_inflight` widened to 64 by an operator script, and harness branch
+`fix/w7-endurance-performance` @ `b5b76009`. That branch had not landed on
+`main` and does not include the #1551 cap change. Part of the shortfall is
+node-side: burst blocks were slow to produce and apply on the minter (#1545,
+tracked as #1550 / #1565). Judge ramp runs against ~797/hour rather than 810/hour
+until the ceiling is re-measured with #1550 / #1565 and this cap change in place
+(#1568).
+
 ### Fee evidence and honest coverage
 
 The signer receives a 1x, 2x, or 4x multiplier **after** the production minimum
@@ -366,3 +392,50 @@ fee-budget overruns, skipped-offer and inflight phase boundaries, seeded
 reproducibility, stale/missing fee evidence, and one-picocredit accounting faults.
 No live rehearsal, fee activation, or new 72-hour campaign is established by
 these offline checks.
+
+### Retaining evidence without retaining whole EC2 disks
+
+Stopped EC2 instances still incur EBS storage charges. For disposable
+qualification fleets, use `scripts/stress/cloud_retention.py` after archival.
+Its default mode writes a plan; `--apply` terminates eligible stopped instances
+and deletes their released disks. It requires an explicit AWS account, profile,
+region, local state directories, backup directory, and a new output directory.
+Repeat `--state-root` for each place run directories are kept. Each may be a
+run directory or a directory of runs; any child holding
+`final-evidence-manifest.json` or `retirement.json` is checked, whatever its
+name:
+
+```sh
+python3 scripts/stress/cloud_retention.py \
+  --profile "$AWS_PROFILE" --region "$AWS_REGION" --account-id "$AWS_ACCOUNT_ID" \
+  --state-root "$BOTHO_RUN_STATES" --state-root "$BOTHO_RUN_ARCHIVES" \
+  --backup-root "$BOTHO_ARCHIVE_BACKUP" \
+  --output "$BOTHO_RETENTION_RESULT" --min-age-hours 24
+```
+
+Only qualification fleets are eligible: those tagged `project=botho` with
+`Purpose=qualification`, or the legacy `Project=botho-qualification`. Testnet
+nodes tagged `project=botho` without that purpose are never selected. Every instance
+must be stopped and match a six-role local inventory, terminal evidence, and
+six verified archives. A second archive copy is verified before termination.
+Cloud state, tags, roles, disk attachments, and archive identity are rechecked
+before each fleet is removed. The newest cloud fleet is always retained for
+diagnosis, even if it failed. Public nodes, other projects, snapshots, and
+fleets with missing evidence are excluded. The default archive retention
+window is 24 hours; reducing it to zero is for reviewed one-time cleanup.
+
+For periodic operation, run the same command with `--apply` from the operator
+host, using a unique output directory each time. A lock in each state root
+prevents overlapping cleanup processes. The operator must be awake and have working AWS
+credentials. Archive checks or unavailable credentials stop deletion; review
+`plan.json`, `execution.json`, and `result.json` in each output directory. If
+execution stops partway through, inspect the recorded instances and disks;
+do not assume that the entire plan completed. Do not delete local archives
+when releasing AWS disks.
+
+A fleet aborted before deployment may instead provide `retirement.json` with
+remote verification of all six hosts: matching run IDs, completed bootstrap,
+no node service, and no controller data. Local deployment markers must also
+be absent. That proof is copied and verified before deletion, and a later EC2
+launch invalidates it. This exception cannot substitute for archives once a
+workload has been deployed.

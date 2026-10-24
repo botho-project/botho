@@ -101,7 +101,7 @@ EMPTY → DRAFTED → REVIEWED+AUDITED → REVISED → … → READY → AUDITED
 
 **Thresholds**: **≥39/44** advances — the customer-facing tier shared with `report`, `deck`, and `ip-uspto` (CLAUDE.md threshold tiers). A datasheet is the purest customer-facing artifact anvil ships: a wrong number costs the customer a board spin. Any critical flag in EITHER `.review/` or `.audit/` short-circuits regardless of total.
 
-**Iteration cap**: default `max_iterations: 4`. The per-document override carrier is the project-level `BRIEF.md` `documents:` entry (`max_iterations` + `iteration_cap_rationale`), per the paired-override schema in `anvil/lib/project_brief.py`. Exceeding the cap marks the thread `BLOCKED` and requires human review.
+**Iteration cap**: default `max_iterations: 4`. The per-document override carrier is the project-level `BRIEF.md` `documents:` entry (`max_iterations` + `iteration_cap_rationale`), per the paired-override schema in `anvil/lib/project_brief/`. Exceeding the cap marks the thread `BLOCKED` and requires human review.
 
 ## Revision-history discipline (the READY-gate)
 
@@ -155,7 +155,7 @@ LaTeX via the shipped `templates/anvil-datasheet.cls` class, compiled with **XeL
 - **Fresh-page major sections**: Performance Characteristics and Pin Configuration start on a new page (`\clearpage` pre-wired in the template).
 - **Consistent rev/footer**: every page footer carries part number · rev · date · page X/Y; the title block carries the PRELIMINARY/PRODUCTION status line.
 
-`datasheet-review` runs the render-gate pre-flight via `anvil/lib/render_gate.py::compile_and_gate(...)` (compile success, overfull boxes >5.0pt, placeholder scan; `page_cap=None` — datasheet length is part-complexity-dependent). On engine-unavailable, the gate degrades gracefully and the review proceeds.
+`datasheet-review` runs the render-gate pre-flight via `anvil/lib/render_gate/compile_and_gate.py::compile_and_gate(...)` (compile success, overfull boxes >5.0pt, placeholder scan; `page_cap=None` — datasheet length is part-complexity-dependent). On engine-unavailable, the gate degrades gracefully and the review proceeds.
 
 ## Knobs (thread-level BRIEF frontmatter)
 
@@ -166,7 +166,7 @@ LaTeX via the shipped `templates/anvil-datasheet.cls` class, compiled with **XeL
 
 ## Project BRIEF artifact type
 
-`datasheet` is registered as a **skill-identity** `artifact_type` value in the shared project-BRIEF registry (`anvil/lib/project_brief.py::REGISTERED_ARTIFACT_TYPES` / `SKILL_IDENTITY_ARTIFACT_TYPES`; issue #486, following the #386/#408/#432/#440/#460 pattern). In a shared project BRIEF, a `documents:` entry with `artifact_type: datasheet` declares that this skill owns the thread. It is NOT a memo subtype: it selects no memo rubric overlay, and memo commands fail loudly when pointed at a thread declaring it. Registering the value lets a validated BRIEF carry it through strict `load_project_brief_strict` validation, which is what `anvil:rubric-rebackport`'s BRIEF-route inference (#484) relies on to resolve an unstamped datasheet review to the `("datasheet", 44)` rubric row. The body filename is `datasheet.tex`, but inference is BRIEF-`artifact_type`-driven (BRIEF-route-only), matching the `ip-uspto-provisional` (`spec.tex`) precedent — `datasheet.tex` is deliberately NOT added to rubric-rebackport's `_BODY_FILENAME_TO_SKILL` rule-2 table.
+`datasheet` is registered as a **skill-identity** `artifact_type` value in the shared project-BRIEF registry (`anvil/lib/project_brief/types.py::REGISTERED_ARTIFACT_TYPES` / `SKILL_IDENTITY_ARTIFACT_TYPES`; issue #486, following the #386/#408/#432/#440/#460 pattern). In a shared project BRIEF, a `documents:` entry with `artifact_type: datasheet` declares that this skill owns the thread. It is NOT a memo subtype: it selects no memo rubric overlay, and memo commands fail loudly when pointed at a thread declaring it. Registering the value lets a validated BRIEF carry it through strict `load_project_brief_strict` validation, which is what `anvil:rubric-rebackport`'s BRIEF-route inference (#484) relies on to resolve an unstamped datasheet review to the `("datasheet", 44)` rubric row. The body filename is `datasheet.tex`, but inference is BRIEF-`artifact_type`-driven (BRIEF-route-only), matching the `ip-uspto-provisional` (`spec.tex`) precedent — `datasheet.tex` is deliberately NOT added to rubric-rebackport's `_BODY_FILENAME_TO_SKILL` rule-2 table.
 
 ## Progress tracking
 

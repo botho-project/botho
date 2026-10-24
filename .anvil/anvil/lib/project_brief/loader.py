@@ -34,7 +34,7 @@ from anvil.lib.project_brief.fields import (
     _normalize_theme,
     _normalize_voice,
 )
-from anvil.lib.project_brief.models import ProjectBrief, RubricOverrides
+from anvil.lib.project_brief.models import EditorialOverride, ProjectBrief, RubricOverrides
 from anvil.lib.project_brief.types import (
     consumer_overlay_dir_for,
     discover_consumer_artifact_types,
@@ -398,3 +398,24 @@ def load_rubric_overrides_for_slug(
     if doc is None or doc.rubric_overrides is None:
         return RubricOverrides()
     return doc.rubric_overrides
+
+
+def load_editorial_overrides_for_slug(
+    project_dir: Path, slug: str
+) -> List[EditorialOverride]:
+    """Return the ``editorial_overrides`` for ``slug`` from ``<project_dir>/BRIEF.md`` (issue #1373).
+
+    Lenient like :func:`load_rubric_overrides_for_slug`: returns ``[]``
+    when the BRIEF is missing or structurally invalid, the slug has no
+    entry, or the entry has no ``editorial_overrides:`` key.
+    """
+    try:
+        brief = load_project_brief(project_dir)
+    except ValueError:
+        return []
+    if brief is None:
+        return []
+    doc = brief.document_for_slug(slug)
+    if doc is None or not doc.editorial_overrides:
+        return []
+    return list(doc.editorial_overrides)

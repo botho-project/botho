@@ -838,7 +838,9 @@ class Controller:
             if now>offered+120:
                 self.j.transition(event['intent'],'skipped','slot expired; no catch-up',finished=now)
                 continue
-            if len(self.j.pending())>=event['max_inflight']:
+            # Confirmed-but-unscanned rows do not occupy the cap; prepare()
+            # still refuses their senders via pending() (#1551).
+            if len(self.j.inflight())>=event['max_inflight']:
                 continue
             index=int(event['intent'].split('-')[-1])
             count = (2 if index==2 else 4 if index==4 else 1)

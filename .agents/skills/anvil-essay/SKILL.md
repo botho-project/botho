@@ -1,6 +1,6 @@
 ---
 name: anvil-essay
-description: Anvil skill registration for 'essay' (canonical body at .anvil/skills/essay/SKILL.md)
+description: "Draft, review, and revise short-form voice-grounded essays and blog posts (markdown body, 500–1500 words typical) through the canonical anvil lifecycle. Ends at READY with a documented publish handoff; site deploys stay consumer-native."
 ---
 
 See `.anvil/skills/essay/SKILL.md` for the canonical skill body.

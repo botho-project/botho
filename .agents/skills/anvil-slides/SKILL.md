@@ -1,6 +1,6 @@
 ---
 name: anvil-slides
-description: Anvil skill registration for 'slides' (canonical body at .anvil/skills/slides/SKILL.md)
+description: "Draft, review, audit, and revise talk / conference / lecture-style presentation slides using the standard anvil lifecycle plus a mandatory technical-fact-check phase and optional rehearse and handout phases."
 ---
 
 See `.anvil/skills/slides/SKILL.md` for the canonical skill body.

@@ -380,7 +380,7 @@ class TestPhotoPlacementContract(unittest.TestCase):
             with self.subTest(macro=macro):
                 self.assertIn(macro, text)
         self.assertIn("manifest.json", text)
-        self.assertIn("render_gate.py", text)
+        self.assertIn("anvil/lib/render_gate/", text)
         self.assertIn("xelatex", text.lower())
 
     def test_unresolved_stable_name_is_a_finding_not_a_crash(self):
