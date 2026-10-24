@@ -19,7 +19,10 @@
 //! ## Caching
 //!
 //! Results are cached based on DNS TTL to reduce lookup frequency.
-//! If DNS fails, falls back to hardcoded seeds.
+//! If DNS fails (or returns no records), falls back to the hardcoded seeds --
+//! unless the fallback was disabled with [`DnsSeedDiscovery::with_fallback`]
+//! (`network.fallback_seeds = false`, #1578), in which case the result is
+//! empty and the node dials nothing it was not told to dial.
 
 use bth_transaction_types::constants::Network;
 use hickory_resolver::Resolver;
@@ -102,6 +105,19 @@ struct CachedSeeds {
     expires_at: Instant,
 }
 
+/// Where a [`DnsSeedDiscovery::discover_seeds_with_source`] result came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DnsSeedSource {
+    /// Seeds were returned by the DNS TXT query (fresh or cached).
+    Dns,
+    /// DNS failed or returned no records; the hardcoded public fallback seeds
+    /// were returned instead.
+    FallbackSeeds,
+    /// DNS failed or returned no records and the hardcoded fallback is
+    /// disabled, so the result is empty.
+    None,
+}
+
 /// DNS seed discovery service
 pub struct DnsSeedDiscovery {
     /// Cached seeds per network
@@ -110,6 +126,9 @@ pub struct DnsSeedDiscovery {
     network: Network,
     /// Custom DNS seed domain (overrides default)
     custom_domain: Option<String>,
+    /// Whether to fall back to the hardcoded public seeds when DNS fails or
+    /// returns no records (`network.fallback_seeds`, default `true`, #1578).
+    fallback: bool,
 }
 
 impl DnsSeedDiscovery {
@@ -119,6 +138,25 @@ impl DnsSeedDiscovery {
             cache: Arc::new(RwLock::new(None)),
             network,
             custom_domain: None,
+            fallback: true,
+        }
+    }
+
+    /// Enable or disable the hardcoded-seed fallback used when DNS fails or
+    /// returns no records (#1578). Enabled by default.
+    pub fn with_fallback(mut self, fallback: bool) -> Self {
+        self.fallback = fallback;
+        self
+    }
+
+    /// Decide what to return when the DNS query produced no usable seeds.
+    ///
+    /// Pure (no network), so the fallback decision is unit-testable.
+    fn on_dns_miss(&self) -> (Vec<String>, DnsSeedSource) {
+        if self.fallback {
+            (self.hardcoded_seeds(), DnsSeedSource::FallbackSeeds)
+        } else {
+            (Vec::new(), DnsSeedSource::None)
         }
     }
 
@@ -139,8 +177,15 @@ impl DnsSeedDiscovery {
     /// Discover seeds via DNS, with caching and fallback
     ///
     /// Returns bootstrap peer addresses in multiaddr format.
-    /// Falls back to hardcoded seeds if DNS fails.
+    /// Falls back to hardcoded seeds if DNS fails, unless the fallback is
+    /// disabled (see [`Self::with_fallback`]).
     pub async fn discover_seeds(&self) -> Vec<String> {
+        self.discover_seeds_with_source().await.0
+    }
+
+    /// Like [`Self::discover_seeds`], but also reports where the peers came
+    /// from so callers can log it honestly (#1578).
+    pub async fn discover_seeds_with_source(&self) -> (Vec<String>, DnsSeedSource) {
         // Check cache first
         {
             let cache = self.cache.read();
@@ -151,7 +196,7 @@ impl DnsSeedDiscovery {
                         cached.peers.len(),
                         cached.expires_at.saturating_duration_since(Instant::now())
                     );
-                    return cached.peers.clone();
+                    return (cached.peers.clone(), DnsSeedSource::Dns);
                 }
             }
         }
@@ -160,8 +205,15 @@ impl DnsSeedDiscovery {
         match self.query_dns_seeds().await {
             Ok((peers, ttl)) => {
                 if peers.is_empty() {
-                    warn!("DNS seed query returned no records, using hardcoded seeds");
-                    return self.hardcoded_seeds();
+                    if self.fallback {
+                        warn!("DNS seed query returned no records, using hardcoded seeds");
+                    } else {
+                        info!(
+                            "DNS seed query returned no records; hardcoded fallback disabled \
+                             (fallback_seeds = false), no seeds"
+                        );
+                    }
+                    return self.on_dns_miss();
                 }
 
                 info!("Discovered {} seeds via DNS (TTL: {:?})", peers.len(), ttl);
@@ -173,11 +225,19 @@ impl DnsSeedDiscovery {
                     expires_at: Instant::now() + ttl,
                 });
 
-                peers
+                (peers, DnsSeedSource::Dns)
             }
             Err(e) => {
-                warn!("DNS seed discovery failed: {}, using hardcoded seeds", e);
-                self.hardcoded_seeds()
+                if self.fallback {
+                    warn!("DNS seed discovery failed: {}, using hardcoded seeds", e);
+                } else {
+                    info!(
+                        "DNS seed discovery failed: {}; hardcoded fallback disabled \
+                         (fallback_seeds = false), no seeds",
+                        e
+                    );
+                }
+                self.on_dns_miss()
             }
         }
     }
@@ -456,6 +516,53 @@ mod tests {
         assert!(!seeds.is_empty());
         assert!(seeds[0].contains("seed.botho.io"));
         assert!(seeds[0].contains("/tcp/17100"));
+    }
+
+    #[test]
+    fn test_dns_miss_falls_back_to_hardcoded_by_default() {
+        // #1578: default behaviour is unchanged -- a failed/empty DNS query
+        // yields the hardcoded public seeds.
+        let discovery = DnsSeedDiscovery::new(Network::Testnet);
+        let (peers, source) = discovery.on_dns_miss();
+        assert_eq!(source, DnsSeedSource::FallbackSeeds);
+        assert_eq!(
+            peers,
+            crate::network::seeds::fallback_seeds(Network::Testnet)
+        );
+        assert!(!peers.is_empty());
+    }
+
+    #[test]
+    fn test_dns_miss_without_fallback_is_empty() {
+        // #1578: with the fallback disabled, a failed or empty DNS query must
+        // return nothing rather than the hardcoded live seeds -- including for
+        // a private custom domain.
+        for discovery in [
+            DnsSeedDiscovery::new(Network::Testnet).with_fallback(false),
+            DnsSeedDiscovery::new(Network::Mainnet).with_fallback(false),
+            DnsSeedDiscovery::with_domain(Network::Testnet, "seeds.private.example".into())
+                .with_fallback(false),
+        ] {
+            let (peers, source) = discovery.on_dns_miss();
+            assert_eq!(source, DnsSeedSource::None);
+            assert!(peers.is_empty(), "expected no seeds, got {peers:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cached_seeds_report_dns_source_without_fallback() {
+        // A valid cache entry is a DNS result regardless of the fallback flag.
+        let discovery = DnsSeedDiscovery::new(Network::Testnet).with_fallback(false);
+        {
+            let mut cache = discovery.cache.write();
+            *cache = Some(CachedSeeds {
+                peers: vec!["/ip4/10.0.0.1/tcp/17100".to_string()],
+                expires_at: Instant::now() + Duration::from_secs(3600),
+            });
+        }
+        let (peers, source) = discovery.discover_seeds_with_source().await;
+        assert_eq!(source, DnsSeedSource::Dns);
+        assert_eq!(peers, vec!["/ip4/10.0.0.1/tcp/17100".to_string()]);
     }
 
     #[test]

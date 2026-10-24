@@ -215,7 +215,8 @@ pub struct NetworkConfig {
     pub cors_origins: Vec<String>,
 
     /// Bootstrap peers for initial discovery (multiaddr format).
-    /// If not set, uses DNS discovery or network-specific seed nodes.
+    /// If empty, uses DNS discovery and/or the built-in public seed nodes
+    /// (see `fallback_seeds`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bootstrap_peers: Vec<String>,
 
@@ -223,6 +224,16 @@ pub struct NetworkConfig {
     /// When enabled, seeds are discovered via DNS TXT records.
     #[serde(default)]
     pub dns_seeds: DnsSeedConfig,
+
+    /// Fall back to the built-in public seed nodes when `bootstrap_peers` is
+    /// empty and DNS discovery is disabled, fails, or returns no records.
+    ///
+    /// Default `true` (an empty `bootstrap_peers` means "use the defaults",
+    /// which BaaS-provisioned nodes rely on). Set to `false` together with
+    /// `[network.dns_seeds] enabled = false` for an isolated node or private
+    /// cluster that never dials a peer it was not told to dial (#1578).
+    #[serde(default = "default_fallback_seeds")]
+    pub fallback_seeds: bool,
 
     /// Optional override for the persistent libp2p node identity key path
     /// (issue #439). If unset, the key lives at `<data_dir>/node_key` alongside
@@ -319,6 +330,69 @@ fn default_dns_seeds_enabled() -> bool {
     true
 }
 
+fn default_fallback_seeds() -> bool {
+    true
+}
+
+/// Where a resolved bootstrap-peer list came from (#1578).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootstrapSource {
+    /// Explicit `network.bootstrap_peers` from config.
+    Configured,
+    /// DNS TXT-record discovery.
+    Dns,
+    /// The built-in public fallback seeds (`network.fallback_seeds = true`).
+    FallbackSeeds,
+    /// Nothing: the list is empty because the fallback is disabled. The node
+    /// is isolated and only accepts inbound peers.
+    None,
+}
+
+impl BootstrapSource {
+    /// Stable lowercase label for logs.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Configured => "configured",
+            Self::Dns => "dns",
+            Self::FallbackSeeds => "fallback_seeds",
+            Self::None => "none",
+        }
+    }
+}
+
+/// A resolved bootstrap-peer list plus where it came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedBootstrapPeers {
+    /// Bootstrap multiaddrs to dial (also re-dialed by the reconnect tick).
+    pub peers: Vec<String>,
+    /// Where `peers` came from.
+    pub source: BootstrapSource,
+}
+
+impl ResolvedBootstrapPeers {
+    /// Log where the bootstrap list came from, honestly (#1578).
+    pub fn log(&self) {
+        tracing::info!(
+            source = self.source.as_str(),
+            count = self.peers.len(),
+            "Resolved bootstrap peers"
+        );
+        match self.source {
+            BootstrapSource::FallbackSeeds => tracing::warn!(
+                count = self.peers.len(),
+                "No bootstrap peers configured or discovered: dialing the built-in PUBLIC seed \
+                 nodes. Set `network.fallback_seeds = false` (and `[network.dns_seeds] enabled \
+                 = false`) to run an isolated node or private cluster"
+            ),
+            BootstrapSource::None => tracing::info!(
+                "Isolated: no bootstrap peers (fallback_seeds = false); this node will not dial \
+                 any peer and will only accept inbound connections"
+            ),
+            BootstrapSource::Configured | BootstrapSource::Dns => {}
+        }
+    }
+}
+
 impl Default for DnsSeedConfig {
     fn default() -> Self {
         Self {
@@ -367,14 +441,26 @@ impl NetworkConfig {
         }
     }
 
-    /// Get bootstrap peers synchronously (uses hardcoded seeds, not DNS).
+    /// Get bootstrap peers synchronously (no DNS query).
     ///
     /// For DNS-based discovery, use `bootstrap_peers_async` instead.
     pub fn bootstrap_peers(&self, network: Network) -> Vec<String> {
-        if self.bootstrap_peers.is_empty() {
-            default_bootstrap_peers(network)
+        self.resolve_bootstrap_peers(network).peers
+    }
+
+    /// Resolve bootstrap peers synchronously (no DNS query), reporting the
+    /// source.
+    ///
+    /// Configured `bootstrap_peers` if non-empty, else the hardcoded fallback
+    /// seeds unless `fallback_seeds = false`, else nothing.
+    pub fn resolve_bootstrap_peers(&self, network: Network) -> ResolvedBootstrapPeers {
+        if !self.bootstrap_peers.is_empty() {
+            ResolvedBootstrapPeers {
+                peers: self.bootstrap_peers.clone(),
+                source: BootstrapSource::Configured,
+            }
         } else {
-            self.bootstrap_peers.clone()
+            self.fallback_or_none(network)
         }
     }
 
@@ -383,28 +469,59 @@ impl NetworkConfig {
     /// Priority:
     /// 1. Explicitly configured bootstrap_peers (if not empty)
     /// 2. DNS TXT record discovery (if enabled)
-    /// 3. Hardcoded fallback seeds
+    /// 3. Hardcoded fallback seeds, unless `fallback_seeds = false`
     pub async fn bootstrap_peers_async(&self, network: Network) -> Vec<String> {
+        self.resolve_bootstrap_peers_async(network).await.peers
+    }
+
+    /// Like [`Self::bootstrap_peers_async`], but also reports where the list
+    /// came from so the node can log it honestly (#1578).
+    pub async fn resolve_bootstrap_peers_async(&self, network: Network) -> ResolvedBootstrapPeers {
         // If explicit bootstrap peers are configured, use them
         if !self.bootstrap_peers.is_empty() {
-            return self.bootstrap_peers.clone();
+            return ResolvedBootstrapPeers {
+                peers: self.bootstrap_peers.clone(),
+                source: BootstrapSource::Configured,
+            };
         }
 
-        // If DNS discovery is enabled, try it
+        // If DNS discovery is enabled, try it. Its own DNS-failure fallback
+        // honours `fallback_seeds` too.
         if self.dns_seeds.enabled {
-            use crate::network::DnsSeedDiscovery;
+            use crate::network::{DnsSeedDiscovery, DnsSeedSource};
 
             let discovery = if let Some(ref domain) = self.dns_seeds.domain {
                 DnsSeedDiscovery::with_domain(network, domain.clone())
             } else {
                 DnsSeedDiscovery::new(network)
-            };
+            }
+            .with_fallback(self.fallback_seeds);
 
-            return discovery.discover_seeds().await;
+            let (peers, source) = discovery.discover_seeds_with_source().await;
+            let source = match source {
+                DnsSeedSource::Dns => BootstrapSource::Dns,
+                DnsSeedSource::FallbackSeeds => BootstrapSource::FallbackSeeds,
+                DnsSeedSource::None => BootstrapSource::None,
+            };
+            return ResolvedBootstrapPeers { peers, source };
         }
 
-        // Fall back to hardcoded seeds
-        default_bootstrap_peers(network)
+        // Fall back to hardcoded seeds (unless disabled)
+        self.fallback_or_none(network)
+    }
+
+    fn fallback_or_none(&self, network: Network) -> ResolvedBootstrapPeers {
+        if self.fallback_seeds {
+            ResolvedBootstrapPeers {
+                peers: default_bootstrap_peers(network),
+                source: BootstrapSource::FallbackSeeds,
+            }
+        } else {
+            ResolvedBootstrapPeers {
+                peers: Vec::new(),
+                source: BootstrapSource::None,
+            }
+        }
     }
 
     /// Parse the connection whitelist strings into IpAddr values.
@@ -876,6 +993,7 @@ impl Default for NetworkConfig {
             cors_origins: default_cors_origins(),
             bootstrap_peers: Vec::new(), // Uses DNS discovery or network-specific defaults
             dns_seeds: DnsSeedConfig::default(),
+            fallback_seeds: default_fallback_seeds(),
             node_key_path: None, // Defaults to <data_dir>/node_key
 
             quorum: QuorumConfig::default(),
@@ -1108,6 +1226,91 @@ mod tests {
             .unwrap();
             assert!(Config::load(&path).is_err(), "accepted {invalid}");
         }
+    }
+
+    // ---- Issue #1578: `network.fallback_seeds` opt-out ----
+
+    fn network_from_toml(toml_str: &str) -> NetworkConfig {
+        toml::from_str(toml_str).expect("parse [network]")
+    }
+
+    #[test]
+    fn test_fallback_seeds_defaults_to_true_when_omitted() {
+        assert!(network_from_toml("").fallback_seeds);
+        assert!(network_from_toml("bootstrap_peers = []\n").fallback_seeds);
+        assert!(NetworkConfig::default().fallback_seeds);
+        assert!(!network_from_toml("fallback_seeds = false\n").fallback_seeds);
+        assert!(network_from_toml("fallback_seeds = true\n").fallback_seeds);
+    }
+
+    #[test]
+    fn test_fallback_seeds_toml_roundtrip() {
+        for value in [true, false] {
+            let cfg = network_from_toml(&format!("fallback_seeds = {value}\n"));
+            let back: NetworkConfig = toml::from_str(&toml::to_string(&cfg).unwrap()).unwrap();
+            assert_eq!(back.fallback_seeds, value);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_empty_bootstrap_peers_without_key_still_uses_fallback() {
+        // Regression guard for BaaS configs (infra/baas/node-bootstrap.sh):
+        // `bootstrap_peers = []`, DNS disabled, no `fallback_seeds` key ->
+        // unchanged behaviour, the hardcoded seeds.
+        let cfg = network_from_toml("bootstrap_peers = []\n[dns_seeds]\nenabled = false\n");
+        for network in [Network::Testnet, Network::Mainnet] {
+            let expected = crate::network::fallback_seeds(network);
+            assert!(!expected.is_empty());
+            assert_eq!(cfg.bootstrap_peers(network), expected);
+            let resolved = cfg.resolve_bootstrap_peers_async(network).await;
+            assert_eq!(resolved.peers, expected);
+            assert_eq!(resolved.source, BootstrapSource::FallbackSeeds);
+            assert_eq!(cfg.bootstrap_peers_async(network).await, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_configured_bootstrap_peers_unchanged_by_fallback_flag() {
+        let peers = vec!["/ip4/10.0.0.1/tcp/17100".to_string()];
+        for fallback in [true, false] {
+            let cfg = NetworkConfig {
+                bootstrap_peers: peers.clone(),
+                fallback_seeds: fallback,
+                ..NetworkConfig::default()
+            };
+            assert_eq!(cfg.bootstrap_peers(Network::Testnet), peers);
+            let resolved = cfg.resolve_bootstrap_peers_async(Network::Testnet).await;
+            assert_eq!(resolved.peers, peers);
+            assert_eq!(resolved.source, BootstrapSource::Configured);
+        }
+    }
+
+    /// The isolation recipe: `fallback_seeds = false`, DNS disabled, empty
+    /// list -> both resolvers return nothing, so no hardcoded seed is dialed.
+    #[tokio::test]
+    async fn test_isolated_config_resolves_no_bootstrap_peers() {
+        let cfg = network_from_toml(
+            "bootstrap_peers = []\nfallback_seeds = false\n[dns_seeds]\nenabled = false\n",
+        );
+        for network in [Network::Testnet, Network::Mainnet] {
+            assert!(cfg.bootstrap_peers(network).is_empty());
+            assert_eq!(
+                cfg.resolve_bootstrap_peers(network).source,
+                BootstrapSource::None
+            );
+            let resolved = cfg.resolve_bootstrap_peers_async(network).await;
+            assert!(resolved.peers.is_empty(), "got {:?}", resolved.peers);
+            assert_eq!(resolved.source, BootstrapSource::None);
+            assert!(cfg.bootstrap_peers_async(network).await.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_bootstrap_source_labels() {
+        assert_eq!(BootstrapSource::Configured.as_str(), "configured");
+        assert_eq!(BootstrapSource::Dns.as_str(), "dns");
+        assert_eq!(BootstrapSource::FallbackSeeds.as_str(), "fallback_seeds");
+        assert_eq!(BootstrapSource::None.as_str(), "none");
     }
 
     #[test]

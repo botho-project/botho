@@ -515,13 +515,17 @@ async fn run_async_with_shutdown(
     // Get network type for port/peer defaults
     let network_type = config.network_type();
 
-    // Discover bootstrap peers (uses DNS if enabled)
-    let bootstrap_peers = config.network.bootstrap_peers_async(network_type).await;
-    info!(
-        "Using {} bootstrap peers (DNS: {})",
-        bootstrap_peers.len(),
-        config.network.dns_seeds.enabled
-    );
+    // Discover bootstrap peers (uses DNS if enabled) and log where they came
+    // from (#1578). With `fallback_seeds = false` and DNS disabled this is
+    // empty, so neither the initial dial nor the reconnect tick below ever
+    // dials a hardcoded seed.
+    let resolved_bootstrap = config
+        .network
+        .resolve_bootstrap_peers_async(network_type)
+        .await;
+    resolved_bootstrap.log();
+    let bootstrap_source = resolved_bootstrap.source;
+    let bootstrap_peers = resolved_bootstrap.peers;
 
     // Keep a copy of the bootstrap multiaddrs so the main loop can re-dial them
     // whenever the node is under-connected. The initial dial happens during the
@@ -619,8 +623,15 @@ async fn run_async_with_shutdown(
         }
     } else {
         println!("=== No peers connected ===");
-        if config.network.bootstrap_peers.is_empty() && !config.network.dns_seeds.enabled {
-            warn!("No bootstrap peers configured and DNS discovery disabled. Add bootstrap_peers to config.toml or enable dns_seeds");
+        match bootstrap_source {
+            crate::config::BootstrapSource::FallbackSeeds => warn!(
+                "No peers connected via the built-in public fallback seeds. Add bootstrap_peers \
+                 to config.toml, or set network.fallback_seeds = false to run isolated"
+            ),
+            crate::config::BootstrapSource::None => {
+                info!("Isolated node (no bootstrap peers): waiting for inbound peers")
+            }
+            _ => {}
         }
     }
     println!();
@@ -4162,6 +4173,53 @@ mod tests {
         // regardless of its peer count.
         assert!(!should_redial_bootstrap_peers(0, 0));
         assert!(!should_redial_bootstrap_peers(3, 0));
+    }
+
+    // ---- Issue #1578: an isolated config never dials a hardcoded seed ----
+
+    #[tokio::test]
+    async fn isolated_config_never_dials_hardcoded_seeds() {
+        // `fallback_seeds = false` + DNS disabled + empty list. `run` dials
+        // exactly the resolved list at startup and the reconnect tick re-dials
+        // exactly that same list, so an empty resolution means no dial ever
+        // targets a hardcoded seed, on startup or on reconnect.
+        let mut network: crate::config::NetworkConfig = toml::from_str(
+            "bootstrap_peers = []\nfallback_seeds = false\n[dns_seeds]\nenabled = false\n",
+        )
+        .unwrap();
+        for network_type in [Network::Testnet, Network::Mainnet] {
+            let resolved = network.resolve_bootstrap_peers_async(network_type).await;
+            assert_eq!(resolved.source, crate::config::BootstrapSource::None);
+            let hardcoded = crate::network::fallback_seeds(network_type);
+            assert!(!hardcoded.is_empty());
+            // Startup dial list.
+            assert!(resolved.peers.iter().all(|p| !hardcoded.contains(p)));
+            assert!(resolved.peers.is_empty());
+            // Reconnect tick: with nothing resolved it never fires, at any
+            // peer count.
+            for peer_count in 0..4 {
+                assert!(!should_redial_bootstrap_peers(
+                    peer_count,
+                    resolved.peers.len()
+                ));
+            }
+        }
+
+        // Contrast: the same config with the default fallback re-dials the
+        // hardcoded seeds while under-connected (unchanged behaviour).
+        network.fallback_seeds = true;
+        let resolved = network
+            .resolve_bootstrap_peers_async(Network::Testnet)
+            .await;
+        assert_eq!(
+            resolved.source,
+            crate::config::BootstrapSource::FallbackSeeds
+        );
+        assert_eq!(
+            resolved.peers,
+            crate::network::fallback_seeds(Network::Testnet)
+        );
+        assert!(should_redial_bootstrap_peers(0, resolved.peers.len()));
     }
 
     // ---- Issue #770: startup sync gate — a restarted node behind the fleet
