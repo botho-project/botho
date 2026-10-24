@@ -22,3 +22,4 @@ jobs:
           python-version: '3.12'
       - run: python3 -m unittest discover -s scripts/stress -p 'test_*.py'
       - run: python3 scripts/stress/plan.py --plan scripts/stress/testnet-discovery-v2.json
+      - run: python3 scripts/stress/plan.py --plan scripts/stress/x-series-plan.json
