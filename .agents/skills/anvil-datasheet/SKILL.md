@@ -1,6 +1,6 @@
 ---
 name: anvil-datasheet
-description: Anvil skill registration for 'datasheet' (canonical body at .anvil/skills/datasheet/SKILL.md)
+description: "Draft, review, audit, and revise customer-facing IC / component datasheets — the spec-bearing document a customer designs against — using the standard anvil lifecycle with a mandatory spec source-of-truth audit."
 ---
 
 See `.anvil/skills/datasheet/SKILL.md` for the canonical skill body.

@@ -1,6 +1,6 @@
 ---
 name: anvil-spec
-description: Anvil skill registration for 'spec' (canonical body at .anvil/skills/spec/SKILL.md)
+description: "Draft, review, audit, revise, and illustrate normative technical specifications (protocol whitepapers, wire-format specs, consensus rules) maintained truthfully against an implementation, through the canonical anvil lifecycle. LaTeX source-of-truth with an optional PDF render; ends at AUDITED. Normative correctness is the owned dominant rubric dimension; an optional code_ref companion input feeds a spec↔implementation consistency audit."
 ---
 
 See `.anvil/skills/spec/SKILL.md` for the canonical skill body.

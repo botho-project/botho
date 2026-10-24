@@ -1,6 +1,6 @@
 ---
 name: anvil-memoir
-description: Anvil skill registration for 'memoir' (canonical body at .anvil/skills/memoir/SKILL.md)
+description: "Draft, review, revise, and audit chaptered narrative nonfiction (family memoirs, oral histories, biography-from-archive, interview-grounded long-form profiles) reconstructed from a private evidentiary corpus. Each chapter is its own thread under the same skill; AUDITED is the terminal state — no shortcut to READY. Assembles into a book via anvil:project-book."
 ---
 
 See `.anvil/skills/memoir/SKILL.md` for the canonical skill body.

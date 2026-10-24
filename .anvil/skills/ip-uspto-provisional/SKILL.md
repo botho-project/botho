@@ -94,7 +94,7 @@ A **mechanical pre-flight gate** (`ip-uspto-provisional-pre-flight`, issue #502)
 
 ### Render-gate threshold calibration + audit/finalize backstop (issue #572)
 
-The pre-flight render-gate (Check 9) and the audit render-gate **backstop** (Check 8 in `ip-uspto-provisional-audit.md`, added by issue #572) both call `anvil/lib/render_gate.py::compile_and_gate(...)` with `overfull_threshold_pt=2.0`, **tighter than** the framework default of 5.0pt in `anvil/lib/render_gate.py`. Rationale: a *filed* provisional shipped with a 83.6pt overfull (~16× the framework default; >40× the ip-skill override) because the entire review pipeline was text-content-based and the load-bearing gap was at audit/finalize — no backstop reinvoked the gate after the last pre-flight pass. The Phase-1 fix is the audit-time backstop (writes `<thread>.{N}.audit/_gate.json`) + the finalize pre-gate (reads it and refuses to assemble `<thread>.counsel/` when overfull-box findings are present), plus the 2.0pt call-site tighten — the framework default in `render_gate.py` remains 5.0pt to avoid disturbing the `installation`, `proposal`, `datasheet`, `paper`, `report` consumers. See `commands/ip-uspto-provisional-pre-flight.md` Check 9, `commands/ip-uspto-provisional-audit.md` Check 8, and `commands/ip-uspto-provisional-finalize.md` step 4b.
+The pre-flight render-gate (Check 9) and the audit render-gate **backstop** (Check 8 in `ip-uspto-provisional-audit.md`, added by issue #572) both call `anvil/lib/render_gate/compile_and_gate.py::compile_and_gate(...)` with `overfull_threshold_pt=2.0`, **tighter than** the framework default of 5.0pt in `anvil/lib/render_gate/`. Rationale: a *filed* provisional shipped with a 83.6pt overfull (~16× the framework default; >40× the ip-skill override) because the entire review pipeline was text-content-based and the load-bearing gap was at audit/finalize — no backstop reinvoked the gate after the last pre-flight pass. The Phase-1 fix is the audit-time backstop (writes `<thread>.{N}.audit/_gate.json`) + the finalize pre-gate (reads it and refuses to assemble `<thread>.counsel/` when overfull-box findings are present), plus the 2.0pt call-site tighten — the framework default in `render_gate.py` remains 5.0pt to avoid disturbing the `installation`, `proposal`, `datasheet`, `paper`, `report` consumers. See `commands/ip-uspto-provisional-pre-flight.md` Check 9, `commands/ip-uspto-provisional-audit.md` Check 8, and `commands/ip-uspto-provisional-finalize.md` step 4b.
 
 ## Command dispatch
 
@@ -172,7 +172,7 @@ See `rubric.md` for the 9-dimension **/45** schema (`anvil-ip-provisional-v1`), 
 
 `ip-uspto-provisional` is registered as a **skill-identity**
 `artifact_type` value in the shared project-BRIEF registry
-(`anvil/lib/project_brief.py::REGISTERED_ARTIFACT_TYPES` /
+(`anvil/lib/project_brief/types.py::REGISTERED_ARTIFACT_TYPES` /
 `SKILL_IDENTITY_ARTIFACT_TYPES`; issue #440, following the
 #386/#408/#432 pattern for `deck`/`slides`/`proposal`/`paper`/`report`).
 In a shared project BRIEF, a `documents:` entry with

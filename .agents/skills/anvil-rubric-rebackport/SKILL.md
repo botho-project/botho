@@ -1,6 +1,6 @@
 ---
 name: anvil-rubric-rebackport
-description: Anvil skill registration for 'rubric-rebackport' (canonical body at .anvil/skills/rubric-rebackport/SKILL.md)
+description: "Bridge tool that stamps legacy /40 reviews with their rubric_id (and optionally re-scores them under the current /44 rubric into a sibling sidecar). Dry-run first; idempotent; per-review atomic."
 ---
 
 See `.anvil/skills/rubric-rebackport/SKILL.md` for the canonical skill body.

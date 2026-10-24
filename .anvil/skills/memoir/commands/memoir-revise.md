@@ -27,7 +27,7 @@ combined verdict pre-check passes.
    SKILL.md). Require `<thread>.{N+1}/` to not exist (immutability —
    never revise in place).
 2. **Combined verdict pre-check**: re-resolve
-   `anvil/lib/project_brief.py::resolve_corpus_dirs(<project_dir>)` to
+   `anvil/lib/project_brief/voice.py::resolve_corpus_dirs(<project_dir>)` to
    determine whether the corpus tier is currently active (the same
    check `memoir-audit` used when it ran). Read
    `<thread>.{N}.review/verdict.md` and `<thread>.{N}.audit/verdict.md`,
@@ -55,7 +55,7 @@ combined verdict pre-check passes.
    **Resolution order — first match wins:**
 
    1. The matching `documents:` entry in `<project>/BRIEF.md` (via
-      `anvil/lib/project_brief.py::load_project_brief` +
+      `anvil/lib/project_brief/loader.py::load_project_brief` +
       `ProjectBrief.document_for_slug(slug)`). When `doc.max_iterations`
       AND `doc.iteration_cap_rationale` are BOTH set, use
       `doc.max_iterations` as the effective cap, carry the rationale
@@ -68,7 +68,7 @@ combined verdict pre-check passes.
    2. Else `metadata.max_iterations` from `<thread>.{N}/_progress.json`
       (typically the default 4 carried forward by the prior drafter /
       reviser pass).
-   3. Else `anvil/lib/project_brief.py::DEFAULT_MAX_ITERATIONS` (4).
+   3. Else `anvil/lib/project_brief/types.py::DEFAULT_MAX_ITERATIONS` (4).
 
    If the BRIEF cannot be loaded at all (absent, malformed YAML), fall
    through to (2)/(3) — `load_project_brief` returns `None` on every

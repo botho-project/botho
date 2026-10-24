@@ -1,6 +1,6 @@
 ---
 name: memoir-figures
-description: Figurer for the memoir skill. Renders diagrams (mmdc → PNG) and resolves the memoir-local photo-placement macros (\famphoto/\fullphoto/\marginphoto) against anvil:project-photos' manifest.json, plus an optional PDF from the LaTeX source, reusing anvil/lib/render.py + anvil/lib/render_gate.py. No new rendering pipeline. Runs any time after draft/revise (no AUDITED gate).
+description: Figurer for the memoir skill. Renders diagrams (mmdc → PNG) and resolves the memoir-local photo-placement macros (\famphoto/\fullphoto/\marginphoto) against anvil:project-photos' manifest.json, plus an optional PDF from the LaTeX source, reusing anvil/lib/render.py + anvil/lib/render_gate/. No new rendering pipeline. Runs any time after draft/revise (no AUDITED gate).
 ---
 
 # memoir-figures — Figurer
@@ -31,7 +31,7 @@ A memoir chapter's body is LaTeX (SKILL.md §Output format):
   already references them via `\includegraphics{exhibits/figN-slug.png}`.
 - **PDF via the LaTeX pipeline** — `<thread>.pdf` is produced from
   `<thread>.tex` via `anvil/lib/render.py`'s LaTeX/xelatex path, gated by
-  `anvil/lib/render_gate.py` (the LaTeX-skill analog of `marp_lint`).
+  `anvil/lib/render_gate/` (the LaTeX-skill analog of `marp_lint`).
   **No third rendering path is invented.**
 
 ## Photo-placement macro resolution (memoir-local, new work)
@@ -101,7 +101,7 @@ and PDF rendering (graceful degradation).
 4. **Resolve photo-placement macros**: per §Photo-placement macro
    resolution above.
 5. **Render-gate pre-flight (deterministic)**: run
-   `anvil/lib/render_gate.py` over the LaTeX render inputs (placeholder
+   `anvil/lib/render_gate/` over the LaTeX render inputs (placeholder
    scan, compile-success check) before the expensive PDF render.
 6. **Produce the optional PDF**: invoke `anvil/lib/render.py` to render
    `<thread>.tex` → `<thread>.{N}/<thread>.pdf` via the xelatex/LaTeX
@@ -131,7 +131,7 @@ and PDF rendering (graceful degradation).
   The body already contains the macro calls the drafter/reviser placed;
   the figurer only fills in / resolves what those calls point at.
 - **Never invents a rendering pipeline** — reuses `anvil/lib/render.py`
-  (LaTeX/xelatex) + `anvil/lib/render_gate.py`.
+  (LaTeX/xelatex) + `anvil/lib/render_gate/`.
 - **Never mutates `manifest.json` or any source photo** — strictly
   read-only consumption of `project-photos`' output.
 - **Never advances the state machine** — figures are collateral.

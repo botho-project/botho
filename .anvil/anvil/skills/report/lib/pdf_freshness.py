@@ -9,7 +9,7 @@ part on whether ``report.pdf`` exists; this module is how the reviewer
 actually enforces that.
 
 **Why this exists (and is additive over #64's render-gate)**: the
-render-gate at ``anvil/lib/render_gate.py`` is invoked in
+render-gate at ``anvil/lib/render_gate/`` is invoked in
 ``report-review`` step 4b, but step 4b deliberately makes the gate
 fail open on a missing ``report.pdf`` — the comment at L50 of
 ``report-review.md`` is explicit: "the gate fails open with a clear

@@ -1,7 +1,7 @@
 """Deterministic numeric-consistency gate (issue #462).
 
 Fourth member of the deterministic-checks family (alongside
-``anvil/lib/render_gate.py``, ``anvil/lib/marp_lint.py``,
+``anvil/lib/render_gate/``, ``anvil/lib/marp_lint.py``,
 ``anvil/lib/revise_consistency.py``, and ``anvil/lib/scorecard_check.py``).
 It catches the **claim-vs-claim** numeric failure mode bred at the
 rjwalters.info consumer (the "spread failure"): a body paragraph names
