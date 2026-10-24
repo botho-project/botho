@@ -159,7 +159,18 @@ class DiscoveryController(Controller):
     async def observe_fees(self):
         while not self.closed:
             try:
+                # A host the active degrade step names is skipped (and the
+                # skip recorded); every other host still fails closed.
+                view = self.fault_view()
+                live = self.live_hosts(view=view)
                 for host in HOSTS:
+                    if host not in live:
+                        self.j.event(
+                            None,
+                            "fee_quote_skipped",
+                            {"host": host, "step": view["step"], "at": time.time()},
+                        )
+                        continue
                     quote = await self.rpc.call(host, "fee_getRate")
                     evidence = quote_evidence(
                         quote, self.statuses[host], host, time.time()
@@ -170,15 +181,16 @@ class DiscoveryController(Controller):
                     self.j.set("fee_latest", latest)
                 # Preserve each finalized block's observed transaction count/hash.
                 # Bounded catch-up never claims observation of skipped blocks.
-                tip = min(s["chainHeight"] for s in self.statuses.values())
+                tip = self.fleet_height()
                 previous = self.j.get("fee_block_height", tip - 1)
                 if tip - previous > 32:
                     self.j.event(
                         None, "fee_block_gap", {"from": previous + 1, "to": tip - 32}
                     )
                 for height in range(max(previous + 1, tip - 31), tip + 1):
+                    live = self.live_hosts()
                     block = await self.rpc.call(
-                        HOSTS[height % 5], "getBlockByHeight", {"height": height}
+                        live[height % len(live)], "getBlockByHeight", {"height": height}
                     )
                     self.j.event(
                         None,
@@ -438,9 +450,20 @@ class DiscoveryController(Controller):
         if phase is None:
             return
         if phase["id"] != self.j.get("active_phase"):
-            earlier = self.j.rows(
-                "kind='campaign' AND offered<?", (start + phase["start_hour"] * 3600,)
-            )
+            boundary = start + phase["start_hour"] * 3600
+            # Receipts a finished step deferred must be verified on every host
+            # before a boundary; that is never a drain wait (#1587). A step
+            # still open at the boundary (D1 starts with its phase) is not due.
+            ends = {w["step"]: w["window_end"] for w in self.degrade_windows()}
+            due = [
+                r
+                for r in self.deferred_rows()
+                if ends.get(json.loads(r["info"]).get("deferred_step"), boundary)
+                <= boundary
+            ]
+            if due:
+                raise Gate("deferred step receipts unverified at phase boundary: " + due[0]["id"])
+            earlier = self.j.rows("kind='campaign' AND offered<?", (boundary,))
             failed = [
                 r
                 for r in earlier
@@ -457,7 +480,6 @@ class DiscoveryController(Controller):
             if failed:
                 raise Gate("generator_limited: previous phase delivery incomplete")
             if self.j.pending() or any(r["state"] != "reconciled" for r in earlier):
-                boundary = start + phase["start_hour"] * 3600
                 self.j.set(
                     "boundary_drain", {"phase": phase["id"], "seconds": now - boundary}
                 )

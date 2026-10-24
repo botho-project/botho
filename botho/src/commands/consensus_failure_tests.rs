@@ -3,7 +3,11 @@
 //! these tests do not assert that SCP would externalize the invalid fixture.
 
 use super::*;
-use crate::consensus::ConsensusValue;
+use crate::{
+    block::{calculate_block_reward, difficulty::EmissionController, Block},
+    consensus::ConsensusValue,
+    ledger::Ledger,
+};
 use bth_transaction_types::constants::Network;
 use std::{
     fs,
@@ -20,19 +24,46 @@ pub(super) struct FailureTestHooks {
     initial_slot: Option<u64>,
     delivered: usize,
     cached_hash: Option<[u8; 32]>,
-    /// Slept inside the off-loop apply job, before the commit (#1565).
+    /// Slept inside every off-loop apply job, before the commit (#1565).
     pub(super) apply_delay: Option<Duration>,
     /// Incremented on every `consensus_tick` arm (#1565).
     ticks: Arc<AtomicU64>,
-    /// One sample per consensus tick: the SCP slot and whether an
-    /// externalized apply was in flight at that tick (#1565).
+    /// One sample per consensus tick: the SCP slot and whether an apply job
+    /// was queued or in flight at that tick (#1565, #1566).
     samples: Arc<Mutex<Vec<TickSample>>>,
+    /// Network blocks the tick arm feeds to the production enqueue
+    /// functions (#1566).
+    network_blocks: mpsc::Receiver<InjectedBlocks>,
+    /// One sample per non-consensus apply completion (#1566).
+    completions: Arc<Mutex<Vec<CompletionSample>>>,
+}
+
+/// Blocks injected as if they had arrived from the network (#1566).
+pub(super) enum InjectedBlocks {
+    /// A `NetworkEvent::NewBlock`.
+    Gossip(Block),
+    /// A `SyncResponse::Blocks` batch the sync manager handed back.
+    Sync(libp2p::PeerId, Vec<Block>),
 }
 
 #[derive(Debug, Clone, Copy)]
 struct TickSample {
     slot: u64,
+    /// An apply job was queued or in flight.
     in_flight: bool,
+    at: Instant,
+}
+
+/// Which completion hooks a non-consensus apply job ran (#1566).
+#[derive(Debug, Clone, Copy)]
+struct CompletionSample {
+    source: &'static str,
+    committed: usize,
+    failed: bool,
+    /// Sync only: `on_blocks_added` (+ chain state, #419 reconcile) ran.
+    blocks_added: bool,
+    /// Sync only: #644 `on_zero_progress` ran.
+    zero_progress: bool,
     at: Instant,
 }
 
@@ -78,6 +109,28 @@ impl FailureTestHooks {
         self.samples.lock().unwrap().push(TickSample {
             slot: consensus.current_slot(),
             in_flight,
+            at: Instant::now(),
+        });
+    }
+
+    pub(super) fn take_network_blocks(&mut self) -> Vec<InjectedBlocks> {
+        self.network_blocks.try_iter().collect()
+    }
+
+    pub(super) fn on_apply_completion(
+        &mut self,
+        source: &'static str,
+        committed: usize,
+        failed: bool,
+        blocks_added: bool,
+        zero_progress: bool,
+    ) {
+        self.completions.lock().unwrap().push(CompletionSample {
+            source,
+            committed,
+            failed,
+            blocks_added,
+            zero_progress,
             at: Instant::now(),
         });
     }
@@ -193,14 +246,78 @@ struct Harness {
     permit_persist: mpsc::Sender<()>,
     ticks: Arc<AtomicU64>,
     samples: Arc<Mutex<Vec<TickSample>>>,
+    network_blocks: mpsc::Sender<InjectedBlocks>,
+    completions: Arc<Mutex<Vec<CompletionSample>>>,
     worker: std::thread::JoinHandle<()>,
 }
 
 fn spawn_harness(apply_delay: Option<Duration>) -> Harness {
+    spawn_harness_with(apply_delay, false)
+}
+
+/// Seed a testnet ledger at `path` whose chain difficulty is trivial, so a
+/// handful of RandomX hashes finds a valid block (as `map_full_tests` does).
+fn seed_trivial_pow_ledger(path: &std::path::Path) -> Ledger {
+    let ledger = Ledger::open(path).unwrap();
+    ledger.set_difficulty(u64::MAX).unwrap();
+    ledger
+}
+
+/// A chain of `count` valid blocks on top of a trivial-PoW genesis, built
+/// by the production commit function on a scratch ledger, so emission and
+/// difficulty evolve exactly as they will on the node under test.
+fn valid_chain(scratch: &std::path::Path, count: u64) -> Vec<Block> {
+    let ledger = seed_trivial_pow_ledger(scratch);
+    let state = ledger.get_chain_state().unwrap();
+    let mut controller = EmissionController::from_chain_state(
+        state.difficulty,
+        state.total_mined,
+        state.total_fees_burned,
+        state.total_tx,
+        state.epoch_tx,
+        state.epoch_emission,
+        state.epoch_burns,
+        state.current_reward,
+    );
+    let ledger: SharedLedger = Arc::new(RwLock::new(ledger));
+    let wallet = Wallet::from_mnemonic("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap();
+    let minter = wallet.default_address();
+    let mut blocks = Vec::new();
+    for _ in 0..count {
+        let state = ledger.read().unwrap().get_chain_state().unwrap();
+        let mut block = Block::new_template_with_txs(
+            &Block::genesis(),
+            &minter,
+            state.difficulty,
+            calculate_block_reward(state.height + 1, state.total_mined),
+            vec![],
+        );
+        block.header.height = state.height + 1;
+        block.header.prev_block_hash = state.tip_hash;
+        block.header.timestamp = block.header.timestamp.max(state.tip_timestamp);
+        block.minting_tx.block_height = block.header.height;
+        block.minting_tx.prev_block_hash = state.tip_hash;
+        block.minting_tx.timestamp = block.header.timestamp;
+        while !block.header.is_valid_pow() {
+            block.header.nonce += 1;
+        }
+        block.minting_tx.nonce = block.header.nonce;
+        commit_block_locked(&ledger, &mut controller, &block).unwrap();
+        blocks.push(block);
+    }
+    blocks
+}
+
+fn spawn_harness_with(apply_delay: Option<Duration>, trivial_pow: bool) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let data_dir = dir.path().join("node");
     fs::create_dir(&data_dir).unwrap();
     let config_path = data_dir.join("config.toml");
+    if trivial_pow {
+        drop(seed_trivial_pow_ledger(
+            &crate::config::ledger_db_path_from_config(&config_path),
+        ));
+    }
     // Reserve an ephemeral RPC port; gossip also uses an ephemeral port. The
     // only configured bootstrap destination is loopback port zero, so neither
     // DNS nor public fallback seeds are contacted by this private fixture.
@@ -228,6 +345,9 @@ fn spawn_harness(apply_delay: Option<Duration>) -> Harness {
     let ticks = Arc::new(AtomicU64::new(0));
     let samples = Arc::new(Mutex::new(Vec::new()));
     let (worker_ticks, worker_samples) = (ticks.clone(), samples.clone());
+    let (network_blocks, network_blocks_rx) = mpsc::channel();
+    let completions = Arc::new(Mutex::new(Vec::new()));
+    let worker_completions = completions.clone();
     let worker_apply_delay = apply_delay;
     drop(reservation);
     let worker = std::thread::spawn(move || {
@@ -255,6 +375,8 @@ fn spawn_harness(apply_delay: Option<Duration>) -> Harness {
                         apply_delay: worker_apply_delay,
                         ticks: worker_ticks,
                         samples: worker_samples,
+                        network_blocks: network_blocks_rx,
+                        completions: worker_completions,
                     }),
                 ),
             )
@@ -289,6 +411,8 @@ fn spawn_harness(apply_delay: Option<Duration>) -> Harness {
         permit_persist,
         ticks,
         samples,
+        network_blocks,
+        completions,
         worker,
     }
 }
@@ -528,4 +652,251 @@ fn externalized_apply_runs_off_loop_and_advances_slot_once_after_completion() {
 #[test]
 fn delayed_externalized_application_failure_stops_loop_unchanged() {
     exercise_failure_with_delay(true, false, Some(APPLY_DELAY));
+}
+
+// ---- #1566: every apply path runs off the node loop ----
+
+/// Wait until the tick samples show an apply job become busy and then idle
+/// again, and return them.
+fn wait_busy_then_idle(harness: &Harness) -> Vec<TickSample> {
+    let deadline = Instant::now() + Duration::from_secs(25);
+    loop {
+        let samples = harness.samples.lock().unwrap().clone();
+        let finished = samples
+            .iter()
+            .position(|sample| sample.in_flight)
+            .is_some_and(|first| samples[first..].iter().any(|sample| !sample.in_flight));
+        if finished {
+            return samples;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "apply never completed: {samples:?}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Wait until at least one tick saw an apply job queued or in flight.
+fn wait_busy(harness: &Harness) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !harness
+        .samples
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|sample| sample.in_flight)
+    {
+        assert!(Instant::now() < deadline, "apply never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// The ticks sampled while an apply was busy. Asserts the loop kept ticking
+/// across the injected delay in real time. A count alone is not enough: a
+/// loop blocked on the apply replays its missed ticks in a burst (tokio's
+/// default `MissedTickBehavior::Burst`) once the apply returns, so the span
+/// is what proves liveness.
+fn assert_ticks_spread_over(samples: &[TickSample], delay: Duration) -> (usize, usize) {
+    let first = samples.iter().position(|sample| sample.in_flight).unwrap();
+    let after = first
+        + samples[first..]
+            .iter()
+            .position(|sample| !sample.in_flight)
+            .unwrap();
+    let during = &samples[first..after];
+    assert!(
+        during.len() >= 4,
+        "node loop stopped ticking during the apply: {samples:?}"
+    );
+    let span = during.last().unwrap().at - during[0].at;
+    assert!(
+        span >= delay / 2,
+        "busy ticks were not spread over the apply ({span:?}): {samples:?}"
+    );
+    (first, after)
+}
+
+/// Shut the harness down cleanly and return what the loop saw at stop.
+fn stop_cleanly(harness: Harness) -> Stopped {
+    harness.shutdown.store(true, Ordering::SeqCst);
+    let stopped = harness
+        .stopped
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
+    harness
+        .before_persist
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
+    harness.permit_persist.send(()).unwrap();
+    assert!(harness
+        .finished
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .is_ok());
+    assert!(
+        !consensus_failure::marker_path(&harness.config_path).exists(),
+        "a non-consensus apply must never write terminal evidence"
+    );
+    harness.worker.join().unwrap();
+    stopped
+}
+
+/// #1566 loop liveness, gossip path: a gossiped block is fed through the
+/// production `enqueue_network_block` (the `NewBlock` arm's entry point) and
+/// applied off the loop. During a 3 s apply the loop keeps ticking, spread
+/// over the delay. The block has no valid parent or PoW, so the commit
+/// fails, and that failure is not terminal.
+#[test]
+fn gossip_apply_runs_off_loop_and_failure_is_non_terminal() {
+    let harness = spawn_harness(Some(APPLY_DELAY));
+    let mut socket = connect_rpc(harness.addr);
+    establish_rpc_keep_alive(&mut socket);
+    // Contiguous with the genesis tip, so it is queued, not dropped.
+    let mut block = Block::genesis();
+    block.header.height = 1;
+    block.minting_tx.block_height = 1;
+    let sent = Instant::now();
+    harness
+        .network_blocks
+        .send(InjectedBlocks::Gossip(block))
+        .unwrap();
+
+    let samples = wait_busy_then_idle(&harness);
+    assert_ticks_spread_over(&samples, APPLY_DELAY);
+    let completions = harness.completions.lock().unwrap().clone();
+    assert_eq!(completions.len(), 1, "{completions:?}");
+    let completion = completions[0];
+    assert_eq!(completion.source, "gossip");
+    assert_eq!(completion.committed, 0);
+    assert!(completion.failed, "the invalid block must fail to commit");
+    assert!(completion.at - sent >= APPLY_DELAY);
+    // The loop survived the failure and still serves the existing connection.
+    establish_rpc_keep_alive(&mut socket);
+
+    let stopped = stop_cleanly(harness);
+    assert_eq!(stopped.ledger_height, 0);
+    assert_eq!(stopped.delivered, 0);
+}
+
+/// #1566 loop liveness, sync path: one multi-block sync batch is fed through
+/// the production `enqueue_sync_batch` (the `SyncResponse::Blocks` arm's
+/// entry point) and applied as ONE off-loop job. The loop keeps ticking
+/// across the delay; the batch's completion hooks run exactly once, after
+/// the job completes, and all blocks commit. Re-serving the same batch is a
+/// pure overlap: it commits nothing and drives #644 `on_zero_progress`
+/// once, not `on_failure`.
+#[test]
+fn sync_batch_apply_runs_off_loop_and_hooks_run_once_after_completion() {
+    let scratch = tempfile::tempdir().unwrap();
+    let blocks = valid_chain(scratch.path(), 3);
+    let harness = spawn_harness_with(Some(APPLY_DELAY), true);
+    let mut socket = connect_rpc(harness.addr);
+    establish_rpc_keep_alive(&mut socket);
+    let peer = libp2p::PeerId::random();
+    let sent = Instant::now();
+    harness
+        .network_blocks
+        .send(InjectedBlocks::Sync(peer, blocks.clone()))
+        .unwrap();
+
+    let samples = wait_busy_then_idle(&harness);
+    assert_ticks_spread_over(&samples, APPLY_DELAY);
+    let completions = harness.completions.lock().unwrap().clone();
+    assert_eq!(
+        completions.len(),
+        1,
+        "batch hooks must run exactly once: {completions:?}"
+    );
+    let completion = completions[0];
+    assert_eq!(completion.source, "sync");
+    assert_eq!(completion.committed, 3);
+    assert!(!completion.failed);
+    assert!(completion.blocks_added, "on_blocks_added must run");
+    assert!(!completion.zero_progress);
+    assert!(
+        completion.at - sent >= APPLY_DELAY,
+        "hooks ran before the job completed"
+    );
+
+    // Pure overlap (#641/#644).
+    let resent = harness.samples.lock().unwrap().len();
+    harness
+        .network_blocks
+        .send(InjectedBlocks::Sync(peer, blocks))
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while harness.completions.lock().unwrap().len() < 2 {
+        assert!(Instant::now() < deadline, "overlap batch never completed");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let completions = harness.completions.lock().unwrap().clone();
+    assert_eq!(completions.len(), 2, "{completions:?}");
+    let overlap = completions[1];
+    assert_eq!(overlap.source, "sync");
+    assert_eq!(overlap.committed, 0);
+    assert!(
+        !overlap.failed,
+        "an overlap must not be reported as a failure"
+    );
+    assert!(!overlap.blocks_added);
+    assert!(
+        overlap.zero_progress,
+        "an overlap must drive on_zero_progress"
+    );
+    assert!(harness.samples.lock().unwrap().len() > resent);
+
+    let stopped = stop_cleanly(harness);
+    assert_eq!(stopped.ledger_height, 3);
+}
+
+/// #1566 / #421: our own decision for height 1, queued behind a gossiped
+/// block for the same height, is NOT dropped at enqueue. It runs after the
+/// gossip commit, is classified a benign duplicate by
+/// `height_already_applied`, and `advance_slot` runs exactly once, after
+/// both jobs completed in order.
+#[test]
+fn consensus_job_behind_same_height_gossip_is_benign_duplicate_and_advances_once() {
+    let scratch = tempfile::tempdir().unwrap();
+    let block = valid_chain(scratch.path(), 1).remove(0);
+    let harness = spawn_harness_with(Some(APPLY_DELAY), true);
+    let mut socket = connect_rpc(harness.addr);
+    establish_rpc_keep_alive(&mut socket);
+    harness
+        .network_blocks
+        .send(InjectedBlocks::Gossip(block))
+        .unwrap();
+    wait_busy(&harness);
+    let wallet = Wallet::from_mnemonic("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap();
+    let decision = MintingTx::new(1, 0, &wallet.default_address(), [0; 32], u64::MAX, 1);
+    harness.decisions.send(vec![Some(decision)]).unwrap();
+
+    let samples = wait_busy_then_idle(&harness);
+    let (first, after) = assert_ticks_spread_over(&samples, APPLY_DELAY * 2);
+    let completions = harness.completions.lock().unwrap().clone();
+    assert_eq!(completions.len(), 1, "{completions:?}");
+    assert_eq!(completions[0].source, "gossip");
+    assert_eq!(
+        completions[0].committed, 1,
+        "the gossiped block commits first"
+    );
+    let slot_before = samples[first].slot;
+    assert!(
+        samples[first..after]
+            .iter()
+            .all(|sample| sample.slot == slot_before),
+        "slot advanced before the consensus job completed: {samples:?}"
+    );
+    assert!(
+        samples[after..]
+            .iter()
+            .all(|sample| sample.slot == slot_before + 1),
+        "slot must advance exactly once, after completion: {samples:?}"
+    );
+
+    let stopped = stop_cleanly(harness);
+    assert_eq!(stopped.delivered, 1);
+    assert_eq!(stopped.initial_slot, slot_before);
+    assert_eq!(stopped.final_slot, stopped.initial_slot + 1);
+    assert_eq!(stopped.ledger_height, 1);
 }

@@ -308,18 +308,10 @@ impl Node {
         self.print_status()
     }
 
-    /// Add a block received from the network (inline apply path).
-    ///
-    /// Commits under the apply mutex ([`commit_block`]) and then runs the
-    /// loop-side post-commit step ([`Self::after_block_commit`]).
-    pub fn add_block_from_network(&mut self, block: &crate::block::Block) -> Result<()> {
-        let new_difficulty = commit_block(&self.ledger, &self.apply_state, block)?;
-        self.after_block_commit(block, new_difficulty);
-        Ok(())
-    }
-
-    /// The block-apply mutex (#1565). The off-loop consensus apply job holds
-    /// it across the lottery computation and [`commit_block_locked`].
+    /// The block-apply mutex (#1565). Every off-loop apply job (#1566) holds
+    /// it for the whole job: across the lottery computation and
+    /// [`commit_block_locked`] for a consensus job, across every block of a
+    /// sync batch.
     pub fn apply_state(&self) -> ApplyState {
         self.apply_state.clone()
     }
@@ -539,25 +531,11 @@ impl Node {
     }
 }
 
-/// Commit `block` to the ledger, locking the apply mutex for the whole
-/// apply (#1565). Returns the post-block difficulty. `Send`: needs no
-/// `&mut Node`, so it can run inside `spawn_blocking`.
-pub fn commit_block(
-    ledger: &SharedLedger,
-    apply_state: &ApplyState,
-    block: &crate::block::Block,
-) -> Result<u64> {
-    let mut controller = apply_state
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Apply state lock poisoned"))?;
-    commit_block_locked(ledger, &mut controller, block)
-}
-
 /// Commit `block` with the apply mutex ALREADY held by the caller
-/// (`controller` is the guarded emission controller). Used by the consensus
-/// apply job, which must hold one guard across `apply_lottery_to_block` and
-/// this commit so the lottery sees exactly the state `add_block_inner`
-/// validates against.
+/// (`controller` is the guarded emission controller). The only commit path:
+/// used by every off-loop apply job (#1566). A consensus job holds one guard
+/// across `apply_lottery_to_block` and this commit so the lottery sees
+/// exactly the state `add_block_inner` validates against.
 ///
 /// Parent-timestamp read, emission `record_block`, the single-txn commit and
 /// the controller adopt all happen under that one guard. No ledger write lock:
