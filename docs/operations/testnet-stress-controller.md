@@ -196,6 +196,63 @@ escalation. Existing journal crash/ambiguous-submit checks apply to both profile
 V2 restores a wallet but does not automatically kill validators or restart a
 controller; those fault semantics continue to have offline fault-injection tests.
 
+### Degrade phase plan (x-series)
+
+`x-series-plan.json` is the v2 plan with one scoped exception: a scripted
+`degrade` phase that faults validators on the **isolated qualification fleet**
+and checks recovery. It is **never** for the public testnet. Schema v1 (the
+public-testnet format) rejects `faults.validator_degrade_phase` and any
+`degrade` block, and v2 still rejects every `public_*` fault key, `isolated_only`
+other than `true`, and public ingresses.
+
+- **Opt-in.** `faults.validator_degrade_phase: true`, accepted only by the
+  isolated v2 planner. An absent key means `false`. The opt-in and a top-level
+  `degrade` block require each other.
+- **Block.** `degrade.phase` names a plan phase, `producer_role` names the
+  minting producer (`n3` on the qualification fleet), and `steps` lists the
+  faults. Each step has exactly `id`, `action`, `targets`, `start_seconds`
+  (from the phase start), `fault_seconds` (60–3600), `recovery_seconds`
+  (300–3600), `offers` (`continue` or `none`) and `expect` (`progress` or
+  `safe_halt`). Actions: `stop_restart` (`systemctl stop`, SIGTERM),
+  `kill_restart` (SIGKILL), `isolate` (no restart), `netem` (also requires
+  integer `loss_percent` 0–50 and `delay_ms` 0–2000) and `stop_restart_pair`.
+- **Rules.** Steps are ordered and lie wholly inside the named phase, recovery
+  included, so only one is active at a time. Targets are distinct `n1`–`n5`
+  roles and never the producer. Single-target actions take one target;
+  `stop_restart_pair` takes two and, being below the 4-of-5 quorum, must be
+  `expect: safe_halt` with `offers: none`. For an `offers: none` step no
+  campaign offer may fall in `[fault_start − 300 s, window_end)`, so in-flight
+  payments confirm before quorum is lost.
+- **Expanded schedule.** With the opt-in, the summary carries `degrade_steps`:
+  `id`, `action`, `targets`, `target_hosts` (the `runtime.HOSTS` strings,
+  `n1`–`n5` in order), `offers`, `expect`, the netem parameters on `netem`
+  steps, and three integer offsets in seconds from campaign start:
+  `fault_start_offset` (fault applied), `restore_offset` (= fault start +
+  `fault_seconds`; the executor restarts, un-isolates or removes netem) and
+  `window_end_offset` (= restore + `recovery_seconds`; the node must have
+  rejoined and the step verdict is taken). This is the one schedule the
+  restart gate, controller tolerance, fault executor and verdicts read.
+  Without the opt-in the key is absent and existing summaries are unchanged.
+  In `rehearsal_only` mode the block is still validated but `degrade_steps` is
+  empty: no fault is scheduled.
+
+The x-series plan keeps every v2 budget and the seed, and splits the old
+48–72 `repeat` into `degrade` 48–54 and `repeat` 54–72 (22,480 campaign
+offers). The degrade phase offers at 4/minute from 48 h (880 offers, last at
++13,185 s) and again from 52.5 h (360 offers), leaving D5 and its lead quiet:
+
+| Step | Action | Target | Fault start → restore → window end (s after 48 h) | Offers | Expect |
+| --- | --- | --- | --- | --- | --- |
+| D1 | `stop_restart` | n1 | 0 → 1800 → 3600 | continue | progress |
+| D2 | `kill_restart` | n2 | 3600 → 4200 → 6000 | continue | progress |
+| D3 | `isolate` | n4 | 6000 → 7800 → 9600 | continue | progress |
+| D4 | `netem` 20 % loss, 250 ms | n5 | 9600 → 11400 → 13200 | continue | progress |
+| D5 | `stop_restart_pair` | n1, n2 | 13500 → 14100 → 15900 | none | safe_halt |
+
+15,900–21,600 s is an in-phase soak, followed by the 54–72 h post-fault soak.
+The producer `n3` is never faulted. `node_commit` and `genesis` are per-run
+pins set in the staged copy, as are any netem adjustments.
+
 ### Rehearsal-only live qualification
 
 Before committing to a new 72-hour campaign, use a **fresh** isolated v2 plan
