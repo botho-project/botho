@@ -166,3 +166,6 @@ __pycache__/
 /.squad/squad.db
 /.squad/squad.db-shm
 /.squad/squad.db-wal
+
+# Session handoff note (/repo:handoff) - session state, never committed.
+.claude/handoff.md
