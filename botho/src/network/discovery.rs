@@ -1260,13 +1260,15 @@ impl NetworkDiscovery {
                                 "Rate limited message from peer"
                             );
                             crate::rpc::metrics::record_gossip_rate_limited(message_type);
-                            if let Some(dropped) =
-                                self.rate_limit_log.record_drop(&peer, Instant::now())
-                            {
+                            if let Some(summary) = self.rate_limit_log.record_drop(
+                                &peer,
+                                crate::rpc::metrics::gossip_message_type_label(message_type),
+                                Instant::now(),
+                            ) {
                                 warn!(
                                     %peer,
-                                    ?message_type,
-                                    dropped,
+                                    dropped = summary.total(),
+                                    by_type = %summary,
                                     violations,
                                     "Rate limited messages from peer (dropped since last summary)"
                                 );

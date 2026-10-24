@@ -16,13 +16,22 @@
 //!
 //! - **Exponential backoff per tx.** After the k-th send the tx is not sent
 //!   again for `base * 2^(k-1)`, capped at `cap` (30 s, 60 s, 120 s, ... 10 min
-//!   by default).
-//! - **Stall gate.** While the SCP slot is stalled nothing can confirm, so
-//!   re-broadcasts are pointless load. [`RebroadcastSchedule::should_send`]
-//!   returns `false` for every tx while the stall flag is set.
-//! - **Reset on recovery.** When the stall clears (the slot externalized again)
+//!   by default). This alone bounds the flood: a 100 ms re-feed over 10 min
+//!   sends a tx 5 times, not 6,000.
+//! - **No stall gate.** Re-broadcasts keep going on the backoff schedule while
+//!   the SCP slot is stalled. A peer validates a nominated transfer only if it
+//!   holds the tx bytes, and gossip is the only way it gets them. If a
+//!   validator missed the first relay, the slot stalls on that tx, and the
+//!   re-send is what heals the stall. An earlier draft of #1547 suppressed all
+//!   re-broadcasts while stalled. That turned such a stall into a permanent
+//!   halt.
+//! - **Reset on recovery.** When a stall clears (the slot externalized again)
 //!   all backoff state is dropped, so every still-pending tx gets one immediate
 //!   send instead of waiting out a backoff of up to `cap`.
+//! - **Reset on peer connect.** A newly connected peer has seen none of the
+//!   pending txs. [`RebroadcastSchedule::reset_all`] drops the backoff state so
+//!   the peer gets them at once, not after up to `cap` (#674). This also covers
+//!   a validator that restarted with an empty tx cache.
 //! - **Pruning.** Entries for txs that left the mempool (confirmed or evicted)
 //!   are removed via [`RebroadcastSchedule::prune`].
 //!
@@ -47,7 +56,8 @@ struct Entry {
     sends: u32,
 }
 
-/// Per-tx rebroadcast backoff with an SCP-stall gate. See the module docs.
+/// Per-tx rebroadcast backoff, reset on SCP recovery and peer connect. See
+/// the module docs.
 #[derive(Debug)]
 pub struct RebroadcastSchedule {
     entries: HashMap<[u8; 32], Entry>,
@@ -101,12 +111,10 @@ impl RebroadcastSchedule {
     /// Whether a re-broadcast of `hash` should go out now. Records the send
     /// when it returns `true`.
     ///
-    /// Returns `false` for every tx while the SCP slot is stalled. A tx the
-    /// schedule has never seen is due immediately.
+    /// Only the per-tx backoff decides. The SCP stall flag does not suppress
+    /// sends (see the module docs). A tx the schedule has never seen is due
+    /// immediately.
     pub fn should_send(&mut self, hash: [u8; 32], now: Instant) -> bool {
-        if self.slot_stalled {
-            return false;
-        }
         let due = match self.entries.get(&hash) {
             None => true,
             Some(e) => now.saturating_duration_since(e.last_sent) >= self.backoff_after(e.sends),
@@ -131,9 +139,19 @@ impl RebroadcastSchedule {
         recovered
     }
 
-    /// Whether re-broadcasts are currently paused by the stall gate.
-    pub fn is_paused(&self) -> bool {
+    /// The last SCP stall flag passed to [`Self::set_slot_stalled`]. Used for
+    /// logging only. It does not gate sends.
+    pub fn slot_stalled(&self) -> bool {
         self.slot_stalled
+    }
+
+    /// Drop all backoff state, so every still-pending tx is due at once.
+    /// Called when a peer connects (#674). Returns the number of entries
+    /// cleared.
+    pub fn reset_all(&mut self) -> usize {
+        let cleared = self.entries.len();
+        self.entries.clear();
+        cleared
     }
 
     /// Drop entries for txs that are no longer pending. `still_pending`
@@ -253,18 +271,61 @@ mod tests {
         assert!(!s.should_send(H2, t0 + secs(1)));
     }
 
+    /// Regression for the #1554 review blocker. A validator missed the single
+    /// first relay of H1, so the slot stalls on H1. The re-sends must keep
+    /// going on the backoff schedule while stalled, because they are the only
+    /// way the validator gets the tx bytes and the slot can externalize.
     #[test]
-    fn stall_gate_suppresses_all_rebroadcasts() {
+    fn stalled_slot_still_rebroadcasts_on_schedule() {
         let mut s = RebroadcastSchedule::new();
         let t0 = Instant::now();
-        s.record_send(H1, t0);
+        s.record_send(H1, t0); // the first relay, missed by one validator
+                               // The stall trips after 3 slot durations, before the first retry.
         assert!(!s.set_slot_stalled(true));
-        assert!(s.is_paused());
-        // Neither a due tx nor an unseen tx goes out while stalled.
-        assert!(!s.should_send(H1, t0 + secs(3_600)));
-        assert!(!s.should_send(H2, t0 + secs(3_600)));
+        assert!(s.slot_stalled());
+        assert!(!s.should_send(H1, t0 + secs(29)), "backoff still applies");
+        assert!(s.should_send(H1, t0 + secs(30)), "re-sent while stalled");
+        assert!(!s.should_send(H1, t0 + secs(89)));
+        assert!(s.should_send(H1, t0 + secs(90)), "and again at 60 s");
+        // An unseen tx is sent at once even while stalled.
+        assert!(s.should_send(H2, t0 + secs(90)));
         // Staying stalled is not a recovery.
         assert!(!s.set_slot_stalled(true));
+    }
+
+    /// While stalled the backoff still bounds a 100 ms re-feed: the same 5
+    /// sends in 10 min as an unstalled node.
+    #[test]
+    fn stalled_hundred_ms_refeed_is_bounded_by_backoff() {
+        let mut s = RebroadcastSchedule::new();
+        s.set_slot_stalled(true);
+        let t0 = Instant::now();
+        let sends = (0..6_000u64)
+            .filter(|i| s.should_send(H1, t0 + Duration::from_millis(i * 100)))
+            .count();
+        assert_eq!(sends, 5);
+    }
+
+    /// A peer that connects late gets long-pending txs at once instead of
+    /// waiting out a backoff of up to 10 min (#674).
+    #[test]
+    fn peer_connect_reset_makes_pending_txs_due() {
+        let mut s = RebroadcastSchedule::new();
+        let mut t = Instant::now();
+        assert!(s.should_send(H1, t));
+        for step in [30u64, 60, 120, 240, 480] {
+            t += secs(step);
+            assert!(s.should_send(H1, t));
+        }
+        s.record_send(H2, t);
+        assert!(!s.should_send(H1, t + secs(1)), "next send is 10 min out");
+
+        assert_eq!(s.reset_all(), 2);
+        assert!(s.is_empty());
+        assert!(s.should_send(H1, t + secs(1)), "due at once after connect");
+        assert!(s.should_send(H2, t + secs(1)));
+        assert!(!s.should_send(H1, t + secs(2)), "then backoff restarts");
+        assert!(s.should_send(H1, t + secs(31)));
     }
 
     #[test]
@@ -281,7 +342,7 @@ mod tests {
 
         s.set_slot_stalled(true);
         assert!(s.set_slot_stalled(false), "stalled -> clear is a recovery");
-        assert!(!s.is_paused());
+        assert!(!s.slot_stalled());
         assert!(s.is_empty(), "backoff state cleared on recovery");
         assert!(
             s.should_send(H1, t + secs(60)),

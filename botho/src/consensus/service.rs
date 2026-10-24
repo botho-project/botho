@@ -5307,12 +5307,15 @@ mod tests {
         }
     }
 
-    /// #1547: the live `slot_status().slot_stalled` verdict drives the
-    /// rebroadcast stall gate. While the slot is jammed no pending transfer is
-    /// re-published; once it externalizes again the backoff resets and each
-    /// pending tx gets one immediate send.
+    /// #1547 / #1554 review: a transfer whose first relay one validator
+    /// missed stalls the slot, because that validator rejects every SCP
+    /// message carrying a value it has no bytes for. With the live
+    /// `slot_status().slot_stalled` verdict set, the pending transfer must
+    /// still be re-published on its backoff schedule, since the re-send is
+    /// the only path that heals the stall. Once the slot externalizes the
+    /// backoff resets and the tx gets one immediate send.
     #[test]
-    fn stalled_slot_suppresses_tx_rebroadcast() {
+    fn stalled_slot_keeps_tx_rebroadcast_on_backoff() {
         use crate::network::rebroadcast::RebroadcastSchedule;
 
         let mut svc = peered_service(&[1, 2]);
@@ -5344,7 +5347,8 @@ mod tests {
             .handle_message(&peer_msg)
             .expect("peer message should be accepted");
 
-        // Progressing slot: re-broadcast is allowed and seeds the backoff.
+        // Progressing slot: the first relay goes out and seeds the backoff.
+        // Assume one validator missed it.
         let now = Instant::now();
         assert!(!schedule.set_slot_stalled(svc.slot_status().slot_stalled));
         assert!(schedule.should_send(pending, now));
@@ -5356,10 +5360,17 @@ mod tests {
                 .expect("monotonic clock supports 30s backdating"),
         );
         assert!(svc.slot_status().slot_stalled);
-        schedule.set_slot_stalled(svc.slot_status().slot_stalled);
-        // Even far past any backoff, a stalled slot publishes nothing.
-        assert!(!schedule.should_send(pending, now + Duration::from_secs(3_600)));
-        assert!(!schedule.should_send([8u8; 32], now));
+        assert!(!schedule.set_slot_stalled(svc.slot_status().slot_stalled));
+        // Stalled, the backoff still applies, but the tx is re-sent when due.
+        assert!(!schedule.should_send(pending, now + Duration::from_secs(29)));
+        assert!(
+            schedule.should_send(pending, now + Duration::from_secs(30)),
+            "a stalled slot must still re-send the missing transfer"
+        );
+        assert!(!schedule.should_send(pending, now + Duration::from_secs(89)));
+        assert!(schedule.should_send(pending, now + Duration::from_secs(90)));
+        // An unseen pending tx goes out at once, stalled or not.
+        assert!(schedule.should_send([8u8; 32], now));
 
         // Externalization clears the stall; backoff resets for one send now.
         svc.last_externalized_at = Some(Instant::now());
