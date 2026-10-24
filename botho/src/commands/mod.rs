@@ -4,6 +4,7 @@
 //! use stdout for output.
 
 pub mod address;
+pub(crate) mod apply_queue;
 pub mod balance;
 mod consensus_failure;
 pub mod init;

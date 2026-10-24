@@ -3276,6 +3276,69 @@ mod tests {
         assert_eq!(a.current_slot(), 6);
     }
 
+    /// #1575: a #770/#419 slot reconcile refused while a decision awaits
+    /// application (`externalized = Some`) is remembered by the run loop's
+    /// `SlotReconcile` and re-run once after `advance_slot`, which then
+    /// advances the slot.
+    #[test]
+    fn refused_slot_reconcile_is_retried_after_advance_slot() {
+        use crate::commands::apply_queue::SlotReconcile;
+        let mut a = federated_pending_application();
+        let mut reconcile = SlotReconcile::default();
+
+        // Refused with no consensus apply pending: nothing to retry.
+        assert!(!reconcile.reconcile(&mut a, 5, false));
+        assert!(!reconcile.is_pending());
+
+        // Refused while the consensus apply is pending: retry later.
+        assert!(!reconcile.reconcile(&mut a, 5, true));
+        assert!(reconcile.is_pending());
+        assert_eq!(a.current_slot(), 2, "fast-forwarded during the apply");
+        assert!(a.externalized.is_some(), "pending decision was cleared");
+
+        a.advance_slot();
+        assert_eq!(reconcile.retry_after_advance(&mut a, 5), Some(true));
+        assert_eq!(a.current_slot(), 6);
+        assert!(!reconcile.is_pending());
+        assert_eq!(
+            reconcile.retry_after_advance(&mut a, 9),
+            None,
+            "the retry runs once"
+        );
+        assert_eq!(a.current_slot(), 6);
+    }
+
+    /// #1575 safety: the retry goes through the unchanged service guards. A
+    /// slot that gained ballot/commit state while the apply was pending is
+    /// still not fast-forwarded (#436): no fast-forward out of Commit.
+    #[test]
+    fn slot_reconcile_retry_never_fast_forwards_a_slot_with_ballot_state() {
+        use crate::commands::apply_queue::SlotReconcile;
+        let mut a = federated_pending_application();
+        let mut reconcile = SlotReconcile::default();
+        assert!(!reconcile.reconcile(&mut a, 5, true));
+
+        // Peer B starts a ballot on A's current slot 2 during the apply.
+        let slot = a.current_slot();
+        let tx = intrinsic_valid_minting_tx(70, [0; 32], slot);
+        a.register_minting_tx(tx.hash(), bincode::serialize(&tx).unwrap());
+        let value = ConsensusValue::from_minting_tx(tx.hash(), tx.pow_priority());
+        let msg = peer_nominate_prepare(node(2), recommended_quorum(&[1, 2]), slot, value);
+        a.scp_node
+            .handle_message(&msg)
+            .expect("peer ballot accepted");
+        assert!(
+            ConsensusService::slot_holds_ballot_or_commit_state(
+                &a.scp_node.get_current_slot_metrics()
+            ),
+            "precondition: slot {slot} holds ballot/commit state"
+        );
+
+        a.advance_slot();
+        assert_eq!(reconcile.retry_after_advance(&mut a, 5), Some(false));
+        assert_eq!(a.current_slot(), slot, "fast-forwarded a balloting slot");
+    }
+
     /// #1565: peer-slot anchoring must not clear a decision that awaits
     /// application, but the advertised slot is still recorded so the
     /// corroboration evidence survives. After `advance_slot`, the next member
