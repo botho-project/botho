@@ -496,3 +496,59 @@ no node service, and no controller data. Local deployment markers must also
 be absent. That proof is copied and verified before deletion, and a later EC2
 launch invalidates it. This exception cannot substitute for archives once a
 workload has been deployed.
+
+### x-series tags and host bootstrap
+
+x-series qualification fleets are provisioned from tracked renderers in
+`scripts/stress/fleet_provision.py`. It is pure and makes no AWS calls; the
+operator's untracked `provision.py` imports it and keeps only the `aws`
+invocations and the files it persists between retries.
+
+Run ids have the form `qYYYYMMDD-xN-<label>`, for example
+`q20261101-x1-endurance`. `run_id()` and `validate_run_id()` require lowercase,
+a real calendar date, a positive `N`, and at most 48 characters, and they refuse
+any `-w<digits>` token so w-series names are never inherited.
+
+Every instance and its root volume carry the same tags, set at creation through
+the `RunInstances` `TagSpecifications` (`tag_specifications()`):
+
+| Key | Value |
+|---|---|
+| `Name` | `botho-<run>-<role>` |
+| `project` | `botho` |
+| `Purpose` | `qualification` |
+| `SideProject` | `botho` |
+| `Run` | the run id |
+| `Role` | `controller` or `n1`..`n5` |
+| `ExpiresAt` | `host_end`, epoch seconds |
+
+The security group carries `project`, `Purpose`, `SideProject` and `Run`.
+`project=botho` with `Purpose=qualification` is the scheme that
+`cloud_retention.py` selects; a regression test builds a fleet with
+`fleet_provision.tags()` and checks that retention selects it.
+
+- **Never emit `Project=` (capital P).** IAM tag keys match case-insensitively,
+  so `Project` collides with `project`, and `Project=botho-qualification` is
+  denied to the botho-deploy role. The renderer refuses any key that equals
+  `project` case-insensitively unless it is exactly `project`.
+- **`SideProject=botho` is set at creation**, not added later by another
+  profile. botho-deploy passed a dry-run of `ec2:RunInstances` and
+  `ec2:CreateSecurityGroup` with all three tags on 2026-10-24.
+
+`security_group_rules()` returns the only allowed ingress: tcp 22 from the
+operator addresses, and tcp 22, 443 and 17110 plus udp 17110 from the group
+itself. Port 17110 is the gossip port the staging renderer uses. Operator
+addresses must be explicit IPv4 `/32` hosts; `0.0.0.0/0` and wider ranges are
+refused.
+
+`bootstrap()` renders the EC2 user data in a fixed order: an absolute-stop
+systemd timer whose `OnCalendar` is `host_end`, then the
+`host_maintenance.bootstrap()` block that masks unattended APT maintenance,
+then package installs, users and SSH hardening, then the role and run markers
+under `/etc/botho-qualification/`. `infrastructure_plan()` returns the plan to
+freeze before any launch: `host_end = created_at + 82h` (inside the 83 h
+maintenance cap), `node_end = created_at + 81.5h`, and the roles with their
+instance types (`m6i.2xlarge` controller, `m6i.large` producer `n3`,
+`c6i.large` validators). `launch_request()` renders one role's `RunInstances`
+input from that plan. SSH host-key pinning and the SSH ControlPath, which must
+stay under macOS's 104-byte socket path limit, remain operator-side.
