@@ -486,12 +486,9 @@ async fn run_async(
     mint: bool,
     mint_window: TestnetMintWindow,
 ) -> Result<()> {
-    // Set up shutdown signal
+    // Set up shutdown signal (SIGINT and SIGTERM; #1577)
     let shutdown = Arc::new(AtomicBool::new(false));
-    let shutdown_clone = shutdown.clone();
-    ctrlc::set_handler(move || {
-        shutdown_clone.store(true, Ordering::SeqCst);
-    })?;
+    spawn_shutdown_signal_listener(shutdown.clone())?;
     run_async_with_shutdown(
         config,
         config_path,
@@ -502,6 +499,73 @@ async fn run_async(
         None,
     )
     .await
+}
+
+/// Set `flag` when SIGINT (Ctrl-C) or SIGTERM arrives (#1577).
+///
+/// `systemctl stop`, `docker stop` and most supervisors send SIGTERM, so it
+/// must take the same graceful path as Ctrl-C: the node loop sees the flag,
+/// drains any in-flight externalized apply, then tears down. SIGHUP is
+/// deliberately NOT handled, so `nohup` / an inherited ignore still applies.
+///
+/// On unix both handlers are registered before this returns, so a
+/// registration failure surfaces as `Err` and a signal raised right after
+/// the call cannot hit the default (terminating) disposition. A repeated
+/// signal is a no-op once the flag is set; SIGKILL remains the escalation.
+fn spawn_shutdown_signal_listener(flag: Arc<AtomicBool>) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigint = signal(SignalKind::interrupt()).context("install SIGINT handler")?;
+        let mut sigterm = signal(SignalKind::terminate()).context("install SIGTERM handler")?;
+        tokio::spawn(async move {
+            let name = tokio::select! {
+                _ = sigint.recv() => "SIGINT",
+                _ = sigterm.recv() => "SIGTERM",
+            };
+            info!(signal = name, "Shutdown signal received");
+            flag.store(true, Ordering::SeqCst);
+        });
+    }
+    #[cfg(not(unix))]
+    tokio::spawn(async move {
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => {
+                info!(signal = "SIGINT", "Shutdown signal received");
+                flag.store(true, Ordering::SeqCst);
+            }
+            Err(e) => error!("Failed to listen for Ctrl-C: {e}"),
+        }
+    });
+    Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod shutdown_signal_tests {
+    use super::*;
+    use nix::sys::signal::{raise, Signal};
+
+    async fn assert_signal_sets_flag(signal: Signal) {
+        let flag = Arc::new(AtomicBool::new(false));
+        // Install BEFORE raising: the default disposition kills the process.
+        spawn_shutdown_signal_listener(flag.clone()).unwrap();
+        raise(signal).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !flag.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{signal} did not set the shutdown flag"));
+    }
+
+    /// One test, sequential: signals are process-wide, so a parallel test
+    /// raising the other signal could otherwise set this test's flag.
+    #[tokio::test]
+    async fn sigterm_and_sigint_set_shutdown_flag() {
+        assert_signal_sets_flag(Signal::SIGTERM).await;
+        assert_signal_sets_flag(Signal::SIGINT).await;
+    }
 }
 
 async fn run_async_with_shutdown(
