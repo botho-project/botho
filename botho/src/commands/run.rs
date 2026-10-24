@@ -645,10 +645,11 @@ async fn run_async_with_shutdown(
     // such as n-of-n (#1546). The node count includes self. We do NOT block
     // startup; small clusters remain supported, just flagged.
     let participating_nodes = connected_peers.len() + 1;
+    let local_peer_id_str = discovery.local_peer_id().to_base58();
     if let Some(warning) = config
         .network
         .quorum
-        .degenerate_quorum_warning(participating_nodes)
+        .degenerate_quorum_warning(participating_nodes, &local_peer_id_str)
     {
         warn!("{}", warning);
     }

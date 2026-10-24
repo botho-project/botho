@@ -1242,10 +1242,17 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
     // Byzantine-fault-tolerance posture (#509). Participating node count
     // includes self, so n = scp_peers + 1. In `recommended` mode, n < 4 yields
     // a degenerate quorum that tolerates ZERO faults; >= 4 is genuinely BFT.
-    // In `explicit` mode the configured threshold and members decide (#1546).
+    // In `explicit` mode `participating_nodes` is ignored: the threshold and the
+    // effective member set (self, duplicates and unparseable IDs dropped, as
+    // the quorum gate does) decide (#1546).
     let participating_nodes = scp_peers + 1;
-    let quorum_fault_tolerant = state.quorum.is_bft_fault_tolerant(participating_nodes);
-    let quorum_degenerate = state.quorum.is_degenerate_quorum(participating_nodes);
+    let local_peer_id = state.identity.peer_id.as_str();
+    let quorum_fault_tolerant = state
+        .quorum
+        .is_bft_fault_tolerant(participating_nodes, local_peer_id);
+    let quorum_degenerate = state
+        .quorum
+        .is_degenerate_quorum(participating_nodes, local_peer_id);
 
     // Stuck-miner health (#538): surface the same verdict as `minting_getStatus`
     // so dashboards/monitoring watching node health catch a wedged miner (active
