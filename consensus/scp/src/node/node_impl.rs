@@ -327,7 +327,10 @@ impl<V: Value, ValidationError: Clone + Display + 'static> ScpNode<V> for Node<V
             .checked_sub(1)
             .and_then(|index| self.get_externalized_slot(index))
             .and_then(|slot| slot.get_last_message_sent());
-        current.into_iter().chain(previous).collect()
+        // Previous slot's Externalize first: a peer still on that slot with
+        // only nomination state may anchor forward on the current-slot
+        // message and then discard the Externalize as an old slot.
+        previous.into_iter().chain(current).collect()
     }
 
     /// Get the current slot's index.
@@ -711,8 +714,9 @@ mod tests {
     }
 
     #[test_with_logger]
-    // Rebroadcast re-sends the current slot's latest message and the previous
-    // slot's Externalize, so a peer that lost the Externalize can finish (#1544).
+    // Rebroadcast re-sends the previous slot's Externalize and the current
+    // slot's latest message, so a peer that lost the Externalize can finish
+    // (#1544).
     fn test_get_rebroadcast_messages(logger: Logger) {
         let slot_index = 1985;
         let mut node = get_node(slot_index, logger);
@@ -748,7 +752,7 @@ mod tests {
             .expect_get_last_message_sent()
             .return_const(Some(externalize.clone()));
         node.push_externalized_slot(Box::new(previous));
-        assert_eq!(node.get_rebroadcast_messages(), vec![nominate, externalize]);
+        assert_eq!(node.get_rebroadcast_messages(), vec![externalize, nominate]);
     }
 
     #[test_with_logger]

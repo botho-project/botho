@@ -61,8 +61,8 @@ pub trait ScpNode<V: Value>: Send {
     fn get_retained_values(&self) -> BTreeSet<V>;
 
     /// The messages to re-send while the network makes no progress: this
-    /// node's latest message for the current slot, then its Externalize for
-    /// the most recently externalized slot. A peer that missed the original
+    /// node's Externalize for the most recently externalized slot, then its
+    /// latest message for the current slot. A peer that missed the original
     /// Externalize can only finish that slot by receiving it again: an
     /// externalized slot answers only messages that are new from their
     /// sender, and a stuck peer has nothing new to send.
