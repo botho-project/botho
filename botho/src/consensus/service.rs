@@ -3175,6 +3175,67 @@ mod tests {
         assert!(values.iter().all(|v| v.tx_hash != stale.hash()));
     }
 
+    /// #1566 (B): in federated mode the decision is queued by
+    /// `handle_message` itself (it runs `check_externalized`), not by
+    /// `tick()`. This is what lets the run loop drain `SlotExternalized` in
+    /// the `ScpMessage` arm, in the same iteration as the completing
+    /// message, instead of up to 500 ms later on the next consensus tick.
+    #[test]
+    fn federated_decision_is_queued_by_handle_message_not_tick() {
+        let cfg = ConsensusConfig::fixed_timing(0);
+        let qs = recommended_quorum(&[1, 2]);
+        let mut a = ConsensusService::new(node(1), qs.clone(), cfg.clone(), genesis_chain_state());
+        let mut b = ConsensusService::new(node(2), qs, cfg, genesis_chain_state());
+        let first = intrinsic_valid_minting_tx(1, [0; 32], 1);
+        submit_and_register(&mut a, &mut b, &first);
+        submit_and_register(&mut b, &mut a, &first);
+
+        let (mut to_a, mut to_b): (Vec<ScpMessage>, Vec<ScpMessage>) = (vec![], vec![]);
+        // Where A's decision first became visible to `next_event`.
+        let mut seen_after: Option<&str> = None;
+        let mut drain_a = |a: &mut ConsensusService, to_b: &mut Vec<ScpMessage>, site| {
+            let mut found = false;
+            while let Some(ev) = a.next_event() {
+                match ev {
+                    ConsensusEvent::BroadcastMessage(msg) => to_b.push(msg),
+                    ConsensusEvent::SlotExternalized { .. } => found = true,
+                    ConsensusEvent::Progress { .. } => {}
+                }
+            }
+            if found && seen_after.is_none() {
+                seen_after = Some(site);
+            }
+        };
+        for _ in 0..4000 {
+            for m in std::mem::take(&mut to_a) {
+                let _ = a.handle_message(m);
+                // The run loop's `ScpMessage` arm: drain right here.
+                drain_a(&mut a, &mut to_b, "handle_message");
+            }
+            for m in to_b.drain(..) {
+                let _ = b.handle_message(m);
+            }
+            a.tick();
+            drain_a(&mut a, &mut to_b, "tick");
+            b.tick();
+            while let Some(ev) = b.next_event() {
+                if let ConsensusEvent::BroadcastMessage(msg) = ev {
+                    to_a.push(msg);
+                }
+            }
+            if a.externalized.is_some() {
+                break;
+            }
+        }
+        assert!(a.externalized.is_some(), "slot 1 never externalized");
+        assert_eq!(
+            seen_after,
+            Some("handle_message"),
+            "the federated decision must be queued by handle_message, so the \
+             ScpMessage arm can drain it without waiting for a tick"
+        );
+    }
+
     /// Drive a 2-of-2 federated pair through slot 1 and return node A with
     /// that decision surfaced but NOT applied (`externalized` is `Some`), the
     /// state the run loop holds while the apply is in flight (#1565).

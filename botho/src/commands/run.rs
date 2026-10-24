@@ -1304,6 +1304,28 @@ async fn run_async_with_shutdown(
                             if let Err(e) = consensus.handle_message(msg) {
                                 warn!("Failed to handle SCP message: {}", e);
                             }
+                            // #1566 (B): `handle_message` already ran
+                            // `check_externalized`, so a decision this message
+                            // completed (and our own SCP responses) is queued
+                            // now. Drain it in this iteration rather than on
+                            // the next 500 ms tick, so our own decision is
+                            // enqueued before the peer's gossiped block for
+                            // the same height arrives.
+                            if let Err(evidence) = drain_consensus_events(
+                                &mut consensus,
+                                &mut swarm,
+                                &discovery,
+                                &node,
+                                &mut in_flight,
+                                &mut deferred_externalized,
+                                #[cfg(test)]
+                                &mut test_hooks,
+                            )
+                            .await
+                            {
+                                terminal_consensus_failure = Some(evidence);
+                                break 'node_loop;
+                            }
                         }
                         NetworkEvent::PeerMetadataUpdated(_) => {
                             // The RPC projection was refreshed above. Identify
@@ -1984,118 +2006,22 @@ async fn run_async_with_shutdown(
                     hooks.on_tick(&consensus, in_flight.is_some());
                 }
 
-                // Process any consensus events. While an externalized apply
-                // is in flight (#1565) no further `SlotExternalized` is taken:
-                // the service will not surface one (it holds `externalized`
-                // until `advance_slot`), the test hook is not polled, and a
-                // deferred decision waits for the completion arm. Other events
-                // (`BroadcastMessage`, ...) keep draining.
-                while let Some(event) = {
-                    let resumed = if in_flight.is_none() {
-                        deferred_externalized.pop_front()
-                    } else {
-                        None
-                    };
-                    // Fault injection exists only in unit-test builds. The injected
-                    // decision uses the production cache, build/apply branch and
-                    // shutdown path below, without a synthetic cleanup replica.
+                // Process any consensus events (#1566 (B): the same drain
+                // runs right after `handle_message` in the `ScpMessage` arm).
+                if let Err(evidence) = drain_consensus_events(
+                    &mut consensus,
+                    &mut swarm,
+                    &discovery,
+                    &node,
+                    &mut in_flight,
+                    &mut deferred_externalized,
                     #[cfg(test)]
-                    let injected = if resumed.is_none() && in_flight.is_none() {
-                        test_hooks.as_mut()
-                            .and_then(|hooks| hooks.next_event(&mut consensus))
-                    } else {
-                        None
-                    };
-                    #[cfg(not(test))]
-                    let injected: Option<ConsensusEvent> = None;
-                    resumed.or(injected).or_else(|| consensus.next_event())
-                } {
-                    match event {
-                        ConsensusEvent::SlotExternalized { slot_index, values } => {
-                            debug_assert!(
-                                in_flight.is_none(),
-                                "consensus surfaced slot {slot_index} while an externalized apply is in flight"
-                            );
-                            if in_flight.is_some() {
-                                error!(
-                                    slot = slot_index,
-                                    "Slot externalized while a previous externalized apply is in flight; \
-                                     deferring it until that apply completes"
-                                );
-                                deferred_externalized
-                                    .push_back(ConsensusEvent::SlotExternalized { slot_index, values });
-                                continue;
-                            }
-                            info!(slot = slot_index, count = values.len(), "Slot externalized!");
-
-                            // Build block from externalized values. This needs
-                            // `&consensus` (tx cache), so it stays on the loop.
-                            match build_block_from_externalized(&values, &consensus) {
-                                Ok(block) => {
-                                    let block_height = block.height();
-                                    info!(
-                                        "Built block {} from consensus; applying off the node loop",
-                                        block_height
-                                    );
-                                    #[cfg(test)]
-                                    let apply_delay = test_hooks.as_ref().and_then(|hooks| hooks.apply_delay);
-                                    #[cfg(not(test))]
-                                    let apply_delay = None;
-                                    // Lottery + commit run in `spawn_blocking`
-                                    // under the apply mutex (#1565). The slot
-                                    // is NOT advanced here: the completion arm
-                                    // below calls `advance_slot` once the
-                                    // apply has finished, so `externalized`
-                                    // keeps proposals gated on the old tip.
-                                    let handle = spawn_externalized_apply(
-                                        block,
-                                        node.shared_ledger(),
-                                        node.apply_state(),
-                                        apply_delay,
-                                    )
-                                    .await;
-                                    in_flight = Some(InFlightApply {
-                                        slot_index,
-                                        values,
-                                        block_height,
-                                        handle,
-                                    });
-                                }
-                                Err(e) => {
-                                    error!(slot = slot_index, error = %e,
-                                        "Terminal consensus failure: externalized block could not be built");
-                                    let checkpoint = node.shared_ledger().read().ok()
-                                        .and_then(|ledger| ledger.get_chain_state().ok());
-                                    terminal_consensus_failure = Some(FailureEvidence::capture(
-                                        slot_index, consensus.current_slot(), checkpoint.as_ref(),
-                                        format!("Externalized block construction failed: {}", e),
-                                        &values, None, |hash| consensus.get_tx_entry(hash),
-                                    ));
-                                    break 'node_loop;
-                                }
-                            }
-                        }
-                        ConsensusEvent::BroadcastMessage(msg) => {
-                            // Broadcast SCP message to network
-                            if let Err(e) =
-                                NetworkDiscovery::broadcast_scp(&mut swarm, discovery.stats_ref(), &msg)
-                            {
-                                warn!("Failed to broadcast SCP message: {}", e);
-                                record_gossip_publish_error("scp");
-                            }
-
-                            // For solo mining: loop our own message back to ourselves
-                            // This is required because SCP needs to see its own messages to advance
-                            if discovery.peer_count() == 0 {
-                                if let Err(e) = consensus.handle_message(msg) {
-                                    debug!("Failed to process own SCP message: {}", e);
-                                }
-                            }
-                        }
-                        ConsensusEvent::Progress { slot_index, phase } => {
-                            debug!(slot = slot_index, phase = %phase, "Consensus progress");
-                        }
-                    }
+                    &mut test_hooks,
+                )
+                .await
+                {
+                    terminal_consensus_failure = Some(evidence);
+                    break 'node_loop;
                 }
 
                 // Publish the live SCP slot-progress snapshot (#653, epic #532
@@ -3622,6 +3548,152 @@ fn build_block_from_externalized(
     )
     .map(|built| built.block)
     .map_err(|e| anyhow::anyhow!("Block build error: {}", e))
+}
+
+/// Drain every queued consensus event (#1566 (B)).
+///
+/// Shared by the `consensus_tick` arm and the `ScpMessage` arm (right after
+/// `handle_message`). This changes only WHEN the loop picks up decisions and
+/// messages the service has already produced, never WHAT SCP decides or
+/// which block is built: `check_externalized` already ran inside the service
+/// and still surfaces slots strictly in order, gated by `externalized`.
+///
+/// While an externalized apply is in flight (#1565) no further
+/// `SlotExternalized` is taken: the service will not surface one (it holds
+/// `externalized` until `advance_slot`), the test hook is not polled, and a
+/// deferred decision waits for the completion arm. Other events
+/// (`BroadcastMessage`, ...) keep draining.
+///
+/// Returns the evidence of a terminal failure (the externalized block could
+/// not be built); the caller must then `break 'node_loop`.
+#[allow(clippy::too_many_arguments)]
+async fn drain_consensus_events(
+    consensus: &mut ConsensusService,
+    swarm: &mut libp2p::Swarm<crate::network::BothoBehaviour>,
+    discovery: &NetworkDiscovery,
+    node: &Node,
+    in_flight: &mut Option<InFlightApply>,
+    deferred_externalized: &mut std::collections::VecDeque<ConsensusEvent>,
+    #[cfg(test)] test_hooks: &mut Option<FailureTestHooks>,
+) -> std::result::Result<(), FailureEvidence> {
+    while let Some(event) = {
+        let resumed = if in_flight.is_none() {
+            deferred_externalized.pop_front()
+        } else {
+            None
+        };
+        // Fault injection exists only in unit-test builds. The injected
+        // decision uses the production cache, build/apply branch and
+        // shutdown path below, without a synthetic cleanup replica.
+        #[cfg(test)]
+        let injected = if resumed.is_none() && in_flight.is_none() {
+            test_hooks
+                .as_mut()
+                .and_then(|hooks| hooks.next_event(consensus))
+        } else {
+            None
+        };
+        #[cfg(not(test))]
+        let injected: Option<ConsensusEvent> = None;
+        resumed.or(injected).or_else(|| consensus.next_event())
+    } {
+        match event {
+            ConsensusEvent::SlotExternalized { slot_index, values } => {
+                debug_assert!(
+                    in_flight.is_none(),
+                    "consensus surfaced slot {slot_index} while an externalized apply is in flight"
+                );
+                if in_flight.is_some() {
+                    error!(
+                        slot = slot_index,
+                        "Slot externalized while a previous externalized apply is in flight; \
+                         deferring it until that apply completes"
+                    );
+                    deferred_externalized
+                        .push_back(ConsensusEvent::SlotExternalized { slot_index, values });
+                    continue;
+                }
+                info!(
+                    slot = slot_index,
+                    count = values.len(),
+                    "Slot externalized!"
+                );
+
+                // Build block from externalized values. This needs
+                // `&consensus` (tx cache), so it stays on the loop.
+                match build_block_from_externalized(&values, consensus) {
+                    Ok(block) => {
+                        let block_height = block.height();
+                        info!(
+                            "Built block {} from consensus; applying off the node loop",
+                            block_height
+                        );
+                        #[cfg(test)]
+                        let apply_delay = test_hooks.as_ref().and_then(|hooks| hooks.apply_delay);
+                        #[cfg(not(test))]
+                        let apply_delay = None;
+                        // Lottery + commit run in `spawn_blocking`
+                        // under the apply mutex (#1565). The slot
+                        // is NOT advanced here: the completion arm
+                        // calls `advance_slot` once the apply has
+                        // finished, so `externalized` keeps
+                        // proposals gated on the old tip.
+                        let handle = spawn_externalized_apply(
+                            block,
+                            node.shared_ledger(),
+                            node.apply_state(),
+                            apply_delay,
+                        )
+                        .await;
+                        *in_flight = Some(InFlightApply {
+                            slot_index,
+                            values,
+                            block_height,
+                            handle,
+                        });
+                    }
+                    Err(e) => {
+                        error!(slot = slot_index, error = %e,
+                            "Terminal consensus failure: externalized block could not be built");
+                        let checkpoint = node
+                            .shared_ledger()
+                            .read()
+                            .ok()
+                            .and_then(|ledger| ledger.get_chain_state().ok());
+                        return Err(FailureEvidence::capture(
+                            slot_index,
+                            consensus.current_slot(),
+                            checkpoint.as_ref(),
+                            format!("Externalized block construction failed: {}", e),
+                            &values,
+                            None,
+                            |hash| consensus.get_tx_entry(hash),
+                        ));
+                    }
+                }
+            }
+            ConsensusEvent::BroadcastMessage(msg) => {
+                // Broadcast SCP message to network
+                if let Err(e) = NetworkDiscovery::broadcast_scp(swarm, discovery.stats_ref(), &msg)
+                {
+                    warn!("Failed to broadcast SCP message: {}", e);
+                    record_gossip_publish_error("scp");
+                }
+
+                // For solo mining: loop our own message back to ourselves
+                // This is required because SCP needs to see its own messages to advance
+                if discovery.peer_count() == 0 {
+                    if let Err(e) = consensus.handle_message(msg) {
+                        debug!("Failed to process own SCP message: {}", e);
+                    }
+                }
+            }
+            ConsensusEvent::Progress { slot_index, phase } => {
+                debug!(slot = slot_index, phase = %phase, "Consensus progress");
+            }
+        }
+    }
+    Ok(())
 }
 
 /// An externalized block whose lottery + commit is running off the node
