@@ -1242,6 +1242,7 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
     // Byzantine-fault-tolerance posture (#509). Participating node count
     // includes self, so n = scp_peers + 1. In `recommended` mode, n < 4 yields
     // a degenerate quorum that tolerates ZERO faults; >= 4 is genuinely BFT.
+    // In `explicit` mode the configured threshold and members decide (#1546).
     let participating_nodes = scp_peers + 1;
     let quorum_fault_tolerant = state.quorum.is_bft_fault_tolerant(participating_nodes);
     let quorum_degenerate = state.quorum.is_degenerate_quorum(participating_nodes);
@@ -1308,7 +1309,8 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
             "mintingThreads": if minting { state.minting_threads } else { 0 },
             "totalTransactions": chain_state.total_tx,
             // BFT posture: `quorumFaultTolerant` is true only with >= 4
-            // participating nodes in recommended mode (3f+1 >= 4 for f=1);
+            // participating nodes in recommended mode (3f+1 >= 4 for f=1), or
+            // an explicit threshold that tolerates f >= 1 (#1546);
             // `quorumDegenerate` flags the n-of-n / zero-fault-tolerance regime.
             "quorumFaultTolerant": quorum_fault_tolerant,
             "quorumDegenerate": quorum_degenerate,
@@ -5442,10 +5444,10 @@ mod tests {
         }
     }
 
-    /// #509: in `explicit` mode the operator owns the threshold/membership, so
-    /// the status payload never flags a degenerate quorum regardless of peers.
+    /// #509/#1546: in `explicit` mode the status payload judges the configured
+    /// threshold and members, not the connected peer count.
     #[tokio::test]
-    async fn test_node_status_explicit_mode_not_flagged() {
+    async fn test_node_status_explicit_mode_judges_threshold() {
         use crate::{
             config::{QuorumConfig, QuorumMode},
             ledger::Ledger,
@@ -5468,12 +5470,13 @@ mod tests {
             ..QuorumConfig::default()
         });
 
-        // Even a lone node in explicit mode is not flagged degenerate.
+        // Explicit mode judges the configured threshold, not the peer count:
+        // the default 2-of-1 (no members) quorum tolerates nothing (#1546).
         *state.scp_peer_count.write().unwrap() = 0;
         let resp = handle_node_status(json!(1), &state).await;
         let result = resp.result.unwrap();
-        assert_eq!(result["quorumDegenerate"], json!(false));
-        assert_eq!(result["quorumFaultTolerant"], json!(true));
+        assert_eq!(result["quorumDegenerate"], json!(true));
+        assert_eq!(result["quorumFaultTolerant"], json!(false));
     }
 
     #[test]

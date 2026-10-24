@@ -585,10 +585,11 @@ impl QuorumConfig {
     /// Whether a `Recommended`-mode cluster of `node_count` participating nodes
     /// (including self) is genuinely Byzantine-fault-tolerant.
     ///
-    /// Returns `true` only when `node_count >= 4` (the hard 3f+1 >= 4 bound for
-    /// f=1) and the node is running in `Recommended` mode. In `Explicit` mode
-    /// the operator owns the threshold/membership decision, so this always
-    /// returns `true` (no auto-derived warning).
+    /// In `Recommended` mode returns `true` only when `node_count >= 4` (the
+    /// hard 3f+1 >= 4 bound for f=1). In `Explicit` mode `node_count` is
+    /// ignored and the answer comes from the configured threshold and member
+    /// list via [`Self::explicit_byzantine_tolerance`] — an n-of-n quorum
+    /// tolerates zero faults no matter how many nodes it has (#1546).
     ///
     /// Below 4 nodes the auto-derived quorum is degenerate — n=2 -> 2-of-2,
     /// n=3 -> 3-of-3 under `Bft`, or a bare crash-majority under `Crash` — and
@@ -596,25 +597,36 @@ impl QuorumConfig {
     /// [`Self::is_degenerate_quorum`].
     pub fn is_bft_fault_tolerant(&self, node_count: usize) -> bool {
         match self.mode {
-            QuorumMode::Explicit => true,
+            QuorumMode::Explicit => self.explicit_byzantine_tolerance() >= 1,
             QuorumMode::Recommended => node_count >= Self::MIN_BFT_NODES,
         }
     }
 
-    /// Whether a `Recommended`-mode cluster of `node_count` participating nodes
-    /// (including self) has a *degenerate* quorum that tolerates zero Byzantine
-    /// faults (`node_count < 4`).
+    /// Byzantine faults `f` an `Explicit`-mode quorum tolerates, from its
+    /// threshold `t` and `n = members + self` (#1546).
     ///
-    /// This is the inverse of [`Self::is_bft_fault_tolerant`]: it is `true`
-    /// only in `Recommended` mode with fewer than [`Self::MIN_BFT_NODES`]
-    /// nodes.
-    pub fn is_degenerate_quorum(&self, node_count: usize) -> bool {
-        matches!(self.mode, QuorumMode::Recommended) && node_count < Self::MIN_BFT_NODES
+    /// Liveness needs `n - t >= f` (a quorum survives `f` silent members) and
+    /// safety needs `2t - n > f` (any two quorums share an honest member), so
+    /// `f = min(n - t, 2t - n - 1)`. An n-of-n quorum gives `f = 0`: one lost
+    /// or slow member halts the network.
+    pub fn explicit_byzantine_tolerance(&self) -> usize {
+        let n = self.members.len() + 1;
+        let t = self.threshold as usize;
+        n.saturating_sub(t).min((2 * t).saturating_sub(n + 1))
     }
 
-    /// Build the loud operator warning for a degenerate `Recommended`-mode
-    /// quorum, or `None` when the cluster is BFT (>= 4 nodes) or in `Explicit`
-    /// mode.
+    /// Whether the quorum is *degenerate*: it tolerates zero Byzantine faults.
+    ///
+    /// This is the inverse of [`Self::is_bft_fault_tolerant`]: in
+    /// `Recommended` mode it is `true` below [`Self::MIN_BFT_NODES`]
+    /// participating nodes; in `Explicit` mode it is `true` when
+    /// [`Self::explicit_byzantine_tolerance`] is zero (e.g. n-of-n).
+    pub fn is_degenerate_quorum(&self, node_count: usize) -> bool {
+        !self.is_bft_fault_tolerant(node_count)
+    }
+
+    /// Build the loud operator warning for a degenerate quorum, or `None` when
+    /// the quorum tolerates at least one Byzantine fault.
     ///
     /// The wording is deliberately honest (#509 research, #510 Thread A): below
     /// 4 nodes the cluster is **not Byzantine-fault-tolerant at all** — it
@@ -623,6 +635,15 @@ impl QuorumConfig {
     pub fn degenerate_quorum_warning(&self, node_count: usize) -> Option<String> {
         if !self.is_degenerate_quorum(node_count) {
             return None;
+        }
+        if matches!(self.mode, QuorumMode::Explicit) {
+            let n = self.members.len() + 1;
+            let t = self.threshold;
+            return Some(format!(
+                "WARNING: explicit {t}-of-{n} quorum is NOT \
+                 Byzantine-fault-tolerant — it tolerates ZERO node failures. \
+                 f=1 needs n - t >= 1 and 2t - n >= 2 (e.g. 4-of-5)."
+            ));
         }
         Some(format!(
             "WARNING: {node_count}-node cluster in recommended mode is NOT \
@@ -1303,24 +1324,53 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_quorum_degenerate_explicit_mode_never_warns() {
-        // Explicit mode: operator owns the threshold/membership, so no
-        // auto-derived degenerate-quorum warning regardless of node count.
-        let quorum = QuorumConfig {
+    fn explicit(threshold: u32, members: usize) -> QuorumConfig {
+        QuorumConfig {
             mode: QuorumMode::Explicit,
             fault_model: FaultModel::default(),
-            threshold: 2,
-            members: vec!["peer1".to_string(), "peer2".to_string()],
+            threshold,
+            members: (0..members).map(|i| format!("peer{i}")).collect(),
             min_peers: 1,
             max_auto_members: 8,
-        };
-
-        for n in 1..=6 {
-            assert!(!quorum.is_degenerate_quorum(n));
-            assert!(quorum.is_bft_fault_tolerant(n));
-            assert!(quorum.degenerate_quorum_warning(n).is_none());
         }
+    }
+
+    #[test]
+    fn test_quorum_explicit_tolerance_from_threshold() {
+        // (threshold, other members, expected f) with n = members + self.
+        for (t, m, f) in [
+            (5, 4, 0), // 5-of-5: the w12 qualification fleet (#1546)
+            (4, 4, 1), // 4-of-5
+            (3, 4, 0), // 3-of-5: quorums need not intersect in an honest node
+            (3, 3, 1), // 3-of-4
+            (2, 2, 0), // 2-of-3
+            (2, 0, 0), // threshold above n: unreachable
+            (5, 6, 2), // 5-of-7
+        ] {
+            assert_eq!(
+                explicit(t, m).explicit_byzantine_tolerance(),
+                f,
+                "{t}-of-{}",
+                m + 1
+            );
+        }
+    }
+
+    #[test]
+    fn test_quorum_explicit_degenerate_follows_threshold() {
+        // node_count is ignored in explicit mode: the threshold decides.
+        let five_of_five = explicit(5, 4);
+        let four_of_five = explicit(4, 4);
+        for n in 1..=6 {
+            assert!(five_of_five.is_degenerate_quorum(n));
+            assert!(!five_of_five.is_bft_fault_tolerant(n));
+            assert!(!four_of_five.is_degenerate_quorum(n));
+            assert!(four_of_five.is_bft_fault_tolerant(n));
+            assert!(four_of_five.degenerate_quorum_warning(n).is_none());
+        }
+        let warning = five_of_five.degenerate_quorum_warning(5).unwrap();
+        assert!(warning.contains("5-of-5"), "{warning}");
+        assert!(warning.contains("ZERO"), "{warning}");
     }
 
     #[test]

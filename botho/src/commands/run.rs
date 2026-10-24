@@ -640,10 +640,10 @@ async fn run_async_with_shutdown(
     println!("Quorum mode: {}", mode_str);
     println!("Quorum status: {}", quorum_message);
 
-    // Loudly warn when a `recommended`-mode cluster is below the BFT bound
-    // (< 4 participating nodes => degenerate n-of-n quorum, zero fault
-    // tolerance). The node count includes self (#509). We do NOT block startup;
-    // small clusters remain supported, just flagged.
+    // Loudly warn when the quorum tolerates zero faults: a `recommended`-mode
+    // cluster below 4 participating nodes (#509), or an `explicit` threshold
+    // such as n-of-n (#1546). The node count includes self. We do NOT block
+    // startup; small clusters remain supported, just flagged.
     let participating_nodes = connected_peers.len() + 1;
     if let Some(warning) = config
         .network
