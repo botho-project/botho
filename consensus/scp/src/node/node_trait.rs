@@ -60,6 +60,14 @@ pub trait ScpNode<V: Value>: Send {
     /// payloads.
     fn get_retained_values(&self) -> BTreeSet<V>;
 
+    /// The messages to re-send while the network makes no progress: this
+    /// node's Externalize for the most recently externalized slot, then its
+    /// latest message for the current slot. A peer that missed the original
+    /// Externalize can only finish that slot by receiving it again: an
+    /// externalized slot answers only messages that are new from their
+    /// sender, and a stuck peer has nothing new to send.
+    fn get_rebroadcast_messages(&self) -> Vec<Msg<V>>;
+
     /// Additional debug info, e.g. a JSON representation of the Slot's state.
     fn get_slot_debug_snapshot(&mut self, slot_index: SlotIndex) -> Option<String>;
 

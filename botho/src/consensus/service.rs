@@ -341,6 +341,12 @@ pub struct ConsensusService {
     /// clock before the first externalization (issue #653).
     started_at: Instant,
 
+    /// When the rebroadcast check last ran, and the SCP slot it saw then
+    /// (#1544). A slot that has not moved for a whole
+    /// [`ConsensusConfig::rebroadcast_interval`] re-sends this node's latest
+    /// messages so peers that lost them can still finish.
+    last_rebroadcast_check: (Instant, SlotIndex),
+
     /// A quorum set reconfiguration that arrived mid-round and was deferred to
     /// the next slot boundary to avoid stranding an in-flight slot.
     pending_quorum_set: Option<QuorumSet>,
@@ -563,6 +569,7 @@ impl ConsensusService {
             last_externalized_slot: None,
             last_externalized_at: None,
             started_at: Instant::now(),
+            last_rebroadcast_check: (Instant::now(), initial_slot),
             pending_quorum_set: None,
             // Default to 0 = no participation gate (genuine solo / dev / tests).
             // The node run loop calls `set_min_peers` to enable the gate when
@@ -1120,6 +1127,8 @@ impl ConsensusService {
         // application boundary before considering proposals for the new slot.
         self.check_externalized();
 
+        self.rebroadcast_if_stalled();
+
         // Get current slot duration (dynamic or fixed)
         let slot_duration = self.current_slot_duration();
 
@@ -1131,6 +1140,41 @@ impl ConsensusService {
 
         // Check if slot externalized
         self.check_externalized();
+    }
+
+    /// Re-send this node's latest SCP messages when the slot has not moved for
+    /// a whole rebroadcast interval (#1544).
+    ///
+    /// SCP only emits a message when its state changes, and gossip can lose
+    /// one (a publish that waits too long in the queue is dropped). If a
+    /// validator's Externalize is lost, it moves on to the next slot while
+    /// its peers wait for it in Commit with nothing new to say. With an
+    /// n-of-n quorum that wait never ends. Re-sending the latest messages
+    /// lets them finish. Receivers ignore copies they already hold.
+    fn rebroadcast_if_stalled(&mut self) {
+        if self.is_solo_mode() {
+            return;
+        }
+        let (checked_at, checked_slot) = self.last_rebroadcast_check;
+        if checked_at.elapsed() < self.config.rebroadcast_interval {
+            return;
+        }
+        let current = self.scp_node.current_slot_index();
+        self.last_rebroadcast_check = (Instant::now(), current);
+        if current != checked_slot {
+            return;
+        }
+        let msgs = self.scp_node.get_rebroadcast_messages();
+        if !msgs.is_empty() {
+            debug!(
+                slot = current,
+                count = msgs.len(),
+                "SCP slot has not advanced; rebroadcasting latest messages"
+            );
+        }
+        for msg in msgs {
+            self.queue_broadcast(msg);
+        }
     }
 
     /// Check if we're in solo mining mode (1-of-1 quorum with ourselves)
@@ -3408,6 +3452,81 @@ mod tests {
         assert!(
             chosen == a_tx.hash() || chosen == b_tx.hash(),
             "externalized minting tx must be one of the two proposed coinbases"
+        );
+    }
+
+    /// Run a 2-of-2 slot in which every message A sends after it externalizes
+    /// is lost for `outage_rounds` rounds (the w12 halt: the minter's Commit
+    /// and Externalize were dropped while its event loop was blocked).
+    /// Returns whether B externalized within `max_rounds`.
+    fn peer_externalizes_after_lost_externalize(
+        rebroadcast_interval: Duration,
+        outage_rounds: usize,
+        max_rounds: usize,
+    ) -> bool {
+        let mut cfg = ConsensusConfig::fixed_timing(0);
+        cfg.rebroadcast_interval = rebroadcast_interval;
+        let qs = recommended_quorum(&[1, 2]);
+        let mut a = ConsensusService::new(node(1), qs.clone(), cfg.clone(), genesis_chain_state());
+        let mut b = ConsensusService::new(node(2), qs, cfg, genesis_chain_state());
+        submit_and_register(&mut a, &mut b, &intrinsic_valid_minting_tx(1, [0u8; 32], 1));
+
+        let mut a_externalized_at: Option<usize> = None;
+        let mut to_a: Vec<ScpMessage> = Vec::new();
+        let mut to_b: Vec<ScpMessage> = Vec::new();
+        for round in 0..max_rounds {
+            for m in to_a.drain(..) {
+                let _ = a.handle_message(m);
+            }
+            for m in to_b.drain(..) {
+                let _ = b.handle_message(m);
+            }
+            a.tick();
+            b.tick();
+            let mut from_a = Vec::new();
+            while let Some(ev) = a.next_event() {
+                match ev {
+                    ConsensusEvent::BroadcastMessage(msg) => from_a.push(msg),
+                    ConsensusEvent::SlotExternalized { .. } => {
+                        a_externalized_at.get_or_insert(round);
+                    }
+                    _ => {}
+                }
+            }
+            let in_outage = a_externalized_at.is_some_and(|at| round < at + outage_rounds);
+            if !in_outage {
+                to_b.extend(from_a);
+            }
+            while let Some(ev) = b.next_event() {
+                match ev {
+                    ConsensusEvent::BroadcastMessage(msg) => to_a.push(msg),
+                    ConsensusEvent::SlotExternalized { .. } => {
+                        assert!(
+                            a_externalized_at.is_some(),
+                            "test assumes A, the proposer, externalizes first"
+                        );
+                        return true;
+                    }
+                    _ => {}
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    }
+
+    /// #1544 (w12 halt at height 4375): once a validator's Externalize is
+    /// lost, SCP alone never re-sends it, and an n-of-n peer waits in Commit
+    /// forever. The stalled-slot rebroadcast delivers it again.
+    #[test]
+    fn lost_externalize_is_recovered_by_stalled_slot_rebroadcast() {
+        assert!(
+            !peer_externalizes_after_lost_externalize(Duration::from_secs(3600), 10, 120),
+            "without rebroadcast the peer must stay stuck (reproduces #1544)"
+        );
+        assert!(
+            peer_externalizes_after_lost_externalize(Duration::from_millis(100), 10, 120),
+            "rebroadcast must deliver the lost Externalize"
         );
     }
 
