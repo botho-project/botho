@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import fleet_provision
 from cloud_retention import PROJECT, ROLES, apply_plan, backup, evidence, evidence_roots, inventory, make_plan
 
 
@@ -72,6 +73,21 @@ class RetentionTests(unittest.TestCase):
     def test_current_tag_scheme_selected(self):
         self.retag(project='botho', Purpose='qualification', SideProject='botho')
         self.assertEqual(self.plan()['volume_count'], 6)
+
+    def test_x_series_fleet_tagged_by_fleet_provision_selected(self):
+        # Ties the tag producer (fleet_provision.tags) to the retention consumer (make_plan).
+        self.retag(project='botho', Purpose='qualification', SideProject='botho')
+        expected = self.plan()['fleets'][0]
+        run = fleet_provision.run_id('20261101', 1, 'endurance')
+        for row in self.nodes[:-1] + self.volumes:
+            row['Tags'] = fleet_provision.tags(run, tags_of(row)['Role'], 1793786400)
+        plan = self.plan()
+        self.assertEqual(plan['volume_count'], 6)
+        self.assertEqual(plan['protected_latest_run'], 'q20261002-b')
+        fleet = plan['fleets'][0]
+        self.assertEqual(fleet['run'], 'q20261101-x1-endurance')
+        self.assertEqual({k: fleet[k] for k in ('instance_ids', 'volumes')},
+                         {k: expected[k] for k in ('instance_ids', 'volumes')})
 
     def test_public_botho_project_without_qualification_purpose_excluded(self):
         self.retag(project='botho', SideProject='botho')

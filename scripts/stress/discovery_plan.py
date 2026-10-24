@@ -33,6 +33,140 @@ def validate_lifetime(plan, config):
         raise Gate(f"fixed {mode} infrastructure lifetime must be {low}–{high} hours")
 
 
+# Scripted validator-degrade schedule (x-series, #1585). Fault roles n1..n5 map
+# in fixed order onto runtime.HOSTS, the keys the controller uses everywhere.
+DEGRADE_ROLES = tuple(f"n{i + 1}" for i in range(len(HOSTS)))
+DEGRADE_ACTIONS = {
+    # action -> exact target count
+    "stop_restart": 1,  # clean `systemctl stop` (SIGTERM), then start
+    "kill_restart": 1,  # SIGKILL, then start
+    "isolate": 1,  # firewall-isolate, no restart
+    "netem": 1,  # tc netem loss/latency
+    "stop_restart_pair": 2,  # below the 4-of-5 quorum: must halt safely
+}
+DEGRADE_STEP_KEYS = {
+    "id",
+    "action",
+    "targets",
+    "start_seconds",
+    "fault_seconds",
+    "recovery_seconds",
+    "offers",
+    "expect",
+}
+NETEM_KEYS = {"loss_percent", "delay_ms"}
+# Offers must stop this long before an `offers: none` fault so that in-flight
+# payments confirm while quorum still holds.
+DEGRADE_QUIET_LEAD_SECONDS = 300
+
+
+def degrade_opt_in(plan):
+    """The scoped opt-in; an absent key means False."""
+    from plan import require
+
+    value = plan["faults"].get("validator_degrade_phase", False)
+    require(type(value) is bool, "validator_degrade_phase must be a boolean")
+    return value
+
+
+def expand_degrade(plan, phase_bounds, events):
+    """Validate the `degrade` block; return steps with campaign-relative offsets.
+
+    Offsets are integer seconds from campaign `start`:
+    fault_start_offset (fault applied), restore_offset (executor restores)
+    and window_end_offset (node rejoined; step verdict taken).
+    """
+    from plan import require, integer
+
+    block = plan["degrade"]
+    require(
+        isinstance(block, dict) and set(block) == {"phase", "producer_role", "steps"},
+        "degrade block requires exactly phase, producer_role and steps",
+    )
+    require(block["phase"] in phase_bounds, "degrade phase names no plan phase")
+    require(block["producer_role"] in DEGRADE_ROLES, "unknown degrade producer role")
+    phase_start, phase_stop = phase_bounds[block["phase"]]
+    steps = block["steps"]
+    require(isinstance(steps, list) and steps, "degrade steps required")
+    offers = sorted(e["offset_seconds"] for e in events)
+    expanded, identifiers, previous_end = [], set(), phase_start
+    for step in steps:
+        require(isinstance(step, dict), "degrade step must be an object")
+        action = step.get("action")
+        require(action in DEGRADE_ACTIONS, "unknown degrade action")
+        keys = DEGRADE_STEP_KEYS | (NETEM_KEYS if action == "netem" else set())
+        require(set(step) == keys, f"degrade step fields must be exactly {sorted(keys)}")
+        step_id = step["id"]
+        require(
+            isinstance(step_id, str)
+            and re.fullmatch("[A-Za-z0-9_-]{1,16}", step_id)
+            and step_id not in identifiers,
+            "degrade step ids must be distinct short tokens",
+        )
+        identifiers.add(step_id)
+        targets = step["targets"]
+        require(
+            isinstance(targets, list)
+            and all(t in DEGRADE_ROLES for t in targets)
+            and len(set(targets)) == len(targets),
+            "degrade targets must be distinct n1..n5 roles",
+        )
+        require(
+            block["producer_role"] not in targets, "degrade must not target the producer"
+        )
+        require(
+            len(targets) == DEGRADE_ACTIONS[action],
+            f"{action} requires exactly {DEGRADE_ACTIONS[action]} target(s)",
+        )
+        require(step["offers"] in ("continue", "none"), "offers: continue or none")
+        require(step["expect"] in ("progress", "safe_halt"), "expect: progress or safe_halt")
+        if action == "stop_restart_pair":
+            require(
+                step["expect"] == "safe_halt" and step["offers"] == "none",
+                "below-quorum pair requires expect safe_halt and offers none",
+            )
+        fault = integer(step["fault_seconds"], "fault_seconds", 60)
+        recovery = integer(step["recovery_seconds"], "recovery_seconds", 300)
+        require(fault <= 3600 and recovery <= 3600, "degrade duration out of bounds")
+        start = phase_start + integer(step["start_seconds"], "start_seconds", 0)
+        restore, window_end = start + fault, start + fault + recovery
+        require(
+            previous_end <= start,
+            "degrade steps must be ordered and not overlap, including recovery",
+        )
+        require(window_end <= phase_stop, "degrade step outside its phase")
+        previous_end = window_end
+        if step["offers"] == "none":
+            quiet = start - DEGRADE_QUIET_LEAD_SECONDS
+            require(
+                not any(quiet <= at < window_end for at in offers),
+                "offer inside an offers:none step window or its quiet lead",
+            )
+        entry = {
+            "id": step_id,
+            "action": action,
+            "targets": list(targets),
+            "target_hosts": [HOSTS[DEGRADE_ROLES.index(t)] for t in targets],
+            "offers": step["offers"],
+            "expect": step["expect"],
+            "fault_start_offset": start,
+            "restore_offset": restore,
+            "window_end_offset": window_end,
+        }
+        if action == "netem":
+            loss, delay = step["loss_percent"], step["delay_ms"]
+            require(
+                type(loss) is int
+                and 0 <= loss <= 50
+                and type(delay) is int
+                and 0 <= delay <= 2000,
+                "netem requires integer loss_percent 0-50 and delay_ms 0-2000",
+            )
+            entry.update(loss_percent=loss, delay_ms=delay)
+        expanded.append(entry)
+    return expanded
+
+
 def expand_discovery(plan):
     from plan import require, integer, pico
 
@@ -109,6 +243,11 @@ def expand_discovery(plan):
         ),
         "public faults forbidden",
     )
+    degrade = degrade_opt_in(plan)
+    require(
+        degrade == ("degrade" in plan),
+        "validator_degrade_phase opt-in and degrade block require each other",
+    )
     rehearsal = plan["rehearsal"]
     require(
         600 <= integer(rehearsal["duration_seconds"], "rehearsal") <= 1800,
@@ -134,7 +273,7 @@ def expand_discovery(plan):
     wallet_order = list(range(count))
     rng.shuffle(wallet_order)
     events, phases, end, idle = [], [], 0, []
-    identifiers = set()
+    identifiers, phase_bounds = set(), {}
     for phase in plan["phases"]:
         start = integer(phase["start_hour"], "start", 0) * 3600
         stop = integer(phase["end_hour"], "end") * 3600
@@ -145,6 +284,7 @@ def expand_discovery(plan):
             "duplicate phase or missing gate",
         )
         identifiers.add(phase["id"])
+        phase_bounds[phase["id"]] = (start, stop)
         require(
             1 <= phase["max_inflight"] <= limits["max_inflight"], "phase inflight bound"
         )
@@ -208,8 +348,12 @@ def expand_discovery(plan):
             len(window) <= limits["max_normal_submissions_per_minute"],
             "combined offered rate exceeds cap",
         )
+    # Validate against the full campaign schedule before rehearsal clears it.
+    degrade_steps = expand_degrade(plan, phase_bounds, events) if degrade else None
     if mode == "rehearsal_only":
         events, phases = [], []
+        if degrade:
+            degrade_steps = []  # no campaign schedule, so no fault is scheduled
     rehearsal_count = (rehearsal["duration_seconds"] - 120) // rehearsal[
         "interval_seconds"
     ]
@@ -223,7 +367,7 @@ def expand_discovery(plan):
         <= limits["max_signed_fee_picocredits"],
         "insufficient worst-case fee budget",
     )
-    return {
+    summary = {
         "status": "DESIGN ONLY",
         "plan_sha256": hashlib.sha256(
             json.dumps(plan, sort_keys=True).encode()
@@ -235,4 +379,8 @@ def expand_discovery(plan):
         "rehearsal_payments": rehearsal_count,
         "total_planned_chain_write_ceiling": len(events) + rehearsal_count,
         "limitations": "Rate is an offer target, not network capacity. Real rehearsal required. Production dynamic fees need ~25+ tx/s, beyond this bounded generator.",
-    }, events
+    }
+    if degrade:
+        # Only with the opt-in, so existing summaries stay byte-identical.
+        summary["degrade_steps"] = degrade_steps
+    return summary, events

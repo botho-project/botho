@@ -122,6 +122,156 @@ class ResourceTests(unittest.TestCase):
                 check_identity({**status,key:'wrong'},plan)
 
 
+class DegradeWindowResourceTests(unittest.TestCase):
+    """check_resources(..., window) for #1585 degrade steps (#1586)."""
+
+    RESTART = 'unexpected node restart or binary change'
+
+    def setUp(self):
+        self.base={'at':1000,'pid':1,'start':'fixed','restarts':0,'binary':'hash',
+                   'config':'config-digest','node_key':'peer-key-digest',
+                   'disk_free':10*1024**3,'disk_total':20*1024**3,
+                   'mem_available':1024**3,'mem_total':2*1024**3,'swap':0,'rss':100*1024**2}
+        # D1-like step: stop at 2000, restart at 2050, rejoin by 2400.
+        self.window={'step':'D1','action':'stop_restart','fault_start':2000,
+                     'restore_at':2050,'window_end':2400}
+
+    def row(self, at, pid=1, start='fixed', **extra):
+        return {**self.base,'at':at,'pid':pid,'start':start,**extra}
+
+    def error(self, at):
+        return {'at':at,'error':'FileNotFoundError: /proc/0/status'}
+
+    def ring(self):
+        """30 records as the observer exports: pre-stop, stopped, restarted."""
+        return ([self.row(t) for t in range(1955,2000,5)]
+                + [self.error(t) for t in range(2000,2055,5)]
+                + [self.row(t,pid=2,start='restarted') for t in range(2055,2105,5)])
+
+    def assertRestartGate(self, records, baseline, now, window):
+        with self.assertRaises(Gate) as caught:
+            check_resources(records,baseline,now,window)
+        self.assertEqual(str(caught.exception),self.RESTART)
+
+    def test_three_argument_form_is_unchanged(self):
+        self.assertIsNone(check_resources([self.base],self.base,1000))
+        self.assertIsNone(check_resources([self.base],self.base,1000,None))
+
+    def test_unscheduled_restart_gates(self):
+        ring=self.ring()
+        self.assertEqual(len(ring),30)
+        # Host A with no step naming it: the caller passes None.
+        self.assertRestartGate([self.row(2100,pid=2,start='restarted')],self.base,2100,None)
+        # A kill-then-start fast enough that no error row was sampled.
+        fast=[self.row(2090),self.row(2095,pid=2,start='restarted'),self.row(2100,pid=2,start='restarted')]
+        self.assertRestartGate(fast,self.base,2100,None)
+        # The full observer ring: its error rows gate first, as today.
+        with self.assertRaises(Gate):check_resources(ring,self.base,2100,None)
+        # A step names host B only, so A's own call gets None: B's window
+        # never reaches A's gate, and A's restart still halts the run.
+        windows={HOSTS[1]:self.window}
+        self.assertIsNone(windows.get(HOSTS[0]))
+        self.assertRestartGate(fast,self.base,2100,windows.get(HOSTS[0]))
+        # The same window, given to the host it names, accepts its restart.
+        self.assertIsNotNone(check_resources(ring,self.base,2100,windows[HOSTS[1]]))
+
+    def test_restart_outside_the_window_gates(self):
+        # First observed at window_end: too late.
+        late=[self.row(2390),self.row(2395),self.row(2400,pid=2,start='restarted')]
+        self.assertRestartGate(late,self.base,2400,self.window)
+        # First observed before fault_start: too early, even if seen again inside.
+        early=[self.row(1990,pid=2,start='restarted'),self.row(2005,pid=2,start='restarted')]
+        self.assertRestartGate(early,self.base,2005,self.window)
+
+    def test_scheduled_restart_rebaselines_only_pid_and_start(self):
+        ring=self.ring()
+        new=check_resources(ring,self.base,2100,self.window)
+        self.assertEqual(new,{**self.base,'pid':2,'start':'restarted'})
+        self.assertEqual({k for k in self.base if self.base[k]!=new[k]},{'pid','start'})
+        self.assertEqual(new['rss'],self.base['rss'])
+        self.assertEqual(self.base['pid'],1)  # the stored baseline is not mutated
+        # Against the returned baseline the same ring is accepted, no new change.
+        self.assertIsNone(check_resources(ring,new,2100,self.window))
+        # A restart seen with base gone from the ring (only error rows before it).
+        self.assertEqual(check_resources(ring[9:],self.base,2100,self.window),new)
+
+    def test_second_restart_gates_against_returned_baseline(self):
+        ring=self.ring()
+        new=check_resources(ring,self.base,2100,self.window)
+        third=self.row(2105,pid=3,start='again')
+        # Inside the window: ring still shows pre-stop, restarted, third.
+        self.assertRestartGate(ring[1:]+[third],new,2105,self.window)
+        # Inside the window, pre-stop rows rolled out: the replaced process
+        # was alive after restore_at, so it was the restored process.
+        self.assertRestartGate([r for r in ring if r.get('pid')==2]+[third],new,2105,self.window)
+        # And against the original baseline: two changes in one window.
+        self.assertRestartGate(ring[1:]+[third],self.base,2105,self.window)
+        # Outside the window (the caller passes None again).
+        after=[self.row(t,pid=2,start='restarted') for t in range(2400,2450,5)]
+        self.assertIsNone(check_resources(after,new,2445,None))
+        self.assertRestartGate(after+[self.row(2450,pid=3,start='again')],new,2450,None)
+        # A process coming back (A, B, A) is not one restart either.
+        self.assertRestartGate(ring+[self.row(2105)],self.base,2105,self.window)
+
+    def test_identity_and_automatic_restart_still_gate_in_window(self):
+        ring=self.ring()
+        for key,message in [('binary',self.RESTART),('restarts',self.RESTART),
+                            ('config','node configuration or peer identity changed'),
+                            ('node_key','node configuration or peer identity changed')]:
+            with self.subTest(key=key):
+                changed=ring[:-1]+[{**ring[-1],key:1 if key=='restarts' else 'new'}]
+                with self.assertRaises(Gate) as caught:
+                    check_resources(changed,self.base,2100,self.window)
+                self.assertEqual(str(caught.exception),message)
+
+    def test_error_rows_tolerated_only_inside_restart_window(self):
+        ring=self.ring()
+        check_resources(ring,self.base,2100,self.window)
+        shifted={**self.window,'fault_start':2010}
+        with self.assertRaises(Gate) as caught:
+            check_resources(ring,self.base,2100,shifted)
+        self.assertEqual(str(caught.exception),'observer cannot read required metrics')
+        with self.assertRaises(Gate):check_resources(ring,self.base,2100,None)
+        # The node still stopped: only error rows inside the window.
+        stopped=[self.error(t) for t in range(2000,2030,5)]
+        self.assertIsNone(check_resources(stopped,self.base,2025,self.window))
+        # Resource breakers still apply to the live rows around the gap.
+        disk=ring[:-1]+[{**ring[-1],'disk_free':1024}]
+        with self.assertRaises(Gate):check_resources(disk,self.base,2100,self.window)
+        low=ring[:-2]+[{**r,'mem_available':100*1024**2} for r in ring[-2:]]
+        with self.assertRaises(Gate):check_resources(low,self.base,2100,self.window)
+
+    def test_every_restart_action_relaxes_the_same_way(self):
+        for action in ('stop_restart','kill_restart','stop_restart_pair'):
+            with self.subTest(action=action):
+                new=check_resources(self.ring(),self.base,2100,{**self.window,'action':action})
+                self.assertEqual((new['pid'],new['start']),(2,'restarted'))
+
+    def test_isolate_and_netem_relax_nothing(self):
+        for action in ('isolate','netem'):
+            window={**self.window,'action':action}
+            with self.subTest(action=action):
+                self.assertIsNone(check_resources([self.row(2100)],self.base,2100,window))
+                self.assertRestartGate([self.row(2100,pid=2,start='restarted')],
+                                       self.base,2100,window)
+                with self.assertRaises(Gate):
+                    check_resources([self.error(2095),self.row(2100)],self.base,2100,window)
+
+    def test_malformed_or_unknown_window_gates(self):
+        for window in [{**self.window,'action':'reboot'},
+                       {k:v for k,v in self.window.items() if k!='step'},
+                       {**self.window,'extra':1},
+                       {**self.window,'restore_at':2500}]:
+            with self.subTest(window=window),self.assertRaises(Gate):
+                check_resources(self.ring(),self.base,2100,window)
+
+    def test_actions_match_the_degrade_schema(self):
+        from discovery_plan import DEGRADE_ACTIONS
+        from runtime import HOLD_ACTIONS, RESTART_ACTIONS
+        self.assertEqual(RESTART_ACTIONS|HOLD_ACTIONS,set(DEGRADE_ACTIONS))
+        self.assertFalse(RESTART_ACTIONS&HOLD_ACTIONS)
+
+
 class CampaignTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp=tempfile.TemporaryDirectory()
