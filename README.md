@@ -243,18 +243,34 @@ Botho is derived from [MobileCoin](https://github.com/mobilecoinfoundation/mobil
 |:--|:--|
 | [botho](./botho) | Main node binary with RPC server |
 | [botho-wallet](./botho-wallet) | CLI wallet implementation |
+| [botho-exchange-scanner](./botho-exchange-scanner) | Client-side deposit detection for exchanges |
 | [bridge](./bridge) | BTH bridge core and bridge service |
 | [cluster-tax](./cluster-tax) | Progressive fee mechanism and monetary policy |
 | [consensus/scp](./consensus/scp) | Stellar Consensus Protocol implementation |
 | [contracts](./contracts) | Ethereum and Solana bridge contracts |
 | [core](./core) | Core shared types |
+| [common](./common) | Shared API-boundary types, errors, and logging |
+| [util](./util) | Small utility crates (serialization, test helpers, logging macros) |
 | [crypto](./crypto) | Cryptographic primitives (ring signatures, keys) |
+| [account-keys](./account-keys) | Account keys, subaddresses, and public address derivation |
+| [address-codec](./address-codec) | Shared base58 codec for address strings |
 | [transaction](./transaction) | Private transaction construction and signing |
 | [botho/src/ledger](./botho/src/ledger) | Blockchain state and LMDB storage (inside the `botho` crate) |
 | [gossip](./gossip) | libp2p networking and peer discovery |
 | [infra](./infra) | Deployment and monitoring infrastructure |
 | [mobile](./mobile) | Mobile app and Rust bridge |
 | [web](./web) | Web wallet, landing page, and UI components |
+| [whitepaper](./whitepaper) | Whitepaper and executive summary LaTeX sources |
+| [experiments](./experiments) | Economic simulation outputs and findings |
+| [fuzz](./fuzz) | Fuzz targets for crypto and deserialization code |
+| [discover](./discover) | CLI for discovering network topology and generating node configs |
+| [tests](./tests) | End-to-end test suites |
+| [docs](./docs) | Guides, design notes, decisions, and operations runbooks |
+| [audits](./audits) | Internal security audit reports |
+| [hooks](./hooks) | Optional git pre-commit and pre-push hooks |
+| [vendor](./vendor) | Vendored, patched third-party crates |
+| [scripts](./scripts) | Bridge, testnet, and stress-test drivers |
+| [tools](./tools) | Repository setup scripts, including git hook installation |
 
 ## Links
 

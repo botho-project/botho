@@ -19,6 +19,13 @@ HOSTS = ('seed.botho.io', 'seed2.botho.io', 'faucet.botho.io',
          'eu.seed.botho.io', 'ap.seed.botho.io')
 TERMINAL = ('reconciled', 'skipped', 'rejected', 'expired', 'aborted')
 PENDING = ('prepared', 'submitting', 'accepted', 'unknown', 'confirmed', 'recipient_verified')
+# The subset of PENDING still occupying chain/ingress capacity: not yet
+# confirmed on every host. Confirmed rows awaiting the batched wallet scan
+# (recipient/change verification) stay PENDING -- they still reserve their
+# sender, gate phase boundaries and drain -- but no longer count against
+# max_inflight, so a burst is not throttled by the reconcile cadence (#1551).
+INFLIGHT = ('prepared', 'submitting', 'accepted', 'unknown')
+assert set(INFLIGHT) < set(PENDING)
 
 
 class Gate(Exception):
@@ -187,6 +194,11 @@ class Journal:
     def pending(self):
         return self.rows('state IN (' + ','.join('?' for _ in PENDING) + ')', PENDING)
 
+    def inflight(self):
+        """Rows counted against max_inflight; see INFLIGHT. Sender reuse and
+        every other safety check must keep using pending()."""
+        return self.rows('state IN (' + ','.join('?' for _ in INFLIGHT) + ')', INFLIGHT)
+
     def prepare(self, identifier, artifact, phase_limit, deadline):
         """Artifact is already fsynced. Reserve every input and actual fee atomically."""
         with self.transaction():
@@ -194,7 +206,7 @@ class Journal:
             if intent['state'] != 'eligible' or self.clock() >= deadline:
                 raise Gate('preparation expired or intent already consumed')
             pending = self.pending()
-            if len(pending) >= min(self.limits['max_inflight'], phase_limit):
+            if len(self.inflight()) >= min(self.limits['max_inflight'], phase_limit):
                 raise Gate('inflight limit')
             if any(r['sender'] == intent['sender'] for r in pending if r['sender'] is not None):
                 raise Gate('wallet already reserved')
