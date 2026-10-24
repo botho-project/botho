@@ -1,6 +1,6 @@
 ---
 name: anvil-ip-uspto
-description: Anvil skill registration for 'ip-uspto' (canonical body at .anvil/skills/ip-uspto/SKILL.md)
+description: "Draft, review, and revise USPTO non-provisional utility patent applications (specification, claims, abstract, drawings, formal sections per 37 CFR) through the canonical anvil lifecycle extended with USPTO-specific phases."
 ---
 
 See `.anvil/skills/ip-uspto/SKILL.md` for the canonical skill body.

@@ -13,7 +13,7 @@ hard_rules:
   - AUDITED is the terminal state for every chapter — no chapter ships
     without a clean corpus-audit pass when the corpus tier is active.
 # Dual-corpus provenance (issue #597) — declared ONCE at the project level,
-# NOT per chapter. anvil/lib/project_brief.py::resolve_corpus_dirs already
+# NOT per chapter. anvil/lib/project_brief/voice.py::resolve_corpus_dirs already
 # resolves a list of N declared directories, in declared order.
 corpus:
   - transcripts/

@@ -1,6 +1,6 @@
 ---
 name: anvil-ip-search
-description: Anvil skill registration for 'ip-search' (canonical body at .anvil/skills/ip-search/SKILL.md)
+description: "Prior-art search utility for the ip suite — derives queries from a thread's inventive-feature inventory, queries a live patent corpus (PatentsView / USPTO Open Data Portal, Google Patents as a documented manual fallback), and writes cited reference summaries into <thread>/prior-art/ in the exact shape the prior-art positioning critics already consume. Degrades gracefully with no API key. A drafting aid, never a clearance search."
 ---
 
 See `.anvil/skills/ip-search/SKILL.md` for the canonical skill body.

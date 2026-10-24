@@ -14,12 +14,12 @@
 # the anvil source repo on the consumer machine.
 
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=84.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "anvil"
-version = "0.11.6"
+version = "0.11.24"
 description = "AI-orchestrated artifact creation using the filesystem as the coordination layer (consumer-side install)."
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -36,8 +36,8 @@ license = { text = "MIT" }
 #     transitively required by `from anvil.lib import ...` — see issue
 #     #231 for the canary reproducer.
 dependencies = [
-    "pydantic>=2.0",
-    "pyyaml>=6.0",
+    "pydantic>=2.13.4",
+    "pyyaml>=6.0.3",
 ]
 
 # Opt-in extras mirrored from the source repo. Each one corresponds to a
@@ -53,7 +53,7 @@ dependencies = [
 # next time install-anvil.sh runs.
 auto_shrink = [
     "Pillow>=12.3.0",
-    "numpy>=1.24",
+    "numpy>=2.2.6",
 ]
 # `anvil:deck` deck-imagegen JPEG/WebP-to-PNG transcode (issue #564).
 # Real image backends (Flux, DALL-E, SDXL, etc.) often default to JPEG or

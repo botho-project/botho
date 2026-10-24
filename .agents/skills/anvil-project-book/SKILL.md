@@ -1,6 +1,6 @@
 ---
 name: anvil-project-book
-description: Anvil skill registration for 'project-book' (canonical body at .anvil/skills/project-book/SKILL.md)
+description: "Assemble a multi-thread project into one compiled book — stage the latest version of every chapter thread into a consumer-owned master LaTeX document, compile it (two-pass XeLaTeX), and report per-thread convergence state."
 ---
 
 See `.anvil/skills/project-book/SKILL.md` for the canonical skill body.

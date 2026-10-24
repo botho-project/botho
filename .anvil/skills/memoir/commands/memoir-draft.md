@@ -47,7 +47,7 @@ abandoned thread.)
      re-validate, and propagates a `ValueError` rather than degrading
      silently.
    - Otherwise write `metadata.max_iterations =
-     anvil/lib/project_brief.py::DEFAULT_MAX_ITERATIONS` (4) and
+     anvil/lib/project_brief/types.py::DEFAULT_MAX_ITERATIONS` (4) and
      `metadata.iteration_cap_rationale = null`. No warning — both keys
      absent is the default-cap case.
    - **Never write `metadata.revision_class`.** That key classifies a
@@ -58,7 +58,7 @@ abandoned thread.)
      `v1 draft` term of its budget-composition line (see
      `memoir-revise.md` §"BLOCKED notice" item 3).
 3. **Load corpus grounding (conditional — #597)**: invoke
-   `anvil/lib/project_brief.py::resolve_corpus_dirs(<project_dir>)` per
+   `anvil/lib/project_brief/voice.py::resolve_corpus_dirs(<project_dir>)` per
    `anvil/lib/snippets/provenance.md` §Section 1. The `<project_dir>` is
    the PROJECT root (`corpus:` is declared once at the project level per
    SKILL.md §Dual-corpus provenance, never per-chapter).
@@ -84,7 +84,7 @@ abandoned thread.)
      (`resolve_corpus_dirs` returns `missing: true` entries, never raises);
      the critics surface the broken declaration as a `major` finding.
 4. **Load author voice grounding (conditional — #461, narrator tier)**:
-   invoke `anvil/lib/project_brief.py::resolve_voice_docs(<project_dir>)`
+   invoke `anvil/lib/project_brief/voice.py::resolve_voice_docs(<project_dir>)`
    per `anvil/lib/snippets/voice_grounding.md`. When active, load values →
    style_guide → vocabulary → corpus exemplars and choose 3-5
    voice-matched exemplars for the NARRATOR framing prose (never the
@@ -93,7 +93,7 @@ abandoned thread.)
    field and draft without narrator calibration.
 5. **Load subject voice grounding (conditional — #598, dialogue tier)**:
    invoke
-   `anvil/lib/project_brief.py::resolve_subject_voice_docs(<project_dir>)`
+   `anvil/lib/project_brief/voice.py::resolve_subject_voice_docs(<project_dir>)`
    (same `<project_dir>`; the subject tier activates independently of
    the author tier) per `anvil/lib/snippets/voice_grounding.md`
    §"Subject voice tier". For each subject whose dialogue this chapter

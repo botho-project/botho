@@ -1,6 +1,6 @@
 ---
 name: anvil-installation
-description: Anvil skill registration for 'installation' (canonical body at .anvil/skills/installation/SKILL.md)
+description: "Draft, review, and revise experiential / installation-art concept proposals using the standard anvil lifecycle."
 ---
 
 See `.anvil/skills/installation/SKILL.md` for the canonical skill body.

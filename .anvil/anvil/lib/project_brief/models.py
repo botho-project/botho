@@ -697,6 +697,24 @@ class ResolvedCorpusDir(BaseModel):
     )
 
 
+class EditorialOverride(BaseModel):
+    """One operator decision recorded in a document's ``editorial_overrides:`` (issue #1373).
+
+    A critic finding matches only when its ``evidence_span`` names
+    ``slide`` AND its ``dimension`` equals ``dimension`` (exact match;
+    no free text). ``dimension`` is stored as a string — the rubric dim
+    number for ``slides-review`` (``"4"``) or the vision dim key for
+    ``slides-vision`` (``"slide_density"``).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    slide: int
+    dimension: str
+    reason: str
+    date: str
+
+
 class BriefDocument(BaseModel):
     """One entry in the project BRIEF's ``documents:`` frontmatter list.
 
@@ -739,7 +757,7 @@ class BriefDocument(BaseModel):
         consolidation moved it here).
     render_engine
         Optional per-document override for the memo HTML/PDF engine
-        used by ``anvil/lib/render_gate.py``. One of
+        used by ``anvil/lib/render_gate/``. One of
         ``"weasyprint"``, ``"xelatex"``, or ``"wkhtmltopdf"`` (issue
         #320). When set, ``_select_memo_engine`` honors this request
         if the named binary is on PATH; otherwise it gracefully
@@ -1088,6 +1106,9 @@ class BriefDocument(BaseModel):
     # Same scalar-or-list normalization as spec_ref / code_ref (issue #890),
     # via _validate_voice_corpus_exclude / _validate_companion_ref.
     voice_corpus_exclude: Optional[List[str]] = Field(default=None)
+    # Operator decisions critics must not re-flag (issue #1373). Validated
+    # by _normalize_editorial_overrides; None when the key is absent.
+    editorial_overrides: Optional[List[EditorialOverride]] = Field(default=None)
 
 
 class AiByline(BaseModel):

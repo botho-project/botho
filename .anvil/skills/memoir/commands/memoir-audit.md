@@ -103,7 +103,7 @@ interrupt of EACH critic removed by `cleanup_one_staging(...)` at entry
    to a factual showstopper the reviser must fix before advance.
 4. **Resolve the corpus tier (conditional — the exhaustive
    corpus-provenance sweep)**: invoke
-   `anvil/lib/project_brief.py::resolve_corpus_dirs(<project_dir>)`
+   `anvil/lib/project_brief/voice.py::resolve_corpus_dirs(<project_dir>)`
    (project-level, per SKILL.md §Dual-corpus provenance) per
    `anvil/lib/snippets/provenance.md` §Section 1.
    - **When active** (>=1 resolved dir): open a SECOND

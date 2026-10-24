@@ -1,6 +1,6 @@
 ---
 name: anvil-primer
-description: Anvil skill registration for 'primer' (canonical body at .anvil/skills/primer/SKILL.md)
+description: "Draft, review, audit, revise, and illustrate long-form pedagogical explainers (teach-from-intuition companions to a formal spec) through the canonical anvil lifecycle. Markdown source-of-truth with an optional PDF render; ends at AUDITED with a documented publish handoff. Pedagogical scaffolding is the owned dominant rubric dimension."
 ---
 
 See `.anvil/skills/primer/SKILL.md` for the canonical skill body.

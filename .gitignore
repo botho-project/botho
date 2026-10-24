@@ -1,6 +1,8 @@
 # Logs
 logs
 *.log
+# Committed research evidence (reproducible run transcripts) is kept on purpose.
+!scripts/research/**/evidence/**/*.log
 junit*
 
 # Rust
@@ -164,3 +166,6 @@ __pycache__/
 /.squad/squad.db
 /.squad/squad.db-shm
 /.squad/squad.db-wal
+
+# Session handoff note (/repo:handoff) - session state, never committed.
+.claude/handoff.md

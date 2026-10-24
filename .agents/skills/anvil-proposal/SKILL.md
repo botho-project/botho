@@ -1,6 +1,6 @@
 ---
 name: anvil-proposal
-description: Anvil skill registration for 'proposal' (canonical body at .anvil/skills/proposal/SKILL.md)
+description: "Draft, review, audit, and revise buildable-system proposals — the pre-commitment document pitching a concrete buildable system to whoever holds the commitment — using the standard anvil lifecycle."
 ---
 
 See `.anvil/skills/proposal/SKILL.md` for the canonical skill body.

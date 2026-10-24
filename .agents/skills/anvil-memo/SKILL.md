@@ -1,6 +1,6 @@
 ---
 name: anvil-memo
-description: Anvil skill registration for 'memo' (canonical body at .anvil/skills/memo/SKILL.md)
+description: "Draft, review, and revise investment memos and internal analytical documents using the standard anvil lifecycle."
 ---
 
 See `.anvil/skills/memo/SKILL.md` for the canonical skill body.

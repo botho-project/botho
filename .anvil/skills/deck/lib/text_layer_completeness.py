@@ -46,7 +46,7 @@ How it works
 3. Extract the rendered ``deck.pdf``'s per-page text via ``pdftotext``
    (poppler-utils), splitting on the form-feed page separator poppler
    emits by default. Mirrors the ``_which_pdftotext`` / ``_extract_pdf_text``
-   precedent in ``anvil/lib/render_gate.py`` (~line 826 / 840), including
+   precedent in ``anvil/lib/render_gate/`` (~line 826 / 840), including
    its Unicode-whitespace-normalization contract: poppler's ``pdftotext``
    collapses Unicode ``Zs``-category separator spaces (NBSP, thin space,
    narrow NBSP, …) to a plain ASCII space during extraction, so the same
@@ -83,7 +83,7 @@ Why skill-local (not ``anvil/lib/``)
 
 This is only the **second** consumer of "extract a PDF page's text via
 ``pdftotext`` and compare against source content" — the first being
-``anvil/lib/render_gate.py``'s whole-document glyph-verification check for
+``anvil/lib/render_gate/``'s whole-document glyph-verification check for
 the LaTeX skills (``report`` / ``paper`` / ``spec`` / ``primer``). That
 check compares *codepoint counts* across an entire document; this one
 compares a *specific line's presence* on a *specific page* — different
@@ -181,7 +181,7 @@ class TextLayerCompletenessResult:
 # --- pdftotext extraction -----------------------------------------------------
 #
 # Mirrors the ``_which_pdftotext`` / ``_extract_pdf_text`` precedent in
-# ``anvil/lib/render_gate.py`` (~line 826 / 840): a ``shutil.which``
+# ``anvil/lib/render_gate/`` (~line 826 / 840): a ``shutil.which``
 # resolver plus a subprocess call to stdout, both graceful-degrading to
 # ``None`` (never raising) on a missing binary / missing PDF / subprocess
 # failure. This module additionally splits the extraction into per-page
@@ -233,7 +233,7 @@ def _extract_pdf_page_texts(
 def _normalize_whitespace(text: str) -> str:
     """Fold Unicode separator-spaces to ASCII and collapse whitespace runs.
 
-    Mirrors ``anvil/lib/render_gate.py``'s pdftotext-normalization
+    Mirrors ``anvil/lib/render_gate/``'s pdftotext-normalization
     contract (see its ``_sweep_nonascii_codepoints`` docstring): poppler's
     ``pdftotext`` collapses Unicode ``Zs``-category separator spaces (NBSP,
     thin space, narrow NBSP, …) to a plain ASCII space during extraction.

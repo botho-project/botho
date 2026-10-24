@@ -81,7 +81,7 @@ corpus:
   - letters/
 ```
 
-`anvil/lib/project_brief.py::resolve_corpus_dirs` already resolves N
+`anvil/lib/project_brief/voice.py::resolve_corpus_dirs` already resolves N
 declared directories in declared order — **no `anvil/lib/` change is
 needed for the "dual" in dual-corpus**; the contract was already a list.
 Every chapter thread under `documents:` inherits the same resolved corpus.
@@ -229,7 +229,7 @@ authority:
    Git history of `BRIEF.md` is the durable record.
    `anvil/skills/memo/SKILL.md` §"Per-document override contract" is the
    schema-of-record (the fields are shared, in
-   `anvil/lib/project_brief.py`); memoir reuses it verbatim rather than
+   `anvil/lib/project_brief/`); memoir reuses it verbatim rather than
    defining a memoir-local variant.
 
    ```yaml
@@ -389,7 +389,7 @@ issue #346) and writes its sidecar atomically via `anvil/lib/sidecar.py`
 ## Project BRIEF artifact type
 
 `memoir` is registered as a **skill-identity** `artifact_type` value in the
-shared project-BRIEF registry (`anvil/lib/project_brief.py::REGISTERED_ARTIFACT_TYPES`
+shared project-BRIEF registry (`anvil/lib/project_brief/types.py::REGISTERED_ARTIFACT_TYPES`
 / `SKILL_IDENTITY_ARTIFACT_TYPES`; per the
 #386/#408/#432/#440/#460/#486/#686/#697 precedent). In a shared project
 BRIEF, a `documents:` entry with `artifact_type: memoir` declares that

@@ -20,7 +20,7 @@ For each ``![alt](figures/<name>.png)`` reference in ``deck.md``:
 
 1. Resolve the intrinsic PNG dimensions from the IHDR chunk (stdlib
    ``struct.unpack`` — no Pillow), via
-   ``anvil/lib/render_gate.py::_read_png_dimensions``. The PNG's
+   ``anvil/lib/render_gate/memo_image_dimensions.py::_read_png_dimensions``. The PNG's
    physical density (``pHYs`` chunk, when present) is read the same
    way — see "DPI awareness" below.
 2. Compute the displayed height ``H_disp`` on the slide:
@@ -341,7 +341,7 @@ _DEFAULT_GEOMETRY = Geometry()
 #
 # ``_read_png_dimensions`` (bytes 16-24 of a signature-verified PNG carry
 # big-endian u32 width/height; the IHDR chunk is mandated first by the PNG
-# spec) is promoted to ``anvil/lib/render_gate.py`` and imported above —
+# spec) is promoted to ``anvil/lib/render_gate/`` and imported above —
 # see that module for the implementation. ``_PNG_SIGNATURE`` stays local:
 # ``_read_png_dpi`` below (a related-but-not-identical ``pHYs``-chunk
 # parser, not promoted) still needs it.

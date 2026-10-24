@@ -1631,10 +1631,10 @@ def write_critic_review_dir(
         their ``exist_ok=True`` overwrite-in-place). Under
         ``atomic=True`` this also sweeps any leftover staging dir from a
         prior interrupted run (:func:`cleanup_one_staging`, issue #376)
-        before staging fresh. When ``False``, a pre-existing sibling dir
-        is left alone under ``atomic=False`` (mirroring
-        ``exist_ok=False``) or raises :class:`FileExistsError` under
-        ``atomic=True`` (:func:`staged_sidecar`'s own immutability
+        before staging fresh. When ``False``, a rerun over a pre-existing
+        sibling dir raises :class:`FileExistsError` under both
+        ``atomic=False`` (mirroring plain ``mkdir(..., exist_ok=False)``)
+        and ``atomic=True`` (:func:`staged_sidecar`'s own immutability
         default) — one-shot semantics for a caller that wants a rerun to
         be a hard error rather than a silent overwrite.
 

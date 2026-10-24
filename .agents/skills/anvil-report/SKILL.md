@@ -1,6 +1,6 @@
 ---
 name: anvil-report
-description: Anvil skill registration for 'report' (canonical body at .anvil/skills/report/SKILL.md)
+description: "Draft, review, audit, revise, and promote customer-facing technical reports through the anvil lifecycle, with a two-stage AUDITED → CUSTOMER-READY promotion gate."
 ---
 
 See `.anvil/skills/report/SKILL.md` for the canonical skill body.
