@@ -319,6 +319,17 @@ impl<V: Value, ValidationError: Clone + Display + 'static> ScpNode<V> for Node<V
         messages
     }
 
+    fn get_rebroadcast_messages(&self) -> Vec<Msg<V>> {
+        let current = self.current_slot.get_last_message_sent();
+        let previous = self
+            .current_slot
+            .get_index()
+            .checked_sub(1)
+            .and_then(|index| self.get_externalized_slot(index))
+            .and_then(|slot| slot.get_last_message_sent());
+        current.into_iter().chain(previous).collect()
+    }
+
     /// Get the current slot's index.
     fn current_slot_index(&self) -> SlotIndex {
         self.current_slot.get_index()
@@ -697,6 +708,47 @@ mod tests {
             Ok(outgoing_msgs) => assert_eq!(outgoing_msgs.len(), 1), // Should return a message.
             Err(e) => panic!("Unexpected error {e:?}"),
         }
+    }
+
+    #[test_with_logger]
+    // Rebroadcast re-sends the current slot's latest message and the previous
+    // slot's Externalize, so a peer that lost the Externalize can finish (#1544).
+    fn test_get_rebroadcast_messages(logger: Logger) {
+        let slot_index = 1985;
+        let mut node = get_node(slot_index, logger);
+        let nominate = Msg::new(
+            node.ID.clone(),
+            node.quorum_set(),
+            slot_index,
+            Topic::Nominate(NominatePayload {
+                X: Default::default(),
+                Y: Default::default(),
+            }),
+        );
+        let externalize = Msg::new(
+            node.ID.clone(),
+            node.quorum_set(),
+            slot_index - 1,
+            Topic::Externalize(ExternalizePayload {
+                C: Ballot::new(4, &[]),
+                HN: 3,
+            }),
+        );
+
+        let mut slot = MockScpSlot::new();
+        slot.expect_get_index().return_const(slot_index);
+        slot.expect_get_last_message_sent()
+            .return_const(Some(nominate.clone()));
+        node.current_slot = Box::new(slot);
+        assert_eq!(node.get_rebroadcast_messages(), vec![nominate.clone()]);
+
+        let mut previous = MockScpSlot::new();
+        previous.expect_get_index().return_const(slot_index - 1);
+        previous
+            .expect_get_last_message_sent()
+            .return_const(Some(externalize.clone()));
+        node.push_externalized_slot(Box::new(previous));
+        assert_eq!(node.get_rebroadcast_messages(), vec![nominate, externalize]);
     }
 
     #[test_with_logger]
