@@ -21,6 +21,16 @@
 # Follows the throwaway-repo harness pattern in test-worktree-sentinel.sh:
 # a bare origin remote + a working repo, with worktree.sh + its lib/ helpers
 # copied into a temp tree, then the script driven directly.
+#
+# Needs a BUILT `loom-daemon` since #8195 slice 3: `worktree.sh remove` is now
+# a thin stub over `loom-daemon worktree-remove`. Every assertion below is
+# unchanged from the shell implementation — running them against the port is
+# the equivalence evidence — so this suite moved to the "Native Port Suites" CI
+# job, which builds the binary, and FAILS rather than skips without one.
+#
+# Usage:
+#   cargo build --package loom-daemon
+#   bash defaults/scripts/tests/test-worktree-remove.sh
 
 set -euo pipefail
 
@@ -28,18 +38,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$SCRIPTS_DIR/../.." && pwd)"
 
+# shellcheck source=lib/require-daemon-bin.sh
+source "$SCRIPT_DIR/lib/require-daemon-bin.sh"
+loom_test_require_daemon_bin "$SCRIPTS_DIR" "worktree-remove"
+
 WORKTREE_SH="$SCRIPTS_DIR/worktree.sh"
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-NC='\033[0m'
-
-TESTS_RUN=0
-TESTS_PASSED=0
-TESTS_FAILED=0
-
-pass() { TESTS_RUN=$((TESTS_RUN + 1)); TESTS_PASSED=$((TESTS_PASSED + 1)); echo -e "  ${GREEN}PASS${NC}: $1"; }
-fail() { TESTS_RUN=$((TESTS_RUN + 1)); TESTS_FAILED=$((TESTS_FAILED + 1)); echo -e "  ${RED}FAIL${NC}: $1"; }
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/assert.sh"
 
 # --- Throwaway repo setup ---------------------------------------------------
 TMP=$(mktemp -d /tmp/loom-remove-test.XXXXXX)

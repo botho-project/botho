@@ -33,7 +33,7 @@
   },
   "overrides": {
     "@coral-xyz/anchor@^0.29.0": {
-      "toml": "4.2.0"
+      "toml": "5.0.1"
     },
     "@solana/web3.js@^1.99.0": {
       "jayson": "5.0.0"

@@ -9,7 +9,7 @@
 # transition on ANY issue, including issues bouncing through Builder-claim ->
 # Judge-approve -> Champion merge-risk-hold -> re-claim cycles (observed on
 # #5607/#5629). Every bounce manufactured its own docs PR. This mirrors the
-# #5643 incident `urgent-flip-guard.sh` fixed for `loom:urgent` specifically,
+# #5643 label-flip incident (fixed then by a per-label flip guard, since retired),
 # but nothing analogous gated the plan-body regeneration itself.
 #
 # The #5890 fix added a time-based debounce: `update_work_plan()` only writes
@@ -76,16 +76,7 @@ else
     GUIDE_MD="$REPO_ROOT/defaults/.claude/commands/loom/guide.md"
 fi
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-NC='\033[0m'
-
-TESTS_RUN=0
-TESTS_PASSED=0
-TESTS_FAILED=0
-
-pass() { TESTS_RUN=$((TESTS_RUN + 1)); TESTS_PASSED=$((TESTS_PASSED + 1)); echo -e "  ${GREEN}PASS${NC}: $1"; }
-fail() { TESTS_RUN=$((TESTS_RUN + 1)); TESTS_FAILED=$((TESTS_FAILED + 1)); echo -e "  ${RED}FAIL${NC}: $1"; }
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/assert.sh"
 
 assert_eq() {
     local actual="$1" expected="$2" msg="$3"

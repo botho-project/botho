@@ -21,6 +21,28 @@ permissions:
   contents: read
 
 jobs:
+  lru-panic-safety:
+    name: Vendored LRU panic safety
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/lru-panic-safety
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Upstream tests and panic-safety regression
+        run: |
+          cargo test --manifest-path vendor/lru/Cargo.toml --locked
+          cargo test --manifest-path vendor/lru/Cargo.toml --locked --no-default-features
+      - name: Install Miri
+        run: rustup toolchain install nightly-2026-10-23 --profile minimal --component miri
+      - name: Verify the regression under Miri
+        run: |
+          cargo +nightly-2026-10-23 miri test --manifest-path vendor/lru/Cargo.toml --locked --test pop_panic_safety
+          cargo +nightly-2026-10-23 miri test --manifest-path vendor/lru/Cargo.toml --locked --test pop_panic_safety --no-default-features
+
   cargo-deny:
     name: cargo deny
     runs-on: ubuntu-latest
@@ -33,3 +55,19 @@ jobs:
         with:
           command: check
           arguments: --all-features
+
+  glib-iterator-safety:
+    name: Vendored GLib iterator safety
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Install native GLib dependencies
+        run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev pkg-config
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Optimized upstream library tests
+        run: cargo test --manifest-path vendor/glib/Cargo.toml --release --locked --lib
+      - name: Optimized string iterator regressions
+        run: cargo test --manifest-path vendor/glib/Cargo.toml --release --locked --test security_variant_iter
