@@ -1,6 +1,8 @@
 # Logs
 logs
 *.log
+# Committed research evidence (reproducible run transcripts) is kept on purpose.
+!scripts/research/**/evidence/**/*.log
 junit*
 
 # Rust
