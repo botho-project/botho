@@ -512,7 +512,11 @@ peer gating (`botho/src/network/discovery.rs`).
 
 **Bootstrap order:** (1) explicit `bootstrap_peers` in `config.toml`, (2) DNS
 TXT discovery (`seeds.botho.io` / `seeds.testnet.botho.io`), (3) hardcoded
-fallback list. The testnet fallback list ships the regional seeds live and
+fallback list, unless `network.fallback_seeds = false` (#1578; step 3 also
+covers a DNS query that fails or returns no records, and the resolved list is
+re-dialed by the reconnect tick for the node's lifetime). Isolated test
+clusters set `fallback_seeds = false` plus `dns_seeds.enabled = false` so they
+cannot dial the live network. The testnet fallback list ships the regional seeds live and
 on by default as of 2026-07-04 (#613; verifiable in `seeds.rs`, where
 `fallback_seeds(Network::Testnet)` unconditionally returns the primary plus
 regionals): a primary (`seed.botho.io`) plus regional hosts

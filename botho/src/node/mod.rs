@@ -178,9 +178,9 @@ impl Node {
             peer_count = self.config.network.bootstrap_peers.len(),
             "Bootstrap peers configured"
         );
-        if self.config.network.bootstrap_peers.is_empty() {
-            warn!("No bootstrap peers configured - add bootstrap_peers to config.toml");
-        }
+        // The old "No bootstrap peers configured" warning was removed (#1578):
+        // an empty list still resolves to DNS / the built-in fallback seeds,
+        // and `run` now logs the actual bootstrap source at resolution time.
         Ok(())
     }
 

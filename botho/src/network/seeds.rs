@@ -10,8 +10,12 @@
 //! ## Bootstrap order (see PLAN.md "Network Bootstrap Strategy")
 //!
 //! 1. Explicitly configured `bootstrap_peers` in `config.toml` (if non-empty).
-//! 2. DNS TXT-record discovery (`seeds.botho.io` / `seeds.testnet.botho.io`).
-//! 3. The hardcoded fallback list defined here.
+//! 2. DNS TXT-record discovery (`seeds.botho.io` / `seeds.testnet.botho.io`),
+//!    if `[network.dns_seeds] enabled`.
+//! 3. The hardcoded fallback list defined here, unless `network.fallback_seeds
+//!    = false` (#1578). This step also covers a DNS query that fails or returns
+//!    no records. An isolated node sets `fallback_seeds = false` and disables
+//!    DNS so it never dials these public seeds.
 //!
 //! ## Multi-seed / regional seeds
 //!
