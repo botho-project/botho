@@ -328,7 +328,55 @@ def check_identity(status, plan):
         raise Gate('network or software identity changed')
 
 
-def check_resources(records, baseline, now):
+# Degrade-step actions (discovery_plan.DEGRADE_ACTIONS, #1585) split by what
+# the restart gate may relax. Only a scheduled stop/kill-then-start may change
+# the node process; isolate and netem never relax anything.
+RESTART_ACTIONS = frozenset({'stop_restart', 'kill_restart', 'stop_restart_pair'})
+HOLD_ACTIONS = frozenset({'isolate', 'netem'})
+WINDOW_KEYS = frozenset({'step', 'action', 'fault_start', 'restore_at', 'window_end'})
+
+
+def check_resources(records, baseline, now, window=None):
+    """Gate one host's observer ring against its stored baseline.
+
+    ``window`` is the caller's view of the active ``degrade_steps`` entry
+    (#1585) whose ``target_hosts`` names this host, in absolute seconds:
+    ``{step, action, fault_start, restore_at, window_end}``. Pass ``None``
+    when no active step names the host: the gate is then exactly the strict
+    one and returns ``None``. ``isolate`` and ``netem`` windows relax nothing.
+
+    For a restart action, rows dated in ``[fault_start, window_end)`` may be
+    observer ``error`` rows (the unit has no live process), and at most one
+    ``(pid, start)`` change from ``baseline`` is accepted, first observed in
+    that interval. ``restarts``, ``binary``, ``config`` and ``node_key`` must
+    never change. When the ring shows the accepted change it returns a copy
+    of ``baseline`` with only ``pid`` and ``start`` replaced, for the caller
+    to persist (``rss`` and the rest stay the launch values, so post-idle
+    RSS growth is still measured from launch); otherwise ``None``.
+
+    Being pure, the gate sees only the ~150 s ring. Against the returned
+    baseline, a further change is a ``Gate`` while the ring still shows the
+    replaced process, or when the replaced process was alive at or after
+    ``restore_at`` (the restored process itself). A caller should still
+    persist at most one re-baseline per step, since a second restart whose
+    predecessor has left the ring entirely is indistinguishable here.
+    """
+    if window is None:
+        _check_resources_strict(records, baseline, now)
+        return None
+    if set(window) != WINDOW_KEYS or not (
+            window['fault_start'] <= window['restore_at'] <= window['window_end']):
+        raise Gate('malformed degrade window')
+    if window['action'] in HOLD_ACTIONS:
+        _check_resources_strict(records, baseline, now)
+        return None
+    if window['action'] not in RESTART_ACTIONS:
+        raise Gate('unknown degrade action')
+    return _check_resources_restart(records, baseline, now, window)
+
+
+def _check_resources_strict(records, baseline, now):
+    """The unrelaxed gate: any restart, error row or identity change halts."""
     if not records or now-records[-1]['at'] > 60 or records[-1]['at'] > now+10:
         raise Gate('stale required observer')
     latest = records[-1]
@@ -350,3 +398,59 @@ def check_resources(records, baseline, now):
     if len(records) >= 25 and records[-1]['at']-records[-25]['at'] >= 115 and all(
             r['swap'] > 64*1024**2 for r in records[-25:]):
         raise Gate('sustained process swap')
+
+
+def _check_resources_restart(records, baseline, now, window):
+    if not records or now-records[-1]['at'] > 60 or records[-1]['at'] > now+10:
+        raise Gate('stale required observer')
+    lo, hi = window['fault_start'], window['window_end']
+    live = []
+    for row in records:
+        if row.get('error'):
+            if lo <= row['at'] < hi:
+                continue  # stopped by the step: no process, no metrics
+            raise Gate('observer cannot read required metrics')
+        if not row.get('config') or not row.get('node_key'):
+            raise Gate('observer configuration identity missing')
+        # Restart=no (#1589): an automatic restart is never the executor's.
+        if (row['restarts'],row['binary']) != (baseline['restarts'],baseline['binary']):
+            raise Gate('unexpected node restart or binary change')
+        if any(row.get(k)!=baseline.get(k) for k in ('config','node_key')):
+            raise Gate('node configuration or peer identity changed')
+        if row['disk_free'] < max(row['disk_total']*.20, 2*1024**3):
+            raise Gate('disk headroom')
+        live.append(row)
+    # Distinct processes in ring order, each with the first row showing it.
+    runs = []
+    for row in live:
+        if not runs or (row['pid'],row['start']) != runs[-1][0]:
+            runs.append(((row['pid'],row['start']),row))
+    keys = [key for key,_ in runs]
+    base = (baseline['pid'],baseline['start'])
+    if len(keys) > 2 or len(set(keys)) != len(keys):
+        raise Gate('unexpected node restart or binary change')  # two changes, or a process coming back
+    rebaseline = None
+    if keys and keys != [base]:
+        if keys[-1] != base:
+            # base -> new, or new alone once base has left the ring.
+            if len(keys) == 2 and keys[0] != base:
+                raise Gate('unexpected node restart or binary change')
+            new = keys[-1]
+            rebaseline = {**baseline, 'pid': new[0], 'start': new[1]}
+        # else: predecessor -> base; base is this window's re-baseline.
+        first = runs[-1][1]
+        if not lo <= first['at'] < hi:
+            raise Gate('unexpected node restart or binary change')
+        # The replaced process must not outlive the scheduled restore: one
+        # alive at or after restore_at is the restored process, and
+        # replacing it would be a second restart in the window.
+        if len(keys) == 2 and any((r['pid'],r['start']) == keys[0]
+                                  and r['at'] >= window['restore_at'] for r in live):
+            raise Gate('unexpected node restart or binary change')
+    if len(live) >= 2 and all(r['mem_available'] < max(r['mem_total']*.15,256*1024**2)
+                              for r in live[-2:]):
+        raise Gate('low available host memory')
+    if len(live) >= 25 and live[-1]['at']-live[-25]['at'] >= 115 and all(
+            r['swap'] > 64*1024**2 for r in live[-25:]):
+        raise Gate('sustained process swap')
+    return rebaseline

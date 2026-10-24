@@ -196,6 +196,63 @@ escalation. Existing journal crash/ambiguous-submit checks apply to both profile
 V2 restores a wallet but does not automatically kill validators or restart a
 controller; those fault semantics continue to have offline fault-injection tests.
 
+### Degrade phase plan (x-series)
+
+`x-series-plan.json` is the v2 plan with one scoped exception: a scripted
+`degrade` phase that faults validators on the **isolated qualification fleet**
+and checks recovery. It is **never** for the public testnet. Schema v1 (the
+public-testnet format) rejects `faults.validator_degrade_phase` and any
+`degrade` block, and v2 still rejects every `public_*` fault key, `isolated_only`
+other than `true`, and public ingresses.
+
+- **Opt-in.** `faults.validator_degrade_phase: true`, accepted only by the
+  isolated v2 planner. An absent key means `false`. The opt-in and a top-level
+  `degrade` block require each other.
+- **Block.** `degrade.phase` names a plan phase, `producer_role` names the
+  minting producer (`n3` on the qualification fleet), and `steps` lists the
+  faults. Each step has exactly `id`, `action`, `targets`, `start_seconds`
+  (from the phase start), `fault_seconds` (60–3600), `recovery_seconds`
+  (300–3600), `offers` (`continue` or `none`) and `expect` (`progress` or
+  `safe_halt`). Actions: `stop_restart` (`systemctl stop`, SIGTERM),
+  `kill_restart` (SIGKILL), `isolate` (no restart), `netem` (also requires
+  integer `loss_percent` 0–50 and `delay_ms` 0–2000) and `stop_restart_pair`.
+- **Rules.** Steps are ordered and lie wholly inside the named phase, recovery
+  included, so only one is active at a time. Targets are distinct `n1`–`n5`
+  roles and never the producer. Single-target actions take one target;
+  `stop_restart_pair` takes two and, being below the 4-of-5 quorum, must be
+  `expect: safe_halt` with `offers: none`. For an `offers: none` step no
+  campaign offer may fall in `[fault_start − 300 s, window_end)`, so in-flight
+  payments confirm before quorum is lost.
+- **Expanded schedule.** With the opt-in, the summary carries `degrade_steps`:
+  `id`, `action`, `targets`, `target_hosts` (the `runtime.HOSTS` strings,
+  `n1`–`n5` in order), `offers`, `expect`, the netem parameters on `netem`
+  steps, and three integer offsets in seconds from campaign start:
+  `fault_start_offset` (fault applied), `restore_offset` (= fault start +
+  `fault_seconds`; the executor restarts, un-isolates or removes netem) and
+  `window_end_offset` (= restore + `recovery_seconds`; the node must have
+  rejoined and the step verdict is taken). This is the one schedule the
+  restart gate, controller tolerance, fault executor and verdicts read.
+  Without the opt-in the key is absent and existing summaries are unchanged.
+  In `rehearsal_only` mode the block is still validated but `degrade_steps` is
+  empty: no fault is scheduled.
+
+The x-series plan keeps every v2 budget and the seed, and splits the old
+48–72 `repeat` into `degrade` 48–54 and `repeat` 54–72 (22,480 campaign
+offers). The degrade phase offers at 4/minute from 48 h (880 offers, last at
++13,185 s) and again from 52.5 h (360 offers), leaving D5 and its lead quiet:
+
+| Step | Action | Target | Fault start → restore → window end (s after 48 h) | Offers | Expect |
+| --- | --- | --- | --- | --- | --- |
+| D1 | `stop_restart` | n1 | 0 → 1800 → 3600 | continue | progress |
+| D2 | `kill_restart` | n2 | 3600 → 4200 → 6000 | continue | progress |
+| D3 | `isolate` | n4 | 6000 → 7800 → 9600 | continue | progress |
+| D4 | `netem` 20 % loss, 250 ms | n5 | 9600 → 11400 → 13200 | continue | progress |
+| D5 | `stop_restart_pair` | n1, n2 | 13500 → 14100 → 15900 | none | safe_halt |
+
+15,900–21,600 s is an in-phase soak, followed by the 54–72 h post-fault soak.
+The producer `n3` is never faulted. `node_commit` and `genesis` are per-run
+pins set in the staged copy, as are any netem adjustments.
+
 ### Rehearsal-only live qualification
 
 Before committing to a new 72-hour campaign, use a **fresh** isolated v2 plan
@@ -439,3 +496,59 @@ no node service, and no controller data. Local deployment markers must also
 be absent. That proof is copied and verified before deletion, and a later EC2
 launch invalidates it. This exception cannot substitute for archives once a
 workload has been deployed.
+
+### x-series tags and host bootstrap
+
+x-series qualification fleets are provisioned from tracked renderers in
+`scripts/stress/fleet_provision.py`. It is pure and makes no AWS calls; the
+operator's untracked `provision.py` imports it and keeps only the `aws`
+invocations and the files it persists between retries.
+
+Run ids have the form `qYYYYMMDD-xN-<label>`, for example
+`q20261101-x1-endurance`. `run_id()` and `validate_run_id()` require lowercase,
+a real calendar date, a positive `N`, and at most 48 characters, and they refuse
+any `-w<digits>` token so w-series names are never inherited.
+
+Every instance and its root volume carry the same tags, set at creation through
+the `RunInstances` `TagSpecifications` (`tag_specifications()`):
+
+| Key | Value |
+|---|---|
+| `Name` | `botho-<run>-<role>` |
+| `project` | `botho` |
+| `Purpose` | `qualification` |
+| `SideProject` | `botho` |
+| `Run` | the run id |
+| `Role` | `controller` or `n1`..`n5` |
+| `ExpiresAt` | `host_end`, epoch seconds |
+
+The security group carries `project`, `Purpose`, `SideProject` and `Run`.
+`project=botho` with `Purpose=qualification` is the scheme that
+`cloud_retention.py` selects; a regression test builds a fleet with
+`fleet_provision.tags()` and checks that retention selects it.
+
+- **Never emit `Project=` (capital P).** IAM tag keys match case-insensitively,
+  so `Project` collides with `project`, and `Project=botho-qualification` is
+  denied to the botho-deploy role. The renderer refuses any key that equals
+  `project` case-insensitively unless it is exactly `project`.
+- **`SideProject=botho` is set at creation**, not added later by another
+  profile. botho-deploy passed a dry-run of `ec2:RunInstances` and
+  `ec2:CreateSecurityGroup` with all three tags on 2026-10-24.
+
+`security_group_rules()` returns the only allowed ingress: tcp 22 from the
+operator addresses, and tcp 22, 443 and 17110 plus udp 17110 from the group
+itself. Port 17110 is the gossip port the staging renderer uses. Operator
+addresses must be explicit IPv4 `/32` hosts; `0.0.0.0/0` and wider ranges are
+refused.
+
+`bootstrap()` renders the EC2 user data in a fixed order: an absolute-stop
+systemd timer whose `OnCalendar` is `host_end`, then the
+`host_maintenance.bootstrap()` block that masks unattended APT maintenance,
+then package installs, users and SSH hardening, then the role and run markers
+under `/etc/botho-qualification/`. `infrastructure_plan()` returns the plan to
+freeze before any launch: `host_end = created_at + 82h` (inside the 83 h
+maintenance cap), `node_end = created_at + 81.5h`, and the roles with their
+instance types (`m6i.2xlarge` controller, `m6i.large` producer `n3`,
+`c6i.large` validators). `launch_request()` renders one role's `RunInstances`
+input from that plan. SSH host-key pinning and the SSH ControlPath, which must
+stay under macOS's 104-byte socket path limit, remain operator-side.
