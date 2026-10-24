@@ -57,17 +57,24 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// [`SYNC_INITIAL_GAP`].
 pub const SYNC_BEHIND_THRESHOLD: u64 = 10;
 
-/// Minimum gap that must trigger a historical catch-up download, regardless of
-/// the near-tip hysteresis [`SYNC_BEHIND_THRESHOLD`].
+/// Gap that a *gossiped* tip block must exceed before it triggers catch-up
+/// (see [`ChainSyncManager::note_gossiped_tip`]).
 ///
 /// Gossip can only ever deliver the *next contiguous* block (`local_height +
-/// 1`); any larger gap must go through the sync state machine. So a node behind
-/// by more than one block (i.e. `peer_height > local_height + 1`, a gap of >=
-/// 2) must enter `Downloading`. A 1-block lag (`peer_height == local_height +
-/// 1`) is left to gossip and does NOT trigger a download, avoiding thrash.
+/// 1`), so a gossiped block at `local_height + 1` is applied by gossip itself
+/// and must not start a download. A gossiped block further ahead (a gap of >=
+/// 2) can never be applied contiguously and does trigger catch-up, even from
+/// `Synced`.
 ///
-/// This is what makes a fresh joiner at height 0 against a tip of, say, 9 enter
-/// catch-up: `9 > 0 + 1` is true even though `9 > 0 + 10` is false.
+/// This constant does NOT gate the initial or recovery catch-up decision. In
+/// `Discovery` and `Failed` the node downloads on *any* gap to the best-known
+/// peer (`peer_height > local_height`), including a gap of one (#1579). A node
+/// that has just restarted, or just failed a sync, is not following the tip,
+/// and the block it is missing was gossiped while it was down: it will never be
+/// re-gossiped. Leaving a one-block lag to gossip there made a node restarted
+/// one block behind report `Synced` at once and wait on a stale tip until the
+/// *next* block happened to arrive. The steady-state `Synced` tolerance is the
+/// separate hysteresis [`SYNC_BEHIND_THRESHOLD`] (plus the #766 guard).
 pub const SYNC_INITIAL_GAP: u64 = 1;
 
 /// How often a synced node re-polls peers for their chain status.
@@ -669,30 +676,26 @@ impl ChainSyncManager {
             },
         );
 
-        // If we're not already downloading and a peer is ahead by a gap that
-        // gossip cannot bridge, (re)enter catch-up. The required gap depends on
-        // our current state:
+        // If we're not already downloading and a peer is ahead, (re)enter
+        // catch-up. The required gap depends on our current state:
         //
-        // - Initial join (Discovery) or recovery (Failed): use the gap-1 rule
-        //   (`SYNC_INITIAL_GAP`, gap >= 2). Gossip only ever delivers the next
-        //   contiguous block, so ANY gap >= 2 — including the entire 0->N initial
-        //   download for a small N — must go through the sync state machine. This is
-        //   the #423 fix: a fresh joiner at height 0 against a small tip (e.g. 9)
-        //   enters Downloading instead of jumping to Synced.
+        // - Initial join (Discovery) or recovery (Failed): ANY gap (`peer_height >
+        //   local_height`). The node is not following the tip yet, so even the one
+        //   block it is missing will not arrive by gossip: it was gossiped while the
+        //   node was down and is never re-gossiped (#1579). This also covers the #423
+        //   case: a fresh joiner at height 0 against a small tip (e.g. 9) enters
+        //   Downloading instead of jumping to Synced.
         //
         // - Already Synced (learned via a status refresh that a peer advanced): use the
         //   hysteresis threshold (`SYNC_BEHIND_THRESHOLD`). An already-caught-up node
         //   that lags a few blocks near the tip normally has that gap closed by gossip,
         //   so we avoid thrashing into a redundant historical download for every small
-        //   near-tip lag.
-        //
-        // Either way, a 1-block lag is left to gossip and never triggers a
-        // download.
+        //   near-tip lag. The #766 guard handles a small gap gossip fails to close.
         if !matches!(self.state, SyncState::Downloading { .. }) {
             let trigger_gap = if matches!(self.state, SyncState::Synced) {
                 SYNC_BEHIND_THRESHOLD
             } else {
-                SYNC_INITIAL_GAP
+                0
             };
             if let Some((best_peer, status)) = self.best_peer() {
                 if status.height > self.local_height + trigger_gap {
@@ -702,8 +705,8 @@ impl ChainSyncManager {
                     };
                     self.pending_request = None;
                 } else if matches!(self.state, SyncState::Discovery) {
-                    // Within one block of the tip during initial discovery:
-                    // gossip will close the gap. Mark synced.
+                    // The best-known peer is not ahead of us during initial
+                    // discovery: we are at the tip. Mark synced.
                     self.state = SyncState::Synced;
                 }
             }
@@ -901,11 +904,50 @@ impl ChainSyncManager {
         // (#644).
         self.peer_overlap_counts.clear();
 
-        // Check if we've caught up
+        // Check if we've caught up. Reaching the *original* target is not
+        // enough: a higher peer height may have been learned during the
+        // download (a status, or `note_gossiped_tip`), so finish or retarget
+        // against the best-known peer (#1579).
         if let SyncState::Downloading { target_height, .. } = self.state {
-            if new_height >= target_height {
+            if new_height >= target_height && self.finish_or_retarget_download() {
                 debug!(height = new_height, "Sync complete");
+            }
+        }
+    }
+
+    /// Leave `Downloading` once the download target has been reached: go to
+    /// `Synced` only if no known peer is ahead of `local_height`, otherwise
+    /// retarget the download to the best-known peer's height (#1579).
+    ///
+    /// `best_peer()` already excludes banned and consensus-incompatible peers,
+    /// so neither can hold the node in `Downloading`. Known heights only rise
+    /// (statuses and [`Self::note_gossiped_tip`]) and each batch fetches up to
+    /// [`BLOCKS_PER_REQUEST`] blocks, so retargeting converges.
+    ///
+    /// Clears the in-flight guard on retarget so `tick()` issues the next
+    /// batch from `local_height + 1`. Returns `true` if the state became
+    /// `Synced`.
+    fn finish_or_retarget_download(&mut self) -> bool {
+        let best = self.best_peer().map(|(peer, status)| (peer, status.height));
+        match best {
+            Some((peer, height)) if height > self.local_height => {
+                debug!(
+                    local_height = self.local_height,
+                    new_target = height,
+                    %peer,
+                    "Download target reached but a peer is further ahead; retargeting (#1579)"
+                );
+                self.state = SyncState::Downloading {
+                    peer,
+                    target_height: height,
+                };
+                self.pending_request = None;
+                false
+            }
+            _ => {
                 self.state = SyncState::Synced;
+                self.pending_request = None;
+                true
             }
         }
     }
@@ -1197,12 +1239,15 @@ impl ChainSyncManager {
                     // every peer is a zombie it returns `None` and we fall to the
                     // genesis branch below.
                     if let Some((best_peer, status)) = self.best_peer() {
-                        // Initial catch-up: trigger on any gap gossip can't
-                        // bridge (gap >= 2), NOT the near-tip hysteresis
-                        // threshold. A fresh joiner at height 0 against a small
-                        // tip (e.g. 9) must enter Downloading here rather than
-                        // jumping straight to Synced and stalling at 0.
-                        if status.height > self.local_height + SYNC_INITIAL_GAP {
+                        // Initial catch-up: trigger on ANY gap, NOT the
+                        // near-tip hysteresis threshold. A fresh joiner at
+                        // height 0 against a small tip (e.g. 9) must enter
+                        // Downloading rather than jumping straight to Synced
+                        // and stalling at 0 (#423). A node restarted one block
+                        // behind must download that block too: it was gossiped
+                        // while the node was down and will not be re-gossiped
+                        // (#1579).
+                        if status.height > self.local_height {
                             self.state = SyncState::Downloading {
                                 peer: best_peer,
                                 target_height: status.height,
@@ -1226,18 +1271,23 @@ impl ChainSyncManager {
                 None
             }
 
-            SyncState::Downloading {
-                peer,
-                target_height,
-            } => {
+            SyncState::Downloading { target_height, .. } => {
                 // The committed height is the single source of truth for the
                 // cursor: `on_blocks_added` advances it as batches land, and a
-                // batch is complete once it reaches the target (#641).
-                if self.local_height >= *target_height {
-                    self.state = SyncState::Synced;
-                    self.pending_request = None;
+                // batch is complete once it reaches the target (#641). The
+                // target may also be reached via `set_local_height` (gossip
+                // applied the blocks); either way, finish only if no known peer
+                // is further ahead, else retarget and keep downloading (#1579).
+                if self.local_height >= *target_height && self.finish_or_retarget_download() {
                     return Some(SyncAction::Synced);
                 }
+                // Re-read the (possibly retargeted) download peer.
+                // `finish_or_retarget_download` leaves us in `Downloading`
+                // whenever it did not report `Synced`, so the `else` is
+                // defensive only.
+                let SyncState::Downloading { peer, .. } = &self.state else {
+                    return None;
+                };
 
                 // In-flight guard: never issue a second `GetBlocks` while a
                 // prior request is still awaiting a response. The fixed-interval
@@ -1346,6 +1396,18 @@ mod tests {
         PeerId::random()
     }
 
+    /// `(peer, start_height, count)` of a `RequestBlocks` action, else `None`.
+    fn requested_blocks(action: Option<SyncAction>) -> Option<(PeerId, u64, u32)> {
+        match action {
+            Some(SyncAction::RequestBlocks {
+                peer,
+                start_height,
+                count,
+            }) => Some((peer, start_height, count)),
+            _ => None,
+        }
+    }
+
     // Rate limiter tests
 
     #[test]
@@ -1422,14 +1484,238 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_manager_stays_synced_if_one_block_behind() {
-        // During initial discovery the gap-1 rule applies (issue #423): a fresh
-        // node only ONE block behind is left to gossip and stays Synced.
+    fn test_discovery_one_block_behind_downloads_the_gap_block() {
+        // Issue #1579 (replaces `test_sync_manager_stays_synced_if_one_block_behind`,
+        // which encoded the bug): a node restarted ONE block behind must
+        // download the missing block, not report Synced and wait for gossip.
+        // The block it is missing was gossiped while it was down and will not
+        // be re-gossiped.
         let mut manager = ChainSyncManager::new(99);
         let peer = make_peer_id();
 
         manager.on_status(peer, 100, [1u8; 32]); // gap = 1
-        assert!(matches!(manager.state(), SyncState::Synced));
+        assert_eq!(
+            manager.state(),
+            &SyncState::Downloading {
+                peer,
+                target_height: 100
+            },
+            "a one-block gap at startup must enter Downloading, not Synced"
+        );
+        assert!(!manager.status_snapshot().synced);
+
+        assert_eq!(
+            requested_blocks(manager.tick(&[peer])),
+            Some((peer, 100, BLOCKS_PER_REQUEST))
+        );
+        manager.on_request_sent(peer);
+        assert!(!manager.status_snapshot().synced, "still catching up");
+
+        manager.on_blocks_added(100);
+        assert!(manager.is_synced());
+        assert!(manager.status_snapshot().synced);
+    }
+
+    #[test]
+    fn test_discovery_tick_one_block_behind_downloads_after_all_peers_answer() {
+        // Issue #1579, `tick` decision path: every compatible connected peer
+        // has answered and the best is at local + 1. Statuses are seeded
+        // directly so the decision is made by `tick`, not by `on_status`.
+        let mut manager = ChainSyncManager::new(99);
+        let peer_a = make_peer_id();
+        let peer_b = make_peer_id();
+        for (peer, height) in [(peer_a, 99), (peer_b, 100)] {
+            manager.peer_statuses.insert(
+                peer,
+                PeerStatus {
+                    height,
+                    tip_hash: [1u8; 32],
+                    last_updated: Instant::now(),
+                },
+            );
+        }
+        assert!(matches!(manager.state(), SyncState::Discovery));
+
+        // The deciding tick enters Downloading (no action yet).
+        assert!(manager.tick(&[peer_a, peer_b]).is_none());
+        assert_eq!(
+            manager.state(),
+            &SyncState::Downloading {
+                peer: peer_b,
+                target_height: 100
+            }
+        );
+        assert!(!manager.status_snapshot().synced);
+
+        assert_eq!(
+            requested_blocks(manager.tick(&[peer_a, peer_b])),
+            Some((peer_b, 100, BLOCKS_PER_REQUEST))
+        );
+        manager.on_blocks_added(100);
+        assert!(manager.is_synced());
+    }
+
+    #[test]
+    fn test_discovery_tick_equal_height_is_synced() {
+        // Unchanged: with every peer at our height, the `tick` decision path
+        // reports Synced immediately.
+        let mut manager = ChainSyncManager::new(100);
+        let peer = make_peer_id();
+        manager.peer_statuses.insert(
+            peer,
+            PeerStatus {
+                height: 100,
+                tip_hash: [1u8; 32],
+                last_updated: Instant::now(),
+            },
+        );
+        assert!(matches!(manager.tick(&[peer]), Some(SyncAction::Synced)));
+        assert!(manager.is_synced());
+    }
+
+    #[test]
+    fn test_failed_recovery_one_block_behind_downloads() {
+        // Issue #1579: recovery from `Failed` with the best peer at local + 1
+        // enters Downloading, both through `on_status` and through the
+        // retry -> Discovery -> status round.
+        let peer = make_peer_id();
+
+        // `on_status` while Failed.
+        let mut manager = ChainSyncManager::new(99);
+        manager.on_failure(None, "test".to_string());
+        manager.on_status(peer, 100, [1u8; 32]);
+        assert_eq!(
+            manager.state(),
+            &SyncState::Downloading {
+                peer,
+                target_height: 100
+            }
+        );
+
+        // Retry deadline passes -> Discovery -> status -> Downloading.
+        let mut manager = ChainSyncManager::new(99);
+        manager.on_failure(None, "test".to_string());
+        if let SyncState::Failed { retry_at, .. } = &mut manager.state {
+            *retry_at = Instant::now() - Duration::from_secs(1);
+        }
+        assert!(matches!(manager.tick(&[peer]), Some(SyncAction::RequestStatus(p)) if p == peer));
+        assert!(matches!(manager.state(), SyncState::Discovery));
+        manager.on_status(peer, 100, [1u8; 32]);
+        assert_eq!(
+            manager.state(),
+            &SyncState::Downloading {
+                peer,
+                target_height: 100
+            }
+        );
+        assert!(!manager.status_snapshot().synced);
+    }
+
+    #[test]
+    fn test_download_retargets_via_on_blocks_added_when_peer_advanced() {
+        // Issue #1579: a download that reaches its ORIGINAL target after a
+        // higher peer height was learned keeps downloading instead of
+        // declaring Synced.
+        let mut manager = ChainSyncManager::new(98);
+        let peer = make_peer_id();
+        manager.on_status(peer, 100, [1u8; 32]);
+        assert_eq!(
+            requested_blocks(manager.tick(&[peer])),
+            Some((peer, 99, BLOCKS_PER_REQUEST))
+        );
+        manager.on_request_sent(peer);
+
+        // While downloading, gossip reveals the tip moved to 103.
+        manager.note_gossiped_tip(&[peer], 103, [3u8; 32]);
+        assert!(matches!(
+            manager.state(),
+            SyncState::Downloading {
+                target_height: 100,
+                ..
+            }
+        ));
+
+        // The batch commits the original target: retarget, not Synced.
+        manager.on_blocks_added(100);
+        assert_eq!(
+            manager.state(),
+            &SyncState::Downloading {
+                peer,
+                target_height: 103
+            },
+            "a higher peer was learned during the download; keep downloading"
+        );
+        assert!(!manager.status_snapshot().synced);
+        assert_eq!(
+            requested_blocks(manager.tick(&[peer])),
+            Some((peer, 101, BLOCKS_PER_REQUEST))
+        );
+
+        manager.on_blocks_added(103);
+        assert!(manager.is_synced());
+    }
+
+    #[test]
+    fn test_download_retargets_via_tick_when_gossip_reached_target() {
+        // Issue #1579, `tick` path: gossip advanced the committed height to
+        // the original target (`set_local_height`) while a higher peer height
+        // is known. `tick` must retarget and request from local + 1.
+        let mut manager = ChainSyncManager::new(98);
+        let peer = make_peer_id();
+        manager.on_status(peer, 100, [1u8; 32]);
+        manager.note_gossiped_tip(&[peer], 103, [3u8; 32]);
+
+        manager.set_local_height(100);
+        assert_eq!(
+            requested_blocks(manager.tick(&[peer])),
+            Some((peer, 101, BLOCKS_PER_REQUEST))
+        );
+        assert_eq!(
+            manager.state(),
+            &SyncState::Downloading {
+                peer,
+                target_height: 103
+            }
+        );
+        assert!(!manager.status_snapshot().synced);
+
+        manager.set_local_height(103);
+        manager.pending_request = None; // the batch resolved
+        assert!(matches!(manager.tick(&[peer]), Some(SyncAction::Synced)));
+        assert!(manager.is_synced());
+    }
+
+    #[test]
+    fn test_download_finishes_when_no_peer_is_ahead() {
+        // Retarget must not hold a node in Downloading when nothing is ahead:
+        // reaching a target equal to the best-known height gives Synced.
+        let mut manager = ChainSyncManager::new(98);
+        let peer = make_peer_id();
+        manager.on_status(peer, 100, [1u8; 32]);
+        manager.on_blocks_added(100);
+        assert!(manager.is_synced());
+    }
+
+    #[test]
+    fn test_download_retarget_ignores_incompatible_peer_height() {
+        // `best_peer()` excludes consensus-incompatible peers, so a zombie's
+        // higher advertised height cannot hold a finished download open
+        // (#998 / #1000 preserved under the #1579 retarget).
+        let mut manager = ChainSyncManager::new(98);
+        let good = make_peer_id();
+        let zombie = make_peer_id();
+        manager.on_status(good, 100, [1u8; 32]);
+        manager.peer_statuses.insert(
+            zombie,
+            PeerStatus {
+                height: 5_000,
+                tip_hash: [9u8; 32],
+                last_updated: Instant::now(),
+            },
+        );
+        manager.incompatible_peers.insert(zombie);
+        manager.on_blocks_added(100);
+        assert!(manager.is_synced());
     }
 
     #[test]
@@ -1868,13 +2154,13 @@ mod tests {
         // Set a new local height
         manager.set_local_height(500);
 
-        // Verify by checking that tick returns correct behavior. With the
-        // local height at 500 and a peer one block ahead (501), the gap-1 rule
-        // leaves the node Synced (gossip closes a 1-block lag). If
-        // set_local_height had NOT updated the height, the peer at 501 would
-        // look 501 blocks ahead of height 0 and trigger Downloading.
+        // Verify by checking the discovery decision. With the local height at
+        // 500 and a peer at the same height, the node is Synced. If
+        // set_local_height had NOT updated the height, the peer at 500 would
+        // look 500 blocks ahead of height 0 and trigger Downloading. (A peer
+        // one block ahead now triggers a download too, #1579.)
         let peer = make_peer_id();
-        manager.on_status(peer, 501, [1u8; 32]);
+        manager.on_status(peer, 500, [1u8; 32]);
 
         assert!(manager.is_synced());
     }
