@@ -44,9 +44,10 @@ use crate::{
     },
     node::{MintedMintingTx, Node, SharedLedger},
     rpc::{
-        calculate_dir_size, init_metrics, start_metrics_server, start_rpc_server, FaucetState,
-        KeyTier, MetricsUpdater, NodeIdentity, PeerInfoSnapshot, RateLimiter, RpcState,
-        WsBroadcaster, DATA_DIR_USAGE_BYTES,
+        calculate_dir_size, init_metrics,
+        metrics::{record_gossip_publish_error, NodeLoopTimer},
+        start_metrics_server, start_rpc_server, FaucetState, KeyTier, MetricsUpdater, NodeIdentity,
+        PeerInfoSnapshot, RateLimiter, RpcState, WsBroadcaster, DATA_DIR_USAGE_BYTES,
     },
     transaction::Transaction,
     wallet::Wallet,
@@ -1128,6 +1129,11 @@ async fn run_async_with_shutdown(
     let mut terminal_consensus_failure = None;
 
     'node_loop: loop {
+        // Time this whole iteration (select wait + handler); recorded on drop,
+        // including early `continue`/`break`. Idle waits are bounded by the
+        // 500 ms consensus tick, so a >= 5 s iteration means a handler blocked
+        // the loop and the swarm went unpolled (#1545).
+        let _loop_timer = NodeLoopTimer::start();
         if shutdown.load(Ordering::SeqCst) {
             info!("Shutting down...");
             break;
@@ -2046,6 +2052,7 @@ async fn run_async_with_shutdown(
                                 NetworkDiscovery::broadcast_scp(&mut swarm, discovery.stats_ref(), &msg)
                             {
                                 warn!("Failed to broadcast SCP message: {}", e);
+                                record_gossip_publish_error("scp");
                             }
 
                             // For solo mining: loop our own message back to ourselves

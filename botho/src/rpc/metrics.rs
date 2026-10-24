@@ -19,6 +19,15 @@
 //!   externalizing (gauge, 0/1)
 //! - `botho_scp_slot_stall_seconds` - Seconds the active SCP slot has gone
 //!   without externalizing, 0 while idle (gauge)
+//! - `botho_gossip_failed_messages_total{kind}` - Gossipsub messages a peer
+//!   failed to receive in time, from `SlowPeer` events; `kind` is `priority` or
+//!   `non_priority` (counter, #1545)
+//! - `botho_gossip_publish_errors_total{topic}` - Synchronous gossipsub
+//!   `publish()` failures, e.g. `AllQueuesFull` (counter, #1545)
+//! - `botho_node_loop_iteration_seconds` - Duration of one `'node_loop` select
+//!   iteration including its handler (histogram, #1545)
+//! - `botho_node_loop_delayed_total` - `'node_loop` iterations that took at
+//!   least `NODE_LOOP_DELAY_WARN_THRESHOLD` (counter, #1545)
 //!
 //! ### System Metrics
 //! - `botho_data_dir_usage_bytes` - Bytes used by the data directory (gauge)
@@ -49,13 +58,19 @@ use lazy_static::lazy_static;
 #[cfg(all(feature = "process", target_os = "linux"))]
 use prometheus::process_collector::ProcessCollector;
 use prometheus::{
-    CounterVec, Encoder, Gauge, Histogram, HistogramOpts, IntCounter, IntGauge, Opts, Registry,
-    TextEncoder,
+    CounterVec, Encoder, Gauge, Histogram, HistogramOpts, IntCounter, IntCounterVec, IntGauge,
+    Opts, Registry, TextEncoder,
 };
 use serde::Serialize;
-use std::{convert::Infallible, net::SocketAddr, path::Path, sync::Arc};
+use std::{
+    convert::Infallible,
+    net::SocketAddr,
+    path::Path,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::net::TcpListener;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use super::RpcState;
 
@@ -414,6 +429,130 @@ lazy_static! {
         "botho_validation_failures_total",
         "Total transaction validation failures"
     ).expect("Failed to create validation_failures metric");
+
+    // ============================================================================
+    // Gossip delivery and event-loop health (#1545)
+    // ============================================================================
+
+    /// Gossipsub messages that a peer failed to receive in time, as reported
+    /// by `gossipsub::Event::SlowPeer` at each heartbeat. A non-zero
+    /// `non_priority` count means queued publishes (blocks, txs, SCP) expired
+    /// in the connection handler before they were sent; in w12 this lost a
+    /// validator's Commit/Externalize and halted consensus (#1544/#1545).
+    pub static ref GOSSIP_FAILED_MESSAGES: IntCounterVec = IntCounterVec::new(
+        Opts::new(
+            "botho_gossip_failed_messages_total",
+            "Gossipsub messages a slow peer failed to receive in time, by queue kind"
+        ),
+        &["kind"]
+    ).expect("Failed to create gossip_failed_messages metric");
+
+    /// Synchronous gossipsub `publish()` failures (`AllQueuesFull`,
+    /// `NoPeersSubscribedToTopic`, ...), labelled by topic.
+    pub static ref GOSSIP_PUBLISH_ERRORS: IntCounterVec = IntCounterVec::new(
+        Opts::new(
+            "botho_gossip_publish_errors_total",
+            "Gossipsub publish() calls that returned an error, by topic"
+        ),
+        &["topic"]
+    ).expect("Failed to create gossip_publish_errors metric");
+
+    /// Duration of one `'node_loop` select iteration, including its handler.
+    /// Idle iterations are bounded by the loop's shortest tick, so the upper
+    /// buckets only fill when a handler blocks the loop.
+    pub static ref NODE_LOOP_ITERATION_SECONDS: Histogram = Histogram::with_opts(
+        HistogramOpts::new(
+            "botho_node_loop_iteration_seconds",
+            "Duration of one node event-loop iteration including its handler"
+        ).buckets(vec![0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0])
+    ).expect("Failed to create node_loop_iteration_seconds metric");
+
+    /// `'node_loop` iterations that took at least
+    /// [`NODE_LOOP_DELAY_WARN_THRESHOLD`] (each also logs `node_loop_delayed`).
+    pub static ref NODE_LOOP_DELAYED: IntCounter = IntCounter::new(
+        "botho_node_loop_delayed_total",
+        "Node event-loop iterations that exceeded the delay warning threshold"
+    ).expect("Failed to create node_loop_delayed metric");
+}
+
+/// Kind label for [`GOSSIP_FAILED_MESSAGES`]: priority-queue failures.
+pub const GOSSIP_FAILED_KIND_PRIORITY: &str = "priority";
+/// Kind label for [`GOSSIP_FAILED_MESSAGES`]: non-priority-queue failures
+/// (publishes and forwards that expired before being sent).
+pub const GOSSIP_FAILED_KIND_NON_PRIORITY: &str = "non_priority";
+
+/// Record the per-peer failed-message counts from a gossipsub `SlowPeer`
+/// event.
+pub fn record_gossip_failed_messages(priority: usize, non_priority: usize) {
+    if priority > 0 {
+        GOSSIP_FAILED_MESSAGES
+            .with_label_values(&[GOSSIP_FAILED_KIND_PRIORITY])
+            .inc_by(priority as u64);
+    }
+    if non_priority > 0 {
+        GOSSIP_FAILED_MESSAGES
+            .with_label_values(&[GOSSIP_FAILED_KIND_NON_PRIORITY])
+            .inc_by(non_priority as u64);
+    }
+}
+
+/// Record one failed gossipsub `publish()` on `topic`.
+pub fn record_gossip_publish_error(topic: &str) {
+    GOSSIP_PUBLISH_ERRORS.with_label_values(&[topic]).inc();
+}
+
+/// A `'node_loop` iteration at least this long logs `node_loop_delayed` at
+/// `warn!` and increments [`NODE_LOOP_DELAYED`]. Gossipsub abandons queued
+/// publishes after `GOSSIPSUB_PUBLISH_QUEUE_DURATION`; a loop that stops
+/// polling the swarm for this long is already starving outbound gossip.
+pub const NODE_LOOP_DELAY_WARN_THRESHOLD: Duration = Duration::from_secs(5);
+
+/// Record one `'node_loop` iteration of length `elapsed`. Returns `true` when
+/// the iteration crossed `threshold` (and was logged and counted as delayed).
+pub fn record_node_loop_iteration(elapsed: Duration, threshold: Duration) -> bool {
+    NODE_LOOP_ITERATION_SECONDS.observe(elapsed.as_secs_f64());
+    if elapsed >= threshold {
+        NODE_LOOP_DELAYED.inc();
+        warn!(
+            event = "node_loop_delayed",
+            elapsed_ms = elapsed.as_millis() as u64,
+            "Node event loop iteration delayed; swarm was not polled"
+        );
+        true
+    } else {
+        false
+    }
+}
+
+/// RAII timer for one `'node_loop` select iteration including its handler.
+///
+/// Create it as the first statement of the loop body; dropping it (at the end
+/// of the iteration, or on `continue`/`break`) records the elapsed time via
+/// [`record_node_loop_iteration`]. Always on: not gated behind any feature.
+pub struct NodeLoopTimer {
+    start: Instant,
+    threshold: Duration,
+}
+
+impl NodeLoopTimer {
+    /// Start timing with the default [`NODE_LOOP_DELAY_WARN_THRESHOLD`].
+    pub fn start() -> Self {
+        Self::with_threshold(NODE_LOOP_DELAY_WARN_THRESHOLD)
+    }
+
+    /// Start timing with a custom delay threshold (used by tests).
+    pub fn with_threshold(threshold: Duration) -> Self {
+        Self {
+            start: Instant::now(),
+            threshold,
+        }
+    }
+}
+
+impl Drop for NodeLoopTimer {
+    fn drop(&mut self) {
+        record_node_loop_iteration(self.start.elapsed(), self.threshold);
+    }
 }
 
 /// Initialize all metrics and register them with the global registry.
@@ -477,6 +616,9 @@ pub fn init_metrics() {
         .register(Box::new(VALIDATION_FAILURES.clone()))
         .expect("Failed to register validation_failures");
 
+    // Register gossip delivery and event-loop health metrics (#1545)
+    register_loop_and_gossip_metrics(&REGISTRY);
+
     // Register system metrics
     REGISTRY
         .register(Box::new(DATA_DIR_USAGE_BYTES.clone()))
@@ -497,6 +639,22 @@ pub fn init_metrics() {
     crate::network::privacy::register_privacy_metrics(&REGISTRY);
 
     info!("Prometheus metrics initialized");
+}
+
+/// Register the gossip-delivery and node-loop metrics (#1545) with `registry`.
+fn register_loop_and_gossip_metrics(registry: &Registry) {
+    registry
+        .register(Box::new(GOSSIP_FAILED_MESSAGES.clone()))
+        .expect("Failed to register gossip_failed_messages");
+    registry
+        .register(Box::new(GOSSIP_PUBLISH_ERRORS.clone()))
+        .expect("Failed to register gossip_publish_errors");
+    registry
+        .register(Box::new(NODE_LOOP_ITERATION_SECONDS.clone()))
+        .expect("Failed to register node_loop_iteration_seconds");
+    registry
+        .register(Box::new(NODE_LOOP_DELAYED.clone()))
+        .expect("Failed to register node_loop_delayed");
 }
 
 /// Start the Prometheus metrics HTTP server.
@@ -840,6 +998,99 @@ mod tests {
         updater.set_scp_slot_stall_seconds(0);
         assert_eq!(SCP_SLOT_STALLED.get(), 0);
         assert_eq!(SCP_SLOT_STALL_SECONDS.get(), 0);
+    }
+
+    /// #1545: an iteration under the threshold is observed but not counted
+    /// as delayed; one at/over the threshold is both.
+    #[test]
+    fn test_node_loop_iteration_threshold() {
+        let threshold = Duration::from_millis(100);
+        let hist_before = NODE_LOOP_ITERATION_SECONDS.get_sample_count();
+        let delayed_before = NODE_LOOP_DELAYED.get();
+
+        assert!(!record_node_loop_iteration(
+            Duration::from_millis(10),
+            threshold
+        ));
+        assert!(record_node_loop_iteration(
+            Duration::from_millis(100),
+            threshold
+        ));
+        assert!(record_node_loop_iteration(
+            Duration::from_secs(8),
+            threshold
+        ));
+
+        // Other tests may record concurrently, so assert lower bounds.
+        assert!(NODE_LOOP_ITERATION_SECONDS.get_sample_count() >= hist_before + 3);
+        assert!(NODE_LOOP_DELAYED.get() >= delayed_before + 2);
+    }
+
+    /// #1545: the RAII timer records on drop, and a zero threshold makes any
+    /// iteration count as delayed without sleeping.
+    #[test]
+    fn test_node_loop_timer_records_on_drop() {
+        let hist_before = NODE_LOOP_ITERATION_SECONDS.get_sample_count();
+        let delayed_before = NODE_LOOP_DELAYED.get();
+        {
+            let _timer = NodeLoopTimer::with_threshold(Duration::ZERO);
+        }
+        assert!(NODE_LOOP_ITERATION_SECONDS.get_sample_count() > hist_before);
+        assert!(NODE_LOOP_DELAYED.get() > delayed_before);
+        assert_eq!(NODE_LOOP_DELAY_WARN_THRESHOLD, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_gossip_counters() {
+        let pri = || {
+            GOSSIP_FAILED_MESSAGES
+                .with_label_values(&[GOSSIP_FAILED_KIND_PRIORITY])
+                .get()
+        };
+        let non_pri = || {
+            GOSSIP_FAILED_MESSAGES
+                .with_label_values(&[GOSSIP_FAILED_KIND_NON_PRIORITY])
+                .get()
+        };
+        let (p0, n0) = (pri(), non_pri());
+        record_gossip_failed_messages(2, 7);
+        assert!(pri() >= p0 + 2);
+        assert!(non_pri() >= n0 + 7);
+
+        let errs = || {
+            GOSSIP_PUBLISH_ERRORS
+                .with_label_values(&["test-topic"])
+                .get()
+        };
+        let e0 = errs();
+        record_gossip_publish_error("test-topic");
+        assert_eq!(errs(), e0 + 1);
+    }
+
+    /// #1545: the new metric names appear in the `/metrics` text encoding.
+    #[test]
+    fn test_loop_and_gossip_metrics_encoded() {
+        // A private registry: the global REGISTRY can register each metric
+        // only once per process.
+        let registry = Registry::new();
+        register_loop_and_gossip_metrics(&registry);
+        record_gossip_failed_messages(1, 1);
+        record_gossip_publish_error("scp");
+        record_node_loop_iteration(Duration::from_millis(1), Duration::from_secs(5));
+
+        let mut buffer = Vec::new();
+        TextEncoder::new()
+            .encode(&registry.gather(), &mut buffer)
+            .unwrap();
+        let text = String::from_utf8(buffer).unwrap();
+        for name in [
+            "botho_gossip_failed_messages_total",
+            "botho_gossip_publish_errors_total",
+            "botho_node_loop_iteration_seconds",
+            "botho_node_loop_delayed_total",
+        ] {
+            assert!(text.contains(name), "{name} missing from /metrics:\n{text}");
+        }
     }
 
     #[test]
