@@ -55,3 +55,19 @@ jobs:
         with:
           command: check
           arguments: --all-features
+
+  glib-iterator-safety:
+    name: Vendored GLib iterator safety
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Install native GLib dependencies
+        run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev pkg-config
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Optimized upstream library tests
+        run: cargo test --manifest-path vendor/glib/Cargo.toml --release --locked --lib
+      - name: Optimized string iterator regressions
+        run: cargo test --manifest-path vendor/glib/Cargo.toml --release --locked --test security_variant_iter
