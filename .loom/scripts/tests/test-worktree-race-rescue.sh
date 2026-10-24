@@ -51,24 +51,27 @@
 # This is a pure lib-function test (no worktree.sh invocation needed) —
 # follows the pattern in test-disk-headroom.sh: source the lib directly,
 # drive it against a throwaway repo.
+#
+# SINCE #8195 SLICE 6 (epic #7810) the lib is a thin wrapper over
+# `loom-daemon worktree-reset`, so the function this file calls now drives the
+# RUST port. Every assertion below is unchanged from the shell implementation —
+# that is exactly what makes them the equivalence evidence for retiring it — so
+# the binary is pinned via loom_test_require_daemon_bin and this suite FAILS
+# rather than skips when there is none. A suite that skipped would remove the
+# port's evidence from CI while still reporting green.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPTS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# shellcheck source=lib/require-daemon-bin.sh
+source "$SCRIPT_DIR/lib/require-daemon-bin.sh"
+loom_test_require_daemon_bin "$SCRIPTS_DIR" "worktree-reset"
+
 RACE_RESCUE_LIB="$SCRIPTS_DIR/lib/worktree-race-rescue.sh"
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-NC='\033[0m'
-
-TESTS_RUN=0
-TESTS_PASSED=0
-TESTS_FAILED=0
-
-pass() { TESTS_RUN=$((TESTS_RUN + 1)); TESTS_PASSED=$((TESTS_PASSED + 1)); echo -e "  ${GREEN}PASS${NC}: $1"; }
-fail() { TESTS_RUN=$((TESTS_RUN + 1)); TESTS_FAILED=$((TESTS_FAILED + 1)); echo -e "  ${RED}FAIL${NC}: $1"; }
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/assert.sh"
 
 assert_eq() {
     if [[ "$1" == "$2" ]]; then pass "$3"; else fail "$3 (expected '$2', got '$1')"; fi
@@ -84,6 +87,11 @@ git init -q -b main "$TMP/repo"
 cd "$TMP/repo"
 git config user.email t@t
 git config user.name t
+# On git >= 2.47 every commit spawns a detached `git maintenance run --auto`
+# that keeps this repo as its cwd for a few ms after `git commit` returns. The
+# #7463 liveness probe would then refuse Test 1's reset (#9973).
+git config maintenance.auto false
+git config gc.auto 0
 echo "base content" > tracked.txt
 git add tracked.txt
 git commit -q -m "base"

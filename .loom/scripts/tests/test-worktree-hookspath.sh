@@ -24,16 +24,7 @@ SCRIPTS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 WORKTREE_SH="$SCRIPTS_DIR/worktree.sh"
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-NC='\033[0m'
-
-TESTS_RUN=0
-TESTS_PASSED=0
-TESTS_FAILED=0
-
-pass() { TESTS_RUN=$((TESTS_RUN + 1)); TESTS_PASSED=$((TESTS_PASSED + 1)); echo -e "  ${GREEN}PASS${NC}: $1"; }
-fail() { TESTS_RUN=$((TESTS_RUN + 1)); TESTS_FAILED=$((TESTS_FAILED + 1)); echo -e "  ${RED}FAIL${NC}: $1"; }
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/assert.sh"
 
 assert_eq() {
     if [[ "$1" == "$2" ]]; then pass "$3"; else fail "$3 (expected '$2', got '$1')"; fi
@@ -78,6 +69,11 @@ cleanup_repo() {
     rm -rf "$(dirname "$repo")"
 }
 
+# `--local`: what worktree.sh PERSISTED to the repo's config is the subject
+# here. The effective value also includes global and env-scoped config, and
+# inside a dispatched sweep the env-scoped `core.hooksPath` is loom's
+# provenance shim directory (#9027), which is not what worktree.sh wrote.
+
 # --- Test 1: repo WITH .githooks/ → hooksPath set ---
 echo "Test 1: repo WITH .githooks/ still gets core.hooksPath == .githooks"
 REPO=$(setup_repo hookrepo with-githooks)
@@ -87,7 +83,7 @@ REPO=$(setup_repo hookrepo with-githooks)
         echo "worktree.sh failed (see /tmp/wthooks-with.$$)"; cat /tmp/wthooks-with.$$
     }
 )
-HOOKS_WITH=$(git -C "$REPO/.loom/worktrees/issue-100" config --get core.hooksPath || true)
+HOOKS_WITH=$(git -C "$REPO/.loom/worktrees/issue-100" config --local --get core.hooksPath || true)
 assert_eq "$HOOKS_WITH" ".githooks" "core.hooksPath set to .githooks when repo ships .githooks/"
 cleanup_repo "$REPO"
 
@@ -101,7 +97,7 @@ REPO=$(setup_repo nohookrepo)
         echo "worktree.sh failed (see /tmp/wthooks-without.$$)"; cat /tmp/wthooks-without.$$
     }
 )
-HOOKS_WITHOUT=$(git -C "$REPO/.loom/worktrees/issue-200" config --get core.hooksPath || true)
+HOOKS_WITHOUT=$(git -C "$REPO/.loom/worktrees/issue-200" config --local --get core.hooksPath || true)
 assert_eq "$HOOKS_WITHOUT" "" "core.hooksPath unset when repo has no .githooks/"
 cleanup_repo "$REPO"
 
