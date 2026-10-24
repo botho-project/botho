@@ -1675,6 +1675,20 @@ impl ConsensusService {
             return false;
         }
 
+        // #1565: never fast-forward while an externalized decision awaits
+        // application. `externalized` is what gates proposals on the stale
+        // tip during the apply, and the run loop's deferred `advance_slot`
+        // must take it. Clearing it here would reopen proposals mid-apply.
+        // This only adds a refusal; the next sync batch or tick re-runs it.
+        if self.externalized.is_some() {
+            debug!(
+                chain_height,
+                "Not fast-forwarding SCP slot to synced chain height: an externalized \
+                 decision is still awaiting application"
+            );
+            return false;
+        }
+
         let target_slot = chain_height + 1;
         let current = self.scp_node.current_slot_index();
 
@@ -1915,6 +1929,18 @@ impl ConsensusService {
             .or_insert(0);
         if peer_slot > *entry {
             *entry = peer_slot;
+        }
+
+        // #1565: never anchor while an externalized decision awaits
+        // application (see `sync_scp_slot_to_chain`). Checked AFTER the
+        // advertised-slot record above so corroboration evidence still
+        // accrues; the next member message re-runs this after `advance_slot`.
+        if self.externalized.is_some() {
+            trace!(
+                peer_slot,
+                "Not anchoring SCP slot: an externalized decision is still awaiting application"
+            );
+            return false;
         }
 
         // FORWARD-ONLY: only anchor when the peer is STRICTLY ahead of us. If
@@ -3147,6 +3173,95 @@ mod tests {
         assert!(values.iter().any(|v| v.tx_hash == next.hash()));
         assert!(values.iter().any(|v| v.tx_hash == transfer_hash));
         assert!(values.iter().all(|v| v.tx_hash != stale.hash()));
+    }
+
+    /// Drive a 2-of-2 federated pair through slot 1 and return node A with
+    /// that decision surfaced but NOT applied (`externalized` is `Some`), the
+    /// state the run loop holds while the apply is in flight (#1565).
+    fn federated_pending_application() -> ConsensusService {
+        let cfg = ConsensusConfig::fixed_timing(0);
+        let qs = recommended_quorum(&[1, 2]);
+        let mut a = ConsensusService::new(node(1), qs.clone(), cfg.clone(), genesis_chain_state());
+        let mut b = ConsensusService::new(node(2), qs, cfg, genesis_chain_state());
+        let first = intrinsic_valid_minting_tx(1, [0; 32], 1);
+        submit_and_register(&mut a, &mut b, &first);
+        submit_and_register(&mut b, &mut a, &first);
+        let (a_values, _) = run_two_services(&mut a, &mut b, 4000);
+        assert!(a_values.is_some() && a.externalized.is_some());
+        assert_eq!(a.current_slot(), 2);
+        a
+    }
+
+    /// #1565: block-sync fast-forward must not clear a decision that awaits
+    /// application. Clearing it would reopen proposals on the stale tip and
+    /// leave the deferred `advance_slot` nothing to take. After
+    /// `advance_slot`, the fast-forward works again.
+    #[test]
+    fn sync_slot_fast_forward_waits_for_pending_externalized_application() {
+        let mut a = federated_pending_application();
+        let pending = a.externalized.clone();
+        let last = a.last_externalized_slot;
+        assert!(
+            !a.sync_scp_slot_to_chain(5),
+            "fast-forwarded while a decision awaits application"
+        );
+        assert_eq!(a.current_slot(), 2);
+        assert_eq!(a.externalized, pending, "pending decision was cleared");
+        assert_eq!(a.last_externalized_slot, last);
+
+        a.advance_slot();
+        assert!(a.externalized.is_none());
+        assert!(a.sync_scp_slot_to_chain(5));
+        assert_eq!(a.current_slot(), 6);
+    }
+
+    /// #1565: peer-slot anchoring must not clear a decision that awaits
+    /// application, but the advertised slot is still recorded so the
+    /// corroboration evidence survives. After `advance_slot`, the next member
+    /// message anchors. (In a 2-of-2 set a v-blocking set is one member.)
+    #[test]
+    fn peer_anchor_waits_for_pending_externalized_application() {
+        let mut a = federated_pending_application();
+        assert_eq!(a.anchor_corroboration_threshold(), 1);
+        let pending = a.externalized.clone();
+        let last = a.last_externalized_slot;
+        let target: SlotIndex = a.current_slot() + 3;
+        let nominate = |tag: u8, a: &mut ConsensusService| {
+            let tx = intrinsic_valid_minting_tx(tag, [0; 32], target);
+            a.register_minting_tx(tx.hash(), bincode::serialize(&tx).unwrap());
+            peer_nominate_only(
+                node(2),
+                recommended_quorum(&[1, 2]),
+                target,
+                ConsensusValue::from_minting_tx(tx.hash(), tx.pow_priority()),
+            )
+        };
+
+        let msg = nominate(60, &mut a);
+        a.handle_message(wire(&node(2), &msg))
+            .expect("handle_message");
+        assert_eq!(
+            a.current_slot(),
+            2,
+            "anchored while a decision awaits application"
+        );
+        assert_eq!(a.externalized, pending, "pending decision was cleared");
+        assert_eq!(a.last_externalized_slot, last);
+        assert_eq!(
+            a.peer_advertised_slots.get(&node(2)).copied(),
+            Some(target),
+            "corroboration evidence must still accrue"
+        );
+
+        a.advance_slot();
+        let msg = nominate(61, &mut a);
+        a.handle_message(wire(&node(2), &msg))
+            .expect("handle_message");
+        assert_eq!(
+            a.current_slot(),
+            target,
+            "must anchor once the decision is applied"
+        );
     }
 
     /// A mempool snapshot taken after SCP externalizes still contains its
