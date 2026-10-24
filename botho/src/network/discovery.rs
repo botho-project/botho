@@ -191,6 +191,42 @@ const UPGRADE_ANNOUNCEMENTS_TOPIC: &str = "botho/upgrades/1.0.0";
 /// Topic for peer exchange (PEX) messages
 const PEX_TOPIC: &str = "botho/pex/1.0.0";
 
+/// How long a locally published gossipsub message may wait in a connection
+/// handler's send queue before libp2p abandons it (libp2p default: 5 s).
+///
+/// In the w12 stress run (#1545, #1544) block produce/apply blocked the node
+/// event loop for ~8 s. While the loop is not polling the swarm, each
+/// connection task's bounded event channel to the swarm fills up and the task
+/// stops polling its handler, so queued publishes sit until this deadline
+/// expires and are then silently dropped (reported only as a heartbeat
+/// `SlowPeer` event). That lost a validator's Commit and Externalize and
+/// halted consensus. 30 s turns such a stall-induced drop into a late
+/// delivery: a late SCP message is harmless, a lost one can halt the slot.
+///
+/// Trade-off: the setting applies to every publish (blocks, transactions,
+/// SCP, PEX, ...), not only SCP, so a stalled node may deliver stale gossip
+/// up to 30 s late and hold it in memory meanwhile. Receivers already dedupe
+/// and validate, so stale delivery is safe. Forwarded messages keep the
+/// libp2p `forward_queue_duration` default (1 s) and the handler queue length
+/// keeps its default (5000): only our own publishes need the longer window.
+/// The root cause (work on the event loop) is tracked in #1550.
+pub const GOSSIPSUB_PUBLISH_QUEUE_DURATION: Duration = Duration::from_secs(30);
+
+/// Build the gossipsub configuration used by the node.
+///
+/// Factored out of [`NetworkDiscovery::start`] so it is testable without a
+/// swarm.
+pub fn gossipsub_config() -> Result<gossipsub::Config, gossipsub::ConfigBuilderError> {
+    // Use MAX_BLOCK_SIZE as the size limit since blocks are the largest
+    // messages.
+    gossipsub::ConfigBuilder::default()
+        .heartbeat_interval(Duration::from_secs(1))
+        .validation_mode(gossipsub::ValidationMode::Strict)
+        .max_transmit_size(MAX_BLOCK_SIZE)
+        .publish_queue_duration(GOSSIPSUB_PUBLISH_QUEUE_DURATION)
+        .build()
+}
+
 /// Parsed protocol version from peer agent string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtocolVersion {
@@ -771,14 +807,9 @@ impl NetworkDiscovery {
                 yamux::Config::default,
             )?
             .with_behaviour(|key| {
-                // Configure gossipsub with message size limits
-                // Use MAX_BLOCK_SIZE as the limit since blocks are the largest messages
-                let gossipsub_config = gossipsub::ConfigBuilder::default()
-                    .heartbeat_interval(Duration::from_secs(1))
-                    .validation_mode(gossipsub::ValidationMode::Strict)
-                    .max_transmit_size(MAX_BLOCK_SIZE)
-                    .build()
-                    .map_err(std::io::Error::other)?;
+                // Configure gossipsub (message size limits, publish queue
+                // duration; see `gossipsub_config`).
+                let gossipsub_config = gossipsub_config().map_err(std::io::Error::other)?;
 
                 let gossipsub = gossipsub::Behaviour::new(
                     MessageAuthenticity::Signed(key.clone()),
@@ -1460,6 +1491,27 @@ impl NetworkDiscovery {
                 None
             }
 
+            // A peer failed to receive gossip in time: publishes/forwards
+            // expired in its connection handler queue, or the queue was full.
+            // libp2p logs this only at debug!, so surface it at warn! and in
+            // metrics (#1545).
+            SwarmEvent::Behaviour(BothoBehaviourEvent::Gossipsub(gossipsub::Event::SlowPeer {
+                peer_id,
+                failed_messages,
+            })) => {
+                warn!(
+                    %peer_id,
+                    priority = failed_messages.priority,
+                    non_priority = failed_messages.non_priority,
+                    "Gossipsub slow peer: messages to this peer were dropped"
+                );
+                crate::rpc::metrics::record_gossip_failed_messages(
+                    failed_messages.priority,
+                    failed_messages.non_priority,
+                );
+                None
+            }
+
             // Handle sync request-response events
             SwarmEvent::Behaviour(BothoBehaviourEvent::Sync(
                 request_response::Event::Message { peer, message, .. },
@@ -1712,6 +1764,50 @@ impl NetworkDiscovery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1545: the node's gossipsub config sets the publish queue duration
+    /// deliberately rather than inheriting libp2p's 5 s default.
+    #[test]
+    fn gossipsub_config_sets_publish_queue_duration() {
+        let config = gossipsub_config().expect("gossipsub config builds");
+        assert_eq!(
+            config.publish_queue_duration(),
+            GOSSIPSUB_PUBLISH_QUEUE_DURATION
+        );
+        assert_eq!(config.max_transmit_size(), MAX_BLOCK_SIZE);
+        // Forward queue duration stays at the libp2p default.
+        assert_eq!(
+            config.forward_queue_duration(),
+            gossipsub::Config::default().forward_queue_duration()
+        );
+    }
+
+    /// #1545: a `SlowPeer` event is consumed (no NetworkEvent) and counted.
+    #[test]
+    fn slow_peer_event_is_counted() {
+        use crate::rpc::metrics::{
+            GOSSIP_FAILED_KIND_NON_PRIORITY, GOSSIP_FAILED_KIND_PRIORITY, GOSSIP_FAILED_MESSAGES,
+        };
+        let counter = |kind: &str| GOSSIP_FAILED_MESSAGES.with_label_values(&[kind]).get();
+        let pri_before = counter(GOSSIP_FAILED_KIND_PRIORITY);
+        let non_pri_before = counter(GOSSIP_FAILED_KIND_NON_PRIORITY);
+
+        let mut discovery = NetworkDiscovery::new(0, vec![]);
+        let event = discovery.process_event(SwarmEvent::Behaviour(BothoBehaviourEvent::Gossipsub(
+            gossipsub::Event::SlowPeer {
+                peer_id: PeerId::random(),
+                failed_messages: gossipsub::FailedMessages {
+                    priority: 3,
+                    non_priority: 11,
+                },
+            },
+        )));
+
+        assert!(event.is_none());
+        // Other tests may increment concurrently, so assert lower bounds.
+        assert!(counter(GOSSIP_FAILED_KIND_PRIORITY) >= pri_before + 3);
+        assert!(counter(GOSSIP_FAILED_KIND_NON_PRIORITY) >= non_pri_before + 11);
+    }
 
     #[test]
     fn peer_metadata_redundant_connection_preserves_all_fields() {
