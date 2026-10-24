@@ -47,6 +47,65 @@ activate LotteryV2 (#1286).
 
 To stop admission, create an owner-readable `STOP` file in the state directory. Do not delete the journal, edit the launch manifest, rebuild a transaction, or restart the service as a means of clearing a hold. Review the evidence and create a separately identified decision/run if continuation is warranted.
 
+### Controller behavior during a degrade step
+
+With an x-series plan (`degrade_steps`, see "Degrade phase plan" below), the
+controller keeps the campaign running on the healthy validators while a step's
+named hosts are faulted. Everywhere else it still fails closed. One helper
+decides this: `fault_view(now)` returns the step active for
+`fault_start <= now < window_end` (absolute times from the journal `start`),
+with its `expected_down` hosts (`target_hosts`) and `expect`.
+`live_hosts(now)` is `HOSTS` minus `expected_down`. With no active step, or
+with no `degrade_steps` at all, `live_hosts()` is exactly `HOSTS` and every
+check below behaves as before. A step relaxes nothing for a host it does not
+name, and nothing outside its window.
+
+- **Monitor.** It still reads every host. A failed `node_getStatus` or observer
+  read from a named host is recorded as `expected_down_unreachable` and the
+  host is marked `{expected_down: true}`. It is not a monitor error. Identity
+  checks run on every reachable host. The unsynced timer is suspended for
+  named hosts until `window_end`, and for **all** hosts during a `safe_halt`
+  step. Finalized-hash agreement uses the common minimum height of every
+  reachable host, so an isolated or netem'd host that is behind is still
+  included.
+- **Restarts.** A named host's observer ring goes to `check_resources()` with
+  its step window (#1586). The one accepted restart is persisted as
+  `baseline:<host>`, with `rebased_step` stored in the same row. That makes it a
+  single journal write. A second non-`None` re-baseline in the same step is a
+  `Gate`.
+- **Rejoin deadline.** At the first monitor tick at or after `window_end`,
+  each named host must be reachable, synced, and at or above the minimum
+  height of the hosts that neither this step nor the active one names.
+  Otherwise the run halts with `<step>: <host> failed to rejoin by window end`.
+  The check is recorded once as `rejoin:<step>`.
+- **Admission.** `gate()` ignores `synced` for named hosts. During a
+  `safe_halt` step it raises `Quota` (a pause) for the whole window. New
+  payments are hashed over `live_hosts()` and never routed to a named host. A
+  row that is already `prepared` keeps its recorded ingress. Its prepared-row
+  status check asks only the live hosts. A submit to an ingress that has gone
+  down fails into `unknown` and halts as before.
+- **Reads.** `sync()` output and spent-image reads, and `observe_fees()` block
+  reads, rotate deterministically over `live_hosts()`. Scan and fee tips are
+  the minimum over live hosts. `observe_fees()` skips named hosts and records
+  `fee_quote_skipped` for each.
+- **Confirmation (decision 6).** During a step a payment is `confirmed` when
+  every live host returns `confirmed` with agreeing receipts. Load is not
+  paused. Its named hosts are recorded in `info.deferred_hosts` and
+  `deferred_step`. A spent-image check run during a step does the same. After
+  the step's `window_end`, and while no later step names those hosts, the
+  reconciler fetches each deferred host's `getTransaction` and
+  `chain_areKeyImagesSpent`. These must match the saved receipts and spent
+  state, including on rows already `reconciled`, or the run stops with
+  `fleet transaction receipt disagreement` or `spent-input state disagreement`.
+  Verified rows record `deferred_verified` and drop `deferred_hosts`.
+- **Halt timers.** The 300 s unconfirmed and 900 s unresolved ages exclude
+  time inside `safe_halt` windows, and nothing else.
+- **Phase boundary.** A payment still carrying `deferred_hosts` from a step
+  whose window ended by the boundary is a `Gate`, not a drain wait. A step that
+  opens with its phase (D1 at 48 h) is not yet due at that boundary.
+- **Memory.** A named host's samples are never post-idle RSS evidence during
+  its step. A stopped node's error row is not stored as `latest:<host>`.
+
 ## Results
 
 - `report.json`: current sanitized status, phase counts, fees, accounting, latency, fleet and resource snapshots.
