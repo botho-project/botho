@@ -8,7 +8,7 @@ const anchorRequire = createRequire(require.resolve("@coral-xyz/anchor"));
 const web3Require = createRequire(require.resolve("@solana/web3.js"));
 test("actual Anchor parser handles config and rejects advisory payloads", () => {
   const toml = anchorRequire("toml");
-  assert.equal(anchorRequire("toml/package.json").version, "4.2.0");
+  assert.equal(anchorRequire("toml/package.json").version, "5.0.1");
   const config = toml.parse(
     fs.readFileSync(path.join(__dirname, "../Anchor.toml"), "utf8"),
   );
@@ -21,6 +21,9 @@ test("actual Anchor parser handles config and rejects advisory payloads", () => 
     toml.parse('[a.b]\ny=1\n[a.b.y.__proto__.__proto__]\npolluted="yes"'),
   );
   assert.equal({}.polluted, undefined);
+  assert.equal(toml.parse("safe = 42").safe, 42);
+  assert.throws(() => toml.parse("unsafe = 9007199254740993"));
+  assert.throws(() => toml.parse("large = 0x" + "f".repeat(1000)));
 });
 test("actual web3 client success/error and unique JSON-RPC IDs", async () => {
   assert.equal(web3Require("jayson/package.json").version, "5.0.0");
