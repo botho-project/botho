@@ -189,6 +189,7 @@ class Base(unittest.IsolatedAsyncioTestCase):
     def quiescent_accounting(self, difference=0):
         """Accounting is exact whenever nothing is pending (the reconciler's rule)."""
         self.c.blocks = [{"height": 0, "outputs": []}]
+        self.c.inventory_initialized = True  # a trusted sync() has run
         self.c.accounting = Mock(side_effect=lambda: self.c.j.set(
             "accounting", {"at": self.now, "difference": difference}))
 
@@ -241,6 +242,22 @@ class MilestoneTests(Base):
             await c.degrade_evidence(r + 15, [status(120, scpBallotCounter=2, scpSlotIndex=140), *others], {})
             self.assertIsNone(self.record("D1")["hosts"][A]["first_ballot_at"])
             await c.degrade_evidence(r + 30, [status(141, scpBallotCounter=1, scpSlotIndex=141), *others], {})
+        self.assertEqual(self.record("D1")["hosts"][A]["first_ballot_at"], r + 30)
+
+
+    async def test_stale_slot_without_a_pre_fault_slot_is_not_a_ballot(self):
+        # No pre-fault lastExternalizedSlot: the restore tip is the baseline,
+        # so the node's stale slot on its first reachable tick is history.
+        c, r = self.c, at("D1", "restore_at")
+        others = lambda height: [status(height) for _ in HOSTS[1:]]
+        with self.clock():
+            await c.degrade_evidence(at("D1", "fault_start"), [None, *others(100)], {})
+            await c.degrade_evidence(r, [None, *others(130)], {})
+            await c.degrade_evidence(r + 15, [status(99, synced=False, lastExternalizedSlot=99),
+                                              *others(131)], {})
+            self.assertIsNone(self.record("D1")["hosts"][A]["first_ballot_at"])
+            await c.degrade_evidence(r + 30, [status(131, lastExternalizedSlot=131),
+                                              *others(131)], {})
         self.assertEqual(self.record("D1")["hosts"][A]["first_ballot_at"], r + 30)
 
 
@@ -357,6 +374,7 @@ class VerdictTests(Base):
 
     async def test_accounting_gate_fails(self):
         self.c.blocks = [{"height": 0, "outputs": []}]
+        self.c.inventory_initialized = True
         self.c.accounting = Mock(side_effect=Gate("exact integer accounting mismatch"))
         await self.run_d1()
         self.assertEqual(self.reason(),
@@ -369,6 +387,41 @@ class VerdictTests(Base):
         self.assertIsNone(self.verdict("D1"))
         row = degrade_report(self.c.j, [STEPS["D1"]])[0]
         self.assertEqual((row["verdict"], row["awaiting"]), ("open", ["accounting"]))
+
+    async def test_known_restart_counts_loop_metrics_from_zero(self):
+        # The target answers at fault_start (a real start sample), then the
+        # restarted process overtakes the old counters within the step. Only
+        # the known-restart flag makes this count from zero.
+        self.quiescent_accounting()
+        self.fleet.loop[A] = {"iterations": 1000, "within_1s": 990, "delayed": 0}
+        fs, r = at("D1", "fault_start"), at("D1", "restore_at")
+
+        def overtake():
+            self.fleet.loop[A] = {"iterations": 50000, "within_1s": 49997, "delayed": 0}
+        self.now = fs - 30
+        await self.monitor(at("D1", "window_end") + 60, {
+            fs + 30: lambda: self.fleet.stop(A),
+            r: lambda: self.fleet.start(A, synced=False),
+            r + 60: overtake,
+            r + 300: lambda: self.fleet.synced.update({A: True})})
+        self.assertFalse(self.held(), self.reason())
+        record = self.record("D1")
+        start = record["metrics_start"][A]  # sampled before the stop: 10 already over 1 s
+        self.assertEqual(start["iterations"] - start["within_1s"], 10)
+        self.assertEqual(record["loops"][A], {"over_1s": 3, "delayed": 0, "reset": True})
+        self.assertEqual(self.verdict("D1"), "pass")
+
+    async def test_live_host_without_status_at_window_end_fails_one_tip(self):
+        self.quiescent_accounting()
+        await self.run_d1(until=at("D1", "window_end") - 30)
+        self.assertIsNone(self.verdict("D1"))
+        self.c.closed = False
+        statuses = [None if h == N3 else status(self.fleet.height[h]) for h in HOSTS]
+        self.now = at("D1", "window_end")
+        with self.clock(), self.assertRaisesRegex(
+                Gate, "D1: recovery check failed: one tip: no status from " + N3):
+            await self.c.degrade_evidence(self.now, statuses, self.c.statuses)
+        self.assertEqual(self.verdict("D1"), "fail")
 
     async def test_skipped_in_window_offer_fails(self):
         self.quiescent_accounting()
@@ -401,6 +454,58 @@ class VerdictTests(Base):
         self.c.j.transition("early", "skipped", "generator_slot_expired", finished=self.now)
         await self.run_d1()
         self.assertEqual(self.verdict("D1"), "pass")
+
+    def trusted_sync(self, c, balance):
+        """What the first sync() after a restart establishes (real inventory)."""
+        c.inventory = [[{"utxo": {"tx_hash": [17] * 32, "output_index": 0, "amount": balance},
+                         "key_image": "image-0"}]]
+        c.spent = [{"keyImage": "image-0", "spent": False, "pending": False}]
+        c.inventory_initialized = True
+
+    async def restart_mid_step(self, until):
+        """Run D1 with the real accounting, then restart the controller.
+
+        The restarted process reloads blocks from disk but its wallet
+        inventory is empty and untrusted until the first sync(); its monitor
+        runs before that sync().
+        """
+        funded = 10 ** 12
+        self.c.j.set("opening_balance", funded)
+        self.c.j.set("opening_verified", True)
+        self.trusted_sync(self.c, funded)
+        await self.run_d1(until=until)
+        self.assertFalse(self.held(), self.reason())
+        self.assertIsNone(self.verdict("D1"))
+        before = self.c.j.get("accounting")
+        self.c.closed = True
+        self.c = self.make()  # same journal file, fresh process state
+        self.c.blocks = [{"height": 0, "outputs": []}]  # reloaded blocks.json
+        self.assertFalse(self.c.inventory_initialized)
+        await self.monitor(self.now + 60)
+        return funded, before
+
+    async def check_restart_holds_open(self, until):
+        funded, before = await self.restart_mid_step(until)
+        self.assertFalse(self.held(), self.reason())
+        self.assertIsNone(self.verdict("D1"))
+        self.assertEqual(self.record("D1")["awaiting"], ["accounting"])
+        self.assertEqual(self.c.j.get("accounting"), before)  # not overwritten
+        # The first trusted sync establishes the inventory; accounting is
+        # exact and the verdict closes.
+        self.trusted_sync(self.c, funded)
+        with self.clock():
+            self.c.settle_degrade_verdicts(self.now)
+        self.assertEqual(self.c.j.get("accounting")["difference"], 0)
+        self.assertEqual(self.verdict("D1"), "pass")
+
+    async def test_restart_after_window_end_does_not_fail_accounting(self):
+        # D1 closed but still open (no quiescent snapshot yet; blocks empty
+        # before the restart), then the controller restarts.
+        await self.check_restart_holds_open(at("D1", "window_end") + 60)
+
+    async def test_restart_before_window_end_does_not_fail_accounting(self):
+        # The restart lands inside the step; D1 closes on a post-restart tick.
+        await self.check_restart_holds_open(at("D1", "window_end") - 30)
 
     async def test_unverified_deferred_receipt_never_passes(self):
         self.quiescent_accounting()

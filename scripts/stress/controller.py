@@ -321,8 +321,11 @@ class Controller:
                 track.update(synced_at_tip_at=now, synced_height=height)
             slot = s.get('lastExternalizedSlot')
             index = s.get('scpSlotIndex')
+            # With no pre-fault slot seen, the live tip at restore is the
+            # baseline: a node's stale pre-fault slot is not a new ballot.
+            baseline = track['last_slot'] if track['last_slot'] is not None else record['tip_restore']
             if track['first_ballot_at'] is None and (
-                    (type(slot) is int and (track['last_slot'] is None or slot > track['last_slot']))
+                    (type(slot) is int and baseline is not None and slot > baseline)
                     or ((s.get('scpBallotCounter') or 0) > 0 and type(index) is int
                         and record['tip_restore'] is not None and index > record['tip_restore'])):
                 track['first_ballot_at'] = now
@@ -417,8 +420,12 @@ class Controller:
         deferred = [r for r in self.deferred_rows()
                     if json.loads(r['info']).get('deferred_step') == window['step']]
         snapshot = self.j.get('accounting')
+        # After a controller restart the blocks reload from disk but the
+        # wallet inventory is empty and untrusted until the first sync(),
+        # and the monitor (this caller) starts before that sync(). Accounting
+        # against that inventory would be a false mismatch, so wait for it.
         if (snapshot is None or snapshot.get('at', 0) < window['window_end']) \
-                and not self.j.pending() and self.blocks:
+                and not self.j.pending() and self.blocks and self.inventory_initialized:
             try:
                 self.accounting()
             except Gate as error:

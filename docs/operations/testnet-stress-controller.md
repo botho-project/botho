@@ -479,7 +479,8 @@ monitor resolution.
   minimum `chainHeight` over reachable hosts the step does not name. That is
   the same convention as `fleet_height()` and the rejoin gate.
 - `first_ballot_at`: the first such tick where `lastExternalizedSlot` has
-  advanced past its last value before `restore_at`, or where
+  advanced past its last value before `restore_at` (or, if no value was seen
+  before `restore_at`, past the live-fleet height at `restore_at`), or where
   `scpBallotCounter > 0` on an `scpSlotIndex` above the live-fleet height at
   `restore_at`.
 - `first_coinbase_at`: always `null` in x1. Only the producer mints, and
@@ -543,8 +544,10 @@ all of it is in place:
 - every campaign offer in the window is `reconciled`;
 - the step's `deferred_hosts` receipts are verified (#1587);
 - the first accounting snapshot at or after `window_end` shows difference 0.
-  The verdict takes one itself whenever nothing is pending, because accounting
-  is only exact then.
+  The verdict takes one itself whenever nothing is pending and the wallet
+  inventory has been established by a sync, because accounting is only exact
+  then. After a controller restart the inventory is untrusted until the first
+  sync, so the verdict waits rather than failing on empty balances.
 
 A missed payment or an accounting mismatch found while the verdict is open
 fails it. An unverified deferred receipt never fails here, but it also never
