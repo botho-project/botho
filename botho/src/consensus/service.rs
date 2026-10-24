@@ -5187,4 +5187,65 @@ mod tests {
             );
         }
     }
+
+    /// #1547: the live `slot_status().slot_stalled` verdict drives the
+    /// rebroadcast stall gate. While the slot is jammed no pending transfer is
+    /// re-published; once it externalizes again the backoff resets and each
+    /// pending tx gets one immediate send.
+    #[test]
+    fn stalled_slot_suppresses_tx_rebroadcast() {
+        use crate::network::rebroadcast::RebroadcastSchedule;
+
+        let mut svc = peered_service(&[1, 2]);
+        let mut schedule = RebroadcastSchedule::new();
+        let pending = [7u8; 32];
+
+        // Populate the slot from a peer so it is ACTIVE.
+        let tx = valid_transfer_tx();
+        let tx_bytes = bincode::serialize(&tx).expect("tx serializes");
+        if let Ok(mut state) = svc.shared_state.write() {
+            state.tx_cache.insert(
+                pending,
+                TxCacheEntry {
+                    data: tx_bytes,
+                    is_minting_tx: false,
+                    retired: false,
+                },
+            );
+        }
+        let value = ConsensusValue::from_transaction(pending, tx.fee);
+        let peer_msg = peer_nominate_prepare(
+            node(2),
+            recommended_quorum(&[1, 2]),
+            svc.scp_node.current_slot_index(),
+            value,
+        );
+        let _ = svc
+            .scp_node
+            .handle_message(&peer_msg)
+            .expect("peer message should be accepted");
+
+        // Progressing slot: re-broadcast is allowed and seeds the backoff.
+        let now = Instant::now();
+        assert!(!schedule.set_slot_stalled(svc.slot_status().slot_stalled));
+        assert!(schedule.should_send(pending, now));
+
+        // Jam the slot (threshold 3s under fixed_timing(1)).
+        svc.last_externalized_at = Some(
+            Instant::now()
+                .checked_sub(Duration::from_secs(30))
+                .expect("monotonic clock supports 30s backdating"),
+        );
+        assert!(svc.slot_status().slot_stalled);
+        schedule.set_slot_stalled(svc.slot_status().slot_stalled);
+        // Even far past any backoff, a stalled slot publishes nothing.
+        assert!(!schedule.should_send(pending, now + Duration::from_secs(3_600)));
+        assert!(!schedule.should_send([8u8; 32], now));
+
+        // Externalization clears the stall; backoff resets for one send now.
+        svc.last_externalized_at = Some(Instant::now());
+        assert!(!svc.slot_status().slot_stalled);
+        assert!(schedule.set_slot_stalled(svc.slot_status().slot_stalled));
+        assert!(schedule.should_send(pending, now + Duration::from_secs(1)));
+    }
 }

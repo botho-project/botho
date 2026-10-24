@@ -349,6 +349,16 @@ lazy_static! {
         "Seconds the active SCP slot has gone without externalizing (0 while idle)"
     ).expect("Failed to create scp_slot_stall_seconds metric");
 
+    /// Gossip messages dropped by the per-peer rate limiter, by message type
+    /// (#1547). Replaces the per-message `warn!` as the flood signal.
+    pub static ref GOSSIP_RATE_LIMITED: prometheus::IntCounterVec = prometheus::IntCounterVec::new(
+        Opts::new(
+            "botho_gossip_rate_limited_total",
+            "Gossip messages dropped by the per-peer rate limiter, by message type"
+        ),
+        &["message_type"]
+    ).expect("Failed to create gossip_rate_limited metric");
+
     // ============================================================================
     // System Metrics
     // ============================================================================
@@ -451,6 +461,9 @@ pub fn init_metrics() {
     REGISTRY
         .register(Box::new(SCP_SLOT_STALL_SECONDS.clone()))
         .expect("Failed to register scp_slot_stall_seconds");
+    REGISTRY
+        .register(Box::new(GOSSIP_RATE_LIMITED.clone()))
+        .expect("Failed to register gossip_rate_limited");
 
     // Register histograms
     REGISTRY
@@ -720,6 +733,26 @@ pub fn calculate_dir_size(path: &Path) -> std::io::Result<u64> {
     Ok(total)
 }
 
+/// Prometheus label for a gossip message type.
+pub fn gossip_message_type_label(message_type: bth_gossip::GossipMessageType) -> &'static str {
+    use bth_gossip::GossipMessageType as T;
+    match message_type {
+        T::Transaction => "transaction",
+        T::Block => "block",
+        T::Consensus => "consensus",
+        T::Announcement => "announcement",
+        T::PeerExchange => "peer_exchange",
+        T::Other => "other",
+    }
+}
+
+/// Count one gossip message dropped by the rate limiter (#1547).
+pub fn record_gossip_rate_limited(message_type: bth_gossip::GossipMessageType) {
+    GOSSIP_RATE_LIMITED
+        .with_label_values(&[gossip_message_type_label(message_type)])
+        .inc();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -863,6 +896,55 @@ mod tests {
         let before = TRANSACTIONS_PROCESSED.get();
         updater.add_transactions_processed(10);
         assert_eq!(TRANSACTIONS_PROCESSED.get(), before + 10);
+    }
+
+    /// #1547: the rate-limit counter increments per drop, per message type,
+    /// and encodes under its Prometheus name.
+    #[test]
+    fn test_gossip_rate_limited_counter() {
+        use bth_gossip::GossipMessageType;
+
+        let tx = GOSSIP_RATE_LIMITED.with_label_values(&["transaction"]);
+        let before = tx.get();
+        record_gossip_rate_limited(GossipMessageType::Transaction);
+        record_gossip_rate_limited(GossipMessageType::Transaction);
+        assert!(tx.get() >= before + 2);
+
+        let consensus = GOSSIP_RATE_LIMITED.with_label_values(&["consensus"]);
+        let before = consensus.get();
+        record_gossip_rate_limited(GossipMessageType::Consensus);
+        assert!(consensus.get() > before);
+
+        // Encode through a scratch registry. `init_metrics` registers into the
+        // global REGISTRY, which can only be done once per process.
+        let registry = Registry::new();
+        registry
+            .register(Box::new(GOSSIP_RATE_LIMITED.clone()))
+            .unwrap();
+        let mut buf = Vec::new();
+        TextEncoder::new()
+            .encode(&registry.gather(), &mut buf)
+            .unwrap();
+        let out = String::from_utf8(buf).unwrap();
+        assert!(out.contains("botho_gossip_rate_limited_total{message_type=\"transaction\"}"));
+        assert!(out.contains("botho_gossip_rate_limited_total{message_type=\"consensus\"}"));
+    }
+
+    #[test]
+    fn test_gossip_message_type_labels_are_distinct() {
+        use bth_gossip::GossipMessageType as T;
+        let labels: std::collections::HashSet<_> = [
+            T::Transaction,
+            T::Block,
+            T::Consensus,
+            T::Announcement,
+            T::PeerExchange,
+            T::Other,
+        ]
+        .into_iter()
+        .map(gossip_message_type_label)
+        .collect();
+        assert_eq!(labels.len(), 6);
     }
 
     #[test]

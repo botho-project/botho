@@ -1115,6 +1115,11 @@ async fn run_async_with_shutdown(
     // from a non-minting node. Gossipsub message ids are source+seqno, so a
     // re-publish is a fresh message to peers whose mempools then dedupe it.
     let mut mempool_rebroadcast_interval = tokio::time::interval(Duration::from_secs(30));
+    // Per-tx backoff + SCP-stall gate shared by BOTH re-broadcast paths (the
+    // 30 s tick above and the minting-arm re-feed). Without it the 100 ms
+    // minting arm re-published the same pending transfers on every minted
+    // solution while SCP was stalled, flooding peers' rate limiters (#1547).
+    let mut rebroadcast_schedule = crate::network::rebroadcast::RebroadcastSchedule::new();
 
     // Track pending compact blocks awaiting missing transactions
     // Key: block hash, Value: (compact block, missing indices)
@@ -2068,6 +2073,14 @@ async fn run_async_with_shutdown(
                 // handle for `node_getStatus`; the Prometheus gauges mirror the
                 // stall verdict for the Grafana dashboard / alarms.
                 let slot_snapshot = consensus.slot_status();
+                // #1547: pause tx re-broadcasts while stalled; on recovery the
+                // schedule resets so pending txs get one immediate send.
+                if rebroadcast_schedule.set_slot_stalled(slot_snapshot.slot_stalled) {
+                    debug!(
+                        tracked = rebroadcast_schedule.len(),
+                        "SCP slot recovered; tx re-broadcast backoff reset"
+                    );
+                }
                 metrics_updater.set_scp_slot_stalled(slot_snapshot.slot_stalled);
                 metrics_updater.set_scp_slot_stall_seconds(slot_snapshot.stall_seconds);
                 if slot_snapshot.slot_stalled && !slot_stall_warned {
@@ -2166,6 +2179,11 @@ async fn run_async_with_shutdown(
                         "Relayed RPC-submitted tx {} to network",
                         hex::encode(&tx_hash[0..8])
                     );
+                    // The first relay is never gated. A successful relay
+                    // seeds the per-tx re-broadcast backoff (#1547). A failed
+                    // one (no peers yet) leaves the tx unseen, so the first
+                    // tick with peers sends it at once (#674).
+                    rebroadcast_schedule.record_send(tx_hash, Instant::now());
                 }
                 consensus.register_transfer_tx(tx_hash, tx_bytes);
             }
@@ -2212,10 +2230,20 @@ async fn run_async_with_shutdown(
             // connections. Peers dedupe via their own mempool acceptance, so
             // a re-publish of an already-known tx is a no-op for them.
             _ = mempool_rebroadcast_interval.tick() => {
+                // Forget txs that left the mempool (confirmed or evicted).
+                if let Ok(mempool) = node.shared_mempool().read() {
+                    rebroadcast_schedule.prune(|hash| mempool.contains(hash));
+                }
                 let pending = node.get_pending_transactions(32);
                 if !pending.is_empty() && discovery.peer_count() > 0 {
-                    debug!("Re-announcing {} mempool tx(s) to peers", pending.len());
+                    // #1547: per-tx backoff, and nothing while SCP is stalled.
+                    let now = Instant::now();
+                    let mut published = 0usize;
                     for tx in &pending {
+                        if !rebroadcast_schedule.should_send(tx.hash(), now) {
+                            continue;
+                        }
+                        published += 1;
                         if let Err(e) = NetworkDiscovery::broadcast_transaction(
                             &mut swarm,
                             discovery.stats_ref(),
@@ -2224,6 +2252,13 @@ async fn run_async_with_shutdown(
                             debug!("Failed to re-announce mempool tx: {}", e);
                         }
                     }
+                    debug!(
+                        path = "mempool_tick",
+                        published,
+                        suppressed = pending.len() - published,
+                        stalled = rebroadcast_schedule.is_paused(),
+                        "Re-announced mempool tx(s) to peers"
+                    );
                 }
             }
 
@@ -2452,17 +2487,29 @@ async fn run_async_with_shutdown(
 
                 // Also check for pending transfer transactions in mempool
                 // and submit them to consensus
+                let refeed_now = Instant::now();
+                let (mut refeed_published, mut refeed_suppressed) = (0usize, 0usize);
                 for tx in node.get_pending_transactions(10) {
                     let tx_hash = tx.hash();
                     let tx_fee = tx.fee;
                     let tx_bytes = bincode::serialize(&tx)
                         .expect("Failed to serialize transaction");
 
-                    // Broadcast to network so other nodes see it
-                    if let Err(e) =
-                        NetworkDiscovery::broadcast_transaction(&mut swarm, discovery.stats_ref(), &tx)
-                    {
-                        debug!("Failed to broadcast transaction: {}", e);
+                    // Broadcast to network so other nodes see it, subject to
+                    // the per-tx backoff and stall gate (#1547). This arm
+                    // runs every 100 ms; ungated it re-published the same
+                    // pending txs on every minted solution during a stall.
+                    if rebroadcast_schedule.should_send(tx_hash, refeed_now) {
+                        refeed_published += 1;
+                        if let Err(e) = NetworkDiscovery::broadcast_transaction(
+                            &mut swarm,
+                            discovery.stats_ref(),
+                            &tx,
+                        ) {
+                            debug!("Failed to broadcast transaction: {}", e);
+                        }
+                    } else {
+                        refeed_suppressed += 1;
                     }
 
                     // Submit to consensus for ordering. The fee is threaded
@@ -2470,6 +2517,14 @@ async fn run_async_with_shutdown(
                     // (issue #449) so the same tx maps to the same value on
                     // every node and SCP nomination converges.
                     consensus.submit_transaction(tx_hash, tx_fee, tx_bytes);
+                }
+                if refeed_published > 0 {
+                    debug!(
+                        path = "minting_refeed",
+                        published = refeed_published,
+                        suppressed = refeed_suppressed,
+                        "Re-broadcast pending tx(s) from minting arm"
+                    );
                 }
             }
 
