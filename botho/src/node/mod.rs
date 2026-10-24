@@ -3,7 +3,7 @@ pub mod minter;
 use anyhow::Result;
 use std::{
     path::{Path, PathBuf},
-    sync::{mpsc::Receiver, Arc, RwLock},
+    sync::{mpsc::Receiver, Arc, Mutex, RwLock},
     thread::JoinHandle,
 };
 use tracing::{info, warn};
@@ -24,6 +24,20 @@ pub type SharedLedger = Arc<RwLock<Ledger>>;
 
 /// Shared mempool type for RPC access
 pub type SharedMempool = Arc<RwLock<Mempool>>;
+
+/// The block-apply serialization point (#1565).
+///
+/// Every path that commits a block to the ledger locks this mutex around the
+/// WHOLE apply: the parent-timestamp read, the emission `record_block`, the
+/// ledger commit and the controller adopt. It replaces the old
+/// ledger write-lock exclusion, so a commit can run off the node event loop
+/// (in `spawn_blocking`) while readers keep their `ledger.read()` guards.
+///
+/// The mutex OWNS the emission controller rather than handing it back with a
+/// job result: an apply that ran in between would otherwise compute
+/// emission/difficulty state that skipped a committed block's `record_block`
+/// (a #558-class persisted-difficulty divergence).
+pub type ApplyState = Arc<Mutex<EmissionController>>;
 
 /// Pending transactions file name
 const PENDING_TXS_FILE: &str = "pending_txs.bin";
@@ -52,8 +66,9 @@ pub struct Node {
     minting_tx_receiver: Option<Receiver<MintedMintingTx>>,
     /// Directory containing config file (for finding pending_txs.bin)
     config_dir: PathBuf,
-    /// Emission controller for tx-based monetary policy
-    emission_controller: EmissionController,
+    /// Emission controller for tx-based monetary policy, owned by the
+    /// block-apply mutex (#1565). See [`ApplyState`].
+    apply_state: ApplyState,
 }
 
 impl Node {
@@ -104,7 +119,7 @@ impl Node {
             minter_health: Arc::new(RwLock::new(None)),
             minting_tx_receiver: None,
             config_dir,
-            emission_controller,
+            apply_state: Arc::new(Mutex::new(emission_controller)),
         })
     }
 
@@ -293,90 +308,29 @@ impl Node {
         self.print_status()
     }
 
-    /// Add a block received from the network
+    /// Add a block received from the network (inline apply path).
+    ///
+    /// Commits under the apply mutex ([`commit_block`]) and then runs the
+    /// loop-side post-commit step ([`Self::after_block_commit`]).
     pub fn add_block_from_network(&mut self, block: &crate::block::Block) -> Result<()> {
-        info!(
-            "Adding block {} from network (hash: {})",
-            block.height(),
-            hex::encode(&block.hash()[0..8])
-        );
+        let new_difficulty = commit_block(&self.ledger, &self.apply_state, block)?;
+        self.after_block_commit(block, new_difficulty);
+        Ok(())
+    }
 
-        // M5 (#554): capture the PARENT tip timestamp BEFORE adding the block.
-        // After `add_block` the chain tip becomes this very block, so the parent
-        // delta must be read first to drive the time-based difficulty controller.
-        let parent_timestamp: Option<u64> = self
-            .ledger
-            .read()
-            .ok()
-            .and_then(|l| l.get_chain_state().ok())
-            .map(|s| s.tip_timestamp);
+    /// The block-apply mutex (#1565). The off-loop consensus apply job holds
+    /// it across the lottery computation and [`commit_block_locked`].
+    pub fn apply_state(&self) -> ApplyState {
+        self.apply_state.clone()
+    }
 
-        // Update emission controller with block data. Only the burn share of
-        // fees is destroyed; the rest is redistributed via the lottery pool
-        // (audit cycle 6, M4). Mirror the ledger's accounting by using the
-        // validated burn amount, not the gross fee total, so the emission
-        // controller's supply/burn figures stay consistent with chain state.
-        let tx_count = block.transactions.len() as u64;
-        let reward_paid = block.minting_tx.reward;
-        let fees_burned: u64 = block.lottery_summary.amount_burned;
-
-        // M5 (#554): difficulty is driven by observed block TIME, not tx count.
-        // Derive the inter-block time from the parent's timestamp captured above.
-        // Monotonicity is already enforced at acceptance (`store::add_block`), so
-        // the delta is non-negative; the `>=` guard is defensive. `None` when
-        // there is no usable parent (genesis / first block, where tip_timestamp
-        // is 0) leaves difficulty unchanged for that block.
-        let observed_secs: Option<u64> = match parent_timestamp {
-            Some(parent) if parent > 0 && block.header.timestamp >= parent => {
-                Some(block.header.timestamp - parent)
-            }
-            _ => None,
-        };
-
-        // H3 (#558): compute the prospective emission state on a CLONE so the
-        // in-memory controller is not mutated until the atomic DB write below
-        // succeeds. The block and the emission/difficulty counters must commit
-        // in a SINGLE LMDB write txn — a crash between two separate commits
-        // would advance the chain height while leaving difficulty/epoch state
-        // stale, and on restart the node would compute a hard-validated
-        // difficulty that diverges from peers (permanent fork from one crash).
-        let old_difficulty = self.emission_controller.difficulty;
-        let mut next_controller = self.emission_controller.clone();
-        let (new_difficulty, new_reward) =
-            next_controller.record_block(tx_count, reward_paid, fees_burned, observed_secs);
-
-        if new_difficulty != old_difficulty {
-            info!(
-                "Difficulty adjustment at height {} (observed block time {:?}s): {} -> {}",
-                block.height(),
-                observed_secs,
-                old_difficulty,
-                new_difficulty,
-            );
-        }
-
-        let emission = crate::ledger::EmissionStateUpdate {
-            difficulty: new_difficulty,
-            total_tx: next_controller.total_tx,
-            epoch_tx: next_controller.epoch_tx,
-            epoch_emission: next_controller.epoch_emission,
-            epoch_burns: next_controller.epoch_burns,
-            current_reward: new_reward,
-        };
-
-        // Single atomic write: block + emission state share one wtxn/commit.
-        self.ledger
-            .write()
-            .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?
-            .add_block_with_emission(block, emission)
-            .map_err(|e| anyhow::anyhow!("Failed to add network block: {}", e))?;
-
-        // The atomic write committed: now adopt the mutated controller in
-        // memory. Doing this only AFTER a successful commit keeps the in-memory
-        // controller consistent with persisted chain state even if the write
-        // had failed (the block-add path is the sole mutator of this state).
-        self.emission_controller = next_controller;
-
+    /// Post-commit step, run on the node loop after a successful commit:
+    /// purge the mempool against the new tip and hand the minter new work.
+    ///
+    /// `remove_invalid` here is what purges any transaction admitted to the
+    /// mempool from a pre-commit ledger view while the commit was running
+    /// (#1565 ledger reader audit).
+    pub fn after_block_commit(&self, block: &crate::block::Block, new_difficulty: u64) {
         // Remove confirmed transactions from mempool and update dynamic fee state
         if let Ok(mut mempool) = self.mempool.write() {
             mempool.remove_confirmed(&block.transactions);
@@ -408,8 +362,6 @@ impl Node {
                 }
             }
         }
-
-        Ok(())
     }
 
     /// Check if we've minted a minting transaction (non-blocking)
@@ -585,6 +537,125 @@ impl Node {
             }
         }
     }
+}
+
+/// Commit `block` to the ledger, locking the apply mutex for the whole
+/// apply (#1565). Returns the post-block difficulty. `Send`: needs no
+/// `&mut Node`, so it can run inside `spawn_blocking`.
+pub fn commit_block(
+    ledger: &SharedLedger,
+    apply_state: &ApplyState,
+    block: &crate::block::Block,
+) -> Result<u64> {
+    let mut controller = apply_state
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Apply state lock poisoned"))?;
+    commit_block_locked(ledger, &mut controller, block)
+}
+
+/// Commit `block` with the apply mutex ALREADY held by the caller
+/// (`controller` is the guarded emission controller). Used by the consensus
+/// apply job, which must hold one guard across `apply_lottery_to_block` and
+/// this commit so the lottery sees exactly the state `add_block_inner`
+/// validates against.
+///
+/// Parent-timestamp read, emission `record_block`, the single-txn commit and
+/// the controller adopt all happen under that one guard. No ledger write lock:
+/// the mutex is the writer exclusion, and `add_block_with_emission` takes
+/// `&self` (LMDB serializes the write txn itself).
+pub fn commit_block_locked(
+    ledger: &SharedLedger,
+    controller: &mut EmissionController,
+    block: &crate::block::Block,
+) -> Result<u64> {
+    info!(
+        "Adding block {} from network (hash: {})",
+        block.height(),
+        hex::encode(&block.hash()[0..8])
+    );
+
+    // M5 (#554): capture the PARENT tip timestamp BEFORE adding the block.
+    // After `add_block` the chain tip becomes this very block, so the parent
+    // delta must be read first to drive the time-based difficulty controller.
+    // Read under the apply mutex (#1565), so no other commit can land between
+    // this read and the commit below.
+    let parent_timestamp: Option<u64> = ledger
+        .read()
+        .ok()
+        .and_then(|l| l.get_chain_state().ok())
+        .map(|s| s.tip_timestamp);
+
+    // Update emission controller with block data. Only the burn share of
+    // fees is destroyed; the rest is redistributed via the lottery pool
+    // (audit cycle 6, M4). Mirror the ledger's accounting by using the
+    // validated burn amount, not the gross fee total, so the emission
+    // controller's supply/burn figures stay consistent with chain state.
+    let tx_count = block.transactions.len() as u64;
+    let reward_paid = block.minting_tx.reward;
+    let fees_burned: u64 = block.lottery_summary.amount_burned;
+
+    // M5 (#554): difficulty is driven by observed block TIME, not tx count.
+    // Derive the inter-block time from the parent's timestamp captured above.
+    // Monotonicity is already enforced at acceptance (`store::add_block`), so
+    // the delta is non-negative; the `>=` guard is defensive. `None` when
+    // there is no usable parent (genesis / first block, where tip_timestamp
+    // is 0) leaves difficulty unchanged for that block.
+    let observed_secs: Option<u64> = match parent_timestamp {
+        Some(parent) if parent > 0 && block.header.timestamp >= parent => {
+            Some(block.header.timestamp - parent)
+        }
+        _ => None,
+    };
+
+    // H3 (#558): compute the prospective emission state on a CLONE so the
+    // in-memory controller is not mutated until the atomic DB write below
+    // succeeds. The block and the emission/difficulty counters must commit
+    // in a SINGLE LMDB write txn — a crash between two separate commits
+    // would advance the chain height while leaving difficulty/epoch state
+    // stale, and on restart the node would compute a hard-validated
+    // difficulty that diverges from peers (permanent fork from one crash).
+    let old_difficulty = controller.difficulty;
+    let mut next_controller = controller.clone();
+    let (new_difficulty, new_reward) =
+        next_controller.record_block(tx_count, reward_paid, fees_burned, observed_secs);
+
+    if new_difficulty != old_difficulty {
+        info!(
+            "Difficulty adjustment at height {} (observed block time {:?}s): {} -> {}",
+            block.height(),
+            observed_secs,
+            old_difficulty,
+            new_difficulty,
+        );
+    }
+
+    let emission = crate::ledger::EmissionStateUpdate {
+        difficulty: new_difficulty,
+        total_tx: next_controller.total_tx,
+        epoch_tx: next_controller.epoch_tx,
+        epoch_emission: next_controller.epoch_emission,
+        epoch_burns: next_controller.epoch_burns,
+        current_reward: new_reward,
+    };
+
+    // Single atomic write: block + emission state share one wtxn/commit.
+    // Through a READ guard (#1565): the apply mutex, not the RwLock, excludes
+    // concurrent writers, and `add_block_inner`'s read-validate-then-write is
+    // serialized by that mutex.
+    ledger
+        .read()
+        .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?
+        .add_block_with_emission(block, emission)
+        .map_err(|e| anyhow::anyhow!("Failed to add network block: {}", e))?;
+
+    // The atomic write committed: now adopt the mutated controller in
+    // memory, still inside the apply mutex. Doing this only AFTER a
+    // successful commit keeps the in-memory controller consistent with
+    // persisted chain state even if the write had failed (the block-add path
+    // is the sole mutator of this state).
+    *controller = next_controller;
+
+    Ok(new_difficulty)
 }
 
 impl Drop for Node {

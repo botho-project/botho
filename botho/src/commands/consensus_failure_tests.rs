@@ -9,7 +9,7 @@ use std::{
     fs,
     io::{Read, Write},
     net::{TcpListener, TcpStream},
-    sync::mpsc,
+    sync::{atomic::AtomicU64, mpsc, Mutex},
     time::Instant,
 };
 
@@ -20,6 +20,20 @@ pub(super) struct FailureTestHooks {
     initial_slot: Option<u64>,
     delivered: usize,
     cached_hash: Option<[u8; 32]>,
+    /// Slept inside the off-loop apply job, before the commit (#1565).
+    pub(super) apply_delay: Option<Duration>,
+    /// Incremented on every `consensus_tick` arm (#1565).
+    ticks: Arc<AtomicU64>,
+    /// One sample per consensus tick: the SCP slot and whether an
+    /// externalized apply was in flight at that tick (#1565).
+    samples: Arc<Mutex<Vec<TickSample>>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TickSample {
+    slot: u64,
+    in_flight: bool,
+    at: Instant,
 }
 
 #[derive(Debug)]
@@ -57,6 +71,15 @@ impl FailureTestHooks {
             slot_index: slot,
             values,
         })
+    }
+
+    pub(super) fn on_tick(&mut self, consensus: &ConsensusService, in_flight: bool) {
+        self.ticks.fetch_add(1, Ordering::SeqCst);
+        self.samples.lock().unwrap().push(TickSample {
+            slot: consensus.current_slot(),
+            in_flight,
+            at: Instant::now(),
+        });
     }
 
     pub(super) fn observe_stop(self, consensus: &ConsensusService, node: &Node) {
@@ -154,7 +177,26 @@ fn assert_rpc_closed(socket: &mut TcpStream) {
     }
 }
 
-fn exercise_failure(application_failure: bool, persistence_failure: bool) {
+/// A running node-loop fixture: the real `run_async_with_shutdown` on its own
+/// runtime thread, with only decision delivery injected.
+struct Harness {
+    dir: tempfile::TempDir,
+    data_dir: std::path::PathBuf,
+    config_path: std::path::PathBuf,
+    addr: SocketAddr,
+    shutdown: Arc<AtomicBool>,
+    _stop_on_panic: StopOnDrop,
+    decisions: mpsc::Sender<Vec<Option<MintingTx>>>,
+    stopped: mpsc::Receiver<Stopped>,
+    finished: mpsc::Receiver<std::result::Result<(), String>>,
+    before_persist: mpsc::Receiver<()>,
+    permit_persist: mpsc::Sender<()>,
+    ticks: Arc<AtomicU64>,
+    samples: Arc<Mutex<Vec<TickSample>>>,
+    worker: std::thread::JoinHandle<()>,
+}
+
+fn spawn_harness(apply_delay: Option<Duration>) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let data_dir = dir.path().join("node");
     fs::create_dir(&data_dir).unwrap();
@@ -183,6 +225,10 @@ fn exercise_failure(application_failure: bool, persistence_failure: bool) {
     let (finished_tx, finished) = mpsc::channel();
     let (before_persist_tx, before_persist) = mpsc::channel();
     let (permit_persist, permit_persist_rx) = mpsc::channel();
+    let ticks = Arc::new(AtomicU64::new(0));
+    let samples = Arc::new(Mutex::new(Vec::new()));
+    let (worker_ticks, worker_samples) = (ticks.clone(), samples.clone());
+    let worker_apply_delay = apply_delay;
     drop(reservation);
     let worker = std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -206,6 +252,9 @@ fn exercise_failure(application_failure: bool, persistence_failure: bool) {
                         initial_slot: None,
                         delivered: 0,
                         cached_hash: None,
+                        apply_delay: worker_apply_delay,
+                        ticks: worker_ticks,
+                        samples: worker_samples,
                     }),
                 ),
             )
@@ -226,6 +275,48 @@ fn exercise_failure(application_failure: bool, persistence_failure: bool) {
             .send(result.map_err(|error| error.to_string()))
             .unwrap();
     });
+    Harness {
+        dir,
+        data_dir,
+        config_path,
+        addr,
+        shutdown,
+        _stop_on_panic,
+        decisions,
+        stopped,
+        finished,
+        before_persist,
+        permit_persist,
+        ticks,
+        samples,
+        worker,
+    }
+}
+
+fn exercise_failure(application_failure: bool, persistence_failure: bool) {
+    exercise_failure_with_delay(application_failure, persistence_failure, None);
+}
+
+fn exercise_failure_with_delay(
+    application_failure: bool,
+    persistence_failure: bool,
+    apply_delay: Option<Duration>,
+) {
+    let Harness {
+        dir,
+        data_dir,
+        config_path,
+        addr,
+        shutdown,
+        _stop_on_panic,
+        decisions,
+        stopped,
+        finished,
+        before_persist,
+        permit_persist,
+        worker,
+        ..
+    } = spawn_harness(apply_delay);
     let mut socket = connect_rpc(addr);
     establish_rpc_keep_alive(&mut socket);
     if persistence_failure {
@@ -333,4 +424,108 @@ fn externalized_build_failure_stops_loop_closes_rpc_and_refuses_restart() {
 #[test]
 fn undurable_externalized_failure_closes_existing_rpc_before_parking() {
     exercise_failure(true, true);
+}
+
+/// Long enough for several 500 ms consensus ticks to run during the apply.
+const APPLY_DELAY: Duration = Duration::from_secs(3);
+
+/// #1565: the externalized apply runs off the node loop. During a 3 s apply
+/// the loop keeps ticking, the slot does not advance, and once the apply
+/// completes the slot advances exactly once.
+///
+/// The decision is a height-0 coinbase: the real builder constructs it, the
+/// real ledger rejects it (genesis already fills height 0), and the #421
+/// classification `height_already_applied(0, Some(0))` treats it as a benign
+/// duplicate. That drives the success-side completion path (`advance_slot`)
+/// without a PoW fixture. The harness is solo, so only `advance_slot` moves
+/// the slot.
+#[test]
+fn externalized_apply_runs_off_loop_and_advances_slot_once_after_completion() {
+    let harness = spawn_harness(Some(APPLY_DELAY));
+    let mut socket = connect_rpc(harness.addr);
+    establish_rpc_keep_alive(&mut socket);
+    let wallet = Wallet::from_mnemonic("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap();
+    let decision = MintingTx::new(0, 0, &wallet.default_address(), [0; 32], u64::MAX, 1);
+    harness.decisions.send(vec![Some(decision)]).unwrap();
+
+    // Wait until a tick observes the apply finished (in flight, then not).
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let samples = loop {
+        let samples = harness.samples.lock().unwrap().clone();
+        let finished = samples
+            .iter()
+            .position(|sample| sample.in_flight)
+            .is_some_and(|first| samples[first..].iter().any(|sample| !sample.in_flight));
+        if finished {
+            break samples;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "apply never completed: {samples:?}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    harness.shutdown.store(true, Ordering::SeqCst);
+    let stopped = harness
+        .stopped
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
+
+    let first = samples.iter().position(|sample| sample.in_flight).unwrap();
+    let after = first
+        + samples[first..]
+            .iter()
+            .position(|sample| !sample.in_flight)
+            .unwrap();
+    let during = &samples[first..after];
+    assert!(
+        during.len() >= 4,
+        "node loop stopped ticking during the apply: {samples:?}"
+    );
+    // The ticks must be spread across the apply in real time. A loop that
+    // blocked on the apply would instead replay its missed ticks in a burst
+    // (tokio's default `MissedTickBehavior::Burst`) once the apply returned.
+    let span = during.last().unwrap().at - during[0].at;
+    assert!(
+        span >= APPLY_DELAY / 2,
+        "in-flight ticks were not spread over the apply ({span:?}): {samples:?}"
+    );
+    assert!(
+        during
+            .iter()
+            .all(|sample| sample.slot == stopped.initial_slot),
+        "slot advanced before the apply completed: {samples:?}"
+    );
+    assert!(
+        samples[after..]
+            .iter()
+            .all(|sample| sample.slot == stopped.initial_slot + 1),
+        "slot must advance exactly once after completion: {samples:?}"
+    );
+    assert!(harness.ticks.load(Ordering::SeqCst) >= during.len() as u64);
+    assert_eq!(stopped.final_slot, stopped.initial_slot + 1);
+    assert_eq!(stopped.delivered, 1);
+    assert_eq!(stopped.queued_remaining, 0);
+    assert_eq!(stopped.ledger_height, 0);
+
+    harness
+        .before_persist
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
+    harness.permit_persist.send(()).unwrap();
+    assert!(harness
+        .finished
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .is_ok());
+    assert!(!consensus_failure::marker_path(&harness.config_path).exists());
+    harness.worker.join().unwrap();
+}
+
+/// #1565: a delayed off-loop apply that fails terminally takes the unchanged
+/// terminal path: no slot advance, the queued decision is never delivered,
+/// evidence is written and restart is refused.
+#[test]
+fn delayed_externalized_application_failure_stops_loop_unchanged() {
+    exercise_failure_with_delay(true, false, Some(APPLY_DELAY));
 }
