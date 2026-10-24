@@ -35,6 +35,19 @@
 # is the regression guard). Every redirect below therefore uses the mechanism
 # the feature actually reclaims: `build.target-dir` in a per-worktree
 # `.cargo/config.toml`, the host-optimize convention issue #7239 describes.
+#
+# Needs a BUILT `loom-daemon` since #8195 slice 3: `worktree.sh remove` is now
+# a thin stub over `loom-daemon worktree-remove`, which drives the RUST
+# reclaim (`worktree_ops/cargo_target.rs`) instead of this lib's bash one. The
+# `worktree.sh remove` cases below are unchanged and are the equivalence
+# evidence for the removal-time half; the resolution-parity cases (Test 7)
+# still compare the two SHELL implementations and are unaffected. So this suite
+# moved to the "Native Port Suites" CI job, which builds the binary, and FAILS
+# rather than skips without one.
+#
+# Usage:
+#   cargo build --package loom-daemon
+#   bash defaults/scripts/tests/test-cargo-target-dir-reclaim.sh
 
 set -uo pipefail
 
@@ -46,17 +59,31 @@ WORKTREE_SH="$SCRIPTS_DIR/worktree.sh"
 LIB_SH="$SCRIPTS_DIR/lib/cargo-target-dir.sh"
 STANDALONE_SH="$REPO_ROOT/scripts/cargo-target-dir.sh"
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
+# #8191 slice: the porcelain lookups this suite extracts from merge-pr.sh
+# (_primary_worktree_path / _worktree_branch_for) now delegate to `loom-daemon
+# merge-pr worktree-*`, so the LEAF verbs are pinned alongside `worktree-remove`
+# — a binary predating this slice makes every lookup fail, and the #3710
+# primary-worktree guard then refuses to clean up anything at all, which would
+# read here as a logic failure across the whole suite rather than as one
+# environment problem.
+# shellcheck source=lib/require-daemon-bin.sh
+source "$SCRIPT_DIR/lib/require-daemon-bin.sh"
+# `cargo-target-dir` too since #9153: Test 8 drives merge-pr.sh's post-merge
+# cleanup, whose resolve/reclaim pair is now that subcommand. A binary predating
+# it would make the reclaim a silent no-op and Test 8 would read as a logic
+# failure rather than an environment one.
+loom_test_require_daemon_bin "$SCRIPTS_DIR" "worktree-remove" "cargo-target-dir" \
+    "merge-pr worktree-primary" "merge-pr worktree-branch-for" \
+    "merge-pr worktree-find-by-branch"
+
+# An ambient CARGO_TARGET_DIR overrides the fixtures' own target-dir redirects
+# (.cargo/config.toml, fake build output); cases that test the ambient variable
+# set it inline per command (#10703).
+unset CARGO_TARGET_DIR
+
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/assert.sh"
 YELLOW='\033[1;33m'
-NC='\033[0m'
 
-TESTS_RUN=0
-TESTS_PASSED=0
-TESTS_FAILED=0
-
-pass() { TESTS_RUN=$((TESTS_RUN + 1)); TESTS_PASSED=$((TESTS_PASSED + 1)); echo -e "  ${GREEN}PASS${NC}: $1"; }
-fail() { TESTS_RUN=$((TESTS_RUN + 1)); TESTS_FAILED=$((TESTS_FAILED + 1)); echo -e "  ${RED}FAIL${NC}: $1"; }
 skip() { echo -e "  ${YELLOW}SKIP${NC}: $1"; }
 
 # --- Throwaway repo setup ---------------------------------------------------
@@ -451,43 +478,28 @@ fi
 
 # --- Test 8: merge-pr.sh's post-merge cleanup reclaims too -------------------
 # Post-merge cleanup is the removal path most worktrees actually take, so the
-# leak lives here more than anywhere else. Drives the REAL `_remove_loom_worktree`
-# body extracted from the live source (the no-drift pattern from
-# test-merge-pr-dirty-worktree-guard.sh), not a reimplementation.
+# leak lives here more than anywhere else. Drives the REAL cleanup wrapper
+# extracted from the live source (the no-drift pattern from
+# test-merge-pr-dirty-worktree-guard.sh) over the real verb, not a
+# reimplementation.
 echo ""
 echo "Test 8: merge-pr.sh's post-merge worktree cleanup reclaims a redirected target dir"
 MERGE_PR="$SCRIPTS_DIR/merge-pr.sh"
 if [[ ! -f "$MERGE_PR" ]]; then
     skip "merge-pr.sh not found"
 else
-    extract_fn() {
-        local name="$1" file="$2"
-        awk -v fn="$name" '
-          $0 ~ "^"fn"\\(\\) \\{" { grab=1 }
-          grab { print }
-          grab && /^}/ { exit }
-        ' "$file"
-    }
-    info()    { echo "INFO: $*"; }
-    warning() { echo "WARN: $*"; }
-    success() { echo "OK: $*"; }
-    error()   { echo "ERROR: $*" >&2; return 1; }
-    loom_record_worktree_removal() { :; }
-
+    # The cleanup under test is `loom-daemon merge-pr post-merge-cleanup` (#8191
+    # orchestrator slice 1: the retired `_remove_loom_worktree` body is Rust now,
+    # resolve + reclaim + render in-process). It is driven through the REAL
+    # wrapper extracted from merge-pr.sh, against real worktrees — the
+    # no-drift pattern, one level up. Nothing on the target-dir path is stubbed:
+    # the RUST decision (`worktree_ops::cargo_target::plan_reclaim`) runs and its
+    # record is replayed through the info/warning/success stubs.
     # shellcheck source=../lib/cargo-target-dir.sh
     source "$LIB_SH"
-    eval "$(extract_fn _primary_worktree_path "$MERGE_PR")"
-    eval "$(extract_fn _worktree_branch_for "$MERGE_PR")"
-    # #7812: _maybe_delete_local_branch's `-d` -> `-D` safety check is now the
-    # shared `branch_landed` primitive — a real library, so it is SOURCED here
-    # rather than extracted. Offline: these cases exercise merge-pr.sh's local
-    # branch logic, not the forge rung, and the suite must stay hermetic.
-    export LOOM_BRANCH_LANDED_OFFLINE=1
-    # shellcheck source=../lib/branch-landed.sh
-    source "$(dirname "$MERGE_PR")/lib/branch-landed.sh"
-    eval "$(extract_fn _maybe_delete_local_branch "$MERGE_PR")"
-    eval "$(extract_fn _mp_report_target_dir_reclaim "$MERGE_PR")"
-    eval "$(extract_fn _remove_loom_worktree "$MERGE_PR")"
+    # shellcheck source=lib/post-merge-cleanup-harness.sh
+    source "$SCRIPT_DIR/lib/post-merge-cleanup-harness.sh"
+    pmc_load "$MERGE_PR"
 
     MP_REPO="$TMP/mp-repo"
     git init -q -b main "$MP_REPO"
@@ -505,7 +517,7 @@ else
     make_target_dir "$MP_EXT"
     redirect_worktree "$MP_WT" "$MP_EXT"
 
-    mp_out="$(_remove_loom_worktree "$MP_WT" 2>&1)"
+    mp_out="$(pmc_run_issue 301 2>&1)"
     if [[ ! -d "$MP_WT" ]]; then
         pass "merge-pr cleanup removed the worktree"
     else
@@ -533,7 +545,7 @@ else
     touch "$MP_WT2/.loom-managed" "$MP_WT3/.loom-managed"
     redirect_worktree "$MP_WT2" "$MP_SHARED"
     redirect_worktree "$MP_WT3" "$MP_SHARED"
-    mp_out2="$(_remove_loom_worktree "$MP_WT2" 2>&1)"
+    mp_out2="$(pmc_run_issue 302 2>&1)"
     if [[ -f "$MP_SHARED/debug/artifact.bin" ]]; then
         pass "shared target dir survived merge-pr cleanup of one sharer"
     else
