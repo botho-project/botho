@@ -312,6 +312,32 @@ Increasing workload requires a separately pinned profile, sufficient isolated
 infrastructure and wallet inventory, and a successful rehearsal at its peak rate.
 It cannot retrofit a stopped campaign or raise an existing journal's limits.
 
+### In-flight accounting and measured ramp ceiling
+
+`max_inflight` counts only work that is not yet confirmed on every host:
+`prepared`, `submitting`, `accepted`, and `unknown` (`Journal.inflight()`). A
+payment that is `confirmed` or `recipient_verified` but not yet `reconciled` is
+waiting on the batched wallet scan. It no longer occupies the cap, but it stays
+pending for every other purpose: phase-boundary gates, accounting, drain, its
+input reservations, and the per-sender guard. That wallet is therefore not chosen
+as a sender again until its change has been scanned. Before #1551, those rows
+did count against the cap. Bursts filled it between the 2.5-3 minute reconcile
+batches and skipped offers (`generator_slot_expired` / `generator_queue_limit`,
+or `queue budget` on the legacy plan).
+
+**Measured ceiling (pending re-measurement).** The w12 qualification run
+(`q20261022-w12-endurance`) sustained about **797 confirmed payments/hour**
+during the 30–42 h ramp phase. The nominal target is 810/hour: 660 offers at
+5-second spacing plus 150 at 2-second spacing in the final five minutes of each
+hour. 160 offers were skipped. Measurement conditions: discovery-v2 ramp
+profile, `max_inflight` widened to 64 by an operator script, and harness branch
+`fix/w7-endurance-performance` @ `b5b76009`. That branch had not landed on
+`main` and does not include the #1551 cap change. Part of the shortfall is
+node-side: burst blocks were slow to produce and apply on the minter (#1545,
+tracked as #1550 / #1565). Judge ramp runs against ~797/hour rather than 810/hour
+until the ceiling is re-measured with #1550 / #1565 and this cap change in place
+(#1568).
+
 ### Fee evidence and honest coverage
 
 The signer receives a 1x, 2x, or 4x multiplier **after** the production minimum

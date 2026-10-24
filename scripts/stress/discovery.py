@@ -392,14 +392,17 @@ class DiscoveryController(Controller):
     async def deliver(self, events, start, kind):
         now = time.time()
         self.materialize(events, start, kind, now)
+        # pending() (incl. confirmed-but-unscanned rows) guards sender reuse;
+        # only inflight() rows count against the cap (#1551).
         pending = self.j.pending()
+        inflight = self.j.inflight()
         lookup = {event["intent"]: event for event in events}
         attempted = 0
         for row in self.j.rows(
             "kind=? AND state IN ('planned','eligible') ORDER BY offered,id", (kind,)
         ):
             event = lookup[row["id"]]
-            if len(pending) >= event["max_inflight"]:
+            if len(inflight) >= event["max_inflight"]:
                 break
             if any(p["sender"] == row["sender"] for p in pending):
                 continue
