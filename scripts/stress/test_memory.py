@@ -201,7 +201,7 @@ class QualifiedBaselineTests(unittest.IsolatedAsyncioTestCase):
             c.j = Journal(Path(name)/'journal.sqlite')
             try:
                 c.config = {'node_sha256':'hash','resource_baselines':{h:reference for h in HOSTS}}
-                c.plan = {'network':'botho-testnet','node_commit':'commit','genesis':'block'}
+                c.plan = {'network':'botho-testnet','node_commit':'commit','genesis':'block','faults':{'validator_degrade_phase':False}}
                 c.closed = False
                 c.reconcile_wakeup = asyncio.Event()
                 c.fresh = 0

@@ -18,6 +18,11 @@ import urllib.parse
 
 HOSTS = ('seed.botho.io', 'seed2.botho.io', 'faucet.botho.io',
          'eu.seed.botho.io', 'ap.seed.botho.io')
+# Explicit-mode threshold for the five x-series validators: 4-of-5, f = 1
+# (#1576). Defined here, not in fleet_nodes, because the controller host only
+# receives staging.CODE: fleet_nodes re-exports it to render configs, and
+# check_quorum reads it to verify the installed quorum (#1605).
+QUORUM_THRESHOLD = 4
 TERMINAL = ('reconciled', 'skipped', 'rejected', 'expired', 'aborted')
 PENDING = ('prepared', 'submitting', 'accepted', 'unknown', 'confirmed', 'recipient_verified')
 # The subset of PENDING still occupying chain/ingress capacity: not yet
@@ -460,6 +465,65 @@ def check_identity(status, plan):
     if (status.get('network') != plan['network'] or status.get('gitCommit') != plan['node_commit']
             or status.get('version') != '0.6.0'):
         raise Gate('network or software identity changed')
+
+
+def byzantine_tolerance(n, t):
+    """f = min(n - t, 2t - n - 1), saturating; mirrors botho::config::byzantine_tolerance."""
+    return max(0, min(n - t, 2 * t - n - 1))
+
+
+def expected_quorum():
+    """(n, t, f) every x-series validator must report: 4-of-5 explicit, f = 1.
+
+    Derived from QUORUM_THRESHOLD (which fleet_nodes renders) and len(HOSTS)
+    rather than restated.
+    """
+    n = len(HOSTS)
+    return n, QUORUM_THRESHOLD, byzantine_tolerance(n, QUORUM_THRESHOLD)
+
+
+# Config-derived quorum fields are non-null from node start; the gate-derived
+# ones are all null until the gate's first evaluation (#1608).
+QUORUM_CONFIG_KEYS = ('quorumMode', 'quorumFaultTolerant', 'quorumDegenerate')
+QUORUM_GATE_KEYS = ('quorumSize', 'quorumThreshold', 'quorumByzantineTolerance',
+                    'quorumAutoMembers', 'quorumGateIntersectionRefused')
+
+
+def check_quorum(status, allow_unevaluated=False):
+    """Fail closed unless the node reports the installed explicit 4-of-5, f = 1 quorum (#1605).
+
+    The node drops an unparseable roster member without failing, which would
+    leave a silent 4-of-4 (f = 0) fleet. `quorumSize`/`quorumThreshold` come
+    from the quorum set the node's gate actually installed (post-clamp,
+    post-fallback), so this reads the truth rather than the config. A missing
+    or null field (an older binary, or a node before its first gate
+    evaluation) is a refusal too.
+
+    ``allow_unevaluated`` (a host inside its own restart window, #1608)
+    accepts a node that has not evaluated its gate yet: every gate-derived
+    key present and null. The config-derived keys stay strict, and a partial
+    null or a missing key still refuses.
+    """
+    n, t, f = expected_quorum()
+    expected = {
+        'quorumMode': 'explicit',
+        'quorumSize': n,
+        'quorumThreshold': t,
+        'quorumByzantineTolerance': f,
+        'quorumFaultTolerant': True,
+        'quorumDegenerate': False,
+        'quorumAutoMembers': 0,
+        'quorumGateIntersectionRefused': False,
+    }
+    keys = list(expected)
+    if allow_unevaluated and all(k in status and status[k] is None for k in QUORUM_GATE_KEYS):
+        keys = list(QUORUM_CONFIG_KEYS)
+    for key in keys:
+        want, got = expected[key], status.get(key)
+        # `type(...) is` so True never passes as 1 or 0 as False.
+        if got is None or type(got) is not type(want) or got != want:
+            raise Gate('installed quorum is not explicit %d-of-%d with f=%d: %s=%r'
+                       % (t, n, f, key, got))
 
 
 # Degrade-step actions (discovery_plan.DEGRADE_ACTIONS, #1585) split by what

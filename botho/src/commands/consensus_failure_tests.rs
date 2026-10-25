@@ -1131,3 +1131,73 @@ fn parked_decision_with_no_sync_source_stays_bounded_and_non_terminal() {
     assert_eq!(stopped.final_slot, slot, "advance_slot ran while parked");
     assert_eq!(stopped.ledger_height, 0);
 }
+
+/// #1577: setting the shutdown flag (what the SIGINT/SIGTERM listener does)
+/// while an externalized apply is in flight drains that apply before the loop
+/// tears down, then exits cleanly.
+///
+/// Asserts only on observable harness outputs (`Stopped`, `finished`, wall
+/// time), not on how the loop tracks the in-flight job, so it survives the
+/// #1566 apply-queue rewrite. The tick samples are used only to pick a moment
+/// when the apply has demonstrably started.
+#[test]
+fn shutdown_during_in_flight_apply_drains_before_teardown() {
+    let harness = spawn_harness(Some(APPLY_DELAY));
+    let mut socket = connect_rpc(harness.addr);
+    establish_rpc_keep_alive(&mut socket);
+    let wallet = Wallet::from_mnemonic("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap();
+    // Height-0 coinbase: a benign duplicate (#421), so the drained apply
+    // completes on the non-terminal path (see the #1565 test above).
+    let decision = MintingTx::new(0, 0, &wallet.default_address(), [0; 32], u64::MAX, 1);
+    // The apply job (and its APPLY_DELAY sleep) cannot start before this.
+    let sent_at = Instant::now();
+    harness.decisions.send(vec![Some(decision)]).unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !harness
+        .samples
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|sample| sample.in_flight)
+    {
+        assert!(Instant::now() < deadline, "apply never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let shutdown_at = Instant::now();
+    let apply_done_no_earlier_than = sent_at + APPLY_DELAY;
+    assert!(
+        shutdown_at + Duration::from_millis(500) < apply_done_no_earlier_than,
+        "fixture too slow: shutdown would not land during the apply"
+    );
+    harness.shutdown.store(true, Ordering::SeqCst);
+
+    let stopped = harness
+        .stopped
+        .recv_timeout(Duration::from_secs(10))
+        .expect("loop did not stop after shutdown");
+    let stopped_at = Instant::now();
+    // i.e. Stopped came no earlier than the apply delay remaining at shutdown.
+    assert!(
+        stopped_at >= apply_done_no_earlier_than,
+        "loop tore down {:?} before the in-flight apply could finish",
+        apply_done_no_earlier_than - stopped_at
+    );
+    assert_eq!(stopped.delivered, 1);
+    assert_eq!(stopped.queued_remaining, 0);
+    assert_eq!(stopped.ledger_height, 0);
+
+    harness
+        .before_persist
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
+    assert_rpc_closed(&mut socket);
+    harness.permit_persist.send(()).unwrap();
+    assert!(harness
+        .finished
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .is_ok());
+    assert!(!consensus_failure::marker_path(&harness.config_path).exists());
+    harness.worker.join().unwrap();
+}

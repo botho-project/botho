@@ -20,7 +20,28 @@ MNEMONIC = ' '.join(['abandon'] * 11 + ['about'])  # BIP-39 test vector; never a
 IPS = {'controller': '172.31.20.10', 'n1': '172.31.20.11', 'n2': '172.31.20.12',
        'n3': '172.31.20.13', 'n4': '172.31.20.14', 'n5': '172.31.20.15'}
 INVENTORY = [{'role': r, 'private_ip': ip, 'hostname': '%s.%s.internal' % (r, RUN)} for r, ip in IPS.items()]
-IDENTITIES = {r: {'peer_id': '12D3KooW' + r * 22} for r in fn.VALIDATORS}  # 52 base58 characters.
+# Launch instant: node_end is NODE_LIFETIME later, inside the 82 h mint window.
+NOW = NODE_END - fp.NODE_LIFETIME
+BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+
+
+def b58(data):
+    """Independent base58btc encoder, so the tests do not trust fn.b58encode."""
+    number, out = int.from_bytes(data, 'big'), ''
+    while number:
+        number, digit = divmod(number, 58)
+        out = BASE58[digit] + out
+    return '1' * (len(data) - len(data.lstrip(b'\0'))) + out
+
+
+def ed25519_peer_id(key):
+    """A real libp2p Ed25519 PeerId: identity multihash of the protobuf public key."""
+    assert len(key) == 32
+    return b58(bytes([0x00, 0x24, 0x08, 0x01, 0x12, 0x20]) + key)
+
+
+IDENTITIES = {r: {'peer_id': ed25519_peer_id(bytes([0x40 + i]) * 31 + bytes([i]))}
+              for i, r in enumerate(fn.VALIDATORS)}
 TOP = {'network_type', 'network', 'minting', 'faucet', 'telemetry', 'rpc'}
 
 
@@ -78,7 +99,7 @@ class ConfigGoldenTests(unittest.TestCase):
     def test_only_producer_mints_and_holds_wallet(self):
         for role in fn.VALIDATORS:
             doc = tomllib.loads(config(role))
-            unit = fn.render_node_unit(role, INVENTORY, PROFILE)
+            unit = fn.render_node_unit(role, INVENTORY, PROFILE, NOW)
             flags = '--mint --mint-threads 1 --testnet-mint-until %d' % NODE_END
             if role == 'n3':
                 self.assertEqual(doc['wallet'], {'mnemonic': MNEMONIC})
@@ -128,7 +149,7 @@ class ConfigGoldenTests(unittest.TestCase):
 
     def test_no_public_seed_or_hosts_name(self):
         for role in fn.VALIDATORS:
-            for text in (config(role), fn.render_node_unit(role, INVENTORY, PROFILE),
+            for text in (config(role), fn.render_node_unit(role, INVENTORY, PROFILE, NOW),
                          fn.render_nginx(role, INVENTORY, PROFILE)):
                 self.assertNotIn('botho.io', text)
                 for host in HOSTS:
@@ -145,7 +166,7 @@ class ConfigGoldenTests(unittest.TestCase):
 
 class UnitGoldenTests(unittest.TestCase):
     def test_validator_unit(self):
-        unit = fn.render_node_unit('n1', INVENTORY, PROFILE)
+        unit = fn.render_node_unit('n1', INVENTORY, PROFILE, NOW)
         lines = unit.splitlines()
         self.assertIn('Restart=no', lines)
         self.assertIn('TimeoutStopSec=30', lines)
@@ -156,10 +177,10 @@ class UnitGoldenTests(unittest.TestCase):
         self.assertIn('MemoryMax=2G', lines)
         self.assertIn('RuntimeMaxSec=%d' % fp.NODE_LIFETIME, lines)
         self.assertNotRegex(unit, r'(?m)^Restart=(?!no$)')
-        self.assertIn('MemoryMax=5G', fn.render_node_unit('n3', INVENTORY, PROFILE).splitlines())
+        self.assertIn('MemoryMax=5G', fn.render_node_unit('n3', INVENTORY, PROFILE, NOW).splitlines())
 
     def test_node_stop_timer_at_node_end(self):
-        service, timer = fn.render_node_stop(PROFILE)
+        service, timer = fn.render_node_stop(PROFILE, NOW)
         self.assertIn('ExecStart=/usr/bin/systemctl stop botho-%s.service' % RUN, service)
         self.assertIn('OnCalendar=%s' % fp.on_calendar(NODE_END), timer.splitlines())
         self.assertIn('OnCalendar=2026-11-04 09:30:00 UTC', timer.splitlines())
@@ -211,7 +232,7 @@ class RefusalTests(unittest.TestCase):
             config('n1', inventory=inventory)
         inventory[2]['private_ip'] = '100.64.0.5'  # CGNAT: private-ish, not RFC1918.
         with self.assertRaisesRegex(ValueError, 'RFC1918'):
-            fn.render_node_unit('n1', inventory, PROFILE)
+            fn.render_node_unit('n1', inventory, PROFILE, NOW)
 
     def test_malformed_run_id(self):
         for bad in ('q20261101-w12-endurance', 'Q20261101-x1-endurance', 'q20261341-x1-endurance', 'x1-endurance'):
@@ -238,15 +259,39 @@ class RefusalTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'producer.mnemonic'
             path.write_text(MNEMONIC + '\n')
-            os.chmod(path, 0o644)
-            with self.assertRaisesRegex(ValueError, 'owner-only'):
-                fn.read_private(path)
+            for mode in (0o644, 0o640, 0o604, 0o660):
+                os.chmod(path, mode)
+                with self.assertRaisesRegex(ValueError, 'owner-only'):
+                    fn.read_private(path)
             os.chmod(path, 0o600)
             self.assertEqual(fn.read_private(path), MNEMONIC)
             link = Path(tmp) / 'link'
             link.symlink_to(path)
             with self.assertRaisesRegex(ValueError, 'symlink'):
                 fn.read_private(link)
+
+    def test_mnemonic_file_checks_run_on_the_opened_fd(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'producer.mnemonic'
+            path.write_text(MNEMONIC + '\n')
+            os.chmod(path, 0o600)
+            # Not owned by the effective user.
+            with mock.patch.object(fn.os, 'geteuid', return_value=os.geteuid() + 1):
+                with self.assertRaisesRegex(ValueError, 'owned'):
+                    fn.read_private(path)
+            # A directory is not a regular file.
+            with self.assertRaisesRegex(ValueError, 'regular file'):
+                fn.read_private(Path(tmp))
+            # The open is O_NOFOLLOW | O_CLOEXEC, and lstat is never consulted.
+            real_open = os.open
+            flags = []
+            with mock.patch.object(fn.os, 'open', side_effect=lambda p, f, *a: flags.append(f) or real_open(p, f, *a)), \
+                    mock.patch.object(fn.Path, 'lstat', side_effect=AssertionError('lstat used')):
+                self.assertEqual(fn.read_private(path), MNEMONIC)
+            self.assertTrue(flags[0] & os.O_NOFOLLOW and flags[0] & os.O_CLOEXEC)
+            # Missing file: a ValueError, not a traceback.
+            with self.assertRaisesRegex(ValueError, 'cannot open'):
+                fn.read_private(Path(tmp) / 'absent')
 
     def test_mnemonic_only_on_producer(self):
         with self.assertRaisesRegex(ValueError, 'producer'):
@@ -274,6 +319,84 @@ class RefusalTests(unittest.TestCase):
             config('n1', inventory=renamed)
 
 
+class PeerIdTests(unittest.TestCase):
+    def test_real_ids_parse_and_round_trip(self):
+        for i, role in enumerate(fn.VALIDATORS):
+            self.assertEqual(fn.parse_peer_id(peer(role)), bytes([0x40 + i]) * 31 + bytes([i]))
+        # A real node id from the repo's docs/config, generated by libp2p.
+        self.assertEqual(len(fn.parse_peer_id('12D3KooWBrjTYjNrEwi9MM3AKFenmymyWVXtXbQiSx7eDnDwv9qQ')), 32)
+
+    def test_regex_valid_garbage_is_refused(self):
+        for bad in ('12D3KooW' + 'r' * 44, '12D3KooW' + 'n1' * 22, '12D3KooW' + '1' * 44):
+            self.assertIsNotNone(re.fullmatch(r'(?:12D3KooW|Qm)[1-9A-HJ-NP-Za-km-z]{36,52}', bad))
+            with self.assertRaises(ValueError):
+                fn.parse_peer_id(bad)
+            identities = copy.deepcopy(IDENTITIES)
+            identities['n4'] = {'peer_id': bad}
+            with self.assertRaisesRegex(ValueError, 'invalid peer_id for n4'):
+                config('n1', identities=identities)
+
+    def test_bad_prefix_byte_is_refused(self):
+        key = bytes(range(32))
+        good = bytes([0x00, 0x24, 0x08, 0x01, 0x12, 0x20])
+        for index, value in ((2, 0x08), (3, 0x00), (3, 0x02), (5, 0x21)):  # key type / data length.
+            prefix = bytearray(good)
+            if prefix[index] == value:
+                continue
+            prefix[index] = value
+            with self.assertRaises(ValueError):
+                fn.parse_peer_id(b58(bytes(prefix) + key))
+        # sha2-256 multihash (RSA-style Qm id) and a secp256k1 key type.
+        with self.assertRaises(ValueError):
+            fn.parse_peer_id(b58(bytes([0x12, 0x20]) + key))
+        with self.assertRaises(ValueError):
+            fn.parse_peer_id(b58(bytes([0x00, 0x25, 0x08, 0x02, 0x12, 0x21, 0x02]) + key))
+
+    def test_wrong_length_is_refused(self):
+        prefix = bytes([0x00, 0x24, 0x08, 0x01, 0x12, 0x20])
+        for key in (bytes(range(31)), bytes(range(33))):
+            with self.assertRaises(ValueError):
+                fn.parse_peer_id(b58(prefix + key))
+        with self.assertRaises(ValueError):
+            fn.parse_peer_id(peer('n1')[:-1])
+
+    def test_non_round_tripping_is_refused(self):
+        # An extra leading '1' decodes to an extra zero byte; never canonical.
+        with self.assertRaises(ValueError):
+            fn.parse_peer_id('1' + peer('n1')[:-1])
+        with mock.patch.object(fn, 'b58encode', return_value='12D3KooW' + 'x' * 44):
+            with self.assertRaisesRegex(ValueError, 'round-trip'):
+                fn.parse_peer_id(peer('n1'))
+
+
+class NodeEndTests(unittest.TestCase):
+    def test_window_bounds(self):
+        limit = 82 * 3600
+        self.assertEqual(fn.MAX_TESTNET_MINT_WINDOW_SECS, limit)
+        self.assertEqual(fn.check_node_end(PROFILE, NODE_END - limit), NODE_END)
+        self.assertEqual(fn.check_node_end(PROFILE, NODE_END - 1), NODE_END)
+        for now, why in ((NODE_END - limit - 1, 'ahead'), (NODE_END, 'future'), (NODE_END + 3600, 'future')):
+            with self.assertRaisesRegex(ValueError, why):
+                fn.check_node_end(PROFILE, now)
+            with self.assertRaisesRegex(ValueError, why):
+                fn.render_node_unit('n3', INVENTORY, PROFILE, now)
+            with self.assertRaisesRegex(ValueError, why):
+                fn.render_node_stop(PROFILE, now)
+            with self.assertRaisesRegex(ValueError, why):
+                fn.render_payloads(INVENTORY, IDENTITIES, PROFILE, MNEMONIC, now)
+
+    def test_wall_clock_is_the_default(self):
+        with mock.patch.object(fn.time, 'time', return_value=float(NOW)):
+            self.assertEqual(fn.check_node_end(PROFILE), NODE_END)
+        with mock.patch.object(fn.time, 'time', return_value=float(NODE_END + 1)):
+            with self.assertRaisesRegex(ValueError, 'future'):
+                fn.render_node_unit('n1', INVENTORY, PROFILE)
+
+    def test_constant_mirrors_rust(self):
+        run_rs = Path(__file__).resolve().parents[2] / 'botho' / 'src' / 'commands' / 'run.rs'
+        self.assertIn('const MAX_TESTNET_MINT_WINDOW_SECS: u64 = 82 * 60 * 60;', run_rs.read_text())
+
+
 class CliTests(unittest.TestCase):
     def test_render_writes_private_payloads(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -288,7 +411,7 @@ class CliTests(unittest.TestCase):
             out = tmp / 'out'
             argv = ['render', '--profile', str(tmp / 'profile.json'), '--inventory', str(tmp / 'inventory.json'),
                     '--identities', str(tmp / 'identity'), '--producer-mnemonic', str(mnemonic), '--output', str(out)]
-            with mock.patch('sys.stdout'):
+            with mock.patch('sys.stdout'), mock.patch.object(fn, '_now', return_value=NOW):
                 self.assertEqual(fn.main(argv), 0)
             self.assertEqual(sorted(p.name for p in out.iterdir()),
                              ['payload-' + r for r in fn.VALIDATORS] + ['staging-fragment.json'])
@@ -302,11 +425,11 @@ class CliTests(unittest.TestCase):
             self.assertEqual(json.loads((out / 'staging-fragment.json').read_text()),
                              fn.render_staging_fragment(INVENTORY, PROFILE))
             # A second render never overwrites.
-            with mock.patch('sys.stderr'):
+            with mock.patch('sys.stderr'), mock.patch.object(fn, '_now', return_value=NOW):
                 self.assertEqual(fn.main(argv), 2)
             os.chmod(mnemonic, 0o640)
             argv[-1] = str(tmp / 'out2')
-            with mock.patch('sys.stderr'):
+            with mock.patch('sys.stderr'), mock.patch.object(fn, '_now', return_value=NOW):
                 self.assertEqual(fn.main(argv), 2)
             self.assertFalse((tmp / 'out2').exists())
 
