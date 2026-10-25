@@ -264,6 +264,72 @@ def rehearsal_summary(journal, plan, artifacts=None):
     }
 
 
+DEGRADE_MILESTONES = ("first_reachable_at", "synced_at_tip_at", "first_ballot_at", "first_coinbase_at")
+
+
+def degrade_report(journal, steps):
+    """One row per planned degrade step (#1591); times are seconds from restore_at.
+
+    ``verdict`` is ``pass``/``fail`` once taken, ``open`` when the window_end
+    checks passed but after-window evidence (payments, deferred receipts,
+    accounting) is still owed, ``in_progress`` inside the window, and
+    ``not_started`` before it. Over-1 s loop counts are recorded only.
+    """
+    rows = []
+    for step in steps:
+        record = journal.get("degrade:" + step["id"])
+        row = {
+            "step": step["id"],
+            "action": step["action"],
+            "expect": step["expect"],
+            "targets": list(step["target_hosts"]),
+            "verdict": "not_started",
+            "failures": [],
+            "awaiting": [],
+            "fault_observed": None,
+            "milestones": {},
+            "outage_blocks": None,
+            "catchup_blocks_per_second": {},
+            "loop": {},
+        }
+        if record is not None:
+            verdict = record.get("verdict")
+            restore = record.get("restore_at")
+            row["verdict"] = (
+                verdict["status"] if verdict
+                else "open" if record.get("closed_at") is not None
+                else "in_progress"
+            )
+            row["failures"] = list(verdict.get("failures") or []) if verdict else []
+            row["awaiting"] = list(record.get("awaiting") or [])
+            row["fault_observed"] = record.get("fault_observed")
+            for host, track in (record.get("hosts") or {}).items():
+                row["milestones"][host] = {
+                    name: None if track.get(name) is None else track[name] - restore
+                    for name in DEGRADE_MILESTONES
+                }
+                reachable, synced = track.get("first_reachable_at"), track.get("synced_at_tip_at")
+                gained = (
+                    track["synced_height"] - track["reachable_height"]
+                    if synced is not None and track.get("reachable_height") is not None
+                    else None
+                )
+                row["catchup_blocks_per_second"][host] = (
+                    gained / (synced - reachable)
+                    if gained is not None and synced > reachable
+                    else None
+                )
+            if record.get("tip_fault_start") is not None and record.get("tip_restore") is not None:
+                row["outage_blocks"] = record["tip_restore"] - record["tip_fault_start"]
+            row["loop"] = {
+                host: None if delta is None
+                else {"over_1s": delta["over_1s"], "delayed": delta["delayed"]}
+                for host, delta in (record.get("loops") or {}).items()
+            }
+        rows.append(row)
+    return rows
+
+
 def controller_report(self):
     rows = self.j.rows()
     artifacts = artifact_evidence(
@@ -293,6 +359,8 @@ def controller_report(self):
             "max": values[-1],
         }
 
+    # Empty without the opt-in and for a rehearsal-only plan: never vacuous.
+    degrade = degrade_report(self.j, getattr(self, "degrade_steps", None) or [])
     report = {
         "at": time.time(),
         "run_id": self.config["run_id"],
@@ -324,7 +392,10 @@ def controller_report(self):
             "max_rss": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
             "user_cpu": resource.getrusage(resource.RUSAGE_SELF).ru_utime,
         },
+        "degrade": degrade,
         "coverage": {
+            "validator_degrade": bool(degrade)
+            and all(row["verdict"] == "pass" for row in degrade),
             "web": False,
             "snap": False,
             "confidential_amounts": False,
@@ -335,8 +406,12 @@ def controller_report(self):
     return report
 
 
-def workload_complete(journal, events, phases):
-    """A delivered schedule cannot erase a safety hold or a missing phase gate."""
+def workload_complete(journal, events, phases, degrade_steps=()):
+    """A delivered schedule cannot erase a safety hold or a missing phase gate.
+
+    Every planned degrade step also needs a stored ``pass`` verdict (#1591),
+    so a controller restart that missed a verdict cannot report complete.
+    """
     rows = journal.rows("kind='campaign'")
     accounting = journal.get("accounting", {})
     gates = journal.get("phase_gates", {})
@@ -347,4 +422,9 @@ def workload_complete(journal, events, phases):
         and all(gates.get(phase["id"]) is True for phase in phases)
         and accounting.get("difference") == 0
         and not journal.pending()
+        and all(
+            ((journal.get("degrade:" + step["id"]) or {}).get("verdict") or {}).get("status")
+            == "pass"
+            for step in degrade_steps
+        )
     )

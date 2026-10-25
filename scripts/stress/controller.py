@@ -14,7 +14,19 @@ import time
 from plan import expand
 from reporting import legacy_lottery_evidence
 from runtime import (Gate, HOSTS, Journal, PENDING, Quota, Rpc, atomic,
-                     check_identity, check_resources, digest, campaign_targets, campaign_tls_context, pinned_file)
+                     RESTART_ACTIONS, check_identity, loop_delta, check_resources, digest, campaign_targets, campaign_tls_context, pinned_file)
+
+
+_NO_VIEW = object()
+# Offer states that mean a payment inside a step window was missed (#1591).
+MISSED = ('skipped', 'unresolved', 'expired', 'rejected', 'aborted')
+# The record must start within this long of fault_start, or the controller
+# did not observe the step's start (e.g. it was down) and cannot pass it.
+DEGRADE_START_SLACK = 60
+# Loop metrics are re-read on every tick this close to window_end, so a host
+# the next step stops at the same instant still has an end sample.
+DEGRADE_END_LEAD = 45
+MILESTONES = ('first_reachable_at', 'synced_at_tip_at', 'first_ballot_at', 'first_coinbase_at')
 
 
 class Controller:
@@ -22,7 +34,9 @@ class Controller:
         self.state = state
         self.config = json.loads((state/'launch.json').read_text())
         self.plan = json.loads((state/'plan.json').read_text())
-        _, self.events = expand(self.plan)
+        summary, self.events = expand(self.plan)
+        # Scheduled validator faults (#1585); absent without the opt-in.
+        self.degrade_steps = summary.get('degrade_steps') or []
         self.targets = campaign_targets(self.config, self.plan)
         tls_context = campaign_tls_context(self.config)
         if 'targets' in self.config:
@@ -59,6 +73,397 @@ class Controller:
         self.signed_tasks = set()
         self.closed = False
 
+    # -- scheduled degrade-step view (#1587) ---------------------------------
+    # One place decides which hosts a plan-scheduled fault may take out. With
+    # no active step, live_hosts() is exactly HOSTS and every caller behaves as
+    # before; nothing outside an active step's named targets is ever relaxed.
+
+    def degrade_windows(self):
+        """Every scheduled step in absolute seconds; empty before campaign start."""
+        steps = getattr(self, 'degrade_steps', None)
+        start = self.j.get('start') if steps else None
+        if start is None:
+            return []
+        return [{'step': s['id'], 'action': s['action'], 'expect': s['expect'],
+                 'offers': s['offers'], 'expected_down': tuple(s['target_hosts']),
+                 'fault_start': start+s['fault_start_offset'],
+                 'restore_at': start+s['restore_offset'],
+                 'window_end': start+s['window_end_offset']} for s in steps]
+
+    def fault_view(self, now=None):
+        """The step active at ``now`` (``fault_start <= now < window_end``), or None."""
+        now = time.time() if now is None else now
+        return next((w for w in self.degrade_windows()
+                     if w['fault_start'] <= now < w['window_end']), None)
+
+    def live_hosts(self, now=None, view=_NO_VIEW):
+        """HOSTS minus the active step's named targets, in fixed HOSTS order.
+
+        Pass ``view`` (possibly None) to reuse a view already taken this tick.
+        """
+        view = self.fault_view(now) if view is _NO_VIEW else view
+        down = view['expected_down'] if view else ()
+        return tuple(h for h in HOSTS if h not in down)
+
+    def resource_window(self, view, host):
+        """The check_resources() window (#1586) for a host the active step names."""
+        if not view or host not in view['expected_down']:
+            return None
+        return {k: view[k] for k in ('step','action','fault_start','restore_at','window_end')}
+
+    def fleet_height(self, now=None, default=None):
+        """Minimum chain height over live hosts with a current status."""
+        live = self.live_hosts(now)
+        heights = [s['chainHeight'] for h,s in self.statuses.items()
+                   if h in live and 'chainHeight' in s]
+        if not heights:
+            if default is None:
+                raise Gate('fleet status unavailable')
+            return default
+        return min(heights)
+
+    def safe_halt_seconds(self, since, now):
+        """Seconds of [since, now) inside scheduled below-quorum windows."""
+        return sum(max(0, min(now, w['window_end'])-max(since, w['fault_start']))
+                   for w in self.degrade_windows() if w['expect'] == 'safe_halt')
+
+    def deferred_rows(self):
+        """Rows confirmed on the live hosts whose down hosts are not yet verified."""
+        return self.j.rows("json_extract(info,'$.deferred_hosts') IS NOT NULL ORDER BY offered, id")
+
+    async def tolerate(self, host, hosts, awaitable, step=None):
+        """Await a read; only a host in ``hosts`` (named by a step) may fail."""
+        if host not in hosts:
+            return await awaitable
+        try:
+            return await awaitable
+        except Quota:
+            raise
+        except Exception as error:
+            self.j.event(None, 'expected_down_unreachable',
+                         {'step': step, 'host': host, 'error': str(error)})
+            return None
+
+    def rebaseline(self, host, view, baseline, rebased):
+        """Persist the one accepted restart of ``host`` in this step.
+
+        The step marker lives in the stored baseline itself, so re-baseline
+        and marker are a single journal write: a crash cannot separate them.
+        """
+        if baseline.get('rebased_step') == view['step']:
+            raise Gate(view['step']+': second node restart in one degrade step: '+host)
+        with self.j.transaction():
+            self.j.set('baseline:'+host, {**rebased, 'rebased_step': view['step']})
+            self.j.event(None, 'rebaseline', {'step': view['step'], 'host': host,
+                                              'pid': rebased['pid'], 'start': rebased['start']})
+
+    def rejoin_due(self, now):
+        """Ended steps whose rejoin has not yet been checked."""
+        return [w for w in self.degrade_windows()
+                if w['window_end'] <= now and self.j.get('rejoin:'+w['step']) is None]
+
+    def check_rejoin(self, now, statuses, down=()):
+        """At window end each named host must be reachable, synced and caught up.
+
+        ``statuses`` maps every host to this tick's ``node_getStatus`` (None if
+        unreachable). "Caught up" means at or above the minimum height of the
+        hosts neither the ended step nor the active one names.
+        """
+        for window in self.rejoin_due(now):
+            peers = [s['chainHeight'] for h,s in statuses.items()
+                     if s is not None and h not in window['expected_down'] and h not in down]
+            for host in window['expected_down']:
+                status = statuses.get(host)
+                if (status is None or status.get('synced') is not True
+                        or (peers and status['chainHeight'] < min(peers))):
+                    raise Gate(window['step']+': '+host+' failed to rejoin by window end')
+            self.j.set('rejoin:'+window['step'], {'at': now, 'heights': {
+                h: statuses[h]['chainHeight'] for h in window['expected_down']}})
+
+    # -- degrade-step recovery verdict and measurements (#1591) --------------
+    # Journal key degrade:<step>. Times are absolute; reporting converts them
+    # to seconds from the planned restore_at (the controller cannot read the
+    # runner's faults.jsonl, so the plan is the only restore clock it has).
+
+    async def degrade_evidence(self, now, statuses, prior=None):
+        """Record one monitor tick of step evidence; take verdicts at window_end.
+
+        ``statuses`` is this tick's node_getStatus per HOSTS entry (None if
+        unreachable); ``prior`` the previous tick's ``self.statuses``. A
+        failed criterion stores the failing verdict and raises
+        ``Gate('<step>: recovery check failed: <which>')``.
+        """
+        windows = self.degrade_windows()
+        if not windows:
+            return
+        status = dict(zip(HOSTS, statuses))
+        view = self.fault_view(now)
+        down = view['expected_down'] if view else ()
+        cache = {}
+
+        async def metrics(host, tolerated, step):
+            # One read per host per tick. A tolerated failure is None; the
+            # same failure re-raises wherever the host is not tolerated.
+            if host not in cache:
+                try:
+                    cache[host] = await self.rpc.metrics(host)
+                except Quota:
+                    raise
+                except Exception as error:
+                    cache[host] = error
+            value = cache[host]
+            if isinstance(value, Exception):
+                if not tolerated:
+                    raise value
+                self.j.event(None, 'expected_down_unreachable',
+                             {'step': step, 'host': host, 'error': 'metrics: '+str(value)})
+                return None
+            return value
+
+        for window in windows:
+            if now < window['fault_start']:
+                break
+            key = 'degrade:'+window['step']
+            record = self.j.get(key)
+            if record is None and now > window['fault_start']+DEGRADE_START_SLACK:
+                # The controller did not see this step start (it was down):
+                # its evidence cannot exist, so it is never a pass. Not a
+                # halt either; workload_complete() and coverage stay false.
+                record = self.degrade_unobserved(window, now)
+            if record is None:
+                record = await self.degrade_open(window, now, status, prior or {}, metrics)
+            if record.get('verdict') is not None:
+                continue
+            if record.get('closed_at') is None:
+                await self.degrade_track(record, window, now, status, metrics)
+                if now >= window['window_end']:
+                    await self.degrade_close(record, window, now, status, down, metrics)
+                else:
+                    self.j.set(key, record)
+            if record.get('closed_at') is not None and record.get('verdict') is None:
+                self.degrade_settle(record, window, now)
+
+    def live_tip(self, statuses, named):
+        """Live-fleet height: min chainHeight over reachable hosts a step does not name."""
+        heights = [s['chainHeight'] for h,s in statuses.items()
+                   if s is not None and h not in named and 'chainHeight' in s]
+        return min(heights) if heights else None
+
+    def degrade_unobserved(self, window, now):
+        record = {'step': window['step'], 'action': window['action'],
+                  'expect': window['expect'], 'targets': list(window['expected_down']),
+                  'fault_start': window['fault_start'], 'restore_at': window['restore_at'],
+                  'window_end': window['window_end'], 'opened_at': now, 'hosts': {},
+                  'closed_at': now, 'verdict': {'status': 'unobserved', 'at': now,
+                                                'failures': ['step start not observed']}}
+        self.j.set('degrade:'+window['step'], record)
+        self.j.event(None, 'degrade_verdict', {'step': window['step'], **record['verdict']})
+        return record
+
+    async def degrade_open(self, window, now, status, prior, metrics):
+        named = window['expected_down']
+        # Live hosts must answer; a failure retries the whole record next tick.
+        start = {h: await metrics(h, h in named, window['step']) for h in HOSTS}
+        record = {
+            'step': window['step'], 'action': window['action'],
+            'expect': window['expect'], 'targets': list(named),
+            'fault_start': window['fault_start'], 'restore_at': window['restore_at'],
+            'window_end': window['window_end'], 'opened_at': now,
+            'metrics_start': start, 'metrics_end': {},
+            'tip_fault_start': self.live_tip(status, named),
+            'tip_restore': None, 'tip_resumed_at': None, 'tips': {}, 'conflict': None,
+            'hosts': {h: {'last_slot': (prior.get(h) or {}).get('lastExternalizedSlot'),
+                          'peer_zero': False, **dict.fromkeys(MILESTONES),
+                          'reachable_height': None, 'synced_height': None}
+                      for h in named},
+            'closed_at': None, 'verdict': None,
+        }
+        self.j.set('degrade:'+window['step'], record)
+        return record
+
+    async def degrade_track(self, record, window, now, status, metrics):
+        named = window['expected_down']
+        tip = self.live_tip(status, named)
+        if window['expect'] == 'safe_halt':
+            for s in status.values():
+                if s is None or type(s.get('chainHeight')) is not int or not s.get('tipHash'):
+                    continue
+                seen = record['tips'].setdefault(str(s['chainHeight']), s['tipHash'])
+                if seen != s['tipHash'] and record['conflict'] is None:
+                    record['conflict'] = {'height': s['chainHeight'], 'hashes': [seen, s['tipHash']]}
+        if now < window['restore_at']:
+            # Start samples a named host missed while already down.
+            for host in named:
+                if record['metrics_start'].get(host) is None:
+                    record['metrics_start'][host] = await metrics(host, True, window['step'])
+        elif record['tip_restore'] is None:
+            record['tip_restore'] = tip
+        elif (record['tip_resumed_at'] is None and tip is not None
+                and tip > record['tip_restore']):
+            record['tip_resumed_at'] = now
+        for host in named:
+            s, track = status.get(host), record['hosts'][host]
+            if now < window['restore_at']:
+                if s is None:
+                    continue
+                if s.get('lastExternalizedSlot') is not None:
+                    track['last_slot'] = s['lastExternalizedSlot']
+                if s.get('scpPeerCount') == 0 or s.get('peerCount') == 0:
+                    track['peer_zero'] = True
+                continue
+            if s is None:
+                continue
+            height = s.get('chainHeight')
+            if track['first_reachable_at'] is None:
+                track.update(first_reachable_at=now, reachable_height=height)
+            if (track['synced_at_tip_at'] is None and s.get('synced') is True
+                    and type(height) is int and tip is not None and height >= tip):
+                track.update(synced_at_tip_at=now, synced_height=height)
+            slot = s.get('lastExternalizedSlot')
+            index = s.get('scpSlotIndex')
+            # With no pre-fault slot seen, the live tip at restore is the
+            # baseline: a node's stale pre-fault slot is not a new ballot.
+            baseline = track['last_slot'] if track['last_slot'] is not None else record['tip_restore']
+            if track['first_ballot_at'] is None and (
+                    (type(slot) is int and baseline is not None and slot > baseline)
+                    or ((s.get('scpBallotCounter') or 0) > 0 and type(index) is int
+                        and record['tip_restore'] is not None and index > record['tip_restore'])):
+                track['first_ballot_at'] = now
+            # Only the producer mints and decision 4 never names it (x1).
+            track['first_coinbase_at'] = None
+        if now >= window['window_end']-DEGRADE_END_LEAD:
+            for host in HOSTS:
+                sample = await metrics(host, True, window['step'])
+                if sample is not None:
+                    record['metrics_end'][host] = sample
+
+    def fault_observed(self, record, window):
+        """True/False from controller observations; 'unknown' for netem."""
+        if window['action'] in RESTART_ACTIONS:
+            return all((self.j.get('baseline:'+h) or {}).get('rebased_step') == window['step']
+                       for h in window['expected_down'])
+        if window['action'] == 'isolate':
+            return all(record['hosts'][h]['peer_zero'] for h in window['expected_down'])
+        return 'unknown'  # netem: operator reconciles faults.jsonl post-run
+
+    async def degrade_close(self, record, window, now, status, down, metrics):
+        """The window_end verdict: every criterion observable at this tick."""
+        step, named = window['step'], window['expected_down']
+        failures = []
+        observed = self.fault_observed(record, window)
+        record['fault_observed'] = observed
+        if observed is False:
+            failures.append('fault not exercised')
+        # One tip: every reachable host agrees at the common minimum height.
+        # Only a host a later, active step names may be absent here.
+        reachable = [h for h in HOSTS if status.get(h) is not None]
+        missing = [h for h in HOSTS if h not in reachable and h not in down]
+        if missing:
+            failures.append('one tip: no status from '+', '.join(missing))
+        elif reachable:
+            height = min(status[h]['chainHeight'] for h in reachable)
+            blocks = await asyncio.gather(*(self.tolerate(h, down, self.rpc.call(
+                h, 'getBlockByHeight', {'height': height}), step) for h in reachable))
+            hashes = {b.get('hash') for b in blocks if b is not None}
+            record['tip_check'] = {'height': height, 'hosts': [h for h,b in zip(reachable,blocks) if b is not None]}
+            if len(hashes) != 1:
+                failures.append('one tip: conflicting hashes at height '+str(height))
+        # Loop stalls: over-1 s recorded only; any >= 5 s delta fails.
+        loops = {}
+        for host in HOSTS:
+            sample = await metrics(host, host in down, step)
+            if sample is not None:
+                record['metrics_end'][host] = sample
+            end = record['metrics_end'].get(host)
+            restarted = (host in named and window['action'] in RESTART_ACTIONS
+                         and (self.j.get('baseline:'+host) or {}).get('rebased_step') == step)
+            start = record['metrics_start'].get(host)
+            if end is None or (start is None and not restarted):
+                loops[host] = None
+                failures.append('loop metrics unavailable: '+host)
+                continue
+            loops[host] = loop_delta(start, end, restarted)
+            if loops[host]['delayed'] > 0:
+                failures.append('node_loop_delayed on '+host)
+        record['loops'] = loops
+        if window['expect'] == 'safe_halt':
+            if record['conflict'] is not None:
+                failures.append('conflicting hash at height '+str(record['conflict']['height']))
+            if record['tip_resumed_at'] is None:
+                failures.append('tip did not advance after restore')
+        record['closed_at'] = now
+        # Missed payments, deferred receipts and accounting are checked by
+        # degrade_settle(), which runs straight after this in the same tick.
+        if failures:
+            self.degrade_verdict(record, failures, now)
+        # Passed at window_end; degrade_settle closes the after-window part.
+        self.j.set('degrade:'+step, record)
+
+    def missed_offers(self, window):
+        return self.j.rows("kind='campaign' AND offered>=? AND offered<? AND state IN ("
+                           + ','.join('?' for _ in MISSED)+") ORDER BY offered, id",
+                           (window['fault_start'], window['window_end'], *MISSED))
+
+    def degrade_settle(self, record, window, now):
+        """Close an open verdict once its after-window evidence exists.
+
+        Payments, deferred receipts and exact accounting resolve after
+        window_end: the in-window offers must all reconcile, the step's
+        deferred receipts verify (#1587), and the first accounting snapshot
+        at or after window_end show difference 0. Until then it stays open.
+        """
+        missed = self.missed_offers(window)
+        if missed:
+            return self.degrade_verdict(record, ['missed payment '+missed[0]['id']], now)
+        unfinished = self.j.rows("kind='campaign' AND offered>=? AND offered<? AND state!='reconciled'",
+                                 (window['fault_start'], window['window_end']))
+        deferred = [r for r in self.deferred_rows()
+                    if json.loads(r['info']).get('deferred_step') == window['step']]
+        snapshot = self.j.get('accounting')
+        # After a controller restart the blocks reload from disk but the
+        # wallet inventory is empty and untrusted until the first sync(),
+        # and the monitor (this caller) starts before that sync(). Accounting
+        # against that inventory would be a false mismatch, so wait for it.
+        if (snapshot is None or snapshot.get('at', 0) < window['window_end']) \
+                and not self.j.pending() and self.blocks and self.inventory_initialized:
+            try:
+                self.accounting()
+            except Gate as error:
+                return self.degrade_verdict(record, ['accounting: '+str(error)], now)
+            snapshot = self.j.get('accounting')
+        if snapshot is not None and snapshot.get('at', 0) >= window['window_end'] \
+                and snapshot.get('difference') != 0:
+            return self.degrade_verdict(
+                record, ['accounting difference '+str(snapshot.get('difference'))], now)
+        record['awaiting'] = [*(['payments'] if unfinished else []),
+                              *(['deferred receipts'] if deferred else []),
+                              *(['accounting'] if snapshot is None
+                                or snapshot.get('at', 0) < window['window_end'] else [])]
+        if record['awaiting']:
+            self.j.set('degrade:'+window['step'], record)
+            return None
+        return self.degrade_verdict(record, [], now)
+
+    def degrade_verdict(self, record, failures, now):
+        step = record['step']
+        if failures:
+            record['verdict'] = {'status': 'fail', 'at': now, 'failures': failures}
+            self.j.set('degrade:'+step, record)
+            self.j.event(None, 'degrade_verdict', {'step': step, **record['verdict']})
+            raise Gate(step+': recovery check failed: '+'; '.join(failures))
+        record['verdict'] = {'status': 'pass', 'at': now, 'failures': []}
+        self.j.set('degrade:'+step, record)
+        self.j.event(None, 'degrade_verdict', {'step': step, **record['verdict']})
+        return record['verdict']
+
+    def settle_degrade_verdicts(self, now=None):
+        """Settle open verdicts outside the monitor (final drain)."""
+        now = time.time() if now is None else now
+        for window in self.degrade_windows():
+            record = self.j.get('degrade:'+window['step'])
+            if record and record.get('closed_at') is not None and record.get('verdict') is None:
+                self.degrade_settle(record, window, now)
+
     def gate(self):
         if self.j.get('status') not in ('setup','running'):
             raise Gate('run is held: '+str(self.j.get('reason')))
@@ -66,7 +471,11 @@ class Controller:
             raise Gate('operator stop marker')
         if time.time()-self.fresh > 60:
             raise Gate('fleet or observer data stale')
-        if any(not s.get('synced') for s in self.statuses.values()):
+        view = self.fault_view()
+        if view and view['expect'] == 'safe_halt':
+            raise Quota(view['step']+': scheduled below-quorum window; admission paused')
+        down = view['expected_down'] if view else ()
+        if any(not s.get('synced') for h,s in self.statuses.items() if h not in down):
             raise Quota('fleet is recovering sync')
         deadline = self.j.get('end',self.j.get('setup_start')+self.plan.get('setup_deadline_hours',8)*3600)
         if time.time() >= deadline:
@@ -111,10 +520,21 @@ class Controller:
         while not self.closed:
             started = time.monotonic()
             try:
-                statuses = await asyncio.gather(*(self.rpc.call(h,'node_getStatus') for h in HOSTS))
-                records = await asyncio.gather(*(self.observer(h) for h in HOSTS))
+                # One view per tick: a host the active step names may be
+                # unreachable; every other host still fails closed.
+                now = time.time()
+                view = self.fault_view(now)
+                step = view['step'] if view else None
+                down = view['expected_down'] if view else ()
+                # A host whose window just ended may still be unreachable;
+                # its status read reports that as the rejoin failure below.
+                rejoining = {h for w in self.rejoin_due(now) for h in w['expected_down']}
+                statuses = await asyncio.gather(*(self.tolerate(h,{*down,*rejoining},self.rpc.call(h,'node_getStatus'),step) for h in HOSTS))
+                records = await asyncio.gather(*(self.tolerate(h,down,self.observer(h),step) for h in HOSTS))
+                self.check_rejoin(now,dict(zip(HOSTS,statuses)),down)
                 for host,status,observed in zip(HOSTS,statuses,records):
-                    check_identity(status,self.plan)
+                    if status is not None:
+                        check_identity(status,self.plan)
                     baseline = self.j.get('baseline:'+host)
                     if baseline is None:
                         if not observed or observed[-1].get('error'):
@@ -123,8 +543,15 @@ class Controller:
                         if baseline['binary'] != self.config['node_sha256']:
                             raise Gate('deployed binary differs from launch pin')
                         self.j.set('baseline:'+host,baseline)
-                    check_resources(observed,baseline,time.time())
-                    if not status.get('synced'):
+                    if observed is not None:
+                        rebased = check_resources(observed,baseline,time.time(),self.resource_window(view,host))
+                        if rebased is not None:
+                            self.rebaseline(host,view,baseline,rebased)
+                    # No progress is expected from a named host until window
+                    # end, nor from anyone while quorum is lost (safe_halt).
+                    if host in down or (view and view['expect'] == 'safe_halt'):
+                        self.j.set('unsynced:'+host,None)
+                    elif not status.get('synced'):
                         since = self.j.get('unsynced:'+host) or time.time()
                         self.j.set('unsynced:'+host,since)
                         if time.time()-since > 120:
@@ -132,30 +559,44 @@ class Controller:
                     else:
                         self.j.set('unsynced:'+host,None)
                     # Post-idle memory is evaluated once per completed active cycle.
-                    self.j.set('latest:'+host,observed[-1])
-                minimum = min(s['chainHeight'] for s in statuses)
+                    # A stopped node's error row carries no memory sample.
+                    if observed and not observed[-1].get('error'):
+                        self.j.set('latest:'+host,observed[-1])
+                # Hash agreement covers every reachable host, including a named
+                # host that is isolated or delayed and therefore behind.
+                reachable = [(h,s) for h,s in zip(HOSTS,statuses) if s is not None]
+                minimum = min(s['chainHeight'] for _,s in reachable)
                 if self.j.get('checkpoint_height') != minimum:
-                    checkpoints = await asyncio.gather(*(self.rpc.call(h,'getBlockByHeight',{'height':minimum}) for h in HOSTS))
+                    checkpoints = await asyncio.gather(*(self.tolerate(h,down,self.rpc.call(h,'getBlockByHeight',{'height':minimum}),step) for h,_ in reachable))
+                    checkpoints = [b for b in checkpoints if b is not None]
                     if len({b['hash'] for b in checkpoints}) != 1:
                         raise Gate('conflicting block hashes at the same finalized height')
                     self.j.set('checkpoint_height',minimum)
                     self.j.set('checkpoint_hash',checkpoints[0]['hash'])
                 if not self.j.get('genesis_verified'):
-                    genesis = await asyncio.gather(*(self.rpc.call(h,'getBlockByHeight',{'height':0}) for h in HOSTS))
-                    if any(b.get('hash') != self.plan['genesis'] for b in genesis):
+                    genesis = await asyncio.gather(*(self.tolerate(h,down,self.rpc.call(h,'getBlockByHeight',{'height':0}),step) for h,_ in reachable))
+                    if any(b.get('hash') != self.plan['genesis'] for b in genesis if b is not None):
                         raise Gate('genesis differs from manifest')
-                    self.j.set('genesis_verified',True)
-                previous_height = min((s['chainHeight'] for s in self.statuses.values()),default=-1)
-                self.statuses = dict(zip(HOSTS,statuses))
+                    # Verified only once every host has answered.
+                    if None not in genesis and len(genesis) == len(HOSTS):
+                        self.j.set('genesis_verified',True)
+                # Per-step recovery evidence and window_end verdicts (#1591).
+                await self.degrade_evidence(now,statuses,self.statuses)
+                previous_height = self.fleet_height(default=-1)
+                self.statuses = {h: {'expected_down': True} if s is None
+                                 else {**s,'expected_down': True} if h in down else s
+                                 for h,s in zip(HOSTS,statuses)}
                 self.fresh = time.time()
                 self.j.set('fleet_latest',{'at':self.fresh,'nodes':self.statuses})
-                self.j.event(None,'fleet',{'height':minimum,'at':self.fresh})
+                live_height = self.fleet_height()
+                self.j.event(None,'fleet',{'height':minimum,'at':self.fresh,
+                    **({'step':view['step'],'expected_down':list(down),'live_height':live_height} if view else {})})
                 self.memory_cycle()
                 # Controller shares no node resources; still stop if its own
                 # state volume approaches exhaustion or its evidence grows too far.
                 if shutil.disk_usage(self.state).free < 2*1024**3:
                     raise Gate('controller disk headroom')
-                if minimum > previous_height:
+                if live_height > previous_height:
                     self.reconcile_wakeup.set()
             except Quota as error:
                 self.j.event(None,'monitor_quota',str(error))
@@ -171,6 +612,8 @@ class Controller:
         last = self.j.get('last_write',0)
         now = time.time()
         pending = bool(self.j.pending())
+        view = self.fault_view(now)
+        down = view['expected_down'] if view else ()
         for host in HOSTS:
             if self.j.get('rss_cycles:'+host,0) >= 3:
                 self.halt('post-idle RSS growth across three cycles: '+host)
@@ -183,7 +626,9 @@ class Controller:
                     or not 0 <= now-state['sample_at'] <= 60):
                 state['since'] = None
             state.update(write=last,sample_at=now)
-            idle = (not pending and 0 <= now-self.fresh <= 60 and row and base
+            # A host the active step names is never idle evidence: its
+            # samples straddle a stop, isolation or netem, not a quiet cycle.
+            idle = (host not in down and not pending and 0 <= now-self.fresh <= 60 and row and base
                     and 0 <= now-row['at'] <= 60 and status.get('synced') is True
                     and status.get('mintingActive') is False
                     and type(status.get('mempoolSize')) is int and status['mempoolSize']==0)
@@ -211,7 +656,9 @@ class Controller:
         async with self.scan_lock:
             if not self.statuses:
                 raise Gate('fleet status unavailable')
-            height = min(s['chainHeight'] for s in self.statuses.values())
+            # Live hosts only: a named host that is down or behind must not
+            # freeze the scan height (#1587). Equals min over HOSTS otherwise.
+            height = self.fleet_height()
             start = 0 if full else (self.blocks[-1]['height']+1 if self.blocks else 0)
             new = []
             waited = 0.0
@@ -247,8 +694,11 @@ class Controller:
 
             for first in range(start,height+1,50):
                 last = min(height,first+49)
+                # Rotation is deterministic over the live list, re-read per
+                # chunk so a step starting mid-scan never routes to its host.
+                live = self.live_hosts()
                 blocks = await read(
-                    HOSTS[(first // 50) % 5],
+                    live[(first // 50) % len(live)],
                     "chain_getOutputs",
                     {"start_height": first, "end_height": last},
                     timeout=20,
@@ -298,7 +748,8 @@ class Controller:
             checked = dict(cached)
             for first in range(0,len(query_images),256):
                 images = query_images[first:first+256]
-                host=HOSTS[(first//256+height)%len(HOSTS)]
+                live = self.live_hosts()
+                host=live[(first//256+height)%len(live)]
                 found = await read(
                     host, "chain_areKeyImagesSpent", {"keyImages": images}
                 )
@@ -452,6 +903,13 @@ class Controller:
     def intent_deadline(self, row):
         return row['offered']+self.j.limits['start_slot_grace_seconds']
 
+    def choose_ingress(self, identifier):
+        """Seeded ingress; never a host the active degrade step names (#1587)."""
+        if self.plan.get('schema_version') != 2:
+            return HOSTS[0]
+        live = self.live_hosts()
+        return live[int(hashlib.sha256((str(self.plan['seed'])+identifier).encode()).hexdigest(),16)%len(live)]
+
     async def prepare(self, identifier, count, phase_limit, burst=False, crash=None, fee_multiplier=1, cohort=None):
         row = self.j.intent(identifier)
         self.gate()
@@ -476,9 +934,7 @@ class Controller:
         artifact = self.state/'artifacts'/(identifier+'.bin')
         if artifact.exists() or artifact.with_suffix('.partial').exists():
             raise Gate('orphaned prepared artifact needs reconciliation: '+identifier)
-        ingress = HOSTS[0]
-        if self.plan.get('schema_version') == 2:
-            ingress = HOSTS[int(hashlib.sha256((str(self.plan['seed'])+identifier).encode()).hexdigest(),16)%len(HOSTS)]
+        ingress = self.choose_ingress(identifier)
         fee_rate = await self.rpc.call(ingress,'fee_getRate')
         info = await self.native({'operation':'prepare','wallet':self.wallets[row['sender']]['key'],
             'blocks':self.blocks,'height':height,'selected':[o['id'] for o in selected],
@@ -595,6 +1051,8 @@ class Controller:
                 next_poll = time.monotonic()+30
             self.reconcile_wakeup.clear()
             try:
+                if poll:
+                    await self.verify_deferred()
                 for row in self.j.pending():
                     # Admission alone owns first submission of prepared work.
                     # Quota pressure must not interrupt unrelated receipt reads.
@@ -606,11 +1064,19 @@ class Controller:
                     if fetch_receipts:
                         if not poll:
                             continue
+                        # Decision 6 (#1576): during a step a payment confirms
+                        # on the live hosts; the named hosts are re-verified
+                        # after window end (verify_deferred).
+                        view = self.fault_view()
+                        live = self.live_hosts(view=view)
                         if row['hash']:
-                            statuses = await asyncio.gather(*(self.rpc.call(h,'getTransactionStatus',{'hash':row['hash']}) for h in HOSTS))
+                            statuses = await asyncio.gather(*(self.rpc.call(h,'getTransactionStatus',{'hash':row['hash']}) for h in live))
                         else:
                             statuses = []
-                        age = time.time()-(row['submitted'] or row['prepared'])
+                        now = time.time()
+                        since = row['submitted'] or row['prepared']
+                        # Only scheduled below-quorum time is excluded.
+                        age = now-since-self.safe_halt_seconds(since,now)
                         if not statuses or not all(s.get('confirmed') and s.get('txHash')==row['hash'] for s in statuses):
                             if age>900:
                                 self.j.transition(row['id'],'unresolved','not reconciled within fifteen minutes')
@@ -618,11 +1084,15 @@ class Controller:
                             elif age>300:
                                 self.halt('payment unconfirmed after five minutes')
                             continue
-                        receipts = await asyncio.gather(*(self.rpc.call(h,'getTransaction',{'hash':row['hash']}) for h in HOSTS))
-                        saved = dict(zip(HOSTS,receipts))
-                    if set(saved) != set(HOSTS):
+                        receipts = await asyncio.gather(*(self.rpc.call(h,'getTransaction',{'hash':row['hash']}) for h in live))
+                        saved = dict(zip(live,receipts))
+                        if len(live) != len(HOSTS):
+                            info.update(deferred_hosts=[h for h in HOSTS if h not in live],
+                                        deferred_step=view['step'])
+                    deferred = info.get('deferred_hosts') or []
+                    if not set(deferred) <= set(HOSTS) or set(saved) != set(HOSTS)-set(deferred):
                         raise Gate('incomplete saved confirmation receipts')
-                    receipts = [saved[h] for h in HOSTS]
+                    receipts = [saved[h] for h in HOSTS if h in saved]
                     if len({(r.get('blockHeight'),r.get('fee'),r.get('outputCount'),r.get('totalOutput')) for r in receipts}) != 1:
                         raise Gate('fleet transaction receipt disagreement')
                     if any(r.get('txHash',row['hash']) != row['hash'] for r in receipts):
@@ -635,9 +1105,10 @@ class Controller:
                         raise Gate('saved confirmation height mismatch')
                     # Monitor wakeups cannot authorize scans from stale or
                     # incomplete fleet state, including after a process restart.
+                    current = [self.statuses[h] for h in self.live_hosts() if h in self.statuses]
                     if (set(self.statuses) != set(HOSTS) or time.time()-self.fresh > 60
-                        or any(not s.get('synced') for s in self.statuses.values())
-                        or min(s['chainHeight'] for s in self.statuses.values()) < info['block_height']):
+                        or any(not s.get('synced') for s in current)
+                        or min(s.get('chainHeight',-1) for s in current) < info['block_height']):
                         continue
                     await self.sync(draining=True)
                     if time.time()-self.fresh > 60:
@@ -655,9 +1126,17 @@ class Controller:
                                      and o['utxo']['output_index']==expected['index']]
                             if len(found)!=1 or found[0]['utxo']['amount']!=expected['amount'] or bytes(found[0]['utxo']['target_key']).hex()!=expected['target_key']:
                                 raise Gate('recipient/change metadata mismatch')
-                        states = await asyncio.gather(*(self.rpc.call(h,'chain_areKeyImagesSpent',{'keyImages':info['key_images']}) for h in HOSTS))
+                        view = self.fault_view()
+                        checked = self.live_hosts(view=view)
+                        states = await asyncio.gather(*(self.rpc.call(h,'chain_areKeyImagesSpent',{'keyImages':info['key_images']}) for h in checked))
                         if any([s.get('keyImage') for s in results] != info['key_images'] or not all(s.get('spent') for s in results) for results in states):
                             raise Gate('spent-input state disagreement')
+                        if len(checked) != len(HOSTS):
+                            # Spent state not yet seen on the named hosts:
+                            # they join the post-window re-verification.
+                            missing = set(HOSTS)-set(checked)|set(info.get('deferred_hosts') or [])
+                            info.update(deferred_hosts=[h for h in HOSTS if h in missing],
+                                        deferred_step=view['step'])
                     else:
                         info['faucet_fee'] = receipts[0]['fee']
                     info['recipient_verified_at'] = time.time()
@@ -672,6 +1151,50 @@ class Controller:
                 self.halt('reconciliation: '+str(error))
             if not self.closed:
                 await self.wait_for_reconcile(max(.2,next_poll-time.monotonic()))
+
+    async def verify_deferred(self):
+        """Re-verify payments confirmed during a step on the hosts it named.
+
+        Runs once the step's window has ended and while no later step names
+        those hosts. Receipts and spent state must agree with the live hosts'
+        saved evidence; that also covers rows already reconciled.
+        """
+        rows = self.deferred_rows()
+        if not rows:
+            return
+        windows = {w['step']: w for w in self.degrade_windows()}
+        now = time.time()
+        view = self.fault_view(now)
+        down = view['expected_down'] if view else ()
+        for row in rows:
+            info = json.loads(row['info'])
+            hosts = info['deferred_hosts']
+            window = windows.get(info.get('deferred_step'))
+            if window is None or not hosts or not set(hosts) <= set(HOSTS):
+                raise Gate('deferred confirmation names no scheduled step')
+            if now < window['window_end'] or any(h in down for h in hosts):
+                continue
+            if time.time()-self.fresh > 60 or any(
+                    self.statuses.get(h,{}).get('synced') is not True
+                    or self.statuses[h].get('chainHeight',-1) < info['block_height'] for h in hosts):
+                continue  # not caught up yet; the rejoin gate bounds this wait
+            receipts = await asyncio.gather(*(self.rpc.call(h,'getTransaction',{'hash':row['hash']}) for h in hosts))
+            saved = info['confirmed_receipts']
+            shape = lambda r: (r.get('blockHeight'),r.get('fee'),r.get('outputCount'),r.get('totalOutput'))
+            if len({shape(r) for r in [*saved.values(),*receipts]}) != 1:
+                raise Gate('fleet transaction receipt disagreement')
+            if any(r.get('txHash',row['hash']) != row['hash'] for r in receipts):
+                raise Gate('fleet transaction receipt hash mismatch')
+            if row['kind'] != 'funding':
+                states = await asyncio.gather(*(self.rpc.call(h,'chain_areKeyImagesSpent',{'keyImages':info['key_images']}) for h in hosts))
+                if any([s.get('keyImage') for s in results] != info['key_images'] or not all(s.get('spent') for s in results) for results in states):
+                    raise Gate('spent-input state disagreement')
+            saved.update(zip(hosts,receipts))
+            del info['deferred_hosts']
+            info['deferred_verified'] = {'step': window['step'], 'hosts': hosts, 'at': time.time()}
+            with self.j.transaction():
+                self.j.db.execute('UPDATE intents SET info=? WHERE id=?', (json.dumps(info), row['id']))
+                self.j.event(row['id'],'deferred_verified',info['deferred_verified'])
 
     def accounting(self):
         state = {s['keyImage']:s for s in self.spent}
@@ -886,8 +1409,10 @@ class Controller:
                 row = waiting[0]
                 # Persisted signatures have no submit marker. Require every
                 # ingress to report unknown before their one allowed attempt.
+                # A named host is skipped; the recorded ingress is not
+                # re-routed (submit_prepared), so a down ingress still halts.
                 statuses = await asyncio.gather(*(self.rpc.call(
-                    h,'getTransactionStatus',{'hash':row['hash']}) for h in HOSTS))
+                    h,'getTransactionStatus',{'hash':row['hash']}) for h in self.live_hosts()))
                 if any(s.get('status')!='unknown' for s in statuses):
                     self.halt('unsubmitted prepared hash unexpectedly exists on chain')
                 else:
@@ -955,8 +1480,13 @@ class Controller:
             if self.fresh and not self.j.pending():
                 await self.sync(full=True, draining=True)
                 self.accounting()
+            try:
+                self.settle_degrade_verdicts()
+            except Gate as error:
+                self.j.event(None,'degrade_verdict_failed',str(error))
             from reporting import workload_complete
-            success=workload_complete(self.j,self.events,self.plan['phases'])
+            success=workload_complete(self.j,self.events,self.plan['phases'],
+                                      getattr(self,'degrade_steps',None) or [])
             self.j.set('status','complete' if success else 'incomplete')
         finally:
             self.closed=True
