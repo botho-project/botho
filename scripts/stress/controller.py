@@ -11,10 +11,11 @@ import re
 import shutil
 import subprocess
 import time
+from discovery_plan import degrade_opt_in
 from plan import expand
 from reporting import legacy_lottery_evidence
 from runtime import (Gate, HOSTS, Journal, PENDING, Quota, Rpc, atomic,
-                     RESTART_ACTIONS, check_identity, loop_delta, check_resources, digest, campaign_targets, campaign_tls_context, pinned_file)
+                     RESTART_ACTIONS, check_identity, check_quorum, loop_delta, check_resources, digest, campaign_targets, campaign_tls_context, pinned_file)
 
 
 _NO_VIEW = object()
@@ -529,12 +530,20 @@ class Controller:
                 # A host whose window just ended may still be unreachable;
                 # its status read reports that as the rejoin failure below.
                 rejoining = {h for w in self.rejoin_due(now) for h in w['expected_down']}
+                # Plan-level, not per host: only x-series (degrade opt-in)
+                # plans require the installed 4-of-5 quorum (#1605).
+                quorum_gated = degrade_opt_in(self.plan)
                 statuses = await asyncio.gather(*(self.tolerate(h,{*down,*rejoining},self.rpc.call(h,'node_getStatus'),step) for h in HOSTS))
                 records = await asyncio.gather(*(self.tolerate(h,down,self.observer(h),step) for h in HOSTS))
                 self.check_rejoin(now,dict(zip(HOSTS,statuses)),down)
                 for host,status,observed in zip(HOSTS,statuses,records):
                     if status is not None:
                         check_identity(status,self.plan)
+                        # Degrade-phase (x-series) plans need the installed
+                        # 4-of-5, f=1 quorum on every reachable validator; a
+                        # silent 4-of-4 would void D1-D5 (#1605).
+                        if quorum_gated:
+                            check_quorum(status)
                     baseline = self.j.get('baseline:'+host)
                     if baseline is None:
                         if not observed or observed[-1].get('error'):

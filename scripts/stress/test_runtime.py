@@ -3,12 +3,15 @@ import copy
 import json
 from pathlib import Path
 import sqlite3
+import shutil
 import tempfile
 import unittest
 from unittest.mock import patch
 from controller import Controller
 from plan import expand
-from runtime import Gate, HOSTS, Journal, Quota, Rpc, check_identity, check_resources
+import fleet_nodes
+import runtime
+from runtime import Gate, HOSTS, Journal, Quota, Rpc, check_identity, check_quorum, check_resources
 
 
 class JournalTests(unittest.TestCase):
@@ -120,6 +123,74 @@ class ResourceTests(unittest.TestCase):
         for key in status:
             with self.subTest(key=key),self.assertRaises(Gate):
                 check_identity({**status,key:'wrong'},plan)
+
+
+class QuorumGateTests(unittest.TestCase):
+    """check_quorum: the installed explicit 4-of-5, f = 1 quorum (#1605)."""
+
+    GOOD = {'quorumMode':'explicit','quorumSize':5,'quorumThreshold':4,
+            'quorumByzantineTolerance':1,'quorumFaultTolerant':True,
+            'quorumDegenerate':False,'quorumAutoMembers':0,
+            'quorumGateIntersectionRefused':False}
+
+    def test_expected_shape_is_derived_not_restated(self):
+        self.assertEqual(runtime.expected_quorum(),(len(HOSTS),fleet_nodes.QUORUM_THRESHOLD,1))
+        self.assertEqual(runtime.byzantine_tolerance(5,4),1)
+        self.assertEqual(runtime.byzantine_tolerance(4,4),0)
+        self.assertEqual(runtime.byzantine_tolerance(5,3),0)
+        self.assertEqual(runtime.byzantine_tolerance(4,9),0)
+
+    def test_renderer_and_gate_share_one_threshold(self):
+        self.assertIs(fleet_nodes.QUORUM_THRESHOLD,runtime.QUORUM_THRESHOLD)
+
+    def test_gate_runs_with_only_the_staged_controller_files(self):
+        # The controller host receives staging.CODE only; check_quorum must not
+        # depend on fleet_nodes or anything else outside it.
+        import staging,subprocess,sys
+        src=Path(__file__).parent
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in staging.CODE:
+                shutil.copy(src/name,Path(tmp)/name)
+            script=('import sys;sys.path.insert(0,%r);import controller,runtime;'
+                    'runtime.check_quorum(%r);'
+                    'print(runtime.expected_quorum())') % (tmp,self.GOOD)
+            out=subprocess.run([sys.executable,'-I','-c',script],cwd=tmp,capture_output=True,text=True)
+            self.assertEqual(out.returncode,0,out.stderr)
+            self.assertEqual(out.stdout.strip(),'(5, 4, 1)')
+
+    def test_accepts_explicit_4_of_5(self):
+        check_quorum(dict(self.GOOD))
+        check_quorum({**self.GOOD,'network':'botho-testnet','quorumCuratedMembers':4})
+
+    def test_rejects_each_deviation(self):
+        bad = {'quorumMode':['recommended','Explicit',None],
+               'quorumSize':[4,6,'5',5.0,True],
+               'quorumThreshold':[3,5,'4',4.0],
+               'quorumByzantineTolerance':[0,2,True],
+               'quorumFaultTolerant':[False,1,'true'],
+               'quorumDegenerate':[True,0],
+               'quorumAutoMembers':[1,False],
+               'quorumGateIntersectionRefused':[True,0]}
+        self.assertEqual(set(bad),set(self.GOOD))
+        for key,values in bad.items():
+            for value in values:
+                with self.subTest(key=key,value=value),self.assertRaisesRegex(Gate,key):
+                    check_quorum({**self.GOOD,key:value})
+
+    def test_rejects_each_missing_or_null_field(self):
+        for key in self.GOOD:
+            with self.subTest(key=key,missing=True),self.assertRaisesRegex(Gate,key):
+                check_quorum({k:v for k,v in self.GOOD.items() if k != key})
+            with self.subTest(key=key,null=True),self.assertRaisesRegex(Gate,key):
+                check_quorum({**self.GOOD,key:None})
+        with self.assertRaises(Gate):
+            check_quorum({})
+
+    def test_silent_4_of_4_is_refused(self):
+        # The #1605 failure: one dropped roster member, node still fine otherwise.
+        with self.assertRaisesRegex(Gate,'quorumSize'):
+            check_quorum({**self.GOOD,'quorumSize':4,'quorumByzantineTolerance':0,
+                          'quorumFaultTolerant':False,'quorumDegenerate':True})
 
 
 class DegradeWindowResourceTests(unittest.TestCase):
