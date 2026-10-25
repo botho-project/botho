@@ -201,7 +201,9 @@ The deployment profile is version 1 and contains these fields:
 
 OS accounts, private routing/firewalls, TLS servers, node deployment and absolute
 host shutdown timers are infrastructure prerequisites, not effects of this
-staging command. Verify the staged source/binary/profile hashes, forced export,
+staging command. For x runs, validator configs, node units, node-stop timers,
+nginx sites and this profile's `targets`/`observers[].node` are rendered by
+`scripts/stress/fleet_nodes.py` (see "Validator staging for x runs" below). Verify the staged source/binary/profile hashes, forced export,
 private TLS identities, five-node genesis/quorum readiness and zero opening
 wallet balances before separately activating observer and controller units.
 Activate before the frozen setup time; do not modify staged launch files or
@@ -217,6 +219,71 @@ results must identify the new endpoints and effective quorum. Continuous mining
 does not establish idle-memory coverage; the existing observer/controller checks
 must actually observe mining stopped. No unrelated issue-closure requirement is
 introduced by this profile.
+
+### Validator staging for x runs
+
+x-series validators are staged from the tracked, stdlib-only renderer
+`scripts/stress/fleet_nodes.py`, which replaces the config half of the untracked
+w-series `stage-nodes.py`. It makes no SSH calls:
+
+```sh
+python3 scripts/stress/fleet_nodes.py render --profile profile.json \
+  --inventory inventory.json --identities identity/ \
+  --producer-mnemonic /private/producer.mnemonic --output /private/payloads
+```
+
+The output directory must not exist. It receives one `payload-<role>` directory
+per validator (`config.toml`, `node.service`, `node-stop.service`,
+`node-stop.timer`, `nginx.conf`, `paths.json`, all mode 0600) and
+`staging-fragment.json`. The operator's untracked installer (rsync plus
+`install.sh`, accounts, journald) consumes the payloads; TLS identities are
+generated separately.
+
+- **Profile:** exactly `run_id` (`qYYYYMMDD-xN-<label>`, validated by
+  `fleet_provision.validate_run_id()`), `producer_role`, `node_end` and
+  `rpc_requests_per_minute`. Hostnames (`<role>.<run_id>.internal`), paths
+  (`/opt/botho-<run_id>`, `/var/lib/botho-<run_id>`) and unit names
+  (`botho-<run_id>.service`) are derived from `run_id`, so no token rename is
+  needed.
+- **Inventory:** all six roles with distinct RFC1918 `private_ip` values.
+  Identities (`nodes.json`) give a distinct `peer_id` for each of `n1`..`n5`.
+- **Ports:** `gossip_port`, `rpc_port` and `metrics_port` come from
+  `fleet_provision.GOSSIP_PORT`, `RPC_PORT` and `METRICS_PORT` (17110, 19090,
+  19100). The security group uses the same constant. RPC and metrics ports must
+  differ, because the testnet default `metrics_port` collides with `rpc_port`.
+- **Quorum:** explicit, `threshold = 4`, with the four other validators as
+  `members` and never self. The node counts self in the quorum size, so this is
+  4-of-5 with f = 1. The threshold is a module constant, not a profile knob.
+- **Isolation:** `fallback_seeds = false`, `dns_seeds.enabled = false`, and
+  `bootstrap_peers` are the four other validators' private
+  `/ip4/<ip>/tcp/17110/p2p/<id>` addresses. No public seed hostname is ever
+  rendered.
+- **Producer:** only `producer_role` gets `[wallet] mnemonic`,
+  `[minting] enabled = true` and `--mint --mint-threads 1
+  --testnet-mint-until <node_end>`. The mnemonic is read from an owner-only
+  regular file and appears only in that role's payload. Other roles get no
+  `[wallet]` and `[minting] enabled = false`. No config has `ledger_rules`.
+- **Exact keys:** every rendered config is parsed back with `tomllib` and must
+  have exactly the reviewed key set at each table level. The node ignores
+  unknown keys silently, so a typo is refused at render time.
+- **Unit:** `Restart=no` (any restart not made by the fault executor is a
+  failure), `TimeoutStopSec=30`, `RuntimeMaxSec` of 81.5 h, `IPAddressDeny=any`
+  with `IPAddressAllow` for localhost and each inventory IP only. A separate
+  node-stop timer stops the unit at `OnCalendar = node_end`.
+- **nginx:** `location = /rpc` proxies to `127.0.0.1:<rpc_port>/rpc` and
+  `location = /metrics` to `127.0.0.1:<metrics_port>/metrics`, the standalone
+  metrics server. Everything else returns 404. The RPC listener's own
+  `/metrics` lacks the node-loop histogram that the degrade recovery
+  measurements read.
+- **Staging fragment:** `targets` in `HOSTS` order (`n1`..`n5`, rpc URL
+  `https://<hostname>/rpc`, observer SSH as `botho@<hostname>`) and
+  `observers[].node` blocks. These are validated with `campaign_targets()` and
+  `observer.node_config()`; copy them into the deployment profile above, and
+  list the same URLs as the plan's `endpoints`.
+
+The renderer refuses a public inventory address, a malformed `run_id`, self in
+`members`, equal RPC and metrics ports, and a producer mnemonic file that is
+not owner-only.
 
 ## Opt-in discovery campaign (schema 2)
 
