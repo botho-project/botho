@@ -4,14 +4,19 @@ Common issues and their solutions when running a Botho node.
 
 ## Network Issues
 
-### "No bootstrap peers configured"
+### "Dialing the built-in PUBLIC seed nodes" / no peers connected
 
-**Symptom:** Warning message at startup:
+**Symptom:** Warning at startup (older releases printed "No bootstrap peers
+configured", even though the node was in fact dialing the fallback seeds):
 ```
-No bootstrap peers configured. Add bootstrap_peers to config.toml
+No bootstrap peers configured or discovered: dialing the built-in PUBLIC seed nodes. ...
 ```
 
-**Cause:** The node doesn't know how to find other peers on the network.
+**Cause:** `bootstrap_peers` is empty and DNS discovery is disabled, failed or
+returned nothing, so the node fell back to the hardcoded public seeds
+(`fallback_seeds = true`, the default). An empty `bootstrap_peers` means "use
+the defaults", not "no peers". The startup line `Resolved bootstrap peers`
+shows the actual `source` (`configured`, `dns`, `fallback_seeds` or `none`).
 
 **Solution:** Add bootstrap peers to your config file:
 
@@ -24,6 +29,12 @@ bootstrap_peers = [
 ```
 
 The official seed node is `seed.botho.io` (IP: 98.95.2.200, port 7100).
+
+If instead you are running a devnet, CI or test cluster that must **not**
+reach the public network, set `fallback_seeds = false` and
+`[network.dns_seeds] enabled = false` (see the "Isolated Cluster" example in
+[configuration.md](configuration.md)). The node then logs that it is isolated
+(`source = "none"`) and dials nothing it was not told to dial.
 
 ---
 

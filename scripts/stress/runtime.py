@@ -5,6 +5,7 @@ import contextlib
 import email.utils
 import hashlib
 import json
+import math
 import os
 import re
 import ssl
@@ -275,6 +276,10 @@ class Rpc:
         return self.journal.db.execute('INSERT INTO requests(at,host,method,bytes) VALUES(?,?,?,?)',
                                       (now, host, method, bytes_count)).lastrowid
 
+    async def metrics(self, host, timeout=10):
+        """Loop-stall counters from the host's metrics server (#1591); see read_metrics."""
+        return await read_metrics(self, host, timeout)
+
     async def call(self, host, method, params=None, timeout=10, write=False):
         payload = json.dumps({'jsonrpc':'2.0', 'id':1404, 'method':method, 'params':params or {}}).encode()
         async with self.locks[host]:
@@ -322,13 +327,190 @@ class Rpc:
                     (time.monotonic()-start,status,request_id))
 
 
+# Loop-stall families served only by the node's standalone metrics server
+# (`metrics_port`, the global REGISTRY), never by the RPC listener's /metrics
+# (#1591). #1589 proxies `https://<host>/metrics` to that server.
+LOOP_BUCKET = 'botho_node_loop_iteration_seconds_bucket'
+LOOP_DELAYED = 'botho_node_loop_delayed_total'
+LOOP_KEYS = ('iterations', 'within_1s', 'delayed')
+METRICS_BYTES = 8*1024*1024
+_SAMPLE = re.compile(r'([a-zA-Z_:][a-zA-Z0-9_:]*)(\{[^}]*\})?[ \t]+(\S+)(?:[ \t]+\S+)?')
+
+
+def _metric_count(value):
+    try:
+        number = float(value)
+    except ValueError as error:
+        raise Gate('malformed loop metric value') from error
+    if not math.isfinite(number) or number < 0 or not number.is_integer():
+        raise Gate('malformed loop metric value')
+    return int(number)
+
+
+def parse_loop_metrics(text):
+    """The two loop families from a metrics-server exposition.
+
+    Returns cumulative ``iterations`` (the ``le="+Inf"`` bucket),
+    ``within_1s`` (the ``le="1"`` bucket; the Rust encoder prints 1.0 as
+    "1") and ``delayed`` (iterations >= 5 s). Every other family is ignored.
+    """
+    buckets, delayed = {}, None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        match = _SAMPLE.fullmatch(line)
+        if not match or match.group(1) not in (LOOP_BUCKET, LOOP_DELAYED):
+            continue
+        name, labels, value = match.groups()
+        if name == LOOP_DELAYED:
+            if delayed is not None:
+                raise Gate('duplicate loop metric sample')
+            delayed = _metric_count(value)
+            continue
+        bound = re.search(r'(?:^|[{,])le="([^"]*)"', labels or '')
+        if not bound:
+            raise Gate('malformed loop histogram bucket')
+        try:
+            upper = float(bound.group(1))
+        except ValueError as error:
+            raise Gate('malformed loop histogram bucket') from error
+        if upper in buckets:
+            raise Gate('duplicate loop metric sample')
+        buckets[upper] = _metric_count(value)
+    if delayed is None or math.inf not in buckets or 1.0 not in buckets:
+        raise Gate('loop metric families missing from metrics server')
+    if buckets[1.0] > buckets[math.inf]:
+        raise Gate('malformed loop histogram bucket')
+    return {'iterations': buckets[math.inf], 'within_1s': buckets[1.0], 'delayed': delayed}
+
+
+def loop_delta(before, after, restarted=False):
+    """Loop-stall counts accrued from ``before`` to ``after``.
+
+    A node restart resets the counters: ``restarted`` (the step re-baselined
+    this host), a missing ``before``, or any counter going backwards all count
+    from zero up to ``after``. ``over_1s`` is the +Inf delta minus the
+    ``le="1"`` delta; ``delayed`` is the >= 5 s counter delta.
+    """
+    reset = restarted or before is None or any(after[k] < before[k] for k in LOOP_KEYS)
+    base = dict.fromkeys(LOOP_KEYS, 0) if reset else before
+    delta = {k: after[k]-base[k] for k in LOOP_KEYS}
+    over = delta['iterations']-delta['within_1s']
+    if over < 0:
+        raise Gate('malformed loop histogram delta')
+    return {'over_1s': over, 'delayed': delta['delayed'], 'reset': reset}
+
+
+def _http_backoff(journal, host, error):
+    retry = error.headers.get('Retry-After', '60')
+    if retry.isdecimal():
+        delay = int(retry)
+    else:
+        try:
+            delay = max(0,email.utils.parsedate_to_datetime(retry).timestamp()-journal.clock())
+        except (TypeError,ValueError):
+            delay = 60
+    journal.set('backoff:'+host, journal.clock()+max(60,delay))
+
+
+async def read_metrics(rpc, host, timeout=10):
+    """Read-only GET of ``<rpc_url minus /rpc>/metrics`` for ``rpc`` (an Rpc).
+
+    Same TLS context, redirect refusal, shared endpoint quota (method
+    ``metrics``) and 8 MiB bound as ``Rpc.call``.
+    """
+    if host not in HOSTS:
+        raise Gate('unlisted RPC host')
+    url = rpc.targets[host]['rpc_url']
+    if not url.endswith('/rpc'):
+        raise Gate('invalid HTTPS RPC URL')
+    url = url[:-len('/rpc')]+'/metrics'
+    async with rpc.locks[host]:
+        request_id = rpc.reserve(host, 'metrics', 0)
+        start = time.monotonic()
+        def fetch():
+            request = urllib.request.Request(url, headers={'Accept': 'text/plain'})
+            with rpc.opener.open(request, timeout=timeout) as response:
+                data = response.read(METRICS_BYTES+1)
+                if len(data) > METRICS_BYTES:
+                    raise Gate('metrics response byte bound')
+                return data.decode('utf-8', 'replace'), dict(response.headers)
+        status = 'unknown'
+        try:
+            text, headers = await asyncio.to_thread(fetch)
+            quota = headers.get('X-RateLimit-Limit') or headers.get('x-ratelimit-limit')
+            if quota and quota.isdecimal():
+                rpc.journal.set('quota:'+host, int(quota))
+            parsed = parse_loop_metrics(text)
+            status = 'ok'
+            return parsed
+        except urllib.error.HTTPError as error:
+            status = str(error.code)
+            if error.code == 429:
+                _http_backoff(rpc.journal, host, error)
+                raise Quota('HTTP 429; metrics read backs off') from error
+            raise
+        finally:
+            rpc.journal.db.execute('UPDATE requests SET latency=?,status=? WHERE id=?',
+                (time.monotonic()-start,status,request_id))
+
+
 def check_identity(status, plan):
     if (status.get('network') != plan['network'] or status.get('gitCommit') != plan['node_commit']
             or status.get('version') != '0.6.0'):
         raise Gate('network or software identity changed')
 
 
-def check_resources(records, baseline, now):
+# Degrade-step actions (discovery_plan.DEGRADE_ACTIONS, #1585) split by what
+# the restart gate may relax. Only a scheduled stop/kill-then-start may change
+# the node process; isolate and netem never relax anything.
+RESTART_ACTIONS = frozenset({'stop_restart', 'kill_restart', 'stop_restart_pair'})
+HOLD_ACTIONS = frozenset({'isolate', 'netem'})
+WINDOW_KEYS = frozenset({'step', 'action', 'fault_start', 'restore_at', 'window_end'})
+
+
+def check_resources(records, baseline, now, window=None):
+    """Gate one host's observer ring against its stored baseline.
+
+    ``window`` is the caller's view of the active ``degrade_steps`` entry
+    (#1585) whose ``target_hosts`` names this host, in absolute seconds:
+    ``{step, action, fault_start, restore_at, window_end}``. Pass ``None``
+    when no active step names the host: the gate is then exactly the strict
+    one and returns ``None``. ``isolate`` and ``netem`` windows relax nothing.
+
+    For a restart action, rows dated in ``[fault_start, window_end)`` may be
+    observer ``error`` rows (the unit has no live process), and at most one
+    ``(pid, start)`` change from ``baseline`` is accepted, first observed in
+    that interval. ``restarts``, ``binary``, ``config`` and ``node_key`` must
+    never change. When the ring shows the accepted change it returns a copy
+    of ``baseline`` with only ``pid`` and ``start`` replaced, for the caller
+    to persist (``rss`` and the rest stay the launch values, so post-idle
+    RSS growth is still measured from launch); otherwise ``None``.
+
+    Being pure, the gate sees only the ~150 s ring. Against the returned
+    baseline, a further change is a ``Gate`` while the ring still shows the
+    replaced process, or when the replaced process was alive at or after
+    ``restore_at`` (the restored process itself). A caller should still
+    persist at most one re-baseline per step, since a second restart whose
+    predecessor has left the ring entirely is indistinguishable here.
+    """
+    if window is None:
+        _check_resources_strict(records, baseline, now)
+        return None
+    if set(window) != WINDOW_KEYS or not (
+            window['fault_start'] <= window['restore_at'] <= window['window_end']):
+        raise Gate('malformed degrade window')
+    if window['action'] in HOLD_ACTIONS:
+        _check_resources_strict(records, baseline, now)
+        return None
+    if window['action'] not in RESTART_ACTIONS:
+        raise Gate('unknown degrade action')
+    return _check_resources_restart(records, baseline, now, window)
+
+
+def _check_resources_strict(records, baseline, now):
+    """The unrelaxed gate: any restart, error row or identity change halts."""
     if not records or now-records[-1]['at'] > 60 or records[-1]['at'] > now+10:
         raise Gate('stale required observer')
     latest = records[-1]
@@ -350,3 +532,59 @@ def check_resources(records, baseline, now):
     if len(records) >= 25 and records[-1]['at']-records[-25]['at'] >= 115 and all(
             r['swap'] > 64*1024**2 for r in records[-25:]):
         raise Gate('sustained process swap')
+
+
+def _check_resources_restart(records, baseline, now, window):
+    if not records or now-records[-1]['at'] > 60 or records[-1]['at'] > now+10:
+        raise Gate('stale required observer')
+    lo, hi = window['fault_start'], window['window_end']
+    live = []
+    for row in records:
+        if row.get('error'):
+            if lo <= row['at'] < hi:
+                continue  # stopped by the step: no process, no metrics
+            raise Gate('observer cannot read required metrics')
+        if not row.get('config') or not row.get('node_key'):
+            raise Gate('observer configuration identity missing')
+        # Restart=no (#1589): an automatic restart is never the executor's.
+        if (row['restarts'],row['binary']) != (baseline['restarts'],baseline['binary']):
+            raise Gate('unexpected node restart or binary change')
+        if any(row.get(k)!=baseline.get(k) for k in ('config','node_key')):
+            raise Gate('node configuration or peer identity changed')
+        if row['disk_free'] < max(row['disk_total']*.20, 2*1024**3):
+            raise Gate('disk headroom')
+        live.append(row)
+    # Distinct processes in ring order, each with the first row showing it.
+    runs = []
+    for row in live:
+        if not runs or (row['pid'],row['start']) != runs[-1][0]:
+            runs.append(((row['pid'],row['start']),row))
+    keys = [key for key,_ in runs]
+    base = (baseline['pid'],baseline['start'])
+    if len(keys) > 2 or len(set(keys)) != len(keys):
+        raise Gate('unexpected node restart or binary change')  # two changes, or a process coming back
+    rebaseline = None
+    if keys and keys != [base]:
+        if keys[-1] != base:
+            # base -> new, or new alone once base has left the ring.
+            if len(keys) == 2 and keys[0] != base:
+                raise Gate('unexpected node restart or binary change')
+            new = keys[-1]
+            rebaseline = {**baseline, 'pid': new[0], 'start': new[1]}
+        # else: predecessor -> base; base is this window's re-baseline.
+        first = runs[-1][1]
+        if not lo <= first['at'] < hi:
+            raise Gate('unexpected node restart or binary change')
+        # The replaced process must not outlive the scheduled restore: one
+        # alive at or after restore_at is the restored process, and
+        # replacing it would be a second restart in the window.
+        if len(keys) == 2 and any((r['pid'],r['start']) == keys[0]
+                                  and r['at'] >= window['restore_at'] for r in live):
+            raise Gate('unexpected node restart or binary change')
+    if len(live) >= 2 and all(r['mem_available'] < max(r['mem_total']*.15,256*1024**2)
+                              for r in live[-2:]):
+        raise Gate('low available host memory')
+    if len(live) >= 25 and live[-1]['at']-live[-25]['at'] >= 115 and all(
+            r['swap'] > 64*1024**2 for r in live[-25:]):
+        raise Gate('sustained process swap')
+    return rebaseline
