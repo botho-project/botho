@@ -495,6 +495,153 @@ Increasing workload requires a separately pinned profile, sufficient isolated
 infrastructure and wallet inventory, and a successful rehearsal at its peak rate.
 It cannot retrofit a stopped campaign or raise an existing journal's limits.
 
+### Prefunding an isolated fleet
+
+A v2 plan cannot fund itself. `expand_discovery()` requires
+`funding.mode == "prefunded_isolated"` and zero grants and bootstrap transfers.
+The controller also pins exact `opening_balances` and needs at least
+`min_mature_utxos_per_wallet` eligible outputs per wallet before it rehearses.
+`scripts/stress/prefund.py` builds that inventory with main's
+`botho-stress-wallet`. It uses no faucet. Run it on the **controller host**, the
+only host with a private route to the fleet RPC. The operator's untracked copy
+step installs it; `staging.py` does not.
+
+The order for an x run is:
+
+1. **Prefund.** Generate the campaign wallets with the signer's `generate`.
+   Then run `prefund.py check --manifest M` (local checks only), followed by
+   `prefund.py run --manifest M`.
+2. **Stage.** Copy `opening_balances.json` into the deployment profile's
+   `opening_balances`, then stage with `deploy.py stage`. Staging pins the
+   balances into `launch.json`.
+3. **Activate.** The controller's first setup tick full-scans the fleet. It
+   holds unless every wallet's unspent balance equals its pinned value.
+
+Stage and activate promptly after prefunding. A lottery award to a campaign
+wallet between prefund completion and the first setup tick changes that
+wallet's balance, and the exact pin then holds the controller.
+
+The manifest is an owner-only JSON file with exactly these keys:
+
+- `schema_version` (1);
+- `plan_file` and `plan_sha256`, pinning an x-series v2 plan;
+- `targets`, `tls_ca_file` and `tls_ca_sha256`, with the same shape as the
+  staging profile;
+- `signer` and `signer_sha256`;
+- `producer_role`, the logical role of `n3`, the sole producer;
+- `funding_wallet` `{address, key}`, the producer's `[wallet]` mnemonic. It is
+  not one of the campaign wallets;
+- `wallets`, the `wallets.count` fresh campaign `{address, key}` entries;
+- `grants_per_wallet` and `grant_picocredits`;
+- `state_dir`, `deadline` and `infrastructure_end`. `infrastructure_end` must
+  be the same value as the deployment profile's `end`, which staging writes into
+  `launch.json` as `infrastructure_end`. The prefunder cannot read the profile
+  and does not cross-check it, so the deadline rule below is only as good as
+  this value.
+
+Every key file must be owner-only. The prefunder refuses a manifest if:
+
+- `grants_per_wallet` is below `min_mature_utxos_per_wallet`. There are no
+  bootstrap splits, so each grant output becomes exactly one future input;
+- `grant_picocredits` is below the largest transfer plus
+  `max_single_signed_fee_picocredits`;
+- `count × grants_per_wallet × grant_picocredits` exceeds
+  `max_principal_picocredits`;
+- the worst-case fees (`count × grants_per_wallet × max_single_signed_fee`)
+  exceed `max_signed_fee_picocredits`.
+
+For x1, 32 grants of 10^11 per wallet gives a principal of 1.024×10^14.
+
+**Deadline rule.** No grant is prepared or submitted at or after `deadline`.
+The prefunder refuses any `deadline` later than:
+
+```text
+infrastructure_end − 72 h − 1800 s − rehearsal.duration_seconds
+                   − rehearsal.drain_seconds − 3600 s
+```
+
+This leaves an hour for output maturity and staging, plus the rehearsal, before
+the 72-hour campaign must start (`discovery.py`). Plans with
+`execution_mode: rehearsal_only` drop the 72-hour term.
+
+**Opening snapshot.** Before the first grant, the prefunder checks:
+
+- all five nodes are synced, report `gitCommit == node_commit` and the plan
+  genesis;
+- `mintingActive` is true only on the producer;
+- no campaign wallet has any on-chain output. With fresh wallets on a fresh
+  chain, this detects reuse directly;
+- the funding wallet's verified spendable balance covers the principal plus
+  worst-case fees.
+
+The snapshot is saved once, to `opening.json`.
+
+**Grants and the never-resubmit rule.** Grant *N* goes to wallet `N % count`.
+It uses `selection.choose()` over the funding wallet. The inputs of every
+unconfirmed grant are passed to `prepare` as `reserved`. For each grant, the
+prefunder:
+
+1. inspects the signed artifact;
+2. creates `grants/grant-NNNN.json` exclusively;
+3. creates the exclusive `grants/grant-NNNN.submit` marker;
+4. calls `tx_submit` exactly once, on the producer.
+
+A grant with a marker is **never prepared or submitted again**. An uncertain
+reply marks the grant `unknown` and holds the run. A grant left unconfirmed for
+15 minutes after its submission also holds. Pacing follows the plan's
+`max_inflight` and `max_normal_submissions_per_minute`. Nothing new is signed
+while any grant is uncertain or unsent.
+
+The producer's request budget (the same per-endpoint count and `Retry-After`
+backoff that `Rpc` enforces) is checked before signing, with room for
+`fee_getRate` and `tx_submit`. It is checked again just before the marker is
+written. If that second check defers the grant, its record stays `prepared` with
+no marker. Nothing was sent, so every later tick retries it, as
+`Controller.admission_tick()` does: once all five nodes report its hash
+`unknown`, it is submitted once. A deferred, unsent grant is not subject to the
+15-minute hold. Only the write deadline bounds it.
+
+A grant is `confirmed` only when:
+
+- all five nodes report it confirmed, with agreeing
+  `(blockHeight, fee, outputCount, totalOutput)`;
+- all five report its key images spent;
+- a scan finds the recipient and change outputs.
+
+The funding wallet must account exactly:
+`opening + coinbase/lottery inflow − remaining − principal − fees == 0`.
+Any other transfer into the funding or campaign wallets holds the run.
+
+**Resume.** Restarting the prefunder is safe:
+
+- it reloads every grant record and verifies each artifact's SHA-256;
+- it holds on any orphan artifact or marker that has no record;
+- it holds on a leftover `grant-NNNN.json.tmp`, which an interrupted record
+  update leaves behind. The record still holds its previous state. Review the
+  `.tmp` against it, then remove the `.tmp`;
+- it requires `state_dir`, `grants/` and `artifacts/` to be owner-only
+  directories, including directories that already exist;
+- it restore-scans the chain instead of trusting persisted inventory;
+- it re-queries every unconfirmed grant before offering anything new.
+
+A record without a marker is a crash or quota deferral between signing and
+submission. It is submitted once, but only if all five nodes report its hash
+`unknown`; otherwise the run holds. A failure writes `held-*.json` and stops; the operator
+reviews it before restarting. `STOP` in `state_dir` stops the prefunder.
+
+**Output.** When every grant is confirmed and the accounting is exact, a final
+full scan writes two files:
+
+- `opening_balances.json`: the per-wallet unspent sums, which is exactly the
+  profile's `opening_balances` list;
+- `funding-health.json`: grants, fees, the accounting difference, per-wallet
+  grant-output counts, and per-wallet `choose()` readiness evidence at the
+  current height.
+
+The prefunder then stops. Outputs that are still maturing show as
+`maturing_or_generator_limited`; the controller rechecks readiness before
+rehearsal.
+
 ### In-flight accounting and measured ramp ceiling
 
 `max_inflight` counts only work that is not yet confirmed on every host:
