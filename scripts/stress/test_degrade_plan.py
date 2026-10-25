@@ -111,8 +111,22 @@ class DegradePlanTests(unittest.TestCase):
     def test_x_series_changes_only_the_opt_in_phases_and_degrade_block(self):
         base, plan = load("testnet-discovery-v2.json"), self.plan()
         for key in set(base) | set(plan):
-            if key not in ("faults", "phases", "degrade"):
+            if key not in ("faults", "phases", "degrade", "limits", "rehearsal"):
                 self.assertEqual(plan[key], base[key], key)
+        # #1613: submission headroom over the 30/min peak (and the wire budget
+        # that keeps it reachable at max transaction size), plus the
+        # generator_limited rehearsal opt-in. Nothing else differs.
+        self.assertEqual(
+            {k: v for k, v in plan["limits"].items() if base["limits"][k] != v},
+            {
+                "max_normal_submissions_per_minute": 40,
+                "max_wire_submission_bytes_per_minute": 25165824,
+            },
+        )
+        self.assertEqual(set(plan["limits"]), set(base["limits"]))
+        rehearsal = dict(plan["rehearsal"])
+        self.assertIs(rehearsal.pop("generator_limited_acceptable"), True)
+        self.assertEqual(rehearsal, base["rehearsal"])
         faults = dict(plan["faults"])
         self.assertIs(faults.pop("validator_degrade_phase"), True)
         self.assertEqual(faults, base["faults"])

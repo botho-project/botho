@@ -267,6 +267,12 @@ def expand_discovery(plan):
         <= limits["max_normal_submissions_per_minute"],
         "rehearsal rate exceeds cap",
     )
+    # #1576 decision 1 (#1613): a v2 plan may accept a clean generator_limited
+    # rehearsal. Absent means False; anything but a boolean is rejected.
+    require(
+        type(rehearsal.get("generator_limited_acceptable", False)) is bool,
+        "generator_limited_acceptable must be a boolean",
+    )
     seed = integer(plan["seed"], "seed", 0)
     require(seed < 2**32, "seed bound")
     rng = random.Random(seed)

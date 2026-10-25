@@ -84,6 +84,10 @@ def expand(plan):
     # The scripted validator-degrade phase is isolated schema-v2 only (#1585).
     require(faults.get("validator_degrade_phase", False) is False and "degrade" not in plan,
             "validator_degrade_phase is forbidden on the public schema-v1 testnet")
+    # Accepting a generator_limited rehearsal is a schema-v2 opt-in (#1613).
+    rehearsal = plan.get("rehearsal")
+    require(not (isinstance(rehearsal, dict) and "generator_limited_acceptable" in rehearsal),
+            "generator_limited_acceptable is a schema-v2 rehearsal opt-in")
     require(faults["invalid_transaction_destination"] == "isolated_cluster_only",
             "negative transactions must stay isolated")
     events, phase_summaries, identifiers = [], [], set()
