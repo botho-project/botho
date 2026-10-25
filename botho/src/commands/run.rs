@@ -1311,9 +1311,28 @@ async fn run_async_with_shutdown(
             let apply_delay = test_hooks.as_ref().and_then(|hooks| hooks.apply_delay);
             #[cfg(not(test))]
             let apply_delay = None;
-            apply_queue.start_next(|job| {
-                spawn_apply_job(job, node.shared_ledger(), node.apply_state(), apply_delay)
-            });
+            // #1583: our own decision more than one above the ledger tip is
+            // parked (not run, not failed) until sync commits its parent.
+            // The tip only moves when a job completes, and every completion
+            // returns here, so the parked decision is re-checked exactly when
+            // its readiness can change.
+            let dispatch = apply_queue.dispatch_next(
+                || ledger_tip_height(&node),
+                Instant::now(),
+                |job| spawn_apply_job(job, node.shared_ledger(), node.apply_state(), apply_delay),
+            );
+            if let Some(parked) = dispatch.parked {
+                let ledger_height = ledger_tip_height(&node);
+                info!(
+                    slot = parked.slot_index,
+                    height = parked.height,
+                    ?ledger_height,
+                    parent = %hex::encode(&parked.prev_block_hash[0..8]),
+                    "Parked externalized decision: its parent is not committed yet; \
+                     fetching it via sync before applying (#1583)"
+                );
+                note_parked_parent(&mut sync_manager, &discovery, &parked);
+            }
         }
 
         tokio::select! {
@@ -1931,6 +1950,26 @@ async fn run_async_with_shutdown(
             // Consensus tick for timeouts and value proposal
             _ = consensus_tick.tick() => {
                 consensus.tick();
+                // #1583: a decision parked for too long means sync cannot
+                // reach its parent (partition, every peer down). Liveness,
+                // not safety: never terminal, but loud, once per interval.
+                if let Some(parked) =
+                    apply_queue.parked_warning_due(Instant::now(), PARKED_DECISION_WARN_AFTER)
+                {
+                    error!(
+                        slot = parked.slot_index,
+                        height = parked.height,
+                        ledger_height = ?ledger_tip_height(&node),
+                        sync_state = ?sync_manager.state(),
+                        parked_secs = parked.parked_for.as_secs(),
+                        "Externalized decision still parked: sync has not delivered its parent; \
+                         retrying (#1583)"
+                    );
+                    #[cfg(test)]
+                    if let Some(hooks) = test_hooks.as_mut() {
+                        hooks.on_parked_warning();
+                    }
+                }
                 #[cfg(test)]
                 if let Some(hooks) = test_hooks.as_mut() {
                     hooks.on_tick(&consensus, apply_queue.is_busy());
@@ -2078,6 +2117,15 @@ async fn run_async_with_shutdown(
                                 .ok()
                                 .and_then(|l| l.get_chain_state().ok());
                             let ledger_height = checkpoint.as_ref().map(|s| s.height);
+                            // #1583: the dispatch rule parks a decision whose
+                            // parent is not committed, so a consensus failure
+                            // above tip + 1 is unreachable. Release builds
+                            // keep the unchanged classification below.
+                            debug_assert!(
+                                ledger_height.is_none_or(|tip| block.height() <= tip.saturating_add(1)),
+                                "consensus apply of height {} dispatched above ledger tip {:?} + 1",
+                                block.height(), ledger_height,
+                            );
                             let height_already_filled = consensus_failure::height_already_applied(
                                 block.height(), ledger_height,
                             );
@@ -2533,6 +2581,15 @@ async fn run_async_with_shutdown(
                 }
 
                 let connected = get_connected_peers(&discovery);
+                // #1583: while a decision is parked, keep sync aimed at its
+                // parent. Only from `Synced`: `Failed` keeps its backoff and
+                // `Discovery` its own recovery (#1579), so peers are never
+                // hammered. Before the tick, so the request goes out now.
+                if sync_manager.is_synced() {
+                    if let Some(parked) = apply_queue.parked(Instant::now()) {
+                        note_parked_parent(&mut sync_manager, &discovery, &parked);
+                    }
+                }
                 // #1566: one sync batch outstanding at a time (see
                 // `gated_sync_tick`).
                 if let Some(action) = gated_sync_tick(&apply_queue, &mut sync_manager, &connected) {
@@ -2988,6 +3045,19 @@ async fn run_async_with_shutdown(
                 error = %e,
                 "In-flight block apply aborted during shutdown"
             ),
+        }
+    }
+    // #1583: a parked decision is not a failure. Drop it without evidence;
+    // on restart sync recovers the decided block from peers (#770, #1579).
+    for job in apply_queue.drain_parked() {
+        if let ApplyOrigin::Consensus { slot_index, .. } = &job.origin {
+            info!(
+                slot = slot_index,
+                height = job.blocks.first().map(|b| b.height()),
+                ledger_height = ?ledger_tip_height(&node),
+                "Dropping parked externalized decision at shutdown (sync recovers it on restart; \
+                 no failure evidence)"
+            );
         }
     }
     let dropped = apply_queue.drain_queued();
@@ -3964,6 +4034,28 @@ fn run_apply_job(
     outcome
 }
 
+/// How long a decision may stay parked before the loop logs an `error!`,
+/// and the interval between repeats (#1583). Not a config key.
+#[cfg(not(test))]
+const PARKED_DECISION_WARN_AFTER: Duration = Duration::from_secs(60);
+/// Shortened so the harness observes several intervals.
+#[cfg(test)]
+const PARKED_DECISION_WARN_AFTER: Duration = Duration::from_secs(1);
+
+/// Aim the sync manager at a parked decision's parent, H-1 (#1583).
+fn note_parked_parent(
+    sync_manager: &mut ChainSyncManager,
+    discovery: &NetworkDiscovery,
+    parked: &crate::commands::apply_queue::ParkedDecision,
+) {
+    let connected = get_connected_peers(discovery);
+    sync_manager.note_decided_parent(
+        &connected,
+        parked.height.saturating_sub(1),
+        parked.prev_block_hash,
+    );
+}
+
 /// The committed ledger height, or `None` if it cannot be read.
 fn ledger_tip_height(node: &Node) -> Option<u64> {
     node.shared_ledger()
@@ -4024,7 +4116,8 @@ fn enqueue_network_block(
 }
 
 /// Drive the sync state machine unless a sync batch is still queued or
-/// being applied (#1566).
+/// being applied (#1566), or a ready `Consensus` job is (#1583): its commit
+/// moves the tip the request would be computed from.
 ///
 /// `on_blocks` already cleared the sync manager's in-flight guard, so while
 /// the batch is still queued or applying, `tick` would re-request the same
@@ -4037,8 +4130,8 @@ fn gated_sync_tick<H>(
     sync_manager: &mut ChainSyncManager,
     connected: &[libp2p::PeerId],
 ) -> Option<SyncAction> {
-    if queue.sync_outstanding() {
-        debug!("Sync: a block batch is still being applied; not requesting more");
+    if queue.holds_sync_requests() {
+        debug!("Sync: a block batch or decision is still being applied; not requesting more");
         return None;
     }
     sync_manager.tick(connected)

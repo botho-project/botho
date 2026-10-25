@@ -804,9 +804,48 @@ impl ChainSyncManager {
         height: u64,
         tip_hash: [u8; 32],
     ) {
-        // Only act if this is genuinely ahead of us by a gap gossip can't bridge
-        // (gap >= 2). A 1-block lag is left to gossip.
-        if height <= self.local_height + SYNC_INITIAL_GAP {
+        self.note_peer_height_hint(connected_peers, height, tip_hash, SYNC_INITIAL_GAP, false);
+    }
+
+    /// React to our own externalized decision at height H that cannot apply
+    /// because its parent (H-1) is not committed yet (#1583).
+    ///
+    /// The quorum that externalized H decided on a minting tx that commits
+    /// to `parent_hash` at `parent_height` = H-1, so every peer that took
+    /// part already holds H-1. Record that height against the connected
+    /// peers and enter `Downloading` towards it. Unlike
+    /// [`Self::note_gossiped_tip`] this acts on a gap of ONE: the common
+    /// case is H = tip+2, whose parent is exactly tip+1, and nothing will
+    /// gossip it again.
+    ///
+    /// The target is the parent, not H: H may not be committed on peers
+    /// yet, and asking for it risks a #644 zero-progress penalty. A peer
+    /// status already known to be higher is kept, never lowered. A
+    /// `Downloading` state is left alone (#1579 retargets it).
+    pub fn note_decided_parent(
+        &mut self,
+        connected_peers: &[PeerId],
+        parent_height: u64,
+        parent_hash: [u8; 32],
+    ) {
+        self.note_peer_height_hint(connected_peers, parent_height, parent_hash, 0, true);
+    }
+
+    /// Shared body of [`Self::note_gossiped_tip`] (`min_gap` =
+    /// `SYNC_INITIAL_GAP`, `keep_higher` = false, its pre-#1583 behaviour)
+    /// and [`Self::note_decided_parent`] (`min_gap` = 0, `keep_higher` =
+    /// true): act only when `height > local_height + min_gap`.
+    fn note_peer_height_hint(
+        &mut self,
+        connected_peers: &[PeerId],
+        height: u64,
+        tip_hash: [u8; 32],
+        min_gap: u64,
+        keep_higher: bool,
+    ) {
+        // Only act if this is genuinely ahead of us by more than `min_gap`.
+        // For gossip (gap >= 2) a 1-block lag is left to gossip.
+        if height <= self.local_height + min_gap {
             return;
         }
 
@@ -816,6 +855,14 @@ impl ChainSyncManager {
         // hold the propose-gate closed (#998 / #1000).
         for peer in connected_peers {
             if self.incompatible_peers.contains(peer) {
+                continue;
+            }
+            if keep_higher
+                && self
+                    .peer_statuses
+                    .get(peer)
+                    .is_some_and(|status| status.height >= height)
+            {
                 continue;
             }
             self.peer_statuses.insert(
@@ -831,11 +878,12 @@ impl ChainSyncManager {
         // Receiving a gossiped block we cannot apply is direct evidence of a
         // real gap (gap >= 2), so trigger catch-up with the gap-1 rule even from
         // the Synced state — do NOT defer to the near-tip hysteresis threshold,
-        // which exists only to suppress thrash on lags gossip *can* close. If we
+        // which exists only to suppress thrash on lags gossip *can* close. Our
+        // own decision's parent (#1583) is the same evidence at gap >= 1. If we
         // are already Downloading we leave the existing target alone.
         if !matches!(self.state, SyncState::Downloading { .. }) {
             if let Some((best_peer, status)) = self.best_peer() {
-                if status.height > self.local_height + SYNC_INITIAL_GAP {
+                if status.height > self.local_height + min_gap {
                     self.state = SyncState::Downloading {
                         peer: best_peer,
                         target_height: status.height,
@@ -2361,6 +2409,108 @@ mod tests {
             matches!(manager.state(), SyncState::Discovery),
             "gossiped tip from an incompatible-only peer set must not trigger catch-up"
         );
+    }
+
+    // ========================================================================
+    // #1583: our own decision's parent drives a one-block catch-up
+    // ========================================================================
+
+    #[test]
+    fn test_note_decided_parent_downloads_a_one_block_gap_from_synced() {
+        // Synced at 100. Our decision at 102 has parent 101: a gap of ONE
+        // that gossip will never close (101 was gossiped while we were
+        // away). `note_gossiped_tip` ignores it; `note_decided_parent` must
+        // download exactly the parent.
+        let mut manager = ChainSyncManager::new(100);
+        let peer = make_peer_id();
+        manager.on_status(peer, 100, [1u8; 32]);
+        assert!(manager.is_synced());
+
+        manager.note_gossiped_tip(&[peer], 101, [2u8; 32]);
+        assert!(
+            manager.is_synced(),
+            "precondition: a gossip hint leaves a one-block lag to gossip"
+        );
+
+        manager.note_decided_parent(&[peer], 101, [2u8; 32]);
+        assert_eq!(
+            manager.state(),
+            &SyncState::Downloading {
+                peer,
+                target_height: 101
+            }
+        );
+        assert_eq!(
+            requested_blocks(manager.tick(&[peer])),
+            Some((peer, 101, BLOCKS_PER_REQUEST))
+        );
+        manager.on_request_sent(peer);
+        manager.on_blocks_added(101);
+        assert!(manager.is_synced());
+    }
+
+    #[test]
+    fn test_note_decided_parent_is_a_noop_when_the_parent_is_committed() {
+        let mut manager = ChainSyncManager::new(101);
+        let peer = make_peer_id();
+        manager.on_status(peer, 101, [1u8; 32]);
+        assert!(manager.is_synced());
+        manager.note_decided_parent(&[peer], 101, [1u8; 32]);
+        assert!(manager.is_synced(), "gap 0: nothing to fetch");
+        manager.note_decided_parent(&[peer], 99, [1u8; 32]);
+        assert!(
+            manager.is_synced(),
+            "parent below the tip: nothing to fetch"
+        );
+    }
+
+    #[test]
+    fn test_note_decided_parent_never_lowers_a_known_higher_peer() {
+        // A peer already known at 110 stays the target: the parent hint is a
+        // floor, not a replacement (a gossip hint keeps overwriting, as
+        // before).
+        let mut manager = ChainSyncManager::new(100);
+        let peer = make_peer_id();
+        manager.on_status(peer, 110, [1u8; 32]);
+        manager.state = SyncState::Synced;
+        manager.note_decided_parent(&[peer], 101, [2u8; 32]);
+        assert_eq!(
+            manager.state(),
+            &SyncState::Downloading {
+                peer,
+                target_height: 110
+            }
+        );
+    }
+
+    #[test]
+    fn test_note_decided_parent_leaves_a_download_alone_and_skips_incompatible_peers() {
+        let mut manager = ChainSyncManager::new(100);
+        let zombie = make_peer_id();
+        manager.mark_incompatible(zombie);
+        manager.note_decided_parent(&[zombie], 101, [2u8; 32]);
+        assert!(
+            matches!(manager.state(), SyncState::Discovery),
+            "an incompatible-only peer set must not drive catch-up"
+        );
+
+        let peer = make_peer_id();
+        manager.on_status(peer, 105, [1u8; 32]);
+        assert!(matches!(
+            manager.state(),
+            SyncState::Downloading {
+                target_height: 105,
+                ..
+            }
+        ));
+        manager.note_decided_parent(&[peer], 101, [2u8; 32]);
+        assert!(matches!(
+            manager.state(),
+            SyncState::Downloading {
+                target_height: 105,
+                ..
+            }
+        ));
     }
 
     #[test]

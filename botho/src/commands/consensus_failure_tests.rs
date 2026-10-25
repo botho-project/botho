@@ -36,6 +36,8 @@ pub(super) struct FailureTestHooks {
     network_blocks: mpsc::Receiver<InjectedBlocks>,
     /// One sample per non-consensus apply completion (#1566).
     completions: Arc<Mutex<Vec<CompletionSample>>>,
+    /// Incremented on every parked-decision `error!` (#1583).
+    parked_warnings: Arc<AtomicU64>,
 }
 
 /// Blocks injected as if they had arrived from the network (#1566).
@@ -111,6 +113,10 @@ impl FailureTestHooks {
             in_flight,
             at: Instant::now(),
         });
+    }
+
+    pub(super) fn on_parked_warning(&mut self) {
+        self.parked_warnings.fetch_add(1, Ordering::SeqCst);
     }
 
     pub(super) fn take_network_blocks(&mut self) -> Vec<InjectedBlocks> {
@@ -248,6 +254,7 @@ struct Harness {
     samples: Arc<Mutex<Vec<TickSample>>>,
     network_blocks: mpsc::Sender<InjectedBlocks>,
     completions: Arc<Mutex<Vec<CompletionSample>>>,
+    parked_warnings: Arc<AtomicU64>,
     worker: std::thread::JoinHandle<()>,
 }
 
@@ -267,6 +274,12 @@ fn seed_trivial_pow_ledger(path: &std::path::Path) -> Ledger {
 /// by the production commit function on a scratch ledger, so emission and
 /// difficulty evolve exactly as they will on the node under test.
 fn valid_chain(scratch: &std::path::Path, count: u64) -> Vec<Block> {
+    valid_chain_minted_by(scratch, count, "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about")
+}
+
+/// [`valid_chain`] minted by `mnemonic`'s wallet: a different mnemonic gives
+/// a competing fork on the same genesis (#1583).
+fn valid_chain_minted_by(scratch: &std::path::Path, count: u64, mnemonic: &str) -> Vec<Block> {
     let ledger = seed_trivial_pow_ledger(scratch);
     let state = ledger.get_chain_state().unwrap();
     let mut controller = EmissionController::from_chain_state(
@@ -280,7 +293,7 @@ fn valid_chain(scratch: &std::path::Path, count: u64) -> Vec<Block> {
         state.current_reward,
     );
     let ledger: SharedLedger = Arc::new(RwLock::new(ledger));
-    let wallet = Wallet::from_mnemonic("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap();
+    let wallet = Wallet::from_mnemonic(mnemonic).unwrap();
     let minter = wallet.default_address();
     let mut blocks = Vec::new();
     for _ in 0..count {
@@ -348,6 +361,8 @@ fn spawn_harness_with(apply_delay: Option<Duration>, trivial_pow: bool) -> Harne
     let (network_blocks, network_blocks_rx) = mpsc::channel();
     let completions = Arc::new(Mutex::new(Vec::new()));
     let worker_completions = completions.clone();
+    let parked_warnings = Arc::new(AtomicU64::new(0));
+    let worker_parked_warnings = parked_warnings.clone();
     let worker_apply_delay = apply_delay;
     drop(reservation);
     let worker = std::thread::spawn(move || {
@@ -377,6 +392,7 @@ fn spawn_harness_with(apply_delay: Option<Duration>, trivial_pow: bool) -> Harne
                         samples: worker_samples,
                         network_blocks: network_blocks_rx,
                         completions: worker_completions,
+                        parked_warnings: worker_parked_warnings,
                     }),
                 ),
             )
@@ -413,6 +429,7 @@ fn spawn_harness_with(apply_delay: Option<Duration>, trivial_pow: bool) -> Harne
         samples,
         network_blocks,
         completions,
+        parked_warnings,
         worker,
     }
 }
@@ -452,9 +469,12 @@ fn exercise_failure_with_delay(
     let decision = if application_failure {
         let wallet = Wallet::from_mnemonic("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap();
         // A new-height block that the real builder constructs but the real
-        // ledger rejects: genesis is height zero, so height two cannot apply.
+        // ledger rejects: genesis is height zero, and this height-one block
+        // names a parent that is not genesis (and has no valid PoW). It is
+        // at tip + 1, so it runs and fails (#1583: a decision ABOVE tip + 1
+        // would be parked, not failed).
         Some(MintingTx::new(
-            2,
+            1,
             0,
             &wallet.default_address(),
             [0; 32],
@@ -899,6 +919,217 @@ fn consensus_job_behind_same_height_gossip_is_benign_duplicate_and_advances_once
     assert_eq!(stopped.initial_slot, slot_before);
     assert_eq!(stopped.final_slot, stopped.initial_slot + 1);
     assert_eq!(stopped.ledger_height, 1);
+}
+
+// ---- #1583: a decision above tip + 1 is parked, not terminal ----
+
+const MNEMONIC_A: &str =
+    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+const MNEMONIC_B: &str =
+    "legal winner thank year wave sausage worth useful legal winner thank yellow";
+
+/// Wait until a tick satisfies `pred`, and return the samples seen so far.
+fn wait_for_sample(
+    harness: &Harness,
+    what: &str,
+    pred: impl Fn(&TickSample) -> bool,
+) -> Vec<TickSample> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let samples = harness.samples.lock().unwrap().clone();
+        if samples.iter().any(&pred) {
+            return samples;
+        }
+        assert!(Instant::now() < deadline, "{what}: {samples:?}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Deliver our own decision for `block` (its minting tx), wait until the
+/// loop holds it, and check it stays parked: the loop keeps ticking, the
+/// slot does not advance, nothing is applied and nothing stops. Returns the
+/// slot the decision was delivered at.
+fn deliver_and_assert_parked(harness: &Harness, block: &Block, hold: Duration) -> u64 {
+    harness
+        .decisions
+        .send(vec![Some(block.minting_tx.clone())])
+        .unwrap();
+    let samples = wait_for_sample(harness, "decision never held", |s| s.in_flight);
+    let first = samples.iter().position(|s| s.in_flight).unwrap();
+    let slot = samples[first].slot;
+    let ticks_before = harness.ticks.load(Ordering::SeqCst);
+    std::thread::sleep(hold);
+    let samples = harness.samples.lock().unwrap().clone();
+    assert!(
+        samples[first..]
+            .iter()
+            .all(|sample| sample.in_flight && sample.slot == slot),
+        "a parked decision must hold the slot and stay pending: {samples:?}"
+    );
+    assert!(
+        harness.ticks.load(Ordering::SeqCst) >= ticks_before + 2,
+        "the node loop stopped ticking while a decision was parked"
+    );
+    assert!(
+        harness.completions.lock().unwrap().is_empty(),
+        "nothing may apply while only the parked decision is pending"
+    );
+    assert!(
+        matches!(harness.finished.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "a parked decision stopped the node"
+    );
+    assert!(!consensus_failure::marker_path(&harness.config_path).exists());
+    slot
+}
+
+/// Externalize at tip + 2 with the parent missing: no terminal failure, the
+/// decision parks, the gap block (sync batch or gossip) is applied, then
+/// the parked decision commits and `advance_slot` runs exactly once.
+fn exercise_parked_fill(fill: impl FnOnce(Block) -> InjectedBlocks) {
+    let scratch = tempfile::tempdir().unwrap();
+    let chain = valid_chain_minted_by(scratch.path(), 2, MNEMONIC_A);
+    let harness = spawn_harness_with(None, true);
+    let mut socket = connect_rpc(harness.addr);
+    establish_rpc_keep_alive(&mut socket);
+
+    let slot = deliver_and_assert_parked(&harness, &chain[1], Duration::from_millis(1500));
+
+    // The gap block is NOT dropped as a duplicate of the parked decision.
+    harness.network_blocks.send(fill(chain[0].clone())).unwrap();
+    let samples = wait_for_sample(&harness, "slot never advanced after the fill", |s| {
+        s.slot != slot
+    });
+    let completions = harness.completions.lock().unwrap().clone();
+    assert_eq!(completions.len(), 1, "{completions:?}");
+    assert_eq!(completions[0].committed, 1, "the gap block commits");
+    assert!(
+        samples
+            .iter()
+            .filter(|sample| sample.slot != slot)
+            .all(|sample| sample.slot == slot + 1 && sample.at >= completions[0].at),
+        "the slot must advance exactly once, after the gap fill: {samples:?}"
+    );
+    // The loop survived and still serves the existing connection.
+    establish_rpc_keep_alive(&mut socket);
+
+    let stopped = stop_cleanly(harness);
+    assert_eq!(stopped.delivered, 1);
+    assert_eq!(stopped.initial_slot, slot);
+    assert_eq!(stopped.final_slot, slot + 1, "advance_slot ran once");
+    assert_eq!(stopped.ledger_height, 2, "the parked decision committed");
+}
+
+#[test]
+fn decision_at_tip_plus_two_parks_then_applies_after_sync_fills_the_parent() {
+    exercise_parked_fill(|parent| InjectedBlocks::Sync(libp2p::PeerId::random(), vec![parent]));
+}
+
+/// The #1593 review case: a gossiped gap block below a parked decision is
+/// enqueued, not dropped as a duplicate.
+#[test]
+fn gap_gossip_block_below_a_parked_decision_is_applied_not_dropped() {
+    exercise_parked_fill(InjectedBlocks::Gossip);
+}
+
+/// A sync batch that already contains H completes the parked decision as a
+/// #421 benign duplicate, and `advance_slot` runs exactly once.
+#[test]
+fn sync_batch_containing_the_parked_height_completes_it_as_a_benign_duplicate() {
+    let scratch = tempfile::tempdir().unwrap();
+    let chain = valid_chain_minted_by(scratch.path(), 2, MNEMONIC_A);
+    let harness = spawn_harness_with(None, true);
+    let slot = deliver_and_assert_parked(&harness, &chain[1], Duration::from_millis(1000));
+    harness
+        .network_blocks
+        .send(InjectedBlocks::Sync(libp2p::PeerId::random(), chain))
+        .unwrap();
+    wait_for_sample(&harness, "slot never advanced after the batch", |s| {
+        s.slot != slot
+    });
+    let completions = harness.completions.lock().unwrap().clone();
+    assert_eq!(completions.len(), 1, "{completions:?}");
+    assert_eq!(completions[0].committed, 2);
+    let stopped = stop_cleanly(harness);
+    assert_eq!(stopped.final_slot, slot + 1);
+    assert_eq!(stopped.ledger_height, 2);
+}
+
+/// Same setup, but sync delivers a DIFFERENT tip + 1 (a fork) from the
+/// decided block's parent. The parked decision dispatches, `add_block`
+/// rejects it with "Previous block hash mismatch" (#420), and the failure
+/// is terminal with today's evidence and restart refusal.
+#[test]
+fn parked_decision_with_mismatched_synced_parent_is_terminal() {
+    let scratch_a = tempfile::tempdir().unwrap();
+    let scratch_b = tempfile::tempdir().unwrap();
+    let chain_a = valid_chain_minted_by(scratch_a.path(), 2, MNEMONIC_A);
+    let fork_b = valid_chain_minted_by(scratch_b.path(), 1, MNEMONIC_B);
+    assert_ne!(chain_a[0].hash(), fork_b[0].hash(), "fixture must fork");
+    let harness = spawn_harness_with(None, true);
+    let slot = deliver_and_assert_parked(&harness, &chain_a[1], Duration::from_millis(1000));
+    harness
+        .network_blocks
+        .send(InjectedBlocks::Sync(libp2p::PeerId::random(), fork_b))
+        .unwrap();
+
+    let stopped = harness
+        .stopped
+        .recv_timeout(Duration::from_secs(15))
+        .unwrap();
+    assert_eq!(stopped.final_slot, slot, "advanced a rejected decision");
+    assert_eq!(stopped.ledger_height, 1, "the forked parent committed");
+    harness
+        .before_persist
+        .recv_timeout(Duration::from_secs(10))
+        .unwrap();
+    harness.permit_persist.send(()).unwrap();
+    let error = harness
+        .finished
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap()
+        .unwrap_err();
+    assert!(
+        error.contains("Consensus stopped after externalized-block failure"),
+        "{error}"
+    );
+    let marker = consensus_failure::marker_path(&harness.config_path);
+    let evidence: serde_json::Value = serde_json::from_slice(&fs::read(&marker).unwrap()).unwrap();
+    assert_eq!(evidence["ledger_height"], 1);
+    assert_eq!(evidence["externalized_slot"], slot);
+    let reason = evidence["reason"].as_str().unwrap();
+    assert!(reason.contains("application failed"), "{reason}");
+    assert!(reason.contains("Previous block hash mismatch"), "{reason}");
+    assert!(!evidence["rejected_block"].is_null());
+    let error = run(&harness.config_path, false, None, None, None).unwrap_err();
+    assert!(error.to_string().contains("Consensus failure marker"));
+    harness.worker.join().unwrap();
+}
+
+/// No sync source (the harness is solo): the decision stays parked past
+/// `PARKED_DECISION_WARN_AFTER`, the loop keeps ticking, the slot never
+/// advances, the `error!` fires once per interval, and a clean shutdown
+/// writes no evidence.
+#[test]
+fn parked_decision_with_no_sync_source_stays_bounded_and_non_terminal() {
+    let harness = spawn_harness(None);
+    let mut socket = connect_rpc(harness.addr);
+    establish_rpc_keep_alive(&mut socket);
+    let wallet = Wallet::from_mnemonic(MNEMONIC_A).unwrap();
+    let mut decided = Block::genesis();
+    decided.minting_tx = MintingTx::new(2, 0, &wallet.default_address(), [7; 32], u64::MAX, 1);
+    let hold = PARKED_DECISION_WARN_AFTER * 3 + PARKED_DECISION_WARN_AFTER / 2;
+    let slot = deliver_and_assert_parked(&harness, &decided, hold);
+    let warnings = harness.parked_warnings.load(Ordering::SeqCst);
+    assert!(
+        (3..=4).contains(&warnings),
+        "expected one parked warning per {PARKED_DECISION_WARN_AFTER:?} over {hold:?}, got {warnings}"
+    );
+    establish_rpc_keep_alive(&mut socket);
+
+    let stopped = stop_cleanly(harness);
+    assert_eq!(stopped.delivered, 1);
+    assert_eq!(stopped.final_slot, slot, "advance_slot ran while parked");
+    assert_eq!(stopped.ledger_height, 0);
 }
 
 /// #1577: setting the shutdown flag (what the SIGINT/SIGTERM listener does)
