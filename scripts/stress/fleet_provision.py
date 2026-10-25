@@ -22,6 +22,11 @@ import host_maintenance
 ROLES = ('controller', 'n1', 'n2', 'n3', 'n4', 'n5')
 PRODUCER = 'n3'
 GOSSIP_PORT = 17110  # Must equal the staging renderer's gossip_port (#1589).
+# Node-local listeners behind nginx; never opened in the security group. The
+# testnet default metrics_port (19090) collides with RPC_PORT, so staging sets
+# both explicitly (#1589). Shared by fleet_nodes.py and the fault executor.
+RPC_PORT = 19090
+METRICS_PORT = 19100
 SSH_PORT = 22
 HTTPS_PORT = 443
 HOST_LIFETIME = 82 * 3600       # Absolute host deadline; under the 83h maintenance cap.
