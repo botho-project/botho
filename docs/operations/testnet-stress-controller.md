@@ -149,11 +149,13 @@ the `dry-run` output, which lists every command with its absolute UTC time
 `rehearsal_only` plan whose `degrade_steps` is `[]` (an empty schedule is never
 run); a target missing from the inventory or equal to the plan's
 `producer_role`; an inventory hostname or alias that is a public
-`runtime.HOSTS` name; a private IP outside RFC1918; and a malformed unit. Before
-every fault it also reads `node_getStatus` on each target (over the same SSH,
-from `http://127.0.0.1:17101/rpc`; override with `--status-url`) and **refuses
-to fault a host that reports `mintingActive`**, or whose status cannot be read,
-whatever the plan names as the producer. A refusal applies nothing and exits 2.
+`runtime.HOSTS` name; a private IP outside RFC1918; and a malformed unit. At
+launch, and again 30 s before each fault (so the check never eats into the
+30 s late window), it reads `node_getStatus` on each target over the same SSH,
+from `http://127.0.0.1:19090/rpc`: `fleet_provision.RPC_PORT`, the staging
+renderer's `rpc_port` (override with `--status-url`). It **refuses to fault a
+host that reports `mintingActive`**, or whose status cannot be read, whatever
+the plan names as the producer. A refusal applies nothing and exits 2.
 
 **Faults.** D1 is `systemctl stop` and records the unit's `Result` (`timeout`
 means systemd had to SIGKILL). D2 is `systemctl kill -s SIGKILL`. D3 adds
@@ -165,31 +167,46 @@ both targets together. Each step's start is `T0 + fault_start_offset`. A step
 the runner reaches more than 30 s late is recorded as `skipped_late` and never
 run late. An apply is never retried; a failed apply is restored at once.
 
+**Stop confirmation (D1, D2, D5).** After the stop or kill, the runner polls
+`systemctl is-active <unit>` every 5 s until it reports `inactive` or `failed`
+(the units are `Restart=no`, so a SIGKILL leaves `failed`). It journals one
+`stopped` line per target with `active_state` and `polls`. The stop must be
+confirmed at least 60 s before `restore_at`, so the controller's restart gate
+never sees the old process outlive the planned restore. If a target is not
+confirmed stopped by then, the runner restores it at once and marks the run
+incomplete (exit 1).
+
 **Dead-man guarantee.** Before each fault, the runner arms an on-host transient
 timer, `botho-x-restore-<step>-<role>` (one per target for D5), that runs the
 same idempotent restore 120 s after the planned restore time. The node is
 therefore restored even if the laptop, its SSH session or the runner dies. The
-normal restore disarms the timer first, restores, then verifies: the unit is
-`active`; `iptables -S` shows no `botho-x`; `tc qdisc show` shows no `prio` or
-`netem`. A failed restore or verify writes `STOP` in the `--controller-stop`
-directory through the same SSH (`sudo -n touch <dir>/STOP`), prints the manual
-restore commands and exits 3.
+normal path runs **restore, then verify, then disarm**, per target. The verify
+checks that the unit is `active`, that `iptables -S` shows no `botho-x`, and
+that `tc qdisc show` shows no `prio` or `netem`. The runner disarms a target's
+timer only after that target's restore and verify both pass. A failed restore
+or verify leaves the timer **armed**, so the dead-man still runs its restore.
+A late firing is harmless because the restore is idempotent. A failed
+restore or verify also writes `STOP` in the `--controller-stop` directory
+through the same SSH (`sudo -n touch <dir>/STOP`). The runner then prints the
+manual restore commands, names the dead-man timers that are still armed and
+when they fire, and exits 3.
 
 **Manual restore**, on the target (replace `<step>`, `<unit>`, `<dev>`):
 
 ```
-sudo systemctl stop botho-x-restore-<step>-<role>.timer   # if still armed
 sudo systemctl start <unit>                               # D1, D2, D5
 while sudo iptables -w -D INPUT -j botho-x-<step>; do :; done   # D3
 while sudo iptables -w -D OUTPUT -j botho-x-<step>; do :; done
 sudo iptables -w -F botho-x-<step>; sudo iptables -w -X botho-x-<step>
 sudo tc qdisc del dev <dev> root                          # D4
+sudo systemctl stop botho-x-restore-<step>-<role>.timer   # only after the verify passes
 ```
 
 **Journal.** Every action appends one line to `faults.jsonl`:
 `{step, role, action, phase, planned_at, at, ok, stderr_tail}` plus
-`unit_result` on `result` lines and `minting_active` on `precheck` lines.
-`phase` is `precheck`, `apply`, `restore`, `verify` or `warn`.
+`unit_result` on `result` lines, `active_state` and `polls` on `stopped` lines,
+and `minting_active` on `precheck` lines. `phase` is `precheck`, `apply`,
+`restore`, `verify`, `disarm` or `warn`.
 
 **Laptop conditions warn, never stop** (the w9 lesson): low local disk, clock
 skew against the controller and slow SSH are journalled as `warn` and the

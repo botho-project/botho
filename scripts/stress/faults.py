@@ -12,8 +12,13 @@ Safety properties:
   and integers). Inventory text never reaches a shell unvalidated.
 - Before every fault an on-host transient systemd timer (the dead-man restore)
   is armed, so the node is restored even if the laptop, its SSH session or this
-  runner dies. The normal restore disarms it first. Every restore is
-  idempotent; the verify commands are the authoritative check.
+  runner dies. The normal path restores, verifies and only then disarms it,
+  per target; a failed restore or verify leaves the timer armed. Every
+  restore is idempotent, so a late dead-man firing is harmless; the verify
+  commands are the authoritative check.
+- A restart fault (D1, D2, D5) is confirmed finished (unit `inactive` or
+  `failed`) well before the planned restore, so the controller's restart gate
+  never sees the replaced process at or after `restore_at`.
 - A host whose RPC reports `mintingActive` (or whose status cannot be read) is
   never faulted, whatever the plan's `producer_role` says.
 - Laptop-side conditions (disk, clock skew, SSH latency) are journalled as
@@ -34,15 +39,20 @@ import time
 from pathlib import Path
 
 import observer
+from fleet_provision import GOSSIP_PORT, RPC_PORT
 from runtime import HOSTS
 
 ROLES = ('controller', 'n1', 'n2', 'n3', 'n4', 'n5')
 NODE_ROLES = ROLES[1:]
-GOSSIP_PORT = 17110
 DEADMAN_GRACE = 120        # Dead-man fires this long after the planned restore.
 LATE_GRACE = 30            # A step starting later than this after fault_start is skipped.
+PRECHECK_LEAD = 30         # Laptop and minting prechecks run this long before fault_start.
+STOP_MARGIN = 60           # A restart fault must be confirmed stopped this long before restore.
+STOP_POLL = 5              # Seconds between stop-confirmation polls.
+STOPPED_STATES = ('inactive', 'failed')
 DEFAULT_DEV = 'ens5'
-DEFAULT_STATUS_URL = 'http://127.0.0.1:17101/rpc'
+# The staging renderer's loopback rpc_port (#1589); one definition in fleet_provision.
+DEFAULT_STATUS_URL = 'http://127.0.0.1:%d/rpc' % RPC_PORT
 STATUS_BODY = '{"jsonrpc":"2.0","id":1588,"method":"node_getStatus","params":{}}'
 RFC1918 = tuple(ipaddress.ip_network(n) for n in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))
 PUBLIC_NAMES = frozenset(h.lower() for h in HOSTS)
@@ -198,13 +208,16 @@ def disarm_argv(step, role):
 
 
 def commands(step, inventory, unit, dev=DEFAULT_DEV, now_offset=None):
-    """Render one step: {apply, restore, verify} lists of {role, action, argv}.
+    """Render one step: {apply, restore, verify, disarm} lists of {role, action, argv}.
 
     `apply` starts with one dead-man `systemd-run` per target, before any fault
     command. `now_offset` (seconds after campaign start) sizes the dead-man so
     it fires DEADMAN_GRACE after the planned restore; it defaults to the
-    planned fault start. Restart steps also carry `result` commands recording
-    the unit's `Result` property after the fault.
+    planned fault start. The runner executes `restore`, then `verify`, then
+    `disarm` only for targets whose restore and verify both passed. Restart
+    steps also carry `stopped` commands (the unit must be `inactive` or
+    `failed` before the restore) and `result` commands recording the unit's
+    `Result` property after the fault.
     """
     unit = validate_unit(unit)
     _need(DEV.fullmatch(dev or ''), 'malformed interface name: %r' % (dev,))
@@ -218,8 +231,8 @@ def commands(step, inventory, unit, dev=DEFAULT_DEV, now_offset=None):
     restore = []
     verify = []
     result = []
-    for role in targets:
-        restore.append(_cmd(role, 'disarm', disarm_argv(step, role)))
+    stopped = []
+    disarm = [_cmd(role, 'disarm', disarm_argv(step, role)) for role in targets]
     if action in ('stop_restart', 'stop_restart_pair'):
         if len(targets) > 1:
             # Queue both stops first so SIGTERM reaches the pair together, then
@@ -266,6 +279,8 @@ def commands(step, inventory, unit, dev=DEFAULT_DEV, now_offset=None):
     for role in targets:
         restore.append(_cmd(role, 'restore', ['sudo', '-n'] + restore_argv(step, role, unit, dev)))
         if action in RESTART_ACTIONS:
+            stopped.append(dict(_cmd(role, 'stopped', ['systemctl', 'is-active', unit]),
+                                expect={'one_of': list(STOPPED_STATES)}))
             result.append(_cmd(role, 'result', ['systemctl', 'show', unit, '--property=Result', '--value']))
             verify.append(dict(_cmd(role, 'verify', ['systemctl', 'is-active', unit]),
                                expect={'stdout': 'active'}))
@@ -275,8 +290,9 @@ def commands(step, inventory, unit, dev=DEFAULT_DEV, now_offset=None):
         else:
             verify.append(dict(_cmd(role, 'verify', ['tc', 'qdisc', 'show', 'dev', dev]),
                                expect={'absent': ['qdisc prio ', 'qdisc netem ']}))
-    rendered = {'apply': apply, 'restore': restore, 'verify': verify}
+    rendered = {'apply': apply, 'restore': restore, 'verify': verify, 'disarm': disarm}
     if result:
+        rendered['stopped'] = stopped
         rendered['result'] = result
     return rendered
 
@@ -291,6 +307,9 @@ def stop_argv(path):
 
 
 def verified(entry, rc, stdout):
+    if 'one_of' in entry['expect']:
+        # `systemctl is-active` exits non-zero for every state but active.
+        return stdout.strip() in entry['expect']['one_of']
     if rc != 0 and 'stdout' in entry['expect']:
         return False
     if 'stdout' in entry['expect']:
@@ -423,7 +442,7 @@ class Runner:
                 return False
         return ok_all
 
-    def fail_closed(self, step, rendered):
+    def fail_closed(self, step, rendered, armed):
         if self.controller_stop:
             alias, path = self.controller_stop
             rc, _, stderr = self.call(alias, stop_argv(path))
@@ -432,13 +451,59 @@ class Runner:
               file=self.out)
         for entry in rendered['restore'] + rendered['verify']:
             print('  ssh %s -- %s' % (entry['role'], shlex.join(entry['argv'])), file=self.out)
+        if armed:
+            print('The dead-man for %s is still armed and fires at about %s (restore + %ds); '
+                  'it runs the same idempotent restore. Disarm only after the verify passes:'
+                  % (','.join(armed), utc(self.start + step['restore_offset'] + DEADMAN_GRACE),
+                     DEADMAN_GRACE), file=self.out)
+            for entry in rendered['disarm']:
+                if entry['role'] in armed:
+                    print('  ssh %s -- %s' % (entry['role'], shlex.join(entry['argv'])),
+                          file=self.out)
         return 3
 
     def restore_step(self, step, rendered):
+        """Restore, verify, then disarm each target whose restore and verify passed.
+
+        Returns the roles whose dead-man is left armed (empty on success). The
+        timer is never disarmed before a verified restore: a late firing runs
+        the same idempotent restore at restore + DEADMAN_GRACE, before the
+        next step (#1585 keeps recovery_seconds >= 300 with no overlap).
+        """
         planned = self.start + step['restore_offset']
-        ok = self.execute(rendered['restore'], step, 'restore', planned, stop_on_failure=False)
-        ok = self.execute(rendered['verify'], step, 'verify', planned, stop_on_failure=False) and ok
-        return ok
+        good = {}
+        for entry in rendered['restore']:
+            good[entry['role']] = self.execute([entry], step, 'restore', planned, False)
+        for entry in rendered['verify']:
+            good[entry['role']] = self.execute([entry], step, 'verify', planned, False) \
+                and good.get(entry['role'], True)
+        for entry in rendered['disarm']:
+            if good.get(entry['role']):
+                # A failed disarm leaves a harmless idempotent restore armed.
+                self.execute([entry], step, 'disarm', planned, False)
+        return [role for role in step['targets'] if not good.get(role)]
+
+    def confirm_stopped(self, step, rendered, deadline):
+        """Poll each restart target until its unit is inactive or failed.
+
+        Journals one `stopped` line per target. False if any target is still
+        not stopped by `deadline`.
+        """
+        fault_at = self.start + step['fault_start_offset']
+        ok_all = True
+        for entry in rendered.get('stopped', []):
+            polls = 0
+            while True:
+                polls += 1
+                rc, stdout, stderr = self.call(entry['role'], entry['argv'])
+                ok = verified(entry, rc, stdout)
+                if ok or self.clock() + STOP_POLL > deadline:
+                    break
+                self.sleep(STOP_POLL)
+            self.record(step['id'], entry['role'], 'stopped', 'apply', fault_at, ok,
+                        '' if ok else (stderr or stdout), active_state=stdout.strip(), polls=polls)
+            ok_all = ok_all and ok
+        return ok_all
 
     def run_step(self, step):
         fault_at = self.start + step['fault_start_offset']
@@ -447,13 +512,15 @@ class Runner:
             self.record(step['id'], ','.join(step['targets']), 'skipped_late', 'apply', fault_at, False)
             self.incomplete = True
             return 0
-        self.wait_until(fault_at)
+        # Prechecks run ahead of the fault so they never eat into LATE_GRACE.
+        self.wait_until(fault_at - PRECHECK_LEAD)
         self.laptop_checks(step['id'])
         refused = self.minting_refusals(step)
         if refused:
             print('REFUSED step %s: %s reports mintingActive (or no readable status)'
                   % (step['id'], ','.join(refused)), file=self.out)
             return 2
+        self.wait_until(fault_at)
         if self.clock() > fault_at + LATE_GRACE:
             self.record(step['id'], ','.join(step['targets']), 'skipped_late', 'apply', fault_at, False)
             self.incomplete = True
@@ -461,20 +528,27 @@ class Runner:
         rendered = commands(step, self.inventory, self.unit, self.dev,
                             now_offset=self.clock() - self.start)
         applied = self.execute(rendered['apply'], step, 'apply', fault_at, stop_on_failure=True)
+        if applied and not self.confirm_stopped(step, rendered, restore_at - STOP_MARGIN):
+            # The replaced process could outlive restore_at and halt the
+            # controller's restart gate; restore now rather than wait.
+            print('step %s: unit not confirmed stopped; restoring now' % step['id'], file=self.out)
+            applied = False
         if applied:
             self.execute(rendered.get('result', []), step, 'apply', fault_at, stop_on_failure=False)
             try:
                 self.wait_until(restore_at)
             except KeyboardInterrupt:
                 print('interrupted: restoring step %s now' % step['id'], file=self.out)
-                if not self.restore_step(step, rendered):
-                    return self.fail_closed(step, rendered)
+                armed = self.restore_step(step, rendered)
+                if armed:
+                    return self.fail_closed(step, rendered, armed)
                 return 130
         else:
             # Never retried; undo whatever part landed straight away.
             self.incomplete = True
-        if not self.restore_step(step, rendered):
-            return self.fail_closed(step, rendered)
+        armed = self.restore_step(step, rendered)
+        if armed:
+            return self.fail_closed(step, rendered, armed)
         return 0
 
     def run(self):
@@ -511,11 +585,13 @@ def dry_run(steps, inventory, unit, start=None, dev=DEFAULT_DEV, controller_stop
         print('%s %s %s fault_start=%d restore=%d window_end=%d%s' % (
             step['id'], step['action'], ','.join(step['targets']), step['fault_start_offset'],
             step['restore_offset'], step['window_end_offset'], extra), file=out)
-        groups = [('precheck', step['fault_start_offset'],
+        groups = [('precheck', step['fault_start_offset'] - PRECHECK_LEAD,
                    [_cmd(r, 'minting_check', status_argv(status_url)) for r in step['targets']]),
-                  ('apply', step['fault_start_offset'], rendered['apply'] + rendered.get('result', [])),
+                  ('apply', step['fault_start_offset'], rendered['apply']
+                   + rendered.get('stopped', []) + rendered.get('result', [])),
                   ('restore', step['restore_offset'], rendered['restore']),
-                  ('verify', step['restore_offset'], rendered['verify'])]
+                  ('verify', step['restore_offset'], rendered['verify']),
+                  ('disarm', step['restore_offset'], rendered['disarm'])]
         for phase, offset, entries in groups:
             for entry in entries:
                 print('  %s %-8s %-4s %s' % (when(offset), phase, entry['role'],

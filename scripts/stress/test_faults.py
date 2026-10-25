@@ -52,12 +52,16 @@ class Commands(unittest.TestCase):
         # D1 records Result: `timeout` means systemd had to SIGKILL.
         self.assertEqual(argvs(rendered['result']), [
             ('n1', 'result', ['systemctl', 'show', UNIT, '--property=Result', '--value'])])
+        # The stop must be confirmed finished before restore_at (#1588 review).
+        self.assertEqual(argvs(rendered['stopped']), [('n1', 'stopped', ['systemctl', 'is-active', UNIT])])
+        self.assertEqual(rendered['stopped'][0]['expect'], {'one_of': ['inactive', 'failed']})
         self.assertEqual(argvs(rendered['restore']), [
+            ('n1', 'restore', ['sudo', '-n', 'systemctl', 'start', UNIT])])
+        # The disarm is its own group, run only after a passing restore and verify.
+        self.assertEqual(argvs(rendered['disarm']), [
             ('n1', 'disarm', ['sudo', '-n', '/bin/sh', '-c',
                               'systemctl stop botho-x-restore-D1-n1.timer 2>/dev/null || ! '
-                              'systemctl is-active --quiet botho-x-restore-D1-n1.timer']),
-            ('n1', 'restore', ['sudo', '-n', 'systemctl', 'start', UNIT]),
-        ])
+                              'systemctl is-active --quiet botho-x-restore-D1-n1.timer'])])
         self.assertEqual(argvs(rendered['verify']), [('n1', 'verify', ['systemctl', 'is-active', UNIT])])
         self.assertEqual(rendered['verify'][0]['expect'], {'stdout': 'active'})
 
@@ -66,7 +70,7 @@ class Commands(unittest.TestCase):
         self.assertEqual(argvs(rendered['apply'])[1:], [
             ('n2', 'kill', ['sudo', '-n', 'systemctl', 'kill', '-s', 'SIGKILL', UNIT])])
         self.assertIn('--on-active=720', rendered['apply'][0]['argv'])
-        self.assertEqual(argvs(rendered['restore'])[1], ('n2', 'restore', ['sudo', '-n', 'systemctl', 'start', UNIT]))
+        self.assertEqual(argvs(rendered['restore'])[0], ('n2', 'restore', ['sudo', '-n', 'systemctl', 'start', UNIT]))
 
     def test_d3_isolate_blocks_only_other_validators_on_gossip(self):
         rendered = commands(step('D3'), INVENTORY, UNIT)
@@ -93,8 +97,8 @@ class Commands(unittest.TestCase):
             self.assertEqual(rule[-2:], ['-j', 'DROP'])
         self.assertEqual({tuple(r[r.index('-p') + 1:r.index('-p') + 2]) for r in drops},
                          {('tcp',), ('udp',)})
-        script = rendered['restore'][1]['argv'][-1]
-        self.assertEqual(rendered['restore'][1]['argv'][:4], ['sudo', '-n', '/bin/sh', '-c'])
+        script = rendered['restore'][0]['argv'][-1]
+        self.assertEqual(rendered['restore'][0]['argv'][:4], ['sudo', '-n', '/bin/sh', '-c'])
         self.assertEqual(script, (
             'while iptables -w -D INPUT -j botho-x-D3 2>/dev/null; do :; done; '
             'while iptables -w -D OUTPUT -j botho-x-D3 2>/dev/null; do :; done; '
@@ -119,7 +123,7 @@ class Commands(unittest.TestCase):
                              'protocol', 'ip', 'prio', '1', 'u32', 'match', 'ip', 'sport', '17110',
                              '0xffff', 'flowid', '1:4']),
         ])
-        self.assertEqual(rendered['restore'][1]['argv'], [
+        self.assertEqual(rendered['restore'][0]['argv'], [
             'sudo', '-n', '/bin/sh', '-c',
             "tc qdisc del dev ens5 root 2>/dev/null; ! tc qdisc show dev ens5 | grep -Eq 'qdisc (prio|netem) '"])
         self.assertEqual(rendered['verify'][0]['argv'], ['tc', 'qdisc', 'show', 'dev', 'ens5'])
@@ -135,7 +139,23 @@ class Commands(unittest.TestCase):
         self.assertEqual(rendered['apply'][2]['argv'], ['sudo', '-n', 'systemctl', 'stop', '--no-block', UNIT])
         self.assertEqual([e['role'] for e in rendered['result']], ['n1', 'n2'])
         self.assertEqual([(e['role'], e['action']) for e in rendered['restore']],
-                         [('n1', 'disarm'), ('n2', 'disarm'), ('n1', 'restore'), ('n2', 'restore')])
+                         [('n1', 'restore'), ('n2', 'restore')])
+        self.assertEqual([(e['role'], e['action']) for e in rendered['disarm']],
+                         [('n1', 'disarm'), ('n2', 'disarm')])
+        self.assertEqual([e['role'] for e in rendered['stopped']], ['n1', 'n2'])
+
+    def test_default_status_url_uses_shared_rpc_port(self):
+        from fleet_provision import RPC_PORT
+        self.assertEqual(RPC_PORT, 19090)
+        self.assertEqual(faults.DEFAULT_STATUS_URL, 'http://127.0.0.1:19090/rpc')
+        self.assertIn('http://127.0.0.1:19090/rpc', faults.status_argv())
+        # One definition: faults.py imports the port, never restates it.
+        self.assertNotRegex((HERE / 'faults.py').read_text(), r'\b(17101|19090)\b')
+
+    def test_only_isolate_and_netem_lack_stop_confirmation(self):
+        for s in STEPS:
+            rendered = commands(s, INVENTORY, UNIT)
+            self.assertEqual('stopped' in rendered, s['action'] in faults.RESTART_ACTIONS, s['id'])
 
     def test_every_apply_starts_with_dead_men_sized_from_now(self):
         for s in STEPS:
@@ -256,6 +276,9 @@ class FakeHost:
         self.skew = 0
         self.latency = 0
         self.override = lambda alias, argv: None
+        self.units = {}          # alias -> ActiveState of UNIT
+        self.stop_lag = 0        # is-active polls that still report `deactivating`
+        self.lagged = 0
 
     def clock(self):
         return self.now
@@ -275,8 +298,18 @@ class FakeHost:
         if argv == ['date', '+%s']:
             self.now += self.latency
             return 0, '%d\n' % (self.now + self.skew), ''
+        if argv[2:5] == ['systemctl', 'stop', UNIT]:
+            self.units[alias], self.lagged = 'inactive', 0
+        elif argv[2:5] == ['systemctl', 'kill', '-s']:
+            self.units[alias], self.lagged = 'failed', 0  # Restart=no (#1589)
+        elif argv[2:5] == ['systemctl', 'start', UNIT]:
+            self.units[alias] = 'active'
         if argv[:2] == ['systemctl', 'is-active']:
-            return 0, 'active\n', ''
+            state = self.units.get(alias, 'active')
+            if state != 'active' and self.lagged < self.stop_lag:
+                self.lagged += 1
+                state = 'deactivating'
+            return (0 if state == 'active' else 3), state + '\n', ''
         if argv[:2] == ['systemctl', 'show']:
             return 0, 'success\n', ''
         if argv[-1] == '-S':
@@ -311,14 +344,16 @@ class RunnerTests(unittest.TestCase):
         n1 = [(argv[0] if argv[0] != 'sudo' else argv[2], argv) for alias, argv in host.calls if alias == 'n1']
         kinds = [k for k, _ in n1]
         self.assertEqual(kinds, ['curl', 'curl', 'systemd-run', 'systemctl', 'systemctl',
-                                 '/bin/sh', 'systemctl', 'systemctl'])
+                                 'systemctl', 'systemctl', 'systemctl', '/bin/sh'])
         self.assertEqual(n1[3][1], ['sudo', '-n', 'systemctl', 'stop', UNIT])
+        self.assertEqual(n1[4][1], ['systemctl', 'is-active', UNIT])
         self.assertEqual(n1[6][1], ['sudo', '-n', 'systemctl', 'start', UNIT])
         lines = [l for l in self.lines() if l['phase'] != 'warn']
+        # restore -> verify -> disarm: the dead-man outlives every unverified restore.
         self.assertEqual([(l['action'], l['phase']) for l in lines], [
             ('minting_check', 'precheck'), ('minting_check', 'precheck'),
-            ('deadman', 'apply'), ('stop', 'apply'), ('result', 'apply'),
-            ('disarm', 'restore'), ('restore', 'restore'), ('verify', 'verify')])
+            ('deadman', 'apply'), ('stop', 'apply'), ('stopped', 'apply'), ('result', 'apply'),
+            ('restore', 'restore'), ('verify', 'verify'), ('disarm', 'disarm')])
         for line in lines:
             self.assertEqual(line['step'], 'D1')
             self.assertEqual(line['role'], 'n1')
@@ -326,11 +361,16 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(line['stderr_tail'], '')
             self.assertTrue({'step', 'role', 'action', 'phase', 'planned_at', 'at', 'ok',
                              'stderr_tail'} <= set(line))
-        self.assertEqual(lines[4]['unit_result'], 'success')
+        self.assertEqual(lines[4]['active_state'], 'inactive')
+        self.assertEqual(lines[4]['polls'], 1)
+        self.assertEqual(lines[5]['unit_result'], 'success')
+        # The per-step precheck runs PRECHECK_LEAD before the fault, not at it.
+        self.assertEqual(lines[1]['planned_at'], START + PHASE)
+        self.assertEqual(lines[1]['at'], START + PHASE - faults.PRECHECK_LEAD)
         self.assertEqual(lines[2]['planned_at'], START + PHASE)
         self.assertEqual(lines[2]['at'], START + PHASE)
-        self.assertEqual(lines[5]['planned_at'], START + PHASE + 1800)
-        self.assertEqual(lines[5]['at'], START + PHASE + 1800)
+        self.assertEqual(lines[6]['planned_at'], START + PHASE + 1800)
+        self.assertEqual(lines[6]['at'], START + PHASE + 1800)
         self.assertNotIn(('controller', faults.stop_argv('/home/ubuntu/.local/share/botho-x')), host.calls)
 
     def test_full_schedule_runs_all_five(self):
@@ -365,6 +405,64 @@ class RunnerTests(unittest.TestCase):
         # Verify still ran after the failed restore.
         self.assertIn('verify', [l['action'] for l in self.lines()])
         self.assertIn('RESTORE FAILED', self.out.getvalue())
+        # The dead-man stays armed: no disarm was sent or journalled.
+        self.assertNotIn('disarm', [l['action'] for l in self.lines()])
+        self.assertFalse([c for c in host.calls if 'botho-x-restore-D1-n1.timer' in ' '.join(c[1])])
+        self.assertIn('dead-man for n1 is still armed', self.out.getvalue())
+
+    def test_verify_failure_keeps_dead_man_armed(self):
+        host = FakeHost(START + PHASE - 100)
+        # The restore reports success but the unit never comes back.
+        host.override = lambda alias, argv: ((0, 'inactive\n', '')
+                                             if argv == ['systemctl', 'is-active', UNIT]
+                                             and host.now >= START + PHASE + 1800 else None)
+        self.assertEqual(self.runner(host).run(), 3)
+        actions = [(l['action'], l['ok']) for l in self.lines()
+                   if l['phase'] != 'warn' and l['role'] != 'controller']
+        self.assertEqual(actions[-2:], [('restore', True), ('verify', False)])
+        self.assertNotIn('disarm', [a for a, _ in actions])
+        self.assertFalse([c for c in host.calls if '.timer' in ' '.join(c[1])])
+
+    def test_d5_disarms_only_targets_that_verified(self):
+        host = FakeHost(START + PHASE + 13500 - 100)
+        host.fail = lambda alias, argv: alias == 'n2' and argv[2:4] == ['systemctl', 'start']
+        self.assertEqual(self.runner(host, steps=[step('D5')]).run(), 3)
+        phases = [(l['role'], l['action'], l['phase']) for l in self.lines()
+                  if l['phase'] != 'warn' and l['role'] != 'controller']
+        tail = phases[phases.index(('n1', 'restore', 'restore')):]
+        self.assertEqual(tail, [('n1', 'restore', 'restore'), ('n2', 'restore', 'restore'),
+                                ('n1', 'verify', 'verify'), ('n2', 'verify', 'verify'),
+                                ('n1', 'disarm', 'disarm')])
+        self.assertIn('dead-man for n2 is still armed', self.out.getvalue())
+
+    def test_stop_confirmation_polls_until_inactive(self):
+        host = FakeHost(START + PHASE - 100)
+        host.stop_lag = 3  # SIGTERM drain: three polls still report `deactivating`.
+        self.assertEqual(self.runner(host).run(), 0)
+        stopped = [l for l in self.lines() if l['action'] == 'stopped']
+        self.assertEqual(len(stopped), 1)
+        self.assertEqual((stopped[0]['ok'], stopped[0]['active_state'], stopped[0]['polls']),
+                         (True, 'inactive', 4))
+        self.assertLessEqual(stopped[0]['at'], START + PHASE + 1800 - faults.STOP_MARGIN)
+
+    def test_d2_kill_is_confirmed_stopped_as_failed(self):
+        host = FakeHost(START + PHASE + 3600 - 100)
+        self.assertEqual(self.runner(host, steps=[step('D2')]).run(), 0)
+        stopped = [l for l in self.lines() if l['action'] == 'stopped'][0]
+        self.assertEqual((stopped['role'], stopped['ok'], stopped['active_state']), ('n2', True, 'failed'))
+
+    def test_unconfirmed_stop_restores_before_restore_at(self):
+        host = FakeHost(START + PHASE - 100)
+        host.stop_lag = 10 ** 6  # Never finishes stopping.
+        self.assertEqual(self.runner(host).run(), 1)
+        lines = [l for l in self.lines() if l['phase'] != 'warn']
+        stopped = [l for l in lines if l['action'] == 'stopped'][0]
+        self.assertEqual((stopped['ok'], stopped['active_state']), (False, 'deactivating'))
+        deadline = START + PHASE + 1800 - faults.STOP_MARGIN
+        self.assertLessEqual(stopped['at'], deadline)
+        restore = [l for l in lines if l['action'] == 'restore'][0]
+        self.assertLess(restore['at'], START + PHASE + 1800)
+        self.assertNotIn('result', [l['action'] for l in lines])
 
     def test_verify_failure_without_controller_stop_prints_manual_restore(self):
         host = FakeHost(START + PHASE + 6000 - 10)
