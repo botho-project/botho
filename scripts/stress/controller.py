@@ -15,7 +15,7 @@ from discovery_plan import degrade_opt_in
 from plan import expand
 from reporting import legacy_lottery_evidence
 from runtime import (Gate, HOSTS, Journal, PENDING, Quota, Rpc, atomic,
-                     RESTART_ACTIONS, check_identity, check_quorum, loop_delta, check_resources, digest, campaign_targets, campaign_tls_context, pinned_file)
+                     RESTART_ACTIONS, QUORUM_GATE_KEYS, check_identity, check_quorum, loop_delta, check_resources, digest, campaign_targets, campaign_tls_context, pinned_file)
 
 
 _NO_VIEW = object()
@@ -163,12 +163,14 @@ class Controller:
         return [w for w in self.degrade_windows()
                 if w['window_end'] <= now and self.j.get('rejoin:'+w['step']) is None]
 
-    def check_rejoin(self, now, statuses, down=()):
+    def check_rejoin(self, now, statuses, down=(), quorum_gated=False):
         """At window end each named host must be reachable, synced and caught up.
 
         ``statuses`` maps every host to this tick's ``node_getStatus`` (None if
         unreachable). "Caught up" means at or above the minimum height of the
-        hosts neither the ended step nor the active one names.
+        hosts neither the ended step nor the active one names. With
+        ``quorum_gated`` it must also report the full installed 4-of-5: the
+        restart-window allowance for an unevaluated gate ends here (#1608).
         """
         for window in self.rejoin_due(now):
             peers = [s['chainHeight'] for h,s in statuses.items()
@@ -178,6 +180,12 @@ class Controller:
                 if (status is None or status.get('synced') is not True
                         or (peers and status['chainHeight'] < min(peers))):
                     raise Gate(window['step']+': '+host+' failed to rejoin by window end')
+                if quorum_gated:
+                    try:
+                        check_quorum(status)
+                    except Gate as error:
+                        raise Gate(window['step']+': '+host+' failed to rejoin by window end: '
+                                   +str(error)) from error
             self.j.set('rejoin:'+window['step'], {'at': now, 'heights': {
                 h: statuses[h]['chainHeight'] for h in window['expected_down']}})
 
@@ -535,7 +543,7 @@ class Controller:
                 quorum_gated = degrade_opt_in(self.plan)
                 statuses = await asyncio.gather(*(self.tolerate(h,{*down,*rejoining},self.rpc.call(h,'node_getStatus'),step) for h in HOSTS))
                 records = await asyncio.gather(*(self.tolerate(h,down,self.observer(h),step) for h in HOSTS))
-                self.check_rejoin(now,dict(zip(HOSTS,statuses)),down)
+                self.check_rejoin(now,dict(zip(HOSTS,statuses)),down,quorum_gated)
                 for host,status,observed in zip(HOSTS,statuses,records):
                     if status is not None:
                         check_identity(status,self.plan)
@@ -543,7 +551,14 @@ class Controller:
                         # 4-of-5, f=1 quorum on every reachable validator; a
                         # silent 4-of-4 would void D1-D5 (#1605).
                         if quorum_gated:
-                            check_quorum(status)
+                            # A host the active restart step names may serve
+                            # RPC before its gate's first evaluation (#1608);
+                            # isolate/netem never restart, rejoining is strict.
+                            unevaluated = (view is not None and host in down
+                                           and view['action'] in RESTART_ACTIONS)
+                            check_quorum(status,allow_unevaluated=unevaluated)
+                            if unevaluated and all(status.get(k,0) is None for k in QUORUM_GATE_KEYS):
+                                self.j.event(None,'quorum_unevaluated',{'step':step,'host':host})
                     baseline = self.j.get('baseline:'+host)
                     if baseline is None:
                         if not observed or observed[-1].get('error'):

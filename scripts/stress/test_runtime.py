@@ -193,6 +193,64 @@ class QuorumGateTests(unittest.TestCase):
                           'quorumFaultTolerant':False,'quorumDegenerate':True})
 
 
+    # #1608: a restarted node serves RPC before its gate's first evaluation.
+    NULL_GATE = {k:None for k in runtime.QUORUM_GATE_KEYS}
+
+    def test_gate_and_config_keys_partition_the_shape(self):
+        self.assertEqual(set(runtime.QUORUM_GATE_KEYS)|set(runtime.QUORUM_CONFIG_KEYS),set(self.GOOD))
+        self.assertFalse(set(runtime.QUORUM_GATE_KEYS)&set(runtime.QUORUM_CONFIG_KEYS))
+
+    def test_unevaluated_gate_passes_only_when_allowed(self):
+        check_quorum({**self.GOOD,**self.NULL_GATE},allow_unevaluated=True)
+        with self.assertRaisesRegex(Gate,'quorumSize=None'):
+            check_quorum({**self.GOOD,**self.NULL_GATE})
+        with self.assertRaisesRegex(Gate,'quorumSize=None'):
+            check_quorum({**self.GOOD,**self.NULL_GATE},allow_unevaluated=False)
+
+    def test_unevaluated_rejects_partial_null(self):
+        for key in runtime.QUORUM_GATE_KEYS:
+            with self.subTest(key=key),self.assertRaisesRegex(Gate,key+'=None'):
+                check_quorum({**self.GOOD,key:None},allow_unevaluated=True)
+
+    def test_unevaluated_keeps_config_keys_strict(self):
+        for key,value in (('quorumMode','recommended'),('quorumFaultTolerant',False),
+                          ('quorumDegenerate',True),('quorumMode',None)):
+            with self.subTest(key=key,value=value),self.assertRaisesRegex(Gate,key):
+                check_quorum({**self.GOOD,**self.NULL_GATE,key:value},allow_unevaluated=True)
+        for key in runtime.QUORUM_CONFIG_KEYS:
+            with self.subTest(key=key,missing=True),self.assertRaisesRegex(Gate,key):
+                check_quorum({k:v for k,v in {**self.GOOD,**self.NULL_GATE}.items() if k != key},
+                             allow_unevaluated=True)
+
+    def test_unevaluated_rejects_missing_gate_keys(self):
+        # An older binary without the fields is not "unevaluated".
+        config={k:self.GOOD[k] for k in runtime.QUORUM_CONFIG_KEYS}
+        with self.assertRaises(Gate):
+            check_quorum(config,allow_unevaluated=True)
+        for key in runtime.QUORUM_GATE_KEYS:
+            partial={k:v for k,v in {**self.GOOD,**self.NULL_GATE}.items() if k != key}
+            with self.subTest(key=key),self.assertRaises(Gate):
+                check_quorum(partial,allow_unevaluated=True)
+        with self.assertRaises(Gate):
+            check_quorum({},allow_unevaluated=True)
+
+    def test_unevaluated_still_rejects_each_non_null_deviation(self):
+        bad = {'quorumMode':['recommended','Explicit',None],
+               'quorumSize':[4,6,'5',5.0,True],
+               'quorumThreshold':[3,5,'4',4.0],
+               'quorumByzantineTolerance':[0,2,True],
+               'quorumFaultTolerant':[False,1,'true'],
+               'quorumDegenerate':[True,0],
+               'quorumAutoMembers':[1,False],
+               'quorumGateIntersectionRefused':[True,0]}
+        for key,values in bad.items():
+            for value in values:
+                with self.subTest(key=key,value=value),self.assertRaisesRegex(Gate,key):
+                    check_quorum({**self.GOOD,key:value},allow_unevaluated=True)
+        with self.assertRaisesRegex(Gate,'quorumSize'):
+            check_quorum({**self.GOOD,'quorumSize':4,'quorumByzantineTolerance':0},allow_unevaluated=True)
+
+
 class DegradeWindowResourceTests(unittest.TestCase):
     """check_resources(..., window) for #1585 degrade steps (#1586)."""
 

@@ -38,6 +38,11 @@ QUORUM = {
     "quorumDegenerate": False, "quorumAutoMembers": 0,
     "quorumGateIntersectionRefused": False,
 }
+# What a restarted node reports before its gate's first evaluation (#1608).
+NULL_GATE = {
+    "quorumSize": None, "quorumThreshold": None, "quorumByzantineTolerance": None,
+    "quorumAutoMembers": None, "quorumGateIntersectionRefused": None,
+}
 
 
 def at(step, key):
@@ -444,6 +449,106 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.monitor(at("D1", "window_end") + 60, actions)
         self.assertTrue(self.held())
         self.assertEqual(self.reason(), "D1: seed.botho.io failed to rejoin by window end")
+
+    # -- #1608: unevaluated gate on a host inside its own restart window -----
+
+    def fresh_run(self):
+        """A new fleet and controller on a new journal (no carried-over baseline)."""
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.fleet = Fleet(self)
+        self.c = self.make()
+
+    def unevaluated_events(self):
+        return [json.loads(r[0]) for r in self.c.j.db.execute(
+            "SELECT detail FROM events WHERE state='quorum_unevaluated'")]
+
+    async def test_restart_null_quorum_inside_window_runs_on(self):
+        restore = at("D1", "restore_at")
+        gates = []
+
+        def gate_probe():
+            with self.clock():
+                try:
+                    self.c.gate()
+                    gates.append("open")
+                except Quota as error:
+                    gates.append("quota: " + str(error))
+
+        await self.run_d1({restore + 1: lambda: self.fleet.quorum[A].update(NULL_GATE),
+                           restore + 16: lambda: self.fleet.quorum[A].update(QUORUM),
+                           restore + 60: gate_probe})
+        self.assertFalse(self.held(), self.reason())
+        self.assertEqual(gates, ["open"])
+        self.assertIsNotNone(self.c.j.get("rejoin:D1"))
+        self.assertEqual(self.unevaluated_events(), [{"step": "D1", "host": A}])
+
+    async def test_null_quorum_outside_window_halts(self):
+        # No active window.
+        self.now = at("D1", "fault_start") - 120
+        await self.monitor(at("D1", "fault_start") + 60,
+                           {at("D1", "fault_start") - 60:
+                                lambda: self.fleet.quorum[A].update(NULL_GATE)})
+        self.assertTrue(self.held())
+        self.assertIn("installed quorum is not explicit 4-of-5", self.reason())
+        self.assertLess(self.now, at("D1", "fault_start"))
+        # A host the active step does not name.
+        self.fresh_run()
+        await self.run_d1({at("D1", "restore_at") + 1:
+                               lambda: self.fleet.quorum[N5].update(NULL_GATE)})
+        self.assertTrue(self.held())
+        self.assertIn("installed quorum is not explicit 4-of-5", self.reason())
+        self.assertIn("quorumSize=None", self.reason())
+        self.assertLess(self.now, at("D1", "window_end"))
+        self.assertEqual(self.unevaluated_events(), [])
+
+    async def test_wrong_quorum_inside_window_halts(self):
+        restore = at("D1", "restore_at")
+        deviations = [{"quorumSize": 4, "quorumByzantineTolerance": 0},
+                      {"quorumThreshold": 5},
+                      {"quorumMode": "recommended"},
+                      {"quorumDegenerate": True},
+                      {"quorumSize": None},  # partial null
+                      {**NULL_GATE, "quorumMode": "recommended"}]
+        for deviation in deviations:
+            with self.subTest(deviation=deviation):
+                self.fresh_run()
+                await self.run_d1({restore + 1:
+                                       lambda d=deviation: self.fleet.quorum[A].update(d)})
+                self.assertTrue(self.held())
+                self.assertIn("installed quorum is not explicit 4-of-5", self.reason())
+                self.assertLess(self.now, at("D1", "window_end"))
+
+    async def test_missing_quorum_keys_inside_window_halts(self):
+        restore = at("D1", "restore_at")
+
+        def older_binary():
+            for key in NULL_GATE:
+                self.fleet.quorum[A].pop(key)
+
+        await self.run_d1({restore + 1: older_binary})
+        self.assertTrue(self.held())
+        self.assertIn("installed quorum is not explicit 4-of-5", self.reason())
+        self.assertLess(self.now, at("D1", "window_end"))
+
+    async def test_null_quorum_on_isolated_host_halts(self):
+        self.now = at("D3", "fault_start") - 30
+        await self.monitor(at("D3", "window_end") + 60,
+                           {at("D3", "fault_start") + 60:
+                                lambda: self.fleet.quorum[N4].update(NULL_GATE)})
+        self.assertTrue(self.held())
+        self.assertIn("installed quorum is not explicit 4-of-5", self.reason())
+        self.assertLess(self.now, at("D3", "fault_start") + 90)
+
+    async def test_null_quorum_at_window_end_halts_via_rejoin(self):
+        await self.run_d1({at("D1", "restore_at") + 1:
+                               lambda: self.fleet.quorum[A].update(NULL_GATE)})
+        self.assertTrue(self.held())
+        self.assertTrue(self.reason().startswith(
+            "D1: seed.botho.io failed to rejoin by window end: installed quorum"), self.reason())
+        self.assertGreaterEqual(self.now, at("D1", "window_end"))
+        self.assertLess(self.now, at("D1", "window_end") + 30)
+        self.assertIsNone(self.c.j.get("rejoin:D1"))
 
     def test_unnamed_host_unsynced_still_pauses_admission(self):
         self.now = at("D1", "fault_start") + 60
