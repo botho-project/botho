@@ -508,36 +508,77 @@ async fn run_async(
 /// drains any in-flight externalized apply, then tears down. SIGHUP is
 /// deliberately NOT handled, so `nohup` / an inherited ignore still applies.
 ///
-/// On unix both handlers are registered before this returns, so a
-/// registration failure surfaces as `Err` and a signal raised right after
-/// the call cannot hit the default (terminating) disposition. A repeated
-/// signal is a no-op once the flag is set; SIGKILL remains the escalation.
+/// The listener runs on a dedicated OS thread with its own current-thread
+/// tokio runtime, NOT on the node runtime. `finish_runtime` drops the node
+/// runtime before `TerminalFailure::finish()`, which may park in
+/// `UndurableFailure::wait_for_operator()` polling this same flag. tokio's
+/// process-wide sigaction is never uninstalled, so a listener task on the
+/// dropped runtime would leave SIGINT/SIGTERM silently swallowed and only
+/// SIGKILL could stop the parked node.
+///
+/// The handlers are registered before this returns (the thread reports the
+/// install result over a channel), so a registration failure surfaces as
+/// `Err` and a signal raised right after the call cannot hit the default
+/// (terminating) disposition. A repeated signal is a no-op once the flag is
+/// set; SIGKILL remains the escalation.
 fn spawn_shutdown_signal_listener(flag: Arc<AtomicBool>) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{signal, SignalKind};
-        let mut sigint = signal(SignalKind::interrupt()).context("install SIGINT handler")?;
-        let mut sigterm = signal(SignalKind::terminate()).context("install SIGTERM handler")?;
-        tokio::spawn(async move {
-            let name = tokio::select! {
-                _ = sigint.recv() => "SIGINT",
-                _ = sigterm.recv() => "SIGTERM",
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<Result<()>>(1);
+    std::thread::Builder::new()
+        .name("shutdown-signal".into())
+        .spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_io()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    let _ = ready_tx.send(Err(anyhow::Error::new(e)
+                        .context("build shutdown-signal runtime")));
+                    return;
+                }
             };
-            info!(signal = name, "Shutdown signal received");
-            flag.store(true, Ordering::SeqCst);
-        });
-    }
-    #[cfg(not(unix))]
-    tokio::spawn(async move {
-        match tokio::signal::ctrl_c().await {
-            Ok(()) => {
-                info!(signal = "SIGINT", "Shutdown signal received");
+            rt.block_on(async move {
+                // Register synchronously, report, THEN wait.
+                #[cfg(unix)]
+                let installed = {
+                    use tokio::signal::unix::{signal, SignalKind};
+                    signal(SignalKind::interrupt())
+                        .context("install SIGINT handler")
+                        .and_then(|sigint| {
+                            signal(SignalKind::terminate())
+                                .context("install SIGTERM handler")
+                                .map(|sigterm| (sigint, sigterm))
+                        })
+                };
+                #[cfg(not(unix))]
+                let installed =
+                    tokio::signal::windows::ctrl_c().context("install Ctrl-C handler");
+                let mut handlers = match installed {
+                    Ok(h) => h,
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(e));
+                        return;
+                    }
+                };
+                let _ = ready_tx.send(Ok(()));
+                #[cfg(unix)]
+                let name = tokio::select! {
+                    _ = handlers.0.recv() => "SIGINT",
+                    _ = handlers.1.recv() => "SIGTERM",
+                };
+                #[cfg(not(unix))]
+                let name = {
+                    handlers.recv().await;
+                    "SIGINT"
+                };
+                info!(signal = name, "Shutdown signal received");
                 flag.store(true, Ordering::SeqCst);
-            }
-            Err(e) => error!("Failed to listen for Ctrl-C: {e}"),
-        }
-    });
-    Ok(())
+            });
+        })
+        .context("spawn shutdown-signal thread")?;
+    ready_rx
+        .recv()
+        .context("shutdown-signal thread exited before reporting")?
 }
 
 #[cfg(all(test, unix))]
@@ -545,26 +586,54 @@ mod shutdown_signal_tests {
     use super::*;
     use nix::sys::signal::{raise, Signal};
 
-    async fn assert_signal_sets_flag(signal: Signal) {
+    /// Signals are process-wide: every live listener in this test binary
+    /// wakes on any raised SIGINT/SIGTERM. Serialize the signal tests so one
+    /// test's raise cannot satisfy another test's flag. Note: once these
+    /// tests run, tokio's handlers stay installed for the life of the test
+    /// binary, so a later Ctrl-C to the test process is ignored.
+    static SIGNAL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn wait_for_flag(flag: &AtomicBool, what: &str) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !flag.load(Ordering::SeqCst) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{what} did not set the shutdown flag within 2s"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn assert_signal_sets_flag(signal: Signal) {
         let flag = Arc::new(AtomicBool::new(false));
         // Install BEFORE raising: the default disposition kills the process.
         spawn_shutdown_signal_listener(flag.clone()).unwrap();
         raise(signal).unwrap();
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while !flag.load(Ordering::SeqCst) {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .unwrap_or_else(|_| panic!("{signal} did not set the shutdown flag"));
+        wait_for_flag(&flag, &signal.to_string());
     }
 
-    /// One test, sequential: signals are process-wide, so a parallel test
-    /// raising the other signal could otherwise set this test's flag.
-    #[tokio::test]
-    async fn sigterm_and_sigint_set_shutdown_flag() {
-        assert_signal_sets_flag(Signal::SIGTERM).await;
-        assert_signal_sets_flag(Signal::SIGINT).await;
+    /// One test, sequential: a fresh listener per phase, so the SIGINT
+    /// phase cannot be satisfied by the earlier SIGTERM delivery.
+    #[test]
+    fn sigterm_and_sigint_set_shutdown_flag() {
+        let _guard = SIGNAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        assert_signal_sets_flag(Signal::SIGTERM);
+        assert_signal_sets_flag(Signal::SIGINT);
+    }
+
+    /// `finish_runtime` drops the node runtime before `finish()` may park in
+    /// `wait_for_operator()` on the shutdown flag. The listener must survive
+    /// that drop, or SIGTERM is swallowed and only SIGKILL stops the node.
+    #[test]
+    fn sigterm_sets_flag_after_node_runtime_dropped() {
+        let _guard = SIGNAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let flag = Arc::new(AtomicBool::new(false));
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async { spawn_shutdown_signal_listener(flag.clone()) })
+            .unwrap();
+        drop(rt);
+        raise(Signal::SIGTERM).unwrap();
+        wait_for_flag(&flag, "SIGTERM after node runtime drop");
     }
 }
 
