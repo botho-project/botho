@@ -12,9 +12,11 @@ before staging the controller:
 
 Every grant is one main-signer ``prepare``. Its record is created exclusively
 before an exclusive submit marker, and ``tx_submit`` is called once. A grant
-with a marker is never prepared or submitted again. Any uncertainty holds the
-run for operator review; restarting resumes from the records, never from a
-replay.
+with a marker is never prepared or submitted again. A record without a marker
+was never sent; it is retried on later ticks (after all five nodes report its
+hash ``unknown``) and nothing new is signed until it is sent. Any uncertainty
+holds the run for operator review. A restart resumes from the records and
+never replays a submission.
 """
 import argparse
 import asyncio
@@ -79,6 +81,21 @@ def private_bytes(path, name, limit=1024 * 1024):
     return data
 
 
+def pinned_bytes(path, expected, name):
+    """Read a pinned file once and return the exact bytes that were hashed."""
+    need(isinstance(path, str) and Path(path).is_absolute() and re.fullmatch(r'[0-9a-f]{64}', str(expected)),
+         name + ' requires an absolute path and SHA256 pin')
+    data = Path(path).read_bytes()
+    need(hashlib.sha256(data).hexdigest() == expected, name + ' differs from launch pin')
+    return data
+
+
+def owner_only_dir(path, name):
+    info = Path(path).lstat()
+    need(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid() and info.st_mode & 0o077 == 0,
+         name + ' must be an owner-only directory')
+
+
 def latest_deadline(plan, infrastructure_end):
     """The last grant write that still leaves maturity, rehearsal and campaign time."""
     rehearsal = plan['rehearsal']
@@ -106,9 +123,10 @@ def load_manifest(path):
         raise Gate('manifest is not JSON') from error
     need(isinstance(m, dict) and set(m) == MANIFEST_FIELDS, 'manifest requires exactly the documented fields')
     need(m['schema_version'] == 1, 'unsupported prefund manifest')
-    pinned_file(m['plan_file'], m['plan_sha256'], 'plan')
-    plan = json.loads(Path(m['plan_file']).read_bytes())
+    # Parse the same bytes that were hashed: no second read of the plan file.
+    plan_bytes = pinned_bytes(m['plan_file'], m['plan_sha256'], 'plan')
     try:
+        plan = json.loads(plan_bytes)
         expand(plan)
     except (KeyError, TypeError, ValueError) as error:
         raise Gate('plan does not expand: ' + str(error)) from error
@@ -179,12 +197,12 @@ class Prefunder(Controller):
         self.m, self.plan, self.clock = manifest, plan, clock
         self.state = Path(manifest['state_dir'])
         self.state.mkdir(mode=0o700, parents=False, exist_ok=True)
-        info = self.state.lstat()
-        need(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid() and info.st_mode & 0o077 == 0,
-             'state_dir must be an owner-only directory')
+        owner_only_dir(self.state, 'state_dir')
         self.grants_dir, self.artifacts = self.state / 'grants', self.state / 'artifacts'
         for directory in (self.grants_dir, self.artifacts):
             directory.mkdir(mode=0o700, exist_ok=True)
+            # An existing directory is re-checked: exist_ok keeps its old mode.
+            owner_only_dir(directory, 'state_dir/' + directory.name)
         self.config = {'signer': manifest['signer']}
         self.targets = campaign_targets({'targets': manifest['targets']}, plan)
         if native is not None:
@@ -224,6 +242,10 @@ class Prefunder(Controller):
     def load_records(self):
         records = []
         names = sorted(p.name for p in self.grants_dir.iterdir())
+        partial = [n for n in names if n.endswith('.tmp')]
+        # atomic() was interrupted: the record itself still holds its previous state.
+        need(not partial, 'interrupted grant record update left ' + ', '.join(partial)
+             + '; review it against the record, then remove it')
         for index, name in enumerate(n for n in names if n.endswith('.json')):
             need(name == f'grant-{index:04d}.json', 'grant record sequence has a gap or a foreign file')
             row = json.loads(self.record_path(index).read_text())
@@ -259,6 +281,18 @@ class Prefunder(Controller):
         return reserved
 
     # ---- signer and RPC --------------------------------------------------
+
+    def producer_budget(self, calls, why):
+        """Refuse unless ``calls`` producer requests fit Rpc.reserve() with one to spare."""
+        producer = self.m['producer_role']
+        now = self.clock()
+        if now < self.j.get('backoff:' + producer, 0):
+            raise Quota(why + ': endpoint Retry-After')
+        used = self.j.db.execute('SELECT COUNT(*) FROM requests WHERE host=? AND at>?',
+                                 (producer, now - 60)).fetchone()[0]
+        if used + calls >= min(self.j.limits['max_rpc_per_endpoint_per_minute'],
+                               self.j.get('quota:' + producer, 100) // 2):
+            raise Quota(why)
 
     async def native(self, request):
         need(set(request) == {'operation'} | SIGNER_FIELDS.get(request.get('operation'), {None}),
@@ -329,12 +363,10 @@ class Prefunder(Controller):
         producer = self.m['producer_role']
         data = Path(row['artifact']).read_bytes()
         need(hashlib.sha256(data).hexdigest() == row['artifact_sha256'], 'grant artifact altered before submit')
-        # Never spend the marker on a request the local quota would refuse.
-        used = self.j.db.execute('SELECT COUNT(*) FROM requests WHERE host=? AND at>?',
-                                 (producer, self.clock() - 60)).fetchone()[0]
-        if used + 1 >= min(self.j.limits['max_rpc_per_endpoint_per_minute'],
-                           self.j.get('quota:' + producer, 100) // 2):
-            raise Quota('producer request budget before submit')
+        # Never spend the marker on a request the local quota would refuse. A
+        # deferral here leaves the record `prepared` without a marker: nothing was
+        # sent, and send_unsent() retries it on a later tick.
+        self.producer_budget(1, 'producer request budget before submit')
         create_exclusive(self.marker_path(row['index']), {'at': self.clock(), 'hash': row['hash']})
         row.update(state='submitting', submitted_at=self.clock())
         self.save(row)
@@ -368,6 +400,9 @@ class Prefunder(Controller):
         self.j.set('selection_latest', evidence)
         if not selected:
             return False  # Funding inputs or change are maturing; wait.
+        # fee_getRate and tx_submit both go to the producer. Check before signing
+        # so a fresh signature is never created when it cannot be sent at once.
+        self.producer_budget(2, 'producer request budget before signing')
         quote = await self.rpc.call(self.m['producer_role'], 'fee_getRate')
         self.gate(write=True)
         index = len(self.records)
@@ -407,6 +442,26 @@ class Prefunder(Controller):
         await self.submit(row)
         return True
 
+    def unsent(self):
+        """Records whose one tx_submit was never attempted: no marker exists."""
+        return [r for r in self.records
+                if r['state'] == 'prepared' and not self.marker_path(r['index']).exists()]
+
+    async def send_unsent(self, row):
+        """Submit a record that has no marker (Controller.admission_tick()).
+
+        No marker means nothing was sent, so one attempt is safe, but only if no
+        node has ever seen the hash. A quota deferral raises Quota and leaves the
+        record unchanged for the next tick.
+        """
+        self.gate(write=True)
+        # One status query plus the submit itself on the producer.
+        self.producer_budget(2, 'producer request budget before unsent grant')
+        statuses = await self.all_hosts('getTransactionStatus', {'hash': row['hash']})
+        need(all(s.get('status') == 'unknown' for s in statuses),
+             'unsubmitted grant %d unexpectedly known to the fleet' % row['index'])
+        await self.submit(row)
+
     async def resume(self):
         """Settle records left by a crash before anything new is offered."""
         # Persisted inventory is never trusted (controller.py): restore-scan everything.
@@ -414,12 +469,9 @@ class Prefunder(Controller):
         for row in self.records:
             marker = self.marker_path(row['index']).exists()
             if row['state'] == 'prepared' and not marker:
-                # Crash between the record and its marker. One attempt is allowed
-                # only if no node has ever seen the hash (Controller.admission_tick()).
-                statuses = await self.all_hosts('getTransactionStatus', {'hash': row['hash']})
-                need(all(s.get('status') == 'unknown' for s in statuses),
-                     'unsubmitted grant %d unexpectedly known to the fleet' % row['index'])
-                await self.submit(row)
+                # A crash or quota deferral between the record and its marker.
+                # tick() retries it through send_unsent() on every tick.
+                continue
             elif row['state'] == 'prepared':
                 # Crash after the marker: the one attempt may have been sent. Never resend.
                 row.update(state='submitting', submitted_at=json.loads(
@@ -443,6 +495,8 @@ class Prefunder(Controller):
         self.last_poll, self.last_poll_height = self.clock(), height
         scanned = False
         for row in pending:
+            if row['state'] == 'prepared':
+                continue  # Never sent: send_unsent() owns it, not the unresolved clock.
             statuses = await self.all_hosts('getTransactionStatus', {'hash': row['hash']})
             if not all(s.get('confirmed') and s.get('txHash') == row['hash'] for s in statuses):
                 need(self.clock() - row.get('submitted_at', row['prepared_at']) <= UNRESOLVED_SECONDS,
@@ -555,6 +609,11 @@ class Prefunder(Controller):
         if len(self.records) == self.total and not self.unconfirmed():
             await self.complete()
             return True
+        unsent = self.unsent()
+        if unsent:
+            # Even when quota defers it, nothing new is signed ahead of it.
+            await self.send_unsent(unsent[0])
+            return False
         if not self.unconfirmed():
             await self.sync()
             self.accounting()

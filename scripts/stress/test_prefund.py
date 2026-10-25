@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import prefund
 from prefund import Prefunder, SIGNER_FIELDS, latest_deadline, load_manifest
-from runtime import Gate, HOSTS, Quota
+from runtime import Gate, HOSTS, Quota, Rpc
 from test_targets import targets
 
 PRODUCER = HOSTS[2]  # n3 is the sole producer (#1576 decision 4).
@@ -553,6 +553,176 @@ class ReconcileTests(PrefundBase):
         with self.assertRaisesRegex(Gate, 'deadline'):
             self.tick(p)
         self.assertEqual(len(self.fleet.submits), 1)
+
+
+class ReservingFleet:
+    """The fake fleet behind main's real ``Rpc.reserve()`` request accounting.
+
+    ``Fleet.call`` alone never touches the journal's ``requests`` table, so the
+    prefunder's producer-budget checks would always see zero requests.
+    """
+
+    def __init__(self, fleet):
+        self.fleet, self.journal = fleet, None
+
+    async def call(self, host, method, params=None, timeout=10, write=False):
+        Rpc.reserve(self, host, method, 0)
+        return await self.fleet.call(host, method, params, timeout, write)
+
+
+class QuotaDeferralTests(PrefundBase):
+    def reserving(self):
+        m, plan = load_manifest(self.manifest_file())
+        p = Prefunder(m, plan, clock=lambda: self.now, rpc=ReservingFleet(self.fleet), native=self.fleet.signer)
+        p.rpc.journal = p.j
+        self.addCleanup(p.j.db.close)
+        return p
+
+    def limit(self, p):
+        return min(p.j.limits['max_rpc_per_endpoint_per_minute'], p.j.get('quota:' + PRODUCER, 100) // 2)
+
+    def used(self, p):
+        return p.j.db.execute('SELECT COUNT(*) FROM requests WHERE host=? AND at>?',
+                              (PRODUCER, self.now - 60)).fetchone()[0]
+
+    def fill(self, p):
+        """Other traffic exhausts the producer's 60 s budget right now."""
+        missing = self.limit(p) - self.used(p)
+        p.j.db.executemany('INSERT INTO requests(at,host,method,bytes) VALUES(?,?,?,?)',
+                           [(self.now, PRODUCER, 'other', 0)] * max(0, missing))
+
+    def step(self, p):
+        try:
+            return self.tick(p)
+        except Quota:
+            return None
+
+    def assertSubmittedOnce(self, p):
+        self.assertEqual(sorted(self.fleet.submits), sorted(r['hash'] for r in p.records if
+                                                            p.marker_path(r['index']).exists()))
+        self.assertEqual(len(self.fleet.submits), len(set(self.fleet.submits)))
+
+    def test_judge_repro_budget_too_small_never_strands_a_grant(self):
+        # The Judge's repro on PR #1596: the budget refuses the submit pre-check.
+        p = self.prefunder()
+        p.j.set('quota:' + PRODUCER, 2)
+        with self.assertRaisesRegex(Quota, 'before signing'):
+            self.tick(p)
+        # The budget is now checked before signing: no signature, no record.
+        self.assertEqual(p.records, [])
+        self.assertFalse(list((Path(self.m['state_dir']) / 'artifacts').iterdir()))
+        self.assertFalse(self.fleet.submits)
+        p.j.set('quota:' + PRODUCER, 1000)
+        for _ in range(20):
+            self.advance()
+            self.tick(p)  # Never a hold.
+        self.assertTrue(self.fleet.submits)
+        self.assertSubmittedOnce(p)
+
+    def test_submit_deferred_before_marker_is_retried_exactly_once(self):
+        p = self.reserving()
+        original = self.fleet.signer
+
+        async def signer(request):
+            result = await original(request)
+            if request['operation'] == 'inspect' and not p.records:
+                self.fill(p)  # A burst between signing and submission.
+            return result
+        p.signer = signer
+        with self.assertRaisesRegex(Quota, 'before submit'):
+            self.tick(p)
+        row = p.records[0]
+        self.assertEqual(row['state'], 'prepared')
+        self.assertFalse(p.marker_path(0).exists())
+        self.assertFalse(self.fleet.submits)
+        # Keep the producer saturated past the fifteen-minute unresolved bound.
+        for _ in range(17):
+            self.now += 61
+            self.fill(p)
+            self.assertIsNone(self.step(p))
+            self.assertFalse(self.fleet.submits)
+            self.assertEqual(len(p.records), 1)  # Nothing new signed ahead of it.
+        self.assertGreater(self.now - row['prepared_at'], prefund.UNRESOLVED_SECONDS)
+        # Budget frees: the real request count admits it, once.
+        for _ in range(6):
+            self.advance()
+            self.step(p)
+        self.assertEqual(self.fleet.submits.count(row['hash']), 1)
+        self.assertEqual(self.fleet.submits[0], row['hash'])
+        self.assertEqual(p.records[0]['state'], 'confirmed')
+        self.assertGreater(len(p.records), 1)  # Normal grants resumed.
+        self.assertSubmittedOnce(p)
+        # A restart sees the marker and never sends it again.
+        q = self.reserving()
+        self.step(q)
+        self.assertEqual(self.fleet.submits.count(row['hash']), 1)
+
+    def test_real_budget_pressure_defers_but_never_holds_or_resubmits(self):
+        # Blocks every 60 s with ticks every 3 s: up to ~20 grants are pending at
+        # once, so reconcile's five-host status polls press the producer's
+        # default 50-request window through the real Rpc.reserve() count.
+        p = self.reserving()
+        deferrals = []
+
+        async def fake_sleep(seconds, *args):
+            self.now += max(seconds, 1)  # Controller.sync()'s quota wait.
+        with patch('controller.asyncio.sleep', fake_sleep):
+            for i in range(300):
+                self.now += 3
+                if i % 20 == 19:
+                    self.fleet.mine(1)
+                try:
+                    self.tick(p)  # Any Gate fails the test.
+                except Quota as error:
+                    deferrals.append(str(error))
+                self.assertLessEqual(self.used(p), self.limit(p))
+        self.assertIn('producer request budget before signing', deferrals)
+        self.assertIn('shared endpoint request budget', deferrals)
+        self.assertGreaterEqual(sum(r['state'] == 'confirmed' for r in p.records), 50)
+        self.assertSubmittedOnce(p)
+        self.assertFalse(p.unsent())
+
+    def test_retry_holds_if_unsent_hash_is_known(self):
+        p = self.reserving()
+
+        async def submit(row):
+            raise Quota('deferred')
+        real, p.submit = p.submit, submit
+        self.step(p)
+        p.submit = real
+        self.fleet.known_override[(HOSTS[1], p.records[0]['hash'])] = 'pending'
+        self.advance()
+        with self.assertRaisesRegex(Gate, 'unexpectedly known'):
+            self.tick(p)
+        self.assertFalse(self.fleet.submits)
+
+
+class StateDirTests(PrefundBase):
+    def test_interrupted_record_update_has_its_own_hold(self):
+        p = self.prefunder()
+        self.offer_one(p)
+        (Path(self.m['state_dir']) / 'grants/grant-0000.json.tmp').write_text('{')
+        with self.assertRaisesRegex(Gate, 'interrupted grant record update'):
+            self.prefunder()
+
+    def test_existing_grants_dir_must_be_owner_only(self):
+        state = Path(self.m['state_dir'])
+        state.mkdir(mode=0o700)
+        (state / 'grants').mkdir(mode=0o700)
+        (state / 'grants').chmod(0o755)
+        with self.assertRaisesRegex(Gate, 'grants must be an owner-only'):
+            self.prefunder()
+
+    def test_plan_is_read_once(self):
+        reads = []
+        real = Path.read_bytes
+
+        def read_bytes(path):
+            reads.append(str(path))
+            return real(path)
+        with patch.object(Path, 'read_bytes', read_bytes):
+            load_manifest(self.manifest_file())
+        self.assertEqual(reads.count(self.m['plan_file']), 1)
 
 
 if __name__ == '__main__':

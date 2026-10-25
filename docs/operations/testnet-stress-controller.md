@@ -391,6 +391,10 @@ The order for an x run is:
 3. **Activate.** The controller's first setup tick full-scans the fleet. It
    holds unless every wallet's unspent balance equals its pinned value.
 
+Stage and activate promptly after prefunding. A lottery award to a campaign
+wallet between prefund completion and the first setup tick changes that
+wallet's balance, and the exact pin then holds the controller.
+
 The manifest is an owner-only JSON file with exactly these keys:
 
 - `schema_version` (1);
@@ -403,7 +407,11 @@ The manifest is an owner-only JSON file with exactly these keys:
   not one of the campaign wallets;
 - `wallets`, the `wallets.count` fresh campaign `{address, key}` entries;
 - `grants_per_wallet` and `grant_picocredits`;
-- `state_dir`, `deadline` and `infrastructure_end`.
+- `state_dir`, `deadline` and `infrastructure_end`. `infrastructure_end` must
+  be the same value as the deployment profile's `end`, which staging writes into
+  `launch.json` as `infrastructure_end`. The prefunder cannot read the profile
+  and does not cross-check it, so the deadline rule below is only as good as
+  this value.
 
 Every key file must be owner-only. The prefunder refuses a manifest if:
 
@@ -454,9 +462,18 @@ prefunder:
 
 A grant with a marker is **never prepared or submitted again**. An uncertain
 reply marks the grant `unknown` and holds the run. A grant left unconfirmed for
-15 minutes also holds. Pacing follows the plan's `max_inflight` and
-`max_normal_submissions_per_minute`. Nothing new is signed while any grant is
-uncertain.
+15 minutes after its submission also holds. Pacing follows the plan's
+`max_inflight` and `max_normal_submissions_per_minute`. Nothing new is signed
+while any grant is uncertain or unsent.
+
+The producer's request budget (the same per-endpoint count and `Retry-After`
+backoff that `Rpc` enforces) is checked before signing, with room for
+`fee_getRate` and `tx_submit`. It is checked again just before the marker is
+written. If that second check defers the grant, its record stays `prepared` with
+no marker. Nothing was sent, so every later tick retries it, as
+`Controller.admission_tick()` does: once all five nodes report its hash
+`unknown`, it is submitted once. A deferred, unsent grant is not subject to the
+15-minute hold. Only the write deadline bounds it.
 
 A grant is `confirmed` only when:
 
@@ -473,12 +490,17 @@ Any other transfer into the funding or campaign wallets holds the run.
 
 - it reloads every grant record and verifies each artifact's SHA-256;
 - it holds on any orphan artifact or marker that has no record;
+- it holds on a leftover `grant-NNNN.json.tmp`, which an interrupted record
+  update leaves behind. The record still holds its previous state. Review the
+  `.tmp` against it, then remove the `.tmp`;
+- it requires `state_dir`, `grants/` and `artifacts/` to be owner-only
+  directories, including directories that already exist;
 - it restore-scans the chain instead of trusting persisted inventory;
 - it re-queries every unconfirmed grant before offering anything new.
 
-A record without a marker is a crash between signing and submission. It is
-submitted once, but only if all five nodes report its hash `unknown`;
-otherwise the run holds. A failure writes `held-*.json` and stops; the operator
+A record without a marker is a crash or quota deferral between signing and
+submission. It is submitted once, but only if all five nodes report its hash
+`unknown`; otherwise the run holds. A failure writes `held-*.json` and stops; the operator
 reviews it before restarting. `STOP` in `state_dir` stops the prefunder.
 
 **Output.** When every grant is confirmed and the accounting is exact, a final
