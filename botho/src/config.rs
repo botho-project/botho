@@ -549,6 +549,22 @@ pub enum QuorumMode {
     Recommended,
 }
 
+/// Byzantine faults `f` a flat symmetric `t`-of-`n` quorum tolerates (#1546,
+/// #1605).
+///
+/// Liveness needs `n - t >= f` (a quorum survives `f` silent members) and
+/// safety needs `2t - n > f` (any two quorums share an honest member), so
+/// `f = min(n - t, 2t - n - 1)`, saturating at zero. An n-of-n quorum gives
+/// `f = 0`; 4-of-5 gives `f = 1`.
+///
+/// This is the single source of the formula: both
+/// [`QuorumConfig::explicit_byzantine_tolerance`] (config-derived) and the
+/// `node_getStatus` `quorumByzantineTolerance` field (derived from the quorum
+/// set the gate actually installed) call it, so the two cannot drift.
+pub fn byzantine_tolerance(n: usize, t: usize) -> usize {
+    n.saturating_sub(t).min((2 * t).saturating_sub(n + 1))
+}
+
 impl Default for QuorumMode {
     fn default() -> Self {
         Self::Recommended
@@ -754,8 +770,7 @@ impl QuorumConfig {
     /// or slow member halts the network.
     pub fn explicit_byzantine_tolerance(&self, local_peer_id: &str) -> usize {
         let n = self.explicit_quorum_size(local_peer_id);
-        let t = self.threshold as usize;
-        n.saturating_sub(t).min((2 * t).saturating_sub(n + 1))
+        byzantine_tolerance(n, self.threshold as usize)
     }
 
     /// Whether the quorum is *degenerate*: it tolerates zero Byzantine faults.
@@ -1605,6 +1620,22 @@ mod tests {
 
     fn explicit(threshold: u32, members: usize) -> QuorumConfig {
         explicit_with(threshold, (0..members).map(|_| random_peer_id()).collect())
+    }
+
+    /// #1605: the shared f helper (used by `explicit_byzantine_tolerance` and
+    /// the `quorumByzantineTolerance` status field).
+    #[test]
+    fn test_byzantine_tolerance_helper() {
+        assert_eq!(byzantine_tolerance(5, 4), 1);
+        assert_eq!(byzantine_tolerance(4, 4), 0);
+        assert_eq!(byzantine_tolerance(5, 3), 0);
+        assert_eq!(byzantine_tolerance(5, 5), 0);
+        assert_eq!(byzantine_tolerance(4, 3), 1);
+        assert_eq!(byzantine_tolerance(7, 5), 2);
+        assert_eq!(byzantine_tolerance(10, 7), 3);
+        assert_eq!(byzantine_tolerance(1, 1), 0);
+        assert_eq!(byzantine_tolerance(0, 0), 0);
+        assert_eq!(byzantine_tolerance(4, 9), 0, "saturates, never underflows");
     }
 
     #[test]

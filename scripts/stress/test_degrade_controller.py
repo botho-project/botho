@@ -31,6 +31,13 @@ REFERENCE = {
     "mem_total": 4 * GIB, "swap": 0, "rss": 350 * MIB,
 }
 HASH = "aa" * 32
+# The installed 4-of-5 explicit quorum every x-series validator reports (#1605).
+QUORUM = {
+    "quorumMode": "explicit", "quorumSize": 5, "quorumThreshold": 4,
+    "quorumByzantineTolerance": 1, "quorumFaultTolerant": True,
+    "quorumDegenerate": False, "quorumAutoMembers": 0,
+    "quorumGateIntersectionRefused": False,
+}
 
 
 def at(step, key):
@@ -59,6 +66,8 @@ class Fleet:
         # Metrics-server loop counters (#1591); a restart resets them.
         self.loop = {h: {"iterations": 1000, "within_1s": 1000, "delayed": 0} for h in HOSTS}
         self.calls = []
+        # Quorum fields merged into node_getStatus; per-host overrides (#1605).
+        self.quorum = {h: dict(QUORUM) for h in HOSTS}
 
     def advance(self):
         for host in HOSTS:
@@ -90,7 +99,8 @@ class Fleet:
                     "chainHeight": self.height[host],
                     "tipHash": "block-%d" % self.height[host],
                     "peerCount": 0 if host in self.frozen else 4,
-                    "scpPeerCount": 0 if host in self.frozen else 4}
+                    "scpPeerCount": 0 if host in self.frozen else 4,
+                    **self.quorum[host]}
         if method == "getBlockByHeight":
             h = params["height"]
             return {"hash": "genesis" if h == 0 else "block-%d" % h,
@@ -149,7 +159,8 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
         c.config = {"node_sha256": "hash", "infrastructure_end": START + 82 * 3600,
                     "resource_baselines": {h: dict(REFERENCE) for h in HOSTS}}
         c.plan = {"network": "botho-testnet", "node_commit": "commit",
-                  "genesis": "genesis", "schema_version": 2, "seed": 7}
+                  "genesis": "genesis", "schema_version": 2, "seed": 7,
+                  "faults": {"validator_degrade_phase": steps}}
         c.degrade_steps = SUMMARY["degrade_steps"] if steps else []
         c.j.set("status", "running")
         c.j.set("setup_start", START - 8 * 3600)
@@ -247,6 +258,80 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
         fresh = self.make()
         fresh.j.set("start", None)
         self.assertIsNone(fresh.fault_view(at("D1", "fault_start")))
+
+    # -- installed quorum gate (#1605) --------------------------------------
+
+    def funding_intents(self):
+        return self.c.j.db.execute(
+            "SELECT COUNT(*) FROM intents WHERE id LIKE 'funding-%'").fetchone()[0]
+
+    async def test_degrade_plan_halts_on_first_tick_without_4_of_5(self):
+        deviations = [
+            {"quorumSize": 4, "quorumByzantineTolerance": 0},  # silent 4-of-4
+            {"quorumThreshold": 5},
+            {"quorumByzantineTolerance": 0},
+            {"quorumMode": "recommended"},
+            {"quorumFaultTolerant": False},
+            {"quorumDegenerate": True},
+            {"quorumAutoMembers": 1},
+            {"quorumGateIntersectionRefused": True},
+            {"quorumSize": None},  # before the first gate evaluation
+        ]
+        for host, deviation in zip(HOSTS * 2, deviations):
+            with self.subTest(host=host, deviation=deviation):
+                self.fleet = Fleet(self)
+                self.c = self.make()
+                self.fleet.quorum[host].update(deviation)
+                self.now = at("D1", "fault_start") - 600
+                await self.monitor(self.now + 300)
+                self.assertTrue(self.held())
+                self.assertIn("installed quorum is not explicit 4-of-5", self.reason())
+                self.assertEqual(self.now, at("D1", "fault_start") - 600 + 15, "first tick")
+                self.assertEqual(self.c.fresh, 0, "never fresh, so gate() refuses funding")
+                self.assertEqual(self.funding_intents(), 0)
+                with self.clock(), self.assertRaises(Gate):
+                    self.c.gate()
+
+    async def test_degrade_plan_halts_on_a_binary_without_quorum_fields(self):
+        self.fleet.quorum[N3] = {}
+        self.now = at("D1", "fault_start") - 600
+        await self.monitor(self.now + 300)
+        self.assertTrue(self.held())
+        self.assertIn("quorumMode=None", self.reason())
+        self.assertEqual(self.funding_intents(), 0)
+
+    async def test_degrade_plan_passes_with_4_of_5_everywhere(self):
+        self.now = at("D1", "fault_start") - 600
+        await self.monitor(self.now + 60)
+        self.assertFalse(self.held(), self.reason())
+        self.assertGreater(self.c.fresh, 0)
+
+    async def test_non_degrade_plan_ignores_quorum_shape(self):
+        self.c = self.make(steps=False)
+        for host in HOSTS:
+            self.fleet.quorum[host].update({"quorumSize": 4, "quorumByzantineTolerance": 0,
+                                            "quorumMode": "recommended"})
+        self.now = at("D1", "fault_start") - 600
+        await self.monitor(self.now + 60)
+        self.assertFalse(self.held(), self.reason())
+
+    async def test_quorum_checked_on_every_tick_not_only_launch(self):
+        self.now = at("D1", "fault_start") - 600
+        await self.monitor(self.now + 300,
+                           {self.now + 60: lambda: self.fleet.quorum[N5].update(quorumThreshold=3)})
+        self.assertTrue(self.held())
+        self.assertIn("quorumThreshold=3", self.reason())
+
+    async def test_expected_down_host_is_skipped_like_check_identity(self):
+        # D1 stops A; its status is None and so is not quorum-checked.
+        self.now = at("D1", "fault_start") - 30
+
+        def stop():
+            self.fleet.stop(A)
+            self.fleet.quorum[A] = {}
+
+        await self.monitor(at("D1", "fault_start") + 60, {at("D1", "fault_start"): stop})
+        self.assertFalse(self.held(), self.reason())
 
     # -- negative: the relaxation is scoped to host and window --------------
 
@@ -704,6 +789,9 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
     async def test_without_degrade_steps_call_sequence_is_unchanged(self):
         """The pre-#1587 sequence, written from main's all-HOSTS formulas."""
         self.c = self.make(steps=False)
+        # A pre-#1605 binary reports no quorum shape; the non-degrade plan
+        # must not care.
+        self.fleet.quorum = {h: {} for h in HOSTS}
         self.now = at("D1", "fault_start") + 60  # would be inside D1
         await self.monitor(self.now + 30)
         self.assertFalse(self.held(), self.reason())

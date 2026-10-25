@@ -26,6 +26,7 @@ Paths, unit names and hostnames are derived from `run_id`, so a new run never
 needs a token-rename step.
 """
 import argparse
+import errno
 import ipaddress
 import json
 import os
@@ -33,24 +34,35 @@ from pathlib import Path
 import re
 import stat
 import sys
+import time
 import tomllib
 
 import fleet_provision as fp
 from observer import node_config
-from runtime import HOSTS, campaign_targets
+from runtime import HOSTS, QUORUM_THRESHOLD, campaign_targets
 
 VALIDATORS = tuple(role for role in fp.ROLES if role != 'controller')
 assert len(VALIDATORS) == len(HOSTS) == 5
 # Explicit-mode threshold for five validators: 4-of-5, f = 1 (#1576). A module
-# constant on purpose; it is not a profile knob.
-QUORUM_THRESHOLD = 4
+# constant on purpose; it is not a profile knob. Imported from runtime so the
+# controller's check_quorum (#1605) verifies the same value this renders.
+assert QUORUM_THRESHOLD == 4
 MIN_PEERS = 4
 MINT_THREADS = 1
 NODE_USER = 'botho'  # Created by fleet_provision.bootstrap(); observers share it.
 PROFILE_KEYS = {'run_id', 'producer_role', 'node_end', 'rpc_requests_per_minute'}
 STAGING_RUN_ID = re.compile(r'[a-z][a-z0-9-]{7,63}')  # staging.prepare()'s run_id rule.
 PRIVATE_NETS = tuple(ipaddress.ip_network(n) for n in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))
-PEER_ID = re.compile(r'(?:12D3KooW|Qm)[1-9A-HJ-NP-Za-km-z]{36,52}')
+PEER_ID = re.compile(r'12D3KooW[1-9A-HJ-NP-Za-km-z]{44}')
+BASE58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+# Identity multihash (0x00, length 0x24) of a protobuf PublicKey {KeyType
+# Ed25519 = 1 (08 01), Data: 32 bytes (12 20)}. Node keys are always Ed25519
+# (`Keypair::generate_ed25519()` in botho/src/network/node_key.rs).
+ED25519_PEER_PREFIX = bytes.fromhex('002408011220')
+# Mirrors MAX_TESTNET_MINT_WINDOW_SECS in botho/src/commands/run.rs, which
+# `TestnetMintWindow::new` enforces at node start: a node_end further out than
+# this makes the producer refuse `--testnet-mint-until`.
+MAX_TESTNET_MINT_WINDOW_SECS = 82 * 60 * 60
 MNEMONIC = re.compile(r'[a-z]+(?: [a-z]+)*')
 MULTIADDR = re.compile(r'/ip4/(?P<ip>[0-9.]+)/tcp/(?P<port>[0-9]+)/p2p/(?P<peer>[1-9A-HJ-NP-Za-km-z]+)')
 FORBIDDEN = ('ledger_rules', 'botho.io') + HOSTS
@@ -103,6 +115,25 @@ def validate_profile(profile):
     return profile
 
 
+def _now():
+    return int(time.time())
+
+
+def check_node_end(profile, now=None):
+    """Require `now < node_end <= now + MAX_TESTNET_MINT_WINDOW_SECS`.
+
+    The producer's `--testnet-mint-until node_end` is refused at node start
+    beyond the Rust bound, and a past node_end would stop every node at once.
+    `now` is injectable for tests; `None` reads the wall clock.
+    """
+    now = _now() if now is None else now
+    end = validate_profile(profile)['node_end']
+    _need(end > now, 'node_end is not in the future')
+    _need(end <= now + MAX_TESTNET_MINT_WINDOW_SECS,
+          'node_end is more than %d h ahead (MAX_TESTNET_MINT_WINDOW_SECS)' % (MAX_TESTNET_MINT_WINDOW_SECS // 3600))
+    return end
+
+
 def paths(run):
     """Every on-host name for one run, derived from the run id alone."""
     fp.validate_run_id(run)
@@ -145,6 +176,41 @@ def validate_inventory(inventory, run):
     return {role: out[role] for role in fp.ROLES}
 
 
+def b58encode(data):
+    number = int.from_bytes(data, 'big')
+    out = ''
+    while number:
+        number, digit = divmod(number, 58)
+        out = BASE58[digit] + out
+    return '1' * (len(data) - len(data.lstrip(b'\0'))) + out
+
+
+def b58decode(text):
+    number = 0
+    for char in text:
+        index = BASE58.find(char)
+        _need(index >= 0, 'invalid base58 character')
+        number = number * 58 + index
+    body = number.to_bytes((number.bit_length() + 7) // 8, 'big')
+    return b'\0' * (len(text) - len(text.lstrip('1'))) + body
+
+
+def parse_peer_id(value):
+    """Return the 32-byte Ed25519 public key behind a base58 PeerId, or raise.
+
+    Stricter than libp2p: only the identity-multihash Ed25519 form
+    `00 24 08 01 12 20 || key` is accepted (the fleet has no RSA keys), and the
+    string must re-encode to itself, so a regex-valid but undecodable ID that
+    the node would silently drop from its quorum (#1605) is refused here.
+    """
+    _need(isinstance(value, str) and PEER_ID.fullmatch(value), 'peer_id is not base58 12D3KooW... form')
+    raw = b58decode(value)
+    _need(len(raw) == len(ED25519_PEER_PREFIX) + 32, 'peer_id is not a 38-byte Ed25519 identity multihash')
+    _need(raw.startswith(ED25519_PEER_PREFIX), 'peer_id multihash prefix is not Ed25519 identity')
+    _need(b58encode(raw) == value, 'peer_id does not round-trip through base58')
+    return raw[len(ED25519_PEER_PREFIX):]
+
+
 def validate_identities(identities):
     """Return {role: peer_id} for n1..n5; distinct, so no member can equal self."""
     _need(isinstance(identities, dict) and set(identities) >= set(VALIDATORS), 'identities required for n1..n5')
@@ -152,7 +218,10 @@ def validate_identities(identities):
     for role in VALIDATORS:
         record = identities[role]
         peer = record.get('peer_id') if isinstance(record, dict) else None
-        _need(isinstance(peer, str) and PEER_ID.fullmatch(peer), 'invalid peer_id for ' + role)
+        try:
+            parse_peer_id(peer)
+        except ValueError as error:
+            raise ValueError('invalid peer_id for %s: %s' % (role, error)) from None
         _need(peer not in out.values(), 'duplicate peer_id for %s: self would appear in members' % role)
         out[role] = peer
     return out
@@ -165,12 +234,28 @@ def validate_mnemonic(value):
 
 
 def read_private(path):
-    """Read an owner-only regular file (no symlink); used for the producer mnemonic."""
-    path = Path(path)
-    info = path.lstat()
-    _need(stat.S_ISREG(info.st_mode), 'producer mnemonic must be a regular file, not a symlink')
-    _need(info.st_mode & 0o077 == 0, 'producer mnemonic file must be owner-only (mode 0600)')
-    return path.read_text().strip()
+    """Read an owner-only regular file (no symlink); used for the producer mnemonic.
+
+    Opened with O_NOFOLLOW, and every check runs on the opened fd, so there is
+    no lstat-then-open window in which the path could be swapped (#1605).
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as error:
+        # ELOOP (Linux, macOS) or EMLINK (FreeBSD): the final component is a symlink.
+        if error.errno in (errno.ELOOP, errno.EMLINK):
+            raise ValueError('producer mnemonic must be a regular file, not a symlink') from None
+        raise ValueError('cannot open producer mnemonic: %s' % error.strerror) from None
+    try:
+        info = os.fstat(fd)
+        _need(stat.S_ISREG(info.st_mode), 'producer mnemonic must be a regular file, not a symlink')
+        _need(info.st_uid == os.geteuid(), 'producer mnemonic file must be owned by the current user')
+        _need(info.st_mode & 0o077 == 0, 'producer mnemonic file must be owner-only (mode 0600)')
+    except BaseException:
+        os.close(fd)
+        raise
+    with os.fdopen(fd, 'r') as stream:
+        return stream.read().strip()
 
 
 def _role(role):
@@ -294,10 +379,11 @@ def check_config(role, text, inventory, identities, profile):
     return doc
 
 
-def render_node_unit(role, inventory, profile):
+def render_node_unit(role, inventory, profile, now=None):
     """The validator's systemd unit; the producer alone carries the mint flags."""
     _role(role)
     profile = validate_profile(profile)
+    check_node_end(profile, now)
     run = profile['run_id']
     ips = validate_inventory(inventory, run)
     p = paths(run)
@@ -337,9 +423,10 @@ WantedBy=multi-user.target
     return text
 
 
-def render_node_stop(profile):
+def render_node_stop(profile, now=None):
     """(service, timer) that stop the node unit at the absolute `node_end`."""
     profile = validate_profile(profile)
+    check_node_end(profile, now)
     p = paths(profile['run_id'])
     service = f'''[Unit]
 Description=Stop the qualification validator at node_end
@@ -397,16 +484,17 @@ def render_staging_fragment(inventory, profile):
     return {'targets': targets, 'observers': observers}
 
 
-def render_payloads(inventory, identities, profile, producer_mnemonic):
+def render_payloads(inventory, identities, profile, producer_mnemonic, now=None):
     """{role: {file name: text}} plus the staging fragment; no I/O."""
     profile = validate_profile(profile)
-    service, timer = render_node_stop(profile)
+    now = _now() if now is None else now
+    service, timer = render_node_stop(profile, now)
     names = json.dumps(paths(profile['run_id']), indent=2, sort_keys=True) + '\n'
     out = {}
     for role in VALIDATORS:
         mnemonic = producer_mnemonic if role == profile['producer_role'] else None
         out[role] = {'config.toml': render_config(role, inventory, identities, profile, mnemonic),
-                     'node.service': render_node_unit(role, inventory, profile),
+                     'node.service': render_node_unit(role, inventory, profile, now),
                      'node-stop.service': service, 'node-stop.timer': timer,
                      'nginx.conf': render_nginx(role, inventory, profile), 'paths.json': names}
     return out, render_staging_fragment(inventory, profile)

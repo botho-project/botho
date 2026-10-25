@@ -198,6 +198,19 @@ pub struct QuorumGateSnapshot {
     /// majority-threshold set over the same members).
     pub intersection_refused: bool,
 
+    /// Size `n` of the quorum set the gate actually INSTALLED, including self
+    /// (#1605). Taken from the final quorum set after the threshold clamp and
+    /// any intersection-refusal fallback (kept previous set, or the majority
+    /// seed), never from the candidate or the config. An unparseable
+    /// `[network.quorum] member` that the gate dropped is therefore NOT
+    /// counted here.
+    pub quorum_size: usize,
+
+    /// Threshold `t` of the quorum set the gate actually INSTALLED (#1605),
+    /// with the same post-clamp, post-fallback provenance as
+    /// [`Self::quorum_size`].
+    pub quorum_threshold: u32,
+
     /// Per-peer gate classification (#707, P4.2). These are the base58 PeerId
     /// strings of the CONNECTED peers, partitioned exactly as the gate
     /// evaluation above partitioned them — the single source of truth for the

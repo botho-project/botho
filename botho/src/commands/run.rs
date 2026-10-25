@@ -3411,6 +3411,10 @@ fn gated_scp_quorum_set(
         suppressed_peers,
         max_auto_members: quorum_cfg.max_auto_members,
         intersection_refused,
+        // #1605: report the INSTALLED set (post-clamp, post-fallback), not the
+        // candidate, so `node_getStatus` shows what consensus actually uses.
+        quorum_size: quorum_set.members.len(),
+        quorum_threshold: quorum_set.threshold,
         curated_peer_ids,
         auto_peer_ids,
         suppressed_peer_ids,
@@ -4984,6 +4988,124 @@ mod tests {
         let (qs, _snap) = gated_scp_quorum_set(&cfg, &local, &curated, None);
         assert_eq!(qs.members.len(), 3, "self must appear exactly once");
         assert!(qs.is_valid(), "no duplicate members: {qs:?}");
+    }
+
+    /// #1605: an explicit 4-of-5 roster (self + 4 valid members) reports the
+    /// installed 5/4 shape in the gate snapshot, i.e. f = 1.
+    #[test]
+    fn gate_snapshot_reports_installed_explicit_4_of_5() {
+        let curated = synthetic_peers(4);
+        let cfg = QuorumConfig {
+            mode: QuorumMode::Explicit,
+            threshold: 4,
+            members: curated.iter().map(|p| p.to_string()).collect(),
+            ..QuorumConfig::default()
+        };
+        let local = ed25519_peer_id([0xB1; 32]);
+
+        // Only one member connected: explicit membership must not follow
+        // connectivity, so the installed set is still 5/4.
+        let (qs, snap) = gated_scp_quorum_set(&cfg, &local, &curated[..1], None);
+        assert_eq!(snap.quorum_size, 5);
+        assert_eq!(snap.quorum_threshold, 4);
+        assert_eq!(snap.quorum_size, qs.members.len());
+        assert_eq!(snap.quorum_threshold, qs.threshold);
+        assert!(!snap.intersection_refused);
+        assert_eq!(
+            crate::config::byzantine_tolerance(snap.quorum_size, snap.quorum_threshold as usize),
+            1
+        );
+    }
+
+    /// #1605: a roster member that does not parse as a PeerId is dropped by
+    /// the gate, so the installed set is 4-of-4 (f = 0) even though the config
+    /// lists five entries. The snapshot must report the INSTALLED size.
+    #[test]
+    fn gate_snapshot_counts_only_parseable_members() {
+        let curated = synthetic_peers(3);
+        let mut members: Vec<String> = curated.iter().map(|p| p.to_string()).collect();
+        // Not decodable as a PeerId: `0`, `O`, `I` and `l` are outside the
+        // base58btc alphabet. (A base58-clean string of the right length can
+        // still parse as an identity multihash in libp2p, which is why the
+        // stress renderer additionally pins the Ed25519 prefix.)
+        members.push("12D3KooW0OIl-not-a-peer-id".to_string());
+        let cfg = QuorumConfig {
+            mode: QuorumMode::Explicit,
+            threshold: 4,
+            members,
+            ..QuorumConfig::default()
+        };
+        let local = ed25519_peer_id([0xB2; 32]);
+
+        let (qs, snap) = gated_scp_quorum_set(&cfg, &local, &curated, None);
+        assert_eq!(qs.members.len(), 4, "self + 3 parseable members");
+        assert_eq!(snap.quorum_size, 4);
+        assert_eq!(snap.quorum_threshold, 4);
+        assert!(!snap.intersection_refused);
+        assert_eq!(
+            crate::config::byzantine_tolerance(snap.quorum_size, snap.quorum_threshold as usize),
+            0,
+            "a dropped member must surface as f = 0"
+        );
+        // The config-derived figure agrees (same helper, same parse-drop).
+        assert_eq!(cfg.explicit_byzantine_tolerance(&local.to_string()), 0);
+    }
+
+    /// #1605: an explicit threshold larger than the member count is clamped
+    /// by the gate; the snapshot reports the clamped (installed) threshold.
+    #[test]
+    fn gate_snapshot_reports_clamped_threshold() {
+        let curated = synthetic_peers(4);
+        let cfg = QuorumConfig {
+            mode: QuorumMode::Explicit,
+            threshold: 9,
+            members: curated.iter().map(|p| p.to_string()).collect(),
+            ..QuorumConfig::default()
+        };
+        let local = ed25519_peer_id([0xB3; 32]);
+
+        let (qs, snap) = gated_scp_quorum_set(&cfg, &local, &curated, None);
+        assert_eq!(qs.threshold, 5, "clamped to n");
+        assert_eq!(snap.quorum_size, 5);
+        assert_eq!(snap.quorum_threshold, 5, "snapshot shows the clamp, not 9");
+        assert!(!snap.intersection_refused);
+    }
+
+    /// #1605: when the intersection check refuses the candidate, the snapshot
+    /// reports the FALLBACK set (majority seed, or the kept previous set),
+    /// not the refused candidate threshold.
+    #[test]
+    fn gate_snapshot_reports_intersection_fallback() {
+        let curated = synthetic_peers(3);
+        let cfg = QuorumConfig {
+            mode: QuorumMode::Explicit,
+            threshold: 2, // 2-of-4: disjoint quorums, refused
+            members: curated.iter().map(|p| p.to_string()).collect(),
+            ..QuorumConfig::default()
+        };
+        let local = ed25519_peer_id([0xB4; 32]);
+
+        // Initial seed: majority fallback 3-of-4.
+        let (_qs, snap) = gated_scp_quorum_set(&cfg, &local, &curated, None);
+        assert!(snap.intersection_refused);
+        assert_eq!(snap.quorum_size, 4);
+        assert_eq!(
+            snap.quorum_threshold, 3,
+            "fallback threshold, not candidate 2"
+        );
+
+        // With a previous set: the kept previous set's shape is reported.
+        let previous = QuorumSet::new(
+            1,
+            vec![bth_consensus_scp_types::QuorumSetMember::Node(
+                peer_id_to_node_id(&local),
+            )],
+        );
+        let (qs, snap) = gated_scp_quorum_set(&cfg, &local, &curated, Some(&previous));
+        assert!(snap.intersection_refused);
+        assert_eq!(qs, previous);
+        assert_eq!(snap.quorum_size, 1);
+        assert_eq!(snap.quorum_threshold, 1);
     }
 
     #[test]
