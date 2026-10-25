@@ -68,6 +68,9 @@ jobs:
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Optimized upstream library tests
-        run: cargo test --manifest-path vendor/glib/Cargo.toml --release --locked --lib
+        # Serial: a test that panics on purpose inside a GLib callback races
+        # the parallel tests and aborts the binary ("failed to initiate
+        # panic", #1561).
+        run: cargo test --manifest-path vendor/glib/Cargo.toml --release --locked --lib -- --test-threads=1
       - name: Optimized string iterator regressions
         run: cargo test --manifest-path vendor/glib/Cargo.toml --release --locked --test security_variant_iter

@@ -55,12 +55,18 @@ class Fleet:
         self.unsubmitted = set()
         self.unconfirmed = set()
         self.unspent = set()  # chain_areKeyImagesSpent reports spent: False
+        self.metrics_down = set()  # metrics server unreachable (#1591)
+        # Metrics-server loop counters (#1591); a restart resets them.
+        self.loop = {h: {"iterations": 1000, "within_1s": 1000, "delayed": 0} for h in HOSTS}
         self.calls = []
 
     def advance(self):
         for host in HOSTS:
             if host not in self.frozen and host not in self.rpc_down:
                 self.height[host] += 1
+            if host not in self.rpc_down:
+                self.loop[host]["iterations"] += 10
+                self.loop[host]["within_1s"] += 10
 
     def stop(self, host):
         self.rpc_down.add(host)
@@ -70,6 +76,7 @@ class Fleet:
         self.rpc_down.discard(host)
         self.stopped.discard(host)
         self.pid[host] += 1
+        self.loop[host] = {"iterations": 0, "within_1s": 0, "delayed": 0}
         self.synced[host] = synced
         self.height[host] = max(self.height[h] for h in HOSTS)
 
@@ -80,7 +87,10 @@ class Fleet:
         if method == "node_getStatus":
             return {"network": "botho-testnet", "gitCommit": "commit",
                     "version": "0.6.0", "synced": self.synced[host],
-                    "chainHeight": self.height[host]}
+                    "chainHeight": self.height[host],
+                    "tipHash": "block-%d" % self.height[host],
+                    "peerCount": 0 if host in self.frozen else 4,
+                    "scpPeerCount": 0 if host in self.frozen else 4}
         if method == "getBlockByHeight":
             h = params["height"]
             return {"hash": "genesis" if h == 0 else "block-%d" % h,
@@ -103,6 +113,12 @@ class Fleet:
             return [{"height": i, "outputs": []}
                     for i in range(params["start_height"], params["end_height"] + 1)]
         raise AssertionError("unexpected RPC: " + method)
+
+    async def metrics(self, host, **_):
+        self.calls.append((host, "metrics", None))
+        if host in self.rpc_down or host in self.metrics_down:
+            raise ConnectionError("metrics refused: " + host)
+        return dict(self.loop[host])
 
     async def observer(self, host):
         self.calls.append((host, "observer", None))
@@ -150,7 +166,8 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
         c.inventory_initialized = False
         c.scan_lock = asyncio.Lock()
         c.admission_lock = asyncio.Lock()
-        c.rpc = Mock(call=AsyncMock(side_effect=self.fleet.rpc))
+        c.rpc = Mock(call=AsyncMock(side_effect=self.fleet.rpc),
+                     metrics=AsyncMock(side_effect=self.fleet.metrics))
         c.observer = AsyncMock(side_effect=self.fleet.observer)
         c.report = Mock()
         return c
@@ -699,7 +716,8 @@ class DegradeControllerTests(unittest.IsolatedAsyncioTestCase):
                 expected += [(h, "getBlockByHeight") for h in HOSTS]
         self.assertEqual([c[:2] for c in self.fleet.calls], expected)
         self.assertEqual(self.c.statuses[A], {"network": "botho-testnet",
-            "gitCommit": "commit", "version": "0.6.0", "synced": True, "chainHeight": 101})
+            "gitCommit": "commit", "version": "0.6.0", "synced": True, "chainHeight": 101,
+            "tipHash": "block-101", "peerCount": 4, "scpPeerCount": 4})
 
         self.fleet.calls.clear()
         self.c.closed = False

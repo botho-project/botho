@@ -201,7 +201,9 @@ The deployment profile is version 1 and contains these fields:
 
 OS accounts, private routing/firewalls, TLS servers, node deployment and absolute
 host shutdown timers are infrastructure prerequisites, not effects of this
-staging command. Verify the staged source/binary/profile hashes, forced export,
+staging command. For x runs, validator configs, node units, node-stop timers,
+nginx sites and this profile's `targets`/`observers[].node` are rendered by
+`scripts/stress/fleet_nodes.py` (see "Validator staging for x runs" below). Verify the staged source/binary/profile hashes, forced export,
 private TLS identities, five-node genesis/quorum readiness and zero opening
 wallet balances before separately activating observer and controller units.
 Activate before the frozen setup time; do not modify staged launch files or
@@ -217,6 +219,71 @@ results must identify the new endpoints and effective quorum. Continuous mining
 does not establish idle-memory coverage; the existing observer/controller checks
 must actually observe mining stopped. No unrelated issue-closure requirement is
 introduced by this profile.
+
+### Validator staging for x runs
+
+x-series validators are staged from the tracked, stdlib-only renderer
+`scripts/stress/fleet_nodes.py`, which replaces the config half of the untracked
+w-series `stage-nodes.py`. It makes no SSH calls:
+
+```sh
+python3 scripts/stress/fleet_nodes.py render --profile profile.json \
+  --inventory inventory.json --identities identity/ \
+  --producer-mnemonic /private/producer.mnemonic --output /private/payloads
+```
+
+The output directory must not exist. It receives one `payload-<role>` directory
+per validator (`config.toml`, `node.service`, `node-stop.service`,
+`node-stop.timer`, `nginx.conf`, `paths.json`, all mode 0600) and
+`staging-fragment.json`. The operator's untracked installer (rsync plus
+`install.sh`, accounts, journald) consumes the payloads; TLS identities are
+generated separately.
+
+- **Profile:** exactly `run_id` (`qYYYYMMDD-xN-<label>`, validated by
+  `fleet_provision.validate_run_id()`), `producer_role`, `node_end` and
+  `rpc_requests_per_minute`. Hostnames (`<role>.<run_id>.internal`), paths
+  (`/opt/botho-<run_id>`, `/var/lib/botho-<run_id>`) and unit names
+  (`botho-<run_id>.service`) are derived from `run_id`, so no token rename is
+  needed.
+- **Inventory:** all six roles with distinct RFC1918 `private_ip` values.
+  Identities (`nodes.json`) give a distinct `peer_id` for each of `n1`..`n5`.
+- **Ports:** `gossip_port`, `rpc_port` and `metrics_port` come from
+  `fleet_provision.GOSSIP_PORT`, `RPC_PORT` and `METRICS_PORT` (17110, 19090,
+  19100). The security group uses the same constant. RPC and metrics ports must
+  differ, because the testnet default `metrics_port` collides with `rpc_port`.
+- **Quorum:** explicit, `threshold = 4`, with the four other validators as
+  `members` and never self. The node counts self in the quorum size, so this is
+  4-of-5 with f = 1. The threshold is a module constant, not a profile knob.
+- **Isolation:** `fallback_seeds = false`, `dns_seeds.enabled = false`, and
+  `bootstrap_peers` are the four other validators' private
+  `/ip4/<ip>/tcp/17110/p2p/<id>` addresses. No public seed hostname is ever
+  rendered.
+- **Producer:** only `producer_role` gets `[wallet] mnemonic`,
+  `[minting] enabled = true` and `--mint --mint-threads 1
+  --testnet-mint-until <node_end>`. The mnemonic is read from an owner-only
+  regular file and appears only in that role's payload. Other roles get no
+  `[wallet]` and `[minting] enabled = false`. No config has `ledger_rules`.
+- **Exact keys:** every rendered config is parsed back with `tomllib` and must
+  have exactly the reviewed key set at each table level. The node ignores
+  unknown keys silently, so a typo is refused at render time.
+- **Unit:** `Restart=no` (any restart not made by the fault executor is a
+  failure), `TimeoutStopSec=30`, `RuntimeMaxSec` of 81.5 h, `IPAddressDeny=any`
+  with `IPAddressAllow` for localhost and each inventory IP only. A separate
+  node-stop timer stops the unit at `OnCalendar = node_end`.
+- **nginx:** `location = /rpc` proxies to `127.0.0.1:<rpc_port>/rpc` and
+  `location = /metrics` to `127.0.0.1:<metrics_port>/metrics`, the standalone
+  metrics server. Everything else returns 404. The RPC listener's own
+  `/metrics` lacks the node-loop histogram that the degrade recovery
+  measurements read.
+- **Staging fragment:** `targets` in `HOSTS` order (`n1`..`n5`, rpc URL
+  `https://<hostname>/rpc`, observer SSH as `botho@<hostname>`) and
+  `observers[].node` blocks. These are validated with `campaign_targets()` and
+  `observer.node_config()`; copy them into the deployment profile above, and
+  list the same URLs as the plan's `endpoints`.
+
+The renderer refuses a public inventory address, a malformed `run_id`, self in
+`members`, equal RPC and metrics ports, and a producer mnemonic file that is
+not owner-only.
 
 ## Opt-in discovery campaign (schema 2)
 
@@ -453,6 +520,124 @@ node-side: burst blocks were slow to produce and apply on the minter (#1545,
 tracked as #1550 / #1565). Judge ramp runs against ~797/hour rather than 810/hour
 until the ceiling is re-measured with #1550 / #1565 and this cap change in place
 (#1568).
+
+### Degrade-step recovery verdicts and measurements
+
+Every step in `degrade_steps` gets a recovery verdict and a set of
+time-to-rejoin measurements. These are the per-step checks of #1576 and the
+inputs to the ramp ceiling work in #1568. Evidence is kept in the journal under
+`degrade:<step>`. The monitor (inherited by `DiscoveryController`) records a
+sample on every 15 s tick from the first tick at or after `fault_start`. With no
+`degrade_steps`, or with a rehearsal-only plan (`degrade_steps: []`), nothing
+is read or recorded.
+
+**Restore clock.** The fault runner and its `faults.jsonl` live on the operator
+laptop, so the controller cannot read them. Every time below is therefore
+measured from the **planned** `restore_at`. Milestones are absolute in the
+journal and reported as seconds from `restore_at`. They are taken at 15 s
+monitor resolution.
+
+**Measurements**, per named host:
+
+- `first_reachable_at`: the first tick at or after `restore_at` when the host
+  answers `node_getStatus`.
+- `synced_at_tip_at`: the first such tick with `synced` true and
+  `chainHeight` at or above the live-fleet height. The live-fleet height is the
+  minimum `chainHeight` over reachable hosts the step does not name. That is
+  the same convention as `fleet_height()` and the rejoin gate.
+- `first_ballot_at`: the first such tick where `lastExternalizedSlot` has
+  advanced past its last value before `restore_at` (or, if no value was seen
+  before `restore_at`, past the live-fleet height at `restore_at`), or where
+  `scpBallotCounter > 0` on an `scpSlotIndex` above the live-fleet height at
+  `restore_at`.
+- `first_coinbase_at`: always `null` in x1. Only the producer mints, and
+  decision 4 never names it.
+- `catchup_blocks_per_second`: blocks the host gained from
+  `first_reachable_at` to `synced_at_tip_at`, divided by that interval. It is
+  `null` when either milestone is missing or they coincide.
+
+Per step, `outage_blocks` is the change in the live-fleet height from the
+first tick at or after `fault_start` to the first tick at or after
+`restore_at`.
+
+**Loop stalls.** The controller reads `botho_node_loop_iteration_seconds` and
+`botho_node_loop_delayed_total` with `Rpc.metrics(host)`, which is a read-only
+GET of `<rpc_url minus /rpc>/metrics`. Only the node's standalone metrics
+server on `metrics_port` serves those families (the global `REGISTRY`). #1589
+proxies `= /metrics` to that server. The RPC listener's own `/metrics` lacks
+both families, and a response without them is a `Gate`. The read uses the same
+TLS context, redirect refusal, 8 MiB bound and shared per-endpoint quota as
+`Rpc.call` (method `metrics`). Samples are taken from every host at the step's
+start and again over the last 45 s before `window_end` and at the verdict.
+That way a host the next step stops at the same instant still has an end
+sample.
+
+- Iterations over 1 s are `Δcount(le="+Inf") − Δcount(le="1")`. The Rust
+  encoder prints the 1.0 bound as `"1"`. This count is **recorded and reported
+  per host, and never fails a step** (decision 7). There is no plan knob for it.
+- The ≥ 5 s counter `botho_node_loop_delayed_total` is a **hard signal**. Any
+  increase on any host within the step fails the verdict.
+- A node restart resets both counters. When the step re-baselined the host,
+  when its start sample is missing because it was already stopped, or when any
+  counter went backwards, the delta counts from zero to the post-restart
+  value.
+
+**Fault observed.** For restart actions, `fault_observed` is true only if the
+step accepted a re-baseline (#1586) for every target. For `isolate`, it is true
+only if the target reported `scpPeerCount == 0` or `peerCount == 0` at least
+once in `[fault_start, restore_at)`. For `netem` it is `unknown`. A step the
+runner skipped (`skipped_late`) or failed to apply therefore records `false`
+and fails as `fault not exercised`.
+
+**Verdict.** At the first tick at or after `window_end` (after the rejoin
+gate), each of the following must hold. Otherwise the run halts with
+`<step>: recovery check failed: <which>`:
+
+- One tip: every reachable host returns the same `getBlockByHeight` hash at the
+  common minimum `chainHeight`. Only a host that a later, active step names may
+  be absent.
+- No `botho_node_loop_delayed_total` increase on any host, and a start and end
+  loop sample for every host.
+- `fault_observed` is not `false`.
+- For `expect: "safe_halt"`: no two hosts reported different `tipHash` at the
+  same height during the window, and the live-fleet height advanced again
+  after `restore_at`.
+- No campaign offer in `[fault_start, window_end)` is `skipped`, `unresolved`,
+  `expired`, `rejected` or `aborted`.
+
+Some evidence only exists after `window_end`, so the verdict stays `open` until
+all of it is in place:
+
+- every campaign offer in the window is `reconciled`;
+- the step's `deferred_hosts` receipts are verified (#1587);
+- the first accounting snapshot at or after `window_end` shows difference 0.
+  The verdict takes one itself whenever nothing is pending and the wallet
+  inventory has been established by a sync, because accounting is only exact
+  then. After a controller restart the inventory is untrusted until the first
+  sync, so the verdict waits rather than failing on empty balances.
+
+A missed payment or an accounting mismatch found while the verdict is open
+fails it. An unverified deferred receipt never fails here, but it also never
+passes: the phase-boundary gate (#1587) halts on it. If the controller did not
+see a step start within 60 s of `fault_start` (for example because it was
+down), the step is recorded as `unobserved`. That is not a halt, and it is
+never a pass.
+
+**Completion and report.** `workload_complete()` requires a stored `pass`
+verdict for every planned step. A controller restart that missed a verdict
+therefore cannot report `complete`. Open verdicts are settled once more after
+the final drain accounting. Every report, including the 6-hourly snapshots,
+has a `degrade` section with one row per step: verdict (`pass`, `fail`, `open`,
+`in_progress`, `not_started` or `unobserved`), failures, the evidence still
+awaited, `fault_observed`, the milestones in seconds from `restore_at`,
+`outage_blocks`, the catch-up rate, and per-host `over_1s` / `delayed` loop
+counts. `coverage.validator_degrade` is true only when there is at least one
+step and every step passed. An empty `degrade_steps` is never vacuous coverage.
+
+**Post-run review.** Metrics cannot show whether a stall coincided with a block
+apply. Correlating stalls with applies from node logs, and confirming a netem
+step (`fault_observed: unknown`) against `faults.jsonl`, remain operator
+post-run review.
 
 ### Fee evidence and honest coverage
 
