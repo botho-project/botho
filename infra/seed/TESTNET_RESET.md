@@ -348,10 +348,11 @@ What already exists in code:
 
 - **DNS-seed discovery** — `botho/src/network/dns_seeds.rs`
   (`seeds.botho.io` / `seeds.testnet.botho.io` TXT records, TTL caching, DNS
-  failure falls back to hardcoded seeds).
+  failure falls back to hardcoded seeds unless `fallback_seeds = false`).
 - **PEX** — `botho/src/network/pex.rs` (decentralized peer exchange).
 - **Bootstrap order** — explicit `config.bootstrap_peers` -> DNS -> hardcoded
-  fallback (`NetworkConfig::bootstrap_peers_async`).
+  fallback, unless `network.fallback_seeds = false` (#1578)
+  (`NetworkConfig::bootstrap_peers_async`).
 
 Single source of truth for the hardcoded fallback:
 

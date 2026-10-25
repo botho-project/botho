@@ -1285,6 +1285,21 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
     // reports "no data", not a plausible-looking constant.
     let quorum_gate = state.quorum_gate_snapshot();
 
+    // Installed quorum shape (#1605): `n` (including self) and `t` of the
+    // quorum set the gate actually INSTALLED (post-clamp, post-fallback), and
+    // `f` from the same shared formula `explicit_byzantine_tolerance` uses.
+    // Counts only (#707: member IDs stay on the operator-gated surface). Null
+    // until the first gate evaluation.
+    let quorum_mode = match state.quorum.mode {
+        crate::config::QuorumMode::Explicit => "explicit",
+        crate::config::QuorumMode::Recommended => "recommended",
+    };
+    let quorum_size = quorum_gate.as_ref().map(|g| g.quorum_size);
+    let quorum_threshold = quorum_gate.as_ref().map(|g| g.quorum_threshold);
+    let quorum_byzantine_tolerance = quorum_gate
+        .as_ref()
+        .map(|g| crate::config::byzantine_tolerance(g.quorum_size, g.quorum_threshold as usize));
+
     // Operator-action pre-signature rejected-requests counter (#750, §6 review
     // finding 3). Pre-signature failures (not-configured / unknown-signer /
     // bad-signature) are reachable by ANY unauthenticated caller, so they are
@@ -1294,9 +1309,7 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
     // store — never a fabricated constant (anti-#541–#544).
     let operator_rejected_requests = state.operator_audit_log.rejected_requests();
 
-    JsonRpcResponse::success(
-        id,
-        json!({
+    let mut status = json!({
             "version": env!("CARGO_PKG_VERSION"),
             "nodeVersion": env!("CARGO_PKG_VERSION"),
             "gitCommit": option_env!("GIT_HASH").unwrap_or("unknown"),
@@ -1362,8 +1375,21 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
             "lastExternalizedSlot": scp_slot.as_ref().and_then(|s| s.last_externalized_slot),
             "lastExternalizedSecondsAgo": scp_slot.as_ref().and_then(|s| s.last_externalized_seconds_ago),
             "effectiveSlotDurationSecs": scp_slot.as_ref().map(|s| s.effective_slot_duration_secs),
-        }),
-    )
+    });
+    // Installed quorum shape (#1605): mode from config; size, threshold and
+    // Byzantine tolerance from the gate's installed QuorumSet. The last three
+    // are null until the first evaluation. Inserted after the literal because
+    // one more key would exceed `json!`'s macro recursion limit.
+    if let Value::Object(map) = &mut status {
+        map.insert("quorumMode".into(), json!(quorum_mode));
+        map.insert("quorumSize".into(), json!(quorum_size));
+        map.insert("quorumThreshold".into(), json!(quorum_threshold));
+        map.insert(
+            "quorumByzantineTolerance".into(),
+            json!(quorum_byzantine_tolerance),
+        );
+    }
+    JsonRpcResponse::success(id, status)
 }
 
 /// Return the node's stable, verifiable identity (#500, epic #441 Phase P1).
@@ -5242,6 +5268,10 @@ mod tests {
         assert_eq!(result["quorumGateSuppressedPeers"], Value::Null);
         assert_eq!(result["quorumGateMaxAutoMembers"], Value::Null);
         assert_eq!(result["quorumGateIntersectionRefused"], Value::Null);
+        assert_eq!(result["quorumSize"], Value::Null);
+        assert_eq!(result["quorumThreshold"], Value::Null);
+        assert_eq!(result["quorumByzantineTolerance"], Value::Null);
+        assert_eq!(result["quorumMode"], json!("recommended"));
 
         // (2) Handle wired but nothing published yet: still null.
         let handle = Arc::new(RwLock::new(None));
@@ -5252,6 +5282,10 @@ mod tests {
         assert_eq!(result["quorumGateSuppressedPeers"], Value::Null);
         assert_eq!(result["quorumGateMaxAutoMembers"], Value::Null);
         assert_eq!(result["quorumGateIntersectionRefused"], Value::Null);
+        assert_eq!(result["quorumSize"], Value::Null);
+        assert_eq!(result["quorumThreshold"], Value::Null);
+        assert_eq!(result["quorumByzantineTolerance"], Value::Null);
+        assert_eq!(result["quorumMode"], json!("recommended"));
 
         // (3) Small honest cluster: gate admits everyone, suppresses no one.
         *handle.write().unwrap() = Some(QuorumGateSnapshot {
@@ -5260,6 +5294,8 @@ mod tests {
             suppressed_peers: 0,
             max_auto_members: 8,
             intersection_refused: false,
+            quorum_size: 5,
+            quorum_threshold: 4,
             curated_peer_ids: Vec::new(),
             auto_peer_ids: Vec::new(),
             suppressed_peer_ids: Vec::new(),
@@ -5270,6 +5306,9 @@ mod tests {
         assert_eq!(quiet["quorumGateSuppressedPeers"], json!(0));
         assert_eq!(quiet["quorumGateMaxAutoMembers"], json!(8));
         assert_eq!(quiet["quorumGateIntersectionRefused"], json!(false));
+        assert_eq!(quiet["quorumSize"], json!(5));
+        assert_eq!(quiet["quorumThreshold"], json!(4));
+        assert_eq!(quiet["quorumByzantineTolerance"], json!(1));
 
         // (4) Sybil flood: the SAME handle now reports active suppression —
         // every field must move with the snapshot (not-a-constant proof).
@@ -5279,6 +5318,8 @@ mod tests {
             suppressed_peers: 22,
             max_auto_members: 8,
             intersection_refused: true,
+            quorum_size: 4,
+            quorum_threshold: 4,
             curated_peer_ids: Vec::new(),
             auto_peer_ids: Vec::new(),
             suppressed_peer_ids: Vec::new(),
@@ -5288,6 +5329,10 @@ mod tests {
         assert_eq!(flooded["quorumAutoMembers"], json!(8));
         assert_eq!(flooded["quorumGateSuppressedPeers"], json!(22));
         assert_eq!(flooded["quorumGateIntersectionRefused"], json!(true));
+        // 4-of-4 installed: f = 0 (#1605).
+        assert_eq!(flooded["quorumSize"], json!(4));
+        assert_eq!(flooded["quorumThreshold"], json!(4));
+        assert_eq!(flooded["quorumByzantineTolerance"], json!(0));
         assert_ne!(
             quiet["quorumGateSuppressedPeers"], flooded["quorumGateSuppressedPeers"],
             "quorumGateSuppressedPeers must track the live snapshot, not a constant"
@@ -5296,6 +5341,33 @@ mod tests {
             quiet["quorumGateIntersectionRefused"], flooded["quorumGateIntersectionRefused"],
             "quorumGateIntersectionRefused must track the live snapshot, not a constant"
         );
+
+        // (5) 5-of-3 installed: f = min(2, 0) = 0 (#1605).
+        *handle.write().unwrap() = Some(QuorumGateSnapshot {
+            curated_members: 4,
+            auto_members: 0,
+            suppressed_peers: 0,
+            max_auto_members: 8,
+            intersection_refused: false,
+            quorum_size: 5,
+            quorum_threshold: 3,
+            curated_peer_ids: Vec::new(),
+            auto_peer_ids: Vec::new(),
+            suppressed_peer_ids: Vec::new(),
+        });
+        let five_three = handle_node_status(json!(1), &state).await.result.unwrap();
+        assert_eq!(five_three["quorumSize"], json!(5));
+        assert_eq!(five_three["quorumThreshold"], json!(3));
+        assert_eq!(five_three["quorumByzantineTolerance"], json!(0));
+
+        // (6) `quorumMode` reflects config.
+        let mut explicit_state = fresh_state().with_quorum_gate_status(handle.clone());
+        explicit_state.quorum.mode = crate::config::QuorumMode::Explicit;
+        let explicit = handle_node_status(json!(1), &explicit_state)
+            .await
+            .result
+            .unwrap();
+        assert_eq!(explicit["quorumMode"], json!("explicit"));
     }
 
     /// #543: `minting_getStatus.blocksFound` reflects the live count from the

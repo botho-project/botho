@@ -5,6 +5,7 @@ import contextlib
 import email.utils
 import hashlib
 import json
+import math
 import os
 import re
 import ssl
@@ -17,6 +18,11 @@ import urllib.parse
 
 HOSTS = ('seed.botho.io', 'seed2.botho.io', 'faucet.botho.io',
          'eu.seed.botho.io', 'ap.seed.botho.io')
+# Explicit-mode threshold for the five x-series validators: 4-of-5, f = 1
+# (#1576). Defined here, not in fleet_nodes, because the controller host only
+# receives staging.CODE: fleet_nodes re-exports it to render configs, and
+# check_quorum reads it to verify the installed quorum (#1605).
+QUORUM_THRESHOLD = 4
 TERMINAL = ('reconciled', 'skipped', 'rejected', 'expired', 'aborted')
 PENDING = ('prepared', 'submitting', 'accepted', 'unknown', 'confirmed', 'recipient_verified')
 # The subset of PENDING still occupying chain/ingress capacity: not yet
@@ -275,6 +281,10 @@ class Rpc:
         return self.journal.db.execute('INSERT INTO requests(at,host,method,bytes) VALUES(?,?,?,?)',
                                       (now, host, method, bytes_count)).lastrowid
 
+    async def metrics(self, host, timeout=10):
+        """Loop-stall counters from the host's metrics server (#1591); see read_metrics."""
+        return await read_metrics(self, host, timeout)
+
     async def call(self, host, method, params=None, timeout=10, write=False):
         payload = json.dumps({'jsonrpc':'2.0', 'id':1404, 'method':method, 'params':params or {}}).encode()
         async with self.locks[host]:
@@ -322,10 +332,183 @@ class Rpc:
                     (time.monotonic()-start,status,request_id))
 
 
+# Loop-stall families served only by the node's standalone metrics server
+# (`metrics_port`, the global REGISTRY), never by the RPC listener's /metrics
+# (#1591). #1589 proxies `https://<host>/metrics` to that server.
+LOOP_BUCKET = 'botho_node_loop_iteration_seconds_bucket'
+LOOP_DELAYED = 'botho_node_loop_delayed_total'
+LOOP_KEYS = ('iterations', 'within_1s', 'delayed')
+METRICS_BYTES = 8*1024*1024
+_SAMPLE = re.compile(r'([a-zA-Z_:][a-zA-Z0-9_:]*)(\{[^}]*\})?[ \t]+(\S+)(?:[ \t]+\S+)?')
+
+
+def _metric_count(value):
+    try:
+        number = float(value)
+    except ValueError as error:
+        raise Gate('malformed loop metric value') from error
+    if not math.isfinite(number) or number < 0 or not number.is_integer():
+        raise Gate('malformed loop metric value')
+    return int(number)
+
+
+def parse_loop_metrics(text):
+    """The two loop families from a metrics-server exposition.
+
+    Returns cumulative ``iterations`` (the ``le="+Inf"`` bucket),
+    ``within_1s`` (the ``le="1"`` bucket; the Rust encoder prints 1.0 as
+    "1") and ``delayed`` (iterations >= 5 s). Every other family is ignored.
+    """
+    buckets, delayed = {}, None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        match = _SAMPLE.fullmatch(line)
+        if not match or match.group(1) not in (LOOP_BUCKET, LOOP_DELAYED):
+            continue
+        name, labels, value = match.groups()
+        if name == LOOP_DELAYED:
+            if delayed is not None:
+                raise Gate('duplicate loop metric sample')
+            delayed = _metric_count(value)
+            continue
+        bound = re.search(r'(?:^|[{,])le="([^"]*)"', labels or '')
+        if not bound:
+            raise Gate('malformed loop histogram bucket')
+        try:
+            upper = float(bound.group(1))
+        except ValueError as error:
+            raise Gate('malformed loop histogram bucket') from error
+        if upper in buckets:
+            raise Gate('duplicate loop metric sample')
+        buckets[upper] = _metric_count(value)
+    if delayed is None or math.inf not in buckets or 1.0 not in buckets:
+        raise Gate('loop metric families missing from metrics server')
+    if buckets[1.0] > buckets[math.inf]:
+        raise Gate('malformed loop histogram bucket')
+    return {'iterations': buckets[math.inf], 'within_1s': buckets[1.0], 'delayed': delayed}
+
+
+def loop_delta(before, after, restarted=False):
+    """Loop-stall counts accrued from ``before`` to ``after``.
+
+    A node restart resets the counters: ``restarted`` (the step re-baselined
+    this host), a missing ``before``, or any counter going backwards all count
+    from zero up to ``after``. ``over_1s`` is the +Inf delta minus the
+    ``le="1"`` delta; ``delayed`` is the >= 5 s counter delta.
+    """
+    reset = restarted or before is None or any(after[k] < before[k] for k in LOOP_KEYS)
+    base = dict.fromkeys(LOOP_KEYS, 0) if reset else before
+    delta = {k: after[k]-base[k] for k in LOOP_KEYS}
+    over = delta['iterations']-delta['within_1s']
+    if over < 0:
+        raise Gate('malformed loop histogram delta')
+    return {'over_1s': over, 'delayed': delta['delayed'], 'reset': reset}
+
+
+def _http_backoff(journal, host, error):
+    retry = error.headers.get('Retry-After', '60')
+    if retry.isdecimal():
+        delay = int(retry)
+    else:
+        try:
+            delay = max(0,email.utils.parsedate_to_datetime(retry).timestamp()-journal.clock())
+        except (TypeError,ValueError):
+            delay = 60
+    journal.set('backoff:'+host, journal.clock()+max(60,delay))
+
+
+async def read_metrics(rpc, host, timeout=10):
+    """Read-only GET of ``<rpc_url minus /rpc>/metrics`` for ``rpc`` (an Rpc).
+
+    Same TLS context, redirect refusal, shared endpoint quota (method
+    ``metrics``) and 8 MiB bound as ``Rpc.call``.
+    """
+    if host not in HOSTS:
+        raise Gate('unlisted RPC host')
+    url = rpc.targets[host]['rpc_url']
+    if not url.endswith('/rpc'):
+        raise Gate('invalid HTTPS RPC URL')
+    url = url[:-len('/rpc')]+'/metrics'
+    async with rpc.locks[host]:
+        request_id = rpc.reserve(host, 'metrics', 0)
+        start = time.monotonic()
+        def fetch():
+            request = urllib.request.Request(url, headers={'Accept': 'text/plain'})
+            with rpc.opener.open(request, timeout=timeout) as response:
+                data = response.read(METRICS_BYTES+1)
+                if len(data) > METRICS_BYTES:
+                    raise Gate('metrics response byte bound')
+                return data.decode('utf-8', 'replace'), dict(response.headers)
+        status = 'unknown'
+        try:
+            text, headers = await asyncio.to_thread(fetch)
+            quota = headers.get('X-RateLimit-Limit') or headers.get('x-ratelimit-limit')
+            if quota and quota.isdecimal():
+                rpc.journal.set('quota:'+host, int(quota))
+            parsed = parse_loop_metrics(text)
+            status = 'ok'
+            return parsed
+        except urllib.error.HTTPError as error:
+            status = str(error.code)
+            if error.code == 429:
+                _http_backoff(rpc.journal, host, error)
+                raise Quota('HTTP 429; metrics read backs off') from error
+            raise
+        finally:
+            rpc.journal.db.execute('UPDATE requests SET latency=?,status=? WHERE id=?',
+                (time.monotonic()-start,status,request_id))
+
+
 def check_identity(status, plan):
     if (status.get('network') != plan['network'] or status.get('gitCommit') != plan['node_commit']
             or status.get('version') != '0.6.0'):
         raise Gate('network or software identity changed')
+
+
+def byzantine_tolerance(n, t):
+    """f = min(n - t, 2t - n - 1), saturating; mirrors botho::config::byzantine_tolerance."""
+    return max(0, min(n - t, 2 * t - n - 1))
+
+
+def expected_quorum():
+    """(n, t, f) every x-series validator must report: 4-of-5 explicit, f = 1.
+
+    Derived from QUORUM_THRESHOLD (which fleet_nodes renders) and len(HOSTS)
+    rather than restated.
+    """
+    n = len(HOSTS)
+    return n, QUORUM_THRESHOLD, byzantine_tolerance(n, QUORUM_THRESHOLD)
+
+
+def check_quorum(status):
+    """Fail closed unless the node reports the installed explicit 4-of-5, f = 1 quorum (#1605).
+
+    The node drops an unparseable roster member without failing, which would
+    leave a silent 4-of-4 (f = 0) fleet. `quorumSize`/`quorumThreshold` come
+    from the quorum set the node's gate actually installed (post-clamp,
+    post-fallback), so this reads the truth rather than the config. A missing
+    or null field (an older binary, or a node before its first gate
+    evaluation) is a refusal too.
+    """
+    n, t, f = expected_quorum()
+    expected = {
+        'quorumMode': 'explicit',
+        'quorumSize': n,
+        'quorumThreshold': t,
+        'quorumByzantineTolerance': f,
+        'quorumFaultTolerant': True,
+        'quorumDegenerate': False,
+        'quorumAutoMembers': 0,
+        'quorumGateIntersectionRefused': False,
+    }
+    for key, want in expected.items():
+        got = status.get(key)
+        # `type(...) is` so True never passes as 1 or 0 as False.
+        if got is None or type(got) is not type(want) or got != want:
+            raise Gate('installed quorum is not explicit %d-of-%d with f=%d: %s=%r'
+                       % (t, n, f, key, got))
 
 
 # Degrade-step actions (discovery_plan.DEGRADE_ACTIONS, #1585) split by what

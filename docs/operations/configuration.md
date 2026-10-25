@@ -53,10 +53,23 @@ threads = 0  # 0 = auto-detect CPU count
 |-----|------|---------|-------------|
 | `gossip_port` | integer | 7100 | Port for libp2p gossipsub communication |
 | `rpc_port` | integer | 7101 | Port for JSON-RPC server |
-| `bootstrap_peers` | array | [] | Initial peers to connect to |
+| `bootstrap_peers` | array | [] | Initial peers to connect to. Empty means "use the defaults" (DNS discovery and/or the built-in seeds), not "no peers" |
+| `fallback_seeds` | bool | true | Fall back to the built-in **public** seed nodes when `bootstrap_peers` is empty and DNS discovery is disabled, fails, or returns no records. Set to `false` to isolate a node or private cluster |
 | `cors_origins` | array | ["http://localhost", "http://127.0.0.1"] | Allowed CORS origins for RPC |
 
 **Bootstrap peer format:** Multiaddr format, e.g., `/ip4/192.168.1.100/tcp/7100/p2p/<peer_id>`
+
+**Bootstrap order:** (1) `bootstrap_peers`, if non-empty; (2) DNS TXT discovery,
+if `[network.dns_seeds] enabled = true` (the default); (3) the hardcoded
+fallback seeds, unless `fallback_seeds = false`. Step (3) also applies when DNS
+is enabled but the query fails or returns no records. The resolved list is
+dialed at startup and re-dialed by the reconnect tick whenever the node is
+under-connected. At startup the node logs `Resolved bootstrap peers` with
+`source` = `configured`, `dns`, `fallback_seeds` or `none`.
+
+The `[network.dns_seeds]` table takes `enabled` (bool, default `true`) and an
+optional `domain` override. DNS with a private `domain` and `fallback_seeds =
+false` is a valid combination: the node uses only what your DNS publishes.
 
 **CORS origins:** For browser-based wallets, add your domain. Use `"*"` to allow all origins (not recommended for production).
 
@@ -205,6 +218,30 @@ bootstrap_peers = [
 mode = "recommended"
 min_peers = 1
 ```
+
+### Isolated Cluster (devnet / CI / qualification)
+
+A node or private cluster that must never dial the public network. Set both
+keys: disabling DNS alone still falls back to the built-in public seeds.
+
+```toml
+[network]
+fallback_seeds = false
+# Empty for a standalone node (or the key-generation boot that learns the
+# peer ID); otherwise list only cluster members.
+bootstrap_peers = [
+    "/ip4/10.0.0.2/tcp/17100/p2p/<peer_id_of_node_2>",
+]
+
+[network.dns_seeds]
+enabled = false
+```
+
+With an empty list the node logs that it is isolated and only accepts inbound
+peers. Neither the startup dial nor the reconnect tick will contact a
+hardcoded seed. Note that the gossip, RPC and metrics servers still bind
+`0.0.0.0` (#1582), so restrict inbound traffic with a firewall or security
+group as well.
 
 ## Environment Variables
 

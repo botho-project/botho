@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 use crate::{
-    config::{ledger_db_path_from_config, Config},
+    config::{ledger_db_path_from_config, BootstrapSource, Config},
     ledger::Ledger,
     wallet::Wallet,
 };
@@ -53,9 +53,23 @@ pub fn run(config_path: &Path) -> Result<()> {
     println!("Network:");
     println!("  Type: {}", network.display_name());
     println!("  Gossip port: {}", config.network.gossip_port(network));
+    let resolved = config.network.resolve_bootstrap_peers(network);
     println!(
-        "  Bootstrap peers: {}",
-        config.network.bootstrap_peers(network).len()
+        "  Bootstrap peers: {} (source: {})",
+        resolved.peers.len(),
+        if config.network.dns_seeds.enabled && resolved.source != BootstrapSource::Configured {
+            "dns, resolved at startup"
+        } else {
+            resolved.source.as_str()
+        }
+    );
+    println!(
+        "  Fallback seeds: {}",
+        if config.network.fallback_seeds {
+            "enabled"
+        } else {
+            "disabled"
+        }
     );
     println!(
         "  DNS seed discovery: {}",
@@ -68,8 +82,17 @@ pub fn run(config_path: &Path) -> Result<()> {
     if let Some(ref domain) = config.network.dns_seeds.domain {
         println!("  DNS seed domain: {}", domain);
     }
-    if config.network.bootstrap_peers.is_empty() && !config.network.dns_seeds.enabled {
-        println!("  (No bootstrap peers - solo minting only)");
+    if !config.network.dns_seeds.enabled {
+        match resolved.source {
+            BootstrapSource::FallbackSeeds => println!(
+                "  (No bootstrap peers configured - using the built-in public seed nodes; set \
+                 network.fallback_seeds = false to isolate)"
+            ),
+            BootstrapSource::None => {
+                println!("  (Isolated - no bootstrap peers, inbound connections only)")
+            }
+            _ => {}
+        }
     }
     println!();
     println!("Minting:");

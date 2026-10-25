@@ -198,6 +198,19 @@ pub struct QuorumGateSnapshot {
     /// majority-threshold set over the same members).
     pub intersection_refused: bool,
 
+    /// Size `n` of the quorum set the gate actually INSTALLED, including self
+    /// (#1605). Taken from the final quorum set after the threshold clamp and
+    /// any intersection-refusal fallback (kept previous set, or the majority
+    /// seed), never from the candidate or the config. An unparseable
+    /// `[network.quorum] member` that the gate dropped is therefore NOT
+    /// counted here.
+    pub quorum_size: usize,
+
+    /// Threshold `t` of the quorum set the gate actually INSTALLED (#1605),
+    /// with the same post-clamp, post-fallback provenance as
+    /// [`Self::quorum_size`].
+    pub quorum_threshold: u32,
+
     /// Per-peer gate classification (#707, P4.2). These are the base58 PeerId
     /// strings of the CONNECTED peers, partitioned exactly as the gate
     /// evaluation above partitioned them — the single source of truth for the
@@ -3175,6 +3188,67 @@ mod tests {
         assert!(values.iter().all(|v| v.tx_hash != stale.hash()));
     }
 
+    /// #1566 (B): in federated mode the decision is queued by
+    /// `handle_message` itself (it runs `check_externalized`), not by
+    /// `tick()`. This is what lets the run loop drain `SlotExternalized` in
+    /// the `ScpMessage` arm, in the same iteration as the completing
+    /// message, instead of up to 500 ms later on the next consensus tick.
+    #[test]
+    fn federated_decision_is_queued_by_handle_message_not_tick() {
+        let cfg = ConsensusConfig::fixed_timing(0);
+        let qs = recommended_quorum(&[1, 2]);
+        let mut a = ConsensusService::new(node(1), qs.clone(), cfg.clone(), genesis_chain_state());
+        let mut b = ConsensusService::new(node(2), qs, cfg, genesis_chain_state());
+        let first = intrinsic_valid_minting_tx(1, [0; 32], 1);
+        submit_and_register(&mut a, &mut b, &first);
+        submit_and_register(&mut b, &mut a, &first);
+
+        let (mut to_a, mut to_b): (Vec<ScpMessage>, Vec<ScpMessage>) = (vec![], vec![]);
+        // Where A's decision first became visible to `next_event`.
+        let mut seen_after: Option<&str> = None;
+        let mut drain_a = |a: &mut ConsensusService, to_b: &mut Vec<ScpMessage>, site| {
+            let mut found = false;
+            while let Some(ev) = a.next_event() {
+                match ev {
+                    ConsensusEvent::BroadcastMessage(msg) => to_b.push(msg),
+                    ConsensusEvent::SlotExternalized { .. } => found = true,
+                    ConsensusEvent::Progress { .. } => {}
+                }
+            }
+            if found && seen_after.is_none() {
+                seen_after = Some(site);
+            }
+        };
+        for _ in 0..4000 {
+            for m in std::mem::take(&mut to_a) {
+                let _ = a.handle_message(m);
+                // The run loop's `ScpMessage` arm: drain right here.
+                drain_a(&mut a, &mut to_b, "handle_message");
+            }
+            for m in to_b.drain(..) {
+                let _ = b.handle_message(m);
+            }
+            a.tick();
+            drain_a(&mut a, &mut to_b, "tick");
+            b.tick();
+            while let Some(ev) = b.next_event() {
+                if let ConsensusEvent::BroadcastMessage(msg) = ev {
+                    to_a.push(msg);
+                }
+            }
+            if a.externalized.is_some() {
+                break;
+            }
+        }
+        assert!(a.externalized.is_some(), "slot 1 never externalized");
+        assert_eq!(
+            seen_after,
+            Some("handle_message"),
+            "the federated decision must be queued by handle_message, so the \
+             ScpMessage arm can drain it without waiting for a tick"
+        );
+    }
+
     /// Drive a 2-of-2 federated pair through slot 1 and return node A with
     /// that decision surfaced but NOT applied (`externalized` is `Some`), the
     /// state the run loop holds while the apply is in flight (#1565).
@@ -3213,6 +3287,69 @@ mod tests {
         assert!(a.externalized.is_none());
         assert!(a.sync_scp_slot_to_chain(5));
         assert_eq!(a.current_slot(), 6);
+    }
+
+    /// #1575: a #770/#419 slot reconcile refused while a decision awaits
+    /// application (`externalized = Some`) is remembered by the run loop's
+    /// `SlotReconcile` and re-run once after `advance_slot`, which then
+    /// advances the slot.
+    #[test]
+    fn refused_slot_reconcile_is_retried_after_advance_slot() {
+        use crate::commands::apply_queue::SlotReconcile;
+        let mut a = federated_pending_application();
+        let mut reconcile = SlotReconcile::default();
+
+        // Refused with no consensus apply pending: nothing to retry.
+        assert!(!reconcile.reconcile(&mut a, 5, false));
+        assert!(!reconcile.is_pending());
+
+        // Refused while the consensus apply is pending: retry later.
+        assert!(!reconcile.reconcile(&mut a, 5, true));
+        assert!(reconcile.is_pending());
+        assert_eq!(a.current_slot(), 2, "fast-forwarded during the apply");
+        assert!(a.externalized.is_some(), "pending decision was cleared");
+
+        a.advance_slot();
+        assert_eq!(reconcile.retry_after_advance(&mut a, 5), Some(true));
+        assert_eq!(a.current_slot(), 6);
+        assert!(!reconcile.is_pending());
+        assert_eq!(
+            reconcile.retry_after_advance(&mut a, 9),
+            None,
+            "the retry runs once"
+        );
+        assert_eq!(a.current_slot(), 6);
+    }
+
+    /// #1575 safety: the retry goes through the unchanged service guards. A
+    /// slot that gained ballot/commit state while the apply was pending is
+    /// still not fast-forwarded (#436): no fast-forward out of Commit.
+    #[test]
+    fn slot_reconcile_retry_never_fast_forwards_a_slot_with_ballot_state() {
+        use crate::commands::apply_queue::SlotReconcile;
+        let mut a = federated_pending_application();
+        let mut reconcile = SlotReconcile::default();
+        assert!(!reconcile.reconcile(&mut a, 5, true));
+
+        // Peer B starts a ballot on A's current slot 2 during the apply.
+        let slot = a.current_slot();
+        let tx = intrinsic_valid_minting_tx(70, [0; 32], slot);
+        a.register_minting_tx(tx.hash(), bincode::serialize(&tx).unwrap());
+        let value = ConsensusValue::from_minting_tx(tx.hash(), tx.pow_priority());
+        let msg = peer_nominate_prepare(node(2), recommended_quorum(&[1, 2]), slot, value);
+        a.scp_node
+            .handle_message(&msg)
+            .expect("peer ballot accepted");
+        assert!(
+            ConsensusService::slot_holds_ballot_or_commit_state(
+                &a.scp_node.get_current_slot_metrics()
+            ),
+            "precondition: slot {slot} holds ballot/commit state"
+        );
+
+        a.advance_slot();
+        assert_eq!(reconcile.retry_after_advance(&mut a, 5), Some(false));
+        assert_eq!(a.current_slot(), slot, "fast-forwarded a balloting slot");
     }
 
     /// #1565: peer-slot anchoring must not clear a decision that awaits

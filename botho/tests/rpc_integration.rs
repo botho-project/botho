@@ -1515,6 +1515,8 @@ async fn test_operator_quorum_info_per_peer_after_evaluation() {
         suppressed_peers: 1,
         max_auto_members: 8,
         intersection_refused: false,
+        quorum_size: 3,
+        quorum_threshold: 2,
         curated_peer_ids: vec!["12D3KooWCurated".to_string()],
         auto_peer_ids: vec!["12D3KooWAuto".to_string()],
         suppressed_peer_ids: vec!["12D3KooWSuppressed".to_string()],

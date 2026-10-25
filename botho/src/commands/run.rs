@@ -21,7 +21,10 @@ use tracing::{debug, error, info, warn};
 
 use std::collections::HashMap;
 
-use super::consensus_failure::{self, FailureEvidence};
+use super::{
+    apply_queue::{Admission, ApplyJob, ApplyOrigin, ApplyQueue, InFlight, SlotReconcile},
+    consensus_failure::{self, FailureEvidence},
+};
 
 #[cfg(test)]
 #[path = "consensus_failure_tests.rs"]
@@ -33,8 +36,8 @@ use crate::{
     block::MintingTx,
     config::{is_dev_rpc_enabled, Config, QuorumConfig, QuorumMode},
     consensus::{
-        BlockBuilder, ConsensusConfig, ConsensusEvent, ConsensusService, ConsensusValue,
-        LotteryFeeConfig, QuorumGateSnapshot, ScpSlotSnapshot, TransactionValidator,
+        BlockBuilder, ConsensusConfig, ConsensusEvent, ConsensusService, LotteryFeeConfig,
+        QuorumGateSnapshot, ScpSlotSnapshot, TransactionValidator,
     },
     network::{
         default_seed_domain, BlockTxn, ChainSyncManager, CompactBlock, GetBlockTxn,
@@ -648,13 +651,17 @@ async fn run_async_with_shutdown(
     // Get network type for port/peer defaults
     let network_type = config.network_type();
 
-    // Discover bootstrap peers (uses DNS if enabled)
-    let bootstrap_peers = config.network.bootstrap_peers_async(network_type).await;
-    info!(
-        "Using {} bootstrap peers (DNS: {})",
-        bootstrap_peers.len(),
-        config.network.dns_seeds.enabled
-    );
+    // Discover bootstrap peers (uses DNS if enabled) and log where they came
+    // from (#1578). With `fallback_seeds = false` and DNS disabled this is
+    // empty, so neither the initial dial nor the reconnect tick below ever
+    // dials a hardcoded seed.
+    let resolved_bootstrap = config
+        .network
+        .resolve_bootstrap_peers_async(network_type)
+        .await;
+    resolved_bootstrap.log();
+    let bootstrap_source = resolved_bootstrap.source;
+    let bootstrap_peers = resolved_bootstrap.peers;
 
     // Keep a copy of the bootstrap multiaddrs so the main loop can re-dial them
     // whenever the node is under-connected. The initial dial happens during the
@@ -752,8 +759,15 @@ async fn run_async_with_shutdown(
         }
     } else {
         println!("=== No peers connected ===");
-        if config.network.bootstrap_peers.is_empty() && !config.network.dns_seeds.enabled {
-            warn!("No bootstrap peers configured and DNS discovery disabled. Add bootstrap_peers to config.toml or enable dns_seeds");
+        match bootstrap_source {
+            crate::config::BootstrapSource::FallbackSeeds => warn!(
+                "No peers connected via the built-in public fallback seeds. Add bootstrap_peers \
+                 to config.toml, or set network.fallback_seeds = false to run isolated"
+            ),
+            crate::config::BootstrapSource::None => {
+                info!("Isolated node (no bootstrap peers): waiting for inbound peers")
+            }
+            _ => {}
         }
     }
     println!();
@@ -1160,9 +1174,10 @@ async fn run_async_with_shutdown(
     // has no fleet to fall behind, so it starts synced and mints immediately
     // (preserves the solo carve-out). A peer-expecting node starts NOT synced
     // and flips true the first time the sync manager reports `Synced` — which,
-    // for a node already at/near tip, happens after the first peer-status round
-    // (no meaningful delay), and for a node genuinely behind happens only after
-    // catch-up completes. The `consensus` service mirrors this flag so its
+    // for a node already at the tip, happens after the first peer-status round
+    // (no meaningful delay), and for a node behind by any gap (including a
+    // single block, #1579) happens only after catch-up has committed the
+    // missing blocks. The `consensus` service mirrors this flag so its
     // nomination/ballot proposer is gated identically (see
     // `ConsensusService::set_initial_sync_complete`).
     let mut initial_sync_complete = min_peers_to_wait == 0;
@@ -1267,18 +1282,15 @@ async fn run_async_with_shutdown(
     // stays jammed (the metric/RPC snapshot keeps reporting continuously).
     let mut slot_stall_warned = false;
     let mut terminal_consensus_failure = None;
-    // The externalized block being applied off the loop (#1565). While it is
-    // `Some`, the consensus service still holds `externalized`, so proposals,
-    // local mints and slot fast-forwards stay gated until the completion arm
-    // calls `advance_slot`.
-    let mut in_flight: Option<InFlightApply> = None;
-    // Defensive: a `SlotExternalized` drained while another apply is in
-    // flight. The service cannot surface one (it surfaces slots strictly in
-    // order and holds `externalized` until `advance_slot`), but if it ever
-    // did, apply it after the current one, exactly as the old sequential
-    // loop would have.
-    let mut deferred_externalized: std::collections::VecDeque<ConsensusEvent> =
-        std::collections::VecDeque::new();
+    // Every block apply (consensus, gossip, compact, sync) runs off the loop
+    // as one job of this FIFO queue, at most one at a time, in enqueue order
+    // (#1565, #1566). While a `Consensus` job is queued or in flight the
+    // service still holds `externalized`, so proposals, local mints and slot
+    // fast-forwards stay gated until its completion calls `advance_slot`.
+    let mut apply_queue: ApplyQueue<ApplyHandle> = ApplyQueue::new();
+    // A #770/#419 slot reconcile refused because a consensus apply was
+    // pending; re-run once after that apply's `advance_slot` (#1575).
+    let mut slot_reconcile = SlotReconcile::default();
 
     'node_loop: loop {
         // Time this whole iteration (select wait + handler); recorded on drop,
@@ -1291,6 +1303,19 @@ async fn run_async_with_shutdown(
             break;
         }
 
+        // Start the next queued apply job if none is in flight (#1566). Done
+        // at the top of every iteration, so a job enqueued by any arm (even
+        // one that ends in `continue`) starts before the loop waits again.
+        {
+            #[cfg(test)]
+            let apply_delay = test_hooks.as_ref().and_then(|hooks| hooks.apply_delay);
+            #[cfg(not(test))]
+            let apply_delay = None;
+            apply_queue.start_next(|job| {
+                spawn_apply_job(job, node.shared_ledger(), node.apply_state(), apply_delay)
+            });
+        }
+
         tokio::select! {
             // Network events
             event = swarm.select_next_some() => {
@@ -1299,67 +1324,14 @@ async fn run_async_with_shutdown(
                     match net_event {
                         NetworkEvent::NewBlock(block) => {
                             info!("Received block {} from network", block.height());
-                            let block_start = std::time::Instant::now();
-                            if let Some(job) = in_flight.as_ref() {
-                                // #1565: never wait on the apply mutex here.
-                                // A peer's block N usually arrives while our
-                                // own apply of N is in flight; anything higher
-                                // cannot apply until ours lands and is covered
-                                // by our next slot or catch-up sync.
-                                debug!(
-                                    height = block.height(),
-                                    applying = job.block_height,
-                                    "Skipping gossiped block while an externalized apply is in flight"
-                                );
-                            } else if let Err(e) = node.add_block_from_network(&block) {
-                                warn!("Failed to add network block: {}", e);
-                            } else {
-                                // Count toward blocksFound if this node won the
-                                // slot but the block came back via gossip before
-                                // our own externalize landed it (#543).
-                                count_won_block(&minter_health, &block);
-
-                                // Record block processing time
-                                metrics_updater.observe_block_processing(block_start.elapsed().as_secs_f64());
-                                metrics_updater.inc_blocks_processed();
-                                metrics_updater.add_transactions_processed(block.transactions.len() as u64);
-
-                                // Record for dynamic timing
-                                consensus.record_block(block.header.timestamp, block.transactions.len());
-
-                                // Update dynamic fee based on congestion
-                                let slot_duration = consensus.current_slot_duration();
-                                let at_min_time = ConsensusConfig::is_at_min_block_time(
-                                    &ConsensusConfig::default(),
-                                    slot_duration,
-                                );
-                                let max_txs = ConsensusConfig::default().max_txs_per_slot;
-                                node.update_dynamic_fee_after_block(
-                                    block.transactions.len(),
-                                    max_txs,
-                                    at_min_time,
-                                );
-
-                                // Broadcast to WebSocket clients
-                                ws_broadcaster.new_block(
-                                    block.height(),
-                                    &block.hash(),
-                                    block.header.timestamp,
-                                    block.transactions.len(),
-                                    block.header.difficulty,
-                                );
-
-                                // Update consensus chain state and metrics
-                                if let Ok(ledger) = node.shared_ledger().read() {
-                                    if let Ok(state) = ledger.get_chain_state() {
-                                        consensus.update_chain_state(state.clone());
-                                        metrics_updater.set_block_height(state.height);
-                                        metrics_updater.set_difficulty(state.difficulty);
-                                        metrics_updater.set_total_minted(state.total_mined);
-                                        metrics_updater.set_total_fees_burned(state.total_fees_burned);
-                                    }
-                                }
-                            }
+                            // #1566: applied off the loop. The completion
+                            // arm runs the post-commit hooks.
+                            enqueue_network_block(
+                                &mut apply_queue,
+                                &node,
+                                ApplyOrigin::Gossip { received_at: std::time::Instant::now() },
+                                block,
+                            );
                         }
                         NetworkEvent::NewTransaction(tx) => {
                             debug!("Received transaction {} from network", hex::encode(&tx.hash()[0..8]));
@@ -1436,6 +1408,27 @@ async fn run_async_with_shutdown(
                             debug!(slot = msg.slot_index, "Received SCP message from network");
                             if let Err(e) = consensus.handle_message(msg) {
                                 warn!("Failed to handle SCP message: {}", e);
+                            }
+                            // #1566 (B): `handle_message` already ran
+                            // `check_externalized`, so a decision this message
+                            // completed (and our own SCP responses) is queued
+                            // now. Drain it in this iteration rather than on
+                            // the next 500 ms tick, so our own decision is
+                            // enqueued before the peer's gossiped block for
+                            // the same height arrives.
+                            if let Err(evidence) = drain_consensus_events(
+                                &mut consensus,
+                                &mut swarm,
+                                &discovery,
+                                &node,
+                                &mut apply_queue,
+                                #[cfg(test)]
+                                &mut test_hooks,
+                            )
+                            .await
+                            {
+                                terminal_consensus_failure = Some(evidence);
+                                break 'node_loop;
                             }
                         }
                         NetworkEvent::PeerMetadataUpdated(_) => {
@@ -1650,111 +1643,16 @@ async fn run_async_with_shutdown(
                                     if let Some(SyncAction::AddBlocks(blocks)) =
                                         sync_manager.on_blocks(&peer, blocks, has_more)
                                     {
-                                        // Overlap tolerance (#641): a peer may re-serve a
-                                        // batch that overlaps blocks we already committed
-                                        // (e.g. a duplicate response near a batch boundary).
-                                        // Snapshot our committed height *before* the loop and
-                                        // skip any block at or below it, applying only the
-                                        // novel tail. Applying an already-committed block
-                                        // would hard-fail the ledger's sequential-height
-                                        // check ("Expected height N, got N-k") and, pre-fix,
-                                        // aborted the whole batch and drove a retry loop.
-                                        let local_height_before = node
-                                            .shared_ledger()
-                                            .read()
-                                            .ok()
-                                            .and_then(|l| l.get_chain_state().ok())
-                                            .map(|s| s.height)
-                                            .unwrap_or(0);
-                                        // #1565: the in-flight consensus job may
-                                        // commit its height after the snapshot
-                                        // above. Skip that height too, so it is
-                                        // never re-applied and never reported to
-                                        // `on_failure` (a spurious peer penalty).
-                                        // Higher heights queue behind the job on
-                                        // the apply mutex, which the job already
-                                        // holds (see `spawn_externalized_apply`).
-                                        let skip_through = in_flight
-                                            .as_ref()
-                                            .map_or(local_height_before, |job| {
-                                                local_height_before.max(job.block_height)
-                                            });
-                                        let mut applied_any = false;
-                                        let mut had_failure = false;
-                                        for block in &blocks {
-                                            // Already have this block — skip it rather than
-                                            // fail. A pure-overlap batch (all blocks known)
-                                            // therefore applies nothing and does NOT trigger
-                                            // on_failure, so the node stays out of the retry
-                                            // loop and advances on the next request.
-                                            if block.height() <= skip_through {
-                                                continue;
-                                            }
-                                            if let Err(e) = node.add_block_from_network(block) {
-                                                warn!("Failed to add synced block {}: {}", block.height(), e);
-                                                sync_manager.on_failure(Some(&peer), e.to_string());
-                                                had_failure = true;
-                                                break;
-                                            }
-                                            applied_any = true;
-                                            // Count toward blocksFound if a synced
-                                            // block carries this node's coinbase
-                                            // (e.g. re-syncing our own past blocks
-                                            // after a restart) (#543).
-                                            count_won_block(&minter_health, block);
-                                            // Record for dynamic timing
-                                            consensus.record_block(block.header.timestamp, block.transactions.len());
-                                        }
-
-                                        if applied_any {
-                                            // Update dynamic fee after syncing (use last block's tx count)
-                                            if let Some(last_block) = blocks.last() {
-                                                let slot_duration = consensus.current_slot_duration();
-                                                let at_min_time = ConsensusConfig::is_at_min_block_time(
-                                                    &ConsensusConfig::default(),
-                                                    slot_duration,
-                                                );
-                                                let max_txs = ConsensusConfig::default().max_txs_per_slot;
-                                                node.update_dynamic_fee_after_block(
-                                                    last_block.transactions.len(),
-                                                    max_txs,
-                                                    at_min_time,
-                                                );
-                                            }
-                                            // Update consensus chain state and inform the
-                                            // sync manager of our new height so it can tell
-                                            // whether we have caught up to the target.
-                                            if let Ok(ledger) = node.shared_ledger().read() {
-                                                if let Ok(state) = ledger.get_chain_state() {
-                                                    metrics_updater.set_block_height(state.height);
-                                                    sync_manager.on_blocks_added(state.height);
-                                                    let synced_height = state.height;
-                                                    consensus.update_chain_state(state);
-                                                    // Issue #419 / #417 Finding 3: after catching
-                                                    // up via block-sync, advance the SCP slot to
-                                                    // `height + 1` so this node stops discarding
-                                                    // the live network's slot messages as "future
-                                                    // slots" and can actually participate.
-                                                    if consensus.sync_scp_slot_to_chain(synced_height) {
-                                                        info!(
-                                                            slot = consensus.current_slot(),
-                                                            height = synced_height,
-                                                            "Advanced SCP slot to synced chain height"
-                                                        );
-                                                    }
-                                                }
-                                            }
-                                        } else if !had_failure {
-                                            // Pure-overlap batch: every block was at or
-                                            // below our committed height, so nothing was
-                                            // applied and no failure was raised. Notify the
-                                            // sync manager so it can track consecutive
-                                            // zero-progress responses and, past a threshold,
-                                            // penalise a peer that persistently re-serves a
-                                            // range we already hold (#644). A one-off overlap
-                                            // stays below the threshold and is tolerated.
-                                            sync_manager.on_zero_progress(&peer);
-                                        }
+                                        // #1566: the whole batch is ONE apply
+                                        // job, committed in order off the loop.
+                                        // The job skips blocks at or below the
+                                        // tip when it starts (#641 overlap
+                                        // tolerance); the completion arm runs
+                                        // `on_failure` / `on_blocks_added` /
+                                        // #419 reconcile / #644
+                                        // `on_zero_progress` exactly as the
+                                        // inline batch loop did.
+                                        enqueue_sync_batch(&mut apply_queue, peer, blocks);
                                     }
                                 }
                                 SyncResponse::Status { height, tip_hash } => {
@@ -1780,40 +1678,46 @@ async fn run_async_with_shutdown(
 
                             // Check if we already have this block, and detect
                             // whether this gossiped tip is ahead of us by a gap
-                            // gossip cannot bridge.
-                            let mut local_height_for_gossip: Option<u64> = None;
-                            if let Ok(ledger) = node.shared_ledger().read() {
-                                if let Ok(state) = ledger.get_chain_state() {
-                                    if state.height >= height {
-                                        debug!("Already have block {}, ignoring compact block", height);
-                                        continue;
-                                    }
-                                    local_height_for_gossip = Some(state.height);
-                                }
+                            // gossip cannot bridge. #1566: both compare against
+                            // the PROJECTED tip (highest height queued or in
+                            // flight, else the ledger tip). A block already
+                            // queued counts as had, and gossip N+1 arriving
+                            // while N is still queued is contiguous, not a gap.
+                            let Some(ledger_tip) = ledger_tip_height(&node) else {
+                                continue;
+                            };
+                            let projected_tip = apply_queue.projected_tip(ledger_tip);
+                            if projected_tip >= height {
+                                debug!(
+                                    height,
+                                    projected_tip,
+                                    "Already have (or are applying) block {}, ignoring compact block",
+                                    height
+                                );
+                                continue;
                             }
 
                             // RC2 fallback (issue #423): a gossiped block more
-                            // than one block ahead of us (height > local + 1)
+                            // than one block ahead of us (height > projected + 1)
                             // can never be applied contiguously — it must be
                             // backfilled via catch-up. Keep the sync manager's
                             // local height current and poke it with the observed
                             // tip so it (re)enters Downloading immediately rather
                             // than waiting up to 30s for the next status refresh.
-                            // The reconstruction/apply below will fail with
-                            // "Expected height L+1, got H"; this is the path that
-                            // turns that failure into a real catch-up trigger.
-                            if let Some(local_h) = local_height_for_gossip {
-                                if height > local_h + 1 {
-                                    sync_manager.set_local_height(local_h);
-                                    let connected = get_connected_peers(&discovery);
-                                    info!(
-                                        height = height,
-                                        local_height = local_h,
-                                        peers = connected.len(),
-                                        "Gossiped tip is ahead by a gap gossip can't bridge; triggering catch-up"
-                                    );
-                                    sync_manager.note_gossiped_tip(&connected, height, block_hash);
-                                }
+                            // The enqueue below drops the block as
+                            // non-contiguous; this is the path that turns it
+                            // into a real catch-up trigger.
+                            if let Some(projected) = apply_queue.catch_up_gap(height, ledger_tip) {
+                                sync_manager.set_local_height(ledger_tip);
+                                let connected = get_connected_peers(&discovery);
+                                info!(
+                                    height = height,
+                                    local_height = ledger_tip,
+                                    projected_tip = projected,
+                                    peers = connected.len(),
+                                    "Gossiped tip is ahead by a gap gossip can't bridge; triggering catch-up"
+                                );
+                                sync_manager.note_gossiped_tip(&connected, height, block_hash);
                             }
 
                             // Attempt reconstruction from mempool
@@ -1832,61 +1736,14 @@ async fn run_async_with_shutdown(
                                     // Remove from pending if it was there
                                     pending_compact_blocks.remove(&block_hash);
 
-                                    // Add to ledger. #1565: skip, without
-                                    // touching the apply mutex, while an
-                                    // externalized apply is in flight (see the
-                                    // `NewBlock` arm).
-                                    if let Some(job) = in_flight.as_ref() {
-                                        debug!(
-                                            height = height,
-                                            applying = job.block_height,
-                                            "Skipping reconstructed compact block while an externalized apply is in flight"
-                                        );
-                                    } else if let Err(e) = node.add_block_from_network(&block) {
-                                        // A non-contiguous gossiped block (height
-                                        // > local + 1) lands here ("Expected
-                                        // height L+1, got H"). The catch-up
-                                        // trigger was already poked above
-                                        // (issue #423 RC2), so the sync state
-                                        // machine will backfill the gap.
-                                        warn!("Failed to add reconstructed block: {} (catch-up handles non-contiguous gaps)", e);
-                                    } else {
-                                        // Count toward blocksFound if this node's
-                                        // coinbase won (#543).
-                                        count_won_block(&minter_health, &block);
-
-                                        // Record for dynamic timing
-                                        consensus.record_block(block.header.timestamp, block.transactions.len());
-
-                                        // Update dynamic fee based on congestion
-                                        let slot_duration = consensus.current_slot_duration();
-                                        let at_min_time = ConsensusConfig::is_at_min_block_time(
-                                            &ConsensusConfig::default(),
-                                            slot_duration,
-                                        );
-                                        let max_txs = ConsensusConfig::default().max_txs_per_slot;
-                                        node.update_dynamic_fee_after_block(
-                                            block.transactions.len(),
-                                            max_txs,
-                                            at_min_time,
-                                        );
-
-                                        // Broadcast to WebSocket clients
-                                        ws_broadcaster.new_block(
-                                            block.height(),
-                                            &block.hash(),
-                                            block.header.timestamp,
-                                            block.transactions.len(),
-                                            block.header.difficulty,
-                                        );
-
-                                        // Update consensus chain state
-                                        if let Ok(ledger) = node.shared_ledger().read() {
-                                            if let Ok(state) = ledger.get_chain_state() {
-                                                consensus.update_chain_state(state);
-                                            }
-                                        }
-                                    }
+                                    // #1566: applied off the loop; see the
+                                    // `NewBlock` arm.
+                                    enqueue_network_block(
+                                        &mut apply_queue,
+                                        &node,
+                                        ApplyOrigin::Compact { block_hash },
+                                        block,
+                                    );
                                 }
                                 ReconstructionResult::Incomplete { missing_indices } => {
                                     info!(
@@ -1987,52 +1844,14 @@ async fn run_async_with_shutdown(
                                             "Completed block reconstruction after receiving missing txs"
                                         );
 
-                                        if let Some(job) = in_flight.as_ref() {
-                                            // #1565: see the `NewBlock` arm.
-                                            debug!(
-                                                height = block.height(),
-                                                applying = job.block_height,
-                                                "Skipping completed compact block while an externalized apply is in flight"
-                                            );
-                                        } else if let Err(e) = node.add_block_from_network(&block) {
-                                            warn!("Failed to add completed block: {}", e);
-                                        } else {
-                                            // Count toward blocksFound if this
-                                            // node's coinbase won (#543).
-                                            count_won_block(&minter_health, &block);
-
-                                            // Record for dynamic timing
-                                            consensus.record_block(block.header.timestamp, block.transactions.len());
-
-                                            // Update dynamic fee based on congestion
-                                            let slot_duration = consensus.current_slot_duration();
-                                            let at_min_time = ConsensusConfig::is_at_min_block_time(
-                                                &ConsensusConfig::default(),
-                                                slot_duration,
-                                            );
-                                            let max_txs = ConsensusConfig::default().max_txs_per_slot;
-                                            node.update_dynamic_fee_after_block(
-                                                block.transactions.len(),
-                                                max_txs,
-                                                at_min_time,
-                                            );
-
-                                            // Broadcast to WebSocket clients
-                                            ws_broadcaster.new_block(
-                                                block.height(),
-                                                &block.hash(),
-                                                block.header.timestamp,
-                                                block.transactions.len(),
-                                                block.header.difficulty,
-                                            );
-
-                                            // Update consensus chain state
-                                            if let Ok(ledger) = node.shared_ledger().read() {
-                                                if let Ok(state) = ledger.get_chain_state() {
-                                                    consensus.update_chain_state(state);
-                                                }
-                                            }
-                                        }
+                                        // #1566: applied off the loop; see
+                                        // the `NewBlock` arm.
+                                        enqueue_network_block(
+                                            &mut apply_queue,
+                                            &node,
+                                            ApplyOrigin::Compact { block_hash: response.block_hash },
+                                            block,
+                                        );
                                     }
                                     ReconstructionResult::Incomplete { missing_indices: still_missing } => {
                                         warn!(
@@ -2114,121 +1933,41 @@ async fn run_async_with_shutdown(
                 consensus.tick();
                 #[cfg(test)]
                 if let Some(hooks) = test_hooks.as_mut() {
-                    hooks.on_tick(&consensus, in_flight.is_some());
-                }
-
-                // Process any consensus events. While an externalized apply
-                // is in flight (#1565) no further `SlotExternalized` is taken:
-                // the service will not surface one (it holds `externalized`
-                // until `advance_slot`), the test hook is not polled, and a
-                // deferred decision waits for the completion arm. Other events
-                // (`BroadcastMessage`, ...) keep draining.
-                while let Some(event) = {
-                    let resumed = if in_flight.is_none() {
-                        deferred_externalized.pop_front()
-                    } else {
-                        None
-                    };
-                    // Fault injection exists only in unit-test builds. The injected
-                    // decision uses the production cache, build/apply branch and
-                    // shutdown path below, without a synthetic cleanup replica.
-                    #[cfg(test)]
-                    let injected = if resumed.is_none() && in_flight.is_none() {
-                        test_hooks.as_mut()
-                            .and_then(|hooks| hooks.next_event(&mut consensus))
-                    } else {
-                        None
-                    };
-                    #[cfg(not(test))]
-                    let injected: Option<ConsensusEvent> = None;
-                    resumed.or(injected).or_else(|| consensus.next_event())
-                } {
-                    match event {
-                        ConsensusEvent::SlotExternalized { slot_index, values } => {
-                            debug_assert!(
-                                in_flight.is_none(),
-                                "consensus surfaced slot {slot_index} while an externalized apply is in flight"
-                            );
-                            if in_flight.is_some() {
-                                error!(
-                                    slot = slot_index,
-                                    "Slot externalized while a previous externalized apply is in flight; \
-                                     deferring it until that apply completes"
+                    hooks.on_tick(&consensus, apply_queue.is_busy());
+                    // Injected network blocks go through the SAME enqueue
+                    // functions the `NewBlock` / compact / sync arms call.
+                    for injected in hooks.take_network_blocks() {
+                        match injected {
+                            consensus_failure_tests::InjectedBlocks::Gossip(block) => {
+                                enqueue_network_block(
+                                    &mut apply_queue,
+                                    &node,
+                                    ApplyOrigin::Gossip { received_at: std::time::Instant::now() },
+                                    block,
                                 );
-                                deferred_externalized
-                                    .push_back(ConsensusEvent::SlotExternalized { slot_index, values });
-                                continue;
                             }
-                            info!(slot = slot_index, count = values.len(), "Slot externalized!");
-
-                            // Build block from externalized values. This needs
-                            // `&consensus` (tx cache), so it stays on the loop.
-                            match build_block_from_externalized(&values, &consensus) {
-                                Ok(block) => {
-                                    let block_height = block.height();
-                                    info!(
-                                        "Built block {} from consensus; applying off the node loop",
-                                        block_height
-                                    );
-                                    #[cfg(test)]
-                                    let apply_delay = test_hooks.as_ref().and_then(|hooks| hooks.apply_delay);
-                                    #[cfg(not(test))]
-                                    let apply_delay = None;
-                                    // Lottery + commit run in `spawn_blocking`
-                                    // under the apply mutex (#1565). The slot
-                                    // is NOT advanced here: the completion arm
-                                    // below calls `advance_slot` once the
-                                    // apply has finished, so `externalized`
-                                    // keeps proposals gated on the old tip.
-                                    let handle = spawn_externalized_apply(
-                                        block,
-                                        node.shared_ledger(),
-                                        node.apply_state(),
-                                        apply_delay,
-                                    )
-                                    .await;
-                                    in_flight = Some(InFlightApply {
-                                        slot_index,
-                                        values,
-                                        block_height,
-                                        handle,
-                                    });
-                                }
-                                Err(e) => {
-                                    error!(slot = slot_index, error = %e,
-                                        "Terminal consensus failure: externalized block could not be built");
-                                    let checkpoint = node.shared_ledger().read().ok()
-                                        .and_then(|ledger| ledger.get_chain_state().ok());
-                                    terminal_consensus_failure = Some(FailureEvidence::capture(
-                                        slot_index, consensus.current_slot(), checkpoint.as_ref(),
-                                        format!("Externalized block construction failed: {}", e),
-                                        &values, None, |hash| consensus.get_tx_entry(hash),
-                                    ));
-                                    break 'node_loop;
-                                }
+                            consensus_failure_tests::InjectedBlocks::Sync(peer, blocks) => {
+                                enqueue_sync_batch(&mut apply_queue, peer, blocks);
                             }
-                        }
-                        ConsensusEvent::BroadcastMessage(msg) => {
-                            // Broadcast SCP message to network
-                            if let Err(e) =
-                                NetworkDiscovery::broadcast_scp(&mut swarm, discovery.stats_ref(), &msg)
-                            {
-                                warn!("Failed to broadcast SCP message: {}", e);
-                                record_gossip_publish_error("scp");
-                            }
-
-                            // For solo mining: loop our own message back to ourselves
-                            // This is required because SCP needs to see its own messages to advance
-                            if discovery.peer_count() == 0 {
-                                if let Err(e) = consensus.handle_message(msg) {
-                                    debug!("Failed to process own SCP message: {}", e);
-                                }
-                            }
-                        }
-                        ConsensusEvent::Progress { slot_index, phase } => {
-                            debug!(slot = slot_index, phase = %phase, "Consensus progress");
                         }
                     }
+                }
+
+                // Process any consensus events (#1566 (B): the same drain
+                // runs right after `handle_message` in the `ScpMessage` arm).
+                if let Err(evidence) = drain_consensus_events(
+                    &mut consensus,
+                    &mut swarm,
+                    &discovery,
+                    &node,
+                    &mut apply_queue,
+                    #[cfg(test)]
+                    &mut test_hooks,
+                )
+                .await
+                {
+                    terminal_consensus_failure = Some(evidence);
+                    break 'node_loop;
                 }
 
                 // Publish the live SCP slot-progress snapshot (#653, epic #532
@@ -2267,137 +2006,332 @@ async fn run_async_with_shutdown(
                 }
             }
 
-            // Completion of the off-loop externalized apply (#1565). This is
-            // the ONLY place the consensus slot is advanced: externalize ->
-            // apply -> `advance_slot`, strictly ordered, exactly once per
-            // surfaced decision, never after a terminal failure.
-            outcome = join_in_flight(&mut in_flight), if in_flight.is_some() => {
-                let InFlightApply { slot_index, values, block_height, .. } = in_flight
-                    .take()
-                    .expect("completion arm is guarded by in_flight.is_some()");
-                let (block, result) = match outcome {
-                    Ok(outcome) => outcome,
-                    Err(join_error) => {
-                        // The job panicked (or was cancelled): whether the
-                        // block committed is unknown, so this is terminal.
-                        error!(slot = slot_index, height = block_height, error = %join_error,
-                            "Terminal consensus failure: externalized block application aborted");
-                        let checkpoint = node.shared_ledger().read().ok()
-                            .and_then(|ledger| ledger.get_chain_state().ok());
-                        terminal_consensus_failure = Some(FailureEvidence::capture(
-                            slot_index, consensus.current_slot(), checkpoint.as_ref(),
-                            format!("Externalized block application aborted: {}", join_error),
-                            &values, None, |hash| consensus.get_tx_entry(hash),
-                        ));
-                        break 'node_loop;
-                    }
-                };
-                match result {
-                    Err(e) => {
-                        // Issue #421 (Option A1): tolerant /
-                        // idempotent duplicate-height apply.
-                        //
-                        // SCP auto-advances its slot on
-                        // externalize, but a duplicate /
-                        // lost-the-race coinbase for a height the
-                        // ledger has ALREADY filled is rejected
-                        // here by `add_block`'s unconditional
-                        // height/prev-hash checks (the #420
-                        // no-fork property — KEEP IT). That
-                        // rejection is EXPECTED and benign: the
-                        // winning coinbase already landed at that
-                        // height, so the externalized duplicate is
-                        // provably redundant. Treat it as a benign
-                        // SKIP (not a hard error) so we don't spam
-                        // misleading error logs for the common
-                        // 2-minter race where the loser's
-                        // externalize is redundant.
-                        //
-                        // SAFETY: we ONLY classify it as benign
-                        // after VERIFYING the height is genuinely
-                        // already in the ledger (block height <=
-                        // current tip height). A block for a NEW
-                        // height that fails for any other reason
-                        // (genuinely invalid: bad PoW, wrong
-                        // difficulty/reward, etc.) is still a hard
-                        // failure — we must NOT mask real
-                        // validation failures, and we must NOT drop
-                        // a real winning block.
-                        let checkpoint = node
-                            .shared_ledger()
-                            .read()
-                            .ok()
-                            .and_then(|l| l.get_chain_state().ok());
-                        let ledger_height = checkpoint.as_ref().map(|s| s.height);
-                        let height_already_filled = consensus_failure::height_already_applied(
-                            block.height(), ledger_height,
-                        );
-                        if height_already_filled {
-                            debug!(
-                                height = block.height(),
-                                ledger_height = ledger_height.unwrap_or_default(),
-                                "Skipping duplicate-height consensus block \
-                                 (height already filled — benign, issue #421 A1): {}",
-                                e
-                            );
-                        } else {
-                            error!(slot = slot_index, height = block.height(), error = %e,
-                                "Terminal consensus failure: externalized block could not be applied");
+            // Completion of the off-loop apply job (#1565, #1566). For a
+            // `Consensus` job this is the ONLY place the consensus slot is
+            // advanced: externalize -> apply -> `advance_slot`, strictly
+            // ordered, exactly once per surfaced decision, never after a
+            // terminal failure. Every other origin runs the post-commit hooks
+            // of its former inline site here, on the loop, in the same order.
+            outcome = join_in_flight(&mut apply_queue), if apply_queue.has_in_flight() => {
+                let InFlight { origin, top_height, .. } = apply_queue
+                    .take_in_flight()
+                    .expect("completion arm is guarded by has_in_flight()");
+                if let ApplyOrigin::Consensus { slot_index, values } = origin {
+                    let block_height = top_height.unwrap_or_default();
+                    let single = match outcome {
+                        Ok(outcome) => outcome
+                            .into_single()
+                            .ok_or_else(|| "apply job returned no result".to_string()),
+                        Err(join_error) => Err(join_error.to_string()),
+                    };
+                    let (block, result) = match single {
+                        Ok(single) => single,
+                        Err(join_error) => {
+                            // The job panicked (or was cancelled): whether the
+                            // block committed is unknown, so this is terminal.
+                            error!(slot = slot_index, height = block_height, error = %join_error,
+                                "Terminal consensus failure: externalized block application aborted");
+                            let checkpoint = node.shared_ledger().read().ok()
+                                .and_then(|ledger| ledger.get_chain_state().ok());
                             terminal_consensus_failure = Some(FailureEvidence::capture(
                                 slot_index, consensus.current_slot(), checkpoint.as_ref(),
-                                format!("Externalized block application failed: {}", e),
-                                &values, Some(block), |hash| consensus.get_tx_entry(hash),
+                                format!("Externalized block application aborted: {}", join_error),
+                                &values, None, |hash| consensus.get_tx_entry(hash),
                             ));
-                            // Do not clear the externalized decision/cache or process
-                            // any more queued broadcasts, proposals or peer events.
                             break 'node_loop;
                         }
-                    }
-                    Ok(new_difficulty) => {
-                        // Post-commit step on the loop: mempool purge against
-                        // the new tip, then minter work.
-                        node.after_block_commit(&block, new_difficulty);
-
-                        // Count toward blocksFound if this node
-                        // won the slot (its coinbase) (#543).
-                        count_won_block(&minter_health, &block);
-
-                        // Record for dynamic timing
-                        consensus.record_block(block.header.timestamp, block.transactions.len());
-
-                        // Broadcast to WebSocket clients
-                        ws_broadcaster.new_block(
-                            block.height(),
-                            &block.hash(),
-                            block.header.timestamp,
-                            block.transactions.len(),
-                            block.header.difficulty,
-                        );
-
-                        // Update consensus chain state
-                        if let Ok(ledger) = node.shared_ledger().read() {
-                            if let Ok(state) = ledger.get_chain_state() {
-                                consensus.update_chain_state(state);
+                    };
+                    match result {
+                        Err(e) => {
+                            // Issue #421 (Option A1): tolerant /
+                            // idempotent duplicate-height apply.
+                            //
+                            // SCP auto-advances its slot on
+                            // externalize, but a duplicate /
+                            // lost-the-race coinbase for a height the
+                            // ledger has ALREADY filled is rejected
+                            // here by `add_block`'s unconditional
+                            // height/prev-hash checks (the #420
+                            // no-fork property — KEEP IT). That
+                            // rejection is EXPECTED and benign: the
+                            // winning coinbase already landed at that
+                            // height, so the externalized duplicate is
+                            // provably redundant. Treat it as a benign
+                            // SKIP (not a hard error) so we don't spam
+                            // misleading error logs for the common
+                            // 2-minter race where the loser's
+                            // externalize is redundant.
+                            //
+                            // SAFETY: we ONLY classify it as benign
+                            // after VERIFYING the height is genuinely
+                            // already in the ledger (block height <=
+                            // current tip height). A block for a NEW
+                            // height that fails for any other reason
+                            // (genuinely invalid: bad PoW, wrong
+                            // difficulty/reward, etc.) is still a hard
+                            // failure — we must NOT mask real
+                            // validation failures, and we must NOT drop
+                            // a real winning block.
+                            let checkpoint = node
+                                .shared_ledger()
+                                .read()
+                                .ok()
+                                .and_then(|l| l.get_chain_state().ok());
+                            let ledger_height = checkpoint.as_ref().map(|s| s.height);
+                            let height_already_filled = consensus_failure::height_already_applied(
+                                block.height(), ledger_height,
+                            );
+                            if height_already_filled {
+                                debug!(
+                                    height = block.height(),
+                                    ledger_height = ledger_height.unwrap_or_default(),
+                                    "Skipping duplicate-height consensus block \
+                                     (height already filled — benign, issue #421 A1): {}",
+                                    e
+                                );
+                            } else {
+                                error!(slot = slot_index, height = block.height(), error = %e,
+                                    "Terminal consensus failure: externalized block could not be applied");
+                                terminal_consensus_failure = Some(FailureEvidence::capture(
+                                    slot_index, consensus.current_slot(), checkpoint.as_ref(),
+                                    format!("Externalized block application failed: {}", e),
+                                    &values, Some(block), |hash| consensus.get_tx_entry(hash),
+                                ));
+                                // Do not clear the externalized decision/cache or process
+                                // any more queued broadcasts, proposals or peer events.
+                                break 'node_loop;
                             }
                         }
+                        Ok(new_difficulty) => {
+                            // Post-commit step on the loop: mempool purge against
+                            // the new tip, then minter work.
+                            node.after_block_commit(&block, new_difficulty);
 
-                        // Broadcast block with bandwidth optimization
-                        // Only send full block if there are legacy peers
-                        let legacy_peers = discovery.legacy_peer_count() > 0;
-                        if let Err(e) = NetworkDiscovery::broadcast_block_smart(
-                            &mut swarm,
-                            discovery.stats_ref(),
-                            &block,
-                            legacy_peers,
-                        ) {
-                            warn!("Failed to broadcast block: {}", e);
+                            // Count toward blocksFound if this node
+                            // won the slot (its coinbase) (#543).
+                            count_won_block(&minter_health, &block);
+
+                            // Record for dynamic timing
+                            consensus.record_block(block.header.timestamp, block.transactions.len());
+
+                            // Broadcast to WebSocket clients
+                            ws_broadcaster.new_block(
+                                block.height(),
+                                &block.hash(),
+                                block.header.timestamp,
+                                block.transactions.len(),
+                                block.header.difficulty,
+                            );
+
+                            // Update consensus chain state
+                            if let Ok(ledger) = node.shared_ledger().read() {
+                                if let Ok(state) = ledger.get_chain_state() {
+                                    consensus.update_chain_state(state);
+                                }
+                            }
+
+                            // Broadcast block with bandwidth optimization
+                            // Only send full block if there are legacy peers
+                            let legacy_peers = discovery.legacy_peer_count() > 0;
+                            if let Err(e) = NetworkDiscovery::broadcast_block_smart(
+                                &mut swarm,
+                                discovery.stats_ref(),
+                                &block,
+                                legacy_peers,
+                            ) {
+                                warn!("Failed to broadcast block: {}", e);
+                            }
                         }
                     }
-                }
 
-                // Advance to next slot (#766 / #998 / #1000: after
-                // `update_chain_state` above).
-                consensus.advance_slot();
+                    // Advance to next slot (#766 / #998 / #1000: after
+                    // `update_chain_state` above).
+                    consensus.advance_slot();
+
+                    // #1575: a #770/#419 reconcile refused while this decision
+                    // awaited application is re-run once, now that
+                    // `externalized` is clear. The service guards (strictly
+                    // behind, no ballot/commit state #436) are unchanged.
+                    if slot_reconcile.is_pending() {
+                        if let Some(height) = ledger_tip_height(&node) {
+                            if slot_reconcile.retry_after_advance(&mut consensus, height) == Some(true) {
+                                info!(
+                                    slot = consensus.current_slot(),
+                                    height,
+                                    "Advanced SCP slot to chain height on the retry of a reconcile \
+                                     refused during an externalized apply (#1575)"
+                                );
+                            }
+                        }
+                    }
+                } else {
+                    let outcome = match outcome {
+                        Ok(outcome) => outcome,
+                        Err(join_error) => {
+                            // Not terminal: only our own decision is. A panic
+                            // poisons the apply mutex, so the next consensus
+                            // apply fails closed.
+                            error!(source = origin.label(), height = ?top_height, error = %join_error,
+                                "Off-loop block apply aborted");
+                            if let ApplyOrigin::Sync { peer, .. } = &origin {
+                                sync_manager.on_failure(Some(peer), format!("sync apply aborted: {join_error}"));
+                            }
+                            continue;
+                        }
+                    };
+                    let max_txs = ConsensusConfig::default().max_txs_per_slot;
+                    // Read AFTER `record_block`, as the inline paths did: the
+                    // dynamic slot timing it feeds decides `at_min_time`.
+                    let at_min_block_time = |consensus: &ConsensusService| {
+                        ConsensusConfig::is_at_min_block_time(
+                            &ConsensusConfig::default(),
+                            consensus.current_slot_duration(),
+                        )
+                    };
+
+                    // Per committed block, in commit order.
+                    for (block, new_difficulty) in &outcome.committed {
+                        // Post-commit step: mempool purge against the new
+                        // tip, then minter work. `remove_confirmed` needs
+                        // every block's txs.
+                        node.after_block_commit(block, *new_difficulty);
+                        // Count toward blocksFound if this node's coinbase
+                        // won, e.g. the block came back via gossip before
+                        // our own externalize landed it, or a re-sync of our
+                        // own past blocks (#543).
+                        count_won_block(&minter_health, block);
+                        if let ApplyOrigin::Gossip { received_at } = &origin {
+                            // Receive-to-commit time, including queue wait.
+                            metrics_updater.observe_block_processing(received_at.elapsed().as_secs_f64());
+                            metrics_updater.inc_blocks_processed();
+                            metrics_updater.add_transactions_processed(block.transactions.len() as u64);
+                        }
+                        // Record for dynamic timing
+                        consensus.record_block(block.header.timestamp, block.transactions.len());
+                        if !origin.is_sync() {
+                            // Update dynamic fee based on congestion
+                            node.update_dynamic_fee_after_block(
+                                block.transactions.len(),
+                                max_txs,
+                                at_min_block_time(&consensus),
+                            );
+                            // Broadcast to WebSocket clients
+                            ws_broadcaster.new_block(
+                                block.height(),
+                                &block.hash(),
+                                block.header.timestamp,
+                                block.transactions.len(),
+                                block.header.difficulty,
+                            );
+                        }
+                    }
+
+                    // The first failure (the job stopped there). Never terminal.
+                    if let Some((block, e)) = &outcome.failure {
+                        match &origin {
+                            ApplyOrigin::Gossip { .. } => warn!("Failed to add network block: {}", e),
+                            ApplyOrigin::Compact { block_hash } => warn!(
+                                block = %hex::encode(&block_hash[0..8]),
+                                "Failed to add reconstructed block: {} (catch-up handles non-contiguous gaps)",
+                                e
+                            ),
+                            ApplyOrigin::Sync { peer, .. } => {
+                                warn!("Failed to add synced block {}: {}", block.height(), e);
+                                sync_manager.on_failure(Some(peer), e.to_string());
+                            }
+                            ApplyOrigin::Consensus { .. } => unreachable!("handled above"),
+                        }
+                    } else if outcome.committed.is_empty() && !origin.is_sync() {
+                        debug!(
+                            source = origin.label(),
+                            height = ?top_height,
+                            "Network block was already committed when its apply started"
+                        );
+                    }
+
+                    let applied_any = !outcome.committed.is_empty();
+                    let zero_progress = !applied_any && outcome.failure.is_none();
+                    match &origin {
+                        ApplyOrigin::Sync { peer, last_tx_count } => {
+                            if applied_any {
+                                // Update dynamic fee after syncing (use the
+                                // batch's last block's tx count)
+                                node.update_dynamic_fee_after_block(
+                                    *last_tx_count,
+                                    max_txs,
+                                    at_min_block_time(&consensus),
+                                );
+                                // Update consensus chain state and inform the
+                                // sync manager of our new height so it can tell
+                                // whether we have caught up to the target.
+                                if let Ok(ledger) = node.shared_ledger().read() {
+                                    if let Ok(state) = ledger.get_chain_state() {
+                                        metrics_updater.set_block_height(state.height);
+                                        sync_manager.on_blocks_added(state.height);
+                                        let synced_height = state.height;
+                                        consensus.update_chain_state(state);
+                                        // Issue #419 / #417 Finding 3: after catching
+                                        // up via block-sync, advance the SCP slot to
+                                        // `height + 1` so this node stops discarding
+                                        // the live network's slot messages as "future
+                                        // slots" and can actually participate. Refused
+                                        // while a consensus apply is pending; then
+                                        // retried after its `advance_slot` (#1575).
+                                        if slot_reconcile.reconcile(
+                                            &mut consensus,
+                                            synced_height,
+                                            apply_queue.consensus_pending(),
+                                        ) {
+                                            info!(
+                                                slot = consensus.current_slot(),
+                                                height = synced_height,
+                                                "Advanced SCP slot to synced chain height"
+                                            );
+                                        }
+                                    }
+                                }
+                            } else if zero_progress {
+                                // Pure-overlap batch: every block was at or
+                                // below our committed height when the job
+                                // started, so nothing was applied and no
+                                // failure was raised. Notify the sync manager
+                                // so it can track consecutive zero-progress
+                                // responses and, past a threshold, penalise a
+                                // peer that persistently re-serves a range we
+                                // already hold (#644). A one-off overlap stays
+                                // below the threshold and is tolerated.
+                                sync_manager.on_zero_progress(peer);
+                            }
+                        }
+                        _ if applied_any => {
+                            // Update consensus chain state (and, for gossip,
+                            // the chain metrics)
+                            if let Ok(ledger) = node.shared_ledger().read() {
+                                if let Ok(state) = ledger.get_chain_state() {
+                                    if matches!(origin, ApplyOrigin::Gossip { .. }) {
+                                        metrics_updater.set_block_height(state.height);
+                                        metrics_updater.set_difficulty(state.difficulty);
+                                        metrics_updater.set_total_minted(state.total_mined);
+                                        metrics_updater.set_total_fees_burned(state.total_fees_burned);
+                                    }
+                                    consensus.update_chain_state(state);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+
+                    #[cfg(test)]
+                    if let Some(hooks) = test_hooks.as_mut() {
+                        hooks.on_apply_completion(
+                            origin.label(),
+                            outcome.committed.len(),
+                            outcome.failure.is_some(),
+                            origin.is_sync() && applied_any,
+                            origin.is_sync() && zero_progress,
+                        );
+                    }
+                }
             }
 
             // Periodic status
@@ -2599,7 +2533,9 @@ async fn run_async_with_shutdown(
                 }
 
                 let connected = get_connected_peers(&discovery);
-                if let Some(action) = sync_manager.tick(&connected) {
+                // #1566: one sync batch outstanding at a time (see
+                // `gated_sync_tick`).
+                if let Some(action) = gated_sync_tick(&apply_queue, &mut sync_manager, &connected) {
                     match action {
                         SyncAction::RequestStatus(peer) => {
                             debug!("Sync: requesting status from {:?}", peer);
@@ -2641,7 +2577,7 @@ async fn run_async_with_shutdown(
                 // release the gate. Here we release it the moment the sync state
                 // machine reports `Synced`, regardless of how the node got
                 // there.
-                if !initial_sync_complete && sync_manager.is_synced() {
+                if initial_sync_gate_releases(initial_sync_complete, &sync_manager) {
                     initial_sync_complete = true;
                     consensus.set_initial_sync_complete(true);
 
@@ -2651,16 +2587,20 @@ async fn run_async_with_shutdown(
                     // `chain_height + 1` derivation; `sync_scp_slot_to_chain`
                     // only advances an idle slot (its ballot/commit-state guard
                     // is preserved) and is a no-op in solo mode.
-                    if let Ok(ledger) = node.shared_ledger().read() {
-                        if let Ok(state) = ledger.get_chain_state() {
-                            if consensus.sync_scp_slot_to_chain(state.height) {
-                                info!(
-                                    slot = consensus.current_slot(),
-                                    height = state.height,
-                                    "Initial sync complete: reconciled SCP slot to synced \
-                                     chain height before first ballot (issue #770)"
-                                );
-                            }
+                    // Refused while a consensus apply is pending; then
+                    // retried after its `advance_slot` (#1575).
+                    if let Some(height) = ledger_tip_height(&node) {
+                        if slot_reconcile.reconcile(
+                            &mut consensus,
+                            height,
+                            apply_queue.consensus_pending(),
+                        ) {
+                            info!(
+                                slot = consensus.current_slot(),
+                                height,
+                                "Initial sync complete: reconciled SCP slot to synced \
+                                 chain height before first ballot (issue #770)"
+                            );
                         }
                     }
 
@@ -2787,17 +2727,18 @@ async fn run_async_with_shutdown(
                 // Also check for pending transfer transactions in mempool
                 // and submit them to consensus.
                 //
-                // #1565: not while an externalized apply is in flight. The
+                // #1565/#1566: not while ANY apply is queued or in flight. The
                 // mempool has not had `remove_invalid` for that block yet, so a
                 // transfer conflicting with it (same key image, different
                 // hash, which `advance_slot`'s hash retire misses) could be
                 // queued and proposed for the next slot, a terminal apply
                 // failure on every node (tip-relative validity is only checked
-                // at apply, #419). The next minter tick after `advance_slot`
-                // re-feeds from the purged mempool.
+                // at apply, #419). A gossip or sync commit has the same hazard.
+                // The next minter tick after the completion re-feeds from the
+                // purged mempool.
                 let refeed_now = Instant::now();
                 let (mut refeed_published, mut refeed_suppressed) = (0usize, 0usize);
-                let refeed_txs = if in_flight.is_none() {
+                let refeed_txs = if !apply_queue.is_busy() {
                     node.get_pending_transactions(10)
                 } else {
                     Vec::new()
@@ -2993,51 +2934,69 @@ async fn run_async_with_shutdown(
         }
     }
 
-    // #1565: never leave an externalized commit running into runtime
-    // teardown, and never swallow its result. The job owns its own `Arc`
-    // clones, so the LMDB env cannot drop under it; this await is for
-    // ordering (`finish_runtime`, the test harness's settled height).
-    if let Some(job) = in_flight.take() {
+    // #1565/#1566: never leave a commit running into runtime teardown, and
+    // never swallow its result. The job owns its own `Arc` clones, so the
+    // LMDB env cannot drop under it; this await is for ordering
+    // (`finish_runtime`, the test harness's settled height). Jobs that never
+    // started are dropped: sync recovers them on restart.
+    if let Some(job) = apply_queue.take_in_flight() {
+        let height = job.top_height.unwrap_or_default();
+        let source = job.origin.label();
+        let slot = match &job.origin {
+            ApplyOrigin::Consensus { slot_index, .. } => Some(*slot_index),
+            _ => None,
+        };
         info!(
-            slot = job.slot_index,
-            height = job.block_height,
-            "Waiting for the in-flight externalized apply before shutdown"
+            ?slot,
+            height, source, "Waiting for the in-flight block apply before shutdown"
         );
         match job.handle.await {
-            Ok((_, Ok(_))) => info!(
-                slot = job.slot_index,
-                height = job.block_height,
-                "In-flight externalized apply committed during shutdown"
-            ),
-            Ok((_, Err(e))) => {
-                let ledger_height = node
-                    .shared_ledger()
-                    .read()
-                    .ok()
-                    .and_then(|l| l.get_chain_state().ok())
-                    .map(|s| s.height);
-                if consensus_failure::height_already_applied(job.block_height, ledger_height) {
-                    debug!(
-                        height = job.block_height,
-                        "In-flight externalized apply was a benign duplicate height at shutdown: {}",
-                        e
-                    );
-                } else {
-                    error!(
-                        slot = job.slot_index,
-                        height = job.block_height,
-                        error = %e,
-                        "In-flight externalized apply failed during shutdown"
-                    );
+            Ok(outcome) => match outcome.failure {
+                None => info!(
+                    ?slot,
+                    height,
+                    source,
+                    committed = outcome.committed.len(),
+                    "In-flight block apply committed during shutdown"
+                ),
+                Some((block, e)) => {
+                    let ledger_height = ledger_tip_height(&node);
+                    if slot.is_none()
+                        || consensus_failure::height_already_applied(block.height(), ledger_height)
+                    {
+                        debug!(
+                            height = block.height(),
+                            source,
+                            "In-flight block apply was a benign duplicate height or a \
+                             non-consensus failure at shutdown: {}",
+                            e
+                        );
+                    } else {
+                        error!(
+                            ?slot,
+                            height,
+                            error = %e,
+                            "In-flight externalized apply failed during shutdown"
+                        );
+                    }
                 }
-            }
+            },
             Err(e) => error!(
-                slot = job.slot_index,
-                height = job.block_height,
+                ?slot,
+                height,
+                source,
                 error = %e,
-                "In-flight externalized apply aborted during shutdown"
+                "In-flight block apply aborted during shutdown"
             ),
         }
+    }
+    let dropped = apply_queue.drain_queued();
+    if !dropped.is_empty() {
+        info!(
+            jobs = dropped.len(),
+            sources = ?dropped.iter().map(|job| job.origin.label()).collect::<Vec<_>>(),
+            "Dropping queued block applies at shutdown (sync recovers them)"
+        );
     }
 
     node.stop_minting_public();
@@ -3586,6 +3545,10 @@ fn gated_scp_quorum_set(
         suppressed_peers,
         max_auto_members: quorum_cfg.max_auto_members,
         intersection_refused,
+        // #1605: report the INSTALLED set (post-clamp, post-fallback), not the
+        // candidate, so `node_getStatus` shows what consensus actually uses.
+        quorum_size: quorum_set.members.len(),
+        quorum_threshold: quorum_set.threshold,
         curated_peer_ids,
         auto_peer_ids,
         suppressed_peer_ids,
@@ -3757,70 +3720,356 @@ fn build_block_from_externalized(
     .map_err(|e| anyhow::anyhow!("Block build error: {}", e))
 }
 
-/// An externalized block whose lottery + commit is running off the node
-/// event loop (#1565, #1550 step 1). At most one exists at a time; the
-/// consensus slot is advanced only when its job completes.
-struct InFlightApply {
-    slot_index: u64,
-    values: Vec<ConsensusValue>,
-    block_height: u64,
-    handle: tokio::task::JoinHandle<ApplyJobOutcome>,
+/// Drain every queued consensus event (#1566 (B)).
+///
+/// Shared by the `consensus_tick` arm and the `ScpMessage` arm (right after
+/// `handle_message`). This changes only WHEN the loop picks up decisions and
+/// messages the service has already produced, never WHAT SCP decides or
+/// which block is built: `check_externalized` already ran inside the service
+/// and still surfaces slots strictly in order, gated by `externalized`.
+///
+/// A `SlotExternalized` is built here (it needs the tx cache) and enqueued as
+/// a `Consensus` apply job. While a `Consensus` job is queued or in flight
+/// (#1565) the service will not surface another one (it holds `externalized`
+/// until `advance_slot`) and the test hook is not polled. Other events
+/// (`BroadcastMessage`, ...) keep draining.
+///
+/// Returns the evidence of a terminal failure (the externalized block could
+/// not be built); the caller must then `break 'node_loop`.
+async fn drain_consensus_events(
+    consensus: &mut ConsensusService,
+    swarm: &mut libp2p::Swarm<crate::network::BothoBehaviour>,
+    discovery: &NetworkDiscovery,
+    node: &Node,
+    apply_queue: &mut ApplyQueue<ApplyHandle>,
+    #[cfg(test)] test_hooks: &mut Option<FailureTestHooks>,
+) -> std::result::Result<(), FailureEvidence> {
+    while let Some(event) = {
+        // Fault injection exists only in unit-test builds. The injected
+        // decision uses the production cache, build/apply branch and
+        // shutdown path below, without a synthetic cleanup replica.
+        #[cfg(test)]
+        let injected = if !apply_queue.consensus_pending() {
+            test_hooks
+                .as_mut()
+                .and_then(|hooks| hooks.next_event(consensus))
+        } else {
+            None
+        };
+        #[cfg(not(test))]
+        let injected: Option<ConsensusEvent> = None;
+        injected.or_else(|| consensus.next_event())
+    } {
+        match event {
+            ConsensusEvent::SlotExternalized { slot_index, values } => {
+                // Defensive: the service cannot surface a second decision
+                // while one awaits application. If it ever did, the FIFO
+                // applies it after the current one, exactly as the old
+                // sequential loop would have.
+                debug_assert!(
+                    !apply_queue.consensus_pending(),
+                    "consensus surfaced slot {slot_index} while an externalized apply is pending"
+                );
+                if apply_queue.consensus_pending() {
+                    error!(
+                        slot = slot_index,
+                        "Slot externalized while a previous externalized apply is pending; \
+                         queueing it behind that apply"
+                    );
+                }
+                info!(
+                    slot = slot_index,
+                    count = values.len(),
+                    "Slot externalized!"
+                );
+
+                // Build block from externalized values. This needs
+                // `&consensus` (tx cache), so it stays on the loop.
+                match build_block_from_externalized(&values, consensus) {
+                    Ok(block) => {
+                        info!(
+                            "Built block {} from consensus; applying off the node loop",
+                            block.height()
+                        );
+                        // Lottery + commit run in the apply job under the
+                        // apply mutex (#1565). The slot is NOT advanced here:
+                        // the completion arm calls `advance_slot` once the
+                        // apply has finished, so `externalized` keeps
+                        // proposals gated on the old tip.
+                        apply_queue.push_consensus(slot_index, values, block);
+                    }
+                    Err(e) => {
+                        error!(slot = slot_index, error = %e,
+                            "Terminal consensus failure: externalized block could not be built");
+                        let checkpoint = node
+                            .shared_ledger()
+                            .read()
+                            .ok()
+                            .and_then(|ledger| ledger.get_chain_state().ok());
+                        return Err(FailureEvidence::capture(
+                            slot_index,
+                            consensus.current_slot(),
+                            checkpoint.as_ref(),
+                            format!("Externalized block construction failed: {}", e),
+                            &values,
+                            None,
+                            |hash| consensus.get_tx_entry(hash),
+                        ));
+                    }
+                }
+            }
+            ConsensusEvent::BroadcastMessage(msg) => {
+                // Broadcast SCP message to network
+                if let Err(e) = NetworkDiscovery::broadcast_scp(swarm, discovery.stats_ref(), &msg)
+                {
+                    warn!("Failed to broadcast SCP message: {}", e);
+                    record_gossip_publish_error("scp");
+                }
+
+                // For solo mining: loop our own message back to ourselves
+                // This is required because SCP needs to see its own messages to advance
+                if discovery.peer_count() == 0 {
+                    if let Err(e) = consensus.handle_message(msg) {
+                        debug!("Failed to process own SCP message: {}", e);
+                    }
+                }
+            }
+            ConsensusEvent::Progress { slot_index, phase } => {
+                debug!(slot = slot_index, phase = %phase, "Consensus progress");
+            }
+        }
+    }
+    Ok(())
 }
 
-/// The lottery-applied block plus the commit result (post-block difficulty).
-type ApplyJobOutcome = (crate::block::Block, Result<u64>);
+/// The result of one apply job (#1566).
+#[derive(Debug, Default)]
+struct JobOutcome {
+    /// Blocks committed, in order, each with its post-block difficulty.
+    /// A `Consensus` job's block is the lottery-applied one.
+    committed: Vec<(crate::block::Block, u64)>,
+    /// The first block that failed to commit, and why. The job stops there.
+    failure: Option<(crate::block::Block, anyhow::Error)>,
+    /// Blocks skipped because they were at or below the ledger tip when the
+    /// job started (#641 overlap tolerance; never for `Consensus` jobs).
+    skipped: usize,
+}
+
+impl JobOutcome {
+    /// The single-block result of a `Consensus` job.
+    fn into_single(mut self) -> Option<(crate::block::Block, Result<u64>)> {
+        match self.failure.take() {
+            Some((block, error)) => Some((block, Err(error))),
+            None => self
+                .committed
+                .pop()
+                .map(|(block, difficulty)| (block, Ok(difficulty))),
+        }
+    }
+}
+
+/// The handle of the apply job in flight.
+type ApplyHandle = tokio::task::JoinHandle<JobOutcome>;
 
 /// Await the in-flight apply job, or never resolve when there is none (the
-/// `select!` arm is also guarded by `in_flight.is_some()`).
+/// `select!` arm is also guarded by `has_in_flight()`).
 async fn join_in_flight(
-    in_flight: &mut Option<InFlightApply>,
-) -> std::result::Result<ApplyJobOutcome, tokio::task::JoinError> {
-    match in_flight {
+    queue: &mut ApplyQueue<ApplyHandle>,
+) -> std::result::Result<JobOutcome, tokio::task::JoinError> {
+    match queue.in_flight_mut() {
         Some(job) => (&mut job.handle).await,
         None => std::future::pending().await,
     }
 }
 
-/// Start the off-loop apply of an externalized block.
+/// Start an apply job off the node loop (#1565, #1566).
 ///
-/// The job locks the apply mutex FIRST and holds that one guard across
-/// `apply_lottery_to_block` and the commit, so the lottery sees exactly the
-/// ledger state `add_block_inner` validates against (lottery determinism) and
-/// no other apply path can commit in between (#558 emission ordering).
-///
-/// This returns only after the job has acquired the mutex. Any apply path
-/// that runs on the loop afterwards (the sync batch) therefore queues
-/// strictly behind this block instead of racing it for height N.
-async fn spawn_externalized_apply(
-    block: crate::block::Block,
+/// The job locks the apply mutex FIRST and holds that one guard for the
+/// whole job: across `apply_lottery_to_block` and the commit for a
+/// `Consensus` job, so the lottery sees exactly the ledger state
+/// `add_block_inner` validates against (lottery determinism), and across
+/// every block of a sync batch. Jobs start only when none is in flight, so
+/// they commit in enqueue order and no two blocks commit concurrently
+/// (#558). Nothing on the loop takes the apply mutex.
+fn spawn_apply_job(
+    job: ApplyJob,
     ledger: SharedLedger,
     apply_state: ApplyState,
     #[cfg_attr(not(test), allow(unused_variables))] apply_delay: Option<Duration>,
-) -> tokio::task::JoinHandle<ApplyJobOutcome> {
-    let (locked_tx, locked_rx) = tokio::sync::oneshot::channel::<()>();
-    let handle = tokio::task::spawn_blocking(move || {
-        let mut controller = match apply_state.lock() {
-            Ok(guard) => guard,
-            Err(_) => {
-                drop(locked_tx);
-                return (block, Err(anyhow::anyhow!("Apply state lock poisoned")));
+) -> ApplyHandle {
+    tokio::task::spawn_blocking(move || {
+        run_apply_job(
+            job.origin.is_consensus(),
+            job.blocks,
+            &ledger,
+            &apply_state,
+            apply_delay,
+        )
+    })
+}
+
+/// The body of an apply job; runs on a blocking thread.
+fn run_apply_job(
+    is_consensus: bool,
+    blocks: Vec<crate::block::Block>,
+    ledger: &SharedLedger,
+    apply_state: &ApplyState,
+    #[cfg_attr(not(test), allow(unused_variables))] apply_delay: Option<Duration>,
+) -> JobOutcome {
+    let mut outcome = JobOutcome::default();
+    let mut controller = match apply_state.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            if let Some(block) = blocks.into_iter().next() {
+                outcome.failure = Some((block, anyhow::anyhow!("Apply state lock poisoned")));
             }
-        };
-        let _ = locked_tx.send(());
-        // Apply lottery fee redistribution
-        let block = apply_lottery_to_block(block, &ledger);
-        #[cfg(test)]
-        if let Some(delay) = apply_delay {
-            std::thread::sleep(delay);
+            return outcome;
         }
-        let result = commit_block_locked(&ledger, &mut controller, &block);
-        drop(controller);
-        (block, result)
-    });
-    // A job that fails before taking the lock drops the sender; it has
-    // already finished, so there is nothing left to order against.
-    let _ = locked_rx.await;
-    handle
+    };
+    #[cfg(test)]
+    if let Some(delay) = apply_delay {
+        std::thread::sleep(delay);
+    }
+    // The tip when the job started, read under the apply mutex: no commit
+    // can land between this read and the commits below.
+    let tip_at_start = ledger
+        .read()
+        .ok()
+        .and_then(|l| l.get_chain_state().ok())
+        .map(|s| s.height);
+    for block in blocks {
+        let block = if is_consensus {
+            // Never skipped: a consensus block for a height that is already
+            // filled fails here and the completion arm classifies it (#421).
+            apply_lottery_to_block(block, ledger)
+        } else {
+            // Already have this block: skip it rather than fail. A
+            // pure-overlap sync batch therefore commits nothing and raises
+            // no failure (#641), which drives #644 `on_zero_progress`.
+            if tip_at_start.is_some_and(|tip| block.height() <= tip) {
+                outcome.skipped += 1;
+                continue;
+            }
+            block
+        };
+        match commit_block_locked(ledger, &mut controller, &block) {
+            Ok(difficulty) => outcome.committed.push((block, difficulty)),
+            Err(error) => {
+                outcome.failure = Some((block, error));
+                break;
+            }
+        }
+    }
+    drop(controller);
+    outcome
+}
+
+/// The committed ledger height, or `None` if it cannot be read.
+fn ledger_tip_height(node: &Node) -> Option<u64> {
+    node.shared_ledger()
+        .read()
+        .ok()
+        .and_then(|l| l.get_chain_state().ok())
+        .map(|s| s.height)
+}
+
+/// Enqueue a gossiped, compact or `BlockTxn` block for an off-loop apply
+/// (#1566). The single entry point for those three arms (and the test
+/// harness). Blocks at or below the projected tip are duplicates, blocks
+/// above projected + 1 are left to #423 catch-up, and a full queue drops the
+/// block; sync and the next status round recover it.
+fn enqueue_network_block(
+    queue: &mut ApplyQueue<ApplyHandle>,
+    node: &Node,
+    origin: ApplyOrigin,
+    block: crate::block::Block,
+) -> Admission {
+    let height = block.height();
+    let label = origin.label();
+    let Some(ledger_tip) = ledger_tip_height(node) else {
+        warn!(
+            height,
+            source = label,
+            "Cannot read the ledger tip; dropping network block"
+        );
+        return Admission::Full;
+    };
+    let admission = queue.admit_network_block(origin, block, ledger_tip);
+    match admission {
+        Admission::Enqueued => debug!(
+            height,
+            source = label,
+            queued = queue.queued_len(),
+            "Queued network block for off-loop apply"
+        ),
+        Admission::Duplicate { projected_tip } => debug!(
+            height,
+            projected_tip,
+            source = label,
+            "Skipping network block: height already committed, queued or in flight"
+        ),
+        Admission::Ahead { projected_tip } => debug!(
+            height,
+            projected_tip,
+            source = label,
+            "Skipping non-contiguous network block (catch-up handles gaps)"
+        ),
+        Admission::Full => debug!(
+            height,
+            source = label,
+            "Apply queue full; dropping network block (sync recovers it)"
+        ),
+    }
+    admission
+}
+
+/// Drive the sync state machine unless a sync batch is still queued or
+/// being applied (#1566).
+///
+/// `on_blocks` already cleared the sync manager's in-flight guard, so while
+/// the batch is still queued or applying, `tick` would re-request the same
+/// range; that duplicate batch would be a pure overlap and drive a #644
+/// penalty against an honest peer. Skip the state machine until the batch's
+/// completion has run `on_blocks_added`, restoring the old serialized
+/// semantics: no `GetBlocks` is issued while a `Sync` job is outstanding.
+fn gated_sync_tick<H>(
+    queue: &ApplyQueue<H>,
+    sync_manager: &mut ChainSyncManager,
+    connected: &[libp2p::PeerId],
+) -> Option<SyncAction> {
+    if queue.sync_outstanding() {
+        debug!("Sync: a block batch is still being applied; not requesting more");
+        return None;
+    }
+    sync_manager.tick(connected)
+}
+
+/// Whether the #770 startup minting/nomination gate releases on this sync
+/// tick: the first time this session that the sync manager reports `Synced`.
+///
+/// `Synced` is reached only once the committed height is at least the
+/// best-known peer height, including after a one-block catch-up (#1579), so the
+/// gate never opens with the ledger short of the known tip.
+fn initial_sync_gate_releases(
+    initial_sync_complete: bool,
+    sync_manager: &ChainSyncManager,
+) -> bool {
+    !initial_sync_complete && sync_manager.is_synced()
+}
+
+/// Enqueue one sync batch as one apply job (#1566).
+fn enqueue_sync_batch(
+    queue: &mut ApplyQueue<ApplyHandle>,
+    peer: libp2p::PeerId,
+    blocks: Vec<crate::block::Block>,
+) {
+    debug!(
+        count = blocks.len(),
+        first = blocks.first().map(|b| b.height()),
+        last = blocks.last().map(|b| b.height()),
+        "Queued sync batch for off-loop apply"
+    );
+    queue.push_sync(peer, blocks);
 }
 
 /// Apply lottery to a block using UTXOs from the ledger.
@@ -3913,6 +4162,151 @@ fn apply_lottery_to_block(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1566 A.5: no sync `GetBlocks` is issued while a `Sync` job is queued
+    /// or in flight, even though `on_blocks` already cleared the sync
+    /// manager's in-flight guard. Once the batch is gone, the next request
+    /// goes out.
+    #[test]
+    fn no_sync_get_blocks_while_a_sync_job_is_outstanding() {
+        let peer = libp2p::PeerId::random();
+        let mut sync = ChainSyncManager::new(0);
+        let mut queue: ApplyQueue<()> = ApplyQueue::new();
+        // Discovery -> status -> Downloading -> first GetBlocks.
+        assert!(matches!(
+            gated_sync_tick(&queue, &mut sync, &[peer]),
+            Some(SyncAction::RequestStatus(p)) if p == peer
+        ));
+        sync.on_status(peer, 500, [7; 32]);
+        let mut request = None;
+        for _ in 0..3 {
+            if let Some(SyncAction::RequestBlocks { start_height, .. }) =
+                gated_sync_tick(&queue, &mut sync, &[peer])
+            {
+                request = Some(start_height);
+                break;
+            }
+        }
+        assert_eq!(request, Some(1), "precondition: downloading from height 1");
+        sync.on_request_sent(peer);
+
+        // The batch arrives: `on_blocks` clears the guard and the batch is
+        // queued as a sync job.
+        let mut block = crate::block::Block::genesis();
+        block.header.height = 1;
+        let Some(SyncAction::AddBlocks(blocks)) = sync.on_blocks(&peer, vec![block], true) else {
+            panic!("expected AddBlocks");
+        };
+        queue.push_sync(peer, blocks);
+
+        // Queued, then in flight: no request at all.
+        for _ in 0..3 {
+            assert!(gated_sync_tick(&queue, &mut sync, &[peer]).is_none());
+        }
+        assert!(queue.start_next(|_| ()));
+        for _ in 0..3 {
+            assert!(gated_sync_tick(&queue, &mut sync, &[peer]).is_none());
+        }
+
+        // Once the job is gone the state machine runs again. Here (no
+        // `on_blocks_added`, the hazard the gate exists for) it re-requests
+        // the very same range, which is what the gate suppressed while the
+        // batch was outstanding.
+        assert!(queue.take_in_flight().is_some());
+        assert!(matches!(
+            gated_sync_tick(&queue, &mut sync, &[peer]),
+            Some(SyncAction::RequestBlocks {
+                start_height: 1,
+                ..
+            })
+        ));
+    }
+
+    /// #1579: a node restarted ONE block behind, with no new block produced,
+    /// downloads the missing block and releases the #770 gate with its ledger
+    /// at the peer tip, within a bounded number of sync ticks.
+    ///
+    /// Models the run loop: each iteration delivers the previous tick's
+    /// network response, runs any queued sync job to completion (the apply
+    /// worker plus its completion arm calling `on_blocks_added`), then runs
+    /// the sync-tick arm (`set_local_height`, `gated_sync_tick`, the gate
+    /// predicate). Nothing else ever advances the ledger: no gossip.
+    #[test]
+    fn one_block_behind_restart_releases_gate_at_tip_without_a_new_block() {
+        let peer = libp2p::PeerId::random();
+        const PEER_TIP: u64 = 100;
+        let mut ledger_height: u64 = PEER_TIP - 1;
+        let mut sync = ChainSyncManager::new(ledger_height);
+        let mut queue: ApplyQueue<()> = ApplyQueue::new();
+        // Startup state of a peer-expecting node (#770).
+        let initial_sync_complete = false;
+        let mut pending_response: Option<SyncAction> = None;
+        let mut released_at_tick = None;
+
+        for tick in 0..10 {
+            // A response to the previous tick's request arrives.
+            match pending_response.take() {
+                Some(SyncAction::RequestStatus(p)) => sync.on_status(p, PEER_TIP, [7; 32]),
+                Some(SyncAction::RequestBlocks {
+                    peer: p,
+                    start_height,
+                    count,
+                }) => {
+                    let end = PEER_TIP.min(start_height + u64::from(count) - 1);
+                    let blocks: Vec<_> = (start_height..=end)
+                        .map(|h| {
+                            let mut block = crate::block::Block::genesis();
+                            block.header.height = h;
+                            block
+                        })
+                        .collect();
+                    if let Some(SyncAction::AddBlocks(blocks)) = sync.on_blocks(&p, blocks, false) {
+                        queue.push_sync(p, blocks);
+                    }
+                }
+                _ => {}
+            }
+
+            // Apply worker + completion arm: commit the batch contiguously.
+            let mut committed_top = None;
+            if queue.start_next(|job| {
+                for block in &job.blocks {
+                    if block.height() == ledger_height + 1 {
+                        ledger_height = block.height();
+                    }
+                }
+                committed_top = Some(ledger_height);
+            }) {
+                assert!(queue.take_in_flight().is_some());
+                sync.on_blocks_added(committed_top.unwrap());
+            }
+
+            // Sync-tick arm.
+            sync.set_local_height(ledger_height);
+            if let Some(action) = gated_sync_tick(&queue, &mut sync, &[peer]) {
+                if let SyncAction::RequestStatus(p) | SyncAction::RequestBlocks { peer: p, .. } =
+                    &action
+                {
+                    sync.on_request_sent(*p);
+                }
+                pending_response = Some(action);
+            }
+            if initial_sync_gate_releases(initial_sync_complete, &sync) {
+                assert_eq!(
+                    ledger_height, PEER_TIP,
+                    "the #770 gate released with the ledger short of the peer tip"
+                );
+                released_at_tick = Some(tick);
+                break;
+            }
+        }
+
+        let tick = released_at_tick.expect("gate never released without a new block");
+        assert!(
+            tick <= 3,
+            "gate released only at sync tick {tick}; expected within ~3 ticks"
+        );
+    }
 
     fn peer_endpoint() -> libp2p::core::ConnectedPoint {
         libp2p::core::ConnectedPoint::Listener {
@@ -4295,6 +4689,53 @@ mod tests {
         // regardless of its peer count.
         assert!(!should_redial_bootstrap_peers(0, 0));
         assert!(!should_redial_bootstrap_peers(3, 0));
+    }
+
+    // ---- Issue #1578: an isolated config never dials a hardcoded seed ----
+
+    #[tokio::test]
+    async fn isolated_config_never_dials_hardcoded_seeds() {
+        // `fallback_seeds = false` + DNS disabled + empty list. `run` dials
+        // exactly the resolved list at startup and the reconnect tick re-dials
+        // exactly that same list, so an empty resolution means no dial ever
+        // targets a hardcoded seed, on startup or on reconnect.
+        let mut network: crate::config::NetworkConfig = toml::from_str(
+            "bootstrap_peers = []\nfallback_seeds = false\n[dns_seeds]\nenabled = false\n",
+        )
+        .unwrap();
+        for network_type in [Network::Testnet, Network::Mainnet] {
+            let resolved = network.resolve_bootstrap_peers_async(network_type).await;
+            assert_eq!(resolved.source, crate::config::BootstrapSource::None);
+            let hardcoded = crate::network::fallback_seeds(network_type);
+            assert!(!hardcoded.is_empty());
+            // Startup dial list.
+            assert!(resolved.peers.iter().all(|p| !hardcoded.contains(p)));
+            assert!(resolved.peers.is_empty());
+            // Reconnect tick: with nothing resolved it never fires, at any
+            // peer count.
+            for peer_count in 0..4 {
+                assert!(!should_redial_bootstrap_peers(
+                    peer_count,
+                    resolved.peers.len()
+                ));
+            }
+        }
+
+        // Contrast: the same config with the default fallback re-dials the
+        // hardcoded seeds while under-connected (unchanged behaviour).
+        network.fallback_seeds = true;
+        let resolved = network
+            .resolve_bootstrap_peers_async(Network::Testnet)
+            .await;
+        assert_eq!(
+            resolved.source,
+            crate::config::BootstrapSource::FallbackSeeds
+        );
+        assert_eq!(
+            resolved.peers,
+            crate::network::fallback_seeds(Network::Testnet)
+        );
+        assert!(should_redial_bootstrap_peers(0, resolved.peers.len()));
     }
 
     // ---- Issue #770: startup sync gate — a restarted node behind the fleet
@@ -4780,6 +5221,124 @@ mod tests {
         let (qs, _snap) = gated_scp_quorum_set(&cfg, &local, &curated, None);
         assert_eq!(qs.members.len(), 3, "self must appear exactly once");
         assert!(qs.is_valid(), "no duplicate members: {qs:?}");
+    }
+
+    /// #1605: an explicit 4-of-5 roster (self + 4 valid members) reports the
+    /// installed 5/4 shape in the gate snapshot, i.e. f = 1.
+    #[test]
+    fn gate_snapshot_reports_installed_explicit_4_of_5() {
+        let curated = synthetic_peers(4);
+        let cfg = QuorumConfig {
+            mode: QuorumMode::Explicit,
+            threshold: 4,
+            members: curated.iter().map(|p| p.to_string()).collect(),
+            ..QuorumConfig::default()
+        };
+        let local = ed25519_peer_id([0xB1; 32]);
+
+        // Only one member connected: explicit membership must not follow
+        // connectivity, so the installed set is still 5/4.
+        let (qs, snap) = gated_scp_quorum_set(&cfg, &local, &curated[..1], None);
+        assert_eq!(snap.quorum_size, 5);
+        assert_eq!(snap.quorum_threshold, 4);
+        assert_eq!(snap.quorum_size, qs.members.len());
+        assert_eq!(snap.quorum_threshold, qs.threshold);
+        assert!(!snap.intersection_refused);
+        assert_eq!(
+            crate::config::byzantine_tolerance(snap.quorum_size, snap.quorum_threshold as usize),
+            1
+        );
+    }
+
+    /// #1605: a roster member that does not parse as a PeerId is dropped by
+    /// the gate, so the installed set is 4-of-4 (f = 0) even though the config
+    /// lists five entries. The snapshot must report the INSTALLED size.
+    #[test]
+    fn gate_snapshot_counts_only_parseable_members() {
+        let curated = synthetic_peers(3);
+        let mut members: Vec<String> = curated.iter().map(|p| p.to_string()).collect();
+        // Not decodable as a PeerId: `0`, `O`, `I` and `l` are outside the
+        // base58btc alphabet. (A base58-clean string of the right length can
+        // still parse as an identity multihash in libp2p, which is why the
+        // stress renderer additionally pins the Ed25519 prefix.)
+        members.push("12D3KooW0OIl-not-a-peer-id".to_string());
+        let cfg = QuorumConfig {
+            mode: QuorumMode::Explicit,
+            threshold: 4,
+            members,
+            ..QuorumConfig::default()
+        };
+        let local = ed25519_peer_id([0xB2; 32]);
+
+        let (qs, snap) = gated_scp_quorum_set(&cfg, &local, &curated, None);
+        assert_eq!(qs.members.len(), 4, "self + 3 parseable members");
+        assert_eq!(snap.quorum_size, 4);
+        assert_eq!(snap.quorum_threshold, 4);
+        assert!(!snap.intersection_refused);
+        assert_eq!(
+            crate::config::byzantine_tolerance(snap.quorum_size, snap.quorum_threshold as usize),
+            0,
+            "a dropped member must surface as f = 0"
+        );
+        // The config-derived figure agrees (same helper, same parse-drop).
+        assert_eq!(cfg.explicit_byzantine_tolerance(&local.to_string()), 0);
+    }
+
+    /// #1605: an explicit threshold larger than the member count is clamped
+    /// by the gate; the snapshot reports the clamped (installed) threshold.
+    #[test]
+    fn gate_snapshot_reports_clamped_threshold() {
+        let curated = synthetic_peers(4);
+        let cfg = QuorumConfig {
+            mode: QuorumMode::Explicit,
+            threshold: 9,
+            members: curated.iter().map(|p| p.to_string()).collect(),
+            ..QuorumConfig::default()
+        };
+        let local = ed25519_peer_id([0xB3; 32]);
+
+        let (qs, snap) = gated_scp_quorum_set(&cfg, &local, &curated, None);
+        assert_eq!(qs.threshold, 5, "clamped to n");
+        assert_eq!(snap.quorum_size, 5);
+        assert_eq!(snap.quorum_threshold, 5, "snapshot shows the clamp, not 9");
+        assert!(!snap.intersection_refused);
+    }
+
+    /// #1605: when the intersection check refuses the candidate, the snapshot
+    /// reports the FALLBACK set (majority seed, or the kept previous set),
+    /// not the refused candidate threshold.
+    #[test]
+    fn gate_snapshot_reports_intersection_fallback() {
+        let curated = synthetic_peers(3);
+        let cfg = QuorumConfig {
+            mode: QuorumMode::Explicit,
+            threshold: 2, // 2-of-4: disjoint quorums, refused
+            members: curated.iter().map(|p| p.to_string()).collect(),
+            ..QuorumConfig::default()
+        };
+        let local = ed25519_peer_id([0xB4; 32]);
+
+        // Initial seed: majority fallback 3-of-4.
+        let (_qs, snap) = gated_scp_quorum_set(&cfg, &local, &curated, None);
+        assert!(snap.intersection_refused);
+        assert_eq!(snap.quorum_size, 4);
+        assert_eq!(
+            snap.quorum_threshold, 3,
+            "fallback threshold, not candidate 2"
+        );
+
+        // With a previous set: the kept previous set's shape is reported.
+        let previous = QuorumSet::new(
+            1,
+            vec![bth_consensus_scp_types::QuorumSetMember::Node(
+                peer_id_to_node_id(&local),
+            )],
+        );
+        let (qs, snap) = gated_scp_quorum_set(&cfg, &local, &curated, Some(&previous));
+        assert!(snap.intersection_refused);
+        assert_eq!(qs, previous);
+        assert_eq!(snap.quorum_size, 1);
+        assert_eq!(snap.quorum_threshold, 1);
     }
 
     #[test]
