@@ -482,7 +482,14 @@ def expected_quorum():
     return n, QUORUM_THRESHOLD, byzantine_tolerance(n, QUORUM_THRESHOLD)
 
 
-def check_quorum(status):
+# Config-derived quorum fields are non-null from node start; the gate-derived
+# ones are all null until the gate's first evaluation (#1608).
+QUORUM_CONFIG_KEYS = ('quorumMode', 'quorumFaultTolerant', 'quorumDegenerate')
+QUORUM_GATE_KEYS = ('quorumSize', 'quorumThreshold', 'quorumByzantineTolerance',
+                    'quorumAutoMembers', 'quorumGateIntersectionRefused')
+
+
+def check_quorum(status, allow_unevaluated=False):
     """Fail closed unless the node reports the installed explicit 4-of-5, f = 1 quorum (#1605).
 
     The node drops an unparseable roster member without failing, which would
@@ -491,6 +498,11 @@ def check_quorum(status):
     post-fallback), so this reads the truth rather than the config. A missing
     or null field (an older binary, or a node before its first gate
     evaluation) is a refusal too.
+
+    ``allow_unevaluated`` (a host inside its own restart window, #1608)
+    accepts a node that has not evaluated its gate yet: every gate-derived
+    key present and null. The config-derived keys stay strict, and a partial
+    null or a missing key still refuses.
     """
     n, t, f = expected_quorum()
     expected = {
@@ -503,8 +515,11 @@ def check_quorum(status):
         'quorumAutoMembers': 0,
         'quorumGateIntersectionRefused': False,
     }
-    for key, want in expected.items():
-        got = status.get(key)
+    keys = list(expected)
+    if allow_unevaluated and all(k in status and status[k] is None for k in QUORUM_GATE_KEYS):
+        keys = list(QUORUM_CONFIG_KEYS)
+    for key in keys:
+        want, got = expected[key], status.get(key)
         # `type(...) is` so True never passes as 1 or 0 as False.
         if got is None or type(got) is not type(want) or got != want:
             raise Gate('installed quorum is not explicit %d-of-%d with f=%d: %s=%r'
