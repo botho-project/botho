@@ -535,7 +535,19 @@ Before T0, the controller actually signs, submits, and reconciles 18 minutes at
 additional minutes of bounded receipt drain. All 540 offers must reconcile;
 the controller then performs a full rescan, exact accounting, fresh fee reads
 from all five nodes, and the inventory/headroom checks again. A failed rehearsal
-records `generator_limited` and cannot activate a 72-hour clock. Calibration
+records `generator_limited` and cannot activate a 72-hour clock, unless the v2
+plan sets `rehearsal.generator_limited_acceptable: true` (#1576 decision 1,
+#1613; schema v1 rejects the key). The opt-in accepts only cadence failures
+(`submission_offer_lag`, `overall_cadence`, `rolling_cadence`,
+`non_monotonic_submissions`). It requires a clean ledger: all offers
+reconciled, nothing signed-unsubmitted or unsigned, and a checked artifact
+directory with no orphaned or ambiguous signed artifacts. The controller
+journals a `rehearsal_generator_limited_accepted` event and still runs every
+post-rehearsal gate. Reports keep `status: generator_limited` and add
+`accepted_as`; rehearsal-only qualification reports
+`accepted_generator_limited`, never `passed`. The x-series plan opts in and caps
+normal submissions at 40/min (wire budget 24 MiB) so that a backlog can drain
+during its 30/min peaks. Calibration
 checks the original offer timestamps and finite, ordered submission/receipt
 records. Each submission must follow its offer by at most four seconds at the
 default two-second cadence (in general, twice the interval, bounded to 1–5

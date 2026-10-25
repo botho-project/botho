@@ -231,8 +231,12 @@ def rehearsal_summary(journal, plan, artifacts=None):
     ]
     uncertain = {f["intent_id"] for f in findings}
     checked = artifacts is not None and artifacts["status"] == "checked"
+    # Present only under the plan opt-in (#1613): never readable as a pass.
+    acceptance = journal.get("rehearsal_acceptance")
+    accepted = {"accepted_as": acceptance["accepted_as"]} if acceptance else {}
     return {
         **result,
+        **accepted,
         "expected": expected,
         "offered": len(rows),
         "not_yet_offered": max(0, expected - len(rows)),

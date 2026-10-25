@@ -9,6 +9,18 @@ from runtime import Gate, HOSTS, Quota, atomic, digest
 from selection import choose
 from fee_evidence import quote_evidence, summarize_fees
 
+# #1576 decision 1: the only rehearsal failures a plan opt-in may accept.
+# Each is a cadence measurement; ledger or timestamp failures always gate.
+CADENCE_FAILURES = frozenset(
+    {
+        "non_monotonic_submissions",
+        "overall_cadence",
+        "rolling_cadence",
+        "submission_offer_lag",
+    }
+)
+ACCEPTED_AS = "generator_limited (plan opt-in, #1576 decision 1)"
+
 
 def rehearsal_result(
     rows, expected, duration, *, start, cutoff, receipt_deadline, now, offer_grace=120
@@ -326,7 +338,7 @@ class DiscoveryController(Controller):
             offer_grace=self.j.limits["start_slot_grace_seconds"],
         )
         self.j.set("rehearsal_result", result)
-        if result["status"] != "passed":
+        if result["status"] != "passed" and not self.accept_generator_limited(result):
             raise Gate("generator_limited: short peak-rate rehearsal incomplete")
         height = await self.sync(full=True)
         self.accounting()
@@ -343,7 +355,12 @@ class DiscoveryController(Controller):
             with self.j.transaction():
                 self.j.set("status", "rehearsal_complete")
                 self.j.set("stopped_at", time.time())
-                self.j.set("reason", "qualification passed; campaign not requested")
+                self.j.set(
+                    "reason",
+                    "qualification accepted as " + ACCEPTED_AS + "; campaign not requested"
+                    if self.j.get("rehearsal_acceptance")
+                    else "qualification passed; campaign not requested",
+                )
             self.report()
             return
         start = time.time() + 60
@@ -363,10 +380,74 @@ class DiscoveryController(Controller):
                 "plan_sha256": digest(self.plan),
                 "run_id": self.config["run_id"],
                 "rehearsal": result,
+                **(
+                    {"rehearsal_acceptance": self.j.get("rehearsal_acceptance")}
+                    if self.j.get("rehearsal_acceptance")
+                    else {}
+                ),
                 "fee_coverage": "not_exercised",
             },
         )
         self.report()
+
+    def accept_generator_limited(self, result):
+        """#1576 decision 1: a plan may accept a cadence-only miss.
+
+        Only a ``generator_limited`` result whose failures are all cadence
+        checks, under the plan's ``rehearsal.generator_limited_acceptable``
+        opt-in, with a clean ledger: every offer reconciled, nothing signed
+        but unsubmitted, nothing unsigned, and a checked artifact directory
+        with no orphaned or ambiguous signed artifacts. The acceptance is
+        journaled; the caller still runs every post-rehearsal gate.
+        """
+        if (
+            result.get("status") != "generator_limited"
+            or self.plan["rehearsal"].get("generator_limited_acceptable") is not True
+            or not set(result.get("failures", ())) <= CADENCE_FAILURES
+        ):
+            return False
+        from reporting import artifact_evidence, rehearsal_summary
+
+        artifacts = artifact_evidence(
+            self.state, self.j.rows(), self.j.limits["max_signed_transaction_bytes"]
+        )
+        ledger = rehearsal_summary(self.j, self.plan, artifacts)
+        expected = result["expected"]
+        if not (
+            artifacts["status"] == "checked"
+            and artifacts["orphaned_signed"] == 0
+            and artifacts["ambiguous_signed"] == 0
+            and ledger["expected"] == expected
+            and ledger["offered"] == result["offered"] == expected
+            and ledger["reconciled"] == result["reconciled"] == expected
+            and ledger["orphaned_signed_artifacts"] == 0
+            and ledger["ambiguous_signed_artifacts"] == 0
+            and ledger["signed_unsubmitted"] == 0
+            and ledger["unsigned"] == 0
+        ):
+            return False
+        if self.j.get("rehearsal_acceptance") is None:
+            acceptance = {
+                "accepted_as": ACCEPTED_AS,
+                "at": time.time(),
+                "result": result,
+                "ledger": {
+                    k: ledger[k]
+                    for k in (
+                        "expected",
+                        "offered",
+                        "reconciled",
+                        "orphaned_signed_artifacts",
+                        "ambiguous_signed_artifacts",
+                        "signed_unsubmitted",
+                        "unsigned",
+                    )
+                },
+            }
+            with self.j.transaction():
+                self.j.event(None, "rehearsal_generator_limited_accepted", acceptance)
+                self.j.set("rehearsal_acceptance", acceptance)
+        return True
 
     def materialize(self, events, start, kind, now):
         grace = self.j.limits["start_slot_grace_seconds"]
@@ -541,7 +622,9 @@ class DiscoveryController(Controller):
             report["not_yet_offered"] = report["rehearsal"]["not_yet_offered"]
             delivery = "not_requested"
             report["qualification_status"] = (
-                "passed"
+                "accepted_generator_limited"
+                if status == "rehearsal_complete" and self.j.get("rehearsal_acceptance")
+                else "passed"
                 if status == "rehearsal_complete"
                 else "failed"
                 if status in ("held", "incomplete")

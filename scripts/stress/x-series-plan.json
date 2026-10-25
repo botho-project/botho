@@ -45,14 +45,14 @@
     "max_signed_fee_picocredits": "100000000000000",
     "max_single_signed_fee_picocredits": "1000000000",
     "max_inflight": 32,
-    "max_normal_submissions_per_minute": 30,
+    "max_normal_submissions_per_minute": 40,
     "max_burst_size": 32,
     "max_rpc_per_endpoint_per_minute": 300,
     "max_automatic_rebroadcasts": 0,
     "start_slot_grace_seconds": 120,
     "max_queued_intents": 64,
     "max_signed_transaction_bytes": 262144,
-    "max_wire_submission_bytes_per_minute": 16777216
+    "max_wire_submission_bytes_per_minute": 25165824
   },
   "observation": {
     "idle_local_interval_seconds": 60,
@@ -343,7 +343,8 @@
   "rehearsal": {
     "duration_seconds": 1200,
     "interval_seconds": 2,
-    "drain_seconds": 300
+    "drain_seconds": 300,
+    "generator_limited_acceptable": true
   },
   "seed": 1475,
   "degrade": {
