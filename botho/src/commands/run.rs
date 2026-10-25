@@ -535,8 +535,9 @@ fn spawn_shutdown_signal_listener(flag: Arc<AtomicBool>) -> Result<()> {
             {
                 Ok(rt) => rt,
                 Err(e) => {
-                    let _ = ready_tx.send(Err(anyhow::Error::new(e)
-                        .context("build shutdown-signal runtime")));
+                    let _ = ready_tx.send(Err(
+                        anyhow::Error::new(e).context("build shutdown-signal runtime")
+                    ));
                     return;
                 }
             };
@@ -554,8 +555,7 @@ fn spawn_shutdown_signal_listener(flag: Arc<AtomicBool>) -> Result<()> {
                         })
                 };
                 #[cfg(not(unix))]
-                let installed =
-                    tokio::signal::windows::ctrl_c().context("install Ctrl-C handler");
+                let installed = tokio::signal::windows::ctrl_c().context("install Ctrl-C handler");
                 let mut handlers = match installed {
                     Ok(h) => h,
                     Err(e) => {
@@ -612,7 +612,7 @@ mod shutdown_signal_tests {
         // Install BEFORE raising: the default disposition kills the process.
         spawn_shutdown_signal_listener(flag.clone()).unwrap();
         raise(signal).unwrap();
-        wait_for_flag(&flag, &signal.to_string());
+        wait_for_flag(&flag, signal.as_ref());
     }
 
     /// One test, sequential: a fresh listener per phase, so the SIGINT
