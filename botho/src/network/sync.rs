@@ -924,8 +924,10 @@ impl ChainSyncManager {
     /// (statuses and [`Self::note_gossiped_tip`]) and each batch fetches up to
     /// [`BLOCKS_PER_REQUEST`] blocks, so retargeting converges.
     ///
-    /// Clears the in-flight guard on retarget so `tick()` issues the next
-    /// batch from `local_height + 1`. Returns `true` if the state became
+    /// Retargeting leaves the in-flight guard untouched: an outstanding
+    /// request still resolves through `on_blocks` or `on_failure` (timeouts
+    /// arrive as `SyncResponse::Error`), and the next `tick()` then requests
+    /// from `local_height + 1` (#641). Returns `true` if the state became
     /// `Synced`.
     fn finish_or_retarget_download(&mut self) -> bool {
         let best = self.best_peer().map(|(peer, status)| (peer, status.height));
@@ -941,7 +943,13 @@ impl ChainSyncManager {
                     peer,
                     target_height: height,
                 };
-                self.pending_request = None;
+                // Do NOT clear `pending_request` here. From `on_blocks_added`
+                // the guard is already `None` (`on_blocks` cleared it); from
+                // `tick` a request may still be in flight, and only a
+                // response, a failure or a disconnect may clear the guard
+                // (#641). Clearing it would issue an overlapping `GetBlocks`
+                // whose reply counts a #644 zero-progress against an honest
+                // peer.
                 false
             }
             _ => {
@@ -1683,6 +1691,51 @@ mod tests {
         manager.pending_request = None; // the batch resolved
         assert!(matches!(manager.tick(&[peer]), Some(SyncAction::Synced)));
         assert!(manager.is_synced());
+    }
+
+    #[test]
+    fn test_tick_retarget_keeps_in_flight_guard() {
+        // Issue #1579 review: when gossip carries the ledger to the old
+        // target while a `GetBlocks` is still in flight and a higher peer is
+        // known, the `tick` retarget must NOT clear the #641 in-flight guard.
+        // A second `GetBlocks` before the first is answered would overlap and
+        // count a #644 zero-progress against an honest peer.
+        let mut manager = ChainSyncManager::new(98);
+        let peer = make_peer_id();
+        manager.on_status(peer, 100, [1u8; 32]);
+        assert_eq!(
+            requested_blocks(manager.tick(&[peer])),
+            Some((peer, 99, BLOCKS_PER_REQUEST))
+        );
+
+        // Gossip reaches the old target and reveals a higher tip while the
+        // request for [99..] is still outstanding.
+        manager.note_gossiped_tip(&[peer], 103, [3u8; 32]);
+        manager.set_local_height(100);
+
+        assert!(
+            manager.tick(&[peer]).is_none(),
+            "retarget must not issue a second GetBlocks while one is in flight"
+        );
+        assert_eq!(
+            manager.state(),
+            &SyncState::Downloading {
+                peer,
+                target_height: 103
+            }
+        );
+        assert!(
+            manager.tick(&[peer]).is_none(),
+            "guard must hold on every tick until the response arrives"
+        );
+
+        // The in-flight response arrives (pure overlap: the run loop applies
+        // nothing). Only now may the next batch go out, from local + 1.
+        assert!(manager.on_blocks(&peer, vec![], false).is_none());
+        assert_eq!(
+            requested_blocks(manager.tick(&[peer])),
+            Some((peer, 101, BLOCKS_PER_REQUEST))
+        );
     }
 
     #[test]
