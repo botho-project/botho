@@ -1041,9 +1041,10 @@ async fn run_async_with_shutdown(
     // has no fleet to fall behind, so it starts synced and mints immediately
     // (preserves the solo carve-out). A peer-expecting node starts NOT synced
     // and flips true the first time the sync manager reports `Synced` — which,
-    // for a node already at/near tip, happens after the first peer-status round
-    // (no meaningful delay), and for a node genuinely behind happens only after
-    // catch-up completes. The `consensus` service mirrors this flag so its
+    // for a node already at the tip, happens after the first peer-status round
+    // (no meaningful delay), and for a node behind by any gap (including a
+    // single block, #1579) happens only after catch-up has committed the
+    // missing blocks. The `consensus` service mirrors this flag so its
     // nomination/ballot proposer is gated identically (see
     // `ConsensusService::set_initial_sync_complete`).
     let mut initial_sync_complete = min_peers_to_wait == 0;
@@ -2443,7 +2444,7 @@ async fn run_async_with_shutdown(
                 // release the gate. Here we release it the moment the sync state
                 // machine reports `Synced`, regardless of how the node got
                 // there.
-                if !initial_sync_complete && sync_manager.is_synced() {
+                if initial_sync_gate_releases(initial_sync_complete, &sync_manager) {
                     initial_sync_complete = true;
                     consensus.set_initial_sync_complete(true);
 
@@ -3906,6 +3907,19 @@ fn gated_sync_tick<H>(
     sync_manager.tick(connected)
 }
 
+/// Whether the #770 startup minting/nomination gate releases on this sync
+/// tick: the first time this session that the sync manager reports `Synced`.
+///
+/// `Synced` is reached only once the committed height is at least the
+/// best-known peer height, including after a one-block catch-up (#1579), so the
+/// gate never opens with the ledger short of the known tip.
+fn initial_sync_gate_releases(
+    initial_sync_complete: bool,
+    sync_manager: &ChainSyncManager,
+) -> bool {
+    !initial_sync_complete && sync_manager.is_synced()
+}
+
 /// Enqueue one sync batch as one apply job (#1566).
 fn enqueue_sync_batch(
     queue: &mut ApplyQueue<ApplyHandle>,
@@ -4069,6 +4083,92 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    /// #1579: a node restarted ONE block behind, with no new block produced,
+    /// downloads the missing block and releases the #770 gate with its ledger
+    /// at the peer tip, within a bounded number of sync ticks.
+    ///
+    /// Models the run loop: each iteration delivers the previous tick's
+    /// network response, runs any queued sync job to completion (the apply
+    /// worker plus its completion arm calling `on_blocks_added`), then runs
+    /// the sync-tick arm (`set_local_height`, `gated_sync_tick`, the gate
+    /// predicate). Nothing else ever advances the ledger: no gossip.
+    #[test]
+    fn one_block_behind_restart_releases_gate_at_tip_without_a_new_block() {
+        let peer = libp2p::PeerId::random();
+        const PEER_TIP: u64 = 100;
+        let mut ledger_height: u64 = PEER_TIP - 1;
+        let mut sync = ChainSyncManager::new(ledger_height);
+        let mut queue: ApplyQueue<()> = ApplyQueue::new();
+        // Startup state of a peer-expecting node (#770).
+        let initial_sync_complete = false;
+        let mut pending_response: Option<SyncAction> = None;
+        let mut released_at_tick = None;
+
+        for tick in 0..10 {
+            // A response to the previous tick's request arrives.
+            match pending_response.take() {
+                Some(SyncAction::RequestStatus(p)) => sync.on_status(p, PEER_TIP, [7; 32]),
+                Some(SyncAction::RequestBlocks {
+                    peer: p,
+                    start_height,
+                    count,
+                }) => {
+                    let end = PEER_TIP.min(start_height + u64::from(count) - 1);
+                    let blocks: Vec<_> = (start_height..=end)
+                        .map(|h| {
+                            let mut block = crate::block::Block::genesis();
+                            block.header.height = h;
+                            block
+                        })
+                        .collect();
+                    if let Some(SyncAction::AddBlocks(blocks)) = sync.on_blocks(&p, blocks, false) {
+                        queue.push_sync(p, blocks);
+                    }
+                }
+                _ => {}
+            }
+
+            // Apply worker + completion arm: commit the batch contiguously.
+            let mut committed_top = None;
+            if queue.start_next(|job| {
+                for block in &job.blocks {
+                    if block.height() == ledger_height + 1 {
+                        ledger_height = block.height();
+                    }
+                }
+                committed_top = Some(ledger_height);
+            }) {
+                assert!(queue.take_in_flight().is_some());
+                sync.on_blocks_added(committed_top.unwrap());
+            }
+
+            // Sync-tick arm.
+            sync.set_local_height(ledger_height);
+            if let Some(action) = gated_sync_tick(&queue, &mut sync, &[peer]) {
+                if let SyncAction::RequestStatus(p) | SyncAction::RequestBlocks { peer: p, .. } =
+                    &action
+                {
+                    sync.on_request_sent(*p);
+                }
+                pending_response = Some(action);
+            }
+            if initial_sync_gate_releases(initial_sync_complete, &sync) {
+                assert_eq!(
+                    ledger_height, PEER_TIP,
+                    "the #770 gate released with the ledger short of the peer tip"
+                );
+                released_at_tick = Some(tick);
+                break;
+            }
+        }
+
+        let tick = released_at_tick.expect("gate never released without a new block");
+        assert!(
+            tick <= 3,
+            "gate released only at sync tick {tick}; expected within ~3 ticks"
+        );
     }
 
     fn peer_endpoint() -> libp2p::core::ConnectedPoint {

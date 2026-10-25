@@ -460,9 +460,11 @@ fn test_fresh_node_syncs_small_gap_chain_discovery_only() {
     }
 }
 
-/// REGRESSION (#423) unit-level: the `on_status` gate must enter `Downloading`
-/// for a small gap (>= 2) and stay `Synced` for a 1-block lag (gossip closes
-/// that). Pre-fix, `on_status(peer, 9, ..)` from height 0 went to `Synced`.
+/// REGRESSION (#423, #1579) unit-level: during discovery the `on_status` gate
+/// must enter `Downloading` for ANY gap, and reach `Synced` only at equal
+/// height. Pre-#423, `on_status(peer, 9, ..)` from height 0 went to `Synced`;
+/// pre-#1579, a 1-block lag at startup went to `Synced` and waited for gossip
+/// that never re-delivers the missed block.
 #[test]
 #[serial]
 fn test_on_status_gap_triggers_download_boundary() {
@@ -479,12 +481,20 @@ fn test_on_status_gap_triggers_download_boundary() {
     sm.on_status(PeerId::random(), 7, [1u8; 32]);
     assert!(!sm.is_synced(), "gap of 2 must trigger Downloading");
 
-    // gap = 1: must NOT trigger a download (gossip delivers the next block).
+    // gap = 1 at startup: must enter Downloading too (#1579). The missed block
+    // was gossiped while the node was down and is never re-gossiped.
     let mut sm = ChainSyncManager::new(5);
     sm.on_status(PeerId::random(), 6, [1u8; 32]);
     assert!(
-        sm.is_synced(),
-        "a 1-block lag must not thrash into Downloading; gossip closes it"
+        matches!(
+            sm.state(),
+            SyncState::Downloading {
+                target_height: 6,
+                ..
+            }
+        ),
+        "a 1-block lag at startup must download the gap block, got {:?}",
+        sm.state()
     );
 
     // gap = 0 (equal heights): synced.
