@@ -21,6 +21,17 @@ CADENCE_FAILURES = frozenset(
 )
 ACCEPTED_AS = "generator_limited (plan opt-in, #1576 decision 1)"
 
+# #1618: one admission pass (one run-loop tick) may prepare and submit several
+# due offers. After the first, an attempt starts only while the tick is younger
+# than this budget, and never more than MAX_ATTEMPTS_PER_PASS (the pre-#1618
+# bound) per pass. x1 attempt b measured ~2.55 s between prepares (0.69 s of
+# it signing), so a 1 s budget would still admit one per tick; 4 s admits up
+# to three (~40/min), and the 40/min submission quota stays the rate limit.
+# admission_lock is only taken here; the monitor and reconciler run
+# concurrently, and every prepare() re-checks gate() (STOP, holds, deadline).
+ADMISSION_TICK_BUDGET_SECONDS = 4.0
+MAX_ATTEMPTS_PER_PASS = 4
+
 
 def rehearsal_result(
     rows, expected, duration, *, start, cutoff, receipt_deadline, now, offer_grace=120
@@ -487,8 +498,11 @@ class DiscoveryController(Controller):
 
         ``sender_busy``: its sender still has a pending spend
         (max_inflight_per_wallet is 1). ``inflight_cap``: the global or phase
-        max_inflight is full. The set is rebuilt from the journal after a
-        restart, so a deferral is never counted twice.
+        max_inflight is full. ``admission_backlog`` (#1618): the offer was due
+        and admissible but this admission pass ended (tick wall-clock budget or
+        the per-pass attempt bound) before it was attempted, i.e. controller
+        throughput, not a ledger limit, held it back. The set is rebuilt from
+        the journal after a restart, so a deferral is never counted twice.
         """
         seen = getattr(self, "_deferrals", None)
         if seen is None:
@@ -508,18 +522,48 @@ class DiscoveryController(Controller):
         )
 
     async def deliver(self, events, start, kind):
+        """Attempt every due offer this pass can admit, oldest first (#1618).
+
+        One pass used to stop at the first successful prepare, so the serial
+        admission cadence (~2.5 s per transaction on x1) capped throughput
+        near 23/min under a 30/min offer clock. A pass now keeps preparing
+        (each prepare signs, then submits) until one of the existing limits
+        binds: sender busy and max_inflight (re-read after every attempt),
+        the per-minute submission and wire-byte budgets (begin_submit raises
+        Quota, which ends the pass so the signed row keeps its slot and no
+        new signature is made), MAX_ATTEMPTS_PER_PASS attempts, or the tick
+        wall-clock budget. Every safety gate stays inside prepare() and
+        Journal.prepare(). One read-only scan serves the whole pass: inputs
+        signed earlier in the pass are reserved before the next selection.
+        """
         now = time.time()
+        tick_started = getattr(self, "admission_started", None)
+        budget_end = (now if tick_started is None else tick_started) + (
+            ADMISSION_TICK_BUDGET_SECONDS
+        )
         self.materialize(events, start, kind, now)
-        # pending() (incl. confirmed-but-unscanned rows) guards sender reuse;
-        # only inflight() rows count against the cap (#1551).
-        pending = self.j.pending()
-        inflight = self.j.inflight()
         lookup = {event["intent"]: event for event in events}
-        busy = {p["sender"] for p in pending}
         attempted = 0
+        scanned = None
+
+        async def scan():
+            # The first attempt scans exactly where prepare() always did
+            # (after its gate and sender checks); later attempts reuse it.
+            nonlocal scanned
+            if scanned is None:
+                scanned = await self.sync()
+            return scanned
+
+        stale = True
         for row in self.j.rows(
             "kind=? AND state IN ('planned','eligible') ORDER BY offered,id", (kind,)
         ):
+            if stale:
+                # pending() (incl. confirmed-but-unscanned rows) guards sender
+                # reuse; only inflight() rows count against the cap (#1551).
+                busy = {p["sender"] for p in self.j.pending()}
+                inflight = len(self.j.inflight())
+                stale = False
             event = lookup[row["id"]]
             # Classify every due offer this tick cannot attempt (#1615), so a
             # report names the binding limit. Neither branch attempts: once
@@ -527,19 +571,24 @@ class DiscoveryController(Controller):
             if row["sender"] in busy:
                 self.note_deferral(row, "sender_busy", now)
                 continue
-            if len(inflight) >= event["max_inflight"]:
+            if inflight >= event["max_inflight"]:
                 self.note_deferral(row, "inflight_cap", now)
                 continue
+            if attempted and (
+                attempted >= MAX_ATTEMPTS_PER_PASS or time.time() >= budget_end
+            ):
+                self.note_deferral(row, "admission_backlog", time.time())
+                continue
             attempted += 1
-            sent = await self.prepare(
+            stale = True
+            await self.prepare(
                 row["id"],
                 event["input_count"],
                 event["max_inflight"],
                 fee_multiplier=event["fee_multiplier"],
                 cohort=event["cohort"],
+                scan=scan,
             )
-            if sent or attempted >= 4:
-                return
 
     async def campaign_tick(self):
         if self.plan.get("execution_mode") == "rehearsal_only":
