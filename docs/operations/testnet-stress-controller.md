@@ -111,7 +111,9 @@ name, and nothing outside its window.
 - `report.json`: current sanitized status, phase counts, fees, accounting, latency, fleet and resource snapshots.
 - `report.json` `discovery.offer_deferrals` (v2, #1615): for `rehearsal` and
   `campaign`, the distinct due offers held back because their sender still had
-  a pending spend (`sender_busy`) or `max_inflight` was full (`inflight_cap`),
+  a pending spend (`sender_busy`), `max_inflight` was full (`inflight_cap`), or
+  the admission pass ended before reaching them (`admission_backlog`, #1618:
+  controller throughput, i.e. the per-tick wall-clock budget or attempt bound),
   `offers_deferred`, `skipped_after_deferral`, and `binding_limit` (the reason
   that held back the most offers; `null` when none). The rehearsal summary
   carries its own copy. Each deferral is journaled once per offer and reason as

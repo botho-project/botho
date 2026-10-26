@@ -204,7 +204,7 @@ class DeferralMetricTests(unittest.TestCase):
         result = offer_deferrals(c.j, "rehearsal")
         self.assertEqual(
             result,
-            {"sender_busy": 1, "inflight_cap": 0, "offers_deferred": 1,
+            {"sender_busy": 1, "inflight_cap": 0, "admission_backlog": 0, "offers_deferred": 1,
              "skipped_after_deferral": 0, "binding_limit": "sender_busy"},
         )
         detail = json.loads(c.j.db.execute(
@@ -250,7 +250,7 @@ class DeferralMetricTests(unittest.TestCase):
         self.assertEqual(offer_deferrals(c.j, "campaign")["sender_busy"], 1)
         self.assertEqual(
             offer_deferrals(c.j, "rehearsal"),
-            {"sender_busy": 0, "inflight_cap": 0, "offers_deferred": 0,
+            {"sender_busy": 0, "inflight_cap": 0, "admission_backlog": 0, "offers_deferred": 0,
              "skipped_after_deferral": 0, "binding_limit": None},
         )
 

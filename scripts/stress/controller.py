@@ -934,12 +934,16 @@ class Controller:
         live = self.live_hosts()
         return live[int(hashlib.sha256((str(self.plan['seed'])+identifier).encode()).hexdigest(),16)%len(live)]
 
-    async def prepare(self, identifier, count, phase_limit, burst=False, crash=None, fee_multiplier=1, cohort=None):
+    async def prepare(self, identifier, count, phase_limit, burst=False, crash=None, fee_multiplier=1, cohort=None, scan=None):
         row = self.j.intent(identifier)
         self.gate()
         if any(r['sender']==row['sender'] for r in self.j.pending()):
             return False
-        height = await self.sync()
+        # ``scan`` lets one admission pass share a single read-only sync
+        # (#1618). Inputs signed earlier in the pass are already reserved,
+        # and an older height only delays maturity, so reuse never widens
+        # selection; every gate below still runs per intent.
+        height = await (scan or self.sync)()
         selected = self.spendable(row['sender'],height,row['amount'],count)
         if not selected:
             self.j.event(identifier,'inventory_wait',{'wallet':row['sender'],'height':height,
@@ -1427,10 +1431,12 @@ class Controller:
 
     async def admission_tick(self):
         async with self.admission_lock:
+            # One tick may admit several offers (#1618); the v2 deliver pass
+            # measures its wall-clock budget from here.
+            self.admission_started = time.time()
             self.gate()
             waiting = self.j.rows("state='prepared' ORDER BY prepared, offered, id")
-            if waiting:
-                row = waiting[0]
+            for row in waiting:
                 # Persisted signatures have no submit marker. Require every
                 # ingress to report unknown before their one allowed attempt.
                 # A named host is skipped; the recorded ingress is not
@@ -1439,10 +1445,17 @@ class Controller:
                     h,'getTransactionStatus',{'hash':row['hash']}) for h in self.live_hosts()))
                 if any(s.get('status')!='unknown' for s in statuses):
                     self.halt('unsubmitted prepared hash unexpectedly exists on chain')
-                else:
-                    await self.submit_prepared(row['id'])
+                    return
+                # A Quota deferral propagates out of this tick: the signature
+                # keeps its slot and nothing newer is submitted or signed.
+                await self.submit_prepared(row['id'])
+                if self.j.get('status') not in ('setup','running'):
+                    return
+            if waiting:
                 # Even when quota defers this signature, never let new signing
                 # steal its next capacity slot or reserve more wallet inputs.
+                # Waiting rows mean quota (or a crash) just bound, so new
+                # signing resumes on the next tick, not this one.
                 return
             if self.j.get('status')=='setup':
                 await self.setup_tick()

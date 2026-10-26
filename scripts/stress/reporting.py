@@ -214,7 +214,7 @@ def accounting_status(journal, rows, now, artifacts=None):
     }
 
 
-DEFERRAL_REASONS = ("sender_busy", "inflight_cap")
+DEFERRAL_REASONS = ("sender_busy", "inflight_cap", "admission_backlog")
 
 
 def offer_deferrals(journal, kind):
