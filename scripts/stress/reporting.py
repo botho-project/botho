@@ -214,6 +214,38 @@ def accounting_status(journal, rows, now, artifacts=None):
     }
 
 
+DEFERRAL_REASONS = ("sender_busy", "inflight_cap")
+
+
+def offer_deferrals(journal, kind):
+    """Offers of ``kind`` held back while due, by reason (#1615).
+
+    Counts distinct offers, not ticks. ``binding_limit`` names the reason that
+    held back the most offers (None when nothing was deferred);
+    ``skipped_after_deferral`` counts deferred offers that later missed their
+    start slot, the outcome that stops a run.
+    """
+    by_reason = {reason: set() for reason in DEFERRAL_REASONS}
+    for intent, detail in journal.db.execute(
+        "SELECT intent, detail FROM events WHERE state='offer_deferred'"
+    ):
+        info = json.loads(detail)
+        if info.get("kind") == kind and info.get("reason") in by_reason:
+            by_reason[info["reason"]].add(intent)
+    deferred = set().union(*by_reason.values())
+    skipped = {
+        r["id"] for r in journal.rows("kind=? AND state='skipped'", (kind,))
+    }
+    counts = {reason: len(ids) for reason, ids in by_reason.items()}
+    binding = max(DEFERRAL_REASONS, key=lambda r: counts[r]) if deferred else None
+    return {
+        **counts,
+        "offers_deferred": len(deferred),
+        "skipped_after_deferral": len(deferred & skipped),
+        "binding_limit": binding,
+    }
+
+
 def rehearsal_summary(journal, plan, artifacts=None):
     settings = plan["rehearsal"]
     expected = (settings["duration_seconds"] - 120) // settings["interval_seconds"]
@@ -265,6 +297,7 @@ def rehearsal_summary(journal, plan, artifacts=None):
         else "journal_only",
         "reconciled": counts.get("reconciled", 0),
         "state_counts": counts,
+        "offer_deferrals": offer_deferrals(journal, "rehearsal"),
     }
 
 

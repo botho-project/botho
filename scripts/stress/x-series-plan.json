@@ -18,7 +18,7 @@
     "https://n5.discovery.internal/rpc"
   ],
   "wallets": {
-    "count": 32,
+    "count": 64,
     "min_mature_utxos_per_wallet": 16,
     "min_input_age_blocks": 10,
     "max_inflight_per_wallet": 1,
@@ -44,7 +44,7 @@
     "max_unique_chain_writes": 30000,
     "max_signed_fee_picocredits": "100000000000000",
     "max_single_signed_fee_picocredits": "1000000000",
-    "max_inflight": 32,
+    "max_inflight": 64,
     "max_normal_submissions_per_minute": 40,
     "max_burst_size": 32,
     "max_rpc_per_endpoint_per_minute": 300,
@@ -99,7 +99,7 @@
       "id": "correctness",
       "start_hour": 0,
       "end_hour": 1,
-      "max_inflight": 32,
+      "max_inflight": 64,
       "gate": "previous_phase_reconciled_and_exact_accounting",
       "segments": [
         {
@@ -114,7 +114,7 @@
       "id": "sustained",
       "start_hour": 1,
       "end_hour": 24,
-      "max_inflight": 32,
+      "max_inflight": 64,
       "gate": "previous_phase_reconciled_and_exact_accounting",
       "segments": [
         {
@@ -129,7 +129,7 @@
       "id": "idle",
       "start_hour": 24,
       "end_hour": 30,
-      "max_inflight": 32,
+      "max_inflight": 64,
       "gate": "previous_phase_reconciled_and_exact_accounting",
       "segments": []
     },
@@ -137,7 +137,7 @@
       "id": "ramp",
       "start_hour": 30,
       "end_hour": 42,
-      "max_inflight": 32,
+      "max_inflight": 64,
       "gate": "previous_phase_reconciled_and_exact_accounting",
       "segments": [
         {
@@ -290,7 +290,7 @@
       "id": "recovery",
       "start_hour": 42,
       "end_hour": 48,
-      "max_inflight": 32,
+      "max_inflight": 64,
       "gate": "previous_phase_reconciled_and_exact_accounting",
       "segments": [
         {
@@ -305,7 +305,7 @@
       "id": "degrade",
       "start_hour": 48,
       "end_hour": 54,
-      "max_inflight": 32,
+      "max_inflight": 64,
       "gate": "previous_phase_reconciled_and_exact_accounting",
       "segments": [
         {
@@ -326,7 +326,7 @@
       "id": "repeat",
       "start_hour": 54,
       "end_hour": 72,
-      "max_inflight": 32,
+      "max_inflight": 64,
       "gate": "previous_phase_reconciled_and_exact_accounting",
       "segments": [
         {
