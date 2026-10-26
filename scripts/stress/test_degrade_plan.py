@@ -111,8 +111,11 @@ class DegradePlanTests(unittest.TestCase):
     def test_x_series_changes_only_the_opt_in_phases_and_degrade_block(self):
         base, plan = load("testnet-discovery-v2.json"), self.plan()
         for key in set(base) | set(plan):
-            if key not in ("faults", "phases", "degrade", "limits", "rehearsal"):
+            if key not in ("faults", "phases", "degrade", "limits", "rehearsal", "wallets"):
                 self.assertEqual(plan[key], base[key], key)
+        # #1615: 64 senders so 30/min peaks never wait on sender reuse.
+        self.assertEqual({**plan["wallets"], "count": base["wallets"]["count"]}, base["wallets"])
+        self.assertEqual(plan["wallets"]["count"], 64)
         # #1613: submission headroom over the 30/min peak (and the wire budget
         # that keeps it reachable at max transaction size), plus the
         # generator_limited rehearsal opt-in. Nothing else differs.
@@ -121,6 +124,7 @@ class DegradePlanTests(unittest.TestCase):
             {
                 "max_normal_submissions_per_minute": 40,
                 "max_wire_submission_bytes_per_minute": 25165824,
+                "max_inflight": 64,  # #1615
             },
         )
         self.assertEqual(set(plan["limits"]), set(base["limits"]))
@@ -130,7 +134,10 @@ class DegradePlanTests(unittest.TestCase):
         faults = dict(plan["faults"])
         self.assertIs(faults.pop("validator_degrade_phase"), True)
         self.assertEqual(faults, base["faults"])
-        self.assertEqual(plan["phases"][:-2], base["phases"][:-1])
+        self.assertEqual({p["max_inflight"] for p in plan["phases"]}, {64})  # #1615
+        self.assertEqual(
+            [{**p, "max_inflight": 32} for p in plan["phases"][:-2]], base["phases"][:-1]
+        )
 
     def test_rehearsal_only_keeps_validation_but_schedules_no_fault(self):
         plan = self.plan()

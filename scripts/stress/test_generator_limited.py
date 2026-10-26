@@ -52,7 +52,9 @@ class OptInSchemaTests(unittest.TestCase):
             limits["max_normal_submissions_per_minute"] * envelope,
             limits["max_wire_submission_bytes_per_minute"],
         )
-        self.assertLessEqual(limits["max_inflight"], 32)
+        # #1615: 64 senders and a cap of 64; the per-minute cap, not
+        # max_inflight, bounds the wire rate.
+        self.assertLessEqual(limits["max_inflight"], 64)
 
     def test_absent_or_false_opt_in_is_accepted_and_non_boolean_rejected(self):
         plan = load("testnet-discovery-v2.json")

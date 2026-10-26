@@ -482,6 +482,31 @@ class DiscoveryController(Controller):
                 row["id"], "skipped", "generator_queue_limit", finished=now
             )
 
+    def note_deferral(self, row, reason, now):
+        """Journal once per (offer, reason) that a due offer was held back (#1615).
+
+        ``sender_busy``: its sender still has a pending spend
+        (max_inflight_per_wallet is 1). ``inflight_cap``: the global or phase
+        max_inflight is full. The set is rebuilt from the journal after a
+        restart, so a deferral is never counted twice.
+        """
+        seen = getattr(self, "_deferrals", None)
+        if seen is None:
+            seen = self._deferrals = {
+                (intent, json.loads(detail)["reason"])
+                for intent, detail in self.j.db.execute(
+                    "SELECT intent, detail FROM events WHERE state='offer_deferred'"
+                )
+            }
+        if (row["id"], reason) in seen:
+            return
+        seen.add((row["id"], reason))
+        self.j.event(
+            row["id"],
+            "offer_deferred",
+            {"kind": row["kind"], "reason": reason, "lag_seconds": now - row["offered"]},
+        )
+
     async def deliver(self, events, start, kind):
         now = time.time()
         self.materialize(events, start, kind, now)
@@ -490,14 +515,20 @@ class DiscoveryController(Controller):
         pending = self.j.pending()
         inflight = self.j.inflight()
         lookup = {event["intent"]: event for event in events}
+        busy = {p["sender"] for p in pending}
         attempted = 0
         for row in self.j.rows(
             "kind=? AND state IN ('planned','eligible') ORDER BY offered,id", (kind,)
         ):
             event = lookup[row["id"]]
+            # Classify every due offer this tick cannot attempt (#1615), so a
+            # report names the binding limit. Neither branch attempts: once
+            # the cap is reached no row is prepared, exactly as before.
+            if row["sender"] in busy:
+                self.note_deferral(row, "sender_busy", now)
+                continue
             if len(inflight) >= event["max_inflight"]:
-                break
-            if any(p["sender"] == row["sender"] for p in pending):
+                self.note_deferral(row, "inflight_cap", now)
                 continue
             attempted += 1
             sent = await self.prepare(
@@ -601,7 +632,7 @@ class DiscoveryController(Controller):
             )
         ]
         report["fee_coverage"] = summarize_fees(self.j.rows(), quotes)
-        from reporting import rehearsal_summary
+        from reporting import offer_deferrals, rehearsal_summary
 
         report["rehearsal"] = rehearsal_summary(
             self.j, self.plan, report["artifact_evidence"]
@@ -638,6 +669,9 @@ class DiscoveryController(Controller):
             "coverage_status": "incomplete",
             "selection": self.j.get("selection_latest"),
             "inventory": self.j.get("inventory_readiness"),
+            "offer_deferrals": {
+                kind: offer_deferrals(self.j, kind) for kind in ("rehearsal", "campaign")
+            },
             "fee_capacity_gap": "Production activation needs 3s slots and >75% EMA fullness (~25+ tx/s); this generator does not establish that capacity.",
         }
         if status == "complete":

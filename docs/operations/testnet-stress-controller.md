@@ -109,6 +109,13 @@ name, and nothing outside its window.
 ## Results
 
 - `report.json`: current sanitized status, phase counts, fees, accounting, latency, fleet and resource snapshots.
+- `report.json` `discovery.offer_deferrals` (v2, #1615): for `rehearsal` and
+  `campaign`, the distinct due offers held back because their sender still had
+  a pending spend (`sender_busy`) or `max_inflight` was full (`inflight_cap`),
+  `offers_deferred`, `skipped_after_deferral`, and `binding_limit` (the reason
+  that held back the most offers; `null` when none). The rehearsal summary
+  carries its own copy. Each deferral is journaled once per offer and reason as
+  an `offer_deferred` event with its lag at first deferral.
 - `reports/`: six-hour snapshots; the current report is also updated on hold, phase transition and completion.
 - `activated.json`: exists only once setup actually passes; immutable workload start/end.
 - `journal.sqlite`: durable intent/input/request/transition records (protected).
@@ -659,6 +666,10 @@ Every key file must be owner-only. The prefunder refuses a manifest if:
   exceed `max_signed_fee_picocredits`.
 
 For x1, 32 grants of 10^11 per wallet gives a principal of 1.024×10^14.
+Since #1615 the x-series plan has 64 wallets, and 64 × 32 × 10^11 would exceed
+the 2×10^14 principal cap. Use 32 grants of 5×10^10 per wallet: the same
+1.024×10^14 principal and per-wallet input depth as x1, 2048 grants, and
+2.048×10^12 of worst-case grant fees.
 
 **Deadline rule.** No grant is prepared or submitted at or after `deadline`.
 The prefunder refuses any `deadline` later than:
