@@ -148,8 +148,8 @@
         },
         {
           "start_hour": 30.916666666666668,
-          "count": 150,
-          "interval_seconds": 2,
+          "count": 100,
+          "interval_seconds": 3,
           "scenario": "burst"
         },
         {
@@ -160,8 +160,8 @@
         },
         {
           "start_hour": 31.916666666666668,
-          "count": 150,
-          "interval_seconds": 2,
+          "count": 100,
+          "interval_seconds": 3,
           "scenario": "burst"
         },
         {
@@ -172,8 +172,8 @@
         },
         {
           "start_hour": 32.916666666666664,
-          "count": 150,
-          "interval_seconds": 2,
+          "count": 100,
+          "interval_seconds": 3,
           "scenario": "burst"
         },
         {
@@ -184,8 +184,8 @@
         },
         {
           "start_hour": 33.916666666666664,
-          "count": 150,
-          "interval_seconds": 2,
+          "count": 100,
+          "interval_seconds": 3,
           "scenario": "burst"
         },
         {
@@ -196,8 +196,8 @@
         },
         {
           "start_hour": 34.916666666666664,
-          "count": 150,
-          "interval_seconds": 2,
+          "count": 100,
+          "interval_seconds": 3,
           "scenario": "burst"
         },
         {
@@ -208,8 +208,8 @@
         },
         {
           "start_hour": 35.916666666666664,
-          "count": 150,
-          "interval_seconds": 2,
+          "count": 100,
+          "interval_seconds": 3,
           "scenario": "burst"
         },
         {
@@ -220,8 +220,8 @@
         },
         {
           "start_hour": 36.916666666666664,
-          "count": 150,
-          "interval_seconds": 2,
+          "count": 100,
+          "interval_seconds": 3,
           "scenario": "burst"
         },
         {
@@ -232,8 +232,8 @@
         },
         {
           "start_hour": 37.916666666666664,
-          "count": 150,
-          "interval_seconds": 2,
+          "count": 100,
+          "interval_seconds": 3,
           "scenario": "burst"
         },
         {
@@ -244,8 +244,8 @@
         },
         {
           "start_hour": 38.916666666666664,
-          "count": 150,
-          "interval_seconds": 2,
+          "count": 100,
+          "interval_seconds": 3,
           "scenario": "burst"
         },
         {
@@ -256,8 +256,8 @@
         },
         {
           "start_hour": 39.916666666666664,
-          "count": 150,
-          "interval_seconds": 2,
+          "count": 100,
+          "interval_seconds": 3,
           "scenario": "burst"
         },
         {
@@ -268,8 +268,8 @@
         },
         {
           "start_hour": 40.916666666666664,
-          "count": 150,
-          "interval_seconds": 2,
+          "count": 100,
+          "interval_seconds": 3,
           "scenario": "burst"
         },
         {
@@ -280,8 +280,8 @@
         },
         {
           "start_hour": 41.916666666666664,
-          "count": 150,
-          "interval_seconds": 2,
+          "count": 100,
+          "interval_seconds": 3,
           "scenario": "burst"
         }
       ]
@@ -342,7 +342,7 @@
   "isolated_only": true,
   "rehearsal": {
     "duration_seconds": 1200,
-    "interval_seconds": 2,
+    "interval_seconds": 3,
     "drain_seconds": 300,
     "generator_limited_acceptable": true
   },

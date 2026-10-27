@@ -32,8 +32,9 @@ class OptInSchemaTests(unittest.TestCase):
         self.assertIs(plan["rehearsal"]["generator_limited_acceptable"], True)
         self.assertEqual(plan["limits"]["max_normal_submissions_per_minute"], 40)
         summary, events = expand(plan)
-        self.assertEqual(len(events), 22480)
+        self.assertEqual(len(events), 21880)  # #1620: 20/min bursts
         rehearsal = plan["rehearsal"]
+        self.assertEqual(60 // rehearsal["interval_seconds"], 20)  # #1620
         self.assertGreater(
             plan["limits"]["max_normal_submissions_per_minute"],
             60 // rehearsal["interval_seconds"],
@@ -219,7 +220,10 @@ class AcceptanceControllerTests(unittest.TestCase):
 
 
 class PeakHeadroomFakeClockTests(unittest.TestCase):
-    """Hours 30-42 of x-series: 55 min ramp at 12/min, then 5 min at 30/min.
+    """Hours 30-42 of x-series: 55 min ramp at 12/min, then 5 min at 20/min.
+
+    #1620 lowered the peak from 30/min to 20/min. "Zero headroom" is a
+    submission cap equal to the plan's peak rate (PEAK); the plan ships 40.
 
     The model drives the real Journal (sliding-window submission cap) and the
     real DiscoveryController.materialize (120 s start-slot grace) on a fake
@@ -235,12 +239,21 @@ class PeakHeadroomFakeClockTests(unittest.TestCase):
     """
 
     PLAN = load("x-series-plan.json")
+    PEAK = 60 // min(
+        s["interval_seconds"]
+        for p in PLAN["phases"]
+        for s in p["segments"]
+        if s["scenario"] == "burst"
+    )
+
+    def test_peak_is_20_per_minute(self):
+        self.assertEqual(self.PEAK, 20)
 
     def simulate(self, cap, stalls=(), latency=20, hour=30):
         plan = copy.deepcopy(self.PLAN)
         plan["limits"]["max_normal_submissions_per_minute"] = cap
         _, events = expand(plan)
-        low = hour * 3600 + 3000  # five ramp minutes before the 30/min peak
+        low = hour * 3600 + 3000  # five ramp minutes before the peak
         high = (hour + 1) * 3600 + 600
         window = [
             dict(e, offset_seconds=e["offset_seconds"] - low)
@@ -299,7 +312,7 @@ class PeakHeadroomFakeClockTests(unittest.TestCase):
         }
 
     def test_undisturbed_peak_holds_with_zero_headroom(self):
-        for cap in (30, 40):
+        for cap in (self.PEAK, 40):
             outcome = self.simulate(cap)
             self.assertEqual(
                 (outcome["skipped"], outcome["expired"], outcome["quota"], outcome["max_lag"]),
@@ -308,17 +321,18 @@ class PeakHeadroomFakeClockTests(unittest.TestCase):
 
     def test_single_admission_stall_recovers_at_either_cap(self):
         # A 100 s stall a minute into the peak: the backlog persists through
-        # the rest of the peak at 30/min but drains once the ramp resumes.
-        for cap in (30, 40):
+        # the rest of the peak at zero headroom but drains once the ramp resumes.
+        for cap in (self.PEAK, 40):
             outcome = self.simulate(cap, stalls=((360, 460),))
             self.assertEqual((outcome["skipped"], outcome["expired"]), (0, 0), cap)
             self.assertEqual(outcome["final_lag"], 0)
 
     def test_two_stalls_in_one_peak_hold_only_with_zero_headroom(self):
-        # 70 s at peak start, then 60 s two minutes later. At 30/min the first
-        # backlog never drains, so the second pushes offers past their slot.
+        # 70 s at peak start, then 60 s two minutes later. With the cap at the
+        # peak rate the first backlog never drains, so the second pushes
+        # offers past their slot.
         stalls = ((300, 370), (430, 490))
-        zero = self.simulate(30, stalls=stalls)
+        zero = self.simulate(self.PEAK, stalls=stalls)
         self.assertGreater(zero["skipped"] + zero["expired"], 0)
         headroom = self.simulate(40, stalls=stalls)
         self.assertEqual((headroom["skipped"], headroom["expired"]), (0, 0))

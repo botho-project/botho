@@ -38,6 +38,12 @@ def x_series():
     return json.loads((HERE / "x-series-plan.json").read_text())
 
 
+# x1 attempt b offered the rehearsal at 30/min (every 2 s). #1620 lowered the
+# x-series peak to 20/min (every 3 s); the controller-mechanics tests below
+# keep the 2 s cadence they were calibrated against.
+ATTEMPT_B_INTERVAL = 2
+
+
 class Clock:
     def __init__(self):
         self.now = 0.0
@@ -46,12 +52,14 @@ class Clock:
 class Fleet:
     """A DiscoveryController in rehearsal setup, faked below prepare()."""
 
-    def __init__(self, tmp, limits=None, latency=(50, 75)):
+    def __init__(self, tmp, limits=None, latency=(50, 75), interval=ATTEMPT_B_INTERVAL):
         self.clock = Clock()
         self.latency = latency
         plan = x_series()
         if limits:
             plan["limits"].update(limits)
+        if interval is not None:
+            plan["rehearsal"]["interval_seconds"] = interval
         c = DiscoveryController.__new__(DiscoveryController)
         c.state = Path(tmp)
         (c.state / "artifacts").mkdir()
@@ -187,18 +195,19 @@ class Fleet:
 
 
 class RehearsalThroughputTests(unittest.TestCase):
-    """The x-series rehearsal: 1200 s, one offer every 2 s (540 offers)."""
+    """x1 attempt b's rehearsal: 1200 s, one offer every 2 s (540 offers)."""
 
-    def simulate(self, budget):
+    def simulate(self, budget, interval=ATTEMPT_B_INTERVAL):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        fleet = Fleet(tmp.name)
+        fleet = Fleet(tmp.name, interval=interval)
         self.addCleanup(fleet.c.j.db.close)
         # Stop before the rehearsal deadline (start + 1200 s) evaluates it.
         result = fleet.run(until=1195, budget=budget)
-        settings = x_series()["rehearsal"]
+        settings = fleet.c.plan["rehearsal"]
         self.assertEqual(
-            (settings["duration_seconds"], settings["interval_seconds"]), (1200, 2)
+            (settings["duration_seconds"], settings["interval_seconds"]),
+            (1200, interval or x_series()["rehearsal"]["interval_seconds"]),
         )
         return fleet, result
 
@@ -223,6 +232,37 @@ class RehearsalThroughputTests(unittest.TestCase):
         self.assertGreater(max(fleet.ticks), 1)
         self.assertEqual(after["deferrals"]["sender_busy"], 0)
         self.assertEqual(after["deferrals"]["inflight_cap"], 0)
+
+
+class XSeriesRehearsalTests(unittest.TestCase):
+    """#1620: the x-series rehearsal as planned, 1200 s at 20/min (360 offers)."""
+
+    def simulate(self, budget):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        fleet = Fleet(tmp.name, interval=None)  # the plan's own cadence
+        self.addCleanup(fleet.c.j.db.close)
+        return fleet, fleet.run(until=1195, budget=budget)
+
+    def test_plan_rehearsal_is_20_per_minute(self):
+        settings = x_series()["rehearsal"]
+        self.assertEqual(settings["interval_seconds"], 3)
+        self.assertEqual(60 // settings["interval_seconds"], 20)
+
+    def test_20_per_minute_keeps_lag_well_inside_the_cadence_bound(self):
+        interval = x_series()["rehearsal"]["interval_seconds"]
+        # rehearsal_result's lag bound: min(grace, max(1, min(5, 2 x interval))).
+        bound = min(120, max(1.0, min(5.0, 2 * interval)))
+        for budget in (None, 0):  # multi-offer pass, and the pre-#1618 single pass
+            with self.subTest(budget=budget):
+                fleet, result = self.simulate(budget)
+                self.assertEqual(result["status"], "setup")
+                self.assertEqual(result["offered"], 360)
+                self.assertEqual(result["submitted"], 360)
+                self.assertEqual(result["skipped"], 0)
+                self.assertLess(result["max_lag"], 4)
+                self.assertLess(result["max_lag"], bound)
+                self.assertIsNone(result["deferrals"]["binding_limit"])
 
 
 class PassBoundTests(unittest.TestCase):
