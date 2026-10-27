@@ -19,7 +19,7 @@ from plan import expand
 from runtime import Gate, HOSTS, campaign_targets, campaign_tls_context, validate_ssh_target
 
 SOURCE = Path(__file__).parent
-CODE = ('controller.py', 'runtime.py', 'plan.py', 'bounds.py', 'discovery.py', 'discovery_plan.py', 'fee_evidence.py', 'selection.py', 'reporting.py')
+CODE = ('controller.py', 'runtime.py', 'plan.py', 'bounds.py', 'discovery.py', 'discovery_plan.py', 'fee_evidence.py', 'selection.py', 'reporting.py', 'signer_history.py')
 
 
 def need(condition, message):
