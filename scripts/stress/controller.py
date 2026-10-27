@@ -19,6 +19,96 @@ from runtime import (Gate, HOSTS, Journal, PENDING, Quota, Rpc, atomic,
 
 
 _NO_VIEW = object()
+
+
+def parse_cpu_max(text):
+    """Whole CPUs granted by a cgroup v2 ``cpu.max`` ("<quota> <period>").
+
+    Rounded down, at least 1. ``None`` when unlimited ("max ...") or
+    unparseable, so the caller falls back to the affinity/CPU count.
+    """
+    fields = text.split()
+    if len(fields) != 2 or fields[0] == 'max':
+        return None
+    try:
+        quota, period = int(fields[0]), int(fields[1])
+    except ValueError:
+        return None
+    if quota <= 0 or period <= 0:
+        return None
+    return max(1, quota // period)
+
+
+def cgroup_cpu_limit(root='/sys/fs/cgroup', self_cgroup='/proc/self/cgroup'):
+    """The tightest ``cpu.max`` on this process's cgroup v2 path, or ``None``.
+
+    systemd's ``CPUQuota=`` lands in the unit's own ``cpu.max``; a parent
+    slice may be tighter, so every ancestor below the root is read too.
+    """
+    try:
+        lines = Path(self_cgroup).read_text().splitlines()
+    except OSError:
+        return None
+    path = None
+    for line in lines:
+        hierarchy, _, rest = line.partition(':')
+        controllers, _, relative = rest.partition(':')
+        if hierarchy == '0' and controllers == '':
+            path = relative.strip()
+            break
+    if path is None:
+        return None
+    parts = [p for p in path.split('/') if p]
+    limits = []
+    for depth in range(len(parts), 0, -1):
+        try:
+            text = (Path(root).joinpath(*parts[:depth]) / 'cpu.max').read_text()
+        except OSError:
+            continue
+        limit = parse_cpu_max(text)
+        if limit is not None:
+            limits.append(limit)
+    return min(limits) if limits else None
+
+
+def effective_cpu_count(cgroup_limit=None):
+    """CPUs this process may actually use: the cgroup quota, else affinity, else count."""
+    limit = cgroup_cpu_limit() if cgroup_limit is None else cgroup_limit
+    try:
+        available = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        available = os.cpu_count() or 1
+    return max(1, min(available, limit) if limit else available)
+
+
+async def bounded_gather(factories, limit):
+    """Await ``factory()`` for each factory, at most ``limit`` at a time.
+
+    Results keep input order. After the first failure no further factory is
+    started; calls already running are awaited (never orphaned, so no signer
+    subprocess outlives the caller's scan lock), then the failure of the
+    lowest-indexed failed call is raised.
+    """
+    semaphore = asyncio.Semaphore(max(1, limit))
+    failed = False
+    skipped = object()
+
+    async def one(factory):
+        nonlocal failed
+        async with semaphore:
+            if failed:
+                return skipped
+            try:
+                return await factory()
+            except BaseException:
+                failed = True
+                raise
+
+    results = await asyncio.gather(*(one(f) for f in factories), return_exceptions=True)
+    for result in results:
+        if isinstance(result, BaseException):
+            raise result
+    return results
 # Offer states that mean a payment inside a step window was missed (#1591).
 MISSED = ('skipped', 'unresolved', 'expired', 'rejected', 'aborted')
 # The record must start within this long of fault_start, or the controller
@@ -498,6 +588,21 @@ class Controller:
             self.j.event(None,'held',str(reason))
             self.report()
 
+    def scan_parallelism(self, incremental):
+        """Concurrent native wallet scans (#1629).
+
+        Whole-chain scans (``restore_check``, or a first ``scan`` from
+        genesis) run one at a time: each holds the full history in its
+        request and a ~300 MB signer, and the x1 controller unit has
+        ``MemoryMax=1G``, no swap and ``CPUQuota=100%``. Only incremental
+        scans of appended blocks run in parallel, up to ``scan_workers`` or
+        the effective CPU limit (cgroup ``cpu.max``), which is 1 on x1.
+        """
+        if not incremental:
+            return 1
+        explicit = getattr(self, 'scan_workers', None)
+        return max(1, explicit or effective_cpu_count())
+
     async def native(self, request):
         def run():
             result = subprocess.run([self.config['signer']], input=json.dumps(request).encode(),
@@ -676,7 +781,26 @@ class Controller:
             if count >= 3:
                 self.halt('post-idle RSS growth across three cycles: '+host)
 
-    async def sync(self, full=False, *, draining=False):
+    async def sync(self, full=False, *, draining=False, rescan_wallets=None):
+        """Refresh output history, wallet ownership and key-image state.
+
+        ``full`` refetches the whole output history from genesis, requires it
+        to extend the checkpointed history exactly, and rechecks every key
+        image. ``rescan_wallets`` (default: ``full``) rebuilds every wallet's
+        ownership with a native ``restore_check`` over all blocks, the
+        independent derivation proof whose cost grows with the chain.
+
+        ``full=True, rescan_wallets=False`` is the phase-boundary mode
+        (#1629): the history refetch and checkpoint comparison, the
+        duplicate-output-id rule and the full key-image recheck are kept,
+        but ownership is extended by an incremental native scan of only the
+        blocks beyond the checkpointed history. It falls back to the full
+        ``restore_check`` whenever no inventory was scanned in this process
+        (persisted inventory is never trusted after a restart).
+        """
+        rescan = full if rescan_wallets is None else rescan_wallets
+        if rescan and not full:
+            raise ValueError('a wallet restore rescan requires a full history refetch')
         async with self.scan_lock:
             if not self.statuses:
                 raise Gate('fleet status unavailable')
@@ -735,35 +859,47 @@ class Controller:
                 if previous and new[:len(previous)] != previous:
                     raise Gate('full rescan disagrees with checkpointed output history')
                 blocks = new
+                # The refetched history beyond the verified checkpoint.
+                appended = new[len(previous):]
             else:
                 blocks = previous+new
-            incremental = self.inventory_initialized and not full
-            scan_blocks = new if incremental else blocks
+                appended = new
+            incremental = self.inventory_initialized and not rescan
+            restore = full and not incremental
+            scan_blocks = appended if incremental else blocks
             if incremental:
                 # The native scanner rejects duplicate output IDs within its
                 # request. Preserve that rule across separate append requests.
                 seen = {(o['txHash'],o['outputIndex']) for b in previous for o in b['outputs']}
-                for block in new:
+                for block in appended:
                     for output in block['outputs']:
                         identifier = (output['txHash'],output['outputIndex'])
                         if identifier in seen:
                             raise Gate('duplicate output id across incremental history')
                         seen.add(identifier)
-            scans = []
-            # Separate signer processes and derivations: restores never reuse key state.
-            for index,wallet in enumerate(self.wallets):
+
+            async def scan_wallet(index, wallet):
                 owned = {o['id']:o for o in self.inventory[index]} if incremental else {}
                 if scan_blocks or not incremental:
-                    scanned = await self.native({'operation':'restore_check' if full else 'scan',
+                    scanned = await self.native({'operation':'restore_check' if restore else 'scan',
                         'wallet':wallet['key'], 'blocks':scan_blocks,
-                        **({'expected_address':wallet['address']} if full else {})})
+                        **({'expected_address':wallet['address']} if restore else {})})
                     if scanned['address'] != wallet['address']:
                         raise Gate('wallet identity differs from allowlist')
                     for output in scanned['owned']:
                         if output['id'] in owned:
                             raise Gate('duplicate owned output across incremental scans')
                         owned[output['id']] = output
-                scans.append(list(owned.values()))
+                return list(owned.values())
+
+            # Separate signer processes and derivations: restores never reuse
+            # key state. Each wallet's request, subprocess and result are
+            # independent; incremental scans may run with bounded parallelism,
+            # whole-chain scans stay serial (#1629). Results keep wallet order
+            # and any failure fails the whole scan.
+            scans = await bounded_gather(
+                [lambda i=i, w=w: scan_wallet(i, w) for i,w in enumerate(self.wallets)],
+                self.scan_parallelism(incremental))
             all_images = list(dict.fromkeys(o['key_image'] for owned in scans for o in owned))
             # Finalized spent images stay spent. Phase/full scans independently
             # recheck them; routine scans reserve RPC capacity for live inputs.
@@ -1420,6 +1556,8 @@ class Controller:
                 shutil.copyfileobj(source,target)
                 target.flush()
                 os.fsync(target.fileno())
+        # Serial on purpose: both are whole-chain scans, and the controller
+        # unit's memory budget does not hold two at once (#1629).
         before=await self.native({'operation':'scan','wallet':str(old),'blocks':self.blocks})
         after=await self.native({'operation':'restore_check','wallet':str(restored),'blocks':self.blocks,
                                 'expected_address':self.wallets[wallet]['address']})

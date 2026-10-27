@@ -737,8 +737,16 @@ class DiscoveryController(Controller):
                 if now - boundary > self.j.limits["start_slot_grace_seconds"]:
                     raise Gate("previous phase drain exceeded bounded grace")
                 return
-            await self.sync(full=True)
+            # Boundary scan (#1629): refetch and compare the whole output
+            # history and recheck every key image, but extend wallet
+            # ownership incrementally; a 64-wallet full restore_check grows
+            # with the chain and would hold admission for many minutes. The
+            # restore proof itself runs in setup and at the final drain.
+            scan_started = time.time()
+            await self.sync(full=True, rescan_wallets=False)
+            scanned = time.time()
             self.accounting()
+            accounted = time.time()
             if self.j.get("active_phase") == "correctness":
                 shapes = {json.loads(r["info"]).get("input_count") for r in earlier}
                 if not {1, 2, 4} <= shapes:
@@ -771,6 +779,8 @@ class DiscoveryController(Controller):
                         "released": released,
                         "gate_wait_seconds": released - boundary,
                         "gate_held_offers": held,
+                        "boundary_scan_seconds": scanned - scan_started,
+                        "accounting_seconds": accounted - scanned,
                     },
                 )
         await self.deliver(self.events, start, "campaign")

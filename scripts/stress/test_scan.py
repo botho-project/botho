@@ -4,9 +4,9 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
-from controller import Controller
+from controller import Controller, cgroup_cpu_limit, effective_cpu_count, parse_cpu_max
 from runtime import Gate, HOSTS, Journal
 
 
@@ -148,6 +148,162 @@ class IncrementalScanTests(unittest.IsolatedAsyncioTestCase):
         self.c.native.side_effect = bad_owned
         with self.assertRaisesRegex(Gate,'duplicate owned output'):await self.c.sync()
         self.assertEqual(len(self.c.blocks),2)
+
+    async def test_boundary_mode_refetches_history_but_scans_only_appended_blocks(self):
+        # #1629: full=True, rescan_wallets=False.
+        self.statuses['image-tx-0'] = {'spent':True}
+        await self.initialize()
+        self.chain += [self.block(2),self.block(3)];self.set_height(3)
+        await self.c.sync(full=True, rescan_wallets=False)
+        self.assertEqual(self.scan_heights(),[[2,3]]*8)
+        self.assertTrue(all(c.args[0]['operation']=='scan' and 'expected_address' not in c.args[0]
+                            for c in self.c.native.call_args_list))
+        outputs = [c.args[2] for c in self.c.rpc.call.call_args_list if c.args[1]=='chain_getOutputs']
+        self.assertEqual(outputs,[{'start_height':0,'end_height':3}])
+        # Every key image is rechecked, the cached spent one included.
+        self.assertEqual(self.spent_queries(),[['image-tx-0','image-tx-1','image-tx-2','image-tx-3']])
+        boundary = (copy.deepcopy(self.c.inventory),copy.deepcopy(self.c.spent))
+        self.c.native.reset_mock()
+        await self.c.sync(full=True)
+        self.assertEqual(self.scan_heights(),[[0,1,2,3]]*8)
+        self.assertEqual((self.c.inventory,self.c.spent),boundary)
+
+    async def test_boundary_mode_keeps_history_duplicate_and_identity_gates(self):
+        await self.initialize()
+        before = copy.deepcopy((self.c.blocks,self.c.inventory,self.c.spent))
+        self.chain[0]['outputs'][0]['txHash'] = 'rewritten'
+        with self.assertRaisesRegex(Gate,'full rescan disagrees'):
+            await self.c.sync(full=True, rescan_wallets=False)
+        self.chain[0] = self.block(0)
+        self.chain.append({'height':2,'outputs':copy.deepcopy(self.chain[1]['outputs'])});self.set_height(2)
+        with self.assertRaisesRegex(Gate,'duplicate output id'):
+            await self.c.sync(full=True, rescan_wallets=False)
+        self.c.native.assert_not_called()
+        self.chain[2] = self.block(2)
+        async def impostor(request):
+            result = await self.scan(request)
+            if request['wallet']=='5':result['address']='address-x'
+            return result
+        self.c.native.side_effect = impostor
+        with self.assertRaisesRegex(Gate,'wallet identity differs'):
+            await self.c.sync(full=True, rescan_wallets=False)
+        self.assertEqual((self.c.blocks,self.c.inventory,self.c.spent),before)
+
+    async def test_boundary_mode_restores_when_no_inventory_was_scanned(self):
+        # A restarted process never trusts persisted inventory.
+        await self.c.sync(full=True, rescan_wallets=False)
+        self.assertEqual(self.scan_heights(),[[0,1]]*8)
+        self.assertTrue(all(c.args[0]['operation']=='restore_check'
+                            and c.args[0]['expected_address']=='address-'+c.args[0]['wallet']
+                            for c in self.c.native.call_args_list))
+        with self.assertRaises(ValueError):
+            await self.c.sync(rescan_wallets=True)
+
+    async def test_whole_chain_scans_are_serial_and_appends_run_bounded_in_wallet_order(self):
+        running = peak = 0
+        async def slow(request):
+            nonlocal running, peak
+            running += 1;peak = max(peak,running)
+            await asyncio.sleep(0.01)
+            running -= 1
+            return await self.scan(request)
+        self.c.native.side_effect = slow
+        self.c.scan_workers = 3
+        # Whole-chain restores stay serial even with an explicit worker count:
+        # the x1 controller unit has MemoryMax=1G and no swap (#1629).
+        await self.c.sync(full=True)
+        self.assertEqual(peak,1)
+        # A first routine scan from genesis is whole-chain too.
+        self.c.inventory_initialized = False
+        peak = 0
+        await self.c.sync()
+        self.assertEqual(peak,1)
+        # Incremental scans of appended blocks may run in parallel.
+        self.chain.append(self.block(2));self.set_height(2)
+        peak = 0
+        await self.c.sync(full=True, rescan_wallets=False)
+        self.assertEqual(peak,3)
+        self.assertEqual([len(owned) for owned in self.c.inventory],[3,0,0,0,0,0,0,0])
+
+    async def test_incremental_parallelism_defaults_to_the_effective_cpu_limit(self):
+        with patch('controller.effective_cpu_count', return_value=1):
+            self.assertEqual(self.c.scan_parallelism(True),1)
+        with patch('controller.effective_cpu_count', return_value=4):
+            self.assertEqual(self.c.scan_parallelism(True),4)
+            self.assertEqual(self.c.scan_parallelism(False),1)
+
+    async def test_restore_wallet_runs_its_two_scans_serially(self):
+        await self.initialize()
+        (self.c.state/'wallets').mkdir()
+        key = self.c.state/'key-0'
+        key.write_text('seed\n')
+        self.c.wallets[0]['key'] = str(key)
+        self.c.scan_workers = 8
+        running = peak = 0
+        async def slow(request):
+            nonlocal running, peak
+            running += 1;peak = max(peak,running)
+            await asyncio.sleep(0.01)
+            running -= 1
+            return {'address':'address-0','owned':[]}
+        self.c.native.side_effect = slow
+        await self.c.restore_wallet(0)
+        self.assertEqual(peak,1)
+        self.assertEqual([c.args[0]['operation'] for c in self.c.native.call_args_list],['scan','restore_check'])
+
+
+class CpuLimitTests(unittest.TestCase):
+    def test_parse_cpu_max(self):
+        self.assertIsNone(parse_cpu_max('max 100000\n'))
+        self.assertEqual(parse_cpu_max('100000 100000\n'),1)
+        self.assertEqual(parse_cpu_max('250000 100000\n'),2)
+        self.assertEqual(parse_cpu_max('50000 100000'),1)
+        for bad in ('', 'garbage', '0 100000', '100000 0', 'a b'):
+            self.assertIsNone(parse_cpu_max(bad), bad)
+
+    def cgroup(self, files, membership='0::/system.slice/x1.service\n'):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)/'cgroup'
+        root.mkdir()
+        proc = Path(tmp.name)/'self-cgroup'
+        if membership is not None:
+            proc.write_text(membership)
+        for relative, text in files.items():
+            path = root/relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        return str(root), str(proc)
+
+    def test_cgroup_cpu_limit_reads_the_unit_and_its_ancestors(self):
+        root, proc = self.cgroup({'system.slice/x1.service/cpu.max':'100000 100000\n'})
+        self.assertEqual(cgroup_cpu_limit(root, proc),1)
+        root, proc = self.cgroup({'system.slice/x1.service/cpu.max':'max 100000\n',
+                                  'system.slice/cpu.max':'250000 100000\n'})
+        self.assertEqual(cgroup_cpu_limit(root, proc),2)
+        root, proc = self.cgroup({'system.slice/x1.service/cpu.max':'max 100000\n'})
+        self.assertIsNone(cgroup_cpu_limit(root, proc))
+
+    def test_missing_cgroup_files_fall_back(self):
+        root, proc = self.cgroup({})
+        self.assertIsNone(cgroup_cpu_limit(root, proc))
+        root, proc = self.cgroup({'system.slice/x1.service/cpu.max':'100000 100000\n'}, membership=None)
+        self.assertIsNone(cgroup_cpu_limit(root, proc))
+        # cgroup v1 only: no unified ("0::") line.
+        root, proc = self.cgroup({}, membership='4:cpu,cpuacct:/x1\n')
+        self.assertIsNone(cgroup_cpu_limit(root, proc))
+
+    def test_effective_cpu_count_prefers_the_quota_and_falls_back(self):
+        with patch('controller.os.sched_getaffinity', create=True, return_value=set(range(8))):
+            self.assertEqual(effective_cpu_count(1),1)
+            self.assertEqual(effective_cpu_count(2),2)
+            self.assertEqual(effective_cpu_count(16),8)
+            with patch('controller.cgroup_cpu_limit', return_value=None):
+                self.assertEqual(effective_cpu_count(),8)
+        with patch('controller.os.sched_getaffinity', create=True, side_effect=AttributeError), \
+             patch('controller.os.cpu_count', return_value=6), \
+             patch('controller.cgroup_cpu_limit', return_value=None):
+            self.assertEqual(effective_cpu_count(),6)
 
 
 if __name__=='__main__':
