@@ -122,7 +122,10 @@ class ChainFleet(CampaignFleet):
             tx = chain_tx(at + BLOCK_SECONDS) - chain_tx(at)
         tx_hash = self.history_tamper.get(k, "%064x" % k)
         return {"height": k, "txCount": tx,
-                "outputs": [{"txHash": tx_hash, "outputIndex": 0}]}
+                # Real RPC rows always carry a targetKey (the bounded
+                # prepare history reads it, #1631); one distinct key per output.
+                "outputs": [{"txHash": tx_hash, "outputIndex": 0,
+                             "targetKey": "%064x" % (k + 10 ** 9)}]}
 
     @staticmethod
     def owner(k):

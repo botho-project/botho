@@ -31,10 +31,21 @@ Decoy privacy. When an input's band pool is small, it is sent whole and the
 signer's pool is identical. Otherwise the outputs of overlapping bands are
 Bernoulli-sampled with one probability per connected group of bands. Given
 how many outputs survive in a band, every subset of that size is equally
-likely. The signer then picks 19 uniformly from them, so each ring is still
-a uniform 19-subset of its band, exactly as with the full history. Separate
-per-band samples would not have this property: outputs where two bands
-overlap would get two chances to appear.
+likely. The signer then picks 19 uniformly from them, so each ring alone is
+still a uniform 19-subset of its band, exactly as with the full history.
+Separate per-band samples would not have this property: outputs where two
+bands overlap would get two chances to appear.
+
+Rings of the *same transaction* are a joint concern. Every selected key is
+excluded from every ring, so a member shared by two rings is provably a
+decoy for both. With a sample of rate p, the expected number of shared
+members is the whole-history figure divided by p. A ring-sized sample (about
+64) would raise it from about 0.1 to about 5.6 per pair at x-series h72, and
+cut the effective ring size from about 20 to about 15. A group that serves
+more than one input is therefore sent whole up to ``DECOY_GROUP_CEILING``
+outputs, and sampled at that ceiling above it. Shared members then stay
+below about 361/2048 times |union|/|band|, which is comparable to the whole
+history. A single-input group has no such pair and keeps the small sample.
 
 The sampling randomness comes from ``random.SystemRandom``. A seed taken
 from public data must never be used. Once a sample is as small as a ring,
@@ -47,9 +58,9 @@ Two documented departures from exact uniformity can occur:
   ``DECOY_SAMPLE_TARGET`` = 64, so the probability is below 1e-10. In that
   case the band is topped up uniformly from its unsent outputs, and the
   signer's "Not enough decoys" error is never introduced.
-* A group can exceed ``DECOY_GROUP_CEILING`` expected outputs. That needs
-  extreme density differences between overlapping bands. The sampling
-  probability is then capped to keep the request bounded.
+* A single-input group can exceed ``DECOY_GROUP_CEILING`` expected
+  outputs only with extreme density differences inside its band. The
+  sampling probability is then capped to keep the request bounded.
 
 ``scan`` and ``restore_check`` judge each output's ownership independently.
 The signer's response is the owned outputs in request order. Sending the
@@ -73,11 +84,13 @@ SCAN_CHUNK_BYTES = 16 * 1024 * 1024
 RING_DECOYS = 19
 # MIN_DECOY_AGE_BLOCKS (botho-wallet/src/decoy_selection.rs).
 MIN_DECOY_AGE = 10
-# Expected sampled outputs in a group's smallest band.
+# Expected sampled outputs in a single-input group's band.
 DECOY_SAMPLE_TARGET = 64
-# Upper bound on expected sampled outputs per group of overlapping bands.
-# There are at most 4 groups (4 inputs), so about 8.2k outputs (about 22 MB)
-# whatever the chain length. The usual case is a few hundred.
+# Expected sampled outputs in a group serving more than one input (sent
+# whole when smaller), and the cap for any group. At about 2.7 KB per output
+# this is about 5.5 MB per group. Four inputs make at most two multi-input
+# groups, so about 11 MB (about 33 MB of signer RSS) whatever the chain
+# length.
 DECOY_GROUP_CEILING = 2048
 SCAN_OPERATIONS = ('scan', 'restore_check')
 
@@ -148,6 +161,9 @@ def prepare_blocks(blocks, height, selected_ids, rng=None,
     # Height intervals of each band, merged into connected groups.
     intervals = sorted((height - high, height - low) for low, high in map(age_band, ages))
     groups = []
+    # Comparing with the previous interval's high is enough: a band's high
+    # rises monotonically with its low (+/-10% with a floor), so sorted
+    # intervals that overlap anything earlier overlap the last one.
     for low, high in intervals:
         if groups and low <= groups[-1][-1][1]:
             groups[-1].append((low, high))
@@ -156,10 +172,19 @@ def prepare_blocks(blocks, height, selected_ids, rng=None,
     for group in groups:
         bands = [pool(low, high) for low, high in group]
         union = pool(min(b[0] for b in group), max(b[1] for b in group))
-        smallest = min(len(b) for b in bands)
-        p = 1.0 if smallest <= target else target / smallest
-        if p * len(union) > ceiling:
-            p = ceiling / len(union)
+        if len(group) > 1:
+            # Several rings of one transaction draw from this sample. A
+            # member shared by two of them is provably a decoy (every
+            # selected key is excluded from every ring). Shared members scale
+            # with 1/p, so a ring-sized sample would make them about
+            # 361/64 per pair. At the ceiling they stay under about
+            # 361/2048 * |union|/|band|, comparable to the whole history.
+            p = 1.0 if len(union) <= ceiling else ceiling / len(union)
+        else:
+            smallest = min(len(b) for b in bands)
+            p = 1.0 if smallest <= target else target / smallest
+            if p * len(union) > ceiling:
+                p = ceiling / len(union)
         sample = set(union) if p >= 1 else {x for x in union if rng.random() < p}
         for band in bands:
             have = sum(1 for x in band if x in sample)

@@ -13,8 +13,8 @@ import json
 import random
 import unittest
 
-from signer_history import (DECOY_SAMPLE_TARGET, RING_DECOYS, SCAN_CHUNK_BYTES,
-                            SIGNER_MAX_REQUEST, age_band, history_duplicate,
+from signer_history import (DECOY_GROUP_CEILING, DECOY_SAMPLE_TARGET, RING_DECOYS,
+                            SCAN_CHUNK_BYTES, SIGNER_MAX_REQUEST, age_band, history_duplicate,
                             merge_scans, prepare_blocks, prepare_spent,
                             scan_payloads)
 
@@ -69,7 +69,32 @@ def signer_pool(blocks, height, created, excluded):
 
 
 def selected_at(history, heights):
-    return [(history[h]['outputs'][0], h) for h in heights]
+    """One distinct output per requested height (a repeated height takes the next output)."""
+    used = {}
+    picked = []
+    for h in heights:
+        picked.append((history[h]['outputs'][used.get(h, 0)], h))
+        used[h] = used.get(h, 0) + 1
+    return picked
+
+
+def ids_of(inputs):
+    return [o['txHash'] + ':' + str(o['outputIndex']) for o, _ in inputs]
+
+
+def expected_shared_decoys(blocks, height, inputs):
+    """Mean members shared by every pair of rings, over the signer's own draws.
+
+    Each ring is an independent uniform 19-subset of its pool (an OsRng
+    shuffle), so a pool member is in both rings of a pair with probability
+    (19/|A|)(19/|B|). Every selected key is excluded from every ring, so
+    each shared member is provably a decoy.
+    """
+    excluded = {o['targetKey'] for o, _ in inputs}
+    pools = [signer_pool(blocks, height, h, excluded) for _, h in inputs]
+    pairs = [(a, b) for i, a in enumerate(pools) for b in pools[i + 1:]]
+    return sum(len(a & b) * min(RING_DECOYS, len(a)) * min(RING_DECOYS, len(b)) / (len(a) * len(b))
+               for a, b in pairs) / len(pairs)
 
 
 class XSeriesH72Tests(unittest.TestCase):
@@ -104,19 +129,34 @@ class XSeriesH72Tests(unittest.TestCase):
     def test_prepare_request_is_bounded_at_h72_for_every_input_shape(self):
         # Ages chosen so the four bands are disjoint and as wide as possible,
         # which is the largest exact pool. Also a young, an overlapping
-        # and a single input.
-        shapes = {
+        # and a single input. Groups serving several inputs are sent at
+        # DECOY_GROUP_CEILING; the worst case is two such groups at the
+        # oldest ages, where both unions are far above the ceiling.
+        single = {
             'one_old': [self.height - 7000],
             'four_disjoint_oldest': [self.height - a for a in (7000, 5700, 4650, 3800)],
-            'four_overlapping': [self.height - a for a in (3000, 3100, 3200, 3300)],
             'young_and_old': [self.height - a for a in (40, 7000)],
         }
-        for name, created in shapes.items():
+        multi = {
+            'four_overlapping': [self.height - a for a in (3000, 3100, 3200, 3300)],
+            'two_overlapping_pairs_oldest': [self.height - a for a in (7000, 7050, 5000, 5010)],
+            'two_in_one_block_oldest': [self.height - 7000] * 2,
+        }
+        groups = {'four_overlapping': 1, 'two_overlapping_pairs_oldest': 2, 'two_in_one_block_oldest': 1}
+        worst = 0
+        for name, created in {**single, **multi}.items():
             with self.subTest(name):
                 inputs = selected_at(self.history, created)
                 request, size = self.prepare_request(inputs)
-                self.assertLess(size, 2 * 1024 ** 2, name)
-                self.assertLess(size * SIGNER_RSS_PER_REQUEST_BYTE, 16 * 1024 ** 2)
+                worst = max(worst, size)
+                if name in single:
+                    self.assertLess(size, 2 * 1024 ** 2, name)
+                    self.assertLess(size * SIGNER_RSS_PER_REQUEST_BYTE, 16 * 1024 ** 2)
+                else:
+                    # About 2048 outputs per multi-input group (binomial,
+                    # so allow 10%), plus the selected outputs.
+                    budget = groups[name] * 1.1 * DECOY_GROUP_CEILING * self.per_output + 2 * 1024 ** 2
+                    self.assertLess(size, budget, name)
                 blocks = request['blocks']
                 self.assertIsNone(history_duplicate(blocks))
                 self.assertTrue(all(b['height'] <= self.height for b in blocks))
@@ -131,6 +171,37 @@ class XSeriesH72Tests(unittest.TestCase):
                     self.assertGreaterEqual(len(bounded), min(RING_DECOYS, len(full)))
                     if len(full) <= DECOY_SAMPLE_TARGET:
                         self.assertEqual(bounded, full)
+        # Worst case at h72: about 11 MB, far below the 128 MiB cap, under
+        # 32 MiB, and about 33 MB of signer RSS in the 1 GiB unit.
+        self.assertLess(worst, 32 * 1024 ** 2)
+        self.assertLess(worst * 4, SIGNER_MAX_REQUEST)
+        self.assertLess(worst * SIGNER_RSS_PER_REQUEST_BYTE, 64 * 1024 ** 2)
+
+    def test_cross_ring_overlap_matches_whole_history_at_h72(self):
+        # Rings of one transaction sharing a member reveal it as a decoy.
+        # A ring-sized shared sample gave about 361/64 = 5.6 shared members
+        # per pair; the whole history gives about 0.05 to 0.5 here.
+        shapes = {
+            'oldest_pair': (7000, 7050),
+            'mid_pair': (3000, 3010),
+            'same_block_pair': (7000, 7000),
+            'young_pair_sent_whole': (500, 505),
+            'four_overlapping': (3000, 3100, 3200, 3300),
+        }
+        for name, ages in shapes.items():
+            with self.subTest(name):
+                inputs = selected_at(self.history, [self.height - a for a in ages])
+                ids = ids_of(inputs)
+                whole = expected_shared_decoys(self.history, self.height, inputs)
+                trials = [expected_shared_decoys(prepare_blocks(self.history, self.height, ids,
+                                                                rng=random.Random(seed)),
+                                                 self.height, inputs) for seed in range(4)]
+                bounded = sum(trials) / len(trials)
+                # Comparable: at most about 361/2048 above the whole history,
+                # and nowhere near the ring-sized-sample figure.
+                self.assertLess(bounded, whole + 361 / DECOY_GROUP_CEILING * 2, name)
+                self.assertLess(bounded, 0.5, name)
+                self.assertGreaterEqual(bounded, whole * 0.9, name)
 
     def test_restore_chunks_cover_history_exactly_under_the_cap(self):
         request = {'operation': 'restore_check', 'wallet': '/state/wallets/w.mnemonic',
@@ -200,6 +271,25 @@ class PrepareHistorySemanticsTests(unittest.TestCase):
         only = [h for h in counts if h not in overlap and h not in created]
         mean = lambda hs: sum(counts[h] for h in hs) / len(hs)
         self.assertAlmostEqual(mean(overlap) / mean(only), 1.0, delta=0.15)
+
+    def test_multi_input_group_below_the_ceiling_is_sent_whole(self):
+        # Two overlapping bands whose union is larger than the single-input
+        # target but within the ceiling: the signer's pools are identical.
+        history = chain(blocks=1500, outputs=6000)
+        height = 1499
+        inputs = selected_at(history, [height - 1000, height - 1020])
+        excluded = {o['targetKey'] for o, _ in inputs}
+        blocks = prepare_blocks(history, height, ids_of(inputs), rng=random.Random(0))
+        for _, h in inputs:
+            full = signer_pool(history, height, h, excluded)
+            self.assertGreater(len(full), DECOY_SAMPLE_TARGET)
+            self.assertEqual(signer_pool(blocks, height, h, excluded), full)
+
+    def test_single_input_keeps_the_small_sample(self):
+        history = chain(blocks=4000, outputs=40_000)
+        inputs = selected_at(history, [3999 - 2000])
+        blocks = prepare_blocks(history, 3999, ids_of(inputs), rng=random.Random(0))
+        self.assertLess(sum(len(b['outputs']) for b in blocks), 4 * DECOY_SAMPLE_TARGET)
 
     def test_spent_rows_trimmed_to_selected_images_keeping_duplicates(self):
         rows = [{'keyImage': 'a'}, {'keyImage': 'b'}, {'keyImage': 'a'}]
