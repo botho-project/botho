@@ -14,6 +14,8 @@ import time
 from discovery_plan import degrade_opt_in
 from plan import expand
 from reporting import legacy_lottery_evidence
+from signer_history import (SCAN_OPERATIONS, history_duplicate, merge_scans,
+                            prepare_blocks, prepare_spent, scan_payloads)
 from runtime import (Gate, HOSTS, Journal, PENDING, Quota, Rpc, atomic,
                      RESTART_ACTIONS, QUORUM_GATE_KEYS, check_identity, check_quorum, loop_delta, check_resources, digest, campaign_targets, campaign_tls_context, pinned_file)
 
@@ -604,8 +606,28 @@ class Controller:
         return max(1, explicit or effective_cpu_count())
 
     async def native(self, request):
+        # Whole-history scans are split into bounded consecutive chunks; the
+        # pinned signer's MAX_REQUEST is 128 MiB (#1631). Ownership is
+        # per-output, so concatenated chunk results equal one request's.
+        if request.get('operation') in SCAN_OPERATIONS:
+            duplicate = history_duplicate(request['blocks'])
+            if duplicate:
+                raise Gate('signer: '+duplicate)
+            results = [await self.native_payload(payload) for payload in scan_payloads(request)]
+            try:
+                return merge_scans(results)
+            except ValueError as error:
+                raise Gate(str(error))
+        return await self.native_payload(json.dumps(request).encode())
+
+    def prepare_history(self, height, selected):
+        """Bounded ``blocks`` and ``spent`` for a prepare request (#1631)."""
+        return (prepare_blocks(self.blocks, height, [o['id'] for o in selected]),
+                prepare_spent(self.spent, {o.get('key_image') for o in selected} - {None}))
+
+    async def native_payload(self, payload):
         def run():
-            result = subprocess.run([self.config['signer']], input=json.dumps(request).encode(),
+            result = subprocess.run([self.config['signer']], input=payload,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=90, check=False)
             if len(result.stdout) > 32*1024*1024:
                 raise Gate('signer response bound')
@@ -1100,9 +1122,10 @@ class Controller:
             raise Gate('orphaned prepared artifact needs reconciliation: '+identifier)
         ingress = self.choose_ingress(identifier)
         fee_rate = await self.rpc.call(ingress,'fee_getRate')
+        blocks, spent = self.prepare_history(height, selected)
         info = await self.native({'operation':'prepare','wallet':self.wallets[row['sender']]['key'],
-            'blocks':self.blocks,'height':height,'selected':[o['id'] for o in selected],
-            'spent':self.spent,'reserved':[r[0] for r in self.j.db.execute('SELECT input FROM reservations')],
+            'blocks':blocks,'height':height,'selected':[o['id'] for o in selected],
+            'spent':spent,'reserved':[r[0] for r in self.j.db.execute('SELECT input FROM reservations')],
             'recipient':self.wallets[row['recipient']]['address'],
             'allowed_recipients':[w['address'] for w in self.wallets],
             'amount':row['amount'],'base_rate':int(fee_rate['baseRate']),'artifact':str(artifact),
@@ -1429,8 +1452,9 @@ class Controller:
                 if probe.exists():
                     raise Gate('setup probe already exists; operator review required')
                 selected = selections[w]
-                await self.native({'operation':'prepare','wallet':self.wallets[w]['key'],'blocks':self.blocks,
-                    'height':height,'selected':[o['id'] for o in selected],'spent':self.spent,'reserved':[],
+                blocks, spent = self.prepare_history(height, selected)
+                await self.native({'operation':'prepare','wallet':self.wallets[w]['key'],'blocks':blocks,
+                    'height':height,'selected':[o['id'] for o in selected],'spent':spent,'reserved':[],
                     'recipient':self.wallets[(w+1)%8]['address'],'allowed_recipients':[x['address'] for x in self.wallets],
                     'amount':10_000_000_000,'base_rate':int(fee_rate['baseRate']),'artifact':str(probe)})
             self.gate()
