@@ -32,6 +32,7 @@ import unittest
 from unittest.mock import patch
 
 import controller as controller_module
+import runtime as runtime_module
 from controller import Controller, compact_owned
 from runtime import BlockLog, Gate, HOSTS, Journal, atomic, inventory_chunks
 
@@ -369,6 +370,26 @@ class BlockLogTests(Scenario):
             self.assertGreater(log.size, size)
             self.assertEqual(BlockLog(tmp).load(), nxt)
 
+    def test_equal_copy_of_persisted_history_appends_not_rewrites(self):
+        # Value fallback: an equal copy (not the persisted object) appends;
+        # a same-length but different history is still rewritten.
+        with tempfile.TemporaryDirectory() as tmp:
+            log = BlockLog(tmp)
+            first = self.blocks(3)
+            log.persist([], first)
+            inode = log.path.stat().st_ino
+            copy = [dict(b) for b in first]
+            with patch.object(runtime_module, 'atomic_stream', wraps=runtime_module.atomic_stream) as rewrite:
+                log.persist(copy, copy + self.blocks(4)[3:])
+                self.assertEqual(rewrite.call_count, 0)
+                self.assertEqual(log.path.stat().st_ino, inode)
+                self.assertEqual(BlockLog(tmp).load(), self.blocks(4))
+                other = self.blocks(4)
+                other[2] = {'height': 2, 'outputs': []}
+                log.persist(other, other + self.blocks(5)[4:])
+                self.assertEqual(rewrite.call_count, 1)
+            self.assertEqual(BlockLog(tmp).load(), other + self.blocks(5)[4:])
+
 
 class RestartExactnessTests(Scenario):
     def reference(self, steps):
@@ -470,6 +491,62 @@ class RestartExactnessTests(Scenario):
         del h.chain.tamper[12]
         h.sync(12)
         self.assertEqual(len(c.blocks), 13)
+
+
+class AppendOnlyAcrossEmptySyncsTests(Scenario):
+    """#1633 review: a sync with no new blocks must not break later appends.
+
+    Empty syncs are routine (discovery deliver passes, reconcile, setup sync
+    faster than blocks arrive), so every later append must stay an append.
+    """
+
+    def run_sequence(self, steps):
+        h = self.harness(tx_per_block=2)
+        c = h.controller()
+        h.sync(40)  # first write: the log is created
+        log = h.state / BlockLog.NAME
+        inode = log.stat().st_ino
+        with patch.object(runtime_module, 'atomic_stream', wraps=runtime_module.atomic_stream) as rewrite:
+            for tip, kwargs in steps:
+                size, before = log.stat().st_size, log.read_bytes()
+                h.sync(tip, **kwargs)
+                after = log.read_bytes()
+                # Append only: the old bytes are an untouched prefix.
+                self.assertEqual(after[:size], before)
+                self.assertEqual(after.count(b'\n'), tip + 1)
+                self.assertTrue(c.block_log.persisted is c.blocks,
+                                'the log no longer tracks the in-memory history list')
+            history_rewrites = [call for call in rewrite.call_args_list
+                                if Path(call.args[0]).name == BlockLog.NAME]
+            self.assertEqual(history_rewrites, [])
+        self.assertEqual(log.stat().st_ino, inode)
+        self.assertEqual(BlockLog(h.state).load(), c.blocks)
+        return h
+
+    def test_empty_incremental_sync_then_append(self):
+        self.run_sequence([(40, {}), (41, {}), (41, {}), (41, {}), (42, {})])
+
+    def test_full_sync_with_no_new_blocks_then_incremental(self):
+        self.run_sequence([(40, {'full': True, 'rescan_wallets': False}), (41, {}),
+                           (42, {'full': True, 'rescan_wallets': False}), (42, {}), (43, {})])
+
+    def test_full_sync_with_new_blocks_then_incremental(self):
+        self.run_sequence([(41, {'full': True, 'rescan_wallets': False}), (42, {}), (42, {}), (43, {})])
+
+    def test_restart_then_empty_sync_then_append(self):
+        h = self.harness(tx_per_block=2)
+        h.controller()
+        h.sync(40)
+        c = h.controller()  # restart: history from the log, inventory untrusted
+        inode = (h.state / BlockLog.NAME).stat().st_ino
+        with patch.object(runtime_module, 'atomic_stream', wraps=runtime_module.atomic_stream) as rewrite:
+            h.sync(40, full=True)  # the restart restore: no new blocks
+            h.sync(40)
+            h.sync(41)
+            self.assertEqual([call for call in rewrite.call_args_list
+                              if Path(call.args[0]).name == BlockLog.NAME], [])
+        self.assertEqual((h.state / BlockLog.NAME).stat().st_ino, inode)
+        self.assertEqual(BlockLog(h.state).load(), c.blocks)
 
 
 class XSeriesBudgetTests(Scenario):

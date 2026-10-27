@@ -917,8 +917,12 @@ class Controller:
             if full:
                 if previous and (diverged or height+1 < len(previous)):
                     raise Gate('full rescan disagrees with checkpointed output history')
-            # The (refetched) history beyond the verified checkpoint.
-            blocks = previous+new
+            # The (refetched) history beyond the verified checkpoint. With no
+            # new blocks keep the checkpointed list itself, not an equal copy:
+            # the block log appends only to the exact list it last persisted,
+            # so a fresh copy would turn the next append into a whole-file
+            # rewrite (#1633 review).
+            blocks = previous+new if new else previous
             appended = new
             incremental = self.inventory_initialized and not rescan
             restore = full and not incremental

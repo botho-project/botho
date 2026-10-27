@@ -170,9 +170,11 @@ class BlockLog:
     fails closed, exactly as an unparsable ``blocks.json`` did.
 
     ``persisted`` is the in-memory history list the file is known to equal.
-    An append is used only when the caller extends exactly that list.
+    An append is used only when the caller extends that history: the same
+    list object, or (as a fallback, so an equal copy never forces a rewrite)
+    a list of the same length that compares equal to it element by element.
     Otherwise (first write, a legacy ``blocks.json`` load, or a caller that
-    replaced the list) the whole history is rewritten atomically.
+    replaced the history) the whole history is rewritten atomically.
     """
 
     NAME = 'blocks.jsonl'
@@ -207,9 +209,19 @@ class BlockLog:
         self.persisted, self.size = blocks, size
         return blocks
 
+    def matches(self, previous):
+        """Whether the file is known to hold exactly ``previous``."""
+        if self.persisted is None or self.size is None:
+            return False
+        if self.persisted is previous:
+            return True
+        # Value fallback: exact equality, never a sampled check. Cheap next to
+        # a rewrite (list equality short-circuits on identical elements).
+        return len(self.persisted) == len(previous) and self.persisted == previous
+
     def persist(self, previous, blocks):
         """Make the file equal ``blocks``, which extends ``previous`` (its prefix)."""
-        if self.persisted is not None and self.persisted is previous and self.size is not None:
+        if self.matches(previous):
             appended = blocks[len(previous):]
             if appended:
                 with self.path.open('r+b') as log:
