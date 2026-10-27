@@ -161,8 +161,74 @@ class DiscoveryController(Controller):
         self.j.set("selection_latest", evidence)
         return selected
 
+    # -- phase-gate slot anchoring (#1627) -----------------------------------
+    # A phase boundary drains the previous phase (bounded by the slot grace),
+    # then runs a full sync and accounting before the new phase's gate
+    # releases. Offers of the new phase are still materialized at their
+    # immutable ``offered`` times while that happens, but their start slot
+    # (``start_slot_grace_seconds``) is measured from
+    # ``max(offered, release of the row's phase)``: the gate's own wait never
+    # uses up their grace. A row whose phase gate has not released has no slot
+    # yet and never expires. ``offered`` is never rewritten, and every lag
+    # metric stays measured from it (see note_deferral and the report's
+    # ``discovery.phase_releases``).
+
+    def campaign_phase(self, offered):
+        """The plan phase containing a campaign offer time, or None."""
+        start = self.j.get("start")
+        if start is None:
+            return None
+        elapsed = offered - start
+        return next(
+            (
+                p
+                for p in self.plan.get("phases", ())
+                if p["start_hour"] * 3600 <= elapsed < p["end_hour"] * 3600
+            ),
+            None,
+        )
+
+    def phase_releases(self):
+        """Gate-release time of every released phase, keyed by phase id.
+
+        Recorded durably with ``active_phase`` (campaign_tick). A phase gated
+        before #1627 has no record; its slots were measured from the offer
+        clock, which is exactly a release at its own boundary.
+        """
+        releases = dict(self.j.get("phase_release") or {})
+        start = self.j.get("start")
+        gates = self.j.get("phase_gates") or {}
+        phases = self.plan.get("phases", ())
+        ids = [p["id"] for p in phases]
+        active = self.j.get("active_phase")
+        # Phases up to the active one have released, whatever was recorded.
+        reached = ids.index(active) + 1 if active in ids else 0
+        for i, phase in enumerate(phases):
+            if phase["id"] in releases:
+                continue
+            if i < reached or gates.get(phase["id"]) is True:
+                releases[phase["id"]] = start + phase["start_hour"] * 3600
+        return releases
+
+    def slot_anchor(self, row, releases=None):
+        """When a row's start slot begins; None while its phase gate is closed."""
+        if row["kind"] != "campaign":
+            return row["offered"]
+        phase = self.campaign_phase(row["offered"])
+        if phase is None:
+            return row["offered"]
+        releases = self.phase_releases() if releases is None else releases
+        release = releases.get(phase["id"])
+        if release is None:
+            return None
+        return max(row["offered"], release)
+
     def intent_deadline(self, row):
-        deadline = super().intent_deadline(row)
+        anchor = self.slot_anchor(row)
+        if anchor is None:
+            # No slot before its phase gate releases: never admissible.
+            return -math.inf
+        deadline = anchor + self.j.limits["start_slot_grace_seconds"]
         if row["kind"] == "rehearsal":
             deadline = min(
                 deadline,
@@ -383,6 +449,8 @@ class DiscoveryController(Controller):
             self.j.set("status", "running")
             self.j.set("active_phase", "correctness")
             self.j.set("phase_gates", {"correctness": True})
+            # The first phase has no boundary wait: its slots start on time.
+            self.j.set("phase_release", {"correctness": start})
         atomic(
             self.state / "activated.json",
             {
@@ -481,12 +549,31 @@ class DiscoveryController(Controller):
                 )
                 cursor += 1
                 self.j.set("offer_cursor:" + kind, cursor)
+        # Expiry is measured from the slot anchor (#1627): rows of a phase
+        # whose gate has not released do not expire; the first ones after a
+        # release get their full grace from the release. The candidate query
+        # stays on ``offered`` (anchor >= offered), so only rows that could
+        # have expired are anchored.
+        releases = None
         for row in self.j.rows(
-            "state IN ('planned','eligible') AND offered<?", (now - grace,)
+            "state IN ('planned','eligible') AND offered<? ORDER BY offered,id",
+            (now - grace,),
         ):
+            if (
+                releases is None
+                and row["kind"] == "campaign"
+                and self.campaign_phase(row["offered"]) is not None
+            ):
+                releases = self.phase_releases()
+            anchor = self.slot_anchor(row, releases)
+            if anchor is None or anchor >= now - grace:
+                continue
             self.j.transition(
                 row["id"], "skipped", "generator_slot_expired", finished=now
             )
+        # The backlog bound counts every queued row, gate-held ones included:
+        # a gate wait longer than max_queued_intents offers is a generator
+        # limit, reported as such, not a backlog to burst through later.
         queued = self.j.rows("state IN ('planned','eligible') ORDER BY offered,id")
         for row in queued[self.j.limits["max_queued_intents"] :]:
             self.j.transition(
@@ -515,11 +602,14 @@ class DiscoveryController(Controller):
         if (row["id"], reason) in seen:
             return
         seen.add((row["id"], reason))
-        self.j.event(
-            row["id"],
-            "offer_deferred",
-            {"kind": row["kind"], "reason": reason, "lag_seconds": now - row["offered"]},
-        )
+        detail = {"kind": row["kind"], "reason": reason, "lag_seconds": now - row["offered"]}
+        # lag_seconds is always from the immutable offer clock (#1627). An
+        # offer that arrived while its phase gate was closed also records how
+        # much of that lag was the gate's wait.
+        anchor = self.slot_anchor(row)
+        if anchor is not None and anchor > row["offered"]:
+            detail["gate_held_seconds"] = anchor - row["offered"]
+        self.j.event(row["id"], "offer_deferred", detail)
 
     async def deliver(self, events, start, kind):
         """Attempt every due offer this pass can admit, oldest first (#1618).
@@ -656,11 +746,61 @@ class DiscoveryController(Controller):
             if phase["id"] == "recovery":
                 await self.restore_wallet(0)
                 self.j.set("restore_recovery", True)
-            self.j.set("active_phase", phase["id"])
-            gates = self.j.get("phase_gates", {})
-            gates[phase["id"]] = True
-            self.j.set("phase_gates", gates)
+            # Release the gate (#1627): the release time starts the slot of
+            # every offer this phase made while the gate was closed. It is
+            # written atomically with active_phase, so a restart before this
+            # point re-runs the gate and a restart after it keeps the release.
+            released = time.time()
+            held = sum(
+                boundary <= start + e["offset_seconds"] < released for e in self.events
+            )
+            with self.j.transaction():
+                releases = self.j.get("phase_release") or {}
+                releases[phase["id"]] = released
+                self.j.set("phase_release", releases)
+                self.j.set("active_phase", phase["id"])
+                gates = self.j.get("phase_gates", {})
+                gates[phase["id"]] = True
+                self.j.set("phase_gates", gates)
+                self.j.event(
+                    None,
+                    "phase_gate_released",
+                    {
+                        "phase": phase["id"],
+                        "boundary": boundary,
+                        "released": released,
+                        "gate_wait_seconds": released - boundary,
+                        "gate_held_offers": held,
+                    },
+                )
         await self.deliver(self.events, start, "campaign")
+
+    def phase_release_report(self):
+        """Each released phase's boundary, gate release and gate wait (#1627).
+
+        Offer lag everywhere is measured from the immutable ``offered`` time;
+        an offer made inside ``[boundary, released)`` carries up to
+        ``gate_wait_seconds`` of boundary-gate wait in that lag, and its start
+        slot was measured from ``released``.
+        """
+        start = self.j.get("start")
+        if start is None:
+            return {}
+        releases = self.phase_releases()
+        recorded = self.j.get("phase_release") or {}
+        out = {}
+        for phase in self.plan.get("phases", ()):
+            if phase["id"] not in releases:
+                continue
+            boundary = start + phase["start_hour"] * 3600
+            released = releases[phase["id"]]
+            out[phase["id"]] = {
+                "boundary": boundary,
+                "released": released,
+                "gate_wait_seconds": released - boundary,
+                "recorded": phase["id"] in recorded,
+            }
+        return out
 
     def report(self):
         # Dense workloads must not rewrite a growing report on each confirmation.
@@ -718,6 +858,7 @@ class DiscoveryController(Controller):
             "coverage_status": "incomplete",
             "selection": self.j.get("selection_latest"),
             "inventory": self.j.get("inventory_readiness"),
+            "phase_releases": self.phase_release_report(),
             "offer_deferrals": {
                 kind: offer_deferrals(self.j, kind) for kind in ("rehearsal", "campaign")
             },
