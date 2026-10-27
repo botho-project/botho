@@ -38,6 +38,13 @@ class Gate(Exception):
     """A fail-closed admission decision, retained for explicit operator review."""
 
 
+class Expired(Exception):
+    """Signing overran its bounded allowance (#1635). Not a Gate: the intent
+    never reached ``prepared``, so nothing was reserved and ``begin_submit``
+    can never publish the artifact; the caller quarantines it and skips the
+    intent instead of holding."""
+
+
 def validate_rpc_url(value):
     """A canonical HTTPS RPC destination; no URL credentials or extra routing."""
     if not isinstance(value, str) or not re.fullmatch(
@@ -333,11 +340,16 @@ class Journal:
         return self.rows('state IN (' + ','.join('?' for _ in INFLIGHT) + ')', INFLIGHT)
 
     def prepare(self, identifier, artifact, phase_limit, deadline):
-        """Artifact is already fsynced. Reserve every input and actual fee atomically."""
+        """Artifact is already fsynced. Reserve every input and actual fee atomically.
+
+        ``deadline`` is the commit deadline: the caller extends the start-slot
+        deadline by a bounded signing allowance for a sign started on time."""
         with self.transaction():
             intent = self.intent(identifier)
-            if intent['state'] != 'eligible' or self.clock() >= deadline:
-                raise Gate('preparation expired or intent already consumed')
+            if intent['state'] != 'eligible':
+                raise Gate('intent already consumed before preparation')
+            if self.clock() >= deadline:
+                raise Expired('signing exceeded its allowance')
             pending = self.pending()
             if len(self.inflight()) >= min(self.limits['max_inflight'], phase_limit):
                 raise Gate('inflight limit')
