@@ -62,8 +62,11 @@ class DegradePlanTests(unittest.TestCase):
 
     def test_x_series_plan_expands_with_the_d1_d5_schedule(self):
         summary, events = expand(self.plan())
-        self.assertEqual(summary["nominal_campaign_payments"], 22480)
-        self.assertEqual(len(events), 22480)
+        # #1620: twelve 100-offer bursts (20/min) instead of 150 (30/min).
+        self.assertEqual(summary["nominal_campaign_payments"], 21880)
+        self.assertEqual(len(events), 21880)
+        self.assertEqual(summary["rehearsal_payments"], 360)
+        self.assertEqual(summary["total_planned_chain_write_ceiling"], 22240)
         self.assertEqual(
             [(p["phase"], p["start_hour"], p["end_hour"]) for p in summary["phases"][-3:]],
             [("recovery", 42, 48), ("degrade", 48, 54), ("repeat", 54, 72)],
@@ -113,10 +116,10 @@ class DegradePlanTests(unittest.TestCase):
         for key in set(base) | set(plan):
             if key not in ("faults", "phases", "degrade", "limits", "rehearsal", "wallets"):
                 self.assertEqual(plan[key], base[key], key)
-        # #1615: 64 senders so 30/min peaks never wait on sender reuse.
+        # #1615: 64 senders so peaks never wait on sender reuse.
         self.assertEqual({**plan["wallets"], "count": base["wallets"]["count"]}, base["wallets"])
         self.assertEqual(plan["wallets"]["count"], 64)
-        # #1613: submission headroom over the 30/min peak (and the wire budget
+        # #1613: submission headroom over the peak (and the wire budget
         # that keeps it reachable at max transaction size), plus the
         # generator_limited rehearsal opt-in. Nothing else differs.
         self.assertEqual(
@@ -130,14 +133,42 @@ class DegradePlanTests(unittest.TestCase):
         self.assertEqual(set(plan["limits"]), set(base["limits"]))
         rehearsal = dict(plan["rehearsal"])
         self.assertIs(rehearsal.pop("generator_limited_acceptable"), True)
-        self.assertEqual(rehearsal, base["rehearsal"])
+        # #1620: the x-series peak is 20/min (every 3 s), not v2's 30/min.
+        self.assertEqual(rehearsal, {**base["rehearsal"], "interval_seconds": 3})
         faults = dict(plan["faults"])
         self.assertIs(faults.pop("validator_degrade_phase"), True)
         self.assertEqual(faults, base["faults"])
         self.assertEqual({p["max_inflight"] for p in plan["phases"]}, {64})  # #1615
+        # #1620: each burst keeps its 5 minutes at 20/min (100 x 3 s, not 150 x 2 s).
+        def v2_burst(segment):
+            if segment["scenario"] != "burst":
+                return segment
+            self.assertEqual((segment["count"], segment["interval_seconds"]), (100, 3))
+            return {**segment, "count": 150, "interval_seconds": 2}
+
         self.assertEqual(
-            [{**p, "max_inflight": 32} for p in plan["phases"][:-2]], base["phases"][:-1]
+            [
+                {**p, "max_inflight": 32, "segments": [v2_burst(s) for s in p["segments"]]}
+                for p in plan["phases"][:-2]
+            ],
+            base["phases"][:-1],
         )
+
+    def test_x_series_peak_is_20_per_minute(self):
+        plan = self.plan()
+        self.assertEqual(60 // plan["rehearsal"]["interval_seconds"], 20)
+        bursts = [
+            s for p in plan["phases"] for s in p["segments"] if s["scenario"] == "burst"
+        ]
+        self.assertEqual(len(bursts), 12)
+        for burst in bursts:
+            self.assertEqual(60 // burst["interval_seconds"], 20)
+            self.assertEqual(burst["count"] * burst["interval_seconds"], 300)
+        # The burst is the fastest segment, and no faster than the rehearsal.
+        fastest = min(
+            s["interval_seconds"] for p in plan["phases"] for s in p["segments"]
+        )
+        self.assertEqual(fastest, plan["rehearsal"]["interval_seconds"])
 
     def test_rehearsal_only_keeps_validation_but_schedules_no_fault(self):
         plan = self.plan()

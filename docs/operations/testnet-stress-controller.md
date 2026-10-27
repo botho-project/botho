@@ -468,8 +468,14 @@ other than `true`, and public ingresses.
   empty: no fault is scheduled.
 
 The x-series plan keeps every v2 budget and the seed, and splits the old
-48–72 `repeat` into `degrade` 48–54 and `repeat` 54–72 (22,480 campaign
-offers). The degrade phase offers at 4/minute from 48 h (880 offers, last at
+48–72 `repeat` into `degrade` 48–54 and `repeat` 54–72. Since #1620 its peak is
+**20/minute**, not v2's 30/minute: the rehearsal offers every 3 s (360 offers)
+and each five-minute burst in hours 30–42 is 100 offers at 3 s instead of 150
+at 2 s. x1 measured a controller ceiling of about 26/minute (median prepare gap
+1.57 s), so a 30/minute rehearsal backlogs and holds; 20/minute leaves about 25 %
+headroom, and 64 senders then recur every 192 s, above the ~170 s reconcile
+maximum. That gives 21,880 campaign offers and a 22,240-write ceiling with
+rehearsal. The degrade phase offers at 4/minute from 48 h (880 offers, last at
 +13,185 s) and again from 52.5 h (360 offers), leaving D5 and its lead quiet:
 
 | Step | Action | Target | Fault start → restore → window end (s after 48 h) | Offers | Expect |
@@ -556,7 +562,7 @@ post-rehearsal gate. Reports keep `status: generator_limited` and add
 `accepted_as`; rehearsal-only qualification reports
 `accepted_generator_limited`, never `passed`. The x-series plan opts in and caps
 normal submissions at 40/min (wire budget 24 MiB) so that a backlog can drain
-during its 30/min peaks. Calibration
+during its 20/min peaks (#1620). Calibration
 checks the original offer timestamps and finite, ordered submission/receipt
 records. Each submission must follow its offer by at most four seconds at the
 default two-second cadence (in general, twice the interval, bounded to 1–5

@@ -38,10 +38,10 @@ class PlanHeadroomTests(unittest.TestCase):
         self.assertEqual(plan["limits"]["max_inflight"], 64)
         self.assertEqual({p["max_inflight"] for p in plan["phases"]}, {64})
         summary, events = expand(plan)
-        self.assertEqual(len(events), 22480)
+        self.assertEqual(len(events), 21880)  # #1620: 20/min bursts
         self.assertEqual({e["sender"] for e in events}, {f"wallet-{i}" for i in range(1, 65)})
 
-    def test_every_sender_rests_128_s_at_the_30_per_minute_peak(self):
+    def test_every_sender_rests_192_s_at_the_20_per_minute_peak(self):
         _, events = expand(x_series())
         last, gaps = {}, []
         for event in events:
@@ -49,8 +49,9 @@ class PlanHeadroomTests(unittest.TestCase):
             if sender in last:
                 gaps.append(event["offset_seconds"] - last[sender])
             last[sender] = event["offset_seconds"]
-        # 64 offers at the 2 s burst cadence: twice attempt d's 64 s reuse.
-        self.assertGreaterEqual(min(gaps), 128)
+        # #1620: 64 offers at the 3 s burst cadence, three times attempt d's
+        # 64 s reuse and above the ~170 s reconcile maximum seen on x1.
+        self.assertGreaterEqual(min(gaps), 192)
 
     def test_validator_still_caps_wallets_at_64(self):
         plan = x_series()
@@ -264,19 +265,20 @@ class DeferralMetricTests(unittest.TestCase):
 
 
 class AttemptDShapeTests(unittest.TestCase):
-    """The rehearsal profile (30/min, 2 s, 1080 s of offers) through the real
-    deliver/materialize path and Journal gates, at a constant latency near
-    attempt d's p90 (71.6 s). Constant latency is optimistic: attempt d's
-    spread (max 165 s) crossed the grace sooner."""
+    """Attempt d's rehearsal profile (30/min, 2 s, 1080 s of offers) through
+    the real deliver/materialize path and Journal gates, at a constant latency
+    near attempt d's p90 (71.6 s). Constant latency is optimistic: attempt d's
+    spread (max 165 s) crossed the grace sooner. #1620 lowered the plan's
+    rehearsal to 20/min (3 s); `interval=None` runs the plan's own cadence."""
 
-    def simulate(self, wallets, cap, latency, seconds=1080):
+    def simulate(self, wallets, cap, latency, seconds=1080, interval=2):
         plan = x_series()
         plan["limits"]["max_inflight"] = cap
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         c, clock = controller(tmp.name, plan["limits"])
         self.addCleanup(c.j.db.close)
-        interval = plan["rehearsal"]["interval_seconds"]
+        interval = interval or plan["rehearsal"]["interval_seconds"]
         events = [event(i, i % wallets, i * interval, cap) for i in range(seconds // interval)]
         run(c, clock, events, seconds + 200, FakeSubmitter(c, clock, latency))
         rows = c.j.rows("kind='rehearsal'")
@@ -299,6 +301,16 @@ class AttemptDShapeTests(unittest.TestCase):
         # 64 senders recur every 128 s: no deferral up to ~125 s latency.
         for latency in (75, 125):
             after = self.simulate(64, 64, latency=latency)
+            self.assertEqual(after["skipped"], 0, latency)
+            self.assertEqual(after["max_lag"], 0, latency)
+            self.assertEqual(after["deferrals"]["offers_deferred"], 0, latency)
+
+    def test_64_wallets_hold_the_20_per_minute_plan_cadence(self):
+        # #1620: 64 senders at 3 s recur every 192 s, past the ~170 s
+        # reconcile maximum seen on x1.
+        self.assertEqual(x_series()["rehearsal"]["interval_seconds"], 3)
+        for latency in (75, 125, 170):
+            after = self.simulate(64, 64, latency=latency, interval=None)
             self.assertEqual(after["skipped"], 0, latency)
             self.assertEqual(after["max_lag"], 0, latency)
             self.assertEqual(after["deferrals"]["offers_deferred"], 0, latency)
