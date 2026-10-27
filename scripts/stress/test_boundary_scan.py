@@ -11,9 +11,10 @@ These tests run the real admission_tick -> campaign_tick -> Controller.sync
 -> accounting path and the real Journal on a virtual clock, over a synthetic
 chain sized like the x-series schedule. Only the network and the native
 signer are faked; each native wallet scan costs virtual time calibrated to
-the x1 measurement, on ``CPUS`` controller cores. ``SerialFullRescan``
-restores the pre-#1629 boundary (serial 64-wallet ``restore_check``) to show
-the failure the fix removes.
+the x1 measurement, on ``CPUS`` controller cores -- 1, the x1 controller
+unit's ``CPUQuota=100%``. ``SerialFullRescan`` restores the pre-#1629
+boundary (serial 64-wallet ``restore_check``) to show the failure the fix
+removes.
 """
 
 import asyncio
@@ -35,7 +36,7 @@ SLOPE = (CALIBRATION[1][1] - CALIBRATION[0][1]) / (CALIBRATION[1][0] - CALIBRATI
 INTERCEPT = CALIBRATION[0][1] - SLOPE * CALIBRATION[0][0]
 WALLETS = 64
 SPAWN = 0.02  # one signer subprocess start, per native call
-CPUS = 8  # m6i.2xlarge controller
+CPUS = 1  # x1 controller unit: CPUQuota=100% (staging.py unit_text)
 # Chain shape: prefunding left ~2,400 transactions in the first ~400 blocks;
 # x1 then reached height 1245 at T0+8.5h (about one block per 36 s). Every
 # campaign offer becomes one chain transaction when it is offered.
@@ -404,7 +405,18 @@ class BoundarySafetyTests(ChainScenario):
 
 
 class BoundaryRestartTests(ChainScenario):
-    def test_restart_mid_boundary_scan_restores_and_skips_nothing(self):
+    def test_restart_mid_boundary_scan_restores_serially_and_reports_skips(self):
+        """A restart at a boundary pays one serial full restore (pre-existing).
+
+        Persisted inventory is never trusted, so the first boundary scan of a
+        fresh process falls back to every wallet's full ``restore_check``.
+        On the x1 controller unit (1 CPU, ``MemoryMax=1G``) those run one at
+        a time, exactly as every boundary did before #1629, so a restart at
+        h30 waits about as long as the old boundary and skips offers. That is
+        a known pre-existing limitation, not made worse here: the skips are
+        bounded by ``max_queued_intents``, journaled as generator limits, and
+        the run neither holds nor bursts; the next boundary is incremental.
+        """
         fleet = self.chain_fleet(30)
         # Die inside the boundary's history refetch, after the drain.
         original = fleet.c.campaign_tick
@@ -423,17 +435,44 @@ class BoundaryRestartTests(ChainScenario):
         fleet.clock.now += 20
         fleet.native_calls.clear()
         c = fleet.reopen()
-        # Persisted inventory is never trusted: the boundary scan of a fresh
-        # process falls back to every wallet's full restore_check, in parallel.
-        fleet.run(fleet.boundary + 600)
+        peak = running = 0
+        native = fleet.native
+
+        async def counted(request):
+            nonlocal peak, running
+            running += 1
+            peak = max(peak, running)
+            try:
+                return await native(request)
+            finally:
+                running -= 1
+
+        c.native = counted
+        expected = full_scan_seconds(chain_tx(fleet.boundary))
+        fleet.run(fleet.boundary + expected + 1200)
         result = fleet.outcome("ramp")
+        # No unsafe behaviour: a full, serial, identity-checked restore.
         self.assertEqual(result["status"], "running", result["reason"])
-        self.assertEqual(result["skipped"], [])
-        self.assertEqual(result["submitted"], result["offered"])
+        self.assertEqual(result["active"], "ramp")
         self.assertEqual(len(fleet.boundary_restores()), WALLETS)
+        self.assertEqual(peak, 1)
         self.assertTrue(c.inventory_initialized)
-        self.assertLess(fleet.gate_event()["boundary_scan_seconds"],
-                        full_scan_seconds(chain_tx(fleet.boundary)) / CPUS * 1.5)
+        event = fleet.gate_event()
+        self.assertGreater(event["boundary_scan_seconds"], 0.9 * expected)
+        # Skips are bounded and reported as generator limits, never a burst.
+        limits = c.j.limits["max_queued_intents"]
+        skipped = c.j.rows("kind='campaign' AND state='skipped' AND offered>=?", (fleet.boundary,))
+        self.assertTrue(skipped)
+        self.assertLessEqual(len(skipped), limits)
+        self.assertEqual({r["reason"] for r in skipped} - {"generator_queue_limit", "generator_slot_expired"}, set())
+        self.assertEqual(result["skipped"], [r["id"] for r in skipped])
+        self.assertEqual(result["expired"], [])
+        self.assertEqual(result["submitted"] + len(skipped), result["offered"])
+
+        # The next boundary in the same process is incremental again.
+        fleet.native_calls.clear()
+        asyncio.run(c.sync(full=True, rescan_wallets=False))
+        self.assertEqual(fleet.boundary_restores(), [])
 
 
 if __name__ == "__main__":

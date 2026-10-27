@@ -4,9 +4,9 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
-from controller import Controller
+from controller import Controller, cgroup_cpu_limit, effective_cpu_count, parse_cpu_max
 from runtime import Gate, HOSTS, Journal
 
 
@@ -199,7 +199,7 @@ class IncrementalScanTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.c.sync(rescan_wallets=True)
 
-    async def test_wallet_scans_run_bounded_in_parallel_in_wallet_order(self):
+    async def test_whole_chain_scans_are_serial_and_appends_run_bounded_in_wallet_order(self):
         running = peak = 0
         async def slow(request):
             nonlocal running, peak
@@ -209,9 +209,101 @@ class IncrementalScanTests(unittest.IsolatedAsyncioTestCase):
             return await self.scan(request)
         self.c.native.side_effect = slow
         self.c.scan_workers = 3
+        # Whole-chain restores stay serial even with an explicit worker count:
+        # the x1 controller unit has MemoryMax=1G and no swap (#1629).
         await self.c.sync(full=True)
+        self.assertEqual(peak,1)
+        # A first routine scan from genesis is whole-chain too.
+        self.c.inventory_initialized = False
+        peak = 0
+        await self.c.sync()
+        self.assertEqual(peak,1)
+        # Incremental scans of appended blocks may run in parallel.
+        self.chain.append(self.block(2));self.set_height(2)
+        peak = 0
+        await self.c.sync(full=True, rescan_wallets=False)
         self.assertEqual(peak,3)
-        self.assertEqual([len(owned) for owned in self.c.inventory],[2,0,0,0,0,0,0,0])
+        self.assertEqual([len(owned) for owned in self.c.inventory],[3,0,0,0,0,0,0,0])
+
+    async def test_incremental_parallelism_defaults_to_the_effective_cpu_limit(self):
+        with patch('controller.effective_cpu_count', return_value=1):
+            self.assertEqual(self.c.scan_parallelism(True),1)
+        with patch('controller.effective_cpu_count', return_value=4):
+            self.assertEqual(self.c.scan_parallelism(True),4)
+            self.assertEqual(self.c.scan_parallelism(False),1)
+
+    async def test_restore_wallet_runs_its_two_scans_serially(self):
+        await self.initialize()
+        (self.c.state/'wallets').mkdir()
+        key = self.c.state/'key-0'
+        key.write_text('seed\n')
+        self.c.wallets[0]['key'] = str(key)
+        self.c.scan_workers = 8
+        running = peak = 0
+        async def slow(request):
+            nonlocal running, peak
+            running += 1;peak = max(peak,running)
+            await asyncio.sleep(0.01)
+            running -= 1
+            return {'address':'address-0','owned':[]}
+        self.c.native.side_effect = slow
+        await self.c.restore_wallet(0)
+        self.assertEqual(peak,1)
+        self.assertEqual([c.args[0]['operation'] for c in self.c.native.call_args_list],['scan','restore_check'])
+
+
+class CpuLimitTests(unittest.TestCase):
+    def test_parse_cpu_max(self):
+        self.assertIsNone(parse_cpu_max('max 100000\n'))
+        self.assertEqual(parse_cpu_max('100000 100000\n'),1)
+        self.assertEqual(parse_cpu_max('250000 100000\n'),2)
+        self.assertEqual(parse_cpu_max('50000 100000'),1)
+        for bad in ('', 'garbage', '0 100000', '100000 0', 'a b'):
+            self.assertIsNone(parse_cpu_max(bad), bad)
+
+    def cgroup(self, files, membership='0::/system.slice/x1.service\n'):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)/'cgroup'
+        root.mkdir()
+        proc = Path(tmp.name)/'self-cgroup'
+        if membership is not None:
+            proc.write_text(membership)
+        for relative, text in files.items():
+            path = root/relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        return str(root), str(proc)
+
+    def test_cgroup_cpu_limit_reads_the_unit_and_its_ancestors(self):
+        root, proc = self.cgroup({'system.slice/x1.service/cpu.max':'100000 100000\n'})
+        self.assertEqual(cgroup_cpu_limit(root, proc),1)
+        root, proc = self.cgroup({'system.slice/x1.service/cpu.max':'max 100000\n',
+                                  'system.slice/cpu.max':'250000 100000\n'})
+        self.assertEqual(cgroup_cpu_limit(root, proc),2)
+        root, proc = self.cgroup({'system.slice/x1.service/cpu.max':'max 100000\n'})
+        self.assertIsNone(cgroup_cpu_limit(root, proc))
+
+    def test_missing_cgroup_files_fall_back(self):
+        root, proc = self.cgroup({})
+        self.assertIsNone(cgroup_cpu_limit(root, proc))
+        root, proc = self.cgroup({'system.slice/x1.service/cpu.max':'100000 100000\n'}, membership=None)
+        self.assertIsNone(cgroup_cpu_limit(root, proc))
+        # cgroup v1 only: no unified ("0::") line.
+        root, proc = self.cgroup({}, membership='4:cpu,cpuacct:/x1\n')
+        self.assertIsNone(cgroup_cpu_limit(root, proc))
+
+    def test_effective_cpu_count_prefers_the_quota_and_falls_back(self):
+        with patch('controller.os.sched_getaffinity', create=True, return_value=set(range(8))):
+            self.assertEqual(effective_cpu_count(1),1)
+            self.assertEqual(effective_cpu_count(2),2)
+            self.assertEqual(effective_cpu_count(16),8)
+            with patch('controller.cgroup_cpu_limit', return_value=None):
+                self.assertEqual(effective_cpu_count(),8)
+        with patch('controller.os.sched_getaffinity', create=True, side_effect=AttributeError), \
+             patch('controller.os.cpu_count', return_value=6), \
+             patch('controller.cgroup_cpu_limit', return_value=None):
+            self.assertEqual(effective_cpu_count(),6)
 
 
 if __name__=='__main__':
