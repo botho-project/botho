@@ -61,6 +61,10 @@ def artifact_evidence(state, rows, byte_limit):
     Missing archives are unavailable evidence, not an empty artifact directory.
     Hash only disagreements, keeping ordinary reporting independent of total
     signed bytes. SHA256 identifies file contents, not the transaction hash.
+
+    ``artifacts/expired/`` holds the controller's quarantine of signed
+    artifacts whose intent never reached ``prepared`` (#1635): never
+    submittable, never orphans, counted as ``expired_unsubmitted``.
     """
     directory = state / "artifacts"
     result = {
@@ -68,6 +72,7 @@ def artifact_evidence(state, rows, byte_limit):
         "directory": str(directory),
         "orphaned_signed": None,
         "ambiguous_signed": None,
+        "expired_unsubmitted": None,
         "findings": [],
         "signature_validation": "not_performed",
         "submission_evidence": "journal_only",
@@ -80,7 +85,15 @@ def artifact_evidence(state, rows, byte_limit):
         result["reason"] = str(error)
         return result
     intents = {row["id"]: row for row in rows}
+    expired = 0
     for path in paths:
+        if path.name == "expired" and stat.S_ISDIR(path.lstat().st_mode):
+            try:
+                expired = sum(1 for _ in path.iterdir())
+            except OSError as error:
+                result["reason"] = str(error)
+                return result
+            continue
         row = intents.get(path.stem)
         if (
             path.suffix == ".bin"
@@ -123,6 +136,7 @@ def artifact_evidence(state, rows, byte_limit):
         result["findings"].append(finding)
     result.update(
         status="checked",
+        expired_unsubmitted=expired,
         **{
             kind: sum(f["classification"] == kind for f in result["findings"])
             for kind in ("orphaned_signed", "ambiguous_signed")

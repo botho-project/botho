@@ -184,6 +184,23 @@ class AcceptanceControllerTests(unittest.TestCase):
         (self.c.state / "artifacts" / "rehearsal-99999.bin").write_bytes(b"x")
         self.assert_gates()
 
+    def test_quarantined_expired_artifact_does_not_gate(self):
+        # #1635: an unprepared intent's quarantined signature (here a first
+        # attempt re-signed after restart) is not an orphan.
+        expired = self.c.state / "artifacts" / "expired"
+        expired.mkdir()
+        (expired / "rehearsal-00010.bin").write_bytes(b"never prepared")
+        self.tick()
+        self.assertEqual(self.c.j.get("status"), "rehearsal_complete")
+        self.assertEqual(len(self.accepted_events()), 1)
+
+    def test_orphan_beside_quarantined_artifact_still_gates(self):
+        expired = self.c.state / "artifacts" / "expired"
+        expired.mkdir()
+        (expired / "rehearsal-00010.bin").write_bytes(b"never prepared")
+        (self.c.state / "artifacts" / "rehearsal-99999.bin").write_bytes(b"x")
+        self.assert_gates()
+
     def test_ambiguous_signed_artifact_gates(self):
         (self.c.state / "artifacts" / "rehearsal-00010.partial").write_bytes(b"x")
         self.assert_gates()

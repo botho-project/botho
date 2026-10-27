@@ -16,7 +16,7 @@ from plan import expand
 from reporting import legacy_lottery_evidence
 from signer_history import (SCAN_OPERATIONS, history_duplicate, merge_scans,
                             prepare_blocks, prepare_spent, scan_payloads)
-from runtime import (BlockLog, Gate, HOSTS, Journal, PENDING, Quota, Rpc, atomic, atomic_stream, inventory_chunks,
+from runtime import (BlockLog, Expired, Gate, HOSTS, Journal, PENDING, Quota, Rpc, atomic, atomic_stream, inventory_chunks,
                      RESTART_ACTIONS, QUORUM_GATE_KEYS, check_identity, check_quorum, loop_delta, check_resources, digest, campaign_targets, campaign_tls_context, pinned_file)
 
 
@@ -32,6 +32,15 @@ INVENTORY_DROPPED_UTXO_FIELDS = frozenset({'kem_ciphertext'})
 # no code reads it back. It is checkpointed on every full sync and otherwise
 # at most this often, instead of on every sync (#1633).
 INVENTORY_CHECKPOINT_SECONDS = 300
+# Do not start signing an intent this close to its start-slot deadline
+# (#1635): a sign that straddles the deadline wastes a signature. It no longer
+# holds the campaign (Journal.prepare raises Expired, not Gate), but the
+# margin makes that path rarer. x1 endurance2 measured a ~4.8 s sign.
+SIGNING_MARGIN_SECONDS = 5
+# Signed artifacts of intents that never reached ``prepared`` (#1635). They
+# cannot be submitted (begin_submit requires ``prepared``) and reserve no
+# inputs; they are kept for audit, never deleted, and are not orphans.
+EXPIRED_ARTIFACTS = 'expired'
 
 
 def compact_owned(output):
@@ -1180,7 +1189,7 @@ class Controller:
                 **self.j.get('selection_latest',{})})
             return False
         self.gate()
-        if time.time() > self.intent_deadline(row):
+        if time.time() > self.intent_deadline(row) - SIGNING_MARGIN_SECONDS:
             return False
         self.j.transition(identifier,'eligible')
         charged=self.j.db.execute('SELECT COALESCE(SUM(fee),0) FROM intents WHERE prepared IS NOT NULL').fetchone()[0]
@@ -1191,7 +1200,12 @@ class Controller:
             raise Gate('chain write budget reached before signing')
         artifact = self.state/'artifacts'/(identifier+'.bin')
         if artifact.exists() or artifact.with_suffix('.partial').exists():
-            raise Gate('orphaned prepared artifact needs reconciliation: '+identifier)
+            current = self.j.intent(identifier)
+            if current['state'] != 'eligible' or current['prepared'] is not None:
+                raise Gate('orphaned prepared artifact needs reconciliation: '+identifier)
+            # A previous attempt signed but never prepared (#1635): nothing
+            # was reserved and it can never be submitted. Keep it for audit.
+            self.quarantine_artifact(identifier)
         ingress = self.choose_ingress(identifier)
         fee_rate = await self.rpc.call(ingress,'fee_getRate')
         blocks, spent = self.prepare_history(height, selected)
@@ -1209,13 +1223,45 @@ class Controller:
         info.update(burst=burst,phase_limit=phase_limit,crash=crash,
                     scan_height=height,prepared_at=time.time())
         self.gate()
-        self.j.prepare(identifier,info,phase_limit,self.intent_deadline(row))
+        try:
+            self.j.prepare(identifier,info,phase_limit,self.intent_deadline(row))
+        except Expired as error:
+            # The slot closed while signing (#1635). The intent is still
+            # ``eligible`` with no reservations: skip it, do not hold.
+            self.quarantine_artifact(identifier)
+            self.j.transition(identifier,'skipped',str(error),finished=time.time())
+            return False
         if crash=='prepared' and not self.j.get('crash:prepared'):
             self.j.set('crash:prepared',identifier)
             self.report()
             os._exit(77)
         await self.submit_prepared(identifier)
         return True
+
+    def quarantine_artifact(self, identifier):
+        """Move an unprepared intent's signed artifact (and any ``.partial``)
+        to ``artifacts/expired/`` (#1635). Callers must have checked that the
+        intent never reached ``prepared``; the files are never deleted."""
+        directory = self.state/'artifacts'
+        expired = directory/EXPIRED_ARTIFACTS
+        expired.mkdir(mode=0o700, exist_ok=True)
+        moved = False
+        for suffix in ('.bin', '.partial'):
+            source = directory/(identifier+suffix)
+            if not source.exists():
+                continue
+            target, n = expired/source.name, 1
+            while target.exists():
+                target, n = expired/f'{identifier}.{n}{suffix}', n+1
+            os.replace(source, target)
+            moved = True
+        if moved:
+            fd = os.open(directory, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            self.j.event(identifier,'artifact_quarantined',{'directory':str(expired)})
 
     async def submit_prepared(self, identifier):
         row = self.j.intent(identifier)
@@ -1705,9 +1751,18 @@ class Controller:
             for wallet,path in zip(self.wallets,paths):
                 wallet['key']=path
         # A crashed signing operation may have left a published artifact before
-        # SQLite preparation. Hold rather than sign again or silently reuse it.
-        for artifact in (self.state/'artifacts').iterdir():
+        # SQLite preparation. An intent still ``eligible`` (never prepared)
+        # reserved nothing and can never be submitted: quarantine its artifact
+        # and let admission retry or expire it (#1635). Anything else holds
+        # rather than sign again or silently reuse it.
+        for artifact in sorted((self.state/'artifacts').iterdir()):
+            if artifact.name==EXPIRED_ARTIFACTS and artifact.is_dir() and not artifact.is_symlink():
+                continue
             row=self.j.intent(artifact.stem)
+            if (row and artifact.suffix in ('.bin','.partial') and row['state']=='eligible'
+                    and row['prepared'] is None and not artifact.is_symlink()):
+                self.quarantine_artifact(artifact.stem)
+                continue
             if artifact.suffix!='.bin' or not row or not row['prepared']:
                 self.halt('orphaned or partial signed artifact after restart')
         monitor=asyncio.create_task(self.monitor())

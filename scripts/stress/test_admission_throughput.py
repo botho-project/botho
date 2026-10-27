@@ -211,14 +211,16 @@ class RehearsalThroughputTests(unittest.TestCase):
         )
         return fleet, result
 
-    def test_one_admission_per_tick_reproduces_the_x1_hold(self):
-        # Budget 0 is the pre-#1618 pass: stop after the first attempt.
+    def test_one_admission_per_tick_reproduces_the_x1_backlog(self):
+        # Budget 0 is the pre-#1618 pass: stop after the first attempt. The
+        # backlog still overruns the 120 s grace, but since #1635 an intent
+        # that runs out of slot is skipped, never a campaign hold.
         fleet, before = self.simulate(budget=0)
         self.assertEqual(max(fleet.ticks), 1)
-        self.assertEqual(before["status"], "held")
-        self.assertIn("preparation expired", before["reason"])
+        self.assertEqual(before["status"], "setup")
         self.assertGreater(before["max_lag"], 100)
         self.assertLess(before["submitted"], 540)
+        self.assertGreater(before["skipped"], 0)
 
     def test_multi_offer_ticks_hold_the_30_per_minute_offer_clock(self):
         fleet, after = self.simulate(budget=None)

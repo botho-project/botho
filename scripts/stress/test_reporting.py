@@ -13,6 +13,10 @@ from discovery import DiscoveryController
 from runtime import Gate, Journal
 
 
+class StopRun(Exception):
+    pass
+
+
 class TerminalReportingTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -201,13 +205,16 @@ class TerminalReportingTests(unittest.TestCase):
         self.assertEqual(report["not_yet_offered"], 6)
         self.assertEqual(report["rehearsal"]["not_yet_offered"], 540)
 
-    def test_published_native_artifact_survives_expired_prepare_and_report_is_read_only(
+    def test_deadline_passing_during_signing_skips_and_quarantines_without_hold(
         self,
     ):
+        # #1635: x1 endurance2 held when a ~4.8 s sign crossed the slot
+        # deadline. The real Controller.prepare and Journal.prepare run.
         self.row(0, "reconciled")
         self.c.j.offer("rehearsal-00411", "rehearsal", 1000, 0, 1, 1)
         self.c.j.offer("rehearsal-00412", "rehearsal", 1002, 1, 0, 1)
         (self.c.state / "artifacts").mkdir()
+        self.c.j.set("status", "setup")
         self.c.gate = Mock()
         self.c.sync = AsyncMock(return_value=100)
         self.c.spendable = Mock(return_value=[{"id": "owned-input"}])
@@ -237,34 +244,124 @@ class TerminalReportingTests(unittest.TestCase):
 
         self.c.native = AsyncMock(side_effect=publish_before_deadline)
         with patch("controller.time.time", side_effect=lambda: now[0]):
-            with self.assertRaisesRegex(Gate, "preparation expired"):
-                asyncio.run(self.c.prepare("rehearsal-00411", 1, 8))
-            self.c.halt("preparation expired or intent already consumed")
-            before = list(self.c.j.db.iterdump())
+            self.assertFalse(asyncio.run(self.c.prepare("rehearsal-00411", 1, 8)))
             report = self.c.report()
         self.c.submit_prepared.assert_not_awaited()
-        self.assertEqual(list(self.c.j.db.iterdump()), before)
+        self.assertEqual(self.c.j.get("status"), "setup")
         row = self.c.j.intent("rehearsal-00411")
-        self.assertEqual(row["state"], "eligible")
+        self.assertEqual(row["state"], "skipped")
+        self.assertEqual(row["reason"], "deadline passed during signing")
         self.assertIsNone(row["prepared"])
         self.assertIsNone(row["submitted"])
         self.assertIsNone(row["hash"])
+        self.assertEqual(
+            self.c.j.db.execute("SELECT COUNT(*) FROM reservations").fetchone()[0], 0
+        )
+        directory = self.c.state / "artifacts"
+        self.assertFalse((directory / "rehearsal-00411.bin").exists())
+        self.assertEqual(
+            (directory / "expired/rehearsal-00411.bin").read_bytes(), payload
+        )
+        evidence = report["artifact_evidence"]
+        self.assertEqual(evidence["status"], "checked")
+        self.assertEqual(evidence["findings"], [])
+        self.assertEqual(evidence["orphaned_signed"], 0)
+        self.assertEqual(evidence["ambiguous_signed"], 0)
+        self.assertEqual(evidence["expired_unsubmitted"], 1)
         rehearsal = report["rehearsal"]
         self.assertEqual(rehearsal["submitted"], 1)
         self.assertEqual(rehearsal["signed_unsubmitted"], 0)
-        self.assertEqual(rehearsal["orphaned_signed_artifacts"], 1)
+        self.assertEqual(rehearsal["orphaned_signed_artifacts"], 0)
         self.assertEqual(rehearsal["ambiguous_signed_artifacts"], 0)
-        self.assertEqual(rehearsal["unsigned"], 1)
-        self.assertEqual(report["qualification_status"], "failed")
-        artifact = report["artifact_evidence"]["findings"][0]
+
+    def test_other_prepare_gates_still_hold_with_artifact_retained(self):
+        # Only expiry is non-holding: a consumed intent is still a Gate.
+        self.c.j.offer("rehearsal-00411", "rehearsal", 1000, 0, 1, 1)
+        self.c.j.transition("rehearsal-00411", "skipped", "test")
+        with self.assertRaisesRegex(Gate, "intent already consumed"):
+            self.c.j.prepare("rehearsal-00411", {}, 8, 10**12)
+
+    def test_restart_quarantines_artifact_of_never_prepared_eligible_intent(self):
+        self.c.j.offer("rehearsal-00411", "rehearsal", 1000, 0, 1, 1)
+        self.c.j.transition("rehearsal-00411", "eligible")
+        directory = self.c.state / "artifacts"
+        directory.mkdir()
+        (directory / "rehearsal-00411.bin").write_bytes(b"signed")
+        (directory / "rehearsal-00411.partial").write_bytes(b"partial")
+        self.c.j.set("status", "setup")
+        self.c.monitor = Mock()
+        # Stop run() right after its startup artifact check.
+        with patch("controller.asyncio.create_task", side_effect=StopRun):
+            with self.assertRaises(StopRun):
+                asyncio.run(Controller.run(self.c))
+        self.assertEqual(self.c.j.get("status"), "setup")
+        row = self.c.j.intent("rehearsal-00411")
+        self.assertEqual(row["state"], "eligible")
+        self.assertEqual(sorted(p.name for p in directory.iterdir()), ["expired"])
         self.assertEqual(
-            artifact["path"], str(self.c.state / "artifacts/rehearsal-00411.bin")
+            sorted(p.name for p in (directory / "expired").iterdir()),
+            ["rehearsal-00411.bin", "rehearsal-00411.partial"],
         )
-        self.assertEqual(artifact["sha256"], hashlib.sha256(payload).hexdigest())
-        self.assertEqual(artifact["bytes"], len(payload))
-        self.assertIsNone(artifact["journal_transaction_hash"])
-        self.assertIn(
-            "artifact/journal disagreement", report["accounting_status"]["reasons"]
+        evidence = self.c.report()["artifact_evidence"]
+        self.assertEqual(evidence["orphaned_signed"], 0)
+        self.assertEqual(evidence["ambiguous_signed"], 0)
+        self.assertEqual(evidence["expired_unsubmitted"], 2)
+
+    def test_restart_still_holds_on_real_orphan_beside_quarantine(self):
+        directory = self.c.state / "artifacts"
+        (directory / "expired").mkdir(parents=True)
+        (directory / "expired/rehearsal-00001.bin").write_bytes(b"quarantined")
+        self.c.j.offer("rehearsal-00411", "rehearsal", 1000, 0, 1, 1)
+        self.c.j.transition("rehearsal-00411", "submitting", prepared=1001)
+        (directory / "rehearsal-00411.partial").write_bytes(b"partial")
+        (directory / "no-journal-row.bin").write_bytes(b"unknown")
+        self.c.j.set("status", "setup")
+        self.c.monitor = Mock()
+        with patch("controller.asyncio.create_task", side_effect=StopRun):
+            with self.assertRaises(StopRun):
+                asyncio.run(Controller.run(self.c))
+        self.assertEqual(self.c.j.get("status"), "held")
+        self.assertIn("orphaned or partial", self.c.j.get("reason"))
+        self.assertTrue((directory / "rehearsal-00411.partial").exists())
+        self.assertTrue((directory / "no-journal-row.bin").exists())
+        evidence = self.c.report()["artifact_evidence"]
+        self.assertEqual(evidence["orphaned_signed"], 1)
+        self.assertEqual(evidence["ambiguous_signed"], 1)
+        self.assertEqual(evidence["expired_unsubmitted"], 1)
+
+    def test_retry_quarantines_stale_artifact_of_eligible_intent_then_signs(self):
+        # Controller.prepare's own pre-sign check: an eligible, never-prepared
+        # intent's leftover artifact is quarantined, not a hold.
+        self.c.j.offer("rehearsal-00411", "rehearsal", 1000, 0, 1, 1)
+        self.c.j.transition("rehearsal-00411", "eligible")
+        directory = self.c.state / "artifacts"
+        directory.mkdir()
+        (directory / "rehearsal-00411.bin").write_bytes(b"stale")
+        self.c.j.set("status", "setup")
+        self.c.gate = Mock()
+        self.c.sync = AsyncMock(return_value=100)
+        self.c.spendable = Mock(return_value=[{"id": "owned-input"}])
+        self.c.blocks, self.c.spent = [], []
+        self.c.wallets = [{"key": "not-read", "address": "a"}, {"address": "b"}]
+        self.c.rpc = Mock(call=AsyncMock(return_value={"baseRate": 1}))
+        self.c.submit_prepared = AsyncMock()
+        self.c.j.clock = lambda: 1001
+
+        async def sign(request):
+            Path(request["artifact"]).write_bytes(b"fresh")
+            return {"artifact": request["artifact"], "hash": "ab" * 32,
+                    "fee": 100_000_000, "baseline_fee": 100_000_000,
+                    "fee_multiplier": 1, "bytes": 5, "input_count": 1,
+                    "selected": [{"id": "owned-input"}]}
+
+        self.c.native = AsyncMock(side_effect=sign)
+        with patch("controller.time.time", return_value=1001):
+            self.assertTrue(asyncio.run(self.c.prepare("rehearsal-00411", 1, 8)))
+        self.c.submit_prepared.assert_awaited_once()
+        self.assertEqual(self.c.j.intent("rehearsal-00411")["state"], "prepared")
+        self.assertEqual((directory / "rehearsal-00411.bin").read_bytes(), b"fresh")
+        self.assertEqual(
+            (directory / "expired/rehearsal-00411.bin").read_bytes(), b"stale"
         )
 
     def test_unavailable_artifact_directory_preserves_historical_journal_counts(self):
