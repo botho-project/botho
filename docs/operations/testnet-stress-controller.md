@@ -420,10 +420,41 @@ intent, selected inputs, native artifact, and failure transition preserve a
 counterexample for replay **offline**, never resubmission.
 
 Phase boundaries allow up to 120 seconds for the preceding phase's natural
-inflight tail to reconcile. Offers keep their original times and deadlines;
-there is no catch-up or clock shift. Missed offers, accounting differences,
+inflight tail to reconcile. Offers keep their original times; there is no
+catch-up or clock shift. Missed offers, accounting differences,
 unresolved spends, node identity changes, and disagreeing receipts still prevent
-escalation. Existing journal crash/ambiguous-submit checks apply to both profiles.
+escalation.
+
+**Start slots across a boundary (#1627).** A boundary gate drains the previous
+phase, then runs a full sync and accounting (and, at 42 h, the wallet restore)
+before it releases. On x1 that took about 197 s. The new phase's offers are
+still journaled at their scheduled `offered` times while the gate waits, but:
+
+- an offer whose phase gate has not released has no start slot yet, so it is
+  never `generator_slot_expired` and cannot be prepared;
+- once the gate releases, an offer's 120 s start slot (`start_slot_grace_seconds`)
+  is measured from `max(offered, release)`, for `materialize()` expiry and for
+  the prepare and submit deadlines alike. Offers made after the release are
+  unaffected;
+- the release time is written with `active_phase` in one transaction
+  (`phase_release` in the journal, plus a `phase_gate_released` event with
+  `gate_wait_seconds` and `gate_held_offers`). A restart before the release
+  re-runs the gate from the top; a restart after it keeps the recorded time.
+  A journal from before #1627 anchors already-released phases at their own
+  boundary, which is the old rule;
+- the `max_queued_intents` bound still counts gate-held offers. A gate wait
+  longer than that many offers is reported as `generator_queue_limit`.
+
+Lag is always measured from the immutable `offered` time: `offer_deferred`
+`lag_seconds`, `offered_to_reconciled_seconds` and rehearsal lag. For an offer
+made while its gate was closed, that lag includes the gate's wait. Its
+`offer_deferred` event also carries `gate_held_seconds` (`release - offered`),
+and `report.json` `discovery.phase_releases` lists each phase's `boundary`,
+`released` and `gate_wait_seconds`. The previous phase stays strict: the drain
+is still bounded, and an earlier failed or skipped row still holds the
+boundary. Degrade verdicts still select offers by `offered`. D1, whose window
+opens at the 48 h boundary, therefore counts its gate-held offers as in-window
+payments, and they are delivered rather than missed. Existing journal crash/ambiguous-submit checks apply to both profiles.
 V2 restores a wallet but does not automatically kill validators or restart a
 controller; those fault semantics continue to have offline fault-injection tests.
 
