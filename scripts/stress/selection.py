@@ -1,6 +1,9 @@
 """Bounded canonical coin selection with complete real-input exclusion."""
 
+from bisect import bisect_left, bisect_right
 from itertools import combinations
+
+ZERO_KEY = "0" * 64
 
 
 def choose(controller, wallet, height, amount=0, count=None, headroom=0):
@@ -8,19 +11,38 @@ def choose(controller, wallet, height, amount=0, count=None, headroom=0):
     raw = controller.canonical_inventory(wallet, canonical)
     unspent = controller.unspent_setup_inputs(wallet, canonical)
     mature = [o for o in unspent if height - o["utxo"]["created_at"] >= 10]
+    # An input's decoy pool is every canonical key (not the zero key, not its
+    # own) created inside its age band. Only pool sizes are needed, so they
+    # are counted over the sorted creation heights instead of materializing
+    # one set per input: that was O(inputs x chain) CPU and memory on every
+    # selection, about 1.2 s at x-series h72 (#1633). The counts equal the
+    # former ``len(pool)`` and ``len(pool - excluded)`` exactly.
+    created_heights = sorted(
+        created for key, (created, _) in canonical.items() if key != ZERO_KEY
+    )
+
+    def in_pool(key, window):
+        entry = canonical.get(key) if key != ZERO_KEY else None
+        return entry is not None and window[0] <= entry[0] <= window[1]
+
     pools, eligible = {}, []
     for output in mature:
         age = height - output["utxo"]["created_at"]
         low, high = max(10, age - age // 10), age + age // 10
         real = bytes(output["utxo"]["target_key"]).hex()
-        pool = {
-            key
-            for key, (created, _) in canonical.items()
-            if key != "0" * 64 and low <= height - created <= high
-        } - {real}
-        if len(pool) >= 19 + headroom:
-            pools[output["id"]] = pool
+        # low <= height - created <= high, as creation heights.
+        window = (height - high, height - low)
+        size = bisect_right(created_heights, window[1]) - bisect_left(
+            created_heights, window[0]
+        )
+        size -= in_pool(real, window)
+        if size >= 19 + headroom:
+            pools[output["id"]] = (window, real, size)
             eligible.append(output)
+
+    def pool_without(output, excluded):
+        window, real, size = pools[output["id"]]
+        return size - sum(1 for key in excluded if key != real and in_pool(key, window))
     eligible.sort(key=lambda o: (-o["utxo"]["amount"], o["id"]))
     evidence = {
         "canonical": len(raw),
@@ -44,7 +66,7 @@ def choose(controller, wallet, height, amount=0, count=None, headroom=0):
             if sum(o["utxo"]["amount"] for o in selected) < amount + fee:
                 continue
             excluded = {bytes(o["utxo"]["target_key"]).hex() for o in selected}
-            if all(len(pools[o["id"]] - excluded) >= 19 + headroom for o in selected):
+            if all(pool_without(o, excluded) >= 19 + headroom for o in selected):
                 return list(selected), {**evidence, "combinations": attempted}
     reason = (
         "reservation_or_spent"

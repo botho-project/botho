@@ -16,11 +16,35 @@ from plan import expand
 from reporting import legacy_lottery_evidence
 from signer_history import (SCAN_OPERATIONS, history_duplicate, merge_scans,
                             prepare_blocks, prepare_spent, scan_payloads)
-from runtime import (Gate, HOSTS, Journal, PENDING, Quota, Rpc, atomic,
+from runtime import (BlockLog, Gate, HOSTS, Journal, PENDING, Quota, Rpc, atomic, atomic_stream, inventory_chunks,
                      RESTART_ACTIONS, QUORUM_GATE_KEYS, check_identity, check_quorum, loop_delta, check_resources, digest, campaign_targets, campaign_tls_context, pinned_file)
 
 
 _NO_VIEW = object()
+
+# Owned-output fields the controller never reads (#1633). The signer returns
+# each owned output's KEM ciphertext as a JSON list of 1,089 integers, about
+# 8.8 KB per output in memory and 5 KB in inventory.json. The same ciphertext
+# is kept once, as hex, in the output history (blocks.jsonl) under the same
+# output id, which is what every signer request is built from.
+INVENTORY_DROPPED_UTXO_FIELDS = frozenset({'kem_ciphertext'})
+# inventory.json is evidence only: it is never trusted after a restart, and
+# no code reads it back. It is checkpointed on every full sync and otherwise
+# at most this often, instead of on every sync (#1633).
+INVENTORY_CHECKPOINT_SECONDS = 300
+
+
+def compact_owned(output):
+    """An owned output without the fields the controller never reads.
+
+    Malformed entries are returned unchanged; canonical_inventory() rejects
+    them later and keeps them as evidence.
+    """
+    utxo = output.get('utxo') if isinstance(output, dict) else None
+    if isinstance(utxo, dict) and not INVENTORY_DROPPED_UTXO_FIELDS.isdisjoint(utxo):
+        output = dict(output, utxo={k: v for k, v in utxo.items()
+                                    if k not in INVENTORY_DROPPED_UTXO_FIELDS})
+    return output
 
 
 def parse_cpu_max(text):
@@ -151,7 +175,9 @@ class Controller:
         self.rpc = Rpc(self.j, self.targets, tls_context, allow_env_proxy='targets' not in self.config)
         self.statuses = {}
         self.fresh = 0
-        self.blocks = json.loads((state/'blocks.json').read_text()) if (state/'blocks.json').exists() else []
+        # Append-only history checkpoint (#1633); a legacy blocks.json still loads.
+        self.block_log = BlockLog(state)
+        self.blocks = self.block_log.load()
         self.wallets = self.config['wallets']
         wallet_count = self.plan['wallets']['count'] if self.plan.get('schema_version') == 2 else 8
         if len(self.wallets) != wallet_count or len({w['address'] for w in self.wallets}) != wallet_count:
@@ -595,8 +621,9 @@ class Controller:
 
         Whole-chain scans (``restore_check``, or a first ``scan`` from
         genesis) run one at a time: each holds the full history in its
-        request and a ~300 MB signer, and the x1 controller unit has
-        ``MemoryMax=1G``, no swap and ``CPUQuota=100%``. Only incremental
+        request and a ~300 MB signer, and the controller unit has no swap,
+        a bounded ``MemoryMax`` (1G on x1, 3G since #1633) and
+        ``CPUQuota=100%``. Only incremental
         scans of appended blocks run in parallel, up to ``scan_workers`` or
         the effective CPU limit (cgroup ``cpu.max``), which is 1 on x1.
         """
@@ -862,6 +889,12 @@ class Controller:
                         await asyncio.sleep(min(1, 300 - waited))
                         waited += time.monotonic() - before
 
+            previous = self.blocks
+            # A full refetch is compared with the checkpoint chunk by chunk and
+            # only the blocks beyond it are kept: the whole refetched history
+            # is never held next to the checkpoint (#1633). The outcome equals
+            # ``new[:len(previous)] != previous`` over the whole refetch.
+            diverged = False
             for first in range(start,height+1,50):
                 last = min(height,first+49)
                 # Rotation is deterministic over the live list, re-read per
@@ -875,30 +908,38 @@ class Controller:
                 )
                 if [b['height'] for b in blocks] != list(range(first,last+1)):
                     raise Gate('incomplete or unordered output range')
+                if full:
+                    overlap = max(0, min(len(blocks), len(previous)-first))
+                    if blocks[:overlap] != previous[first:first+overlap]:
+                        diverged = True
+                    blocks = blocks[overlap:]
                 new.extend(blocks)
-            previous = self.blocks
             if full:
-                if previous and new[:len(previous)] != previous:
+                if previous and (diverged or height+1 < len(previous)):
                     raise Gate('full rescan disagrees with checkpointed output history')
-                blocks = new
-                # The refetched history beyond the verified checkpoint.
-                appended = new[len(previous):]
-            else:
-                blocks = previous+new
-                appended = new
+            # The (refetched) history beyond the verified checkpoint. With no
+            # new blocks keep the checkpointed list itself, not an equal copy:
+            # the block log appends only to the exact list it last persisted,
+            # so a fresh copy would turn the next append into a whole-file
+            # rewrite (#1633 review).
+            blocks = previous+new if new else previous
+            appended = new
             incremental = self.inventory_initialized and not rescan
             restore = full and not incremental
             scan_blocks = appended if incremental else blocks
+            added = set()
             if incremental:
                 # The native scanner rejects duplicate output IDs within its
                 # request. Preserve that rule across separate append requests.
-                seen = {(o['txHash'],o['outputIndex']) for b in previous for o in b['outputs']}
+                # The ids of the checkpointed history are cached across syncs
+                # and extended only on success (#1633).
+                seen = self.history_output_ids(previous)
                 for block in appended:
                     for output in block['outputs']:
                         identifier = (output['txHash'],output['outputIndex'])
-                        if identifier in seen:
+                        if identifier in seen or identifier in added:
                             raise Gate('duplicate output id across incremental history')
-                        seen.add(identifier)
+                        added.add(identifier)
 
             async def scan_wallet(index, wallet):
                 owned = {o['id']:o for o in self.inventory[index]} if incremental else {}
@@ -911,7 +952,7 @@ class Controller:
                     for output in scanned['owned']:
                         if output['id'] in owned:
                             raise Gate('duplicate owned output across incremental scans')
-                        owned[output['id']] = output
+                        owned[output['id']] = compact_owned(output)
                 return list(owned.values())
 
             # Separate signer processes and derivations: restores never reuse
@@ -943,11 +984,42 @@ class Controller:
             # Do not advance in-memory scan progress on a failed native/RPC
             # check: retry must scan the same new outputs, never skip them.
             if full or new:
-                atomic(self.state/'blocks.json',blocks)
-            atomic(self.state/'inventory.json',{'at':time.time(),'height':height,'owned':scans,'spent':spent})
+                self.history_log().persist(previous, blocks)
+            self.checkpoint_inventory(height, scans, spent, force=full)
             self.blocks, self.inventory, self.spent = blocks, scans, spent
             self.inventory_initialized = True
+            if incremental:
+                seen.update(added)
+                self.output_id_cache = (blocks, len(blocks), seen)
             return height
+
+    def history_log(self):
+        log = self.__dict__.get('block_log')
+        if log is None:
+            log = self.block_log = BlockLog(self.state)
+        return log
+
+    def history_output_ids(self, blocks):
+        """Every (txHash, outputIndex) in ``blocks``; cached per history list (#1633)."""
+        cached = self.__dict__.get('output_id_cache')
+        if cached and cached[0] is blocks and cached[1] == len(blocks):
+            return cached[2]
+        ids = {(o['txHash'],o['outputIndex']) for b in blocks for o in b['outputs']}
+        self.output_id_cache = (blocks, len(blocks), ids)
+        return ids
+
+    def checkpoint_inventory(self, height, owned, spent, force=False):
+        """Atomically write inventory.json, at most every INVENTORY_CHECKPOINT_SECONDS.
+
+        Evidence only (never trusted after a restart). Always written on a
+        full sync and on the first sync of a process.
+        """
+        now = time.monotonic()
+        last = self.__dict__.get('inventory_checkpoint_at')
+        if not force and last is not None and now-last < INVENTORY_CHECKPOINT_SECONDS:
+            return
+        atomic_stream(self.state/'inventory.json', inventory_chunks(time.time(), height, owned, spent))
+        self.inventory_checkpoint_at = now
 
     def canonical_history(self):
         # Match target-only ledger resolution before any maturity/age filtering.

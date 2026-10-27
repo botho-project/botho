@@ -56,6 +56,21 @@ def component(value, run_id):
          and run_id in value['unit'], 'fresh service name must include run_id')
 
 
+# Campaign controller unit budget (#1633). The controller host is a dedicated
+# m6i.2xlarge (8 vCPU, 32 GiB). On a synthetic x-series h72 chain (~55.8k
+# outputs, test_controller_memory.py) the controller retains ~5.7 KB per
+# output (~320 MB) and peaked at ~0.65 GB RSS during a whole-chain restore,
+# before allocator fragmentation; x1 measured RSS about 2x the synthetic
+# figure under glibc. 3G covers that with one bounded whole-chain signer
+# (~64 MB, signer_history.SCAN_CHUNK_BYTES) and stays under 10% of the host.
+# MALLOC_ARENA_MAX=2 stops glibc creating a malloc arena per asyncio worker
+# thread (native_payload parses signer output in one). CPUQuota stays 100%:
+# after #1633 an incremental sync costs ~0.07 s at h72, and the one-CPU
+# quota is what keeps incremental signer scans serial on x1 (#1629/#1630).
+CONTROLLER_MEMORY_MAX = '3G'
+CONTROLLER_CPU_QUOTA = '100%'
+
+
 def unit_text(item, observer=False):
     package, state = item['package'], item['state']
     command = (f'{package}/observer.py run --state {state}' if observer else
@@ -72,10 +87,10 @@ ExecStart=/usr/bin/python3 {command}
 Restart=on-failure
 RestartSec=5
 RuntimeMaxSec={item.get('runtime_max_seconds',295200)}
-CPUQuota={'5%' if observer else '100%'}
-MemoryMax={'64M' if observer else '1G'}
+CPUQuota={'5%' if observer else CONTROLLER_CPU_QUOTA}
+MemoryMax={'64M' if observer else CONTROLLER_MEMORY_MAX}
 MemorySwapMax=0
-TasksMax=64
+{'' if observer else 'Environment=MALLOC_ARENA_MAX=2' + chr(10)}TasksMax=64
 KillMode=control-group
 LimitCORE=0
 NoNewPrivileges=yes

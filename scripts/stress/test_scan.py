@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from controller import Controller, cgroup_cpu_limit, effective_cpu_count, parse_cpu_max
-from runtime import Gate, HOSTS, Journal
+from runtime import BlockLog, Gate, HOSTS, Journal
 
 
 class IncrementalScanTests(unittest.IsolatedAsyncioTestCase):
@@ -127,7 +127,7 @@ class IncrementalScanTests(unittest.IsolatedAsyncioTestCase):
                 self.c.rpc.call.side_effect = bad_spent if failure=='spent' else self.rpc
                 with self.assertRaises(Gate):await self.c.sync()
                 self.assertEqual((self.c.blocks,self.c.inventory,self.c.spent),before)
-                self.assertEqual(json.loads((self.c.state/'blocks.json').read_text()),before[0])
+                self.assertEqual(BlockLog(self.c.state).load(),before[0])
         self.c.native.side_effect = self.scan;self.c.native.reset_mock()
         self.c.rpc.call.side_effect = self.rpc
         await self.c.sync()
