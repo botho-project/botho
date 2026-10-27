@@ -149,6 +149,70 @@ class IncrementalScanTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(Gate,'duplicate owned output'):await self.c.sync()
         self.assertEqual(len(self.c.blocks),2)
 
+    async def test_boundary_mode_refetches_history_but_scans_only_appended_blocks(self):
+        # #1629: full=True, rescan_wallets=False.
+        self.statuses['image-tx-0'] = {'spent':True}
+        await self.initialize()
+        self.chain += [self.block(2),self.block(3)];self.set_height(3)
+        await self.c.sync(full=True, rescan_wallets=False)
+        self.assertEqual(self.scan_heights(),[[2,3]]*8)
+        self.assertTrue(all(c.args[0]['operation']=='scan' and 'expected_address' not in c.args[0]
+                            for c in self.c.native.call_args_list))
+        outputs = [c.args[2] for c in self.c.rpc.call.call_args_list if c.args[1]=='chain_getOutputs']
+        self.assertEqual(outputs,[{'start_height':0,'end_height':3}])
+        # Every key image is rechecked, the cached spent one included.
+        self.assertEqual(self.spent_queries(),[['image-tx-0','image-tx-1','image-tx-2','image-tx-3']])
+        boundary = (copy.deepcopy(self.c.inventory),copy.deepcopy(self.c.spent))
+        self.c.native.reset_mock()
+        await self.c.sync(full=True)
+        self.assertEqual(self.scan_heights(),[[0,1,2,3]]*8)
+        self.assertEqual((self.c.inventory,self.c.spent),boundary)
+
+    async def test_boundary_mode_keeps_history_duplicate_and_identity_gates(self):
+        await self.initialize()
+        before = copy.deepcopy((self.c.blocks,self.c.inventory,self.c.spent))
+        self.chain[0]['outputs'][0]['txHash'] = 'rewritten'
+        with self.assertRaisesRegex(Gate,'full rescan disagrees'):
+            await self.c.sync(full=True, rescan_wallets=False)
+        self.chain[0] = self.block(0)
+        self.chain.append({'height':2,'outputs':copy.deepcopy(self.chain[1]['outputs'])});self.set_height(2)
+        with self.assertRaisesRegex(Gate,'duplicate output id'):
+            await self.c.sync(full=True, rescan_wallets=False)
+        self.c.native.assert_not_called()
+        self.chain[2] = self.block(2)
+        async def impostor(request):
+            result = await self.scan(request)
+            if request['wallet']=='5':result['address']='address-x'
+            return result
+        self.c.native.side_effect = impostor
+        with self.assertRaisesRegex(Gate,'wallet identity differs'):
+            await self.c.sync(full=True, rescan_wallets=False)
+        self.assertEqual((self.c.blocks,self.c.inventory,self.c.spent),before)
+
+    async def test_boundary_mode_restores_when_no_inventory_was_scanned(self):
+        # A restarted process never trusts persisted inventory.
+        await self.c.sync(full=True, rescan_wallets=False)
+        self.assertEqual(self.scan_heights(),[[0,1]]*8)
+        self.assertTrue(all(c.args[0]['operation']=='restore_check'
+                            and c.args[0]['expected_address']=='address-'+c.args[0]['wallet']
+                            for c in self.c.native.call_args_list))
+        with self.assertRaises(ValueError):
+            await self.c.sync(rescan_wallets=True)
+
+    async def test_wallet_scans_run_bounded_in_parallel_in_wallet_order(self):
+        running = peak = 0
+        async def slow(request):
+            nonlocal running, peak
+            running += 1;peak = max(peak,running)
+            await asyncio.sleep(0.01)
+            running -= 1
+            return await self.scan(request)
+        self.c.native.side_effect = slow
+        self.c.scan_workers = 3
+        await self.c.sync(full=True)
+        self.assertEqual(peak,3)
+        self.assertEqual([len(owned) for owned in self.c.inventory],[2,0,0,0,0,0,0,0])
+
 
 if __name__=='__main__':
     unittest.main()
