@@ -205,52 +205,77 @@ class TerminalReportingTests(unittest.TestCase):
         self.assertEqual(report["not_yet_offered"], 6)
         self.assertEqual(report["rehearsal"]["not_yet_offered"], 540)
 
-    def test_deadline_passing_during_signing_skips_and_quarantines_without_hold(
-        self,
-    ):
-        # #1635: x1 endurance2 held when a ~4.8 s sign crossed the slot
-        # deadline. The real Controller.prepare and Journal.prepare run.
+    def sign_across_deadline(self, eligible_at, sign_seconds):
+        """Real Controller.prepare/submit_prepared and Journal gates; only the
+        native signer boundary (with its durable file) and RPC are faked."""
         self.row(0, "reconciled")
         self.c.j.offer("rehearsal-00411", "rehearsal", 1000, 0, 1, 1)
         self.c.j.offer("rehearsal-00412", "rehearsal", 1002, 1, 0, 1)
         (self.c.state / "artifacts").mkdir()
-        self.c.j.set("status", "setup")
         self.c.gate = Mock()
         self.c.sync = AsyncMock(return_value=100)
         self.c.spendable = Mock(return_value=[{"id": "owned-input"}])
         self.c.blocks, self.c.spent = [], []
         self.c.wallets = [{"key": "not-read", "address": "a"}, {"address": "b"}]
-        self.c.rpc = Mock(call=AsyncMock(return_value={"baseRate": 1}))
-        self.c.submit_prepared = AsyncMock()
-        now = [1001]
+        self.c.report = Mock()
+        now = [eligible_at]
         self.c.j.clock = lambda: now[0]
         payload = b"native publication before journal preparation"
+        signed = {
+            "hash": "ab" * 32,
+            "fee": 100_000_000,
+            "baseline_fee": 100_000_000,
+            "fee_multiplier": 1,
+            "bytes": len(payload),
+            "input_count": 1,
+            "outputs": [],
+            "key_images": ["image"],
+            "selected": [{"id": "owned-input"}],
+        }
 
-        async def publish_before_deadline(request):
-            # Emulate only the native subprocess boundary, including its durable
-            # file side effect. Real Controller.prepare and Journal.prepare run.
+        async def native(request):
+            if request["operation"] == "inspect":
+                return dict(signed)
             Path(request["artifact"]).write_bytes(payload)
-            now[0] = 1120
-            return {
-                "artifact": request["artifact"],
-                "hash": "ab" * 32,
-                "fee": 100_000_000,
-                "baseline_fee": 100_000_000,
-                "fee_multiplier": 1,
-                "bytes": len(payload),
-                "input_count": 1,
-                "selected": [{"id": "owned-input"}],
-            }
+            now[0] += sign_seconds
+            return {"artifact": request["artifact"], **signed}
 
-        self.c.native = AsyncMock(side_effect=publish_before_deadline)
+        async def rpc(host, method, params=None, **_):
+            if method == "fee_getRate":
+                return {"baseRate": 1}
+            if method == "tx_submit":
+                return {"txHash": signed["hash"]}
+            raise AssertionError(method)
+
+        self.c.native = AsyncMock(side_effect=native)
+        self.c.rpc = Mock(call=AsyncMock(side_effect=rpc))
         with patch("controller.time.time", side_effect=lambda: now[0]):
-            self.assertFalse(asyncio.run(self.c.prepare("rehearsal-00411", 1, 8)))
-            report = self.c.report()
-        self.c.submit_prepared.assert_not_awaited()
+            result = asyncio.run(self.c.prepare("rehearsal-00411", 1, 8))
+        return result, payload
+
+    def test_sign_started_inside_slot_commits_and_submits_after_deadline(self):
+        # #1635, the x1 endurance2 case: eligible at +118.3 s of a 120 s grace,
+        # signed in ~4.8 s. Here eligible at deadline-1 s, signing 5 s.
+        self.assertEqual(
+            self.c.intent_deadline({"kind": "rehearsal", "offered": 1000}), 1120
+        )
+        result, _ = self.sign_across_deadline(1119, 5)
+        self.assertTrue(result)
+        self.assertEqual(self.c.j.get("status"), "setup")
+        row = self.c.j.intent("rehearsal-00411")
+        self.assertEqual(row["state"], "accepted")
+        self.assertEqual(row["prepared"], 1124)
+        self.assertEqual(row["submitted"], 1124)
+        self.assertEqual(json.loads(row["info"])["eligible_at"], 1119)
+        self.assertFalse((self.c.state / "artifacts" / "expired").exists())
+
+    def test_runaway_signing_past_cap_skips_and_quarantines_without_hold(self):
+        result, payload = self.sign_across_deadline(1001, 121)
+        self.assertFalse(result)
         self.assertEqual(self.c.j.get("status"), "setup")
         row = self.c.j.intent("rehearsal-00411")
         self.assertEqual(row["state"], "skipped")
-        self.assertEqual(row["reason"], "deadline passed during signing")
+        self.assertEqual(row["reason"], "signing exceeded its allowance")
         self.assertIsNone(row["prepared"])
         self.assertIsNone(row["submitted"])
         self.assertIsNone(row["hash"])
@@ -262,6 +287,9 @@ class TerminalReportingTests(unittest.TestCase):
         self.assertEqual(
             (directory / "expired/rehearsal-00411.bin").read_bytes(), payload
         )
+        del self.c.report
+        with patch("controller.time.time", return_value=1122):
+            report = self.c.report()
         evidence = report["artifact_evidence"]
         self.assertEqual(evidence["status"], "checked")
         self.assertEqual(evidence["findings"], [])

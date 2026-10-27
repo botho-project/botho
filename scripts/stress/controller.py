@@ -32,11 +32,12 @@ INVENTORY_DROPPED_UTXO_FIELDS = frozenset({'kem_ciphertext'})
 # no code reads it back. It is checkpointed on every full sync and otherwise
 # at most this often, instead of on every sync (#1633).
 INVENTORY_CHECKPOINT_SECONDS = 300
-# Do not start signing an intent this close to its start-slot deadline
-# (#1635): a sign that straddles the deadline wastes a signature. It no longer
-# holds the campaign (Journal.prepare raises Expired, not Gate), but the
-# margin makes that path rarer. x1 endurance2 measured a ~4.8 s sign.
-SIGNING_MARGIN_SECONDS = 5
+# The start-slot deadline bounds when signing STARTS (the ``eligible``
+# transition), not when it commits (#1635): x1 endurance2 held when an intent
+# eligible at +118.3 s of a 120 s grace took ~4.8 s to sign. A signature
+# started on time may be prepared and submitted until this long after it
+# became eligible; only a runaway sign past it expires (skipped, not held).
+MAX_SIGNING_SECONDS = 120
 # Signed artifacts of intents that never reached ``prepared`` (#1635). They
 # cannot be submitted (begin_submit requires ``prepared``) and reserve no
 # inputs; they are kept for audit, never deleted, and are not orphans.
@@ -1189,7 +1190,8 @@ class Controller:
                 **self.j.get('selection_latest',{})})
             return False
         self.gate()
-        if time.time() > self.intent_deadline(row) - SIGNING_MARGIN_SECONDS:
+        eligible_at = time.time()
+        if eligible_at > self.intent_deadline(row):
             return False
         self.j.transition(identifier,'eligible')
         charged=self.j.db.execute('SELECT COALESCE(SUM(fee),0) FROM intents WHERE prepared IS NOT NULL').fetchone()[0]
@@ -1221,12 +1223,12 @@ class Controller:
             info.update(fee_evidence=signed_fee_evidence(info, fee_multiplier), cohort=cohort,
                         fee_quote=fee_rate, ingress_role=ingress)
         info.update(burst=burst,phase_limit=phase_limit,crash=crash,
-                    scan_height=height,prepared_at=time.time())
+                    scan_height=height,eligible_at=eligible_at,prepared_at=time.time())
         self.gate()
         try:
-            self.j.prepare(identifier,info,phase_limit,self.intent_deadline(row))
+            self.j.prepare(identifier,info,phase_limit,self.commit_deadline(row,info))
         except Expired as error:
-            # The slot closed while signing (#1635). The intent is still
+            # Signing ran past MAX_SIGNING_SECONDS (#1635). The intent is still
             # ``eligible`` with no reservations: skip it, do not hold.
             self.quarantine_artifact(identifier)
             self.j.transition(identifier,'skipped',str(error),finished=time.time())
@@ -1237,6 +1239,19 @@ class Controller:
             os._exit(77)
         await self.submit_prepared(identifier)
         return True
+
+    def commit_deadline(self, row, info):
+        """Deadline to prepare and submit a signature (#1635).
+
+        A signature whose signing started on time (``eligible_at`` within the
+        start slot) gets MAX_SIGNING_SECONDS from that start. Signatures
+        journaled without ``eligible_at`` keep the start-slot deadline.
+        """
+        deadline = self.intent_deadline(row)
+        started = info.get('eligible_at')
+        if started is None or started > deadline:
+            return deadline
+        return max(deadline, started+MAX_SIGNING_SECONDS)
 
     def quarantine_artifact(self, identifier):
         """Move an unprepared intent's signed artifact (and any ``.partial``)
@@ -1272,14 +1287,14 @@ class Controller:
         for key in ('hash','fee','bytes','outputs','key_images'):
             if inspected[key] != info[key]:
                 raise Gate('saved artifact does not match durable journal')
-        if time.time() >= self.intent_deadline(row):
+        if time.time() >= self.commit_deadline(row,info):
             self.j.transition(identifier,'expired','prepared intent exceeded original slot',finished=time.time())
             # Retain the signed input reservations: a signed artifact still exists.
             self.halt('prepared intent expired; review reserved inputs')
             return
         host = info.get('ingress_role', HOSTS[(sum(identifier.encode()) % len(HOSTS))])
         wire = len(json.dumps({'jsonrpc':'2.0','id':1404,'method':'tx_submit','params':{'tx_hex':data.hex()}}).encode())
-        self.j.begin_submit(identifier,host,wire,info['burst'],self.intent_deadline(row))
+        self.j.begin_submit(identifier,host,wire,info['burst'],self.commit_deadline(row,info))
         # Retain the durable marker's byte charge through receipt transitions.
         info = json.loads(self.j.intent(identifier)['info'])
         self.j.set('last_write',time.time())

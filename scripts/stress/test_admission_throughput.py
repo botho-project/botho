@@ -213,14 +213,22 @@ class RehearsalThroughputTests(unittest.TestCase):
 
     def test_one_admission_per_tick_reproduces_the_x1_backlog(self):
         # Budget 0 is the pre-#1618 pass: stop after the first attempt. The
-        # backlog still overruns the 120 s grace, but since #1635 an intent
-        # that runs out of slot is skipped, never a campaign hold.
+        # backlog still overruns the 120 s grace. It used to hold when a sign
+        # started inside the slot committed after it ("preparation expired");
+        # since #1635 the deadline bounds the start of signing, so those
+        # signatures are prepared and submitted, and the backlog shows only
+        # as skipped offers.
         fleet, before = self.simulate(budget=0)
         self.assertEqual(max(fleet.ticks), 1)
         self.assertEqual(before["status"], "setup")
         self.assertGreater(before["max_lag"], 100)
         self.assertLess(before["submitted"], 540)
         self.assertGreater(before["skipped"], 0)
+        late = [
+            r for r in fleet.c.j.rows("prepared IS NOT NULL")
+            if r["prepared"] > fleet.c.intent_deadline(r)
+        ]
+        self.assertTrue(late)
 
     def test_multi_offer_ticks_hold_the_30_per_minute_offer_clock(self):
         fleet, after = self.simulate(budget=None)
