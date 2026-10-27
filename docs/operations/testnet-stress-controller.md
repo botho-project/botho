@@ -121,7 +121,19 @@ name, and nothing outside its window.
 - `reports/`: six-hour snapshots; the current report is also updated on hold, phase transition and completion.
 - `activated.json`: exists only once setup actually passes; immutable workload start/end.
 - `journal.sqlite`: durable intent/input/request/transition records (protected).
-- `artifacts/`, `probes/`, `wallets/`, `inventory.json`, `blocks.json`: protected operational state.
+- `artifacts/`, `probes/`, `wallets/`, `inventory.json`, `blocks.jsonl`: protected operational state.
+- `blocks.jsonl` (#1633): the checkpointed output history, one block per line
+  in height order. It is appended after each sync validates new blocks and
+  replaced atomically only when the in-memory history does not extend it. A
+  torn final line from a crash is ignored and truncated by the next append; a
+  corrupt or out-of-order whole line fails closed. A pre-#1633 `blocks.json`
+  is still loaded when no log exists and is converted on the next write.
+- `inventory.json` (#1633): evidence only; it is never trusted after a
+  restart. Owned outputs omit the signer's `kem_ciphertext`, which stays in
+  `blocks.jsonl` under the same output id. It is rewritten atomically on every
+  full sync and otherwise at most every five minutes.
+- Controller unit budget (#1633): `MemoryMax=3G`, no swap, `CPUQuota=100%`,
+  `MALLOC_ARENA_MAX=2`; see `staging.py` for the measured basis.
 
 The controller reports actual coverage. Native headless signing does not establish web wallet, MetaMask Snap or confidential-amount acceptance. The full showcase gates remain open.
 

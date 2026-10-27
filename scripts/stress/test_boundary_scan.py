@@ -260,8 +260,9 @@ class ChainScenario(Scenario):
     def chain_fleet(self, boundary_hour, **kwargs):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        # blocks.json/inventory.json evidence is not under test here, and
-        # serializing a 5,000-block chain on every scan dominates the runtime.
+        # Whole-file JSON evidence is not under test here. Since #1633 the
+        # sync's own history log and inventory checkpoint no longer use
+        # atomic() and run for real.
         writes = patch("controller.atomic", lambda path, value: None)
         writes.start()
         self.addCleanup(writes.stop)

@@ -99,6 +99,14 @@ class Quota(Exception):
     pass
 
 
+def fsync_directory(path):
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def atomic(path, value):
     path = Path(path)
     tmp = path.with_suffix(path.suffix + '.tmp')
@@ -108,11 +116,118 @@ def atomic(path, value):
         output.flush()
         os.fsync(output.fileno())
     os.replace(tmp, path)
-    fd = os.open(path.parent, os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+    fsync_directory(path.parent)
+
+
+def atomic_stream(path, chunks):
+    """``atomic()`` for a file produced as text ``chunks`` (#1633).
+
+    Same temporary file, fsync, rename and directory fsync, so readers see
+    the old file or the complete new one. The caller never holds the whole
+    serialized value: each chunk is written and dropped.
+    """
+    path = Path(path)
+    tmp = path.with_suffix(path.suffix + '.tmp')
+    with tmp.open('w') as output:
+        for chunk in chunks:
+            output.write(chunk)
+        output.flush()
+        os.fsync(output.fileno())
+    os.replace(tmp, path)
+    fsync_directory(path.parent)
+
+
+def _dumps(value):
+    return json.dumps(value, sort_keys=True)
+
+
+def inventory_chunks(at, height, owned, spent):
+    """``atomic(path, {'at', 'height', 'owned', 'spent'})``'s exact bytes, in chunks.
+
+    One chunk per wallet and per 4,096 spent rows, each encoded by the C
+    encoder (``json.dump`` to a file uses the pure-Python one, which cost
+    seconds per sync at x-series size, #1633).
+    """
+    yield '{"at": ' + _dumps(at) + ', "height": ' + _dumps(height) + ', "owned": ['
+    for index, outputs in enumerate(owned):
+        yield (', [' if index else '[') + ', '.join(map(_dumps, outputs)) + ']'
+    yield '], "spent": ['
+    for first in range(0, len(spent), 4096):
+        yield (', ' if first else '') + ', '.join(map(_dumps, spent[first:first + 4096]))
+    yield ']}\n'
+
+
+class BlockLog:
+    """Append-only output-history checkpoint, one block per line (#1633).
+
+    Replaces rewriting the whole ``blocks.json`` on every sync. The file is
+    only ever (a) appended to, after the sync that fetched the blocks has
+    validated them, or (b) atomically replaced by the complete history.
+    A crash during an append can leave only whole validated lines plus at
+    most one torn final line (no newline). ``load`` drops that torn tail
+    and the next append truncates it. Every whole line must parse and carry
+    the next height (0, 1, 2, ...), else the log is corrupt and ``load``
+    fails closed, exactly as an unparsable ``blocks.json`` did.
+
+    ``persisted`` is the in-memory history list the file is known to equal.
+    An append is used only when the caller extends exactly that list.
+    Otherwise (first write, a legacy ``blocks.json`` load, or a caller that
+    replaced the list) the whole history is rewritten atomically.
+    """
+
+    NAME = 'blocks.jsonl'
+    LEGACY = 'blocks.json'
+
+    def __init__(self, state):
+        self.path = Path(state) / self.NAME
+        self.legacy = Path(state) / self.LEGACY
+        self.persisted = None
+        self.size = None
+
+    def load(self):
+        """The checkpointed history: the log, else a legacy ``blocks.json``, else []."""
+        if not self.path.exists():
+            blocks = json.loads(self.legacy.read_text()) if self.legacy.exists() else []
+            # Converted to the log by the first persist (a full rewrite).
+            self.persisted, self.size = None, None
+            return blocks
+        blocks, size = [], 0
+        with self.path.open('rb') as log:
+            for number, line in enumerate(log):
+                if not line.endswith(b'\n'):
+                    break  # torn final append: never part of the checkpoint
+                try:
+                    block = json.loads(line)
+                except ValueError:
+                    raise Gate('block log corrupt at line %d' % (number + 1)) from None
+                if not isinstance(block, dict) or block.get('height') != len(blocks):
+                    raise Gate('block log corrupt at line %d' % (number + 1))
+                blocks.append(block)
+                size += len(line)
+        self.persisted, self.size = blocks, size
+        return blocks
+
+    def persist(self, previous, blocks):
+        """Make the file equal ``blocks``, which extends ``previous`` (its prefix)."""
+        if self.persisted is not None and self.persisted is previous and self.size is not None:
+            appended = blocks[len(previous):]
+            if appended:
+                with self.path.open('r+b') as log:
+                    # Discard a torn tail an earlier failed append left behind.
+                    log.truncate(self.size)
+                    log.seek(self.size)
+                    for block in appended:
+                        log.write((_dumps(block) + '\n').encode())
+                    log.flush()
+                    os.fsync(log.fileno())
+                    size = log.tell()
+                self.size = size
+        else:
+            # Unknown file state: replace it with the whole history at once.
+            self.persisted = self.size = None
+            atomic_stream(self.path, (_dumps(block) + '\n' for block in blocks))
+            self.size = self.path.stat().st_size
+        self.persisted = blocks
 
 
 def digest(value):
