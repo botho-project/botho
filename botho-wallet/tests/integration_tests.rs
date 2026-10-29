@@ -42,6 +42,7 @@ fn owned_utxo(keys: &WalletKeys, amount: u64, created_at: u64, seed: u8) -> Owne
         crypto_output_index: None,
         coinbase: false,
         lottery: false,
+        lottery_context: None,
         amount,
         created_at,
         target_key: out.target_key,
@@ -459,6 +460,7 @@ mod utxo_selection {
                 crypto_output_index: None,
                 coinbase: false,
                 lottery: false,
+                lottery_context: None,
                 amount: 10 * PICOCREDITS_PER_CAD,
                 created_at: 100,
                 target_key: [0u8; 32],
@@ -473,6 +475,7 @@ mod utxo_selection {
                 crypto_output_index: None,
                 coinbase: false,
                 lottery: false,
+                lottery_context: None,
                 amount: 5 * PICOCREDITS_PER_CAD,
                 created_at: 101,
                 target_key: [0u8; 32],
@@ -487,6 +490,7 @@ mod utxo_selection {
                 crypto_output_index: None,
                 coinbase: false,
                 lottery: false,
+                lottery_context: None,
                 amount: 2 * PICOCREDITS_PER_CAD,
                 created_at: 102,
                 target_key: [0u8; 32],
@@ -886,6 +890,7 @@ mod cluster_tags {
             crypto_output_index: None,
             coinbase: false,
             lottery: false,
+            lottery_context: None,
             amount: 10 * PICOCREDITS_PER_CAD,
             created_at: 100,
             target_key: [0u8; 32],
@@ -915,6 +920,7 @@ mod cluster_tags {
             crypto_output_index: None,
             coinbase: false,
             lottery: false,
+            lottery_context: None,
             amount: PICOCREDITS_PER_CAD,
             created_at: 100,
             target_key: [0u8; 32],
@@ -938,6 +944,7 @@ mod cluster_tags {
             crypto_output_index: None,
             coinbase: false,
             lottery: false,
+            lottery_context: None,
             amount: PICOCREDITS_PER_CAD,
             created_at: 100,
             target_key: [0u8; 32],
@@ -979,6 +986,7 @@ mod cluster_tags {
             crypto_output_index: None,
             coinbase: false,
             lottery: false,
+            lottery_context: None,
             amount: 5 * PICOCREDITS_PER_CAD,
             created_at: 12345,
             target_key: [0xCD; 32],
@@ -1293,6 +1301,149 @@ mod decoy_selection {
                 .iter()
                 .any(|(idx, msg)| *idx == 3 && msg.contains("factor")),
             "Should detect factor violation"
+        );
+    }
+}
+
+// ============================================================================
+// V2 lottery payouts (#1642)
+// ============================================================================
+
+/// Public-API round trip: a payout derived with the real `lottery_v2` rules
+/// and served in the frozen #1641 row shape is discovered, recovered under a
+/// distinct key image and spent by a verifying CLSAG transaction; a forged
+/// tweak and a legacy context-less row are not spendable.
+mod lottery_v2_payouts {
+    use super::*;
+    use botho_wallet::{ring_builder::canonical_rpc_history, rpc_pool::BlockOutputs};
+    use bth_crypto_keys::RistrettoPublic;
+    use bth_crypto_ring_signature::{KeyImage, Scalar};
+    use bth_transaction_clsag::lottery_v2::{derive, Context, Domain, Outpoint, Source};
+    use bth_transaction_types::ClusterTagVector;
+    use serde_json::{json, Value};
+
+    fn row(out: &ClsagTxOutput, hash: [u8; 32], index: u32) -> Value {
+        json!({"txHash": hex::encode(hash), "outputIndex": index,
+            "targetKey": hex::encode(out.target_key), "publicKey": hex::encode(out.public_key),
+            "amountCommitment": hex::encode(out.amount.to_le_bytes()), "clusterTags": [],
+            "kemCiphertext": out.kem_ciphertext.as_ref().map(hex::encode)})
+    }
+
+    #[test]
+    fn payout_is_discovered_recovered_and_spent() {
+        let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+        let source = ClsagTxOutput::new_hybrid_to_address(
+            4 * PICOCREDITS_PER_CAD,
+            &keys.public_address(),
+            2,
+            None,
+            ClusterTagVector::empty(),
+        )
+        .unwrap();
+        let derived = derive(
+            &Source {
+                outpoint: Outpoint {
+                    hash: [5; 32],
+                    index: 2,
+                },
+                target: source.target_key,
+                context: Context {
+                    base_index: 2,
+                    tweak: [0; 32],
+                },
+            },
+            &Domain {
+                genesis: [1; 32],
+                parent: [2; 32],
+                height: 900,
+                ordinary_root: [3; 32],
+                manifest: [4; 32],
+                ordinal: 0,
+                amount: 3 * PICOCREDITS_PER_CAD,
+            },
+        )
+        .unwrap();
+        let mut payout = source.clone();
+        payout.amount = 3 * PICOCREDITS_PER_CAD;
+        payout.target_key = derived.target;
+        let mut payout_row = row(&payout, [6; 32], 1);
+        payout_row["cryptoOutputIndex"] = json!(2);
+        payout_row["lottery"] = json!(true);
+        payout_row["lotteryContext"] = json!({"version": 2, "baseIndex": 2,
+            "tweak": hex::encode(derived.context.tweak), "ordinal": 0, "height": 900});
+        payout_row["winnerOutpoint"] = json!(format!("{}:2", hex::encode([5u8; 32])));
+        let blocks = |payout_row: Value| -> Vec<BlockOutputs> {
+            serde_json::from_value(json!([
+                {"height": 10, "outputs": [row(&source, [5; 32], 2)]},
+                {"height": 900, "outputs": [payout_row]},
+            ]))
+            .unwrap()
+        };
+
+        let history = blocks(payout_row.clone());
+        let owned = botho_wallet::transaction::WalletScanner::new(&keys).scan_outputs(&history);
+        assert_eq!(owned.len(), 2);
+        let found = owned.iter().find(|u| u.lottery).unwrap().clone();
+        let key = found.recover_spend_key(&keys).unwrap();
+        assert_eq!(RistrettoPublic::from(&key).to_bytes(), derived.target);
+        let source_key = owned[0].recover_spend_key(&keys).unwrap();
+        assert_ne!(
+            KeyImage::from(&key).as_bytes(),
+            KeyImage::from(&source_key).as_bytes()
+        );
+        assert_eq!(
+            canonical_rpc_history(&history)
+                .iter()
+                .map(|b| b.outputs.len())
+                .sum::<usize>(),
+            2
+        );
+
+        let recipient = WalletKeys::from_mnemonic(RECIPIENT_MNEMONIC).unwrap();
+        let decoys: Vec<_> = (0..MIN_RING_SIZE - 1)
+            .map(|i| {
+                RingMember::from_output(&ClsagTxOutput::new(
+                    1_000 + i as u64,
+                    &recipient.public_address(),
+                ))
+            })
+            .collect();
+        let builder = TransactionBuilder::new(keys.clone(), vec![found.clone()], 1_000);
+        let tx = builder
+            .build_signed_transaction(
+                &recipient.public_address(),
+                PICOCREDITS_PER_CAD,
+                MIN_TX_FEE,
+                vec![found.clone()],
+                found.amount,
+                vec![decoys],
+            )
+            .unwrap()
+            .transaction;
+        assert!(tx.verify_ring_signatures().is_ok());
+        assert_eq!(tx.key_images(), vec![*KeyImage::from(&key).as_bytes()]);
+        let decoded: ClsagTransaction =
+            bincode::deserialize(&hex::decode(to_tx_hex(&tx).unwrap()).unwrap()).unwrap();
+        assert!(decoded.verify_ring_signatures().is_ok());
+
+        // Forged tweak: no ownership.
+        let mut forged = payout_row.clone();
+        forged["lotteryContext"]["tweak"] = json!(hex::encode(Scalar::from(5u64).to_bytes()));
+        let owned =
+            botho_wallet::transaction::WalletScanner::new(&keys).scan_outputs(&blocks(forged));
+        assert!(owned.iter().all(|u| !u.lottery));
+
+        // Legacy context-less row: not canonical, so never an input.
+        let mut legacy = payout_row;
+        let fields = legacy.as_object_mut().unwrap();
+        fields.remove("lotteryContext");
+        fields.remove("cryptoOutputIndex");
+        assert_eq!(
+            canonical_rpc_history(&blocks(legacy))
+                .iter()
+                .map(|b| b.outputs.len())
+                .sum::<usize>(),
+            1
         );
     }
 }

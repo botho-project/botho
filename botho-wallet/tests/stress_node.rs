@@ -193,6 +193,380 @@ async fn receive_prepare_submit_restore_and_respend() {
         server.abort();
     }).await.expect("fixture exceeded eight minute deadline");
 }
+/// Where the V2 payout rows' derivation context comes from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ContextSource {
+    /// `chain_getOutputs` serves `lotteryContext`/`winnerOutpoint` itself
+    /// (#1286 P4, #1641).
+    Rpc,
+    /// The test reads each payout's committed context from the node's own
+    /// ledger and attaches it to the served row in the frozen #1641 shape.
+    /// If the row already carries the fields (P4 landed), it asserts that they
+    /// equal the ledger's instead.
+    #[cfg_attr(not(feature = "test-fixtures"), allow(dead_code))]
+    Ledger,
+}
+
+/// #1642 (P5) end-to-end, on real V2 blocks from the production producer
+/// (P3, #1640): the signer's wallet wins a V2 lottery payout on a local node,
+/// discovers it under a key image distinct from the winning source's,
+/// prepares a spend the ledger accepts, and then spends the source too.
+///
+/// The payout's context comes from the ledger (`ContextSource::Ledger`),
+/// because main's `chain_getOutputs` does not serve `lotteryContext` until P4
+/// (#1641). Needs `--features test-fixtures` for the ledger read. Kept separate
+/// from `receive_prepare_submit_restore_and_respend`, so the two do not
+/// duplicate each other.
+#[cfg(feature = "test-fixtures")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_payout_win_discover_spend_and_source_still_spendable() {
+    v2_payout_round_trip(ContextSource::Ledger).await;
+}
+
+/// The same round trip with contexts served by the node's RPC alone.
+///
+/// GATED on #1286 P4 (#1641) only: main's `chain_getOutputs` does not yet
+/// carry `lotteryContext`/`winnerOutpoint`/`cryptoOutputIndex` on payout rows.
+/// Remove the `ignore` when P4 lands.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs #1286 P4 (#1641) lotteryContext/winnerOutpoint RPC rows"]
+async fn v2_payout_round_trip_from_rpc_contexts_alone() {
+    v2_payout_round_trip(ContextSource::Rpc).await;
+}
+
+/// Attach each V2 payout row's committed derivation context (read from the
+/// ledger) in the frozen #1641 wire shape. If a row already carries it (P4),
+/// the served fields must equal the ledger's.
+#[cfg(feature = "test-fixtures")]
+fn attach_ledger_contexts(ledger: &Ledger, blocks: &mut Value) {
+    for block in blocks.as_array_mut().unwrap() {
+        let height = block["height"].as_u64().unwrap();
+        let mut sealed = None;
+        for row in block["outputs"].as_array_mut().unwrap() {
+            if row["lottery"] != true {
+                continue;
+            }
+            let sealed = sealed.get_or_insert_with(|| ledger.get_block(height).unwrap());
+            let tx_hash: [u8; 32] = hex::decode(row["ledgerOutpoint"]["txHash"].as_str().unwrap())
+                .unwrap()
+                .try_into()
+                .unwrap();
+            let index = row["ledgerOutpoint"]["outputIndex"].as_u64().unwrap() as u32;
+            assert_eq!(
+                tx_hash,
+                sealed.hash(),
+                "payout ids live under the block hash"
+            );
+            let ordinal = index - 1;
+            let (_, context) = ledger
+                .fixture_derivation_context(&botho::transaction::UtxoId::new(tx_hash, index))
+                .unwrap();
+            assert_ne!(
+                context.tweak, [0; 32],
+                "a V2 payout carries a nonzero tweak"
+            );
+            let award = &sealed.lottery_outputs[ordinal as usize];
+            assert_eq!(hex::encode(award.target_key), row["targetKey"]);
+            let expected = [
+                (
+                    "lotteryContext",
+                    json!({"version":2,"baseIndex":context.base_index,
+                        "tweak":hex::encode(context.tweak),"ordinal":ordinal,"height":height}),
+                ),
+                (
+                    "winnerOutpoint",
+                    json!(format!(
+                        "{}:{}",
+                        hex::encode(award.winner_tx_hash),
+                        award.winner_output_index
+                    )),
+                ),
+                ("cryptoOutputIndex", json!(context.base_index)),
+            ];
+            for (field, value) in expected {
+                match row.get(field) {
+                    Some(served) => assert_eq!(served, &value, "served {field} != ledger"),
+                    None => row[field] = value,
+                }
+            }
+        }
+    }
+}
+
+async fn v2_payout_round_trip(source: ContextSource) {
+    tokio::time::timeout(Duration::from_secs(900), async {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let a = dir.path().join("a.mnemonic");
+        let b = dir.path().join("b.mnemonic");
+        adapter(json!({"operation":"generate","wallet":a}));
+        let address_b = adapter(json!({"operation":"generate","wallet":b}))["address"].clone();
+        let phrase = std::fs::read_to_string(&a).unwrap();
+        let winner = botho_wallet::WalletKeys::from_mnemonic(phrase.trim()).unwrap();
+        let ledger = Ledger::open(&dir.path().join("ledger")).unwrap();
+        ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
+        assert_eq!(
+            LotteryFeeConfig::default().draw_config.min_utxo_age,
+            720,
+            "run this fixture without a lottery-age environment override"
+        );
+        // Wallet A mints every block, so every lottery candidate (and so
+        // every winner) is A's.
+        for _ in 1..=FUNDING_HEIGHT {
+            mine_block(&ledger, &winner.public_address(), vec![]);
+        }
+        let state = Arc::new(RpcState::new(
+            ledger,
+            Mempool::new(),
+            Network::Testnet,
+            None,
+            None,
+            vec!["*".to_owned()],
+            Arc::new(WsBroadcaster::new(100)),
+        ));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let server_state = state.clone();
+        let server = tokio::spawn(async move {
+            botho::rpc::start_rpc_server(addr, server_state)
+                .await
+                .unwrap()
+        });
+        let url = format!("http://{addr}/rpc");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let height = || {
+            state
+                .ledger
+                .read()
+                .unwrap()
+                .get_chain_state()
+                .unwrap()
+                .height
+        };
+        let outputs = |end: u64| {
+            let (url, state) = (url.clone(), state.clone());
+            async move {
+                #[allow(unused_mut)]
+                let mut blocks = rpc(
+                    &url,
+                    "chain_getOutputs",
+                    json!({"start_height":0,"end_height":end}),
+                )
+                .await;
+                if source == ContextSource::Ledger {
+                    #[cfg(feature = "test-fixtures")]
+                    attach_ledger_contexts(&state.ledger.read().unwrap(), &mut blocks);
+                    #[cfg(not(feature = "test-fixtures"))]
+                    unreachable!("ContextSource::Ledger needs --features test-fixtures");
+                }
+                let _ = &state;
+                blocks
+            }
+        };
+        let target_hex = |owned: &Value| {
+            hex::encode(
+                owned["utxo"]["target_key"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|b| b.as_u64().unwrap() as u8)
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        // Prepare (trying the highest fee rate the program bound allows when
+        // `max_fee`), submit, mine and confirm one spend of `owned`.
+        let spend = |owned: Value,
+                     blocks: Value,
+                     amount: u64,
+                     max_fee: bool,
+                     label: &'static str| {
+            let url = url.clone();
+            let state = state.clone();
+            let (a, address_b, dir, winner) = (
+                a.clone(),
+                address_b.clone(),
+                dir.path().to_owned(),
+                winner.public_address(),
+            );
+            async move {
+                let height = state
+                    .ledger
+                    .read()
+                    .unwrap()
+                    .get_chain_state()
+                    .unwrap()
+                    .height;
+                let spent = rpc(
+                    &url,
+                    "chain_areKeyImagesSpent",
+                    json!({"keyImages":[owned["key_image"]]}),
+                )
+                .await;
+                let artifact = dir.join(format!("{label}.bin"));
+                let mut rate = if max_fee { 1u64 << 40 } else { 1 };
+                let prepared = loop {
+                    let request = json!({"operation":"prepare","wallet":a,"blocks":blocks,
+                        "height":height,"selected":[owned["id"]],"spent":spent,"reserved":[],
+                        "recipient":address_b,"allowed_recipients":[address_b],"amount":amount,
+                        "base_rate":rate,"fee_multiplier":if max_fee {4} else {1},
+                        "artifact":artifact});
+                    match execute(serde_json::from_value::<Request>(request).unwrap()) {
+                        Ok(prepared) => break prepared,
+                        Err(error) if rate > 1 && error.to_string().contains("bound") => rate /= 2,
+                        Err(error) => panic!("{label} prepare: {error:#}"),
+                    }
+                };
+                let bytes = std::fs::read(&artifact).unwrap();
+                let tx: botho::transaction::Transaction = bincode::deserialize(&bytes).unwrap();
+                let submitted = rpc(&url, "tx_submit", json!({"tx_hex":hex::encode(bytes)})).await;
+                assert_eq!(submitted["txHash"], prepared["hash"]);
+                {
+                    let ledger = state.ledger.read().unwrap();
+                    mine_block(&ledger, &winner, vec![tx.clone()]);
+                }
+                state.mempool.write().unwrap().remove_tx(&tx.hash());
+                let receipt = rpc(
+                    &url,
+                    "getTransactionStatus",
+                    json!({"hash":prepared["hash"]}),
+                )
+                .await;
+                assert_eq!(
+                    receipt["confirmed"], true,
+                    "the ledger accepts the {label} spend"
+                );
+                prepared
+            }
+        };
+
+        // Fund the lottery pool: a near-maximum-fee spend of A's oldest
+        // coinbase is mined into the first block that can draw payouts.
+        let blocks = outputs(height()).await;
+        let scan = adapter(json!({"operation":"scan","wallet":a,"blocks":blocks}));
+        let funding = scan["owned"][0].clone();
+        let funding_target = target_hex(&funding);
+        let funded = spend(funding, blocks, 10_000_000_000, true, "funding").await;
+        assert!(
+            funded["fee"].as_u64().unwrap() > 1_000_000_000,
+            "pool funding fee: {funded}"
+        );
+        // Age the payouts past the decoy floor with a full age-similar band.
+        for _ in 0..150 {
+            mine_block(
+                &state.ledger.read().unwrap(),
+                &winner.public_address(),
+                vec![],
+            );
+        }
+
+        // Discover: the largest V2 payout whose source A still holds.
+        let blocks = outputs(height()).await;
+        let rows: Vec<Value> = blocks
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|block| block["outputs"].as_array().unwrap().clone())
+            .collect();
+        let mut payouts: Vec<&Value> = rows.iter().filter(|row| row["lottery"] == true).collect();
+        assert!(
+            !payouts.is_empty(),
+            "the funded chain must draw a lottery payout"
+        );
+        payouts.sort_by_key(|row| {
+            std::cmp::Reverse(u64::from_le_bytes(
+                hex::decode(row["amountCommitment"].as_str().unwrap())
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
+            ))
+        });
+        let source_of = |payout: &Value| -> Value {
+            let winner_outpoint = payout["winnerOutpoint"].as_str().unwrap_or_else(|| {
+                panic!("V2 payout rows carry winnerOutpoint (P4, #1641): {payout}")
+            });
+            rows.iter()
+                .find(|row| {
+                    format!(
+                        "{}:{}",
+                        row["ledgerOutpoint"]["txHash"].as_str().unwrap_or_default(),
+                        row["ledgerOutpoint"]["outputIndex"]
+                    ) == winner_outpoint
+                })
+                .expect("winner outpoint resolves to a served row")
+                .clone()
+        };
+        let payout_row = payouts
+            .into_iter()
+            .find(|payout| source_of(payout)["targetKey"] != json!(funding_target))
+            .expect("a payout won by an unspent source")
+            .clone();
+        let source_row = source_of(&payout_row);
+        assert!(
+            payout_row["lotteryContext"].is_object(),
+            "V2 payout rows must carry lotteryContext (P4, #1641): {payout_row}"
+        );
+        assert_eq!(payout_row["lotteryContext"]["version"], 2);
+        assert_eq!(
+            payout_row["cryptoOutputIndex"],
+            payout_row["lotteryContext"]["baseIndex"]
+        );
+        assert_ne!(source_row["targetKey"], payout_row["targetKey"]);
+        let payout_amount = u64::from_le_bytes(
+            hex::decode(payout_row["amountCommitment"].as_str().unwrap())
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        );
+        let fee_floor = bth_transaction_clsag::MIN_TX_FEE;
+        assert!(
+            payout_amount > 2 * fee_floor + 1_000_000,
+            "payout {payout_amount} cannot fund its own spend fee"
+        );
+
+        let scan = adapter(json!({"operation":"scan","wallet":a,"blocks":blocks}));
+        let owned = scan["owned"].as_array().unwrap();
+        let by_target = |row: &Value| {
+            owned
+                .iter()
+                .find(|o| json!(target_hex(o)) == row["targetKey"])
+                .cloned()
+        };
+        let payout = by_target(&payout_row).expect("the signer discovers its payout");
+        let source = by_target(&source_row).expect("the signer owns the winning source");
+        assert!(payout["utxo"]["lottery_context"].is_object());
+        assert_ne!(
+            payout["key_image"], source["key_image"],
+            "payout and source spend under distinct key images"
+        );
+
+        // Spend the payout on its own, then the source: both are accepted.
+        let paid = spend(
+            payout.clone(),
+            blocks,
+            payout_amount - 2 * fee_floor,
+            false,
+            "payout",
+        )
+        .await;
+        assert_eq!(paid["key_images"], json!([payout["key_image"]]));
+        let blocks = outputs(height()).await;
+        let respent = spend(source.clone(), blocks, 10_000_000_000, false, "source").await;
+        assert_eq!(respent["key_images"], json!([source["key_image"]]));
+        let spent = rpc(
+            &url,
+            "chain_areKeyImagesSpent",
+            json!({"keyImages":[payout["key_image"], source["key_image"]]}),
+        )
+        .await;
+        assert!(spent.as_array().unwrap().iter().all(|s| s["spent"] == true));
+        server.abort();
+    })
+    .await
+    .expect("fixture exceeded fifteen minute deadline");
+}
+
 /// Whether the fixture chain reaches the first lottery-paying block. P2
 /// (#1652) set this `false` while storage refused V1 payouts; P3 (#1640)
 /// restores `true` now that the V2 producer/validator are live.

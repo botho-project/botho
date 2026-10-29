@@ -540,6 +540,11 @@ pub struct LedgerOutpoint {
 
 /// Resolve only the supported coinbase/ordinary index contracts. Old nodes
 /// already mark coinbases explicitly; a bare MAX is not proof of coinbase.
+///
+/// This is the context-free contract. A V2 lottery row's derivation index is
+/// its `lotteryContext.baseIndex`, not its outpoint index; resolve those rows
+/// through [`TxOutput::derivation`], which applies this function only to rows
+/// without a lottery context.
 pub(crate) fn crypto_output_index(
     index: u32,
     coinbase: bool,
@@ -557,6 +562,124 @@ pub(crate) fn crypto_output_index(
     }
 }
 
+/// The only lottery-context wire version a wallet accepts (#1286 / #1641).
+pub const LOTTERY_CONTEXT_VERSION: u8 = 2;
+
+/// V2 lottery payout derivation context, as emitted by `chain_getOutputs` on
+/// a V2 chain (frozen contract, #1641).
+///
+/// The payout's one-time key is `P = P_base + T·G`, where `P_base` is the
+/// winner's original one-time key at derivation index `baseIndex` and `T` is
+/// the cumulative `tweak` scalar. A wallet scans the base target `P − T·G` at
+/// `baseIndex` and recovers `x_base + T`, which must satisfy `x·G = P`.
+///
+/// # Trust model ("trusts own node")
+///
+/// The wallet cannot authenticate this context against the chain: it does
+/// not check the block's V2 body root. It takes the context from the node it
+/// talks to. That is safe for the wallet's funds, because a forged context
+/// can only cause one of two outcomes:
+///
+/// - **A missed payout.** A forged tweak or base index moves the base target
+///   off the wallet's keys, so the ownership check fails and nothing is
+///   discovered.
+/// - **A spend the ledger rejects.** Recovery always proves `x·G = P` for the
+///   row's own target `P`, so the wallet never signs with a key for a target it
+///   does not control. A context that passes that check for a target the chain
+///   does not hold yields a ring the honest ledger refuses.
+///
+/// It cannot make the wallet sign for someone else's output or leak a key.
+/// Point the wallet at a node you run when payout discovery must be complete.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LotteryContext {
+    /// Context wire version. Only [`LOTTERY_CONTEXT_VERSION`] is accepted.
+    pub version: u8,
+    /// Original derivation index `j` of the lineage's first output.
+    pub base_index: u32,
+    /// Cumulative tweak scalar `T`: 64 lowercase hex characters, a canonical
+    /// nonzero Ristretto scalar.
+    pub tweak: String,
+    /// Award ordinal within the paying block.
+    pub ordinal: u32,
+    /// Height of the paying block.
+    pub height: u64,
+}
+
+impl LotteryContext {
+    /// The crypto context, if this row is a well-formed V2 payout context.
+    ///
+    /// Rejects other versions, non-lowercase or wrong-length hex, a
+    /// noncanonical scalar and the zero tweak (a payout always carries a
+    /// nonzero cumulative tweak). Syntax only: see the type-level trust note.
+    pub fn derivation(&self) -> Option<bth_transaction_clsag::lottery_v2::Context> {
+        use bth_transaction_clsag::lottery_v2::Context;
+        if self.version != LOTTERY_CONTEXT_VERSION
+            || self.tweak.len() != 64
+            || !self
+                .tweak
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return None;
+        }
+        let tweak: [u8; 32] = hex::decode(&self.tweak).ok()?.try_into().ok()?;
+        if tweak == [0; 32] {
+            return None;
+        }
+        let context = Context {
+            base_index: self.base_index,
+            tweak,
+        };
+        // `encode` enforces the canonical-scalar rule.
+        context.encode().ok()?;
+        Some(context)
+    }
+}
+
+/// How one RPC row's one-time key was derived.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum OutputDerivation {
+    /// Ordinary or coinbase output, or a legacy (context-less) lottery
+    /// receipt, derived directly at `index`.
+    Direct { index: u32 },
+    /// V2 lottery payout: derived at `context.base_index` with `context.tweak`.
+    LotteryV2 {
+        context: bth_transaction_clsag::lottery_v2::Context,
+    },
+}
+
+/// Resolve a row's derivation from its additive metadata.
+///
+/// - A row with a lottery context must be a well-formed, non-coinbase lottery
+///   row whose `cryptoOutputIndex`, if present, equals `baseIndex`.
+/// - A row without a context keeps the context-free contract of
+///   [`crypto_output_index`]. That includes legacy V1 lottery receipts, which
+///   stay scannable for accounting but never canonical or spendable (#1450).
+pub(crate) fn output_derivation(
+    index: u32,
+    coinbase: bool,
+    lottery: bool,
+    explicit: Option<u32>,
+    context: Option<&LotteryContext>,
+) -> Option<OutputDerivation> {
+    match context {
+        Some(wire) => {
+            let context = wire.derivation()?;
+            if !lottery
+                || coinbase
+                || index == u32::MAX
+                || explicit.is_some_and(|value| value != context.base_index)
+            {
+                return None;
+            }
+            Some(OutputDerivation::LotteryV2 { context })
+        }
+        None => crypto_output_index(index, coinbase, explicit)
+            .map(|index| OutputDerivation::Direct { index }),
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TxOutput {
@@ -565,16 +688,26 @@ pub struct TxOutput {
     // Node emits `outputIndex`.
     pub output_index: u32,
     /// Optional derivation index; absent on older nodes and legacy lottery
-    /// rows.
+    /// rows. On a V2 lottery row it equals `lotteryContext.baseIndex`, not
+    /// `outputIndex`.
     #[serde(default)]
     pub crypto_output_index: Option<u32>,
     /// Explicit existing RPC discriminator, needed for old-node compatibility.
     #[serde(default)]
     pub coinbase: bool,
-    /// Legacy lottery payouts reuse a winner's target key with a different
-    /// amount. They cannot be decoys for the ledger's first-target lookup.
+    /// Lottery payout discriminator. Legacy (context-less) payouts reuse a
+    /// winner's target key with a different amount: they cannot be decoys for
+    /// the ledger's first-target lookup and are never spendable. V2 payouts
+    /// carry a [`LotteryContext`] and a distinct target.
     #[serde(default)]
     pub lottery: bool,
+    /// V2 payout derivation context (#1641). `None` on ordinary rows and on
+    /// legacy lottery rows.
+    #[serde(default)]
+    pub lottery_context: Option<LotteryContext>,
+    /// V2 payout's winning outpoint, `"<hash>:<index>"`. Informational only.
+    #[serde(default)]
+    pub winner_outpoint: Option<String>,
     /// Additive canonical ledger identity. Never substitutes for crypto index.
     #[serde(default)]
     pub ledger_outpoint: Option<LedgerOutpoint>,
@@ -596,6 +729,30 @@ pub struct TxOutput {
     /// ciphertext IS the hybrid marker.
     #[serde(default)]
     pub kem_ciphertext: Option<String>,
+}
+
+impl TxOutput {
+    /// This row's derivation, or `None` for inconsistent metadata.
+    pub(crate) fn derivation(&self) -> Option<OutputDerivation> {
+        output_derivation(
+            self.output_index,
+            self.coinbase,
+            self.lottery,
+            self.crypto_output_index,
+            self.lottery_context.as_ref(),
+        )
+    }
+
+    /// A V2 lottery payout with a well-formed context.
+    pub fn is_v2_lottery(&self) -> bool {
+        matches!(self.derivation(), Some(OutputDerivation::LotteryV2 { .. }))
+    }
+
+    /// A legacy lottery receipt: flagged `lottery` but with no context.
+    /// Retained for accounting, never canonical or spendable (#1450).
+    pub fn is_legacy_lottery(&self) -> bool {
+        self.lottery && self.lottery_context.is_none()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1030,6 +1187,69 @@ mod tests {
         assert_eq!(crypto_output_index(1, true, Some(0)), None);
         // Legacy lottery index is retained, not reinterpreted as a source index.
         assert_eq!(crypto_output_index(2, false, None), Some(2));
+    }
+
+    /// The frozen #1641 V2 payout row shape decodes, and only a well-formed
+    /// context makes a lottery row V2.
+    #[test]
+    fn v2_lottery_row_follows_the_frozen_rpc_contract() {
+        use bth_crypto_ring_signature::Scalar;
+        let tweak = hex::encode(Scalar::from(0xabu64).to_bytes());
+        let row = json!({"txHash":"bb".repeat(32), "outputIndex":2, "cryptoOutputIndex":3,
+            "ledgerOutpoint":{"txHash":"bb".repeat(32), "outputIndex":2},
+            "targetKey":"aa", "publicKey":"cc", "amountCommitment":"dd",
+            "clusterTags":[[4u64, 1_000_000u64]], "lottery":true,
+            "lotteryContext":{"version":2,"baseIndex":3,"tweak":tweak,"ordinal":1,"height":1234},
+            "winnerOutpoint":format!("{}:3", "ee".repeat(32))});
+        let out: TxOutput = serde_json::from_value(row.clone()).unwrap();
+        assert!(out.is_v2_lottery() && !out.is_legacy_lottery());
+        assert_eq!(out.cluster_tags, vec![[4, 1_000_000]]);
+        assert_eq!(
+            out.winner_outpoint.as_deref(),
+            Some(format!("{}:3", "ee".repeat(32)).as_str())
+        );
+        let Some(OutputDerivation::LotteryV2 { context }) = out.derivation() else {
+            panic!("V2 derivation expected");
+        };
+        assert_eq!(context.base_index, 3);
+        assert_eq!(context.tweak, Scalar::from(0xabu64).to_bytes());
+
+        let derivation = |mutate: &dyn Fn(&mut Value)| {
+            let mut value = row.clone();
+            mutate(&mut value);
+            serde_json::from_value::<TxOutput>(value)
+                .ok()
+                .and_then(|o| o.derivation())
+        };
+        // cryptoOutputIndex may be omitted, never contradict baseIndex.
+        assert!(derivation(&|v| {
+            v.as_object_mut().unwrap().remove("cryptoOutputIndex");
+        })
+        .is_some());
+        for bad in [
+            &(|v: &mut Value| v["cryptoOutputIndex"] = json!(2)) as &dyn Fn(&mut Value),
+            &|v| v["lottery"] = json!(false),
+            &|v| v["coinbase"] = json!(true),
+            &|v| v["outputIndex"] = json!(u32::MAX),
+            &|v| v["lotteryContext"]["version"] = json!(1),
+            &|v| v["lotteryContext"]["tweak"] = json!(tweak.to_uppercase()),
+            &|v| v["lotteryContext"]["tweak"] = json!("00".repeat(32)),
+            &|v| v["lotteryContext"]["tweak"] = json!("ff".repeat(32)),
+            &|v| v["lotteryContext"]["tweak"] = json!("09"),
+            &|v| v["lotteryContext"]["extra"] = json!(0),
+        ] {
+            assert_eq!(derivation(bad), None);
+        }
+        // Context-less lottery rows are legacy and keep the #1450 contract.
+        let legacy = derivation(&|v| {
+            v.as_object_mut().unwrap().remove("lotteryContext");
+            v.as_object_mut().unwrap().remove("cryptoOutputIndex");
+        });
+        assert_eq!(legacy, Some(OutputDerivation::Direct { index: 2 }));
+        let mut value = row;
+        value.as_object_mut().unwrap().remove("lotteryContext");
+        let legacy: TxOutput = serde_json::from_value(value).unwrap();
+        assert!(legacy.is_legacy_lottery() && !legacy.is_v2_lottery());
     }
 
     /// Mirrors `tx_submit` success (botho/src/rpc/mod.rs).
