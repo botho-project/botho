@@ -22,6 +22,8 @@ on:
   pull_request:
     paths:
       - 'web/**'
+      # The WASM signer compiles the shared lottery_v2 recovery rule (#1645).
+      - 'transaction/clsag/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/web-ci.yml'
@@ -31,6 +33,8 @@ on:
       - main
     paths:
       - 'web/**'
+      # The WASM signer compiles the shared lottery_v2 recovery rule (#1645).
+      - 'transaction/clsag/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/web-ci.yml'
@@ -131,6 +135,20 @@ jobs:
       # browser, no network beyond crate/wasm-bindgen fetches.
       - name: Build wasm-signer bundler artifact (prereq for snap tests)
         run: pnpm --filter @botho/wasm-signer build:wasm:bundler
+
+      # V2 lottery payouts through the ACTUAL compiled WASM signer (#1645): the
+      # committed vector's key images must equal native recovery, and the
+      # wallet orchestrator must discover and spend the payout. The root vitest
+      # run above skips this file (no `pkg/` yet), so build the `--target web`
+      # artifact (shares the cargo cache with the bundler build) and run it with
+      # BOTHO_REQUIRE_WASM=1 so it can never silently skip.
+      - name: Build wasm-signer web artifact (V2 lottery WASM vectors)
+        run: pnpm --filter @botho/wasm-signer build:wasm
+
+      - name: Run V2 lottery WASM vector + orchestration tests
+        env:
+          BOTHO_REQUIRE_WASM: '1'
+        run: pnpm exec vitest run packages/wasm-signer/test/lottery-v2-wasm.test.ts
 
       # test:snap = `mm-snap build && jest`; runs the 76 `*.snap.ts` tests inside
       # the real Snaps SES executor with an in-process mocked node (no secrets,

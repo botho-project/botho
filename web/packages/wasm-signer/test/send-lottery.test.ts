@@ -168,3 +168,100 @@ describe('legacy lottery payout exclusion', () => {
   })
 
 })
+
+
+const V2_KEY = 'e'.repeat(64)
+const V2_CONTEXT = { version: 2, baseIndex: 3, tweak: '4b'.repeat(32), ordinal: 0, height: 17 }
+
+describe('V2 lottery payout spending (#1645)', () => {
+  afterEach(() => resetSigner())
+
+  /** A fake signer whose scan reports an owned V2 payout (plus the ordinary output). */
+  function v2Signer(payoutContext = V2_CONTEXT) {
+    const { signer, lastRequest } = fakeSigner()
+    const ordinary = signer.scanOwnedOutputs({ spendPrivateKey: '', viewPrivateKey: '', outputs: [] })[0]
+    const payout = {
+      ...ordinary,
+      targetKey: V2_KEY,
+      amount: 2_000_000_000_000n,
+      outputIndex: 3,
+      lotteryContext: payoutContext,
+    }
+    signer.scanOwnedOutputs = () => [ordinary, payout]
+    signer.computeOwnedOutputKeyImages = () =>
+      [ordinary, payout].map((output, i) => ({ ...output, keyImage: String(i).repeat(64) }))
+    return { signer, lastRequest, payout }
+  }
+
+  function v2Row() {
+    return {
+      targetKey: V2_KEY,
+      publicKey: PUB_KEY,
+      amount: 2_000_000_000_000n,
+      outputIndex: 3,
+      cryptoOutputIndex: 3,
+      lottery: true,
+      lotteryContext: V2_CONTEXT,
+      winnerOutpoint: `${'07'.repeat(32)}:3`,
+      clusterTags: [] as Array<[number, number]>,
+    }
+  }
+
+  it('selects a discovered V2 payout as an input and threads its context to the signer', async () => {
+    const { signer, lastRequest } = v2Signer()
+    setSigner(signer)
+    const request = params()
+    request.amount = 1_500_000_000_000n
+    const ordinary = await request.rpc.getOutputs(0, 100)
+    request.rpc.getOutputs = async () => [...ordinary, v2Row()]
+    const result = await buildSendTransaction(request)
+    const inputs = lastRequest()?.inputs ?? []
+    expect(inputs.map((input) => input.target_key)).toEqual([V2_KEY])
+    expect(inputs[0].lottery_context).toEqual(V2_CONTEXT)
+    expect(inputs[0].output_index).toBe(3)
+    expect(result.inputs[0].lotteryContext).toEqual(V2_CONTEXT)
+  })
+
+  it('keeps V2 payouts out of the decoy set', async () => {
+    const { signer, lastRequest } = fakeSigner()
+    setSigner(signer)
+    const request = params()
+    const ordinary = await request.rpc.getOutputs(0, 100)
+    request.rpc.getOutputs = async () => [ordinary[0], v2Row(), ordinary[1]]
+    await buildSendTransaction(request)
+    expect(lastRequest()?.inputs[0].decoys.map((decoy) => decoy.target_key)).toEqual([DECOY_KEY])
+  })
+
+  it('does not count V2 payouts toward the minimum decoy count', async () => {
+    const { signer, lastRequest } = fakeSigner()
+    setSigner(signer)
+    const request = params()
+    const ordinary = await request.rpc.getOutputs(0, 100)
+    request.rpc.getOutputs = async () => [ordinary[0], v2Row()]
+    await expect(buildSendTransaction(request)).rejects.toThrow('Not enough decoys')
+    expect(lastRequest()).toBeNull()
+  })
+
+  it('rejects an owned payout whose context disagrees with the chain row', async () => {
+    const { signer, lastRequest } = v2Signer({ ...V2_CONTEXT, baseIndex: 4 })
+    setSigner(signer)
+    const request = params()
+    request.amount = 1_500_000_000_000n
+    const ordinary = await request.rpc.getOutputs(0, 100)
+    request.rpc.getOutputs = async () => [...ordinary, v2Row()]
+    await expect(buildSendTransaction(request)).rejects.toThrow()
+    expect(lastRequest()).toBeNull()
+  })
+
+  it('still excludes a context-less (legacy) payout with the same shape', async () => {
+    const { signer, lastRequest } = v2Signer()
+    setSigner(signer)
+    const request = params()
+    request.amount = 1_500_000_000_000n
+    const ordinary = await request.rpc.getOutputs(0, 100)
+    const { lotteryContext: _dropped, ...legacy } = v2Row()
+    request.rpc.getOutputs = async () => [...ordinary, legacy]
+    await expect(buildSendTransaction(request)).rejects.toThrow('Legacy lottery payouts')
+    expect(lastRequest()).toBeNull()
+  })
+})

@@ -1074,6 +1074,7 @@ mod tests {
                     output_index: 0,
                     kem_ciphertext: None,
                     decoys,
+                    lottery_context: None,
                 }],
                 recipient: RecipientAddress {
                     spend_public_key: hex::encode(recipient_addr.spend_public_key().to_bytes()),

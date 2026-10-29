@@ -266,7 +266,13 @@ interface RawOutput {
   publicKey: string;
   amountCommitment: string;
   outputIndex: number;
+  /** One-time-key derivation index; `lotteryContext.baseIndex` for a V2 payout. */
+  cryptoOutputIndex?: number;
   kemCiphertext?: string | null;
+  /** Lottery payout row; legacy when it has no `lotteryContext` (#1450). */
+  lottery?: boolean;
+  /** V2 lottery payout derivation context (#1641 contract, #1645). */
+  lotteryContext?: ChainOutput['lotteryContext'];
 }
 
 function makeSendRpc(call: ReturnType<typeof makeJsonRpc>): SendRpc {
@@ -285,8 +291,17 @@ function makeSendRpc(call: ReturnType<typeof makeJsonRpc>): SendRpc {
             publicKey: o.publicKey,
             amount: leHexToBigInt(o.amountCommitment),
             outputIndex:
-              o.outputIndex === COINBASE_OUTPUT_INDEX_SENTINEL ? 0 : o.outputIndex,
+              typeof o.cryptoOutputIndex === 'number'
+                ? o.cryptoOutputIndex
+                : o.outputIndex === COINBASE_OUTPUT_INDEX_SENTINEL
+                  ? 0
+                  : o.outputIndex,
             kemCiphertext: o.kemCiphertext ?? null,
+            // Pass the lottery flag + V2 context through so the shared
+            // orchestrator excludes legacy payouts (#1450) and discovers and
+            // spends V2 payouts client-side (#1645).
+            ...(o.lottery === true ? { lottery: true } : {}),
+            ...(o.lotteryContext != null ? { lotteryContext: o.lotteryContext } : {}),
           }),
         ),
       );

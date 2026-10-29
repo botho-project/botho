@@ -14,6 +14,7 @@ import type {
   ChainOutput,
   ChainOutputWithMeta,
   KeyImageSpentStatus,
+  LotteryContext,
   SendRpc,
 } from '@botho/wasm-signer';
 
@@ -140,7 +141,45 @@ interface RawOutput {
   publicKey: string;
   amountCommitment: string;
   outputIndex: number;
+  /** Original derivation index; for a V2 lottery payout, `lotteryContext.baseIndex`. */
+  cryptoOutputIndex?: number;
   kemCiphertext?: string | null;
+  /** Lottery payout row; legacy (V1) when it has no `lotteryContext` (#1450). */
+  lottery?: boolean;
+  /** V2 lottery payout derivation context (frozen #1641 contract, #1645). */
+  lotteryContext?: LotteryContext | null;
+  /** For a V2 payout: the winning source outpoint (`hash:index`). */
+  winnerOutpoint?: string;
+  /** Stored cluster tags (`[clusterId, weight]` pairs). */
+  clusterTags?: Array<[number, number]>;
+}
+
+/**
+ * The scan/send view of a row shared by both fetchers. The index bound into
+ * the one-time key is `cryptoOutputIndex` when served (equal to `outputIndex`
+ * for ordinary outputs, 0 for the coinbase, `baseIndex` for a V2 payout), else
+ * the normalized `outputIndex` (older nodes). The lottery flag + context are
+ * passed through so the shared orchestrator keeps legacy payouts out of inputs
+ * and decoys (#1450) and discovers/spends V2 payouts client-side (#1645).
+ */
+function decodeRow(o: RawOutput): ChainOutput {
+  const row: ChainOutput = {
+    targetKey: o.targetKey,
+    publicKey: o.publicKey,
+    amount: leHexToBigInt(o.amountCommitment),
+    outputIndex:
+      typeof o.cryptoOutputIndex === 'number'
+        ? o.cryptoOutputIndex
+        : o.outputIndex === COINBASE_OUTPUT_INDEX_SENTINEL
+          ? 0
+          : o.outputIndex,
+    kemCiphertext: o.kemCiphertext ?? null,
+  };
+  if (o.lottery === true) row.lottery = true;
+  if (o.lotteryContext != null) row.lotteryContext = o.lotteryContext;
+  if (o.winnerOutpoint !== undefined) row.winnerOutpoint = o.winnerOutpoint;
+  if (o.clusterTags !== undefined) row.clusterTags = o.clusterTags;
+  return row;
 }
 
 /** A `chain_getOutputs` output row that also carries its creating tx hash. */
@@ -170,18 +209,7 @@ export function makeSendRpc(call: NodeCall): SendRpc {
         start_height: start,
         end_height: end,
       });
-      return blocks.flatMap((b) =>
-        b.outputs.map(
-          (o): ChainOutput => ({
-            targetKey: o.targetKey,
-            publicKey: o.publicKey,
-            amount: leHexToBigInt(o.amountCommitment),
-            outputIndex:
-              o.outputIndex === COINBASE_OUTPUT_INDEX_SENTINEL ? 0 : o.outputIndex,
-            kemCiphertext: o.kemCiphertext ?? null,
-          }),
-        ),
-      );
+      return blocks.flatMap((b) => b.outputs.map(decodeRow));
     },
     areKeyImagesSpent: (keyImages) =>
       call<KeyImageSpentStatus[]>('chain_areKeyImagesSpent', { keyImages }),
@@ -205,12 +233,7 @@ export function getOutputsWithMeta(call: NodeCall) {
     return blocks.flatMap((b) =>
       b.outputs.map(
         (o): ChainOutputWithMeta => ({
-          targetKey: o.targetKey,
-          publicKey: o.publicKey,
-          amount: leHexToBigInt(o.amountCommitment),
-          outputIndex:
-            o.outputIndex === COINBASE_OUTPUT_INDEX_SENTINEL ? 0 : o.outputIndex,
-          kemCiphertext: o.kemCiphertext ?? null,
+          ...decodeRow(o),
           txHash: o.txHash,
           height: b.height,
         }),

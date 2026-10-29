@@ -22,6 +22,47 @@
  * the wasm module will fail; {@link loadSigner} surfaces a clear error.
  */
 
+/**
+ * The V2 lottery payout derivation context, exactly as `chain_getOutputs`
+ * serves it on a lottery payout row (`lotteryContext`, frozen RPC contract of
+ * #1641). A V2 payout's one-time key is `P = P_base + T·G`; the signer scans the
+ * base target `P − T·G` at `baseIndex` and recovers `x = x_base + T`, checking
+ * `x·G == P` (#1645). Pass the RPC object through unchanged.
+ *
+ * The context is not chain authentication — the wallet trusts its node. A
+ * forged context can only cause a missed payout or a spend the ledger rejects;
+ * it can never make the signer use a key that does not own the output.
+ */
+export interface LotteryContext {
+  /** Context encoding version; only 2 is accepted. */
+  version: number
+  /** Original derivation index `j` (equals the row's `cryptoOutputIndex`). */
+  baseIndex: number
+  /** Hex-encoded 32-byte canonical scalar `T` (the cumulative tweak). */
+  tweak: string
+  /** Award ordinal within the block's payout manifest. */
+  ordinal: number
+  /** Height the payout was created at. */
+  height: number
+}
+
+/** True when a chain row is a V2 lottery payout (it carries a derivation context). */
+export function isV2LotteryPayout(row: { lotteryContext?: LotteryContext | null }): boolean {
+  return row.lotteryContext != null
+}
+
+/**
+ * True when a chain row is a LEGACY (V1) lottery payout: flagged `lottery` but
+ * with no derivation context. Legacy payouts alias their source's key, so they
+ * stay excluded from inputs and decoys (#1450). A V2 chain never emits them.
+ */
+export function isLegacyLotteryPayout(row: {
+  lottery?: boolean
+  lotteryContext?: LotteryContext | null
+}): boolean {
+  return row.lottery === true && row.lotteryContext == null
+}
+
 /** A ring member (decoy or real output) sourced from the chain. */
 export interface DecoyOutput {
   /** Hex-encoded 32-byte one-time target key of the output. */
@@ -55,6 +96,12 @@ export interface SpendInput {
    * Required to recover a hybrid output's one-time spend key (#988).
    */
   kem_ciphertext?: string | null
+  /**
+   * V2 lottery payout context (from the scan's `lotteryContext`), or
+   * null/undefined for an ordinary output. Required to recover a V2 payout's
+   * one-time key; the signer checks `x·G == P` before signing (#1645).
+   */
+  lottery_context?: LotteryContext | null
   /**
    * Decoys for this input's ring. Must contain at least `ringSize() - 1`
    * distinct outputs.
@@ -132,8 +179,28 @@ export interface SignRequest {
 
 /** A chain output (as returned by `chain_getOutputs`) to test for ownership. */
 export interface ChainOutput {
-  /** Legacy payout envelope; retain in history, exclude from independent inputs and decoys. */
+  /**
+   * Lottery payout row. Without a `lotteryContext` it is a LEGACY (V1) payout
+   * envelope: retained in history, excluded from independent inputs and decoys
+   * (#1450). With a context it is an independently keyed V2 payout (#1645).
+   */
   lottery?: boolean
+  /**
+   * V2 lottery payout derivation context (`lotteryContext`), or null/undefined
+   * for an ordinary row. When present the scan checks the base target
+   * `P − T·G` at `baseIndex` instead of the plain check at `P` (#1645).
+   */
+  lotteryContext?: LotteryContext | null
+  /**
+   * The output's original derivation index (`cryptoOutputIndex`). For a V2
+   * payout this is `lotteryContext.baseIndex`, NOT the payout outpoint index.
+   * Informational; adapters already map it into `outputIndex`.
+   */
+  cryptoOutputIndex?: number
+  /** For a V2 payout: the winning source outpoint, `"<hash>:<index>"`. */
+  winnerOutpoint?: string
+  /** The output's stored cluster tags (`[clusterId, weight]` pairs). */
+  clusterTags?: Array<[number, number]>
   /** Hex-encoded 32-byte one-time target key of the output. */
   targetKey: string
   /** Hex-encoded 32-byte ephemeral public key of the output. */
@@ -195,6 +262,11 @@ export interface OwnedOutput {
    * output — preserved from the scan for hybrid spend-key recovery (#988).
    */
   kemCiphertext?: string | null
+  /**
+   * The V2 lottery payout context the output was discovered under, or absent
+   * for an ordinary output — preserved for key-image and spend recovery (#1645).
+   */
+  lotteryContext?: LotteryContext | null
 }
 
 /**
@@ -230,6 +302,8 @@ export interface OwnedOutputKeyImage {
   outputIndex?: number
   /** The owned output's ML-KEM-768 ciphertext (hex), or null (#988). */
   kemCiphertext?: string | null
+  /** The V2 lottery payout context, preserved from the scan (#1645). */
+  lotteryContext?: LotteryContext | null
   /**
    * Hex-encoded 32-byte key image. Querying the node's
    * `chain_areKeyImagesSpent` RPC with this value reveals whether the output

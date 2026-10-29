@@ -9,7 +9,7 @@
 use bth_account_keys::{AccountKey, PublicAddress};
 use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 use bth_transaction_clsag::{
-    ClsagRingInput, MemoPayload, RingMember, Transaction, TxOutput, DEFAULT_RING_SIZE,
+    lottery_v2, ClsagRingInput, MemoPayload, RingMember, Transaction, TxOutput, DEFAULT_RING_SIZE,
     DUST_THRESHOLD, MIN_TX_FEE,
 };
 use rand_core::{CryptoRng, Rng};
@@ -56,9 +56,79 @@ pub struct SpendInput {
     /// and the produced ring signature would be invalid (#988).
     #[serde(default)]
     pub kem_ciphertext: Option<String>,
+    /// V2 lottery payout derivation context (#1286 / #1645), or `None` for an
+    /// ordinary output. When present, the one-time key is recovered through
+    /// [`lottery_v2::recover_with_context`]: the base output (target
+    /// `P − T·G`) is recovered at `context.baseIndex`, the tweak is added, and
+    /// `x·G == P` is checked before the key is used for signing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lottery_context: Option<LotteryContext>,
     /// Decoys for this input's ring. Must contain at least `ringSize - 1`
     /// distinct outputs (the signer uses exactly `ringSize - 1`).
     pub decoys: Vec<DecoyOutput>,
+}
+
+/// The V2 lottery payout derivation context, exactly as `chain_getOutputs`
+/// serves it on a lottery payout row (`lotteryContext`, frozen RPC contract
+/// for #1641):
+///
+/// ```json
+/// { "version": 2, "baseIndex": 3, "tweak": "<64 hex>", "ordinal": 0, "height": 1234 }
+/// ```
+///
+/// A V2 payout's one-time key is `P = P_base + T·G`, where `T` is the
+/// cumulative `tweak` and `P_base` is the original (ordinary) output's key
+/// derived at `baseIndex`. A wallet scans the base target `P − T·G` at index
+/// `baseIndex` and recovers `x = x_base + T`, checking `x·G == P`.
+///
+/// The context is NOT chain authentication: the wallet trusts the node it
+/// queries for it. A forged context can only make the wallet miss a payout
+/// (no ownership) or build a spend the ledger rejects; the `x·G == P` check
+/// means it can never make the wallet sign with a key that does not own the
+/// output. Everything stays client-side (self-custody red line).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LotteryContext {
+    /// Context encoding version. Only [`lottery_v2::CONTEXT_VERSION`] (2) is
+    /// accepted.
+    pub version: u8,
+    /// The original derivation index `j` of the lineage's base output (equals
+    /// the row's `cryptoOutputIndex`, NOT the payout outpoint index).
+    pub base_index: u32,
+    /// Hex-encoded 32-byte canonical scalar `T` (the cumulative tweak).
+    pub tweak: String,
+    /// The award's ordinal within its block's payout manifest (informational).
+    pub ordinal: u32,
+    /// The block height the payout was created at (informational).
+    pub height: u64,
+}
+
+impl LotteryContext {
+    /// Validate and convert to the shared [`lottery_v2::Context`]. Rejects an
+    /// unknown version, a malformed or non-canonical tweak scalar, and the zero
+    /// tweak (a payout always carries a nonzero cumulative tweak; zero would
+    /// make the "payout" an alias of its source, the #1450 legacy shape).
+    pub fn to_context(&self) -> Result<lottery_v2::Context, String> {
+        if self.version != lottery_v2::CONTEXT_VERSION {
+            return Err(format!(
+                "lotteryContext.version: unsupported version {} (expected {})",
+                self.version,
+                lottery_v2::CONTEXT_VERSION
+            ));
+        }
+        let tweak = parse_hex_32("lotteryContext.tweak", &self.tweak)?;
+        if tweak == [0u8; 32] {
+            return Err("lotteryContext.tweak: zero tweak is not a V2 payout".to_string());
+        }
+        let context = lottery_v2::Context {
+            base_index: self.base_index,
+            tweak,
+        };
+        context
+            .encode()
+            .map_err(|e| format!("lotteryContext: invalid context: {e:?}"))?;
+        Ok(context)
+    }
 }
 
 /// A recipient address: the two 32-byte Ristretto stealth keys PLUS the
@@ -562,16 +632,17 @@ pub fn build_and_sign_with_rng<R: CryptoRng>(
             cluster_tags: Default::default(),
             kem_ciphertext,
         };
-        let onetime_private = match &kem_keypair {
-            Some(kp) => real_output.recover_spend_key_for(
-                &account,
-                kp,
-                input.subaddress_index,
-                input.output_index,
-            ),
-            None => real_output.recover_spend_key(&account, input.subaddress_index),
-        }
-        .ok_or("failed to recover one-time private key for input")?;
+        // A V2 lottery payout input recovers through its context and the
+        // `x·G == P` check (#1645); the ring member stays the payout key `P`.
+        let onetime_private = recover_onetime_private_key(
+            &real_output,
+            &account,
+            kem_keypair.as_ref(),
+            input.subaddress_index,
+            input.output_index,
+            input.lottery_context.as_ref(),
+        )
+        .map_err(|e| format!("input: {e}"))?;
 
         // Assemble the ring: real member + (ringSize - 1) decoys, then shuffle
         // so the real input's position is hidden.
@@ -646,6 +717,13 @@ pub struct ChainOutput {
     /// ML-KEM secret to detect the hybrid one-time key (issue #970/#988).
     #[serde(default)]
     pub kem_ciphertext: Option<String>,
+    /// V2 lottery payout context (`lotteryContext` from `chain_getOutputs`),
+    /// or `None` for an ordinary output. When present the scan checks the base
+    /// target `P − T·G` at `baseIndex` and proves `x·G == P` (#1645). A
+    /// context-less legacy lottery row is scanned as before; producers exclude
+    /// it from inputs and decoys (#1450).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lottery_context: Option<LotteryContext>,
 }
 
 /// A scan request: the account's private keys plus candidate chain outputs.
@@ -699,6 +777,11 @@ pub struct OwnedOutput {
     /// derivation dispatches down the same hybrid-when-present path (#988).
     #[serde(default)]
     pub kem_ciphertext: Option<String>,
+    /// The V2 lottery payout context the output was discovered under, or
+    /// `None` for an ordinary output. Preserved so key-image derivation and
+    /// spend recovery go through [`lottery_v2::recover_with_context`] (#1645).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lottery_context: Option<LotteryContext>,
 }
 
 /// Derive the wallet's ML-KEM-768 secret keypair from its hex BIP39 seed, using
@@ -730,6 +813,88 @@ fn parse_kem_ciphertext(field: &str, ct: &Option<String>) -> Result<Option<Vec<u
         Some(s) => {
             let bytes = hex::decode(s.trim()).map_err(|e| format!("{field}: invalid hex: {e}"))?;
             Ok(Some(bytes))
+        }
+    }
+}
+
+/// Ordinary (context-less) ownership check at `output_index`, dispatching on
+/// whether an ML-KEM secret is available (the pre-#1645 scan rule).
+fn detect_ordinary(
+    output: &TxOutput,
+    account: &AccountKey,
+    kem_keypair: Option<&bth_crypto_pq::MlKem768KeyPair>,
+    output_index: u32,
+) -> Option<u64> {
+    match kem_keypair {
+        Some(kp) => output.belongs_to_account(account, kp, output_index),
+        None => output.belongs_to(account),
+    }
+}
+
+/// Ordinary one-time private key recovery at `output_index` for a known
+/// subaddress (the pre-#1645 recovery rule).
+fn recover_ordinary(
+    output: &TxOutput,
+    account: &AccountKey,
+    kem_keypair: Option<&bth_crypto_pq::MlKem768KeyPair>,
+    subaddress_index: u64,
+    output_index: u32,
+) -> Option<RistrettoPrivate> {
+    match kem_keypair {
+        Some(kp) => output.recover_spend_key_for(account, kp, subaddress_index, output_index),
+        None => output.recover_spend_key(account, subaddress_index),
+    }
+}
+
+/// Scan a V2 lottery payout: test the base target `P − T·G` at
+/// `context.baseIndex` with the ordinary ownership rule, then recover the
+/// tweaked key through [`lottery_v2::recover_with_context`], which proves
+/// `x·G == P`. Returns the owning subaddress, or `None` when the payout is not
+/// ours OR the context is malformed / forged (a forged context can only cause
+/// a missed payout, never a wrong key).
+pub fn detect_lottery_payout(
+    output: &TxOutput,
+    account: &AccountKey,
+    kem_keypair: Option<&bth_crypto_pq::MlKem768KeyPair>,
+    context: &LotteryContext,
+) -> Option<u64> {
+    let context = context.to_context().ok()?;
+    let mut owner = None;
+    lottery_v2::recover_with_context(output, &context, |base, index| {
+        let subaddress_index = detect_ordinary(base, account, kem_keypair, index)?;
+        owner = Some(subaddress_index);
+        recover_ordinary(base, account, kem_keypair, subaddress_index, index)
+    })
+    .ok()?;
+    owner
+}
+
+/// Recover an owned output's one-time private key on the single shared path
+/// used by key-image derivation AND signing.
+///
+/// * No lottery context: the ordinary hybrid-when-present rule at
+///   `output_index` (#988).
+/// * V2 lottery context: [`lottery_v2::recover_with_context`] recovers the base
+///   key at `context.baseIndex` (NOT `output_index`), adds the tweak and checks
+///   `x·G == P` (#1645). A mismatch is a hard error, so the wallet never signs
+///   with a key that does not own the payout.
+pub fn recover_onetime_private_key(
+    output: &TxOutput,
+    account: &AccountKey,
+    kem_keypair: Option<&bth_crypto_pq::MlKem768KeyPair>,
+    subaddress_index: u64,
+    output_index: u32,
+    lottery_context: Option<&LotteryContext>,
+) -> Result<RistrettoPrivate, String> {
+    match lottery_context {
+        None => recover_ordinary(output, account, kem_keypair, subaddress_index, output_index)
+            .ok_or_else(|| "failed to recover one-time private key".to_string()),
+        Some(context) => {
+            let context = context.to_context()?;
+            lottery_v2::recover_with_context(output, &context, |base, index| {
+                recover_ordinary(base, account, kem_keypair, subaddress_index, index)
+            })
+            .map_err(|e| format!("failed to recover V2 lottery payout key: {e:?}"))
         }
     }
 }
@@ -776,9 +941,15 @@ pub fn scan_owned_outputs_inner(req: &ScanRequest) -> Result<Vec<OwnedOutput>, S
         // ciphertext-bearing output and folds the secret into the classical DH
         // stealth check; a KEM-less output falls through to the classical path.
         // Without a seed we can only run the classical check.
-        let detected = match &kem_keypair {
-            Some(kp) => tx_out.belongs_to_account(&account, kp, out.output_index),
-            None => tx_out.belongs_to(&account),
+        //
+        // A V2 lottery payout (row carries `lotteryContext`, #1645) is keyed
+        // `P = P_base + T·G`, so the plain check at `P` can never match: scan the
+        // base target `P − T·G` at `baseIndex` and prove `x·G == P` instead.
+        let detected = match &out.lottery_context {
+            Some(context) => {
+                detect_lottery_payout(&tx_out, &account, kem_keypair.as_ref(), context)
+            }
+            None => detect_ordinary(&tx_out, &account, kem_keypair.as_ref(), out.output_index),
         };
         if let Some(subaddress_index) = detected {
             owned.push(OwnedOutput {
@@ -788,6 +959,7 @@ pub fn scan_owned_outputs_inner(req: &ScanRequest) -> Result<Vec<OwnedOutput>, S
                 subaddress_index,
                 output_index: out.output_index,
                 kem_ciphertext: out.kem_ciphertext.clone(),
+                lottery_context: out.lottery_context.clone(),
             });
         }
     }
@@ -839,6 +1011,9 @@ pub struct OwnedOutputKeyImage {
     /// classical/legacy output, preserved from the scan (issue #988).
     #[serde(default)]
     pub kem_ciphertext: Option<String>,
+    /// The V2 lottery payout context, preserved from the scan (#1645).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lottery_context: Option<LotteryContext>,
     /// Hex-encoded 32-byte key image. Querying the node's
     /// `chain_areKeyImagesSpent` RPC with this value reveals whether the output
     /// has already been spent on-chain (or is pending in the mempool).
@@ -878,13 +1053,16 @@ pub fn compute_owned_output_key_images_inner(
         // Recover the one-time spend key on the same unified path as the scan:
         // a hybrid (ciphertext-bearing) output needs the ML-KEM secret + its
         // bound `output_index`; a KEM-less output uses classical recovery.
-        let onetime_private = match &kem_keypair {
-            Some(kp) => {
-                tx_out.recover_spend_key_for(&account, kp, out.subaddress_index, out.output_index)
-            }
-            None => tx_out.recover_spend_key(&account, out.subaddress_index),
-        }
-        .ok_or("failed to recover one-time private key for owned output")?;
+        // A V2 lottery payout recovers through its context (#1645).
+        let onetime_private = recover_onetime_private_key(
+            &tx_out,
+            &account,
+            kem_keypair.as_ref(),
+            out.subaddress_index,
+            out.output_index,
+            out.lottery_context.as_ref(),
+        )
+        .map_err(|e| format!("owned output: {e}"))?;
         let key_image = KeyImage::from(&onetime_private);
         result.push(OwnedOutputKeyImage {
             target_key: out.target_key.clone(),
@@ -893,6 +1071,7 @@ pub fn compute_owned_output_key_images_inner(
             subaddress_index: out.subaddress_index,
             output_index: out.output_index,
             kem_ciphertext: out.kem_ciphertext.clone(),
+            lottery_context: out.lottery_context.clone(),
             key_image: hex::encode(key_image.as_bytes()),
         });
     }
@@ -929,6 +1108,9 @@ fn shuffle<T, R: Rng>(items: &mut [T], rng: &mut R) {
         items.swap(i, j);
     }
 }
+
+#[cfg(test)]
+mod lottery_v2_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1016,6 +1198,7 @@ mod tests {
                 amount: owned_amount,
                 subaddress_index: 0,
                 decoys,
+                lottery_context: None,
             }],
             recipient: recipient_of(&recipient_account),
             sender_kem_public_key: kem_public_hex(&pq_keys(0xCD)),
@@ -1093,6 +1276,7 @@ mod tests {
                 subaddress_index: 0,
                 output_index: 0,
                 kem_ciphertext: None,
+                lottery_context: None,
             }],
         };
         let computed = compute_owned_output_key_images_inner(&ki_req).unwrap();
@@ -1114,6 +1298,7 @@ mod tests {
                 amount: owned_amount,
                 subaddress_index: 0,
                 decoys,
+                lottery_context: None,
             }],
             recipient: recipient_of(&recipient_account),
             sender_kem_public_key: kem_public_hex(&pq_keys(0xCD)),
@@ -1154,6 +1339,7 @@ mod tests {
                     amount: 1_000_000_000,
                     output_index: 0,
                     kem_ciphertext: None,
+                    lottery_context: None,
                 },
                 ChainOutput {
                     target_key: hex::encode(theirs.target_key),
@@ -1161,6 +1347,7 @@ mod tests {
                     amount: 2_000_000_000,
                     output_index: 0,
                     kem_ciphertext: None,
+                    lottery_context: None,
                 },
             ],
         };
@@ -1253,6 +1440,7 @@ mod tests {
             amount: o.amount,
             output_index: 0,
             kem_ciphertext: o.kem_ciphertext.as_ref().map(hex::encode),
+            lottery_context: None,
         };
 
         let req = ScanRequest {
@@ -1312,6 +1500,7 @@ mod tests {
             amount: o.amount,
             output_index: 0,
             kem_ciphertext: o.kem_ciphertext.as_ref().map(hex::encode),
+            lottery_context: None,
         };
 
         let req = ScanRequest {
@@ -1500,6 +1689,7 @@ mod tests {
                 amount: owned_amount,
                 subaddress_index: 0,
                 decoys,
+                lottery_context: None,
             }],
             recipient: recipient_of_with_pq(&recipient_account, &recipient_pq),
             sender_kem_public_key: kem_public_hex(&sender_pq),
@@ -1577,6 +1767,7 @@ mod tests {
                 amount: funder_amount,
                 subaddress_index: 0,
                 decoys: make_decoys(DEFAULT_RING_SIZE - 1, funder_amount, &mut rng),
+                lottery_context: None,
             }],
             recipient: recipient_of_with_pq(&wallet, &wallet_pq),
             sender_kem_public_key: kem_public_hex(&funder_pq),
@@ -1614,6 +1805,7 @@ mod tests {
                 amount: received_amount,
                 subaddress_index: 0,
                 decoys: make_decoys(DEFAULT_RING_SIZE - 1, received_amount, &mut rng),
+                lottery_context: None,
             }],
             recipient: recipient_of(&funder),
             sender_kem_public_key: kem_public_hex(&wallet_pq),
@@ -1666,6 +1858,7 @@ mod tests {
                 amount: owned_amount,
                 subaddress_index: 0,
                 decoys,
+                lottery_context: None,
             }],
             recipient,
             sender_kem_public_key: kem_public_hex(&pq_keys(0xCD)),
@@ -1701,6 +1894,7 @@ mod tests {
             amount: out.amount,
             output_index,
             kem_ciphertext: out.kem_ciphertext.as_ref().map(hex::encode),
+            lottery_context: None,
         }
     }
 
@@ -1740,6 +1934,7 @@ mod tests {
                 amount: owned_amount,
                 subaddress_index: 0,
                 decoys,
+                lottery_context: None,
             }],
             recipient: recipient_of_with_pq(&recipient_account, &recipient_pq),
             sender_kem_public_key: kem_public_hex(&pq_keys(0x11)),
@@ -1831,6 +2026,7 @@ mod tests {
                 amount: owned_amount,
                 subaddress_index: 0,
                 decoys,
+                lottery_context: None,
             }],
             recipient: recipient_of_with_pq(&recipient_account, &recipient_pq),
             sender_kem_public_key: kem_public_hex(&sender_pq),
@@ -1923,6 +2119,7 @@ mod tests {
                 amount: owned_amount,
                 subaddress_index: 0,
                 decoys,
+                lottery_context: None,
             }],
             recipient: recipient_of_with_pq(&recipient_account, &recipient_pq),
             sender_kem_public_key: kem_public_hex(&pq_keys(0x11)),
@@ -1988,6 +2185,7 @@ mod tests {
                 amount: owned_amount,
                 subaddress_index: 0,
                 decoys,
+                lottery_context: None,
             }],
             recipient: recipient_of_with_pq(&deposit_account, &deposit_pq),
             sender_kem_public_key: kem_public_hex(&pq_keys(0xcd)),

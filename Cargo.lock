@@ -2776,6 +2776,7 @@ dependencies = [
  "rand_core 0.10.1",
  "serde",
  "serde-wasm-bindgen",
+ "serde_json",
  "wasm-bindgen",
 ]
 

@@ -15,8 +15,11 @@
  */
 
 import {
+  isLegacyLotteryPayout,
+  isV2LotteryPayout,
   loadSigner,
   type ChainOutput,
+  type LotteryContext,
   type OwnedOutput,
   type RecipientAddress,
   type SignRequest,
@@ -124,7 +127,22 @@ export async function spendableOwnedOutputs(
       // 6.0.0 one-time key; the ciphertext is decapsulated at signing time).
       outputIndex: o.outputIndex,
       kemCiphertext: o.kemCiphertext ?? null,
+      // A V2 lottery payout recovers through its derivation context (#1645).
+      ...(o.lotteryContext ? { lotteryContext: o.lotteryContext } : {}),
     }))
+}
+
+/** Equal when both are absent, or both present with the same derivation. */
+function sameLotteryContext(
+  a: LotteryContext | null | undefined,
+  b: LotteryContext | null | undefined,
+): boolean {
+  if (a == null || b == null) return a == null && b == null
+  return (
+    a.version === b.version &&
+    a.baseIndex === b.baseIndex &&
+    a.tweak.toLowerCase() === b.tweak.toLowerCase()
+  )
 }
 
 /**
@@ -269,6 +287,8 @@ export async function buildOwnedHistory(
       // Preserve the hybrid metadata so 6.0.0 outputs are detected (#988).
       outputIndex: c.outputIndex,
       kemCiphertext: c.kemCiphertext,
+      // V2 lottery payouts are discovered through their context (#1645).
+      lotteryContext: c.lotteryContext ?? null,
     })),
   })
   if (owned.length === 0) return []
@@ -569,9 +589,12 @@ export async function buildSendTransaction(
 
   // Resolve each target once in chain order before selecting inputs or decoys.
   // Preserve the complete scan for accounting, including unsupported receipts.
+  // Legacy (context-less) lottery payouts alias their source's key, so they are
+  // never canonical (#1450). V2 payouts carry a derivation context and their own
+  // one-time key, so they are canonical inputs (#1645).
   const canonical = new Map<string, ChainOutput>()
   for (const candidate of candidates) {
-    if (candidate.lottery !== true && !canonical.has(candidate.targetKey)) {
+    if (!isLegacyLotteryPayout(candidate) && !canonical.has(candidate.targetKey)) {
       canonical.set(candidate.targetKey, candidate)
     }
   }
@@ -581,6 +604,7 @@ export async function buildSendTransaction(
     if (!original || original.publicKey !== input.publicKey ||
         toBigInt(original.amount) !== toBigInt(input.amount) ||
         (original.outputIndex ?? 0) !== (input.outputIndex ?? 0) ||
+        !sameLotteryContext(original.lotteryContext, input.lotteryContext) ||
         seenInputs.has(input.targetKey)) return false
     seenInputs.add(input.targetKey)
     return true
@@ -605,10 +629,16 @@ export async function buildSendTransaction(
   // the real inputs). In particular decoys MAY be the wallet's own other
   // outputs; requiring foreign-only decoys would make a solo-mined / low-
   // traffic chain unspendable. We still drop the all-zero genesis placeholder.
+  // Lottery payouts (legacy AND V2) stay out of the decoy set for now, matching
+  // the native wallet's initial V2 policy (#1642).
   const inputKeys = new Set(inputs.map((o) => o.targetKey))
   const isZeroKey = (k: string) => /^0+$/.test(k)
   const decoyPool = [...canonical.values()].filter(
-    (c) => c.lottery !== true && !inputKeys.has(c.targetKey) && !isZeroKey(c.targetKey),
+    (c) =>
+      c.lottery !== true &&
+      !isV2LotteryPayout(c) &&
+      !inputKeys.has(c.targetKey) &&
+      !isZeroKey(c.targetKey),
   )
   if (decoyPool.length < decoysPerInput) {
     throw new Error(
@@ -637,6 +667,9 @@ export async function buildSendTransaction(
       // the wrong one-time key and fail CLSAG verification.
       output_index: input.outputIndex ?? 0,
       kem_ciphertext: input.kemCiphertext ?? null,
+      // V2 lottery payout input: the signer recovers x = x_base + T and checks
+      // x·G == P before signing (#1645).
+      lottery_context: input.lotteryContext ?? null,
       decoys: decoys.map((d) => ({
         target_key: d.targetKey,
         public_key: d.publicKey,

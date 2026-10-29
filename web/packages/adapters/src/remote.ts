@@ -78,6 +78,78 @@ function normalizeOutputIndex(outputIndex: number): number {
 }
 
 /**
+ * V2 lottery payout derivation context on a `chain_getOutputs` row (frozen RPC
+ * contract of #1641). Structurally identical to `@botho/wasm-signer`'s
+ * `LotteryContext`; passed through unchanged to the client-side signer, which
+ * scans the base target `P − T·G` at `baseIndex` (#1645).
+ */
+export interface RpcLotteryContext {
+  version: number
+  baseIndex: number
+  tweak: string
+  ordinal: number
+  height: number
+}
+
+/** One `chain_getOutputs` output row as the node serves it. */
+interface RpcOutputRow {
+  txHash: string
+  outputIndex: number
+  /** Original derivation index; for a V2 payout, `lotteryContext.baseIndex`. */
+  cryptoOutputIndex?: number
+  targetKey: string
+  publicKey: string
+  amountCommitment: string
+  kemCiphertext?: string | null
+  lottery?: boolean
+  lotteryContext?: RpcLotteryContext | null
+  winnerOutpoint?: string
+  clusterTags?: Array<[number, number]>
+}
+
+/** The decoded scan/send view of one output row. */
+export interface RawChainOutput {
+  targetKey: string
+  publicKey: string
+  amount: bigint
+  outputIndex: number
+  kemCiphertext: string | null
+  /** Lottery payout row: legacy when `lotteryContext` is absent (#1450). */
+  lottery: boolean
+  /** V2 lottery payout derivation context, or null for other rows (#1645). */
+  lotteryContext: RpcLotteryContext | null
+  /** For a V2 payout: the winning source outpoint (`hash:index`). */
+  winnerOutpoint?: string
+  /** Stored cluster tags (`[clusterId, weight]`), when the node serves them. */
+  clusterTags?: Array<[number, number]>
+}
+
+/**
+ * Decode an output row. The index used for one-time-key derivation is the
+ * row's `cryptoOutputIndex` when served (it equals `outputIndex` for ordinary
+ * outputs, `MINTING_OUTPUT_INDEX` for the coinbase and `baseIndex` for a V2
+ * payout); older nodes without it fall back to the normalized `outputIndex`.
+ */
+function decodeOutputRow(output: RpcOutputRow): RawChainOutput {
+  const decoded: RawChainOutput = {
+    targetKey: output.targetKey,
+    publicKey: output.publicKey,
+    amount: leHexToBigInt(output.amountCommitment),
+    outputIndex:
+      typeof output.cryptoOutputIndex === 'number'
+        ? output.cryptoOutputIndex
+        : normalizeOutputIndex(output.outputIndex),
+    // ML-KEM ciphertext (hex) or null for a classical/legacy output (#970).
+    kemCiphertext: output.kemCiphertext ?? null,
+    lottery: output.lottery === true,
+    lotteryContext: output.lotteryContext ?? null,
+  }
+  if (output.winnerOutpoint !== undefined) decoded.winnerOutpoint = output.winnerOutpoint
+  if (output.clusterTags !== undefined) decoded.clusterTags = output.clusterTags
+  return decoded
+}
+
+/**
  * Wire shape of `getBlockByHeight` / `getBlockByHash` results. The
  * `transactions` / `totalFees` / `lottery` fields are the additive explorer
  * enrichment from #700 — older nodes omit them, so they are all optional and
@@ -405,46 +477,19 @@ export class RemoteNodeAdapter implements NodeAdapter {
   async getRawOutputs(
     startHeight: number,
     endHeight: number,
-  ): Promise<
-    Array<{
-      targetKey: string
-      publicKey: string
-      amount: bigint
-      outputIndex: number
-      kemCiphertext: string | null
-      lottery: boolean
-    }>
-  > {
+  ): Promise<RawChainOutput[]> {
     const result = await this.call<Array<{
       height: number
-      outputs: Array<{
-        txHash: string
-        outputIndex: number
-        targetKey: string
-        publicKey: string
-        amountCommitment: string
-        kemCiphertext?: string | null
-        lottery?: boolean
-      }>
+      outputs: RpcOutputRow[]
     }>>('chain_getOutputs', {
       start_height: startHeight,
       end_height: endHeight,
     })
 
-    return result.flatMap((block) =>
-      block.outputs.map((output) => ({
-        targetKey: output.targetKey,
-        publicKey: output.publicKey,
-        amount: leHexToBigInt(output.amountCommitment),
-        // The output's tx position, needed to detect 6.0.0 hybrid outputs
-        // (#988). The node reports a coinbase as u32::MAX; normalize it to the
-        // index its one-time key is actually bound to (MINTING_OUTPUT_INDEX=0).
-        outputIndex: normalizeOutputIndex(output.outputIndex),
-        // ML-KEM ciphertext (hex) or null for a classical/legacy output (#970).
-        kemCiphertext: output.kemCiphertext ?? null,
-        lottery: output.lottery === true,
-      })),
-    )
+    // Each row keeps the index its hybrid one-time key is bound to (#988; the
+    // coinbase u32::MAX sentinel is normalized) and any V2 lottery payout
+    // context, so the client-side signer can discover and spend it (#1645).
+    return result.flatMap((block) => block.outputs.map(decodeOutputRow))
   }
 
   /**
@@ -458,29 +503,10 @@ export class RemoteNodeAdapter implements NodeAdapter {
   async getRawOutputsWithMeta(
     startHeight: number,
     endHeight: number,
-  ): Promise<
-    Array<{
-      txHash: string
-      height: number
-      targetKey: string
-      publicKey: string
-      amount: bigint
-      outputIndex: number
-      kemCiphertext: string | null
-      lottery: boolean
-    }>
-  > {
+  ): Promise<Array<RawChainOutput & { txHash: string; height: number }>> {
     const result = await this.call<Array<{
       height: number
-      outputs: Array<{
-        txHash: string
-        outputIndex: number
-        targetKey: string
-        publicKey: string
-        amountCommitment: string
-        kemCiphertext?: string | null
-        lottery?: boolean
-      }>
+      outputs: RpcOutputRow[]
     }>>('chain_getOutputs', {
       start_height: startHeight,
       end_height: endHeight,
@@ -490,13 +516,8 @@ export class RemoteNodeAdapter implements NodeAdapter {
       block.outputs.map((output) => ({
         txHash: output.txHash,
         height: block.height,
-        targetKey: output.targetKey,
-        publicKey: output.publicKey,
-        amount: leHexToBigInt(output.amountCommitment),
-        // Hybrid-detection metadata (#988), coinbase sentinel normalized.
-        outputIndex: normalizeOutputIndex(output.outputIndex),
-        kemCiphertext: output.kemCiphertext ?? null,
-        lottery: output.lottery === true,
+        // Hybrid-detection metadata (#988) and any V2 payout context (#1645).
+        ...decodeOutputRow(output),
       })),
     )
   }

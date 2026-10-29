@@ -61,3 +61,6 @@ getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] 
 
 [dev-dependencies]
 rand = { workspace = true, features = ["thread_rng"] }
+# Parses the committed V2 lottery payout vector (test/fixtures/lottery-v2-payout.json)
+# that the native tests and the real-WASM vitest suite both check (#1645).
+serde_json = "1"
