@@ -12,7 +12,12 @@ https://github.com/botho-project/botho/issues/1641#issuecomment-6488144384):
   ("hash:index"). Its one-time key P = P_base + T*G is distinct, so a V2
   payout is canonical, spendable campaign inventory, and income in accounting.
 
-Any other combination is a malformed row and fails closed.
+Any other combination is a malformed row and fails closed. The context is
+validated as strictly as the native signer's ``LotteryContext`` (P5, #1642):
+exactly the five frozen keys (the signer is ``deny_unknown_fields``, so an
+extra key would fail every signer request carrying the row; a new field needs
+a contract version bump), wire-type ranges (``version`` u8, ``baseIndex`` and
+``ordinal`` u32, ``height`` u64), and a nonzero canonical tweak scalar.
 """
 
 import re
@@ -25,8 +30,22 @@ _HEX64 = re.compile(r'[0-9a-f]{64}')
 _OUTPOINT = re.compile(r'([0-9a-fA-F]{64}):(0|[1-9][0-9]{0,9})')
 
 
-def _natural(value):
-    return type(value) is int and value >= 0
+CONTEXT_KEYS = frozenset({'version', 'baseIndex', 'tweak', 'ordinal', 'height'})
+# Ristretto255 / ed25519 group order: a canonical scalar is < L, little-endian.
+GROUP_ORDER = 2**252 + 27742317777372353535851937790883648493
+_U32, _U64 = 1 << 32, 1 << 64
+
+
+def _natural(value, bound=_U64):
+    return type(value) is int and 0 <= value < bound
+
+
+def canonical_tweak(tweak):
+    """The signer's tweak rule: 64 lowercase hex, nonzero, canonical (< L, LE)."""
+    if not isinstance(tweak, str) or not _HEX64.fullmatch(tweak):
+        return False
+    scalar = int.from_bytes(bytes.fromhex(tweak), 'little')
+    return 0 < scalar < GROUP_ORDER
 
 
 def lottery_context(row):
@@ -44,11 +63,13 @@ def lottery_context(row):
     if (
         lottery is not True
         or not isinstance(context, dict)
+        or set(context) != CONTEXT_KEYS
         or type(context.get('version')) is not int
         or context['version'] != LOTTERY_RULES
-        or not all(_natural(context.get(k)) for k in ('baseIndex', 'ordinal', 'height'))
-        or not isinstance(context.get('tweak'), str)
-        or not _HEX64.fullmatch(context['tweak'])
+        or not _natural(context['baseIndex'], _U32)
+        or not _natural(context['ordinal'], _U32)
+        or not _natural(context['height'], _U64)
+        or not canonical_tweak(context['tweak'])
         or row.get('cryptoOutputIndex') != context['baseIndex']
         or type(row.get('cryptoOutputIndex')) is not int
         or match is None

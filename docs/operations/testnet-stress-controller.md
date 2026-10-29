@@ -49,8 +49,12 @@ activate LotteryV2 (#1286).
 carries `lotteryContext`, `cryptoOutputIndex` and `winnerOutpoint`. Its payout
 has its own one-time key, so it is canonical campaign inventory that selection
 may choose as an input; it is never counted as a ring decoy, matching the
-signer. The chain row classifies each output; the signer's `lottery` flag can
-only exclude an ordinary row, never a V2 payout. Accounting counts V2 awards as
+signer. The chain row classifies each output. The signer's scan reports
+`utxo.lottery_context`, and a V2 payout counts as inventory only when that
+equals the row's `lotteryContext` exactly. It must be null on every other row.
+The context is checked as strictly as the signer's: exactly the five frozen
+keys (the signer rejects unknown keys), u8/u32/u64 ranges, and a nonzero tweak
+below the group order. Accounting counts V2 awards as
 lottery income in the same exact `difference`, and reports them apart under
 `lottery_v2` (received and spent counts and picocredits, also summarized at the
 report's top level). Completeness gate: every V2 payout whose `winnerOutpoint`

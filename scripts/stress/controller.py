@@ -1099,14 +1099,20 @@ class Controller:
                 or row.get('outputIndex') != utxo['output_index']
             ):
                 continue
-            # The chain row classifies the output; the signer's flag may not
-            # contradict it. A V2 payout's crypto index, when the signer
-            # reports one, is the context's base index (#1643).
+            # The chain row classifies the output; the signer may not
+            # contradict it (#1643). Its ``lottery_context`` (P5, #1642) must
+            # be the row's exact context on a V2 payout, and absent or null
+            # otherwise: a V2 payout the signer reports without a context is,
+            # to the signer, an unspendable legacy receipt. Its crypto index,
+            # when reported, is the context's base index.
             context = lottery_context(row)
-            if context is None and utxo.get('lottery', False):
-                continue
-            if context is not None and utxo.get('crypto_output_index') not in (
-                    None, context['base_index']):
+            if context is None:
+                if utxo.get('lottery', False) or utxo.get('lottery_context') is not None:
+                    continue
+            elif (
+                utxo.get('lottery_context') != row['lotteryContext']
+                or utxo.get('crypto_output_index') not in (None, context['base_index'])
+            ):
                 continue
             seen.add(key)
             outputs.append(output)

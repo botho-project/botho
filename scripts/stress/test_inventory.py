@@ -96,7 +96,8 @@ class V2LotteryInputTests(unittest.TestCase):
         self.payout = {
             'id': self.PAYOUT, 'key_image': 'award',
             'utxo': {'target_key': [1] * 32, 'amount': 10**12, 'created_at': 100,
-                     'tx_hash': [7] * 32, 'output_index': 1, 'lottery': True},
+                     'tx_hash': [7] * 32, 'output_index': 1, 'lottery': True,
+                     'lottery_context': None},
         }
         self.c.inventory = [[self.payout]]
         self.c.spent = [{'keyImage': 'award', 'spent': False, 'pending': False}]
@@ -104,12 +105,13 @@ class V2LotteryInputTests(unittest.TestCase):
         self.row = {'targetKey': bytes([1] * 32).hex(), 'txHash': bytes([7] * 32).hex(),
                     'outputIndex': 1, 'lottery': True, 'cryptoOutputIndex': 0,
                     'amountCommitment': (10**12).to_bytes(8, 'little').hex(),
-                    'lotteryContext': {'version': 2, 'baseIndex': 0, 'tweak': 'ab' * 32,
+                    'lotteryContext': {'version': 2, 'baseIndex': 0, 'tweak': '03' + '00' * 31,
                                        'ordinal': 0, 'height': 100},
                     'winnerOutpoint': 'cd' * 32 + ':0'}
         self.decoys = [{'targetKey': bytes([i] * 32).hex(), 'txHash': bytes([i] * 32).hex(),
                         'outputIndex': 0} for i in range(2, 21)]
         self.c.blocks = [{'height': 100, 'outputs': [self.row, *self.decoys]}]
+        self.payout['utxo']['lottery_context'] = dict(self.row['lotteryContext'])
 
     def test_v2_award_is_selected_as_a_campaign_input(self):
         self.assertEqual(self.c.canonical_inventory(0), [self.payout])
@@ -121,6 +123,22 @@ class V2LotteryInputTests(unittest.TestCase):
         # The bounded signer history carries the selected row with its context.
         sent = [o for b in prepare_blocks(self.c.blocks, 170, [self.PAYOUT]) for o in b['outputs']]
         self.assertIn(self.row, sent)
+        # Verbatim: the signer needs ``lottery: true`` and the full context.
+        payout = next(o for o in sent if o['txHash'] == self.row['txHash'])
+        self.assertIs(payout['lottery'], True)
+        self.assertEqual(payout['lotteryContext'], self.row['lotteryContext'])
+        self.assertEqual(payout['cryptoOutputIndex'], 0)
+        self.assertEqual(payout['winnerOutpoint'], self.row['winnerOutpoint'])
+
+    def test_prepare_blocks_refuses_a_selected_legacy_payout(self):
+        from runtime import Gate
+
+        del self.row['lotteryContext']
+        with self.assertRaisesRegex(Gate, 'selected legacy lottery payout'):
+            prepare_blocks(self.c.blocks, 170, [self.PAYOUT])
+        self.row['lotteryContext'] = {'version': 2}
+        with self.assertRaisesRegex(Gate, 'malformed V2 lottery row'):
+            prepare_blocks(self.c.blocks, 170, [self.PAYOUT])
 
     def test_v2_payouts_never_count_as_decoys(self):
         # Replace one ordinary decoy with another V2 payout: 18 decoys remain.

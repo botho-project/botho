@@ -118,13 +118,17 @@ class LotteryAccountingTests(unittest.TestCase):
         self.assertEqual(first["aliased_awards_picocredits"], 10)
 
 
+# A canonical nonzero scalar (3), little-endian, as the signer requires.
+TWEAK = "03" + "00" * 31
+
+
 def v2_row(tx, index, target, amount, winner, base=0, **overrides):
     """A chain_getOutputs V2 payout row in the frozen #1641 contract shape."""
     row = {
         "txHash": bytes(tx).hex(), "outputIndex": index, "targetKey": bytes(target).hex(),
         "lottery": True, "amountCommitment": amount.to_bytes(8, "little").hex(),
         "cryptoOutputIndex": base,
-        "lotteryContext": {"version": 2, "baseIndex": base, "tweak": "ab" * 32,
+        "lotteryContext": {"version": 2, "baseIndex": base, "tweak": TWEAK,
                            "ordinal": 0, "height": 20},
         "winnerOutpoint": winner,
     }
@@ -149,7 +153,8 @@ class V2Fixture:
             {"height": 20, "outputs": [v2_row([2] * 32, 1, [2] * 32, 50, self.SOURCE)]},
         ]
         self.own(0, [1] * 32, 0, [1] * 32, 1000, 10, "source")
-        self.own(0, [2] * 32, 1, [2] * 32, 50, 20, "payout", lottery=True)
+        self.own(0, [2] * 32, 1, [2] * 32, 50, 20, "payout", lottery=True,
+                 context=dict(self.c.blocks[1]["outputs"][0]["lotteryContext"]))
         self.c.j.set("opening_balance", 1000)
 
     def tearDown(self):
@@ -161,11 +166,13 @@ class V2Fixture:
         return {"txHash": bytes(tx).hex(), "outputIndex": index, "targetKey": bytes(target).hex(),
                 "lottery": False, "amountCommitment": amount.to_bytes(8, "little").hex()}
 
-    def own(self, wallet, tx, index, target, amount, height, image, lottery=False):
+    def own(self, wallet, tx, index, target, amount, height, image, lottery=False, context=None):
+        # Shaped like the P5 signer's scan/restore ``owned[]`` entry (#1642).
         output = {
             "id": bytes(tx).hex() + ":" + str(index), "key_image": image,
             "utxo": {"tx_hash": list(tx), "output_index": index, "target_key": list(target),
-                     "amount": amount, "created_at": height, "lottery": lottery},
+                     "amount": amount, "created_at": height, "lottery": lottery,
+                     "lottery_context": context},
         }
         self.c.inventory[wallet].append(output)
         if not any(s["keyImage"] == image for s in self.c.spent):
@@ -270,11 +277,64 @@ class V2LotteryAccountingTests(V2Fixture, unittest.TestCase):
         for change in ({"cryptoOutputIndex": 1}, {"lottery": False}, {"winnerOutpoint": "x:1"},
                        {"lotteryContext": {**row["lotteryContext"], "version": 1}},
                        {"lotteryContext": {**row["lotteryContext"], "version": True}},
-                       {"lotteryContext": {**row["lotteryContext"], "tweak": "AB" * 32}}):
+                       {"lotteryContext": {**row["lotteryContext"], "tweak": "0A" + "00" * 31}},
+                       # Exactly the frozen keys: the signer is deny_unknown_fields.
+                       {"lotteryContext": {**row["lotteryContext"], "extra": 1}},
+                       {"lotteryContext": {k: v for k, v in row["lotteryContext"].items()
+                                           if k != "ordinal"}},
+                       # Signer wire types: baseIndex/ordinal u32, height u64.
+                       {"lotteryContext": {**row["lotteryContext"], "baseIndex": 1 << 32},
+                        "cryptoOutputIndex": 1 << 32},
+                       {"lotteryContext": {**row["lotteryContext"], "ordinal": 1 << 32}},
+                       {"lotteryContext": {**row["lotteryContext"], "height": 1 << 64}},
+                       {"lotteryContext": {**row["lotteryContext"], "height": -1}}):
             with self.subTest(change=change):
                 self.c.blocks[1]["outputs"][0] = {**row, **change}
                 with self.assertRaisesRegex(Gate, "malformed V2 lottery row"):
                     self.c.canonical_history()
+
+    def test_tweak_must_be_a_nonzero_canonical_scalar(self):
+        from lottery import GROUP_ORDER, canonical_tweak, lottery_context
+
+        le = lambda n: n.to_bytes(32, "little").hex()
+        for tweak in (le(1), le(3), le(GROUP_ORDER - 1)):
+            self.assertTrue(canonical_tweak(tweak), tweak)
+        for tweak in ("00" * 32, le(GROUP_ORDER), le(GROUP_ORDER + 1), "ff" * 32,
+                      "ab" * 32, "09", None, 3):
+            self.assertFalse(canonical_tweak(tweak), tweak)
+        row = self.c.blocks[1]["outputs"][0]
+        for tweak in ("00" * 32, le(GROUP_ORDER)):
+            with self.subTest(tweak=tweak):
+                bad = {**row, "lotteryContext": {**row["lotteryContext"], "tweak": tweak}}
+                with self.assertRaisesRegex(Gate, "malformed V2 lottery row"):
+                    lottery_context(bad)
+        good = {**row, "lotteryContext": {**row["lotteryContext"], "tweak": le(GROUP_ORDER - 1)}}
+        self.assertEqual(lottery_context(good)["tweak"], le(GROUP_ORDER - 1))
+
+    def test_signer_lottery_context_cross_checks_the_chain_row(self):
+        from controller import compact_owned
+
+        payout = self.c.inventory[0][1]
+        ids = lambda: {o["id"] for o in self.c.canonical_inventory(0)}
+        # Tolerated and retained verbatim in the controller's inventory.
+        self.assertEqual(compact_owned(payout)["utxo"]["lottery_context"],
+                         self.c.blocks[1]["outputs"][0]["lotteryContext"])
+        self.assertIn(self.PAYOUT, ids())
+        context = payout["utxo"]["lottery_context"]
+        for reported in (None, {**context, "tweak": "05" + "00" * 31},
+                         {**context, "ordinal": 1}, "not-a-context"):
+            with self.subTest(reported=reported):
+                payout["utxo"]["lottery_context"] = reported
+                self.assertNotIn(self.PAYOUT, ids())
+        del payout["utxo"]["lottery_context"]  # a pre-P5 signer: legacy to it
+        self.assertNotIn(self.PAYOUT, ids())
+        # The signer never discovered it as V2: the completeness gate fires.
+        self.assertUndiscovered()
+
+    def test_signer_context_on_an_ordinary_row_is_rejected(self):
+        source = self.c.inventory[0][0]
+        source["utxo"]["lottery_context"] = dict(self.c.blocks[1]["outputs"][0]["lotteryContext"])
+        self.assertNotIn(self.SOURCE, {o["id"] for o in self.c.canonical_inventory(0)})
 
     def test_signer_lottery_flag_never_reclassifies_the_chain_row(self):
         payout = self.c.inventory[0][1]

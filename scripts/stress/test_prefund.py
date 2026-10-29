@@ -126,7 +126,9 @@ class Fleet:
                 owned.append({'id': identifier, 'key_image': 'ki-' + identifier, 'utxo': {
                     'target_key': list(bytes.fromhex(meta['target'])), 'tx_hash': list(bytes.fromhex(row['txHash'])),
                     'output_index': row['outputIndex'], 'created_at': block['height'], 'amount': meta['amount'],
-                    'coinbase': meta['coinbase'], 'lottery': meta['lottery']}})
+                    'coinbase': meta['coinbase'], 'lottery': meta['lottery'],
+                    # The P5 signer echoes a V2 row's context (#1642).
+                    'lottery_context': copy.deepcopy(row.get('lotteryContext'))}})
         return address, owned
 
     async def signer(self, request):
@@ -370,7 +372,7 @@ class EndToEndTests(PrefundBase):
                 award = self.fleet.output(self.fleet.height, winner_address, 7 * 10**9, index=1, lottery=True)
                 self.fleet.blocks[self.fleet.height][-1].update(
                     amountCommitment=(7 * 10**9).to_bytes(8, 'little').hex(), cryptoOutputIndex=0,
-                    lotteryContext={'version': 2, 'baseIndex': 0, 'tweak': 'ab' * 32,
+                    lotteryContext={'version': 2, 'baseIndex': 0, 'tweak': '03' + '00' * 31,
                                     'ordinal': 0, 'height': self.fleet.height},
                     winnerOutpoint=tx + ':' + str(index))
         self.assertTrue(done)
