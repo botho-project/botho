@@ -1,21 +1,20 @@
 //! Inactive, private producer/validator boundary. Only tests open this local
 //! chain. Disk schema/rules, not a peer header version, select these rules.
 use super::*;
+#[cfg(test)]
+use crate::ledger::lottery_v2::canonical_config;
 use crate::{
-    block::{BlockLotterySummary, LotteryOutput},
-    consensus::{
-        lottery::{
-            compute_pool_accounting, draw_lottery_winners, reward_cap, BlockLotteryResult,
-            LotteryPoolAccounting,
-        },
-        BlockBuilder, LotteryFeeConfig,
-    },
+    consensus::BlockBuilder,
     ledger::{
-        store::validation::{self, ReadPolicy, RootRule, ValidationReads},
+        // V2 rules are shared with the production ledger (#1637); this
+        // boundary only adapts its pinned store to the rule module's reads.
+        lottery_v2::{self as rules, crypto, fixed, invalid, root, DerivationReads},
+        store::validation::{self, ReadPolicy, ValidationReads},
         ChainState,
     },
 };
-use bth_transaction_clsag::lottery_v2::{self as v2, Award, Domain, Outpoint, Source, Summary};
+use bth_cluster_tax::{LotteryCandidate, LotteryDrawConfig};
+use bth_transaction_clsag::lottery_v2::{self as v2, Outpoint};
 
 const VALIDATED_SCHEMA: &[u8] = b"botho.experimental.lottery-v2.validated.1";
 const RULES: &[u8] = b"local-v2-candidate4-canonical-lottery-v1-fees-easy-pow-1";
@@ -30,35 +29,6 @@ struct PinnedView<'a, 'env> {
     txn: &'a RoTxn<'env>,
 }
 
-fn invalid(s: impl ToString) -> LedgerError {
-    LedgerError::InvalidBlock(s.to_string())
-}
-fn crypto(e: v2::Error) -> LedgerError {
-    invalid(format!("V2 binding: {e:?}"))
-}
-fn fixed<const N: usize>(bytes: &[u8]) -> Result<[u8; N], LedgerError> {
-    bytes.try_into().map_err(|_| encoding("state width"))
-}
-fn canonical_config() -> LotteryFeeConfig {
-    // Deliberately does not read test environment overrides.
-    LotteryFeeConfig {
-        pool_fraction_permille: 800,
-        draw_config: bth_cluster_tax::LotteryDrawConfig::default(),
-    }
-}
-fn root(block: &Block, records: &[Record]) -> Result<[u8; 32], LedgerError> {
-    Ok(v2::body_root(
-        block.minting_tx.hash(),
-        Block::compute_tx_root(&block.transactions),
-        v2::payout_root(records).map_err(crypto)?,
-        v2::summary_root(&Summary {
-            fees: block.lottery_summary.total_fees,
-            distributed: block.lottery_summary.pool_distributed,
-            burned: block.lottery_summary.amount_burned,
-            seed: block.lottery_summary.lottery_seed,
-        }),
-    ))
-}
 fn local_genesis() -> Envelope {
     let mut block = Block::genesis();
     block.header.tx_root = root(&block, &[]).expect("empty local genesis root");
@@ -236,178 +206,47 @@ impl PinnedView<'_, '_> {
     fn source(&self, id: &Outpoint) -> Result<(Utxo, StoredContext), LedgerError> {
         self.output(&UtxoId::new(id.hash, id.index))
     }
-    fn drawing(
-        &self,
-        block: &Block,
-    ) -> Result<(BlockLotteryResult, LotteryPoolAccounting), LedgerError> {
-        let config = canonical_config();
-        if config.draw_config.winners_per_draw > CANDIDATE_MAX_AWARDS {
-            return Err(invalid("experimental award bound"));
-        }
-        let candidates = validation::lottery_candidates(
-            &self.store.tables,
-            self.txn,
-            block.height(),
-            &block.header.prev_block_hash,
-            &config.draw_config,
-            ReadPolicy::Strict,
-            &mut |u| self.output(&u.id).map(|_| ()),
-        )?;
-        let fees = block.transactions.iter().try_fold(0u64, |sum, t| {
-            sum.checked_add(t.fee).ok_or(LedgerError::FeeOverflow)
-        })?;
-        let cap = reward_cap(
-            &candidates,
-            block.height(),
-            block.minting_tx.reward,
-            &config,
-        );
-        let accounting = compute_pool_accounting(
-            fees,
-            block.minting_tx.lottery_emission_share(),
-            self.u128(b"lottery_pool")?,
-            cap,
-            &config,
-        );
-        let draw = draw_lottery_winners(
-            &candidates,
-            fees,
-            &accounting,
-            block.height(),
-            &block.header.prev_block_hash,
-            &config,
-        );
-        if accounting.payout > 0 && !candidates.is_empty() && draw.winners.is_empty() {
-            return Err(inconsistent("positive eligible draw returned no winners"));
-        }
-        Ok((draw, accounting))
-    }
-    fn awards(draw: &BlockLotteryResult) -> Result<Vec<Award>, LedgerError> {
-        draw.winners
-            .iter()
-            .map(|w| {
-                let id =
-                    UtxoId::from_bytes(&w.utxo_id).ok_or_else(|| encoding("winner outpoint"))?;
-                Ok(Award {
-                    winner: Outpoint {
-                        hash: id.tx_hash,
-                        index: id.output_index,
-                    },
-                    amount: w.payout,
-                })
-            })
-            .collect()
-    }
-    fn domain(
-        &self,
-        block: &Block,
-        manifest: [u8; 32],
-        ordinal: usize,
-        amount: u64,
-    ) -> Result<Domain, LedgerError> {
-        Ok(Domain {
-            genesis: fixed(self.metadata(GENESIS)?)?,
-            parent: block.header.prev_block_hash,
-            height: block.height(),
-            ordinary_root: Block::compute_tx_root(&block.transactions),
-            manifest,
-            ordinal: ordinal as u32,
-            amount,
-        })
-    }
     fn validate(&self, e: &Envelope, state: &ChainState) -> Result<u128, LedgerError> {
         e.check()?;
-        // Root comes from independent decoding and recomputation, never from a
-        // supplied validation token. All ordinary checks retain their order.
-        self.validate_ordinary_block(
-            &e.block,
-            state,
-            RootRule::Experimental(root(&e.block, &e.records)?),
-        )?;
-        let (draw, accounting) = self.drawing(&e.block)?;
-        let awards = Self::awards(&draw)?;
-        let manifest = v2::manifest(&awards).map_err(crypto)?;
-        let s = &e.block.lottery_summary;
-        if s.total_fees != draw.total_fees
-            || s.pool_distributed != draw.pool_amount
-            || s.amount_burned != draw.burn_amount
-            || s.lottery_seed != draw.seed
-            || awards.len() != e.records.len()
-        {
-            return Err(invalid("V2 draw/summary/count"));
-        }
-        for (i, (a, r)) in awards.iter().zip(&e.records).enumerate() {
-            let (source, context) = self.source(&a.winner)?;
-            if source.created_at >= e.block.height() {
-                return Err(inconsistent("source height"));
-            }
-            let source_key = Source {
-                outpoint: a.winner.clone(),
-                target: source.output.target_key,
-                context: context.derivation(),
-            };
-            let d = self.domain(&e.block, manifest, i, a.amount)?;
-            r.validate(&source_key, &source.output, &d)
-                .map_err(crypto)?;
-        }
-        Ok(accounting.carryover_after(draw.pool_amount))
+        rules::validate(self, &e.block, &e.records, state)
     }
 }
 impl BlockBuilder {
     // Actual fallible producer, private to this inactive boundary. Producer
     // output grants no authority to write: apply independently validates it.
-    fn apply_lottery_v2(
-        mut block: Block,
-        view: &PinnedView<'_, '_>,
-    ) -> Result<Envelope, LedgerError> {
+    fn apply_lottery_v2(block: Block, view: &PinnedView<'_, '_>) -> Result<Envelope, LedgerError> {
         let state = view.state()?;
         if block.height() != state.height + 1 || block.header.prev_block_hash != state.tip_hash {
             return Err(invalid("producer pre-state"));
         }
-        let (draw, _) = view.drawing(&block)?;
-        let awards = PinnedView::awards(&draw)?;
-        let manifest = v2::manifest(&awards).map_err(crypto)?;
-        let mut records = Vec::with_capacity(awards.len());
-        for (i, a) in awards.iter().enumerate() {
-            let (source, context) = view.source(&a.winner)?;
-            let derived = v2::derive(
-                &Source {
-                    outpoint: a.winner.clone(),
-                    target: source.output.target_key,
-                    context: context.derivation(),
-                },
-                &view.domain(&block, manifest, i, a.amount)?,
-            )
-            .map_err(crypto)?;
-            records.push(Record {
-                ordinal: i as u32,
-                winner: a.winner.clone(),
-                amount: a.amount,
-                target: derived.target,
-                public_key: source.output.public_key,
-                ciphertext: source.output.kem_ciphertext,
-                context: derived.context,
-            });
-        }
-        block.lottery_outputs = records
-            .iter()
-            .map(|r| LotteryOutput {
-                winner_tx_hash: r.winner.hash,
-                winner_output_index: r.winner.index,
-                payout: r.amount,
-                target_key: r.target,
-                public_key: r.public_key,
-                kem_ciphertext: r.ciphertext.clone(),
-            })
-            .collect();
-        block.lottery_summary = BlockLotterySummary {
-            total_fees: draw.total_fees,
-            pool_distributed: draw.pool_amount,
-            amount_burned: draw.burn_amount,
-            lottery_seed: draw.seed,
-        };
-        block.header.tx_root = root(&block, &records)?;
+        let (block, records) = rules::derive(view, block)?;
         Ok(Envelope { block, records })
+    }
+}
+impl DerivationReads for PinnedView<'_, '_> {
+    fn genesis_hash(&self) -> Result<[u8; 32], LedgerError> {
+        fixed(self.metadata(GENESIS)?)
+    }
+    fn lottery_pool(&self) -> Result<u128, LedgerError> {
+        self.u128(b"lottery_pool")
+    }
+    fn output_context(&self, id: &UtxoId) -> Result<(Utxo, StoredContext), LedgerError> {
+        self.output(id)
+    }
+    fn lottery_candidates(
+        &self,
+        block: &Block,
+        config: &LotteryDrawConfig,
+    ) -> Result<Vec<LotteryCandidate>, LedgerError> {
+        validation::lottery_candidates(
+            &self.store.tables,
+            self.txn,
+            block.height(),
+            &block.header.prev_block_hash,
+            config,
+            ReadPolicy::Strict,
+            &mut |u| self.output(&u.id).map(|_| ()),
+        )
     }
 }
 impl ValidationReads for PinnedView<'_, '_> {
