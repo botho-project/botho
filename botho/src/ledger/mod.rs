@@ -10,7 +10,7 @@ mod lottery_v2;
 mod snapshot;
 mod store;
 
-pub use snapshot::{SnapshotError, UtxoSnapshot};
+pub use snapshot::{SnapshotError, SnapshotV2Contents, UtxoSnapshot, UtxoSnapshotV2};
 /// Test-only `botho.ledger.2` ledger with V2 lottery payouts (#1286 P7).
 #[cfg(test)]
 pub(crate) use store::v2::wallet::fixture as wallet_v2_fixture;
@@ -40,6 +40,17 @@ pub enum LedgerError {
 
     #[error("Block not found: height {0}")]
     BlockNotFound(u64),
+
+    /// The ledger was restored from a V2 snapshot at height `base` (#1646):
+    /// it holds genesis and the blocks from `base` upward, but not `height`
+    /// (0 < height < base). Distinct from [`LedgerError::BlockNotFound`] so
+    /// callers (sync serving, RPC block scans) report "not held here" rather
+    /// than treating the height as past the tip.
+    #[error(
+        "Block {height} is not held: this ledger was restored from a snapshot at height \
+         {base} and holds only genesis and blocks from {base} upward"
+    )]
+    BelowSnapshotBase { height: u64, base: u64 },
 
     #[error("Invalid block: {0}")]
     InvalidBlock(String),

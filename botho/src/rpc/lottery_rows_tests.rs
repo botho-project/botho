@@ -390,6 +390,85 @@ async fn chain_info_and_identity_report_lottery_rules() {
     assert_eq!(identity["lotteryRules"], json!(2));
 }
 
+/// On a ledger restored from a V2 snapshot (#1646), `chain_getOutputs` over
+/// a height the node never held fails with a distinct, actionable error
+/// instead of silently skipping it as "past the tip" (#1664 review): a
+/// scanning wallet must not receive an incomplete output set. Heights from
+/// the base upward and past the tip behave as before.
+#[tokio::test]
+async fn get_outputs_below_snapshot_base_is_an_error_not_a_skip() {
+    let chain = seeded_chain();
+    // One block on top of the payout block, so the payout's block (3) is
+    // strictly below the restored ledger's base (4).
+    let snapshot = {
+        let ledger = chain.state.ledger.read().unwrap();
+        let b4 = child(&chain.b3);
+        ledger
+            .apply_writer_effects_for_test(&b4, &[], 0, None)
+            .unwrap();
+        ledger.create_snapshot().unwrap()
+    };
+    assert_eq!(snapshot.height, 4);
+    let dir = TempDir::new().unwrap();
+    let restored = Ledger::open(dir.path()).unwrap();
+    restored.load_from_snapshot(&snapshot, None).unwrap();
+    assert_eq!(restored.snapshot_base_height().unwrap(), Some(4));
+    let state = RpcState::new(
+        restored,
+        Mempool::new(),
+        Network::Testnet,
+        None,
+        None,
+        vec![],
+        Arc::new(WsBroadcaster::new(16)),
+    );
+    let params = |start: u64, end: u64| json!({"start_height": start, "end_height": end});
+    // A range crossing the gap (including the below-base payout block) fails
+    // closed, naming the base so the caller can act on it.
+    for (start, end, first_missing) in [(0, 6, 1), (3, 3, 3), (2, 4, 2)] {
+        let resp = handle_get_outputs(json!(1), &params(start, end), &state).await;
+        assert!(resp.result.is_none(), "{start}..={end} returned rows");
+        let error = resp.error.expect("below-base range must be an error");
+        assert_eq!(error.code, -32000, "{start}..={end}: {}", error.message);
+        assert!(
+            error.message.contains(&format!("block {first_missing} "))
+                && error.message.contains("snapshot base 4"),
+            "{start}..={end}: {}",
+            error.message
+        );
+    }
+
+    // Genesis, the base and past-the-tip keep their behavior: the base block
+    // is served, heights past the tip are skipped.
+    let resp = handle_get_outputs(json!(1), &params(4, 9), &state).await;
+    assert!(resp.error.is_none(), "{:?}", resp.error);
+    let blocks = resp.result.unwrap();
+    assert_eq!(blocks.as_array().unwrap().len(), 1);
+    assert_eq!(blocks[0]["height"], json!(4));
+    let resp = handle_get_outputs(json!(1), &params(0, 0), &state).await;
+    assert!(resp.error.is_none(), "{:?}", resp.error);
+    assert_eq!(resp.result.unwrap()[0]["height"], json!(0));
+
+    // The payout itself survived the restore and is still served by the
+    // strict accessor, even though its creating block is not held.
+    let payout = UtxoId::new(chain.b3.hash(), 1);
+    let (_, context) = state
+        .ledger
+        .read()
+        .unwrap()
+        .get_output_derivation_context(&payout)
+        .unwrap();
+    assert_eq!(
+        context,
+        DerivationContext::Lottery {
+            height: 3,
+            ordinal: 0,
+            base_index: WINNER_INDEX,
+            tweak: tweak(),
+        }
+    );
+}
+
 /// Real V2 blocks (#1640 producer + validator) at the real 720-block
 /// maturity: every lottery row of the first paying block carries the frozen
 /// #1641 fields, each equal to the ledger's committed state, and deleting one

@@ -8,7 +8,7 @@ use tracing::info;
 
 use crate::{
     config::{ledger_db_path_from_config, Config},
-    ledger::{Ledger, UtxoSnapshot},
+    ledger::{Ledger, UtxoSnapshotV2},
 };
 
 /// Create a snapshot of the current UTXO set.
@@ -78,14 +78,17 @@ pub fn load(config_path: &Path, input: &str, verify_hash: Option<&str>) -> Resul
     // First, show snapshot info
     let file = std::fs::File::open(input_path).context("Failed to open snapshot file")?;
     let reader = std::io::BufReader::new(file);
-    let snapshot = UtxoSnapshot::read_from(reader).context("Failed to read snapshot")?;
+    let snapshot = UtxoSnapshotV2::read_from(reader).context("Failed to read snapshot")?;
 
     println!("Snapshot information:");
     println!("  Version: {}", snapshot.version);
     println!("  Height: {}", snapshot.height);
     println!("  UTXOs: {}", snapshot.utxo_count);
+    println!("  Derivation contexts: {}", snapshot.context_count);
     println!("  Key images: {}", snapshot.key_image_count);
     println!("  Block hash: {}", hex::encode(snapshot.block_hash));
+    println!("  Genesis hash: {}", hex::encode(snapshot.genesis_hash));
+    println!("  Commitment: {}", hex::encode(snapshot.commitment));
     println!("  Compressed size: {} bytes", snapshot.compressed_size());
 
     if verify_hash.is_some() {
@@ -94,10 +97,10 @@ pub fn load(config_path: &Path, input: &str, verify_hash: Option<&str>) -> Resul
 
     println!("\nVerifying snapshot integrity...");
     snapshot.verify().context("Snapshot verification failed")?;
-    println!("  Merkle roots verified!");
+    println!("  Commitment and Merkle roots verified!");
 
     println!("\nLoading snapshot into ledger...");
-    println!("  WARNING: This will replace current UTXO set!");
+    println!("  (V2 snapshots load only into a freshly initialized, genesis-only ledger)");
 
     let utxo_count = ledger.load_from_snapshot(&snapshot, expected_hash.as_ref())?;
 
@@ -126,7 +129,7 @@ pub fn info(file: &str) -> Result<()> {
     let file_size = metadata.len();
 
     let reader = std::io::BufReader::new(file);
-    let snapshot = UtxoSnapshot::read_from(reader).context("Failed to read snapshot")?;
+    let snapshot = UtxoSnapshotV2::read_from(reader).context("Failed to read snapshot")?;
 
     println!("Snapshot Information");
     println!("====================");
@@ -141,26 +144,44 @@ pub fn info(file: &str) -> Result<()> {
     println!("Format version: {}", snapshot.version);
     println!("Block height: {}", snapshot.height);
     println!("Block hash: {}", hex::encode(snapshot.block_hash));
+    println!("Genesis hash: {}", hex::encode(snapshot.genesis_hash));
+    println!(
+        "Storage schema: {}",
+        String::from_utf8_lossy(&snapshot.storage_schema)
+    );
+    println!("Commitment: {}", hex::encode(snapshot.commitment));
     println!();
     println!("Contents:");
     println!("  UTXOs: {}", snapshot.utxo_count);
+    println!("  Derivation contexts: {}", snapshot.context_count);
     println!("  Key images: {}", snapshot.key_image_count);
+    println!("  Cluster wealth entries: {}", snapshot.cluster_count);
+    println!(
+        "  Bridge-import clusters: {}",
+        snapshot.import_cluster_count
+    );
     println!();
     println!("Data sizes:");
+    println!("  Tip block: {} bytes", snapshot.tip_block_data.len());
     println!("  UTXO data: {} bytes", snapshot.utxo_data.len());
+    println!("  Context data: {} bytes", snapshot.context_data.len());
+    println!(
+        "  Address index data: {} bytes",
+        snapshot.address_index_data.len()
+    );
     println!("  Key image data: {} bytes", snapshot.key_image_data.len());
     println!(
         "  Cluster wealth data: {} bytes",
         snapshot.cluster_wealth_data.len()
     );
     println!("  Compressed total: {} bytes", snapshot.compressed_size());
-    println!(
-        "  Estimated uncompressed: ~{} bytes",
-        snapshot.estimated_uncompressed_size()
-    );
     println!();
     println!("Merkle roots:");
     println!("  UTXO: {}", hex::encode(snapshot.utxo_merkle_root));
+    println!(
+        "  Derivation context: {}",
+        hex::encode(snapshot.context_merkle_root)
+    );
     println!(
         "  Key image: {}",
         hex::encode(snapshot.key_image_merkle_root)
@@ -185,7 +206,7 @@ pub fn info(file: &str) -> Result<()> {
     // Verify integrity
     print!("Verifying integrity... ");
     match snapshot.verify() {
-        Ok(()) => println!("OK"),
+        Ok(_) => println!("OK"),
         Err(e) => println!("FAILED: {}", e),
     }
 

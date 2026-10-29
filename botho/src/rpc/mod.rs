@@ -1863,9 +1863,24 @@ async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> Json
         // One strict read per block: the block plus every lottery payout's
         // UTXO and derivation context (#1641). A height past the tip is
         // skipped as before; any other read failure fails the call closed.
+        // A height this node never held because it was restored from a V2
+        // snapshot (#1646) is NOT "past the tip": skipping it would hand a
+        // scanning wallet a silently incomplete output set, so it is a
+        // distinct, actionable error.
         let (block, payouts) = match ledger.get_block_with_payout_contexts(height) {
             Ok(fetched) => fetched,
             Err(crate::ledger::LedgerError::BlockNotFound(_)) => continue,
+            Err(crate::ledger::LedgerError::BelowSnapshotBase { height, base }) => {
+                return JsonRpcResponse::error(
+                    id,
+                    -32000,
+                    &format!(
+                        "block {height} is below this node's snapshot base {base}: the node \
+                         was restored from a V2 snapshot and does not hold blocks 1..{base}; \
+                         query from start_height {base} or use a node synced from genesis"
+                    ),
+                )
+            }
             Err(e) => {
                 return JsonRpcResponse::error(
                     id,

@@ -8,12 +8,16 @@ mod map_full_tests;
 #[path = "store/ring_admission_tests.rs"]
 mod ring_admission_tests;
 #[cfg(test)]
+#[path = "store/snapshot_v2_tests.rs"]
+mod snapshot_v2_tests;
+#[cfg(test)]
 #[path = "store/v2_activation_tests.rs"]
 mod v2_activation_tests;
 #[cfg(test)]
 #[path = "store/v2_tests.rs"]
 mod v2_tests;
 
+pub(super) mod snapshot_v2;
 pub(super) mod v2;
 pub(super) mod validation;
 pub(super) mod writer;
@@ -38,7 +42,10 @@ use crate::{
 
 /// Fixed LMDB map size for the ledger. LMDB does not grow the map on its own:
 /// once the data file reaches this size, writes fail with `MDB_MAP_FULL`.
-const LEDGER_MAP_SIZE: usize = 1024 * 1024 * 1024; // 1GB
+/// The V2 snapshot decompression ceiling is derived from it
+/// (`snapshot::MAX_SNAPSHOT_DECOMPRESSED`), so growing the map never makes
+/// honest snapshots unloadable.
+pub(in crate::ledger) const LEDGER_MAP_SIZE: usize = 1024 * 1024 * 1024; // 1GB
 
 /// Maximum allowed clock skew for a block timestamp relative to local time.
 ///
@@ -698,38 +705,44 @@ impl Ledger {
             .env
             .read_txn()
             .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
+        self.chain_state_in(&rtxn)
+    }
 
+    /// [`Ledger::get_chain_state`] inside an existing read transaction, so a
+    /// caller (the V2 snapshot export, #1646) can read the chain state and the
+    /// tables it describes from one consistent LMDB snapshot.
+    fn chain_state_in(&self, rtxn: &heed::RoTxn<'_>) -> Result<ChainState, LedgerError> {
         let height = self
             .meta_db
-            .get(&rtxn, META_HEIGHT)
+            .get(rtxn, META_HEIGHT)
             .map_err(|e| LedgerError::Database(format!("Failed to get height: {}", e)))?
             .map(|b| u64::from_le_bytes(b.try_into().unwrap_or([0; 8])))
             .unwrap_or(0);
 
         let tip_hash = self
             .meta_db
-            .get(&rtxn, META_TIP_HASH)
+            .get(rtxn, META_TIP_HASH)
             .map_err(|e| LedgerError::Database(format!("Failed to get tip_hash: {}", e)))?
             .map(|b| b.try_into().unwrap_or([0u8; 32]))
             .unwrap_or([0u8; 32]);
 
         let total_mined = self
             .meta_db
-            .get(&rtxn, META_TOTAL_MINED)
+            .get(rtxn, META_TOTAL_MINED)
             .map_err(|e| LedgerError::Database(format!("Failed to get total_mined: {}", e)))?
             .map(|b| u128::from_le_bytes(b.try_into().unwrap_or([0; 16])))
             .unwrap_or(0);
 
         let total_fees_burned = self
             .meta_db
-            .get(&rtxn, META_FEES_BURNED)
+            .get(rtxn, META_FEES_BURNED)
             .map_err(|e| LedgerError::Database(format!("Failed to get fees_burned: {}", e)))?
             .map(|b| u128::from_le_bytes(b.try_into().unwrap_or([0; 16])))
             .unwrap_or(0);
 
         let difficulty = self
             .meta_db
-            .get(&rtxn, META_DIFFICULTY)
+            .get(rtxn, META_DIFFICULTY)
             .map_err(|e| LedgerError::Database(format!("Failed to get difficulty: {}", e)))?
             .map(|b| u64::from_le_bytes(b.try_into().unwrap_or([0; 8])))
             .unwrap_or(crate::node::minter::INITIAL_DIFFICULTY);
@@ -737,7 +750,7 @@ impl Ledger {
         // Get tip timestamp from the tip block (if exists)
         let tip_timestamp = if height > 0 {
             self.blocks_db
-                .get(&rtxn, &height)
+                .get(rtxn, &height)
                 .ok()
                 .flatten()
                 .and_then(|bytes| bincode::deserialize::<Block>(bytes).ok())
@@ -750,35 +763,35 @@ impl Ledger {
         // EmissionController state
         let total_tx = self
             .meta_db
-            .get(&rtxn, META_TOTAL_TX)
+            .get(rtxn, META_TOTAL_TX)
             .map_err(|e| LedgerError::Database(format!("Failed to get total_tx: {}", e)))?
             .map(|b| u64::from_le_bytes(b.try_into().unwrap_or([0; 8])))
             .unwrap_or(0);
 
         let epoch_tx = self
             .meta_db
-            .get(&rtxn, META_EPOCH_TX)
+            .get(rtxn, META_EPOCH_TX)
             .map_err(|e| LedgerError::Database(format!("Failed to get epoch_tx: {}", e)))?
             .map(|b| u64::from_le_bytes(b.try_into().unwrap_or([0; 8])))
             .unwrap_or(0);
 
         let epoch_emission = self
             .meta_db
-            .get(&rtxn, META_EPOCH_EMISSION)
+            .get(rtxn, META_EPOCH_EMISSION)
             .map_err(|e| LedgerError::Database(format!("Failed to get epoch_emission: {}", e)))?
             .map(|b| u64::from_le_bytes(b.try_into().unwrap_or([0; 8])))
             .unwrap_or(0);
 
         let epoch_burns = self
             .meta_db
-            .get(&rtxn, META_EPOCH_BURNS)
+            .get(rtxn, META_EPOCH_BURNS)
             .map_err(|e| LedgerError::Database(format!("Failed to get epoch_burns: {}", e)))?
             .map(|b| u64::from_le_bytes(b.try_into().unwrap_or([0; 8])))
             .unwrap_or(0);
 
         let current_reward = self
             .meta_db
-            .get(&rtxn, META_CURRENT_REWARD)
+            .get(rtxn, META_CURRENT_REWARD)
             .map_err(|e| LedgerError::Database(format!("Failed to get current_reward: {}", e)))?
             .map(|b| u64::from_le_bytes(b.try_into().unwrap_or([0; 8])))
             .unwrap_or(crate::block::difficulty::INITIAL_REWARD);
@@ -805,11 +818,14 @@ impl Ledger {
             .read_txn()
             .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
 
-        let bytes = self
+        let bytes = match self
             .blocks_db
             .get(&rtxn, &height)
             .map_err(|e| LedgerError::Database(format!("Failed to get block: {}", e)))?
-            .ok_or(LedgerError::BlockNotFound(height))?;
+        {
+            Some(bytes) => bytes,
+            None => return Err(self.missing_block_error(&rtxn, height)?),
+        };
 
         bincode::deserialize(bytes).map_err(|e| LedgerError::Serialization(e.to_string()))
     }
@@ -848,7 +864,9 @@ impl Ledger {
                         return Ok(Some(block));
                     }
                 }
-                Err(LedgerError::BlockNotFound(_)) => continue,
+                Err(LedgerError::BlockNotFound(_) | LedgerError::BelowSnapshotBase { .. }) => {
+                    continue
+                }
                 Err(e) => return Err(e),
             }
         }
@@ -1085,7 +1103,12 @@ impl Ledger {
                         .map_err(|e| LedgerError::Serialization(e.to_string()))?;
                     blocks.push(block);
                 }
-                Ok(None) => break,
+                // A snapshot-restored ledger does not hold (0, base): report
+                // that instead of a silently short range (#1646).
+                Ok(None) => match self.missing_block_error(&rtxn, height)? {
+                    e @ LedgerError::BelowSnapshotBase { .. } => return Err(e),
+                    _ => break,
+                },
                 Err(e) => return Err(LedgerError::Database(format!("Failed to get block: {}", e))),
             }
         }
@@ -1277,7 +1300,9 @@ impl Ledger {
         key
     }
 
-    /// Add a UTXO ID to the address index
+    /// Add a UTXO ID to the address index (fixture seeding and tests; the
+    /// block writer and the V2 snapshot loader write the index directly).
+    #[cfg(any(test, feature = "test-fixtures"))]
     fn add_to_address_index(&self, wtxn: &mut RwTxn, utxo: &Utxo) -> Result<(), LedgerError> {
         self.write_tables()
             .add_to_address_index(wtxn, utxo, &mut || Ok(()))
@@ -2268,134 +2293,41 @@ impl Ledger {
     // Snapshot Support
     // ========================================================================
 
-    /// Create a UTXO snapshot at the current chain height.
+    /// Create a versioned V2 UTXO snapshot at the current chain height.
     ///
-    /// This captures the complete UTXO set, key images, and cluster wealth
-    /// for fast initial sync of new nodes.
-    ///
-    /// # Returns
-    ///
-    /// A `UtxoSnapshot` containing all state needed to bootstrap a node.
-    ///
-    /// # botho.ledger.2
-    ///
-    /// Fails closed: snapshot format V1 carries no derivation contexts, so a
-    /// `botho.ledger.2` store (every production store, #1286 P2) refuses to
-    /// export one. Versioned snapshot V2 is a follow-up.
-    pub fn create_snapshot(&self) -> Result<super::UtxoSnapshot, LedgerError> {
-        Err(Self::snapshot_unsupported("Snapshot creation"))
+    /// Captures the UTXO set with every output's derivation context, the key
+    /// images, cluster wealth, bridge-import clusters, lottery pool, chain
+    /// state and the tip block, all from one LMDB read transaction, bound to
+    /// the genesis and tip hashes (#1646). Reads are strict: a missing or
+    /// corrupt row is an error, never skipped.
+    pub fn create_snapshot(&self) -> Result<super::UtxoSnapshotV2, LedgerError> {
+        self.create_snapshot_v2()
     }
 
-    /// Former V1 snapshot export, preserved (unreachable from the public API
-    /// under `botho.ledger.2`) for the versioned-snapshot V2 follow-up.
-    #[allow(dead_code)]
-    fn create_snapshot_v1(&self) -> Result<super::UtxoSnapshot, LedgerError> {
-        use super::snapshot::UtxoSnapshot;
-
-        let chain_state = self.get_chain_state()?;
-        let tip = self.get_tip()?;
-        let block_hash = tip.hash();
-
-        let rtxn = self
-            .env
-            .read_txn()
-            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
-
-        // Collect all UTXOs
-        let mut utxos = Vec::new();
-        let utxo_iter = self
-            .utxo_db
-            .iter(&rtxn)
-            .map_err(|e| LedgerError::Database(format!("Failed to iterate UTXOs: {}", e)))?;
-
-        for result in utxo_iter {
-            if let Ok((_, value)) = result {
-                if let Ok(utxo) = bincode::deserialize::<Utxo>(value) {
-                    utxos.push(utxo);
-                }
-            }
-        }
-
-        // Collect all key images
-        let mut key_images = Vec::new();
-        let ki_iter = self
-            .key_images_db
-            .iter(&rtxn)
-            .map_err(|e| LedgerError::Database(format!("Failed to iterate key images: {}", e)))?;
-
-        for result in ki_iter {
-            if let Ok((key, value)) = result {
-                if key.len() == 32 && value.len() == 8 {
-                    let mut ki = [0u8; 32];
-                    ki.copy_from_slice(key);
-                    let height = u64::from_le_bytes(value.try_into().unwrap());
-                    key_images.push((ki, height));
-                }
-            }
-        }
-
-        // Collect cluster wealth data
-        let mut cluster_wealth = Vec::new();
-        let cw_iter = self.cluster_wealth_db.iter(&rtxn).map_err(|e| {
-            LedgerError::Database(format!("Failed to iterate cluster wealth: {}", e))
-        })?;
-
-        for result in cw_iter {
-            if let Ok((key, value)) = result {
-                if key.len() == 8 {
-                    let cluster_id = u64::from_le_bytes(key.try_into().unwrap());
-                    // 16-byte LE u128, reject-legacy (#626).
-                    let wealth = decode_cluster_wealth(value)?;
-                    cluster_wealth.push((cluster_id, wealth));
-                }
-            }
-        }
-
-        drop(rtxn);
-
-        info!(
-            height = chain_state.height,
-            utxo_count = utxos.len(),
-            key_image_count = key_images.len(),
-            cluster_count = cluster_wealth.len(),
-            "Creating UTXO snapshot"
-        );
-
-        UtxoSnapshot::new(
-            chain_state.height,
-            block_hash,
-            chain_state,
-            utxos,
-            key_images,
-            cluster_wealth,
-        )
-        .map_err(|e| LedgerError::Serialization(e.to_string()))
-    }
-
-    /// Load ledger state from a snapshot.
+    /// Load ledger state from a verified V2 snapshot.
     ///
-    /// This replaces the current ledger state with the snapshot data.
-    /// The snapshot is verified before loading.
+    /// The target must be a genesis-only `botho.ledger.2` ledger with the
+    /// snapshot's genesis. The snapshot is fully verified (commitment, every
+    /// section root, the context/UTXO bijection, each context against its
+    /// output, the tip block against `block_hash`) before the single write
+    /// transaction; any failure leaves the ledger untouched. V1 snapshots
+    /// cannot be passed here (they carry no derivation contexts) and are
+    /// refused by [`Ledger::load_snapshot_from_file`].
     ///
     /// # Arguments
     ///
     /// * `snapshot` - The snapshot to load
-    /// * `expected_block_hash` - Optional block hash to verify against
+    /// * `expected_block_hash` - Optional tip hash to verify against
     ///
     /// # Returns
     ///
     /// The number of UTXOs loaded.
-    ///
-    /// # botho.ledger.2
-    ///
-    /// Fails closed before any write: a V1 snapshot cannot supply the
-    /// derivation contexts a `botho.ledger.2` store requires (#1286 P2).
     pub fn load_from_snapshot(
         &self,
-        _snapshot: &super::UtxoSnapshot,
-        _expected_block_hash: Option<&[u8; 32]>,
+        snapshot: &super::UtxoSnapshotV2,
+        expected_block_hash: Option<&[u8; 32]>,
     ) -> Result<usize, LedgerError> {
-        Err(Self::snapshot_unsupported("Snapshot loading"))
+        self.load_snapshot_v2(snapshot, expected_block_hash)
     }
 
     /// TEST/FIXTURE SEEDING ONLY: not a sync path and not validation.
@@ -2456,9 +2388,10 @@ impl Ledger {
         self.spend_recovery_context(id)
     }
 
-    /// Former V1 snapshot loader body (preserved for the fixture seeder and
-    /// the versioned-snapshot V2 follow-up). `direct_contexts` additionally
-    /// rewrites the derivation-context table with one `Direct` row per UTXO.
+    /// Former V1 snapshot loader body, now used only by the fixture seeder.
+    /// `direct_contexts` additionally rewrites the derivation-context table
+    /// with one `Direct` row per UTXO.
+    #[cfg(any(test, feature = "test-fixtures"))]
     fn load_snapshot_rows(
         &self,
         snapshot: &super::UtxoSnapshot,
@@ -2669,32 +2602,18 @@ impl Ledger {
         Ok(size)
     }
 
-    /// Load a snapshot from a file.
+    /// Load a V2 snapshot from a file (see [`Ledger::load_from_snapshot`]).
+    ///
+    /// A V1 file (`BTHSNAP\x01`) is refused with
+    /// [`LedgerError::UnsupportedSchema`] after reading only its magic bytes;
+    /// a truncated or otherwise malformed file is a serialization error.
     pub fn load_snapshot_from_file(
         &self,
         path: &std::path::Path,
         expected_block_hash: Option<&[u8; 32]>,
     ) -> Result<usize, LedgerError> {
-        // botho.ledger.2: refuse before even reading the file (#1286 P2).
-        let _ = (path, expected_block_hash);
-        Err(Self::snapshot_unsupported("Snapshot loading"))
-    }
-
-    /// Former V1 file loader, preserved for the versioned-snapshot follow-up.
-    #[allow(dead_code)]
-    fn load_snapshot_file_v1(
-        &self,
-        path: &std::path::Path,
-        expected_block_hash: Option<&[u8; 32]>,
-    ) -> Result<usize, LedgerError> {
-        let file = std::fs::File::open(path)
-            .map_err(|e| LedgerError::Database(format!("Failed to open file: {}", e)))?;
-
-        let reader = std::io::BufReader::new(file);
-        let snapshot = super::UtxoSnapshot::read_from(reader)
-            .map_err(|e| LedgerError::Serialization(e.to_string()))?;
-
-        self.load_snapshot_rows(&snapshot, expected_block_hash, false)
+        let snapshot = Self::read_snapshot_file(path)?;
+        self.load_snapshot_v2(&snapshot, expected_block_hash)
     }
 
     // ========================================================================
