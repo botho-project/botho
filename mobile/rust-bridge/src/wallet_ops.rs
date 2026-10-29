@@ -153,6 +153,40 @@ pub fn supported_inputs(spendable: &[OwnedOutput], canonical: &[&Candidate]) -> 
         .collect()
 }
 
+/// True only when a LEGACY lottery payout is what blocks funding: some owned
+/// output was left out of `supported` because it matches a context-less
+/// lottery row's envelope (#1450), and counting those payouts would cover
+/// `target`. Other exclusions (a duplicated ordinary target, an envelope that
+/// disagrees with its canonical row) report plain insufficient funds.
+pub fn legacy_payouts_block_selection(
+    spendable: &[OwnedOutput],
+    supported: &[OwnedOutput],
+    candidates: &[Candidate],
+    target: u64,
+) -> bool {
+    let supported_total: u64 = supported.iter().map(|o| o.amount).sum();
+    let mut counted = std::collections::HashSet::new();
+    let legacy_total: u64 = spendable
+        .iter()
+        .filter(|o| {
+            !supported.iter().any(|s| {
+                s.target_key == o.target_key && s.amount == o.amount && s.public_key == o.public_key
+            })
+        })
+        .filter(|o| {
+            candidates.iter().any(|c| {
+                c.is_legacy_lottery()
+                    && c.output.target_key == o.target_key
+                    && c.output.public_key == o.public_key
+                    && c.output.amount == o.amount
+            })
+        })
+        .filter(|o| counted.insert((o.target_key.clone(), o.amount)))
+        .map(|o| o.amount)
+        .sum();
+    legacy_total > 0 && supported_total.saturating_add(legacy_total) >= target
+}
+
 /// Ring decoys: canonical, non-lottery, non-input, non-genesis outputs.
 pub fn decoy_pool<'a>(canonical: &[&'a Candidate], inputs: &[OwnedOutput]) -> Vec<&'a ChainOutput> {
     let input_keys: std::collections::HashSet<&str> =
@@ -346,7 +380,7 @@ pub fn plan_send(
 
     let inputs = match select_inputs(&supported, target) {
         Some(i) => i,
-        None if supported.len() != spendable.len() => {
+        None if legacy_payouts_block_selection(spendable, &supported, candidates, target) => {
             return Err(SendError::Other(
                 "Legacy lottery payouts cannot be spent independently yet".into(),
             ))
@@ -614,5 +648,46 @@ mod lottery_v2_tests {
             &candidates,
         );
         assert!(matches!(result, Err(SendError::Other(m)) if m.contains("Legacy lottery payouts")));
+
+        // A send even the alias could not fund is plain insufficient funds.
+        let result = plan_send(
+            &keys(&v),
+            recipient(&v),
+            50_000_000_000_000,
+            MIN_TX_FEE,
+            40,
+            &spendable,
+            &candidates,
+        );
+        assert!(matches!(result, Err(SendError::Insufficient)));
+    }
+
+    /// An unfundable send must not blame legacy payouts when none is involved,
+    /// e.g. an ordinary output listed twice under the same key.
+    #[test]
+    fn duplicate_ordinary_output_reports_insufficient_not_legacy() {
+        let v = vector();
+        let mut candidates = chain(&v, &[]);
+        candidates.retain(|c| c.output.lottery_context.is_none()); // no payouts
+        let source = candidates[0].output.clone();
+        let mut spendable: Vec<OwnedOutput> =
+            scan(&v, &candidates).into_iter().map(|(o, _)| o).collect();
+        assert_eq!(spendable.len(), 1);
+        // The same owned output twice: one copy is dropped by the
+        // once-per-target rule, so `supported` is shorter than `spendable`.
+        spendable.push(spendable[0].clone());
+        let canonical = canonical_candidates(&candidates);
+        assert_eq!(supported_inputs(&spendable, &canonical).len(), 1);
+
+        let result = plan_send(
+            &keys(&v),
+            recipient(&v),
+            source.amount, // + fee: more than the single source holds
+            MIN_TX_FEE,
+            40,
+            &spendable,
+            &candidates,
+        );
+        assert!(matches!(result, Err(SendError::Insufficient)));
     }
 }
