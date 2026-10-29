@@ -28,6 +28,7 @@ mod attestation;
 #[cfg(test)]
 mod bth_fork_tests;
 mod bth_keys;
+mod bth_lottery;
 mod bth_rpc;
 mod bth_scan;
 #[cfg(test)]

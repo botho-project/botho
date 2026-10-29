@@ -18,9 +18,11 @@
 //!   localhost by default — anyone who can reach this endpoint is an operator.
 //! - `GET /api/reserve/proof` -> the latest reconciliation snapshot:
 //!   `{lockedReserve, ethSupply, solSupply, totalWrapped, drift, inTolerance,
-//!   pegHealthy, reserveBalanceChecked, takenAt}` (503 until the first pass
-//!   runs). `reserveBalanceChecked` (#846) distinguishes "custody checked OK"
-//!   from "custody never checked".
+//!   pegHealthy, reserveBalanceChecked, lotterySurplus, takenAt}` (503 until
+//!   the first pass runs). `reserveBalanceChecked` (#846) distinguishes
+//!   "custody checked OK" from "custody never checked". `lotterySurplus`
+//!   (#1657) is V2 lottery winnings on reserve outputs, reported apart from and
+//!   never counted in the principal backing.
 //!
 //! The full per-chain detail (including in-flight allowances) is written
 //! to the `audit_log` by the reconciler; this surface serves the compact
@@ -74,6 +76,10 @@ pub struct ReserveProofResponse {
     /// `reserveBalanceChecked: false` means "peg healthy, custody
     /// unverified").
     pub reserve_balance_checked: bool,
+    /// Unspent V2 lottery winnings held by the reserve, picocredits (#1657).
+    /// NOT peg backing: excluded from `lockedReserve`, the custody leg and
+    /// mintable supply. `null` when the reserve balance was not checked.
+    pub lottery_surplus: Option<u64>,
     /// When the reconciliation ran (unix seconds).
     pub taken_at: i64,
 }
@@ -93,6 +99,7 @@ impl From<ReserveSnapshot> for ReserveProofResponse {
             in_tolerance: s.in_tolerance,
             peg_healthy: s.peg_healthy,
             reserve_balance_checked: s.reserve_balance_checked,
+            lottery_surplus: s.lottery_surplus,
             taken_at: s.taken_at,
         }
     }
@@ -441,6 +448,7 @@ mod tests {
             in_tolerance: true,
             peg_healthy: true,
             reserve_balance_checked: false,
+            lottery_surplus: Some(77),
         }
     }
 
@@ -486,11 +494,14 @@ mod tests {
             "inTolerance",
             "pegHealthy",
             "reserveBalanceChecked",
+            "lotterySurplus",
             "takenAt",
         ] {
             assert!(json.get(key).is_some(), "missing contract field {}", key);
         }
         assert_eq!(json["lockedReserve"], 1_500);
+        // #1657: surplus is its own field, never folded into lockedReserve.
+        assert_eq!(json["lotterySurplus"], 77);
         assert_eq!(json["ethSupply"], 1_000);
         assert_eq!(json["solSupply"], serde_json::Value::Null);
         assert_eq!(json["totalWrapped"], 1_000);

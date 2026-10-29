@@ -57,6 +57,29 @@
 //! ledger: a shortfall is a custody incident (unauthorized reserve
 //! movement) and flips `pegHealthy` even if supplies match the ledger.
 //!
+//! ## Lottery surplus (#1657)
+//!
+//! On a V2 lottery chain a reserve output can win the lottery. The payout is
+//! real BTH the reserve can spend, but it was never deposited against a mint,
+//! so it is **not** peg backing:
+//!
+//! - it is reported separately as `lotterySurplus` (the unspent, factor-1 V2
+//!   payouts the reserve owns), never folded into the custody figure;
+//! - the custody leg compares **principal only** (ordinary reserve outputs)
+//!   against the ledger, so surplus can neither mask a principal shortfall nor
+//!   make the peg look over-collateralised;
+//! - it never increases mintable wBTH supply. Minting is driven solely by
+//!   memo-matched deposits ([`crate::bth_scan::scan_deposit_output`] rejects
+//!   every lottery row), and the ledger-locked backing stays principal-only;
+//! - the release path may still spend it (principal first, then surplus).
+//!   Change from such a spend returns as an ordinary output, so it later counts
+//!   as principal. That can only raise the principal figure. The surplus figure
+//!   is therefore the *currently unspent* winnings, a lower bound on lifetime
+//!   winnings.
+//!
+//! Legacy context-less lottery rows alias their winning output's keys
+//! (#1450). They are counted in neither figure.
+//!
 //! Every pass persists a `reserve_snapshots` row and an `audit_log` entry,
 //! and any violation emits a `reserve_drift_alert` audit event plus an
 //! error log (rate-bounded by the reconcile interval).
@@ -80,7 +103,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     bth_keys::ReserveKeys,
     bth_rpc::BthNodeRpc,
-    bth_scan::{scan_deposit_output, OwnedOutput},
+    bth_scan::{scan_reserve_output, OwnedOutput},
     db::{Database, ReserveSnapshot},
     mint::solana::{parse_bridge_mint, BRIDGE_PDA_SEED},
     solana_rpc::{HttpSolanaRpc, Pubkey, SolanaRpc},
@@ -271,8 +294,33 @@ impl SupplySource for SolSupplySource {
 /// actually holds. A shortfall is a custody incident.
 #[async_trait]
 pub trait ReserveBalanceSource: Send + Sync {
-    /// Spendable balance of the reserve address in picocredits.
-    async fn reserve_balance(&self) -> Result<u128, ReserveError>;
+    /// Spendable balance of the reserve address in picocredits, split into
+    /// principal (peg backing) and lottery surplus (#1657).
+    async fn reserve_balance(&self) -> Result<ReserveBalance, ReserveError>;
+}
+
+/// The reserve's actual on-chain holdings, split by provenance (#1657).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReserveBalance {
+    /// Unspent ordinary (non-lottery) factor-1 reserve outputs, in
+    /// picocredits. This is the only figure the custody leg compares against
+    /// the ledger-locked backing.
+    pub principal: u128,
+    /// Unspent factor-1 V2 lottery payouts the reserve won, in picocredits.
+    /// Spendable by the release path, but never peg backing and never
+    /// mintable.
+    pub lottery_surplus: u128,
+}
+
+#[cfg(test)]
+impl ReserveBalance {
+    /// Principal-only balance (no lottery surplus).
+    pub fn principal(principal: u128) -> Self {
+        Self {
+            principal,
+            lottery_surplus: 0,
+        }
+    }
 }
 
 /// How many recent blocks to scan for reserve-owned outputs. Mirrors
@@ -283,12 +331,13 @@ const RESERVE_SCAN_WINDOW: u64 = 10_000;
 /// Live BTH reserve-balance source (#853).
 ///
 /// View-key-scans the recent reserve window (`chain_getOutputs` over
-/// `BthConfig::rpc_url`) for factor-1, reserve-owned outputs — the exact
-/// [`crate::bth_scan::scan_deposit_output`] primitive the deposit watcher and
-/// the [`crate::release::bth::BthReleaser`] use — drops any output whose key
+/// `BthConfig::rpc_url`) for factor-1, reserve-owned outputs (the exact
+/// [`crate::bth_scan::scan_reserve_output`] primitive the
+/// [`crate::release::bth::BthReleaser`] uses), drops any output whose key
 /// image is already spent/pending (`chain_areKeyImagesSpent`), and sums the
-/// remaining unspent amounts. That sum is the ACTUAL spendable reserve
-/// balance the reconciler's custody leg compares against the ledger.
+/// remaining unspent amounts, split into principal and V2 lottery surplus
+/// (#1657). The principal sum is the ACTUAL backing balance the reconciler's
+/// custody leg compares against the ledger; the surplus is reported apart.
 ///
 /// Only factor-1 outputs count: a factor-1-only reserve is the peg backing
 /// (ADR 0003), and only factor-1 outputs are ever releasable, so this is the
@@ -354,7 +403,7 @@ impl NodeReserveBalanceSource {
 
 #[async_trait]
 impl ReserveBalanceSource for NodeReserveBalanceSource {
-    async fn reserve_balance(&self) -> Result<u128, ReserveError> {
+    async fn reserve_balance(&self) -> Result<ReserveBalance, ReserveError> {
         if let Some(e) = &self.build_error {
             return Err(ReserveError::Config(e.clone()));
         }
@@ -381,7 +430,9 @@ impl ReserveBalanceSource for NodeReserveBalanceSource {
             .await
             .map_err(|e| ReserveError::Rpc(e.to_string()))?;
 
-        // Reserve-owned, factor-1 outputs (the peg backing, ADR 0003).
+        // Reserve-owned, factor-1 outputs: ordinary principal (the peg
+        // backing, ADR 0003) plus any V2 lottery payouts the reserve won
+        // (surplus, #1657). Legacy lottery rows are never returned (#1450).
         let mut owned: Vec<OwnedOutput> = Vec::new();
         for block in &blocks {
             for out in &block.outputs {
@@ -389,17 +440,17 @@ impl ReserveBalanceSource for NodeReserveBalanceSource {
                 // configured) so hybrid deposits to the reserve are DETECTED,
                 // not just warned about (issue #972). A classical-only reserve
                 // still passes `None` and warns on hybrid outputs (#970).
-                match scan_deposit_output(out, account, reserve.kem_keypair())
+                match scan_reserve_output(out, account, reserve.kem_keypair())
                     .map_err(ReserveError::Config)?
                 {
-                    Some(scanned) if scanned.owned.factor_one => owned.push(scanned.owned),
+                    Some(owned_out) if owned_out.factor_one => owned.push(owned_out),
                     _ => {}
                 }
             }
         }
 
         if owned.is_empty() {
-            return Ok(0);
+            return Ok(ReserveBalance::default());
         }
 
         // Drop already-spent / pending outputs so the balance reflects only
@@ -407,7 +458,7 @@ impl ReserveBalanceSource for NodeReserveBalanceSource {
         // uses before selecting inputs).
         let key_images: Vec<String> = owned
             .iter()
-            .map(|o| reserve_output_key_image(account, o))
+            .map(|o| reserve_output_key_image(account, o, reserve.kem_keypair()))
             .collect::<Result<_, _>>()?;
         let statuses = self
             .rpc
@@ -420,53 +471,44 @@ impl ReserveBalanceSource for NodeReserveBalanceSource {
 }
 
 /// Sum the amounts of `owned` reserve outputs whose key-image `statuses`
-/// (positionally aligned) report neither spent nor pending. The pure core of
+/// (positionally aligned) report neither spent nor pending, split into
+/// principal and V2 lottery surplus. The pure core of
 /// [`NodeReserveBalanceSource::reserve_balance`], unit-testable without a live
 /// node. A status shorter than `owned` conservatively treats the missing
 /// entries as spent (excluded), never overcounting the reserve.
 fn sum_unspent_reserve_balance(
     owned: &[OwnedOutput],
     statuses: &[crate::bth_rpc::KeyImageStatus],
-) -> u128 {
-    owned
+) -> ReserveBalance {
+    let mut balance = ReserveBalance::default();
+    for (o, _) in owned
         .iter()
         .zip(statuses)
         .filter(|(_, s)| !s.spent && !s.pending)
-        .map(|(o, _)| o.amount as u128)
-        .sum()
+    {
+        let bucket = if o.is_lottery_payout() {
+            &mut balance.lottery_surplus
+        } else {
+            &mut balance.principal
+        };
+        *bucket = bucket.saturating_add(o.amount as u128);
+    }
+    balance
 }
 
 /// Derive the key image of a reserve-owned output (node-identical), for the
-/// spent-status query. Reuses `recover_spend_key` + `KeyImage::from`, exactly
-/// what the node records in its double-spend set (mirrors the releaser's
-/// `release_input_key_image`).
+/// spent-status query. Delegates to [`OwnedOutput::key_image`], the same
+/// recovery the releaser uses (`release_input_key_image`): hybrid outputs
+/// through ML-KEM decapsulation, V2 lottery payouts through their context with
+/// the `x·G == P` check (#1657).
 fn reserve_output_key_image(
     account: &bth_account_keys::AccountKey,
     owned: &OwnedOutput,
+    kem_keypair: Option<&bth_crypto_pq::MlKem768KeyPair>,
 ) -> Result<String, ReserveError> {
-    use bth_crypto_ring_signature::KeyImage;
-    use bth_transaction_clsag::TxOutput;
-
-    let target_key: [u8; 32] = hex::decode(&owned.target_key)
-        .ok()
-        .and_then(|b| b.try_into().ok())
-        .ok_or_else(|| ReserveError::Config("owned output target_key not 32 bytes".into()))?;
-    let public_key: [u8; 32] = hex::decode(&owned.public_key)
-        .ok()
-        .and_then(|b| b.try_into().ok())
-        .ok_or_else(|| ReserveError::Config("owned output public_key not 32 bytes".into()))?;
-    let tx_out = TxOutput {
-        amount: owned.amount,
-        target_key,
-        public_key,
-        e_memo: None,
-        cluster_tags: Default::default(),
-        kem_ciphertext: None,
-    };
-    let onetime = tx_out
-        .recover_spend_key(account, owned.subaddress_index)
-        .ok_or_else(|| ReserveError::Config("cannot recover reserve one-time key".into()))?;
-    Ok(hex::encode(KeyImage::from(&onetime).as_bytes()))
+    owned
+        .key_image(account, kem_keypair)
+        .map_err(|e| ReserveError::Config(format!("cannot derive reserve key image: {e}")))
 }
 
 /// Per-chain reconciliation detail in a [`ReserveProof`].
@@ -513,6 +555,11 @@ pub struct ReserveProof {
     /// Whether the on-Botho reserve balance was actually checked (false
     /// until the #853 transport lands).
     pub reserve_balance_checked: bool,
+    /// Unspent V2 lottery winnings held by the reserve, picocredits (#1657).
+    /// Reported separately: NOT peg backing, NOT in `lockedReserve`, NOT in
+    /// the custody leg, and never mintable. `None` when the reserve balance
+    /// was not checkable this pass.
+    pub lottery_surplus: Option<u64>,
     /// When the reconciliation ran (unix seconds).
     pub taken_at: i64,
     /// Per-chain detail.
@@ -808,11 +855,18 @@ impl Reconciler {
         let locked_reserve = self.db.locked_reserve_total()?;
 
         // Custody leg: read the ACTUAL reserve balance (`None` = not checkable
-        // this pass; the drift legs still guard the peg).
+        // this pass; the drift legs still guard the peg). Only PRINCIPAL is
+        // custody backing; V2 lottery winnings are reported apart as surplus
+        // and never enter the verdict (#1657).
         let mut reserve_balance: Option<u128> = None;
+        let mut lottery_surplus: Option<u64> = None;
         if let Some(source) = &self.reserve_balance {
             match source.reserve_balance().await {
-                Ok(balance) => reserve_balance = Some(balance),
+                Ok(balance) => {
+                    reserve_balance = Some(balance.principal);
+                    lottery_surplus =
+                        Some(u64::try_from(balance.lottery_surplus).unwrap_or(u64::MAX));
+                }
                 Err(ReserveError::NotImplemented(msg)) => {
                     debug!("reserve balance unverified: {}", msg)
                 }
@@ -847,6 +901,7 @@ impl Reconciler {
             in_tolerance: all_in_tolerance,
             peg_healthy: verdict.peg_healthy,
             reserve_balance_checked: verdict.reserve_balance_checked,
+            lottery_surplus,
             taken_at,
             chains: verdict.chains,
         };
@@ -861,6 +916,7 @@ impl Reconciler {
             in_tolerance: all_in_tolerance,
             peg_healthy: proof.peg_healthy,
             reserve_balance_checked: proof.reserve_balance_checked,
+            lottery_surplus: proof.lottery_surplus,
         })?;
         if let Some(retention) = self.snapshot_retention_secs {
             if let Err(e) = self.db.prune_reserve_snapshots(retention) {
@@ -998,24 +1054,31 @@ mod tests {
 
     /// Programmable reserve-balance source.
     struct MockBalance {
-        balance: Mutex<Result<u128, ReserveError>>,
+        balance: Mutex<Result<ReserveBalance, ReserveError>>,
     }
 
     impl MockBalance {
         fn new(balance: u128) -> Arc<Self> {
             Arc::new(Self {
-                balance: Mutex::new(Ok(balance)),
+                balance: Mutex::new(Ok(ReserveBalance::principal(balance))),
             })
         }
 
         fn set(&self, balance: u128) {
-            *self.balance.lock().unwrap() = Ok(balance);
+            *self.balance.lock().unwrap() = Ok(ReserveBalance::principal(balance));
+        }
+
+        fn set_split(&self, principal: u128, lottery_surplus: u128) {
+            *self.balance.lock().unwrap() = Ok(ReserveBalance {
+                principal,
+                lottery_surplus,
+            });
         }
     }
 
     #[async_trait]
     impl ReserveBalanceSource for MockBalance {
-        async fn reserve_balance(&self) -> Result<u128, ReserveError> {
+        async fn reserve_balance(&self) -> Result<ReserveBalance, ReserveError> {
             self.balance.lock().unwrap().clone()
         }
     }
@@ -1203,6 +1266,44 @@ mod tests {
             !proof.peg_healthy,
             "custody shortfall must flip the peg state"
         );
+        assert_eq!(db.count_audit_action("reserve_drift_alert").unwrap(), 1);
+    }
+
+    /// #1657: V2 lottery winnings on reserve outputs are reported as a
+    /// separate surplus. They never cover a principal custody shortfall,
+    /// never enter `lockedReserve` (the mintable backing), and are persisted
+    /// and served apart.
+    #[tokio::test]
+    async fn test_lottery_surplus_is_reported_apart_and_never_backs_the_peg() {
+        let db = setup_db();
+        lock(&db, Chain::Ethereum, 1_000);
+        let eth = MockSupply::new(Chain::Ethereum, 1_000);
+        let balance = MockBalance::new(0);
+        let reconciler = Reconciler::new(db.clone(), vec![eth], Some(balance.clone()), 0);
+
+        // Principal exactly covers the ledger; the surplus is extra.
+        balance.set_split(1_000, 5_000);
+        let proof = reconciler.reconcile_once().await.unwrap();
+        assert!(proof.peg_healthy);
+        assert_eq!(proof.lottery_surplus, Some(5_000));
+        assert_eq!(
+            proof.locked_reserve, 1_000,
+            "surplus never enters the locked (mintable) backing"
+        );
+        let snap = db.latest_reserve_snapshot().unwrap().unwrap();
+        assert_eq!(snap.lottery_surplus, Some(5_000));
+        assert_eq!(snap.locked_reserve, 1_000);
+
+        // A principal shortfall is a custody incident even though principal +
+        // surplus would cover the ledger many times over.
+        balance.set_split(800, 1_000_000);
+        let proof = reconciler.reconcile_once().await.unwrap();
+        assert!(proof.in_tolerance, "ledger vs supply is still consistent");
+        assert!(
+            !proof.peg_healthy,
+            "lottery surplus must not mask a principal shortfall"
+        );
+        assert_eq!(proof.lottery_surplus, Some(1_000_000));
         assert_eq!(db.count_audit_action("reserve_drift_alert").unwrap(), 1);
     }
 
@@ -1507,7 +1608,7 @@ mod tests {
     /// Build a reserve `OwnedOutput` (via the real scan path) for a factor-1
     /// output the reserve owns, so its key-image derivation matches the node.
     fn reserve_owned(reserve: &AccountKey, amount: u64, tag: &str) -> OwnedOutput {
-        use crate::bth_rpc::RpcOutput;
+        use crate::{bth_rpc::RpcOutput, bth_scan::scan_deposit_output};
         let out = TxOutput::new(amount, &reserve.default_subaddress());
         let rpc = RpcOutput {
             tx_hash: tag.to_string(),
@@ -1518,6 +1619,9 @@ mod tests {
             cluster_tags: vec![],
             e_memo: None,
             kem_ciphertext: None,
+            lottery: false,
+            crypto_output_index: None,
+            lottery_context: None,
         };
         scan_deposit_output(&rpc, reserve, None)
             .unwrap()
@@ -1552,15 +1656,68 @@ mod tests {
         // All unspent: full sum.
         assert_eq!(
             sum_unspent_reserve_balance(&owned, &[unspent, unspent, unspent]),
-            7_000
+            ReserveBalance::principal(7_000)
         );
         // The 2_000 output is spent, the 4_000 is pending: only 1_000 counts.
         assert_eq!(
             sum_unspent_reserve_balance(&owned, &[unspent, spent, pending]),
-            1_000
+            ReserveBalance::principal(1_000)
         );
         // A short status vector never overcounts (missing entries excluded).
-        assert_eq!(sum_unspent_reserve_balance(&owned, &[unspent]), 1_000);
+        assert_eq!(
+            sum_unspent_reserve_balance(&owned, &[unspent]),
+            ReserveBalance::principal(1_000)
+        );
+    }
+
+    /// #1657: unspent V2 payouts sum into the surplus bucket, principal into
+    /// the principal bucket; spent/pending payouts count in neither.
+    #[test]
+    fn test_sum_unspent_reserve_balance_splits_lottery_surplus() {
+        use crate::bth_lottery::LotteryContext;
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::from_seed([41u8; 32]);
+        let reserve = AccountKey::random(&mut rng);
+
+        let payout = |amount: u64, tag: &str| {
+            let mut o = reserve_owned(&reserve, amount, tag);
+            o.lottery_context = Some(LotteryContext {
+                version: 2,
+                base_index: 0,
+                tweak: "07".repeat(32),
+                ordinal: 0,
+                height: 1,
+            });
+            o
+        };
+        let owned = vec![
+            reserve_owned(&reserve, 1_000, "p1"),
+            payout(300, "w1"),
+            reserve_owned(&reserve, 2_000, "p2"),
+            payout(50, "w2"),
+        ];
+        let unspent = KeyImageStatus {
+            spent: false,
+            pending: false,
+        };
+        let spent = KeyImageStatus {
+            spent: true,
+            pending: false,
+        };
+        assert_eq!(
+            sum_unspent_reserve_balance(&owned, &[unspent, unspent, unspent, unspent]),
+            ReserveBalance {
+                principal: 3_000,
+                lottery_surplus: 350,
+            }
+        );
+        assert_eq!(
+            sum_unspent_reserve_balance(&owned, &[unspent, spent, unspent, unspent]),
+            ReserveBalance {
+                principal: 3_000,
+                lottery_surplus: 50,
+            }
+        );
     }
 
     #[test]
@@ -1570,8 +1727,8 @@ mod tests {
         let reserve = AccountKey::random(&mut rng);
         let owned = reserve_owned(&reserve, 5_000, "ki");
 
-        let ki1 = reserve_output_key_image(&reserve, &owned).unwrap();
-        let ki2 = reserve_output_key_image(&reserve, &owned).unwrap();
+        let ki1 = reserve_output_key_image(&reserve, &owned, None).unwrap();
+        let ki2 = reserve_output_key_image(&reserve, &owned, None).unwrap();
         assert_eq!(ki1, ki2, "key image derivation must be deterministic");
         assert_eq!(ki1.len(), 64, "32-byte key image, hex-encoded");
     }
@@ -1614,6 +1771,7 @@ mod tests {
             in_tolerance: true,
             peg_healthy: true,
             reserve_balance_checked: false,
+            lottery_surplus: None,
             taken_at: 1_752_000_000,
             chains: vec![ChainReserveStatus {
                 chain: "ethereum".to_string(),
@@ -1637,6 +1795,7 @@ mod tests {
             "inTolerance",
             "pegHealthy",
             "reserveBalanceChecked",
+            "lotterySurplus",
             "takenAt",
             "chains",
         ] {

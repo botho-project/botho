@@ -18,6 +18,22 @@
 //!   transaction spending reserve-owned factor-1 outputs to a FRESH one-time
 //!   stealth output for the recipient (ADR 0004), change back to the reserve
 //!   (ADR 0003 provenance).
+//!
+//! ## V2 lottery payouts (#1657)
+//!
+//! Rows are classified by [`RpcOutput::class`] under the frozen #1641
+//! contract, and each consumer applies one rule:
+//!
+//! | Row                 | Deposit | Reserve input / value       | Decoy |
+//! |---------------------|---------|-----------------------------|-------|
+//! | ordinary            | yes     | yes (principal)             | yes   |
+//! | V2 payout (context) | never   | yes, as *lottery surplus*   | no    |
+//! | legacy (no context) | never   | never (#1450)               | no    |
+//! | malformed           | never   | never                       | no    |
+//!
+//! V2 ownership is proven through [`crate::bth_lottery`] (the base target at
+//! `baseIndex`, then `x·G == P`). V2 payouts are kept out of decoys for now,
+//! matching the wallets (#1642); #1663 tracks the privacy gap that leaves.
 
 use bth_account_keys::{AccountKey, PublicAddress};
 use bth_crypto_keys::RistrettoPublic;
@@ -29,7 +45,10 @@ use bth_transaction_clsag::{
 use bth_transaction_types::{ClusterId, ClusterTagVector};
 use rand_core::{CryptoRng, Rng};
 
-use crate::bth_rpc::RpcOutput;
+use crate::{
+    bth_lottery::{detect_lottery_payout, recover_onetime_private_key, LotteryContext},
+    bth_rpc::{OutputClass, RpcOutput},
+};
 
 /// An owned reserve/deposit output the scan identified.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +71,64 @@ pub struct OwnedOutput {
     /// `None` (classical). Retained so the release path can recover the
     /// one-time key via hybrid decapsulation (issue #970).
     pub kem_ciphertext: Option<Vec<u8>>,
+    /// The V2 lottery derivation context when this output is a lottery payout
+    /// the reserve won, else `None` (an ordinary, principal output). Preserved
+    /// so key-image derivation and release signing recover the tweaked key
+    /// (#1657). A payout is reserve *surplus*, never peg backing.
+    pub lottery_context: Option<LotteryContext>,
+}
+
+impl OwnedOutput {
+    /// Whether this output is a V2 lottery payout (reserve surplus) rather
+    /// than ordinary principal.
+    pub fn is_lottery_payout(&self) -> bool {
+        self.lottery_context.is_some()
+    }
+
+    /// The node-identical [`TxOutput`] shell for this owned output (no memo or
+    /// tags: neither affects key recovery or the ring member).
+    fn tx_output(&self) -> Result<TxOutput, String> {
+        Ok(TxOutput {
+            amount: self.amount,
+            target_key: parse_hex_32("owned.target_key", &self.target_key)?,
+            public_key: parse_hex_32("owned.public_key", &self.public_key)?,
+            e_memo: None,
+            cluster_tags: Default::default(),
+            kem_ciphertext: self.kem_ciphertext.clone(),
+        })
+    }
+
+    /// Recover this output's one-time private key: the ordinary
+    /// hybrid-when-present rule, or the V2 context path with its `x·G == P`
+    /// check for a lottery payout.
+    pub fn recover_onetime_key(
+        &self,
+        account: &AccountKey,
+        kem_keypair: Option<&MlKem768KeyPair>,
+    ) -> Result<bth_crypto_keys::RistrettoPrivate, String> {
+        recover_onetime_private_key(
+            &self.tx_output()?,
+            account,
+            kem_keypair,
+            self.subaddress_index,
+            self.output_index,
+            self.lottery_context.as_ref(),
+        )
+    }
+
+    /// Hex key image of this output (node-identical), for the
+    /// `chain_areKeyImagesSpent` spent-status query. Shared by the releaser
+    /// and the reserve-balance source so both agree on what is spent.
+    pub fn key_image(
+        &self,
+        account: &AccountKey,
+        kem_keypair: Option<&MlKem768KeyPair>,
+    ) -> Result<String, String> {
+        let onetime = self.recover_onetime_key(account, kem_keypair)?;
+        Ok(hex::encode(
+            bth_crypto_ring_signature::KeyImage::from(&onetime).as_bytes(),
+        ))
+    }
 }
 
 /// The result of view-key testing a deposit-address output.
@@ -112,11 +189,19 @@ fn tx_output_from_rpc(out: &RpcOutput) -> Result<TxOutput, String> {
 /// ppm as reported by the node (0 == factor-1 / background, ADR 0003). It is
 /// passed alongside because the reconstructed [`TxOutput`] shell does not carry
 /// cluster tags (the RPC returns them separately).
+///
+/// Only ordinary rows can be deposits. Every lottery row (V2 payout, legacy,
+/// or malformed) returns `Ok(None)` here: a payout is never a deposit and must
+/// never mint wBTH (#1657). Reserve-owned payouts are found by
+/// [`scan_reserve_output`] instead.
 pub fn scan_deposit_output(
     out: &RpcOutput,
     account: &AccountKey,
     kem_keypair: Option<&MlKem768KeyPair>,
 ) -> Result<Option<ScannedDeposit>, String> {
+    if out.class() != OutputClass::Ordinary {
+        return Ok(None);
+    }
     let tx_out = tx_output_from_rpc(out)?;
 
     // Unified hybrid scan path (issue #970). A hybrid deposit (KEM ciphertext
@@ -164,9 +249,70 @@ pub fn scan_deposit_output(
             subaddress_index,
             factor_one: out.explicit_cluster_weight() == 0,
             kem_ciphertext: tx_out.kem_ciphertext.clone(),
+            lottery_context: None,
         },
         memo,
     }))
+}
+
+/// Scan one row for reserve ownership, for reserve accounting and release
+/// input selection (#1657).
+///
+/// * Ordinary rows: the deposit ownership scan ([`scan_deposit_output`]); the
+///   result is principal (`lottery_context: None`).
+/// * V2 payouts: [`detect_lottery_payout`] on the base target at `baseIndex`
+///   with the `x·G == P` check; the result carries its context (surplus).
+/// * Legacy and malformed lottery rows: never owned (#1450).
+pub fn scan_reserve_output(
+    out: &RpcOutput,
+    account: &AccountKey,
+    kem_keypair: Option<&MlKem768KeyPair>,
+) -> Result<Option<OwnedOutput>, String> {
+    match out.class() {
+        OutputClass::Ordinary => {
+            Ok(scan_deposit_output(out, account, kem_keypair)?.map(|s| s.owned))
+        }
+        OutputClass::LotteryV2 => {
+            let Some(context) = out.lottery_context.as_ref() else {
+                return Ok(None);
+            };
+            let tx_out = tx_output_from_rpc(out)?;
+            if tx_out.kem_ciphertext.is_some() && kem_keypair.is_none() {
+                tracing::warn!(
+                    tx_hash = %out.tx_hash,
+                    output_index = out.output_index,
+                    "hybrid (ML-KEM) lottery payout seen but reserve has no ML-KEM secret \
+                     configured; cannot scan it"
+                );
+                return Ok(None);
+            }
+            let Some(subaddress_index) =
+                detect_lottery_payout(&tx_out, account, kem_keypair, context)
+            else {
+                return Ok(None);
+            };
+            Ok(Some(OwnedOutput {
+                tx_hash: out.tx_hash.clone(),
+                output_index: out.output_index,
+                target_key: out.target_key.clone(),
+                public_key: out.public_key.clone(),
+                amount: out.amount,
+                subaddress_index,
+                factor_one: out.explicit_cluster_weight() == 0,
+                kem_ciphertext: tx_out.kem_ciphertext,
+                lottery_context: Some(context.clone()),
+            }))
+        }
+        OutputClass::LegacyLottery | OutputClass::Malformed => Ok(None),
+    }
+}
+
+/// Whether a row may be used as a CLSAG ring decoy, by class: only ordinary
+/// rows. Legacy lottery rows alias their winner's keys (#1450) and V2 payouts
+/// stay out of decoys for now (#1642; privacy gap tracked by #1663). The
+/// releaser also applies its own UTXO-plausibility filter on top.
+pub fn is_decoy_class(out: &RpcOutput) -> bool {
+    out.class() == OutputClass::Ordinary
 }
 
 /// Decode a base58 classical BTH address (`<view32><spend32>`) into a
@@ -335,31 +481,15 @@ pub fn build_release_tx<R: CryptoRng>(
             ));
         }
 
-        let real_output = TxOutput {
-            amount: input.owned.amount,
-            target_key: parse_hex_32("input.target_key", &input.owned.target_key)?,
-            public_key: parse_hex_32("input.public_key", &input.owned.public_key)?,
-            e_memo: None,
-            cluster_tags: Default::default(),
-            kem_ciphertext: input.owned.kem_ciphertext.clone(),
-        };
-        // Unified recovery (issue #970): a hybrid reserve input needs the ML-KEM
-        // secret to reconstruct its one-time key; a classical input uses the
-        // pure view-key path. Both dispatch through `recover_spend_key_for`.
-        let onetime_private = if real_output.kem_ciphertext.is_some() {
-            let kp = kem_keypair.ok_or(
-                "hybrid reserve input requires an ML-KEM secret to recover its one-time key",
-            )?;
-            real_output.recover_spend_key_for(
-                account,
-                kp,
-                input.owned.subaddress_index,
-                input.owned.output_index,
-            )
-        } else {
-            real_output.recover_spend_key(account, input.owned.subaddress_index)
-        }
-        .ok_or("failed to recover one-time private key for reserve input")?;
+        let real_output = input.owned.tx_output()?;
+        // Unified recovery: a hybrid reserve input needs the ML-KEM secret
+        // (issue #970), a classical input uses the pure view-key path, and a
+        // V2 lottery payout recovers through its context with the `x·G == P`
+        // check (#1657). The ring member stays the payout key `P`.
+        let onetime_private = input
+            .owned
+            .recover_onetime_key(account, kem_keypair)
+            .map_err(|e| format!("reserve input: {e}"))?;
 
         let real_member = RingMember::from_output(&real_output);
         let real_target = real_member.target_key;
@@ -452,6 +582,9 @@ mod tests {
                 .collect(),
             e_memo: out.e_memo.as_ref().map(|m| hex::encode(m.as_bytes())),
             kem_ciphertext: out.kem_ciphertext.as_ref().map(hex::encode),
+            lottery: false,
+            crypto_output_index: None,
+            lottery_context: None,
         }
     }
 
@@ -870,5 +1003,280 @@ mod tests {
         super::shuffle(&mut items, &mut rng);
         items.sort();
         assert_eq!(items, original);
+    }
+
+    // ---- V2 lottery payouts won by reserve outputs (#1657) ----
+
+    use crate::bth_lottery::LotteryContext;
+    use bth_transaction_clsag::lottery_v2::{self, Award, Domain, Outpoint, Source};
+
+    /// The winning reserve output's derivation index `j` (its position in its
+    /// tx). Nonzero so a wrong `baseIndex` is distinguishable.
+    const BASE_INDEX: u32 = 3;
+    const WINNER_HASH: [u8; 32] = [7; 32];
+    const SOURCE_AMOUNT: u64 = 1_000_000_000_000;
+    const PAYOUT_AMOUNT: u64 = 10_000_000_000_000;
+    const PAYOUT_HEIGHT: u64 = 17;
+
+    fn domain() -> Domain {
+        Domain {
+            genesis: [1; 32],
+            parent: [2; 32],
+            height: PAYOUT_HEIGHT,
+            ordinary_root: [5; 32],
+            manifest: lottery_v2::manifest(&[Award {
+                winner: Outpoint {
+                    hash: WINNER_HASH,
+                    index: BASE_INDEX,
+                },
+                amount: PAYOUT_AMOUNT,
+            }])
+            .unwrap(),
+            ordinal: 0,
+            amount: PAYOUT_AMOUNT,
+        }
+    }
+
+    /// A synthetic V2 payout row, built exactly the way the ledger derives
+    /// one: a hybrid reserve output at index `j` wins, `lottery_v2::derive`
+    /// yields `P = P_base + T·G` and the cumulative context, and the row
+    /// carries them in the frozen #1641 shape. Returns `(source, payout)`.
+    fn v2_payout_rows(reserve: &AccountKey, kem: &MlKem768KeyPair) -> (RpcOutput, RpcOutput) {
+        let source_out = TxOutput::new_hybrid(
+            SOURCE_AMOUNT,
+            &reserve.default_subaddress(),
+            kem.public_key(),
+            BASE_INDEX,
+            None,
+            ClusterTagVector::empty(),
+        );
+        let derived = lottery_v2::derive(
+            &Source {
+                outpoint: Outpoint {
+                    hash: WINNER_HASH,
+                    index: BASE_INDEX,
+                },
+                target: source_out.target_key,
+                context: lottery_v2::Context {
+                    base_index: BASE_INDEX,
+                    tweak: [0; 32],
+                },
+            },
+            &domain(),
+        )
+        .unwrap();
+        let source = rpc_output_from_txoutput(&source_out, &hex::encode(WINNER_HASH), BASE_INDEX);
+        let mut payout_out = source_out.clone();
+        payout_out.amount = PAYOUT_AMOUNT;
+        payout_out.target_key = derived.target;
+        let mut payout = rpc_output_from_txoutput(&payout_out, &"bb".repeat(32), 1);
+        payout.lottery = true;
+        payout.crypto_output_index = Some(BASE_INDEX);
+        payout.lottery_context = Some(LotteryContext {
+            version: lottery_v2::CONTEXT_VERSION,
+            base_index: derived.context.base_index,
+            tweak: hex::encode(derived.context.tweak),
+            ordinal: 0,
+            height: PAYOUT_HEIGHT,
+        });
+        (source, payout)
+    }
+
+    /// Acceptance: a reserve-owned V2 payout from a synthetic row is detected
+    /// as reserve surplus, is never a deposit or decoy, and is spendable by
+    /// the release builder with a node-verifiable CLSAG whose key image is the
+    /// one the reserve's spent-status check derives.
+    #[test]
+    fn reserve_owned_v2_payout_is_detected_and_spendable() {
+        let mut rng = StdRng::from_seed([0x57u8; 32]);
+        let reserve = AccountKey::random(&mut rng);
+        let recipient = AccountKey::random(&mut rng).default_subaddress();
+        let kem = MlKem768KeyPair::from_seed(&[0x61u8; 32]);
+        let (source, payout) = v2_payout_rows(&reserve, &kem);
+
+        // The plain ownership test at P can never match a V2 payout...
+        let payout_tx = tx_output_from_rpc(&payout).unwrap();
+        assert!(payout_tx
+            .belongs_to_account(&reserve, &kem, BASE_INDEX)
+            .is_none());
+        // ...and a payout is never a deposit (never mints wBTH).
+        assert!(scan_deposit_output(&payout, &reserve, Some(&kem))
+            .unwrap()
+            .is_none());
+
+        // The reserve scan finds it through the context, as surplus.
+        let owned = scan_reserve_output(&payout, &reserve, Some(&kem))
+            .unwrap()
+            .expect("reserve detects its V2 payout");
+        assert!(owned.is_lottery_payout());
+        assert!(owned.factor_one, "winner was untagged => factor-1 payout");
+        assert_eq!(owned.amount, PAYOUT_AMOUNT);
+        assert_eq!(owned.subaddress_index, 0);
+        // The source output is ordinary principal, distinct key image.
+        let principal = scan_reserve_output(&source, &reserve, Some(&kem))
+            .unwrap()
+            .expect("reserve owns the winning source output");
+        assert!(!principal.is_lottery_payout());
+        let payout_ki = owned.key_image(&reserve, Some(&kem)).unwrap();
+        assert_ne!(
+            payout_ki,
+            principal.key_image(&reserve, Some(&kem)).unwrap(),
+            "a V2 payout must not alias its winner's key image (#1450)"
+        );
+
+        // Never a decoy (#1642), unlike the ordinary source row.
+        assert!(!is_decoy_class(&payout));
+        assert!(is_decoy_class(&source));
+
+        // Spendable: the release builder signs with the recovered x and the
+        // node verifier accepts the tx.
+        let inputs = vec![ReleaseInput {
+            owned,
+            decoys: make_decoys(DEFAULT_RING_SIZE - 1, PAYOUT_AMOUNT, &mut rng),
+        }];
+        let tx = build_release_tx(
+            &reserve,
+            &recipient,
+            4_000_000_000_000,
+            MIN_TX_FEE,
+            &inputs,
+            PAYOUT_HEIGHT + 10,
+            Some(&kem),
+            &mut rng,
+        )
+        .expect("V2 payout release builds and self-verifies");
+        tx.verify_ring_signatures().unwrap();
+        let clsag = &tx.inputs.clsag()[0];
+        assert!(
+            clsag
+                .ring
+                .iter()
+                .any(|m| m.target_key == payout_tx.target_key),
+            "the ring member is the payout key P"
+        );
+        assert_eq!(
+            hex::encode(clsag.key_image),
+            payout_ki,
+            "spent-status key image matches the signed input's key image"
+        );
+    }
+
+    /// Acceptance: a forged context, a zero tweak, a wrong `baseIndex`, an
+    /// unknown version, or a contract-violating row yields no ownership, and
+    /// a forged context never yields a signing key.
+    #[test]
+    fn forged_v2_context_yields_no_ownership() {
+        let mut rng = StdRng::from_seed([0x59u8; 32]);
+        let reserve = AccountKey::random(&mut rng);
+        let stranger = AccountKey::random(&mut rng);
+        let kem = MlKem768KeyPair::from_seed(&[0x62u8; 32]);
+        let (_, payout) = v2_payout_rows(&reserve, &kem);
+        let ctx = payout.lottery_context.clone().unwrap();
+
+        let with_ctx = |f: &dyn Fn(&mut LotteryContext), index: Option<u32>| {
+            let mut row = payout.clone();
+            let mut c = ctx.clone();
+            f(&mut c);
+            row.crypto_output_index = index;
+            row.lottery_context = Some(c);
+            row
+        };
+        let cases = [
+            (
+                "forged tweak",
+                with_ctx(&|c| c.tweak = hex::encode([9u8; 32]), Some(BASE_INDEX)),
+            ),
+            (
+                "zero tweak",
+                with_ctx(&|c| c.tweak = hex::encode([0u8; 32]), Some(BASE_INDEX)),
+            ),
+            (
+                "non-canonical tweak",
+                with_ctx(&|c| c.tweak = "ff".repeat(32), Some(BASE_INDEX)),
+            ),
+            (
+                // Consistent on the wire, but not the index the hybrid key is
+                // bound to.
+                "wrong baseIndex",
+                with_ctx(&|c| c.base_index = BASE_INDEX + 1, Some(BASE_INDEX + 1)),
+            ),
+            (
+                "unknown version",
+                with_ctx(&|c| c.version = 3, Some(BASE_INDEX)),
+            ),
+        ];
+        // A row whose `cryptoOutputIndex` disagrees with its (otherwise
+        // genuine) context breaks the frozen contract: excluded at
+        // classification, before any key recovery.
+        let mismatched = with_ctx(&|_| {}, Some(BASE_INDEX + 1));
+        assert_eq!(mismatched.class(), OutputClass::Malformed);
+        assert!(scan_reserve_output(&mismatched, &reserve, Some(&kem))
+            .unwrap()
+            .is_none());
+        for (name, row) in &cases {
+            assert!(
+                scan_reserve_output(row, &reserve, Some(&kem))
+                    .unwrap()
+                    .is_none(),
+                "{name}: must yield no ownership"
+            );
+            // Even handed straight to recovery, a forged context never
+            // produces a key (x·G == P fails or the context is rejected).
+            let tx_out = tx_output_from_rpc(row).unwrap();
+            assert!(
+                recover_onetime_private_key(
+                    &tx_out,
+                    &reserve,
+                    Some(&kem),
+                    0,
+                    row.output_index,
+                    row.lottery_context.as_ref(),
+                )
+                .is_err(),
+                "{name}: must not recover a signing key"
+            );
+        }
+        // The genuine row is owned only by the reserve, and only with its
+        // ML-KEM secret.
+        assert!(scan_reserve_output(&payout, &stranger, Some(&kem))
+            .unwrap()
+            .is_none());
+        assert!(scan_reserve_output(&payout, &reserve, None)
+            .unwrap()
+            .is_none());
+        assert!(scan_reserve_output(&payout, &reserve, Some(&kem))
+            .unwrap()
+            .is_some());
+    }
+
+    /// Acceptance: a legacy (context-less) lottery row whose keys alias a
+    /// reserve output is excluded: never owned, never a deposit, never a decoy
+    /// (#1450).
+    #[test]
+    fn legacy_lottery_row_is_excluded() {
+        let mut rng = StdRng::from_seed([0x5bu8; 32]);
+        let reserve = AccountKey::random(&mut rng);
+        let kem = MlKem768KeyPair::from_seed(&[0x63u8; 32]);
+
+        // Main's legacy emitter reuses the winning UTXO's stealth keys, so the
+        // ordinary ownership check WOULD match it.
+        let winner = TxOutput::new(SOURCE_AMOUNT, &reserve.default_subaddress());
+        let mut legacy = rpc_output_from_txoutput(&winner, &"0b".repeat(32), 1);
+        legacy.lottery = true;
+        assert!(tx_output_from_rpc(&legacy)
+            .unwrap()
+            .belongs_to(&reserve)
+            .is_some());
+
+        assert!(scan_reserve_output(&legacy, &reserve, Some(&kem))
+            .unwrap()
+            .is_none());
+        assert!(scan_reserve_output(&legacy, &reserve, None)
+            .unwrap()
+            .is_none());
+        assert!(scan_deposit_output(&legacy, &reserve, None)
+            .unwrap()
+            .is_none());
+        assert!(!is_decoy_class(&legacy));
     }
 }

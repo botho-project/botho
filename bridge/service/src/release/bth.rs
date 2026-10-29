@@ -31,10 +31,12 @@
 //! - **`prepare_release`**: after the attestation gate, scan the recent reserve
 //!   window (`chain_getOutputs`) for spendable, factor-1, reserve-owned outputs
 //!   (ADR 0003; spent/pending inputs dropped via `chain_areKeyImagesSpent`),
-//!   select inputs, gather ring decoys, and build + CLSAG-sign a tx paying a
-//!   FRESH one-time stealth output to the recipient (ADR 0004) with change back
-//!   to the reserve. The signed tx is self-verified against the node's verifier
-//!   before it is returned.
+//!   select inputs (principal first; V2 lottery payouts the reserve won are
+//!   spendable surplus, used only when principal falls short, #1657), gather
+//!   ring decoys (ordinary rows only: never a lottery row, #1450 / #1642), and
+//!   build + CLSAG-sign a tx paying a FRESH one-time stealth output to the
+//!   recipient (ADR 0004) with change back to the reserve. The signed tx is
+//!   self-verified against the node's verifier before it is returned.
 //! - **`broadcast`**: submit the bincode wire bytes via `tx_submit`; idempotent
 //!   (an "already known" / duplicate-key-image rejection of our OWN recorded tx
 //!   is success on resume).
@@ -52,8 +54,7 @@
 
 use async_trait::async_trait;
 use bth_bridge_core::{BridgeOrder, BthConfig, ReleaseAuthorization};
-use bth_crypto_ring_signature::KeyImage;
-use bth_transaction_clsag::{TxOutput, MIN_TX_FEE};
+use bth_transaction_clsag::MIN_TX_FEE;
 use ed25519_dalek::{Signature, VerifyingKey};
 use tracing::{debug, info, warn};
 
@@ -62,7 +63,8 @@ use crate::{
     bth_keys::ReserveKeys,
     bth_rpc::{BthNodeRpc, RpcError, TxInclusion},
     bth_scan::{
-        build_release_tx, decode_recipient_address, scan_deposit_output, OwnedOutput, ReleaseInput,
+        build_release_tx, decode_recipient_address, is_decoy_class, scan_reserve_output,
+        OwnedOutput, ReleaseInput,
     },
 };
 
@@ -345,11 +347,13 @@ impl BthReleaser {
                 // Pass the reserve's ML-KEM secret (when configured) so hybrid
                 // reserve outputs are DETECTED as spendable inputs, not warned
                 // about (issue #972). A classical-only reserve passes `None`.
-                match scan_deposit_output(out, account, reserve.kem_keypair())
+                // `scan_reserve_output` also finds V2 lottery payouts the
+                // reserve won and never returns a legacy lottery row (#1657).
+                match scan_reserve_output(out, account, reserve.kem_keypair())
                     .map_err(ReleaseError::Config)?
                 {
                     // A reserve-owned, factor-1 output is a candidate input.
-                    Some(scanned) if scanned.owned.factor_one => owned.push(scanned.owned),
+                    Some(owned_out) if owned_out.factor_one => owned.push(owned_out),
                     // A reserve-owned but NON-factor-1 output must never be
                     // spent (it would launder cluster provenance, ADR 0003);
                     // it is neither an input nor a decoy.
@@ -361,8 +365,12 @@ impl BthReleaser {
                     // is NOT in the UTXO set; using it as a ring member makes the
                     // node reject the release block ("ring member target_key not
                     // in UTXO set", C3). Skip zero-amount / all-zero-key outputs
-                    // so every decoy resolves to a real UTXO (#1025).
-                    None if is_spendable_decoy(out) => decoy_pool.push(out.clone()),
+                    // so every decoy resolves to a real UTXO (#1025). Lottery
+                    // rows are never decoys: legacy rows alias their winner
+                    // (#1450) and V2 payouts stay out for now (#1642, #1663).
+                    None if is_decoy_class(out) && is_spendable_decoy(out) => {
+                        decoy_pool.push(out.clone())
+                    }
                     None => {}
                 }
             }
@@ -403,51 +411,33 @@ fn is_spendable_decoy(out: &crate::bth_rpc::RpcOutput) -> bool {
 }
 
 /// Derive the key image of a reserve-owned output (node-identical), for the
-/// spent-status query. Reuses `recover_spend_key` + `KeyImage::from`, exactly
-/// what the node records in its double-spend set.
+/// spent-status query. Delegates to [`OwnedOutput::key_image`], the same
+/// recovery the release signer uses: hybrid outputs go through ML-KEM
+/// decapsulation (issue #972) and V2 lottery payouts through their context
+/// with the `x·G == P` check (#1657), so the spent-status key image always
+/// matches the one the node records.
 fn release_input_key_image(
     account: &bth_account_keys::AccountKey,
     owned: &OwnedOutput,
     kem_keypair: Option<&bth_crypto_pq::MlKem768KeyPair>,
 ) -> Result<String, ReleaseError> {
-    let target_key: [u8; 32] = hex::decode(&owned.target_key)
-        .ok()
-        .and_then(|b| b.try_into().ok())
-        .ok_or_else(|| ReleaseError::Config("owned output target_key not 32 bytes".into()))?;
-    let public_key: [u8; 32] = hex::decode(&owned.public_key)
-        .ok()
-        .and_then(|b| b.try_into().ok())
-        .ok_or_else(|| ReleaseError::Config("owned output public_key not 32 bytes".into()))?;
-    let tx_out = TxOutput {
-        amount: owned.amount,
-        target_key,
-        public_key,
-        e_memo: None,
-        cluster_tags: Default::default(),
-        kem_ciphertext: owned.kem_ciphertext.clone(),
-    };
-    // A hybrid reserve output's one-time key (and hence its key image) can only
-    // be reconstructed via ML-KEM decapsulation; a classical output uses the
-    // pure view-key path (issue #972). Both dispatch through the same unified
-    // recovery the release signer uses, so the spent-status key image matches.
-    let onetime = if tx_out.kem_ciphertext.is_some() {
-        let kp = kem_keypair.ok_or_else(|| {
-            ReleaseError::Config(
-                "hybrid reserve output requires an ML-KEM secret to derive its key image".into(),
-            )
-        })?;
-        tx_out.recover_spend_key_for(account, kp, owned.subaddress_index, owned.output_index)
-    } else {
-        tx_out.recover_spend_key(account, owned.subaddress_index)
-    }
-    .ok_or_else(|| ReleaseError::Config("cannot recover reserve one-time key".into()))?;
-    Ok(hex::encode(KeyImage::from(&onetime).as_bytes()))
+    owned
+        .key_image(account, kem_keypair)
+        .map_err(|e| ReleaseError::Config(format!("reserve output key image: {e}")))
 }
 
-/// Greedily select reserve outputs covering `amount + fee`, largest first (so
-/// the fewest inputs — hence rings — are used).
+/// Greedily select reserve outputs covering `amount + fee`: principal before
+/// lottery surplus, and largest first within each (so the fewest inputs, and
+/// hence rings, are used).
+///
+/// Spending principal first means a release that principal can cover behaves
+/// exactly as before #1657, and the surplus stays separately visible in the
+/// proof of reserves. A V2 payout is used only when principal alone falls
+/// short. Its change then returns to the reserve as an ordinary output, which
+/// can only raise the principal figure and never the mintable supply (minting
+/// is driven by memo-matched deposits only).
 fn select_inputs(mut owned: Vec<OwnedOutput>, required: u64) -> Option<Vec<OwnedOutput>> {
-    owned.sort_by_key(|entry| std::cmp::Reverse(entry.amount));
+    owned.sort_by_key(|entry| (entry.is_lottery_payout(), std::cmp::Reverse(entry.amount)));
     let mut selected = Vec::new();
     let mut total = 0u64;
     for o in owned {
@@ -980,5 +970,43 @@ mod tests {
             Err(ReleaseError::Rpc(_)) => {} // retryable, order stays BurnConfirmed
             other => panic!("expected a retryable Rpc error, got {other:?}"),
         }
+    }
+
+    /// #1657: input selection spends principal before lottery surplus, and
+    /// reaches for a V2 payout only when principal alone falls short.
+    #[test]
+    fn test_select_inputs_spends_principal_before_lottery_surplus() {
+        use crate::bth_lottery::LotteryContext;
+        let out = |amount: u64, lottery: bool| OwnedOutput {
+            tx_hash: format!("{amount}"),
+            output_index: 0,
+            target_key: String::new(),
+            public_key: String::new(),
+            amount,
+            subaddress_index: 0,
+            factor_one: true,
+            kem_ciphertext: None,
+            lottery_context: lottery.then(|| LotteryContext {
+                version: 2,
+                base_index: 0,
+                tweak: "07".repeat(32),
+                ordinal: 0,
+                height: 1,
+            }),
+        };
+        let owned = vec![out(5_000, true), out(1_000, false), out(2_000, false)];
+
+        // Principal covers it: the (larger) payout is left untouched.
+        let picked = select_inputs(owned.clone(), 2_500).unwrap();
+        assert!(picked.iter().all(|o| !o.is_lottery_payout()));
+        assert_eq!(picked.iter().map(|o| o.amount).sum::<u64>(), 3_000);
+
+        // Principal falls short: the payout is spendable surplus.
+        let picked = select_inputs(owned.clone(), 4_000).unwrap();
+        assert_eq!(picked.len(), 3);
+        assert!(picked.last().unwrap().is_lottery_payout());
+
+        // Even all of it cannot cover more than exists.
+        assert!(select_inputs(owned, 9_000).is_none());
     }
 }

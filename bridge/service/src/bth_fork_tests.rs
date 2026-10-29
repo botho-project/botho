@@ -167,5 +167,8 @@ async fn bth_node_reserve_balance_reads_live_reserve() {
         .reserve_balance()
         .await
         .expect("reserve_balance scans the live reserve window without error");
-    eprintln!("live reserve balance: {balance} picocredits (unspent factor-1)");
+    eprintln!(
+        "live reserve balance: principal {} + lottery surplus {} picocredits (unspent factor-1)",
+        balance.principal, balance.lottery_surplus
+    );
 }
