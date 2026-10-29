@@ -126,6 +126,29 @@ pub(in crate::ledger) fn read_context(
     txn: &RoTxn<'_>,
     id: &UtxoId,
 ) -> Result<(Utxo, StoredContext), LedgerError> {
+    read_context_with(ledger, txn, id, &mut |height| {
+        let bytes = ledger
+            .blocks_db
+            .get(txn, &height)
+            .map_err(db_op("read payout creating block"))?
+            .ok_or_else(|| {
+                LedgerError::InconsistentRecord("missing payout creating block".into())
+            })?;
+        let block: Block = crate::ledger::experimental::decode(bytes)?;
+        Ok(block.hash())
+    })
+}
+
+/// [`read_context`] with the lottery creating-block lookup supplied by the
+/// caller: `creating_hash(height)` must return the hash of the block stored
+/// at `height` in the SAME `txn` (or an error). Lets a caller that already
+/// decoded that block in `txn` skip re-decoding it per payout.
+fn read_context_with(
+    ledger: &Ledger,
+    txn: &RoTxn<'_>,
+    id: &UtxoId,
+    creating_hash: &mut dyn FnMut(u64) -> Result<[u8; 32], LedgerError>,
+) -> Result<(Utxo, StoredContext), LedgerError> {
     let key = id.to_bytes();
     let context = StoredContext::decode(
         ledger
@@ -161,15 +184,7 @@ pub(in crate::ledger) fn read_context(
                     "lottery context ordinal/index".into(),
                 ));
             }
-            let bytes = ledger
-                .blocks_db
-                .get(txn, &context.height())
-                .map_err(db_op("read payout creating block"))?
-                .ok_or_else(|| {
-                    LedgerError::InconsistentRecord("missing payout creating block".into())
-                })?;
-            let block: Block = crate::ledger::experimental::decode(bytes)?;
-            if block.hash() != id.tx_hash {
+            if creating_hash(context.height())? != id.tx_hash {
                 return Err(LedgerError::InconsistentRecord(
                     "lottery context creating block".into(),
                 ));
@@ -324,7 +339,8 @@ pub const LOTTERY_RULES_VERSION: u32 = 2;
 /// Public, read-only copy of an output's persisted derivation context
 /// (#1286 P4). A value snapshot of the crate-internal [`StoredContext`]:
 /// holding one grants no write path, and it is only ever produced by the
-/// strict [`Ledger::get_output_derivation_context`] read.
+/// strict [`Ledger::get_output_derivation_context`] and
+/// [`Ledger::get_block_with_payout_contexts`] reads.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DerivationContext {
     /// Coinbase / transaction output: zero tweak, base index = output index.
@@ -377,33 +393,83 @@ impl Ledger {
         read_context(self, &txn, id).map(|(utxo, c)| (utxo, DerivationContext::from(&c)))
     }
 
+    /// The block at `height` and, for each of its lottery payouts in order
+    /// (outpoint `(block hash, 1 + i)`), the payout UTXO and its derivation
+    /// context, all read in ONE transaction (#1286 P4, the
+    /// `chain_getOutputs` path).
+    ///
+    /// Strict: the block is decoded once and every payout read applies the
+    /// full `get_derivation_context` checks, with the creating-block check
+    /// made against that decoded block. A payout without a context is
+    /// [`LedgerError::MissingContext`] (on `botho.ledger.2` that can only be
+    /// corruption). A missing block is [`LedgerError::BlockNotFound`].
+    pub fn get_block_with_payout_contexts(
+        &self,
+        height: u64,
+    ) -> Result<(Block, Vec<(Utxo, DerivationContext)>), LedgerError> {
+        let txn = self.env.read_txn().map_err(db_op("payout read txn"))?;
+        let bytes = self
+            .blocks_db
+            .get(&txn, &height)
+            .map_err(db_op("read block"))?
+            .ok_or(LedgerError::BlockNotFound(height))?;
+        let block: Block = crate::ledger::experimental::decode(bytes)?;
+        let hash = block.hash();
+        let payouts = (0..block.lottery_outputs.len())
+            .map(|i| {
+                let id = UtxoId::new(hash, (i as u32) + 1);
+                read_context_with(self, &txn, &id, &mut |h| {
+                    if h == height {
+                        Ok(hash)
+                    } else {
+                        Err(LedgerError::InconsistentRecord(
+                            "lottery context creating block".into(),
+                        ))
+                    }
+                })
+                .map(|(utxo, c)| (utxo, DerivationContext::from(&c)))
+            })
+            .collect::<Result<_, _>>()?;
+        Ok((block, payouts))
+    }
+
+    /// TEST/FIXTURE ONLY: delete the derivation context of `id`, simulating
+    /// a corrupted `botho.ledger.2` store. Gated like
+    /// [`Ledger::seed_fixture_snapshot_unvalidated`].
+    #[cfg(any(test, feature = "test-fixtures"))]
+    #[doc(hidden)]
+    pub fn fixture_delete_derivation_context(&self, id: &UtxoId) -> Result<bool, LedgerError> {
+        let mut txn = self.env.write_txn().map_err(db_op("fixture write txn"))?;
+        let deleted = self
+            .contexts_db
+            .delete(&mut txn, &id.to_bytes())
+            .map_err(db_op("fixture delete context"))?;
+        txn.commit().map_err(db_op("fixture commit"))?;
+        Ok(deleted)
+    }
+
     /// TEST/FIXTURE SEEDING ONLY: not a sync path and not validation.
     ///
-    /// Applies `block`'s storage effects through the shared writer without
-    /// any consensus check (transactions are not verified, the drawing is not
-    /// recomputed). `Some(records)` writes `botho.ledger.2` effects: a
-    /// Direct context per coinbase/transaction output and the Lottery context
-    /// of `records[ordinal]` per payout (the state P3's V2 rules will
-    /// produce). `None` writes legacy V1 effects with NO derivation contexts,
-    /// the only way to reproduce a pre-V2 (legacy) lottery payout row. Gated
-    /// like [`Ledger::seed_fixture_snapshot_unvalidated`]; never call it on
-    /// operator data.
+    /// Applies `block`'s `botho.ledger.2` storage effects through the shared
+    /// writer without any consensus check (transactions are not verified,
+    /// the drawing is not recomputed): a Direct context per
+    /// coinbase/transaction output and the Lottery context of
+    /// `records[ordinal]` per payout (the state P3's V2 rules will produce).
+    /// Gated like [`Ledger::seed_fixture_snapshot_unvalidated`]; never call
+    /// it on operator data.
     #[cfg(any(test, feature = "test-fixtures"))]
     #[doc(hidden)]
     pub fn seed_fixture_block_unvalidated(
         &self,
         block: &Block,
-        records: Option<&[bth_transaction_clsag::lottery_v2::Record]>,
+        records: &[bth_transaction_clsag::lottery_v2::Record],
     ) -> Result<(), LedgerError> {
         let state = self.get_chain_state()?;
         let bytes =
             bincode::serialize(block).map_err(|e| LedgerError::Serialization(e.to_string()))?;
-        let representation = match records {
-            Some(records) => super::writer::Representation::Production {
-                contexts: self.contexts_db,
-                records,
-            },
-            None => super::writer::Representation::Legacy,
+        let representation = super::writer::Representation::Production {
+            contexts: self.contexts_db,
+            records,
         };
         let mut txn = self.env.write_txn().map_err(db_op("fixture write txn"))?;
         self.write_tables().block_effects(

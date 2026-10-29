@@ -1764,10 +1764,12 @@ fn cluster_tags_json(tags: &bth_transaction_types::ClusterTagVector) -> Vec<[u64
 /// - `clusterTags` = the payout UTXO's STORED tags (previously always empty,
 ///   which made signers underestimate fees).
 ///
-/// Without it (`None`) the row is a legacy V1 row: no `lotteryContext`,
-/// `cryptoOutputIndex` or `winnerOutpoint`, and consumers must exclude it
-/// (#1450). Its `clusterTags` are the stored UTXO's tags when one exists
-/// (`legacy_tags`), else empty.
+/// Without it (`None`) the row is the legacy V1 shape: no `lotteryContext`,
+/// `cryptoOutputIndex` or `winnerOutpoint` (and empty `clusterTags`), which
+/// consumers must exclude (#1450). `handle_get_outputs` never emits it: on a
+/// `botho.ledger.2` store a payout without a context is corruption and the
+/// call fails with -32603. The shape is kept as a pure-function golden so
+/// consumers can test their exclusion path.
 ///
 /// A stored context that is not `Lottery`, or a stored UTXO whose envelope
 /// differs from the block's payout, is an inconsistent ledger and an error.
@@ -1776,7 +1778,6 @@ fn lottery_payout_row(
     lottery_idx: usize,
     lottery_output: &crate::block::LotteryOutput,
     stored: Option<(&crate::transaction::Utxo, &crate::ledger::DerivationContext)>,
-    legacy_tags: Option<&bth_transaction_types::ClusterTagVector>,
 ) -> Result<Value, String> {
     let output_index = (lottery_idx as u32) + 1;
     let mut row = json!({
@@ -1786,7 +1787,7 @@ fn lottery_payout_row(
         "targetKey": hex::encode(lottery_output.target_key),
         "publicKey": hex::encode(lottery_output.public_key),
         "amountCommitment": hex::encode(lottery_output.payout.to_le_bytes()),
-        "clusterTags": legacy_tags.map(cluster_tags_json).unwrap_or_default(),
+        "clusterTags": Vec::<[u64; 2]>::new(),
         // Unified ML-KEM ciphertext (issue #970): hex or null.
         "kemCiphertext": lottery_output.kem_ciphertext.as_ref().map(hex::encode),
         "lottery": true,
@@ -1857,7 +1858,21 @@ async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> Json
     let mut blocks = Vec::new();
 
     for height in start_height..=end_height {
-        if let Ok(block) = ledger.get_block(height) {
+        // One strict read per block: the block plus every lottery payout's
+        // UTXO and derivation context (#1641). A height past the tip is
+        // skipped as before; any other read failure fails the call closed.
+        let (block, payouts) = match ledger.get_block_with_payout_contexts(height) {
+            Ok(fetched) => fetched,
+            Err(crate::ledger::LedgerError::BlockNotFound(_)) => continue,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    id,
+                    -32603,
+                    &format!("block {height} payout read failed: {e}"),
+                )
+            }
+        };
+        {
             // Genesis initializes block metadata only; its placeholder mint
             // never creates a ledger output. Keep the requested block envelope
             // without advertising a nonexistent coinbase to wallet ring pools.
@@ -1955,54 +1970,21 @@ async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> Json
             // the payout's persisted derivation context, the winner outpoint,
             // and the payout UTXO's STORED cluster tags. See
             // `lottery_payout_row`.
+            //
+            // The payout UTXOs and contexts were read strictly in the same
+            // transaction as `block` (`get_block_with_payout_contexts`). On a
+            // `botho.ledger.2` store every payout has a Lottery context, so any
+            // failure (including a missing context) is corruption and the
+            // call fails closed rather than emitting a legacy-shaped row.
             let block_hash = block.hash();
-            for (lottery_idx, lottery_output) in block.lottery_outputs.iter().enumerate() {
-                let outpoint =
-                    crate::transaction::UtxoId::new(block_hash, (lottery_idx as u32) + 1);
-                let stored = match ledger.get_output_derivation_context(&outpoint) {
-                    Ok((utxo, context)) => Some((utxo, context)),
-                    // Legacy (pre-V2) payout: no context was ever written. Emit
-                    // the row WITHOUT `lotteryContext`, which marks it legacy;
-                    // consumers must exclude it (#1450). A `botho.ledger.2`
-                    // chain never produces one.
-                    Err(crate::ledger::LedgerError::MissingContext(_)) => {
-                        warn!(
-                            height,
-                            lottery_idx, "lottery payout has no derivation context (legacy row)"
-                        );
-                        None
-                    }
-                    Err(e) => {
-                        return JsonRpcResponse::error(
-                            id,
-                            -32603,
-                            &format!(
-                                "lottery payout {}:{} context read failed: {e}",
-                                hex::encode(block_hash),
-                                outpoint.output_index
-                            ),
-                        )
-                    }
-                };
-                let legacy_tags = match &stored {
-                    Some(_) => None,
-                    None => match ledger.get_utxo(&outpoint) {
-                        Ok(utxo) => utxo.map(|u| u.output.cluster_tags),
-                        Err(e) => {
-                            return JsonRpcResponse::error(
-                                id,
-                                -32603,
-                                &format!("lottery payout UTXO read failed: {e}"),
-                            )
-                        }
-                    },
-                };
+            for (lottery_idx, (lottery_output, (utxo, context))) in
+                block.lottery_outputs.iter().zip(&payouts).enumerate()
+            {
                 match lottery_payout_row(
                     &block_hash,
                     lottery_idx,
                     lottery_output,
-                    stored.as_ref().map(|(u, c)| (u, c)),
-                    legacy_tags.as_ref(),
+                    Some((utxo, context)),
                 ) {
                     Ok(row) => outputs.push(row),
                     Err(e) => return JsonRpcResponse::error(id, -32603, &e),

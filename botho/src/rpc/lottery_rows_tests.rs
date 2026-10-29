@@ -3,9 +3,11 @@
 //!
 //! P3 (protocol 7.0.0 producer/validator) is not on this branch, so real V2
 //! payouts cannot be mined yet. These tests seed fixture blocks through the
-//! shared writer (`Ledger::seed_fixture_block_unvalidated`): with payout
-//! records (the `botho.ledger.2` Lottery contexts P3 will produce) for V2
-//! rows, and with legacy V1 effects (no contexts) for legacy rows.
+//! shared writer (`Ledger::seed_fixture_block_unvalidated`) with payout
+//! records, i.e. the `botho.ledger.2` Lottery contexts P3 will produce. The
+//! legacy (V1-shaped) row is never emitted by the handler (a payout without a
+//! context is corruption, -32603); its golden is built from the pure row
+//! helper so consumers can test their exclusion path.
 //!
 //! Golden rows live in `botho/tests/fixtures/rpc-lottery-rows.json`.
 //! Regenerate with `BOTHO_BLESS_RPC_GOLDEN=1` only for a deliberate,
@@ -74,9 +76,8 @@ struct Chain {
     b3: Block,
 }
 
-/// `v2`: seed with `botho.ledger.2` contexts (Lottery for the payout);
-/// otherwise legacy V1 effects with no contexts at all.
-fn seeded_chain(v2: bool) -> Chain {
+/// Seeded with `botho.ledger.2` contexts (Lottery for the payout).
+fn seeded_chain() -> Chain {
     let dir = TempDir::new().unwrap();
     let ledger = Ledger::open(dir.path()).unwrap();
     ledger.set_difficulty(u64::MAX).unwrap();
@@ -92,9 +93,7 @@ fn seeded_chain(v2: bool) -> Chain {
     ];
     let winner = UtxoId::new(tx.hash(), WINNER_INDEX);
     b2.transactions = vec![tx];
-    ledger
-        .seed_fixture_block_unvalidated(&b2, v2.then_some(&[][..]))
-        .unwrap();
+    ledger.seed_fixture_block_unvalidated(&b2, &[]).unwrap();
 
     let mut b3 = child(&b2);
     let record = Record {
@@ -122,7 +121,7 @@ fn seeded_chain(v2: bool) -> Chain {
     }];
     let records = [record];
     ledger
-        .seed_fixture_block_unvalidated(&b3, v2.then_some(&records[..]))
+        .seed_fixture_block_unvalidated(&b3, &records)
         .unwrap();
 
     let state = RpcState::new(
@@ -186,7 +185,7 @@ fn check_golden(key: &str, actual: &Value) {
 
 #[tokio::test]
 async fn v2_lottery_row_matches_golden_and_frozen_contract() {
-    let chain = seeded_chain(true);
+    let chain = seeded_chain();
     let rows = lottery_rows(&chain.state, 3).await;
     assert_eq!(rows.len(), 1);
     let row = &rows[0];
@@ -247,29 +246,49 @@ async fn v2_lottery_row_matches_golden_and_frozen_contract() {
     );
 }
 
-#[tokio::test]
-async fn v1_legacy_lottery_row_matches_golden_and_omits_context() {
-    let chain = seeded_chain(false);
-    let rows = lottery_rows(&chain.state, 3).await;
-    assert_eq!(rows.len(), 1);
-    let row = &rows[0];
-    check_golden("v1", row);
-
+/// The legacy (V1-shaped) row, built from the pure helper: the handler never
+/// emits it on a `botho.ledger.2` store.
+#[test]
+fn v1_legacy_lottery_row_matches_golden_and_omits_context() {
+    let (lottery_output, _) = row_inputs();
+    let row = lottery_payout_row(&[0x0b; 32], 0, &lottery_output, None).unwrap();
+    check_golden("v1", &row);
     // Legacy marker: no context, so consumers exclude the row (#1450).
     for field in ["lotteryContext", "cryptoOutputIndex", "winnerOutpoint"] {
         assert!(row.get(field).is_none(), "legacy row must omit {field}");
     }
-    // Tags still come from the stored UTXO rather than being emitted empty.
+    assert_eq!(row["lottery"], json!(true));
+}
+
+/// A payout whose context is missing (corruption on `botho.ledger.2`) fails
+/// the call closed instead of degrading to a legacy row (#1655 review).
+#[tokio::test]
+async fn missing_payout_context_fails_closed() {
+    let chain = seeded_chain();
     let payout = UtxoId::new(chain.b3.hash(), 1);
-    let tags = stored_tags(&chain.state, &payout);
-    assert_eq!(tags.as_array().unwrap().len(), 2);
-    assert_eq!(row["clusterTags"], tags);
+    assert!(chain
+        .state
+        .ledger
+        .read()
+        .unwrap()
+        .fixture_delete_derivation_context(&payout)
+        .unwrap());
+    let resp = handle_get_outputs(
+        json!(1),
+        &json!({"start_height": 1, "end_height": 3}),
+        &chain.state,
+    )
+    .await;
+    assert!(resp.result.is_none());
+    let error = resp.error.expect("missing context must be an error");
+    assert_eq!(error.code, -32603);
+    assert!(error.message.contains("context"), "{}", error.message);
 }
 
 /// Ordinary rows keep their shape: no lottery fields leak onto them.
 #[tokio::test]
 async fn ordinary_rows_are_unchanged_by_v2_lottery_fields() {
-    let chain = seeded_chain(true);
+    let chain = seeded_chain();
     let resp = handle_get_outputs(
         json!(1),
         &json!({"start_height": 2, "end_height": 2}),
@@ -280,7 +299,7 @@ async fn ordinary_rows_are_unchanged_by_v2_lottery_fields() {
     for row in blocks[0]["outputs"].as_array().unwrap() {
         assert!(row.get("lotteryContext").is_none());
         assert!(row.get("winnerOutpoint").is_none());
-        assert_eq!(row["cryptoOutputIndex"].is_null(), false);
+        assert!(!row["cryptoOutputIndex"].is_null());
     }
 }
 
@@ -308,15 +327,11 @@ fn payout_row_rejects_a_direct_context_and_a_mismatched_utxo() {
         height: 8,
         base_index: 1,
     };
-    assert!(lottery_payout_row(
-        &[0x0b; 32],
-        0,
-        &lottery_output,
-        Some((&utxo, &direct)),
-        None
-    )
-    .unwrap_err()
-    .contains("non-lottery"));
+    assert!(
+        lottery_payout_row(&[0x0b; 32], 0, &lottery_output, Some((&utxo, &direct)))
+            .unwrap_err()
+            .contains("non-lottery")
+    );
 
     let lottery = DerivationContext::Lottery {
         height: 8,
@@ -326,37 +341,19 @@ fn payout_row_rejects_a_direct_context_and_a_mismatched_utxo() {
     };
     let mut other = utxo.clone();
     other.output.target_key = [0x99; 32];
-    assert!(lottery_payout_row(
-        &[0x0b; 32],
-        0,
-        &lottery_output,
-        Some((&other, &lottery)),
-        None
-    )
-    .unwrap_err()
-    .contains("disagrees"));
+    assert!(
+        lottery_payout_row(&[0x0b; 32], 0, &lottery_output, Some((&other, &lottery)))
+            .unwrap_err()
+            .contains("disagrees")
+    );
     // Ordinal must match the payout's position in the block.
-    assert!(lottery_payout_row(
-        &[0x0b; 32],
-        1,
-        &lottery_output,
-        Some((&utxo, &lottery)),
-        None
-    )
-    .is_err());
-    assert!(lottery_payout_row(
-        &[0x0b; 32],
-        0,
-        &lottery_output,
-        Some((&utxo, &lottery)),
-        None
-    )
-    .is_ok());
+    assert!(lottery_payout_row(&[0x0b; 32], 1, &lottery_output, Some((&utxo, &lottery))).is_err());
+    assert!(lottery_payout_row(&[0x0b; 32], 0, &lottery_output, Some((&utxo, &lottery))).is_ok());
 }
 
 #[tokio::test]
 async fn chain_info_and_identity_report_lottery_rules() {
-    let chain = seeded_chain(true);
+    let chain = seeded_chain();
     let state = chain.state.with_identity(NodeIdentity {
         protocol_version: "7.0.0".into(),
         ..NodeIdentity::default()
