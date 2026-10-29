@@ -8,6 +8,9 @@ mod map_full_tests;
 #[path = "store/ring_admission_tests.rs"]
 mod ring_admission_tests;
 #[cfg(test)]
+#[path = "store/v2_activation_tests.rs"]
+mod v2_activation_tests;
+#[cfg(test)]
 #[path = "store/v2_tests.rs"]
 mod v2_tests;
 
@@ -28,9 +31,7 @@ use tracing::{debug, info, warn};
 use super::{ChainState, LedgerError};
 use crate::{
     block::{calculate_block_reward, Block},
-    consensus::{
-        validate_block_lottery, validate_lottery_output_bindings, LotteryFeeConfig, MAX_TX_AGE,
-    },
+    consensus::MAX_TX_AGE,
     decoy_selection::{DecoySelectionError, GammaDecoySelector, OutputCandidate},
     transaction::{RingMember, Transaction as BothoTransaction, TxOutput, Utxo, UtxoId},
 };
@@ -892,120 +893,49 @@ impl Ledger {
         block: &Block,
         emission: Option<EmissionStateUpdate>,
     ) -> Result<(), LedgerError> {
-        // botho.ledger.2 (#1286 P2, D0): a V1 payout reuses its winner's
-        // one-time key (the aliased-key-image defect), so it has no honest
-        // derivation context and D0 admits no `LegacyAliased` state. Until the
-        // V2 producer/validator of protocol 7.0.0 (P3) supplies payout
-        // records, a block carrying V1 lottery payouts is refused FIRST, before
-        // validation or any write: a node-local storage refusal, not a verdict
-        // on the peer's block.
-        if !block.lottery_outputs.is_empty() {
-            return Err(LedgerError::UnsupportedSchema(format!(
-                "block {} carries {} V1 lottery payout(s); botho.ledger.2 stores \
-                 accept only V2 payout records, which arrive with protocol 7.0.0 \
-                 (#1286 P3)",
-                block.height(),
-                block.lottery_outputs.len()
-            )));
-        }
-
+        // Protocol 7.0.0 (#1286 P3, #1640): every block is validated under the
+        // V2 lottery rules from genesis. This replaces P2's interim refusal of
+        // lottery-bearing blocks and the V1 pair `validate_block_lottery` +
+        // `validate_lottery_output_bindings` (the latter REQUIRED payouts to
+        // copy the winner's one-time target, the #1286 aliased-key-image
+        // defect; both stay in `consensus::lottery` for their unit/fuzz
+        // coverage but no block path calls them). A V1-shaped payout cannot
+        // equal its V2 record, so it is invalid.
         let state = self.get_chain_state()?;
 
-        let block_fees = validation::ValidationReads::validate_ordinary_block(
-            self,
-            block,
-            &state,
-            validation::RootRule::Legacy,
-        )?;
-
-        // Validate lottery results and compute the new carryover pool.
-        // The pool is consensus state: fees' pool share and the
-        // height-scheduled emission share flow in; capped payouts flow out.
-        let stored_lottery_pool = self.get_lottery_pool()?;
-        let emission_share = block.minting_tx.lottery_emission_share();
-        let new_lottery_pool = if block.total_fees() > 0
-            || !block.lottery_outputs.is_empty()
-            || emission_share > 0
-            || stored_lottery_pool > 0
-        {
-            let lottery_config = LotteryFeeConfig::default();
-            // prev_block_hash is used for verifiable randomness — both for the
-            // candidate-window start offset and the draw itself.
-            let prev_block_hash = &block.header.prev_block_hash;
-            let candidates = self.get_lottery_validation_candidates(
-                block.height(),
-                prev_block_hash,
-                &lottery_config.draw_config,
-            )?;
-
-            match validate_block_lottery(
-                block,
-                &candidates,
-                stored_lottery_pool,
-                prev_block_hash,
-                &lottery_config,
-            ) {
-                Ok(new_pool) => new_pool,
-                Err(e) => {
-                    warn!(
-                        block_height = block.height(),
-                        error = %e,
-                        "Lottery validation failed"
-                    );
-                    return Err(LedgerError::InvalidBlock(format!(
-                        "Lottery validation failed: {}",
-                        e
-                    )));
-                }
-            }
-        } else {
-            stored_lottery_pool
-        };
-
-        // Bind each lottery payout's stealth envelope (target/public key AND the
-        // hybrid ML-KEM ciphertext) to the winning UTXO it redistributes to
-        // (sub-issue 5 deferred check, #973). `validate_block_lottery` above
-        // confirms winner eligibility and payout accounting but cannot see the
-        // winning UTXO's stealth keys (they are not carried by
-        // `LotteryCandidate`); this read-only check resolves them from the same
-        // pre-block UTXO set the payouts are credited from, so proposer and
-        // validator agree deterministically. Rejects a proposer that commits a
-        // payout whose envelope does not match the winner (redirected funds or a
-        // stripped ciphertext the winner could not recover).
-        if !block.lottery_outputs.is_empty() {
-            let rtxn = self
-                .env
-                .read_txn()
-                .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
-            validate_lottery_output_bindings(&block.lottery_outputs, |winner_id| {
-                self.utxo_db
-                    .get(&rtxn, winner_id)
-                    .ok()
-                    .flatten()
-                    .and_then(|bytes| bincode::deserialize::<Utxo>(bytes).ok())
-                    .map(|u| {
-                        (
-                            u.output.target_key,
-                            u.output.public_key,
-                            u.output.kem_ciphertext,
-                        )
-                    })
-            })
-            .map_err(|e| {
-                warn!(
-                    block_height = block.height(),
-                    error = %e,
-                    "Lottery payout stealth-envelope binding failed"
-                );
-                LedgerError::InvalidBlock(format!("Lottery payout binding failed: {}", e))
-            })?;
-        }
-
-        // Store block and update metadata
+        // Acquire the exclusive writer FIRST, then pin the read snapshot: no
+        // commit can land between the validated pre-state and the write, and
+        // every validation read (ordinary rules, drawing, payout sources,
+        // derivation contexts, transaction verification) comes from that ONE
+        // snapshot. No other ledger read txn may be opened on this thread
+        // while `rtxn` is live, so validation reads only through `view`.
         let mut wtxn = self
             .env
             .write_txn()
             .map_err(|e| LedgerError::Database(format!("Failed to start write txn: {}", e)))?;
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
+        let view = self.production_view(&rtxn);
+
+        // Draw once, re-derive the canonical V2 payout records, bind the
+        // block's payouts to them, then run the shared ordinary checks with
+        // `RootRule::BodyV2` (the recomputed body root) and the per-record
+        // V2 validation.
+        let (records, new_lottery_pool) =
+            match super::lottery_v2::validate_block(&view, block, &state) {
+                Ok(result) => result,
+                Err(e) => {
+                    warn!(
+                        block_height = block.height(),
+                        error = %e,
+                        "V2 block validation failed"
+                    );
+                    return Err(e);
+                }
+            };
+        let block_fees = block.total_fees();
 
         let block_bytes =
             bincode::serialize(block).map_err(|e| LedgerError::Serialization(e.to_string()))?;
@@ -1016,15 +946,17 @@ impl Ledger {
             new_lottery_pool,
             emission,
             &block_bytes,
-            // Live V1 block-application rules, V2 storage: every output gets
-            // its Direct context in this same txn (no payouts reach here).
+            // Every output gets its derivation context in this same txn:
+            // Direct for coinbase/transaction outputs, Lottery (from the
+            // validated records) for payouts.
             writer::Representation::Production {
                 contexts: self.contexts_db,
-                records: &[],
+                records: &records,
             },
-            &mut |tx| self.verify_transaction(tx),
+            &mut |tx| validation::ValidationReads::verify_transaction(&view, tx),
             &mut || Ok(()),
         )?;
+        drop(rtxn);
         let new_hash = block.hash();
         let new_height = block.height();
 
@@ -2509,6 +2441,21 @@ impl Ledger {
         Ok(utxos)
     }
 
+    /// TEST/FIXTURE ONLY: the persisted output and its committed derivation
+    /// context (`base_index` = ORIGINAL index, `tweak` = cumulative V2 payout
+    /// tweak), read strictly. Lets integration tests compare contexts across
+    /// nodes and replicas (#1640). Gated like
+    /// [`Ledger::seed_fixture_snapshot_unvalidated`]; the public RPC-facing
+    /// accessor is P4's (#1641) `get_output_derivation_context`.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    #[doc(hidden)]
+    pub fn fixture_derivation_context(
+        &self,
+        id: &UtxoId,
+    ) -> Result<(Utxo, bth_transaction_clsag::lottery_v2::Context), LedgerError> {
+        self.spend_recovery_context(id)
+    }
+
     /// Former V1 snapshot loader body (preserved for the fixture seeder and
     /// the versioned-snapshot V2 follow-up). `direct_contexts` additionally
     /// rewrites the derivation-context table with one `Direct` row per UTXO.
@@ -2677,6 +2624,14 @@ impl Ledger {
                 &snapshot.chain_state.current_reward.to_le_bytes(),
             )
             .map_err(|e| LedgerError::Database(format!("Failed to put current_reward: {}", e)))?;
+        if direct_contexts {
+            // FIXTURE ONLY: a V1 snapshot carries no lottery pool, and the
+            // strict V2 pre-state (#1640) refuses a missing pool above
+            // genesis. The fixture asserts an empty carryover pool.
+            self.meta_db
+                .put(&mut wtxn, META_LOTTERY_POOL, &0u128.to_le_bytes())
+                .map_err(|e| LedgerError::Database(format!("Failed to put lottery pool: {}", e)))?;
+        }
 
         wtxn.commit()
             .map_err(|e| LedgerError::Database(format!("Failed to commit: {}", e)))?;

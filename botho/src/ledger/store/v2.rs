@@ -1,13 +1,13 @@
 //! Production V2 ledger schema (`botho.ledger.2`, #1286 P2).
 //!
-//! Storage only: a fresh [`Ledger`] is marked `botho.ledger.2` and carries a
+//! A fresh [`Ledger`] is marked `botho.ledger.2` and carries a
 //! `derivation_contexts` table (outpoint -> [`StoredContext`]) written in the
 //! same LMDB transaction as each output. Unmarked non-empty (V1) stores and
 //! every other marker are refused at open (D0: no migration, no dual rule
-//! set). V2 *consensus* (producer, validator, body root, protocol 7.0.0) is P3;
-//! the [`ProductionView`] adapter here only makes the shared
-//! [`lottery_v2`](crate::ledger::lottery_v2) rules callable against a pinned
-//! production pre-state.
+//! set). Since protocol 7.0.0 (#1640, P3) the [`ProductionView`] adapter is
+//! what the live block path validates against (`Ledger::add_block`) and what
+//! the V2 producer ([`Ledger::seal_block`]) derives payouts from, through the
+//! shared [`lottery_v2`](crate::ledger::lottery_v2) rules.
 use super::{
     validation::{self, ReadPolicy, ValidationReads},
     *,
@@ -177,8 +177,7 @@ pub(in crate::ledger) fn read_context(
     Ok((utxo, context))
 }
 
-// Inactive until P3 (validator/producer) and P4 (RPC) consume these; only
-// tests call them in P2.
+// `get_derivation_context` is consumed by tests until P4 (RPC) reads it.
 #[allow(dead_code)]
 impl Ledger {
     /// The persisted derivation context of `id` (strict; #1286 P2).
@@ -201,6 +200,68 @@ impl Ledger {
         ProductionView { ledger: self, txn }
     }
 
+    /// The V2 block-body producer (protocol 7.0.0, #1286 P3, #1640).
+    ///
+    /// Takes a block whose header, minting tx and ordinary transactions are
+    /// final, draws the lottery over ONE pinned pre-state, derives every
+    /// payout record through the shared rules (`lottery_v2::derive`: a fresh,
+    /// independently keyed target per award; the winner's one-time target is
+    /// never copied), writes the payouts and the lottery summary, and sets
+    /// `header.tx_root` to the V2 body root. The block hash therefore commits
+    /// to the payouts; the PoW preimage does not include `tx_root`
+    /// (`BlockHeader::pow_hash`), so sealing never invalidates the PoW.
+    ///
+    /// Deterministic: every node that seals the same externalized block over
+    /// the same pre-state produces byte-identical output. The result grants
+    /// no authority to write; [`Ledger::add_block`] validates it from
+    /// scratch. Errors (wrong parent/height, a strict-read failure) are
+    /// returned, never papered over with a lottery-free fallback.
+    pub fn seal_block(&self, block: Block) -> Result<Block, LedgerError> {
+        let txn = self.env.read_txn().map_err(db_op("seal read txn"))?;
+        let view = self.production_view(&txn);
+        let (height, tip) = (view.height()?, view.tip_hash()?);
+        // Same wording as `add_block`'s pre-checks, so operator evidence
+        // (consensus-failure markers, logs) reads the same whether the
+        // producer or the validator refused the block.
+        let expected = height.checked_add(1);
+        let mismatch = if expected != Some(block.height()) {
+            Some(format!(
+                "Expected height {}, got {}",
+                height.saturating_add(1),
+                block.height()
+            ))
+        } else if block.header.prev_block_hash != tip {
+            Some("Previous block hash mismatch".to_string())
+        } else {
+            None
+        };
+        if let Some(mismatch) = mismatch {
+            return Err(LedgerError::InvalidBlock(format!(
+                "{mismatch} (V2 producer pre-state: block {} on parent {}, tip {} at height {})",
+                block.height(),
+                hex::encode(&block.header.prev_block_hash[..8]),
+                hex::encode(&tip[..8]),
+                height
+            )));
+        }
+        let (block, _records) = crate::ledger::lottery_v2::derive(&view, block)?;
+        Ok(block)
+    }
+
+    /// Crate-internal spend-recovery read (#1640): the persisted output and
+    /// its committed derivation context as the crypto-layer `Context`
+    /// (`base_index` = ORIGINAL derivation index, `tweak` = cumulative V2
+    /// payout tweak, zero for a direct output), read strictly in one txn.
+    /// Only the node wallet's `WalletRead` adapter uses it; the public,
+    /// RPC-facing accessor is P4's (#1641) `get_output_derivation_context`.
+    pub(crate) fn spend_recovery_context(
+        &self,
+        id: &UtxoId,
+    ) -> Result<(Utxo, bth_transaction_clsag::lottery_v2::Context), LedgerError> {
+        let txn = self.env.read_txn().map_err(db_op("context read txn"))?;
+        read_context(self, &txn, id).map(|(utxo, c)| (utxo, c.derivation()))
+    }
+
     /// The fail-closed snapshot error under `botho.ledger.2`.
     pub(in crate::ledger) fn snapshot_unsupported(operation: &str) -> LedgerError {
         LedgerError::UnsupportedSchema(format!(
@@ -208,6 +269,42 @@ impl Ledger {
              format V1 carries no derivation contexts (a versioned V2 snapshot is \
              a #1286 follow-up). Sync from genesis instead"
         ))
+    }
+}
+
+#[cfg(test)]
+impl Ledger {
+    /// UNIT-TEST ONLY: apply `block`'s storage effects through the shared
+    /// production writer with NO consensus validation (supplied pool and
+    /// emission). Pins writer byte effects for fixtures whose block predates
+    /// the V2 rules (e.g. the V1 writer golden), which `add_block` now
+    /// rightly rejects.
+    pub(in crate::ledger) fn apply_writer_effects_for_test(
+        &self,
+        block: &Block,
+        records: &[bth_transaction_clsag::lottery_v2::Record],
+        new_lottery_pool: u128,
+        emission: Option<EmissionStateUpdate>,
+    ) -> Result<(), LedgerError> {
+        let state = self.get_chain_state()?;
+        let bytes =
+            bincode::serialize(block).map_err(|e| LedgerError::Serialization(e.to_string()))?;
+        let mut txn = self.env.write_txn().map_err(db_op("test write txn"))?;
+        self.write_tables().block_effects(
+            &mut txn,
+            block,
+            &state,
+            new_lottery_pool,
+            emission,
+            &bytes,
+            super::writer::Representation::Production {
+                contexts: self.contexts_db,
+                records,
+            },
+            &mut |_| Ok(()),
+            &mut || Ok(()),
+        )?;
+        txn.commit().map_err(db_op("test commit"))
     }
 }
 
@@ -219,6 +316,15 @@ pub(in crate::ledger) struct ProductionView<'a, 'env> {
 }
 
 impl ProductionView<'_, '_> {
+    fn tip_hash(&self) -> Result<[u8; 32], LedgerError> {
+        fixed(
+            self.ledger
+                .meta_db
+                .get(self.txn, META_TIP_HASH)
+                .map_err(db_op("view tip"))?
+                .ok_or_else(|| LedgerError::InconsistentRecord("missing tip hash".into()))?,
+        )
+    }
     fn height(&self) -> Result<u64, LedgerError> {
         let bytes = self
             .ledger

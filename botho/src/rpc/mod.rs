@@ -1833,9 +1833,13 @@ async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> Json
             // (block_hash, 1 + lottery_index)) but they are NOT part of
             // `block.transactions`, so they must be emitted explicitly here or a
             // thin wallet scanning the chain would never see a lottery payout it
-            // won. The payout reuses the winning UTXO's stealth keys (target /
-            // public), so the winner's `scanOwnedOutputs`/`belongs_to` detects
-            // it. `txHash` is the block hash and `outputIndex` is `1 + index` to
+            // won. Since protocol 7.0.0 (#1640) a payout is independently
+            // keyed: `targetKey` is the winner's target plus a committed V2
+            // tweak, while `publicKey`/`kemCiphertext` are inherited from the
+            // ORIGINAL derivation. A plain `belongs_to(outputIndex)` scan
+            // therefore no longer detects it; recovery needs the derivation
+            // context (original index + cumulative tweak), which RPC exposes
+            // in P4 (#1286). `txHash` is the block hash and `outputIndex` is `1 + index` to
             // mirror the ledger's deterministic id scheme (coinbase holds index
             // 0 under the block hash; tx outputs use the tx hash, never the
             // block hash, so these ids cannot collide).

@@ -2,10 +2,19 @@
 //! retain their existing reads/errors; experimental adapters pin a strict
 //! pre-state.
 use super::{writer::WriteTables, *};
+/// Which commitment `header.tx_root` must equal.
 #[derive(Clone, Copy)]
 pub(in crate::ledger) enum RootRule {
+    /// V1: the flat ordinary-transaction root (`Block::compute_tx_root`).
+    /// No production block uses it since protocol 7.0.0 (#1640); retained so
+    /// the shared ordinary checks still name the V1 rule explicitly.
+    #[allow(dead_code)]
     Legacy,
-    Experimental([u8; 32]),
+    /// V2 (#1286, protocol 7.0.0): the recomputed body root
+    /// (`lottery_v2::root`), which commits the minting tx, the ordinary root,
+    /// every payout record (target, keys, ciphertext, derivation context) and
+    /// the lottery summary, so the block hash commits to the payouts.
+    BodyV2([u8; 32]),
 }
 #[derive(Clone, Copy)]
 pub(in crate::ledger) enum ReadPolicy {
@@ -480,14 +489,17 @@ pub(in crate::ledger) trait ValidationReads {
             )));
         }
 
-        // C4: Verify the transaction root commits to the actual tx list.
+        // C4: Verify the header root commits to the actual block body.
         //
-        // header.tx_root feeds the header hash and therefore PoW, but is
-        // never recomputed at acceptance — a relay can swap the tx list
-        // under a valid PoW unless we re-derive and compare here.
+        // header.tx_root feeds the header hash (the block's identity), but NOT
+        // the PoW preimage (`BlockHeader::pow_hash`: nonce ‖ prev ‖ minter
+        // keys), so a relay can swap the body under a valid PoW unless we
+        // re-derive and compare here. Under V2 (protocol 7.0.0, #1640) the
+        // root also commits every lottery payout record, so a payout
+        // disagreement changes the block hash instead of hiding under it.
         let expected_tx_root = match root {
             RootRule::Legacy => Block::compute_tx_root(&block.transactions),
-            RootRule::Experimental(hash) => hash,
+            RootRule::BodyV2(hash) => hash,
         };
         if block.header.tx_root != expected_tx_root {
             return Err(LedgerError::InvalidBlock(

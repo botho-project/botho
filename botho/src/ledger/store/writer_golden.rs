@@ -80,7 +80,13 @@ fn v1_writer_pre_extraction_bytes_and_helper_effects() {
         epoch_burns: 789,
         current_reward: 111,
     };
-    ledger.add_block_with_emission(&block, emission).unwrap();
+    // Protocol 7.0.0 (#1640): the golden block is a V1 block (flat tx root,
+    // V1 summary), which `add_block` now rejects. The fixture pins the shared
+    // WRITER's effects, so apply it through that writer directly, with the
+    // exact pool (0) and emission inputs the former V1 validator supplied.
+    ledger
+        .apply_writer_effects_for_test(&block, &[], 0, Some(emission))
+        .unwrap();
     let accepted = v1_tables(&ledger);
     // The only context row: the golden block's coinbase, Direct at height 1.
     let coinbase = UtxoId::new(block.hash(), 0);

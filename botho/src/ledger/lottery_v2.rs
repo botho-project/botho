@@ -7,10 +7,13 @@
 //! [`DerivationReads`] adapter, so the private experimental ledger and (from
 //! P2/P3) the production ledger share these rules instead of forking them.
 //!
-//! INACTIVE: nothing on the production path selects these rules yet. The
-//! production ledger stores `botho.ledger.2` derivation contexts and exposes a
-//! pinned [`DerivationReads`] adapter (P2, `store::v2::ProductionView`), but
-//! keeps V1 block-application rules until protocol 7.0.0 activation (P3).
+//! ACTIVE from protocol 7.0.0 (#1286 P3, #1640): the production ledger
+//! applies every block through [`validate_block`] (validator) and builds every
+//! block body through [`derive`] (producer, `Ledger::seal_block`), both
+//! against the pinned `store::v2::ProductionView`. The header's `tx_root` is
+//! the V2 body [`root`] from genesis on fresh chains; V1 payouts (which copy
+//! the winner's one-time target) are invalid. The private experimental
+//! ledger keeps calling [`validate`] with its persisted records.
 use super::{
     store::validation::{RootRule, ValidationReads},
     ChainState, LedgerError,
@@ -267,22 +270,41 @@ pub(in crate::ledger) fn domain<R: DerivationReads + ?Sized>(
     })
 }
 
+/// One canonical drawing: the winners plus the pool accounting.
+type Drawing = (BlockLotteryResult, LotteryPoolAccounting);
+
 /// Full V2 block validation against the pinned pre-state: the shared ordinary
 /// checks (with the recomputed V2 body root), then the drawing, summary and
 /// every payout record. Returns the new lottery pool carryover.
 ///
 /// Callers must first check the block/record envelope shape (record count,
-/// record/output agreement); this does not.
+/// record/output agreement, [`bind_outputs`]); this does not.
 pub(in crate::ledger) fn validate<R: ValidationReads + DerivationReads + ?Sized>(
     reads: &R,
     block: &Block,
     records: &[Record],
     state: &ChainState,
 ) -> Result<u128, LedgerError> {
+    validate_drawn(reads, block, records, state, None)
+}
+
+/// [`validate`], optionally reusing a drawing already computed over the SAME
+/// pinned pre-state (the production validator draws once to reconstruct the
+/// records, and must not pay for a second full candidate scan).
+fn validate_drawn<R: ValidationReads + DerivationReads + ?Sized>(
+    reads: &R,
+    block: &Block,
+    records: &[Record],
+    state: &ChainState,
+    drawn: Option<Drawing>,
+) -> Result<u128, LedgerError> {
     // Root comes from independent decoding and recomputation, never from a
     // supplied validation token. All ordinary checks retain their order.
-    reads.validate_ordinary_block(block, state, RootRule::Experimental(root(block, records)?))?;
-    let (draw, accounting) = drawing(reads, block)?;
+    reads.validate_ordinary_block(block, state, RootRule::BodyV2(root(block, records)?))?;
+    let (draw, accounting) = match drawn {
+        Some(drawn) => drawn,
+        None => drawing(reads, block)?,
+    };
     let awards = awards(&draw)?;
     let manifest = v2::manifest(&awards).map_err(crypto)?;
     let s = &block.lottery_summary;
@@ -311,16 +333,69 @@ pub(in crate::ledger) fn validate<R: ValidationReads + DerivationReads + ?Sized>
     Ok(accounting.carryover_after(draw.pool_amount))
 }
 
-/// Producer: draw, derive every payout record, and fill the block's lottery
-/// outputs, summary and V2 body root. The result grants no authority to
-/// write; it must still pass [`validate`]. Callers must first check the
-/// producer pre-state (height/parent).
-pub(in crate::ledger) fn derive<R: DerivationReads + ?Sized>(
+/// Envelope shape: the block's wire payouts are exactly `records` (count,
+/// bound, ordinal order, winner, amount, target, public key, ciphertext).
+/// The per-record derivation context is not on the wire; it is committed
+/// only through the body root. Returns a static reason on mismatch so each
+/// caller can classify it (a peer's invalid block in production, a corrupt
+/// envelope in the experimental store).
+pub(in crate::ledger) fn bind_outputs(
+    block: &Block,
+    records: &[Record],
+) -> Result<(), &'static str> {
+    if records.len() > CANDIDATE_MAX_AWARDS || records.len() != block.lottery_outputs.len() {
+        return Err("payout record count");
+    }
+    for (i, (r, o)) in records.iter().zip(&block.lottery_outputs).enumerate() {
+        if r.encode().is_err()
+            || r.ordinal as usize != i
+            || r.winner.hash != o.winner_tx_hash
+            || r.winner.index != o.winner_output_index
+            || r.amount != o.payout
+            || r.target != o.target_key
+            || r.public_key != o.public_key
+            || r.ciphertext != o.kem_ciphertext
+        {
+            return Err("payout envelope/record mismatch");
+        }
+    }
+    Ok(())
+}
+
+/// Production V2 validator (#1640): the block carries only the wire payouts,
+/// so the validator draws ONCE over the pinned pre-state, re-derives the
+/// canonical payout records (target and derivation context) exactly as the
+/// producer did, requires the block's payouts to equal them
+/// ([`bind_outputs`]), and then runs the full [`validate`] checks (ordinary
+/// rules with the recomputed V2 body root, summary and every record) on that
+/// same drawing. Returns the records (for the writer's derivation contexts)
+/// and the new lottery pool carryover.
+///
+/// A V1-shaped payout (the winner's target, key and ciphertext copied
+/// verbatim) can never equal its V2 record, whose target is tweaked, so it is
+/// rejected here.
+pub(in crate::ledger) fn validate_block<R: ValidationReads + DerivationReads + ?Sized>(
     reads: &R,
-    mut block: Block,
-) -> Result<(Block, Vec<Record>), LedgerError> {
-    let (draw, _) = drawing(reads, &block)?;
-    let awards = awards(&draw)?;
+    block: &Block,
+    state: &ChainState,
+) -> Result<(Vec<Record>, u128), LedgerError> {
+    let drawn = drawing(reads, block)?;
+    let records = records_for(reads, block, &drawn.0)?;
+    bind_outputs(block, &records).map_err(|reason| invalid(format!("V2 payouts: {reason}")))?;
+    let pool = validate_drawn(reads, block, &records, state, Some(drawn))?;
+    Ok((records, pool))
+}
+
+/// The canonical payout records of `draw` for `block` over the pinned
+/// pre-state: one [`v2::derive`] per award, in draw order. Only
+/// `block.transactions` (ordinary root) and its height/parent feed the
+/// derivation domain; the block's own payouts, body root and hash never do.
+fn records_for<R: DerivationReads + ?Sized>(
+    reads: &R,
+    block: &Block,
+    draw: &BlockLotteryResult,
+) -> Result<Vec<Record>, LedgerError> {
+    let awards = awards(draw)?;
     let manifest = v2::manifest(&awards).map_err(crypto)?;
     let mut records = Vec::with_capacity(awards.len());
     for (i, a) in awards.iter().enumerate() {
@@ -331,9 +406,13 @@ pub(in crate::ledger) fn derive<R: DerivationReads + ?Sized>(
                 target: source.output.target_key,
                 context: context.derivation(),
             },
-            &domain(reads, &block, manifest, i, a.amount)?,
+            &domain(reads, block, manifest, i, a.amount)?,
         )
         .map_err(crypto)?;
+        // Only the one-time target is new (tweaked). The DH public key and
+        // the ML-KEM ciphertext are inherited from the original derivation by
+        // construction: the owner recovers the base key with them at the
+        // original index, then adds the committed tweak (#1286 design §1).
         records.push(Record {
             ordinal: i as u32,
             winner: a.winner.clone(),
@@ -344,6 +423,19 @@ pub(in crate::ledger) fn derive<R: DerivationReads + ?Sized>(
             context: derived.context,
         });
     }
+    Ok(records)
+}
+
+/// Producer: draw, derive every payout record, and fill the block's lottery
+/// outputs, summary and V2 body root. The result grants no authority to
+/// write; it must still pass [`validate`]. Callers must first check the
+/// producer pre-state (height/parent).
+pub(in crate::ledger) fn derive<R: DerivationReads + ?Sized>(
+    reads: &R,
+    mut block: Block,
+) -> Result<(Block, Vec<Record>), LedgerError> {
+    let (draw, _) = drawing(reads, &block)?;
+    let records = records_for(reads, &block, &draw)?;
     block.lottery_outputs = records
         .iter()
         .map(|r| LotteryOutput {

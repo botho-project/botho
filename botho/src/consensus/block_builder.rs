@@ -9,14 +9,12 @@
 //! - Ensuring only one MintingTx per block (the consensus winner)
 
 use crate::{
-    block::{Block, BlockHeader, BlockLotterySummary, LotteryOutput, MintingTx},
-    consensus::{
-        lottery::{draw_lottery_winners, BlockLotteryResult, LotteryFeeConfig},
-        ConsensusValue,
-    },
-    transaction::{Transaction, Utxo},
+    block::{Block, BlockHeader, MintingTx},
+    consensus::ConsensusValue,
+    transaction::Transaction,
 };
-use bth_cluster_tax::{LotteryCandidate, TagVector};
+#[cfg(test)]
+use bth_cluster_tax::TagVector;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use tracing::{debug, info, warn};
@@ -270,160 +268,40 @@ impl BlockBuilder {
     // Lottery Integration
     // ========================================================================
 
-    /// Apply lottery results to a built block.
+    /// Apply the V2 lottery to a built block (protocol 7.0.0, #1286 P3,
+    /// #1640).
     ///
-    /// This method draws lottery winners from the UTXO set and adds lottery
-    /// outputs to the block. It's called after the basic block is built to
-    /// integrate fee redistribution.
+    /// The block's header, minting tx and ordinary transactions must be final.
+    /// This delegates to the ledger's V2 producer [`Ledger::seal_block`],
+    /// which draws over one pinned pre-state, derives every payout record
+    /// through the shared `ledger::lottery_v2::derive` rules (a fresh,
+    /// independently keyed target per award, recoverable by the winner from
+    /// the committed derivation context), writes the payouts and the lottery
+    /// summary, and sets `header.tx_root` to the V2 body root.
     ///
-    /// # Arguments
-    /// * `block` - The block to add lottery results to
-    /// * `candidates` - Lottery candidates with real cluster factors, from
-    ///   `Ledger::get_lottery_validation_candidates` — the SAME function block
-    ///   validation uses. Verification re-runs the draw, so proposer and
-    ///   validator candidate sets (values, factors, order) must match.
-    /// * `stored_pool` - Carryover lottery pool balance from the ledger
-    /// * `utxo_lookup` - Function to look up UTXO details by ID for key
-    ///   recovery
-    /// * `lottery_config` - Configuration for fee splitting and lottery drawing
+    /// The former V1 producer (`winners_to_outputs`) built each payout by
+    /// COPYING the winning UTXO's one-time target, DH key and ML-KEM
+    /// ciphertext, so source and payout shared one key image (#1286). It is
+    /// retired with protocol 7.0.0 (see git history before #1640); V1-shaped
+    /// payouts are invalid under the V2 validator.
     ///
-    /// # Returns
-    /// Updated block with lottery outputs and summary
-    pub fn apply_lottery<F>(
-        mut block: Block,
-        candidates: &[LotteryCandidate],
-        stored_pool: u128,
-        utxo_lookup: F,
-        lottery_config: &LotteryFeeConfig,
-    ) -> Block
-    where
-        F: Fn(&[u8; 36]) -> Option<Utxo>,
-    {
-        // Calculate total fees from transactions. Saturating
-        // (block.rs::total_fees) — a plain sum() panics under release
-        // overflow-checks on this every-node externalize path before
-        // add_block's checked_block_fees can reject the block gracefully.
-        let total_fees: u64 = block.total_fees();
-
-        // Pool accounting: carryover + emission share + fee pool share,
-        // payouts capped at the Path C reward cap R = min(ρ·base_fee,
-        // block_reward) (Sybil-neutrality ∧ anti-grinding). The over-cap fee
-        // pool carries forward in `available`. Must match validation exactly.
-        let emission_share = block.minting_tx.lottery_emission_share();
-        let payout_cap = crate::consensus::lottery::reward_cap(
-            candidates,
-            block.height(),
-            block.minting_tx.reward,
-            lottery_config,
-        );
-        let accounting = crate::consensus::lottery::compute_pool_accounting(
-            total_fees,
-            emission_share,
-            stored_pool,
-            payout_cap,
-            lottery_config,
-        );
-
-        if accounting.payout == 0 && accounting.fee_burn == 0 {
-            debug!("Nothing to distribute or burn, skipping lottery");
-            return block;
-        }
-
-        if candidates.is_empty() {
-            debug!("No lottery candidates available; pool carries over");
-            // Fee burn share is burned; the pool share carries over.
-            block.lottery_summary = BlockLotterySummary {
-                total_fees,
-                pool_distributed: 0,
-                amount_burned: accounting.fee_burn,
-                lottery_seed: [0u8; 32],
-            };
-            return block;
-        }
-
-        info!(
-            candidates = candidates.len(),
-            total_fees = total_fees,
-            payout = accounting.payout,
-            emission_share = emission_share,
-            "Drawing lottery winners"
-        );
-
-        // Draw lottery winners
-        let lottery_result = draw_lottery_winners(
-            &candidates,
-            total_fees,
-            &accounting,
-            block.height(),
-            &block.header.prev_block_hash,
-            lottery_config,
-        );
-
-        // Convert winners to lottery outputs
-        let lottery_outputs =
-            Self::winners_to_outputs(&lottery_result, &utxo_lookup, lottery_config);
-
-        // Build lottery summary
-        let lottery_summary = BlockLotterySummary {
-            total_fees,
-            pool_distributed: lottery_result.pool_amount,
-            amount_burned: lottery_result.burn_amount,
-            lottery_seed: lottery_result.seed,
-        };
-
-        info!(
-            winners = lottery_outputs.len(),
-            pool = lottery_result.pool_amount,
-            burned = lottery_result.burn_amount,
-            "Lottery drawing complete"
-        );
-
-        block.lottery_outputs = lottery_outputs;
-        block.lottery_summary = lottery_summary;
-        block
-    }
-
-    /// Convert lottery winners to lottery outputs.
+    /// Errors are returned to the caller; there is deliberately no lottery-free
+    /// fallback, because any other body would fail validation on every node.
     ///
-    /// For each winner, looks up the original UTXO to get the stealth keys
-    /// (target_key, public_key) so the payout goes to the same owner.
-    fn winners_to_outputs<F>(
-        result: &BlockLotteryResult,
-        utxo_lookup: &F,
-        _config: &LotteryFeeConfig,
-    ) -> Vec<LotteryOutput>
-    where
-        F: Fn(&[u8; 36]) -> Option<Utxo>,
-    {
-        let mut outputs = Vec::new();
-
-        for winner in &result.winners {
-            // Look up the winning UTXO to get its stealth keys
-            if let Some(utxo) = utxo_lookup(&winner.utxo_id) {
-                outputs.push(LotteryOutput::from_utxo_id(
-                    winner.utxo_id,
-                    winner.payout,
-                    utxo.output.target_key,
-                    utxo.output.public_key,
-                    // Reuse the winning UTXO's hybrid ML-KEM envelope so the
-                    // payout is recoverable by the same owner (issue #958).
-                    utxo.output.kem_ciphertext.clone(),
-                ));
-            } else {
-                warn!(
-                    utxo_id = hex::encode(&winner.utxo_id[..8]),
-                    "Could not find winning UTXO for lottery output, skipping"
-                );
-            }
-        }
-
-        outputs
+    /// [`Ledger::seal_block`]: crate::ledger::Ledger::seal_block
+    pub fn apply_lottery(
+        block: Block,
+        ledger: &crate::ledger::Ledger,
+    ) -> Result<Block, crate::ledger::LedgerError> {
+        ledger.seal_block(block)
     }
 
     /// Convert ClusterTagVector (on-chain format) to TagVector (cluster-tax
     /// format).
     ///
     /// Both represent the same concept but in different crate contexts.
+    /// Only its unit test uses it since the V1 producer was retired (#1640).
+    #[cfg(test)]
     fn cluster_tags_to_tag_vector(
         cluster_tags: &bth_transaction_types::ClusterTagVector,
     ) -> TagVector {
@@ -481,154 +359,6 @@ mod tests {
             nonce: 12345,
             timestamp: 1000000,
         }
-    }
-
-    /// REPRODUCTION (issue #998): once the lottery first draws WINNERS (fleet
-    /// runs with a low `min_utxo_age`, so eligible coinbase outputs appear a
-    /// few blocks in), the block the proposer builds via `apply_lottery`
-    /// must pass the validator gates `validate_block_lottery` AND
-    /// `validate_lottery_output_bindings` — otherwise the proposer's own
-    /// `add_block` rejects its block and the chain wedges (the minter re-mints
-    /// the same height forever). No existing test exercised the winner path
-    /// (all use min_utxo_age=720, so nothing is ever eligible).
-    #[test]
-    fn winner_drawing_block_passes_validator_gates() {
-        use crate::{
-            block::BlockLotterySummary,
-            consensus::lottery::{
-                validate_block_lottery, validate_lottery_output_bindings, LotteryFeeConfig,
-            },
-            transaction::{TxOutput, UtxoId},
-        };
-        use bth_cluster_tax::{LotteryCandidate, LotteryDrawConfig, TagVector};
-        use bth_transaction_types::ClusterTagVector;
-
-        // Lottery config with a LOW age gate (the fleet's testnet setting) so the
-        // eligible-output / winner path is actually exercised.
-        let config = LotteryFeeConfig {
-            pool_fraction_permille: 800,
-            draw_config: LotteryDrawConfig {
-                min_utxo_age: 0,
-                min_utxo_value: 1,
-                winners_per_draw: 4,
-                ..Default::default()
-            },
-        };
-
-        let height = 5u64;
-        let prev_hash = [7u8; 32];
-
-        // A single eligible coinbase UTXO carrying a 6.0.0 hybrid ML-KEM
-        // ciphertext, created early so it is in-window and mature at height 5.
-        let winner_utxo_id = UtxoId::new([0xAAu8; 32], 0);
-        let winner_out = TxOutput {
-            amount: 50_000_000_000_000,
-            target_key: [0x11u8; 32],
-            public_key: [0x22u8; 32],
-            e_memo: None,
-            cluster_tags: ClusterTagVector::empty(),
-            kem_ciphertext: Some(vec![0x33u8; 1088]),
-        };
-        let winner_utxo = Utxo {
-            id: winner_utxo_id,
-            output: winner_out.clone(),
-            created_at: 0,
-        };
-        let candidate = LotteryCandidate::new(
-            winner_utxo_id.to_bytes(),
-            winner_out.amount,
-            1000,
-            &TagVector::new(),
-            0,
-        );
-        let candidates = vec![candidate];
-
-        // A carryover pool large enough that the per-block payout is nonzero, so
-        // the draw actually produces winners.
-        let stored_pool: u128 = 10_000_000_000_000;
-
-        // Minting-only block (no transfers/fees) at height 5.
-        let minting_tx = MintingTx {
-            block_height: height,
-            reward: 50_000_000_000_000,
-            minter_view_key: [1u8; 32],
-            minter_spend_key: [2u8; 32],
-            target_key: [3u8; 32],
-            public_key: [4u8; 32],
-            kem_ciphertext: Some(vec![9u8; 1088]),
-            prev_block_hash: prev_hash,
-            difficulty: u64::MAX,
-            nonce: 1,
-            timestamp: 1_000_000,
-        };
-        let block = Block {
-            header: BlockHeader {
-                version: 1,
-                prev_block_hash: prev_hash,
-                tx_root: [0u8; 32],
-                timestamp: 1_000_000,
-                height,
-                difficulty: u64::MAX,
-                nonce: 1,
-                minter_view_key: [1u8; 32],
-                minter_spend_key: [2u8; 32],
-            },
-            minting_tx,
-            transactions: vec![],
-            lottery_outputs: vec![],
-            lottery_summary: BlockLotterySummary::default(),
-        };
-
-        // Proposer path: build the block's lottery outputs/summary.
-        let lookup_utxo = |id: &[u8; 36]| {
-            if *id == winner_utxo_id.to_bytes() {
-                Some(winner_utxo.clone())
-            } else {
-                None
-            }
-        };
-        let built =
-            BlockBuilder::apply_lottery(block, &candidates, stored_pool, lookup_utxo, &config);
-
-        // The draw must have produced at least one winner (otherwise the test is
-        // vacuous and the winner path is not exercised).
-        assert!(
-            !built.lottery_outputs.is_empty(),
-            "test setup did not draw any winners (payout={}, summary={:?})",
-            built.lottery_summary.pool_distributed,
-            built.lottery_summary
-        );
-
-        // Validator path 1: validate_block_lottery must accept the proposer's
-        // own block (this is what add_block runs; a mismatch wedges the chain).
-        let vres = validate_block_lottery(&built, &candidates, stored_pool, &prev_hash, &config);
-        assert!(
-            vres.is_ok(),
-            "validate_block_lottery REJECTED the proposer's own winner block \
-             (chain would wedge): {:?}; summary={:?}, outputs={}",
-            vres.err(),
-            built.lottery_summary,
-            built.lottery_outputs.len()
-        );
-
-        // Validator path 2: the ML-KEM binding gate (#973) must accept it too.
-        let bindings = validate_lottery_output_bindings(&built.lottery_outputs, |id| {
-            if *id == winner_utxo_id.to_bytes() {
-                Some((
-                    winner_out.target_key,
-                    winner_out.public_key,
-                    winner_out.kem_ciphertext.clone(),
-                ))
-            } else {
-                None
-            }
-        });
-        assert!(
-            bindings.is_ok(),
-            "validate_lottery_output_bindings REJECTED the proposer's own \
-             winner block (chain would wedge): {:?}",
-            bindings.err()
-        );
     }
 
     #[test]
@@ -797,154 +527,56 @@ mod tests {
     // Lottery Integration Tests
     // ========================================================================
 
-    fn mock_utxo(utxo_id: [u8; 36], amount: u64, created_at: u64) -> Utxo {
-        use crate::transaction::{TxOutput, UtxoId};
-        use bth_transaction_types::ClusterTagVector;
-
-        Utxo {
-            id: UtxoId::from_bytes(&utxo_id).expect("valid utxo id"),
-            output: TxOutput {
-                amount,
-                target_key: [10u8; 32],
-                public_key: [20u8; 32],
-                cluster_tags: ClusterTagVector::single(bth_transaction_types::ClusterId(1)),
-                e_memo: None,
-                kem_ciphertext: None,
-            },
-            created_at,
-        }
-    }
-
-    fn mock_candidate(
-        utxo_id: [u8; 36],
-        amount: u64,
-        created_at: u64,
-    ) -> bth_cluster_tax::LotteryCandidate {
-        let utxo = mock_utxo(utxo_id, amount, created_at);
-        let tag_vector = BlockBuilder::cluster_tags_to_tag_vector(&utxo.output.cluster_tags);
-        crate::consensus::lottery::utxo_to_candidate(
-            utxo_id,
-            amount,
-            1000, // factor 1.0
-            &tag_vector,
-            created_at,
-        )
-    }
-
-    fn mock_transaction_with_fee(fee: u64) -> Transaction {
-        use crate::transaction::TxInputs;
-
-        // Minimal transaction with specified fee
-        Transaction {
-            inputs: TxInputs::new(vec![]),
-            outputs: vec![],
-            fee,
-            created_at_height: 0,
-            settlement: None,
-        }
-    }
+    // The V1 `apply_lottery` unit tests (mock candidates + a UTXO lookup)
+    // and the #998 proposer/validator-gate reproduction exercised the retired
+    // V1 envelope-copy producer. Their V2 equivalents run against a real
+    // ledger, where proposer and validator share one pinned pre-state:
+    // `ledger::store::v2_activation_tests` (winner path at the real 720-block
+    // maturity, forged payouts, determinism) and the `lottery_v2_activation`
+    // TestNetwork regression.
 
     #[test]
-    fn test_apply_lottery_no_fees() {
-        let minting_tx = mock_minting_tx(100);
+    fn apply_lottery_seals_a_v2_body_root_that_the_ledger_accepts() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = crate::ledger::Ledger::open(dir.path()).unwrap();
+        let tip = ledger.get_tip().unwrap();
+        let mut minting_tx = mock_minting_tx(1);
+        minting_tx.prev_block_hash = tip.hash();
         let block = BlockBuilder::build_direct(minting_tx, vec![]);
-
-        // Block with no transactions (0 fees)
-        let candidates = vec![mock_candidate([1u8; 36], 1_000_000, 50)];
-        let utxo_lookup = |id: &[u8; 36]| {
-            if id == &[1u8; 36] {
-                Some(mock_utxo([1u8; 36], 1_000_000, 50))
-            } else {
-                None
-            }
-        };
-
-        let lottery_config = LotteryFeeConfig::default();
-        let result = BlockBuilder::apply_lottery(
-            block.clone(),
-            &candidates,
-            0,
-            utxo_lookup,
-            &lottery_config,
+        let legacy_root = block.header.tx_root;
+        let sealed = BlockBuilder::apply_lottery(block.clone(), &ledger).unwrap();
+        // No payouts below maturity, but the header now commits the V2 body.
+        assert!(sealed.lottery_outputs.is_empty());
+        assert_ne!(sealed.header.tx_root, legacy_root);
+        assert_ne!(sealed.hash(), block.hash());
+        // Sealing is a pure function of the pre-state and the block.
+        assert_eq!(
+            bincode::serialize(&sealed).unwrap(),
+            bincode::serialize(&BlockBuilder::apply_lottery(block, &ledger).unwrap()).unwrap()
         );
-
-        // No fees means no lottery
-        assert!(result.lottery_outputs.is_empty());
-        assert_eq!(result.lottery_summary.total_fees, 0);
     }
 
     #[test]
-    fn test_apply_lottery_no_candidates() {
-        let minting_tx = mock_minting_tx(100);
-        let tx = mock_transaction_with_fee(1_000_000);
-        let block = BlockBuilder::build_direct(minting_tx, vec![tx]);
-
-        // Empty candidates
-        let candidates: Vec<bth_cluster_tax::LotteryCandidate> = vec![];
-        let utxo_lookup = |_: &[u8; 36]| None;
-
-        let lottery_config = LotteryFeeConfig::default();
-        let result = BlockBuilder::apply_lottery(
-            block.clone(),
-            &candidates,
-            0,
-            utxo_lookup,
-            &lottery_config,
+    fn apply_lottery_refuses_a_block_that_does_not_extend_the_tip() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = crate::ledger::Ledger::open(dir.path()).unwrap();
+        // mock_minting_tx's parent is all-zero, not the genesis hash.
+        let block = BlockBuilder::build_direct(mock_minting_tx(1), vec![]);
+        let error = BlockBuilder::apply_lottery(block, &ledger).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Previous block hash mismatch (V2 producer pre-state"),
+            "{error}"
         );
-
-        // No candidates: the fee burn share (20%) is burned; the pool share
-        // carries over via the persistent lottery pool
-        assert!(result.lottery_outputs.is_empty());
-        assert_eq!(result.lottery_summary.total_fees, 1_000_000);
-        assert_eq!(result.lottery_summary.pool_distributed, 0);
-        assert_eq!(result.lottery_summary.amount_burned, 200_000);
-    }
-
-    #[test]
-    fn test_apply_lottery_with_fees_and_candidates() {
-        let minting_tx = mock_minting_tx(100);
-        let tx = mock_transaction_with_fee(10_000_000); // 10M picocredits fee
-        let block = BlockBuilder::build_direct(minting_tx, vec![tx]);
-
-        // Create some candidate UTXOs
-        let candidates = vec![
-            mock_candidate([1u8; 36], 100_000_000, 50), // 100M value, 50 blocks old
-            mock_candidate([2u8; 36], 200_000_000, 40), // 200M value, 60 blocks old
-            mock_candidate([3u8; 36], 50_000_000, 30),  // 50M value, 70 blocks old
-        ];
-
-        let utxo_lookup = |id: &[u8; 36]| match id[0] {
-            1 => Some(mock_utxo([1u8; 36], 100_000_000, 50)),
-            2 => Some(mock_utxo([2u8; 36], 200_000_000, 40)),
-            3 => Some(mock_utxo([3u8; 36], 50_000_000, 30)),
-            _ => None,
-        };
-
-        let lottery_config = LotteryFeeConfig::default();
-        let result = BlockBuilder::apply_lottery(
-            block.clone(),
-            &candidates,
-            0,
-            utxo_lookup,
-            &lottery_config,
+        let mut minting_tx = mock_minting_tx(2);
+        minting_tx.prev_block_hash = ledger.get_tip().unwrap().hash();
+        let skipped = BlockBuilder::build_direct(minting_tx, vec![]);
+        let error = BlockBuilder::apply_lottery(skipped, &ledger).unwrap_err();
+        assert!(
+            error.to_string().contains("Expected height 1, got 2"),
+            "{error}"
         );
-
-        // Should have applied lottery - total_fees should be recorded
-        assert_eq!(result.lottery_summary.total_fees, 10_000_000);
-
-        // The fee burn share (20%) is always burned; the pool share either
-        // pays out (capped at one block reward) or carries over
-        assert_eq!(result.lottery_summary.amount_burned, 2_000_000);
-
-        if result.lottery_outputs.is_empty() {
-            // No winners drawn (candidates too young for default min age):
-            // nothing distributed, pool share carries over
-            assert_eq!(result.lottery_summary.pool_distributed, 0);
-        } else {
-            // Winners drawn: payout = min(fee pool share, block reward cap)
-            let cap = result.minting_tx.reward;
-            assert_eq!(result.lottery_summary.pool_distributed, 8_000_000.min(cap));
-        }
     }
 
     #[test]

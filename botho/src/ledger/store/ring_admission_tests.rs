@@ -308,11 +308,11 @@ fn signed_test_block(ledger: &Ledger, tx: Transaction) -> Block {
     block.header.prev_block_hash = state.tip_hash;
     block.minting_tx.block_height = block.header.height;
     block.minting_tx.prev_block_hash = state.tip_hash;
-    block.lottery_summary.amount_burned =
-        LotteryFeeConfig::default().split_fees(block.total_fees()).1;
     while !block.header.is_valid_pow() {
         block.header.nonce += 1;
     }
     block.minting_tx.nonce = block.header.nonce;
-    block
+    // V2 body (protocol 7.0.0, #1640): the ledger's producer writes the
+    // lottery summary and the body root. The PoW preimage excludes tx_root.
+    ledger.seal_block(block).expect("seal V2 block body")
 }
