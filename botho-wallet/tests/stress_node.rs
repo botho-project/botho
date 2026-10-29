@@ -193,22 +193,107 @@ async fn receive_prepare_submit_restore_and_respend() {
         server.abort();
     }).await.expect("fixture exceeded eight minute deadline");
 }
-/// #1642 (P5) end-to-end: the signer's wallet wins a V2 lottery payout on a
-/// real local node, discovers it under a key image distinct from the winning
-/// source's, prepares a spend the ledger accepts, and then spends the source
-/// too.
+/// Where the V2 payout rows' derivation context comes from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ContextSource {
+    /// `chain_getOutputs` serves `lotteryContext`/`winnerOutpoint` itself
+    /// (#1286 P4, #1641).
+    Rpc,
+    /// The test reads each payout's committed context from the node's own
+    /// ledger and attaches it to the served row in the frozen #1641 shape.
+    /// If the row already carries the fields (P4 landed), it asserts that they
+    /// equal the ledger's instead.
+    #[cfg_attr(not(feature = "test-fixtures"), allow(dead_code))]
+    Ledger,
+}
+
+/// #1642 (P5) end-to-end, on real V2 blocks from the production producer
+/// (P3, #1640): the signer's wallet wins a V2 lottery payout on a local node,
+/// discovers it under a key image distinct from the winning source's,
+/// prepares a spend the ledger accepts, and then spends the source too.
 ///
-/// GATED until #1286 P3 (#1640) and P4 (#1641) are on the branch: P2 refuses
-/// every lottery-paying block, and only P3's V2 producer (which this file's
-/// `apply_lottery_to_block` helper must call once it lands) plus P4's
-/// `lotteryContext` rows make the payout discoverable (today the funded block
-/// at 741 is refused by `add_block`). It compiles now and is
-/// reported as ignored; remove the `ignore` when both land. Kept separate from
-/// `receive_prepare_submit_restore_and_respend`, whose lottery-reaching shape
-/// P3 restores, so the two do not duplicate each other.
+/// The payout's context comes from the ledger (`ContextSource::Ledger`),
+/// because main's `chain_getOutputs` does not serve `lotteryContext` until P4
+/// (#1641). Needs `--features test-fixtures` for the ledger read. Kept separate
+/// from `receive_prepare_submit_restore_and_respend`, so the two do not
+/// duplicate each other.
+#[cfg(feature = "test-fixtures")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "needs #1286 P3 (#1640) V2 payout producer and P4 (#1641) lotteryContext RPC rows"]
 async fn v2_payout_win_discover_spend_and_source_still_spendable() {
+    v2_payout_round_trip(ContextSource::Ledger).await;
+}
+
+/// The same round trip with contexts served by the node's RPC alone.
+///
+/// GATED on #1286 P4 (#1641) only: main's `chain_getOutputs` does not yet
+/// carry `lotteryContext`/`winnerOutpoint`/`cryptoOutputIndex` on payout rows.
+/// Remove the `ignore` when P4 lands.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs #1286 P4 (#1641) lotteryContext/winnerOutpoint RPC rows"]
+async fn v2_payout_round_trip_from_rpc_contexts_alone() {
+    v2_payout_round_trip(ContextSource::Rpc).await;
+}
+
+/// Attach each V2 payout row's committed derivation context (read from the
+/// ledger) in the frozen #1641 wire shape. If a row already carries it (P4),
+/// the served fields must equal the ledger's.
+#[cfg(feature = "test-fixtures")]
+fn attach_ledger_contexts(ledger: &Ledger, blocks: &mut Value) {
+    for block in blocks.as_array_mut().unwrap() {
+        let height = block["height"].as_u64().unwrap();
+        let mut sealed = None;
+        for row in block["outputs"].as_array_mut().unwrap() {
+            if row["lottery"] != true {
+                continue;
+            }
+            let sealed = sealed.get_or_insert_with(|| ledger.get_block(height).unwrap());
+            let tx_hash: [u8; 32] = hex::decode(row["ledgerOutpoint"]["txHash"].as_str().unwrap())
+                .unwrap()
+                .try_into()
+                .unwrap();
+            let index = row["ledgerOutpoint"]["outputIndex"].as_u64().unwrap() as u32;
+            assert_eq!(
+                tx_hash,
+                sealed.hash(),
+                "payout ids live under the block hash"
+            );
+            let ordinal = index - 1;
+            let (_, context) = ledger
+                .fixture_derivation_context(&botho::transaction::UtxoId::new(tx_hash, index))
+                .unwrap();
+            assert_ne!(
+                context.tweak, [0; 32],
+                "a V2 payout carries a nonzero tweak"
+            );
+            let award = &sealed.lottery_outputs[ordinal as usize];
+            assert_eq!(hex::encode(award.target_key), row["targetKey"]);
+            let expected = [
+                (
+                    "lotteryContext",
+                    json!({"version":2,"baseIndex":context.base_index,
+                        "tweak":hex::encode(context.tweak),"ordinal":ordinal,"height":height}),
+                ),
+                (
+                    "winnerOutpoint",
+                    json!(format!(
+                        "{}:{}",
+                        hex::encode(award.winner_tx_hash),
+                        award.winner_output_index
+                    )),
+                ),
+                ("cryptoOutputIndex", json!(context.base_index)),
+            ];
+            for (field, value) in expected {
+                match row.get(field) {
+                    Some(served) => assert_eq!(served, &value, "served {field} != ledger"),
+                    None => row[field] = value,
+                }
+            }
+        }
+    }
+}
+
+async fn v2_payout_round_trip(source: ContextSource) {
     tokio::time::timeout(Duration::from_secs(900), async {
         let dir = tempfile::tempdir().unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -227,7 +312,7 @@ async fn v2_payout_win_discover_spend_and_source_still_spendable() {
         );
         // Wallet A mints every block, so every lottery candidate (and so
         // every winner) is A's.
-        for _ in 1..=740 {
+        for _ in 1..=FUNDING_HEIGHT {
             mine_block(&ledger, &winner.public_address(), vec![]);
         }
         let state = Arc::new(RpcState::new(
@@ -260,11 +345,24 @@ async fn v2_payout_win_discover_spend_and_source_still_spendable() {
                 .height
         };
         let outputs = |end: u64| {
-            rpc(
-                &url,
-                "chain_getOutputs",
-                json!({"start_height":0,"end_height":end}),
-            )
+            let (url, state) = (url.clone(), state.clone());
+            async move {
+                #[allow(unused_mut)]
+                let mut blocks = rpc(
+                    &url,
+                    "chain_getOutputs",
+                    json!({"start_height":0,"end_height":end}),
+                )
+                .await;
+                if source == ContextSource::Ledger {
+                    #[cfg(feature = "test-fixtures")]
+                    attach_ledger_contexts(&state.ledger.read().unwrap(), &mut blocks);
+                    #[cfg(not(feature = "test-fixtures"))]
+                    unreachable!("ContextSource::Ledger needs --features test-fixtures");
+                }
+                let _ = &state;
+                blocks
+            }
         };
         let target_hex = |owned: &Value| {
             hex::encode(
