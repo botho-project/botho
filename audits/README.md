@@ -50,6 +50,7 @@ Security auditing is iterative. Each internal audit:
 
 | Date | Auditor | Scope | Critical | High | Medium | Low | Status |
 |------|---------|-------|----------|------|--------|-----|--------|
+| 2026-10-29 (lottery V2) | Internal | Dedicated - LotteryV2 payouts P12 (#1647) | 0 | **1** (#1676, fixing pre-x1) | 1 | 2 | Issues found |
 | 2026-07-20 (snap) | Internal | Dedicated - MetaMask Snap key-handling (#1096) | **0** | **0** | 0 | 1 (fixed) | **Clean (internal)** |
 | 2026-07-13 (bridge) | Internal | Dedicated - BTH↔Ethereum wBTH bridge (#830) | **0** | **0** | 3 | 3 | **Clean (internal); external audit pending #616** |
 | 2026-07-12 (c8) | Internal | Delta - Operator write path + consensus/BaaS | **0** | **0** | 1 new | 3 | **Healthy** |
@@ -84,6 +85,7 @@ completion or mainnet fitness is asserted by this index.
 
 ## Report Index
 
+- [2026-10-29 LotteryV2 payouts](2026-10-29-lottery-v2-internal.md) - P12 internal review of the V2 lottery payout path (#1647): the related-key construction, determinism, the body root and RPC trust are clean. Draw seed grindable (#1676, High, pre-dates V2 and V2 made it worse), validator ordering (#1670), coinbase KEM aliasing (#1677)
 - [2026-07-20 Snap key-handling](2026-07-20-snap-keyhandling.md) - Dedicated MetaMask Snap key-handling audit (#1096): SRP→Botho key derivation, claim-link bearer secrets, wasm signing under SES, `snap_manageState` persistence; 0 Critical/High, 1 Low (fixed)
 - [2026-07-13 Bridge](2026-07-13-bridge.md) - Dedicated BTH↔Ethereum wBTH bridge audit (#830): custody, attestation protocol, WrappedBTH.sol, watchers/engine exactly-once, reserve peg invariant, privacy boundary; 0 Critical/High, external audit + mainnet gate remain (operator, #616)
 - [2026-07-12 Cycle 8](2026-07-12-cycle8.md) - Operator-signed quorum-curation write path (P4.4), consensus deltas, BaaS status-link; cycle-7 findings closed
