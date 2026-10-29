@@ -57,6 +57,8 @@ class QualificationTests(unittest.TestCase):
         c.j.set("status", "setup")
         c.j.set("setup_start", 1000)
         c.j.set("opening_verified", True)
+        # The V2 lottery preflight (#1643) already passed for this campaign.
+        c.j.set("lottery_preflight", {"at": 999, "hosts": {}})
         c.j.set("rehearsal_start", 1000)
         c.j.set("fee_latest", {host: {"at": 2500} for host in HOSTS})
         for i, row in enumerate(test_rehearsal.RehearsalCadenceTests().rows(cadence)):

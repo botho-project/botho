@@ -74,6 +74,9 @@ from bisect import bisect_left, bisect_right
 import json
 import random
 
+from lottery import lottery_context
+from runtime import Gate
+
 # botho-wallet/src/stress.rs MAX_REQUEST (pinned signer, 386b5ede).
 SIGNER_MAX_REQUEST = 128 * 1024 * 1024
 # The signer used about 3x the request size in RSS (309 MB for a 101.8 MiB
@@ -141,6 +144,12 @@ def prepare_blocks(blocks, height, selected_ids, rng=None,
     excluded = set()
     ages = []
     for h, position, output in located.values():
+        # A selected lottery payout must be V2 (``lottery: true`` and a
+        # well-formed context, which the signer requires); the row is then
+        # sent verbatim. A legacy payout is never a valid input (#1643).
+        if (output.get('lottery', False) or output.get('lotteryContext') is not None) \
+                and lottery_context(output) is None:
+            raise Gate('selected legacy lottery payout')
         chosen.add((h, position))
         key = output['targetKey'].lower()
         excluded.add(key)

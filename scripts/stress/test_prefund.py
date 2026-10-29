@@ -37,6 +37,7 @@ class Fleet:
         self.height, self.blocks, self.outputs = 0, {0: []}, {}
         self.spent, self.mempool, self.txs = {}, {}, {}
         self.status_override, self.receipt_override, self.known_override = {}, {}, {}
+        self.chain_info_override = {}
         self.submits, self.requests, self.submit_hook = [], [], None
         self.counter = 0
         self.coinbase_to = None
@@ -76,6 +77,8 @@ class Fleet:
     async def call(self, host, method, params=None, timeout=10, write=False):
         params = params or {}
         self.requests.append((host, method))
+        if method == 'getChainInfo':
+            return {'lotteryRules': 2, 'protocolVersion': '7.0.0', **self.chain_info_override.get(host, {})}
         if method == 'node_getStatus':
             return {'network': self.plan['network'], 'gitCommit': self.plan['node_commit'], 'version': '0.6.0',
                     'synced': True, 'mintingActive': host == PRODUCER, 'chainHeight': self.height,
@@ -123,7 +126,9 @@ class Fleet:
                 owned.append({'id': identifier, 'key_image': 'ki-' + identifier, 'utxo': {
                     'target_key': list(bytes.fromhex(meta['target'])), 'tx_hash': list(bytes.fromhex(row['txHash'])),
                     'output_index': row['outputIndex'], 'created_at': block['height'], 'amount': meta['amount'],
-                    'coinbase': meta['coinbase'], 'lottery': meta['lottery']}})
+                    'coinbase': meta['coinbase'], 'lottery': meta['lottery'],
+                    # The P5 signer echoes a V2 row's context (#1642).
+                    'lottery_context': copy.deepcopy(row.get('lotteryContext'))}})
         return address, owned
 
     async def signer(self, request):
@@ -257,7 +262,7 @@ class SignerContractTests(unittest.TestCase):
         source = Path(prefund.__file__).read_text()
         imported = set(re.findall(r'^(?:from|import) (\w+)', source, re.M))
         local = {p.stem for p in Path(prefund.__file__).parent.glob('*.py')}
-        self.assertLessEqual(imported & local, {'controller', 'plan', 'runtime', 'selection'})
+        self.assertLessEqual(imported & local, {'controller', 'lottery', 'plan', 'runtime', 'selection'})
         self.assertFalse({'qualification', 'fast_timing', 'manifest_limits'} & imported)
         for module in imported - local:
             __import__(module)  # standard library only
@@ -319,6 +324,14 @@ class OpeningTests(PrefundBase):
         self.fleet.status_override[HOSTS[4]] = {'synced': False}
         self.assertOpeningRefused('unsynced at opening')
 
+    def test_v1_lottery_node(self):
+        self.fleet.chain_info_override[HOSTS[2]] = {'lotteryRules': 1}
+        self.assertOpeningRefused('V2 lottery rules')
+
+    def test_pre_7_protocol_node(self):
+        self.fleet.chain_info_override[HOSTS[0]] = {'protocolVersion': '6.0.0'}
+        self.assertOpeningRefused('protocol is not 7.0.0')
+
     def test_wrong_commit(self):
         self.fleet.status_override[HOSTS[1]] = {'gitCommit': 'f' * 40}
         self.assertOpeningRefused('software identity')
@@ -333,6 +346,46 @@ class OpeningTests(PrefundBase):
 
 
 class EndToEndTests(PrefundBase):
+    def test_v2_award_during_prefund_is_income_not_principal(self):
+        """A campaign wallet wins a V2 award mid-prefund (#1643).
+
+        The pin stays exact principal, so the launch check and the principal
+        budget never count lottery inflow; the award is reported apart.
+        """
+        p = self.prefunder()
+        winner_address = self.fleet.addresses[self.m['wallets'][0]['key']]
+        award = None
+        done = False
+        for _ in range(400):
+            for _ in range(40):
+                before = len(self.fleet.submits)
+                done = self.tick(p)
+                if done or len(self.fleet.submits) == before:
+                    break
+            if done:
+                break
+            self.advance()
+            owned = [(tx, i) for (tx, i), meta in self.fleet.outputs.items()
+                     if meta['owner'] == winner_address and not meta['lottery']]
+            if award is None and owned:
+                tx, index = owned[0]
+                award = self.fleet.output(self.fleet.height, winner_address, 7 * 10**9, index=1, lottery=True)
+                self.fleet.blocks[self.fleet.height][-1].update(
+                    amountCommitment=(7 * 10**9).to_bytes(8, 'little').hex(), cryptoOutputIndex=0,
+                    lotteryContext={'version': 2, 'baseIndex': 0, 'tweak': '03' + '00' * 31,
+                                    'ordinal': 0, 'height': self.fleet.height},
+                    winnerOutpoint=tx + ':' + str(index))
+        self.assertTrue(done)
+        self.assertIsNotNone(award)
+        state = Path(self.m['state_dir'])
+        self.assertEqual(json.loads((state / 'opening_balances.json').read_text()), [16 * GRANT] * 32)
+        health = json.loads((state / 'funding-health.json').read_text())
+        self.assertEqual(health['opening_lottery_balances'], [7 * 10**9] + [0] * 31)
+        self.assertEqual(health['accounting']['difference'], 0)
+        self.assertEqual(health['accounting']['lottery_v2']['received_count'], 1)
+        self.assertEqual(health['accounting']['lottery_v2']['undiscovered'], [])
+        self.assertEqual([w['grant_outputs'] for w in health['inventory_readiness']['wallets']], [16] * 32)
+
     def test_prefund_writes_exact_opening_balances(self):
         p = self.prefunder()
         done = False
