@@ -259,15 +259,35 @@ pub(in crate::ledger) fn domain<R: DerivationReads + ?Sized>(
     ordinal: usize,
     amount: u64,
 ) -> Result<Domain, LedgerError> {
-    Ok(Domain {
-        genesis: reads.genesis_hash()?,
+    Ok(domain_for(
+        reads.genesis_hash()?,
+        block,
+        manifest,
+        ordinal,
+        amount,
+    ))
+}
+
+/// The payout derivation [`Domain`] of award `ordinal` in `block` under the
+/// chain whose genesis hash is `genesis`. The one construction shared by the
+/// producer/validator ([`domain`]) and the detached witness verifier
+/// (`store::v2::detached`, #1499), which has no ledger to read genesis from.
+pub(in crate::ledger) fn domain_for(
+    genesis: [u8; 32],
+    block: &Block,
+    manifest: [u8; 32],
+    ordinal: usize,
+    amount: u64,
+) -> Domain {
+    Domain {
+        genesis,
         parent: block.header.prev_block_hash,
         height: block.height(),
         ordinary_root: Block::compute_tx_root(&block.transactions),
         manifest,
         ordinal: ordinal as u32,
         amount,
-    })
+    }
 }
 
 /// One canonical drawing: the winners plus the pool accounting.

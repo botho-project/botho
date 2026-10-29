@@ -18,6 +18,9 @@ use heed::RoTxn;
 /// Native node-wallet discovery/recovery through these contexts (#1286 P7).
 pub(in crate::ledger) mod wallet;
 
+/// Authenticated detached native-wallet witness (#1499, #1286 P10). Inactive.
+pub(in crate::ledger) mod detached;
+
 /// Metadata key holding the storage-schema marker. Shared with the private
 /// experimental stores, whose (different) markers are therefore refused here
 /// by exact comparison.
