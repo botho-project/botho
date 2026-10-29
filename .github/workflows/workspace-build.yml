@@ -311,6 +311,10 @@ jobs:
             # cryptoOutputIndex/clusterTags equal to the ledger's, and a
             # missing context fails closed (-32603).
             timeout 900s "$NATIVE_WALLET_TEST_EXECUTABLE" rpc::lottery_rows_tests::real_sealed_v2_payout_rows_match_the_ledger --exact --ignored --nocapture || exit "$?"
+            # #1286 P10 (#1499): a detached wallet verifies an exported witness
+            # against a separately supplied anchor, then discovers and spends a
+            # naturally drawn V2 payout (~45 s locally on this profile).
+            timeout 900s "$NATIVE_WALLET_TEST_EXECUTABLE" ledger::store::v2::detached::tests::detached_wallet_spends_natural_payout_at_real_maturity --exact --ignored --nocapture || exit "$?"
             timeout 1200s cargo test --locked --profile ci -p botho --test lottery_v2_activation -- --nocapture || exit "$?"
           } 2>&1 | tee "$RUNNER_TEMP/lottery-v2-activation.log"
 
