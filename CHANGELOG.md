@@ -41,6 +41,12 @@ bumps (`0.X.Y`) are backwards-compatible.
   vulnerable Solana native bigint conversion, and migrated DNS/libp2p/WebRTC
   dependencies with bounded connection cleanup (#1269, #1303, #1312, #1316,
   #1330).
+- **Consensus-breaking (rides the protocol 7.0.0 reset):** `Transaction::hash`
+  and `Transaction::signing_hash` now commit to every output field, including
+  `e_memo`, `cluster_tags` and `kem_ciphertext`, under new domain separators.
+  Those fields can no longer be altered without invalidating the signatures.
+  There is no legacy signing mode; every producer signs through the shared
+  function (#1638, part of #1286).
 
 ### Changed
 - contracts/ethereum migrated to the Hardhat 3 toolchain (#1185).

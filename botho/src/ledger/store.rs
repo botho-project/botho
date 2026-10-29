@@ -1,4 +1,7 @@
 #[cfg(test)]
+#[path = "store/complete_output_signing_tests.rs"]
+mod complete_output_signing_tests;
+#[cfg(test)]
 #[path = "store/map_full_tests.rs"]
 mod map_full_tests;
 #[cfg(test)]
