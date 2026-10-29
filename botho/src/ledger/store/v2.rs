@@ -533,16 +533,33 @@ impl DerivationReads for ProductionView<'_, '_> {
     fn output_context(&self, id: &UtxoId) -> Result<(Utxo, StoredContext), LedgerError> {
         read_context(self.ledger, self.txn, id)
     }
+    fn tip_header(&self) -> Result<crate::block::BlockHeader, LedgerError> {
+        let height = self.height()?;
+        let bytes = self
+            .ledger
+            .blocks_db
+            .get(self.txn, &height)
+            .map_err(db_op("view tip block"))?
+            .ok_or_else(|| LedgerError::InconsistentRecord("missing tip block".into()))?;
+        let tip: Block = crate::ledger::experimental::decode(bytes)?;
+        if tip.height() != height || tip.hash() != self.tip_hash()? {
+            return Err(LedgerError::InconsistentRecord(
+                "tip block disagrees with tip metadata".into(),
+            ));
+        }
+        Ok(tip.header)
+    }
     fn lottery_candidates(
         &self,
         block: &Block,
+        seed: &[u8; 32],
         config: &LotteryDrawConfig,
     ) -> Result<Vec<LotteryCandidate>, LedgerError> {
         validation::lottery_candidates(
             &self.ledger.write_tables(),
             self.txn,
             block.height(),
-            &block.header.prev_block_hash,
+            seed,
             config,
             ReadPolicy::Strict,
             &mut |u| read_context(self.ledger, self.txn, &u.id).map(|_| ()),

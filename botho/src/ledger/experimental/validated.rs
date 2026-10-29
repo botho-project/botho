@@ -233,16 +233,22 @@ impl DerivationReads for PinnedView<'_, '_> {
     fn output_context(&self, id: &UtxoId) -> Result<(Utxo, StoredContext), LedgerError> {
         self.output(id)
     }
+    fn tip_header(&self) -> Result<crate::block::BlockHeader, LedgerError> {
+        // `state` checks the stored tip envelope against the tip metadata.
+        let state = self.state()?;
+        Ok(self.store.envelope(self.txn, state.height)?.block.header)
+    }
     fn lottery_candidates(
         &self,
         block: &Block,
+        seed: &[u8; 32],
         config: &LotteryDrawConfig,
     ) -> Result<Vec<LotteryCandidate>, LedgerError> {
         validation::lottery_candidates(
             &self.store.tables,
             self.txn,
             block.height(),
-            &block.header.prev_block_hash,
+            seed,
             config,
             ReadPolicy::Strict,
             &mut |u| self.output(&u.id).map(|_| ()),

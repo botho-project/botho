@@ -39,10 +39,57 @@
 //! ```
 
 use bth_cluster_tax::{
-    count_eligible, draw_winners, sybil_reward_cap, verify_drawing, LotteryCandidate,
-    LotteryDrawConfig, LotteryResult, LotteryWinner, TagVector,
+    count_eligible, draw_winners, draw_winners_with_seed, sybil_reward_cap, verify_drawing,
+    LotteryCandidate, LotteryDrawConfig, LotteryResult, LotteryWinner, TagVector,
 };
+use sha2::{Digest, Sha256};
 use tracing::{debug, info};
+
+/// Domain tag of the protocol-7.0.0 PoW-bound lottery seed (#1676).
+pub const LOTTERY_SEED_V2_DOMAIN: &[u8] = b"BOTHO_LOTTERY_SEED_V2";
+
+/// The consensus lottery seed of block `height` (protocol 7.0.0, #1676):
+///
+/// ```text
+/// seed = SHA256("BOTHO_LOTTERY_SEED_V2" ‖ pow_hash(N−1) ‖ prev_block_hash(N−1) ‖ height_le)
+/// ```
+///
+/// Every input is a PoW field of the parent header `N−1` (or the height):
+/// `parent_pow_hash` is its RandomX output
+/// ([`crate::block::BlockHeader::pow_hash`]) and `parent_prev_hash` is the
+/// `prev_block_hash` field of its PoW preimage
+/// (`nonce ‖ prev ‖ minter_view ‖ minter_spend`), i.e. `hash(N−2)`.
+///
+/// The parent's header HASH `hash(N−1)` is deliberately NOT an input. It also
+/// covers `timestamp` and `tx_root` (which, under V2, includes the freely
+/// regenerable coinbase stealth output), so a minter holding one PoW solution
+/// could re-roll it — and with it block N's winners and #573 candidate window
+/// — for free. With only PoW-preimage fields bound, two parents that differ
+/// only in timestamp or coinbase output yield the IDENTICAL seed, and every
+/// re-roll costs a fresh PoW solution. (The parent identity is still enforced:
+/// the validator requires the stored parent to hash to the child's
+/// `prev_block_hash` before seeding.)
+///
+/// This one seed feeds BOTH the winner draw
+/// ([`draw_lottery_winners_seeded`]) and the candidate-window offset, and is
+/// committed in `BlockLotterySummary::lottery_seed` for drawn blocks.
+///
+/// Height 1 is not special: its parent is the fixed per-network genesis
+/// header, whose `pow_hash` is a deterministic constant (genesis is not
+/// mined, so there is nothing to grind) and whose `prev_block_hash` is the
+/// network genesis magic.
+pub fn lottery_seed_v2(
+    parent_pow_hash: &[u8; 32],
+    parent_prev_hash: &[u8; 32],
+    height: u64,
+) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(LOTTERY_SEED_V2_DOMAIN);
+    h.update(parent_pow_hash);
+    h.update(parent_prev_hash);
+    h.update(height.to_le_bytes());
+    h.finalize().into()
+}
 
 /// Configuration for lottery fee redistribution.
 #[derive(Clone, Debug)]
@@ -309,6 +356,11 @@ pub fn compute_pool_accounting(
 ///
 /// # Returns
 /// `BlockLotteryResult` with winners and fee allocation
+///
+/// This is the V1 (`LOTTERY_SEED_V1`, header-hash-seeded) entry point, kept
+/// for the unit/fuzz/economics harnesses. No block path calls it: protocol
+/// 7.0.0 consensus draws go through [`draw_lottery_winners_seeded`] with
+/// [`lottery_seed_v2`] (#1676).
 pub fn draw_lottery_winners(
     candidates: &[LotteryCandidate],
     total_fees: u64,
@@ -316,6 +368,45 @@ pub fn draw_lottery_winners(
     block_height: u64,
     prev_block_hash: &[u8; 32],
     config: &LotteryFeeConfig,
+) -> BlockLotteryResult {
+    finish_draw(total_fees, accounting, block_height, || {
+        draw_winners(
+            candidates,
+            accounting.payout,
+            block_height,
+            prev_block_hash,
+            &config.draw_config,
+        )
+    })
+}
+
+/// Consensus draw (protocol 7.0.0): [`draw_lottery_winners`] over an
+/// already-derived `seed` (the PoW-bound [`lottery_seed_v2`], #1676). A drawn
+/// result carries `seed` verbatim as [`BlockLotteryResult::seed`].
+pub fn draw_lottery_winners_seeded(
+    candidates: &[LotteryCandidate],
+    total_fees: u64,
+    accounting: &LotteryPoolAccounting,
+    block_height: u64,
+    seed: &[u8; 32],
+    config: &LotteryFeeConfig,
+) -> BlockLotteryResult {
+    finish_draw(total_fees, accounting, block_height, || {
+        draw_winners_with_seed(
+            candidates,
+            accounting.payout,
+            block_height,
+            seed,
+            &config.draw_config,
+        )
+    })
+}
+
+fn finish_draw(
+    total_fees: u64,
+    accounting: &LotteryPoolAccounting,
+    block_height: u64,
+    draw: impl FnOnce() -> Option<LotteryResult>,
 ) -> BlockLotteryResult {
     if accounting.payout == 0 {
         debug!(
@@ -326,13 +417,7 @@ pub fn draw_lottery_winners(
     }
 
     // Draw winners using cluster-tax lottery implementation
-    match draw_winners(
-        candidates,
-        accounting.payout,
-        block_height,
-        prev_block_hash,
-        &config.draw_config,
-    ) {
+    match draw() {
         Some(result) => {
             info!(
                 block_height = block_height,

@@ -326,7 +326,45 @@ pub fn draw_winners(
 
     // Generate deterministic seed from block hash and height
     let seed = generate_seed(block_hash, block_height);
+    draw_eligible(&eligible, pool_amount, block_height, seed, config)
+}
 
+/// Perform a verifiable lottery drawing from an already-derived 32-byte
+/// `seed`.
+///
+/// Identical to [`draw_winners`] except that the caller supplies the seed
+/// instead of having it derived from `(block_hash, height)` by the V1
+/// `LOTTERY_SEED_V1` construction. Protocol 7.0.0 consensus draws use this
+/// with the PoW-bound seed (`botho` `consensus::lottery::lottery_seed_v2`,
+/// #1676), so the draw cannot be re-rolled by re-hashing a block header
+/// without new proof of work. The returned [`LotteryResult::seed`] is `seed`.
+pub fn draw_winners_with_seed(
+    candidates: &[LotteryCandidate],
+    pool_amount: u64,
+    block_height: u64,
+    seed: &[u8; 32],
+    config: &LotteryDrawConfig,
+) -> Option<LotteryResult> {
+    let eligible: Vec<&LotteryCandidate> = candidates
+        .iter()
+        .filter(|c| c.is_eligible(block_height, config))
+        .collect();
+
+    if eligible.is_empty() || pool_amount == 0 {
+        return None;
+    }
+    draw_eligible(&eligible, pool_amount, block_height, *seed, config)
+}
+
+/// The seeded weighted draw over the eligible set (shared by
+/// [`draw_winners`] and [`draw_winners_with_seed`]).
+fn draw_eligible(
+    eligible: &[&LotteryCandidate],
+    pool_amount: u64,
+    block_height: u64,
+    seed: [u8; 32],
+    config: &LotteryDrawConfig,
+) -> Option<LotteryResult> {
     // Calculate max value for normalization (used by Hybrid mode)
     let max_value = eligible.iter().map(|c| c.value).max().unwrap_or(1);
 

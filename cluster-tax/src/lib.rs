@@ -158,7 +158,7 @@ pub use validate::{
 //
 // See docs/research/ct-compatible-lottery-selection.md for the analysis.
 pub use lottery::{
-    count_eligible, draw_winners, sybil_reward_cap, verify_drawing, LotteryCandidate,
-    LotteryDrawConfig, LotteryResult, LotteryWinner, SelectionMode, CIRCULATION_WINDOW_BLOCKS,
-    LOTTERY_BASE_FEE_PICO,
+    count_eligible, draw_winners, draw_winners_with_seed, sybil_reward_cap, verify_drawing,
+    LotteryCandidate, LotteryDrawConfig, LotteryResult, LotteryWinner, SelectionMode,
+    CIRCULATION_WINDOW_BLOCKS, LOTTERY_BASE_FEE_PICO,
 };

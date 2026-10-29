@@ -675,7 +675,7 @@ pub(in crate::ledger) fn lottery_candidates(
     tables: &WriteTables,
     txn: &heed::RoTxn<'_>,
     block_height: u64,
-    prev_block_hash: &[u8; 32],
+    seed: &[u8; 32],
     config: &LotteryDrawConfig,
     policy: ReadPolicy,
     mut check_context: &mut dyn FnMut(&Utxo) -> Result<(), LedgerError>,
@@ -692,8 +692,10 @@ pub(in crate::ledger) fn lottery_candidates(
     let mut wealth_cache: HashMap<u64, u128> = HashMap::new();
     let factor_curve = ClusterFactorCurve::default_params();
 
-    // Seed-derived 36-byte start offset into the UTXO-id keyspace.
-    let offset_key = Ledger::lottery_candidate_offset_key(prev_block_hash, block_height);
+    // Seed-derived 36-byte start offset into the UTXO-id keyspace. Consensus
+    // callers pass the PoW-bound V2 lottery seed (#1676), never a raw
+    // header hash.
+    let offset_key = Ledger::lottery_candidate_offset_key(seed, block_height);
     let offset_slice: &[u8] = &offset_key;
 
     // Wraparound rotation: walk `[offset, end)` then `[start, offset)`.
@@ -723,7 +725,7 @@ pub(in crate::ledger) fn lottery_candidates(
         // seed-derived start offset, and the wraparound order) must be
         // identical for the block proposer and every validator, because
         // lottery verification re-runs the draw. The offset is a pure
-        // function of (prev_block_hash, height); LMDB range iteration order
+        // function of (seed, height); LMDB range iteration order
         // is key order, a deterministic function of the UTXO set.
         if candidates.len() >= MAX_LOTTERY_CANDIDATES {
             break;

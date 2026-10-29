@@ -711,8 +711,9 @@ splitting a position never increases total weight. The consensus lottery
 defaults to `ClusterWeighted` (not the grindable `Hybrid { alpha }`). Because
 churn/split fees feed the pool, attacking the mechanism *funds* it (gamed
 simulation redistributes marginally more than honest). Payout cap ≤ 1 reward
-with carryover, plus a seed-rotated candidate window (#573), bounds
-seed-grinding gain below the PoW cost of a regrind.
+with carryover, plus a seed-rotated candidate window (#573) and a seed bound
+to the parent's PoW output (#1676), bounds seed-grinding gain below the PoW
+cost of a regrind.
 
 **H4 candidate-cap grindability at scale (analysed 2026-07-07, #715 — ACCEPTED
 as economically inert).** When more than `MAX_LOTTERY_CANDIDATES` (10,000)
@@ -723,20 +724,50 @@ block's draw. The residual grindability is bounded on three fronts:
   fair share regardless of offset; clustering UTXOs into a contiguous keyspace
   region would require vanity-grinding every `tx_hash` (astronomically
   expensive).
-- **Draw grind** is structurally a one-block lookahead only: both the window
-  and the draw are seeded by `block.header.prev_block_hash` — the hash of the
-  *already-committed* previous block (fixed by SCP externalization before the
-  current block is mined). A miner therefore cannot grind its own block's
-  lottery; the only surface is biasing `hash(N−1)` while mining N−1, which
-  competes with competing-coinbase PoW-priority optimization, costs a full PoW
-  attempt per grind, and yields only the *marginal* gain over the fair-share
-  draw — bounded above by the ≤1-reward payout cap. EV(grind) is negative.
+- **Draw grind** is structurally a one-block lookahead only: block N's
+  window and draw are seeded from the *already-committed* parent N−1, so a
+  minter cannot grind its own block's lottery; the only surface is biasing
+  the parent's contribution while mining N−1. **Correction (2026-10-29,
+  #1676, P12 internal review H-1):** the original acceptance assumed that
+  surface was `prev_block_hash = hash(N−1)` and that each re-roll "costs a
+  full PoW attempt". It did not: `hash(N−1)` also covers `timestamp` (~7,200
+  admissible values) and `tx_root`, which under V2 includes the coinbase
+  stealth output (`target_key`/`public_key`/`kem_ciphertext`, regenerable
+  without limit), while the RandomX PoW covers only
+  `nonce ‖ prev ‖ minter keys`. One PoW solution therefore bought unbounded
+  free re-rolls of block N's winners and window. **Fixed in protocol 7.0.0:**
+  the seed is `SHA256("BOTHO_LOTTERY_SEED_V2" ‖ pow_hash(N−1) ‖
+  prev_block_hash(N−1) ‖ height)` (`consensus::lottery_seed_v2`) — only PoW
+  preimage fields of the parent plus the height; `hash(N−1)` is not an input
+  (the validator still requires the stored parent to hash to the child's
+  `prev_block_hash`). The same seed feeds the draw and the #573 window offset,
+  producer and validator share it via `ledger::lottery_v2::drawing`, and drawn
+  blocks commit it in `lottery_summary.lottery_seed`. Two parents differing
+  only in timestamp or coinbase output now yield the identical draw.
+  **Corrected EV argument:** every alternative seed is now a distinct valid
+  PoW solution (a new nonce or minter key). The residual is *selective
+  release*: a minter that finds several N−1 solutions within one round can
+  publish the one whose draw favours it instead of its best-priority one.
+  That (i) yields options only at the attacker's own PoW rate — each costs a
+  full expected block of work; (ii) trades away coinbase PoW-priority (the
+  withheld solution may have won N−1's reward, and withholding risks losing
+  the round entirely, forfeiting the whole block reward); and (iii) is capped
+  at the marginal improvement over the attacker's fair-share draw of a
+  per-block payout ≤ one block reward. For a minority hashrate the expected
+  extra options per round are < 1 and the forfeited coinbase expectation
+  exceeds the capped marginal gain, so EV(grind) < 0; even a large-hashrate
+  minter gains at most one capped payout per block it mines, bounded by the
+  same cap. Height 1 seeds from the fixed, unmined genesis header (nothing to
+  grind). The flaw predated V2 (timestamp lever) and V2 widened it
+  (coinbase-output lever); no 7.0.0 chain had been deployed when it was
+  fixed.
 - **Scale** is bounded by the *per-block* payout cap (applied to the total
   block payout, not per-winner), so a large-UTXO holder's expected winnings
   stay proportional to weight share and cannot grow with UTXO count.
 
-This disposition is in scope for the external audit (#616) to independently
-confirm the EV/grindability argument.
+This disposition — now the corrected, PoW-bound argument above (#1676) —
+is in scope for the external audit (#616) to independently confirm,
+including the selective-release residual.
 
 **Residual:** payout privacy — on-chain winners statistically reveal the winner
 factor distribution (design Open Question 4). Open.
