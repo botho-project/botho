@@ -19,11 +19,11 @@ use super::{
     ChainState, LedgerError,
 };
 use crate::{
-    block::{Block, BlockLotterySummary, LotteryOutput},
+    block::{Block, BlockHeader, BlockLotterySummary, LotteryOutput},
     consensus::{
         lottery::{
-            compute_pool_accounting, draw_lottery_winners, reward_cap, BlockLotteryResult,
-            LotteryPoolAccounting,
+            compute_pool_accounting, draw_lottery_winners_seeded, lottery_seed_v2, reward_cap,
+            BlockLotteryResult, LotteryPoolAccounting,
         },
         LotteryFeeConfig,
     },
@@ -158,10 +158,17 @@ pub(in crate::ledger) trait DerivationReads {
     /// never a default (e.g. a Direct/zero-tweak context), and corruption or
     /// an output/context disagreement is an error too.
     fn output_context(&self, id: &UtxoId) -> Result<(Utxo, StoredContext), LedgerError>;
-    /// Canonical, strictly-read lottery candidate set for `block`.
+    /// The header of the committed tip of this pinned view (#1676: the
+    /// parent whose RandomX PoW output seeds the next draw). Strict: a
+    /// missing or undecodable tip block, or one that disagrees with the
+    /// view's tip height/hash, is an error, never a default.
+    fn tip_header(&self) -> Result<BlockHeader, LedgerError>;
+    /// Canonical, strictly-read lottery candidate set for `block`, windowed
+    /// by the block's PoW-bound lottery `seed` (see [`seed`]).
     fn lottery_candidates(
         &self,
         block: &Block,
+        seed: &[u8; 32],
         config: &LotteryDrawConfig,
     ) -> Result<Vec<LotteryCandidate>, LedgerError>;
 }
@@ -196,6 +203,37 @@ fn source<R: DerivationReads + ?Sized>(
     reads.output_context(&UtxoId::new(id.hash, id.index))
 }
 
+/// The PoW-bound lottery seed of `block` (#1676): [`lottery_seed_v2`] over
+/// the PoW fields of the committed parent (its RandomX output and its
+/// preimage's `prev_block_hash`), read strictly from the pinned view and
+/// recomputed from the stored parent header (RandomX light mode; a pure
+/// function of the header, memoized by exact input in `crate::pow`). The
+/// parent's header hash, which a minter can re-roll without new PoW via the
+/// timestamp or coinbase output, is never a seed input.
+///
+/// The parent is the pinned view's committed tip: `block` must sit at
+/// `tip.height + 1` and name `tip.hash()` as `prev_block_hash`, otherwise it
+/// is invalid (wrong height/parent) — checked here, before any seed is
+/// derived, so a peer block on a wrong parent is classified as invalid rather
+/// than as missing storage. Genesis has no drawing; height 1 seeds from the
+/// fixed genesis header's (deterministic, unmined) PoW output.
+pub(in crate::ledger) fn seed<R: DerivationReads + ?Sized>(
+    reads: &R,
+    block: &Block,
+) -> Result<[u8; 32], LedgerError> {
+    let parent = reads.tip_header()?;
+    if parent.height.checked_add(1) != Some(block.height())
+        || parent.hash() != block.header.prev_block_hash
+    {
+        return Err(invalid("V2 seed parent"));
+    }
+    Ok(lottery_seed_v2(
+        &parent.pow_hash(),
+        &parent.prev_block_hash,
+        block.height(),
+    ))
+}
+
 /// Canonical V2 drawing over the pinned pre-state.
 pub(in crate::ledger) fn drawing<R: DerivationReads + ?Sized>(
     reads: &R,
@@ -205,7 +243,8 @@ pub(in crate::ledger) fn drawing<R: DerivationReads + ?Sized>(
     if config.draw_config.winners_per_draw > CANDIDATE_MAX_AWARDS {
         return Err(invalid("experimental award bound"));
     }
-    let candidates = reads.lottery_candidates(block, &config.draw_config)?;
+    let seed = seed(reads, block)?;
+    let candidates = reads.lottery_candidates(block, &seed, &config.draw_config)?;
     let fees = block.transactions.iter().try_fold(0u64, |sum, t| {
         sum.checked_add(t.fee).ok_or(LedgerError::FeeOverflow)
     })?;
@@ -222,12 +261,12 @@ pub(in crate::ledger) fn drawing<R: DerivationReads + ?Sized>(
         cap,
         &config,
     );
-    let draw = draw_lottery_winners(
+    let draw = draw_lottery_winners_seeded(
         &candidates,
         fees,
         &accounting,
         block.height(),
-        &block.header.prev_block_hash,
+        &seed,
         &config,
     );
     if accounting.payout > 0 && !candidates.is_empty() && draw.winners.is_empty() {

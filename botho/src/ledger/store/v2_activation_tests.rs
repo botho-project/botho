@@ -333,6 +333,42 @@ fn v2_activation_real_maturity_matrix() {
         );
         cases.push((what, b));
     }
+    // #1676: the committed seed is the PoW-bound V2 seed of the parent,
+    // never the V1 header-hash seed; a block committing the V1 seed (under a
+    // recomputed root, so only the seed differs) is rejected.
+    let parent = blocks.last().unwrap();
+    let seed = crate::consensus::lottery_seed_v2(
+        &parent.header.pow_hash(),
+        &parent.header.prev_block_hash,
+        honest.height(),
+    );
+    assert_eq!(
+        honest.lottery_summary.lottery_seed, seed,
+        "V2 PoW-bound seed"
+    );
+    let v1_seed: [u8; 32] = {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(b"LOTTERY_SEED_V1");
+        h.update(honest.header.prev_block_hash);
+        h.update(honest.height().to_le_bytes());
+        h.finalize().into()
+    };
+    assert_ne!(v1_seed, seed);
+    for (what, forged_seed) in [
+        ("V1 header-hash seed", v1_seed),
+        ("forged seed", {
+            let mut x = seed;
+            x[0] ^= 1;
+            x
+        }),
+    ] {
+        let mut b = honest.clone();
+        b.lottery_summary.lottery_seed = forged_seed;
+        b.header.tx_root = lottery_v2::root(&b, &honest_records).unwrap();
+        assert_ne!(b.hash(), honest.hash(), "{what}: seed committed");
+        cases.push((what, b));
+    }
     // Wire forgeries carried under a RECOMPUTED root as well.
     // (Only payout-changing cases: the summary and context cases keep the
     // honest payouts, so re-deriving their root would rebuild the honest

@@ -2,6 +2,9 @@
 #[path = "store/complete_output_signing_tests.rs"]
 mod complete_output_signing_tests;
 #[cfg(test)]
+#[path = "store/lottery_seed_tests.rs"]
+mod lottery_seed_tests;
+#[cfg(test)]
 #[path = "store/map_full_tests.rs"]
 mod map_full_tests;
 #[cfg(test)]
@@ -2498,8 +2501,28 @@ impl Ledger {
                 &snapshot.chain_state.height.to_le_bytes(),
             )
             .map_err(|e| LedgerError::Database(format!("Failed to put height: {}", e)))?;
+        // FIXTURE ONLY: the V2 lottery seed (#1676) reads the committed tip
+        // header strictly (its RandomX output seeds the next draw), and a V1
+        // snapshot carries no block. Above genesis, persist a synthetic tip
+        // header naming the snapshot block hash as its parent, and make it the
+        // tip, so the fixture ledger has a strict, self-consistent tip.
+        let tip_hash = if snapshot.chain_state.height > 0 {
+            let mut tip = Block::genesis();
+            tip.header.height = snapshot.chain_state.height;
+            tip.header.prev_block_hash = snapshot.block_hash;
+            tip.minting_tx.block_height = snapshot.chain_state.height;
+            tip.minting_tx.prev_block_hash = snapshot.block_hash;
+            let bytes =
+                bincode::serialize(&tip).map_err(|e| LedgerError::Serialization(e.to_string()))?;
+            self.blocks_db
+                .put(&mut wtxn, &snapshot.chain_state.height, &bytes)
+                .map_err(|e| LedgerError::Database(format!("Failed to put tip block: {}", e)))?;
+            tip.hash()
+        } else {
+            snapshot.block_hash
+        };
         self.meta_db
-            .put(&mut wtxn, META_TIP_HASH, &snapshot.block_hash)
+            .put(&mut wtxn, META_TIP_HASH, &tip_hash)
             .map_err(|e| LedgerError::Database(format!("Failed to put tip_hash: {}", e)))?;
         self.meta_db
             .put(
@@ -2636,18 +2659,20 @@ impl Ledger {
     /// vanity-ground low `tx_hash` could permanently occupy). Instead, the
     /// window starts at a deterministic, per-block seed-derived offset into the
     /// UTXO-id keyspace and wraps around to the start. The offset is derived
-    /// from the same verifiable-randomness source the draw consumes
-    /// (`prev_block_hash` + height), so the proposer and every validator derive
-    /// an identical window, while the window rotates each block — grinding a
-    /// low hash position no longer guarantees membership.
+    /// from the same verifiable-randomness source the draw consumes (the
+    /// seed + height), so the proposer and every validator derive an
+    /// identical window, while the window rotates each block — grinding a
+    /// low hash position no longer guarantees membership. Consensus (the V2
+    /// rules, protocol 7.0.0) windows by the PoW-bound
+    /// `consensus::lottery_seed_v2` (#1676); this legacy-policy reader takes
+    /// any 32-byte seed for the harnesses.
     ///
     /// # Arguments
     /// * `block_height` - The block height being validated (UTXOs must be
     ///   older)
-    /// * `prev_block_hash` - Previous block hash; the verifiable-randomness
-    ///   seed used (with height) to derive the candidate-window start offset.
-    ///   MUST be the same value the draw/verification uses, or proposer and
-    ///   validator diverge.
+    /// * `seed` - The verifiable-randomness seed used (with height) to derive
+    ///   the candidate-window start offset. MUST be the same value the
+    ///   draw/verification uses, or proposer and validator diverge.
     /// * `config` - Lottery draw configuration with age/value thresholds
     ///
     /// # Returns
@@ -2658,7 +2683,7 @@ impl Ledger {
     pub fn get_lottery_validation_candidates(
         &self,
         block_height: u64,
-        prev_block_hash: &[u8; 32],
+        seed: &[u8; 32],
         config: &LotteryDrawConfig,
     ) -> Result<Vec<LotteryCandidate>, LedgerError> {
         let txn = self
@@ -2669,7 +2694,7 @@ impl Ledger {
             &self.write_tables(),
             &txn,
             block_height,
-            prev_block_hash,
+            seed,
             config,
             validation::ReadPolicy::Legacy,
             &mut |_| Ok(()),
@@ -2681,20 +2706,23 @@ impl Ledger {
     ///
     /// UTXO keys are `tx_hash || output_index` (32 + 4 = 36 bytes). The offset
     /// rotates every block via the same verifiable-randomness source the draw
-    /// consumes (`prev_block_hash` + height), so the proposer and every
+    /// consumes (the lottery `seed` + height), so the proposer and every
     /// validator derive an identical window for the same block, while the
-    /// window moves block-to-block. Using SHA-256 (the codebase's
+    /// window moves block-to-block. From protocol 7.0.0 the consensus `seed`
+    /// is the PoW-bound `consensus::lottery_seed_v2` (#1676), so re-hashing
+    /// the parent header (timestamp, coinbase output) without new PoW cannot
+    /// move the window. Using SHA-256 (the codebase's
     /// lottery-seed primitive, see `generate_seed` in `cluster-tax`) with
     /// domain separation keeps this offset independent of the draw seed yet
     /// equally deterministic.
-    fn lottery_candidate_offset_key(prev_block_hash: &[u8; 32], block_height: u64) -> [u8; 36] {
+    fn lottery_candidate_offset_key(seed: &[u8; 32], block_height: u64) -> [u8; 36] {
         use sha2::{Digest, Sha256};
 
         // First 32 bytes (tx_hash slot): domain-separated hash over the lottery
         // randomness inputs.
         let mut head_hasher = Sha256::new();
         head_hasher.update(b"LOTTERY_CANDIDATE_OFFSET_V1");
-        head_hasher.update(prev_block_hash);
+        head_hasher.update(seed);
         head_hasher.update(block_height.to_le_bytes());
         let head: [u8; 32] = head_hasher.finalize().into();
 

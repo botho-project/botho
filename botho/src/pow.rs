@@ -88,7 +88,7 @@
 //! call repeatedly during validation. Miners build their own (fast-mode) VMs
 //! in the minter threads (see `node::minter`).
 
-use std::sync::Mutex;
+use std::{collections::VecDeque, sync::Mutex};
 
 use randomx_rs::{RandomXCache, RandomXDataset, RandomXFlag, RandomXVM};
 use sha2::{Digest, Sha256};
@@ -385,12 +385,57 @@ unsafe impl Send for SendCache {}
 
 static LIGHT_VM: Mutex<Option<SendCache>> = Mutex::new(None);
 
+/// Capacity of the [`POW_MEMO`] verification memo.
+const POW_MEMO_CAPACITY: usize = 16;
+
+/// One memoized verification: `(seed_key, preimage, output)`.
+type PowMemoEntry = ([u8; 32], Vec<u8>, [u8; 32]);
+
+/// Bounded memo of the most recent light-mode verifications, keyed by the
+/// EXACT `(seed_key, preimage)` input (#1676).
+///
+/// RandomX is a pure function of `(seed_key, preimage)`, so returning a
+/// memoized output is indistinguishable from recomputing it — the memo can
+/// never change a consensus result. It exists because the PoW-bound lottery
+/// seed (`consensus::lottery_seed_v2`) needs the parent's `pow_hash` when
+/// drawing block N, and that is exactly the hash this node computed when it
+/// verified block N−1: the memo turns the second RandomX evaluation into a
+/// lookup, and keeps an epoch-boundary block (parent in the previous seed
+/// epoch) from rebuilding the single cached light VM twice.
+static POW_MEMO: Mutex<VecDeque<PowMemoEntry>> = Mutex::new(VecDeque::new());
+
+fn memo_get(seed_key: &[u8; 32], preimage: &[u8]) -> Option<[u8; 32]> {
+    let memo = POW_MEMO.lock().expect("POW_MEMO mutex poisoned");
+    memo.iter()
+        .find(|(k, p, _)| k == seed_key && p.as_slice() == preimage)
+        .map(|(_, _, h)| *h)
+}
+
+fn memo_put(seed_key: &[u8; 32], preimage: &[u8], hash: [u8; 32]) {
+    let mut memo = POW_MEMO.lock().expect("POW_MEMO mutex poisoned");
+    if memo.len() >= POW_MEMO_CAPACITY {
+        memo.pop_front();
+    }
+    memo.push_back((*seed_key, preimage.to_vec(), hash));
+}
+
 /// Compute the RandomX PoW hash of `preimage` under `seed_key`, using a cached
 /// light-mode verifier VM (re-initialized only on seed rotation).
 ///
 /// This is the canonical verification hasher. It produces the **same** output
 /// a miner's fast-mode VM produces for the same `(seed_key, preimage)`.
+/// Recent results are memoized by exact input (see [`POW_MEMO`]).
 pub fn verify_pow_hash(seed_key: &[u8; 32], preimage: &[u8]) -> [u8; 32] {
+    if let Some(hash) = memo_get(seed_key, preimage) {
+        return hash;
+    }
+    let hash = verify_pow_hash_uncached(seed_key, preimage);
+    memo_put(seed_key, preimage, hash);
+    hash
+}
+
+/// [`verify_pow_hash`] without the memo: always evaluates RandomX.
+pub fn verify_pow_hash_uncached(seed_key: &[u8; 32], preimage: &[u8]) -> [u8; 32] {
     let mut guard = LIGHT_VM.lock().expect("LIGHT_VM mutex poisoned");
 
     let needs_rebuild = match guard.as_ref() {
@@ -608,4 +653,58 @@ mod tests {
     // path and confirmed identical under fast mode and FLAG_DEFAULT.
     const KNOWN_ANSWER_HEX: &str =
         "04779c03247d2b9f45bd745529ae60cc02ddab82d5eb3c2fdcb8b1fcaaa7dfb4";
+
+    /// The #1676 memo is invisible: memoized and uncached evaluation agree
+    /// for every input, after eviction, and across a seed-epoch change (the
+    /// epoch-boundary parent/child pattern). Epoch switches rebuild the light
+    /// VM (~2 s each), so this switches only once.
+    #[test]
+    fn test_memo_matches_uncached() {
+        let e0 = seed_key_for_height(0);
+        let e1 = seed_key_for_height(SEED_ROTATION_INTERVAL);
+        let pre = |n: u64| pow_preimage(n, &[3u8; 32], &[4u8; 32], &[5u8; 32]);
+        let mut e0_hashes = Vec::new();
+        for n in 0..(POW_MEMO_CAPACITY as u64 + 4) {
+            let memo = verify_pow_hash(&e0, &pre(n));
+            assert_eq!(memo, verify_pow_hash(&e0, &pre(n)));
+            assert_eq!(memo, verify_pow_hash_uncached(&e0, &pre(n)));
+            e0_hashes.push(memo);
+        }
+        // Same preimage, other epoch: a different key, never a memo alias.
+        let last = POW_MEMO_CAPACITY as u64 + 3;
+        let other = verify_pow_hash(&e1, &pre(last));
+        assert_ne!(other, e0_hashes[last as usize]);
+        assert_eq!(other, verify_pow_hash(&e1, &pre(last)));
+        // The epoch-0 parent is still served (from the memo) after the switch.
+        assert_eq!(verify_pow_hash(&e0, &pre(last)), e0_hashes[last as usize]);
+    }
+
+    /// #1676 cost measurement (ignored; run with `--ignored --nocapture`):
+    /// warm light-mode verify, memo hit, and a seed-epoch rebuild.
+    #[test]
+    #[ignore = "timing measurement, not a correctness check"]
+    fn measure_light_verify_cost() {
+        use std::time::Instant;
+        let e0 = seed_key_for_height(0);
+        let e1 = seed_key_for_height(SEED_ROTATION_INTERVAL);
+        let pre = |n: u64| pow_preimage(n, &[1u8; 32], &[2u8; 32], &[3u8; 32]);
+        let t = Instant::now();
+        verify_pow_hash_uncached(&e0, &pre(0));
+        eprintln!("first verify (VM build, epoch 0): {:?}", t.elapsed());
+        let n = 50u64;
+        let t = Instant::now();
+        for i in 1..=n {
+            verify_pow_hash_uncached(&e0, &pre(i));
+        }
+        eprintln!("warm light verify: {:?}/hash", t.elapsed() / n as u32);
+        verify_pow_hash(&e0, &pre(1_000));
+        let t = Instant::now();
+        for _ in 0..n {
+            verify_pow_hash(&e0, &pre(1_000));
+        }
+        eprintln!("memo hit: {:?}/lookup", t.elapsed() / n as u32);
+        let t = Instant::now();
+        verify_pow_hash_uncached(&e1, &pre(0));
+        eprintln!("epoch switch (light VM rebuild): {:?}", t.elapsed());
+    }
 }

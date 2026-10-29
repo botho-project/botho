@@ -18,9 +18,10 @@ mod value;
 
 pub use block_builder::{BlockBuildError, BlockBuilder, BuiltBlock, MAX_TX_AGE};
 pub use lottery::{
-    draw_lottery_winners, split_fees, utxo_to_candidate, validate_block_lottery,
-    validate_lottery_output_bindings, verify_lottery_result, BlockLotteryResult, LotteryFeeConfig,
-    LotteryStats, LotteryValidationError,
+    draw_lottery_winners, draw_lottery_winners_seeded, lottery_seed_v2, split_fees,
+    utxo_to_candidate, validate_block_lottery, validate_lottery_output_bindings,
+    verify_lottery_result, BlockLotteryResult, LotteryFeeConfig, LotteryStats,
+    LotteryValidationError, LOTTERY_SEED_V2_DOMAIN,
 };
 pub use service::{
     ConsensusConfig, ConsensusEvent, ConsensusService, QuorumGateSnapshot, ScpMessage,
