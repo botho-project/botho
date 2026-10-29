@@ -7,10 +7,9 @@ use anyhow::{anyhow, Result};
 #[cfg(feature = "pq")]
 use bth_account_keys::QuantumSafeAccountKey;
 use bth_account_keys::{AccountKey, PublicAddress};
-use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bth_crypto_keys::RistrettoPrivate;
 #[cfg(test)]
 use bth_crypto_ring_signature::onetime_keys::recover_public_subaddress_spend_key;
-use bth_crypto_ring_signature::Scalar;
 use bth_transaction_clsag::{
     lottery_v2, ClsagRingInput, RingMember, Transaction, TxOutput, MIN_RING_SIZE,
 };
@@ -785,8 +784,8 @@ impl<'a> WalletScanner<'a> {
         let view_private = self.account_key.view_private_key();
 
         // Parse keys
-        let public_key_point = RistrettoPublic::try_from(&public_key[..]).ok()?;
-        let target_key_point = RistrettoPublic::try_from(&target_key[..]).ok()?;
+        let public_key_point = bth_crypto_keys::RistrettoPublic::try_from(&public_key[..]).ok()?;
+        let target_key_point = bth_crypto_keys::RistrettoPublic::try_from(&target_key[..]).ok()?;
 
         // Recover the spend public key that would correspond to this output
         let recovered_spend_key =
@@ -943,6 +942,8 @@ pub fn parse_amount(cad: &str) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bth_crypto_keys::RistrettoPublic;
+    use bth_crypto_ring_signature::Scalar;
 
     #[test]
     fn test_format_amount() {
