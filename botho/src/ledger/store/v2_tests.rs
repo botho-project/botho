@@ -13,7 +13,7 @@ use crate::{
 use bth_transaction_clsag::lottery_v2::{Context, Outpoint, Record};
 use tempfile::TempDir;
 
-const ALL_TABLES: [&str; 9] = [
+pub(super) const ALL_TABLES: [&str; 9] = [
     "blocks",
     "meta",
     "utxos",
@@ -24,9 +24,9 @@ const ALL_TABLES: [&str; 9] = [
     "bridge_import_clusters",
     CONTEXTS_TABLE,
 ];
-type Rows = Vec<(Vec<u8>, Vec<u8>)>;
+pub(super) type Rows = Vec<(Vec<u8>, Vec<u8>)>;
 
-fn tables(env: &Env) -> Vec<(&'static str, Rows)> {
+pub(super) fn tables(env: &Env) -> Vec<(&'static str, Rows)> {
     let txn = env.read_txn().unwrap();
     ALL_TABLES
         .iter()
@@ -47,7 +47,7 @@ fn tables(env: &Env) -> Vec<(&'static str, Rows)> {
         .collect()
 }
 
-fn golden_block() -> Block {
+pub(super) fn golden_block() -> Block {
     let golden: serde_json::Value = serde_json::from_str(include_str!(
         "../../../tests/fixtures/v1-writer-effects.json"
     ))
@@ -55,7 +55,7 @@ fn golden_block() -> Block {
     bincode::deserialize(&hex::decode(golden["block_hex"].as_str().unwrap()).unwrap()).unwrap()
 }
 
-fn output(seed: u8) -> TxOutput {
+pub(super) fn output(seed: u8) -> TxOutput {
     TxOutput {
         amount: 1_000 + seed as u64,
         target_key: [seed; 32],
@@ -67,7 +67,7 @@ fn output(seed: u8) -> TxOutput {
 }
 
 /// A canonical, non-zero scalar tweak.
-fn tweak() -> [u8; 32] {
+pub(super) fn tweak() -> [u8; 32] {
     let mut t = [0u8; 32];
     t[0] = 7;
     t
@@ -76,7 +76,7 @@ fn tweak() -> [u8; 32] {
 /// Block 2 on top of `parent`: one stub transaction with two outputs and one
 /// V2 payout (with its record) to `parent`'s coinbase. Storage fixture only:
 /// it is applied through the shared writer, never through V1 validation.
-fn payout_block(parent: &Block) -> (Block, Vec<Record>) {
+pub(super) fn payout_block(parent: &Block) -> (Block, Vec<Record>) {
     let mut block = parent.clone();
     block.header.height = parent.height() + 1;
     block.header.prev_block_hash = parent.hash();
@@ -109,7 +109,7 @@ fn payout_block(parent: &Block) -> (Block, Vec<Record>) {
     (block, vec![record])
 }
 
-fn apply_v2(
+pub(super) fn apply_v2(
     ledger: &Ledger,
     block: &Block,
     records: &[Record],
@@ -141,7 +141,7 @@ fn apply_v2(
 /// (#1640) `add_block` rejects the golden block (flat tx root), so these
 /// storage tests seed it writer-only; V2 consensus is covered by
 /// `v2_activation_tests`.
-fn ledger_at_height_one(dir: &Path) -> (Ledger, Block) {
+pub(super) fn ledger_at_height_one(dir: &Path) -> (Ledger, Block) {
     let ledger = Ledger::open(dir).unwrap();
     ledger.set_difficulty(u64::MAX).unwrap();
     let block = golden_block();
@@ -527,45 +527,8 @@ fn foreign_markers_and_missing_contexts_table_are_refused() {
     assert_eq!(std::fs::read(dir.path().join("data.mdb")).unwrap(), data);
 }
 
-#[test]
-fn snapshots_fail_closed_without_writes() {
-    let dir = TempDir::new().unwrap();
-    let (ledger, _) = ledger_at_height_one(dir.path());
-    let before = tables(&ledger.env);
-    assert!(matches!(
-        ledger.create_snapshot(),
-        Err(LedgerError::UnsupportedSchema(_))
-    ));
-    let file = dir.path().join("out.snapshot");
-    assert!(matches!(
-        ledger.write_snapshot_to_file(&file),
-        Err(LedgerError::UnsupportedSchema(_))
-    ));
-    assert!(!file.exists());
-    let snapshot = UtxoSnapshot::new(
-        5,
-        [9; 32],
-        ChainState {
-            height: 5,
-            ..ChainState::default()
-        },
-        vec![],
-        vec![],
-        vec![],
-    )
-    .unwrap();
-    assert!(matches!(
-        ledger.load_from_snapshot(&snapshot, None),
-        Err(LedgerError::UnsupportedSchema(_))
-    ));
-    std::fs::write(&file, b"not a snapshot").unwrap();
-    let err = ledger.load_snapshot_from_file(&file, None).unwrap_err();
-    assert!(
-        matches!(&err, LedgerError::UnsupportedSchema(m) if m.contains("botho.ledger.2")),
-        "{err}"
-    );
-    assert_eq!(tables(&ledger.env), before);
-}
+// The former `snapshots_fail_closed_without_writes` test is superseded by
+// `snapshot_v2_tests` (versioned snapshot V2, #1646), which covers V1 refusal.
 
 #[test]
 fn fixture_seeding_writes_direct_contexts_for_every_row() {

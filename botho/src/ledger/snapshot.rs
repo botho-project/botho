@@ -16,13 +16,21 @@
 //! After loading, nodes should sync remaining blocks from snapshot height
 //! to current tip, verifying the chain connects properly.
 //!
-//! # `botho.ledger.2` (#1286 P2)
+//! # Versions
 //!
-//! This (V1) format carries no per-output derivation contexts, so
-//! `botho.ledger.2` ledgers refuse to create or load it: `create_snapshot`,
-//! `write_snapshot_to_file`, `load_from_snapshot` and `load_snapshot_from_file`
-//! fail closed with `LedgerError::UnsupportedSchema`. A versioned V2 snapshot
-//! is a follow-up; until then nodes sync from genesis.
+//! - **V1** ([`UtxoSnapshot`], magic `BTHSNAP\x01`): UTXOs, key images and
+//!   cluster wealth. It carries no per-output derivation contexts, so
+//!   `botho.ledger.2` ledgers refuse to load it (#1286 P2). The type is kept
+//!   because test fixtures still construct it for
+//!   `Ledger::seed_fixture_snapshot_unvalidated`.
+//! - **V2** ([`UtxoSnapshotV2`], magic `BTHSNAP\x02`, #1646): the
+//!   `botho.ledger.2` snapshot. It adds the derivation-context table, the
+//!   storage marker, the genesis hash, the tip block itself, the lottery pool
+//!   carryover, the address index and the bridge-import cluster set, and binds
+//!   all of them (plus every section root) into one SHA-256
+//!   [`UtxoSnapshotV2::commitment`]. The commitment is computed over the
+//!   *decompressed* section contents, so it does not depend on the zstd version
+//!   that produced the file.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -37,6 +45,21 @@ pub const SNAPSHOT_VERSION: u32 = 1;
 
 /// Magic bytes for snapshot file identification
 pub const SNAPSHOT_MAGIC: &[u8; 8] = b"BTHSNAP\x01";
+
+/// Snapshot format version carrying derivation contexts (`botho.ledger.2`).
+pub const SNAPSHOT_VERSION_V2: u32 = 2;
+
+/// Magic bytes of a V2 snapshot file.
+pub const SNAPSHOT_MAGIC_V2: &[u8; 8] = b"BTHSNAP\x02";
+
+/// Storage schema a V2 snapshot belongs to (the ledger's `storage_schema`).
+pub const SNAPSHOT_V2_SCHEMA: &[u8] = b"botho.ledger.2";
+
+/// Domain separator of the V2 snapshot commitment.
+const SNAPSHOT_V2_DOMAIN: &[u8] = b"botho.snapshot.2";
+
+/// Width of an outpoint key (`UtxoId::to_bytes()`).
+const OUTPOINT_LEN: usize = 36;
 
 /// Zstd compression level (3 = balanced speed/compression)
 const COMPRESSION_LEVEL: i32 = 3;
@@ -291,6 +314,485 @@ impl UtxoSnapshot {
     pub fn compressed_size(&self) -> u64 {
         (self.utxo_data.len() + self.key_image_data.len() + self.cluster_wealth_data.len()) as u64
     }
+}
+
+// ============================================================================
+// Snapshot format V2 (botho.ledger.2, #1646)
+// ============================================================================
+
+/// The decompressed, decoded sections of a V2 snapshot. Every list is in
+/// strictly ascending key order (the LMDB iteration order of its table).
+#[derive(Debug, Clone, Default)]
+pub struct SnapshotV2Contents {
+    /// Every unspent output, ascending by `UtxoId::to_bytes()`.
+    pub utxos: Vec<Utxo>,
+    /// `(outpoint key (36 B), encoded StoredContext)`, one per UTXO, same
+    /// order as `utxos`.
+    pub contexts: Vec<(Vec<u8>, Vec<u8>)>,
+    /// `(target key, concatenated 36 B outpoint keys)`, ascending by target
+    /// key, verbatim from the source ledger. Carried (not rebuilt) because
+    /// the in-row order is creation order, which the canonical first-index
+    /// target lookup (#1443/#1444) depends on and the sorted UTXO list does
+    /// not preserve. Every UTXO appears exactly once, under its target key.
+    pub address_index: Vec<([u8; 32], Vec<u8>)>,
+    /// `(key image, spent height)`, ascending by key image.
+    pub key_images: Vec<([u8; 32], u64)>,
+    /// `(cluster id, wealth)`, ascending by little-endian cluster key.
+    pub cluster_wealth: Vec<(u64, u128)>,
+    /// Bridge-import cluster ids, ascending by little-endian cluster key.
+    pub import_clusters: Vec<u64>,
+}
+
+/// UTXO snapshot format V2 for `botho.ledger.2` ledgers.
+///
+/// Adds, relative to V1: the storage marker, the genesis hash, the tip block
+/// (so a restored ledger has a real tip for `get_tip` and the next block's
+/// parent/timestamp checks), the lottery pool carryover, the derivation
+/// contexts, the address index and the bridge-import cluster set. Integrity is
+/// one SHA-256 [`commitment`](Self::commitment) over every header field and
+/// every section's Merkle root; [`verify`](Self::verify) recomputes all of them
+/// from the decompressed data, so tampering with any context, UTXO, key image
+/// or header field is detected.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UtxoSnapshotV2 {
+    /// Always [`SNAPSHOT_VERSION_V2`].
+    pub version: u32,
+    /// Storage schema marker of the source ledger (`botho.ledger.2`).
+    pub storage_schema: Vec<u8>,
+    /// Hash of block 0 of the source chain.
+    pub genesis_hash: [u8; 32],
+    /// Block height at which the snapshot was taken.
+    pub height: u64,
+    /// Hash of the tip block at `height`.
+    pub block_hash: [u8; 32],
+    /// Chain state metadata at `height`.
+    pub chain_state: ChainState,
+    /// Lottery pool carryover after the tip block.
+    pub lottery_pool: u128,
+    /// zstd(bincode(tip `Block`)).
+    pub tip_block_data: Vec<u8>,
+    pub utxo_count: u64,
+    pub context_count: u64,
+    pub address_index_count: u64,
+    pub key_image_count: u64,
+    pub cluster_count: u64,
+    pub import_cluster_count: u64,
+    pub utxo_merkle_root: [u8; 32],
+    pub context_merkle_root: [u8; 32],
+    pub address_index_merkle_root: [u8; 32],
+    pub key_image_merkle_root: [u8; 32],
+    pub cluster_wealth_merkle_root: [u8; 32],
+    pub import_cluster_merkle_root: [u8; 32],
+    /// zstd(bincode(section)) for each section of [`SnapshotV2Contents`].
+    pub utxo_data: Vec<u8>,
+    pub context_data: Vec<u8>,
+    pub address_index_data: Vec<u8>,
+    pub key_image_data: Vec<u8>,
+    pub cluster_wealth_data: Vec<u8>,
+    pub import_cluster_data: Vec<u8>,
+    /// SHA-256 binding every field above (see [`UtxoSnapshotV2::verify`]).
+    pub commitment: [u8; 32],
+}
+
+/// Section roots and the tip-block digest, recomputed from contents.
+struct V2Roots {
+    utxo: [u8; 32],
+    context: [u8; 32],
+    address_index: [u8; 32],
+    key_image: [u8; 32],
+    cluster_wealth: [u8; 32],
+    import_cluster: [u8; 32],
+}
+
+fn ser<T: Serialize + ?Sized>(value: &T) -> Result<Vec<u8>, SnapshotError> {
+    bincode::serialize(value).map_err(|e| SnapshotError::Serialization(e.to_string()))
+}
+
+/// Strict bincode decode (legacy fixint encoding, as `bincode::serialize`
+/// writes it) that rejects trailing bytes.
+fn de_strict<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, SnapshotError> {
+    use bincode::Options;
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .reject_trailing_bytes()
+        .deserialize(bytes)
+        .map_err(|e| SnapshotError::Serialization(e.to_string()))
+}
+
+fn strictly_ascending<K: Ord>(
+    keys: impl Iterator<Item = K>,
+    what: &str,
+) -> Result<(), SnapshotError> {
+    let mut prev: Option<K> = None;
+    for key in keys {
+        if prev.as_ref().is_some_and(|p| *p >= key) {
+            return Err(SnapshotError::Invalid(format!(
+                "{what} section is not in strictly ascending key order (duplicate or unsorted)"
+            )));
+        }
+        prev = Some(key);
+    }
+    Ok(())
+}
+
+impl SnapshotV2Contents {
+    /// Canonical-order and shape checks shared by creation and verification.
+    fn check_canonical(&self) -> Result<(), SnapshotError> {
+        strictly_ascending(self.utxos.iter().map(|u| u.id.to_bytes()), "UTXO")?;
+        strictly_ascending(self.contexts.iter().map(|(k, _)| k.clone()), "context")?;
+        strictly_ascending(self.address_index.iter().map(|(k, _)| *k), "address index")?;
+        strictly_ascending(self.key_images.iter().map(|(k, _)| *k), "key image")?;
+        strictly_ascending(
+            self.cluster_wealth.iter().map(|(id, _)| id.to_le_bytes()),
+            "cluster wealth",
+        )?;
+        strictly_ascending(
+            self.import_clusters.iter().map(|id| id.to_le_bytes()),
+            "import cluster",
+        )?;
+        if self.contexts.len() != self.utxos.len() {
+            return Err(SnapshotError::Invalid(format!(
+                "{} derivation contexts for {} UTXOs",
+                self.contexts.len(),
+                self.utxos.len()
+            )));
+        }
+        for (utxo, (key, _)) in self.utxos.iter().zip(&self.contexts) {
+            if key.len() != OUTPOINT_LEN || key[..] != utxo.id.to_bytes()[..] {
+                return Err(SnapshotError::Invalid(
+                    "derivation context outpoint does not match its UTXO".into(),
+                ));
+            }
+        }
+        // Address index: an exact partition of the UTXO set by target key.
+        let mut targets: std::collections::HashMap<[u8; OUTPOINT_LEN], Option<[u8; 32]>> = self
+            .utxos
+            .iter()
+            .map(|u| (u.id.to_bytes(), Some(u.output.target_key)))
+            .collect();
+        for (target, ids) in &self.address_index {
+            if ids.is_empty() || ids.len() % OUTPOINT_LEN != 0 {
+                return Err(SnapshotError::Invalid("address index row width".into()));
+            }
+            for id in ids.chunks(OUTPOINT_LEN) {
+                let id: [u8; OUTPOINT_LEN] = id.try_into().expect("chunk width");
+                match targets.get_mut(&id) {
+                    Some(slot) if *slot == Some(*target) => *slot = None,
+                    _ => {
+                        return Err(SnapshotError::Invalid(
+                            "address index entry is not an unindexed UTXO with that target key"
+                                .into(),
+                        ))
+                    }
+                }
+            }
+        }
+        if targets.values().any(Option::is_some) {
+            return Err(SnapshotError::Invalid(
+                "UTXO missing from the address index".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn roots(&self) -> Result<V2Roots, SnapshotError> {
+        let utxo = self
+            .utxos
+            .iter()
+            .map(|u| Ok(hash_leaf(&ser(u)?)))
+            .collect::<Result<Vec<_>, SnapshotError>>()?;
+        let context: Vec<_> = self
+            .contexts
+            .iter()
+            .map(|(k, v)| {
+                let mut data = k.clone();
+                data.extend_from_slice(v);
+                hash_leaf(&data)
+            })
+            .collect();
+        let address_index: Vec<_> = self
+            .address_index
+            .iter()
+            .map(|(target, ids)| {
+                let mut data = target.to_vec();
+                data.extend_from_slice(ids);
+                hash_leaf(&data)
+            })
+            .collect();
+        let key_image: Vec<_> = self
+            .key_images
+            .iter()
+            .map(|(ki, h)| {
+                let mut data = ki.to_vec();
+                data.extend_from_slice(&h.to_le_bytes());
+                hash_leaf(&data)
+            })
+            .collect();
+        let cluster_wealth: Vec<_> = self
+            .cluster_wealth
+            .iter()
+            .map(|(id, w)| {
+                let mut data = id.to_le_bytes().to_vec();
+                data.extend_from_slice(&w.to_le_bytes());
+                hash_leaf(&data)
+            })
+            .collect();
+        let import_cluster: Vec<_> = self
+            .import_clusters
+            .iter()
+            .map(|id| hash_leaf(&id.to_le_bytes()))
+            .collect();
+        Ok(V2Roots {
+            utxo: compute_merkle_root(&utxo),
+            context: compute_merkle_root(&context),
+            address_index: compute_merkle_root(&address_index),
+            key_image: compute_merkle_root(&key_image),
+            cluster_wealth: compute_merkle_root(&cluster_wealth),
+            import_cluster: compute_merkle_root(&import_cluster),
+        })
+    }
+}
+
+impl UtxoSnapshotV2 {
+    /// Build a V2 snapshot. `tip_block` is the bincode encoding of the block
+    /// at `height` (its hash must be `block_hash`; the ledger checks that).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        genesis_hash: [u8; 32],
+        height: u64,
+        block_hash: [u8; 32],
+        chain_state: ChainState,
+        lottery_pool: u128,
+        tip_block: &[u8],
+        contents: &SnapshotV2Contents,
+    ) -> Result<Self, SnapshotError> {
+        contents.check_canonical()?;
+        let roots = contents.roots()?;
+        let mut snapshot = Self {
+            version: SNAPSHOT_VERSION_V2,
+            storage_schema: SNAPSHOT_V2_SCHEMA.to_vec(),
+            genesis_hash,
+            height,
+            block_hash,
+            chain_state,
+            lottery_pool,
+            tip_block_data: compress(tip_block)?,
+            utxo_count: contents.utxos.len() as u64,
+            context_count: contents.contexts.len() as u64,
+            address_index_count: contents.address_index.len() as u64,
+            key_image_count: contents.key_images.len() as u64,
+            cluster_count: contents.cluster_wealth.len() as u64,
+            import_cluster_count: contents.import_clusters.len() as u64,
+            utxo_merkle_root: roots.utxo,
+            context_merkle_root: roots.context,
+            address_index_merkle_root: roots.address_index,
+            key_image_merkle_root: roots.key_image,
+            cluster_wealth_merkle_root: roots.cluster_wealth,
+            import_cluster_merkle_root: roots.import_cluster,
+            utxo_data: compress(&ser(&contents.utxos)?)?,
+            context_data: compress(&ser(&contents.contexts)?)?,
+            address_index_data: compress(&ser(&contents.address_index)?)?,
+            key_image_data: compress(&ser(&contents.key_images)?)?,
+            cluster_wealth_data: compress(&ser(&contents.cluster_wealth)?)?,
+            import_cluster_data: compress(&ser(&contents.import_clusters)?)?,
+            commitment: [0; 32],
+        };
+        snapshot.commitment = snapshot.compute_commitment(&sha256(tip_block))?;
+        Ok(snapshot)
+    }
+
+    /// SHA-256 over the domain tag and every header field, the decompressed
+    /// tip block's digest, every count and every section root. Compressed
+    /// bytes are not hashed directly: [`verify`](Self::verify) recomputes the
+    /// roots from the decompressed sections instead.
+    fn compute_commitment(&self, tip_digest: &[u8; 32]) -> Result<[u8; 32], SnapshotError> {
+        let mut h = Sha256::new();
+        h.update((SNAPSHOT_V2_DOMAIN.len() as u64).to_le_bytes());
+        h.update(SNAPSHOT_V2_DOMAIN);
+        h.update(self.version.to_le_bytes());
+        h.update((self.storage_schema.len() as u64).to_le_bytes());
+        h.update(&self.storage_schema);
+        h.update(self.genesis_hash);
+        h.update(self.height.to_le_bytes());
+        h.update(self.block_hash);
+        let chain_state = ser(&self.chain_state)?;
+        h.update((chain_state.len() as u64).to_le_bytes());
+        h.update(&chain_state);
+        h.update(self.lottery_pool.to_le_bytes());
+        h.update(tip_digest);
+        for count in [
+            self.utxo_count,
+            self.context_count,
+            self.address_index_count,
+            self.key_image_count,
+            self.cluster_count,
+            self.import_cluster_count,
+        ] {
+            h.update(count.to_le_bytes());
+        }
+        for root in [
+            &self.utxo_merkle_root,
+            &self.context_merkle_root,
+            &self.address_index_merkle_root,
+            &self.key_image_merkle_root,
+            &self.cluster_wealth_merkle_root,
+            &self.import_cluster_merkle_root,
+        ] {
+            h.update(root);
+        }
+        Ok(h.finalize().into())
+    }
+
+    /// Decompressed tip block bytes (bincode `Block`).
+    pub fn tip_block_bytes(&self) -> Result<Vec<u8>, SnapshotError> {
+        decompress(&self.tip_block_data)
+    }
+
+    /// Decompress and strictly decode every section (no integrity check).
+    pub fn contents(&self) -> Result<SnapshotV2Contents, SnapshotError> {
+        Ok(SnapshotV2Contents {
+            utxos: de_strict(&decompress(&self.utxo_data)?)?,
+            contexts: de_strict(&decompress(&self.context_data)?)?,
+            address_index: de_strict(&decompress(&self.address_index_data)?)?,
+            key_images: de_strict(&decompress(&self.key_image_data)?)?,
+            cluster_wealth: de_strict(&decompress(&self.cluster_wealth_data)?)?,
+            import_clusters: de_strict(&decompress(&self.import_cluster_data)?)?,
+        })
+    }
+
+    /// Full integrity check. Returns the verified contents and tip block
+    /// bytes, so a loader never acts on data other than what was verified.
+    ///
+    /// Checks: version and storage marker; canonical section order and the
+    /// one-context-per-UTXO bijection; every count and Merkle root against
+    /// the decompressed data; and the commitment over all of it.
+    pub fn verify(&self) -> Result<(SnapshotV2Contents, Vec<u8>), SnapshotError> {
+        if self.version != SNAPSHOT_VERSION_V2 {
+            return Err(SnapshotError::VersionMismatch {
+                expected: SNAPSHOT_VERSION_V2,
+                got: self.version,
+            });
+        }
+        if self.storage_schema != SNAPSHOT_V2_SCHEMA {
+            return Err(SnapshotError::Invalid(format!(
+                "snapshot storage schema {:?} is not {:?}",
+                String::from_utf8_lossy(&self.storage_schema),
+                String::from_utf8_lossy(SNAPSHOT_V2_SCHEMA),
+            )));
+        }
+        let contents = self.contents()?;
+        contents.check_canonical()?;
+        let counts = [
+            (self.utxo_count, contents.utxos.len(), "UTXO"),
+            (self.context_count, contents.contexts.len(), "context"),
+            (
+                self.address_index_count,
+                contents.address_index.len(),
+                "address index",
+            ),
+            (self.key_image_count, contents.key_images.len(), "key image"),
+            (
+                self.cluster_count,
+                contents.cluster_wealth.len(),
+                "cluster wealth",
+            ),
+            (
+                self.import_cluster_count,
+                contents.import_clusters.len(),
+                "import cluster",
+            ),
+        ];
+        for (declared, actual, what) in counts {
+            if declared != actual as u64 {
+                return Err(SnapshotError::Invalid(format!(
+                    "{what} count {declared} does not match {actual} decoded rows"
+                )));
+            }
+        }
+        let roots = contents.roots()?;
+        let checks = [
+            (roots.utxo, self.utxo_merkle_root, "UTXO"),
+            (
+                roots.context,
+                self.context_merkle_root,
+                "derivation context",
+            ),
+            (
+                roots.address_index,
+                self.address_index_merkle_root,
+                "address index",
+            ),
+            (roots.key_image, self.key_image_merkle_root, "key image"),
+            (
+                roots.cluster_wealth,
+                self.cluster_wealth_merkle_root,
+                "cluster wealth",
+            ),
+            (
+                roots.import_cluster,
+                self.import_cluster_merkle_root,
+                "import cluster",
+            ),
+        ];
+        for (computed, declared, what) in checks {
+            if computed != declared {
+                return Err(SnapshotError::MerkleVerification(format!(
+                    "{what} Merkle root mismatch"
+                )));
+            }
+        }
+        let tip = self.tip_block_bytes()?;
+        if self.compute_commitment(&sha256(&tip))? != self.commitment {
+            return Err(SnapshotError::MerkleVerification(
+                "snapshot commitment mismatch".into(),
+            ));
+        }
+        Ok((contents, tip))
+    }
+
+    /// Write `BTHSNAP\x02` followed by the bincode-encoded snapshot.
+    pub fn write_to<W: Write>(&self, mut writer: W) -> Result<(), SnapshotError> {
+        writer.write_all(SNAPSHOT_MAGIC_V2)?;
+        writer.write_all(&ser(self)?)?;
+        Ok(())
+    }
+
+    /// Read a V2 snapshot. A V1 file (`BTHSNAP\x01`) is reported as
+    /// [`SnapshotError::VersionMismatch`] `{ expected: 2, got: 1 }` without
+    /// decoding its body; a truncated file or trailing bytes are errors.
+    pub fn read_from<R: Read>(mut reader: R) -> Result<Self, SnapshotError> {
+        let mut magic = [0u8; 8];
+        reader.read_exact(&mut magic)?;
+        if &magic == SNAPSHOT_MAGIC {
+            return Err(SnapshotError::VersionMismatch {
+                expected: SNAPSHOT_VERSION_V2,
+                got: SNAPSHOT_VERSION,
+            });
+        }
+        if &magic != SNAPSHOT_MAGIC_V2 {
+            return Err(SnapshotError::Invalid(
+                "Invalid snapshot magic bytes".to_string(),
+            ));
+        }
+        let mut data = Vec::new();
+        reader.read_to_end(&mut data)?;
+        de_strict(&data)
+    }
+
+    /// Compressed size of all sections and the tip block.
+    pub fn compressed_size(&self) -> u64 {
+        (self.tip_block_data.len()
+            + self.utxo_data.len()
+            + self.context_data.len()
+            + self.address_index_data.len()
+            + self.key_image_data.len()
+            + self.cluster_wealth_data.len()
+            + self.import_cluster_data.len()) as u64
+    }
+}
+
+fn sha256(data: &[u8]) -> [u8; 32] {
+    Sha256::digest(data).into()
 }
 
 // ============================================================================

@@ -10,7 +10,7 @@ mod lottery_v2;
 mod snapshot;
 mod store;
 
-pub use snapshot::{SnapshotError, UtxoSnapshot};
+pub use snapshot::{SnapshotError, SnapshotV2Contents, UtxoSnapshot, UtxoSnapshotV2};
 /// Test-only `botho.ledger.2` ledger with V2 lottery payouts (#1286 P7).
 #[cfg(test)]
 pub(crate) use store::v2::wallet::fixture as wallet_v2_fixture;

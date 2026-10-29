@@ -118,6 +118,19 @@ pub(in crate::ledger) fn classify(
     Ok(StoreSchema::Fresh)
 }
 
+/// Whether `height` lies strictly below the V2 snapshot this ledger was
+/// restored from (strictly decoded; absent on ledgers synced from genesis).
+fn below_snapshot_base(ledger: &Ledger, txn: &RoTxn<'_>, height: u64) -> Result<bool, LedgerError> {
+    match ledger
+        .meta_db
+        .get(txn, super::snapshot_v2::META_SNAPSHOT_BASE)
+        .map_err(db_op("read snapshot base"))?
+    {
+        Some(bytes) => Ok(height > 0 && height < u64::from_le_bytes(fixed(bytes)?)),
+        None => Ok(false),
+    }
+}
+
 /// Strict context read inside `txn`: a missing context is
 /// [`LedgerError::MissingContext`], never a default. The context must agree
 /// with its persisted output (identity, creation height, index shape).
@@ -127,27 +140,27 @@ pub(in crate::ledger) fn read_context(
     id: &UtxoId,
 ) -> Result<(Utxo, StoredContext), LedgerError> {
     read_context_with(ledger, txn, id, &mut |height| {
-        let bytes = ledger
+        ledger
             .blocks_db
             .get(txn, &height)
             .map_err(db_op("read payout creating block"))?
-            .ok_or_else(|| {
-                LedgerError::InconsistentRecord("missing payout creating block".into())
-            })?;
-        let block: Block = crate::ledger::experimental::decode(bytes)?;
-        Ok(block.hash())
+            .map(|bytes| crate::ledger::experimental::decode::<Block>(bytes).map(|b| b.hash()))
+            .transpose()
     })
 }
 
 /// [`read_context`] with the lottery creating-block lookup supplied by the
 /// caller: `creating_hash(height)` must return the hash of the block stored
-/// at `height` in the SAME `txn` (or an error). Lets a caller that already
-/// decoded that block in `txn` skip re-decoding it per payout.
+/// at `height` in the SAME `txn`, `None` if no block is stored there, or an
+/// error. Lets a caller that already decoded that block in `txn` skip
+/// re-decoding it per payout. A `None` is judged HERE, for every caller: it
+/// is accepted only strictly below a V2 snapshot base (#1646), otherwise it
+/// is [`LedgerError::InconsistentRecord`].
 fn read_context_with(
     ledger: &Ledger,
     txn: &RoTxn<'_>,
     id: &UtxoId,
-    creating_hash: &mut dyn FnMut(u64) -> Result<[u8; 32], LedgerError>,
+    creating_hash: &mut dyn FnMut(u64) -> Result<Option<[u8; 32]>, LedgerError>,
 ) -> Result<(Utxo, StoredContext), LedgerError> {
     let key = id.to_bytes();
     let context = StoredContext::decode(
@@ -184,10 +197,24 @@ fn read_context_with(
                     "lottery context ordinal/index".into(),
                 ));
             }
-            if creating_hash(context.height())? != id.tx_hash {
-                return Err(LedgerError::InconsistentRecord(
-                    "lottery context creating block".into(),
-                ));
+            match creating_hash(context.height())? {
+                Some(hash) if hash == id.tx_hash => {}
+                Some(_) => {
+                    return Err(LedgerError::InconsistentRecord(
+                        "lottery context creating block".into(),
+                    ))
+                }
+                // A ledger restored from a V2 snapshot (#1646) holds no
+                // blocks strictly between genesis and the snapshot tip; a
+                // payout created there was checked against the snapshot's
+                // verified commitment at load instead. Anything else missing
+                // its creating block is inconsistent.
+                None if below_snapshot_base(ledger, txn, context.height())? => {}
+                None => {
+                    return Err(LedgerError::InconsistentRecord(
+                        "missing payout creating block".into(),
+                    ))
+                }
             }
         }
         StoredContext::Direct { .. } => {}
@@ -283,15 +310,6 @@ impl Ledger {
     ) -> Result<(Utxo, bth_transaction_clsag::lottery_v2::Context), LedgerError> {
         let txn = self.env.read_txn().map_err(db_op("context read txn"))?;
         read_context(self, &txn, id).map(|(utxo, c)| (utxo, c.derivation()))
-    }
-
-    /// The fail-closed snapshot error under `botho.ledger.2`.
-    pub(in crate::ledger) fn snapshot_unsupported(operation: &str) -> LedgerError {
-        LedgerError::UnsupportedSchema(format!(
-            "{operation} is unsupported for botho.ledger.2 stores: UTXO snapshot \
-             format V1 carries no derivation contexts (a versioned V2 snapshot is \
-             a #1286 follow-up). Sync from genesis instead"
-        ))
     }
 }
 
@@ -422,7 +440,7 @@ impl Ledger {
                 let id = UtxoId::new(hash, (i as u32) + 1);
                 read_context_with(self, &txn, &id, &mut |h| {
                     if h == height {
-                        Ok(hash)
+                        Ok(Some(hash))
                     } else {
                         Err(LedgerError::InconsistentRecord(
                             "lottery context creating block".into(),
