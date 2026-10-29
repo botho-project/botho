@@ -125,6 +125,19 @@ fn native_key_image(
     hex::encode(KeyImage::from(&key).as_bytes())
 }
 
+/// NATIVE recovery of a direct (untweaked) output through
+/// `lottery_v2::recover_direct`, the same primitive the node wallet uses for a
+/// `Direct` derivation context (#1667).
+fn native_direct_key_image(account: &AccountKey, output: &TxOutput, base_index: u32) -> String {
+    let kp = kem_keypair();
+    let key = lottery_v2::recover_direct(output, base_index, |base, index| {
+        let sub = base.belongs_to_account(account, &kp, index)?;
+        base.recover_spend_key_for(account, &kp, sub, index)
+    })
+    .expect("native recovery of the fixture source");
+    hex::encode(KeyImage::from(&key).as_bytes())
+}
+
 fn decoys(v: &Value) -> Vec<DecoyOutput> {
     v["decoys"]
         .as_array()
@@ -221,13 +234,20 @@ fn signer_core_matches_native_recovery() {
         .unwrap();
 
     let native_payout = native_key_image(&account, &tx_output(&payout), &context);
-    let native_source = native_key_image(
-        &account,
-        &tx_output(&source),
-        &lottery_v2::Context {
-            base_index: BASE_INDEX,
-            tweak: [0; 32],
-        },
+    let native_source = native_direct_key_image(&account, &tx_output(&source), BASE_INDEX);
+    // The source's zero-tweak context is refused by the payout entry point
+    // (#1667) before any wallet callback: a direct output is recovered only
+    // through `recover_direct`, never as a "zero-tweak payout".
+    assert_eq!(
+        lottery_v2::recover_with_context(
+            &tx_output(&source),
+            &lottery_v2::Context {
+                base_index: BASE_INDEX,
+                tweak: [0; 32],
+            },
+            |_, _| panic!("a rejected context must not reach the wallet"),
+        ),
+        Err(lottery_v2::Error::ZeroTweak)
     );
     assert_eq!(
         native_payout,
@@ -454,9 +474,15 @@ fn print_vector() {
         .unwrap();
         hex::encode(KeyImage::from(&key).as_bytes())
     };
-    let zero = lottery_v2::Context {
-        base_index: BASE_INDEX,
-        tweak: [0; 32],
+    // The source is a direct (untweaked) output: `recover_with_context`
+    // rejects the zero tweak (#1667), so it recovers through `recover_direct`.
+    let direct_key_image = |out: &TxOutput| {
+        let key = lottery_v2::recover_direct(out, BASE_INDEX, |base, index| {
+            let s = base.belongs_to_account(&wallet, kp, index)?;
+            base.recover_spend_key_for(&wallet, kp, s, index)
+        })
+        .unwrap();
+        hex::encode(KeyImage::from(&key).as_bytes())
     };
 
     let recipient = AccountKey::random(&mut rng);
@@ -499,7 +525,7 @@ fn print_vector() {
         "expected": {
             "baseTarget": hex::encode(source.target_key),
             "subaddressIndex": 0,
-            "sourceKeyImage": key_image(&source, &zero),
+            "sourceKeyImage": direct_key_image(&source),
             "payoutKeyImage": key_image(&payout, &derived.context),
         },
     });

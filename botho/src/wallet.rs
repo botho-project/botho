@@ -65,15 +65,16 @@ impl WalletRead for Ledger {
     /// Protocol 7.0.0 (#1640) / #1286 P7: recover the one-time key through
     /// the output's committed derivation context instead of guessing
     /// `id.output_index`. A direct output's context is (its own index, zero
-    /// tweak), which is exactly the former direct-index recovery; a V2 lottery
+    /// tweak), recovered through `recover_direct` exactly as the former
+    /// direct-index recovery (#1667: `recover_with_context` now rejects the
+    /// zero tweak, so it is reserved for payouts); a V2 lottery
     /// payout's is (the ORIGINAL index, the cumulative tweak), so its
     /// independently keyed target is recoverable and its key image differs
     /// from the source's. This is the ONE spend-recovery path: it runs the
     /// same `recover_owned` rule wallet discovery uses (see
     /// `ledger::store::v2::wallet`), reads output + context strictly in one
     /// pinned txn, refuses a caller-supplied input that differs from the
-    /// ledger's or is already spent, and ends in `recover_with_context`'s
-    /// `x*G == P` check.
+    /// ledger's or is already spent, and ends in the clsag `x*G == P` check.
     fn recover_input(&self, wallet: &Wallet, utxo: &Utxo) -> Result<RistrettoPrivate> {
         self.recover_wallet_input(wallet, utxo)
     }

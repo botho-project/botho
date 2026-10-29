@@ -17,8 +17,8 @@ boundary; no network configuration or serialized context can select it.
 
 Discovery authenticates each record through the accepted local store, removes
 the canonical accumulated tweak for the existing classical/hybrid ownership
-scan, and recovers through `recover_with_context`, including its final public-key
-check. The final output key image controls spent filtering. An owned output
+scan, and recovers a payout through `recover_with_context` (a direct output
+through `recover_direct`), including the final public-key check. The final output key image controls spent filtering. An owned output
 carries its actual outpoint, private context, chain identity and checkpoint;
 construction rereads the current accepted state and requires a rescan after a
 checkpoint change. It never trusts a cached secret or externally supplied

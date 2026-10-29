@@ -69,10 +69,11 @@ impl LotteryContext {
     /// Validate and convert to the shared [`lottery_v2::Context`].
     ///
     /// Rejects an unknown version, a malformed or non-canonical tweak, and the
-    /// zero tweak. A payout always carries a nonzero cumulative tweak, and
-    /// `recover_with_context` itself accepts zero, so the check has to live
-    /// here: a zero tweak would make the "payout" an alias of its source
-    /// output (the #1450 legacy shape).
+    /// zero tweak. A payout always carries a nonzero cumulative tweak; a zero
+    /// tweak would make the "payout" an alias of its source output (the #1450
+    /// legacy shape). `recover_with_context` also fails closed on zero and on
+    /// an unknown version since #1667; this check keeps the bridge's own,
+    /// descriptive error at the RPC boundary.
     pub fn to_context(&self) -> Result<lottery_v2::Context, String> {
         if self.version != lottery_v2::CONTEXT_VERSION {
             return Err(format!(

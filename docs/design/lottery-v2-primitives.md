@@ -26,11 +26,18 @@ immediately winning outpoint. A child uses `Pchild=Psource+tG`,
 `Tchild=Tsource+t mod l`, and inherits the original index. `recover_with_context`
 subtracts `TG`, delegates original classical/hybrid recovery to the existing
 wallet derivation, then requires `xG=P` before returning the final key. It does
-not return ownership based on a callback's assertion alone.
+not return ownership based on a callback's assertion alone. It fails closed,
+before the callback runs, on a zero tweak (`ZeroTweak`: with `T=0` an ordinary
+output's base key would pass `xG=P`) and on a non-canonical tweak `T>=l`
+(`NonCanonicalTweak`); `derive` never yields a zero cumulative tweak and
+`Record::encode` rejects one, so no payout context is affected. A direct,
+untweaked output recovers through `recover_direct`, which applies the same point
+checks and the same final `xG=P` proof without a tweak (#1667).
 
 `Context` exposes the same explicit versioned fixed-width encoding used by a
 future payout record: version, original derivation index and cumulative tweak.
-Its decoder is syntax-only and does not authenticate lineage. `Record` encodes
+Its decoder is syntax-only and does not authenticate lineage; an unknown
+version byte fails with `Version`, also inside a `Record`. `Record` encodes
 the proposed payout fields with canonical points/scalars, explicit KEM/context
 tags, exact 1088-byte optional ML-KEM ciphertext and no trailing bytes.
 `validate` additionally checks it against supplied source data and the complete
