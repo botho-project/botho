@@ -7,7 +7,11 @@ mod map_full_tests;
 #[cfg(test)]
 #[path = "store/ring_admission_tests.rs"]
 mod ring_admission_tests;
+#[cfg(test)]
+#[path = "store/v2_tests.rs"]
+mod v2_tests;
 
+pub(super) mod v2;
 pub(super) mod validation;
 pub(super) mod writer;
 use bth_account_keys::{AccountKey, PublicAddress};
@@ -335,6 +339,13 @@ pub struct Ledger {
     /// every node builds the identical set — no fork, and the rebuild path
     /// reconstructs it byte-identically from the block store.
     bridge_import_clusters_db: Database<Bytes, Bytes>,
+    /// derivation_contexts: UtxoId (36 bytes) -> encoded `StoredContext`
+    /// (45 B Direct / 49 B Lottery).
+    ///
+    /// `botho.ledger.2` (#1286 P2): every output written by the block writer
+    /// gets its derivation context in the same LMDB transaction. Reads are
+    /// strict: a missing context is an error, never a default.
+    contexts_db: Database<Bytes, Bytes>,
 }
 
 /// Serialized width of a `cluster_wealth_db` value: 16-byte little-endian
@@ -537,8 +548,9 @@ impl Ledger {
         // its lifetime.
         let env = unsafe {
             let mut opts = EnvOpenOptions::new();
-            opts.max_dbs(8) // +bridge_import_clusters_db (ADR 0007, #938)
-                .map_size(map_size);
+            // +bridge_import_clusters_db (ADR 0007, #938)
+            // +derivation_contexts (botho.ledger.2, #1286 P2)
+            opts.max_dbs(9).map_size(map_size);
             if let Some(readers) = max_readers {
                 opts.max_readers(readers);
             }
@@ -546,14 +558,16 @@ impl Ledger {
         }
         .map_err(|e| LedgerError::Database(format!("Failed to open environment: {}", e)))?;
 
-        // Reject marked experimental/unknown stores before ordinary initialization
-        // writes.
-        super::experimental::require_v1_schema(&env)?;
-
         // Create/open databases
         let mut wtxn = env
             .write_txn()
             .map_err(|e| LedgerError::Database(format!("Failed to start write txn: {}", e)))?;
+
+        // botho.ledger.2 (#1286 P2): classify under the exclusive writer and
+        // BEFORE any table creation. Unmarked non-empty (V1) stores and every
+        // foreign/experimental marker are refused; the aborted txn leaves the
+        // store untouched. Replaces the former V1-only `require_v1_schema`.
+        let schema = v2::classify(&env, &wtxn, path)?;
 
         let blocks_db = env
             .create_database(&mut wtxn, Some("blocks"))
@@ -585,6 +599,21 @@ impl Ledger {
             .map_err(|e| {
                 LedgerError::Database(format!("Failed to create bridge_import_clusters db: {}", e))
             })?;
+        let contexts_db = env
+            .create_database(&mut wtxn, Some(v2::CONTEXTS_TABLE))
+            .map_err(|e| {
+                LedgerError::Database(format!("Failed to create derivation_contexts db: {}", e))
+            })?;
+        if schema == v2::StoreSchema::Fresh {
+            // Same txn as table creation: a crash leaves either nothing or a
+            // marked, empty V2 store (genesis is (re)initialized below).
+            meta_db
+                .put(&mut wtxn, v2::SCHEMA_KEY, v2::LEDGER_SCHEMA_V2)
+                .map_err(|e| {
+                    LedgerError::Database(format!("Failed to write schema marker: {}", e))
+                })?;
+            info!(path = %path.display(), "Initialized botho.ledger.2 ledger store");
+        }
 
         wtxn.commit()
             .map_err(|e| LedgerError::Database(format!("Failed to commit: {}", e)))?;
@@ -600,6 +629,7 @@ impl Ledger {
             tx_index_db,
             cluster_wealth_db,
             bridge_import_clusters_db,
+            contexts_db,
         };
 
         // Initialize with genesis if empty
@@ -862,6 +892,23 @@ impl Ledger {
         block: &Block,
         emission: Option<EmissionStateUpdate>,
     ) -> Result<(), LedgerError> {
+        // botho.ledger.2 (#1286 P2, D0): a V1 payout reuses its winner's
+        // one-time key (the aliased-key-image defect), so it has no honest
+        // derivation context and D0 admits no `LegacyAliased` state. Until the
+        // V2 producer/validator of protocol 7.0.0 (P3) supplies payout
+        // records, a block carrying V1 lottery payouts is refused FIRST, before
+        // validation or any write: a node-local storage refusal, not a verdict
+        // on the peer's block.
+        if !block.lottery_outputs.is_empty() {
+            return Err(LedgerError::UnsupportedSchema(format!(
+                "block {} carries {} V1 lottery payout(s); botho.ledger.2 stores \
+                 accept only V2 payout records, which arrive with protocol 7.0.0 \
+                 (#1286 P3)",
+                block.height(),
+                block.lottery_outputs.len()
+            )));
+        }
+
         let state = self.get_chain_state()?;
 
         let block_fees = validation::ValidationReads::validate_ordinary_block(
@@ -969,7 +1016,12 @@ impl Ledger {
             new_lottery_pool,
             emission,
             &block_bytes,
-            writer::Representation::Legacy,
+            // Live V1 block-application rules, V2 storage: every output gets
+            // its Direct context in this same txn (no payouts reach here).
+            writer::Representation::Production {
+                contexts: self.contexts_db,
+                records: &[],
+            },
             &mut |tx| self.verify_transaction(tx),
             &mut || Ok(()),
         )?;
@@ -2292,7 +2344,20 @@ impl Ledger {
     /// # Returns
     ///
     /// A `UtxoSnapshot` containing all state needed to bootstrap a node.
+    ///
+    /// # botho.ledger.2
+    ///
+    /// Fails closed: snapshot format V1 carries no derivation contexts, so a
+    /// `botho.ledger.2` store (every production store, #1286 P2) refuses to
+    /// export one. Versioned snapshot V2 is a follow-up.
     pub fn create_snapshot(&self) -> Result<super::UtxoSnapshot, LedgerError> {
+        Err(Self::snapshot_unsupported("Snapshot creation"))
+    }
+
+    /// Former V1 snapshot export, preserved (unreachable from the public API
+    /// under `botho.ledger.2`) for the versioned-snapshot V2 follow-up.
+    #[allow(dead_code)]
+    fn create_snapshot_v1(&self) -> Result<super::UtxoSnapshot, LedgerError> {
         use super::snapshot::UtxoSnapshot;
 
         let chain_state = self.get_chain_state()?;
@@ -2388,10 +2453,65 @@ impl Ledger {
     /// # Returns
     ///
     /// The number of UTXOs loaded.
+    ///
+    /// # botho.ledger.2
+    ///
+    /// Fails closed before any write: a V1 snapshot cannot supply the
+    /// derivation contexts a `botho.ledger.2` store requires (#1286 P2).
     pub fn load_from_snapshot(
+        &self,
+        _snapshot: &super::UtxoSnapshot,
+        _expected_block_hash: Option<&[u8; 32]>,
+    ) -> Result<usize, LedgerError> {
+        Err(Self::snapshot_unsupported("Snapshot loading"))
+    }
+
+    /// TEST/FIXTURE SEEDING ONLY: not a sync path and not validation.
+    ///
+    /// Replaces the UTXO/key-image/cluster-wealth state with `snapshot`'s
+    /// rows exactly as the former V1 loader did, and additionally writes a
+    /// `Direct` derivation context for every seeded output so strict V2 reads
+    /// stay consistent. Fixture outputs are asserted, not proven, to be
+    /// direct; never call this on operator data (it is what the fail-closed
+    /// [`Ledger::load_from_snapshot`] refuses to do). Public only because
+    /// integration tests and dependent crates' tests seed ledgers with it.
+    #[doc(hidden)]
+    pub fn seed_fixture_snapshot_unvalidated(
+        &self,
+        snapshot: &super::UtxoSnapshot,
+    ) -> Result<usize, LedgerError> {
+        self.load_snapshot_rows(snapshot, None, true)
+    }
+
+    /// TEST/FUZZ ONLY: every persisted UTXO, strictly decoded (corruption is
+    /// an error, never a skipped row). Replaces the fuzz target's former use of
+    /// [`Ledger::create_snapshot`] for supply-conservation sums.
+    #[doc(hidden)]
+    pub fn fixture_utxos(&self) -> Result<Vec<Utxo>, LedgerError> {
+        let rtxn = self
+            .env
+            .read_txn()
+            .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
+        let rows = self
+            .utxo_db
+            .iter(&rtxn)
+            .map_err(|e| LedgerError::Database(format!("Failed to iterate UTXOs: {}", e)))?;
+        let mut utxos = Vec::new();
+        for row in rows {
+            let (_, value) = row.map_err(|e| LedgerError::Database(e.to_string()))?;
+            utxos.push(super::experimental::decode(value)?);
+        }
+        Ok(utxos)
+    }
+
+    /// Former V1 snapshot loader body (preserved for the fixture seeder and
+    /// the versioned-snapshot V2 follow-up). `direct_contexts` additionally
+    /// rewrites the derivation-context table with one `Direct` row per UTXO.
+    fn load_snapshot_rows(
         &self,
         snapshot: &super::UtxoSnapshot,
         expected_block_hash: Option<&[u8; 32]>,
+        direct_contexts: bool,
     ) -> Result<usize, LedgerError> {
         // Verify snapshot integrity
         snapshot.verify().map_err(|e| {
@@ -2441,6 +2561,11 @@ impl Ledger {
         self.cluster_wealth_db
             .clear(&mut wtxn)
             .map_err(|e| LedgerError::Database(format!("Failed to clear cluster wealth: {}", e)))?;
+        if direct_contexts {
+            self.contexts_db.clear(&mut wtxn).map_err(|e| {
+                LedgerError::Database(format!("Failed to clear derivation contexts: {}", e))
+            })?;
+        }
 
         // Load UTXOs
         let utxo_count = utxos.len();
@@ -2453,6 +2578,15 @@ impl Ledger {
 
             // Rebuild address index
             self.add_to_address_index(&mut wtxn, &utxo)?;
+            if direct_contexts {
+                let context = super::lottery_v2::StoredContext::Direct {
+                    height: utxo.created_at,
+                    base_index: utxo.id.output_index,
+                };
+                self.contexts_db
+                    .put(&mut wtxn, &utxo.id.to_bytes(), &context.encode()?)
+                    .map_err(|e| LedgerError::Database(format!("Failed to put context: {}", e)))?;
+            }
         }
 
         // Load key images
@@ -2581,6 +2715,18 @@ impl Ledger {
         path: &std::path::Path,
         expected_block_hash: Option<&[u8; 32]>,
     ) -> Result<usize, LedgerError> {
+        // botho.ledger.2: refuse before even reading the file (#1286 P2).
+        let _ = (path, expected_block_hash);
+        Err(Self::snapshot_unsupported("Snapshot loading"))
+    }
+
+    /// Former V1 file loader, preserved for the versioned-snapshot follow-up.
+    #[allow(dead_code)]
+    fn load_snapshot_file_v1(
+        &self,
+        path: &std::path::Path,
+        expected_block_hash: Option<&[u8; 32]>,
+    ) -> Result<usize, LedgerError> {
         let file = std::fs::File::open(path)
             .map_err(|e| LedgerError::Database(format!("Failed to open file: {}", e)))?;
 
@@ -2588,7 +2734,7 @@ impl Ledger {
         let snapshot = super::UtxoSnapshot::read_from(reader)
             .map_err(|e| LedgerError::Serialization(e.to_string()))?;
 
-        self.load_from_snapshot(&snapshot, expected_block_hash)
+        self.load_snapshot_rows(&snapshot, expected_block_hash, false)
     }
 
     // ========================================================================
@@ -3710,9 +3856,7 @@ mod tests {
             let state = ledger.get_chain_state().unwrap();
             let pool = ledger.get_lottery_pool().unwrap();
             let utxo_sum: u128 = ledger
-                .create_snapshot()
-                .unwrap()
-                .get_utxos()
+                .fixture_utxos()
                 .unwrap()
                 .iter()
                 .map(|u| u.output.amount as u128)

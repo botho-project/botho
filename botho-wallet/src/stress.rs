@@ -777,7 +777,7 @@ mod tests {
                 vec![],
             )
             .unwrap();
-            ledger.load_from_snapshot(&snapshot, None).unwrap();
+            ledger.seed_fixture_snapshot_unvalidated(&snapshot).unwrap();
             let prepared = execute(serde_json::from_value(value).unwrap()).unwrap();
             let bytes = fs::read(dir.path().join("signed.bin")).unwrap();
             let tx: Transaction = bincode::deserialize(&bytes).unwrap();

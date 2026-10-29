@@ -1,0 +1,333 @@
+//! Production V2 ledger schema (`botho.ledger.2`, #1286 P2).
+//!
+//! Storage only: a fresh [`Ledger`] is marked `botho.ledger.2` and carries a
+//! `derivation_contexts` table (outpoint -> [`StoredContext`]) written in the
+//! same LMDB transaction as each output. Unmarked non-empty (V1) stores and
+//! every other marker are refused at open (D0: no migration, no dual rule
+//! set). V2 *consensus* (producer, validator, body root, protocol 7.0.0) is P3;
+//! the [`ProductionView`] adapter here only makes the shared
+//! [`lottery_v2`](crate::ledger::lottery_v2) rules callable against a pinned
+//! production pre-state.
+use super::{
+    validation::{self, ReadPolicy, ValidationReads},
+    *,
+};
+use crate::ledger::lottery_v2::{fixed, DerivationReads, StoredContext};
+use heed::RoTxn;
+
+/// Metadata key holding the storage-schema marker. Shared with the private
+/// experimental stores, whose (different) markers are therefore refused here
+/// by exact comparison.
+pub(in crate::ledger) const SCHEMA_KEY: &[u8] = b"storage_schema";
+/// The production V2 schema marker.
+pub(in crate::ledger) const LEDGER_SCHEMA_V2: &[u8] = b"botho.ledger.2";
+/// Table name of the per-output derivation contexts.
+pub(in crate::ledger) const CONTEXTS_TABLE: &str = "derivation_contexts";
+
+/// Every table a V1 ledger could have written. A store in which any of these
+/// holds a row, but which carries no marker, is an unmarked V1 store.
+const V1_TABLES: [&str; 8] = [
+    "blocks",
+    "meta",
+    "utxos",
+    "address_index",
+    "key_images",
+    "tx_index",
+    "cluster_wealth",
+    "bridge_import_clusters",
+];
+
+fn db_op(operation: &'static str) -> impl FnOnce(heed::Error) -> LedgerError {
+    move |e| LedgerError::Database(format!("{operation}: {e}"))
+}
+
+/// How an opened environment must be treated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::ledger) enum StoreSchema {
+    /// No table holds a row: initialize as `botho.ledger.2` in this txn.
+    Fresh,
+    /// Exactly marked `botho.ledger.2`.
+    V2,
+}
+
+/// Operator-facing refusal for an unmarked, non-empty (pre-7.0.0) store.
+pub(in crate::ledger) fn v1_store_refusal(path: &Path) -> LedgerError {
+    LedgerError::UnsupportedSchema(format!(
+        "the ledger at {} is an unmarked V1 ledger store (written before the \
+         botho.ledger.2 schema). This binary refuses V1 ledgers: there is no \
+         migration (protocol 7.0.0 starts fresh chains from genesis, #1286). \
+         Stop the node, wipe/reset the ledger by deleting that directory, and \
+         restart to resync from genesis",
+        path.display()
+    ))
+}
+
+/// Classify the store inside the opening write transaction, BEFORE any table
+/// creation or initialization write. Returning an error aborts that
+/// transaction, so a refused store is left byte-for-byte untouched.
+pub(in crate::ledger) fn classify(
+    env: &Env,
+    txn: &RwTxn<'_>,
+    path: &Path,
+) -> Result<StoreSchema, LedgerError> {
+    let meta: Option<Database<Bytes, Bytes>> = env
+        .open_database(txn, Some("meta"))
+        .map_err(db_op("schema open metadata"))?;
+    if let Some(meta) = meta {
+        if let Some(marker) = meta
+            .get(txn, SCHEMA_KEY)
+            .map_err(db_op("schema read marker"))?
+        {
+            if marker != LEDGER_SCHEMA_V2 {
+                return Err(LedgerError::UnsupportedSchema(format!(
+                    "the ledger at {} carries storage marker {:?} (hex {}), not {:?}; \
+                     refusing to open it as a production ledger",
+                    path.display(),
+                    String::from_utf8_lossy(marker),
+                    hex::encode(marker),
+                    String::from_utf8_lossy(LEDGER_SCHEMA_V2),
+                )));
+            }
+            let contexts: Option<Database<Bytes, Bytes>> = env
+                .open_database(txn, Some(CONTEXTS_TABLE))
+                .map_err(db_op("schema open contexts"))?;
+            if contexts.is_none() {
+                return Err(LedgerError::InconsistentRecord(
+                    "botho.ledger.2 store is missing its derivation_contexts table".into(),
+                ));
+            }
+            return Ok(StoreSchema::V2);
+        }
+    }
+    for name in V1_TABLES.iter().copied().chain([CONTEXTS_TABLE]) {
+        let table: Option<Database<Bytes, Bytes>> = env
+            .open_database(txn, Some(name))
+            .map_err(db_op("schema open table"))?;
+        if let Some(table) = table {
+            if !table
+                .is_empty(txn)
+                .map_err(db_op("schema table emptiness"))?
+            {
+                return Err(v1_store_refusal(path));
+            }
+        }
+    }
+    Ok(StoreSchema::Fresh)
+}
+
+/// Strict context read inside `txn`: a missing context is
+/// [`LedgerError::MissingContext`], never a default. The context must agree
+/// with its persisted output (identity, creation height, index shape).
+pub(in crate::ledger) fn read_context(
+    ledger: &Ledger,
+    txn: &RoTxn<'_>,
+    id: &UtxoId,
+) -> Result<(Utxo, StoredContext), LedgerError> {
+    let key = id.to_bytes();
+    let context = StoredContext::decode(
+        ledger
+            .contexts_db
+            .get(txn, &key)
+            .map_err(db_op("read derivation context"))?
+            .ok_or_else(|| LedgerError::MissingContext(hex::encode(key)))?,
+    )?;
+    let utxo: Utxo = crate::ledger::experimental::decode(
+        ledger
+            .utxo_db
+            .get(txn, &key)
+            .map_err(db_op("read context output"))?
+            .ok_or_else(|| {
+                LedgerError::InconsistentRecord("derivation context without output".into())
+            })?,
+    )?;
+    if utxo.id != *id || utxo.created_at != context.height() {
+        return Err(LedgerError::InconsistentRecord(
+            "output identity/height disagrees with its derivation context".into(),
+        ));
+    }
+    match &context {
+        StoredContext::Direct { base_index, .. } if *base_index != id.output_index => {
+            return Err(LedgerError::InconsistentRecord(
+                "direct context base index".into(),
+            ))
+        }
+        StoredContext::Lottery { ordinal, .. } => {
+            // Payout outpoints are (creating block hash, 1 + ordinal).
+            if ordinal.checked_add(1) != Some(id.output_index) {
+                return Err(LedgerError::InconsistentRecord(
+                    "lottery context ordinal/index".into(),
+                ));
+            }
+            let bytes = ledger
+                .blocks_db
+                .get(txn, &context.height())
+                .map_err(db_op("read payout creating block"))?
+                .ok_or_else(|| {
+                    LedgerError::InconsistentRecord("missing payout creating block".into())
+                })?;
+            let block: Block = crate::ledger::experimental::decode(bytes)?;
+            if block.hash() != id.tx_hash {
+                return Err(LedgerError::InconsistentRecord(
+                    "lottery context creating block".into(),
+                ));
+            }
+        }
+        StoredContext::Direct { .. } => {}
+    }
+    Ok((utxo, context))
+}
+
+// Inactive until P3 (validator/producer) and P4 (RPC) consume these; only
+// tests call them in P2.
+#[allow(dead_code)]
+impl Ledger {
+    /// The persisted derivation context of `id` (strict; #1286 P2).
+    ///
+    /// A missing context is [`LedgerError::MissingContext`] and corruption is
+    /// an error; neither is ever replaced by a default (Direct/zero tweak).
+    pub(in crate::ledger) fn get_derivation_context(
+        &self,
+        id: &UtxoId,
+    ) -> Result<StoredContext, LedgerError> {
+        let txn = self.env.read_txn().map_err(db_op("context read txn"))?;
+        read_context(self, &txn, id).map(|(_, c)| c)
+    }
+
+    /// Pin one read transaction as the pre-state for the shared V2 rules.
+    pub(in crate::ledger) fn production_view<'a, 'env>(
+        &'a self,
+        txn: &'a RoTxn<'env>,
+    ) -> ProductionView<'a, 'env> {
+        ProductionView { ledger: self, txn }
+    }
+
+    /// The fail-closed snapshot error under `botho.ledger.2`.
+    pub(in crate::ledger) fn snapshot_unsupported(operation: &str) -> LedgerError {
+        LedgerError::UnsupportedSchema(format!(
+            "{operation} is unsupported for botho.ledger.2 stores: UTXO snapshot \
+             format V1 carries no derivation contexts (a versioned V2 snapshot is \
+             a #1286 follow-up). Sync from genesis instead"
+        ))
+    }
+}
+
+/// Production adapter for the shared V2 rule module: every read comes from
+/// one pinned transaction, and every read is strict.
+pub(in crate::ledger) struct ProductionView<'a, 'env> {
+    ledger: &'a Ledger,
+    txn: &'a RoTxn<'env>,
+}
+
+impl ProductionView<'_, '_> {
+    fn height(&self) -> Result<u64, LedgerError> {
+        let bytes = self
+            .ledger
+            .meta_db
+            .get(self.txn, META_HEIGHT)
+            .map_err(db_op("view height"))?
+            .ok_or_else(|| LedgerError::InconsistentRecord("missing height".into()))?;
+        Ok(u64::from_le_bytes(fixed(bytes)?))
+    }
+}
+
+impl DerivationReads for ProductionView<'_, '_> {
+    fn genesis_hash(&self) -> Result<[u8; 32], LedgerError> {
+        let bytes = self
+            .ledger
+            .blocks_db
+            .get(self.txn, &0)
+            .map_err(db_op("view genesis"))?
+            .ok_or_else(|| LedgerError::InconsistentRecord("missing genesis block".into()))?;
+        let genesis: Block = crate::ledger::experimental::decode(bytes)?;
+        if genesis.height() != 0 {
+            return Err(LedgerError::InconsistentRecord("genesis key/height".into()));
+        }
+        Ok(genesis.hash())
+    }
+    fn lottery_pool(&self) -> Result<u128, LedgerError> {
+        match self
+            .ledger
+            .meta_db
+            .get(self.txn, META_LOTTERY_POOL)
+            .map_err(db_op("view lottery pool"))?
+        {
+            Some(bytes) => Ok(u128::from_le_bytes(fixed(bytes)?)),
+            // Genesis initialization does not write the pool; every applied
+            // block does. Absence is only legitimate before the first block.
+            None if self.height()? == 0 => Ok(0),
+            None => Err(LedgerError::InconsistentRecord(
+                "missing lottery pool after genesis".into(),
+            )),
+        }
+    }
+    fn output_context(&self, id: &UtxoId) -> Result<(Utxo, StoredContext), LedgerError> {
+        read_context(self.ledger, self.txn, id)
+    }
+    fn lottery_candidates(
+        &self,
+        block: &Block,
+        config: &LotteryDrawConfig,
+    ) -> Result<Vec<LotteryCandidate>, LedgerError> {
+        validation::lottery_candidates(
+            &self.ledger.write_tables(),
+            self.txn,
+            block.height(),
+            &block.header.prev_block_hash,
+            config,
+            ReadPolicy::Strict,
+            &mut |u| read_context(self.ledger, self.txn, &u.id).map(|_| ()),
+        )
+    }
+}
+
+impl ValidationReads for ProductionView<'_, '_> {
+    fn get_utxo_by_target_key(&self, key: &[u8; 32]) -> Result<Option<Utxo>, LedgerError> {
+        let Some(bytes) = self
+            .ledger
+            .address_index_db
+            .get(self.txn, key)
+            .map_err(db_op("view target index"))?
+        else {
+            return Ok(None);
+        };
+        if bytes.is_empty() || bytes.len() % 36 != 0 {
+            return Err(LedgerError::StorageEncoding("target index width".into()));
+        }
+        let id = UtxoId::from_bytes(&bytes[..36])
+            .ok_or_else(|| LedgerError::StorageEncoding("target index".into()))?;
+        let (utxo, _) = read_context(self.ledger, self.txn, &id)?;
+        if &utxo.output.target_key != key {
+            return Err(LedgerError::InconsistentRecord("target index key".into()));
+        }
+        Ok(Some(utxo))
+    }
+    fn get_cluster_wealth(&self, id: u64) -> Result<u128, LedgerError> {
+        self.ledger
+            .cluster_wealth_db
+            .get(self.txn, &id.to_le_bytes())
+            .map_err(db_op("view cluster wealth"))?
+            .map(decode_cluster_wealth)
+            .transpose()
+            .map(|v| v.unwrap_or(0))
+    }
+    fn is_bridge_import_cluster(&self, id: u64) -> Result<bool, LedgerError> {
+        match self
+            .ledger
+            .bridge_import_clusters_db
+            .get(self.txn, &id.to_le_bytes())
+            .map_err(db_op("view import cluster"))?
+        {
+            None => Ok(false),
+            Some([]) => Ok(true),
+            Some(_) => Err(LedgerError::StorageEncoding("import value".into())),
+        }
+    }
+    fn is_key_image_spent(&self, key: &[u8; 32]) -> Result<Option<u64>, LedgerError> {
+        self.ledger
+            .key_images_db
+            .get(self.txn, key)
+            .map_err(db_op("view key image"))?
+            .map(|b| fixed(b).map(u64::from_le_bytes))
+            .transpose()
+    }
+}

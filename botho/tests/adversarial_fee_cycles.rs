@@ -63,7 +63,7 @@ impl Fixture {
             vec![],
         )
         .unwrap();
-        ledger.load_from_snapshot(&snapshot, None).unwrap();
+        ledger.seed_fixture_snapshot_unvalidated(&snapshot).unwrap();
         Self {
             _dir: dir,
             ledger,

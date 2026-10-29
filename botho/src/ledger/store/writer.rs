@@ -18,15 +18,38 @@ pub(in crate::ledger) struct WriteTables {
 
 #[derive(Clone, Copy)]
 pub(in crate::ledger) enum Representation<'a> {
+    /// V1 storage: no derivation contexts. No production store uses it since
+    /// `botho.ledger.2` (#1286 P2); kept so the V1 writer golden still pins
+    /// the shared effects byte-for-byte.
+    #[allow(dead_code)]
     Legacy,
+    /// Private experimental fixture/validated stores.
     Experimental {
         contexts: Database<Bytes, Bytes>,
         records: &'a [Record],
     },
+    /// The production `botho.ledger.2` ledger (#1286 P2): every output's
+    /// derivation context is written in the same transaction, Direct for
+    /// coinbase/transaction outputs and Lottery (from `records`) for payouts.
+    /// Like `Experimental`, this is NOT a validation token.
+    Production {
+        contexts: Database<Bytes, Bytes>,
+        records: &'a [Record],
+    },
 }
-impl Representation<'_> {
+impl<'a> Representation<'a> {
+    /// The context table and payout records, for every context-writing
+    /// representation.
+    fn context_table(self) -> Option<(Database<Bytes, Bytes>, &'a [Record])> {
+        match self {
+            Self::Legacy => None,
+            Self::Experimental { contexts, records } | Self::Production { contexts, records } => {
+                Some((contexts, records))
+            }
+        }
+    }
     fn check_new(self, tables: &WriteTables, txn: &RwTxn, id: &UtxoId) -> Result<(), LedgerError> {
-        if let Self::Experimental { contexts, .. } = self {
+        if let Some((contexts, _)) = self.context_table() {
             if tables
                 .utxo_db
                 .get(txn, &id.to_bytes())
@@ -49,7 +72,7 @@ impl Representation<'_> {
         ordinal: Option<u32>,
         after: &mut dyn FnMut() -> Result<(), LedgerError>,
     ) -> Result<(), LedgerError> {
-        if let Self::Experimental { contexts, records } = self {
+        if let Some((contexts, records)) = self.context_table() {
             let c = match ordinal {
                 None => StoredContext::Direct {
                     height: u.created_at,
@@ -262,7 +285,7 @@ impl WriteTables {
 
             let payout_output = match representation {
                 Representation::Legacy => payout_output,
-                Representation::Experimental { .. } => {
+                Representation::Experimental { .. } | Representation::Production { .. } => {
                     lottery_output.to_tx_output(winner_utxo.output.cluster_tags.clone())
                 }
             };

@@ -59,7 +59,7 @@ fn admission_rejects_signed_lottery_alias_ring_and_accepts_canonical_control() {
         ..ChainState::default()
     };
     let snapshot = UtxoSnapshot::new(100, [0; 32], state, utxos, vec![], vec![]).unwrap();
-    ledger.load_from_snapshot(&snapshot, None).unwrap();
+    ledger.seed_fixture_snapshot_unvalidated(&snapshot).unwrap();
     let canonical = ledger
         .get_utxo_by_target_key(&payout_member.target_key)
         .unwrap()

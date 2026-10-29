@@ -1626,7 +1626,7 @@ mod tests {
             vec![(1, whale_amount as u128)],
         )
         .unwrap();
-        ledger.load_from_snapshot(&snapshot, None).unwrap();
+        ledger.seed_fixture_snapshot_unvalidated(&snapshot).unwrap();
 
         // A tiny transaction whose outputs are 100% tagged to the whale
         // cluster: the fee wealth must be the GLOBAL cluster wealth, not the
@@ -2448,7 +2448,7 @@ mod tests {
             cluster_wealth.to_vec(),
         )
         .unwrap();
-        ledger.load_from_snapshot(&snapshot, None).unwrap();
+        ledger.seed_fixture_snapshot_unvalidated(&snapshot).unwrap();
         ring
     }
 

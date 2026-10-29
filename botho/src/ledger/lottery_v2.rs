@@ -8,7 +8,9 @@
 //! P2/P3) the production ledger share these rules instead of forking them.
 //!
 //! INACTIVE: nothing on the production path selects these rules yet. The
-//! production ledger keeps V1 behaviour until protocol 7.0.0 activation (P3).
+//! production ledger stores `botho.ledger.2` derivation contexts and exposes a
+//! pinned [`DerivationReads`] adapter (P2, `store::v2::ProductionView`), but
+//! keeps V1 block-application rules until protocol 7.0.0 activation (P3).
 use super::{
     store::validation::{RootRule, ValidationReads},
     ChainState, LedgerError,
@@ -148,8 +150,10 @@ pub(in crate::ledger) trait DerivationReads {
     fn genesis_hash(&self) -> Result<[u8; 32], LedgerError>;
     /// Lottery pool carryover before this block.
     fn lottery_pool(&self) -> Result<u128, LedgerError>;
-    /// A persisted output and its derivation context (strict; corruption is
-    /// an error).
+    /// A persisted output and its derivation context. Strict: a missing
+    /// context MUST be an explicit error ([`LedgerError::MissingContext`]),
+    /// never a default (e.g. a Direct/zero-tweak context), and corruption or
+    /// an output/context disagreement is an error too.
     fn output_context(&self, id: &UtxoId) -> Result<(Utxo, StoredContext), LedgerError>;
     /// Canonical, strictly-read lottery candidate set for `block`.
     fn lottery_candidates(
