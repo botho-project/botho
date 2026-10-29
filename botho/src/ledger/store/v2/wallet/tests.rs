@@ -323,19 +323,15 @@ fn shared_recovery_reproduces_clsag_lottery_v2_vectors() {
 }
 
 /// Acceptance at real 720-block maturity through the production `add_block`
-/// path (#1644). GATED ON P3 (#1640): until protocol 7.0.0 activation,
-/// `add_block` keeps V1 rules (V1 `tx_root`,
-/// `validate_lottery_output_bindings`) and refuses every block carrying lottery
-/// payouts, so this cannot run on the P2 base. It compiles against today's APIs
-/// and is skipped via `#[ignore]`; un-ignore it once P3 is on the branch (the
-/// only P3 seam it relies on is `add_block` accepting the block
-/// `lottery_v2::derive` produces).
+/// path (#1644), on real V2 blocks: every block is sealed by P3's (#1640)
+/// shared producer `Ledger::seal_block` (the `run.rs` mining path) and
+/// applied by `add_block` under protocol 7.0.0 validation
+/// (`lottery_v2::validate_block`, `RootRule::BodyV2`).
 ///
 /// The owner is the sole minter and owner of every output, so (1) every draw
 /// winner is the owner's, and (2) the wallet balance must equal
 /// `total_mined - total_fees_burned - lottery_pool` exactly.
 #[test]
-#[ignore = "needs #1640 (P3): add_block refuses V2 payout blocks until protocol 7.0.0 activation"]
 fn node_wallet_v2_payout_at_real_720_block_maturity() {
     use crate::{block::calculate_block_reward, ledger::lottery_v2};
     const MAX_HEIGHT: u64 = 1_100;
@@ -416,12 +412,7 @@ fn node_wallet_v2_payout_at_real_720_block_maturity() {
             calculate_block_reward(height + 1, state.total_mined),
             transactions,
         );
-        let mut block = {
-            let txn = ledger.env.read_txn().unwrap();
-            lottery_v2::derive(&ledger.production_view(&txn), template)
-                .unwrap()
-                .0
-        };
+        let mut block = ledger.seal_block(template).unwrap();
         while !block.header.is_valid_pow() {
             block.header.nonce += 1;
         }
