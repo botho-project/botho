@@ -151,7 +151,7 @@ pub(in crate::ledger) fn read_context(
 /// re-decoding it per payout. A `None` is judged HERE, for every caller: it
 /// is accepted only strictly below a V2 snapshot base (#1646), otherwise it
 /// is [`LedgerError::InconsistentRecord`].
-fn read_context_with(
+pub(super) fn read_context_with(
     ledger: &Ledger,
     txn: &RoTxn<'_>,
     id: &UtxoId,
@@ -417,17 +417,22 @@ impl Ledger {
     /// full `get_derivation_context` checks, with the creating-block check
     /// made against that decoded block. A payout without a context is
     /// [`LedgerError::MissingContext`] (on `botho.ledger.2` that can only be
-    /// corruption). A missing block is [`LedgerError::BlockNotFound`].
+    /// corruption). A missing block is [`LedgerError::BelowSnapshotBase`]
+    /// strictly between genesis and the snapshot base of a ledger restored
+    /// from a V2 snapshot (#1646: the block was never held), otherwise
+    /// [`LedgerError::BlockNotFound`] (past the tip).
     pub fn get_block_with_payout_contexts(
         &self,
         height: u64,
     ) -> Result<(Block, Vec<(Utxo, DerivationContext)>), LedgerError> {
         let txn = self.env.read_txn().map_err(db_op("payout read txn"))?;
-        let bytes = self
+        let Some(bytes) = self
             .blocks_db
             .get(&txn, &height)
             .map_err(db_op("read block"))?
-            .ok_or(LedgerError::BlockNotFound(height))?;
+        else {
+            return Err(self.missing_block_error(&txn, height)?);
+        };
         let block: Block = crate::ledger::experimental::decode(bytes)?;
         let hash = block.hash();
         let payouts = (0..block.lottery_outputs.len())

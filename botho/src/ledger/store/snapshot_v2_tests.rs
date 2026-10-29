@@ -6,7 +6,7 @@ use super::{
 };
 use crate::ledger::{
     lottery_v2::{DerivationReads, StoredContext},
-    SnapshotV2Contents, UtxoSnapshot, UtxoSnapshotV2,
+    DerivationContext, SnapshotV2Contents, UtxoSnapshot, UtxoSnapshotV2,
 };
 use bth_transaction_clsag::lottery_v2::Context;
 use tempfile::TempDir;
@@ -723,4 +723,309 @@ fn tip_timestamp_and_key_image_heights_are_checked() {
 
     let at_tip = recommit(&snapshot, |_, c| c.key_images[0].1 = snapshot.height);
     dst.load_from_snapshot(&at_tip, None).unwrap();
+}
+
+/// #1664 review, items 2 and 3 (post-rebase onto P4 #1655):
+/// - P4's one-txn payout read `get_block_with_payout_contexts` reports a block
+///   the restored ledger never held as `BelowSnapshotBase`, not `BlockNotFound`
+///   (which callers treat as "past the tip");
+/// - the below-base tolerance lives in `read_context_with` itself, so it
+///   applies to EVERY creating-block lookup that reports "no block stored" (the
+///   default `blocks_db` path behind `read_context`, P4's public
+///   `get_output_derivation_context`, and any custom lookup), and nowhere else:
+///   without a base, or at/above it, a missing block stays
+///   `InconsistentRecord`.
+#[test]
+fn payout_reads_on_a_restored_ledger_honour_the_snapshot_base() {
+    let src_dir = TempDir::new().unwrap();
+    let src = source_chain(src_dir.path());
+    let snapshot = src.ledger.create_snapshot().unwrap();
+    let dst_dir = TempDir::new().unwrap();
+    let dst = Ledger::open(dst_dir.path()).unwrap();
+    dst.load_from_snapshot(&snapshot, None).unwrap();
+    assert_eq!(dst.snapshot_base_height().unwrap(), Some(3));
+
+    // Item 2: the payout read distinguishes "never held" from "past the tip".
+    for h in [1, 2] {
+        match dst.get_block_with_payout_contexts(h) {
+            Err(LedgerError::BelowSnapshotBase { height, base }) => {
+                assert_eq!((height, base), (h, 3))
+            }
+            other => panic!("height {h}: {other:?}"),
+        }
+    }
+    let (tip, payouts) = dst.get_block_with_payout_contexts(3).unwrap();
+    assert_eq!(tip.hash(), src.tip.hash());
+    assert!(payouts.is_empty());
+    assert!(matches!(
+        dst.get_block_with_payout_contexts(4),
+        Err(LedgerError::BlockNotFound(4))
+    ));
+    assert_eq!(dst.get_block_with_payout_contexts(0).unwrap().0.height(), 0);
+    // Without a snapshot base the same missing heights are past the tip.
+    assert!(matches!(
+        src.ledger.get_block_with_payout_contexts(4),
+        Err(LedgerError::BlockNotFound(4))
+    ));
+
+    // Item 3, default blocks_db path: the below-base payout (block 2 is not
+    // held) is served by both strict readers.
+    let expected = DerivationContext::from(&src.payout_context);
+    assert_eq!(
+        dst.get_output_derivation_context(&src.payout).unwrap().1,
+        expected
+    );
+    assert_eq!(
+        dst.get_derivation_context(&src.payout).unwrap(),
+        src.payout_context
+    );
+
+    // Item 3, the arm is in `read_context_with`: a caller-supplied lookup
+    // that reports "no block stored" is judged by the same rule.
+    let none = |_: u64| -> Result<Option<[u8; 32]>, LedgerError> { Ok(None) };
+    {
+        let txn = dst.env.read_txn().unwrap();
+        let (utxo, context) =
+            super::v2::read_context_with(&dst, &txn, &src.payout, &mut none.clone()).unwrap();
+        assert_eq!((utxo.id, context), (src.payout, src.payout_context.clone()));
+        // A lookup that does find a block must still match the outpoint.
+        let wrong =
+            super::v2::read_context_with(&dst, &txn, &src.payout, &mut |_| Ok(Some([0xee; 32])));
+        assert!(
+            matches!(&wrong, Err(LedgerError::InconsistentRecord(m)) if m.contains("creating block")),
+            "{wrong:?}"
+        );
+    }
+    // Without a base (the source), "no block stored" is inconsistent, for
+    // the custom lookup and the default path alike.
+    {
+        let txn = src.ledger.env.read_txn().unwrap();
+        let missing =
+            super::v2::read_context_with(&src.ledger, &txn, &src.payout, &mut none.clone());
+        assert!(
+            matches!(&missing, Err(LedgerError::InconsistentRecord(m)) if m == "missing payout creating block"),
+            "{missing:?}"
+        );
+    }
+    // At/above the base it is inconsistent too: move the restored base down
+    // to the payout height, so block 2 is no longer "strictly below".
+    let mut txn = dst.env.write_txn().unwrap();
+    dst.meta_db
+        .put(&mut txn, META_SNAPSHOT_BASE, &2u64.to_le_bytes())
+        .unwrap();
+    txn.commit().unwrap();
+    assert!(matches!(
+        dst.get_output_derivation_context(&src.payout),
+        Err(LedgerError::InconsistentRecord(_))
+    ));
+}
+
+/// #1646 acceptance, "a V2 payout stays spendable after restoring", against
+/// REAL V2 blocks: every block below is sealed by P3's producer
+/// (`Ledger::seal_block`, #1640) and applied by the V2 validator
+/// (`Ledger::add_block`), on the source and on the restored ledger alike.
+///
+/// To stay cheap enough to run un-ignored, the pre-state is seeded at a
+/// height past the 720-block lottery maturity with mature wallet outputs
+/// (P2's fixture seeder, Direct contexts), instead of mining 720 blocks; the
+/// draw, the payout derivation and validation are the production ones. The
+/// payout's creating block lies strictly below the snapshot base, so the
+/// restored ledger does not hold it: discovery, input recovery, ring
+/// building, the V2 producer's candidate scan and the validator all go
+/// through the below-base arm of `read_context_with`.
+#[test]
+fn sealed_v2_payout_is_spendable_after_snapshot_restore() {
+    use crate::{
+        block::calculate_block_reward,
+        ledger::{
+            wallet_v2_fixture::{OTHER_WORDS, OWNER_WORDS, SOURCE_AMOUNT},
+            ChainState,
+        },
+        transaction::{Transaction, TxOutput, Utxo, MIN_RING_SIZE, PICOCREDITS_PER_CREDIT},
+        wallet::Wallet,
+    };
+    use bth_transaction_types::ClusterTagVector;
+
+    /// Past the 720-block maturity, so the seeded outputs are candidates.
+    const SEEDED: u64 = 800;
+    const FEE: u64 = PICOCREDITS_PER_CREDIT;
+    /// Fee of the self-payment that funds a draw.
+    const FUNDING_FEE: u64 = 10 * PICOCREDITS_PER_CREDIT;
+    /// Blocks on top of the paying block: past the spend maturity, and the
+    /// paying block ends up strictly below the snapshot base.
+    const PAD: u64 = 12;
+
+    /// Seal (V2 producer) and apply (V2 validator) the next block.
+    fn mine(ledger: &Ledger, minter: &Wallet, txs: Vec<Transaction>) -> Block {
+        let state = ledger.get_chain_state().unwrap();
+        let mut block = Block::new_template_with_txs(
+            &Block::genesis(),
+            &minter.default_address(),
+            state.difficulty,
+            calculate_block_reward(state.height + 1, state.total_mined),
+            txs,
+        );
+        block.header.height = state.height + 1;
+        block.header.prev_block_hash = state.tip_hash;
+        block.header.timestamp = block.header.timestamp.max(state.tip_timestamp);
+        block.minting_tx.block_height = block.header.height;
+        block.minting_tx.prev_block_hash = state.tip_hash;
+        block.minting_tx.timestamp = block.header.timestamp;
+        let mut block = ledger.seal_block(block).expect("seal");
+        while !block.header.is_valid_pow() {
+            block.header.nonce += 1;
+        }
+        block.minting_tx.nonce = block.header.nonce;
+        ledger
+            .add_block(&block)
+            .expect("V2 validator accepts the V2 producer");
+        block
+    }
+
+    fn spend(ledger: &Ledger, owner: &Wallet, to: &Wallet, input: &Utxo, fee: u64) -> Transaction {
+        let height = ledger.get_chain_state().unwrap().height;
+        owner
+            .create_private_transaction(
+                std::slice::from_ref(input),
+                vec![TxOutput::new(
+                    input.output.amount - fee,
+                    &to.default_address(),
+                )],
+                fee,
+                height,
+                ledger,
+            )
+            .expect("production wallet signs the input")
+    }
+
+    let owner = Wallet::from_mnemonic(OWNER_WORDS).unwrap();
+    let other = Wallet::from_mnemonic(OTHER_WORDS).unwrap();
+
+    // ---- Source: mature owner outputs (one hybrid at a nonzero index). ----
+    let src_dir = TempDir::new().unwrap();
+    let src = Ledger::open(src_dir.path()).unwrap();
+    let mut utxos = vec![Utxo {
+        id: UtxoId::new([0xa1; 32], 3),
+        output: TxOutput::new_hybrid_to_address(
+            SOURCE_AMOUNT,
+            &owner.default_address(),
+            3,
+            None,
+            ClusterTagVector::empty(),
+        )
+        .unwrap(),
+        created_at: 1,
+    }];
+    for i in 0..MIN_RING_SIZE + 8 {
+        utxos.push(Utxo {
+            id: UtxoId::new([i as u8 + 0x10; 32], 0),
+            output: TxOutput::new(SOURCE_AMOUNT, &owner.default_address()),
+            created_at: 1,
+        });
+    }
+    let funding_sources: Vec<Utxo> = utxos[1..].to_vec();
+    let state = ChainState {
+        height: SEEDED,
+        difficulty: u64::MAX,
+        ..ChainState::default()
+    };
+    let seed = UtxoSnapshot::new(SEEDED, [0; 32], state, utxos, vec![], vec![]).unwrap();
+    src.seed_fixture_snapshot_unvalidated(&seed).unwrap();
+
+    // ---- A real sealed V2 payout block (funded by a fee). ------------------
+    let mut funding = funding_sources.iter();
+    let paying = loop {
+        let source = funding.next().expect("no V2 draw within the funding bound");
+        let fund = spend(&src, &owner, &other, source, FUNDING_FEE);
+        let block = mine(&src, &other, vec![fund]);
+        if !block.lottery_outputs.is_empty() {
+            break block;
+        }
+    };
+    let payout = UtxoId::new(paying.hash(), 1);
+    let winner = UtxoId::new(
+        paying.lottery_outputs[0].winner_tx_hash,
+        paying.lottery_outputs[0].winner_output_index,
+    );
+    let StoredContext::Lottery { height, .. } = src.get_derivation_context(&payout).unwrap() else {
+        panic!("a sealed payout carries a Lottery context");
+    };
+    assert_eq!(height, paying.height());
+    assert_ne!(
+        src.get_utxo(&payout).unwrap().unwrap().output.target_key,
+        src.get_utxo(&winner).unwrap().unwrap().output.target_key,
+        "the payout is independently keyed"
+    );
+    // Every candidate is the owner's, so every payout from here on is too
+    // (the pad blocks may draw from the emission share).
+    let mut payouts_total = paying.lottery_outputs.len();
+    for _ in 0..PAD {
+        payouts_total += mine(&src, &other, vec![]).lottery_outputs.len();
+    }
+    let tip = src.get_chain_state().unwrap();
+    assert_eq!(tip.height, paying.height() + PAD);
+
+    // ---- Snapshot -> file -> restore into a fresh genesis-only ledger. -----
+    let file = src_dir.path().join("sealed.snapshot");
+    src.write_snapshot_to_file(&file).unwrap();
+    let dst_dir = TempDir::new().unwrap();
+    let dst = Ledger::open(dst_dir.path()).unwrap();
+    dst.load_snapshot_from_file(&file, Some(&tip.tip_hash))
+        .unwrap();
+    assert_eq!(dst.snapshot_base_height().unwrap(), Some(tip.height));
+    assert!(matches!(
+        dst.get_block(paying.height()),
+        Err(LedgerError::BelowSnapshotBase { .. })
+    ));
+    assert_eq!(
+        dst.get_derivation_context(&payout).unwrap(),
+        src.get_derivation_context(&payout).unwrap()
+    );
+
+    // The production wallet discovers the same outputs, payouts included,
+    // with the same key images, on both ledgers.
+    let view = |ledger: &Ledger| {
+        let mut owned: Vec<_> = ledger
+            .discover_wallet_outputs(&owner)
+            .unwrap()
+            .into_iter()
+            .map(|o| {
+                (
+                    o.utxo.id.to_bytes(),
+                    o.key_image,
+                    o.lottery_payout,
+                    o.spent_at,
+                )
+            })
+            .collect();
+        owned.sort();
+        owned
+    };
+    let restored_view = view(&dst);
+    assert_eq!(restored_view, view(&src));
+    let paid: Vec<_> = restored_view.iter().filter(|o| o.2).collect();
+    assert_eq!(paid.len(), payouts_total);
+    assert!(paid.iter().any(|o| o.0 == payout.to_bytes()));
+    assert!(paid.iter().all(|o| o.3.is_none()));
+
+    // ---- Spend the payout on the restored ledger (sealed + validated). ----
+    let payout_utxo = dst.get_utxo(&payout).unwrap().unwrap();
+    let tx = spend(&dst, &owner, &other, &payout_utxo, FEE);
+    dst.verify_transaction(&tx).unwrap();
+    dst.verify_ring_members(&tx).unwrap();
+    // The same signed spend is valid against the source: the restore changed
+    // nothing the spend depends on.
+    src.verify_transaction(&tx).unwrap();
+    let image = tx.inputs.clsag()[0].key_image;
+    let spent_in = mine(&dst, &other, vec![tx.clone()]);
+    let after = dst.discover_wallet_outputs(&owner).unwrap();
+    let spent = after.iter().find(|o| o.utxo.id == payout).unwrap();
+    assert_eq!(spent.key_image, image);
+    assert_eq!(spent.spent_at, Some(spent_in.height()));
+    // Replay is rejected on the restored ledger.
+    assert!(dst.verify_transaction(&tx).is_err());
+    let error = dst.recover_wallet_input(&owner, &payout_utxo).unwrap_err();
+    assert!(error.to_string().contains("already spent"), "{error}");
+    // And the restored chain keeps producing V2 blocks.
+    mine(&dst, &other, vec![]);
 }

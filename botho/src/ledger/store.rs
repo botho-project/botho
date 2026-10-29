@@ -42,7 +42,10 @@ use crate::{
 
 /// Fixed LMDB map size for the ledger. LMDB does not grow the map on its own:
 /// once the data file reaches this size, writes fail with `MDB_MAP_FULL`.
-const LEDGER_MAP_SIZE: usize = 1024 * 1024 * 1024; // 1GB
+/// The V2 snapshot decompression ceiling is derived from it
+/// (`snapshot::MAX_SNAPSHOT_DECOMPRESSED`), so growing the map never makes
+/// honest snapshots unloadable.
+pub(in crate::ledger) const LEDGER_MAP_SIZE: usize = 1024 * 1024 * 1024; // 1GB
 
 /// Maximum allowed clock skew for a block timestamp relative to local time.
 ///
