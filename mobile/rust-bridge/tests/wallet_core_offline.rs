@@ -108,6 +108,7 @@ fn mint_owned_output(amount: u64, recipient: &PublicAddress) -> ChainOutput {
         amount,
         output_index: 0,
         kem_ciphertext: None,
+        lottery_context: None,
     }
 }
 
@@ -129,6 +130,7 @@ fn mint_hybrid_owned_output(
         amount,
         output_index,
         kem_ciphertext: out.kem_ciphertext.as_ref().map(hex::encode),
+        lottery_context: None,
     }
 }
 
@@ -289,6 +291,7 @@ fn build_and_sign_produces_node_verifiable_tx() {
             output_index: input.output_index,
             kem_ciphertext: input.kem_ciphertext.clone(),
             decoys,
+            lottery_context: None,
         }],
         recipient: recipient_addr,
         sender_kem_public_key: sender.kem_public_hex.clone(),
@@ -385,6 +388,7 @@ fn build_and_sign_spends_hybrid_output() {
             output_index: input.output_index,
             kem_ciphertext: input.kem_ciphertext.clone(),
             decoys,
+            lottery_context: None,
         }],
         recipient: recipient_addr,
         sender_kem_public_key: sender.kem_public_hex.clone(),
@@ -441,6 +445,7 @@ fn build_and_sign_rejects_insufficient_inputs() {
             output_index: owned[0].output_index,
             kem_ciphertext: owned[0].kem_ciphertext.clone(),
             decoys,
+            lottery_context: None,
         }],
         recipient: RecipientAddress {
             view_public_key: hex::encode(recipient.public_address.view_public_key().to_bytes()),

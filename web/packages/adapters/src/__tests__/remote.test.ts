@@ -621,3 +621,37 @@ describe('RemoteNodeAdapter legacy lottery metadata', () => {
     expect(withMeta.map((output) => output.amount)).toEqual([1n, 1n])
   })
 })
+
+describe('RemoteNodeAdapter V2 lottery rows (#1645)', () => {
+  const context = { version: 2, baseIndex: 3, tweak: '4b'.repeat(32), ordinal: 0, height: 90 }
+  const ordinary = {
+    txHash: 'ab', outputIndex: 3, cryptoOutputIndex: 3, targetKey: 'cd', publicKey: 'ef',
+    amountCommitment: '0100000000000000', clusterTags: [[7, 1000]], kemCiphertext: null,
+  }
+  const coinbase = { ...ordinary, outputIndex: 0xffffffff, cryptoOutputIndex: 0, coinbase: true }
+  const payout = {
+    ...ordinary, txHash: '0b'.repeat(32), outputIndex: 1, cryptoOutputIndex: 3,
+    targetKey: 'aa', lottery: true, lotteryContext: context,
+    winnerOutpoint: `${'ab'.repeat(32)}:3`, clusterTags: [[7, 1000]],
+  }
+  const legacy = { ...ordinary, txHash: '0c'.repeat(32), outputIndex: 2, cryptoOutputIndex: undefined, lottery: true }
+
+  it('passes the frozen contract fields through and derives from cryptoOutputIndex', async () => {
+    const adapter = await connectedAdapter({
+      chain_getOutputs: { jsonrpc: '2.0', id: 1, result: [{ height: 90, outputs: [ordinary, coinbase, payout, legacy] }] },
+    })
+    for (const rows of [await adapter.getRawOutputs(90, 90), await adapter.getRawOutputsWithMeta(90, 90)]) {
+      // Ordinary + coinbase: crypto index (coinbase bound to MINTING_OUTPUT_INDEX 0).
+      expect(rows.map((r) => r.outputIndex)).toEqual([3, 0, 3, 2])
+      expect(rows[0].lotteryContext).toBeNull()
+      expect(rows[0].clusterTags).toEqual([[7, 1000]])
+      // V2 payout: context passed through unchanged; derivation index = baseIndex.
+      expect(rows[2]).toMatchObject({
+        lottery: true, lotteryContext: context, winnerOutpoint: `${'ab'.repeat(32)}:3`,
+        clusterTags: [[7, 1000]], amount: 1n,
+      })
+      // Legacy (context-less) payout stays flagged and context-less (#1450).
+      expect(rows[3]).toMatchObject({ lottery: true, lotteryContext: null })
+    }
+  })
+})

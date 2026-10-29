@@ -890,6 +890,7 @@ mod send_acceptance_tests {
                 output_index: 0,
                 kem_ciphertext: None,
                 decoys,
+                lottery_context: None,
             }],
             recipient: parsed_recipient,
             sender_kem_public_key: signer.sender_kem_public_key.clone(),

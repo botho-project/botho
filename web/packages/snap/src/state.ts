@@ -49,6 +49,7 @@
 
 import type {
   ChainOutputWithMeta,
+  LotteryContext,
   OwnedOutput,
   SendRpc,
   SignerKeys,
@@ -107,6 +108,12 @@ export interface PersistedOwnedOutput {
   outputIndex: number;
   /** Hex ML-KEM-768 ciphertext, or null for a classical output — #988. */
   kemCiphertext: string | null;
+  /**
+   * V2 lottery payout derivation context, present only for a V2 payout (#1645).
+   * Optional so blobs persisted before #1645 still load unchanged (they can
+   * hold no V2 payouts: those were undiscoverable without the context).
+   */
+  lotteryContext?: LotteryContext;
   /** Receive block height. Carried so #1092 renders history with no rescan. */
   blockHeight: number;
   /** Creating tx hash (hex). Carried so #1092 renders history with no rescan. */
@@ -225,6 +232,7 @@ export function toPersistedOwnedOutput(
     subaddressIndex: owned.subaddressIndex.toString(),
     outputIndex: owned.outputIndex ?? 0,
     kemCiphertext: owned.kemCiphertext ?? null,
+    ...(owned.lotteryContext ? { lotteryContext: owned.lotteryContext } : {}),
     blockHeight: meta.blockHeight,
     txHash: meta.txHash,
   };
@@ -239,6 +247,7 @@ export function toOwnedOutput(p: PersistedOwnedOutput): OwnedOutput {
     subaddressIndex: BigInt(p.subaddressIndex),
     outputIndex: p.outputIndex,
     kemCiphertext: p.kemCiphertext,
+    ...(p.lotteryContext ? { lotteryContext: p.lotteryContext } : {}),
   };
 }
 
@@ -397,6 +406,8 @@ export async function incrementalScan(args: IncrementalScanArgs): Promise<Increm
         amount: c.amount,
         outputIndex: c.outputIndex,
         kemCiphertext: c.kemCiphertext,
+        // V2 lottery payouts are discovered through their context (#1645).
+        lotteryContext: c.lotteryContext ?? null,
       })),
     });
 

@@ -12,6 +12,7 @@
 //! still runs through the shared, node-identical `bth_wasm_signer::core`
 //! primitives -- this module is purely transport.
 
+use bth_wasm_signer::core::LotteryContext;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -44,6 +45,22 @@ pub struct RpcOutput {
     /// hybrid one-time key.
     #[serde(rename = "kemCiphertext", default)]
     pub kem_ciphertext: Option<String>,
+    /// The index the output's one-time key is derived at (`cryptoOutputIndex`).
+    /// Equal to `outputIndex` for ordinary outputs, 0 for the coinbase, and
+    /// `lotteryContext.baseIndex` for a V2 lottery payout. Absent on older
+    /// nodes, in which case the normalized `outputIndex` is used.
+    #[serde(rename = "cryptoOutputIndex", default)]
+    pub crypto_output_index: Option<u32>,
+    /// Lottery payout row. Without a `lotteryContext` it is a LEGACY (V1)
+    /// payout that aliases its source's key: excluded from inputs and decoys
+    /// (#1450).
+    #[serde(default)]
+    pub lottery: bool,
+    /// V2 lottery payout derivation context (frozen #1641 RPC contract). The
+    /// shared signer core scans the base target `P − T·G` at `baseIndex` and
+    /// recovers the payout key with the `x·G == P` check (#1645).
+    #[serde(rename = "lotteryContext", default)]
+    pub lottery_context: Option<LotteryContext>,
 }
 
 /// Spent/pending status of a key image from `chain_areKeyImagesSpent`.
