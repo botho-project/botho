@@ -9,11 +9,13 @@
 //! balance gate, input recovery) instead goes through [`recover_owned`], the
 //! one recovery rule shared with the private experimental wallet
 //! (`experimental/validated/wallet.rs`, #1360/#1365), which ends in the clsag
-//! `x·G = P` check: [`clsag_v2::recover_direct`] for a `Direct` context and
-//! [`clsag_v2::recover_with_context`] for a `Lottery` one. The dispatch is
-//! load-bearing: `recover_with_context` fails closed on the zero tweak
-//! (#1667), so routing a direct output through it would make every ordinary
-//! output vanish from balance, faucet and minting gate.
+//! `x·G = P` check: [`clsag_v2::recover_direct_owner`] (over
+//! [`clsag_v2::recover_direct`]) for a `Direct` context and
+//! [`clsag_v2::recover_payout_owner`] (over [`clsag_v2::recover_with_context`])
+//! for a `Lottery` one. The dispatch is load-bearing: `recover_with_context`
+//! fails closed on the zero tweak (#1667), so routing a direct output through
+//! it would make every ordinary output vanish from balance, faucet and minting
+//! gate.
 //!
 //! Contexts are read strictly from P2's store ([`read_context`]): a missing or
 //! inconsistent context is an error, never a Direct default. Legacy aliased
@@ -29,8 +31,8 @@ use tracing::debug;
 
 /// Recover `(subaddress, one-time key)` for `output` under `context` with a
 /// caller-supplied base recovery. Shared by every wallet adapter. A `Direct`
-/// context (no tweak) goes to [`clsag_v2::recover_direct`]; a `Lottery`
-/// context goes to [`clsag_v2::recover_with_context`], which rejects a zero or
+/// context (no tweak) goes to [`clsag_v2::recover_direct_owner`]; a `Lottery`
+/// context goes to [`clsag_v2::recover_payout_owner`], which rejects a zero or
 /// non-canonical tweak before the base callback runs. Both end in the same
 /// final `x·G = P` check.
 pub(in crate::ledger) fn recover_with_base(
@@ -38,21 +40,16 @@ pub(in crate::ledger) fn recover_with_base(
     context: &StoredContext,
     base: impl FnOnce(&TxOutput, u32) -> Option<(u64, RistrettoPrivate)>,
 ) -> Result<(u64, RistrettoPrivate), clsag_v2::Error> {
-    let mut subaddress = None;
-    let base_key = |base_output: &TxOutput, index| {
-        let (found, key) = base(base_output, index)?;
-        subaddress = Some(found);
-        Some(key)
-    };
-    let key = match context {
+    // The owner-reporting forms are the shared clsag helpers (#1667), the same
+    // ones the wasm-signer core and the bridge use.
+    match context {
         StoredContext::Direct { base_index, .. } => {
-            clsag_v2::recover_direct(output, *base_index, base_key)
+            clsag_v2::recover_direct_owner(output, *base_index, base)
         }
         StoredContext::Lottery { context, .. } => {
-            clsag_v2::recover_with_context(output, context, base_key)
+            clsag_v2::recover_payout_owner(output, context, base)
         }
-    }?;
-    Ok((subaddress.ok_or(clsag_v2::Error::Ownership)?, key))
+    }
 }
 
 /// The native wallet's recovery of one persisted output: the unified hybrid

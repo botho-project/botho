@@ -25,17 +25,22 @@
 //! build. Because of the `x·G == P` check it can never make the bridge sign
 //! with a key that does not own the output.
 //!
-//! ## Relationship to the P8 signer-core helpers
+//! ## Relationship to the shared helpers (#1667)
 //!
-//! [`detect_lottery_payout`] and [`recover_onetime_private_key`] deliberately
-//! mirror the signatures and rules of the same-named helpers in
-//! `bth_wasm_signer::core` (#1645 / PR #1658), so all clients apply one rule.
-//! The bridge does not depend on that crate. It is GPL-3.0 while the bridge is
-//! Apache-2.0, it builds a `cdylib` with wasm-bindgen and getrandom-js
-//! dependencies, and PR #1658 was not merged when this landed. If the helpers
-//! move into a shared, license-compatible crate (for example
-//! `bth-transaction-clsag`), these bodies can be replaced by re-exports. The
-//! callers in [`crate::bth_scan`] only go through the two functions below.
+//! The payout rules live once, in `bth_transaction_clsag::lottery_v2`, which
+//! the bridge already depends on for its transaction types:
+//! [`lottery_v2::payout_context`] (version / zero / non-canonical tweak),
+//! [`lottery_v2::recover_payout_owner`] (base target `P − T·G`, owner and
+//! `x·G == P`) and [`lottery_v2::recover_with_context`]. This module keeps only
+//! what is the bridge's own: the wire struct, its hex syntax and error strings,
+//! and the reserve's ordinary ownership rule (a hybrid output without an
+//! ML-KEM secret is an explicit error here). [`detect_lottery_payout`] and
+//! [`recover_onetime_private_key`] keep the signatures of the same-named
+//! `bth_wasm_signer::core` helpers (#1645); the bridge does not depend on that
+//! crate (it builds a `cdylib` with wasm-bindgen and getrandom-js
+//! dependencies). Both crates run the one shared vector
+//! `transaction/clsag/tests/fixtures/lottery-v2-wallet.json`. The callers in
+//! [`crate::bth_scan`] only go through the two functions below.
 
 use bth_account_keys::AccountKey;
 use bth_crypto_keys::RistrettoPrivate;
@@ -87,18 +92,13 @@ impl LotteryContext {
         let tweak: [u8; 32] = bytes
             .try_into()
             .map_err(|_| "lotteryContext.tweak: expected 32 bytes".to_string())?;
-        if tweak == [0u8; 32] {
-            return Err("lotteryContext.tweak: zero tweak is not a V2 payout".to_string());
-        }
-        let context = lottery_v2::Context {
-            base_index: self.base_index,
-            tweak,
-        };
-        // `encode` enforces a canonical scalar encoding of the tweak.
-        context
-            .encode()
-            .map_err(|e| format!("lotteryContext: invalid context: {e:?}"))?;
-        Ok(context)
+        // The shared rule (#1667); only the error strings are the bridge's.
+        lottery_v2::payout_context(self.version, self.base_index, tweak).map_err(|e| match e {
+            lottery_v2::Error::ZeroTweak => {
+                "lotteryContext.tweak: zero tweak is not a V2 payout".to_string()
+            }
+            e => format!("lotteryContext: invalid context: {e:?}"),
+        })
     }
 }
 
@@ -150,14 +150,13 @@ pub fn detect_lottery_payout(
     context: &LotteryContext,
 ) -> Option<u64> {
     let context = context.to_context().ok()?;
-    let mut owner = None;
-    lottery_v2::recover_with_context(output, &context, |base, index| {
+    let (owner, _) = lottery_v2::recover_payout_owner(output, &context, |base, index| {
         let subaddress_index = detect_ordinary(base, account, kem_keypair, index)?;
-        owner = Some(subaddress_index);
-        recover_ordinary(base, account, kem_keypair, subaddress_index, index).ok()
+        let key = recover_ordinary(base, account, kem_keypair, subaddress_index, index).ok()?;
+        Some((subaddress_index, key))
     })
     .ok()?;
-    owner
+    Some(owner)
 }
 
 /// Recover an owned reserve output's one-time private key on the single path
@@ -185,6 +184,128 @@ pub fn recover_onetime_private_key(
                 recover_ordinary(base, account, kem_keypair, subaddress_index, index).ok()
             })
             .map_err(|e| format!("failed to recover V2 lottery payout key: {e:?}"))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! The shared V2 payout wallet vector (#1667 part 2), committed once in
+    //! `transaction/clsag/tests/fixtures/lottery-v2-wallet.json` and run by
+    //! every payout consumer.
+    use super::*;
+    use bth_crypto_ring_signature::KeyImage;
+    use serde_json::Value;
+
+    const SHARED: &str =
+        include_str!("../../../transaction/clsag/tests/fixtures/lottery-v2-wallet.json");
+
+    fn shared() -> Value {
+        serde_json::from_str(SHARED).unwrap()
+    }
+
+    fn h32(s: &str) -> [u8; 32] {
+        hex::decode(s).unwrap().try_into().unwrap()
+    }
+
+    /// The bridge's verdict for a wire context, exact error strings pinned.
+    fn verdict(wire: &Value) -> String {
+        let context: LotteryContext = serde_json::from_value(wire.clone()).unwrap();
+        match context.to_context() {
+            Ok(_) => "ok".into(),
+            Err(e) if e.starts_with("lotteryContext.version: unsupported version ") => {
+                assert!(e.ends_with("(expected 2)"), "{e}");
+                "Version".into()
+            }
+            Err(e) if e == "lotteryContext.tweak: zero tweak is not a V2 payout" => {
+                "ZeroTweak".into()
+            }
+            Err(e) if e == "lotteryContext: invalid context: NonCanonicalTweak" => {
+                "NonCanonicalTweak".into()
+            }
+            Err(e)
+                if e.starts_with("lotteryContext.tweak: invalid hex: ")
+                    || e == "lotteryContext.tweak: expected 32 bytes" =>
+            {
+                "Syntax".into()
+            }
+            Err(e) => panic!("unclassified context error: {e}"),
+        }
+    }
+
+    #[test]
+    fn contexts_match_the_shared_verdicts() {
+        for case in shared()["contexts"].as_array().unwrap() {
+            assert_eq!(
+                verdict(&case["wire"]),
+                case["expect"].as_str().unwrap(),
+                "{}",
+                case["name"]
+            );
+        }
+    }
+
+    #[test]
+    fn recoveries_match_the_shared_vector() {
+        let v = shared();
+        let a = &v["account"];
+        let private =
+            |name: &str| RistrettoPrivate::try_from(&h32(a[name].as_str().unwrap())).unwrap();
+        let account = AccountKey::new(&private("spendPrivateKey"), &private("viewPrivateKey"));
+        let seed: [u8; 64] = hex::decode(a["seed"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let kp = bth_crypto_pq::derive_pq_keys_from_seed(&seed).kem_keypair;
+        for case in v["recoveries"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let o = &case["output"];
+            let output = TxOutput {
+                amount: 1,
+                target_key: h32(o["targetKey"].as_str().unwrap()),
+                public_key: h32(o["publicKey"].as_str().unwrap()),
+                e_memo: None,
+                cluster_tags: Default::default(),
+                kem_ciphertext: o["kemCiphertext"].as_str().map(|s| hex::decode(s).unwrap()),
+            };
+            let context: LotteryContext = serde_json::from_value(case["wire"].clone()).unwrap();
+            let detected = detect_lottery_payout(&output, &account, Some(&kp), &context);
+            match case["expect"].as_object() {
+                None => {
+                    assert_eq!(detected, None, "{name}");
+                    let err = recover_onetime_private_key(
+                        &output,
+                        &account,
+                        Some(&kp),
+                        0,
+                        0,
+                        Some(&context),
+                    )
+                    .unwrap_err();
+                    assert_eq!(
+                        err, "failed to recover V2 lottery payout key: Ownership",
+                        "{name}"
+                    );
+                }
+                Some(expect) => {
+                    let sub = expect["subaddressIndex"].as_u64().unwrap();
+                    assert_eq!(detected, Some(sub), "{name}");
+                    let key = recover_onetime_private_key(
+                        &output,
+                        &account,
+                        Some(&kp),
+                        sub,
+                        0,
+                        Some(&context),
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        hex::encode(KeyImage::from(&key).as_bytes()),
+                        expect["keyImage"].as_str().unwrap(),
+                        "{name}"
+                    );
+                }
+            }
         }
     }
 }

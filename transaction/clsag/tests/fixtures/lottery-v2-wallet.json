@@ -1,0 +1,444 @@
+{
+  "account": {
+    "seed": "6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a6a",
+    "spendPrivateKey": "c1811dc50340e8fdf28c11cff1763d9501c77425d044bf5517306479f4875703",
+    "viewPrivateKey": "0b533e9a82cf08673ed059c4782504df8a3214b52a0ae37700a476cffe9b2a07"
+  },
+  "baseTargets": [
+    {
+      "baseIndex": 3,
+      "expect": "3a8e31d3cfcd99cf0094b9c27da7dcbea180cd46b8676b90c6999a2762607813",
+      "name": "P - T·G",
+      "targetKey": "1a6237e8b7f3f58afe11b56d692fe62b218ad1f6223e9c047f6aae42c70d297c",
+      "tweak": "8e48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a"
+    },
+    {
+      "baseIndex": 3,
+      "expect": "9c79391925530a12ccd82ebfb3b582b1800943e704027d8c3f4e74d23e2ffb63",
+      "name": "payout output of the classical case",
+      "targetKey": "968b3f0107c01c7a4b6558f11d6664acf3b6510a479d5d83341fc82c0b431827",
+      "tweak": "8e48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a"
+    },
+    {
+      "baseIndex": 3,
+      "expect": "ba4dfd3a14f6ff20e4fc62f3169db9fb3dce411f6cc0a9b7bfb1571acd45c004",
+      "name": "payout output of the hybrid case",
+      "targetKey": "20493f4706841dbe84ba0c506b058c573e70e434b284a6f8191cd04d8686b448",
+      "tweak": "8e48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a"
+    },
+    {
+      "baseIndex": 3,
+      "expect": "Point",
+      "name": "identity target",
+      "targetKey": "0000000000000000000000000000000000000000000000000000000000000000",
+      "tweak": "8e48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a"
+    },
+    {
+      "baseIndex": 3,
+      "expect": "Point",
+      "name": "target not a point",
+      "targetKey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "tweak": "8e48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a"
+    },
+    {
+      "baseIndex": 3,
+      "expect": "Point",
+      "name": "identity base (P = T·G)",
+      "targetKey": "e63aeab25843f4e66b7a65e40539693df7118a6193ecc646cc47fcae09448f06",
+      "tweak": "8e48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a"
+    },
+    {
+      "baseIndex": 3,
+      "expect": "ZeroTweak",
+      "name": "zero tweak",
+      "targetKey": "1a6237e8b7f3f58afe11b56d692fe62b218ad1f6223e9c047f6aae42c70d297c",
+      "tweak": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "baseIndex": 3,
+      "expect": "NonCanonicalTweak",
+      "name": "non-canonical tweak",
+      "targetKey": "1a6237e8b7f3f58afe11b56d692fe62b218ad1f6223e9c047f6aae42c70d297c",
+      "tweak": "edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010"
+    }
+  ],
+  "contexts": [
+    {
+      "expect": "ok",
+      "name": "valid",
+      "wire": {
+        "baseIndex": 3,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "8e48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a",
+        "version": 2
+      }
+    },
+    {
+      "expect": "ok",
+      "name": "valid, baseIndex 0",
+      "wire": {
+        "baseIndex": 0,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "8e48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a",
+        "version": 2
+      }
+    },
+    {
+      "expect": "ok",
+      "name": "valid, baseIndex u32::MAX",
+      "wire": {
+        "baseIndex": 4294967295,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "8e48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a",
+        "version": 2
+      }
+    },
+    {
+      "expect": "ok",
+      "name": "valid, tweak = 1",
+      "wire": {
+        "baseIndex": 3,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "0100000000000000000000000000000000000000000000000000000000000000",
+        "version": 2
+      }
+    },
+    {
+      "expect": "ok",
+      "name": "valid, tweak = l - 1",
+      "wire": {
+        "baseIndex": 3,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "ecd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010",
+        "version": 2
+      }
+    },
+    {
+      "expect": "ok",
+      "expectStrictHex": "Syntax",
+      "name": "uppercase tweak hex",
+      "wire": {
+        "baseIndex": 3,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "8E48B3F66F69B05878BA38D88DA3C209160BDF28775D482B60FD09A8C278D20A",
+        "version": 2
+      }
+    },
+    {
+      "expect": "Version",
+      "name": "version 0",
+      "wire": {
+        "baseIndex": 3,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "8e48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a",
+        "version": 0
+      }
+    },
+    {
+      "expect": "Version",
+      "name": "version 1",
+      "wire": {
+        "baseIndex": 3,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "8e48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a",
+        "version": 1
+      }
+    },
+    {
+      "expect": "Version",
+      "name": "version 3",
+      "wire": {
+        "baseIndex": 3,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "8e48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a",
+        "version": 3
+      }
+    },
+    {
+      "expect": "Version",
+      "name": "version 255",
+      "wire": {
+        "baseIndex": 3,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "8e48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a",
+        "version": 255
+      }
+    },
+    {
+      "expect": "Version",
+      "name": "version 1 with malformed tweak",
+      "wire": {
+        "baseIndex": 3,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "zz",
+        "version": 1
+      }
+    },
+    {
+      "expect": "ZeroTweak",
+      "name": "zero tweak",
+      "wire": {
+        "baseIndex": 3,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "0000000000000000000000000000000000000000000000000000000000000000",
+        "version": 2
+      }
+    },
+    {
+      "expect": "NonCanonicalTweak",
+      "name": "tweak = l",
+      "wire": {
+        "baseIndex": 3,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010",
+        "version": 2
+      }
+    },
+    {
+      "expect": "NonCanonicalTweak",
+      "name": "tweak = l + 1",
+      "wire": {
+        "baseIndex": 3,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "eed3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010",
+        "version": 2
+      }
+    },
+    {
+      "expect": "NonCanonicalTweak",
+      "name": "tweak = 2^256 - 1",
+      "wire": {
+        "baseIndex": 3,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "version": 2
+      }
+    },
+    {
+      "expect": "Syntax",
+      "name": "tweak 31 bytes",
+      "wire": {
+        "baseIndex": 3,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "8e48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d2",
+        "version": 2
+      }
+    },
+    {
+      "expect": "Syntax",
+      "name": "tweak 33 bytes",
+      "wire": {
+        "baseIndex": 3,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "8e48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a00",
+        "version": 2
+      }
+    },
+    {
+      "expect": "Syntax",
+      "name": "tweak odd length",
+      "wire": {
+        "baseIndex": 3,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "8e48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20",
+        "version": 2
+      }
+    },
+    {
+      "expect": "Syntax",
+      "name": "tweak not hex",
+      "wire": {
+        "baseIndex": 3,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "zz48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a",
+        "version": 2
+      }
+    },
+    {
+      "expect": "Syntax",
+      "name": "tweak empty",
+      "wire": {
+        "baseIndex": 3,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "",
+        "version": 2
+      }
+    }
+  ],
+  "description": "Shared V2 lottery payout wallet vector (#1667 part 2). Run by bth-transaction-clsag (shared helpers), bth-wasm-signer, bth-bridge-service, botho-wallet and the botho node wallet. See transaction/clsag/tests/lottery_v2_wallet.rs.",
+  "recoveries": [
+    {
+      "expect": {
+        "keyImage": "504455d301bd20d0b613906f0647df847602bbffdbe81afa4542a2bf68f5c869",
+        "subaddressIndex": 0
+      },
+      "name": "classical payout, default subaddress",
+      "output": {
+        "kemCiphertext": null,
+        "publicKey": "b829035e5ffae8fbc02508fec3720418f6b45cd1674461a592408e18bd0ce121",
+        "targetKey": "968b3f0107c01c7a4b6558f11d6664acf3b6510a479d5d83341fc82c0b431827"
+      },
+      "source": {
+        "kemCiphertext": null,
+        "publicKey": "b829035e5ffae8fbc02508fec3720418f6b45cd1674461a592408e18bd0ce121",
+        "targetKey": "9c79391925530a12ccd82ebfb3b582b1800943e704027d8c3f4e74d23e2ffb63"
+      },
+      "wire": {
+        "baseIndex": 0,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "8e48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a",
+        "version": 2
+      }
+    },
+    {
+      "expect": {
+        "keyImage": "0e38130ccad1094b8b12945d3784ed5c40c44f1272df6ddedc533240067d636d",
+        "subaddressIndex": 18446744073709551614
+      },
+      "name": "hybrid payout, change subaddress",
+      "output": {
+        "kemCiphertext": "a22742b81cf009d9204620e1f65d1b2e818ecb68635a3b14c9febdbdc4c409676c99184d30added474601a725a2ce2cd0fe2b26b959368dfda55b31cdaab451f2dac57f34ead210973317ce5a40b37ec3ca3317e6bd04d43ef17a24f6cacbebbaadc5113f679d08d6925fd8f19102180ad2586db676ada3336a005eb6b468f3c74742317578863f788eb198687feb8ee6a2a08a84b16a24346684d0e5f7b29450843d7867f1663e8795168a29fa3ed018854452d012cdd0ae3a2ed2fc657f593866b4bef8ec2b0fd367475382bf89729f20f98172d3d697775639688912845ad6e09eb7af3da9a1b10805b70d6768f09ee11b858b673b9729634ebd0dd545aecf723f4dd46a7b0d6dddcd729ef4db30e9be190614796bb657fe4b4f764bf07ee7f345db417ebc262765deec8210e79b4fc49e03315bcbefbb3ea9fe2f2e595f6d668d8a5c6b726363d911cfc9bb4d040a47ae82622cadba27d0190412e5881b46f316e62af8382a417caa9ffd58ea23dd0a7860126066c8564b8bcb7b55806b3260bdd0372d8cddb51937b2eb330c482ab57f4a77cc03d23ef5337393e9e4bd08cb08cb3b2a7246ce096a55b7deecf4a04a151f68f50060c5134b8102de239818756050eb62e1d4e17fd2f398aff9a522a76ae67722b42ee5f8d9c25ed498311e8c3e8fec60a31e65493029eddfdba28c439a5db0fbd47bea07c06faf51fa75eeaed0d4150723d47dd0e85d493abaa138cbc318e3c35073b7220742258d1d478271a4aa0b40375784e20a0df0d4487c4375ebd0730514879ab87d213c901f1c6dc21d50cf0dba64efb92f7e18cc166343eab50bea25107b211186dbd6a654df15d410a142d653feaf6e00c8d52cb65cb4bd190f22e376667e7d03d4af0a591d794398220e8ab9653931a7c67876a35252e287be11f82e6215f309e893391083149085d4b4b78cc865b339f22904ed19b060b34d508d438c786cebb5898ed7340823cd1301c31406b9dcd4e8c47c4ac0d8716441c939797ddbc75211a57c6a241bf0499a0389e0e9c1db25598a78e8fd6075a5a05a3c311963b3a538d4008b561c4eed6b1400996d6216804fcbc2bed912d20deab8ec7cc5ccae0a30812361084385fd09bbd70d84984de8c07a97ee8776a84baef0fa154df1453e1e767496869a8f67c431cdc749ecd6e407e67f80ad045fb2159f1e6f756fc568ada9c361b385cf37d225daa2b276032b3ccb218318c5d07560054a05f1db287db22a6fe8f1e57ea7b94506793d7209ffcfeb8b5d0959a50f76289d2531f3c2a2db7fe5c3b87b29b2c9a5bad6f18726d7ac086b608b5829a9cc7061cccc8566edcf5a7e39eae382bac6b114e565d185c0931d2419e2137885bdc9026c6f5df2b87ad53cdf5e7568c9200b949ac1d27bf59d59762505684a7902d90397736dc61d431bc2a6c6f948359ddb08fa0ecc14e003e4cbb176ffc578209e443506e19a2ff2cc1c50f9b34b47a0ba03b6818e84cfe297213e34b9eca7c7921437f41c21987e237520d42",
+        "publicKey": "a02a0551140120454eb0317f640c66722debaf3981ff2eeab530ce73014de579",
+        "targetKey": "32c8632183d4e5c6ab93ee9edba874f5537b6ff2dcf738a9c72120ef4d296778"
+      },
+      "source": {
+        "kemCiphertext": "a22742b81cf009d9204620e1f65d1b2e818ecb68635a3b14c9febdbdc4c409676c99184d30added474601a725a2ce2cd0fe2b26b959368dfda55b31cdaab451f2dac57f34ead210973317ce5a40b37ec3ca3317e6bd04d43ef17a24f6cacbebbaadc5113f679d08d6925fd8f19102180ad2586db676ada3336a005eb6b468f3c74742317578863f788eb198687feb8ee6a2a08a84b16a24346684d0e5f7b29450843d7867f1663e8795168a29fa3ed018854452d012cdd0ae3a2ed2fc657f593866b4bef8ec2b0fd367475382bf89729f20f98172d3d697775639688912845ad6e09eb7af3da9a1b10805b70d6768f09ee11b858b673b9729634ebd0dd545aecf723f4dd46a7b0d6dddcd729ef4db30e9be190614796bb657fe4b4f764bf07ee7f345db417ebc262765deec8210e79b4fc49e03315bcbefbb3ea9fe2f2e595f6d668d8a5c6b726363d911cfc9bb4d040a47ae82622cadba27d0190412e5881b46f316e62af8382a417caa9ffd58ea23dd0a7860126066c8564b8bcb7b55806b3260bdd0372d8cddb51937b2eb330c482ab57f4a77cc03d23ef5337393e9e4bd08cb08cb3b2a7246ce096a55b7deecf4a04a151f68f50060c5134b8102de239818756050eb62e1d4e17fd2f398aff9a522a76ae67722b42ee5f8d9c25ed498311e8c3e8fec60a31e65493029eddfdba28c439a5db0fbd47bea07c06faf51fa75eeaed0d4150723d47dd0e85d493abaa138cbc318e3c35073b7220742258d1d478271a4aa0b40375784e20a0df0d4487c4375ebd0730514879ab87d213c901f1c6dc21d50cf0dba64efb92f7e18cc166343eab50bea25107b211186dbd6a654df15d410a142d653feaf6e00c8d52cb65cb4bd190f22e376667e7d03d4af0a591d794398220e8ab9653931a7c67876a35252e287be11f82e6215f309e893391083149085d4b4b78cc865b339f22904ed19b060b34d508d438c786cebb5898ed7340823cd1301c31406b9dcd4e8c47c4ac0d8716441c939797ddbc75211a57c6a241bf0499a0389e0e9c1db25598a78e8fd6075a5a05a3c311963b3a538d4008b561c4eed6b1400996d6216804fcbc2bed912d20deab8ec7cc5ccae0a30812361084385fd09bbd70d84984de8c07a97ee8776a84baef0fa154df1453e1e767496869a8f67c431cdc749ecd6e407e67f80ad045fb2159f1e6f756fc568ada9c361b385cf37d225daa2b276032b3ccb218318c5d07560054a05f1db287db22a6fe8f1e57ea7b94506793d7209ffcfeb8b5d0959a50f76289d2531f3c2a2db7fe5c3b87b29b2c9a5bad6f18726d7ac086b608b5829a9cc7061cccc8566edcf5a7e39eae382bac6b114e565d185c0931d2419e2137885bdc9026c6f5df2b87ad53cdf5e7568c9200b949ac1d27bf59d59762505684a7902d90397736dc61d431bc2a6c6f948359ddb08fa0ecc14e003e4cbb176ffc578209e443506e19a2ff2cc1c50f9b34b47a0ba03b6818e84cfe297213e34b9eca7c7921437f41c21987e237520d42",
+        "publicKey": "a02a0551140120454eb0317f640c66722debaf3981ff2eeab530ce73014de579",
+        "targetKey": "d044f5289ccc3b44eceb8ceaca76f89914aa55a41407e163668d78a7cf04312c"
+      },
+      "wire": {
+        "baseIndex": 0,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "8e48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a",
+        "version": 2
+      }
+    },
+    {
+      "expect": {
+        "keyImage": "4407a54179ff1f74a7cd9766e4cb79df0f9255cb7a11c85d332914307b40f503",
+        "subaddressIndex": 0
+      },
+      "name": "hybrid payout at baseIndex 3",
+      "output": {
+        "kemCiphertext": "a37712c3d97190b1eaa2cabda83f4286b3e8af2cf78cb03dcf45614599368a3e18aca8b043c5357eba8ec28c6ad8d37dc22c2c1ccb599842fbb2ad4e28a1f5ec339f9f7f9b2fba7ba41d3cfd1df1b3c0b0b1294e48a7a00e45064cfd27fe5f2384f004f711c6d4d30501483953d081eaf10f8d2112b5ec4d00b205737e03ef9140f183119d6038753c9a33f089ed3bc5313d80c486f824162055bd9e1872af470d92f3ae1d0e5686b279235a04445e2af74342b42f1104cb32c5b19cbbea6cb5a7b83443eec2197cd82ceff183261a59c57ded9117b6cc0657c8fab6887a573216f1e681cabd7e1896d3dd0f2d9686f4d12c0dee2f442d36034c77392502ad732e46524a461122ad8713056cd9f58b85a9a0494ebe4ffe28a334f54aac5b07d6103722ae6fb72717c5c3c82556a04eb9936cc4441ddcac487f287131225b6d04561a72359797ddc5b11522cb80dbc255175709d174d016c2ad2743782b8d34b2749883e56593e62c1fed0c199395068cdb5d730c59dea6606ccfddb6499b0dc7f933edfa19747d8f889a078d64f4b7fedf52cc87db17cb81cd347d2d605ec52565a204ac49395b9befd9b058126d7f05a640501fcb94096f77e135e02ba51ca883e7e5559d176801c01e12a1bb4ee16bdbc741dadc7f59e33737d1508646db54903a383dd0bd92cf68ff58bda16b850b05f47e7aae8e4bbe06ae8bb1cd7da52244f43e84167003cf39a8dd350e8cd60b15b1a9611812742fc737211f8071ca1b5e7c551d3e7e8b79a930637e84a5ef422b2c2f4580b727b6ecb9ba73290283d7b1019bf686a24114aa40babbddbe1833511070dd5d56093edbe458600b93d5c16d5fb4de99635d01f278e7b6d65b83beea0da092d0fb3e695a07ecf8cd41e152fc7ea25ab3ad3351cb6f3a8aaa5eec00bbd328adfc6786ec859296132dd817cd14a9512256b27c5019eaf59334314bcd07d3294d1774307bc834e558711ea0379dac0b6d08a9ef2daf05a6633cdacf7ad61f973c54a60366398c5512999095efb8e54d8c763305233943d655a2415284c2384d8bc7843a83acf2498a784cb2fa01515361ebd39ed5ad2bafecba3c5536384a8520bb2365fd36eaafe5fd498912ed5618885f101672ee6d09d77e363fb1e88beae7bc41afda3cb2e545d984553dc88c5777cb3e6b8794ea442bac03f06b346d2c3f0d3069bd6f6456316e1c615b2e4f7e4884bfa94ca9da7b874634f04c035cdf86d7d0fe95400f0158295df8714a93120d2ae490d3cc9e16983f98b79ec57a06d43c4981ab4c8cbe271e11c50aa008bfce3ea7d256a2498c64843aa7d8cbda7bc5145f9c2ae4c46b3707fb762c8b2d2cc2e06387eb9d293947c769b137fa90678e878a585d085d02314ed908429193a07c2c90de39360247b6a54f349e73691c0049fa034bc797c2699ccee1f8f3312ac0d875b05b7af5e1d0884c8180325fb5a42e1044f2b7271e5154f33f27de4dc5714d001a8b852a79da6f1bcda17cfe225ece69d4f44ecdcfd716c1d269",
+        "publicKey": "7e6747b41b1dfd7a9c2a6bc307b04a5c89c1c6e8821889c834a17d03dbcf7961",
+        "targetKey": "20493f4706841dbe84ba0c506b058c573e70e434b284a6f8191cd04d8686b448"
+      },
+      "source": {
+        "kemCiphertext": "a37712c3d97190b1eaa2cabda83f4286b3e8af2cf78cb03dcf45614599368a3e18aca8b043c5357eba8ec28c6ad8d37dc22c2c1ccb599842fbb2ad4e28a1f5ec339f9f7f9b2fba7ba41d3cfd1df1b3c0b0b1294e48a7a00e45064cfd27fe5f2384f004f711c6d4d30501483953d081eaf10f8d2112b5ec4d00b205737e03ef9140f183119d6038753c9a33f089ed3bc5313d80c486f824162055bd9e1872af470d92f3ae1d0e5686b279235a04445e2af74342b42f1104cb32c5b19cbbea6cb5a7b83443eec2197cd82ceff183261a59c57ded9117b6cc0657c8fab6887a573216f1e681cabd7e1896d3dd0f2d9686f4d12c0dee2f442d36034c77392502ad732e46524a461122ad8713056cd9f58b85a9a0494ebe4ffe28a334f54aac5b07d6103722ae6fb72717c5c3c82556a04eb9936cc4441ddcac487f287131225b6d04561a72359797ddc5b11522cb80dbc255175709d174d016c2ad2743782b8d34b2749883e56593e62c1fed0c199395068cdb5d730c59dea6606ccfddb6499b0dc7f933edfa19747d8f889a078d64f4b7fedf52cc87db17cb81cd347d2d605ec52565a204ac49395b9befd9b058126d7f05a640501fcb94096f77e135e02ba51ca883e7e5559d176801c01e12a1bb4ee16bdbc741dadc7f59e33737d1508646db54903a383dd0bd92cf68ff58bda16b850b05f47e7aae8e4bbe06ae8bb1cd7da52244f43e84167003cf39a8dd350e8cd60b15b1a9611812742fc737211f8071ca1b5e7c551d3e7e8b79a930637e84a5ef422b2c2f4580b727b6ecb9ba73290283d7b1019bf686a24114aa40babbddbe1833511070dd5d56093edbe458600b93d5c16d5fb4de99635d01f278e7b6d65b83beea0da092d0fb3e695a07ecf8cd41e152fc7ea25ab3ad3351cb6f3a8aaa5eec00bbd328adfc6786ec859296132dd817cd14a9512256b27c5019eaf59334314bcd07d3294d1774307bc834e558711ea0379dac0b6d08a9ef2daf05a6633cdacf7ad61f973c54a60366398c5512999095efb8e54d8c763305233943d655a2415284c2384d8bc7843a83acf2498a784cb2fa01515361ebd39ed5ad2bafecba3c5536384a8520bb2365fd36eaafe5fd498912ed5618885f101672ee6d09d77e363fb1e88beae7bc41afda3cb2e545d984553dc88c5777cb3e6b8794ea442bac03f06b346d2c3f0d3069bd6f6456316e1c615b2e4f7e4884bfa94ca9da7b874634f04c035cdf86d7d0fe95400f0158295df8714a93120d2ae490d3cc9e16983f98b79ec57a06d43c4981ab4c8cbe271e11c50aa008bfce3ea7d256a2498c64843aa7d8cbda7bc5145f9c2ae4c46b3707fb762c8b2d2cc2e06387eb9d293947c769b137fa90678e878a585d085d02314ed908429193a07c2c90de39360247b6a54f349e73691c0049fa034bc797c2699ccee1f8f3312ac0d875b05b7af5e1d0884c8180325fb5a42e1044f2b7271e5154f33f27de4dc5714d001a8b852a79da6f1bcda17cfe225ece69d4f44ecdcfd716c1d269",
+        "publicKey": "7e6747b41b1dfd7a9c2a6bc307b04a5c89c1c6e8821889c834a17d03dbcf7961",
+        "targetKey": "ba4dfd3a14f6ff20e4fc62f3169db9fb3dce411f6cc0a9b7bfb1571acd45c004"
+      },
+      "wire": {
+        "baseIndex": 3,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "8e48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a",
+        "version": 2
+      }
+    },
+    {
+      "expect": null,
+      "name": "hybrid payout, wrong baseIndex",
+      "output": {
+        "kemCiphertext": "a37712c3d97190b1eaa2cabda83f4286b3e8af2cf78cb03dcf45614599368a3e18aca8b043c5357eba8ec28c6ad8d37dc22c2c1ccb599842fbb2ad4e28a1f5ec339f9f7f9b2fba7ba41d3cfd1df1b3c0b0b1294e48a7a00e45064cfd27fe5f2384f004f711c6d4d30501483953d081eaf10f8d2112b5ec4d00b205737e03ef9140f183119d6038753c9a33f089ed3bc5313d80c486f824162055bd9e1872af470d92f3ae1d0e5686b279235a04445e2af74342b42f1104cb32c5b19cbbea6cb5a7b83443eec2197cd82ceff183261a59c57ded9117b6cc0657c8fab6887a573216f1e681cabd7e1896d3dd0f2d9686f4d12c0dee2f442d36034c77392502ad732e46524a461122ad8713056cd9f58b85a9a0494ebe4ffe28a334f54aac5b07d6103722ae6fb72717c5c3c82556a04eb9936cc4441ddcac487f287131225b6d04561a72359797ddc5b11522cb80dbc255175709d174d016c2ad2743782b8d34b2749883e56593e62c1fed0c199395068cdb5d730c59dea6606ccfddb6499b0dc7f933edfa19747d8f889a078d64f4b7fedf52cc87db17cb81cd347d2d605ec52565a204ac49395b9befd9b058126d7f05a640501fcb94096f77e135e02ba51ca883e7e5559d176801c01e12a1bb4ee16bdbc741dadc7f59e33737d1508646db54903a383dd0bd92cf68ff58bda16b850b05f47e7aae8e4bbe06ae8bb1cd7da52244f43e84167003cf39a8dd350e8cd60b15b1a9611812742fc737211f8071ca1b5e7c551d3e7e8b79a930637e84a5ef422b2c2f4580b727b6ecb9ba73290283d7b1019bf686a24114aa40babbddbe1833511070dd5d56093edbe458600b93d5c16d5fb4de99635d01f278e7b6d65b83beea0da092d0fb3e695a07ecf8cd41e152fc7ea25ab3ad3351cb6f3a8aaa5eec00bbd328adfc6786ec859296132dd817cd14a9512256b27c5019eaf59334314bcd07d3294d1774307bc834e558711ea0379dac0b6d08a9ef2daf05a6633cdacf7ad61f973c54a60366398c5512999095efb8e54d8c763305233943d655a2415284c2384d8bc7843a83acf2498a784cb2fa01515361ebd39ed5ad2bafecba3c5536384a8520bb2365fd36eaafe5fd498912ed5618885f101672ee6d09d77e363fb1e88beae7bc41afda3cb2e545d984553dc88c5777cb3e6b8794ea442bac03f06b346d2c3f0d3069bd6f6456316e1c615b2e4f7e4884bfa94ca9da7b874634f04c035cdf86d7d0fe95400f0158295df8714a93120d2ae490d3cc9e16983f98b79ec57a06d43c4981ab4c8cbe271e11c50aa008bfce3ea7d256a2498c64843aa7d8cbda7bc5145f9c2ae4c46b3707fb762c8b2d2cc2e06387eb9d293947c769b137fa90678e878a585d085d02314ed908429193a07c2c90de39360247b6a54f349e73691c0049fa034bc797c2699ccee1f8f3312ac0d875b05b7af5e1d0884c8180325fb5a42e1044f2b7271e5154f33f27de4dc5714d001a8b852a79da6f1bcda17cfe225ece69d4f44ecdcfd716c1d269",
+        "publicKey": "7e6747b41b1dfd7a9c2a6bc307b04a5c89c1c6e8821889c834a17d03dbcf7961",
+        "targetKey": "20493f4706841dbe84ba0c506b058c573e70e434b284a6f8191cd04d8686b448"
+      },
+      "wire": {
+        "baseIndex": 2,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "8e48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a",
+        "version": 2
+      }
+    },
+    {
+      "expect": null,
+      "name": "hybrid payout, forged tweak",
+      "output": {
+        "kemCiphertext": "a37712c3d97190b1eaa2cabda83f4286b3e8af2cf78cb03dcf45614599368a3e18aca8b043c5357eba8ec28c6ad8d37dc22c2c1ccb599842fbb2ad4e28a1f5ec339f9f7f9b2fba7ba41d3cfd1df1b3c0b0b1294e48a7a00e45064cfd27fe5f2384f004f711c6d4d30501483953d081eaf10f8d2112b5ec4d00b205737e03ef9140f183119d6038753c9a33f089ed3bc5313d80c486f824162055bd9e1872af470d92f3ae1d0e5686b279235a04445e2af74342b42f1104cb32c5b19cbbea6cb5a7b83443eec2197cd82ceff183261a59c57ded9117b6cc0657c8fab6887a573216f1e681cabd7e1896d3dd0f2d9686f4d12c0dee2f442d36034c77392502ad732e46524a461122ad8713056cd9f58b85a9a0494ebe4ffe28a334f54aac5b07d6103722ae6fb72717c5c3c82556a04eb9936cc4441ddcac487f287131225b6d04561a72359797ddc5b11522cb80dbc255175709d174d016c2ad2743782b8d34b2749883e56593e62c1fed0c199395068cdb5d730c59dea6606ccfddb6499b0dc7f933edfa19747d8f889a078d64f4b7fedf52cc87db17cb81cd347d2d605ec52565a204ac49395b9befd9b058126d7f05a640501fcb94096f77e135e02ba51ca883e7e5559d176801c01e12a1bb4ee16bdbc741dadc7f59e33737d1508646db54903a383dd0bd92cf68ff58bda16b850b05f47e7aae8e4bbe06ae8bb1cd7da52244f43e84167003cf39a8dd350e8cd60b15b1a9611812742fc737211f8071ca1b5e7c551d3e7e8b79a930637e84a5ef422b2c2f4580b727b6ecb9ba73290283d7b1019bf686a24114aa40babbddbe1833511070dd5d56093edbe458600b93d5c16d5fb4de99635d01f278e7b6d65b83beea0da092d0fb3e695a07ecf8cd41e152fc7ea25ab3ad3351cb6f3a8aaa5eec00bbd328adfc6786ec859296132dd817cd14a9512256b27c5019eaf59334314bcd07d3294d1774307bc834e558711ea0379dac0b6d08a9ef2daf05a6633cdacf7ad61f973c54a60366398c5512999095efb8e54d8c763305233943d655a2415284c2384d8bc7843a83acf2498a784cb2fa01515361ebd39ed5ad2bafecba3c5536384a8520bb2365fd36eaafe5fd498912ed5618885f101672ee6d09d77e363fb1e88beae7bc41afda3cb2e545d984553dc88c5777cb3e6b8794ea442bac03f06b346d2c3f0d3069bd6f6456316e1c615b2e4f7e4884bfa94ca9da7b874634f04c035cdf86d7d0fe95400f0158295df8714a93120d2ae490d3cc9e16983f98b79ec57a06d43c4981ab4c8cbe271e11c50aa008bfce3ea7d256a2498c64843aa7d8cbda7bc5145f9c2ae4c46b3707fb762c8b2d2cc2e06387eb9d293947c769b137fa90678e878a585d085d02314ed908429193a07c2c90de39360247b6a54f349e73691c0049fa034bc797c2699ccee1f8f3312ac0d875b05b7af5e1d0884c8180325fb5a42e1044f2b7271e5154f33f27de4dc5714d001a8b852a79da6f1bcda17cfe225ece69d4f44ecdcfd716c1d269",
+        "publicKey": "7e6747b41b1dfd7a9c2a6bc307b04a5c89c1c6e8821889c834a17d03dbcf7961",
+        "targetKey": "20493f4706841dbe84ba0c506b058c573e70e434b284a6f8191cd04d8686b448"
+      },
+      "wire": {
+        "baseIndex": 3,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "8f48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a",
+        "version": 2
+      }
+    },
+    {
+      "expect": null,
+      "name": "classical payout, forged tweak",
+      "output": {
+        "kemCiphertext": null,
+        "publicKey": "b829035e5ffae8fbc02508fec3720418f6b45cd1674461a592408e18bd0ce121",
+        "targetKey": "968b3f0107c01c7a4b6558f11d6664acf3b6510a479d5d83341fc82c0b431827"
+      },
+      "wire": {
+        "baseIndex": 0,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "8f48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a",
+        "version": 2
+      }
+    },
+    {
+      "expect": null,
+      "name": "foreign payout",
+      "output": {
+        "kemCiphertext": null,
+        "publicKey": "3aee6215b8b5e7aabd347748ba5f1af972f02ea684ef4ee2450e360608ddb402",
+        "targetKey": "86c6580e2027d8d3ebea584b4c52cab45a92dd6c98eebce7f9cb670c1fc2e868"
+      },
+      "wire": {
+        "baseIndex": 0,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "8e48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a",
+        "version": 2
+      }
+    },
+    {
+      "expect": null,
+      "name": "untweaked source under a payout context",
+      "output": {
+        "kemCiphertext": null,
+        "publicKey": "b829035e5ffae8fbc02508fec3720418f6b45cd1674461a592408e18bd0ce121",
+        "targetKey": "9c79391925530a12ccd82ebfb3b582b1800943e704027d8c3f4e74d23e2ffb63"
+      },
+      "wire": {
+        "baseIndex": 0,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "8e48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a",
+        "version": 2
+      }
+    }
+  ],
+  "version": 1
+}

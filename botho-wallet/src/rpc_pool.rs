@@ -613,7 +613,7 @@ impl LotteryContext {
     /// noncanonical scalar and the zero tweak (a payout always carries a
     /// nonzero cumulative tweak). Syntax only: see the type-level trust note.
     pub fn derivation(&self) -> Option<bth_transaction_clsag::lottery_v2::Context> {
-        use bth_transaction_clsag::lottery_v2::Context;
+        use bth_transaction_clsag::lottery_v2;
         if self.version != LOTTERY_CONTEXT_VERSION
             || self.tweak.len() != 64
             || !self
@@ -624,16 +624,9 @@ impl LotteryContext {
             return None;
         }
         let tweak: [u8; 32] = hex::decode(&self.tweak).ok()?.try_into().ok()?;
-        if tweak == [0; 32] {
-            return None;
-        }
-        let context = Context {
-            base_index: self.base_index,
-            tweak,
-        };
-        // `encode` enforces the canonical-scalar rule.
-        context.encode().ok()?;
-        Some(context)
+        // The shared semantic rule (version, zero and non-canonical tweak,
+        // #1667); the lowercase-hex syntax above is this wallet's own.
+        lottery_v2::payout_context(self.version, self.base_index, tweak).ok()
     }
 }
 

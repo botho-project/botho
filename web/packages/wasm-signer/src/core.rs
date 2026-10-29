@@ -117,17 +117,15 @@ impl LotteryContext {
             ));
         }
         let tweak = parse_hex_32("lotteryContext.tweak", &self.tweak)?;
-        if tweak == [0u8; 32] {
-            return Err("lotteryContext.tweak: zero tweak is not a V2 payout".to_string());
-        }
-        let context = lottery_v2::Context {
-            base_index: self.base_index,
-            tweak,
-        };
-        context
-            .encode()
-            .map_err(|e| format!("lotteryContext: invalid context: {e:?}"))?;
-        Ok(context)
+        // The semantic rules (version, zero and non-canonical tweak) are the
+        // shared `lottery_v2::payout_context` (#1667); only the hex syntax and
+        // the error strings are this crate's.
+        lottery_v2::payout_context(self.version, self.base_index, tweak).map_err(|e| match e {
+            lottery_v2::Error::ZeroTweak => {
+                "lotteryContext.tweak: zero tweak is not a V2 payout".to_string()
+            }
+            e => format!("lotteryContext: invalid context: {e:?}"),
+        })
     }
 }
 
@@ -852,6 +850,12 @@ fn recover_ordinary(
 /// `x·G == P`. Returns the owning subaddress, or `None` when the payout is not
 /// ours OR the context is malformed / forged (a forged context can only cause
 /// a missed payout, never a wrong key).
+///
+/// The payout rules are the shared [`lottery_v2::payout_context`] and
+/// [`lottery_v2::recover_payout_owner`] (#1667), which the bridge, botho-wallet
+/// and the node wallet also use; this crate supplies only its ordinary
+/// ownership rule. The shared vector
+/// `transaction/clsag/tests/fixtures/lottery-v2-wallet.json` pins it.
 pub fn detect_lottery_payout(
     output: &TxOutput,
     account: &AccountKey,
@@ -859,14 +863,13 @@ pub fn detect_lottery_payout(
     context: &LotteryContext,
 ) -> Option<u64> {
     let context = context.to_context().ok()?;
-    let mut owner = None;
-    lottery_v2::recover_with_context(output, &context, |base, index| {
+    let (owner, _) = lottery_v2::recover_payout_owner(output, &context, |base, index| {
         let subaddress_index = detect_ordinary(base, account, kem_keypair, index)?;
-        owner = Some(subaddress_index);
-        recover_ordinary(base, account, kem_keypair, subaddress_index, index)
+        let key = recover_ordinary(base, account, kem_keypair, subaddress_index, index)?;
+        Some((subaddress_index, key))
     })
     .ok()?;
-    owner
+    Some(owner)
 }
 
 /// Recover an owned output's one-time private key on the single shared path
