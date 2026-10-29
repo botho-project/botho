@@ -5,7 +5,10 @@
 //! it. The separate `validated` child owns an inactive accepted local chain;
 //! fixture storage is never converted into that handle. No real caller
 //! exposure.
+// The V2 rule types (StoredContext, Reader) live in the shared production
+// rule module (#1637); this private store only persists them.
 use super::{
+    lottery_v2::{Reader, StoredContext},
     store::writer::{Representation, WriteTables},
     EmissionStateUpdate, LedgerError,
 };
@@ -14,8 +17,11 @@ use crate::{
     transaction::{Utxo, UtxoId},
 };
 use bincode::Options;
+#[cfg(test)]
 use bth_crypto_ring_signature::Scalar;
-use bth_transaction_clsag::lottery_v2::{Context, Record, CANDIDATE_MAX_AWARDS};
+#[cfg(test)]
+use bth_transaction_clsag::lottery_v2::Context;
+use bth_transaction_clsag::lottery_v2::{Record, CANDIDATE_MAX_AWARDS};
 use heed::{
     types::{Bytes, U64},
     Database, Env, RoTxn,
@@ -144,96 +150,6 @@ impl Envelope {
         r.end()?;
         let result = Self { block, records };
         result.check()?;
-        Ok(result)
-    }
-}
-
-struct Reader<'a>(&'a [u8]);
-impl<'a> Reader<'a> {
-    fn take(&mut self, n: usize) -> Result<&'a [u8], LedgerError> {
-        let (a, b) = self
-            .0
-            .split_at_checked(n)
-            .ok_or_else(|| encoding("truncated"))?;
-        self.0 = b;
-        Ok(a)
-    }
-    fn u32(&mut self) -> Result<u32, LedgerError> {
-        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
-    }
-    fn u64(&mut self) -> Result<u64, LedgerError> {
-        Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
-    }
-    fn end(self) -> Result<(), LedgerError> {
-        if self.0.is_empty() {
-            Ok(())
-        } else {
-            Err(encoding("trailing bytes"))
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum StoredContext {
-    Direct {
-        height: u64,
-        base_index: u32,
-    },
-    Lottery {
-        height: u64,
-        ordinal: u32,
-        context: Context,
-    },
-}
-impl StoredContext {
-    fn height(&self) -> u64 {
-        match self {
-            Self::Direct { height, .. } | Self::Lottery { height, .. } => *height,
-        }
-    }
-    fn derivation(&self) -> Context {
-        match self {
-            Self::Direct { base_index, .. } => Context {
-                base_index: *base_index,
-                tweak: [0; 32],
-            },
-            Self::Lottery { context, .. } => context.clone(),
-        }
-    }
-    pub(super) fn encode(&self) -> Result<Vec<u8>, LedgerError> {
-        let mut out = vec![match self {
-            Self::Direct { .. } => 0,
-            Self::Lottery { .. } => 2,
-        }];
-        out.extend(self.height().to_le_bytes());
-        let c = self.derivation();
-        if Option::<Scalar>::from(Scalar::from_canonical_bytes(c.tweak)).is_none() {
-            return Err(encoding("noncanonical tweak"));
-        }
-        out.extend(c.base_index.to_le_bytes());
-        out.extend(c.tweak);
-        if let Self::Lottery { ordinal, .. } = self {
-            out.extend(ordinal.to_le_bytes());
-        }
-        Ok(out)
-    }
-    fn decode(bytes: &[u8]) -> Result<Self, LedgerError> {
-        let mut r = Reader(bytes);
-        let tag = r.take(1)?[0];
-        let height = r.u64()?;
-        let base_index = r.u32()?;
-        let tweak = r.take(32)?.try_into().unwrap();
-        let result = match tag {
-            0 if tweak == [0; 32] => Self::Direct { height, base_index },
-            2 => Self::Lottery {
-                height,
-                ordinal: r.u32()?,
-                context: Context { base_index, tweak },
-            },
-            _ => return Err(encoding("context tag or direct tweak")),
-        };
-        r.end()?;
-        result.encode()?;
         Ok(result)
     }
 }

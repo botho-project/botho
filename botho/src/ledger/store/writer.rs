@@ -2,7 +2,7 @@
 //! encoding. This module is private to the ledger. Representation is NOT a
 //! validation token.
 use super::*;
-use crate::ledger::experimental::StoredContext;
+use crate::ledger::lottery_v2::StoredContext;
 use bth_transaction_clsag::lottery_v2::Record;
 #[derive(Clone, Copy)]
 pub(in crate::ledger) struct WriteTables {
