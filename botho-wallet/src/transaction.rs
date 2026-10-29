@@ -7,12 +7,13 @@ use anyhow::{anyhow, Result};
 #[cfg(feature = "pq")]
 use bth_account_keys::QuantumSafeAccountKey;
 use bth_account_keys::{AccountKey, PublicAddress};
-use bth_crypto_keys::RistrettoPrivate;
-#[cfg(test)]
-use bth_crypto_keys::RistrettoPublic;
+use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
 #[cfg(test)]
 use bth_crypto_ring_signature::onetime_keys::recover_public_subaddress_spend_key;
-use bth_transaction_clsag::{ClsagRingInput, RingMember, Transaction, TxOutput, MIN_RING_SIZE};
+use bth_crypto_ring_signature::Scalar;
+use bth_transaction_clsag::{
+    lottery_v2, ClsagRingInput, RingMember, Transaction, TxOutput, MIN_RING_SIZE,
+};
 use bth_transaction_types::{ClusterId, ClusterTagEntry, ClusterTagVector};
 use bth_util_from_random::OsRng;
 use rand::seq::SliceRandom;
@@ -22,7 +23,7 @@ use crate::{
     fee_estimation::StoredTags,
     keys::WalletKeys,
     ring_builder::{canonical_rpc_history, select_rpc_decoys_from_history},
-    rpc_pool::{BlockOutputs, RpcPool},
+    rpc_pool::{output_derivation, BlockOutputs, LotteryContext, OutputDerivation, RpcPool},
 };
 
 // The real transaction format lives in `bth-transaction-clsag` (the same crate
@@ -69,10 +70,17 @@ pub struct OwnedUtxo {
     /// records.
     #[serde(default)]
     pub coinbase: bool,
-    /// Preserve the discriminator for scanned legacy receipts. Accounting
-    /// records do not imply an independently spendable payout (#1286).
+    /// Lottery payout discriminator. With no [`Self::lottery_context`] this
+    /// is a legacy receipt: retained for accounting, never independently
+    /// spendable (#1286, #1450).
     #[serde(default)]
     pub lottery: bool,
+    /// V2 lottery payout derivation context (#1642). Present only on V2
+    /// payouts; it makes the payout independently spendable under its own
+    /// key `x_base + T`. `serde(default)` keeps older caches loadable, and an
+    /// older cache's payouts stay legacy until a rescan.
+    #[serde(default)]
+    pub lottery_context: Option<LotteryContext>,
     /// Amount in picocredits
     pub amount: u64,
     /// Block height where created
@@ -105,6 +113,22 @@ impl OwnedUtxo {
         }
     }
 
+    /// A legacy (context-less) lottery receipt, which cannot be spent.
+    pub fn is_legacy_lottery(&self) -> bool {
+        self.lottery && self.lottery_context.is_none()
+    }
+
+    /// This UTXO's derivation, or `None` for inconsistent metadata.
+    fn derivation(&self) -> Option<OutputDerivation> {
+        output_derivation(
+            self.output_index,
+            self.coinbase,
+            self.lottery,
+            self.crypto_output_index,
+            self.lottery_context.as_ref(),
+        )
+    }
+
     /// Get cluster tags for fee estimation, returning empty tags if not set.
     pub fn tags(&self) -> StoredTags {
         self.cluster_tags.clone().unwrap_or_default()
@@ -132,28 +156,60 @@ impl OwnedUtxo {
     /// classical stealth derivation; a classical/legacy UTXO uses the pure
     /// view-key path. Both dispatch through
     /// [`TxOutput::recover_spend_key_for`].
+    ///
+    /// A V2 lottery payout goes through
+    /// [`lottery_v2::recover_with_context`]: the base key is recovered for the
+    /// base target `P − T·G` at the context's base index, then `x_base + T` is
+    /// returned only if it proves `x·G = P` for this UTXO's own target.
     pub fn recover_spend_key(&self, keys: &WalletKeys) -> Option<RistrettoPrivate> {
-        let crypto_index = crate::rpc_pool::crypto_output_index(
-            self.output_index,
-            self.coinbase,
-            self.crypto_output_index,
-        )?;
         let output = self.as_tx_output();
-        #[cfg(feature = "pq")]
-        {
-            output.recover_spend_key_for(
-                keys.account_key(),
-                keys.pq_account_key().pq_kem_keypair(),
-                self.subaddress_index,
-                crypto_index,
-            )
-        }
-        #[cfg(not(feature = "pq"))]
-        {
-            let _ = crypto_index;
-            output.recover_spend_key(keys.account_key(), self.subaddress_index)
+        match self.derivation()? {
+            OutputDerivation::Direct { index } => {
+                recover_base_key(&output, keys, self.subaddress_index, index)
+            }
+            OutputDerivation::LotteryV2 { context } => {
+                lottery_v2::recover_with_context(&output, &context, |base, index| {
+                    recover_base_key(base, keys, self.subaddress_index, index)
+                })
+                .ok()
+            }
         }
     }
+}
+
+/// Recover the one-time private key of a directly derived output (unified
+/// hybrid path, issue #970).
+fn recover_base_key(
+    output: &TxOutput,
+    keys: &WalletKeys,
+    subaddress_index: u64,
+    crypto_index: u32,
+) -> Option<RistrettoPrivate> {
+    #[cfg(feature = "pq")]
+    {
+        output.recover_spend_key_for(
+            keys.account_key(),
+            keys.pq_account_key().pq_kem_keypair(),
+            subaddress_index,
+            crypto_index,
+        )
+    }
+    #[cfg(not(feature = "pq"))]
+    {
+        let _ = crypto_index;
+        output.recover_spend_key(keys.account_key(), subaddress_index)
+    }
+}
+
+/// The base target `P − T·G` a V2 payout with target `P` and cumulative tweak
+/// `T` is scanned against. `None` for a malformed target or tweak, or an
+/// identity base.
+fn lottery_base_target(target_key: &[u8; 32], tweak: &[u8; 32]) -> Option<[u8; 32]> {
+    let target = RistrettoPublic::try_from(&target_key[..]).ok()?;
+    let tweak = Option::<Scalar>::from(Scalar::from_canonical_bytes(*tweak))?;
+    let tweak_point = RistrettoPublic::from(&RistrettoPrivate::from(tweak));
+    let base = RistrettoPublic::from(target.as_ref() - tweak_point.as_ref()).to_bytes();
+    (base != [0; 32]).then_some(base)
 }
 
 /// UTXO identifier
@@ -378,7 +434,7 @@ impl TransactionBuilder {
         total_selected: u64,
         decoy_rings: Vec<Vec<RingMember>>,
     ) -> Result<TransferResult> {
-        if selected.iter().any(|utxo| utxo.lottery) {
+        if selected.iter().any(OwnedUtxo::is_legacy_lottery) {
             return Err(anyhow!(
                 "Legacy lottery payouts cannot be spent independently yet"
             ));
@@ -531,13 +587,14 @@ impl TransactionBuilder {
             return Err(anyhow!("No UTXOs available"));
         }
 
-        // Keep payout receipts in balances while preferring independently
-        // spendable inputs. If those cannot fund the payment, explain why.
-        let has_legacy_payouts = self.utxos.iter().any(|utxo| utxo.lottery);
+        // Keep legacy payout receipts in balances while selecting only
+        // independently spendable inputs (ordinary outputs and V2 payouts).
+        // If those cannot fund the payment, explain why.
+        let has_legacy_payouts = self.utxos.iter().any(OwnedUtxo::is_legacy_lottery);
         let mut sorted: Vec<_> = self
             .utxos
             .iter()
-            .filter(|utxo| !utxo.lottery)
+            .filter(|utxo| !utxo.is_legacy_lottery())
             .cloned()
             .collect();
         sorted.sort_by_key(|utxo| utxo.created_at);
@@ -604,11 +661,7 @@ impl<'a> WalletScanner<'a> {
 
         for block in block_outputs {
             for output in &block.outputs {
-                let Some(crypto_index) = crate::rpc_pool::crypto_output_index(
-                    output.output_index,
-                    output.coinbase,
-                    output.crypto_output_index,
-                ) else {
+                let Some(derivation) = output.derivation() else {
                     tracing::warn!("Skipping output with inconsistent crypto-index metadata");
                     continue;
                 };
@@ -636,10 +689,23 @@ impl<'a> WalletScanner<'a> {
                     .as_ref()
                     .and_then(|s| hex::decode(s).ok());
 
+                // A V2 lottery payout `P = P_base + T·G` is checked against its
+                // base target `P − T·G` at the base index `j`. Recovery later
+                // proves `x·G = P`; a forged tweak or index finds no owner.
+                let (scan_target, crypto_index, lottery_context) = match derivation {
+                    OutputDerivation::Direct { index } => (target_key, index, None),
+                    OutputDerivation::LotteryV2 { context } => {
+                        let Some(base) = lottery_base_target(&target_key, &context.tweak) else {
+                            continue;
+                        };
+                        (base, context.base_index, output.lottery_context.clone())
+                    }
+                };
+
                 // Unified ownership check (hybrid decapsulation folded into the
                 // classical stealth check, or pure classical when KEM-less).
                 if let Some(subaddress_index) = self.check_ownership(
-                    &target_key,
+                    &scan_target,
                     &public_key,
                     kem_ciphertext.as_deref(),
                     crypto_index,
@@ -653,6 +719,7 @@ impl<'a> WalletScanner<'a> {
                         crypto_output_index: output.crypto_output_index,
                         coinbase: output.coinbase,
                         lottery: output.lottery,
+                        lottery_context,
                         amount,
                         created_at: block.height,
                         target_key,
@@ -904,6 +971,7 @@ mod tests {
                 crypto_output_index: None,
                 coinbase: false,
                 lottery: false,
+                lottery_context: None,
                 amount: 1_000_000_000_000, // 1 CAD
                 created_at: 1,
                 target_key: [0u8; 32],
@@ -918,6 +986,7 @@ mod tests {
                 crypto_output_index: None,
                 coinbase: false,
                 lottery: false,
+                lottery_context: None,
                 amount: 500_000_000_000, // 0.5 CAD
                 created_at: 2,
                 target_key: [0u8; 32],
@@ -956,6 +1025,7 @@ mod tests {
             crypto_output_index: None,
             coinbase: false,
             lottery: false,
+            lottery_context: None,
             amount,
             created_at,
             target_key: out.target_key,
@@ -1303,6 +1373,8 @@ mod tests {
                 crypto_output_index: None,
                 coinbase: false,
                 lottery: false,
+                lottery_context: None,
+                winner_outpoint: None,
                 ledger_outpoint: None,
                 target_key: hex::encode(out.target_key),
                 public_key: hex::encode(out.public_key),
@@ -1415,6 +1487,290 @@ mod tests {
                 scanner.scan_outputs(&blocks).is_empty(),
                 "a stranger's hybrid output must not be detected",
             );
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // V2 lottery payouts (#1642): payouts derived with the real
+    // `lottery_v2` rules and emitted in the frozen #1641 RPC row shape.
+    // ------------------------------------------------------------------
+    mod lottery_v2_payouts {
+        use super::*;
+        use crate::{
+            lottery_fixtures::{derive_payout, legacy_row, ordinary_row, payout_row, Payout},
+            ring_builder::{canonical_rpc_history, prepare_rpc_decoy_pool},
+        };
+        use bth_crypto_ring_signature::KeyImage;
+        use bth_transaction_clsag::lottery_v2::{Context, Outpoint};
+        use serde_json::json;
+
+        const SOURCE_INDEX: u32 = 3;
+        const SOURCE_HASH: [u8; 32] = [0x11; 32];
+        const PAYING_BLOCK: [u8; 32] = [0x22; 32];
+        const PAYOUT: u64 = 2_000_000_000_000;
+
+        fn source(keys: &WalletKeys) -> TxOutput {
+            TxOutput::new_hybrid_to_address(
+                5_000_000_000_000,
+                &keys.public_address(),
+                SOURCE_INDEX,
+                None,
+                ClusterTagVector::empty(),
+            )
+            .unwrap()
+        }
+
+        fn first_payout(src: &TxOutput) -> Payout {
+            derive_payout(
+                src,
+                Outpoint {
+                    hash: SOURCE_HASH,
+                    index: SOURCE_INDEX,
+                },
+                Context {
+                    base_index: SOURCE_INDEX,
+                    tweak: [0; 32],
+                },
+                800,
+                0,
+                PAYOUT,
+            )
+        }
+
+        fn history(rows: Vec<(u64, serde_json::Value)>) -> Vec<BlockOutputs> {
+            serde_json::from_value(json!(rows
+                .into_iter()
+                .map(|(height, row)| json!({"height": height, "outputs": [row]}))
+                .collect::<Vec<_>>()))
+            .unwrap()
+        }
+
+        fn fixture(keys: &WalletKeys) -> (TxOutput, Payout, Vec<BlockOutputs>) {
+            let src = source(keys);
+            let payout = first_payout(&src);
+            let blocks = history(vec![
+                (10, ordinary_row(&src, SOURCE_HASH, SOURCE_INDEX)),
+                (800, payout_row(&payout, PAYING_BLOCK, 1)),
+            ]);
+            (src, payout, blocks)
+        }
+
+        fn scan(keys: &WalletKeys, blocks: &[BlockOutputs]) -> Vec<OwnedUtxo> {
+            WalletScanner::new(keys).scan_outputs(blocks)
+        }
+
+        fn image(key: &RistrettoPrivate) -> [u8; 32] {
+            *KeyImage::from(key).as_bytes()
+        }
+
+        #[test]
+        fn v2_payout_is_discovered_through_its_base_target() {
+            let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+            let (src, payout, blocks) = fixture(&keys);
+            assert_ne!(payout.output.target_key, src.target_key);
+            let owned = scan(&keys, &blocks);
+            assert_eq!(owned.len(), 2, "source and payout are both owned");
+            let found = owned.iter().find(|u| u.lottery).unwrap();
+            assert_eq!(found.target_key, payout.output.target_key);
+            assert_eq!(found.output_index, 1);
+            assert_eq!(found.tx_hash, PAYING_BLOCK);
+            assert_eq!(found.crypto_output_index, Some(SOURCE_INDEX));
+            assert_eq!(found.amount, PAYOUT);
+            assert!(!found.is_legacy_lottery());
+            let context = found.lottery_context.as_ref().unwrap();
+            assert_eq!(context.base_index, SOURCE_INDEX);
+            assert_eq!(context.tweak, hex::encode(payout.context.tweak));
+            assert_eq!((context.ordinal, context.height), (0, 800));
+            assert_eq!(found.tags().tags, vec![(7, 1_000_000)]);
+            // The context survives a wallet-cache round trip.
+            let cached: OwnedUtxo =
+                serde_json::from_value(serde_json::to_value(found).unwrap()).unwrap();
+            assert_eq!(cached.lottery_context, found.lottery_context);
+        }
+
+        #[test]
+        fn v2_payout_key_proves_its_target_with_a_distinct_key_image() {
+            let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+            let (src, payout, blocks) = fixture(&keys);
+            let owned = scan(&keys, &blocks);
+            let source_utxo = owned.iter().find(|u| !u.lottery).unwrap();
+            let payout_utxo = owned.iter().find(|u| u.lottery).unwrap();
+            let source_key = source_utxo.recover_spend_key(&keys).unwrap();
+            let payout_key = payout_utxo.recover_spend_key(&keys).unwrap();
+            assert_eq!(
+                RistrettoPublic::from(&source_key).to_bytes(),
+                src.target_key
+            );
+            assert_eq!(
+                RistrettoPublic::from(&payout_key).to_bytes(),
+                payout.output.target_key,
+                "x·G = P for the payout's own target"
+            );
+            assert_ne!(image(&payout_key), image(&source_key));
+            // The recovered key is exactly x_base + T.
+            let base: &Scalar = source_key.as_ref();
+            let tweak = Scalar::from_canonical_bytes(payout.context.tweak).unwrap();
+            let payout_secret: &Scalar = payout_key.as_ref();
+            assert_eq!(*payout_secret, base + tweak);
+        }
+
+        #[test]
+        fn v2_payout_spend_verifies_and_source_stays_spendable() {
+            let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+            let recipient = WalletKeys::from_mnemonic(RECIPIENT_MNEMONIC)
+                .unwrap()
+                .public_address();
+            let (_, payout, blocks) = fixture(&keys);
+            let owned = scan(&keys, &blocks);
+            // V2 rows are canonical inputs but never decoys.
+            let canonical = canonical_rpc_history(&blocks);
+            assert_eq!(canonical.iter().map(|b| b.outputs.len()).sum::<usize>(), 2);
+            assert!(prepare_rpc_decoy_pool(&blocks, &[])
+                .iter()
+                .all(|m| m.target_key != payout.output.target_key));
+
+            let builder = TransactionBuilder::new(keys.clone(), owned.clone(), 1_000);
+            let (selected, _) = builder.select_inputs(5_000_000_000_001).unwrap();
+            assert_eq!(selected.len(), 2, "selection may use the V2 payout");
+
+            let mut images = Vec::new();
+            for utxo in owned {
+                let expected = image(&utxo.recover_spend_key(&keys).unwrap());
+                let tx = builder
+                    .build_signed_transaction(
+                        &recipient,
+                        PICOCREDITS_PER_CAD,
+                        MIN_TX_FEE,
+                        vec![utxo.clone()],
+                        utxo.amount,
+                        vec![fixture_decoys(MIN_RING_SIZE - 1)],
+                    )
+                    .expect("spend builds")
+                    .transaction;
+                assert!(tx.is_valid_structure().is_ok());
+                assert!(tx.verify_ring_signatures().is_ok(), "CLSAG verifies");
+                assert_eq!(tx.key_images(), vec![expected]);
+                images.push(expected);
+            }
+            assert_ne!(images[0], images[1], "source and payout spend separately");
+        }
+
+        #[test]
+        fn forged_context_yields_no_ownership() {
+            let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+            let (src, payout, _) = fixture(&keys);
+            let honest = payout_row(&payout, PAYING_BLOCK, 1);
+            let forged_tweak = Scalar::from(5u64).to_bytes();
+            let mut tweak = honest.clone();
+            tweak["lotteryContext"]["tweak"] = json!(hex::encode(forged_tweak));
+            let mut forgeries = vec![tweak];
+            #[cfg(feature = "pq")]
+            {
+                // The hybrid derivation binds the index; classical does not.
+                let mut index = honest.clone();
+                index["lotteryContext"]["baseIndex"] = json!(SOURCE_INDEX + 1);
+                index["cryptoOutputIndex"] = json!(SOURCE_INDEX + 1);
+                forgeries.push(index);
+            }
+            for forged in forgeries {
+                let owned = scan(&keys, &history(vec![(800, forged.clone())]));
+                assert!(owned.is_empty(), "forged context discovered: {forged}");
+            }
+            // A cached UTXO with a forged context never yields a key.
+            let blocks = history(vec![(800, honest)]);
+            let mut utxo = scan(&keys, &blocks).pop().unwrap();
+            utxo.lottery_context.as_mut().unwrap().tweak = hex::encode(forged_tweak);
+            assert!(utxo.recover_spend_key(&keys).is_none());
+            // Nor does the honest context applied to another target.
+            let mut moved = scan(&keys, &blocks).pop().unwrap();
+            moved.target_key = src.target_key;
+            assert!(moved.recover_spend_key(&keys).is_none());
+            // Malformed or inconsistent contexts are skipped, not reinterpreted.
+            for (field, value) in [
+                ("version", json!(1)),
+                (
+                    "tweak",
+                    json!(hex::encode(payout.context.tweak).to_uppercase()),
+                ),
+                ("tweak", json!(hex::encode([0u8; 32]))),
+                ("tweak", json!("ff".repeat(32))),
+            ] {
+                let mut row = payout_row(&payout, PAYING_BLOCK, 1);
+                row["lotteryContext"][field] = value;
+                assert!(scan(&keys, &history(vec![(800, row)])).is_empty());
+            }
+            let mut mismatched = payout_row(&payout, PAYING_BLOCK, 1);
+            mismatched["cryptoOutputIndex"] = json!(1);
+            assert!(scan(&keys, &history(vec![(800, mismatched)])).is_empty());
+            let mut unflagged = payout_row(&payout, PAYING_BLOCK, 1);
+            unflagged["lottery"] = json!(false);
+            assert!(scan(&keys, &history(vec![(800, unflagged)])).is_empty());
+        }
+
+        #[test]
+        fn legacy_context_less_payout_stays_excluded() {
+            let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+            let src = source(&keys);
+            let blocks = history(vec![
+                (10, ordinary_row(&src, SOURCE_HASH, SOURCE_INDEX)),
+                // Synthetic owned alias: a real hybrid V1 payout omits its
+                // recovery index, so reuse the source index to make it owned.
+                (800, legacy_row(&src, PAYING_BLOCK, SOURCE_INDEX, PAYOUT)),
+            ]);
+            let owned = scan(&keys, &blocks);
+            let legacy = owned.iter().find(|u| u.lottery).unwrap();
+            assert!(legacy.is_legacy_lottery() && legacy.lottery_context.is_none());
+            // Not canonical: the source keeps the target.
+            let canonical = canonical_rpc_history(&blocks);
+            assert_eq!(canonical.iter().map(|b| b.outputs.len()).sum::<usize>(), 1);
+            let builder = TransactionBuilder::new(keys, owned.clone(), 1_000);
+            assert_eq!(builder.balance(), 5_000_000_000_000 + PAYOUT);
+            let (selected, _) = builder.select_inputs(1).unwrap();
+            assert!(selected.iter().all(|u| !u.lottery));
+            assert!(builder
+                .build_signed_transaction(
+                    &WalletKeys::from_mnemonic(RECIPIENT_MNEMONIC)
+                        .unwrap()
+                        .public_address(),
+                    1,
+                    1,
+                    vec![legacy.clone()],
+                    PAYOUT,
+                    vec![],
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("Legacy lottery payouts"));
+        }
+
+        #[test]
+        fn nested_payout_of_a_payout_is_discovered_and_recovered() {
+            let keys = WalletKeys::from_mnemonic(TEST_MNEMONIC).unwrap();
+            let (_, first, mut blocks) = fixture(&keys);
+            let nested = derive_payout(
+                &first.output,
+                Outpoint {
+                    hash: PAYING_BLOCK,
+                    index: 1,
+                },
+                first.context.clone(),
+                1_700,
+                1,
+                PAYOUT / 2,
+            );
+            assert_eq!(nested.context.base_index, SOURCE_INDEX);
+            blocks.extend(history(vec![(1_700, payout_row(&nested, [0x33; 32], 2))]));
+            let owned = scan(&keys, &blocks);
+            assert_eq!(owned.len(), 3);
+            let images: std::collections::HashSet<_> = owned
+                .iter()
+                .map(|u| {
+                    let key = u.recover_spend_key(&keys).unwrap();
+                    assert_eq!(RistrettoPublic::from(&key).to_bytes(), u.target_key);
+                    image(&key)
+                })
+                .collect();
+            assert_eq!(images.len(), 3, "every lineage member has its own image");
         }
     }
 }

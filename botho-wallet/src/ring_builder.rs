@@ -122,10 +122,14 @@ pub async fn fetch_decoy_ring_members(
     )
 }
 
-/// Canonical ordinary outputs in validated chain order. Keep the first target
-/// across the entire supplied history, not the first target in an age window.
-/// Lottery receipts remain in scans/accounting but are never independently
-/// usable.
+/// Canonical outputs in validated chain order. Keep the first target across
+/// the entire supplied history, not the first target in an age window.
+///
+/// V2 lottery payouts (rows with a well-formed `lotteryContext`, #1641) have
+/// their own target `P_base + T·G` and are canonical, so they can be spent as
+/// inputs. Legacy (context-less) lottery receipts remain in scans/accounting
+/// but are never canonical or independently usable (#1450). Canonical is not
+/// the decoy set: [`prepare_rpc_decoy_pool`] still keeps every payout out.
 pub fn canonical_rpc_history(blocks: &[BlockOutputs]) -> Vec<BlockOutputs> {
     let mut ordered: Vec<_> = blocks.iter().collect();
     ordered.sort_by_key(|block| block.height);
@@ -141,7 +145,8 @@ pub fn canonical_rpc_history(blocks: &[BlockOutputs]) -> Vec<BlockOutputs> {
                     // Older RPC servers/caches include a synthetic genesis
                     // mint, but genesis creates no ledger outputs.
                     block.height > 0
-                        && !output.lottery
+                        && (!(output.lottery || output.lottery_context.is_some())
+                            || output.is_v2_lottery())
                         && parse_key32(&output.target_key).is_some_and(|key| seen.insert(key))
                 })
                 .cloned()
@@ -215,7 +220,9 @@ pub fn prepare_rpc_decoy_pool(
             // The original winner can be outside this requested age window.
             // Deduplicating this window by target key cannot make a legacy
             // payout agree with the ledger's canonical first-target lookup.
-            if out.lottery {
+            // V2 payouts are canonical but stay out of the decoy set for now
+            // (#1642): payout rings are a separate privacy decision.
+            if out.lottery || out.lottery_context.is_some() {
                 continue;
             }
             let member = match rpc_output_to_ring_member(out) {
@@ -282,6 +289,8 @@ mod tests {
             crypto_output_index: None,
             coinbase: false,
             lottery: false,
+            lottery_context: None,
+            winner_outpoint: None,
             ledger_outpoint: None,
             target_key: hex::encode(out.target_key),
             public_key: hex::encode(out.public_key),
@@ -448,5 +457,41 @@ mod tests {
             );
             assert_eq!(pool, vec![expected.clone()]);
         }
+    }
+
+    #[test]
+    fn v2_payouts_are_canonical_inputs_but_never_decoys() {
+        use crate::rpc_pool::LotteryContext;
+        let ordinary = random_rpc_output(50_000_000_000_000);
+        let mut v2 = random_rpc_output(20_000_000);
+        v2.lottery = true;
+        v2.output_index = 1;
+        v2.crypto_output_index = Some(4);
+        v2.lottery_context = Some(LotteryContext {
+            version: 2,
+            base_index: 4,
+            tweak: hex::encode(bth_crypto_ring_signature::Scalar::from(3u64).to_bytes()),
+            ordinal: 0,
+            height: 90,
+        });
+        let mut malformed = random_rpc_output(20_000_000);
+        malformed.lottery = true;
+        malformed.lottery_context = v2.lottery_context.clone();
+        malformed.lottery_context.as_mut().unwrap().version = 1;
+        let mut unflagged = v2.clone();
+        unflagged.lottery = false;
+        unflagged.target_key = random_rpc_output(1).target_key;
+        let blocks = vec![BlockOutputs {
+            height: 90,
+            outputs: vec![ordinary.clone(), v2.clone(), malformed, unflagged],
+        }];
+        let canonical: Vec<_> = canonical_rpc_history(&blocks)
+            .into_iter()
+            .flat_map(|b| b.outputs)
+            .map(|o| o.target_key)
+            .collect();
+        assert_eq!(canonical, vec![ordinary.target_key.clone(), v2.target_key]);
+        let pool = prepare_rpc_decoy_pool(&blocks, &[]);
+        assert_eq!(pool, vec![rpc_output_to_ring_member(&ordinary).unwrap()]);
     }
 }

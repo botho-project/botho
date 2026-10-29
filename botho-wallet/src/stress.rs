@@ -200,6 +200,11 @@ fn validate_history(blocks: &[BlockOutputs]) -> Result<()> {
             if let Some(kem) = &output.kem_ciphertext {
                 ensure!(hex::decode(kem)?.len() == 1088, "invalid KEM ciphertext");
             }
+            // A present lottery context must be a well-formed V2 payout row.
+            // An absent one on a lottery row is a legacy receipt (#1450).
+            if output.lottery_context.is_some() {
+                ensure!(output.is_v2_lottery(), "invalid lottery context");
+            }
         }
     }
     Ok(())
@@ -415,8 +420,11 @@ pub fn execute(request: Request) -> Result<Value> {
                     height.saturating_sub(output.utxo.created_at) >= MIN_DECOY_AGE_BLOCKS,
                     "immature input"
                 );
+                // V2 payouts are independently spendable under `x_base + T`;
+                // legacy receipts are also non-canonical, so this is a second
+                // guard, not the only one.
                 ensure!(
-                    !output.utxo.lottery,
+                    !output.utxo.is_legacy_lottery(),
                     "Legacy lottery payouts cannot be spent independently yet"
                 );
                 inputs.push(output.utxo.clone());
@@ -698,6 +706,129 @@ mod tests {
         assert!(!dir.path().join("signed.bin").exists());
     }
 
+    /// Append a real V2 payout of the fixture's first owned output to the
+    /// request history, select it, and return (request, source key image).
+    fn v2_payout_request(dir: &Path) -> (Value, String) {
+        use crate::lottery_fixtures::{derive_payout, payout_row};
+        use bth_transaction_clsag::{
+            lottery_v2::{Context, Outpoint},
+            TxOutput,
+        };
+        let mut value = prepare_fixture(dir);
+        let row = &value["blocks"][0]["outputs"][0];
+        let key = |field: &str| -> [u8; 32] {
+            hex::decode(row[field].as_str().unwrap())
+                .unwrap()
+                .try_into()
+                .unwrap()
+        };
+        let source = TxOutput {
+            amount: 20_000_000_000,
+            target_key: key("targetKey"),
+            public_key: key("publicKey"),
+            e_memo: None,
+            cluster_tags: Default::default(),
+            kem_ciphertext: row["kemCiphertext"]
+                .as_str()
+                .map(|k| hex::decode(k).unwrap()),
+        };
+        let payout = derive_payout(
+            &source,
+            Outpoint {
+                hash: [9; 32],
+                index: 0,
+            },
+            Context {
+                base_index: 0,
+                tweak: [0; 32],
+            },
+            100,
+            0,
+            30_000_000_000,
+        );
+        let source_image = value["spent"][0]["keyImage"].as_str().unwrap().to_owned();
+        value["blocks"][0]["outputs"]
+            .as_array_mut()
+            .unwrap()
+            .push(payout_row(&payout, [0x22; 32], 1));
+        let blocks: Vec<BlockOutputs> = serde_json::from_value(value["blocks"].clone()).unwrap();
+        let keys = read_keys(Path::new(value["wallet"].as_str().unwrap())).unwrap();
+        let owned = scan(&keys, &blocks).unwrap();
+        let found = owned.iter().find(|o| o.utxo.lottery).expect("payout owned");
+        assert_ne!(found.key_image, source_image);
+        value["selected"] = json!([found.id]);
+        value["spent"] =
+            json!([{"keyImage":found.key_image,"spent":false,"pending":false,"spentHeight":null}]);
+        (value, source_image)
+    }
+
+    #[test]
+    fn prepare_spends_v2_payout_under_its_own_key_image() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let (value, source_image) = v2_payout_request(dir.path());
+        let payout_image = value["spent"][0]["keyImage"].clone();
+        let payout_target = value["blocks"][0]["outputs"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()["targetKey"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let prepared = execute(serde_json::from_value(value).unwrap()).unwrap();
+        assert_eq!(prepared["key_images"], json!([payout_image]));
+        assert_ne!(prepared["key_images"][0], json!(source_image));
+        assert_eq!(prepared["selected"][0]["amount"], 30_000_000_000u64);
+        let tx: Transaction =
+            bincode::deserialize(&fs::read(dir.path().join("signed.bin")).unwrap()).unwrap();
+        assert!(tx.verify_ring_signatures().is_ok());
+        // The payout is the real member exactly once; payouts are never decoys.
+        let ring = &tx.inputs.clsag()[0].ring;
+        assert_eq!(
+            ring.iter()
+                .filter(|m| hex::encode(m.target_key) == payout_target)
+                .count(),
+            1
+        );
+        assert_eq!(tx.inputs.clsag()[0].ring.len(), MIN_RING_SIZE);
+    }
+
+    #[test]
+    fn prepare_rejects_forged_and_malformed_v2_contexts() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let (request, _) = v2_payout_request(dir.path());
+        let payout = request["blocks"][0]["outputs"].as_array().unwrap().len() - 1;
+        // A well-formed but forged tweak moves the base target off our keys.
+        let mut forged = request.clone();
+        forged["blocks"][0]["outputs"][payout]["lotteryContext"]["tweak"] = json!(hex::encode(
+            bth_crypto_ring_signature::Scalar::from(5u64).to_bytes()
+        ));
+        assert!(prepare_error(forged).contains("not owned"));
+        // A malformed context anywhere in history fails the whole request
+        // before any ownership crypto.
+        for (field, invalid) in [("version", json!(1)), ("tweak", json!("00".repeat(32)))] {
+            let mut malformed = request.clone();
+            malformed["blocks"][0]["outputs"][payout]["lotteryContext"][field] = invalid;
+            OWNERSHIP_OUTPUTS.with(|count| count.set(0));
+            assert!(prepare_error(malformed).contains("invalid lottery context"));
+            assert_eq!(OWNERSHIP_OUTPUTS.with(|count| count.get()), 0);
+        }
+        // Dropping the context makes it a legacy receipt: never canonical.
+        let mut legacy = request.clone();
+        legacy["blocks"][0]["outputs"][payout]
+            .as_object_mut()
+            .unwrap()
+            .remove("lotteryContext");
+        let error = prepare_error(legacy);
+        assert!(
+            error.contains("not owned") || error.contains("not canonical"),
+            "{error}"
+        );
+        assert!(!dir.path().join("signed.bin").exists());
+    }
+
     #[test]
     fn prepare_normalizes_rpc_hex_ids_and_rejects_case_duplicate_ids() {
         let dir = tempfile::tempdir().unwrap();
@@ -818,6 +949,78 @@ mod tests {
                 inputs as u64 * 20_000_000_000
             );
             assert_eq!(prepared["input_count"], inputs);
+        }
+    }
+
+    // The V2 payout spend from `v2_payout_request` against a real ledger
+    // seeded with the request history (payout row included). Ring and
+    // signature verification is what this proves; the V2 producer/validator
+    // path is P3's (#1640) and is covered end to end in `tests/stress_node.rs`.
+    #[cfg(feature = "pq")]
+    #[test]
+    #[cfg_attr(
+        not(feature = "test-fixtures"),
+        ignore = "needs `--features test-fixtures` (botho ledger fixture seeding)"
+    )]
+    fn prepare_v2_payout_spend_passes_ledger_verification() {
+        #[cfg(feature = "test-fixtures")]
+        {
+            use botho::{
+                ledger::{ChainState, Ledger, UtxoSnapshot},
+                transaction::{TxOutput, Utxo, UtxoId},
+            };
+            let dir = tempfile::tempdir().unwrap();
+            fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+            let (value, _) = v2_payout_request(dir.path());
+            let blocks: Vec<BlockOutputs> =
+                serde_json::from_value(value["blocks"].clone()).unwrap();
+            let utxos = blocks
+                .iter()
+                .flat_map(|block| {
+                    block.outputs.iter().map(|o| {
+                        let key =
+                            |h: &str| -> [u8; 32] { hex::decode(h).unwrap().try_into().unwrap() };
+                        Utxo {
+                            id: UtxoId::new(key(&o.tx_hash), o.output_index),
+                            output: TxOutput {
+                                amount: u64::from_le_bytes(
+                                    hex::decode(&o.amount_commitment)
+                                        .unwrap()
+                                        .try_into()
+                                        .unwrap(),
+                                ),
+                                target_key: key(&o.target_key),
+                                public_key: key(&o.public_key),
+                                e_memo: None,
+                                cluster_tags: Default::default(),
+                                kem_ciphertext: o
+                                    .kem_ciphertext
+                                    .as_ref()
+                                    .map(|k| hex::decode(k).unwrap()),
+                            },
+                            created_at: block.height,
+                        }
+                    })
+                })
+                .collect();
+            let ledger = Ledger::open(&dir.path().join("ledger")).unwrap();
+            let snapshot = UtxoSnapshot::new(
+                120,
+                [0; 32],
+                ChainState {
+                    height: 120,
+                    ..Default::default()
+                },
+                utxos,
+                vec![],
+                vec![],
+            )
+            .unwrap();
+            ledger.seed_fixture_snapshot_unvalidated(&snapshot).unwrap();
+            execute(serde_json::from_value(value).unwrap()).unwrap();
+            let tx: Transaction =
+                bincode::deserialize(&fs::read(dir.path().join("signed.bin")).unwrap()).unwrap();
+            ledger.verify_transaction(&tx).unwrap();
         }
     }
 

@@ -11,6 +11,8 @@ mod decoy_selection;
 mod discovery;
 mod fee_estimation;
 mod keys;
+#[cfg(test)]
+mod lottery_fixtures;
 mod ring_builder;
 mod rpc_pool;
 mod secmem;
