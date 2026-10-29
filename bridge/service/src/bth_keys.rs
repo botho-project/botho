@@ -401,6 +401,9 @@ mod tests {
             cluster_tags: vec![],
             e_memo: None,
             kem_ciphertext: out.kem_ciphertext.as_ref().map(hex::encode),
+            lottery: false,
+            crypto_output_index: None,
+            lottery_context: None,
         };
 
         // Without the ML-KEM secret the reserve cannot see it (the #970 warn

@@ -229,6 +229,11 @@ pub struct ReserveSnapshot {
     /// checked this pass (#846: consumers must be able to distinguish
     /// "custody checked OK" from "custody never checked").
     pub reserve_balance_checked: bool,
+    /// Unspent V2 lottery winnings held by the reserve, picocredits (#1657).
+    /// Reported separately from (never included in) `locked_reserve` and the
+    /// custody leg; `None` when the reserve balance was not checked or the
+    /// row predates the column.
+    pub lottery_surplus: Option<u64>,
 }
 
 /// Outcome of an atomic rate-limit reservation
@@ -541,6 +546,9 @@ impl Database {
             "reserve_balance_checked",
             "INTEGER",
         )?;
+        // #1657: V2 lottery winnings on reserve outputs, reported apart from
+        // the principal backing (NULL = unchecked / pre-#1657 row).
+        Self::ensure_column(&conn, "reserve_snapshots", "lottery_surplus", "INTEGER")?;
 
         Ok(())
     }
@@ -2114,8 +2122,9 @@ impl Database {
             r#"
             INSERT INTO reserve_snapshots (
                 taken_at, locked_reserve, eth_supply, sol_supply,
-                drift, in_tolerance, peg_healthy, reserve_balance_checked
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                drift, in_tolerance, peg_healthy, reserve_balance_checked,
+                lottery_surplus
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             "#,
             params![
                 snapshot.taken_at,
@@ -2126,6 +2135,9 @@ impl Database {
                 snapshot.in_tolerance as i64,
                 snapshot.peg_healthy as i64,
                 snapshot.reserve_balance_checked as i64,
+                snapshot
+                    .lottery_surplus
+                    .map(|s| i64::try_from(s).unwrap_or(i64::MAX)),
             ],
         )
         .map_err(|e| format!("Insert failed: {}", e))?;
@@ -2161,7 +2173,7 @@ impl Database {
                 r#"
                 SELECT taken_at, locked_reserve, eth_supply, sol_supply,
                        drift, in_tolerance, peg_healthy,
-                       COALESCE(reserve_balance_checked, 0)
+                       COALESCE(reserve_balance_checked, 0), lottery_surplus
                 FROM reserve_snapshots ORDER BY id DESC LIMIT 1
                 "#,
             )
@@ -2177,6 +2189,7 @@ impl Database {
                 in_tolerance: row.get::<_, i64>(5)? != 0,
                 peg_healthy: row.get::<_, i64>(6)? != 0,
                 reserve_balance_checked: row.get::<_, i64>(7)? != 0,
+                lottery_surplus: row.get::<_, Option<i64>>(8)?.map(|s| s.max(0) as u64),
             })
         })
         .optional()
@@ -3528,6 +3541,7 @@ mod tests {
             in_tolerance: true,
             peg_healthy: true,
             reserve_balance_checked: false,
+            lottery_surplus: None,
         };
         db.insert_reserve_snapshot(&old).unwrap();
         db.insert_reserve_snapshot(&ReserveSnapshot {
@@ -3602,6 +3616,7 @@ mod tests {
             in_tolerance: true,
             peg_healthy: true,
             reserve_balance_checked: false,
+            lottery_surplus: None,
         };
         db.insert_reserve_snapshot(&first).unwrap();
 
@@ -3614,6 +3629,8 @@ mod tests {
             in_tolerance: false,
             peg_healthy: false,
             reserve_balance_checked: true,
+            // #1657: the surplus column round-trips.
+            lottery_surplus: Some(42),
         };
         db.insert_reserve_snapshot(&second).unwrap();
 

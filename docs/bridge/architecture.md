@@ -264,6 +264,48 @@ so the bridge is removed from the lineage-reset-door list. See the
 [bridge threat model](../security/bridge-threat-model.md) for how this closes the
 round-trip laundromat threat.
 
+## Lottery Winnings on Reserve Outputs (#1657)
+
+On a V2 lottery chain (protocol 7.0.0, #1286) a bridge reserve output can win the
+lottery. A V2 payout is keyed `P = P_base + T·G`, so the reserve's ordinary
+ownership scan never matches it. The bridge reads the payout context from the
+frozen `chain_getOutputs` contract (#1641: `lottery`, `cryptoOutputIndex`,
+`lotteryContext`). It scans the base target `P − T·G` at `baseIndex`, recovers
+the key with `lottery_v2::recover_with_context`, and requires `x·G == P`
+(`bridge/service/src/bth_lottery.rs`). A forged context, a zero tweak, a wrong
+`baseIndex` or a `cryptoOutputIndex` that disagrees with `baseIndex` yields no
+ownership and never a signing key.
+
+How each `chain_getOutputs` row is used:
+
+| Row | Deposit (mints wBTH) | Reserve input | Ring decoy | Counted as |
+|-----|----------------------|---------------|------------|------------|
+| Ordinary output | yes (memo-matched) | yes | yes | principal |
+| V2 payout (has `lotteryContext`) | **never** | yes, after principal | **no** (as #1642; gap #1663) | **lottery surplus** |
+| Legacy payout (no context) | never | never (#1450) | no | nothing |
+| Malformed lottery row | never | never | no | nothing |
+
+**Proof-of-reserve policy.** Lottery winnings are a reserve **surplus**, not peg
+backing:
+
+- The 1:1 peg backing stays **principal-only**. `lockedReserve` is derived from
+  memo-matched deposits in the ledger, and the custody leg compares only the
+  unspent ordinary reserve outputs against it. A principal shortfall is a custody
+  incident even when the surplus would cover it.
+- Winnings **never increase mintable wBTH supply**. A lottery row is never a
+  deposit, so it can never open or fund a mint.
+- `GET /api/reserve/proof` reports the unspent factor-1 winnings separately as
+  `lotterySurplus` (picocredits; `null` when the reserve balance was not checked
+  that pass). They are also persisted per snapshot.
+- The release path may spend winnings, but only after principal. Change from such
+  a spend returns to the reserve as an ordinary output and from then on counts as
+  principal. That can only raise the principal figure, so `lotterySurplus` is the
+  *currently unspent* winnings, a lower bound on lifetime winnings.
+
+The `/network` proof-of-reserves panel and the metrics daemon read only
+`lockedReserve`, the supplies, `drift` and `pegHealthy`. Surplus is never shown as
+backing.
+
 ## Order Identification
 
 Orders are tracked using UUID-based memos:

@@ -24,6 +24,8 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+pub use crate::bth_lottery::LotteryContext;
+
 /// A JSON-RPC transport failure or a node-side error response.
 #[derive(Debug, Clone)]
 pub enum RpcError {
@@ -85,9 +87,51 @@ pub struct RpcOutput {
     /// the reserve's ML-KEM secret to detect hybrid deposits; without it a
     /// hybrid deposit would be silently missed.
     pub kem_ciphertext: Option<String>,
+    /// `lottery: true` on a lottery payout row (V1 or V2). Absent/false on
+    /// ordinary outputs.
+    pub lottery: bool,
+    /// `cryptoOutputIndex` on a V2 payout row: the lineage's original
+    /// derivation index `j`. It equals `lottery_context.base_index` and is NOT
+    /// the payout outpoint index (frozen #1641 contract). `None` elsewhere.
+    pub crypto_output_index: Option<u32>,
+    /// `lotteryContext` on a V2 payout row, `None` elsewhere. A lottery row
+    /// without it is legacy (V1) and must be excluded (#1450).
+    pub lottery_context: Option<LotteryContext>,
+}
+
+/// How a `chain_getOutputs` row may be used by the reserve (#1657).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputClass {
+    /// An ordinary (non-lottery) output: deposit candidate, input, decoy.
+    Ordinary,
+    /// A V2 lottery payout carrying its derivation context. It can be a
+    /// reserve input once ownership is proven with `x·G == P`, but it is never
+    /// a deposit and never a decoy (same as the wallets, #1642; the privacy
+    /// gap this leaves is #1663).
+    LotteryV2,
+    /// A context-less lottery row (V1 legacy shape). Its keys alias the
+    /// winning output, so it is never an input, a decoy, or reserve value
+    /// (#1450).
+    LegacyLottery,
+    /// A row that breaks the frozen contract (a context on a non-lottery row,
+    /// or `cryptoOutputIndex` disagreeing with `lotteryContext.baseIndex`).
+    /// Excluded everywhere, fail-closed.
+    Malformed,
 }
 
 impl RpcOutput {
+    /// Classify the row under the frozen #1641 contract.
+    pub fn class(&self) -> OutputClass {
+        match (self.lottery, &self.lottery_context) {
+            (false, None) => OutputClass::Ordinary,
+            (true, None) => OutputClass::LegacyLottery,
+            (true, Some(ctx)) if self.crypto_output_index == Some(ctx.base_index) => {
+                OutputClass::LotteryV2
+            }
+            _ => OutputClass::Malformed,
+        }
+    }
+
     /// Total explicit (non-background) cluster weight in ppm. Factor-1
     /// (wrap-eligible per ADR 0003) outputs have `explicit_cluster_weight() ==
     /// 0` — all of their value is background/commerce.
@@ -317,6 +361,12 @@ struct RawOutput {
     e_memo: Option<String>,
     #[serde(rename = "kemCiphertext", default)]
     kem_ciphertext: Option<String>,
+    #[serde(default)]
+    lottery: bool,
+    #[serde(rename = "cryptoOutputIndex", default)]
+    crypto_output_index: Option<u32>,
+    #[serde(rename = "lotteryContext", default)]
+    lottery_context: Option<LotteryContext>,
 }
 
 /// Decode the transparent amount from the node's little-endian
@@ -361,6 +411,9 @@ fn decode_block_outputs(block: &Value) -> Result<RpcBlockOutputs, RpcError> {
                 .collect(),
             e_memo: parsed.e_memo,
             kem_ciphertext: parsed.kem_ciphertext,
+            lottery: parsed.lottery,
+            crypto_output_index: parsed.crypto_output_index,
+            lottery_context: parsed.lottery_context,
         });
     }
     Ok(RpcBlockOutputs { height, outputs })
@@ -425,5 +478,101 @@ mod tests {
         );
         assert_eq!(decoded.outputs[1].explicit_cluster_weight(), 350_000);
         assert_eq!(decoded.outputs[1].e_memo.as_deref(), Some("abcd"));
+    }
+
+    /// The frozen #1641 payout rows (the node's golden
+    /// `rpc-lottery-rows.json` shape) decode and classify: V2 with its
+    /// context, V1 legacy without one (#1657).
+    #[test]
+    fn decode_block_outputs_parses_v2_and_legacy_lottery_rows() {
+        let tweak = format!("075a{}", "0".repeat(60));
+        let block = json!({
+            "height": 3,
+            "outputs": [
+                {
+                    "txHash": "77", "outputIndex": 1,
+                    "targetKey": "41", "publicKey": "42",
+                    "amountCommitment": hex::encode(77u64.to_le_bytes()),
+                    "clusterTags": [[8738, 500051], [4369, 300000]],
+                    "kemCiphertext": null,
+                    "ledgerOutpoint": {"txHash": "77", "outputIndex": 1},
+                    "lottery": true,
+                    "cryptoOutputIndex": 2,
+                    "lotteryContext": {
+                        "version": 2, "baseIndex": 2, "tweak": tweak,
+                        "ordinal": 0, "height": 3
+                    },
+                    "winnerOutpoint": format!("{}:2", "93".repeat(32))
+                },
+                {
+                    "txHash": "0b", "outputIndex": 1,
+                    "targetKey": "41", "publicKey": "42",
+                    "amountCommitment": hex::encode(9u64.to_le_bytes()),
+                    "clusterTags": [], "kemCiphertext": null,
+                    "lottery": true
+                },
+                {
+                    "txHash": "dd", "outputIndex": 0,
+                    "targetKey": "ee", "publicKey": "ff",
+                    "amountCommitment": hex::encode(5u64.to_le_bytes())
+                }
+            ]
+        });
+        let decoded = decode_block_outputs(&block).unwrap();
+        let [v2, v1, ordinary] = &decoded.outputs[..] else {
+            panic!("three rows");
+        };
+        assert!(v2.lottery);
+        assert_eq!(v2.crypto_output_index, Some(2));
+        let ctx = v2
+            .lottery_context
+            .as_ref()
+            .expect("V2 row carries a context");
+        assert_eq!(
+            (ctx.version, ctx.base_index, ctx.ordinal, ctx.height),
+            (2, 2, 0, 3)
+        );
+        assert_eq!(ctx.tweak, tweak);
+        assert_eq!(v2.class(), OutputClass::LotteryV2);
+        assert_eq!(v1.class(), OutputClass::LegacyLottery);
+        assert_eq!(ordinary.class(), OutputClass::Ordinary);
+        assert!(!ordinary.lottery);
+    }
+
+    /// Rows that break the frozen contract are excluded, never guessed at.
+    #[test]
+    fn contract_violations_classify_as_malformed() {
+        let ctx = LotteryContext {
+            version: 2,
+            base_index: 2,
+            tweak: "07".repeat(32),
+            ordinal: 0,
+            height: 3,
+        };
+        let base = RpcOutput {
+            tx_hash: "aa".into(),
+            output_index: 1,
+            target_key: "bb".into(),
+            public_key: "cc".into(),
+            amount: 1,
+            cluster_tags: vec![],
+            e_memo: None,
+            kem_ciphertext: None,
+            lottery: true,
+            crypto_output_index: Some(2),
+            lottery_context: Some(ctx),
+        };
+        assert_eq!(base.class(), OutputClass::LotteryV2);
+        // cryptoOutputIndex disagrees with baseIndex (or is missing).
+        let mut wrong_index = base.clone();
+        wrong_index.crypto_output_index = Some(1);
+        assert_eq!(wrong_index.class(), OutputClass::Malformed);
+        let mut no_index = base.clone();
+        no_index.crypto_output_index = None;
+        assert_eq!(no_index.class(), OutputClass::Malformed);
+        // A context on a row not flagged as lottery.
+        let mut unflagged = base;
+        unflagged.lottery = false;
+        assert_eq!(unflagged.class(), OutputClass::Malformed);
     }
 }

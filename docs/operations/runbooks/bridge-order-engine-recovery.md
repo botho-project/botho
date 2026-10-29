@@ -59,7 +59,7 @@ localhost-only; reaching it means you are an operator):
 | `GET /api/status` | Pause state, order counts per status, actionable backlog, stuck-order count, component health, latest peg verdict |
 | `GET /metrics` | Prometheus text for `bridge/service/alerts.yml` |
 | `POST /api/breaker` | Kill-switch toggle (below) |
-| `GET /api/reserve/proof` | Latest proof-of-reserves snapshot (`pegHealthy`, `reserveBalanceChecked`, drift) |
+| `GET /api/reserve/proof` | Latest proof-of-reserves snapshot (`pegHealthy`, `reserveBalanceChecked`, drift; `lotterySurplus` = V2 lottery winnings on reserve outputs, reported apart and never peg backing, #1657) |
 
 ```bash
 curl -s http://127.0.0.1:9741/api/status | jq
