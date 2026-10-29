@@ -11,6 +11,12 @@ default = ["pq"]
 # account keys (kept for universal ML-KEM outputs, ADR 0006 / #904). The
 # quantum-private transaction class was removed (issue #903).
 pq = ["bth-account-keys/pq", "bth-crypto-pq", "bth-transaction-clsag/pq"]
+# TEST/FUZZ ONLY: exposes the hidden ledger fixture API
+# (`Ledger::seed_fixture_snapshot_unvalidated`, `Ledger::fixture_utxos`) to
+# integration tests, the wallet's tests and the fuzz crate. Never enable it in
+# a node/operator build: the seeder writes Direct derivation contexts for
+# arbitrary rows (#1286 P2, #1652).
+test-fixtures = []
 
 [lib]
 name = "botho"
@@ -185,6 +191,8 @@ chrono = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
+# Self dev-dependency: integration tests see the `test-fixtures` ledger API.
+botho = { path = ".", features = ["test-fixtures"] }
 botho-wallet = { path = "../botho-wallet" }
 # Enable the CLSAG transaction crate's test-only constructors (e.g.
 # `Transaction::new_stub_with_fee`) for botho's own test/dev builds.

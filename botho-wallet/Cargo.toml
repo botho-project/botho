@@ -9,6 +9,10 @@ rust-version = { workspace = true }
 [features]
 default = ["pq"]
 pq = ["bth-account-keys/pq", "bth-crypto-ring-signature/pq", "botho/pq", "dep:bth-crypto-pq"]
+# TEST ONLY: lets the stress adapter's ledger-seeded unit test reach botho's
+# hidden fixture API (`Ledger::seed_fixture_snapshot_unvalidated`). Never
+# enable it for a release/signer build (#1652).
+test-fixtures = ["pq", "botho/test-fixtures"]
 
 [[bin]]
 name = "botho-wallet"

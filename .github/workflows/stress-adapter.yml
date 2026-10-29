@@ -27,7 +27,7 @@ jobs:
       - name: Isolated native acceptance
         run: cargo test --locked --release -p botho-wallet --test stress_node
       - name: Artifact safety tests
-        run: cargo test --locked --release -p botho-wallet --lib stress::tests
+        run: cargo test --locked --release -p botho-wallet --features test-fixtures --lib stress::tests
       - name: Build Linux signer
         run: |
           cargo build --locked --release -p botho-wallet --bin botho-stress-wallet

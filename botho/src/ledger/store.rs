@@ -2474,7 +2474,10 @@ impl Ledger {
     /// stay consistent. Fixture outputs are asserted, not proven, to be
     /// direct; never call this on operator data (it is what the fail-closed
     /// [`Ledger::load_from_snapshot`] refuses to do). Public only because
-    /// integration tests and dependent crates' tests seed ledgers with it.
+    /// integration tests and dependent crates' tests seed ledgers with it;
+    /// compiled only for this crate's unit tests or with the non-default
+    /// `test-fixtures` feature, so production builds cannot reach it.
+    #[cfg(any(test, feature = "test-fixtures"))]
     #[doc(hidden)]
     pub fn seed_fixture_snapshot_unvalidated(
         &self,
@@ -2485,7 +2488,9 @@ impl Ledger {
 
     /// TEST/FUZZ ONLY: every persisted UTXO, strictly decoded (corruption is
     /// an error, never a skipped row). Replaces the fuzz target's former use of
-    /// [`Ledger::create_snapshot`] for supply-conservation sums.
+    /// [`Ledger::create_snapshot`] for supply-conservation sums. Gated like
+    /// [`Ledger::seed_fixture_snapshot_unvalidated`].
+    #[cfg(any(test, feature = "test-fixtures"))]
     #[doc(hidden)]
     pub fn fixture_utxos(&self) -> Result<Vec<Utxo>, LedgerError> {
         let rtxn = self

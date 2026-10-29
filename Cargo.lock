@@ -1789,6 +1789,7 @@ dependencies = [
  "base64 0.22.1",
  "bincode",
  "blake2 0.10.6",
+ "botho",
  "botho-wallet",
  "bs58 0.5.1",
  "bth-account-keys",

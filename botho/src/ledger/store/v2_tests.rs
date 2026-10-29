@@ -632,8 +632,10 @@ fn production_view_runs_shared_v2_derive_and_validate() {
 
 /// LMDB growth per derivation-context row (cf. #1536 map sizing). Uses
 /// uniformly random 36-byte outpoint keys (tx hashes are hash outputs) and the
-/// real 45-byte Direct encoding; reported via `--nocapture`.
+/// real 45-byte Direct encoding. Inserts 100k rows, so it is on demand only:
+/// run it by name with `--ignored --nocapture`.
 #[test]
+#[ignore = "measurement (100k rows); run with --ignored --nocapture"]
 fn measure_lmdb_growth_per_context_row() {
     use rand::{rngs::StdRng, RngExt, SeedableRng};
     let dir = TempDir::new().unwrap();
