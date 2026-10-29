@@ -267,7 +267,14 @@ impl Fixture {
     pub(crate) fn spend(&self, id: &UtxoId) -> Transaction {
         let input = self.utxo(id);
         let height = self.ledger.get_chain_state().unwrap().height;
-        let output = TxOutput::new(input.output.amount - FEE, &self.other.default_address());
+        let output = TxOutput::new_hybrid_to_address(
+            input.output.amount - FEE,
+            &self.other.default_address(),
+            0,
+            None,
+            Default::default(),
+        )
+        .unwrap();
         self.owner
             .create_private_transaction(&[input], vec![output], FEE, height, &self.ledger)
             .unwrap()

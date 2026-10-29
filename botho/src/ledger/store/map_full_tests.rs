@@ -39,7 +39,9 @@ fn next_block(ledger: &Ledger, minter: &PublicAddress) -> Block {
 fn map_full_fails_closed_and_recovers_with_larger_map() {
     use rand::{rngs::StdRng, SeedableRng};
     let dir = tempdir().unwrap();
-    let minter = AccountKey::random(&mut StdRng::seed_from_u64(1618)).default_subaddress();
+    let minter = super::block_validation_tests::kem_address(
+        AccountKey::random(&mut StdRng::seed_from_u64(1618)).default_subaddress(),
+    );
 
     let (height, refused) = {
         let ledger = Ledger::open_with_map_size(dir.path(), SMALL_MAP).unwrap();

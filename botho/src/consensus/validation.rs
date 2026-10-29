@@ -74,7 +74,14 @@ pub const KEM_CIPHERTEXT_ENFORCED: bool =
 /// validity is not (and cannot be) checked here — only the recipient holding
 /// the ML-KEM secret can decapsulate — so structural presence + length is the
 /// consensus-enforceable invariant.
-fn check_kem_ciphertext(kem_ciphertext: &Option<Vec<u8>>) -> Result<(), ValidationError> {
+///
+/// Shared by the SCP validity gates here and by the ledger's block-apply
+/// rules (`ValidationReads::validate_ordinary_block`, #1677), so a block that
+/// reaches `Ledger::add_block` without SCP intrinsic validation (sync, replay)
+/// is held to the identical shape rule.
+pub(crate) fn check_kem_ciphertext(
+    kem_ciphertext: &Option<Vec<u8>>,
+) -> Result<(), ValidationError> {
     if !KEM_CIPHERTEXT_ENFORCED {
         return Ok(());
     }

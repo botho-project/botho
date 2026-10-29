@@ -127,12 +127,13 @@ fn matrix(
         };
         let mut used: BTreeSet<_> = a.awards.iter().map(|x| x.to_bytes()).collect();
         used.insert(a.source.to_bytes());
-        // B: a separate classical source, spent after its award.
+        // B: a separate direct source, spent after its award. (Formerly a
+        // classical source; since #1677 the shared ordinary rules reject
+        // KEM-less transaction outputs, so every direct source is hybrid.)
         for (source, awards) in edges {
             let source = UtxoId::from_bytes(source).unwrap();
-            let (u, c) = lookup(store, source);
-            if u.output.kem_ciphertext.is_some()
-                || !matches!(c, StoredContext::Direct { .. })
+            let (_, c) = lookup(store, source);
+            if !matches!(c, StoredContext::Direct { .. })
                 || used.contains(&source.to_bytes())
                 || !usable(source)
             {
@@ -219,25 +220,30 @@ fn native_wallet_accepted_repeated_nested_payout_spends() {
                 .checked_sub(32 * output_value)
                 .and_then(|v| v.checked_sub(FUNDING_FEE))
                 .expect("actual funding covers outputs and fee");
-            // Ordinary actual wallet payment: 16 classical and 16 hybrid
-            // outputs, with hybrid outputs at nonzero original indices.
+            // Ordinary actual wallet payment: 32 hybrid outputs at nonzero
+            // original indices (classical outputs are invalid since #1677).
             let mut outputs: Vec<_> = (0..32)
                 .map(|i| {
-                    if i % 2 == 0 {
-                        TxOutput::new(output_value, &wallet.default_address())
-                    } else {
-                        TxOutput::new_hybrid_to_address(
-                            output_value,
-                            &wallet.quantum_safe_address(),
-                            i,
-                            None,
-                            Default::default(),
-                        )
-                        .unwrap()
-                    }
+                    TxOutput::new_hybrid_to_address(
+                        output_value,
+                        &wallet.quantum_safe_address(),
+                        i,
+                        None,
+                        Default::default(),
+                    )
+                    .unwrap()
                 })
                 .collect();
-            outputs.push(TxOutput::new(change, &wallet.default_address()));
+            outputs.push(
+                TxOutput::new_hybrid_to_address(
+                    change,
+                    &wallet.quantum_safe_address(),
+                    32,
+                    None,
+                    Default::default(),
+                )
+                .unwrap(),
+            );
             txs.push(
                 store
                     .wallet_transaction(&wallet, &inputs, outputs, FUNDING_FEE)

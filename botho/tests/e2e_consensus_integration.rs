@@ -458,11 +458,16 @@ fn test_private_ring_signature_transaction() {
     let current_height = node.chain_state().height;
     let ledger = node.ledger.read().unwrap();
 
-    // Create outputs (recipient + change)
-    let mut outputs = vec![TxOutput::new(send_amount, &recipient_address)];
+    // Create outputs (recipient + change): hybrid ML-KEM outputs at their
+    // real indices, since `add_block` enforces the ciphertext shape (#1677).
+    let hybrid = |value, to: &bth_account_keys::PublicAddress, index| {
+        TxOutput::new_hybrid_to_address(value, to, index, None, Default::default())
+            .expect("test wallets publish an ML-KEM key")
+    };
+    let mut outputs = vec![hybrid(send_amount, &recipient_address, 0)];
     let change = utxo_amount - send_amount - tx_fee;
     if change > 0 {
-        outputs.push(TxOutput::new(change, &sender_wallet.default_address()));
+        outputs.push(hybrid(change, &sender_wallet.default_address(), 1));
     }
 
     // Create private transaction with ring signature

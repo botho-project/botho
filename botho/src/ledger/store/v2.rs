@@ -138,13 +138,58 @@ pub(in crate::ledger) fn read_context(
     id: &UtxoId,
 ) -> Result<(Utxo, StoredContext), LedgerError> {
     read_context_with(ledger, txn, id, &mut |height| {
-        ledger
-            .blocks_db
-            .get(txn, &height)
-            .map_err(db_op("read payout creating block"))?
-            .map(|bytes| crate::ledger::experimental::decode::<Block>(bytes).map(|b| b.hash()))
-            .transpose()
+        stored_block_hash(ledger, txn, height)
     })
+}
+
+/// The hash of the block stored at `height` in `txn`, `None` if no block is
+/// stored there (#1670 §2).
+///
+/// Decodes only the [`BlockHeader`] (the block's identity: `Block::hash` is
+/// `header.hash()`), never the transactions, payouts or ciphertexts behind
+/// it. `Block` is bincode-encoded with fixint integers and the header as its
+/// first field, so the header is a fixed-width prefix of the stored row and
+/// decoding it from that prefix yields exactly the header a full decode
+/// would. Fails closed: a row too short for a header, or one whose header
+/// does not decode, is an error, never `None`. (Corruption strictly inside
+/// the body does not change the identity checked here; every reader that
+/// consumes the body still decodes it strictly.)
+pub(in crate::ledger) fn stored_block_hash(
+    ledger: &Ledger,
+    txn: &RoTxn<'_>,
+    height: u64,
+) -> Result<Option<[u8; 32]>, LedgerError> {
+    use bincode::Options;
+    let Some(bytes) = ledger
+        .blocks_db
+        .get(txn, &height)
+        .map_err(db_op("read payout creating block"))?
+    else {
+        return Ok(None);
+    };
+    let header: crate::block::BlockHeader = bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .allow_trailing_bytes()
+        .deserialize(bytes)
+        .map_err(|e| LedgerError::StorageEncoding(format!("creating block header: {e}")))?;
+    if header.height != height {
+        return Err(LedgerError::InconsistentRecord(
+            "creating block key/height".into(),
+        ));
+    }
+    Ok(Some(header.hash()))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// UNIT-TEST ONLY: number of strict candidate scans started on this
+    /// thread (#1670 §1 tests assert a rejected fork block never scans).
+    pub(in crate::ledger) static STRICT_SCANS: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+    /// UNIT-TEST ONLY: creating-block hash lookups made by strict scans on
+    /// this thread (#1670 §2 tests assert at most one per block per scan).
+    pub(in crate::ledger) static SCAN_BLOCK_LOOKUPS: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
 }
 
 /// [`read_context`] with the lottery creating-block lookup supplied by the
@@ -161,13 +206,7 @@ pub(super) fn read_context_with(
     creating_hash: &mut dyn FnMut(u64) -> Result<Option<[u8; 32]>, LedgerError>,
 ) -> Result<(Utxo, StoredContext), LedgerError> {
     let key = id.to_bytes();
-    let context = StoredContext::decode(
-        ledger
-            .contexts_db
-            .get(txn, &key)
-            .map_err(db_op("read derivation context"))?
-            .ok_or_else(|| LedgerError::MissingContext(hex::encode(key)))?,
-    )?;
+    let context = read_stored_context(ledger, txn, &key)?;
     let utxo: Utxo = crate::ledger::experimental::decode(
         ledger
             .utxo_db
@@ -177,12 +216,54 @@ pub(super) fn read_context_with(
                 LedgerError::InconsistentRecord("derivation context without output".into())
             })?,
     )?;
+    check_context(ledger, txn, id, &utxo, &context, creating_hash)?;
+    Ok((utxo, context))
+}
+
+fn read_stored_context(
+    ledger: &Ledger,
+    txn: &RoTxn<'_>,
+    key: &[u8],
+) -> Result<StoredContext, LedgerError> {
+    StoredContext::decode(
+        ledger
+            .contexts_db
+            .get(txn, key)
+            .map_err(db_op("read derivation context"))?
+            .ok_or_else(|| LedgerError::MissingContext(hex::encode(key)))?,
+    )
+}
+
+/// The strict context check of one candidate row the scan already read and
+/// strictly decoded from `txn` (`validation::candidate_record` checks the row
+/// key equals `utxo.id`): the SAME checks as [`read_context_with`] against
+/// that output, without re-reading and re-decoding it.
+fn check_scanned_context(
+    ledger: &Ledger,
+    txn: &RoTxn<'_>,
+    utxo: &Utxo,
+    creating_hash: &mut dyn FnMut(u64) -> Result<Option<[u8; 32]>, LedgerError>,
+) -> Result<(), LedgerError> {
+    let context = read_stored_context(ledger, txn, &utxo.id.to_bytes())?;
+    check_context(ledger, txn, &utxo.id, utxo, &context, creating_hash)
+}
+
+/// Agreement of a persisted output with its derivation context (identity,
+/// creation height, index shape and, for a payout, its creating block).
+fn check_context(
+    ledger: &Ledger,
+    txn: &RoTxn<'_>,
+    id: &UtxoId,
+    utxo: &Utxo,
+    context: &StoredContext,
+    creating_hash: &mut dyn FnMut(u64) -> Result<Option<[u8; 32]>, LedgerError>,
+) -> Result<(), LedgerError> {
     if utxo.id != *id || utxo.created_at != context.height() {
         return Err(LedgerError::InconsistentRecord(
             "output identity/height disagrees with its derivation context".into(),
         ));
     }
-    match &context {
+    match context {
         StoredContext::Direct { base_index, .. } if *base_index != id.output_index => {
             return Err(LedgerError::InconsistentRecord(
                 "direct context base index".into(),
@@ -217,7 +298,7 @@ pub(super) fn read_context_with(
         }
         StoredContext::Direct { .. } => {}
     }
-    Ok((utxo, context))
+    Ok(())
 }
 
 // `get_derivation_context` is consumed by tests until P4 (RPC) reads it.
@@ -555,6 +636,25 @@ impl DerivationReads for ProductionView<'_, '_> {
         seed: &[u8; 32],
         config: &LotteryDrawConfig,
     ) -> Result<Vec<LotteryCandidate>, LedgerError> {
+        #[cfg(test)]
+        STRICT_SCANS.with(|n| n.set(n.get() + 1));
+        // Every scanned row still gets the full strict context check (the
+        // eligible set and its fail-closed behaviour are unchanged, #1670
+        // §2). Within this ONE scan over ONE pinned txn, each creating
+        // block's hash is read at most once (payout rows of one block share
+        // it) and from its header only, never by decoding the whole block.
+        let mut creating: std::collections::HashMap<u64, Option<[u8; 32]>> =
+            std::collections::HashMap::new();
+        let mut creating_hash = |height: u64| -> Result<Option<[u8; 32]>, LedgerError> {
+            if let Some(hash) = creating.get(&height) {
+                return Ok(*hash);
+            }
+            #[cfg(test)]
+            SCAN_BLOCK_LOOKUPS.with(|n| n.set(n.get() + 1));
+            let hash = stored_block_hash(self.ledger, self.txn, height)?;
+            creating.insert(height, hash);
+            Ok(hash)
+        };
         validation::lottery_candidates(
             &self.ledger.write_tables(),
             self.txn,
@@ -562,7 +662,7 @@ impl DerivationReads for ProductionView<'_, '_> {
             seed,
             config,
             ReadPolicy::Strict,
-            &mut |u| read_context(self.ledger, self.txn, &u.id).map(|_| ()),
+            &mut |u| check_scanned_context(self.ledger, self.txn, u, &mut creating_hash),
         )
     }
 }

@@ -24,7 +24,7 @@ fn block_with(ledger: &Ledger, tx: Transaction) -> Block {
     let minter = AccountKey::random(&mut StdRng::seed_from_u64(1638));
     let mut block = Block::new_template_with_txs(
         &Block::genesis(),
-        &minter.default_subaddress(),
+        &super::block_validation_tests::kem_address(minter.default_subaddress()),
         state.difficulty,
         calculate_block_reward(state.height + 1, state.total_mined),
         vec![tx],

@@ -27,5 +27,8 @@ pub use service::{
     ConsensusConfig, ConsensusEvent, ConsensusService, QuorumGateSnapshot, ScpMessage,
     ScpSlotSnapshot, SLOT_STALL_THRESHOLD_MULTIPLIER,
 };
+pub(crate) use validation::check_kem_ciphertext;
 pub use validation::{BatchValidationResult, TransactionValidator, ValidationError};
+#[cfg(test)]
+pub(crate) use validation::{KEM_CIPHERTEXT_ENFORCED, ML_KEM_768_CIPHERTEXT_BYTES};
 pub use value::{ConsensusValue, ConsensusValueHash};

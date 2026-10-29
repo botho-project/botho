@@ -75,7 +75,9 @@ fn admission_rejects_signed_lottery_alias_ring_and_accepts_canonical_control() {
         public_key: RistrettoPublic::from(&RistrettoPrivate::from_random(&mut rng)).to_bytes(),
         e_memo: None,
         cluster_tags: ClusterTagVector::empty(),
-        kem_ciphertext: None,
+        // Shape-valid ML-KEM ciphertext (#1677: `add_block` checks the shape
+        // before ring resolution), so the ring verdict is what is observed.
+        kem_ciphertext: Some(vec![0x5C; crate::consensus::ML_KEM_768_CIPHERTEXT_BYTES]),
     };
     let unsigned = Transaction::new_clsag(vec![], vec![output.clone()], FEE, 100);
     let mut sign = |ring| {
@@ -299,7 +301,7 @@ fn signed_test_block(ledger: &Ledger, tx: Transaction) -> Block {
     let minter = AccountKey::random(&mut StdRng::seed_from_u64(1444));
     let mut block = Block::new_template_with_txs(
         &Block::genesis(),
-        &minter.default_subaddress(),
+        &super::block_validation_tests::kem_address(minter.default_subaddress()),
         state.difficulty,
         calculate_block_reward(state.height + 1, state.total_mined),
         vec![tx],

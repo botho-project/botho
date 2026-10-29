@@ -521,10 +521,14 @@ async fn real_sealed_v2_payout_rows_match_the_ledger() {
             vec![wallet
                 .create_private_transaction(
                     std::slice::from_ref(&input),
-                    vec![TxOutput::new(
+                    vec![TxOutput::new_hybrid_to_address(
                         input.output.amount - FUNDING_FEE,
                         &wallet.default_address(),
-                    )],
+                        0,
+                        None,
+                        Default::default(),
+                    )
+                    .unwrap()],
                     FUNDING_FEE,
                     height,
                     &ledger,

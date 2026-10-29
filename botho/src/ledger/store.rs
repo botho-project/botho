@@ -1,4 +1,7 @@
 #[cfg(test)]
+#[path = "store/block_validation_tests.rs"]
+mod block_validation_tests;
+#[cfg(test)]
 #[path = "store/complete_output_signing_tests.rs"]
 mod complete_output_signing_tests;
 #[cfg(test)]
@@ -922,7 +925,6 @@ impl Ledger {
         // defect; both stay in `consensus::lottery` for their unit/fuzz
         // coverage but no block path calls them). A V1-shaped payout cannot
         // equal its V2 record, so it is invalid.
-        let state = self.get_chain_state()?;
 
         // Acquire the exclusive writer FIRST, then pin the read snapshot: no
         // commit can land between the validated pre-state and the write, and
@@ -939,11 +941,15 @@ impl Ledger {
             .read_txn()
             .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
         let view = self.production_view(&rtxn);
+        // The pre-state `ChainState` (height, tip, difficulty, totals) comes
+        // from the SAME pinned snapshot as every other validation read
+        // (#1670 §3), not from a separate read txn taken before the writer.
+        let state = self.chain_state_in(&rtxn)?;
 
-        // Draw once, re-derive the canonical V2 payout records, bind the
-        // block's payouts to them, then run the shared ordinary checks with
-        // `RootRule::BodyV2` (the recomputed body root) and the per-record
-        // V2 validation.
+        // Header checks first (inside `validate_block`), then draw once, re-derive the
+        // canonical V2 payout records, bind the block's payouts to them, then
+        // run the shared ordinary checks with `RootRule::BodyV2` (the
+        // recomputed body root) and the per-record V2 validation.
         let (records, new_lottery_pool) =
             match super::lottery_v2::validate_block(&view, block, &state) {
                 Ok(result) => result,
@@ -3735,7 +3741,9 @@ mod tests {
         ];
         let block = Block::new_template_with_txs(
             &genesis,
-            &minter.default_subaddress(),
+            // Publishes an ML-KEM key, so the coinbase passes the #1677
+            // ciphertext-shape gate that precedes the fee-sum guard.
+            &super::block_validation_tests::kem_address(minter.default_subaddress()),
             state.difficulty,
             calculate_block_reward(1, state.total_mined),
             txs,
