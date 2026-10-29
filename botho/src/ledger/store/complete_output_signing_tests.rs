@@ -186,4 +186,21 @@ fn output_field_mutations_after_signing_are_rejected_by_the_ledger() {
     for input in tx.inputs.clsag() {
         assert_eq!(ledger.is_key_image_spent(&input.key_image).unwrap(), None);
     }
+
+    // Control for the block-application rejections above: the same block
+    // template carrying the honest transaction is accepted, so the forged
+    // rejections cannot pass vacuously on a malformed template.
+    ledger
+        .add_block(&block_with(&ledger, tx.clone()))
+        .expect("honest block must be accepted by add_block");
+    assert_eq!(ledger.get_chain_state().unwrap().height, HEIGHT + 1);
+    for input in tx.inputs.clsag() {
+        assert!(
+            ledger
+                .is_key_image_spent(&input.key_image)
+                .unwrap()
+                .is_some(),
+            "honest block spends its key images"
+        );
+    }
 }

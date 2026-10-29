@@ -76,6 +76,57 @@ fn complete_output_golden_vectors() {
     );
 }
 
+/// One-input golden vector: covers the key-image prefix of `hash()` with a
+/// nonzero count (and the `None` settlement tag). Independently assembled in
+/// Python the same way as `complete_output_golden_vectors`: `hash()` =
+/// SHA-256(domain || u64 1 || key_image || body), `signing_hash()` =
+/// SHA-256(domain || body). Ring members, the commitment key image, the
+/// signature bytes and `pseudo_output_amount` are not part of either
+/// transcript, so they are filled with unrelated bytes here.
+#[test]
+fn complete_output_one_input_golden_vectors() {
+    let base = fixture();
+    let input = ClsagRingInput {
+        ring: vec![RingMember {
+            target_key: [0xd1; 32],
+            public_key: [0xd2; 32],
+            commitment: [0xd3; 32],
+        }],
+        key_image: std::array::from_fn(|i| 0xc0u8.wrapping_add(i as u8)),
+        commitment_key_image: [0xe1; 32],
+        clsag_signature: vec![0xf1; 96],
+        pseudo_output_amount: 0x7172737475767778,
+    };
+    let tx = Transaction::new_clsag(
+        vec![input],
+        base.outputs.clone(),
+        base.fee,
+        base.created_at_height,
+    );
+    assert_eq!(
+        hex32(tx.signing_hash()),
+        "1f11b712b988434d78e1100dd1a8ad5e22783cd7d4e0d4f769f9d42eb3cacc94",
+        "one-input signing_hash golden vector"
+    );
+    assert_eq!(
+        hex32(tx.hash()),
+        "b2719f58bdd1255c27e0c80991dd1b207d75233ef6b77b63f37db95b89c51497",
+        "one-input tx hash golden vector"
+    );
+    // The key image is committed to the ID but not to the signing hash.
+    let mut other = tx.clone();
+    other.inputs = TxInputs::new(vec![ClsagRingInput {
+        key_image: [0; 32],
+        ..tx.inputs.clsag()[0].clone()
+    }]);
+    assert_ne!(other.hash(), tx.hash(), "key image changes tx hash");
+    assert_eq!(
+        other.signing_hash(),
+        tx.signing_hash(),
+        "key image is excluded from the signing hash"
+    );
+}
+
 /// Every individual output-field mutation changes both hashes.
 #[test]
 fn every_output_field_changes_both_hashes() {
