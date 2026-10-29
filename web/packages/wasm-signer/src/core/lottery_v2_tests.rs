@@ -531,3 +531,141 @@ fn print_vector() {
     });
     println!("{}", serde_json::to_string_pretty(&vector).unwrap());
 }
+
+/// The shared V2 payout wallet vector (#1667 part 2), committed once in
+/// `transaction/clsag/tests/fixtures/lottery-v2-wallet.json` and run by every
+/// payout consumer. This crate parses the wire context itself (hex syntax and
+/// error strings) and supplies its own ordinary ownership rule, so the vector
+/// proves this crate's observable behavior equals the shared helpers'.
+mod shared_wallet_vector {
+    use super::*;
+
+    const SHARED: &str =
+        include_str!("../../../../../transaction/clsag/tests/fixtures/lottery-v2-wallet.json");
+
+    fn shared() -> Value {
+        serde_json::from_str(SHARED).unwrap()
+    }
+
+    /// This crate's verdict for a wire context, with the exact error strings
+    /// pinned per class.
+    fn verdict(wire: &Value) -> String {
+        let context: LotteryContext = serde_json::from_value(wire.clone()).unwrap();
+        match context.to_context() {
+            Ok(_) => "ok".into(),
+            Err(e) if e.starts_with("lotteryContext.version: unsupported version ") => {
+                assert!(e.ends_with("(expected 2)"), "{e}");
+                "Version".into()
+            }
+            Err(e) if e == "lotteryContext.tweak: zero tweak is not a V2 payout" => {
+                "ZeroTweak".into()
+            }
+            Err(e) if e == "lotteryContext: invalid context: NonCanonicalTweak" => {
+                "NonCanonicalTweak".into()
+            }
+            Err(e)
+                if e.starts_with("lotteryContext.tweak: invalid hex: ")
+                    || e.starts_with("lotteryContext.tweak: expected 32 bytes, got ") =>
+            {
+                "Syntax".into()
+            }
+            Err(e) => panic!("unclassified context error: {e}"),
+        }
+    }
+
+    #[test]
+    fn contexts_match_the_shared_verdicts() {
+        for case in shared()["contexts"].as_array().unwrap() {
+            assert_eq!(
+                verdict(&case["wire"]),
+                case["expect"].as_str().unwrap(),
+                "{}",
+                case["name"]
+            );
+        }
+    }
+
+    fn chain_output(case: &Value) -> ChainOutput {
+        let o = &case["output"];
+        ChainOutput {
+            target_key: o["targetKey"].as_str().unwrap().into(),
+            public_key: o["publicKey"].as_str().unwrap().into(),
+            amount: 1,
+            output_index: 0,
+            kem_ciphertext: o["kemCiphertext"].as_str().map(Into::into),
+            lottery_context: Some(serde_json::from_value(case["wire"].clone()).unwrap()),
+        }
+    }
+
+    /// Scan + key images through the public signer-core entry points, and the
+    /// two payout helpers directly, for every recovery case.
+    #[test]
+    fn recoveries_match_the_shared_vector() {
+        let v = shared();
+        let a = &v["account"];
+        let (spend, view, seed) = (
+            a["spendPrivateKey"].as_str().unwrap().to_string(),
+            a["viewPrivateKey"].as_str().unwrap().to_string(),
+            a["seed"].as_str().unwrap().to_string(),
+        );
+        let account = AccountKey::new(
+            &parse_private("spend", &spend).unwrap(),
+            &parse_private("view", &view).unwrap(),
+        );
+        let kp = derive_kem_keypair(&seed).unwrap().unwrap();
+        for case in v["recoveries"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let row = chain_output(case);
+            let owned = scan_owned_outputs_inner(&ScanRequest {
+                spend_private_key: spend.clone(),
+                view_private_key: view.clone(),
+                seed: seed.clone(),
+                outputs: vec![row.clone()],
+            })
+            .unwrap();
+            let context = row.lottery_context.as_ref().unwrap();
+            let output = TxOutput {
+                amount: 1,
+                target_key: parse_hex_32("t", &row.target_key).unwrap(),
+                public_key: parse_hex_32("p", &row.public_key).unwrap(),
+                e_memo: None,
+                cluster_tags: Default::default(),
+                kem_ciphertext: parse_kem_ciphertext("k", &row.kem_ciphertext).unwrap(),
+            };
+            let detected = detect_lottery_payout(&output, &account, Some(&kp), context);
+            match case["expect"].as_object() {
+                None => {
+                    assert!(owned.is_empty(), "{name}");
+                    assert_eq!(detected, None, "{name}");
+                    let err = recover_onetime_private_key(
+                        &output,
+                        &account,
+                        Some(&kp),
+                        0,
+                        0,
+                        Some(context),
+                    )
+                    .unwrap_err();
+                    assert_eq!(
+                        err, "failed to recover V2 lottery payout key: Ownership",
+                        "{name}"
+                    );
+                }
+                Some(expect) => {
+                    let sub = expect["subaddressIndex"].as_u64().unwrap();
+                    assert_eq!(detected, Some(sub), "{name}");
+                    assert_eq!(owned.len(), 1, "{name}");
+                    assert_eq!(owned[0].subaddress_index, sub, "{name}");
+                    let images = compute_owned_output_key_images_inner(&KeyImageRequest {
+                        spend_private_key: spend.clone(),
+                        view_private_key: view.clone(),
+                        seed: seed.clone(),
+                        outputs: owned,
+                    })
+                    .unwrap();
+                    assert_eq!(images[0].key_image, expect["keyImage"].as_str().unwrap());
+                }
+            }
+        }
+    }
+}

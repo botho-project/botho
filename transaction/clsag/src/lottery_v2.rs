@@ -222,6 +222,102 @@ fn derive_inner(
     }
     Err(Error::Exhausted)
 }
+/// A payout tweak: canonical ([`Error::NonCanonicalTweak`]) and nonzero
+/// ([`Error::ZeroTweak`]).
+fn payout_tweak(bytes: Hash) -> Result<Scalar, Error> {
+    let tweak = canonical_tweak(bytes)?;
+    if tweak == Scalar::ZERO {
+        return Err(Error::ZeroTweak);
+    }
+    Ok(tweak)
+}
+/// `P − T·G`, rejected ([`Error::Point`]) when it is the identity.
+fn untweak(target: &RistrettoPublic, tweak: Scalar) -> Result<Hash, Error> {
+    let tweak_point = RistrettoPublic::from(&RistrettoPrivate::from(tweak));
+    let base = RistrettoPublic::from(target.as_ref() - tweak_point.as_ref()).to_bytes();
+    point(base)?;
+    Ok(base)
+}
+
+// ---------------------------------------------------------------------------
+// Shared wallet-side payout helpers (#1667 part 2).
+//
+// Every V2 payout consumer (the wasm-signer core, the bridge reserve scan,
+// botho-wallet and the node wallet) applies the same three rules: validate the
+// served context, scan the base target `P − T·G` at the context's base index,
+// and recover `x_base + T` only if `x·G = P`. These helpers are the one copy
+// of those rules. Each consumer keeps its own wire syntax (hex strictness,
+// error strings) and its own ordinary ownership rule (the callbacks), which
+// legitimately differ; the committed shared vector
+// `tests/fixtures/lottery-v2-wallet.json` pins the observable behavior of
+// every consumer against these helpers.
+// ---------------------------------------------------------------------------
+
+/// Validate the semantic fields of a served payout derivation context (the
+/// `lotteryContext` RPC row, frozen #1641 contract) and build the [`Context`].
+///
+/// Rejects an unknown `version` ([`Error::Version`]), a non-canonical tweak
+/// ([`Error::NonCanonicalTweak`]) and the zero tweak ([`Error::ZeroTweak`]): a
+/// payout always carries a nonzero cumulative tweak, and a zero tweak would
+/// make the "payout" an alias of its source (the #1450 legacy shape). This is
+/// syntax only, NOT chain authentication: a forged context can only cause a
+/// missed payout or a refused spend, never a wrong key (see
+/// [`recover_with_context`]). The caller parses the tweak's wire encoding.
+pub fn payout_context(version: u8, base_index: u32, tweak: Hash) -> Result<Context, Error> {
+    if version != CONTEXT_VERSION {
+        return Err(Error::Version);
+    }
+    payout_tweak(tweak)?;
+    Ok(Context { base_index, tweak })
+}
+
+/// The base target `P − T·G` a payout with one-time key `target_key` (`P`) is
+/// scanned against at `context.base_index`. This is exactly the base output
+/// [`recover_with_context`] hands to its wallet callback.
+///
+/// Fails like [`recover_with_context`]: [`Error::NonCanonicalTweak`] /
+/// [`Error::ZeroTweak`] for the tweak, [`Error::Point`] for a target that is
+/// not a canonical non-identity point or an identity base.
+pub fn base_target(target_key: &Hash, context: &Context) -> Result<Hash, Error> {
+    let tweak = payout_tweak(context.tweak)?;
+    untweak(&point(*target_key)?, tweak)
+}
+
+/// [`recover_with_context`] for a wallet whose base recovery also reports who
+/// owns the base output (a subaddress index). Returns that owner with the
+/// payout key; the owner is only returned when `x·G = P` holds.
+///
+/// This is the shared form of `detect_lottery_payout` (owner only) and
+/// `recover_onetime_private_key` (key only).
+pub fn recover_payout_owner<O>(
+    output: &TxOutput,
+    context: &Context,
+    recover_base: impl FnOnce(&TxOutput, u32) -> Option<(O, RistrettoPrivate)>,
+) -> Result<(O, RistrettoPrivate), Error> {
+    let mut owner = None;
+    let key = recover_with_context(output, context, |base, index| {
+        let (found, key) = recover_base(base, index)?;
+        owner = Some(found);
+        Some(key)
+    })?;
+    Ok((owner.ok_or(Error::Ownership)?, key))
+}
+
+/// [`recover_direct`] with the base recovery's owner, like
+/// [`recover_payout_owner`].
+pub fn recover_direct_owner<O>(
+    output: &TxOutput,
+    base_index: u32,
+    recover_base: impl FnOnce(&TxOutput, u32) -> Option<(O, RistrettoPrivate)>,
+) -> Result<(O, RistrettoPrivate), Error> {
+    let mut owner = None;
+    let key = recover_direct(output, base_index, |base, index| {
+        let (found, key) = recover_base(base, index)?;
+        owner = Some(found);
+        Some(key)
+    })?;
+    Ok((owner.ok_or(Error::Ownership)?, key))
+}
 /// Recover a V2 lottery payout through the existing wallet derivation
 /// callback, then prove xG=P. This checks key ownership, not the chain
 /// authentication of `context`.
@@ -238,16 +334,11 @@ pub fn recover_with_context(
     context: &Context,
     recover_base: impl FnOnce(&TxOutput, u32) -> Option<RistrettoPrivate>,
 ) -> Result<RistrettoPrivate, Error> {
-    let tweak = canonical_tweak(context.tweak)?;
-    if tweak == Scalar::ZERO {
-        return Err(Error::ZeroTweak);
-    }
+    let tweak = payout_tweak(context.tweak)?;
     let target = point(output.target_key)?;
     point(output.public_key)?;
-    let tweak_point = RistrettoPublic::from(&RistrettoPrivate::from(tweak));
     let mut base = output.clone();
-    base.target_key = RistrettoPublic::from(target.as_ref() - tweak_point.as_ref()).to_bytes();
-    point(base.target_key)?;
+    base.target_key = untweak(&target, tweak)?;
     let key = recover_base(&base, context.base_index).ok_or(Error::Ownership)?;
     let base_secret: &Scalar = key.as_ref();
     let recovered = RistrettoPrivate::from(*base_secret + tweak);

@@ -615,3 +615,83 @@ fn node_wallet_v2_payout_at_real_720_block_maturity() {
         eprintln!("note: no repeated/nested award occurred naturally in this run");
     }
 }
+
+/// The shared V2 payout wallet vector (#1667 part 2), committed once in
+/// `transaction/clsag/tests/fixtures/lottery-v2-wallet.json` and run by every
+/// payout consumer: [`recover_with_base`] (the node wallet's one recovery rule)
+/// under a `Lottery` context recovers exactly the vector's owner and key
+/// image, and under a `Direct` context its untweaked source. The base callback
+/// is the unified hybrid ownership rule `recover_owned` applies through
+/// `Wallet::scan_output`.
+#[cfg(feature = "pq")]
+#[test]
+fn recover_with_base_matches_the_shared_wallet_vector() {
+    use bth_account_keys::AccountKey;
+    use bth_crypto_keys::RistrettoPrivate;
+    use serde_json::Value;
+
+    let v: Value = serde_json::from_str(include_str!(
+        "../../../../../../transaction/clsag/tests/fixtures/lottery-v2-wallet.json"
+    ))
+    .unwrap();
+    let h32 = |s: &Value| -> [u8; 32] {
+        hex::decode(s.as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap()
+    };
+    let a = &v["account"];
+    let account = AccountKey::new(
+        &RistrettoPrivate::try_from(&h32(&a["spendPrivateKey"])).unwrap(),
+        &RistrettoPrivate::try_from(&h32(&a["viewPrivateKey"])).unwrap(),
+    );
+    let seed: [u8; 64] = hex::decode(a["seed"].as_str().unwrap())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let kp = bth_crypto_pq::derive_pq_keys_from_seed(&seed).kem_keypair;
+    let output = |o: &Value| TxOutput {
+        amount: 1,
+        target_key: h32(&o["targetKey"]),
+        public_key: h32(&o["publicKey"]),
+        e_memo: None,
+        cluster_tags: Default::default(),
+        kem_ciphertext: o["kemCiphertext"].as_str().map(|s| hex::decode(s).unwrap()),
+    };
+    let base = |base: &TxOutput, index: u32| {
+        let sub = base.belongs_to_account(&account, &kp, index)?;
+        Some((sub, base.recover_spend_key_for(&account, &kp, sub, index)?))
+    };
+    for case in v["recoveries"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let wire = &case["wire"];
+        let context = StoredContext::Lottery {
+            height: wire["height"].as_u64().unwrap(),
+            ordinal: wire["ordinal"].as_u64().unwrap() as u32,
+            context: Context {
+                base_index: wire["baseIndex"].as_u64().unwrap() as u32,
+                tweak: h32(&wire["tweak"]),
+            },
+        };
+        let got = recover_with_base(&output(&case["output"]), &context, base);
+        match case["expect"].as_object() {
+            None => assert_eq!(got.err(), Some(clsag_v2::Error::Ownership), "{name}"),
+            Some(expect) => {
+                let (sub, key) = got.unwrap();
+                assert_eq!(sub, expect["subaddressIndex"].as_u64().unwrap(), "{name}");
+                assert_eq!(
+                    hex::encode(KeyImage::from(&key).as_bytes()),
+                    expect["keyImage"].as_str().unwrap(),
+                    "{name}"
+                );
+                let direct = StoredContext::Direct {
+                    height: 1,
+                    base_index: wire["baseIndex"].as_u64().unwrap() as u32,
+                };
+                let (direct_sub, _) =
+                    recover_with_base(&output(&case["source"]), &direct, base).unwrap();
+                assert_eq!(direct_sub, sub, "{name}");
+            }
+        }
+    }
+}

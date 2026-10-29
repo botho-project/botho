@@ -7,10 +7,9 @@ use anyhow::{anyhow, Result};
 #[cfg(feature = "pq")]
 use bth_account_keys::QuantumSafeAccountKey;
 use bth_account_keys::{AccountKey, PublicAddress};
-use bth_crypto_keys::{RistrettoPrivate, RistrettoPublic};
+use bth_crypto_keys::RistrettoPrivate;
 #[cfg(test)]
 use bth_crypto_ring_signature::onetime_keys::recover_public_subaddress_spend_key;
-use bth_crypto_ring_signature::Scalar;
 use bth_transaction_clsag::{
     lottery_v2, ClsagRingInput, RingMember, Transaction, TxOutput, MIN_RING_SIZE,
 };
@@ -204,12 +203,12 @@ fn recover_base_key(
 /// The base target `P − T·G` a V2 payout with target `P` and cumulative tweak
 /// `T` is scanned against. `None` for a malformed target or tweak, or an
 /// identity base.
-fn lottery_base_target(target_key: &[u8; 32], tweak: &[u8; 32]) -> Option<[u8; 32]> {
-    let target = RistrettoPublic::try_from(&target_key[..]).ok()?;
-    let tweak = Option::<Scalar>::from(Scalar::from_canonical_bytes(*tweak))?;
-    let tweak_point = RistrettoPublic::from(&RistrettoPrivate::from(tweak));
-    let base = RistrettoPublic::from(target.as_ref() - tweak_point.as_ref()).to_bytes();
-    (base != [0; 32]).then_some(base)
+//
+// The shared `lottery_v2::base_target` (#1667) is exactly the base output
+// recovery checks; it also rejects an identity target, which the previous local
+// copy let through to a scan that could never prove `x·G = P` for it.
+fn lottery_base_target(target_key: &[u8; 32], context: &lottery_v2::Context) -> Option<[u8; 32]> {
+    lottery_v2::base_target(target_key, context).ok()
 }
 
 /// UTXO identifier
@@ -695,7 +694,7 @@ impl<'a> WalletScanner<'a> {
                 let (scan_target, crypto_index, lottery_context) = match derivation {
                     OutputDerivation::Direct { index } => (target_key, index, None),
                     OutputDerivation::LotteryV2 { context } => {
-                        let Some(base) = lottery_base_target(&target_key, &context.tweak) else {
+                        let Some(base) = lottery_base_target(&target_key, &context) else {
                             continue;
                         };
                         (base, context.base_index, output.lottery_context.clone())
@@ -785,8 +784,8 @@ impl<'a> WalletScanner<'a> {
         let view_private = self.account_key.view_private_key();
 
         // Parse keys
-        let public_key_point = RistrettoPublic::try_from(&public_key[..]).ok()?;
-        let target_key_point = RistrettoPublic::try_from(&target_key[..]).ok()?;
+        let public_key_point = bth_crypto_keys::RistrettoPublic::try_from(&public_key[..]).ok()?;
+        let target_key_point = bth_crypto_keys::RistrettoPublic::try_from(&target_key[..]).ok()?;
 
         // Recover the spend public key that would correspond to this output
         let recovered_spend_key =
@@ -943,6 +942,8 @@ pub fn parse_amount(cad: &str) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bth_crypto_keys::RistrettoPublic;
+    use bth_crypto_ring_signature::Scalar;
 
     #[test]
     fn test_format_amount() {
@@ -1771,6 +1772,68 @@ mod tests {
                 })
                 .collect();
             assert_eq!(images.len(), 3, "every lineage member has its own image");
+        }
+    }
+
+    /// The shared V2 payout wallet vector (#1667 part 2), committed once in
+    /// `transaction/clsag/tests/fixtures/lottery-v2-wallet.json` and run by
+    /// every payout consumer. This wallet keeps its own (stricter,
+    /// lowercase-only) hex syntax for `lotteryContext.tweak`; the semantic
+    /// rules and the base target are the shared `lottery_v2` helpers. Its
+    /// recovery is `lottery_v2::recover_with_context` itself.
+    mod shared_wallet_vector {
+        use super::super::*;
+        use crate::rpc_pool::LotteryContext;
+        use serde_json::Value;
+
+        const SHARED: &str =
+            include_str!("../../transaction/clsag/tests/fixtures/lottery-v2-wallet.json");
+
+        fn shared() -> Value {
+            serde_json::from_str(SHARED).unwrap()
+        }
+
+        fn h32(s: &str) -> [u8; 32] {
+            hex::decode(s).unwrap().try_into().unwrap()
+        }
+
+        /// The wallet's parse returns `None` for every rejection class; the
+        /// shared vector's verdict (or its strict-hex override) says which
+        /// rows must parse.
+        #[test]
+        fn contexts_match_the_shared_verdicts() {
+            for case in shared()["contexts"].as_array().unwrap() {
+                let expect = case
+                    .get("expectStrictHex")
+                    .unwrap_or(&case["expect"])
+                    .as_str()
+                    .unwrap();
+                let wire: LotteryContext = serde_json::from_value(case["wire"].clone()).unwrap();
+                let parsed = wire.derivation();
+                assert_eq!(parsed.is_some(), expect == "ok", "{}", case["name"]);
+                if let Some(context) = parsed {
+                    assert_eq!(context.base_index, wire.base_index);
+                    assert_eq!(hex::encode(context.tweak), wire.tweak.to_lowercase());
+                }
+            }
+        }
+
+        #[test]
+        fn base_targets_match_the_shared_vector() {
+            for case in shared()["baseTargets"].as_array().unwrap() {
+                let context = lottery_v2::Context {
+                    base_index: case["baseIndex"].as_u64().unwrap() as u32,
+                    tweak: h32(case["tweak"].as_str().unwrap()),
+                };
+                let target = h32(case["targetKey"].as_str().unwrap());
+                let expect = case["expect"].as_str().unwrap();
+                assert_eq!(
+                    lottery_base_target(&target, &context).map(hex::encode),
+                    (expect.len() == 64).then(|| expect.to_string()),
+                    "{}",
+                    case["name"]
+                );
+            }
         }
     }
 }
