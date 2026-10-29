@@ -84,6 +84,47 @@ fn check_context(
 }
 
 impl Ledger {
+    /// Height of the V2 snapshot this ledger was restored from, or `None` for
+    /// a ledger synced from genesis. A restored ledger holds genesis and the
+    /// blocks from this height upward; block reads strictly in between fail
+    /// with [`LedgerError::BelowSnapshotBase`].
+    pub fn snapshot_base_height(&self) -> Result<Option<u64>, LedgerError> {
+        let txn = self
+            .env
+            .read_txn()
+            .map_err(db_op("snapshot base read txn"))?;
+        self.snapshot_base_in(&txn)
+    }
+
+    /// [`Ledger::snapshot_base_height`] inside `txn` (strictly decoded).
+    pub(in crate::ledger) fn snapshot_base_in(
+        &self,
+        txn: &heed::RoTxn<'_>,
+    ) -> Result<Option<u64>, LedgerError> {
+        self.meta_db
+            .get(txn, META_SNAPSHOT_BASE)
+            .map_err(db_op("read snapshot base"))?
+            .map(|b| crate::ledger::lottery_v2::fixed(b).map(u64::from_le_bytes))
+            .transpose()
+    }
+
+    /// The error for a block absent at `height`:
+    /// [`LedgerError::BelowSnapshotBase`] strictly between genesis and the
+    /// snapshot base of a restored ledger,
+    /// otherwise [`LedgerError::BlockNotFound`].
+    pub(in crate::ledger) fn missing_block_error(
+        &self,
+        txn: &heed::RoTxn<'_>,
+        height: u64,
+    ) -> Result<LedgerError, LedgerError> {
+        Ok(match self.snapshot_base_in(txn)? {
+            Some(base) if height > 0 && height < base => {
+                LedgerError::BelowSnapshotBase { height, base }
+            }
+            _ => LedgerError::BlockNotFound(height),
+        })
+    }
+
     /// Strict V2 export from one read transaction.
     pub(super) fn create_snapshot_v2(&self) -> Result<UtxoSnapshotV2, LedgerError> {
         let rtxn = self.env.read_txn().map_err(db_op("snapshot read txn"))?;
@@ -245,6 +286,17 @@ impl Ledger {
         }
         if height == 0 && snapshot.lottery_pool != 0 {
             return Err(rejected("non-zero lottery pool at genesis"));
+        }
+        // `get_chain_state` derives tip_timestamp from the tip block (0 at
+        // genesis); the committed value must agree with the carried block.
+        let tip_timestamp = if height > 0 { tip.header.timestamp } else { 0 };
+        if snapshot.chain_state.tip_timestamp != tip_timestamp {
+            return Err(rejected(
+                "chain state tip timestamp disagrees with the tip block",
+            ));
+        }
+        if contents.key_images.iter().any(|(_, spent)| *spent > height) {
+            return Err(rejected("key image spent above the snapshot height"));
         }
         let mut contexts = Vec::with_capacity(contents.contexts.len());
         for (utxo, (_, encoded)) in contents.utxos.iter().zip(&contents.contexts) {

@@ -815,11 +815,14 @@ impl Ledger {
             .read_txn()
             .map_err(|e| LedgerError::Database(format!("Failed to start read txn: {}", e)))?;
 
-        let bytes = self
+        let bytes = match self
             .blocks_db
             .get(&rtxn, &height)
             .map_err(|e| LedgerError::Database(format!("Failed to get block: {}", e)))?
-            .ok_or(LedgerError::BlockNotFound(height))?;
+        {
+            Some(bytes) => bytes,
+            None => return Err(self.missing_block_error(&rtxn, height)?),
+        };
 
         bincode::deserialize(bytes).map_err(|e| LedgerError::Serialization(e.to_string()))
     }
@@ -858,7 +861,9 @@ impl Ledger {
                         return Ok(Some(block));
                     }
                 }
-                Err(LedgerError::BlockNotFound(_)) => continue,
+                Err(LedgerError::BlockNotFound(_) | LedgerError::BelowSnapshotBase { .. }) => {
+                    continue
+                }
                 Err(e) => return Err(e),
             }
         }
@@ -1095,7 +1100,12 @@ impl Ledger {
                         .map_err(|e| LedgerError::Serialization(e.to_string()))?;
                     blocks.push(block);
                 }
-                Ok(None) => break,
+                // A snapshot-restored ledger does not hold (0, base): report
+                // that instead of a silently short range (#1646).
+                Ok(None) => match self.missing_block_error(&rtxn, height)? {
+                    e @ LedgerError::BelowSnapshotBase { .. } => return Err(e),
+                    _ => break,
+                },
                 Err(e) => return Err(LedgerError::Database(format!("Failed to get block: {}", e))),
             }
         }

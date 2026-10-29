@@ -61,6 +61,27 @@ const SNAPSHOT_V2_DOMAIN: &[u8] = b"botho.snapshot.2";
 /// Width of an outpoint key (`UtxoId::to_bytes()`).
 const OUTPOINT_LEN: usize = 36;
 
+/// Hard ceiling on the total decompressed size of a V2 snapshot's sections
+/// and tip block (2 GiB). Every section's output is additionally capped by
+/// its declared row count (see [`UtxoSnapshotV2::section_caps`]), so a forged
+/// or corrupt file can never make decompression allocate more than this,
+/// whatever its compression ratio. The ledger's LMDB map is 1 GiB
+/// (`LEDGER_MAP_SIZE`), so no loadable snapshot comes close.
+pub const MAX_SNAPSHOT_DECOMPRESSED: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Decompressed-size cap of the tip block (the stored-block bound of the
+/// strict ledger decoder, 16 MiB).
+pub const MAX_SNAPSHOT_TIP_BLOCK: u64 = 16 * 1024 * 1024;
+
+/// Conservative per-row maximum of a bincode `Utxo`, used as an *average*
+/// bound for the UTXO section. A protocol-6 hybrid output is about 1.5 KB
+/// (36 B id, amounts/keys, at most `MAX_CLUSTER_TAGS` = 16 tag entries, an
+/// optional memo and a 1,088 B ML-KEM-768 ciphertext); 4 KiB leaves headroom.
+const MAX_UTXO_ROW: u64 = 4096;
+
+/// bincode `Vec` length prefix.
+const LEN_PREFIX: u64 = 8;
+
 /// Zstd compression level (3 = balanced speed/compression)
 const COMPRESSION_LEVEL: i32 = 3;
 
@@ -643,29 +664,91 @@ impl UtxoSnapshotV2 {
         Ok(h.finalize().into())
     }
 
-    /// Decompressed tip block bytes (bincode `Block`).
+    /// Decompressed tip block bytes (bincode `Block`), capped at
+    /// [`MAX_SNAPSHOT_TIP_BLOCK`].
     pub fn tip_block_bytes(&self) -> Result<Vec<u8>, SnapshotError> {
-        decompress(&self.tip_block_data)
+        decompress_bounded(&self.tip_block_data, MAX_SNAPSHOT_TIP_BLOCK, "tip block")
     }
 
-    /// Decompress and strictly decode every section (no integrity check).
+    /// Decompressed-size cap of each section, derived from the declared row
+    /// counts before anything is decompressed: `utxos, contexts,
+    /// address_index, key_images, cluster_wealth, import_clusters`. Fails if
+    /// any cap overflows or their sum plus the tip-block cap exceeds
+    /// [`MAX_SNAPSHOT_DECOMPRESSED`].
+    pub fn section_caps(&self) -> Result<[u64; 6], SnapshotError> {
+        let too_big = || {
+            SnapshotError::Invalid(format!(
+                "declared row counts exceed the {MAX_SNAPSHOT_DECOMPRESSED} B decompressed \
+                 snapshot ceiling"
+            ))
+        };
+        let cap = |count: u64, row: u64| {
+            count
+                .checked_mul(row)
+                .and_then(|n| n.checked_add(LEN_PREFIX))
+                .ok_or_else(too_big)
+        };
+        let caps = [
+            cap(self.utxo_count, MAX_UTXO_ROW)?,
+            // (Vec<u8> 36 B key, Vec<u8> <= 49 B Lottery encoding)
+            cap(self.context_count, LEN_PREFIX + 36 + LEN_PREFIX + 49)?,
+            // Rows of ([u8; 32], Vec<u8>); their ids total 36 B per UTXO.
+            cap(self.address_index_count, 32 + LEN_PREFIX)?
+                .checked_add(self.utxo_count.checked_mul(36).ok_or_else(too_big)?)
+                .ok_or_else(too_big)?,
+            cap(self.key_image_count, 32 + 8)?,
+            cap(self.cluster_count, 8 + 16)?,
+            cap(self.import_cluster_count, 8)?,
+        ];
+        let total = caps
+            .iter()
+            .try_fold(MAX_SNAPSHOT_TIP_BLOCK, |sum, c| sum.checked_add(*c))
+            .ok_or_else(too_big)?;
+        if total > MAX_SNAPSHOT_DECOMPRESSED {
+            return Err(too_big());
+        }
+        Ok(caps)
+    }
+
+    /// Decompress (each section bounded by [`Self::section_caps`]) and
+    /// strictly decode every section. No integrity check beyond the bounds.
     pub fn contents(&self) -> Result<SnapshotV2Contents, SnapshotError> {
+        let [utxo, context, address, key_image, cluster, import] = self.section_caps()?;
         Ok(SnapshotV2Contents {
-            utxos: de_strict(&decompress(&self.utxo_data)?)?,
-            contexts: de_strict(&decompress(&self.context_data)?)?,
-            address_index: de_strict(&decompress(&self.address_index_data)?)?,
-            key_images: de_strict(&decompress(&self.key_image_data)?)?,
-            cluster_wealth: de_strict(&decompress(&self.cluster_wealth_data)?)?,
-            import_clusters: de_strict(&decompress(&self.import_cluster_data)?)?,
+            utxos: de_strict(&decompress_bounded(&self.utxo_data, utxo, "UTXO")?)?,
+            contexts: de_strict(&decompress_bounded(&self.context_data, context, "context")?)?,
+            address_index: de_strict(&decompress_bounded(
+                &self.address_index_data,
+                address,
+                "address index",
+            )?)?,
+            key_images: de_strict(&decompress_bounded(
+                &self.key_image_data,
+                key_image,
+                "key image",
+            )?)?,
+            cluster_wealth: de_strict(&decompress_bounded(
+                &self.cluster_wealth_data,
+                cluster,
+                "cluster wealth",
+            )?)?,
+            import_clusters: de_strict(&decompress_bounded(
+                &self.import_cluster_data,
+                import,
+                "import cluster",
+            )?)?,
         })
     }
 
     /// Full integrity check. Returns the verified contents and tip block
     /// bytes, so a loader never acts on data other than what was verified.
     ///
-    /// Checks: version and storage marker; canonical section order and the
-    /// one-context-per-UTXO bijection; every count and Merkle root against
-    /// the decompressed data; and the commitment over all of it.
+    /// Checks, cheapest first: version and storage marker; the decompression
+    /// bounds implied by the declared counts; the commitment over the header
+    /// (declared counts and roots) and the bounded tip block, before any
+    /// section is decompressed; then, per bounded section, canonical order,
+    /// the one-context-per-UTXO and address-index bijections, and every
+    /// count and Merkle root against the decompressed data.
     pub fn verify(&self) -> Result<(SnapshotV2Contents, Vec<u8>), SnapshotError> {
         if self.version != SNAPSHOT_VERSION_V2 {
             return Err(SnapshotError::VersionMismatch {
@@ -679,6 +762,13 @@ impl UtxoSnapshotV2 {
                 String::from_utf8_lossy(&self.storage_schema),
                 String::from_utf8_lossy(SNAPSHOT_V2_SCHEMA),
             )));
+        }
+        self.section_caps()?;
+        let tip = self.tip_block_bytes()?;
+        if self.compute_commitment(&sha256(&tip))? != self.commitment {
+            return Err(SnapshotError::MerkleVerification(
+                "snapshot commitment mismatch".into(),
+            ));
         }
         let contents = self.contents()?;
         contents.check_canonical()?;
@@ -740,12 +830,6 @@ impl UtxoSnapshotV2 {
                     "{what} Merkle root mismatch"
                 )));
             }
-        }
-        let tip = self.tip_block_bytes()?;
-        if self.compute_commitment(&sha256(&tip))? != self.commitment {
-            return Err(SnapshotError::MerkleVerification(
-                "snapshot commitment mismatch".into(),
-            ));
         }
         Ok((contents, tip))
     }
@@ -861,7 +945,27 @@ fn compress(data: &[u8]) -> Result<Vec<u8>, SnapshotError> {
     zstd::encode_all(data, COMPRESSION_LEVEL).map_err(|e| SnapshotError::Compression(e.to_string()))
 }
 
-/// Decompress zstd-compressed data.
+/// Decompress zstd data, refusing to produce more than `cap` bytes. The
+/// output buffer grows only with bytes actually produced (streaming, never
+/// pre-sized from an untrusted length), and decoding stops at `cap + 1`.
+fn decompress_bounded(data: &[u8], cap: u64, what: &str) -> Result<Vec<u8>, SnapshotError> {
+    let decoder = zstd::stream::read::Decoder::with_buffer(data)
+        .map_err(|e| SnapshotError::Decompression(e.to_string()))?;
+    let mut out = Vec::new();
+    decoder
+        .take(cap.saturating_add(1))
+        .read_to_end(&mut out)
+        .map_err(|e| SnapshotError::Decompression(e.to_string()))?;
+    if out.len() as u64 > cap {
+        return Err(SnapshotError::Decompression(format!(
+            "{what} section decompresses past its {cap} B bound"
+        )));
+    }
+    Ok(out)
+}
+
+/// Decompress zstd-compressed data (unbounded: V1 snapshots only, which
+/// `botho.ledger.2` ledgers refuse to load; never used on V2 input).
 fn decompress(data: &[u8]) -> Result<Vec<u8>, SnapshotError> {
     zstd::decode_all(data).map_err(|e| SnapshotError::Decompression(e.to_string()))
 }

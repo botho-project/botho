@@ -557,3 +557,170 @@ fn measure_snapshot_v2_size_and_timing() {
         load,
     );
 }
+
+/// zstd of `len` zero bytes: a few KB that inflate enormously.
+fn zeros_bomb(len: usize) -> Vec<u8> {
+    zstd::encode_all(&vec![0u8; len][..], 19).unwrap()
+}
+
+#[test]
+fn decompression_is_bounded_by_declared_counts() {
+    let src_dir = TempDir::new().unwrap();
+    let src = source_chain(src_dir.path());
+    let snapshot = src.ledger.create_snapshot().unwrap();
+    let dst_dir = TempDir::new().unwrap();
+    let dst = Ledger::open(dst_dir.path()).unwrap();
+
+    // One declared key image (cap 8 + 40 B) but the section inflates to
+    // 64 MiB. Without the bound this decompresses fully and only then fails
+    // strict decoding ("bytes remaining"); with it, decoding stops at the cap.
+    let mut bomb = snapshot.clone();
+    bomb.key_image_data = zeros_bomb(64 << 20);
+    assert!(bomb.key_image_data.len() < 16 << 10);
+    let bound = |e: &dyn std::fmt::Display| {
+        let m = e.to_string();
+        assert!(
+            m.contains("key image section decompresses past its 48 B bound"),
+            "{m}"
+        );
+    };
+    bound(&bomb.verify().unwrap_err()); // the `snapshot info` path
+    bound(&bomb.contents().unwrap_err());
+    bound(&assert_refused_untouched(&dst, |l| {
+        l.load_from_snapshot(&bomb, None)
+    }));
+    let file = dst_dir.path().join("bomb.snapshot");
+    let mut bytes = Vec::new();
+    bomb.write_to(&mut bytes).unwrap();
+    std::fs::write(&file, bytes).unwrap();
+    bound(&assert_refused_untouched(&dst, |l| {
+        l.load_snapshot_from_file(&file, None)
+    }));
+
+    // The tip block is capped at the stored-block bound.
+    let mut tip_bomb = snapshot.clone();
+    tip_bomb.tip_block_data = zeros_bomb(17 << 20);
+    let err = assert_refused_untouched(&dst, |l| l.load_from_snapshot(&tip_bomb, None));
+    assert!(
+        err.to_string()
+            .contains("tip block section decompresses past"),
+        "{err}"
+    );
+
+    // Forged counts cannot raise the cap past the global ceiling (checked
+    // before anything is decompressed), including on overflow.
+    for count in [u64::MAX, u64::MAX / 4096, (2u64 << 30) / 40] {
+        let mut forged = snapshot.clone();
+        forged.key_image_count = count;
+        let err = assert_refused_untouched(&dst, |l| l.load_from_snapshot(&forged, None));
+        assert!(
+            err.to_string().contains("decompressed snapshot ceiling"),
+            "{err}"
+        );
+        assert!(forged.verify().is_err());
+    }
+
+    // The genuine snapshot is within every bound and still loads.
+    dst.load_from_snapshot(&snapshot, None).unwrap();
+}
+
+#[test]
+fn restored_ledger_reports_blocks_below_its_snapshot_base() {
+    let src_dir = TempDir::new().unwrap();
+    let src = source_chain(src_dir.path());
+    assert_eq!(src.ledger.snapshot_base_height().unwrap(), None);
+    assert!(matches!(
+        src.ledger.get_block(9),
+        Err(LedgerError::BlockNotFound(9))
+    ));
+    let snapshot = src.ledger.create_snapshot().unwrap();
+    let dst_dir = TempDir::new().unwrap();
+    let dst = Ledger::open(dst_dir.path()).unwrap();
+    dst.load_from_snapshot(&snapshot, None).unwrap();
+
+    assert_eq!(dst.snapshot_base_height().unwrap(), Some(3));
+    let genesis = dst.get_block(0).unwrap();
+    assert_eq!(genesis.hash(), snapshot.genesis_hash);
+    for h in [1, 2] {
+        match dst.get_block(h) {
+            Err(LedgerError::BelowSnapshotBase { height, base }) => {
+                assert_eq!((height, base), (h, 3))
+            }
+            other => panic!("height {h}: {other:?}"),
+        }
+    }
+    assert_eq!(dst.get_block(3).unwrap().hash(), src.tip.hash());
+    assert!(matches!(
+        dst.get_block(4),
+        Err(LedgerError::BlockNotFound(4))
+    ));
+    // Range reads fail closed across the gap instead of returning a short
+    // range, and still serve from the base upward.
+    assert!(matches!(
+        dst.get_blocks(0, 5),
+        Err(LedgerError::BelowSnapshotBase { height: 1, base: 3 })
+    ));
+    assert!(matches!(
+        dst.get_blocks(2, 1),
+        Err(LedgerError::BelowSnapshotBase { height: 2, base: 3 })
+    ));
+    let from_base = dst.get_blocks(3, 5).unwrap();
+    assert_eq!(from_base.len(), 1);
+    assert_eq!(from_base[0].hash(), src.tip.hash());
+    // Hash lookback skips the gap rather than failing.
+    assert_eq!(
+        dst.get_block_by_hash(&genesis.hash(), 10)
+            .unwrap()
+            .map(|b| b.hash()),
+        Some(genesis.hash())
+    );
+    assert_eq!(
+        dst.get_block_by_hash(&[0xcd; 32], 10)
+            .unwrap()
+            .map(|b| b.hash()),
+        None
+    );
+}
+
+/// Re-commit `snapshot` with edited chain state / contents (a consistent
+/// forgery: only the semantic load checks can catch it).
+fn recommit(
+    snapshot: &UtxoSnapshotV2,
+    edit: impl FnOnce(&mut ChainState, &mut SnapshotV2Contents),
+) -> UtxoSnapshotV2 {
+    let mut state = snapshot.chain_state.clone();
+    let mut contents = snapshot.contents().unwrap();
+    edit(&mut state, &mut contents);
+    UtxoSnapshotV2::new(
+        snapshot.genesis_hash,
+        snapshot.height,
+        snapshot.block_hash,
+        state,
+        snapshot.lottery_pool,
+        &snapshot.tip_block_bytes().unwrap(),
+        &contents,
+    )
+    .unwrap()
+}
+
+#[test]
+fn tip_timestamp_and_key_image_heights_are_checked() {
+    let src_dir = TempDir::new().unwrap();
+    let src = source_chain(src_dir.path());
+    let snapshot = src.ledger.create_snapshot().unwrap();
+    let dst_dir = TempDir::new().unwrap();
+    let dst = Ledger::open(dst_dir.path()).unwrap();
+
+    let skewed = recommit(&snapshot, |s, _| s.tip_timestamp += 1);
+    skewed.verify().unwrap();
+    let err = assert_refused_untouched(&dst, |l| l.load_from_snapshot(&skewed, None));
+    assert!(err.to_string().contains("tip timestamp"), "{err}");
+
+    let future = recommit(&snapshot, |_, c| c.key_images[0].1 = snapshot.height + 1);
+    future.verify().unwrap();
+    let err = assert_refused_untouched(&dst, |l| l.load_from_snapshot(&future, None));
+    assert!(err.to_string().contains("key image spent above"), "{err}");
+
+    let at_tip = recommit(&snapshot, |_, c| c.key_images[0].1 = snapshot.height);
+    dst.load_from_snapshot(&at_tip, None).unwrap();
+}

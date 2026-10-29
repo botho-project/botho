@@ -41,6 +41,17 @@ pub enum LedgerError {
     #[error("Block not found: height {0}")]
     BlockNotFound(u64),
 
+    /// The ledger was restored from a V2 snapshot at height `base` (#1646):
+    /// it holds genesis and the blocks from `base` upward, but not `height`
+    /// (0 < height < base). Distinct from [`LedgerError::BlockNotFound`] so
+    /// callers (sync serving, RPC block scans) report "not held here" rather
+    /// than treating the height as past the tip.
+    #[error(
+        "Block {height} is not held: this ledger was restored from a snapshot at height \
+         {base} and holds only genesis and blocks from {base} upward"
+    )]
+    BelowSnapshotBase { height: u64, base: u64 },
+
     #[error("Invalid block: {0}")]
     InvalidBlock(String),
 

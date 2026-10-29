@@ -118,17 +118,12 @@ pub(in crate::ledger) fn classify(
     Ok(StoreSchema::Fresh)
 }
 
-/// Whether `height` lies strictly below the V2 snapshot this ledger was
-/// restored from (strictly decoded; absent on ledgers synced from genesis).
+/// Whether `height` lies strictly between genesis and the V2 snapshot this
+/// ledger was restored from (blocks the restored ledger does not hold).
 fn below_snapshot_base(ledger: &Ledger, txn: &RoTxn<'_>, height: u64) -> Result<bool, LedgerError> {
-    match ledger
-        .meta_db
-        .get(txn, super::snapshot_v2::META_SNAPSHOT_BASE)
-        .map_err(db_op("read snapshot base"))?
-    {
-        Some(bytes) => Ok(height > 0 && height < u64::from_le_bytes(fixed(bytes)?)),
-        None => Ok(false),
-    }
+    Ok(ledger
+        .snapshot_base_in(txn)?
+        .is_some_and(|base| height > 0 && height < base))
 }
 
 /// Strict context read inside `txn`: a missing context is
