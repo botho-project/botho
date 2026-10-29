@@ -441,6 +441,52 @@ mod tests {
         assert_eq!(data.as_slice(), decompressed.as_slice());
     }
 
+    /// Payload used for the zstd compatibility fixture below.
+    fn zstd_compat_payload() -> Vec<u8> {
+        let mut data = Vec::new();
+        for i in 0u32..64 {
+            data.extend_from_slice(b"botho snapshot zstd compat ");
+            data.extend_from_slice(&i.to_le_bytes());
+        }
+        data
+    }
+
+    /// Frame produced by `zstd::encode_all(zstd_compat_payload(), 3)` with
+    /// zstd 0.13.3 / zstd-safe 7.2.4 / zstd-sys 2.0.16+zstd.1.5.7, the stack
+    /// shipped before the RUSTSEC-2026-0391/0398/0403/0410 bump (#1617).
+    const ZSTD_0_13_FRAME_HEX: &[&str] = &[
+        "28b52ffd0058ed05001406626f74686f20736e617073686f74207a73746420636f6d706174200000",
+        "00000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223242526",
+        "2728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f0000003f20e03703a288273251c413",
+        "9928e2894c14f144268a782213453c9189423c9189229ec844114f64a288273251c4139928e2894c",
+        "14f1444614f144268a782213453c9189229ec844114f64a288273251c4233251827817617202",
+    ];
+
+    fn decode_hex(parts: &[&str]) -> Vec<u8> {
+        let hex: String = parts.concat();
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// Snapshots written by older nodes (zstd 0.13) must still decode after
+    /// the zstd upgrade, since snapshot files are persisted on disk.
+    #[test]
+    fn test_decompress_zstd_0_13_frame() {
+        let frame = decode_hex(ZSTD_0_13_FRAME_HEX);
+        let decompressed = decompress(&frame).unwrap();
+        assert_eq!(decompressed, zstd_compat_payload());
+    }
+
+    /// The current encoder's output for the fixture payload must round-trip.
+    #[test]
+    fn test_zstd_compat_payload_roundtrip() {
+        let payload = zstd_compat_payload();
+        let compressed = compress(&payload).unwrap();
+        assert_eq!(decompress(&compressed).unwrap(), payload);
+    }
+
     #[test]
     fn test_snapshot_creation() {
         let utxos = vec![test_utxo(1), test_utxo(2), test_utxo(3)];
