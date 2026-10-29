@@ -389,9 +389,7 @@ fn actual_ledger_public_inventory_and_boundary_parity() {
             vec![],
         )
         .unwrap();
-        ledger
-            .load_from_snapshot(&snapshot, Some(&[3; 32]))
-            .unwrap();
+        ledger.seed_fixture_snapshot_unvalidated(&snapshot).unwrap();
         assert_eq!(ledger.is_key_image_spent(&image).unwrap(), Some(1500));
         for hash in [[1; 32], [2; 32]] {
             let actual = ledger

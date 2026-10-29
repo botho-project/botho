@@ -56,24 +56,10 @@ pub(super) fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, LedgerError
         .map_err(encoding)
 }
 
-/// Must run before create_database, genesis or metadata initialization.
-pub(super) fn require_v1_schema(env: &Env) -> Result<(), LedgerError> {
-    let txn = env
-        .read_txn()
-        .map_err(db_operation("V1 schema read transaction"))?;
-    let meta: Option<Database<Bytes, Bytes>> = env
-        .open_database(&txn, Some("meta"))
-        .map_err(db_operation("V1 schema open metadata"))?;
-    if let Some(meta) = meta {
-        if let Some(marker) = meta
-            .get(&txn, SCHEMA_KEY)
-            .map_err(db_operation("V1 schema read marker"))?
-        {
-            return Err(LedgerError::UnsupportedSchema(hex::encode(marker)));
-        }
-    }
-    txn.commit().map_err(db_operation("V1 schema read commit"))
-}
+// The former `require_v1_schema` open guard was superseded by the production
+// `botho.ledger.2` classifier (`store::v2::classify`, #1286 P2), which refuses
+// this store's experimental markers by exact comparison under the same
+// `storage_schema` key.
 
 #[derive(Clone)]
 struct Envelope {

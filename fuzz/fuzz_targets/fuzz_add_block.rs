@@ -44,15 +44,13 @@ fn fresh_ledger() -> Option<(tempfile::TempDir, Ledger)> {
     Some((dir, ledger))
 }
 
-/// Sum the value of every UTXO currently in the ledger. Uses the public
-/// snapshot API so we observe exactly what the ledger committed.
+/// Sum the value of every UTXO currently in the ledger, strictly decoded so
+/// we observe exactly what the ledger committed. (`create_snapshot` fails
+/// closed on `botho.ledger.2` stores since #1286 P2.)
 fn sum_utxo_values(ledger: &Ledger) -> u128 {
-    let snapshot = ledger
-        .create_snapshot()
-        .expect("snapshot creatable after successful add_block");
-    let utxos = snapshot
-        .get_utxos()
-        .expect("snapshot UTXOs decodable after successful add_block");
+    let utxos = ledger
+        .fixture_utxos()
+        .expect("UTXOs decodable after successful add_block");
     utxos.iter().map(|u| u.output.amount as u128).sum()
 }
 

@@ -52,14 +52,18 @@ async fn receive_prepare_submit_restore_and_respend() {
         let sink=botho_wallet::WalletKeys::generate().unwrap();
         let ledger=Ledger::open(&dir.path().join("ledger")).unwrap();
         ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
-        // Use the production 720-block lottery maturity threshold. The first
-        // 21 sink coinbases are eligible when the grant is mined at height 741,
-        // while the faucet's height-100 coinbase is still outside the draw.
-        // Neither payment wallet has an old output, so later lottery receipts
-        // cannot change the two-wallet transfer accounting below.
+        // Use the production 720-block lottery maturity threshold. While the
+        // #1286 P2 storage refuses V1 lottery payouts (until P3, #1640), the
+        // whole fixture chain (~462 blocks) stays below the first block that
+        // could pay a lottery, so no payout is ever drawn.
+        // P3 (#1640) must restore the lottery-reaching shape from #1450:
+        // fund through height 740 so the grant block at 741 carries real
+        // payouts, and re-enable the payout assertions gated on
+        // `LOTTERY_REACHED` below. Neither payment wallet has an old output,
+        // so lottery receipts cannot change the transfer accounting below.
         assert_eq!(LotteryFeeConfig::default().draw_config.min_utxo_age, 720,
             "run this fixture without a lottery-age environment override");
-        for height in 1..=740 {
+        for height in 1..=FUNDING_HEIGHT {
             let address=if height==100 {faucet_keys.public_address()} else {sink.public_address()};
             mine_block(&ledger,&address,vec![]);
         }
@@ -77,8 +81,9 @@ async fn receive_prepare_submit_restore_and_respend() {
         let grant_hash: [u8;32]=hex::decode(grant["txHash"].as_str().unwrap()).unwrap().try_into().unwrap();
         let grant_tx=state.mempool.read().unwrap().get(&grant_hash).unwrap().clone();
         mine_block(&state.ledger.read().unwrap(),&sink.public_address(),vec![grant_tx]);
-        assert!(!state.ledger.read().unwrap().get_tip().unwrap().lottery_outputs.is_empty(),
-            "funding must create actual legacy lottery payouts for this regression");
+        assert_eq!(!state.ledger.read().unwrap().get_tip().unwrap().lottery_outputs.is_empty(),
+            LOTTERY_REACHED,
+            "funding block lottery payouts must match the fixture's lottery-reaching mode");
         state.mempool.write().unwrap().remove_tx(&grant_hash);
         for _ in 0..120 {mine_block(&state.ledger.read().unwrap(),&sink.public_address(),vec![]);}
         let mut fees=0u64;
@@ -119,8 +124,10 @@ async fn receive_prepare_submit_restore_and_respend() {
                 let (min_age, max_age) = age_similarity_band(real_age);
                 let window: Vec<BlockOutputs> = serde_json::from_value::<Vec<BlockOutputs>>(blocks.clone()).unwrap()
                     .into_iter().filter(|block| (min_age..=max_age).contains(&(height-block.height))).collect();
-                assert!(window.iter().flat_map(|b| &b.outputs).any(|out| out.lottery),
-                    "RPC must preserve real payout discriminator inside the input age window");
+                if LOTTERY_REACHED {
+                    assert!(window.iter().flat_map(|b| &b.outputs).any(|out| out.lottery),
+                        "RPC must preserve real payout discriminator inside the input age window");
+                }
                 let pool = prepare_rpc_decoy_pool(&window, &[]);
                 assert!(pool.len() >= bth_transaction_clsag::MIN_RING_SIZE);
                 let ledger = state.ledger.read().unwrap();
@@ -187,6 +194,13 @@ async fn receive_prepare_submit_restore_and_respend() {
         server.abort();
     }).await.expect("fixture exceeded eight minute deadline");
 }
+/// Whether the fixture chain reaches the first lottery-paying block.
+/// `false` while #1286 P2 storage refuses V1 lottery payouts; P3 (#1640)
+/// restores `true` with `FUNDING_HEIGHT = 740`.
+const LOTTERY_REACHED: bool = false;
+/// Last pre-grant funding height. 220 (the pre-#1450 value) keeps the whole
+/// chain below the 720-block lottery maturity; P3 (#1640) restores 740.
+const FUNDING_HEIGHT: u64 = 220;
 const TEST_BLOCK_REWARD: u64 = 50 * PICOCREDITS_PER_CREDIT;
 const TRIVIAL_DIFFICULTY: u64 = u64::MAX;
 /// Create a minting transaction for testing with trivial PoW.

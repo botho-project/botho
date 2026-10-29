@@ -718,9 +718,23 @@ mod tests {
         assert_eq!(prepared["selected"][0]["id"], format!("{tx_hash}:0"));
     }
 
+    // Seeds a real ledger through `Ledger::seed_fixture_snapshot_unvalidated`,
+    // which botho only compiles with its `test-fixtures` feature (#1652). Run
+    // with `--features test-fixtures` (CI: stress-adapter.yml); without it the
+    // test is reported as ignored rather than silently dropped.
     #[cfg(feature = "pq")]
     #[test]
+    #[cfg_attr(
+        not(feature = "test-fixtures"),
+        ignore = "needs `--features test-fixtures` (botho ledger fixture seeding)"
+    )]
     fn prepare_selected_shapes_pass_ledger_and_exclude_other_reals_from_every_ring() {
+        #[cfg(feature = "test-fixtures")]
+        prepare_selected_shapes_pass_ledger_body();
+    }
+
+    #[cfg(all(feature = "pq", feature = "test-fixtures"))]
+    fn prepare_selected_shapes_pass_ledger_body() {
         use botho::{
             ledger::{ChainState, Ledger, UtxoSnapshot},
             transaction::{TxOutput, Utxo, UtxoId},
@@ -777,7 +791,7 @@ mod tests {
                 vec![],
             )
             .unwrap();
-            ledger.load_from_snapshot(&snapshot, None).unwrap();
+            ledger.seed_fixture_snapshot_unvalidated(&snapshot).unwrap();
             let prepared = execute(serde_json::from_value(value).unwrap()).unwrap();
             let bytes = fs::read(dir.path().join("signed.bin")).unwrap();
             let tx: Transaction = bincode::deserialize(&bytes).unwrap();

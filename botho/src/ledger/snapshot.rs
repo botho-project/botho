@@ -15,6 +15,14 @@
 //!
 //! After loading, nodes should sync remaining blocks from snapshot height
 //! to current tip, verifying the chain connects properly.
+//!
+//! # `botho.ledger.2` (#1286 P2)
+//!
+//! This (V1) format carries no per-output derivation contexts, so
+//! `botho.ledger.2` ledgers refuse to create or load it: `create_snapshot`,
+//! `write_snapshot_to_file`, `load_from_snapshot` and `load_snapshot_from_file`
+//! fail closed with `LedgerError::UnsupportedSchema`. A versioned V2 snapshot
+//! is a follow-up; until then nodes sync from genesis.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

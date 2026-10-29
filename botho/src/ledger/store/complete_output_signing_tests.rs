@@ -84,7 +84,7 @@ fn output_field_mutations_after_signing_are_rejected_by_the_ledger() {
         ..ChainState::default()
     };
     let snapshot = UtxoSnapshot::new(HEIGHT, [0; 32], state, utxos, vec![], vec![]).unwrap();
-    ledger.load_from_snapshot(&snapshot, None).unwrap();
+    ledger.seed_fixture_snapshot_unvalidated(&snapshot).unwrap();
 
     let outputs = vec![
         TxOutput::new_hybrid_to_address(
