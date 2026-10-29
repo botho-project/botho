@@ -107,6 +107,8 @@ fn production_routes_and_candidate_fee_report() {
                     amount_commitment: hex::encode(1_000_000_000_000u64.to_le_bytes()),
                     cluster_tags: vec![],
                     kem_ciphertext: None,
+                    lottery_context: None,
+                    winner_outpoint: None,
                 }],
             })
             .collect();
@@ -304,6 +306,8 @@ fn cli_pool_preserves_dedup_exclusion_and_seed_replay() {
         amount_commitment: hex::encode(1u64.to_le_bytes()),
         cluster_tags: vec![],
         kem_ciphertext: None,
+        lottery_context: None,
+        winner_outpoint: None,
     };
     let mut outputs: Vec<_> = (1..=20).map(make).collect();
     outputs.push(make(1));
