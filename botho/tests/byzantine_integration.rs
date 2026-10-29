@@ -657,9 +657,13 @@ fn apply_externalized_block_simple(
                 lottery_summary: BlockLotterySummary::default(),
             };
 
+            let ledger = ledger.write().unwrap();
+            // Protocol 7.0.0 (#1640): seal the V2 body (draw, payouts,
+            // summary, body root) with the production producer.
+            let block = ledger
+                .seal_block(block)
+                .map_err(|e| format!("Failed to seal block: {:?}", e))?;
             ledger
-                .write()
-                .unwrap()
                 .add_block(&block)
                 .map_err(|e| format!("Failed to apply block: {:?}", e))?;
         }

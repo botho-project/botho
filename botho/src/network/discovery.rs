@@ -135,7 +135,21 @@ use crate::{
 /// with `MIN_SUPPORTED_PROTOCOL_VERSION` rising to 6.0.0 in lockstep
 /// (pre-mainnet testnet reset). Shares the single `SETTLEMENT_HORIZON_BLOCKS`
 /// dial with #831.
-pub const PROTOCOL_VERSION: &str = "6.0.0";
+/// PROTOCOL 7.0.0 (#1286 D0, P3 #1640): LotteryV2 from genesis plus the
+/// complete-output signing rules (#1638). Lottery payouts are independently
+/// keyed (a committed, domain-separated tweak of the winner's target; the
+/// winner's one-time key is never copied, so source and payout have distinct
+/// key images), `header.tx_root` is the V2 body root committing the minting
+/// tx, the ordinary transactions, every payout record (with its derivation
+/// context) and the lottery summary, so the block hash commits to the
+/// payouts; and the transaction hash/signing hash cover every output field
+/// (`kem_ciphertext`, `e_memo`, `cluster_tags`). CONSENSUS-BREAKING: a 6.x
+/// peer produces V1 payouts that copy the winner's key and a flat tx root,
+/// and signs a hash that omits output fields, so the two cannot agree on a
+/// single block. MAJOR bump (`is_consensus_compatible` is major-only) with
+/// `MIN_SUPPORTED_PROTOCOL_VERSION` rising to 7.0.0 in lockstep; fresh chains
+/// only (the binary refuses unmarked V1 ledger stores, no migration).
+pub const PROTOCOL_VERSION: &str = "7.0.0";
 
 /// Minimum supported protocol version.
 /// Peers below this version are consensus-incompatible and are disconnected.
@@ -159,7 +173,12 @@ pub const PROTOCOL_VERSION: &str = "6.0.0";
 /// price only accrued-to-date demurrage and would fork the chain that now
 /// charges the capitalized reset on deflating spends, so they must be
 /// disconnected.
-pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "6.0.0";
+///
+/// Raised to 7.0.0 for LotteryV2 + the body root + complete-output signing
+/// (#1286 P3, #1640): 6.x peers build and accept V1 payouts and flat tx
+/// roots, so they must be refused at the identify handshake rather than left
+/// connected to fork.
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: &str = "7.0.0";
 
 /// Topic for block announcements
 const BLOCKS_TOPIC: &str = "botho/blocks/1.0.0";
@@ -2415,11 +2434,38 @@ mod tests {
         // fee floor now prices a demurrage class downgrade at capitalized future
         // demurrage, another consensus-breaking fee-floor rule. MAJOR so 5.x
         // peers (accrued-only) are disconnected rather than left forking.
-        assert_eq!(PROTOCOL_VERSION, "6.0.0");
+        //
+        // Bumped to 7.0.0 (MAJOR) for LotteryV2 + the body root + complete-
+        // output signing (#1286 P3, #1640). MAJOR so 6.x (V1-payout) peers
+        // are disconnected rather than left forking.
+        assert_eq!(PROTOCOL_VERSION, "7.0.0");
         let parsed = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
-        assert_eq!(parsed.major, 6);
+        assert_eq!(parsed.major, 7);
         assert_eq!(parsed.minor, 0);
         assert_eq!(parsed.patch, 0);
+    }
+
+    /// #1640 is a consensus-breaking MAJOR bump (6.x → 7.0.0): 6.x peers
+    /// produce and accept V1 lottery payouts (the winner's key copied) under a
+    /// flat tx root, so they must be DISCONNECTED, not merely warned.
+    #[test]
+    fn test_v6_peers_are_consensus_incompatible_after_issue_1640() {
+        let local = ProtocolVersion::parse(PROTOCOL_VERSION).unwrap();
+        let min = ProtocolVersion::parse(MIN_SUPPORTED_PROTOCOL_VERSION).unwrap();
+        for v1_lottery_peer in ["6.0.0", "6.9.9"] {
+            let peer = ProtocolVersion::parse(v1_lottery_peer).unwrap();
+            assert!(!peer.is_consensus_compatible(&local));
+            assert!(!peer.is_compatible_with(&min));
+            assert_eq!(
+                ProtocolVersion::consensus_incompatibility(&Some(peer.clone()), &local),
+                Some(peer)
+            );
+        }
+        let v2_peer = ProtocolVersion::parse("7.0.1").unwrap();
+        assert_eq!(
+            ProtocolVersion::consensus_incompatibility(&Some(v2_peer), &local),
+            None
+        );
     }
 
     /// #925 is a consensus-breaking MAJOR bump (5.x → 6.0.0): 5.x peers price
@@ -2453,9 +2499,9 @@ mod tests {
 
     #[test]
     fn test_min_supported_protocol_version_constant() {
-        assert_eq!(MIN_SUPPORTED_PROTOCOL_VERSION, "6.0.0");
+        assert_eq!(MIN_SUPPORTED_PROTOCOL_VERSION, "7.0.0");
         let parsed = ProtocolVersion::parse(MIN_SUPPORTED_PROTOCOL_VERSION).unwrap();
-        assert_eq!(parsed.major, 6);
+        assert_eq!(parsed.major, 7);
         assert_eq!(parsed.minor, 0);
     }
 

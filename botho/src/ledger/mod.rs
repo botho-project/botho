@@ -2,8 +2,9 @@
 // remain test-only. No network or ordinary Ledger rule selection.
 #[allow(dead_code)]
 mod experimental;
-// Shared LotteryV2 rule module (#1286 P1). Inactive: only the experimental
-// ledger calls it until protocol 7.0.0 activation (P3).
+// Shared LotteryV2 rule module (#1286 P1). ACTIVE since protocol 7.0.0
+// (P3, #1640): the production validator and producer use it. Some helpers
+// remain experimental-store-only.
 #[allow(dead_code)]
 mod lottery_v2;
 mod snapshot;

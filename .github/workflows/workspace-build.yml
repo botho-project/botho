@@ -285,6 +285,35 @@ jobs:
             timeout 1800s "$NATIVE_WALLET_TEST_EXECUTABLE" ledger::experimental::validated::wallet::tests::native_wallet_accepted_repeated_nested_payout_spends --exact --ignored --nocapture || exit "$?"
           } 2>&1 | tee "$RUNNER_TEMP/native-wallet-validation.log"
 
+      # Protocol 7.0.0 LotteryV2 activation (#1640) at the REAL 720-block
+      # maturity on the PRODUCTION ledger: the forged-payout matrix, repeated
+      # and nested awards, either-order spends and full/compact replay
+      # (~75 s + ~155 s locally on this profile), then the 5-node SCP
+      # TestNetwork regression (~290 s). Reuses the checked-arithmetic `ci`
+      # profile build above.
+      - name: Run LotteryV2 activation real-maturity regressions
+        timeout-minutes: 40
+        env:
+          CARGO_PROFILE_CI_DEBUG_ASSERTIONS: 'true'
+          CARGO_PROFILE_CI_OVERFLOW_CHECKS: 'true'
+          NATIVE_WALLET_TEST_EXECUTABLE: ${{ steps.native_wallet_tests.outputs.executable }}
+        run: |
+          set -o pipefail
+          {
+            git rev-parse HEAD
+            timeout 900s "$NATIVE_WALLET_TEST_EXECUTABLE" ledger::store::v2_activation_tests:: --include-ignored --nocapture || exit "$?"
+            timeout 1200s cargo test --locked --profile ci -p botho --test lottery_v2_activation -- --nocapture || exit "$?"
+          } 2>&1 | tee "$RUNNER_TEMP/lottery-v2-activation.log"
+
+      - name: Retain LotteryV2 activation evidence (including failures)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lottery-v2-activation-${{ github.sha }}
+          path: ${{ runner.temp }}/lottery-v2-activation.log
+          retention-days: 14
+          if-no-files-found: warn
+
       - name: Retain native-wallet validation evidence (including failures)
         if: always()
         uses: actions/upload-artifact@v7

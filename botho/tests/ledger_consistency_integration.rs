@@ -111,7 +111,7 @@ fn mine_block(
         hasher.finalize().into()
     };
 
-    Block {
+    let block = Block {
         header: BlockHeader {
             version: 1,
             prev_block_hash: prev_hash,
@@ -127,7 +127,9 @@ fn mine_block(
         transactions,
         lottery_outputs: Vec::new(),
         lottery_summary: BlockLotterySummary::default(),
-    }
+    };
+    // V2 body root, summary and payouts (protocol 7.0.0, #1640).
+    ledger.seal_block(block).expect("seal V2 block body")
 }
 
 // ============================================================================
@@ -1112,9 +1114,9 @@ fn test_c2_block_rejected_when_timestamp_far_in_future() {
 }
 
 /// C4: A block whose `header.tx_root` does not commit to the actual
-/// transactions must be rejected. The tx_root feeds the header hash and
-/// therefore PoW; without re-derivation at acceptance, a relay can swap
-/// the tx list under a valid PoW.
+/// transactions must be rejected. The tx_root (the V2 body root since
+/// protocol 7.0.0, #1640) feeds the header hash; without re-derivation at
+/// acceptance, a relay can swap the body under an unchanged block hash.
 #[test]
 #[serial]
 fn test_c4_block_rejected_when_tx_root_does_not_match_transactions() {
@@ -1127,8 +1129,7 @@ fn test_c4_block_rejected_when_tx_root_does_not_match_transactions() {
     let miner = create_test_wallet(1);
     let miner_address = miner.account_key().default_subaddress();
 
-    // Build a block with an empty tx list, then claim a non-zero tx_root.
-    // (`compute_tx_root(&[]) == [0; 32]`, so anything else is a mismatch.)
+    // Seal an honest block, then claim a different tx_root.
     let mut block = mine_block(&ledger, &miner_address, vec![]);
     block.header.tx_root = [0xAB; 32];
 
@@ -1185,9 +1186,8 @@ fn test_c3_block_rejected_when_ring_member_target_key_not_in_utxo_set() {
     };
     let bad_tx = Transaction::new(vec![fake_input], vec![fake_output], 0, 0);
 
-    let mut block = mine_block(&ledger, &miner_address, vec![bad_tx]);
-    // mine_block sets tx_root from the (now non-empty) transaction list.
-    block.header.tx_root = Block::compute_tx_root(&block.transactions);
+    // mine_block seals the V2 body root over the (now non-empty) tx list.
+    let block = mine_block(&ledger, &miner_address, vec![bad_tx]);
 
     let err = ledger
         .add_block(&block)
@@ -1250,8 +1250,7 @@ fn test_c3_block_rejected_when_ring_member_commitment_mismatched() {
     };
     let bad_tx = Transaction::new(vec![fake_input], vec![fake_output], 0, 1);
 
-    let mut block2 = mine_block(&ledger, &miner_address, vec![bad_tx]);
-    block2.header.tx_root = Block::compute_tx_root(&block2.transactions);
+    let block2 = mine_block(&ledger, &miner_address, vec![bad_tx]);
 
     let err = ledger
         .add_block(&block2)

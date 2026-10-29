@@ -36,8 +36,8 @@ use crate::{
     block::MintingTx,
     config::{is_dev_rpc_enabled, Config, QuorumConfig, QuorumMode},
     consensus::{
-        BlockBuilder, ConsensusConfig, ConsensusEvent, ConsensusService, LotteryFeeConfig,
-        QuorumGateSnapshot, ScpSlotSnapshot, TransactionValidator,
+        BlockBuilder, ConsensusConfig, ConsensusEvent, ConsensusService, QuorumGateSnapshot,
+        ScpSlotSnapshot, TransactionValidator,
     },
     network::{
         default_seed_domain, BlockTxn, ChainSyncManager, CompactBlock, GetBlockTxn,
@@ -4011,7 +4011,13 @@ fn run_apply_job(
         let block = if is_consensus {
             // Never skipped: a consensus block for a height that is already
             // filled fails here and the completion arm classifies it (#421).
-            apply_lottery_to_block(block, ledger)
+            match apply_lottery_to_block(block, ledger) {
+                Ok(sealed) => sealed,
+                Err((block, error)) => {
+                    outcome.failure = Some((block, error));
+                    break;
+                }
+            }
         } else {
             // Already have this block: skip it rather than fail. A
             // pure-overlap sync batch therefore commits nothing and raises
@@ -4165,91 +4171,47 @@ fn enqueue_sync_batch(
     queue.push_sync(peer, blocks);
 }
 
-/// Apply lottery to a block using UTXOs from the ledger.
+/// Seal a consensus block's V2 body (protocol 7.0.0, #1286 P3, #1640).
 ///
-/// This draws lottery winners from the UTXO set and adds lottery outputs
-/// to the block for fee redistribution.
+/// Every node runs this on the externalized block, under the apply mutex, so
+/// the lottery sees exactly the pre-state `add_block_inner` validates against.
+/// The ledger's V2 producer draws the winners, derives each independently
+/// keyed payout (`lottery_v2::derive`), writes the payouts and summary, and
+/// sets `header.tx_root` to the body root that the block hash commits. The PoW
+/// preimage excludes `tx_root` (`BlockHeader::pow_hash`), so the externalized
+/// minting tx's PoW stays valid.
+///
+/// Fallible on purpose: the former V1 path fell back to a lottery-free
+/// "burn only" body on any lock/read error, a body every validator would
+/// reject. A sealing failure is now reported as the block's commit failure.
 fn apply_lottery_to_block(
     block: crate::block::Block,
     shared_ledger: &SharedLedger,
-) -> crate::block::Block {
-    // Saturating (block.rs::total_fees): a plain sum() panics under
-    // release overflow-checks on this every-node externalize path before
-    // add_block's checked_block_fees can reject the block gracefully.
-    let total_fees: u64 = block.total_fees();
-    let emission_share = block.minting_tx.lottery_emission_share();
-
-    // Helper for error cases: burn only the fee burn share (the pool share
-    // carries over via the persistent lottery pool), matching validation.
-    let lottery_config = LotteryFeeConfig::default();
-    let (_, fee_burn) = lottery_config.split_fees(total_fees);
-    let burn_fee_share = |mut block: crate::block::Block| {
-        block.lottery_summary = crate::block::BlockLotterySummary {
-            total_fees,
-            pool_distributed: 0,
-            amount_burned: fee_burn,
-            lottery_seed: [0u8; 32],
-        };
-        block
+) -> std::result::Result<crate::block::Block, (crate::block::Block, anyhow::Error)> {
+    let ledger = match shared_ledger.read() {
+        Ok(ledger) => ledger,
+        Err(e) => {
+            let error = anyhow::anyhow!("Failed to acquire ledger lock for lottery: {}", e);
+            return Err((block, error));
+        }
     };
-
-    // Get the carryover pool and candidates from the ledger using the SAME
-    // function and config that block validation uses — lottery verification
-    // re-runs the draw, so proposer and validator state must be identical.
-    let (stored_pool, candidates) = match shared_ledger.read() {
-        Ok(ledger) => {
-            let pool = match ledger.get_lottery_pool() {
-                Ok(p) => p,
-                Err(e) => {
-                    warn!("Failed to get lottery pool: {}", e);
-                    return burn_fee_share(block);
-                }
-            };
-            match ledger.get_lottery_validation_candidates(
-                block.height(),
-                &block.header.prev_block_hash,
-                &lottery_config.draw_config,
-            ) {
-                Ok(c) => (pool, c),
-                Err(e) => {
-                    warn!("Failed to get lottery candidates: {}", e);
-                    return burn_fee_share(block);
-                }
+    match BlockBuilder::apply_lottery(block.clone(), &ledger) {
+        Ok(sealed) => {
+            if !sealed.lottery_outputs.is_empty() {
+                info!(
+                    height = sealed.height(),
+                    payouts = sealed.lottery_outputs.len(),
+                    distributed = sealed.lottery_summary.pool_distributed,
+                    "Sealed V2 lottery payouts"
+                );
             }
+            Ok(sealed)
         }
         Err(e) => {
-            warn!("Failed to acquire ledger lock for lottery: {}", e);
-            return burn_fee_share(block);
+            warn!(height = block.height(), error = %e, "Failed to seal V2 block body");
+            Err((block, anyhow::anyhow!("V2 lottery sealing failed: {}", e)))
         }
-    };
-
-    // Skip entirely only when there is nothing flowing in or out
-    if total_fees == 0 && emission_share == 0 && stored_pool == 0 {
-        return block;
     }
-
-    info!(
-        candidates = candidates.len(),
-        fees = total_fees,
-        emission_share = emission_share,
-        stored_pool = stored_pool,
-        "Applying lottery to block"
-    );
-
-    // Create UTXO lookup function for winner key recovery
-    let ledger_clone = shared_ledger.clone();
-    let utxo_lookup = move |utxo_id: &[u8; 36]| {
-        let ledger = ledger_clone.read().ok()?;
-        ledger.get_utxo_by_id(utxo_id).ok().flatten()
-    };
-
-    BlockBuilder::apply_lottery(
-        block,
-        &candidates,
-        stored_pool,
-        utxo_lookup,
-        &lottery_config,
-    )
 }
 
 #[cfg(test)]
@@ -4459,14 +4421,14 @@ mod tests {
         let identified = identify_peer(
             &mut discovery,
             &key,
-            "botho/6.0.0/5/transport-caps/1/webrtc,plain/open",
+            "botho/7.0.0/5/transport-caps/1/webrtc,plain/open",
         )
         .expect("Identify must notify the RPC snapshot consumer");
         assert!(matches!(identified, NetworkEvent::PeerMetadataUpdated(p) if p == peer));
         refresh_peer_snapshot_for_event(&identified, &discovery, &snapshot);
         assert_eq!(
             snapshot.read().unwrap()[0].protocol_version.as_deref(),
-            Some("6.0.0 (block v5)")
+            Some("7.0.0 (block v5)")
         );
         assert!(!snapshot.read().unwrap()[0].version_warning);
         assert_eq!(discovery.peer_count(), 1);
@@ -4480,7 +4442,7 @@ mod tests {
             build_peer_snapshot(&discovery)[0]
                 .protocol_version
                 .as_deref(),
-            Some("6.0.0 (block v5)")
+            Some("7.0.0 (block v5)")
         );
         assert!(discovery.peer_table()[0].transport_capabilities.is_some());
         for remaining in [1, 0] {
@@ -4506,9 +4468,19 @@ mod tests {
         }
     }
 
+    /// #1640: a protocol-6 (V1 lottery payout, flat tx root) peer is refused
+    /// at the identify handshake, alongside unparseable and other-major
+    /// agents. The 6.x entries are the V1 peers of the 7.0.0 reset.
     #[test]
     fn peer_metadata_missing_or_incompatible_identify_removes_rpc_entry() {
-        for agent in ["", "not-a-version", "botho/5.0.0/5", "botho/7.0.0/5"] {
+        for agent in [
+            "",
+            "not-a-version",
+            "botho/5.0.0/5",
+            "botho/6.0.0/5",
+            "botho/6.0.0/5/transport-caps/1/webrtc,plain/open",
+            "botho/8.0.0/5",
+        ] {
             let mut discovery = NetworkDiscovery::new(0, vec![]);
             let key = libp2p::identity::Keypair::generate_ed25519();
             let peer = key.public().to_peer_id();

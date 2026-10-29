@@ -71,6 +71,36 @@ impl WalletRead for Ledger {
         }
         Ok(())
     }
+    /// Protocol 7.0.0 (#1640): recover the one-time key through the output's
+    /// committed derivation context instead of guessing `id.output_index`.
+    /// A direct output's context is (its own index, zero tweak), which is
+    /// exactly the former direct-index recovery; a V2 lottery payout's is
+    /// (the ORIGINAL index, the cumulative tweak), so its independently keyed
+    /// target is recoverable and its key image differs from the source's.
+    /// `recover_with_context` proves `x*G == P` before the key is used.
+    fn recover_input(&self, wallet: &Wallet, utxo: &Utxo) -> Result<RistrettoPrivate> {
+        // Output and context come from ONE strict read; a caller-supplied
+        // output that differs from the ledger's is refused.
+        let (stored, context) = self.spend_recovery_context(&utxo.id)?;
+        anyhow::ensure!(
+            stored.output == utxo.output && stored.created_at == utxo.created_at,
+            "Selected input differs from its ledger output"
+        );
+        bth_transaction_clsag::lottery_v2::recover_with_context(
+            &utxo.output,
+            &context,
+            |base, j| {
+                let subaddress = wallet.scan_output(base, j)?;
+                wallet.recover_output_spend_key(base, subaddress, j)
+            },
+        )
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "UTXO does not belong to this wallet: {} ({e:?})",
+                hex::encode(&utxo.id.tx_hash[0..8])
+            )
+        })
+    }
     fn decoys(
         &self,
         count: usize,

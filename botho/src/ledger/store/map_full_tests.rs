@@ -10,7 +10,7 @@ const SMALL_MAP: usize = 1024 * 1024;
 /// instead of looping.
 const MAX_BLOCKS: u64 = 100_000;
 
-/// Next empty trivial-PoW block on the current tip.
+/// Next empty trivial-PoW, V2-sealed block on the current tip.
 fn next_block(ledger: &Ledger, minter: &PublicAddress) -> Block {
     let state = ledger.get_chain_state().unwrap();
     let mut block = Block::new_template_with_txs(
@@ -28,7 +28,8 @@ fn next_block(ledger: &Ledger, minter: &PublicAddress) -> Block {
         block.header.nonce += 1;
     }
     block.minting_tx.nonce = block.header.nonce;
-    block
+    // V2 body root and summary (protocol 7.0.0, #1640).
+    ledger.seal_block(block).unwrap()
 }
 
 /// Fill a small map with valid blocks until LMDB refuses a write, then check

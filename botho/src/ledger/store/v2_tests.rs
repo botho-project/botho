@@ -136,12 +136,18 @@ fn apply_v2(
     Ok(())
 }
 
-/// Ledger with the golden V1 block applied through the live add_block path.
+/// Ledger with the golden (V1-shaped, payout-free) block's storage effects
+/// applied through the shared production writer. Since protocol 7.0.0
+/// (#1640) `add_block` rejects the golden block (flat tx root), so these
+/// storage tests seed it writer-only; V2 consensus is covered by
+/// `v2_activation_tests`.
 fn ledger_at_height_one(dir: &Path) -> (Ledger, Block) {
     let ledger = Ledger::open(dir).unwrap();
     ledger.set_difficulty(u64::MAX).unwrap();
     let block = golden_block();
-    ledger.add_block(&block).unwrap();
+    ledger
+        .apply_writer_effects_for_test(&block, &[], 0, None)
+        .unwrap();
     (ledger, block)
 }
 
@@ -308,15 +314,18 @@ fn production_writer_refuses_overwriting_an_existing_outpoint_context() {
     assert_eq!(tables(&ledger.env), before);
 }
 
+/// P2's interim refusal became the real rule in P3 (#1640): a payout the V2
+/// draw did not produce (here, at height 2 nothing is eligible) is an
+/// INVALID block, rejected before any write.
 #[test]
-fn live_add_block_refuses_v1_lottery_payouts_before_any_write() {
+fn live_add_block_rejects_v1_lottery_payouts_before_any_write() {
     let dir = TempDir::new().unwrap();
     let (ledger, b1) = ledger_at_height_one(dir.path());
     let before = tables(&ledger.env);
     let (b2, _) = payout_block(&b1);
     let err = ledger.add_block(&b2).unwrap_err();
     assert!(
-        matches!(&err, LedgerError::UnsupportedSchema(m) if m.contains("V1 lottery payout")),
+        matches!(&err, LedgerError::InvalidBlock(m) if m.contains("V2 payouts")),
         "{err}"
     );
     assert_eq!(tables(&ledger.env), before);

@@ -2,7 +2,7 @@
 //! faucet substitute, consensus/index rewrite, or legacy lottery recovery.
 use botho::{
     block::{Block, BlockHeader, BlockLotterySummary, MintingTx, MINTING_OUTPUT_INDEX},
-    consensus::{BlockBuilder, LotteryFeeConfig},
+    consensus::BlockBuilder,
     ledger::Ledger,
     mempool::Mempool,
     rpc::{RpcState, WsBroadcaster},
@@ -60,21 +60,8 @@ fn mine(ledger: &Ledger, address: &PublicAddress, transactions: Vec<Transaction>
         lottery_outputs: vec![],
         lottery_summary: BlockLotterySummary::default(),
     };
-    let config = LotteryFeeConfig::default();
-    let candidates = ledger
-        .get_lottery_validation_candidates(
-            block.height(),
-            &block.header.prev_block_hash,
-            &config.draw_config,
-        )
-        .unwrap();
-    let block = BlockBuilder::apply_lottery(
-        block,
-        &candidates,
-        ledger.get_lottery_pool().unwrap(),
-        |id| ledger.get_utxo_by_id(id).unwrap(),
-        &config,
-    );
+    // V2 body (protocol 7.0.0, #1640): the production producer.
+    let block = BlockBuilder::apply_lottery(block, ledger).unwrap();
     ledger.add_block(&block).unwrap();
     block
 }

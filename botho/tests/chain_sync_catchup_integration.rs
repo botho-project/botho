@@ -110,7 +110,7 @@ fn mine_block(
         hasher.finalize().into()
     };
 
-    Block {
+    let block = Block {
         header: BlockHeader {
             version: 1,
             prev_block_hash: prev_hash,
@@ -126,7 +126,9 @@ fn mine_block(
         transactions,
         lottery_outputs: Vec::new(),
         lottery_summary: BlockLotterySummary::default(),
-    }
+    };
+    // V2 body root, summary and payouts (protocol 7.0.0, #1640).
+    ledger.seal_block(block).expect("seal V2 block body")
 }
 
 /// Build a chain in `ledger` up to `target_height` (empty blocks).

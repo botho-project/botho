@@ -315,6 +315,8 @@ fn valid_chain_minted_by(scratch: &std::path::Path, count: u64, mnemonic: &str) 
             block.header.nonce += 1;
         }
         block.minting_tx.nonce = block.header.nonce;
+        // Protocol 7.0.0 (#1640): seal the V2 body root like the producer.
+        let block = ledger.read().unwrap().seal_block(block).unwrap();
         commit_block_locked(&ledger, &mut controller, &block).unwrap();
         blocks.push(block);
     }
@@ -1055,8 +1057,9 @@ fn sync_batch_containing_the_parked_height_completes_it_as_a_benign_duplicate() 
 }
 
 /// Same setup, but sync delivers a DIFFERENT tip + 1 (a fork) from the
-/// decided block's parent. The parked decision dispatches, `add_block`
-/// rejects it with "Previous block hash mismatch" (#420), and the failure
+/// decided block's parent. The parked decision dispatches, the V2 producer
+/// (`seal_block`, #1640) refuses it with the same "Previous block hash
+/// mismatch" wording `add_block` uses (#420), and the failure
 /// is terminal with today's evidence and restart refusal.
 #[test]
 fn parked_decision_with_mismatched_synced_parent_is_terminal() {

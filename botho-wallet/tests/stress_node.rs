@@ -52,15 +52,13 @@ async fn receive_prepare_submit_restore_and_respend() {
         let sink=botho_wallet::WalletKeys::generate().unwrap();
         let ledger=Ledger::open(&dir.path().join("ledger")).unwrap();
         ledger.set_difficulty(TRIVIAL_DIFFICULTY).unwrap();
-        // Use the production 720-block lottery maturity threshold. While the
-        // #1286 P2 storage refuses V1 lottery payouts (until P3, #1640), the
-        // whole fixture chain (~462 blocks) stays below the first block that
-        // could pay a lottery, so no payout is ever drawn.
-        // P3 (#1640) must restore the lottery-reaching shape from #1450:
-        // fund through height 740 so the grant block at 741 carries real
-        // payouts, and re-enable the payout assertions gated on
-        // `LOTTERY_REACHED` below. Neither payment wallet has an old output,
-        // so lottery receipts cannot change the transfer accounting below.
+        // Use the production 720-block lottery maturity threshold. The first
+        // 21 sink coinbases are eligible when the grant is mined at height
+        // 741, while the faucet's height-100 coinbase is still outside the
+        // draw, so the grant block carries real V2 (independently keyed)
+        // payouts (#1450 shape, restored by P3 #1640). Neither payment wallet
+        // has an old output, so lottery receipts cannot change the transfer
+        // accounting below.
         assert_eq!(LotteryFeeConfig::default().draw_config.min_utxo_age, 720,
             "run this fixture without a lottery-age environment override");
         for height in 1..=FUNDING_HEIGHT {
@@ -93,10 +91,11 @@ async fn receive_prepare_submit_restore_and_respend() {
             let scan=adapter(json!({"operation":"scan","wallet":sender,"blocks":blocks}));
             let owned=scan["owned"].as_array().unwrap(); assert!(!owned.is_empty());
             if round == 0 {
-                // Synthetic owned alias: real legacy payout envelopes omit the
-                // hybrid recovery context (#1286), so do not pretend they are
-                // independently scannable. Retain the real grant's recovery
-                // context to exercise the offline signer's explicit boundary.
+                // Synthetic owned alias: a payout needs its V2 derivation
+                // context (#1286) to be spendable, and this RPC output shape
+                // does not carry one, so do not pretend it is independently
+                // scannable. Retain the real grant's recovery context to
+                // exercise the offline signer's explicit boundary.
                 let mut aliased_blocks = blocks.clone();
                 let original = blocks.as_array().unwrap().iter()
                     .flat_map(|block| block["outputs"].as_array().unwrap())
@@ -194,13 +193,13 @@ async fn receive_prepare_submit_restore_and_respend() {
         server.abort();
     }).await.expect("fixture exceeded eight minute deadline");
 }
-/// Whether the fixture chain reaches the first lottery-paying block.
-/// `false` while #1286 P2 storage refuses V1 lottery payouts; P3 (#1640)
-/// restores `true` with `FUNDING_HEIGHT = 740`.
-const LOTTERY_REACHED: bool = false;
-/// Last pre-grant funding height. 220 (the pre-#1450 value) keeps the whole
-/// chain below the 720-block lottery maturity; P3 (#1640) restores 740.
-const FUNDING_HEIGHT: u64 = 220;
+/// Whether the fixture chain reaches the first lottery-paying block. P2
+/// (#1652) set this `false` while storage refused V1 payouts; P3 (#1640)
+/// restores `true` now that the V2 producer/validator are live.
+const LOTTERY_REACHED: bool = true;
+/// Last pre-grant funding height: the grant block at 741 is the first one
+/// whose draw has mature (720-block) candidates.
+const FUNDING_HEIGHT: u64 = 740;
 const TEST_BLOCK_REWARD: u64 = 50 * PICOCREDITS_PER_CREDIT;
 const TRIVIAL_DIFFICULTY: u64 = u64::MAX;
 /// Create a minting transaction for testing with trivial PoW.
@@ -234,36 +233,14 @@ fn create_mock_minting_tx(
     minting_tx
 }
 
-/// Apply the lottery fee-split / draw to a block so it satisfies
-/// `validate_block_lottery` in `add_block` (mirrors the production proposer
-/// path). For our funding blocks there are no fees, but the lottery emission
-/// share still has to be accounted for.
+/// Seal the block's V2 body (lottery draw, independently keyed payouts,
+/// summary, body root) with the production producer, mirroring
+/// `commands/run.rs::apply_lottery_to_block`.
 fn apply_lottery_to_block(block: Block, ledger: &Ledger) -> Block {
-    let total_fees: u64 = block.transactions.iter().map(|tx| tx.fee).sum();
-    let emission_share = block.minting_tx.lottery_emission_share();
-    let lottery_config = LotteryFeeConfig::default();
-
-    let stored_pool = ledger.get_lottery_pool().unwrap_or(0);
-    let candidates = ledger
-        .get_lottery_validation_candidates(
-            block.height(),
-            &block.header.prev_block_hash,
-            &lottery_config.draw_config,
-        )
-        .unwrap_or_default();
-
-    if total_fees == 0 && emission_share == 0 && stored_pool == 0 {
-        return block;
-    }
-
-    let utxo_lookup = |utxo_id: &[u8; 36]| ledger.get_utxo_by_id(utxo_id).ok().flatten();
-    BlockBuilder::apply_lottery(
-        block,
-        &candidates,
-        stored_pool,
-        utxo_lookup,
-        &lottery_config,
-    )
+    // Protocol 7.0.0 (#1640): the production V2 producer (the ledger's
+    // `seal_block`) draws, derives independently keyed payouts and sets the
+    // body root. The one shared V2 mining path; no lottery-free fallback.
+    BlockBuilder::apply_lottery(block, ledger).expect("seal V2 block body")
 }
 
 /// Mine a single block crediting `minter_address` and append it to the ledger.

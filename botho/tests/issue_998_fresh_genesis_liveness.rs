@@ -115,7 +115,10 @@ fn fresh_6_0_0_genesis_advances_past_height_6() {
     const N: u64 = 12;
     for height in 1..=N {
         let prev_hash = ledger.get_tip().expect("tip").hash();
-        let block = mine_minting_block(height, prev_hash, &minter);
+        // Protocol 7.0.0 (#1640): the V2 body root is sealed by the producer.
+        let block = ledger
+            .seal_block(mine_minting_block(height, prev_hash, &minter))
+            .expect("seal V2 block body");
         ledger
             .add_block(&block)
             .unwrap_or_else(|e| panic!("WEDGE at height {height}: add_block failed: {e}"));

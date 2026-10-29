@@ -28,7 +28,7 @@ use botho::{
     address::Address,
     block::{Block, BlockHeader, BlockLotterySummary, MintingTx},
     config::FaucetConfig,
-    consensus::{BlockBuilder, LotteryFeeConfig},
+    consensus::BlockBuilder,
     ledger::Ledger,
     mempool::Mempool,
     rpc::{FaucetState, RpcState, WsBroadcaster},
@@ -122,36 +122,14 @@ fn create_mock_minting_tx(
     minting_tx
 }
 
-/// Apply the lottery fee-split / draw to a block so it satisfies
-/// `validate_block_lottery` in `add_block` (mirrors the production proposer
-/// path). For our funding blocks there are no fees, but the lottery emission
-/// share still has to be accounted for.
+/// Seal the block's V2 body (lottery draw, independently keyed payouts,
+/// summary, body root) with the production producer, mirroring
+/// `commands/run.rs::apply_lottery_to_block`.
 fn apply_lottery_to_block(block: Block, ledger: &Ledger) -> Block {
-    let total_fees: u64 = block.transactions.iter().map(|tx| tx.fee).sum();
-    let emission_share = block.minting_tx.lottery_emission_share();
-    let lottery_config = LotteryFeeConfig::default();
-
-    let stored_pool = ledger.get_lottery_pool().unwrap_or(0);
-    let candidates = ledger
-        .get_lottery_validation_candidates(
-            block.height(),
-            &block.header.prev_block_hash,
-            &lottery_config.draw_config,
-        )
-        .unwrap_or_default();
-
-    if total_fees == 0 && emission_share == 0 && stored_pool == 0 {
-        return block;
-    }
-
-    let utxo_lookup = |utxo_id: &[u8; 36]| ledger.get_utxo_by_id(utxo_id).ok().flatten();
-    BlockBuilder::apply_lottery(
-        block,
-        &candidates,
-        stored_pool,
-        utxo_lookup,
-        &lottery_config,
-    )
+    // Protocol 7.0.0 (#1640): the production V2 producer (the ledger's
+    // `seal_block`) draws, derives independently keyed payouts and sets the
+    // body root. The one shared V2 mining path; no lottery-free fallback.
+    BlockBuilder::apply_lottery(block, ledger).expect("seal V2 block body")
 }
 
 /// Mine a single block crediting `minter_address` and append it to the ledger.
