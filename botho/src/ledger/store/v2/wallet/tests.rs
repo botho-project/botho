@@ -2,7 +2,8 @@
 use super::{fixture::*, *};
 use crate::{mempool::Mempool, wallet::WalletRead};
 use bth_crypto_keys::RistrettoPublic;
-use bth_crypto_ring_signature::Scalar;
+use bth_crypto_ring_signature::{KeyImage, Scalar};
+use bth_transaction_clsag::lottery_v2::{self as clsag_v2, Context};
 use std::collections::BTreeSet;
 
 fn by_id(owned: &[WalletOutput]) -> std::collections::BTreeMap<[u8; 36], WalletOutput> {
@@ -250,6 +251,120 @@ fn missing_context_is_an_error_not_a_direct_default() {
     assert!(f.ledger.recover_wallet_input(&f.owner, &payout).is_err());
 }
 
+/// #1667 regression: `recover_with_context` now fails closed on the zero
+/// tweak, which is exactly a `Direct` context's derivation. The node wallet
+/// must route ordinary outputs to `recover_direct`, so they are still
+/// discovered, counted in the balance and spendable, with the SAME key (and
+/// key image) the classical per-index recovery yields. Were they routed
+/// through `recover_with_context`, `wallet_output` would have dropped every
+/// one of them as "not ours" with no error.
+#[test]
+fn ordinary_direct_outputs_still_discovered_balanced_and_spent() {
+    let f = Fixture::build();
+    let direct = [f.hybrid_source, f.classical_source];
+    let found = by_id(&f.ledger.discover_wallet_outputs(&f.owner).unwrap());
+    for id in direct {
+        let utxo = f.utxo(&id);
+        let context = f.ledger.get_derivation_context(&id).unwrap();
+        assert!(
+            matches!(context, StoredContext::Direct { base_index, .. } if base_index == id.output_index)
+        );
+        // The zero-tweak derivation is refused by the payout entry point
+        // before any wallet callback...
+        assert_eq!(
+            clsag_v2::recover_with_context(&utxo.output, &context.derivation(), |_, _| {
+                panic!("a rejected context must not reach the wallet")
+            }),
+            Err(clsag_v2::Error::ZeroTweak)
+        );
+        // ...yet the wallet still discovers the output, as a direct one, with
+        // the classical per-index key.
+        let classical = f
+            .owner
+            .scan_output(&utxo.output, id.output_index)
+            .and_then(|s| {
+                f.owner
+                    .recover_output_spend_key(&utxo.output, s, id.output_index)
+            })
+            .expect("classical recovery of a direct output");
+        let owned = &found[&id.to_bytes()];
+        assert!(!owned.lottery_payout);
+        assert!(owned.is_unspent());
+        assert_eq!(owned.utxo.output.amount, SOURCE_AMOUNT);
+        assert_eq!(owned.key_image, *KeyImage::from(&classical).as_bytes());
+        let (_, key) = recover_owned(&f.owner, &utxo.output, &context).unwrap();
+        assert_eq!(key.to_bytes(), classical.to_bytes());
+        assert_eq!(
+            f.ledger
+                .recover_wallet_input(&f.owner, &utxo)
+                .unwrap()
+                .to_bytes(),
+            classical.to_bytes()
+        );
+    }
+    let balance = |f: &Fixture| -> u64 {
+        f.ledger
+            .unspent_wallet_outputs(&f.owner)
+            .unwrap()
+            .iter()
+            .map(|o| o.utxo.output.amount)
+            .sum()
+    };
+    assert_eq!(balance(&f), f.owned_total());
+
+    // Spend both direct outputs through the native wallet and the full
+    // protocol 7.0.0 block path.
+    let spends: Vec<_> = direct.iter().map(|id| f.spend(id)).collect();
+    for (tx, id) in spends.iter().zip(direct) {
+        assert_eq!(
+            tx.inputs.clsag()[0].key_image,
+            found[&id.to_bytes()].key_image
+        );
+        tx.verify_ring_signatures().unwrap();
+        f.ledger.verify_transaction(tx).unwrap();
+    }
+    f.ledger.add_block(&f.block_with(spends)).unwrap();
+    let after = by_id(&f.ledger.discover_wallet_outputs(&f.owner).unwrap());
+    for id in direct {
+        assert_eq!(after[&id.to_bytes()].spent_at, Some(TIP + 1));
+    }
+    assert_eq!(balance(&f), f.owned_total() - 2 * SOURCE_AMOUNT);
+}
+
+/// #1667: a persisted `Lottery` context whose tweak recovery rejects (here the
+/// zero tweak) is store corruption. Discovery reports it as an error, like a
+/// missing context, instead of silently dropping the owned output.
+#[test]
+fn rejected_lottery_context_is_an_error_not_a_missing_output() {
+    let f = Fixture::build();
+    let payout = f.utxo(&f.nested);
+    let StoredContext::Lottery {
+        height, ordinal, ..
+    } = f.ledger.get_derivation_context(&f.nested).unwrap()
+    else {
+        panic!("payout must carry a lottery context");
+    };
+    let corrupt = StoredContext::Lottery {
+        height,
+        ordinal,
+        context: Context {
+            base_index: 3,
+            tweak: [0; 32],
+        },
+    };
+    let mut txn = f.ledger.env.write_txn().unwrap();
+    f.ledger
+        .contexts_db
+        .put(&mut txn, &payout.id.to_bytes(), &corrupt.encode().unwrap())
+        .unwrap();
+    txn.commit().unwrap();
+    assert!(matches!(
+        f.ledger.discover_wallet_outputs(&f.owner),
+        Err(LedgerError::InconsistentRecord(e)) if e.contains("ZeroTweak")
+    ));
+    assert!(f.ledger.recover_wallet_input(&f.owner, &payout).is_err());
+}
+
 /// The shared recovery reproduces the committed clsag `lottery_v2` vectors:
 /// the single derivation, the repeated award, and the three-level lineage
 /// (cumulative tweaks over one base key).
@@ -280,9 +395,13 @@ fn shared_recovery_reproduces_clsag_lottery_v2_vectors() {
         };
         recover_with_base(
             &output,
-            &Context {
-                base_index: 3,
-                tweak,
+            &StoredContext::Lottery {
+                height: 0,
+                ordinal: 0,
+                context: Context {
+                    base_index: 3,
+                    tweak,
+                },
             },
             |b, index| {
                 assert_eq!(index, 3);

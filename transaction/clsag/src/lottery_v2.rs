@@ -25,6 +25,14 @@ pub enum Error {
     Exhausted,
     Ownership,
     Binding,
+    /// A recovery context carried the zero tweak. With `T = 0` the "payout"
+    /// target is its base target, so an ordinary output would pass `x·G = P`;
+    /// direct outputs recover through [`recover_direct`] instead.
+    ZeroTweak,
+    /// A context tweak was not a canonical scalar (`T ≥ ℓ` little-endian).
+    NonCanonicalTweak,
+    /// A context encoding carried a version other than [`CONTEXT_VERSION`].
+    Version,
 }
 pub type Hash = [u8; 32];
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,7 +51,7 @@ impl Context {
     /// Zero is valid here because an ordinary output starts a lineage with no
     /// accumulated payout tweak; payout records reject zero below.
     pub fn encode(&self) -> Result<Vec<u8>, Error> {
-        scalar(self.tweak)?;
+        canonical_tweak(self.tweak)?;
         let mut out = Vec::with_capacity(1 + 4 + 32);
         out.push(CONTEXT_VERSION);
         out.extend(self.base_index.to_le_bytes());
@@ -64,7 +72,7 @@ impl Context {
 
     fn decode_reader(reader: &mut Reader<'_>) -> Result<Self, Error> {
         if reader.take::<1>()?[0] != CONTEXT_VERSION {
-            return Err(Error::Encoding);
+            return Err(Error::Version);
         }
         let context = Self {
             base_index: u32::from_le_bytes(reader.take()?),
@@ -121,6 +129,11 @@ pub struct Summary {
 }
 fn scalar(bytes: Hash) -> Result<Scalar, Error> {
     Option::<Scalar>::from(Scalar::from_canonical_bytes(bytes)).ok_or(Error::Scalar)
+}
+/// Canonical context tweak, with its own error so callers can tell a
+/// malformed tweak from other scalar failures.
+fn canonical_tweak(bytes: Hash) -> Result<Scalar, Error> {
+    scalar(bytes).map_err(|_| Error::NonCanonicalTweak)
 }
 fn point(bytes: Hash) -> Result<RistrettoPublic, Error> {
     let p = RistrettoPublic::try_from(&bytes[..]).map_err(|_| Error::Point)?;
@@ -209,16 +222,28 @@ fn derive_inner(
     }
     Err(Error::Exhausted)
 }
-/// Recover through the existing wallet derivation callback, then prove xG=P.
-/// This checks key ownership, not the chain authentication of `context`.
+/// Recover a V2 lottery payout through the existing wallet derivation
+/// callback, then prove xG=P. This checks key ownership, not the chain
+/// authentication of `context`.
+///
+/// Fails closed on a non-canonical tweak ([`Error::NonCanonicalTweak`]) and on
+/// the zero tweak ([`Error::ZeroTweak`]): a payout always carries a nonzero
+/// cumulative tweak ([`derive`] never yields zero and [`Record::encode`]
+/// rejects it), while a zero tweak would let an ordinary output's base key pass
+/// the ownership check. An unknown context version is rejected when the context
+/// is decoded ([`Context::decode`], [`Record::decode`]: [`Error::Version`]).
+/// Direct (untweaked) outputs recover through [`recover_direct`].
 pub fn recover_with_context(
     output: &TxOutput,
     context: &Context,
     recover_base: impl FnOnce(&TxOutput, u32) -> Option<RistrettoPrivate>,
 ) -> Result<RistrettoPrivate, Error> {
+    let tweak = canonical_tweak(context.tweak)?;
+    if tweak == Scalar::ZERO {
+        return Err(Error::ZeroTweak);
+    }
     let target = point(output.target_key)?;
     point(output.public_key)?;
-    let tweak = scalar(context.tweak)?;
     let tweak_point = RistrettoPublic::from(&RistrettoPrivate::from(tweak));
     let mut base = output.clone();
     base.target_key = RistrettoPublic::from(target.as_ref() - tweak_point.as_ref()).to_bytes();
@@ -230,6 +255,24 @@ pub fn recover_with_context(
         return Err(Error::Ownership);
     }
     Ok(recovered)
+}
+/// Recover a direct (untweaked) output at `base_index` through the same wallet
+/// callback, with the same point checks and the same final xG=P proof as
+/// [`recover_with_context`]. This is the lineage start that a zero-tweak
+/// context used to express; it is a separate entry point so that a payout
+/// context can never silently fall back to the base key.
+pub fn recover_direct(
+    output: &TxOutput,
+    base_index: u32,
+    recover_base: impl FnOnce(&TxOutput, u32) -> Option<RistrettoPrivate>,
+) -> Result<RistrettoPrivate, Error> {
+    point(output.target_key)?;
+    point(output.public_key)?;
+    let key = recover_base(output, base_index).ok_or(Error::Ownership)?;
+    if RistrettoPublic::from(&key).to_bytes() != output.target_key {
+        return Err(Error::Ownership);
+    }
+    Ok(key)
 }
 impl Record {
     /// Explicit canonical proposed wire bytes. Existing wire structs stay

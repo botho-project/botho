@@ -169,7 +169,7 @@ fn canonical_codec_rejects_malformed_trailing_and_unknown_fields() {
     assert_eq!(Record::decode(&b), Err(Error::Encoding)); // KEM tag
     let mut b = bytes.clone();
     b[113 + KEM_BYTES] = 3;
-    assert_eq!(Record::decode(&b), Err(Error::Encoding)); // context tag
+    assert_eq!(Record::decode(&b), Err(Error::Version)); // context version
     let mut r = r.clone();
     r.ciphertext = Some(vec![0; KEM_BYTES - 1]);
     assert_eq!(r.encode(), Err(Error::Encoding));
@@ -210,7 +210,7 @@ fn context_codec_is_versioned_canonical_and_syntax_only() {
 
     let mut unknown = bytes.clone();
     unknown[0] = CONTEXT_VERSION + 1;
-    assert_eq!(Context::decode(&unknown), Err(Error::Encoding));
+    assert_eq!(Context::decode(&unknown), Err(Error::Version));
 
     let mut malformed = bytes;
     malformed[5] = 0xff;
@@ -218,7 +218,7 @@ fn context_codec_is_versioned_canonical_and_syntax_only() {
     malformed[7] = 0xff;
     malformed[8] = 0xff;
     malformed[9..].fill(0xff);
-    assert_eq!(Context::decode(&malformed), Err(Error::Scalar));
+    assert_eq!(Context::decode(&malformed), Err(Error::NonCanonicalTweak));
 }
 #[test]
 fn ordered_records_bind_every_field_and_body_component() {
@@ -338,4 +338,89 @@ fn recovery_never_returns_wrong_key_even_if_callback_lies() {
         }),
         Err(Error::Ownership)
     ));
+}
+#[test]
+fn recovery_rejects_zero_noncanonical_tweaks_and_direct_recovery_is_separate() {
+    // A direct output owned at index 7 with base key 7.
+    let out = TxOutput {
+        amount: 5,
+        target_key: public(7),
+        public_key: public(11),
+        kem_ciphertext: None,
+        e_memo: None,
+        cluster_tags: Default::default(),
+    };
+    let honest = |_: &TxOutput, i| (i == 7).then(|| RistrettoPrivate::from(Scalar::from(7u64)));
+    let zero = Context {
+        base_index: 7,
+        tweak: [0; 32],
+    };
+    // Before #1667 this returned the base key: the zero tweak aliases the
+    // ordinary output as a "payout".
+    assert_eq!(
+        recover_with_context(&out, &zero, honest).map(|k| k.to_bytes()),
+        Err(Error::ZeroTweak)
+    );
+    // The callback is never consulted for a zero tweak.
+    assert_eq!(
+        recover_with_context(&out, &zero, |_, _| panic!("callback reached")).map(|k| k.to_bytes()),
+        Err(Error::ZeroTweak)
+    );
+    let key = recover_direct(&out, 7, honest).unwrap();
+    assert_eq!(RistrettoPublic::from(&key).to_bytes(), out.target_key);
+    assert!(matches!(
+        recover_direct(&out, 0, honest),
+        Err(Error::Ownership)
+    ));
+    assert!(matches!(
+        recover_direct(&out, 7, |_, _| Some(RistrettoPrivate::from(Scalar::ONE))),
+        Err(Error::Ownership)
+    ));
+    let mut bad = out.clone();
+    bad.target_key = [0; 32];
+    assert!(matches!(recover_direct(&bad, 7, honest), Err(Error::Point)));
+
+    let mut ell = (-Scalar::ONE).to_bytes();
+    ell[0] += 1; // l itself
+    for tweak in [ell, [0xff; 32]] {
+        let context = Context {
+            base_index: 7,
+            tweak,
+        };
+        assert_eq!(
+            recover_with_context(&out, &context, |_, _| panic!("callback reached"))
+                .map(|k| k.to_bytes()),
+            Err(Error::NonCanonicalTweak)
+        );
+        assert_eq!(context.encode(), Err(Error::NonCanonicalTweak));
+    }
+}
+#[test]
+fn derive_and_validated_records_never_carry_a_rejected_context() {
+    // derive() skips any counter whose cumulative tweak would be zero, so a
+    // forced T_source + t = 0 candidate advances the counter, never yields 0.
+    let mut s = source();
+    let d = domain();
+    s.context.tweak = Scalar::from(3u64).to_bytes();
+    let first = derive(&s, &d).unwrap();
+    let forced = derive_inner(&s, &d, |bytes| {
+        if *bytes.last().unwrap() == 0 {
+            wide(-Scalar::from(3u64))
+        } else {
+            Sha512::digest(bytes).into()
+        }
+    })
+    .unwrap();
+    assert_eq!(forced.counter, 1);
+    for derived in [first, forced] {
+        assert_ne!(derived.context.tweak, [0; 32]);
+        let bytes = derived.context.encode().unwrap();
+        assert_eq!(bytes[0], CONTEXT_VERSION);
+        assert_eq!(Context::decode(&bytes).unwrap(), derived.context);
+    }
+    // A record that validates/encodes always carries a nonzero canonical
+    // version-2 context, so recover_with_context accepts its context.
+    let r = record();
+    assert_eq!(Record::decode(&r.encode().unwrap()).unwrap(), r);
+    assert_ne!(r.context.tweak, [0; 32]);
 }

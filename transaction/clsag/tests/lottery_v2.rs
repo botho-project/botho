@@ -7,6 +7,116 @@ fn committed_native_vectors() {
         serde_json::from_str(include_str!("fixtures/lottery-v2.json")).unwrap();
     assert_eq!(vectors::vectors(), expected);
 }
+/// Fixed byte vectors for the three contexts the payout primitive refuses
+/// (#1667): the zero tweak, a non-canonical tweak (T >= l little-endian) and an
+/// unknown context version. Each fails with its own error, before the wallet
+/// callback runs, in both the context codec and `recover_with_context`.
+#[test]
+fn rejected_context_vectors() {
+    fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+    // Target and public key of the committed classical record: valid points.
+    let output = bth_transaction_clsag::TxOutput {
+        amount: 1,
+        target_key: unhex("7e533e092d9dbca8090dfbe34949ece2062d00cd35a02c7eec9a8ddbddc33f50")
+            .try_into()
+            .unwrap(),
+        public_key: unhex("bce83f8ba5dd2fa572864c24ba1810f9522bc6004afe95877ac73241cafdab42")
+            .try_into()
+            .unwrap(),
+        kem_ciphertext: None,
+        e_memo: None,
+        cluster_tags: Default::default(),
+    };
+    let never = |_: &bth_transaction_clsag::TxOutput, _| -> Option<_> {
+        panic!("wallet callback reached for a rejected context")
+    };
+    // version || base_index (LE u32 = 3) || tweak (LE scalar)
+    let cases = [
+        (
+            "zero tweak",
+            "0203000000",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            Ok(()),
+            Error::ZeroTweak,
+        ),
+        (
+            "tweak = l",
+            "0203000000",
+            "edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010",
+            Err(Error::NonCanonicalTweak),
+            Error::NonCanonicalTweak,
+        ),
+        (
+            "tweak = l + 1",
+            "0203000000",
+            "eed3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010",
+            Err(Error::NonCanonicalTweak),
+            Error::NonCanonicalTweak,
+        ),
+        (
+            "tweak = 2^256 - 1",
+            "0203000000",
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            Err(Error::NonCanonicalTweak),
+            Error::NonCanonicalTweak,
+        ),
+    ];
+    for (name, head, tweak, codec, recover) in cases {
+        let bytes = unhex(&format!("{head}{tweak}"));
+        let context = Context {
+            base_index: 3,
+            tweak: unhex(tweak).try_into().unwrap(),
+        };
+        assert_eq!(
+            Context::decode(&bytes).map(|c| assert_eq!(c, context)),
+            codec,
+            "{name}: decode"
+        );
+        assert_eq!(
+            recover_with_context(&output, &context, never).map(|_| ()),
+            Err(recover),
+            "{name}: recover"
+        );
+    }
+    // A canonical nonzero tweak (scalar 1) under every version byte other than
+    // CONTEXT_VERSION.
+    let one = "0100000000000000000000000000000000000000000000000000000000000000";
+    for version in (0..=u8::MAX).filter(|v| *v != CONTEXT_VERSION) {
+        let bytes = unhex(&format!("{version:02x}03000000{one}"));
+        assert_eq!(
+            Context::decode(&bytes),
+            Err(Error::Version),
+            "version {version}"
+        );
+    }
+    let good = unhex(&format!("0203000000{one}"));
+    assert_eq!(
+        Context::decode(&good).unwrap().encode().unwrap(),
+        good,
+        "the same bytes under CONTEXT_VERSION are accepted"
+    );
+    // The version check also applies to a context inside a payout record.
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/lottery-v2.json")).unwrap();
+    let record = unhex(fixture["classical_record"].as_str().unwrap());
+    assert!(Record::decode(&record).is_ok());
+    let at = record.len() - (1 + 4 + 32);
+    assert_eq!(record[at], CONTEXT_VERSION);
+    for version in [0, 1, 3, 0xff] {
+        let mut bad = record.clone();
+        bad[at] = version;
+        assert_eq!(
+            Record::decode(&bad),
+            Err(Error::Version),
+            "record version {version}"
+        );
+    }
+}
 #[cfg(feature = "pq")]
 #[test]
 fn actual_clsag_source_repeated_and_nested_spends() {
@@ -113,7 +223,18 @@ fn actual_clsag_source_repeated_and_nested_spends() {
                     index,
                 )
             };
-            let key = recover_with_context(output, &source.context, recover).unwrap();
+            // The original output is a direct lineage start (zero tweak); it
+            // recovers through recover_direct, and the payout primitive
+            // refuses its zero context (#1667).
+            let key = if source.context.tweak == [0; 32] {
+                assert_eq!(
+                    recover_with_context(output, &source.context, recover).map(|_| ()),
+                    Err(Error::ZeroTweak)
+                );
+                recover_direct(output, source.context.base_index, recover).unwrap()
+            } else {
+                recover_with_context(output, &source.context, recover).unwrap()
+            };
             assert_eq!(RistrettoPublic::from(&key).to_bytes(), output.target_key);
             if hybrid {
                 let mut bad = source.context.clone();

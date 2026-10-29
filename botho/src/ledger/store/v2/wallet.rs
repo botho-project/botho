@@ -8,8 +8,12 @@
 //! see it. Every node-wallet path (balance, faucet, settlement, minting
 //! balance gate, input recovery) instead goes through [`recover_owned`], the
 //! one recovery rule shared with the private experimental wallet
-//! (`experimental/validated/wallet.rs`, #1360/#1365), which ends in
-//! [`clsag_v2::recover_with_context`]'s `x·G = P` check.
+//! (`experimental/validated/wallet.rs`, #1360/#1365), which ends in the clsag
+//! `x·G = P` check: [`clsag_v2::recover_direct`] for a `Direct` context and
+//! [`clsag_v2::recover_with_context`] for a `Lottery` one. The dispatch is
+//! load-bearing: `recover_with_context` fails closed on the zero tweak
+//! (#1667), so routing a direct output through it would make every ordinary
+//! output vanish from balance, faucet and minting gate.
 //!
 //! Contexts are read strictly from P2's store ([`read_context`]): a missing or
 //! inconsistent context is an error, never a Direct default. Legacy aliased
@@ -20,23 +24,34 @@ use super::*;
 use crate::{transaction::TxOutput, wallet::Wallet};
 use bth_crypto_keys::RistrettoPrivate;
 use bth_crypto_ring_signature::KeyImage;
-use bth_transaction_clsag::lottery_v2::{self as clsag_v2, Context};
+use bth_transaction_clsag::lottery_v2 as clsag_v2;
 use tracing::debug;
 
 /// Recover `(subaddress, one-time key)` for `output` under `context` with a
-/// caller-supplied base recovery. Shared by every wallet adapter; the final
-/// `x·G = P` check is [`clsag_v2::recover_with_context`]'s.
+/// caller-supplied base recovery. Shared by every wallet adapter. A `Direct`
+/// context (no tweak) goes to [`clsag_v2::recover_direct`]; a `Lottery`
+/// context goes to [`clsag_v2::recover_with_context`], which rejects a zero or
+/// non-canonical tweak before the base callback runs. Both end in the same
+/// final `x·G = P` check.
 pub(in crate::ledger) fn recover_with_base(
     output: &TxOutput,
-    context: &Context,
+    context: &StoredContext,
     base: impl FnOnce(&TxOutput, u32) -> Option<(u64, RistrettoPrivate)>,
 ) -> Result<(u64, RistrettoPrivate), clsag_v2::Error> {
     let mut subaddress = None;
-    let key = clsag_v2::recover_with_context(output, context, |base_output, index| {
+    let base_key = |base_output: &TxOutput, index| {
         let (found, key) = base(base_output, index)?;
         subaddress = Some(found);
         Some(key)
-    })?;
+    };
+    let key = match context {
+        StoredContext::Direct { base_index, .. } => {
+            clsag_v2::recover_direct(output, *base_index, base_key)
+        }
+        StoredContext::Lottery { context, .. } => {
+            clsag_v2::recover_with_context(output, context, base_key)
+        }
+    }?;
     Ok((subaddress.ok_or(clsag_v2::Error::Ownership)?, key))
 }
 
@@ -47,7 +62,7 @@ pub(in crate::ledger) fn recover_owned(
     output: &TxOutput,
     context: &StoredContext,
 ) -> Result<(u64, RistrettoPrivate), clsag_v2::Error> {
-    recover_with_base(output, &context.derivation(), |base, index| {
+    recover_with_base(output, context, |base, index| {
         let subaddress = wallet.scan_output(base, index)?;
         let key = wallet.recover_output_spend_key(base, subaddress, index)?;
         Some((subaddress, key))
@@ -86,6 +101,19 @@ impl ProductionView<'_, '_> {
         let (subaddress, secret) = match recover_owned(wallet, &utxo.output, &context) {
             Ok(found) => found,
             Err(clsag_v2::Error::Ownership) => return Ok(None),
+            // A rejected persisted context is store corruption, not a foreign
+            // output: surface it (like a missing context) instead of letting
+            // an owned output silently drop out of balance (#1667).
+            Err(
+                error @ (clsag_v2::Error::ZeroTweak
+                | clsag_v2::Error::NonCanonicalTweak
+                | clsag_v2::Error::Version),
+            ) => {
+                return Err(LedgerError::InconsistentRecord(format!(
+                    "derivation context of {} rejected by recovery: {error:?}",
+                    hex::encode(id.to_bytes())
+                )))
+            }
             // A foreign output whose keys are not usable points/scalars is
             // simply not ours (the classical scan treated it the same way).
             Err(error) => {
