@@ -1457,59 +1457,57 @@ impl Transaction {
         HEADER_SIZE + input_size + output_size
     }
 
-    /// Compute the transaction hash (includes signatures)
+    /// Compute the transaction hash (transaction ID).
+    ///
+    /// Commits to every input key image and to **every field of every output**
+    /// (#1638 / #1286 D0): amount, stealth keys, encrypted memo, cluster tags
+    /// (entries and decay state) and the ML-KEM ciphertext, plus the fee,
+    /// creation height and settlement marker. Ring signatures are not
+    /// included. Before #1638 the ID omitted `e_memo`, `cluster_tags` and
+    /// `kem_ciphertext`; there is no legacy mode — protocol-7.0.0 chains start
+    /// from genesis under this single rule.
     pub fn hash(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
 
-        hasher.update(b"clsag");
-        for input in self.inputs.clsag() {
+        hasher.update(TX_HASH_DOMAIN);
+        let inputs = self.inputs.clsag();
+        hasher.update((inputs.len() as u64).to_le_bytes());
+        for input in inputs {
             hasher.update(input.key_image);
         }
-
-        for output in &self.outputs {
-            hasher.update(output.amount.to_le_bytes());
-            hasher.update(output.target_key);
-            hasher.update(output.public_key);
-        }
-
-        hasher.update(self.fee.to_le_bytes());
-        hasher.update(self.created_at_height.to_le_bytes());
-        // #831: bind the settlement marker + certified value into the tx hash so
-        // it cannot be added/stripped without changing the hash. A `1` tag byte
-        // plus the value distinguishes `Some(0)` from `None` unambiguously.
-        match &self.settlement {
-            Some(s) => {
-                hasher.update([1u8]);
-                hasher.update(s.settled_value.to_le_bytes());
-            }
-            None => hasher.update([0u8]),
-        }
+        self.hash_body(&mut hasher);
         hasher.finalize().into()
     }
 
     /// Compute the signing hash (excludes signatures for deterministic signing)
     ///
-    /// This hash is used as the message for signing/verifying transaction
-    /// inputs. It includes all transaction data except the signatures
-    /// themselves.
+    /// This is the message every CLSAG input signs and every verifier checks.
+    /// It commits to **every field of every output** (#1638 / #1286 D0) —
+    /// amount, stealth keys, encrypted memo, cluster tags and ML-KEM
+    /// ciphertext — plus the fee, creation height and settlement marker, so
+    /// none of those can be altered without invalidating the signatures.
+    /// There is deliberately no legacy/selectable rule: every producer (node
+    /// wallet, botho-wallet and its stress signer, wasm-signer/web, mobile
+    /// bridge, bridge service) signs through this one function.
     pub fn signing_hash(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
+        hasher.update(TX_SIGNING_DOMAIN);
+        self.hash_body(&mut hasher);
+        hasher.finalize().into()
+    }
 
-        // Domain separator
-        hasher.update(b"botho-tx-clsag");
-
-        // Include all outputs (stealth keys, not recipient identity)
+    /// Shared, self-delimiting transcript of the signed transaction body:
+    /// output count, each complete output, fee, creation height, settlement.
+    fn hash_body(&self, hasher: &mut Sha256) {
+        hasher.update((self.outputs.len() as u64).to_le_bytes());
         for output in &self.outputs {
-            hasher.update(output.amount.to_le_bytes());
-            hasher.update(output.target_key);
-            hasher.update(output.public_key);
+            hash_complete_output(hasher, output);
         }
-
         hasher.update(self.fee.to_le_bytes());
         hasher.update(self.created_at_height.to_le_bytes());
-        // #831: the settlement marker is part of the signed message, so a
-        // signature over a settlement tx does not verify if the flag is
-        // stripped, and vice versa. Same encoding as `hash()`.
+        // #831: bind the settlement marker + certified value so it cannot be
+        // added/stripped without changing the hash. A `1` tag byte plus the
+        // value distinguishes `Some(0)` from `None` unambiguously.
         match &self.settlement {
             Some(s) => {
                 hasher.update([1u8]);
@@ -1517,7 +1515,6 @@ impl Transaction {
             }
             None => hasher.update([0u8]),
         }
-        hasher.finalize().into()
     }
 
     /// Get total output amount (excluding fee).
@@ -1699,6 +1696,55 @@ impl Transaction {
     }
 }
 
+/// Domain separator for [`Transaction::hash`] (complete-output rule, #1638).
+const TX_HASH_DOMAIN: &[u8] = b"botho-txid-complete-outputs-v2\0";
+/// Domain separator for [`Transaction::signing_hash`] (complete-output rule,
+/// #1638).
+const TX_SIGNING_DOMAIN: &[u8] = b"botho-tx-clsag-complete-outputs-v2\0";
+
+/// Stream every `TxOutput` field in declaration order with fixed-width LE
+/// integers, raw fixed-size keys, a one-byte 0/1 tag for each `Option` and a
+/// `u64` length prefix for every variable-length field, so the transcript is
+/// unambiguous (no two distinct outputs share an encoding).
+fn hash_complete_output(hasher: &mut Sha256, output: &TxOutput) {
+    hasher.update(output.amount.to_le_bytes());
+    hasher.update(output.target_key);
+    hasher.update(output.public_key);
+    hash_optional_bytes(
+        hasher,
+        output.e_memo.as_ref().map(|m| m.ciphertext.as_slice()),
+    );
+    hasher.update((output.cluster_tags.entries.len() as u64).to_le_bytes());
+    for entry in &output.cluster_tags.entries {
+        hasher.update(entry.cluster_id.0.to_le_bytes());
+        hasher.update(entry.weight.to_le_bytes());
+    }
+    match &output.cluster_tags.decay_state {
+        None => hasher.update([0u8]),
+        Some(decay) => {
+            hasher.update([1u8]);
+            hasher.update(decay.last_decay_block.to_le_bytes());
+            hasher.update(decay.decays_this_epoch.to_le_bytes());
+            hasher.update(decay.epoch_start_block.to_le_bytes());
+        }
+    }
+    hash_optional_bytes(hasher, output.kem_ciphertext.as_deref());
+}
+
+fn hash_optional_bytes(hasher: &mut Sha256, value: Option<&[u8]>) {
+    match value {
+        None => hasher.update([0u8]),
+        Some(bytes) => {
+            hasher.update([1u8]);
+            hasher.update((bytes.len() as u64).to_le_bytes());
+            hasher.update(bytes);
+        }
+    }
+}
+
+#[cfg(test)]
+mod complete_output_hash_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1716,7 +1762,7 @@ mod tests {
     }
 
     /// Default test amount that's above the dust threshold
-    const TEST_AMOUNT: u64 = DUST_THRESHOLD * 10;
+    pub(crate) const TEST_AMOUNT: u64 = DUST_THRESHOLD * 10;
 
     /// A destination memo built from raw 64 bytes preserves them byte-for-byte
     /// in `memo_data()`, is not "unused", and survives an encrypt -> on-chain
@@ -1952,7 +1998,7 @@ mod tests {
     /// The real input sits at a random index; the remaining ring members are
     /// independently-keyed decoys with valid curve points. This mirrors how a
     /// wallet constructs an input and lets us drive `verify` end-to-end.
-    fn signed_clsag_input(amount: u64, message: &[u8; 32]) -> ClsagRingInput {
+    pub(crate) fn signed_clsag_input(amount: u64, message: &[u8; 32]) -> ClsagRingInput {
         use bth_crypto_keys::ReprBytes;
         use rand::RngExt;
 
