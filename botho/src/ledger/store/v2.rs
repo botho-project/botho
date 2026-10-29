@@ -316,6 +316,111 @@ impl Ledger {
     }
 }
 
+/// Lottery-rules generation of this binary's ledger (#1286): every
+/// `botho.ledger.2` store accepts only V2 (independently keyed) payouts, so
+/// the RPC reports this as `lotteryRules` (P4, #1641).
+pub const LOTTERY_RULES_VERSION: u32 = 2;
+
+/// Public, read-only copy of an output's persisted derivation context
+/// (#1286 P4). A value snapshot of the crate-internal [`StoredContext`]:
+/// holding one grants no write path, and it is only ever produced by the
+/// strict [`Ledger::get_output_derivation_context`] read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DerivationContext {
+    /// Coinbase / transaction output: zero tweak, base index = output index.
+    Direct { height: u64, base_index: u32 },
+    /// V2 lottery payout `(creating block hash, 1 + ordinal)`. The one-time
+    /// key is `P = P_base + tweak·G`, where `P_base` was derived at
+    /// `base_index` (the original derivation index j, NOT the payout index).
+    Lottery {
+        height: u64,
+        ordinal: u32,
+        base_index: u32,
+        /// Canonical 32-byte scalar `T`.
+        tweak: [u8; 32],
+    },
+}
+
+impl From<&StoredContext> for DerivationContext {
+    fn from(context: &StoredContext) -> Self {
+        match context {
+            StoredContext::Direct { height, base_index } => Self::Direct {
+                height: *height,
+                base_index: *base_index,
+            },
+            StoredContext::Lottery {
+                height,
+                ordinal,
+                context,
+            } => Self::Lottery {
+                height: *height,
+                ordinal: *ordinal,
+                base_index: context.base_index,
+                tweak: context.tweak,
+            },
+        }
+    }
+}
+
+impl Ledger {
+    /// The persisted output `id` and its derivation context, read in ONE
+    /// transaction (public read-only accessor, #1286 P4).
+    ///
+    /// Strict exactly like `get_derivation_context`: a missing context is
+    /// [`LedgerError::MissingContext`] (never defaulted), and an
+    /// output/context disagreement or corruption is an error.
+    pub fn get_output_derivation_context(
+        &self,
+        id: &UtxoId,
+    ) -> Result<(Utxo, DerivationContext), LedgerError> {
+        let txn = self.env.read_txn().map_err(db_op("context read txn"))?;
+        read_context(self, &txn, id).map(|(utxo, c)| (utxo, DerivationContext::from(&c)))
+    }
+
+    /// TEST/FIXTURE SEEDING ONLY: not a sync path and not validation.
+    ///
+    /// Applies `block`'s storage effects through the shared writer without
+    /// any consensus check (transactions are not verified, the drawing is not
+    /// recomputed). `Some(records)` writes `botho.ledger.2` effects: a
+    /// Direct context per coinbase/transaction output and the Lottery context
+    /// of `records[ordinal]` per payout (the state P3's V2 rules will
+    /// produce). `None` writes legacy V1 effects with NO derivation contexts,
+    /// the only way to reproduce a pre-V2 (legacy) lottery payout row. Gated
+    /// like [`Ledger::seed_fixture_snapshot_unvalidated`]; never call it on
+    /// operator data.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    #[doc(hidden)]
+    pub fn seed_fixture_block_unvalidated(
+        &self,
+        block: &Block,
+        records: Option<&[bth_transaction_clsag::lottery_v2::Record]>,
+    ) -> Result<(), LedgerError> {
+        let state = self.get_chain_state()?;
+        let bytes =
+            bincode::serialize(block).map_err(|e| LedgerError::Serialization(e.to_string()))?;
+        let representation = match records {
+            Some(records) => super::writer::Representation::Production {
+                contexts: self.contexts_db,
+                records,
+            },
+            None => super::writer::Representation::Legacy,
+        };
+        let mut txn = self.env.write_txn().map_err(db_op("fixture write txn"))?;
+        self.write_tables().block_effects(
+            &mut txn,
+            block,
+            &state,
+            0,
+            None,
+            &bytes,
+            representation,
+            &mut |_| Ok(()),
+            &mut || Ok(()),
+        )?;
+        txn.commit().map_err(db_op("fixture commit"))
+    }
+}
+
 /// Production adapter for the shared V2 rule module: every read comes from
 /// one pinned transaction, and every read is strict.
 pub(in crate::ledger) struct ProductionView<'a, 'env> {

@@ -1441,6 +1441,8 @@ async fn handle_node_identity(id: Value, state: &RpcState) -> JsonRpcResponse {
             // Current chain tip so the client can confirm the node's chain.
             "chainHeight": chain_state.height,
             "tipHash": hex::encode(chain_state.tip_hash),
+            // Lottery-rules generation (#1286 P4), mirrors `getChainInfo`.
+            "lotteryRules": crate::ledger::LOTTERY_RULES_VERSION,
         }),
     )
 }
@@ -1469,6 +1471,10 @@ async fn handle_chain_info(id: Value, state: &RpcState) -> JsonRpcResponse {
             "circulatingSupply": circulating_supply.to_string(),
             "mempoolSize": mempool.len(),
             "mempoolFees": mempool.total_fees(),
+            // Lottery-rules generation (#1286 P4): 2 = V2 independently keyed
+            // payouts whose `chain_getOutputs` rows carry `lotteryContext`.
+            "lotteryRules": crate::ledger::LOTTERY_RULES_VERSION,
+            "protocolVersion": state.identity.protocol_version,
         }),
     )
 }
@@ -1736,6 +1742,107 @@ async fn handle_get_fee_rate(id: Value, state: &RpcState) -> JsonRpcResponse {
     )
 }
 
+/// `[cluster_id, weight]` pairs: the `clusterTags` wire schema shared by
+/// every `chain_getOutputs` row.
+fn cluster_tags_json(tags: &bth_transaction_types::ClusterTagVector) -> Vec<[u64; 2]> {
+    tags.entries
+        .iter()
+        .map(|e| [e.cluster_id.0, e.weight as u64])
+        .collect()
+}
+
+/// One `chain_getOutputs` lottery payout row (frozen V2 wire contract,
+/// #1641 / #1286 P4).
+///
+/// `stored` is the payout UTXO plus its persisted derivation context, read
+/// strictly from the ledger. With it the row is a V2 row:
+/// - `cryptoOutputIndex` = `lotteryContext.baseIndex` (the original derivation
+///   index j, NOT the payout outpoint index);
+/// - `lotteryContext {version: 2, baseIndex, tweak, ordinal, height}`, where
+///   `tweak` is the 32-byte scalar T as 64 lowercase hex (P = P_base + T·G);
+/// - `winnerOutpoint` = `"<hash hex>:<index>"`;
+/// - `clusterTags` = the payout UTXO's STORED tags (previously always empty,
+///   which made signers underestimate fees).
+///
+/// Without it (`None`) the row is a legacy V1 row: no `lotteryContext`,
+/// `cryptoOutputIndex` or `winnerOutpoint`, and consumers must exclude it
+/// (#1450). Its `clusterTags` are the stored UTXO's tags when one exists
+/// (`legacy_tags`), else empty.
+///
+/// A stored context that is not `Lottery`, or a stored UTXO whose envelope
+/// differs from the block's payout, is an inconsistent ledger and an error.
+fn lottery_payout_row(
+    block_hash: &[u8; 32],
+    lottery_idx: usize,
+    lottery_output: &crate::block::LotteryOutput,
+    stored: Option<(&crate::transaction::Utxo, &crate::ledger::DerivationContext)>,
+    legacy_tags: Option<&bth_transaction_types::ClusterTagVector>,
+) -> Result<Value, String> {
+    let output_index = (lottery_idx as u32) + 1;
+    let mut row = json!({
+        "txHash": hex::encode(block_hash),
+        "outputIndex": output_index,
+        "ledgerOutpoint": {"txHash": hex::encode(block_hash), "outputIndex": output_index},
+        "targetKey": hex::encode(lottery_output.target_key),
+        "publicKey": hex::encode(lottery_output.public_key),
+        "amountCommitment": hex::encode(lottery_output.payout.to_le_bytes()),
+        "clusterTags": legacy_tags.map(cluster_tags_json).unwrap_or_default(),
+        // Unified ML-KEM ciphertext (issue #970): hex or null.
+        "kemCiphertext": lottery_output.kem_ciphertext.as_ref().map(hex::encode),
+        "lottery": true,
+    });
+    let Some((utxo, context)) = stored else {
+        return Ok(row);
+    };
+    let crate::ledger::DerivationContext::Lottery {
+        height,
+        ordinal,
+        base_index,
+        tweak,
+    } = context
+    else {
+        return Err(format!(
+            "lottery payout {}:{output_index} carries a non-lottery derivation context",
+            hex::encode(block_hash)
+        ));
+    };
+    if utxo.output.target_key != lottery_output.target_key
+        || utxo.output.public_key != lottery_output.public_key
+        || utxo.output.amount != lottery_output.payout
+        || *ordinal as usize != lottery_idx
+    {
+        return Err(format!(
+            "lottery payout {}:{output_index} disagrees with its stored UTXO",
+            hex::encode(block_hash)
+        ));
+    }
+    let fields = row.as_object_mut().expect("row is an object");
+    fields.insert("cryptoOutputIndex".into(), json!(base_index));
+    fields.insert(
+        "lotteryContext".into(),
+        json!({
+            "version": crate::ledger::LOTTERY_RULES_VERSION,
+            "baseIndex": base_index,
+            "tweak": hex::encode(tweak),
+            "ordinal": ordinal,
+            "height": height,
+        }),
+    );
+    fields.insert(
+        "winnerOutpoint".into(),
+        json!(format!(
+            "{}:{}",
+            hex::encode(lottery_output.winner_tx_hash),
+            lottery_output.winner_output_index
+        )),
+    );
+    fields.insert(
+        "clusterTags".into(),
+        json!(cluster_tags_json(&utxo.output.cluster_tags)),
+    );
+    Ok(row)
+}
+
 async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> JsonRpcResponse {
     let start_height = params
         .get("start_height")
@@ -1838,25 +1945,68 @@ async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> Json
             // tweak, while `publicKey`/`kemCiphertext` are inherited from the
             // ORIGINAL derivation. A plain `belongs_to(outputIndex)` scan
             // therefore no longer detects it; recovery needs the derivation
-            // context (original index + cumulative tweak), which RPC exposes
-            // in P4 (#1286). `txHash` is the block hash and `outputIndex` is `1 + index` to
+            // context (original index + cumulative tweak), which each row
+            // exposes below (P4, #1286). `txHash` is the block hash and `outputIndex` is `1 + index` to
             // mirror the ledger's deterministic id scheme (coinbase holds index
             // 0 under the block hash; tx outputs use the tx hash, never the
             // block hash, so these ids cannot collide).
+            //
+            // V2 (#1286 P4, frozen contract on #1641): each row also carries
+            // the payout's persisted derivation context, the winner outpoint,
+            // and the payout UTXO's STORED cluster tags. See
+            // `lottery_payout_row`.
             let block_hash = block.hash();
             for (lottery_idx, lottery_output) in block.lottery_outputs.iter().enumerate() {
-                outputs.push(json!({
-                    "txHash": hex::encode(block_hash),
-                    "outputIndex": (lottery_idx as u32) + 1,
-                    "ledgerOutpoint": {"txHash": hex::encode(block_hash), "outputIndex": (lottery_idx as u32) + 1},
-                    "targetKey": hex::encode(lottery_output.target_key),
-                    "publicKey": hex::encode(lottery_output.public_key),
-                    "amountCommitment": hex::encode(lottery_output.payout.to_le_bytes()),
-                    "clusterTags": Vec::<[u64; 2]>::new(),
-                    // Unified ML-KEM ciphertext (issue #970): hex or null.
-                    "kemCiphertext": lottery_output.kem_ciphertext.as_ref().map(hex::encode),
-                    "lottery": true,
-                }));
+                let outpoint =
+                    crate::transaction::UtxoId::new(block_hash, (lottery_idx as u32) + 1);
+                let stored = match ledger.get_output_derivation_context(&outpoint) {
+                    Ok((utxo, context)) => Some((utxo, context)),
+                    // Legacy (pre-V2) payout: no context was ever written. Emit
+                    // the row WITHOUT `lotteryContext`, which marks it legacy;
+                    // consumers must exclude it (#1450). A `botho.ledger.2`
+                    // chain never produces one.
+                    Err(crate::ledger::LedgerError::MissingContext(_)) => {
+                        warn!(
+                            height,
+                            lottery_idx, "lottery payout has no derivation context (legacy row)"
+                        );
+                        None
+                    }
+                    Err(e) => {
+                        return JsonRpcResponse::error(
+                            id,
+                            -32603,
+                            &format!(
+                                "lottery payout {}:{} context read failed: {e}",
+                                hex::encode(block_hash),
+                                outpoint.output_index
+                            ),
+                        )
+                    }
+                };
+                let legacy_tags = match &stored {
+                    Some(_) => None,
+                    None => match ledger.get_utxo(&outpoint) {
+                        Ok(utxo) => utxo.map(|u| u.output.cluster_tags),
+                        Err(e) => {
+                            return JsonRpcResponse::error(
+                                id,
+                                -32603,
+                                &format!("lottery payout UTXO read failed: {e}"),
+                            )
+                        }
+                    },
+                };
+                match lottery_payout_row(
+                    &block_hash,
+                    lottery_idx,
+                    lottery_output,
+                    stored.as_ref().map(|(u, c)| (u, c)),
+                    legacy_tags.as_ref(),
+                ) {
+                    Ok(row) => outputs.push(row),
+                    Err(e) => return JsonRpcResponse::error(id, -32603, &e),
+                }
             }
 
             blocks.push(json!({
@@ -4275,6 +4425,9 @@ async fn handle_faucet_status(id: Value, state: &RpcState) -> JsonRpcResponse {
         ),
     }
 }
+
+#[cfg(test)]
+mod lottery_rows_tests;
 
 #[cfg(test)]
 mod tests {
