@@ -1994,10 +1994,12 @@ async fn handle_wallet_balance(id: Value, state: &RpcState) -> JsonRpcResponse {
         }
     };
 
-    // Scan UTXOs for this wallet
+    // Discover this wallet's unspent outputs through their persisted
+    // derivation contexts (botho.ledger.2, #1286 P7): direct outputs and V2
+    // lottery payouts alike. Legacy aliased rows are excluded.
     let ledger = read_lock!(state.ledger, id);
-    let all_utxos = match ledger.scan_utxos_for_account(wallet.account_key()) {
-        Ok(u) => u,
+    let owned = match ledger.unspent_wallet_outputs(wallet) {
+        Ok(owned) => owned,
         Err(e) => {
             error!("Wallet balance scan failed: {}", e);
             return JsonRpcResponse::error(id, -32000, "Failed to scan wallet UTXOs");
@@ -2008,36 +2010,17 @@ async fn handle_wallet_balance(id: Value, state: &RpcState) -> JsonRpcResponse {
     let mempool = read_lock!(state.mempool, id);
     let mut confirmed_balance: u64 = 0;
     let mut utxo_count = 0;
+    let mut lottery_payout_count = 0;
 
-    for utxo in &all_utxos {
-        // Unified hybrid scan path (issue #970): decapsulate + view-key check.
-        if let Some(subaddress_index) = wallet.scan_output(&utxo.output, utxo.id.output_index) {
-            // Recover the one-time private key to compute key image
-            if let Some(onetime_private) = wallet.recover_output_spend_key(
-                &utxo.output,
-                subaddress_index,
-                utxo.id.output_index,
-            ) {
-                let key_image = bth_crypto_ring_signature::KeyImage::from(&onetime_private);
-                let key_image_bytes = key_image.as_bytes();
-
-                // Skip if pending in mempool
-                if mempool.is_key_image_pending(&key_image_bytes) {
-                    continue;
-                }
-
-                // Skip if already spent on-chain
-                if ledger
-                    .is_key_image_spent(&key_image_bytes)
-                    .unwrap_or(None)
-                    .is_some()
-                {
-                    continue;
-                }
-
-                confirmed_balance += utxo.output.amount;
-                utxo_count += 1;
-            }
+    for output in &owned {
+        // Skip if pending in mempool
+        if mempool.is_key_image_pending(&output.key_image) {
+            continue;
+        }
+        confirmed_balance += output.utxo.output.amount;
+        utxo_count += 1;
+        if output.lottery_payout {
+            lottery_payout_count += 1;
         }
     }
 
@@ -2048,6 +2031,7 @@ async fn handle_wallet_balance(id: Value, state: &RpcState) -> JsonRpcResponse {
             "pending": 0,
             "total": confirmed_balance,
             "utxoCount": utxo_count,
+            "lotteryPayoutCount": lottery_payout_count,
         }),
     )
 }
@@ -3637,71 +3621,34 @@ async fn handle_faucet_request(
     let ledger = read_lock!(state.ledger, id);
     let our_address = wallet.default_address();
 
-    // Get our UTXOs using stealth address scanning
-    // This scans all UTXOs and checks ownership via the account key
-    let all_utxos = match ledger.scan_utxos_for_account(wallet.account_key()) {
-        Ok(u) => u,
+    // Get our unspent outputs through their persisted derivation contexts
+    // (botho.ledger.2, #1286 P7): direct outputs and V2 lottery payouts, with
+    // key images recovered via the context and legacy aliased rows excluded.
+    let owned = match ledger.unspent_wallet_outputs(wallet) {
+        Ok(owned) => owned,
         Err(e) => {
             error!("Faucet: failed to scan UTXOs: {}", e);
             return JsonRpcResponse::error(id, -32000, "Failed to get faucet balance");
         }
     };
 
-    let all_utxos = match Wallet::canonical_inputs(&all_utxos, &ledger) {
-        Ok(utxos) => utxos,
-        Err(error) => {
-            error!("Failed to resolve canonical wallet inputs: {}", error);
-            return JsonRpcResponse::error(id, -32000, "Failed to resolve canonical wallet inputs");
-        }
-    };
-
-    // Filter out spent UTXOs by checking key images in both ledger and mempool
-    // We need to check the mempool to avoid double-spend errors when a previous
-    // faucet transaction is still pending (not yet confirmed in a block)
+    // Filter out outputs whose key image is pending in the mempool, to avoid
+    // double-spend errors while a previous faucet transaction is unconfirmed.
     let mempool = read_lock!(state.mempool, id);
     let mut utxos = Vec::new();
-    info!("Faucet: scanning {} UTXOs from ledger", all_utxos.len());
-    for (idx, utxo) in all_utxos.iter().enumerate() {
-        // Unified hybrid scan path (issue #970): decapsulate + view-key check.
-        if let Some(subaddress_index) = wallet.scan_output(&utxo.output, utxo.id.output_index) {
-            // Recover the one-time private key
-            if let Some(onetime_private) = wallet.recover_output_spend_key(
-                &utxo.output,
-                subaddress_index,
-                utxo.id.output_index,
-            ) {
-                // Compute the key image
-                let key_image = bth_crypto_ring_signature::KeyImage::from(&onetime_private);
-                let key_image_bytes = key_image.as_bytes();
-
-                // Check if this key image is pending in mempool
-                if mempool.is_key_image_pending(&key_image_bytes) {
-                    debug!("Faucet: skipping UTXO with pending key image in mempool");
-                    continue;
-                }
-
-                // Check if this key image has been spent on-chain
-                match ledger.is_key_image_spent(&key_image_bytes) {
-                    Ok(None) => {
-                        // Not spent, include this UTXO
-                        info!(
-                            "Faucet: UTXO {} owned, unspent - id={}, key_image={}",
-                            idx,
-                            hex::encode(&utxo.id.to_bytes()[0..8]),
-                            hex::encode(&key_image_bytes[0..8])
-                        );
-                        utxos.push(utxo.clone());
-                    }
-                    Ok(Some(_)) => {
-                        // Already spent, skip
-                        debug!("Faucet: skipping spent UTXO");
-                    }
-                    Err(e) => {
-                        warn!("Faucet: failed to check key image: {}", e);
-                    }
-                }
-            }
+    info!("Faucet: scanning {} owned unspent outputs", owned.len());
+    for (idx, output) in owned.iter().enumerate() {
+        if mempool.is_key_image_pending(&output.key_image) {
+            debug!("Faucet: skipping UTXO with pending key image in mempool");
+            continue;
         }
+        info!(
+            "Faucet: UTXO {} owned, unspent - id={}, key_image={}",
+            idx,
+            hex::encode(&output.utxo.id.to_bytes()[0..8]),
+            hex::encode(&output.key_image[0..8])
+        );
+        utxos.push(output.utxo.clone());
     }
     // Drop mempool read lock before continuing
     drop(mempool);
@@ -3948,49 +3895,23 @@ async fn handle_dev_settle_to_background(
 
     let ledger = read_lock!(state.ledger, id);
 
-    // Scan our own spendable UTXOs (stealth ownership via the account key).
-    let all_utxos = match ledger.scan_utxos_for_account(wallet.account_key()) {
-        Ok(u) => u,
+    // Our own spendable outputs, through their persisted derivation contexts
+    // (botho.ledger.2, #1286 P7; V2 lottery payouts included, legacy aliased
+    // rows excluded). Spent outputs are already dropped; drop mempool-pending
+    // ones too, mirroring the faucet.
+    let owned = match ledger.unspent_wallet_outputs(wallet) {
+        Ok(owned) => owned,
         Err(e) => {
             error!("dev_settleToBackground: failed to scan UTXOs: {}", e);
             return JsonRpcResponse::error(id, -32000, "Failed to scan wallet UTXOs");
         }
     };
-
-    let all_utxos = match Wallet::canonical_inputs(&all_utxos, &ledger) {
-        Ok(utxos) => utxos,
-        Err(error) => {
-            error!("Failed to resolve canonical wallet inputs: {}", error);
-            return JsonRpcResponse::error(id, -32000, "Failed to resolve canonical wallet inputs");
-        }
-    };
-
-    // Drop spent / pending inputs (chain + mempool), mirroring the faucet.
     let mempool = read_lock!(state.mempool, id);
-    let mut utxos = Vec::new();
-    for utxo in &all_utxos {
-        if let Some(subaddress_index) = wallet.scan_output(&utxo.output, utxo.id.output_index) {
-            if let Some(onetime_private) = wallet.recover_output_spend_key(
-                &utxo.output,
-                subaddress_index,
-                utxo.id.output_index,
-            ) {
-                let key_image = bth_crypto_ring_signature::KeyImage::from(&onetime_private);
-                let key_image_bytes = key_image.as_bytes();
-                if mempool.is_key_image_pending(&key_image_bytes) {
-                    continue;
-                }
-                match ledger.is_key_image_spent(&key_image_bytes) {
-                    Ok(None) => utxos.push(utxo.clone()),
-                    Ok(Some(_)) => continue,
-                    Err(e) => {
-                        error!("dev_settleToBackground: key image check failed: {}", e);
-                        return JsonRpcResponse::error(id, -32000, "Key image check failed");
-                    }
-                }
-            }
-        }
-    }
+    let utxos: Vec<_> = owned
+        .iter()
+        .filter(|output| !mempool.is_key_image_pending(&output.key_image))
+        .map(|output| output.utxo.clone())
+        .collect();
     drop(mempool);
 
     // Select enough inputs to cover amount + fee.
@@ -4175,6 +4096,7 @@ fn calculate_dispensed_from_blockchain(
 
     if chain_state.height >= start_height {
         let mut cache = faucet.key_image_cache_mut();
+        let mut scanned_to = Some(chain_state.height);
 
         for height in start_height..=chain_state.height {
             let block = match ledger.get_block(height) {
@@ -4197,6 +4119,23 @@ fn calculate_dispensed_from_blockchain(
                 }
             }
 
+            // V2 lottery payouts to the faucet's outputs (botho.ledger.2,
+            // #1286 P7): each has its own one-time key (base + context tweak)
+            // and so its own key image, recovered via its persisted context.
+            match ledger.wallet_payouts_in_block(wallet, &block) {
+                Ok(payouts) => {
+                    for payout in payouts {
+                        cache.key_images.insert(payout.key_image);
+                    }
+                }
+                Err(e) => {
+                    // Retry this height next time instead of skipping it.
+                    warn!("Faucet stats: payout scan at {} failed: {}", height, e);
+                    scanned_to = height.checked_sub(1);
+                    break;
+                }
+            }
+
             // Check regular tx outputs (change back to faucet, or incoming transfers)
             for tx in &block.transactions {
                 for (idx, output) in tx.outputs.iter().enumerate() {
@@ -4213,7 +4152,10 @@ fn calculate_dispensed_from_blockchain(
             }
         }
 
-        cache.cached_height = chain_state.height;
+        // `None`: the genesis scan itself failed; leave the cache unscanned.
+        if let Some(scanned_to) = scanned_to {
+            cache.cached_height = scanned_to;
+        }
 
         debug!(
             "Faucet stats: updated cache to height {}, {} key images",
@@ -4337,6 +4279,65 @@ async fn handle_faucet_status(id: Value, state: &RpcState) -> JsonRpcResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1286 P7: the node wallet's balance RPC and the faucet's key-image
+    /// history see V2 lottery payouts, recovered through their persisted
+    /// derivation contexts (repeated and nested awards included).
+    #[tokio::test]
+    async fn wallet_balance_and_faucet_history_include_v2_payouts() {
+        use crate::{config::FaucetConfig, ledger::wallet_v2_fixture::Fixture, mempool::Mempool};
+        let f = Fixture::build();
+        // Spend one nested payout on chain: the faucet history must count it.
+        let nested_amount = f.utxo(&f.nested).output.amount;
+        let block = f.block_with(vec![f.spend(&f.nested)]);
+        f.ledger.add_block(&block).unwrap();
+        let expected = f.owned_total() - nested_amount;
+        let payouts = f.payouts.len() as u64;
+        let owned = f.owned_ids().len() as u64;
+        let Fixture {
+            ledger, owner, dir, ..
+        } = f;
+        let mut state = RpcState::new(
+            ledger,
+            Mempool::new(),
+            Network::Testnet,
+            None,
+            None,
+            vec![],
+            Arc::new(WsBroadcaster::new(16)),
+        );
+        let wallet = Arc::new(owner);
+        state.wallet = Some(wallet.clone());
+
+        let resp = handle_wallet_balance(json!(1), &state).await;
+        assert!(resp.error.is_none(), "{:?}", resp.error);
+        let result = resp.result.unwrap();
+        assert_eq!(result["confirmed"], json!(expected));
+        assert_eq!(result["utxoCount"], json!(owned - 1));
+        assert_eq!(result["lotteryPayoutCount"], json!(payouts - 1));
+
+        let faucet = FaucetState::new(FaucetConfig {
+            enabled: true,
+            amount: 7,
+            per_ip_hourly_limit: 3,
+            per_address_daily_limit: 2,
+            daily_limit: 100,
+            cooldown_secs: 5,
+        });
+        let ledger = state.ledger.read().unwrap();
+        let stats = calculate_dispensed_from_blockchain(&wallet, &ledger, &faucet, 7);
+        assert_eq!(stats.lifetime_dispensed, 7);
+        // Every owned payout's key image is in the history cache.
+        let images = &faucet.key_image_cache().key_images;
+        for output in ledger.discover_wallet_outputs(&wallet).unwrap() {
+            if output.lottery_payout {
+                assert!(images.contains(&output.key_image));
+            }
+        }
+        drop(ledger);
+        drop(state);
+        drop(dir);
+    }
 
     fn empty_test_state() -> RpcState {
         use crate::{ledger::Ledger, mempool::Mempool};

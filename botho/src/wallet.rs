@@ -25,8 +25,10 @@ use crate::{
     transaction::{ClsagRingInput, RingMember, Transaction, TxOutput, Utxo, MIN_RING_SIZE},
 };
 
-/// Narrow internal read seam. The ordinary Ledger adapter retains direct-index
-/// recovery and its existing decoy selection/errors. No network format changes.
+/// Narrow internal read seam. The production Ledger adapter recovers inputs
+/// through their persisted derivation contexts (#1286 P7) and keeps its
+/// existing decoy selection/errors. No network format changes. The default
+/// `recover_input` is the classical direct-index recovery.
 pub(crate) trait WalletRead {
     fn validate_input(&self, _utxo: &Utxo) -> Result<()> {
         Ok(())
@@ -60,6 +62,21 @@ pub(crate) trait WalletRead {
     ) -> std::result::Result<Vec<TxOutput>, crate::ledger::LedgerError>;
 }
 impl WalletRead for Ledger {
+    /// Protocol 7.0.0 (#1640) / #1286 P7: recover the one-time key through
+    /// the output's committed derivation context instead of guessing
+    /// `id.output_index`. A direct output's context is (its own index, zero
+    /// tweak), which is exactly the former direct-index recovery; a V2 lottery
+    /// payout's is (the ORIGINAL index, the cumulative tweak), so its
+    /// independently keyed target is recoverable and its key image differs
+    /// from the source's. This is the ONE spend-recovery path: it runs the
+    /// same `recover_owned` rule wallet discovery uses (see
+    /// `ledger::store::v2::wallet`), reads output + context strictly in one
+    /// pinned txn, refuses a caller-supplied input that differs from the
+    /// ledger's or is already spent, and ends in `recover_with_context`'s
+    /// `x*G == P` check.
+    fn recover_input(&self, wallet: &Wallet, utxo: &Utxo) -> Result<RistrettoPrivate> {
+        self.recover_wallet_input(wallet, utxo)
+    }
     fn validate_input(&self, utxo: &Utxo) -> Result<()> {
         let canonical = self
             .get_utxo_by_target_key(&utxo.output.target_key)?
@@ -70,36 +87,6 @@ impl WalletRead for Ledger {
             ));
         }
         Ok(())
-    }
-    /// Protocol 7.0.0 (#1640): recover the one-time key through the output's
-    /// committed derivation context instead of guessing `id.output_index`.
-    /// A direct output's context is (its own index, zero tweak), which is
-    /// exactly the former direct-index recovery; a V2 lottery payout's is
-    /// (the ORIGINAL index, the cumulative tweak), so its independently keyed
-    /// target is recoverable and its key image differs from the source's.
-    /// `recover_with_context` proves `x*G == P` before the key is used.
-    fn recover_input(&self, wallet: &Wallet, utxo: &Utxo) -> Result<RistrettoPrivate> {
-        // Output and context come from ONE strict read; a caller-supplied
-        // output that differs from the ledger's is refused.
-        let (stored, context) = self.spend_recovery_context(&utxo.id)?;
-        anyhow::ensure!(
-            stored.output == utxo.output && stored.created_at == utxo.created_at,
-            "Selected input differs from its ledger output"
-        );
-        bth_transaction_clsag::lottery_v2::recover_with_context(
-            &utxo.output,
-            &context,
-            |base, j| {
-                let subaddress = wallet.scan_output(base, j)?;
-                wallet.recover_output_spend_key(base, subaddress, j)
-            },
-        )
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "UTXO does not belong to this wallet: {} ({e:?})",
-                hex::encode(&utxo.id.tx_hash[0..8])
-            )
-        })
     }
     fn decoys(
         &self,

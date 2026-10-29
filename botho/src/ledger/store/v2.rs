@@ -15,6 +15,9 @@ use super::{
 use crate::ledger::lottery_v2::{fixed, DerivationReads, StoredContext};
 use heed::RoTxn;
 
+/// Native node-wallet discovery/recovery through these contexts (#1286 P7).
+pub(in crate::ledger) mod wallet;
+
 /// Metadata key holding the storage-schema marker. Shared with the private
 /// experimental stores, whose (different) markers are therefore refused here
 /// by exact comparison.
@@ -252,8 +255,13 @@ impl Ledger {
     /// its committed derivation context as the crypto-layer `Context`
     /// (`base_index` = ORIGINAL derivation index, `tweak` = cumulative V2
     /// payout tweak, zero for a direct output), read strictly in one txn.
-    /// Only the node wallet's `WalletRead` adapter uses it; the public,
-    /// RPC-facing accessor is P4's (#1641) `get_output_derivation_context`.
+    /// Only the test/fixture accessor `Ledger::fixture_derivation_context`
+    /// uses it now: the node wallet's spend path (`WalletRead for Ledger`)
+    /// recovers through `v2::wallet::recover_wallet_input` (#1286 P7), the
+    /// same `recover_owned` rule wallet discovery uses, so there is one
+    /// recovery path. The public, RPC-facing accessor is P4's (#1641)
+    /// `get_output_derivation_context`.
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub(crate) fn spend_recovery_context(
         &self,
         id: &UtxoId,
