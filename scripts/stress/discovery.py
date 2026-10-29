@@ -5,6 +5,7 @@ import json
 import math
 import time
 from controller import Controller
+from lottery import lottery_rows
 from runtime import Gate, HOSTS, Quota, atomic, digest
 from selection import choose
 from fee_evidence import quote_evidence, summarize_fees
@@ -155,6 +156,20 @@ class DiscoveryController(Controller):
         if not self.j.get("opening_verified"):
             return
         super().accounting()
+
+    def principal_balances(self, states):
+        """Per-wallet unspent balance excluding every lottery award (#1643)."""
+        awards = set(lottery_rows(self.blocks))
+        return [
+            sum(
+                o["utxo"]["amount"]
+                for o in owned
+                if not states[o["key_image"]]["spent"]
+                and bytes(o["utxo"]["tx_hash"]).hex() + ":" + str(o["utxo"]["output_index"])
+                not in awards
+            )
+            for owned in self.inventory
+        ]
 
     def spendable(self, wallet, height, amount=0, count=None):
         selected, evidence = choose(self, wallet, height, amount, count)
@@ -338,7 +353,11 @@ class DiscoveryController(Controller):
                 )
                 for owned in self.inventory
             ]
-            if balances != self.config["opening_balances"]:
+            # The pin is prefunded principal. Lottery awards (V2 is
+            # discoverable, so campaign wallets do win) may land at any time,
+            # including between prefund and launch: exclude them here and
+            # count them as opening lottery income below (#1643).
+            if self.principal_balances(states) != self.config["opening_balances"]:
                 raise Gate("prefunded opening balances differ from pinned launch")
             # Exact opening inventory becomes immutable once any rehearsal signs.
             self.j.set("opening_balance", sum(balances))

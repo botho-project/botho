@@ -32,6 +32,8 @@ class TerminalReportingTests(unittest.TestCase):
         self.c.j = Journal(self.c.state / "journal.sqlite")
         self.addCleanup(self.c.j.db.close)
         self.c.j.set("status", "setup")
+        # The V2 lottery preflight (#1643) already passed for this campaign.
+        self.c.j.set("lottery_preflight", {"at": 999, "hosts": {}})
         self.c.j.set("rehearsal_start", 1000)
         self.opening = {
             "at": 999,

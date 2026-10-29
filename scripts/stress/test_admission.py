@@ -31,6 +31,8 @@ class AdmissionTests(unittest.IsolatedAsyncioTestCase):
             self.c.state / "journal.sqlite", lambda: self.now, self.limits
         )
         self.addCleanup(lambda: self.c.j.db.close())
+        # The V2 lottery preflight (#1643) already passed for this campaign.
+        self.c.j.set("lottery_preflight", {"at": 999, "hosts": {}})
         self.c.j.set("status", "setup")
         self.c.j.set("setup_start", 1000)
         self.c.j.set("last_summary_at", self.now)

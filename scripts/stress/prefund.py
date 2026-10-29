@@ -31,6 +31,7 @@ import stat
 import time
 
 from controller import Controller
+from lottery import lottery_rows
 from plan import expand
 from runtime import (Gate, HOSTS, Journal, Quota, Rpc, atomic, campaign_targets,
                      campaign_tls_context, check_identity, pinned_file)
@@ -334,6 +335,18 @@ class Prefunder(Controller):
         state = {s['keyImage']: s for s in self.spent}
         return [o for o in self.inventory[wallet] if not state[o['key_image']]['spent']]
 
+    def award_ids(self):
+        """Every lottery payout outpoint on chain, legacy or V2 (#1643).
+
+        The chain row classifies an award; the signer's ``lottery`` flag is
+        accepted too, so neither alone can hide inflow.
+        """
+        return set(lottery_rows(self.blocks))
+
+    @staticmethod
+    def is_award(output, awards):
+        return bool(output['utxo'].get('lottery')) or output['id'] in awards
+
     # ---- opening ---------------------------------------------------------
 
     async def opening_snapshot(self):
@@ -535,11 +548,12 @@ class Prefunder(Controller):
         hashes = {r['hash'] for r in self.records}
         opening = set(self.opening['owned'])
         inflow, external = 0, []
+        awards = self.award_ids()
         for output in self.inventory[self.funding]:
             utxo = output['utxo']
             if output['id'] in opening or bytes(utxo['tx_hash']).hex() in hashes:
                 continue
-            if not (utxo.get('coinbase') or utxo.get('lottery')):
+            if not (utxo.get('coinbase') or self.is_award(output, awards)):
                 external.append(output['id'])
             inflow += utxo['amount']
         need(not external, 'unexpected non-coinbase transfer into the funding wallet')
@@ -547,14 +561,18 @@ class Prefunder(Controller):
         fees = sum(r['fee'] for r in self.records)
         remaining = sum(o['utxo']['amount'] for o in self.unspent(self.funding))
         difference = self.opening['balance'] + inflow - remaining - principal - fees
+        v2 = self.lottery_v2_evidence(lottery_rows(self.blocks), {s['keyImage']: s for s in self.spent})
         report = {'at': self.clock(), 'opening': self.opening['balance'], 'coinbase_lottery_inflow': inflow,
-                  'remaining': remaining, 'principal': principal, 'fees': fees, 'difference': difference}
+                  'remaining': remaining, 'principal': principal, 'fees': fees, 'difference': difference,
+                  'lottery_v2': v2}
         self.j.set('accounting', report)
+        need(not v2['undiscovered'], 'undiscovered lottery award: '
+             + (v2['undiscovered'][0]['payout'] if v2['undiscovered'] else ''))
         need(difference == 0, 'exact funding-wallet accounting mismatch')
         for wallet in range(self.count):
             grants = {r['hash'] + ':0' for r in self.records if r['recipient'] == wallet}
             for output in self.inventory[wallet]:
-                need(output['id'] in grants or output['utxo'].get('lottery'),
+                need(output['id'] in grants or self.is_award(output, awards),
                      'unexpected transfer into campaign wallet-%d' % (wallet + 1))
         return report
 
@@ -562,9 +580,14 @@ class Prefunder(Controller):
         """Final full scan, exact accounting, then the staging inputs. Then stop."""
         height = await self.sync(full=True)
         report = self.accounting()
-        state = {s['keyImage']: s for s in self.spent}
-        balances = [sum(o['utxo']['amount'] for o in owned if not state[o['key_image']]['spent'])
-                    for owned in self.inventory[:self.count]]
+        # Pin prefunded principal only: lottery awards are not principal, may
+        # keep arriving before launch, and are opening lottery income there
+        # (#1643). The principal budget therefore never counts lottery inflow.
+        awards = self.award_ids()
+        balances = [sum(o['utxo']['amount'] for o in self.unspent(w) if not self.is_award(o, awards))
+                    for w in range(self.count)]
+        lottery_balances = [sum(o['utxo']['amount'] for o in self.unspent(w) if self.is_award(o, awards))
+                            for w in range(self.count)]
         check_opening_balances(balances, self.plan)
         wallets = self.plan['wallets']
         largest = max(map(int, wallets['transfer_amounts_picocredits']))
@@ -573,7 +596,7 @@ class Prefunder(Controller):
             ready, counts = choose(self, w, height, headroom=wallets['decoy_headroom'])
             probe, _ = choose(self, w, height, largest, 4, wallets['decoy_headroom'])
             grants = sum(r['recipient'] == w for r in self.records)
-            need(sum(1 for o in self.unspent(w) if not o['utxo'].get('lottery')) == grants,
+            need(sum(1 for o in self.unspent(w) if not self.is_award(o, awards)) == grants,
                  'campaign wallet-%d grant outputs spent or missing' % (w + 1))
             readiness.append({**counts, 'grant_outputs': grants, 'four_input_probe_feasible': bool(probe),
                               'ready': len(ready) >= wallets['min_mature_utxos_per_wallet'] and bool(probe)})
@@ -581,7 +604,7 @@ class Prefunder(Controller):
                   'grants': len(self.records), 'grant_picocredits': self.m['grant_picocredits'],
                   'principal': report['principal'], 'fees': report['fees'],
                   'max_fee': max(r['fee'] for r in self.records), 'accounting': report,
-                  'opening_balances': balances,
+                  'opening_balances': balances, 'opening_lottery_balances': lottery_balances,
                   'completed_before_deadline': self.clock() < self.m['deadline'],
                   'inventory_readiness': {'status': 'ready' if all(r['ready'] for r in readiness) else
                                           'maturing_or_generator_limited', 'wallets': readiness}}
@@ -600,6 +623,7 @@ class Prefunder(Controller):
         self.gate()
         if (self.state / 'opening_balances.json').exists() and len(self.records) == self.total:
             return True
+        await self.lottery_preflight()
         await self.health(force=not self.statuses)
         if self.opening is None:
             await self.opening_snapshot()

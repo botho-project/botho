@@ -23,6 +23,8 @@ class AdmissionPacingTests(unittest.IsolatedAsyncioTestCase):
         self.c.j = Journal(self.c.state / 'journal.sqlite', lambda: self.now)
         self.addCleanup(self.c.j.db.close)
         self.c.j.set('status', 'running')
+        # The V2 lottery preflight (#1643) already passed for this campaign.
+        self.c.j.set('lottery_preflight', {'at': 999, 'hosts': {}})
         self.c.j.set('setup_start', 1000)
         self.c.j.set('end', 10000)
         self.c.j.set('last_summary_at', 1000)

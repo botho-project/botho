@@ -45,6 +45,28 @@ the new field retain their existing interpretation; absence is not proof that
 legacy payouts were checked. This diagnostic does not repair legacy claims or
 activate LotteryV2 (#1286).
 
+**V2 lottery awards (#1643).** On a V2 chain (protocol 7.0.0) a lottery row
+carries `lotteryContext`, `cryptoOutputIndex` and `winnerOutpoint`. Its payout
+has its own one-time key, so it is canonical campaign inventory that selection
+may choose as an input; it is never counted as a ring decoy, matching the
+signer. The chain row classifies each output; the signer's `lottery` flag can
+only exclude an ordinary row, never a V2 payout. Accounting counts V2 awards as
+lottery income in the same exact `difference`, and reports them apart under
+`lottery_v2` (received and spent counts and picocredits, also summarized at the
+report's top level). Completeness gate: every V2 payout whose `winnerOutpoint`
+is a campaign-owned outpoint must be in the winner's wallet, canonical, and
+under a key image no other owned output shares. Otherwise accounting records
+the payout under `lottery_v2.undiscovered` and raises `undiscovered lottery
+award`, and the report cannot mark final reconciliation verified. Context-less
+(legacy) rows keep the `legacy_lottery` hold above, unchanged. A row with a
+malformed or non-V2 context holds the run.
+
+**Lottery preflight.** Before a campaign or a prefund starts, every node must
+report `getChainInfo.lotteryRules == 2` and `protocolVersion == "7.0.0"`. A V1
+or pre-7.0.0 node refuses the start before anything is written. The result is
+recorded once in the journal (`lottery_preflight`); afterwards the per-tick
+identity check pins the same binary.
+
 To stop admission, create an owner-readable `STOP` file in the state directory. Do not delete the journal, edit the launch manifest, rebuild a transaction, or restart the service as a means of clearing a hold. Review the evidence and create a separately identified decision/run if continuation is warranted.
 
 ### Controller behavior during a degrade step
@@ -670,7 +692,8 @@ The controller also pins exact `opening_balances` and needs at least
 `scripts/stress/prefund.py` builds that inventory with main's
 `botho-stress-wallet`. It uses no faucet. Run it on the **controller host**, the
 only host with a private route to the fleet RPC. The operator's untracked copy
-step installs it; `staging.py` does not.
+step installs it; `staging.py` does not. The copy must include `lottery.py`
+next to `prefund.py`, as staging's `CODE` does for the controller.
 
 The order for an x run is:
 
@@ -681,11 +704,14 @@ The order for an x run is:
    `opening_balances`, then stage with `deploy.py stage`. Staging pins the
    balances into `launch.json`.
 3. **Activate.** The controller's first setup tick full-scans the fleet. It
-   holds unless every wallet's unspent balance equals its pinned value.
+   holds unless every wallet's unspent principal balance, meaning its balance
+   excluding lottery awards, equals its pinned value.
 
-Stage and activate promptly after prefunding. A lottery award to a campaign
-wallet between prefund completion and the first setup tick changes that
-wallet's balance, and the exact pin then holds the controller.
+`opening_balances` is principal only (#1643). Campaign wallets do win V2 lottery
+awards, during prefunding or between prefund completion and the first setup
+tick. Those awards are not principal and do not count against
+`max_principal_picocredits`. The first setup tick counts every award it finds
+as opening lottery income (`opening_lottery`), so the accounting stays exact.
 
 The manifest is an owner-only JSON file with exactly these keys:
 
@@ -802,8 +828,10 @@ reviews it before restarting. `STOP` in `state_dir` stops the prefunder.
 **Output.** When every grant is confirmed and the accounting is exact, a final
 full scan writes two files:
 
-- `opening_balances.json`: the per-wallet unspent sums, which is exactly the
-  profile's `opening_balances` list;
+- `opening_balances.json`: the per-wallet unspent principal (grant) sums,
+  excluding lottery awards, which is exactly the profile's `opening_balances`
+  list. `funding-health.json` reports any awards separately as
+  `opening_lottery_balances`;
 - `funding-health.json`: grants, fees, the accounting difference, per-wallet
   grant-output counts, and per-wallet `choose()` readiness evidence at the
   current height.

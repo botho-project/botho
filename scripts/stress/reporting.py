@@ -55,6 +55,21 @@ def legacy_lottery_evidence(inventory, lottery_amounts, spent_by_image):
     }
 
 
+LOTTERY_V2_COUNTS = (
+    "received_count", "received_picocredits", "spent_count",
+    "spent_picocredits", "unspent_count", "unspent_picocredits",
+)
+
+
+def lottery_v2_summary(snapshot):
+    """V2 award counts from the latest accounting snapshot, or ``None`` (#1643)."""
+    v2 = (snapshot or {}).get("lottery_v2")
+    if not isinstance(v2, dict):
+        return None
+    return {**{k: v2.get(k) for k in LOTTERY_V2_COUNTS},
+            "undiscovered_count": len(v2.get("undiscovered") or ())}
+
+
 def artifact_evidence(state, rows, byte_limit):
     """Audit only controller publications; never inspect signatures or infer sends.
 
@@ -197,6 +212,8 @@ def accounting_status(journal, rows, now, artifacts=None):
             reasons.append("accounting difference is nonzero or missing")
         if snapshot.get("legacy_lottery", {}).get("award_count", 0):
             reasons.append("unsupported legacy lottery payouts")
+        if (snapshot.get("lottery_v2") or {}).get("undiscovered"):
+            reasons.append("undiscovered lottery award")
     if unresolved:
         reasons.append("signed or submitted work remains unreconciled")
     if reserved:
@@ -435,6 +452,8 @@ def controller_report(self):
             if r["kind"] == "funding"
         ),
         "accounting": self.j.get("accounting"),
+        # V2 awards received and spent, counted apart from transfers (#1643).
+        "lottery_v2": lottery_v2_summary(self.j.get("accounting")),
         "artifact_evidence": artifacts,
         "accounting_status": accounting_status(self.j, rows, time.time(), artifacts),
         "fleet": self.j.get("fleet_latest"),

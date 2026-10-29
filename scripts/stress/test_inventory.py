@@ -4,6 +4,8 @@ import unittest
 from types import SimpleNamespace
 
 from controller import Controller
+from selection import choose
+from signer_history import prepare_blocks
 
 
 class CanonicalDecoyInventoryTests(unittest.TestCase):
@@ -77,6 +79,67 @@ class CanonicalDecoyInventoryTests(unittest.TestCase):
         self.owned['utxo']['lottery'] = True
         self.assertEqual(self.c.spendable(0,170),[])
         self.assertEqual(self.c.inventory[0],[self.owned])
+
+
+class V2LotteryInputTests(unittest.TestCase):
+    """A V2 award is a campaign input; it is never a decoy (#1643)."""
+
+    PAYOUT = bytes([7] * 32).hex() + ':1'
+
+    def setUp(self):
+        self.c = Controller.__new__(Controller)
+        db = sqlite3.connect(':memory:')
+        db.execute('CREATE TABLE reservations (input TEXT)')
+        self.addCleanup(db.close)
+        self.c.j = SimpleNamespace(db=db, limits={'max_single_signed_fee_picocredits': 10},
+                                   set=lambda *a: None)
+        self.payout = {
+            'id': self.PAYOUT, 'key_image': 'award',
+            'utxo': {'target_key': [1] * 32, 'amount': 10**12, 'created_at': 100,
+                     'tx_hash': [7] * 32, 'output_index': 1, 'lottery': True},
+        }
+        self.c.inventory = [[self.payout]]
+        self.c.spent = [{'keyImage': 'award', 'spent': False, 'pending': False}]
+        # At height 170 the payout's age window is heights 93..107.
+        self.row = {'targetKey': bytes([1] * 32).hex(), 'txHash': bytes([7] * 32).hex(),
+                    'outputIndex': 1, 'lottery': True, 'cryptoOutputIndex': 0,
+                    'amountCommitment': (10**12).to_bytes(8, 'little').hex(),
+                    'lotteryContext': {'version': 2, 'baseIndex': 0, 'tweak': 'ab' * 32,
+                                       'ordinal': 0, 'height': 100},
+                    'winnerOutpoint': 'cd' * 32 + ':0'}
+        self.decoys = [{'targetKey': bytes([i] * 32).hex(), 'txHash': bytes([i] * 32).hex(),
+                        'outputIndex': 0} for i in range(2, 21)]
+        self.c.blocks = [{'height': 100, 'outputs': [self.row, *self.decoys]}]
+
+    def test_v2_award_is_selected_as_a_campaign_input(self):
+        self.assertEqual(self.c.canonical_inventory(0), [self.payout])
+        self.assertEqual(self.c.spendable(0, 170), [self.payout])
+        self.assertEqual(self.c.spendable(0, 170, 10**11, 1), [self.payout])
+        selected, evidence = choose(self.c, 0, 170, 10**11, 1)
+        self.assertEqual(selected, [self.payout])
+        self.assertEqual(evidence['eligible'], 1)
+        # The bounded signer history carries the selected row with its context.
+        sent = [o for b in prepare_blocks(self.c.blocks, 170, [self.PAYOUT]) for o in b['outputs']]
+        self.assertIn(self.row, sent)
+
+    def test_v2_payouts_never_count_as_decoys(self):
+        # Replace one ordinary decoy with another V2 payout: 18 decoys remain.
+        other = dict(self.row, targetKey=bytes([30] * 32).hex(), txHash=bytes([30] * 32).hex())
+        self.c.blocks[0]['outputs'][-1] = other
+        self.assertEqual(self.c.spendable(0, 170), [])
+        self.assertEqual(choose(self.c, 0, 170)[0], [])
+        sent = [o for b in prepare_blocks(self.c.blocks, 170, [self.PAYOUT]) for o in b['outputs']]
+        self.assertNotIn(other, sent)
+        self.c.blocks[0]['outputs'].append({'targetKey': bytes([21] * 32).hex(),
+                                            'txHash': bytes([21] * 32).hex(), 'outputIndex': 0})
+        self.assertEqual(self.c.spendable(0, 170), [self.payout])
+        self.assertEqual(choose(self.c, 0, 170)[0], [self.payout])
+
+    def test_legacy_payout_stays_unspendable(self):
+        del self.row['lotteryContext']
+        self.assertEqual(self.c.canonical_inventory(0), [])
+        self.assertEqual(self.c.spendable(0, 170), [])
+        self.assertEqual(self.c.inventory[0], [self.payout])  # retained as evidence
 
 
 if __name__ == '__main__':

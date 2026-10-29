@@ -3,6 +3,8 @@
 from bisect import bisect_left, bisect_right
 from itertools import combinations
 
+from lottery import decoy_row
+
 ZERO_KEY = "0" * 64
 
 
@@ -17,13 +19,21 @@ def choose(controller, wallet, height, amount=0, count=None, headroom=0):
     # one set per input: that was O(inputs x chain) CPU and memory on every
     # selection, about 1.2 s at x-series h72 (#1633). The counts equal the
     # former ``len(pool)`` and ``len(pool - excluded)`` exactly.
+    # Lottery payouts, V2 included, are canonical inputs but never decoys,
+    # matching the native signer (#1643).
     created_heights = sorted(
-        created for key, (created, _) in canonical.items() if key != ZERO_KEY
+        created
+        for key, (created, row) in canonical.items()
+        if key != ZERO_KEY and decoy_row(row)
     )
 
     def in_pool(key, window):
         entry = canonical.get(key) if key != ZERO_KEY else None
-        return entry is not None and window[0] <= entry[0] <= window[1]
+        return (
+            entry is not None
+            and decoy_row(entry[1])
+            and window[0] <= entry[0] <= window[1]
+        )
 
     pools, eligible = {}, []
     for output in mature:

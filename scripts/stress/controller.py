@@ -14,6 +14,8 @@ import time
 from discovery_plan import degrade_opt_in
 from plan import expand
 from reporting import legacy_lottery_evidence
+from lottery import (check_lottery_rules, decoy_row, lottery_context, lottery_rows,
+                     v2_award_evidence)
 from signer_history import (SCAN_OPERATIONS, history_duplicate, merge_scans,
                             prepare_blocks, prepare_spent, scan_payloads)
 from runtime import (BlockLog, Expired, Gate, HOSTS, Journal, PENDING, Quota, Rpc, atomic, atomic_stream, inventory_chunks,
@@ -1034,12 +1036,20 @@ class Controller:
     def canonical_history(self):
         # Match target-only ledger resolution before any maturity/age filtering.
         # History and inventory retain unsupported receipts for accounting.
+        # A V2 lottery payout has its own one-time key and is canonical
+        # (spendable) history; a legacy, context-less payout reuses its
+        # winner's key and never is (#1643). Decoy pools still exclude every
+        # lottery row; see ``decoy_row``.
         canonical = {}
         for block in sorted(self.blocks, key=lambda block: block['height']):
             for output in block['outputs']:
                 key = output['targetKey'].lower()
-                if not output.get('lottery', False) and key not in canonical:
-                    canonical[key] = (block['height'], output)
+                if key in canonical:
+                    continue
+                if output.get('lottery', False) or output.get('lotteryContext') is not None:
+                    if lottery_context(output) is None:
+                        continue
+                canonical[key] = (block['height'], output)
         return canonical
 
     def canonical_inventory(self, wallet, canonical=None):
@@ -1056,7 +1066,7 @@ class Controller:
                 not isinstance(output.get('id'), str)
                 or not isinstance(output.get('key_image'), str)
                 or not output['key_image']
-                or utxo.get('lottery', False) is not False
+                or type(utxo.get('lottery', False)) is not bool
                 or any(
                     type(utxo.get(field)) is not int or utxo[field] < 0
                     for field in ('created_at', 'output_index', 'amount')
@@ -1080,7 +1090,7 @@ class Controller:
             ):
                 continue
             original = canonical.get(key)
-            if utxo.get('lottery', False) or original is None or key in seen:
+            if original is None or key in seen:
                 continue
             created, row = original
             if (
@@ -1088,6 +1098,15 @@ class Controller:
                 or row.get('txHash', '').lower() != tx_hash
                 or row.get('outputIndex') != utxo['output_index']
             ):
+                continue
+            # The chain row classifies the output; the signer's flag may not
+            # contradict it. A V2 payout's crypto index, when the signer
+            # reports one, is the context's base index (#1643).
+            context = lottery_context(row)
+            if context is None and utxo.get('lottery', False):
+                continue
+            if context is not None and utxo.get('crypto_output_index') not in (
+                    None, context['base_index']):
                 continue
             seen.add(key)
             outputs.append(output)
@@ -1131,8 +1150,8 @@ class Controller:
             # Match production age_similarity_band: integer +/-10%, ten-block floor.
             delta = age//10
             low,high = max(10,age-delta),age+delta
-            keys = {key for key, (created, _) in canonical.items()
-                    if low <= height-created <= high and key != '0'*64}
+            keys = {key for key, (created, row) in canonical.items()
+                    if low <= height-created <= high and key != '0'*64 and decoy_row(row)}
             keys.discard(bytes(utxo['target_key']).hex())
             if len(keys) >= 19:
                 outputs.append(output)
@@ -1516,6 +1535,28 @@ class Controller:
                 self.j.db.execute('UPDATE intents SET info=? WHERE id=?', (json.dumps(info), row['id']))
                 self.j.event(row['id'],'deferred_verified',info['deferred_verified'])
 
+    def lottery_v2_evidence(self, rows, state):
+        """Completeness gate input: V2 awards received/spent and any undiscovered (#1643)."""
+        if all(context is None for _, _, context in rows.values()):
+            ids = [set() for _ in self.inventory]  # no V2 payout: nothing to check
+        else:
+            canonical = self.canonical_history()
+            ids = [{o['id'] for o in self.canonical_inventory(w, canonical)}
+                   for w in range(len(self.inventory))]
+        return v2_award_evidence(self.inventory, ids, rows, state)
+
+    async def lottery_preflight(self):
+        """Refuse to start unless every node reports V2 lottery rules on 7.0.0 (#1643).
+
+        Recorded once per campaign; afterwards ``check_identity`` pins the
+        same binary on every status read, so the rules cannot change.
+        """
+        if self.j.get('lottery_preflight'):
+            return
+        infos = await asyncio.gather(*(self.rpc.call(h,'getChainInfo') for h in HOSTS))
+        hosts = {h:check_lottery_rules(info,h) for h,info in zip(HOSTS,infos)}
+        self.j.set('lottery_preflight',{'at':time.time(),'hosts':hosts})
+
     def accounting(self):
         state = {s['keyImage']:s for s in self.spent}
         if any(s['pending'] for s in self.spent):
@@ -1524,18 +1565,26 @@ class Controller:
         grants = sum(r['amount'] for r in self.j.rows("kind='funding' AND state='reconciled'"))
         fees = sum(r['fee'] for r in self.j.rows("kind!='funding' AND state='reconciled'"))
         # Recognize actual scanned lottery awards explicitly; never round a difference.
+        # V2 awards are income like any other scanned lottery award (#1643).
+        rows = lottery_rows(self.blocks)
         lottery = {(o['txHash'],o['outputIndex']):int.from_bytes(bytes.fromhex(o['amountCommitment']),'little')
                    for b in self.blocks for o in b['outputs'] if o.get('lottery')}
+        # The legacy hold is unchanged, and only ever sees context-less rows.
+        legacy = {k:v for k,v in lottery.items() if rows[k[0].lower()+':'+str(k[1])][2] is None}
         awards = sum(lottery.get((bytes(o['utxo']['tx_hash']).hex(),o['utxo']['output_index']),0)
                      for owned in self.inventory for o in owned)
         opening = self.j.get('opening_balance',0)
+        v2 = self.lottery_v2_evidence(rows,state)
         report = {'at':time.time(),'opening':opening,'grants':grants,'lottery_receipts':awards,
                   'balances':balances,'ending':sum(balances),'signed_fees':fees,
                   'difference':opening+grants+awards-self.j.get('opening_lottery',0)-sum(balances)-fees,
-                  'legacy_lottery':legacy_lottery_evidence(self.inventory,lottery,state)}
+                  'legacy_lottery':legacy_lottery_evidence(self.inventory,legacy,state),
+                  'lottery_v2':v2}
         self.j.set('accounting',report)
         if report['legacy_lottery']['award_count']:
             raise Gate('unsupported legacy lottery payouts share a key image; see accounting evidence')
+        if v2['undiscovered']:
+            raise Gate('undiscovered lottery award: '+v2['undiscovered'][0]['payout'])
         if report['difference'] != 0:
             raise Gate('exact integer accounting mismatch')
 
@@ -1758,6 +1807,7 @@ class Controller:
                 await self.campaign_tick()
 
     async def run(self):
+        await self.lottery_preflight()
         if not self.j.get('status'):
             self.j.set('setup_start',self.config['setup_start'])
             self.j.set('status','setup')
