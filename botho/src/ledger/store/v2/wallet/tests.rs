@@ -326,12 +326,19 @@ fn shared_recovery_reproduces_clsag_lottery_v2_vectors() {
 /// path (#1644), on real V2 blocks: every block is sealed by P3's (#1640)
 /// shared producer `Ledger::seal_block` (the `run.rs` mining path) and
 /// applied by `add_block` under protocol 7.0.0 validation
-/// (`lottery_v2::validate_block`, `RootRule::BodyV2`).
+/// (`lottery_v2::validate_block`, `RootRule::BodyV2`). No longer gated on P3;
+/// `#[ignore]`d only for cost, like P3's real-maturity profiles (~43 min in the
+/// debug profile), and run explicitly on the checked-arithmetic `ci` profile
+/// by workspace-build's LotteryV2 activation step:
+/// `cargo test --profile ci -p botho --lib
+/// ledger::store::v2::wallet::tests::node_wallet_v2_payout_at_real_720_block_maturity
+/// -- --exact --ignored --nocapture`.
 ///
 /// The owner is the sole minter and owner of every output, so (1) every draw
 /// winner is the owner's, and (2) the wallet balance must equal
 /// `total_mined - total_fees_burned - lottery_pool` exactly.
 #[test]
+#[ignore = "real-maturity profile (~1100 blocks); run on the ci profile"]
 fn node_wallet_v2_payout_at_real_720_block_maturity() {
     use crate::{block::calculate_block_reward, ledger::lottery_v2};
     const MAX_HEIGHT: u64 = 1_100;
@@ -353,29 +360,32 @@ fn node_wallet_v2_payout_at_real_720_block_maturity() {
         let mut transactions = Vec::new();
         match win {
             Some((payout, source, at)) if height >= at + 10 => {
-                // Spend the payout and its source in the same block: distinct
-                // key images or the block is a double spend.
-                for id in [payout, source] {
-                    let input = unspent.iter().find(|o| o.utxo.id == id).unwrap();
-                    let output =
-                        TxOutput::new(input.utxo.output.amount - FEE, &owner.default_address());
+                // Spend the payout and its source in the same block, in
+                // separate transactions: distinct key images or the block is a
+                // double spend. A real V2 payout can be smaller than `FEE`, so
+                // the payout's spend also takes one untracked mature direct
+                // output to cover the fee.
+                let helper = unspent
+                    .iter()
+                    .filter(mature)
+                    .find(|o| !o.lottery_payout && o.utxo.id != payout && o.utxo.id != source)
+                    .expect("a mature direct output to fund the payout spend");
+                let find = |id| unspent.iter().find(|o| o.utxo.id == id).unwrap();
+                for inputs in [vec![find(payout), helper], vec![find(source)]] {
+                    let utxos: Vec<Utxo> = inputs.iter().map(|o| o.utxo.clone()).collect();
+                    let total: u64 = utxos.iter().map(|u| u.output.amount).sum();
+                    let output = TxOutput::new(total - FEE, &owner.default_address());
                     transactions.push(
                         owner
-                            .create_private_transaction(
-                                std::slice::from_ref(&input.utxo),
-                                vec![output],
-                                FEE,
-                                height,
-                                &ledger,
-                            )
+                            .create_private_transaction(&utxos, vec![output], FEE, height, &ledger)
                             .unwrap(),
                     );
                 }
                 let images: BTreeSet<_> = transactions
                     .iter()
-                    .map(|tx| tx.inputs.clsag()[0].key_image)
+                    .flat_map(|tx| tx.inputs.clsag().iter().map(|i| i.key_image))
                     .collect();
-                assert_eq!(images.len(), 2);
+                assert_eq!(images.len(), 3);
                 spent_pair = true;
             }
             _ if height > 720 => {

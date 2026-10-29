@@ -10,7 +10,6 @@
 use super::*;
 use crate::{
     block::{calculate_block_reward, LotteryOutput},
-    consensus::LotteryFeeConfig,
     ledger::{lottery_v2::DerivationReads, ChainState, UtxoSnapshot},
     transaction::{Transaction, MIN_RING_SIZE},
 };
@@ -275,10 +274,14 @@ impl Fixture {
     }
 
     /// A PoW-valid block on the tip carrying `transactions`, for `add_block`.
+    /// Sealed by P3's (#1640) shared producer `Ledger::seal_block` (the
+    /// `run.rs` mining path), so the lottery summary, any payouts and the V2
+    /// body root are exactly what protocol 7.0.0 validation re-derives.
     pub(crate) fn block_with(&self, transactions: Vec<Transaction>) -> Block {
-        let mut block = next_block(&self.ledger, &self.other, transactions);
-        block.lottery_summary.amount_burned =
-            LotteryFeeConfig::default().split_fees(block.total_fees()).1;
+        let mut block = self
+            .ledger
+            .seal_block(next_block(&self.ledger, &self.other, transactions))
+            .unwrap();
         while !block.header.is_valid_pow() {
             block.header.nonce += 1;
         }
