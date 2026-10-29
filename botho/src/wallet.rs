@@ -223,8 +223,14 @@ pub struct Wallet {
 
 impl Wallet {
     /// Select independently usable outpoints without changing accounting scans.
-    /// All native producers share this filter before balances/fees are
-    /// selected.
+    ///
+    /// Deprecated, with no production callers: native producers (CLI
+    /// `balance`/`send`, the wallet RPC) now select through
+    /// `Ledger::unspent_wallet_outputs`, whose view-key discovery already
+    /// excludes legacy aliased rows (#1662). Kept only for a test in the
+    /// CT-inventory-pinned `store.rs`; not marked `#[deprecated]` so that
+    /// test builds warning-free. Slated for removal once `store.rs` is
+    /// re-pinned.
     pub fn canonical_inputs(utxos: &[Utxo], ledger: &Ledger) -> Result<Vec<Utxo>> {
         let mut seen = std::collections::HashSet::new();
         let mut canonical = Vec::new();

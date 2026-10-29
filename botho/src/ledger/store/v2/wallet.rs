@@ -199,6 +199,8 @@ impl Ledger {
 }
 
 #[cfg(test)]
+mod cli_tests;
+#[cfg(test)]
 pub(crate) mod fixture;
 #[cfg(test)]
 mod tests;

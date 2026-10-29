@@ -1,6 +1,7 @@
 // Copyright (c) 2024 Botho Foundation
 
 use anyhow::{Context, Result};
+use bth_account_keys::PublicAddress;
 use bth_cluster_tax::{FeeConfig, TransactionType};
 use std::{fs, path::Path};
 
@@ -10,7 +11,7 @@ use crate::{
     address::Address,
     config::{ledger_db_path_from_config, Config},
     ledger::Ledger,
-    transaction::{MemoPayload, Transaction, TxOutput},
+    transaction::{MemoPayload, Transaction, TxOutput, Utxo, MIN_TX_FEE},
     wallet::Wallet,
 };
 
@@ -40,7 +41,6 @@ pub fn run(
         .ok_or_else(|| anyhow::anyhow!("No wallet configured. Run 'botho init' first."))?;
 
     let wallet = Wallet::from_mnemonic(&wallet_config.mnemonic)?;
-    let our_address = wallet.default_address();
 
     // Get the network type
     let network = config.network_type();
@@ -61,144 +61,19 @@ pub fn run(
     let ledger =
         Ledger::open(&ledger_path).map_err(|e| anyhow::anyhow!("Failed to open ledger: {}", e))?;
 
-    // Get chain state
-    let state = ledger
-        .get_chain_state()
-        .map_err(|e| anyhow::anyhow!("Failed to get chain state: {}", e))?;
-
-    // Get our UTXOs
-    let utxos = ledger
-        .get_utxos_for_address(&our_address)
-        .map_err(|e| anyhow::anyhow!("Failed to get UTXOs: {}", e))?;
-
-    let utxos = Wallet::canonical_inputs(&utxos, &ledger)?;
-
-    // Calculate fee using the cluster-tax fee curve
-    // All transactions are private (CLSAG ring signatures)
-    let fee_config = FeeConfig::default();
-    let tx_type = TransactionType::Hidden;
     let _ = private; // Deprecated: all transactions are now private
-
-    // Estimate fee using effective cluster wealth: the wallet's UTXO tags
-    // weighted against the ledger's global per-cluster wealth. Use the max
-    // across UTXOs since any of them may fund this transaction (conservative,
-    // matches mempool enforcement which uses decayed output tags).
-    let cluster_wealth = utxos
-        .iter()
-        .map(|utxo| {
-            let weighted: u128 = utxo
-                .output
-                .cluster_tags
-                .entries
-                .iter()
-                .map(|entry| {
-                    // get_cluster_wealth is now u128 (16-byte accumulator, #626).
-                    let global = ledger.get_cluster_wealth(entry.cluster_id.0).unwrap_or(0);
-                    entry.weight as u128 * global
-                })
-                .sum();
-            // estimate_typical_fee takes full-u128 wealth end-to-end (#626 PR3):
-            // no clamp — the exact per-UTXO effective wealth flows into the fee
-            // estimate and the demurrage factor below.
-            weighted / bth_transaction_types::TAG_WEIGHT_SCALE as u128
-        })
-        .max()
-        .unwrap_or(0);
-    let num_memos = if memo.is_some() { 1 } else { 0 };
-    let fee = fee_config.estimate_typical_fee(tx_type, cluster_wealth, num_memos);
-
-    // Estimate cluster demurrage (holding charge on wealthy-cluster coins,
-    // enforced by the mempool). Conservative: use the oldest wallet UTXO's
-    // age, since UTXO selection happens below. Factor-1 wallets pay zero.
-    let demurrage = {
-        let policy = crate::monetary::mainnet_policy();
-        let max_elapsed = utxos
-            .iter()
-            .map(|u| state.height.saturating_sub(u.created_at))
-            .max()
-            .unwrap_or(0);
-        let blocks_per_year = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
-        bth_cluster_tax::demurrage_charge(
-            amount,
-            fee_config.cluster_factor(cluster_wealth),
-            max_elapsed,
-            policy.demurrage_rate_bps(state.height),
-            blocks_per_year,
-        )
-    };
-
-    // Ensure minimum fee of at least 1 picocredit
-    let fee = fee.saturating_add(demurrage).max(1);
-
-    let total_balance: u64 = utxos.iter().map(|u| u.output.amount).sum();
-    let required = amount + fee;
-
-    if total_balance < required {
-        return Err(anyhow::anyhow!(
-            "Insufficient balance: have {:.12} BTH, need {:.12} BTH (including {:.12} fee)",
-            total_balance as f64 / 1_000_000_000_000.0,
-            required as f64 / 1_000_000_000_000.0,
-            fee as f64 / 1_000_000_000_000.0
-        ));
-    }
-
-    // Select UTXOs to spend (simple: use enough to cover amount + fee)
-    let mut selected_utxos = Vec::new();
-    let mut selected_amount = 0u64;
-
-    for utxo in &utxos {
-        if selected_amount >= required {
-            break;
-        }
-        selected_utxos.push(utxo.clone());
-        selected_amount += utxo.output.amount;
-    }
-
-    // Build outputs.
-    //
-    // Under protocol 6.0.0 every value-transfer output is a hybrid
-    // post-quantum stealth output: the sender encapsulates a shared secret
-    // against the destination's published ML-KEM-768 key and attaches the
-    // 1,088-byte ciphertext (issue #958 sub-issue 4, whitepaper §4.2). The
-    // recipient output is index 0; the change output (a self-send whose
-    // ciphertext is encapsulated to our OWN published address) is index 1.
-    let mut outputs = Vec::new();
-
-    // Output to recipient (with optional memo)
-    let memo_payload = memo.map(MemoPayload::destination);
-    outputs.push(
-        TxOutput::new_hybrid_to_address(
-            amount,
-            &recipient,
-            0,
-            memo_payload,
-            ClusterTagVector::empty(),
-        )
-        .context("recipient address does not publish a valid ML-KEM-768 key")?,
-    );
-
-    // Change output (if any) - no memo on change, encapsulated to our address
-    let change = selected_amount - amount - fee;
-    if change > 0 {
-        outputs.push(
-            TxOutput::new_hybrid_to_address(
-                change,
-                &our_address,
-                1,
-                None,
-                ClusterTagVector::empty(),
-            )
-            .context("wallet address does not publish a valid ML-KEM-768 key")?,
-        );
-    }
 
     // Create the transaction (always private with CLSAG ring signatures)
     // Note: All transactions are now private by default for sender anonymity
     println!();
     println!("Creating private transaction with CLSAG ring signatures...");
 
-    let tx =
-        wallet.create_private_transaction(&selected_utxos, outputs, fee, state.height, &ledger)?;
+    let PreparedSend {
+        tx,
+        fee,
+        change,
+        fee_config,
+    } = prepare(&ledger, &wallet, &recipient, amount, memo)?;
 
     let tx_hash = tx.hash();
     let num_inputs = tx.inputs.len();
@@ -250,6 +125,233 @@ pub fn run(
     println!();
 
     Ok(())
+}
+
+/// A signed CLI send, ready for the pending queue.
+pub(crate) struct PreparedSend {
+    pub(crate) tx: Transaction,
+    pub(crate) fee: u64,
+    pub(crate) change: u64,
+    pub(crate) fee_config: FeeConfig,
+}
+
+/// Select inputs, price the fee and sign a private send of `amount` to
+/// `recipient`, with change back to the wallet.
+///
+/// Inputs come from view-key discovery (#1662), not an address lookup: every
+/// output is a one-time stealth key, so `get_utxos_for_address` never found
+/// any. `Ledger::unspent_wallet_outputs` (#1286 P7) finds ordinary stealth
+/// outputs and V2 lottery payouts alike and excludes legacy aliased rows; the
+/// signer recovers each input's key through its persisted derivation context
+/// (`WalletRead::recover_input`). This keeps `botho send` in agreement with
+/// `botho balance` and the wallet RPC.
+pub(crate) fn prepare(
+    ledger: &Ledger,
+    wallet: &Wallet,
+    recipient: &PublicAddress,
+    amount: u64,
+    memo: Option<&str>,
+) -> Result<PreparedSend> {
+    // Get chain state
+    let state = ledger
+        .get_chain_state()
+        .map_err(|e| anyhow::anyhow!("Failed to get chain state: {}", e))?;
+
+    // Get our unspent outputs (stealth discovery; aliases already excluded)
+    let utxos: Vec<Utxo> = ledger
+        .unspent_wallet_outputs(wallet)
+        .map_err(|e| anyhow::anyhow!("Failed to scan wallet UTXOs: {}", e))?
+        .into_iter()
+        .map(|owned| owned.utxo)
+        .collect();
+
+    // Calculate fee using the cluster-tax fee curve
+    // All transactions are private (CLSAG ring signatures)
+    let fee_config = FeeConfig::default();
+    let tx_type = TransactionType::Hidden;
+
+    // Estimate fee using effective cluster wealth: the wallet's UTXO tags
+    // weighted against the ledger's global per-cluster wealth. Use the max
+    // across UTXOs since any of them may fund this transaction (conservative,
+    // matches mempool enforcement which uses decayed output tags).
+    let cluster_wealth = utxos
+        .iter()
+        .map(|utxo| {
+            let weighted: u128 = utxo
+                .output
+                .cluster_tags
+                .entries
+                .iter()
+                .map(|entry| {
+                    // get_cluster_wealth is now u128 (16-byte accumulator, #626).
+                    let global = ledger.get_cluster_wealth(entry.cluster_id.0).unwrap_or(0);
+                    entry.weight as u128 * global
+                })
+                .sum();
+            // estimate_typical_fee takes full-u128 wealth end-to-end (#626 PR3):
+            // no clamp — the exact per-UTXO effective wealth flows into the fee
+            // estimate and the demurrage factor below.
+            weighted / bth_transaction_types::TAG_WEIGHT_SCALE as u128
+        })
+        .max()
+        .unwrap_or(0);
+    let num_memos = if memo.is_some() { 1 } else { 0 };
+    let fee = fee_config.estimate_typical_fee(tx_type, cluster_wealth, num_memos);
+
+    // Estimate cluster demurrage (holding charge on wealthy-cluster coins,
+    // enforced by the mempool). Conservative: use the oldest wallet UTXO's
+    // age, since UTXO selection happens below. Factor-1 wallets pay zero.
+    let demurrage = {
+        let policy = crate::monetary::mainnet_policy();
+        let max_elapsed = utxos
+            .iter()
+            .map(|u| state.height.saturating_sub(u.created_at))
+            .max()
+            .unwrap_or(0);
+        let blocks_per_year = (365 * 24 * 60 * 60) / policy.target_block_time_secs.max(1);
+        bth_cluster_tax::demurrage_charge(
+            amount,
+            fee_config.cluster_factor(cluster_wealth),
+            max_elapsed,
+            policy.demurrage_rate_bps(state.height),
+            blocks_per_year,
+        )
+    };
+
+    // Seed at the structural minimum. Mempool admission
+    // (`Transaction::is_valid_structure`) rejects any fee below
+    // `MIN_TX_FEE` regardless of the consensus floor, and `botho run`
+    // drops a rejected pending tx with only a warning. The faucet and
+    // `botho-wallet` seed the same way.
+    let mut fee = fee.saturating_add(demurrage).max(MIN_TX_FEE);
+    let total_balance: u64 = utxos.iter().map(|u| u.output.amount).sum();
+
+    // The typical-size estimate assumes a small transaction; a send that
+    // gathers many inputs (e.g. a wallet holding several lottery payouts) is
+    // larger, and a block rejects it below the deterministic consensus fee
+    // floor. `MIN_TX_FEE` normally dominates that floor, but demurrage or a
+    // high cluster factor can exceed it. Sign at the seed, then re-sign at the
+    // floor (for the block that would include it) plus headroom until the
+    // signed transaction meets it. More inputs can raise the floor again, and
+    // every signing draws fresh decoys, so the demurrage term (priced from
+    // the ring) moves between passes; the headroom absorbs that jitter.
+    const MAX_FEE_PASSES: usize = 8;
+    for _ in 0..MAX_FEE_PASSES {
+        let (tx, change) = sign(
+            ledger,
+            wallet,
+            &utxos,
+            total_balance,
+            recipient,
+            amount,
+            fee,
+            memo,
+            state.height,
+        )?;
+        let floor = ledger
+            .consensus_fee_floor(&tx, state.height + 1)
+            .map_err(|e| anyhow::anyhow!("Failed to compute the consensus fee floor: {}", e))?;
+        if fee >= floor {
+            return Ok(PreparedSend {
+                tx,
+                fee,
+                change,
+                fee_config,
+            });
+        }
+        fee = floor.saturating_add(fee_headroom(floor));
+    }
+    Err(anyhow::anyhow!(
+        "Could not settle a fee meeting the consensus floor after {} passes",
+        MAX_FEE_PASSES
+    ))
+}
+
+/// Headroom added when re-signing at an observed consensus floor: 1/64 of
+/// the floor (about 1.6%). Covers ring-dependent demurrage jitter between
+/// signing passes without materially overpaying.
+fn fee_headroom(floor: u64) -> u64 {
+    floor / 64
+}
+
+/// Select inputs covering `amount + fee` (in discovery order), build the
+/// recipient and change outputs, and sign. Returns the transaction and its
+/// change.
+#[allow(clippy::too_many_arguments)]
+fn sign(
+    ledger: &Ledger,
+    wallet: &Wallet,
+    utxos: &[Utxo],
+    total_balance: u64,
+    recipient: &PublicAddress,
+    amount: u64,
+    fee: u64,
+    memo: Option<&str>,
+    height: u64,
+) -> Result<(Transaction, u64)> {
+    let required = amount + fee;
+
+    if total_balance < required {
+        return Err(anyhow::anyhow!(
+            "Insufficient balance: have {:.12} BTH, need {:.12} BTH (including {:.12} fee)",
+            total_balance as f64 / 1_000_000_000_000.0,
+            required as f64 / 1_000_000_000_000.0,
+            fee as f64 / 1_000_000_000_000.0
+        ));
+    }
+
+    // Select UTXOs to spend (simple: use enough to cover amount + fee)
+    let mut selected_utxos = Vec::new();
+    let mut selected_amount = 0u64;
+
+    for utxo in utxos {
+        if selected_amount >= required {
+            break;
+        }
+        selected_utxos.push(utxo.clone());
+        selected_amount += utxo.output.amount;
+    }
+
+    // Build outputs.
+    //
+    // Under protocol 6.0.0 every value-transfer output is a hybrid
+    // post-quantum stealth output: the sender encapsulates a shared secret
+    // against the destination's published ML-KEM-768 key and attaches the
+    // 1,088-byte ciphertext (issue #958 sub-issue 4, whitepaper §4.2). The
+    // recipient output is index 0; the change output (a self-send whose
+    // ciphertext is encapsulated to our OWN published address) is index 1.
+    let mut outputs = Vec::new();
+
+    // Output to recipient (with optional memo)
+    let memo_payload = memo.map(MemoPayload::destination);
+    outputs.push(
+        TxOutput::new_hybrid_to_address(
+            amount,
+            recipient,
+            0,
+            memo_payload,
+            ClusterTagVector::empty(),
+        )
+        .context("recipient address does not publish a valid ML-KEM-768 key")?,
+    );
+
+    // Change output (if any) - no memo on change, encapsulated to our address
+    let change = selected_amount - amount - fee;
+    if change > 0 {
+        outputs.push(
+            TxOutput::new_hybrid_to_address(
+                change,
+                &wallet.default_address(),
+                1,
+                None,
+                ClusterTagVector::empty(),
+            )
+            .context("wallet address does not publish a valid ML-KEM-768 key")?,
+        );
+    }
+
+    let tx = wallet.create_private_transaction(&selected_utxos, outputs, fee, height, ledger)?;
+    Ok((tx, change))
 }
 
 /// Save a transaction to the pending transactions file
