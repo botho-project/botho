@@ -306,6 +306,11 @@ jobs:
             # V2 payout (and its source, same block) at real 720-block maturity
             # (~180 s locally on this profile).
             timeout 900s "$NATIVE_WALLET_TEST_EXECUTABLE" ledger::store::v2::wallet::tests::node_wallet_v2_payout_at_real_720_block_maturity --exact --ignored --nocapture || exit "$?"
+            # #1286 P4 (#1641): chain_getOutputs lottery rows on real sealed V2
+            # blocks carry the frozen lotteryContext/winnerOutpoint/
+            # cryptoOutputIndex/clusterTags equal to the ledger's, and a
+            # missing context fails closed (-32603).
+            timeout 900s "$NATIVE_WALLET_TEST_EXECUTABLE" rpc::lottery_rows_tests::real_sealed_v2_payout_rows_match_the_ledger --exact --ignored --nocapture || exit "$?"
             timeout 1200s cargo test --locked --profile ci -p botho --test lottery_v2_activation -- --nocapture || exit "$?"
           } 2>&1 | tee "$RUNNER_TEMP/lottery-v2-activation.log"
 

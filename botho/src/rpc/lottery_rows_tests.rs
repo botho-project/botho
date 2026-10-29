@@ -1,13 +1,24 @@
 //! `chain_getOutputs` lottery payout rows: the frozen V2 wire contract
 //! (#1641 / #1286 P4).
 //!
-//! P3 (protocol 7.0.0 producer/validator) is not on this branch, so real V2
-//! payouts cannot be mined yet. These tests seed fixture blocks through the
-//! shared writer (`Ledger::seed_fixture_block_unvalidated`) with payout
-//! records, i.e. the `botho.ledger.2` Lottery contexts P3 will produce. The
-//! legacy (V1-shaped) row is never emitted by the handler (a payout without a
-//! context is corruption, -32603); its golden is built from the pure row
-//! helper so consumers can test their exclusion path.
+//! Two layers:
+//! - Golden rows, seeded through the shared production writer
+//!   (`Ledger::apply_writer_effects_for_test`) with FIXED V2 records, so the
+//!   wire bytes (tweak included) are stable across runs. A sealed block's tweak
+//!   depends on its timestamp, so it cannot back a byte golden.
+//! - `real_sealed_v2_payout_rows_match_the_ledger`: real V2 blocks sealed by
+//!   P3's producer (`Ledger::seal_block`, #1640) and applied by `add_block` at
+//!   the real 720-block maturity, every served field checked against the
+//!   ledger. `#[ignore]`d only for cost, like P3/P7's real-maturity profiles;
+//!   run on the `ci` profile by workspace-build's LotteryV2 activation step.
+//!   The release-profile RPC round trip
+//!   `v2_payout_round_trip_from_rpc_contexts_alone` (in
+//!   `botho-wallet/tests/stress_node.rs`) also exercises these rows on real
+//!   sealed blocks, un-ignored.
+//!
+//! The legacy (V1-shaped) row is never emitted by the handler (a payout
+//! without a context is corruption, -32603); its golden is built from the
+//! pure row helper so consumers can test their exclusion path.
 //!
 //! Golden rows live in `botho/tests/fixtures/rpc-lottery-rows.json`.
 //! Regenerate with `BOTHO_BLESS_RPC_GOLDEN=1` only for a deliberate,
@@ -66,7 +77,7 @@ fn child(parent: &Block) -> Block {
     block
 }
 
-/// The seeded chain: block 1 = the golden V1 block (live `add_block`),
+/// The seeded chain: block 1 = the golden V1 block (writer-applied),
 /// block 2 = one stub transaction with three tagged outputs, block 3 = one
 /// payout to block 2's output `WINNER_INDEX`.
 struct Chain {
@@ -81,8 +92,15 @@ fn seeded_chain() -> Chain {
     let dir = TempDir::new().unwrap();
     let ledger = Ledger::open(dir.path()).unwrap();
     ledger.set_difficulty(u64::MAX).unwrap();
+    // The golden block is a V1 block (flat tx root, V1 summary) that
+    // protocol 7.0.0's `add_block` rejects; like the writer golden, apply its
+    // effects through the shared writer. Fixed-record seeding keeps the row
+    // bytes stable; real sealed blocks are covered by
+    // `real_sealed_v2_payout_rows_match_the_ledger`.
     let b1 = golden_block();
-    ledger.add_block(&b1).unwrap();
+    ledger
+        .apply_writer_effects_for_test(&b1, &[], 0, None)
+        .unwrap();
 
     let mut b2 = child(&b1);
     let mut tx = Transaction::new_stub_with_fee(0);
@@ -93,7 +111,9 @@ fn seeded_chain() -> Chain {
     ];
     let winner = UtxoId::new(tx.hash(), WINNER_INDEX);
     b2.transactions = vec![tx];
-    ledger.seed_fixture_block_unvalidated(&b2, &[]).unwrap();
+    ledger
+        .apply_writer_effects_for_test(&b2, &[], 0, None)
+        .unwrap();
 
     let mut b3 = child(&b2);
     let record = Record {
@@ -121,7 +141,7 @@ fn seeded_chain() -> Chain {
     }];
     let records = [record];
     ledger
-        .seed_fixture_block_unvalidated(&b3, &records)
+        .apply_writer_effects_for_test(&b3, &records, 0, None)
         .unwrap();
 
     let state = RpcState::new(
@@ -353,15 +373,177 @@ fn payout_row_rejects_a_direct_context_and_a_mismatched_utxo() {
 
 #[tokio::test]
 async fn chain_info_and_identity_report_lottery_rules() {
+    // No injected identity: `protocolVersion` comes from the real constant.
     let chain = seeded_chain();
-    let state = chain.state.with_identity(NodeIdentity {
-        protocol_version: "7.0.0".into(),
-        ..NodeIdentity::default()
-    });
     assert_eq!(LOTTERY_RULES_VERSION, 2);
-    let info = handle_chain_info(json!(1), &state).await.result.unwrap();
+    assert_eq!(crate::network::PROTOCOL_VERSION, "7.0.0");
+    let info = handle_chain_info(json!(1), &chain.state)
+        .await
+        .result
+        .unwrap();
     assert_eq!(info["lotteryRules"], json!(2));
     assert_eq!(info["protocolVersion"], json!("7.0.0"));
-    let identity = handle_node_identity(json!(1), &state).await.result.unwrap();
+    let identity = handle_node_identity(json!(1), &chain.state)
+        .await
+        .result
+        .unwrap();
     assert_eq!(identity["lotteryRules"], json!(2));
+}
+
+/// Real V2 blocks (#1640 producer + validator) at the real 720-block
+/// maturity: every lottery row of the first paying block carries the frozen
+/// #1641 fields, each equal to the ledger's committed state, and deleting one
+/// payout's context fails the call closed.
+///
+/// Run: `cargo test --profile ci -p botho --lib
+/// rpc::lottery_rows_tests::real_sealed_v2_payout_rows_match_the_ledger --
+/// --exact --ignored --nocapture`.
+#[tokio::test]
+#[ignore = "real-maturity profile (~721 blocks, ~35 s on ci); run on the ci profile"]
+async fn real_sealed_v2_payout_rows_match_the_ledger() {
+    use crate::{block::calculate_block_reward, ledger::Ledger, wallet::Wallet};
+    // Public deterministic test mnemonic, used only for temporary fixtures.
+    const WORDS: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+    const FUNDING_FEE: u64 = 10 * crate::transaction::PICOCREDITS_PER_CREDIT;
+    let began = std::time::Instant::now();
+    let dir = TempDir::new().unwrap();
+    let ledger = Ledger::open(dir.path()).unwrap();
+    ledger.set_difficulty(u64::MAX).unwrap();
+    let wallet = Wallet::from_mnemonic(WORDS).unwrap();
+
+    // Seal (V2 producer) and apply (V2 validator) the next block.
+    let mine = |ledger: &Ledger, txs: Vec<Transaction>| -> Block {
+        let state = ledger.get_chain_state().unwrap();
+        let mut block = Block::new_template_with_txs(
+            &ledger.get_tip().unwrap(),
+            &wallet.default_address(),
+            state.difficulty,
+            calculate_block_reward(state.height + 1, state.total_mined),
+            txs,
+        );
+        block.header.timestamp = block.header.timestamp.max(state.tip_timestamp);
+        block.minting_tx.timestamp = block.header.timestamp;
+        while !block.header.is_valid_pow() {
+            block.header.nonce += 1;
+        }
+        block.minting_tx.nonce = block.header.nonce;
+        let block = ledger.seal_block(block).expect("seal");
+        ledger.add_block(&block).expect("V2 validator accepts");
+        block
+    };
+    let mut blocks: Vec<Block> = Vec::new();
+    let paying = loop {
+        // Past maturity, fund each draw with a self-payment spending the
+        // coinbase 21 blocks back (too young to be a lottery candidate).
+        let txs = if blocks.len() >= 720 {
+            let coinbase = UtxoId::new(blocks[blocks.len() - 21].hash(), 0);
+            let input = ledger.get_utxo(&coinbase).unwrap().unwrap();
+            let height = ledger.get_chain_state().unwrap().height;
+            vec![wallet
+                .create_private_transaction(
+                    std::slice::from_ref(&input),
+                    vec![TxOutput::new(
+                        input.output.amount - FUNDING_FEE,
+                        &wallet.default_address(),
+                    )],
+                    FUNDING_FEE,
+                    height,
+                    &ledger,
+                )
+                .unwrap()]
+        } else {
+            vec![]
+        };
+        let block = mine(&ledger, txs);
+        blocks.push(block.clone());
+        if !block.lottery_outputs.is_empty() {
+            break block;
+        }
+        assert!(blocks.len() < 800, "no V2 payout within bound");
+    };
+    eprintln!(
+        "P4_REAL_V2 paying_height={} payouts={} elapsed_ms={}",
+        paying.height(),
+        paying.lottery_outputs.len(),
+        began.elapsed().as_millis()
+    );
+
+    let state = RpcState::new(
+        ledger,
+        Mempool::new(),
+        Network::Testnet,
+        None,
+        None,
+        vec![],
+        Arc::new(WsBroadcaster::new(16)),
+    );
+    let rows = lottery_rows(&state, paying.height()).await;
+    assert_eq!(rows.len(), paying.lottery_outputs.len());
+    let hash = paying.hash();
+    for (ordinal, (row, award)) in rows.iter().zip(&paying.lottery_outputs).enumerate() {
+        let payout = UtxoId::new(hash, ordinal as u32 + 1);
+        let (utxo, context) = state
+            .ledger
+            .read()
+            .unwrap()
+            .get_output_derivation_context(&payout)
+            .unwrap();
+        let DerivationContext::Lottery {
+            height,
+            ordinal: stored_ordinal,
+            base_index,
+            tweak,
+        } = context
+        else {
+            panic!("a sealed V2 payout carries a Lottery context: {context:?}");
+        };
+        assert_eq!(
+            (height, stored_ordinal as usize),
+            (paying.height(), ordinal)
+        );
+        assert_ne!(tweak, [0; 32], "a V2 payout carries a nonzero tweak");
+        assert_eq!(row["cryptoOutputIndex"], json!(base_index));
+        assert_eq!(
+            row["lotteryContext"],
+            json!({"version": 2, "baseIndex": base_index, "tweak": hex::encode(tweak),
+                "ordinal": ordinal, "height": paying.height()})
+        );
+        assert_eq!(
+            row["winnerOutpoint"],
+            json!(format!(
+                "{}:{}",
+                hex::encode(award.winner_tx_hash),
+                award.winner_output_index
+            ))
+        );
+        // Independently keyed: never the winner's copied one-time target.
+        let winner = UtxoId::new(award.winner_tx_hash, award.winner_output_index);
+        let source = state.ledger.read().unwrap().get_utxo(&winner).unwrap();
+        if let Some(source) = source {
+            assert_ne!(
+                row["targetKey"],
+                json!(hex::encode(source.output.target_key))
+            );
+        }
+        assert_eq!(row["targetKey"], json!(hex::encode(utxo.output.target_key)));
+        assert_eq!(
+            row["clusterTags"],
+            json!(cluster_tags_json(&utxo.output.cluster_tags))
+        );
+    }
+
+    // A missing context on a real V2 block fails the call closed (-32603).
+    assert!(state
+        .ledger
+        .read()
+        .unwrap()
+        .fixture_delete_derivation_context(&UtxoId::new(hash, 1))
+        .unwrap());
+    let resp = handle_get_outputs(
+        json!(1),
+        &json!({"start_height": paying.height(), "end_height": paying.height()}),
+        &state,
+    )
+    .await;
+    assert_eq!(resp.error.expect("fails closed").code, -32603);
 }

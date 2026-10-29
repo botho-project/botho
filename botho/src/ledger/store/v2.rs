@@ -301,8 +301,10 @@ impl Ledger {
     /// production writer with NO consensus validation (supplied pool and
     /// emission). Pins writer byte effects for fixtures whose block predates
     /// the V2 rules (e.g. the V1 writer golden), which `add_block` now
-    /// rightly rejects.
-    pub(in crate::ledger) fn apply_writer_effects_for_test(
+    /// rightly rejects. Also seeds the RPC lottery-row goldens (#1641) with
+    /// fixed records, whose tweak must be byte-stable across runs (a sealed
+    /// V2 block's tweak depends on its timestamp).
+    pub(crate) fn apply_writer_effects_for_test(
         &self,
         block: &Block,
         records: &[bth_transaction_clsag::lottery_v2::Record],
@@ -446,44 +448,6 @@ impl Ledger {
             .map_err(db_op("fixture delete context"))?;
         txn.commit().map_err(db_op("fixture commit"))?;
         Ok(deleted)
-    }
-
-    /// TEST/FIXTURE SEEDING ONLY: not a sync path and not validation.
-    ///
-    /// Applies `block`'s `botho.ledger.2` storage effects through the shared
-    /// writer without any consensus check (transactions are not verified,
-    /// the drawing is not recomputed): a Direct context per
-    /// coinbase/transaction output and the Lottery context of
-    /// `records[ordinal]` per payout (the state P3's V2 rules will produce).
-    /// Gated like [`Ledger::seed_fixture_snapshot_unvalidated`]; never call
-    /// it on operator data.
-    #[cfg(any(test, feature = "test-fixtures"))]
-    #[doc(hidden)]
-    pub fn seed_fixture_block_unvalidated(
-        &self,
-        block: &Block,
-        records: &[bth_transaction_clsag::lottery_v2::Record],
-    ) -> Result<(), LedgerError> {
-        let state = self.get_chain_state()?;
-        let bytes =
-            bincode::serialize(block).map_err(|e| LedgerError::Serialization(e.to_string()))?;
-        let representation = super::writer::Representation::Production {
-            contexts: self.contexts_db,
-            records,
-        };
-        let mut txn = self.env.write_txn().map_err(db_op("fixture write txn"))?;
-        self.write_tables().block_effects(
-            &mut txn,
-            block,
-            &state,
-            0,
-            None,
-            &bytes,
-            representation,
-            &mut |_| Ok(()),
-            &mut || Ok(()),
-        )?;
-        txn.commit().map_err(db_op("fixture commit"))
     }
 }
 

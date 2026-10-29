@@ -1474,7 +1474,9 @@ async fn handle_chain_info(id: Value, state: &RpcState) -> JsonRpcResponse {
             // Lottery-rules generation (#1286 P4): 2 = V2 independently keyed
             // payouts whose `chain_getOutputs` rows carry `lotteryContext`.
             "lotteryRules": crate::ledger::LOTTERY_RULES_VERSION,
-            "protocolVersion": state.identity.protocol_version,
+            // The binary's real protocol constant (7.0.0 = LotteryV2, #1640),
+            // not the injected identity, so it is never empty.
+            "protocolVersion": crate::network::PROTOCOL_VERSION,
         }),
     )
 }
@@ -1961,10 +1963,11 @@ async fn handle_get_outputs(id: Value, params: &Value, state: &RpcState) -> Json
             // ORIGINAL derivation. A plain `belongs_to(outputIndex)` scan
             // therefore no longer detects it; recovery needs the derivation
             // context (original index + cumulative tweak), which each row
-            // exposes below (P4, #1286). `txHash` is the block hash and `outputIndex` is `1 + index` to
-            // mirror the ledger's deterministic id scheme (coinbase holds index
-            // 0 under the block hash; tx outputs use the tx hash, never the
-            // block hash, so these ids cannot collide).
+            // exposes below (P4, #1286). `txHash` is the block hash and
+            // `outputIndex` is `1 + index` to mirror the ledger's deterministic
+            // id scheme (coinbase holds index 0 under the block hash; tx
+            // outputs use the tx hash, never the block hash, so these ids
+            // cannot collide).
             //
             // V2 (#1286 P4, frozen contract on #1641): each row also carries
             // the payout's persisted derivation context, the winner outpoint,
