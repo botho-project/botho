@@ -22,8 +22,15 @@ fn key_images(tx: &crate::transaction::Transaction) -> BTreeSet<[u8; 32]> {
         .collect()
 }
 
-/// Verify `tx` against the ledger and apply it in a new block.
+/// Admit `tx` through the real relay path (`Mempool::add_tx`, which runs
+/// `is_valid_structure` and its `MIN_TX_FEE` check), verify it against the
+/// ledger and apply it in a new block.
 fn confirm(f: &Fixture, tx: crate::transaction::Transaction) {
+    assert!(tx.fee >= crate::transaction::MIN_TX_FEE, "fee {}", tx.fee);
+    tx.is_valid_structure().unwrap();
+    crate::mempool::Mempool::new()
+        .add_tx(tx.clone(), &f.ledger)
+        .unwrap();
     tx.verify_ring_signatures().unwrap();
     f.ledger.verify_transaction(&tx).unwrap();
     f.ledger.verify_ring_members(&tx).unwrap();
@@ -88,8 +95,9 @@ fn cli_send_spends_v2_payouts_and_balance_sees_the_change() {
     assert_eq!(key_images(&prepared.tx), discovered);
     assert!(prepared.change > 0);
     assert_eq!(f.owned_total() - amount - prepared.fee, prepared.change);
-    // A seven-input send outgrows the typical-size fee estimate; the CLI
-    // re-signs it at the consensus floor so the block accepts it.
+    // The fee meets both the structural minimum (mempool admission) and the
+    // consensus floor for the next block (block acceptance).
+    assert!(prepared.fee >= crate::transaction::MIN_TX_FEE);
     let floor = f.ledger.consensus_fee_floor(&prepared.tx, TIP + 1).unwrap();
     assert!(
         prepared.fee >= floor,

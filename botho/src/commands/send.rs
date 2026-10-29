@@ -11,7 +11,7 @@ use crate::{
     address::Address,
     config::{ledger_db_path_from_config, Config},
     ledger::Ledger,
-    transaction::{MemoPayload, Transaction, TxOutput, Utxo},
+    transaction::{MemoPayload, Transaction, TxOutput, Utxo, MIN_TX_FEE},
     wallet::Wallet,
 };
 
@@ -218,17 +218,24 @@ pub(crate) fn prepare(
         )
     };
 
-    // Ensure minimum fee of at least 1 picocredit
-    let mut fee = fee.saturating_add(demurrage).max(1);
+    // Seed at the structural minimum. Mempool admission
+    // (`Transaction::is_valid_structure`) rejects any fee below
+    // `MIN_TX_FEE` regardless of the consensus floor, and `botho run`
+    // drops a rejected pending tx with only a warning. The faucet and
+    // `botho-wallet` seed the same way.
+    let mut fee = fee.saturating_add(demurrage).max(MIN_TX_FEE);
     let total_balance: u64 = utxos.iter().map(|u| u.output.amount).sum();
 
     // The typical-size estimate assumes a small transaction; a send that
     // gathers many inputs (e.g. a wallet holding several lottery payouts) is
     // larger, and a block rejects it below the deterministic consensus fee
-    // floor. Sign at the estimate, then re-sign at the floor (for the block
-    // that would include it) until the signed transaction meets it. More
-    // inputs can raise the floor again, so this is a short fixed-point loop.
-    const MAX_FEE_PASSES: usize = 4;
+    // floor. `MIN_TX_FEE` normally dominates that floor, but demurrage or a
+    // high cluster factor can exceed it. Sign at the seed, then re-sign at the
+    // floor (for the block that would include it) plus headroom until the
+    // signed transaction meets it. More inputs can raise the floor again, and
+    // every signing draws fresh decoys, so the demurrage term (priced from
+    // the ring) moves between passes; the headroom absorbs that jitter.
+    const MAX_FEE_PASSES: usize = 8;
     for _ in 0..MAX_FEE_PASSES {
         let (tx, change) = sign(
             ledger,
@@ -252,12 +259,19 @@ pub(crate) fn prepare(
                 fee_config,
             });
         }
-        fee = floor;
+        fee = floor.saturating_add(fee_headroom(floor));
     }
     Err(anyhow::anyhow!(
         "Could not settle a fee meeting the consensus floor after {} passes",
         MAX_FEE_PASSES
     ))
+}
+
+/// Headroom added when re-signing at an observed consensus floor: 1/64 of
+/// the floor (about 1.6%). Covers ring-dependent demurrage jitter between
+/// signing passes without materially overpaying.
+fn fee_headroom(floor: u64) -> u64 {
+    floor / 64
 }
 
 /// Select inputs covering `amount + fee` (in discovery order), build the
