@@ -30,13 +30,8 @@ impl WalletView<'_, '_> {
         utxo: &Utxo,
         context: &StoredContext,
     ) -> Result<(u64, RistrettoPrivate), v2::Error> {
-        let mut subaddress = None;
-        let key = v2::recover_with_context(&utxo.output, &context.derivation(), |base, index| {
-            let found = wallet.scan_output(base, index)?;
-            subaddress = Some(found);
-            wallet.recover_output_spend_key(base, found, index)
-        })?;
-        Ok((subaddress.ok_or(v2::Error::Ownership)?, key))
+        // One recovery rule for the experimental and production wallets (#1644).
+        crate::ledger::store::v2::wallet::recover_owned(wallet, &utxo.output, context)
     }
     // Discovery includes immature owned/unspent outputs. Construction separately
     // requires ten confirmations; lottery eligibility remains canonical720.

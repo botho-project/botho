@@ -25,8 +25,10 @@ use crate::{
     transaction::{ClsagRingInput, RingMember, Transaction, TxOutput, Utxo, MIN_RING_SIZE},
 };
 
-/// Narrow internal read seam. The ordinary Ledger adapter retains direct-index
-/// recovery and its existing decoy selection/errors. No network format changes.
+/// Narrow internal read seam. The production Ledger adapter recovers inputs
+/// through their persisted derivation contexts (#1286 P7) and keeps its
+/// existing decoy selection/errors. No network format changes. The default
+/// `recover_input` is the classical direct-index recovery.
 pub(crate) trait WalletRead {
     fn validate_input(&self, _utxo: &Utxo) -> Result<()> {
         Ok(())
@@ -60,6 +62,13 @@ pub(crate) trait WalletRead {
     ) -> std::result::Result<Vec<TxOutput>, crate::ledger::LedgerError>;
 }
 impl WalletRead for Ledger {
+    /// `botho.ledger.2` (#1286 P7): recover through the input's persisted
+    /// derivation context, so V2 lottery payouts (base key + context tweak)
+    /// are spendable; direct outputs use the zero tweak, i.e. the classical
+    /// derivation. See `ledger::store::v2::wallet`.
+    fn recover_input(&self, wallet: &Wallet, utxo: &Utxo) -> Result<RistrettoPrivate> {
+        self.recover_wallet_input(wallet, utxo)
+    }
     fn validate_input(&self, utxo: &Utxo) -> Result<()> {
         let canonical = self
             .get_utxo_by_target_key(&utxo.output.target_key)?

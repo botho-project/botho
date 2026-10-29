@@ -2868,33 +2868,21 @@ async fn run_async_with_shutdown(
                     // Get wallet balance by scanning UTXOs
                     let balance = match rpc_state.ledger.read() {
                         Ok(ledger) => {
-                            match ledger.scan_utxos_for_account(wallet.account_key()) {
-                                Ok(utxos) => {
-                                    // Filter to unspent UTXOs and sum amounts
+                            // Context-aware discovery (botho.ledger.2, #1286 P7):
+                            // V2 lottery payouts count, legacy aliased rows do not.
+                            match ledger.unspent_wallet_outputs(wallet) {
+                                Ok(owned) => {
+                                    // Unspent on chain; also skip mempool-pending spends.
                                     let mempool = rpc_state.mempool.read().ok();
-                                    let mut total = 0u64;
-                                    for utxo in &utxos {
-                                        // Unified hybrid scan path (issue #970).
-                                        if let Some(subaddr_idx) = wallet.scan_output(&utxo.output, utxo.id.output_index) {
-                                            if let Some(onetime_key) = wallet.recover_output_spend_key(&utxo.output, subaddr_idx, utxo.id.output_index) {
-                                                let key_image = bth_crypto_ring_signature::KeyImage::from(&onetime_key);
-                                                let key_image_bytes = key_image.as_bytes();
-
-                                                // Check if pending in mempool
-                                                if let Some(ref mp) = mempool {
-                                                    if mp.is_key_image_pending(key_image_bytes) {
-                                                        continue;
-                                                    }
-                                                }
-
-                                                // Check if spent on-chain
-                                                if let Ok(None) = ledger.is_key_image_spent(key_image_bytes) {
-                                                    total += utxo.output.amount;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    total
+                                    owned
+                                        .iter()
+                                        .filter(|o| {
+                                            !mempool.as_ref().is_some_and(|mp| {
+                                                mp.is_key_image_pending(&o.key_image)
+                                            })
+                                        })
+                                        .map(|o| o.utxo.output.amount)
+                                        .sum::<u64>()
                                 }
                                 Err(e) => {
                                     warn!("Failed to scan UTXOs for balance check: {}", e);

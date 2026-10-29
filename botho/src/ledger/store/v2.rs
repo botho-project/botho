@@ -15,6 +15,9 @@ use super::{
 use crate::ledger::lottery_v2::{fixed, DerivationReads, StoredContext};
 use heed::RoTxn;
 
+/// Native node-wallet discovery/recovery through these contexts (#1286 P7).
+pub(in crate::ledger) mod wallet;
+
 /// Metadata key holding the storage-schema marker. Shared with the private
 /// experimental stores, whose (different) markers are therefore refused here
 /// by exact comparison.
