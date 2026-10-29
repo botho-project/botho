@@ -200,9 +200,9 @@ enum ContextSource {
     /// (#1286 P4, #1641).
     Rpc,
     /// The test reads each payout's committed context from the node's own
-    /// ledger and attaches it to the served row in the frozen #1641 shape.
-    /// If the row already carries the fields (P4 landed), it asserts that they
-    /// equal the ledger's instead.
+    /// ledger and checks it against the served row in the frozen #1641
+    /// shape: since P4 the row carries the fields, so this asserts that they
+    /// equal the ledger's (and attaches any missing one).
     #[cfg_attr(not(feature = "test-fixtures"), allow(dead_code))]
     Ledger,
 }
@@ -212,9 +212,10 @@ enum ContextSource {
 /// discovers it under a key image distinct from the winning source's,
 /// prepares a spend the ledger accepts, and then spends the source too.
 ///
-/// The payout's context comes from the ledger (`ContextSource::Ledger`),
-/// because main's `chain_getOutputs` does not serve `lotteryContext` until P4
-/// (#1641). Needs `--features test-fixtures` for the ledger read. Kept separate
+/// The payout's context is cross-checked against the ledger
+/// (`ContextSource::Ledger`): every field `chain_getOutputs` serves (P4,
+/// #1641) must equal the committed one. Needs `--features test-fixtures` for
+/// the ledger read. Kept separate
 /// from `receive_prepare_submit_restore_and_respend`, so the two do not
 /// duplicate each other.
 #[cfg(feature = "test-fixtures")]
@@ -223,13 +224,11 @@ async fn v2_payout_win_discover_spend_and_source_still_spendable() {
     v2_payout_round_trip(ContextSource::Ledger).await;
 }
 
-/// The same round trip with contexts served by the node's RPC alone.
-///
-/// GATED on #1286 P4 (#1641) only: main's `chain_getOutputs` does not yet
-/// carry `lotteryContext`/`winnerOutpoint`/`cryptoOutputIndex` on payout rows.
-/// Remove the `ignore` when P4 lands.
+/// The same round trip with contexts served by the node's RPC alone
+/// (#1286 P4, #1641): `chain_getOutputs` payout rows carry
+/// `lotteryContext`/`winnerOutpoint`/`cryptoOutputIndex`, so the wallet needs
+/// no ledger access. Runs without `test-fixtures`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "needs #1286 P4 (#1641) lotteryContext/winnerOutpoint RPC rows"]
 async fn v2_payout_round_trip_from_rpc_contexts_alone() {
     v2_payout_round_trip(ContextSource::Rpc).await;
 }

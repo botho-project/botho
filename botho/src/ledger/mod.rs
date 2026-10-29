@@ -14,7 +14,10 @@ pub use snapshot::{SnapshotError, UtxoSnapshot};
 /// Test-only `botho.ledger.2` ledger with V2 lottery payouts (#1286 P7).
 #[cfg(test)]
 pub(crate) use store::v2::wallet::fixture as wallet_v2_fixture;
-pub use store::{ClusterWealthInfo, EmissionStateUpdate, Ledger, TxLocation};
+pub use store::{
+    v2::{DerivationContext, LOTTERY_RULES_VERSION},
+    ClusterWealthInfo, EmissionStateUpdate, Ledger, TxLocation,
+};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

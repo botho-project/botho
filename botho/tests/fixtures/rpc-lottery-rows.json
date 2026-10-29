@@ -1,0 +1,48 @@
+{
+  "v1": {
+    "amountCommitment": "0900000000000000",
+    "clusterTags": [],
+    "kemCiphertext": null,
+    "ledgerOutpoint": {
+      "outputIndex": 1,
+      "txHash": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"
+    },
+    "lottery": true,
+    "outputIndex": 1,
+    "publicKey": "4242424242424242424242424242424242424242424242424242424242424242",
+    "targetKey": "4141414141414141414141414141414141414141414141414141414141414141",
+    "txHash": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"
+  },
+  "v2": {
+    "amountCommitment": "4d00000000000000",
+    "clusterTags": [
+      [
+        8738,
+        500051
+      ],
+      [
+        4369,
+        300000
+      ]
+    ],
+    "cryptoOutputIndex": 2,
+    "kemCiphertext": null,
+    "ledgerOutpoint": {
+      "outputIndex": 1,
+      "txHash": "77374aca739dfa3c81a0aa6ecc839b5d779a7a47c3596f12a99d1b410f8fb3a3"
+    },
+    "lottery": true,
+    "lotteryContext": {
+      "baseIndex": 2,
+      "height": 3,
+      "ordinal": 0,
+      "tweak": "075a000000000000000000000000000000000000000000000000000000000000",
+      "version": 2
+    },
+    "outputIndex": 1,
+    "publicKey": "4242424242424242424242424242424242424242424242424242424242424242",
+    "targetKey": "4141414141414141414141414141414141414141414141414141414141414141",
+    "txHash": "77374aca739dfa3c81a0aa6ecc839b5d779a7a47c3596f12a99d1b410f8fb3a3",
+    "winnerOutpoint": "93e612bc2b1cbb2e4c7a53c9e11cd358533fd647318663f2a6a88828920f2270:2"
+  }
+}
