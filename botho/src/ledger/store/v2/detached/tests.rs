@@ -150,7 +150,14 @@ impl Chain {
         let input = ledger.get_utxo(&spent_source).unwrap().unwrap();
         let to_other = 5 * PICOCREDITS_PER_CREDIT;
         let outputs = vec![
-            TxOutput::new(to_other, &other.default_address()),
+            TxOutput::new_hybrid_to_address(
+                to_other,
+                &other.default_address(),
+                0,
+                None,
+                ClusterTagVector::empty(),
+            )
+            .unwrap(),
             TxOutput::new_hybrid_to_address(
                 input.output.amount - to_other - FEE,
                 &owner.default_address(),
@@ -217,10 +224,14 @@ impl Chain {
         anchor: &TrustedCheckpoint,
         input: &DetachedOutput,
     ) -> anyhow::Result<Transaction> {
-        let output = TxOutput::new(
+        let output = TxOutput::new_hybrid_to_address(
             input.utxo.output.amount - FEE,
             &self.other.default_address(),
-        );
+            0,
+            None,
+            ClusterTagVector::empty(),
+        )
+        .unwrap();
         snapshot.create_transaction(
             &self.owner,
             anchor,
@@ -789,10 +800,14 @@ fn detached_wallet_spends_natural_payout_at_real_maturity() {
                         && !tracked.contains(&o.utxo.id)
                 })
             {
-                let output = TxOutput::new(
+                let output = TxOutput::new_hybrid_to_address(
                     input.utxo.output.amount - 10 * FEE,
                     &owner.default_address(),
-                );
+                    0,
+                    None,
+                    ClusterTagVector::empty(),
+                )
+                .unwrap();
                 txs.push(
                     owner
                         .create_private_transaction(
@@ -862,7 +877,14 @@ fn detached_wallet_spends_natural_payout_at_real_maturity() {
                     &owner,
                     &anchor,
                     &inputs,
-                    vec![TxOutput::new(total - FEE, &owner.default_address())],
+                    vec![TxOutput::new_hybrid_to_address(
+                        total - FEE,
+                        &owner.default_address(),
+                        0,
+                        None,
+                        ClusterTagVector::empty(),
+                    )
+                    .unwrap()],
                     FEE,
                 )
                 .unwrap(),

@@ -124,12 +124,17 @@ impl Default for LotteryFeeConfig {
 /// exchange-until-lottery-payout node-backed test, issue #394) can make freshly
 /// created UTXOs eligible without pre-mining ~720 blocks per round.
 ///
-/// CONSENSUS NOTE: both the block proposer (`run::apply_lottery_to_block`) and
-/// the validator (`LedgerStore::add_block`) build their lottery config via
-/// `LotteryFeeConfig::default()`, so both read the SAME environment in the same
-/// process and agree on the candidate set exactly — the lottery draw stays
-/// consensus-deterministic. The override is a no-op when the variables are
-/// unset, so it never changes mainnet/testnet behavior.
+/// CONSENSUS NOTE: since protocol 7.0.0 (#1286 P3, #1640) this override is
+/// consensus-INERT. Neither the block producer (`Ledger::seal_block`, reached
+/// from `run::apply_lottery_to_block` via `BlockBuilder::apply_lottery`) nor
+/// the validator (`Ledger::add_block`) reads it: both build their lottery
+/// config from `ledger::lottery_v2::canonical_config`, a fixed constant that
+/// deliberately ignores the environment, so every node draws from the same
+/// candidate set regardless of its environment. Only code that calls
+/// `LotteryFeeConfig::default()` directly (unit tests and test harnesses in
+/// this module) observes the override; setting the variables on a node does
+/// not change which blocks it produces or accepts. It is a no-op when the
+/// variables are unset.
 fn draw_config_from_env() -> LotteryDrawConfig {
     let mut cfg = LotteryDrawConfig::default();
     if let Ok(raw) = std::env::var("BOTHO_LOTTERY_MIN_UTXO_AGE") {

@@ -124,10 +124,14 @@ fn spend(ledger: &Ledger, owner: &Wallet, to: &Wallet, input: &Utxo, fee: u64) -
     owner
         .create_private_transaction(
             std::slice::from_ref(input),
-            vec![TxOutput::new(
+            vec![TxOutput::new_hybrid_to_address(
                 input.output.amount - fee,
                 &to.default_address(),
-            )],
+                0,
+                None,
+                Default::default(),
+            )
+            .unwrap()],
             fee,
             height,
             ledger,
@@ -627,11 +631,76 @@ fn nested_award_real_maturity_profile() {
         assert!(ledger.is_key_image_spent(&image).unwrap().is_some());
     }
     assert_eq!(images.len(), 2, "nested and parent payouts both spent");
+    strict_scan_matches_full_decode_reference(&ledger, &wallet, &blocks);
     eprintln!(
         "V2_NESTED done nested_height={nested_height} height={} awards={} spent={} elapsed_ms={}",
         blocks.len(),
         awards(&blocks).len(),
         images.len(),
         began.elapsed().as_millis()
+    );
+}
+
+/// #1670 §2 at real payout scale: the production strict scan (memoized,
+/// header-only creating-block hash, no output re-read) returns exactly the
+/// candidate set of the pre-#1670 reference (full `read_context` per row,
+/// whole creating block decoded per payout row), reads each creating block at
+/// most once, and reports both scan times.
+fn strict_scan_matches_full_decode_reference(ledger: &Ledger, wallet: &Wallet, blocks: &[Block]) {
+    use super::{
+        v2::{read_context_with, SCAN_BLOCK_LOOKUPS},
+        validation::{self, ReadPolicy},
+    };
+    let next = template(ledger, wallet, vec![]);
+    let config = lottery_v2::canonical_config().draw_config;
+    let payouts: usize = blocks.iter().map(|b| b.lottery_outputs.len()).sum();
+    let paying_blocks = blocks
+        .iter()
+        .filter(|b| !b.lottery_outputs.is_empty())
+        .count() as u64;
+    let txn = ledger.env.read_txn().unwrap();
+    let view = ledger.production_view(&txn);
+    let lookups = SCAN_BLOCK_LOOKUPS.with(|n| n.get());
+    let began = Instant::now();
+    let seed = lottery_v2::seed(&view, &next).unwrap();
+    let production = view.lottery_candidates(&next, &seed, &config).unwrap();
+    let production_us = began.elapsed().as_micros();
+    let lookups = SCAN_BLOCK_LOOKUPS.with(|n| n.get()) - lookups;
+    assert!(
+        lookups <= paying_blocks,
+        "{lookups} creating-block reads for {paying_blocks} paying blocks"
+    );
+    let began = Instant::now();
+    let reference = validation::lottery_candidates(
+        &ledger.write_tables(),
+        &txn,
+        next.height(),
+        &seed,
+        &config,
+        ReadPolicy::Strict,
+        &mut |u| {
+            read_context_with(ledger, &txn, &u.id, &mut |height| {
+                ledger
+                    .blocks_db
+                    .get(&txn, &height)
+                    .unwrap()
+                    .map(|b| crate::ledger::experimental::decode::<Block>(b).map(|b| b.hash()))
+                    .transpose()
+            })
+            .map(|_| ())
+        },
+    )
+    .unwrap();
+    let reference_us = began.elapsed().as_micros();
+    let ids = |c: &[bth_cluster_tax::LotteryCandidate]| -> Vec<_> {
+        c.iter()
+            .map(|c| (c.id, c.value, c.cluster_factor, c.creation_block))
+            .collect()
+    };
+    assert_eq!(ids(&production), ids(&reference), "identical eligible set");
+    eprintln!(
+        "V2_SCAN payouts={payouts} paying_blocks={paying_blocks} block_reads={lookups} \
+         candidates={} production_us={production_us} reference_us={reference_us}",
+        production.len()
     );
 }

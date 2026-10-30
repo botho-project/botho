@@ -16,6 +16,15 @@ use botho::{
 
 use crate::common::{TestNetwork, TEST_RING_SIZE};
 
+/// A hybrid ML-KEM output at its real `index` (#1677: `Ledger::add_block`
+/// enforces the ciphertext shape SCP's transfer gate requires, so classical
+/// outputs are invalid on a KEM-enforcing chain). A recipient that publishes
+/// no ML-KEM key keeps a classical output.
+fn output(amount: u64, recipient: &PublicAddress, index: usize) -> TxOutput {
+    TxOutput::new_hybrid_to_address(amount, recipient, index as u32, None, Default::default())
+        .unwrap_or_else(|_| TxOutput::new(amount, recipient))
+}
+
 /// Create a signed CLSAG ring signature transaction.
 ///
 /// This creates a transaction spending a single UTXO with proper ring signature
@@ -53,9 +62,9 @@ pub fn create_signed_transaction(
         .ok_or("Insufficient funds")?;
 
     // Build outputs
-    let mut outputs = vec![TxOutput::new(amount, recipient)];
+    let mut outputs = vec![output(amount, recipient, 0)];
     if change > 0 {
-        outputs.push(TxOutput::new(change, &sender_wallet.default_address()));
+        outputs.push(output(change, &sender_wallet.default_address(), 1));
     }
 
     // Create preliminary tx to get signing hash
@@ -156,9 +165,9 @@ pub fn create_multi_input_transaction(
         .ok_or("Insufficient funds")?;
 
     // Build outputs
-    let mut outputs = vec![TxOutput::new(amount, recipient)];
+    let mut outputs = vec![output(amount, recipient, 0)];
     if change > 0 {
-        outputs.push(TxOutput::new(change, &sender_wallet.default_address()));
+        outputs.push(output(change, &sender_wallet.default_address(), 1));
     }
 
     // Create preliminary tx to get signing hash
@@ -262,11 +271,13 @@ pub fn create_split_payment_transaction(
     // Build outputs for all recipients
     let mut outputs: Vec<TxOutput> = recipients
         .iter()
-        .map(|(addr, amt)| TxOutput::new(*amt, addr))
+        .enumerate()
+        .map(|(i, (addr, amt))| output(*amt, addr, i))
         .collect();
 
     if change > 0 {
-        outputs.push(TxOutput::new(change, &sender_wallet.default_address()));
+        let index = outputs.len();
+        outputs.push(output(change, &sender_wallet.default_address(), index));
     }
 
     // Create preliminary tx to get signing hash

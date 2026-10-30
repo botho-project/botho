@@ -23,9 +23,16 @@ pub fn with_decoys(
 
     // Create outputs: recipient + change
     let change = sender_utxo.output.amount - amount - fee;
-    let mut outputs = vec![TxOutput::new(amount, recipient)];
+    // Hybrid ML-KEM outputs at their real indices (#1677: `add_block` now
+    // enforces the ciphertext shape SCP's transfer gate requires). A
+    // recipient that publishes no ML-KEM key keeps a classical output.
+    let output = |value: u64, to: &PublicAddress, index: u32| {
+        TxOutput::new_hybrid_to_address(value, to, index, None, Default::default())
+            .unwrap_or_else(|_| TxOutput::new(value, to))
+    };
+    let mut outputs = vec![output(amount, recipient, 0)];
     if change > 0 {
-        outputs.push(TxOutput::new(change, &sender_wallet.public_address()));
+        outputs.push(output(change, &sender_wallet.public_address(), 1));
     }
 
     // Build preliminary transaction to get signing hash

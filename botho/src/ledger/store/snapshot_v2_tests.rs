@@ -887,10 +887,14 @@ fn sealed_v2_payout_is_spendable_after_snapshot_restore() {
         owner
             .create_private_transaction(
                 std::slice::from_ref(input),
-                vec![TxOutput::new(
+                vec![TxOutput::new_hybrid_to_address(
                     input.output.amount - fee,
                     &to.default_address(),
-                )],
+                    0,
+                    None,
+                    Default::default(),
+                )
+                .unwrap()],
                 fee,
                 height,
                 ledger,

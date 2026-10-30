@@ -347,22 +347,35 @@ pub(in crate::ledger) fn validate<R: ValidationReads + DerivationReads + ?Sized>
     validate_drawn(reads, block, records, state, None)
 }
 
+/// A drawing the production validator already computed over the SAME pinned
+/// pre-state, AFTER running the ordinary header prefix
+/// (`ValidationReads::validate_ordinary_header`) against the same `state`.
+struct Prechecked(Drawing);
+
 /// [`validate`], optionally reusing a drawing already computed over the SAME
 /// pinned pre-state (the production validator draws once to reconstruct the
-/// records, and must not pay for a second full candidate scan).
+/// records, and must not pay for a second full candidate scan). With
+/// `prechecked`, the header prefix already ran (before the draw), so only the
+/// ordinary body checks run here; the full ordinary order is unchanged.
 fn validate_drawn<R: ValidationReads + DerivationReads + ?Sized>(
     reads: &R,
     block: &Block,
     records: &[Record],
     state: &ChainState,
-    drawn: Option<Drawing>,
+    prechecked: Option<Prechecked>,
 ) -> Result<u128, LedgerError> {
     // Root comes from independent decoding and recomputation, never from a
     // supplied validation token. All ordinary checks retain their order.
-    reads.validate_ordinary_block(block, state, RootRule::BodyV2(root(block, records)?))?;
-    let (draw, accounting) = match drawn {
-        Some(drawn) => drawn,
-        None => drawing(reads, block)?,
+    let root = RootRule::BodyV2(root(block, records)?);
+    let (draw, accounting) = match prechecked {
+        Some(Prechecked(drawn)) => {
+            reads.validate_ordinary_body(block, state, root)?;
+            drawn
+        }
+        None => {
+            reads.validate_ordinary_block(block, state, root)?;
+            drawing(reads, block)?
+        }
     };
     let awards = awards(&draw)?;
     let manifest = v2::manifest(&awards).map_err(crypto)?;
@@ -433,15 +446,22 @@ pub(in crate::ledger) fn bind_outputs(
 /// A V1-shaped payout (the winner's target, key and ciphertext copied
 /// verbatim) can never equal its V2 record, whose target is tweaked, so it is
 /// rejected here.
+///
+/// The header-only ordinary checks (height, parent hash, minting-tx/header
+/// agreement, coinbase ciphertext shape, difficulty, PoW) run FIRST (#1670
+/// §1): a gossiped block on the wrong parent or without PoW is rejected with
+/// its precise error before the full candidate scan and the per-award
+/// derivations, so it cannot amplify into a scan.
 pub(in crate::ledger) fn validate_block<R: ValidationReads + DerivationReads + ?Sized>(
     reads: &R,
     block: &Block,
     state: &ChainState,
 ) -> Result<(Vec<Record>, u128), LedgerError> {
+    reads.validate_ordinary_header(block, state)?;
     let drawn = drawing(reads, block)?;
     let records = records_for(reads, block, &drawn.0)?;
     bind_outputs(block, &records).map_err(|reason| invalid(format!("V2 payouts: {reason}")))?;
-    let pool = validate_drawn(reads, block, &records, state, Some(drawn))?;
+    let pool = validate_drawn(reads, block, &records, state, Some(Prechecked(drawn)))?;
     Ok((records, pool))
 }
 

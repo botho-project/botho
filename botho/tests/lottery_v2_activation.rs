@@ -122,10 +122,14 @@ fn spend(
     owner
         .create_private_transaction(
             std::slice::from_ref(input),
-            vec![TxOutput::new(
+            vec![TxOutput::new_hybrid_to_address(
                 input.output.amount - fee,
                 &to.default_address(),
-            )],
+                0,
+                None,
+                Default::default(),
+            )
+            .unwrap()],
             fee,
             height,
             &ledger,

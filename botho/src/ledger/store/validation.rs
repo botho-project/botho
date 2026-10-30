@@ -374,12 +374,32 @@ pub(in crate::ledger) trait ValidationReads {
         let implied = bth_cluster_tax::ring_centroid_implied_factor(&members, curve);
         Ok(claimed_factor.max(implied))
     }
+    /// The full shared ordinary block checks: the cheap header-only prefix
+    /// ([`Self::validate_ordinary_header`]) followed by the body checks
+    /// ([`Self::validate_ordinary_body`]), in that order. Returns the
+    /// validated fee sum.
     fn validate_ordinary_block(
         &self,
         block: &Block,
         state: &ChainState,
         root: RootRule,
     ) -> Result<u64, LedgerError> {
+        self.validate_ordinary_header(block, state)?;
+        self.validate_ordinary_body(block, state, root)
+    }
+    /// The header-only prefix of the ordinary checks (#1670 §1): height,
+    /// parent hash, minting-tx/header agreement, the coinbase ML-KEM
+    /// ciphertext shape (#1677), chain-expected difficulty and PoW. Every
+    /// check is a pure function of the block header, its minting tx and the
+    /// pinned [`ChainState`]: no UTXO, context or block-table read. The V2
+    /// validator (`lottery_v2::validate_block`) runs it BEFORE the candidate
+    /// scan, so a gossiped fork block (wrong parent) or a block without PoW
+    /// is rejected without paying for a scan or any payout derivation.
+    fn validate_ordinary_header(
+        &self,
+        block: &Block,
+        state: &ChainState,
+    ) -> Result<(), LedgerError> {
         // Validate block height
         let expected_height = state.height + 1;
         if block.height() != expected_height {
@@ -427,6 +447,16 @@ pub(in crate::ledger) trait ValidationReads {
             ));
         }
 
+        // Universal ML-KEM (6.0.0, #958/#973; ledger parity #1677): the
+        // coinbase must carry exactly one ML-KEM-768 ciphertext, the same
+        // rule SCP's `validate_minting_tx_intrinsic` applies. Without it a
+        // block reaching `add_block` without SCP intrinsic validation (sync,
+        // replay) could carry `Some(vec![])`, which `MintingTx::hash` aliases
+        // with `None`. Shared function, so the two gates cannot drift; a no-op
+        // when `KEM_CIPHERTEXT_ENFORCED` is false (no-PQ / pre-6.0.0 builds).
+        crate::consensus::check_kem_ciphertext(&block.minting_tx.kem_ciphertext)
+            .map_err(|e| LedgerError::InvalidBlock(format!("Coinbase ML-KEM ciphertext: {}", e)))?;
+
         // C1: Enforce chain-expected difficulty.
         //
         // is_valid_pow() only proves the PoW hash is below the header's *own*
@@ -445,7 +475,18 @@ pub(in crate::ledger) trait ValidationReads {
                 "Invalid proof of work".to_string(),
             ));
         }
-
+        Ok(())
+    }
+    /// The ordinary checks after the header prefix: reward, timestamps, the
+    /// body root, output ciphertext shape, fees, staleness, ring members, tag
+    /// inheritance, fee floor and settlements. Callers must have run
+    /// [`Self::validate_ordinary_header`] against the same `state` first.
+    fn validate_ordinary_body(
+        &self,
+        block: &Block,
+        state: &ChainState,
+        root: RootRule,
+    ) -> Result<u64, LedgerError> {
         // C2a: Recompute the block reward from the emission schedule and
         // chain state. Without this a producer can claim any reward, inflating
         // supply arbitrarily.
@@ -505,6 +546,24 @@ pub(in crate::ledger) trait ValidationReads {
             return Err(LedgerError::InvalidBlock(
                 "Block tx_root does not match transactions".to_string(),
             ));
+        }
+
+        // Universal ML-KEM (#958/#973; ledger parity #1677): every ordinary
+        // transaction output carries exactly one ML-KEM-768 ciphertext, the
+        // rule SCP's `validate_transfer_tx` applies to the value. Lottery
+        // payouts need no separate check: under V2 a payout's ciphertext must
+        // equal its canonical record's, which inherits the winning output's
+        // ciphertext verbatim (`lottery_v2::bind_outputs`), and that output
+        // was itself shape-checked here when its block was applied.
+        for (tx_idx, tx) in block.transactions.iter().enumerate() {
+            for (out_idx, output) in tx.outputs.iter().enumerate() {
+                crate::consensus::check_kem_ciphertext(&output.kem_ciphertext).map_err(|e| {
+                    LedgerError::InvalidBlock(format!(
+                        "Transaction {} output {} ML-KEM ciphertext: {}",
+                        tx_idx, out_idx, e
+                    ))
+                })?;
+            }
         }
 
         // Fee-sum overflow guard (#599, #663). Per-tx fees are

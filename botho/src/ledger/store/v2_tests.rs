@@ -322,7 +322,32 @@ fn live_add_block_rejects_v1_lottery_payouts_before_any_write() {
     let dir = TempDir::new().unwrap();
     let (ledger, b1) = ledger_at_height_one(dir.path());
     let before = tables(&ledger.env);
-    let (b2, _) = payout_block(&b1);
+    let (mut b2, _) = payout_block(&b1);
+    // The header-only checks now run before the V2 draw (#1670 §1), so give
+    // the storage fixture a header-consistent minting tx (height, parent,
+    // difficulty, reward, ML-KEM coinbase) to reach the payout verdict.
+    let state = ledger.get_chain_state().unwrap();
+    let minter = super::block_validation_tests::kem_address(
+        bth_account_keys::AccountKey::random(
+            &mut <rand::rngs::StdRng as rand::SeedableRng>::seed_from_u64(1670),
+        )
+        .default_subaddress(),
+    );
+    b2.minting_tx = crate::block::MintingTx::new(
+        2,
+        calculate_block_reward(2, state.total_mined),
+        &minter,
+        b1.hash(),
+        state.difficulty,
+        b2.header.timestamp,
+    );
+    b2.header.difficulty = state.difficulty;
+    b2.header.minter_view_key = b2.minting_tx.minter_view_key;
+    b2.header.minter_spend_key = b2.minting_tx.minter_spend_key;
+    while !b2.header.is_valid_pow() {
+        b2.header.nonce += 1;
+    }
+    b2.minting_tx.nonce = b2.header.nonce;
     let err = ledger.add_block(&b2).unwrap_err();
     assert!(
         matches!(&err, LedgerError::InvalidBlock(m) if m.contains("V2 payouts")),
@@ -580,7 +605,7 @@ fn production_view_runs_shared_v2_derive_and_validate() {
     let genesis = ledger.get_block(0).unwrap();
     let template = Block::new_template_with_txs(
         &genesis,
-        &account.default_subaddress(),
+        &super::block_validation_tests::kem_address(account.default_subaddress()),
         state.difficulty,
         calculate_block_reward(state.height + 1, state.total_mined),
         vec![],

@@ -493,7 +493,14 @@ fn node_wallet_v2_payout_at_real_720_block_maturity() {
                 for inputs in [vec![find(payout), helper], vec![find(source)]] {
                     let utxos: Vec<Utxo> = inputs.iter().map(|o| o.utxo.clone()).collect();
                     let total: u64 = utxos.iter().map(|u| u.output.amount).sum();
-                    let output = TxOutput::new(total - FEE, &owner.default_address());
+                    let output = TxOutput::new_hybrid_to_address(
+                        total - FEE,
+                        &owner.default_address(),
+                        0,
+                        None,
+                        Default::default(),
+                    )
+                    .unwrap();
                     transactions.push(
                         owner
                             .create_private_transaction(&utxos, vec![output], FEE, height, &ledger)
@@ -516,8 +523,14 @@ fn node_wallet_v2_payout_at_real_720_block_maturity() {
                     .filter(mature)
                     .find(|o| !o.lottery_payout && !tracked.contains(&o.utxo.id))
                 {
-                    let output =
-                        TxOutput::new(input.utxo.output.amount - FEE, &owner.default_address());
+                    let output = TxOutput::new_hybrid_to_address(
+                        input.utxo.output.amount - FEE,
+                        &owner.default_address(),
+                        0,
+                        None,
+                        Default::default(),
+                    )
+                    .unwrap();
                     transactions.push(
                         owner
                             .create_private_transaction(
