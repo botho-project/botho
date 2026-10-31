@@ -169,3 +169,6 @@ __pycache__/
 
 # Session handoff note (/repo:handoff) - session state, never committed.
 .claude/handoff.md
+
+# Lean build output (formal/, #1705)
+formal/.lake/

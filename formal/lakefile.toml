@@ -1,0 +1,6 @@
+name = "botho_formal"
+version = "0.1.0"
+defaultTargets = ["Botho"]
+
+[[lean_lib]]
+name = "Botho"

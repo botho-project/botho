@@ -1,0 +1,10 @@
+# Axioms that the exported theorems in Theorems.lean may depend on.
+#
+# One fully-qualified axiom name per line. '#' starts a comment.
+# The three standard Lean axioms are always allowed. An opaque-function axiom
+# (for example a `Botho.sha256` or `Botho.randomx` stand-in) is added only by
+# the PR that introduces it, with a one-line justification comment on the line
+# above it. Theorems that depend on it are labeled "trusted" in the README.
+propext
+Classical.choice
+Quot.sound

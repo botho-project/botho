@@ -1,0 +1,128 @@
+name: Formal (Lean)
+
+# Builds the Lean 4 model under formal/ and runs the sorry and axiom gates
+# (#1705, epic #1704).
+#
+# No workflow-level `paths:` filter on purpose: a path-filtered workflow that
+# is skipped leaves a required check pending forever. The `changes` job decides
+# whether the heavy `lean` job runs, and `formal-gate` always runs and passes
+# when `lean` succeeded or was skipped. Make `formal-gate` the required check.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: formal-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ELAN_VERSION: v4.2.4
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      formal: ${{ steps.filter.outputs.formal }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Detect formal-relevant changes
+        id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          # Paths that trigger the Lean job. Child issues of #1704 append the
+          # Rust files their models mirror.
+          pattern='^(formal/|\.github/workflows/formal\.yml$|cluster-tax/src/lottery\.rs$|botho/src/block\.rs$)'
+          case "$EVENT" in
+            pull_request) range="$BASE_SHA...HEAD" ;;
+            push)
+              if [[ -z "$BEFORE_SHA" || "$BEFORE_SHA" =~ ^0+$ ]]; then
+                echo "formal=true" >>"$GITHUB_OUTPUT"; exit 0
+              fi
+              range="$BEFORE_SHA..HEAD" ;;
+            *) echo "formal=true" >>"$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+          if ! changed="$(git diff --name-only "$range")"; then
+            echo "diff failed for $range; running the Lean job to be safe"
+            echo "formal=true" >>"$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "Changed files:"; echo "$changed"
+          if grep -Eq "$pattern" <<<"$changed"; then
+            echo "formal=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "formal=false" >>"$GITHUB_OUTPUT"
+          fi
+
+  lean:
+    needs: changes
+    if: needs.changes.outputs.formal == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: formal
+    steps:
+      - uses: actions/checkout@v7
+      - name: Cache elan toolchain
+        uses: actions/cache@v6
+        with:
+          path: ~/.elan
+          key: elan-${{ runner.os }}-${{ env.ELAN_VERSION }}-${{ hashFiles('formal/lean-toolchain') }}
+      - name: Install elan
+        run: |
+          if [[ ! -x "$HOME/.elan/bin/elan" ]]; then
+            curl -sSfL "https://raw.githubusercontent.com/leanprover/elan/${ELAN_VERSION}/elan-init.sh" -o elan-init.sh
+            sh elan-init.sh -y --default-toolchain none --no-modify-path
+            rm elan-init.sh
+          fi
+          echo "$HOME/.elan/bin" >>"$GITHUB_PATH"
+      - name: Install pinned toolchain
+        run: |
+          elan toolchain install "$(cat lean-toolchain)"
+          lean --version
+          lake --version
+      - name: Cache .lake build
+        uses: actions/cache@v6
+        with:
+          path: formal/.lake
+          key: lake-${{ runner.os }}-${{ hashFiles('formal/lean-toolchain', 'formal/lake-manifest.json') }}-${{ hashFiles('formal/**/*.lean') }}
+          restore-keys: |
+            lake-${{ runner.os }}-${{ hashFiles('formal/lean-toolchain', 'formal/lake-manifest.json') }}-
+      - name: lake build
+        run: lake build
+      - name: Sorry gate
+        run: scripts/check-sorry.sh
+      - name: Axiom gate
+        run: scripts/check-axioms.sh
+      - name: Gate self-test
+        run: scripts/selftest-gates.sh
+
+  formal-gate:
+    needs: [changes, lean]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require lean job success or skip
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          LEAN: ${{ needs.lean.result }}
+        run: |
+          echo "changes=$CHANGES lean=$LEAN"
+          if [[ "$CHANGES" != "success" ]]; then
+            echo "changes job did not succeed" >&2; exit 1
+          fi
+          if [[ "$LEAN" != "success" && "$LEAN" != "skipped" ]]; then
+            echo "lean job did not succeed" >&2; exit 1
+          fi
