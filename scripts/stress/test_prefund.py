@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 
 import prefund
+from controller import SPENT_AUDIT_IMAGES
 from prefund import Prefunder, SIGNER_FIELDS, latest_deadline, load_manifest
 from runtime import Gate, HOSTS, Quota, Rpc
 from test_targets import targets
@@ -554,6 +555,29 @@ class ResumeTests(PrefundBase):
 
 
 class ReconcileTests(PrefundBase):
+    def test_confirmed_grant_inputs_read_spent_past_the_spent_query_bound(self):
+        """#1719 review: more images than SPENT_AUDIT_IMAGES; grants are not journal intents."""
+        # Small producer outputs in an earlier block sort ahead of the large
+        # ones grants select: ten audit slices of them, so the rotation alone
+        # cannot reach a grant's inputs before it confirms.
+        funding = self.m['funding_wallet']['address']
+        for _ in range(10 * SPENT_AUDIT_IMAGES):
+            self.fleet.output(0, funding, 10**6, coinbase=True)
+        p = self.prefunder()
+        self.offer_one(p)
+        self.assertGreater(len(p.spent), SPENT_AUDIT_IMAGES)
+        self.advance()
+        self.tick(p)  # confirms the grant, then a routine sync and accounting
+        self.assertEqual(p.records[0]['state'], 'confirmed')
+        state = {s['keyImage']: s for s in p.spent}
+        inputs = {o['key_image'] for o in p.inventory[p.funding]
+                  if o['id'] in {s['id'] for s in p.records[0]['selected']}}
+        self.assertTrue(all(state[image]['spent'] for image in inputs))
+        self.offer_one(p)
+        selected = [s['id'] for r in p.records for s in r['selected']]
+        self.assertGreater(len(p.records), 1)
+        self.assertEqual(len(selected), len(set(selected)))  # no spent input reselected
+
     def test_receipt_disagreement_holds(self):
         p = self.prefunder()
         self.offer_one(p)

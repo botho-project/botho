@@ -878,8 +878,9 @@ class Controller:
         whose state can have changed: never checked, last seen pending or
         not cleanly unspent, or in a transaction this controller signed (the
         campaign wallets' keys are held only here). One rotating request's
-        worth of the rest is rechecked per scan, so every image is still
-        re-verified between full scans.
+        worth of the rest is rechecked per scan: over a stable set that
+        revisits each image every ceil(N/256) scans, and full scans still
+        recheck every image.
         """
         offset = self.__dict__.get('spent_audit_offset', 0)
         candidates = [image for image in all_images if image not in cached]

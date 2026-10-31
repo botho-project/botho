@@ -229,6 +229,15 @@ class Prefunder(Controller):
         self.j = Journal(self.state / 'journal.sqlite', clock, limits=plan['limits'])
         self.rpc = rpc or Rpc(self.j, self.targets, campaign_tls_context(manifest), allow_env_proxy=False)
 
+    def spent_query_images(self, all_images, cached, full):
+        """Every image not known spent, on every sync (#1719 review).
+
+        Grants are durable files, not journal intents, so the controller's
+        signed-image bound would never see the funding wallet's spends and
+        would leave a confirmed grant's inputs reading unspent.
+        """
+        return [image for image in all_images if image not in cached], 0
+
     # ---- durable records -------------------------------------------------
 
     def record_path(self, index):
