@@ -15,8 +15,10 @@ cargo test --locked -p botho \
 This selects twelve ordinary tests. The eight ignored chaos/load tests remain
 ignored here and retain their separate manual opt-in jobs. Selecting
 `regression` with `include_ignored=false` still executes both ordinary baselines.
-Other timing, Byzantine, network, consensus and fee suites retain their existing
-manual selectors; adding a schedule does not silently enable them.
+Timing, Byzantine, chaos-ignored and load-ignored suites retain their existing
+manual selectors; adding a schedule does not silently enable them. The
+consensus-integration job (consensus, network and progressive-fee suites) also
+runs nightly, because manual-only gating hid fee-suite failures on main (#1573).
 
 The job pins `nightly-2025-12-03`, compiles the four targets together with a
 30-minute limit, and gives execution a separate 15-minute limit. This isolates

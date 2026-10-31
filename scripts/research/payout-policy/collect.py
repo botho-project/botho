@@ -53,7 +53,7 @@ def main():
         (out/'baseline.json').write_bytes(gzip.decompress((ROOT/'scripts/research/ct-reinvestment/evidence/raw.json.gz').read_bytes()))
         start=time.monotonic();m['compile_exit']=bounded(COMMAND,out/'cargo.jsonl',out/'compile.log',env,900);m['compile_seconds']=time.monotonic()-start;save();assert m['compile_exit']==0
         a=artifact(out/'cargo.jsonl');m['artifact']=a;m['executable_sha256']=digest(a['executable'])
-        command=[a['executable'],'fixed_six_histories_source_review_draft','--exact','--nocapture'];m['matrix_command']=command
+        command=[a['executable'],'fixed_six_histories_source_review_draft','--exact','--include-ignored','--nocapture'];m['matrix_command']=command
         env.update(PAYOUT_BASELINE_JSON=str(out/'baseline.json'),PAYOUT_POLICY_OUTPUT=str(out/'raw.json'))
         start=time.monotonic();m['matrix_exit']=bounded(command,out/'matrix.log',out/'matrix-stderr.log',env,180);m['matrix_seconds']=time.monotonic()-start;save();assert m['matrix_exit']==0
         assert '1 passed; 0 failed; 0 ignored' in (out/'matrix.log').read_text()

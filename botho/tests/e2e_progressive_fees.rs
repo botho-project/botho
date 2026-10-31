@@ -86,6 +86,21 @@ fn single_cluster_tags(cluster_id: u64) -> ClusterTagVector {
 // Transaction Creation Helpers (with cluster tag support)
 // ============================================================================
 
+/// A hybrid ML-KEM output at its real `index`, carrying `tags`. Since #1677
+/// `Ledger::add_block` enforces the ML-KEM ciphertext shape, so a classical
+/// output passes the mempool but its block never applies (#1573). A recipient
+/// that publishes no ML-KEM key keeps a classical output, matching
+/// `common::transactions`.
+fn tagged_output(
+    amount: u64,
+    recipient: &PublicAddress,
+    index: u32,
+    tags: ClusterTagVector,
+) -> TxOutput {
+    TxOutput::new_hybrid_to_address(amount, recipient, index, None, tags.clone())
+        .unwrap_or_else(|_| TxOutput::new_with_cluster_tags(amount, recipient, None, tags))
+}
+
 /// Create a signed CLSAG ring signature transaction.
 fn create_signed_transaction(
     sender_wallet: &botho::wallet::Wallet,
@@ -134,17 +149,12 @@ fn create_signed_transaction_with_tags(
 
     // Create outputs with cluster tags if provided
     let tags = cluster_tags.unwrap_or_else(ClusterTagVector::empty);
-    let mut outputs = vec![TxOutput::new_with_cluster_tags(
-        amount,
-        recipient,
-        None,
-        tags.clone(),
-    )];
+    let mut outputs = vec![tagged_output(amount, recipient, 0, tags.clone())];
     if change > 0 {
-        outputs.push(TxOutput::new_with_cluster_tags(
+        outputs.push(tagged_output(
             change,
             &sender_wallet.default_address(),
-            None,
+            1,
             tags,
         ));
     }
@@ -152,9 +162,16 @@ fn create_signed_transaction_with_tags(
     let preliminary_tx = Transaction::new_clsag(Vec::new(), outputs.clone(), fee, current_height);
     let signing_hash = preliminary_tx.signing_hash();
 
-    let onetime_private = sender_utxo
-        .output
-        .recover_spend_key(sender_wallet.account_key(), subaddress_index)
+    // Recover through the wallet so hybrid (ML-KEM) outputs use their PQ
+    // derivation under `feature = "pq"`; the classical-only
+    // `TxOutput::recover_spend_key` yields the wrong one-time key for them
+    // and the CLSAG then fails with `InvalidSignature` (#1573, #1669).
+    let onetime_private = sender_wallet
+        .recover_output_spend_key(
+            &sender_utxo.output,
+            subaddress_index,
+            sender_utxo.id.output_index,
+        )
         .ok_or("Failed to recover spend key")?;
 
     let exclude_keys = vec![sender_utxo.output.target_key];

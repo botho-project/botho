@@ -120,7 +120,7 @@ def load(directory):
     assert set(m['raw_hashes'])==expected
     for f,h in m['raw_hashes'].items():assert digest(p/f)==h
     a=artifact(p/'cargo.jsonl');assert a==m['artifact']
-    assert m['matrix_command']==[a['executable'],'fixed_six_histories_source_review_draft','--exact','--nocapture']
+    assert m['matrix_command']==[a['executable'],'fixed_six_histories_source_review_draft','--exact','--include-ignored','--nocapture']
     assert '1 passed; 0 failed; 0 ignored' in (p/'matrix.log').read_text()
     baseline=json.loads((p/'baseline.json').read_text())
     import gzip
