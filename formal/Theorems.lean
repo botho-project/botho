@@ -17,3 +17,8 @@ import Botho
 #print axioms Botho.transfer_isSome_iff
 #print axioms Botho.satAdd_le_cap
 #print axioms Botho.satAdd_eq_add
+
+-- CI TEST (#1705): deliberate axiom; reverted in the next commit.
+axiom Botho.ciTestBogus : 1 = 2
+theorem Botho.ci_test_axiom : 1 = 2 := Botho.ciTestBogus
+#print axioms Botho.ci_test_axiom
