@@ -42,8 +42,8 @@ use crate::{
     network::{
         default_seed_domain, BlockTxn, ChainSyncManager, CompactBlock, GetBlockTxn,
         NetworkDiscovery, NetworkEvent, QuorumBuilder, ReconstructionResult, SyncAction,
-        SyncRequest, SyncResponse, SyncStatusSnapshot, MIN_SUPPORTED_PROTOCOL_VERSION,
-        PROTOCOL_VERSION,
+        SyncRequest, SyncRequestKind, SyncRequestToken, SyncResponse, SyncStatusSnapshot,
+        MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION,
     },
     node::{commit_block_locked, ApplyState, MintedMintingTx, Node, SharedLedger},
     rpc::{
@@ -1162,6 +1162,15 @@ async fn run_async_with_shutdown(
     // this gap by polling peers for their chain status and, when we are behind,
     // requesting the missing block range and applying it sequentially.
     let mut sync_manager = ChainSyncManager::new(local_height);
+    // Transport request id -> sync manager token for every outbound sync
+    // request (#1431). libp2p emits exactly one response or failure per
+    // outbound request, and each removes its entry, so the map stays bounded.
+    // The token lets the manager tell a failure of the request it is waiting
+    // on from a late failure of a superseded one.
+    let mut sync_request_tokens: HashMap<
+        libp2p::request_response::OutboundRequestId,
+        SyncRequestToken,
+    > = HashMap::new();
 
     // Startup sync gate (issue #770): whether this node has caught up to the
     // fleet tip since the process started. Until this is true, a node that
@@ -1650,7 +1659,13 @@ async fn run_async_with_shutdown(
                                 warn!("Failed to send sync response: {:?}", e);
                             }
                         }
-                        NetworkEvent::SyncResponse { peer, request_id: _, response } => {
+                        NetworkEvent::SyncResponse { peer, request_id, response } => {
+                            let token = sync_request_tokens.remove(&request_id);
+                            // A successful reply resolves the request here. A
+                            // failure is resolved by `on_request_failed` below.
+                            if let Some(token) = token.filter(|_| !matches!(response, SyncResponse::Error(_))) {
+                                sync_manager.on_request_resolved(token);
+                            }
                             match response {
                                 SyncResponse::Blocks { blocks, has_more } => {
                                     debug!("Received {} blocks from sync (has_more={})", blocks.len(), has_more);
@@ -1679,8 +1694,12 @@ async fn run_async_with_shutdown(
                                     sync_manager.on_status(peer, height, tip_hash);
                                 }
                                 SyncResponse::Error(e) => {
-                                    warn!("Sync error from peer {:?}: {}", peer, e);
-                                    sync_manager.on_failure(Some(&peer), e);
+                                    warn!(%peer, ?request_id, error = %e, "Sync error from peer");
+                                    // #1431: only the request the state machine is
+                                    // waiting on may demote it. Unknown,
+                                    // superseded, or post-catch-up status
+                                    // failures are ignored there.
+                                    sync_manager.on_request_failed(token, e);
                                 }
                             }
                         }
@@ -2595,9 +2614,11 @@ async fn run_async_with_shutdown(
                 if let Some(action) = gated_sync_tick(&apply_queue, &mut sync_manager, &connected) {
                     match action {
                         SyncAction::RequestStatus(peer) => {
-                            debug!("Sync: requesting status from {:?}", peer);
-                            sync_manager.on_request_sent(peer);
-                            NetworkDiscovery::send_sync_request(&mut swarm, peer, SyncRequest::GetStatus);
+                            let request_id =
+                                NetworkDiscovery::send_sync_request(&mut swarm, peer, SyncRequest::GetStatus);
+                            debug!(%peer, ?request_id, "Sync: requesting status");
+                            let token = sync_manager.on_request_dispatched(peer, SyncRequestKind::Status);
+                            sync_request_tokens.insert(request_id, token);
                         }
                         SyncAction::RequestBlocks { peer, start_height, count } => {
                             debug!(
@@ -2606,12 +2627,15 @@ async fn run_async_with_shutdown(
                                 start_height + count as u64 - 1,
                                 peer
                             );
-                            sync_manager.on_request_sent(peer);
-                            NetworkDiscovery::send_sync_request(
+                            let request_id = NetworkDiscovery::send_sync_request(
                                 &mut swarm,
                                 peer,
                                 SyncRequest::GetBlocks { start_height, count },
                             );
+                            debug!(%peer, ?request_id, start_height, "Sync: block request sent");
+                            let token = sync_manager
+                                .on_request_dispatched(peer, SyncRequestKind::Blocks { start_height });
+                            sync_request_tokens.insert(request_id, token);
                         }
                         SyncAction::Synced => {
                             debug!("Sync: caught up with network tip");
