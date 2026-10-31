@@ -24,7 +24,8 @@ use crate::{
     FeeCurve,
 };
 
-/// Sim base unit = milliBTH (matches the historical lottery experiment).
+/// Sim base unit = milliBTH (matches the historical lottery experiment), i.e.
+/// one unit = `PICO_PER_BTH / M2_BTH` = 10^9 picocredits.
 pub const M2_BTH: u64 = 1_000;
 /// Blocks per day at the sim's assumed block time.
 pub const M2_BLOCKS_PER_DAY: u64 = 4_320;
@@ -81,6 +82,10 @@ pub struct M2Params {
     /// Smoke mode collapses each epoch to a handful of blocks so the harness
     /// runs end-to-end in a unit test while preserving the epoch structure.
     pub smoke: bool,
+    /// Fee model (#1695). `Some(mode)` prices every tx and churn with the
+    /// shared consensus fee model; `None` keeps the legacy flat
+    /// `base_fee = 250` (0.25 BTH) × factor pricing.
+    pub fee_model: Option<crate::consensus_fee::FeeModelMode>,
 }
 
 /// Metrics emitted by one M2 run.
@@ -122,6 +127,10 @@ pub fn run_m2(params: &M2Params) -> M2Report {
     config.selection_mode = SelectionMode::ClusterWeighted;
 
     let mut sim = LotterySimulation::new_seeded(config, FeeCurve::default_params(), params.seed);
+    if let Some(mode) = params.fee_model {
+        // Sim unit = milliBTH = 10^9 picocredits.
+        sim = sim.with_consensus_fee(mode, crate::fee_curve::PICO_PER_BTH / M2_BTH as u128);
+    }
 
     let cohorts = m2_population();
     let mut agents: Vec<Agent> = Vec::new();
@@ -281,6 +290,30 @@ pub fn ring_id_rate(half_life_years: u64) -> f64 {
 mod tests {
     use super::*;
 
+    /// #1695: the M2 harness runs end-to-end under the shared consensus fee
+    /// model (both modes) and stays deterministic.
+    #[test]
+    fn smoke_m2_consensus_fee_model() {
+        use crate::consensus_fee::FeeModelMode;
+        for mode in [
+            FeeModelMode::ConsensusOnly,
+            FeeModelMode::ConsensusPlusRelayMin,
+        ] {
+            let p = M2Params {
+                horizon_years: 2,
+                half_life_years: Some(5),
+                gamed: true,
+                seed: 626_626_626,
+                smoke: true,
+                fee_model: Some(mode),
+            };
+            let a = run_m2(&p);
+            let b = run_m2(&p);
+            assert!(a.delta_gini.is_finite());
+            assert_eq!(a.gini_f.to_bits(), b.gini_f.to_bits());
+        }
+    }
+
     /// The population enters at REAL-curve factors (not hardcoded): small
     /// holders ~1x, merchants low, whales high — proving the curve is wired in.
     #[test]
@@ -306,6 +339,7 @@ mod tests {
                 gamed,
                 seed: 626_626_626,
                 smoke: true,
+                fee_model: None,
             });
             assert!(r.gini0.is_finite() && r.gini_f.is_finite());
             assert!(r.delta_gini.is_finite());
@@ -329,6 +363,7 @@ mod tests {
                 gamed: true,
                 seed: 626_626_626,
                 smoke: true,
+                fee_model: None,
             });
             let evasion = r.wash_evasion_pct.expect("decay run emits evasion");
             let id_rate = r.ring_id_rate.expect("decay run emits id-rate");
@@ -356,6 +391,7 @@ mod tests {
             gamed: false,
             seed: 42,
             smoke: true,
+            fee_model: None,
         };
         let a = run_m2(&p);
         let b = run_m2(&p);

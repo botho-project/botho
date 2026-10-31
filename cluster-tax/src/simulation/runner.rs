@@ -2,7 +2,12 @@
 
 use std::collections::HashMap;
 
-use crate::{execute_transfer, ClusterWealth, FeeCurve, MonetaryPolicy, TransferConfig};
+use crate::{
+    consensus_fee::{ClaimedClass, SimConsensusFee},
+    execute_transfer, execute_transfer_with_fee,
+    fee_curve::ClusterFactorCurve,
+    ClusterWealth, FeeCurve, MonetaryPolicy, TagVector, TransferConfig, TAG_WEIGHT_SCALE,
+};
 
 use super::{
     agent::{Action, Agent, AgentId},
@@ -42,6 +47,12 @@ pub struct SimulationConfig {
     /// This should match the policy's target_block_time_secs for stable
     /// simulation.
     pub secs_per_block: u64,
+
+    /// Fee model (#1695). `Some` prices every transfer and wash hop with the
+    /// shared consensus fee model (`crate::consensus_fee_model`), converting
+    /// sim units to picocredits via its `pico_per_unit`. `None` keeps the
+    /// legacy linear-bps `fee_curve` / `transfer_config.fee_curve` pricing.
+    pub consensus_fee: Option<SimConsensusFee>,
 }
 
 impl Default for SimulationConfig {
@@ -56,6 +67,7 @@ impl Default for SimulationConfig {
             initial_difficulty: 1000,
             blocks_per_round: 1,
             secs_per_block: 60,
+            consensus_fee: None,
         }
     }
 }
@@ -97,6 +109,14 @@ pub struct SimulationResult {
 
     /// Final monetary statistics (if monetary policy enabled).
     pub monetary_stats: Option<super::state::MonetaryStats>,
+
+    /// Exact per-agent fees in picocredits as priced by the consensus fee
+    /// model (empty under the legacy fee curve). Balances are charged in sim
+    /// units with the sub-unit remainder carried (see `SimConsensusFee`).
+    pub agent_fees_pico: HashMap<AgentId, u128>,
+
+    /// Total picocredits priced by the consensus fee model (0 under legacy).
+    pub total_fees_pico: u128,
 }
 
 /// Summary of a single round.
@@ -129,6 +149,8 @@ pub fn run_simulation(
 
     let mut metrics = SimulationMetrics::new();
     let mut round_summaries = Vec::new();
+    let mut consensus_fee = config.consensus_fee.clone();
+    let mut agent_fees_pico: HashMap<AgentId, u128> = HashMap::new();
 
     // Register all agents and properly mint their initial balances
     // This ensures cluster wealth is tracked correctly for progressive fees
@@ -222,6 +244,8 @@ pub fn run_simulation(
                                     amount,
                                     &config.transfer_config,
                                     &mut state.cluster_wealth,
+                                    consensus_fee.as_mut().map(|cf| (cf, round)),
+                                    &mut agent_fees_pico,
                                 );
 
                                 if let Some((fee, net)) = result {
@@ -255,6 +279,8 @@ pub fn run_simulation(
                                         amount,
                                         &config.transfer_config,
                                         &mut state.cluster_wealth,
+                                        consensus_fee.as_mut().map(|cf| (cf, round)),
+                                        &mut agent_fees_pico,
                                     );
 
                                     if let Some((fee, net)) = result {
@@ -287,6 +313,8 @@ pub fn run_simulation(
                                 amount,
                                 &config.transfer_config,
                                 &mut state.cluster_wealth,
+                                consensus_fee.as_mut().map(|cf| (cf, round)),
+                                &mut agent_fees_pico,
                             );
 
                             if let Some((fee, net)) = result {
@@ -308,6 +336,80 @@ pub fn run_simulation(
                 }
 
                 Action::WashTrade { amount, hops } => {
+                    // Consensus fee model (#1695): each hop is a 1-in/1-out
+                    // self-transfer whose tag decay is a class downgrade,
+                    // priced by the shared model (capitalized reset charge
+                    // once demurrage is active).
+                    if let (Some(cf), Some(&sender_idx)) =
+                        (consensus_fee.as_mut(), agent_map.get(&sender_id))
+                    {
+                        let hop_amount = amount / hops.max(1) as u64;
+                        let ppu = cf.pico_per_unit;
+                        let curve = ClusterFactorCurve::default();
+                        let initial_w = claimed_wealth_pico(
+                            agents[sender_idx].tags(),
+                            &state.cluster_wealth,
+                            ppu,
+                        );
+                        let mut wash_fees_pico: u128 = 0;
+                        let mut wash_fees_units = 0u64;
+                        for _ in 0..hops {
+                            let agent = &mut agents[sender_idx];
+                            if agent.balance() < hop_amount {
+                                break;
+                            }
+                            let w_in =
+                                claimed_wealth_pico(agent.tags(), &state.cluster_wealth, ppu);
+                            agent
+                                .account_mut()
+                                .tags
+                                .apply_decay(config.transfer_config.decay_rate);
+                            let w_out =
+                                claimed_wealth_pico(agent.tags(), &state.cluster_wealth, ppu);
+                            let before = cf.total_fee_pico;
+                            let units = cf.charge_transfer(
+                                1,
+                                1,
+                                ClaimedClass::Wealth(w_out),
+                                curve.factor(w_in),
+                                0,
+                                round,
+                                hop_amount,
+                            );
+                            wash_fees_pico += cf.total_fee_pico - before;
+                            wash_fees_units += units;
+                            round_fees += units;
+                            round_transactions += 1;
+                        }
+                        *agent_fees_pico.entry(sender_id).or_insert(0) += wash_fees_pico;
+                        let final_w = claimed_wealth_pico(
+                            agents[sender_idx].tags(),
+                            &state.cluster_wealth,
+                            ppu,
+                        );
+                        // Savings: the fee difference on one future 1-in/2-out
+                        // transfer of `amount` at the old vs new class.
+                        let future_fee = |w: u128| {
+                            cf.fee_pico(&crate::consensus_fee::ConsensusFeeInputs {
+                                size: crate::consensus_fee::consensus_tx_size_bytes(1, 2, 0),
+                                n_out: 2,
+                                n_memo: 0,
+                                claimed: ClaimedClass::Wealth(w),
+                                floor: curve.factor(w),
+                                elapsed: 0,
+                                height: cf.height_offset.saturating_add(round),
+                                output_sum: cf.units_to_pico(amount),
+                            }) as i128
+                        };
+                        let savings_pico = future_fee(initial_w) - future_fee(final_w);
+                        let net_pico = savings_pico - wash_fees_pico as i128;
+                        let net_units = (net_pico / ppu as i128)
+                            .clamp(i64::MIN as i128, i64::MAX as i128)
+                            as i64;
+                        metrics.record_wash_trade(wash_fees_units, net_units);
+                        continue;
+                    }
+
                     // Simulate wash trading as a series of self-transfers with decay
                     if let Some(&sender_idx) = agent_map.get(&sender_id) {
                         let initial_rate = agents[sender_idx]
@@ -444,6 +546,8 @@ pub fn run_simulation(
         final_state: state,
         round_summaries,
         monetary_stats,
+        agent_fees_pico,
+        total_fees_pico: consensus_fee.map(|cf| cf.total_fee_pico).unwrap_or(0),
     }
 }
 
@@ -471,6 +575,8 @@ fn execute_transfer_between_agents(
     amount: u64,
     config: &TransferConfig,
     cluster_wealth: &mut ClusterWealth,
+    consensus_fee: Option<(&mut SimConsensusFee, u64)>,
+    agent_fees_pico: &mut HashMap<AgentId, u128>,
 ) -> Option<(u64, u64)> {
     // We need to get mutable references to both accounts safely
     if sender_idx == receiver_idx {
@@ -486,19 +592,62 @@ fn execute_transfer_between_agents(
         (&mut right[0], &mut left[receiver_idx])
     };
 
+    let sender_id = sender.id();
     let sender_account = sender.account_mut();
     let receiver_account = receiver.account_mut();
 
-    match execute_transfer(
-        sender_account,
-        receiver_account,
-        amount,
-        config,
-        cluster_wealth,
-    ) {
+    let result = match consensus_fee {
+        // Consensus fee model (#1695): a 1-in/2-out in-class transfer (the
+        // sim does not model rings or coin ages, so floor = claimed factor
+        // and elapsed = 0: the size/output base, no demurrage).
+        Some((cf, round)) => {
+            if sender_account.balance < amount {
+                return None;
+            }
+            let w = claimed_wealth_pico(&sender_account.tags, cluster_wealth, cf.pico_per_unit);
+            let factor = ClusterFactorCurve::default().factor(w);
+            let before = cf.total_fee_pico;
+            let fee = cf.charge_transfer(1, 2, ClaimedClass::Wealth(w), factor, 0, round, amount);
+            *agent_fees_pico.entry(sender_id).or_insert(0) += cf.total_fee_pico - before;
+            execute_transfer_with_fee(
+                sender_account,
+                receiver_account,
+                amount,
+                fee,
+                config,
+                cluster_wealth,
+            )
+        }
+        None => execute_transfer(
+            sender_account,
+            receiver_account,
+            amount,
+            config,
+            cluster_wealth,
+        ),
+    };
+    match result {
         Ok(result) => Some((result.fee, result.net_amount)),
         Err(_) => None,
     }
+}
+
+/// Effective cluster wealth of a tag vector in picocredits: Σ weight × the
+/// cluster's (sim-unit) wealth × `pico_per_unit`, the value-normalized form of
+/// the ledger's `effective_cluster_wealth_from_outputs`.
+fn claimed_wealth_pico(
+    tags: &TagVector,
+    cluster_wealth: &ClusterWealth,
+    pico_per_unit: u128,
+) -> u128 {
+    tags.iter()
+        .map(|(cluster, weight)| {
+            (cluster_wealth.get(cluster) as u128)
+                .saturating_mul(pico_per_unit)
+                .saturating_mul(weight as u128)
+                / TAG_WEIGHT_SCALE as u128
+        })
+        .fold(0u128, |a, b| a.saturating_add(b))
 }
 
 /// Collect metrics from current state.
@@ -546,6 +695,48 @@ mod tests {
         simulation::agents::{MerchantAgent, MinterAgent, RetailUserAgent},
         MonetaryPolicy,
     };
+
+    /// #1695: with the consensus fee model, transfers are priced in
+    /// picocredits by `consensus_fee_model` (size × factor × min(n,10)²),
+    /// orders of magnitude below the legacy linear-bps curve, and the exact
+    /// pico total is reported.
+    #[test]
+    fn consensus_fee_model_prices_transfers_in_pico() {
+        use crate::consensus_fee::{ConsensusFeeParams, FeeModelMode};
+        let run = |consensus: bool| {
+            let mut agents: Vec<Box<dyn Agent>> = vec![
+                Box::new(RetailUserAgent::new(AgentId(1)).with_merchants(vec![AgentId(2)])),
+                Box::new(MerchantAgent::new(AgentId(2))),
+            ];
+            agents[0].account_mut().balance = 1000;
+            agents[1].account_mut().balance = 500;
+            let config = SimulationConfig {
+                rounds: 200,
+                snapshot_frequency: 100,
+                consensus_fee: consensus.then(|| {
+                    SimConsensusFee::new(
+                        ConsensusFeeParams::mainnet(FeeModelMode::ConsensusOnly),
+                        crate::fee_curve::PICO_PER_BTH,
+                    )
+                }),
+                ..Default::default()
+            };
+            run_simulation(&mut agents, &config)
+        };
+        let legacy = run(false);
+        let consensus = run(true);
+        assert!(legacy.final_state.total_fees_collected > 0);
+        assert!(consensus.total_fees_pico > 0, "consensus fees are priced");
+        // 1 unit = 1 BTH: thousands of pico per tx never reach one unit.
+        assert_eq!(consensus.final_state.total_fees_collected, 0);
+        let per_tx = consensus.total_fees_pico / consensus.final_state.transaction_count as u128;
+        // Background 1-in/2-out: 990 B × 1-6× × 4.
+        assert!((3_960..=6 * 3_960).contains(&per_tx), "per-tx {per_tx}");
+        assert_eq!(
+            consensus.agent_fees_pico.values().sum::<u128>(),
+            consensus.total_fees_pico
+        );
+    }
 
     #[test]
     fn test_basic_simulation() {

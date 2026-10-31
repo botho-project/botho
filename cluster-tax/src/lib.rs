@@ -36,6 +36,7 @@
 
 pub mod analysis;
 pub mod bridge_import;
+pub mod consensus_fee;
 pub mod crypto;
 pub mod demurrage;
 pub mod dynamic_fee;
@@ -59,6 +60,12 @@ pub use bridge_import::{
     import_epoch, BRIDGE_IMPORT_EPOCH_BLOCKS, BRIDGE_IMPORT_FACTOR_FLOOR,
 };
 pub use cluster::{ClusterId, ClusterWealth};
+// One shared consensus fee model for every economic sim (#1695).
+pub use consensus_fee::{
+    consensus_fee_breakdown, consensus_fee_model, consensus_tx_size_bytes, ClaimedClass,
+    ConsensusFeeBreakdown, ConsensusFeeInputs, ConsensusFeeParams, FeeModelMode, SimConsensusFee,
+    RELAY_MIN_TX_FEE,
+};
 
 // ============================================================================
 // Monetary Policy (Canonical)
@@ -131,8 +138,9 @@ pub use signing::{
 };
 pub use tag::{TagVector, TagWeight, TAG_WEIGHT_SCALE};
 pub use transfer::{
-    execute_transfer, execute_transfer_and, mint, mint_and, Account, AndTransferConfig,
-    AndTransferResult, BlockAwareAccount, TransferConfig, TransferError, TransferResult,
+    execute_transfer, execute_transfer_and, execute_transfer_with_fee, mint, mint_and, Account,
+    AndTransferConfig, AndTransferResult, BlockAwareAccount, TransferConfig, TransferError,
+    TransferResult,
 };
 pub use validate::{
     validate_committed_tag_structure,

@@ -6,12 +6,13 @@
 mod cli {
     use bth_cluster_tax::{
         analysis::{
-            analyze_fee_curve, analyze_structuring, analyze_wash_trading, hops_to_reach,
-            tag_after_hops,
+            analyze_fee_curve, analyze_structuring, analyze_structuring_consensus,
+            analyze_wash_trading, analyze_wash_trading_consensus, hops_to_reach, tag_after_hops,
         },
+        consensus_fee::ConsensusFeeParams,
         execute_transfer, mint, Account, AndDecayConfig, AndTagVector, BlockAwareTagVector,
-        BlockDecayConfig, ClusterId, ClusterWealth, FeeCurve, RateLimitedDecayConfig,
-        RateLimitedTagVector, TransferConfig, TAG_WEIGHT_SCALE,
+        BlockDecayConfig, ClusterId, ClusterWealth, FeeCurve, FeeModelMode, RateLimitedDecayConfig,
+        RateLimitedTagVector, SimConsensusFee, TransferConfig, PICO_PER_BTH, TAG_WEIGHT_SCALE,
     };
     use clap::{Parser, Subcommand};
     use rand::prelude::*;
@@ -22,6 +23,40 @@ mod cli {
     pub struct Cli {
         #[command(subcommand)]
         pub command: Command,
+    }
+
+    /// Fee model for the economic sims (#1695).
+    ///
+    /// `consensus` (default) and `consensus-relay` price every transaction
+    /// with the shared `bth_cluster_tax::consensus_fee_model` — the node's
+    /// consensus fee floor, without / with the relay `MIN_TX_FEE`. `legacy`
+    /// restores each sim's historical pricing (linear-bps `FeeCurve`, flat
+    /// `base_fee`), which the node never enforced.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+    pub enum FeeModelArg {
+        /// Consensus fee floor only (attack-cost lower bound).
+        Consensus,
+        /// max(consensus floor, relay MIN_TX_FEE) — what a default node relays.
+        ConsensusRelay,
+        /// The pre-#1695 per-sim fee model (kept for comparison).
+        Legacy,
+    }
+
+    impl FeeModelArg {
+        fn mode(self) -> Option<FeeModelMode> {
+            match self {
+                FeeModelArg::Consensus => Some(FeeModelMode::ConsensusOnly),
+                FeeModelArg::ConsensusRelay => Some(FeeModelMode::ConsensusPlusRelayMin),
+                FeeModelArg::Legacy => None,
+            }
+        }
+
+        fn label(self) -> &'static str {
+            match self.mode() {
+                Some(m) => m.label(),
+                None => "legacy",
+            }
+        }
     }
 
     #[derive(Subcommand)]
@@ -57,6 +92,20 @@ mod cli {
             /// Maximum hops to analyze
             #[arg(short = 'n', long, default_value = "50")]
             max_hops: u32,
+
+            /// Fee model (#1695). Under consensus models `--wealth` and
+            /// `--principal` are in BTH.
+            #[arg(long, value_enum, default_value = "consensus")]
+            fee_model: FeeModelArg,
+
+            /// Principal washed, in BTH (consensus models; default = wealth)
+            #[arg(long)]
+            principal: Option<u64>,
+
+            /// Block height (consensus models; default = first epoch-1 block,
+            /// demurrage active). Use 1 for the bootstrap epoch.
+            #[arg(long)]
+            height: Option<u64>,
         },
 
         /// Analyze structuring attack
@@ -68,6 +117,19 @@ mod cli {
             /// Cluster wealth
             #[arg(short, long, default_value = "50000000")]
             wealth: u64,
+
+            /// Fee model (#1695). Under consensus models `--amount` and
+            /// `--wealth` are in BTH.
+            #[arg(long, value_enum, default_value = "consensus")]
+            fee_model: FeeModelArg,
+
+            /// Ring age of the coins in blocks (consensus models)
+            #[arg(long, default_value = "0")]
+            elapsed: u64,
+
+            /// Block height (consensus models; default = first epoch-1 block)
+            #[arg(long)]
+            height: Option<u64>,
         },
 
         /// Run a whale diffusion scenario
@@ -140,6 +202,10 @@ mod cli {
             /// Number of simulation rounds
             #[arg(short, long, default_value = "5000")]
             rounds: u64,
+
+            /// Fee model (#1695). Under consensus models 1 sim unit = 1 BTH.
+            #[arg(long, value_enum, default_value = "consensus")]
+            fee_model: FeeModelArg,
         },
 
         /// Scenario C: Mixer equilibrium with competing mixers
@@ -439,6 +505,15 @@ mod cli {
             /// Quick mode: single recommended config instead of full grid
             #[arg(long)]
             quick: bool,
+
+            /// Fee model (#1695). Sim unit = milliBTH (10^9 pico).
+            #[arg(long, value_enum, default_value = "consensus")]
+            fee_model: FeeModelArg,
+
+            /// Deterministic RNG seed (omit for system entropy, the
+            /// historical behavior)
+            #[arg(long)]
+            seed: Option<u64>,
         },
 
         /// Structural Gini-reduction experiment: tail emission routed to the
@@ -702,6 +777,10 @@ mod cli {
             /// Smoke mode: tiny horizon (days, not years) for end-to-end tests
             #[arg(long)]
             smoke: bool,
+
+            /// Fee model (#1695). Sim unit = milliBTH (10^9 pico).
+            #[arg(long, value_enum, default_value = "consensus")]
+            fee_model: FeeModelArg,
         },
 
         /// M2 (#605 / #626 §7) — EPOCH-HALVING DECAY variant: same cumulative
@@ -736,6 +815,10 @@ mod cli {
             /// Smoke mode: tiny horizon (days, not years) for end-to-end tests
             #[arg(long)]
             smoke: bool,
+
+            /// Fee model (#1695). Sim unit = milliBTH (10^9 pico).
+            #[arg(long, value_enum, default_value = "consensus")]
+            fee_model: FeeModelArg,
         },
     }
 
@@ -747,8 +830,30 @@ mod cli {
                 wealth,
                 decay,
                 max_hops,
-            } => run_wash_trading_analysis(wealth, decay, max_hops),
-            Command::Structuring { amount, wealth } => run_structuring_analysis(amount, wealth),
+                fee_model,
+                principal,
+                height,
+            } => match fee_model.mode() {
+                Some(mode) => run_wash_trading_consensus(
+                    wealth,
+                    principal.unwrap_or(wealth),
+                    decay,
+                    max_hops,
+                    height,
+                    mode,
+                ),
+                None => run_wash_trading_analysis(wealth, decay, max_hops),
+            },
+            Command::Structuring {
+                amount,
+                wealth,
+                fee_model,
+                elapsed,
+                height,
+            } => match fee_model.mode() {
+                Some(mode) => run_structuring_consensus(amount, wealth, elapsed, height, mode),
+                None => run_structuring_analysis(amount, wealth),
+            },
             Command::WhaleDiffusion {
                 wealth,
                 participants,
@@ -778,7 +883,8 @@ mod cli {
                 whale_wealth,
                 participants,
                 rounds,
-            } => run_scenario_whale(whale_wealth, participants, rounds),
+                fee_model,
+            } => run_scenario_whale(whale_wealth, participants, rounds, fee_model),
             Command::ScenarioMixers {
                 num_mixers,
                 whales,
@@ -898,7 +1004,9 @@ mod cli {
                 blocks,
                 txs_per_block,
                 quick,
-            } => run_lottery_sweep(blocks, txs_per_block, quick),
+                fee_model,
+                seed,
+            } => run_lottery_sweep(blocks, txs_per_block, quick, fee_model, seed),
             Command::LotteryExperiment {
                 blocks,
                 txs_per_block,
@@ -969,8 +1077,9 @@ mod cli {
                 gamed,
                 seed,
                 smoke,
+                fee_model,
             } => {
-                run_m2_cumulative(horizon_years, gamed, seed, smoke);
+                run_m2_cumulative(horizon_years, gamed, seed, smoke, fee_model);
             }
             Command::M2Decay {
                 horizon_years,
@@ -978,8 +1087,16 @@ mod cli {
                 gamed,
                 seed,
                 smoke,
+                fee_model,
             } => {
-                run_m2_decay(horizon_years, half_life_years, gamed, seed, smoke);
+                run_m2_decay(
+                    horizon_years,
+                    half_life_years,
+                    gamed,
+                    seed,
+                    smoke,
+                    fee_model,
+                );
             }
         }
     }
@@ -1117,6 +1234,119 @@ mod cli {
                 analysis.total_split_fees,
                 analysis.savings,
                 savings_pct
+            );
+        }
+    }
+
+    /// Wash-trading analysis under the shared consensus fee model (#1695).
+    fn run_wash_trading_consensus(
+        wealth_bth: u64,
+        principal_bth: u64,
+        decay_pct: f64,
+        max_hops: u32,
+        height: Option<u64>,
+        mode: FeeModelMode,
+    ) {
+        let params = ConsensusFeeParams::mainnet(mode);
+        let height = height.unwrap_or(params.first_demurrage_height());
+        let decay_rate = (decay_pct / 100.0 * TAG_WEIGHT_SCALE as f64) as u32;
+        let wealth = wealth_bth as u128 * PICO_PER_BTH;
+        let principal = (principal_bth as u128 * PICO_PER_BTH).min(u64::MAX as u128) as u64;
+        let bth = PICO_PER_BTH as f64;
+
+        println!("Wash Trading Analysis (fee model: {})", mode.label());
+        println!("=====================");
+        println!("Cluster wealth: {wealth_bth} BTH");
+        println!("Principal washed: {principal_bth} BTH");
+        println!("Decay rate: {decay_pct}% per hop");
+        println!(
+            "Height: {height} (demurrage {} bps/yr at max factor)\n",
+            params.demurrage_rate_bps(height)
+        );
+
+        println!(
+            "{:>5} {:>7} {:>7} {:>14} {:>16} {:>12} {:>14} {:>14} {:>12}",
+            "Hops",
+            "InitF",
+            "FinalF",
+            "HopBase(pico)",
+            "Downgrade(BTH)",
+            "Total%Princ",
+            "Savings/Tx(p)",
+            "BreakEven txs",
+            "BreakEven yr"
+        );
+        for hops in [5, 10, 15, 20, 30, 40, 50]
+            .iter()
+            .filter(|&&h| h <= max_hops)
+        {
+            let a = analyze_wash_trading_consensus(
+                wealth, principal, decay_rate, *hops, height, &params,
+            );
+            println!(
+                "{:>5} {:>6.3}x {:>6.3}x {:>14} {:>16.4} {:>11.6}% {:>14} {:>14} {:>12}",
+                hops,
+                a.initial_factor as f64 / 1000.0,
+                a.final_factor as f64 / 1000.0,
+                a.hop_base_fees_pico,
+                a.hop_demurrage_pico as f64 / bth,
+                a.total_fees_fraction * 100.0,
+                a.fee_savings_per_tx_pico,
+                a.break_even_transactions
+                    .map(|n| format!("{n}"))
+                    .unwrap_or_else(|| "Never".into()),
+                a.break_even_years
+                    .map(|y| format!("{y:.2}"))
+                    .unwrap_or_else(|| "Never".into()),
+            );
+        }
+    }
+
+    /// Structuring analysis under the shared consensus fee model (#1695).
+    fn run_structuring_consensus(
+        amount_bth: u64,
+        wealth_bth: u64,
+        elapsed: u64,
+        height: Option<u64>,
+        mode: FeeModelMode,
+    ) {
+        let params = ConsensusFeeParams::mainnet(mode);
+        let height = height.unwrap_or(params.first_demurrage_height());
+        let amount = (amount_bth as u128 * PICO_PER_BTH).min(u64::MAX as u128) as u64;
+        let wealth = wealth_bth as u128 * PICO_PER_BTH;
+
+        println!("Structuring Attack Analysis (fee model: {})", mode.label());
+        println!("===========================");
+        println!("Transfer amount: {amount_bth} BTH");
+        println!("Cluster wealth: {wealth_bth} BTH");
+        println!("Ring age: {elapsed} blocks, height {height}\n");
+
+        println!(
+            "{:>7} {:>18} {:>20} {:>20} {:>12} {:>12}",
+            "Splits",
+            "Single (pico)",
+            "Split txs (pico)",
+            "1 tx N outs (pico)",
+            "Save% txs",
+            "Save% outs"
+        );
+        for splits in [1, 2, 5, 10, 20, 50, 100] {
+            let a = analyze_structuring_consensus(amount, wealth, splits, elapsed, height, &params);
+            let pct = |sv: i128| {
+                if a.single_fee_pico > 0 {
+                    sv as f64 / a.single_fee_pico as f64 * 100.0
+                } else {
+                    0.0
+                }
+            };
+            println!(
+                "{:>7} {:>18} {:>20} {:>20} {:>11.2}% {:>11.2}%",
+                splits,
+                a.single_fee_pico,
+                a.split_txs_fee_pico,
+                a.split_outputs_fee_pico,
+                pct(a.savings_separate_txs_pico),
+                pct(a.savings_one_tx_pico)
             );
         }
     }
@@ -1480,7 +1710,12 @@ mod cli {
         );
     }
 
-    fn run_scenario_whale(whale_wealth: u64, num_participants: usize, rounds: u64) {
+    fn run_scenario_whale(
+        whale_wealth: u64,
+        num_participants: usize,
+        rounds: u64,
+        fee_model: FeeModelArg,
+    ) {
         use bth_cluster_tax::simulation::{
             agents::whale::WhaleStrategy, run_simulation, Agent, AgentId, MerchantAgent,
             RetailUserAgent, SimulationConfig, WhaleAgent,
@@ -1490,7 +1725,16 @@ mod cli {
         println!("==============================================");
         println!("Whale wealth: {whale_wealth}");
         println!("Participants: {num_participants}");
-        println!("Rounds: {rounds}\n");
+        println!("Rounds: {rounds}");
+        println!(
+            "Fee model: {}{}\n",
+            fee_model.label(),
+            if fee_model.mode().is_some() {
+                " (1 unit = 1 BTH; whale fees in picocredits)"
+            } else {
+                ""
+            }
+        );
 
         let strategies = [
             ("Passive", WhaleStrategy::Passive),
@@ -1508,7 +1752,7 @@ mod cli {
             "", "", "", "", ""
         );
 
-        let mut baseline_fees = 0u64;
+        let mut baseline_fees = 0u128;
 
         for (name, strategy) in strategies {
             let mut agents: Vec<Box<dyn Agent>> = Vec::new();
@@ -1551,18 +1795,32 @@ mod cli {
                 rounds,
                 snapshot_frequency: rounds / 10,
                 verbose: false,
+                consensus_fee: fee_model.mode().map(|mode| {
+                    SimConsensusFee::new(ConsensusFeeParams::mainnet(mode), PICO_PER_BTH)
+                }),
                 ..Default::default()
             };
 
             let result = run_simulation(&mut agents, &config);
             let summary = result.metrics.summary();
 
-            let whale_fees = result
-                .metrics
-                .agent_fees
-                .get(&whale_id)
-                .copied()
-                .unwrap_or(0);
+            // Consensus models report exact picocredits (fees are far below
+            // one BTH unit); legacy reports sim units.
+            let whale_fees: u128 = if fee_model.mode().is_some() {
+                result.agent_fees_pico.get(&whale_id).copied().unwrap_or(0)
+            } else {
+                result
+                    .metrics
+                    .agent_fees
+                    .get(&whale_id)
+                    .copied()
+                    .unwrap_or(0) as u128
+            };
+            let total_fees: u128 = if fee_model.mode().is_some() {
+                result.total_fees_pico
+            } else {
+                summary.total_fees as u128
+            };
 
             if name == "Passive" {
                 baseline_fees = whale_fees;
@@ -1576,7 +1834,7 @@ mod cli {
 
             println!(
                 "{:<15} {:>12.4} {:>12} {:>12} {:>14.1}%",
-                name, summary.final_gini, summary.total_fees, whale_fees, effectiveness
+                name, summary.final_gini, total_fees, whale_fees, effectiveness
             );
         }
 
@@ -3591,7 +3849,13 @@ mod cli {
     /// Engine dynamics depend on (decay, threshold); the structure-fee penalty
     /// is applied analytically to attack cost since the tx loop models fixed
     /// 2-output transactions.
-    fn run_lottery_sweep(blocks: u64, txs_per_block: u32, quick: bool) {
+    fn run_lottery_sweep(
+        blocks: u64,
+        txs_per_block: u32,
+        quick: bool,
+        fee_model: FeeModelArg,
+        seed: Option<u64>,
+    ) {
         use bth_cluster_tax::simulation::lottery::{
             LotteryConfig, LotterySimulation, SelectionMode, SybilStrategy, TransactionModel,
         };
@@ -3633,7 +3897,16 @@ mod cli {
         // Population: 5% poor (80 owners), 25% middle (30), 60% honest whales
         // (8), 5% parking attacker, 5% Sybil. Initial Gini ~0.72.
         let build = |config: LotteryConfig| -> (LotterySimulation, u64, u64, Vec<u64>) {
-            let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
+            let mut sim = match seed {
+                Some(seed) => {
+                    LotterySimulation::new_seeded(config, FeeCurve::default_params(), seed)
+                }
+                None => LotterySimulation::new(config, FeeCurve::default_params()),
+            };
+            if let Some(mode) = fee_model.mode() {
+                // Sim unit = milliBTH = 10^9 picocredits.
+                sim = sim.with_consensus_fee(mode, PICO_PER_BTH / BTH as u128);
+            }
             for _ in 0..80 {
                 sim.add_owner(total_wealth / 20 / 80, SybilStrategy::Normal);
             }
@@ -3669,6 +3942,11 @@ mod cli {
             blocks / 4_320,
             txs_per_block
         );
+        println!("Fee model: {}", fee_model.label());
+        match seed {
+            Some(seed) => println!("Seed: {seed}"),
+            None => println!("Seed: none (system entropy)"),
+        }
         println!();
 
         // Baseline: identical population and fees, but everything burned
@@ -3784,8 +4062,36 @@ mod cli {
                 // vs the one-time split cost under this structure-fee penalty.
                 let mut cfg = make_config(run.decay, run.threshold_bth);
                 cfg.split_penalty_multiplier = penalty;
-                let split_factor = cfg.structure_factor(1, PARKER_SPLIT);
-                let split_cost = cfg.base_fee as f64 * run.parker_cluster_factor * split_factor;
+                let split_cost = match fee_model.mode() {
+                    // #1695: the node prices a 1-in/N-out split at
+                    // size × factor × min(N,10)² (no structure penalty), in
+                    // milliBTH units.
+                    Some(mode) => {
+                        let factor = (run.parker_cluster_factor * 1000.0) as u64;
+                        let fee_pico = bth_cluster_tax::consensus_fee_model(
+                            &bth_cluster_tax::ConsensusFeeInputs {
+                                size: bth_cluster_tax::consensus_tx_size_bytes(
+                                    1,
+                                    PARKER_SPLIT as usize,
+                                    0,
+                                ),
+                                n_out: PARKER_SPLIT as usize,
+                                n_memo: 0,
+                                claimed: bth_cluster_tax::ClaimedClass::Factor(factor),
+                                floor: factor,
+                                elapsed: 0,
+                                height: ConsensusFeeParams::mainnet(mode).first_demurrage_height(),
+                                output_sum: 0,
+                            },
+                            &ConsensusFeeParams::mainnet(mode),
+                        );
+                        fee_pico as f64 / (PICO_PER_BTH / BTH as u128) as f64
+                    }
+                    None => {
+                        let split_factor = cfg.structure_factor(1, PARKER_SPLIT);
+                        cfg.base_fee as f64 * run.parker_cluster_factor * split_factor
+                    }
+                };
                 let parker_wealth = (total_wealth * 5 / 100) as f64;
                 let extra_winnings = run.parker_winnings as f64 - run.honest_rate * parker_wealth;
                 let parking_roi = if split_cost > 0.0 {
@@ -4250,9 +4556,16 @@ mod cli {
 
     /// Run set 1: recalibrated-cumulative long-horizon run. Emits Δgini vs the
     /// >0.05 criterion plus merchant-mispricing and whale-progressivity health.
-    fn run_m2_cumulative(horizon_years: u64, gamed: bool, seed: u64, smoke: bool) {
+    fn run_m2_cumulative(
+        horizon_years: u64,
+        gamed: bool,
+        seed: u64,
+        smoke: bool,
+        fee_model: FeeModelArg,
+    ) {
         use bth_cluster_tax::simulation::m2::{run_m2, M2Params};
         println!("M2 RECALIBRATED-CUMULATIVE (real log-domain curve, #626 §7 run set 1)");
+        println!("fee model: {}", fee_model.label());
         println!(
             "horizon={}yr  equilibrium={}  seed={}{}",
             horizon_years,
@@ -4267,6 +4580,7 @@ mod cli {
             gamed,
             seed,
             smoke,
+            fee_model: fee_model.mode(),
         });
         println!(
             "gini0={:.4}  giniF={:.4}  dGini={:+.4}  (criterion >0.05: {})",
@@ -4290,9 +4604,17 @@ mod cli {
     /// Run set 2: epoch-halving decay variant. Emits Δgini plus the
     /// wash-trading evasion and privacy ring-identification metrics from
     /// experiments/ANALYSIS.md prior art.
-    fn run_m2_decay(horizon_years: u64, half_life_years: u64, gamed: bool, seed: u64, smoke: bool) {
+    fn run_m2_decay(
+        horizon_years: u64,
+        half_life_years: u64,
+        gamed: bool,
+        seed: u64,
+        smoke: bool,
+        fee_model: FeeModelArg,
+    ) {
         use bth_cluster_tax::simulation::m2::{run_m2, M2Params};
         println!("M2 EPOCH-HALVING DECAY (real log-domain curve, #626 §7 run set 2)");
+        println!("fee model: {}", fee_model.label());
         println!(
             "horizon={}yr  half_life={}yr  equilibrium={}  seed={}{}",
             horizon_years,
@@ -4308,6 +4630,7 @@ mod cli {
             gamed,
             seed,
             smoke,
+            fee_model: fee_model.mode(),
         });
         let evasion = r.wash_evasion_pct.unwrap_or(0.0);
         let id_rate = r.ring_id_rate.unwrap_or(0.0);
