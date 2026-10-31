@@ -132,7 +132,7 @@ mc-oblivious-aes-gcm = { version = "0.10", default-features = false }
 mc-oblivious-traits = { version = "2", features = ["no_asm_insecure"] }
 mc-rand = "1"
 merlin = { version = "3", default-features = false }
-mockall = "0.12"
+mockall = "0.15"
 more-asserts = "0.3"
 num_cpus = "1"
 once_cell = { version = "1", default-features = false }
