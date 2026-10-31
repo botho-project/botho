@@ -48,7 +48,3 @@ theorem satAdd_eq_add {cap a b : Nat} (h : a + b ≤ cap) :
   omega
 
 end Botho
-
--- CI TEST (#1705): deliberate sorry; reverted in the next commit.
-theorem Botho.ci_test_sorry : 1 = 2 := by
-  sorry
