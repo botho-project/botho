@@ -24,17 +24,17 @@ sys.path.insert(0, str(_HERE))
 
 from _project_migrate_skill_lib import orchestrate  # noqa: E402
 from _fixtures import (  # noqa: E402
-    build_aldus_shaped_deck,
+    build_beacon_shaped_deck,
     build_mixed_memo_deck_proposal,
 )
 
 run = orchestrate.run
 
 
-class TestAldusShapedDeckApply(unittest.TestCase):
+class TestBeaconShapedDeckApply(unittest.TestCase):
     def test_apply_nests_version_dirs(self) -> None:
         with TemporaryDirectory() as td:
-            project = build_aldus_shaped_deck(Path(td))
+            project = build_beacon_shaped_deck(Path(td))
             result = run(project, apply=True)
             self.assertTrue(result.success)
             thread_root = project / "series-a-deck"
@@ -50,7 +50,7 @@ class TestAldusShapedDeckApply(unittest.TestCase):
         """BRIEF / refs / assets stay in place; only version dirs move in
         (the studio hand-fix 2cf3f37 reference shape)."""
         with TemporaryDirectory() as td:
-            project = build_aldus_shaped_deck(Path(td))
+            project = build_beacon_shaped_deck(Path(td))
             run(project, apply=True)
             thread_root = project / "series-a-deck"
             self.assertTrue((thread_root / "BRIEF.md").is_file())
@@ -61,7 +61,7 @@ class TestAldusShapedDeckApply(unittest.TestCase):
 
     def test_critic_siblings_moved(self) -> None:
         with TemporaryDirectory() as td:
-            project = build_aldus_shaped_deck(Path(td))
+            project = build_beacon_shaped_deck(Path(td))
             run(project, apply=True)
             thread_root = project / "series-a-deck"
             self.assertTrue(
@@ -73,7 +73,7 @@ class TestAldusShapedDeckApply(unittest.TestCase):
 
     def test_anvil_json_merged_and_deleted(self) -> None:
         with TemporaryDirectory() as td:
-            project = build_aldus_shaped_deck(Path(td))
+            project = build_beacon_shaped_deck(Path(td))
             run(project, apply=True)
             self.assertFalse(
                 (project / "series-a-deck" / ".anvil.json").exists()
@@ -93,10 +93,10 @@ class TestMixedProjectApply(unittest.TestCase):
 
             # Memo: nested + slug-echo body.
             self.assertTrue(
-                (project / "aldus" / "aldus.1" / "aldus.md").is_file()
+                (project / "beacon" / "beacon.1" / "beacon.md").is_file()
             )
             self.assertFalse(
-                (project / "aldus" / "aldus.1" / "memo.md").exists()
+                (project / "beacon" / "beacon.1" / "memo.md").exists()
             )
 
             # Deck: nested + retained body.
@@ -157,7 +157,7 @@ class TestMixedProjectApply(unittest.TestCase):
                 ArtifactType.PROPOSAL,
             )
             self.assertEqual(
-                by_slug["aldus"].artifact_type,
+                by_slug["beacon"].artifact_type,
                 ArtifactType.INVESTMENT_MEMO,
             )
 
@@ -173,7 +173,7 @@ class TestMixedProjectApply(unittest.TestCase):
             project = build_mixed_memo_deck_proposal(Path(td))
             run(project, apply=True)
             cases = {
-                "aldus": project / "aldus" / "aldus.1" / "aldus.md",
+                "beacon": project / "beacon" / "beacon.1" / "beacon.md",
                 "series-a-deck": (
                     project / "series-a-deck" / "series-a-deck.1" / "deck.md"
                 ),

@@ -25,7 +25,7 @@ documents:
 # Botho from the Basics — project brief
 
 A ground-up teaching companion to the Botho whitepaper (authored via
-`anvil:pub`). The whitepaper is a terse, citable, spec-style document for
+`anvil:paper`). The whitepaper is a terse, citable, spec-style document for
 cryptographers, auditors, and implementers. This companion teaches the same
 primitives — stealth addresses, ring signatures / CLSAG, Pedersen commitments +
 Bulletproofs, and the novel-to-Botho pieces (hybrid PQ stealth addresses, the

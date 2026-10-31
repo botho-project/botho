@@ -78,6 +78,8 @@ Preset key naming the visual register the generative pipeline should target (e.g
 
 Marp theme name (the `@theme` marker of a registered theme CSS) the drafter copies into the generated `deck.md` frontmatter `theme:` line (see `deck-draft.md` step 7). When absent, the drafter uses the shipped default (`theme: anvil-deck`) — existing briefs behave exactly as before. Setting the key only names the theme; the consumer must still register the CSS at `.anvil/skills/deck/templates/<their-theme>.css` and pass it via `--theme-set` on the render line. The porting recipe for brand themes (e.g., from a LaTeX beamer `.sty`) lives at `anvil/lib/snippets/brand-theme-porting.md`.
 
+**How `deck-review`'s overflow lint learns a consumer theme's geometry (issue #1150).** The `slide-content-overflow` capacity model (`anvil/lib/marp_lint.py`) is calibrated against the *shipped* `anvil-deck` theme's padding/font/line-height — a registered consumer theme with different geometry gets false-positive (or mis-calibrated) findings unless it states its own. Declare a `/* @anvil-capacity ... */` comment block in the registered theme CSS (see `brand-theme-porting.md` §"Declaring capacity geometry"); `deck-review.md` step 5b reads it automatically whenever `deck.md`'s `theme:` names a non-default theme. No contract block means the shipped default geometry is used — same behavior as a shipped-theme deck, not an error.
+
 Required sections:
 
 1. **Problem** — One paragraph. What hurts, for whom, how much. Specific not general.

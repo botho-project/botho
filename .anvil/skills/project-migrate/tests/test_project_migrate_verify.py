@@ -23,7 +23,7 @@ sys.path.insert(0, str(_HERE))
 # Skill-local imports.
 from _project_migrate_skill_lib import orchestrate, verify  # noqa: E402
 from _fixtures import (  # noqa: E402
-    build_bessemer_shaped,
+    build_foundry_shaped,
     build_fully_migrated,
     build_post_283_anvil_json,
     build_pre_283_classic,
@@ -70,9 +70,9 @@ class TestVerifyAfterApply(unittest.TestCase):
             verify_result = verify_migration(project)
             self.assertTrue(verify_result.ok)
 
-    def test_bessemer_apply_then_verify_ok(self) -> None:
+    def test_foundry_apply_then_verify_ok(self) -> None:
         with TemporaryDirectory() as td:
-            project = build_bessemer_shaped(Path(td))
+            project = build_foundry_shaped(Path(td))
             result = run(project, apply=True)
             self.assertTrue(result.success)
             self.assertTrue(result.verify_result.ok)
@@ -148,7 +148,7 @@ class TestDiscoveryRoundTrip(unittest.TestCase):
             result = run(project, apply=True)
             self.assertTrue(result.success)
             self.assertTrue(result.verify_result.ok)
-            for slug in ("aldus", "series-a-deck", "gossamer-lan"):
+            for slug in ("beacon", "series-a-deck", "gossamer-lan"):
                 discovery = discover_thread_root(project / slug)
                 self.assertIsNotNone(discovery)
                 self.assertEqual(discovery.slug, slug)
@@ -156,7 +156,7 @@ class TestDiscoveryRoundTrip(unittest.TestCase):
             self.assertIsNotNone(brief)
             brief_slugs = {d.slug for d in brief.documents}
             self.assertEqual(
-                brief_slugs, {"aldus", "series-a-deck", "gossamer-lan"}
+                brief_slugs, {"beacon", "series-a-deck", "gossamer-lan"}
             )
             # The deck thread's paired iteration-cap override survived
             # the merge AND the strict BRIEF parser.

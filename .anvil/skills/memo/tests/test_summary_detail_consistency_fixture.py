@@ -2,8 +2,8 @@
 
 Phase A of issue #245 ships the summary-detail consistency back-check as
 reviewer-prose-only (no Python detector module). The fixture under
-``tests/fixtures/summary_detail_consistency/raytheon_gen_attribution/``
-preserves the verbatim Studio canary worked example (the Raytheon-pitch
+``tests/fixtures/summary_detail_consistency/northwind_gen_attribution/``
+preserves the verbatim Studio canary worked example (the Northwind-pitch
 memo.3 Gen-2/Gen-3 attribution swap) so that:
 
 1. The expected ``_summary.md.summary_detail_consistency`` block shape per
@@ -39,7 +39,7 @@ _FIXTURE_DIR = (
     _HERE
     / "fixtures"
     / "summary_detail_consistency"
-    / "raytheon_gen_attribution"
+    / "northwind_gen_attribution"
 )
 
 # Per AC6: the verdict tags and severity vocabularies are part of the
@@ -228,10 +228,10 @@ class TestExpectedFindingsParses(unittest.TestCase):
         self.assertEqual(total, block["findings_count"])
 
 
-class TestRaytheonCanaryFindings(unittest.TestCase):
+class TestNorthwindCanaryFindings(unittest.TestCase):
     """AC9 — the fixture encodes the Studio canary failure mode verbatim.
 
-    The Raytheon-pitch memo.3 catch is the worked-example anchor for the
+    The Northwind-pitch memo.3 catch is the worked-example anchor for the
     back-check. These tests pin the specific shape — the CONTRADICTED /
     critical finding on the Gen-2/Gen-3 attribution swap — so that a
     future change to ``expected_findings.json`` cannot silently drift

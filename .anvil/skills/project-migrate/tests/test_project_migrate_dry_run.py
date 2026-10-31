@@ -11,34 +11,24 @@ Acceptance criterion: dry-run never mutates (verified by snapshot-and-diff).
 
 from __future__ import annotations
 
-import hashlib
 import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from anvil.lib.testing import tree_hash as _tree_hash
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
 from _project_migrate_skill_lib import orchestrate  # noqa: E402
 from _fixtures import (  # noqa: E402
-    build_bessemer_shaped,
+    build_foundry_shaped,
     build_fully_migrated,
     build_post_283_anvil_json,
     build_pre_283_classic,
 )
 
 run = orchestrate.run
-
-
-def _tree_hash(project: Path) -> dict:
-    """Return ``{relative_path: sha256_hex}`` for every file in ``project``."""
-    out: dict = {}
-    for path in sorted(project.rglob("*")):
-        if path.is_file():
-            rel = str(path.relative_to(project))
-            out[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return out
 
 
 class TestDryRunNoMutations(unittest.TestCase):
@@ -77,9 +67,9 @@ class TestDryRunNoMutations(unittest.TestCase):
             after = _tree_hash(project)
             self.assertEqual(before, after)
 
-    def test_bessemer_dry_run_byte_identical(self) -> None:
+    def test_foundry_dry_run_byte_identical(self) -> None:
         with TemporaryDirectory() as td:
-            project = build_bessemer_shaped(Path(td))
+            project = build_foundry_shaped(Path(td))
             before = _tree_hash(project)
             result = run(project, apply=False)
             self.assertTrue(result.success)
@@ -87,7 +77,7 @@ class TestDryRunNoMutations(unittest.TestCase):
             self.assertEqual(
                 before,
                 after,
-                "dry-run mutated the bessemer fixture",
+                "dry-run mutated the foundry fixture",
             )
 
     def test_report_mode_byte_identical(self) -> None:

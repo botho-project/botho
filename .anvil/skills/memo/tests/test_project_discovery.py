@@ -195,7 +195,7 @@ class TestProjectBriefLayout(_TmpRootBase):
     """A project BRIEF with a non-empty documents: list triggers project-brief layout."""
 
     def _make_project(self) -> Path:
-        project = self.root / "brains-for-robots"
+        project = self.root / "smart-actuators"
         _write_project_brief(
             project,
             textwrap.dedent(
@@ -422,7 +422,7 @@ class TestProjectBriefFixture(unittest.TestCase):
 
     def test_project_brief_fixture_resolves(self) -> None:
         """Each listed slug in the project BRIEF fixture resolves to project-brief."""
-        project = _FIXTURES / "brains-for-robots"
+        project = _FIXTURES / "smart-actuators"
         if not project.is_dir():
             self.skipTest(f"missing project fixture: {project}")
         # has_project_brief recognizes the project root.

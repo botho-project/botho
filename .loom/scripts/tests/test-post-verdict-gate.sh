@@ -156,6 +156,8 @@ REAL_DAEMON="${LOOM_DAEMON_BIN:-loom-daemon}"
 cat > "$STUB_DIR/daemon" <<WRAP
 #!/usr/bin/env bash
 [[ "\${1:-} \${2:-}" == "forge wait-checks" ]] && { echo "LOOM-CHECKS-GREEN \$(cat "$STUB_DIR/cur-sha")"; exit 0; }
+# #13055: approvals are gated on a live Judge lease; the caller holds it here.
+[[ "\${1:-} \${2:-} \${3:-}" == "lease pr check" ]] && { echo "PR_LEASE_STATE=held-self"; exit 0; }
 exec "$REAL_DAEMON" "\$@"
 WRAP
 chmod +x "$STUB_DIR/daemon"
@@ -300,6 +302,7 @@ cat > "$STUB_DIR/old-daemon" <<OLD
 case "\${1:-} \${2:-}" in
   "--version "*) echo "loom-daemon 0.19.870 (pre-10581)"; exit 0 ;;
   "forge wait-checks") echo "LOOM-CHECKS-GREEN \$(cat "$STUB_DIR/cur-sha")"; exit 0 ;;
+  "lease pr") echo "PR_LEASE_STATE=held-self"; exit 0 ;;  # #13055: the caller holds the Judge lease
   "forge verdict-"*) printf "error: unrecognized subcommand '%s'\n\nUsage: loom-daemon forge <COMMAND>\n" "\$2" >&2; exit 2 ;;
 esac
 exec "$REAL_DAEMON" "\$@"
@@ -423,6 +426,19 @@ check "operator comment: nothing posted" "" "$POSTED"
 state "$OP_COMMENT" loom:review-requested loom:reviewing
 pv 12614 changes-requested "$HEAD" --body "Changes requested: see the spec." --review-started "$PAST_T"
 check "changes-requested is never refused by it" 0 "$RC"
+
+# #13134: --acknowledged-comment is forwarded and excuses only the listed id.
+state "$OP_COMMENT" loom:review-requested loom:reviewing
+pv 12614 approved "$HEAD" --body "Approved: covered by the new tests." --review-started "$PAST_T" --acknowledged-comment 4242
+check "acknowledged comment id: exit 0" 0 "$RC"
+check "acknowledged comment id: posted" 12614 "$POSTED"
+state "$OP_COMMENT" loom:review-requested loom:reviewing
+pv 12614 approved "$HEAD" --body "Approved: covered by the new tests." --review-started "$PAST_T" --acknowledged-comment 9999
+check "acknowledging a different id still refuses: exit 7" 7 "$RC"
+contains "refusal names the remedy flag" "$OUT" "--acknowledged-comment"
+state "$OP_COMMENT" loom:review-requested loom:reviewing
+pv 12614 approved "$HEAD" --body "Approved: covered by the new tests." --review-started "$PAST_T" --acknowledged-comment 4242 --issue-body-sha "50=$(printf %s 'stale body' | sha256sum | cut -d' ' -f1)"
+check "acknowledged id never excuses a body-hash mismatch: exit 7" 7 "$RC"
 
 # #12714: the start comes from the dispatch, so omitting or lying about the flag cannot hide a comment.
 DISPATCH_T="$(($(date +%s) - 3600))"

@@ -8,25 +8,15 @@ step writes, so the preview equals the eventual write byte-for-byte.
 
 from __future__ import annotations
 
-import hashlib
 
 from _fixtures import (
     build_loose_file_in_existing_project,
     build_loose_file_no_project,
 )
 from _project_migrate_skill_lib import orchestrate
+from anvil.lib.testing import tree_hash as _tree_digest
 
 run_enroll = orchestrate.run_enroll
-
-
-def _tree_digest(root) -> str:
-    """Stable digest of every path + file content under ``root``."""
-    h = hashlib.sha256()
-    for path in sorted(root.rglob("*")):
-        h.update(str(path.relative_to(root)).encode("utf-8"))
-        if path.is_file():
-            h.update(path.read_bytes())
-    return h.hexdigest()
 
 
 class TestEnrollDryRun:

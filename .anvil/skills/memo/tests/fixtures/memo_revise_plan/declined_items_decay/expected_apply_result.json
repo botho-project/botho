@@ -1,7 +1,7 @@
 {
   "_comment": "The declined_items_decay fixture exercises all three accepted rejection shapes (same-line comment, row deletion, priority-cell replacement) AND preserves the studio canary memo.3 → memo.4 case from issue #243.",
   "apply_should_succeed": true,
-  "version_dir_created": "raytheon-pitch.4/",
+  "version_dir_created": "northwind-pitch.4/",
   "memo_md_written": true,
   "changelog_md_written": true,
   "changelog_row_count": 5,

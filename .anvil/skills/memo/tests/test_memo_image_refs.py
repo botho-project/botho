@@ -50,7 +50,7 @@ _FIXTURES = _HERE / "fixtures" / "memo_image_refs"
 
 
 class TestCanaryFootgun(unittest.TestCase):
-    """AC2 — Bessemer v11 ``cp -r`` footgun.
+    """AC2 — Foundry v11 ``cp -r`` footgun.
 
     The body markdown (``canary_footgun.md`` per the slug-echo convention
     of #295) says ``![x](exhibits/fig_a.png)`` and ``fig_a.png`` is at the

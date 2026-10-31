@@ -32,6 +32,7 @@ If any such heading is present AND the section has more than 3 lines of content,
 - **Brief** (`<thread>/BRIEF.md`): freeform prose, optionally with YAML frontmatter. Recognized frontmatter keys (all optional):
   - `audience` — who is in the room (e.g., "ML researchers, PhD level, familiar with transformers but not diffusion models").
   - `time_slot_minutes` — declared slot length (e.g., `45`). Used by `slides-rehearse` for the time flag.
+  - `talk_genre` — `technical-lecture` (default when absent or unrecognized) or `maker-story`. Calibrates how critics read dims 2, 3, and 5 in judgment prose only; weights are unchanged (see `rubric.md` §"Talk genre calibration").
   - `venue` — conference / class / meeting name. Influences voice (formal vs. casual) and Q&A expectations.
   - `learning_goals` — what the audience should be able to do or recall after the talk.
   - `prior_knowledge` — what the audience already knows. Critical for jargon-without-definition checks.

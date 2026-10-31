@@ -35,9 +35,12 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from anvil.lib.render import (  # noqa: E402
+    MMDC_LAUNCH_REMEDIATION,
     MMDC_REMEDIATION,
     check_mmdc_available,
 )
+
+_DECK_ROOT = _HERE.parent
 
 
 class TestCheckMmdcAvailable(unittest.TestCase):
@@ -89,6 +92,53 @@ class TestMmdcRemediation(unittest.TestCase):
         # The CI/container --no-sandbox guidance.
         self.assertIn("--puppeteerConfigFile", MMDC_REMEDIATION)
         self.assertIn("--no-sandbox", MMDC_REMEDIATION)
+
+
+class TestDeckFiguresDocumentsLaunchabilityProbe(unittest.TestCase):
+    """``deck-figures.md`` must wire the launchability probe, not just PATH.
+
+    Mirrors the coverage primer already carries
+    (``test_primer_command_coverage.py::
+    test_figures_documents_mmdc_launchability_probe``) — the deck/slides
+    analog was the gap fixed in issue #951.
+    """
+
+    def _doc(self) -> str:
+        return (_DECK_ROOT / "commands" / "deck-figures.md").read_text(
+            encoding="utf-8"
+        )
+
+    def test_doc_references_launchability_check(self) -> None:
+        text = self._doc()
+        self.assertIn("check_mmdc_launchable", text)
+        self.assertIn("MMDC_LAUNCH_REMEDIATION", text)
+
+    def test_doc_still_references_path_presence_check(self) -> None:
+        """The launchability probe augments the PATH check, never replaces it."""
+        self.assertIn("check_mmdc_available", self._doc())
+
+    def test_doc_preserves_graceful_degrade_on_launch_failure(self) -> None:
+        """A launch failure writes the same ``-FAILED.md`` stub, never aborts."""
+        text = self._doc()
+        launch_section = text[text.index("Launchability, not just presence") :]
+        self.assertIn("-FAILED.md", launch_section)
+        self.assertIn("never abort", launch_section)
+
+    def test_doc_keeps_zero_diagram_decks_out_of_the_probe(self) -> None:
+        text = self._doc()
+        launch_section = text[text.index("Launchability, not just presence") :]
+        self.assertIn("zero diagrams", launch_section)
+
+
+class TestMmdcLaunchRemediation(unittest.TestCase):
+    """``MMDC_LAUNCH_REMEDIATION`` names the two fixes the doc promises."""
+
+    def test_remediation_names_both_fixes(self) -> None:
+        self.assertIn(
+            "npx puppeteer browsers install chrome", MMDC_LAUNCH_REMEDIATION
+        )
+        self.assertIn("--puppeteerConfigFile", MMDC_LAUNCH_REMEDIATION)
+        self.assertIn("executablePath", MMDC_LAUNCH_REMEDIATION)
 
 
 if __name__ == "__main__":  # pragma: no cover

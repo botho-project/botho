@@ -60,7 +60,7 @@ thread root (e.g., `<project>/<slug>/`), a project root (e.g.,
   `outside --skill=<name> scope (inferred skill: None)`. The new
   force-set behavior unblocks the canary's deck threads (and any
   other skill whose body filename is not slug-echoed, e.g.,
-  `aldus/aldus.4/deck.md` instead of `aldus/aldus.4/aldus.md`) where
+  `beacon/beacon.4/deck.md` instead of `beacon/beacon.4/beacon.md`) where
   the operator knows the skill but the heuristic cannot infer it.
 
 ### 1. Detect

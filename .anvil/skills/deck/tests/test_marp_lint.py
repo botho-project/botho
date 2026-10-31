@@ -650,6 +650,251 @@ size: 16:9
         )
 
 
+class TestSplitPanelTextColumnFraction(unittest.TestCase):
+    """Unit tests for the ``_estimate_text_column_fraction`` helper (issue #1321).
+
+    Pure function on a slide's raw source — testable without constructing a
+    full slide or running the whole lint.
+    """
+
+    def test_no_bg_directive_is_full_width(self) -> None:
+        from anvil.lib.marp_lint import _estimate_text_column_fraction
+        est = _estimate_text_column_fraction("## Heading\n\nSome body text.\n")
+        self.assertEqual(est.fraction, 1.0)
+        self.assertTrue(est.determinate)
+
+    def test_bg_right_with_percent(self) -> None:
+        from anvil.lib.marp_lint import _estimate_text_column_fraction
+        est = _estimate_text_column_fraction("![bg right:32%](figures/x.png)")
+        self.assertAlmostEqual(est.fraction, 0.68, places=6)
+        self.assertTrue(est.determinate)
+
+    def test_bg_left_with_percent(self) -> None:
+        from anvil.lib.marp_lint import _estimate_text_column_fraction
+        est = _estimate_text_column_fraction("![bg left:40%](figures/x.png)")
+        self.assertAlmostEqual(est.fraction, 0.60, places=6)
+        self.assertTrue(est.determinate)
+
+    def test_bg_right_no_percent_defaults_to_marp_50_percent_split(self) -> None:
+        """``bg right`` with no ``:N%`` is Marp's documented 50% default."""
+        from anvil.lib.marp_lint import _estimate_text_column_fraction
+        est = _estimate_text_column_fraction("![bg right](figures/x.png)")
+        self.assertAlmostEqual(est.fraction, 0.5, places=6)
+        self.assertTrue(est.determinate)
+
+    def test_bare_bg_is_full_width(self) -> None:
+        """Full-bleed ``bg`` (no direction) does not narrow the text column."""
+        from anvil.lib.marp_lint import _estimate_text_column_fraction
+        est = _estimate_text_column_fraction("![bg](figures/x.png)")
+        self.assertEqual(est.fraction, 1.0)
+        self.assertTrue(est.determinate)
+
+    def test_bg_vertical_is_full_width(self) -> None:
+        """``bg vertical:N%`` (top/bottom split) does not narrow the column."""
+        from anvil.lib.marp_lint import _estimate_text_column_fraction
+        est = _estimate_text_column_fraction("![bg vertical:30%](figures/x.png)")
+        self.assertEqual(est.fraction, 1.0)
+        self.assertTrue(est.determinate)
+
+    def test_out_of_range_percent_is_indeterminate(self) -> None:
+        from anvil.lib.marp_lint import _estimate_text_column_fraction
+        est = _estimate_text_column_fraction("![bg right:150%](figures/x.png)")
+        self.assertFalse(est.determinate)
+        # Callers fall back to full width when indeterminate, but must
+        # surface the uncertainty separately — see the lint_source tests.
+        self.assertEqual(est.fraction, 1.0)
+
+    def test_combined_splits_at_100_percent_is_indeterminate(self) -> None:
+        """Two split panels combining to ≥100% leave no real text column."""
+        from anvil.lib.marp_lint import _estimate_text_column_fraction
+        est = _estimate_text_column_fraction(
+            "![bg left:60%](figures/l.png)\n\n![bg right:50%](figures/r.png)"
+        )
+        self.assertFalse(est.determinate)
+
+    def test_two_side_splits_are_additive_when_under_100(self) -> None:
+        from anvil.lib.marp_lint import _estimate_text_column_fraction
+        est = _estimate_text_column_fraction(
+            "![bg left:20%](figures/l.png)\n\n![bg right:30%](figures/r.png)"
+        )
+        self.assertTrue(est.determinate)
+        self.assertAlmostEqual(est.fraction, 0.5, places=6)
+
+
+class TestSplitPanelOverflowRepro(unittest.TestCase):
+    """Issue #1321 — a bg right/left slide's text column is narrower than full width.
+
+    ``body_paragraph_chars_per_line`` / ``bullet_chars_per_line`` modeled a
+    full-width column unconditionally. On a slide using
+    ``![bg right:32%]``, the text column is only 68% of the slide's width,
+    so the same character count wraps to more lines than the flat model
+    predicted — a slide that scored comfortably "clean" collided with the
+    footer in the rendered PDF (the issue's own reproduction: effective wrap
+    point ~47 chars against the lint's configured 70 — exactly
+    ``70 * 0.68 = 47.6`` truncated).
+    """
+
+    #: One H2 + a bg right:32% hero panel + 4 bullets + a caption paragraph
+    #: + an attribution paragraph. Every bullet/paragraph line individually
+    #: fits within the full-width 70/64-char budget (no wraps), but several
+    #: exceed the 47/43-char effective budget of a 32%-reserved column.
+    _SOURCE = """---
+marp: true
+size: 16:9
+---
+
+## Q3 regional performance snapshot review
+
+![bg right:32%](figures/chart.png)
+
+- North America grew fourteen percent year over year in Q3 results
+- Europe held steady with modest single digit growth overall this year
+- APAC lagged behind due to currency headwinds this quarter overall
+- LATAM posted a small but real recovery after two rough quarters
+
+Chart shows quarterly revenue growth across all four regions we track
+
+Source internal finance team analysis dated September twenty twenty six
+"""
+
+    def test_full_width_model_would_have_scored_this_clean(self) -> None:
+        """Demonstrates the "passes today" half of the regression.
+
+        Feeding the slide's raw cost estimator the UNMODIFIED (full-width)
+        ``Geometry`` — i.e. the pre-#1321 code path — must still report a
+        total comfortably under the 13.0u budget. This is the false-clean
+        result the issue reports; it is not itself a public API, but it
+        pins that the fix is a real behavior change and not a no-op.
+        """
+        from anvil.lib.marp_lint import Geometry, _estimate_slide_cost, _split_slides
+
+        geo = Geometry()
+        slide = _split_slides(self._SOURCE)[0]
+        breakdown = _estimate_slide_cost(slide, geo)
+        self.assertLessEqual(
+            breakdown.total_units,
+            geo.capacity_units,
+            "sanity check: the full-width model must be the 'passes today' "
+            "case this regression demonstrates a fix for",
+        )
+
+    def test_column_aware_model_flags_the_overflow(self) -> None:
+        """Demonstrates the "fails after" half — ``lint_source`` now flags it."""
+        result = lint_source(self._SOURCE)
+        overflow_findings = [
+            f for f in result.errors + result.warnings
+            if f.rule == "slide-content-overflow"
+        ]
+        self.assertGreaterEqual(
+            len(overflow_findings), 1,
+            "bg right:32% slide with narrow-column-only overflow must flag",
+        )
+        self.assertIn("text column", overflow_findings[0].message)
+
+    def test_wide_split_short_content_still_stays_clean(self) -> None:
+        """AC4 sibling — a genuinely sparse bg-split slide is still clean.
+
+        The fix must not turn every ``bg left``/``bg right`` slide into an
+        automatic finding; it only narrows the budget used to score the
+        slide's actual content.
+        """
+        source = """---
+marp: true
+size: 16:9
+---
+
+## Hero panel
+
+![bg right:32%](figures/hero.png)
+
+- One short bullet
+- Another short one
+"""
+        result = lint_source(source)
+        overflow_findings = [
+            f for f in result.errors + result.warnings
+            if f.rule == "slide-content-overflow"
+        ]
+        self.assertEqual(overflow_findings, [])
+
+
+class TestSplitPanelIndeterminateWidthReporting(unittest.TestCase):
+    """Issue #1321 AC3 — an unmeasurable split-panel width is reported, not silent.
+
+    When the split percentage can't be trusted (out of range, or multiple
+    splits combining to ≥100%), the lint must not silently fall back to the
+    full-width assumption unannounced — it must emit a finding that makes
+    the slide look different from a normally-measured one.
+    """
+
+    def test_out_of_range_percent_emits_a_distinct_warning(self) -> None:
+        source = """---
+marp: true
+---
+
+## Weird split
+
+![bg right:150%](figures/x.png)
+
+- one bullet
+"""
+        result = lint_source(source)
+        indeterminate = [
+            f for f in result.warnings
+            if f.rule == "slide-content-overflow"
+            and "could not be determined" in f.message
+        ]
+        self.assertEqual(len(indeterminate), 1)
+        self.assertEqual(indeterminate[0].severity, "warning")
+
+    def test_combined_over_100_percent_emits_a_distinct_warning(self) -> None:
+        source = """---
+marp: true
+---
+
+## Two-sided panel
+
+![bg left:60%](figures/l.png)
+
+![bg right:50%](figures/r.png)
+
+- one bullet
+"""
+        result = lint_source(source)
+        indeterminate = [
+            f for f in result.warnings
+            if f.rule == "slide-content-overflow"
+            and "could not be determined" in f.message
+        ]
+        self.assertEqual(len(indeterminate), 1)
+
+    def test_suppressed_indeterminate_downgrades_to_info(self) -> None:
+        source = """---
+marp: true
+---
+
+## Weird split
+
+![bg right:150%](figures/x.png)
+
+<!-- anvil-lint-disable: slide-content-overflow -->
+
+- one bullet
+"""
+        result = lint_source(source)
+        self.assertEqual(
+            [f for f in result.warnings if f.rule == "slide-content-overflow"],
+            [],
+        )
+        indeterminate_infos = [
+            f for f in result.infos
+            if f.rule == "slide-content-overflow"
+            and "could not be determined" in f.message
+        ]
+        self.assertEqual(len(indeterminate_infos), 1)
+        self.assertEqual(indeterminate_infos[0].severity, "info")
+
+
 class TestImageCostUnits(unittest.TestCase):
     """Unit tests for the ``_image_cost_units`` helper (issue #562).
 
@@ -1054,6 +1299,249 @@ size: 16:9
             [f.to_dict() for f in with_path.warnings],
             [f.to_dict() for f in without_path.warnings],
         )
+
+
+class TestStandaloneImageAltTextLengthDoesNotAffectCost(unittest.TestCase):
+    """Issue #905 — a standalone image's alt-text length must not change cost.
+
+    The ``slide-content-overflow`` standalone-image branch used to be gated
+    on ``len(raw_line.strip()) < 250``. A long, accessible alt string could
+    push the line past that threshold, causing it to fall through to the
+    body-paragraph branch — where the alt characters were charged as
+    rendered prose (per-70-char text rate) *in addition to* the image's own
+    cost. Alt text is never rendered on the slide, so the estimated cost
+    must be identical regardless of alt-text length.
+    """
+
+    @staticmethod
+    def _slide_cost(alt_text: str) -> float:
+        from anvil.lib.marp_lint import Geometry, _estimate_slide_cost, _split_slides
+
+        source = f"""---
+marp: true
+size: 16:9
+---
+
+## Heading
+
+![{alt_text}](figures/photo.png)
+
+- One bullet
+"""
+        slide = _split_slides(source)[0]
+        breakdown = _estimate_slide_cost(slide, Geometry())
+        return breakdown.total_units
+
+    def test_short_and_long_alt_text_produce_same_cost(self) -> None:
+        short_alt = "a" * 40
+        long_alt = "a" * 400
+        self.assertEqual(self._slide_cost(short_alt), self._slide_cost(long_alt))
+
+    def test_long_alt_text_line_still_recognized_as_image(self) -> None:
+        """A >250-char image line must be charged as an image, not prose.
+
+        Regression guard for the misclassification itself (not just the
+        cost parity above): the breakdown must show an image-family label
+        and must NOT show a ``paragraph(...)`` charge for the image line.
+        """
+        from anvil.lib.marp_lint import Geometry, _estimate_slide_cost, _split_slides
+
+        long_alt = "a" * 400
+        self.assertGreater(
+            len(f"![{long_alt}](figures/photo.png)"), 250,
+            "fixture must actually exceed the old 250-char guard",
+        )
+        source = f"""---
+marp: true
+size: 16:9
+---
+
+## Heading
+
+![{long_alt}](figures/photo.png)
+"""
+        slide = _split_slides(source)[0]
+        breakdown = _estimate_slide_cost(slide, Geometry())
+        labels = [label for label, _units in breakdown.parts]
+        self.assertTrue(
+            any(label.startswith("image") for label in labels),
+            f"expected an image-family label, got {labels}",
+        )
+        self.assertFalse(
+            any(label.startswith("paragraph(") for label in labels),
+            f"alt text must not be charged as paragraph prose, got {labels}",
+        )
+
+    def test_short_alt_text_is_also_not_charged_as_prose(self) -> None:
+        """Sanity check: the < 250-char case was already correct pre-fix."""
+        from anvil.lib.marp_lint import Geometry, _estimate_slide_cost, _split_slides
+
+        short_alt = "a" * 40
+        source = f"""---
+marp: true
+size: 16:9
+---
+
+## Heading
+
+![{short_alt}](figures/photo.png)
+"""
+        slide = _split_slides(source)[0]
+        breakdown = _estimate_slide_cost(slide, Geometry())
+        labels = [label for label, _units in breakdown.parts]
+        self.assertTrue(any(label.startswith("image") for label in labels))
+        self.assertFalse(any(label.startswith("paragraph(") for label in labels))
+
+
+class TestGeometryFromThemeCss(unittest.TestCase):
+    """``geometry_from_theme_css`` — the ``@anvil-capacity`` contract parser
+    (issue #1150). Exercises the in-memory string API directly."""
+
+    def test_no_block_returns_default_geometry_unchanged(self) -> None:
+        from anvil.lib.marp_lint import Geometry, geometry_from_theme_css
+
+        result = geometry_from_theme_css("section { padding: 72px; }")
+        self.assertFalse(result.found)
+        self.assertEqual(result.geometry, Geometry())
+        self.assertEqual(result.overrides, {})
+
+    def test_valid_block_overrides_only_named_fields(self) -> None:
+        from anvil.lib.marp_lint import Geometry, geometry_from_theme_css
+
+        css = """
+        /* @theme acme-brand */
+        /* @anvil-capacity
+           top_padding_px: 72
+           bottom_padding_px: 72
+           body_line_height_px: 44
+           capacity_units: 12.0
+           ask_class_capacity_penalty_units: 1.8
+        */
+        section { padding: 72px; }
+        """
+        result = geometry_from_theme_css(css)
+        self.assertTrue(result.found)
+        self.assertEqual(result.geometry.top_padding_px, 72)
+        self.assertEqual(result.geometry.bottom_padding_px, 72)
+        self.assertEqual(result.geometry.body_line_height_px, 44)
+        self.assertEqual(result.geometry.capacity_units, 12.0)
+        self.assertEqual(result.geometry.ask_class_capacity_penalty_units, 1.8)
+        # Fields not named in the block keep the shipped default verbatim.
+        self.assertEqual(result.geometry.h1_units, Geometry().h1_units)
+        self.assertEqual(result.geometry.image_units, Geometry().image_units)
+        self.assertEqual(result.warnings, ())
+
+    def test_unknown_and_malformed_keys_are_skipped_not_fatal(self) -> None:
+        from anvil.lib.marp_lint import Geometry, geometry_from_theme_css
+
+        css = """
+        /* @anvil-capacity
+           top_padding_px: 40
+           not_a_real_field: 99
+           capacity_units: not-a-number
+           no colon here at all
+        */
+        """
+        result = geometry_from_theme_css(css)
+        self.assertTrue(result.found)
+        # The one well-formed key still applies...
+        self.assertEqual(result.geometry.top_padding_px, 40)
+        # ...while the malformed/unknown ones fall back to defaults and are
+        # recorded as warnings rather than raising.
+        self.assertEqual(result.geometry.capacity_units, Geometry().capacity_units)
+        self.assertEqual(len(result.warnings), 3)
+
+    def test_fully_malformed_block_falls_back_to_default_geometry(self) -> None:
+        from anvil.lib.marp_lint import Geometry, geometry_from_theme_css
+
+        css = """
+        /* @anvil-capacity
+           not_a_real_field: 99
+           also_not_real: hello
+        */
+        """
+        result = geometry_from_theme_css(css)
+        self.assertTrue(result.found)
+        self.assertEqual(result.geometry, Geometry())
+        self.assertEqual(result.overrides, {})
+        self.assertEqual(len(result.warnings), 2)
+
+
+class TestGeometryFromThemeContract(unittest.TestCase):
+    """``geometry_from_theme_contract`` — the file-based wrapper (issue
+    #1150). Exercises the on-disk fixture themes under
+    ``fixtures/marp_lint/``."""
+
+    def test_none_path_returns_default(self) -> None:
+        from anvil.lib.marp_lint import Geometry, geometry_from_theme_contract
+
+        result = geometry_from_theme_contract(None)
+        self.assertFalse(result.found)
+        self.assertEqual(result.geometry, Geometry())
+
+    def test_missing_file_returns_default(self) -> None:
+        from anvil.lib.marp_lint import Geometry, geometry_from_theme_contract
+
+        result = geometry_from_theme_contract(_FIXTURES / "does-not-exist.css")
+        self.assertFalse(result.found)
+        self.assertEqual(result.geometry, Geometry())
+
+    def test_fixture_theme_with_contract_overrides(self) -> None:
+        from anvil.lib.marp_lint import geometry_from_theme_contract
+
+        result = geometry_from_theme_contract(
+            _FIXTURES / "consumer_theme_capacity.css"
+        )
+        self.assertTrue(result.found)
+        self.assertEqual(result.geometry.top_padding_px, 40)
+        self.assertEqual(result.geometry.capacity_units, 18.0)
+
+    def test_fixture_theme_with_no_contract_returns_default(self) -> None:
+        from anvil.lib.marp_lint import Geometry, geometry_from_theme_contract
+
+        result = geometry_from_theme_contract(
+            _FIXTURES / "consumer_theme_no_capacity.css"
+        )
+        self.assertFalse(result.found)
+        self.assertEqual(result.geometry, Geometry())
+
+    def test_fixture_theme_with_malformed_contract_falls_back_to_default(
+        self,
+    ) -> None:
+        from anvil.lib.marp_lint import Geometry, geometry_from_theme_contract
+
+        result = geometry_from_theme_contract(
+            _FIXTURES / "consumer_theme_malformed_capacity.css"
+        )
+        self.assertTrue(result.found)
+        self.assertEqual(result.geometry, Geometry())
+        self.assertTrue(len(result.warnings) >= 1)
+
+
+class TestConsumerThemeCapacityRegression(unittest.TestCase):
+    """AC regression (issue #1150): a consumer-theme deck with no genuine
+    overflow lints clean under the theme's own capacity contract, without
+    resorting to the per-slide ``anvil-lint-disable`` escape hatch — even
+    though the SAME slide is flagged under the shipped-theme default
+    geometry (proving this isn't just a universally-lenient override)."""
+
+    def test_default_geometry_still_flags_the_fixture(self) -> None:
+        result = lint_deck(_FIXTURES / "overflow_figure_plus_bullets.md")
+        self.assertEqual(len(result.errors), 1)
+
+    def test_consumer_theme_geometry_lints_clean_no_escape_hatch(self) -> None:
+        from anvil.lib.marp_lint import geometry_from_theme_contract
+
+        contract = geometry_from_theme_contract(
+            _FIXTURES / "consumer_theme_capacity.css"
+        )
+        self.assertTrue(contract.found)
+        result = lint_deck(
+            _FIXTURES / "overflow_figure_plus_bullets.md",
+            geometry=contract.geometry,
+        )
+        self.assertEqual(len(result.errors), 0)
+        self.assertEqual(len(result.warnings), 0)
 
 
 if __name__ == "__main__":

@@ -21,51 +21,20 @@ collection collision documented in issue #58 (two skills each shipping a
 from __future__ import annotations
 
 import re
+import sys
 import unittest
 from pathlib import Path
 
 
 _SKILL_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = _SKILL_ROOT.parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
+from anvil.lib.testing import parse_frontmatter as _parse_frontmatter  # noqa: E402
+from anvil.lib.testing import read_text
 
-def _read(rel: str) -> str:
-    return (_SKILL_ROOT / rel).read_text(encoding="utf-8")
-
-
-def _parse_frontmatter(text: str) -> dict:
-    """Parse a leading ``---``-delimited YAML frontmatter block.
-
-    Uses PyYAML when available; falls back to a minimal ``key: value`` parser so
-    the test does not hard-depend on PyYAML being installed.
-    """
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return {}
-    # Find the closing fence: the next line that is exactly ``---``. Splitting on
-    # a bare ``---`` substring is wrong because frontmatter values may legitimately
-    # contain ``---`` (e.g. ``stage: "DESIGN PROPOSAL --- CONCEPT STAGE"``).
-    end = None
-    for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
-            end = i
-            break
-    if end is None:
-        return {}
-    block = "\n".join(lines[1:end])
-    try:
-        import yaml  # type: ignore
-
-        data = yaml.safe_load(block)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        result: dict = {}
-        for line in block.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or ":" not in line:
-                continue
-            key, _, value = line.partition(":")
-            result[key.strip()] = value.strip().strip('"').strip("'")
-        return result
+_read = lambda rel: read_text(_SKILL_ROOT / rel)
 
 
 class TestFilesExist(unittest.TestCase):
@@ -147,9 +116,7 @@ class TestCommandFrontmatter(unittest.TestCase):
             with self.subTest(path=rel):
                 fm = _parse_frontmatter(_read(rel))
                 self.assertEqual(fm.get("name"), expected_name)
-                self.assertTrue(
-                    fm.get("description"), f"{rel} missing a description"
-                )
+                self.assertTrue(fm.get("description"), f"{rel} missing a description")
 
 
 class TestRubric(unittest.TestCase):
@@ -167,9 +134,7 @@ class TestRubric(unittest.TestCase):
             self.text,
             flags=re.MULTILINE,
         )
-        self.assertEqual(
-            len(rows), 9, f"expected 9 dimension rows, found {len(rows)}"
-        )
+        self.assertEqual(len(rows), 9, f"expected 9 dimension rows, found {len(rows)}")
         indices = sorted(int(i) for i, _ in rows)
         self.assertEqual(indices, [1, 2, 3, 4, 5, 6, 7, 8, 9])
         total = sum(int(w) for _, w in rows)
@@ -334,6 +299,28 @@ class TestTemplate(unittest.TestCase):
         # signature_color falls back to 4A6FA5 (steel blue) when omitted.
         self.assertIn("4A6FA5", self.text)
         self.assertIn("signature_color", self.text)
+
+    def test_cost_basis_knob(self):
+        # Issue #840: `cost_basis` (quoted | estimated | none) gates the
+        # priced-table contract in section 7. Default is `quoted`, byte-
+        # identical to pre-#840 behavior (the Gossamer LAN worked example).
+        self.assertIn("cost_basis", self.text)
+        self.assertTrue(
+            re.search(r'cost_basis[^\n]*default\("quoted"\)', self.text),
+            "cost_basis must default to quoted in the template",
+        )
+        self.assertIn("estimated", self.text)
+
+    def test_cost_basis_none_drops_bom_section(self):
+        # `cost_basis: none` swaps section 7 for a lighter "Cost Basis"
+        # section that defers commercial terms to Open Decisions (§10)
+        # instead of requiring a priced BOM.
+        self.assertIn("Cost Basis", self.text)
+        self.assertTrue(
+            re.search(r'cost_basis_resolved\s*==\s*"none"', self.text)
+            or re.search(r'cost_basis_resolved\s*!=\s*"none"', self.text),
+            "template must branch section 7 on cost_basis_resolved",
+        )
 
 
 class TestExampleBrief(unittest.TestCase):

@@ -45,6 +45,19 @@ A **paper thread** is a single research paper authored across one or more revisi
     citation-audit.md             Per-\cite{} resolution + claim-support check
     numerical-audit.md            Numbers-in-text vs figures/tables consistency
     flags.md                      Critical flags (unsupported citations, numerical disagreement)
+  <thread>.1.audience/            Audience-fit pre-flight sidecar (deterministic, advisory — issue #1322)
+    _review.json                  kind: tool_evidence; governance-vocabulary / private-locator /
+                                  unlinked-artifact-path findings (major in body, minor in appendix)
+  <thread>.1.readerflow/          Reader-flow lens sidecar (fresh-context subagent, advisory — issue #1397)
+    _review.json                  kind: judgment, critic_id: "readerflow"; findings tagged by defect
+                                  class 1-7, 9 (+ class 8 when a reworded-caveats list is supplied); class 1 includes the referent/baseline sub-rule (#1432)
+    glossary.md                   term | first use | definition site | variants
+    _meta.json                    scorecard_kind declared (canonical co-write)
+  <thread>.1.operator/            (optional, human) Operator read-through after READY (issue #1322)
+    _review.json                  kind: judgment, critic_id: "operator", verdict: BLOCK; its critical
+                                  flags make paper-revise produce one more version
+    _meta.json                    scorecard_kind: "human-verdict"
+    operator.md                   Operator's notes for the reviser
   <thread>.1.litsearch/           (optional) Re-run litsearch after reviewer flagged missing prior work
   <thread>.2/                     Revised version (after revise consumes v1 + all critic siblings)
   ...
@@ -71,12 +84,18 @@ EMPTY → DRAFTED → REVIEWED → REVISED → … → READY → AUDITED
 | `DRAFTED` | Latest `<thread>.{N}/` exists with `main.tex` + `refs.bib` + `_progress.json.draft == done`; no sibling review at the same `N` |
 | `REVIEWED` | `<thread>.{N}.review/verdict.md` exists for the latest `N` |
 | `REVISED` | A `<thread>.{N+1}/` exists after a prior `<thread>.{N}.review/` |
-| `READY` | Latest `<thread>.{N}.review/verdict.md` records `advance: true` AND no unresolved critical flag (in either `.review/` or `.audit/`) |
-| `AUDITED` | `<thread>.{N}.audit/` exists alongside a `READY` version AND `audit/_progress.json.audit == done` AND `flags.md` records no unresolved critical flag |
+| `READY` | Latest `<thread>.{N}.review/verdict.md` records `advance: true` AND no unresolved critical flag (in `.review/`, `.audit/`, or an operator `.operator/` sibling — issue #1322) AND no unresolved `[PENDING <source>]` marker in the body (`paper-review` step 7's terminal gate) |
+| `AUDITED` | `<thread>.{N}.audit/` exists alongside a `READY` version AND `audit/_progress.json.audit == done` AND `flags.md` records no unresolved critical flag AND no blocking flag in a `<thread>.{N}.operator/` sibling AND no unresolved `[PENDING <source>]` marker in the body (`paper-audit` step 6b's terminal gate) |
 
-Thresholds: **≥35/44** advances. **<35/44** requires revision. Any critical flag (from `.review/` OR `.audit/`) short-circuits regardless of total — block until addressed.
+> **Pending-marker gate is a separate terminal condition, not a critical flag (issue #842).** An unresolved `[PENDING <source>]` marker (an honest disclosure that a load-bearing value is not yet available — a training run still running, a benchmark queued, a vendor quote not returned) holds the READY and AUDITED transitions *independently of* the "no unresolved critical flag" clause above. It is deliberately **not** implied by that clause: the deterministic `pending_marker` gate (`anvil/lib/pending_marker.py`, wired at `paper-review` step 4g / step 7 and `paper-audit` step 6b) emits the specially-resolved `pending_dependency` flag type, which `convergence.blocking_critical_flags` filters *out* of the ordinary blocking-critical set — so it never forces `advance: false`, never lowers a dimension score (see `rubric.md`), and would be missed by a reader relying on the literal "no unresolved critical flag" wording. Resolving it means replacing the marker with the real value; **never fabricate a value to force the terminal transition.**
 
-Iteration cap: default `max_iterations: 4` (so worst-case terminal version is `<thread>.5/`). The cap is configurable per-thread by writing `{ "max_iterations": <N> }` to `<thread>/.anvil.json` in the thread root. Exceeding the cap marks the thread `BLOCKED` (in the portfolio orchestrator's report) and requires human review.
+> **Operator feedback after READY (issue #1322).** The operator's read-through of a `READY` or `AUDITED` thread is the one gate the lifecycle reserves for a human. When it finds a defect the critics missed, or the operator amends `BRIEF.md` after READY, the feedback goes into one more critic sibling at the current version: `<thread>.{N}.operator/`. It holds an ordinary `Review` (`kind: judgment`, `critic_id: "operator"`, `verdict: BLOCK`, one `CriticalFlag` per defect, conventional types `operator_defect` / `brief_amendment`) plus `_meta.json` (`scorecard_kind: "human-verdict"`) and `operator.md`. Write it with `python -m anvil.lib.operator_feedback write <thread>.{N}/ --flag "<type>: <justification>"`. Only `operator_defect:` / `brief_amendment:` are read as a type prefix (any other `word:` stays in the justification), and `pending_dependency:` is refused with exit `2`: that type is non-blocking, so the sibling would not reopen the thread. No schema change is involved (`critic_id` and `CriticalFlag.type` are free-form), and `critics.discover_critics` picks the sibling up unchanged. A blocking operator flag takes the thread out of `READY`/`AUDITED` and satisfies `paper-revise` step 4's pre-check, so the reviser produces `<thread>.{N+1}/` and the loop resumes at `paper-review`. `paper-revise` step 3 allows that one operator-driven pass even beyond `max_iterations`; each further pass needs a new sibling written by a human. Editing an existing critic sibling, or bumping `max_iterations` and hand-writing an ad hoc sibling, are no longer needed.
+
+> **Audience fit is scored, not gated (issue #1322).** `paper-review` step 4i runs the deterministic `anvil/lib/audience_check.py` pre-flight and writes `<thread>.{N}.audience/`. That sidecar is advisory and carries no critical flag, so it never moves the state machine by itself. Its findings feed the rubric's audience-fit sub-rule under dims 7 and 9 and the reviser. `paper-audit` step 6c reuses the same scan for artifact link hygiene, which *is* a critical flag in `flags.md` when a public repository URL resolves.
+
+Thresholds: **≥35/44** advances. **<35/44** requires revision. Any critical flag (from `.review/` OR `.audit/` OR `.operator/`) short-circuits regardless of total — block until addressed.
+
+Iteration cap: default `max_iterations: 4` (`<thread>.{max_iterations}/` — `<thread>.4/` at the default — is the worst-case terminal version dir; there is no `<thread>.5/` under a default cap). The cap is configurable per-thread by writing `{ "max_iterations": <N> }` to `<thread>/.anvil.json` in the thread root. Exceeding the cap marks the thread `BLOCKED` (in the portfolio orchestrator's report) and requires human review. The one exception is an operator-driven pass (issue #1322): a version whose `<thread>.{N}.operator/` sibling carries a blocking flag gets exactly one more revision past the cap (`paper-revise` step 3).
 
 ### `<thread>/.anvil.json` schema
 
@@ -86,6 +105,7 @@ The per-thread config supports the following optional fields:
 {
   "max_iterations": 4,
   "venue": "neurips",
+  "public_repo_url": "https://github.com/example/proofs",
   "artifact_verify": {
     "commands": ["lake build", "lake exe check_theorems"],
     "cwd": "proof/",
@@ -98,6 +118,7 @@ The per-thread config supports the following optional fields:
 |---|---|---|---|
 | `max_iterations` | int | 4 | Iteration cap (see above). |
 | `venue` | string | none | Target venue slug. When set, `paper-review` also scores the paper against the matching venue YAML and writes `_review.venue.json` alongside `_review.json`. Advisory only; does not change the /44 gate. See "Venue overlays" below. |
+| `public_repo_url` | string | none | Public repository that hosts the paper's artifacts (issue #1322). `paper-review` step 4i and `paper-audit` step 6c use it to suggest the concrete `\href` for a bare repo-relative artifact path. With it declared (here, or in the thread `BRIEF.md` frontmatter `public_repo_url`), an unlinked path in an artifacts/availability section is an audit critical flag. Without a declaration the scanner may *derive* a candidate from a GitHub/GitLab/Codeberg/Bitbucket/Zenodo/DOI/OSF/figshare/Hugging Face link inside the paper's artifacts/availability section (a dependency cited elsewhere, e.g. the Mathlib GitHub in the introduction, is never used). Inside that section a link is only offered when the sentence around it names it as the paper's own ("our code", "the repository for this paper") or when the section holds exactly one repository and does not introduce it as a dependency ("requires `<library>`, `\url{...}`"); an ambiguous or dependency-only section yields no candidate at all (issue #1329). A derived URL is reported with `public_repo_url_source: "derived"` and is not trusted: unlinked paths stay a non-critical audit note that names the candidate and asks the author to declare it, and no concrete `\href` is templated. |
 | `artifact_verify` | object | none | Optional external-artifact verification gate (issue #663). When declared, `paper-review` runs each command in `commands` (a list of command strings) in the resolved `cwd` (thread-relative or absolute; defaults to the thread root) under a per-command `timeout_s` budget (default 300s). A failed command (non-zero exit or timeout) emits an `artifact_verify_*` critical flag that blocks the review. When absent, behavior is byte-identical to today. See "External-artifact verification" below. |
 
 ### Venue overlays (advisory)
@@ -144,13 +165,17 @@ The contract mirrors the venue-overlay discovery/fail-open shape exactly (fail-o
 - **Declared and resolvable**: each command in `commands` runs via `subprocess.run` in the resolved `cwd` (thread-relative or absolute; defaults to the thread root) under `timeout_s` (default 300s), subprocess-only with no new Python dependency. ALL commands run — an earlier failure does not short-circuit the rest — so a reviewer sees every failing step in one pass. A failed command (non-zero exit OR timeout) emits a `CriticalFlag` with `type` prefix `artifact_verify_<n>` (`<n>` is the 0-based command index) that routes through the unchanged `anvil/lib/critics.py::compute_verdict` path and forces `Verdict.BLOCK` — no aggregator or schema change.
 - **Declared but unresolvable** (missing / non-directory `cwd`, or a command whose executable is not launchable): the gate **fails open** — a one-line stdout warning + a `major` finding in `comments.md`, and the review proceeds. A broken declaration is a defect worth surfacing, but it must not be indistinguishable from "the reviewer never checked" — so it does NOT block and does NOT silently pass as "verified".
 
-The gate's raw stdout/stderr capture is written to `<thread>.{N}.review/_artifact_verify.json` (mirroring the render gate's `_gate.json`) for CI/operator inspection — a conditional output, NOT in the review's required-files manifest. The skill-local implementation lives at `anvil/skills/paper/lib/artifact_verify.py` (`discover_artifact_verify`, `verify`, `ArtifactVerifyResult.to_review()`/`to_critical_flags()`), modeled on `anvil/lib/render_gate.py`'s `GateResult` shape but scoped to paper per the "wait for the second consumer before generalizing" rule.
+The gate's raw stdout/stderr capture is written to `<thread>.{N}.review/_artifact_verify.json` (mirroring the render gate's `_gate.json`) for CI/operator inspection — a conditional output, NOT in the review's required-files manifest. The skill-local implementation lives at `anvil/skills/paper/lib/artifact_verify.py` (`discover_artifact_verify`, `verify`, `ArtifactVerifyResult.to_review()`/`to_critical_flags()`), modeled on `anvil/lib/render_gate/`'s `GateResult` shape but scoped to paper per the "wait for the second consumer before generalizing" rule.
 
 ### Area Chair pattern (AI-Scientist) maps to existing N-critics-one-reviser
 
 The "Area Chair ensemble" pattern published in AI-Scientist (Sakana, 2024) — multiple reviewer agents whose outputs are merged into a single recommendation — maps directly onto the framework's existing **N parallel critics, one reviser** primitive in `anvil/lib/critics.py::aggregate`. No separate AC role is needed in this skill; the reviser pass IS the AC pass. The venue overlay above is a parallel design move: the reviser already aggregates across all `<thread>.{N}.<critic>/` siblings, so the venue scorecard at `_review.venue.json` is consumed in the same machinery as `.review/_review.json`, `.audit/_review.json`, etc.
 
 **READY vs AUDITED distinction.** Unlike memo (where `AUDITED` is rarely reached), `paper-audit` is part of the normal lifecycle. A paper is **not done** until it reaches `AUDITED`: the auditor's job is to verify every `\cite{}` resolves and every cited claim is actually supported. The PDF compile check (see Acceptance criteria) lives in the auditor's responsibility because it requires the bibliography to be valid.
+
+**`paper-vision` is recommended-but-optional.** Unlike `paper-audit` (mandatory-at-`READY`), `paper-vision` does **not** gate the state machine and will **not** run unless explicitly invoked — a thread with figures can reach terminal `AUDITED` without any visual review. To keep the rendered-artifact critic from being silently skipped, the portfolio orchestrator (`paper`) surfaces the recommendation: at `READY` with figures present but no `<thread>.{N}.vision/` sibling it recommends `paper-vision` (before `paper-audit`), and at `AUDITED` in the same condition it emits a non-blocking `NEVER-VISION-CHECKED` operator note. Threads with **no figures** are never prompted for vision. This is a recommendation only — it does not change the `AUDITED` state's on-disk evidence definition below, and the vision-owned dimensions remain an additive overlay outside the /44 gate (see `rubric.md`).
+
+**`paper-review` surfaces `EVIDENCE-DRIFT` when thread-root evidence changed after the reviewed version was written (issue #857).** Version-dir immutability means `<thread>.{N}/` is frozen at draft/revise time, but `<thread>/BRIEF.md` and `<thread>/refs/**` are mutable thread-root siblings — a terminal `READY`/`AUDITED` thread whose BRIEF or refs changed since drafting looks identical on disk to one whose evidence is current. `paper-draft`/`paper-revise` record a BRIEF/refs mtime baseline into `<thread>.{N}/_progress.json.metadata.evidence_snapshot` (`anvil/lib/evidence_drift.py`) at completion; `paper-review` step 4h compares the CURRENT thread-root mtimes against that baseline and, on drift, adds a non-blocking "Evidence drift" note to `verdict.md` naming what changed. Like `NEVER-VISION-CHECKED`, this is **purely advisory** — it does NOT change `advance`, any dimension score, or the terminal-state gate, and it is never routed through the `CriticalFlag` machinery (contrast the pending-marker gate below, which IS wired through `CriticalFlag` because it has something to *resolve*; evidence drift has nothing to resolve, only something to re-weigh). A thread with no recorded baseline (pre-#857, or no draft/revise pass since adoption) reports clean, never a false positive.
 
 ## Command dispatch
 
@@ -198,11 +223,11 @@ See `rubric.md` for the 9-dimension /44 scoring schema (paper-tuned weights, rig
 
 **`paper-litsearch` (optional, read-only critic).** Pure-LLM literature search is prone to hallucinating citations. This role MUST refuse to invent BibTeX entries. Instead, it produces:
 - `notes.md` — discussion of how the paper positions against the related work the author already supplied, plus a list of **gaps** (named missing topics or specific known papers the brief mentioned but did not supply BibTeX for).
-- `candidates.bib` — entries that come from author-supplied refs (re-formatted for consistency) or that the role is **explicitly told** about in the brief. Entries from "I think there's a 2023 paper about X by someone named Smith" are forbidden — the role surfaces such gaps in `notes.md` for the author to fill manually (e.g., by pasting a Semantic Scholar export into `<thread>/refs/`).
+- `candidates.bib` — entries that come from author-supplied refs (re-formatted for consistency) or that the role is **explicitly told** about in the brief. Entries from "I think there's a 2023 paper about X by someone named Smith" are forbidden — the role surfaces such gaps in `notes.md` for the author to fill manually (e.g., by pasting a Semantic Scholar export into `<thread>/refs/`). Before `litsearch.state` reaches `done`, `candidates.bib` must pass the deterministic structural gate at `anvil/skills/paper/lib/bib_lint.py::lint_bib_file` (issue #998) — catches a bare `@<word>` token left outside a real entry (e.g. inside a `%`-comment discussion — BibTeX has no comment syntax) and unbalanced entry braces, before either can propagate into a version's `refs.bib` via `paper-draft`/`paper-revise`'s merge.
 
 ### Opt-in web search (`web_search: true`) — issue #424
 
-By default this skill runs **no autonomous web search** — the anti-hallucination posture above. A consumer can opt a thread in by setting `web_search: true` (a YAML boolean, default `false`) in the per-thread `<thread>/BRIEF.md` frontmatter; in a post-#295 project layout the equivalent carrier is the `web_search` key on the thread's `documents:` entry in the project `BRIEF.md` (schema-validated as a strict bool by `anvil/lib/project_brief.py`). When the knob is absent or `false`, `paper-litsearch` and `paper-review` are byte-identical to their default no-web behavior.
+By default this skill runs **no autonomous web search** — the anti-hallucination posture above. A consumer can opt a thread in by setting `web_search: true` (a YAML boolean, default `false`) in the per-thread `<thread>/BRIEF.md` frontmatter; in a post-#295 project layout the equivalent carrier is the `web_search` key on the thread's `documents:` entry in the project `BRIEF.md` (schema-validated as a strict bool by `anvil/lib/project_brief/`). When the knob is absent or `false`, `paper-litsearch` and `paper-review` are byte-identical to their default no-web behavior.
 
 When enabled:
 
@@ -225,7 +250,7 @@ See `commands/paper-litsearch.md` § "Opt-in web search" and `commands/paper-rev
 
 The auditor (`paper-audit`) may re-run scripts in `figures/src/` to verify rendered outputs are current; this verification policy is documented in `paper-audit.md`.
 
-**`paper-review` render-gate hook (deterministic pre-flight).** `paper-review` runs a deterministic render-gate pre-flight via `anvil/lib/render_gate.py` (the LaTeX-skill analog of `marp_lint` for the deck/slides skills). The gate checks page count (`page_cap=None` — paper length is venue-dependent; consumers can override per-thread via `<thread>/.anvil.json: render_gate.page_cap`), overfull boxes (>5.0pt threshold), compile success, and source-side placeholders (`TODO` / `[TBD]` / `(figure)` / `.MISSING`). The gate runs after `paper-audit` has produced `main.pdf` + `compile-log.txt`; if invoked before audit, the gate fails open with a clear stdout message and the review proceeds without enforcement. On failure, the gate emits a typed `Review(kind=tool_evidence)` with one `CriticalFlag` per failed gate dimension, which the existing `anvil/lib/critics.py::compute_verdict` path treats as `BLOCK`. See `commands/paper-review.md` step 4b.
+**`paper-review` render-gate hook (deterministic pre-flight).** `paper-review` runs a deterministic render-gate pre-flight via `anvil/lib/render_gate/` (the LaTeX-skill analog of `marp_lint` for the deck/slides skills). The gate checks page count (`page_cap=None` — paper length is venue-dependent; consumers can override per-thread via `<thread>/.anvil.json: render_gate.page_cap`), overfull boxes (>5.0pt threshold), compile success, and source-side placeholders (`TODO` / `[TBD]` / `(figure)` / `.MISSING`). The gate runs after `paper-audit` has produced `main.pdf` + `compile-log.txt`; if invoked before audit, the gate fails open with a clear stdout message and the review proceeds without enforcement. On failure, the gate emits a typed `Review(kind=tool_evidence)` with one `CriticalFlag` per failed gate dimension, which the existing `anvil/lib/critics.py::compute_verdict` path treats as `BLOCK`. See `commands/paper-review.md` step 4b.
 
 ## Templates / assets
 
@@ -235,12 +260,13 @@ The auditor (`paper-audit`) may re-run scripts in `figures/src/` to verify rende
 - **Entry-point template**: `templates/main.tex.j2` — Jinja2-style placeholder document with frontmatter hooks (`{{title}}`, `{{author}}`, `{{abstract}}`) and section skeletons (`\section{Introduction}`, etc.). The drafter substitutes from the brief and elaborates.
 - **Starter bibliography**: `templates/refs.bib.j2` — empty `.bib` with a comment header explaining that entries come from either author-supplied `<thread>/refs.bib` or the litsearch sibling's `candidates.bib`.
 - **Smoke test brief**: `assets/example-brief.md` — a one-page paper brief the drafter can turn into a compilable 2–4 page paper with one figure and a handful of citations. Used by the acceptance test.
+- **Worked fixtures**: `examples/` — two hand-authored projects (`underclaiming-buried-lede/`, `bold-synthesis-labeled/`) reporting the *same synthetic study with the same evidence and the same bibliography, framed two ways*, plus their recorded `paper-review` siblings (33/44 `advance: false` with a named `underclaiming_buried_lede` finding; 43/44 `advance: true` with no overclaiming deduction). They are the regression fixtures for the dim 3 / dim 9 symmetry in `rubric.md` (issue #1046/#1047/#1048) and double as a reviewer-calibration reference — read the two verdicts' cold-reader and ambition-versus-inflation tables side by side. Everything in them is synthetic; see `examples/README.md`.
 
 ## Project BRIEF artifact type
 
 `paper` is registered as a **skill-identity** `artifact_type` value in the
 shared project-BRIEF registry
-(`anvil/lib/project_brief.py::REGISTERED_ARTIFACT_TYPES` /
+(`anvil/lib/project_brief/types.py::REGISTERED_ARTIFACT_TYPES` /
 `SKILL_IDENTITY_ARTIFACT_TYPES`; issue #408, following the #386
 pattern for `deck`/`slides`/`proposal`). In a shared project BRIEF, a
 `documents:` entry with `artifact_type: paper` declares that this skill
@@ -262,7 +288,7 @@ non-`anvil-proposal` `\documentclass`.
 
 This skill ships opinionated defaults. Consumers are expected to override liberally via `.anvil/skills/paper/` in their own repo:
 
-- `voice.md` (optional) — Author or lab voice/style guidance the drafter reads in addition to its base prompt.
+- `voice.md` (optional) — Author or lab voice/style guidance both the drafter (`commands/paper-draft.md`) and the reviser (`commands/paper-revise.md`) read in addition to their base prompts, so a voice tell is scrubbed on every prose-writing pass, not just the first draft (issue #732).
 - `rubric.overrides.md` (optional) — Add domain-specific critical-flag examples or adjust the open-ended "any dealbreaker a sophisticated reader would catch" instruction.
 - `templates/<venue>.cls` or `templates/<venue>.sty` — Venue-specific style files. The brief tells the drafter to use them.
 - `BRIEF.md.example` — Reference brief shape; freeform prose with optional YAML frontmatter is accepted.
@@ -278,6 +304,8 @@ Bringing a pre-existing, hand-authored LaTeX paper into the `paper` grammar is a
 **The lifecycle is class-agnostic.** `draft → review → revise → audit → figures`, the /44 rubric scoring, and the `render_gate.py` pre-flight all operate on the compiled artifact — **none of them inspect or require `anvil-paper.cls` specifically**, and no rubric dimension penalizes not using it. Keeping your own class costs you the free styling anvil-paper provides, nothing else.
 
 **Decision guidance:** use `\documentclass[numeric]{anvil-paper}` when only the citation style is the blocker; keep the original `\documentclass` verbatim when the preamble itself collides (theorem environments, package-option clashes, or highly customized macros). See `commands/paper-draft.md` § "Documentclass overrides" for how the brief frontmatter selects the class.
+
+**Migrating from Markdown via pandoc (issue #1328):** when the source manuscript is Markdown, `pandoc -t latex` body output pastes into `main.tex` under `anvil-paper` as-is — including its tables. Pandoc renders *every* pipe table as a `longtable` (not `tabular`), with the caption inside the environment and, for tables wider than the line, `>{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{...}}` column specs. The class loads `booktabs`, `longtable`, `array`, and `calc` **before** `caption` so all of that typesets without a preamble patch; the ordering is load-bearing (`caption` installs its `\LT@` longtable hooks for a `longtable` already loaded when `caption` itself loads, which is why adding `\usepackage{longtable}` to the document preamble instead is not a reliable substitute on older caption/longtable releases). **Do not rewrite pandoc longtables as `tabular`/`tabularx`** — that was the pre-#1328 workaround and it loses page breaking for tables longer than a page. Convert only the body (`pandoc -t latex body.md`), not a `--standalone` document: pandoc's own preamble would re-`\usepackage` these packages and clash with the class's options.
 
 ## Anonymous / double-blind submission
 

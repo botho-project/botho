@@ -15,7 +15,7 @@ Normative technical specifications — protocol whitepapers, wire-format specs, 
 | `commands/spec-review.md` | Reviewer (normative-correctness / consistency / precision critic). Scores the /44 rubric; raises the review-side "Self-contradiction" / "Undefined normative term" flags. |
 | `commands/spec-audit.md` | Auditor (factual + spec↔implementation consistency). Resolves `code_ref` as its oracle; a contradiction fires the `implementation_contradicts_spec` critical flag with the three-way `Disposition` (spec-wrong → revise; code-wrong → operator escalation, never a silent spec rewrite; intentional-gap → register-suppressed or flagged `unregistered`). Degrades gracefully when `code_ref` is absent/unresolvable. |
 | `commands/spec-revise.md` | Reviser. Consumes BOTH critic siblings; routes by `Disposition` and never rewrites the spec to match a vestigial code path (a `code-wrong` finding blocks advance pending `--override-code-wrong "<reason>"`). |
-| `commands/spec-figures.md` | Figurer. Diagrams (`mmdc → PNG`) + optional PDF from the LaTeX source via `anvil/lib/render.py` + `anvil/lib/render_gate.py`. Runs any time after draft. |
+| `commands/spec-figures.md` | Figurer. Diagrams (`mmdc → PNG`) + optional PDF from the LaTeX source via `anvil/lib/render.py` + `anvil/lib/render_gate/`. Runs any time after draft. |
 | `templates/BRIEF.md.example` | Project-level BRIEF with a `documents:` entry declaring `artifact_type: spec` + an optional `code_ref`. |
 | `templates/spec.template.tex` | LaTeX body skeleton (scope/conformance, definitions, normative content, validity predicates, the `## Implementation status` register table, revision history). |
 

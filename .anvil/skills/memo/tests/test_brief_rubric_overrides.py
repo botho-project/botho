@@ -226,7 +226,7 @@ class TestLoadRubricOverridesHappyPath(_TmpProjectBase):
     """Well-formed BRIEF + matching slug + populated overrides parses cleanly."""
 
     def test_full_synthesis_brief_shape(self) -> None:
-        """The brasidas-synthesis canary shape parses identically to PR #267."""
+        """The meridian-synthesis canary shape parses identically to PR #267."""
         extras = textwrap.dedent(
             """\
             rubric_overrides:
@@ -244,10 +244,10 @@ class TestLoadRubricOverridesHappyPath(_TmpProjectBase):
         ).rstrip()
         _write_brief(
             self.project_dir,
-            _minimal_brief_frontmatter(slug="brasidas-synthesis", extras=extras),
+            _minimal_brief_frontmatter(slug="meridian-synthesis", extras=extras),
         )
 
-        result = load_rubric_overrides_for_slug(self.project_dir, "brasidas-synthesis")
+        result = load_rubric_overrides_for_slug(self.project_dir, "meridian-synthesis")
 
         self.assertFalse(result.is_empty)
         self.assertEqual(result.memo_subtype, "synthesis-brief")
@@ -704,7 +704,7 @@ class TestWorkedExampleRoundtrip(_TmpProjectBase):
 
     def test_template_carries_synthesis_brief_calibrations(self) -> None:
         result = load_rubric_overrides_for_slug(
-            self.project_dir, "brasidas-synthesis"
+            self.project_dir, "meridian-synthesis"
         )
         self.assertEqual(result.memo_subtype, "synthesis-brief")
         dims = sorted(c.dimension for c in result.calibrations)
@@ -714,7 +714,7 @@ class TestWorkedExampleRoundtrip(_TmpProjectBase):
 
     def test_template_carries_feedback_memo_calibrations(self) -> None:
         result = load_rubric_overrides_for_slug(
-            self.project_dir, "raytheon-pitch-strategy"
+            self.project_dir, "northwind-pitch-strategy"
         )
         self.assertEqual(result.memo_subtype, "feedback-memo")
         dims = sorted(c.dimension for c in result.calibrations)
@@ -723,7 +723,7 @@ class TestWorkedExampleRoundtrip(_TmpProjectBase):
     def test_template_carries_synthesis_brief_target_length_overrides(self) -> None:
         """The synthesis-brief entry declares per-version target_length_overrides."""
         brief = load_project_brief_strict(self.project_dir)
-        doc = brief.document_for_slug("brasidas-synthesis")
+        doc = brief.document_for_slug("meridian-synthesis")
         assert doc is not None
         assert doc.target_length_overrides is not None
         v1 = doc.target_length_overrides.for_version(1)
@@ -751,14 +751,14 @@ class TestWorkedExampleRoundtrip(_TmpProjectBase):
     def test_template_demonstrates_iteration_cap_override(self) -> None:
         """The template demonstrates the issue #349 paired override.
 
-        The `raytheon-pitch-strategy` entry in
+        The `northwind-pitch-strategy` entry in
         ``templates/BRIEF.rubric-overrides.md.example`` carries both
         ``max_iterations`` and ``iteration_cap_rationale`` so operators
         have a worked example to copy. A regression here would mean the
         template silently lost the demonstration.
         """
         brief = load_project_brief_strict(self.project_dir)
-        doc = brief.document_for_slug("raytheon-pitch-strategy")
+        doc = brief.document_for_slug("northwind-pitch-strategy")
         assert doc is not None
         # The template ships max_iterations: 5 + non-empty rationale.
         self.assertEqual(doc.max_iterations, 5)

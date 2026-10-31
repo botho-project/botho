@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from anvil.lib.testing import read_text as _read
+
 _HERE = Path(__file__).resolve().parent
 _SKILL_ROOT = _HERE.parent
 
@@ -31,10 +33,6 @@ DECK_IMAGEGEN = _SKILL_ROOT / "commands" / "deck-imagegen.md"
 DECK_IMAGEGEN_ADAPTER = _SKILL_ROOT / "commands" / "deck-imagegen-adapter.md"
 DECK_BRIEF = _SKILL_ROOT / "commands" / "deck-brief.md"
 SKILL_MD = _SKILL_ROOT / "SKILL.md"
-
-
-def _read(p: Path) -> str:
-    return p.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

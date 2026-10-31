@@ -64,7 +64,7 @@ Print a markdown table to stdout:
 | beta-bridge     | .3     | READY        | 44/49   | 3/4                                               | all                 | (terminal) — optionally audit     |
 | gamma-series-a  | -      | BRIEF_DONE   | -       | 0/4                                               | -                   | deck-draft gamma-series-a         |
 | delta-board     | .1     | DRAFTED      | -       | 1/4                                               | -                   | deck-figures → 4 critics parallel |
-| aldus           | .5     | REVIEWED     | 42/49   | 5/6 (override: Well-conditioned thread: traje…)   | review,nar,mkt,des  | deck-revise aldus                 |
+| beacon           | .5     | REVIEWED     | 42/49   | 5/6 (override: Well-conditioned thread: traje…)   | review,nar,mkt,des  | deck-revise beacon                 |
 ```
 
 Follow the table with:

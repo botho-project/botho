@@ -113,7 +113,7 @@ def test_end_to_end_smoke_compiles(tmp_path):
     slugs = ["00-intro", "01-mid", "appendix"]
     write_brief(
         tmp_path,
-        project="nitas-mama",
+        project="example-memoir",
         documents=default_documents(slugs),
         build={
             "order": slugs,

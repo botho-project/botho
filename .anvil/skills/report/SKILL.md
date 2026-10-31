@@ -80,7 +80,7 @@ EMPTY → DRAFTED → REVIEWED+AUDITED → REVISED → … → READY → AUDITED
 
 **Threshold**: ≥39/44 (the customer-facing tier; higher than the ≥35/44 used by `anvil:memo`). Any critical flag in EITHER `.review/` or `.audit/` short-circuits regardless of total — block until addressed.
 
-**Iteration cap**: default `max_iterations: 4` (so worst-case terminal version is `<thread>.5/`). Configurable per-thread by writing `{ "max_iterations": <N> }` to `<thread>/.anvil.json` in the thread root.
+**Iteration cap**: default `max_iterations: 4` (`<thread>.{max_iterations}/` — `<thread>.4/` at the default — is the worst-case terminal version dir; there is no `<thread>.5/` under a default cap). Configurable per-thread by writing `{ "max_iterations": <N> }` to `<thread>/.anvil.json` in the thread root.
 
 ## Two-stage promotion: `AUDITED → CUSTOMER-READY`
 
@@ -187,6 +187,8 @@ The default location is `<repo_root>/customers/` (customer context is *content*,
 
 The portfolio orchestrator (`report`) is the user-facing entry point for status; the lifecycle commands are dispatched from it (or invoked directly by the orchestrating agent). `report-vision` is an optional rendered-PDF critic sibling (alongside `report-review` and `report-audit`) — recommended before `report-promote` for customer-facing material; see `commands/report-vision.md` and `rubric.md` § "Vision-owned dimensions".
 
+**`report-review` surfaces `EVIDENCE-DRIFT` when thread-root evidence changed after the reviewed version was written (issue #857).** Version-dir immutability means `<thread>.{N}/` is frozen at draft/revise time, but `<thread>/BRIEF.md` and `<thread>/refs/**` are mutable thread-root siblings — a terminal `AUDITED`/`CUSTOMER-READY` thread whose BRIEF or refs changed since drafting looks identical on disk to one whose evidence is current. `report-draft`/`report-revise` record a BRIEF/refs mtime baseline into `<thread>.{N}/_progress.json.metadata.evidence_snapshot` (`anvil/lib/evidence_drift.py`) at completion; `report-review` compares the CURRENT thread-root mtimes against that baseline and, on drift, adds a non-blocking "Evidence drift" note to `verdict.md` naming what changed. This is **purely advisory** — it does NOT change `advance`, any dimension score, or the `AUDITED` terminal-state gate, and it is never routed through the `CriticalFlag` machinery (contrast the pending-marker gate, which IS wired through `CriticalFlag` because it has something to *resolve*; evidence drift has nothing to resolve, only something to re-weigh). A thread with no recorded baseline (pre-#857, or no draft/revise pass since adoption) reports clean, never a false positive.
+
 ## Progress tracking
 
 Each `<thread>.{N}/` directory contains `_progress.json` recording phase state. Schema mirrors `anvil:memo` with two extensions:
@@ -232,7 +234,7 @@ Both paths produce `report.pdf` alongside `report.md` in the same version direct
 
 **Consumer-pluggable block-figure adapters (opt-in, defaults off).** For reports about hardware/design artifacts, consumers can register external CLI figure generators (e.g., SPICE→SVG, GDS→PNG) under `report.figure_adapters` in the repo-level `.anvil/config.json`. `report-figures` invokes each adapter once per glob-matched design unit and lands outputs at `<thread>.{N}/exhibits/blocks/<unit>/<adapter>.<ext>`, where body references are covered by the existing `report-review` step-4c existence/freshness gate and the pandoc render. Anvil ships the contract plus a no-op reference adapter (`assets/noop-figure-adapter.sh`), zero EDA tooling; per-unit failures write `*.FAILED.md` stubs and never abort the phase, and a missing adapter binary degrades gracefully. Block coverage is reported, not gated. See `commands/report-figure-adapter.md` for the full contract and `lib/figure_adapters.py` for the dispatcher.
 
-**`report-review` render-gate hook (deterministic pre-flight).** `report-review` runs a deterministic render-gate pre-flight via `anvil/lib/render_gate.py`. The gate checks page count (`page_cap=None` — customer reports vary; consumers can override per-thread via `<thread>/.anvil.json: render_gate.page_cap`), overfull boxes (>5.0pt threshold; **skipped when `delivery_format` selects the pandoc path** — no `Overfull` semantics in CSS output), compile success, and source-side placeholders. On failure, the gate emits a typed `Review(kind=tool_evidence)` with one `CriticalFlag` per failed gate dimension; the existing `anvil/lib/critics.py::compute_verdict` path treats this as `BLOCK`. See `commands/report-review.md` step 4b.
+**`report-review` render-gate hook (deterministic pre-flight).** `report-review` runs a deterministic render-gate pre-flight via `anvil/lib/render_gate/`. The gate checks page count (`page_cap=None` — customer reports vary; consumers can override per-thread via `<thread>/.anvil.json: render_gate.page_cap`), overfull boxes (>5.0pt threshold; **skipped when `delivery_format` selects the pandoc path** — no `Overfull` semantics in CSS output), compile success, and source-side placeholders. On failure, the gate emits a typed `Review(kind=tool_evidence)` with one `CriticalFlag` per failed gate dimension; the existing `anvil/lib/critics.py::compute_verdict` path treats this as `BLOCK`. See `commands/report-review.md` step 4b.
 
 ## Defaults and overrides
 
@@ -250,7 +252,7 @@ Resolution rule: consumer overrides win when present, else fall back to skill de
 
 `report` is registered as a **skill-identity** `artifact_type` value in
 the shared project-BRIEF registry
-(`anvil/lib/project_brief.py::REGISTERED_ARTIFACT_TYPES` /
+(`anvil/lib/project_brief/types.py::REGISTERED_ARTIFACT_TYPES` /
 `SKILL_IDENTITY_ARTIFACT_TYPES`; issue #432, following the #386/#408
 pattern for `deck`/`slides`/`proposal`/`paper`). In a shared project
 BRIEF, a `documents:` entry with `artifact_type: report` declares that

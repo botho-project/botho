@@ -1,6 +1,6 @@
 ---
 name: deck-imagegen
-description: Generative-imagery command for the deck skill. Opt-in via `imagery_policy: generative-eligible` in BRIEF.md. Dispatches to a consumer-registered backend adapter, writes rendered PNGs into `<thread>.{N}/assets/`, and records every prompt + parameters into a prompt journal at `assets/_prompts.json`.
+description: "Generative-imagery command for the deck skill. Opt-in via `imagery_policy: generative-eligible` in BRIEF.md. Dispatches to a consumer-registered backend adapter, writes rendered PNGs into `<thread>.{N}/assets/`, and records every prompt + parameters into a prompt journal at `assets/_prompts.json`."
 ---
 
 # deck-imagegen — Generative-imagery command (opt-in)
@@ -17,7 +17,7 @@ This command exists because aesthetic-craft venture categories (consumer product
 
 - **Thread slug** (positional argument).
 - **Latest version directory**: highest `N` with `<thread>.{N}/deck.md` under the thread root `<thread>/`.
-- **`<thread>/BRIEF.md`**: read frontmatter for `imagery_policy` (REQUIRED gate) and `imagery_style` (optional style preset key; see `commands/imagery-style-presets.md` when shipped per Epic #130 Phase 1C / issue #133).
+- **`<thread>/BRIEF.md`**: read frontmatter for `imagery_policy` (REQUIRED gate) and `imagery_style` (optional style preset key; see `assets/imagery-style-presets.md`).
 - **`.anvil/config.json`**: read `deck.imagegen.backend` to discover the consumer-registered adapter. See `commands/deck-imagegen-adapter.md` for the adapter contract and registration mechanics.
 - **`deck.md` imagery markers**: the drafter MAY annotate a slide that needs a generative asset with an HTML comment of the form `<!-- anvil-imagegen: <slot> [style=<preset>] [steps=<N>] -->` immediately above the `![alt](assets/generated/<slot>.png)` reference. `<slot>` is the asset's stable filename stem; `<style>` (optional) overrides the brief-level style preset for this single slide; `<steps>` (optional) overrides the adapter's default step count. The `assets/generated/` namespace is the canonical generative-asset location per Phase 1B (see `commands/deck-draft.md` §"Respecting imagery_policy" and issue #132).
 
@@ -88,7 +88,7 @@ The full dispatch loop is implemented in `anvil/skills/deck/lib/imagegen.py` (`r
 
 7. **Load presets + journal**: parse `anvil/skills/deck/assets/imagery-style-presets.md` for prefix/suffix per preset key (case-insensitive, hyphen-equivalent-to-underscore matching). Read the prior journal at `<thread>.{N}/assets/_prompts.json` via `prompt_journal.read_journal` (Phase 2D primitive at `anvil/skills/deck/lib/prompt_journal.py`). A missing or empty journal returns `{}`; a corrupt journal is treated as missing (mirrors the `_progress.json` crash-recovery contract). Unknown per-entry fields do NOT count as corruption — they are tolerated and preserved (issue #621; see the read contract above).
 
-8. **Resolve prompt source per slot** — refusal-on-fabrication: the drafter MUST have written the slide-specific prompt body either to a sidecar `<thread>.{N}/assets/generated/<slot>.prompt.md` (highest precedence) OR to a `## Imagery prompt: <slot>` section in `<thread>.{N}/speaker-notes.md`. If neither resolves, the slot is a per-slot failure — write a `<slot>.png-FAILED.md` stub naming the missing-prompt condition; the run continues with the next slot.
+8. **Resolve prompt source per slot** — refusal-on-fabrication: the drafter MUST have written the slide-specific prompt body either to a sidecar `<thread>.{N}/assets/generated/<slot>.prompt.md` (highest precedence, whole file content is the prompt) OR to a `## Imagery prompt: <slot>` section in `<thread>.{N}/speaker-notes.md` — for the speaker-notes source, only the **first blank-line-separated paragraph** after the heading is taken as the prompt; anything after the first blank line (a second paragraph, a trailing aside) is treated as a human-facing note and is excluded from the dispatched prompt, so a drafter can leave e.g. an on-slide caption reminder there without it leaking into the image backend's input and being rendered as visible text. A section with no blank line at all resolves in full. If neither resolves, the slot is a per-slot failure — write a `<slot>.png-FAILED.md` stub naming the missing-prompt condition; the run continues with the next slot.
 
 9. **Compose the final prompt** per `assets/imagery-style-presets.md` § "Composition rules": `final = <prefix(K)> + ". " + P + ". " + <suffix(K)>`. The `raw` preset short-circuits to `P` (no prefix, no suffix). The deck-wide `imagery_style:` frontmatter is the default; the per-marker `style=<preset>` token overrides for that slot.
 
@@ -130,7 +130,7 @@ The command never retries on `BackendError`. Retry/backoff is the consumer's res
 
 - `commands/deck-imagegen-adapter.md` — adapter contract (minimal `generate()` signature, consumer registration via `.anvil/config.json`, explicit non-goals).
 - `SKILL.md` § "Asset generation" — the opt-in framing and the `imagery_policy` contract.
-- `commands/imagery-style-presets.md` (Epic #130 Phase 1C / issue #133) — the style-preset library (keys + prompt-prefix definitions).
+- `assets/imagery-style-presets.md` — the style-preset library (keys + prompt-prefix definitions).
 - Epic #130 — the multi-phase plan that ships `deck-imagegen`, the prompt-journal primitive, the fabrication-contract drafter prompts, and the `deck-audit` extension.
 - `commands/deck-figures.md` — the deterministic figure pipeline; `deck-imagegen` is a *parallel* asset path, not a replacement.
 - `commands/deck-audit.md` — Phase 3 (Epic #130 / issue G) extends the auditor with three new findings: `unattributed-generative-imagery`, `prompt-claim-divergence`, `style-incoherence`.

@@ -33,7 +33,7 @@ A single command that an operator (or orchestrating agent) runs to see the state
    - `AUDITED-PARTIAL` (transient) — only `.audit/` present; not advance-eligible.
    - `REVIEWED+AUDITED` — both `.review/` and `.audit/` present; no synthesis sibling yet (or synthesis sibling present but `gaps.json` missing / phase not done).
    - `SYNTHESIZED` (transient) — BOTH `<slug>.{N}.review/verdict.md` AND `<slug>.{N}.audit/verdict.md` are present AND `<slug>.{N}.synthesis/verdict.md` + `<slug>.{N}.synthesis/gaps.json` are present for the latest `N`. The synthesizer has consolidated cross-critic findings into a single machine-readable gap list the reviser will consume; this is the recommended pre-revise state on the proposal skill (the reviser's fallback to per-sibling reading still works without it — see `proposal-synthesize.md` §"Backward compatibility").
-   - `READY`/`AUDITED` — both critics clear (review `advance: true` ≥35, audit `pass: true`, no critical flags). The synthesis sibling, if present at a terminal `N`, is informational only (the thread is terminal; nothing further to revise).
+   - `READY`/`AUDITED` — both critics clear (review `advance: true` ≥35, audit `pass: true`, no critical flags) AND no unresolved pending marker (issue #841 — see `commands/proposal-audit.md`'s terminal-gate step; equivalently, `<slug>.{N}.pending/_review.json` carries no active `pending_dependency` flag). A thread that clears score + critical flags but still has an active `[PENDING <source>]` marker reads as `REVIEWED+AUDITED`, not `AUDITED` — this is a distinct check from the critical-flag check, since `pending_dependency` never appears in either verdict's `Critical flags` list. The synthesis sibling, if present at a terminal `N`, is informational only (the thread is terminal; nothing further to revise).
 4. Recommend the next command per thread:
 
    | State | Recommended next command |
@@ -69,7 +69,7 @@ Print a markdown table to stdout:
 | Thread       | Latest | State            | Review | Audit | Iter | Next                              |
 |--------------|--------|------------------|--------|-------|------|-----------------------------------|
 | gossamer-lan | .2     | REVIEWED+AUDITED | 32/44  | pass  | 2/4  | proposal-synthesize gossamer-lan  |
-| raytheon-pitch | .1   | SYNTHESIZED      | 33/44  | pass  | 1/4  | proposal-revise raytheon-pitch    |
+| northwind-pitch | .1   | SYNTHESIZED      | 33/44  | pass  | 1/4  | proposal-revise northwind-pitch    |
 | solar-rig    | .3     | AUDITED          | 38/44  | pass  | 3/4  | (terminal)                        |
 | new-system   | -      | EMPTY            | -      | -     | 0/4  | proposal-draft new-system         |
 ```
