@@ -21,7 +21,7 @@
   "dependencies": {
     "@react-navigation/native": "^7.5.0",
     "@tanstack/react-query": "^5.104.1",
-    "expo": "~57.0.30",
+    "expo": "~58.0.14",
     "expo-constants": "~57.0.22",
     "expo-linking": "~57.0.13",
     "expo-local-authentication": "~57.0.3",
