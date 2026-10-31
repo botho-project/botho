@@ -13,10 +13,24 @@ bumps (`0.X.Y`) are backwards-compatible.
 ## [Unreleased]
 
 ### Added
-- Inactive LotteryV2 primitives, durable storage and validated atomic ledger
-  transitions, with native/WASM primitive evidence and native payout
-  discovery/spend tests (#1302, #1351, #1353, #1357, #1365). These are candidate
-  components; LotteryV2 is not activated on the current network.
+- **Consensus-breaking (protocol 7.0.0 reset):** LotteryV2 payouts are active on
+  the production ledger from genesis (#1640, #1668), on the new
+  `botho.ledger.2` schema with derivation-context storage (#1639, #1652) and
+  versioned V2 snapshots (#1646, #1664). The draw and the #573 candidate window
+  are seeded from the parent block's RandomX PoW output, not its header hash
+  (#1676, #1679). Header checks run before the V2 draw, and add_block enforces
+  the ML-KEM ciphertext shape (#1670, #1677, #1680). This builds on the LotteryV2
+  primitives, storage and atomic ledger transitions from #1302, #1351, #1353,
+  #1357 and #1365.
+- Every wallet discovers and spends V2 lottery payouts: the native node wallet
+  (#1644, #1661), `botho balance`/`send` via view-key scan (#1662, #1665), the
+  WASM, web and mobile clients (#1645, #1658), the bridge reserve (#1657,
+  #1666) and the stress harness (#1642, #1643, #1659, #1660). Detached native
+  payout recovery and spending are authenticated (#1499, #1672), all consumers
+  share one set of CLSAG payout helpers (#1667, #1671, #1673), and
+  `chain_getOutputs` exposes V2 payout context and real cluster tags (#1641,
+  #1655).
+- P12 internal review of LotteryV2 payouts (`audits/`, #1647, #1678).
 - Proposed confidential-transaction contract and integer-proof gates, bounded
   composition experiments, and resource/economic measurements (#1266, #1284,
   #1288, #1311, #1335, #1347, #1350, #1356). This is design and research
@@ -37,6 +51,8 @@ bumps (`0.X.Y`) are backwards-compatible.
   without changing host limits (`scripts/test-ledger.sh`, #1362).
 
 ### Security
+- Bumped zstd 0.13 → 0.14.3 to clear RUSTSEC-2026-0391, -0398, -0403 and -0410
+  (#1617, #1654).
 - Remediated HTTP/TLS and Bulletproofs dependency advisories, removed the
   vulnerable Solana native bigint conversion, and migrated DNS/libp2p/WebRTC
   dependencies with bounded connection cleanup (#1269, #1303, #1312, #1316,
