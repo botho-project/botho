@@ -44,6 +44,14 @@ MAX_SIGNING_SECONDS = 120
 # cannot be submitted (begin_submit requires ``prepared``) and reserve no
 # inputs; they are kept for audit, never deleted, and are not orphans.
 EXPIRED_ARTIFACTS = 'expired'
+# Routine scans recheck at most this many settled-unspent key images (one
+# chain_areKeyImagesSpent request), rotating through the rest (#1719). x1
+# q20261030 held at T0+42h: re-querying ~17.6k unspent images on every sync
+# pinned the 300/min endpoint quota and starved reconciliation.
+SPENT_AUDIT_IMAGES = 256
+# Journal ``prepared`` times are re-read this far back, so an intent committed
+# with a slightly earlier clock reading is never missed.
+SIGNED_IMAGES_OVERLAP_SECONDS = 600
 
 
 def compact_owned(output):
@@ -198,6 +206,8 @@ class Controller:
         # Never trust persisted wallet inventory after a process restart.
         self.inventory_initialized = False
         self.spent = []
+        self.spent_audit_offset = 0
+        self.signed_images = (set(), set(), None)
         self.scan_lock = asyncio.Lock()
         self.admission_lock = asyncio.Lock()
         self.reconcile_wakeup = asyncio.Event()
@@ -842,6 +852,56 @@ class Controller:
             if count >= 3:
                 self.halt('post-idle RSS growth across three cycles: '+host)
 
+    def signed_key_images(self):
+        """Every key image this controller has put in a signed transaction (#1719).
+
+        Read from the durable journal (``info.key_images`` is written with
+        ``prepared``), so a restart loses nothing; extended incrementally.
+        """
+        seen, images, since = self.__dict__.get('signed_images') or (set(), set(), None)
+        rows = self.j.db.execute(
+            'SELECT id, prepared, info FROM intents WHERE prepared IS NOT NULL AND prepared>=?',
+            (-1 if since is None else since-SIGNED_IMAGES_OVERLAP_SECONDS,))
+        for identifier, prepared, info in rows:
+            since = prepared if since is None else max(since, prepared)
+            if identifier not in seen:
+                seen.add(identifier)
+                images.update(json.loads(info).get('key_images') or ())
+        self.signed_images = (seen, images, since)
+        return images
+
+    def spent_query_images(self, all_images, cached, full):
+        """Key images a scan must query, and the next audit offset (#1719).
+
+        Full scans query every image. A routine scan queries every image not
+        known spent while they fit in one request; beyond that only those
+        whose state can have changed: never checked, last seen pending or
+        not cleanly unspent, or in a transaction this controller signed (the
+        campaign wallets' keys are held only here). One rotating request's
+        worth of the rest is rechecked per scan: over a stable set that
+        revisits each image every ceil(N/256) scans, and full scans still
+        recheck every image.
+        """
+        offset = self.__dict__.get('spent_audit_offset', 0)
+        candidates = [image for image in all_images if image not in cached]
+        if full or len(candidates) <= SPENT_AUDIT_IMAGES:
+            return candidates, offset
+        previous = {s['keyImage']:s for s in self.spent}
+        signed = self.signed_key_images()
+        volatile = {image for image in candidates
+                    if image in signed or image not in previous
+                    or previous[image].get('spent') is not False
+                    or previous[image].get('pending') is not False
+                    or 'error' in previous[image]}
+        rest = [image for image in candidates if image not in volatile]
+        if not rest:
+            return candidates, offset
+        start = offset % len(rest)
+        audit = set(rest[start:start+SPENT_AUDIT_IMAGES]
+                    + rest[:max(0, start+SPENT_AUDIT_IMAGES-len(rest))])
+        return ([image for image in candidates if image in volatile or image in audit],
+                (start+SPENT_AUDIT_IMAGES) % len(rest))
+
     async def sync(self, full=False, *, draining=False, rescan_wallets=None):
         """Refresh output history, wallet ownership and key-image state.
 
@@ -979,8 +1039,9 @@ class Controller:
             # Finalized spent images stay spent. Phase/full scans independently
             # recheck them; routine scans reserve RPC capacity for live inputs.
             cached = {} if full else {s['keyImage']:s for s in self.spent if s['spent']}
-            query_images = [image for image in all_images if image not in cached]
-            checked = dict(cached)
+            query_images, audit_next = self.spent_query_images(all_images, cached, full)
+            # Images a routine scan did not query keep their last checked state.
+            checked = {} if full else {s['keyImage']:s for s in self.spent}
             for first in range(0,len(query_images),256):
                 images = query_images[first:first+256]
                 live = self.live_hosts()
@@ -999,6 +1060,7 @@ class Controller:
                 self.history_log().persist(previous, blocks)
             self.checkpoint_inventory(height, scans, spent, force=full)
             self.blocks, self.inventory, self.spent = blocks, scans, spent
+            self.spent_audit_offset = audit_next
             self.inventory_initialized = True
             if incremental:
                 seen.update(added)

@@ -6,11 +6,12 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
-from controller import Controller, cgroup_cpu_limit, effective_cpu_count, parse_cpu_max
+from controller import (Controller, SPENT_AUDIT_IMAGES, cgroup_cpu_limit,
+                        effective_cpu_count, parse_cpu_max)
 from runtime import BlockLog, Gate, HOSTS, Journal
 
 
-class IncrementalScanTests(unittest.IsolatedAsyncioTestCase):
+class ScanHarness(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.c = Controller.__new__(Controller)
@@ -65,6 +66,8 @@ class IncrementalScanTests(unittest.IsolatedAsyncioTestCase):
         self.c.native.reset_mock()
         self.c.rpc.call.reset_mock()
 
+
+class IncrementalScanTests(ScanHarness):
     async def test_first_scan_and_cached_restart_rebuild_all_owned_outputs(self):
         await self.initialize()
         expected = copy.deepcopy(self.c.inventory)
@@ -250,6 +253,102 @@ class IncrementalScanTests(unittest.IsolatedAsyncioTestCase):
         await self.c.restore_wallet(0)
         self.assertEqual(peak,1)
         self.assertEqual([c.args[0]['operation'] for c in self.c.native.call_args_list],['scan','restore_check'])
+
+
+class SpentQueryBoundTests(ScanHarness):
+    """#1719: routine scans query volatile images plus one rotating audit request."""
+
+    TIP = 599  # 600 owned images: more than SPENT_AUDIT_IMAGES
+
+    async def grow(self):
+        self.chain = [self.block(h) for h in range(self.TIP+1)]
+        self.set_height(self.TIP)
+        await self.initialize()
+
+    def sign(self, identifier, images):
+        self.c.j.db.execute(
+            "INSERT INTO intents(id,kind,offered,state,recipient,amount,prepared,info)"
+            " VALUES(?,'campaign',0,'accepted',1,1,?,?)",
+            (identifier, 1000.0, json.dumps({'key_images': images})))
+
+    def queried(self):
+        return [image for query in self.spent_queries() for image in query]
+
+    async def test_first_sync_queries_everything(self):
+        self.chain = [self.block(h) for h in range(self.TIP+1)]
+        self.set_height(self.TIP)
+        await self.c.sync()
+        self.assertEqual(len(self.queried()), self.TIP+1)
+
+    async def test_routine_sync_cost_is_bounded_by_volatile_images_and_one_audit_request(self):
+        await self.grow()
+        self.sign('pay', ['image-tx-500'])
+        self.chain.append(self.block(self.TIP+1)); self.set_height(self.TIP+1)
+        await self.c.sync()
+        images = self.queried()
+        self.assertIn('image-tx-500', images)          # signed by the controller
+        self.assertIn('image-tx-%d' % (self.TIP+1), images)  # never checked
+        self.assertEqual(len(images), SPENT_AUDIT_IMAGES+2)
+        self.assertEqual(len(self.spent_queries()), 2)
+
+    async def test_signed_input_flips_spent_and_stays_cached(self):
+        await self.grow()
+        self.sign('pay', ['image-tx-500'])
+        self.statuses['image-tx-500'] = {'spent': True}
+        await self.c.sync()
+        state = {s['keyImage']: s for s in self.c.spent}
+        self.assertTrue(state['image-tx-500']['spent'])
+        self.c.rpc.call.reset_mock()
+        await self.c.sync()
+        self.assertNotIn('image-tx-500', self.queried())
+        self.assertTrue({s['keyImage']: s for s in self.c.spent}['image-tx-500']['spent'])
+
+    async def test_pending_image_is_requeried_until_settled(self):
+        await self.grow()
+        self.c.spent[10] = dict(self.c.spent[10], pending=True)
+        await self.c.sync()
+        self.assertIn('image-tx-10', self.queried())
+        self.assertFalse({s['keyImage']: s for s in self.c.spent}['image-tx-10']['pending'])
+
+    async def test_unqueried_images_keep_their_last_checked_state(self):
+        await self.grow()
+        before = {s['keyImage']: s for s in self.c.spent}
+        await self.c.sync()
+        self.assertEqual({s['keyImage']: s for s in self.c.spent}, before)
+        self.assertEqual(len(self.c.spent), self.TIP+1)
+
+    async def test_audit_rotation_covers_every_image(self):
+        await self.grow()
+        seen = set()
+        for _ in range(-(-(self.TIP+1)//SPENT_AUDIT_IMAGES)):
+            self.c.rpc.call.reset_mock()
+            await self.c.sync()
+            seen.update(self.queried())
+        self.assertEqual(seen, {'image-tx-%d' % h for h in range(self.TIP+1)})
+
+    async def test_failed_query_does_not_advance_the_audit_offset(self):
+        await self.grow()
+        offset = self.c.spent_audit_offset
+        async def bad(host, method, params, **kwargs):
+            return [] if method == 'chain_areKeyImagesSpent' else await self.rpc(host, method, params, **kwargs)
+        self.c.rpc.call.side_effect = bad
+        with self.assertRaises(Gate):
+            await self.c.sync()
+        self.assertEqual(self.c.spent_audit_offset, offset)
+
+    async def test_full_sync_still_queries_every_image(self):
+        await self.grow()
+        await self.c.sync(full=True)
+        self.assertEqual(len(self.queried()), self.TIP+1)
+
+    async def test_signed_images_survive_a_restart(self):
+        await self.grow()
+        self.sign('pay', ['image-tx-500'])
+        self.c.signed_key_images()
+        self.c.signed_images = (set(), set(), None)  # a new process
+        self.assertIn('image-tx-500', self.c.signed_key_images())
+        self.sign('later', ['image-tx-501'])
+        self.assertEqual(self.c.signed_key_images(), {'image-tx-500', 'image-tx-501'})
 
 
 class CpuLimitTests(unittest.TestCase):
