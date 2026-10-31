@@ -25,7 +25,9 @@ The red-team critic generates its own objection set **before** consulting any au
 1. The critic reads the memo body (`<thread>.md`) and the source-of-truth materials in the resolved refs-dir list (per `refs_resolver.resolve_refs_dirs`).
 2. The critic generates the strongest case for **killing** the thesis: independent objections, each ranked as **load-bearing** (a deal-breaker for the cited recommendation if it stands) or **non-load-bearing** (peripheral or speculative concerns).
 3. The critic renders a verdict on each objection: did the memo's response defeat the objection, did the objection survive, or did the memo not engage at all?
-4. **Only after** the objection set is generated does the critic optionally read `refs/strongman-against.md` (and portfolio-level equivalents) — for the calibration crosscheck only (see §"Calibration crosscheck" below). The strongman file is **never** input to objection generation.
+4. **Only after** the objection set is generated does the critic consult calibration substrate — for the calibration crosscheck only (see §"Calibration crosscheck" below), never as input to objection generation. Two modes, resolved mechanically (issue #913):
+   - **`strongman-crosscheck` mode**: `refs/strongman-against.md` (or a portfolio-level equivalent) resolves in the refs-dir list. The critic reads it now and crosschecks its own objection set against the author's named objections.
+   - **`self-derived` mode**: no `strongman-against.md` resolves anywhere in the resolved refs-dir list. The critic instead crosschecks its own objection set against the memo's OWN self-directed critique — its risk register (dim 4 *Risk honesty*), any explicitly stated concessions/caveats, and any kill-criteria or downside scenarios the memo names for itself. This is the common case (issue #913) — most threads never carry a hand-authored `strongman-against.md`, since the reviser cannot honestly author one (a strongman is meant to supply objections independently of the author).
 
 This is the load-bearing differentiator from `memo-review` step 4g: the existing strongman back-check is **substrate-driven** (the author names the objections; the reviewer classifies engagement); the red-team critic is **adversarial-by-default** (the critic generates the objections; the critic judges rebuttal sufficiency). Quality critics score; this critic prosecutes.
 
@@ -55,12 +57,12 @@ The bar is materially higher than the existing strongman back-check vocabulary. 
 <thread>.{N}.redteam/
   _review.json         Canonical typed review payload per anvil/lib/review_schema.py
   objections.md        One-per-objection prose: objection, load-bearing tag, verdict, rebuttal-sufficiency justification
-  calibration.md       Strongman crosscheck (emitted only when refs/strongman-against.md is present)
+  calibration.md       Calibration crosscheck — ALWAYS emitted (issue #913): `strongman-crosscheck` mode when refs/strongman-against.md resolves, `self-derived` mode (from the memo's own risk register / concessions / kill list) otherwise
   _meta.json           { critic: redteam, role, started, finished, model, scorecard_kind: human-verdict, rubric_id }
   _progress.json       Phase state (phase: redteam; for_version: N)
 ```
 
-**Atomicity** (issue #350, #376): the red-team sibling dir is written **atomically** via the staged-sidecar primitive at `anvil/lib/sidecar.py`. The required files (`_review.json`, `objections.md`, `_meta.json`, `_progress.json`) are staged under a leading-dot sibling `.<thread>.{N}.redteam.tmp/` during writing; on clean completion the staging dir is renamed (one atomic `Path.rename`) to the final `<thread>.{N}.redteam/` name. `calibration.md` is conditionally added to the manifest only when `refs/strongman-against.md` (or a portfolio-level equivalent) is present. A mid-cycle interrupt leaves a `.<thread>.{N}.redteam.tmp/` dir on disk that the next invocation's `cleanup_one_staging(<thread>.{N}.redteam)` per-critic sweep removes; the final-named dir never exists in partial form. Discovery (`anvil/lib/critics.py::discover_critics`) is unchanged — the leading-dot staging shape is invisible to the discovery glob.
+**Atomicity** (issue #350, #376): the red-team sibling dir is written **atomically** via the staged-sidecar primitive at `anvil/lib/sidecar.py`. The required files (`_review.json`, `objections.md`, `calibration.md`, `_meta.json`, `_progress.json`) are staged under a leading-dot sibling `.<thread>.{N}.redteam.tmp/` during writing; on clean completion the staging dir is renamed (one atomic `Path.rename`) to the final `<thread>.{N}.redteam/` name. `calibration.md` is **unconditionally** part of the required-files manifest (issue #913 — previously gated on `refs/strongman-against.md` presence; now always written, with its declared mode/content varying instead of its presence). A mid-cycle interrupt leaves a `.<thread>.{N}.redteam.tmp/` dir on disk that the next invocation's `cleanup_one_staging(<thread>.{N}.redteam)` per-critic sweep removes; the final-named dir never exists in partial form. Discovery (`anvil/lib/critics.py::discover_critics`) is unchanged — the leading-dot staging shape is invisible to the discovery glob.
 
 ### `_review.json` shape
 
@@ -130,14 +132,16 @@ One markdown subsection per objection:
 
 Objections are numbered in load-bearing-first order (load-bearing objections first, ordered by adversarial strength; non-load-bearing objections last). The verdict appears in the section heading prefix (`Verdict: SURVIVES.`) so a reader scanning headings can see the kill-case shape at a glance.
 
-### `calibration.md` structure (conditional)
+### `calibration.md` structure (two modes; ALWAYS emitted — issue #913)
 
-Emitted ONLY when `refs/strongman-against.md` (or a portfolio-level equivalent under `<portfolio>/research/<topic>-analysis/`) is present in the resolved refs-dir list. The file inverts the original contract: the author's strongman becomes a calibration signal on the author's adversarial imagination.
+`calibration.md` is **always written**, in one of two modes, chosen mechanically by whether `refs/strongman-against.md` (or a portfolio-level equivalent under `<portfolio>/research/<topic>-analysis/`) resolves in the refs-dir list. This replaces the pre-#913 contract, under which the file was emitted only when a hand-authored strongman existed — which, in the studio canary, is the *uncommon* case (the reviser cannot honestly author `strongman-against.md` itself, since a strongman is meant to supply objections independently of the author; most threads never accumulate one). Whichever mode applies, the file MUST open with a mode + bias banner before the crosscheck body, so a reader (or a downstream consumer parsing the file) can tell at a glance which signal they are holding.
+
+**Mode 1 — `strongman-crosscheck`** (when `refs/strongman-against.md` resolves). The file inverts the original contract: the author's strongman becomes a calibration signal on the author's adversarial imagination.
 
 ```markdown
 # Calibration crosscheck against author-supplied strongman
 
-The author-supplied `refs/strongman-against.md` named the following objections. This file calibrates the red-team's independent objection set against the author's anticipated set.
+**Mode: strongman-crosscheck.** `refs/strongman-against.md` was present and consulted AFTER objection generation (never as input to it — see §"Charter: independence of substrate"). This file calibrates the red-team's independently-generated objection set against the author's anticipated set.
 
 ## Anticipated (positive signal for author imagination)
 
@@ -164,7 +168,33 @@ Author-named objections the red-team judged non-load-bearing or already defeated
 The red-team raised **N load-bearing** objections, of which **K** were anticipated by the author's strongman and **N-K** were novel. The novel-objection count is the load-bearing-blind-spot signal: a high ratio suggests the author's adversarial imagination is missing the strongest counter-arguments.
 ```
 
-The calibration block does NOT contribute findings or critical flags to `_review.json` — it is operator-facing audit-trail only. The existing strongman back-check at `memo-review` step 4g continues to function as designed; this crosscheck does not replace it.
+**Mode 2 — `self-derived`** (when no `strongman-against.md` resolves anywhere in the resolved refs-dir list — the common case). There is no author-supplied strongman to crosscheck against, so the anticipated set is substituted with the memo's OWN self-directed critique: its risk register (dim 4 *Risk honesty* — the named top risks and mitigations), any explicitly stated concessions/caveats, and any kill-criteria or downside-scenario list the memo names for itself.
+
+```markdown
+# Calibration crosscheck — self-derived mode
+
+**Mode: self-derived.** No `refs/strongman-against.md` (or portfolio-level equivalent) resolved in the refs-dir list for this thread — there is no author-supplied strongman to crosscheck against. This file substitutes the memo's OWN anticipated-objection set instead: its risk register, its named concessions/caveats, and any kill-criteria or downside scenarios it states about itself.
+
+**Bias.** This substitution is generous to the author by construction: it can only ever contain objections the author already wrote down. It cannot surface anything outside the author's own adversarial imagination — measuring that blind spot is exactly what `strongman-crosscheck` mode is for, and self-derived mode cannot measure it. Treat the categories below as a floor, not a substitute for genuine external calibration; the `Novel` category below remains the load-bearing signal, and it is a STRONGER signal in this mode, not a weaker one — a novel objection here evaded not just the author's imagination but the author's own generous self-accounting.
+
+## Anticipated (already named in the memo's own self-critique)
+
+Red-team objections that overlap with something the memo's risk register / concessions / kill list already names:
+
+- **Objection 1 (...)** — overlaps with §<N>'s risk "<risk name>" / the stated concession on <topic>.
+
+## Novel (memo did not anticipate — even generously)
+
+Red-team objections with no counterpart anywhere in the memo's own self-critique:
+
+- **Objection 2 (...)** — no counterpart in the memo's risk register, concessions, or kill list. The memo's adversarial imagination never turned toward this axis at all.
+
+## Summary
+
+The red-team raised **N load-bearing** objections, of which **K** overlap with the memo's own named self-critique and **N-K** are novel. Because the anticipated set is self-derived (not independently authored), a high anticipated count is NOT evidence of genuine author foresight — it only shows the objection was already on the page somewhere. The novel count is the operative signal, and — per the mode's bias above — it is conservative: the true blind-spot count under a genuine external strongman would be at least this large.
+```
+
+Both modes: the calibration block does NOT contribute findings or critical flags to `_review.json` — it is operator-facing audit-trail only. The existing strongman back-check at `memo-review` step 4g continues to function as designed for `strongman-crosscheck` mode; `self-derived` mode has no analog in `memo-review` — it is a red-team-only signal.
 
 ### `_meta.json`
 
@@ -187,9 +217,12 @@ The calibration block does NOT contribute findings or critical flags to `_review
     "UNENGAGED": <count>
   },
   "strongman_crosscheck_present": <bool>,
+  "calibration_mode": "strongman-crosscheck" | "self-derived",
   "novel_objection_count": <N>
 }
 ```
+
+`strongman_crosscheck_present` records whether `refs/strongman-against.md` (or a portfolio-level equivalent) resolved — `true` selects `calibration_mode: "strongman-crosscheck"`, `false` selects `calibration_mode: "self-derived"` (issue #913). The two fields are redundant by construction (one is derivable from the other) but both are stamped so a downstream consumer can filter on either without re-deriving the mode from the boolean, and so the mode is discoverable without opening `calibration.md` itself. Downstream consumers SHOULD weight `self-derived` findings more conservatively than `strongman-crosscheck` findings on the `Anticipated` axis — see calibration.md's bias banner above.
 
 `scorecard_kind: human-verdict` per `anvil/lib/snippets/scorecard_kind.md`: the red-team's prose is read narratively by the reviser; the `_review.json` carries the load-bearing structured payload (scores + findings + critical flags), and `objections.md` is the human-readable narrative.
 
@@ -199,22 +232,22 @@ The calibration block does NOT contribute findings or critical flags to `_review
 
 2. **Resume check**: per the staged-sidecar shape (issue #350), a completed red-team sibling means the final-named `<thread>.{N}.redteam/` dir exists — the atomic-rename contract guarantees the dir only exists when complete. If `<thread>.{N}.redteam/` exists, exit early — the sibling is complete (idempotent). The completed sibling is read-only; re-run only by creating a NEW sibling at the next version. A partial red-team left behind by a mid-cycle interrupt manifests as a leading-dot `.<thread>.{N}.redteam.tmp/` directory; the sweep in step 1 has already removed any such partial.
 
-3. **Open the staged sidecar** for the red-team dir by invoking the context manager `anvil/lib/sidecar.py::staged_sidecar(final_dir=<thread>.{N}.redteam, required_files=[...])`. The required-files manifest starts with `["_review.json", "objections.md", "_meta.json", "_progress.json"]`; `calibration.md` is added conditionally at step 6 when a strongman-against file is discovered. Every file write from this step through step 9 MUST land **inside the yielded staging directory** (the path the context manager yields, of the shape `.<thread>.{N}.redteam.tmp/`), NOT inside the final `<thread>.{N}.redteam/` path. On clean context exit, the staged sidecar primitive verifies every name in the manifest exists, then atomically renames the staging dir to its final name. Then, **inside the staging dir**, initialize `_progress.json`: `phases.redteam.state = in_progress`, `phases.redteam.started = <ISO>`, `for_version = N`.
+3. **Open the staged sidecar** for the red-team dir by invoking the context manager `anvil/lib/sidecar.py::staged_sidecar(final_dir=<thread>.{N}.redteam, required_files=[...])`. The required-files manifest is `["_review.json", "objections.md", "calibration.md", "_meta.json", "_progress.json"]` — `calibration.md` is **unconditional** as of issue #913 (both modes write it; only its content and declared mode differ). Every file write from this step through step 9 MUST land **inside the yielded staging directory** (the path the context manager yields, of the shape `.<thread>.{N}.redteam.tmp/`), NOT inside the final `<thread>.{N}.redteam/` path. On clean context exit, the staged sidecar primitive verifies every name in the manifest exists, then atomically renames the staging dir to its final name. Then, **inside the staging dir**, initialize `_progress.json`: `phases.redteam.state = in_progress`, `phases.redteam.started = <ISO>`, `for_version = N`.
 
    **Non-Python-driver ordering (fail-open, manual fallback)** — issue #645: `staged_sidecar` is a Python context manager. A manual/agent session with **no orchestrating Python driver** cannot hold its `with` block open across the file writes below (it writes files with its own editing tool between discrete steps), so it MUST use the equivalent CLI shim rather than writing straight into the final `<thread>.{N}.redteam/` dir (which silently reopens the #350 partial-write defect this primitive exists to close). Two tiers, in preference order:
 
-   1. **Primary — `python -m anvil.lib.sidecar` CLI shim** (the common case). This wraps the *exact same* `staged_sidecar` code, so the manifest check + single atomic `Path.rename` are enforced by code, not agent discipline:
-      - `python -m anvil.lib.sidecar stage <thread>.{N}.redteam` → prints the staging path (`.<thread>.{N}.redteam.tmp/`). (Refuses with a nonzero exit if `<thread>.{N}.redteam/` already exists — matching `staged_sidecar`'s `FileExistsError` refuse-to-overwrite guard.)
-      - Write **all** required files (the required-files manifest for this step (`_review.json`, `objections.md`, `_meta.json`, `_progress.json`; plus `calibration.md` when a strongman-against file is discovered at step 6)) into that printed staging path — never into the final `<thread>.{N}.redteam/` name.
-      - `python -m anvil.lib.sidecar commit <thread>.{N}.redteam --required <comma-separated required set from above>` → verifies the manifest, then atomically renames staging → final. **Nonzero exit (1) leaves the staging dir in place with no partial final dir** if any required file is missing — the `SidecarIncompleteError` analog; fix the gap and re-`commit`.
-      - The stale-staging sweep of step 1 has an exact CLI analog: `python -m anvil.lib.sidecar cleanup <thread>.{N}.redteam` (the parallel-safe per-critic sweep, issue #376).
+   1. **Primary — `python -m anvil.lib.sidecar` CLI shim** (the common case). In an installed consumer repo (anvil vendored under `.anvil/`, not on `sys.path`), prefix every invocation below with `uv run --project .anvil` (the `.anvil/pyproject.toml` + `uv sync --project .anvil` shipped by the installer since #230 make the module resolvable from the consumer root — the same shape the other `anvil.lib.*` critics already use); in the anvil source repo the bare `python -m anvil.lib.sidecar` form works as-is. This wraps the *exact same* `staged_sidecar` code, so the manifest check + single atomic `Path.rename` are enforced by code, not agent discipline:
+      - `uv run --project .anvil python -m anvil.lib.sidecar stage <thread>.{N}.redteam` → prints the staging path (`.<thread>.{N}.redteam.tmp/`). (Refuses with a nonzero exit if `<thread>.{N}.redteam/` already exists — matching `staged_sidecar`'s `FileExistsError` refuse-to-overwrite guard.)
+      - Write **all** required files (the required-files manifest for this step — `_review.json`, `objections.md`, `calibration.md`, `_meta.json`, `_progress.json`, per step 3) into that printed staging path — never into the final `<thread>.{N}.redteam/` name.
+      - `uv run --project .anvil python -m anvil.lib.sidecar commit <thread>.{N}.redteam --required <comma-separated required set from above>` → verifies the manifest, then atomically renames staging → final. **Nonzero exit (1) leaves the staging dir in place with no partial final dir** if any required file is missing — the `SidecarIncompleteError` analog; fix the gap and re-`commit`.
+      - The stale-staging sweep of step 1 has an exact CLI analog: `uv run --project .anvil python -m anvil.lib.sidecar cleanup <thread>.{N}.redteam` (the parallel-safe per-critic sweep, issue #376).
    2. **Last resort — manual `mv`-based staging** when even `python`/`uv` is unavailable. Reproduce the staging contract by hand: (a) at entry, sweep any leftover `rm -rf .<thread>.{N}.redteam.tmp/` (the `cleanup_one_staging` analog); (b) `mkdir .<thread>.{N}.redteam.tmp/` and write **every** required file into it — writing `_progress.json` **last**, so a mid-write interrupt is caught by the missing-manifest check rather than producing a final-named partial; (c) confirm every required file computed above is present, **then** `mv .<thread>.{N}.redteam.tmp <thread>.{N}.redteam` as the **last** step (POSIX `mv` on a same-filesystem dir-to-dir rename is atomic, matching `Path.rename`). Do NOT create `<thread>.{N}.redteam/` before all files are staged. **Record the fallback durably** so a reader can tell atomicity was reproduced by hand rather than tool-verified: stamp `_meta.json` with `"atomicity_fallback": "manual-mv"` (e.g. `sidecar: staged_sidecar CLI unavailable (uv/python not on PATH); atomicity reproduced via manual mv this pass`). Absent this note the manual staging is indistinguishable from an unsafe direct write.
 
    The two tiers land a byte-identical on-disk result to the `staged_sidecar` context-manager path; they exist only to give a Python-less session a code-enforced (tier 1) or contract-faithful (tier 2) route to the same atomicity guarantee. When an orchestrating Python driver IS present, use `staged_sidecar` directly as documented above — the CLI shim is not needed.
 
 4. **Read the memo body**: load `<thread>.{N}/<thread>.md` (body filename echoes the slug per #295). Identify the load-bearing recommendation (typically: the invest / pass / conditional call + the check size + the thesis sentence), the load-bearing claims that support it (market shape, traction, team, technical thesis, financial framing), and the explicit scope-outs the memo declares.
 
-5. **Read the source-of-truth materials**: enumerate the resolved refs-dir list returned by `anvil/skills/memo/lib/refs_resolver.py::resolve_refs_dirs(<thread_dir>)` — `[<thread>/refs/]` for the legacy single-thread shape, or `[<thread>/refs/, <portfolio>/research/]` for the portfolio-shared shape (issue #280). Read source-of-truth materials (CVs, transcripts, filings, papers, LOIs, market reports, comparable memos, portfolio-level vertical briefs / comp matrices / case studies) as the substrate against which the memo's claims are evaluated. **Do NOT read `strongman-against.md`** at this step — that file is consulted only at step 7 for calibration. **Do NOT read `strongman-for.md`** at this step — that file feeds dim 2 calibration for the reviewer, not the red-team's objection generation.
+5. **Read the source-of-truth materials**: enumerate the resolved refs-dir list returned by `anvil/skills/memo/lib/refs_resolver.py::resolve_refs_dirs(<thread_dir>)` — `[<thread>/refs/]` for the legacy single-thread shape, or `[<thread>/refs/, <portfolio>/research/]` for the portfolio-shared shape (issue #280). Read source-of-truth materials (CVs, transcripts, filings, papers, LOIs, market reports, comparable memos, portfolio-level vertical briefs / comp matrices / case studies) as the substrate against which the memo's claims are evaluated. **Do NOT read `strongman-against.md`** at this step (when it exists at all) — it is consulted only at step 7 for calibration, and only in `strongman-crosscheck` mode. **Do NOT read `strongman-for.md`** at this step — that file feeds dim 2 calibration for the reviewer, not the red-team's objection generation.
 
 6. **Generate the objection set INDEPENDENTLY**: produce the strongest case for killing the thesis. For each objection:
    - **Identify the kill-case**: name the objection in 1-2 paragraphs, citing specific evidence in the memo or the refs that motivates it. Be hostile — the critic's job is to surface the strongest objection a sophisticated adversary would raise, not the politest.
@@ -225,12 +258,18 @@ The calibration block does NOT contribute findings or critical flags to `_review
 
    Aim for 5-10 objections per memo; load-bearing-first ordering. A memo where every objection comes back `DEFEATED` is a legitimate positive signal (the thesis survives a hostile reading) — DO NOT manufacture `SURVIVES` verdicts to surface findings, but DO be honest about whether the rebuttal actually wins.
 
-7. **Calibration crosscheck (conditional)**: if `refs/strongman-against.md` (or a portfolio-level equivalent under `<portfolio>/research/<topic>-analysis/`) is present in the resolved refs-dir list, NOW (and only now) read it. Enumerate the author's named objections and compare against the red-team's generated objection set:
-   - **Anticipated**: red-team objections that the author already named in `strongman-against.md`. Positive signal for author imagination.
-   - **Novel**: red-team objections that the author did NOT name. Load-bearing-blind-spot signal.
-   - **Over-weighted**: author-named objections the red-team judged non-load-bearing or already defeated. Author over-imagined.
+7. **Calibration crosscheck (ALWAYS runs; mode resolved mechanically — issue #913)**: determine the mode first, THEN read the corresponding substrate — never before objection generation in step 6.
 
-   Write the crosscheck to `calibration.md` per the structure documented in §"Outputs" above. Add `calibration.md` to the staged-sidecar required-files manifest. If `strongman-against.md` is absent in every resolved refs-dir, skip this step — `calibration.md` is NOT emitted (the manifest still requires only the four base files).
+   - **`strongman-crosscheck` mode**: if `refs/strongman-against.md` (or a portfolio-level equivalent under `<portfolio>/research/<topic>-analysis/`) is present in the resolved refs-dir list, NOW (and only now) read it. Enumerate the author's named objections and compare against the red-team's generated objection set:
+     - **Anticipated**: red-team objections that the author already named in `strongman-against.md`. Positive signal for author imagination.
+     - **Novel**: red-team objections that the author did NOT name. Load-bearing-blind-spot signal.
+     - **Over-weighted**: author-named objections the red-team judged non-load-bearing or already defeated. Author over-imagined.
+   - **`self-derived` mode**: if `strongman-against.md` is absent in every resolved refs-dir (the common case), do NOT skip this step — re-read the memo's own risk register (dim 4 *Risk honesty*), explicitly stated concessions/caveats, and any kill-criteria or downside-scenario list it names for itself, and use THAT as the anticipated set instead:
+     - **Anticipated**: red-team objections that overlap with something the memo's own risk register / concessions / kill list already names.
+     - **Novel**: red-team objections with no counterpart anywhere in the memo's own self-critique — the stronger blind-spot signal in this mode (see calibration.md's bias banner).
+     - No `Over-weighted` category is required in this mode (optional) — a memo's dim-4 risk register is already supposed to be load-bearing by rubric contract, so "the author over-imagined a risk they themselves listed" is a weaker, less-actionable signal than in `strongman-crosscheck` mode.
+
+   Write the crosscheck to `calibration.md` per the structure documented in §"Outputs" above, opening with the mode + bias banner for whichever mode applies. `calibration.md` is **unconditionally** part of the staged-sidecar required-files manifest (set at step 3) — there is no skip path.
 
 8. **Write `objections.md`**: one section per objection, load-bearing-first. Each section carries the objection, the memo's response (with line/section pointer), the verdict, and the rebuttal-sufficiency justification per the structure in §"Outputs" above.
 
@@ -240,7 +279,7 @@ The calibration block does NOT contribute findings or critical flags to `_review
 
 11. **Update `_progress.json`** inside the staging dir: `phases.redteam.state = done`, `phases.redteam.completed = <ISO>`. This is the LAST file write before the context manager exits — the manifest verification + atomic rename at exit requires `_progress.json` to be present. Then **exit the `staged_sidecar` context block**: the primitive verifies every name in the required-files manifest exists in the staging dir, then atomically renames `.<thread>.{N}.redteam.tmp/` → `<thread>.{N}.redteam/`. The final-named dir only ever exists in **complete** form.
 
-12. **Report**: print the path to the (now-renamed) red-team sibling and a one-line status (e.g., `Red-team investment-memo.3.redteam/ (7 objections, 3 load-bearing, 2 SURVIVES + 1 UNENGAGED → 3 critical-flag candidates, strongman crosscheck present)`).
+12. **Report**: print the path to the (now-renamed) red-team sibling and a one-line status naming the calibration mode (e.g., `Red-team investment-memo.3.redteam/ (7 objections, 3 load-bearing, 2 SURVIVES + 1 UNENGAGED → 3 critical-flag candidates, calibration: strongman-crosscheck)` or `... calibration: self-derived, no refs/strongman-against.md)`).
 
 ## Verdict pathway: how SURVIVES / UNENGAGED flow into advance
 
@@ -281,6 +320,7 @@ This is the same property that lets every other opt-in critic ship incrementally
 - **Be hostile.** The critic's job is to argue for killing the thesis. Surface the strongest objection a sophisticated adversary would raise, not the politest. A red-team that surfaces no `SURVIVES` verdicts on a weak memo is doing its job badly.
 - **Be honest.** `DEFEATED` is the high bar — the response must win on the merits. `SURVIVES` is the default when engagement exists but the rebuttal is thin. `UNENGAGED` is the default when the memo does not address the objection at all. DO NOT manufacture `SURVIVES` verdicts to surface findings.
 - **Generate objections BEFORE reading the author's strongman.** This is the load-bearing differentiator — the author's strongman becomes a calibration signal on the author's adversarial imagination, NOT input to the red-team's objection generation.
+- **`calibration.md` is never optional (issue #913).** When no `refs/strongman-against.md` resolves — the common case — do NOT skip the calibration crosscheck. Fall back to `self-derived` mode: crosscheck against the memo's own risk register / concessions / kill list, state the mode and its author-generous bias at the top of the file, and stamp `_meta.json.calibration_mode`. A missing `calibration.md` on ANY thread is a manifest-incompleteness bug, not a legitimate absence.
 - **Name the load-bearing-ness.** Load-bearing means: if this objection stands, the recommendation has to change. Non-load-bearing is a peripheral concern that doesn't shift the call.
 - **Cite evidence.** Every objection MUST point at specific memo text and specific refs/research material. Vague "the team is weak" objections without named evidence are not actionable for the reviser and SHOULD be avoided — same standard as the existing strongman back-check.
 - **Stay in scope.** The red-team owns dim 2 (*Thesis coherence*) and dim 3 (*Evidence quality*). It does NOT score dims 1, 4, 5, 6, 7, 8, 9 — those dims are owned by the existing `memo-review` critic. The aggregator's mean-of-non-null contract handles the score merging correctly when the red-team emits `score: null` for unowned dims.

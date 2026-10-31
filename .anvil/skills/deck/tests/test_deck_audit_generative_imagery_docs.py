@@ -27,6 +27,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from anvil.lib.testing import read_text as _read
+
 _HERE = Path(__file__).resolve().parent
 _SKILL_ROOT = _HERE.parent  # anvil/skills/deck/
 
@@ -48,10 +50,6 @@ FINDING_SEVERITIES = {
     "prompt-claim-divergence": "MAJOR",
     "style-incoherence": "MINOR",
 }
-
-
-def _read(p: Path) -> str:
-    return p.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

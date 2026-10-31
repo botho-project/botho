@@ -5,7 +5,7 @@ under issue #284 (sub-deliverable 1 of #283) and simplified under
 issue #295 (project-org model lock — body filename echoes doc folder,
 classic layout retired). It carries two on-disk shapes:
 
-1. **`brains-for-robots/`** — the canary's intended five-document
+1. **`smart-actuators/`** — the canary's intended five-document
    project-as-thread-root shape. A single project-level `BRIEF.md`
    with a non-empty `documents:` frontmatter list naming five slugs;
    each slug has its own subdirectory carrying version dirs
@@ -19,7 +19,7 @@ classic layout retired). It carries two on-disk shapes:
 
 ```
 project_brief/
-  brains-for-robots/            (project-brief layout)
+  smart-actuators/            (project-brief layout)
     BRIEF.md                    (frontmatter has non-empty documents: list)
     investment-memo/
       investment-memo.1/
@@ -45,9 +45,9 @@ project_brief/
 
 The fixture is the regression anchor for the discovery primitive:
 
-- `discover_thread_root(<path under brains-for-robots/<slug>/>)`
+- `discover_thread_root(<path under smart-actuators/<slug>/>)`
   returns `LAYOUT_PROJECT_BRIEF` with `project_root` = the
-  `brains-for-robots/` directory.
+  `smart-actuators/` directory.
 - `has_project_brief(empty-documents-project/)` returns `False` (the
   empty list does NOT trigger the project-brief dispatch).
 - `discover_thread_root` for any path under `empty-documents-project/`

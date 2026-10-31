@@ -20,7 +20,7 @@ Two of the three structural critical flags (density and time) are mechanical —
 - **Thread slug** (positional argument).
 - **Latest version directory**: highest `N` with `<thread>.{N}/deck.md` under the thread root `<thread>/`.
 - **Brief**: `<thread>/BRIEF.md` for `time_slot_minutes` frontmatter. If absent, defaults to 45 minutes and warns.
-- **Per-thread overrides**: `<thread>/.anvil.json` may set `time_per_slide_seconds_base` to override the default 90s base.
+- **Per-thread overrides**: `<thread>/.anvil.json` may set `time_per_slide_seconds_base` to override the default 90s base, and `script_wpm` to override the default 130 words-per-minute used by script mode (see "Script mode" below).
 
 ## Outputs
 
@@ -59,7 +59,11 @@ Nested under the thread root `<thread>/`, as a sibling of the `<thread>.{N}/` ve
    - Bullet count (lines starting with `-`, `*`, or `1.`/`2.`/etc., at any nesting).
    - Word count of body (split on whitespace; exclude markdown syntax tokens like `**`, `*`, `[`, `]`, `(`, `)`).
    - Figure count (matches of `![...](figures/...)` or fenced ```mermaid blocks).
-5. **Pair each slide with its notes file**: `notes/<NN>-*.md` where `<NN>` is the zero-padded slide number. Count notes words.
+5. **Pair each slide with its notes file**: `notes/<NN>-*.md` where `<NN>` is the zero-padded slide number. Select the slide's timing **mode** and its timed words by notes heading, in this precedence order (first match wins):
+   - **`script`** — the notes file contains a `## Script (timed core)` heading. Timed words = words in that section (heading to the next `##` heading of any name, or EOF) **plus** any `## Transition` section (same bounds). Step 7 times this mode by `wpm`, not by the cues heuristic.
+   - **`cues`** — no `## Script (timed core)` heading, but a `## Cues` heading is present: count words **only within that section** — from `## Cues` to the next `##` heading (of any name) or EOF. This is the same heading-scoped-section parsing pattern used in step 4 to split a slide into title/body on `---`.
+   - **`full`** — neither heading present (including a plain `## Script` heading, which keeps today's behavior: excluded when `## Cues` is present, counted in full otherwise): fall back to the **whole notes file**.
+   - See "Cues vs. Script sections" and "Script mode" below for the rationale and the authoring convention this recognizes. A notes file with an empty `## Script (timed core)` section is still `script` mode with 0 timed words (0 seconds) — it is not silently downgraded to `cues`/`full`.
 6. **Density check** (deterministic):
    - For each slide, check `body_word_count > 50` OR `bullet_count > 7`.
    - For each violation, record: slide number, title, word count, bullet count, the rule violated.
@@ -77,8 +81,16 @@ Nested under the thread root `<thread>/`, as a sibling of the `<thread>.{N}/` ve
    - `notes_words` = word count of the paired `notes/<NN>-*.md` (the more the speaker plans to say, the longer the slide).
    - The 180-second cap reflects that even deep-dive technical slides rarely sustain attention beyond 3 minutes; if the heuristic suggests more, the slide should be split (which the density check usually catches independently).
 
+   **Script mode** (slide's `mode` is `script`): the script is the whole spoken time, so the `base` and figure terms are NOT added and the 180-second cap does NOT apply:
+
+   ```
+   slide_seconds = script_words / wpm * 60
+   ```
+
+   Where `script_words` is the step 5 timed-word count and `wpm = 130` by default (overridable via `<thread>/.anvil.json` `script_wpm`). `cues` and `full` slides use the formula above unchanged.
+
 8. **Aggregate time estimate**: `total_seconds = sum(slide_seconds)`. Convert to minutes for reporting.
-9. **Time flag check**: read `time_slot_minutes` from `<thread>/BRIEF.md` frontmatter. If `total_minutes > time_slot_minutes * 1.10`, set the **time flag**.
+9. **Time flag check**: read `time_slot_minutes` from `<thread>/BRIEF.md` frontmatter. If `total_minutes > time_slot_minutes * 1.10`, set the **time flag**. Then run the **script-pace flag** for `script`-mode slides: flag any script-mode slide whose own words imply more than 150 wpm against its allotted per-slide budget (`script_words / (allotted_seconds / 60) > 150`). If no per-slide budget is declared anywhere (BRIEF or notes), flag on the aggregate instead: total script words across script-mode slides ÷ `time_slot_minutes` > 150 wpm. The script-pace flag is reported in `timing.md`; it is advisory and does not by itself set the time flag.
 10. **Write `density.md`**:
 
     ```markdown
@@ -103,26 +115,33 @@ Nested under the thread root `<thread>/`, as a sibling of the `<thread>.{N}/` ve
     | ...   | ...                | ...        | ...          |
     ```
 
-11. **Write `timing.md`**:
+11. **Write `timing.md`**. First, compute the **saturation check**: count how many slides had `slide_seconds` hit the 180s cap (i.e. the uncapped formula value was ≥180) before rounding/reporting. Report `Saturated slides: <K> of <N> (<P>%)` in the Summary in all cases. If a **majority** of slides are saturated (`P > 50%`), the aggregate `total_seconds` is dominated by the flat cap rather than by real per-slide signal — it degenerates toward `n_slides * 180s`, which carries almost no information about the actual deck. **Why >50%** (majority, not some smaller threshold): once more than half the slides are pinned at the ceiling, the "estimate" is majority-cap-value by construction, so calling it a duration estimate is misleading; below that threshold enough slides still vary that the aggregate stays meaningfully deck-dependent. When `P > 50%`, prepend a caveat blockquote to the Summary section, immediately before the `Estimated talk duration` line:
 
     ```markdown
     # Time-budget check for <thread>.<N>
 
     ## Summary
     - Declared slot: <M> minutes (from BRIEF.md `time_slot_minutes`)
+    > **Caveat** (only present when Saturated slides > 50%): <K> of <N> slides (<P>%) hit the 180s cap — a majority. This aggregate is low-information: it is close to `n_slides * 180s` rather than a real per-deck estimate. Treat the time flag and "Estimated talk duration" below with reduced confidence; a manual rehearsal read-through is the reliable check here.
     - Estimated talk duration: <X> minutes (<X*60> seconds)
     - Fit: <Y>% of slot (target ≤100%, hard cap 110%)
     - Time flag: <SET / NOT SET>
+    - Saturated slides: <K> of <N> (<P>%)
 
     ## Per-slide time estimates
-    | Slide | Title              | Base | Figures (non-trivial) | Notes words | Estimated seconds |
-    |-------|--------------------|------|------------------------|-------------|-------------------|
-    | 1     | Title              | 90   | 0                      | 18          | 117 (capped at 180) |
-    | 2     | Hook               | 90   | 0                      | 42          | 153                 |
-    | ...   | ...                | ...  | ...                    | ...         | ...                 |
+    | Slide | Title              | Mode   | Base | Figures (non-trivial) | Notes words | Estimated seconds |
+    |-------|--------------------|--------|------|------------------------|-------------|-------------------|
+    | 1     | Title              | cues   | 90   | 0                      | 18          | 117 (capped at 180) |
+    | 2     | Hook               | full   | 90   | 0                      | 42          | 153                 |
+    | 3     | Method             | script | —    | —                      | 71 (130 wpm)| 33 (wpm-derived)    |
+    | ...   | ...                | ...    | ...  | ...                    | ...         | ...                 |
+
+    ## Script-pace flags (only when any slide is in script mode)
+    - <slide N: <words> words in <allotted>s = <wpm> wpm (>150)>, or the aggregate form `<total script words> words / <M> min = <wpm> wpm (>150)` when no per-slide budget is declared; `none` if no flag.
 
     ## Heuristic
-    slide_seconds = base + (non_trivial_figures * 30) + (notes_words * 1.5), capped at 180s.
+    cues / full: slide_seconds = base + (non_trivial_figures * 30) + (notes_words * 1.5), capped at 180s.
+    script: slide_seconds = script_words / wpm * 60 (no base, no figure term, no cap); wpm = 130 (overridable via .anvil.json `script_wpm`).
     Base = 90s (overridable via .anvil.json `time_per_slide_seconds_base`).
 
     ## Recommended cuts (if time flag set)
@@ -132,11 +151,28 @@ Nested under the thread root `<thread>/`, as a sibling of the `<thread>.{N}/` ve
 12. **Update `_progress.json`** inside the staging dir: `phases.rehearse.state = done`, `phases.rehearse.completed = <ISO>`. This is the LAST file write before the context manager exits — the manifest verification + atomic rename at exit (issue #350) requires `_progress.json` to be present. Then **exit the `staged_sidecar` context block**: the primitive verifies every name in the required-files manifest exists in the staging dir, then atomically renames `.<thread>.{N}.rehearse.tmp/` → `<thread>.{N}.rehearse/`. The final-named dir only ever exists in **complete** form.
 13. **Report**: print a one-line status (e.g., `Rehearsed kdd-2026-keynote.1 → kdd-2026-keynote.1.rehearse/ (22 slides, 47 minutes for 45-min slot, density flag SET, time flag SET)`).
 
+## Cues vs. Script sections
+
+Presenters write notes in two very different styles, and the notes-word count for time-estimation should not treat them the same:
+
+- **Cues style** — a short list of prompts the speaker glances at ("mention the 2024 result", "pause for the demo", "transition to limitations"). This is what the notes_words heuristic was designed to time: a speaker paraphrasing from cues talks roughly at a steady pace proportional to prompt density, so `notes_words * 1.5` is a reasonable proxy.
+- **Script style** — a full word-for-word script the speaker reads verbatim, or drafting prose the speaker will condense before rehearsal. Counting every word of a full script against the same `* 1.5s` multiplier over-counts badly: a 300-word verbatim script is not spoken at the same rate as 300 words of terse cues, and worse, a script that the speaker intends to trim is not a reliable proxy for what will actually be said.
+
+**Convention**: a notes file may separate the two with headings — `## Cues` for the short prompts that should drive timing, and `## Script` (or any other non-`## Cues` heading, e.g. `## Draft`, `## Full notes`) for supporting prose that should not. Step 5 counts words only within `## Cues` (to the next `##` heading or EOF) when that heading is present, and falls back to the whole-file word count when it is absent — so decks with no `## Cues` heading (including every pre-existing notes file) behave exactly as before this change. A notes file with only a `## Script` section and no `## Cues` heading is still counted in full under the fallback; adding a `## Cues` section is what opts a slide's notes into cues-only timing.
+
+**Precedence**: `## Script (timed core)` > `## Cues` > whole-file fallback. A plain `## Script` heading (without the `(timed core)` suffix) keeps today's behavior — excluded when `## Cues` is present, counted in full otherwise. When a file carries both `## Script (timed core)` and `## Cues`, the script wins and the `## Cues` words are not timed.
+
+## Script mode
+
+The `notes_words * 1.5` multiplier is calibrated for terse cues. For a verbatim timed script (~130 wpm ≈ 0.46 s/word) it overstates spoken time by roughly 3×, which projects a 9-minute script at ~25 minutes and tempts the operator to skip rehearse entirely (leaving rubric dim 8 unevidenced). A notes file opts a slide into script mode by carrying a `## Script (timed core)` heading; selection is by notes heading only (per-slide and self-describing — there is deliberately no BRIEF knob for it). Script mode times `words(## Script (timed core) section + any ## Transition section) ÷ wpm × 60`, with `wpm` defaulting to 130 (`script_wpm` in `<thread>/.anvil.json`). No base/figure terms are added and the 180s per-slide cap does not apply. `timing.md` records `Mode: script|cues|full` per slide and the wpm-derived seconds, and flags script-mode pace above 150 wpm (see step 9).
+
 ## Heuristic calibration note
 
 The 90s-base + 30s-per-figure + 1.5s-per-notes-word formula is plausible but inherently rough — actual rehearsal with the speaker is the ground truth. The skill ships this heuristic as a default and exposes `time_per_slide_seconds_base` for tuning. A speaker who runs through their decks faster or slower than average should override the base after their first real rehearsal.
 
 The heuristic is intentionally conservative on the high side (notes_words * 1.5 assumes a moderate-paced delivery; an animated speaker may run faster). Better to flag a deck as over-budget and have rehearsal show it fits, than to under-flag and have the talk overrun in front of a live audience.
+
+**Short-slot tuning**: the 90s default base alone already implies `n_slides * 90s` as a floor before any notes or figures are counted — for a 14-slide deck that is 21 minutes, which already exceeds a 15-minute slot before a single word of notes is added. For any `time_slot_minutes` under ~20, set a lower `time_per_slide_seconds_base` in `<thread>/.anvil.json` (e.g. 30–45s) so the base itself doesn't saturate a short slot on its own; a lightning-talk or 10-minute-slot deck typically needs both a lower base and terse (Cues-style, see above) notes to produce a usable estimate.
 
 ## Idempotence and resumability
 

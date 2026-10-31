@@ -10,7 +10,6 @@ step writes, so the preview equals the eventual write byte-for-byte
 
 from __future__ import annotations
 
-import hashlib
 
 import pytest
 
@@ -20,6 +19,7 @@ from _fixtures import (
     write_tag_map,
 )
 from _project_migrate_skill_lib import adopt_family, orchestrate
+from anvil.lib.testing import tree_hash as _tree_digest
 
 run_adopt_family = orchestrate.run_adopt_family
 AdoptFamilyError = adopt_family.AdoptFamilyError
@@ -29,15 +29,6 @@ ARTIFACT_TYPE = "ip-uspto-provisional"
 
 def _tag_map(tmp_path):
     return write_tag_map(tmp_path / "tag-map.json", DEFAULT_TAG_MAP)
-
-
-def _tree_digest(root) -> str:
-    h = hashlib.sha256()
-    for path in sorted(root.rglob("*")):
-        h.update(str(path.relative_to(root)).encode("utf-8"))
-        if path.is_file():
-            h.update(path.read_bytes())
-    return h.hexdigest()
 
 
 def _previewed_brief(report: str) -> str:
@@ -95,13 +86,13 @@ class TestAdoptFamilyDryRun:
         assert "## Sidecar tag resolution" in report
         # EVERY renameable sidecar's old name → new name appears.
         for old, new in (
-            ("Brasidas.A.2.review", "brasidas-a.2.review"),
-            ("Brasidas.C.5.review-v2", "brasidas-c.5.review"),
-            ("Brasidas.C.5.pre_flight", "brasidas-c.5.pre_flight"),
-            ("Brasidas.C.7.enablement", "brasidas-c.7.enablement"),
-            ("Brasidas.C.7.s101", "brasidas-c.7.s101"),
-            ("Brasidas.C.7.audit", "brasidas-c.7.audit"),
-            ("Brasidas.C.7.audit2", "brasidas-c.7.audit2"),
+            ("Meridian.A.2.review", "meridian-a.2.review"),
+            ("Meridian.C.5.review-v2", "meridian-c.5.review"),
+            ("Meridian.C.5.pre_flight", "meridian-c.5.pre_flight"),
+            ("Meridian.C.7.enablement", "meridian-c.7.enablement"),
+            ("Meridian.C.7.s101", "meridian-c.7.s101"),
+            ("Meridian.C.7.audit", "meridian-c.7.audit"),
+            ("Meridian.C.7.audit2", "meridian-c.7.audit2"),
         ):
             assert f"`{old}/` → `{new}/`" in report
 
@@ -148,8 +139,8 @@ class TestAdoptFamilyDryRun:
     def test_leading_zero_refusal_mutates_nothing_even_under_apply(
         self, tmp_path
     ):
-        # Issue #458: the Brasidas.C.07/Brasidas.C.7 slot collision
-        # refuses at scan time — the whole batch (the clean Brasidas.A
+        # Issue #458: the Meridian.C.07/Meridian.C.7 slot collision
+        # refuses at scan time — the whole batch (the clean Meridian.A
         # family included) stays byte-identical even with apply=True.
         project = build_letter_family_threads(
             tmp_path, with_leading_zero_dup=True
@@ -171,7 +162,7 @@ class TestAdoptFamilyDryRun:
         # dir is a plan-time refusal (not the old misleading
         # seen_targets message) — tree untouched under apply=True.
         project = build_letter_family_threads(tmp_path)
-        dup = project / "Brasidas.C.07.enablement"
+        dup = project / "Meridian.C.07.enablement"
         dup.mkdir()
         (dup / "review.md").write_text("# dup\n", encoding="utf-8")
         before = _tree_digest(project)

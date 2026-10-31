@@ -445,7 +445,7 @@ class TestLoaderIntegration(unittest.TestCase):
         )
 
     def test_full_synthesis_brief_pipeline(self) -> None:
-        """The brasidas-synthesis canary shape (issue #233 worked example)
+        """The meridian-synthesis canary shape (issue #233 worked example)
         produces the expected per-dim suffix attachments."""
         from tempfile import TemporaryDirectory
 
@@ -459,7 +459,7 @@ class TestLoaderIntegration(unittest.TestCase):
                 audience: [studio]
                 hard_rules: []
                 documents:
-                  - slug: brasidas-synthesis
+                  - slug: meridian-synthesis
                     artifact_type: descriptive-thesis
                     rubric_overrides:
                       memo_subtype: synthesis-brief
@@ -476,7 +476,7 @@ class TestLoaderIntegration(unittest.TestCase):
             self._write_brief(project_dir, frontmatter)
 
             overrides = load_rubric_overrides_for_slug(
-                project_dir, "brasidas-synthesis"
+                project_dir, "meridian-synthesis"
             )
             self.assertFalse(overrides.is_empty)
 

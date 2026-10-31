@@ -104,6 +104,32 @@ Nested under the thread root `<thread>/`:
      fences) does NOT trigger this preflight — `mmdc` is only required when a
      diagram is present.
 
+   **Launchability, not just presence (#692).** `check_mmdc_available()` only
+   tests that the binary is on PATH — it reports available while `mmdc`'s
+   pinned Puppeteer Chromium is absent from `~/.cache/puppeteer`, in which
+   case every diagram render dies at browser launch with an opaque
+   `Could not find Chrome ver. <pinned>`. When `mmdc` IS on PATH, call
+   `anvil/lib/render.py::check_mmdc_launchable()` (a trivial one-node probe
+   render, unit-tested) **once before committing to the batch of diagram
+   renders**. On `False`:
+
+   - Emit a `[blocker]` quoting `anvil/lib/render.py::MMDC_LAUNCH_REMEDIATION`
+     verbatim — it names the two working fixes: install the pinned browser
+     with `npx puppeteer browsers install chrome`, or point `mmdc` at an
+     existing system Chrome via `mmdc --puppeteerConfigFile <file>` where
+     `<file>` contains
+     `{"executablePath":"/path/to/google-chrome","args":["--no-sandbox"]}`.
+   - **Write the same proactive `figures/<name>.png-FAILED.md` stub** for each
+     diagram that would have been rendered, naming the launch failure and that
+     remediation — identical graceful-degrade path to the absent-binary case
+     above.
+   - Skip the `mmdc` render path for this run; never abort the phase (the
+     matplotlib + reference validation steps still run).
+   - A deck with zero diagrams does NOT trigger this probe either — like the
+     PATH check, launchability is only required when a diagram is present
+     (and the probe costs a real Chromium cold start, so it is never run
+     speculatively).
+
    When `mmdc` is present, render each diagram with:
    ```bash
    mmdc \
@@ -202,7 +228,7 @@ Nested under the thread root `<thread>/`:
 
    It then estimates the displayed text-glyph height (`intrinsic_text_h × displayed_h / intrinsic_h`) and flags figures whose glyph height falls below the projection legibility floor: `<14 px` displayed → warning, `<11 px` → error.
 
-   The intrinsic source font height per diagram type lives in `Geometry.intrinsic_text_h_px_by_diagram_type` (mermaid: 18 px after issue #563's theme update; matplotlib: 14 px default). A future image-measurement implementation (Option 2 from the curator's plan — numpy/Pillow connected-component analysis under a `[legibility_lint]` extra) would replace the type-based lookup with measured text bounding-box heights; the public API (`lint_figures(deck_md, figures_dir, geometry=...)`) is the documented escalation seam.
+   The intrinsic text height per diagram type is diagram-aware, not a single flat constant: `mermaid` is the theme's 18px source-SVG font size (issue #563) multiplied by `Geometry.mermaid_render_scale` (default `2.0`, matching the load-bearing `mmdc --scale 2` invocation which doubles every rendered dimension — issue #964); `matplotlib` is read from the sibling `figures/src/<name>.py` script (a regex scan for the smallest explicit `fontsize=`, falling back to matplotlib's 10pt rcParam default — issue #964) converted pt→px at the PNG's actual embedded DPI when present, else the 200 DPI `savefig` convention (issue #904). A future image-measurement implementation (Option 2 from the curator's plan — numpy/Pillow connected-component analysis under a `[legibility_lint]` extra) would replace these heuristics with measured text bounding-box heights; the public API (`lint_figures(deck_md, figures_dir, geometry=...)`) is the documented escalation seam.
 
    For each finding, write a `figures/<name>.png-LEGIBILITY.md` stub (mirrors the `figures/<name>.png-FAILED.md` pattern from step 4 — a visible debuggable artifact, never silent) containing the finding message and the per-figure escape hatch:
 

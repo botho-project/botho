@@ -192,6 +192,84 @@ class TestGuards(unittest.TestCase):
             self.assertEqual(len(ok_docs), 2)
 
 
+class TestCover(unittest.TestCase):
+    def test_no_cover_configured_yields_no_cover_file(self) -> None:
+        with TemporaryDirectory() as td:
+            project = build_full_project(Path(td))
+            share_plan = _plan_for(project)
+            self.assertIsNone(share_plan.cover_file)
+
+    def test_cover_resolved_and_folded_into_all_file_plans(self) -> None:
+        with TemporaryDirectory() as td:
+            project = build_full_project(Path(td))
+            cover_source = project / "SHARE-README.md"
+            cover_source.write_text("# Read me first\n", encoding="utf-8")
+            share_plan = _plan_for(project, cover="SHARE-README.md")
+            assert share_plan.cover_file is not None
+            self.assertEqual(
+                share_plan.cover_file.source, cover_source.resolve()
+            )
+            self.assertEqual(
+                share_plan.cover_file.target_rel, Path("README.md")
+            )
+            self.assertIn("README.md", _target_rels(share_plan))
+
+    def test_cover_as_override_used_as_target_name(self) -> None:
+        with TemporaryDirectory() as td:
+            project = build_full_project(Path(td))
+            (project / "SHARE-README.md").write_text(
+                "# Read me\n", encoding="utf-8"
+            )
+            share_plan = _plan_for(
+                project, cover="SHARE-README.md", cover_as="OVERVIEW.md"
+            )
+            assert share_plan.cover_file is not None
+            self.assertEqual(
+                share_plan.cover_file.target_rel, Path("OVERVIEW.md")
+            )
+
+    def test_cover_as_colliding_with_export_md_marker_raises(self) -> None:
+        with TemporaryDirectory() as td:
+            project = build_full_project(Path(td))
+            (project / "SHARE-README.md").write_text(
+                "# Read me\n", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "EXPORT.md"):
+                _plan_for(
+                    project, cover="SHARE-README.md", cover_as="EXPORT.md"
+                )
+
+    def test_cover_as_colliding_with_research_dirname_raises(self) -> None:
+        with TemporaryDirectory() as td:
+            project = build_full_project(Path(td))
+            (project / "SHARE-README.md").write_text(
+                "# Read me\n", encoding="utf-8"
+            )
+            with self.assertRaises(ValueError):
+                _plan_for(
+                    project, cover="SHARE-README.md", cover_as="research"
+                )
+
+    def test_cover_as_colliding_with_doc_target_dirname_raises(self) -> None:
+        with TemporaryDirectory() as td:
+            project = build_full_project(Path(td))
+            (project / "SHARE-README.md").write_text(
+                "# Read me\n", encoding="utf-8"
+            )
+            with self.assertRaises(ValueError):
+                _plan_for(
+                    project,
+                    cover="SHARE-README.md",
+                    cover_as="00-series-a-deck",
+                )
+
+    def test_missing_cover_source_raises_at_plan_time(self) -> None:
+        with TemporaryDirectory() as td:
+            project = build_full_project(Path(td))
+            with self.assertRaisesRegex(ValueError, "does not resolve"):
+                _plan_for(project, cover="does-not-exist.md")
+
+
 class TestInspectOutDir(unittest.TestCase):
     def test_states(self) -> None:
         with TemporaryDirectory() as td:

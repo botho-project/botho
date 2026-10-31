@@ -27,10 +27,10 @@ class TestDetect:
         plan = build_adopt_review_plan(project)
         # Every foreign sidecar (review.md only) is a conversion target.
         assert _names(plan) == [
-            "brasidas-a.2.review",
-            "brasidas-c.5.review",
-            "brasidas-c.7.enablement",
-            "brasidas-c.7.s101",
+            "meridian-a.2.review",
+            "meridian-c.5.review",
+            "meridian-c.7.enablement",
+            "meridian-c.7.s101",
         ]
         assert not plan.is_noop
 
@@ -38,8 +38,8 @@ class TestDetect:
         project = build_adopted_review_threads(tmp_path)
         plan = build_adopt_review_plan(project)
         by_name = {c.sidecar_dir.name: c for c in plan.conversions}
-        c = by_name["brasidas-c.7.enablement"]
-        assert c.version_dir == "brasidas-c.7"
+        c = by_name["meridian-c.7.enablement"]
+        assert c.version_dir == "meridian-c.7"
         assert c.critic_id == "enablement"
         assert c.review_filename == "review.md"
 
@@ -51,8 +51,8 @@ class TestDetect:
         assert plan.is_noop
         # Each is reported as skipped (already recognizable).
         skipped_reasons = {name: reason for name, reason in plan.skipped}
-        assert "brasidas-c.7.s101" in skipped_reasons
-        assert "recognizable" in skipped_reasons["brasidas-c.7.s101"]
+        assert "meridian-c.7.s101" in skipped_reasons
+        assert "recognizable" in skipped_reasons["meridian-c.7.s101"]
 
     def test_ignores_real_scored_sibling(self, tmp_path):
         # The genuinely-scored .audit sibling carries a _review.json — it
@@ -61,16 +61,16 @@ class TestDetect:
             tmp_path, with_real_sibling=True
         )
         plan = build_adopt_review_plan(project)
-        assert "brasidas-c.7.audit" not in _names(plan)
+        assert "meridian-c.7.audit" not in _names(plan)
         # But the foreign review.md-only siblings on the same version dir
         # ARE still found.
-        assert "brasidas-c.7.enablement" in _names(plan)
-        assert "brasidas-c.7.s101" in _names(plan)
+        assert "meridian-c.7.enablement" in _names(plan)
+        assert "meridian-c.7.s101" in _names(plan)
 
     def test_does_not_treat_version_dirs_as_sidecars(self, tmp_path):
         project = build_adopted_review_threads(tmp_path)
         plan = build_adopt_review_plan(project)
-        # `brasidas-c.7` is a version dir (tag would be a bare digit) — never
+        # `meridian-c.7` is a version dir (tag would be a bare digit) — never
         # a sidecar.
         for c in plan.conversions:
             assert not c.sidecar_dir.name[len(c.version_dir) + 1:].isdigit()
@@ -85,5 +85,5 @@ class TestDetect:
     def test_thread_root_passed_directly(self, tmp_path):
         # Passing a single thread root (not the project root) also works.
         project = build_adopted_review_threads(tmp_path)
-        plan = build_adopt_review_plan(project / "brasidas-a")
-        assert _names(plan) == ["brasidas-a.2.review"]
+        plan = build_adopt_review_plan(project / "meridian-a")
+        assert _names(plan) == ["meridian-a.2.review"]

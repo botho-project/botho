@@ -16,7 +16,7 @@ The rubric is tuned so that the **conceptual + spatial + sensory + experiential 
 | 6 | **Ethics & safety** | 4 | For participatory/sensory work: consent design, safety-without-surveillance, and accessibility are addressed. (For non-participatory pieces, scored on physical safety and accessibility only.) |
 | 7 | **References & lineage** | 4 | The work is situated in art-historical / architectural precedent, not naive about what came before. Precedents are named and their relevance is stated. |
 | 8 | **Open decisions** | 4 | Unresolved choices are tracked honestly (the `anvil:memo` "assumptions to validate" analogue). A proposal that pretends every decision is settled scores low. |
-| 9 | **Rhetorical economy** | 4 | Is every paragraph load-bearing? Could the same argument land in fewer words? Are the most important claims surfaced early? Is hedging proportional to genuine uncertainty, not used as a cushion? Could a curator or fabricator extract the argument and the build in 5 minutes? |
+| 9 | **Rhetorical economy** | 4 | Does every paragraph carry weight the argument needs? Could the same argument land in fewer words? Are the most important claims surfaced early? Is hedging proportional to genuine uncertainty, not used as a cushion? Could a curator or fabricator extract the argument and the build in 5 minutes? |
 | | **Total** | **44** | Advance threshold: ≥35 |
 
 ## Scoring guidance

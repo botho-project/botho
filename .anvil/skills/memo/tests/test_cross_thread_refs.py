@@ -87,16 +87,16 @@ class TestParser(unittest.TestCase):
 
     def test_latest_without_file(self) -> None:
         """``[[../slug/slug.latest]]`` — version dir, no file suffix."""
-        text = "See [[../brasidas-synthesis/brasidas-synthesis.latest]] for context."
+        text = "See [[../meridian-synthesis/meridian-synthesis.latest]] for context."
         refs = find_cross_thread_refs(text)
 
         self.assertEqual(len(refs), 1)
         ref = refs[0]
         self.assertEqual(ref.line, 1)
-        self.assertEqual(ref.other_slug, "brasidas-synthesis")
+        self.assertEqual(ref.other_slug, "meridian-synthesis")
         self.assertEqual(ref.version, LATEST)
         self.assertIsNone(ref.file)
-        self.assertIn("brasidas-synthesis.latest", ref.raw)
+        self.assertIn("meridian-synthesis.latest", ref.raw)
 
     def test_explicit_version_without_file(self) -> None:
         """``[[../slug/slug.N]]`` — explicit version, no file suffix."""
@@ -185,7 +185,7 @@ class TestParser(unittest.TestCase):
         parser is anchored on ``../`` to avoid pulling in arbitrary
         wiki-style links.
         """
-        text = "See [[brasidas-synthesis/brasidas-synthesis.latest]]."
+        text = "See [[meridian-synthesis/meridian-synthesis.latest]]."
         refs = find_cross_thread_refs(text)
         self.assertEqual(refs, [])
 

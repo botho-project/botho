@@ -60,14 +60,11 @@ import re
 import unittest
 from pathlib import Path
 
+from anvil.lib.testing import read_text as _read
 
 _SKILL_ROOT = Path(__file__).resolve().parent.parent
 _PROPOSAL_MD = _SKILL_ROOT / "commands" / "proposal.md"
 _SKILL_MD = _SKILL_ROOT / "SKILL.md"
-
-
-def _read(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
 
 
 def _extract_section(text: str, heading: str) -> str:
@@ -629,8 +626,8 @@ class TestSchemaModuleStillImportable(unittest.TestCase):
 
     def test_synthesis_schema_module_imports(self):
         from anvil.skills.proposal.lib.synthesis_schema import (
-            GapList,
             SCHEMA_VERSION,
+            GapList,
         )
 
         self.assertEqual(SCHEMA_VERSION, "1")

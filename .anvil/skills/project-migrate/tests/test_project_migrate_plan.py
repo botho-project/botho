@@ -25,7 +25,7 @@ sys.path.insert(0, str(_HERE))
 
 from _project_migrate_skill_lib import detect, plan  # noqa: E402
 from _fixtures import (  # noqa: E402
-    build_bessemer_shaped,
+    build_foundry_shaped,
     build_fully_migrated,
     build_post_283_anvil_json,
     build_pre_283_classic,
@@ -129,10 +129,10 @@ class TestPlanPre283(unittest.TestCase):
                 self.assertTrue(rw.new_string.startswith("acme."))
 
 
-class TestPlanBessemer(unittest.TestCase):
+class TestPlanFoundry(unittest.TestCase):
     def test_critic_siblings_renamed_alongside_version_dirs(self) -> None:
         with TemporaryDirectory() as td:
-            project = build_bessemer_shaped(Path(td))
+            project = build_foundry_shaped(Path(td))
             plan = build_plan(project, Shape.PRE_283_CLASSIC)
             doc = plan.documents[0]
             renames = doc.renames
@@ -148,18 +148,18 @@ class TestPlanBessemer(unittest.TestCase):
                 "expected critic siblings to be planned for rename",
             )
             for r in critic_renames:
-                self.assertTrue(r.target.name.startswith("bessemer."))
+                self.assertTrue(r.target.name.startswith("foundry."))
 
     def test_canary_memo_2_cross_ref_rewritten(self) -> None:
         with TemporaryDirectory() as td:
-            project = build_bessemer_shaped(Path(td))
+            project = build_foundry_shaped(Path(td))
             plan = build_plan(project, Shape.PRE_283_CLASSIC)
             doc = plan.documents[0]
-            # bessemer/memo.3/memo.md references "memo.2" — should be
-            # rewritten to "bessemer.2".
+            # foundry/memo.3/memo.md references "memo.2" — should be
+            # rewritten to "foundry.2".
             rewrites = [
                 r for r in doc.content_rewrites
-                if r.old_string == "memo.2" and r.new_string == "bessemer.2"
+                if r.old_string == "memo.2" and r.new_string == "foundry.2"
             ]
             self.assertGreater(len(rewrites), 0)
 

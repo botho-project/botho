@@ -31,6 +31,20 @@ recommendation_target: undecided  # invest | pass | conditional | undecided (iss
                                   # calibration. Mirrors the memo-skill default in
                                   # `templates/BRIEF.fresh.md.example` — the proposer-side
                                   # default for a fresh thread is `undecided`.
+cost_basis: quoted            # quoted | estimated | none (issue #840). Default quoted —
+                              # byte-identical to pre-#840 behavior: priced lines are sourced
+                              # against vendor quotes / datasheets / planning ranges, and
+                              # `proposal-audit` back-checks the BOM against `refs/`.
+                              # `estimated` is for proposals with no vendor quotes but real
+                              # priced figures (e.g. an internal build spec sized on
+                              # engineering judgment): the template emits estimate-labelled
+                              # captions and dim 6 scores estimate-basis consistency, not
+                              # vendor sourceability. `none` is for proposals with NO hardware
+                              # BOM at all (e.g. a partnership/integration proposal) — the
+                              # priced-table requirement is dropped and commercial terms move
+                              # to Open Decisions (§10). Orthogonal to `customer_kind`: an
+                              # `internal` build spec can still be `quoted` or `estimated`.
+                              # See `rubric.md` §"Dim 6 — `cost_basis` calibration".
 ---
 
 # Brief: <System / Project Name>

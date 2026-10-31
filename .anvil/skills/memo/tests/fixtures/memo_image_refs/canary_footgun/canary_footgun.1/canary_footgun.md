@@ -1,4 +1,4 @@
-# Bessemer Q3 — investment memo (v11)
+# Foundry Q3 — investment memo (v11)
 
 ## Cohort valuations across vintages
 

@@ -10,7 +10,6 @@ safe to hand to ``detect_shape``.
 
 from __future__ import annotations
 
-import hashlib
 import importlib.util
 import re
 import sys
@@ -18,6 +17,7 @@ from pathlib import Path
 
 from _fixtures import build_vn_report_dirs
 from _project_migrate_skill_lib import orchestrate
+from anvil.lib.testing import tree_hash as _tree_digest
 
 run_adopt_vn = orchestrate.run_adopt_vn
 
@@ -48,15 +48,6 @@ def _load_scout_foreign():
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
-
-
-def _tree_digest(root) -> str:
-    h = hashlib.sha256()
-    for path in sorted(root.rglob("*")):
-        h.update(str(path.relative_to(root)).encode("utf-8"))
-        if path.is_file():
-            h.update(path.read_bytes())
-    return h.hexdigest()
 
 
 def _families_on_disk(parent: Path):

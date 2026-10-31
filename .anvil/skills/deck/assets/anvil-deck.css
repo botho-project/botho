@@ -116,6 +116,15 @@ section table td {
   vertical-align: top;
 }
 
+/* Defeat the imported Marp default theme's zebra-striping on alternating
+ * rows. The comment above states no shading on alternating rows (chartjunk);
+ * the imported `default` theme applies a tbody tr:nth-child(even) background
+ * that contradicts that intent unless explicitly reset here (#906). */
+section table tbody tr:nth-child(even) {
+  background: transparent;
+  background-color: transparent;
+}
+
 /* Code (rarely used in pitch decks; styled minimally) */
 section code {
   font-family: "SF Mono", Menlo, Consolas, monospace;
@@ -225,6 +234,16 @@ section.ask li {
   font-size: 28px;
 }
 
+/* Pagination on the ask slide — the base section::after rule paints the
+ * pagination glyph var(--anvil-muted) (#6b6b6b), which measures ~1.79:1
+ * against the dark --anvil-bg-ask (#1f4e7a) background, well under WCAG's
+ * 3:1 floor for incidental text and effectively invisible in the render.
+ * A translucent white matches the section.ask em treatment and measures
+ * ~5.7:1 against the accent background (#906). */
+section.ask::after {
+  color: rgba(255, 255, 255, 0.75);
+}
+
 /* Tables on the ask slide — defeat the imported Marp default theme's cell
  * backgrounds so the dark accent slide background (--anvil-bg-ask) shows
  * through, then re-color text white. Without this, data cells render
@@ -290,6 +309,14 @@ section.section h1 {
   color: #ffffff;
   font-size: 64px;
   margin: 0;
+}
+
+/* Pagination on the section-divider slide — same dark-background contrast
+ * problem as section.ask (both paint var(--anvil-accent) / --anvil-bg-ask,
+ * which are the same #1f4e7a) so the base section::after color is
+ * effectively invisible here too (#906). */
+section.section::after {
+  color: rgba(255, 255, 255, 0.75);
 }
 
 /* --- Stock layout classes ----------------------------------------------- */

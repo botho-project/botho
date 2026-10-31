@@ -347,7 +347,7 @@ def build_unconventional_body_filename_thread(
     root: Path,
     project_name: str = "canary-unconventional",
     *,
-    thread_slug: str = "aldus",
+    thread_slug: str = "beacon",
     body_filename: str = "body.md",
     body_skill: str = "deck",
 ) -> Path:
@@ -355,7 +355,7 @@ def build_unconventional_body_filename_thread(
     AND has no BRIEF — so the planner sees ``inferred_skill is None``.
 
     Reproduces the canary's #374 failure mode after the inference-table
-    extension landed. The canary's actual repro was ``aldus/aldus.4/
+    extension landed. The canary's actual repro was ``beacon/beacon.4/
     deck.md`` (no BRIEF), which the table-extension half of #374 fixes
     via rule 2. This fixture instead uses a body filename that is NOT
     in the (post-#374) extended table — ``body.md`` — so rule 2 still
@@ -366,11 +366,11 @@ def build_unconventional_body_filename_thread(
 
     Shape (defaults):
       <project>/
-        aldus/
-          aldus.4/
+        beacon/
+          beacon.4/
             body.md             <- body filename NOT in inference table
             _progress.json
-          aldus.4.review/
+          beacon.4.review/
             _meta.json          <- /40-era pre-stamp shape
             _summary.md
             verdict.md
@@ -420,17 +420,17 @@ def build_deck_thread_no_brief(
     root: Path,
     project_name: str = "canary-deck-no-brief",
     *,
-    thread_slug: str = "aldus",
+    thread_slug: str = "beacon",
 ) -> Path:
     """Build the canary's exact #374 repro: deck thread, no BRIEF.
 
     Shape:
       <project>/
-        aldus/
-          aldus.4/
+        beacon/
+          beacon.4/
             deck.md             <- deck-fixed body filename
             _progress.json
-          aldus.4.review/
+          beacon.4.review/
             _meta.json          <- /40-era pre-stamp shape
             _summary.md
             verdict.md

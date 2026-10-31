@@ -10,26 +10,17 @@ byte-identical — the determinism check rides along for free.
 
 from __future__ import annotations
 
-import hashlib
 import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from anvil.lib.testing import tree_hash as _tree_hash
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
 from _project_scout_skill_lib import orchestrate  # noqa: E402
 from _scout_fixtures import build_mega_tree  # noqa: E402
-
-
-def _tree_hash(root: Path) -> dict:
-    out: dict = {}
-    for path in sorted(root.rglob("*")):
-        if path.is_file():
-            rel = str(path.relative_to(root))
-            out[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return out
 
 
 class TestZeroMutations(unittest.TestCase):

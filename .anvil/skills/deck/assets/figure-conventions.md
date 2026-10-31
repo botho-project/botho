@@ -163,10 +163,15 @@ def _find_anvil_root(start: Path) -> Path:
 
     Tolerates non-canonical thread depths — uses search-up rather than a
     hard-coded ``parents[N]`` index, so the script works from any directory
-    underneath the consumer repo root.
+    underneath the consumer repo root. Tries the canonical nested layout
+    (``.anvil/anvil/lib/``) first, then the pre-#230 flat layout
+    (``.anvil/lib/``); either way the returned root composes with
+    ``lib/figures/...``.
     """
     for p in [start, *start.parents]:
-        if (p / ".anvil" / "lib" / "figures" / "palette.json").is_file():
+        if (p / ".anvil" / "anvil" / "lib" / "figures" / "palette.json").is_file():
+            return p / ".anvil" / "anvil"
+        if (p / ".anvil" / "lib" / "figures" / "palette.json").is_file():  # pre-#230 layout
             return p / ".anvil"
     raise FileNotFoundError("could not locate .anvil/ ancestor of " + str(start))
 
@@ -332,10 +337,10 @@ hardcoding a version number:
 
 ```python
 # Prefer this — stable across revisions of the peer thread:
-SRC_PEER = Path("refs") / "bessemer.latest" / "exhibits" / "headline.csv"
+SRC_PEER = Path("refs") / "foundry.latest" / "exhibits" / "headline.csv"
 
-# Avoid this — silently goes stale the next time `bessemer` is revised:
-SRC_PEER = Path("refs") / "bessemer.8" / "exhibits" / "headline.csv"
+# Avoid this — silently goes stale the next time `foundry` is revised:
+SRC_PEER = Path("refs") / "foundry.8" / "exhibits" / "headline.csv"
 ```
 
 The convention is documented in `anvil/lib/snippets/version_layout.md`
@@ -375,10 +380,13 @@ from pathlib import Path
 
 # --- shared on-brand style (section 3): JSON-read pattern for bare python3.
 #     Walks up from __file__ until it finds a .anvil/ ancestor — tolerates
-#     non-canonical thread depths.
+#     non-canonical thread depths. Canonical nested layout first, pre-#230
+#     flat layout as a fallback.
 def _find_anvil_root(start: Path) -> Path:
     for p in [start, *start.parents]:
-        if (p / ".anvil" / "lib" / "figures" / "palette.json").is_file():
+        if (p / ".anvil" / "anvil" / "lib" / "figures" / "palette.json").is_file():
+            return p / ".anvil" / "anvil"
+        if (p / ".anvil" / "lib" / "figures" / "palette.json").is_file():  # pre-#230 layout
             return p / ".anvil"
     raise FileNotFoundError("could not locate .anvil/ ancestor of " + str(start))
 
@@ -464,7 +472,7 @@ is optional at the framework level (needs `Pillow` + `numpy`, opt-in via
 
 **Remediation.** Trim 10–20 words from the densest element on the slide,
 or move one bullet (or one body paragraph) to a peer slide. The
-[slide-archetypes budget guidance](#slide-archetypes) — under the
+[slide-archetypes budget guidance](slide-archetypes.md) — under the
 `marp_lint` doc — is the source-side analogue: stay within the word
 budget the archetype documents and Marp won't have anything to scale.
 

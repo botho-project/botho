@@ -18,7 +18,6 @@ Per the #58 packaging convention this filename is unique across the
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 
 from _fixtures import (
@@ -31,6 +30,7 @@ from _project_migrate_skill_lib import (
     orchestrate,
     plan as plan_mod,
 )
+from anvil.lib.testing import tree_hash as _tree_hash
 
 _merge_brief_documents = apply_mod._merge_brief_documents
 render_migrate_brief = apply_mod.render_migrate_brief
@@ -63,15 +63,6 @@ def _make_migrate_plan(project_dir: Path, *, merges) -> Plan:
             )
         )
     return p
-
-
-def _tree_hash(project: Path) -> dict:
-    out: dict = {}
-    for path in sorted(project.rglob("*")):
-        if path.is_file():
-            rel = str(path.relative_to(project))
-            out[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return out
 
 
 class TestMigrateApplyBytePreservation:

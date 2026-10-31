@@ -42,11 +42,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional
 
+from anvil.lib.testing import read_text
+
 _SKILL_ROOT = Path(__file__).resolve().parent.parent
 
-
-def _read(rel: str) -> str:
-    return (_SKILL_ROOT / rel).read_text(encoding="utf-8")
+_read = lambda rel: read_text(_SKILL_ROOT / rel)
 
 
 @dataclass
@@ -186,13 +186,9 @@ class TestFixturesAreWellFormed(unittest.TestCase):
 
     def test_all_four_dispositions_are_represented(self):
         dispositions = {f.expected_disposition for f in ALL_FIXTURES}
-        self.assertEqual(
-            dispositions, {"spec-wrong", "code-wrong", "intentional-gap"}
-        )
+        self.assertEqual(dispositions, {"spec-wrong", "code-wrong", "intentional-gap"})
         # The two intentional-gap fixtures differ only in registration.
-        gap = [
-            f for f in ALL_FIXTURES if f.expected_disposition == "intentional-gap"
-        ]
+        gap = [f for f in ALL_FIXTURES if f.expected_disposition == "intentional-gap"]
         self.assertEqual(len(gap), 2)
         self.assertEqual(gap[0].spec_claim, gap[1].spec_claim)
         self.assertNotEqual(
@@ -213,9 +209,7 @@ class TestFixturesAreWellFormed(unittest.TestCase):
         self.assertIsNotNone(
             f.adr_backing, "code-wrong requires a ratified-decision marker"
         )
-        self.assertTrue(
-            f.code_is_vestigial, "code-wrong code reads as vestigial drift"
-        )
+        self.assertTrue(f.code_is_vestigial, "code-wrong code reads as vestigial drift")
         self.assertIsNone(f.register_row, "code-wrong is not a target-state gap")
 
     def test_registered_gap_has_a_target_state_register_row(self):
@@ -289,13 +283,16 @@ class TestDispositionCountsAccounting(unittest.TestCase):
         # spec-audit.md documents: contradictions = spec_wrong + code_wrong +
         # unregistered (register-suppressed intentional gaps are clean passes,
         # NOT blocking contradictions).
-        agg = {"spec_wrong": 0, "code_wrong": 0, "intentional_gap": 0, "unregistered": 0}
+        agg = {
+            "spec_wrong": 0,
+            "code_wrong": 0,
+            "intentional_gap": 0,
+            "unregistered": 0,
+        }
         for f in ALL_FIXTURES:
             for k in agg:
                 agg[k] += f.expected_counts[k]
-        contradictions = (
-            agg["spec_wrong"] + agg["code_wrong"] + agg["unregistered"]
-        )
+        contradictions = agg["spec_wrong"] + agg["code_wrong"] + agg["unregistered"]
         # Across the four fixtures: 1 spec-wrong + 1 code-wrong + 1 unregistered
         # = 3 blocking contradictions; the registered gap is a clean pass.
         self.assertEqual(agg["spec_wrong"], 1)

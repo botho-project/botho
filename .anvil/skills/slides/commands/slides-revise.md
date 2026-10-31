@@ -17,6 +17,28 @@ This command is the "N parallel critics, one reviser" pattern from anvil's desig
 - **Latest version**: highest `N` with `<thread>.{N}/deck.md` under the thread root `<thread>/`.
 - **Critic siblings**: ALL `<thread>.{N}.<critic>/` directories at that `N` (also under the thread root). At minimum the `.review/` sibling is required (the reviewer's verdict drives the dimension-by-dimension revision plan). The `.audit/` and `.rehearse/` siblings, when present, contribute additional findings — and `wrong` audit verdicts or set density/time flags MUST be addressed (they short-circuit advancement). The `.vision/` sibling (per `slides-vision.md`), when present, contributes the rendered-artifact scorecard (`kind=vision`, discovered via `anvil.lib.critics.discover_critics`): its `vertical_overflow`/`label_cropping`/`axis_legibility`/`palette_adherence`/`mathtext_artifacts`/`slide_density` dims and its `rendered_overflow_unrecoverable` / `mathtext_artifact_breaks_meaning` critical flags MUST be addressed if set.
 
+## External-source threads (`slides.external_source`)
+
+A thread imported by `slides-import` has an image-backed `deck.md` whose real source lives elsewhere (JSON + a build script, a Keynote export pipeline, …). Its thread `BRIEF.md` may declare, in frontmatter, a skill-local block (ignored by every other skill; same shape as `project-book`'s `build:`):
+
+```yaml
+slides:
+  external_source:
+    dir: source/            # editable source tree, relative to the thread root
+    build: "python3 build.py"   # command that rebuilds the PDF; run with cwd = dir
+    pdf: out/talk.pdf       # the PDF `build` produces, relative to dir
+```
+
+When the block is **absent**, this command behaves exactly as documented below. When **present**, the procedure changes at steps 8–10:
+
+- Step 8: edit the files under `dir` (copied into `<thread>.{N+1}/source/` first, so each version carries its own editable source), NOT `deck.md` prose. `deck.md` slide text lives only in page-text comments.
+- Then run `build` with cwd `<thread>.{N+1}/source/`; if it exits non-zero, stop and report (write nothing further; the revision is not complete).
+- Re-render the resulting `pdf` to `<thread>.{N+1}/figures/slide-NN.png` (`pdftoppm -png -r 150 -singlefile`), refresh each page's text comment in `deck.md` from `pdftotext` (no `-layout`), and rewrite the `![bg fit]` slide list to match the new page count.
+- Step 10: the carried-over figures are the re-rendered pages; do not run `slides-figures` over them (it only renders missing mermaid/data figures and does not touch existing PNGs).
+- `changelog.md` entries cite the changed source file, not a `deck.md` line.
+
+The original PDF under `refs/original/` is never modified.
+
 ## Outputs
 
 Nested under the thread root `<thread>/`, as a sibling of `<thread>.{N}/`:
@@ -30,12 +52,42 @@ Nested under the thread root `<thread>/`, as a sibling of `<thread>.{N}/`:
   _progress.json     Phase state with revise: done
 ```
 
+## CLI flags
+
+Operator-directed revision of an already-passing version. The generic contract lives in `anvil/lib/snippets/directed_revision.md`; this section is the slides adoption (issue #1369). Both flags bypass **step 4 only** and are the sanctioned override: deleting a verdict or hand-editing `_progress.json` to force a revision destroys the thread's audit trail and is not supported.
+
+### `--polish "<reason>"` (optional)
+
+Line-level polish of a `READY` version.
+
+- **Bypasses step 4 ONLY.** When passed, the verdict pre-check is skipped entirely, so the reviser runs against an `advance == true` version (which the default path correctly refuses) and works the sub-threshold dimension notes in `scoring.md`, `nit`-tagged or untagged `comments.md` entries, and sibling line-level findings. It never restructures the deck.
+- **The discover step (step 1) still applies.** `--polish` bypasses the pre-check *verdict*, never the *existence* of the review: `<thread>.{N}.review/verdict.md` is still required.
+- **The iteration-cap check (step 3) still applies.** `--polish` against a thread at `max_iterations` still hits the `BLOCKED` notice.
+- **The reason argument is required.** `--polish` with no value, `--polish ""`, and `--polish "   "` (whitespace-only) are rejected with a clear error; the thread is left untouched (no version dir written, no `_progress.json` mutation).
+- **No inherited credit.** The output is a normal `<thread>.{N+1}/` version dir. The next `slides-review` / `slides-audit` / `slides-rehearse` pass scores it on its own rubric merits and does NOT read the audit-trail fields.
+- **Audit-trail fields** (step 12): `metadata.revision_mode = "polish"` + `metadata.revise_force_reason = "<verbatim reason>"`.
+
+### `--reject "<reason>"` (optional)
+
+Operator rejection of an advancing version for a reason the rubric cannot see (a reframed narrative, new evidence, a comprehension failure). Semantics mirror `memo-revise.md` §`--reject`.
+
+- **Bypasses step 4 ONLY**, the same `advance == true` refusal `--polish` bypasses. Step 1 (a review must exist) and step 3 (iteration cap) still apply.
+- **Grants the full revision contract**, not the polish subset: the pass consumes the review, ALL critic siblings and the brief, and MAY restructure substantively (reorder beats, split or merge slides).
+- **The reason is the highest-priority finding.** The revision plan at step 7 opens with it, ranked above every critic finding. Critical flags from siblings still cannot be declined.
+- **The reason argument is required**, with the same rejection rule as `--polish` (empty / whitespace-only rejected, thread untouched).
+- **Mutually exclusive with `--polish`.** Passing both is rejected as contradictory: they bypass the same precondition but grant different scopes. The thread is left untouched.
+- **Audit-trail fields** (step 12): `metadata.revision_mode = "operator_reject"` + `metadata.reject_reason = "<verbatim reason>"`.
+
+Both audit-trail fields are audit-trail-only: NOT scored, NOT gating, NO state-machine impact. The next `slides-review` notes an `operator_reject` in `findings.md` (observational, no score effect). See SKILL.md §"Operator-initiated polish / rejection" for the user-facing shape.
+
 ## Procedure
 
 1. **Discover state**: find the highest `N` with `<thread>.{N}/deck.md` AND at least `<thread>.{N}.review/verdict.md` under the thread root `<thread>/`. If no review exists, exit with an error ("no review to revise against; run `slides-review` first").
 2. **Resume check**: if `<thread>.{N+1}/_progress.json.revise.state == done` and `deck.md` + `changelog.md` exist, the revision is complete — exit early with a notice.
 3. **Iteration cap check**: read `metadata.max_iterations` from `<thread>.{N}/_progress.json` (or `<thread>/.anvil.json` override; default 4). If `N + 1 > max_iterations`, exit with a `BLOCKED` notice — human review required.
-4. **Verdict pre-check**: parse `<thread>.{N}.review/verdict.md`. If `advance == true` and there are no critical flags from any sibling (review, audit, rehearse), exit with a notice: the thread is `READY`, no revision needed. (Operator can force-run by deleting the verdict or bumping the iteration manually, but the default is to refuse to revise an already-passing version.)
+4. **Verdict pre-check**: parse `<thread>.{N}.review/verdict.md`. If `advance == true` and there are no critical flags from any sibling (review, audit, rehearse), exit with a notice: the thread is `READY`, no revision needed. The default is to refuse to revise an already-passing version; the sanctioned override is `slides-revise <thread> --polish "<reason>"` or `--reject "<reason>"` (see §"CLI flags"), not deleting the verdict or hand-editing `_progress.json`.
+
+   **`--polish` / `--reject` bypass** (`anvil/lib/snippets/directed_revision.md`): when either flag is passed, this step is skipped entirely — proceed to step 5 regardless of `advance == true`. Validate first: an absent / empty / whitespace-only reason is rejected with a clear error and the thread is left untouched, and `--polish` together with `--reject` is rejected as mutually exclusive. The flags bypass ONLY this step — step 1's review-exists check and step 3's iteration cap still apply. Under `--reject`, the reason heads the revision plan at step 7, ranked above every critic finding.
 5. **Initialize `_progress.json`**: `phases.revise.state = in_progress`, `phases.revise.started = <ISO>`, `metadata.iteration = N+1`, `metadata.max_iterations`, `metadata.revised_from = N`.
 6. **Read inputs**:
    - Prior version's `deck.md`, `notes/*.md`, `figures/`.
@@ -49,6 +101,7 @@ Nested under the thread root `<thread>/`, as a sibling of `<thread>.{N}/`:
    - For each rubric dimension that scored below threshold, enumerate the specific changes required to lift the score (cite the reviewer's justification in `scoring.md`).
    - For each `comments.md` entry tagged `blocker` or `major`, plan a concrete change.
    - For each `unsupported` audit claim (does NOT set the flag but reduces Dimension 1), plan either: (a) add a citation, (b) soften the claim to match what's defensible, or (c) remove the claim. The reviser chooses per claim and documents the choice in `changelog.md`.
+   - **Under `--reject`, the operator's reason is plan item #1**, ranked above every critic finding (critical flags remain non-declinable). Under `--polish`, restrict the plan to sub-threshold dimension notes and `nit`/untagged comments, and honor the prior review's "what's working" observations.
    - Resolve conflicting feedback between critic siblings explicitly (e.g., reviewer says "more depth on slide 7," rehearse says "slide 7 is over-dense" — synthesis: split slide 7 into two slides, each with more depth than the original combined slide).
 8. **Produce `deck.md`** at `<thread>.{N+1}/deck.md`:
    - Address each planned change.
@@ -79,9 +132,11 @@ Nested under the thread root `<thread>/`, as a sibling of `<thread>.{N}/`:
     | kdd-2026.1.review (major)           | Dim 3 (Narrative arc) scored 3/6                  | Added section divider before beat 2; reworded slide 5 to recap beat 1 explicitly |
     ```
 
-    For deliberate non-resolutions (e.g., critic suggested a change the reviser disagrees with), include them with `Resolution: declined — <one-line reason>`. The next reviewer pass can override or accept the reviser's judgment. **Critical flags cannot be declined** — `wrong` claims must be addressed; density and time violations must be resolved.
+    For deliberate non-resolutions (e.g., critic suggested a change the reviser disagrees with), include them with `Resolution: declined — <one-line reason>`. The next reviewer pass can override or accept the reviser's judgment. A finding that recommends adding an on-slide disclosure label may likewise be declined with a one-line rationale (e.g. `declined — fails the audience common-sense test: obviously an illustration`) when it fails the test in `rubric.md` §"On-slide disclosure vs. provenance"; record the provenance in notes instead. **Critical flags cannot be declined** — `wrong` claims must be addressed; density and time violations must be resolved.
 
-12. **Update `_progress.json`**: `phases.revise.state = done`, `phases.revise.completed = <ISO>`.
+    **Directed-pass header note.** On a `--polish` pass, prepend a blockquote to `changelog.md` quoting the reason verbatim (e.g., `> Polish pass. Operator reason: "<reason>"`) and map each edit to a critic note or to the directive itself; an untraceable polish edit is a defect. On a `--reject` pass, prepend `> Operator rejection. Operator reason: "<reason>"` and lead the table with the reason's row.
+
+12. **Update `_progress.json`**: `phases.revise.state = done`, `phases.revise.completed = <ISO>`. On a `--polish` pass also write `metadata.revision_mode = "polish"` and `metadata.revise_force_reason = "<verbatim reason>"`; on a `--reject` pass write `metadata.revision_mode = "operator_reject"` and `metadata.reject_reason = "<verbatim reason>"`. Reasons are stored verbatim (no trimming, normalization or truncation beyond JSON encoding). On the default path `revision_mode` is absent (or `"normal"`) and the reason fields are absent, so a non-directed version dir is byte-identical to the pre-#1369 shape.
 13. **Report**: print the path to the new version dir and a one-line status (e.g., `Revised kdd-2026-keynote.1 → kdd-2026-keynote.2/ (addressed 11 notes, declined 1, slides 22 → 24)`).
 
 ## Idempotence and resumability
@@ -94,6 +149,10 @@ Nested under the thread root `<thread>/`, as a sibling of `<thread>.{N}/`:
 After this command produces `<thread>.{N+1}/`, the orchestrator runs all three critics (`slides-review`, `slides-audit`, `slides-rehearse`) against the new version. The cycle continues until:
 - `verdict.md` reports `advance: true` (no rubric block, no propagated audit/density/time flag) — thread reaches `READY`. Then `slides-audit` (if not already current) and `slides-rehearse` (if not already current) must complete cleanly for the thread to reach `AUDITED` and `REHEARSED`. Then `slides-handout` may produce the terminal export.
 - `N+1 > max_iterations` — thread is `BLOCKED` for human review.
+
+## Overridden findings (issue #1373)
+
+Findings whose rationale starts with `overridden:` record a deliberate operator decision (`editorial_overrides:` in `BRIEF.md`). Do NOT revise them — leave the operator's edit in place and do not list them as addressed in `changelog.md`. A finding marked `override ignored: critical` is NOT an overridden finding and must be revised as usual.
 
 ## Notes for the reviser agent
 

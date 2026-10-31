@@ -7,11 +7,11 @@ projects they've already rebackported.
 
 from __future__ import annotations
 
-import hashlib
 import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from anvil.lib.testing import tree_hash as _tree_hash
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
@@ -24,15 +24,6 @@ from _rebackport_fixtures import (  # noqa: E402
 
 run = orchestrate.run
 Mode = plan.Mode
-
-
-def _tree_hash(project: Path) -> dict:
-    out: dict = {}
-    for path in sorted(project.rglob("*")):
-        if path.is_file():
-            rel = str(path.relative_to(project))
-            out[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return out
 
 
 class TestIdempotence(unittest.TestCase):
