@@ -75,25 +75,24 @@
 //! [`super::privacy_routes`] (pinned to production by
 //! `botho/tests/privacy_sim_route_parity.rs`):
 //!
-//! - **CLI** (`select_rpc_decoy_pool`): a full Fisher–Yates shuffle of the ±10%
-//!   age band, truncated to 19 — a uniform sample without replacement. Given
-//!   the band's composition, `P` is exactly hypergeometric, `C(A, 19) / C(N,
-//!   19)`, which the report uses. A unit test checks the port against that
-//!   formula by Monte Carlo.
-//! - **Web** (`selectDecoysForInput`, #1735; web wallet, Snap, claim links):
-//!   when the band holds at least 19 candidates, phase 1 is a partial
-//!   Fisher–Yates over the band — also a uniform sample without replacement, so
-//!   the same hypergeometric `P` applies. A unit test checks the web port
-//!   against the formula by Monte Carlo.
-//! - **Node** (`select_decoys_for_input`): per slot, a gamma target age clamped
-//!   into the band, then the nearest unused candidate. Since #1786 (#1771) the
-//!   eligible set is shuffled once per ring before selection, so distance ties
-//!   are broken uniformly at random, not by `utxo_db` key order.
+//! Since #1692 every picker draws one random-offset age window per ring (the
+//! real input's age uniform inside it, `W + 1` blocks wide with
+//! `W = 2 × 10%` of the real age) and takes a uniform sample of the window:
 //!
-//! Every block has outputs, so each slot lands at distance 0 in the block at
-//! its target age and takes a uniformly random unused output of that block.
-//! Given the picker's selections, `P = Π_blocks C(a, k_b) / C(n, k_b)` where
-//! `k_b` decoys came from block `b`, whatever the attacker's keys are.
+//! - **CLI** (`select_rpc_decoy_pool`): a full Fisher–Yates shuffle of the
+//!   window, truncated to 19 — a uniform sample without replacement.
+//! - **Web** (`selectDecoysForInput`, #1735; web wallet, Snap, claim links):
+//!   when the window holds at least 19 candidates, phase 1 is a partial
+//!   Fisher–Yates over it — also a uniform sample without replacement.
+//! - **Node** (`select_decoys_for_input`): the first 19 window members of a
+//!   per-ring shuffle of the eligible set (#1786) — again a uniform sample.
+//!
+//! Every window has the same composition (`W + 1` full blocks, the real
+//! input's block among them), so `P` is exactly hypergeometric,
+//! `C(A, 19) / C(N, 19)`, for all three pickers, whatever the attacker's keys
+//! are; the report uses it. Unit tests check each port against the formula by
+//! Monte Carlo. (Before #1692 the node clamped a gamma target into a centred
+//! band and took the nearest candidate, which needed its own Monte Carlo.)
 //!
 //! Two attacker key strategies are still distinguished:
 //!
@@ -108,18 +107,11 @@
 //!   changes the attacker's lottery ticket share (the lottery candidate scan is
 //!   in key order; [`ground_ticket_share`]), downward.
 //!
-//! For the uniform formula the node port runs on a chain with `min(n, 20)`
-//! outputs per block. That is exact in distribution: a block contributes at
-//! most 19 decoys, so with ≥ 20 outputs per block a target's block is never
-//! exhausted and the per-block counts `k_b` have the same law for any `n ≥ 20`
-//! (only the labels differ, which the formula applies with the true `a` and
-//! `n`). The ground-key re-run needs the true labels, so it runs at full width.
-//!
 //! # What is *not* modelled
 //!
 //! Real honest traffic is not uniform in time; coinbase and lottery payout
-//! outputs are folded into `h`; the web picker's thin-band fallback (fewer
-//! than 19 band candidates, never reached at these rates) is not modelled;
+//! outputs are folded into `h`; the thin-window fallback (fewer than 19
+//! window candidates, never reached at these rates) is not modelled;
 //! adversaries beyond "all 19 decoys known" are in the #1700 report. Nothing
 //! here is consensus code.
 
@@ -140,7 +132,8 @@ use std::collections::HashMap;
 use super::{
     privacy::DECOY_COUNT,
     privacy_routes::{
-        age_similarity_band, node_select_decoys_banded, node_select_decoys_for_input, ChainModel,
+        age_similarity_envelope, age_similarity_window_width, draw_age_similarity_window,
+        node_select_decoys_banded, node_select_decoys_in_window, window_slice, ChainModel,
         RouteCandidate, MIN_DECOY_AGE_BLOCKS,
     },
 };
@@ -445,19 +438,22 @@ pub fn all_attacker_prob(a: u64, n: u64, k: u64) -> f64 {
     (0..k).fold(1.0, |p, i| p * (a - i) as f64 / (n - i) as f64)
 }
 
-/// Number of block ages in the real input's ±10% band.
+/// Number of block ages in a random-offset window around the real input:
+/// `W + 1` (every offset gives the same count unless the window is clamped at
+/// the confirmation floor, i.e. for real ages below ~13 blocks; 0 for a
+/// degenerate window).
 pub fn band_blocks(real_age: u64) -> u64 {
-    let (lo, hi) = age_similarity_band(real_age);
-    if lo > hi {
+    if real_age < MIN_DECOY_AGE_BLOCKS {
         0
     } else {
-        hi - lo + 1
+        age_similarity_window_width(real_age) + 1
     }
 }
 
-/// CLI picker: exact `P(all decoys are the attacker's)`. The band holds
-/// `a × B` attacker and `h × B − 1` honest candidates (the real input is
-/// honest and excluded); the port shuffles and truncates — a uniform sample.
+/// Exact `P(all decoys are the attacker's)` for every picker (#1692: each
+/// takes a uniform sample of a `B`-block window that contains the real
+/// input's block). The window holds `a × B` attacker and `h × B − 1` honest
+/// candidates (the real input is honest and excluded).
 pub fn cli_all_attacker_prob(a: u64, h: u64, real_age: u64) -> f64 {
     let b = band_blocks(real_age);
     let attacker = a * b;
@@ -472,20 +468,23 @@ pub type NodeSelection = Vec<(u64, Vec<u64>)>;
 /// Node-picker selections for `trials` rings around a real input of
 /// `real_age`, on a chain with `outputs_per_block` outputs per block. The real
 /// input is the last output of its block (honest under both key strategies).
+/// Each ring draws its random-offset window (#1692) and samples it with the
+/// distribution-equivalent fast path (or the literal port with the same
+/// window when the window is thin).
 pub fn node_selections(
     outputs_per_block: u64,
     real_age: u64,
     trials: usize,
     seed: u64,
 ) -> Vec<NodeSelection> {
-    let (lo, hi) = age_similarity_band(real_age);
+    let (lo, hi) = age_similarity_envelope(real_age);
     let chain = ChainModel {
         tip_height: (hi + 2_000).max(real_age + 2_000),
         outputs_per_block,
     };
     let real_id = chain.id_at(real_age, outputs_per_block - 1);
     let real_key = ChainModel::key(real_id);
-    let band: Vec<RouteCandidate> = chain
+    let envelope: Vec<RouteCandidate> = chain
         .candidates_by_age(lo, hi)
         .into_iter()
         .filter(|c| c.key != real_key)
@@ -495,16 +494,23 @@ pub fn node_selections(
     let mut rng = ChaCha8Rng::seed_from_u64(seed ^ real_age.rotate_left(17) ^ outputs_per_block);
     let mut out = Vec::with_capacity(trials);
     for _ in 0..trials {
-        let keys =
-            match node_select_decoys_banded(&band, eligible_total, DECOY_COUNT, real_age, &mut rng)
-            {
-                Some(r) => r.expect("node picker succeeds on a full chain"),
-                None => {
-                    let all = chain.candidates_by_age(0, chain.max_age());
-                    node_select_decoys_for_input(&all, DECOY_COUNT, &[real_key], real_age, &mut rng)
-                        .expect("node picker succeeds on a full chain")
-                }
-            };
+        let window = draw_age_similarity_window(real_age, &mut rng);
+        let band = window_slice(&envelope, window);
+        let keys = match node_select_decoys_banded(band, eligible_total, DECOY_COUNT, &mut rng) {
+            Some(r) => r.expect("node picker succeeds on a full chain"),
+            None => {
+                let all = chain.candidates_by_age(0, chain.max_age());
+                node_select_decoys_in_window(
+                    &all,
+                    DECOY_COUNT,
+                    &[real_key],
+                    real_age,
+                    window,
+                    &mut rng,
+                )
+                .expect("node picker succeeds on a full chain")
+            }
+        };
         let mut by_block: HashMap<u64, Vec<u64>> = HashMap::new();
         for k in &keys {
             let id = ChainModel::id_of(k);
@@ -518,31 +524,6 @@ pub fn node_selections(
         out.push(sel);
     }
     out
-}
-
-/// Width of the node-port chain needed for `n` true outputs per block (see
-/// the module docs: exact for `n ≥ 20`).
-pub fn node_chain_width(n: u64) -> u64 {
-    n.min(DECOY_COUNT as u64 + 1)
-}
-
-/// Node picker `P(all decoys are the attacker's)` for one ring, given the
-/// picker's per-block selection counts.
-///
-/// Since #1786 the node picker breaks distance ties with a per-ring shuffle,
-/// so the outputs it takes from a block are a uniform subset of that block
-/// whatever the attacker's keys are. The same formula therefore holds for
-/// both key strategies; [`node_ground_full_width_prob`] checks the ground-key
-/// case on the port directly.
-pub fn node_ring_all_attacker(sel: &NodeSelection, a: u64, h: u64, real_age: u64) -> f64 {
-    let n = a + h;
-    sel.iter()
-        .map(|(age, pos)| {
-            // The real input (honest) is excluded from its own block.
-            let total = if *age == real_age { n - 1 } else { n };
-            all_attacker_prob(a, total, pos.len() as u64)
-        })
-        .product()
 }
 
 /// Largest `a + h` for which [`node_ground_full_width_prob`] runs (the chain
@@ -572,51 +553,15 @@ pub fn node_ground_full_width_prob(a: u64, h: u64, real_age: u64, trials: usize,
     hits as f64 / sels.len() as f64
 }
 
-/// Caches node-picker selections per (chain width, real age).
-pub struct NodeSampler {
-    trials: usize,
-    seed: u64,
-    cache: HashMap<(u64, u64), Vec<NodeSelection>>,
-}
-
-impl NodeSampler {
-    /// A sampler drawing `trials` rings per (width, age).
-    pub fn new(trials: usize, seed: u64) -> Self {
-        Self {
-            trials,
-            seed,
-            cache: HashMap::new(),
-        }
-    }
-
-    /// Mean node-picker `P(all decoys are the attacker's)`. Key strategy does
-    /// not enter (see [`node_ring_all_attacker`]).
-    pub fn prob(&mut self, a: u64, h: u64, real_age: u64) -> f64 {
-        if a == 0 {
-            return 0.0;
-        }
-        let width = node_chain_width(a + h);
-        let (trials, seed) = (self.trials, self.seed);
-        let sels = self
-            .cache
-            .entry((width, real_age))
-            .or_insert_with(|| node_selections(width, real_age, trials, seed));
-        let sum: f64 = sels
-            .iter()
-            .map(|s| node_ring_all_attacker(s, a, h, real_age))
-            .sum();
-        sum / sels.len() as f64
-    }
-}
-
 /// The production pickers this sweep covers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Picker {
     /// `select_rpc_decoy_pool` (botho-wallet thin CLI). The web picker
-    /// (`selectDecoysForInput`, #1735) has the same `P` (a uniform band
+    /// (`selectDecoysForInput`, #1735) has the same `P` (a uniform window
     /// sample), so its rows are shared.
     Cli,
-    /// `select_decoys_for_input` (node wallet, detached signer).
+    /// `select_decoys_for_input` (node wallet, detached signer). Same `P` as
+    /// the CLI since #1692 (a uniform window sample); kept as its own rows.
     Node,
 }
 
@@ -634,43 +579,35 @@ impl Picker {
 }
 
 /// `P(all decoys are the attacker's)` for a picker. Key grinding affects no
-/// picker: CLI and web shuffle the band, and the node picker shuffles its
-/// tie-break since #1786.
-pub fn all_decoys_prob(
-    sampler: &mut NodeSampler,
-    picker: Picker,
-    a: u64,
-    h: u64,
-    real_age: u64,
-) -> f64 {
+/// picker: CLI and web shuffle the window, and the node picker shuffles the
+/// eligible set (#1786). Since #1692 all three take a uniform sample of the
+/// random-offset window, so `P` is the same hypergeometric value for each.
+pub fn all_decoys_prob(picker: Picker, a: u64, h: u64, real_age: u64) -> f64 {
     match picker {
-        Picker::Cli => cli_all_attacker_prob(a, h, real_age),
-        Picker::Node => sampler.prob(a, h, real_age),
+        Picker::Cli | Picker::Node => cli_all_attacker_prob(a, h, real_age),
     }
 }
 
 /// Smallest attacker rate `a` (outputs/block) with `P ≥ target` at every
-/// age in `ages`, searched up to `a_max`. `P` is monotone in `a` for the CLI
-/// formula and for the node formula over a fixed selection sample.
+/// age in `ages`, searched up to `a_max`. `P` is monotone in `a`.
 pub fn min_flood_rate(
-    sampler: &mut NodeSampler,
     picker: Picker,
     h: u64,
     ages: &[u64],
     target: f64,
     a_max: u64,
 ) -> Option<u64> {
-    let ok = |s: &mut NodeSampler, a: u64| {
+    let ok = |a: u64| {
         ages.iter()
-            .all(|&age| all_decoys_prob(s, picker, a, h, age) >= target)
+            .all(|&age| all_decoys_prob(picker, a, h, age) >= target)
     };
-    if !ok(sampler, a_max) {
+    if !ok(a_max) {
         return None;
     }
     let (mut lo, mut hi) = (0u64, a_max); // ok(lo) false (a=0 => P=0), ok(hi) true
     while hi - lo > 1 {
         let mid = lo + (hi - lo) / 2;
-        if ok(sampler, mid) {
+        if ok(mid) {
             hi = mid;
         } else {
             lo = mid;
@@ -696,7 +633,8 @@ pub struct SweepConfig {
     pub epochs: Vec<u64>,
     /// Real-input ages (blocks) at which `P` is reported.
     pub real_ages: Vec<u64>,
-    /// Node-picker rings per (chain width, age).
+    /// Node-picker rings per (chain width, age) for the §5 ground-key Monte
+    /// Carlo.
     pub trials: usize,
     /// RNG seed.
     pub seed: u64,
@@ -711,7 +649,8 @@ impl Default for SweepConfig {
             attacker_shares: vec![0.5, 0.9, 0.95, 0.9642, 0.99],
             block_times_secs: vec![5, 20, 60],
             epochs: vec![0, 1],
-            // Below the node gamma (edge clamp), its mode, above it.
+            // The pre-#1692 node picker's edge-clamp, mid-band and upper ages,
+            // kept so runs stay comparable.
             real_ages: vec![1_000, 22_000, 60_000],
             trials: 4_000,
             seed: 1701,
@@ -803,7 +742,7 @@ pub struct PrivacyRow {
     pub real_age: u64,
     /// CLI and web picker (exact).
     pub cli: f64,
-    /// Node picker (any attacker keys since #1786).
+    /// Node picker (any attacker keys since #1786; exact since #1692).
     pub node: f64,
 }
 
@@ -817,7 +756,7 @@ pub struct GrindRow {
     pub real_age: u64,
     /// [`node_ground_full_width_prob`].
     pub ground: f64,
-    /// [`NodeSampler::prob`] (uniform keys).
+    /// The exact uniform-key value ([`all_decoys_prob`]).
     pub uniform: f64,
 }
 
@@ -899,7 +838,6 @@ pub const A_MAX: u64 = 1 << 16;
 
 /// Run the sweep.
 pub fn run_decoy_flood_sweep(config: &SweepConfig) -> SweepReport {
-    let mut sampler = NodeSampler::new(config.trials, config.seed);
     let h0 = epoch_height(0);
     let dust = lottery_draw_config().min_utxo_value;
     let fee = |n: u64, m: FeeModelMode| tx_fee_pico(n, n * dust, m, h0);
@@ -929,7 +867,7 @@ pub fn run_decoy_flood_sweep(config: &SweepConfig) -> SweepReport {
                     a,
                     real_age: age,
                     cli: cli_all_attacker_prob(a, h, age),
-                    node: sampler.prob(a, h, age),
+                    node: all_decoys_prob(Picker::Node, a, h, age),
                 });
             }
             for &epoch in &config.epochs {
@@ -953,14 +891,7 @@ pub fn run_decoy_flood_sweep(config: &SweepConfig) -> SweepReport {
     let keys = KeyStrategy::Uniform;
     for picker in Picker::ALL {
         for &h in &config.honest_rates {
-            let a_min = min_flood_rate(
-                &mut sampler,
-                picker,
-                h,
-                &config.real_ages,
-                config.p_target,
-                A_MAX,
-            );
+            let a_min = min_flood_rate(picker, h, &config.real_ages, config.p_target, A_MAX);
             for &epoch in &config.epochs {
                 for mode in AttackerFeeMode::ALL {
                     let e = a_min.map(|a| block_economics(a, h, epoch, mode, keys));
@@ -1003,7 +934,7 @@ pub fn run_decoy_flood_sweep(config: &SweepConfig) -> SweepReport {
                 a,
                 real_age: age,
                 ground: node_ground_full_width_prob(a, h_min, age, config.trials, config.seed),
-                uniform: sampler.prob(a, h_min, age),
+                uniform: all_decoys_prob(Picker::Node, a, h_min, age),
             });
         }
         let ground_ok = |a: u64| {
@@ -1029,14 +960,7 @@ pub fn run_decoy_flood_sweep(config: &SweepConfig) -> SweepReport {
             h: h_min,
             real_age: age,
             ground_a_min,
-            uniform_a_min: min_flood_rate(
-                &mut sampler,
-                Picker::Node,
-                h_min,
-                &[age],
-                config.p_target,
-                A_MAX,
-            ),
+            uniform_a_min: min_flood_rate(Picker::Node, h_min, &[age], config.p_target, A_MAX),
         });
     }
 
@@ -1115,7 +1039,8 @@ pub fn to_markdown(r: &SweepReport) -> String {
     );
     let _ = writeln!(
         s,
-        "Node-picker rings per (chain width, age): {}; seed {}.\n",
+        "Node-picker rings per (chain width, age) for the §5 ground-key Monte Carlo: {}; \
+         seed {}.\n",
         c.trials, c.seed
     );
 
@@ -1153,9 +1078,10 @@ pub fn to_markdown(r: &SweepReport) -> String {
     );
     let _ = writeln!(
         s,
-        "`a` = attacker outputs/block, `h` = honest outputs/block, `f = a/(a+h)`. CLI / web is \
-         exact (hypergeometric over the band; both pickers take a uniform band sample); node is \
-         the #1700 port with the #1786 shuffled tie-break, Monte Carlo. Attacker keys do not \
+        "`a` = attacker outputs/block, `h` = honest outputs/block, `f = a/(a+h)`. Exact \
+         (hypergeometric over the window). Since #1692 all three pickers take a uniform sample \
+         of a random-offset age window, so the CLI / web and node columns are the same value \
+         (each port is checked against the formula by a unit test). Attacker keys do not \
          matter to any picker (§5). `f^19` is the independent-draw reference.\n"
     );
     let _ = writeln!(s, "| h | a | f | f^19 | real age | CLI / web | node |");
@@ -1456,71 +1382,71 @@ mod tests {
     }
 
     #[test]
-    fn node_width_reduction_is_exact_in_distribution() {
-        // With >= 20 outputs per block the per-block decoy counts have the same
-        // law for any width. Since #1786 the port's tie-break draws consume
-        // RNG, so widths no longer give bit-identical rings; compare the
-        // uniform-key P (with the true a, h) and the number of distinct blocks
-        // used, widths 20 and 37, on independent samples.
-        let (a, h) = (30u64, 7u64);
-        let trials = 1_500;
-        for age in [1_000u64, 22_000] {
-            let mut stats = Vec::new();
-            for (width, seed) in [(20u64, 99u64), (37, 100)] {
-                let sels = node_selections(width, age, trials, seed);
-                let p: Vec<f64> = sels
-                    .iter()
-                    .map(|s| node_ring_all_attacker(s, a, h, age))
-                    .collect();
-                let blocks: Vec<f64> = sels.iter().map(|s| s.len() as f64).collect();
-                stats.push((mean_se(&p), mean_se(&blocks)));
-            }
-            let ((p20, sp20), (b20, sb20)) = stats[0];
-            let ((p37, sp37), (b37, sb37)) = stats[1];
-            assert!(
-                (p20 - p37).abs() <= 4.0 * (sp20.hypot(sp37)) + 1e-9,
-                "age {age}: P {p20} vs {p37}"
-            );
-            assert!(
-                (b20 - b37).abs() <= 4.0 * (sb20.hypot(sb37)) + 1e-9,
-                "age {age}: blocks {b20} vs {b37}"
-            );
+    fn node_port_matches_hypergeometric() {
+        // Since #1692 the node picker takes a uniform sample of the
+        // random-offset window, so the CLI formula applies to it too. Literal
+        // port and the sweep's banded fast path (`node_selections`) both.
+        let (a, h) = (9u64, 1u64);
+        let n = a + h;
+        let real_age = 100;
+        let chain = ChainModel {
+            tip_height: 400,
+            outputs_per_block: n,
+        };
+        let real_key = ChainModel::key(chain.id_at(real_age, n - 1));
+        let all = chain.candidates_by_age(0, chain.max_age());
+        let mut rng = ChaCha8Rng::seed_from_u64(12);
+        let trials = 6_000;
+        let mut hits = 0usize;
+        for _ in 0..trials {
+            let keys = node_literal(&all, DECOY_COUNT, &[real_key], real_age, &mut rng).unwrap();
+            hits += usize::from(keys.iter().all(|k| ChainModel::id_of(k) % n < a));
         }
-    }
+        let exact = cli_all_attacker_prob(a, h, real_age);
+        assert!(
+            exact > 0.005,
+            "test needs a measurable probability: {exact}"
+        );
+        let se = (exact * (1.0 - exact) / trials as f64).sqrt();
+        let mc = hits as f64 / trials as f64;
+        assert!(
+            (mc - exact).abs() < 5.0 * se + 1e-3,
+            "literal {mc} vs exact {exact}"
+        );
 
-    fn mean_se(xs: &[f64]) -> (f64, f64) {
-        let n = xs.len() as f64;
-        let m = xs.iter().sum::<f64>() / n;
-        let var = xs.iter().map(|x| (x - m).powi(2)).sum::<f64>() / (n - 1.0);
-        (m, (var / n).sqrt())
+        let sels = node_selections(n, real_age, trials, 13);
+        let fast = sels
+            .iter()
+            .filter(|s| s.iter().all(|(_, pos)| pos.iter().all(|&j| j < a)))
+            .count() as f64
+            / trials as f64;
+        assert!(
+            (fast - exact).abs() < 5.0 * se + 1e-3,
+            "banded {fast} vs exact {exact}"
+        );
     }
 
     #[test]
     fn node_ground_keys_no_longer_help_after_1786() {
         // The #1771 grind case. Before #1786, 19 ground outputs per block gave
         // P = 1 at the band edge and 8 gave P > 0.5 mid band. With the
-        // shuffled tie-break the ground-key value tracks the uniform one.
-        let mut s = NodeSampler::new(1_000, 5);
-        // Edge clamp (age 1000): all 19 decoys from one 20-output block, so
-        // P = C(19,19)/C(20,19) = 1/20.
+        // shuffled eligible set the ground-key value tracks the uniform one.
         let ground = node_ground_full_width_prob(19, 1, 1_000, 1_000, 5);
-        let uniform = s.prob(19, 1, 1_000);
-        assert!(ground < 0.2, "ground {ground}");
+        let uniform = all_decoys_prob(Picker::Node, 19, 1, 1_000);
         let se = (uniform * (1.0 - uniform) / 1_000.0).sqrt();
         assert!(
             (ground - uniform).abs() < 5.0 * se + 0.01,
             "ground {ground} vs uniform {uniform}"
         );
-        // Mid band: 8 ground outputs among 24 per block no longer suffice.
+        // Mid band: 8 ground outputs among 24 per block do not suffice.
         assert!(node_ground_full_width_prob(8, 16, 22_000, 1_000, 5) < 0.01);
     }
 
     #[test]
     fn node_uniform_tracks_independent_reference() {
-        let mut s = NodeSampler::new(400, 9);
         let (a, h) = (27u64, 1u64);
         let f = a as f64 / (a + h) as f64;
-        let p = s.prob(a, h, 22_000);
+        let p = all_decoys_prob(Picker::Node, a, h, 22_000);
         assert!(
             (p - f.powi(19)).abs() < 0.05,
             "p {p} vs f^19 {}",
@@ -1532,9 +1458,9 @@ mod tests {
     fn node_literal_port_rerun_of_grind_case() {
         // The #1771 grind case on the literal port (#1786 shuffle included):
         // 19 attacker outputs with the lowest keys plus 1 honest output per
-        // block. At age 200 every gamma target clamps to the band top, so all
-        // 19 decoys come from one block and P = 1/20 (it was 1 before #1786).
-        // The banded fast path the sweep uses must agree.
+        // block. Key order does not matter, so P is the uniform-key
+        // hypergeometric value (it was 1 before #1786). The banded fast path
+        // the sweep uses must agree.
         let (a, h) = (19u64, 1u64);
         let n = a + h;
         let chain = ChainModel {
@@ -1542,9 +1468,9 @@ mod tests {
             outputs_per_block: n,
         };
         let age = 200;
-        let (lo, hi) = age_similarity_band(age);
+        let (lo, hi) = age_similarity_envelope(age);
         let real_key = ChainModel::key(chain.id_at(age, n - 1));
-        let band: Vec<RouteCandidate> = chain
+        let envelope: Vec<RouteCandidate> = chain
             .candidates_by_age(lo, hi)
             .into_iter()
             .filter(|c| c.key != real_key)
@@ -1556,11 +1482,11 @@ mod tests {
         let mut r2 = ChaCha8Rng::seed_from_u64(5);
         let (mut fast_hits, mut slow_hits) = (0usize, 0usize);
         for _ in 0..trials {
+            let window = draw_age_similarity_window(age, &mut r1);
             let fast = node_select_decoys_banded(
-                &band,
+                window_slice(&envelope, window),
                 chain.eligible_count() - 1,
                 DECOY_COUNT,
-                age,
                 &mut r1,
             )
             .unwrap()
@@ -1569,7 +1495,7 @@ mod tests {
             fast_hits += usize::from(ground(&fast));
             slow_hits += usize::from(ground(&slow));
         }
-        let expected = 1.0 / n as f64;
+        let expected = cli_all_attacker_prob(a, h, age);
         let se = (expected * (1.0 - expected) / trials as f64).sqrt();
         for (name, hits) in [("banded", fast_hits), ("literal", slow_hits)] {
             let p = hits as f64 / trials as f64;
@@ -1579,7 +1505,7 @@ mod tests {
 
     #[test]
     fn web_port_matches_hypergeometric() {
-        // The web picker (#1735) takes a uniform band sample, so the CLI
+        // The web picker (#1735) takes a uniform window sample, so the CLI
         // formula applies to it too.
         let (a, h) = (9u64, 1u64);
         let n = a + h;

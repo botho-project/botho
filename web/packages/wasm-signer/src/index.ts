@@ -535,8 +535,13 @@ export {
   AGE_SIMILARITY_SPREAD_BPS,
   MIN_DECOY_AGE_BLOCKS,
   ageSimilarityBand,
+  ageSimilarityEnvelope,
+  ageSimilarityWindow,
+  ageSimilarityWindowWidth,
+  drawAgeSimilarityWindow,
   outputAge,
   randomIndex,
+  randomInteger,
   selectDecoysForInput,
   type RandomFill,
 } from './decoys'

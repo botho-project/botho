@@ -33,12 +33,12 @@
 //! # Chain model
 //!
 //! Ring privacy depends on the age density of the candidate set, so instead of
-//! the legacy gamma-aged pool (which concentrates every output at 13k–33k
-//! blocks, exactly where the node picker's edge clamp is weakest) the UTXO set
-//! is an explicit chain: `outputs_per_block` outputs created at every height
-//! `1..=tip_height`. Cluster-tag profiles for each output come from the legacy
-//! [`OutputPoolGenerator`] mix (standard/exchange/whale/coinbase/mixed), drawn
-//! deterministically per output id.
+//! the legacy gamma-aged pool (which concentrates every output around the
+//! gamma mean) the UTXO set is an explicit chain: `outputs_per_block` outputs
+//! created at every height `1..=tip_height`. Cluster-tag profiles for each
+//! output come from the legacy [`OutputPoolGenerator`] mix
+//! (standard/exchange/whale/coinbase/mixed), drawn deterministically per output
+//! id.
 //!
 //! # What is reported
 //!
@@ -57,6 +57,15 @@
 //! `Cluster-Fingerprint` (matches each member's tags against the output's
 //! published tags) and `Combined` (age-heuristic × cluster, as in the legacy
 //! model).
+//!
+//! # Placement rule (#1692 / #1755)
+//!
+//! All three production pickers draw one random-offset age window per ring
+//! (width 20% of the real age, real age uniform inside it) and sample decoys
+//! uniformly inside it. Before #1692 the node clamped a gamma target into a
+//! band centred on the real age (real input youngest/oldest at most ages), and
+//! the CLI and web sampled that centred band uniformly (real input the median
+//! member, #1755).
 //!
 //! The native producers stamp every output with the REAL input's tags decayed
 //! one hop, in plaintext (`ClusterTagVector::merge_weighted`; decoys never
@@ -82,9 +91,11 @@ use super::privacy::{
 pub const NODE_GAMMA_SHAPE: f64 = 19.28;
 /// `DEFAULT_GAMMA_SCALE_DAYS` in `botho/src/decoy_selection.rs`.
 pub const NODE_GAMMA_SCALE_DAYS: f64 = 1.61;
-/// `BLOCKS_PER_DAY` in `botho/src/decoy_selection.rs` (assumes 2-minute
-/// blocks; see #1692 for the block-time mismatch).
-pub const NODE_BLOCKS_PER_DAY: f64 = 720.0;
+/// `BLOCKS_PER_DAY` in `botho/src/decoy_selection.rs`: derived from the
+/// mainnet policy's 5 s target block time (17,280/day) since #1692. Imported
+/// from the shared [`crate::consensus_fee::MAINNET_BLOCKS_PER_YEAR`], not
+/// restated.
+pub const NODE_BLOCKS_PER_DAY: f64 = (crate::consensus_fee::MAINNET_BLOCKS_PER_YEAR / 365) as f64;
 /// `MIN_DECOY_AGE_BLOCKS` (node and `botho-wallet`).
 pub const MIN_DECOY_AGE_BLOCKS: u64 = 10;
 /// `AGE_SIMILARITY_SPREAD_BPS` (node and `botho-wallet`): ±10%.
@@ -94,7 +105,9 @@ pub const AGE_SIMILARITY_SPREAD_BPS: u64 = 1_000;
 /// whose χ² exceeds this is distinguishable from uniform at the 1% level.
 pub const CHI2_CRIT_DF19_P01: f64 = 36.191;
 
-/// Port of `age_similarity_band` (`botho/src/decoy_selection.rs`).
+/// Port of `age_similarity_band` (`botho/src/decoy_selection.rs`): the band
+/// CENTRED on the real age. No picker uses it since #1692; it is the reference
+/// band of the shared fixture.
 pub fn age_similarity_band(real_input_age: u64) -> (u64, u64) {
     let delta = (real_input_age as u128 * AGE_SIMILARITY_SPREAD_BPS as u128 / 10_000) as u64;
     let min_age = real_input_age
@@ -102,6 +115,74 @@ pub fn age_similarity_band(real_input_age: u64) -> (u64, u64) {
         .max(MIN_DECOY_AGE_BLOCKS);
     let max_age = real_input_age.saturating_add(delta);
     (min_age, max_age)
+}
+
+/// Port of `age_similarity_window_width`: the window's total width
+/// `W = 2 × delta` in blocks.
+pub fn age_similarity_window_width(real_input_age: u64) -> u64 {
+    2 * (real_input_age as u128 * AGE_SIMILARITY_SPREAD_BPS as u128 / 10_000) as u64
+}
+
+/// Port of `age_similarity_window`: `[real − offset, real − offset + W]`,
+/// `offset` clamped to `0..=W`, lower bound floored at
+/// [`MIN_DECOY_AGE_BLOCKS`].
+pub fn age_similarity_window(real_input_age: u64, offset: u64) -> (u64, u64) {
+    let width = age_similarity_window_width(real_input_age);
+    let start = real_input_age - offset.min(width);
+    (start.max(MIN_DECOY_AGE_BLOCKS), start + width)
+}
+
+/// Port of `draw_age_similarity_window` (node and `botho-wallet`): one
+/// `rng.random_range(0..=W)` offset draw per ring (#1692 / #1755).
+pub fn draw_age_similarity_window<R: Rng + ?Sized>(real_input_age: u64, rng: &mut R) -> (u64, u64) {
+    let width = age_similarity_window_width(real_input_age);
+    let offset = rng.random_range(0..=width);
+    age_similarity_window(real_input_age, offset)
+}
+
+/// Port of `age_similarity_envelope`: the union `[real − W, real + W]` of
+/// every window (lower bound floored at [`MIN_DECOY_AGE_BLOCKS`]).
+pub fn age_similarity_envelope(real_input_age: u64) -> (u64, u64) {
+    let width = age_similarity_window_width(real_input_age);
+    (
+        real_input_age
+            .saturating_sub(width)
+            .max(MIN_DECOY_AGE_BLOCKS),
+        real_input_age.saturating_add(width),
+    )
+}
+
+/// The members of an age-sorted candidate list inside `window` (inclusive),
+/// by binary search. Empty for a degenerate window.
+pub fn window_slice(sorted: &[RouteCandidate], (lo, hi): (u64, u64)) -> &[RouteCandidate] {
+    if lo > hi {
+        return &[];
+    }
+    let a = sorted.partition_point(|c| c.age_blocks < lo);
+    let b = sorted.partition_point(|c| c.age_blocks <= hi);
+    &sorted[a..b.max(a)]
+}
+
+/// Uniform ordered sample of `count` indices from `0..len` without
+/// replacement: a partial Fisher–Yates over a sparse swap map, so the cost is
+/// `O(count)` whatever `len` is. `draw(n)` must return a uniform index in
+/// `0..n`.
+fn sparse_partial_fisher_yates<F: FnMut(usize) -> usize>(
+    len: usize,
+    count: usize,
+    mut draw: F,
+) -> Vec<usize> {
+    let mut swapped: HashMap<usize, usize> = HashMap::with_capacity(2 * count);
+    let at = |m: &HashMap<usize, usize>, i: usize| *m.get(&i).unwrap_or(&i);
+    let mut picked = Vec::with_capacity(count);
+    for i in 0..count {
+        let j = i + draw(len - i);
+        let (vi, vj) = (at(&swapped, i), at(&swapped, j));
+        swapped.insert(i, vj);
+        swapped.insert(j, vi);
+        picked.push(vj);
+    }
+    picked
 }
 
 /// A decoy candidate as the pickers see it: an identity and an age.
@@ -137,17 +218,15 @@ fn node_gamma() -> Result<Gamma<f64>, RouteError> {
 // Route `node`: GammaDecoySelector::select_decoys_for_input
 // ============================================================================
 
-/// Literal port of `GammaDecoySelector::select_decoys_for_input` with the
-/// default spend distribution (the configuration every production caller
-/// uses; `record_spend` has no caller).
+/// Literal port of `GammaDecoySelector::select_decoys_for_input` (#1692).
 ///
 /// After the insufficient-candidates check the eligible set is shuffled once
-/// with `rng` (#1771 / #1786), so equal-distance ties are a uniform draw rather
-/// than resolved in candidate order. Phase 1 then draws a gamma target age per
-/// slot, clamps it into the ±10% band and takes the nearest unused in-band
-/// candidate (first in shuffled order on ties). Phase 2 fills any shortfall
-/// with the nearest-aged eligible candidates (stable sort over the shuffled
-/// order). Returns the selected keys in selection order.
+/// with `rng` (#1771 / #1786), then one random-offset window is drawn
+/// ([`draw_age_similarity_window`]). Phase 1 takes the first `count` in-window
+/// candidates in shuffled order (a uniform sample); phase 2 fills any
+/// shortfall with the nearest-aged eligible candidates to the real age (stable
+/// sort over the shuffled order). Returns the selected keys in selection
+/// order. The gamma spend model plays no part since #1692.
 pub fn node_select_decoys_for_input<R: Rng>(
     candidates: &[RouteCandidate],
     count: usize,
@@ -155,49 +234,67 @@ pub fn node_select_decoys_for_input<R: Rng>(
     real_input_age: u64,
     rng: &mut R,
 ) -> Result<Vec<[u8; 32]>, RouteError> {
-    let mut eligible: Vec<&RouteCandidate> = candidates
+    let mut eligible = node_eligible(candidates, count, exclude_keys)?;
+    eligible.shuffle(rng);
+    let window = draw_age_similarity_window(real_input_age, rng);
+    node_pick_from_shuffled(&eligible, count, exclude_keys, real_input_age, window)
+}
+
+/// [`node_select_decoys_for_input`] with the window already drawn: same
+/// eligibility check and shuffle, no window draw. The simulation uses it when
+/// its fast path ([`node_select_decoys_banded`]) drew a window too thin to fill
+/// the ring, so the window keeps its uniform offset.
+pub fn node_select_decoys_in_window<R: Rng>(
+    candidates: &[RouteCandidate],
+    count: usize,
+    exclude_keys: &[[u8; 32]],
+    real_input_age: u64,
+    window: (u64, u64),
+    rng: &mut R,
+) -> Result<Vec<[u8; 32]>, RouteError> {
+    let mut eligible = node_eligible(candidates, count, exclude_keys)?;
+    eligible.shuffle(rng);
+    node_pick_from_shuffled(&eligible, count, exclude_keys, real_input_age, window)
+}
+
+fn node_eligible<'a>(
+    candidates: &'a [RouteCandidate],
+    count: usize,
+    exclude_keys: &[[u8; 32]],
+) -> Result<Vec<&'a RouteCandidate>, RouteError> {
+    let eligible: Vec<&RouteCandidate> = candidates
         .iter()
         .filter(|c| c.age_blocks >= MIN_DECOY_AGE_BLOCKS && !exclude_keys.contains(&c.key))
         .collect();
-
     if eligible.len() < count {
         return Err(RouteError::InsufficientCandidates {
             required: count,
             available: eligible.len(),
         });
     }
+    Ok(eligible)
+}
 
-    // #1771 / #1786: randomize the tie-break with one shuffle of the eligible
-    // set, at the same position (and so the same RNG-stream offset) as
-    // production.
-    eligible.shuffle(rng);
-
-    let gamma = node_gamma()?;
-    let (min_age, max_age) = age_similarity_band(real_input_age);
-
+fn node_pick_from_shuffled(
+    eligible: &[&RouteCandidate],
+    count: usize,
+    exclude_keys: &[[u8; 32]],
+    real_input_age: u64,
+    (min_age, max_age): (u64, u64),
+) -> Result<Vec<[u8; 32]>, RouteError> {
     let mut selected = Vec::with_capacity(count);
     let mut used_keys = exclude_keys.to_vec();
 
     if min_age <= max_age {
-        for _ in 0..count {
-            let target_age: f64 = gamma.sample(rng);
-            let target_age_blocks = (target_age as u64).clamp(min_age, max_age);
-
-            let best = eligible
-                .iter()
-                .filter(|c| {
-                    c.age_blocks >= min_age
-                        && c.age_blocks <= max_age
-                        && !used_keys.contains(&c.key)
-                })
-                .min_by_key(|c| (c.age_blocks as i64 - target_age_blocks as i64).unsigned_abs());
-
-            if let Some(candidate) = best {
-                selected.push(candidate.key);
-                used_keys.push(candidate.key);
-            } else {
+        for c in eligible {
+            if selected.len() >= count {
                 break;
             }
+            if c.age_blocks < min_age || c.age_blocks > max_age || used_keys.contains(&c.key) {
+                continue;
+            }
+            selected.push(c.key);
+            used_keys.push(c.key);
         }
     }
 
@@ -229,38 +326,24 @@ pub fn node_select_decoys_for_input<R: Rng>(
     Ok(selected)
 }
 
-/// Fast path for [`node_select_decoys_for_input`] over an age-sorted pool.
+/// Fast path for [`node_select_decoys_for_input`] once the window is drawn.
 ///
-/// `band` must be exactly the eligible (non-excluded) candidates whose age lies
-/// in `age_similarity_band(real_input_age)`, **sorted by ascending age**.
-/// `eligible_total` is the number of eligible candidates in the full list.
+/// `window_band` must be exactly the eligible (non-excluded) candidates inside
+/// the drawn window; `eligible_total` is the number of eligible candidates in
+/// the full list. When the window can supply all `count` decoys, the literal
+/// port takes the first `count` window members of a uniform shuffle: a uniform
+/// ORDERED sample without replacement. This takes the same sample by a sparse
+/// partial Fisher–Yates over the window (`O(count)` draws instead of a shuffle
+/// of the whole UTXO set), so the result is **distribution-equivalent** (not
+/// bit-identical) to the literal port, selection order included.
 ///
-/// When the band can supply all `count` decoys, phase 1 never exhausts and the
-/// result is **distribution-equivalent** (not bit-identical) to the literal
-/// port on the full list: each slot draws the same gamma target, clamps it into
-/// the band and takes an unused in-band candidate at minimum distance, but each
-/// slot costs a binary search instead of a scan over the whole UTXO set.
-///
-/// Since #1771 / #1786 the literal port shuffles the whole eligible set once
-/// per ring and breaks distance ties by shuffled order. Reproducing that RNG
-/// stream would mean shuffling every eligible output (1.2M on the default
-/// chain) for every ring. Instead, the fast path gives each band member a
-/// lazily drawn i.i.d. random priority, fixed for the ring, and breaks ties by
-/// lowest priority. The shuffle's restriction to the band is a uniformly random
-/// relative order, independent of the gamma draws, and i.i.d. continuous
-/// priorities induce exactly that order. So the joint distribution of the
-/// selected ring (including selection order and correlated tie outcomes across
-/// slots) is the same as the literal port's. A `u64` priority collision is
-/// broken by index, which is a deviation of order 2^-64 per comparison.
-///
-/// Returns `None` when the precondition does not hold (degenerate or
-/// under-filled band); the caller must then run the literal port.
+/// Returns `None` when the window holds fewer than `count` members; the caller
+/// must then run [`node_select_decoys_in_window`] with the SAME window.
 /// Equivalence is pinned by a statistical unit test.
 pub fn node_select_decoys_banded<R: Rng>(
-    band: &[RouteCandidate],
+    window_band: &[RouteCandidate],
     eligible_total: usize,
     count: usize,
-    real_input_age: u64,
     rng: &mut R,
 ) -> Option<Result<Vec<[u8; 32]>, RouteError>> {
     if eligible_total < count {
@@ -269,105 +352,11 @@ pub fn node_select_decoys_banded<R: Rng>(
             available: eligible_total,
         }));
     }
-    let (min_age, max_age) = age_similarity_band(real_input_age);
-    if min_age > max_age || band.len() < count {
+    if window_band.len() < count {
         return None;
     }
-    debug_assert!(band.windows(2).all(|w| w[0].age_blocks <= w[1].age_blocks));
-    debug_assert!(band
-        .iter()
-        .all(|c| c.age_blocks >= min_age && c.age_blocks <= max_age));
-
-    let gamma = match node_gamma() {
-        Ok(g) => g,
-        Err(e) => return Some(Err(e)),
-    };
-
-    let mut used: Vec<usize> = Vec::with_capacity(count);
-    let mut priorities: Vec<(usize, u64)> = Vec::new();
-    for _ in 0..count {
-        let target_age: f64 = gamma.sample(rng);
-        let t = (target_age as u64).clamp(min_age, max_age);
-        let idx = nearest_unused(band, &used, t, &mut priorities, rng);
-        used.push(idx);
-    }
-    Some(Ok(used.into_iter().map(|i| band[i].key).collect()))
-}
-
-/// Index of an unused band member nearest to `t`. Among all unused members at
-/// the minimum distance (ages `t - d` and `t + d`), the one with the lowest
-/// per-ring random priority wins; priorities are drawn from `rng` on first use
-/// and remembered in `priorities` for the rest of the ring (see
-/// [`node_select_decoys_banded`] for why this matches the #1786 shuffle).
-fn nearest_unused<R: Rng>(
-    band: &[RouteCandidate],
-    used: &[usize],
-    t: u64,
-    priorities: &mut Vec<(usize, u64)>,
-    rng: &mut R,
-) -> usize {
-    let p = band.partition_point(|c| c.age_blocks < t);
-
-    let mut r = p;
-    while r < band.len() && used.contains(&r) {
-        r += 1;
-    }
-    let right_age = (r < band.len()).then(|| band[r].age_blocks);
-
-    let mut left_age = None;
-    let mut l = p;
-    while l > 0 {
-        l -= 1;
-        if !used.contains(&l) {
-            left_age = Some(band[l].age_blocks);
-            break;
-        }
-    }
-
-    let d = match (left_age, right_age) {
-        (Some(la), Some(ra)) => (t - la).min(ra - t),
-        (Some(la), None) => t - la,
-        (None, Some(ra)) => ra - t,
-        (None, None) => unreachable!("band holds at least `count` members"),
-    };
-
-    // Every unused member at distance exactly `d`.
-    let mut group: Vec<usize> = Vec::new();
-    let mut push_age = |age: u64| {
-        let lo = band.partition_point(|c| c.age_blocks < age);
-        let hi = band.partition_point(|c| c.age_blocks <= age);
-        group.extend((lo..hi).filter(|i| !used.contains(i)));
-    };
-    if let Some(a) = t.checked_sub(d) {
-        push_age(a);
-    }
-    if d > 0 {
-        push_age(t + d);
-    }
-    debug_assert!(!group.is_empty());
-    if group.len() == 1 {
-        return group[0];
-    }
-
-    let mut best = group[0];
-    let mut best_priority = u64::MAX;
-    let mut first = true;
-    for i in group {
-        let pr = match priorities.iter().find(|(j, _)| *j == i) {
-            Some(&(_, pr)) => pr,
-            None => {
-                let pr = rng.next_u64();
-                priorities.push((i, pr));
-                pr
-            }
-        };
-        if first || pr < best_priority {
-            best = i;
-            best_priority = pr;
-            first = false;
-        }
-    }
-    best
+    let picked = sparse_partial_fisher_yates(window_band.len(), count, |n| rng.random_range(0..n));
+    Some(Ok(picked.into_iter().map(|i| window_band[i].key).collect()))
 }
 
 // ============================================================================
@@ -409,8 +398,9 @@ pub fn cli_sample_prepared_rpc_decoy_pool<R: Rng + ?Sized>(
 }
 
 /// Port of `select_rpc_decoys_from_history` over an already-canonical
-/// candidate set: refuse inputs younger than [`MIN_DECOY_AGE_BLOCKS`], window
-/// to the ±10% age band, prepare, then sample uniformly.
+/// candidate set: refuse inputs younger than [`MIN_DECOY_AGE_BLOCKS`], draw the
+/// random-offset age window (#1692), keep the candidates inside it, prepare,
+/// then sample uniformly.
 pub fn cli_select_rpc_decoys_for_input<R: Rng + ?Sized>(
     candidates: &[RouteCandidate],
     real_input_age: u64,
@@ -421,7 +411,7 @@ pub fn cli_select_rpc_decoys_for_input<R: Rng + ?Sized>(
     if real_input_age < MIN_DECOY_AGE_BLOCKS {
         return Err(RouteError::InputTooYoung);
     }
-    let (min_age, max_age) = age_similarity_band(real_input_age);
+    let (min_age, max_age) = draw_age_similarity_window(real_input_age, rng);
     let window: Vec<RouteCandidate> = candidates
         .iter()
         .filter(|c| c.age_blocks >= min_age && c.age_blocks <= max_age)
@@ -432,6 +422,28 @@ pub fn cli_select_rpc_decoys_for_input<R: Rng + ?Sized>(
         count,
         rng,
     )
+}
+
+/// Fast path for the CLI route once the window is drawn: `window_band` is the
+/// prepared (distinct, non-excluded) candidates inside it. The literal port
+/// shuffles the key-sorted window and truncates to `count`, a uniform ordered
+/// sample without replacement; this takes the same sample by a sparse partial
+/// Fisher–Yates, so it is distribution-equivalent (not bit-identical) without
+/// sorting the window per ring. Fails exactly when the literal port does
+/// (fewer than `count` members).
+pub fn cli_sample_window_fast<R: Rng + ?Sized>(
+    window_band: &[RouteCandidate],
+    count: usize,
+    rng: &mut R,
+) -> Result<Vec<[u8; 32]>, RouteError> {
+    if window_band.len() < count {
+        return Err(RouteError::InsufficientCandidates {
+            required: count,
+            available: window_band.len(),
+        });
+    }
+    let picked = sparse_partial_fisher_yates(window_band.len(), count, |n| rng.random_range(0..n));
+    Ok(picked.into_iter().map(|i| window_band[i].key).collect())
 }
 
 // ============================================================================
@@ -482,6 +494,38 @@ pub fn web_random_index<F: FnMut() -> u32>(n: usize, next_u32: &mut F) -> usize 
     }
 }
 
+/// Port of `randomInteger` (`decoys.ts`): `n <= 2^32` delegates to
+/// [`web_random_index`]; larger bounds draw a 53-bit value from two u32 words
+/// (`(w0 >> 11) × 2^32 + w1`, `getRandomValues` fills `w0` first) with
+/// rejection below the largest multiple of `n`.
+pub fn web_random_integer<F: FnMut() -> u32>(n: u64, next_u32: &mut F) -> u64 {
+    assert!(
+        (1..=(1u64 << 53) - 1).contains(&n),
+        "web_random_integer: invalid bound {n}"
+    );
+    if n <= 1u64 << 32 {
+        return web_random_index(n as usize, next_u32) as u64;
+    }
+    let range = 1u64 << 53;
+    let limit = range - (range % n);
+    loop {
+        let w0 = next_u32() as u64;
+        let w1 = next_u32() as u64;
+        let v = (w0 >> 11) * (1u64 << 32) + w1;
+        if v < limit {
+            return v % n;
+        }
+    }
+}
+
+/// Port of `drawAgeSimilarityWindow` (`decoys.ts`, #1692): offset =
+/// `randomInteger(W + 1)`, window = [`age_similarity_window`].
+pub fn web_draw_window<F: FnMut() -> u32>(real_input_age: u64, next_u32: &mut F) -> (u64, u64) {
+    let width = age_similarity_window_width(real_input_age);
+    let offset = web_random_integer(width + 1, next_u32);
+    age_similarity_window(real_input_age, offset)
+}
+
 /// Port of the in-place `shuffle` (`decoys.ts`): Fisher–Yates from the end.
 fn web_shuffle<T, F: FnMut() -> u32>(items: &mut [T], next_u32: &mut F) {
     for i in (1..items.len()).rev() {
@@ -501,13 +545,14 @@ fn web_insufficient(count: usize, available: usize) -> RouteError {
 /// (`web/packages/wasm-signer/src/decoys.ts`).
 ///
 /// `pool` must already exclude the transaction's real inputs (as `send.ts`
-/// does). Drops candidates younger than [`MIN_DECOY_AGE_BLOCKS`]; phase 1 takes
-/// a uniform sample without replacement from the ±10% band by partial
-/// Fisher–Yates over the in-band candidates (in `pool` order); phase 2 fills a
-/// shortfall with the nearest-aged out-of-band candidates (shuffle, then
-/// stable sort by distance); finally the selection is shuffled. Every random
-/// draw is [`web_random_index`] over `next_u32`, so a seeded source reproduces
-/// the TypeScript output exactly. Returns keys in final ring order.
+/// does). Drops candidates younger than [`MIN_DECOY_AGE_BLOCKS`]; draws the
+/// random-offset window ([`web_draw_window`], #1692); phase 1 takes a uniform
+/// sample without replacement from the window by partial Fisher–Yates over
+/// the in-window candidates (in `pool` order); phase 2 fills a shortfall with
+/// the nearest-aged out-of-window candidates (shuffle, then stable sort by
+/// distance to the real age); finally the selection is shuffled. Every random
+/// draw comes from `next_u32`, so a seeded source reproduces the TypeScript
+/// output exactly. Returns keys in final ring order.
 pub fn web_select_decoys_for_input<F: FnMut() -> u32>(
     pool: &[RouteCandidate],
     count: usize,
@@ -521,7 +566,7 @@ pub fn web_select_decoys_for_input<F: FnMut() -> u32>(
     if eligible.len() < count {
         return Err(web_insufficient(count, eligible.len()));
     }
-    let (min_age, max_age) = age_similarity_band(real_input_age);
+    let (min_age, max_age) = web_draw_window(real_input_age, next_u32);
     let (mut in_band, out_of_band): (Vec<&RouteCandidate>, Vec<&RouteCandidate>) = eligible
         .into_iter()
         .partition(|c| min_age <= max_age && c.age_blocks >= min_age && c.age_blocks <= max_age);
@@ -547,15 +592,16 @@ pub fn web_select_decoys_for_input<F: FnMut() -> u32>(
     Ok(selected.into_iter().map(|c| c.key).collect())
 }
 
-/// Fast path of [`web_select_decoys_for_input`] for the simulation when the
-/// band alone can fill the ring.
+/// Fast path of [`web_select_decoys_for_input`] for the simulation, AFTER the
+/// window has been drawn ([`web_draw_window`]) from the same `next_u32`
+/// stream, when the window alone can fill the ring.
 ///
-/// `band` is exactly the in-band eligible candidates in pool order (the real
+/// `band` is exactly the in-window eligible candidates in pool order (the real
 /// input excluded). Returns `None` when `band.len() < count` (phase 2 would
-/// run; see [`web_fill_nearest`]). Otherwise the result — including every RNG
-/// draw — is bit-identical to the literal port over any pool whose in-band
-/// subsequence is `band`: phase 1's partial Fisher–Yates is replayed with a
-/// sparse swap map instead of copying the band.
+/// run; see [`web_fill_nearest`], with the same window). Otherwise the result
+/// — including every RNG draw — is bit-identical to the literal port over any
+/// pool whose in-window subsequence is `band`: phase 1's partial Fisher–Yates
+/// is replayed with a sparse swap map instead of copying the band.
 pub fn web_select_decoys_banded<F: FnMut() -> u32>(
     band: &[RouteCandidate],
     count: usize,
@@ -564,23 +610,19 @@ pub fn web_select_decoys_banded<F: FnMut() -> u32>(
     if band.len() < count {
         return None;
     }
-    let mut swapped: HashMap<usize, usize> = HashMap::with_capacity(2 * count);
-    let at = |m: &HashMap<usize, usize>, i: usize| *m.get(&i).unwrap_or(&i);
-    let mut selected: Vec<[u8; 32]> = Vec::with_capacity(count);
-    for i in 0..count {
-        let j = i + web_random_index(band.len() - i, next_u32);
-        let (vi, vj) = (at(&swapped, i), at(&swapped, j));
-        swapped.insert(i, vj);
-        swapped.insert(j, vi);
-        selected.push(band[vj].key);
-    }
+    let mut selected: Vec<[u8; 32]> =
+        sparse_partial_fisher_yates(band.len(), count, |n| web_random_index(n, next_u32))
+            .into_iter()
+            .map(|i| band[i].key)
+            .collect();
     web_shuffle(&mut selected, next_u32);
     Some(selected)
 }
 
-/// Simulation stand-in for the thin-band case (`band.len() < count`) on the
-/// chain model, where the literal port would shuffle the entire out-of-band
-/// UTXO set per ring.
+/// Simulation stand-in for the thin-window case (`band.len() < count`) on the
+/// chain model, where the literal port would shuffle the entire out-of-window
+/// UTXO set per ring. `window` is the already-drawn window and `band` its
+/// members.
 ///
 /// Same distribution, different RNG stream: phase 1 takes the whole band (in
 /// uniformly random order, as partial Fisher–Yates does); phase 2 takes the
@@ -593,17 +635,12 @@ pub fn web_select_decoys_banded<F: FnMut() -> u32>(
 fn web_fill_nearest<F: FnMut() -> u32>(
     chain: &ChainModel,
     band: &[RouteCandidate],
+    (min_age, max_age): (u64, u64),
     real_key: [u8; 32],
     real_age: u64,
     count: usize,
     next_u32: &mut F,
 ) -> Result<Vec<[u8; 32]>, RouteError> {
-    let real_eligible = usize::from(real_age >= MIN_DECOY_AGE_BLOCKS);
-    let eligible_total = chain.eligible_count() - real_eligible;
-    if eligible_total < count {
-        return Err(web_insufficient(count, eligible_total));
-    }
-    let (min_age, max_age) = age_similarity_band(real_age);
     let in_band = |a: u64| min_age <= max_age && a >= min_age && a <= max_age;
     let mut selected: Vec<[u8; 32]> = band.iter().map(|c| c.key).collect();
     let mut d = 0u64;
@@ -828,9 +865,8 @@ impl DecoyRoute {
 pub enum RealAgeSpec {
     /// Every ring spends an output exactly this many blocks old.
     Fixed(u64),
-    /// Real ages drawn from the node picker's own gamma spend model
-    /// (k = 19.28, θ = 1.61 days at 720 blocks/day; mean ≈ 22k blocks) — the
-    /// most favourable case for the node route.
+    /// Real ages drawn from the node's gamma spend model (k = 19.28,
+    /// θ = 1.61 days at 17,280 blocks/day; mean ≈ 536k blocks ≈ 31 days).
     GammaSpend,
 }
 
@@ -966,38 +1002,63 @@ fn row_seed(seed: u64, route: DecoyRoute, spec: RealAgeSpec, phase: u64) -> u64 
     splitmix64(seed ^ splitmix64(route_tag ^ splitmix64(spec_tag ^ splitmix64(phase))))
 }
 
-/// Per-row cache: for a fixed real age the real input, its band and the CLI
-/// prepared pool are the same for every ring.
+/// Per-row context: the real input and, for a fixed real age, the age-sorted
+/// candidates of its window envelope (cached once per row; every ring's
+/// random-offset window is a slice of it).
 struct RowContext {
     real_id: u64,
-    band: Vec<RouteCandidate>,
-    cli_pool: Vec<[u8; 32]>,
+    envelope: Option<Vec<RouteCandidate>>,
 }
 
 impl RowContext {
-    fn new(chain: &ChainModel, real_age: u64, j: u64) -> Self {
+    /// `cache_envelope`: materialise the envelope once (fixed-age rows). A
+    /// gamma-spend row builds a fresh context per ring and only materialises
+    /// the drawn window.
+    fn new(chain: &ChainModel, real_age: u64, j: u64, cache_envelope: bool) -> Self {
         let real_id = chain.id_at(real_age, j);
-        let real_key = ChainModel::key(real_id);
-        let (lo, hi) = age_similarity_band(real_age);
-        let band: Vec<RouteCandidate> = if lo <= hi {
+        let envelope = cache_envelope.then(|| {
+            let real_key = ChainModel::key(real_id);
+            let (lo, hi) = age_similarity_envelope(real_age);
             chain
                 .candidates_by_age(lo, hi)
                 .into_iter()
                 .filter(|c| c.key != real_key)
                 .collect()
-        } else {
-            Vec::new()
-        };
-        let cli_pool = cli_prepare_rpc_decoy_pool(&band, &[real_key]);
-        Self {
-            real_id,
-            band,
-            cli_pool,
+        });
+        Self { real_id, envelope }
+    }
+
+    /// The window's members (age-sorted, real input excluded).
+    fn window_band<'a>(
+        &'a self,
+        chain: &ChainModel,
+        window: (u64, u64),
+    ) -> std::borrow::Cow<'a, [RouteCandidate]> {
+        match &self.envelope {
+            Some(envelope) => std::borrow::Cow::Borrowed(window_slice(envelope, window)),
+            None => {
+                if window.0 > window.1 {
+                    return std::borrow::Cow::Owned(Vec::new());
+                }
+                let real_key = ChainModel::key(self.real_id);
+                std::borrow::Cow::Owned(
+                    chain
+                        .candidates_by_age(window.0, window.1)
+                        .into_iter()
+                        .filter(|c| c.key != real_key)
+                        .collect(),
+                )
+            }
         }
     }
 }
 
 /// Build one ring on `route` for `ctx`'s real input; returns decoy ids.
+///
+/// Every production route draws its random-offset window (#1692) from the
+/// ring's RNG, then samples inside it with a fast path that is
+/// distribution-equivalent to (node, CLI) or bit-identical with (web) the
+/// literal port.
 fn build_ring<R: Rng>(
     chain: &ChainModel,
     route: DecoyRoute,
@@ -1006,17 +1067,32 @@ fn build_ring<R: Rng>(
 ) -> Result<Vec<u64>, RouteError> {
     let real_key = ChainModel::key(ctx.real_id);
     let real_age = chain.age_of(ctx.real_id);
+    let real_eligible = usize::from(real_age >= MIN_DECOY_AGE_BLOCKS);
+    let eligible_total = chain.eligible_count() - real_eligible;
     let keys = match route {
         DecoyRoute::Node => {
-            let real_eligible = usize::from(real_age >= MIN_DECOY_AGE_BLOCKS);
-            let eligible_total = chain.eligible_count() - real_eligible;
-            match node_select_decoys_banded(&ctx.band, eligible_total, DECOY_COUNT, real_age, rng) {
+            if eligible_total < DECOY_COUNT {
+                return Err(RouteError::InsufficientCandidates {
+                    required: DECOY_COUNT,
+                    available: eligible_total,
+                });
+            }
+            let window = draw_age_similarity_window(real_age, rng);
+            let band = ctx.window_band(chain, window);
+            match node_select_decoys_banded(&band, eligible_total, DECOY_COUNT, rng) {
                 Some(result) => result?,
                 None => {
-                    // Sparse/degenerate band: run the literal port over the
-                    // whole (age-sorted) UTXO set.
+                    // Thin/degenerate window: run the literal port over the
+                    // whole (age-sorted) UTXO set with the SAME window.
                     let all = chain.candidates_by_age(0, chain.max_age());
-                    node_select_decoys_for_input(&all, DECOY_COUNT, &[real_key], real_age, rng)?
+                    node_select_decoys_in_window(
+                        &all,
+                        DECOY_COUNT,
+                        &[real_key],
+                        real_age,
+                        window,
+                        rng,
+                    )?
                 }
             }
         }
@@ -1024,15 +1100,23 @@ fn build_ring<R: Rng>(
             if real_age < MIN_DECOY_AGE_BLOCKS {
                 return Err(RouteError::InputTooYoung);
             }
-            cli_sample_prepared_rpc_decoy_pool(ctx.cli_pool.clone(), DECOY_COUNT, rng)?
+            let window = draw_age_similarity_window(real_age, rng);
+            let band = ctx.window_band(chain, window);
+            cli_sample_window_fast(&band, DECOY_COUNT, rng)?
         }
         DecoyRoute::Web => {
+            if eligible_total < DECOY_COUNT {
+                return Err(web_insufficient(DECOY_COUNT, eligible_total));
+            }
             let mut next_u32 = || rng.next_u32();
-            match web_select_decoys_banded(&ctx.band, DECOY_COUNT, &mut next_u32) {
+            let window = web_draw_window(real_age, &mut next_u32);
+            let band = ctx.window_band(chain, window);
+            match web_select_decoys_banded(&band, DECOY_COUNT, &mut next_u32) {
                 Some(keys) => keys,
                 None => web_fill_nearest(
                     chain,
-                    &ctx.band,
+                    &band,
+                    window,
                     real_key,
                     real_age,
                     DECOY_COUNT,
@@ -1061,10 +1145,12 @@ fn argmax_share(probs: &[f64]) -> f64 {
     }
 }
 
-/// `Band-Center` adversary: every native picker centres its ±10% age band on
-/// the real input's age, so the midrange of the ring's ages estimates the real
-/// age. Score each member by closeness to that midrange (the closest member is
-/// the argmax). Uses only public ring ages.
+/// `Band-Center` adversary: before #1692 every picker centred its ±10% age
+/// band on the real input's age, so the midrange of the ring's ages estimated
+/// the real age (#1755). Score each member by closeness to that midrange (the
+/// closest member is the argmax). Uses only public ring ages. Against the
+/// random-offset window the midrange estimates the window's centre, not the
+/// real age.
 fn band_center_scores(ring: &[SimulatedOutput]) -> Vec<f64> {
     let min = ring.iter().map(|o| o.age_blocks).min().unwrap_or(0) as f64;
     let max = ring.iter().map(|o| o.age_blocks).max().unwrap_or(0) as f64;
@@ -1112,7 +1198,7 @@ fn simulate_rings(
     let tags = OutputPoolGenerator::new(config.pool.clone());
     let gamma = node_gamma().expect("valid gamma");
     let fixed_ctx = match spec {
-        RealAgeSpec::Fixed(a) => Some(RowContext::new(chain, a.min(chain.max_age()), 0)),
+        RealAgeSpec::Fixed(a) => Some(RowContext::new(chain, a.min(chain.max_age()), 0, true)),
         RealAgeSpec::GammaSpend => None,
     };
     let output_with = |r: &mut ChaCha8Rng, id: u64| -> SimulatedOutput {
@@ -1148,7 +1234,7 @@ fn simulate_rings(
             None => {
                 let age = (gamma.sample(rng) as u64).clamp(MIN_DECOY_AGE_BLOCKS, chain.max_age());
                 let j = rng.random_range(0..chain.outputs_per_block);
-                gamma_ctx = RowContext::new(chain, age, j);
+                gamma_ctx = RowContext::new(chain, age, j, false);
                 &gamma_ctx
             }
         };
@@ -1343,6 +1429,24 @@ mod tests {
         assert_eq!(age_similarity_band(1_000_000), (900_000, 1_100_000));
         // Degenerate band for an input below the confirmation floor.
         assert_eq!(age_similarity_band(5), (10, 5));
+        // Random-offset window (#1692).
+        assert_eq!(age_similarity_window_width(100), 20);
+        assert_eq!(age_similarity_window(100, 0), (100, 120));
+        assert_eq!(age_similarity_window(100, 20), (80, 100));
+        assert_eq!(age_similarity_window(100, 10), age_similarity_band(100));
+        assert_eq!(age_similarity_window(100, 99), (80, 100));
+        assert_eq!(age_similarity_envelope(100), (80, 120));
+        assert!(age_similarity_window(5, 0).0 > age_similarity_window(5, 0).1);
+    }
+
+    /// `randomInteger` above 2^32: two words, the first shifted right by 11.
+    #[test]
+    fn web_random_integer_uses_53_bit_draws_above_2_pow_32() {
+        let mut words = vec![0u32, 5].into_iter();
+        let mut next = || words.next().expect("draw");
+        assert_eq!(web_random_integer((1 << 32) + 1, &mut next), 5);
+        let mut one = || 7u32;
+        assert_eq!(web_random_integer(3, &mut one), 1);
     }
 
     /// Age-sorted pool whose distinct ages step by `1..=max_step` and each
@@ -1368,23 +1472,14 @@ mod tests {
         out
     }
 
-    /// Since #1786 the literal node port breaks distance ties with a shuffle
-    /// of the whole eligible set, so the banded fast path can no longer match
-    /// its RNG stream; it must instead be distribution-equivalent. Check this
-    /// statistically on tie-heavy pools: for every (slot, candidate) cell, the
-    /// frequency with which the candidate is picked at that slot must agree
+    /// The node fast path (sparse partial Fisher–Yates over the drawn window)
+    /// must be distribution-equivalent to the literal port (shuffle the whole
+    /// eligible set, take the first in-window members), selection order
+    /// included. For every (slot, candidate) cell the frequency must agree
     /// between the two paths within several binomial sigmas (Z = 5 on top of
-    /// a 3/N slack; 20k seeded rings per path). Checking every slot, not just
-    /// inclusion, also pins selection order. A first-index tie break (the
-    /// pre-#1786 behaviour) fails this test at slot 0. The test cannot tell
-    /// the per-ring remembered priorities apart from fresh per-slot uniform
-    /// tie breaks, because on these pools the two differ only for rare
-    /// `t - d` / `t + d` ties that recur across slots; the remembered
-    /// priorities are exact by construction (see `node_select_decoys_banded`).
-    ///
-    /// Two scenarios: an edge-clamped band (real age 1000, gamma targets clamp
-    /// to the top edge, so the picks are decided almost entirely by same-age
-    /// ties) and a midrange band (real age 8000, straddling the gamma mode).
+    /// a 3/N slack; 20k seeded rings per path) on tie-heavy pools. Both paths
+    /// draw the window from their own RNG; thin windows fall back to the
+    /// literal port with the same window, as in the simulation.
     #[test]
     fn banded_node_path_is_distribution_equivalent_to_literal_port() {
         const TRIALS: u64 = 20_000;
@@ -1393,8 +1488,8 @@ mod tests {
         let mut gen = StdRng::seed_from_u64(1700);
 
         for (real_age, first, last, max_step, max_mult) in [
-            (1_000u64, 880u64, 1_120u64, 6u64, 4u64),
-            (8_000, 7_150, 8_850, 40, 3),
+            (100u64, 78u64, 122u64, 1u64, 3u64),
+            (1_000, 790, 1_210, 6, 4),
         ] {
             let mut all = tie_heavy_pool(&mut gen, first, last, max_step, max_mult);
             let real_key = k(1_000_000);
@@ -1403,13 +1498,8 @@ mod tests {
                 age_blocks: real_age,
             });
             all.sort_by_key(|c| c.age_blocks);
-            let (lo, hi) = age_similarity_band(real_age);
-            let band: Vec<RouteCandidate> = all
-                .iter()
-                .filter(|c| c.key != real_key && c.age_blocks >= lo && c.age_blocks <= hi)
-                .copied()
-                .collect();
-            assert!(band.len() >= DECOY_COUNT);
+            let envelope: Vec<RouteCandidate> =
+                all.iter().filter(|c| c.key != real_key).copied().collect();
             let eligible_total = all.len() - 1;
             let slot_of: HashMap<[u8; 32], usize> =
                 all.iter().enumerate().map(|(i, c)| (c.key, i)).collect();
@@ -1421,15 +1511,21 @@ mod tests {
                     let seed = if fast { 1 << 32 } else { 0 } + trial;
                     let mut rng = StdRng::seed_from_u64(seed);
                     let ring = if fast {
-                        node_select_decoys_banded(
-                            &band,
-                            eligible_total,
-                            DECOY_COUNT,
-                            real_age,
-                            &mut rng,
-                        )
-                        .expect("band fills the ring")
-                        .unwrap()
+                        let window = draw_age_similarity_window(real_age, &mut rng);
+                        let band = window_slice(&envelope, window);
+                        match node_select_decoys_banded(band, eligible_total, DECOY_COUNT, &mut rng)
+                        {
+                            Some(r) => r.unwrap(),
+                            None => node_select_decoys_in_window(
+                                &all,
+                                DECOY_COUNT,
+                                &[real_key],
+                                real_age,
+                                window,
+                                &mut rng,
+                            )
+                            .unwrap(),
+                        }
                     } else {
                         node_select_decoys_for_input(
                             &all,
@@ -1452,7 +1548,7 @@ mod tests {
 
             let n = TRIALS as f64;
             let mut worst = 0.0f64;
-            let mut tie_cells = 0;
+            let mut mixed_cells = 0;
             for slot in 0..DECOY_COUNT {
                 for c in 0..all.len() {
                     let (a, b) = (literal[slot][c] as f64 / n, fast[slot][c] as f64 / n);
@@ -1466,17 +1562,57 @@ mod tests {
                          literal {a:.4} vs fast {b:.4} (sigma {sigma:.4})",
                         all[c].age_blocks
                     );
-                    if a > 0.05 && a < 0.95 {
-                        tie_cells += 1;
+                    if a > 0.002 {
+                        mixed_cells += 1;
                     }
                 }
             }
-            // The scenario must actually exercise randomized outcomes.
             assert!(
-                tie_cells > 10,
-                "real age {real_age}: only {tie_cells} mixed cells"
+                mixed_cells > 100,
+                "real age {real_age}: only {mixed_cells} exercised cells"
             );
-            eprintln!("real age {real_age}: worst |z| = {worst:.2}, mixed cells {tie_cells}");
+            eprintln!("real age {real_age}: worst |z| = {worst:.2}, cells {mixed_cells}");
+        }
+    }
+
+    /// The CLI fast path (sparse partial Fisher–Yates over the drawn window)
+    /// is distribution-equivalent to the literal port (sort the window by
+    /// key, shuffle, truncate): per-candidate inclusion frequencies agree.
+    #[test]
+    fn cli_fast_path_is_distribution_equivalent_to_literal_port() {
+        const TRIALS: u64 = 10_000;
+        let mut gen = StdRng::seed_from_u64(1692);
+        let real_age = 500u64;
+        let mut all = tie_heavy_pool(&mut gen, 390, 610, 3, 2);
+        all.sort_by_key(|c| c.age_blocks);
+        let tally = |fast: bool| {
+            let mut counts = vec![0u64; all.len()];
+            for trial in 0..TRIALS {
+                let mut rng = StdRng::seed_from_u64(if fast { 1 << 32 } else { 0 } + trial);
+                let ring = if fast {
+                    let window = draw_age_similarity_window(real_age, &mut rng);
+                    cli_sample_window_fast(window_slice(&all, window), DECOY_COUNT, &mut rng)
+                } else {
+                    cli_select_rpc_decoys_for_input(&all, real_age, &[], DECOY_COUNT, &mut rng)
+                }
+                .unwrap();
+                for key in ring {
+                    counts[all.iter().position(|c| c.key == key).unwrap()] += 1;
+                }
+            }
+            counts
+        };
+        let (literal, fast) = (tally(false), tally(true));
+        let n = TRIALS as f64;
+        for c in 0..all.len() {
+            let (a, b) = (literal[c] as f64 / n, fast[c] as f64 / n);
+            let p = (a + b) / 2.0;
+            let sigma = (p * (1.0 - p) * 2.0 / n).sqrt();
+            assert!(
+                (a - b).abs() <= 5.0 * sigma + 3.0 / n,
+                "candidate {c} (age {}): literal {a:.4} vs fast {b:.4}",
+                all[c].age_blocks
+            );
         }
     }
 
@@ -1620,38 +1756,50 @@ mod tests {
         assert!(web.id_rates[4] < 0.2, "web cluster ID {}", web.id_rates[4]);
     }
 
-    /// The CLI route draws uniformly from the ±10% band CENTRED on the real
-    /// age, so each decoy is younger than the real input with probability ½:
-    /// the real input's rank is Binomial(19, ½) + 1, not uniform. It is the
-    /// median-age member, and the midrange of the ring's ages pins it down.
+    /// #1692 / #1755: with the random-offset window the real input's age rank
+    /// is uniform on every production route, and the midrange of the ring's
+    /// ages no longer points at it. (Before #1692 the CLI and web routes made
+    /// the real input the median member, χ² in the hundreds and Band-Center
+    /// ID > 20% here; the node made it the youngest member at age 1000.)
     #[test]
-    fn cli_route_centred_band_leaks_the_median() {
-        let r = run_route_row(&small_config(), DecoyRoute::Cli, RealAgeSpec::Fixed(5_000));
-        assert_eq!(r.failures, 0);
-        assert!(
-            (r.id_rates[0] - 0.05).abs() < 1e-9,
-            "Naive must be exactly 1/20"
-        );
-        assert!(r.chi_squared > CHI2_CRIT_DF19_P01, "χ² = {}", r.chi_squared);
-        assert!(
-            (10..=11).contains(&r.age_rank_guess),
-            "guess r{}",
-            r.age_rank_guess
-        );
-        assert!(r.id_rates[2] > 0.12, "Age-Rank ID {}", r.id_rates[2]);
-        assert!(r.id_rates[3] > 0.20, "Band-Center ID {}", r.id_rates[3]);
-    }
-
-    /// Pins the current node picker's edge clamp (#1692): at real ages well
-    /// below the gamma bulk every target clamps to the band's upper edge, so
-    /// the real input is the youngest ring member. When #1692 lands the botho
-    /// parity test forces this port to change and this pin must follow.
-    #[test]
-    fn node_route_pins_edge_clamp() {
-        let r = run_route_row(&small_config(), DecoyRoute::Node, RealAgeSpec::Fixed(1_000));
-        assert!(r.youngest_rate() > 0.95, "youngest {}", r.youngest_rate());
-        assert_eq!(r.age_rank_guess, 1);
-        assert!(r.id_rates[2] > 0.95);
+    fn production_routes_rank_is_uniform() {
+        for (route, age) in [
+            (DecoyRoute::Cli, 5_000u64),
+            (DecoyRoute::Node, 1_000),
+            (DecoyRoute::Web, 5_000),
+        ] {
+            let r = run_route_row(&small_config(), route, RealAgeSpec::Fixed(age));
+            let name = route.name();
+            assert_eq!(r.failures, 0, "{name}");
+            assert!(
+                (r.id_rates[0] - 0.05).abs() < 1e-9,
+                "{name}: Naive must be exactly 1/20"
+            );
+            assert!(
+                r.chi_squared < CHI2_CRIT_DF19_P01,
+                "{name}: χ² = {}",
+                r.chi_squared
+            );
+            assert!(
+                r.youngest_rate() < 0.12,
+                "{name}: youngest {}",
+                r.youngest_rate()
+            );
+            assert!(r.oldest_rate() < 0.12, "{name}: oldest {}", r.oldest_rate());
+            assert!(
+                r.id_rates[2] < 0.12,
+                "{name}: Age-Rank ID {}",
+                r.id_rates[2]
+            );
+            assert!(
+                r.id_rates[3] < 0.12,
+                "{name}: Band-Center ID {}",
+                r.id_rates[3]
+            );
+        }
+        // Empty web output tags: the cluster adversary has nothing to match.
+        let web = run_route_row(&small_config(), DecoyRoute::Web, RealAgeSpec::Fixed(5_000));
+        assert!(web.id_rates[4] < 0.2, "cluster ID {}", web.id_rates[4]);
     }
 
     /// The pre-#1735 web route always uses the chain's oldest outputs.
@@ -1705,9 +1853,9 @@ mod tests {
         out
     }
 
-    /// The banded fast path (sparse-swap partial Fisher–Yates) is
-    /// bit-identical to the literal `selectDecoysForInput` port, RNG
-    /// consumption included, whenever the band fills the ring.
+    /// The banded fast path (window draw, then sparse-swap partial
+    /// Fisher–Yates) is bit-identical to the literal `selectDecoysForInput`
+    /// port, RNG consumption included, whenever the window fills the ring.
     #[test]
     fn web_banded_path_equals_literal_port() {
         let mut gen = StdRng::seed_from_u64(1735);
@@ -1715,22 +1863,24 @@ mod tests {
         for trial in 0..80u64 {
             let pool = aged_pool(&mut gen, trial);
             let real_age = pool[gen.random_range(0..pool.len())].age_blocks;
-            let (lo, hi) = age_similarity_band(real_age);
-            let band: Vec<RouteCandidate> = pool
-                .iter()
-                .filter(|c| {
-                    c.age_blocks >= MIN_DECOY_AGE_BLOCKS
-                        && lo <= hi
-                        && c.age_blocks >= lo
-                        && c.age_blocks <= hi
-                })
-                .copied()
-                .collect();
             for seed in 0..4u32 {
                 let mut a = Mulberry32::new(seed);
                 let mut b = Mulberry32::new(seed);
                 let literal =
                     web_select_decoys_for_input(&pool, DECOY_COUNT, real_age, &mut || a.next_u32());
+                // The fast path's caller draws the window from the same stream
+                // (after the eligibility check, as the literal port does).
+                let (lo, hi) = web_draw_window(real_age, &mut || b.next_u32());
+                let band: Vec<RouteCandidate> = pool
+                    .iter()
+                    .filter(|c| {
+                        c.age_blocks >= MIN_DECOY_AGE_BLOCKS
+                            && lo <= hi
+                            && c.age_blocks >= lo
+                            && c.age_blocks <= hi
+                    })
+                    .copied()
+                    .collect();
                 let fast = web_select_decoys_banded(&band, DECOY_COUNT, &mut || b.next_u32());
                 if let Some(fast) = fast {
                     assert_eq!(Ok(fast), literal, "trial {trial} seed {seed}");
@@ -1743,9 +1893,10 @@ mod tests {
         assert!(checked > 100, "fast path exercised only {checked} times");
     }
 
-    /// Thin band on the chain model: the simulation's nearest-age fill picks
-    /// the same multiset of age distances as the literal port (only the
-    /// random choice within the straddling distance group differs).
+    /// Thin window on the chain model: given the same window (same seed for
+    /// the window draw), the simulation's nearest-age fill picks the same
+    /// multiset of age distances as the literal port (only the random choice
+    /// within the straddling distance group differs).
     #[test]
     fn web_thin_band_fill_matches_literal_distances() {
         let chain = ChainModel {
@@ -1757,21 +1908,22 @@ mod tests {
             let real_key = ChainModel::key(chain.id_at(real_age, 0));
             let pool: Vec<RouteCandidate> =
                 all.iter().filter(|c| c.key != real_key).copied().collect();
-            let (lo, hi) = age_similarity_band(real_age);
-            let band: Vec<RouteCandidate> = pool
-                .iter()
-                .filter(|c| {
-                    c.age_blocks >= MIN_DECOY_AGE_BLOCKS
-                        && lo <= hi
-                        && c.age_blocks >= lo
-                        && c.age_blocks <= hi
-                })
-                .copied()
-                .collect();
-            assert!(band.len() < DECOY_COUNT, "age {real_age} band not thin");
             for seed in 0..5u32 {
                 let mut a = Mulberry32::new(seed);
-                let mut b = Mulberry32::new(seed + 100);
+                let mut b = Mulberry32::new(seed);
+                let window = web_draw_window(real_age, &mut || b.next_u32());
+                let (lo, hi) = window;
+                let band: Vec<RouteCandidate> = pool
+                    .iter()
+                    .filter(|c| {
+                        c.age_blocks >= MIN_DECOY_AGE_BLOCKS
+                            && lo <= hi
+                            && c.age_blocks >= lo
+                            && c.age_blocks <= hi
+                    })
+                    .copied()
+                    .collect();
+                assert!(band.len() < DECOY_COUNT, "age {real_age} window not thin");
                 let dists = |keys: Vec<[u8; 32]>| {
                     let mut d: Vec<u64> = keys
                         .iter()
@@ -1783,35 +1935,21 @@ mod tests {
                 let literal =
                     web_select_decoys_for_input(&pool, DECOY_COUNT, real_age, &mut || a.next_u32())
                         .unwrap();
-                let fast =
-                    web_fill_nearest(&chain, &band, real_key, real_age, DECOY_COUNT, &mut || {
-                        b.next_u32()
-                    })
-                    .unwrap();
+                let fast = web_fill_nearest(
+                    &chain,
+                    &band,
+                    window,
+                    real_key,
+                    real_age,
+                    DECOY_COUNT,
+                    &mut || b.next_u32(),
+                )
+                .unwrap();
                 assert_eq!(fast.iter().collect::<HashSet<_>>().len(), DECOY_COUNT);
                 assert!(!fast.contains(&real_key));
                 assert_eq!(dists(fast), dists(literal), "age {real_age} seed {seed}");
             }
         }
-    }
-
-    /// #1735's web picker draws uniformly from the same centred ±10% band as
-    /// the CLI route, so it inherits the centred-band median leak (#1755)
-    /// instead of the pre-#1735 "real input is the youngest" leak.
-    #[test]
-    fn web_route_centred_band_leaks_the_median() {
-        let r = run_route_row(&small_config(), DecoyRoute::Web, RealAgeSpec::Fixed(5_000));
-        assert_eq!(r.failures, 0);
-        assert!(r.youngest_rate() < 0.01, "youngest {}", r.youngest_rate());
-        assert!(r.chi_squared > CHI2_CRIT_DF19_P01, "χ² = {}", r.chi_squared);
-        assert!(
-            (10..=11).contains(&r.age_rank_guess),
-            "guess r{}",
-            r.age_rank_guess
-        );
-        assert!(r.id_rates[3] > 0.20, "Band-Center ID {}", r.id_rates[3]);
-        // Empty output tags: the cluster adversary has nothing to match.
-        assert!(r.id_rates[4] < 0.2, "cluster ID {}", r.id_rates[4]);
     }
 
     #[test]

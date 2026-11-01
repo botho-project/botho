@@ -209,6 +209,8 @@ gives a background spender the full same-class background pool (maximal within-c
 with a large margin against cross-class contamination, and by construction caps any admitted
 decoy's factor at 1.100× — so even a worst-case in-band decoy could lift the floor by at most
 10% of the 1× minimum, exactly mirroring the ≤1.10 over-charge bound the age band guarantees.
+(Since #1692 the age window's position is random, which raises the per-ring age bound to 1.20×;
+the factor band here is unchanged.)
 Part 3 wires this constant into `botho/src/decoy_selection.rs`.
 
 ## 5. Read-out: is the keying tight enough?

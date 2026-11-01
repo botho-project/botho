@@ -678,6 +678,12 @@ mod cli {
             #[arg(long, default_value = "500")]
             honest_jitter_bps: u32,
 
+            /// Place the honest band at a random offset so the real age sits
+            /// uniformly inside it (the production placement since #1692),
+            /// instead of centring it on the real age
+            #[arg(long)]
+            honest_band_offset: bool,
+
             /// Base RNG seed for reproducibility
             #[arg(long, default_value = "2953379877")]
             seed: u64,
@@ -1191,6 +1197,7 @@ mod cli {
                 rounds,
                 rate_bps,
                 honest_jitter_bps,
+                honest_band_offset,
                 seed,
             } => run_decoy_quantile_sweep(
                 poor,
@@ -1200,6 +1207,7 @@ mod cli {
                 rounds,
                 rate_bps,
                 honest_jitter_bps,
+                honest_band_offset,
                 seed,
             ),
             Command::SettlementHorizonSweep => run_settlement_horizon_sweep_cli(),
@@ -2588,7 +2596,7 @@ mod cli {
             mixed_fraction,
             num_clusters: 1_000,
             decay_rate: decay_rate_pct / 100.0,
-            max_age_blocks: 525_600,
+            max_age_blocks: bth_cluster_tax::simulation::privacy::MAX_AGE_BLOCKS,
         };
 
         if !routes.is_empty() {
@@ -2720,7 +2728,7 @@ mod cli {
             mixed_fraction: mixed_fraction.max(0.0),
             num_clusters: 1_000,
             decay_rate: decay_rate_pct / 100.0,
-            max_age_blocks: 525_600,
+            max_age_blocks: bth_cluster_tax::simulation::privacy::MAX_AGE_BLOCKS,
         };
 
         let ring_config = RingSimConfig {
@@ -5280,6 +5288,7 @@ mod cli {
         rounds: u64,
         rate_bps: u32,
         honest_jitter_bps: u32,
+        honest_band_offset: bool,
         seed: u64,
     ) {
         use bth_cluster_tax::simulation::decoy_quantile_sweep::{
@@ -5295,6 +5304,7 @@ mod cli {
             rounds,
             rate_bps,
             honest_jitter_bps,
+            honest_band_offset,
             seed,
             ..defaults
         };
