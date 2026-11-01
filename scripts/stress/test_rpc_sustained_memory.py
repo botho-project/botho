@@ -405,6 +405,16 @@ class CliTests(unittest.TestCase):
         ):
             with self.subTest(url=url):
                 self.assertIsNone(rpc_url_problem(url))
+        for url in ("http://[::ffff:10.0.0.1]:7101/", "http://[fd12:3456::1]:7101/"):
+            with self.subTest(url=url):
+                self.assertIsNone(rpc_url_problem(url))
+        for host in (
+            "169.254.169.254", "[fe80::1]", "0.1.2.3", "192.0.2.1",
+            "[2001:db8::1]", "198.18.0.1", "240.0.0.1", "255.255.255.255",
+            "[2002::1]", "[::ffff:8.8.8.8]",
+        ):
+            with self.subTest(host=host):
+                self.assertIsNotNone(rpc_url_problem(f"http://{host}:7101/"))
         ca = self.root / "ca.pem"
         self.assertIsNone(rpc_url_problem("https://seed.botho.io/rpc", ca))
         self.assertIsNone(rpc_url_problem("https://seed.botho.io:8443/rpc", ca))

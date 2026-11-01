@@ -67,6 +67,30 @@ RPC_URL_HELP = (
 MAX_REPLY_BYTES = 256 * 1024
 
 
+PLAIN_HTTP_NETWORKS = tuple(
+    ipaddress.ip_network(cidr)
+    for cidr in (
+        "127.0.0.0/8",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "::1/128",
+        "fc00::/7",
+    )
+)
+
+
+def plain_http_address_allowed(address):
+    """Explicit loopback/RFC 1918/ULA allowlist (not ``is_private``, which
+    is broader and varies across Python versions)."""
+    if address.version == 6 and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return any(
+        address.version == network.version and address in network
+        for network in PLAIN_HTTP_NETWORKS
+    )
+
+
 def rpc_url_problem(url, ca_file=None):
     """Return why ``url`` is not an acceptable RPC endpoint, or ``None``."""
     match = RPC_URL.fullmatch(url) if isinstance(url, str) else None
@@ -86,7 +110,7 @@ def rpc_url_problem(url, ca_file=None):
             address = ipaddress.ip_address(host)
         except ValueError:
             return "plain http requires a loopback or private-lab address literal"
-        if not (address.is_loopback or address.is_private) or address.is_unspecified:
+        if not plain_http_address_allowed(address):
             return "plain http requires a loopback or private-lab address literal"
         return None
     if match["path"] != "/rpc":

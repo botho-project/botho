@@ -195,7 +195,7 @@ inside its gates. On each tick, for each node:
    ```sh
    python3 scripts/stress/rpc_sustained_memory.py \
      --manifest manifest.json --node n1 \
-     --rpc-url http://127.0.0.1:7101/ --expected-network botho-testnet \
+     --rpc-url http://127.0.0.1:17101/ --expected-network botho-testnet \
      --out n1-observation.json
    ```
 
