@@ -1,0 +1,76 @@
+# CT Provenance-Factor Calibration Sweep — D2 (issue #902)
+
+### Population (factors from the real `ClusterFactorCurve`)
+
+| tier | count | value (BTH) | cluster wealth (BTH) | age (yr) | hops | mint-epoch (BTH) | origin-tagged |
+|------|------:|------------:|---------------------:|---------:|-----:|-----------------:|:-------------:|
+| background (poor) | 90 | 1000 | 1000 | 0.02 | 30 | 1000 | 0% |
+| 50k-cluster wealthy | 4 | 5000 | 50000 | 1.50 | 0 | 50000 | 100% |
+| 500k-cluster wealthy | 3 | 50000 | 500000 | 2.00 | 0 | 500000 | 100% |
+| 10M-cluster whale | 3 | 100000 | 10000000 | 2.00 | 0 | 10000000 | 100% |
+
+### Track 1a — faithfulness: factor per rule, by tier
+
+How coarsely each value-free signal tracks the value-weighted baseline. A faithful rule reproduces the baseline column; a coarse one flattens the wealthy tiers together.
+
+| tier | cluster wealth | ValueWeighted | Age | HopCount | EpochOrigin |
+|------|---------------:|------:|------:|------:|------:|
+| background (poor) | 1000 | 1.265x | 1.050x | 1.000x | 1.000x |
+| 50k-cluster wealthy | 50000 | 3.023x | 4.750x | 6.000x | 3.023x |
+| 500k-cluster wealthy | 500000 | 4.617x | 6.000x | 6.000x | 4.617x |
+| 10M-cluster whale | 10000000 | 5.745x | 6.000x | 6.000x | 5.745x |
+
+Mean absolute factor error vs the ValueWeighted baseline (lower = more faithful):
+
+| rule | mean |factor − baseline| |
+|------|--------------------:|
+| ValueWeighted | 0.000x |
+| Age | 0.312x |
+| HopCount | 0.407x |
+| EpochOrigin | 0.238x |
+
+### Track 1b — redistribution in an HONEST population (Δgini vs burn)
+
+Collect-and-redistribute over 10 years, per-capita (Path C uniform) payout. Initial Gini 0.7773; burn baseline Gini 0.7525. Δgini = burn − rule (higher = more equalizing). Recovery = Δgini ÷ ValueWeighted's Δgini.
+
+| rule | final Gini | Δgini | recovery vs baseline | CT-clean |
+|------|-----------:|------:|---------------------:|:--------:|
+| ValueWeighted | 0.6508 | +0.1017 | 100.0% | **no** |
+| Age | 0.6325 | +0.1201 | 118.0% | yes |
+| HopCount | 0.6310 | +0.1215 | 119.5% | yes |
+| EpochOrigin | 0.6507 | +0.1019 | 100.2% | yes |
+
+### Track 2 — Sybil manufacturability (the crux)
+
+A concentrated whale (value 100k BTH, live cluster wealth 10M → baseline 5.745x) tries to manufacture a LOWER factor with cheap manipulations. Each cell is the whale's factor AFTER the attack; **bold** = the attack is FREE (base fees only). A rule is Sybil-broken iff some free attack drops its factor materially.
+
+| rule | honest | split→K coins | churn young (age→0) | self-hop wash (hops→20) | real-circulate (costs value) | cheaply gameable? |
+|------|------:|------:|------:|------:|------:|:-----------------:|
+| ValueWeighted | **5.745x** | **5.745x** | **5.745x** | **5.745x** | 5.745x | no |
+| Age | **3.500x** | **1.000x** | **1.000x** | **1.000x** | 1.000x | **YES — broken** |
+| HopCount | **6.000x** | **5.750x** | **5.750x** | **1.000x** | 3.750x | **YES — broken** |
+| EpochOrigin | **5.745x** | **5.745x** | **5.745x** | **5.745x** | 1.474x | no |
+
+Reading it: `split`, `churn young` and `self-hop wash` are all FREE (only base fees). ValueWeighted and EpochOrigin are unmoved by every free attack — the live aggregate is split-invariant and can only fall by giving value away, and the epoch-origin tag decays **only** by real circulation (mixing 0 incoming value is a no-op). Age and HopCount collapse to 1× under a free churn/wash: they key on 'structure the holder controls for free', the exact Path-C failure mode. `real-circulate` (NOT free) is the only thing that lowers EpochOrigin — and it costs the whale a full position's worth of genuine background value.
+
+### Track 3 — redistribution when the whale GAMES the factor
+
+The same collect-and-redistribute, but the wealthy tiers manufacture their cheapest FREE low factor (Age → churn young; HopCount → self-hop wash → 1×). ValueWeighted and EpochOrigin cannot be gamed for free, so the wealthy keep their honest factor. This is the redistribution consequence of the Track-2 result.
+
+| rule | Δgini honest | Δgini gamed | survives gaming? | CT-clean |
+|------|-------------:|------------:|:----------------:|:--------:|
+| ValueWeighted | +0.1017 | +0.1017 | yes | **no** |
+| Age | +0.1201 | -0.0249 | **NO** | yes |
+| HopCount | +0.1215 | -0.0248 | **NO** | yes |
+| EpochOrigin | +0.1019 | +0.1019 | yes | yes |
+
+### CT-compatibility & signal summary
+
+| rule | CT-clean | keys on | Sybil verdict |
+|------|:--------:|---------|---------------|
+| ValueWeighted | **no** | hidden live cluster wealth Σ v·weight | resistant (but reads hidden value → Option A) |
+| Age | yes | public blocks-since-mint | **BROKEN — free manufacture** |
+| HopCount | yes | public spend/hop count | **BROKEN — free manufacture** |
+| EpochOrigin | yes | public mint-epoch pool wealth + circulation blend | resistant (decay is circulation-gated) |
+
+

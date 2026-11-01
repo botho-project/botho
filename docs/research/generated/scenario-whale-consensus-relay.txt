@@ -1,0 +1,15 @@
+Scenario B: Whale Fee Minimization Strategies
+==============================================
+Whale wealth: 10000000
+Participants: 50
+Rounds: 5000
+Fee model: consensus+relay (1 unit = 1 BTH; whale fees in picocredits)
+
+Strategy          Final Gini   Total Fees   Whale Fees   Effectiveness
+--------------- ------------ ------------ ------------ ---------------
+Passive               0.9111 316700000000 264900000000            0.0%
+Wash Trading          0.9111 7947626820548836 7947575020548836     -3000117.1%
+Structuring           0.9054 800800000000 749000000000         -182.7%
+Aggressive            0.9081 9233153620548988 9233101820548988     -3485404.7%
+
+Note: Effectiveness = reduction in whale fees vs passive strategy

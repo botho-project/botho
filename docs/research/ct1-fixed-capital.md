@@ -15,6 +15,7 @@ bytes, remaining bytes zero). Two seeds are paired observations, not statistical
 confidence. Ticket identifiers 101 onward preserve common identifiers across
 strategies; changing output count necessarily changes the candidate population.
 
+<!-- stale-literal-ok: the CT1 rehearsal's candidate creation fee, not the shipped fee -->
 The single creation batch pays the candidate gross fee of 0.25 BTH per output
 from the fixed budget. Remaining principal is divided equally; any integer
 remainder stays in old cash outside the circulation window. The live minimum

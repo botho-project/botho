@@ -216,12 +216,14 @@ impl ClusterTags {
 /// Blocks per day (assuming 2-minute block time)
 const BLOCKS_PER_DAY: f64 = 720.0;
 
-/// Minimum age in blocks for decoy consideration (must be confirmed)
-const MIN_DECOY_AGE_BLOCKS: u64 = 10;
+/// Minimum age in blocks for decoy consideration (must be confirmed).
+/// `pub` so `tests/sim_code_parity.rs` can pin the wallet and sim copies
+/// (#1702).
+pub const MIN_DECOY_AGE_BLOCKS: u64 = 10;
 
 /// Maximum age to consider for gamma sampling (prevents extreme outliers)
-/// ~2 years in blocks
-const MAX_DECOY_AGE_BLOCKS: u64 = 525_600;
+/// ~2 years in blocks. `pub` for `tests/sim_code_parity.rs` (#1702).
+pub const MAX_DECOY_AGE_BLOCKS: u64 = 525_600;
 
 /// Number of recent spends to track for distribution estimation
 const SPEND_HISTORY_SIZE: usize = 10_000;

@@ -82,8 +82,8 @@
 use crate::{
     consensus_fee::{
         consensus_fee_breakdown, consensus_tx_size_bytes, ClaimedClass, ConsensusFeeInputs,
-        ConsensusFeeParams, FeeModelMode, MAINNET_BLOCKS_PER_YEAR, MAINNET_HALVING_INTERVAL,
-        RELAY_MIN_TX_FEE,
+        ConsensusFeeParams, FeeModelMode, LOTTERY_POOL_FRACTION_PERMILLE, MAINNET_BLOCKS_PER_YEAR,
+        MAINNET_HALVING_INTERVAL, RELAY_MIN_TX_FEE,
     },
     fee_curve::PICO_PER_BTH,
     sybil_reward_cap, LotteryDrawConfig, MonetaryPolicy, LOTTERY_BASE_FEE_PICO,
@@ -98,24 +98,28 @@ use crate::{
 /// UTXOs, so `count_eligible` — the reward-cap `ρ` — never exceeds it.
 pub const MAX_LOTTERY_CANDIDATES: usize = 10_000;
 
-/// `canonical_config().pool_fraction_permille` (80% of fees to the pool).
-pub const POOL_FRACTION_PERMILLE: u64 = 800;
+/// `canonical_config().pool_fraction_permille` (80% of fees to the pool),
+/// imported from the shared [`LOTTERY_POOL_FRACTION_PERMILLE`] (#1702).
+pub const POOL_FRACTION_PERMILLE: u64 = LOTTERY_POOL_FRACTION_PERMILLE as u64;
 
-/// `bth_transaction_types::MAX_OUTPUTS` (mempool-only; #1684).
-pub const MAX_OUTPUTS_PER_TX: usize = 16;
+/// `bth_transaction_types::MAX_OUTPUTS` (mempool-only; #1684), imported
+/// (#1702).
+pub const MAX_OUTPUTS_PER_TX: usize = bth_transaction_types::MAX_OUTPUTS as usize;
 
 /// `ConsensusConfig::default().max_txs_per_slot` — node-local proposer policy,
 /// not a validity rule. One slot goes to the minting tx.
 pub const PROPOSER_MAX_TXS_PER_SLOT: usize = 100;
 
-/// `bth_transaction_types::MAX_BLOCK_SIZE` (20 MiB gossip transmit bound).
-pub const MAX_BLOCK_SIZE_BYTES: usize = 20 * 1024 * 1024;
+/// `bth_transaction_types::MAX_BLOCK_SIZE` (20 MiB gossip transmit bound),
+/// imported (#1702).
+pub const MAX_BLOCK_SIZE_BYTES: usize = bth_transaction_types::MAX_BLOCK_SIZE;
 
 /// Coinbase outputs per block (the minting tx has one stealth output).
 pub const COINBASE_TICKETS_PER_BLOCK: f64 = 1.0;
 
-/// Blocks per day at the 5 s monetary block time.
-pub const BLOCKS_PER_DAY: f64 = 17_280.0;
+/// Blocks per day at the 5 s monetary block time, derived from the shared
+/// [`MAINNET_BLOCKS_PER_YEAR`] (#1702).
+pub const BLOCKS_PER_DAY: f64 = (MAINNET_BLOCKS_PER_YEAR / 365) as f64;
 
 /// Number of halving epochs before tail emission (mainnet).
 pub const MAINNET_HALVING_COUNT: u32 = 5;

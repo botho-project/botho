@@ -43,7 +43,8 @@ use crate::tag::TAG_WEIGHT_SCALE;
 
 /// Default ring size (1 real signer + 19 decoys).
 /// Ring size 20 provides strong anonymity (larger than Monero's 16).
-pub const RING_SIZE: usize = 20;
+/// Imported from the shared consensus ring size (#1702).
+pub const RING_SIZE: usize = crate::consensus_fee::CONSENSUS_RING_SIZE;
 
 /// Number of decoys to select.
 pub const DECOY_COUNT: usize = RING_SIZE - 1;
@@ -224,17 +225,24 @@ pub fn format_ring_size_analysis(analyses: &[RingSizeAnalysis]) -> String {
     report
 }
 
+// The decoy-age constants below are the node's
+// (`botho/src/decoy_selection.rs`). The gamma, blocks-per-day and minimum-age
+// values reuse the `privacy_routes` mirrors, which
+// `botho/tests/privacy_sim_route_parity.rs` pins to the production pickers; the
+// rest are pinned by `botho/tests/sim_code_parity.rs` (#1702). `botho` depends
+// on this crate, so they cannot be imported directly.
+
 /// Default gamma shape parameter for age distribution.
-pub const GAMMA_SHAPE: f64 = 19.28;
+pub const GAMMA_SHAPE: f64 = super::privacy_routes::NODE_GAMMA_SHAPE;
 
 /// Default gamma scale in days.
-pub const GAMMA_SCALE_DAYS: f64 = 1.61;
+pub const GAMMA_SCALE_DAYS: f64 = super::privacy_routes::NODE_GAMMA_SCALE_DAYS;
 
 /// Blocks per day (2-minute blocks).
-pub const BLOCKS_PER_DAY: f64 = 720.0;
+pub const BLOCKS_PER_DAY: f64 = super::privacy_routes::NODE_BLOCKS_PER_DAY;
 
 /// Minimum output age for eligibility (blocks).
-pub const MIN_AGE_BLOCKS: u64 = 10;
+pub const MIN_AGE_BLOCKS: u64 = super::privacy_routes::MIN_DECOY_AGE_BLOCKS;
 
 /// Maximum output age for consideration (blocks, ~2 years).
 pub const MAX_AGE_BLOCKS: u64 = 525_600;

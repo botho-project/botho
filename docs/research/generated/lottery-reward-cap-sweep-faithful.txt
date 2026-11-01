@@ -1,0 +1,100 @@
+# Reward-Cap Sweep — faithful to the implemented rules (issue #1682)
+
+### Setup (faithful to protocol 7.0.0)
+
+Candidate window: ages 720..=10000 blocks (ticket life L = 9281), truncated at MAX_LOTTERY_CANDIDATES = 10000; 4 winners, uniform draw; pool share 800‰; base_fee = 0.25 BTH; min_utxo_value = 1000000 pico; MIN_TX_FEE = 100000000 pico (relay only). Cap = min(sybil_reward_cap(min(count, 10k)), block_reward). Per-ticket cost from the real consensus fee floor (`consensus_fee_breakdown`), 1 input, n = 1..=16 outputs. Organic outputs come in 2-output txs paying 100000000 pico each. Free tickets: 1 coinbase + 4 payouts per block. 1 day = 17280 blocks.
+
+| epoch | block reward (BTH) | lottery emission share (BTH/blk) |
+|---|---:|---:|
+| 0 | 50.0000 | 0.0000 |
+| 1 | 25.0000 | 2.5000 |
+| 3 | 6.2500 | 1.8750 |
+| tail | 2.4219 | 1.2109 |
+
+### Per-ticket cost under the implemented fee floor
+
+Fee of one split tx (1 input, n outputs of min_utxo_value) and the cost per new eligible output, epoch 1, vs the modelled base_fee of 2.5e11 pico.
+
+| n outputs | factor | floor fee/tx (pico) | floor per ticket | floor+MIN_TX_FEE per ticket | base_fee ÷ cheapest |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 1× | 870 | 870 | 1.000e8 | 2.9e8 |
+| 1 | 6× | 5251 | 5251 | 1.000e8 | 4.8e7 |
+| 2 | 1× | 3960 | 1980 | 5.000e7 | 1.3e8 |
+| 2 | 6× | 23823 | 11912 | 5.000e7 | 2.1e7 |
+| 4 | 1× | 19680 | 4920 | 2.500e7 | 5.1e7 |
+| 4 | 6× | 118206 | 29552 | 2.500e7 | 8.5e6 |
+| 8 | 1× | 109440 | 13680 | 1.250e7 | 1.8e7 |
+| 8 | 6× | 656893 | 82112 | 1.250e7 | 3.0e6 |
+| 10 | 1× | 195000 | 19500 | 1.000e7 | 1.3e7 |
+| 10 | 6× | 1170317 | 117032 | 1.000e7 | 2.1e6 |
+| 16 | 1× | 267000 | 16688 | 6.250e6 | 1.5e7 |
+| 16 | 6× | 1602507 | 100157 | 6.250e6 | 2.5e6 |
+
+### Whale net vs k — current code (epoch 1, backlog 0, ρ_o 20, floor+MIN_TX_FEE, 6×, proposer slot (1,584 out/blk))
+
+| k (out/blk) | n/tx | share | cap (BTH) | R (BTH) | winnings/blk | cost/blk | **net/blk** | net/day |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 16 | 4.55% | 25.0 | 2.5008 | 0.1137 | 0.000006 | +0.1137 | +1964 |
+| 10 | 16 | 32.26% | 25.0 | 2.5008 | 0.8067 | 0.000063 | +0.8067 | +13939 |
+| 100 | 16 | 82.64% | 25.0 | 2.5013 | 2.0672 | 0.000625 | +2.0666 | +35710 |
+| 200 | 16 | 90.50% | 25.0 | 2.5018 | 2.2641 | 0.001250 | +2.2628 | +39102 |
+| 1000 | 16 | 97.94% | 25.0 | 2.5058 | 2.4543 | 0.006250 | +2.4480 | +42302 |
+| 1584 | 16 | 98.69% | 25.0 | 2.5087 | 2.4759 | 0.009900 | +2.4660 | +42612 |
+
+### Current code — whale optimum over the grid
+
+R0 = payout/blk with no whale. c* = break-even per-ticket cost (splitting is profitable iff the per-ticket cost is below c*). c = the whale's actual cheapest per-ticket cost at k*. Columns at the realistic-expensive end (floor+MIN_TX_FEE, 6×, proposer slot); the last column is the cheapest end (floor only, 1×, block-size bound).
+
+| epoch | backlog | ρ_o | R0 (BTH) | c* (BTH/ticket) | c (BTH/ticket) | k* | share* | **net*/blk** | net*/day | net*/blk (floor, 1×, block-size) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0 | 0 | 2 | 0.0001 | 2.500e-5 | 6.25e-6 | 9 | 75.0% | +0.0000 | +1 | +0.0001 |
+| 0 | 0 | 20 | 0.0008 | 3.774e-5 | 6.25e-6 | 89 | 80.9% | +0.0005 | +8 | +0.0008 |
+| 0 | 0 | 200 | 0.0080 | 3.976e-5 | 6.25e-6 | 862 | 81.1% | +0.0046 | +79 | +0.0079 |
+| 0 | 1000 | 2 | 50.0000 | 1.250e1 | 6.25e-6 | 1584 | 99.8% | +49.8956 | +862196 | +49.9975 |
+| 0 | 1000 | 20 | 50.0000 | 2.273e0 | 6.25e-6 | 1584 | 98.7% | +49.3359 | +852524 | +49.9895 |
+| 0 | 1000 | 200 | 50.0000 | 2.475e-1 | 6.25e-6 | 1584 | 88.7% | +44.3598 | +766538 | +49.9181 |
+| 1 | 0 | 2 | 2.5001 | 7.813e-1 | 6.25e-6 | 1584 | 99.8% | +2.4934 | +43085 | +2.4999 |
+| 1 | 0 | 20 | 2.5008 | 1.180e-1 | 6.25e-6 | 1584 | 98.7% | +2.4660 | +42612 | +2.5000 |
+| 1 | 0 | 200 | 2.5080 | 1.247e-2 | 6.25e-6 | 1584 | 88.7% | +2.2227 | +38409 | +2.5036 |
+| 1 | 1000 | 2 | 25.0000 | 6.250e0 | 6.25e-6 | 1584 | 99.8% | +24.9428 | +431012 | +24.9986 |
+| 1 | 1000 | 20 | 25.0000 | 1.136e0 | 6.25e-6 | 1584 | 98.7% | +24.6630 | +426177 | +24.9937 |
+| 1 | 1000 | 200 | 25.0000 | 1.238e-1 | 6.25e-6 | 1584 | 88.7% | +22.1750 | +383184 | +24.9580 |
+| 3 | 0 | 2 | 1.8751 | 5.860e-1 | 6.25e-6 | 1584 | 99.8% | +1.8695 | +32306 | +1.8749 |
+| 3 | 0 | 20 | 1.8758 | 8.848e-2 | 6.25e-6 | 1584 | 98.7% | +1.8492 | +31954 | +1.8752 |
+| 3 | 0 | 200 | 1.8830 | 9.359e-3 | 6.25e-6 | 1584 | 88.7% | +1.6681 | +28825 | +1.8796 |
+| 3 | 1000 | 2 | 6.2500 | 1.562e0 | 6.25e-6 | 1584 | 99.8% | +6.2283 | +107625 | +6.2495 |
+| 3 | 1000 | 20 | 6.2500 | 2.841e-1 | 6.25e-6 | 1584 | 98.7% | +6.1583 | +106416 | +6.2478 |
+| 3 | 1000 | 200 | 6.2500 | 3.094e-2 | 6.25e-6 | 1584 | 88.7% | +5.5363 | +95668 | +6.2379 |
+| tail | 0 | 2 | 1.2110 | 3.784e-1 | 6.25e-6 | 1584 | 99.8% | +1.2067 | +20852 | +1.2109 |
+| tail | 0 | 20 | 1.2117 | 5.716e-2 | 6.25e-6 | 1584 | 98.7% | +1.1938 | +20629 | +1.2113 |
+| tail | 0 | 200 | 1.2189 | 6.058e-3 | 6.25e-6 | 1584 | 88.7% | +1.0788 | +18642 | +1.2166 |
+| tail | 1000 | 2 | 2.4219 | 6.055e-1 | 6.25e-6 | 1088 | 99.7% | +2.4084 | +41617 | +2.4216 |
+| tail | 1000 | 20 | 2.4219 | 1.101e-1 | 6.25e-6 | 1584 | 98.7% | +2.3803 | +41131 | +2.4208 |
+| tail | 1000 | 200 | 2.4219 | 1.199e-2 | 6.25e-6 | 1584 | 88.7% | +2.1393 | +36966 | +2.4159 |
+
+### Candidate window (MAX_LOTTERY_CANDIDATES) — seeded-offset walk
+
+Monte Carlo of the node's walk (seed 0x1682fa170902, 400 offsets each): ids are `tx_hash ‖ index`, so a split tx's outputs sit together in key order.
+
+| ρ_o | k | n/tx | eligible set | window count | global share | mean window share | sd (window) | sd (binomial) |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 20 | 20 | 16 | 371236 | 10000 | 49.999% | 49.950% | 1.470% | 0.500% |
+| 20 | 200 | 16 | 2041828 | 10000 | 90.909% | 90.910% | 0.468% | 0.287% |
+| 20 | 200 | 1 | 2041820 | 10000 | 90.909% | 90.924% | 0.389% | 0.287% |
+| 200 | 200 | 16 | 3712408 | 10000 | 50.000% | 50.002% | 1.449% | 0.500% |
+
+### Remedy decision table (sim-measured; none implemented)
+
+Whale optimum over all 192 grid points (4 epochs × 2 backlogs × 3 ρ_o × 2 fee modes × 2 factors × 2 capacities). Reference = epoch 1, backlog 0, ρ_o 20, floor+MIN_TX_FEE, 6×, proposer slot (1,584 out/blk).
+
+| rule set | profitable points | max net*/blk (BTH) | max net*/day | reference net*/blk | honest R0 at reference (BTH/blk) | honest regimes with inflow > cap | worst point |
+|---|---:|---:|---:|---:|---:|---:|---|
+| current code | 192/192 | +49.9975 | +863957 | +2.4660 | 2.5008 | 0/12 | epoch 0, backlog 1000, ρ_o 2, floor, 1×, block size (20 MiB) (k*=76565) |
+| (a) per-block ρ in cap | 192/192 | +49.9975 | +863957 | +2.4660 | 2.5008 | 2/12 | epoch 0, backlog 1000, ρ_o 2, floor, 1×, block size (20 MiB) (k*=76565) |
+| (a') ρ = window count / L (10k truncation kept) | 192/192 | +0.2693 | +4654 | +0.2576 | 0.2694 | 9/12 | epoch 0, backlog 1000, ρ_o 2, floor, 1×, block size (20 MiB) (k*=23873) |
+| (b) base_fee per eligible output | 96/192 | +38.5000 | +665280 | +0.2421 | 6.5008 | 4/12 | epoch 0, backlog 1000, ρ_o 2, floor, 1×, proposer slot (1,584 out/blk) (k*=21) |
+| (a)+(b), free tickets kept | 96/192 | +0.9844 | +17010 | +0.2421 | 6.2500 | 7/12 | epoch 0, backlog 1000, ρ_o 2, floor, 1×, block size (20 MiB) (k*=189) |
+| (a)+(b)+free-ticket rule | 0/192 | +0.0000 | +0 | +0.0000 | 5.0000 | 9/12 | — |
+| min_utxo_value = 1 BTH | 192/192 | +49.9975 | +863957 | +2.4575 | 2.5008 | 0/12 | epoch 0, backlog 1000, ρ_o 2, floor, 1×, block size (20 MiB) (k*=76565) |
+
+

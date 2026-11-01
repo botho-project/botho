@@ -20,6 +20,15 @@ This section contains research analysis, comparisons, and technical evaluations.
 | [Economic Sims Under the Consensus Fee Model](consensus-fee-model-sim-verdicts.md) | #1695: every economic sim now prices fees with the shared `cluster_tax::consensus_fee_model` (golden-pinned to `Ledger::consensus_fee_floor`); wash/structuring/whale/M2/lottery re-run and restated as SURVIVES/FAILS. M2's Δgini PASS flips to FAIL at the real fee floor (#1727). |
 | [M2 at Production Parameters](m2-production-verdicts.md) | #1696: M2 re-run on the node's real parameters (6.3M blocks/yr, mainnet emission and lottery-share ramp, uniform V2 lottery with payouts as outputs, coinbase-lineage clusters, optimal-decoy mining whale) with a mechanism-off counterfactual. The mechanism's ΔGini is between −0.028 and +0.001 (3-seed means) against the 0.05 bar, and below +0.019 at up to 1000x the transaction rate, and 100% of top-decile value prices below 1.5x: the #605 premise is broken (decision in #1727). |
 
+## Regenerated tables
+
+CI regenerates the quick, deterministic `cluster-tax-sim` reports and fails on any drift
+(`scripts/research/check_research_tables.py`, #1702). The committed outputs live in
+[`generated/`](generated/). Reports that paste the tables verbatim are also checked
+against the doc. After an intentional sim change, run the script with `--update` and
+update the affected report in the same PR. The script lists the generators it skips
+because they take minutes.
+
 ## Purpose
 
 Research documents serve to:
