@@ -390,6 +390,17 @@ phrase at module scope (re-derived on demand — deterministic in `(SRP, snap id
 salt)`, so the derived wallet is unchanged). Residual limits (immutable JS strings
 for hex keys; the required in-memory `cachedWallet`) are documented in the audit.
 
+### Build tooling: the elliptic advisory (#1562)
+
+`@metamask/snaps-cli` and `@metamask/snaps-jest` still pull `elliptic@6.6.1`
+(GHSA-848j-6mx2-7j84). Upstream has published no fix, and `pnpm audit` keeps
+reporting the advisory. elliptic is a dev-only dependency here: it is absent
+from `dist/bundle.js` and is never loaded during `mm-snap build` or the jest
+suite. Keep `polyfills.crypto` off in `snap.config.ts`, because turning it on
+pulls in crypto-browserify, which bundles elliptic.
+`web/scripts/check-elliptic-containment.mjs` enforces this in CI. Evidence:
+[`audits/2026-10-31-elliptic-snap-tooling.md`](../../../audits/2026-10-31-elliptic-snap-tooling.md).
+
 ## Architecture
 
 | File | Responsibility |
