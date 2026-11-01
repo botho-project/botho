@@ -213,6 +213,19 @@ rand_chacha = { workspace = true }
 serial_test = { workspace = true }
 statrs = "0.19"
 
+# Test builds on Apple hosts only (#1725): switch LMDB from SysV to POSIX
+# semaphores. On Apple, LMDB keys each environment's SysV semaphore set with
+# `ftok(lock.mdb)`, which keeps only the low 16 bits of the inode. The lib suite
+# opens hundreds of temp-dir ledgers at once, so two environments regularly get
+# the same key and share one set. When one closes, it removes the set
+# (`IPC_RMID`), and the other's next write txn fails with EINVAL (os error 22).
+# POSIX semaphore names hash the full device and inode, so they do not collide.
+# This is a dev-dependency, so with resolver 2 it does not reach `cargo build` /
+# release binaries. Production keeps LMDB's default locking, and Linux (pthread
+# mutexes) is unaffected.
+[target.'cfg(target_vendor = "apple")'.dev-dependencies]
+heed = { version = "0.22", features = ["posix-sem"] }
+
 [[bench]]
 name = "block_benchmarks"
 harness = false
