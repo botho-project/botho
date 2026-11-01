@@ -226,6 +226,13 @@ and the source scan below, over the pull request's sources as data:
   edit, allow-listed metadata and `leanOptions` in both TOML spellings, a
   tree without `lake-manifest.json`, names that merely contain a banned
   name, and the verify job's `--no-build` call with `LAKE=false`.
+- **Workflow self-test** (`scripts/selftest-workflow.sh`, #1804) takes the
+  `run:` block of the verify job's verify step from
+  `.github/workflows/formal.yml` and runs it with stub verifiers. It checks
+  that the step fails, and runs no verifier, when the base commit has no
+  `verify-artifacts.sh` (even if the pull request has one), and that
+  otherwise it runs the base copy with the base allow-list and lakefile.
+  It needs no Lean toolchain.
 - **Verify self-test** (`scripts/selftest-verify.sh`) runs the verify job's
   checks against the fixtures in `scripts/fixtures/verify/`: the bypasses
   found in the reviews of PR #1783 (an `@[init]` that widens the allow-list,
@@ -386,17 +393,37 @@ broad. Hence the review rule below.
   `AxiomReport.lean` is out of scope. The verify job holds no secrets and a
   read-only token.
 - The workflow file comes from the pull request, as it does for every
-  `pull_request` workflow. A pull request can edit `formal.yml` itself. Such
-  an edit, and any edit under `formal/scripts/`, is visible in review and
-  needs a human reviewer. (The repository has no CODEOWNERS file yet; one
-  that covers `formal/scripts/`, `formal/axioms-allowlist.txt` and
-  `.github/workflows/formal.yml` would enforce this.)
-- Until verify-artifacts.sh is on the base branch (the pull request that
-  adds it, #1799), the verify job runs the pull request's own copy and
-  prints a warning.
+  `pull_request` workflow. A pull request can edit `formal.yml` itself,
+  including the verify job. Such an edit, and any edit under
+  `formal/scripts/`, is visible in review and needs a human reviewer.
+  `.github/CODEOWNERS` (#1804) names a code owner for `formal/scripts/`,
+  `formal/axioms-allowlist.txt`, `formal/lakefile.toml`,
+  `formal/lean-toolchain`, `.github/workflows/formal.yml` and
+  `.github/CODEOWNERS` itself.
+- **Two branch-protection settings are not in place.** They need a
+  repository admin, and no pull request can set them. Until an admin turns
+  them on, CODEOWNERS only requests a review and a red `formal-gate` does not
+  block a merge:
+  - *Require review from Code Owners* on `main`
+    (`require_code_owner_reviews`, today `false`);
+  - *Require status checks to pass*, with `formal-gate` as a required check
+    (`main` has no required checks today).
+
+  A ruleset that pins `formal.yml` to `main` ("Require workflows to pass
+  before merging") would take the workflow out of the pull request's hands.
+  That rule needs GitHub Enterprise Cloud; the `botho-project` organization
+  is on the Free plan, so it is not available.
+- The verify job runs only the base commit's `verify-artifacts.sh`. If the
+  base commit has none, the job fails; it never falls back to the pull
+  request's copy (#1804). `scripts/selftest-workflow.sh` runs the job's
+  script against stub verifiers to check this.
 - The pull request picks the toolchain version, so a toolchain bump is
   verified with the bumped toolchain. Only official `leanprover/lean4`
   releases are accepted.
+- That includes old ones: a pull request can pin an older official release
+  in `lean-toolchain`, and the verify job checks the artifact with that
+  older `leanchecker`. The checks do not reject a downgrade; `lean-toolchain`
+  is under CODEOWNERS, so a code owner reviews it.
 - `leanchecker` trusts the toolchain's own library (`Init`). The artifact
   cannot replace it (step 3 above), and it is loaded from `--sysroot` through
   `LEAN_SYSROOT`, never from a `lean` found on `PATH`.

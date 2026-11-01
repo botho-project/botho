@@ -1,0 +1,13 @@
+# Code owners (#1804). The formal verification gates decide whether a Lean
+# proof is accepted, so a change to them needs review from a code owner.
+# Branch protection must have "Require review from Code Owners" turned on
+# for this file to block a merge; see "Limits" in formal/README.md.
+#
+# The last matching pattern wins. Keep these lines at the end.
+
+/formal/scripts/               @rjwalters
+/formal/axioms-allowlist.txt   @rjwalters
+/formal/lakefile.toml          @rjwalters
+/formal/lean-toolchain         @rjwalters
+/.github/workflows/formal.yml  @rjwalters
+/.github/CODEOWNERS            @rjwalters
