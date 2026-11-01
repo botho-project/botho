@@ -5535,11 +5535,19 @@ mod tests {
         submit_and_register(&mut a, &mut b, &a_tx);
         submit_and_register(&mut b, &mut a, &b_tx);
 
+        // Both externalizations (and so both stall-baseline stamps) happen
+        // inside `run_two_services`, i.e. strictly after `run_started`.
+        let run_started = Instant::now();
         let (a_ext, b_ext) = run_two_services(&mut a, &mut b, 2000);
         assert!(a_ext.is_some() && b_ext.is_some(), "both must externalize");
 
         for (label, svc) in [("A", &a), ("B", &b)] {
             let snap = svc.slot_status();
+            // Read after the snapshot: stamp >= run_started and snapshot <=
+            // now, so the stamped age can never exceed this bound, however
+            // slow the run is under full-suite load (issue #1601). A fixed
+            // wall-clock bound flaked there.
+            let bound = run_started.elapsed().as_secs();
             assert_eq!(
                 snap.last_externalized_slot,
                 Some(1),
@@ -5549,8 +5557,9 @@ mod tests {
                 .last_externalized_seconds_ago
                 .expect("federated externalize must stamp the stall baseline");
             assert!(
-                age <= 5,
-                "node {label}: externalization age must be fresh (got {age}s)"
+                age <= bound,
+                "node {label}: externalization age must be no older than this \
+                 test's own run (got {age}s, run took {bound}s)"
             );
             assert!(
                 !snap.slot_stalled,
