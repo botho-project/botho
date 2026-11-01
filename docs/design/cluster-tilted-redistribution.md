@@ -8,9 +8,9 @@ replaced it with a **uniform** draw over a circulation window, because the
 tilted weight reads the UTXO value. `SelectionMode::ClusterWeighted` remains
 in `cluster-tax/src/lottery.rs` for simulation only; the consensus default is
 `SelectionMode::Uniform`. The other two components did ship: emission routing
-(`lottery_emission_bps`, `cluster-tax/src/monetary.rs:243`) and demurrage on
+(`lottery_emission_bps`, `cluster-tax/src/monetary.rs`) and demurrage on
 the consensus fee floor (`consensus_fee_floor`,
-`botho/src/ledger/store/validation.rs:161`; zero in epoch 0, #1685). The
+`botho/src/ledger/store/validation.rs`; zero in epoch 0, #1685). The
 simulated Gini results below are for the tilted payout and do not measure the
 implemented draw; code-faithful re-runs are #1696 and #1682.
 

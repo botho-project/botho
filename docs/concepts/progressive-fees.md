@@ -194,10 +194,10 @@ See [Privacy](privacy.md#progressive-transaction-fees) for detailed analysis.
 
 > **As built (#1703):** none of this section runs in the node. Consensus
 > applies no decay (`CONSENSUS_TAG_DECAY_RATE = 0`,
-> `botho/src/ledger/store.rs:102`) and only rejects outputs that claim *more*
+> `botho/src/ledger/store.rs`) and only rejects outputs that claim *more*
 > cluster mass than their inputs, so a modified wallet can drop tags in one
 > transaction. The stock wallets decay 5% on every transfer with no age gate
-> (`botho/src/wallet.rs:106`, `botho-wallet/src/transaction.rs:48`), so a
+> (`botho/src/wallet.rs`, `botho-wallet/src/transaction.rs`), so a
 > weight halves after about 13.5 transfers however fast they are made. The
 > age-gated model below exists only as `cluster-tax/src/age_decay.rs`, with no
 > production caller, and the 12-per-day bound and attack table are not

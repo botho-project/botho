@@ -715,14 +715,14 @@ lottery rewards to their own UTXOs?
 
 \textbf{Defense mechanism}: Since protocol 7.0.0 the lottery seed is
 derived from the parent block's proof-of-work fields
-(\path{lottery_seed_v2}, \path{botho/src/consensus/lottery.rs:81};
+(\path{lottery_seed_v2}, \path{botho/src/consensus/lottery.rs};
 issue \#1676):
 \[
 \text{seed}_h = \text{SHA256}(\text{``BOTHO\_LOTTERY\_SEED\_V2''} \,\|\, \text{pow\_hash}_{h-1} \,\|\, \text{prev\_block\_hash}_{h-1} \,\|\, h),
 \]
 where $\text{pow\_hash}_{h-1}$ is the parent's RandomX output over
 $\text{nonce} \,\|\, \text{prev} \,\|\, \text{minter keys}$
-(\path{BlockHeader::pow_hash}, \path{botho/src/block.rs:96}).
+(\path{BlockHeader::pow_hash}, \path{botho/src/block.rs}).
 
 \textbf{Analysis}:
 \begin{itemize}
@@ -747,7 +747,7 @@ solution to try for a different seed forfeits that block's coinbase. The
 coinbase is the reward minus the lottery emission share, so the forfeit is
 $(1-f_{\text{em}})\,R(h)$, where $f_{\text{em}}$ is 0 in the first halving
 epoch and rises to a 50\% cap (\path{miner_payout},
-\path{botho/src/block.rs:381}). The payout the new seed can redirect is at
+\path{botho/src/block.rs}). The payout the new seed can redirect is at
 most one block reward:
 \[
 \text{grinding\_cost} \;\approx\; (1-f_{\text{em}})\,R(h),
@@ -820,7 +820,7 @@ factor.
       \item \textit{Result}: Consensus applies no decay and does not
         rate-limit it; it rejects only tag \emph{inflation}
         (\path{CONSENSUS_TAG_DECAY_RATE} $= 0$,
-        \path{botho/src/ledger/store.rs:102})
+        \path{botho/src/ledger/store.rs})
       \item \textit{Outcome}: Stock wallets decay 5\% per transfer with no
         age gate (half-life $\approx$13.5 transfers); a modified wallet can
         write empty tags in one transaction (as built, pending \#1687)

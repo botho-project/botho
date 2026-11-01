@@ -327,7 +327,7 @@ lottery redistribution pool (ADR~0009; issue~\#925).
 The ring floor is the \emph{value-weighted centroid} of the ring members'
 effective cluster wealth, mapped through the factor curve
 (\path{ring_centroid_floored_factor},
-\path{botho/src/ledger/store/validation.rs:341}). The floor is therefore not
+\path{botho/src/ledger/store/validation.rs}). The floor is therefore not
 exact in either direction. A high-value wealthy decoy in an honest background
 spender's ring can lift it above 1$\times$ and trip the charge. In the other
 direction, a spender who pads the ring with high-value background decoys can
@@ -339,7 +339,7 @@ $\pm 10\%$ \textbf{factor-similarity band} picker
 background rings near 1$\times$, but it has no production caller. It is wallet
 policy at most, and consensus does not check it. The charge also uses the
 epoch's demurrage rate, which is zero for the first halving epoch
-(\path{demurrage_rate_bps}, \path{cluster-tax/src/monetary.rs:279}), so
+(\path{demurrage_rate_bps}, \path{cluster-tax/src/monetary.rs}), so
 the class-transition and settlement charges are zero until block 6,307,200
 (as built, pending \#1685).
 
@@ -379,11 +379,11 @@ R = \min\!\big(\rho \cdot f_{\text{lott}},\; R(h)\big),
 \end{equation}
 where the \emph{reward cap} $R$ is the smaller of the Path~C cap
 $\rho \cdot f_{\text{lott}}$ and one block reward $R(h)$
-(\path{reward_cap}, \path{botho/src/consensus/lottery.rs:306};
-\path{compute_pool_accounting}, \path{lottery.rs:326}). Here $\rho$ is
+(\path{reward_cap}, \path{botho/src/consensus/lottery.rs};
+\path{compute_pool_accounting}, \path{lottery.rs}). Here $\rho$ is
 the count of eligible outputs in the candidate set (up to 10{,}000, gathered
 over the whole circulation window), and $f_{\text{lott}} = 0.25$~BTH
-(\path{LOTTERY_BASE_FEE_PICO}, \path{cluster-tax/src/lottery.rs:51}) is
+(\path{LOTTERY_BASE_FEE_PICO}, \path{cluster-tax/src/lottery.rs}) is
 a per-ticket \emph{cap unit}. It is used only to size the cap; no transaction
 is charged 0.25~BTH, per output or otherwise. Any surplus \emph{carries
 forward} to later blocks rather than being burned, so $\approx$100\% of
@@ -401,9 +401,9 @@ This creates:
   \item \textbf{Uniform selection}: Winners are drawn \emph{uniformly}
     among eligible outputs: no value and no cluster factor enters the draw
     weight (\path{SelectionMode::Uniform},
-    \path{cluster-tax/src/lottery.rs:97}). Selection is not value-free,
+    \path{cluster-tax/src/lottery.rs}). Selection is not value-free,
     however: eligibility reads each output's amount against the
-    $10^{6}$~pico-BTH minimum (\path{botho/src/ledger/store/validation.rs:802}),
+    $10^{6}$~pico-BTH minimum (\path{min_utxo_value} in \path{lottery_candidates}, \path{botho/src/ledger/store/validation.rs}),
     which a confidential-amounts design would have to replace
   \item \textbf{Splitting (design intent, not met as built)}: Path~C was
     designed so that a holder who splits a position into many outputs raises
@@ -455,7 +455,7 @@ The draw runs once \emph{per block}, over the block's accumulated pool:
     $0.8\,f_{\text{block}}$ plus the emission share to the cumulative pool
   \item Derive the seed from the parent block's proof-of-work fields
     (protocol 7.0.0, \path{lottery_seed_v2},
-    \path{botho/src/consensus/lottery.rs:81}):
+    \path{botho/src/consensus/lottery.rs}):
     \begin{equation}
     s = \text{SHA256}(\text{``BOTHO\_LOTTERY\_SEED\_V2''} \,\|\, \text{pow\_hash}_{h-1} \,\|\, \text{prev\_block\_hash}_{h-1} \,\|\, h),
     \end{equation}
@@ -467,7 +467,7 @@ The draw runs once \emph{per block}, over the block's accumulated pool:
     keeping outputs at least 720 blocks old, at most $N = 10{,}000$ blocks old
     (the circulation window), and worth at least $10^{6}$ pico-BTH, up to
     10{,}000 candidates (\path{lottery_candidates},
-    \path{botho/src/ledger/store/validation.rs:733-802}). Eligibility is by
+    \path{botho/src/ledger/store/validation.rs}). Eligibility is by
     creation height, so coins that have not moved for 10{,}000 blocks drop
     out. Let $\rho$ be the resulting count of eligible outputs
   \item Set the reward cap $R = \min(\rho \cdot f_{\text{lott}},\, R(h))$
@@ -558,8 +558,8 @@ fees:
 
 where $f_{\text{em}}(h)$ is 0 in the first halving epoch and rises 10
 percentage points per epoch to a 50\% cap (\path{lottery_emission_bps},
-\path{cluster-tax/src/monetary.rs:243}; \path{miner_payout},
-\path{botho/src/block.rs:381}).
+\path{cluster-tax/src/monetary.rs}; \path{miner_payout},
+\path{botho/src/block.rs}).
 
 This simplifies minting economics and eliminates fee-based attacks.
 

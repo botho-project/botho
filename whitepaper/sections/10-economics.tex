@@ -88,7 +88,7 @@ The expected cluster factor depends on wealth distribution:
 penalty and demurrage; $4{,}000$ pico-BTH $= 4\times10^{-9}$ BTH. Under
 congestion the dynamic base multiplies these by up to $100\times$. Default
 nodes also require the flat relay minimum \path{MIN_TX_FEE} $= 10^{8}$
-pico-BTH (\path{transaction/clsag/src/lib.rs:90}), which exceeds every row,
+pico-BTH (\path{transaction/clsag/src/lib.rs}), which exceeds every row,
 so at today's constants an ordinary wallet pays the same fee at every
 percentile (pending \#1688; the relay minimum is not a consensus rule, \#1684).}
 
@@ -111,7 +111,7 @@ by reducing supply:
 \textbf{Lottery selection as built}:
 \begin{itemize}
   \item Winners are drawn uniformly among eligible outputs
-    (\path{SelectionMode::Uniform}, \path{cluster-tax/src/lottery.rs:97});
+    (\path{SelectionMode::Uniform}, \path{cluster-tax/src/lottery.rs});
     every eligible output is one ticket, regardless of value or cluster
     factor (Section~\ref{sec:monetary})
   \item A uniform per-output draw depends on UTXO count, which a holder
@@ -335,7 +335,7 @@ demurrage is the cluster-scaled stock-level term on the consensus fee floor
 (Section~\ref{sec:cluster-tags}). The payout lever is not: the
 ``cluster-tilted'' rows below simulate the retired value-weighted, tilted
 draw, while the protocol draws winners uniformly
-(\path{SelectionMode::Uniform}, \path{cluster-tax/src/lottery.rs:97}).
+(\path{SelectionMode::Uniform}, \path{cluster-tax/src/lottery.rs}).
 The table is therefore an earlier design's result, not a measurement of the
 implemented mechanism. The row closest to the implemented draw is ``Uniform per UTXO
 + emission'', which inverts under gaming; the Path~C reward cap was meant to

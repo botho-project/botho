@@ -335,7 +335,7 @@ Network propagation & 200 TPS & Bandwidth (10 Mbps) \\
 The block-time row uses the 5-second tier, the sustained high-load level and
 monetary reference. The consensus floor is 3 seconds
 (\path{ConsensusConfig::MIN_BLOCK_TIME_SECS},
-\path{botho/src/consensus/service.rs:58}), reached at $\geq$20 tx/s; while
+\path{botho/src/consensus/service.rs}), reached at $\geq$20 tx/s; while
 load holds that tier, the block-time bound is $\approx$167 TPS and network
 propagation (200 TPS) is the next limit.
 
@@ -564,7 +564,7 @@ Transaction Summary:
 
 \textbf{Fee transparency}: Users see the consensus floor and their cluster
 factor multiplier. At today's constants the flat relay minimum
-(\path{MIN_TX_FEE}, \path{transaction/clsag/src/lib.rs:90}) exceeds
+(\path{MIN_TX_FEE}, \path{transaction/clsag/src/lib.rs}) exceeds
 the floor, so it sets the fee an ordinary wallet pays (pending \#1688,
 \#1684).
 

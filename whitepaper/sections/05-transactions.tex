@@ -179,17 +179,17 @@ not a consensus rule:
     \vec{t}'_{\text{out}} = 0.95 \cdot \vec{t}_{\text{out}}
     \end{equation}
     (\path{DEFAULT_CLUSTER_DECAY_RATE} $= 50{,}000$ ppm,
-    \path{botho/src/wallet.rs:106},
-    \path{botho-wallet/src/transaction.rs:48}). There is no age gate: a
+    \path{botho/src/wallet.rs},
+    \path{botho-wallet/src/transaction.rs}). There is no age gate: a
     weight halves after $\ln 0.5 / \ln 0.95 \approx 13.5$ transfers, however
     quickly they are made.
   \item \textbf{Consensus} applies no decay
     (\path{CONSENSUS_TAG_DECAY_RATE} $= 0$,
-    \path{botho/src/ledger/store.rs:102}). Block validation only rejects
+    \path{botho/src/ledger/store.rs}). Block validation only rejects
     \emph{inflation}: for each cluster, the outputs may not claim more tag
     mass than the per-ring maximum of the inputs
     (\path{check_cluster_tag_inheritance},
-    \path{store.rs:152}). Smaller or empty output tags are accepted, so a
+    \path{store.rs}). Smaller or empty output tags are accepted, so a
     modified wallet can drop a coin's tags in one transaction. Its only
     consensus cost is the class-downgrade charge of
     Section~\ref{sec:demurrage-class-transition}. This is the as-built
@@ -259,7 +259,7 @@ $\gtrsim$1{,}000{,}000 BTH & $\approx$5.2$\times$ -- 6.0$\times$ \\
 Ring signatures hide which input is real among $n$ ring members, but every
 member's tag vector is public. As built, the consensus fee floor
 (\path{consensus_fee_floor},
-\path{botho/src/ledger/store/validation.rs:161-271}) uses tags in three
+\path{botho/src/ledger/store/validation.rs}) uses tags in three
 places:
 
 \begin{enumerate}
@@ -267,13 +267,13 @@ places:
     computed from the spender's \emph{output} tags, weighted by output value
     against the committed per-cluster wealth
     (\path{effective_cluster_wealth_from_outputs},
-    \path{validation.rs:272}).
+    \path{validation.rs}).
   \item \textbf{Ring floor for demurrage}: the demurrage factor is floored at
     the \emph{value-weighted centroid} of the ring members' effective
     cluster wealth, mapped through the factor curve
-    (\path{ring_centroid_floored_factor}, \path{validation.rs:341};
+    (\path{ring_centroid_floored_factor}, \path{validation.rs};
     \path{ring_centroid_implied_factor},
-    \path{cluster-tax/src/demurrage.rs:482}). It is a mean, not the maximum
+    \path{cluster-tax/src/demurrage.rs}). It is a mean, not the maximum
     factor among ring members. Because the spender chooses the decoys,
     high-value low-factor decoys can pull the floor down (as built, pending
     \#1686).
@@ -447,7 +447,7 @@ A private transaction is valid if and only if:
   \item \textbf{Fee}: $\text{fee} \geq \text{min\_fee}(\text{size}, \text{cluster\_factor}, n_{\text{out}}) + \text{demurrage}$,
     the congestion-free consensus floor
     (\path{verify_consensus_fee_floor},
-    \path{botho/src/ledger/store/validation.rs:147})
+    \path{botho/src/ledger/store/validation.rs})
 
   \item \textbf{Size}: Total serialized size $\leq$ 100 KB
 \end{enumerate}
@@ -455,8 +455,8 @@ A private transaction is valid if and only if:
 \textbf{Relay policy versus consensus (as built).} The 20-member minimum ring
 size, the $10^{6}$ pico-BTH dust floor and the $10^{8}$ pico-BTH minimum fee
 (\path{MIN_TX_FEE}) are checked by \path{is_valid_structure}
-(\path{transaction/clsag/src/lib.rs:1536}), whose only production caller is
-mempool admission (\path{botho/src/mempool.rs:706}). Block validation does
+(\path{transaction/clsag/src/lib.rs}), whose only production caller is
+mempool admission (\path{botho/src/mempool.rs}). Block validation does
 not call it, so a block producer can include its own transactions that a
 default node would not relay. These limits are relay policy today, pending
 \#1684.
@@ -495,8 +495,8 @@ exist and are unspent. As built:
   \item \textbf{Age distribution}: The node and CLI pickers draw decoys from
     a gamma spend-age model inside a $\pm 10\%$ age band centred on the real
     input's age (\path{age_similarity_band},
-    \path{botho/src/decoy_selection.rs:278};
-    \path{botho-wallet/src/ring_builder.rs:159}). The band bounds the
+    \path{botho/src/decoy_selection.rs};
+    \path{botho-wallet/src/ring_builder.rs}). The band bounds the
     demurrage over-charge of the max-age ring clock, but centring it on the
     real input makes the real input the ring's median-age member (pending
     \#1755).
@@ -504,13 +504,16 @@ exist and are unspent. As built:
   \item \textbf{Cluster similarity}: Mempool admission rejects a ring whose
     value-weighted tag centroid has cosine similarity below 0.7 with the
     output tags (\path{RING_TAG_SIMILARITY_THRESHOLD},
-    \path{botho/src/mempool.rs:167}); empty tags score 1.0. This is relay
+    \path{botho/src/mempool.rs}); empty tags score 1.0. This is relay
     policy, not a consensus rule. No production picker selects decoys by
     tag, and output tags are published in plaintext (pending \#1756).
 
   \item \textbf{Randomization}: Subject to the above constraints, selection
-    is randomized. Browser and Snap signers are being moved to the same model
-    (\#1693).
+    is randomized. Browser, Snap and claim-link signers apply the same
+    $\pm 10\%$ age band and pick uniformly inside it with a CSPRNG
+    (\path{web/packages/wasm-signer/src/decoys.ts}; \#1693, \#1735). Their pick is uniform
+    within the band, not the gamma model above, and the median-age caveat
+    (pending \#1755) applies to them too.
 \end{enumerate}
 
 Measured identification rates for each production picker are in
