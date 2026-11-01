@@ -434,6 +434,10 @@ pub enum NetworkEvent {
     PeerMetadataUpdated(PeerId),
     /// A peer disconnected
     PeerDisconnected(PeerId),
+    /// A peer subscribed to the transactions gossip topic. Fires after the
+    /// connection is up and the peer's subscription has arrived, so a publish
+    /// on the transactions topic made in response can reach it (#1570).
+    PeerSubscribedToTransactions(PeerId),
     /// A sync request was received (need to respond)
     SyncRequest {
         peer: PeerId,
@@ -1258,6 +1262,22 @@ impl NetworkDiscovery {
         Ok(())
     }
 
+    /// Handle a gossipsub `Subscribed` event. Tracks compact-block
+    /// subscribers and maps a transactions-topic subscription to
+    /// [`NetworkEvent::PeerSubscribedToTransactions`] (#1570).
+    fn on_gossip_subscribed(&mut self, peer_id: PeerId, topic: &str) -> Option<NetworkEvent> {
+        if topic == COMPACT_BLOCKS_TOPIC {
+            self.compact_block_peers.insert(peer_id);
+            debug!(%peer_id, "Peer subscribed to compact blocks");
+            None
+        } else if topic == TRANSACTIONS_TOPIC {
+            debug!(%peer_id, "Peer subscribed to transactions");
+            Some(NetworkEvent::PeerSubscribedToTransactions(peer_id))
+        } else {
+            None
+        }
+    }
+
     /// Process a swarm event
     pub fn process_event(
         &mut self,
@@ -1531,16 +1551,12 @@ impl NetworkDiscovery {
                 None
             }
 
-            // Track peers subscribing to compact blocks topic
+            // Track peers subscribing to compact blocks topic, and surface
+            // transactions-topic subscriptions so the node can re-feed pending
+            // txs to the new peer (#674, #1570).
             SwarmEvent::Behaviour(BothoBehaviourEvent::Gossipsub(
                 gossipsub::Event::Subscribed { peer_id, topic },
-            )) => {
-                if topic.as_str() == COMPACT_BLOCKS_TOPIC {
-                    self.compact_block_peers.insert(peer_id);
-                    debug!(%peer_id, "Peer subscribed to compact blocks");
-                }
-                None
-            }
+            )) => self.on_gossip_subscribed(peer_id, topic.as_str()),
 
             // Track peers unsubscribing from compact blocks topic
             SwarmEvent::Behaviour(BothoBehaviourEvent::Gossipsub(
@@ -1973,6 +1989,35 @@ mod tests {
     // ========================================================================
     // NetworkStats tests (#542)
     // ========================================================================
+
+    fn subscribed(
+        discovery: &mut NetworkDiscovery,
+        peer_id: PeerId,
+        topic: &str,
+    ) -> Option<NetworkEvent> {
+        discovery.process_event(SwarmEvent::Behaviour(BothoBehaviourEvent::Gossipsub(
+            gossipsub::Event::Subscribed {
+                peer_id,
+                topic: IdentTopic::new(topic).hash(),
+            },
+        )))
+    }
+
+    /// #1570: the transactions-topic subscription, not the connection, is
+    /// what triggers the pending-tx re-feed. Other topics map to nothing.
+    #[test]
+    fn test_transactions_subscription_maps_to_event() {
+        let mut discovery = NetworkDiscovery::new(0, vec![]);
+        let peer = PeerId::random();
+        assert!(matches!(
+            subscribed(&mut discovery, peer, TRANSACTIONS_TOPIC),
+            Some(NetworkEvent::PeerSubscribedToTransactions(p)) if p == peer
+        ));
+        assert!(subscribed(&mut discovery, peer, BLOCKS_TOPIC).is_none());
+        assert!(subscribed(&mut discovery, peer, SCP_TOPIC).is_none());
+        assert!(subscribed(&mut discovery, peer, COMPACT_BLOCKS_TOPIC).is_none());
+        assert!(discovery.compact_block_peers.contains(&peer));
+    }
 
     #[test]
     fn test_network_stats_default_is_zero() {

@@ -28,10 +28,18 @@
 //! - **Reset on recovery.** When a stall clears (the slot externalized again)
 //!   all backoff state is dropped, so every still-pending tx gets one immediate
 //!   send instead of waiting out a backoff of up to `cap`.
-//! - **Reset on peer connect.** A newly connected peer has seen none of the
-//!   pending txs. [`RebroadcastSchedule::reset_all`] drops the backoff state so
-//!   the peer gets them at once, not after up to `cap` (#674). This also covers
-//!   a validator that restarted with an empty tx cache.
+//! - **Reset on peer subscribe, coalesced.** A newly connected peer has seen
+//!   none of the pending txs. [`RebroadcastSchedule::reset_all`] drops the
+//!   backoff state so the peer gets them at once, not after up to `cap` (#674).
+//!   This also covers a validator that restarted with an empty tx cache. The
+//!   node calls it when a peer subscribes to the transactions gossip topic, not
+//!   at connection establishment, so the re-feed cannot publish before the new
+//!   peer is in the topic mesh (#1570). Resets are coalesced to at most one per
+//!   `base` interval: a reset inside that window is a no-op. Without this, a
+//!   peer that flaps its connection at 10 Hz would make every pending tx due on
+//!   every re-feed, which is the #1547 flood again. A peer whose reset was
+//!   coalesced still gets every pending tx within `base`, because the honoured
+//!   reset restarted each tx at its first (shortest) backoff step.
 //! - **Pruning.** Entries for txs that left the mempool (confirmed or evicted)
 //!   are removed via [`RebroadcastSchedule::prune`].
 //!
@@ -64,6 +72,9 @@ pub struct RebroadcastSchedule {
     base: Duration,
     cap: Duration,
     slot_stalled: bool,
+    /// When [`Self::reset_all`] last cleared the schedule. Resets within
+    /// `base` of this are coalesced into it (#1570).
+    last_reset: Option<Instant>,
 }
 
 impl Default for RebroadcastSchedule {
@@ -85,6 +96,7 @@ impl RebroadcastSchedule {
             base,
             cap: cap.max(base),
             slot_stalled: false,
+            last_reset: None,
         }
     }
 
@@ -146,9 +158,21 @@ impl RebroadcastSchedule {
     }
 
     /// Drop all backoff state, so every still-pending tx is due at once.
-    /// Called when a peer connects (#674). Returns the number of entries
-    /// cleared.
-    pub fn reset_all(&mut self) -> usize {
+    /// Called when a peer subscribes to the transactions topic (#674, #1570).
+    ///
+    /// Coalesced: if the last honoured reset was less than `base` before
+    /// `now`, this is a no-op and returns 0. Peer churn therefore resets the
+    /// schedule at most once per `base`, so re-broadcasts stay bounded at
+    /// about one send per pending tx per `base` however fast peers flap.
+    /// Returns the number of entries cleared.
+    pub fn reset_all(&mut self, now: Instant) -> usize {
+        if self
+            .last_reset
+            .is_some_and(|last| now.saturating_duration_since(last) < self.base)
+        {
+            return 0;
+        }
+        self.last_reset = Some(now);
         let cleared = self.entries.len();
         self.entries.clear();
         cleared
@@ -320,7 +344,7 @@ mod tests {
         s.record_send(H2, t);
         assert!(!s.should_send(H1, t + secs(1)), "next send is 10 min out");
 
-        assert_eq!(s.reset_all(), 2);
+        assert_eq!(s.reset_all(t + secs(1)), 2);
         assert!(s.is_empty());
         assert!(s.should_send(H1, t + secs(1)), "due at once after connect");
         assert!(s.should_send(H2, t + secs(1)));
@@ -360,5 +384,111 @@ mod tests {
         assert!(!s.set_slot_stalled(false));
         assert_eq!(s.len(), 1);
         assert!(!s.should_send(H1, t0 + secs(1)));
+    }
+
+    /// Push every hash in `hashes` deep into backoff (next send 10 min out).
+    fn drive_to_cap(s: &mut RebroadcastSchedule, hashes: &[[u8; 32]], t0: Instant) -> Instant {
+        let mut t = t0;
+        for h in hashes {
+            assert!(s.should_send(*h, t));
+        }
+        for step in [30u64, 60, 120, 240, 480] {
+            t += secs(step);
+            for h in hashes {
+                assert!(s.should_send(*h, t));
+            }
+        }
+        t
+    }
+
+    fn hashes(n: u8) -> Vec<[u8; 32]> {
+        (0..n).map(|i| [i.wrapping_add(10); 32]).collect()
+    }
+
+    /// #1570: a peer flapping its connection 100 times in 10 s triggers at
+    /// most one honoured reset, and the 100 ms re-feed sends each pending tx
+    /// once, not once per flap.
+    #[test]
+    fn hundred_resets_in_ten_seconds_are_coalesced() {
+        const N: u8 = 10;
+        let pending = hashes(N);
+        let mut s = RebroadcastSchedule::new();
+        let t = drive_to_cap(&mut s, &pending, Instant::now());
+
+        let mut honoured = 0usize;
+        let mut sends = 0usize;
+        for i in 0..100u64 {
+            let now = t + Duration::from_millis(i * 100);
+            if s.reset_all(now) > 0 {
+                honoured += 1;
+            }
+            sends += pending.iter().filter(|h| s.should_send(**h, now)).count();
+        }
+        assert!(honoured <= 1, "honoured {honoured} resets in 10 s");
+        assert_eq!(honoured, 1, "the first reset after quiet is honoured");
+        assert_eq!(sends, N as usize, "one send per pending tx in 10 s");
+    }
+
+    /// #1570: sustained 10 Hz flapping with a 100 ms re-feed stays at about
+    /// one send per pending tx per 30 s (the #1547 flood would be 6,000 per
+    /// tx over 10 min).
+    #[test]
+    fn sustained_flapping_is_bounded_to_one_send_per_base_interval() {
+        const N: u8 = 10;
+        let pending = hashes(N);
+        let mut s = RebroadcastSchedule::new();
+        let t0 = Instant::now();
+
+        let mut sends = 0usize;
+        let ticks = 6_000u64; // 10 min at 100 ms
+        for i in 0..ticks {
+            let now = t0 + Duration::from_millis(i * 100);
+            s.reset_all(now);
+            sends += pending.iter().filter(|h| s.should_send(**h, now)).count();
+        }
+        // 600 s / 30 s = 20 windows, plus the send at t = 0.
+        let bound = N as usize * (600 / 30 + 1);
+        assert!(sends <= bound, "{sends} sends > bound {bound}");
+    }
+
+    /// A reset inside the window is a no-op that leaves backoff intact; the
+    /// first reset once the window has passed is honoured again.
+    #[test]
+    fn reset_window_reopens_after_base_interval() {
+        let mut s = RebroadcastSchedule::new();
+        let t = drive_to_cap(&mut s, &[H1], Instant::now());
+
+        assert_eq!(s.reset_all(t + secs(1)), 1);
+        assert!(s.should_send(H1, t + secs(1)));
+        assert_eq!(s.reset_all(t + secs(30)), 0, "inside 30 s of last reset");
+        assert!(!s.should_send(H1, t + secs(30)), "backoff not cleared");
+        assert_eq!(s.reset_all(t + secs(31)), 1, "window has passed");
+        assert!(s.should_send(H1, t + secs(31)));
+    }
+
+    /// A peer whose reset was coalesced still gets every pending tx within
+    /// one base interval of the honoured reset.
+    #[test]
+    fn coalesced_peer_is_served_within_base_interval() {
+        let mut s = RebroadcastSchedule::new();
+        let t = drive_to_cap(&mut s, &[H1], Instant::now());
+
+        assert_eq!(s.reset_all(t), 1); // peer A subscribes
+        assert!(s.should_send(H1, t));
+        assert_eq!(s.reset_all(t + secs(10)), 0); // peer B, coalesced
+        assert!(!s.should_send(H1, t + secs(10)));
+        assert!(s.should_send(H1, t + secs(30)), "B gets H1 by t + 30 s");
+    }
+
+    /// The coalescing window follows a custom `base`.
+    #[test]
+    fn reset_window_uses_configured_base() {
+        let mut s = RebroadcastSchedule::with_intervals(secs(5), secs(60));
+        let t0 = Instant::now();
+        s.record_send(H1, t0);
+        assert_eq!(s.reset_all(t0), 1);
+        s.record_send(H1, t0);
+        assert_eq!(s.reset_all(t0 + secs(4)), 0);
+        assert_eq!(s.reset_all(t0 + secs(5)), 1);
     }
 }
