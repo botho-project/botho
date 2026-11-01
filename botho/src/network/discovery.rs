@@ -19,7 +19,9 @@
 
 use libp2p::{
     gossipsub::{self, IdentTopic, MessageAuthenticity},
-    identify, identity, noise,
+    identify, identity,
+    multiaddr::Protocol,
+    noise,
     request_response::{self, InboundRequestId, OutboundRequestId, ResponseChannel},
     swarm::{NetworkBehaviour, SwarmEvent},
     tcp, yamux, Multiaddr, PeerId, Swarm,
@@ -27,6 +29,7 @@ use libp2p::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
+    net::{IpAddr, Ipv4Addr},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -602,6 +605,9 @@ pub struct NetworkDiscovery {
     local_peer_id: PeerId,
     /// Gossip port
     port: u16,
+    /// Local IP the gossip listener binds to (issue #1582). Defaults to
+    /// `0.0.0.0`; set via [`with_listen_address`](Self::with_listen_address).
+    listen_ip: IpAddr,
     /// Bootstrap peers
     bootstrap_peers: Vec<String>,
     /// Sender for network events
@@ -691,6 +697,7 @@ impl NetworkDiscovery {
             keypair,
             local_peer_id,
             port,
+            listen_ip: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             bootstrap_peers,
             event_tx,
             event_rx: Some(event_rx),
@@ -701,6 +708,19 @@ impl NetworkDiscovery {
             rate_limit_log: RateLimitLogSummary::default(),
             stats: Arc::new(NetworkStats::new()),
         }
+    }
+
+    /// Set the local IP the gossip listener binds to (issue #1582).
+    ///
+    /// Defaults to `0.0.0.0`. Wired from `network.listen_address`.
+    pub fn with_listen_address(mut self, ip: IpAddr) -> Self {
+        self.listen_ip = ip;
+        self
+    }
+
+    /// The multiaddr [`start`](Self::start) will listen on.
+    pub fn listen_multiaddr(&self) -> Multiaddr {
+        gossip_listen_multiaddr(self.listen_ip, self.port)
     }
 
     /// Get a shared handle to the live network-traffic counters (#542).
@@ -901,7 +921,8 @@ impl NetworkDiscovery {
         swarm.behaviour_mut().gossipsub.subscribe(&pex_topic)?;
 
         // Listen on the configured port
-        let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", self.port).parse()?;
+        let listen_addr = self.listen_multiaddr();
+        info!("Gossip listening on {}", listen_addr);
         swarm.listen_on(listen_addr)?;
 
         // Connect to bootstrap peers
@@ -1803,9 +1824,65 @@ impl NetworkDiscovery {
     }
 }
 
+/// Build the gossip listen multiaddr for `ip`:`port` (issue #1582).
+///
+/// libp2p encodes the address family in the protocol, so an IPv4 address
+/// becomes `/ip4/<ip>/tcp/<port>` and an IPv6 one `/ip6/<ip>/tcp/<port>`.
+pub fn gossip_listen_multiaddr(ip: IpAddr, port: u16) -> Multiaddr {
+    let ip_proto = match ip {
+        IpAddr::V4(v4) => Protocol::Ip4(v4),
+        IpAddr::V6(v6) => Protocol::Ip6(v6),
+    };
+    Multiaddr::empty().with(ip_proto).with(Protocol::Tcp(port))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1582: unset listen address keeps the historical `0.0.0.0` bind.
+    #[test]
+    fn gossip_listen_defaults_to_all_ipv4_interfaces() {
+        let d = NetworkDiscovery::new(7100, Vec::new());
+        assert_eq!(d.listen_multiaddr().to_string(), "/ip4/0.0.0.0/tcp/7100");
+    }
+
+    /// #1582: a configured listen address reaches the gossip multiaddr, with
+    /// the right libp2p protocol for each address family.
+    #[test]
+    fn gossip_listen_uses_configured_address() {
+        let d = NetworkDiscovery::new(17100, Vec::new())
+            .with_listen_address("127.0.0.1".parse().unwrap());
+        assert_eq!(d.listen_multiaddr().to_string(), "/ip4/127.0.0.1/tcp/17100");
+        assert_eq!(
+            gossip_listen_multiaddr("::1".parse().unwrap(), 7100).to_string(),
+            "/ip6/::1/tcp/7100"
+        );
+    }
+
+    /// #1582: with `listen_address = "127.0.0.1"` the swarm's actual listen
+    /// addresses are loopback only.
+    #[tokio::test]
+    async fn gossip_swarm_binds_loopback_only() {
+        let mut d =
+            NetworkDiscovery::new(0, Vec::new()).with_listen_address("127.0.0.1".parse().unwrap());
+        let mut swarm = d.start().await.expect("swarm starts");
+        let addr = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let SwarmEvent::NewListenAddr { address, .. } =
+                    futures::StreamExt::select_next_some(&mut swarm).await
+                {
+                    break address;
+                }
+            }
+        })
+        .await
+        .expect("listen address reported");
+        match addr.iter().next() {
+            Some(Protocol::Ip4(ip)) => assert!(ip.is_loopback(), "bound {addr}"),
+            other => panic!("unexpected listen address {other:?} in {addr}"),
+        }
+    }
 
     /// #1545: the node's gossipsub config sets the publish queue duration
     /// deliberately rather than inheriting libp2p's 5 s default.

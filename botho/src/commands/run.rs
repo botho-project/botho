@@ -710,7 +710,8 @@ async fn run_async_with_shutdown(
         config.network.gossip_port(network_type),
         bootstrap_peers,
         rate_limit_config,
-    );
+    )
+    .with_listen_address(config.network.listen_address());
 
     let mut swarm = discovery.start().await?;
 
@@ -812,9 +813,9 @@ async fn run_async_with_shutdown(
     let mut node = Node::new(config.clone(), config_path)?;
 
     // Start RPC server for thin wallet connections
-    let rpc_addr: SocketAddr = format!("0.0.0.0:{}", config.network.rpc_port(network_type))
-        .parse()
-        .expect("Invalid RPC address");
+    // Bind address comes from `network.listen_address` (default 0.0.0.0,
+    // issue #1582).
+    let rpc_addr: SocketAddr = config.network.rpc_socket_addr(network_type);
 
     // Create shared state for RPC
     let minting_active = Arc::new(RwLock::new(false));
@@ -1048,11 +1049,7 @@ async fn run_async_with_shutdown(
         }
     });
 
-    if let Some(metrics_port) = config.network.metrics_port(network_type) {
-        let metrics_addr: SocketAddr = format!("0.0.0.0:{}", metrics_port)
-            .parse()
-            .expect("Invalid metrics address");
-
+    if let Some(metrics_addr) = config.network.metrics_socket_addr(network_type) {
         tokio::spawn(async move {
             if let Err(e) = start_metrics_server(metrics_addr).await {
                 error!("Metrics server error: {}", e);
