@@ -999,9 +999,11 @@ mod tests {
         let result = run_simulation(&mut agents, &config);
         let stats = result.monetary_stats.unwrap();
 
-        // After 25 blocks: blocks 0-9 = 100, blocks 10-19 = 50, blocks 20-24 = 25
-        // Total = 10*100 + 10*50 + 5*25 = 1000 + 500 + 125 = 1625
-        assert_eq!(stats.total_emitted, 1625);
+        // Node height convention (#1699): genesis (height 0) mints nothing, so
+        // the 25 simulated blocks are heights 1-25: heights 1-9 = 100,
+        // 10-19 = 50, 20-25 = 25.
+        // Total = 9*100 + 10*50 + 6*25 = 900 + 500 + 150 = 1550
+        assert_eq!(stats.total_emitted, 1550);
         assert_eq!(stats.block_reward, 25); // After 2 complete halvings: 100 -> 50 -> 25
         assert_eq!(stats.phase, "Halving"); // Still in halving phase
     }

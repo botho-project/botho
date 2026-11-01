@@ -43,7 +43,7 @@ La recompensa de acuñación comienza en 50 BTH y se reduce a la mitad cada **6 
 
 ### Fase 2: emisión de cola
 
-Tras la Fase 1, Botho pasa a una emisión de cola perpetua orientada a una **inflación neta anual del 2 %** (emisión bruta menos las quemas de comisiones), con la dificultad ajustándose para alcanzar el objetivo.
+Tras la Fase 1, Botho pasa a una emisión de cola perpetua orientada a una **inflación neta anual del 2 %** (emisión bruta menos las quemas de comisiones). La dificultad solo apunta al tiempo de bloque; la tasa de cola proviene de la recompensa por bloque, recalculada a partir de la emisión acumulada.
 
 **¿Por qué emisión de cola?**
 

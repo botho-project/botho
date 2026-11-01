@@ -54,9 +54,9 @@ S_1 = R_0 H \sum_{i=0}^{K-1} 2^{-i}
 \subsubsection{Tail Emission}
 
 After the five halvings complete, perpetual tail emission begins. Rather than
-a fixed per-block constant, the tail targets a constant \emph{net annual
-inflation rate} on the circulating supply, so emission scales with supply
-rather than being pinned to an absolute number:
+a fixed per-block constant, the tail reward is a fixed \emph{annual rate} on
+the cumulative supply, so emission scales with supply rather than being pinned
+to an absolute number:
 
 \begin{equation}
 R_{\text{tail}} = \frac{S \cdot (\beta_{\text{net}} + \beta_{\text{burn}})}
@@ -65,12 +65,13 @@ R_{\text{tail}} = \frac{S \cdot (\beta_{\text{net}} + \beta_{\text{burn}})}
 
 where:
 \begin{itemize}
-  \item $S$ is the circulating supply at the start of the tail phase
-  \item $\beta_{\text{net}} = 0.02$ (200 bps) is the target net annual
+  \item $S$ is the cumulative gross issuance so far (every block reward ever
+    minted, not reduced by burns), \emph{recomputed every block}
+  \item $\beta_{\text{net}} = 0.02$ (200 bps) is the design net annual
     inflation
-  \item $\beta_{\text{burn}} = 0.005$ (50 bps) is the expected annual
+  \item $\beta_{\text{burn}} = 0.005$ (50 bps) is an \emph{assumed} annual
     fee-burn rate (the 20\% burn, see Section~\ref{sec:economic-modeling}),
-    added so that \emph{gross} emission nets to the 2\% target after burns
+    added so that \emph{gross} emission would net to 2\% if burns reached it
   \item $N_{\text{year}} = 6{,}307{,}200$ is the number of blocks per year at
     5s blocks
 \end{itemize}
@@ -82,9 +83,24 @@ tail onset:
 \text{Net annual emission}   &= 611{,}010{,}000 \times 0.020 = 12{,}220{,}200 \text{ BTH} \\
 R_{\text{tail}} &= \frac{15{,}275{,}250}{6{,}307{,}200} \approx 2.42 \text{ BTH/block (gross)}
 \end{align}
-or $\approx 1.94$ BTH/block net of the expected fee burn. Because $R_{\text{tail}}$
-is proportional to supply, the per-block reward \emph{grows} as the supply
-grows, holding net inflation fixed at 2\%.
+or $\approx 1.94$ BTH/block net of the assumed fee burn. Because each tail
+reward is added back into $S$, the per-block reward \emph{grows} as the supply
+grows and gross issuance compounds at $\approx$2.53\% per $N_{\text{year}}$
+blocks.
+
+\textbf{Realized net rate.} The 0.5\% burn is a calibration assumption, not
+an expected outcome. Only 20\% of fees are burned, and a typical
+1-input/2-output transaction pays the 0.0001\,BTH relay minimum, so burning
+0.5\% of the tail-onset supply each year would take about 4,800 transactions
+per second, sustained. At the loads the timing tiers anticipate, the base-fee
+burn is a few thousandths of a percent of supply. Demurrage is collected as
+part of the fee, so 20\% of it is burned too; that term is at most
+$\approx$0.4\%/year, and only if every coin sat at the maximum cluster factor
+and was settled yearly. The realized net tail is therefore between $\approx$2.1\%
+and $\approx$2.53\% (compounded) per $N_{\text{year}}$ blocks, near the top in practice, rather than
+2\%. The parameters are unchanged (ratified); this restates what they imply.
+Whether to keep them and restate the headline figure, or recalibrate the tail
+(a consensus change), is an open operator decision tracked in issue \#1788.
 
 \subsubsection{Supply Projection}
 
@@ -100,18 +116,22 @@ grows, holding net inflation fixed at 2\%.
 2 & 473.0M BTH & 157.7M & 50\% \\
 3 & 551.9M BTH & 78.8M & 17\% \\
 5 & 611.0M BTH & 19.7M & 3.3\% \\
-6 & 626.3M BTH & 15.3M & 2.5\% \\
-10 & 691.3M BTH & 16.9M & 2.5\% \\
-20 & 884.9M BTH & 21.6M & 2.5\% \\
+6 & 626.5M BTH & 15.5M & 2.5\% \\
+10 & 692.4M BTH & 17.1M & 2.5\% \\
+20 & 889.0M BTH & 22.0M & 2.5\% \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\textbf{Note}: Years 1--5 are the halving phase (rewards 50, 25, 12.5, 6.25,
-3.125 BTH/block), which fix the Phase-1 supply at $\approx$611M BTH. From year 6
-onward the tail holds \emph{gross} emission at 2.5\% of supply (2\% net of the
-expected 0.5\% fee burn). Because the tail tracks supply, nominal emission
-grows over time while the net inflation rate stays pinned at 2\%.
+\textbf{Note}: Years are \emph{policy-years} of 6,307,200 blocks (calendar
+years only at 5\,s blocks; see Emission Bounds). Years 1--5 are the halving
+phase (rewards 50, 25, 12.5, 6.25, 3.125 BTH/block), which fix the Phase-1
+supply at $\approx$611M BTH. From year 6 onward the tail reward is recomputed
+every block from cumulative issuance, so gross issuance compounds at
+$\approx$2.53\% per policy-year (2.5\% calibrated, compounded per block).
+Burns are omitted: at realistic fee volumes they are far below the assumed
+0.5\%/year (see Realized net rate above). Figures are the node's exact
+issuance (\texttt{cluster-tax-sim emission-sweep}, node-parity section).
 
 \input{figures/supply-projection}
 
@@ -196,9 +216,9 @@ This aligns miner incentives with network utility.
 
 \subsubsection{Emission Bounds}
 
-Because the tail reward is fixed per block (at $\approx$2.42 BTH/block gross
-for the $\approx$611M tail-onset supply), slower blocks produce fewer blocks
-per year and therefore proportionally lower annual emission. The effective
+Because the tail reward is set per block, not per unit of time (at
+$\approx$2.42 BTH/block gross for the $\approx$611M tail-onset supply), slower
+blocks produce fewer blocks per year and therefore proportionally lower annual emission. The effective
 annual tail emission thus varies with utilization:
 
 \begin{table}[h]
@@ -216,11 +236,15 @@ High, reference (5s) & 6,307,200 & 15.28M BTH \\
 \end{tabular}
 \end{table}
 
-At the 5\,s monetary reference this is the 2.5\% gross (2\% net) tail target;
-sustained slower operation acts as a natural inflation dampener, holding
-emission below the 2\% net rate. The 3-second floor (transient maximum demand)
-would raise the block count to 10.5M/year, briefly exceeding the reference
-target until difficulty and load re-equilibrate.
+At the 5\,s monetary reference this is the 2.5\% gross tail rate (2\% net
+only if fee burns reached the assumed 0.5\%); sustained slower operation acts
+as a natural inflation dampener. Blocks are load-paced, so the same
+dampening stretches the calendar: the 5 policy-years to tail take 10 years at
+10\,s blocks and 40 years when idle. The 3-second tier (sustained $\geq$20
+tx/s) raises the block count to 10.5M/year, about 4.2\% gross per calendar
+year, and reaches the tail in 3 years. The difficulty controller targets 5\,s
+blocks but cannot make blocks faster than load pacing allows; how it behaves
+at sustained low load on the live network has not yet been measured.
 
 \subsection{Fee Economics}
 
@@ -233,10 +257,15 @@ f_{\text{base}} = 1 \text{ pico-BTH per byte}
 \end{equation}
 
 (\Botho's smallest unit is the picocredit, $1\text{ BTH} = 10^{12}$ pico-BTH.)
-For a typical 4 KB transaction:
+The size term is multiplied by the cluster factor and by an output-count
+penalty ($\min(n_{\text{out}}, 10)^2$). For a typical 1-input/2-output
+transaction (990 bytes) of factor-1 coins, the consensus floor is
 \begin{equation}
-f_{\text{min}} = 4{,}000 \times 1 = 4{,}000 \text{ pico-BTH} = 4 \times 10^{-9} \text{ BTH}
+f_{\text{floor}} = 990 \times 1 \times 2^2 = 3{,}960 \text{ pico-BTH} \approx 4 \times 10^{-9} \text{ BTH}.
 \end{equation}
+This is the block-validity floor. Default nodes also enforce a relay minimum of
+$10^{8}$ pico-BTH (0.0001 BTH) per transaction, so that is what an ordinary
+wallet pays; the floor is what a miner including its own transactions pays.
 
 The 1\,pico-BTH/byte figure is the congestion \emph{floor}. Under load the
 dynamic base rises multiplicatively (a congestion response bounded by a
@@ -295,13 +324,24 @@ downgrade relative to the ring floor is priced. The charge folds into the
 consensus fee floor and thus flows, via the 80/20 split, into the same
 lottery redistribution pool (ADR~0009; issue~\#925).
 
-Because the floor is an order statistic over the ring's implied factors
-weighted by input value, a single high-value decoy in an honest background spender's
-ring could spuriously lift the floor above 1$\times$ and trip the charge. Decoy
-selection therefore draws only ring members whose cluster factor lies within a
-\textbf{$\pm 10\%$ factor-similarity band} of the real input's factor
-(\texttt{FACTOR\_SIMILARITY\_SPREAD}), so a background spender draws only
-near-1$\times$ decoys and the ring floor stays exact.
+The ring floor is the \emph{value-weighted centroid} of the ring members'
+effective cluster wealth, mapped through the factor curve
+(\path{ring_centroid_floored_factor},
+\path{botho/src/ledger/store/validation.rs}). The floor is therefore not
+exact in either direction. A high-value wealthy decoy in an honest background
+spender's ring can lift it above 1$\times$ and trip the charge. In the other
+direction, a spender who pads the ring with high-value background decoys can
+pull it toward 1$\times$ and dilute the charge (as built, pending \#1686). A
+$\pm 10\%$ \textbf{factor-similarity band} picker
+(\path{FACTOR_SIMILARITY_SPREAD},
+\path{select_decoys_cluster_aware} in
+\path{botho/src/decoy_selection.rs}) was written to keep honest
+background rings near 1$\times$, but it has no production caller. It is wallet
+policy at most, and consensus does not check it. The charge also uses the
+epoch's demurrage rate, which is zero for the first halving epoch
+(\path{demurrage_rate_bps}, \path{cluster-tax/src/monetary.rs}), so
+the class-transition and settlement charges are zero until block 6,307,200
+(as built, pending \#1685).
 
 A holder may also \emph{opt in} to a \textbf{demurrage-settlement operation}
 (issue~\#831): a transaction declaring all-background (factor-1) outputs pays
@@ -319,9 +359,8 @@ Transaction fees are split between a redistribution pool and burning:
 
 \begin{itemize}
   \item \textbf{80\% to the lottery pool}: Added to a persistent,
-    cumulative pool and distributed to 4 UTXOs per block via a verifiable,
-    value-free uniform lottery over a circulation window (\emph{Path C};
-    ADR~0009)
+    cumulative pool and distributed to 4 UTXOs per block via a verifiable
+    uniform lottery over a circulation window (\emph{Path C}; ADR~0009)
   \item \textbf{20\% burned}: Permanently removed from supply
 \end{itemize}
 
@@ -338,36 +377,54 @@ still (Section~\ref{sec:economic-modeling}). The pool balance is cumulative
 \qquad
 R = \min\!\big(\rho \cdot f_{\text{lott}},\; R(h)\big),
 \end{equation}
-where the \emph{reward cap} $R$ is the smaller of the Path~C Sybil cap
-$\rho \cdot f_{\text{lott}}$ ($\rho$ = the count of in-window eligible
-outputs, $f_{\text{lott}} = 0.25$ BTH the lottery base fee) and one block
-reward $R(h)$. Any surplus \emph{carries forward} to later blocks rather than
-being burned, so $\approx$100\% of collected fees are eventually redistributed.
-The block-reward term $R(h)$ is the anti-grinding bound
-(Section~\ref{sec:security}); the $\rho \cdot f_{\text{lott}}$ term is the
-Sybil-neutrality bound (below).
+where the \emph{reward cap} $R$ is the smaller of the Path~C cap
+$\rho \cdot f_{\text{lott}}$ and one block reward $R(h)$
+(\path{reward_cap}, \path{botho/src/consensus/lottery.rs};
+\path{compute_pool_accounting}, \path{lottery.rs}). Here $\rho$ is
+the count of eligible outputs in the candidate set (up to 10{,}000, gathered
+over the whole circulation window), and $f_{\text{lott}} = 0.25$~BTH
+(\path{LOTTERY_BASE_FEE_PICO}, \path{cluster-tax/src/lottery.rs}) is
+a per-ticket \emph{cap unit}. It is used only to size the cap; no transaction
+is charged 0.25~BTH, per output or otherwise. Any surplus \emph{carries
+forward} to later blocks rather than being burned, so $\approx$100\% of
+collected fees are eventually redistributed. The block-reward term $R(h)$ is
+the anti-grinding bound (Section~\ref{sec:security}). Because $\rho$ counts
+the whole window, $\rho \cdot f_{\text{lott}}$ exceeds $R(h)$ whenever more
+than a few hundred outputs are eligible, so in practice the binding terms are
+the available pool and $R(h)$ (pending \#1682). A large carried-forward pool,
+for example a demurrage lump, therefore drains at up to one block reward per
+block to current ticket holders (pending \#1691).
 
 This creates:
 
 \begin{itemize}
-  \item \textbf{Value-free selection}: Winners are drawn \emph{uniformly}
-    over the circulation window --- no UTXO value and no cluster factor enters
-    the draw, so the lottery reads only public chain state and remains
-    compatible with confidential amounts (ADR~0009)
-  \item \textbf{Reward-cap net-zero (Sybil-neutrality)}: A holder that splits
-    a position into many outputs to buy more tickets also raises the reward
-    cap $R = \rho \cdot f_{\text{lott}}$ by exactly one base fee per extra
-    eligible output. It therefore wins back precisely its base-fee outlay ---
-    realized net gain is \emph{zero} at every split factor, and strictly
-    negative whenever the fee pool is thin. Sybil resistance comes from the
-    cap, not from a value-based weight formula
+  \item \textbf{Uniform selection}: Winners are drawn \emph{uniformly}
+    among eligible outputs: no value and no cluster factor enters the draw
+    weight (\path{SelectionMode::Uniform},
+    \path{cluster-tax/src/lottery.rs}). Selection is not value-free,
+    however: eligibility reads each output's amount against the
+    $10^{6}$~pico-BTH minimum (\path{min_utxo_value} in \path{lottery_candidates}, \path{botho/src/ledger/store/validation.rs}),
+    which a confidential-amounts design would have to replace
+  \item \textbf{Splitting (design intent, not met as built)}: Path~C was
+    designed so that a holder who splits a position into many outputs raises
+    the cap by one $f_{\text{lott}}$ per extra ticket and pays one
+    $f_{\text{lott}}$ per output, making splitting net-zero. As built,
+    neither premise holds: nothing charges $f_{\text{lott}}$ (an extra output
+    costs roughly the $10^{8}$~pico-BTH relay minimum, about 2{,}500$\times$
+    less), and $\rho$ counts the whole window rather than one block's new
+    outputs. Ticket-splitting can therefore be profitable (pending \#1682).
+    Coinbase and lottery payout outputs also become tickets at no fee, so
+    past winners compound their share (pending \#1690)
   \item \textbf{Progressive intake}: Redistribution progressivity now lives
     on the \emph{source} side --- the demurrage and progressive-fee terms
-    that fill the pool are value- and factor-dependent, while the payout draw
-    is Sybil-neutral
+    that fill the pool are value- and factor-dependent. At today's constants
+    the flat $10^{8}$~pico-BTH relay minimum exceeds the factor-scaled size
+    fee for ordinary transactions, so demurrage (from the second halving
+    epoch on) is the term that is progressive in practice (pending \#1688)
   \item \textbf{Deflationary pressure}: 20\% burn creates supply reduction
   \item \textbf{Anti-MEV}: No miner incentive to reorder transactions
-  \item \textbf{Alignment}: Miner income comes from block rewards only
+  \item \textbf{Alignment}: Miner income comes from its share of the block
+    reward only
 \end{itemize}
 
 Earlier designs drew winners with weight
@@ -379,14 +436,13 @@ adversarial simulation (the \texttt{cluster-tax} lottery-selection sweep;
 Section~\ref{sec:economic-modeling}) showed the value term dominates the
 factor tilt in realistic populations, routing much of the pool
 \emph{back} to whales. Path~C (ADR~0009,
-\texttt{docs/research/ct-compatible-lottery-selection.md}) retires the value
-tilt entirely: the payout is a uniform draw whose split-resistance is the
-endogenous reward cap, not the weight. Because consensus must count a
-splitter's \emph{own} outputs in $\rho$, the cap rises in lockstep with the
-tickets bought, pinning the attacker's realized gain at zero --- a
-regime-independent Sybil bound obtained from public signals alone, with no
-zero-knowledge value proof. In honest populations this is strictly more
-equalizing than the retired tilt.
+\path{docs/research/ct-compatible-lottery-selection.md}) retires the value
+tilt entirely: the payout is a uniform draw whose split-resistance was meant
+to come from the endogenous reward cap, not the weight. The research memo's
+net-zero bound assumes a per-block $\rho$ and a per-output charge of
+$f_{\text{lott}}$; the implementation has neither, so the bound does not
+currently hold (pending \#1682). In honest populations the uniform draw is
+more equalizing than the retired tilt.
 
 \input{figures/fee-flow}
 
@@ -397,33 +453,42 @@ The draw runs once \emph{per block}, over the block's accumulated pool:
 \begin{enumerate}
   \item Compute the fee split: burn $0.2\,f_{\text{block}}$; add
     $0.8\,f_{\text{block}}$ plus the emission share to the cumulative pool
-  \item Filter eligible candidates: UTXOs at least 720 blocks old, worth at
-    least $10^{6}$ pico-BTH (1 micro-BTH), and \emph{spent-and-recreated
-    within the last $N = 10{,}000$-block circulation window} --- idle wealth
-    self-excludes and the base fee is the only value gate. Let $\rho$ be the
-    resulting count of eligible outputs
-  \item Set the reward cap $R = \min(\rho \cdot f_{\text{lott}},\, R(h))$,
-    with $f_{\text{lott}} = 0.25$ BTH the lottery base fee and $R(h)$ one
-    block reward; pay out $\min(\text{available},\, R)$ this block and carry
-    any surplus forward
-  \item Derive the seed from the \emph{committed previous block hash} and
-    height,
+  \item Derive the seed from the parent block's proof-of-work fields
+    (protocol 7.0.0, \path{lottery_seed_v2},
+    \path{botho/src/consensus/lottery.rs}):
     \begin{equation}
-    s = \Hash(\text{``LOTTERY\_SEED\_V1''} \,\|\, \text{prev\_block\_hash} \,\|\, h),
+    s = \text{SHA256}(\text{``BOTHO\_LOTTERY\_SEED\_V2''} \,\|\, \text{pow\_hash}_{h-1} \,\|\, \text{prev\_block\_hash}_{h-1} \,\|\, h),
     \end{equation}
-    and select 4 winners \emph{uniformly} without replacement --- every
-    eligible UTXO has equal probability, with no value or cluster-factor
+    where $\text{pow\_hash}_{h-1}$ is the parent's RandomX output and
+    $\text{prev\_block\_hash}_{h-1}$ is the field of its PoW preimage. The
+    parent's header hash is deliberately not an input, because its timestamp
+    and coinbase output can be changed without new proof of work
+  \item Gather candidates: walk the UTXO set from a seed-derived offset,
+    keeping outputs at least 720 blocks old, at most $N = 10{,}000$ blocks old
+    (the circulation window), and worth at least $10^{6}$ pico-BTH, up to
+    10{,}000 candidates (\path{lottery_candidates},
+    \path{botho/src/ledger/store/validation.rs}). Eligibility is by
+    creation height, so coins that have not moved for 10{,}000 blocks drop
+    out. Let $\rho$ be the resulting count of eligible outputs
+  \item Set the reward cap $R = \min(\rho \cdot f_{\text{lott}},\, R(h))$
+    and pay out $\min(\text{available},\, R)$ this block, carrying any
+    surplus forward
+  \item Select 4 winners \emph{uniformly} without replacement: every
+    eligible output has equal probability, with no value or cluster-factor
     weight
-  \item Split the capped payout equally among the 4 winners
+  \item Split the capped payout equally among the winners (integer
+    remainder to the last winner)
 \end{enumerate}
 
-Because the seed depends only on the already-externalized previous block, a
-block proposer cannot bias the draw through transaction selection or ordering
-of the \emph{current} block. Two bounds complete the security argument: the
-per-block reward cap makes seed-grinding unprofitable
-(Section~\ref{sec:security}, Lottery Grinding), and the Sybil cap
-$\rho \cdot f_{\text{lott}}$ makes ticket-splitting net-zero (the reward-cap
-property above).
+The seed is fixed once the parent's proof of work is found, and re-rolling
+it requires a new PoW solution. The candidate set, however, is read from the
+state after block $h-1$, and the PoW does not commit to $h-1$'s
+transactions. Whoever assembles block $h-1$'s body after its PoW is solved can
+choose which eligible outputs it spends, which changes block $h$'s candidates
+and winners at roughly one transaction fee per alternative (as built, pending
+\#1689). The grinding bound and its caveats are in
+Section~\ref{sec:security} (Lottery Grinding); the splitting bound is not met
+as built (above, \#1682).
 
 \subsubsection{Effective Inflation}
 
@@ -484,11 +549,17 @@ multi-output transactions raise them proportionally.
 
 \subsubsection{Block Reward Composition}
 
-Minters receive only the block reward:
+Minters receive the block reward minus the lottery emission share, and no
+fees:
 
 \begin{equation}
-\text{minter\_income} = R(h) \text{ (no fees)}
+\text{minter\_income} = (1 - f_{\text{em}}(h)) \cdot R(h)
 \end{equation}
+
+where $f_{\text{em}}(h)$ is 0 in the first halving epoch and rises 10
+percentage points per epoch to a 50\% cap (\path{lottery_emission_bps},
+\path{cluster-tax/src/monetary.rs}; \path{miner_payout},
+\path{botho/src/block.rs}).
 
 This simplifies minting economics and eliminates fee-based attacks.
 
@@ -575,18 +646,18 @@ Initial reward & 50 BTH & Block reward at genesis \\
 Halving period & 6,307,200 blocks & $\approx$ 1 year (at 5s blocks) \\
 Halving count & 5 & Time-to-tail $\approx$ 5 years \\
 Phase-1 supply & $\approx$611M BTH & Geometric sum of 5 halvings \\
-Tail inflation & 2\% net/yr & Supply-dependent, perpetual \\
-Tail reward & $\approx$1.94 BTH/block & Net, at 611M supply (grows with supply) \\
+Tail inflation & 2.5\% gross/yr & 2\% net + 0.5\% assumed burn; realized net $\approx$2.1--2.53\% \\
+Tail reward & $\approx$2.42 BTH/block & Gross, at 611M supply (recomputed each block) \\
 Min block time & 3 seconds & Consensus floor (very high load) \\
 Reference block time & 5 seconds & Monetary-calculation reference \\
 Max block time & 40 seconds & Idle ceiling \\
 Base fee rate & 1 pico-BTH/byte & Congestion floor (dynamic, $\leq$100$\times$) \\
-Lottery winners/block & 4 & Value-free uniform draw (Path C) \\
+Lottery winners/block & 4 & Uniform draw (Path C); eligibility reads amount \\
 Lottery circulation window & 10,000 blocks & Eligibility horizon ($\approx$14\,h) \\
-Lottery base fee & 0.25 BTH & Reward cap $R = \min(\rho f_{\text{lott}}, R(h))$ \\
+Lottery cap unit & 0.25 BTH & Sizes $R = \min(\rho f_{\text{lott}}, R(h))$; not charged \\
 Emission-to-lottery cap & 50\% of reward & Ramps 10\%/halving epoch \\
 Settlement horizon & 5 years & Capitalized reset / class-downgrade charge \\
-Decoy factor band & $\pm 10\%$ & Keeps ring floor exact on 1$\times$ spends \\
+Decoy factor band & $\pm 10\%$ & Unwired wallet picker; not consensus (\#1686) \\
 Max cluster factor & 6.0$\times$ & Top 1\% wealth multiplier \\
 Decimals & 12 & Smallest unit: 1 picocredit \\
 \bottomrule

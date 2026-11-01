@@ -91,7 +91,7 @@ $\lambda$ & Security parameter \\
 \textbf{Parameter} & \textbf{Value} & \textbf{Description} \\
 \midrule
 Ring size & 20 & Decoys per input \\
-Min block time & 5s & At maximum utilization \\
+Min block time & 3s & Consensus floor (very high load, $\geq$20 tx/s) \\
 Max block time & 40s & At zero utilization \\
 Block size limit & 2 MB & Maximum block size \\
 Transaction limit & 100 KB & Maximum transaction size \\
@@ -142,7 +142,7 @@ Initial block reward & 50 BTH & Genesis reward \\
 Halving period & 6,307,200 blocks & $\approx$1 year (at 5s blocks) \\
 Halving count & 5 & Time-to-tail $\approx$5 years \\
 Phase-1 supply & $\approx$611M BTH & After 5 halvings \\
-Tail emission & 2\% net/yr & Supply-dependent ($\approx$1.94 BTH/block at 611M) \\
+Tail emission & 2.5\% gross/yr & Supply-dependent ($\approx$2.42 BTH/block at 611M); realized net $\approx$2.1--2.53\% \\
 Decimal places & 12 & Smallest: 1 picocredit \\
 Base fee rate & 1 pico-BTH/byte & Minimum fee \\
 Max cluster factor & 6.0$\times$ & Top 1\% multiplier \\

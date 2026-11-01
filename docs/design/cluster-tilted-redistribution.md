@@ -2,6 +2,25 @@
 
 ## Status
 
+**Superseded (payout component)** (2026-10-31, #1703). The cluster-tilted,
+value-weighted payout described here was not adopted: Path C (ADR 0009)
+replaced it with a **uniform** draw over a circulation window, because the
+tilted weight reads the UTXO value. `SelectionMode::ClusterWeighted` remains
+in `cluster-tax/src/lottery.rs` for simulation only; the consensus default is
+`SelectionMode::Uniform`. The other two components did ship: emission routing
+(`lottery_emission_bps`, `cluster-tax/src/monetary.rs`) and demurrage on
+the consensus fee floor (`consensus_fee_floor`,
+`botho/src/ledger/store/validation.rs`; zero in epoch 0, #1685). The
+simulated Gini results below are for the tilted payout and do not measure the
+implemented draw; code-faithful re-runs are #1696 and #1682.
+
+Current specification: [ADR 0009](../decisions/0009-confidential-amounts-economics.md),
+[Path C research memo](../research/ct-compatible-lottery-selection.md),
+whitepaper section 7 (Lottery Mechanism) and the Appendix "Fee Processing"
+pseudocode.
+
+Original status line, kept for history:
+
 **Proposed** — Mechanism empirically validated by simulation (2026-06-11);
 protocol changes not yet implemented. Supersedes the redistribution goals of
 [Asymmetric UTXO Fees](asymmetric-utxo-fees.md) (whose attack-resistance

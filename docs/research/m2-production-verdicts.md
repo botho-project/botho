@@ -163,7 +163,7 @@ $B m2-production --tx-scale {100,1000} --mining {wealth,egalitarian} --whale hon
 $B m2-cumulative --horizon-years {10,20} --fee-model {legacy,consensus}
 ```
 
-The runs above were made at `b3404acf` plus this change. A 20-year pair (on and off) takes about 4 minutes. `--mining` and `--whale` take `wealth|egalitarian|both` and `honest|optimal-decoy|both`. Determinism is covered by a unit test.
+The runs above were made at `b3404acf` plus this change. After merging `c9190d8b` (#1751 emission-model changes), seed 1696 wealth/honest and egalitarian/optimal-decoy reproduce exactly at 10 and 20 years. A 20-year pair (on and off) takes about 4 minutes. `--mining` and `--whale` take `wealth|egalitarian|both` and `honest|optimal-decoy|both`. Determinism is covered by a unit test.
 
 ## Approximations, and which way they lean
 

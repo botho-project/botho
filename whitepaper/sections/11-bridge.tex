@@ -337,9 +337,13 @@ Concretely, for an unwrap at block height $h$:
 \begin{align}
 m &= \left\lfloor h / K \right\rfloor, \label{eq:bridge:epoch}\\
 c_{\mathrm{import}}(m) &= \Hash\!\left(\text{``bridge-import''} \,\|\, m\right), \label{eq:bridge:cluster}\\
-\mathrm{import\_factor}(m) &= \max\!\Big(F,\; \mathrm{ClusterFactorCurve}\big(\textstyle\sum_{\text{unwraps in }m} \mathrm{amount}\big)\Big), \label{eq:bridge:importfactor}
+\mathrm{import\_factor}(m) &= \max\!\Big(F,\; \mathrm{ClusterFactorCurve}\big(W_m\big)\Big), \label{eq:bridge:importfactor}
 \end{align}
-where the epoch length and floor are:
+where $W_m$ is the import cluster's cumulative wealth. It starts at the sum of the
+epoch's unwrap amounts and grows with every downstream output that carries the
+tag. On a spend, the node charges
+$\max(\mathrm{curve}(\text{output-tag wealth}),\ \text{ring centroid},\ F\text{-blend on output tags})$.
+The epoch length and floor are:
 \begin{center}
 \begin{tabular}{lll}
 \toprule
@@ -370,8 +374,11 @@ defeats the split because all unwraps in a window \emph{share one accumulating
 cluster}: intra-epoch splitting piles into the same pool and still hits the high
 factor. Diluting requires spreading across \emph{epochs}, which costs wall-clock
 time ($K$ blocks each)---\textbf{time-as-cost replaces provenance-as-cost}. The
-calibration confirms a 2M-\BTH\ whale needs 541 separate epochs (541 days at
-$K$) to drip-dilute to the floor.
+production-semantics calibration (\#1697) finds a 2M-\BTH\ whale needs 584
+separate epochs to drip-dilute to the floor. Because $K$ is counted in blocks,
+that is 584 days at 5\,s blocks and 2{,}336--4{,}672 days at the 20--40\,s blocks
+observed on testnet. The split-game wall holds only while the import tag cannot
+be shed by other means; see the caveat below.
 
 \subsubsection{Shared fate and decay by circulation}
 
@@ -383,17 +390,34 @@ This shared-fate coupling is judged a feature: bridge-inflow-\emph{rate} becomes
 a concentration signal---a sudden capital flood is treated as maximally
 concentrated, an organic trickle enters benignly. The floor $F$ plus a modest
 $K$ bound the collateral to innocent small co-entrants, whose small coins blend
-down quickly. Decay is \emph{only} by circulation: an imported coin's factor
-falls solely through value-weighted tag-blending on spends (a worst-case
-$6\times$ flood import blends to the $1.5\times$ floor in $\approx 9$
-domestic-mixing spends); sitting idle never normalizes imported wealth.
+down quickly. The design intent is that decay happens \emph{only} by circulation: an
+imported coin's factor falls through value-weighted tag-blending on spends. A
+flood-epoch coin that mixes with equal domestic value each spend falls from
+$5.44\times$ to $1.43\times$ in 9 spends and its tag is pruned on the 10th. The
+import cluster's wealth is cumulative: every downstream output carrying the tag
+adds to it. So the shared-fate collateral keeps growing as the epoch's coins
+circulate.
+
+\paragraph{Caveat: the floor is read from output tags (target-state).} As built, the
+import floor is a blend over the spender's \emph{output} tags, and consensus
+rejects only tag inflation. The stock wallet's 5\% per-transfer decay prunes the
+import tag after 135 self-spends with no domestic money at all. A spender who
+declares weight$\,\div\,20$ per hop sheds a $5.44\times$ flood coin to $1\times$
+in 3 spends for about 0.15\% of value. Until consensus derives the floor from
+inputs (\#1687, \#1686), the guarantees of this subsection hold only for
+compliant wallets that do not churn. The re-calibration
+(\texttt{docs/research/bridge-import-calibration.md}) leaves $K$ and $F$
+unchanged.
 
 \paragraph{Confidential-amounts-clean by construction.} The epoch cluster's
 wealth is the sum of unwrap amounts, which are \emph{public at the bridge
 boundary by necessity} (\S\ref{sec:bridge:privacy}). The import factor is
 therefore computable from already-public data with no zero-knowledge gadget---it
 sidesteps, for imported coins, the confidential-amounts problem that domestic
-cluster-wealth accounting faces.
+cluster-wealth accounting faces. This holds for the epoch's initial unwrap
+total. As built, $W_m$ also accumulates the amounts of downstream outputs that
+carry the tag, and those amounts are not public under confidential amounts
+(\#902, \#1697).
 
 Figure~\ref{fig:bridge:unwrap} shows the unwrap flow with import tagging.
 

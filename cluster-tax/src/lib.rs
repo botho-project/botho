@@ -40,6 +40,7 @@ pub mod consensus_fee;
 pub mod crypto;
 pub mod demurrage;
 pub mod dynamic_fee;
+pub mod fee_floor_inputs;
 pub mod monetary;
 pub mod signing;
 #[cfg(any(feature = "cli", test))]
@@ -65,6 +66,11 @@ pub use consensus_fee::{
     consensus_fee_breakdown, consensus_fee_model, consensus_tx_size_bytes, mainnet_monetary_policy,
     ClaimedClass, ConsensusFeeBreakdown, ConsensusFeeInputs, ConsensusFeeParams, FeeModelMode,
     SimConsensusFee, RELAY_MIN_TX_FEE,
+};
+// Pure mirrors of the ledger's DB-dependent fee-floor resolution (#1697).
+pub use fee_floor_inputs::{
+    resolve_fee_floor, resolve_fee_floor_at, FloorOutput, ResolvedFeeFloor, TagPair,
+    WALLET_CLUSTER_DECAY_RATE,
 };
 
 // ============================================================================

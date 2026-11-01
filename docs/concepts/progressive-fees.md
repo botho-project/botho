@@ -128,7 +128,7 @@ As coins circulate through legitimate economic activity, their source_wealth nat
 ![Provenance Decay](../../cluster-tax/docs/figures/provenance_decay.png)
 
 Circulating through merchants diffuses attribution two ways at once:
-- Each **eligible hop** decays tags by 5%
+- Each **transfer** made by a standard wallet decays tags by 5% (wallet policy, not consensus; #1687)
 - **Blending** with counterparties' coins dilutes attribution much faster than decay alone — a value-weighted average with every combined input
 
 **This is by design**: Well-circulated money should pay lower fees than freshly-hoarded wealth.
@@ -187,10 +187,21 @@ See [Privacy](privacy.md#progressive-transaction-fees) for detailed analysis.
 | w_mid | 100,000 BTH | Log-sigmoid midpoint (factor 3.5x) |
 | Curve domain | log₂(cluster wealth) | Integer-only fixed point (consensus-deterministic) |
 | Output penalty | quadratic, capped at 100x | Anti-UTXO-farming multiplier |
-| Decay rate | 5% per eligible hop | Tag decay when UTXO meets age requirement |
-| min_age_blocks | 720 blocks (~2 hours) | Minimum UTXO age for decay eligibility |
+| Decay rate | 5% per transfer | Wallet policy (`DEFAULT_CLUSTER_DECAY_RATE`); consensus applies none |
+| min_age_blocks | not implemented | The 720-block age gate below is a design, not enforced (#1687) |
 
-## Decay Mechanism: Age-Based Gating
+## Decay Mechanism: Age-Based Gating (design, not implemented)
+
+> **As built (#1703):** none of this section runs in the node. Consensus
+> applies no decay (`CONSENSUS_TAG_DECAY_RATE = 0`,
+> `botho/src/ledger/store.rs`) and only rejects outputs that claim *more*
+> cluster mass than their inputs, so a modified wallet can drop tags in one
+> transaction. The stock wallets decay 5% on every transfer with no age gate
+> (`botho/src/wallet.rs`, `botho-wallet/src/transaction.rs`), so a
+> weight halves after about 13.5 transfers however fast they are made. The
+> age-gated model below exists only as `cluster-tax/src/age_decay.rs`, with no
+> production caller, and the 12-per-day bound and attack table are not
+> enforced. Tag persistence is an open decision in #1687.
 
 Botho uses **age-based decay** to prevent wash trading attacks while preserving privacy.
 

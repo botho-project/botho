@@ -204,7 +204,6 @@ async fn scan_batch(
         handler,
         sync_state,
         chain_info.height,
-        &chain_info.tip_hash,
         config.min_confirmations,
         config.effective_batch_size(),
         |start, end| get_outputs(client, &config.rpc_endpoints[0], start, end),
@@ -215,8 +214,6 @@ async fn scan_batch(
 #[derive(serde::Deserialize)]
 struct ChainInfo {
     height: u64,
-    #[serde(rename = "tipHash")]
-    tip_hash: String,
 }
 
 async fn get_chain_info(client: &reqwest::Client, endpoint: &str) -> Result<ChainInfo> {

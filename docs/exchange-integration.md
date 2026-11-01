@@ -284,6 +284,18 @@ the output handler (for example the webhook) fails, the checkpoint is not
 advanced and the whole batch is retried on the next pass, so handlers should
 de-duplicate on `tx_hash:output_index`.
 
+**Upgrading from a release before the confirmation fix (#1779).** Older
+scanner builds, run with `min_confirmations > 1`, skipped almost every deposit,
+and upgrading does not recover them. After upgrading, rescan from a height
+safely before the first affected deposit, for example:
+
+```bash
+botho-exchange-scanner scan --from-height <earlier-height>
+```
+
+Rescanning re-reports deposits that were already credited, so de-duplicate on
+`tx_hash:output_index` before crediting anything.
+
 ### Confirmation Requirements
 
 | Risk Level | Confirmations | Wait Time |

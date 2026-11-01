@@ -1,5 +1,16 @@
 # Cluster Tag Decay: Design Specification
 
+> **As built (2026-10-31, #1703): neither design below runs in the node.**
+> Consensus applies no decay (`CONSENSUS_TAG_DECAY_RATE = 0`,
+> `botho/src/ledger/store.rs`) and only rejects tag *inflation*
+> (`check_cluster_tag_inheritance`, `store.rs`), so lower or empty output
+> tags are valid. The stock wallets apply the naive 5%-per-transfer decay this
+> document warns against, with no age gate (`DEFAULT_CLUSTER_DECAY_RATE`,
+> `botho/src/wallet.rs`, `botho-wallet/src/transaction.rs`). The
+> age-based model exists as `cluster-tax/src/age_decay.rs` with no production
+> caller. The 12-decays-per-day bound below is therefore not enforced. What
+> consensus should guarantee about tag persistence is open in #1687.
+
 ## Overview
 
 This document specifies the decay mechanisms for cluster tags in Botho's progressive fee system. Two approaches are detailed:

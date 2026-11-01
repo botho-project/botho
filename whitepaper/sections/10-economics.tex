@@ -83,9 +83,14 @@ The expected cluster factor depends on wealth distribution:
 \end{tabular}
 \end{table}
 
-\textit{Fees are the congestion-floor minimum (1 pico-BTH/byte $\times$ 4{,}096
-bytes $\times$ factor); $4{,}000$ pico-BTH $= 4\times10^{-9}$ BTH. Under
-congestion the dynamic base multiplies these by up to $100\times$.}
+\textit{Fees are the size term of the congestion-floor consensus minimum
+(1 pico-BTH/byte $\times$ 4{,}096 bytes $\times$ factor), before the output
+penalty and demurrage; $4{,}000$ pico-BTH $= 4\times10^{-9}$ BTH. Under
+congestion the dynamic base multiplies these by up to $100\times$. Default
+nodes also require the flat relay minimum \path{MIN_TX_FEE} $= 10^{8}$
+pico-BTH (\path{transaction/clsag/src/lib.rs}), which exceeds every row,
+so at today's constants an ordinary wallet pays the same fee at every
+percentile (pending \#1688; the relay minimum is not a consensus rule, \#1684).}
 
 \subsubsection{Redistribution Effect}
 
@@ -103,17 +108,18 @@ by reducing supply:
 \text{redistribution}_{\text{indirect}} = 0.2 \times \sum_{\text{tx}} f_{\text{total}}
 \end{equation}
 
-\textbf{Progressive properties of lottery selection}:
+\textbf{Lottery selection as built}:
 \begin{itemize}
-  \item Winner weight is $w_i = v_i \times (\phi_{\max} - \phi_i + 1) /
-    \phi_{\max}$: value-weighted (splitting a position never increases total
-    weight) and tilted $\phi_{\max}$:1 toward coins from low-wealth clusters
-  \item No payout term depends on UTXO count, account count, or any other
-    structure a holder controls for free --- the tilt depends only on
-    cluster provenance, which is inherited through splits
-  \item Net effect: redistribution from wealthy clusters toward commerce and
-    background coins, robust to splitting strategies
-    (Section~\ref{sec:economic-modeling})
+  \item Winners are drawn uniformly among eligible outputs
+    (\path{SelectionMode::Uniform}, \path{cluster-tax/src/lottery.rs});
+    every eligible output is one ticket, regardless of value or cluster
+    factor (Section~\ref{sec:monetary})
+  \item A uniform per-output draw depends on UTXO count, which a holder
+    controls. Its split resistance rests on the Path~C reward cap, whose
+    premises the implementation does not meet (pending \#1682); coinbase and
+    payout outputs are also free tickets (pending \#1690)
+  \item Progressivity therefore comes from the intake side (demurrage, and
+    the factor-scaled fee where it binds), not from the payout weight
 \end{itemize}
 
 \subsubsection{Anti-Hoarding Dynamics}
@@ -132,12 +138,11 @@ Creates net pressure toward circulation:
 \text{holding\_cost} = \text{dilution} - \text{lottery\_income} + \text{opportunity\_cost}
 \end{equation}
 
-Holders of low-factor coins (typically acquired through genuine commerce)
-receive proportionally more lottery income, partially offsetting dilution.
-Wealthy clusters experience full dilution with tilted-down lottery income.
-Holding-side pressure cannot be escaped structurally: splitting does not
-change cluster attribution, and shedding attribution through artificial
-transfers is rate-bounded by tag decay (Section~\ref{sec:security}).
+Lottery income is per eligible output, not tilted by cluster factor (as
+built, Section~\ref{sec:monetary}). Splitting does not change cluster
+attribution, but shedding attribution is not rate-bounded by consensus: tags
+can be dropped at the cost of the class-downgrade charge (as built, pending
+\#1687, \#1686, \#1685; Section~\ref{sec:tag-decay}).
 
 \paragraph{Intuition: why a holding cost, and why a targeted one.}
 A fixed-supply currency in the Bitcoin mold makes hoarding costless, indeed
@@ -327,9 +332,15 @@ reproducible via \texttt{cluster-tax-sim lottery-experiment -{}-blocks 7884000
 add-ons. Emission-routing is the height-scheduled emission share paid into the
 lottery pool (Section~\ref{sec:monetary}, ramping to a 50\% cap), and
 demurrage is the cluster-scaled stock-level term on the consensus fee floor
-(Section~\ref{sec:cluster-tags}). The simulated ``cluster-tilted + emission +
-demurrage'' configuration is therefore the mechanism the protocol implements,
-at a representative operating point.
+(Section~\ref{sec:cluster-tags}). The payout lever is not: the
+``cluster-tilted'' rows below simulate the retired value-weighted, tilted
+draw, while the protocol draws winners uniformly
+(\path{SelectionMode::Uniform}, \path{cluster-tax/src/lottery.rs}).
+The table is therefore an earlier design's result, not a measurement of the
+implemented mechanism. The row closest to the implemented draw is ``Uniform per UTXO
++ emission'', which inverts under gaming; the Path~C reward cap was meant to
+prevent that inversion, and as built it does not bind (\#1682). Code-faithful re-runs are tracked in \#1696 (M2 at
+production scale) and \#1682 (splitting under the implemented cap).
 
 \begin{table}[h]
 \centering
@@ -370,21 +381,17 @@ Three structural results:
     position over five years. Attacking the mechanism funds it.
 \end{enumerate}
 
-\textbf{Expected lottery income under cluster tilt}. For a holder with
-value $v$ in coins of cluster factor $\phi$, expected income per
-distribution of pool $P$ is:
-
+\textbf{Expected lottery income as built}. Under the uniform draw, a holder
+with $k$ of the $\rho$ eligible outputs in the candidate set expects, per
+block of payout $P$,
 \begin{equation}
-E[\text{income}] = P \cdot
-\frac{v \, (\phi_{\max} - \phi + 1)}
-     {\sum_j v_j \, (\phi_{\max} - \phi_j + 1)}
+E[\text{income}] \approx P \cdot \frac{k}{\rho},
 \end{equation}
-
-This is independent of how $v$ is divided across UTXOs. A factor-1 holder
-earns $\phi_{\max} = 6$ times the per-value income of a factor-6 holder;
-the only way to improve one's tilt is to reduce $\phi$, which requires
-genuine commerce (tag decay is rate-bounded; see
-Section~\ref{sec:security}).
+independent of value and cluster factor. This depends on how a position is
+divided across outputs, which is why the splitting premises (\#1682) matter.
+The tilted formula of earlier drafts,
+$P \cdot v(\phi_{\max}-\phi+1) / \sum_j v_j(\phi_{\max}-\phi_j+1)$, describes
+the retired \texttt{ClusterWeighted} mode only.
 
 \textbf{Magnitude and headroom}. At the conservative parameters above, the
 combined mechanism reduces the Gini coefficient by $0.078 \pm 0.0002$ per five
@@ -519,16 +526,14 @@ Mixing requires acquiring low-cluster UTXOs through genuine trade. With
 efficient markets, arbitrage prevents free cluster factor reduction.
 
 \textbf{Lottery Grinding}.
-Miners cannot influence the random seed, which is derived solely from the
-committed previous block hash and height
-(Section~\ref{sec:security}, Lottery Grinding). Cost of grinding:
-
-\begin{equation}
-\text{Cost}_{\text{grind}} = E[\text{hashpower}] \cdot t_{\text{grind}} \cdot P_{\text{electricity}} \gg E[\text{lottery\_gain}]
-\end{equation}
-
-Grinding is unprofitable: expected lottery gain is proportional to UTXOs held,
-not hashpower.
+The seed is bound to the parent block's proof of work (protocol 7.0.0,
+Section~\ref{sec:security}, Lottery Grinding), so each new seed costs a PoW
+solution. A miner that discards a solution forfeits its coinbase,
+$(1-f_{\text{em}})\,R(h)$, not the full reward $R(h)$; with the lottery
+emission share $f_{\text{em}}$ at its 50\% cap, that is half a reward against
+a redirectable payout of up to one reward. The candidate set can also be
+changed without new PoW through the parent block's transaction set (as
+built, pending \#1689).
 
 \subsection{Economic Risks}
 

@@ -5,7 +5,7 @@
 % A graph comparing emission schedules. X-axis shows years (0-12), Y-axis
 % shows block reward. Botho's curve (blue, stepped) starts at 50 BTH and
 % halves each year (50, 25, 12.5, 6.25, 3.125) for 5 years, then transitions
-% to perpetual supply-dependent tail emission (~1.94 BTH/block net at the
+% to perpetual supply-dependent tail emission (~2.42 BTH/block gross at the
 % ~611M tail-onset supply, growing as supply grows). Bitcoin's curve (orange,
 % stepped) shows discrete halvings every 4 years, eventually reaching zero.
 % Botho reaches its tail in ~5 years while ensuring perpetual security funding.
@@ -34,7 +34,7 @@
     \draw[gray!30, dashed] (0,40) -- (12,40);
     \draw[gray!30, dashed] (0,50) -- (12,50);
 
-    % Botho annual halvings: 50, 25, 12.5, 6.25, 3.125, then tail ~1.94
+    % Botho annual halvings: 50, 25, 12.5, 6.25, 3.125, then tail ~2.42 (gross)
     \draw[blue, thick]
         (0,50) -- (1,50)
         (1,50) -- (1,25)
@@ -45,8 +45,8 @@
         (3,6.25) -- (4,6.25)
         (4,6.25) -- (4,3.125)
         (4,3.125) -- (5,3.125)
-        (5,3.125) -- (5,1.94)
-        (5,1.94) -- (12,1.94);
+        (5,3.125) -- (5,2.42)
+        (5,2.42) -- (12,2.42);
 
     % Bitcoin step function
     \draw[red, thick]
@@ -57,20 +57,20 @@
         (8,12.5) -- (12,12.5);
 
     % Tail emission line (rises gently with supply)
-    \draw[blue, dashed] (5,1.94) -- (12,3.0);
+    \draw[blue, dashed] (5,2.42) -- (12,2.89);
 
     % Legend
     \draw[blue, thick] (8.5,48) -- (9.5,48) node[right, font=\scriptsize] {Botho (annual halvings)};
     \draw[red, thick] (8.5,43) -- (9.5,43) node[right, font=\scriptsize] {Bitcoin (4-yr halvings)};
-    \draw[blue, dashed] (8.5,38) -- (9.5,38) node[right, font=\scriptsize] {Tail (2\% net, supply-dependent)};
+    \draw[blue, dashed] (8.5,38) -- (9.5,38) node[right, font=\scriptsize] {Tail (2.5\% gross, supply-dependent)};
 
     % Annotation
     \node[font=\scriptsize] at (9,8) {Perpetual security};
 \end{tikzpicture}
 \caption{Block reward emission schedule. Botho halves the reward each year
 (50, 25, 12.5, 6.25, 3.125 BTH) for 5 years, then transitions to perpetual
-supply-dependent tail emission targeting 2\% net annual inflation
-($\approx$1.94 BTH/block net at the $\approx$611M tail-onset supply, rising as
+supply-dependent tail emission at a 2.5\% gross annual rate
+($\approx$2.42 BTH/block at the $\approx$611M tail-onset supply, rising as
 supply grows), compared to Bitcoin's 4-year halvings toward zero. Tail
 emission ensures long-term security funding.}
 \label{fig:emission-curve}

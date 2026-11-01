@@ -35,7 +35,6 @@ pub async fn scan_confirmed_batch<F, Fut>(
     handler: &dyn OutputHandler,
     sync_state: &mut SyncState,
     chain_height: u64,
-    tip_hash: &str,
     min_confirmations: u64,
     batch_size: u64,
     fetch: F,
@@ -85,13 +84,7 @@ where
         handler.handle_batch(&deposits).await?;
     }
 
-    sync_state.update_after_batch(
-        end,
-        tip_hash,
-        deposit_count,
-        total_amount,
-        outputs.len() as u64,
-    );
+    sync_state.update_after_batch(end, deposit_count, total_amount, outputs.len() as u64);
 
     Ok(deposit_count)
 }
@@ -195,7 +188,6 @@ mod tests {
             handler,
             state,
             chain_height,
-            "tip",
             min_conf,
             batch,
             |s, e| async move { chain.fetch(s, e) },
@@ -355,16 +347,9 @@ mod tests {
         let rec = Recorder::default();
         let mut state = SyncState::default();
 
-        let res = scan_confirmed_batch(
-            &scanner,
-            &rec,
-            &mut state,
-            30,
-            "tip",
-            10,
-            100,
-            |_, _| async { Ok(vec![stray]) },
-        )
+        let res = scan_confirmed_batch(&scanner, &rec, &mut state, 30, 10, 100, |_, _| async {
+            Ok(vec![stray])
+        })
         .await;
         assert!(res.is_err());
         assert!(rec.ids().is_empty());
