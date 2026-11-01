@@ -55,7 +55,7 @@ Las propiedades clave:
 | **Etiquetas concentradas** | Recién acuñada, aún sin circular → Comisiones altas |
 | **Etiquetas diversificadas** | Negociada por muchas manos → Comisiones bajas |
 | **Resistente a la división** | Dividir preserva la concentración de etiquetas |
-| **Resistente al decaimiento** | Solo el comercio real reduce las etiquetas |
+| **A prueba de inflación** | Las salidas nunca pueden reclamar más peso de clúster que sus entradas |
 
 ### Por qué esto es progresivo
 
@@ -168,11 +168,11 @@ Veredicto: ataque derrotado
 **Wash trading (autotransferencias):**
 ```
 Atacante: envía a sí mismo rápidamente para decaer las etiquetas
-Resultado: la restricción de antigüedad requiere 720 bloques por decaimiento
-        Como máximo ~12 decaimientos por día ≈ 46 % de decaimiento diario
-        1 semana de wash trading: ~99 % de decaimiento
-        Coste: ~84 comisiones de transacción (cada una alimentando la lotería)
-Veredicto: caro, lento, detectable
+Resultado: sin restricción de antigüedad; el consenso no aplica decaimiento ni limita la frecuencia
+        Los monederos estándar decaen un 5 % por transferencia (~50 % tras ~14 transferencias)
+        El consenso acepta etiquetas de salida menores o vacías (solo rechaza la inflación)
+        Coste: comisiones de transacción (que alimentan la lotería) + cargo por bajada de clase
+Veredicto: no limitado en frecuencia por el protocolo (decisión abierta, #1687)
 ```
 
 ### El panorama completo

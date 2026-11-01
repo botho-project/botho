@@ -52,9 +52,9 @@ Entrada 2: 30 BTH {cluster_B: 100%}
 Salida: 100 BTH {cluster_A: 70%, cluster_B: 30%}
 ```
 
-**4. Las etiquetas decaen con el tiempo**
+**4. Las etiquetas decaen al moverse las monedas**
 
-Cada salto de transacción reduce la etiqueta un 5 %, repartiendo la atribución por toda la economía. Pero el decaimiento solo se aplica si el UTXO tiene al menos 720 bloques de antigüedad (de una a unas pocas horas, según el tiempo de bloque adaptativo a la carga), lo que previene ataques de wash trading.
+Los monederos estándar reducen los pesos de las etiquetas un 5 % en cada transferencia, repartiendo la atribución por toda la economía: un peso se reduce a la mitad tras unas 13,5 transferencias. Es una regla del monedero, no del consenso. No hay restricción por antigüedad, y la red en sí no aplica ningún decaimiento; solo rechaza las salidas que reclaman *más* peso de clúster que sus entradas. Qué debe garantizar el protocolo sobre la persistencia de las etiquetas es una decisión abierta (#1687).
 
 ### Por qué dividir no funciona
 
@@ -119,20 +119,18 @@ Esto previene la evasión de comisiones: no puedes seleccionar a dedo señuelos 
 
 ### Detalles del mecanismo de decaimiento
 
-Para prevenir el wash trading (enviarte fondos a ti mismo repetidamente para decaer las etiquetas):
+Cómo funciona el decaimiento hoy (tal como está implementado):
 
-**Restricción por antigüedad:**
-- El decaimiento solo se aplica a UTXO con al menos 720 bloques de antigüedad
-- Las salidas nuevas de autotransferencias rápidas no decaen
-- La restricción de antigüedad limita de forma natural el decaimiento a ~12 eventos por día
+- **Política del monedero:** los monederos estándar (el monedero del nodo y el monedero CLI) mezclan las etiquetas de las entradas ponderadas por valor y luego reducen el resultado un 5 % en cada transferencia
+- **Sin restricción por antigüedad:** el decaimiento se aplica sin importar lo reciente que sea la moneda gastada, de modo que un peso se reduce a la mitad tras unas 13,5 transferencias, por rápidas que sean
+- **Consenso:** no aplica ningún decaimiento y solo rechaza la *inflación* de etiquetas (salidas que reclaman más peso de clúster que las entradas). Se aceptan etiquetas de salida menores o vacías, así que un monedero modificado puede eliminar las etiquetas en una sola transacción
 
-**Limitación de tasa natural:**
+**El wash trading (enviarte fondos a ti mismo repetidamente para decaer las etiquetas) no está limitado en frecuencia por el protocolo.** Su coste son las comisiones de transacción y el cargo de demurrage por bajada de clase, no el tiempo. Versiones anteriores de esta documentación describían una restricción de antigüedad de 720 bloques que limitaba el decaimiento a ~12 eventos por día; la red no aplica ese diseño. La persistencia de las etiquetas es una decisión abierta (#1687).
 
-| Ataque | Resultado |
-|--------|--------|
-| 100 autotransferencias rápidas | 0 % de decaimiento (todas las salidas demasiado nuevas) |
-| Ataque paciente (1 día) | ~46 % de decaimiento máximo (solo ~12 saltos elegibles) |
-| Ataque paciente (1 semana) | ~99 % de decaimiento, pero has pagado ~84 comisiones de transacción |
+| Escenario | Resultado (monedero estándar) |
+|-----------|-------------------------------|
+| Una transferencia | 5 % de decaimiento |
+| ~14 transferencias (a cualquier velocidad) | ~50 % de decaimiento |
 | Retener sin transaccionar | 0 % de decaimiento |
 
 ### Consideraciones de privacidad
@@ -155,8 +153,8 @@ El sistema de etiquetas de clúster crea incentivos alineados:
 
 | Parámetro | Valor | Propósito |
 |-----------|-------|---------|
-| Tasa de decaimiento | 5 % por salto elegible | Difusión gradual de etiquetas |
-| Antigüedad mínima del UTXO (decaimiento + lotería) | 720 bloques | Prevención de wash trading |
+| Tasa de decaimiento | 5 % por transferencia (política del monedero; el consenso no aplica ninguno) | Difusión gradual de etiquetas |
+| Antigüedad mínima del UTXO (lotería) | 720 bloques | Elegibilidad para la lotería |
 | Valor mínimo del UTXO (lotería) | 1 µBTH | Exclusión de polvo (dust) |
 | Rango del factor de clúster | 1x–6x (punto medio 3.5x en 100K BTH) | Comisiones progresivas |
 | Tamaño del anillo | 20 | Conjunto de privacidad para la propagación de etiquetas |

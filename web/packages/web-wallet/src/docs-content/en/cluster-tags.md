@@ -52,9 +52,9 @@ Input 2: 30 BTH {cluster_B: 100%}
 Output: 100 BTH {cluster_A: 70%, cluster_B: 30%}
 ```
 
-**4. Tags Decay Over Time**
+**4. Tags Decay as Coins Move**
 
-Each transaction hop decays the tag by 5%, spreading attribution across the economy. But decay only applies if the UTXO is at least 720 blocks old (one to a few hours, depending on the load-adaptive block time), preventing wash trading attacks.
+The standard wallets decay tag weights by 5% on every transfer, spreading attribution across the economy: a weight halves after about 13.5 transfers. This is a wallet rule, not a consensus rule. There is no age gate, and the network itself applies no decay; it only rejects outputs that claim *more* cluster weight than their inputs. What the protocol should guarantee about tag persistence is an open decision (#1687).
 
 ### Why Splitting Doesn't Work
 
@@ -119,20 +119,18 @@ This prevents fee evasion — you can't cherry-pick low-factor decoys to cut you
 
 ### Decay Mechanism Details
 
-To prevent wash trading (sending to yourself repeatedly to decay tags):
+How decay works today (as built):
 
-**Age-Based Gating:**
-- Decay only applies to UTXOs at least 720 blocks old
-- New outputs from rapid self-transfers don't decay
-- The age gate naturally caps decay at ~12 events per day
+- **Wallet policy:** the standard wallets (node wallet and CLI wallet) blend input tags by value, then decay the result by 5% on every transfer
+- **No age gate:** decay applies however young the spent coin is, so a weight halves after about 13.5 transfers no matter how quickly they are made
+- **Consensus:** applies no decay and only rejects tag *inflation* (outputs claiming more cluster weight than the inputs). Lower or empty output tags are accepted, so a modified wallet can drop tags in one transaction
 
-**Natural rate limiting:**
+**Wash trading (sending to yourself repeatedly to decay tags) is not rate-limited by the protocol.** Its cost is the transaction fees and the demurrage class-downgrade charge, not time. Earlier versions of these docs described a 720-block age gate capping decay at ~12 events per day; that design is not enforced by the network. Tag persistence is an open decision (#1687).
 
-| Attack | Result |
-|--------|--------|
-| 100 rapid self-transfers | 0% decay (all outputs too young) |
-| Patient attack (1 day) | ~46% max decay (only ~12 eligible hops) |
-| Patient attack (1 week) | ~99% decay — but you've paid ~84 transaction fees |
+| Scenario | Result (stock wallet) |
+|----------|-----------------------|
+| One transfer | 5% decay |
+| ~14 transfers (any speed) | ~50% decay |
 | Holding without transacting | 0% decay |
 
 ### Privacy Considerations
@@ -155,8 +153,8 @@ The cluster tag system creates aligned incentives:
 
 | Parameter | Value | Purpose |
 |-----------|-------|---------|
-| Decay rate | 5% per eligible hop | Gradual tag diffusion |
-| Min UTXO age (decay + lottery) | 720 blocks | Wash trading prevention |
+| Decay rate | 5% per transfer (wallet policy; consensus applies none) | Gradual tag diffusion |
+| Min UTXO age (lottery) | 720 blocks | Lottery eligibility |
 | Min UTXO value (lottery) | 1 µBTH | Dust exclusion |
 | Cluster factor range | 1x–6x (midpoint 3.5x at 100K BTH) | Progressive fees |
 | Ring size | 20 | Privacy set for tag propagation |
