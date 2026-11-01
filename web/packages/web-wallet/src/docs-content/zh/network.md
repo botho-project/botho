@@ -61,7 +61,7 @@ Botho 使用 libp2p 进行联网，它支持多种发现机制：
 | 手续费公式 | per-byte rate × size × cluster factor × output penalty | 基于大小、随财富渐进 |
 | 集群系数 | 1x–6x | 源自币来源的渐进式乘数 |
 | 输出惩罚 | quadratic, capped at 100x | 反 UTXO 农场 |
-| 手续费去向 | 80% lottery / 20% burned | 再分配加上通缩压力 |
+| 手续费去向 | 80% lottery / 20% burned | 抽奖奖金加上通缩压力 |
 
 ### 端口参考
 

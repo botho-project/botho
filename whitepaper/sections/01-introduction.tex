@@ -89,8 +89,11 @@ This philosophy manifests in concrete design decisions:
     Permanent data receives permanent protection; ephemeral data can use
     efficient classical cryptography.
 
-  \item \textbf{Fair economics}: Progressive fees discourage wealth
-    concentration. Perpetual tail emission ensures sustainable security.
+  \item \textbf{Fair economics}: Progressive fees, cluster-scaled
+    demurrage and a fee-and-emission lottery are aimed at wealth
+    concentration; that they measurably reduce it is not yet demonstrated
+    (Section~\ref{sec:redistribution-status}). Perpetual tail emission
+    ensures sustainable security.
     Fee burning aligns incentives with network health.
 
   \item \textbf{Community consensus}: The Stellar Consensus Protocol~\cite{scp}
@@ -120,7 +123,10 @@ following novel contributions:
   \item \textbf{Progressive fee mechanism}: We introduce cluster-based
     fees that increase with wealth concentration. Unlike identity-based
     approaches, this preserves privacy while resisting Sybil attacks---fees
-    are based on coin \textit{ancestry}, not current ownership.
+    are based on coin \textit{ancestry}, not current ownership. The fee
+    schedule is progressive; a measurable reduction in inequality from the
+    combined mechanism is not demonstrated at production parameters
+    (Section~\ref{sec:redistribution-status}).
 
   \item \textbf{Dynamic block timing}: Block intervals adapt to network
     load (3--40 seconds, 5-second steady-state reference), creating

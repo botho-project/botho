@@ -1,6 +1,30 @@
-# Cluster-Tilted Redistribution: Validated Design
+# Cluster-Tilted Redistribution: Design History
 
 ## Status
+
+**Redistribution not demonstrated (2026-11-01, operator ruling on #1727 /
+#1682; restated in #1800).** The mechanisms the protocol implements
+(progressive cluster-factor fees, cluster demurrage, a lottery funded by 80%
+of fees plus an emission share, cluster tags) are specified and implemented
+as described elsewhere, but measurable inequality reduction is **not
+demonstrated at production parameters**:
+
+- The code-faithful re-run ([M2 at production parameters](../research/m2-production-verdicts.md),
+  #1696 / PR #1790) measures the mechanism's own ΔGini at −0.028 to +0.001
+  (3-seed means, 10 and 20 years) against the 0.05 bar, and at most +0.019
+  even at 1000x the transaction rate.
+- Lottery ticket-splitting is profitable at all 192 points of the
+  faithful-to-code grid (#1761, issue #1682).
+- A sim-only redesign study is under way (#1801), targeting tickets
+  proportional to hashpower and output count, frequent spenders losing their
+  tickets, tag decay erasing demurrage at high transaction density, and
+  per-output splitting. No constant or consensus rule changes until a
+  candidate passes the #1790 harness and the #1761 grid.
+
+Every ΔGini figure and "validated", "passes" or "margin" claim below comes
+from legacy harnesses (a tilted draw, a flat fee, one cluster per agent, no
+mining) and is kept as the record of how the design was chosen. None of it is
+a property of the protocol.
 
 **Superseded (payout component)** (2026-10-31, #1703). The cluster-tilted,
 value-weighted payout described here was not adopted: Path C (ADR 0009)
@@ -12,7 +36,8 @@ in `cluster-tax/src/lottery.rs` for simulation only; the consensus default is
 the consensus fee floor (`consensus_fee_floor`,
 `botho/src/ledger/store/validation.rs`; zero in epoch 0, #1685). The
 simulated Gini results below are for the tilted payout and do not measure the
-implemented draw; code-faithful re-runs are #1696 and #1682.
+implemented draw; the code-faithful re-runs (#1696, #1761) are summarised
+above.
 
 Current specification: [ADR 0009](../decisions/0009-confidential-amounts-economics.md),
 [Path C research memo](../research/ct-compatible-lottery-selection.md),
@@ -153,10 +178,11 @@ share of a cluster's coins raises that cluster's wealth and hence its factor.
 > when they spend), and coinbase-lineage clusters keep mined wealth at
 > about 1x. See
 > [`m2-production-verdicts.md`](../research/m2-production-verdicts.md).
-> Whether to add a redistribution source or restate the criterion is open
-> in **#1727**. The ratified *semantic* (W is cumulative and monotone) is
-> unchanged; what no longer holds is the redistribution margin it was
-> ratified on.
+> The operator ruling on #1727 (2026-11-01) restated the claim: the
+> redistribution is not demonstrated, and a sim-only redesign is under study
+> in #1801 (see Status above). The ratified *semantic* (W is cumulative and
+> monotone) is unchanged; what no longer holds is the redistribution margin
+> it was ratified on.
 
 **Status: RATIFIED 2026-07-05 (option 2, accept-and-document).** Cycle-6 audit
 item **M2** (#605) asked whether `cluster_wealth_db` — which is
@@ -195,10 +221,11 @@ at long horizons):
 | 20yr honest | +0.5644 | PASS | 5.745x PASS |
 | 20yr gamed | +0.5745 | PASS | 5.745x PASS |
 
-Cumulative semantics on the recalibrated curve pass the decision rule with a
-4–11× margin, at both horizons, honest and gamed. Redistribution *strengthens*
-with horizon (Gini 0.93 → 0.37 at 20yr), and the gamed runs do marginally
-better than honest — whale splitting/churning under cumulative tagging simply
+In the legacy harness, cumulative semantics on the recalibrated curve passed
+the decision rule with a 4–11× margin, at both horizons, honest and gamed
+(historical result; it does not hold at production parameters, see Status).
+In that harness redistribution *strengthened* with horizon (Gini 0.93 → 0.37
+at 20yr), and the gamed runs did marginally better than honest — whale splitting/churning under cumulative tagging simply
 re-tags the value, opening no evasion channel.
 
 **Epoch-halving decay variants (option 1) — for comparison.** Deterministic
@@ -259,7 +286,11 @@ complete.
 
 ## Parameters and Headroom
 
-| Lever | Validated value | Headroom | Cost of turning up |
+Values below were chosen on the legacy harnesses. Raising these levers was
+considered and rejected on #1727, because the #1790 sims show the failure is
+structural.
+
+| Lever | Simulated value (legacy harness) | Headroom | Cost of turning up |
 |-------|----------------|----------|--------------------|
 | Payout tilt | 6:1 linear | quadratic (36:1) | payout selection leaks ~1–2 bits of coin origin |
 | Emission to lottery | 25–50% of reward (see schedule) | up to full tail emission | miner security budget |
@@ -279,16 +310,18 @@ cap:                  f = 50%    — tail emission funds at least half the
                                    mining security budget
 ```
 
-The emission-fraction sweep validates this: with 2%/yr demurrage, the
-mechanism passes the Δgini > 0.05 criterion at every tested f (25/50/100%);
-without demurrage only f = 100% passes, which is not miner-viable.
+In the legacy emission-fraction sweep, with 2%/yr demurrage, the mechanism
+passed the Δgini > 0.05 criterion at every tested f (25/50/100%); without
+demurrage only f = 100% passed, which is not miner-viable. That sweep does not
+carry over to production parameters (see Status).
 Per-block payouts are capped at one block reward with carryover (consensus
 state), which bounds seed-grinding gain below the PoW cost of a regrind.
 
 ## Protocol Changes (Status)
 
-1. **Consensus lottery selection mode** — DONE (2026-06-11):
-   `ClusterWeighted` is the default; real cluster factors (tag weights ×
+1. **Consensus lottery selection mode** — DONE (2026-06-11), later
+   superseded by the uniform Path C draw (ADR 0009): `ClusterWeighted` was
+   the default; real cluster factors (tag weights ×
    global cluster wealth, fixed-point) wired into candidate construction;
    proposer/validator candidate sets unified (fixed a latent fork bug);
    draw arithmetic converted to integer fixed-point.
@@ -370,3 +403,7 @@ state), which bounds seed-grinding gain below the PoW cost of a regrind.
   wealth is cumulative lifetime tagged volume with no decay, with the
   2026-07-05 empirical run matrix on the #626-recalibrated log-domain curve
   (#605).
+- 2026-11-01: Restated the redistribution claim per the operator ruling on
+  #1727 / #1682 (#1800): not demonstrated at production parameters, splitting
+  profitable, redesign under study (#1801). Title changed from "Validated
+  Design" to "Design History".

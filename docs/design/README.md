@@ -17,7 +17,7 @@ This section contains design proposals, roadmaps, and technical specifications f
 
 | Document | Status | Description |
 |----------|--------|-------------|
-| [Cluster-Tilted Redistribution](cluster-tilted-redistribution.md) | Superseded (payout) | Tilted payout replaced by the Path C uniform draw (ADR 0009); emission routing and demurrage shipped |
+| [Cluster-Tilted Redistribution](cluster-tilted-redistribution.md) | Superseded (payout) | Tilted payout replaced by the Path C uniform draw (ADR 0009); emission routing and demurrage shipped; redistribution not demonstrated at production parameters (#1790), redesign under study (#1801) |
 | [Asymmetric UTXO Fees](asymmetric-utxo-fees.md) | Superseded | Combined mechanism: attack-resistant but zero Gini reduction (see sweep). Redistribution goals superseded by cluster-tilted design |
 | [Asymmetric Fees Simulation](asymmetric-fees-simulation.md) | Executed | Sweep run 2026-06-11: attack resistance PASS, Gini reduction FAIL |
 | [Lottery Redistribution](lottery-redistribution.md) | Superseded | Historical background; current spec is ADR 0009 + whitepaper section 7 |

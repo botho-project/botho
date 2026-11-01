@@ -57,7 +57,9 @@ Most cryptocurrencies reward early accumulators and punish late adopters. Botho 
 
 The system tracks coin *ancestry*, not identities. Coins that circulate through the economy pay less; coins that sit in whale wallets pay more. This is Sybil-resistant—splitting your wallet doesn't help because fees are based on where coins came from, not where they are now. **Cluster demurrage** adds a small spend-time holding charge on concentrated clusters, reaching idle wealth that a consumption tax cannot (well-circulated coins pay zero).
 
-Fees are not simply burned. Each block, collected fees are split **80% into a cluster-tilted redistribution lottery** (paid back out to randomly selected, mostly small/well-circulated holders) and **20% burned** (deflationary). A height-scheduled fraction of the block reward is also routed into that pool. This turns wealth-concentration charges into a redistribution flow rather than pure destruction. See [Cluster-Tilted Redistribution](docs/design/cluster-tilted-redistribution.md) and [Tokenomics](docs/concepts/tokenomics.md).
+Fees are not simply burned. Each block, collected fees are split **80% into a redistribution lottery** (paid back out to four outputs per block, drawn uniformly from recently created unspent outputs) and **20% burned** (deflationary). A height-scheduled fraction of the block reward is also routed into that pool. This turns wealth-concentration charges into a payout flow rather than pure destruction.
+
+> **Status: redistribution is not demonstrated.** These mechanisms are specified and implemented as described, but they are not shown to measurably reduce inequality at production parameters. A code-faithful simulation (#1790) measured the mechanism's effect on the Gini coefficient at −0.028 to +0.001 against a 0.05 design bar, and at most +0.019 even at 1000x the transaction rate. Lottery ticket-splitting is currently profitable (#1761, #1682). A redesign is under study (#1801); no constant has changed. See [Tokenomics](docs/concepts/tokenomics.md#redistribution-status) and [Cluster-Tilted Redistribution](docs/design/cluster-tilted-redistribution.md).
 
 ### Sustainable Security
 
@@ -79,7 +81,7 @@ Botho combines proven cryptographic building blocks in a novel architecture:
 | Minting | RandomX proof-of-work (issuance only) | CPU-egalitarian rewards, decoupled from consensus |
 | Privacy | CryptoNote stealth addresses | Unlinkable transactions |
 | Quantum safety | ML-KEM-768 stealth addresses; PoW-preimage minting attribution | Future-proof recipient privacy and hash-based (quantum-sound) reward binding |
-| Fee system | Cluster-tagged progressive fees | Economic equality without identity |
+| Fee system | Cluster-tagged progressive fees | Wealth-scaled fees without identity |
 | Network privacy | Onion Gossip | Transaction origin hidden from observers |
 
 ### Transaction Types
@@ -93,7 +95,7 @@ Botho has two transaction types:
 
 Fees are calculated as: `fee = fee_per_byte × tx_size × cluster_factor × output_penalty`
 
-The cluster factor (1x to 6x) is a progressive multiplier that discourages wealth concentration; the output penalty (quadratic in output count, capped at 100x) makes UTXO-farming attacks uneconomical.
+The cluster factor (1x to 6x) is a progressive multiplier aimed at wealth concentration; the output penalty (quadratic in output count, capped at 100x) raises the cost of many-output transactions. It does not make lottery ticket-splitting unprofitable: at the implemented fee floor, splitting is profitable (#1761, #1682).
 
 **Why this architecture?**
 

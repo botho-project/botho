@@ -34,7 +34,12 @@ is not an engagement agreement or a finding of mainnet fitness.
 Botho is a Rust CPU-mineable (RandomX) cryptocurrency with SCP-based
 federated consensus and a novel anti-concentration economic mechanism:
 redistribution, demurrage, and a deterministic consensus fee floor, enforced
-at block acceptance. The active transaction format uses CLSAG ring signatures
+at block acceptance. The mechanism's *intended* effect, a measurable reduction
+in inequality, is **not demonstrated** at production parameters (mechanism
+ΔGini −0.028 to +0.001 against a 0.05 bar, #1790), and lottery
+ticket-splitting is currently profitable (#1761, #1682); a sim-only redesign
+is under study (#1801). Audit the mechanism as implemented, not its intended
+outcome. The active transaction format uses CLSAG ring signatures
 and hybrid ML-KEM recipient outputs, but **amounts remain public**.
 `transaction/clsag/src/lib.rs` publishes `TxOutput.amount` and
 `ClsagRingInput.pseudo_output_amount`, using zero-blinded amount commitments.
@@ -100,7 +105,9 @@ floor. Plus:
   reward cap/carry-forward and payout accounting. #902/ADR 0009 record
   Path C work (#955/#980); do not use the historical tilted-selection model
   as a substitute for reading the freeze. Reassess H4's historical accepted
-  disposition (#715) against the actual mechanism.
+  disposition (#715) against the actual mechanism. Known open issue:
+  per-output ticket-splitting is profitable under the implemented reward cap
+  (#1761, #1682); free coinbase and payout tickets (#1690).
 - Demurrage: max-quantile ring age + centroid-floored cluster factor
   (decoy-resistant, #596/#582). `consensus_fee_floor` uses
   `ring_elapsed_quantile` for age, while the factor path still uses
@@ -191,7 +198,7 @@ and issue status against the freeze, especially after CT/economic changes;
 | Item | Disposition |
 |---|---|
 | H4 lottery candidate-cap grindability | **Accepted** as economically inert (#715), with the premise **corrected and fixed in #1676**: the original argument wrongly assumed re-rolling `hash(N−1)` costs PoW (timestamp and V2 coinbase-output re-rolls were free); 7.0.0 seeds the draw and #573 window from the parent's RandomX output (`consensus::lottery_seed_v2`). In scope to *challenge the corrected acceptance* (residual: selective release of the attacker's own PoW solutions, capped at ≤ 1 block reward per block), not to rediscover. |
-| M2 cluster wealth = cumulative volume, not holdings | **Ratified design decision** (#605/#630, 4–11× dGini margin without decay in the legacy harness; the margin does not hold at production parameters, see #1727 and `docs/research/m2-production-verdicts.md`). |
+| M2 cluster wealth = cumulative volume, not holdings | **Ratified design decision** (#605/#630), ratified on a legacy-harness ΔGini result that does not hold at production parameters (`docs/research/m2-production-verdicts.md`). Per the operator ruling on #1727 (2026-11-01), redistribution is restated as not demonstrated; the semantic is unchanged and a redesign is under study (#1801). |
 | Cycle-6 M3–M6, L1, L3 | Historical report entries; reconcile each closure/residual at freeze rather than treating this row as a current open count. |
 | Lottery payout privacy (winners visible on-chain) | Known testnet watch item; phase-2 (Pedersen payout blinding) not yet scheduled. |
 | "Everyone parks" demurrage drift | Historical watch item; reassess against the current circulation window and reward-cap mechanism, rather than carrying forward an old implementation claim. |

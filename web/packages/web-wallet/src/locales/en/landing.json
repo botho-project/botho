@@ -38,7 +38,7 @@
     },
     "economics": {
       "title": "Progressive Economics",
-      "description": "Fees based on coin provenance, not identity. Fresh mints pay more; well-traded coins pay less. 80% of fees redistributed via lottery that favors small holders. Splitting doesn't help—tags track origin, not amount."
+      "description": "Fees based on coin provenance, not identity. Fresh mints pay more; well-traded coins pay less. 80% of fees are paid out via a uniform lottery. Splitting doesn't lower your fee rate—tags track origin, not amount. A measurable reduction in inequality is not yet demonstrated; a redesign is under study."
     },
     "quantum": {
       "title": "Quantum-Safe Where It Matters",

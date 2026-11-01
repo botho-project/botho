@@ -187,7 +187,7 @@ This ensures permanent mining incentives while maintaining predictable monetary 
 
 ### What happens to transaction fees?
 
-Fees are not paid to miners. Each block, collected fees are split **80% into a cluster-tilted redistribution lottery** (paid back out to randomly selected, mostly small/well-circulated holders) and **20% burned**. Only the burned 20% is deflationary and partially offsets tail emission, keeping net inflation around 2%. This split also:
+Fees are not paid to miners. Each block, collected fees are split **80% into a redistribution lottery** (paid back out to outputs drawn uniformly from eligible unspent outputs; redistribution toward small holders is not demonstrated, see [Redistribution Status](concepts/tokenomics.md#redistribution-status)) and **20% burned**. Only the burned 20% is deflationary and partially offsets tail emission, keeping net inflation around 2%. This split also:
 
 - Recycles wealth-concentration charges back into the economy rather than destroying them
 - Prevents fee-based miner centralization

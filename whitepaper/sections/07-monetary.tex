@@ -412,7 +412,9 @@ This creates:
     neither premise holds: nothing charges $f_{\text{lott}}$ (an extra output
     costs roughly the $10^{8}$~pico-BTH relay minimum, about 2{,}500$\times$
     less), and $\rho$ counts the whole window rather than one block's new
-    outputs. Ticket-splitting can therefore be profitable (pending \#1682).
+    outputs. Ticket-splitting is therefore profitable: a code-faithful
+    re-run finds it profitable at all 192 points of its parameter grid
+    (\#1761, pending \#1682).
     Coinbase and lottery payout outputs also become tickets at no fee, so
     past winners compound their share (pending \#1690)
   \item \textbf{Progressive intake}: Redistribution progressivity now lives
@@ -441,8 +443,17 @@ tilt entirely: the payout is a uniform draw whose split-resistance was meant
 to come from the endogenous reward cap, not the weight. The research memo's
 net-zero bound assumes a per-block $\rho$ and a per-output charge of
 $f_{\text{lott}}$; the implementation has neither, so the bound does not
-currently hold (pending \#1682). In honest populations the uniform draw is
-more equalizing than the retired tilt.
+currently hold (pending \#1682). In the earlier simulation's honest
+populations the uniform draw was more equalizing than the retired tilt; at
+production parameters it is not measurably equalizing (below).
+
+\textbf{Status of the redistribution claim.} The mechanisms above are
+specified and implemented as described: fees and an emission share fill the
+pool, demurrage charges high-factor coins, and the pool pays uniformly drawn
+outputs. A measurable reduction in inequality from them is \emph{not}
+demonstrated at production parameters, lottery ticket-splitting is
+profitable, and a redesign is under study
+(Section~\ref{sec:redistribution-status}).
 
 \input{figures/fee-flow}
 

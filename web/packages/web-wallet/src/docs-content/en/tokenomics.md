@@ -76,7 +76,7 @@ fee = per-byte rate × transaction size × cluster factor × output penalty + me
 
 ### Cluster-Based Progressive Fees
 
-Botho implements a novel **progressive fee system** that taxes wealth concentration without enabling Sybil attacks.
+Botho implements a novel **progressive fee system** that prices coins by the wealth of their origin cluster, without letting Sybil attacks lower the fee rate.
 
 **The core innovation:** Instead of taxing based on transaction amount (easily gamed by splitting), fees are based on coin *provenance* — where coins originally came from.
 
@@ -134,11 +134,11 @@ At sustained full load (5-second blocks; slower when the network is idle):
 - **Deflationary pressure** - The 20% burn offsets tail emission
 - **Predictable** - Net inflation = gross emission − burns
 
-> **Simulation status (#1696):** at production parameters the lottery draw is uniform over recently created unspent outputs, so payouts track output creation, which is mostly mining. In that run the full mechanism's own Gini reduction is zero or slightly negative against its 0.05 design criterion. A decision on a stronger redistribution source or a restated criterion is open (#1727).
+> **Redistribution status (not demonstrated):** the mechanisms on this page are specified and implemented as described, but a measurable reduction in inequality is **not demonstrated** at production parameters. A code-faithful simulation (#1790) measured the mechanism's own effect on the Gini coefficient at −0.028 to +0.001 against a 0.05 design bar, and at most +0.019 even at 1000× the transaction rate. Payouts track output creation, which is mostly mining. Lottery ticket-splitting is currently profitable (#1761, #1682). A redesign is under study (#1801); no constant has changed.
 
 ### Why Progressive Cluster Fees?
 
-- **Reduce concentration** — Wealthy clusters pay more
+- **Aimed at concentration** — Wealthy clusters pay more (a measurable reduction in inequality is not demonstrated; see the status note above)
 - **Sybil-resistant** — Can't avoid by splitting accounts
 - **Encourage circulation** — Moving coins diffuses tags, reducing fees
 - **Privacy-compatible** — Works with ring signatures and stealth addresses

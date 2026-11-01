@@ -12,7 +12,7 @@ Botho takes a different approach:
 - **Post-quantum cryptography** protects your privacy against adversaries with quantum computers
 - **Federated Byzantine Agreement** provides fast finality — consensus safety never depends on hashpower
 - **Egalitarian issuance** distributes new coins through RandomX CPU mining that is deliberately decoupled from consensus: mining earns rewards but buys no say over which transactions confirm
-- **Progressive economics** — fees scale 1×–6× with wealth concentration, 80% of every fee is redistributed by lottery, and 20% is burned
+- **Progressive economics** — fees scale 1×–6× with wealth concentration, 80% of every fee is redistributed by lottery, and 20% is burned (a measurable reduction in inequality is not yet demonstrated; see Tokenomics)
 
 ### Creating a Wallet
 
@@ -64,7 +64,7 @@ Transactions are final once confirmed—there are no chargebacks or reversals in
 Every Botho transaction requires a small fee. These fees serve three purposes:
 
 1. **Spam prevention** - Fees make it expensive to flood the network with junk transactions
-2. **Progressive taxation** - Fees scale 1× to 6× based on cluster wealth, discouraging concentration without enabling Sybil attacks
+2. **Progressive pricing** - Fees scale 1× to 6× based on cluster wealth, aimed at concentration without enabling Sybil attacks
 3. **Redistribution and deflation** - 80% of every fee is redistributed to holders through a lottery; the remaining 20% is permanently burned
 
 Fees are size-based, not amount-based: `fee = per-byte rate × transaction size × cluster factor (1×–6×) × output penalty`. See the Cluster Tags and Tokenomics sections for details.

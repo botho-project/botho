@@ -57,7 +57,7 @@ Earlier exploration script comparing burn vs redistribution mechanisms. Useful f
 Progressive fees are modelled as working through two distinct mechanisms:
 
 1. **Burn** — high fees on large holders deplete concentrated wealth faster
-2. **Redistribution** — collected fees are paid back out to small holders (UBI-style)
+2. **Redistribution** — collected fees are paid back out to holders (UBI-style; the intended goal, not demonstrated at production parameters, #1790)
 
 Both are swept across fee-curve parameters to find configurations that halve
 inequality over a 10-year horizon. Writes `./gini_10yr/gini_10yr_model.png`.

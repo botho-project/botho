@@ -63,8 +63,8 @@ with their tracking issue.
   supply. Accepted residual (never false-rejects a valid block; tightening
   needs a decoy-independent input set).
 - **Lottery / demurrage payout privacy** — lottery winners are visible
-  on-chain and cluster-tilted selection statistically leaks winner factor
-  distribution (design doc Open Question 4). Open, unquantified.
+  on-chain; this was a concern for the retired cluster-tilted selection
+  (design doc Open Question 4) and is unquantified for the uniform draw. Open.
 - **"Everyone parks" drift** — spend-time demurrage charges accrual at spend,
   so a permanently parked coin pays nothing until it moves (nominal share
   drifts ~+0.5pp/5yr, offset by unbooked accrued liability). The designed
@@ -259,26 +259,31 @@ cryptography or control consensus — only to shape its own transactions and
 holdings.
 
 **Goals:**
-- Capture the cluster-tilted lottery payout stream
+- Capture the lottery payout stream
 - Avoid the progressive cluster-factor fee (evade attribution)
 - Avoid spend-time demurrage (park wealth, or dilute the ring age clock)
 - Inflate output cluster-tag mass beyond what real inputs supply
 
 **Cannot:**
-- Gain lottery weight by splitting UTXOs (weight is value-weighted, Sybil/split-invariant by construction)
 - Lower its fee rate by splitting funds across accounts (fees key off *global* cluster wealth)
 - Dilute the consensus demurrage clock with fresh decoys (the floor uses `ring_elapsed_quantile@max`, an unweighted order statistic — B1)
 - Escape a wealthy ring's demurrage with background-tagged outputs (factor floored at the ring-centroid-implied value — B2)
 
 **Residual levers (open):**
+- Gain lottery tickets by splitting UTXOs: the as-built draw is uniform per eligible output, so splitting is profitable (#1761, #1682)
 - Shedding cluster attribution via wash trading (rate-bounded by tag decay, but the single remaining designed lever)
 - Decoy-sourced tag-mass inflation against the C6 guard (**#581**, accepted residual)
 - Permanent parking to defer demurrage (**#314** / "everyone parks" watch item)
 - Payout-privacy leakage from on-chain lottery winners (design Open Question 4)
 
-**Mitigation level:** Medium — the core split/Sybil vectors are closed by
-construction and validated by simulation ([design doc](../design/cluster-tilted-redistribution.md));
-the residuals above are explicitly tracked, not mitigated.
+**Mitigation level:** Medium for the fee rate, which splitting does not
+lower. **Open for the lottery:** the implemented draw is uniform per eligible
+output, and ticket-splitting is profitable at the implemented fee floor
+(#1761, #1682). The redistribution mechanism is not demonstrated to reduce
+inequality at production parameters (#1790; see
+[Tokenomics: Redistribution Status](../concepts/tokenomics.md#redistribution-status));
+a redesign is under study (#1801). The residuals above are explicitly
+tracked, not mitigated.
 
 | Component | Algorithm | Quantum Safety |
 |-----------|-----------|----------------|
@@ -492,9 +497,10 @@ consensus-validity split).
 - Cumulative cluster wealth never decrements (M2) — **RATIFIED 2026-07-05 as a
   design decision** (#605, option 2): cluster wealth is intentionally lifetime
   cumulative tagged volume with no decay. Deterministic; economics-only.
-  Empirically justified on the #626-recalibrated log-domain curve (cumulative
-  ΔGini +0.2171/+0.2242 at 10yr, +0.5644/+0.5745 at 20yr, honest/gamed — every
-  epoch-halving decay variant strictly weaker). Live-testnet confirmation of
+  Justified in the legacy harness on the #626-recalibrated log-domain curve
+  (cumulative ΔGini +0.2171/+0.2242 at 10yr, +0.5644/+0.5745 at 20yr,
+  honest/gamed — every epoch-halving decay variant strictly weaker); that
+  margin does not hold at production parameters (#1790, #1727). Live-testnet confirmation of
   the on-chain factor distribution after the 4.0.0 reset remains pending on
   #605. See
   [redistribution design doc](../design/cluster-tilted-redistribution.md#cluster-wealth-is-cumulative-lifetime-volume-design-decision).
@@ -675,8 +681,9 @@ For a block B applied at height H by any honest node:
 - Emission reward recomputation and timestamp bounds at acceptance (C2)
 - Deterministic integer consensus fee floor with `ring_elapsed_quantile@max`
   demurrage clock and ring-centroid-floored factor (C7, #602)
-- Value-weighted, split-invariant lottery weight; per-block payout cap with
-  carryover; validator re-derivation of the draw
+- Per-block payout cap with carryover; validator re-derivation of the
+  deterministic draw (the as-built draw is uniform per eligible output, so it
+  is *not* split-resistant; open, #1682 / #1761)
 - Global (not per-UTXO) cluster wealth as the fee-rate signal
 
 **Limitations (open residuals):**
@@ -692,25 +699,31 @@ For a block B applied at height H by any honest node:
 
 ## Economic Mechanism Threats
 
-The cluster-tilted redistribution mechanism is designed so that the primary
-gaming vectors are closed *by construction* (value-weighting, global cluster
-wealth) rather than by policy — see the
-[design doc](../design/cluster-tilted-redistribution.md), empirically validated
-by 5-year honest-and-gamed simulation. This section enumerates the specific
-threats and their current status against merged code.
+The redistribution mechanism was designed so that the primary gaming vectors
+would be closed *by construction* (value-weighting, global cluster wealth)
+rather than by policy — see the
+[design doc](../design/cluster-tilted-redistribution.md). The tilted payout
+was later replaced by a uniform draw (ADR 0009), and at production parameters
+the mechanism is **not demonstrated** to reduce inequality (#1790), while
+lottery ticket-splitting is profitable (#1761, #1682); a redesign is under
+study (#1801). This section enumerates the specific threats and their current
+status against merged code.
 
-### 1. Gaming the tilted lottery (payout capture)
+### 1. Gaming the lottery (payout capture)
 
 **Threat:** A whale splits/churns UTXOs to capture the redistribution stream
 (the failure mode of uniform/Hybrid-α payouts, which *inverted* Gini under
 gaming — whale 5%→24% in simulation).
 
-**Status:** Mitigated by construction. Lottery weight is
-`value × (max_factor − cluster_factor + 1) / max_factor` — value-weighted, so
-splitting a position never increases total weight. The consensus lottery
-defaults to `ClusterWeighted` (not the grindable `Hybrid { alpha }`). Because
-churn/split fees feed the pool, attacking the mechanism *funds* it (gamed
-simulation redistributes marginally more than honest). Payout cap ≤ 1 reward
+**Status:** **Open** (#1682). The consensus draw is `SelectionMode::Uniform`
+(Path C, ADR 0009): every eligible output is one ticket. Its split resistance
+was meant to come from the Path C reward cap, whose premises the
+implementation does not meet; a faithful-to-code re-run finds splitting
+profitable at all 192 grid points (#1761). Coinbase and payout outputs are
+also free tickets (#1690). A sim-only redesign is under study (#1801). The
+earlier value-weighted, cluster-tilted weight
+`value × (max_factor − cluster_factor + 1) / max_factor` was split-invariant,
+but it is retired. Payout cap ≤ 1 reward
 with carryover, plus a seed-rotated candidate window (#573) and a seed bound
 to the parent's PoW output (#1676), bounds seed-grinding gain below the PoW
 cost of a regrind.
@@ -775,7 +788,8 @@ factor distribution (design Open Question 4). Open.
 ### 2. Demurrage evasion
 
 **Threat:** Avoid the spend-time demurrage levy, the load-bearing stock-level
-term of the validated Gini mechanism, by (a) selecting fresh high-value decoys
+term of the redistribution mechanism (whose Gini effect is not demonstrated
+at production parameters, #1790), by (a) selecting fresh high-value decoys
 to dilute the ring age clock, (b) tagging outputs as background to zero the
 factor, or (c) never spending.
 
@@ -922,7 +936,7 @@ mempool's dynamic base can only make a node *stricter*.
 | Cluster fingerprinting | Medium | Medium | Medium | OSPEAD mitigated |
 | Inflation via forged block reward | Low | Critical | High | Mitigated (C2, #602) |
 | Block-acceptance economic bypass (C1–C7) | Low | Critical | High | Mitigated (cycle 6) |
-| Lottery payout capture (split/churn) | Medium | Medium | Medium | Mitigated by construction |
+| Lottery payout capture (split/churn) | High | Medium | Medium-High | Open (#1682, #1761) |
 | Demurrage parking ("everyone parks") | Low | Medium | Low-Medium | Open residual (#314) |
 | Tag-mass inflation via decoys | Medium | Medium | Medium | Partial (residual #581) |
 | Fee-market manipulation (self-mining) | Medium | Medium | Medium | Mitigated (C7) |
@@ -939,7 +953,7 @@ mempool's dynamic base can only make a node *stricter*.
 - [Security Guide](../concepts/security.md) - Operational security practices
 - [Privacy Features](../concepts/privacy.md) - Cryptographic privacy mechanisms
 - [Transactions](../concepts/transactions.md) - Transaction types and structure
-- [Cluster-Tilted Redistribution](../design/cluster-tilted-redistribution.md) - Economic mechanism design (validated)
+- [Cluster-Tilted Redistribution](../design/cluster-tilted-redistribution.md) - Economic mechanism design history (redistribution not demonstrated at production parameters)
 - [Cycle-6 Internal Audit](../../audits/2026-06-11-cycle6.md) - Consensus-economics findings (C1–C7, H/M/L)
 
 ### External Standards

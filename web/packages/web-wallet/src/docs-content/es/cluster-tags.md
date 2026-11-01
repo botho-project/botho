@@ -101,7 +101,7 @@ En cada bloque se realiza un sorteo. Los ganadores se eligen de forma **uniforme
 - **Ganadores:** 4 por sorteo, elegidos sin reemplazo con una semilla vinculada a la prueba de trabajo.
 - **Pago:** el fondo es la parte del 80 % de las comisiones, más la cuota de emisión de lotería del bloque (una parte de la recompensa del bloque que se destina al fondo en lugar de al minero: 0 % en la época de arranque, luego 10 % más por cada halving, con tope del 50 %), más lo arrastrado de bloques anteriores; cada sorteo paga el menor entre lo disponible y el límite por bloque, y el resto se arrastra.
 
-La progresividad proviene ahora del lado de la *entrada* (comisiones progresivas y demurrage), no del sorteo. Parte de la economía del sorteo sigue siendo una decisión abierta: dividir una posición en muchas salidas puede mejorar hoy tus probabilidades ([#1682](https://github.com/botho-project/botho/issues/1682)) y los ganadores anteriores acumulan su cuota ([#1690](https://github.com/botho-project/botho/issues/1690)); véanse también [#1689](https://github.com/botho-project/botho/issues/1689) y [#1691](https://github.com/botho-project/botho/issues/1691). Esta sección describe el mecanismo tal como está construido.
+Cualquier progresividad tiene que venir del lado de la *entrada* (comisiones progresivas y demurrage), no del sorteo. Con los parámetros de producción, el mecanismo **no** reduce la desigualdad de forma medible ([#1790](https://github.com/botho-project/botho/issues/1790)). Dividir una posición en muchas salidas es hoy rentable ([#1761](https://github.com/botho-project/botho/issues/1761), [#1682](https://github.com/botho-project/botho/issues/1682)) y los ganadores anteriores acumulan su cuota ([#1690](https://github.com/botho-project/botho/issues/1690)); véanse también [#1689](https://github.com/botho-project/botho/issues/1689) y [#1691](https://github.com/botho-project/botho/issues/1691). Se estudia un rediseño ([#1801](https://github.com/botho-project/botho/issues/1801)). Esta sección describe el mecanismo tal como está construido.
 
 ### Firmas de anillo y privacidad de las etiquetas
 
@@ -147,7 +147,7 @@ El sistema de etiquetas de clúster crea incentivos alineados:
 |----------|----------------|-----------|
 | **Circular monedas** | Las etiquetas decaen y se mezclan | Comisiones más bajas |
 | **Acumular riqueza** | Las etiquetas permanecen concentradas | Comisiones más altas, demurrage |
-| **Dividir en muchos UTXO** | Etiquetas sin cambios | Las comisiones se basan en la procedencia, así que no hay beneficio en comisiones; tal como está construido, más salidas pueden mejorar las probabilidades en la lotería ([#1682](https://github.com/botho-project/botho/issues/1682)) |
+| **Dividir en muchos UTXO** | Etiquetas sin cambios | Las comisiones se basan en la procedencia, así que no hay beneficio en comisiones; tal como está construido, más salidas compran boletos de lotería, y dividir es hoy rentable ([#1761](https://github.com/botho-project/botho/issues/1761), [#1682](https://github.com/botho-project/botho/issues/1682)) |
 
 ### Parámetros técnicos
 
@@ -171,7 +171,7 @@ Las etiquetas de clúster resuelven el problema de la "tributación progresiva r
 1. **Rastrean procedencia, no identidad**: las monedas recuerdan su origen
 2. **Resisten los ataques de división**: la riqueza del clúster se fija en la acuñación
 3. **Habilitan comisiones progresivas**: los clústeres ricos pagan más
-4. **Impulsan la redistribución**: el 80 % de las comisiones regresa a los poseedores mediante una lotería uniforme (la progresividad proviene de las comisiones y el demurrage)
+4. **Financian una lotería**: el 80 % de las comisiones regresa a los poseedores mediante una lotería uniforme (la progresividad proviene de las comisiones y el demurrage); una reducción medible de la desigualdad no está demostrada (ver Tokenómica)
 5. **Preservan la privacidad**: funcionan con firmas de anillo
 6. **Fomentan la circulación**: las etiquetas decaen a través del comercio
 

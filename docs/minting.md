@@ -193,10 +193,11 @@ The signal deliberately ignores transaction count, so a block producer cannot sk
 ## Transaction Fees
 
 Transaction fees in Botho are **split 80% / 20%**: each block, 80% of collected
-fees fund the cluster-tilted redistribution lottery (paid back out to randomly
-selected, mostly small/well-circulated holders) and 20% are **burned** (removed
+fees fund the redistribution lottery (a uniform draw over eligible outputs;
+redistribution toward small holders is not demonstrated, see
+[Redistribution Status](concepts/tokenomics.md#redistribution-status)) and 20% are **burned** (removed
 from circulation). Only the burned 20% is deflationary; it partially offsets tail
-emission. See [Cluster-Tilted Redistribution](design/cluster-tilted-redistribution.md).
+emission. See [Cluster-Tilted Redistribution](design/cluster-tilted-redistribution.md) (design history).
 
 | Parameter | Value |
 |-----------|-------|

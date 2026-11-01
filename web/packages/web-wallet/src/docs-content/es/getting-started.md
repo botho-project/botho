@@ -12,7 +12,7 @@ Botho adopta un enfoque distinto:
 - La **criptografía poscuántica** protege tu privacidad frente a adversarios con ordenadores cuánticos
 - El **Acuerdo Bizantino Federado** proporciona firmeza rápida: la seguridad del consenso nunca depende del poder de cómputo (hashpower)
 - La **emisión igualitaria** distribuye monedas nuevas mediante minería de CPU con RandomX, deliberadamente desacoplada del consenso: minar genera recompensas pero no otorga voz sobre qué transacciones se confirman
-- La **economía progresiva**: las comisiones escalan de 1× a 6× según la concentración de riqueza, el 80 % de cada comisión se redistribuye por lotería y el 20 % se quema
+- La **economía progresiva**: las comisiones escalan de 1× a 6× según la concentración de riqueza, el 80 % de cada comisión se redistribuye por lotería y el 20 % se quema (una reducción medible de la desigualdad aún no está demostrada; ver Tokenómica)
 
 ### Crear un monedero
 
@@ -64,7 +64,7 @@ Las transacciones son definitivas una vez confirmadas: en Botho no hay contracar
 Cada transacción de Botho requiere una pequeña comisión. Estas comisiones cumplen tres propósitos:
 
 1. **Prevención de spam**: las comisiones encarecen inundar la red con transacciones basura
-2. **Tributación progresiva**: las comisiones escalan de 1× a 6× según la riqueza del clúster, desincentivando la concentración sin habilitar ataques Sybil
+2. **Tarificación progresiva**: las comisiones escalan de 1× a 6× según la riqueza del clúster, orientadas a la concentración sin habilitar ataques Sybil
 3. **Redistribución y deflación**: el 80 % de cada comisión se redistribuye a los poseedores mediante una lotería; el 20 % restante se quema permanentemente
 
 Las comisiones se basan en el tamaño, no en el importe: `fee = tarifa por byte × tamaño de la transacción × factor de clúster (1×–6×) × penalización por salida`. Consulta las secciones Etiquetas de clúster y Tokenómica para más detalles.

@@ -2,6 +2,8 @@
 
 Progressive transaction fees based on coin provenance, designed to reduce wealth inequality while being resistant to sybil attacks and compatible with zero-knowledge proofs.
 
+> **Status:** the design goal is not demonstrated at production parameters: the code-faithful re-run measures no meaningful Gini reduction (#1790), and lottery ticket-splitting is profitable (#1761, #1682). A redesign is under study (#1801). The documents below are design and research background. See `docs/concepts/tokenomics.md` (Redistribution Status).
+
 ![System Overview](figures/system_overview.png)
 
 ## Overview
@@ -29,7 +31,7 @@ Coins carry **provenance tags** that persist through splits:
 
 ![Split Resistance](figures/split_resistance.png)
 
-Fee is based on `source_wealth`, not `value`. Splitting doesn't help.
+Fee is based on `source_wealth`, not `value`. Splitting doesn't lower the fee rate.
 
 ### Key Properties
 

@@ -80,7 +80,7 @@ The creation of new coins through mining. See [Tokenomics](concepts/tokenomics.m
 ## F
 
 ### Fee Burn
-When transaction fees are destroyed rather than paid to miners. Botho burns 20% of collected fees (the other 80% funds the cluster-tilted redistribution lottery); only this 20% burn share creates deflationary pressure.
+When transaction fees are destroyed rather than paid to miners. Botho burns 20% of collected fees (the other 80% funds the redistribution lottery (uniform draw)); only this 20% burn share creates deflationary pressure.
 
 ### Finality
 The point at which a transaction cannot be reversed. Botho provides immediate finality via SCP consensus.

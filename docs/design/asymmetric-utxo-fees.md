@@ -4,9 +4,11 @@
 
 **Superseded** — the [simulation sweep](asymmetric-fees-simulation.md) (2026-06-11)
 passed attack resistance but FAILED the Gini-reduction criterion, and per-UTXO
-ticket floors were later shown to subsidize whoever splits hardest. The shipped
-lottery uses **cluster-weighted selection** (weight = value ÷ cluster factor,
-no per-UTXO floor) — see
+ticket floors were later shown to subsidize whoever splits hardest. The
+cluster-weighted selection that replaced it was itself superseded: the shipped
+lottery draws **uniformly** per eligible output (Path C, ADR 0009), splitting
+is profitable under it (#1761, #1682), and redistribution is not demonstrated
+at production parameters (#1790; redesign under study, #1801) — see
 [Cluster-Tilted Redistribution](cluster-tilted-redistribution.md) and
 `cluster-tax/src/lottery.rs`. Kept for the analysis framework and attack
 taxonomy.

@@ -32,11 +32,16 @@ provides ephemeral sender anonymity.
 block proposal with Stellar Consensus Protocol (SCP) finalization,
 achieving deterministic finality in approximately 5 seconds while
 maintaining permissionless participation. The protocol includes
-\emph{progressive fees} based on coin provenance (cluster tags), creating
-Sybil-resistant economic incentives against wealth concentration.
-Transaction fees are split: 80\% redistributed via lottery to random UTXOs,
-20\% burned---creating progressive redistribution that statistically
-favors smaller holders.
+\emph{progressive fees} based on coin provenance (cluster tags), a
+cluster-scaled demurrage term, and a lottery: 80\% of transaction fees,
+plus a height-scheduled share of emission, are paid to uniformly drawn
+outputs, and 20\% of fees are burned. These mechanisms are designed to
+counter wealth concentration, but a measurable reduction in inequality is
+\emph{not demonstrated} at production parameters: a code-faithful
+simulation measures the mechanism's effect on the Gini coefficient at
+$-0.028$ to $+0.001$ against a $0.05$ design bar, lottery ticket-splitting
+is currently profitable, and a redesign is under study
+(Section~\ref{sec:redistribution-status}).
 
 Key parameters: ring size 20, transaction size $\sim$4~KB, 5-second
 finality, perpetual 2\% tail emission with dynamic inflation dampening.

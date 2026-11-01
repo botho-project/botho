@@ -8,7 +8,7 @@ Botho's economic system has four pillars:
 
 1. **Tag Vectors** - Track coin provenance through cluster attribution
 2. **Progressive Fees** - Size-based fees with wealth-dependent multipliers (1x-6x)
-3. **Lottery Redistribution** - 80% of fees redistributed via a cluster-tilted lottery, 20% burned
+3. **Lottery Redistribution** - 80% of fees redistributed via a uniform lottery (see Lottery Selection Modes), 20% burned
 4. **Two-Phase Monetary Policy** - Halving schedule (5 yearly epochs, ~611M BTH) then tail emission (2% target)
 
 ## Key Concepts
@@ -133,7 +133,7 @@ Fees are split between lottery redistribution and burning:
 │                    Transaction Fee                       │
 ├─────────────────────────────────────┬───────────────────┤
 │         80% Lottery Pool            │    20% Burned     │
-│   (cluster-tilted redistribution)   │  (deflationary)   │
+│   (uniform-draw redistribution)     │  (deflationary)   │
 └─────────────────────────────────────┴───────────────────┘
 ```
 
@@ -141,13 +141,13 @@ Fees are split between lottery redistribution and burning:
 
 | Mode | Sybil Resistance | Progressive | Status |
 |------|------------------|-------------|--------|
-| **ClusterWeighted** | High (value-based) | Yes (tilt via cluster factor) | **Production default** |
+| **ClusterWeighted** | High (value-based) | Yes (tilt via cluster factor) | Simulation only (retired from consensus) |
 | **ValueWeighted** | High (1x) | None | Baseline for comparison |
-| **Uniform** | Low (~9x gaming advantage) | High | Simulation only — vulnerable |
+| **Uniform** | Low (~9x gaming advantage) | High | **Consensus default (Path C, ADR 0009)** |
 | **Hybrid** | Low-medium (α-dependent) | Medium | Simulation only |
 | **EntropyWeighted** | Medium | Medium | Simulation only |
 
-**Production mode is `ClusterWeighted`:** winner weight is `value ÷ cluster_factor`. It is the only mode whose progressive term is **split-invariant** — weights are value-based (splitting a position never increases total weight) and the tilt depends on cluster provenance, which inherits through splits. Adversarial simulation showed that per-UTXO weight terms (Uniform, the α component of Hybrid) are subsidies to whoever splits hardest: a strategic whale splitting into 1,000 UTXOs captured the payout stream (~300x weight gain under Hybrid α=0.3). See [Cluster-Tilted Redistribution](../docs/design/cluster-tilted-redistribution.md) and `experiments/ANALYSIS.md`.
+**Consensus mode is `Uniform` (Path C, ADR 0009):** each block draws four winners uniformly from eligible unspent outputs; neither value nor cluster factor enters the draw. `ClusterWeighted` (winner weight `value ÷ cluster_factor`, split-invariant) was the earlier production mode and is retained for simulation only. Because the as-built draw gives one ticket per output, **splitting is profitable**: a faithful-to-code re-run finds it profitable at all 192 grid points (#1761, #1682). Redistribution is not demonstrated at production parameters (#1790); a redesign is under study (#1801). See [Cluster-Tilted Redistribution](../docs/design/cluster-tilted-redistribution.md) (design history) and `experiments/ANALYSIS.md`.
 
 ## Monetary Policy
 
@@ -287,15 +287,7 @@ cargo bench -p bth-cluster-tax
 
 ## Economic Impact
 
-Simulations show the combined fee + lottery system can significantly reduce wealth inequality:
-
-| Metric | Value |
-|--------|-------|
-| Initial GINI | 0.788 |
-| Final GINI (10 years) | 0.409 |
-| Reduction | 48.1% |
-
-The lottery mechanism provides additional redistribution beyond pure fee burning, though with trade-offs around Sybil resistance. See design documents for detailed analysis.
+**Redistribution is not demonstrated at production parameters.** Early simulations in this crate (a different fee model and lottery, no mining) reported large Gini reductions, for example 0.788 → 0.409 over 10 years. Those results do not carry over to the protocol. The code-faithful `m2-production` run measures the mechanism's own ΔGini at −0.028 to +0.001 against a 0.05 bar, and at most +0.019 even at 1000x the transaction rate (#1790, `docs/research/m2-production-verdicts.md`). The faithful-to-code `lottery-reward-cap-sweep --faithful` finds lottery ticket-splitting profitable (#1761, #1682). A sim-only redesign is under study (#1801). See `docs/concepts/tokenomics.md` (Redistribution Status).
 
 ## License
 
