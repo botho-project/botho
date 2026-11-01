@@ -22,6 +22,17 @@ The first four rows reproduce the bypasses found in the reviews of PR #1783:
 | `artifact-shadow` | the uploaded artifact carries an `Init/Prelude.olean` to shadow the toolchain's |
 | `lakefile-decoy` | `srcDir = "src"` compiles a copy whose `satAdd_le_cap` states `True`, while the scanned `Botho/` stays unchanged; no code runs during the build |
 | `lakefile-benign` | (must pass) a lakefile edit that keeps the layout: a version bump and a `leanOptions` table |
+| `require-dep` | (scan-only) a `[[require]]` path dependency whose `lakefile.lean` `#eval` rewrites `Botho/Cheat.lean` before Lake compiles it; the committed manifest lists it (#1783 review) |
+| `native-split-swap` | (scan-only) `decide +native` in an `example` in a module with no axiom; its IO overwrites `Cheat.olean` and the `Tidy.olean` that holds the world-token axiom (#1810 variant A) |
+| `guard-swap` | (scan-only) the same with `#guard`, which evaluates with the compiler and has no `native` token (#1810 variant B) |
+| `eval-swap` | (scan-only) a prelude `#eval` that overwrites `Cheat.olean`, with no axiom and no `import Lean` |
+
+A `scan-only` fixture leaves an artifact that is an honest build of a
+different source, so no artifact check can reject it: only the base
+branch's source scan or lakefile check (check 2) can. For these the
+verifier must fail with the full checks (matching `expect.txt`) and must
+pass without the scan (matching the regex in `scan-only`), which shows the
+forgery is real.
 
 Fixture files:
 
@@ -37,6 +48,12 @@ Fixture files:
   blank line) with `theorem NAME : True := trivial`.
 - `lakefile.toml`: replaces the tree's `lakefile.toml`.
 - `lakefile-append.txt`: lines appended to the tree's `lakefile.toml`.
+- `lake-manifest.json`: replaces the tree's `lake-manifest.json`.
+- `dep/`: copied next to the tree, as `../dep` (a `[[require]]` path
+  dependency).
+- `scan-only`: a regex. The fixture must pass the checks without the scan
+  and match it (see above); the full checks must fail and match
+  `expect.txt`.
 - `artifact-extra.txt`: paths added to the uploaded artifact (copies of
   `Botho.olean`), as a build job that uploads extra files would.
 - `expect.txt`: an extended regex that the verifier's output must match.

@@ -105,15 +105,31 @@ The in-tree gates (#1770). The build job runs them in full; the verify job
 runs the base commit's `check-sorry.sh --no-build`, which is the layout check
 and the source scan below, over the pull request's sources as data:
 
-- **Build layout.** Before anything else, both gates check that there is no
-  `lakefile.lean` (a Lean program that runs on every `lake` call) and that
-  `lakefile.toml` keeps the layout in `scripts/gate-common.sh`: no package
-  `srcDir`, one `[[lean_lib]]` named `Botho` with no `srcDir`, `roots`,
-  `globs` or `root`, and no `[[lean_exe]]`. These are the keys the verify
-  job's layout check compares with the base's `lakefile.toml`. So Lake
-  compiles only `Botho.lean` and the modules it imports, all in `Botho/`.
-  Other keys (`version`, options, a `[[require]]`) and `lean-toolchain` are
-  not pinned by the gates; see [The verify job](#the-verify-job).
+- **Build configuration.** Before anything else, both gates check that
+  there is no `lakefile.lean` (a Lean program that runs on every `lake`
+  call) and that `lakefile.toml` passes the allow-list in
+  `scripts/gate-common.sh`:
+  - *Layout:* no package `srcDir`, one `[[lean_lib]]` named `Botho` with no
+    `srcDir`, `roots`, `globs` or `root`, and no `[[lean_exe]]`. These are
+    the keys the verify job's layout check compares with the base's
+    `lakefile.toml`. So Lake compiles only `Botho.lean` and the modules it
+    imports, all in `Botho/`.
+  - *Keys:* every other key must be on an allow-list of keys that cannot
+    load or run code: package metadata (`name`, `version`, `defaultTargets`,
+    `description`, `keywords`, `homepage`, `license`) and `leanOptions`
+    with plain values for a short list of options (`autoImplicit`,
+    `relaxedAutoImplicit`, `maxHeartbeats`, `maxRecDepth`, the
+    `synthInstance` limits, `linter.*`, `pp.*`). A `[[lean_lib]]` may carry
+    only its `name`. Everything else is rejected, known or unknown:
+    `[[require]]`, `moreLeanArgs`, `weakLeanArgs`, `moreServerOptions`,
+    `moreLinkArgs`, `plugins`, `dynlibs`, `precompileModules`,
+    `extraDepTargets`, `buildDir`, `testDriver`, and options such as
+    `debug.skipKernelTC`.
+  - *No dependencies:* `lake-manifest.json`, if present, must list no
+    packages.
+
+  `lean-toolchain` is not pinned by the gates, so toolchain bumps pass; see
+  [The verify job](#the-verify-job).
 - **Source scan** (`scripts/gate_scan.py`). Both gates run it before their
   first `lake` call, and stop if it fails, so the in-tree gates never build a
   tree the scan rejected. It checks:
@@ -142,8 +158,17 @@ and the source scan below, over the pull request's sources as data:
   `-- formal-gate: allow native_decide`, and the compiler-trust axioms it
   introduces (such as `Lean.ofReduceBool`) must also be on the allow-list.
   The scan also rejects commands that run code or hide messages at compile
-  time (`#eval`, `run_cmd`, `run_elab`, `run_meta`, `run_tac`, `by_elab`,
-  `#guard_msgs`, `initialize`), metaprogramming commands that can expand to
+  time (`#eval`, `#guard`, `#guard_expr`, `run_cmd`, `run_elab`, `run_meta`,
+  `run_tac`, `by_elab`, `#guard_msgs`, `initialize`, and `#print` outside
+  `Theorems.lean`), the evaluators that run compiled code while the model is
+  elaborated (`native` in any form, such as `decide +native` or
+  `native := true`, and `reduceBool`, `reduceNat`, `ofReduceBool`,
+  `ofReduceNat`, `trustCompiler`), the prelude IO surface (`IO`, `EIO`,
+  `BaseIO`, `ST`, `EST`, `EStateM`, `RealWorld`, `Void`, `System`,
+  `FilePath` as a name or any dotted component, so `IO.FS`, `IO.Process`,
+  `IO.Ref` and `ST.Ref` too; the `unsafe` keyword; and any name starting
+  with `unsafe` or ending in `Unsafe`, such as `unsafeCast` or
+  `unsafeBaseIO`), metaprogramming commands that can expand to
   them (`macro`, `macro_rules`, `syntax`, `elab`, `elab_rules`,
   `declare_syntax_cat`), simprocs (`simproc`, `dsimproc`), and the option
   `debug.skipKernelTC`. Inside `@[...]` and `attribute [...]` it rejects
@@ -190,10 +215,17 @@ and the source scan below, over the pull request's sources as data:
   line, each forbidden attribute and metaprogramming command, a simproc that
   overwrites a compiled `.olean`, a bare `import Lean`, each import-header
   form, symlinked or stray sources, and layout changes (`srcDir`, an extra
-  `lean_lib`, a `lean_exe`, `roots`, `globs`). Passing controls cover a
-  second module with quoted multi-line imports, a commented lakefile, the
-  verify job's benign lakefile edit, and the verify job's `--no-build` call
-  with `LAKE=false`.
+  `lean_lib`, a `lean_exe`, `roots`, `globs`). Since the #1783 review it
+  also covers a `[[require]]` dependency whose `lakefile.lean` rewrites a
+  model source (its code must never run), a manifest that lists a package,
+  each disallowed lakefile key and option, and (#1810) the `decide +native`
+  split, `#guard` and prelude `#eval` `.olean` swaps, with `--no-scan`
+  controls that show each swap fools the later layers, plus each banned IO
+  name and evaluator. Passing controls cover a second module with quoted
+  multi-line imports, a commented lakefile, the verify job's benign lakefile
+  edit, allow-listed metadata and `leanOptions` in both TOML spellings, a
+  tree without `lake-manifest.json`, names that merely contain a banned
+  name, and the verify job's `--no-build` call with `LAKE=false`.
 - **Verify self-test** (`scripts/selftest-verify.sh`) runs the verify job's
   checks against the fixtures in `scripts/fixtures/verify/`: the bypasses
   found in the reviews of PR #1783 (an `@[init]` that widens the allow-list,
@@ -204,7 +236,16 @@ and the source scan below, over the pull request's sources as data:
   of the model while the scanned `Botho/` stays unchanged, and (accepted) a
   benign lakefile edit. Each fixture is built the way the build job
   builds it, and the verifier must reject it with the clean allow-list, both
-  with and without the source scan. The self-test also checks that no
+  with and without the source scan. The verifier reads a copy of the
+  sources taken before the build, as the verify job reads its own checkout.
+  Four `scan-only` fixtures leave an artifact that is an honest build of a
+  different source, so only the base's scan or lakefile check can stop
+  them: a `[[require]]` dependency whose `lakefile.lean` rewrites
+  `Botho/Cheat.lean` before it is compiled, and (#1810) `decide +native`
+  split across modules, `#guard`, and a prelude `#eval`, each overwriting
+  compiled `.olean` files. For these the self-test shows both halves: the
+  full verifier rejects them, and the checks without the scan accept the
+  forged `one_eq_two`. The self-test also checks that no
   fixture initializer runs inside the verifier, and, as a control, that the
   same initializer does run when the library is imported through the Lean
   frontend. The clean tree is also verified with no `lean`, `lake` or `elan`
@@ -223,8 +264,9 @@ verify job reads until it is merged. It then:
    as the base's. Both are parsed with Python's `tomllib`, and the
    package-level `srcDir` and, for every `[[lean_lib]]` and `[[lean_exe]]`,
    `name`, `srcDir`, `roots`, `globs` and `root` must be identical (so the
-   set of libraries and executables is too). Other keys, such as `version`,
-   options or a `[[require]]` pin, may change. A `lakefile.lean` on either
+   set of libraries and executables is too). Which other keys may change is
+   decided in step 2 by the base's key allow-list (no `[[require]]`, no
+   code-loading keys; see Build configuration above). A `lakefile.lean` on either
    side, or a `lakefile.toml` that does not parse, is rejected. Without this
    a pull request could leave the scanned `Botho/` as a decoy and compile a
    different copy (`srcDir = "src"`) whose theorems state something else;
@@ -274,11 +316,12 @@ left on disk. The verify job proves that the uploaded library is
 kernel-valid and that the listed theorems, as compiled, depend only on
 allowed axioms. It does not prove that those theorems state what the
 sources say. The `simproc-swap` and `native-world-swap` fixtures replace
-`one_eq_two : 1 = 2` with `one_eq_two : True` in the compiled library. The
-verify job rejects them only because of other evidence they leave behind
-(an `import Lean`, a declared axiom). A build-time attack that also rewrote
-those modules would leave a library that passes. Two things stand in the
-way of such an attack:
+`one_eq_two : 1 = 2` with `one_eq_two : True` in the compiled library, and
+the later checks reject them only because of other evidence they leave
+behind (an `import Lean`, a declared axiom). A build-time attack that also
+rewrites those modules leaves a library that passes every artifact check:
+the `native-split-swap`, `guard-swap`, `eval-swap` and `require-dep`
+fixtures do exactly that. Two things stand in the way of such an attack:
 
 - the base commit's source scan, which the pull request cannot weaken, has to
   miss every way the attack runs code during the build; and
@@ -290,10 +333,16 @@ during the build, is closed by step 1: Lake compiles only the sources the
 base's layout names, and those are the sources the scan reads and the
 intake's module-set check compares (the `lakefile-decoy` fixture; it passes
 every other check). That check covers the layout keys of Lake v4.35.0's
-TOML configuration. Other build configuration, such as `[[require]]`
-dependencies, `leanOptions` or `moreLeanArgs`, can still change and is
-reviewed like any other diff; the base's source scan and the artifact checks
-still apply to what it produces. Binding each theorem's compiled statement
+TOML configuration. Build configuration that loads or runs code is closed
+by the base's key allow-list in step 2. A `[[require]]` dependency's
+`lakefile.lean` is a Lean program that Lake elaborates, `#eval` included, on
+every `lake` call, and its source is never scanned, so it could rewrite a
+model source before Lake compiles it and leave an artifact that is an
+honest build of the rewritten source (the `require-dep` fixture; no check
+on the artifact can tell). The allow-list rejects `[[require]]`, a manifest
+that lists a package, `moreLeanArgs`, `weakLeanArgs`, `plugins`, `dynlibs`,
+`precompileModules`, `extraDepTargets`, any unknown key and any
+`leanOptions` entry outside a short list. Binding each theorem's compiled statement
 to a reviewed record is tracked in #1805.
 
 Binding the artifact to the sources needs a build that runs no model code,
@@ -310,12 +359,19 @@ against cruder tricks. Their source scan is what carries over to the verify
 job: there it runs from the base commit and decides, before any of the
 artifact checks, whether the sources may run code at build time at all.
 Without `import Lean` a model cannot define a simproc, elaborator, tactic or
-`deriving` handler, so what is left is the prelude, which the token scan
-covers with a denylist. A denylist can miss routes. One known miss:
-`decide +native` together with an IO world token built by `cast` through a
-declared axiom runs IO with only the prelude and passes the scan (the
-`native-world-swap` fixture); the verify job rejects it only because the
-model declares a non-allow-listed axiom. Hence the review rule below.
+`deriving` handler, so what is left is the prelude. The scan covers it in
+two layers (#1810). First, it bans the evaluators that run compiled code
+while a module is elaborated: `#eval`, `#guard` (which evaluates its term
+with the compiler and needs no `native` token), `native` in every spelling
+(`native_decide`, `decide +native`, `native := true`), `Lean.reduceBool`
+and its relatives, and initializers. Second, it bans the prelude IO surface
+(`IO`, `EIO`, `BaseIO`, `ST`, `EST`, `EStateM`, `RealWorld`, `Void`,
+`System`, `FilePath`, `unsafe*`), so an evaluator missing from the first
+list has no named effect left to run: the world-token trick (`cast` through
+`axiom : Void Unit = Void IO.RealWorld`) and every file or process call are
+spelled with these names. Both layers are denylists, and a denylist can
+miss routes. A pure model needs none of these names, so the lists can stay
+broad. Hence the review rule below.
 
 **Other limits.**
 

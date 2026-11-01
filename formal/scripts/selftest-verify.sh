@@ -4,8 +4,9 @@
 # For the clean tree and each fixture under fixtures/verify/ this script:
 #   1. copies the formal/ tree to a scratch directory and applies the fixture
 #      (the pull request);
-#   2. runs `lake build` there, which runs the fixture's code, as the
-#      untrusted `build` job does;
+#   2. snapshots the sources (the verify job reads its own checkout, which
+#      build-time code cannot touch), then runs `lake build` in the tree,
+#      which runs the fixture's code, as the untrusted `build` job does;
 #   3. keeps only the files the workflow uploads (artifact_files below must
 #      match the `upload-artifact` paths in .github/workflows/formal.yml);
 #   4. runs verify-artifacts.sh from this directory with the clean
@@ -15,7 +16,9 @@
 # It asserts that the clean tree passes, also with no `lean`, `lake` or `elan`
 # on PATH (the verify job installs none there); that each fixture fails, for
 # the reason in its expect.txt, or passes if it is marked `pass`; that the
-# canary allow-list is unchanged; and that
+# canary allow-list is unchanged; that a `scan-only` fixture (a route that
+# leaves an honest-looking artifact, so only the base branch's scan or
+# lakefile check can stop it) passes the checks without the scan; and that
 # no model initializer ran inside the verifier (the fixtures' initializers
 # write to $BOTHO_INIT_CANARY). As a control it then imports the fixture's
 # library through the Lean frontend (`import Botho`), which does run
@@ -149,7 +152,18 @@ run_case() {
     if [[ -f "$fx/lakefile-append.txt" ]]; then
       cat "$fx/lakefile-append.txt" >>"$dir/tree/lakefile.toml"
     fi
+    if [[ -f "$fx/lake-manifest.json" ]]; then
+      cp "$fx/lake-manifest.json" "$dir/tree/lake-manifest.json"
+    fi
+    # A dependency package next to the tree (lakefile-append.txt points a
+    # [[require]] at ../dep).
+    if [[ -d "$fx/dep" ]]; then cp -R "$fx/dep" "$dir/dep"; fi
   fi
+
+  # The sources the verifier reads: a copy taken before the build, as the
+  # verify job checks out the pull request again instead of reusing the
+  # build job's tree.
+  cp -R "$dir/tree" "$dir/sources"
 
   # Untrusted build: the fixture's code runs here.
   if ! (cd "$dir/tree" && "$lake" build) >"$dir/build.log" 2>&1; then
@@ -180,11 +194,16 @@ run_case() {
   # Run no-lean-path (clean tree only): as full, with no lean, lake or elan on
   # PATH and LEAN_SYSROOT unset, as in the verify job: --sysroot alone must
   # supply the toolchain.
+  # Run no-scan for a `scan-only` fixture: the checks without the scan must
+  # PASS, and the output must match the regex in `scan-only`. That shows the
+  # route forges an artifact the later checks cannot tell from an honest one,
+  # so the scan (or the lakefile check that runs with it) is what stops it.
+  # The full run must fail and match expect.txt.
   # Run same-layout (if the fixture has expect-same-layout.txt): as no-scan,
   # but with the fixture's own lakefile.toml as the base's, so the layout
   # check passes. Its output must match expect-same-layout.txt. This shows
   # what the fixture would get past without the layout check.
-  local canary="$dir/init-canary" ok=1 expect="" pass=0 run rc log
+  local canary="$dir/init-canary" ok=1 expect="" pass=0 scan_only="" run rc log
   local runs=(full no-scan)
   if [[ "$name" == clean ]]; then
     pass=1
@@ -193,6 +212,7 @@ run_case() {
     pass=1
   else
     expect="$(cat "$fx/expect.txt")"
+    if [[ -f "$fx/scan-only" ]]; then scan_only="$(cat "$fx/scan-only")"; fi
   fi
   if [[ -n "$fx" && -f "$fx/expect-same-layout.txt" ]]; then runs+=(same-layout); fi
   for run in "${runs[@]}"; do
@@ -209,7 +229,7 @@ run_case() {
         env_cmd=(env -u LEAN_SYSROOT -u LEAN_PATH PATH="$nolean") ;;
     esac
     (cd "$dir/cwd" && "${env_cmd[@]}" BOTHO_INIT_CANARY="$canary" \
-      bash "$here/verify-artifacts.sh" --lib "$dir/artifact" --sources "$dir/tree" \
+      bash "$here/verify-artifacts.sh" --lib "$dir/artifact" --sources "$dir/sources" \
         --sysroot "$sysroot" --allowlist "$root/axioms-allowlist.txt" \
         --base-lakefile "$base_lakefile" ${extra[@]+"${extra[@]}"}) >"$log" 2>&1 || rc=$?
     if [[ "$run" == same-layout ]]; then
@@ -218,6 +238,16 @@ run_case() {
           "$(cat "$fx/expect-same-layout.txt")" >&2
         ok=0
       fi
+    elif [[ -n "$scan_only" && "$run" == no-scan ]]; then
+      if [[ "$rc" != 0 ]] || ! grep -Eq -- "$scan_only" "$log"; then
+        echo "  [$run] expected the checks without the scan to pass and match" \
+          "scan-only: $scan_only (rc=$rc)" >&2
+        ok=0
+      fi
+    elif [[ -n "$scan_only" && "$run" == full ]] && { [[ "$rc" == 0 ]] ||
+        ! grep -Eq -- "$expect" "$log"; }; then
+      echo "  [$run] expected verify to fail for: $expect (rc=$rc)" >&2
+      ok=0
     elif [[ "$pass" == 1 ]]; then
       if [[ "$rc" != 0 ]]; then
         echo "  [$run] expected verify to pass (rc=$rc)" >&2
@@ -275,6 +305,9 @@ run_case() {
     echo "  ok: clean tree passes, also with no lean, lake or elan on PATH"
   elif [[ "$pass" == 1 ]]; then
     echo "  ok: accepted by the full verifier and by the checks without the scan"
+  elif [[ -n "$scan_only" ]]; then
+    echo "  ok: rejected by the full verifier ($(grep -E -m1 -- "$expect" "$dir/verify-full.log"))"
+    echo "  ok: without the scan the forged artifact passes ($(grep -E -m1 -- "$scan_only" "$dir/verify-no-scan.log"))"
   else
     echo "  ok: rejected by the full verifier ($(grep -m1 '^FAIL' "$dir/verify-full.log"))"
     echo "  ok: rejected without the source scan ($(grep -E -m1 -- "$expect" "$dir/verify-no-scan.log"))"

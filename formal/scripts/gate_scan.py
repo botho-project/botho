@@ -8,9 +8,10 @@ all of the following hold for the formal/ tree at ROOT.
 1. Layout. The model is `Botho.lean` plus `Botho/**/*.lean`, and the manifest
    is `Theorems.lean`. These are regular files (no symlinks anywhere under
    `Botho/`), and no other `*.lean` file exists under ROOT outside `.lake/`
-   and `scripts/`. (The lakefile's layout keys are checked separately, in
-   gate-common.sh, so Lake compiles exactly the modules reachable from
-   `Botho`, from `Botho.lean` and `Botho/`.)
+   and `scripts/`. (The lakefile is checked separately, in gate-common.sh:
+   its layout keys, so Lake compiles exactly the modules reachable from
+   `Botho`, from `Botho.lean` and `Botho/`, and a key allow-list with no
+   dependencies, so no other Lean code is loaded.)
 2. Import allow-list. The header of every scanned file is a sequence of plain
    `import M` commands where M is `Botho` or `Botho.X.Y` and resolves to a
    scanned file (`Botho.lean` or `Botho/X/Y.lean`). Nothing else may be
@@ -26,8 +27,23 @@ all of the following hold for the formal/ tree at ROOT.
    string interpolation), no file contains:
      - a proof escape: `sorry`, `sorryAx`, `admit`, `native_decide`;
      - a command that runs code or hides messages at compile time: `#eval`,
-       `#eval!`, `run_cmd`, `run_elab`, `run_meta`, `run_tac`, `by_elab`,
-       `#guard_msgs`, `initialize`, `builtin_initialize`;
+       `#eval!`, `#guard`, `#guard_expr`, `run_cmd`, `run_elab`, `run_meta`,
+       `run_tac`, `by_elab`, `#guard_msgs`, `initialize`,
+       `builtin_initialize`; and, in model sources (not Theorems.lean, whose
+       `#print axioms` lines the axiom gate checks), `#print`;
+     - an evaluator, as an identifier or any dotted component (#1810):
+       `native` (`decide +native`, `native := true`), `reduceBool`,
+       `reduceNat`, `ofReduceBool`, `ofReduceNat`, `trustCompiler`. These run
+       compiled model code while the model is elaborated or type-checked;
+     - the prelude IO surface, as an identifier or any dotted component
+       (#1810): `IO`, `EIO`, `BaseIO`, `ST`, `EST`, `EStateM`, `RealWorld`,
+       `Void`, `System`, `FilePath`, the `unsafe` keyword, and any name
+       starting with `unsafe` or ending in `Unsafe` (`unsafeCast`,
+       `unsafeIO`, `unsafeBaseIO`, `unsafeEIO`, `ptrAddrUnsafe`, ...). This
+       covers `IO.FS`, `IO.Process`, `IO.Ref`, `ST.Ref`, `IO.RealWorld` and
+       the `Void`-cast world token. A model is pure, so it has no use for any
+       of them. The evaluator ban is the primary layer; this one means that
+       an evaluator the list misses has no named effect left to run;
      - a metaprogramming command (`macro`, `macro_rules`, `syntax`,
        `declare_syntax_cat`, `elab`, `elab_rules`) or a simproc
        (`simproc`, `dsimproc`, `simproc_decl`, `dsimproc_decl`);
@@ -53,7 +69,7 @@ FORBIDDEN = ("sorry", "sorryAx", "admit", "native_decide")
 # use for them, and they are the tools for faking gate output (printing a
 # fake `#print axioms` line, hiding "declaration uses sorry").
 FORBIDDEN_COMMANDS = (
-    "#eval", "#eval!", "run_cmd", "run_elab", "run_meta", "run_tac", "by_elab",
+    "#eval", "#eval!", "#guard", "#guard_expr", "run_cmd", "run_elab", "run_meta", "run_tac", "by_elab",
     "#guard_msgs", "initialize", "builtin_initialize",
     # Metaprogramming: a macro can expand to any of the commands above built
     # from raw syntax nodes, so the banned keyword never appears in the source.
@@ -82,8 +98,31 @@ FORBIDDEN_ATTR_SUFFIXES = (
 )
 # Modifiers that may precede an attribute name inside the brackets.
 ATTR_MODIFIERS = ("scoped", "local")
-# Forbidden as any dotted component (catches `set_option debug.skipKernelTC`).
-FORBIDDEN_COMPONENTS = ("skipKernelTC",)
+# Commands banned in model sources only: Theorems.lean is made of
+# `#print axioms` lines, which check-axioms.sh checks line by line.
+MODEL_ONLY_COMMANDS = ("#print",)
+MANIFEST = "Theorems.lean"
+# Evaluators (#1810): each runs compiled model code at build time. `native`
+# is `decide +native` and `decide (config := { native := true })`;
+# `Lean.reduceBool` / `Lean.reduceNat` make the kernel and `whnf` call the
+# compiler; `ofReduceBool`, `ofReduceNat` and `trustCompiler` are the axioms
+# behind them.
+EVALUATORS = (
+    "native", "reduceBool", "reduceNat", "ofReduceBool", "ofReduceNat",
+    "trustCompiler",
+)
+# The prelude IO surface (#1810). Without `import Lean`, an evaluator can
+# still run prelude IO given a world token, which `axiom w : Void Unit =
+# Void IO.RealWorld` plus `cast w (Void.mk ())` builds from safe code. A
+# model is pure, so none of these names belong in it.
+IO_SURFACE = (
+    "IO", "EIO", "BaseIO", "ST", "EST", "EStateM", "RealWorld", "Void",
+    "System", "FilePath", "unsafe",
+)
+UNSAFE_PREFIX, UNSAFE_SUFFIX = "unsafe", "Unsafe"
+# Forbidden as any dotted component (catches `set_option debug.skipKernelTC`,
+# `IO.FS.writeFile`, `Lean.reduceBool`, `+native`).
+FORBIDDEN_COMPONENTS = ("skipKernelTC",) + EVALUATORS + IO_SURFACE
 ALLOW_MARKER = "-- formal-gate: allow native_decide"
 IDENT = re.compile(r"#?[A-Za-z_][A-Za-z0-9_'!?.]*")
 # A Lean char literal starting at a `'`: one plain character, or an escape
@@ -198,11 +237,20 @@ def strip(src, interp):
     return "".join(out)
 
 
-def offenses(tok):
-    """Forbidden names in one identifier-like token, or []."""
-    if tok in FORBIDDEN_COMMANDS:
+def forbidden_component(part):
+    return (
+        part in FORBIDDEN_COMPONENTS
+        or (part.startswith(UNSAFE_PREFIX) and part != UNSAFE_PREFIX)
+        or (part.endswith(UNSAFE_SUFFIX) and part != UNSAFE_SUFFIX)
+    )
+
+
+def offenses(tok, model=True):
+    """Forbidden names in one identifier-like token, or []. MODEL is False
+    for the manifest (Theorems.lean), where `#print` is allowed."""
+    if tok in FORBIDDEN_COMMANDS or (model and tok in MODEL_ONLY_COMMANDS):
         return [tok]
-    found = [p for p in tok.split(".") if p in FORBIDDEN_COMPONENTS]
+    found = [p for p in tok.split(".") if forbidden_component(p)]
     tok = tok.rstrip(".")
     while tok.startswith(ROOT_PREFIX):
         tok = tok[len(ROOT_PREFIX):]
@@ -464,7 +512,7 @@ def check_imports(path, raw, root, scanned, errors):
 # ---- Token scan -------------------------------------------------------------
 
 
-def scan_tokens(path, raw, errors):
+def scan_tokens(path, raw, errors, model=True):
     raw_lines = raw.splitlines()
     reported = set()
     for interp in (False, True):
@@ -479,7 +527,7 @@ def scan_tokens(path, raw, errors):
             errors.append(f"{path}:{lineno}: forbidden attribute '{name}': {original.strip()}")
         for lineno, line in enumerate(stripped.splitlines(), 1):
             for tok in IDENT.findall(line):
-                for name in offenses(tok):
+                for name in offenses(tok, model):
                     original = raw_lines[lineno - 1] if lineno <= len(raw_lines) else ""
                     if name == "native_decide" and ALLOW_MARKER in original:
                         continue
@@ -504,7 +552,8 @@ def main():
             errors.append(f"{path}: cannot read as UTF-8: {e}")
             continue
         check_imports(path, raw, root, scanned, errors)
-        scan_tokens(path, raw, errors)
+        scan_tokens(path, raw, errors,
+                    model=os.path.relpath(path, root) != MANIFEST)
     if errors:
         for e in errors:
             print(e)

@@ -44,8 +44,11 @@
 #      sources as the base branch's. Both are parsed with tomllib; the
 #      package-level `srcDir` and, for every [[lean_lib]] and [[lean_exe]],
 #      `name`, `srcDir`, `roots`, `globs` and `root` must be identical, so
-#      the set of libraries and executables is too. Other keys (version,
-#      options, [[require]] pins) may change. A lakefile.lean next to either
+#      the set of libraries and executables is too. Which other keys may
+#      change is decided in check 2 by the base's key allow-list
+#      (gate-common.sh lakefile_preflight, run by check-sorry.sh): no
+#      [[require]], no listed manifest packages, no code-loading keys. A
+#      lakefile.lean next to either
 #      lakefile.toml, or a lakefile.toml tomllib cannot parse, is rejected.
 #      Without this check a pull request could keep the scanned Botho/ as a
 #      decoy and compile another copy (`srcDir = "src"`) whose theorems

@@ -665,11 +665,12 @@ expect_fail_with 'lakefile.toml changes the build layout' \
   "srcDir = \"src\" (full axiom gate)" axiom_gate "$d"
 expect fail "  (the initializer never ran)" test -e "$d/PWNED"
 
-# Both gates (#1770 second review): other layout changes are rejected. Since
-# #1799 only the layout keys are checked (the same keys as the verify job's
-# layout check): the old exact-text pins on lakefile.toml, lean-toolchain and
-# lake-manifest.json are gone, because the verify job runs this scan from the
-# base branch and accepts other lakefile edits and toolchain bumps.
+# Both gates (#1770 second review): other layout changes are rejected. The
+# layout keys are the same keys as the verify job's layout check. The old
+# exact-text pins on lakefile.toml, lean-toolchain and lake-manifest.json
+# are gone, because the verify job runs this scan from the base branch and
+# accepts benign lakefile edits and toolchain bumps; the key allow-list
+# (#1783 review, below) rejects the rest.
 for case in \
   'extra lean_lib|\n[[lean_lib]]\nname = "Evil"' \
   'lean_exe|\n[[lean_exe]]\nname = "evil"\nroot = "Evil"' \
@@ -737,6 +738,204 @@ expect pass "guillemet and multi-line imports, commented lakefile (full sorry ga
   sorry_gate "$d"
 expect pass "guillemet and multi-line imports, commented lakefile (full axiom gate)" \
   axiom_gate "$d"
+
+# ---- #1783 review: lakefile key allow-list ----
+
+# Both gates (#1783 review): the Judge's [[require]] bypass. A dependency's
+# lakefile.lean is a Lean program that Lake elaborates (running its `#eval`)
+# on every `lake` call; this one rewrites Botho/Cheat.lean before Lake
+# compiles it. The model sources and the committed manifest are what the
+# PoC committed. The preflight rejects it before any `lake` call, so the
+# dependency's code never runs.
+d="$(fresh_copy)"
+rm -rf "$d/.lake"
+mkdir "$d.dep"
+cat >"$d.dep/lakefile.lean" <<'EOF'
+import Lake
+open Lake DSL
+package tidy
+#eval show IO Unit from do
+  IO.FS.writeFile ((← IO.currentDir) / "PWNED_REQUIRE") ""
+  let p := (← IO.currentDir) / "Botho" / "Cheat.lean"
+  if ← p.pathExists then
+    IO.FS.writeFile p "namespace Botho\ntheorem one_eq_two : True := trivial\nend Botho\n"
+EOF
+printf 'namespace Botho\naxiom cheat : False\ntheorem one_eq_two : 1 = 2 := cheat.elim\nend Botho\n' \
+  >"$d/Botho/Cheat.lean"
+printf 'import Botho.Cheat\n' >>"$d/Botho.lean"
+printf '#print axioms Botho.one_eq_two\n' >>"$d/Theorems.lean"
+printf '\n[[require]]\nname = "tidy"\npath = "%s"\n' "$d.dep" >>"$d/lakefile.toml"
+cp "$here/fixtures/verify/require-dep/lake-manifest.json" "$d/lake-manifest.json"
+expect_fail_with "key 'require' is not allowed" \
+  "[[require]] dependency with a code-running lakefile.lean (full sorry gate)" sorry_gate "$d"
+expect_fail_with "lake-manifest.json must have an empty packages list" \
+  "[[require]] dependency: the manifest lists a package (full axiom gate)" axiom_gate "$d"
+expect_fail_with "key 'require' is not allowed" \
+  "[[require]] dependency (verify-job mode: --no-build, LAKE=false)" \
+  env LAKE=false "$here/check-sorry.sh" --no-build "$d"
+expect fail "  (the dependency's lakefile.lean never ran)" test -e "$d/PWNED_REQUIRE"
+expect fail "  (and nothing was built)" test -e "$d/.lake"
+
+# Both gates (#1783 review): a manifest that lists a package fails on its
+# own, with a clean lakefile.toml (second layer).
+d="$(fresh_copy)"
+cp "$here/fixtures/verify/require-dep/lake-manifest.json" "$d/lake-manifest.json"
+expect_fail_with "lake-manifest.json must have an empty packages list" \
+  "manifest with a package, clean lakefile (sorry gate, no scan)" sorry_gate --no-scan "$d"
+d="$(fresh_copy)"
+printf '{"packages": \n' >"$d/lake-manifest.json"
+expect_fail_with "cannot parse lake-manifest.json" \
+  "unparsable lake-manifest.json (sorry gate, no scan)" sorry_gate --no-scan "$d"
+
+# Both gates (#1783 review): keys that load or run code, unknown keys and
+# options outside the list are rejected. TOP| cases go before the first
+# table (package keys); LIB| cases are appended (inside [[lean_lib]]).
+for case in \
+  "key 'require' is not allowed|TOP|require = [{ name = \"x\", path = \"../x\" }]" \
+  "key 'moreLeanArgs' is not allowed|TOP|moreLeanArgs = [\"--plugin=evil.so\"]" \
+  "key 'weakLeanArgs' is not allowed|TOP|weakLeanArgs = [\"--load-dynlib=evil.so\"]" \
+  "key 'moreServerOptions' is not allowed|TOP|moreServerOptions = [\"-Dx=1\"]" \
+  "key 'moreLinkArgs' is not allowed|TOP|moreLinkArgs = [\"-levil\"]" \
+  "key 'buildDir' is not allowed|TOP|buildDir = \".lake/elsewhere\"" \
+  "key 'testDriver' is not allowed|TOP|testDriver = \"Botho\"" \
+  "key 'precompileModules' is not allowed|TOP|precompileModules = true" \
+  "key 'botho_unknown' is not allowed|TOP|botho_unknown = 1" \
+  "key 'description' must be a string|TOP|description = 1" \
+  "option 'debug.skipKernelTC' is not allowed|TOP|leanOptions = { debug.skipKernelTC = true }" \
+  "option 'weak.linter.all' is not allowed|TOP|leanOptions = { weak.linter.all = true }" \
+  "option 'pp.all' must be a bool|TOP|leanOptions = { pp.all = [true] }" \
+  "key 'moreLeanArgs' is not allowed|LIB|moreLeanArgs = [\"--plugin=evil.so\"]" \
+  "key 'plugins' is not allowed|LIB|plugins = [\"evil\"]" \
+  "key 'dynlibs' is not allowed|LIB|dynlibs = [\"evil\"]" \
+  "key 'precompileModules' is not allowed|LIB|precompileModules = true" \
+  "key 'extraDepTargets' is not allowed|LIB|extraDepTargets = [\"evil\"]" \
+  "key 'leanOptions' is not allowed|LIB|leanOptions = { autoImplicit = true }" \
+  "key 'require' is not allowed|LIB|\n[[require]]\nname = \"tidy\"\ngit = \"https://example.invalid/tidy\"\nrev = \"master\""; do
+  want="${case%%|*}"; rest="${case#*|}"; where="${rest%%|*}"; text="${rest#*|}"
+  d="$(fresh_copy)"
+  if [[ "$where" == TOP ]]; then
+    { printf '%b\n' "$text"; cat "$d/lakefile.toml"; } >"$d/lakefile.tmp"
+    mv "$d/lakefile.tmp" "$d/lakefile.toml"
+  else
+    printf '%b\n' "$text" >>"$d/lakefile.toml"
+  fi
+  expect_fail_with "$want" "lakefile.toml $where: $(printf '%b' "$text" | tr '\n' ' ') (sorry gate, no scan)" \
+    sorry_gate --no-scan "$d"
+done
+d="$(fresh_copy)"
+{ printf 'moreLeanArgs = ["--plugin=evil.so"]\n'; cat "$d/lakefile.toml"; } >"$d/lakefile.tmp"
+mv "$d/lakefile.tmp" "$d/lakefile.toml"
+expect_fail_with "key 'moreLeanArgs' is not allowed" \
+  "lakefile.toml moreLeanArgs (full axiom gate)" axiom_gate "$d"
+
+# Accepted (#1783 review): package metadata and plain leanOptions from the
+# allow-list, in both TOML spellings. Both full gates build and pass.
+d="$(fresh_copy)"
+cat >"$d/lakefile.toml" <<'EOF'
+name = "botho_formal"
+version = "0.2.0"
+description = "Botho formal model"
+keywords = ["formal", "lean"]
+license = "MIT"
+defaultTargets = ["Botho"]
+leanOptions = { linter.unusedVariables = false, maxRecDepth = 1024 }
+
+[[lean_lib]]
+name = "Botho"
+EOF
+expect pass "metadata and inline leanOptions (full sorry gate)" sorry_gate "$d"
+expect pass "metadata and inline leanOptions (full axiom gate)" axiom_gate "$d"
+d="$(fresh_copy)"
+cat >"$d/lakefile.toml" <<'EOF'
+name = "botho_formal"
+version = "0.1.2"
+defaultTargets = ["Botho"]
+
+[leanOptions]
+autoImplicit = false
+pp.unicode.fun = true
+
+[[lean_lib]]
+name = "Botho"
+EOF
+expect pass "version bump and [leanOptions] table (scan only)" sorry_gate --no-build "$d"
+d="$(fresh_copy)"
+rm "$d/lake-manifest.json"
+expect pass "no lake-manifest.json (scan only)" sorry_gate --no-build "$d"
+
+# ---- #1810: the prelude IO surface and the evaluators ----
+
+# Both gates (#1810): the Judge's split and #guard variants and the prelude
+# #eval swap. Each runs prelude IO at build time, with no `import Lean`, and
+# overwrites the compiled Botho/Cheat.olean (and Tidy.olean) with honest-
+# looking ones in which `one_eq_two` has no axioms. The --no-scan controls
+# show the forgery fools the later layers, so the scan cases are not vacuous.
+for fx in native-split-swap guard-swap eval-swap; do
+  want="$(cat "$here/fixtures/verify/$fx/expect.txt")"
+  d="$(fresh_copy)"
+  rm -rf "$d/.lake"
+  cp -R "$here/fixtures/verify/$fx/Botho/." "$d/Botho/"
+  cat "$here/fixtures/verify/$fx/imports.txt" >>"$d/Botho.lean"
+  cat "$here/fixtures/verify/$fx/manifest.txt" >>"$d/Theorems.lean"
+  expect_fail_with "$want" "$fx (full sorry gate)" sorry_gate "$d"
+  expect_fail_with "$want" "$fx (full axiom gate)" axiom_gate "$d"
+  expect fail "  (nothing was built)" test -e "$d/.lake"
+  expect pass "  (control: without the scan the forged .olean fools the axiom gate)" \
+    axiom_gate --no-scan "$d"
+done
+
+# Sorry gate (#1810): each banned name of the IO surface and each evaluator,
+# alone (scan only; the lines need not compile).
+for case in \
+  "IO|def Botho.x : IO Unit := pure ()" \
+  "IO|def Botho.x := IO.FS.writeFile \"f\" \"\"" \
+  "IO|def Botho.x := IO.Process.output" \
+  "IO|def Botho.x := IO.mkRef 0" \
+  "RealWorld|def Botho.x : Type := IO.RealWorld" \
+  "EIO|def Botho.x : EIO Nat Unit := pure ()" \
+  "BaseIO|def Botho.x : BaseIO Unit := pure ()" \
+  "ST|def Botho.x := ST.Ref.get" \
+  "EST|def Botho.x : EST Nat Nat Unit := pure ()" \
+  "EStateM|def Botho.x := EStateM.run" \
+  "Void|def Botho.x := Void.mk ()" \
+  "System|def Botho.x := System.FilePath.pathExists" \
+  "FilePath|open System in def Botho.x := FilePath.pathExists" \
+  "unsafeCast|def Botho.x : Nat := unsafeCast ()" \
+  "unsafeIO|def Botho.x := unsafeIO" \
+  "unsafeBaseIO|def Botho.x := unsafeBaseIO" \
+  "unsafeEIO|def Botho.x := unsafeEIO" \
+  "ptrAddrUnsafe|def Botho.x := ptrAddrUnsafe" \
+  "unsafe|unsafe def Botho.x : Nat := 1" \
+  "native|example : 2 + 2 = 4 := by decide +native" \
+  "native|example : 2 + 2 = 4 := by decide (config := { native := true })" \
+  "reduceBool|example : Lean.reduceBool true = true := rfl" \
+  "ofReduceBool|def Botho.x := Lean.ofReduceBool" \
+  "reduceNat|def Botho.x := Lean.reduceNat 1" \
+  "trustCompiler|def Botho.x := Lean.trustCompiler" \
+  "#guard|#guard 1 + 1 == 2" \
+  "#guard_expr|#guard_expr 1 + 1 = 2" \
+  "#print|#print axioms Botho.transfer_conserves" \
+  "#eval|#eval 1"; do
+  d="$(fresh_copy)"
+  printf '\n%b\n' "${case#*|}" >>"$d/Botho/Basic.lean"
+  expect_fail_with "forbidden token '${case%%|*}'" \
+    "IO surface / evaluator: ${case#*|} (scan only)" sorry_gate --no-build "$d"
+done
+
+# Negative control (#1810): names that only contain a banned name, the names
+# in comments and strings, and `#print axioms` in Theorems.lean pass; the
+# tree still builds.
+d="$(fresh_copy)"
+cat >>"$d/Botho/Basic.lean" <<'EOF'
+
+-- IO, Void, #guard, decide +native and unsafeCast in a comment
+def Botho.selftest_io_str : String := "IO.FS.writeFile, #eval, native"
+def Botho.selftest_runIO (nativeX ioVoid : Nat) : Nat := nativeX + ioVoid
+theorem Botho.selftest_STx : Botho.selftest_runIO 1 2 = 3 := rfl
+EOF
+printf '#print axioms Botho.selftest_STx\n' >>"$d/Theorems.lean"
+expect pass "IO-like names, comments and strings (full sorry gate)" sorry_gate "$d"
+expect pass "IO-like names, comments and strings (full axiom gate)" axiom_gate "$d"
 
 echo
 if [[ "$failures" != 0 ]]; then

@@ -17,12 +17,16 @@
 #       `@[implemented_by]`, ...), a metaprogramming command, or
 #       `debug.skipKernelTC`. See gate_scan.py for the full lists.
 #
-# Before anything else the gate checks that lakefile.toml keeps the pinned
-# build layout (gate-common.sh), so Lake compiles exactly the scanned files.
+# Before anything else the gate checks the build configuration
+# (gate-common.sh): lakefile.toml keeps the pinned build layout, so Lake
+# compiles exactly the scanned files, and uses only allow-listed keys (no
+# [[require]], no code-loading keys), and lake-manifest.json lists no
+# packages.
 #
 # The trusted verify job (verify-artifacts.sh, #1799) runs the base branch's
 # copy of this script with --no-build over a pull request's sources, as data:
-# then only the layout check and the scan run, and no `lake` call is made.
+# then only the build-configuration check and the scan run, and no `lake`
+# call is made.
 #
 # The scan runs first, before `lake build`, and a failed scan stops the gate
 # before any model code runs. Code that runs during the build could rewrite
