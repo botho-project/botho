@@ -29,6 +29,10 @@ rand_distr = { workspace = true, optional = true }
 rayon = { workspace = true, optional = true }
 # For progress tracking
 indicatif = { workspace = true, optional = true }
+# Production `ClusterTagVector` (16 tags, 0.1% pruning, `merge_weighted`) and
+# `RING_SIZE` for the bridge-import calibration sim (#1697). Simulation-only:
+# enabled by `cli`; tests get it from the dev-dependency below.
+bth-transaction-types = { path = "../transaction/types", default-features = false, features = ["alloc"], optional = true }
 
 [dev-dependencies]
 bth-util-from-random = { path = "../util/from-random" }
@@ -46,4 +50,4 @@ harness = false
 [features]
 default = []
 serde = ["dep:serde"]
-cli = ["dep:clap", "dep:rand", "dep:rand_chacha", "dep:rand_distr", "dep:rayon", "dep:indicatif"]
+cli = ["dep:bth-transaction-types", "dep:clap", "dep:rand", "dep:rand_chacha", "dep:rand_distr", "dep:rayon", "dep:indicatif"]

@@ -60,7 +60,8 @@ use crate::{
     demurrage_charge, fee_curve::PICO_PER_BTH, ClusterFactorCurve, TagVector, TAG_WEIGHT_SCALE,
 };
 
-use super::{bridge_import_sweep::import_cluster_id, metrics::calculate_gini};
+use super::metrics::calculate_gini;
+use crate::bridge_import::import_cluster_id;
 
 /// Blocks per year at the 5s reference block time (matches the node and every
 /// other sweep: `31_536_000 s / 5 s`).
