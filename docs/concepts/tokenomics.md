@@ -75,7 +75,7 @@ At the ~611M BTH tail-onset supply:
 - Blocks per year (5s baseline): 6,307,200
 - **Tail reward: supply-dependent, ~2.4 BTH/block gross (~1.9 BTH/block net) at this supply**
 
-The tail reward is **not a fixed constant**: it is recomputed each block from cumulative gross issuance at a 2.5% annual rate (2% net design plus a 0.5% assumed fee burn), so it grows as supply grows. The burn assumption is not met at realistic fee volumes, so realized net inflation is ~2.1–2.5% (the 0.5% burn the tail is calibrated for would need ~4,800 tx/s; see `experiments/results/emission_sweep.md`, #1699). (The exact tail-reward figure also depends on the assumed block time; cross-source numeric reconciliation is tracked separately in issue #321.)
+The tail reward is **not a fixed constant**: it is recomputed each block from cumulative gross issuance at a 2.5% annual rate (2% net design plus a 0.5% assumed fee burn), so it grows as supply grows. The burn assumption is not met at realistic fee volumes, so realized net inflation is ~2.1–2.53%, decision pending #1788 (the 0.5% burn the tail is calibrated for would need ~4,800 tx/s; see `experiments/results/emission_sweep.md`, #1699). (The exact tail-reward figure also depends on the assumed block time; cross-source numeric reconciliation is tracked separately in issue #321.)
 
 ### Emission Routing into the Lottery Pool
 

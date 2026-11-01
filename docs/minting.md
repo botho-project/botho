@@ -116,20 +116,20 @@ of `reward × 6,307,200` per epoch (e.g. 50 × 6,307,200 = 315.36M BTH in epoch 
 
 ### Phase 2: Tail Emission (Year 5+)
 
-After Phase 1, Botho transitions to perpetual tail emission targeting **2% annual net inflation**.
+After Phase 1, Botho transitions to perpetual tail emission at a **2.5% gross annual rate**, designed as 2% net of an assumed 0.5% fee burn (realized net ~2.1–2.53%; decision pending #1788).
 
 | Parameter | Value |
 |-----------|-------|
-| Target net inflation | 2% annually |
-| Tail reward | Supply-dependent: ~1.9 BTH per block at the ~611M tail-onset supply, growing with supply (at 5s blocks) |
-| Fee burn offset | ~0.5% expected |
+| Gross tail rate | 2.5% per 6,307,200 blocks (2% net design + 0.5% assumed burn) |
+| Tail reward | Supply-dependent: ~2.4 BTH per block gross at the ~611M tail-onset supply, growing with supply (at 5s blocks) |
+| Fee burn offset | 0.5% assumed (calibration); realized burn is far lower at anticipated loads |
 
 The tail reward is **not a fixed constant** — it is recomputed each block from
 cumulative gross issuance (`total_mined`, not reduced by burns). The gross
 per-block reward is `total_mined × (2% + 0.5% assumed burns) / 6,307,200`; at the
 ~611M tail-onset supply this is ~2.4 BTH/block, and it scales upward as supply
 grows, compounding at ~2.53% per 6,307,200 blocks. The 0.5% burn is a calibration
-assumption: realized net inflation is ~2.1–2.5% (the 0.5% burn the tail is calibrated for would need ~4,800 tx/s; see `experiments/results/emission_sweep.md`, #1699).
+assumption: realized net inflation is ~2.1–2.53%, decision pending #1788 (the 0.5% burn the tail is calibrated for would need ~4,800 tx/s; see `experiments/results/emission_sweep.md`, #1699).
 
 **Why tail emission?**
 - Ensures minters always have incentive to secure the network
@@ -188,7 +188,7 @@ observed < target (blocks too fast) → harden PoW
 new_difficulty = current_difficulty × clamp(observed / target, 0.5, 2.0)
 ```
 
-The signal deliberately ignores transaction count, so a block producer cannot skew difficulty by stuffing or starving blocks. Tail-phase inflation targeting comes from the supply-dependent tail *reward* (recomputed each block for 2% net), not from difficulty.
+The signal deliberately ignores transaction count, so a block producer cannot skew difficulty by stuffing or starving blocks. Tail-phase inflation targeting comes from the supply-dependent tail *reward* (recomputed each block from cumulative issuance at 2.5% gross), not from difficulty.
 
 ## Transaction Fees
 
@@ -303,8 +303,8 @@ A peer required for your quorum went offline.
 | Halving interval | 6,307,200 blocks (~1 year at 5s blocks) |
 | Number of halvings | 5 |
 | Phase 1 supply | ~611 million BTH (~5 years) |
-| Tail emission | Supply-dependent (~1.9 BTH/block at ~611M tail-onset supply) |
-| Tail inflation | 2.5% gross (2% net design; realized net ~2.1–2.5%) |
+| Tail emission | Supply-dependent (~2.4 BTH/block gross at ~611M tail-onset supply) |
+| Tail inflation | 2.5% gross (2% net design; realized net ~2.1–2.53%, decision pending #1788) |
 | Difficulty adjustment | Every block, time-based (0.5x–2x per step) |
 | Gossip port | 7100 |
 | RPC port | 7101 |

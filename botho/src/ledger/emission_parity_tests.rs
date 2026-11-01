@@ -4,8 +4,9 @@
 //! `DifficultyController` used by the agent-based runner) model issuance,
 //! fee burn and block timing with copies of the node's rules, because
 //! `cluster-tax` cannot depend on `botho`. These tests fail CI when the node
-//! and the copies diverge. They read node code only; nothing here changes
-//! consensus behaviour.
+//! and the copies diverge (run by the "Run emission-model drift guards" step
+//! in `.github/workflows/workspace-build.yml`). They read node code only;
+//! nothing here changes consensus behaviour.
 
 // `emission_sweep::cumulative_supply_at` is a thin wrapper over
 // `MonetaryPolicy::cumulative_issuance_at` (the `simulation` module is behind a
@@ -40,10 +41,10 @@ fn mainnet_policy_mirror_matches_node() {
 /// `calculate_block_reward(height, total_mined)`) over 20 policy-years.
 ///
 /// The node loop is the validator's own rule
-/// (`ledger::store::validation`: `calculate_block_reward(block.height(),
-/// state.total_mined)`, then `total_mined += reward`), block by block from
-/// height 1 — about 126M calls. Checkpoints cover every halving boundary, the
-/// tail onset, and the end of every policy-year.
+/// (`consensus/validation.rs`: `calculate_block_reward(tx.block_height,
+/// state.total_mined)`; `ledger/store/writer.rs`: `total_mined += reward`),
+/// block by block from height 1 — about 126M calls. Checkpoints cover every
+/// halving boundary, the tail onset, and the end of every policy-year.
 #[test]
 fn sim_cumulative_supply_matches_node_total_mined_over_20_policy_years() {
     let node_policy = mainnet_policy();

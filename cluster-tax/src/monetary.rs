@@ -571,6 +571,11 @@ pub struct MonetaryState {
     /// never reduced by burns. The sim's analogue of the node's
     /// `ChainState::total_mined`, which is what the node's tail reward is
     /// computed from (#1699). `u128` like the node's.
+    ///
+    /// Caveat: state serialized before #1699 lacks this field and deserializes
+    /// as 0, which would drop Phase-2 rewards to the 1-pico floor. Nothing
+    /// persists `MonetaryState` today; anything that starts to must migrate
+    /// old records (initial supply plus `total_rewards_emitted`) first.
     #[cfg_attr(feature = "serde", serde(default))]
     pub gross_issued: u128,
 }

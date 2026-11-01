@@ -43,7 +43,7 @@ The minting reward starts at 50 BTH and halves every **6,307,200 blocks** (one y
 
 ### Phase 2: Tail Emission
 
-After Phase 1, Botho transitions to perpetual tail emission targeting **2% annual net inflation** (gross emission minus fee burns), with difficulty adjusting to hit the target.
+After Phase 1, Botho transitions to perpetual tail emission targeting **2% annual net inflation** (gross emission minus fee burns). Difficulty only targets block time; the tail rate comes from the per-block reward, recomputed from cumulative issuance.
 
 **Why tail emission?**
 

@@ -97,8 +97,10 @@ burn is a few thousandths of a percent of supply. Demurrage is collected as
 part of the fee, so 20\% of it is burned too; that term is at most
 $\approx$0.4\%/year, and only if every coin sat at the maximum cluster factor
 and was settled yearly. The realized net tail is therefore between $\approx$2.1\%
-and 2.5\% per $N_{\text{year}}$ blocks, near the top in practice, rather than
+and $\approx$2.53\% (compounded) per $N_{\text{year}}$ blocks, near the top in practice, rather than
 2\%. The parameters are unchanged (ratified); this restates what they imply.
+Whether to keep them and restate the headline figure, or recalibrate the tail
+(a consensus change), is an open operator decision tracked in issue \#1788.
 
 \subsubsection{Supply Projection}
 
@@ -602,7 +604,7 @@ Initial reward & 50 BTH & Block reward at genesis \\
 Halving period & 6,307,200 blocks & $\approx$ 1 year (at 5s blocks) \\
 Halving count & 5 & Time-to-tail $\approx$ 5 years \\
 Phase-1 supply & $\approx$611M BTH & Geometric sum of 5 halvings \\
-Tail inflation & 2.5\% gross/yr & 2\% net + 0.5\% assumed burn; realized net $\approx$2.1--2.5\% \\
+Tail inflation & 2.5\% gross/yr & 2\% net + 0.5\% assumed burn; realized net $\approx$2.1--2.53\% \\
 Tail reward & $\approx$2.42 BTH/block & Gross, at 611M supply (recomputed each block) \\
 Min block time & 3 seconds & Consensus floor (very high load) \\
 Reference block time & 5 seconds & Monetary-calculation reference \\

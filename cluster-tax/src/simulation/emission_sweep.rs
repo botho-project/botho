@@ -597,8 +597,9 @@ Gross tail %/calendar yr | Base-fee burn %/calendar yr | Net (excl. demurrage) |
         "Neutral observations:\n\n\
 - Per policy-year, realised net tail inflation is the ~2.5% gross rate minus a base-fee burn \
 that is negligible at any load the timing tiers anticipate, minus at most the demurrage-burn \
-bound above: between ~2.1% and ~2.5%, near the top in practice. The \"2% net\" figure holds \
-only if burns reach the assumed 0.5%/yr.\n\
+bound above: between ~2.1% and ~2.53% compounded, near the top in practice. The \"2% net\" figure holds \
+only if burns reach the assumed 0.5%/yr. Whether to keep and restate the figure or recalibrate the \
+tail is an open operator decision (#1788).\n\
 - In calendar time, emission and the run-up to tail scale with block time: blocks are \
 load-paced (3–40 s), so \"5 years to tail\" is 3 years at sustained ≥20 tx/s and 40 years \
 when idle.\n\

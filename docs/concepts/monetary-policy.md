@@ -579,7 +579,7 @@ pub struct MonetaryEpoch {
 | 2 | 12,614,400 | 2 | 100 µBTH | 12.5 BTH | Second halving |
 | 3 | 18,921,600 | 3 | 50 µBTH | 6.25 BTH | Third halving |
 | 4 | 25,228,800 | 4 | 25 µBTH | 3.125 BTH | Fourth halving |
-| 5 | 31,536,000 | 5 | 12.5 µBTH | ~1.9 BTH (supply-dependent) | Tail emission begins |
+| 5 | 31,536,000 | 5 | 12.5 µBTH | ~2.4 BTH gross (supply-dependent) | Tail emission begins |
 | 6 | 63,072,000 | 10 | 10 µBTH | supply-dependent | Maturity (possible inflation reduction) |
 
 ### Epoch 0: Genesis
@@ -623,8 +623,8 @@ MonetaryEpoch {
     cluster_decay_bps: 500,
 
     // Emission (tail begins)
-    target_net_inflation_bps: 200,                 // 2% - now actively targeted
-    tail_emission_override: 0,                     // 0 = supply-dependent tail (recomputed each block to target 2% net)
+    target_net_inflation_bps: 200,                 // 2% net design figure; not a controller input (#1699)
+    tail_emission_override: 0,                     // 0 = supply-dependent tail (recomputed each block from total_mined at 2.5% gross; realized net ~2.1–2.53%, decision pending #1788)
 
     // Difficulty (monetary-focused for Phase 2)
     timing_weight_bps: 3000,                       // 30%
