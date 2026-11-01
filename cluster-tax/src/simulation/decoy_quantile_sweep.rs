@@ -33,6 +33,48 @@
 //! A kernel **passes the gate** iff Δgini > 0.05 AND dilution ≈ 1.0 AND
 //! over-charge ≈ 1.0.
 //!
+//! # Recorded results: ring 11 (PR #595) and the ring-20 re-run (#1796)
+//!
+//! The gate was first run (PR #595) with 11-member rings. The node's
+//! consensus minimum (`MIN_RING_SIZE`) is 20, so on 2026-11-01 (#1796) the
+//! default ring size was switched to the imported node value
+//! ([`bth_transaction_types::RING_SIZE`]) and the gate was re-run. Default
+//! population, seed `0xB07A_2025`, 25 rounds of one year, 200 bps, honest
+//! jitter ±5% (`cluster-tax-sim decoy-quantile-sweep`; add `--ring-size 11`
+//! for the original column):
+//!
+//! | kernel          | Δgini r11 | Δgini r20 | adv_dilution r11 | adv_dilution r20 | honest_overcharge r11 | honest_overcharge r20 | passes |
+//! |-----------------|----------:|----------:|-----------------:|-----------------:|----------------------:|----------------------:|:------:|
+//! | centroid (mean) | +0.1717 | +0.1623 | 0.0909 | 0.0500 | 0.9999 | 0.9996 | no / no |
+//! | quantile@p75    | +0.1535 | +0.1531 | 0.0000 | 0.0000 | 1.0227 | 1.0198 | no / no |
+//! | quantile@p90    | +0.1545 | +0.1548 | 0.0000 | 0.0000 | 1.0310 | 1.0336 | no / no |
+//! | quantile@max    | +0.3462 | +0.3467 | 1.0000 | 1.0000 | 1.0390 | 1.0427 | YES / YES |
+//!
+//! Honest over-charge under `quantile@max` against the honest decoy
+//! age-spread (`--honest-jitter-bps`), the table that set the wallet's
+//! `AGE_SIMILARITY_SPREAD_BPS = 1000` (±10%) band against the #314 ≤15%
+//! tolerance:
+//!
+//! | honest decoy age-spread | ring 11 | ring 20 | within #314 tolerance |
+//! |-------------------------|--------:|--------:|:---------------------:|
+//! | ±5%                     | 1.0390  | 1.0427  | yes / yes             |
+//! | ±10%                    | 1.0781  | 1.0855  | yes / yes             |
+//! | ±20%                    | 1.1560  | 1.1708  | no / no               |
+//! | ±35%                    | 1.2726  | 1.2986  | no / no               |
+//! | ±50%                    | 1.3888  | 1.4260  | no / no               |
+//!
+//! **No verdict changed at ring 20.** Only `quantile@max` passes, and ±10% is
+//! still the widest #314-safe age band. Two numbers moved, both in the
+//! direction the ring-size argument predicts. The mean kernel is diluted
+//! harder (the adversary pays 5.0% of the true charge instead of 9.1%,
+//! because 19 fresh decoys instead of 10 drag the mean further). Honest
+//! over-charge under `@max` rises slightly (±10%: 1.078 to 1.086), because
+//! the maximum of 19 jittered decoy ages sits closer to the top of the band
+//! than the maximum of 10. It stays below the 1.10 ceiling the band imposes by
+//! construction. (The ring-11 column differs from PR #595's figures in the
+//! third or fourth decimal, e.g. 1.0386 then vs 1.0390 now, from changes to the
+//! simulation since then; the verdicts are the same.)
+//!
 //! # Why a focused Monte-Carlo (not the agent framework)
 //!
 //! The agent framework ([`crate::simulation::run_simulation`]) models balances
@@ -57,6 +99,8 @@
 
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
+
+use bth_transaction_types::RING_SIZE;
 
 use crate::{demurrage_charge, ring_elapsed_centroid, ring_elapsed_quantile};
 
@@ -132,7 +176,8 @@ pub struct DecoySweepParams {
     pub poor_wealth: u64,
     /// Starting wealth of each whale (honest and adversary alike).
     pub whale_wealth: u64,
-    /// Ring size (1 real input + `ring_size - 1` decoys).
+    /// Ring size (1 real input + `ring_size - 1` decoys). Defaults to the
+    /// node's ring size ([`RING_SIZE`], 20).
     pub ring_size: usize,
     /// Number of simulated rounds; each round = one spend per agent and one
     /// per-capita redistribution. With `blocks_per_round == blocks_per_year`,
@@ -164,11 +209,11 @@ impl Default for DecoySweepParams {
             adversary_whales: 10,
             poor_wealth: 1_000,
             whale_wealth: 1_000_000,
-            // Historical: the #577 gate ran at ring 11, before the ring-20
-            // consensus minimum. Kept so the recorded gate stays reproducible;
-            // listed as an intentional divergence in
-            // `botho/tests/sim_code_parity.rs` (#1702).
-            ring_size: 11,
+            // The node's ring size (`bth_transaction_types::RING_SIZE`, equal
+            // to consensus `MIN_RING_SIZE`), imported rather than restated.
+            // The original #577 gate (PR #595) ran at ring 11; it was re-run
+            // at ring 20 on 2026-11-01 (#1796).
+            ring_size: RING_SIZE,
             rounds: 25,
             blocks_per_round: blocks_per_year,
             rate_bps: 200,
@@ -612,8 +657,9 @@ mod tests {
 
     #[test]
     fn lone_real_input_only_max_passes_dilution() {
-        // With ring_size 11 and a single old real input, only the max statistic
-        // surfaces it; p75/p90 return a fresh decoy age (heavy dilution).
+        // With the node's ring size (20) and a single old real input, only the
+        // max statistic surfaces it (a percentile needs p > 95% here); p75/p90
+        // return a fresh decoy age (heavy dilution).
         let report = run_decoy_sweep(&DecoySweepParams::default());
         let p75 = report
             .results

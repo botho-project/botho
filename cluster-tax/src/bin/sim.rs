@@ -662,8 +662,10 @@ mod cli {
             #[arg(long, default_value = "10")]
             adversary_whales: usize,
 
-            /// Ring size (1 real input + ring_size-1 decoys)
-            #[arg(long, default_value = "11")]
+            /// Ring size (1 real input + ring_size-1 decoys); defaults to the
+            /// node's ring size (`bth_transaction_types::RING_SIZE`, 20).
+            /// Pass `--ring-size 11` to reproduce the original #577 gate.
+            #[arg(long, default_value_t = bth_transaction_types::RING_SIZE)]
             ring_size: usize,
 
             /// Simulated rounds (each round ~= one year of holding)
@@ -817,7 +819,14 @@ mod cli {
         /// background→background and in-class spends stay at zero), and the
         /// decoy-contamination sensitivity. Does NOT wire anything into
         /// consensus.
-        HonestOverchargeSweep,
+        ///
+        /// `--ring-size` defaults to the node's ring size (20); pass
+        /// `--ring-size 11` to reproduce the pre-#1796 ring-11 tables.
+        HonestOverchargeSweep {
+            /// Ring size (1 real input + ring_size-1 decoys)
+            #[arg(long, default_value_t = bth_transaction_types::RING_SIZE)]
+            ring_size: usize,
+        },
 
         /// M2 (#605 / #626 §7) — RECALIBRATED-CUMULATIVE run: exercises the
         /// REAL production log-domain cluster-factor curve (not the
@@ -1219,7 +1228,9 @@ mod cli {
                 smoke,
             } => run_decoy_flood_sweep_cli(trials, seed, smoke),
             Command::BridgeImportSweep => run_bridge_import_sweep_cli(),
-            Command::HonestOverchargeSweep => run_honest_overcharge_sweep_cli(),
+            Command::HonestOverchargeSweep { ring_size } => {
+                run_honest_overcharge_sweep_cli(ring_size)
+            }
             Command::M2Cumulative {
                 horizon_years,
                 gamed,
@@ -5416,11 +5427,11 @@ mod cli {
         println!("{}", to_markdown(&report));
     }
 
-    fn run_honest_overcharge_sweep_cli() {
+    fn run_honest_overcharge_sweep_cli(ring_size: usize) {
         use bth_cluster_tax::simulation::downgrade_overcharge_sweep::{
-            run_honest_overcharge_sweep, to_markdown,
+            run_honest_overcharge_sweep_at, to_markdown,
         };
-        let report = run_honest_overcharge_sweep();
+        let report = run_honest_overcharge_sweep_at(ring_size);
         println!("# Honest-Overcharge Sweep for the #925 Downgrade Charge (issue #950)\n");
         println!("{}", to_markdown(&report));
     }

@@ -22,14 +22,14 @@ Input floor = `ring_centroid_implied_factor` over the real input + honest (backg
 | retail-purchase | 1.000x | 1.000x | no | 0.0000% | 0.0000% |
 | merchant-supplier | 1.000x | 1.000x | no | 0.0000% | 0.0000% |
 | mixer-withdrawal | 1.000x | 1.000x | no | 0.0000% | 0.0000% |
-| whale-consolidation | 5.708x | 5.745x | no | 0.0000% | 0.0000% |
-| whale-change-making | 5.620x | 5.745x | no | 0.0000% | 0.0000% |
-| whale-inclass-transfer | 5.612x | 5.745x | no | 0.0000% | 0.0000% |
+| whale-consolidation | 5.672x | 5.745x | no | 0.0000% | 0.0000% |
+| whale-change-making | 5.536x | 5.745x | no | 0.0000% | 0.0000% |
+| whale-inclass-transfer | 5.521x | 5.745x | no | 0.0000% | 0.0000% |
 | **exploit (young-wealthy→bg)** | 5.745x | 1.000x | **YES** | **1.8980%** | **9.4900%** |
 
 ### Honest false-positive rate & over-charge (clean rings, realistic case)
 
-Monte-Carlo over 20000 honest spends (seed `0xB07A0925`), ring size 11, all-background decoys (0% contamination). False-positive rate = fraction of honest spends charged a non-zero downgrade fee.
+Monte-Carlo over 20000 honest spends (seed `0xB07A0925`), ring size 20, all-background decoys (0% contamination). False-positive rate = fraction of honest spends charged a non-zero downgrade fee.
 
 **Honest false-positive rate: 0.0000% (0 / 20000 spends).**
 
@@ -60,13 +60,13 @@ The **only** channel to an honest over-charge: a wealthy decoy contaminating a b
 | contamination | honest FP rate | mean over-charge @5yr | max over-charge @5yr |
 |--------------:|--------------:|----------------------:|---------------------:|
 | 0.0% | 0.0000% | 0.0000% | 0.0000% |
-| 1.0% | 8.3750% | 9.3843% | 9.4820% |
-| 5.0% | 34.0250% | 9.3997% | 9.4840% |
-| 10.0% | 55.7200% | 9.4129% | 9.4880% |
+| 1.0% | 14.3250% | 9.3257% | 9.4720% |
+| 5.0% | 52.4900% | 9.3603% | 9.4800% |
+| 10.0% | 72.9050% | 9.3955% | 9.4860% |
 
 ### Factor-similarity decoy band (picks `FACTOR_SIMILARITY_SPREAD`)
 
-The §4.5 contamination channel is closed at the wallet layer by a factor band mirroring the shipped `AGE_SIMILARITY_SPREAD_BPS` (±10%) age band: a background (1×) spender draws only decoys whose cluster factor sits within the band around its real input's factor. This sweep applies that filter at the pathological 5.0% raw contamination (the §4.5 level that gave a 34.0% FP rate UNFILTERED) and finds the widest band that keeps the honest FP rate at 0%. Band edge = `1000 × (1 + spread)` clamped to 6×; same-class (background) pool retention is 1.00 at every band because factor is class-quantized.
+The §4.5 contamination channel is closed at the wallet layer by a factor band mirroring the shipped `AGE_SIMILARITY_SPREAD_BPS` (±10%) age band: a background (1×) spender draws only decoys whose cluster factor sits within the band around its real input's factor. This sweep applies that filter at the pathological 5.0% raw contamination (the §4.5 level that gave a 52.5% FP rate UNFILTERED) and finds the widest band that keeps the honest FP rate at 0%. Band edge = `1000 × (1 + spread)` clamped to 6×; same-class (background) pool retention is 1.00 at every band because factor is class-quantized.
 
 | factor band | band edge (×) | wealthy classes admitted | eligible pool | same-class pool | honest FP rate | mean over-charge @5yr | FP-safe |
 |------------:|--------------:|-------------------------:|--------------:|----------------:|---------------:|----------------------:|:-------:|
@@ -76,9 +76,9 @@ The §4.5 contamination channel is closed at the wallet layer by a factor band m
 | ±35% | 1.350× | 0 / 6 | 95.00% | 100.00% | 0.0000% | 0.0000% | yes |
 | ±50% | 1.500× | 0 / 6 | 95.00% | 100.00% | 0.0000% | 0.0000% | yes |
 | ±90% | 1.900× | 0 / 6 | 95.00% | 100.00% | 0.0000% | 0.0000% | yes |
-| ±100% | 2.000× | 1 / 6 | 95.83% | 100.00% | 8.0000% | 1.5661% | NO |
-| ±250% | 3.500× | 3 / 6 | 97.50% | 100.00% | 22.4000% | 3.3982% | NO |
-| ±500% | 6.000× | 6 / 6 | 100.00% | 100.00% | 40.5350% | 6.1124% | NO |
+| ±100% | 2.000× | 1 / 6 | 95.83% | 100.00% | 14.4600% | 1.3859% | NO |
+| ±250% | 3.500× | 3 / 6 | 97.50% | 100.00% | 37.7500% | 3.2374% | NO |
+| ±500% | 6.000× | 6 / 6 | 100.00% | 100.00% | 62.3750% | 6.2239% | NO |
 
 **Recommended `FACTOR_SIMILARITY_SPREAD` = ±10% (1000 bps)** — the age-band convention, comfortably inside the widest FP-safe band (±90%). Every band that excludes the nearest wealthy class drives the honest FP rate to exactly 0% while retaining the full same-class background pool.
 

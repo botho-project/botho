@@ -29,8 +29,6 @@
 //! [`intentional_divergences_are_still_the_documented_values`] pins them, so
 //! aligning one (or drifting further) forces this list to be revisited:
 //!
-//! - `decoy_quantile_sweep` (#577 gate) and `downgrade_overcharge_sweep` (#925
-//!   honest over-charge) build 11-member rings; consensus requires 20.
 //! - `m2.rs` (legacy `m2-cumulative` / `m2-decay`) and the `lottery-experiment`
 //!   CLI assume 20 s blocks (4,320/day); `m2_production` is the at-node run.
 //! - The node's own decoy gamma assumes 2-minute blocks (720/day) while the
@@ -147,6 +145,10 @@ fn ring_size_matches_consensus_minimum() {
     assert_eq!(CONSENSUS_RING_SIZE, min);
     assert_eq!(bth_transaction_types::RING_SIZE, min);
     assert_eq!(privacy::RING_SIZE, min);
+    // The #577 gate and #925 honest over-charge sweeps were re-run at ring 20
+    // (#1796); their defaults must track consensus, not a historical 11.
+    assert_eq!(DecoySweepParams::default().ring_size, min);
+    assert_eq!(HonestSweepParams::default().ring_size, min);
     assert_eq!(privacy::DECOY_COUNT, min - 1);
     assert_eq!(m2_production::RING_SIZE, min);
     assert_eq!(botho_wallet::decoy_selection::DEFAULT_RING_SIZE, min);
@@ -255,11 +257,6 @@ fn lottery_constants_match_node() {
 /// harness's published report, in the same change.
 #[test]
 fn intentional_divergences_are_still_the_documented_values() {
-    let consensus_ring = botho::transaction::MIN_RING_SIZE;
-    assert_eq!(DecoySweepParams::default().ring_size, 11);
-    assert_eq!(HonestSweepParams::default().ring_size, 11);
-    assert_ne!(11, consensus_ring);
-
     assert_eq!(m2::M2_BLOCKS_PER_DAY, 4_320);
     assert_ne!(m2::M2_BLOCKS_PER_DAY, node_blocks_per_year() / 365);
 
