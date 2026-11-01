@@ -69,7 +69,7 @@ jobs:
         run: |
           # Paths that trigger the Lean job. Child issues of #1704 append the
           # Rust files their models mirror.
-          pattern='^(formal/|\.github/workflows/formal\.yml$|cluster-tax/src/lottery\.rs$|botho/src/block\.rs$)'
+          pattern='^(formal/|\.github/workflows/formal\.yml$|cluster-tax/src/lottery\.rs$|botho/src/block\.rs$|botho/src/consensus/lottery\.rs$|botho/src/ledger/lottery_v2\.rs$|botho/src/ledger/store/validation\.rs$)'
           case "$EVENT" in
             pull_request) range="$BASE_SHA...HEAD" ;;
             push)

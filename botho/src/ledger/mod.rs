@@ -9,6 +9,12 @@ mod experimental;
 mod lottery_v2;
 mod snapshot;
 mod store;
+// TEST/DRT ONLY (#1706, #1707): the V2 drawing over an in-memory
+// DerivationReads double, for the Lean differential tests in formal-drt/.
+// Gated like the ledger fixture API; never in a node build.
+#[cfg(feature = "test-fixtures")]
+#[doc(hidden)]
+pub mod formal_drt;
 // Drift guards pinning the cluster-tax emission model to the node (#1699).
 #[cfg(test)]
 mod emission_parity_tests;
