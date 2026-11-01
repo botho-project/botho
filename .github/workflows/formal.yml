@@ -1,12 +1,35 @@
 name: Formal (Lean)
 
-# Builds the Lean 4 model under formal/ and runs the sorry and axiom gates
-# (#1705, epic #1704).
+# Builds the Lean 4 model under formal/ and checks it (#1705, epic #1704).
+#
+# Two jobs, split at a trust boundary (#1799):
+#
+#   build   UNTRUSTED. Checks out the pull request and runs `lake build` and
+#           the in-tree gates. Building runs code from the model (an
+#           `initialize`, a simproc, `decide +native`, ...), so nothing this
+#           job reports or leaves on disk is trusted. It uploads only the
+#           compiled .olean files, as the artifact `formal-lib`.
+#   verify  TRUSTED. A fresh runner with no cache. It checks out
+#           formal/scripts/ (verify-artifacts.sh, AxiomReport.lean, the
+#           scan) and axioms-allowlist.txt from the BASE commit, never from
+#           the pull request, downloads `formal-lib`, and runs leanchecker
+#           and the independent axiom walk over it. It never runs `lake` and
+#           never compiles or imports model code through the Lean frontend,
+#           so model code does not run in this job (see "Limits" in
+#           formal/README.md). The pull request's sources are read as data:
+#           the base branch's scan checks them and the manifest is parsed as
+#           text.
+#
+# The workflow file itself comes from the pull request (that is how
+# `pull_request` works; `pull_request_target` would be worse: it runs with a
+# write token and secrets). Changes to this file and to formal/scripts/ need
+# human review.
 #
 # No workflow-level `paths:` filter on purpose: a path-filtered workflow that
 # is skipped leaves a required check pending forever. The `changes` job decides
-# whether the heavy `lean` job runs, and `formal-gate` always runs and passes
-# when `lean` succeeded or was skipped. Make `formal-gate` the required check.
+# whether `build` and `verify` run, and `formal-gate` always runs and passes
+# when both succeeded or both were skipped. Make `formal-gate` the required
+# check.
 
 on:
   pull_request:
@@ -23,6 +46,8 @@ concurrency:
 
 env:
   ELAN_VERSION: v4.2.4
+  # sha256 of elan-init.sh at ELAN_VERSION. The verify job checks it.
+  ELAN_INIT_SHA256: a620ff1641616222c8d37c54845492004bb84d6877cdbc944dd65c1aa685bf53
 
 jobs:
   changes:
@@ -64,16 +89,24 @@ jobs:
             echo "formal=false" >>"$GITHUB_OUTPUT"
           fi
 
-  lean:
+  build:
     needs: changes
     if: needs.changes.outputs.formal == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    # Untrusted: read-only token, no secrets.
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: formal
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # Only the toolchain is cached, and only this job restores it. There is
+      # no .lake cache: a cached build from one run must never feed another
+      # (#1799).
       - name: Cache elan toolchain
         uses: actions/cache@v6
         with:
@@ -92,37 +125,127 @@ jobs:
           elan toolchain install "$(cat lean-toolchain)"
           lean --version
           lake --version
-      - name: Cache .lake build
-        uses: actions/cache@v6
-        with:
-          path: formal/.lake
-          key: lake-${{ runner.os }}-${{ hashFiles('formal/lean-toolchain', 'formal/lake-manifest.json') }}-${{ hashFiles('formal/**/*.lean') }}
-          restore-keys: |
-            lake-${{ runner.os }}-${{ hashFiles('formal/lean-toolchain', 'formal/lake-manifest.json') }}-
-      - name: lake build
-        run: lake build
+      # Fast feedback only: the gates build the model themselves. The
+      # verdict comes from the verify job.
       - name: Sorry gate
         run: scripts/check-sorry.sh
       - name: Axiom gate
         run: scripts/check-axioms.sh
+      # Keep this file list in sync with artifact_files in
+      # formal/scripts/selftest-verify.sh.
+      - name: Stage compiled library
+        run: |
+          stage="$RUNNER_TEMP/formal-lib"
+          mkdir -p "$stage"
+          cd .lake/build/lib/lean
+          find . -type f \( -name '*.olean' -o -name '*.olean.server' \
+            -o -name '*.olean.private' -o -name '*.ir' \) -print0 \
+            | xargs -0 -I{} cp --parents {} "$stage/"
+          find "$stage" -type f | sort
+      - name: Upload compiled library
+        uses: actions/upload-artifact@v7
+        with:
+          name: formal-lib
+          path: ${{ runner.temp }}/formal-lib
+          if-no-files-found: error
+          retention-days: 5
+      # The self-tests run fixture code, so they run after the upload.
       - name: Gate self-test
         run: scripts/selftest-gates.sh
+      - name: Verify self-test (#1783 review PoCs)
+        run: scripts/selftest-verify.sh
+
+  verify:
+    needs: [changes, build]
+    if: needs.changes.outputs.formal == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      # The commit whose gate scripts and allow-list decide the verdict: the
+      # base of a pull request, otherwise the pushed (already merged) commit.
+      TRUSTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
+    steps:
+      - name: Check out gate scripts and allow-list (base commit)
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TRUSTED_SHA }}
+          path: trusted
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /formal/scripts/
+            /formal/axioms-allowlist.txt
+      - name: Check out pull request sources (data only, never built)
+        uses: actions/checkout@v7
+        with:
+          path: untrusted
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /formal/
+      - name: Download compiled library
+        uses: actions/download-artifact@v8
+        with:
+          name: formal-lib
+          path: ${{ runner.temp }}/formal-lib
+      # Fresh install, no cache: a cache written by the untrusted build job
+      # could hold a modified toolchain.
+      - name: Install elan and the toolchain
+        id: toolchain
+        run: |
+          tc="$(tr -d '[:space:]' <untrusted/formal/lean-toolchain)"
+          # Only official Lean releases: the pull request picks the version,
+          # never the origin of the binaries this job runs.
+          if [[ ! "$tc" =~ ^leanprover/lean4:v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
+            echo "::error::lean-toolchain '$tc' is not an official leanprover/lean4 release"
+            exit 1
+          fi
+          curl -sSfL "https://raw.githubusercontent.com/leanprover/elan/${ELAN_VERSION}/elan-init.sh" -o "$RUNNER_TEMP/elan-init.sh"
+          echo "${ELAN_INIT_SHA256}  $RUNNER_TEMP/elan-init.sh" | sha256sum -c -
+          sh "$RUNNER_TEMP/elan-init.sh" -y --default-toolchain none --no-modify-path
+          "$HOME/.elan/bin/elan" toolchain install "$tc"
+          sysroot="$HOME/.elan/toolchains/$(sed -e 's|/|--|g' -e 's|:|---|g' <<<"$tc")"
+          "$sysroot/bin/lean" --version
+          echo "sysroot=$sysroot" >>"$GITHUB_OUTPUT"
+      - name: Verify (base-commit gates over the compiled library)
+        env:
+          SYSROOT: ${{ steps.toolchain.outputs.sysroot }}
+        run: |
+          gate=trusted/formal
+          if [[ ! -f "$gate/scripts/verify-artifacts.sh" ]]; then
+            # Bootstrap: only the pull request that adds verify-artifacts.sh
+            # (#1799) has a base without it. Its own copy runs, with the
+            # base allow-list. Remove this branch once #1799 is on main.
+            echo "::warning::base commit has no formal/scripts/verify-artifacts.sh; bootstrapping with the pull request's copy"
+            gate=untrusted/formal
+          fi
+          bash "$gate/scripts/verify-artifacts.sh" \
+            --lib "$RUNNER_TEMP/formal-lib" \
+            --sources untrusted/formal \
+            --sysroot "$SYSROOT" \
+            --allowlist trusted/formal/axioms-allowlist.txt
 
   formal-gate:
-    needs: [changes, lean]
+    needs: [changes, build, verify]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require lean job success or skip
+      - name: Require build and verify success, or both skipped
         env:
           CHANGES: ${{ needs.changes.result }}
-          LEAN: ${{ needs.lean.result }}
+          BUILD: ${{ needs.build.result }}
+          VERIFY: ${{ needs.verify.result }}
         run: |
-          echo "changes=$CHANGES lean=$LEAN"
+          echo "changes=$CHANGES build=$BUILD verify=$VERIFY"
           if [[ "$CHANGES" != "success" ]]; then
             echo "changes job did not succeed" >&2; exit 1
           fi
-          if [[ "$LEAN" != "success" && "$LEAN" != "skipped" ]]; then
-            echo "lean job did not succeed" >&2; exit 1
+          if [[ "$BUILD" == "skipped" && "$VERIFY" == "skipped" ]]; then
+            exit 0
+          fi
+          if [[ "$BUILD" != "success" || "$VERIFY" != "success" ]]; then
+            echo "build and verify must both succeed" >&2; exit 1
           fi
