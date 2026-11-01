@@ -6,6 +6,9 @@
 //! special scope management. These macros create a Logger and pass it
 //! to the wrapped function for API compatibility.
 
+// `proc_macro_diagnostic` is currently unused; kept so the nightly feature set
+// is unchanged.
+#![allow(unused_features)]
 #![feature(proc_macro_diagnostic)]
 
 extern crate proc_macro;

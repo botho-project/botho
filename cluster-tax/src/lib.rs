@@ -1,4 +1,18 @@
 #![deny(clippy::print_stdout)]
+// Sweep SEED constants use mnemonic hex groupings (e.g. 0xB07A_0902_D2).
+#![allow(clippy::unusual_byte_groupings)]
+// Test-only style lints in files whose contents are hash-pinned by the
+// CT-contract inventory (tag.rs, fee_curve.rs, monetary.rs,
+// provenance_factor_sweep.rs); allowed here rather than editing those files.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::manual_range_contains,
+        clippy::unnecessary_cast,
+        clippy::identity_op,
+        clippy::useless_vec
+    )
+)]
 
 //! Botho fee system with size-based progressive pricing.
 //!

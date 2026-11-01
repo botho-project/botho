@@ -305,10 +305,10 @@ pub fn calculate_fee_rates_by_quintile(
 
     // Sort by wealth
     let mut sorted = agents.to_vec();
-    sorted.sort_by(|a, b| a.1.cmp(&b.1));
+    sorted.sort_by_key(|a| a.1);
 
     let n = sorted.len();
-    let quintile_size = (n + 4) / 5; // Ceiling division
+    let quintile_size = n.div_ceil(5); // Ceiling division
 
     let mut quintile_rates = [0.0; 5];
     let mut quintile_counts = [0usize; 5];
@@ -393,7 +393,7 @@ pub fn snapshot_metrics(
         0.0
     };
 
-    let avg_cluster_wealth = if cluster_wealth.len() > 0 {
+    let avg_cluster_wealth = if !cluster_wealth.is_empty() {
         cluster_wealth.total() / cluster_wealth.len() as u64
     } else {
         0

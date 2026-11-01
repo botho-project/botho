@@ -1,0 +1,42 @@
+name: Clippy (deny warnings)
+
+# Gate: `cargo clippy --all-targets -- -D warnings` on the pinned nightly for the
+# crates that are currently warning-clean. Crates NOT in this set still carry
+# pre-existing warnings (see #1795); add each crate here as it is cleaned.
+# Other crates are gated by their own workflows (bridge-ci, metrics-ci,
+# lottery-primitives).
+
+on:
+  pull_request:
+    paths:
+      - '**/*.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/clippy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clippy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clippy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-06-09
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: clippy
+      - name: Clippy (clean crate set, deny warnings)
+        run: >
+          cargo clippy --locked
+          -p bth-common -p bth-util-logger-macros -p bth-cluster-tax
+          --all-targets -- -D warnings

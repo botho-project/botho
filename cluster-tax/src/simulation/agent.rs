@@ -39,6 +39,7 @@ pub enum Action {
 
 /// Result of an agent's action execution.
 #[derive(Clone, Debug)]
+#[allow(dead_code)] // scaffolding retained for the agent API
 pub struct ActionResult {
     /// Total fees paid.
     pub fees_paid: u64,
@@ -53,6 +54,7 @@ pub struct ActionResult {
     pub description: Option<String>,
 }
 
+#[allow(dead_code)]
 impl ActionResult {
     pub fn success(fees: u64, net: u64) -> Self {
         Self {

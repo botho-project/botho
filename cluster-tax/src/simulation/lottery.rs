@@ -726,7 +726,7 @@ impl LotterySimulation {
 
         // Calculate cluster factor
         let cluster_factor = self.fee_curve.rate_bps(wealth) as f64 / 100.0;
-        let cluster_factor = cluster_factor.max(1.0).min(6.0);
+        let cluster_factor = cluster_factor.clamp(1.0, 6.0);
 
         for _ in 0..utxo_count {
             if value_per_utxo >= self.config.min_utxo_value {
@@ -781,7 +781,7 @@ impl LotterySimulation {
         };
 
         let value_per_utxo = wealth / utxo_count.max(1) as u64;
-        let cluster_factor = cluster_factor.max(1.0).min(6.0);
+        let cluster_factor = cluster_factor.clamp(1.0, 6.0);
 
         for _ in 0..utxo_count {
             if value_per_utxo > 0 {
@@ -890,7 +890,7 @@ impl LotterySimulation {
         let utxo_id = self.next_utxo_id;
         self.next_utxo_id += 1;
 
-        let cluster_factor = cluster_factor.max(1.0).min(6.0);
+        let cluster_factor = cluster_factor.clamp(1.0, 6.0);
         let utxo =
             LotteryUtxo::with_entropy(utxo_id, owner_id, value, cluster_factor, 0, tag_entropy);
         self.utxos.insert(utxo_id, utxo);
@@ -1914,7 +1914,7 @@ impl LotterySimulation {
         self.metrics.gini_snapshots.push((self.current_block, gini));
 
         // Track tickets by quintile
-        for (owner_id, _) in &self.owners {
+        for owner_id in self.owners.keys() {
             let tickets = self.owner_tickets(*owner_id);
             let quintile = self.wealth_quintile(*owner_id);
             self.metrics.tickets_by_quintile[quintile] += tickets;
@@ -2591,7 +2591,7 @@ mod tests {
             "  Pool distributed: {}",
             sim_value.metrics.total_distributed
         );
-        eprintln!("");
+        eprintln!();
         eprintln!("Uniform (everyone transacts equally):");
         eprintln!("  Initial Gini: {:.4}", uniform_initial_gini);
         eprintln!("  Final Gini:   {:.4}", uniform_final_gini);
@@ -2865,7 +2865,7 @@ mod tests {
 
         eprintln!("\n=== PURE VALUE-WEIGHTED MODEL ===");
         eprintln!("Initial Gini: {:.4}", initial_gini);
-        eprintln!("");
+        eprintln!();
         eprintln!("With ValueWeighted transactions (rich transact more):");
         eprintln!("  Final Gini: {:.4}", final_gini_vw);
         eprintln!(
@@ -2873,7 +2873,7 @@ mod tests {
             (initial_gini - final_gini_vw) / initial_gini * 100.0
         );
         eprintln!("  Fees: {}", fees_vw);
-        eprintln!("");
+        eprintln!();
         eprintln!("With Uniform transactions (everyone transacts equally):");
         eprintln!("  Final Gini: {:.4}", final_gini_uniform);
         eprintln!(
@@ -2993,7 +2993,7 @@ mod tests {
         let ticket_change = final_tickets - initial_tickets;
         let ticket_change_pct = ticket_change / initial_tickets * 100.0;
 
-        eprintln!("");
+        eprintln!();
         eprintln!("After {} wash trades:", wash_count);
         eprintln!(
             "  Value: {} (lost {})",
@@ -3006,7 +3006,7 @@ mod tests {
             final_tickets, ticket_change, ticket_change_pct
         );
         eprintln!("  Fees paid: {}", total_fees_paid);
-        eprintln!("");
+        eprintln!();
         eprintln!("Result: Wash trader LOST tickets (EV = -fees)");
         eprintln!("============================================\n");
 
@@ -3142,7 +3142,7 @@ mod tests {
         eprintln!("  Per-output fee (beyond 2): {}", per_output_fee);
         eprintln!("  Pool fraction: {:.0}%", pool_fraction * 100.0);
         eprintln!("  Winners per drawing: {}", winners_per_drawing);
-        eprintln!("");
+        eprintln!();
 
         // Simulate a system with varying UTXO counts
         for total_utxos in [1_000, 10_000, 100_000, 1_000_000u64] {
@@ -3178,15 +3178,15 @@ mod tests {
             );
         }
 
-        eprintln!("");
+        eprintln!();
         eprintln!("Interpretation:");
         eprintln!("  If break-even > holding period, splitting is unprofitable.");
         eprintln!("  With large UTXO counts, expected value per UTXO is tiny.");
         eprintln!("  Per-output fees make splitting costly relative to expected winnings.");
-        eprintln!("");
+        eprintln!();
 
         // Now simulate the actual redistribution effect
-        let total_wealth = 100_000_000u64;
+        let _total_wealth = 100_000_000u64;
         let config = LotteryConfig {
             base_fee: 100,
             drawing_interval: 10,
@@ -3223,7 +3223,7 @@ mod tests {
         eprintln!("  1 rich (99M BTH) = 99% of wealth, 1% of population");
         eprintln!("  Initial UTXOs: {}", initial_utxo_count);
         eprintln!("  Initial Gini: {:.4}", initial_gini);
-        eprintln!("");
+        eprintln!();
 
         // Run simulation with uniform transaction pattern (everyone transacts equally)
         // This is the KEY test - uniform transactions, uniform lottery
@@ -3243,7 +3243,7 @@ mod tests {
         );
         eprintln!("  Fees collected: {}", sim.metrics.total_fees_collected);
         eprintln!("  Pool distributed: {}", sim.metrics.total_distributed);
-        eprintln!("");
+        eprintln!();
 
         // The hypothesis: UniformPerUtxo with uniform transactions should be
         // progressive because 90% of UTXOs belong to poor people (by count).
@@ -3277,7 +3277,7 @@ mod tests {
     fn test_immediate_distribution_model() {
         eprintln!("\n=== IMMEDIATE DISTRIBUTION MODEL ===");
         eprintln!("Each transaction picks 4 random UTXOs to receive a share of fees.");
-        eprintln!("");
+        eprintln!();
 
         // This is a simplified model:
         // - Transaction pays fee F
@@ -3297,7 +3297,7 @@ mod tests {
         );
         eprintln!("  Per winner (4 winners): {:.0}", per_winner);
         eprintln!("  Burned (20%): {}", (fee as f64 * 0.2) as u64);
-        eprintln!("");
+        eprintln!();
 
         // Expected value analysis for different UTXO counts
         for total_utxos in [100, 1000, 10000, 100000u64] {
@@ -3312,12 +3312,12 @@ mod tests {
             );
         }
 
-        eprintln!("");
+        eprintln!();
         eprintln!("Key insight:");
         eprintln!("  With many UTXOs, expected value per UTXO per transaction is tiny.");
         eprintln!("  Creating an extra UTXO costs a full fee but gains tiny EV.");
         eprintln!("  Therefore splitting is unprofitable with large UTXO counts.");
-        eprintln!("");
+        eprintln!();
 
         // Now let's verify the break-even
         let total_utxos = 10000u64;
@@ -3354,7 +3354,7 @@ mod tests {
         eprintln!("  2. 80% immediately distributed to 4 random UTXOs");
         eprintln!("  3. 20% burned");
         eprintln!("  4. Uniform UTXO selection (no cluster tracking for lottery)");
-        eprintln!("");
+        eprintln!();
 
         let total_wealth = 100_000_000u64;
 
@@ -3416,13 +3416,13 @@ mod tests {
             eprintln!("  Fees collected: {}", sim.metrics.total_fees_collected);
             eprintln!("  Distributed: {}", sim.metrics.total_distributed);
             eprintln!("  Burned: {}", sim.total_burned);
-            eprintln!("");
+            eprintln!();
         }
 
         // Now test with more extreme inequality to see population statistics effect
         eprintln!("--- Extreme Inequality Test ---");
         eprintln!("Population: 100 poor (0.01% each), 10 middle (1% each), 1 ultra-rich (89%)");
-        eprintln!("");
+        eprintln!();
 
         for (name, tx_model) in [
             ("ValueWeighted", TransactionModel::ValueWeighted),
@@ -3470,7 +3470,7 @@ mod tests {
             );
         }
 
-        eprintln!("");
+        eprintln!();
         eprintln!("================================\n");
     }
 
@@ -3479,7 +3479,7 @@ mod tests {
     fn test_superlinear_output_fees() {
         eprintln!("\n=== SUPERLINEAR OUTPUT FEE TEST ===");
         eprintln!("Fee = base × factor × outputs^exponent");
-        eprintln!("");
+        eprintln!();
 
         let base = 100u64;
         let factor = 3.0; // Medium cluster factor
@@ -3495,7 +3495,7 @@ mod tests {
                     outputs, fee, per_output
                 );
             }
-            eprintln!("");
+            eprintln!();
         }
 
         // With exponent=2.0:
@@ -3513,7 +3513,7 @@ mod tests {
     #[test]
     fn test_design_comparison() {
         eprintln!("\n=== COMPREHENSIVE DESIGN COMPARISON ===");
-        eprintln!("");
+        eprintln!();
 
         let total_wealth = 100_000_000u64;
 
@@ -3627,7 +3627,7 @@ mod tests {
             );
         }
 
-        eprintln!("");
+        eprintln!();
         eprintln!("Note: All tests use ValueWeighted transactions (realistic scenario)");
         eprintln!("================================\n");
     }
@@ -3647,7 +3647,7 @@ mod tests {
     fn test_time_to_equilibrium() {
         eprintln!("\n=== TIME TO EQUILIBRIUM STRESS TEST ===");
         eprintln!("Measuring convergence rate under realistic tx volumes.");
-        eprintln!("");
+        eprintln!();
 
         let total_wealth = 100_000_000u64;
 
@@ -3661,7 +3661,7 @@ mod tests {
         eprintln!("  Block time: {}s", block_time_seconds);
         eprintln!("  Txs per block: {}", txs_per_block);
         eprintln!("  Txs per day: {}", txs_per_day);
-        eprintln!("");
+        eprintln!();
 
         let config = LotteryConfig {
             base_fee: 100,
@@ -3700,10 +3700,10 @@ mod tests {
             "Targets: 10%={:.4}, 25%={:.4}, 50%={:.4}",
             target_10pct, target_25pct, target_50pct
         );
-        eprintln!("");
+        eprintln!();
 
         // Simulate up to 1 year (in blocks)
-        let blocks_per_year = blocks_per_day * 365;
+        let _blocks_per_year = blocks_per_day * 365;
         let check_interval = blocks_per_day; // Check once per simulated day
 
         let mut total_txs = 0u64;
@@ -3756,14 +3756,14 @@ mod tests {
         let final_gini = sim.calculate_gini();
         let total_reduction = (initial_gini - final_gini) / initial_gini * 100.0;
 
-        eprintln!("");
+        eprintln!();
         eprintln!(
             "Final results after {} days ({} transactions):",
             days, total_txs
         );
         eprintln!("  Final Gini: {:.4}", final_gini);
         eprintln!("  Total reduction: {:.1}%", total_reduction);
-        eprintln!("");
+        eprintln!();
 
         // Analysis
         eprintln!("ANALYSIS:");
@@ -3783,7 +3783,7 @@ mod tests {
             eprintln!("  50% reduction: NOT REACHED in {} days!", days);
         }
 
-        eprintln!("");
+        eprintln!();
         if reached_10pct.is_none() {
             eprintln!("WARNING: Even 10% Gini reduction not achieved in 1 year!");
             eprintln!("The lottery mechanism may be too slow for practical use.");
@@ -3808,7 +3808,7 @@ mod tests {
     fn test_slow_utxo_accumulation_gaming() {
         eprintln!("\n=== SLOW UTXO ACCUMULATION GAMING TEST ===");
         eprintln!("Can a patient attacker game the lottery by accumulating UTXOs?");
-        eprintln!("");
+        eprintln!();
 
         let total_wealth = 100_000_000u64;
         let attacker_wealth = total_wealth * 10 / 100; // 10% of total
@@ -3868,7 +3868,7 @@ mod tests {
             "  Attacker net: {:+}",
             baseline_attacker_winnings as i64 - baseline_attacker_fees as i64
         );
-        eprintln!("");
+        eprintln!();
 
         // Gaming scenario: Attacker fragments wealth into many UTXOs upfront
         // Using MaximizeSplit strategy
@@ -3921,7 +3921,7 @@ mod tests {
             "  Attacker net: {:+}",
             gaming_attacker_winnings as i64 - gaming_attacker_fees as i64
         );
-        eprintln!("");
+        eprintln!();
 
         // Compare
         let winnings_ratio =
@@ -3933,7 +3933,7 @@ mod tests {
         eprintln!("  Winnings ratio (gaming/baseline): {:.2}x", winnings_ratio);
         eprintln!("  Net result baseline: {:+}", net_baseline);
         eprintln!("  Net result gaming: {:+}", net_gaming);
-        eprintln!("");
+        eprintln!();
 
         if net_gaming > net_baseline * 2 {
             eprintln!("WARNING: Gaming strategy gives >2x advantage!");
@@ -3962,11 +3962,11 @@ mod tests {
     fn test_exchange_entity_impact() {
         eprintln!("\n=== EXCHANGE ENTITY IMPACT TEST ===");
         eprintln!("Testing: Does lottery redistribution benefit exchanges?");
-        eprintln!("");
+        eprintln!();
         eprintln!("Scenario:");
         eprintln!("  3 exchanges holding 50% of funds (few UTXOs)");
         eprintln!("  1000 retail users holding 50% (many UTXOs)");
-        eprintln!("");
+        eprintln!();
 
         let total_wealth = 100_000_000u64;
         let exchange_wealth = total_wealth / 2; // 50% in exchanges
@@ -4007,7 +4007,7 @@ mod tests {
         eprintln!("  Exchange UTXOs: 3 (holding {})", initial_exchange_wealth);
         eprintln!("  Retail UTXOs: 1000 (holding {})", initial_retail_wealth);
         eprintln!("  Gini: {:.4}", initial_gini);
-        eprintln!("");
+        eprintln!();
 
         // Run simulation with value-weighted transactions
         // (Exchanges transact more because they hold more value)
@@ -4057,7 +4057,7 @@ mod tests {
             final_gini,
             (initial_gini - final_gini) / initial_gini * 100.0
         );
-        eprintln!("");
+        eprintln!();
         eprintln!("Exchange entities (3 entities, 3 UTXOs):");
         eprintln!(
             "  Wealth: {} -> {} ({:+})",
@@ -4069,7 +4069,7 @@ mod tests {
             "  Net: {:+}",
             exchange_winnings as i64 - exchange_fees as i64
         );
-        eprintln!("");
+        eprintln!();
         eprintln!("Retail users (1000 entities, 1000 UTXOs):");
         eprintln!(
             "  Wealth: {} -> {} ({:+})",
@@ -4078,7 +4078,7 @@ mod tests {
         eprintln!("  Fees paid: {}", retail_fees);
         eprintln!("  Lottery winnings: {}", retail_winnings);
         eprintln!("  Net: {:+}", retail_winnings as i64 - retail_fees as i64);
-        eprintln!("");
+        eprintln!();
 
         // Key question: Did retail users (the "many") win proportionally more?
         // Retail has 1000 UTXOs vs 3 for exchanges = 333x more UTXOs
@@ -4097,7 +4097,7 @@ mod tests {
             retail_win_fraction * 100.0
         );
         eprintln!("  Expected (if uniform): {:.1}%", expected_fraction * 100.0);
-        eprintln!("");
+        eprintln!();
 
         if retail_win_fraction < 0.8 {
             eprintln!("WARNING: Retail users receiving <80% of lottery winnings!");
@@ -4110,7 +4110,7 @@ mod tests {
 
         // But the real issue: exchanges transact on behalf of users
         // Those fees come from user funds, but winnings go to the exchange
-        eprintln!("");
+        eprintln!();
         eprintln!("KEY INSIGHT:");
         eprintln!(
             "  Exchanges paid {} in fees (from user funds)",
@@ -4125,7 +4125,7 @@ mod tests {
                 "net negative"
             }
         );
-        eprintln!("");
+        eprintln!();
 
         if exchange_winnings < exchange_fees && retail_winnings > retail_fees {
             eprintln!("POSITIVE: Lottery redistributes FROM exchanges TO retail!");
@@ -4143,13 +4143,13 @@ mod tests {
     fn test_breakeven_dynamics() {
         eprintln!("\n=== BREAK-EVEN DYNAMICS TEST ===");
         eprintln!("Testing whether UTXO splitting profitability claims hold.");
-        eprintln!("");
+        eprintln!();
 
         // Parameters from the design doc
         let base_fee = 100u64;
         let pool_fraction = 0.8;
-        let winners_per_tx = 4;
-        let burn_fraction = 0.2;
+        let _winners_per_tx = 4;
+        let _burn_fraction = 0.2;
 
         // Various network sizes
         let scenarios = [
@@ -4170,7 +4170,7 @@ mod tests {
             let avg_fee = base_fee as f64 * 2.0; // Rough average cluster factor
 
             // Pool per day
-            let pool_per_day = txs_per_day as f64 * avg_fee * pool_fraction;
+            let _pool_per_day = txs_per_day as f64 * avg_fee * pool_fraction;
 
             // Expected winnings per UTXO per day
             // Each tx has 4 winners, prize = (fee × 0.8) / 4
@@ -4210,12 +4210,12 @@ mod tests {
             );
         }
 
-        eprintln!("");
+        eprintln!();
         eprintln!("ANALYSIS:");
         eprintln!("  - Smaller networks: Splitting may be profitable!");
         eprintln!("  - Larger networks: Splitting is unprofitable.");
         eprintln!("  - The mechanism's Sybil resistance scales with network size.");
-        eprintln!("");
+        eprintln!();
         eprintln!("IMPLICATION:");
         eprintln!("  Early-stage networks may need additional Sybil protection.");
         eprintln!("  Consider min_utxo_value or output count limits for bootstrap phase.");
@@ -4230,7 +4230,7 @@ mod tests {
     fn test_extreme_inequality_limits() {
         eprintln!("\n=== EXTREME INEQUALITY LIMITS TEST ===");
         eprintln!("Testing lottery behavior under pathological wealth distributions.");
-        eprintln!("");
+        eprintln!();
 
         let total_wealth = 100_000_000u64;
 
@@ -4298,7 +4298,7 @@ mod tests {
             );
         }
 
-        eprintln!("");
+        eprintln!();
         eprintln!("ANALYSIS:");
         eprintln!("  The lottery's effectiveness may decrease with extreme inequality.");
         eprintln!("  This is because wealthy entities dominate transaction volume,");
@@ -4315,7 +4315,7 @@ mod tests {
     fn test_selection_mode_sybil_resistance() {
         eprintln!("\n=== SELECTION MODE SYBIL RESISTANCE TEST ===");
         eprintln!("Comparing how different selection modes handle UTXO splitting.");
-        eprintln!("");
+        eprintln!();
 
         let total_wealth = 100_000_000u64;
         let attacker_wealth = total_wealth * 10 / 100; // 10% of total
@@ -4406,13 +4406,13 @@ mod tests {
             );
         }
 
-        eprintln!("");
+        eprintln!();
         eprintln!("ANALYSIS:");
         eprintln!("  Uniform:       ~10x advantage from splitting (most vulnerable)");
         eprintln!("  ValueWeighted: ~1x advantage (Sybil-resistant but not progressive)");
         eprintln!("  SqrtWeighted:  ~3.16x theoretical advantage (balanced)");
         eprintln!("  LogWeighted:   Variable advantage based on value distribution");
-        eprintln!("");
+        eprintln!();
         eprintln!("RECOMMENDATION:");
         eprintln!("  SqrtWeighted offers best balance of progressivity and Sybil resistance.");
         eprintln!("  It maintains sqrt(10) ≈ 3.16x advantage from splitting vs 10x uniform,");
@@ -4428,7 +4428,7 @@ mod tests {
     fn test_sqrt_weighted_progressivity() {
         eprintln!("\n=== SQRT WEIGHTED PROGRESSIVITY TEST ===");
         eprintln!("Testing whether SqrtWeighted maintains progressive redistribution.");
-        eprintln!("");
+        eprintln!();
 
         let total_wealth = 100_000_000u64;
 
@@ -4475,7 +4475,7 @@ mod tests {
             );
         }
 
-        eprintln!("");
+        eprintln!();
         eprintln!("INTERPRETATION:");
         eprintln!("  If SqrtWeighted achieves significant Gini reduction (>50%),");
         eprintln!("  it can replace Uniform as the default while fixing the");
@@ -4499,10 +4499,10 @@ mod tests {
     fn test_pareto_frontier_hybrid() {
         eprintln!("\n=== PARETO FRONTIER: HYBRID PARAMETER SWEEP ===");
         eprintln!("Exploring trade-offs between progressivity and Sybil resistance.");
-        eprintln!("");
+        eprintln!();
         eprintln!("α = 1.0: Pure uniform (progressive, 10x gameable)");
         eprintln!("α = 0.0: Pure value-weighted (not progressive, 1x gameable)");
-        eprintln!("");
+        eprintln!();
 
         let total_wealth = 100_000_000u64;
         let attacker_wealth = total_wealth * 10 / 100;
@@ -4635,13 +4635,13 @@ mod tests {
             );
         }
 
-        eprintln!("");
+        eprintln!();
         eprintln!("INTERPRETATION:");
         eprintln!("  Look for α values where:");
         eprintln!("  - Gaming ratio ≤ 2x (acceptable Sybil resistance)");
         eprintln!("  - Gini reduction > 20% (meaningful progressivity)");
         eprintln!("  - Poor gain > 0% (actual redistribution to poor)");
-        eprintln!("");
+        eprintln!();
         eprintln!("  The optimal α represents the best trade-off point.");
         eprintln!("==========================================\n");
     }
@@ -4654,7 +4654,7 @@ mod tests {
     fn test_age_weighted_sybil_resistance() {
         eprintln!("\n=== AGE-WEIGHTED SYBIL RESISTANCE TEST ===");
         eprintln!("Testing whether age weighting discourages rapid UTXO accumulation.");
-        eprintln!("");
+        eprintln!();
 
         let total_wealth = 100_000_000u64;
         let attacker_wealth = total_wealth * 10 / 100;
@@ -4742,7 +4742,7 @@ mod tests {
                     sim.cluster_wealth.set(cluster_id, attacker_wealth);
 
                     let cluster_factor = sim.fee_curve.rate_bps(attacker_wealth) as f64 / 100.0;
-                    let cluster_factor = cluster_factor.max(1.0).min(6.0);
+                    let cluster_factor = cluster_factor.clamp(1.0, 6.0);
 
                     let utxo_id = sim.next_utxo_id;
                     sim.next_utxo_id += 1;
@@ -4776,7 +4776,7 @@ mod tests {
             );
         }
 
-        eprintln!("");
+        eprintln!();
         eprintln!("INTERPRETATION:");
         eprintln!("  Higher age bonus = older UTXOs win more");
         eprintln!("  This discourages rapid UTXO splitting (new UTXOs have low weight)");
@@ -4792,7 +4792,7 @@ mod tests {
     fn test_cluster_weighted_progressivity() {
         eprintln!("\n=== CLUSTER-WEIGHTED PROGRESSIVITY TEST ===");
         eprintln!("Testing whether cluster weighting provides progressive redistribution.");
-        eprintln!("");
+        eprintln!();
 
         let total_wealth = 100_000_000u64;
 
@@ -4860,7 +4860,7 @@ mod tests {
                 "  Rich: {} -> {} ({:+.1}%)",
                 initial_rich, final_rich, rich_change
             );
-            eprintln!("");
+            eprintln!();
         }
 
         eprintln!("INTERPRETATION:");
@@ -4880,7 +4880,7 @@ mod tests {
     fn test_privacy_progressivity_tradeoff() {
         eprintln!("\n=== PRIVACY-PROGRESSIVITY TRADE-OFF ANALYSIS ===");
         eprintln!("Evaluating all selection modes on three dimensions.");
-        eprintln!("");
+        eprintln!();
 
         let total_wealth = 100_000_000u64;
         let attacker_wealth = total_wealth * 10 / 100;
@@ -5018,7 +5018,7 @@ mod tests {
         }
 
         // Find best options
-        eprintln!("");
+        eprintln!();
         eprintln!("PARETO-OPTIMAL POINTS:");
 
         // Sort by score descending
@@ -5037,7 +5037,7 @@ mod tests {
             );
         }
 
-        eprintln!("");
+        eprintln!();
         eprintln!("RECOMMENDATIONS:");
         eprintln!("  - For maximum privacy: Use Hybrid(0.3) - 0 bits cost, ~3x gaming");
         eprintln!("  - For balanced approach: Use AgeWeighted(5x) - 0.5 bits cost");
@@ -5077,7 +5077,7 @@ mod tests {
         eprintln!("Same wealth, same factor, different UTXO counts");
         eprintln!("Honest: 1 UTXO with 10M value");
         eprintln!("Attacker: 10 UTXOs with 1M value each");
-        eprintln!("");
+        eprintln!();
 
         let total_wealth = 100_000_000u64;
         let test_wealth = 10_000_000u64; // 10% each for attacker and honest
@@ -5151,7 +5151,7 @@ mod tests {
         eprintln!("Different wealth, SAME factor (3.0 for all)");
         eprintln!("Poor: 10 users × 500K each = 5M total");
         eprintln!("Rich: 2 users × 47.5M each = 95M total");
-        eprintln!("");
+        eprintln!();
 
         for (name, mode) in &modes {
             let config = LotteryConfig {
@@ -5217,7 +5217,7 @@ mod tests {
 
         eprintln!("\n--- TEST 3: CLUSTER-WEIGHTED MECHANISM ---");
         eprintln!("Testing cluster factor's effect independent of wealth");
-        eprintln!("");
+        eprintln!();
 
         // Scenario A: Poor with HIGH factor (fresh minters) vs Rich with LOW factor
         // (commerce whales) This is OPPOSITE to the ideal - ClusterWeighted
@@ -5326,7 +5326,7 @@ mod tests {
         // ========================================
         eprintln!("\n--- TEST 4: STATISTICAL CONFIDENCE ---");
         eprintln!("Running 10 trials per mode to measure variance");
-        eprintln!("");
+        eprintln!();
 
         let trials = 10;
 
@@ -5448,12 +5448,12 @@ mod tests {
         eprintln!("\n{}", "=".repeat(80));
         eprintln!("ENTROPY-WEIGHTED SYBIL RESISTANCE VALIDATION");
         eprintln!("{}", "=".repeat(80));
-        eprintln!("");
+        eprintln!();
         eprintln!("Testing documented claims about entropy-weighted selection:");
         eprintln!("1. Uniform selection: ~10× Sybil advantage");
         eprintln!("2. Entropy-weighted: ~6-7× Sybil advantage (reduced but not eliminated)");
         eprintln!("3. Splits preserve entropy (no weight increase from splitting)");
-        eprintln!("");
+        eprintln!();
 
         let total_wealth = 100_000_000u64;
         let test_wealth = 10_000_000u64;
@@ -5464,7 +5464,7 @@ mod tests {
         eprintln!("--- TEST 1: BASELINE - UNIFORM SELECTION ---");
         eprintln!("Attacker: 10 UTXOs (1M each, entropy 0.6 - same provenance)");
         eprintln!("Honest:   1 UTXO (10M, entropy 2.0 - diverse commerce)");
-        eprintln!("");
+        eprintln!();
 
         {
             let config = LotteryConfig {
@@ -5522,7 +5522,7 @@ mod tests {
         eprintln!("\n--- TEST 2: ENTROPY-WEIGHTED SELECTION ---");
         eprintln!("Same setup, but selection weighted by entropy");
         eprintln!("weight = value × (1 + 0.5 × entropy)");
-        eprintln!("");
+        eprintln!();
 
         let mut entropy_ratios = Vec::new();
         let trials = 5;
@@ -5578,7 +5578,7 @@ mod tests {
             mean_ratio, trials
         );
         eprintln!("Expected: ~6-7× (reduced from 10× but not eliminated)");
-        eprintln!("");
+        eprintln!();
 
         // Calculate theoretical advantage
         eprintln!("Theoretical calculation:");
@@ -5592,7 +5592,7 @@ mod tests {
         // ========================================
         eprintln!("\n--- TEST 3: VALUE-WEIGHTED (BASELINE) ---");
         eprintln!("Pure value-weighted should show ~1.0× ratio (no Sybil advantage)");
-        eprintln!("");
+        eprintln!();
 
         {
             let config = LotteryConfig {
@@ -5642,13 +5642,13 @@ mod tests {
         // ========================================
         eprintln!("\n{}", "=".repeat(80));
         eprintln!("SUMMARY OF SYBIL RESISTANCE BY SELECTION MODE:");
-        eprintln!("");
+        eprintln!();
         eprintln!("| Mode            | Sybil Advantage | Progressive? |");
         eprintln!("|-----------------|-----------------|--------------|");
         eprintln!("| Uniform         | ~10×            | YES          |");
         eprintln!("| EntropyWeighted | ~6-7×           | YES (reduced)|");
         eprintln!("| ValueWeighted   | ~1×             | NO           |");
-        eprintln!("");
+        eprintln!();
         eprintln!("Key insight: Entropy weighting REDUCES but does NOT ELIMINATE");
         eprintln!("Sybil advantage. It's a compromise between progressivity and");
         eprintln!("Sybil resistance, not a complete solution.");
@@ -5664,12 +5664,12 @@ mod tests {
         eprintln!("\n{}", "=".repeat(80));
         eprintln!("NETWORK SIZE EFFECT ON FARMING PROFITABILITY");
         eprintln!("{}", "=".repeat(80));
-        eprintln!("");
+        eprintln!();
         eprintln!("Testing claim: Larger networks are naturally more Sybil-resistant");
         eprintln!("because lottery returns per UTXO decrease with N.");
-        eprintln!("");
+        eprintln!();
 
-        let pool_per_round = 1000u64; // Fixed pool size
+        let _pool_per_round = 1000u64; // Fixed pool size
 
         for &utxo_count in &[100, 1000, 10_000, 100_000] {
             let config = LotteryConfig {
@@ -5684,7 +5684,7 @@ mod tests {
             let mut sim = LotterySimulation::new(config, FeeCurve::default_params());
 
             // Create N participants
-            for i in 0..utxo_count {
+            for _i in 0..utxo_count {
                 let id = sim.create_owner(SybilStrategy::Normal);
                 sim.create_utxo_with_entropy(id, 1000, 3.0, 1.0);
             }
@@ -5707,7 +5707,7 @@ mod tests {
             );
         }
 
-        eprintln!("");
+        eprintln!();
         eprintln!("As N increases, returns per UTXO decrease.");
         eprintln!("This makes UTXO farming less profitable at scale.");
         eprintln!("{}", "=".repeat(80));
@@ -5767,9 +5767,9 @@ mod tests {
         eprintln!("\n{}", "=".repeat(80));
         eprintln!("FORMAL PROOF: SPLIT ATTACKS PROVIDE NO LOTTERY ADVANTAGE");
         eprintln!("{}", "=".repeat(80));
-        eprintln!("");
+        eprintln!();
         eprintln!("Using real TagVector operations to validate the design claim.");
-        eprintln!("");
+        eprintln!();
 
         let entropy_bonus = 0.5; // 50% bonus per bit of entropy
         let mut next_id = 1u64;
@@ -5779,7 +5779,7 @@ mod tests {
         // ========================================
         eprintln!("--- SCENARIO 1: Fresh Mint Split Attack ---");
         eprintln!("Attacker mints 10M BTH, then splits into 10 UTXOs of 1M each");
-        eprintln!("");
+        eprintln!();
 
         // Fresh mint: 100% attributed to minter's cluster
         let minter_cluster = ClusterId::new(1);
@@ -5825,7 +5825,7 @@ mod tests {
         // ========================================
         eprintln!("\n--- SCENARIO 2: Commerce Coin Split Attack ---");
         eprintln!("Attacker has a high-entropy commerce coin, tries to split for advantage");
-        eprintln!("");
+        eprintln!();
 
         // Commerce coin with diverse provenance
         let mut commerce_tags = TagVector::new();
@@ -5878,7 +5878,7 @@ mod tests {
         // ========================================
         eprintln!("\n--- SCENARIO 3: Honest User vs Sybil Attacker ---");
         eprintln!("Both start with same value and entropy. Attacker splits, honest doesn't.");
-        eprintln!("");
+        eprintln!();
 
         // Both have the same starting point
         let mut shared_tags = TagVector::new();
@@ -5926,7 +5926,7 @@ mod tests {
         // KEY INSIGHT: Contrast with Uniform Selection
         // ========================================
         eprintln!("\n--- CONTRAST: Uniform Selection Vulnerability ---");
-        eprintln!("");
+        eprintln!();
 
         // Under uniform selection, each UTXO = 1 lottery ticket
         let honest_uniform_tickets = 1;
@@ -5936,7 +5936,7 @@ mod tests {
         eprintln!("  Honest: {} ticket(s)", honest_uniform_tickets);
         eprintln!("  Attacker: {} tickets", attacker_uniform_tickets);
         eprintln!("  Attacker advantage: {}×", attacker_uniform_tickets);
-        eprintln!("");
+        eprintln!();
         eprintln!("Under ENTROPY-WEIGHTED selection:");
         eprintln!("  Honest: {:.0} weight", honest_weight);
         eprintln!("  Attacker: {:.0} weight (same!)", attacker_total_weight);
@@ -5947,12 +5947,12 @@ mod tests {
         // ========================================
         eprintln!("\n{}", "=".repeat(80));
         eprintln!("PROOF COMPLETE:");
-        eprintln!("");
+        eprintln!();
         eprintln!("1. TagVector entropy is preserved exactly when splitting UTXOs");
         eprintln!("2. Lottery weight = value × (1 + bonus × entropy)");
         eprintln!("3. Total weight before split = Total weight after split");
         eprintln!("4. Therefore: Splitting provides ZERO lottery advantage");
-        eprintln!("");
+        eprintln!();
         eprintln!("This is the formal foundation for entropy-weighted Sybil resistance.");
         eprintln!("{}", "=".repeat(80));
     }
@@ -5966,7 +5966,7 @@ mod tests {
         eprintln!("\n{}", "=".repeat(80));
         eprintln!("PROOF: Commerce (not splitting) is the ONLY way to increase weight");
         eprintln!("{}", "=".repeat(80));
-        eprintln!("");
+        eprintln!();
 
         let entropy_bonus = 0.5;
         let mut next_id = 1u64;
@@ -6002,7 +6002,7 @@ mod tests {
         }
         let merged_value: u64 = splits.iter().map(|u| u.value).sum();
         user_utxo = RealUtxo::new(next_id, merged_value, merged_tags);
-        next_id += 1;
+        let _ = next_id; // last id consumed above; no further UTXOs are created
 
         eprintln!(
             "  After reconsolidation: weight = {:.0}",
@@ -6066,7 +6066,7 @@ mod tests {
             "Commerce:  INCREASES weight per BTH from {:.4} to {:.4}",
             1.0, weight_per_bth
         );
-        eprintln!("");
+        eprintln!();
         eprintln!("CONCLUSION: Only genuine economic activity increases lottery advantage.");
         eprintln!("{}", "=".repeat(80));
 
@@ -6085,7 +6085,7 @@ mod tests {
         eprintln!("\n{}", "=".repeat(80));
         eprintln!("ATTACK SCENARIO COMPARISON");
         eprintln!("{}", "=".repeat(80));
-        eprintln!("");
+        eprintln!();
 
         let entropy_bonus = 0.5;
         let initial_value = 10_000_000u64;
@@ -6124,7 +6124,7 @@ mod tests {
             "All attackers start with {} BTH (fresh mint, entropy = 0)",
             initial_value
         );
-        eprintln!("");
+        eprintln!();
         eprintln!("| Strategy | UTXOs | Total Weight | Advantage |");
         eprintln!("|----------|-------|--------------|-----------|");
         eprintln!("| A: Hold 1 UTXO | 1 | {:.0} | 1.00× |", weight_a);
@@ -6138,7 +6138,7 @@ mod tests {
             weight_c,
             weight_c / weight_a
         );
-        eprintln!("");
+        eprintln!();
 
         // Verify no advantage
         assert!(
@@ -6164,7 +6164,7 @@ mod tests {
         let commerce = RealUtxo::new(500, initial_value, commerce_tags);
         let weight_commerce = commerce.lottery_weight(entropy_bonus);
 
-        eprintln!("");
+        eprintln!();
         eprintln!("| Strategy | Entropy | Weight | Advantage |");
         eprintln!("|----------|---------|--------|-----------|");
         eprintln!(
@@ -6179,7 +6179,7 @@ mod tests {
             weight_commerce / weight_a
         );
 
-        eprintln!("");
+        eprintln!();
         eprintln!(
             "CONCLUSION: Commerce provides {:.0}% more lottery weight than Sybil attacks.",
             (weight_commerce / weight_a - 1.0) * 100.0
@@ -6208,11 +6208,11 @@ mod tests {
         eprintln!("\n{}", "=".repeat(80));
         eprintln!("PATIENT ACCUMULATION ATTACK ANALYSIS");
         eprintln!("{}", "=".repeat(80));
-        eprintln!("");
+        eprintln!();
         eprintln!("This test documents what entropy-weighting DOESN'T solve:");
         eprintln!("An attacker who participates in real commerce can accumulate");
         eprintln!("multiple high-entropy UTXOs, gaining lottery advantage.");
-        eprintln!("");
+        eprintln!();
 
         let entropy_bonus = 0.5;
 
@@ -6221,7 +6221,7 @@ mod tests {
         for i in 1..=5 {
             let cluster = ClusterId::new(i);
             let incoming = TagVector::single(cluster);
-            honest_tags.mix(1_000_000 * (i as u64 - 1), &incoming, 1_000_000);
+            honest_tags.mix(1_000_000 * (i - 1), &incoming, 1_000_000);
         }
         let honest = RealUtxo::new(1, 5_000_000, honest_tags);
 
@@ -6237,7 +6237,7 @@ mod tests {
             let incoming = TagVector::single(secondary_cluster);
             utxo_tags.mix(500_000, &incoming, 500_000);
 
-            attacker_utxos.push(RealUtxo::new(i as u64 + 10, 1_000_000, utxo_tags));
+            attacker_utxos.push(RealUtxo::new(i + 10, 1_000_000, utxo_tags));
         }
 
         let honest_weight = honest.lottery_weight(entropy_bonus);
@@ -6249,7 +6249,7 @@ mod tests {
         eprintln!("Honest user: 1 UTXO, {} BTH", honest.value);
         eprintln!("  Entropy: {:.3} bits", honest.tags.shannon_entropy());
         eprintln!("  Lottery weight: {:.0}", honest_weight);
-        eprintln!("");
+        eprintln!();
 
         eprintln!(
             "Patient attacker: {} UTXOs, {} BTH total",
@@ -6268,28 +6268,28 @@ mod tests {
         eprintln!("  Total weight: {:.0}", attacker_total_weight);
 
         let advantage = attacker_total_weight / honest_weight;
-        eprintln!("");
+        eprintln!();
         eprintln!("Attacker advantage: {:.2}×", advantage);
 
         // This is the key insight: patient accumulation DOES provide advantage
         // because the attacker has more lottery "tickets" (each high-entropy UTXO)
-        eprintln!("");
+        eprintln!();
         eprintln!("{}", "=".repeat(80));
         eprintln!("CONCLUSION:");
-        eprintln!("");
+        eprintln!();
         eprintln!(
             "Patient accumulation provides {:.0}% advantage even with entropy-weighting.",
             (advantage - 1.0) * 100.0
         );
-        eprintln!("");
+        eprintln!();
         eprintln!("This is EXPECTED and DOCUMENTED. Entropy-weighting solves:");
         eprintln!("  ✓ Instant split attacks (same entropy = no advantage)");
         eprintln!("  ✓ UTXO farming (superlinear fees make gratuitous txs expensive)");
-        eprintln!("");
+        eprintln!();
         eprintln!("But it does NOT solve:");
         eprintln!("  ✗ Patient accumulation through genuine commerce");
         eprintln!("  ✗ Purchasing high-entropy coins from others");
-        eprintln!("");
+        eprintln!();
         eprintln!("These are fundamental limitations of any privacy-preserving system.");
         eprintln!("See design doc: 'In a pseudonymous system without identity, you cannot");
         eprintln!("have both progressive redistribution AND full Sybil resistance.'");
@@ -6302,7 +6302,7 @@ mod tests {
 
         // The advantage should be less than the UTXO count ratio because
         // the honest user's consolidated UTXO has higher entropy per BTH
-        eprintln!("");
+        eprintln!();
         eprintln!("Sanity check:");
         eprintln!("  UTXO count ratio: {:.1}×", utxo_count_ratio);
         eprintln!("  Actual advantage: {:.2}×", advantage);
@@ -6319,7 +6319,7 @@ mod tests {
         eprintln!("\n{}", "=".repeat(80));
         eprintln!("ENTROPY-WEIGHTED LOTTERY: DESIGN CLAIMS VALIDATION");
         eprintln!("{}", "=".repeat(80));
-        eprintln!("");
+        eprintln!();
 
         let entropy_bonus = 0.5;
         let value = 10_000_000u64;
@@ -6343,7 +6343,7 @@ mod tests {
         );
 
         // Claim 2: Splitting provides no lottery advantage
-        eprintln!("");
+        eprintln!();
         eprintln!("CLAIM 2: Splitting provides no lottery advantage");
         let parent_weight = parent.lottery_weight(entropy_bonus);
         let children_weight: f64 = children
@@ -6358,7 +6358,7 @@ mod tests {
         );
 
         // Claim 3: Commerce increases weight per BTH
-        eprintln!("");
+        eprintln!();
         eprintln!("CLAIM 3: Commerce increases weight per BTH");
         let fresh_mint = RealUtxo::new(100, value, TagVector::single(ClusterId::new(1)));
         let fresh_weight_per_bth = fresh_mint.lottery_weight(entropy_bonus) / value as f64;
@@ -6380,7 +6380,7 @@ mod tests {
         );
 
         // Claim 4: Entropy weighting preserves value-weighted Sybil resistance
-        eprintln!("");
+        eprintln!();
         eprintln!("CLAIM 4: Same-value UTXOs have same total weight regardless of split");
         let whole = RealUtxo::new(200, 1_000_000, TagVector::single(ClusterId::new(5)));
         let mut id = 300u64;
@@ -6396,7 +6396,7 @@ mod tests {
             ratio
         );
 
-        eprintln!("");
+        eprintln!();
         eprintln!("{}", "=".repeat(80));
         eprintln!("ALL DESIGN CLAIMS VERIFIED");
         eprintln!("{}", "=".repeat(80));
@@ -6418,7 +6418,7 @@ mod tests {
         eprintln!("\n{}", "=".repeat(80));
         eprintln!("PRODUCTION DECAY TEST: cluster_entropy() is decay-invariant");
         eprintln!("{}", "=".repeat(80));
-        eprintln!("");
+        eprintln!();
 
         // Create a fresh mint at block 0
         let cluster_a = ClusterId(1);
@@ -6531,7 +6531,7 @@ mod tests {
         eprintln!("\n{}", "=".repeat(80));
         eprintln!("LOTTERY WEIGHT COMPARISON: cluster_entropy vs shannon_entropy");
         eprintln!("{}", "=".repeat(80));
-        eprintln!("");
+        eprintln!();
 
         let entropy_bonus = 0.5;
         let value = 10_000_000u64;
@@ -6639,7 +6639,7 @@ mod tests {
 
         eprintln!("\n✓ VERIFIED: cluster_entropy gives stable lottery weights");
         eprintln!("✓ VERIFIED: shannon_entropy gives inflated weights for old coins");
-        eprintln!("");
+        eprintln!();
         eprintln!("CONCLUSION: Use cluster_entropy() for lottery selection!");
         eprintln!("{}", "=".repeat(80));
     }
@@ -6652,7 +6652,7 @@ mod tests {
         eprintln!("\n{}", "=".repeat(80));
         eprintln!("AGE GAMING TEST: Old coins should NOT have lottery advantage");
         eprintln!("{}", "=".repeat(80));
-        eprintln!("");
+        eprintln!();
 
         let entropy_bonus = 0.5;
         let value = 10_000_000u64;
@@ -6758,11 +6758,11 @@ mod tests {
         eprintln!("\n{}", "=".repeat(80));
         eprintln!("COMBINED MECHANISM: Value-Weighted with Floor");
         eprintln!("{}", "=".repeat(80));
-        eprintln!("");
+        eprintln!();
         eprintln!("Formula: tickets = max(1, value / threshold)");
         eprintln!("Progressive: small holders get more tickets per BTH");
         eprintln!("Sybil-resistant: splitting above threshold gives no advantage");
-        eprintln!("");
+        eprintln!();
 
         let ticket_threshold = 1_000_000u64; // 1000 BTH per ticket
 
@@ -6789,7 +6789,7 @@ mod tests {
             );
         }
 
-        eprintln!("");
+        eprintln!();
         eprintln!("Progressivity analysis:");
 
         // Small holder: 100 BTH
@@ -6814,7 +6814,7 @@ mod tests {
             "Small holders should get >5x more tickets per BTH"
         );
 
-        eprintln!("");
+        eprintln!();
         eprintln!("Sybil resistance (splitting analysis):");
 
         // Wealthy holder with 1M BTH: consolidated vs split
@@ -6851,7 +6851,7 @@ mod tests {
             split_advantage
         );
 
-        eprintln!("");
+        eprintln!();
         eprintln!("✓ VERIFIED: Value-weighted with floor is progressive");
         eprintln!("✓ VERIFIED: Splitting above threshold gives no advantage");
         eprintln!("{}", "=".repeat(80));
@@ -6863,10 +6863,10 @@ mod tests {
         eprintln!("\n{}", "=".repeat(80));
         eprintln!("COMBINED MECHANISM: Eligibility Decay");
         eprintln!("{}", "=".repeat(80));
-        eprintln!("");
+        eprintln!();
         eprintln!("Formula: eligibility = max(floor, (1 - decay_rate)^age_days)");
         eprintln!("Counters parking attack: inactive UTXOs lose lottery weight");
-        eprintln!("");
+        eprintln!();
 
         let decay_rate = 0.03f64; // 3% per day
         let min_eligibility = 0.10f64; // 10% floor
@@ -6892,14 +6892,14 @@ mod tests {
             min_eligibility
         );
 
-        eprintln!("");
+        eprintln!();
         eprintln!("Parking attack analysis:");
 
         // Parking attacker: splits into 100 UTXOs, parks them
         let attacker_value = 100_000_000u64; // 100K BTH
         let split_count = 100u64;
-        let value_per_utxo = attacker_value / split_count;
-        let ticket_threshold = 1_000_000u64;
+        let _value_per_utxo = attacker_value / split_count;
+        let _ticket_threshold = 1_000_000u64;
 
         // Each small UTXO gets floor of 1 ticket
         let tickets_per_utxo = 1u64;
@@ -6929,7 +6929,7 @@ mod tests {
             elig_77 * 100.0
         );
 
-        eprintln!("");
+        eprintln!();
         eprintln!("Activity refresh test:");
 
         // Refresh activity at day 50
@@ -6950,7 +6950,7 @@ mod tests {
             elig_after_refresh * 100.0
         );
 
-        eprintln!("");
+        eprintln!();
         eprintln!("✓ VERIFIED: Eligibility decays over time");
         eprintln!("✓ VERIFIED: Floor prevents complete exclusion");
         eprintln!("✓ VERIFIED: Activity refresh restores eligibility");
@@ -6963,10 +6963,10 @@ mod tests {
         eprintln!("\n{}", "=".repeat(80));
         eprintln!("COMBINED MECHANISM: Asymmetric Structure Fees");
         eprintln!("{}", "=".repeat(80));
-        eprintln!("");
+        eprintln!();
         eprintln!("Split penalty: extra fee for creating many outputs");
         eprintln!("Consolidation discount: reduced fee for combining inputs");
-        eprintln!("");
+        eprintln!();
 
         let config = LotteryConfig::combined_mechanism();
         eprintln!("Parameters:");
@@ -6979,7 +6979,7 @@ mod tests {
             config.consolidation_discount
         );
         eprintln!("  Allowed extra outputs: {}", config.allowed_extra_outputs);
-        eprintln!("");
+        eprintln!();
 
         // Test various transaction structures
         let test_cases = [
@@ -7029,7 +7029,7 @@ mod tests {
             normal_factor
         );
 
-        eprintln!("");
+        eprintln!();
         eprintln!("✓ VERIFIED: Consolidation gets discount");
         eprintln!("✓ VERIFIED: Splitting incurs penalty");
         eprintln!("✓ VERIFIED: Normal transactions unaffected");
@@ -7042,7 +7042,7 @@ mod tests {
         eprintln!("\n{}", "=".repeat(80));
         eprintln!("COMBINED MECHANISM: Parking Attack Simulation");
         eprintln!("{}", "=".repeat(80));
-        eprintln!("");
+        eprintln!();
 
         let config = LotteryConfig::combined_mechanism();
         let fee_curve = FeeCurve::default_params();
@@ -7078,7 +7078,7 @@ mod tests {
             attacker_wealth / 1000,
             initial_attacker_utxos
         );
-        eprintln!("");
+        eprintln!();
 
         // Simulate attacker splitting (manually for this test)
         // In real simulation, this would happen through the behavior model
@@ -7094,7 +7094,7 @@ mod tests {
         // Simulate parking over 30 days
         let blocks_per_day = 4320u64;
         let days_parked = 30u64;
-        let blocks_parked = days_parked * blocks_per_day;
+        let _blocks_parked = days_parked * blocks_per_day;
 
         // Calculate expected lottery winnings with decay
         let ticket_threshold = 1_000_000u64;
@@ -7105,7 +7105,7 @@ mod tests {
         };
         let initial_tickets = tickets_per_utxo * split_count as u64;
 
-        eprintln!("");
+        eprintln!();
         eprintln!("Lottery ticket analysis:");
         eprintln!("  Value per UTXO: {} BTH", value_per_split / 1000);
         eprintln!("  Tickets per UTXO: {}", tickets_per_utxo);
@@ -7132,7 +7132,7 @@ mod tests {
 
         // Compare to unsplit scenario
         let unsplit_tickets = attacker_wealth / ticket_threshold;
-        eprintln!("");
+        eprintln!();
         eprintln!("Comparison to unsplit (honest) strategy:");
         eprintln!("  Unsplit tickets: {}", unsplit_tickets);
         eprintln!("  Split tickets (day 0): {}", initial_tickets);
@@ -7148,13 +7148,13 @@ mod tests {
         // The split advantage should be bounded by min_utxo constraint
         let max_split_advantage = (attacker_wealth / config.min_utxo_value) as f64
             / (attacker_wealth / ticket_threshold) as f64;
-        eprintln!("");
+        eprintln!();
         eprintln!(
             "Max theoretical split advantage (from min UTXO): {:.1}x",
             max_split_advantage
         );
 
-        eprintln!("");
+        eprintln!();
         eprintln!("Attack profitability analysis:");
         eprintln!("  Split cost: {} BTH", split_cost / 1000);
         eprintln!(
@@ -7168,7 +7168,7 @@ mod tests {
 
         // Key insight: with eligibility decay, the advantage diminishes over time
         // Combined with split cost, the attack becomes unprofitable
-        eprintln!("");
+        eprintln!();
         eprintln!("Key insights:");
         eprintln!("  1. Value-weighted floor limits max splitting advantage");
         eprintln!(
@@ -7179,7 +7179,7 @@ mod tests {
         eprintln!("  4. Split penalty adds upfront cost");
         eprintln!("  5. Combined: Parking attack ROI < 1.0 (unprofitable)");
 
-        eprintln!("");
+        eprintln!();
         eprintln!("✓ TEST COMPLETE: Parking attack mechanics verified");
         eprintln!("{}", "=".repeat(80));
     }
