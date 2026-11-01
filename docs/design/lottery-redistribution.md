@@ -9,7 +9,9 @@ seeded from the parent block's PoW fields (`BOTHO_LOTTERY_SEED_V2`), with a
 payout cap `min(rho * 0.25 BTH, block_reward)` and a cumulative carry-forward
 pool fed by fees and an emission share. Fees are not distributed immediately,
 and the per-output fee does not make splitting prohibitive at today's
-constants (#1682, #1688).
+constants (#1682, #1688): a faithful-to-code re-run finds splitting
+profitable (#1761). Redistribution is not demonstrated at production
+parameters (#1790); a redesign is under study (#1801).
 
 Current specification:
 - Code: `botho/src/consensus/lottery.rs` (seed, cap, pool accounting),

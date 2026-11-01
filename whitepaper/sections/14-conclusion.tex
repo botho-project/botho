@@ -26,10 +26,13 @@ design tradeoffs.
     worlds: permissionless participation and fair distribution from PoW,
     with fast deterministic finality and Byzantine fault tolerance from SCP.
 
-  \item \textbf{Progressive fee mechanism}: Cluster-based fees create
-    economic pressure against wealth concentration while preserving privacy.
-    Unlike identity-based approaches, fees are determined by coin ancestry,
-    resisting Sybil attacks without requiring user identification.
+  \item \textbf{Progressive fee mechanism}: Cluster-based fees and
+    demurrage price coins by the wealth of their ancestry while preserving
+    privacy. Unlike identity-based approaches, fees are determined by coin
+    ancestry, resisting Sybil attacks without requiring user identification.
+    The mechanism is aimed at wealth concentration, but a measurable
+    reduction in inequality is not demonstrated at production parameters
+    (Section~\ref{sec:redistribution-status}).
 
   \item \textbf{Sustainable economics}: Perpetual tail emission ensures
     long-term security funding. Fee burning creates deflationary pressure
@@ -44,7 +47,7 @@ serve community rather than concentrate power. This manifests in:
 
 \begin{itemize}
   \item Privacy as baseline, not premium feature
-  \item Progressive economics discouraging hoarding
+  \item Progressive economics aimed at discouraging hoarding
   \item Decentralized consensus with open participation
   \item Sustainable security through perpetual emission
 \end{itemize}
@@ -64,6 +67,12 @@ serve community rather than concentrate power. This manifests in:
 
   \item \textbf{Synchronization time}: Full nodes require several hours
     to synchronize, limiting immediate usability for new users.
+
+  \item \textbf{Redistribution not demonstrated}: At production parameters
+    the redistribution mechanism does not measurably reduce inequality
+    (mechanism $\Delta G$ of $-0.028$ to $+0.001$ against a $0.05$ bar), and
+    lottery ticket-splitting is profitable. A redesign is under study
+    (Section~\ref{sec:redistribution-status}).
 \end{itemize}
 
 \subsubsection{Future Research Directions}
@@ -225,6 +234,9 @@ economics:
 
 \begin{itemize}
   \item Can market mechanisms encourage circulation without coercion?
+  \item Can a provenance-based lottery and demurrage measurably reduce
+    inequality? At production parameters the current design does not
+    (Section~\ref{sec:redistribution-status})
   \item Does cluster-based taxation effectively resist Sybil attacks?
   \item Will tail emission prove superior to fixed supply for security?
 \end{itemize}
@@ -240,8 +252,8 @@ privacy and encourage fair participation.
 
 \textit{Motho ke motho ka batho}---a person is a person through other
 people. \Botho is designed with this principle at its core: technology
-that serves community, privacy that protects dignity, and economics that
-resist concentration.
+that serves community, privacy that protects dignity, and economics
+designed to resist concentration.
 
 We invite the community to examine, critique, and improve upon this
 design. The source code is open; the conversation continues.

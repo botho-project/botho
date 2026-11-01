@@ -101,7 +101,7 @@ Fee rate: unchanged (based on cluster wealth, not UTXO count)
 - **中奖者：** 每次 4 名，不放回抽取，种子与工作量证明绑定。
 - **支付：** 奖池为手续费的 80%，加上该区块的彩票排放份额（区块奖励中划入奖池而非矿工的一部分：启动期为 0%，此后每次减半增加 10%，上限为 50%），再加上此前区块结转的部分；每次抽取支付可用金额与单区块上限中的较小者，其余结转。
 
-渐进性现在来自*入口*一侧（渐进式手续费和滞留费），而非抽取本身。抽取的部分经济机制仍是未决事项：把头寸拆分成许多输出目前可能提高中奖概率（[#1682](https://github.com/botho-project/botho/issues/1682)），过往中奖者会累积份额（[#1690](https://github.com/botho-project/botho/issues/1690)）；另见 [#1689](https://github.com/botho-project/botho/issues/1689) 和 [#1691](https://github.com/botho-project/botho/issues/1691)。本节描述的是当前已实现的机制。
+任何渐进性都只能来自*入口*一侧（渐进式手续费和滞留费），而非抽取本身。在生产参数下，该机制**并未**可测量地降低不平等（[#1790](https://github.com/botho-project/botho/issues/1790)）。目前把头寸拆分成许多输出是有利可图的（[#1761](https://github.com/botho-project/botho/issues/1761)、[#1682](https://github.com/botho-project/botho/issues/1682)），过往中奖者会累积份额（[#1690](https://github.com/botho-project/botho/issues/1690)）；另见 [#1689](https://github.com/botho-project/botho/issues/1689) 和 [#1691](https://github.com/botho-project/botho/issues/1691)。重新设计正在研究中（[#1801](https://github.com/botho-project/botho/issues/1801)）。本节描述的是当前已实现的机制。
 
 ### 环签名与标签隐私
 
@@ -147,7 +147,7 @@ Fee rate: unchanged (based on cluster wealth, not UTXO count)
 |----------|----------------|-----------|
 | **让币流通** | 标签衰减并混合 | 更低的手续费 |
 | **囤积财富** | 标签保持集中 | 更高的手续费，滞留费 |
-| **拆分成许多 UTXO** | 标签不变 | 手续费基于来源，因此没有手续费上的好处；按当前实现，更多输出可能提高中奖概率（[#1682](https://github.com/botho-project/botho/issues/1682)） |
+| **拆分成许多 UTXO** | 标签不变 | 手续费基于来源，因此没有手续费上的好处；按当前实现，更多输出等于更多抽奖券，目前拆分是有利可图的（[#1761](https://github.com/botho-project/botho/issues/1761)、[#1682](https://github.com/botho-project/botho/issues/1682)） |
 
 ### 技术参数
 
@@ -171,7 +171,7 @@ Fee rate: unchanged (based on cluster wealth, not UTXO count)
 1. **追踪来源，而非身份** — 币会记住自己的起源
 2. **抵御拆分攻击** — 集群财富在铸造时即已固定
 3. **实现渐进式手续费** — 富有的集群支付更多
-4. **驱动重新分配** — 手续费的 80% 通过均匀抽奖回流给持有者（渐进性来自手续费和滞留费）
+4. **为抽奖注资** — 手续费的 80% 通过均匀抽奖回流给持有者（渐进性来自手续费和滞留费）；可测量的不平等下降未得到证明（见“代币经济”）
 5. **保护隐私** — 与环签名协同工作
 6. **鼓励流通** — 标签通过商业活动衰减
 

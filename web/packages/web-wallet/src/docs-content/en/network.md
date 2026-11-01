@@ -61,7 +61,7 @@ Botho uses libp2p for networking, which supports multiple discovery mechanisms:
 | Fee formula | per-byte rate × size × cluster factor × output penalty | Size-based, wealth-progressive |
 | Cluster factor | 1x–6x | Progressive multiplier from coin provenance |
 | Output penalty | quadratic, capped at 100x | Anti-UTXO-farming |
-| Fee destination | 80% lottery / 20% burned | Redistribution plus deflationary pressure |
+| Fee destination | 80% lottery / 20% burned | Lottery payouts plus deflationary pressure |
 
 ### Port Reference
 

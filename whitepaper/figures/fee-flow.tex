@@ -7,7 +7,8 @@
 % based on wealth percentile). The total fee then splits: 80% flows to a
 % lottery pool (green), which randomly selects a winning UTXO for
 % redistribution. 20% flows to burn (red), permanently removing coins from
-% circulation. This creates progressive redistribution favoring small holders.
+% circulation. The flow is designed to favor small holders; a measurable
+% reduction in inequality is not demonstrated (Section sec:redistribution-status).
 
 \begin{figure}[ht]
 \centering
@@ -55,13 +56,15 @@
 \node[below=0.3cm of destroyed, align=center, font=\scriptsize] {Deflationary\\pressure};
 
 % Progressive aspect
-\node[above=1cm of tx, align=center, font=\footnotesize\itshape] {Wealthy clusters pay more $\rightarrow$ Redistribution to random holders};
+\node[above=1cm of tx, align=center, font=\footnotesize\itshape] {Wealthy clusters pay more $\rightarrow$ Pool paid to random outputs};
 
 \end{tikzpicture}
 \caption{Fee flow mechanism. Transaction fees are calculated using a progressive
 cluster factor (1x--6x based on coin ancestry). 80\% of fees are redistributed
 via verifiable lottery to 4 randomly selected UTXOs, while 20\% is permanently
-burned. This creates redistribution from active wealthy users to passive holders,
-with deflationary pressure proportional to network usage.}
+burned, with deflationary pressure proportional to network usage. The flow is
+designed to move value from high-factor payers to random holders; a measurable
+reduction in inequality is not demonstrated at production parameters
+(Section~\ref{sec:redistribution-status}).}
 \label{fig:fee-flow}
 \end{figure}

@@ -92,21 +92,26 @@ pico-BTH (\path{transaction/clsag/src/lib.rs}), which exceeds every row,
 so at today's constants an ordinary wallet pays the same fee at every
 percentile (pending \#1688; the relay minimum is not a consensus rule, \#1684).}
 
-\subsubsection{Redistribution Effect}
+\subsubsection{Redistribution Flows}
 
-The lottery mechanism creates direct wealth transfer from high-activity,
-high-cluster users to random UTXO holders:
+The lottery routes fees from fee payers to the holders of randomly drawn
+outputs:
 
 \begin{equation}
 \text{redistribution}_{\text{direct}} = 0.8 \times \sum_{\text{tx}} f_{\text{total}}
 \end{equation}
 
-Additionally, fee burning (20\%) redistributes indirectly to all holders
-by reducing supply:
+Fee burning (20\%) reduces supply, which benefits all holders in
+proportion to their holdings and so does not by itself change the
+distribution:
 
 \begin{equation}
 \text{redistribution}_{\text{indirect}} = 0.2 \times \sum_{\text{tx}} f_{\text{total}}
 \end{equation}
+
+These are flows, not outcomes. Whether they reduce inequality depends on
+who pays and who wins; at production parameters they do not measurably do so
+(Section~\ref{sec:redistribution-status}).
 
 \textbf{Lottery selection as built}:
 \begin{itemize}
@@ -116,15 +121,19 @@ by reducing supply:
     factor (Section~\ref{sec:monetary})
   \item A uniform per-output draw depends on UTXO count, which a holder
     controls. Its split resistance rests on the Path~C reward cap, whose
-    premises the implementation does not meet (pending \#1682); coinbase and
-    payout outputs are also free tickets (pending \#1690)
-  \item Progressivity therefore comes from the intake side (demurrage, and
-    the factor-scaled fee where it binds), not from the payout weight
+    premises the implementation does not meet, so splitting is profitable
+    (\#1761, pending \#1682); coinbase and payout outputs are also free
+    tickets (pending \#1690)
+  \item Any progressivity therefore has to come from the intake side
+    (demurrage, and the factor-scaled fee where it binds), not from the
+    payout weight; at production parameters that intake does not produce a
+    measurable reduction in inequality
+    (Section~\ref{sec:redistribution-status})
 \end{itemize}
 
 \subsubsection{Anti-Hoarding Dynamics}
 
-The combination of:
+The combination of
 \begin{itemize}
   \item Tail emission ($\sim$2\% annual supply increase)
   \item Progressive fees (wealth-based costs)
@@ -132,7 +141,7 @@ The combination of:
   \item Fee burning (20\% deflationary pressure)
 \end{itemize}
 
-Creates net pressure toward circulation:
+is designed to create net pressure toward circulation:
 
 \begin{equation}
 \text{holding\_cost} = \text{dilution} - \text{lottery\_income} + \text{opportunity\_cost}
@@ -157,14 +166,17 @@ diluted only uniformly, which large holders can hedge simply by holding a
 proportional share of hashpower. In neither design does sitting on wealth cost
 the holder anything relative to their peers.
 
-\Botho's anti-hoarding pressure comes from making idle wealth carry a small,
+\Botho's anti-hoarding design makes idle wealth carry a small,
 \emph{cluster-scaled} holding cost while leaving circulating money alone. The
-$\text{holding\_cost}$ term above is negative---a net drag---precisely for the
+intent is that the $\text{holding\_cost}$ term above is a net drag for the
 high-factor clusters that dominate the supply and positive-leaning for
-ordinary factor-1 balances, which recover much of their dilution through
-lottery income. The effect is a continuous incentive to \emph{spend} rather
-than accumulate, without penalizing the everyday user the way classical
-uniform demurrage does. Historical demurrage currencies (Freigeld, the
+ordinary factor-1 balances, which would recover much of their dilution
+through lottery income: a continuous incentive to \emph{spend} rather than
+accumulate, without penalizing the everyday user the way classical uniform
+demurrage does. At production parameters that targeting does not hold:
+lottery income tracks block production and output count rather than
+holdings, and decayed or coinbase-lineage tags price nearly all value at
+factor~1 within a decade (Section~\ref{sec:redistribution-status}). Historical demurrage currencies (Freigeld, the
 Chiemgauer) taxed every balance equally and were rejected as user-hostile for
 exactly this reason (Section~\ref{sec:related}); \Botho's contribution is to
 aim the same circulation incentive only where concentration actually occurs,
@@ -272,7 +284,7 @@ Supply cap & 21M & None (tail) \\
 Long-term inflation & 0\% & $\sim$2\% \\
 Security funding & Fees only & Emission + burn \\
 Fee predictability & Low & High \\
-Wealth concentration & High & Moderate \\
+Wealth concentration & High & Reduction not demonstrated \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -304,12 +316,15 @@ economic mechanisms.
 \subsubsection{Adversarial Redistribution Simulation}
 \label{sec:gini-experiment}
 
-We validate the redistribution design with an agent-based simulation in
-which every candidate mechanism is tested twice: once with honest
+An earlier agent-based simulation evaluated candidate redistribution
+designs. It does not model the implemented mechanism and does not
+demonstrate it (Section~\ref{sec:redistribution-status}). Every candidate
+mechanism was tested twice: once with honest
 participants, and once against a \emph{strategic whale} that splits its
 position into 1{,}000 UTXOs and churns them periodically to maintain
-lottery eligibility --- the optimal known gaming strategy. A mechanism's
-redistributive effect is only credited in the \emph{gamed} equilibrium.
+lottery eligibility --- the optimal gaming strategy known at the time. A
+mechanism's redistributive effect was only credited in the \emph{gamed}
+equilibrium.
 
 \textbf{Setup}: 100M BTH economy; 80 small holders (5\% of wealth, cluster
 factor 1$\times$), 30 mid holders (25\%, 2$\times$), 9 honest whales (65\%,
@@ -339,8 +354,10 @@ draw, while the protocol draws winners uniformly
 The table is therefore an earlier design's result, not a measurement of the
 implemented mechanism. The row closest to the implemented draw is ``Uniform per UTXO
 + emission'', which inverts under gaming; the Path~C reward cap was meant to
-prevent that inversion, and as built it does not bind (\#1682). Code-faithful re-runs are tracked in \#1696 (M2 at
-production scale) and \#1682 (splitting under the implemented cap).
+prevent that inversion, and as built it does not bind (\#1682). The
+code-faithful re-runs (\#1696 for M2 at production scale, \#1761 for splitting
+under the implemented cap) are reported in
+Section~\ref{sec:redistribution-status}.
 
 \begin{table}[h]
 \centering
@@ -362,7 +379,7 @@ Cluster-tilted + emission & $+0.054$ & $+0.055$ \\
 \end{tabular}
 \end{table}
 
-Three structural results:
+Three structural results from that model:
 
 \begin{enumerate}
   \item \textbf{Per-UTXO payouts invert under gaming.} The uniform lottery
@@ -393,40 +410,74 @@ The tilted formula of earlier drafts,
 $P \cdot v(\phi_{\max}-\phi+1) / \sum_j v_j(\phi_{\max}-\phi_j+1)$, describes
 the retired \texttt{ClusterWeighted} mode only.
 
-\textbf{Magnitude and headroom}. At the conservative parameters above, the
-combined mechanism reduces the Gini coefficient by $0.078 \pm 0.0002$ per five
-years ($\Delta G$ vs.\ the no-redistribution baseline; mean $\pm$ 95\% CI over
-the eight seeds), and by $\approx 0.097$ in absolute terms ($0.77 \to 0.68$).
-The strategic-whale (split-and-churn) attack does not degrade this ---
-the gamed run reduces $\Delta G$ by $0.076$ while the attacker's own share
-falls from 5\% to 3.4\% of supply. Every seed clears the $\Delta G > 0.05$
-design criterion by better than a $50\%$ margin, and the eight-seed spread is
-negligible ($1\sigma = 0.0003$): the result is not sensitive to the RNG seed.
-All three levers have headroom --- steeper (quadratic) tilt, higher
-demurrage, larger emission fraction --- with quantified costs in payout
-privacy, holding ergonomics, and miner security budget respectively. The
-fee-only configuration (no emission routing, no demurrage) yields
-$+0.02$/5yr: transaction fees are a consumption tax and cannot by
-themselves touch idle wealth at realistic velocities.
+\textbf{What the earlier model reported}. In that model, at its
+parameters, the retired cluster-tilted design with emission routing and
+demurrage lowered the Gini coefficient by $0.078 \pm 0.0002$ per five years
+($\Delta G$ vs.\ the no-redistribution baseline; mean $\pm$ 95\% CI over the
+eight seeds), and by $\approx 0.097$ in absolute terms ($0.77 \to 0.68$); the
+gamed run gave $0.076$. The fee-only configuration (no emission routing, no
+demurrage) gave $+0.02$/5yr: transaction fees are a consumption tax and
+cannot by themselves touch idle wealth at realistic velocities. These
+figures describe a design the protocol does not implement and are kept only
+as a record of how the design was chosen. They are not a property of
+\Botho.
 
-\textbf{Status at production parameters (2026-10-31).} The experiment above
-uses a cluster-tilted draw, a flat per-transaction fee and one cluster per
-participant, and it does not model mining. A production-parameter re-run
-(issue \#1696, \texttt{cluster-tax-sim m2-production}) does not reproduce its
-margin. That re-run uses the node's fee floor, 5\,s blocks, the mainnet
-emission and lottery-share ramp, the uniform V2 draw with payouts as new
-outputs, coinbase-lineage clusters and an optimal-decoy mining whale. It
-compares each run against the same seed with the mechanism switched off. The
-mechanism's own $\Delta G$ is between $-0.028$ and $+0.001$ (three-seed means
-at 10 and 20 years), it stays below $+0.019$ at up to $1000\times$ the
-transaction rate, and 100\% of top-decile value is priced below
-$1.5\times$. Two causes dominate. The uniform draw pays in proportion to
-unspent output creation, which is mostly block production. And
-coinbase-lineage clusters keep mined wealth near factor $1$. The record is in
-\texttt{docs/research/m2-production-verdicts.md}. Whether to add a
-redistribution source or restate the criterion is open in issue \#1727. The
-claims in this subsection should be read with that caveat until it is
-resolved.
+\subsubsection{Status of the Redistribution Claim}
+\label{sec:redistribution-status}
+
+\textbf{Measurable inequality reduction is not demonstrated at production
+parameters.} This restatement (2026-11-01) follows the operator ruling on
+issues \#1727 and \#1682. It changes no constant and no consensus rule.
+
+\textbf{What the protocol does, as specified.} The fee floor scales with a
+coin's cluster factor ($1\times$--$6\times$). Cluster-scaled demurrage charges
+high-factor coins in proportion to value and holding time, from the second
+halving epoch on; factor-1 coins are exempt. The lottery pool receives 80\%
+of fees (demurrage included) and a height-scheduled emission share, and pays four
+outputs per block drawn uniformly from the unspent outputs aged 720 to
+10{,}000 blocks. Cluster tags record each output's provenance; each coinbase
+starts a fresh cluster. These descriptions stand.
+
+\textbf{What is not demonstrated.} A code-faithful re-run (issue \#1696, PR
+\#1790, \texttt{cluster-tax-sim m2-production}) uses the node's fee floor,
+5\,s blocks, the mainnet emission and lottery-share ramp, the uniform draw
+with payouts as new outputs, coinbase-lineage clusters and an optimal-decoy
+mining whale, and compares each run against the same seed with the mechanism
+switched off. The mechanism's own $\Delta G$ is between $-0.028$ and
+$+0.001$ (three-seed means at 10 and 20 years) against the $0.05$ design
+bar. Even at $1000\times$ the transaction rate it is at most $+0.019$. By
+year 10, 100\% of top-decile value is priced below $1.5\times$. The measured
+failure mechanisms are structural:
+\begin{itemize}
+  \item lottery tickets track hashpower and output count, because most
+    eligible outputs are coinbases and payouts that copy their winner;
+  \item frequent spenders lose their tickets, since a spend removes the
+    spent outputs from the candidate window and new outputs need 720 blocks
+    to become eligible;
+  \item tag decay and coinbase-lineage clusters bring nearly all value to
+    factor~1, so demurrage stops, and at high transaction density it
+    disappears altogether;
+  \item per-output splitting buys tickets (below).
+\end{itemize}
+Under egalitarian mining the mechanism is mildly regressive on average. The
+record is \path{docs/research/m2-production-verdicts.md}.
+
+\textbf{Lottery splitting is profitable.} A faithful-to-code re-run of the
+splitting experiment (PR \#1761, \texttt{lottery-reward-cap-sweep
+-{}-faithful}) finds splitting profitable at all 192 grid points: an extra
+output costs far less than the ticket share it buys, and the Path~C reward
+cap does not bind as built (issue \#1682). The record is
+\path{docs/research/ct-compatible-lottery-selection.md}, \S9.1.1.
+
+\textbf{What happens next.} A sim-only redesign study (issue \#1801) targets
+the failure mechanisms above. Candidate directions include tickets weighted
+by value, age or cluster factor instead of output count, and any candidate
+must pass the production-fidelity harness of \#1790 and the splitting grid of
+\#1761 before a constant or consensus rule moves. Raising the existing levers
+(demurrage rate, lottery share, per-transaction floor) was considered and
+rejected, because the failure is structural. Until the study concludes, the
+redistribution mechanism should be read as specified and implemented, but not
+as a demonstrated means of reducing inequality.
 
 \subsubsection{Formal Nash Equilibrium Analysis}
 

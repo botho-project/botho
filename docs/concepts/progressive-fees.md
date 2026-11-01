@@ -1,6 +1,8 @@
 # Progressive Transaction Fees
 
-Botho implements a novel **provenance-based progressive fee system** that taxes wealth concentration without enabling Sybil attacks or compromising privacy.
+Botho implements a novel **provenance-based progressive fee system** that prices coins by the wealth of their origin cluster, without enabling Sybil attacks on the fee rate or compromising privacy.
+
+> **Status:** the fee schedule is progressive as specified, but the redistribution mechanism it feeds is **not demonstrated** to measurably reduce inequality at production parameters (mechanism ΔGini −0.028 to +0.001 against a 0.05 bar; at most +0.019 even at 1000x the transaction rate; #1790). Lottery ticket-splitting is currently profitable (#1761, #1682), and a redesign is under study (#1801). See [Tokenomics: Redistribution Status](tokenomics.md#redistribution-status).
 
 ![System Overview](../../cluster-tax/docs/figures/system_overview.png)
 
@@ -100,8 +102,10 @@ Whale splits 1M into 1000 × 1K UTXOs
 Each UTXO: source_wealth = 1M (unchanged)
 Each tx pays: factor(1M) = 6x — and the split itself pays
 quadratic output penalties (up to 100x per transaction)
-Result: Attack defeated (splitting costs extra, saves nothing)
+Result: Fee attack defeated (splitting costs extra, saves nothing)
 ```
+
+Splitting does not lower the fee rate, but it does buy lottery tickets: each eligible output is one ticket in a uniform draw. At the implemented fee floor that is profitable (#1761, #1682); see [Tokenomics: Redistribution Status](tokenomics.md#redistribution-status).
 
 ### Attack 2: Sybil Shuffle
 ```
@@ -131,11 +135,11 @@ Circulating through merchants diffuses attribution two ways at once:
 - Each **transfer** made by a standard wallet decays tags by 5% (wallet policy, not consensus; #1687)
 - **Blending** with counterparties' coins dilutes attribution much faster than decay alone — a value-weighted average with every combined input
 
-**This is by design**: Well-circulated money should pay lower fees than freshly-hoarded wealth.
+**This is by design**: Well-circulated money should pay lower fees than freshly-hoarded wealth. At production parameters this decay and coinbase-lineage clusters bring nearly all value to factor 1 within a decade, which is one reason the mechanism does not measurably reduce inequality ([Redistribution Status](tokenomics.md#redistribution-status)).
 
 ## Simulation Results
 
-We validated the progressive fee system through extensive simulation:
+Early simulations compared fee-curve shapes. They predate the implemented lottery, fee floor and cluster model, and do not demonstrate the protocol's effect on inequality:
 
 ![Gini Reduction Comparison](../../cluster-tax/docs/figures/gini_reduction_comparison.png)
 
@@ -146,20 +150,20 @@ We validated the progressive fee system through extensive simulation:
 | Sigmoid | -0.2393 | 12.5% |
 | 3-Segment | -0.2399 | 12.4% |
 
-These early sweeps compared curve *shapes*; all performed within a fraction of a percent of each other. The **deployed** curve is the log-domain sigmoid (`ClusterFactorCurve`, midpoint 100K BTH), chosen in the M2 calibration for its smoothness across orders of magnitude and consensus-deterministic integer implementation; the full mechanism (fees + tilted lottery + emission routing + demurrage) passed its Gini-reduction criterion with a 4–11x margin in the legacy harness (see `experiments/ANALYSIS.md`). At production parameters that margin is gone (#1727, `docs/research/m2-production-verdicts.md`).
+These early sweeps compared curve *shapes*; all performed within a fraction of a percent of each other. The **deployed** curve is the log-domain sigmoid (`ClusterFactorCurve`, midpoint 100K BTH), chosen in the M2 calibration for its smoothness across orders of magnitude and consensus-deterministic integer implementation. The legacy harnesses behind that calibration modelled a retired tilted lottery and do not carry over: at production parameters the mechanism does not measurably reduce inequality (`docs/research/m2-production-verdicts.md`; see [Tokenomics: Redistribution Status](tokenomics.md#redistribution-status)).
 
 > **Note on "Burn Rate"**: the column above measures *fee intake* (fees collected as a fraction of value moved) in the original simulation, not the share of fees destroyed. In the shipped protocol, fees are **not** all burned — see **Where Fees Go** below.
 
 ## Where Fees Go: Redistribution Lottery + Burn (80/20)
 
-Progressive fees are the *intake* side of Botho's anti-concentration design. The *outflow* side is a cluster-tilted redistribution lottery. Each block, collected fees (including the cluster-demurrage charges described below) are split deterministically by `LotteryFeeConfig` (`botho/src/consensus/lottery.rs`):
+Progressive fees are the *intake* side of Botho's anti-concentration design. The *outflow* side is a redistribution lottery. Each block, collected fees (including the cluster-demurrage charges described below) are split deterministically by `LotteryFeeConfig` (`botho/src/consensus/lottery.rs`):
 
-- **80% → redistribution lottery pool**, paid back out to randomly selected UTXO holders, with the draw tilted toward smaller, well-circulated holders.
+- **80% → redistribution lottery pool**, paid back out to four outputs per block drawn uniformly from eligible unspent outputs (neither value nor cluster factor enters the draw weight; the earlier cluster-tilted draw is retired).
 - **20% → burned** (deflationary).
 
 Only the 20% burn share is destroyed; the redistributed 80% stays in circulating supply as new payout UTXOs (audit cycle 6, M4). A height-scheduled fraction of the block reward is also routed into the same pool (`lottery_emission_share`), and the pool carries over between blocks under a per-block payout cap.
 
-**Cluster demurrage** complements progressive fees by reaching *idle* wealth that a consumption tax cannot: concentrated-cluster coins accrue a small spend-time holding charge (factor-1 coins pay zero), which is added to the minimum fee and flows through the same 80/20 split into the lottery pool.
+**Cluster demurrage** complements progressive fees and is designed to reach *idle* wealth that a consumption tax cannot: concentrated-cluster coins accrue a small spend-time holding charge (factor-1 coins pay zero), which is added to the minimum fee and flows through the same 80/20 split into the lottery pool.
 
 > **See also**: [Cluster-Tilted Redistribution](../design/cluster-tilted-redistribution.md), [Lottery-Based Fee Redistribution](../design/lottery-redistribution.md), [Entropy-Weighted Decay](../design/entropy-weighted-decay.md), and the [Tokenomics](tokenomics.md#fee-destination-redistribution-lottery--burn-8020) fee-destination summary.
 

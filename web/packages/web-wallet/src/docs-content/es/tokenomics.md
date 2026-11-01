@@ -76,7 +76,7 @@ fee = tarifa por byte × tamaño de la transacción × factor de clúster × pen
 
 ### Comisiones progresivas basadas en clúster
 
-Botho implementa un novedoso **sistema de comisiones progresivas** que grava la concentración de riqueza sin habilitar ataques Sybil.
+Botho implementa un novedoso **sistema de comisiones progresivas** que tasa las monedas según la riqueza de su clúster de origen, sin que los ataques Sybil puedan reducir la tarifa.
 
 **La innovación central:** En lugar de gravar según el importe de la transacción (fácil de manipular dividiendo), las comisiones se basan en la *procedencia* de la moneda: de dónde vinieron originalmente las monedas.
 
@@ -134,11 +134,11 @@ A plena carga sostenida (bloques de 5 segundos; más lentos cuando la red está 
 - **Presión deflacionaria**: la quema del 20 % compensa la emisión de cola
 - **Predecible**: inflación neta = emisión bruta − quemas
 
-> **Estado de la simulación (#1696):** con los parámetros de producción, el sorteo de la lotería es uniforme sobre las salidas no gastadas creadas recientemente, así que los premios siguen a la creación de salidas, que es sobre todo minería. En esa ejecución, la reducción del índice de Gini atribuible al mecanismo completo es nula o ligeramente negativa frente a su criterio de diseño de 0,05. Queda abierta la decisión sobre una fuente de redistribución más fuerte o un criterio reformulado (#1727).
+> **Estado de la redistribución (no demostrada):** los mecanismos de esta página están especificados e implementados tal como se describen, pero una reducción medible de la desigualdad **no está demostrada** con los parámetros de producción. Una simulación fiel al código (#1790) midió el efecto propio del mecanismo sobre el índice de Gini entre −0,028 y +0,001, frente a un umbral de diseño de 0,05, y como máximo +0,019 incluso a 1000× la tasa de transacciones. Los premios siguen a la creación de salidas, que es sobre todo minería. Dividir una posición en muchas salidas para obtener más boletos de lotería es hoy rentable (#1761, #1682). Se estudia un rediseño (#1801); no ha cambiado ninguna constante.
 
 ### ¿Por qué comisiones progresivas por clúster?
 
-- **Reducir la concentración**: los clústeres ricos pagan más
+- **Orientadas a la concentración**: los clústeres ricos pagan más (una reducción medible de la desigualdad no está demostrada; véase la nota de estado anterior)
 - **Resistentes a Sybil**: no se pueden evitar dividiendo cuentas
 - **Fomentan la circulación**: mover monedas difunde las etiquetas, reduciendo las comisiones
 - **Compatibles con la privacidad**: funcionan con firmas de anillo y direcciones sigilosas

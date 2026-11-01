@@ -132,7 +132,7 @@ Neither value nor cluster factor enters the draw.
 
 Four winners are drawn per block from outputs that are at least 720 blocks old and worth at least 1 µBTH, within a 10,000-block window (at most 10,000 candidates, from a seeded offset). The pool (80% of fees, plus the block's lottery emission share of the block reward (0% in the bootstrap epoch, then 10% more per halving, capped at 50%), plus anything carried forward) pays out the lesser of what is available and a per-block cap.
 
-Progressivity lives on the *intake* side: progressive fees and demurrage fill the pool. The earlier value ÷ cluster-factor weighting was retired. Because the draw is uniform, splitting a position into many outputs can currently improve your odds ([#1682](https://github.com/botho-project/botho/issues/1682)); this and related questions ([#1689](https://github.com/botho-project/botho/issues/1689), [#1690](https://github.com/botho-project/botho/issues/1690), [#1691](https://github.com/botho-project/botho/issues/1691)) are open decisions.
+Progressivity lives on the *intake* side: progressive fees and demurrage fill the pool. The earlier value ÷ cluster-factor weighting was retired. Because the draw is uniform, splitting a position into many outputs is currently profitable ([#1761](https://github.com/botho-project/botho/issues/1761), [#1682](https://github.com/botho-project/botho/issues/1682)); this and related questions ([#1689](https://github.com/botho-project/botho/issues/1689), [#1690](https://github.com/botho-project/botho/issues/1690), [#1691](https://github.com/botho-project/botho/issues/1691)) are open. At production parameters the mechanism does not measurably reduce inequality ([#1790](https://github.com/botho-project/botho/issues/1790)), and a redesign is under study ([#1801](https://github.com/botho-project/botho/issues/1801)).
 
 **Eligibility gates** limit gaming: a UTXO must be at least 720 blocks old and worth at least 1 µBTH to participate.
 
@@ -160,9 +160,10 @@ Verdict: Attack defeated
 ```
 Attacker: Split into 100 UTXOs, wait for lottery winnings
 Result: The draw is uniform per output, so as built extra outputs
-        can raise the odds of winning (open decision, #1682)
+        raise the odds of winning; at the implemented fee floor
+        splitting is profitable (#1761)
         Quadratic output fees make the split itself cost up to 100×
-Verdict: Not fully defeated (open decision, #1682)
+Verdict: Not defeated (#1682; redesign under study, #1801)
 ```
 
 **Wash Trading (Self-transfers):**
@@ -194,13 +195,13 @@ Each layer contributes to both goals without conflict.
 
 This isn't just a technical achievement—it changes what's possible:
 
-**For users:** You get financial privacy AND a fair economic system. No trade-off required.
+**For users:** You get financial privacy AND provenance-based progressive fees. No trade-off required.
 
 **For merchants:** Low fees reward economic activity. The more you trade, the lower your rates.
 
-**For the network:** Wealth naturally flows from concentrated to distributed holdings. Self-custody is rewarded over custodial services.
+**For the network:** The design aims for wealth to flow from concentrated to distributed holdings. At production parameters that is not demonstrated (#1790), and a redesign is under study (#1801). Self-custody is rewarded over custodial services.
 
-**For the ecosystem:** We've proven that "privacy vs. fairness" is a false dichotomy. Other projects can adopt these techniques.
+**For the ecosystem:** Provenance-based fees show that privacy and progressive pricing can coexist. Other projects can adopt these techniques.
 
 ### Summary
 
@@ -210,7 +211,7 @@ Botho's privacy + progressivity mechanism works because:
 2. **Provenance correlates with wealth behavior** — Fresh minters are wealthy, active traders are merchants
 3. **Ring signatures preserve privacy** — Centroid validation prevents gaming
 4. **Progressive intake feeds a uniform lottery** — Fees and demurrage are progressive; the draw itself is uniform
-5. **Quadratic output fees raise the cost of splitting** — whether splitting pays off under the uniform draw is an open decision (#1682)
+5. **Quadratic output fees raise the cost of splitting** — but under the uniform draw splitting currently pays off (#1761, #1682)
 6. **Commerce is rewarded** — Tags decay through legitimate trade; idle concentrated wealth pays demurrage
 
 The result: **The first cryptocurrency where you can be private AND contribute fairly to the network, where the wealthy pay more without anyone knowing who they are.**

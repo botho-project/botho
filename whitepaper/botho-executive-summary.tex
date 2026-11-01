@@ -45,9 +45,10 @@ attacks. On-chain data remains secure even if quantum computers break
 classical cryptography. \\[0.5em]
 Fast Finality & Hybrid PoW+SCP consensus achieves deterministic finality in
 $\sim$5 seconds. Unlike Bitcoin, finalized blocks cannot be reverted. \\[0.5em]
-Fair Economics & Progressive fees based on coin ancestry (not identity) create
-Sybil-resistant pressure against wealth concentration. Fees are 80\%
-redistributed via lottery, 20\% burned. \\[0.5em]
+Fair Economics & Progressive fees and demurrage based on coin ancestry (not
+identity) are aimed at wealth concentration. Fees are 80\% paid out via
+lottery, 20\% burned. A measurable reduction in inequality is \emph{not}
+demonstrated at production parameters (see Economic Design). \\[0.5em]
 Cross-chain Bridge & Native BTH wraps 1:1 to transparent \textbf{wBTH} on
 Ethereum and Solana (factor-1 peg; a \(t\)-of-\(n\) validator federation
 custodies the reserve). Unwrapped coins enter tagged to a block-epoch
@@ -104,9 +105,17 @@ coin \emph{ancestry}, not current ownership---preserves privacy.
 \begin{itemize}
 \item 80\% redistributed via a lottery to 4 winning UTXOs per block, drawn
   uniformly from recently created outputs (with a PoW-bound seed); its
-  anti-splitting cap is under review (\#1682)
+  anti-splitting cap does not bind as built (\#1682)
 \item 20\% burned (creates deflationary pressure proportional to usage)
 \end{itemize}
+
+\textbf{Redistribution status}: the mechanisms are specified and implemented
+as described, but measurable inequality reduction is \emph{not demonstrated}
+at production parameters. A code-faithful simulation (\#1790) measures the
+mechanism's effect on the Gini coefficient at $-0.028$ to $+0.001$ against a
+0.05 design bar, and at most $+0.019$ even at 1000$\times$ the transaction
+rate. Lottery ticket-splitting is currently profitable (\#1761, \#1682). A
+sim-only redesign is under study (\#1801); no constant has changed.
 
 \textbf{Tail emission}: After 5 annual halvings ($\sim$5 years, fixing the
 Phase-1 supply at $\approx$611M BTH), perpetual tail emission funds long-term
@@ -139,7 +148,7 @@ Privacy & Full & Full & Optional & Pseudonymous \\
 Post-quantum & Partial & No & No & No \\
 Finality & 5s deterministic & 10+ min prob. & 10+ min prob. & 60+ min prob. \\
 Tx size & 4 KB & 2 KB & 2 KB (shielded) & 0.3 KB \\
-Fair distribution & Yes & No & No & No \\
+Progressive fee schedule & Yes & No & No & No \\
 \bottomrule
 \end{tabular}
 

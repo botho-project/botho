@@ -89,7 +89,7 @@ The miner receives `reward − emission_share`; the routed share joins the fee p
 
 ## Fee Structure
 
-Botho has a multi-layered fee system combining size-based fees, progressive wealth taxation, and dynamic congestion pricing.
+Botho has a multi-layered fee system combining size-based fees, a progressive provenance-based multiplier, cluster demurrage, and dynamic congestion pricing.
 
 ### Fee Formula
 
@@ -102,21 +102,30 @@ fee = dynamic_base × tx_size × cluster_factor × output_penalty + memo_fees
 | `dynamic_base` | 1-100 picocredits/byte | Adjusts based on network congestion |
 | `tx_size` | ~4-65 KB | Transaction size in bytes |
 | `cluster_factor` | 1x-6x | Progressive multiplier based on sender's cluster wealth |
-| `output_penalty` | quadratic in outputs, capped at 100x | Makes UTXO-farming (mass splitting) uneconomical |
+| `output_penalty` | quadratic in outputs, capped at 100x | Raises the cost of many-output transactions (does not make lottery ticket-splitting unprofitable; see [Redistribution Status](#redistribution-status)) |
 | `memo_fees` | 100 picocredits/memo | Additional fee for encrypted memos |
 
 #### Fee Destination: Redistribution Lottery + Burn (80/20)
 
 Transaction fees are **not** all burned. Each block, collected fees are split deterministically (`LotteryFeeConfig` in `botho/src/consensus/lottery.rs`, 800 permille):
 
-- **80% → redistribution lottery pool**, paid back out to randomly selected UTXO holders. The draw is cluster-tilted, favoring smaller, well-circulated holders over concentrated clusters.
+- **80% → redistribution lottery pool**, paid back out to four outputs per block. Winners are drawn **uniformly** from eligible unspent outputs (aged 720–10,000 blocks, at least 10⁶ picocredits, capped at 10,000 candidates); neither value nor cluster factor enters the draw weight. The earlier cluster-tilted draw is retired.
 - **20% → burned**, providing deflationary pressure that partially offsets tail emission.
 
-The lottery pool is consensus state. A per-block payout cap (one block reward) plus carryover make seed-grinding unprofitable: undistributed pool funds carry over to future blocks rather than being destroyed. The burn share (the 20%) is the **only** portion of fees subtracted from supply; the redistributed 80% stays in circulation as new lottery-payout UTXOs.
+The lottery pool is consensus state. Each block pays out at most one block reward (the reward cap), and undistributed pool funds carry over to future blocks rather than being destroyed. The burn share (the 20%) is the **only** portion of fees subtracted from supply; the redistributed 80% stays in circulation as new lottery-payout UTXOs.
 
-In addition, **cluster demurrage** levies a small spend-time holding charge on coins in concentrated clusters (factor-1 / well-circulated coins pay zero). The charge is added to a transaction's minimum fee and flows through the same 80/20 split into the lottery pool — so idle-wealth charges are redistributed, not burned.
+In addition, **cluster demurrage** levies a small spend-time holding charge on coins in concentrated clusters (factor-1 / well-circulated coins pay zero). The charge is added to a transaction's minimum fee and flows through the same 80/20 split into the lottery pool — so idle-wealth charges are paid out through the lottery, not burned.
 
-> **See also**: [Cluster-Tilted Redistribution](../design/cluster-tilted-redistribution.md) (the validated mechanism), [Lottery-Based Fee Redistribution](../design/lottery-redistribution.md) (background analysis), and [Entropy-Weighted Decay](../design/entropy-weighted-decay.md) (tag-decay hardening).
+#### Redistribution Status
+
+**Measurable inequality reduction is not demonstrated at production parameters.** The mechanisms above (progressive fees, demurrage, the fee-and-emission lottery, cluster tags) are specified and implemented as described, but they are not shown to reduce inequality. This restates the claim per the operator ruling on #1727 and #1682 (2026-11-01); no constant has changed.
+
+- **No measurable Gini reduction.** A code-faithful simulation at production parameters ([M2 at production parameters](../research/m2-production-verdicts.md), #1696 / PR #1790) measured the mechanism's own ΔGini at −0.028 to +0.001 (3-seed means at 10 and 20 years) against a 0.05 design bar. Even at 1000x the transaction rate it is at most +0.019.
+- **Why.** Lottery tickets track hashpower and output count, because most eligible outputs are coinbases and payouts; frequent spenders lose their tickets; tag decay and coinbase-lineage clusters bring nearly all value to factor 1, so demurrage stops (and disappears at high transaction density).
+- **Lottery splitting is profitable.** A faithful-to-code re-run (#1761, issue #1682) finds splitting a position into many outputs profitable at all 192 grid points: an extra output costs far less than the ticket share it buys, and the reward cap does not bind as built.
+- **Next.** A sim-only redesign study is under way (#1801). No constant or consensus rule moves until a candidate passes the #1790 production-fidelity harness and the #1761 splitting grid.
+
+> **See also**: [Cluster-Tilted Redistribution](../design/cluster-tilted-redistribution.md) (design history; the tilted draw is retired), [Lottery-Based Fee Redistribution](../design/lottery-redistribution.md) (background analysis), and [Entropy-Weighted Decay](../design/entropy-weighted-decay.md) (tag-decay hardening).
 
 ### Size-Based Fees
 
@@ -145,7 +154,7 @@ This ensures fees stay low during normal operation while providing strong conges
 
 ### Cluster-Based Progressive Fees
 
-Botho implements a novel **provenance-based progressive fee system** that taxes wealth concentration without enabling Sybil attacks.
+Botho implements a novel **provenance-based progressive fee system** that prices coins by the wealth of their origin cluster, so splitting across addresses does not lower the fee rate. It is aimed at wealth concentration; a measurable reduction in inequality is not demonstrated (see [Redistribution Status](#redistribution-status)).
 
 ![Progressive Fee System](../../cluster-tax/docs/figures/system_overview.png)
 
@@ -184,11 +193,13 @@ Not every transaction triggers decay. To prevent **wash trading attacks** (rapid
 
 This means a wash trader executing 100 rapid self-transfers gets 0% decay (all outputs too young), while legitimate commerce over time allows natural tag diffusion.
 
+> **As built**, the age gate above is a library model with no production caller. Consensus applies no tag decay and accepts smaller or empty output tags (charging only the class-downgrade fee); stock wallets decay tags 5% on every transfer with no age gate (#1687). See whitepaper §5 (cluster tags).
+
 #### Simulation Results
 
 ![Gini Reduction](../../cluster-tax/docs/figures/gini_reduction_comparison.png)
 
-The deployed log-domain cluster-factor curve was calibrated against agent-based simulation sweeps (see `experiments/ANALYSIS.md` and [Cluster-Tilted Redistribution](../design/cluster-tilted-redistribution.md)); the full mechanism (progressive fees + tilted lottery + emission routing + demurrage) passed its Gini-reduction criterion with a 4–11x margin in that harness. **That result does not hold at production parameters:** with the node's real fee floor, block rate, emission ramp, uniform lottery and coinbase-lineage clusters, the mechanism's own Gini reduction is zero or negative against the 0.05 criterion (3-seed means −0.028 to +0.001) (#1727, [M2 at production parameters](../research/m2-production-verdicts.md)). The decision on a new redistribution source or a restated criterion is open in #1727.
+The deployed log-domain cluster-factor curve was calibrated against agent-based simulation sweeps (see `experiments/ANALYSIS.md` and [Cluster-Tilted Redistribution](../design/cluster-tilted-redistribution.md)). Those legacy harnesses modelled a retired tilted lottery, a flat fee and one cluster per agent, with no mining, and their Gini results do not carry over to the protocol. **At production parameters the mechanism does not measurably reduce inequality** (mechanism ΔGini −0.028 to +0.001 against a 0.05 bar; [M2 at production parameters](../research/m2-production-verdicts.md)). See [Redistribution Status](#redistribution-status).
 
 #### Why It's Sybil-Resistant
 
@@ -214,7 +225,7 @@ Tags decay through legitimate commerce:
 - Per week: ~97% (84 eligible decays)
 - Holding without transacting: 0% decay (requires spending)
 
-**Economic effect**: Encourages velocity of money and discourages extreme wealth accumulation.
+**Intended economic effect**: Encourage velocity of money and discourage extreme wealth accumulation. That this measurably reduces inequality is not demonstrated (see [Redistribution Status](#redistribution-status)).
 
 > **See also**: [Progressive Fees](progressive-fees.md) for detailed analysis, attack resistance proofs, and implementation details.
 
@@ -313,14 +324,14 @@ Two properties worth noting:
 
 ### Why Redistribute Most Fees (and Burn the Rest)?
 
-- **Structural Gini reduction**: Returning 80% of fees (plus demurrage charges and a height-scheduled emission share) to small, well-circulated holders via the cluster-tilted lottery actively reduces wealth concentration — burning alone cannot redistribute. See [Cluster-Tilted Redistribution](../design/cluster-tilted-redistribution.md).
+- **Intended Gini reduction (not demonstrated)**: Returning 80% of fees (plus demurrage charges and a height-scheduled emission share) through the lottery was meant to move value toward small, well-circulated holders — burning alone cannot redistribute. At production parameters it does not measurably do so, and lottery splitting is profitable; a redesign is under study (#1801). See [Redistribution Status](#redistribution-status).
 - **Deflationary pressure**: The 20% burn share still offsets part of tail emission.
 - **Predictable**: Net inflation = gross emission − (20% fee burn share).
-- **Grinding-resistant**: A per-block payout cap and pool carryover make manipulating the verifiable lottery draw unprofitable.
+- **Grinding bound**: The lottery seed is bound to the parent block's proof of work, and the per-block payout is capped at one block reward with carryover. Ticket share is cheap to acquire while splitting is profitable (#1682), so the grinding bound also depends on that fix.
 
 ### Why Progressive Cluster Fees?
 
-- **Reduce concentration**: Wealthy clusters pay more
+- **Aimed at concentration**: Wealthy clusters pay more (a measurable reduction in inequality is not demonstrated; see [Redistribution Status](#redistribution-status))
 - **Sybil-resistant**: Can't avoid by splitting accounts
 - **Encourage circulation**: Moving coins diffuses tags, reducing fees
 - **Privacy-compatible**: Works with ring signatures and stealth addresses

@@ -132,7 +132,7 @@ Ni el valor ni el factor de clúster intervienen en el sorteo.
 
 En cada bloque se eligen cuatro ganadores entre las salidas con al menos 720 bloques de antigüedad y un valor de al menos 1 µBTH, dentro de una ventana de 10 000 bloques (como máximo 10 000 candidatos, a partir de un desplazamiento derivado de una semilla). El fondo (80 % de las comisiones, más la cuota de emisión de lotería de la recompensa del bloque (0 % en la época de arranque, luego 10 % más por cada halving, con tope del 50 %), más lo arrastrado) paga el menor entre lo disponible y un límite por bloque.
 
-La progresividad está en el lado de la *entrada*: las comisiones progresivas y el demurrage llenan el fondo. Se retiró la ponderación anterior valor ÷ factor de clúster. Como el sorteo es uniforme, dividir una posición en muchas salidas puede mejorar hoy tus probabilidades ([#1682](https://github.com/botho-project/botho/issues/1682)); esta y otras cuestiones relacionadas ([#1689](https://github.com/botho-project/botho/issues/1689), [#1690](https://github.com/botho-project/botho/issues/1690), [#1691](https://github.com/botho-project/botho/issues/1691)) son decisiones abiertas.
+La progresividad está en el lado de la *entrada*: las comisiones progresivas y el demurrage llenan el fondo. Se retiró la ponderación anterior valor ÷ factor de clúster. Como el sorteo es uniforme, dividir una posición en muchas salidas es hoy rentable ([#1761](https://github.com/botho-project/botho/issues/1761), [#1682](https://github.com/botho-project/botho/issues/1682)); esta y otras cuestiones relacionadas ([#1689](https://github.com/botho-project/botho/issues/1689), [#1690](https://github.com/botho-project/botho/issues/1690), [#1691](https://github.com/botho-project/botho/issues/1691)) siguen abiertas. Con los parámetros de producción, el mecanismo no reduce la desigualdad de forma medible ([#1790](https://github.com/botho-project/botho/issues/1790)), y se estudia un rediseño ([#1801](https://github.com/botho-project/botho/issues/1801)).
 
 **Las restricciones de elegibilidad** limitan el abuso: un UTXO debe tener al menos 720 bloques de antigüedad y valer al menos 1 µBTH para participar.
 
@@ -160,9 +160,10 @@ Veredicto: ataque derrotado
 ```
 Atacante: divide en 100 UTXO, espera las ganancias de la lotería
 Resultado: el sorteo es uniforme por salida, así que, tal como está
-        construido, más salidas pueden aumentar las probabilidades (decisión abierta, #1682)
+        construido, más salidas aumentan las probabilidades; con el mínimo
+        de comisión implementado, dividir es rentable (#1761)
         Las comisiones cuadráticas por salida hacen que la división cueste hasta 100×
-Veredicto: no derrotado del todo (decisión abierta, #1682)
+Veredicto: no derrotado (#1682; rediseño en estudio, #1801)
 ```
 
 **Wash trading (autotransferencias):**
@@ -194,13 +195,13 @@ Cada capa contribuye a ambos objetivos sin conflicto.
 
 Esto no es solo un logro técnico: cambia lo que es posible:
 
-**Para los usuarios:** Obtienes privacidad financiera Y un sistema económico justo. Sin disyuntiva.
+**Para los usuarios:** Obtienes privacidad financiera Y comisiones progresivas basadas en la procedencia. Sin disyuntiva.
 
 **Para los comerciantes:** Las comisiones bajas premian la actividad económica. Cuanto más negocias, más bajas son tus tarifas.
 
-**Para la red:** La riqueza fluye de forma natural desde las tenencias concentradas hacia las distribuidas. La autocustodia se premia por encima de los servicios de custodia.
+**Para la red:** El diseño busca que la riqueza fluya desde las tenencias concentradas hacia las distribuidas. Con los parámetros de producción eso no está demostrado (#1790), y se estudia un rediseño (#1801). La autocustodia se premia por encima de los servicios de custodia.
 
-**Para el ecosistema:** Hemos demostrado que "privacidad frente a equidad" es una falsa dicotomía. Otros proyectos pueden adoptar estas técnicas.
+**Para el ecosistema:** Las comisiones basadas en la procedencia muestran que la privacidad y la tarificación progresiva pueden coexistir. Otros proyectos pueden adoptar estas técnicas.
 
 ### Resumen
 
@@ -210,7 +211,7 @@ El mecanismo de privacidad + progresividad de Botho funciona porque:
 2. **La procedencia se correlaciona con el comportamiento de riqueza**: los acuñadores nuevos son ricos, los negociantes activos son comerciantes
 3. **Las firmas de anillo preservan la privacidad**: la validación por centroide previene el abuso
 4. **Una entrada progresiva alimenta una lotería uniforme**: las comisiones y el demurrage son progresivos; el sorteo en sí es uniforme
-5. **Las comisiones cuadráticas por salida encarecen la división**: si dividir compensa con el sorteo uniforme es una decisión abierta (#1682)
+5. **Las comisiones cuadráticas por salida encarecen la división**: pero con el sorteo uniforme dividir compensa hoy (#1761, #1682)
 6. **El comercio se premia**: las etiquetas decaen mediante el comercio legítimo; la riqueza concentrada e inactiva paga demurrage
 
 El resultado: **La primera criptomoneda donde puedes ser privado Y contribuir con equidad a la red, donde los ricos pagan más sin que nadie sepa quiénes son.**

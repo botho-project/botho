@@ -61,7 +61,7 @@ Botho usa libp2p para la red, que admite múltiples mecanismos de descubrimiento
 | Fórmula de comisión | tarifa por byte × tamaño × factor de clúster × penalización por salida | Basada en el tamaño, progresiva según la riqueza |
 | Factor de clúster | 1x–6x | Multiplicador progresivo según la procedencia de la moneda |
 | Penalización por salida | cuadrática, limitada a 100x | Anti-farming de UTXO |
-| Destino de la comisión | 80 % lotería / 20 % quemado | Redistribución más presión deflacionaria |
+| Destino de la comisión | 80 % lotería / 20 % quemado | Premios de lotería más presión deflacionaria |
 
 ### Referencia de puertos
 
