@@ -406,7 +406,7 @@ expect_fail_with "Theorems.lean:1: import of 'Lean' is not allowed" \
   "manifest importing a non-Botho module (full axiom gate)" axiom_gate "$d"
 
 # Both gates (#1770): a lakefile.lean (a Lean program run by every lake call)
-# or a lakefile.toml that passes extra arguments to lean is rejected.
+# is rejected.
 d="$(fresh_copy)"
 printf 'import Lake\nopen Lake DSL\npackage botho_formal\n@[default_target] lean_lib Botho\n' \
   >"$d/lakefile.lean"
@@ -414,10 +414,6 @@ expect_fail_with 'lakefile.lean is not allowed' \
   "lakefile.lean present (axiom gate)" axiom_gate "$d"
 expect_fail_with 'lakefile.lean is not allowed' \
   "lakefile.lean present (sorry gate)" sorry_gate --no-scan "$d"
-d="$(fresh_copy)"
-printf '\nmoreLeanArgs = ["-Ddebug.skipKernelTC=true"]\n' >>"$d/lakefile.toml"
-expect_fail_with 'does not match the pinned layout' \
-  "lakefile.toml with moreLeanArgs" axiom_gate "$d"
 
 # ---- #1770 review: code that runs during `lake build` ----
 
@@ -656,46 +652,54 @@ expect_fail_with 'Extra.lean: Lean file outside the scanned set' \
 
 # Both gates (#1770 second review): the Judge's srcDir bypass. The sources
 # move to src/ and lakefile.toml points Lake there, so a scan of the fixed
-# paths would see none of them. The pinned lakefile rejects it.
+# paths would see none of them. The layout check rejects it.
 d="$(fresh_copy)"
 mkdir "$d/src"
 mv "$d/Botho.lean" "$d/Botho" "$d/src/"
 printf 'srcDir = "src"\n' >>"$d/lakefile.toml"
 printf '\nnamespace Botho\ndef pwn : IO Unit := IO.FS.writeFile "PWNED" ""\n@[init pwn] opaque pwnInit : Unit\nend Botho\n' \
   >>"$d/src/Botho/Basic.lean"
-expect_fail_with 'lakefile.toml does not match the pinned layout' \
+expect_fail_with 'lakefile.toml changes the build layout' \
   "srcDir = \"src\" (full sorry gate)" sorry_gate "$d"
-expect_fail_with 'lakefile.toml does not match the pinned layout' \
+expect_fail_with 'lakefile.toml changes the build layout' \
   "srcDir = \"src\" (full axiom gate)" axiom_gate "$d"
 expect fail "  (the initializer never ran)" test -e "$d/PWNED"
 
-# Both gates (#1770 second review): other layout changes the pin rejects.
+# Both gates (#1770 second review): other layout changes are rejected. Since
+# #1799 only the layout keys are checked (the same keys as the verify job's
+# layout check): the old exact-text pins on lakefile.toml, lean-toolchain and
+# lake-manifest.json are gone, because the verify job runs this scan from the
+# base branch and accepts other lakefile edits and toolchain bumps.
 for case in \
   'extra lean_lib|\n[[lean_lib]]\nname = "Evil"' \
-  'require|\n[[require]]\nname = "evil"\npath = "evil"' \
+  'lean_exe|\n[[lean_exe]]\nname = "evil"\nroot = "Evil"' \
   'globs|globs = ["Botho.+", "Evil"]' \
   'roots|roots = ["Botho", "Evil"]' \
-  'extern_lib|\n[[extern_lib]]\nname = "evil"' \
-  'precompileModules|precompileModules = true'; do
+  'lean_lib srcDir|srcDir = ".lake/evil"'; do
   d="$(fresh_copy)"
   printf '%b\n' "${case#*|}" >>"$d/lakefile.toml"
-  expect_fail_with 'lakefile.toml does not match the pinned layout' \
+  expect_fail_with 'lakefile.toml changes the build layout' \
     "lakefile.toml with ${case%%|*} (sorry gate, no scan)" sorry_gate --no-scan "$d"
-  expect_fail_with 'lakefile.toml does not match the pinned layout' \
+  expect_fail_with 'lakefile.toml changes the build layout' \
     "lakefile.toml with ${case%%|*} (axiom gate)" axiom_gate "$d"
 done
 d="$(fresh_copy)"
-printf 'leanprover/lean4:v4.36.0\n' >"$d/lean-toolchain"
-expect_fail_with 'lean-toolchain is .leanprover/lean4:v4.36.0.' \
-  "lean-toolchain not the pinned release (axiom gate)" axiom_gate "$d"
+printf 'name = [\n' >>"$d/lakefile.toml"
+expect_fail_with 'cannot parse lakefile.toml' \
+  "unparsable lakefile.toml (sorry gate, no scan)" sorry_gate --no-scan "$d"
+# Accepted: a lakefile edit that keeps the layout (the verify job's
+# lakefile-benign fixture: a version bump, a comment and leanOptions).
 d="$(fresh_copy)"
-cat >"$d/lake-manifest.json" <<'EOF'
-{"version": "1.3.0", "packagesDir": ".lake/packages",
- "packages": [{"type": "path", "name": "evil", "dir": "evil", "inherited": false, "scope": "", "manifestFile": "lake-manifest.json", "configFile": "lakefile.toml"}],
- "name": "botho_formal", "lakeDir": ".lake", "fixedToolchain": false}
-EOF
-expect_fail_with 'lake-manifest.json does not match the pinned manifest' \
-  "lake-manifest.json with a package (sorry gate, no scan)" sorry_gate --no-scan "$d"
+cp "$here/fixtures/verify/lakefile-benign/lakefile.toml" "$d/lakefile.toml"
+expect pass "benign lakefile edit, same layout (full sorry gate)" sorry_gate "$d"
+expect pass "benign lakefile edit, same layout (full axiom gate)" axiom_gate "$d"
+# The verify job runs the base branch's check-sorry.sh like this: scan only,
+# with LAKE=false so a `lake` call would fail. It must accept the clean tree.
+d="$(fresh_copy)"
+rm -rf "$d/.lake"
+expect pass "verify-job mode: --no-build with LAKE=false (clean tree)" \
+  env LAKE=false "$here/check-sorry.sh" --no-build "$d"
+expect fail "  (and nothing was built)" test -e "$d/.lake"
 
 # Negative control (#1770 second review): a second module imported through
 # guillemets and a multi-line import with comments between the imports,

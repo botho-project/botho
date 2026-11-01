@@ -6,8 +6,8 @@
 # so that no single trick in the model can fake a pass, after two checks that
 # run before any `lake` call:
 #
-#   0. Pinned layout and source scan. lakefile.toml, lean-toolchain and
-#      lake-manifest.json must match the pins in gate-common.sh, and the
+#   0. Build layout and source scan. lakefile.toml must compile only the
+#      scanned sources (the layout keys checked in gate-common.sh), and the
 #      source scan (gate_scan.py, shared with the sorry gate) must pass. The
 #      scan's import allow-list keeps `import Lean` and friends out of the
 #      model, so no simproc, elaborator or tactic written in the model can run
@@ -47,7 +47,7 @@
 #
 # Usage: check-axioms.sh [--no-scan] [FORMAL_ROOT]
 #   FORMAL_ROOT defaults to the directory above this script.
-#   --no-scan  skip the source scan in step 0 (the layout pin still runs).
+#   --no-scan  skip the source scan in step 0 (the layout check still runs).
 #              Only the self-test uses this, to prove each later layer works
 #              on its own. CI never passes it.
 # Environment: LAKE overrides the lake binary (default: lake).

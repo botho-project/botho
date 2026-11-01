@@ -8,9 +8,9 @@ all of the following hold for the formal/ tree at ROOT.
 1. Layout. The model is `Botho.lean` plus `Botho/**/*.lean`, and the manifest
    is `Theorems.lean`. These are regular files (no symlinks anywhere under
    `Botho/`), and no other `*.lean` file exists under ROOT outside `.lake/`
-   and `scripts/`. (The lakefile, lean-toolchain and lake-manifest.json are
-   pinned separately, in gate-common.sh, so Lake compiles exactly the modules
-   reachable from `Botho`, from `Botho.lean` and `Botho/`.)
+   and `scripts/`. (The lakefile's layout keys are checked separately, in
+   gate-common.sh, so Lake compiles exactly the modules reachable from
+   `Botho`, from `Botho.lean` and `Botho/`.)
 2. Import allow-list. The header of every scanned file is a sequence of plain
    `import M` commands where M is `Botho` or `Botho.X.Y` and resolves to a
    scanned file (`Botho.lean` or `Botho/X/Y.lean`). Nothing else may be
@@ -288,7 +288,7 @@ def enumerate_sources(root, errors):
                     else:
                         errors.append(f"{path}: not a regular file")
     scanned = set(files)
-    # Any other .lean file is outside the scan. With the pinned lakefile Lake
+    # Any other .lean file is outside the scan. With the pinned layout Lake
     # cannot reach it, but it has no business here, so it fails too.
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         if dirpath == root:

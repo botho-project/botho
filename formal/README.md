@@ -55,7 +55,7 @@ automatically:
 ```bash
 cd formal
 lake build                      # type-checks every module under Botho/
-scripts/check-sorry.sh          # sorry gate
+scripts/check-sorry.sh          # sorry gate (scans, then builds)
 scripts/check-axioms.sh         # axiom gate
 scripts/selftest-gates.sh       # proves both gates reject injected defects
 scripts/selftest-verify.sh      # proves the verify job rejects the bypass fixtures
@@ -74,7 +74,7 @@ scripts/verify-artifacts.sh --lib /tmp/formal-lib --sources .
 name the toolchain directory when `lean --print-prefix` does not find it.
 `verify-artifacts.sh` passes that directory to every Lean process as
 `LEAN_SYSROOT`, so `Init` always comes from it, never from a `lean` on `PATH`;
-with `--sysroot` it needs no `lean` on `PATH` at all. It also needs a
+with `--sysroot` it needs no `lean` on `PATH` at all. It and the gates need a
 `python3` with `tomllib` (3.11 or later).
 
 The scripts take an optional `LAKE=/path/to/lake` environment variable if the
@@ -101,27 +101,99 @@ The required check is `formal-gate`. It passes when both jobs succeeded, or
 when both were skipped because nothing under `formal/`, the workflow, or a
 mirrored Rust file changed.
 
-The in-tree gates:
+The in-tree gates (#1770). The build job runs them in full; the verify job
+runs the base commit's `check-sorry.sh --no-build`, which is the layout check
+and the source scan below, over the pull request's sources as data:
 
+- **Build layout.** Before anything else, both gates check that there is no
+  `lakefile.lean` (a Lean program that runs on every `lake` call) and that
+  `lakefile.toml` keeps the layout in `scripts/gate-common.sh`: no package
+  `srcDir`, one `[[lean_lib]]` named `Botho` with no `srcDir`, `roots`,
+  `globs` or `root`, and no `[[lean_exe]]`. These are the keys the verify
+  job's layout check compares with the base's `lakefile.toml`. So Lake
+  compiles only `Botho.lean` and the modules it imports, all in `Botho/`.
+  Other keys (`version`, options, a `[[require]]`) and `lean-toolchain` are
+  not pinned by the gates; see [The verify job](#the-verify-job).
+- **Source scan** (`scripts/gate_scan.py`). Both gates run it before their
+  first `lake` call, and stop if it fails, so the in-tree gates never build a
+  tree the scan rejected. It checks:
+  - *Layout.* The model is `Botho.lean` and `Botho/**/*.lean`, the manifest
+    is `Theorems.lean`, all regular files (no symlinks under `Botho/`), and
+    there is no other `*.lean` file outside `.lake/` and `scripts/`.
+  - *Import allow-list.* Every scanned file may import only `Botho` modules
+    that are scanned files (`import Botho.X.Y` must be `Botho/X/Y.lean`). Not
+    `Lean`, `Std`, `Lake`, `Init.*`, Mathlib or anything else. A model that
+    needs another import must extend the list in `gate_scan.py` in a reviewed
+    diff. `prelude`, `module`, import modifiers (`public`, `meta`,
+    `import all`) and an `import` after the header are rejected. Multi-line
+    headers, comments between imports and `«»`-quoted names are parsed the
+    way Lean parses them.
+  - *Tokens*, as listed under the sorry gate below.
 - **Sorry gate** (`scripts/check-sorry.sh`) fails if `lake build` warns that a
-  declaration uses `sorry`. It also fails if the source scan finds `sorry`,
-  `sorryAx`, `admit` or `native_decide` (bare or `_root_.`-qualified) outside
-  comments, string literals, raw strings (`r#"..."#`) and char literals.
+  declaration uses `sorry`, or if a sweep of the compiled library finds any
+  declaration that reaches `sorryAx`. The sweep (`scripts/AxiomReport.lean`)
+  walks declaration bodies directly, so it still works when the warning is
+  hidden (for example by `#guard_msgs`). The gate also fails if the source
+  scan finds `sorry`, `sorryAx`, `admit` or `native_decide` (bare,
+  `_root_.`-qualified, or with explicit universes such as `sorryAx.{0}`)
+  outside comments, string literals, raw strings (`r#"..."#`) and char
+  literals. Code inside `{...}` string interpolation is scanned.
   `native_decide` trusts the compiler, so it is allowed only on a line marked
   `-- formal-gate: allow native_decide`, and the compiler-trust axioms it
   introduces (such as `Lean.ofReduceBool`) must also be on the allow-list.
-- **Axiom gate** (`scripts/check-axioms.sh`) compiles `Theorems.lean` and
-  parses every `#print axioms` result. It fails on `sorryAx`, on any axiom not
-  in `axioms-allowlist.txt`, on an empty manifest, or when the number of
-  results does not match the number of `#print axioms` lines. It anchors on
-  Lean's full result-line format, so primed names like `foo'` parse.
+  The scan also rejects commands that run code or hide messages at compile
+  time (`#eval`, `run_cmd`, `run_elab`, `run_meta`, `run_tac`, `by_elab`,
+  `#guard_msgs`, `initialize`), metaprogramming commands that can expand to
+  them (`macro`, `macro_rules`, `syntax`, `elab`, `elab_rules`,
+  `declare_syntax_cat`), simprocs (`simproc`, `dsimproc`), and the option
+  `debug.skipKernelTC`. Inside `@[...]` and `attribute [...]` it rejects
+  attributes that run code at build or import time, bind native or
+  substitute code, or extend the elaborator: `init`, `builtin_*`, `extern`,
+  `implemented_by`, `export`, `macro`, `*_elab`, `*_parser`, `tactic`,
+  `delab` and similar.
+- **Axiom gate** (`scripts/check-axioms.sh`) runs the layout check and the
+  source scan, then checks every theorem listed in `Theorems.lean` in four
+  layers:
+  1. `Theorems.lean` must be a plain manifest: comments, `import` lines, then
+     one `#print axioms NAME` per line, no duplicates, nothing else.
+  2. `leanchecker` replays every declaration of the `Botho` library in the
+     kernel, so a declaration admitted with kernel checking off fails.
+  3. `lean --json Theorems.lean` must print only Lean messages and no errors.
+     Exactly one result is accepted per manifest command, matched by source
+     position and theorem name, so text printed elsewhere (by `#eval` or an
+     imported initializer) cannot stand in for a result.
+  4. `scripts/AxiomReport.lean` imports the compiled library without
+     elaborating its syntax and computes each theorem's axioms itself. These
+     must equal Lean's `#print axioms` results, which catches a model that
+     redefines `#print axioms`. The independent result is checked against
+     `axioms-allowlist.txt` and must not contain `sorryAx`. Like the sorry
+     gate, it also fails if any library declaration reaches `sorryAx`.
+- Both gates read their inputs (`axioms-allowlist.txt`, `Theorems.lean`,
+  `scripts/AxiomReport.lean`) before the first `lake` call and use only those
+  copies afterwards, and the axiom gate runs the independent walk before it
+  compiles `Theorems.lean`. This keeps local runs honest against cruder
+  tricks; it is not what the verdict rests on (see [Limits](#limits)).
 - **Self-test** (`scripts/selftest-gates.sh`) copies the tree, injects a
   `sorry`, an `admit`, a `native_decide`, a bogus axiom, a `sorryAx` and an
   empty manifest, and asserts that the matching gate fails each time. It also
   checks that the clean tree passes and that the tokens are ignored inside
   comments, strings, raw strings and char literals. Since #1724 it also covers
   `sorry` hidden after a `'"'` char literal or an `r#"a"b"#` raw string, a
-  `_root_.sorryAx` term, and primed theorem names in the axiom gate.
+  `_root_.sorryAx` term, and primed theorem names in the axiom gate. Since
+  #1770 it covers each known bypass of the in-tree gates, and checks that the
+  gate fails for the intended reason: a fake `#print axioms` line printed by
+  `#eval` or an imported initializer, `#print axioms` redefined by
+  `macro_rules`, a theorem admitted with `debug.skipKernelTC`, a `sorry`
+  hidden by `#guard_msgs`, `sorryAx.{0}`, `s!"{sorry}"`, duplicate manifest
+  lines, a `lakefile.lean`, an `@[init]` initializer that rewrites
+  `axioms-allowlist.txt` during the build, one that erases its own `@[init]`
+  line, each forbidden attribute and metaprogramming command, a simproc that
+  overwrites a compiled `.olean`, a bare `import Lean`, each import-header
+  form, symlinked or stray sources, and layout changes (`srcDir`, an extra
+  `lean_lib`, a `lean_exe`, `roots`, `globs`). Passing controls cover a
+  second module with quoted multi-line imports, a commented lakefile, the
+  verify job's benign lakefile edit, and the verify job's `--no-build` call
+  with `LAKE=false`.
 - **Verify self-test** (`scripts/selftest-verify.sh`) runs the verify job's
   checks against the fixtures in `scripts/fixtures/verify/`: the bypasses
   found in the reviews of PR #1783 (an `@[init]` that widens the allow-list,
@@ -156,8 +228,9 @@ verify job reads until it is merged. It then:
    side, or a `lakefile.toml` that does not parse, is rejected. Without this
    a pull request could leave the scanned `Botho/` as a decoy and compile a
    different copy (`srcDir = "src"`) whose theorems state something else;
-2. runs the base commit's source scan (`check-sorry.sh --no-build`) over the
-   pull request's sources, read as data;
+2. runs the base commit's source scan (`check-sorry.sh --no-build`: the
+   build-layout check and `gate_scan.py` described above) over the pull
+   request's sources, read as data;
 3. takes in the artifact: only regular files named `Botho.olean` or
    `Botho/**/*.olean` (and the `.olean.server`, `.olean.private` and `.ir`
    parts), copied to a private directory that is the only entry on
@@ -228,7 +301,29 @@ which Lean does not offer (macros, `decide +native` and initializers all run
 user code during elaboration), or a rebuild under a sandbox that confines
 each module's elaboration to its own output.
 
+**The in-tree gates.** In the build job, model code runs during
+`lake build`, and from then on nothing that reads `.lake/` can be trusted:
+build-time code can replace a module's `.olean` with a forged one, and then
+`leanchecker`, the walk and `#print axioms` in that job all check the forged
+output. The in-tree gates' snapshots, kernel replay and walk only defend
+against cruder tricks. Their source scan is what carries over to the verify
+job: there it runs from the base commit and decides, before any of the
+artifact checks, whether the sources may run code at build time at all.
+Without `import Lean` a model cannot define a simproc, elaborator, tactic or
+`deriving` handler, so what is left is the prelude, which the token scan
+covers with a denylist. A denylist can miss routes. One known miss:
+`decide +native` together with an IO world token built by `cast` through a
+declared axiom runs IO with only the prelude and passes the scan (the
+`native-world-swap` fixture); the verify job rejects it only because the
+model declares a non-allow-listed axiom. Hence the review rule below.
+
 **Other limits.**
+
+- A human must review every change to the model (`Botho.lean`, `Botho/`,
+  `Theorems.lean`, `lakefile.toml`, `lean-toolchain`, `lake-manifest.json`,
+  `axioms-allowlist.txt`) for IO and metaprogramming, with the same care as
+  a change to `formal/scripts/`. A green `formal-gate` does not replace that
+  review.
 
 - The `.olean` format is a memory image that Lean maps without validating
   it. A hand-crafted `.olean` that corrupts the memory of `leanchecker` or of
@@ -255,7 +350,8 @@ each module's elaboration to its own output.
 
 ## Adding a theorem
 
-1. Prove it in a module under `Botho/` that `Botho.lean` imports.
+1. Prove it in a module under `Botho/` that `Botho.lean` imports. Do not
+   declare anything in `Theorems.lean`; the axiom gate rejects it.
 2. Add one line to `Theorems.lean`:
 
    ```lean

@@ -16,68 +16,80 @@ if [[ ! -f "$here/AxiomReport.lean" ]]; then
 fi
 gate_report_src="$(cat "$here/AxiomReport.lean")"
 
-# The build layout, pinned (#1770 review). Lake compiles whatever the lakefile
-# says, so the gates accept exactly one layout: one `Botho` library rooted at
-# Botho.lean with sources in Botho/, no dependencies, no extra libraries, no
-# srcDir / roots / globs / extra arguments / plugins / native code. Any other
-# lakefile.toml fails, which is simpler and safer than a list of banned keys.
-# Changing the layout or bumping the toolchain means editing these pins in a
-# reviewed diff.
+# The build layout (#1770 review; narrowed to the layout keys in #1799).
+# Lake compiles whatever the lakefile says, so the gates accept one layout:
+# one `Botho` library rooted at Botho.lean with sources in Botho/, and no
+# executables. Only the keys that decide which sources Lake compiles are
+# checked, the same keys as verify-artifacts.sh step 1 (Lake v4.35.0: the
+# package `srcDir`; `name`, `srcDir`, `roots`, `globs` and `root` of every
+# [[lean_lib]] and [[lean_exe]]). Other keys (version, options, [[require]]
+# pins) may change, as the verify job allows.
 #
-# lakefile.toml is compared after dropping blank lines, full-line `#`
-# comments, and leading and trailing whitespace.
-gate_lakefile_pin='name = "botho_formal"
-version = "0.1.0"
-defaultTargets = ["Botho"]
-[[lean_lib]]
-name = "Botho"'
-gate_toolchain_pin='leanprover/lean4:v4.35.0'
-# lake-manifest.json, compared as parsed JSON: no packages.
-gate_manifest_pin='{"version": "1.3.0", "packagesDir": ".lake/packages", "packages": [], "name": "botho_formal", "lakeDir": ".lake", "fixedToolchain": false}'
+# This used to be an exact-text pin of lakefile.toml, lean-toolchain and
+# lake-manifest.json. The verify job (#1799) runs the base branch's
+# check-sorry.sh over each pull request, so those pins would reject edits
+# the verify job accepts on purpose (fixture lakefile-benign) and block every
+# toolchain bump. The trust decisions they made are now the verify job's:
+# it compares the layout with the base's lakefile, installs only official
+# toolchain releases, and rejects any import outside Init and Botho in the
+# compiled library.
 
-# lakefile_preflight: fail unless the build configuration is exactly the
-# pinned layout above.
+# lakefile_preflight: fail unless the build configuration compiles exactly
+# the scanned sources.
 #   - lakefile.lean is a Lean program that lake runs on every `lake` call.
-#   - Any lakefile.toml other than the pinned one could move the sources out
-#     of the scan (srcDir, roots, globs, a second lean_lib, a [[require]]) or
-#     load native code and options (plugins, moreLeanArgs, extern_lib, ...).
+#   - A lakefile.toml whose layout keys differ from EXPECTED below could
+#     move the compiled sources out of the scan (srcDir, roots, globs, a
+#     second lean_lib or a lean_exe).
 lakefile_preflight() {
   local f
   if [[ -e "$root/lakefile.lean" || -L "$root/lakefile.lean" ]]; then
     echo "FAIL: $root/lakefile.lean is not allowed (use lakefile.toml)" >&2
     return 1
   fi
-  for f in lakefile.toml lean-toolchain lake-manifest.json; do
+  for f in lakefile.toml lean-toolchain; do
     if [[ -L "$root/$f" || ! -f "$root/$f" ]]; then
       echo "FAIL: $root/$f must be a regular file (not missing, not a symlink)" >&2
       return 1
     fi
   done
-  local got
-  got="$(sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$root/lakefile.toml" \
-    | grep -v -e '^$' -e '^#' || true)"
-  if [[ "$got" != "$gate_lakefile_pin" ]]; then
-    echo "FAIL: lakefile.toml does not match the pinned layout (see gate-common.sh)" >&2
-    diff <(printf '%s\n' "$gate_lakefile_pin") <(printf '%s\n' "$got") \
-      | sed 's/^/  /' >&2 || true
-    return 1
-  fi
-  got="$(sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$root/lean-toolchain" \
-    | grep -v -e '^$' || true)"
-  if [[ "$got" != "$gate_toolchain_pin" ]]; then
-    echo "FAIL: lean-toolchain is '$got', pinned '$gate_toolchain_pin' (see gate-common.sh)" >&2
-    return 1
-  fi
-  if ! GATE_PIN="$gate_manifest_pin" python3 -I -c '
-import json, os, sys
+  if ! python3 -I -c '
+import json, sys
 try:
-    with open(sys.argv[1], encoding="utf-8") as fh:
-        got = json.load(fh)
+    import tomllib
+except ImportError:
+    sys.exit("FAIL: python3 has no tomllib (needs Python 3.11 or later)")
+KEYS = ("name", "srcDir", "roots", "globs", "root")
+ABSENT = "<absent>"
+# The pinned layout: the package has no srcDir, one lean_lib named Botho
+# with no srcDir, roots, globs or root, and no lean_exe.
+EXPECTED = {"lean_lib": [{"name": "Botho"}], "lean_exe": []}
+
+
+def layout(doc):
+    out = {"srcDir": json.dumps(doc.get("srcDir", ABSENT))}
+    for kind in ("lean_lib", "lean_exe"):
+        tables = doc.get(kind, [])
+        if not isinstance(tables, list) or not all(isinstance(t, dict) for t in tables):
+            sys.exit(f"FAIL: lakefile.toml has a {kind} that is not an array of tables")
+        out[kind] = sorted(
+            json.dumps({k: t.get(k, ABSENT) for k in KEYS}, sort_keys=True)
+            for t in tables)
+    return out
+
+
+try:
+    with open(sys.argv[1], "rb") as fh:
+        doc = tomllib.load(fh)
 except (OSError, ValueError) as e:
-    sys.exit(f"cannot parse: {e}")
-sys.exit(0 if got == json.loads(os.environ["GATE_PIN"]) else 1)
-' "$root/lake-manifest.json" >&2; then
-    echo "FAIL: lake-manifest.json does not match the pinned manifest (see gate-common.sh)" >&2
+    sys.exit(f"FAIL: cannot parse lakefile.toml: {e}")
+got, want = layout(doc), layout(EXPECTED)
+if got != want:
+    for key in ("srcDir", "lean_lib", "lean_exe"):
+        if got[key] != want[key]:
+            print(f"  {key}: expected {want[key]}; found {got[key]}", file=sys.stderr)
+    sys.exit(1)
+' "$root/lakefile.toml"; then
+    echo "FAIL: lakefile.toml changes the build layout (package srcDir, or a lean_lib/lean_exe name, srcDir, roots, globs or root; see gate-common.sh)" >&2
     return 1
   fi
 }
