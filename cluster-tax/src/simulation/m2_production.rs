@@ -93,6 +93,16 @@
 //!   to the Gini path.
 //! - **No lottery farming.** No agent splits outputs to farm tickets; that
 //!   attack is #1682.
+//! - **Spent outputs leave the draw.** A spend consumes every coin of the
+//!   position, so those coins drop out of the candidate window and out of the
+//!   not-yet-mature buckets, as on the node, where candidates come only from
+//!   the UTXO set. Each agent carries a spend generation; window entries and
+//!   pending bucket entries from an older generation are spent coins.
+//! - **Transaction density.** The population makes about 13,000 transactions a
+//!   year against 6.3M blocks, so about 99.6% of window outputs are coinbases
+//!   and lottery payouts. `tx_scale` multiplies every cohort's transaction rate
+//!   at a fixed velocity (each transaction moves `velocity / tx_per_year` of
+//!   the position), to test how the result depends on density.
 
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -197,6 +207,10 @@ pub struct ProdParams {
     /// reward), fees fully burned, demurrage rate 0.
     pub mechanism: bool,
     pub seed: u64,
+    /// Multiplier on every cohort's transactions per year (1.0 = the M2
+    /// rates). Velocity is unchanged, so each transaction moves a
+    /// proportionally smaller fraction of the position.
+    pub tx_scale: f64,
 }
 
 impl ProdParams {
@@ -215,6 +229,7 @@ impl ProdParams {
             fee_mode: FeeModelMode::ConsensusOnly,
             mechanism: true,
             seed: 1_696,
+            tx_scale: 1.0,
         }
     }
 }
@@ -282,6 +297,9 @@ struct Agent {
     prune_at: usize,
     lottery_won: u128,
     demurrage_paid: u128,
+    /// Spend generation: bumped on every spend, which consumes all coins.
+    /// Outputs tagged with an older generation are spent.
+    generation: u32,
 }
 
 /// The tags of a group of identical-tag outputs, or of `count` coinbase
@@ -294,6 +312,8 @@ enum OutTags {
 
 struct WinEntry {
     owner: u32,
+    /// Owner's spend generation when the outputs were created.
+    generation: u32,
     count: u64,
     tags: OutTags,
 }
@@ -446,6 +466,7 @@ fn multinomial(rng: &mut ChaCha8Rng, n: u64, weights: &[f64]) -> Vec<u64> {
 impl World {
     fn new(p: ProdParams) -> Self {
         assert!(p.step_blocks >= 1 && PROD_BLOCKS_PER_YEAR % p.step_blocks == 0);
+        assert!(p.tx_scale > 0.0, "tx_scale must be positive");
         let policy = mainnet_monetary_policy();
         let mut fee_params = ConsensusFeeParams::from_policy(&policy, p.fee_mode);
         if !p.mechanism {
@@ -465,11 +486,23 @@ impl World {
         for (ci, c) in cohorts.iter().enumerate() {
             names.push(c.name);
             for _ in 0..c.count {
-                agents.push((ci, c.holdings_bth, c.velocity_per_year, tx_rates[ci], false));
+                agents.push((
+                    ci,
+                    c.holdings_bth,
+                    c.velocity_per_year,
+                    tx_rates[ci] * p.tx_scale,
+                    false,
+                ));
             }
         }
         names.push("strategic");
-        agents.push((cohorts.len(), STRATEGIC_WHALE_BTH, 0.2, 12.0, true));
+        agents.push((
+            cohorts.len(),
+            STRATEGIC_WHALE_BTH,
+            0.2,
+            12.0 * p.tx_scale,
+            true,
+        ));
 
         let n = agents.len() as f64;
         let total_bth: f64 = agents.iter().map(|a| a.1 as f64).sum();
@@ -497,6 +530,7 @@ impl World {
                     prune_at: MASS_PRUNE_TRIGGER,
                     lottery_won: 0,
                     demurrage_paid: 0,
+                    generation: 0,
                 }
             })
             .collect();
@@ -535,6 +569,7 @@ impl World {
             let tags = OutTags::Shared(Rc::new(vec![(i as u32, 1.0)]));
             world.buckets[0].push(WinEntry {
                 owner: i as u32,
+                generation: 0,
                 count: 1,
                 tags,
             });
@@ -681,8 +716,10 @@ impl World {
         while self.buckets.len() <= idx {
             self.buckets.push_back(Vec::new());
         }
+        let generation = self.agents[owner].generation;
         self.buckets[idx].push(WinEntry {
             owner: owner as u32,
+            generation,
             count,
             tags,
         });
@@ -699,6 +736,10 @@ impl World {
                     let entries = std::mem::take(&mut self.buckets[idx]);
                     for e in entries {
                         let o = e.owner as usize;
+                        if e.generation != self.agents[o].generation {
+                            // Spent before it matured.
+                            continue;
+                        }
                         self.owner_counts[o] += e.count;
                         self.owner_entries[o].push_back(OwnerEntry {
                             step: enter,
@@ -871,6 +912,14 @@ impl World {
         ag.mass.clear();
         ag.coins = 0;
         ag.prune_at = MASS_PRUNE_TRIGGER;
+        // The spend consumes every coin: none of them can win the lottery
+        // any more (the node draws only from unspent outputs). Eligible ones
+        // leave the window now; pending ones are skipped when their bucket
+        // matures because their generation is stale.
+        ag.generation = ag.generation.wrapping_add(1);
+        self.owner_counts[a] = 0;
+        self.owner_entries[a].clear();
+        let ag = &mut self.agents[a];
         ag.demurrage_paid += dem;
         self.demurrage += dem;
         self.transactions += n_tx;
@@ -1116,6 +1165,7 @@ mod tests {
             fee_mode: FeeModelMode::ConsensusOnly,
             mechanism,
             seed: 7,
+            tx_scale: 1.0,
         }
     }
 
@@ -1239,6 +1289,58 @@ mod tests {
         assert_eq!(t.len(), 16);
         let tiny: Vec<(u32, f64)> = (0..2000).map(|i| (i, 1.0 / 2000.0)).collect();
         assert!(finish_tags(tiny).is_empty(), "0.05% weights are pruned");
+    }
+
+    /// Spent outputs cannot win: a full-consolidation spend drops the
+    /// agent's eligible count to zero (eligible coins and the coinbases still
+    /// maturing in the pending bucket), no lottery slot goes to it while it
+    /// holds nothing eligible, and its count comes back only from outputs
+    /// created by or after the spend.
+    #[test]
+    fn spent_outputs_leave_the_lottery() {
+        let p = ProdParams {
+            mining: MiningModel::WealthProportional,
+            ..short(720, true)
+        };
+        let mut w = World::new(p.clone());
+        let whale = w.agents.iter().position(|a| a.strategic).unwrap();
+        let h1 = p.start_height + p.step_blocks;
+        // Step 0: genesis outputs are pending. Step 1: they mature.
+        w.advance_window(0);
+        w.advance_window(1);
+        assert_eq!(w.owner_counts[whale], 1, "genesis output is eligible");
+        // Coinbases mined in step 1 are pending (eligible from step 2).
+        w.mine(1, h1);
+        let pending_cb: u64 = w.buckets[(1 - w.bucket_base) as usize]
+            .iter()
+            .filter(|e| e.owner as usize == whale)
+            .map(|e| e.count)
+            .sum();
+        assert!(
+            pending_cb > 0,
+            "the 21%-hashpower whale mined in 720 blocks"
+        );
+
+        let tx_before = w.transactions;
+        w.spend(1, whale, h1);
+        let n_tx = w.transactions - tx_before;
+        assert_eq!(w.owner_counts[whale], 0, "spent coins left the window");
+        assert!(w.owner_entries[whale].is_empty());
+
+        // Many draws in epoch 1 (thousands of slots, others eligible): the
+        // whale wins nothing while it holds no unspent eligible output.
+        let won_before = w.agents[whale].lottery_won;
+        for _ in 0..5 {
+            w.lottery(1, h1, 0);
+        }
+        assert!(w.lottery_paid > 0);
+        assert_eq!(w.agents[whale].lottery_won, won_before, "spent outputs won");
+
+        // Step 2: the step-1 bucket matures. Only the spend's own change
+        // outputs come back; the pre-spend coinbases were consumed.
+        w.advance_window(2);
+        assert_eq!(w.owner_counts[whale], n_tx);
+        assert!(w.owner_entries[whale].iter().all(|e| e.step >= 1));
     }
 
     /// The optimal-decoy whale's floor is never above the honest floor and

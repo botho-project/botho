@@ -127,10 +127,12 @@ share of a cluster's coins raises that cluster's wealth and hence its factor.
 > 6.3M blocks/yr, mainnet emission and lottery-share ramp, the uniform V2
 > draw with payouts as new outputs, coinbase-lineage clusters, and an
 > optimal-decoy mining whale), the mechanism's own ΔGini against a
-> mechanism-off counterfactual is between −0.009 and +0.020 (3-seed means,
-> 10 and 20 years), and 100% of top-decile value prices below 1.5x. The
-> uniform lottery pays in proportion to hashpower, and coinbase-lineage
-> clusters keep mined wealth at about 1x. See
+> mechanism-off counterfactual is between −0.028 and +0.001 (3-seed means,
+> 10 and 20 years), and 100% of top-decile value prices below 1.5x. At 100x
+> and 1000x the transaction rate it stays below +0.019. The uniform lottery
+> pays in proportion to hashpower (less the tickets frequent spenders lose
+> when they spend), and coinbase-lineage clusters keep mined wealth at
+> about 1x. See
 > [`m2-production-verdicts.md`](../research/m2-production-verdicts.md).
 > Whether to add a redistribution source or restate the criterion is open
 > in **#1727**. The ratified *semantic* (W is cumulative and monotone) is

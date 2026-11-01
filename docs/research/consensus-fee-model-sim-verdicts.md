@@ -113,7 +113,7 @@ These metrics are computed from the factor curve, not from fee flows.
 
 The Δgini > 0.05 criterion passed only because of the flat 0.25 BTH × factor × 4 per-tx fee, which the node never charged. Demurrage (200 bps/yr at max factor, charged at spend) is the same in both runs. With node-accurate fees, Δgini drops about 7×, below the gate. Per #1695's scoping note, the remedy is not in this change. It is filed as **#1727**, and #1696's production-scale M2 re-run should use `--fee-model consensus`.
 
-**Update (#1696):** the production-scale re-run (`m2-production`, 6.3M blocks/yr, mainnet emission ramp, uniform V2 lottery, coinbase-lineage clusters) also fails, by a wider margin: the mechanism's own ΔGini is between −0.009 and +0.020 (3-seed means), and 100% of top-decile value prices below 1.5x at 10 and 20 years. See [`m2-production-verdicts.md`](m2-production-verdicts.md).
+**Update (#1696):** the production-scale re-run (`m2-production`, 6.3M blocks/yr, mainnet emission ramp, uniform V2 lottery, coinbase-lineage clusters) also fails, by a wider margin: the mechanism's own ΔGini is between −0.028 and +0.001 (3-seed means), it stays below +0.019 at up to 1000x the transaction rate, and 100% of top-decile value prices below 1.5x at 10 and 20 years. See [`m2-production-verdicts.md`](m2-production-verdicts.md).
 
 ### 5. `lottery-sweep`: **FAILS** (unchanged; legacy also FAILS)
 

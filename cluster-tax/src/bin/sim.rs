@@ -875,6 +875,11 @@ mod cli {
             /// mode and at --step-blocks, and print both.
             #[arg(long)]
             validate_days: Option<u64>,
+
+            /// Multiply every cohort's transactions per year (velocity held
+            /// fixed). 1 = the M2 rates, about 13k tx/yr or 0.002 tx/block.
+            #[arg(long, default_value = "1")]
+            tx_scale: f64,
         },
     }
 
@@ -1152,6 +1157,7 @@ mod cli {
                 whale,
                 fee_model,
                 validate_days,
+                tx_scale,
             } => run_m2_production_cli(
                 horizon_years,
                 snapshot_years,
@@ -1161,6 +1167,7 @@ mod cli {
                 &whale,
                 fee_model,
                 validate_days,
+                tx_scale,
             ),
             Command::M2Decay {
                 horizon_years,
@@ -4694,6 +4701,7 @@ mod cli {
         whale: &str,
         fee_model: FeeModelArg,
         validate_days: Option<u64>,
+        tx_scale: f64,
     ) {
         use bth_cluster_tax::simulation::m2_production::{
             run_m2_production, run_m2_production_pair, MiningModel, ProdParams, ProdSnapshot,
@@ -4745,7 +4753,7 @@ mod cli {
             let blocks = days * PROD_BLOCKS_PER_YEAR / 365;
             println!(
                 "M2-PRODUCTION aggregation check: {days} days ({blocks} blocks) from height \
-                 {PROD_BLOCKS_PER_YEAR} (epoch 1), seed={seed}, fee model={}",
+                 {PROD_BLOCKS_PER_YEAR} (epoch 1), seed={seed}, tx-scale={tx_scale}, fee model={}",
                 fee_model.label()
             );
             for m in &minings {
@@ -4762,6 +4770,7 @@ mod cli {
                             fee_mode,
                             mechanism: true,
                             seed,
+                            tx_scale,
                         });
                         println!(
                             "mining={} whale={} step={step}  gini0={:.4}  ({:.1}s)",
@@ -4779,7 +4788,7 @@ mod cli {
 
         println!(
             "M2-PRODUCTION (#1696): horizon={horizon_years}yr  snapshots={snapshot_years:?}  \
-             seed={seed}  step={step_blocks} blocks  fee model={}",
+             seed={seed}  step={step_blocks} blocks  tx-scale={tx_scale}  fee model={}",
             fee_model.label()
         );
         print_m2_population();
@@ -4793,6 +4802,7 @@ mod cli {
                 p.mining = *m;
                 p.whale = *w;
                 p.fee_mode = fee_mode;
+                p.tx_scale = tx_scale;
                 let t = std::time::Instant::now();
                 let pair = run_m2_production_pair(&p);
                 println!(
@@ -4835,7 +4845,10 @@ mod cli {
                 }
             }
         }
-        println!("\nSUMMARY (fee model {}, seed {seed})", fee_model.label());
+        println!(
+            "\nSUMMARY (fee model {}, seed {seed}, tx-scale {tx_scale})",
+            fee_model.label()
+        );
         println!(
             "| mining | whale | yr | gini0 | giniF on | giniF off | dGini raw | dGini mechanism | top-decile <1.5x |"
         );
