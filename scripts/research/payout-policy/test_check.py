@@ -51,3 +51,17 @@ class AttributionChecks(unittest.TestCase):
         self.assertEqual(sum(r['value'] for r in result['releases']),800_000_000_000)
         bad=copy.deepcopy(second);bad['reason']='accumulating'
         with self.assertRaises(AssertionError):derive_fifo([first,bad])
+
+class SourceRegressionIgnoreSeam(unittest.TestCase):
+    def test_collector_ignore_is_the_only_permitted_edit(self):
+        from source_regression import COLLECTOR_IGNORE, strip_collector_ignore
+        test,ignore,fn=COLLECTOR_IGNORE
+        pinned='    #[test]\n    fn a() {}\n'+test+fn+'        body();\n    }\n'
+        current='    #[test]\n    fn a() {}\n'+test+ignore+fn+'        body();\n    }\n'
+        self.assertEqual(strip_collector_ignore(current),pinned)
+        with self.assertRaises(AssertionError):strip_collector_ignore(pinned)  # missing
+        with self.assertRaises(AssertionError):strip_collector_ignore(current+ignore)  # duplicated
+        moved='    #[test]\n'+ignore+'    fn a() {}\n'+test+fn
+        with self.assertRaises(AssertionError):strip_collector_ignore(moved)
+        edited=strip_collector_ignore(current.replace('body()','other()'))
+        self.assertNotEqual(edited,pinned)  # body edits survive stripping and still fail equality
