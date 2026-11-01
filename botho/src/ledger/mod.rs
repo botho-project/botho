@@ -10,6 +10,11 @@ mod lottery_v2;
 mod snapshot;
 mod store;
 
+// #1698 drift guards for the shared sim consensus fee model (kept out of the
+// SHA-pinned store.rs).
+#[cfg(test)]
+mod consensus_fee_parity_tests;
+
 pub use snapshot::{SnapshotError, SnapshotV2Contents, UtxoSnapshot, UtxoSnapshotV2};
 /// Test-only `botho.ledger.2` ledger with V2 lottery payouts (#1286 P7).
 #[cfg(test)]

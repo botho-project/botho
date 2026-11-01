@@ -164,6 +164,11 @@ a deliberate stance).
 How much residual gain survives if only a *fraction* of the top decile wraps out (P = passes
 the 0.05 floor, F = fails).
 
+> **Frozen legacy output.** This table is the pre-#1698 edition's output under the legacy yearly
+> HOLD model. The current `settlement-horizon-sweep` CLI no longer emits a legacy adoption table, so
+> it cannot be regenerated from the documented command; it is kept verbatim as the "before" that
+> §8.3 compares against. The node-faithful adoption table is in §8.2.
+
 | horizon | 25% adoption | 50% adoption | 100% adoption |
 |---------|------------:|------------:|------------:|
 | 1mo (0.08yr) | +0.1139 P | +0.0693 P | +0.0013 F |

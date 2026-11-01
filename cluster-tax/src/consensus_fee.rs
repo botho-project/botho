@@ -68,21 +68,24 @@ pub const RELAY_MIN_TX_FEE: u64 = 100_000_000;
 /// `lottery_v2::canonical_config().pool_fraction_permille`
 /// and `LotteryFeeConfig::default()` (`botho/src/consensus/lottery.rs`), which
 /// `cluster-tax` cannot import. A drift-guard test in `botho`
-/// (`consensus_fee_model_relay_min_matches_min_tx_fee`) asserts equality.
+/// (`consensus_fee_model_pool_split_and_ring_size_match_node`) asserts
+/// equality, and that [`split_fee_pool_burn`] matches `split_fees`.
 pub const LOTTERY_POOL_FRACTION_PERMILLE: u32 = 800;
 
 /// Ring size (real input + decoys) the node requires of every CLSAG input.
 ///
 /// Mirrors `bth_transaction_clsag::MIN_RING_SIZE` / `DEFAULT_RING_SIZE`;
-/// drift-guarded in `botho` alongside [`RELAY_MIN_TX_FEE`]. Sims that model the
-/// ring-centroid floor build rings of this size.
+/// drift-guarded in `botho` by
+/// `consensus_fee_model_pool_split_and_ring_size_match_node`. Sims that model
+/// the ring-centroid floor build rings of this size.
 pub const CONSENSUS_RING_SIZE: usize = 20;
 
 /// The wallet's factor-similarity decoy band, in bps of the real input's
 /// factor (±10%): honest wallets draw decoys only from coins in this band.
 ///
 /// Mirrors `botho::decoy_selection::FACTOR_SIMILARITY_SPREAD` (wallet policy,
-/// not consensus); drift-guarded in `botho` alongside [`CONSENSUS_RING_SIZE`].
+/// not consensus); drift-guarded in `botho` alongside [`CONSENSUS_RING_SIZE`]
+/// (`consensus_fee_model_pool_split_and_ring_size_match_node`).
 pub const WALLET_FACTOR_SIMILARITY_SPREAD_BPS: u64 = 1_000;
 
 /// Split a fee into `(pool, burn)` exactly as the node's
