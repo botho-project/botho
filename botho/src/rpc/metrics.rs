@@ -23,7 +23,9 @@
 //!   failed to receive in time, from `SlowPeer` events; `kind` is `priority` or
 //!   `non_priority` (counter, #1545)
 //! - `botho_gossip_publish_errors_total{topic}` - Synchronous gossipsub
-//!   `publish()` failures, e.g. `AllQueuesFull` (counter, #1545)
+//!   `publish()` failures, e.g. `AllQueuesFull` (counter, #1545). Also counts
+//!   `NoPeersSubscribedToTopic`, so it climbs on a node with 0 peers; alert on
+//!   it only while `botho_peers_connected > 0`
 //! - `botho_node_loop_iteration_seconds` - Duration of one `'node_loop` select
 //!   iteration including its handler (histogram, #1545)
 //! - `botho_node_loop_delayed_total` - `'node_loop` iterations that took at
@@ -469,10 +471,17 @@ lazy_static! {
     // ============================================================================
 
     /// Gossipsub messages that a peer failed to receive in time, as reported
-    /// by `gossipsub::Event::SlowPeer` at each heartbeat. A non-zero
-    /// `non_priority` count means queued publishes (blocks, txs, SCP) expired
-    /// in the connection handler before they were sent; in w12 this lost a
-    /// validator's Commit/Externalize and halted consensus (#1544/#1545).
+    /// by `gossipsub::Event::SlowPeer` at each heartbeat. In
+    /// libp2p-gossipsub 0.50 the `non_priority` count has two sources:
+    /// `Publish` RPCs that expired in the connection handler before being
+    /// sent (our own publishes, timeout `publish_queue_duration`, 5 s libp2p
+    /// default, raised by this node; and forwards/IWANT replies, timeout
+    /// `forward_queue_duration`, 1 s default), and non-priority messages
+    /// (publishes, forwards, IHAVE/IWANT) dropped because the peer's send
+    /// queue was full. `priority` counts only full-queue drops of
+    /// GRAFT/PRUNE/IDONTWANT (SUBSCRIBE/UNSUBSCRIBE go on an unbounded queue
+    /// and never fail). Expired publishes lost a validator's
+    /// Commit/Externalize in w12 and halted consensus (#1544/#1545).
     pub static ref GOSSIP_FAILED_MESSAGES: IntCounterVec = IntCounterVec::new(
         Opts::new(
             "botho_gossip_failed_messages_total",
@@ -483,6 +492,10 @@ lazy_static! {
 
     /// Synchronous gossipsub `publish()` failures (`AllQueuesFull`,
     /// `NoPeersSubscribedToTopic`, ...), labelled by topic.
+    ///
+    /// `NoPeersSubscribedToTopic` is counted too, so on a node with 0 peers
+    /// `{topic="scp"}` climbs with every SCP broadcast. Alerts on this metric
+    /// should require `botho_peers_connected > 0` (#1572).
     pub static ref GOSSIP_PUBLISH_ERRORS: IntCounterVec = IntCounterVec::new(
         Opts::new(
             "botho_gossip_publish_errors_total",
@@ -512,7 +525,8 @@ lazy_static! {
 /// Kind label for [`GOSSIP_FAILED_MESSAGES`]: priority-queue failures.
 pub const GOSSIP_FAILED_KIND_PRIORITY: &str = "priority";
 /// Kind label for [`GOSSIP_FAILED_MESSAGES`]: non-priority-queue failures
-/// (publishes and forwards that expired before being sent).
+/// (publishes and forwards that expired before being sent, plus non-priority
+/// messages dropped because the peer's queue was full).
 pub const GOSSIP_FAILED_KIND_NON_PRIORITY: &str = "non_priority";
 
 /// Record the per-peer failed-message counts from a gossipsub `SlowPeer`

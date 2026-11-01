@@ -630,6 +630,10 @@ pub struct NetworkDiscovery {
     /// Per-peer summary of rate-limit drops, so a flood logs one `warn!`
     /// per peer per minute instead of one per message (#1547).
     rate_limit_log: RateLimitLogSummary<PeerId>,
+    /// Per-peer summary of gossipsub `SlowPeer` reports, so a persistently
+    /// slow peer logs one `warn!` per minute instead of one per 1 s
+    /// heartbeat (#1572).
+    slow_peer_log: RateLimitLogSummary<PeerId>,
     /// Live traffic / connection-direction counters surfaced by
     /// `network_getInfo` (#542). Shared (cheap [`Arc`] clone) with the RPC
     /// layer via [`stats`](Self::stats); incremented on the send/receive
@@ -710,6 +714,7 @@ impl NetworkDiscovery {
             pex_manager: PexManager::new(),
             rate_limiter: PeerRateLimiter::new(rate_limit_config),
             rate_limit_log: RateLimitLogSummary::default(),
+            slow_peer_log: RateLimitLogSummary::default(),
             stats: Arc::new(NetworkStats::new()),
         }
     }
@@ -1569,20 +1574,55 @@ impl NetworkDiscovery {
                 None
             }
 
-            // A peer failed to receive gossip in time: publishes/forwards
-            // expired in its connection handler queue, or the queue was full.
-            // libp2p logs this only at debug!, so surface it at warn! and in
-            // metrics (#1545).
+            // A peer failed to receive gossip in time: our publishes or our
+            // forwards/IWANT replies expired in its connection handler queue,
+            // or its send queue was full.
+            // libp2p logs this only at debug!, so surface it in metrics and
+            // at warn! (#1545). gossipsub reports once per slow peer per 1 s
+            // heartbeat, so the per-report line is debug! and a per-peer
+            // summary warns at most once per minute (#1572).
             SwarmEvent::Behaviour(BothoBehaviourEvent::Gossipsub(gossipsub::Event::SlowPeer {
                 peer_id,
                 failed_messages,
             })) => {
-                warn!(
+                debug!(
                     %peer_id,
                     priority = failed_messages.priority,
                     non_priority = failed_messages.non_priority,
-                    "Gossipsub slow peer: messages to this peer were dropped"
+                    "Gossipsub slow peer report"
                 );
+                // gossipsub drains its failed-message map only at the next
+                // heartbeat, so a SlowPeer report can arrive after the peer's
+                // last ConnectionClosed already cleared its summary state.
+                // Only track connected peers, or each slow-then-gone peer ID
+                // would leak a summary entry (#1572). The metric below still
+                // counts late reports.
+                let summary = if self.peers.contains_key(&peer_id) {
+                    self.slow_peer_log.record_drops(
+                        &peer_id,
+                        &[
+                            (
+                                crate::rpc::metrics::GOSSIP_FAILED_KIND_PRIORITY,
+                                failed_messages.priority as u64,
+                            ),
+                            (
+                                crate::rpc::metrics::GOSSIP_FAILED_KIND_NON_PRIORITY,
+                                failed_messages.non_priority as u64,
+                            ),
+                        ],
+                        std::time::Instant::now(),
+                    )
+                } else {
+                    None
+                };
+                if let Some(summary) = summary {
+                    warn!(
+                        %peer_id,
+                        dropped = summary.total(),
+                        by_kind = %summary,
+                        "Gossipsub slow peer: messages to this peer were dropped (since last summary)"
+                    );
+                }
                 crate::rpc::metrics::record_gossip_failed_messages(
                     failed_messages.priority,
                     failed_messages.non_priority,
@@ -1815,6 +1855,7 @@ impl NetworkDiscovery {
                 // Clean up rate limiter state for disconnected peer
                 self.rate_limiter.remove_peer(&peer_id);
                 self.rate_limit_log.remove_peer(&peer_id);
+                self.slow_peer_log.remove_peer(&peer_id);
                 Some(NetworkEvent::PeerDisconnected(peer_id))
             }
             _ => None,
@@ -1917,7 +1958,53 @@ mod tests {
         );
     }
 
+    fn slow_peer_event(
+        peer_id: PeerId,
+        priority: usize,
+        non_priority: usize,
+    ) -> SwarmEvent<BothoBehaviourEvent> {
+        SwarmEvent::Behaviour(BothoBehaviourEvent::Gossipsub(gossipsub::Event::SlowPeer {
+            peer_id,
+            failed_messages: gossipsub::FailedMessages {
+                priority,
+                non_priority,
+            },
+        }))
+    }
+
+    fn test_listener_endpoint() -> libp2p::core::ConnectedPoint {
+        libp2p::core::ConnectedPoint::Listener {
+            local_addr: "/ip4/127.0.0.1/tcp/17110".parse().unwrap(),
+            send_back_addr: "/ip4/127.0.0.1/tcp/17112".parse().unwrap(),
+        }
+    }
+
+    fn connect_peer(discovery: &mut NetworkDiscovery, peer_id: PeerId) {
+        discovery.process_event(SwarmEvent::ConnectionEstablished {
+            peer_id,
+            connection_id: libp2p::swarm::ConnectionId::new_unchecked(1),
+            endpoint: test_listener_endpoint(),
+            num_established: 1.try_into().unwrap(),
+            concurrent_dial_errors: None,
+            established_in: std::time::Duration::ZERO,
+        });
+        assert!(discovery.peers.contains_key(&peer_id));
+    }
+
+    fn disconnect_peer(discovery: &mut NetworkDiscovery, peer_id: PeerId) {
+        discovery.process_event(SwarmEvent::ConnectionClosed {
+            peer_id,
+            connection_id: libp2p::swarm::ConnectionId::new_unchecked(1),
+            endpoint: test_listener_endpoint(),
+            num_established: 0,
+            cause: None,
+        });
+        assert!(!discovery.peers.contains_key(&peer_id));
+    }
+
     /// #1545: a `SlowPeer` event is consumed (no NetworkEvent) and counted.
+    /// #1572: the per-peer summary only tracks connected peers, so a report
+    /// for an unknown peer is counted but leaves no summary state.
     #[test]
     fn slow_peer_event_is_counted() {
         use crate::rpc::metrics::{
@@ -1928,20 +2015,72 @@ mod tests {
         let non_pri_before = counter(GOSSIP_FAILED_KIND_NON_PRIORITY);
 
         let mut discovery = NetworkDiscovery::new(0, vec![]);
-        let event = discovery.process_event(SwarmEvent::Behaviour(BothoBehaviourEvent::Gossipsub(
-            gossipsub::Event::SlowPeer {
-                peer_id: PeerId::random(),
-                failed_messages: gossipsub::FailedMessages {
-                    priority: 3,
-                    non_priority: 11,
-                },
-            },
-        )));
+        let peer_id = PeerId::random();
 
-        assert!(event.is_none());
+        // Unknown (never-connected) peer: counted, not tracked.
+        assert!(discovery
+            .process_event(slow_peer_event(peer_id, 3, 11))
+            .is_none());
         // Other tests may increment concurrently, so assert lower bounds.
         assert!(counter(GOSSIP_FAILED_KIND_PRIORITY) >= pri_before + 3);
         assert!(counter(GOSSIP_FAILED_KIND_NON_PRIORITY) >= non_pri_before + 11);
+        assert_eq!(discovery.slow_peer_log.tracked_peers(), 0);
+
+        // Connected peer: tracked by the slow-peer summary, so later
+        // heartbeat reports are folded into a once-a-minute warn!.
+        connect_peer(&mut discovery, peer_id);
+        assert!(discovery
+            .process_event(slow_peer_event(peer_id, 1, 2))
+            .is_none());
+        assert_eq!(discovery.slow_peer_log.tracked_peers(), 1);
+
+        // Final disconnect clears the summary state.
+        disconnect_peer(&mut discovery, peer_id);
+        assert_eq!(discovery.slow_peer_log.tracked_peers(), 0);
+    }
+
+    /// #1572: gossipsub drains `failed_messages` only at the next heartbeat,
+    /// so a `SlowPeer` report can arrive after the final `ConnectionClosed`.
+    /// It must still be counted but must not re-add the peer to the summary.
+    #[test]
+    fn slow_peer_event_after_disconnect_is_not_tracked() {
+        use crate::rpc::metrics::{GOSSIP_FAILED_KIND_NON_PRIORITY, GOSSIP_FAILED_MESSAGES};
+        let counter = || {
+            GOSSIP_FAILED_MESSAGES
+                .with_label_values(&[GOSSIP_FAILED_KIND_NON_PRIORITY])
+                .get()
+        };
+
+        let mut discovery = NetworkDiscovery::new(0, vec![]);
+        let peer_id = PeerId::random();
+        connect_peer(&mut discovery, peer_id);
+        discovery.process_event(slow_peer_event(peer_id, 0, 4));
+        assert_eq!(discovery.slow_peer_log.tracked_peers(), 1);
+        disconnect_peer(&mut discovery, peer_id);
+        assert_eq!(discovery.slow_peer_log.tracked_peers(), 0);
+
+        let before = counter();
+        assert!(discovery
+            .process_event(slow_peer_event(peer_id, 0, 7))
+            .is_none());
+        assert!(counter() >= before + 7);
+        assert_eq!(discovery.slow_peer_log.tracked_peers(), 0);
+    }
+
+    /// #1572: a remote cycling fresh peer IDs (connect, go slow, disconnect,
+    /// late heartbeat report) cannot grow the slow-peer summary map.
+    #[test]
+    fn slow_peer_log_bounded_under_peer_id_churn() {
+        let mut discovery = NetworkDiscovery::new(0, vec![]);
+        for _ in 0..200 {
+            let peer_id = PeerId::random();
+            connect_peer(&mut discovery, peer_id);
+            discovery.process_event(slow_peer_event(peer_id, 1, 5));
+            disconnect_peer(&mut discovery, peer_id);
+            discovery.process_event(slow_peer_event(peer_id, 1, 5));
+            assert_eq!(discovery.slow_peer_log.tracked_peers(), 0);
+        }
+        assert!(discovery.peers.is_empty());
     }
 
     #[test]

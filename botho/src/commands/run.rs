@@ -1321,7 +1321,7 @@ async fn run_async_with_shutdown(
     'node_loop: loop {
         // Time this whole iteration (select wait + handler); recorded on drop,
         // including early `continue`/`break`. Idle waits are bounded by the
-        // 500 ms consensus tick, so a >= 5 s iteration means a handler blocked
+        // 100 ms minting check, so a >= 5 s iteration means a handler blocked
         // the loop and the swarm went unpolled (#1545).
         let _loop_timer = NodeLoopTimer::start();
         if shutdown.load(Ordering::SeqCst) {
