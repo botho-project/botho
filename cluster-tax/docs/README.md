@@ -31,7 +31,7 @@ Coins carry **provenance tags** that persist through splits:
 
 ![Split Resistance](figures/split_resistance.png)
 
-Fee is based on `source_wealth`, not `value`. Splitting doesn't help.
+Fee is based on `source_wealth`, not `value`. Splitting doesn't lower the fee rate.
 
 ### Key Properties
 

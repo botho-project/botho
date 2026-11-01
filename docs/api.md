@@ -271,7 +271,7 @@ Get circulating supply information. Useful for exchanges and block explorers to 
 | `totalFeesBurned` | integer | Cumulative transaction fees burned, in picocredits |
 | `circulatingSupply` | integer | Net supply (totalMined - totalFeesBurned), in picocredits |
 
-**Note:** All values are in picocredits (1 BTH = 1,000,000,000,000 picocredits). Collected transaction fees are split 80% into the cluster-tilted redistribution lottery and 20% burned; only the burned 20% (`totalFeesBurned`) is removed from circulation, which is why circulating supply = totalMined - totalFeesBurned.
+**Note:** All values are in picocredits (1 BTH = 1,000,000,000,000 picocredits). Collected transaction fees are split 80% into the redistribution lottery (uniform draw) and 20% burned; only the burned 20% (`totalFeesBurned`) is removed from circulation, which is why circulating supply = totalMined - totalFeesBurned.
 
 **Example:**
 ```bash

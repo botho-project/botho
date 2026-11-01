@@ -160,7 +160,7 @@ Botho implements a novel **provenance-based progressive fee system** that prices
 
 **The Problem**: Traditional wealth taxes fail in cryptocurrency because users can split holdings across unlimited addresses.
 
-**The Solution**: Tax based on coin *ancestry* (source_wealth), not account identity. Splitting doesn't help because provenance tags persist.
+**The Solution**: Tax based on coin *ancestry* (source_wealth), not account identity. Splitting doesn't lower your fee rate because provenance tags persist.
 
 ![Split Resistance](../../cluster-tax/docs/figures/split_resistance.png)
 
@@ -327,7 +327,7 @@ Two properties worth noting:
 - **Intended Gini reduction (not demonstrated)**: Returning 80% of fees (plus demurrage charges and a height-scheduled emission share) through the lottery was meant to move value toward small, well-circulated holders — burning alone cannot redistribute. At production parameters it does not measurably do so, and lottery splitting is profitable; a redesign is under study (#1801). See [Redistribution Status](#redistribution-status).
 - **Deflationary pressure**: The 20% burn share still offsets part of tail emission.
 - **Predictable**: Net inflation = gross emission − (20% fee burn share).
-- **Grinding bound**: The lottery seed is bound to the parent block's proof of work, and the per-block payout is capped at one block reward with carryover. Ticket share is cheap to acquire while splitting is profitable (#1682), so the grinding bound also depends on that fix.
+- **Grinding bound**: The lottery seed is bound to the parent block's proof of work, and the per-block payout is capped at one block reward with carryover.
 
 ### Why Progressive Cluster Fees?
 
