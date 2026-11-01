@@ -50,6 +50,9 @@ members = [
 ]
 exclude = [
     "contracts",
+    # Lean-model DRT harness (#1706, #1707): its own workspace, so botho's
+    # `test-fixtures` feature never unifies into a workspace build.
+    "formal-drt",
     "fuzz",
     "util/serial",
     "vendor/bulletproofs-og",

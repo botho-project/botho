@@ -1,0 +1,22 @@
+# DRT executable for the Botho Lean model (#1706, #1707).
+#
+# This package is deliberately OUTSIDE formal/: the formal gates reject any
+# .lean file under formal/ other than the model (Botho.lean, Botho/**,
+# Theorems.lean) and any [[lean_exe]] or [[require]] in formal/lakefile.toml.
+# It requires the model by path, so the model it runs is exactly the gated
+# sources; nothing here is part of the gated package, scanned by the gates or
+# built by the verify job. This package may use IO (it is a test driver).
+name = "botho_model_drt"
+version = "0.1.0"
+defaultTargets = ["botho-model"]
+
+[[require]]
+name = "botho_formal"
+path = "../../formal"
+
+[[lean_lib]]
+name = "Drt"
+
+[[lean_exe]]
+name = "botho-model"
+root = "Main"
