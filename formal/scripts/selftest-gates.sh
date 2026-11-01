@@ -59,6 +59,9 @@ expect_fail_with() {
 
 sorry_gate() { "$here/check-sorry.sh" "$@"; }
 axiom_gate() { "$here/check-axioms.sh" "$@"; }
+# The axiom gate runs the source scan first (#1770 second review). Cases that
+# test a later layer on its own skip the scan with --no-scan, and where it
+# matters a second run proves the full gate fails too.
 
 # Positive control: the committed tree passes both gates.
 d="$(fresh_copy)"
@@ -99,7 +102,7 @@ d="$(fresh_copy)"
 printf '\nexample : 1 = 2 := sorry\n' >>"$d/Theorems.lean"
 expect fail "sorry in Theorems.lean (scan only)" sorry_gate --no-build "$d"
 expect_fail_with 'only .import. lines' \
-  "declaration in Theorems.lean (strict manifest)" axiom_gate "$d"
+  "declaration in Theorems.lean (strict manifest)" axiom_gate --no-scan "$d"
 
 # Sorry gate: native_decide without the allow marker is rejected.
 d="$(fresh_copy)"
@@ -189,6 +192,8 @@ cat >>"$d/Botho/Basic.lean" <<'EOF'
 theorem Botho.selftest_primed_sorry' : 1 = 2 := sorry
 EOF
 printf '#print axioms %s\n' "Botho.selftest_primed_sorry'" >>"$d/Theorems.lean"
+expect_fail_with "selftest_primed_sorry' depends on sorryAx" \
+  "primed theorem depending on sorryAx (no scan)" axiom_gate --no-scan "$d"
 expect fail "primed theorem depending on sorryAx" axiom_gate "$d"
 
 # Axiom gate: a bogus axiom used by a manifest theorem fails.
@@ -208,6 +213,8 @@ cat >>"$d/Botho/Basic.lean" <<'EOF'
 theorem Botho.selftest_sorryAx : 1 = 2 := sorry
 EOF
 printf '#print axioms %s\n' "Botho.selftest_sorryAx" >>"$d/Theorems.lean"
+expect_fail_with 'selftest_sorryAx depends on sorryAx' \
+  "theorem depending on sorryAx (no scan)" axiom_gate --no-scan "$d"
 expect fail "theorem depending on sorryAx" axiom_gate "$d"
 
 # Axiom gate: an empty manifest fails.
@@ -240,7 +247,7 @@ cat >>"$d/Theorems.lean" <<'EOF'
 #eval IO.println "'Botho.selftest_spoofed' does not depend on any axioms"
 EOF
 expect_fail_with 'only .import. lines' \
-  "#eval-printed fake '#print axioms' result" axiom_gate "$d"
+  "#eval-printed fake '#print axioms' result" axiom_gate --no-scan "$d"
 
 # Axiom gate (#1770): a `#print axioms` inside a block comment is not a
 # command, and a fake line cannot make up the count.
@@ -251,7 +258,7 @@ cat >>"$d/Theorems.lean" <<'EOF'
 #eval IO.println "'Botho.selftest_spoofed' does not depend on any axioms"
 EOF
 expect_fail_with 'only .import. lines' \
-  "commented-out '#print axioms' plus a fake result" axiom_gate "$d"
+  "commented-out '#print axioms' plus a fake result" axiom_gate --no-scan "$d"
 
 # Axiom gate (#1770): output from an imported module's initializer (which
 # runs when Theorems.lean imports Botho) is not a Lean message and is
@@ -262,7 +269,7 @@ cat >>"$d/Botho/Basic.lean" <<'EOF'
 initialize IO.println "'Botho.transfer_conserves' does not depend on any axioms"
 EOF
 expect_fail_with 'not a Lean message' \
-  "imported initializer printing a fake result" axiom_gate "$d"
+  "imported initializer printing a fake result" axiom_gate --no-scan "$d"
 expect_fail_with "forbidden token 'initialize'" \
   "initialize in a model source (scan only)" sorry_gate --no-build "$d"
 
@@ -279,7 +286,8 @@ EOF
 printf '\n%s\n' "${spoof/@LINE@/$line}" >>"$d/Botho/Basic.lean"
 printf '#print axioms Botho.selftest_spoofed\n' >>"$d/Theorems.lean"
 expect_fail_with 'second result for Botho.selftest_spoofed' \
-  "initializer printing a fake JSON result at a command position" axiom_gate "$d"
+  "initializer printing a fake JSON result at a command position" \
+  axiom_gate --no-scan "$d"
 
 # Axiom gate (#1770): a model that redefines `#print axioms` with
 # macro_rules gets one fake result at each real command position. The
@@ -295,7 +303,7 @@ macro_rules
 EOF
 printf '#print axioms Botho.selftest_spoofed\n' >>"$d/Theorems.lean"
 expect_fail_with 'is .#print axioms. overridden' \
-  "'#print axioms' overridden by macro_rules" axiom_gate "$d"
+  "'#print axioms' overridden by macro_rules" axiom_gate --no-scan "$d"
 expect_fail_with "forbidden token '#eval'" \
   "#eval in a model source (scan only)" sorry_gate --no-build "$d"
 
@@ -316,7 +324,10 @@ run_cmd liftCoreM <| addDecl <| .thmDecl {
 EOF
 printf '#print axioms Botho.selftest_unchecked\n' >>"$d/Theorems.lean"
 expect_fail_with 'leanchecker rejected' \
-  "theorem admitted with debug.skipKernelTC (kernel replay)" axiom_gate "$d"
+  "theorem admitted with debug.skipKernelTC (kernel replay)" \
+  axiom_gate --no-scan "$d"
+expect_fail_with "import of 'Lean' is not allowed" \
+  "import Lean / run_cmd in a model source (full axiom gate)" axiom_gate "$d"
 expect_fail_with "forbidden token 'skipKernelTC'" \
   "run_cmd / debug.skipKernelTC in a model source (scan only)" \
   sorry_gate --no-build "$d"
@@ -338,10 +349,13 @@ expect_fail_with 'reaches sorryAx: Botho.selftest_hidden' \
 expect_fail_with "forbidden token '#guard_msgs'" \
   "#guard_msgs in a model source (scan only)" sorry_gate --no-build "$d"
 expect_fail_with 'Botho.selftest_hidden reaches sorryAx' \
-  "#guard_msgs-hidden stop proof, unlisted (axiom gate sweep)" axiom_gate "$d"
+  "#guard_msgs-hidden stop proof, unlisted (axiom gate sweep)" \
+  axiom_gate --no-scan "$d"
 printf '#print axioms Botho.selftest_hidden\n' >>"$d/Theorems.lean"
 expect_fail_with 'Botho.selftest_hidden depends on sorryAx' \
-  "#guard_msgs-hidden stop proof, listed (axiom gate)" axiom_gate "$d"
+  "#guard_msgs-hidden stop proof, listed (axiom gate)" axiom_gate --no-scan "$d"
+expect_fail_with "forbidden token '#guard_msgs'" \
+  "#guard_msgs-hidden stop proof (full axiom gate)" axiom_gate "$d"
 
 # Sorry gate (#1770): `sorryAx.{0}` (explicit universe) is caught by the scan.
 d="$(fresh_copy)"
@@ -387,7 +401,9 @@ d="$(fresh_copy)"
 { printf 'import Lean\n'; cat "$d/Theorems.lean"; } >"$d/Theorems.tmp"
 mv "$d/Theorems.tmp" "$d/Theorems.lean"
 expect_fail_with 'imports outside the Botho library' \
-  "manifest importing a non-Botho module" axiom_gate "$d"
+  "manifest importing a non-Botho module (no scan)" axiom_gate --no-scan "$d"
+expect_fail_with "Theorems.lean:1: import of 'Lean' is not allowed" \
+  "manifest importing a non-Botho module (full axiom gate)" axiom_gate "$d"
 
 # Both gates (#1770): a lakefile.lean (a Lean program run by every lake call)
 # or a lakefile.toml that passes extra arguments to lean is rejected.
@@ -400,7 +416,7 @@ expect_fail_with 'lakefile.lean is not allowed' \
   "lakefile.lean present (sorry gate)" sorry_gate --no-scan "$d"
 d="$(fresh_copy)"
 printf '\nmoreLeanArgs = ["-Ddebug.skipKernelTC=true"]\n' >>"$d/lakefile.toml"
-expect_fail_with 'forbidden build option' \
+expect_fail_with 'does not match the pinned layout' \
   "lakefile.toml with moreLeanArgs" axiom_gate "$d"
 
 # ---- #1770 review: code that runs during `lake build` ----
@@ -429,15 +445,23 @@ EOF
 d="$(fresh_copy)"
 init_widen "$d"
 expect_fail_with 'one_eq_two depends on non-allow-listed axiom Botho.cheat' \
-  "@[init] initializer widening the allow-list during the build" axiom_gate "$d"
+  "@[init] initializer widening the allow-list during the build (no scan)" \
+  axiom_gate --no-scan "$d"
 expect pass "  (the initializer did rewrite axioms-allowlist.txt)" \
   grep -q '^Botho.cheat$' "$d/axioms-allowlist.txt"
 expect_fail_with "forbidden attribute 'init'" \
   "@[init f] in a model source (scan only)" sorry_gate --no-build "$d"
+d="$(fresh_copy)"
+init_widen "$d"
+expect_fail_with "forbidden attribute 'init'" \
+  "@[init] initializer widening the allow-list (full axiom gate)" axiom_gate "$d"
+expect fail "  (the failed scan stopped the gate before the build ran it)" \
+  grep -q '^Botho.cheat$' "$d/axioms-allowlist.txt"
 
 # Sorry gate (#1770 review): an initializer that deletes its own `@[init]`
 # line from the source during the build. The scan runs before the build, so
-# it still sees the attribute.
+# it still sees the attribute, and a failed scan stops the gate before the
+# build runs the initializer at all. With --no-scan the build does run it.
 d="$(fresh_copy)"
 cat >>"$d/Botho/Basic.lean" <<'EOF'
 
@@ -451,7 +475,11 @@ end Botho
 EOF
 expect_fail_with "forbidden attribute 'init'" \
   "self-erasing @[init] initializer (full sorry gate)" sorry_gate "$d"
-expect fail "  (the initializer did erase its @[init] line)" \
+expect pass "  (the failed scan stopped the gate before the build)" \
+  grep -q '@\[init hide\]' "$d/Botho/Basic.lean"
+expect pass "  (without the scan the build runs the initializer)" \
+  sorry_gate --no-scan "$d"
+expect fail "  (and the initializer did erase its @[init] line)" \
   grep -q '@\[init hide\]' "$d/Botho/Basic.lean"
 
 # Sorry gate (#1770 review): initializer and other code-running attributes in
@@ -520,6 +548,191 @@ EOF
 expect pass "init as a variable, @[simp], attribute [local simp] (scan only)" \
   sorry_gate --no-build "$d"
 expect pass "init control tree still builds (full sorry gate)" sorry_gate "$d"
+
+# ---- #1770 second review: imports and the build layout ----
+
+# Both gates (#1770 second review): the Judge's simproc bypass. A simproc (a
+# compile-time `MetaM` hook, which needs `import Lean`) runs during
+# `lake build` and overwrites the compiled Botho/Cheat.olean with a forged
+# one in which `one_eq_two` has no axioms. leanchecker, the walk and
+# `#print axioms` all read the forged file, so only the import allow-list in
+# the source scan stops it. The control run with --no-scan proves the swap
+# really fools the later layers, so the scan cases are not vacuous.
+simproc_swap() {
+  cat >"$1/Botho/Cheat.lean" <<'EOF'
+namespace Botho
+axiom cheat : False
+theorem one_eq_two : 1 = 2 := cheat.elim
+end Botho
+EOF
+  cat >"$1/Botho/Evil.lean" <<'EOF'
+import Lean
+import Botho.Cheat
+open Lean Meta Simp in
+simproc botho_tidy (Nat.succ _) := fun _ => do
+  let cwd ← IO.currentDir
+  let dir := cwd / ".lake" / "tidy"
+  IO.FS.createDirAll dir
+  IO.FS.writeFile (dir / "Cheat.lean") "namespace Botho\ntheorem one_eq_two : True := trivial\nend Botho\n"
+  let exe := (← IO.appPath).toString
+  let args := #["-o", (cwd / ".lake/build/lib/lean/Botho/Cheat.olean").toString, (dir / "Cheat.lean").toString]
+  let _ ← IO.Process.output { cmd := exe, args := args }
+  return .continue
+
+example : Nat.succ 1 = 2 := by simp only [botho_tidy]
+EOF
+  printf 'import Botho.Basic\nimport Botho.Cheat\nimport Botho.Evil\n' >"$1/Botho.lean"
+  printf '#print axioms Botho.one_eq_two\n' >>"$1/Theorems.lean"
+}
+d="$(fresh_copy)"
+simproc_swap "$d"
+expect_fail_with "Evil.lean:1: import of 'Lean' is not allowed" \
+  "simproc overwriting a compiled .olean (full sorry gate)" sorry_gate "$d"
+expect_fail_with "Evil.lean:1: import of 'Lean' is not allowed" \
+  "simproc overwriting a compiled .olean (full axiom gate)" axiom_gate "$d"
+expect pass "  (control: without the scan the forged .olean fools the axiom gate)" \
+  axiom_gate --no-scan "$d"
+
+# Both gates (#1770 second review): a bare `import Lean` in a model module.
+d="$(fresh_copy)"
+{ printf 'import Lean\n'; cat "$d/Botho/Basic.lean"; } >"$d/Basic.tmp"
+mv "$d/Basic.tmp" "$d/Botho/Basic.lean"
+expect_fail_with "Basic.lean:1: import of 'Lean' is not allowed" \
+  "bare import Lean in Botho/Basic.lean (scan only)" sorry_gate --no-build "$d"
+expect_fail_with "Basic.lean:1: import of 'Lean' is not allowed" \
+  "bare import Lean in Botho/Basic.lean (full axiom gate)" axiom_gate "$d"
+
+# Sorry gate (#1770 second review): the import allow-list in every header
+# form: other packages, `Init`, guillemets, imports split over lines with
+# comments between them, header keywords and modifiers, a module that is not
+# a scanned file, and an `import` after the header. Each replaces Botho.lean.
+for case in \
+  "import of .Std. is not allowed|import Botho.Basic\nimport Std" \
+  "import of .Lake. is not allowed|import Lake\nimport Botho.Basic" \
+  "import of .Mathlib. is not allowed|import Mathlib\nimport Botho.Basic" \
+  "import of .Init.Data.List. is not allowed|import Init.Data.List\nimport Botho.Basic" \
+  "import of .Lean.Elab.Command. is not allowed|import Botho.Basic\nimport Lean.Elab.Command" \
+  "import of .Lean. is not allowed|import Botho.Basic\nimport «Lean»" \
+  "import of .Lean. is not allowed|/- doc -/\nimport Botho.Basic\nimport\tLean" \
+  "Botho.lean:5: import of .Lean. is not allowed|import Botho.Basic\n/- c -/ import -- c\n  /- nested /- c -/ -/\n\n  Lean" \
+  "header keyword .prelude.|prelude\nimport Botho.Basic" \
+  "header keyword .module.|module\nimport Botho.Basic" \
+  "import modifier .public.|public import Botho.Basic" \
+  "import modifier .meta.|meta import Botho.Basic" \
+  "import of .all. is not allowed|import all Botho.Basic" \
+  "does not resolve to a scanned file|import Botho.Basic\nimport Botho.Missing" \
+  "malformed import|import Botho.«Ba sic»" \
+  ".import. after the module header|import Botho.Basic\ndef Botho.x : Nat := 1\nimport Lean"; do
+  d="$(fresh_copy)"
+  printf '%b\n' "${case#*|}" >"$d/Botho.lean"
+  expect_fail_with "${case%%|*}" \
+    "Botho.lean header: $(printf '%b' "${case#*|}" | tr '\n\t' '  ') (scan only)" \
+    sorry_gate --no-build "$d"
+done
+
+# Sorry gate (#1770 second review): the simproc commands are also banned
+# tokens, as a second layer behind the import allow-list.
+d="$(fresh_copy)"
+printf '\nsimproc botho_s (Nat.succ _) := fun _ => pure .continue\n' >>"$d/Botho/Basic.lean"
+expect_fail_with "forbidden token 'simproc'" "simproc command (scan only)" \
+  sorry_gate --no-build "$d"
+
+# Both gates (#1770 second review): the layout. Model sources must be regular
+# files in Botho.lean and Botho/, and no other .lean file may exist.
+d="$(fresh_copy)"
+printf 'def Botho.outside : Nat := 1\n' >"$scratch/outside.lean"
+ln -s "$scratch/outside.lean" "$d/Botho/Link.lean"
+expect_fail_with 'symlink under Botho/' "symlinked Botho/Link.lean (scan only)" \
+  sorry_gate --no-build "$d"
+d="$(fresh_copy)"
+mv "$d/Botho" "$d/Botho.real"
+ln -s "$d/Botho.real" "$d/Botho"
+expect_fail_with 'must be a directory' "Botho/ as a symlink (full axiom gate)" \
+  axiom_gate "$d"
+d="$(fresh_copy)"
+printf 'def Botho.stray : Nat := 1\n' >"$d/Extra.lean"
+expect_fail_with 'Extra.lean: Lean file outside the scanned set' \
+  "stray Extra.lean next to Botho.lean (full axiom gate)" axiom_gate "$d"
+
+# Both gates (#1770 second review): the Judge's srcDir bypass. The sources
+# move to src/ and lakefile.toml points Lake there, so a scan of the fixed
+# paths would see none of them. The pinned lakefile rejects it.
+d="$(fresh_copy)"
+mkdir "$d/src"
+mv "$d/Botho.lean" "$d/Botho" "$d/src/"
+printf 'srcDir = "src"\n' >>"$d/lakefile.toml"
+printf '\nnamespace Botho\ndef pwn : IO Unit := IO.FS.writeFile "PWNED" ""\n@[init pwn] opaque pwnInit : Unit\nend Botho\n' \
+  >>"$d/src/Botho/Basic.lean"
+expect_fail_with 'lakefile.toml does not match the pinned layout' \
+  "srcDir = \"src\" (full sorry gate)" sorry_gate "$d"
+expect_fail_with 'lakefile.toml does not match the pinned layout' \
+  "srcDir = \"src\" (full axiom gate)" axiom_gate "$d"
+expect fail "  (the initializer never ran)" test -e "$d/PWNED"
+
+# Both gates (#1770 second review): other layout changes the pin rejects.
+for case in \
+  'extra lean_lib|\n[[lean_lib]]\nname = "Evil"' \
+  'require|\n[[require]]\nname = "evil"\npath = "evil"' \
+  'globs|globs = ["Botho.+", "Evil"]' \
+  'roots|roots = ["Botho", "Evil"]' \
+  'extern_lib|\n[[extern_lib]]\nname = "evil"' \
+  'precompileModules|precompileModules = true'; do
+  d="$(fresh_copy)"
+  printf '%b\n' "${case#*|}" >>"$d/lakefile.toml"
+  expect_fail_with 'lakefile.toml does not match the pinned layout' \
+    "lakefile.toml with ${case%%|*} (sorry gate, no scan)" sorry_gate --no-scan "$d"
+  expect_fail_with 'lakefile.toml does not match the pinned layout' \
+    "lakefile.toml with ${case%%|*} (axiom gate)" axiom_gate "$d"
+done
+d="$(fresh_copy)"
+printf 'leanprover/lean4:v4.36.0\n' >"$d/lean-toolchain"
+expect_fail_with 'lean-toolchain is .leanprover/lean4:v4.36.0.' \
+  "lean-toolchain not the pinned release (axiom gate)" axiom_gate "$d"
+d="$(fresh_copy)"
+cat >"$d/lake-manifest.json" <<'EOF'
+{"version": "1.3.0", "packagesDir": ".lake/packages",
+ "packages": [{"type": "path", "name": "evil", "dir": "evil", "inherited": false, "scope": "", "manifestFile": "lake-manifest.json", "configFile": "lakefile.toml"}],
+ "name": "botho_formal", "lakeDir": ".lake", "fixedToolchain": false}
+EOF
+expect_fail_with 'lake-manifest.json does not match the pinned manifest' \
+  "lake-manifest.json with a package (sorry gate, no scan)" sorry_gate --no-scan "$d"
+
+# Negative control (#1770 second review): a second module imported through
+# guillemets and a multi-line import with comments between the imports,
+# `private def` right after the header, "import Lean" in a comment and a
+# string, and a lakefile.toml with comments, blank lines and indentation.
+# Both full gates pass.
+d="$(fresh_copy)"
+mkdir -p "$d/Botho/Extra"
+cat >"$d/Botho.lean" <<'EOF'
+/- Root import (self-test control). import Lean in a comment. -/
+import Botho.Basic -- the toy model
+/- a comment between imports: import Lean -/
+import
+  «Botho».Extra.«Deep»
+EOF
+cat >"$d/Botho/Extra/Deep.lean" <<'EOF'
+import Botho.Basic
+-- import Lean (in a comment)
+private def Botho.selftest_deep_helper : Nat := 1
+def Botho.selftest_deep_str : String := "import Lean"
+theorem Botho.selftest_deep : Botho.selftest_deep_helper = 1 := rfl
+EOF
+printf '#print axioms Botho.selftest_deep\n' >>"$d/Theorems.lean"
+cat >"$d/lakefile.toml" <<'EOF'
+# Botho formal model: one library, no dependencies.
+name = "botho_formal"
+  version = "0.1.0"
+
+defaultTargets = ["Botho"]
+
+[[lean_lib]]
+name = "Botho"   
+EOF
+expect pass "guillemet and multi-line imports, commented lakefile (full sorry gate)" \
+  sorry_gate "$d"
+expect pass "guillemet and multi-line imports, commented lakefile (full axiom gate)" \
+  axiom_gate "$d"
 
 echo
 if [[ "$failures" != 0 ]]; then

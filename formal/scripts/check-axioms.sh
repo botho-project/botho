@@ -3,8 +3,16 @@
 #
 # Every theorem listed in Theorems.lean must depend only on axioms named in
 # axioms-allowlist.txt (never `sorryAx`). The gate checks this in four layers,
-# so that no single trick in the model can fake a pass:
+# so that no single trick in the model can fake a pass, after two checks that
+# run before any `lake` call:
 #
+#   0. Pinned layout and source scan. lakefile.toml, lean-toolchain and
+#      lake-manifest.json must match the pins in gate-common.sh, and the
+#      source scan (gate_scan.py, shared with the sorry gate) must pass. The
+#      scan's import allow-list keeps `import Lean` and friends out of the
+#      model, so no simproc, elaborator or tactic written in the model can run
+#      during `lake build` and rewrite the compiled library that layers 2 and
+#      4 read. The layers below cannot detect such a rewrite on their own.
 #   1. Strict manifest. After comments are removed, Theorems.lean may contain
 #      only `import` lines (of Botho modules) followed by `#print axioms NAME`
 #      lines, one per line, with no duplicate names. Nothing else (no `#eval`, no declarations) can
@@ -37,12 +45,22 @@
 # rewrite of this file during the build has no effect. These are defence in
 # depth, not a sandbox: see "Limits" in formal/README.md.
 #
-# Usage: check-axioms.sh [FORMAL_ROOT]
+# Usage: check-axioms.sh [--no-scan] [FORMAL_ROOT]
 #   FORMAL_ROOT defaults to the directory above this script.
+#   --no-scan  skip the source scan in step 0 (the layout pin still runs).
+#              Only the self-test uses this, to prove each later layer works
+#              on its own. CI never passes it.
 # Environment: LAKE overrides the lake binary (default: lake).
 set -euo pipefail
 
 main() {
+scan=1
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-scan) scan=0; shift ;;
+    *) break ;;
+  esac
+done
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="${1:-$(cd "$here/.." && pwd)}"
 root="$(cd "$root" && pwd)"
@@ -71,6 +89,13 @@ trap 'rm -rf "$tmp"' EXIT
 out="$tmp/out"
 
 lakefile_preflight
+
+if [[ "$scan" == 1 ]]; then
+  echo "== axiom gate: source scan ($root)"
+  if ! source_scan; then
+    exit 1
+  fi
+fi
 
 echo "== axiom gate: manifest syntax"
 if ! GATE_MANIFEST="$manifest_src" python3 - "$manifest" "$gate_lib" \
