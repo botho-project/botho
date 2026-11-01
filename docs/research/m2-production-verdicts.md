@@ -150,7 +150,7 @@ The module doc in `m2_production.rs` lists them in full. Most lean in the mechan
 - **Honest decoys are negligible in value**, and decoys are assumed no older than the real input, so the age clock is the real input's.
 - **Step aggregation** (validated above). Payouts are spread over the owner's eligible outputs by count.
 - **Tag-mass union.** Mass below 1e-6 of a position is dropped once the union passes 4,096 clusters. *Lowers the floor slightly.*
-- **No lottery farming.** No agent splits to farm tickets. That attack (#1682) would concentrate the lottery further. *Favours the mechanism.*
+- **No lottery farming.** No agent splits to farm tickets. #1682 (re-run in #1761) found that splitting is profitable on the implemented rules, so farming would concentrate the lottery further. *Favours the mechanism.*
 - **Payments go to recipients in proportion to spending flow**, so they move no wealth in expectation but add noise.
 
 ## What this does not decide
