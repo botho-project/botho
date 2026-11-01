@@ -604,6 +604,22 @@ pub struct ChainSyncManager {
     /// overlapping requests. Cleared by the peer's status response, the
     /// matching failure, or its disconnect.
     status_in_flight: HashSet<PeerId>,
+    /// Peers whose `GetStatus` failed (timeout, connection closed, error)
+    /// during the current Discovery round (#1723).
+    ///
+    /// Discovery used to wait until every compatible connected peer had
+    /// answered, and a status failure in Discovery ran [`Self::on_failure`].
+    /// One connected but silent peer therefore kept the node cycling
+    /// `Discovery -> Failed -> Discovery` even when every other peer had
+    /// answered. Peers in this set count as resolved for the round, so it
+    /// concludes from the peers that did answer, and they are not asked again
+    /// within the round. A round in which no compatible peer answered at all
+    /// still goes to `Failed` (an isolated node never reports synced).
+    ///
+    /// A peer leaves the set when it answers ([`Self::on_status`]) or
+    /// disconnects, and the whole set is cleared when the round ends (any
+    /// transition out of `Discovery`), so the next round asks it again.
+    discovery_unresponsive: HashSet<PeerId>,
 }
 
 impl ChainSyncManager {
@@ -625,6 +641,7 @@ impl ChainSyncManager {
             active_blocks_request: None,
             next_request_token: 0,
             status_in_flight: HashSet::new(),
+            discovery_unresponsive: HashSet::new(),
         }
     }
 
@@ -712,13 +729,15 @@ impl ChainSyncManager {
     /// the global [`Self::on_failure`] path (reputation, `Failed`, backoff):
     ///
     /// - unknown or already-resolved token: ignored;
-    /// - `Status` failure: clears that peer's status in-flight guard. It is the
-    ///   active work only in `Discovery` while that peer's status is still
-    ///   missing (Discovery cannot conclude without it), so only there does it
-    ///   run `on_failure`. In `Synced`, `Downloading` and `Failed` it records a
-    ///   reputation failure and leaves state, deadline and backoff alone.
-    ///   Before this, a late timeout from an old status request demoted a
-    ///   caught-up node to `stalled`;
+    /// - `Status` failure: clears that peer's status in-flight guard and
+    ///   records a reputation failure. It never runs `on_failure` directly. In
+    ///   `Discovery`, while that peer's status is still missing, the peer is
+    ///   excluded from the rest of the round (#1723): the round concludes from
+    ///   the peers that answered, and [`Self::tick`] enters `Failed` only when
+    ///   no compatible peer answered at all. In `Synced`, `Downloading` and
+    ///   `Failed` state, deadline and backoff are left alone. Before #1431, a
+    ///   late timeout from an old status request demoted a caught-up node to
+    ///   `stalled`;
     /// - `Blocks` failure: runs `on_failure` only for the active download
     ///   request (see [`Self::is_active_blocks_request`]). If the failed
     ///   request is the one the in-flight guard awaits but the download has
@@ -739,13 +758,21 @@ impl ChainSyncManager {
         match kind {
             SyncRequestKind::Status => {
                 self.status_in_flight.remove(&peer);
+                self.reputation.request_failed(&peer);
                 if matches!(self.state, SyncState::Discovery)
                     && !self.peer_statuses.contains_key(&peer)
                 {
-                    self.on_failure(Some(&peer), reason);
-                    true
+                    // Exclude the peer from this round instead of failing the
+                    // whole round (#1723). `tick` decides from the peers that
+                    // answered, or enters `Failed` if none did.
+                    self.discovery_unresponsive.insert(peer);
+                    warn!(
+                        %peer,
+                        %reason,
+                        "Status request failed in Discovery; excluding peer from this round"
+                    );
+                    false
                 } else {
-                    self.reputation.request_failed(&peer);
                     debug!(
                         %peer,
                         %reason,
@@ -860,6 +887,9 @@ impl ChainSyncManager {
         // The peer answered, so its status request is no longer in flight
         // (#1431), whether or not the advertised height is used below.
         self.status_in_flight.remove(&peer);
+        // A peer that answers is no longer unresponsive: it counts in this
+        // Discovery round again (#1723).
+        self.discovery_unresponsive.remove(&peer);
 
         // A consensus-incompatible peer's advertised height is an old-chain
         // height that must never influence sync-completion or peer selection.
@@ -916,6 +946,12 @@ impl ChainSyncManager {
                     self.state = SyncState::Synced;
                 }
             }
+        }
+
+        // An answer that concluded the Discovery round ends the round's
+        // exclusions (#1723).
+        if !matches!(self.state, SyncState::Discovery) {
+            self.discovery_unresponsive.clear();
         }
     }
 
@@ -1314,6 +1350,9 @@ impl ChainSyncManager {
 
         // The in-flight request (if any) has resolved into a failure.
         self.pending_request = None;
+        // Any Discovery round ends here; the retry starts a fresh one in
+        // which every peer is asked again (#1723).
+        self.discovery_unresponsive.clear();
 
         self.state = SyncState::Failed {
             reason,
@@ -1382,6 +1421,7 @@ impl ChainSyncManager {
         // failure for one of them is ignored as unknown and a reconnecting
         // peer can be queried again (#1431).
         self.status_in_flight.remove(peer);
+        self.discovery_unresponsive.remove(peer);
         // If the in-flight guard awaits a block request sent to this peer
         // (e.g. the download was retargeted away from it, #1579), that request
         // will never resolve once its record is dropped; release the guard so
@@ -1488,6 +1528,14 @@ impl ChainSyncManager {
         // Clean up rate limiter periodically
         self.rate_limiter.cleanup();
 
+        // Peers excluded from a Discovery round are excluded from that round
+        // only (#1723). Every transition out of `Discovery` ends the round;
+        // the explicit clears on those paths cover the common cases, and this
+        // catches any other path, so a later round asks every peer again.
+        if !matches!(self.state, SyncState::Discovery) {
+            self.discovery_unresponsive.clear();
+        }
+
         match &self.state {
             SyncState::Discovery => {
                 // Consensus-incompatible peers are being torn down and their
@@ -1509,9 +1557,13 @@ impl ChainSyncManager {
                 // re-asking a silent peer every tick piled up overlapping
                 // requests. Their late failures then knocked the node out of
                 // sync.
+                //
+                // Also skip peers whose status request already failed in this
+                // round (#1723); they are asked again in the next round.
                 for peer in connected_peers {
                     if self.incompatible_peers.contains(peer)
                         || self.status_in_flight.contains(peer)
+                        || self.discovery_unresponsive.contains(peer)
                     {
                         continue;
                     }
@@ -1520,16 +1572,44 @@ impl ChainSyncManager {
                     }
                 }
 
-                // Once every COMPATIBLE connected peer has answered (vacuously
-                // true when all peers are incompatible), decide. Requiring at
-                // least one connected peer preserves the min-peers wait for a
-                // genuinely isolated node.
-                let all_compatible_have_status = connected_peers
+                // Once every COMPATIBLE connected peer has either answered or
+                // failed its status request this round (vacuously true when
+                // all peers are incompatible), decide. A peer that failed is
+                // excluded rather than waited on, so one persistently silent
+                // peer cannot hold the round open and cycle the node through
+                // `Failed` (#1723). Requiring at least one connected peer
+                // preserves the min-peers wait for a genuinely isolated node.
+                let all_compatible_resolved = connected_peers
                     .iter()
                     .filter(|p| !self.incompatible_peers.contains(p))
-                    .all(|p| self.peer_statuses.contains_key(p));
+                    .all(|p| {
+                        self.peer_statuses.contains_key(p)
+                            || self.discovery_unresponsive.contains(p)
+                    });
 
-                if has_connected_peer && all_compatible_have_status {
+                if has_connected_peer && all_compatible_resolved {
+                    // The round resolved only through exclusions: compatible
+                    // peers exist but none of them answered. That is not
+                    // evidence we are at the tip, so do not declare Synced.
+                    // Fail the round as before #1723 (backoff, then a fresh
+                    // round that asks every peer again). The reputation
+                    // failures were already recorded per peer.
+                    let any_compatible_answered = connected_peers.iter().any(|p| {
+                        !self.incompatible_peers.contains(p) && self.peer_statuses.contains_key(p)
+                    });
+                    let any_compatible_excluded = connected_peers.iter().any(|p| {
+                        !self.incompatible_peers.contains(p)
+                            && self.discovery_unresponsive.contains(p)
+                    });
+                    if any_compatible_excluded && !any_compatible_answered {
+                        self.on_failure(
+                            None,
+                            "no connected peer answered the status request".to_string(),
+                        );
+                        return None;
+                    }
+
+                    self.discovery_unresponsive.clear();
                     // `best_peer()` already excludes incompatible peers, so when
                     // every peer is a zombie it returns `None` and we fall to the
                     // genesis branch below.
@@ -1662,6 +1742,7 @@ impl ChainSyncManager {
                 if Instant::now() >= *retry_at {
                     self.state = SyncState::Discovery;
                     self.peer_statuses.clear();
+                    self.discovery_unresponsive.clear();
                     return self.tick(connected_peers);
                 }
 
@@ -4117,8 +4198,11 @@ mod tests {
             );
         }
 
-        // Failure (in Discovery this is the active work, so it backs off) ...
-        assert!(manager.on_request_failed(Some(token), "Timeout".into()));
+        // Failure: the peer is excluded from the round (#1723). It was the
+        // only peer, so nobody answered and the next tick backs off ...
+        assert!(!manager.on_request_failed(Some(token), "Timeout".into()));
+        assert!(matches!(manager.state(), SyncState::Discovery));
+        assert!(manager.tick(&[peer]).is_none());
         assert!(matches!(manager.state(), SyncState::Failed { .. }));
         // ... and after the retry deadline, the peer is asked again.
         manager.state = SyncState::Failed {
@@ -4279,5 +4363,231 @@ mod tests {
             "retry deadline must not move"
         );
         assert_eq!(manager.retry_backoff, backoff);
+    }
+
+    // ------------------------------------------------------------------
+    // #1723: a silent peer is excluded from the Discovery round
+    // ------------------------------------------------------------------
+
+    /// Seed `peer`'s status as already known while still in `Discovery`,
+    /// as after a download peer disconnects (the other peers' statuses
+    /// survive the drop back to `Discovery`). This lets the round be
+    /// concluded by `tick`, not by `on_status`.
+    fn seed_discovery_status(manager: &mut ChainSyncManager, peer: PeerId, height: u64) {
+        manager.peer_statuses.insert(
+            peer,
+            PeerStatus {
+                height,
+                tip_hash: [7u8; 32],
+                last_updated: Instant::now(),
+            },
+        );
+        assert!(matches!(manager.state(), SyncState::Discovery));
+    }
+
+    /// Acceptance (#1723): with two peers, one at the tip that answered and
+    /// one whose status request fails, Discovery concludes `Synced` without
+    /// entering `Failed`, and the backoff does not grow.
+    #[test]
+    fn test_discovery_failed_peer_excluded_concludes_synced() {
+        let mut manager = ChainSyncManager::new(100);
+        let silent = make_peer_id();
+        let good = make_peer_id();
+        seed_discovery_status(&mut manager, good, 100);
+        let backoff = manager.retry_backoff;
+
+        // The silent peer is asked and its request fails.
+        let token = tick_dispatch(&mut manager, &[silent, good]);
+        assert!(!manager.on_request_failed(Some(token), "Timeout".into()));
+        assert!(
+            matches!(manager.state(), SyncState::Discovery),
+            "a single status failure must not fail the round"
+        );
+
+        // The round concludes from the peer that answered.
+        assert!(matches!(
+            manager.tick(&[silent, good]),
+            Some(SyncAction::Synced)
+        ));
+        assert!(manager.is_synced());
+        assert_eq!(manager.retry_backoff, backoff, "backoff must not grow");
+        assert!(manager.discovery_unresponsive.is_empty(), "round ended");
+        let rep = manager.reputation_mut().get(&silent).expect("tracked");
+        assert_eq!(rep.failures, 1, "the failure is still recorded once");
+    }
+
+    /// Acceptance (#1723), ahead variant: the answering peer is ahead, so
+    /// Discovery concludes `Downloading` from it, never `Failed`.
+    #[test]
+    fn test_discovery_failed_peer_excluded_downloads_from_responder() {
+        let mut manager = ChainSyncManager::new(100);
+        let silent = make_peer_id();
+        let good = make_peer_id();
+        seed_discovery_status(&mut manager, good, 150);
+
+        let token = tick_dispatch(&mut manager, &[silent, good]);
+        assert!(!manager.on_request_failed(Some(token), "Connection closed".into()));
+        assert!(manager.tick(&[silent, good]).is_none());
+
+        assert_eq!(
+            *manager.state(),
+            SyncState::Downloading {
+                peer: good,
+                target_height: 150
+            }
+        );
+        // The download proceeds from the responder.
+        assert!(matches!(
+            manager.tick(&[silent, good]),
+            Some(SyncAction::RequestBlocks { peer, start_height: 101, .. }) if peer == good
+        ));
+    }
+
+    /// #1723: a status failure that lands before the other peer has even
+    /// been asked does not fail the round. The failed peer is not re-asked
+    /// in the same round, the other peer is, and its answer concludes it.
+    #[test]
+    fn test_discovery_early_failure_asks_remaining_peer() {
+        let mut manager = ChainSyncManager::new(100);
+        let silent = make_peer_id();
+        let good = make_peer_id();
+
+        let first = tick_dispatch(&mut manager, &[silent, good]);
+        assert!(!manager.on_request_failed(Some(first), "Connection closed".into()));
+        assert!(matches!(manager.state(), SyncState::Discovery));
+
+        let second = manager.tick(&[silent, good]);
+        assert!(
+            matches!(second, Some(SyncAction::RequestStatus(p)) if p == good),
+            "the remaining peer must be asked, got {second:?}"
+        );
+        let second = dispatch(&mut manager, second);
+        // While the good peer's reply is pending the round stays open.
+        assert!(manager.tick(&[silent, good]).is_none());
+        assert!(matches!(manager.state(), SyncState::Discovery));
+
+        manager.on_request_resolved(second);
+        manager.on_status(good, 100, [1u8; 32]);
+        assert!(manager.is_synced());
+        assert!(manager.discovery_unresponsive.is_empty(), "round ended");
+    }
+
+    /// #1723: a node no peer answers is never reported synced. With no
+    /// connected peers it waits in Discovery. When every connected peer
+    /// fails its status request the round fails (as before) and the next
+    /// round asks every peer again.
+    #[test]
+    fn test_discovery_no_responders_is_not_synced() {
+        let mut manager = ChainSyncManager::new(100);
+        for _ in 0..10 {
+            assert!(manager.tick(&[]).is_none());
+        }
+        assert!(matches!(manager.state(), SyncState::Discovery));
+        assert!(!manager.is_synced());
+
+        let (a, b) = (make_peer_id(), make_peer_id());
+        let ta = tick_dispatch(&mut manager, &[a, b]);
+        let tb = tick_dispatch(&mut manager, &[a, b]);
+        let backoff = manager.retry_backoff;
+        assert!(!manager.on_request_failed(Some(ta), "Timeout".into()));
+        // b is still in flight: the round stays open.
+        assert!(manager.tick(&[a, b]).is_none());
+        assert!(matches!(manager.state(), SyncState::Discovery));
+        assert!(!manager.on_request_failed(Some(tb), "Timeout".into()));
+
+        // Nobody answered: Failed, not Synced, and the backoff grows.
+        assert!(manager.tick(&[a, b]).is_none());
+        assert!(matches!(manager.state(), SyncState::Failed { .. }));
+        assert!(!manager.is_synced());
+        assert!(manager.retry_backoff > backoff, "backoff must grow");
+        for peer in [a, b] {
+            let rep = manager.reputation_mut().get(&peer).expect("tracked");
+            assert_eq!(rep.failures, 1, "one reputation failure per peer");
+        }
+
+        // The next round re-includes both peers.
+        manager.state = SyncState::Failed {
+            reason: "test".into(),
+            retry_at: Instant::now(),
+        };
+        assert!(matches!(manager.tick(&[a, b]), Some(SyncAction::RequestStatus(p)) if p == a));
+        manager.on_request_dispatched(a, SyncRequestKind::Status);
+        assert!(matches!(manager.tick(&[a, b]), Some(SyncAction::RequestStatus(p)) if p == b));
+    }
+
+    /// #1723: a round made only of consensus-incompatible peers still
+    /// concludes `Synced` (#1000), and an excluded compatible peer next to
+    /// them does not count as an answer.
+    #[test]
+    fn test_discovery_excluded_peer_with_only_zombies_fails() {
+        let mut manager = ChainSyncManager::new(0);
+        let zombie = make_peer_id();
+        let silent = make_peer_id();
+        manager.mark_incompatible(zombie);
+
+        let token = tick_dispatch(&mut manager, &[zombie, silent]);
+        assert!(!manager.on_request_failed(Some(token), "Timeout".into()));
+        assert!(manager.tick(&[zombie, silent]).is_none());
+        assert!(matches!(manager.state(), SyncState::Failed { .. }));
+        assert!(!manager.is_synced());
+
+        // Zombies alone: unchanged #1000 behaviour.
+        let mut zombies_only = ChainSyncManager::new(0);
+        zombies_only.mark_incompatible(zombie);
+        assert!(matches!(
+            zombies_only.tick(&[zombie]),
+            Some(SyncAction::Synced)
+        ));
+    }
+
+    /// #1723: an excluded peer that recovers is used again. A late answer
+    /// within the round re-includes it, and once Synced the status refresh
+    /// polls it again; if it is now far ahead the node downloads from it.
+    #[test]
+    fn test_discovery_failed_peer_recovers() {
+        let mut manager = ChainSyncManager::new(100);
+        let flaky = make_peer_id();
+        let good = make_peer_id();
+        seed_discovery_status(&mut manager, good, 105);
+
+        // Within the round: fail, then a late answer re-includes it.
+        let token = tick_dispatch(&mut manager, &[flaky, good]);
+        assert!(!manager.on_request_failed(Some(token), "Timeout".into()));
+        assert!(manager.discovery_unresponsive.contains(&flaky));
+        manager.on_status(flaky, 100, [3u8; 32]);
+        assert!(!manager.discovery_unresponsive.contains(&flaky));
+        // good (105) is ahead, so the answer drove the catch-up.
+        assert!(matches!(manager.state(), SyncState::Downloading { peer, .. } if *peer == good));
+        manager.on_peer_disconnected(&good);
+        manager.peer_statuses.clear();
+        assert!(matches!(manager.state(), SyncState::Discovery));
+
+        // A fresh round: flaky fails again, good answers at the tip.
+        let t_flaky = tick_dispatch(&mut manager, &[flaky, good]);
+        assert!(!manager.on_request_failed(Some(t_flaky), "Timeout".into()));
+        let t_good = tick_dispatch(&mut manager, &[flaky, good]);
+        manager.on_request_resolved(t_good);
+        manager.on_status(good, 100, [1u8; 32]);
+        assert!(manager.is_synced());
+        assert!(manager.discovery_unresponsive.is_empty());
+
+        // The synced refresh polls flaky again; it now answers far ahead.
+        manager.last_status_refresh = Instant::now() - STATUS_REFRESH_INTERVAL;
+        let refresh = manager.tick(&[flaky, good]);
+        assert!(
+            matches!(refresh, Some(SyncAction::RequestStatus(p)) if p == flaky),
+            "the recovered peer must be polled again, got {refresh:?}"
+        );
+        let t_refresh = dispatch(&mut manager, refresh);
+        manager.on_request_resolved(t_refresh);
+        let ahead = 100 + SYNC_BEHIND_THRESHOLD + 5;
+        manager.on_status(flaky, ahead, [4u8; 32]);
+        assert_eq!(
+            *manager.state(),
+            SyncState::Downloading {
+                peer: flaky,
+                target_height: ahead
+            }
+        );
     }
 }
