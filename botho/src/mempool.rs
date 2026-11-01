@@ -1592,6 +1592,63 @@ mod tests {
         );
     }
 
+    /// Build a transfer with `n` dust-clearing outputs for the #1772 cap tests.
+    fn tx_with_n_outputs(n: usize) -> Transaction {
+        let outputs = (0..n)
+            .map(|i| TxOutput {
+                amount: 2_000_000,
+                target_key: [i as u8; 32],
+                public_key: [100u8.wrapping_add(i as u8); 32],
+                e_memo: None,
+                cluster_tags: ClusterTagVector::empty(),
+                kem_ciphertext: None,
+            })
+            .collect();
+        Transaction::new_clsag(vec![test_clsag_input(3)], outputs, MIN_TX_FEE, 0)
+    }
+
+    /// #1772 Part A: a 17-output transaction is rejected at mempool admission
+    /// with the structural `TooManyOutputs` error (relay policy; block
+    /// validation is unchanged pending #1684).
+    #[test]
+    fn mempool_rejects_more_than_max_outputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let mut mempool = Mempool::new();
+
+        let err = mempool
+            .add_tx(tx_with_n_outputs(17), &ledger)
+            .expect_err("17 outputs must be rejected at admission");
+        match err {
+            MempoolError::InvalidTransaction(msg) => assert_eq!(
+                msg,
+                "Transaction has 17 outputs, exceeding the maximum of 16 per transaction"
+            ),
+            other => panic!("expected InvalidTransaction, got {other:?}"),
+        }
+        assert_eq!(mempool.len(), 0);
+    }
+
+    /// #1772 Part A: exactly 16 outputs passes the output cap. The fixture
+    /// carries a dummy ring signature, so admission fails LATER (signature /
+    /// ring checks) — the point is that it is not rejected for its output
+    /// count.
+    #[test]
+    fn mempool_does_not_reject_max_outputs_for_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let mut mempool = Mempool::new();
+
+        let tx = tx_with_n_outputs(16);
+        assert!(tx.is_valid_structure().is_ok());
+        if let Err(err) = mempool.add_tx(tx, &ledger) {
+            assert!(
+                !format!("{err:?}").contains("exceeding the maximum"),
+                "16 outputs must not hit the output cap: {err:?}"
+            );
+        }
+    }
+
     #[test]
     fn test_effective_cluster_wealth_uses_global_ledger_wealth() {
         use crate::{

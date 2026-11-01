@@ -80,7 +80,8 @@
     },
     {
       "path": "transaction/types/src/constants.rs",
-      "sha256": "0c70f1abdacca7ce5f48433bc9ec8b081b5b84e46a9af5897f7b244c5f85fe34",
+      "sha256": "15c554d7590aa3073eccd9478927bb1e0923630bb7482c49c3392e031c128069",
+      "reviewed_change": "#1772 Part A: doc comment on MAX_OUTPUTS only (enforcement status: relay/mempool policy, consensus decision pending #1684). MAX_INPUTS/MAX_OUTPUTS/RING_SIZE values unchanged. Current provenance only; historical measurements not rerun.",
       "symbols": [
         "pub const MAX_INPUTS:",
         "pub const MAX_OUTPUTS:",
@@ -89,8 +90,8 @@
     },
     {
       "path": "transaction/clsag/src/lib.rs",
-      "sha256": "e5463425c6c5451e4087ccee079a602e91a1bca40e665323cdb2dc7d9524cc35",
-      "reviewed_change": "40e39a7d7741d094660d658c31ea9d5cd254d4ed: exports inactive lottery_v2 module; existing CT and legacy codec functions unchanged. #1638/#1649: complete-output signing hash; Transaction::hash/signing_hash transcript now commits every output field (e_memo, cluster_tags incl. decay state, kem_ciphertext) under new domain separators. apply_memo_keystream, decrypt_memo and assemble_hybrid unchanged.",
+      "sha256": "761111672e9b7fac3117ce62b7039ab3d5b10370587c7d97efcecd8e7b44d8a9",
+      "reviewed_change": "40e39a7d7741d094660d658c31ea9d5cd254d4ed: exports inactive lottery_v2 module; existing CT and legacy codec functions unchanged. #1638/#1649: complete-output signing hash; Transaction::hash/signing_hash transcript now commits every output field (e_memo, cluster_tags incl. decay state, kem_ciphertext) under new domain separators. apply_memo_keystream, decrypt_memo and assemble_hybrid unchanged. #1772 Part A: TransactionStructureError::TooManyOutputs and an outputs.len() > MAX_OUTPUTS check in is_valid_structure (mempool admission only, not block validation) plus unit tests; apply_memo_keystream, decrypt_memo and assemble_hybrid unchanged.",
       "symbols": [
         "fn apply_memo_keystream(",
         "pub fn decrypt_memo(",
