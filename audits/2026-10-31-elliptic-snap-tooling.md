@@ -146,7 +146,19 @@ the Snap tests (`--require-bundle snap`). It fails if any of these happens:
 4. a built Snap bundle contains elliptic's ECDSA fingerprint strings. Before
    this check, the script confirms the fingerprints are still present in every
    installed elliptic, so the check cannot pass silently after an elliptic
-   change.
+   change. CI builds only `@botho/snap`, so in CI the `snap-spike` bundle check
+   is skipped (the script logs this) and only its config check (3) runs. That
+   is acceptable for a spike that does not ship. "Every built Snap bundle"
+   means every bundle present when the script runs.
+
+Checks 1 and 2 fail closed. `pnpm why --json` changed shape between pnpm 9
+(entries per importer) and pnpm 10+ (a reverse `dependents` tree).
+`web/scripts/elliptic-why.mjs` parses both and throws on anything else. If
+elliptic is installed but the parsed dev graph does not show `@botho/snap`,
+the script treats the output as unrecognized and fails, so a pnpm upgrade
+cannot quietly disable these checks. The parser has fixture tests for both
+shapes and for malformed output (`node --test scripts/elliptic-why.test.mjs`,
+also run in CI).
 
 If elliptic leaves the lock graph, the script says so and passes. That is the
 signal to re-run `pnpm audit` and close #1562.
@@ -164,9 +176,10 @@ signal to re-run `pnpm audit` and close #1562.
 
 ## Other advisories observed (not part of #1562)
 
-On the same date, the full `pnpm audit` reports 9 findings (2 low, 7
-moderate). Besides elliptic there are `deepmerge` 4.3.1 (GHSA-gcqx-w48m-w2h4,
-no patch), `minimatch < 11.0.1` (GHSA-g3hv-75wg-m249) and `glob 9–14.0.1`
-(GHSA-3g3m-2fjr-6pw4). All of them are published after #1560 and are
-dev-tooling only. `pnpm audit --prod` reports none. They are tracked
-in #1745.
+After #1766 (the #1745 fix) merged, the full `pnpm audit` (pnpm 9.15.9)
+reports 3 findings (2 low, 1 moderate): elliptic (this report), `deepmerge`
+4.3.1 (GHSA-gcqx-w48m-w2h4, low, no patch) and `minimatch` 3.1.5 (moderate,
+no 3.x fix). `pnpm audit --prod` reports none. glob and the other vulnerable
+minimatch lines are fixed with scoped overrides. The deepmerge and minimatch
+3.x exposure is analysed in
+[2026-10-31-dev-advisories-glob-minimatch-deepmerge.md](2026-10-31-dev-advisories-glob-minimatch-deepmerge.md).

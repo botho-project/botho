@@ -163,7 +163,9 @@ jobs:
       # was just built contains no elliptic code. Evidence is in
       # audits/2026-10-31-elliptic-snap-tooling.md.
       - name: Check elliptic containment (#1562)
-        run: node scripts/check-elliptic-containment.mjs --require-bundle snap
+        run: |
+          node --test scripts/elliptic-why.test.mjs
+          node scripts/check-elliptic-containment.mjs --require-bundle snap
       # -------------------------------------------------------------------------
 
       # Validate the worker still bundles/deploys without actually shipping it.
