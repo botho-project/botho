@@ -28,6 +28,8 @@ pub mod bridge_import_sweep;
 #[cfg(any(feature = "cli", test))]
 pub mod constrained_analysis;
 #[cfg(any(feature = "cli", test))]
+pub mod decoy_flood_sweep;
+#[cfg(any(feature = "cli", test))]
 pub mod decoy_quantile_sweep;
 #[cfg(any(feature = "cli", test))]
 pub mod downgrade_overcharge_sweep;
