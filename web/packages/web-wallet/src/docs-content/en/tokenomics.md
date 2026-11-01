@@ -134,6 +134,8 @@ At sustained full load (5-second blocks; slower when the network is idle):
 - **Deflationary pressure** - The 20% burn offsets tail emission
 - **Predictable** - Net inflation = gross emission − burns
 
+> **Simulation status (#1696):** at production parameters the lottery draw is uniform over recently created outputs, so payouts track output creation, which is mostly mining. In that run the full mechanism's own Gini reduction is about zero against its 0.05 design criterion. A decision on a stronger redistribution source or a restated criterion is open (#1727).
+
 ### Why Progressive Cluster Fees?
 
 - **Reduce concentration** — Wealthy clusters pay more

@@ -402,6 +402,24 @@ fee-only configuration (no emission routing, no demurrage) yields
 $+0.02$/5yr: transaction fees are a consumption tax and cannot by
 themselves touch idle wealth at realistic velocities.
 
+\textbf{Status at production parameters (2026-10-31).} The experiment above
+uses a cluster-tilted draw, a flat per-transaction fee and one cluster per
+participant, and it does not model mining. A production-parameter re-run
+(issue \#1696, \texttt{cluster-tax-sim m2-production}) does not reproduce its
+margin. That re-run uses the node's fee floor, 5\,s blocks, the mainnet
+emission and lottery-share ramp, the uniform V2 draw with payouts as new
+outputs, coinbase-lineage clusters and an optimal-decoy mining whale. It
+compares each run against the same seed with the mechanism switched off. The
+mechanism's own $\Delta G$ is between $-0.009$ and $+0.020$ (three-seed means
+at 10 and 20 years), and 100\% of top-decile value is priced below
+$1.5\times$. Two causes dominate. The uniform draw pays in proportion to
+output creation, which is mostly block production. And coinbase-lineage
+clusters keep mined wealth near factor $1$. The record is in
+\texttt{docs/research/m2-production-verdicts.md}. Whether to add a
+redistribution source or restate the criterion is open in issue \#1727. The
+claims in this subsection should be read with that caveat until it is
+resolved.
+
 \subsubsection{Formal Nash Equilibrium Analysis}
 
 We prove that honest participation constitutes a Nash equilibrium under

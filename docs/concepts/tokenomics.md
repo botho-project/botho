@@ -188,7 +188,7 @@ This means a wash trader executing 100 rapid self-transfers gets 0% decay (all o
 
 ![Gini Reduction](../../cluster-tax/docs/figures/gini_reduction_comparison.png)
 
-The deployed log-domain cluster-factor curve was calibrated against agent-based simulation sweeps (see `experiments/ANALYSIS.md` and [Cluster-Tilted Redistribution](../design/cluster-tilted-redistribution.md)); the full mechanism (progressive fees + tilted lottery + emission routing + demurrage) passes its Gini-reduction criterion with a 4–11x margin.
+The deployed log-domain cluster-factor curve was calibrated against agent-based simulation sweeps (see `experiments/ANALYSIS.md` and [Cluster-Tilted Redistribution](../design/cluster-tilted-redistribution.md)); the full mechanism (progressive fees + tilted lottery + emission routing + demurrage) passed its Gini-reduction criterion with a 4–11x margin in that harness. **That result does not hold at production parameters:** with the node's real fee floor, block rate, emission ramp, uniform lottery and coinbase-lineage clusters, the mechanism's own Gini reduction is about zero against the 0.05 criterion (#1727, [M2 at production parameters](../research/m2-production-verdicts.md)). The decision on a new redistribution source or a restated criterion is open in #1727.
 
 #### Why It's Sybil-Resistant
 

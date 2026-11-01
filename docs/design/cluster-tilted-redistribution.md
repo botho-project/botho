@@ -119,6 +119,24 @@ share of a cluster's coins raises that cluster's wealth and hence its factor.
 
 ## Cluster Wealth Is Cumulative Lifetime Volume (Design Decision)
 
+> **Premise broken at production parameters (2026-10-31, #1696).** The
+> ΔGini results below come from the legacy M2 harness: 4,320 blocks/day, a
+> flat 0.25 BTH fee, a cluster-weighted draw, one cluster per agent, and no
+> mining. Two re-runs undo them. Under the node's real fee floor, M2 already
+> fails (ΔGini +0.029, #1727). At production parameters (`m2-production`:
+> 6.3M blocks/yr, mainnet emission and lottery-share ramp, the uniform V2
+> draw with payouts as new outputs, coinbase-lineage clusters, and an
+> optimal-decoy mining whale), the mechanism's own ΔGini against a
+> mechanism-off counterfactual is between −0.009 and +0.020 (3-seed means,
+> 10 and 20 years), and 100% of top-decile value prices below 1.5x. The
+> uniform lottery pays in proportion to hashpower, and coinbase-lineage
+> clusters keep mined wealth at about 1x. See
+> [`m2-production-verdicts.md`](../research/m2-production-verdicts.md).
+> Whether to add a redistribution source or restate the criterion is open
+> in **#1727**. The ratified *semantic* (W is cumulative and monotone) is
+> unchanged; what no longer holds is the redistribution margin it was
+> ratified on.
+
 **Status: RATIFIED 2026-07-05 (option 2, accept-and-document).** Cycle-6 audit
 item **M2** (#605) asked whether `cluster_wealth_db` — which is
 *monotonically non-decreasing*, since `update_cluster_wealth_for_output`

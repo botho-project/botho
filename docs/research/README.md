@@ -18,6 +18,7 @@ This section contains research analysis, comparisons, and technical evaluations.
 | [Demurrage Background-Reset Leak — Verdict](demurrage-background-reset-leak.md) | #834 verdict: the young-coin spend-to-background reset is a real, unpriced class transition (zero-cost demurrage escape); informs the #925 downgrade charge. |
 | [Downgrade-Charge Honest-Overcharge Surface](demurrage-downgrade-overcharge.md) | #950 simulation of how much honest users overpay under the #925 downgrade charge across the settlement horizon; calibration artifact for the #925 ratification, not shipped in the node. |
 | [Economic Sims Under the Consensus Fee Model](consensus-fee-model-sim-verdicts.md) | #1695: every economic sim now prices fees with the shared `cluster_tax::consensus_fee_model` (golden-pinned to `Ledger::consensus_fee_floor`); wash/structuring/whale/M2/lottery re-run and restated as SURVIVES/FAILS. M2's Δgini PASS flips to FAIL at the real fee floor (#1727). |
+| [M2 at Production Parameters](m2-production-verdicts.md) | #1696: M2 re-run on the node's real parameters (6.3M blocks/yr, mainnet emission and lottery-share ramp, uniform V2 lottery with payouts as outputs, coinbase-lineage clusters, optimal-decoy mining whale) with a mechanism-off counterfactual. The mechanism's ΔGini is ≈ 0 against the 0.05 bar, and 100% of top-decile value prices below 1.5x: the #605 premise is broken (decision in #1727). |
 
 ## Purpose
 

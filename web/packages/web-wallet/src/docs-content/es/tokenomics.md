@@ -134,6 +134,8 @@ A plena carga sostenida (bloques de 5 segundos; más lentos cuando la red está 
 - **Presión deflacionaria**: la quema del 20 % compensa la emisión de cola
 - **Predecible**: inflación neta = emisión bruta − quemas
 
+> **Estado de la simulación (#1696):** con los parámetros de producción, el sorteo de la lotería es uniforme sobre las salidas creadas recientemente, así que los premios siguen a la creación de salidas, que es sobre todo minería. En esa ejecución, la reducción del índice de Gini atribuible al mecanismo completo es prácticamente nula frente a su criterio de diseño de 0,05. Queda abierta la decisión sobre una fuente de redistribución más fuerte o un criterio reformulado (#1727).
+
 ### ¿Por qué comisiones progresivas por clúster?
 
 - **Reducir la concentración**: los clústeres ricos pagan más

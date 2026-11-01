@@ -53,12 +53,6 @@
 //!   differs by O(4/rho)). Per-block reward, emission share, pool and cap are
 //!   computed block by block. `step_blocks = 1` is the exact per-block mode
 //!   used to validate the aggregation.
-//! - **Coinbase clusters under aggregation.** The `m` blocks a miner mines in
-//!   one step share one synthetic cluster whose initial W is one block's payout
-//!   (exact at `step_blocks = 1`). Later increments land on that one cluster,
-//!   so its W grows up to `m` times faster than each real coinbase cluster's
-//!   would, and its merged weight is pruned less often. Both errs toward a
-//!   *higher* factor, i.e. in the mechanism's favour.
 //! - **Wallets.** Each agent consolidates all of its coins whenever it spends
 //!   (one payment output + one change output per transaction, chunked at 10M
 //!   BTH per transaction because ledger amounts are `u64`). The demurrage clock
@@ -72,10 +66,10 @@
 //!   agents' consolidated positions (one UTXO each). A real chain offers far
 //!   more background outputs, so the dilution here is a lower bound.
 //! - **Tag-mass bookkeeping.** A position's coins are tracked as the union of
-//!   their tag mass. When the union exceeds 4,096 clusters, mass below 1e-6 of
-//!   the position is dropped. That mass is too small to reach any merged output
-//!   tag, but it could raise the ring-centroid floor slightly, so dropping it
-//!   errs toward a lower floor.
+//!   their tag mass. When the union exceeds 4,096 clusters (and again each time
+//!   it doubles), mass below 1e-6 of the position is dropped. That mass is too
+//!   small to reach any merged output tag, but it could raise the ring-centroid
+//!   floor slightly, so dropping it errs toward a lower floor.
 //! - **Consolidation charge.** Because the wallet consolidates, the merged
 //!   output tags are often pruned or truncated well below the inputs'
 //!   value-weighted centroid. The node prices that gap as a #925 downgrade. A
@@ -89,9 +83,14 @@
 //!   holdings in one cluster with W = holdings (the legacy M2 assumption; the
 //!   real chain has no pre-mine). This maximises the whales' factors, again in
 //!   the mechanism's favour.
-//! - **Payments.** The recipient of each payment is drawn in proportion to
-//!   wealth, which is Gini-neutral in expectation, so payments by themselves do
-//!   not equalise.
+//! - **Payments.** Cohorts transact at 52 (small), 24 (middle), 365 (merchant)
+//!   and 12 (whales) transactions a year, each paying `velocity / tx_per_year`
+//!   of the position. The recipient is drawn in proportion to its spending flow
+//!   (velocity x value), so each agent's expected inflow equals its expected
+//!   outflow: payments by themselves neither concentrate nor equalise wealth.
+//!   (Drawing in proportion to wealth alone would drain high-velocity agents
+//!   into low-velocity whales.) Payments are lumpy, though, so they add noise
+//!   to the Gini path.
 //! - **No lottery farming.** No agent splits outputs to farm tickets; that
 //!   attack is #1682.
 
@@ -279,20 +278,30 @@ struct Agent {
     oldest: u64,
     /// Coins (UTXOs) currently in the position.
     coins: u32,
+    /// Union size that triggers the next tiny-mass prune.
+    prune_at: usize,
     lottery_won: u128,
     demurrage_paid: u128,
+}
+
+/// The tags of a group of identical-tag outputs, or of `count` coinbase
+/// outputs whose fresh clusters are `first..first + count`.
+#[derive(Clone)]
+enum OutTags {
+    Shared(Tags),
+    Coinbase { first: u32 },
 }
 
 struct WinEntry {
     owner: u32,
     count: u64,
-    tags: Tags,
+    tags: OutTags,
 }
 
 struct OwnerEntry {
     step: u64,
     count: u64,
-    tags: Tags,
+    tags: OutTags,
 }
 
 struct World {
@@ -485,6 +494,7 @@ impl World {
                     mass,
                     oldest: p.start_height,
                     coins: 1,
+                    prune_at: MASS_PRUNE_TRIGGER,
                     lottery_won: 0,
                     demurrage_paid: 0,
                 }
@@ -522,7 +532,7 @@ impl World {
         // Genesis endowments are outputs created at the start height.
         world.buckets.push_back(Vec::new());
         for i in 0..na {
-            let tags: Tags = Rc::new(vec![(i as u32, 1.0)]);
+            let tags = OutTags::Shared(Rc::new(vec![(i as u32, 1.0)]));
             world.buckets[0].push(WinEntry {
                 owner: i as u32,
                 count: 1,
@@ -648,9 +658,11 @@ impl World {
         // node each input coin keeps its own tags. Only mass below
         // `MASS_PRUNE_FRACTION` of the position is dropped, and only when the
         // union is large.
-        if ag.mass.len() > MASS_PRUNE_TRIGGER {
+        if ag.mass.len() > ag.prune_at {
             let v = ag.value as f64;
             ag.mass.retain(|_, m| *m / v >= MASS_PRUNE_FRACTION);
+            // Amortise: next prune only after the union doubles again.
+            ag.prune_at = (2 * ag.mass.len()).max(MASS_PRUNE_TRIGGER);
         }
     }
 
@@ -660,7 +672,7 @@ impl World {
         }
     }
 
-    fn add_output(&mut self, step: u64, owner: usize, count: u64, per_output: u128, tags: Tags) {
+    fn add_output(&mut self, step: u64, owner: usize, count: u64, per_output: u128, tags: OutTags) {
         self.outputs_created += count;
         if count == 0 || per_output < self.draw.min_utxo_value as u128 {
             return;
@@ -727,12 +739,14 @@ impl World {
             if m == 0 {
                 continue;
             }
-            let c = self.w.len() as u32;
-            // Coinbase output: a fresh cluster, W = the output amount.
-            self.w.push(miner_payout as f64);
-            let tags: Tags = Rc::new(vec![(c, 1.0)]);
-            self.receive(i, miner_payout * m as u128, &tags, h0);
-            self.add_output(step, i, m, miner_payout, tags);
+            // Each coinbase output starts its own fresh cluster with W = the
+            // output amount (block.rs `to_tx_output`, writer.rs).
+            let first = self.w.len() as u32;
+            for k in 0..m as u32 {
+                self.w.push(miner_payout as f64);
+                self.receive(i, miner_payout, &[(first + k, 1.0)], h0);
+            }
+            self.add_output(step, i, m, miner_payout, OutTags::Coinbase { first });
         }
     }
 
@@ -856,6 +870,7 @@ impl World {
         ag.value = 0;
         ag.mass.clear();
         ag.coins = 0;
+        ag.prune_at = MASS_PRUNE_TRIGGER;
         ag.demurrage_paid += dem;
         self.demurrage += dem;
         self.transactions += n_tx;
@@ -866,8 +881,8 @@ impl World {
         self.agents[a].oldest = height;
         self.receive(r, pay, &tags, height);
         let per = (net / (2 * n_tx as u128)).max(1);
-        self.add_output(step, a, n_tx, per, tags.clone());
-        self.add_output(step, r, n_tx, per, tags);
+        self.add_output(step, a, n_tx, per, OutTags::Shared(tags.clone()));
+        self.add_output(step, r, n_tx, per, OutTags::Shared(tags));
         fee
     }
 
@@ -932,12 +947,27 @@ impl World {
                 }
             }
             for (i, n) in picks {
-                let tags = self.owner_entries[o][i].tags.clone();
-                let value = per_slot * n as u128;
-                self.credit_w(&tags, value);
-                self.receive(o, value, &tags, h0);
-                self.agents[o].lottery_won += value;
-                self.add_output(step, o, n, per_slot, tags);
+                let entry_count = self.owner_entries[o][i].count;
+                match self.owner_entries[o][i].tags.clone() {
+                    OutTags::Shared(tags) => {
+                        let value = per_slot * n as u128;
+                        self.credit_w(&tags, value);
+                        self.receive(o, value, &tags, h0);
+                        self.agents[o].lottery_won += value;
+                        self.add_output(step, o, n, per_slot, OutTags::Shared(tags));
+                    }
+                    OutTags::Coinbase { first } => {
+                        // Each win copies the tags of one coinbase output.
+                        for _ in 0..n {
+                            let c = first + self.rng_lot.random_range(0..entry_count) as u32;
+                            let tags: Tags = Rc::new(vec![(c, 1.0)]);
+                            self.credit_w(&tags, per_slot);
+                            self.receive(o, per_slot, &tags, h0);
+                            self.agents[o].lottery_won += per_slot;
+                            self.add_output(step, o, 1, per_slot, OutTags::Shared(tags));
+                        }
+                    }
+                }
             }
         }
     }
