@@ -191,7 +191,7 @@ and issue status against the freeze, especially after CT/economic changes;
 | Item | Disposition |
 |---|---|
 | H4 lottery candidate-cap grindability | **Accepted** as economically inert (#715), with the premise **corrected and fixed in #1676**: the original argument wrongly assumed re-rolling `hash(N−1)` costs PoW (timestamp and V2 coinbase-output re-rolls were free); 7.0.0 seeds the draw and #573 window from the parent's RandomX output (`consensus::lottery_seed_v2`). In scope to *challenge the corrected acceptance* (residual: selective release of the attacker's own PoW solutions, capped at ≤ 1 block reward per block), not to rediscover. |
-| M2 cluster wealth = cumulative volume, not holdings | **Ratified design decision** (#605/#630, 4–11× dGini margin without decay). |
+| M2 cluster wealth = cumulative volume, not holdings | **Ratified design decision** (#605/#630, 4–11× dGini margin without decay in the legacy harness; the margin does not hold at production parameters, see #1727 and `docs/research/m2-production-verdicts.md`). |
 | Cycle-6 M3–M6, L1, L3 | Historical report entries; reconcile each closure/residual at freeze rather than treating this row as a current open count. |
 | Lottery payout privacy (winners visible on-chain) | Known testnet watch item; phase-2 (Pedersen payout blinding) not yet scheduled. |
 | "Everyone parks" demurrage drift | Historical watch item; reassess against the current circulation window and reward-cap mechanism, rather than carrying forward an old implementation claim. |

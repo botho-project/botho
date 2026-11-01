@@ -146,7 +146,7 @@ We validated the progressive fee system through extensive simulation:
 | Sigmoid | -0.2393 | 12.5% |
 | 3-Segment | -0.2399 | 12.4% |
 
-These early sweeps compared curve *shapes*; all performed within a fraction of a percent of each other. The **deployed** curve is the log-domain sigmoid (`ClusterFactorCurve`, midpoint 100K BTH), chosen in the M2 calibration for its smoothness across orders of magnitude and consensus-deterministic integer implementation; the full mechanism (fees + tilted lottery + emission routing + demurrage) passes its Gini-reduction criterion with a 4–11x margin (see `experiments/ANALYSIS.md`).
+These early sweeps compared curve *shapes*; all performed within a fraction of a percent of each other. The **deployed** curve is the log-domain sigmoid (`ClusterFactorCurve`, midpoint 100K BTH), chosen in the M2 calibration for its smoothness across orders of magnitude and consensus-deterministic integer implementation; the full mechanism (fees + tilted lottery + emission routing + demurrage) passed its Gini-reduction criterion with a 4–11x margin in the legacy harness (see `experiments/ANALYSIS.md`). At production parameters that margin is gone (#1727, `docs/research/m2-production-verdicts.md`).
 
 > **Note on "Burn Rate"**: the column above measures *fee intake* (fees collected as a fraction of value moved) in the original simulation, not the share of fees destroyed. In the shipped protocol, fees are **not** all burned — see **Where Fees Go** below.
 

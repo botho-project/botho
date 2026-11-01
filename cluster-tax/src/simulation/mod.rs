@@ -45,6 +45,8 @@ pub mod lottery_selection_sweep;
 pub mod lottery_sybil_brake_sweep;
 #[cfg(any(feature = "cli", test))]
 pub mod m2;
+#[cfg(any(feature = "cli", test))]
+pub mod m2_production;
 mod metrics;
 #[cfg(any(feature = "cli", test))]
 pub mod privacy;

@@ -109,6 +109,28 @@ pub const MAINNET_BLOCKS_PER_YEAR: u64 = 6_307_200;
 /// zero during epoch 0 (`height < halving_interval`).
 pub const MAINNET_HALVING_INTERVAL: u64 = MAINNET_BLOCKS_PER_YEAR;
 
+/// Mirror of the node's `botho::monetary::mainnet_policy()` (#1696), for sims
+/// that need the real emission schedule (50 BTH initial reward, 1-year
+/// halvings at 5 s, 5 halvings, 2% tail) and the lottery-emission ramp
+/// ([`MonetaryPolicy::lottery_emission_bps`]: 0 in epoch 0, then +10% per
+/// epoch, capped at 50%). `cluster-tax` cannot depend on `botho`, so a
+/// drift-guard test in `botho` (`mainnet_policy_matches_cluster_tax_mirror`
+/// in `botho/src/monetary.rs`) asserts field-by-field equality.
+pub fn mainnet_monetary_policy() -> MonetaryPolicy {
+    MonetaryPolicy {
+        initial_reward: 50_000_000_000_000,
+        halving_interval: MAINNET_BLOCKS_PER_YEAR,
+        halving_count: 5,
+        tail_inflation_bps: 200,
+        target_block_time_secs: 5,
+        min_block_time_secs: 3,
+        max_block_time_secs: 60,
+        difficulty_adjustment_interval: MAINNET_BLOCKS_PER_YEAR / 365,
+        max_difficulty_adjustment_bps: 2500,
+        expected_fee_burn_rate_bps: 50,
+    }
+}
+
 /// Size-estimate constants, mirroring `BothoTransaction::estimate_size`
 /// (`transaction/clsag/src/lib.rs`). Drift-guarded by the `botho` golden test.
 const TX_HEADER_SIZE: usize = 50;
