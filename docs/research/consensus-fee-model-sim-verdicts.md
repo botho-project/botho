@@ -56,7 +56,7 @@ The default height is the first epoch-1 block (6,307,200), so the node's demurra
 
 ### 1. `wash-trading`: **SURVIVES** (epoch ≥ 1). Bootstrap epoch: **FAILS**, tracked as #1685
 
-Setup: 100M-BTH cluster, whole cluster washed, 5% decay per hop.
+Setup: 100M-BTH cluster, 5% decay per hop, `--principal` defaulting to the whole cluster. A ledger amount is a `u64` of picocredits, so the principal saturates at `u64::MAX` pico (about 18.45M BTH, the largest single transaction the node can carry); the cost percentages below are relative to that saturated principal. (Judge note on review of #1728.) The break-even horizon is a ratio and does not depend on the principal.
 
 | Hops | Legacy break-even | Consensus: total cost | Consensus: per-tx savings | Consensus: break-even (years of demurrage saved) |
 |---|---|---|---|---|
