@@ -84,7 +84,7 @@ Botho implementa un novedoso **sistema de comisiones progresivas** que grava la 
 |-----------|-------|
 | Rango del factor de clúster | multiplicador de 1x a 6x |
 | Forma de la curva | Sigmoide en log(riqueza del clúster), punto medio 3.5x en 100K BTH |
-| Decaimiento de etiquetas | 5 % por salto elegible |
+| Decaimiento de etiquetas | 5 % por transferencia (política del monedero; el consenso no aplica ninguno) |
 
 **Por qué es resistente a Sybil:** Dividir monedas no cambia su origen. Las monedas de una ballena llevan la misma etiqueta de clúster tanto si se guardan en 1 UTXO como en 1000.
 
