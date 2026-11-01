@@ -59,6 +59,10 @@ jobs:
         working-directory: fuzz
         run: cargo +nightly-2026-06-09 fmt -- --check
 
+      - name: Check formal-drt crate formatting
+        working-directory: formal-drt
+        run: cargo +nightly-2026-06-09 fmt -- --check
+
       - name: Check util/serial crate formatting
         working-directory: util/serial
         run: cargo +nightly-2026-06-09 fmt -- --check

@@ -2,8 +2,12 @@
 
 This directory holds Lean 4 models of selected Botho mechanisms, proofs about
 those models, and the gates that keep the proofs honest. It is the scaffold for
-epic #1704, set up by #1705. It currently contains one toy model
-(`Botho/Basic.lean`) that mirrors no Rust code.
+epic #1704, set up by #1705. It contains a toy model (`Botho/Basic.lean`)
+that mirrors no Rust code, and the LotteryV2 model (`Botho/Lottery/`, #1707),
+which mirrors the node's lottery draw, reward cap and pool accounting and is
+differentially tested against the Rust code (see
+[The lottery model](#the-lottery-model) and
+[Differential random testing](#differential-random-testing-drt)).
 
 The approach follows Cedar's verification-guided development: write a small
 executable Lean model of a Rust component, prove properties about the model,
@@ -22,7 +26,8 @@ model agree.
 3. **DRT.** Compile the model to an executable and run it against the Rust
    implementation on random and boundary inputs, comparing outputs. A proof
    only says something about Rust if DRT shows the model and the code agree.
-   The DRT harness lands with the first real model (a child issue of #1704).
+   The harness is `formal-drt/` (#1706, #1707); see
+   [Differential random testing](#differential-random-testing-drt).
 4. **Mirror.** Add the mirrored Rust files to the `pattern` in
    `.github/workflows/formal.yml` so that edits to them re-run the Lean job.
 
@@ -84,6 +89,179 @@ The toolchain is pinned to an exact stable release in `lean-toolchain`. Bump it
 deliberately in its own PR. Never use `stable` or `nightly`. The project has no
 dependencies (no Mathlib). Whether to add Mathlib is decided in #1708, because
 it adds substantial CI time.
+
+## The lottery model
+
+`Botho/Lottery/` (#1707, the pilot of epic #1704) models what the node
+computes for each block's LotteryV2 draw. Each definition's docstring names
+the Rust function and file it mirrors:
+
+| Lean (`Botho.Lottery.*`) | Rust | Status |
+|--------------------------|------|--------|
+| `lotterySeedV2` | `lottery_seed_v2`, `botho/src/consensus/lottery.rs:81` | tested |
+| `Candidate.isEligible` | `LotteryCandidate::is_eligible`, `cluster-tax/src/lottery.rs:187` | tested |
+| `Candidate.weight` | `LotteryCandidate::weight`, `cluster-tax/src/lottery.rs:203` | tested (through the draw) |
+| `countEligible` | `count_eligible`, `cluster-tax/src/lottery.rs:248` | tested |
+| `sybilRewardCap` | `sybil_reward_cap`, `cluster-tax/src/lottery.rs:272` | tested |
+| `drawWinnersWithSeed`, `drawEligible`, `verifiableRandomU128` | `draw_winners_with_seed`, `draw_eligible`, `verifiable_random_u128`, `cluster-tax/src/lottery.rs:341,361,498` | tested |
+| `splitFees` | `LotteryFeeConfig::split_fees`, `botho/src/consensus/lottery.rs:167` | tested |
+| `Accounting.carryoverAfter` | `LotteryPoolAccounting::carryover_after`, `botho/src/consensus/lottery.rs:283` | tested |
+| `rewardCap` | `reward_cap`, `botho/src/consensus/lottery.rs:306` | tested |
+| `computePoolAccounting` | `compute_pool_accounting`, `botho/src/consensus/lottery.rs:326` | tested |
+| `drawLotteryWinnersSeeded` | `draw_lottery_winners_seeded` and `finish_draw`, `botho/src/consensus/lottery.rs:391,410` | tested |
+| `offsetKey`, `lotteryCandidates` | `Ledger::lottery_candidate_offset_key`, `botho/src/ledger/store.rs:2811`; the candidate read `lottery_candidates`, `botho/src/ledger/store/validation.rs:733` (reached through `DerivationReads::lottery_candidates`, `botho/src/ledger/lottery_v2.rs:168`) | tested |
+| `headerHash` | `BlockHeader::hash`, `botho/src/block.rs` | tested (through `drawing`) |
+| `seed`, `drawing` | `lottery_v2::seed`, `lottery_v2::drawing`, `botho/src/ledger/lottery_v2.rs:220,238` | tested |
+
+Line numbers are those of main at `651d0c45`.
+
+How the model is written:
+
+- **Integers.** The model computes on `Nat` and states each Rust width.
+  `Botho/Lottery/Arith.lean` defines one helper per Rust primitive
+  (`satSub`, `satAdd`, `satMul`, `checkedAdd`, `truncU64`, `leBytes`,
+  `ofLeBytes`), and a plain `+` or `*` is used only where the Rust operation
+  cannot overflow, with the reason next to it.
+- **Recursion.** Lists are walked by structural recursion, mirroring the Rust
+  loops: the cumulative winner walk (`selectAt`), the roll loop
+  (`pickWinners`), the capped candidate scan (`scan`).
+- **Hashes are parameters, not axioms.** Every hashing function takes a
+  `Prims` argument holding `sha256` and RandomX's `powHash`. A theorem about
+  the model therefore holds for every hash function, and no axiom is added
+  (`axioms-allowlist.txt` is unchanged). A theorem that needs a property of
+  the hash takes it as a hypothesis and is labeled **trusted**. The DRT
+  executable instantiates `sha256` with a SHA-256 written in Lean
+  (`formal-drt/lean/Drt/Sha256.lean`, checked against the FIPS 180-4 vectors
+  at start-up) and takes the RandomX output of the parent header from the Rust
+  side as data.
+- **Inputs, not models.** The per-UTXO cluster factor (the fee curve, #1711),
+  the emission share (`MintingTx::lottery_emission_share`, #1710) and
+  RandomX are inputs.
+- **Out of scope.** `SelectionMode::EntropyWeighted` (research-only, reads a
+  floating-point entropy), the `f64` to basis-point conversion of
+  `SelectionMode::Hybrid` (the model takes `alpha_bps`; DRT checks the round
+  trip for every value it generates), and the strict read policy's failures
+  in the candidate read (the model assumes every row decodes).
+- **Preconditions.** `winners_per_draw > 0` (Rust divides by it; consensus
+  fixes it at 4), and the candidate read's rows sorted strictly by key (as
+  LMDB iterates them).
+
+The theorems about this model are #1708.
+
+## Differential random testing (DRT)
+
+`formal-drt/` (#1706, #1707) checks that the Lean model and the Rust code
+compute the same function. It has two parts:
+
+- `formal-drt/lean/`: a Lake package with the executable `botho-model`. It
+  `require`s the model by path (`../../formal`), reads JSON-lines requests on
+  stdin (`{"fn": ..., "args": {...}}`) and writes one JSON-lines response per
+  request (`{"ok": ...}` or `{"err": ...}`). Integers are decimal strings and
+  byte strings are hex. The codec and dispatch are in `Drt/Codec.lean`.
+- `formal-drt/` (Rust): the dev-only crate `botho-formal-drt`. It holds one
+  long-lived `botho-model` process, generates inputs with `proptest`
+  (biased to 0, 1, `u64::MAX`, the eligibility and cap boundaries, empty and
+  single candidate sets, and `MAX_LOTTERY_CANDIDATES` ± 1), sends them in
+  batches, runs the Rust function on each, and compares the two JSON values.
+  A Rust panic counts as a mismatch. A mismatch is shrunk and appended to
+  `formal-drt/regressions/<leg>.jsonl`, and every run replays those files
+  first.
+
+**Why it lives outside `formal/`.** The gates (above) accept exactly one
+shape of the gated package: no `.lean` file under `formal/` besides
+`Botho.lean`, `Botho/**` and `Theorems.lean`; no `[[lean_exe]]` or
+`[[require]]` in `formal/lakefile.toml`; and no `IO`, `#eval` or `extern` in
+model sources. An executable needs all three, so it is a separate package
+next to `formal/`, never scanned by the gates or built by the verify job. It
+runs the gated model sources unchanged. The Rust crate is kept beside it so
+that DRT changes do not touch the gated tree: the formal gate job does not
+re-run for them, and `selftest-gates.sh` (which copies all of `formal/` for
+each case) never copies a Cargo build.
+
+The Rust crate is its own Cargo workspace (excluded from the root one, like
+`fuzz/`): it enables botho's `test-fixtures` feature, which must never be
+unified into a node build. It uses that feature for two things: seeding a
+real LMDB ledger (the `lottery_candidates` leg runs the production reader)
+and `botho::ledger::formal_drt`, which runs the production
+`lottery_v2::drawing` over an in-memory `DerivationReads` double (the
+`drawing` leg).
+
+### Legs
+
+| Leg | Rust | Model |
+|-----|------|-------|
+| `lottery_seed_v2` | `consensus::lottery::lottery_seed_v2` | `lotterySeedV2` |
+| `is_eligible` | `LotteryCandidate::is_eligible` | `Candidate.isEligible` |
+| `count_eligible` | `count_eligible` | `countEligible` |
+| `sybil_reward_cap` | `sybil_reward_cap` | `sybilRewardCap` |
+| `split_fees` | `LotteryFeeConfig::split_fees` | `splitFees` |
+| `reward_cap` | `consensus::lottery::reward_cap` | `rewardCap` |
+| `compute_pool_accounting` | `consensus::lottery::compute_pool_accounting` | `computePoolAccounting` |
+| `carryover_after` | `LotteryPoolAccounting::carryover_after` | `Accounting.carryoverAfter` |
+| `draw_winners_with_seed` | `draw_winners_with_seed` | `drawWinnersWithSeed` |
+| `draw_lottery_winners_seeded` | `consensus::draw_lottery_winners_seeded` | `drawLotteryWinnersSeeded` |
+| `lottery_candidates` | `Ledger::get_lottery_validation_candidates` over a real LMDB ledger | `lotteryCandidates` |
+| `drawing` | `lottery_v2::drawing` over the in-memory double | `drawing` |
+
+The `drawing` double reimplements the candidate read over an in-memory
+table (it cannot use LMDB); the `lottery_candidates` leg checks the
+production reader against the same model, so the two legs together tie both
+to the model.
+
+### Running it (macOS or Linux)
+
+Prerequisites: elan (see [Building locally](#building-locally)), the pinned
+Rust toolchain, and `cmake` (RandomX). From the repository root:
+
+```bash
+(cd formal-drt/lean && lake build)          # builds the model and botho-model
+cp Cargo.lock formal-drt/Cargo.lock         # build the node's exact dependency versions
+cd formal-drt
+cargo run --release -- --cases 10000        # the per-PR tier: seed 1707, all legs
+cargo run --release -- --cases 1000000 --seed random --legs drawing,reward_cap
+cargo run --release -- --list               # leg names
+```
+
+Options: `--cases N` (per leg), `--seed S` or `random`, `--legs a,b`,
+`--batch B`, `--json PATH` (machine-readable report), `--regressions DIR`
+and `--no-write-regressions`. The report prints, per leg, the cases run, the
+fixtures replayed, the mismatches and a histogram of outcome classes (winner
+counts, error kinds, saturated or exact sums), which shows which branches the
+cases reached. On macOS the first `drawing` case builds a RandomX light cache
+for each epoch of the parent headers (a few seconds); everything else needs no
+special setup. The legs are independent, so a long run can be split across
+processes with `--legs`.
+
+CI (`.github/workflows/formal-drt.yml`) runs the per-PR tier: seed 1707,
+10,000 cases per leg, about a minute of run time. The nightly random-seed
+tier of 1M cases per leg, and the leg that feeds the same inputs to the
+`cluster-tax` simulation code (#1709), are follow-ups of #1706.
+
+### Adding a function
+
+One generator, one Lean entry point and one comparison:
+
+1. **Model.** Add the definition under `Botho/`, with a docstring naming the
+   Rust function and file, and import it from `Botho.lean`.
+2. **Lean entry point.** In `formal-drt/lean/Drt/Codec.lean`, add an arm
+   `| "my_fn" => ...` to `dispatch` that decodes the arguments, calls the
+   model and encodes the result (the decoders and encoders for the common
+   types are in the same file).
+3. **Rust leg.** In `formal-drt/src/legs.rs`, add a type implementing `Leg`:
+   `NAME` (the same `"my_fn"`), an `Input` type, `strategy()` (the generator;
+   reuse the edge-biased strategies in `src/gen.rs`), `args()` (the request
+   arguments, in the wire format of `src/wire.rs`) and `rust()` (the Rust
+   result in the same wire format). Optionally `classify()` for the
+   histogram. List it in `LEGS` in `src/main.rs`.
+4. Run `cargo run --release -- --legs my_fn --cases 100000`, then inject a
+   bug into the Rust function (an off-by-one, a wrong saturation) and check
+   that the leg catches it within the 10,000-case tier. Revert the bug.
+5. If the leg needs the Rust files it mirrors to trigger CI, add them to the
+   `paths` of `formal-drt.yml` and to the `pattern` in `formal.yml`.
+
+A mismatch is either a model bug or a Rust bug. Fix a model bug in the
+model. File a Rust bug as an issue with the shrunk fixture; do not change the
+model to match it.
 
 ## Gates
 
