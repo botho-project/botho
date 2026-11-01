@@ -1,7 +1,10 @@
 import base64
 import datetime
+from pathlib import Path
 import re
+import shutil
 import subprocess
+import tempfile
 import unittest
 
 import fleet_provision as fp
@@ -176,6 +179,113 @@ class BootstrapTests(unittest.TestCase):
             fp.bootstrap('n9', RUN, CREATED, HOST_END)
 
 
+class HardeningTests(unittest.TestCase):
+    """#1610 items 2, 5 and 8: netem prerequisites, observer sshd and the keys directory."""
+
+    WRAPPER = '/usr/local/libexec/botho-observer-' + RUN + '-b'
+
+    def test_authorized_keys_directory_is_traversable(self):
+        for role in fp.ROLES:
+            script = fp.bootstrap(role, RUN, CREATED, HOST_END)
+            self.assertIn('install -d -m 755 -o root -g root /etc/ssh/authorized_keys\n', script)
+            self.assertNotIn('-m 700 /etc/ssh/authorized_keys', script)
+
+    def test_netem_probe_on_nodes_only(self):
+        script = fp.bootstrap('n5', RUN, CREATED, HOST_END)
+        self.assertIn('netem_probe() { ' + fp.NETEM_PROBE + '; }', script)
+        # The probe is the D4 stack: prio root, netem on band 4, u32 gossip filter.
+        for token in ('prio bands 4', 'parent 1:4 handle 40: netem', 'match ip dport 17110 0xffff flowid 1:4'):
+            self.assertIn(token, fp.NETEM_PROBE)
+        self.assertIn('install -y -qq "linux-modules-extra-$(uname -r)"', script)
+        self.assertIn('iproute2 iptables', script)
+        probe = script.index('netem_probe() {')
+        self.assertLess(script.index('apt-get update'), probe)
+        self.assertLess(probe, script.index('/etc/botho-qualification/role'))
+        # The extra modules are installed only when the first probe fails, and the second is fatal.
+        block = script[probe:script.index('/etc/botho-qualification/netem-ok')]
+        self.assertRegex(block, r'if ! netem_probe; then\n(?:.*\n){2}  modprobe sch_netem\n  netem_probe\nfi\n')
+        self.assertIn("printf 'sch_netem\\nsch_prio\\ncls_u32\\n' > /etc/modules-load.d/botho-x-faults.conf", script)
+        controller = fp.bootstrap('controller', RUN, CREATED, HOST_END)
+        self.assertNotIn('netem', controller)
+
+    def test_bootstrap_hardens_observer_account(self):
+        script = fp.bootstrap('n1', RUN, CREATED, HOST_END)
+        conf = script[script.index('40-botho-qualification.conf <<'):]
+        conf = conf[:conf.index('\nEOF\n')]
+        self.assertIn('\nMatch User botho\n', conf)
+        for key, value in fp.OBSERVER_SSHD_OPTIONS:
+            self.assertIn('\n    %s %s' % (key, value), conf)
+        self.assertNotIn('ForceCommand', conf)  # The wrapper path is fixed at staging.
+        # The Match block ends the drop-in, so no global option falls inside it.
+        self.assertLess(conf.index('AuthorizedKeysFile .ssh/'), conf.index('Match User'))
+
+    def test_observer_sshd_config_forces_wrapper(self):
+        text = fp.observer_sshd_config(self.WRAPPER)
+        self.assertIn('Match User botho\n    ForceCommand %s\n' % self.WRAPPER, text)
+        for key in ('AllowTcpForwarding', 'AllowAgentForwarding', 'AllowStreamLocalForwarding',
+                    'X11Forwarding', 'PermitTTY', 'PermitTunnel'):
+            self.assertIn('    %s no\n' % key, text)
+        for wrapper in ('/usr/local/libexec/../bin/sh', '/tmp/x', 'botho-observer', '/usr/local/libexec/a b',
+                        "/usr/local/libexec/x'y", '/usr/local/libexec/a/b'):
+            with self.subTest(wrapper=wrapper), self.assertRaises(ValueError):
+                fp.observer_sshd_config(wrapper)
+        for user in ('root', 'Botho', 'a b', ''):
+            with self.subTest(user=user), self.assertRaises(ValueError):
+                fp.observer_sshd_config(self.WRAPPER, user)
+
+    def test_observer_sshd_install_script(self):
+        script = fp.observer_sshd_install(self.WRAPPER)
+        subprocess.run(['bash', '-n'], input=script.encode(), check=True)
+        self.assertIn(fp.observer_sshd_config(self.WRAPPER), script)
+        self.assertIn("test -x '%s'" % self.WRAPPER, script)
+        self.assertIn('chmod 755 /etc/ssh/authorized_keys', script)
+        # Validate before reload, and roll back on a failed validation.
+        self.assertLess(script.index('/usr/sbin/sshd -t'), script.index('systemctl reload ssh'))
+        self.assertIn("mv -f '%s.previous' '%s'" % ((fp.OBSERVER_SSHD_DROPIN,) * 2), script)
+        # Neither the temp file nor the backup matches sshd's `*.conf` include.
+        self.assertTrue(fp.OBSERVER_SSHD_DROPIN.endswith('.conf'))
+        self.assertIn('mktemp /etc/ssh/sshd_config.d/.botho-observer.XXXXXX', script)
+
+    @unittest.skipUnless(Path('/usr/sbin/sshd').exists() and shutil.which('ssh-keygen'), 'needs OpenSSH')
+    def test_sshd_accepts_rendered_blocks(self):
+        bootstrap = fp.bootstrap('n1', RUN, CREATED, HOST_END)
+        conf = bootstrap[bootstrap.index('40-botho-qualification.conf <<') :]
+        conf = conf[conf.index('\n') + 1:conf.index('\nEOF\n') + 1]
+        with tempfile.TemporaryDirectory() as tmp:
+            key = Path(tmp) / 'host'
+            subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(key)], check=True)
+            path = Path(tmp) / 'sshd_config'
+            path.write_text(conf + fp.observer_sshd_config(self.WRAPPER))
+            done = subprocess.run(['/usr/sbin/sshd', '-t', '-f', str(path), '-h', str(key)],
+                                  capture_output=True, text=True)
+            if done.returncode and str(path) not in done.stderr:
+                # Host-environment failures (e.g. no /run/sshd) are not config errors.
+                self.skipTest('sshd -t cannot run here: ' + done.stderr.strip())
+            self.assertEqual(done.returncode, 0, done.stderr)
+
+
+class KeyscanTests(unittest.TestCase):
+    IPS = ['10.0.1.11', '10.0.1.12']
+    KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOQ1fXv2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0'
+
+    def test_argv(self):
+        self.assertEqual(fp.keyscan_argv(self.IPS),
+                         ['ssh-keyscan', '-T', '10', '-t', 'ed25519', '10.0.1.11', '10.0.1.12'])
+        for ips in ([], ['8.8.8.8'], ['10.0.1.11', '10.0.1.11'], ['10.0.1'], ['10.0.1.11; id']):
+            with self.subTest(ips=ips), self.assertRaises(ValueError):
+                fp.keyscan_argv(ips)
+
+    def test_parse(self):
+        text = '# 10.0.1.11:22 SSH-2.0-OpenSSH_9.6\n10.0.1.11 %s\n10.0.1.12 %s\n' % (self.KEY, self.KEY)
+        self.assertEqual(fp.parse_keyscan(text, self.IPS), {ip: self.KEY for ip in self.IPS})
+        for bad, needle in (('10.0.1.11 %s\n' % self.KEY, 'no key scanned'),
+                            (text + '10.0.1.13 %s\n' % self.KEY, 'unexpected host'),
+                            (text + '10.0.1.11 %s\n' % self.KEY, 'more than one'),
+                            (text.replace('ssh-ed25519', 'ssh-rsa', 1), 'not one ed25519')):
+            with self.subTest(needle=needle), self.assertRaisesRegex(ValueError, needle):
+                fp.parse_keyscan(bad, self.IPS)
+
+
 class PlanTests(unittest.TestCase):
     def test_golden_plan(self):
         plan = fp.infrastructure_plan(RUN, CREATED, **PLAN_ARGS)
@@ -201,6 +311,31 @@ class PlanTests(unittest.TestCase):
                 fp.infrastructure_plan(RUN, CREATED, **dict(PLAN_ARGS, **{key: value}))
         with self.assertRaises(ValueError):
             fp.infrastructure_plan('q20261022-w12-endurance', CREATED, **PLAN_ARGS)
+
+    def test_rehearsal_lifetime(self):
+        life = 6 * 3600
+        plan = fp.infrastructure_plan(RUN, CREATED, execution_mode='rehearsal_only', lifetime=life, **PLAN_ARGS)
+        self.assertEqual(plan['host_end'], CREATED + life)
+        self.assertEqual(plan['node_end'], CREATED + life - 1800)
+        self.assertEqual(plan['prefund_end'], CREATED + life - 1800)  # Never past the nodes.
+        self.assertEqual((plan['execution_mode'], plan['host_lifetime']), ('rehearsal_only', life))
+        launch = fp.launch_request(plan, 'n1', SG)
+        script = base64.b64decode(launch['UserData']).decode()
+        self.assertIn('OnCalendar=2026-11-01 06:00:00 UTC', script)
+        self.assertEqual(fp.tags(RUN, 'n1', CREATED + life)[-1], {'Key': 'ExpiresAt', 'Value': str(CREATED + life)})
+        # A rehearsal without an override keeps 82 h, and its plan is the campaign plan.
+        self.assertEqual(fp.infrastructure_plan(RUN, CREATED, execution_mode='rehearsal_only', **PLAN_ARGS),
+                         fp.infrastructure_plan(RUN, CREATED, **PLAN_ARGS))
+        for mode, value in (('campaign', life), ('rehearsal_only', fp.MIN_REHEARSAL_LIFETIME - 1),
+                            ('rehearsal_only', 82 * 3600 + 1), ('rehearsal_only', float(life)),
+                            ('rehearsal_only', True), ('later', None)):
+            with self.subTest(mode=mode, value=value), self.assertRaises(ValueError):
+                fp.infrastructure_plan(RUN, CREATED, execution_mode=mode, lifetime=value, **PLAN_ARGS)
+        # A frozen plan cannot be edited into another lifetime, or into a campaign.
+        for tampered in (dict(plan, host_end=plan['host_end'] + 3600), dict(plan, execution_mode='campaign'),
+                         dict(plan, host_lifetime=life + 3600)):
+            with self.assertRaises(ValueError):
+                fp.launch_request(tampered, 'n1', SG)
 
     def test_launch_request_tags_at_creation(self):
         plan = fp.infrastructure_plan(RUN, CREATED, **PLAN_ARGS)
