@@ -58,7 +58,24 @@ lake build                      # type-checks every module under Botho/
 scripts/check-sorry.sh          # sorry gate
 scripts/check-axioms.sh         # axiom gate
 scripts/selftest-gates.sh       # proves both gates reject injected defects
+scripts/selftest-verify.sh      # proves the verify job rejects the bypass fixtures
 ```
+
+To run the verify job's checks on your own build, stage the `.olean` files
+the way CI uploads them and point the verifier at them:
+
+```bash
+rsync -am --include='*/' --include='*.olean' --exclude='*' \
+  .lake/build/lib/lean/ /tmp/formal-lib/
+scripts/verify-artifacts.sh --lib /tmp/formal-lib --sources .
+```
+
+`verify-artifacts.sh --sysroot DIR` and `selftest-verify.sh`'s `LEAN_SYSROOT`
+name the toolchain directory when `lean --print-prefix` does not find it.
+`verify-artifacts.sh` passes that directory to every Lean process as
+`LEAN_SYSROOT`, so `Init` always comes from it, never from a `lean` on `PATH`;
+with `--sysroot` it needs no `lean` on `PATH` at all. It also needs a
+`python3` with `tomllib` (3.11 or later).
 
 The scripts take an optional `LAKE=/path/to/lake` environment variable if the
 `lake` on your `PATH` is not the elan proxy.
@@ -70,10 +87,21 @@ it adds substantial CI time.
 
 ## Gates
 
-CI (`.github/workflows/formal.yml`) runs `lake build` and then three scripts.
-The required check is `formal-gate`. It passes when the Lean job succeeded, or
-when the Lean job was skipped because nothing under `formal/`, the workflow, or
-a mirrored Rust file changed.
+CI (`.github/workflows/formal.yml`) runs two jobs on opposite sides of a trust
+boundary (#1799; see [Limits](#limits)):
+
+- **build** (untrusted) checks out the pull request, runs the gates below
+  (which run `lake build`) and the self-tests, and uploads the compiled
+  `.olean` files as the artifact `formal-lib`. Its results are fast feedback
+  only: model code runs during the build and could fake them.
+- **verify** (trusted) runs `scripts/verify-artifacts.sh` from the **base**
+  commit over that artifact. See [The verify job](#the-verify-job).
+
+The required check is `formal-gate`. It passes when both jobs succeeded, or
+when both were skipped because nothing under `formal/`, the workflow, or a
+mirrored Rust file changed.
+
+The in-tree gates:
 
 - **Sorry gate** (`scripts/check-sorry.sh`) fails if `lake build` warns that a
   declaration uses `sorry`. It also fails if the source scan finds `sorry`,
@@ -94,6 +122,136 @@ a mirrored Rust file changed.
   comments, strings, raw strings and char literals. Since #1724 it also covers
   `sorry` hidden after a `'"'` char literal or an `r#"a"b"#` raw string, a
   `_root_.sorryAx` term, and primed theorem names in the axiom gate.
+- **Verify self-test** (`scripts/selftest-verify.sh`) runs the verify job's
+  checks against the fixtures in `scripts/fixtures/verify/`: the bypasses
+  found in the reviews of PR #1783 (an `@[init]` that widens the allow-list,
+  a simproc that swaps an `.olean`, a `srcDir` move with an initializer, and
+  `decide +native` with an IO world-token cast), a pull request that edits
+  its own allow-list, a module with an initializer, and an artifact that
+  carries an `Init` module, a `srcDir` decoy that compiles a weakened copy
+  of the model while the scanned `Botho/` stays unchanged, and (accepted) a
+  benign lakefile edit. Each fixture is built the way the build job
+  builds it, and the verifier must reject it with the clean allow-list, both
+  with and without the source scan. The self-test also checks that no
+  fixture initializer runs inside the verifier, and, as a control, that the
+  same initializer does run when the library is imported through the Lean
+  frontend. The clean tree is also verified with no `lean`, `lake` or `elan`
+  on `PATH`, as in the verify job.
+
+### The verify job
+
+`scripts/verify-artifacts.sh` is the authority for the verdict. The verify job
+checks out `formal/scripts/` (this script, `AxiomReport.lean`,
+`check-sorry.sh`), `axioms-allowlist.txt` and `lakefile.toml` from the base
+commit of the pull request (on a push, the pushed commit), never from the
+pull request head. A pull request that edits these files changes nothing the
+verify job reads until it is merged. It then:
+
+1. checks that the pull request's `lakefile.toml` compiles the same sources
+   as the base's. Both are parsed with Python's `tomllib`, and the
+   package-level `srcDir` and, for every `[[lean_lib]]` and `[[lean_exe]]`,
+   `name`, `srcDir`, `roots`, `globs` and `root` must be identical (so the
+   set of libraries and executables is too). Other keys, such as `version`,
+   options or a `[[require]]` pin, may change. A `lakefile.lean` on either
+   side, or a `lakefile.toml` that does not parse, is rejected. Without this
+   a pull request could leave the scanned `Botho/` as a decoy and compile a
+   different copy (`srcDir = "src"`) whose theorems state something else;
+2. runs the base commit's source scan (`check-sorry.sh --no-build`) over the
+   pull request's sources, read as data;
+3. takes in the artifact: only regular files named `Botho.olean` or
+   `Botho/**/*.olean` (and the `.olean.server`, `.olean.private` and `.ir`
+   parts), copied to a private directory that is the only entry on
+   `LEAN_PATH`, so the artifact cannot shadow a toolchain module;
+4. replays every `Botho` declaration in the kernel with `leanchecker`;
+5. walks the compiled library with `AxiomReport.lean`, and fails if a
+   theorem listed in `Theorems.lean` (parsed as text, never compiled) is
+   missing or depends on an axiom outside the base allow-list or on
+   `sorryAx`; if any library declaration reaches `sorryAx`; if a library
+   module declares an axiom outside the base allow-list, imports anything
+   but `Init` and `Botho` modules, or declares an `[init]` initializer; or if
+   the compiled modules differ from the source modules.
+
+It never runs `lake`, never compiles a model source, installs the toolchain
+fresh (an official `leanprover/lean4` release only) and uses no cache.
+
+## Limits
+
+**What the trust boundary guarantees.** No model code runs in the verify job,
+so model code cannot change the verify job's inputs (the gate scripts, the
+allow-list, the report program) or its output. This closes the bypasses
+found in the reviews of #1783: each one ran model code during `lake build` to
+rewrite something the gate read in the same job.
+
+**Why no model code runs there.** `leanchecker` and `AxiomReport.lean` load the
+`.olean` files with `importModules (loadExts := false)`. Lean runs `[init]`
+and `initialize` declarations only from `finalizePersistentExtensions`, which
+only `loadExts := true` calls (`finalizeImport` in `Lean/Environment.lean`,
+v4.35.0). The Lean frontend does load extensions: elaborating any file that
+imports the model (`import Botho`, `lean Theorems.lean`) runs the model's
+initializers. So the verify job never passes a model file, or a file that
+imports the model, to the frontend, and it does not compile `Theorems.lean`
+(the build job's axiom gate does; the verify job parses it as text).
+`AxiomReport.lean` itself is elaborated, but it imports only `Lean` and loads
+the model at run time. `selftest-verify.sh` checks this with a canary
+initializer and the frontend control described above.
+
+**What it does not guarantee: the artifact matches the sources.** The build
+job is untrusted, so the `.olean` files it uploads are whatever model code
+left on disk. The verify job proves that the uploaded library is
+kernel-valid and that the listed theorems, as compiled, depend only on
+allowed axioms. It does not prove that those theorems state what the
+sources say. The `simproc-swap` and `native-world-swap` fixtures replace
+`one_eq_two : 1 = 2` with `one_eq_two : True` in the compiled library. The
+verify job rejects them only because of other evidence they leave behind
+(an `import Lean`, a declared axiom). A build-time attack that also rewrote
+those modules would leave a library that passes. Two things stand in the
+way of such an attack:
+
+- the base commit's source scan, which the pull request cannot weaken, has to
+  miss every way the attack runs code during the build; and
+- review: the sources of such a pull request contain both the false proof
+  and the code that runs during the build.
+
+Statement substitution through build configuration alone, with no code run
+during the build, is closed by step 1: Lake compiles only the sources the
+base's layout names, and those are the sources the scan reads and the
+intake's module-set check compares (the `lakefile-decoy` fixture; it passes
+every other check). That check covers the layout keys of Lake v4.35.0's
+TOML configuration. Other build configuration, such as `[[require]]`
+dependencies, `leanOptions` or `moreLeanArgs`, can still change and is
+reviewed like any other diff; the base's source scan and the artifact checks
+still apply to what it produces. Binding each theorem's compiled statement
+to a reviewed record is tracked in #1805.
+
+Binding the artifact to the sources needs a build that runs no model code,
+which Lean does not offer (macros, `decide +native` and initializers all run
+user code during elaboration), or a rebuild under a sandbox that confines
+each module's elaboration to its own output.
+
+**Other limits.**
+
+- The `.olean` format is a memory image that Lean maps without validating
+  it. A hand-crafted `.olean` that corrupts the memory of `leanchecker` or of
+  `AxiomReport.lean` is out of scope. The verify job holds no secrets and a
+  read-only token.
+- The workflow file comes from the pull request, as it does for every
+  `pull_request` workflow. A pull request can edit `formal.yml` itself. Such
+  an edit, and any edit under `formal/scripts/`, is visible in review and
+  needs a human reviewer. (The repository has no CODEOWNERS file yet; one
+  that covers `formal/scripts/`, `formal/axioms-allowlist.txt` and
+  `.github/workflows/formal.yml` would enforce this.)
+- Until verify-artifacts.sh is on the base branch (the pull request that
+  adds it, #1799), the verify job runs the pull request's own copy and
+  prints a warning.
+- The pull request picks the toolchain version, so a toolchain bump is
+  verified with the bumped toolchain. Only official `leanprover/lean4`
+  releases are accepted.
+- `leanchecker` trusts the toolchain's own library (`Init`). The artifact
+  cannot replace it (step 3 above), and it is loaded from `--sysroot` through
+  `LEAN_SYSROOT`, never from a `lean` found on `PATH`.
+- The artifact download relies on `actions/download-artifact` (v4.1.3 and
+  later) to refuse archive entries outside the target directory (zip-slip).
+  Intake then accepts only regular files with library names.
 
 ## Adding a theorem
 
@@ -127,6 +285,11 @@ To add one:
    ```
 
 3. Label every theorem that depends on it **trusted** and name the axiom.
+
+The verify job reads the allow-list from the base commit, so a new axiom
+fails the verify job until its allow-list entry is on `main`. Land the
+allow-list line (with the axiom's justification) in its own pull request
+first, then the model that declares and uses it.
 
 Only opaque functions belong on the allow-list. Never add an axiom that states
 a property (for example "sha256 is injective") without a design discussion on
