@@ -85,6 +85,7 @@ completion or mainnet fitness is asserted by this index.
 
 ## Report Index
 
+- [2026-10-31 mobile/app npm advisories](2026-10-31-mobile-app-npm-advisories.md) - every `pnpm audit` finding in `mobile/app` (#1769). The critical shell-quote finding is fixed (it was never reachable at runtime), and `pnpm audit` goes from 39 to 5. Residuals: decode-uri-component (bundled through expo-router, but not reachable from incoming-URL handling), zod in `@expo/cli` (the vulnerable v4 code is never loaded), deepmerge (no upstream fix) and minimatch 3.1.5 (the vulnerable code is not in it)
 - [2026-10-31 Dev-only web advisories](2026-10-31-dev-advisories-glob-minimatch-deepmerge.md) - glob/minimatch/deepmerge findings in `web/` (#1745): glob and the vulnerable minimatch lines are fixed with scoped overrides, minimatch 3.1.5 stays (no 3.x fix, and the vulnerable code is not in it), and deepmerge stays (no upstream fix). Dev-only, and no untrusted input reaches it
 - [2026-10-29 LotteryV2 payouts](2026-10-29-lottery-v2-internal.md) - P12 internal review of the V2 lottery payout path (#1647): the related-key construction, determinism, the body root and RPC trust are clean. Draw seed grindable (#1676, High, pre-dates V2 and V2 made it worse), validator ordering (#1670), coinbase KEM aliasing (#1677)
 - [2026-07-20 Snap key-handling](2026-07-20-snap-keyhandling.md) - Dedicated MetaMask Snap key-handling audit (#1096): SRP→Botho key derivation, claim-link bearer secrets, wasm signing under SES, `snap_manageState` persistence; 0 Critical/High, 1 Low (fixed)
