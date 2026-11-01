@@ -563,11 +563,14 @@ Pr[adversary correctly determines R1 = R2 | blockchain] ≤ negl(λ)
 - Stealth addresses (one-time destination keys)
 - Ring signatures (CLSAG ring=20)
 - Cluster-aware decoy selection (≥70% cosine similarity)
-- Age-similar decoy selection: decoys drawn from ±10% of the real input's age
-  (`AGE_SIMILARITY_SPREAD_BPS`), floored at `MIN_DECOY_AGE_BLOCKS`
-  confirmations, CSPRNG-shuffled (not a deterministic first-N height slice).
-  The node and the CLI thin wallet share this policy
-  (`botho/src/decoy_selection.rs`, `botho-wallet/src/decoy_selection.rs`).
+- Age-similar decoy selection: decoys drawn uniformly from a window 20% of
+  the real input's age wide (`AGE_SIMILARITY_SPREAD_BPS` = ±10%), whose
+  position is drawn at random per ring so the real input's age rank is
+  uniform (#1692), floored at `MIN_DECOY_AGE_BLOCKS` confirmations,
+  CSPRNG-shuffled (not a deterministic first-N height slice). The node, the
+  CLI thin wallet and the web/Snap signer share this policy
+  (`botho/src/decoy_selection.rs`, `botho-wallet/src/decoy_selection.rs`,
+  `web/packages/wasm-signer/src/decoys.ts`).
 
 **Limitations:**
 - Network-level correlation possible without Tor
@@ -576,8 +579,12 @@ Pr[adversary correctly determines R1 = R2 | blockchain] ≤ negl(λ)
 - **Ring-age fingerprinting (mitigated, residual):** an earlier wallet decoy
   policy used a wide (~2×) age band; a chain-analysis adversary could
   fingerprint wallet-built rings by their unusually broad ring-age spread. The
-  ±10% age-similarity band (#596) collapses that distinction and is `#314`-safe
-  under `ring_elapsed_quantile@max`. The band is degenerate for very young
+  ±10% age-similarity band (#596) collapses that distinction. A band centred
+  on the real age still exposed it as the median (or, in the node picker,
+  edge-clamped) member; since #1692 the window's position is random, so the
+  age rank is uniform. The cost is a wider `ring_elapsed_quantile@max`
+  over-charge: up to 1.20× per ring (aggregate 1.0825 at ring 20, inside the
+  `#314` 1.15 bound). The band is degenerate for very young
   inputs (below the confirmation floor `min_age > max_age`); spending such
   inputs is guarded with a clean error rather than a panic (fixed #611 → #618).
   Age-similarity is a heuristic-resistance measure, not a proof of

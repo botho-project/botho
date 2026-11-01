@@ -38,14 +38,23 @@ magnitude. This is a real threat to ring privacy, not a modelling artefact.
    outputs per block gave P = 1.000 at every age, for any h, at 3.46 BTH/day
    gross (#1771). #1786 shuffles the eligible candidates once per ring before
    selection, so ties are now uniform. Re-run on the port at full chain width
-   (§5 of the output), the ground-key P matches the uniform-key P within Monte
-   Carlo noise: at h = 1 and a = 19 it is 0.045 / 0.324 / 0.049 at ages
-   1,000 / 22,000 / 60,000 (uniform keys: 0.050 / 0.331 / 0.050). The minimal
-   flood for P ≥ 0.5 is 37 / 30 / 38 outputs per block with ground keys and
-   38 / 30 / 38 with uniform keys, against 19 / 8 / 19 before #1786. The node
-   picker is now bounded by finding 2, like the others. Ground keys still
-   cluster the attacker in the lottery's key-order candidate scan, which only
-   lowers its ticket share, so the criterion uses uniform keys.
+   (§5 of the output, re-run again after #1692), the ground-key P matches the
+   uniform-key P within Monte Carlo noise: at h = 1 and a = 19 it is
+   0.387 / 0.382 / 0.376 at ages 1,000 / 22,000 / 60,000 (exact uniform-key
+   value: 0.378 / 0.377 / 0.377). The minimal flood for P ≥ 0.5 is
+   28 / 27 / 28 outputs per block with ground keys and 27 / 27 / 27 with
+   uniform keys, against 19 / 8 / 19 before #1786. The node picker is bounded
+   by finding 2, like the others. Ground keys still cluster the attacker in
+   the lottery's key-order candidate scan, which only lowers its ticket share,
+   so the criterion uses uniform keys.
+5. **#1692 made the node picker as floodable as the others.** Before #1692
+   the node picker clamped gamma targets to the edge of a band centred on the
+   real age and took the nearest candidates, so at ages 1,000 and 60,000 a
+   flood needed 38 outputs per block (h = 1) for P ≥ 0.5. The random-offset
+   window samples its members uniformly, so the node's P is now the same
+   hypergeometric value as the CLI and web pickers' (27 outputs per block).
+   The edge clamp was not a flood defence worth keeping: it identified the
+   real input outright (#1700).
 
 The model holds `MAX_OUTPUTS` = 16 outputs per transaction. Since #1780 the
 mempool enforces that (`Transaction::is_valid_structure`, called by
@@ -85,17 +94,22 @@ In short:
 - **Privacy.** All three pickers use the #1700 production-picker ports in
   `cluster-tax/src/simulation/privacy_routes.rs`, which
   `botho/tests/privacy_sim_route_parity.rs` pins to production.
-  - CLI (`select_rpc_decoy_pool`): the port does a full shuffle of the ±10%
-    band, so the probability is exactly hypergeometric. A unit test checks the
-    port against the formula.
-  - Web (`selectDecoysForInput`, #1735): a partial Fisher–Yates over the band,
-    also a uniform sample, so the CLI formula applies. A unit test checks the
-    web port against it. The tables label these rows "CLI / web".
-  - Node (`select_decoys_for_input`, with the #1786 shuffled tie-break): the
-    port runs by Monte Carlo on a chain with `min(a+h, 20)` outputs per block.
-    A unit test shows that this reduction is exact in distribution. The
-    ground-key re-run (§5) uses the full width `a + h`, and a second test runs
-    the literal port on the grind case.
+  - Since #1692 every picker draws one random-offset age window per ring
+    (width 20% of the real age, real input uniform inside it) and takes a
+    uniform sample of it. Given the window, the probability that all 19
+    decoys are the attacker's is exactly hypergeometric over the window's
+    `(W + 1)·(a + h) − 1` other outputs, and it does not depend on the
+    offset when every block has the same `a` and `h`.
+  - CLI (`select_rpc_decoy_pool`): the port shuffles the window, so the
+    formula applies directly. A unit test checks the port against it.
+  - Web (`selectDecoysForInput`): a partial Fisher–Yates over the window,
+    also a uniform sample. A unit test checks the web port against it.
+  - Node (`select_decoys_for_input`, with the #1786 shuffle): the first 19
+    in-window members of a uniformly shuffled eligible set, again a uniform
+    sample. A unit test checks the port against the formula, so the tables
+    use the exact value. The ground-key re-run (§5) is Monte Carlo on the
+    port at full chain width `a + h`, and a second test runs the literal port
+    on the grind case.
 - **Constants.** Constants are imported where the crate graph allows. The
   mainnet reward schedule comes from the shared, drift-guarded
   `cluster_tax::monetary::mainnet_policy_mirror` (#1751), and the 80% pool
@@ -106,13 +120,14 @@ In short:
 **Not modelled:**
 
 - bursty honest traffic;
-- the web picker's thin-band fallback (fewer than 19 candidates in the band;
+- the pickers' thin-window fallback (fewer than 19 candidates in the window;
   never reached at these rates);
 - adversaries weaker than "all 19 decoys known" (see the #1700 report);
 - whether lottery payouts are spendable at once (#1286/#1499).
 
-The node picker's 720-blocks-per-day gamma assumption is used as shipped
-(#1692).
+Since #1692 the node picker no longer uses the gamma spend model to place
+decoys, and its blocks-per-day constant comes from the monetary policy block
+time (17,280/day at 5 s blocks).
 
 ## Pass criterion (PROPOSED, for ratification)
 
@@ -134,12 +149,22 @@ From the repository root:
 ```sh
 cargo run --release -p bth-cluster-tax --features cli --bin cluster-tax-sim -- decoy-flood-sweep
 # quick grid: ... -- decoy-flood-sweep --smoke
-cargo test --release -p bth-cluster-tax --lib decoy_flood     # 12 passed
+cargo test --release -p bth-cluster-tax --lib decoy_flood
 cargo test -p botho --test decoy_flood_parity                  # 3 passed
 ```
 
 The default run uses seed 1701 and 4,000 node-picker rings per (chain width,
-age). It runs in about 10 s. The output below is verbatim.
+age) for the §5 Monte Carlo. It runs in about a second. The output below is
+verbatim.
+
+### Re-run after #1692 (2026-11-01)
+
+#1692 replaced every picker's centred ±10% band with a random-offset window.
+§2 and §4 now give the node picker the exact hypergeometric P of the CLI and
+web pickers, so its minimal flood fell from 38 / 117 / 440 to
+27 / 108 / 431 outputs per block (h = 1 / 4 / 16), and its §4 rows equal the
+CLI / web rows. §5 was re-run on the new port. The fee and lottery economics
+did not change.
 
 ### Re-run after #1786, #1780, #1757 and #1751 (2026-11-01)
 
@@ -160,7 +185,7 @@ The sweep was re-run after these merged to main:
 
 Code constants: MIN_TX_FEE = 100000000 pico; CONSENSUS_FEE_BASE = 1 pico/byte; output penalty cap = 10 outputs; MAX_OUTPUTS = 16 (mempool-enforced since #1780, not by block validation); ring size = 20 (19 decoys); ±10% age band; lottery pool = 800‰ of fees; lottery window = ages 720..=10000 (9281 blocks), dust floor 1000000 pico; MAX_LOTTERY_CANDIDATES = 10000; LOTTERY_BASE_FEE_PICO = 250000000000; reward epoch 0 = 50 BTH, halving every 6307200 blocks; lottery emission share +10%/epoch from epoch 1.
 
-Node-picker rings per (chain width, age): 4000; seed 1701.
+Node-picker rings per (chain width, age) for the §5 ground-key Monte Carlo: 4000; seed 1701.
 
 ### 1. Fee per transaction (epoch 0, factor 1×)
 
@@ -173,55 +198,55 @@ The CT1 docs' 2.5e11 pico per attacker output is 40000× the relay cost of a 16-
 
 ### 2. P(all 19 decoys are the attacker's)
 
-`a` = attacker outputs/block, `h` = honest outputs/block, `f = a/(a+h)`. CLI / web is exact (hypergeometric over the band; both pickers take a uniform band sample); node is the #1700 port with the #1786 shuffled tie-break, Monte Carlo. Attacker keys do not matter to any picker (§5). `f^19` is the independent-draw reference.
+`a` = attacker outputs/block, `h` = honest outputs/block, `f = a/(a+h)`. Exact (hypergeometric over the window). Since #1692 all three pickers take a uniform sample of a random-offset age window, so the CLI / web and node columns are the same value (each port is checked against the formula by a unit test). Attacker keys do not matter to any picker (§5). `f^19` is the independent-draw reference.
 
 | h | a | f | f^19 | real age | CLI / web | node |
 |---:|---:|---:|---:|---:|---:|---:|
-| 1 | 1 | 0.5000 | 1.9e-6 | 1000 | 1.3e-6 | 0 |
-| 1 | 1 | 0.5000 | 1.9e-6 | 22000 | 1.9e-6 | 0 |
-| 1 | 1 | 0.5000 | 1.9e-6 | 60000 | 1.9e-6 | 0 |
-| 1 | 9 | 0.9000 | 0.135 | 1000 | 0.135 | 0 |
-| 1 | 9 | 0.9000 | 0.135 | 22000 | 0.135 | 0.054 |
-| 1 | 9 | 0.9000 | 0.135 | 60000 | 0.135 | 0 |
-| 1 | 19 | 0.9500 | 0.377 | 1000 | 0.378 | 0.050 |
-| 1 | 19 | 0.9500 | 0.377 | 22000 | 0.377 | 0.331 |
-| 1 | 19 | 0.9500 | 0.377 | 60000 | 0.377 | 0.050 |
-| 1 | 27 | 0.9643 | 0.501 | 1000 | 0.502 | 0.321 |
-| 1 | 27 | 0.9643 | 0.501 | 22000 | 0.501 | 0.472 |
-| 1 | 27 | 0.9643 | 0.501 | 60000 | 0.501 | 0.321 |
-| 1 | 99 | 0.9900 | 0.826 | 1000 | 0.827 | 0.810 |
-| 1 | 99 | 0.9900 | 0.826 | 22000 | 0.826 | 0.823 |
-| 1 | 99 | 0.9900 | 0.826 | 60000 | 0.826 | 0.810 |
-| 4 | 4 | 0.5000 | 1.9e-6 | 1000 | 1.7e-6 | 0 |
-| 4 | 4 | 0.5000 | 1.9e-6 | 22000 | 1.9e-6 | 1.5e-9 |
-| 4 | 4 | 0.5000 | 1.9e-6 | 60000 | 1.9e-6 | 0 |
-| 4 | 36 | 0.9000 | 0.135 | 1000 | 0.135 | 0.065 |
-| 4 | 36 | 0.9000 | 0.135 | 22000 | 0.135 | 0.120 |
-| 4 | 36 | 0.9000 | 0.135 | 60000 | 0.135 | 0.065 |
-| 4 | 76 | 0.9500 | 0.377 | 1000 | 0.378 | 0.330 |
-| 4 | 76 | 0.9500 | 0.377 | 22000 | 0.377 | 0.368 |
-| 4 | 76 | 0.9500 | 0.377 | 60000 | 0.377 | 0.330 |
-| 4 | 108 | 0.9643 | 0.501 | 1000 | 0.501 | 0.470 |
-| 4 | 108 | 0.9643 | 0.501 | 22000 | 0.501 | 0.495 |
-| 4 | 108 | 0.9643 | 0.501 | 60000 | 0.501 | 0.470 |
-| 4 | 396 | 0.9900 | 0.826 | 1000 | 0.826 | 0.822 |
-| 4 | 396 | 0.9900 | 0.826 | 22000 | 0.826 | 0.825 |
-| 4 | 396 | 0.9900 | 0.826 | 60000 | 0.826 | 0.822 |
-| 16 | 16 | 0.5000 | 1.9e-6 | 1000 | 1.9e-6 | 0 |
-| 16 | 16 | 0.5000 | 1.9e-6 | 22000 | 1.9e-6 | 4.8e-7 |
-| 16 | 16 | 0.5000 | 1.9e-6 | 60000 | 1.9e-6 | 0 |
-| 16 | 144 | 0.9000 | 0.135 | 1000 | 0.135 | 0.119 |
-| 16 | 144 | 0.9000 | 0.135 | 22000 | 0.135 | 0.132 |
-| 16 | 144 | 0.9000 | 0.135 | 60000 | 0.135 | 0.119 |
-| 16 | 304 | 0.9500 | 0.377 | 1000 | 0.377 | 0.366 |
-| 16 | 304 | 0.9500 | 0.377 | 22000 | 0.377 | 0.375 |
-| 16 | 304 | 0.9500 | 0.377 | 60000 | 0.377 | 0.366 |
-| 16 | 431 | 0.9642 | 0.500 | 1000 | 0.500 | 0.493 |
-| 16 | 431 | 0.9642 | 0.500 | 22000 | 0.500 | 0.499 |
-| 16 | 431 | 0.9642 | 0.500 | 60000 | 0.500 | 0.493 |
-| 16 | 1584 | 0.9900 | 0.826 | 1000 | 0.826 | 0.825 |
+| 1 | 1 | 0.5000 | 1.9e-6 | 1000 | 1.3e-6 | 1.3e-6 |
+| 1 | 1 | 0.5000 | 1.9e-6 | 22000 | 1.9e-6 | 1.9e-6 |
+| 1 | 1 | 0.5000 | 1.9e-6 | 60000 | 1.9e-6 | 1.9e-6 |
+| 1 | 9 | 0.9000 | 0.135 | 1000 | 0.135 | 0.135 |
+| 1 | 9 | 0.9000 | 0.135 | 22000 | 0.135 | 0.135 |
+| 1 | 9 | 0.9000 | 0.135 | 60000 | 0.135 | 0.135 |
+| 1 | 19 | 0.9500 | 0.377 | 1000 | 0.378 | 0.378 |
+| 1 | 19 | 0.9500 | 0.377 | 22000 | 0.377 | 0.377 |
+| 1 | 19 | 0.9500 | 0.377 | 60000 | 0.377 | 0.377 |
+| 1 | 27 | 0.9643 | 0.501 | 1000 | 0.502 | 0.502 |
+| 1 | 27 | 0.9643 | 0.501 | 22000 | 0.501 | 0.501 |
+| 1 | 27 | 0.9643 | 0.501 | 60000 | 0.501 | 0.501 |
+| 1 | 99 | 0.9900 | 0.826 | 1000 | 0.827 | 0.827 |
+| 1 | 99 | 0.9900 | 0.826 | 22000 | 0.826 | 0.826 |
+| 1 | 99 | 0.9900 | 0.826 | 60000 | 0.826 | 0.826 |
+| 4 | 4 | 0.5000 | 1.9e-6 | 1000 | 1.7e-6 | 1.7e-6 |
+| 4 | 4 | 0.5000 | 1.9e-6 | 22000 | 1.9e-6 | 1.9e-6 |
+| 4 | 4 | 0.5000 | 1.9e-6 | 60000 | 1.9e-6 | 1.9e-6 |
+| 4 | 36 | 0.9000 | 0.135 | 1000 | 0.135 | 0.135 |
+| 4 | 36 | 0.9000 | 0.135 | 22000 | 0.135 | 0.135 |
+| 4 | 36 | 0.9000 | 0.135 | 60000 | 0.135 | 0.135 |
+| 4 | 76 | 0.9500 | 0.377 | 1000 | 0.378 | 0.378 |
+| 4 | 76 | 0.9500 | 0.377 | 22000 | 0.377 | 0.377 |
+| 4 | 76 | 0.9500 | 0.377 | 60000 | 0.377 | 0.377 |
+| 4 | 108 | 0.9643 | 0.501 | 1000 | 0.501 | 0.501 |
+| 4 | 108 | 0.9643 | 0.501 | 22000 | 0.501 | 0.501 |
+| 4 | 108 | 0.9643 | 0.501 | 60000 | 0.501 | 0.501 |
+| 4 | 396 | 0.9900 | 0.826 | 1000 | 0.826 | 0.826 |
+| 4 | 396 | 0.9900 | 0.826 | 22000 | 0.826 | 0.826 |
+| 4 | 396 | 0.9900 | 0.826 | 60000 | 0.826 | 0.826 |
+| 16 | 16 | 0.5000 | 1.9e-6 | 1000 | 1.9e-6 | 1.9e-6 |
+| 16 | 16 | 0.5000 | 1.9e-6 | 22000 | 1.9e-6 | 1.9e-6 |
+| 16 | 16 | 0.5000 | 1.9e-6 | 60000 | 1.9e-6 | 1.9e-6 |
+| 16 | 144 | 0.9000 | 0.135 | 1000 | 0.135 | 0.135 |
+| 16 | 144 | 0.9000 | 0.135 | 22000 | 0.135 | 0.135 |
+| 16 | 144 | 0.9000 | 0.135 | 60000 | 0.135 | 0.135 |
+| 16 | 304 | 0.9500 | 0.377 | 1000 | 0.377 | 0.377 |
+| 16 | 304 | 0.9500 | 0.377 | 22000 | 0.377 | 0.377 |
+| 16 | 304 | 0.9500 | 0.377 | 60000 | 0.377 | 0.377 |
+| 16 | 431 | 0.9642 | 0.500 | 1000 | 0.500 | 0.500 |
+| 16 | 431 | 0.9642 | 0.500 | 22000 | 0.500 | 0.500 |
+| 16 | 431 | 0.9642 | 0.500 | 60000 | 0.500 | 0.500 |
+| 16 | 1584 | 0.9900 | 0.826 | 1000 | 0.826 | 0.826 |
 | 16 | 1584 | 0.9900 | 0.826 | 22000 | 0.826 | 0.826 |
-| 16 | 1584 | 0.9900 | 0.826 | 60000 | 0.826 | 0.825 |
+| 16 | 1584 | 0.9900 | 0.826 | 60000 | 0.826 | 0.826 |
 
 ### 3. Per-block economics (uniform keys; BTH per block)
 
@@ -308,18 +333,18 @@ Proposed: sustaining P ≥ 0.5 at every reported age ([1000, 22000, 60000]) must
 | CLI / web | uniform keys | 16 | 431 | 27 | 0 | consensus | 0.124 | 10.759 | -10.635 [8640] | -2.659 [2160] | -0.886 [720] | FAIL |
 | CLI / web | uniform keys | 16 | 431 | 27 | 1 | relay | 46.656 | 41700 | -41654 [4320] | -10413 [1080] | -3471 [360] | FAIL |
 | CLI / web | uniform keys | 16 | 431 | 27 | 1 | consensus | 0.124 | 41664 | -41664 [4320] | -10416 [1080] | -3472 [360] | FAIL |
-| node | uniform keys | 1 | 38 | 3 | 0 | relay | 5.184 | 5.388 | -0.204 [8640] | -0.051 [2160] | -0.017 [720] | FAIL |
-| node | uniform keys | 1 | 38 | 3 | 0 | consensus | 0.010 | 1.355 | -1.345 [8640] | -0.336 [2160] | -0.112 [720] | FAIL |
-| node | uniform keys | 1 | 38 | 3 | 1 | relay | 5.184 | 42098 | -42093 [4320] | -10523 [1080] | -3508 [360] | FAIL |
-| node | uniform keys | 1 | 38 | 3 | 1 | consensus | 0.010 | 42094 | -42094 [4320] | -10523 [1080] | -3508 [360] | FAIL |
-| node | uniform keys | 4 | 117 | 8 | 0 | relay | 13.824 | 13.367 | 0.457 [8640] | 0.114 [2160] | 0.038 [720] | FAIL |
-| node | uniform keys | 4 | 117 | 8 | 0 | consensus | 0.033 | 2.699 | -2.666 [8640] | -0.666 [2160] | -0.222 [720] | FAIL |
-| node | uniform keys | 4 | 117 | 8 | 1 | relay | 13.824 | 41785 | -41771 [4320] | -10443 [1080] | -3481 [360] | FAIL |
-| node | uniform keys | 4 | 117 | 8 | 1 | consensus | 0.033 | 41775 | -41775 [4320] | -10444 [1080] | -3481 [360] | FAIL |
-| node | uniform keys | 16 | 440 | 28 | 0 | relay | 48.384 | 48.020 | 0.364 [8640] | 0.091 [2160] | 0.030 [720] | FAIL |
-| node | uniform keys | 16 | 440 | 28 | 0 | consensus | 0.126 | 10.769 | -10.642 [8640] | -2.661 [2160] | -0.887 [720] | FAIL |
-| node | uniform keys | 16 | 440 | 28 | 1 | relay | 48.384 | 41732 | -41684 [4320] | -10421 [1080] | -3474 [360] | FAIL |
-| node | uniform keys | 16 | 440 | 28 | 1 | consensus | 0.126 | 41695 | -41695 [4320] | -10424 [1080] | -3475 [360] | FAIL |
+| node | uniform keys | 1 | 27 | 2 | 0 | relay | 3.456 | 3.999 | -0.543 [8640] | -0.136 [2160] | -0.045 [720] | FAIL |
+| node | uniform keys | 1 | 27 | 2 | 0 | consensus | 8.19e-3 | 1.339 | -1.331 [8640] | -0.333 [2160] | -0.111 [720] | FAIL |
+| node | uniform keys | 1 | 27 | 2 | 1 | relay | 3.456 | 41661 | -41658 [4320] | -10414 [1080] | -3471 [360] | FAIL |
+| node | uniform keys | 1 | 27 | 2 | 1 | consensus | 8.19e-3 | 41658 | -41658 [4320] | -10415 [1080] | -3472 [360] | FAIL |
+| node | uniform keys | 4 | 108 | 7 | 0 | relay | 12.096 | 11.997 | 0.099 [8640] | 0.025 [2160] | 8.23e-3 [720] | FAIL |
+| node | uniform keys | 4 | 108 | 7 | 0 | consensus | 0.031 | 2.690 | -2.659 [8640] | -0.665 [2160] | -0.222 [720] | FAIL |
+| node | uniform keys | 4 | 108 | 7 | 1 | relay | 12.096 | 41669 | -41657 [4320] | -10414 [1080] | -3471 [360] | FAIL |
+| node | uniform keys | 4 | 108 | 7 | 1 | consensus | 0.031 | 41660 | -41660 [4320] | -10415 [1080] | -3472 [360] | FAIL |
+| node | uniform keys | 16 | 431 | 27 | 0 | relay | 46.656 | 46.652 | 3.87e-3 [8640] | 9.66e-4 [2160] | 3.22e-4 [720] | FAIL |
+| node | uniform keys | 16 | 431 | 27 | 0 | consensus | 0.124 | 10.759 | -10.635 [8640] | -2.659 [2160] | -0.886 [720] | FAIL |
+| node | uniform keys | 16 | 431 | 27 | 1 | relay | 46.656 | 41700 | -41654 [4320] | -10413 [1080] | -3471 [360] | FAIL |
+| node | uniform keys | 16 | 431 | 27 | 1 | consensus | 0.124 | 41664 | -41664 [4320] | -10416 [1080] | -3472 [360] | FAIL |
 
 ### 5. Node picker with ground keys: the #1771 grind case after #1786
 
@@ -327,24 +352,23 @@ The node port at full chain width (a + h outputs per block), with the attacker's
 
 | h | a | real age | node, ground keys | node, uniform keys |
 |---:|---:|---:|---:|---:|
-| 1 | 8 | 1000 | 0 | 0 |
-| 1 | 19 | 1000 | 0.045 | 0.050 |
-| 1 | 27 | 1000 | 0.307 | 0.321 |
-| 1 | 38 | 1000 | 0.525 | 0.513 |
-| 1 | 8 | 22000 | 0.029 | 0.030 |
-| 1 | 19 | 22000 | 0.324 | 0.331 |
-| 1 | 27 | 22000 | 0.467 | 0.472 |
-| 1 | 38 | 22000 | 0.599 | 0.593 |
-| 1 | 8 | 60000 | 0 | 0 |
-| 1 | 19 | 60000 | 0.049 | 0.050 |
-| 1 | 27 | 60000 | 0.339 | 0.321 |
-| 1 | 38 | 60000 | 0.508 | 0.513 |
+| 1 | 8 | 1000 | 0.104 | 0.107 |
+| 1 | 19 | 1000 | 0.387 | 0.378 |
+| 1 | 27 | 1000 | 0.499 | 0.502 |
+| 1 | 38 | 1000 | 0.616 | 0.612 |
+| 1 | 8 | 22000 | 0.105 | 0.107 |
+| 1 | 19 | 22000 | 0.382 | 0.377 |
+| 1 | 27 | 22000 | 0.503 | 0.501 |
+| 1 | 38 | 22000 | 0.609 | 0.611 |
+| 1 | 8 | 60000 | 0.108 | 0.107 |
+| 1 | 19 | 60000 | 0.376 | 0.377 |
+| 1 | 27 | 60000 | 0.493 | 0.501 |
+| 1 | 38 | 60000 | 0.603 | 0.610 |
 
 Minimal attacker outputs per block for P ≥ 0.5 (ground keys searched up to a + h = 256; pre-#1786 ground-key minima were 19 / 8 / 19 at ages 1000 / 22000 / 60000).
 
 | h | real age | a_min, ground keys | a_min, uniform keys |
 |---:|---:|---:|---:|
-| 1 | 1000 | 37 | 38 |
-| 1 | 22000 | 30 | 30 |
-| 1 | 60000 | 38 | 38 |
-
+| 1 | 1000 | 28 | 27 |
+| 1 | 22000 | 27 | 27 |
+| 1 | 60000 | 28 | 27 |

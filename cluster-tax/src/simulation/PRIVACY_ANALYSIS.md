@@ -3,38 +3,40 @@
 This document reports what the privacy simulation measures for the ring
 producers Botho actually ships. Every number below is CLI output from
 `cluster-tax-sim`, and the exact commands are listed with the results. Last
-regenerated for #1700 (after #1735 and #1786 merged) at ring size **20**
-(`MIN_RING_SIZE`, `transaction/clsag/src/lib.rs:980`) with the **±10%** age
-band (`AGE_SIMILARITY_SPREAD_BPS`, `botho/src/decoy_selection.rs:269`).
+regenerated for #1692 / #1755 (random-offset age window) at ring size **20**
+(`MIN_RING_SIZE`, `transaction/clsag/src/lib.rs:980`) with a **20%-wide** age
+window (`AGE_SIMILARITY_SPREAD_BPS` = ±10%, `botho/src/decoy_selection.rs`).
 
-> **Headline: deployed ring privacy is far below the "≈95% efficiency" this
-> document used to claim.** The old number came from a model of
-> cluster-aware decoy selection, which no wallet implements, and it reported
-> entropy (bits) instead of how often the real input is singled out. Measured
-> against the real pickers:
+> **Headline (after #1692): the age leaks are closed on all three routes;
+> plaintext cluster tags remain the dominant leak.** Every picker now draws
+> one random-offset age window per ring (`draw_age_similarity_window`): the
+> window is 20% of the real age wide, the real input's age is uniform inside
+> it, and decoys are a uniform sample of the window.
 >
-> - **node** (`select_decoys_for_input`): the real input's age rank is fixed
->   (youngest in 100% of rings at ages 1k/5k, oldest in 100% at 100k/1M).
->   Even when real ages follow the picker's own gamma model, the member
->   nearest the ring's age midrange is the real input **85.3%** of the time.
-> - **CLI wallet** (`select_rpc_decoy_pool`) and **web/Snap/claim links**
->   (`decoys.ts` `selectDecoysForInput`, #1735): decoys are uniform within the
->   band, but the band is *centred* on the real age. The real input is
->   therefore the median-age member, and the midrange guess identifies it in
->   **~50%** of rings (cli 49.1–53.4%, web 49.1–52.3% at ages 1k–1M and
->   gamma; ~95% at age 100). #1735 removed the pre-#1735 web leak (the real
->   input was the youngest member in 100% of rings) but the web route now
->   shares the centred-band leak (#1755).
-> - **Cluster tags**: the native wallets stamp outputs with the real input's
->   tags in plaintext, and no picker looks at tags. Cluster fingerprinting
->   identifies the real input in **~99.7%** of node and CLI rings — an
->   **upper estimate (every output tagged)**: the legacy synthetic profile mix
->   tags every output. With half the outputs untagged it is still ~55%. The
->   web signer publishes empty output tags, so this adversary gets 5.0%
->   (uniform) there.
+> - **Age rank** is uniform on every route at every reported age: rank
+>   χ² 8–29 (uniform below 36.19 at p = 0.01), youngest/oldest rates
+>   4.5–5.5%, and the picker-aware Age-Rank and Band-Center adversaries score
+>   4.5–5.5% (uniform guess: 5.0%).
+> - **Before #1692** the node picker clamped a gamma target into a band
+>   centred on the real age, so the real input was the youngest ring member
+>   in 100% of rings at ages 1k/5k and the oldest in 100% at 100k/1M
+>   (Band-Center 85.3% even with gamma-distributed real ages). The CLI and web
+>   pickers sampled the centred band uniformly, making the real input the
+>   median member (Band-Center ~50%, ~95% at age 100; #1755).
+> - **Residual age signal:** when real ages follow the gamma spend model, the
+>   Age-Heuristic adversary (weights members by the gamma pdf) reaches
+>   6.2–6.6% instead of 5.0%. Inside one window the decoys are uniform while
+>   the real age follows the spend prior, so an adversary who knows the prior
+>   gains slightly. Any uniform in-window picker has this.
+> - **Cluster tags** (unchanged): the native wallets stamp outputs with the
+>   real input's tags in plaintext, and no picker looks at tags. Cluster
+>   fingerprinting identifies the real input in **~99.7%** of node and CLI
+>   rings — an **upper estimate (every output tagged)**. With half the
+>   outputs untagged it is still ~55%. The web signer publishes empty output
+>   tags, so this adversary gets 5.0% (uniform) there.
 >
-> Follow-ups: #1692 (node edge clamp), #1755 (centred band — node, CLI and
-> web), #1756 (plaintext inherited tags).
+> Follow-ups: #1756 (plaintext inherited tags). The over-charge cost of the
+> random offset is in "Reading the results" below.
 
 ## What is simulated
 
@@ -47,44 +49,48 @@ CI runs it (and the `privacy_routes` unit tests) in `workspace-build.yml`.
 
 | route  | production code | used by |
 |--------|-----------------|---------|
-| `node` | `GammaDecoySelector::select_decoys_for_input` (`botho/src/decoy_selection.rs:755`) | `Ledger::get_decoy_outputs_for_input`, node wallet, detached signer |
-| `cli`  | `select_rpc_decoys_from_history` → `select_rpc_decoy_pool` (`botho-wallet/src/ring_builder.rs:159`) | `botho-wallet` thin CLI wallet |
-| `web`  | `selectDecoysForInput` (`web/packages/wasm-signer/src/decoys.ts:141`, called per input at `send.ts:655`) | web wallet, MetaMask Snap, claim links |
+| `node` | `GammaDecoySelector::select_decoys_for_input` (`botho/src/decoy_selection.rs:856`) | `Ledger::get_decoy_outputs_for_input`, node wallet, detached signer |
+| `cli`  | `select_rpc_decoys_from_history` → `select_rpc_decoy_pool` (`botho-wallet/src/ring_builder.rs:166`) | `botho-wallet` thin CLI wallet |
+| `web`  | `selectDecoysForInput` (`web/packages/wasm-signer/src/decoys.ts:227`, called per input at `send.ts:655`) | web wallet, MetaMask Snap, claim links |
 | `web-pre-1735` | historical chain-ordered `decoyPool[(i*19 + j) % len]` window (`send.ts:657` at `596f64c0`, removed by #1735) | nothing — comparison only, not in `--route production` |
 
 **Node port provenance.** The `node` port is a literal copy of
-`select_decoys_for_input`, including #1786's single shuffle of the eligible
-set (which makes equal-distance ties a uniform draw), so the parity test
-compares rings exactly. Replaying that shuffle in the simulation would
-mean permuting all 1.2M eligible outputs for every ring, so when the band
-fills the ring the simulation uses a banded fast path instead. It draws the
-same gamma targets and picks the same distances, and breaks ties by a
-per-ring random priority over the band members, which induces the same
-uniform relative order as the shuffle. It is distribution-equivalent to the
-literal port, not bit-identical, and a seeded statistical unit test checks
-per-slot pick frequencies against the literal port within 5σ.
+`select_decoys_for_input`: #1786's single shuffle of the eligible set, then
+one `draw_age_similarity_window` draw, then the first 19 in-window members of
+the shuffled set (nearest-age fill if the window is thin). The parity test
+compares rings exactly. Replaying the shuffle in the simulation would mean
+permuting all 1.2M eligible outputs for every ring, so when the window fills
+the ring the simulation draws the window the same way and takes a sparse
+partial Fisher–Yates sample of it. Both are a uniform ordered sample of the
+window, so the fast path is distribution-equivalent to the literal port, not
+bit-identical; a seeded statistical unit test checks per-slot pick
+frequencies against the literal port within 5σ. The CLI route uses the same
+kind of fast path (its literal port is pinned exactly by the parity test).
 
 **Web port provenance.** The `web` port mirrors `decoys.ts` step for step:
-10-block confirmation floor, `ageSimilarityBand` (±10%, same integer bps
-math), partial Fisher–Yates over the in-band candidates, nearest-age fill
-(shuffle, then stable sort by distance) when the band is thin, final ring
-shuffle, every draw via `randomIndex`'s u32 rejection sampling over an
-injected u32 source. The parity test replays all 16 scenarios of
-`scripts/research/ct-economics/web-selection.json` — the rings #1735's
+10-block confirmation floor, `drawAgeSimilarityWindow` (offset =
+`randomInteger(W + 1)`, same integer bps math as the Rust window), partial
+Fisher–Yates over the in-window candidates, nearest-age fill (shuffle, then
+stable sort by distance) when the window is thin, final ring shuffle, every
+draw via `randomIndex`'s u32 rejection sampling over an injected u32 source.
+The parity test replays all 16 scenarios of
+`scripts/research/ct-economics/web-selection.json` — the rings
 `ct-economics-selection.test.ts` recorded from the real `send.ts` with
-`crypto.getRandomValues` stubbed by a seeded mulberry32 — through the port
-with the same mulberry32 seeds and requires identical rings, order included;
-it also checks the shared `test/fixtures/decoy-age-band.json` vectors. The
-simulation drives the same port from ChaCha8 u32 draws. When the band alone
-fills the ring (every reported age, including 100 on this chain: 20 in-band
-outputs) it uses a sparse-swap fast path that is bit-identical to the
-literal port; for thinner bands it uses a distribution-equivalent
-nearest-age fill (unit-tested against the literal port).
+`crypto.getRandomValues` stubbed by a seeded mulberry32, re-recorded for
+#1692 — through the port with the same mulberry32 seeds and requires
+identical rings, order included; it also checks the shared
+`test/fixtures/decoy-age-band.json` band and window vectors. The simulation
+drives the same port from ChaCha8 u32 draws. When the window alone fills the
+ring (every reported age, including 100 on this chain: 21 window ages, 20
+outputs besides the real input) it uses a sparse-swap fast path that is
+bit-identical to the literal port; for thinner windows it uses a
+distribution-equivalent nearest-age fill (unit-tested against the literal
+port).
 
 **Chain model.** The UTXO set has one output at every height
-1..=1,200,000, so it covers every reported age densely. The legacy model used
-a gamma-aged pool instead, which puts every output between about 13k and 33k
-blocks, exactly where the node picker's edge clamp hurts least. Cluster-tag
+1..=1,200,000, so it covers every reported age densely, at the locally
+uniform age density the uniform-rank result relies on. The legacy model used
+a gamma-aged pool instead. Cluster-tag
 profiles use the legacy type mix (50% standard, 25% exchange, 10% whale, 10%
 coinbase, 5% mixed). That mix tags *every* output. `--background-fraction`
 blanks a share of them.
@@ -94,18 +100,21 @@ the adversary's single top suspect is the real input, with ties split. A
 uniform guess scores exactly 5.0%.
 
 - *Naive*: a uniform guess.
-- *Age-Heuristic*: the gamma spend pdf.
+- *Age-Heuristic*: the gamma spend pdf (k = 19.28, θ = 1.61 days at
+  17,280 blocks/day since #1692; it used to assume 720 blocks/day).
 - *Age-Rank*: knows the picker. It always guesses the age rank that the real
   input held most often in an independent set of training rings.
 - *Band-Center*: guesses the member closest to the midrange of the ring's
-  ages. Every native picker centres its band on the real age.
+  ages. It targets pickers that centre the band on the real age (all three
+  did before #1692); against the random-offset window the midrange estimates
+  the window's centre instead.
 - *Cluster-Fingerprint*: matches each member's tags to the output's
   published tags.
 - *Combined*: age-heuristic × cluster, as in the legacy model.
 
 ## Results
 
-Command (about 30 s on a laptop):
+Command (about 10 s on a laptop):
 
 ```bash
 cargo run -p bth-cluster-tax --features cli --bin cluster-tax-sim --release -- \
@@ -129,13 +138,13 @@ Outputs carry the real input's tags decayed one hop (plaintext).
 
 | real age | rings | fail | youngest | oldest | rank χ² | ID Naive | ID Age-Heuristic | ID Age-Rank (guess) | ID Band-Center | ID Cluster-Fingerprint | ID Combined |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| 100 | 10000 | 0 | 0.0% | 0.0% | 190000 | 5.0% | 0.0% | 100.0% (r10) | 50.0% | 99.8% | 99.4% |
-| 1000 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 0.0% | 100.0% (r1) | 0.0% | 99.8% | 98.5% |
-| 5000 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 0.0% | 100.0% (r1) | 0.0% | 99.6% | 97.5% |
-| 30000 | 10000 | 0 | 0.0% | 22.1% | 40752 | 5.0% | 0.0% | 34.7% (r19) | 59.6% | 99.7% | 98.4% |
-| 100000 | 10000 | 0 | 0.0% | 100.0% | 190000 | 5.0% | 0.0% | 100.0% (r20) | 0.0% | 99.7% | 89.8% |
-| 1000000 | 10000 | 0 | 0.0% | 100.0% | 190000 | 5.0% | 5.0% | 100.0% (r20) | 0.0% | 99.7% | 99.7% |
-| gamma-spend | 10000 | 0 | 4.8% | 4.8% | 13 | 5.0% | 4.8% | 5.1% (r5) | 85.3% | 99.7% | 99.2% |
+| 100 | 10000 | 0 | 5.0% | 5.2% | 15 | 5.0% | 5.2% | 4.8% (r16) | 5.0% | 99.7% | 98.9% |
+| 1000 | 10000 | 0 | 5.5% | 4.9% | 25 | 5.0% | 4.9% | 5.1% (r17) | 4.7% | 99.7% | 99.0% |
+| 5000 | 10000 | 0 | 4.5% | 4.9% | 29 | 5.0% | 4.9% | 4.7% (r15) | 4.7% | 99.7% | 99.2% |
+| 30000 | 10000 | 0 | 5.1% | 5.0% | 16 | 5.0% | 5.0% | 4.5% (r13) | 4.7% | 99.7% | 98.9% |
+| 100000 | 10000 | 0 | 4.9% | 4.5% | 20 | 5.0% | 4.5% | 4.9% (r4) | 5.1% | 99.7% | 99.2% |
+| 1000000 | 10000 | 0 | 5.3% | 5.1% | 11 | 5.0% | 5.3% | 5.0% (r2) | 4.7% | 99.7% | 99.1% |
+| gamma-spend | 10000 | 0 | 5.2% | 4.8% | 29 | 5.0% | 6.6% | 5.0% (r3) | 5.0% | 99.8% | 99.6% |
 
 #### Route `cli`
 
@@ -144,13 +153,13 @@ Outputs carry the real input's tags decayed one hop (plaintext).
 
 | real age | rings | fail | youngest | oldest | rank χ² | ID Naive | ID Age-Heuristic | ID Age-Rank (guess) | ID Band-Center | ID Cluster-Fingerprint | ID Combined |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| 100 | 10000 | 0 | 0.0% | 0.0% | 90000 | 5.0% | 0.0% | 49.9% (r10) | 95.1% | 99.7% | 99.3% |
-| 1000 | 10000 | 0 | 0.0% | 0.0% | 16760 | 5.0% | 0.0% | 18.1% (r11) | 53.4% | 99.7% | 99.2% |
-| 5000 | 10000 | 0 | 0.0% | 0.0% | 15869 | 5.0% | 0.0% | 17.8% (r11) | 49.7% | 99.8% | 99.2% |
-| 30000 | 10000 | 0 | 0.0% | 0.0% | 15504 | 5.0% | 0.0% | 18.0% (r10) | 50.9% | 99.7% | 99.3% |
-| 100000 | 10000 | 0 | 0.0% | 0.0% | 16142 | 5.0% | 0.0% | 18.3% (r10) | 50.3% | 99.7% | 97.4% |
-| 1000000 | 10000 | 0 | 0.0% | 0.0% | 15715 | 5.0% | 5.0% | 18.0% (r11) | 49.9% | 99.8% | 99.8% |
-| gamma-spend | 10000 | 0 | 0.0% | 0.0% | 15830 | 5.0% | 1.8% | 18.6% (r10) | 49.1% | 99.8% | 99.6% |
+| 100 | 10000 | 0 | 4.8% | 5.2% | 15 | 5.0% | 5.2% | 5.2% (r20) | 4.7% | 99.7% | 99.0% |
+| 1000 | 10000 | 0 | 4.7% | 5.1% | 19 | 5.0% | 5.1% | 5.3% (r12) | 5.0% | 99.7% | 98.9% |
+| 5000 | 10000 | 0 | 5.2% | 4.7% | 15 | 5.0% | 4.7% | 5.0% (r5) | 5.0% | 99.7% | 99.0% |
+| 30000 | 10000 | 0 | 5.1% | 5.1% | 11 | 5.0% | 5.1% | 5.1% (r20) | 4.9% | 99.7% | 99.2% |
+| 100000 | 10000 | 0 | 5.2% | 5.0% | 15 | 5.0% | 5.0% | 5.1% (r17) | 5.0% | 99.7% | 99.1% |
+| 1000000 | 10000 | 0 | 5.2% | 5.1% | 22 | 5.0% | 5.2% | 5.0% (r16) | 5.0% | 99.7% | 99.0% |
+| gamma-spend | 10000 | 0 | 4.9% | 5.0% | 8 | 5.0% | 6.2% | 4.9% (r18) | 5.0% | 99.7% | 99.6% |
 
 #### Route `web`
 
@@ -159,47 +168,43 @@ Outputs carry empty cluster tags.
 
 | real age | rings | fail | youngest | oldest | rank χ² | ID Naive | ID Age-Heuristic | ID Age-Rank (guess) | ID Band-Center | ID Cluster-Fingerprint | ID Combined |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| 100 | 10000 | 0 | 0.0% | 0.0% | 90000 | 5.0% | 0.0% | 50.0% (r11) | 94.7% | 5.0% | 0.0% |
-| 1000 | 10000 | 0 | 0.0% | 0.0% | 17078 | 5.0% | 0.0% | 18.8% (r11) | 52.3% | 5.0% | 0.0% |
-| 5000 | 10000 | 0 | 0.0% | 0.0% | 16128 | 5.0% | 0.0% | 17.4% (r11) | 50.2% | 5.0% | 0.0% |
-| 30000 | 10000 | 0 | 0.0% | 0.0% | 16126 | 5.0% | 0.0% | 17.0% (r10) | 49.6% | 5.0% | 0.0% |
-| 100000 | 10000 | 0 | 0.0% | 0.0% | 15689 | 5.0% | 0.0% | 16.9% (r10) | 49.1% | 5.0% | 0.0% |
-| 1000000 | 10000 | 0 | 0.0% | 0.0% | 15756 | 5.0% | 5.0% | 17.8% (r10) | 49.5% | 5.0% | 5.0% |
-| gamma-spend | 10000 | 0 | 0.0% | 0.0% | 15595 | 5.0% | 1.8% | 17.5% (r10) | 49.9% | 5.0% | 1.8% |
+| 100 | 10000 | 0 | 4.7% | 4.9% | 15 | 5.0% | 4.9% | 4.9% (r15) | 4.9% | 5.0% | 4.9% |
+| 1000 | 10000 | 0 | 4.7% | 5.2% | 18 | 5.0% | 5.2% | 4.7% (r1) | 4.9% | 5.0% | 5.2% |
+| 5000 | 10000 | 0 | 5.5% | 5.1% | 23 | 5.0% | 5.1% | 5.5% (r1) | 5.1% | 5.0% | 5.1% |
+| 30000 | 10000 | 0 | 5.2% | 4.9% | 15 | 5.0% | 4.9% | 5.0% (r13) | 4.9% | 5.0% | 4.9% |
+| 100000 | 10000 | 0 | 5.0% | 4.9% | 18 | 5.0% | 4.9% | 4.8% (r17) | 5.0% | 5.0% | 4.9% |
+| 1000000 | 10000 | 0 | 4.5% | 5.1% | 14 | 5.0% | 4.5% | 5.0% (r11) | 4.9% | 5.0% | 4.5% |
+| gamma-spend | 10000 | 0 | 4.8% | 5.1% | 22 | 5.0% | 6.5% | 5.2% (r9) | 5.1% | 5.0% | 6.5% |
 
 #### Real-input age-rank histogram (% of rings at each rank)
 
 | route | real age | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| node | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| node | 1000 | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| node | 5000 | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| node | 30000 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 | 4 | 12 | 26 | 35 | 22 |
-| node | 100000 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 100 |
-| node | 1000000 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 100 |
-| node | gamma-spend | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 |
-| cli | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 50 | 50 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| cli | 1000 | 0 | 0 | 0 | 0 | 1 | 2 | 5 | 9 | 15 | 19 | 18 | 14 | 9 | 5 | 2 | 0 | 0 | 0 | 0 | 0 |
-| cli | 5000 | 0 | 0 | 0 | 0 | 1 | 2 | 5 | 9 | 14 | 18 | 18 | 15 | 9 | 5 | 2 | 1 | 0 | 0 | 0 | 0 |
-| cli | 30000 | 0 | 0 | 0 | 0 | 1 | 2 | 5 | 9 | 14 | 18 | 17 | 15 | 9 | 6 | 2 | 1 | 0 | 0 | 0 | 0 |
-| cli | 100000 | 0 | 0 | 0 | 0 | 1 | 2 | 5 | 9 | 14 | 18 | 18 | 14 | 10 | 5 | 2 | 1 | 0 | 0 | 0 | 0 |
-| cli | 1000000 | 0 | 0 | 0 | 0 | 1 | 3 | 5 | 9 | 14 | 17 | 18 | 15 | 9 | 5 | 2 | 1 | 0 | 0 | 0 | 0 |
-| cli | gamma-spend | 0 | 0 | 0 | 0 | 1 | 2 | 5 | 9 | 14 | 19 | 18 | 14 | 10 | 5 | 2 | 1 | 0 | 0 | 0 | 0 |
-| web | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 50 | 50 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| web | 1000 | 0 | 0 | 0 | 0 | 1 | 2 | 5 | 9 | 14 | 19 | 19 | 15 | 9 | 5 | 2 | 1 | 0 | 0 | 0 | 0 |
-| web | 5000 | 0 | 0 | 0 | 0 | 1 | 2 | 5 | 10 | 15 | 18 | 17 | 15 | 9 | 5 | 2 | 1 | 0 | 0 | 0 | 0 |
-| web | 30000 | 0 | 0 | 0 | 0 | 1 | 2 | 5 | 9 | 15 | 17 | 18 | 15 | 9 | 5 | 2 | 1 | 0 | 0 | 0 | 0 |
-| web | 100000 | 0 | 0 | 0 | 0 | 1 | 2 | 5 | 10 | 15 | 17 | 18 | 14 | 10 | 5 | 2 | 1 | 0 | 0 | 0 | 0 |
-| web | 1000000 | 0 | 0 | 0 | 0 | 1 | 2 | 5 | 10 | 14 | 18 | 18 | 14 | 9 | 5 | 2 | 1 | 0 | 0 | 0 | 0 |
-| web | gamma-spend | 0 | 0 | 0 | 0 | 1 | 2 | 5 | 10 | 14 | 18 | 18 | 14 | 10 | 5 | 2 | 1 | 0 | 0 | 0 | 0 |
+| node | 100 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 |
+| node | 1000 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 |
+| node | 5000 | 4 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 |
+| node | 30000 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 |
+| node | 100000 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 |
+| node | 1000000 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 |
+| node | gamma-spend | 5 | 5 | 5 | 5 | 5 | 4 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 6 | 5 | 5 | 5 | 5 | 5 | 5 |
+| cli | 100 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 |
+| cli | 1000 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 |
+| cli | 5000 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 |
+| cli | 30000 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 |
+| cli | 100000 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 |
+| cli | 1000000 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 |
+| cli | gamma-spend | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 |
+| web | 100 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 |
+| web | 1000 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 |
+| web | 5000 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 4 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 |
+| web | 30000 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 |
+| web | 100000 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 |
+| web | 1000000 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 |
+| web | gamma-spend | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 4 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 |
 
 A low ID rate in one column does not mean the real input is safe; read
-the row's maximum. In particular, `ID Combined` on the `web` rows (0.0% at
-most ages) is a weighted geometric mean of the Age-Heuristic score and a
-cluster score that is flat, because web outputs carry empty tags. It therefore reproduces the
-Age-Heuristic guess (the ring member the gamma spend pdf favours, which is
-rarely the median-aged real input) and ignores the midrange signal that
-Band-Center uses to reach 94.7% at age 100.
+the row's maximum. On the native routes that maximum is the
+Cluster-Fingerprint column (#1756), not age.
 
 ### Historical comparison: the pre-#1735 web route
 
@@ -218,12 +223,12 @@ Outputs carry empty cluster tags.
 
 | real age | rings | fail | youngest | oldest | rank χ² | ID Naive | ID Age-Heuristic | ID Age-Rank (guess) | ID Band-Center | ID Cluster-Fingerprint | ID Combined |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| 100 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 100.0% | 100.0% (r1) | 0.0% | 5.0% | 100.0% |
-| 1000 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 100.0% | 100.0% (r1) | 0.0% | 5.0% | 100.0% |
-| 5000 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 100.0% | 100.0% (r1) | 0.0% | 5.0% | 100.0% |
-| 30000 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 100.0% | 100.0% (r1) | 0.0% | 5.0% | 100.0% |
-| 100000 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 100.0% | 100.0% (r1) | 0.0% | 5.0% | 100.0% |
-| 1000000 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 5.0% | 100.0% (r1) | 0.0% | 5.0% | 5.0% |
+| 100 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 0.0% | 100.0% (r1) | 0.0% | 5.0% | 0.0% |
+| 1000 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 0.0% | 100.0% (r1) | 0.0% | 5.0% | 0.0% |
+| 5000 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 0.0% | 100.0% (r1) | 0.0% | 5.0% | 0.0% |
+| 30000 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 0.0% | 100.0% (r1) | 0.0% | 5.0% | 0.0% |
+| 100000 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 0.0% | 100.0% (r1) | 0.0% | 5.0% | 0.0% |
+| 1000000 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 100.0% | 100.0% (r1) | 0.0% | 5.0% | 100.0% |
 | gamma-spend | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 100.0% | 100.0% (r1) | 0.0% | 5.0% | 100.0% |
 
 #### Real-input age-rank histogram (% of rings at each rank)
@@ -253,14 +258,14 @@ cargo run -p bth-cluster-tax --features cli --bin cluster-tax-sim --release -- \
 
 | route | real age | ID Cluster-Fingerprint (0% background) | ID Cluster-Fingerprint (50% background) |
 |---|---|---|---|
-| node | 1000 | 99.8% | 55.5% |
-| node | 30000 | 99.7% | 54.3% |
-| node | gamma-spend | 99.7% | 54.9% |
-| cli | 1000 | 99.7% | 55.1% |
-| cli | 30000 | 99.7% | 54.5% |
-| cli | gamma-spend | 99.8% | 54.0% |
-| web | 1000 | 5.0% | 4.9% |
-| web | 30000 | 5.0% | 5.1% |
+| node | 1000 | 99.7% | 54.1% |
+| node | 30000 | 99.7% | 55.1% |
+| node | gamma-spend | 99.8% | 55.2% |
+| cli | 1000 | 99.7% | 55.4% |
+| cli | 30000 | 99.7% | 55.2% |
+| cli | gamma-spend | 99.7% | 55.2% |
+| web | 1000 | 5.0% | 4.7% |
+| web | 30000 | 5.0% | 5.0% |
 | web | gamma-spend | 5.0% | 5.0% |
 | web-pre-1735 | 1000 | 5.0% | 6.2% |
 | web-pre-1735 | 30000 | 5.0% | 6.4% |
@@ -278,28 +283,32 @@ tag-drop problem tracked in #1687.
 
 ### Reading the results
 
-1. **The node picker's edge clamp (#1692)** puts every decoy on one side of
-   the real input wherever the real age sits outside the gamma bulk (about
-   13k–33k blocks). Inside the bulk (30k) the Age-Rank guess still gets 34.7%
-   and Band-Center 59.6%. When real ages follow the picker's own gamma model,
-   the pooled rank histogram looks uniform (χ² = 13). Conditioned on the
-   ring's public ages, though, the real input is the midrange member in 85.3%
-   of rings.
-2. **The centred ±10% band leaks the real age (#1755).** This is a new
-   finding of #1700. The CLI wallet and, since #1735, the web signer draw
-   decoys uniformly within the band. Because the band is centred on the real
-   age, each decoy is younger than the real input with probability ½. The
-   real input's rank is therefore Binomial(19, ½) + 1: it is the median
-   member, and the ring's midrange estimates its age. The `web` rows confirm
-   it: Band-Center 49.1–52.3% at ages 1k–1M and gamma (cli 49.1–53.4%),
-   Age-Rank 16.9–18.8% (cli 17.8–18.6%), 94.7% Band-Center at age 100 where
-   the band holds only 20 outputs (cli 95.1%). Any picker that centres the
-   band on the real input inherits this, including the node picker. A
-   uniform age rank (the #1692 acceptance) is out of reach while the band
-   stays centred. The one behavioural difference between `web` and `cli` —
-   web fills a thin band with nearest-age outputs where the CLI refuses —
-   never triggers at the reported ages on this chain (0 failures and no
-   fallback for either route at age 100).
+1. **The random-offset window closes the age-rank leaks (#1692, #1755).**
+   Before #1692 the node picker clamped a gamma target into a band centred
+   on the real age and took the nearest candidate, so outside the gamma bulk
+   every decoy sat on one side of the real input (youngest in 100% of rings
+   at 1k/5k, oldest in 100% at 100k/1M; Band-Center 85.3% with
+   gamma-distributed real ages). The CLI and web pickers drew uniformly from
+   the centred band, so the real input's rank was Binomial(19, ½) + 1, the
+   median member (Band-Center ~50% at 1k–1M, ~95% at age 100). Now every
+   picker draws the window offset uniformly, so given the window all 20 ring
+   members are exchangeable: on a pool of locally uniform age density the
+   real input's rank is exactly uniform (a hypergeometric count with a
+   uniform parameter), which the tables confirm on every route at every age.
+   The one behavioural difference between `web`/`node` and `cli` — they fill
+   a thin window with nearest-age outputs where the CLI refuses — never
+   triggers at the reported ages on this chain.
+2. **What the random offset costs: the `@max` over-charge tail.** The window
+   is still 20% of the real age wide, but the real input can now sit at its
+   young edge, so the oldest ring member (which drives the
+   `ring_elapsed_quantile@max` demurrage clock) can be up to 1.20× the real
+   age instead of 1.10×. Measured with `cluster-tax-sim decoy-quantile-sweep
+   --ring-size 20 --honest-jitter-bps 1000 --honest-band-offset`: the
+   aggregate honest over-charge (the #314 metric) is **1.0825**, against
+   1.0855 for the centred band, inside the 1.15 tolerance. Per spend, the
+   worst case rises from 1.1000 to 1.1985, and about 19% of honest spends are
+   over-charged by more than 15%. Pools whose age density varies within the
+   window (fast chain growth) bias the rank slightly toward the denser side.
 3. **Plaintext inherited cluster tags fingerprint the real input (#1756).**
    This is also new from #1700. `Wallet::compute_inherited_tags`
    (`botho/src/wallet.rs:695`) and `inherited_cluster_tags`
