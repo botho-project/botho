@@ -563,19 +563,39 @@ fn zeros_bomb(len: usize) -> Vec<u8> {
     zstd::encode_all(&vec![0u8; len][..], 19).unwrap()
 }
 
+/// zstd of a bincode row count `rows` followed by `len` zero bytes: a bomb
+/// whose section header agrees with a declared count of `rows`.
+fn counted_zeros_bomb(rows: u64, len: usize) -> Vec<u8> {
+    let mut raw = rows.to_le_bytes().to_vec();
+    raw.resize(8 + len, 0);
+    zstd::encode_all(&raw[..], 19).unwrap()
+}
+
 #[test]
-fn decompression_is_bounded_by_declared_counts() {
+fn decompression_is_bounded_by_actual_bytes() {
     let src_dir = TempDir::new().unwrap();
     let src = source_chain(src_dir.path());
     let snapshot = src.ledger.create_snapshot().unwrap();
     let dst_dir = TempDir::new().unwrap();
     let dst = Ledger::open(dst_dir.path()).unwrap();
 
-    // One declared key image (cap 8 + 40 B) but the section inflates to
-    // 64 MiB. Without the bound this decompresses fully and only then fails
-    // strict decoding ("bytes remaining"); with it, decoding stops at the cap.
+    // A plain zeros bomb decodes a row count of 0 against the declared 1 and
+    // is refused after 8 decompressed bytes.
+    let mut zeros = snapshot.clone();
+    zeros.key_image_data = zeros_bomb(64 << 20);
+    let err = assert_refused_untouched(&dst, |l| l.load_from_snapshot(&zeros, None));
+    assert!(
+        err.to_string()
+            .contains("key image section holds 0 rows but the header declares 1"),
+        "{err}"
+    );
+
+    // One declared key image (exactly 8 + 40 B) and a matching row count, but
+    // the section inflates to 64 MiB. Without the bound this decompresses
+    // fully and only then fails strict decoding; with it, streaming decoding
+    // stops one byte past the section's exact size.
     let mut bomb = snapshot.clone();
-    bomb.key_image_data = zeros_bomb(64 << 20);
+    bomb.key_image_data = counted_zeros_bomb(1, 64 << 20);
     assert!(bomb.key_image_data.len() < 16 << 10);
     let bound = |e: &dyn std::fmt::Display| {
         let m = e.to_string();
