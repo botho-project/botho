@@ -17,7 +17,9 @@ for row in data['rows']:
         assert row['largest_repeat_overlap_with_first'] is None
         assert row['max_jaccard_with_first'] is None
     if row['scenario'] == 'high-young-tail' and row['route'] == 'web_rpc_order':
-        assert row['outside_age_band'] == 1  # lower-bound violations count too
+        # The web route now applies the native age band (#1693); before it took
+        # a chain-ordered window and this row recorded 1 (lower-bound) violation.
+        assert row['outside_age_band'] == 0
     for e in row['evaluations']:
         assert e['affordable'] + e['unaffordable'] == e['selected']
         assert e['selected'] + e['selection_failures'] == row['attempts']

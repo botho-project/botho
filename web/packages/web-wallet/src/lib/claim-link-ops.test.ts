@@ -59,7 +59,7 @@ function fakeSigner(): WasmSigner {
 }
 
 interface StubOpts {
-  outputs?: Array<{ targetKey: string; publicKey: string; amount: bigint }>
+  outputs?: Array<{ targetKey: string; publicKey: string; amount: bigint; height?: number }>
   spentKeyImages?: Set<string>
   submitOk?: boolean
   connected?: boolean
@@ -136,12 +136,13 @@ describe('sweepEphemeral', () => {
   it('sweeps a funded link and returns the net + tx hash', async () => {
     setSigner(fakeSigner())
     const gross = 5_000_000_000_000n + SWEEP_FEE_RESERVE
-    // Need >= ringSize-1 = 2 decoys on chain besides the input.
+    // Need >= ringSize-1 = 2 decoys on chain besides the input, with block
+    // heights for age-band decoy selection (#1693).
     const adapter = stubAdapter({
       outputs: [
-        { targetKey: 'eph-1', publicKey: 'pk1', amount: gross },
-        { targetKey: 'decoy-1', publicKey: 'pk2', amount: 1n },
-        { targetKey: 'decoy-2', publicKey: 'pk3', amount: 1n },
+        { targetKey: 'eph-1', publicKey: 'pk1', amount: gross, height: 50 },
+        { targetKey: 'decoy-1', publicKey: 'pk2', amount: 1n, height: 50 },
+        { targetKey: 'decoy-2', publicKey: 'pk3', amount: 1n, height: 50 },
       ],
     })
     const result = await sweepEphemeral(adapter, EPH_MNEMONIC, DEST)
@@ -163,9 +164,9 @@ describe('sweepEphemeral', () => {
     const gross = 5_000_000_000_000n + SWEEP_FEE_RESERVE
     const adapter = stubAdapter({
       outputs: [
-        { targetKey: 'eph-1', publicKey: 'pk1', amount: gross },
-        { targetKey: 'decoy-1', publicKey: 'pk2', amount: 1n },
-        { targetKey: 'decoy-2', publicKey: 'pk3', amount: 1n },
+        { targetKey: 'eph-1', publicKey: 'pk1', amount: gross, height: 50 },
+        { targetKey: 'decoy-1', publicKey: 'pk2', amount: 1n, height: 50 },
+        { targetKey: 'decoy-2', publicKey: 'pk3', amount: 1n, height: 50 },
       ],
       submitOk: false,
     })
