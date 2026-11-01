@@ -31,6 +31,10 @@
 //!
 //! ### System Metrics
 //! - `botho_data_dir_usage_bytes` - Bytes used by the data directory (gauge)
+//! - `botho_ledger_map_size_bytes` - LMDB map size of the ledger (gauge)
+//! - `botho_ledger_used_bytes` - High-water mark of the ledger data file
+//!   (gauge)
+//! - `botho_ledger_map_full` - 1 once a block write hit MDB_MAP_FULL (gauge)
 //!
 //! ### Process Metrics (Linux only)
 //! The following metrics are only available on Linux via the Prometheus process
@@ -384,6 +388,26 @@ lazy_static! {
         "Total bytes used by the node's data directory"
     ).expect("Failed to create data_dir_usage_bytes metric");
 
+    /// LMDB map size of the ledger (#1535): the most `data.mdb` can hold.
+    pub static ref LEDGER_MAP_SIZE_BYTES: IntGauge = IntGauge::new(
+        "botho_ledger_map_size_bytes",
+        "LMDB map size of the ledger: the most the ledger data file can hold"
+    ).expect("Failed to create ledger_map_size_bytes metric");
+
+    /// High-water mark of the ledger's LMDB data file (#1535). Writes fail
+    /// with MDB_MAP_FULL once this reaches `botho_ledger_map_size_bytes`.
+    pub static ref LEDGER_USED_BYTES: IntGauge = IntGauge::new(
+        "botho_ledger_used_bytes",
+        "High-water mark of the ledger LMDB data file; writes fail once it reaches the map size"
+    ).expect("Failed to create ledger_used_bytes metric");
+
+    /// 1 once a block write has failed with MDB_MAP_FULL (#1535): the node
+    /// cannot store blocks until restarted with a larger map.
+    pub static ref LEDGER_MAP_FULL: IntGauge = IntGauge::new(
+        "botho_ledger_map_full",
+        "Whether a ledger block write has failed with MDB_MAP_FULL since startup (1) or not (0)"
+    ).expect("Failed to create ledger_map_full metric");
+
     // ============================================================================
     // Histograms (latency measurements)
     // ============================================================================
@@ -636,6 +660,15 @@ pub fn init_metrics() {
     REGISTRY
         .register(Box::new(DATA_DIR_USAGE_BYTES.clone()))
         .expect("Failed to register data_dir_usage_bytes");
+    REGISTRY
+        .register(Box::new(LEDGER_MAP_SIZE_BYTES.clone()))
+        .expect("Failed to register ledger_map_size_bytes");
+    REGISTRY
+        .register(Box::new(LEDGER_USED_BYTES.clone()))
+        .expect("Failed to register ledger_used_bytes");
+    REGISTRY
+        .register(Box::new(LEDGER_MAP_FULL.clone()))
+        .expect("Failed to register ledger_map_full");
 
     // Register process collector for memory metrics (Linux only)
     // This provides: process_resident_memory_bytes, process_virtual_memory_bytes,
@@ -861,6 +894,13 @@ impl MetricsUpdater {
     /// Update the data directory usage metric.
     pub fn set_data_dir_usage(&self, bytes: u64) {
         DATA_DIR_USAGE_BYTES.set(bytes as i64);
+    }
+
+    /// Update the ledger LMDB map-usage metrics (#1535).
+    pub fn set_ledger_storage(&self, usage: &crate::ledger::LedgerStorageUsage) {
+        LEDGER_MAP_SIZE_BYTES.set(usage.map_size_bytes.min(i64::MAX as u64) as i64);
+        LEDGER_USED_BYTES.set(usage.used_bytes.min(i64::MAX as u64) as i64);
+        LEDGER_MAP_FULL.set(i64::from(usage.map_full));
     }
 }
 

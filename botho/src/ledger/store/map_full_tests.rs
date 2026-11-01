@@ -82,6 +82,18 @@ fn map_full_fails_closed_and_recovers_with_larger_map() {
             "refused block is readable"
         );
 
+        assert!(error.is_map_full(), "{error:?}");
+
+        // Status/metrics see the full map (#1535): the flag is set and the
+        // high-water mark is at the map.
+        let usage = ledger.storage_usage();
+        assert!(usage.map_full, "{usage:?}");
+        assert_eq!(usage.map_size_bytes, SMALL_MAP as u64);
+        assert!(
+            usage.used_bytes <= usage.map_size_bytes && usage.used_fraction() > 0.9,
+            "{usage:?}"
+        );
+
         // Retrying without more space fails the same way.
         assert!(matches!(
             ledger.add_block(&block),
@@ -97,7 +109,53 @@ fn map_full_fails_closed_and_recovers_with_larger_map() {
 
     // Reopening with a larger map keeps the chain and accepts the refused block.
     let ledger = Ledger::open_with_map_size(dir.path(), 4 * SMALL_MAP).unwrap();
+    assert!(!ledger.storage_usage().map_full);
     assert_eq!(ledger.get_chain_state().unwrap().height, height);
     ledger.add_block(&refused).unwrap();
     assert_eq!(ledger.get_chain_state().unwrap().height, height + 1);
+}
+
+/// The production map (#1535; at least 64 GiB on 64-bit hosts, checked at
+/// compile time next to `LEDGER_MAP_SIZE`) opens on this platform, and reports
+/// its usage. Only address space is reserved: the data file stays small.
+#[test]
+fn production_map_size_opens_and_reports_usage() {
+    let dir = tempdir().unwrap();
+    let ledger = Ledger::open_with_map_size(dir.path(), LEDGER_MAP_SIZE).unwrap();
+    ledger.set_difficulty(u64::MAX).unwrap();
+    use rand::{rngs::StdRng, SeedableRng};
+    let minter = super::block_validation_tests::kem_address(
+        AccountKey::random(&mut StdRng::seed_from_u64(1535)).default_subaddress(),
+    );
+    let before = ledger.storage_usage();
+    for _ in 0..3 {
+        let block = next_block(&ledger, &minter);
+        ledger.add_block(&block).unwrap();
+    }
+    let after = ledger.storage_usage();
+    assert_eq!(after.map_size_bytes, LEDGER_MAP_SIZE as u64);
+    assert!(!after.map_full);
+    assert!(after.used_bytes >= before.used_bytes && after.used_bytes > 0);
+    assert!(after.used_fraction() < 0.001, "{after:?}");
+    let file = std::fs::metadata(dir.path().join("data.mdb"))
+        .unwrap()
+        .len();
+    assert!(
+        file < 64 * 1024 * 1024,
+        "data file is {file} B: the map must be sparse address space"
+    );
+}
+
+/// A non-map-full database error, and an invalid block, are not mistaken
+/// for a full map.
+#[test]
+fn only_map_full_errors_classify_as_map_full() {
+    assert!(LedgerError::Database(
+        "Failed to commit: MDB_MAP_FULL: Environment mapsize limit reached".into()
+    )
+    .is_map_full());
+    assert!(
+        !LedgerError::Database("Failed to start write txn: Invalid argument".into()).is_map_full()
+    );
+    assert!(!LedgerError::InvalidBlock("MDB_MAP_FULL".into()).is_map_full());
 }

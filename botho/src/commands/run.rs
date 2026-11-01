@@ -45,7 +45,10 @@ use crate::{
         SyncRequest, SyncRequestKind, SyncRequestToken, SyncResponse, SyncStatusSnapshot,
         MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION,
     },
-    node::{commit_block_locked, ApplyState, MintedMintingTx, Node, SharedLedger},
+    node::{
+        commit_block_locked, is_ledger_map_full, ApplyState, MintedMintingTx, Node, SharedLedger,
+        LEDGER_MAP_FULL_MESSAGE,
+    },
     rpc::{
         calculate_dir_size, init_metrics,
         metrics::{record_gossip_publish_error, NodeLoopTimer},
@@ -1040,8 +1043,12 @@ async fn run_async_with_shutdown(
         DATA_DIR_USAGE_BYTES.set(size as i64);
         debug!("Initial data_dir_usage_bytes: {} bytes", size);
     }
+    // Ledger LMDB map usage (#1535): same cadence as the data-dir size.
+    metrics_updater.set_ledger_storage(&ledger_storage_usage(&node));
     // Spawn background task for periodic updates
     let data_dir_clone = data_dir.clone();
+    let storage_ledger = node.shared_ledger();
+    let storage_metrics = metrics_updater.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         interval.tick().await; // Skip the immediate first tick (already done above)
@@ -1050,6 +1057,9 @@ async fn run_async_with_shutdown(
             if let Ok(size) = calculate_dir_size(&data_dir_clone) {
                 DATA_DIR_USAGE_BYTES.set(size as i64);
                 debug!("Updated data_dir_usage_bytes: {} bytes", size);
+            }
+            if let Ok(ledger) = storage_ledger.read() {
+                storage_metrics.set_ledger_storage(&ledger.storage_usage());
             }
         }
     });
@@ -2150,6 +2160,14 @@ async fn run_async_with_shutdown(
                             let height_already_filled = consensus_failure::height_already_applied(
                                 block.height(), ledger_height,
                             );
+                            if !height_already_filled && is_ledger_map_full(&e) {
+                                // #1535: still terminal (the externalized block
+                                // is not stored, so this node cannot follow the
+                                // decision), but say plainly that it is a local
+                                // storage fault and not a disagreement.
+                                error!(slot = slot_index, height = block.height(), error = %e,
+                                    "{}", LEDGER_MAP_FULL_MESSAGE);
+                            }
                             if height_already_filled {
                                 debug!(
                                     height = block.height(),
@@ -2297,7 +2315,23 @@ async fn run_async_with_shutdown(
 
                     // The first failure (the job stopped there). Never terminal.
                     if let Some((block, e)) = &outcome.failure {
+                        // #1535: a full LMDB map is a LOCAL storage fault. The
+                        // block may be perfectly valid, so it is not reported as
+                        // rejected and the serving peer is not charged with it.
+                        let storage_full = is_ledger_map_full(e);
+                        if storage_full {
+                            error!(source = origin.label(), height = block.height(), error = %e,
+                                "{}", LEDGER_MAP_FULL_MESSAGE);
+                            metrics_updater.set_ledger_storage(&ledger_storage_usage(&node));
+                        }
                         match &origin {
+                            _ if storage_full => {
+                                if origin.is_sync() {
+                                    // Back off the sync state machine without a
+                                    // reputation hit against the peer.
+                                    sync_manager.on_failure(None, format!("local ledger storage full: {e}"));
+                                }
+                            }
                             ApplyOrigin::Gossip { .. } => warn!("Failed to add network block: {}", e),
                             ApplyOrigin::Compact { block_hash } => warn!(
                                 block = %hex::encode(&block_hash[0..8]),
@@ -4074,6 +4108,15 @@ fn note_parked_parent(
         parked.height.saturating_sub(1),
         parked.prev_block_hash,
     );
+}
+
+/// The ledger's LMDB map usage (#1535), or the default (all zero) if the
+/// ledger lock is poisoned.
+fn ledger_storage_usage(node: &Node) -> crate::ledger::LedgerStorageUsage {
+    node.shared_ledger()
+        .read()
+        .map(|l| l.storage_usage())
+        .unwrap_or_default()
 }
 
 /// The committed ledger height, or `None` if it cannot be read.

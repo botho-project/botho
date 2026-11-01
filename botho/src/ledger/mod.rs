@@ -16,7 +16,7 @@ pub use snapshot::{SnapshotError, SnapshotV2Contents, UtxoSnapshot, UtxoSnapshot
 pub(crate) use store::v2::wallet::fixture as wallet_v2_fixture;
 pub use store::{
     v2::{DerivationContext, LOTTERY_RULES_VERSION},
-    ClusterWealthInfo, EmissionStateUpdate, Ledger, TxLocation,
+    ClusterWealthInfo, EmissionStateUpdate, Ledger, LedgerStorageUsage, TxLocation,
 };
 
 use serde::{Deserialize, Serialize};
@@ -95,6 +95,20 @@ pub enum LedgerError {
     /// per-tx balance overflow guard from issue #340.
     #[error("Block fee total overflows u64")]
     FeeOverflow,
+}
+
+impl LedgerError {
+    /// True when LMDB refused a write because the ledger's map is full
+    /// (`MDB_MAP_FULL`, #1535).
+    ///
+    /// This is a LOCAL storage fault, not a verdict on the block: the refused
+    /// write commits nothing, the same block is accepted once the node is
+    /// restarted with a larger map, and peers that served the block did
+    /// nothing wrong. Callers must not treat it as an invalid block or
+    /// penalize the serving peer.
+    pub fn is_map_full(&self) -> bool {
+        matches!(self, LedgerError::Database(message) if message.contains("MDB_MAP_FULL"))
+    }
 }
 
 /// Information about the current chain state
