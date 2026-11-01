@@ -1,0 +1,4 @@
+
+[[require]]
+name = "tidy"
+path = "../dep"
