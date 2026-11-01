@@ -192,9 +192,26 @@ python3 scripts/stress/faults.py run --plan <staged x-series plan> \
 the `dry-run` output, which lists every command with its absolute UTC time
 (`T0+<s>` without `--start`), before launching `run`.
 
-**Refusals.** The executor refuses a plan without `degrade_steps`, including a
-`rehearsal_only` plan whose `degrade_steps` is `[]` (an empty schedule is never
-run); a target missing from the inventory or equal to the plan's
+**Manual single step (rehearsal only, #1610).** A `rehearsal_only` plan
+validates its `degrade` block but schedules nothing. `--only <step> --at now`
+takes that one step from the plan, for example the rehearsal's single manual
+D1, and runs it immediately. The step is re-validated by the planner's own
+`expand_degrade()`, keeps its `fault_seconds` and `recovery_seconds`, and
+starts 30 s after launch, after the same minting prechecks. It also gets the
+same dead-man, stop confirmation, restore, verify and journal. Omit `--start`.
+A campaign plan refuses `--only`, because it runs its whole schedule. The
+rehearsal controller has no scheduled window for a manual fault, so use this
+only on a rehearsal-only fleet:
+
+```
+python3 scripts/stress/faults.py run --plan <staged rehearsal plan> \
+    --inventory inventory.json --ssh-config operator-ssh-config --unit <node unit> \
+    --only D1 --at now --controller-stop controller:<controller state dir> --journal faults.jsonl
+```
+
+**Refusals.** Without `--only`, the executor refuses a plan without
+`degrade_steps`, including a `rehearsal_only` plan whose `degrade_steps` is
+`[]` (an empty schedule is never run as a schedule). It also refuses a target missing from the inventory or equal to the plan's
 `producer_role`; an inventory hostname or alias that is a public
 `runtime.HOSTS` name; a private IP outside RFC1918; and a malformed unit. At
 launch, and again 30 s before each fault (so the check never eats into the
@@ -294,7 +311,15 @@ validates every input and prepares protected local bundles without SSH. Adding
 `--execute` installs **inactive, disabled** services using explicit operator SSH
 credentials; it never starts nodes, observers, controllers or funding. Both the
 output directory and every remote campaign state/package/unit/control-file leaf
-must be absent. Existing parent directories are allowed; control parents must
+must be absent. **Staging retry (#1610).** sshd reads the observer key from the
+fixed per-account file `/etc/ssh/authorized_keys/<user>`. A retry therefore
+needs fresh run-scoped `state`, `package`, `unit` and `export_wrapper` paths,
+for example with an attempt suffix, and it still collides on that one file.
+`deploy.py stage --execute --replace-observer-keys` lets the installer replace
+it atomically. It does so only if the existing file is a root-owned regular
+file that contains nothing but staging-rendered
+`restrict,from="…",command="/usr/local/libexec/…" ssh-ed25519 …` lines. Any
+other content still refuses. Nothing else is ever replaced. Existing parent directories are allowed; control parents must
 be root-owned and not writable by other users. Packages, units, authorized keys
 and export wrappers are root-owned. State and wallets belong to the configured
 service account. Operator credentials are never shipped. This mode cannot fall
@@ -333,7 +358,10 @@ The deployment profile is version 1 and contains these fields:
   and an exclusive root-owned authorized-keys file under `/etc/ssh/authorized_keys/`.
   The key is restricted to `controller_ip` and the wrapper; the controller passes
   no remote command. Infrastructure must configure sshd to use this authorized
-  keys file, disable forwarding/TTY, and enforce the same fixed command.
+  keys file, disable forwarding/TTY, and enforce the same fixed command. For
+  x-series fleets, `fleet_provision.bootstrap()` already does the first two
+  (see below). After staging, run `fleet_provision.observer_sshd_install(<export_wrapper>)`
+  as root on each node to add `ForceCommand`.
 - `controller_ip`: the private source address allowed for observer export.
 - `hosts_file`: a private-address hosts file covering every RPC/SSH target name.
   Its hash is pinned and it is mounted read-only as `/etc/hosts` **inside the
@@ -699,6 +727,17 @@ only host with a private route to the fleet RPC. The operator's untracked copy
 step installs it; `staging.py` does not. The copy must include `lottery.py`
 next to `prefund.py`, as staging's `CODE` does for the controller.
 
+**Fleet hostnames (#1610).** The controller host cannot resolve the fleet's
+`<role>.<run>.internal` RPC names: staging binds the fleet hosts file over
+`/etc/hosts` for the controller *unit* only. Run the prefunder the same way, in
+a transient unit with that file bound read-only. `prefund.py check --manifest M
+--hosts H` checks that `H` gives a private address for every target and prints
+the `unit_properties` to pass as `systemd-run --property=…`:
+`BindReadOnlyPaths=H:/etc/hosts`, `ReadWritePaths=<state_dir>`, a read-only
+system and IP egress limited to localhost and the five nodes. Before any RPC,
+`prefund.py run` refuses if a target name does not resolve. With `--hosts H`, it
+also refuses if a name resolves to an address other than the one in `H`.
+
 The order for an x run is:
 
 1. **Prefund.** Generate the campaign wallets with the signer's `generate`.
@@ -773,6 +812,15 @@ the 72-hour campaign must start (`discovery.py`). Plans with
   chain, this detects reuse directly;
 - the funding wallet's verified spendable balance covers the principal plus
   worst-case fees.
+
+On a fresh chain the producer's coinbase outputs are not mature yet: a
+prefunder started at height 0 used to hold at once with "funding wallet balance
+cannot cover principal". Nothing is at stake before the opening (#1610), so it
+now **waits** instead. It rescans every 60 s (`FUNDING_WAIT_SECONDS`), journals
+`prefund_funding_wait` with `height`, `spendable` and `needed`, and prints the
+same line to the unit's log. It holds with that message only when the
+write `deadline` arrives with the balance still short. The node and wallet checks
+above still hold at once.
 
 The snapshot is saved once, to `opening.json`.
 
@@ -1120,10 +1168,11 @@ The security group carries `project`, `Purpose`, `SideProject` and `Run`.
 `cloud_retention.py` selects; a regression test builds a fleet with
 `fleet_provision.tags()` and checks that retention selects it.
 
-- **Never emit `Project=` (capital P).** IAM tag keys match case-insensitively,
-  so `Project` collides with `project`, and `Project=botho-qualification` is
-  denied to the botho-deploy role. The renderer refuses any key that equals
-  `project` case-insensitively unless it is exactly `project`.
+- **Never emit `Project=` (capital P).** It is forbidden by policy, not denied
+  by IAM. IAM tag keys match case-insensitively, so `Project` collides with
+  `project`. (A 2026-10-25 botho-deploy dry-run with `Project=botho-qualification`
+  succeeded, #1610.) The renderer refuses any key that equals `project`
+  case-insensitively unless it is exactly `project`.
 - **`SideProject=botho` is set at creation**, not added later by another
   profile. botho-deploy passed a dry-run of `ec2:RunInstances` and
   `ec2:CreateSecurityGroup` with all three tags on 2026-10-24.
@@ -1132,7 +1181,15 @@ The security group carries `project`, `Purpose`, `SideProject` and `Run`.
 operator addresses, and tcp 22, 443 and 17110 plus udp 17110 from the group
 itself. Port 17110 is the gossip port the staging renderer uses. Operator
 addresses must be explicit IPv4 `/32` hosts; `0.0.0.0/0` and wider ranges are
-refused.
+refused. **List every egress address the operator laptop can use.** A laptop
+may alternate between egress IPs (dual-WAN, a VPN, a phone hotspot, or a
+carrier NAT that rotates), and the SSH rule allows only the addresses in
+`operator_cidrs`. `security_group_rules()` accepts several distinct `/32`s, so
+freeze all of them in the plan rather than editing the group mid-run. Check the
+current egress before each session, for example with
+`curl -s https://checkip.amazonaws.com`. An SSH timeout, rather than a refused
+connection, usually means the laptop has moved to an address that is not in the
+list.
 
 `bootstrap()` renders the EC2 user data in a fixed order: an absolute-stop
 systemd timer whose `OnCalendar` is `host_end`, then the
@@ -1140,8 +1197,55 @@ systemd timer whose `OnCalendar` is `host_end`, then the
 then package installs, users and SSH hardening, then the role and run markers
 under `/etc/botho-qualification/`. `infrastructure_plan()` returns the plan to
 freeze before any launch: `host_end = created_at + 82h` (inside the 83 h
-maintenance cap), `node_end = created_at + 81.5h`, and the roles with their
+maintenance cap), `node_end = host_end − 30 min`, and the roles with their
 instance types (`m6i.2xlarge` controller, `m6i.large` producer `n3`,
 `c6i.large` validators). `launch_request()` renders one role's `RunInstances`
-input from that plan. SSH host-key pinning and the SSH ControlPath, which must
-stay under macOS's 104-byte socket path limit, remain operator-side.
+input from that plan and refuses a plan whose `host_end` was edited.
+
+**Rehearsal lifetime (#1610).** A rehearsal-only fleet does not need 82 hours.
+`infrastructure_plan(..., execution_mode='rehearsal_only', lifetime=<seconds>)`
+freezes a shorter host lifetime, from 4 h (`MIN_REHEARSAL_LIFETIME`: prefund and
+staging plus the 1.5–2 h rehearsal window) up to 82 h. The plan then records
+`execution_mode` and `host_lifetime`. `node_end` is still 30 min before
+`host_end`, and `prefund_end` never falls after `node_end`. A campaign plan
+cannot shorten its lifetime, and its frozen plan is unchanged.
+
+**Host prerequisites rendered at bootstrap (#1610).**
+
+- **netem (D4).** On every node, bootstrap installs `iproute2` and `iptables`.
+  It then smoke-tests the exact D4 qdisc stack on `lo`: a 4-band `prio` root,
+  `netem` on band 4 and a `u32` filter on port 17110. If that fails, as it can
+  on the `-aws` kernel, which ships `sch_netem` in
+  `linux-modules-extra-$(uname -r)`, bootstrap installs that package, runs
+  `modprobe sch_netem` and probes again. A second failure is fatal, so
+  `bootstrap-complete` is never written. The modules are listed in
+  `/etc/modules-load.d/botho-x-faults.conf`, and
+  `/etc/botho-qualification/netem-ok` records the passing probe.
+- **Authorized-keys directory.** `/etc/ssh/authorized_keys` is root-owned
+  `0755`. sshd opens `AuthorizedKeysFile` as the target user, so the earlier
+  `0700` made the observer key unreadable ("Could not open user botho
+  authorized keys … Permission denied"). The controller then held with
+  `restricted observer export failed`. The files inside stay root-owned.
+- **Observer account.** The sshd drop-in ends with a `Match User botho` block.
+  It limits that account to `/etc/ssh/authorized_keys/%u` (never `~/.ssh`,
+  because the node runs as `botho`) and turns off TCP, agent and stream-local
+  forwarding, X11, TTY, tunnels, user rc and gateway ports.
+  `ForceCommand` needs the export wrapper path, which staging fixes, so it is
+  added after staging. `observer_sshd_install(<export_wrapper>)` renders a root
+  script that writes `/etc/ssh/sshd_config.d/41-botho-observer.conf`
+  atomically, replacing an earlier attempt's copy, and validates it with
+  `sshd -t`. It reloads sshd only after that check passes, and restores the
+  previous drop-in on failure.
+
+**SSH host keys.** Pinning is operator-side. At first boot the operator pins
+each host from the ed25519 fingerprint in the EC2 console output. **After a
+stop/start that console output is gone.** The keys on disk are unchanged, but a
+host that was never pinned, or whose pin was lost, has no out-of-band source.
+The tracked fallback scans over the VPC from a host that is already pinned,
+never over the internet. `keyscan_argv(private_ips)` is the remote argv to run
+on the pinned host through the operator SSH config. `parse_keyscan(output,
+private_ips)` returns exactly one ed25519 key per expected address, and refuses
+missing, extra, duplicate or non-ed25519 entries. Trust then rests on the
+pinned host and the private VPC path. Record which host the scan came from. The
+SSH ControlPath, which must stay under macOS's 104-byte socket path limit, also
+remains operator-side.

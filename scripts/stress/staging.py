@@ -16,7 +16,7 @@ import tarfile
 
 from observer import absolute_path, node_config
 from plan import expand
-from runtime import Gate, HOSTS, campaign_targets, campaign_tls_context, validate_ssh_target
+from runtime import Gate, HOSTS, campaign_targets, campaign_tls_context, parse_hosts, validate_ssh_target
 
 SOURCE = Path(__file__).parent
 CODE = ('controller.py', 'runtime.py', 'plan.py', 'bounds.py', 'discovery.py', 'discovery_plan.py', 'fee_evidence.py', 'selection.py', 'reporting.py', 'signer_history.py', 'lottery.py')
@@ -142,16 +142,7 @@ def prepare(profile):
     known_hosts = read_file(profile['observer_known_hosts'])
     hosts = read_file(profile['hosts_file'])
     # Unit-scoped hosts must resolve every configured RPC/SSH hostname privately.
-    resolved = {}
-    for line in hosts.decode().splitlines():
-        parts = line.split('#',1)[0].split()
-        if not parts:
-            continue
-        address = ipaddress.ip_address(parts[0])
-        need(address.is_private, 'campaign hosts file requires private addresses')
-        for name in parts[1:]:
-            need(name not in resolved, 'duplicate hosts-file hostname')
-            resolved[name] = str(address)
+    resolved = parse_hosts(hosts)
     from urllib.parse import urlsplit
     for target in mapping.values():
         for name in (urlsplit(target['rpc_url']).hostname, target['observer_ssh_target'].split('@')[1]):
@@ -208,7 +199,14 @@ def prepare(profile):
 
 # Installed through sudo with a digest-checked in-memory archive. No shell, tar
 # extraction paths, service activation, existing-file replacement or migration.
-INSTALL = '''import hashlib,io,json,os,pathlib,pwd,subprocess,tarfile
+# One exception (#1610 item 6): sshd reads the observer key from the fixed
+# per-account file /etc/ssh/authorized_keys/<user>, so a staging retry (fresh
+# run-scoped state, package, unit and wrapper) collides on it alone. With the
+# explicit `replace_authorized_keys` opt-in, an existing root-owned regular file
+# holding only staging-rendered observer entries is atomically replaced.
+STAGED_KEY_LINE = r'restrict,from="[0-9.]+",command="/usr/local/libexec/[A-Za-z0-9_.-]+" ssh-ed25519 [A-Za-z0-9+/]+={0,2}(?: [^\r\n]*)?'
+INSTALL = 'KEY_LINE=' + repr(STAGED_KEY_LINE) + '''
+import hashlib,io,json,os,pathlib,pwd,re,subprocess,tarfile
 os.umask(0o022)
 archive=pathlib.Path(ARCHIVE)
 data=archive.read_bytes()
@@ -219,8 +217,17 @@ with tarfile.open(fileobj=io.BytesIO(data)) as tar:
  state=pathlib.Path(item['state']);package=pathlib.Path(item['package'])
  unit=pathlib.Path('/etc/systemd/system')/item['unit']
  destinations={n:(state/n[6:] if n.startswith('state/') else package/n[8:] if n.startswith('package/') else pathlib.Path(item[n])) for n in meta['files']}
+ keys=destinations.get('authorized_keys_file');replaced=None
  for path in [state,package,unit,*[p for n,p in destinations.items() if not n.startswith(('state/','package/'))]]:
-  assert not path.exists() and not path.is_symlink(), 'destination exists: '+str(path)
+  if path==keys and meta.get('replace_authorized_keys') is True and path.exists() and not path.is_symlink():
+   info=path.lstat()
+   assert path.is_file() and info.st_uid==0 and info.st_nlink==1, 'existing authorized keys file is not a root-owned regular file'
+   old=path.read_bytes();lines=[l for l in old.decode().splitlines() if l.strip()]
+   assert lines and all(re.fullmatch(KEY_LINE,l) for l in lines), 'existing authorized keys file holds entries staging did not render'
+   replaced=hashlib.sha256(old).hexdigest()
+   continue
+  hint=' (an earlier staging attempt? rerun with --replace-observer-keys)' if path==keys else ''
+  assert not path.exists() and not path.is_symlink(), 'destination exists: '+str(path)+hint
   assert not any(p.is_symlink() for p in path.parents), 'symlink parent'
  for path in [package,unit,*[p for n,p in destinations.items() if not n.startswith(('state/','package/'))]]:
   for parent in path.parents:
@@ -235,6 +242,11 @@ with tarfile.open(fileobj=io.BytesIO(data)) as tar:
    for parent in path.parents:
     if parent==state.parent:break
     os.chmod(parent,0o700);os.chown(parent,account.pw_uid,account.pw_gid)
+  if path==keys and replaced is not None:
+   staged=path.with_name('.'+path.name+'.staging')
+   with staged.open('xb') as output:output.write(tar.extractfile(name).read());output.flush();os.fsync(output.fileno())
+   os.chmod(staged,mode);os.replace(staged,path)
+   continue
   with path.open('xb') as output:output.write(tar.extractfile(name).read());output.flush();os.fsync(output.fileno())
   os.chmod(path,mode)
   if name.startswith('state/'):os.chown(path,account.pw_uid,account.pw_gid)
@@ -248,11 +260,17 @@ assert result.stdout.strip() in ('inactive','unknown'), 'staged unit unexpectedl
 enabled=subprocess.run(['systemctl','is-enabled',item['unit']],capture_output=True,text=True)
 assert enabled.stdout.strip() in ('disabled','static'), 'staged unit unexpectedly enabled'
 archive.unlink()
-print(json.dumps({'unit':item['unit'],'status':'staged-inactive','archive_sha256':SHA}))
+print(json.dumps({'unit':item['unit'],'status':'staged-inactive','archive_sha256':SHA,'replaced_authorized_keys_sha256':replaced}))
 '''
 
 
-def stage(profile_path, output, execute=False):
+def stage(profile_path, output, execute=False, replace_observer_keys=False):
+    """Seal one archive per component; with `execute`, install each INACTIVE.
+
+    `replace_observer_keys` lets a staging retry replace an earlier attempt's
+    observer authorized-keys file (see STAGED_KEY_LINE); nothing else is ever
+    replaced, so the retry still needs fresh state/package/unit/wrapper paths.
+    """
     profile = json.loads(Path(profile_path).read_text())
     bundles = prepare(profile)
     output = Path(output)
@@ -263,7 +281,8 @@ def stage(profile_path, output, execute=False):
         with archive.open('xb') as stream:
             os.chmod(archive,0o600)
             with tarfile.open(fileobj=stream,mode='w') as tar:
-                meta = {'item':item,'observer':observer,'files':{n:m for n,(_,m) in files.items()},'unit':unit_text(item,observer)}
+                meta = {'item':item,'observer':observer,'files':{n:m for n,(_,m) in files.items()},'unit':unit_text(item,observer),
+                        'replace_authorized_keys':bool(replace_observer_keys and observer)}
                 for name,(data,mode) in dict(files, **{'install.json':(json.dumps(meta).encode(),0o600)}).items():
                     info=tarfile.TarInfo(name);info.size=len(data);info.mode=mode
                     tar.addfile(info,io.BytesIO(data))

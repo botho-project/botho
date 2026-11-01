@@ -125,6 +125,69 @@ class StagingTests(unittest.TestCase):
         self.assertEqual((state/'keep').read_text(),'preserved')
         self.assertFalse((self.root/'new-package').exists())
 
+    def observer_install(self, keys_text, replace, attempt='b'):
+        """Run the real installer for observer bundle n1 against temp paths (#1610 item 6)."""
+        output=self.root/('prepared-'+attempt)
+        results=staging.stage(self.profile,output,replace_observer_keys=replace)
+        archive=Path(results[1]['archive'])
+        with tarfile.open(archive) as tar:
+            entries={m.name:tar.extractfile(m).read() for m in tar.getmembers()}
+        meta=json.loads(entries['install.json'])
+        self.assertIs(meta['replace_authorized_keys'],replace)
+        base=self.root.resolve()/('host-'+attempt)
+        keys=self.root.resolve()/'keys';keys.mkdir(exist_ok=True)
+        if keys_text is not None:(keys/'botho').write_text(keys_text)
+        units=base/'systemd';units.mkdir(parents=True)
+        meta['item'].update(package=str(base/'opt'/'obs'),state=str(base/'var'/'obs'),
+                            export_wrapper=str(base/'libexec'/'export'),authorized_keys_file=str(keys/'botho'))
+        entries['install.json']=json.dumps(meta).encode()
+        with tarfile.open(archive,'w') as tar:
+            for name,data in entries.items():
+                info=tarfile.TarInfo(name);info.size=len(data);tar.addfile(info,io.BytesIO(data))
+        env={'ARCHIVE':str(archive),'SHA':hashlib.sha256(archive.read_bytes()).hexdigest()}
+        installer=staging.INSTALL.replace("pathlib.Path('/etc/systemd/system')",'pathlib.Path('+repr(str(units))+')')
+        real_stat,real_lstat=Path.stat,Path.lstat
+        def root(real):
+            def owned(path,*args,**kwargs):
+                fields=list(real(path,*args,**kwargs));fields[4]=0;fields[0]&=~0o022
+                return os.stat_result(fields)
+            return owned
+        def systemctl(args,**kwargs):
+            output={'show':'LoadState=not-found','is-active':'inactive','is-enabled':'static'}
+            return types.SimpleNamespace(stdout=output.get(args[1],''),returncode=0)
+        printed=[]
+        account=types.SimpleNamespace(pw_uid=os.getuid(),pw_gid=os.getgid())
+        with patch('pwd.getpwnam',return_value=account),patch('os.chown'), \
+             patch.object(Path,'stat',root(real_stat)),patch.object(Path,'lstat',root(real_lstat)), \
+             patch('subprocess.run',side_effect=systemctl),patch('builtins.print',side_effect=printed.append):
+            exec(installer,env)
+        return keys/'botho',json.loads(printed[-1]),entries['authorized_keys_file']
+
+    def test_staging_retry_replaces_only_a_staged_observer_key(self):
+        old='restrict,from="10.0.0.10",command="/usr/local/libexec/botho-observer-a" ssh-ed25519 AAAA old\n'
+        # Without the opt-in an existing key file still refuses, with a hint.
+        with self.assertRaisesRegex(AssertionError,'replace-observer-keys'):
+            self.observer_install(old,False,'a')
+        path,result,new=self.observer_install(old,True)
+        self.assertEqual(path.read_bytes(),new)
+        self.assertEqual(path.stat().st_mode & 0o777,0o644)
+        self.assertEqual(result['replaced_authorized_keys_sha256'],hashlib.sha256(old.encode()).hexdigest())
+        self.assertEqual([p.name for p in path.parent.iterdir()],['botho'])
+        # The rendered line is exactly what a later retry accepts.
+        self.assertRegex(new.decode().strip(),'^'+staging.STAGED_KEY_LINE+'$')
+        # A first attempt (no file) works with the opt-in too.
+        path.unlink()
+        path,result,new=self.observer_install(None,True,'c')
+        self.assertIsNone(result['replaced_authorized_keys_sha256'])
+
+    def test_staging_retry_refuses_foreign_key_files(self):
+        for i,text in enumerate(('ssh-ed25519 AAAA operator\n','',
+                                 'restrict,from="10.0.0.10",command="/bin/sh" ssh-ed25519 AAAA x\n')):
+            with self.subTest(text=text):
+                with self.assertRaisesRegex(AssertionError,'entries staging did not render'):
+                    self.observer_install(text,True,'r%d'%i)
+                self.assertEqual((self.root/'keys'/'botho').read_text(),text)
+
     def test_observer_uses_configured_unit_and_paths(self):
         node=self.p['observers'][0]['node']
         def read_text(path):
