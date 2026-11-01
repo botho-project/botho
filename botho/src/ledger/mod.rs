@@ -9,6 +9,9 @@ mod experimental;
 mod lottery_v2;
 mod snapshot;
 mod store;
+// Drift guards pinning the cluster-tax emission model to the node (#1699).
+#[cfg(test)]
+mod emission_parity_tests;
 
 // #1698 drift guards for the shared sim consensus fee model (kept out of the
 // SHA-pinned store.rs).

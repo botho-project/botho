@@ -54,9 +54,9 @@ S_1 = R_0 H \sum_{i=0}^{K-1} 2^{-i}
 \subsubsection{Tail Emission}
 
 After the five halvings complete, perpetual tail emission begins. Rather than
-a fixed per-block constant, the tail targets a constant \emph{net annual
-inflation rate} on the circulating supply, so emission scales with supply
-rather than being pinned to an absolute number:
+a fixed per-block constant, the tail reward is a fixed \emph{annual rate} on
+the cumulative supply, so emission scales with supply rather than being pinned
+to an absolute number:
 
 \begin{equation}
 R_{\text{tail}} = \frac{S \cdot (\beta_{\text{net}} + \beta_{\text{burn}})}
@@ -65,12 +65,13 @@ R_{\text{tail}} = \frac{S \cdot (\beta_{\text{net}} + \beta_{\text{burn}})}
 
 where:
 \begin{itemize}
-  \item $S$ is the circulating supply at the start of the tail phase
-  \item $\beta_{\text{net}} = 0.02$ (200 bps) is the target net annual
+  \item $S$ is the cumulative gross issuance so far (every block reward ever
+    minted, not reduced by burns), \emph{recomputed every block}
+  \item $\beta_{\text{net}} = 0.02$ (200 bps) is the design net annual
     inflation
-  \item $\beta_{\text{burn}} = 0.005$ (50 bps) is the expected annual
+  \item $\beta_{\text{burn}} = 0.005$ (50 bps) is an \emph{assumed} annual
     fee-burn rate (the 20\% burn, see Section~\ref{sec:economic-modeling}),
-    added so that \emph{gross} emission nets to the 2\% target after burns
+    added so that \emph{gross} emission would net to 2\% if burns reached it
   \item $N_{\text{year}} = 6{,}307{,}200$ is the number of blocks per year at
     5s blocks
 \end{itemize}
@@ -82,9 +83,24 @@ tail onset:
 \text{Net annual emission}   &= 611{,}010{,}000 \times 0.020 = 12{,}220{,}200 \text{ BTH} \\
 R_{\text{tail}} &= \frac{15{,}275{,}250}{6{,}307{,}200} \approx 2.42 \text{ BTH/block (gross)}
 \end{align}
-or $\approx 1.94$ BTH/block net of the expected fee burn. Because $R_{\text{tail}}$
-is proportional to supply, the per-block reward \emph{grows} as the supply
-grows, holding net inflation fixed at 2\%.
+or $\approx 1.94$ BTH/block net of the assumed fee burn. Because each tail
+reward is added back into $S$, the per-block reward \emph{grows} as the supply
+grows and gross issuance compounds at $\approx$2.53\% per $N_{\text{year}}$
+blocks.
+
+\textbf{Realized net rate.} The 0.5\% burn is a calibration assumption, not
+an expected outcome. Only 20\% of fees are burned, and a typical
+1-input/2-output transaction pays the 0.0001\,BTH relay minimum, so burning
+0.5\% of the tail-onset supply each year would take about 4,800 transactions
+per second, sustained. At the loads the timing tiers anticipate, the base-fee
+burn is a few thousandths of a percent of supply. Demurrage is collected as
+part of the fee, so 20\% of it is burned too; that term is at most
+$\approx$0.4\%/year, and only if every coin sat at the maximum cluster factor
+and was settled yearly. The realized net tail is therefore between $\approx$2.1\%
+and $\approx$2.53\% (compounded) per $N_{\text{year}}$ blocks, near the top in practice, rather than
+2\%. The parameters are unchanged (ratified); this restates what they imply.
+Whether to keep them and restate the headline figure, or recalibrate the tail
+(a consensus change), is an open operator decision tracked in issue \#1788.
 
 \subsubsection{Supply Projection}
 
@@ -100,18 +116,22 @@ grows, holding net inflation fixed at 2\%.
 2 & 473.0M BTH & 157.7M & 50\% \\
 3 & 551.9M BTH & 78.8M & 17\% \\
 5 & 611.0M BTH & 19.7M & 3.3\% \\
-6 & 626.3M BTH & 15.3M & 2.5\% \\
-10 & 691.3M BTH & 16.9M & 2.5\% \\
-20 & 884.9M BTH & 21.6M & 2.5\% \\
+6 & 626.5M BTH & 15.5M & 2.5\% \\
+10 & 692.4M BTH & 17.1M & 2.5\% \\
+20 & 889.0M BTH & 22.0M & 2.5\% \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\textbf{Note}: Years 1--5 are the halving phase (rewards 50, 25, 12.5, 6.25,
-3.125 BTH/block), which fix the Phase-1 supply at $\approx$611M BTH. From year 6
-onward the tail holds \emph{gross} emission at 2.5\% of supply (2\% net of the
-expected 0.5\% fee burn). Because the tail tracks supply, nominal emission
-grows over time while the net inflation rate stays pinned at 2\%.
+\textbf{Note}: Years are \emph{policy-years} of 6,307,200 blocks (calendar
+years only at 5\,s blocks; see Emission Bounds). Years 1--5 are the halving
+phase (rewards 50, 25, 12.5, 6.25, 3.125 BTH/block), which fix the Phase-1
+supply at $\approx$611M BTH. From year 6 onward the tail reward is recomputed
+every block from cumulative issuance, so gross issuance compounds at
+$\approx$2.53\% per policy-year (2.5\% calibrated, compounded per block).
+Burns are omitted: at realistic fee volumes they are far below the assumed
+0.5\%/year (see Realized net rate above). Figures are the node's exact
+issuance (\texttt{cluster-tax-sim emission-sweep}, node-parity section).
 
 \input{figures/supply-projection}
 
@@ -196,9 +216,9 @@ This aligns miner incentives with network utility.
 
 \subsubsection{Emission Bounds}
 
-Because the tail reward is fixed per block (at $\approx$2.42 BTH/block gross
-for the $\approx$611M tail-onset supply), slower blocks produce fewer blocks
-per year and therefore proportionally lower annual emission. The effective
+Because the tail reward is set per block, not per unit of time (at
+$\approx$2.42 BTH/block gross for the $\approx$611M tail-onset supply), slower
+blocks produce fewer blocks per year and therefore proportionally lower annual emission. The effective
 annual tail emission thus varies with utilization:
 
 \begin{table}[h]
@@ -216,11 +236,15 @@ High, reference (5s) & 6,307,200 & 15.28M BTH \\
 \end{tabular}
 \end{table}
 
-At the 5\,s monetary reference this is the 2.5\% gross (2\% net) tail target;
-sustained slower operation acts as a natural inflation dampener, holding
-emission below the 2\% net rate. The 3-second floor (transient maximum demand)
-would raise the block count to 10.5M/year, briefly exceeding the reference
-target until difficulty and load re-equilibrate.
+At the 5\,s monetary reference this is the 2.5\% gross tail rate (2\% net
+only if fee burns reached the assumed 0.5\%); sustained slower operation acts
+as a natural inflation dampener. Blocks are load-paced, so the same
+dampening stretches the calendar: the 5 policy-years to tail take 10 years at
+10\,s blocks and 40 years when idle. The 3-second tier (sustained $\geq$20
+tx/s) raises the block count to 10.5M/year, about 4.2\% gross per calendar
+year, and reaches the tail in 3 years. The difficulty controller targets 5\,s
+blocks but cannot make blocks faster than load pacing allows; how it behaves
+at sustained low load on the live network has not yet been measured.
 
 \subsection{Fee Economics}
 
@@ -233,10 +257,15 @@ f_{\text{base}} = 1 \text{ pico-BTH per byte}
 \end{equation}
 
 (\Botho's smallest unit is the picocredit, $1\text{ BTH} = 10^{12}$ pico-BTH.)
-For a typical 4 KB transaction:
+The size term is multiplied by the cluster factor and by an output-count
+penalty ($\min(n_{\text{out}}, 10)^2$). For a typical 1-input/2-output
+transaction (990 bytes) of factor-1 coins, the consensus floor is
 \begin{equation}
-f_{\text{min}} = 4{,}000 \times 1 = 4{,}000 \text{ pico-BTH} = 4 \times 10^{-9} \text{ BTH}
+f_{\text{floor}} = 990 \times 1 \times 2^2 = 3{,}960 \text{ pico-BTH} \approx 4 \times 10^{-9} \text{ BTH}.
 \end{equation}
+This is the block-validity floor. Default nodes also enforce a relay minimum of
+$10^{8}$ pico-BTH (0.0001 BTH) per transaction, so that is what an ordinary
+wallet pays; the floor is what a miner including its own transactions pays.
 
 The 1\,pico-BTH/byte figure is the congestion \emph{floor}. Under load the
 dynamic base rises multiplicatively (a congestion response bounded by a
@@ -575,8 +604,8 @@ Initial reward & 50 BTH & Block reward at genesis \\
 Halving period & 6,307,200 blocks & $\approx$ 1 year (at 5s blocks) \\
 Halving count & 5 & Time-to-tail $\approx$ 5 years \\
 Phase-1 supply & $\approx$611M BTH & Geometric sum of 5 halvings \\
-Tail inflation & 2\% net/yr & Supply-dependent, perpetual \\
-Tail reward & $\approx$1.94 BTH/block & Net, at 611M supply (grows with supply) \\
+Tail inflation & 2.5\% gross/yr & 2\% net + 0.5\% assumed burn; realized net $\approx$2.1--2.53\% \\
+Tail reward & $\approx$2.42 BTH/block & Gross, at 611M supply (recomputed each block) \\
 Min block time & 3 seconds & Consensus floor (very high load) \\
 Reference block time & 5 seconds & Monetary-calculation reference \\
 Max block time & 40 seconds & Idle ceiling \\

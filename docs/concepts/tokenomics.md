@@ -75,7 +75,7 @@ At the ~611M BTH tail-onset supply:
 - Blocks per year (5s baseline): 6,307,200
 - **Tail reward: supply-dependent, ~2.4 BTH/block gross (~1.9 BTH/block net) at this supply**
 
-The tail reward is **not a fixed constant**: it is recomputed from circulating supply each block to target 2% net annual inflation, so it grows as supply grows. (The exact tail-reward figure also depends on the assumed block time; cross-source numeric reconciliation is tracked separately in issue #321.)
+The tail reward is **not a fixed constant**: it is recomputed each block from cumulative gross issuance at a 2.5% annual rate (2% net design plus a 0.5% assumed fee burn), so it grows as supply grows. The burn assumption is not met at realistic fee volumes, so realized net inflation is ~2.1–2.53%, decision pending #1788 (the 0.5% burn the tail is calibrated for would need ~4,800 tx/s; see `experiments/results/emission_sweep.md`, #1699). (The exact tail-reward figure also depends on the assumed block time; cross-source numeric reconciliation is tracked separately in issue #321.)
 
 ### Emission Routing into the Lottery Pool
 
@@ -267,8 +267,8 @@ Two properties worth noting:
   count, so a block producer cannot move difficulty by stuffing or starving
   blocks (this replaced the earlier tx-count-epoch controller).
 - **Emission targeting lives in the reward, not the difficulty**: tail-phase
-  2% net inflation is achieved by recomputing the supply-dependent tail
-  reward each block; difficulty's job is keeping PoW solvable at the target
+  the tail rate (2.5% gross; 2% net only if burns reach the assumed 0.5%) is
+  achieved by recomputing the supply-dependent tail reward each block; difficulty's job is keeping PoW solvable at the target
   block time as hashrate changes.
 
 ## Transaction Constraints

@@ -32,7 +32,8 @@
     },
     {
       "path": "cluster-tax/src/monetary.rs",
-      "sha256": "b80cff28f1d4f4c07cb4717536e1f883e7b5cbe5731fa2b93813bc11aad60ea7",
+      "sha256": "e8d929aa0583f5e09e30e51a0807b199e6ef0dee39b0da8130c922c0c855d453",
+      "reviewed_change": "#1699: pinned symbol pub fn demurrage_rate_bps( unchanged. Sim-only additions: block_reward_at, cumulative_issuance_at/issuance_at_checkpoints, node_constants, mainnet_policy_mirror, the DifficultyController gross-issuance tail recompute and block-time difficulty target (inflation kernel retained as dead code), PartialEq on MonetaryPolicy, and a doc-comment caveat on the MonetaryState.gross_issued serde default. No node or consensus arithmetic changed. Current provenance only; historical measurements not rerun.",
       "symbols": [
         "pub fn demurrage_rate_bps("
       ]

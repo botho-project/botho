@@ -27,7 +27,7 @@ Python models in [`../cluster-tax/scripts/`](../cluster-tax/scripts/).
 | `gini_experiment_5yr_atspend_f{25,50}.txt` | same | The spend-time-demurrage variants (as implemented in the node) at ~0.5%/yr and ~1.0%/yr emission, including the permanent-parker escape scenario |
 | `gini_progressive.csv`, `gini_flat.csv`, `gini_comparison.csv` | `cluster-tax-sim compare --output experiments/results` | Per-round metrics for the progressive and flat fee curves, plus the combined Gini comparison |
 | `lottery_sweep_30d.txt` | `cluster-tax-sim lottery-sweep` | Combined progressive-mechanism parameter sweep over a 30-day horizon |
-| `emission_sweep.csv`, `emission_sweep.md` | `cluster-tax-sim emission-sweep` | Emission-schedule sweep (#350) — neutral numbers and observations feeding the emission decision (#321/#351) |
+| `emission_sweep.csv`, `emission_sweep.md` | `cluster-tax-sim emission-sweep` | Emission-schedule sweep (#350) — neutral numbers and observations feeding the emission decision (#321/#351). Re-run 2026-10-31 for node parity (#1699): per-block tail recompute, the ratified mainnet schedule as reference row `M`, and a node-parity section (exact 20-policy-year issuance, realistic fee burn via the shared consensus fee model, calendar time per load-paced block-time tier) |
 
 ## Reading these results
 
