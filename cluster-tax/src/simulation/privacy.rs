@@ -3,6 +3,18 @@
 //! This module models the effective bits of privacy users can expect from
 //! ring signatures under various adversary models and network conditions.
 //!
+//! ## Which model to use (#1700)
+//!
+//! - [`super::privacy_routes`] drives the decoy pickers that production
+//!   actually runs (node `select_decoys_for_input`, CLI wallet
+//!   `select_rpc_decoy_pool`, and the web/Snap `send.ts` route) over an
+//!   explicit chain model. **Use it for any claim about deployed privacy.**
+//! - [`RingSimulator`] / [`run_monte_carlo`] below is the LEGACY model:
+//!   global-gamma age weighting plus cluster-similarity-aware decoy selection.
+//!   No production ring producer implements cluster-aware selection, so its
+//!   numbers describe a hypothetical design, not the shipped wallets. It is
+//!   kept for comparison (`cluster-tax-sim privacy --route legacy`).
+//!
 //! ## Key Concepts
 //!
 //! - **Effective Anonymity Set**: The number of ring members that appear
@@ -44,10 +56,23 @@ pub const DECOY_COUNT: usize = RING_SIZE - 1;
 /// CLSAG is the standard ring signature scheme per ADR-0001
 pub const KEY_IMAGE_BYTES: usize = 32;
 pub const RESPONSE_BYTES: usize = 32;
-pub const SIGNATURE_BASE_BYTES: usize = 64; // c0 + s_real
+/// Fixed (ring-size-independent) part of a serialized CLSAG signature:
+/// `c_zero` (32) + key image `I` (32) + commitment key image `D` (32).
+///
+/// Matches the production layout documented on
+/// `bth_transaction_clsag::ClsagRingInput::clsag_signature`
+/// (`transaction/clsag/src/lib.rs`): `c_zero (32) || responses (32 *
+/// ring_size) || key_image (32) || commitment_key_image (32)`. The previous
+/// value (64, "c0 + s_real") double-counted the real signer's response and
+/// omitted both key images, under-reporting a ring-20 signature as 704 B
+/// instead of 736 B (#1700).
+pub const SIGNATURE_BASE_BYTES: usize = 32 + KEY_IMAGE_BYTES + KEY_IMAGE_BYTES;
 
-/// Calculate signature size for a given ring size (CLSAG).
-/// CLSAG signatures are approximately 32 + 32*ring_size bytes per input.
+/// Serialized CLSAG signature size for a given ring size, in bytes.
+///
+/// `96 + 32 * ring_size` — 736 B at the production ring size of 20. This is the
+/// signature blob only; the ring members themselves (target key, public key and
+/// commitment per member) are carried separately in the transaction.
 #[inline]
 pub const fn signature_size_bytes(ring_size: usize) -> usize {
     SIGNATURE_BASE_BYTES + ring_size * RESPONSE_BYTES
@@ -400,25 +425,7 @@ impl OutputPoolGenerator {
         self.next_output_id += 1;
 
         // Determine output type based on fractions
-        let r: f64 = rng.random();
-        let output_type = if r < self.config.standard_fraction {
-            OutputType::Standard
-        } else if r < self.config.standard_fraction + self.config.exchange_fraction {
-            OutputType::Exchange
-        } else if r < self.config.standard_fraction
-            + self.config.exchange_fraction
-            + self.config.whale_fraction
-        {
-            OutputType::Whale
-        } else if r < self.config.standard_fraction
-            + self.config.exchange_fraction
-            + self.config.whale_fraction
-            + self.config.coinbase_fraction
-        {
-            OutputType::Coinbase
-        } else {
-            OutputType::Mixed
-        };
+        let output_type = self.sample_output_type(rng);
 
         // Generate age from gamma distribution (matching spend patterns)
         let age_blocks =
@@ -436,6 +443,51 @@ impl OutputPoolGenerator {
             output_type,
             cluster_tags,
             hops_since_mint,
+        }
+    }
+
+    /// Generate an output of a caller-chosen id and age: sample its type and
+    /// cluster-tag profile only. Used by the production-route simulation
+    /// ([`super::privacy_routes`]), whose ages come from an explicit chain
+    /// model rather than this generator's gamma.
+    pub fn output_with_age<R: Rng>(
+        &self,
+        rng: &mut R,
+        id: u64,
+        age_blocks: u64,
+    ) -> SimulatedOutput {
+        let output_type = self.sample_output_type(rng);
+        let (cluster_tags, hops_since_mint) =
+            self.generate_cluster_profile(rng, output_type, age_blocks);
+        SimulatedOutput {
+            id,
+            age_blocks,
+            output_type,
+            cluster_tags,
+            hops_since_mint,
+        }
+    }
+
+    /// Sample an output type from the configured fractions (one `f64` draw).
+    fn sample_output_type<R: Rng>(&self, rng: &mut R) -> OutputType {
+        let r: f64 = rng.random();
+        if r < self.config.standard_fraction {
+            OutputType::Standard
+        } else if r < self.config.standard_fraction + self.config.exchange_fraction {
+            OutputType::Exchange
+        } else if r < self.config.standard_fraction
+            + self.config.exchange_fraction
+            + self.config.whale_fraction
+        {
+            OutputType::Whale
+        } else if r < self.config.standard_fraction
+            + self.config.exchange_fraction
+            + self.config.whale_fraction
+            + self.config.coinbase_fraction
+        {
+            OutputType::Coinbase
+        } else {
+            OutputType::Mixed
         }
     }
 
@@ -1061,18 +1113,30 @@ impl RingSimulator {
 
     /// Simulate the output cluster tags after the real signer spends.
     fn simulate_output_tags(&self, real_signer: &SimulatedOutput) -> HashMap<u64, u32> {
-        let retention = 1.0 - DEFAULT_DECAY_RATE;
-        let mut output_tags = HashMap::new();
-
-        for (&cluster, &weight) in &real_signer.cluster_tags {
-            let decayed = (weight as f64 * retention).round() as u32;
-            if decayed > 5_000 {
-                output_tags.insert(cluster, decayed);
-            }
-        }
-
-        output_tags
+        inherited_output_tags(real_signer)
     }
+}
+
+/// The cluster tags an observer sees on the outputs of a single-input spend:
+/// the REAL input's tags after one hop of [`DEFAULT_DECAY_RATE`] decay.
+///
+/// This is what the production native producers publish: the node wallet
+/// (`Wallet::compute_inherited_tags`, `botho/src/wallet.rs`) and the CLI wallet
+/// (`inherited_cluster_tags`, `botho-wallet/src/transaction.rs`) both stamp
+/// every output with `ClusterTagVector::merge_weighted(real inputs, 50_000)`,
+/// in plaintext. Decoys never contribute.
+pub fn inherited_output_tags(real_signer: &SimulatedOutput) -> HashMap<u64, u32> {
+    let retention = 1.0 - DEFAULT_DECAY_RATE;
+    let mut output_tags = HashMap::new();
+
+    for (&cluster, &weight) in &real_signer.cluster_tags {
+        let decayed = (weight as f64 * retention).round() as u32;
+        if decayed > 5_000 {
+            output_tags.insert(cluster, decayed);
+        }
+    }
+
+    output_tags
 }
 
 // ============================================================================
@@ -1261,8 +1325,10 @@ pub fn format_monte_carlo_report(results: &MonteCarloResults) -> String {
     report.push_str("║           RING SIGNATURE PRIVACY SIMULATION REPORT               ║\n");
     report.push_str("╠══════════════════════════════════════════════════════════════════╣\n");
     report.push_str(&format!(
-        "║  Simulations: {:>6}    Ring Size: 7    Theoretical Max: 2.81 bits ║\n",
-        results.num_simulations
+        "║  Simulations: {:>6}    Ring Size: {:>2}   Theoretical Max: {:.2} bits ║\n",
+        results.num_simulations,
+        RING_SIZE,
+        (RING_SIZE as f64).log2()
     ));
     report.push_str("╚══════════════════════════════════════════════════════════════════╝\n\n");
 
@@ -1288,7 +1354,10 @@ pub fn format_monte_carlo_report(results: &MonteCarloResults) -> String {
         }
     }
 
-    report.push_str("\nEFFECTIVE ANONYMITY SET SIZE (ideal = 7.0)\n");
+    report.push_str(&format!(
+        "\nEFFECTIVE ANONYMITY SET SIZE (ideal = {:.1})\n",
+        RING_SIZE as f64
+    ));
     report.push_str("─────────────────────────────────────────────────────────────────────\n");
     report.push_str("Adversary            Mean    5th%   Median  95th%\n");
     report.push_str("─────────────────────────────────────────────────────────────────────\n");

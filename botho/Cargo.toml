@@ -194,6 +194,10 @@ tempfile = "3"
 # Self dev-dependency: integration tests see the `test-fixtures` ledger API.
 botho = { path = ".", features = ["test-fixtures"] }
 botho-wallet = { path = "../botho-wallet" }
+# The privacy simulation's ports of the production decoy pickers live behind
+# cluster-tax's `cli` feature; `tests/privacy_sim_route_parity.rs` pins them to
+# the real pickers (#1700).
+bth-cluster-tax = { path = "../cluster-tax", features = ["cli"] }
 # Enable the CLSAG transaction crate's test-only constructors (e.g.
 # `Transaction::new_stub_with_fee`) for botho's own test/dev builds.
 bth-transaction-clsag = { path = "../transaction/clsag", features = ["test-utils"] }
