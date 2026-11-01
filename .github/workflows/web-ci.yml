@@ -80,6 +80,31 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Wasm toolchain + bundler artifact are built BEFORE typecheck: @botho/snap's
+      # typecheck imports the git-ignored pkg-bundler output and otherwise skips
+      # itself, which hid a real type error (#1776).
+      - name: Install Rust (wasm32 target for the snap wasm-signer)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-06-09
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo (snap wasm build)
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: web-ci-wasm-signer
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: v0.13.1
+
+      # Bundler-target build: emits web/packages/wasm-signer/pkg-bundler, which
+      # the snap's `mm-snap build` inlines. Runs headless on ubuntu-latest — no
+      # browser, no network beyond crate/wasm-bindgen fetches.
+      - name: Build wasm-signer bundler artifact (prereq for snap tests)
+        run: pnpm --filter @botho/wasm-signer build:wasm:bundler
+
       # Typecheck every workspace package (tsc --noEmit), including the worker
       # and the wallet.
       - name: Typecheck
@@ -114,28 +139,6 @@ jobs:
       # produce the bundler-target artifact (`pkg-bundler/`) before running them.
       # Toolchain pin matches rust-toolchain.toml; the wasm32 target is not in
       # that file's `targets`, so request it explicitly here.
-      - name: Install Rust (wasm32 target for the snap wasm-signer)
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly-2026-06-09
-          targets: wasm32-unknown-unknown
-
-      - name: Cache cargo (snap wasm build)
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: web-ci-wasm-signer
-
-      - name: Install wasm-pack
-        uses: jetli/wasm-pack-action@v0.4.0
-        with:
-          version: v0.13.1
-
-      # Bundler-target build: emits web/packages/wasm-signer/pkg-bundler, which
-      # the snap's `mm-snap build` inlines. Runs headless on ubuntu-latest — no
-      # browser, no network beyond crate/wasm-bindgen fetches.
-      - name: Build wasm-signer bundler artifact (prereq for snap tests)
-        run: pnpm --filter @botho/wasm-signer build:wasm:bundler
-
       # V2 lottery payouts through the ACTUAL compiled WASM signer (#1645): the
       # committed vector's key images must equal native recovery, and the
       # wallet orchestrator must discover and spend the payout. The root vitest
