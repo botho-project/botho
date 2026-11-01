@@ -296,11 +296,49 @@ mod cli {
             pool_size: usize,
         },
 
-        /// Simulate ring signature privacy under various adversary models
+        /// Simulate ring signature privacy under various adversary models.
+        ///
+        /// By default this drives ports of the decoy pickers production runs
+        /// (node `select_decoys_for_input`, CLI wallet `select_rpc_decoy_pool`,
+        /// web/Snap `decoys.ts` `selectDecoysForInput`) over an explicit chain
+        /// model and reports, per route and real-input age, the real
+        /// input's age-rank distribution and each adversary's argmax
+        /// identification rate (#1700). `--route legacy` runs the old
+        /// global-gamma / cluster-aware model, which no production
+        /// producer implements.
         Privacy {
-            /// Number of ring simulations to run
+            /// Rings per (route, real age) row for the production routes (plus
+            /// as many training rings); total rings for `--route legacy`
             #[arg(short = 'n', long, default_value = "10000")]
             simulations: usize,
+
+            /// Which picker(s) to simulate: production (node+cli+web), node,
+            /// cli, web, web-pre-1735 (historical chain-ordered web window,
+            /// not in production), legacy, or all (production + legacy)
+            #[arg(long, default_value = "production")]
+            route: String,
+
+            /// Real-input ages (blocks) to report, comma-separated; `gamma`
+            /// draws them from the node picker's own spend model
+            #[arg(long, default_value = "100,1000,5000,30000,100000,1000000,gamma")]
+            real_ages: String,
+
+            /// Chain model: tip height (outputs exist at heights 1..=tip)
+            #[arg(long, default_value = "1200000")]
+            chain_height: u64,
+
+            /// Chain model: outputs created per block
+            #[arg(long, default_value = "1")]
+            outputs_per_block: u64,
+
+            /// RNG seed (all results are reproducible from it)
+            #[arg(long, default_value = "1700")]
+            seed: u64,
+
+            /// Production routes: fraction of outputs with empty (background)
+            /// cluster tags
+            #[arg(long, default_value = "0.0")]
+            background_fraction: f64,
 
             /// Size of the UTXO pool
             #[arg(long, default_value = "100000")]
@@ -322,8 +360,10 @@ mod cli {
             #[arg(long, default_value = "5.0")]
             decay_rate: f64,
 
-            /// Enable cluster-aware decoy selection
-            #[arg(long, default_value = "true")]
+            /// Legacy model only: cluster-aware decoy selection on/off
+            /// (`--cluster-aware false` gives global-gamma age weighting).
+            /// No production picker is cluster-aware.
+            #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
             cluster_aware: bool,
 
             /// Minimum cluster similarity threshold
@@ -925,6 +965,12 @@ mod cli {
             } => run_ring_size_analysis(&sizes, simulate, simulations, pool_size),
             Command::Privacy {
                 simulations,
+                route,
+                real_ages,
+                chain_height,
+                outputs_per_block,
+                seed,
+                background_fraction,
                 pool_size,
                 standard_fraction,
                 exchange_fraction,
@@ -934,7 +980,15 @@ mod cli {
                 min_similarity,
                 no_parallel,
                 quiet,
-            } => run_privacy_simulation(
+            } => run_privacy_command(
+                PrivacyRouteArgs {
+                    route,
+                    real_ages,
+                    chain_height,
+                    outputs_per_block,
+                    seed,
+                    background_fraction,
+                },
                 simulations,
                 pool_size,
                 standard_fraction,
@@ -2377,6 +2431,162 @@ mod cli {
         println!("  python3 cluster-tax/scripts/plot_gini.py {output_dir}");
     }
 
+    /// Production-route options of the `privacy` command.
+    pub struct PrivacyRouteArgs {
+        pub route: String,
+        pub real_ages: String,
+        pub chain_height: u64,
+        pub outputs_per_block: u64,
+        pub seed: u64,
+        pub background_fraction: f64,
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_privacy_command(
+        args: PrivacyRouteArgs,
+        num_simulations: usize,
+        pool_size: usize,
+        standard_fraction: f64,
+        exchange_fraction: f64,
+        whale_fraction: f64,
+        decay_rate_pct: f64,
+        cluster_aware: bool,
+        min_similarity: f64,
+        use_parallel: bool,
+        show_progress: bool,
+    ) {
+        use bth_cluster_tax::simulation::privacy_routes::DecoyRoute;
+
+        let (routes, legacy): (Vec<DecoyRoute>, bool) = match args.route.as_str() {
+            "production" => (DecoyRoute::PRODUCTION.to_vec(), false),
+            "all" => (DecoyRoute::PRODUCTION.to_vec(), true),
+            "node" => (vec![DecoyRoute::Node], false),
+            "cli" => (vec![DecoyRoute::Cli], false),
+            "web" => (vec![DecoyRoute::Web], false),
+            "web-pre-1735" => (vec![DecoyRoute::WebPre1735], false),
+            "legacy" => (Vec::new(), true),
+            other => {
+                eprintln!(
+                    "unknown --route {other:?}; expected production, all, node, cli, web, web-pre-1735 or legacy"
+                );
+                std::process::exit(2);
+            }
+        };
+
+        // The pool's type mix also drives the per-output tag profiles of the
+        // production-route chain model.
+        let total_specified = standard_fraction + exchange_fraction + whale_fraction;
+        let coinbase_fraction = 0.10;
+        let mixed_fraction = (1.0 - total_specified - coinbase_fraction).max(0.0);
+        let pool_config = bth_cluster_tax::simulation::privacy::PoolConfig {
+            pool_size,
+            standard_fraction,
+            exchange_fraction,
+            whale_fraction,
+            coinbase_fraction,
+            mixed_fraction,
+            num_clusters: 1_000,
+            decay_rate: decay_rate_pct / 100.0,
+            max_age_blocks: 525_600,
+        };
+
+        if !routes.is_empty() {
+            run_privacy_routes(&args, &routes, num_simulations, pool_config, use_parallel);
+        }
+        if legacy {
+            run_privacy_simulation(
+                num_simulations,
+                pool_size,
+                standard_fraction,
+                exchange_fraction,
+                whale_fraction,
+                decay_rate_pct,
+                cluster_aware,
+                min_similarity,
+                use_parallel,
+                show_progress,
+                args.seed,
+            );
+        }
+    }
+
+    fn run_privacy_routes(
+        args: &PrivacyRouteArgs,
+        routes: &[bth_cluster_tax::simulation::privacy_routes::DecoyRoute],
+        rings: usize,
+        pool: bth_cluster_tax::simulation::privacy::PoolConfig,
+        use_parallel: bool,
+    ) {
+        use bth_cluster_tax::simulation::privacy_routes::{
+            format_route_report, run_route_row, ChainModel, RealAgeSpec, RouteSimConfig,
+        };
+        use rayon::prelude::*;
+
+        let real_ages: Vec<RealAgeSpec> = match args
+            .real_ages
+            .split(',')
+            .filter(|s| !s.trim().is_empty())
+            .map(RealAgeSpec::parse)
+            .collect()
+        {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2);
+            }
+        };
+        if args.outputs_per_block == 0 || args.chain_height < 2 {
+            eprintln!("--outputs-per-block must be >= 1 and --chain-height >= 2");
+            std::process::exit(2);
+        }
+        let config = RouteSimConfig {
+            rings,
+            chain: ChainModel {
+                tip_height: args.chain_height,
+                outputs_per_block: args.outputs_per_block,
+            },
+            pool,
+            seed: args.seed,
+            background_fraction: args.background_fraction.clamp(0.0, 1.0),
+        };
+        for spec in &real_ages {
+            if let RealAgeSpec::Fixed(a) = spec {
+                if *a > config.chain.max_age() {
+                    eprintln!(
+                        "real age {a} exceeds the chain model's oldest output ({}); raise \
+                         --chain-height",
+                        config.chain.max_age()
+                    );
+                    std::process::exit(2);
+                }
+            }
+        }
+
+        let jobs: Vec<_> = routes
+            .iter()
+            .flat_map(|&r| real_ages.iter().map(move |&a| (r, a)))
+            .collect();
+        eprintln!(
+            "Running {} production-route rows x {} rings (+{} training)...",
+            jobs.len(),
+            rings,
+            rings
+        );
+        // Every row is independently seeded, so parallel and sequential runs
+        // produce identical reports.
+        let results: Vec<_> = if use_parallel {
+            jobs.par_iter()
+                .map(|&(r, a)| run_route_row(&config, r, a))
+                .collect()
+        } else {
+            jobs.iter()
+                .map(|&(r, a)| run_route_row(&config, r, a))
+                .collect()
+        };
+        println!("{}", format_route_report(&config, &results));
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn run_privacy_simulation(
         num_simulations: usize,
         pool_size: usize,
@@ -2388,6 +2598,7 @@ mod cli {
         min_similarity: f64,
         use_parallel: bool,
         show_progress: bool,
+        seed: u64,
     ) {
         use bth_cluster_tax::simulation::privacy::{
             format_monte_carlo_report, run_monte_carlo, MonteCarloConfig, PoolConfig,
@@ -2424,6 +2635,8 @@ mod cli {
         };
 
         let num_threads = rayon::current_num_threads();
+        println!("LEGACY privacy model (global-gamma + cluster-aware selection; not run by any");
+        println!("production producer — see the production-route report for deployed privacy)");
         println!("Running privacy simulation...");
         println!("  Simulations: {num_simulations}");
         println!("  Pool size: {pool_size}");
@@ -2442,7 +2655,7 @@ mod cli {
             eprintln!("(parallel execution not available; running single-threaded...)");
         }
         let results = {
-            let mut rng = rand::rng();
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
             run_monte_carlo(&config, &mut rng)
         };
 
@@ -2505,8 +2718,15 @@ mod cli {
 
         println!();
         println!(
-            "Note: Higher bits = better privacy. Theoretical max for ring size 7 is 2.81 bits."
+            "Note: Higher bits = better privacy. Theoretical max for ring size {} is {:.2} bits.",
+            RING_SIZE,
+            (RING_SIZE as f64).log2()
         );
+        println!(
+            "Bits are entropy over the adversary's whole distribution; the ID rate is how often"
+        );
+        println!("its single top suspect is the real signer. Read both: high bits can hide a high");
+        println!("ID rate.");
     }
 
     fn run_ring_size_analysis(sizes_str: &str, simulate: bool, num_sims: usize, pool_size: usize) {
@@ -4904,6 +5124,52 @@ mod cli {
         let report = run_honest_overcharge_sweep();
         println!("# Honest-Overcharge Sweep for the #925 Downgrade Charge (issue #950)\n");
         println!("{}", to_markdown(&report));
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{Cli, Command};
+        use clap::Parser;
+
+        fn privacy(args: &[&str]) -> Command {
+            let mut argv = vec!["cluster-tax-sim", "privacy"];
+            argv.extend_from_slice(args);
+            Cli::try_parse_from(argv).expect("parses").command
+        }
+
+        fn cluster_aware_of(cmd: Command) -> bool {
+            match cmd {
+                Command::Privacy { cluster_aware, .. } => cluster_aware,
+                _ => panic!("not the privacy command"),
+            }
+        }
+
+        /// #1700: `--cluster-aware` was a `bool` with `default_value = "true"`
+        /// and an implicit `SetTrue` action, so it could never be turned off.
+        #[test]
+        fn cluster_aware_flag_is_toggleable() {
+            assert!(cluster_aware_of(privacy(&[])));
+            assert!(cluster_aware_of(privacy(&["--cluster-aware", "true"])));
+            assert!(!cluster_aware_of(privacy(&["--cluster-aware", "false"])));
+            assert!(!cluster_aware_of(privacy(&["--cluster-aware=false"])));
+        }
+
+        #[test]
+        fn privacy_route_defaults_to_production() {
+            match privacy(&[]) {
+                Command::Privacy {
+                    route,
+                    real_ages,
+                    seed,
+                    ..
+                } => {
+                    assert_eq!(route, "production");
+                    assert!(real_ages.contains("gamma"));
+                    assert_eq!(seed, 1700);
+                }
+                _ => panic!("not the privacy command"),
+            }
+        }
     }
 }
 

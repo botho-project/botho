@@ -28,6 +28,7 @@ on:
       - 'web/packages/desktop/**'
       - '.github/workflows/workspace-build.yml'
       - 'scripts/research/ct-economics/**'
+      - 'web/packages/wasm-signer/test/fixtures/decoy-age-band.json'
   workflow_dispatch:
 
 env:
@@ -148,6 +149,19 @@ jobs:
             scripts/research/ct-economics/workload-results.json
             scripts/research/ct-economics/workload-summary.json
           if-no-files-found: warn
+
+      # Privacy-sim decoy-picker pins (#1700). The parity test feeds identical
+      # candidates + seeded RNGs to the production node/CLI pickers and to the
+      # sim's ports, and replays the recorded web route
+      # (ct-economics/web-selection.json, decoy-age-band.json) through the web
+      # port; the privacy_routes unit tests pin the sim fast paths to the
+      # literal ports. A picker change fails here until the port and
+      # PRIVACY_ANALYSIS.md are updated.
+      - name: Run privacy-sim decoy-route parity and port tests
+        timeout-minutes: 10
+        run: |
+          cargo test --locked -p botho --test privacy_sim_route_parity
+          cargo test --locked -p bth-cluster-tax --lib privacy_routes
 
       # The compact-block suite caught serialized-size drift (#1187/#1212), but
       # --no-run never exercised its assertions. It needs no external services

@@ -47,6 +47,8 @@ mod metrics;
 #[cfg(any(feature = "cli", test))]
 pub mod privacy;
 #[cfg(any(feature = "cli", test))]
+pub mod privacy_routes;
+#[cfg(any(feature = "cli", test))]
 pub mod provenance_factor_sweep;
 mod runner;
 #[cfg(any(feature = "cli", test))]
