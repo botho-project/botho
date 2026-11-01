@@ -205,11 +205,19 @@ export function makeSendRpc(call: NodeCall): SendRpc {
     getChainHeight: async () =>
       (await call<{ chainHeight: number }>('node_getStatus', {})).chainHeight,
     getOutputs: async (start, end) => {
-      const blocks = await call<Array<{ outputs: RawOutput[] }>>('chain_getOutputs', {
-        start_height: start,
-        end_height: end,
-      });
-      return blocks.flatMap((b) => b.outputs.map(decodeRow));
+      const blocks = await call<Array<{ height?: number; outputs: RawOutput[] }>>(
+        'chain_getOutputs',
+        { start_height: start, end_height: end },
+      );
+      // Keep each row's block height: the shared send path draws ring decoys
+      // from the real input's age band and fails closed without it (#1693).
+      return blocks.flatMap((b) =>
+        b.outputs.map((o) => {
+          const row = decodeRow(o);
+          if (typeof b.height === 'number') row.height = b.height;
+          return row;
+        }),
+      );
     },
     areKeyImagesSpent: (keyImages) =>
       call<KeyImageSpentStatus[]>('chain_areKeyImagesSpent', { keyImages }),

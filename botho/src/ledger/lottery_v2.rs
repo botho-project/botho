@@ -535,3 +535,131 @@ pub(in crate::ledger) fn derive<R: DerivationReads + ?Sized>(
     block.header.tx_root = root(&block, &records)?;
     Ok((block, records))
 }
+
+/// Parity pins for the faithful reward-cap sweep (#1682).
+///
+/// `cluster-tax/src/simulation/lottery_reward_cap_faithful.rs` mirrors
+/// [`reward_cap`], [`compute_pool_accounting`], `MAX_LOTTERY_CANDIDATES`,
+/// [`canonical_config`] and the mainnet schedule because `cluster-tax`
+/// cannot depend on `botho`. These tests assert the same golden table
+/// (`PARITY_VECTORS`) and constants against the real node code, so a change
+/// on either side fails CI. Test-only: no consensus behaviour changes.
+#[cfg(test)]
+mod faithful_sweep_parity {
+    use super::*;
+    use bth_cluster_tax::TagVector;
+
+    /// Same rows as `lottery_reward_cap_faithful::PARITY_VECTORS`: count,
+    /// reward, fees, emission, stored → cap, fee_pool, payout.
+    const PARITY_VECTORS: [(u64, u64, u64, u64, u128, u64, u64, u64); 5] = [
+        (
+            3,
+            50_000_000_000_000,
+            0,
+            0,
+            10_000_000_000_000,
+            750_000_000_000,
+            0,
+            750_000_000_000,
+        ),
+        (
+            1_000_000,
+            25_000_000_000_000,
+            100_000_000,
+            2_500_000_000_000,
+            0,
+            25_000_000_000_000,
+            80_000_000,
+            2_500_080_000_000,
+        ),
+        (
+            9_281,
+            25_000_000_000_000,
+            100_000_000,
+            2_500_000_000_000,
+            1_000_000_000_000_000,
+            25_000_000_000_000,
+            80_000_000,
+            25_000_000_000_000,
+        ),
+        (
+            46_405,
+            50_000_000_000_000,
+            1_000_000_000,
+            0,
+            0,
+            50_000_000_000_000,
+            800_000_000,
+            800_000_000,
+        ),
+        (
+            10_000,
+            3_000_000_000_000_000,
+            0,
+            0,
+            u128::MAX,
+            2_500_000_000_000_000,
+            0,
+            2_500_000_000_000_000,
+        ),
+    ];
+
+    /// Mirrored in the sim as `MAX_LOTTERY_CANDIDATES`.
+    const SIM_MAX_LOTTERY_CANDIDATES: usize = 10_000;
+
+    #[test]
+    fn faithful_sweep_parity_reward_cap_and_accounting() {
+        let config = canonical_config();
+        let height = 20_000u64;
+        let tags = TagVector::new();
+        for (count, reward, fees, emission, stored, cap, fee_pool, payout) in PARITY_VECTORS {
+            // The candidate walk stops at MAX_LOTTERY_CANDIDATES eligible
+            // UTXOs, so reward_cap only ever sees the truncated set.
+            let n = (count as usize).min(SIM_MAX_LOTTERY_CANDIDATES);
+            let candidates: Vec<LotteryCandidate> = (0..n)
+                .map(|i| {
+                    let mut id = [0u8; 36];
+                    id[..8].copy_from_slice(&(i as u64).to_le_bytes());
+                    LotteryCandidate::new(id, 1_000_000, 1000, &tags, height - 5_000)
+                })
+                .collect();
+            assert_eq!(reward_cap(&candidates, height, reward, &config), cap);
+            let acc = compute_pool_accounting(fees, emission, stored, cap, &config);
+            assert_eq!((acc.fee_pool, acc.payout), (fee_pool, payout));
+        }
+    }
+
+    #[test]
+    fn faithful_sweep_parity_constants() {
+        let config = canonical_config();
+        assert_eq!(config.pool_fraction_permille, 800);
+        assert_eq!(config.draw_config.winners_per_draw, 4);
+        assert_eq!(config.draw_config.min_utxo_age, 720);
+        assert_eq!(config.draw_config.circulation_window, 10_000);
+        assert_eq!(config.draw_config.min_utxo_value, 1_000_000);
+        let src = include_str!("store/validation.rs");
+        assert!(
+            src.contains(&format!(
+                "const MAX_LOTTERY_CANDIDATES: usize = {};",
+                "10_000"
+            )),
+            "MAX_LOTTERY_CANDIDATES changed: update the #1682 faithful sweep"
+        );
+        assert_eq!(
+            crate::consensus::ConsensusConfig::default().max_txs_per_slot,
+            100
+        );
+        let p = crate::monetary::mainnet_policy();
+        let interval = p.halving_interval;
+        assert_eq!(interval, 6_307_200);
+        assert_eq!(p.halving_count, 5);
+        assert_eq!(p.halving_reward(interval / 2), Some(50_000_000_000_000));
+        assert_eq!(
+            p.lottery_emission_share(interval + interval / 2, 25_000_000_000_000),
+            2_500_000_000_000
+        );
+        assert_eq!(p.tail_inflation_bps, 200);
+        assert_eq!(p.expected_fee_burn_rate_bps, 50);
+        assert_eq!(p.target_block_time_secs, 5);
+    }
+}

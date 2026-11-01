@@ -199,6 +199,14 @@ export interface ChainOutput {
   cryptoOutputIndex?: number
   /** For a V2 payout: the winning source outpoint, `"<hash>:<index>"`. */
   winnerOutpoint?: string
+  /**
+   * Block height the output was confirmed at (the per-block `height` of
+   * `chain_getOutputs`). Optional in the type so scan-only callers keep
+   * compiling, but REQUIRED by the send path: ring decoys are drawn from the
+   * real input's age band (#1693), and a send whose rows lack heights fails
+   * closed rather than falling back to chain-ordered decoys.
+   */
+  height?: number
   /** The output's stored cluster tags (`[clusterId, weight]` pairs). */
   clusterTags?: Array<[number, number]>
   /** Hex-encoded 32-byte one-time target key of the output. */
@@ -523,3 +531,12 @@ export {
   type SendRpc,
   type SignerKeys,
 } from './send'
+export {
+  AGE_SIMILARITY_SPREAD_BPS,
+  MIN_DECOY_AGE_BLOCKS,
+  ageSimilarityBand,
+  outputAge,
+  randomIndex,
+  selectDecoysForInput,
+  type RandomFill,
+} from './decoys'

@@ -1653,6 +1653,78 @@ mod tests {
         assert_eq!(max_floor, 12);
     }
 
+    /// Shared web<->native conformance fixture (#1693). The web wallet / Snap /
+    /// claim-link decoy picker (`web/packages/wasm-signer/src/decoys.ts`)
+    /// checks the SAME JSON against its `ageSimilarityBand` port, so a
+    /// change to the band policy on either side fails one of the two suites
+    /// until both agree.
+    #[test]
+    fn test_age_similarity_band_matches_shared_web_fixture() {
+        let raw = include_str!("../../web/packages/wasm-signer/test/fixtures/decoy-age-band.json");
+        let fixture: serde_json::Value = serde_json::from_str(raw).expect("fixture parses");
+        assert_eq!(
+            fixture["minDecoyAgeBlocks"].as_u64().unwrap(),
+            MIN_DECOY_AGE_BLOCKS
+        );
+        assert_eq!(
+            fixture["ageSimilaritySpreadBps"].as_u64().unwrap(),
+            AGE_SIMILARITY_SPREAD_BPS
+        );
+
+        let bands = fixture["bands"].as_array().unwrap();
+        assert!(!bands.is_empty());
+        for v in bands {
+            let real = v["realAge"].as_u64().unwrap();
+            let (min_age, max_age) = age_similarity_band(real);
+            assert_eq!(min_age, v["minAge"].as_u64().unwrap(), "minAge for {real}");
+            assert_eq!(max_age, v["maxAge"].as_u64().unwrap(), "maxAge for {real}");
+            assert_eq!(
+                min_age > max_age,
+                v["degenerate"].as_bool().unwrap(),
+                "degenerate flag for {real}"
+            );
+        }
+
+        // Fallback vectors: the selected SET is RNG-independent, so the native
+        // selector must produce exactly the ages the web picker is pinned to.
+        let current_height = 100_000;
+        let selector = GammaDecoySelector::new();
+        for case in fixture["fallback"].as_array().unwrap() {
+            let real = case["realAge"].as_u64().unwrap();
+            let count = case["count"].as_u64().unwrap() as usize;
+            let candidates: Vec<OutputCandidate> = case["poolAges"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| {
+                    let age = a.as_u64().unwrap();
+                    let mut key = [0u8; 32];
+                    key[..8].copy_from_slice(&age.to_le_bytes());
+                    make_candidate(key, age, current_height)
+                })
+                .collect();
+            let mut expected: Vec<u64> = case["expectedAges"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| a.as_u64().unwrap())
+                .collect();
+            expected.sort_unstable();
+            for _ in 0..32 {
+                let mut rng = rand::rng();
+                let picked = selector
+                    .select_decoys_for_input(&candidates, count, &[], real, &mut rng)
+                    .expect("fallback case selects");
+                let mut ages: Vec<u64> = picked
+                    .iter()
+                    .map(|o| u64::from_le_bytes(o.target_key[..8].try_into().unwrap()))
+                    .collect();
+                ages.sort_unstable();
+                assert_eq!(ages, expected, "{}", case["name"]);
+            }
+        }
+    }
+
     /// The core #596 guarantee: for an honest spender, the realized demurrage
     /// over-charge under the `ring_elapsed_quantile@max` kernel (PR #595) stays
     /// within the #314 tolerance (≤15%). The age-similarity band caps it at

@@ -300,7 +300,151 @@ And `net ≤ 0` is the *theorem*, `net = 0` merely its ceiling: when the actual 
 | 130.0 | 130.00 | 125.000 | 125.000 | +0.0000 |
 | 520.0 | 130.00 | 125.000 | 125.000 | +0.0000 |
 
-**Claim 1 verdict: CONFIRMED.** The reward-cap makes the splitting attack net-zero at best and net-negative whenever the pool is thin — Sybil-neutral by construction, independent of `k`, `N`, and `ρ_o`. This is the regime-independent, hard Sybil bound that §7.5 said the *external* invariant could not deliver; pinning `R` to `ρ·base_fee` delivers it.
+**Claim 1 verdict: CONFIRMED for the model above, REFUTED for the implemented rules (#1682, §9.1.1).** Within its premises (per-block `ρ`, every split output pays `base_fee`), the reward-cap makes splitting net-zero at best and net-negative whenever the pool is thin. The node, as implemented at protocol 7.0.0, meets neither premise. Re-run against the code, splitting is profitable at every grid point (§9.1.1).
+
+### 9.1.1 Faithful-to-code re-run (#1682): the implementation violates the proof's premises, and splitting is profitable
+
+**Reproduce:**
+```
+cargo run --release -p bth-cluster-tax --features cli --bin cluster-tax-sim -- lottery-reward-cap-sweep --faithful
+cargo test --release -p bth-cluster-tax --lib lottery_reward_cap_faithful
+cargo test -p botho --lib faithful_sweep_parity
+```
+Sim source: `cluster-tax/src/simulation/lottery_reward_cap_faithful.rs`. It uses expected values plus one seeded Monte Carlo (seed `0x1682_FA17_0902`), and the output is byte-for-byte reproducible. It calls the shipped kernels directly: `consensus_fee_breakdown` (the pure half of `Ledger::consensus_fee_floor`, golden-pinned to the ledger by #1695), `sybil_reward_cap`, `LotteryDrawConfig::default()` (what `ledger::lottery_v2::canonical_config` uses), and `MonetaryPolicy::lottery_emission_share` / `calculate_tail_reward_u128`. It mirrors `consensus::lottery::reward_cap`, `compute_pool_accounting`, `MAX_LOTTERY_CANDIDATES`, the 80% pool share and the mainnet schedule. A shared golden table pins the mirror to the node: `faithful_sweep_parity_*` in `botho/src/ledger/lottery_v2.rs` runs it against the real functions. Analysis only: this changes no consensus code.
+
+**Premises the implementation violates.**
+
+| §9.1 premise | Implementation (protocol 7.0.0) | Effect |
+|---|---|---|
+| `ρ` = outputs created **per block** | `ρ` = `count_eligible` over the seeded-offset candidate set: every output aged 720..=10,000 blocks, truncated at `MAX_LOTTERY_CANDIDATES` = 10,000 (`ledger/store/validation.rs`). Above about 1.08 eligible outputs/block the count is always 10,000. | The Sybil cap is a constant 10,000 × 0.25 = 2,500 BTH and never binds. The live clamp is the anti-grinding `block_reward`, so `R = min(avail, block_reward)`. Splitting no longer raises the cap in step with the whale's cost. |
+| each split output pays `base_fee` = 0.25 BTH | No rule charges `LOTTERY_BASE_FEE_PICO`; it appears only in the cap. The consensus floor is 1 pico/byte × size × factor × `min(n_out,10)²` plus demurrage: **870–117,032 pico per ticket**. The relay `MIN_TX_FEE` adds `1e8/n` pico per ticket (6.25e6 at n = 16), but it is enforced in the mempool only (#1684). | A ticket costs 2.1e6× to 2.9e8× less than modelled with the floor alone, and about 2,500× to 40,000× less with `MIN_TX_FEE`. |
+| the only tickets are paid-for outputs | Coinbase and the 4 payout outputs per block are eligible tickets that cost nothing (#1690). | The whale's stationary share is `k/(ρ_o+k+1)`: it wins its share of the payout tickets back as new tickets. |
+| `R` = the fee pool | `R = min(carry-forward + emission share + 0.8·fees, cap)`. The emission share is 0% in epoch 0 and rises 10 points per epoch to 50%. The backlog drains at the full block reward (#1691). | From epoch 1 on, `R` is mostly emission, which no fee pays for, so the "net-negative when the pool is thin" branch never occurs. |
+| — | 80% of the whale's own fees return to a pool it mostly owns. A ticket stays live for L = 9,281 blocks, not N. | Both are modelled. |
+
+**Model.** These are stationary expected values. Every eligible output stays in the eligible set for L = 9,281 blocks, so window shares equal creation-rate shares.
+- The organic economy creates `ρ_o` eligible outputs per block in 2-output txs, each tx paying the wallet fee `max(floor, MIN_TX_FEE)` = 1e8 pico (the x1 run observed 1e8–4e8 per tx).
+- The whale creates `k` tickets per block, each worth `min_utxo_value`. It mints them by spending an aged-out ticket into an `n`-output tx (`n` = 1..=16, chosen per `k` to minimise cost) at cluster factor 1× or 6×. The fee mode is either the consensus floor only (what a whale-miner or bribed proposer pays) or the floor plus `MIN_TX_FEE` (what a default node relays).
+- Capacity is either the default proposer slot (`max_txs_per_slot` = 100 minus the minting tx, × 16 outputs = 1,584 tickets per block) or the 20 MiB block-size bound. Neither the slot limit nor the 16-output cap is a validity rule (#1684).
+- Two choices understate the whale: organic demurrage is left out of the pool, and the tail reward ignores burns.
+
+The grid is epochs {0, 1, 3, tail} × backlog {0, 1000 BTH} × `ρ_o` ∈ {2, 20, 200} × fee mode × factor {1×, 6×} × capacity, which is 192 points.
+
+| epoch | block reward (BTH) | lottery emission share (BTH/blk) |
+|---|---:|---:|
+| 0 | 50.0000 | 0.0000 |
+| 1 | 25.0000 | 2.5000 |
+| 3 | 6.2500 | 1.8750 |
+| tail | 2.4219 | 1.2109 |
+
+**Per-ticket cost under the implemented floor** (epoch 1):
+
+Fee of one split tx (1 input, n outputs of min_utxo_value) and the cost per new eligible output, epoch 1, vs the modelled base_fee of 2.5e11 pico.
+
+| n outputs | factor | floor fee/tx (pico) | floor per ticket | floor+MIN_TX_FEE per ticket | base_fee ÷ cheapest |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 1× | 870 | 870 | 1.000e8 | 2.9e8 |
+| 1 | 6× | 5251 | 5251 | 1.000e8 | 4.8e7 |
+| 2 | 1× | 3960 | 1980 | 5.000e7 | 1.3e8 |
+| 2 | 6× | 23823 | 11912 | 5.000e7 | 2.1e7 |
+| 4 | 1× | 19680 | 4920 | 2.500e7 | 5.1e7 |
+| 4 | 6× | 118206 | 29552 | 2.500e7 | 8.5e6 |
+| 8 | 1× | 109440 | 13680 | 1.250e7 | 1.8e7 |
+| 8 | 6× | 656893 | 82112 | 1.250e7 | 3.0e6 |
+| 10 | 1× | 195000 | 19500 | 1.000e7 | 1.3e7 |
+| 10 | 6× | 1170317 | 117032 | 1.000e7 | 2.1e6 |
+| 16 | 1× | 267000 | 16688 | 6.250e6 | 1.5e7 |
+| 16 | 6× | 1602507 | 100157 | 6.250e6 | 2.5e6 |
+
+**Whale net vs k**, current code, at the reference point:
+
+| k (out/blk) | n/tx | share | cap (BTH) | R (BTH) | winnings/blk | cost/blk | **net/blk** | net/day |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 16 | 4.55% | 25.0 | 2.5008 | 0.1137 | 0.000006 | +0.1137 | +1964 |
+| 10 | 16 | 32.26% | 25.0 | 2.5008 | 0.8067 | 0.000063 | +0.8067 | +13939 |
+| 100 | 16 | 82.64% | 25.0 | 2.5013 | 2.0672 | 0.000625 | +2.0666 | +35710 |
+| 200 | 16 | 90.50% | 25.0 | 2.5018 | 2.2641 | 0.001250 | +2.2628 | +39102 |
+| 1000 | 16 | 97.94% | 25.0 | 2.5058 | 2.4543 | 0.006250 | +2.4480 | +42302 |
+| 1584 | 16 | 98.69% | 25.0 | 2.5087 | 2.4759 | 0.009900 | +2.4660 | +42612 |
+
+**Current code: the whale's optimum over the grid.**
+
+R0 = payout/blk with no whale. c* = break-even per-ticket cost (splitting is profitable iff the per-ticket cost is below c*). c = the whale's actual cheapest per-ticket cost at k*. Columns at the realistic-expensive end (floor+MIN_TX_FEE, 6×, proposer slot); the last column is the cheapest end (floor only, 1×, block-size bound).
+
+| epoch | backlog | ρ_o | R0 (BTH) | c* (BTH/ticket) | c (BTH/ticket) | k* | share* | **net*/blk** | net*/day | net*/blk (floor, 1×, block-size) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0 | 0 | 2 | 0.0001 | 2.500e-5 | 6.25e-6 | 9 | 75.0% | +0.0000 | +1 | +0.0001 |
+| 0 | 0 | 20 | 0.0008 | 3.774e-5 | 6.25e-6 | 89 | 80.9% | +0.0005 | +8 | +0.0008 |
+| 0 | 0 | 200 | 0.0080 | 3.976e-5 | 6.25e-6 | 862 | 81.1% | +0.0046 | +79 | +0.0079 |
+| 0 | 1000 | 2 | 50.0000 | 1.250e1 | 6.25e-6 | 1584 | 99.8% | +49.8956 | +862196 | +49.9975 |
+| 0 | 1000 | 20 | 50.0000 | 2.273e0 | 6.25e-6 | 1584 | 98.7% | +49.3359 | +852524 | +49.9895 |
+| 0 | 1000 | 200 | 50.0000 | 2.475e-1 | 6.25e-6 | 1584 | 88.7% | +44.3598 | +766538 | +49.9181 |
+| 1 | 0 | 2 | 2.5001 | 7.813e-1 | 6.25e-6 | 1584 | 99.8% | +2.4934 | +43085 | +2.4999 |
+| 1 | 0 | 20 | 2.5008 | 1.180e-1 | 6.25e-6 | 1584 | 98.7% | +2.4660 | +42612 | +2.5000 |
+| 1 | 0 | 200 | 2.5080 | 1.247e-2 | 6.25e-6 | 1584 | 88.7% | +2.2227 | +38409 | +2.5036 |
+| 1 | 1000 | 2 | 25.0000 | 6.250e0 | 6.25e-6 | 1584 | 99.8% | +24.9428 | +431012 | +24.9986 |
+| 1 | 1000 | 20 | 25.0000 | 1.136e0 | 6.25e-6 | 1584 | 98.7% | +24.6630 | +426177 | +24.9937 |
+| 1 | 1000 | 200 | 25.0000 | 1.238e-1 | 6.25e-6 | 1584 | 88.7% | +22.1750 | +383184 | +24.9580 |
+| 3 | 0 | 2 | 1.8751 | 5.860e-1 | 6.25e-6 | 1584 | 99.8% | +1.8695 | +32306 | +1.8749 |
+| 3 | 0 | 20 | 1.8758 | 8.848e-2 | 6.25e-6 | 1584 | 98.7% | +1.8492 | +31954 | +1.8752 |
+| 3 | 0 | 200 | 1.8830 | 9.359e-3 | 6.25e-6 | 1584 | 88.7% | +1.6681 | +28825 | +1.8796 |
+| 3 | 1000 | 2 | 6.2500 | 1.562e0 | 6.25e-6 | 1584 | 99.8% | +6.2283 | +107625 | +6.2495 |
+| 3 | 1000 | 20 | 6.2500 | 2.841e-1 | 6.25e-6 | 1584 | 98.7% | +6.1583 | +106416 | +6.2478 |
+| 3 | 1000 | 200 | 6.2500 | 3.094e-2 | 6.25e-6 | 1584 | 88.7% | +5.5363 | +95668 | +6.2379 |
+| tail | 0 | 2 | 1.2110 | 3.784e-1 | 6.25e-6 | 1584 | 99.8% | +1.2067 | +20852 | +1.2109 |
+| tail | 0 | 20 | 1.2117 | 5.716e-2 | 6.25e-6 | 1584 | 98.7% | +1.1938 | +20629 | +1.2113 |
+| tail | 0 | 200 | 1.2189 | 6.058e-3 | 6.25e-6 | 1584 | 88.7% | +1.0788 | +18642 | +1.2166 |
+| tail | 1000 | 2 | 2.4219 | 6.055e-1 | 6.25e-6 | 1088 | 99.7% | +2.4084 | +41617 | +2.4216 |
+| tail | 1000 | 20 | 2.4219 | 1.101e-1 | 6.25e-6 | 1584 | 98.7% | +2.3803 | +41131 | +2.4208 |
+| tail | 1000 | 200 | 2.4219 | 1.199e-2 | 6.25e-6 | 1584 | 88.7% | +2.1393 | +36966 | +2.4159 |
+
+**Candidate window.** Does splitting into more than 10,000 outputs interact with `MAX_LOTTERY_CANDIDATES`? Not in the whale's favour or against it. Below is a seeded Monte Carlo of the node's walk. UTXO ids are `tx_hash ‖ index`, so a split tx's outputs sit next to each other in key order. The walk starts at a seeded offset and takes the first 10,000 eligible outputs:
+
+Monte Carlo of the node's walk (seed 0x1682fa170902, 400 offsets each): ids are `tx_hash ‖ index`, so a split tx's outputs sit together in key order.
+
+| ρ_o | k | n/tx | eligible set | window count | global share | mean window share | sd (window) | sd (binomial) |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 20 | 20 | 16 | 371236 | 10000 | 49.999% | 49.950% | 1.470% | 0.500% |
+| 20 | 200 | 16 | 2041828 | 10000 | 90.909% | 90.910% | 0.468% | 0.287% |
+| 20 | 200 | 1 | 2041820 | 10000 | 90.909% | 90.924% | 0.389% | 0.287% |
+| 200 | 200 | 16 | 3712408 | 10000 | 50.000% | 50.002% | 1.449% | 0.500% |
+
+**Reading it.**
+1. **Splitting is profitable at 192 of 192 grid points.** This confirms the issue's rough consequence. At the reference point (epoch 1, `ρ_o` = 20, floor + `MIN_TX_FEE`, 6×, proposer slot), the whale fills the slot (k\* = 1,584 tickets per block), takes 98.7% of the tickets, and nets **+2.47 BTH/block, about +42,600 BTH/day**. Honest holders would otherwise receive 2.50 BTH/block, so the whale captures almost all of it. The issue's example of k = 200 nets +2.26 BTH/block here. That is close to its +3.3 estimate; the difference is that R is 2.5 BTH at epoch 1, not 3.8.
+2. **The worst regime is a carry-forward backlog draining.** The payout is then the full block reward, so the whale nets up to +49.9 BTH/block in epoch 0 and +24.9 in epoch 1 for as long as the backlog lasts (#1691).
+3. **The epoch-0 steady state is small.** With no backlog, R is only organic fees, so the whale nets ≤ 0.008 BTH/block. It is still positive at every grid point.
+4. **Break-even.** Splitting is profitable whenever the per-ticket cost is below **c\* ≈ R0/(ρ_o+2)**, where R0 is the payout with no whale and k = 1 is the smallest split. At the reference point c\* = 0.118 BTH per ticket. The actual cost is 6.25e-6 BTH with `MIN_TX_FEE`, about 19,000× below c\*, and 870 pico (8.7e-10 BTH) with the floor alone at 1×. At every grid point the actual cost is far below c\*.
+5. **The candidate window gives no protection.**
+   - The whale's mean share inside the 10,000-candidate window equals its global share.
+   - Contiguous split outputs make the window share vary about 3× more from block to block (sd 1.47% vs 0.50% binomial), but the mean does not move.
+   - Because `count_eligible` saturates at 10,000, the Sybil cap is a constant 2,500 BTH, more than the largest block reward. As implemented, `sybil_reward_cap` never binds.
+   - The unit test `test_reward_cap_makes_splitting_net_zero` (`consensus/lottery.rs`) passes only because it assumes both premises (`block_reward = u64::MAX`, cost = k·base_fee). It says nothing about the implemented rules.
+
+**Remedy options (sim-measured; none implemented — a consensus decision for the maintainer).**
+
+Whale optimum over all 192 grid points (4 epochs × 2 backlogs × 3 ρ_o × 2 fee modes × 2 factors × 2 capacities). Reference = epoch 1, backlog 0, ρ_o 20, floor+MIN_TX_FEE, 6×, proposer slot (1,584 out/blk).
+
+| rule set | profitable points | max net*/blk (BTH) | max net*/day | reference net*/blk | honest R0 at reference (BTH/blk) | honest regimes with inflow > cap | worst point |
+|---|---:|---:|---:|---:|---:|---:|---|
+| current code | 192/192 | +49.9975 | +863957 | +2.4660 | 2.5008 | 0/12 | epoch 0, backlog 1000, ρ_o 2, floor, 1×, block size (20 MiB) (k*=76565) |
+| (a) per-block ρ in cap | 192/192 | +49.9975 | +863957 | +2.4660 | 2.5008 | 2/12 | epoch 0, backlog 1000, ρ_o 2, floor, 1×, block size (20 MiB) (k*=76565) |
+| (a') ρ = window count / L (10k truncation kept) | 192/192 | +0.2693 | +4654 | +0.2576 | 0.2694 | 9/12 | epoch 0, backlog 1000, ρ_o 2, floor, 1×, block size (20 MiB) (k*=23873) |
+| (b) base_fee per eligible output | 96/192 | +38.5000 | +665280 | +0.2421 | 6.5008 | 4/12 | epoch 0, backlog 1000, ρ_o 2, floor, 1×, proposer slot (1,584 out/blk) (k*=21) |
+| (a)+(b), free tickets kept | 96/192 | +0.9844 | +17010 | +0.2421 | 6.2500 | 7/12 | epoch 0, backlog 1000, ρ_o 2, floor, 1×, block size (20 MiB) (k*=189) |
+| (a)+(b)+free-ticket rule | 0/192 | +0.0000 | +0 | +0.0000 | 5.0000 | 9/12 | — |
+| min_utxo_value = 1 BTH | 192/192 | +49.9975 | +863957 | +2.4575 | 2.5008 | 0/12 | epoch 0, backlog 1000, ρ_o 2, floor, 1×, block size (20 MiB) (k*=76565) |
+
+How to read the remedy table:
+- **"Honest regimes with inflow > cap"** counts the 12 honest regimes (4 epochs × 3 `ρ_o`, no whale, no backlog) in which the per-block pool inflow (emission share + 80% of fees) exceeds the cap. In those regimes the carry-forward backlog grows without bound and honest redistribution is throttled to the cap. This is the §9.2 stability condition.
+- **(a) per-block `ρ`, alone**, changes nothing measurable. The cap `(ρ_o+k+5)·base_fee` grows with the whale's k for free, so it reaches `block_reward` at the whale's optimum. Profit is the same as current code at every point.
+- **(a') window count / L with the 10k truncation kept** pins `ρ` at about 1.08, so the cap is about 0.27 BTH. The whale still captures it at a profit, and honest redistribution is throttled in 9 of 12 regimes. This shows that any per-block `ρ` must be computed without the `MAX_LOTTERY_CANDIDATES` truncation.
+- **(b) `base_fee` per eligible output, alone**, removes the profit wherever R0 < 0.25·(ρ_o+2), which is the c\* condition. It leaves 96 of 192 points profitable, worst +38.5 BTH/block during an epoch-0 backlog drain. It is also a large fee increase for every user: 0.25 BTH per output.
+- **(a)+(b) with free tickets still eligible** still leaks up to +0.98 BTH/block. The 5 free tickets per block inflate the cap by 1.25 BTH that nobody paid for.
+- **(a)+(b)+free-ticket rule** is the only option with net\* ≤ 0 at all 192 points. Here coinbase and payout outputs are neither eligible nor counted. It restores the §9.1 algebra exactly: `s·R ≤ k/(ρ_o+k)·(ρ_o+k)·base = k·base ≤ cost`. The CI test `combined_remedy_is_non_positive_everywhere` asserts it. **Its cost:** it throttles honest redistribution in 9 of 12 regimes. The cap `ρ_o·base_fee` (0.5 BTH at `ρ_o` = 2) is below the emission share, and organic base fees alone put 0.8·ρ_o·base into the pool. So the excess needs a separate channel that cannot be gamed by splitting: burn it, route it back to the miner, or send it to a per-capita rebate. Carry-forward would grow without bound.
+- **Raising `min_utxo_value` to 1 BTH** has no effect. The capital is locked, not spent, and demurrage on a ticket is zero at 1× and negligible at 6× over 9,281 blocks.
+- **Age weighting** was analysed but not simulated. A whale ticket lives as long in the window as an organic one, so weighting by age leaves the whale's share unchanged. If organic outputs are spent sooner, it tilts toward the patient whale.
+
+
 
 ### 9.2 Claim 2 — does the cap throttle redistribution into irrelevance?
 
@@ -343,6 +487,8 @@ Burn's throttling is worst exactly where reality lives — big holders making fe
 **Claim 2 verdict: CONDITIONAL — the cap is fine, but the excess policy is decisive.** Burn-the-excess **fails** the throughput test (a 1–9% trickle; Δgini +0.0038). Carry-forward **passes** (≈100% throughput, Δgini +0.1144, Sybil-safety preserved), *provided* the mean fee inflow/block stays below the cap (the stability condition — comfortably true on a busy chain: 0.0013 ≪ 5 BTH at ρ=20, and even at the #351 steady ~1.9 BTH/block mean it is below the 5 BTH cap). If the chain is persistently so busy that mean inflow exceeds `ρ·base_fee`, carry-forward's backlog grows without bound and a **separate Sybil-immune channel** for the demurrage bulk (e.g. routing over-cap demurrage to emission or a direct per-capita rebate) would be needed — but that regime is not the expected operating point.
 
 ### 9.3 Bottom line — does Path C + reward-cap survive both claims?
+
+> **Status (2026-10-31, #1682):** Claim 1 below holds only under the §9.1 model's premises. The implemented rules violate them, and splitting is measured as profitable at every grid point (§9.1.1). The "Reward cap" parameter below is what the code ships, and it does not deliver the Sybil bound. Choosing a remedy is a pending maintainer decision (§9.1.1 decision table).
 
 **Yes, with carry-forward as the excess policy (not burn).**
 

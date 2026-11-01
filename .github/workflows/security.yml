@@ -68,9 +68,12 @@ jobs:
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Optimized upstream library tests
-        # Serial: a test that panics on purpose inside a GLib callback races
-        # the parallel tests and aborts the binary ("failed to initiate
-        # panic", #1561).
+        # Serial as a mitigation for #1561. In parallel the binary sometimes
+        # aborted with "fatal runtime error: failed to initiate panic, error
+        # 3" (the unwinder's _URC_FATAL_PHASE1_ERROR). The cause is
+        # unconfirmed; shared GLib global state touched by concurrent tests
+        # is the leading suspect. glib-parallel-loop.yml is a manual job that
+        # loops the parallel binary under gdb to name the colliding tests.
         run: cargo test --manifest-path vendor/glib/Cargo.toml --release --locked --lib -- --test-threads=1
       - name: Optimized string iterator regressions
         run: cargo test --manifest-path vendor/glib/Cargo.toml --release --locked --test security_variant_iter

@@ -94,11 +94,17 @@ const keys = {
   seed: vector.seed,
 }
 
-/** Mock node: the fixture rows in chain order, nothing spent. */
+/**
+ * Mock node: the fixture rows in chain order, nothing spent. Row `i` is
+ * confirmed at block height `i` (as in the history mock below) so the
+ * age-band decoy picker (#1693) can resolve ages: at tip 40 every decoy-pool
+ * row is >= 21 blocks old (past the 10-block floor), and the pool (source + 19
+ * decoys = 20 rows) covers the 19 decoys a ring of 20 needs.
+ */
 function rpc(rows: ChainOutput[]): SendRpc {
   return {
     getChainHeight: async () => 40,
-    getOutputs: async () => rows,
+    getOutputs: async () => rows.map((r, i) => ({ ...r, height: i })),
     areKeyImagesSpent: async (keyImages) =>
       keyImages.map((keyImage) => ({ keyImage, spent: false, spentHeight: null, pending: false })),
   }

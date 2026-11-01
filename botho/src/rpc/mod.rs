@@ -1205,6 +1205,8 @@ fn compute_effective_decay_rate(validation_result: Option<&str>, block_height: u
 async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
     let ledger = read_lock!(state.ledger, id.clone());
     let chain_state = ledger.get_chain_state().unwrap_or_default();
+    // Ledger LMDB map usage (#1535), read live from the environment.
+    let storage = ledger.storage_usage();
     let minting = *read_lock!(state.minting_active, id.clone());
     let mempool = read_lock!(state.mempool, id.clone());
     let peers = *read_lock!(state.peer_count, id.clone());
@@ -1403,6 +1405,14 @@ async fn handle_node_status(id: Value, state: &RpcState) -> JsonRpcResponse {
             "quorumByzantineTolerance".into(),
             json!(quorum_byzantine_tolerance),
         );
+        // Ledger storage (#1535): the LMDB data file's high-water mark
+        // against its fixed map size. `ledgerStorageFull` is true once a
+        // block write has failed with MDB_MAP_FULL: the node cannot store
+        // blocks (its height is frozen) until restarted with a larger map.
+        map.insert("ledgerMapSizeBytes".into(), json!(storage.map_size_bytes));
+        map.insert("ledgerUsedBytes".into(), json!(storage.used_bytes));
+        map.insert("ledgerUsedFraction".into(), json!(storage.used_fraction()));
+        map.insert("ledgerStorageFull".into(), json!(storage.map_full));
     }
     JsonRpcResponse::success(id, status)
 }
@@ -5055,6 +5065,36 @@ mod tests {
         assert_eq!(result["scpPeerCount"], json!(3));
         assert_eq!(result["quorumDegenerate"], json!(false));
         assert_eq!(result["quorumFaultTolerant"], json!(true));
+    }
+
+    /// #1535: `node_getStatus` reports the ledger's LMDB map usage, read live
+    /// from the open environment (not hardcoded).
+    #[tokio::test]
+    async fn test_node_status_reports_ledger_storage() {
+        use crate::{ledger::Ledger, mempool::Mempool};
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let usage = ledger.storage_usage();
+        let state = RpcState::new(
+            ledger,
+            Mempool::new(),
+            Network::Testnet,
+            None,
+            None,
+            vec![],
+            Arc::new(WsBroadcaster::new(16)),
+        );
+
+        let resp = handle_node_status(json!(1), &state).await;
+        let result = resp.result.unwrap();
+        assert_eq!(result["ledgerMapSizeBytes"], json!(usage.map_size_bytes));
+        assert!(usage.map_size_bytes > 0);
+        let used = result["ledgerUsedBytes"].as_u64().unwrap();
+        assert!(used > 0 && used <= usage.map_size_bytes);
+        let fraction = result["ledgerUsedFraction"].as_f64().unwrap();
+        assert!(fraction > 0.0 && fraction <= 1.0);
+        assert_eq!(result["ledgerStorageFull"], json!(false));
     }
 
     /// #541: `node_getStatus` must report honest sync state wired to the live

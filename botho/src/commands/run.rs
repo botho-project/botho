@@ -45,7 +45,10 @@ use crate::{
         SyncRequest, SyncRequestKind, SyncRequestToken, SyncResponse, SyncStatusSnapshot,
         MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION,
     },
-    node::{commit_block_locked, ApplyState, MintedMintingTx, Node, SharedLedger},
+    node::{
+        commit_block_locked, is_ledger_map_full, ApplyState, MintedMintingTx, Node, SharedLedger,
+        LEDGER_MAP_FULL_MESSAGE,
+    },
     rpc::{
         calculate_dir_size, init_metrics,
         metrics::{record_gossip_publish_error, NodeLoopTimer},
@@ -710,7 +713,8 @@ async fn run_async_with_shutdown(
         config.network.gossip_port(network_type),
         bootstrap_peers,
         rate_limit_config,
-    );
+    )
+    .with_listen_address(config.network.listen_address());
 
     let mut swarm = discovery.start().await?;
 
@@ -812,9 +816,9 @@ async fn run_async_with_shutdown(
     let mut node = Node::new(config.clone(), config_path)?;
 
     // Start RPC server for thin wallet connections
-    let rpc_addr: SocketAddr = format!("0.0.0.0:{}", config.network.rpc_port(network_type))
-        .parse()
-        .expect("Invalid RPC address");
+    // Bind address comes from `network.listen_address` (default 0.0.0.0,
+    // issue #1582).
+    let rpc_addr: SocketAddr = config.network.rpc_socket_addr(network_type);
 
     // Create shared state for RPC
     let minting_active = Arc::new(RwLock::new(false));
@@ -1039,8 +1043,12 @@ async fn run_async_with_shutdown(
         DATA_DIR_USAGE_BYTES.set(size as i64);
         debug!("Initial data_dir_usage_bytes: {} bytes", size);
     }
+    // Ledger LMDB map usage (#1535): same cadence as the data-dir size.
+    metrics_updater.set_ledger_storage(&ledger_storage_usage(&node));
     // Spawn background task for periodic updates
     let data_dir_clone = data_dir.clone();
+    let storage_ledger = node.shared_ledger();
+    let storage_metrics = metrics_updater.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         interval.tick().await; // Skip the immediate first tick (already done above)
@@ -1050,14 +1058,13 @@ async fn run_async_with_shutdown(
                 DATA_DIR_USAGE_BYTES.set(size as i64);
                 debug!("Updated data_dir_usage_bytes: {} bytes", size);
             }
+            if let Ok(ledger) = storage_ledger.read() {
+                storage_metrics.set_ledger_storage(&ledger.storage_usage());
+            }
         }
     });
 
-    if let Some(metrics_port) = config.network.metrics_port(network_type) {
-        let metrics_addr: SocketAddr = format!("0.0.0.0:{}", metrics_port)
-            .parse()
-            .expect("Invalid metrics address");
-
+    if let Some(metrics_addr) = config.network.metrics_socket_addr(network_type) {
         tokio::spawn(async move {
             if let Err(e) = start_metrics_server(metrics_addr).await {
                 error!("Metrics server error: {}", e);
@@ -1132,12 +1139,17 @@ async fn run_async_with_shutdown(
         metrics_updater.set_mempool_size(mempool.len());
     }
 
-    let mut consensus = ConsensusService::new(
-        node_id,
-        scp_quorum_set,
-        consensus_config_from_env(),
-        chain_state,
-    );
+    // Unit-test builds may pin the slot timing so the real-loop harness can
+    // drive the solo propose path within its deadline (#1550).
+    #[cfg(test)]
+    let consensus_config = test_hooks
+        .as_ref()
+        .and_then(|hooks| hooks.consensus_config.clone())
+        .unwrap_or_else(consensus_config_from_env);
+    #[cfg(not(test))]
+    let consensus_config = consensus_config_from_env();
+    let mut consensus =
+        ConsensusService::new(node_id, scp_quorum_set, consensus_config, chain_state);
 
     // Participation gate (issue #428): tell the consensus service how many
     // connected peers this node expects before it may produce a block, and the
@@ -1464,6 +1476,22 @@ async fn run_async_with_shutdown(
                                 break 'node_loop;
                             }
                         }
+                        NetworkEvent::PeerSubscribedToTransactions(peer_id) => {
+                            // The new peer has seen none of the pending txs.
+                            // Reset the re-broadcast backoff so it gets them
+                            // on the next re-feed, not after up to 10 min
+                            // (#674, #1547). Coalesced to at most one reset
+                            // per 30 s, so peer churn cannot re-open the
+                            // #1547 flood (#1570).
+                            let cleared = rebroadcast_schedule.reset_all(Instant::now());
+                            if cleared > 0 {
+                                debug!(
+                                    %peer_id,
+                                    cleared,
+                                    "Peer subscribed to transactions; tx re-broadcast backoff reset"
+                                );
+                            }
+                        }
                         NetworkEvent::PeerMetadataUpdated(_) => {
                             // The RPC projection was refreshed above. Identify
                             // does not change connection counts or quorum membership.
@@ -1471,18 +1499,11 @@ async fn run_async_with_shutdown(
                         NetworkEvent::PeerDiscovered(peer_id) => {
                             info!("Peer connected: {}", peer_id);
                             let new_peer_count = discovery.peer_count();
-                            // The new peer has seen none of the pending txs.
-                            // Reset the re-broadcast backoff so it gets them
-                            // on the next re-feed, not after up to 10 min
-                            // (#674, #1547).
-                            let cleared = rebroadcast_schedule.reset_all();
-                            if cleared > 0 {
-                                debug!(
-                                    %peer_id,
-                                    cleared,
-                                    "Peer connected; tx re-broadcast backoff reset"
-                                );
-                            }
+                            // The pending-tx re-broadcast reset for this peer
+                            // happens on its transactions-topic subscription
+                            // (PeerSubscribedToTransactions), not here: at
+                            // connection time the peer is not yet in the topic
+                            // mesh, so a re-feed could miss it (#1570).
 
                             // Update RPC peer count and metrics
                             if let Ok(mut count) = peer_count.write() {
@@ -1997,6 +2018,10 @@ async fn run_async_with_shutdown(
                 #[cfg(test)]
                 if let Some(hooks) = test_hooks.as_mut() {
                     hooks.on_tick(&consensus, apply_queue.is_busy());
+                    // Injected local mint candidates go through the SAME
+                    // `submit_minting_tx` the miner's work channel uses; the
+                    // next tick's `consensus.tick()` proposes them (#1550).
+                    hooks.submit_candidates(&mut consensus, apply_queue.is_busy());
                     // Injected network blocks go through the SAME enqueue
                     // functions the `NewBlock` / compact / sync arms call.
                     for injected in hooks.take_network_blocks() {
@@ -2153,6 +2178,14 @@ async fn run_async_with_shutdown(
                             let height_already_filled = consensus_failure::height_already_applied(
                                 block.height(), ledger_height,
                             );
+                            if !height_already_filled && is_ledger_map_full(&e) {
+                                // #1535: still terminal (the externalized block
+                                // is not stored, so this node cannot follow the
+                                // decision), but say plainly that it is a local
+                                // storage fault and not a disagreement.
+                                error!(slot = slot_index, height = block.height(), error = %e,
+                                    "{}", LEDGER_MAP_FULL_MESSAGE);
+                            }
                             if height_already_filled {
                                 debug!(
                                     height = block.height(),
@@ -2300,7 +2333,23 @@ async fn run_async_with_shutdown(
 
                     // The first failure (the job stopped there). Never terminal.
                     if let Some((block, e)) = &outcome.failure {
+                        // #1535: a full LMDB map is a LOCAL storage fault. The
+                        // block may be perfectly valid, so it is not reported as
+                        // rejected and the serving peer is not charged with it.
+                        let storage_full = is_ledger_map_full(e);
+                        if storage_full {
+                            error!(source = origin.label(), height = block.height(), error = %e,
+                                "{}", LEDGER_MAP_FULL_MESSAGE);
+                            metrics_updater.set_ledger_storage(&ledger_storage_usage(&node));
+                        }
                         match &origin {
+                            _ if storage_full => {
+                                if origin.is_sync() {
+                                    // Back off the sync state machine without a
+                                    // reputation hit against the peer.
+                                    sync_manager.on_failure(None, format!("local ledger storage full: {e}"));
+                                }
+                            }
                             ApplyOrigin::Gossip { .. } => warn!("Failed to add network block: {}", e),
                             ApplyOrigin::Compact { block_hash } => warn!(
                                 block = %hex::encode(&block_hash[0..8]),
@@ -4077,6 +4126,15 @@ fn note_parked_parent(
         parked.height.saturating_sub(1),
         parked.prev_block_hash,
     );
+}
+
+/// The ledger's LMDB map usage (#1535), or the default (all zero) if the
+/// ledger lock is poisoned.
+fn ledger_storage_usage(node: &Node) -> crate::ledger::LedgerStorageUsage {
+    node.shared_ledger()
+        .read()
+        .map(|l| l.storage_usage())
+        .unwrap_or_default()
 }
 
 /// The committed ledger height, or `None` if it cannot be read.

@@ -35,16 +35,48 @@ The ledger uses LMDB for persistent storage with memory-mapped I/O.
 
 | Component | Size | Notes |
 |-----------|------|-------|
-| LMDB Map Size | 1 GB (configured) | Virtual, not RSS |
+| LMDB Map Size | 64 GiB (fixed, `LEDGER_MAP_SIZE`) | Address space only: not RSS, not disk |
 | Active Page Cache | Variable | Depends on access patterns |
-| UTXO Database | Grows with chain | Bounded by map size |
+| UTXO Database | Grows with chain | Shares the map with every other table |
 | Key Images Database | Grows with chain | One entry per spent output |
 | Cluster Wealth Index | ~8 bytes × clusters | Progressive fee tracking |
 
 **Notes:**
-- LMDB uses virtual memory mapping; RSS reflects actual page usage
-- Consider reducing `map_size` on memory-constrained systems
+- LMDB uses virtual memory mapping; RSS reflects actual page usage, and the
+  data file (`data.mdb`) grows only as pages are used. The 64 GiB map is a
+  reservation of address space, so a large map costs nothing on small hosts.
+  Do not shrink it to save memory: that saves no RSS and only brings the cap
+  closer.
 - Hot pages stay in memory; cold pages are paged out by OS
+
+#### Ledger map exhaustion (`MDB_MAP_FULL`, #1535)
+
+LMDB never grows its map. Once the data file's high-water mark reaches the
+map size, every block write fails with `MDB_MAP_FULL`. A 72 h stress fleet
+grew its ledger about 4.5 MiB/h, which put the former 1 GiB map about 8 days
+out; 64 GiB is years at that rate.
+
+If a node does hit the cap:
+
+- The ledger fails closed: the refused block commits nothing and the chain
+  stays intact. The node's height stops advancing.
+- The node logs an `error!` beginning `LEDGER STORAGE FULL`. A full map is a
+  local storage fault, so the block is not treated as invalid and the peer
+  that served it is not penalized. An externalized consensus block that
+  cannot be stored still stops the node (terminal consensus failure), with
+  the same message logged first.
+- `node_getStatus` reports `ledgerStorageFull: true`, and the metric
+  `botho_ledger_map_full` is 1.
+- **Recovery:** restart the node on a build with a larger `LEDGER_MAP_SIZE`
+  (`botho/src/ledger/store.rs`). The existing data file opens with the larger
+  map and the refused block is accepted on the next sync. If the stop came
+  from a consensus apply, the `consensus-failure.json` marker it wrote must
+  be handled per the usual operator recovery first.
+
+Watch for it before it happens: `node_getStatus` reports `ledgerMapSizeBytes`,
+`ledgerUsedBytes` and `ledgerUsedFraction`, and Prometheus exports
+`botho_ledger_map_size_bytes`, `botho_ledger_used_bytes` and
+`botho_ledger_map_full` (refreshed every 60 s).
 
 ### P2P Network (`botho/src/network/`)
 
@@ -93,13 +125,11 @@ Transactions are evicted when:
 
 ### 3. LMDB Page Management
 
-For memory-constrained environments:
-```rust
-// Reduce map size (requires restart)
-EnvOpenOptions::new()
-    .map_size(512 * 1024 * 1024)  // 512 MB instead of 1 GB
-    .open(path)
-```
+The LMDB map size is address space, not memory: shrinking it does not reduce
+RSS, so it is not a memory knob. RSS from LMDB is the set of recently touched
+pages, which the OS reclaims under pressure. See
+[Ledger map exhaustion](#ledger-map-exhaustion-mdb_map_full-1535) for what the
+map size does bound.
 
 ### 4. Connection Limits
 
@@ -154,7 +184,7 @@ curl -X POST http://localhost:8332/rpc \
 | Setting | Location | Default | Memory Impact |
 |---------|----------|---------|---------------|
 | `MAX_MEMPOOL_SIZE` | `mempool.rs` | 10,000 | ~17 MB per 1K tx |
-| `map_size` | `store.rs` | 1 GB | Virtual memory |
+| `LEDGER_MAP_SIZE` | `store.rs` | 64 GiB | Address space only (caps ledger size) |
 | `max_peers` | `node.toml` | 100 | ~80 KB per peer |
 
 ## Memory Leak Detection
@@ -172,7 +202,7 @@ curl -X POST http://localhost:8332/rpc \
 4. **Monitor key image cleanup** after block confirmations
 
 ### Known Safe Patterns
-- LMDB virtual size is constant (map_size)
+- LMDB virtual size is constant (`LEDGER_MAP_SIZE`)
 - Mempool size is bounded by `MAX_MEMPOOL_SIZE`
 - Key images are pruned when transactions confirm
 

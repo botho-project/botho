@@ -8,7 +8,30 @@ from lottery import decoy_row
 ZERO_KEY = "0" * 64
 
 
-def choose(controller, wallet, height, amount=0, count=None, headroom=0):
+MAX_PAYMENT_INPUTS = 4
+
+
+def is_v2_award(canonical, output):
+    """Whether a canonical inventory output is a V2 lottery payout (#1643)."""
+    entry = canonical.get(bytes(output["utxo"]["target_key"]).hex())
+    return entry is not None and entry[1].get("lotteryContext") is not None
+
+
+def choose(controller, wallet, height, amount=0, count=None, headroom=0,
+           award_input=False):
+    """Canonical selection; ``award_input`` adds the oldest mature V2 award.
+
+    Largest-value-first never reaches a V2 payout (~1.25e8 picocredits next
+    to ~1e10 principal outputs), so without ``award_input`` a campaign
+    discovers awards but never spends one (#1681). With it, a free-shape
+    payment (``count`` None) whose value selection leaves room under
+    MAX_PAYMENT_INPUTS also spends the sender's oldest eligible V2 award
+    (lowest creation height, then id) whose complete-set decoy pools still
+    hold. The choice is a pure function of the scanned state, so a replay
+    reproduces it, and the award only adds value: the signer returns it as
+    change, so exact accounting is unchanged. Pinned shapes and readiness
+    probes (explicit ``count``) are never widened.
+    """
     canonical = controller.canonical_history()
     raw = controller.canonical_inventory(wallet, canonical)
     unspent = controller.unspent_setup_inputs(wallet, canonical)
@@ -54,6 +77,35 @@ def choose(controller, wallet, height, amount=0, count=None, headroom=0):
         window, real, size = pools[output["id"]]
         return size - sum(1 for key in excluded if key != real and in_pool(key, window))
     eligible.sort(key=lambda o: (-o["utxo"]["amount"], o["id"]))
+
+    def add_award(selected, excluded):
+        # Bounded: at most MAX_PAYMENT_INPUTS - 1 candidate awards checked,
+        # oldest first; the first whose addition keeps every ring complete.
+        if len(selected) >= MAX_PAYMENT_INPUTS or any(
+            is_v2_award(canonical, o) for o in selected
+        ):
+            return None
+        chosen = {o["id"] for o in selected}
+        images = {o["key_image"] for o in selected}
+        awards = sorted(
+            (
+                o
+                for o in eligible
+                if is_v2_award(canonical, o)
+                and o["id"] not in chosen
+                and o["key_image"] not in images
+            ),
+            key=lambda o: (o["utxo"]["created_at"], o["id"]),
+        )
+        for award in awards[: MAX_PAYMENT_INPUTS - 1]:
+            widened = excluded | {bytes(award["utxo"]["target_key"]).hex()}
+            if all(
+                pool_without(o, widened) >= 19 + headroom
+                for o in selected + [award]
+            ):
+                selected.append(award)
+                return award
+        return None
     evidence = {
         "canonical": len(raw),
         "unreserved_unspent": len(unspent),
@@ -77,7 +129,12 @@ def choose(controller, wallet, height, amount=0, count=None, headroom=0):
                 continue
             excluded = {bytes(o["utxo"]["target_key"]).hex() for o in selected}
             if all(pool_without(o, excluded) >= 19 + headroom for o in selected):
-                return list(selected), {**evidence, "combinations": attempted}
+                selected = list(selected)
+                extra = {**evidence, "combinations": attempted}
+                if award_input and count is None:
+                    award = add_award(selected, excluded)
+                    extra["award_input"] = award["id"] if award else None
+                return selected, extra
     reason = (
         "reservation_or_spent"
         if raw and not unspent

@@ -122,6 +122,11 @@ export interface RawChainOutput {
   winnerOutpoint?: string
   /** Stored cluster tags (`[clusterId, weight]`), when the node serves them. */
   clusterTags?: Array<[number, number]>
+  /**
+   * Block height the output was confirmed at. The send path needs it to draw
+   * ring decoys from the real input's age band (#1693).
+   */
+  height?: number
 }
 
 /**
@@ -489,7 +494,11 @@ export class RemoteNodeAdapter implements NodeAdapter {
     // Each row keeps the index its hybrid one-time key is bound to (#988; the
     // coinbase u32::MAX sentinel is normalized) and any V2 lottery payout
     // context, so the client-side signer can discover and spend it (#1645).
-    return result.flatMap((block) => block.outputs.map(decodeOutputRow))
+    // Each row also carries its block height so the send path can pick
+    // age-similar ring decoys (#1693) instead of chain-ordered ones.
+    return result.flatMap((block) =>
+      block.outputs.map((output) => ({ ...decodeOutputRow(output), height: block.height })),
+    )
   }
 
   /**

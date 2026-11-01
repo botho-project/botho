@@ -80,8 +80,11 @@ obligation; the sampler verifies executable bytes, not the build history.
    }
    ```
 
-   Bind `mining` to `minting_getStatus.active`. Bind tip height/hash to the
-   same canonical chain response, not independent non-atomic RPC reads. Tie
+   `scripts/stress/rpc_sustained_memory.py` builds this file from one
+   `node_getStatus` reply (see [x-series integration](#x-series-runner-integration)).
+   It binds `mining` to `mintingActive` (the same lock
+   `minting_getStatus.active` reads) and tip height/hash to the same
+   `chain_state` read in that one reply, not independent non-atomic RPC reads. Tie
    the endpoint to the intended process/chain before the experiment. An RPC
    timestamp must be no older than fifteen seconds, and cannot be in the
    future. Record RPC failures in `errors`; never synthesize success counters.
@@ -130,6 +133,12 @@ or missing observations are incomplete, never implicit zeros or a pass.
 For a complete node trace, the four-hour measurement uses ordinary least squares
 over elapsed hours. Both **RSS + process swap** and **anonymous RSS + process
 swap** must have slope ≤10 MiB/hour and end-minus-start growth ≤64 MiB.
+A manifest may **tighten** either gate with `slope_limit_mib_per_hour` or
+`net_growth_limit_mib` (positive, at most the defaults). They are part of the
+hashed manifest, so they are fixed before t0, and the report echoes the active
+values under `thresholds`. Relaxing a gate is rejected at validation; a looser
+gate (one that could admit the historical 49 MiB/hour retention) needs a
+separately reviewed code change, not a manifest edit.
 The first measurement observation is the fixed memory baseline. Follow-up
 endpoint growth also must remain ≤64 MiB against that same baseline. No moving
 minimum, warmup reset, outlier deletion or later baseline selection is used.
@@ -158,10 +167,83 @@ failure domains; they do not establish equivalent dedicated-host performance.
 State the actual topology and workload, never relabel a same-host minting pass
 as full payment/campaign qualification.
 
+## X-series runner integration
+
+The x-series controller (`scripts/stress/controller.py` with
+`scripts/stress/runtime.py`) is the real production-process runner. It reads
+`node_getStatus` from every host on each monitor tick, and it pulls a resource
+ring from the restricted `observer.py` export. The controller uses that ring
+for its live halt gates (`runtime.check_resources`): restarts, binary, config
+or node-key changes, disk headroom, low host memory and sustained swap.
+**That ring cannot replace this qualification's evidence:**
+
+- `observer.py` rows have no `RssAnon`, cgroup memory, cgroup swap,
+  `memory.events`, cgroup CPU or throttling, and no tip height or hash.
+- The ring keeps about 150 s (`latest.json`). `resources.jsonl` rotates at
+  64 MiB, and its process identity is systemd's monotonic start time, not
+  the boot-ID start-tick identity this manifest binds.
+- During degrade steps the controller deliberately re-baselines a
+  scheduled restart (`check_resources` returns a new baseline). The
+  sustained gate never re-baselines; any restart makes the run incomplete.
+
+So a sustained qualification runs **alongside** the controller and never
+inside its gates. On each tick, for each node:
+
+1. On the controller (or any host with the node's RPC endpoint), write the
+   observation from one read-only reply:
+
+   ```sh
+   python3 scripts/stress/rpc_sustained_memory.py \
+     --manifest manifest.json --node n1 \
+     --rpc-url http://127.0.0.1:7101/ --expected-network botho-testnet \
+     --out n1-observation.json
+   ```
+
+   Use `https://…/rpc` with `--ca-file` for the controller's pinned private
+   TLS endpoints (`runtime.campaign_tls_context`). The file is replaced
+   atomically. The timestamp is taken at reply receipt. A missing or
+   malformed `chainHeight`/`tipHash`/`mintingActive`/`totalTransactions` is
+   omitted and recorded in `errors`, never zeroed. A `network` that differs
+   from `--expected-network`, or a known `gitCommit` that contradicts the
+   manifest `source_revision`, is an error. The process and chain identity
+   always come from the manifest. The RPC reply can only contradict it.
+   Exit 2 still writes a valid observation file that describes the failure.
+2. On the node's host, run `sample_sustained_memory.py` (above) against that
+   file and append its stdout to the raw JSONL. The sampler keeps the
+   adapter's `errors` in the row verbatim.
+3. Archive the raw JSONL next to the controller's own journal and observer
+   `resources.jsonl` for cross-reference. Do not merge or rewrite them.
+
+`confirmed_transfers` is bound to `node_getStatus.totalTransactions`, the
+canonical chain-state transaction counter. That counter is enough for the
+minting profile, whose transfer minimum is zero. A payments run must
+independently confirm that the counter counts only the declared transfer
+workload on that chain, or replace the observation file's
+`confirmed_transfers` with a reviewed canonical source. Submission or
+acceptance counts from the controller journal are never transfer evidence.
+
+### Inference limits
+
+- A passing result covers only the stated `scope` and topology, for one
+  artifact on one isolated chain. It is not campaign acceptance, payment
+  qualification (for `limited_minting`), or recovery of historical state
+  (#1440).
+- Trend gates detect sustained retention over four hours. They do not prove
+  the absence of slower growth that becomes visible only over days, of
+  growth triggered by workload the profile does not exercise, or of
+  allocator behavior that differs on other kernels or hardware.
+- RPC fields are self-reported by the measured node. Sampled same-height
+  hash agreement shows the sampled tips agreed. It does not show the absence
+  of forks between samples. Height alone never implies agreement.
+- `gitCommit` is a build-time string, and `unknown` is accepted. The
+  executable SHA256 that the sampler verifies on every row is the binding
+  artifact identity.
+
 ## Offline checks
 
 ```sh
 python3 -m unittest discover -s scripts/stress -p '*sustained_memory.py'
+python3 -m unittest discover -s scripts/stress -p 'test_*.py'
 ruff check scripts/stress/*sustained_memory.py
 ruff format --check scripts/stress/*sustained_memory.py
 ```
@@ -169,6 +251,9 @@ ruff format --check scripts/stress/*sustained_memory.py
 Synthetic controls include constant and warmed plateau traces, the historical
 49 MiB/hour growth rate, swap-only growth, missing/restarted processes, altered
 identities, insufficient workload, resource failures, phase deadlines and
-same-height hash comparisons. Linux filesystem fixtures exercise the real
+same-height hash comparisons, and tightened/relaxed thresholds. Synthetic
+`node_getStatus` series fed through the RPC adapter repeat the plateau pass,
+49 MiB/hour failure, RPC outage, network drift, unpaused miner and divergent
+same-height tip controls. Linux filesystem fixtures exercise the real
 sampler's unit conversion, cgroup reads and process identity parsing. These
 checks provide no live five-hour observation.
