@@ -199,28 +199,55 @@ inside its gates. On each tick, for each node:
      --out n1-observation.json
    ```
 
-   Use `https://…/rpc` with `--ca-file` for the controller's pinned private
-   TLS endpoints (`runtime.campaign_tls_context`). The file is replaced
-   atomically. The timestamp is taken at reply receipt. A missing or
+   The endpoint must be explicit, with no credentials, query or fragment.
+   Plain `http://` is accepted only to `localhost` or a loopback or
+   private-lab (RFC 1918 / IPv6 ULA) address literal, with path `/` or
+   `/rpc` (the node's JSON-RPC server answers POST on any path; `7101` is the
+   mainnet default RPC port, `17101` testnet). Use `https://<host>/rpc` with
+   `--ca-file` for the controller's pinned private TLS endpoints
+   (`runtime.campaign_tls_context`): https requires the `/rpc` proxy path and
+   a pinned CA. The file is replaced atomically. The timestamp is taken at reply receipt. A missing or
    malformed `chainHeight`/`tipHash`/`mintingActive`/`totalTransactions` is
    omitted and recorded in `errors`, never zeroed. A `network` that differs
    from `--expected-network`, or a known `gitCommit` that contradicts the
-   manifest `source_revision`, is an error. The process and chain identity
+   manifest `source_revision`, is an error. The commit check needs at least
+   seven lowercase hex characters on both sides. A shorter or non-hex
+   `gitCommit` (or `source_revision`) is an error, never a prefix match.
+   An `unknown` or absent `gitCommit` (a dev build) is not checked. The process and chain identity
    always come from the manifest. The RPC reply can only contradict it.
-   Exit 2 still writes a valid observation file that describes the failure.
+   Exit 2 still writes a valid observation file that describes the failure,
+   including HTTP protocol failures such as a bad status line or truncated
+   reply.
 2. On the node's host, run `sample_sustained_memory.py` (above) against that
    file and append its stdout to the raw JSONL. The sampler keeps the
    adapter's `errors` in the row verbatim.
 3. Archive the raw JSONL next to the controller's own journal and observer
    `resources.jsonl` for cross-reference. Do not merge or rewrite them.
 
-`confirmed_transfers` is bound to `node_getStatus.totalTransactions`, the
-canonical chain-state transaction counter. That counter is enough for the
-minting profile, whose transfer minimum is zero. A payments run must
-independently confirm that the counter counts only the declared transfer
-workload on that chain, or replace the observation file's
-`confirmed_transfers` with a reviewed canonical source. Submission or
-acceptance counts from the controller journal are never transfer evidence.
+For a minting manifest, `confirmed_transfers` is bound to
+`node_getStatus.totalTransactions`, the cumulative chain-state transaction
+counter (`ChainState::record_block` adds every block's transaction count).
+That counter is enough for the minting profile, whose transfer minimum is
+zero. It counts every transaction on the chain, not only the declared
+transfer workload, so the adapter refuses it for a payments manifest. A payments
+run must pass `--transfer-source FILE`, a JSON file written by a separately
+reviewed canonical transfer counter for the declared workload on that chain:
+
+```json
+{
+  "source": "REVIEWED_COUNTER_ID",
+  "observed_at_unix_s": 1790000000.0,
+  "chain_id": "ISOLATED_CAMPAIGN_CHAIN",
+  "confirmed_transfers": 17
+}
+```
+
+Its `chain_id` must match the manifest node. Its timestamp must be no older
+than `max_gap_s` at reply receipt and not in the future. Without a valid
+source, a payments observation omits `confirmed_transfers` and records an
+error, so the run is incomplete rather than counted. `--transfer-source` is
+refused for a minting manifest. Submission or acceptance counts from the
+controller journal are never transfer evidence.
 
 ### Inference limits
 

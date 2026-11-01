@@ -1,13 +1,19 @@
 """node_getStatus -> observation adapter: the x-series RPC half of the contract."""
 
 import copy
+import http.client
 import io
 import json
 from pathlib import Path
 import tempfile
 import unittest
 
-from rpc_sustained_memory import fetch_status, main, observation_from_status
+from rpc_sustained_memory import (
+    fetch_status,
+    main,
+    observation_from_status,
+    rpc_url_problem,
+)
 from sustained_memory import analyze
 from test_sample_sustained_memory import SamplerTests
 from test_sustained_memory import MIB, manifest, samples
@@ -111,6 +117,70 @@ class AdapterTests(unittest.TestCase):
         self.assertTrue(self.adapt(status(1, gitCommit="b" * 40))["errors"])
         self.assertEqual(self.adapt(status(1, gitCommit="aaaaaaa"))["errors"], [])
         self.assertEqual(self.adapt(status(1, gitCommit="unknown"))["errors"], [])
+
+    def test_short_or_non_hex_commit_never_agrees(self):
+        # #1743: a 1-char commit used to "agree" by prefix in both directions.
+        for commit in ("a", "aaaaaa", "AAAAAAA", "aaaaaaa-dirty", 7):
+            with self.subTest(commit=commit):
+                errors = self.adapt(status(1, gitCommit=commit))["errors"]
+                self.assertTrue(any("gitCommit" in e for e in errors), errors)
+        self.assertEqual(self.adapt(status(1, gitCommit="a" * 7))["errors"], [])
+        self.assertEqual(self.adapt(status(1, gitCommit="a" * 40))["errors"], [])
+        no_commit = status(1)
+        del no_commit["gitCommit"]
+        self.assertEqual(self.adapt(no_commit)["errors"], [])
+
+    def test_short_manifest_revision_cannot_vouch_for_a_commit(self):
+        for revision in ("a", "aaaaaa", "REPLACE_WITH_REVIEWED_SOURCE_COMMIT"):
+            with self.subTest(revision=revision):
+                self.plan["source_revision"] = revision
+                errors = self.adapt(status(1))["errors"]
+                self.assertTrue(any("source_revision" in e for e in errors), errors)
+        self.assertEqual(self.adapt(status(1, gitCommit="unknown"))["errors"], [])
+
+
+class PaymentsGuardTests(unittest.TestCase):
+    """#1743: totalTransactions counts every chain tx, so payments refuse it."""
+
+    def setUp(self):
+        self.plan = manifest("payments")
+        self.node = self.plan["nodes"][0]
+
+    def adapt(self, reply, **kwargs):
+        return observation_from_status(self.plan, self.node, reply, 5.0, **kwargs)
+
+    def test_payments_without_reviewed_source_is_an_error_not_a_count(self):
+        observation = self.adapt(status(12, transactions=30))
+        self.assertNotIn("confirmed_transfers", observation)
+        self.assertTrue(
+            any("reviewed transfer source" in e for e in observation["errors"])
+        )
+        self.assertEqual(observation["chain_height"], 12)
+
+    def test_payments_take_the_reviewed_count_never_total_transactions(self):
+        observation = self.adapt(status(12, transactions=30), transfer_source=(4, []))
+        self.assertEqual(observation["errors"], [])
+        self.assertEqual(observation["confirmed_transfers"], 4)
+
+    def test_reviewed_source_failure_is_omitted_and_reported(self):
+        observation = self.adapt(
+            status(12, transactions=30), transfer_source=(None, ["stale"])
+        )
+        self.assertNotIn("confirmed_transfers", observation)
+        self.assertEqual(observation["errors"], ["stale"])
+
+    def test_minting_refuses_a_transfer_source(self):
+        plan = manifest("minting")
+        observation = observation_from_status(
+            plan, plan["nodes"][0], status(12), 5.0, transfer_source=(4, [])
+        )
+        self.assertNotIn("confirmed_transfers", observation)
+        self.assertTrue(observation["errors"])
+
+    def test_payments_series_without_source_is_incomplete(self):
+        rows = joined(self.plan)
+        self.assertTrue(all("confirmed_transfers" not in row for row in rows))
+        self.assertEqual(analyze(self.plan, rows)["status"], "incomplete")
 
 
 class TimeSeriesThroughAdapterTests(unittest.TestCase):
@@ -217,7 +287,7 @@ class CliTests(unittest.TestCase):
         (self.root / "manifest.json").write_text(json.dumps(self.plan))
         self.out = self.root / "n1-observation.json"
 
-    def run_cli(self, opener, url="http://127.0.0.1:7101/"):
+    def run_cli(self, opener, url="http://127.0.0.1:7101/", extra=(), now=123.0):
         return main(
             [
                 "--manifest",
@@ -230,8 +300,9 @@ class CliTests(unittest.TestCase):
                 str(self.out),
                 "--expected-network",
                 "botho-testnet",
+                *extra,
             ],
-            now=lambda: 123.0,
+            now=lambda: now,
             opener=opener,
         )
 
@@ -261,6 +332,40 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self.run_cli(rpc_error), 2)
         self.assertNotIn("chain_height", json.loads(self.out.read_text()))
 
+    def test_http_protocol_errors_still_write_error_observation(self):
+        # #1743: http.client.HTTPException is not an OSError; BadStatusLine
+        # used to escape and leave no observation file behind.
+        failures = (
+            http.client.BadStatusLine("garbage"),
+            http.client.RemoteDisconnected("closed"),
+            http.client.IncompleteRead(b"partial"),
+            http.client.HTTPException("generic"),
+        )
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__):
+                self.out.unlink(missing_ok=True)
+
+                def broken(request, timeout, context):
+                    raise failure
+
+                self.assertEqual(self.run_cli(broken), 2)
+                observation = json.loads(self.out.read_text())
+                self.assertEqual(observation["pid"], 42)
+                self.assertNotIn("chain_height", observation)
+                self.assertTrue(
+                    any(type(failure).__name__ in e for e in observation["errors"])
+                )
+
+        class TruncatedBody(Response):
+            def read(self, *args):
+                raise http.client.IncompleteRead(b"{")
+
+        result, errors = fetch_status(
+            "http://127.0.0.1/", 1, opener=lambda *a, **k: TruncatedBody()
+        )
+        self.assertIsNone(result)
+        self.assertIn("IncompleteRead", errors[0])
+
     def test_oversized_reply_is_rejected(self):
         def huge(request, timeout, context):
             return Response(b" " * (300 * 1024))
@@ -274,9 +379,92 @@ class CliTests(unittest.TestCase):
             "http://user:pw@127.0.0.1/",
             "ftp://127.0.0.1/rpc",
             "http://127.0.0.1/rpc?x=1",
+            "http://127.0.0.1/rpc#x",
+            "http://127.0.0.1/other",
+            "http://127.0.0.1:99999/",
+            # plain http must stay on loopback or a private-lab address
+            "http://seed.botho.io/rpc",
+            "http://8.8.8.8/",
+            "http://0.0.0.0/",
+            # https needs the proxy /rpc path and a pinned CA
+            "https://seed.botho.io/",
+            "https://seed.botho.io/rpc",
         ):
             with self.subTest(url=url), self.assertRaises(SystemExit):
                 self.run_cli(lambda *a, **k: None, url)
+        self.assertFalse(self.out.exists())
+
+    def test_url_rule_matches_runbook_and_controller_endpoints(self):
+        for url in (
+            "http://127.0.0.1:7101/",
+            "http://127.0.0.1:17101/rpc",
+            "http://localhost:7101/",
+            "http://[::1]:7101/",
+            "http://10.0.1.5:17101/",
+            "http://192.168.1.20:7101/rpc",
+        ):
+            with self.subTest(url=url):
+                self.assertIsNone(rpc_url_problem(url))
+        ca = self.root / "ca.pem"
+        self.assertIsNone(rpc_url_problem("https://seed.botho.io/rpc", ca))
+        self.assertIsNone(rpc_url_problem("https://seed.botho.io:8443/rpc", ca))
+        self.assertIsNotNone(rpc_url_problem("https://seed.botho.io/rpc"))
+        self.assertIsNotNone(rpc_url_problem("https://seed.botho.io/", ca))
+
+    def payments_manifest(self):
+        self.plan = manifest("payments")
+        (self.root / "manifest.json").write_text(json.dumps(self.plan))
+
+    def ok(self, request, timeout, context):
+        return Response(json.dumps({"result": status(9, transactions=50)}).encode())
+
+    def test_payments_cli_without_source_writes_error_observation(self):
+        self.payments_manifest()
+        self.assertEqual(self.run_cli(self.ok), 2)
+        observation = json.loads(self.out.read_text())
+        self.assertNotIn("confirmed_transfers", observation)
+        self.assertEqual(observation["chain_height"], 9)
+        self.assertTrue(observation["errors"])
+
+    def test_payments_cli_with_reviewed_source(self):
+        self.payments_manifest()
+        source = self.root / "transfers.json"
+        record = {
+            "source": "reviewed-payments-counter",
+            "observed_at_unix_s": 120.0,
+            "chain_id": "isolated-control",
+            "confirmed_transfers": 7,
+        }
+        source.write_text(json.dumps(record))
+        extra = ("--transfer-source", str(source))
+        self.assertEqual(self.run_cli(self.ok, extra=extra), 0)
+        observation = json.loads(self.out.read_text())
+        self.assertEqual(observation["confirmed_transfers"], 7)
+        self.assertEqual(observation["errors"], [])
+
+        for change in (
+            {"observed_at_unix_s": 100.0},  # older than max_gap_s
+            {"observed_at_unix_s": 124.0},  # in the future
+            {"chain_id": "other-chain"},
+            {"confirmed_transfers": -1},
+            {"confirmed_transfers": True},
+            {"source": ""},
+        ):
+            with self.subTest(change=change):
+                source.write_text(json.dumps({**record, **change}))
+                self.assertEqual(self.run_cli(self.ok, extra=extra), 2)
+                observation = json.loads(self.out.read_text())
+                self.assertNotIn("confirmed_transfers", observation)
+                self.assertTrue(observation["errors"])
+        source.write_text("not json")
+        self.assertEqual(self.run_cli(self.ok, extra=extra), 2)
+        source.unlink()
+        self.assertEqual(self.run_cli(self.ok, extra=extra), 2)
+        self.assertTrue(json.loads(self.out.read_text())["errors"])
+
+    def test_minting_cli_refuses_transfer_source(self):
+        with self.assertRaises(SystemExit):
+            self.run_cli(self.ok, extra=("--transfer-source", str(self.root / "t")))
         self.assertFalse(self.out.exists())
 
 
