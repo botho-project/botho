@@ -7,6 +7,7 @@ resistance, realistic calibration, or approval of D3 or the proposed base fee.
 
 ## Fee-basis correction (2026-10-31, #1701)
 
+<!-- stale-literal-ok: describes the CT1 candidate fee basis being corrected, not the shipped fee -->
 The creation fees below charge 0.25 BTH per output, the CT1 **candidate** base:
 0.25 / 0.5 / 4 BTH for 1 / 2 / 16 outputs. Today's node charges each
 transaction, not each output. A 1-, 2- or 16-output creation transaction pays
