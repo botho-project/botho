@@ -1,0 +1,56 @@
+# CT-Compatible Lottery-Selection Sweep (issue #902)
+
+### Redistribution population (factors from the real `ClusterFactorCurve`)
+
+| tier | count | wealth (BTH) | cluster wealth (BTH) | factor | circulated |
+|------|------:|-------------:|---------------------:|-------:|:----------:|
+| background (poor) | 90 | 1000 | 1000 | 1.265x | yes |
+| 50k-cluster wealthy | 4 | 5000 | 50000 | 3.023x | no |
+| 500k-cluster wealthy | 3 | 50000 | 500000 | 4.617x | no |
+| 10M-cluster whale | 3 | 100000 | 10000000 | 5.745x | no |
+
+### Track 1 — redistribution (Δgini vs a burn baseline)
+
+Collect-and-redistribute over 10 years. Initial Gini 0.7773; burn baseline (collect demurrage, redistribute nothing) Gini 0.7525. Δgini = burn − rule (higher = more equalizing). Recovery = Δgini ÷ ClusterWeighted's Δgini.
+
+| rule | final Gini | Δgini | recovery vs CW | CT-clean |
+|------|-----------:|------:|---------------:|:--------:|
+| Uniform | 0.6508 | +0.1017 | 266.3% | yes |
+| ClusterWeighted | 0.7144 | +0.0382 | 100.0% | **no** |
+| FeeInverse | 0.6455 | +0.1070 | 280.1% | yes |
+| CirculationGated | 0.6396 | +0.1130 | 295.8% | yes |
+| Hybrid(fee×circ) | 0.6389 | +0.1136 | 297.5% | yes |
+
+### Track 2 — Sybil resistance (ticket share under splitting)
+
+Attacker: one 100000-BTH whale coin at factor 5.745x, fragmented into K fresh equal coins, measured against a fixed reference population of 100 holders (which still contains idle whales, so the population max-fee stays high). The metric is the attacker's **share of total lottery weight** (bounded in [0,1] — a splitter can never exceed 100% of tickets). Split-invariant = the share barely moves under a 1000-way split (the ClusterWeighted property). The demurrage the whale sheds is churn-invariant, so the only real cost of the split is (K−1)×base_fee = 249.8 BTH at K=1000.
+
+| rule | unsplit share | share @K=1000 | split-invariant | CT-clean |
+|------|--------------:|--------------:|:---------------:|:--------:|
+| Uniform | 0.990% | 90.909% | **no** | yes |
+| ClusterWeighted | 8.625% | 8.625% | yes | **no** |
+| FeeInverse | 0.000% | 91.260% | **no** | yes |
+| CirculationGated | 0.110% | 91.659% | **no** | yes |
+| Hybrid(fee×circ) | 0.000% | 91.695% | **no** | yes |
+
+Ticket share by split count K (shows the [0,1] self-limit saturating):
+
+| rule | K=10 | K=100 | K=1000 |
+|------|-----:|------:|-------:|
+| Uniform | 9.091% | 50.000% | 90.909% |
+| ClusterWeighted | 8.625% | 8.625% | 8.625% |
+| FeeInverse | 9.454% | 51.080% | 91.260% |
+| CirculationGated | 9.901% | 52.356% | 91.659% |
+| Hybrid(fee×circ) | 9.943% | 52.472% | 91.695% |
+
+### CT-compatibility & incremental leakage
+
+| rule | CT-clean | reason | leakage beyond ADR-0006-public |
+|------|:--------:|--------|--------------------------------|
+| Uniform | yes | reads nothing about value (equal weight) | none |
+| ClusterWeighted | **no** | weight ∝ hidden value → needs a ZK sort over amounts | N/A (not CT-compatible) |
+| FeeInverse | yes | reads only the public fee (already public under ADR 0006) | none beyond the already-public fee |
+| CirculationGated | yes | reads only public creation age / circulation | none (creation heights already public) |
+| Hybrid(fee×circ) | yes | reads only public fee + public age | none beyond the already-public fee + age |
+
+

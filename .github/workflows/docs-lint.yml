@@ -1,0 +1,27 @@
+name: Docs Lint
+
+# Fails when docs repeat known-stale protocol literals (ring size 11, 62 KB
+# signatures, a 0.25 BTH per-output fee, the V1 lottery seed). Historical
+# contexts are allowlisted by path or by a `stale-literal-ok` marker (#1702).
+
+on:
+  pull_request:
+    paths:
+      - '**.md'
+      - '**.tex'
+      - 'scripts/check-stale-doc-literals.py'
+      - '.github/workflows/docs-lint.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stale-literals:
+    name: stale doc literals
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check for stale protocol literals
+        run: python3 scripts/check-stale-doc-literals.py

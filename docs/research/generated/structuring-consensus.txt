@@ -1,0 +1,14 @@
+Structuring Attack Analysis (fee model: consensus)
+===========================
+Transfer amount: 1000000 BTH
+Cluster wealth: 50000000 BTH
+Ring age: 0 blocks, height 6307200
+
+ Splits      Single (pico)     Split txs (pico)   1 tx N outs (pico)    Save% txs   Save% outs
+      1              23478                23478                23478        0.00%        0.00%
+      2              23478                46956                59230     -100.00%     -152.28%
+      5              23478               117390               313762     -400.00%    -1236.41%
+     10              23478               234780              1227303     -900.00%    -5127.46%
+     20              23478               469560              1938783    -1900.00%    -8157.87%
+     50              23478              1173900              4073223    -4900.00%   -17249.11%
+    100              23478              2347800              7630623    -9900.00%   -32401.16%

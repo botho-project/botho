@@ -156,13 +156,18 @@ impl Default for DecoySweepParams {
         // Each round = one year (blocks_per_round == blocks_per_year), so a
         // 25-round run is ~25 years of holding — long enough that 2%/yr
         // demurrage drives a visible Gini compression under full payment.
-        let blocks_per_year = 6_307_200; // 5s blocks, matches the node
+        // 5s blocks: the shared mainnet constant, not a restated literal (#1702).
+        let blocks_per_year = crate::consensus_fee::MAINNET_BLOCKS_PER_YEAR;
         Self {
             poor: 100,
             honest_whales: 10,
             adversary_whales: 10,
             poor_wealth: 1_000,
             whale_wealth: 1_000_000,
+            // Historical: the #577 gate ran at ring 11, before the ring-20
+            // consensus minimum. Kept so the recorded gate stays reproducible;
+            // listed as an intentional divergence in
+            // `botho/tests/sim_code_parity.rs` (#1702).
             ring_size: 11,
             rounds: 25,
             blocks_per_round: blocks_per_year,

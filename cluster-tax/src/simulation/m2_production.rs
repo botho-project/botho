@@ -116,7 +116,8 @@ use rand_distr::{Binomial, Distribution};
 use crate::{
     consensus_fee::{
         consensus_fee_breakdown, consensus_tx_size_bytes, mainnet_monetary_policy, ClaimedClass,
-        ConsensusFeeInputs, ConsensusFeeParams, FeeModelMode, MAINNET_BLOCKS_PER_YEAR,
+        ConsensusFeeInputs, ConsensusFeeParams, FeeModelMode, LOTTERY_POOL_FRACTION_PERMILLE,
+        MAINNET_BLOCKS_PER_YEAR,
     },
     demurrage::ring_centroid_implied_factor,
     fee_curve::{ClusterFactorCurve, PICO_PER_BTH},
@@ -127,18 +128,24 @@ use super::m2::m2_population;
 
 /// Blocks per year at the node's 5 s monetary block time.
 pub const PROD_BLOCKS_PER_YEAR: u64 = MAINNET_BLOCKS_PER_YEAR;
-/// `MAX_LOTTERY_CANDIDATES` in `botho/src/ledger/store/validation.rs`.
-pub const MAX_LOTTERY_CANDIDATES: u64 = 10_000;
-/// `canonical_config().pool_fraction_permille` (`lottery_v2.rs`).
-pub const POOL_FRACTION_PERMILLE: u128 = 800;
-/// `MAX_CLUSTER_TAGS` (`transaction/types/src/cluster_tags.rs`).
-pub const MAX_CLUSTER_TAGS: usize = 16;
-/// `MIN_STORED_WEIGHT` / `TAG_WEIGHT_SCALE` = 1000 ppm = 0.1%.
-pub const MIN_TAG_WEIGHT: f64 = 0.001;
+/// `MAX_LOTTERY_CANDIDATES` in `botho/src/ledger/store/validation.rs`, via
+/// the faithful sweep's mirror (source-pinned in `lottery_v2.rs`; #1702).
+pub const MAX_LOTTERY_CANDIDATES: u64 =
+    super::lottery_reward_cap_faithful::MAX_LOTTERY_CANDIDATES as u64;
+/// `canonical_config().pool_fraction_permille` (`lottery_v2.rs`), imported
+/// from the shared [`LOTTERY_POOL_FRACTION_PERMILLE`] (#1702).
+pub const POOL_FRACTION_PERMILLE: u128 = LOTTERY_POOL_FRACTION_PERMILLE as u128;
+/// `MAX_CLUSTER_TAGS` (`transaction/types/src/cluster_tags.rs`), imported.
+pub const MAX_CLUSTER_TAGS: usize = bth_transaction_types::MAX_CLUSTER_TAGS;
+/// `MIN_STORED_WEIGHT` / `TAG_WEIGHT_SCALE` = 1000 ppm = 0.1%, imported.
+pub const MIN_TAG_WEIGHT: f64 = bth_transaction_types::MIN_STORED_WEIGHT as f64
+    / bth_transaction_types::TAG_WEIGHT_SCALE as f64;
 /// Stock wallet decay per hop (`DEFAULT_CLUSTER_DECAY_RATE` = 50,000 ppm).
+/// The wallet constant lives in `botho`/`botho-wallet`, which depend on this
+/// crate; `botho/tests/sim_code_parity.rs` pins it (#1702).
 pub const STOCK_WALLET_DECAY: f64 = 0.05;
-/// `RING_SIZE` (`transaction/types/src/constants.rs`).
-pub const RING_SIZE: usize = 20;
+/// `RING_SIZE` (`transaction/types/src/constants.rs`), imported.
+pub const RING_SIZE: usize = bth_transaction_types::RING_SIZE;
 /// Largest amount priced as one transaction (ledger amounts are `u64` pico).
 const TX_CHUNK_PICO: u128 = 10_000_000 * PICO_PER_BTH;
 /// Union size above which tiny tag mass is dropped from a position.

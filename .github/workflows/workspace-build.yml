@@ -163,6 +163,14 @@ jobs:
           cargo test --locked -p botho --test privacy_sim_route_parity
           cargo test --locked -p bth-cluster-tax --lib privacy_routes
 
+      # #1702: every sim constant that is still copied rather than imported
+      # (blocks/year, demurrage rate, ring size, relay fee, decoy bands, tag
+      # decay, lottery limits) equals the node/wallet value, and the documented
+      # intentional divergences stay as documented.
+      - name: Run sim<->code constant parity guard
+        timeout-minutes: 10
+        run: cargo test --locked -p botho --test sim_code_parity
+
       # The compact-block suite caught serialized-size drift (#1187/#1212), but
       # --no-run never exercised its assertions. It needs no external services
       # and runs in seconds after compilation; keep it in the PR execution gate.

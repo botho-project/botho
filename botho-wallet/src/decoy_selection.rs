@@ -42,18 +42,21 @@ use rand::seq::SliceRandom;
 use crate::fee_estimation::StoredTags;
 
 /// Minimum confirmations before an output may be used as a ring member (real or
-/// decoy). Mirrors the node's `MIN_DECOY_AGE_BLOCKS`.
+/// decoy). Mirrors the node's `MIN_DECOY_AGE_BLOCKS` (pinned by
+/// `botho/tests/sim_code_parity.rs`, #1702).
 pub const MIN_DECOY_AGE_BLOCKS: u64 = 10;
 
 /// Half-width of the decoy age-similarity band, in basis points of the real
 /// input's age. `1_000` bps = ±10%. Mirrors the node's
-/// `AGE_SIMILARITY_SPREAD_BPS`.
+/// `AGE_SIMILARITY_SPREAD_BPS` (pinned by `botho/tests/sim_code_parity.rs`,
+/// #1702).
 pub const AGE_SIMILARITY_SPREAD_BPS: u64 = 1_000;
 
 /// Default (and minimum) ring size, matching the node's consensus
 /// `MIN_RING_SIZE`. A ring of 20 provides a strong anonymity set with compact
-/// ~700-byte CLSAG signatures.
-pub const DEFAULT_RING_SIZE: usize = 20;
+/// ~700-byte CLSAG signatures. Imported from the CLSAG crate rather than
+/// restated (#1702).
+pub const DEFAULT_RING_SIZE: usize = bth_transaction_clsag::DEFAULT_RING_SIZE;
 
 /// Compute the inclusive `[min_age, max_age]` decoy-age band around a real
 /// input's age under the [`AGE_SIMILARITY_SPREAD_BPS`] policy.

@@ -39,7 +39,7 @@
 use crate::{
     consensus_fee::{
         consensus_fee_breakdown, consensus_tx_size_bytes, ClaimedClass, ConsensusFeeInputs,
-        ConsensusFeeParams, FeeModelMode,
+        ConsensusFeeParams, FeeModelMode, MAINNET_BLOCKS_PER_YEAR,
     },
     monetary::{mainnet_policy_mirror, node_constants},
     simulation::{
@@ -52,8 +52,9 @@ use crate::{
 /// 1 BTH expressed in picocredits (the base unit used by the policy, #649).
 const PICOCREDITS_PER_BTH: u128 = 1_000_000_000_000;
 
-/// Real-world blocks per year at 5-second blocks (issue #350 grid assumption).
-pub const BLOCKS_PER_YEAR: u64 = 6_307_200;
+/// Real-world blocks per year at 5-second blocks (issue #350 grid assumption),
+/// imported from the shared [`MAINNET_BLOCKS_PER_YEAR`] (#1702).
+pub const BLOCKS_PER_YEAR: u64 = MAINNET_BLOCKS_PER_YEAR;
 
 /// A candidate emission schedule, defined with **real-world** parameters.
 ///

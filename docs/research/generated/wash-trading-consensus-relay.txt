@@ -1,0 +1,15 @@
+Wash Trading Analysis (fee model: consensus+relay)
+=====================
+Cluster wealth: 100000000 BTH
+Principal washed: 100000000 BTH
+Decay rate: 5% per hop
+Height: 6307200 (demurrage 200 bps/yr at max factor)
+
+ Hops   InitF  FinalF  HopBase(pico)   Downgrade(BTH)  Total%Princ  Savings/Tx(p)  BreakEven txs BreakEven yr
+    5  5.949x  5.943x          25859        2213.6093    0.012000%              0          Never         5.00
+   10  5.949x  5.934x          51687        5534.0232    0.030000%              0          Never         5.00
+   15  5.949x  5.927x          77478        8116.5674    0.044000%              0          Never         5.00
+   20  5.949x  5.921x         103241       10330.1767    0.056000%              0          Never         5.00
+   30  5.949x  5.881x         154617       25087.5719    0.136000%              0          Never         5.00
+   40  5.949x  5.784x         205333       60874.2554    0.330000%              0          Never         5.00
+   50  5.949x  5.692x         255242       94816.2645    0.514000%              0          Never         5.00

@@ -358,7 +358,7 @@ cargo run -p bth-cluster-tax --features cli --bin cluster-tax-sim --release -- \
 Signature bytes are `c_zero (32) || responses (32 × ring) || key_image (32) ||
 commitment_key_image (32)`, the production layout documented at
 `transaction/clsag/src/lib.rs:1052`. This document previously said
-"62 KB". The sim's own formula said 704 B, because it double-counted the real
+"62 KB". The sim's own formula said 704 B, because it double-counted the real <!-- stale-literal-ok: quotes the pre-#1700 claim being corrected -->
 response and omitted both key images; #1700 corrected it. Ring members (key,
 public key, commitment) are carried separately from the signature. The
 legacy `--simulate` column is not reproduced here because it measures the
