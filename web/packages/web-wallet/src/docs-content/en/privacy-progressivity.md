@@ -55,7 +55,7 @@ The key properties:
 | **Concentrated tags** | Recently minted, not yet circulated → High fees |
 | **Diversified tags** | Traded through many hands → Low fees |
 | **Splitting-resistant** | Splitting preserves tag concentration |
-| **Decay-resistant** | Only real commerce reduces tags |
+| **Inflation-proof** | Outputs can never claim more cluster weight than their inputs |
 
 ### Why This Is Progressive
 
@@ -168,11 +168,11 @@ Verdict: Attack defeated
 **Wash Trading (Self-transfers):**
 ```
 Attacker: Send to self rapidly to decay tags
-Result: Age-gating requires 720 blocks per decay
-        At most ~12 decays per day ≈ 46% daily decay
-        1 week of wash trading: ~99% decay
-        Cost: ~84 transaction fees (each feeding the lottery)
-Verdict: Expensive, slow, detectable
+Result: No age gate; consensus applies no decay and does not rate-limit
+        Stock wallets decay 5% per transfer (~50% after ~14 transfers)
+        Consensus accepts lower or empty output tags (no inflation only)
+        Cost: transaction fees (feeding the lottery) + class-downgrade charge
+Verdict: Not rate-limited by the protocol (open decision, #1687)
 ```
 
 ### The Complete Picture
