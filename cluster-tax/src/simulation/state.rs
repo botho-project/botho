@@ -292,12 +292,13 @@ mod tests {
     /// u64 fields overflowed silently in release and panicked in debug.
     #[test]
     fn total_rewards_emitted_accumulates_past_u64_max() {
-        let mut state = SimulationState::default();
-
         // Pre-seed the cumulative accumulator just below the u64 boundary,
         // then add enough per-block rewards (each a valid u64) to cross it.
         // This mirrors how `process_block` does `+= reward as u128`.
-        state.total_rewards_emitted = (u64::MAX - 10) as u128;
+        let mut state = SimulationState {
+            total_rewards_emitted: (u64::MAX - 10) as u128,
+            ..Default::default()
+        };
 
         let per_block: u64 = 100; // per-step reward stays u64
         let blocks: u128 = 50;
@@ -320,10 +321,11 @@ mod tests {
     /// public `record_fees` API) must also accumulate exactly past u64::MAX.
     #[test]
     fn total_fees_collected_accumulates_past_u64_max() {
-        let mut state = SimulationState::default();
-
         // Seed near the boundary, then drive the public API past it.
-        state.total_fees_collected = (u64::MAX - 5) as u128;
+        let mut state = SimulationState {
+            total_fees_collected: (u64::MAX - 5) as u128,
+            ..Default::default()
+        };
 
         let per_round_fee: u64 = u64::MAX / 4; // ~4.6e18 each, valid u64
         let rounds: u128 = 3;

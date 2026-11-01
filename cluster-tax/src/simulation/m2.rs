@@ -279,7 +279,7 @@ pub fn ring_id_rate(half_life_years: u64) -> f64 {
         0.5_f64.powf(1.0 / half_life_years as f64)
     };
     let signal = 1.0 - per_epoch_retained; // 0..0.5
-    let mut w = vec![1.0_f64; RING];
+    let mut w = [1.0_f64; RING];
     w[0] = 1.0 + 4.0 * signal; // real signer distinguishable by residual tracked wealth
     let total: f64 = w.iter().sum();
     let probs: Vec<f64> = w.iter().map(|x| x / total).collect();

@@ -845,7 +845,7 @@ mod tests {
         // Input entropy > 0 (two separate clusters)
         // Output entropy = 1 bit (two equal clusters)
         // Depending on how we compute input entropy, this may or may not pass
-        let proof = builder.prove(&mut OsRng);
+        let _proof = builder.prove(&mut OsRng);
 
         // This test validates that multiple inputs are handled correctly
         // The exact behavior depends on the entropy calculation

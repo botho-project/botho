@@ -444,7 +444,7 @@ mod tests {
         // But EMA may not fully converge, so allow wider range
         let multiplier = fee.compute_multiplier(true);
         assert!(
-            multiplier >= 1.5 && multiplier < 5.0,
+            (1.5..5.0).contains(&multiplier),
             "Multiplier at 90%: {}",
             multiplier
         );

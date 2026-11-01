@@ -187,7 +187,7 @@ pub fn format_ring_size_analysis(analyses: &[RingSizeAnalysis]) -> String {
         ));
     }
 
-    report.push_str("\n");
+    report.push('\n');
     report.push_str("COST ANALYSIS\n");
     report.push_str(
         "─────────────────────────────────────────────────────────────────────────────────\n",
@@ -207,7 +207,7 @@ pub fn format_ring_size_analysis(analyses: &[RingSizeAnalysis]) -> String {
         ));
     }
 
-    report.push_str("\n");
+    report.push('\n');
     report.push_str("LEDGER IMPACT (per 1M private transactions)\n");
     report.push_str(
         "─────────────────────────────────────────────────────────────────────────────────\n",
@@ -309,7 +309,7 @@ impl SimulatedOutput {
     /// Get top N clusters by weight.
     pub fn top_clusters(&self, n: usize) -> Vec<(u64, u32)> {
         let mut entries: Vec<_> = self.cluster_tags.iter().map(|(&k, &v)| (k, v)).collect();
-        entries.sort_by(|a, b| b.1.cmp(&a.1));
+        entries.sort_by_key(|e| std::cmp::Reverse(e.1));
         entries.truncate(n);
         entries
     }

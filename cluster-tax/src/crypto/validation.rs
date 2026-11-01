@@ -334,7 +334,7 @@ mod tests {
             let weight = output.get(ClusterId(1));
             // 95% of 1_000_000 = 950_000
             assert!(
-                weight >= 940_000 && weight <= 960_000,
+                (940_000..=960_000).contains(&weight),
                 "Expected ~950000, got {weight}"
             );
         }

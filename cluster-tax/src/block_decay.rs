@@ -1206,7 +1206,7 @@ mod tests {
 
     #[test]
     fn test_and_decay_no_passive_decay() {
-        let config = AndDecayConfig::default();
+        let _config = AndDecayConfig::default();
         let cluster = ClusterId::new(1);
 
         // Create tags at block 0
@@ -1253,7 +1253,7 @@ mod tests {
         );
 
         // Tag should be approximately 0.95^84 ≈ 1.35%
-        let expected = (0.95_f64.powi(decays as i32) * TAG_WEIGHT_SCALE as f64) as TagWeight;
+        let expected = (0.95_f64.powi(decays) * TAG_WEIGHT_SCALE as f64) as TagWeight;
         let actual = tags.get(cluster);
         assert!(
             (actual as i64 - expected as i64).abs() < 5000,

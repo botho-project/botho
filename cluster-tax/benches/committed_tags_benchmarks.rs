@@ -33,8 +33,8 @@
 
 use bth_cluster_tax::{
     crypto::{
-        blinding_generator, cluster_generator, CommittedTagMass, CommittedTagVector,
-        CommittedTagVectorSecret, SchnorrProof, TagConservationProof, TagConservationProver,
+        blinding_generator, cluster_generator, CommittedTagMass,
+        CommittedTagVectorSecret, SchnorrProof, TagConservationProver,
         TagConservationVerifier,
     },
     ClusterId, TagVector, TagWeight, TAG_WEIGHT_SCALE,

@@ -514,7 +514,7 @@ mod tests {
 
         // Should take about 14 hops to halve
         let hops = hops_to_reach(decay_rate, 0.5).unwrap();
-        assert!(hops >= 13 && hops <= 15, "Expected ~14 hops, got {hops}");
+        assert!((13..=15).contains(&hops), "Expected ~14 hops, got {hops}");
     }
 
     #[test]
