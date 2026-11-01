@@ -19,9 +19,9 @@
   "devDependencies": {
     "@jest/globals": "^30.5.2",
     "@metamask/snaps-cli": "^8.4.1",
-    "@metamask/snaps-jest": "^10.2.1",
+    "@metamask/snaps-jest": "^10.2.2",
     "@swc/jest": "^0.2.39",
-    "@types/node": "^26.6.5",
+    "@types/node": "^26.6.6",
     "jest": "^30.5.2",
     "typescript": "~7.0.2"
   }
