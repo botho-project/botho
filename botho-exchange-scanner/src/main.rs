@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use botho_exchange_scanner::{
+    batch::scan_confirmed_batch,
     config::ScannerConfig,
     output::{create_handler, OutputHandler},
     scanner::{ExchangeScanner, RpcOutput},
@@ -140,7 +141,7 @@ async fn run_scanner(config: &ScannerConfig, from_height: Option<u64>, once: boo
     // Override start height if specified
     if let Some(height) = from_height {
         tracing::info!("Starting from specified height: {}", height);
-        sync_state.last_scanned_height = if height > 0 { height - 1 } else { 0 };
+        sync_state.set_start_height(height);
     }
 
     // Create output handler
@@ -194,62 +195,21 @@ async fn scan_batch(
     sync_state: &mut SyncState,
     config: &ScannerConfig,
 ) -> Result<u64> {
-    let start_height = sync_state.next_scan_height();
-
-    // Get chain info
     let chain_info = get_chain_info(client, &config.rpc_endpoints[0]).await?;
-    let chain_height = chain_info.height;
 
-    if start_height > chain_height {
-        tracing::debug!("Already at chain tip ({})", chain_height);
-        return Ok(0);
-    }
-
-    // Calculate end height for this batch
-    // Never above the node's per-call cap (#1656): the checkpoint advances to
-    // `end_height`, so a clamped batch would silently skip deposits.
-    let end_height = std::cmp::min(
-        start_height.saturating_add(config.effective_batch_size() - 1),
-        chain_height,
-    );
-
-    tracing::debug!(
-        "Scanning blocks {} to {} (chain height: {})",
-        start_height,
-        end_height,
-        chain_height
-    );
-
-    // Get outputs from RPC
-    let outputs = get_outputs(client, &config.rpc_endpoints[0], start_height, end_height).await?;
-
-    // Scan outputs
-    let deposits = scanner.scan_outputs(&outputs, chain_height);
-
-    // Filter by minimum confirmations
-    let confirmed_deposits: Vec<_> = deposits
-        .into_iter()
-        .filter(|d| d.confirmations >= config.min_confirmations)
-        .collect();
-
-    let deposit_count = confirmed_deposits.len() as u64;
-    let total_amount: u64 = confirmed_deposits.iter().map(|d| d.amount).sum();
-
-    // Output deposits
-    if !confirmed_deposits.is_empty() {
-        handler.handle_batch(&confirmed_deposits).await?;
-    }
-
-    // Update sync state
-    sync_state.update_after_batch(
-        end_height,
+    // Scans only blocks that already have `min_confirmations` (#1779), at
+    // most `effective_batch_size` of them (#1656), and checkpoints there.
+    scan_confirmed_batch(
+        scanner,
+        handler,
+        sync_state,
+        chain_info.height,
         &chain_info.tip_hash,
-        deposit_count,
-        total_amount,
-        outputs.len() as u64,
-    );
-
-    Ok(deposit_count)
+        config.min_confirmations,
+        config.effective_batch_size(),
+        |start, end| get_outputs(client, &config.rpc_endpoints[0], start, end),
+    )
+    .await
 }
 
 #[derive(serde::Deserialize)]
