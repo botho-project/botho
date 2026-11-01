@@ -768,6 +768,28 @@ mod cli {
             faithful: bool,
         },
 
+        /// Decoy-flood cost model at the real fee floor, with lottery
+        /// recapture (#1701). For each (honest rate, attacker share, block
+        /// time, epoch, attacker fee mode) reports gross flood cost, lottery
+        /// recapture, net cost and P(all 19 decoys are the attacker's) for
+        /// the CLI, web and node pickers (the #1700 production-picker ports),
+        /// and re-runs the #1771 ground-key case on the node port after the
+        /// #1786 shuffle. States a PROPOSED pass criterion. Changes nothing in
+        /// consensus.
+        DecoyFloodSweep {
+            /// Node-picker rings per (chain width, real age)
+            #[arg(long, default_value = "4000")]
+            trials: usize,
+
+            /// RNG seed
+            #[arg(long, default_value = "1701")]
+            seed: u64,
+
+            /// Small grid for a quick check
+            #[arg(long)]
+            smoke: bool,
+        },
+
         /// Bridge-import calibration sweep (empirical gate for #937):
         /// calibrates ADR 0007's two constants — epoch length K and
         /// import-factor floor F. Sweeps K across ~14h/1d/2d/3.5d/1wk
@@ -1191,6 +1213,11 @@ mod cli {
                     run_lottery_reward_cap_sweep_cli()
                 }
             }
+            Command::DecoyFloodSweep {
+                trials,
+                seed,
+                smoke,
+            } => run_decoy_flood_sweep_cli(trials, seed, smoke),
             Command::BridgeImportSweep => run_bridge_import_sweep_cli(),
             Command::HonestOverchargeSweep => run_honest_overcharge_sweep_cli(),
             Command::M2Cumulative {
@@ -5368,6 +5395,24 @@ mod cli {
         };
         let report = run_faithful_sweep();
         println!("# Reward-Cap Sweep — faithful to the implemented rules (issue #1682)\n");
+        println!("{}", to_markdown(&report));
+    }
+
+    fn run_decoy_flood_sweep_cli(trials: usize, seed: u64, smoke: bool) {
+        use bth_cluster_tax::simulation::decoy_flood_sweep::{
+            run_decoy_flood_sweep, to_markdown, SweepConfig,
+        };
+        let mut config = if smoke {
+            SweepConfig::smoke()
+        } else {
+            SweepConfig::default()
+        };
+        if !smoke {
+            config.trials = trials;
+        }
+        config.seed = seed;
+        let report = run_decoy_flood_sweep(&config);
+        println!("# Decoy-Flood Cost Sweep at the Real Fee Floor (issue #1701)\n");
         println!("{}", to_markdown(&report));
     }
 

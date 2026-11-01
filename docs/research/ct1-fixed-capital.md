@@ -5,6 +5,35 @@ part of #1306 and implemented by #1318. It changes no production sampler, policy
 protocol. It does not establish stationary profitability, universal Sybil
 resistance, realistic calibration, or approval of D3 or the proposed base fee.
 
+## Fee-basis correction (2026-10-31, #1701)
+
+The creation fees below charge 0.25 BTH per output, the CT1 **candidate** base:
+0.25 / 0.5 / 4 BTH for 1 / 2 / 16 outputs. Today's node charges each
+transaction, not each output. A 1-, 2- or 16-output creation transaction pays
+**1e-4 BTH** when relayed. At the bare consensus floor it pays 870 / 3,960 /
+267,000 pico. The "Creation fee" column, and the four unaffordable 2-BTH /
+16-output cases, therefore apply only to the candidate policy. On current code
+every case is affordable, and the creation fee is negligible next to the
+measured capture. The capture and final-wealth values were not re-run here.
+
+For the current-rule attacker economics, see
+[decoy-flood-cost.md](decoy-flood-cost.md).
+
+Per-transaction fees on current code, from §1 of the `decoy-flood-sweep` output
+in [decoy-flood-cost.md](decoy-flood-cost.md), at epoch 0 and factor 1×:
+
+| transaction | consensus floor (pico) | relay fee (pico) | relay pico/output |
+|---|---:|---:|---:|
+| attacker 1-in/16-out, dust outputs | 267,000 | 100,000,000 | 6.25e6 |
+| honest 1-in/2-out payment | 3,960 | 100,000,000 | 5.0e7 |
+
+A 1-output transaction has a floor of 870 pico: `1 pico/byte × 870 bytes × 1²`.
+It also pays 1e8 pico when relayed. To reproduce:
+
+```sh
+cargo run --release -p bth-cluster-tax --features cli --bin cluster-tax-sim -- decoy-flood-sweep
+```
+
 ## Paired design
 
 The matrix contains 32 cases: initial attacker wealth 2 or 32 BTH, idle or one,
