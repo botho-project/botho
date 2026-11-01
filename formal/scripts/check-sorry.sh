@@ -13,9 +13,21 @@
 #       interpolation):
 #         - a proof escape: `sorry`, `sorryAx`, `admit`, `native_decide`;
 #         - a command that runs code or hides messages at compile time:
-#           `#eval`, `#eval!`, `run_cmd`, `run_elab`, `run_meta`,
-#           `#guard_msgs`, `initialize`, `builtin_initialize`;
+#           `#eval`, `#eval!`, `run_cmd`, `run_elab`, `run_meta`, `run_tac`,
+#           `by_elab`, `#guard_msgs`, `initialize`, `builtin_initialize`;
+#         - a metaprogramming command (`macro`, `macro_rules`, `syntax`,
+#           `declare_syntax_cat`, `elab`, `elab_rules`), which can expand to
+#           any of the above without naming it;
+#         - inside `@[...]` or `attribute [...]`, an attribute that runs code
+#           at build or import time or extends the elaborator: `init`,
+#           `builtin_*`, `extern`, `implemented_by`, `export`, `macro`,
+#           `*_elab`, `*_parser`, `tactic`, `delab`, ... (see FORBIDDEN_ATTRS);
 #         - the option `debug.skipKernelTC` (admits unchecked declarations).
+#
+# The scan runs first, before `lake build`: model code runs during the build
+# (for example an `@[init]` initializer) and could rewrite the sources to hide
+# itself. The whole script is one function, so bash parses it completely
+# before running anything. See "Limits" in formal/README.md.
 #
 # `native_decide` trusts the compiler and adds compiler-trust axioms (such as
 # `Lean.ofReduceBool`).
@@ -32,6 +44,7 @@
 # Environment: LAKE overrides the lake binary (default: lake).
 set -euo pipefail
 
+main() {
 build=1
 scan=1
 sweep=1
@@ -54,53 +67,23 @@ gate_lib=Botho
 fail=0
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+files=()
 
-if [[ "$build" == 1 ]]; then
-  lakefile_preflight
-  echo "== sorry gate: lake build ($root)"
-  log="$tmp/build.log"
-  if ! (cd "$root" && "$lake" build) >"$log" 2>&1; then
-    cat "$log"
-    echo "FAIL: lake build failed" >&2
+# (c) runs first, before any `lake` call, so code that runs during the build
+# cannot edit what is scanned.
+if [[ "$scan" == 1 ]]; then
+  echo "== sorry gate: source scan ($root)"
+  [[ -f "$root/Botho.lean" ]] && files+=("$root/Botho.lean")
+  [[ -f "$root/Theorems.lean" ]] && files+=("$root/Theorems.lean")
+  if [[ -d "$root/Botho" ]]; then
+    while IFS= read -r f; do files+=("$f"); done \
+      < <(find "$root/Botho" -name '*.lean' -type f | LC_ALL=C sort)
+  fi
+  if [[ ${#files[@]} -eq 0 ]]; then
+    echo "FAIL: no Lean sources found under $root" >&2
     exit 1
   fi
-  cat "$log"
-  if grep -Eq "declaration uses ['\`\"]?sorry" "$log"; then
-    echo "FAIL: lake build reported a declaration that uses 'sorry'" >&2
-    fail=1
-  fi
-fi
-
-if [[ "$sweep" == 1 ]]; then
-  echo "== sorry gate: sweep $gate_lib for sorryAx (AxiomReport.lean)"
-  run_report "$tmp/report"
-  if grep -q $'^SORRY\t' "$tmp/report"; then
-    grep $'^SORRY\t' "$tmp/report" | cut -f2 | sed 's/^/  reaches sorryAx: /' >&2
-    echo "FAIL: a declaration in $gate_lib reaches sorryAx (see above)" >&2
-    fail=1
-  fi
-fi
-
-if [[ "$scan" == 0 ]]; then
-  if [[ "$fail" != 0 ]]; then exit 1; fi
-  echo "OK: sorry gate passed (no source scan)"
-  exit 0
-fi
-
-echo "== sorry gate: source scan ($root)"
-files=()
-[[ -f "$root/Botho.lean" ]] && files+=("$root/Botho.lean")
-[[ -f "$root/Theorems.lean" ]] && files+=("$root/Theorems.lean")
-if [[ -d "$root/Botho" ]]; then
-  while IFS= read -r f; do files+=("$f"); done \
-    < <(find "$root/Botho" -name '*.lean' -type f | LC_ALL=C sort)
-fi
-if [[ ${#files[@]} -eq 0 ]]; then
-  echo "FAIL: no Lean sources found under $root" >&2
-  exit 1
-fi
-
-if ! python3 - "${files[@]}" <<'PY'
+  if ! python3 - "${files[@]}" <<'PY'
 import re
 import sys
 
@@ -113,9 +96,32 @@ FORBIDDEN = ("sorry", "sorryAx", "admit", "native_decide")
 # use for them, and they are the tools for faking gate output (printing a
 # fake `#print axioms` line, hiding "declaration uses sorry").
 FORBIDDEN_COMMANDS = (
-    "#eval", "#eval!", "run_cmd", "run_elab", "run_meta", "#guard_msgs",
-    "initialize", "builtin_initialize",
+    "#eval", "#eval!", "run_cmd", "run_elab", "run_meta", "run_tac", "by_elab",
+    "#guard_msgs", "initialize", "builtin_initialize",
+    # Metaprogramming: a macro can expand to any of the commands above built
+    # from raw syntax nodes, so the banned keyword never appears in the source.
+    "macro", "macro_rules", "syntax", "declare_syntax_cat", "elab", "elab_rules",
 )
+# Attributes that run code when a module is built or imported, bind
+# declarations to native or substitute code, or extend the elaborator,
+# parser or pretty-printer. Matched only inside `@[...]` and `attribute [...]`
+# (a bare `init` is a common variable name). `@[init f] opaque x : Unit` runs
+# `f : IO Unit` whenever the module is imported, with no `import Lean`.
+FORBIDDEN_ATTRS = (
+    "init", "extern", "implemented_by", "export", "macro", "command_elab",
+    "term_elab", "tactic", "delab", "app_unexpander", "command_parser",
+    "term_parser", "tactic_parser", "formatter", "parenthesizer",
+    "combinator_formatter", "combinator_parenthesizer", "env_linter",
+    "code_action_provider", "server_rpc_method", "widget_module",
+    "run_builtin_parser_attribute_hooks", "run_parser_attribute_hooks",
+)
+FORBIDDEN_ATTR_PREFIXES = ("builtin_",)  # builtin_init, builtin_command_elab, ...
+FORBIDDEN_ATTR_SUFFIXES = (
+    "_elab", "_parser", "_delab", "_unexpander", "_formatter",
+    "_parenthesizer", "_linter", "_code_action", "_rpc_method",
+)
+# Modifiers that may precede an attribute name inside the brackets.
+ATTR_MODIFIERS = ("scoped", "local")
 # Forbidden as any dotted component (catches `set_option debug.skipKernelTC`).
 FORBIDDEN_COMPONENTS = ("skipKernelTC",)
 ALLOW_MARKER = "-- formal-gate: allow native_decide"
@@ -245,6 +251,48 @@ def offenses(tok):
     return found
 
 
+def forbidden_attr(name):
+    while name.startswith(ROOT_PREFIX):
+        name = name[len(ROOT_PREFIX):]
+    return (
+        name in FORBIDDEN_ATTRS
+        or name.startswith(FORBIDDEN_ATTR_PREFIXES)
+        or name.endswith(FORBIDDEN_ATTR_SUFFIXES)
+    )
+
+
+ATTR_OPEN = re.compile(r"@\[|(?<![A-Za-z0-9_'!?.])attribute\s*\[")
+
+
+def attr_offenses(text):
+    """(line, attribute) for each forbidden attribute named in an `@[...]` or
+    `attribute [...]` list of the stripped source TEXT. Every comma-separated
+    entry is checked, after `scoped` / `local` / `-` prefixes."""
+    found = []
+    for m in ATTR_OPEN.finditer(text):
+        i, depth, start, entries = m.end(), 0, m.end(), []
+        while i < len(text):
+            c = text[i]
+            if c in "([{":
+                depth += 1
+            elif c in ")}" or (c == "]" and depth > 0):
+                depth -= 1
+            elif c == "]":
+                break
+            elif c == "," and depth == 0:
+                entries.append((start, text[start:i]))
+                start = i + 1
+            i += 1
+        entries.append((start, text[start:i]))
+        for pos, entry in entries:
+            toks = IDENT.findall(entry.replace("-", " "))
+            while toks and toks[0] in ATTR_MODIFIERS:
+                toks = toks[1:]
+            if toks and forbidden_attr(toks[0]):
+                found.append((text.count("\n", 0, pos + len(entry) - len(entry.lstrip())) + 1, toks[0]))
+    return found
+
+
 bad = 0
 for path in sys.argv[1:]:
     with open(path, encoding="utf-8") as fh:
@@ -252,7 +300,17 @@ for path in sys.argv[1:]:
     raw_lines = raw.splitlines()
     reported = set()
     for interp in (False, True):
-        for lineno, line in enumerate(strip(raw, interp).splitlines(), 1):
+        # `«sorryAx»` and `@[«init» f]` name the same things as the bare
+        # tokens, so guillemets are dropped (line numbers are unchanged).
+        stripped = strip(raw, interp).replace("\u00ab", "").replace("\u00bb", "")
+        for lineno, name in attr_offenses(stripped):
+            if (lineno, "@" + name) in reported:
+                continue
+            reported.add((lineno, "@" + name))
+            original = raw_lines[lineno - 1] if lineno <= len(raw_lines) else ""
+            print(f"{path}:{lineno}: forbidden attribute '{name}': {original.strip()}")
+            bad = 1
+        for lineno, line in enumerate(stripped.splitlines(), 1):
             for tok in IDENT.findall(line):
                 for name in offenses(tok):
                     original = raw_lines[lineno - 1] if lineno <= len(raw_lines) else ""
@@ -265,12 +323,46 @@ for path in sys.argv[1:]:
                     bad = 1
 sys.exit(bad)
 PY
-then
-  echo "FAIL: forbidden token in source (see above)" >&2
-  fail=1
+  then
+    echo "FAIL: forbidden token in source (see above)" >&2
+    fail=1
+  fi
+fi
+
+if [[ "$build" == 1 ]]; then
+  lakefile_preflight
+  echo "== sorry gate: lake build ($root)"
+  log="$tmp/build.log"
+  if ! (cd "$root" && "$lake" build) >"$log" 2>&1; then
+    cat "$log"
+    echo "FAIL: lake build failed" >&2
+    exit 1
+  fi
+  cat "$log"
+  if grep -Eq "declaration uses ['\`\"]?sorry" "$log"; then
+    echo "FAIL: lake build reported a declaration that uses 'sorry'" >&2
+    fail=1
+  fi
+fi
+
+if [[ "$sweep" == 1 ]]; then
+  echo "== sorry gate: sweep $gate_lib for sorryAx (AxiomReport.lean)"
+  run_report "$tmp/report"
+  if grep -q $'^SORRY\t' "$tmp/report"; then
+    grep $'^SORRY\t' "$tmp/report" | cut -f2 | sed 's/^/  reaches sorryAx: /' >&2
+    echo "FAIL: a declaration in $gate_lib reaches sorryAx (see above)" >&2
+    fail=1
+  fi
 fi
 
 if [[ "$fail" != 0 ]]; then
   exit 1
 fi
-echo "OK: sorry gate passed (${#files[@]} files scanned)"
+if [[ "$scan" == 1 ]]; then
+  echo "OK: sorry gate passed (${#files[@]} files scanned)"
+else
+  echo "OK: sorry gate passed (no source scan)"
+fi
+}
+
+main "$@"

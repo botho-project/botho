@@ -8,10 +8,10 @@ the manifest is empty, or if this file contains anything other than comments,
 `import` lines and one `#print axioms NAME` per line (#1770). Prove theorems
 in the `Botho` library, not here.
 
-This file is not part of the `Botho` library. The gate compiles it separately
-with `lake env lean --json Theorems.lean` after `lake build`, and checks each
-result against an independent walk of the compiled library
-(`scripts/AxiomReport.lean`).
+This file is not part of the `Botho` library. The gate reads it before
+`lake build`, and compiles that copy separately with `lake env lean --json`
+after the build. It checks each result against an independent walk of the
+compiled library (`scripts/AxiomReport.lean`).
 -/
 import Botho
 

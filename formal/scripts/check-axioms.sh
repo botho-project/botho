@@ -25,11 +25,24 @@
 #      is the authority for the allow-list check. It also fails if any
 #      declaration in the library reaches `sorryAx`, listed or not.
 #
+# Gate inputs are read before the first `lake` call (#1770 review). Model code
+# runs during `lake build` (for example an `@[init]` initializer), so it could
+# otherwise rewrite axioms-allowlist.txt, Theorems.lean or AxiomReport.lean
+# before the gate reads them. The allow-list, the manifest and the report
+# program are held in shell variables from the start; the manifest reaches
+# Lean on stdin, and the report program is written out just before it runs.
+# The walk runs before Theorems.lean is compiled, because that compile runs
+# the initializers of every imported module again. The whole script is one
+# function, so bash parses it completely before running anything and a
+# rewrite of this file during the build has no effect. These are defence in
+# depth, not a sandbox: see "Limits" in formal/README.md.
+#
 # Usage: check-axioms.sh [FORMAL_ROOT]
 #   FORMAL_ROOT defaults to the directory above this script.
 # Environment: LAKE overrides the lake binary (default: lake).
 set -euo pipefail
 
+main() {
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="${1:-$(cd "$here/.." && pwd)}"
 root="$(cd "$root" && pwd)"
@@ -48,6 +61,11 @@ for f in "$manifest" "$allowlist"; do
   fi
 done
 
+# Snapshot the gate inputs before any `lake` call (see the header). From here
+# on the gate reads only these variables, never the files.
+manifest_src="$(cat "$manifest")"
+allowlist_src="$(cat "$allowlist")"
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 out="$tmp/out"
@@ -55,13 +73,14 @@ out="$tmp/out"
 lakefile_preflight
 
 echo "== axiom gate: manifest syntax"
-if ! python3 - "$manifest" "$gate_lib" >"$tmp/commands" <<'PY'
+if ! GATE_MANIFEST="$manifest_src" python3 - "$manifest" "$gate_lib" \
+  >"$tmp/commands" <<'PY'
+import os
 import re
 import sys
 
 path, lib = sys.argv[1:]
-with open(path, encoding="utf-8") as fh:
-    src = fh.read()
+src = os.environ["GATE_MANIFEST"]
 
 
 def blank_comments(s):
@@ -146,6 +165,7 @@ then
   echo "FAIL: Theorems.lean is not a plain manifest" >&2
   exit 1
 fi
+commands="$(cat "$tmp/commands")"
 
 echo "== axiom gate: lake build ($root)"
 if ! (cd "$root" && "$lake" build) >"$out" 2>&1; then
@@ -161,39 +181,43 @@ if ! (cd "$root" && "$lake" env leanchecker "$gate_lib") >"$out" 2>&1; then
   exit 1
 fi
 
-echo "== axiom gate: lake env lean --json Theorems.lean"
-if ! (cd "$root" && "$lake" env lean --json Theorems.lean) >"$tmp/json" 2>&1; then
-  cat "$tmp/json"
+# The walk runs before Theorems.lean is compiled: compiling Theorems.lean runs
+# the initializers of every imported module, which could tamper with the
+# compiled library the walk reads.
+echo "== axiom gate: independent axiom walk (AxiomReport.lean)"
+names=()
+while IFS=$'\t' read -r _ _ name; do names+=("$name"); done <<<"$commands"
+run_report "$tmp/report" "${names[@]}"
+report="$(cat "$tmp/report")"
+
+echo "== axiom gate: lake env lean --json Theorems.lean (snapshot, on stdin)"
+if ! json="$(cd "$root" && "$lake" env lean --json --stdin <<<"$manifest_src" 2>&1)"; then
+  printf '%s\n' "$json"
   echo "FAIL: Theorems.lean does not compile" >&2
   exit 1
 fi
 
-echo "== axiom gate: independent axiom walk (AxiomReport.lean)"
-names=()
-while IFS=$'\t' read -r _ _ name; do names+=("$name"); done <"$tmp/commands"
-run_report "$tmp/report" "${names[@]}"
-
-python3 - "$tmp/commands" "$tmp/json" "$tmp/report" "$allowlist" <<'PY'
+GATE_COMMANDS="$commands" GATE_JSON="$json" GATE_REPORT="$report" \
+  GATE_ALLOWLIST="$allowlist_src" python3 - <<'PY'
 import json
+import os
 import re
 import sys
 
-commands_path, json_path, report_path, allowlist = sys.argv[1:]
-
 commands = {}  # (line, col) -> name
 order = []
-with open(commands_path, encoding="utf-8") as fh:
-    for row in fh.read().splitlines():
-        line, col, name = row.split("\t")
-        commands[(int(line), int(col))] = name
-        order.append(name)
+for row in os.environ["GATE_COMMANDS"].splitlines():
+    line, col, name = row.split("\t")
+    commands[(int(line), int(col))] = name
+    order.append(name)
 
+# The allow-list as read before `lake build` (not the file, which model code
+# could have rewritten during the build).
 allowed = set()
-with open(allowlist, encoding="utf-8") as fh:
-    for row in fh:
-        name = row.split("#", 1)[0].strip()
-        if name:
-            allowed.add(name)
+for row in os.environ["GATE_ALLOWLIST"].splitlines():
+    name = row.split("#", 1)[0].strip()
+    if name:
+        allowed.add(name)
 
 errors = []
 
@@ -203,58 +227,56 @@ RESULT = re.compile(
     re.S,
 )
 printed = {}  # name -> sorted axiom list
-with open(json_path, encoding="utf-8") as fh:
-    for raw in fh.read().splitlines():
-        if not raw.strip():
-            continue
-        try:
-            msg = json.loads(raw)
-            pos = (int(msg["pos"]["line"]), int(msg["pos"]["column"]))
-            severity, data = msg["severity"], msg["data"]
-        except (ValueError, KeyError, TypeError):
-            errors.append(f"lean printed a line that is not a Lean message: {raw[:120]}")
-            continue
-        if severity != "information":
-            errors.append(f"Theorems.lean:{pos[0]}:{pos[1]}: {severity}: {data[:200]}")
-            continue
-        name = commands.get(pos)
-        if name is None:
-            errors.append(
-                f"Theorems.lean:{pos[0]}:{pos[1]}: message not at a manifest "
-                f"'#print axioms' command: {data[:120]!r}"
-            )
-            continue
-        m = RESULT.fullmatch(data)
-        if not m or m.group(1) != name:
-            errors.append(
-                f"Theorems.lean:{pos[0]}:{pos[1]}: not a '#print axioms {name}' "
-                f"result: {data[:120]!r}"
-            )
-            continue
-        if name in printed:
-            errors.append(f"Theorems.lean:{pos[0]}:{pos[1]}: second result for {name}")
-            continue
-        listed = m.group(2)
-        printed[name] = sorted(
-            a.strip() for a in (listed or "").replace("\n", " ").split(",") if a.strip()
+for raw in os.environ["GATE_JSON"].splitlines():
+    if not raw.strip():
+        continue
+    try:
+        msg = json.loads(raw)
+        pos = (int(msg["pos"]["line"]), int(msg["pos"]["column"]))
+        severity, data = msg["severity"], msg["data"]
+    except (ValueError, KeyError, TypeError):
+        errors.append(f"lean printed a line that is not a Lean message: {raw[:120]}")
+        continue
+    if severity != "information":
+        errors.append(f"Theorems.lean:{pos[0]}:{pos[1]}: {severity}: {data[:200]}")
+        continue
+    name = commands.get(pos)
+    if name is None:
+        errors.append(
+            f"Theorems.lean:{pos[0]}:{pos[1]}: message not at a manifest "
+            f"'#print axioms' command: {data[:120]!r}"
         )
+        continue
+    m = RESULT.fullmatch(data)
+    if not m or m.group(1) != name:
+        errors.append(
+            f"Theorems.lean:{pos[0]}:{pos[1]}: not a '#print axioms {name}' "
+            f"result: {data[:120]!r}"
+        )
+        continue
+    if name in printed:
+        errors.append(f"Theorems.lean:{pos[0]}:{pos[1]}: second result for {name}")
+        continue
+    listed = m.group(2)
+    printed[name] = sorted(
+        a.strip() for a in (listed or "").replace("\n", " ").split(",") if a.strip()
+    )
 for name in order:
     if name not in printed:
         errors.append(f"no '#print axioms' result for {name}")
 
 # Layer 4: the independent walk.
 walked, swept = {}, None
-with open(report_path, encoding="utf-8") as fh:
-    for row in fh.read().splitlines():
-        parts = row.split("\t")
-        if parts[0] == "AXIOMS":
-            walked[parts[1]] = sorted(a for a in parts[2].split(",") if a)
-        elif parts[0] == "MISSING":
-            errors.append(f"{parts[1]} is not a declaration of the compiled library")
-        elif parts[0] == "SORRY":
-            errors.append(f"{parts[1]} reaches sorryAx (a sorry is reachable)")
-        elif parts[0] == "DONE":
-            swept = int(parts[1])
+for row in os.environ["GATE_REPORT"].splitlines():
+    parts = row.split("\t")
+    if parts[0] == "AXIOMS":
+        walked[parts[1]] = sorted(a for a in parts[2].split(",") if a)
+    elif parts[0] == "MISSING":
+        errors.append(f"{parts[1]} is not a declaration of the compiled library")
+    elif parts[0] == "SORRY":
+        errors.append(f"{parts[1]} reaches sorryAx (a sorry is reachable)")
+    elif parts[0] == "DONE":
+        swept = int(parts[1])
 for name in order:
     if name not in walked:
         continue
@@ -281,3 +303,6 @@ print(
     f"swept; allow-list: {', '.join(sorted(allowed))})"
 )
 PY
+}
+
+main "$@"

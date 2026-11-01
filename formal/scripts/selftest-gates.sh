@@ -403,6 +403,124 @@ printf '\nmoreLeanArgs = ["-Ddebug.skipKernelTC=true"]\n' >>"$d/lakefile.toml"
 expect_fail_with 'forbidden build option' \
   "lakefile.toml with moreLeanArgs" axiom_gate "$d"
 
+# ---- #1770 review: code that runs during `lake build` ----
+
+# Axiom gate (#1770 review): the Judge's bypass. An `@[init]` initializer
+# (no `import Lean`, no banned keyword) runs during `lake build` and appends
+# the cheat axiom to axioms-allowlist.txt before the gate reads it. The gate
+# reads the allow-list it snapshotted before the build, so it still rejects
+# the cheat axiom. The second check proves the initializer really ran.
+init_widen() {
+  cat >>"$1/Botho/Basic.lean" <<'EOF'
+
+namespace Botho
+axiom cheat : False
+theorem one_eq_two : 1 = 2 := cheat.elim
+def widen : IO Unit := do
+  let p := "axioms-allowlist.txt"
+  let s ← IO.FS.readFile p
+  unless (s.splitOn "Botho.cheat").length > 1 do
+    IO.FS.writeFile p (s ++ "Botho.cheat\n")
+@[init widen] opaque widenInit : Unit
+end Botho
+EOF
+  printf '#print axioms Botho.one_eq_two\n' >>"$1/Theorems.lean"
+}
+d="$(fresh_copy)"
+init_widen "$d"
+expect_fail_with 'one_eq_two depends on non-allow-listed axiom Botho.cheat' \
+  "@[init] initializer widening the allow-list during the build" axiom_gate "$d"
+expect pass "  (the initializer did rewrite axioms-allowlist.txt)" \
+  grep -q '^Botho.cheat$' "$d/axioms-allowlist.txt"
+expect_fail_with "forbidden attribute 'init'" \
+  "@[init f] in a model source (scan only)" sorry_gate --no-build "$d"
+
+# Sorry gate (#1770 review): an initializer that deletes its own `@[init]`
+# line from the source during the build. The scan runs before the build, so
+# it still sees the attribute.
+d="$(fresh_copy)"
+cat >>"$d/Botho/Basic.lean" <<'EOF'
+
+namespace Botho
+def hide : IO Unit := do
+  let p := "Botho/Basic.lean"
+  let s ← IO.FS.readFile p
+  IO.FS.writeFile p (s.replace "@[init hide]" "")
+@[init hide] opaque hideInit : Unit
+end Botho
+EOF
+expect_fail_with "forbidden attribute 'init'" \
+  "self-erasing @[init] initializer (full sorry gate)" sorry_gate "$d"
+expect fail "  (the initializer did erase its @[init] line)" \
+  grep -q '@\[init hide\]' "$d/Botho/Basic.lean"
+
+# Sorry gate (#1770 review): initializer and other code-running attributes in
+# every attribute position: lists, `attribute [...]`, `local` / `scoped`,
+# entries split over lines, guillemets, and the attribute-erasing `-` form.
+d="$(fresh_copy)"
+cat >>"$d/Botho/Basic.lean" <<'EOF'
+
+def Botho.selftest_io : IO Unit := pure ()
+@[simp, init Botho.selftest_io] opaque Botho.selftest_w1 : Unit
+EOF
+expect_fail_with "forbidden attribute 'init'" \
+  "@[simp, init f] attribute list (scan only)" sorry_gate --no-build "$d"
+for case in \
+  'init|attribute [init Botho.selftest_io] Botho.selftest_w' \
+  'init|attribute [simp, local init Botho.selftest_io] Botho.selftest_w' \
+  'init|@[scoped init Botho.selftest_io] opaque Botho.selftest_w : Unit' \
+  'init|@[«init» Botho.selftest_io] opaque Botho.selftest_w : Unit' \
+  'builtin_init|@[builtin_init Botho.selftest_io] opaque Botho.selftest_w : Unit' \
+  'extern|@[extern "system"] opaque Botho.selftest_w : Nat → Nat' \
+  'implemented_by|@[implemented_by Botho.selftest_io] opaque Botho.selftest_w : IO Unit' \
+  'export|@[export botho_w] def Botho.selftest_w : Nat := 0' \
+  'macro|@[macro Botho.selftest_k] def Botho.selftest_w : Nat := 0' \
+  'command_elab|@[command_elab Botho.selftest_k] def Botho.selftest_w : Nat := 0' \
+  'term_elab|@[term_elab Botho.selftest_k] def Botho.selftest_w : Nat := 0'; do
+  d="$(fresh_copy)"
+  printf '\n%s\n' "${case#*|}" >>"$d/Botho/Basic.lean"
+  expect_fail_with "forbidden attribute '${case%%|*}'" \
+    "attribute: ${case#*|} (scan only)" sorry_gate --no-build "$d"
+done
+d="$(fresh_copy)"
+cat >>"$d/Botho/Basic.lean" <<'EOF'
+
+@[simp
+  , init Botho.selftest_io] opaque Botho.selftest_w2 : Unit
+EOF
+expect_fail_with "Basic.lean:[0-9]+: forbidden attribute 'init'" \
+  "init on the second line of an attribute list (scan only)" \
+  sorry_gate --no-build "$d"
+
+# Sorry gate (#1770 review): metaprogramming commands, which can expand to a
+# banned command built from raw syntax, are rejected by the scan.
+for cmd in \
+  'macro "botho_m" : term => `(1)' \
+  'syntax "botho_s" : term' \
+  'elab "botho_e" : term => pure (Lean.mkNatLit 1)' \
+  'declare_syntax_cat botho_cat'; do
+  d="$(fresh_copy)"
+  printf '\n%s\n' "$cmd" >>"$d/Botho/Basic.lean"
+  expect_fail_with "forbidden token '${cmd%% *}'" \
+    "command: ${cmd%% *} (scan only)" sorry_gate --no-build "$d"
+done
+
+# Negative control (#1770 review): `init` as a variable name, harmless
+# attributes, and `init` in a comment or string pass the scan and build.
+d="$(fresh_copy)"
+cat >>"$d/Botho/Basic.lean" <<'EOF'
+
+def Botho.selftest_init_ok (init : Nat) : Nat := init + 1
+@[simp] theorem Botho.selftest_init_simp (init : Nat) :
+    Botho.selftest_init_ok init = init + 1 := rfl
+attribute [local simp] Botho.selftest_init_ok
+-- @[init foo] in a comment
+def Botho.selftest_init_str : String := "@[init foo]"
+EOF
+expect pass "init as a variable, @[simp], attribute [local simp] (scan only)" \
+  sorry_gate --no-build "$d"
+expect pass "init control tree still builds (full sorry gate)" sorry_gate "$d"
+
 echo
 if [[ "$failures" != 0 ]]; then
   echo "selftest: $failures case(s) FAILED"
