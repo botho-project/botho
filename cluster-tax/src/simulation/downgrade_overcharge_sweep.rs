@@ -884,7 +884,10 @@ pub fn run_honest_overcharge_sweep() -> HonestOverchargeReport {
 pub fn run_honest_overcharge_sweep_at(ring_size: usize) -> HonestOverchargeReport {
     let horizons = candidate_horizons();
     let archetypes = honest_archetypes();
-    let params = HonestSweepParams { ring_size, ..HonestSweepParams::default() };
+    let params = HonestSweepParams {
+        ring_size,
+        ..HonestSweepParams::default()
+    };
     let curve = ClusterFactorCurve::default_params();
 
     let archetype_classification = classify_archetypes(&archetypes, &params, &curve);

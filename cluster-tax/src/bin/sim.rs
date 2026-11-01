@@ -1228,7 +1228,9 @@ mod cli {
                 smoke,
             } => run_decoy_flood_sweep_cli(trials, seed, smoke),
             Command::BridgeImportSweep => run_bridge_import_sweep_cli(),
-            Command::HonestOverchargeSweep { ring_size } => run_honest_overcharge_sweep_cli(ring_size),
+            Command::HonestOverchargeSweep { ring_size } => {
+                run_honest_overcharge_sweep_cli(ring_size)
+            }
             Command::M2Cumulative {
                 horizon_years,
                 gamed,
