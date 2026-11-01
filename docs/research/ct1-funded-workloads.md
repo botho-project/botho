@@ -8,6 +8,33 @@ eligibility. It changes no production rule, wallet policy, protocol or price.
 It is **synthetic fixed-stock workload evidence**, not observed calibration,
 stationary profitability, a full wallet transaction rehearsal or D3/base approval.
 
+## Fee-basis correction (2026-10-31, #1701)
+
+The workloads below price a two-output payment at the **proposed** 0.5-BTH base
+(2 × 0.25 BTH candidate per-output base). Today's node charges that payment
+`max(3,960 pico floor, 1e8 pico MIN_TX_FEE)`, which is **1e-4 BTH**, 5,000×
+less. The 56.5 BTH of gross fees from 113 payments, and the 45.2 BTH lottery
+capture they fund, are therefore candidate-policy figures. On current code the
+same 113 payments pay about 0.0113 BTH. They were not re-run here.
+
+For the current-rule attacker economics, see
+[decoy-flood-cost.md](decoy-flood-cost.md).
+
+Per-transaction fees on current code, from §1 of the `decoy-flood-sweep` output
+in [decoy-flood-cost.md](decoy-flood-cost.md), at epoch 0 and factor 1×:
+
+| transaction | consensus floor (pico) | relay fee (pico) | relay pico/output |
+|---|---:|---:|---:|
+| attacker 1-in/16-out, dust outputs | 267,000 | 100,000,000 | 6.25e6 |
+| honest 1-in/2-out payment | 3,960 | 100,000,000 | 5.0e7 |
+
+A 1-output transaction has a floor of 870 pico: `1 pico/byte × 870 bytes × 1²`.
+It also pays 1e8 pico when relayed. To reproduce:
+
+```sh
+cargo run --release -p bth-cluster-tax --features cli --bin cluster-tax-sim -- decoy-flood-sweep
+```
+
 ## Exact workload and implementation boundaries
 
 There are sixteen histories: seeds 1306/902, an honest payment attempt every

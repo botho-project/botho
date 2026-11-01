@@ -7,6 +7,43 @@ F=1500/K=17280 is unchanged. These results do not reproduce the old EpochOrigin
 Gini calibration: that simulation used value-weighted circulation mixing, while
 CT1 proposes maximum public ring factor and paid deflation.
 
+## Fee-basis correction (2026-10-31, #1701)
+
+This checkpoint prices every created output at the CT1 **candidate** base,
+0.25 BTH (2.5e11 pico). That base is a proposal, and nothing in today's node
+charges it. The node charges each **transaction**
+`max(consensus floor, MIN_TX_FEE)`. The floor is
+`1 pico/byte × size × factor × min(n_out, 10)²` plus demurrage. `MIN_TX_FEE`
+(1e8 pico) is a relay-only check, not a block-validity rule.
+
+The "Paid" column of the Path C table below (128 / 256 / 2,048 BTH for 1 / 2 /
+16 outputs per batch over 512 batches) therefore describes the candidate
+policy, not the live chain. On current code each batch is one transaction. All
+three schedules pay 512 × 1e8 pico = **0.0512 BTH** when relayed, or at most
+512 × 267,000 pico ≈ 1.4e-4 BTH at the bare floor. The "Captured" values come
+from the candidate-fee run and were not re-run here. Read the table as
+candidate-policy evidence only.
+
+For attacker economics on the current rules, see
+[decoy-flood-cost.md](decoy-flood-cost.md). A uniform decoy flood roughly
+self-finances through lottery recapture in epoch 0 and is profitable from
+epoch 1 (#1682).
+
+Per-transaction fees on current code, from §1 of the `decoy-flood-sweep` output
+in [decoy-flood-cost.md](decoy-flood-cost.md), at epoch 0 and factor 1×:
+
+| transaction | consensus floor (pico) | relay fee (pico) | relay pico/output |
+|---|---:|---:|---:|
+| attacker 1-in/16-out, dust outputs | 267,000 | 100,000,000 | 6.25e6 |
+| honest 1-in/2-out payment | 3,960 | 100,000,000 | 5.0e7 |
+
+A 1-output transaction has a floor of 870 pico: `1 pico/byte × 870 bytes × 1²`.
+It also pays 1e8 pico when relayed. To reproduce:
+
+```sh
+cargo run --release -p bth-cluster-tax --features cli --bin cluster-tax-sim -- decoy-flood-sweep
+```
+
 ## What ran
 
 The checked-in [summary](../../scripts/research/ct-economics/summary.json) records
