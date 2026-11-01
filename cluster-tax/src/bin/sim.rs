@@ -900,6 +900,50 @@ mod cli {
             fee_model: FeeModelArg,
         },
 
+        /// REDISTRIBUTION REDESIGN STUDY (#1801): candidate lottery and
+        /// tag-decay redesigns on three axes. `--part splitting` and
+        /// `--part privacy` print the splitting-grid and privacy tables
+        /// (seconds). `--part m2` runs one m2-production run (minutes) and
+        /// prints one JSON line per snapshot.
+        ///
+        ///   sim redistribution-redesign --part splitting
+        ///   sim redistribution-redesign --part m2 --variant value-age \
+        ///       --mining egalitarian --seed 2 --tx-scale 100 --run on
+        RedistributionRedesign {
+            /// splitting, privacy, or m2
+            #[arg(long, default_value = "splitting")]
+            part: String,
+
+            /// Variant: baseline, value-age, inverse-factor, ticket-price,
+            /// time-decay, inverse-factor+time-decay (or R0..R5)
+            #[arg(long, default_value = "baseline")]
+            variant: String,
+
+            /// Hashpower distribution: wealth or egalitarian
+            #[arg(long, default_value = "egalitarian")]
+            mining: String,
+
+            /// Strategic whale: honest or optimal-decoy
+            #[arg(long, default_value = "honest")]
+            whale: String,
+
+            /// Deterministic RNG seed
+            #[arg(long, default_value = "1696")]
+            seed: u64,
+
+            /// Transaction-rate multiplier (1 = the M2 rates)
+            #[arg(long, default_value = "1")]
+            tx_scale: f64,
+
+            /// Keep spent outputs in the lottery window (what the node does)
+            #[arg(long)]
+            spent_eligible: bool,
+
+            /// on (mechanism on) or off (counterfactual)
+            #[arg(long, default_value = "on")]
+            run: String,
+        },
+
         /// M2-PRODUCTION (#1696): the M2 Gini experiment at the node's real
         /// parameters — 6,307,200 blocks/yr, mainnet emission with the
         /// lottery-share ramp and epoch-0 holiday, the V2 uniform draw
@@ -1260,6 +1304,25 @@ mod cli {
                 fee_model,
                 validate_days,
                 tx_scale,
+            ),
+            Command::RedistributionRedesign {
+                part,
+                variant,
+                mining,
+                whale,
+                seed,
+                tx_scale,
+                spent_eligible,
+                run,
+            } => run_redistribution_redesign_cli(
+                &part,
+                &variant,
+                &mining,
+                &whale,
+                seed,
+                tx_scale,
+                spent_eligible,
+                &run,
             ),
             Command::M2Decay {
                 horizon_years,
@@ -5029,6 +5092,7 @@ mod cli {
                             mechanism: true,
                             seed,
                             tx_scale,
+                            ..ProdParams::years(0, &[])
                         });
                         println!(
                             "mining={} whale={} step={step}  gini0={:.4}  ({:.1}s)",
@@ -5124,6 +5188,117 @@ mod cli {
                 r.7,
                 r.8 * 100.0
             );
+        }
+    }
+
+    /// #1801 redesign study: printing wrapper over
+    /// `bth_cluster_tax::simulation::redistribution_redesign`.
+    #[allow(clippy::too_many_arguments)]
+    fn run_redistribution_redesign_cli(
+        part: &str,
+        variant: &str,
+        mining: &str,
+        whale: &str,
+        seed: u64,
+        tx_scale: f64,
+        spent_eligible: bool,
+        run: &str,
+    ) {
+        use bth_cluster_tax::simulation::{
+            m2_production::{run_m2_production, MiningModel, WhaleStrategy, PROD_BLOCKS_PER_YEAR},
+            redistribution_redesign::{
+                privacy_markdown, splitting_markdown, variant_params, Variant,
+            },
+        };
+        match part {
+            "splitting" => {
+                println!("# Redistribution redesign study: splitting grid (#1801)\n");
+                print!("{}", splitting_markdown());
+            }
+            "privacy" => {
+                println!("# Redistribution redesign study: privacy measurements (#1801)\n");
+                print!("{}", privacy_markdown());
+            }
+            "m2" => {
+                let Some(v) = Variant::parse(variant) else {
+                    eprintln!("unknown variant {variant:?}");
+                    std::process::exit(2);
+                };
+                let mining_model = match mining {
+                    "wealth" => MiningModel::WealthProportional,
+                    "egalitarian" => MiningModel::Egalitarian,
+                    _ => {
+                        eprintln!("--mining must be wealth or egalitarian");
+                        std::process::exit(2);
+                    }
+                };
+                let whale_strategy = match whale {
+                    "honest" => WhaleStrategy::Honest,
+                    "optimal-decoy" => WhaleStrategy::OptimalDecoy,
+                    _ => {
+                        eprintln!("--whale must be honest or optimal-decoy");
+                        std::process::exit(2);
+                    }
+                };
+                let mut p = variant_params(
+                    v,
+                    mining_model,
+                    whale_strategy,
+                    seed,
+                    tx_scale,
+                    spent_eligible,
+                );
+                p.mechanism = match run {
+                    "on" => true,
+                    "off" => false,
+                    _ => {
+                        eprintln!("--run must be on or off");
+                        std::process::exit(2);
+                    }
+                };
+                let t = std::time::Instant::now();
+                let r = run_m2_production(&p);
+                for s in &r.snapshots {
+                    let cohorts: Vec<String> = s
+                        .cohorts
+                        .iter()
+                        .map(|c| {
+                            format!(
+                                "\"{}\":{{\"wealth\":{:.6},\"lottery\":{:.6},\"demurrage\":{:.6e},\"factor\":{:.4}}}",
+                                c.name, c.wealth_share, c.lottery_share, c.demurrage_bth, c.mean_priced_factor
+                            )
+                        })
+                        .collect();
+                    println!(
+                        "{{\"variant\":\"{}\",\"mining\":\"{}\",\"whale\":\"{}\",\"seed\":{},\"tx_scale\":{},\"spent_eligible\":{},\"run\":\"{}\",\"yr\":{},\"gini0\":{:.6},\"gini\":{:.6},\"top_decile_below_1_5x\":{:.6},\"lottery_bth\":{:.6e},\"demurrage_bth\":{:.6e},\"ticket_burn_bth\":{:.6e},\"downgrade_bth\":{:.6e},\"burned_bth\":{:.6e},\"mined_bth\":{:.6e},\"txs\":{},\"outputs\":{},\"secs\":{:.0},\"cohorts\":{{{}}}}}",
+                        v.id(),
+                        mining_model.label(),
+                        whale_strategy.label(),
+                        seed,
+                        tx_scale,
+                        spent_eligible,
+                        run,
+                        s.blocks / PROD_BLOCKS_PER_YEAR,
+                        r.gini0,
+                        s.gini,
+                        s.top_decile_below_1_5x,
+                        s.lottery_paid_bth,
+                        s.demurrage_bth,
+                        s.ticket_burn_bth,
+                        s.downgrade_bth,
+                        s.burned_bth,
+                        s.total_mined_bth,
+                        r.transactions,
+                        r.outputs_created,
+                        t.elapsed().as_secs_f64(),
+                        cohorts.join(",")
+                    );
+                }
+            }
+            _ => {
+                eprintln!("--part must be splitting, privacy or m2");
+                std::process::exit(2);
+            }
         }
     }
 

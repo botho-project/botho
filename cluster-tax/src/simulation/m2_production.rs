@@ -119,7 +119,7 @@ use crate::{
         ConsensusFeeInputs, ConsensusFeeParams, FeeModelMode, LOTTERY_POOL_FRACTION_PERMILLE,
         MAINNET_BLOCKS_PER_YEAR,
     },
-    demurrage::ring_centroid_implied_factor,
+    demurrage::{demurrage_charge, ring_centroid_implied_factor},
     fee_curve::{ClusterFactorCurve, PICO_PER_BTH},
     LotteryDrawConfig, MonetaryPolicy, LOTTERY_BASE_FEE_PICO,
 };
@@ -195,6 +195,73 @@ impl WhaleStrategy {
     }
 }
 
+/// How a lottery candidate's ticket weight is computed (#1801 redesign
+/// study). [`TicketRule::Uniform`] is the node's rule and the #1790 baseline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TicketRule {
+    /// One ticket per eligible output (`SelectionMode::Uniform`, the node).
+    Uniform,
+    /// Weight = output value x output age (coin-age). Value-linear, so a
+    /// split adds no weight, and it discounts outputs that are recycled
+    /// often.
+    ValueAge,
+    /// Weight = value x (max factor - factor + 1), the existing
+    /// `SelectionMode::ClusterWeighted` kernel: a 1x output has 6x the
+    /// per-value weight of a 6x output.
+    InverseFactor,
+    /// Uniform draw, but an output is eligible only if it buys a ticket, at
+    /// a price equal to the average payout per ticket (previous step's
+    /// payout / tickets bought in that step), burned. Coinbase and payout
+    /// outputs must buy too (no free tickets). Wallets buy rationally: only
+    /// for outputs worth more than the price, and (under #1790's rule, where
+    /// a spent ticket stops counting) only if the owner's median holding time
+    /// covers the circulation window.
+    TicketPrice,
+}
+
+impl TicketRule {
+    pub fn label(self) -> &'static str {
+        match self {
+            TicketRule::Uniform => "uniform",
+            TicketRule::ValueAge => "value-age",
+            TicketRule::InverseFactor => "inverse-factor",
+            TicketRule::TicketPrice => "ticket-price",
+        }
+    }
+}
+
+/// How honest wallets decay their output tags (#1801 redesign study).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TagDecay {
+    /// The stock wallet: 5% per hop, however often the holder spends.
+    PerHop,
+    /// Decay keyed to elapsed blocks since the position's last spend:
+    /// `(1 - 5%)^(elapsed / TIME_DECAY_REF_BLOCKS)`. The reference interval is
+    /// the 1x whale's mean inter-spend time (1/12 yr), so the 1x whale decays
+    /// about as before, but churn no longer speeds decay up.
+    PerBlock,
+}
+
+impl TagDecay {
+    pub fn label(self) -> &'static str {
+        match self {
+            TagDecay::PerHop => "per-hop",
+            TagDecay::PerBlock => "per-block",
+        }
+    }
+}
+
+/// Reference interval for [`TagDecay::PerBlock`]: one 5% decay step per
+/// 1/12 year (525,600 blocks).
+pub const TIME_DECAY_REF_BLOCKS: u64 = PROD_BLOCKS_PER_YEAR / 12;
+
+/// Eligible lifetime of a lottery ticket, `circulation_window - min_utxo_age
+/// + 1` = 9,281 blocks.
+pub fn ticket_life_blocks() -> u64 {
+    let d = LotteryDrawConfig::default();
+    d.circulation_window - d.min_utxo_age + 1
+}
+
 /// Parameters of one M2-production run.
 #[derive(Clone, Debug)]
 pub struct ProdParams {
@@ -218,6 +285,16 @@ pub struct ProdParams {
     /// rates). Velocity is unchanged, so each transaction moves a
     /// proportionally smaller fraction of the position.
     pub tx_scale: f64,
+    /// Lottery ticket weighting (#1801). [`TicketRule::Uniform`] = #1790.
+    pub ticket_rule: TicketRule,
+    /// Honest-wallet tag decay (#1801). [`TagDecay::PerHop`] = #1790.
+    pub tag_decay: TagDecay,
+    /// `true` = spent outputs stay lottery candidates until they age out of
+    /// the window, which is what the node does: ring inputs only record a
+    /// key image, so `utxo_db` never drops the real input (`writer.rs`).
+    /// `false` = #1790's rule (a spend removes its coins from the draw),
+    /// which the node can only enforce by revealing which output was spent.
+    pub spent_eligible: bool,
 }
 
 impl ProdParams {
@@ -237,6 +314,9 @@ impl ProdParams {
             mechanism: true,
             seed: 1_696,
             tx_scale: 1.0,
+            ticket_rule: TicketRule::Uniform,
+            tag_decay: TagDecay::PerHop,
+            spent_eligible: false,
         }
     }
 }
@@ -267,6 +347,12 @@ pub struct ProdSnapshot {
     pub demurrage_bth: f64,
     pub fees_bth: f64,
     pub burned_bth: f64,
+    /// Ticket prices paid so far ([`TicketRule::TicketPrice`]; burned and
+    /// included in `burned_bth`), in BTH.
+    pub ticket_burn_bth: f64,
+    /// Part of `demurrage_bth` charged above the time-accrued demurrage: the
+    /// #925 downgrade (capitalized reset) charge, in BTH.
+    pub downgrade_bth: f64,
     /// Strategic whale's priced factor (FACTOR_SCALE) at this snapshot.
     pub whale_priced_factor: u64,
 }
@@ -323,12 +409,19 @@ struct WinEntry {
     generation: u32,
     count: u64,
     tags: OutTags,
+    /// Value of each output in the group, pico (ticket weighting only).
+    value: f64,
 }
 
 struct OwnerEntry {
     step: u64,
     count: u64,
     tags: OutTags,
+    /// Value of each output, pico.
+    value: f64,
+    /// Per-value ticket tilt fixed when the output enters the window
+    /// ([`TicketRule::InverseFactor`]; 1.0 otherwise).
+    tilt: f64,
 }
 
 struct World {
@@ -356,6 +449,14 @@ struct World {
     burned: u128,
     outputs_created: u64,
     transactions: u64,
+    /// Current ticket price, pico ([`TicketRule::TicketPrice`]).
+    ticket_price: u128,
+    /// Tickets bought since the last price update.
+    tickets_bought: u64,
+    /// Demurrage above the time-accrued charge (#925 downgrade part), pico.
+    downgrade: u128,
+    /// Ticket prices paid (burned), pico.
+    ticket_burn: u128,
     rng_mine: ChaCha8Rng,
     rng_tx: ChaCha8Rng,
     rng_lot: ChaCha8Rng,
@@ -565,6 +666,10 @@ impl World {
             burned: 0,
             outputs_created: 0,
             transactions: 0,
+            ticket_price: 0,
+            tickets_bought: 0,
+            downgrade: 0,
+            ticket_burn: 0,
             rng_mine: ChaCha8Rng::seed_from_u64(seed ^ 0x6d69_6e65),
             rng_tx: ChaCha8Rng::seed_from_u64(seed ^ 0x7478_7478),
             rng_lot: ChaCha8Rng::seed_from_u64(seed ^ 0x6c6f_7474),
@@ -574,11 +679,13 @@ impl World {
         world.buckets.push_back(Vec::new());
         for i in 0..na {
             let tags = OutTags::Shared(Rc::new(vec![(i as u32, 1.0)]));
+            let value = world.agents[i].value as f64;
             world.buckets[0].push(WinEntry {
                 owner: i as u32,
                 generation: 0,
                 count: 1,
                 tags,
+                value,
             });
         }
         world
@@ -714,10 +821,37 @@ impl World {
         }
     }
 
-    fn add_output(&mut self, step: u64, owner: usize, count: u64, per_output: u128, tags: OutTags) {
+    /// Record `count` new outputs of `owner` (already credited to its
+    /// position). `per_output` decides eligibility exactly as in #1790;
+    /// `value_each` is each output's own value, used for ticket weights and
+    /// the ticket price.
+    fn add_output(
+        &mut self,
+        step: u64,
+        owner: usize,
+        count: u64,
+        per_output: u128,
+        value_each: u128,
+        tags: OutTags,
+    ) {
         self.outputs_created += count;
         if count == 0 || per_output < self.draw.min_utxo_value as u128 {
             return;
+        }
+        if self.p.ticket_rule == TicketRule::TicketPrice && self.p.mechanism {
+            // An output is eligible only if it buys its ticket. The wallet
+            // skips outputs worth no more than the price and, when a spent
+            // ticket stops counting, outputs it expects to spend before the
+            // ticket's window ends (median holding time below the window).
+            let price = self.ticket_price;
+            let median_hold = std::f64::consts::LN_2 * PROD_BLOCKS_PER_YEAR as f64
+                / self.agents[owner].tx_per_year;
+            let holds = self.p.spent_eligible || median_hold >= self.draw.circulation_window as f64;
+            if !holds || value_each <= price {
+                return;
+            }
+            self.charge(owner, price * count as u128);
+            self.tickets_bought += count;
         }
         let idx = (step - self.bucket_base) as usize;
         while self.buckets.len() <= idx {
@@ -729,7 +863,62 @@ impl World {
             generation,
             count,
             tags,
+            value: value_each as f64,
         });
+    }
+
+    /// Burn `amount` from agent `a`'s position (ticket purchases), scaling
+    /// its tag mass so mass and value stay consistent.
+    fn charge(&mut self, a: usize, amount: u128) {
+        let ag = &mut self.agents[a];
+        let amount = amount.min(ag.value);
+        if amount == 0 {
+            return;
+        }
+        let keep = (ag.value - amount) as f64 / ag.value as f64;
+        ag.value -= amount;
+        for m in ag.mass.values_mut() {
+            *m *= keep;
+        }
+        self.ticket_burn += amount;
+        self.burned += amount;
+    }
+
+    /// Per-value ticket tilt of an output entering the window.
+    fn entry_tilt(&self, tags: &OutTags, count: u64) -> f64 {
+        if self.p.ticket_rule != TicketRule::InverseFactor {
+            return 1.0;
+        }
+        let tilt = |f: u64| {
+            let f = f.clamp(
+                ClusterFactorCurve::FACTOR_SCALE,
+                crate::lottery::MAX_FACTOR_SCALED,
+            );
+            (crate::lottery::MAX_FACTOR_SCALED - f + ClusterFactorCurve::FACTOR_SCALE) as f64
+                / ClusterFactorCurve::FACTOR_SCALE as f64
+        };
+        match tags {
+            OutTags::Shared(t) => tilt(self.factor(self.eff_wealth(t))),
+            OutTags::Coinbase { first } => {
+                let n = count.max(1);
+                (0..n)
+                    .map(|k| tilt(self.factor(self.w[(*first + k as u32) as usize])))
+                    .sum::<f64>()
+                    / n as f64
+            }
+        }
+    }
+
+    /// Ticket weight of one window entry at `step`.
+    fn entry_weight(&self, e: &OwnerEntry, step: u64) -> f64 {
+        match self.p.ticket_rule {
+            TicketRule::Uniform | TicketRule::TicketPrice => e.count as f64,
+            TicketRule::InverseFactor => e.count as f64 * e.value * e.tilt,
+            TicketRule::ValueAge => {
+                let age = (step - e.step) * self.p.step_blocks;
+                e.count as f64 * e.value * age as f64
+            }
+        }
     }
 
     /// Move bucket `step - lo` into the eligible window and expire bucket
@@ -747,11 +936,14 @@ impl World {
                             // Spent before it matured.
                             continue;
                         }
+                        let tilt = self.entry_tilt(&e.tags, e.count);
                         self.owner_counts[o] += e.count;
                         self.owner_entries[o].push_back(OwnerEntry {
                             step: enter,
                             count: e.count,
                             tags: e.tags,
+                            value: e.value,
+                            tilt,
                         });
                     }
                 }
@@ -794,13 +986,22 @@ impl World {
                 self.w.push(miner_payout as f64);
                 self.receive(i, miner_payout, &[(first + k, 1.0)], h0);
             }
-            self.add_output(step, i, m, miner_payout, OutTags::Coinbase { first });
+            self.add_output(
+                step,
+                i,
+                m,
+                miner_payout,
+                miner_payout,
+                OutTags::Coinbase { first },
+            );
         }
     }
 
     /// Consensus fee (and its demurrage part) for spending `v` pico, chunked
     /// into transactions of at most [`TX_CHUNK_PICO`]. Returns (fee,
-    /// demurrage, transactions).
+    /// demurrage, transactions, downgrade part): the downgrade part is the
+    /// demurrage above the time-accrued charge, i.e. the #925 capitalized
+    /// reset charge when it is the larger of the two (diagnostic only).
     fn price(
         &self,
         v: u128,
@@ -809,8 +1010,8 @@ impl World {
         elapsed: u64,
         height: u64,
         n_in: usize,
-    ) -> (u128, u128, u64) {
-        let (mut fee, mut dem, mut n_tx) = (0u128, 0u128, 0u64);
+    ) -> (u128, u128, u64, u128) {
+        let (mut fee, mut dem, mut n_tx, mut reset) = (0u128, 0u128, 0u64, 0u128);
         let mut left = v;
         while left > 0 {
             let chunk = left.min(TX_CHUNK_PICO);
@@ -831,8 +1032,16 @@ impl World {
             );
             fee += b.fee as u128;
             dem += b.demurrage as u128;
+            let accrued = demurrage_charge(
+                chunk as u64,
+                b.demurrage_factor,
+                elapsed,
+                self.fee_params.demurrage_rate_bps(height),
+                self.fee_params.blocks_per_year,
+            );
+            reset += b.demurrage.saturating_sub(accrued) as u128;
         }
-        (fee, dem, n_tx)
+        (fee, dem, n_tx, reset)
     }
 
     /// One spend by agent `a` at `height`: consolidate, price, pay.
@@ -845,7 +1054,7 @@ impl World {
         let in_tags = self.input_tags(a);
         let elapsed = height.saturating_sub(self.agents[a].oldest);
         let n_in = (self.agents[a].coins as usize).clamp(1, 16);
-        let (out_tags, fee, dem, n_tx) = if strategic_opt {
+        let (out_tags, fee, dem, n_tx, reset) = if strategic_opt {
             // Cheapest of: (a) claim the merged class undecayed (in-class,
             // accrued only) or (b) claim background and pay the downgrade
             // charge from the decoy-diluted floor. Decoys only ever lower the
@@ -870,23 +1079,26 @@ impl World {
                 n_in,
             );
             if pb.0 <= pa.0 {
-                (Vec::new(), pb.0, pb.1, pb.2)
+                (Vec::new(), pb.0, pb.1, pb.2, pb.3)
             } else {
-                (in_tags, pa.0, pa.1, pa.2)
+                (in_tags, pa.0, pa.1, pa.2, pa.3)
             }
         } else {
-            let out = finish_tags(
-                in_tags
-                    .iter()
-                    .map(|(c, wt)| (*c, wt * (1.0 - STOCK_WALLET_DECAY)))
-                    .collect(),
-            );
+            let keep = match self.p.tag_decay {
+                TagDecay::PerHop => 1.0 - STOCK_WALLET_DECAY,
+                // Keyed to time since the position's last spend, not to the
+                // number of hops (the same 5% per reference interval).
+                TagDecay::PerBlock => {
+                    (1.0 - STOCK_WALLET_DECAY).powf(elapsed as f64 / TIME_DECAY_REF_BLOCKS as f64)
+                }
+            };
+            let out = finish_tags(in_tags.iter().map(|(c, wt)| (*c, wt * keep)).collect());
             let claimed = self.factor(self.eff_wealth(&out));
             // Honest decoys are negligible in value: the ring floor is the
             // inputs' own effective wealth.
             let floor = self.factor(self.input_eff_wealth(a)).max(claimed);
-            let (f, d, n) = self.price(v, claimed, floor, elapsed, height, n_in);
-            (out, f, d, n)
+            let (f, d, n, r) = self.price(v, claimed, floor, elapsed, height, n_in);
+            (out, f, d, n, r)
         };
         let fee = fee.min(v);
         let net = v - fee;
@@ -919,16 +1131,21 @@ impl World {
         ag.mass.clear();
         ag.coins = 0;
         ag.prune_at = MASS_PRUNE_TRIGGER;
-        // The spend consumes every coin: none of them can win the lottery
-        // any more (the node draws only from unspent outputs). Eligible ones
-        // leave the window now; pending ones are skipped when their bucket
-        // matures because their generation is stale.
-        ag.generation = ag.generation.wrapping_add(1);
-        self.owner_counts[a] = 0;
-        self.owner_entries[a].clear();
+        // #1790 rule: the spend consumes every coin, and none of them can
+        // win the lottery any more. Eligible ones leave the window now;
+        // pending ones are skipped when their bucket matures because their
+        // generation is stale. With `spent_eligible` (what the node does:
+        // a ring spend only records a key image) the spent coins stay
+        // candidates until they age out, and a win still pays their owner.
+        if !self.p.spent_eligible {
+            ag.generation = ag.generation.wrapping_add(1);
+            self.owner_counts[a] = 0;
+            self.owner_entries[a].clear();
+        }
         let ag = &mut self.agents[a];
         ag.demurrage_paid += dem;
         self.demurrage += dem;
+        self.downgrade += reset;
         self.transactions += n_tx;
 
         self.credit_w(&out_tags, net);
@@ -937,8 +1154,16 @@ impl World {
         self.agents[a].oldest = height;
         self.receive(r, pay, &tags, height);
         let per = (net / (2 * n_tx as u128)).max(1);
-        self.add_output(step, a, n_tx, per, OutTags::Shared(tags.clone()));
-        self.add_output(step, r, n_tx, per, OutTags::Shared(tags));
+        let n = n_tx as u128;
+        self.add_output(
+            step,
+            a,
+            n_tx,
+            per,
+            change / n,
+            OutTags::Shared(tags.clone()),
+        );
+        self.add_output(step, r, n_tx, per, pay / n, OutTags::Shared(tags));
         fee
     }
 
@@ -974,6 +1199,14 @@ impl World {
                 slots += (self.draw.winners_per_draw as u64).min(rho);
             }
         }
+        if self.p.ticket_rule == TicketRule::TicketPrice {
+            // Next step's price: the average payout per ticket, so tickets
+            // bought and payouts balance in aggregate (p = R / T).
+            if self.tickets_bought > 0 {
+                self.ticket_price = payout_total / self.tickets_bought as u128;
+            }
+            self.tickets_bought = 0;
+        }
         if slots == 0 || payout_total == 0 {
             return;
         }
@@ -982,17 +1215,29 @@ impl World {
         self.carry += dust;
         self.lottery_paid += per_slot * slots as u128;
 
-        let weights: Vec<f64> = self.owner_counts.iter().map(|c| *c as f64).collect();
+        let uniform = matches!(
+            self.p.ticket_rule,
+            TicketRule::Uniform | TicketRule::TicketPrice
+        );
+        let weights: Vec<f64> = if uniform {
+            self.owner_counts.iter().map(|c| *c as f64).collect()
+        } else {
+            self.owner_entries
+                .iter()
+                .map(|es| es.iter().map(|e| self.entry_weight(e, step)).sum())
+                .collect()
+        };
         let wins = multinomial(&mut self.rng_lot, slots, &weights);
         for (o, k) in wins.into_iter().enumerate() {
             if k == 0 {
                 continue;
             }
-            // Spread the owner's k wins over its eligible outputs by count.
+            // Spread the owner's k wins over its eligible outputs by ticket
+            // weight (by count under the uniform rule).
             let mut picks: BTreeMap<usize, u64> = BTreeMap::new();
             let ew: Vec<f64> = self.owner_entries[o]
                 .iter()
-                .map(|e| e.count as f64)
+                .map(|e| self.entry_weight(e, step))
                 .collect();
             for (i, n) in multinomial(&mut self.rng_lot, k, &ew)
                 .into_iter()
@@ -1010,7 +1255,7 @@ impl World {
                         self.credit_w(&tags, value);
                         self.receive(o, value, &tags, h0);
                         self.agents[o].lottery_won += value;
-                        self.add_output(step, o, n, per_slot, OutTags::Shared(tags));
+                        self.add_output(step, o, n, per_slot, per_slot, OutTags::Shared(tags));
                     }
                     OutTags::Coinbase { first } => {
                         // Each win copies the tags of one coinbase output.
@@ -1020,7 +1265,7 @@ impl World {
                             self.credit_w(&tags, per_slot);
                             self.receive(o, per_slot, &tags, h0);
                             self.agents[o].lottery_won += per_slot;
-                            self.add_output(step, o, 1, per_slot, OutTags::Shared(tags));
+                            self.add_output(step, o, 1, per_slot, per_slot, OutTags::Shared(tags));
                         }
                     }
                 }
@@ -1081,6 +1326,8 @@ impl World {
             demurrage_bth: bth(self.demurrage),
             fees_bth: bth(self.fees),
             burned_bth: bth(self.burned),
+            ticket_burn_bth: bth(self.ticket_burn),
+            downgrade_bth: bth(self.downgrade),
             whale_priced_factor: self.priced_factor(whale),
         }
     }
@@ -1173,6 +1420,9 @@ mod tests {
             mechanism,
             seed: 7,
             tx_scale: 1.0,
+            ticket_rule: TicketRule::Uniform,
+            tag_decay: TagDecay::PerHop,
+            spent_eligible: false,
         }
     }
 
@@ -1360,6 +1610,156 @@ mod tests {
         let opt = w.optimal_floor(whale);
         assert!(opt <= honest, "opt {opt} <= honest {honest}");
         assert!(honest > 5_000);
+    }
+
+    /// #1801: the baseline (uniform tickets, per-hop decay, #1790 candidate
+    /// rule) is bit-for-bit the #1790 harness. The goldens were captured from
+    /// `m2_production.rs` at 5bb7969e, before the redesign switches existed:
+    /// 30 days from the start of epoch 1, seed 1696, honest whale, mechanism
+    /// on and off, both mining models, 1x and 100x density.
+    #[test]
+    fn baseline_reproduces_1790_bit_for_bit() {
+        // (mining, tx_scale, mechanism, gini bits, outputs, txs, lottery
+        // BTH bits, demurrage BTH bits)
+        type Golden = (MiningModel, f64, bool, u64, u64, u64, u64, u64);
+        let goldens: [Golden; 8] = [
+            (
+                MiningModel::WealthProportional,
+                1.0,
+                true,
+                0x3fedcfcf94f35788,
+                2_591_292,
+                1_086,
+                4698378751907483686,
+                4670662219687873389,
+            ),
+            (
+                MiningModel::WealthProportional,
+                1.0,
+                false,
+                0x3fedcfc892c81767,
+                520_572,
+                1_086,
+                0,
+                0,
+            ),
+            (
+                MiningModel::WealthProportional,
+                100.0,
+                true,
+                0x3fedc948f3731c60,
+                2_792_294,
+                101_587,
+                4702284146422142341,
+                4698367302383781520,
+            ),
+            (
+                MiningModel::WealthProportional,
+                100.0,
+                false,
+                0x3fedc46e45ad7916,
+                721_574,
+                101_587,
+                0,
+                0,
+            ),
+            (
+                MiningModel::Egalitarian,
+                1.0,
+                true,
+                0x3fe37befffc100bb,
+                2_591_292,
+                1_086,
+                4698421317636198927,
+                4674067477979002697,
+            ),
+            (
+                MiningModel::Egalitarian,
+                1.0,
+                false,
+                0x3fe36c204c776a50,
+                520_572,
+                1_086,
+                0,
+                0,
+            ),
+            (
+                MiningModel::Egalitarian,
+                100.0,
+                true,
+                0x3fe456c2a719ce56,
+                2_792_294,
+                101_587,
+                4702626505183157684,
+                4699223199281203697,
+            ),
+            (
+                MiningModel::Egalitarian,
+                100.0,
+                false,
+                0x3fe33276164b2b0e,
+                721_574,
+                101_587,
+                0,
+                0,
+            ),
+        ];
+        for (mining, tx_scale, mechanism, gini, outputs, txs, lottery, demurrage) in goldens {
+            let p = ProdParams {
+                horizon_blocks: 30 * 17_280,
+                snapshots: vec![30 * 17_280],
+                start_height: PROD_BLOCKS_PER_YEAR,
+                mining,
+                whale: WhaleStrategy::Honest,
+                mechanism,
+                tx_scale,
+                ..ProdParams::years(0, &[])
+            };
+            assert_eq!(p.ticket_rule, TicketRule::Uniform);
+            assert_eq!(p.tag_decay, TagDecay::PerHop);
+            assert!(!p.spent_eligible);
+            let r = run_m2_production(&p);
+            let s = &r.snapshots[0];
+            let tag = format!("{mining:?} x{tx_scale} mechanism={mechanism}");
+            assert_eq!(s.gini.to_bits(), gini, "{tag}: gini");
+            assert_eq!(r.outputs_created, outputs, "{tag}: outputs");
+            assert_eq!(r.transactions, txs, "{tag}: transactions");
+            assert_eq!(s.lottery_paid_bth.to_bits(), lottery, "{tag}: lottery paid");
+            assert_eq!(s.demurrage_bth.to_bits(), demurrage, "{tag}: demurrage");
+            assert_eq!(s.ticket_burn_bth, 0.0);
+        }
+    }
+
+    /// #1801: the full published #1790 numbers (seed 1696, consensus fees,
+    /// 20 years). Slow (about 4 minutes per pair), so ignored by default:
+    /// `cargo test --release -p bth-cluster-tax --features cli --lib
+    /// published_1790 -- --ignored`.
+    #[test]
+    #[ignore]
+    fn published_1790_numbers_reproduce() {
+        // (mining, gini on 10y, gini off 10y, gini on 20y, gini off 20y),
+        // from m2-production-verdicts.md "Main runs", honest whale.
+        let rows = [
+            (
+                MiningModel::WealthProportional,
+                0.9371,
+                0.9369,
+                0.9396,
+                0.9386,
+            ),
+            (MiningModel::Egalitarian, 0.3334, 0.3234, 0.4359, 0.3890),
+        ];
+        for (mining, on10, off10, on20, off20) in rows {
+            let mut p = ProdParams::years(20, &[10, 20]);
+            p.mining = mining;
+            p.whale = WhaleStrategy::Honest;
+            let pair = run_m2_production_pair(&p);
+            let r4 = |x: f64| (x * 1e4).round() / 1e4;
+            assert_eq!(r4(pair.on.snapshots[0].gini), on10, "{mining:?} on 10y");
+            assert_eq!(r4(pair.off.snapshots[0].gini), off10, "{mining:?} off 10y");
+            assert_eq!(r4(pair.on.snapshots[1].gini), on20, "{mining:?} on 20y");
+            assert_eq!(r4(pair.off.snapshots[1].gini), off20, "{mining:?} off 20y");
+        }
     }
 
     /// Fixed seed reproduces the run bit for bit.

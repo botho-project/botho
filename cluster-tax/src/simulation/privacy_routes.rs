@@ -1222,6 +1222,54 @@ pub fn run_route_row(
     }
 }
 
+/// Ages of one ring built by a production route: the real input's age and its
+/// decoys' ages, in blocks (#1801 redesign study).
+#[derive(Debug, Clone)]
+pub struct RouteRingAges {
+    pub real_age: u64,
+    pub decoy_ages: Vec<u64>,
+}
+
+/// Build `n` rings on `route` for real inputs of `spec` with the same pickers
+/// and real-age draws as [`run_route_row`], and return only their ages.
+/// Rings the picker refuses are skipped. Deterministic in `seed` (an
+/// independent stream from the report's training and evaluation rings).
+pub fn sample_route_ring_ages(
+    chain: &ChainModel,
+    route: DecoyRoute,
+    spec: RealAgeSpec,
+    n: usize,
+    seed: u64,
+) -> Vec<RouteRingAges> {
+    let mut rng = ChaCha8Rng::seed_from_u64(row_seed(seed, route, spec, 2));
+    let gamma = node_gamma().expect("valid gamma");
+    let fixed_ctx = match spec {
+        RealAgeSpec::Fixed(a) => Some(RowContext::new(chain, a.min(chain.max_age()), 0)),
+        RealAgeSpec::GammaSpend => None,
+    };
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let gamma_ctx;
+        let ctx = match &fixed_ctx {
+            Some(ctx) => ctx,
+            None => {
+                let age =
+                    (gamma.sample(&mut rng) as u64).clamp(MIN_DECOY_AGE_BLOCKS, chain.max_age());
+                let j = rng.random_range(0..chain.outputs_per_block);
+                gamma_ctx = RowContext::new(chain, age, j);
+                &gamma_ctx
+            }
+        };
+        if let Ok(decoys) = build_ring(chain, route, ctx, &mut rng) {
+            out.push(RouteRingAges {
+                real_age: chain.age_of(ctx.real_id),
+                decoy_ages: decoys.iter().map(|&id| chain.age_of(id)).collect(),
+            });
+        }
+    }
+    out
+}
+
 /// Run every `(route, real age)` row sequentially. The CLI parallelises over
 /// rows itself; every row is independently seeded, so the order of execution
 /// does not change the results.

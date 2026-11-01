@@ -1,0 +1,49 @@
+# Redistribution redesign study: splitting grid (#1801)
+
+### Splitting grid (#1761 grid, 192 points)
+
+Whale optimum per grid point (4 epochs x 2 backlogs x 3 organic rates x 2 fee modes x 2 factors x 2 capacities). "Node" = spent outputs stay candidates (what the node does). "Reveal" = spent outputs leave the draw (#1790's rule; needs the winner to reveal its key image). Value-linear rules: the whale re-spends up to 5000000 BTH per block; organic outputs are worth 10 BTH each. Reference point = epoch 1, backlog 0, rho_o 20, floor+MIN_TX_FEE, 6x, proposer slot.
+
+| variant | profitable (node) | profitable (reveal) | max net*/blk, node (BTH) | max net*/day, node (BTH) | reference net*/blk, node (BTH) | reference whale share, node |
+|---|---:|---:|---:|---:|---:|---:|
+| R0 baseline | 192/192 | 192/192 | +49.9975 | +863957 | +2.4660 | 98.7% |
+| R1 value-age | 192/192 | 0/192 | +49.9993 | +863988 | +2.4978 | 99.9% |
+| R2 inverse-factor | 192/192 | 0/192 | +49.9993 | +863988 | +2.4934 | 99.9% |
+| R3 ticket-price | 0/192 | 0/192 | +0.0000 | +0 | +0.0000 | 0.0% |
+| R4 time-decay | 192/192 | 192/192 | +49.9975 | +863957 | +2.4660 | 98.7% |
+| R5 inverse-factor+time-decay | 192/192 | 0/192 | +49.9993 | +863988 | +2.4934 | 99.9% |
+
+### Value-linear churn: sensitivity (node candidate rule)
+
+Profitable points out of 192 when the whale re-spends at most its capital per block.
+
+| whale capital (BTH) | organic output value (BTH) | R1 value-age | R2 inverse-factor |
+|---:|---:|---:|---:|
+| 1000 | 10 | 192/192 | 192/192 |
+| 1000 | 1000 | 180/192 | 180/192 |
+| 100000 | 10 | 192/192 | 192/192 |
+| 100000 | 1000 | 192/192 | 192/192 |
+| 5000000 | 10 | 192/192 | 192/192 |
+| 5000000 | 1000 | 192/192 | 192/192 |
+
+### R1 churn by epoch (node candidate rule, reference fee mode and capacity)
+
+| epoch | rho_o | factor | re-spent/blk (BTH) | whale share | net*/blk (BTH) | net*/day (BTH) |
+|---|---:|---:|---:|---:|---:|---:|
+| 0 | 20 | 1x | 5000000 | 100.0% | +0.0008 | +13 |
+| 0 | 20 | 6x | 5000000 | 100.0% | +0.0008 | +13 |
+| 0 | 200 | 1x | 5000000 | 100.0% | +0.0080 | +138 |
+| 0 | 200 | 6x | 5000000 | 100.0% | +0.0080 | +138 |
+| 1 | 20 | 1x | 5000000 | 100.0% | +2.5007 | +43212 |
+| 1 | 20 | 6x | 334096 | 99.9% | +2.4978 | +43162 |
+| 1 | 200 | 1x | 5000000 | 100.0% | +2.5070 | +43320 |
+| 1 | 200 | 6x | 1019579 | 99.8% | +2.4989 | +43181 |
+| 3 | 20 | 1x | 5000000 | 100.0% | +1.8757 | +32412 |
+| 3 | 20 | 6x | 334096 | 99.9% | +1.8733 | +32371 |
+| 3 | 200 | 1x | 5000000 | 100.0% | +1.8822 | +32525 |
+| 3 | 200 | 6x | 1019579 | 99.8% | +1.8752 | +32403 |
+| tail | 20 | 1x | 5000000 | 100.0% | +1.2117 | +20938 |
+| tail | 20 | 6x | 267276 | 99.9% | +1.2098 | +20905 |
+| tail | 200 | 1x | 5000000 | 100.0% | +1.2184 | +21054 |
+| tail | 200 | 6x | 815663 | 99.8% | +1.2127 | +20955 |
+
