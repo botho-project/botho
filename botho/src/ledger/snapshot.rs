@@ -62,10 +62,15 @@ const SNAPSHOT_V2_DOMAIN: &[u8] = b"botho.snapshot.2";
 const OUTPOINT_LEN: usize = 36;
 
 /// Hard ceiling on the total decompressed size of a V2 snapshot's sections
-/// and tip block: 2 GiB. Every section's output is additionally capped by its
-/// declared row count (see [`UtxoSnapshotV2::section_caps`]), so a forged or
-/// corrupt file can never make decompression allocate more than this,
-/// whatever its compression ratio.
+/// and tip block: 2 GiB. It is enforced on the bytes decompression actually
+/// produces (#1748): sections are decoded straight from a streaming zstd
+/// decoder through a byte counter, and decoding aborts the moment the
+/// running total would pass the ceiling, so a forged or corrupt file can
+/// never make decompression produce (or the decoder allocate for) more than
+/// this, whatever its compression ratio. Declared row counts are sanity
+/// bounds only (see [`UtxoSnapshotV2::check_declared_counts`]); they no
+/// longer gate a snapshot by a worst-case row width, which rejected honest
+/// snapshots at ~500K UTXOs (#1748).
 ///
 /// Until #1535 this was derived as twice the ledger's LMDB map (#1664
 /// review), when that map was 1 GiB. #1535 raised the map to 64 GiB of
@@ -73,20 +78,34 @@ const OUTPOINT_LEN: usize = 36;
 /// declare (and decompress into) 128 GiB of memory. The ceiling is therefore
 /// pinned at its former 2 GiB value. A snapshot's decompressed rows are the
 /// UTXO set and its indexes, not the block history that dominates the ledger
-/// file, so 2 GiB is far above any snapshot an honest ledger produces today;
-/// revisit it (and #1664's derivation argument) if the live UTXO set ever
-/// approaches it.
+/// file, so 2 GiB is far above any snapshot an honest ledger produces today
+/// (a protocol-6 hybrid UTXO is about 1.5 KB with its context and index
+/// entry, so roughly 1.3M of them); revisit it (and #1664's derivation
+/// argument) if the live UTXO set ever approaches it.
 pub const MAX_SNAPSHOT_DECOMPRESSED: u64 = 2 * 1024 * 1024 * 1024;
 
 /// Decompressed-size cap of the tip block (the stored-block bound of the
 /// strict ledger decoder, 16 MiB).
 pub const MAX_SNAPSHOT_TIP_BLOCK: u64 = 16 * 1024 * 1024;
 
-/// Conservative per-row maximum of a bincode `Utxo`, used as an *average*
-/// bound for the UTXO section. A protocol-6 hybrid output is about 1.5 KB
-/// (36 B id, amounts/keys, at most `MAX_CLUSTER_TAGS` = 16 tag entries, an
-/// optional memo and a 1,088 B ML-KEM-768 ciphertext); 4 KiB leaves headroom.
-const MAX_UTXO_ROW: u64 = 4096;
+/// Smallest possible bincode `Utxo` row: the 36 B outpoint, the amount, the
+/// target and public keys and `created_at` (every other field encodes to at
+/// least one byte more). A lower bound used only to reject declared counts
+/// that cannot fit under [`MAX_SNAPSHOT_DECOMPRESSED`]; never a gate on an
+/// honest snapshot, whose rows are judged by their actual bytes.
+const MIN_UTXO_ROW: u64 = OUTPOINT_LEN as u64 + 8 + 32 + 32 + 8;
+
+/// Smallest derivation-context row: `(Vec<u8> 36 B outpoint, Vec<u8>)`.
+const MIN_CONTEXT_ROW: u64 = LEN_PREFIX + OUTPOINT_LEN as u64 + LEN_PREFIX;
+
+/// Address-index row header: `([u8; 32], Vec<u8>)` without its ids, which
+/// total 36 B per UTXO.
+const ADDRESS_ROW_HEADER: u64 = 32 + LEN_PREFIX;
+
+/// Exact bincode widths of the fixed-width sections' rows.
+const KEY_IMAGE_ROW: u64 = 32 + 8;
+const CLUSTER_ROW: u64 = 8 + 16;
+const IMPORT_CLUSTER_ROW: u64 = 8;
 
 /// bincode `Vec` length prefix.
 const LEN_PREFIX: u64 = 8;
@@ -679,85 +698,115 @@ impl UtxoSnapshotV2 {
         decompress_bounded(&self.tip_block_data, MAX_SNAPSHOT_TIP_BLOCK, "tip block")
     }
 
-    /// Decompressed-size cap of each section, derived from the declared row
-    /// counts before anything is decompressed: `utxos, contexts,
-    /// address_index, key_images, cluster_wealth, import_clusters`. Fails if
-    /// any cap overflows or their sum plus the tip-block cap exceeds
-    /// [`MAX_SNAPSHOT_DECOMPRESSED`].
-    pub fn section_caps(&self) -> Result<[u64; 6], SnapshotError> {
+    /// Sanity-check the declared row counts before anything is decompressed,
+    /// returning the exact decompressed size of the fixed-width sections
+    /// `[key_images, cluster_wealth, import_clusters]`.
+    ///
+    /// Fails if the counts overflow, or if even the *smallest* possible
+    /// encoding of that many rows (plus the tip-block cap) would exceed
+    /// [`MAX_SNAPSHOT_DECOMPRESSED`]: such a header cannot describe a
+    /// snapshot that fits, so it is refused without decompressing anything.
+    /// The variable-width sections are not bounded by a worst-case row width
+    /// here (#1748); [`contents`](Self::contents) judges them by the bytes
+    /// they actually decompress to.
+    pub fn check_declared_counts(&self) -> Result<[u64; 3], SnapshotError> {
         let too_big = || {
             SnapshotError::Invalid(format!(
                 "declared row counts exceed the {MAX_SNAPSHOT_DECOMPRESSED} B decompressed \
                  snapshot ceiling"
             ))
         };
-        let cap = |count: u64, row: u64| {
+        let size = |count: u64, row: u64| {
             count
                 .checked_mul(row)
                 .and_then(|n| n.checked_add(LEN_PREFIX))
                 .ok_or_else(too_big)
         };
-        let caps = [
-            cap(self.utxo_count, MAX_UTXO_ROW)?,
-            // (Vec<u8> 36 B key, Vec<u8> <= 49 B Lottery encoding)
-            cap(self.context_count, LEN_PREFIX + 36 + LEN_PREFIX + 49)?,
-            // Rows of ([u8; 32], Vec<u8>); their ids total 36 B per UTXO.
-            cap(self.address_index_count, 32 + LEN_PREFIX)?
-                .checked_add(self.utxo_count.checked_mul(36).ok_or_else(too_big)?)
-                .ok_or_else(too_big)?,
-            cap(self.key_image_count, 32 + 8)?,
-            cap(self.cluster_count, 8 + 16)?,
-            cap(self.import_cluster_count, 8)?,
+        let fixed = [
+            size(self.key_image_count, KEY_IMAGE_ROW)?,
+            size(self.cluster_count, CLUSTER_ROW)?,
+            size(self.import_cluster_count, IMPORT_CLUSTER_ROW)?,
         ];
-        let total = caps
+        let minimums = [
+            size(self.utxo_count, MIN_UTXO_ROW)?,
+            size(self.context_count, MIN_CONTEXT_ROW)?,
+            size(self.address_index_count, ADDRESS_ROW_HEADER)?
+                .checked_add(
+                    self.utxo_count
+                        .checked_mul(OUTPOINT_LEN as u64)
+                        .ok_or_else(too_big)?,
+                )
+                .ok_or_else(too_big)?,
+        ];
+        let total = fixed
             .iter()
+            .chain(&minimums)
             .try_fold(MAX_SNAPSHOT_TIP_BLOCK, |sum, c| sum.checked_add(*c))
             .ok_or_else(too_big)?;
         if total > MAX_SNAPSHOT_DECOMPRESSED {
             return Err(too_big());
         }
-        Ok(caps)
+        Ok(fixed)
     }
 
-    /// Decompress (each section bounded by [`Self::section_caps`]) and
-    /// strictly decode every section. No integrity check beyond the bounds.
+    /// Decompress and strictly decode every section, judging the snapshot by
+    /// the bytes decompression actually produces: all sections together may
+    /// decompress to at most [`MAX_SNAPSHOT_DECOMPRESSED`] minus the
+    /// tip-block cap, and each fixed-width section to exactly its declared
+    /// size. Each section's leading row count must equal its declared count
+    /// (checked after 8 decompressed bytes, before any row is decoded). No
+    /// integrity check beyond that.
     pub fn contents(&self) -> Result<SnapshotV2Contents, SnapshotError> {
-        let [utxo, context, address, key_image, cluster, import] = self.section_caps()?;
+        self.contents_within(MAX_SNAPSHOT_DECOMPRESSED - MAX_SNAPSHOT_TIP_BLOCK)
+    }
+
+    /// [`contents`](Self::contents) with an explicit decompressed-byte budget
+    /// shared by all six sections (tests use a small one to exercise the
+    /// ceiling without allocating 2 GiB).
+    fn contents_within(&self, budget: u64) -> Result<SnapshotV2Contents, SnapshotError> {
+        let [key_image, cluster, import] = self.check_declared_counts()?;
+        let mut budget = SectionBudget { remaining: budget };
         Ok(SnapshotV2Contents {
-            utxos: de_strict(&decompress_bounded(&self.utxo_data, utxo, "UTXO")?)?,
-            contexts: de_strict(&decompress_bounded(&self.context_data, context, "context")?)?,
-            address_index: de_strict(&decompress_bounded(
+            utxos: budget.decode(&self.utxo_data, self.utxo_count, None, "UTXO")?,
+            contexts: budget.decode(&self.context_data, self.context_count, None, "context")?,
+            address_index: budget.decode(
                 &self.address_index_data,
-                address,
+                self.address_index_count,
+                None,
                 "address index",
-            )?)?,
-            key_images: de_strict(&decompress_bounded(
+            )?,
+            key_images: budget.decode(
                 &self.key_image_data,
-                key_image,
+                self.key_image_count,
+                Some(key_image),
                 "key image",
-            )?)?,
-            cluster_wealth: de_strict(&decompress_bounded(
+            )?,
+            cluster_wealth: budget.decode(
                 &self.cluster_wealth_data,
-                cluster,
+                self.cluster_count,
+                Some(cluster),
                 "cluster wealth",
-            )?)?,
-            import_clusters: de_strict(&decompress_bounded(
+            )?,
+            import_clusters: budget.decode(
                 &self.import_cluster_data,
-                import,
+                self.import_cluster_count,
+                Some(import),
                 "import cluster",
-            )?)?,
+            )?,
         })
     }
 
     /// Full integrity check. Returns the verified contents and tip block
     /// bytes, so a loader never acts on data other than what was verified.
     ///
-    /// Checks, cheapest first: version and storage marker; the decompression
-    /// bounds implied by the declared counts; the commitment over the header
+    /// Checks, cheapest first: version and storage marker; the sanity bounds
+    /// on the declared counts; the commitment over the header
     /// (declared counts and roots) and the bounded tip block, before any
     /// section is decompressed; then, per bounded section, canonical order,
     /// the one-context-per-UTXO and address-index bijections, and every
-    /// count and Merkle root against the decompressed data.
+    /// count and Merkle root against the decompressed data. Sections are
+    /// bounded by their actual decompressed bytes (see
+    /// [`contents`](Self::contents)).
     pub fn verify(&self) -> Result<(SnapshotV2Contents, Vec<u8>), SnapshotError> {
         if self.version != SNAPSHOT_VERSION_V2 {
             return Err(SnapshotError::VersionMismatch {
@@ -772,7 +821,7 @@ impl UtxoSnapshotV2 {
                 String::from_utf8_lossy(SNAPSHOT_V2_SCHEMA),
             )));
         }
-        self.section_caps()?;
+        self.check_declared_counts()?;
         let tip = self.tip_block_bytes()?;
         if self.compute_commitment(&sha256(&tip))? != self.commitment {
             return Err(SnapshotError::MerkleVerification(
@@ -971,6 +1020,121 @@ fn decompress_bounded(data: &[u8], cap: u64, what: &str) -> Result<Vec<u8>, Snap
         )));
     }
     Ok(out)
+}
+
+/// Reader that counts the bytes pulled through it and fails once more than
+/// `limit` would be produced, so a decompression bomb is cut off after at
+/// most `limit` bytes of output.
+struct CountingReader<R> {
+    inner: R,
+    count: u64,
+    limit: u64,
+    exceeded: bool,
+}
+
+impl<R: Read> Read for CountingReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        // Allow one byte past the limit so "exactly at the limit" and
+        // "past it" are distinguishable, then refuse.
+        let room = self.limit.saturating_add(1).saturating_sub(self.count);
+        let want = (buf.len() as u64).min(room) as usize;
+        if want == 0 && !buf.is_empty() {
+            self.exceeded = true;
+            return Err(std::io::Error::other("decompressed byte limit exceeded"));
+        }
+        let n = self.inner.read(&mut buf[..want])?;
+        self.count += n as u64;
+        if self.count > self.limit {
+            self.exceeded = true;
+            return Err(std::io::Error::other("decompressed byte limit exceeded"));
+        }
+        Ok(n)
+    }
+}
+
+/// Decompressed-byte budget shared by the V2 sections (#1748).
+struct SectionBudget {
+    remaining: u64,
+}
+
+impl SectionBudget {
+    /// Stream-decode one section (`zstd(bincode(Vec<Row>))`) without
+    /// buffering its decompressed bytes, charging the bytes actually produced
+    /// to the budget. `exact` is the fixed-width size of the section, if any
+    /// (it may only shrink the bound). Fails as soon as the output passes the
+    /// bound, if the leading row count differs from `declared`, on any strict
+    /// decoding error, or on trailing bytes.
+    ///
+    /// Allocation is bounded by bytes actually decoded: bincode's size limit
+    /// is checked before a byte buffer is sized from its length prefix, and
+    /// `Vec` preallocation from a sequence length is capped by serde.
+    fn decode<Row: serde::de::DeserializeOwned>(
+        &mut self,
+        data: &[u8],
+        declared: u64,
+        exact: Option<u64>,
+        what: &str,
+    ) -> Result<Vec<Row>, SnapshotError> {
+        use bincode::Options;
+        let cap = exact.map_or(self.remaining, |e| e.min(self.remaining));
+        let past = || {
+            SnapshotError::Decompression(format!(
+                "{what} section decompresses past its {cap} B bound"
+            ))
+        };
+        let decoder = zstd::stream::read::Decoder::with_buffer(data)
+            .map_err(|e| SnapshotError::Decompression(e.to_string()))?;
+        let mut reader = CountingReader {
+            inner: decoder,
+            count: 0,
+            limit: cap,
+            exceeded: false,
+        };
+        let io_err = |reader: &CountingReader<_>, e: std::io::Error| {
+            if reader.exceeded {
+                past()
+            } else {
+                SnapshotError::Decompression(e.to_string())
+            }
+        };
+        let mut prefix = [0u8; LEN_PREFIX as usize];
+        if let Err(e) = reader.read_exact(&mut prefix) {
+            return Err(io_err(&reader, e));
+        }
+        let rows = u64::from_le_bytes(prefix);
+        if rows != declared {
+            return Err(SnapshotError::Invalid(format!(
+                "{what} section holds {rows} rows but the header declares {declared}"
+            )));
+        }
+        let decoded: Result<Vec<Row>, _> = bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .with_limit(cap)
+            .deserialize_from(std::io::Read::chain(&prefix[..], &mut reader));
+        let decoded = match decoded {
+            Ok(rows) => rows,
+            Err(e) => {
+                return Err(match *e {
+                    _ if reader.exceeded => past(),
+                    bincode::ErrorKind::SizeLimit => past(),
+                    other => SnapshotError::Serialization(other.to_string()),
+                })
+            }
+        };
+        // Strict: the section must end exactly where its rows do.
+        let mut extra = [0u8; 1];
+        match reader.read(&mut extra) {
+            Ok(0) => {}
+            Ok(_) => {
+                return Err(SnapshotError::Serialization(format!(
+                    "{what} section has trailing bytes"
+                )))
+            }
+            Err(e) => return Err(io_err(&reader, e)),
+        }
+        self.remaining -= reader.count;
+        Ok(decoded)
+    }
 }
 
 /// Decompress zstd-compressed data (unbounded: V1 snapshots only, which
@@ -1226,5 +1390,272 @@ mod tests {
 
         assert_eq!(recovered.chain_state.total_mined, big_mined);
         assert_eq!(recovered.chain_state.total_fees_burned, big_burned);
+    }
+
+    // ---- V2 decompression ceiling (#1748) ----------------------------------
+
+    /// A canonical V2 contents with `utxos` distinct UTXOs (each with a
+    /// context and its own address-index row) and `key_images` key images.
+    fn v2_contents(utxos: usize, key_images: usize) -> SnapshotV2Contents {
+        let mut rows: Vec<Utxo> = (0..utxos)
+            .map(|i| {
+                let mut hash = [0u8; 32];
+                hash[..8].copy_from_slice(&(i as u64).to_be_bytes());
+                let mut target = [0u8; 32];
+                target[..8].copy_from_slice(&(i as u64).to_be_bytes());
+                Utxo {
+                    id: UtxoId::new(hash, 0),
+                    output: TxOutput {
+                        amount: 1,
+                        target_key: target,
+                        public_key: [2; 32],
+                        e_memo: None,
+                        cluster_tags: ClusterTagVector::default(),
+                        kem_ciphertext: None,
+                    },
+                    created_at: 1,
+                }
+            })
+            .collect();
+        rows.sort_by_key(|u| u.id.to_bytes());
+        let contexts = rows
+            .iter()
+            .map(|u| (u.id.to_bytes().to_vec(), vec![0u8]))
+            .collect();
+        let mut address_index: Vec<([u8; 32], Vec<u8>)> = rows
+            .iter()
+            .map(|u| (u.output.target_key, u.id.to_bytes().to_vec()))
+            .collect();
+        address_index.sort_by_key(|(t, _)| *t);
+        let key_images = (0..key_images as u64)
+            .map(|i| {
+                let mut ki = [0u8; 32];
+                ki[..8].copy_from_slice(&i.to_be_bytes());
+                (ki, 1)
+            })
+            .collect();
+        SnapshotV2Contents {
+            utxos: rows,
+            contexts,
+            address_index,
+            key_images,
+            cluster_wealth: vec![(1, 10)],
+            import_clusters: vec![1],
+        }
+    }
+
+    fn v2_snapshot(contents: &SnapshotV2Contents) -> UtxoSnapshotV2 {
+        UtxoSnapshotV2::new(
+            [7; 32],
+            1000,
+            [1; 32],
+            test_chain_state(),
+            0,
+            b"tip block",
+            contents,
+        )
+        .unwrap()
+    }
+
+    /// Total bytes the six sections actually decompress to.
+    fn v2_actual_bytes(s: &UtxoSnapshotV2) -> u64 {
+        [
+            &s.utxo_data,
+            &s.context_data,
+            &s.address_index_data,
+            &s.key_image_data,
+            &s.cluster_wealth_data,
+            &s.import_cluster_data,
+        ]
+        .iter()
+        .map(|d| decompress(d).unwrap().len() as u64)
+        .sum()
+    }
+
+    /// The bound the pre-#1748 loader charged a snapshot, before decompressing
+    /// anything: declared counts times a worst-case row width.
+    fn old_worst_case_bytes(s: &UtxoSnapshotV2) -> u64 {
+        MAX_SNAPSHOT_TIP_BLOCK
+            + (s.utxo_count * 4096 + 8)
+            + (s.context_count * (8 + 36 + 8 + 49) + 8)
+            + (s.address_index_count * 40 + 8 + s.utxo_count * 36)
+            + (s.key_image_count * 40 + 8)
+            + (s.cluster_count * 24 + 8)
+            + (s.import_cluster_count * 8 + 8)
+    }
+
+    /// `MIN_UTXO_ROW` must really be a lower bound, or the declared-count
+    /// sanity check could refuse an honest snapshot.
+    #[test]
+    fn test_min_utxo_row_is_a_lower_bound() {
+        let minimal = Utxo {
+            id: UtxoId::new([0; 32], 0),
+            output: TxOutput {
+                amount: 0,
+                target_key: [0; 32],
+                public_key: [0; 32],
+                e_memo: None,
+                cluster_tags: ClusterTagVector::default(),
+                kem_ciphertext: None,
+            },
+            created_at: 0,
+        };
+        assert!(ser(&minimal).unwrap().len() as u64 >= MIN_UTXO_ROW);
+        assert_eq!(ser(&minimal.id).unwrap().len(), OUTPOINT_LEN);
+    }
+
+    #[test]
+    fn test_v2_snapshot_verifies() {
+        let contents = v2_contents(50, 20);
+        let snapshot = v2_snapshot(&contents);
+        let (verified, tip) = snapshot.verify().unwrap();
+        assert_eq!(verified.utxos.len(), 50);
+        assert_eq!(verified.key_images.len(), 20);
+        assert_eq!(tip, b"tip block");
+    }
+
+    /// Declared counts are sanity bounds only: >1M UTXOs and >10M key images
+    /// pass, where the old worst-case row width refused at ~500K UTXOs.
+    /// Counts that cannot fit even at the minimum row width are refused
+    /// before anything is decompressed.
+    #[test]
+    fn test_declared_counts_are_not_charged_worst_case_widths() {
+        let mut s = v2_snapshot(&v2_contents(1, 1));
+        s.utxo_count = 1_100_000;
+        s.context_count = 1_100_000;
+        s.address_index_count = 1_100_000;
+        s.key_image_count = 10_500_000;
+        assert!(old_worst_case_bytes(&s) > MAX_SNAPSHOT_DECOMPRESSED);
+        s.check_declared_counts().unwrap();
+
+        for (utxos, key_images) in [
+            (MAX_SNAPSHOT_DECOMPRESSED / MIN_UTXO_ROW, 0),
+            (0, MAX_SNAPSHOT_DECOMPRESSED / KEY_IMAGE_ROW),
+            (u64::MAX, 0),
+            (0, u64::MAX),
+        ] {
+            let mut forged = v2_snapshot(&v2_contents(1, 1));
+            forged.utxo_count = utxos;
+            forged.key_image_count = key_images;
+            let err = forged.check_declared_counts().unwrap_err();
+            assert!(
+                err.to_string().contains("decompressed snapshot ceiling"),
+                "{err}"
+            );
+            assert!(forged.contents().is_err());
+        }
+    }
+
+    /// The ceiling is judged by actual decompressed bytes: scaled down to a
+    /// budget of exactly the snapshot's real size, a snapshot with far more
+    /// UTXOs than the old worst-case width allowed for that budget is
+    /// accepted, and one byte less is refused.
+    #[test]
+    fn test_v2_budget_is_judged_by_actual_bytes() {
+        let snapshot = v2_snapshot(&v2_contents(2_000, 2_000));
+        let actual = v2_actual_bytes(&snapshot);
+        let old_charge = old_worst_case_bytes(&snapshot) - MAX_SNAPSHOT_TIP_BLOCK;
+        assert!(
+            old_charge > 2 * actual,
+            "old worst-case charge {old_charge} vs actual {actual}"
+        );
+        let decoded = snapshot.contents_within(actual).unwrap();
+        assert_eq!(decoded.utxos.len(), 2_000);
+        let err = snapshot.contents_within(actual - 1).unwrap_err();
+        assert!(err.to_string().contains("decompresses past its"), "{err}");
+    }
+
+    /// A decompression bomb (a few KB inflating to 64 MiB) is cut off as
+    /// soon as its output passes the budget, not after inflating fully.
+    #[test]
+    fn test_v2_bomb_is_cut_off_at_the_budget() {
+        let mut snapshot = v2_snapshot(&v2_contents(1, 1));
+        // contexts = [(36 B key, Vec<u8> of 2^40 zero bytes)] truncated at 64 MiB.
+        let mut raw = 1u64.to_le_bytes().to_vec();
+        raw.extend_from_slice(&36u64.to_le_bytes());
+        raw.extend_from_slice(&snapshot.contents().unwrap().contexts[0].0);
+        raw.extend_from_slice(&(1u64 << 40).to_le_bytes());
+        raw.resize(raw.len() + (64 << 20), 0);
+        snapshot.context_data = zstd::encode_all(&raw[..], 19).unwrap();
+        assert!(snapshot.context_data.len() < 16 << 10);
+
+        let budget = 1 << 20;
+        let err = snapshot.contents_within(budget).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("context section decompresses past its"),
+            "{err}"
+        );
+
+        // The streaming counter itself never yields more than limit + 1 bytes.
+        let mut reader = CountingReader {
+            inner: zstd::stream::read::Decoder::with_buffer(&snapshot.context_data[..]).unwrap(),
+            count: 0,
+            limit: budget,
+            exceeded: false,
+        };
+        let mut sink = Vec::new();
+        assert!(reader.read_to_end(&mut sink).is_err());
+        assert!(reader.exceeded);
+        assert!(sink.len() as u64 <= budget + 1, "{}", sink.len());
+    }
+
+    /// A header whose counts disagree with a section's own row count, or a
+    /// forged huge count over a tiny body, fails without decoding rows.
+    #[test]
+    fn test_v2_forged_counts_fail_fast() {
+        let snapshot = v2_snapshot(&v2_contents(3, 3));
+
+        let mut mismatch = snapshot.clone();
+        mismatch.utxo_count = 4;
+        let err = mismatch.contents().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("UTXO section holds 3 rows but the header declares 4"),
+            "{err}"
+        );
+
+        // Header and section prefix both claim 10M UTXOs; the body is empty.
+        let mut forged = snapshot.clone();
+        forged.utxo_count = 10_000_000;
+        forged.context_count = 0;
+        forged.address_index_count = 0;
+        forged.utxo_data = compress(&10_000_000u64.to_le_bytes()).unwrap();
+        forged.context_data = compress(&ser(&Vec::<(Vec<u8>, Vec<u8>)>::new()).unwrap()).unwrap();
+        forged.address_index_data =
+            compress(&ser(&Vec::<([u8; 32], Vec<u8>)>::new()).unwrap()).unwrap();
+        forged.check_declared_counts().unwrap();
+        assert!(forged.contents().is_err());
+
+        // Trailing bytes after the last row are refused.
+        let mut trailing = snapshot.clone();
+        let mut raw = decompress(&snapshot.key_image_data).unwrap();
+        raw.push(0);
+        trailing.key_image_data = compress(&raw).unwrap();
+        assert!(trailing.contents().is_err());
+        let mut raw = decompress(&snapshot.utxo_data).unwrap();
+        raw.push(0);
+        trailing = snapshot.clone();
+        trailing.utxo_data = compress(&raw).unwrap();
+        let err = trailing.contents().unwrap_err();
+        assert!(err.to_string().contains("trailing bytes"), "{err}");
+    }
+
+    /// Acceptance-scale honest snapshot (>1M UTXOs, >10M key images), which
+    /// the pre-#1748 worst-case row width refused outright (~2.2 GB RSS,
+    /// ~7 min in debug; 702 MB of actual section bytes);
+    /// on demand: `--ignored`.
+    #[test]
+    #[ignore = "heavy (1.1M UTXOs + 10.5M key images); run with --ignored"]
+    fn test_v2_large_honest_snapshot_loads() {
+        let contents = v2_contents(1_100_000, 10_500_000);
+        let snapshot = v2_snapshot(&contents);
+        drop(contents);
+        assert!(old_worst_case_bytes(&snapshot) > MAX_SNAPSHOT_DECOMPRESSED);
+        let actual = v2_actual_bytes(&snapshot);
+        assert!(actual < MAX_SNAPSHOT_DECOMPRESSED, "{actual} B");
+        let (verified, _) = snapshot.verify().unwrap();
+        assert_eq!(verified.utxos.len(), 1_100_000);
+        assert_eq!(verified.key_images.len(), 10_500_000);
     }
 }
