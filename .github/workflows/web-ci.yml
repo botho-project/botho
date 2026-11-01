@@ -155,6 +155,17 @@ jobs:
       # no live betanet).
       - name: Run Snap tests (@metamask/snaps-jest)
         run: pnpm --filter @botho/snap test:snap
+
+      # Unresolved elliptic advisory GHSA-848j-6mx2-7j84 (#1562): upstream has
+      # published no fix, and the advisory is not suppressed. This step checks
+      # that elliptic stays limited to Snap build/test tooling: no production
+      # importer reaches it, the crypto polyfill stays off, and the bundle that
+      # was just built contains no elliptic code. Evidence is in
+      # audits/2026-10-31-elliptic-snap-tooling.md.
+      - name: Check elliptic containment (#1562)
+        run: |
+          node --test scripts/elliptic-why.test.mjs
+          node scripts/check-elliptic-containment.mjs --require-bundle snap
       # -------------------------------------------------------------------------
 
       # Validate the worker still bundles/deploys without actually shipping it.
