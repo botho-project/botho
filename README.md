@@ -247,6 +247,7 @@ Botho is derived from [MobileCoin](https://github.com/mobilecoinfoundation/mobil
 | [bridge](./bridge) | BTH bridge core and bridge service |
 | [cluster-tax](./cluster-tax) | Progressive fee mechanism and monetary policy |
 | [consensus/scp](./consensus/scp) | Stellar Consensus Protocol implementation |
+| [consensus/quorum-sim](./consensus/quorum-sim) | Quorum-health analyzer and SCP simulator for the curated federation (`bth-quorum-sim`) |
 | [contracts](./contracts) | Ethereum and Solana bridge contracts |
 | [core](./core) | Core shared types |
 | [common](./common) | Shared API-boundary types, errors, and logging |
