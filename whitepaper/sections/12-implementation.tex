@@ -323,7 +323,7 @@ after sufficient confirmations.
 \textbf{Constraint} & \textbf{Limit} & \textbf{Bottleneck} \\
 \midrule
 Block size (2 MB) & $\sim$500 tx/block & Storage/bandwidth \\
-Block time (5s min) & 100 TPS peak & Consensus latency \\
+Block time (5s tier) & 100 TPS peak & Consensus latency \\
 Validation speed & 1,400 TPS & CPU (6 cores) \\
 Network propagation & 200 TPS & Bandwidth (10 Mbps) \\
 \midrule
@@ -331,6 +331,13 @@ Network propagation & 200 TPS & Bandwidth (10 Mbps) \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+The block-time row uses the 5-second tier, the sustained high-load level and
+monetary reference. The consensus floor is 3 seconds
+(\path{ConsensusConfig::MIN_BLOCK_TIME_SECS},
+\path{botho/src/consensus/service.rs:58}), reached at $\geq$20 tx/s; while
+load holds that tier, the block-time bound is $\approx$167 TPS and network
+propagation (200 TPS) is the next limit.
 
 \subsubsection{Comparison to Existing Systems}
 
@@ -546,15 +553,20 @@ Wallets provide clear fee information:
 \begin{lstlisting}[caption={Fee estimation display}]
 Transaction Summary:
   Amount:      50.00 BTH
-  Base fee:     4,800 pico-BTH   (4 KB x 1 pico/byte x 1.2 factor)
-  Cluster factor: 1.2x
-  Total fee:    4,800 pico-BTH   (= 4.8e-9 BTH)
+  Consensus floor: 19,200 pico-BTH  (4 KB x 1 pico/byte x 1.2 factor
+                                     x 2^2 output penalty)
+  Cluster factor:  1.2x
+  Relay minimum:   100,000,000 pico-BTH  (MIN_TX_FEE)
+  Total fee:       100,000,000 pico-BTH  (= 1e-4 BTH)
 
   [Expected confirmation: ~5 seconds]
 \end{lstlisting}
 
-\textbf{Fee transparency}: Users see both the base fee and their cluster
-factor multiplier, promoting awareness of the progressive fee mechanism.
+\textbf{Fee transparency}: Users see the consensus floor and their cluster
+factor multiplier. At today's constants the flat relay minimum
+(\path{MIN_TX_FEE}, \path{transaction/clsag/src/lib.rs:90}) exceeds
+the floor, so it sets the fee an ordinary wallet pays (pending \#1688,
+\#1684).
 
 \subsubsection{Error Handling}
 

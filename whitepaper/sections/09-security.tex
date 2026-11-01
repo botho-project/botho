@@ -713,34 +713,54 @@ lottery rewards to their own UTXOs?
   \item Bias the lottery toward controlled UTXOs
 \end{enumerate}
 
-\textbf{Defense mechanism}: The lottery seed is derived only from the
-\emph{committed previous block}:
+\textbf{Defense mechanism}: Since protocol 7.0.0 the lottery seed is
+derived from the parent block's proof-of-work fields
+(\path{lottery_seed_v2}, \path{botho/src/consensus/lottery.rs:81};
+issue \#1676):
 \[
-\text{seed} = \Hash(\text{``LOTTERY\_SEED\_V1''} \| \text{prev\_block\_hash} \| h).
+\text{seed}_h = \text{SHA256}(\text{``BOTHO\_LOTTERY\_SEED\_V2''} \,\|\, \text{pow\_hash}_{h-1} \,\|\, \text{prev\_block\_hash}_{h-1} \,\|\, h),
 \]
+where $\text{pow\_hash}_{h-1}$ is the parent's RandomX output over
+$\text{nonce} \,\|\, \text{prev} \,\|\, \text{minter keys}$
+(\path{BlockHeader::pow_hash}, \path{botho/src/block.rs:96}).
 
 \textbf{Analysis}:
 \begin{itemize}
-  \item The seed does not depend on the current block's transactions, merkle
-    root, or ordering, so the proposer of block $h$ cannot bias the draw by
-    selecting or reordering its own transactions.
-  \item \texttt{prev\_block\_hash} is already externalized by SCP before block
-    $h$ is built, so it is fixed for every honest and Byzantine proposer alike.
-  \item The only remaining lever is to regrind the \emph{previous} block's PoW
-    to change its hash --- but this costs a full PoW solution, and the payout
-    it can redirect is bounded by the per-block cap (one block reward).
+  \item The seed does not depend on block $h$'s transactions or ordering, so
+    the proposer of block $h$ cannot bias the draw through its own body.
+  \item The parent's header hash is not an input. It covers the timestamp
+    and the coinbase output, which a minter can change without new proof of
+    work; binding only PoW-preimage fields means every change of seed costs a
+    fresh PoW solution.
+  \item \textbf{Candidate-set channel (open).} Block $h$'s candidates are read
+    from the state after block $h-1$, and $\text{pow\_hash}_{h-1}$ does not
+    commit to $h-1$'s transactions. Once $h-1$'s PoW is solved and the seed is
+    known, whoever assembles $h-1$'s body can choose which eligible outputs to
+    spend in it, changing block $h$'s candidate list and winners. Each
+    alternative costs about one transaction fee, not a PoW solution. Whether
+    this is feasible within SCP nomination timing is unverified (as built,
+    pending \#1689).
 \end{itemize}
 
-\textbf{Cost-benefit (the load-bearing bound)}: The pool pays out at most one
-block reward per block. Regrinding the previous block to reshape the seed
-therefore trades a full PoW solution (worth one block reward in expectation)
-for the chance to redirect at most a fraction of one reward:
+\textbf{Cost-benefit for PoW regrinding}: A miner that discards a valid
+solution to try for a different seed forfeits that block's coinbase. The
+coinbase is the reward minus the lottery emission share, so the forfeit is
+$(1-f_{\text{em}})\,R(h)$, where $f_{\text{em}}$ is 0 in the first halving
+epoch and rises to a 50\% cap (\path{miner_payout},
+\path{botho/src/block.rs:381}). The payout the new seed can redirect is at
+most one block reward:
 \[
-\text{grinding\_cost} \;\approx\; R(h) \;>\; \Delta_{\text{payout}} \leq R(h) \times P(\text{controlled UTXO wins}).
+\text{grinding\_cost} \;\approx\; (1-f_{\text{em}})\,R(h),
+\qquad
+\Delta_{\text{payout}} \;\leq\; R(h) \times P(\text{controlled UTXO wins}).
 \]
-
-Grinding is unprofitable by construction: the cost of the extra PoW solution
-exceeds the capped payout it can capture.
+In the first epoch ($f_{\text{em}} = 0$) the forfeit is a full reward and
+exceeds any redirectable payout. As $f_{\text{em}}$ rises to 50\%, the forfeit
+falls to half a reward while the redirectable payout stays up to one reward,
+so the bound no longer holds by construction for a grinder whose controlled
+outputs hold a large share of the eligible tickets. Ticket share is cheap to
+acquire while the splitting cost premises are unmet (\#1682), so the grinding
+bound depends on resolving that issue as well.
 
 \subsubsection{Scenario: Eclipse Attack on Light Client}
 
@@ -797,9 +817,16 @@ factor.
 
   \item \textbf{Wash trading}: Rapid self-transfers to decay tags
     \begin{itemize}
-      \item \textit{Result}: Decay requires 720-block minimum age
-      \item \textit{Outcome}: Maximum 12 decay events/day, 27-hour half-life
-      \item \textit{Cost}: Transaction fees during wash trading
+      \item \textit{Result}: Consensus applies no decay and does not
+        rate-limit it; it rejects only tag \emph{inflation}
+        (\path{CONSENSUS_TAG_DECAY_RATE} $= 0$,
+        \path{botho/src/ledger/store.rs:102})
+      \item \textit{Outcome}: Stock wallets decay 5\% per transfer with no
+        age gate (half-life $\approx$13.5 transfers); a modified wallet can
+        write empty tags in one transaction (as built, pending \#1687)
+      \item \textit{Cost}: Transaction fees plus the class-downgrade charge,
+        which is zero in the first halving epoch (pending \#1685) and can be
+        diluted by decoy choice (pending \#1686)
     \end{itemize}
 
   \item \textbf{Exchange laundering}: Deposit to exchange, withdraw different
@@ -811,8 +838,9 @@ factor.
     \end{itemize}
 \end{enumerate}
 
-\textbf{Conclusion}: Only genuine economic activity (trading, spending)
-reduces cluster factor. Sybil attacks provide no benefit.
+\textbf{Conclusion}: Splitting and new addresses provide no benefit. Wash
+trading is bounded only by the class-downgrade charge, not by a decay rate
+limit; whether consensus should guarantee tag persistence is open (\#1687).
 
 \subsection{Known Limitations}
 

@@ -9,7 +9,7 @@ This section contains design proposals, roadmaps, and technical specifications f
 | Document | Status | Description |
 |----------|--------|-------------|
 | [Minting Proximity Fees](minting-proximity-fees.md) | Research | Conceptual framing: cluster tags track minting origin |
-| [Cluster Tag Decay](cluster-tag-decay.md) | Implemented | Phase 1: Age-based decay mechanism |
+| [Cluster Tag Decay](cluster-tag-decay.md) | Not implemented | Age-based decay design; consensus applies no decay and wallets decay 5% per transfer (#1687) |
 | [Entropy-Weighted Decay](entropy-weighted-decay.md) | Proposed | Phase 2: Commerce-sensitive decay |
 | [Progressive Fees](../concepts/progressive-fees.md) | Implemented | Fee curve and economic effects |
 
@@ -17,10 +17,10 @@ This section contains design proposals, roadmaps, and technical specifications f
 
 | Document | Status | Description |
 |----------|--------|-------------|
-| [Cluster-Tilted Redistribution](cluster-tilted-redistribution.md) | Proposed | Validated design: cluster-tilted lottery + emission routing + demurrage. Passes Δgini > 0.05 in gamed equilibrium |
+| [Cluster-Tilted Redistribution](cluster-tilted-redistribution.md) | Superseded (payout) | Tilted payout replaced by the Path C uniform draw (ADR 0009); emission routing and demurrage shipped |
 | [Asymmetric UTXO Fees](asymmetric-utxo-fees.md) | Superseded | Combined mechanism: attack-resistant but zero Gini reduction (see sweep). Redistribution goals superseded by cluster-tilted design |
 | [Asymmetric Fees Simulation](asymmetric-fees-simulation.md) | Executed | Sweep run 2026-06-11: attack resistance PASS, Gini reduction FAIL |
-| [Lottery Redistribution](lottery-redistribution.md) | Reference | Background analysis of lottery trade-offs |
+| [Lottery Redistribution](lottery-redistribution.md) | Superseded | Historical background; current spec is ADR 0009 + whitepaper section 7 |
 
 ### Entropy Proofs
 

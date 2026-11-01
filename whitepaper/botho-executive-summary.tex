@@ -102,10 +102,9 @@ coin \emph{ancestry}, not current ownership---preserves privacy.
 
 \textbf{Fee distribution}:
 \begin{itemize}
-\item 80\% redistributed via a cluster-tilted lottery to 4 winning UTXOs per
-  block: winner weight is UTXO value scaled by inverse cluster factor, so
-  payouts favor coins from low-wealth clusters while remaining immune to
-  splitting strategies
+\item 80\% redistributed via a lottery to 4 winning UTXOs per block, drawn
+  uniformly from recently created outputs (with a PoW-bound seed); its
+  anti-splitting cap is under review (\#1682)
 \item 20\% burned (creates deflationary pressure proportional to usage)
 \end{itemize}
 

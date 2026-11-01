@@ -2,6 +2,29 @@
 
 ## Status
 
+**Superseded** (2026-10-31, #1703). This is historical background, not the
+current specification. The lottery as built (protocol 7.0.0) draws 4 winners
+**uniformly** from outputs aged 720-10,000 blocks and worth at least 1e6 pico,
+seeded from the parent block's PoW fields (`BOTHO_LOTTERY_SEED_V2`), with a
+payout cap `min(rho * 0.25 BTH, block_reward)` and a cumulative carry-forward
+pool fed by fees and an emission share. Fees are not distributed immediately,
+and the per-output fee does not make splitting prohibitive at today's
+constants (#1682, #1688).
+
+Current specification:
+- Code: `botho/src/consensus/lottery.rs` (seed, cap, pool accounting),
+  `botho/src/ledger/lottery_v2.rs` (`drawing`),
+  `botho/src/ledger/store/validation.rs` (`lottery_candidates`),
+  `cluster-tax/src/lottery.rs` (`LotteryDrawConfig::default`, uniform draw).
+- Design record: [ADR 0009](../decisions/0009-confidential-amounts-economics.md),
+  [Path C research memo](../research/ct-compatible-lottery-selection.md).
+- Whitepaper section 7 (Lottery Mechanism), section 9 (Lottery Grinding), and
+  Appendix "Fee Processing" pseudocode.
+- Open issues against the as-built draw: #1682 (splitting), #1689 (candidate-set
+  re-roll), #1690 (free coinbase/payout tickets), #1691 (carry-forward drain).
+
+Original status line, kept for history:
+
 **Reference** - Background analysis for current mechanism
 
 > This document provides valuable analysis of the progressivity-Sybil trade-off

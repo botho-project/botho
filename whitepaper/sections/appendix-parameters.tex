@@ -102,14 +102,18 @@ Monetary reference & 5 seconds & Sustained-high-load level \\
   \item Dynamic adjustment aligns emission with network utility
 \end{itemize}
 
-\textbf{Lower bound justification (5s)}:
+\textbf{Lower bound (3s)}: the consensus floor is the fastest dynamic-timing
+tier, 3 seconds at $\geq$20 tx/s (\path{ConsensusConfig::MIN_BLOCK_TIME_SECS},
+\path{botho/src/consensus/service.rs:58}; \path{BLOCK_TIME_LEVELS},
+\path{botho/src/block.rs:832}, with a compile-time check that the two agree).
+The budget is roughly:
 \begin{itemize}
   \item SCP nomination: $\sim$1 second
   \item Ballot prepare: $\sim$1 second
-  \item Ballot commit: $\sim$1 second
-  \item Network propagation: $\sim$1 second
-  \item Safety margin: $\sim$1 second
+  \item Ballot commit and propagation: $\sim$1 second
 \end{itemize}
+This leaves no explicit safety margin, which is why 3 seconds is used only
+under sustained very high load; the 5-second tier is the monetary reference.
 
 \subsubsection{Quorum Thresholds: 3-of-4 Infrastructure, 2-of-3 Community}
 
@@ -300,26 +304,26 @@ and the midpoint ($3.5\times$) sits at 100k BTH.
   \item Most users (bottom 50\%) experience near-base fees
 \end{itemize}
 
-\subsubsection{Tag Decay: 0.95 Rate, 720-Block Minimum Age}
+\subsubsection{Tag Decay: 0.95 per Transfer (Wallet Policy)}
 
-\textbf{Decay rate 0.95}:
+\textbf{As built} (Section~\ref{sec:tag-decay}):
 \begin{itemize}
-  \item Half-life: $\ln(0.5) / \ln(0.95) \approx 13.5$ decay events
-  \item At maximum 1 decay per 720 blocks ($\sim$1 hour at the 5\,s
-    reference): $\approx$13.5 hours half-life
-  \item Encourages circulation without rapid tag elimination
+  \item Stock wallets retain 0.95 of each tag weight per transfer
+    (\path{DEFAULT_CLUSTER_DECAY_RATE} $= 50{,}000$ ppm,
+    \path{botho/src/wallet.rs:106},
+    \path{botho-wallet/src/transaction.rs:48}), with no age gate
+  \item Half-life: $\ln(0.5) / \ln(0.95) \approx 13.5$ transfers, with no
+    time bound
+  \item Consensus applies no decay (\path{CONSENSUS_TAG_DECAY_RATE}
+    $= 0$, \path{botho/src/ledger/store.rs:102}) and rejects only tag
+    inflation, so lower or empty output tags are valid (pending \#1687)
 \end{itemize}
 
-\textbf{Minimum age 720 blocks}:
-\begin{itemize}
-  \item $\sim$1 hour at the 5\,s reference block time (longer when blocks are
-    slower under the dynamic schedule)
-  \item Prevents rapid wash trading from bypassing progressive fees
-  \item Patient wash trading over one week ($\sim$168 decay events) approaches
-    100\% decay; the binding cost is the enforced inter-decay age, not the
-    number of transactions
-  \item Creates meaningful time cost for fee evasion
-\end{itemize}
+\textbf{Not implemented: 720-block minimum age.} Earlier drafts gated decay
+on a 720-block minimum UTXO age, which would cap a wash trader at one decay
+event per 720 blocks. That rule exists only as a library model
+(\path{cluster-tax/src/age_decay.rs}) with no production caller, so the
+event rates and hour-based half-lives quoted for it do not apply.
 
 \subsection{Network Parameters}
 
