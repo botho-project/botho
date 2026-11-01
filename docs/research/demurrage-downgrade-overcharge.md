@@ -17,9 +17,10 @@ Sim source: `cluster-tax/src/simulation/downgrade_overcharge_sweep.rs` (determin
 > `FACTOR_SIMILARITY_SPREAD` is still ±10% with the FP-safe limit still at ±90%. What did move
 > is the size of the *unfiltered* contamination tail (§4.5, §4.6): with 19 decoys instead of 10
 > there are more chances for a wealthy decoy to land in a background spender's ring, so the FP
-> rate at a given contamination level is roughly 1.3–1.7× higher. That strengthens the case for
+> rate at a given contamination level is roughly 1.3–1.8× higher. That strengthens the case for
 > the wallet-layer factor band; it does not change the recommendation. The ring-11 figures are
-> kept in §7 for comparison. To reproduce them, set `HonestSweepParams::ring_size = 11`.
+> kept in §7 for comparison. To reproduce them, run `honest-overcharge-sweep --ring-size 11`
+> (the output equals the ring-11 golden file published by #1794).
 
 ---
 
@@ -118,7 +119,7 @@ rows never downgrade; the exploit does.
 both the shortest and longest horizon. The three background patterns floor at exactly 1× (output
 == floor). The three whale patterns declare the full 5.745× class while honest decoys dilute the
 floor slightly *below* that (5.521×–5.672×; more decoys dilute it a little further than the
-5.585×–5.697× seen at ring 11) — so the declared output is *above* the floor and
+5.612×–5.708× seen at ring 11) — so the declared output is *above* the floor and
 there is nothing to price. Only the exploit declares below its floor, and it is charged.
 
 ### 4.3 Honest false-positive rate & over-charge (clean rings, realistic case)
@@ -187,8 +188,8 @@ The ring size matters here. With `n − 1` decoys each independently wealthy wit
 the chance that at least one lands in the ring is `1 − (1 − c)^(n−1)`. At `c = 1%` that is about
 9.6% for ring 11 and 17.4% for ring 20. (The measured FP rate is a little lower, because a
 wealthy decoy does not always lift the floor above 1× for a large honest coin.) Moving from ring
-11 to ring 20 raised the measured FP rate from 8.3% to 14.3% at 1% contamination, from 34.1% to
-52.5% at 5%, and from 55.4% to 72.9% at 10%. The over-charge per trip is unchanged.
+11 to ring 20 raised the measured FP rate from 8.4% to 14.3% at 1% contamination, from 34.0% to
+52.5% at 5%, and from 55.7% to 72.9% at 10%. The over-charge per trip is unchanged.
 
 ### 4.6 Factor-similarity decoy band — closing the §4.5 channel (issue #925 Part 1)
 
@@ -287,14 +288,14 @@ factor bands up to ±90%) were identical at ring 11 and ring 20.
 
 | quantity | ring 11 | ring 20 |
 |----------|--------:|--------:|
-| whale floors, clean ring (§4.2) | 5.585×–5.697× | 5.521×–5.672× |
+| whale floors, clean ring (§4.2) | 5.612×–5.708× | 5.521×–5.672× |
 | honest FP rate, clean ring (§4.3) | 0.0000% | 0.0000% |
 | exploit charge 1yr / 5yr (§4.4) | 1.8980% / 9.4900% | 1.8980% / 9.4900% |
-| FP rate at 1% contamination (§4.5) | 8.2800% | 14.3250% |
-| FP rate at 5% contamination (§4.5) | 34.0650% | 52.4900% |
-| FP rate at 10% contamination (§4.5) | 55.3500% | 72.9050% |
-| mean over-charge @5yr at 1% / 5% / 10% (§4.5) | 9.3879% / 9.3973% / 9.4131% | 9.3257% / 9.3603% / 9.3955% |
-| FP rate, ±100% band / ±250% / ±500% (§4.6) | 8.0300% / 22.3000% / 41.6500% | 14.4600% / 37.7500% / 62.3750% |
+| FP rate at 1% contamination (§4.5) | 8.3750% | 14.3250% |
+| FP rate at 5% contamination (§4.5) | 34.0250% | 52.4900% |
+| FP rate at 10% contamination (§4.5) | 55.7200% | 72.9050% |
+| mean over-charge @5yr at 1% / 5% / 10% (§4.5) | 9.3843% / 9.3997% / 9.4129% | 9.3257% / 9.3603% / 9.3955% |
+| FP rate, ±100% band / ±250% / ±500% (§4.6) | 8.0000% / 22.4000% / 40.5350% | 14.4600% / 37.7500% / 62.3750% |
 | widest FP-safe factor band (§4.6) | ±90% | ±90% |
 | recommended `FACTOR_SIMILARITY_SPREAD` | ±10% | ±10% |
 

@@ -72,7 +72,7 @@
 //! the maximum of 19 jittered decoy ages sits closer to the top of the band
 //! than the maximum of 10. It stays below the 1.10 ceiling the band imposes by
 //! construction. (The ring-11 column differs from PR #595's figures in the
-//! fourth decimal, e.g. 1.0386 then vs 1.0390 now, from changes to the
+//! third or fourth decimal, e.g. 1.0386 then vs 1.0390 now, from changes to the
 //! simulation since then; the verdicts are the same.)
 //!
 //! # Why a focused Monte-Carlo (not the agent framework)

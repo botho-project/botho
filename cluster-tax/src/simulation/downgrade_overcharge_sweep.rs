@@ -643,7 +643,7 @@ fn evaluate_exploit(
 //
 // §4.5 showed the ONLY honest over-charge channel is a wealthy decoy
 // contaminating a background spender's value-weighted ring floor (14.3% FP at
-// 1% contamination with ring 20; 8.3% at the original ring 11). The
+// 1% contamination with ring 20; 8.4% at the original ring 11). The
 // wallet-layer fix mirrors the shipped
 // `AGE_SIMILARITY_SPREAD_BPS = 1000` (±10%) age band in
 // `botho/src/decoy_selection.rs`: draw only decoys whose cluster factor is
@@ -876,9 +876,15 @@ pub struct HonestOverchargeReport {
 
 /// Run the complete honest-overcharge sweep with the default configuration.
 pub fn run_honest_overcharge_sweep() -> HonestOverchargeReport {
+    run_honest_overcharge_sweep_at(HonestSweepParams::default().ring_size)
+}
+
+/// Same as [`run_honest_overcharge_sweep`] but at an explicit ring size
+/// (e.g. 11 to reproduce the pre-#1796 ring-11 tables).
+pub fn run_honest_overcharge_sweep_at(ring_size: usize) -> HonestOverchargeReport {
     let horizons = candidate_horizons();
     let archetypes = honest_archetypes();
-    let params = HonestSweepParams::default();
+    let params = HonestSweepParams { ring_size, ..HonestSweepParams::default() };
     let curve = ClusterFactorCurve::default_params();
 
     let archetype_classification = classify_archetypes(&archetypes, &params, &curve);

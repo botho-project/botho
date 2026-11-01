@@ -254,13 +254,13 @@ const DEFAULT_GAMMA_SCALE_DAYS: f64 = 1.61;
 /// 2026-11-01 (#1796, `simulation::decoy_quantile_sweep`), with the same
 /// verdict:
 ///
-/// | honest decoy age-spread | over-charge, ring 11 | over-charge, ring 20 | within #314 tol (≤15%) |
-/// |-------------------------|----------------------|----------------------|------------------------|
-/// | ±5%                     | 1.039                | 1.043                | yes                    |
-/// | ±10%                    | 1.077                | 1.086                | yes                    |
-/// | ±20%                    | 1.158                | 1.171                | no                     |
-/// | ±35%                    | 1.277                | 1.299                | no                     |
-/// | ±50%                    | 1.388                | 1.426                | no                     |
+/// | honest decoy age-spread | over-charge, ring 11 (PR #595) | over-charge, ring 20 | within #314 tol (≤15%) |
+/// |-------------------------|--------------------------------|----------------------|------------------------|
+/// | ±5%                     | 1.039                          | 1.043                | yes                    |
+/// | ±10%                    | 1.077                          | 1.086                | yes                    |
+/// | ±20%                    | 1.158                          | 1.171                | no                     |
+/// | ±35%                    | 1.277                          | 1.299                | no                     |
+/// | ±50%                    | 1.388                          | 1.426                | no                     |
 ///
 /// ±10% is the widest empirically-safe band (1.086 ≤ 1.15 at ring 20). We
 /// adopt ±10% as the policy: it maximizes the eligible decoy pool (and hence
@@ -312,7 +312,7 @@ pub const MAX_FACTOR_SCALED: u64 = 6 * FACTOR_SCALE;
 /// spender's ring inflates the value-weighted floor above 1× and spuriously
 /// trips the downgrade charge (the honest-overcharge channel quantified in
 /// `docs/research/demurrage-downgrade-overcharge.md` §4.5: 14.3% false
-/// positives at just 1% contamination with ring 20; 8.3% at ring 11).
+/// positives at just 1% contamination with ring 20; 8.4% at ring 11).
 ///
 /// This band closes that channel at the wallet layer, exactly as
 /// [`AGE_SIMILARITY_SPREAD_BPS`] closes the age-dilution channel for the
