@@ -473,6 +473,26 @@ pub enum SyncAction {
     Wait(Duration),
 }
 
+/// What an outbound sync request asked for, recorded when it is sent so a
+/// later failure can be attributed to the right request (#1431).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncRequestKind {
+    /// A `GetStatus` request.
+    Status,
+    /// A `GetBlocks` request anchored at `start_height`.
+    Blocks { start_height: u64 },
+}
+
+/// Opaque handle for one outbound sync request (#1431).
+///
+/// Issued by [`ChainSyncManager::on_request_dispatched`]. The run loop maps the
+/// transport's `OutboundRequestId` to this token and hands it back on the
+/// matching response ([`ChainSyncManager::on_request_resolved`]) or failure
+/// ([`ChainSyncManager::on_request_failed`]). Keeping the correlation in the
+/// manager makes it testable without a live swarm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SyncRequestToken(u64);
+
 /// Manager for chain synchronization
 #[derive(Debug)]
 pub struct ChainSyncManager {
@@ -557,6 +577,33 @@ pub struct ChainSyncManager {
     /// ([`Self::on_status`], [`Self::note_gossiped_tip`]) and they are excluded
     /// from peer selection ([`Self::best_peer`]).
     incompatible_peers: HashSet<PeerId>,
+    /// Outbound requests still awaiting a response or failure, by token
+    /// (#1431).
+    ///
+    /// The transport delivers a timeout up to [`REQUEST_TIMEOUT`] after the
+    /// send. By then the node may have caught up by gossip, or moved on to a
+    /// newer download. Without this record every late failure ran the
+    /// global [`Self::on_failure`] path. That demoted a `Synced` node to
+    /// `Failed` and pushed its retry deadline out again on each burst.
+    /// Entries are removed on response, on failure, and when their peer
+    /// disconnects.
+    outstanding_requests: HashMap<SyncRequestToken, (PeerId, SyncRequestKind)>,
+    /// Token of the most recent `GetBlocks` dispatch. While `pending_request`
+    /// still names its start height it is the request the in-flight guard is
+    /// waiting on (see [`Self::awaits_blocks_request`]); it is the active
+    /// download request when its peer is also the download peer (see
+    /// [`Self::is_active_blocks_request`]).
+    active_blocks_request: Option<SyncRequestToken>,
+    /// Next token value to issue.
+    next_request_token: u64,
+    /// Peers with a `GetStatus` request in flight (#1431).
+    ///
+    /// The status-side counterpart of `pending_request`. The tick runs every
+    /// ~2s against a 30s transport timeout. Without this guard Discovery
+    /// re-sent `GetStatus` to a silent peer on every tick and piled up
+    /// overlapping requests. Cleared by the peer's status response, the
+    /// matching failure, or its disconnect.
+    status_in_flight: HashSet<PeerId>,
 }
 
 impl ChainSyncManager {
@@ -574,6 +621,10 @@ impl ChainSyncManager {
             peer_overlap_counts: HashMap::new(),
             small_gap_since_height: None,
             incompatible_peers: HashSet::new(),
+            outstanding_requests: HashMap::new(),
+            active_blocks_request: None,
+            next_request_token: 0,
+            status_in_flight: HashSet::new(),
         }
     }
 
@@ -585,6 +636,157 @@ impl ChainSyncManager {
     /// Record that a request was sent to a peer (for latency tracking)
     pub fn on_request_sent(&mut self, peer: PeerId) {
         self.reputation.request_sent(peer);
+    }
+
+    /// Record that a sync request of `kind` was sent to `peer` and return the
+    /// token that identifies it (#1431).
+    ///
+    /// Also records latency tracking (as [`Self::on_request_sent`]). A
+    /// `Status` dispatch sets the peer's status in-flight guard. A `Blocks`
+    /// dispatch becomes the active download request.
+    pub fn on_request_dispatched(
+        &mut self,
+        peer: PeerId,
+        kind: SyncRequestKind,
+    ) -> SyncRequestToken {
+        self.on_request_sent(peer);
+        let token = SyncRequestToken(self.next_request_token);
+        self.next_request_token = self.next_request_token.wrapping_add(1);
+        self.outstanding_requests.insert(token, (peer, kind));
+        match kind {
+            SyncRequestKind::Status => {
+                self.status_in_flight.insert(peer);
+            }
+            SyncRequestKind::Blocks { .. } => {
+                self.active_blocks_request = Some(token);
+            }
+        }
+        token
+    }
+
+    /// Forget a request whose response arrived (#1431). The response itself
+    /// is still processed by [`Self::on_status`] / [`Self::on_blocks`]. This
+    /// only drops the correlation record and the status in-flight guard.
+    pub fn on_request_resolved(&mut self, token: SyncRequestToken) {
+        if let Some((peer, SyncRequestKind::Status)) = self.outstanding_requests.remove(&token) {
+            self.status_in_flight.remove(&peer);
+        }
+    }
+
+    /// Whether `token` is the `GetBlocks` request the in-flight guard
+    /// (`pending_request`) is waiting on: the latest blocks dispatch, with its
+    /// start height still pending. The peer may differ from the current
+    /// download peer after a retarget (#1579).
+    fn awaits_blocks_request(&self, token: SyncRequestToken, start_height: u64) -> bool {
+        self.active_blocks_request == Some(token) && self.pending_request == Some(start_height)
+    }
+
+    /// Release the in-flight guard held by the awaited `GetBlocks` request,
+    /// so the next `tick()` re-requests from the current download peer.
+    fn release_blocks_guard(&mut self) {
+        self.pending_request = None;
+        self.active_blocks_request = None;
+    }
+
+    /// Whether `token` is the `GetBlocks` request the current download is
+    /// waiting on: the awaited blocks request (see
+    /// [`Self::awaits_blocks_request`]) and its peer still the download peer.
+    fn is_active_blocks_request(
+        &self,
+        token: SyncRequestToken,
+        peer: &PeerId,
+        start_height: u64,
+    ) -> bool {
+        self.awaits_blocks_request(token, start_height)
+            && matches!(
+                &self.state,
+                SyncState::Downloading { peer: download_peer, .. } if download_peer == peer
+            )
+    }
+
+    /// Handle a failed outbound sync request (#1431).
+    ///
+    /// `token` is the value [`Self::on_request_dispatched`] returned for the
+    /// request, or `None` when the run loop has no record of it. Only a
+    /// failure of the request the state machine is actually waiting on runs
+    /// the global [`Self::on_failure`] path (reputation, `Failed`, backoff):
+    ///
+    /// - unknown or already-resolved token: ignored;
+    /// - `Status` failure: clears that peer's status in-flight guard. It is the
+    ///   active work only in `Discovery` while that peer's status is still
+    ///   missing (Discovery cannot conclude without it), so only there does it
+    ///   run `on_failure`. In `Synced`, `Downloading` and `Failed` it records a
+    ///   reputation failure and leaves state, deadline and backoff alone.
+    ///   Before this, a late timeout from an old status request demoted a
+    ///   caught-up node to `stalled`;
+    /// - `Blocks` failure: runs `on_failure` only for the active download
+    ///   request (see [`Self::is_active_blocks_request`]). If the failed
+    ///   request is the one the in-flight guard awaits but the download has
+    ///   since been retargeted to another peer (#1579), the guard is released
+    ///   so the next tick re-requests from the new peer, without demoting
+    ///   state. A failure from any other superseded request leaves the current
+    ///   download intact.
+    ///
+    /// Returns `true` when the failure was applied through `on_failure`.
+    pub fn on_request_failed(&mut self, token: Option<SyncRequestToken>, reason: String) -> bool {
+        let Some((token, (peer, kind))) =
+            token.and_then(|t| self.outstanding_requests.remove(&t).map(|entry| (t, entry)))
+        else {
+            debug!(?token, %reason, "Ignoring failure of unknown or already-resolved sync request");
+            return false;
+        };
+
+        match kind {
+            SyncRequestKind::Status => {
+                self.status_in_flight.remove(&peer);
+                if matches!(self.state, SyncState::Discovery)
+                    && !self.peer_statuses.contains_key(&peer)
+                {
+                    self.on_failure(Some(&peer), reason);
+                    true
+                } else {
+                    self.reputation.request_failed(&peer);
+                    debug!(
+                        %peer,
+                        %reason,
+                        state = ?self.state,
+                        "Status request failed outside Discovery; not demoting sync state"
+                    );
+                    false
+                }
+            }
+            SyncRequestKind::Blocks { start_height } => {
+                if self.is_active_blocks_request(token, &peer, start_height) {
+                    self.on_failure(Some(&peer), reason);
+                    true
+                } else if self.awaits_blocks_request(token, start_height) {
+                    // The guard is waiting on this request, but the download
+                    // was retargeted to another peer meanwhile (#1579).
+                    // Ignoring the failure would leave the guard set forever
+                    // and stall the download; release it instead so the next
+                    // tick asks the current download peer.
+                    self.reputation.request_failed(&peer);
+                    self.release_blocks_guard();
+                    debug!(
+                        %peer,
+                        start_height,
+                        %reason,
+                        state = ?self.state,
+                        "Awaited block request failed after retarget; releasing in-flight guard"
+                    );
+                    false
+                } else {
+                    debug!(
+                        %peer,
+                        start_height,
+                        %reason,
+                        state = ?self.state,
+                        "Ignoring failure of superseded block request"
+                    );
+                    false
+                }
+            }
+        }
     }
 
     /// Get current state
@@ -655,6 +857,10 @@ impl ChainSyncManager {
 
     /// Handle status response from a peer
     pub fn on_status(&mut self, peer: PeerId, height: u64, tip_hash: [u8; 32]) {
+        // The peer answered, so its status request is no longer in flight
+        // (#1431), whether or not the advertised height is used below.
+        self.status_in_flight.remove(&peer);
+
         // A consensus-incompatible peer's advertised height is an old-chain
         // height that must never influence sync-completion or peer selection.
         // Ignoring it here closes the race where a late in-flight status
@@ -973,10 +1179,13 @@ impl ChainSyncManager {
     /// [`BLOCKS_PER_REQUEST`] blocks, so retargeting converges.
     ///
     /// Retargeting leaves the in-flight guard untouched: an outstanding
-    /// request still resolves through `on_blocks` or `on_failure` (timeouts
-    /// arrive as `SyncResponse::Error`), and the next `tick()` then requests
-    /// from `local_height + 1` (#641). Returns `true` if the state became
-    /// `Synced`.
+    /// request still resolves through `on_blocks`, through
+    /// [`Self::on_request_failed`] (timeouts arrive as `SyncResponse::Error`;
+    /// a failure of the awaited request from the pre-retarget peer releases
+    /// the guard without demoting state, #1431), or through
+    /// [`Self::on_peer_disconnected`] of the peer it was sent to. The next
+    /// `tick()` then requests from `local_height + 1` (#641). Returns `true`
+    /// if the state became `Synced`.
     fn finish_or_retarget_download(&mut self) -> bool {
         let best = self.best_peer().map(|(peer, status)| (peer, status.height));
         match best {
@@ -1168,6 +1377,28 @@ impl ChainSyncManager {
         // (#644).
         self.peer_overlap_counts.remove(peer);
 
+        // Requests to this peer can no longer complete usefully. Drop their
+        // correlation records and the status guard, so a late transport
+        // failure for one of them is ignored as unknown and a reconnecting
+        // peer can be queried again (#1431).
+        self.status_in_flight.remove(peer);
+        // If the in-flight guard awaits a block request sent to this peer
+        // (e.g. the download was retargeted away from it, #1579), that request
+        // will never resolve once its record is dropped; release the guard so
+        // the next tick asks the current download peer.
+        let awaited_from_peer = self.active_blocks_request.is_some_and(|token| {
+            matches!(
+                self.outstanding_requests.get(&token),
+                Some((request_peer, SyncRequestKind::Blocks { start_height }))
+                    if request_peer == peer && self.pending_request == Some(*start_height)
+            )
+        });
+        if awaited_from_peer {
+            self.release_blocks_guard();
+        }
+        self.outstanding_requests
+            .retain(|_, (request_peer, _)| request_peer != peer);
+
         // If we were downloading from this peer, go back to discovery
         if let SyncState::Downloading {
             peer: download_peer,
@@ -1272,8 +1503,16 @@ impl ChainSyncManager {
                 // for. Never round-trip an incompatible peer: its response is
                 // ignored by `on_status`, so requesting it would spin Discovery
                 // without ever advancing.
+                //
+                // Skip peers whose status request is still in flight (#1431).
+                // The tick runs every ~2s and the transport timeout is 30s, so
+                // re-asking a silent peer every tick piled up overlapping
+                // requests. Their late failures then knocked the node out of
+                // sync.
                 for peer in connected_peers {
-                    if self.incompatible_peers.contains(peer) {
+                    if self.incompatible_peers.contains(peer)
+                        || self.status_in_flight.contains(peer)
+                    {
                         continue;
                     }
                     if !self.peer_statuses.contains_key(peer) {
@@ -1397,13 +1636,23 @@ impl ChainSyncManager {
                     // request/response (not gossiped), so without this a synced
                     // node would never learn that a peer advanced and would rely
                     // solely on gossiped tip blocks to stay current. Skip
-                    // incompatible peers — their status is ignored anyway.
-                    if let Some(peer) = connected_peers
+                    // incompatible peers — their status is ignored anyway — and
+                    // peers that already have a status request in flight
+                    // (#1431).
+                    let mut compatible = connected_peers
                         .iter()
-                        .find(|p| !self.incompatible_peers.contains(p))
-                    {
+                        .filter(|p| !self.incompatible_peers.contains(p))
+                        .peekable();
+                    if compatible.peek().is_some() {
+                        // Restart the interval even when every compatible peer
+                        // is still awaiting an earlier status reply. Otherwise
+                        // the #766 small-gap check would run on every tick
+                        // instead of once per refresh interval.
                         self.last_status_refresh = Instant::now();
-                        return Some(SyncAction::RequestStatus(*peer));
+                        if let Some(peer) = compatible.find(|p| !self.status_in_flight.contains(p))
+                        {
+                            return Some(SyncAction::RequestStatus(*peer));
+                        }
                     }
                 }
                 None
@@ -3639,5 +3888,396 @@ mod tests {
         manager.on_peer_disconnected(&peer);
         assert!(matches!(manager.state(), SyncState::Discovery));
         assert_eq!(manager.pending_request, None);
+    }
+
+    // ========================================================================
+    // Request correlation: stale failures must not demote (#1431)
+    // ========================================================================
+
+    /// Dispatch whatever `tick()` asked for, recording it like the run loop,
+    /// and return its token.
+    fn dispatch(manager: &mut ChainSyncManager, action: Option<SyncAction>) -> SyncRequestToken {
+        match action {
+            Some(SyncAction::RequestStatus(peer)) => {
+                manager.on_request_dispatched(peer, SyncRequestKind::Status)
+            }
+            Some(SyncAction::RequestBlocks {
+                peer, start_height, ..
+            }) => manager.on_request_dispatched(peer, SyncRequestKind::Blocks { start_height }),
+            other => panic!("expected a request action, got {other:?}"),
+        }
+    }
+
+    /// One sync tick whose request action is dispatched as the run loop would.
+    fn tick_dispatch(manager: &mut ChainSyncManager, peers: &[PeerId]) -> SyncRequestToken {
+        let action = manager.tick(peers);
+        dispatch(manager, action)
+    }
+
+    /// Regression 1: a status request that times out after the node already
+    /// reached `Synced` (caught up via another peer or gossip) must leave it
+    /// `Synced`, with no `Failed` state and no backoff growth.
+    #[test]
+    fn test_late_status_failure_after_synced_keeps_synced() {
+        let mut manager = ChainSyncManager::new(100);
+        let peer = make_peer_id();
+
+        // Discovery: one status round trip, at the tip -> Synced.
+        let first = tick_dispatch(&mut manager, &[peer]);
+        manager.on_request_resolved(first);
+        manager.on_status(peer, 100, [1u8; 32]);
+        assert!(manager.is_synced());
+
+        // Periodic refresh: a status request goes out and the peer goes quiet.
+        manager.last_status_refresh = Instant::now() - STATUS_REFRESH_INTERVAL;
+        let refresh = tick_dispatch(&mut manager, &[peer]);
+        // Meanwhile gossip keeps the node at the tip.
+        manager.set_local_height(101);
+        assert!(manager.tick(&[peer]).is_none());
+        assert!(manager.is_synced());
+        let backoff = manager.retry_backoff;
+
+        // 30s later the transport reports the timeout.
+        let applied = manager.on_request_failed(Some(refresh), "Timeout".to_string());
+
+        assert!(!applied, "a late status failure must not run on_failure");
+        assert!(
+            manager.is_synced(),
+            "late status failure demoted a synced node"
+        );
+        assert_eq!(manager.status_snapshot().status, "synced");
+        assert_eq!(manager.retry_backoff, backoff, "backoff must not grow");
+        assert!(
+            !manager.status_in_flight.contains(&peer),
+            "guard must clear"
+        );
+    }
+
+    /// Regression 2: during a newer download, a failure from an old peer/old
+    /// request must leave the current peer, target, and in-flight guard
+    /// intact.
+    #[test]
+    fn test_stale_request_failure_keeps_current_download() {
+        let mut manager = ChainSyncManager::new(0);
+        let old_peer = make_peer_id();
+        let new_peer = make_peer_id();
+
+        // Download from old_peer; its block request is in flight.
+        manager.on_status(old_peer, 50, [1u8; 32]);
+        let old_blocks = tick_dispatch(&mut manager, &[old_peer]);
+        // A status refresh to old_peer is also outstanding.
+        let old_status = manager.on_request_dispatched(old_peer, SyncRequestKind::Status);
+
+        // old_peer drops; new_peer (higher) becomes the download source and
+        // its request is in flight.
+        manager.on_peer_disconnected(&old_peer);
+        manager.on_status(new_peer, 300, [2u8; 32]);
+        let new_blocks = tick_dispatch(&mut manager, &[new_peer]);
+        let expected_state = SyncState::Downloading {
+            peer: new_peer,
+            target_height: 300,
+        };
+        assert_eq!(*manager.state(), expected_state);
+        assert_eq!(manager.pending_request, Some(1));
+
+        // The transport now reports both old requests as failed.
+        assert!(!manager.on_request_failed(Some(old_blocks), "Connection closed".into()));
+        assert!(!manager.on_request_failed(Some(old_status), "Connection closed".into()));
+
+        assert_eq!(
+            *manager.state(),
+            expected_state,
+            "current download disturbed"
+        );
+        assert_eq!(manager.pending_request, Some(1), "in-flight guard cleared");
+        assert!(
+            manager.tick(&[new_peer]).is_none(),
+            "guard must still suppress a duplicate request"
+        );
+
+        // The genuinely current request is still tracked and still active.
+        assert!(manager.on_request_failed(Some(new_blocks), "Timeout".into()));
+        assert!(matches!(manager.state(), SyncState::Failed { .. }));
+    }
+
+    /// Regression 2b: an old block request to the SAME peer, superseded by a
+    /// newer one, does not clear the newer request's guard.
+    #[test]
+    fn test_superseded_block_request_same_peer_is_ignored() {
+        let mut manager = ChainSyncManager::new(0);
+        let peer = make_peer_id();
+        manager.on_status(peer, 300, [1u8; 32]);
+
+        let first = tick_dispatch(&mut manager, &[peer]);
+        // The first batch is answered and applied, and the next request goes
+        // out. The first token is never resolved (a late failure for it
+        // arrives instead, e.g. a stream error after the reply).
+        manager.pending_request = None;
+        manager.on_blocks_added(100);
+        let second = tick_dispatch(&mut manager, &[peer]);
+        assert_eq!(manager.pending_request, Some(101));
+
+        assert!(!manager.on_request_failed(Some(first), "late".into()));
+        assert_eq!(manager.pending_request, Some(101));
+        assert!(matches!(manager.state(), SyncState::Downloading { .. }));
+
+        // The second request is still the active one: its failure applies.
+        assert!(manager.on_request_failed(Some(second), "Timeout".into()));
+        assert!(matches!(manager.state(), SyncState::Failed { .. }));
+    }
+
+    /// Sets up a download from `a` whose block request is in flight, then
+    /// gossip reaches `a`'s tip and the tick retargets the download to the
+    /// higher peer `b` while the guard still awaits `a`'s request (#1579).
+    fn retargeted_download(
+        manager: &mut ChainSyncManager,
+        a: PeerId,
+        b: PeerId,
+    ) -> SyncRequestToken {
+        manager.on_status(a, 50, [1u8; 32]);
+        let token = tick_dispatch(manager, &[a, b]);
+        manager.on_status(b, 300, [2u8; 32]);
+        manager.set_local_height(50);
+        assert!(manager.tick(&[a, b]).is_none(), "retarget keeps the guard");
+        assert_eq!(
+            *manager.state(),
+            SyncState::Downloading {
+                peer: b,
+                target_height: 300
+            }
+        );
+        assert_eq!(manager.pending_request, Some(1));
+        token
+    }
+
+    /// Whether a `RequestBlocks` to `peer` from height 51 goes out within a
+    /// few ticks.
+    fn requests_blocks_within_ticks(
+        manager: &mut ChainSyncManager,
+        peers: &[PeerId],
+        peer: PeerId,
+    ) -> bool {
+        (0..5).any(|_| {
+            matches!(
+                manager.tick(peers),
+                Some(SyncAction::RequestBlocks { peer: p, start_height: 51, .. }) if p == peer
+            )
+        })
+    }
+
+    /// Judge regression (#1431): after a retarget to a new peer, the old
+    /// peer's timeout of the awaited request must release the in-flight
+    /// guard so the download resumes from the new peer.
+    #[test]
+    fn retarget_then_old_peer_timeout_recovers() {
+        let mut manager = ChainSyncManager::new(0);
+        let (a, b) = (make_peer_id(), make_peer_id());
+        let token = retargeted_download(&mut manager, a, b);
+
+        assert!(!manager.on_request_failed(Some(token), "Timeout".into()));
+        assert_eq!(manager.pending_request, None, "guard must be released");
+        assert!(matches!(manager.state(), SyncState::Downloading { .. }));
+        assert!(
+            requests_blocks_within_ticks(&mut manager, &[a, b], b),
+            "download stalled after old peer timeout"
+        );
+    }
+
+    /// Judge regression (#1431): after a retarget to a new peer, the old
+    /// peer disconnecting (its late failure then unknown) must release the
+    /// in-flight guard so the download resumes from the new peer.
+    #[test]
+    fn retarget_then_old_peer_disconnect_recovers() {
+        let mut manager = ChainSyncManager::new(0);
+        let (a, b) = (make_peer_id(), make_peer_id());
+        let token = retargeted_download(&mut manager, a, b);
+
+        manager.on_peer_disconnected(&a);
+        assert!(!manager.on_request_failed(Some(token), "Connection closed".into()));
+        assert_eq!(manager.pending_request, None, "guard must be released");
+        assert!(
+            requests_blocks_within_ticks(&mut manager, &[b], b),
+            "download stalled after old peer disconnect"
+        );
+    }
+
+    /// Regression 3: repeated 2s Discovery ticks emit exactly one
+    /// `RequestStatus` per peer until the response, failure, or disconnect.
+    /// Afterwards the peer can be requested again.
+    #[test]
+    fn test_discovery_status_request_is_bounded_per_peer() {
+        let mut manager = ChainSyncManager::new(0);
+        let peer = make_peer_id();
+
+        let token = tick_dispatch(&mut manager, &[peer]);
+        for _ in 0..15 {
+            assert!(
+                manager.tick(&[peer]).is_none(),
+                "no duplicate status request while one is in flight"
+            );
+        }
+
+        // Failure (in Discovery this is the active work, so it backs off) ...
+        assert!(manager.on_request_failed(Some(token), "Timeout".into()));
+        assert!(matches!(manager.state(), SyncState::Failed { .. }));
+        // ... and after the retry deadline, the peer is asked again.
+        manager.state = SyncState::Failed {
+            reason: "test".into(),
+            retry_at: Instant::now(),
+        };
+        let retry = manager.tick(&[peer]);
+        assert!(
+            matches!(retry, Some(SyncAction::RequestStatus(p)) if p == peer),
+            "peer must be re-requestable after its failure, got {retry:?}"
+        );
+        let token = dispatch(&mut manager, retry);
+        assert!(manager.tick(&[peer]).is_none());
+
+        // Disconnect clears the guard too.
+        manager.on_peer_disconnected(&peer);
+        assert!(matches!(
+            manager.tick(&[peer]),
+            Some(SyncAction::RequestStatus(p)) if p == peer
+        ));
+        // The disconnected request's late failure is now unknown and ignored.
+        assert!(!manager.on_request_failed(Some(token), "Connection closed".into()));
+    }
+
+    /// Regression 3b: a status response clears the guard (both via the
+    /// response itself and the token), so the peer is not re-requested in
+    /// Discovery but is eligible for the next synced refresh.
+    #[test]
+    fn test_status_response_clears_in_flight_guard() {
+        let mut manager = ChainSyncManager::new(10);
+        let peer = make_peer_id();
+        let token = tick_dispatch(&mut manager, &[peer]);
+        assert!(manager.status_in_flight.contains(&peer));
+
+        manager.on_request_resolved(token);
+        manager.on_status(peer, 10, [1u8; 32]);
+        assert!(!manager.status_in_flight.contains(&peer));
+        assert!(manager.is_synced());
+
+        // The synced refresh can poll this peer again.
+        manager.last_status_refresh = Instant::now() - STATUS_REFRESH_INTERVAL;
+        assert!(matches!(
+            manager.tick(&[peer]),
+            Some(SyncAction::RequestStatus(p)) if p == peer
+        ));
+    }
+
+    /// The synced refresh skips a peer whose earlier status request is still
+    /// in flight and polls another one instead.
+    #[test]
+    fn test_synced_refresh_skips_peer_with_status_in_flight() {
+        let mut manager = ChainSyncManager::new(10);
+        let slow = make_peer_id();
+        let other = make_peer_id();
+        manager.on_status(slow, 10, [1u8; 32]);
+        manager.state = SyncState::Synced;
+        manager.on_request_dispatched(slow, SyncRequestKind::Status);
+
+        manager.last_status_refresh = Instant::now() - STATUS_REFRESH_INTERVAL;
+        assert!(matches!(
+            manager.tick(&[slow, other]),
+            Some(SyncAction::RequestStatus(p)) if p == other
+        ));
+
+        // With every peer in flight, no request goes out, and the refresh
+        // interval still restarts (the #766 check stays one interval apart).
+        manager.on_request_dispatched(other, SyncRequestKind::Status);
+        manager.last_status_refresh = Instant::now() - STATUS_REFRESH_INTERVAL;
+        assert!(manager.tick(&[slow, other]).is_none());
+        assert!(manager.last_status_refresh.elapsed() < STATUS_REFRESH_INTERVAL);
+    }
+
+    /// Regression 4: a failure of the ACTIVE block request still records the
+    /// reputation failure, enters `Failed`, and grows the backoff. A node that
+    /// is behind is never reported synced.
+    #[test]
+    fn test_active_block_request_failure_still_fails() {
+        let mut manager = ChainSyncManager::new(0);
+        let peer = make_peer_id();
+        manager.on_status(peer, 250, [1u8; 32]);
+        let token = tick_dispatch(&mut manager, &[peer]);
+        let backoff = manager.retry_backoff;
+
+        assert!(manager.on_request_failed(Some(token), "Timeout".into()));
+
+        assert!(matches!(manager.state(), SyncState::Failed { .. }));
+        assert!(!manager.is_synced());
+        assert_eq!(manager.status_snapshot().status, "stalled");
+        assert_eq!(manager.pending_request, None);
+        assert!(manager.retry_backoff > backoff, "backoff must grow");
+        let rep = manager.reputation_mut().get(&peer).expect("tracked");
+        assert!(rep.failures > 0, "reputation failure must be recorded");
+    }
+
+    /// Regression 4b: a node behind its peers whose download peer
+    /// disconnects goes back to Discovery, never to Synced. A late failure
+    /// for that request is ignored and does not change this.
+    #[test]
+    fn test_disconnected_behind_node_is_not_synced() {
+        let mut manager = ChainSyncManager::new(0);
+        let peer = make_peer_id();
+        manager.on_status(peer, 250, [1u8; 32]);
+        let token = tick_dispatch(&mut manager, &[peer]);
+
+        manager.on_peer_disconnected(&peer);
+        assert!(!manager.on_request_failed(Some(token), "Connection closed".into()));
+        assert!(matches!(manager.state(), SyncState::Discovery));
+        assert!(!manager.is_synced());
+        // With no connected peers, Discovery waits rather than declaring sync.
+        assert!(manager.tick(&[]).is_none());
+        assert!(!manager.is_synced());
+    }
+
+    /// A failure with an unknown (or missing, or already-resolved) request id
+    /// is ignored without any state change.
+    #[test]
+    fn test_unknown_request_failure_is_ignored() {
+        let mut manager = ChainSyncManager::new(0);
+        let peer = make_peer_id();
+        manager.on_status(peer, 250, [1u8; 32]);
+        let token = tick_dispatch(&mut manager, &[peer]);
+        let state = manager.state().clone();
+        let backoff = manager.retry_backoff;
+
+        assert!(!manager.on_request_failed(None, "Timeout".into()));
+        assert!(!manager.on_request_failed(Some(SyncRequestToken(u64::MAX)), "Timeout".into()));
+        assert_eq!(*manager.state(), state);
+        assert_eq!(manager.pending_request, Some(1));
+        assert_eq!(manager.retry_backoff, backoff);
+
+        // Each token is consumed by its first failure: a duplicate delivery
+        // is unknown.
+        assert!(manager.on_request_failed(Some(token), "Timeout".into()));
+        let failed_state = manager.state().clone();
+        let backoff = manager.retry_backoff;
+        assert!(!manager.on_request_failed(Some(token), "Timeout".into()));
+        assert_eq!(*manager.state(), failed_state);
+        assert_eq!(manager.retry_backoff, backoff);
+    }
+
+    /// While `Failed`, a late status failure must not push the retry deadline
+    /// out again. Repeated pushes are what kept nodes `stalled`.
+    #[test]
+    fn test_late_status_failure_while_failed_keeps_deadline() {
+        let mut manager = ChainSyncManager::new(0);
+        let peer = make_peer_id();
+        let status_token = manager.on_request_dispatched(peer, SyncRequestKind::Status);
+        manager.on_failure(Some(&peer), "earlier failure".into());
+        let SyncState::Failed { retry_at, .. } = manager.state().clone() else {
+            panic!("expected Failed");
+        };
+        let backoff = manager.retry_backoff;
+
+        assert!(!manager.on_request_failed(Some(status_token), "Timeout".into()));
+
+        assert!(
+            matches!(manager.state(), SyncState::Failed { retry_at: r, .. } if *r == retry_at),
+            "retry deadline must not move"
+        );
+        assert_eq!(manager.retry_backoff, backoff);
     }
 }
