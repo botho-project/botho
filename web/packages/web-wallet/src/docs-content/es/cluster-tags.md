@@ -93,15 +93,15 @@ El 80 % de todas las comisiones de transacción se redistribuye a los UTXO elegi
 2. El 80 % de la comisión se reparte entre 4 ganadores elegidos con aleatoriedad verificable
 3. El 20 % se quema permanentemente (deflacionario)
 
-**Cómo se seleccionan los ganadores (ponderado por clúster):**
+**Cómo se seleccionan los ganadores (sorteo uniforme, tal como está construido):**
 
-El peso ganador de un UTXO es su **valor dividido por su factor de clúster**. Esta es la única ponderación progresiva que es invariante a la división:
+En cada bloque se realiza un sorteo. Los ganadores se eligen de forma **uniforme** entre las salidas elegibles: ni el valor de un UTXO ni su factor de clúster modifican su probabilidad de ser elegido. (Los diseños anteriores ponderaban por valor ÷ factor de clúster; se retiró porque leía los importes directamente y, en simulación, devolvía gran parte del fondo a las ballenas.)
 
-- Los pesos se basan en el valor, así que dividir una posición en muchos UTXO nunca aumenta el peso total
-- El sesgo proviene de la procedencia del clúster, que se hereda a través de las divisiones
-- Las monedas bien circuladas (factor bajo) ganan proporcionalmente más; las monedas de clúster ballena ganan menos
+- **Elegibilidad:** al menos 720 bloques de antigüedad, valor de al menos 1 µBTH (10^6 picoBTH) y dentro de la ventana reciente de 10 000 bloques. Se consideran como máximo 10 000 candidatos elegibles por sorteo, a partir de un desplazamiento derivado de una semilla.
+- **Ganadores:** 4 por sorteo, elegidos sin reemplazo con una semilla vinculada a la prueba de trabajo.
+- **Pago:** el fondo es la parte del 80 % de las comisiones, más la cuota de emisión de lotería del bloque (una parte de la recompensa del bloque que se destina al fondo en lugar de al minero: 0 % en la época de arranque, luego 10 % más por cada halving, con tope del 50 %), más lo arrastrado de bloques anteriores; cada sorteo paga el menor entre lo disponible y el límite por bloque, y el resto se arrastra.
 
-Para participar, un UTXO debe tener al menos 720 bloques de antigüedad y valer al menos 1 µBTH.
+La progresividad proviene ahora del lado de la *entrada* (comisiones progresivas y demurrage), no del sorteo. Parte de la economía del sorteo sigue siendo una decisión abierta: dividir una posición en muchas salidas puede mejorar hoy tus probabilidades ([#1682](https://github.com/botho-project/botho/issues/1682)) y los ganadores anteriores acumulan su cuota ([#1690](https://github.com/botho-project/botho/issues/1690)); véanse también [#1689](https://github.com/botho-project/botho/issues/1689) y [#1691](https://github.com/botho-project/botho/issues/1691). Esta sección describe el mecanismo tal como está construido.
 
 ### Firmas de anillo y privacidad de las etiquetas
 
@@ -145,9 +145,9 @@ El sistema de etiquetas de clúster crea incentivos alineados:
 
 | Comportamiento | Efecto en las etiquetas | Incentivo |
 |----------|----------------|-----------|
-| **Circular monedas** | Las etiquetas decaen y se mezclan | Comisiones más bajas, mayor peso en la lotería |
-| **Acumular riqueza** | Las etiquetas permanecen concentradas | Comisiones más altas, menor peso en la lotería, demurrage |
-| **Dividir en muchos UTXO** | Etiquetas sin cambios | Sin beneficio: las comisiones y el peso en la lotería se basan en la procedencia y el valor |
+| **Circular monedas** | Las etiquetas decaen y se mezclan | Comisiones más bajas |
+| **Acumular riqueza** | Las etiquetas permanecen concentradas | Comisiones más altas, demurrage |
+| **Dividir en muchos UTXO** | Etiquetas sin cambios | Las comisiones se basan en la procedencia, así que no hay beneficio en comisiones; tal como está construido, más salidas pueden mejorar las probabilidades en la lotería ([#1682](https://github.com/botho-project/botho/issues/1682)) |
 
 ### Parámetros técnicos
 
@@ -158,7 +158,8 @@ El sistema de etiquetas de clúster crea incentivos alineados:
 | Valor mínimo del UTXO (lotería) | 1 µBTH | Exclusión de polvo (dust) |
 | Rango del factor de clúster | 1x–6x (punto medio 3.5x en 100K BTH) | Comisiones progresivas |
 | Tamaño del anillo | 20 | Conjunto de privacidad para la propagación de etiquetas |
-| Ganadores de la lotería | 4 por sorteo | Granularidad de la redistribución |
+| Ganadores de la lotería | 4 por sorteo (sorteo uniforme) | Granularidad de la redistribución |
+| Ventana de la lotería | 10 000 bloques, hasta 10 000 candidatos | Acota el trabajo por sorteo |
 | Tasa de quema | 20 % de las comisiones | Presión deflacionaria |
 | Tasa del fondo | 80 % de las comisiones | Cantidad de redistribución |
 | Demurrage | 2 %/año al factor máximo (ver Tokenómica) | Alcanza la riqueza concentrada e inactiva |
@@ -170,7 +171,7 @@ Las etiquetas de clúster resuelven el problema de la "tributación progresiva r
 1. **Rastrean procedencia, no identidad**: las monedas recuerdan su origen
 2. **Resisten los ataques de división**: la riqueza del clúster se fija en la acuñación
 3. **Habilitan comisiones progresivas**: los clústeres ricos pagan más
-4. **Impulsan una redistribución justa**: el peso en la lotería se inclina hacia las monedas bien circuladas
+4. **Impulsan la redistribución**: el 80 % de las comisiones regresa a los poseedores mediante una lotería uniforme (la progresividad proviene de las comisiones y el demurrage)
 5. **Preservan la privacidad**: funcionan con firmas de anillo
 6. **Fomentan la circulación**: las etiquetas decaen a través del comercio
 
