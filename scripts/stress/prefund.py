@@ -7,8 +7,22 @@ funding wallet into freshly generated campaign wallets. Then it writes the
 controller host, which is the only host with a private route to the fleet RPC,
 before staging the controller:
 
-    prefund.py check --manifest M   # local validation only; no RPC or signing
-    prefund.py run --manifest M     # prefund, reconcile, then stop
+    prefund.py check --manifest M [--hosts H]  # local validation only; no RPC or signing
+    prefund.py run --manifest M [--hosts H]    # prefund, reconcile, then stop
+
+The fleet's ``*.internal`` RPC names resolve only through the fleet hosts file
+that staging binds over ``/etc/hosts`` for the controller unit; the controller
+host itself cannot resolve them (#1610). Run the prefunder the same way, in a
+transient unit with that file bound read-only over ``/etc/hosts``.
+``check --hosts H`` validates the file against every target and prints the
+unit properties to use; ``run`` refuses before any RPC if a target name does
+not resolve (or, with ``--hosts``, resolves elsewhere).
+
+Started at a fresh chain's height 0, the producer's funding wallet holds
+nothing spendable yet. The opening snapshot then waits, rescanning every
+``FUNDING_WAIT_SECONDS`` and journalling ``prefund_funding_wait`` with the
+spendable and needed amounts, until the balance covers the principal plus
+worst-case fees; it holds only at the write deadline.
 
 Every grant is one main-signer ``prepare``. Its record is created exclusively
 before an exclusive submit marker, and ``tx_submit`` is called once. A grant
@@ -27,14 +41,16 @@ import math
 import os
 from pathlib import Path
 import re
+import socket
 import stat
 import time
+from urllib.parse import urlsplit
 
 from controller import Controller
 from lottery import lottery_rows
 from plan import expand
 from runtime import (Gate, HOSTS, Journal, Quota, Rpc, atomic, campaign_targets,
-                     campaign_tls_context, check_identity, pinned_file)
+                     campaign_tls_context, check_identity, parse_hosts, pinned_file)
 from selection import choose
 
 # main's `botho-stress-wallet` Request enum is `deny_unknown_fields`
@@ -59,6 +75,7 @@ UNRESOLVED_SECONDS = 900        # same bound as Controller.reconcile()
 POLL_SECONDS = 30
 HEALTH_SECONDS = 15
 UNSYNCED_SECONDS = 120
+FUNDING_WAIT_SECONDS = 60       # Full rescans while the funding wallet matures.
 
 
 def need(condition, message):
@@ -169,6 +186,46 @@ def load_manifest(path):
     return m, plan
 
 
+def target_names(manifest):
+    """Every RPC hostname the manifest's targets name, in role order."""
+    return [urlsplit(t['rpc_url']).hostname for t in manifest['targets']]
+
+
+def check_hosts(manifest, path):
+    """The fleet hosts file must privately resolve every target; returns `{name: address}`."""
+    data = Path(path).read_bytes()
+    resolved = parse_hosts(data)
+    missing = [name for name in target_names(manifest) if name not in resolved]
+    need(not missing, 'hosts file does not resolve target %s' % ', '.join(missing))
+    return {name: resolved[name] for name in target_names(manifest)}
+
+
+def unit_properties(manifest, hosts_path, addresses):
+    """systemd-run properties for the prefunder: the fleet hosts file over /etc/hosts.
+
+    Mirrors the controller unit staging renders: read-only system, writes only
+    to state_dir, and IP egress limited to localhost and the target nodes.
+    """
+    return (['BindReadOnlyPaths=%s:/etc/hosts' % Path(hosts_path).resolve(),
+             'ReadWritePaths=' + manifest['state_dir'], 'UMask=0077', 'NoNewPrivileges=yes',
+             'ProtectSystem=strict', 'PrivateTmp=yes', 'LimitCORE=0', 'IPAddressDeny=any',
+             'IPAddressAllow=localhost']
+            + ['IPAddressAllow=%s/32' % ip for ip in sorted(set(addresses.values()))])
+
+
+def check_resolution(manifest, expected=None, resolve=socket.getaddrinfo):
+    """Refuse before any RPC if a target hostname does not resolve as the hosts file says."""
+    for name in target_names(manifest):
+        try:
+            found = {info[4][0] for info in resolve(name, 443, proto=socket.IPPROTO_TCP)}
+        except OSError:
+            raise Gate('cannot resolve %s: run prefund with the fleet hosts file bound over /etc/hosts '
+                       '(prefund.py check --hosts H prints the unit properties)' % name) from None
+        if expected is not None:
+            need(found == {expected[name]}, '%s resolves to %s, not the hosts-file address %s'
+                 % (name, ','.join(sorted(found)), expected[name]))
+
+
 def create_exclusive(path, value):
     """Create a JSON file once. An existing file is never overwritten."""
     raw = (json.dumps(value, sort_keys=True) + '\n').encode()
@@ -221,6 +278,7 @@ class Prefunder(Controller):
         self.closed = False
         self.resumed = False
         self.last_poll, self.last_poll_height = 0, -1
+        self.funding_wait_until = 0
         # Validate every durable record before opening a writable journal.
         self.records = self.load_records()
         opening = self.state / 'opening.json'
@@ -359,6 +417,7 @@ class Prefunder(Controller):
     # ---- opening ---------------------------------------------------------
 
     async def opening_snapshot(self):
+        """Freeze the opening; False while the funding wallet cannot yet cover the grants."""
         need(not self.records, 'opening snapshot after grants')
         genesis = await self.all_hosts('getBlockByHeight', {'height': 0})
         need(all(b.get('hash') == self.plan['genesis'] for b in genesis), 'genesis differs from plan')
@@ -370,12 +429,24 @@ class Prefunder(Controller):
         owned = self.inventory[self.funding]
         spendable = sum(o['utxo']['amount'] for o in self.unspent_setup_inputs(self.funding))
         principal = self.total * self.m['grant_picocredits']
-        need(spendable >= principal + self.total * self.max_fee,
-             'funding wallet balance cannot cover principal plus worst-case fees')
+        needed = principal + self.total * self.max_fee
+        if spendable < needed:
+            # Nothing is at stake before the opening: wait for coinbase
+            # maturity rather than hold, but never past the write deadline.
+            detail = {'height': height, 'spendable': spendable, 'needed': needed}
+            need(self.clock() < self.m['deadline'],
+                 'funding wallet balance cannot cover principal plus worst-case fees by the '
+                 'prefund deadline: spendable %(spendable)d of %(needed)d at height %(height)d' % detail)
+            self.funding_wait_until = self.clock() + FUNDING_WAIT_SECONDS
+            self.j.event(None, 'prefund_funding_wait', detail)
+            print('prefund: waiting for the funding wallet to mature: spendable %(spendable)d of '
+                  '%(needed)d at height %(height)d' % detail, flush=True)
+            return False
         self.opening = {'at': self.clock(), 'height': height, 'owned': sorted(o['id'] for o in owned),
                         'balance': sum(o['utxo']['amount'] for o in self.unspent(self.funding)),
                         'spendable': spendable, 'principal': principal}
         create_exclusive(self.state / 'opening.json', self.opening)
+        return True
 
     # ---- grants ----------------------------------------------------------
 
@@ -635,7 +706,10 @@ class Prefunder(Controller):
         await self.lottery_preflight()
         await self.health(force=not self.statuses)
         if self.opening is None:
-            await self.opening_snapshot()
+            if self.clock() < self.funding_wait_until:
+                return False
+            if not await self.opening_snapshot():
+                return False
         if not self.resumed:
             await self.resume()
         await self.reconcile()
@@ -676,14 +750,20 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('mode', choices=['check', 'run'])
     parser.add_argument('--manifest', type=Path, required=True)
+    parser.add_argument('--hosts', type=Path, help='the fleet hosts file staging binds over /etc/hosts')
     args = parser.parse_args()
     os.umask(0o077)
     manifest, plan = load_manifest(args.manifest)
+    addresses = check_hosts(manifest, args.hosts) if args.hosts else None
     if args.mode == 'check':
-        print(json.dumps({'manifest': 'valid', 'grants': plan['wallets']['count'] * manifest['grants_per_wallet'],
-                          'latest_deadline': latest_deadline(plan, manifest['infrastructure_end']),
-                          'network_calls': 0, 'signatures': 0}))
+        report = {'manifest': 'valid', 'grants': plan['wallets']['count'] * manifest['grants_per_wallet'],
+                  'latest_deadline': latest_deadline(plan, manifest['infrastructure_end']),
+                  'network_calls': 0, 'signatures': 0}
+        if addresses is not None:
+            report.update(hosts=addresses, unit_properties=unit_properties(manifest, args.hosts, addresses))
+        print(json.dumps(report))
         return
+    check_resolution(manifest, addresses)
     state = Path(manifest['state_dir'])
     state.mkdir(mode=0o700, exist_ok=True)
     with (state / 'prefund.lock').open('a') as lock:

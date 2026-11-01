@@ -62,7 +62,7 @@ import {
   type SendRpc,
   type WasmSigner,
 } from '../src/index'
-import { startNodeBackedHarness, type NodeHarness } from './node-harness'
+import { startNodeBackedHarness, withPagedOutputs, type NodeHarness } from './node-harness'
 
 // Read env without depending on @types/node in this package.
 const env =
@@ -115,7 +115,7 @@ async function loadWasmNode(): Promise<WasmSigner> {
 /** Minimal JSON-RPC client for the node under test. */
 function makeRpc(url: string) {
   let id = 1
-  return async function rpc<T>(method: string, params: Record<string, unknown>): Promise<T> {
+  return withPagedOutputs(async function rpc<T>(method: string, params: Record<string, unknown>): Promise<T> {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -124,7 +124,7 @@ function makeRpc(url: string) {
     const json = (await res.json()) as { result?: T; error?: { message: string } }
     if (json.error) throw new Error(`${method}: ${json.error.message}`)
     return json.result as T
-  }
+  })
 }
 
 interface RawOutput {

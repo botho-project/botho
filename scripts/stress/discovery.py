@@ -5,7 +5,7 @@ import json
 import math
 import time
 from controller import Controller
-from lottery import lottery_rows
+from lottery import AWARD_SPEND_POLICY, lottery_rows, spend_expectation_threshold
 from runtime import Gate, HOSTS, Quota, atomic, digest
 from selection import choose
 from fee_evidence import quote_evidence, summarize_fees
@@ -172,7 +172,11 @@ class DiscoveryController(Controller):
         ]
 
     def spendable(self, wallet, height, amount=0, count=None):
-        selected, evidence = choose(self, wallet, height, amount, count)
+        # Free-shape payments also spend the sender's oldest mature V2
+        # award (#1681); see selection.choose.
+        selected, evidence = choose(
+            self, wallet, height, amount, count, award_input=True
+        )
         self.j.set("selection_latest", evidence)
         return selected
 
@@ -470,6 +474,15 @@ class DiscoveryController(Controller):
             self.j.set("phase_gates", {"correctness": True})
             # The first phase has no boundary wait: its slots start on time.
             self.j.set("phase_release", {"correctness": start})
+            # Marks a campaign that ran the award-spend policy, so a report
+            # rebuilt over an older journal never judges it by #1681.
+            self.j.set(
+                "award_spend_policy",
+                {
+                    "version": AWARD_SPEND_POLICY,
+                    "min_received": spend_expectation_threshold(self.plan),
+                },
+            )
         atomic(
             self.state / "activated.json",
             {

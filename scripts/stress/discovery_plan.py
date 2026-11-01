@@ -6,6 +6,7 @@ import re
 import random
 from collections import deque
 from bounds import checked_limits
+from lottery import spend_expectation_threshold
 from runtime import Gate, HOSTS, validate_rpc_url
 import math
 
@@ -221,6 +222,8 @@ def expand_discovery(plan):
     )
     amounts = [pico(v, "amount") for v in wallets["transfer_amounts_picocredits"]]
     require(amounts and max(amounts) <= 10**12, "payment bound")
+    # Optional pin for the #1681 award-spend expectation; default otherwise.
+    spend_expectation_threshold(plan)
     require(
         plan["funding"]["mode"] == "prefunded_isolated"
         and plan["funding"]["max_grants"] == 0

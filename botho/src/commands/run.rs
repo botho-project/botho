@@ -1476,6 +1476,22 @@ async fn run_async_with_shutdown(
                                 break 'node_loop;
                             }
                         }
+                        NetworkEvent::PeerSubscribedToTransactions(peer_id) => {
+                            // The new peer has seen none of the pending txs.
+                            // Reset the re-broadcast backoff so it gets them
+                            // on the next re-feed, not after up to 10 min
+                            // (#674, #1547). Coalesced to at most one reset
+                            // per 30 s, so peer churn cannot re-open the
+                            // #1547 flood (#1570).
+                            let cleared = rebroadcast_schedule.reset_all(Instant::now());
+                            if cleared > 0 {
+                                debug!(
+                                    %peer_id,
+                                    cleared,
+                                    "Peer subscribed to transactions; tx re-broadcast backoff reset"
+                                );
+                            }
+                        }
                         NetworkEvent::PeerMetadataUpdated(_) => {
                             // The RPC projection was refreshed above. Identify
                             // does not change connection counts or quorum membership.
@@ -1483,18 +1499,11 @@ async fn run_async_with_shutdown(
                         NetworkEvent::PeerDiscovered(peer_id) => {
                             info!("Peer connected: {}", peer_id);
                             let new_peer_count = discovery.peer_count();
-                            // The new peer has seen none of the pending txs.
-                            // Reset the re-broadcast backoff so it gets them
-                            // on the next re-feed, not after up to 10 min
-                            // (#674, #1547).
-                            let cleared = rebroadcast_schedule.reset_all();
-                            if cleared > 0 {
-                                debug!(
-                                    %peer_id,
-                                    cleared,
-                                    "Peer connected; tx re-broadcast backoff reset"
-                                );
-                            }
+                            // The pending-tx re-broadcast reset for this peer
+                            // happens on its transactions-topic subscription
+                            // (PeerSubscribedToTransactions), not here: at
+                            // connection time the peer is not yet in the topic
+                            // mesh, so a re-feed could miss it (#1570).
 
                             // Update RPC peer count and metrics
                             if let Ok(mut count) = peer_count.write() {

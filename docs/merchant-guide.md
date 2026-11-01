@@ -278,18 +278,25 @@ class PaymentMonitor:
 
     def _scan_for_payments(self, start, end):
         """Scan blocks for pending payments"""
-        outputs = self.rpc('chain_getOutputs', {
-            'start_height': start,
-            'end_height': end
-        })
+        # The node serves at most 1000 blocks per chain_getOutputs call and
+        # clamps longer ranges, so page from the last returned height + 1.
+        while start <= end:
+            outputs = self.rpc('chain_getOutputs', {
+                'start_height': start,
+                'end_height': end
+            })
+            if not outputs:
+                break
 
-        for block in outputs:
-            for output in block['outputs']:
-                # Match against pending payments
-                # This requires decrypting memos to find matches
-                payment = self._match_payment(output)
-                if payment:
-                    self._process_payment(payment, block['height'])
+            for block in outputs:
+                for output in block['outputs']:
+                    # Match against pending payments
+                    # This requires decrypting memos to find matches
+                    payment = self._match_payment(output)
+                    if payment:
+                        self._process_payment(payment, block['height'])
+
+            start = outputs[-1]['height'] + 1
 
     def _match_payment(self, output):
         """Match output to pending payment"""

@@ -206,7 +206,12 @@ async fn scan_batch(
     }
 
     // Calculate end height for this batch
-    let end_height = std::cmp::min(start_height + config.batch_size - 1, chain_height);
+    // Never above the node's per-call cap (#1656): the checkpoint advances to
+    // `end_height`, so a clamped batch would silently skip deposits.
+    let end_height = std::cmp::min(
+        start_height.saturating_add(config.effective_batch_size() - 1),
+        chain_height,
+    );
 
     tracing::debug!(
         "Scanning blocks {} to {} (chain height: {})",
@@ -301,10 +306,25 @@ async fn get_outputs(
         .get("result")
         .ok_or_else(|| anyhow::anyhow!("No result in response"))?;
 
+    // The node returns the block list as the result itself; accept a legacy
+    // `{blocks: [...]}` wrapper too.
     let blocks = result
-        .get("blocks")
-        .and_then(|b| b.as_array())
+        .as_array()
+        .or_else(|| result.get("blocks").and_then(|b| b.as_array()))
         .ok_or_else(|| anyhow::anyhow!("No blocks in response"))?;
+
+    // Every requested block must be served, or the checkpoint (advanced to
+    // `end_height` by the caller) would skip the missing ones' deposits.
+    let last = blocks
+        .last()
+        .and_then(|b| b.get("height"))
+        .and_then(|h| h.as_u64());
+    if last != Some(end_height) {
+        anyhow::bail!(
+            "chain_getOutputs [{start_height}, {end_height}] ended at {last:?}; \
+             refusing to advance past unserved blocks"
+        );
+    }
 
     let mut outputs = Vec::new();
 

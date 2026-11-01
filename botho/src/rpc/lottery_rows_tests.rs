@@ -630,3 +630,88 @@ async fn real_sealed_v2_payout_rows_match_the_ledger() {
     .await;
     assert_eq!(resp.error.expect("fails closed").code, -32603);
 }
+
+// ---------------------------------------------------------------------------
+// Height-range cap (#1656). Lives here for the seeded chain (heights 0..=3).
+// ---------------------------------------------------------------------------
+
+fn served_heights(resp: &JsonRpcResponse) -> Vec<u64> {
+    assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+    resp.result
+        .as_ref()
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["height"].as_u64().unwrap())
+        .collect()
+}
+
+#[test]
+fn get_outputs_range_clamps_and_saturates() {
+    let r = |p: Value| get_outputs_range(&p, MAX_GET_OUTPUTS_BLOCKS);
+    // Within the cap: unchanged.
+    assert_eq!(r(json!({"start_height": 5, "end_height": 104})), (5, 104));
+    assert_eq!(r(json!({"start_height": 0, "end_height": 999})), (0, 999));
+    // Over the cap: clamped to exactly MAX blocks.
+    assert_eq!(r(json!({"start_height": 0, "end_height": 1000})), (0, 999));
+    assert_eq!(
+        r(json!({"start_height": 7, "end_height": u64::MAX})),
+        (7, 1006)
+    );
+    // Default end is start + 100 (101 blocks), within the cap.
+    assert_eq!(r(json!({"start_height": 10})), (10, 110));
+    // Extreme heights saturate instead of overflowing.
+    assert_eq!(r(json!({"start_height": u64::MAX})), (u64::MAX, u64::MAX));
+    assert_eq!(
+        r(json!({"start_height": u64::MAX - 1, "end_height": u64::MAX})),
+        (u64::MAX - 1, u64::MAX)
+    );
+    // end < start stays an empty range.
+    assert_eq!(r(json!({"start_height": 9, "end_height": 3})), (9, 3));
+    assert_eq!(
+        get_outputs_range(&json!({"start_height": 4, "end_height": 50}), 1),
+        (4, 4)
+    );
+}
+
+/// The handler serves at most `max_blocks` blocks, densely from
+/// `start_height`, and a caller resuming at `last.height + 1` until an empty
+/// page collects every block (and every output) exactly once.
+#[tokio::test]
+async fn get_outputs_clamps_and_pages_by_continuation() {
+    let chain = seeded_chain();
+    let state = &chain.state;
+    let params = |start: u64, end: u64| json!({"start_height": start, "end_height": end});
+
+    let uncapped = handle_get_outputs(json!(1), &params(0, 3), state).await;
+    assert_eq!(served_heights(&uncapped), vec![0, 1, 2, 3]);
+    let all_rows = uncapped.result.unwrap();
+
+    // Cap 2: a far-past-the-tip request is clamped to two dense blocks.
+    let resp = handle_get_outputs_capped(json!(1), &params(0, u64::MAX), state, 2).await;
+    assert_eq!(served_heights(&resp), vec![0, 1]);
+
+    // Paging by continuation reassembles exactly the uncapped result.
+    let mut paged = Vec::new();
+    let mut next = 0u64;
+    let mut calls = 0;
+    loop {
+        calls += 1;
+        let resp = handle_get_outputs_capped(json!(1), &params(next, u64::MAX), state, 2).await;
+        let page = resp.result.clone().unwrap();
+        let page = page.as_array().unwrap();
+        let Some(last) = page.last() else { break };
+        next = last["height"].as_u64().unwrap() + 1;
+        paged.extend(page.iter().cloned());
+    }
+    assert_eq!(calls, 3, "two full pages then one empty past-the-tip page");
+    assert_eq!(Value::Array(paged), all_rows);
+
+    // The real cap bounds an unbounded request instead of walking to
+    // u64::MAX (this would previously never return).
+    let resp = handle_get_outputs(json!(1), &params(0, u64::MAX), state).await;
+    assert_eq!(served_heights(&resp), vec![0, 1, 2, 3]);
+    let resp = handle_get_outputs(json!(1), &json!({"start_height": u64::MAX}), state).await;
+    assert_eq!(served_heights(&resp), Vec::<u64>::new());
+}
