@@ -9,6 +9,16 @@
 //! require identical output. If a production picker changes (e.g. #1692), this
 //! fails until the port — and the privacy report — are updated.
 //!
+//! The web picker (`web/packages/wasm-signer/src/decoys.ts`
+//! `selectDecoysForInput`, #1735) is TypeScript, so its port is pinned to the
+//! rings the real `send.ts` recorded in
+//! `scripts/research/ct-economics/web-selection.json`
+//! (`web/packages/wasm-signer/test/ct-economics-selection.test.ts`, which
+//! replaces `crypto.getRandomValues` with a seeded mulberry32 stream) and to
+//! the shared `test/fixtures/decoy-age-band.json` vectors. Re-recording that
+//! file (`CT_ECONOMICS_WRITE_WEB=1`) after a picker change fails this test
+//! until the port follows.
+//!
 //! Synthetic key bytes are identifiers only; no signatures are built.
 
 use botho::decoy_selection::{
@@ -298,4 +308,126 @@ fn cli_port_matches_select_rpc_decoys_from_history() {
         matched_rings >= compared / 2,
         "only {matched_rings} rings compared"
     );
+}
+
+// ============================================================================
+// Web route: decoys.ts selectDecoysForInput (#1735)
+// ============================================================================
+
+const CT_SCENARIOS: &str = include_str!("../../scripts/research/ct-economics/scenarios.json");
+const CT_POOLS: &str = include_str!("../../scripts/research/ct-economics/pools.json");
+const CT_WEB_SELECTION: &str =
+    include_str!("../../scripts/research/ct-economics/web-selection.json");
+const DECOY_AGE_BAND: &str =
+    include_str!("../../web/packages/wasm-signer/test/fixtures/decoy-age-band.json");
+
+/// Replays every scenario of the CT-economics web recording through the
+/// `web` port. As in `ct-economics-selection.test.ts`: the decoy pool is the
+/// scenario's `pools.json` rows in RPC order (the owned real inputs are
+/// excluded by `send.ts`), every real input is `real_age` old, and one
+/// mulberry32 stream seeded `seeds[0] * 2 + inputs` drives the per-input
+/// selections in input order. Rings must match exactly, order included.
+#[test]
+fn web_port_matches_recorded_decoys_ts_rings() {
+    let scenarios: serde_json::Value = serde_json::from_str(CT_SCENARIOS).unwrap();
+    let pools: serde_json::Value = serde_json::from_str(CT_POOLS).unwrap();
+    let recorded: serde_json::Value = serde_json::from_str(CT_WEB_SELECTION).unwrap();
+    let seed0 = scenarios["seeds"][0].as_u64().unwrap();
+    let mut rings_compared = 0;
+    let mut failures_compared = 0;
+    for scenario in scenarios["scenarios"].as_array().unwrap() {
+        let name = scenario["name"].as_str().unwrap();
+        let real_age = scenario["real_age"].as_u64().unwrap();
+        let pool: Vec<RouteCandidate> = pools[name]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| RouteCandidate {
+                key: key(row[0].as_u64().unwrap()),
+                age_blocks: row[1].as_u64().unwrap(),
+            })
+            .collect();
+        let rows = recorded[name].as_array().unwrap();
+        assert_eq!(rows.len(), 2, "{name}");
+        for row in rows {
+            let inputs = row["inputs"].as_u64().unwrap();
+            let mut prng = port::Mulberry32::new((seed0 * 2 + inputs) as u32);
+            let mut next = || prng.next_u32();
+            let got: Result<Vec<Vec<u64>>, RouteError> = (0..inputs)
+                .map(|_| {
+                    port::web_select_decoys_for_input(&pool, COUNT, real_age, &mut next).map(
+                        |ring| {
+                            ring.iter()
+                                .map(|k| u64::from_le_bytes(k[..8].try_into().unwrap()) - 1)
+                                .collect()
+                        },
+                    )
+                })
+                .collect();
+            if row.get("error").is_some() {
+                assert_eq!(row["error"], "insufficient_decoys", "{name}/{inputs}");
+                assert!(
+                    matches!(got, Err(RouteError::InsufficientCandidates { .. })),
+                    "{name}/{inputs}: {got:?}"
+                );
+                failures_compared += 1;
+            } else {
+                let want: Vec<Vec<u64>> = serde_json::from_value(row["rings"].clone()).unwrap();
+                assert_eq!(got.as_ref().ok(), Some(&want), "{name}/{inputs} rings");
+                rings_compared += want.len();
+            }
+        }
+    }
+    // 16 scenarios x {1, 2} inputs; eighteen-decoys refuses both spends.
+    assert_eq!(failures_compared, 2);
+    assert_eq!(rings_compared, 15 * 3);
+}
+
+/// The shared web<->native conformance vectors (#1693): the band math and the
+/// RNG-independent fallback selections.
+#[test]
+fn web_port_matches_decoy_age_band_fixture() {
+    let fixture: serde_json::Value = serde_json::from_str(DECOY_AGE_BAND).unwrap();
+    assert_eq!(
+        fixture["minDecoyAgeBlocks"].as_u64(),
+        Some(port::MIN_DECOY_AGE_BLOCKS)
+    );
+    assert_eq!(
+        fixture["ageSimilaritySpreadBps"].as_u64(),
+        Some(port::AGE_SIMILARITY_SPREAD_BPS)
+    );
+    for band in fixture["bands"].as_array().unwrap() {
+        let age = band["realAge"].as_u64().unwrap();
+        let (lo, hi) = port::age_similarity_band(age);
+        assert_eq!(lo, band["minAge"].as_u64().unwrap(), "age {age}");
+        assert_eq!(hi, band["maxAge"].as_u64().unwrap(), "age {age}");
+        assert_eq!(lo > hi, band["degenerate"].as_bool().unwrap(), "age {age}");
+    }
+    for case in fixture["fallback"].as_array().unwrap() {
+        let ages: Vec<u64> = serde_json::from_value(case["poolAges"].clone()).unwrap();
+        let pool: Vec<RouteCandidate> = ages
+            .iter()
+            .enumerate()
+            .map(|(i, &a)| RouteCandidate {
+                key: key(i as u64),
+                age_blocks: a,
+            })
+            .collect();
+        let count = case["count"].as_u64().unwrap() as usize;
+        let real_age = case["realAge"].as_u64().unwrap();
+        let mut want: Vec<u64> = serde_json::from_value(case["expectedAges"].clone()).unwrap();
+        want.sort();
+        for seed in 0..8u32 {
+            let mut prng = port::Mulberry32::new(seed);
+            let ring =
+                port::web_select_decoys_for_input(&pool, count, real_age, &mut || prng.next_u32())
+                    .unwrap();
+            let mut got: Vec<u64> = ring
+                .iter()
+                .map(|k| ages[(u64::from_le_bytes(k[..8].try_into().unwrap()) - 1) as usize])
+                .collect();
+            got.sort();
+            assert_eq!(got, want, "{} seed {seed}", case["name"]);
+        }
+    }
 }

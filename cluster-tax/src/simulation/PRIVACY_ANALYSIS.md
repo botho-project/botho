@@ -3,9 +3,9 @@
 This document reports what the privacy simulation measures for the ring
 producers Botho actually ships. Every number below is CLI output from
 `cluster-tax-sim`, and the exact commands are listed with the results. Last
-regenerated for #1700 at ring size **20** (`MIN_RING_SIZE`,
-`transaction/clsag/src/lib.rs:980`) with the **±10%** age band
-(`AGE_SIMILARITY_SPREAD_BPS`, `botho/src/decoy_selection.rs:269`).
+regenerated for #1700 (after #1735 merged) at ring size **20**
+(`MIN_RING_SIZE`, `transaction/clsag/src/lib.rs:980`) with the **±10%** age
+band (`AGE_SIMILARITY_SPREAD_BPS`, `botho/src/decoy_selection.rs:269`).
 
 > **Headline: deployed ring privacy is far below the "≈95% efficiency" this
 > document used to claim.** The old number came from a model of
@@ -13,23 +13,28 @@ regenerated for #1700 at ring size **20** (`MIN_RING_SIZE`,
 > entropy (bits) instead of how often the real input is singled out. Measured
 > against the real pickers:
 >
-> - **web/Snap/claim links** (`send.ts`, before #1735): the real input is the
->   youngest ring member in **100%** of rings, at every age.
 > - **node** (`select_decoys_for_input`): the real input's age rank is fixed
 >   (youngest in 100% of rings at ages 1k/5k, oldest in 100% at 100k/1M).
 >   Even when real ages follow the picker's own gamma model, the member
 >   nearest the ring's age midrange is the real input **85.5%** of the time.
-> - **CLI wallet** (`select_rpc_decoy_pool`): decoys are uniform within the
+> - **CLI wallet** (`select_rpc_decoy_pool`) and **web/Snap/claim links**
+>   (`decoys.ts` `selectDecoysForInput`, #1735): decoys are uniform within the
 >   band, but the band is *centred* on the real age. The real input is
 >   therefore the median-age member, and the midrange guess identifies it in
->   **~50%** of rings (95% at age 100).
+>   **~50%** of rings (cli 49.1–53.4%, web 49.1–52.3% at ages 1k–1M and
+>   gamma; ~95% at age 100). #1735 removed the pre-#1735 web leak (the real
+>   input was the youngest member in 100% of rings) but the web route now
+>   shares the centred-band leak (#1755).
 > - **Cluster tags**: the native wallets stamp outputs with the real input's
->   tags in plaintext, and no picker looks at tags. When every output is
->   tagged, cluster fingerprinting identifies the real input in **~99.7%** of
->   node and CLI rings. With half the outputs untagged it is still ~55%.
+>   tags in plaintext, and no picker looks at tags. Cluster fingerprinting
+>   identifies the real input in **~99.7%** of node and CLI rings — an
+>   **upper estimate (every output tagged)**: the legacy synthetic profile mix
+>   tags every output. With half the outputs untagged it is still ~55%. The
+>   web signer publishes empty output tags, so this adversary gets 5.0%
+>   (uniform) there.
 >
-> Follow-ups: #1692 (node edge clamp), #1693 / PR #1735 (web route), #1755
-> (centred band), #1756 (plaintext inherited tags).
+> Follow-ups: #1692 (node edge clamp), #1755 (centred band — node, CLI and
+> web), #1756 (plaintext inherited tags).
 
 ## What is simulated
 
@@ -38,18 +43,31 @@ production decoy pickers. `cluster-tax` cannot depend on `botho` or
 `botho-wallet` (both depend on it), so the native pickers are ported.
 `botho/tests/privacy_sim_route_parity.rs` pins each port to the real function:
 identical candidates and identically seeded RNGs must give identical rings.
+CI runs it (and the `privacy_routes` unit tests) in `workspace-build.yml`.
 
 | route  | production code | used by |
 |--------|-----------------|---------|
 | `node` | `GammaDecoySelector::select_decoys_for_input` (`botho/src/decoy_selection.rs:749`) | `Ledger::get_decoy_outputs_for_input`, node wallet, detached signer |
 | `cli`  | `select_rpc_decoys_from_history` → `select_rpc_decoy_pool` (`botho-wallet/src/ring_builder.rs:159`) | `botho-wallet` thin CLI wallet |
-| `web`  | `decoyPool[(i*19 + j) % len]` (`web/packages/wasm-signer/src/send.ts:657`) | web wallet, MetaMask Snap, claim links |
+| `web`  | `selectDecoysForInput` (`web/packages/wasm-signer/src/decoys.ts:141`, called per input at `send.ts:655`) | web wallet, MetaMask Snap, claim links |
+| `web-pre-1735` | historical chain-ordered `decoyPool[(i*19 + j) % len]` window (`send.ts:657` at `596f64c0`, removed by #1735) | nothing — comparison only, not in `--route production` |
 
-The web route is modelled **as on `main` before PR #1735** (#1693). A unit
-test pins the port to the rings the TypeScript route recorded in
-`scripts/research/ct-economics/web-selection.json`. #1735 replaces the route
-with a centred-band CSPRNG picker, which is statistically the same as the
-`cli` route. Re-run this report and update the port once #1735 merges.
+**Web port provenance.** The `web` port mirrors `decoys.ts` step for step:
+10-block confirmation floor, `ageSimilarityBand` (±10%, same integer bps
+math), partial Fisher–Yates over the in-band candidates, nearest-age fill
+(shuffle, then stable sort by distance) when the band is thin, final ring
+shuffle, every draw via `randomIndex`'s u32 rejection sampling over an
+injected u32 source. The parity test replays all 16 scenarios of
+`scripts/research/ct-economics/web-selection.json` — the rings #1735's
+`ct-economics-selection.test.ts` recorded from the real `send.ts` with
+`crypto.getRandomValues` stubbed by a seeded mulberry32 — through the port
+with the same mulberry32 seeds and requires identical rings, order included;
+it also checks the shared `test/fixtures/decoy-age-band.json` vectors. The
+simulation drives the same port from ChaCha8 u32 draws. When the band alone
+fills the ring (every reported age, including 100 on this chain: 20 in-band
+outputs) it uses a sparse-swap fast path that is bit-identical to the
+literal port; for thinner bands it uses a distribution-equivalent
+nearest-age fill (unit-tested against the literal port).
 
 **Chain model.** The UTXO set has one output at every height
 1..=1,200,000, so it covers every reported age densely. The legacy model used
@@ -124,18 +142,18 @@ Outputs carry the real input's tags decayed one hop (plaintext).
 
 #### Route `web`
 
-Ports: buildSendTransaction decoy window (web/packages/wasm-signer/src/send.ts, pre-#1735) — web wallet, Snap, claim links.
+Ports: selectDecoysForInput (web/packages/wasm-signer/src/decoys.ts, #1735) — web wallet, Snap, claim links.
 Outputs carry empty cluster tags.
 
 | real age | rings | fail | youngest | oldest | rank χ² | ID Naive | ID Age-Heuristic | ID Age-Rank (guess) | ID Band-Center | ID Cluster-Fingerprint | ID Combined |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| 100 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 100.0% | 100.0% (r1) | 0.0% | 5.0% | 100.0% |
-| 1000 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 100.0% | 100.0% (r1) | 0.0% | 5.0% | 100.0% |
-| 5000 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 100.0% | 100.0% (r1) | 0.0% | 5.0% | 100.0% |
-| 30000 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 100.0% | 100.0% (r1) | 0.0% | 5.0% | 100.0% |
-| 100000 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 100.0% | 100.0% (r1) | 0.0% | 5.0% | 100.0% |
-| 1000000 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 5.0% | 100.0% (r1) | 0.0% | 5.0% | 5.0% |
-| gamma-spend | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 100.0% | 100.0% (r1) | 0.0% | 5.0% | 100.0% |
+| 100 | 10000 | 0 | 0.0% | 0.0% | 90000 | 5.0% | 0.0% | 50.0% (r11) | 94.7% | 5.0% | 0.0% |
+| 1000 | 10000 | 0 | 0.0% | 0.0% | 17078 | 5.0% | 0.0% | 18.8% (r11) | 52.3% | 5.0% | 0.0% |
+| 5000 | 10000 | 0 | 0.0% | 0.0% | 16128 | 5.0% | 0.0% | 17.4% (r11) | 50.2% | 5.0% | 0.0% |
+| 30000 | 10000 | 0 | 0.0% | 0.0% | 16126 | 5.0% | 0.0% | 17.0% (r10) | 49.6% | 5.0% | 0.0% |
+| 100000 | 10000 | 0 | 0.0% | 0.0% | 15689 | 5.0% | 0.0% | 16.9% (r10) | 49.1% | 5.0% | 0.0% |
+| 1000000 | 10000 | 0 | 0.0% | 0.0% | 15756 | 5.0% | 5.0% | 17.8% (r10) | 49.5% | 5.0% | 5.0% |
+| gamma-spend | 10000 | 0 | 0.0% | 0.0% | 15595 | 5.0% | 1.8% | 17.5% (r10) | 49.9% | 5.0% | 1.8% |
 
 #### Real-input age-rank histogram (% of rings at each rank)
 
@@ -155,19 +173,62 @@ Outputs carry empty cluster tags.
 | cli | 100000 | 0 | 0 | 0 | 0 | 1 | 2 | 5 | 9 | 14 | 18 | 18 | 14 | 10 | 5 | 2 | 1 | 0 | 0 | 0 | 0 |
 | cli | 1000000 | 0 | 0 | 0 | 0 | 1 | 3 | 5 | 9 | 14 | 17 | 18 | 15 | 9 | 5 | 2 | 1 | 0 | 0 | 0 | 0 |
 | cli | gamma-spend | 0 | 0 | 0 | 0 | 1 | 2 | 5 | 9 | 14 | 19 | 18 | 14 | 10 | 5 | 2 | 1 | 0 | 0 | 0 | 0 |
-| web | 100 | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| web | 1000 | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| web | 5000 | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| web | 30000 | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| web | 100000 | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| web | 1000000 | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| web | gamma-spend | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| web | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 50 | 50 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| web | 1000 | 0 | 0 | 0 | 0 | 1 | 2 | 5 | 9 | 14 | 19 | 19 | 15 | 9 | 5 | 2 | 1 | 0 | 0 | 0 | 0 |
+| web | 5000 | 0 | 0 | 0 | 0 | 1 | 2 | 5 | 10 | 15 | 18 | 17 | 15 | 9 | 5 | 2 | 1 | 0 | 0 | 0 | 0 |
+| web | 30000 | 0 | 0 | 0 | 0 | 1 | 2 | 5 | 9 | 15 | 17 | 18 | 15 | 9 | 5 | 2 | 1 | 0 | 0 | 0 | 0 |
+| web | 100000 | 0 | 0 | 0 | 0 | 1 | 2 | 5 | 10 | 15 | 17 | 18 | 14 | 10 | 5 | 2 | 1 | 0 | 0 | 0 | 0 |
+| web | 1000000 | 0 | 0 | 0 | 0 | 1 | 2 | 5 | 10 | 14 | 18 | 18 | 14 | 9 | 5 | 2 | 1 | 0 | 0 | 0 | 0 |
+| web | gamma-spend | 0 | 0 | 0 | 0 | 1 | 2 | 5 | 10 | 14 | 18 | 18 | 14 | 10 | 5 | 2 | 1 | 0 | 0 | 0 | 0 |
+
+### Historical comparison: the pre-#1735 web route
+
+```bash
+cargo run -p bth-cluster-tax --features cli --bin cluster-tax-sim --release -- \
+    privacy -n 10000 --route web-pre-1735
+```
+
+Output (route table and histogram; the header paragraphs are identical to
+the run above):
+
+#### Route `web-pre-1735`
+
+Ports: HISTORICAL chain-ordered decoyPool[(i*19+j) % len] window that web/packages/wasm-signer/src/send.ts used before #1735 — no longer run.
+Outputs carry empty cluster tags.
+
+| real age | rings | fail | youngest | oldest | rank χ² | ID Naive | ID Age-Heuristic | ID Age-Rank (guess) | ID Band-Center | ID Cluster-Fingerprint | ID Combined |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 100 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 100.0% | 100.0% (r1) | 0.0% | 5.0% | 100.0% |
+| 1000 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 100.0% | 100.0% (r1) | 0.0% | 5.0% | 100.0% |
+| 5000 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 100.0% | 100.0% (r1) | 0.0% | 5.0% | 100.0% |
+| 30000 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 100.0% | 100.0% (r1) | 0.0% | 5.0% | 100.0% |
+| 100000 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 100.0% | 100.0% (r1) | 0.0% | 5.0% | 100.0% |
+| 1000000 | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 5.0% | 100.0% (r1) | 0.0% | 5.0% | 5.0% |
+| gamma-spend | 10000 | 0 | 100.0% | 0.0% | 190000 | 5.0% | 100.0% | 100.0% (r1) | 0.0% | 5.0% | 100.0% |
+
+#### Real-input age-rank histogram (% of rings at each rank)
+
+| route | real age | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| web-pre-1735 | 100 | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| web-pre-1735 | 1000 | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| web-pre-1735 | 5000 | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| web-pre-1735 | 30000 | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| web-pre-1735 | 100000 | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| web-pre-1735 | 1000000 | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| web-pre-1735 | gamma-spend | 100 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+Before #1735 every web ring used the chain's 19 oldest outputs, so the real
+input was always the youngest member and every web ring shared the same
+decoys. No production code runs this route any more.
 
 ### Sensitivity: half the outputs untagged
 
 ```bash
 cargo run -p bth-cluster-tax --features cli --bin cluster-tax-sim --release -- \
     privacy -n 10000 --background-fraction 0.5 --real-ages 1000,30000,gamma
+cargo run -p bth-cluster-tax --features cli --bin cluster-tax-sim --release -- \
+    privacy -n 10000 --background-fraction 0.5 --real-ages 1000,30000,gamma --route web-pre-1735
 ```
 
 | route | real age | ID Cluster-Fingerprint (0% background) | ID Cluster-Fingerprint (50% background) |
@@ -178,42 +239,58 @@ cargo run -p bth-cluster-tax --features cli --bin cluster-tax-sim --release -- \
 | cli | 1000 | 99.7% | 55.1% |
 | cli | 30000 | 99.7% | 54.5% |
 | cli | gamma-spend | 99.8% | 54.0% |
-| web | 1000 | 5.0% | 6.2% |
+| web | 1000 | 5.0% | 4.9% |
+| web | 30000 | 5.0% | 5.1% |
+| web | gamma-spend | 5.0% | 5.0% |
+| web-pre-1735 | 1000 | 5.0% | 6.2% |
+| web-pre-1735 | 30000 | 5.0% | 6.4% |
+| web-pre-1735 | gamma-spend | 5.0% | 6.3% |
 
 The age-rank, Age-Rank and Band-Center columns do not change; they use ages
 only. The web signer publishes empty output tags, so the cluster adversary
-learns nothing there. Those empty tags are themselves the tag-drop problem
-tracked in #1687.
+learns nothing there: it scores every empty-tagged ring member 1.0 and every
+tagged one 0.5, so its guess is uniform among the blanked members. With
+random decoys (`web`) that averages to 5.0%. The pre-#1735 window always used
+the same 19 decoys, a fixed number of which happen to be blanked, so its
+tie-split share drifts to 6.2–6.4%. That is an artefact of the fixed decoy
+set, not a leak in the web signer. The empty tags are themselves the
+tag-drop problem tracked in #1687.
 
 ### Reading the results
 
-1. **The web route (pre-#1735) offers no sender privacy against age
-   analysis.** Every ring uses the chain's 19 oldest outputs. The real input
-   is always the youngest member, and every web ring shares the same decoys.
-2. **The node picker's edge clamp (#1692)** puts every decoy on one side of
+1. **The node picker's edge clamp (#1692)** puts every decoy on one side of
    the real input wherever the real age sits outside the gamma bulk (about
    13k–33k blocks). Inside the bulk (30k) the Age-Rank guess still gets 34.7%
    and Band-Center 59.7%. When real ages follow the picker's own gamma model,
    the pooled rank histogram looks uniform (χ² = 20). Conditioned on the
    ring's public ages, though, the real input is the midrange member in 85.5%
    of rings.
-3. **The centred ±10% band leaks the real age (#1755).** This is a new finding of
-   #1700. The CLI wallet draws decoys uniformly within the band. Because the
-   band is centred on the real age, each decoy is younger than the real input
-   with probability ½. The real input's rank is therefore Binomial(19, ½) + 1:
-   it is the median member, and the ring's midrange estimates its age. Any
-   picker that centres the band on the real input inherits this, including
-   the node picker and PR #1735's web picker. A uniform age rank (the #1692
-   acceptance) is out of reach while the band stays centred.
-4. **Plaintext inherited cluster tags fingerprint the real input (#1756).** This is
-   also new from #1700. `Wallet::compute_inherited_tags`
+2. **The centred ±10% band leaks the real age (#1755).** This is a new
+   finding of #1700. The CLI wallet and, since #1735, the web signer draw
+   decoys uniformly within the band. Because the band is centred on the real
+   age, each decoy is younger than the real input with probability ½. The
+   real input's rank is therefore Binomial(19, ½) + 1: it is the median
+   member, and the ring's midrange estimates its age. The `web` rows confirm
+   it: Band-Center 49.1–52.3% at ages 1k–1M and gamma (cli 49.1–53.4%),
+   Age-Rank 16.9–18.8% (cli 17.8–18.6%), 94.7% Band-Center at age 100 where
+   the band holds only 20 outputs (cli 95.1%). Any picker that centres the
+   band on the real input inherits this, including the node picker. A
+   uniform age rank (the #1692 acceptance) is out of reach while the band
+   stays centred. The one behavioural difference between `web` and `cli` —
+   web fills a thin band with nearest-age outputs where the CLI refuses —
+   never triggers at the reported ages on this chain (0 failures and no
+   fallback for either route at age 100).
+3. **Plaintext inherited cluster tags fingerprint the real input (#1756).**
+   This is also new from #1700. `Wallet::compute_inherited_tags`
    (`botho/src/wallet.rs:695`) and `inherited_cluster_tags`
    (`botho-wallet/src/transaction.rs:465`) stamp every output with the real
    input's tags decayed 5%. Decoys never contribute, and none of the pickers
    looks at tags. Cluster-aware selection (`select_decoys_cluster_aware`,
    including the ±10% factor band `factor_similarity_band`) exists in
-   `botho/src/decoy_selection.rs` but has **no production caller**.
-5. **Bits are not the metric to quote.** The legacy report below shows 4.11
+   `botho/src/decoy_selection.rs` but has **no production caller**. The
+   ~99.7% rate is an upper estimate (every output tagged); see the
+   sensitivity table for the dilution.
+4. **Bits are not the metric to quote.** The legacy report below shows 4.11
    of 4.32 bits ("95%") against cluster fingerprinting while the same
    adversary's ID rate is 58.7%. Entropy averages over the whole distribution,
    so a minority of fully exposed rings barely moves the mean.
@@ -242,7 +319,8 @@ cargo run -p bth-cluster-tax --features cli --bin cluster-tax-sim --release -- \
 Theoretical maximum: 4.32 bits (log₂ 20). Even the hypothetical
 cluster-aware design leaves the cluster adversary a 58.7% ID rate. The
 production-like tag-blind configuration (`--cluster-aware false`) matches the
-production-route result: about 99.7%.
+production-route result: about 99.7%, an upper estimate (every output tagged)
+since both use the synthetic all-tagged profile mix.
 
 ## Ring size and signature cost
 
@@ -338,7 +416,8 @@ This replaces the weighted cosine similarity used with plaintext tags (which req
 > **Unverified (#1700):** no `cluster-tax-sim` command produces the table
 > below. Its baseline (4.10 bits / 32.6%) is the legacy cluster-aware model,
 > which no producer runs. The production plaintext-tag fingerprint rate is
-> ~99.7% (see Results). Treat these numbers as historical until a
+> ~99.7% as an upper estimate (every output tagged; ~55% with half untagged —
+> see Results). Treat these numbers as historical until a
 > committed-tag run is added to the CLI.
 
 Historical claim, from a simulation of committed tag vectors:

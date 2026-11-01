@@ -300,11 +300,12 @@ mod cli {
         ///
         /// By default this drives ports of the decoy pickers production runs
         /// (node `select_decoys_for_input`, CLI wallet `select_rpc_decoy_pool`,
-        /// web/Snap `send.ts`) over an explicit chain model and reports, per
-        /// route and real-input age, the real input's age-rank distribution and
-        /// each adversary's argmax identification rate (#1700). `--route
-        /// legacy` runs the old global-gamma / cluster-aware model, which no
-        /// production producer implements.
+        /// web/Snap `decoys.ts` `selectDecoysForInput`) over an explicit chain
+        /// model and reports, per route and real-input age, the real
+        /// input's age-rank distribution and each adversary's argmax
+        /// identification rate (#1700). `--route legacy` runs the old
+        /// global-gamma / cluster-aware model, which no production
+        /// producer implements.
         Privacy {
             /// Rings per (route, real age) row for the production routes (plus
             /// as many training rings); total rings for `--route legacy`
@@ -312,7 +313,8 @@ mod cli {
             simulations: usize,
 
             /// Which picker(s) to simulate: production (node+cli+web), node,
-            /// cli, web, legacy, or all (production + legacy)
+            /// cli, web, web-pre-1735 (historical chain-ordered web window,
+            /// not in production), legacy, or all (production + legacy)
             #[arg(long, default_value = "production")]
             route: String,
 
@@ -2461,10 +2463,11 @@ mod cli {
             "node" => (vec![DecoyRoute::Node], false),
             "cli" => (vec![DecoyRoute::Cli], false),
             "web" => (vec![DecoyRoute::Web], false),
+            "web-pre-1735" => (vec![DecoyRoute::WebPre1735], false),
             "legacy" => (Vec::new(), true),
             other => {
                 eprintln!(
-                    "unknown --route {other:?}; expected production, all, node, cli, web or legacy"
+                    "unknown --route {other:?}; expected production, all, node, cli, web, web-pre-1735 or legacy"
                 );
                 std::process::exit(2);
             }

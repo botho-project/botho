@@ -8,27 +8,27 @@
 //!
 //! # Routes
 //!
-//! | route  | production code                                                              | used by                                              |
-//! |--------|------------------------------------------------------------------------------|------------------------------------------------------|
-//! | `node` | `GammaDecoySelector::select_decoys_for_input` (`botho/src/decoy_selection.rs`) | `Ledger::get_decoy_outputs_for_input`, node wallet, detached signer |
-//! | `cli`  | `select_rpc_decoys_from_history` → `select_rpc_decoy_pool` (`botho-wallet/src/ring_builder.rs`) | `botho-wallet` thin CLI wallet |
-//! | `web`  | `buildSendTransaction` decoy window (`web/packages/wasm-signer/src/send.ts`)  | web wallet, MetaMask Snap, claim links               |
+//! | route         | production code                                                              | used by                                              |
+//! |---------------|------------------------------------------------------------------------------|------------------------------------------------------|
+//! | `node`        | `GammaDecoySelector::select_decoys_for_input` (`botho/src/decoy_selection.rs`) | `Ledger::get_decoy_outputs_for_input`, node wallet, detached signer |
+//! | `cli`         | `select_rpc_decoys_from_history` → `select_rpc_decoy_pool` (`botho-wallet/src/ring_builder.rs`) | `botho-wallet` thin CLI wallet |
+//! | `web`         | `selectDecoysForInput` (`web/packages/wasm-signer/src/decoys.ts`, #1735)      | web wallet, MetaMask Snap, claim links               |
+//! | `web-pre-1735`| historical: the chain-ordered `decoyPool[(i*19 + j) % len]` window `send.ts` used before #1735 | nothing (kept for before/after comparison; not in `production`) |
 //!
 //! `cluster-tax` cannot depend on `botho` / `botho-wallet` (they depend on
 //! `cluster-tax`), so the native pickers are **ported** here. The ports are
 //! pinned to the production functions by
 //! `botho/tests/privacy_sim_route_parity.rs`, which feeds identical candidates
-//! and identically-seeded RNGs to both and asserts identical output. The web
-//! route is pinned to the TypeScript route's recorded output
-//! (`scripts/research/ct-economics/web-selection.json`, produced
-//! by `web/packages/wasm-signer/test/ct-economics-selection.test.ts`) by a unit
-//! test below.
+//! and identically-seeded RNGs to both and asserts identical output.
 //!
-//! The web route is modelled **as on `main` at the time of #1700**:
-//! chain-ordered `decoyPool[(i*19 + j) % len]` with no age band and no
-//! randomness. PR #1735 (#1693) replaces it with an age-band CSPRNG picker that
-//! is statistically the same as the `cli` route; once it merges, this port and
-//! its fixture test must be updated and the report re-run.
+//! The `web` port is pinned the same way to the TypeScript picker's recorded
+//! output: `web/packages/wasm-signer/test/ct-economics-selection.test.ts` runs
+//! the real `send.ts` → `selectDecoysForInput` with `crypto.getRandomValues`
+//! stubbed by a seeded mulberry32 stream and records the rings in
+//! `scripts/research/ct-economics/web-selection.json`. The parity test replays
+//! the same pools through [`web_select_decoys_for_input`] driven by
+//! [`Mulberry32`] with the same seeds and requires identical rings (including
+//! order), and checks the shared `decoy-age-band.json` fixture.
 //!
 //! # Chain model
 //!
@@ -382,11 +382,214 @@ pub fn cli_select_rpc_decoys_for_input<R: Rng + ?Sized>(
 }
 
 // ============================================================================
-// Route `web`: wasm-signer send.ts (as on main before #1735)
+// Route `web`: wasm-signer decoys.ts selectDecoysForInput (#1735)
 // ============================================================================
 
-/// Port of the `buildSendTransaction` decoy window in
-/// `web/packages/wasm-signer/src/send.ts` (pre-#1735).
+/// mulberry32, the seeded PRNG `ct-economics-selection.test.ts` substitutes
+/// for `crypto.getRandomValues` when it records `web-selection.json`. Test
+/// fixture only: production always uses the platform CSPRNG.
+#[derive(Debug, Clone)]
+pub struct Mulberry32(u32);
+
+impl Mulberry32 {
+    pub fn new(seed: u32) -> Self {
+        Self(seed)
+    }
+
+    /// Next 32-bit output (identical to the TypeScript stub's per-element
+    /// fill).
+    pub fn next_u32(&mut self) -> u32 {
+        self.0 = self.0.wrapping_add(0x6d2b_79f5);
+        let mut t = self.0;
+        t = (t ^ (t >> 15)).wrapping_mul(t | 1);
+        t ^= t.wrapping_add((t ^ (t >> 7)).wrapping_mul(t | 61));
+        t ^ (t >> 14)
+    }
+}
+
+/// Port of `randomIndex` (`decoys.ts`): uniform integer in `[0, n)` from a
+/// u32 source by rejection sampling (no modulo bias). `n == 1` consumes
+/// nothing. `n` must be in `[1, 2^32]`.
+pub fn web_random_index<F: FnMut() -> u32>(n: usize, next_u32: &mut F) -> usize {
+    let n = n as u64;
+    assert!(
+        (1..=1u64 << 32).contains(&n),
+        "web_random_index: invalid bound {n}"
+    );
+    if n == 1 {
+        return 0;
+    }
+    let range = 1u64 << 32;
+    let limit = range - (range % n);
+    loop {
+        let v = next_u32() as u64;
+        if v < limit {
+            return (v % n) as usize;
+        }
+    }
+}
+
+/// Port of the in-place `shuffle` (`decoys.ts`): Fisher–Yates from the end.
+fn web_shuffle<T, F: FnMut() -> u32>(items: &mut [T], next_u32: &mut F) {
+    for i in (1..items.len()).rev() {
+        let j = web_random_index(i + 1, next_u32);
+        items.swap(i, j);
+    }
+}
+
+fn web_insufficient(count: usize, available: usize) -> RouteError {
+    RouteError::InsufficientCandidates {
+        required: count,
+        available,
+    }
+}
+
+/// Literal port of `selectDecoysForInput`
+/// (`web/packages/wasm-signer/src/decoys.ts`).
+///
+/// `pool` must already exclude the transaction's real inputs (as `send.ts`
+/// does). Drops candidates younger than [`MIN_DECOY_AGE_BLOCKS`]; phase 1 takes
+/// a uniform sample without replacement from the ±10% band by partial
+/// Fisher–Yates over the in-band candidates (in `pool` order); phase 2 fills a
+/// shortfall with the nearest-aged out-of-band candidates (shuffle, then
+/// stable sort by distance); finally the selection is shuffled. Every random
+/// draw is [`web_random_index`] over `next_u32`, so a seeded source reproduces
+/// the TypeScript output exactly. Returns keys in final ring order.
+pub fn web_select_decoys_for_input<F: FnMut() -> u32>(
+    pool: &[RouteCandidate],
+    count: usize,
+    real_input_age: u64,
+    next_u32: &mut F,
+) -> Result<Vec<[u8; 32]>, RouteError> {
+    let eligible: Vec<&RouteCandidate> = pool
+        .iter()
+        .filter(|c| c.age_blocks >= MIN_DECOY_AGE_BLOCKS)
+        .collect();
+    if eligible.len() < count {
+        return Err(web_insufficient(count, eligible.len()));
+    }
+    let (min_age, max_age) = age_similarity_band(real_input_age);
+    let (mut in_band, out_of_band): (Vec<&RouteCandidate>, Vec<&RouteCandidate>) = eligible
+        .into_iter()
+        .partition(|c| min_age <= max_age && c.age_blocks >= min_age && c.age_blocks <= max_age);
+
+    let mut selected: Vec<&RouteCandidate> = Vec::with_capacity(count);
+    let take = count.min(in_band.len());
+    for i in 0..take {
+        let j = i + web_random_index(in_band.len() - i, next_u32);
+        in_band.swap(i, j);
+        selected.push(in_band[i]);
+    }
+
+    if selected.len() < count {
+        let mut leftovers = out_of_band;
+        web_shuffle(&mut leftovers, next_u32);
+        // `Array.prototype.sort` is stable, as is `sort_by_key`.
+        leftovers.sort_by_key(|c| c.age_blocks.abs_diff(real_input_age));
+        let need = count - selected.len();
+        selected.extend(leftovers.into_iter().take(need));
+    }
+
+    web_shuffle(&mut selected, next_u32);
+    Ok(selected.into_iter().map(|c| c.key).collect())
+}
+
+/// Fast path of [`web_select_decoys_for_input`] for the simulation when the
+/// band alone can fill the ring.
+///
+/// `band` is exactly the in-band eligible candidates in pool order (the real
+/// input excluded). Returns `None` when `band.len() < count` (phase 2 would
+/// run; see [`web_fill_nearest`]). Otherwise the result — including every RNG
+/// draw — is bit-identical to the literal port over any pool whose in-band
+/// subsequence is `band`: phase 1's partial Fisher–Yates is replayed with a
+/// sparse swap map instead of copying the band.
+pub fn web_select_decoys_banded<F: FnMut() -> u32>(
+    band: &[RouteCandidate],
+    count: usize,
+    next_u32: &mut F,
+) -> Option<Vec<[u8; 32]>> {
+    if band.len() < count {
+        return None;
+    }
+    let mut swapped: HashMap<usize, usize> = HashMap::with_capacity(2 * count);
+    let at = |m: &HashMap<usize, usize>, i: usize| *m.get(&i).unwrap_or(&i);
+    let mut selected: Vec<[u8; 32]> = Vec::with_capacity(count);
+    for i in 0..count {
+        let j = i + web_random_index(band.len() - i, next_u32);
+        let (vi, vj) = (at(&swapped, i), at(&swapped, j));
+        swapped.insert(i, vj);
+        swapped.insert(j, vi);
+        selected.push(band[vj].key);
+    }
+    web_shuffle(&mut selected, next_u32);
+    Some(selected)
+}
+
+/// Simulation stand-in for the thin-band case (`band.len() < count`) on the
+/// chain model, where the literal port would shuffle the entire out-of-band
+/// UTXO set per ring.
+///
+/// Same distribution, different RNG stream: phase 1 takes the whole band (in
+/// uniformly random order, as partial Fisher–Yates does); phase 2 takes the
+/// out-of-band eligible outputs in increasing age distance, and from the
+/// distance group that straddles the remaining slots a uniform subset — what
+/// "shuffle, then stable sort by distance, take the first k" yields; the ring
+/// is then shuffled. Not bit-identical to the literal port (the parity test
+/// pins the literal port; a unit test checks this agrees with it on the
+/// selected distance multiset).
+fn web_fill_nearest<F: FnMut() -> u32>(
+    chain: &ChainModel,
+    band: &[RouteCandidate],
+    real_key: [u8; 32],
+    real_age: u64,
+    count: usize,
+    next_u32: &mut F,
+) -> Result<Vec<[u8; 32]>, RouteError> {
+    let real_eligible = usize::from(real_age >= MIN_DECOY_AGE_BLOCKS);
+    let eligible_total = chain.eligible_count() - real_eligible;
+    if eligible_total < count {
+        return Err(web_insufficient(count, eligible_total));
+    }
+    let (min_age, max_age) = age_similarity_band(real_age);
+    let in_band = |a: u64| min_age <= max_age && a >= min_age && a <= max_age;
+    let mut selected: Vec<[u8; 32]> = band.iter().map(|c| c.key).collect();
+    let mut d = 0u64;
+    while selected.len() < count {
+        let mut group: Vec<[u8; 32]> = Vec::new();
+        let below = (d <= real_age).then(|| real_age - d);
+        let above = (d > 0).then(|| real_age + d);
+        for age in below.into_iter().chain(above) {
+            if age < MIN_DECOY_AGE_BLOCKS || age > chain.max_age() || in_band(age) {
+                continue;
+            }
+            for j in 0..chain.outputs_per_block {
+                let key = ChainModel::key(chain.id_at(age, j));
+                if key != real_key {
+                    group.push(key);
+                }
+            }
+        }
+        let need = count - selected.len();
+        if group.len() <= need {
+            selected.extend(group);
+        } else {
+            web_shuffle(&mut group, next_u32);
+            selected.extend(group.into_iter().take(need));
+        }
+        d += 1;
+    }
+    web_shuffle(&mut selected, next_u32);
+    Ok(selected)
+}
+
+// ============================================================================
+// Route `web-pre-1735`: the chain-ordered send.ts window (historical)
+// ============================================================================
+
+/// Port of the `buildSendTransaction` decoy window that
+/// `web/packages/wasm-signer/src/send.ts` used before #1735 replaced it with
+/// [`web_select_decoys_for_input`]. Historical: no production code runs this
+/// any more; it backs the `web-pre-1735` comparison route.
 ///
 /// `chain_ordered` is the `chain_getOutputs(0, height)` result in chain order
 /// (ascending height). The route keeps the first occurrence of each target
@@ -516,11 +719,16 @@ impl ChainModel {
 pub enum DecoyRoute {
     Node,
     Cli,
+    /// `decoys.ts` `selectDecoysForInput` (#1735) — what web/Snap/claim links
+    /// run today.
     Web,
+    /// The chain-ordered window `send.ts` used before #1735. Historical
+    /// comparison only; not part of [`DecoyRoute::PRODUCTION`].
+    WebPre1735,
 }
 
 impl DecoyRoute {
-    /// Every production route.
+    /// Every production route (what ring producers on `main` run today).
     pub const PRODUCTION: [DecoyRoute; 3] = [DecoyRoute::Node, DecoyRoute::Cli, DecoyRoute::Web];
 
     /// Short name used on the command line and in reports.
@@ -529,6 +737,7 @@ impl DecoyRoute {
             DecoyRoute::Node => "node",
             DecoyRoute::Cli => "cli",
             DecoyRoute::Web => "web",
+            DecoyRoute::WebPre1735 => "web-pre-1735",
         }
     }
 
@@ -544,8 +753,12 @@ impl DecoyRoute {
                  (botho-wallet/src/ring_builder.rs) — thin CLI wallet"
             }
             DecoyRoute::Web => {
-                "buildSendTransaction decoy window (web/packages/wasm-signer/src/send.ts, \
-                 pre-#1735) — web wallet, Snap, claim links"
+                "selectDecoysForInput (web/packages/wasm-signer/src/decoys.ts, #1735) — \
+                 web wallet, Snap, claim links"
+            }
+            DecoyRoute::WebPre1735 => {
+                "HISTORICAL chain-ordered decoyPool[(i*19+j) % len] window that \
+                 web/packages/wasm-signer/src/send.ts used before #1735 — no longer run"
             }
         }
     }
@@ -761,6 +974,20 @@ fn build_ring<R: Rng>(
             cli_sample_prepared_rpc_decoy_pool(ctx.cli_pool.clone(), DECOY_COUNT, rng)?
         }
         DecoyRoute::Web => {
+            let mut next_u32 = || rng.next_u32();
+            match web_select_decoys_banded(&ctx.band, DECOY_COUNT, &mut next_u32) {
+                Some(keys) => keys,
+                None => web_fill_nearest(
+                    chain,
+                    &ctx.band,
+                    real_key,
+                    real_age,
+                    DECOY_COUNT,
+                    &mut next_u32,
+                )?,
+            }
+        }
+        DecoyRoute::WebPre1735 => {
             let prefix = chain.chain_order_prefix(DECOY_COUNT + 2);
             web_chain_order_decoys(&prefix, &[real_key], 0, DECOY_COUNT)?
         }
@@ -1125,13 +1352,17 @@ mod tests {
         assert!(checked > 100, "fast path exercised only {checked} times");
     }
 
-    /// The web port reproduces every ring the real `send.ts` route recorded in
-    /// `scripts/research/ct-economics/web-selection.json` (pools from
+    /// The `web-pre-1735` port reproduces every ring the pre-#1735 `send.ts`
+    /// route recorded in `scripts/research/ct-economics/web-selection.json`
+    /// BEFORE #1735 re-recorded that file (`git show
+    /// 596f64c0:scripts/research/ct-economics/web-selection.json`; pools from
     /// `pools.json`; inputs are keys 10000/10001 listed first by the RPC mock).
-    /// Snapshot of `main` before #1735: the 16 scenarios reduce to these four
-    /// pool shapes, each checked for one- and two-input spends.
+    /// The constants below are from that historical recording, not the current
+    /// file: the 16 scenarios reduce to these four pool shapes, each checked
+    /// for one- and two-input spends. The current recording pins the `web`
+    /// route instead (`botho/tests/privacy_sim_route_parity.rs`).
     #[test]
-    fn web_port_matches_recorded_send_ts_rings() {
+    fn web_pre_1735_port_matches_pre_1735_recording() {
         // The RPC mock lists the spend's owned outputs (keys 10000, 10001, ...)
         // first, then the pool rows in order.
         let rows = |n_inputs: u64, ids: &[u64]| -> Vec<RouteCandidate> {
@@ -1297,10 +1528,162 @@ mod tests {
 
     /// The pre-#1735 web route always uses the chain's oldest outputs.
     #[test]
-    fn web_route_pins_chain_order() {
-        let r = run_route_row(&small_config(), DecoyRoute::Web, RealAgeSpec::Fixed(1_000));
+    fn web_pre_1735_route_pins_chain_order() {
+        let r = run_route_row(
+            &small_config(),
+            DecoyRoute::WebPre1735,
+            RealAgeSpec::Fixed(1_000),
+        );
         assert_eq!(r.youngest_rate(), 1.0);
         assert_eq!(r.id_rates[2], 1.0);
+    }
+
+    /// Same outputs as the TypeScript mulberry32 stub
+    /// (`ct-economics-selection.test.ts`, seed 1306 * 2 + 1).
+    #[test]
+    fn mulberry32_matches_typescript_stub() {
+        let mut m = Mulberry32::new(1306 * 2 + 1);
+        let got: Vec<u32> = (0..4).map(|_| m.next_u32()).collect();
+        assert_eq!(got, [3_491_642_415, 324_970_104, 922_888_339, 560_157_628]);
+    }
+
+    /// `randomIndex` rejection sampling: draws at or above the largest
+    /// multiple of `n` are rejected; `n == 1` consumes nothing.
+    #[test]
+    fn web_random_index_rejects_biased_draws() {
+        let mut draws = vec![u32::MAX, 7].into_iter();
+        let mut next = || draws.next().expect("draw");
+        // 2^32 % 3 == 1, so u32::MAX is rejected and 7 % 3 == 1 accepted.
+        assert_eq!(web_random_index(3, &mut next), 1);
+        let mut none = || -> u32 { panic!("n == 1 must not draw") };
+        assert_eq!(web_random_index(1, &mut none), 0);
+        let mut one = || 5u32;
+        assert_eq!(web_random_index(1 << 32, &mut one), 5);
+    }
+
+    fn aged_pool(gen: &mut StdRng, trial: u64) -> Vec<RouteCandidate> {
+        let mut out = Vec::new();
+        let mut age = gen.random_range(0..15u64);
+        let len = 50 + gen.random_range(0..400usize);
+        for i in 0..len {
+            out.push(RouteCandidate {
+                key: k(i as u64 + trial * 10_000),
+                age_blocks: age,
+            });
+            age += gen.random_range(0..4u64);
+        }
+        // Shuffle so pool order is not age order.
+        out.shuffle(gen);
+        out
+    }
+
+    /// The banded fast path (sparse-swap partial Fisher–Yates) is
+    /// bit-identical to the literal `selectDecoysForInput` port, RNG
+    /// consumption included, whenever the band fills the ring.
+    #[test]
+    fn web_banded_path_equals_literal_port() {
+        let mut gen = StdRng::seed_from_u64(1735);
+        let mut checked = 0;
+        for trial in 0..80u64 {
+            let pool = aged_pool(&mut gen, trial);
+            let real_age = pool[gen.random_range(0..pool.len())].age_blocks;
+            let (lo, hi) = age_similarity_band(real_age);
+            let band: Vec<RouteCandidate> = pool
+                .iter()
+                .filter(|c| {
+                    c.age_blocks >= MIN_DECOY_AGE_BLOCKS
+                        && lo <= hi
+                        && c.age_blocks >= lo
+                        && c.age_blocks <= hi
+                })
+                .copied()
+                .collect();
+            for seed in 0..4u32 {
+                let mut a = Mulberry32::new(seed);
+                let mut b = Mulberry32::new(seed);
+                let literal =
+                    web_select_decoys_for_input(&pool, DECOY_COUNT, real_age, &mut || a.next_u32());
+                let fast = web_select_decoys_banded(&band, DECOY_COUNT, &mut || b.next_u32());
+                if let Some(fast) = fast {
+                    assert_eq!(Ok(fast), literal, "trial {trial} seed {seed}");
+                    // Both consumed the same number of draws.
+                    assert_eq!(a.next_u32(), b.next_u32());
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 100, "fast path exercised only {checked} times");
+    }
+
+    /// Thin band on the chain model: the simulation's nearest-age fill picks
+    /// the same multiset of age distances as the literal port (only the
+    /// random choice within the straddling distance group differs).
+    #[test]
+    fn web_thin_band_fill_matches_literal_distances() {
+        let chain = ChainModel {
+            tip_height: 400,
+            outputs_per_block: 2,
+        };
+        let all = chain.candidates_by_age(0, chain.max_age());
+        for real_age in [0u64, 5, 9, 10, 12, 20, 40] {
+            let real_key = ChainModel::key(chain.id_at(real_age, 0));
+            let pool: Vec<RouteCandidate> =
+                all.iter().filter(|c| c.key != real_key).copied().collect();
+            let (lo, hi) = age_similarity_band(real_age);
+            let band: Vec<RouteCandidate> = pool
+                .iter()
+                .filter(|c| {
+                    c.age_blocks >= MIN_DECOY_AGE_BLOCKS
+                        && lo <= hi
+                        && c.age_blocks >= lo
+                        && c.age_blocks <= hi
+                })
+                .copied()
+                .collect();
+            assert!(band.len() < DECOY_COUNT, "age {real_age} band not thin");
+            for seed in 0..5u32 {
+                let mut a = Mulberry32::new(seed);
+                let mut b = Mulberry32::new(seed + 100);
+                let dists = |keys: Vec<[u8; 32]>| {
+                    let mut d: Vec<u64> = keys
+                        .iter()
+                        .map(|key| chain.age_of(ChainModel::id_of(key)).abs_diff(real_age))
+                        .collect();
+                    d.sort();
+                    d
+                };
+                let literal =
+                    web_select_decoys_for_input(&pool, DECOY_COUNT, real_age, &mut || a.next_u32())
+                        .unwrap();
+                let fast =
+                    web_fill_nearest(&chain, &band, real_key, real_age, DECOY_COUNT, &mut || {
+                        b.next_u32()
+                    })
+                    .unwrap();
+                assert_eq!(fast.iter().collect::<HashSet<_>>().len(), DECOY_COUNT);
+                assert!(!fast.contains(&real_key));
+                assert_eq!(dists(fast), dists(literal), "age {real_age} seed {seed}");
+            }
+        }
+    }
+
+    /// #1735's web picker draws uniformly from the same centred ±10% band as
+    /// the CLI route, so it inherits the centred-band median leak (#1755)
+    /// instead of the pre-#1735 "real input is the youngest" leak.
+    #[test]
+    fn web_route_centred_band_leaks_the_median() {
+        let r = run_route_row(&small_config(), DecoyRoute::Web, RealAgeSpec::Fixed(5_000));
+        assert_eq!(r.failures, 0);
+        assert!(r.youngest_rate() < 0.01, "youngest {}", r.youngest_rate());
+        assert!(r.chi_squared > CHI2_CRIT_DF19_P01, "χ² = {}", r.chi_squared);
+        assert!(
+            (10..=11).contains(&r.age_rank_guess),
+            "guess r{}",
+            r.age_rank_guess
+        );
+        assert!(r.id_rates[3] > 0.20, "Band-Center ID {}", r.id_rates[3]);
+        // Empty output tags: the cluster adversary has nothing to match.
+        assert!(r.id_rates[4] < 0.2, "cluster ID {}", r.id_rates[4]);
     }
 
     #[test]
