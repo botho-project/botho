@@ -60,7 +60,7 @@ enum Commands {
         #[arg(long)]
         mint: bool,
 
-        /// Number of minting threads (default: all CPUs)
+        /// Number of minting threads (default: CPU count, capped at 16)
         #[arg(long)]
         mint_threads: Option<u32>,
 

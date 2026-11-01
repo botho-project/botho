@@ -16,6 +16,12 @@ gossip_port = 7100
 # Port for JSON-RPC API
 rpc_port = 7101
 
+# Local IP the gossip, RPC and metrics listeners bind to (optional).
+# Unset = "0.0.0.0" (all IPv4 interfaces). Use "127.0.0.1" to keep all three
+# loopback-only, or a specific interface IP such as "10.0.0.5". IPv6 ("::1",
+# "::") is accepted too.
+# listen_address = "0.0.0.0"
+
 # Bootstrap peers for network discovery
 bootstrap_peers = [
     "/ip4/98.95.2.200/tcp/7100/p2p/12D3KooWBrjTYjNrEwi9MM3AKFenmymyWVXtXbQiSx7eDnDwv9qQ",
@@ -53,9 +59,19 @@ threads = 0  # 0 = auto-detect CPU count
 |-----|------|---------|-------------|
 | `gossip_port` | integer | 7100 | Port for libp2p gossipsub communication |
 | `rpc_port` | integer | 7101 | Port for JSON-RPC server |
+| `metrics_port` | integer | 9090 | Port for the Prometheus metrics endpoint (19090 on testnet); `0` disables it |
+| `listen_address` | string | "0.0.0.0" | Local IP address the gossip, RPC **and** metrics listeners bind to. IPv4 or IPv6, bare address only (no port or brackets). Invalid values fail config load |
 | `bootstrap_peers` | array | [] | Initial peers to connect to. Empty means "use the defaults" (DNS discovery and/or the built-in seeds), not "no peers" |
 | `fallback_seeds` | bool | true | Fall back to the built-in **public** seed nodes when `bootstrap_peers` is empty and DNS discovery is disabled, fails, or returns no records. Set to `false` to isolate a node or private cluster |
 | `cors_origins` | array | ["http://localhost", "http://127.0.0.1"] | Allowed CORS origins for RPC |
+
+**Listen address:** one key covers all three listeners; there are no
+per-listener addresses. With `listen_address = "127.0.0.1"` the node is not
+reachable from other machines on any port, so it cannot accept inbound gossip
+peers (outbound dials still work) and remote wallets cannot reach its RPC.
+To expose gossip publicly while keeping RPC/metrics private, leave the default
+and restrict RPC/metrics with a firewall. At startup the node logs
+`Gossip listening on <multiaddr>`.
 
 **Bootstrap peer format:** Multiaddr format, e.g., `/ip4/192.168.1.100/tcp/7100/p2p/<peer_id>`
 

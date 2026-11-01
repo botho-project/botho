@@ -4,6 +4,8 @@
 Applies the `degrade_steps` schedule from `plan.expand()` (#1585) to the
 isolated qualification fleet over SSH, restores each fault, verifies the
 restore and journals every action to a local `faults.jsonl`. Stdlib only.
+On a `rehearsal_only` fleet, `--only <step> --at now` runs one plan step
+immediately instead (#1610); a campaign plan refuses it.
 
 Safety properties:
 
@@ -133,6 +135,31 @@ def schedule(summary, plan):
     producer = plan.get('degrade', {}).get('producer_role')
     _need(producer in NODE_ROLES, 'plan names no producer role')
     return steps, producer
+
+
+# A manual step's fault and recovery each fit in an hour (discovery_plan bounds).
+MANUAL_WINDOW = 2 * 3600
+
+
+def manual_step(summary, plan, step_id):
+    """One plan step rebased to fault at offset 0, for a rehearsal-only fleet (#1610).
+
+    A `rehearsal_only` plan validates its `degrade` block but schedules nothing,
+    so the rehearsal's single manual fault (for example one D1) is taken from
+    the plan by id and re-expanded with the same validator, starting at once.
+    A campaign plan is refused: it runs its own schedule, never a manual step.
+    """
+    _need(summary.get('execution_mode') == 'rehearsal_only',
+          '--only is for rehearsal-only plans; a campaign runs its whole schedule')
+    _need(summary.get('degrade_steps') == [],
+          'plan has no degrade block (validator_degrade_phase opt-in missing)')
+    block = plan['degrade']
+    raw = [s for s in block['steps'] if isinstance(s, dict) and s.get('id') == step_id]
+    _need(len(raw) == 1, 'no degrade step %r in the plan' % (step_id,))
+    from discovery_plan import expand_degrade
+    single = dict(plan, degrade=dict(block, steps=[dict(raw[0], start_seconds=0)]))
+    (entry,) = expand_degrade(single, {block['phase']: (0, MANUAL_WINDOW)}, [])
+    return [entry], block['producer_role']
 
 
 def check_targets(steps, producer, inventory):
@@ -605,7 +632,13 @@ def prepare(args):
     from plan import expand
     plan = json.loads(Path(args.plan).read_text())
     summary, _ = expand(plan)
-    steps, producer = schedule(summary, plan)
+    if args.only is not None:
+        _need(args.at == 'now', '--only requires --at now')
+        _need(args.start is None, '--only starts the step now; do not pass --start')
+        steps, producer = manual_step(summary, plan, args.only)
+    else:
+        _need(args.at is None, '--at is only used with --only')
+        steps, producer = schedule(summary, plan)
     inventory = load_inventory(json.loads(Path(args.inventory).read_text()))
     check_targets(steps, producer, inventory)
     validate_unit(args.unit)
@@ -614,7 +647,7 @@ def prepare(args):
     return steps, inventory, stop
 
 
-def main(argv=None, transport=None, out=sys.stdout):
+def main(argv=None, transport=None, out=sys.stdout, clock=None, sleep=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('mode', choices=['run', 'dry-run'])
     parser.add_argument('--plan', required=True)
@@ -626,9 +659,18 @@ def main(argv=None, transport=None, out=sys.stdout):
     parser.add_argument('--dev', default=DEFAULT_DEV, help='egress interface for netem')
     parser.add_argument('--status-url', default=DEFAULT_STATUS_URL)
     parser.add_argument('--journal', default='faults.jsonl')
+    parser.add_argument('--only', metavar='STEP',
+                        help='rehearsal-only plans: run this one degrade step (e.g. D1) now')
+    parser.add_argument('--at', choices=['now'],
+                        help='with --only: apply the fault %ds after launch' % PRECHECK_LEAD)
     args = parser.parse_args(argv)
     try:
         steps, inventory, stop = prepare(args)
+        if args.only is not None:
+            # Rebased step: prechecks run at once and the fault lands
+            # PRECHECK_LEAD later, exactly as for a scheduled step.
+            clock = clock or time.time
+            args.start = int(clock()) + PRECHECK_LEAD
         if args.mode == 'dry-run':
             dry_run(steps, inventory, args.unit, args.start, args.dev, stop, args.status_url, out)
             return 0
@@ -637,6 +679,7 @@ def main(argv=None, transport=None, out=sys.stdout):
             _need(args.ssh_config and Path(args.ssh_config).is_file(), 'run requires --ssh-config')
             transport = ssh_transport(args.ssh_config)
         runner = Runner(steps, inventory, args.unit, args.start, transport, args.journal,
+                        clock=clock or time.time, sleep=sleep or time.sleep,
                         controller_stop=stop, dev=args.dev, status_url=args.status_url, out=out)
         return runner.run()
     except (Refusal, ValueError) as error:

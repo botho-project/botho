@@ -113,6 +113,9 @@ fn production_routes_and_candidate_fee_report() {
             })
             .collect();
         let cli_prepared = prepare_rpc_decoy_pool(&cli_blocks, &[key(10000)]);
+        // `web_rpc_order` keeps its historical name; since #1693 the recorded web
+        // route is the age-band CSPRNG picker (`wasm-signer/src/decoys.ts`), not
+        // the old chain-ordered window.
         for route in ["node_age_gamma", "cli_age_window", "web_rpc_order"] {
             let attempts = if route == "web_rpc_order" {
                 1

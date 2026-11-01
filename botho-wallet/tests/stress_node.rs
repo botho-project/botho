@@ -19,7 +19,38 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime},
 };
+/// One JSON-RPC call; `chain_getOutputs` is paged across the node's
+/// 1000-block per-call cap (#1656) the way the stress controller and wallets
+/// do, so `[0, height]` fetches stay complete on long fixture chains.
 async fn rpc(url: &str, method: &str, params: Value) -> Value {
+    if method != "chain_getOutputs" {
+        return rpc_once(url, method, params).await;
+    }
+    let end = params["end_height"].as_u64().unwrap();
+    let mut next = params["start_height"].as_u64().unwrap();
+    let mut blocks = Vec::new();
+    while next <= end {
+        let page = rpc_once(
+            url,
+            method,
+            json!({"start_height": next, "end_height": end}),
+        )
+        .await;
+        let page = page.as_array().unwrap().clone();
+        let Some(last) = page.last().map(|b| b["height"].as_u64().unwrap()) else {
+            break;
+        };
+        assert!(
+            last >= next,
+            "chain_getOutputs page from {next} ended at {last}"
+        );
+        blocks.extend(page);
+        next = last + 1;
+    }
+    Value::Array(blocks)
+}
+
+async fn rpc_once(url: &str, method: &str, params: Value) -> Value {
     let body: Value = reqwest::Client::new()
         .post(url)
         .json(&json!({"jsonrpc":"2.0",

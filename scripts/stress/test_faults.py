@@ -265,6 +265,81 @@ class Refusals(unittest.TestCase):
         self.assertIn('--start', out.getvalue())
 
 
+class ManualStep(unittest.TestCase):
+    """`--only <step> --at now` for rehearsal-only fleets (#1610)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.plan = copy.deepcopy(PLAN)
+        self.plan.update(execution_mode='rehearsal_only', setup_deadline_hours=1)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def main(self, mode, *extra, plan=None, transport=None, clock=None, sleep=None):
+        (self.dir / 'plan.json').write_text(json.dumps(self.plan if plan is None else plan))
+        (self.dir / 'inventory.json').write_text(json.dumps(inventory_rows()))
+        out = io.StringIO()
+        code = faults.main([mode, '--plan', str(self.dir / 'plan.json'),
+                            '--inventory', str(self.dir / 'inventory.json'), '--unit', UNIT,
+                            '--journal', str(self.dir / 'faults.jsonl'), *extra],
+                           transport=transport or (lambda *a: (0, '', '')), out=out,
+                           clock=clock, sleep=sleep)
+        return code, out.getvalue()
+
+    def test_manual_step_rebased_to_now(self):
+        steps, producer = faults.manual_step(expand(copy.deepcopy(self.plan))[0], self.plan, 'D1')
+        self.assertEqual(producer, 'n3')
+        self.assertEqual(steps, [dict(step('D1'), fault_start_offset=0, restore_offset=1800,
+                                      window_end_offset=3600)])
+        (d4,), _ = faults.manual_step(expand(copy.deepcopy(self.plan))[0], self.plan, 'D4')
+        self.assertEqual((d4['loss_percent'], d4['delay_ms'], d4['fault_start_offset']), (20, 250, 0))
+
+    def test_dry_run_lists_only_that_step(self):
+        code, text = self.main('dry-run', '--only', 'D2', '--at', 'now',
+                               clock=lambda: START)
+        self.assertEqual(code, 0, text)
+        heads = [line for line in text.splitlines() if not line.startswith(' ')]
+        self.assertEqual(heads, ['D2 kill_restart n2 fault_start=0 restore=600 window_end=2400'])
+        # The fault lands PRECHECK_LEAD after launch.
+        self.assertIn(faults.utc(START + faults.PRECHECK_LEAD) + ' apply    n2', text)
+
+    def test_run_applies_restores_and_disarms_now(self):
+        host = FakeHost(START)
+        code, text = self.main('run', '--only', 'D1', '--at', 'now', transport=host,
+                               clock=host.clock, sleep=host.sleep)
+        self.assertEqual(code, 0, text)
+        lines = [json.loads(l) for l in (self.dir / 'faults.jsonl').read_text().splitlines()]
+        actions = [(l['action'], l['ok']) for l in lines if l['role'] == 'n1']
+        self.assertIn(('stop', True), actions)
+        self.assertIn(('verify', True), actions)
+        self.assertEqual(actions[-1], ('disarm', True))
+        stop = next(l for l in lines if l['action'] == 'stop')
+        self.assertEqual(stop['planned_at'], START + faults.PRECHECK_LEAD)
+        self.assertLessEqual(stop['at'] - stop['planned_at'], faults.LATE_GRACE)
+
+    def test_refusals(self):
+        for extra, needle in ((('--only', 'D1'), '--at now'),
+                              (('--at', 'now'), 'only used with --only'),
+                              (('--only', 'D9', '--at', 'now'), "no degrade step 'D9'"),
+                              (('--only', 'D1', '--at', 'now', '--start', str(START)), 'do not pass --start')):
+            with self.subTest(extra=extra):
+                code, text = self.main('dry-run', *extra, clock=lambda: START)
+                self.assertEqual(code, 2, text)
+                self.assertIn(needle, text)
+        # A campaign plan runs its schedule; it never accepts a manual step.
+        code, text = self.main('dry-run', '--only', 'D1', '--at', 'now', plan=PLAN, clock=lambda: START)
+        self.assertEqual(code, 2)
+        self.assertIn('rehearsal-only', text)
+        # Without the degrade opt-in there is nothing to pick from.
+        bare = json.loads((HERE / 'testnet-discovery-v2.json').read_text())
+        bare.update(execution_mode='rehearsal_only', setup_deadline_hours=1)
+        code, text = self.main('dry-run', '--only', 'D1', '--at', 'now', plan=bare, clock=lambda: START)
+        self.assertEqual(code, 2, text)
+        self.assertIn('no degrade block', text)
+
+
 class FakeHost:
     """Fake clock + transport; records every (alias, argv) call."""
 

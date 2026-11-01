@@ -84,7 +84,7 @@ Botho implements a novel **progressive fee system** that taxes wealth concentrat
 |-----------|-------|
 | Cluster factor range | 1x to 6x multiplier |
 | Curve shape | Sigmoid in log(cluster wealth), midpoint 3.5x at 100K BTH |
-| Tag decay | 5% per eligible hop |
+| Tag decay | 5% per transfer (wallet policy; consensus applies none) |
 
 **Why it's Sybil-resistant:** Splitting coins doesn't change their origin. A whale's coins carry the same cluster tag whether held in 1 UTXO or 1000.
 

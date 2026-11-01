@@ -95,7 +95,7 @@ maybe('production Snap -> funded local node acceptance', () => {
     });
     const ui = await pending.getInterface();
     expect(ui.type).toBe('confirmation');
-    await ui.ok();
+    await (ui as { ok(): Promise<void> }).ok();
     return unwrap<{ txHash: string }>(await pending);
   }
 

@@ -357,6 +357,166 @@ pub struct ReleaseInput {
     pub decoys: Vec<RpcOutput>,
 }
 
+/// The node's transfer-staleness bound, mirrored here (the bridge service does
+/// not depend on the `botho` node crate).
+///
+/// MUST equal `botho::consensus::MAX_TX_AGE`
+/// (`botho/src/consensus/block_builder.rs`). A block at height `H` rejects a
+/// transfer whose `created_at_height + MAX_TX_AGE < H`
+/// (`first_stale_transfer_tx`, `ledger/store.rs`), so a release created at `h`
+/// can only be included in a block in `[h + 1, h + MAX_TX_AGE]`.
+pub const RELEASE_MAX_TX_AGE: u64 = 100;
+
+/// Why a release's `created_at_height` is outside the window the relayer will
+/// build or relay (#1740).
+///
+/// The release's recipient output is tagged to
+/// `import_cluster_id_for_height(created_at_height)`, but the ledger records
+/// that id as an import cluster (and so applies the import floor `F`) only when
+/// it equals the import id of the block that INCLUDES the output
+/// (`record_bridge_import_clusters_for_output`). Consensus bounds
+/// `created_at_height` only from below (the staleness rule above); it has no
+/// upper bound and no epoch check. So the relayer is the layer that keeps the
+/// tag on the including block's epoch: it derives the height from the
+/// confirmed tip and refuses any height whose inclusion window could land in a
+/// different epoch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReleaseHeightError {
+    /// `created_at_height` is above the confirmed tip. The tag would name a
+    /// future (unrecorded) epoch, and the release would skip `F`.
+    Future {
+        /// The offending height.
+        created_at_height: u64,
+        /// The confirmed tip it was checked against.
+        tip: u64,
+    },
+    /// The next block (`tip + 1`) already rejects the tx as stale
+    /// (`created_at_height + MAX_TX_AGE < tip + 1`).
+    Stale {
+        /// The offending height.
+        created_at_height: u64,
+        /// The confirmed tip it was checked against.
+        tip: u64,
+    },
+    /// The tx could be included in a block of a different import epoch than
+    /// the one its tag names: either the height belongs to an earlier epoch
+    /// than the next block, or the inclusion window `[tip + 1,
+    /// created_at_height + MAX_TX_AGE]` crosses an epoch boundary. Retry once
+    /// the tip has moved into the new epoch.
+    EpochWindow {
+        /// The offending height.
+        created_at_height: u64,
+        /// The confirmed tip it was checked against.
+        tip: u64,
+        /// The import epoch the tag would name.
+        tag_epoch: u64,
+        /// The last import epoch a block could include it in.
+        last_inclusion_epoch: u64,
+    },
+}
+
+impl std::fmt::Display for ReleaseHeightError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReleaseHeightError::Future {
+                created_at_height,
+                tip,
+            } => write!(
+                f,
+                "release created_at_height {created_at_height} is above the confirmed tip {tip}"
+            ),
+            ReleaseHeightError::Stale {
+                created_at_height,
+                tip,
+            } => write!(
+                f,
+                "release created_at_height {created_at_height} is stale at tip {tip} \
+                 (+ MAX_TX_AGE {RELEASE_MAX_TX_AGE} < next block {})",
+                tip.saturating_add(1)
+            ),
+            ReleaseHeightError::EpochWindow {
+                created_at_height,
+                tip,
+                tag_epoch,
+                last_inclusion_epoch,
+            } => write!(
+                f,
+                "release created_at_height {created_at_height} (import epoch {tag_epoch}) could be \
+                 included in import epoch {last_inclusion_epoch} at tip {tip}; deferring until the \
+                 inclusion window is inside one epoch"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ReleaseHeightError {}
+
+/// Relay-time check: may a release created at `created_at_height` still be
+/// (re)broadcast at confirmed tip `tip`?
+///
+/// Refuses a height above the tip (never something [`build_release_tx`]
+/// produces, so a recorded tx carrying one is foreign or tampered) and a
+/// height the next block would reject as stale. It does not apply the epoch
+/// window: the tx was already broadcast when it was built, and withholding a
+/// re-broadcast cannot pull it back out of the mempool.
+pub fn check_release_height_for_relay(
+    created_at_height: u64,
+    tip: u64,
+) -> Result<(), ReleaseHeightError> {
+    if created_at_height > tip {
+        return Err(ReleaseHeightError::Future {
+            created_at_height,
+            tip,
+        });
+    }
+    if created_at_height.saturating_add(RELEASE_MAX_TX_AGE) < tip.saturating_add(1) {
+        return Err(ReleaseHeightError::Stale {
+            created_at_height,
+            tip,
+        });
+    }
+    Ok(())
+}
+
+/// Build-time check: may a release be signed with `created_at_height` at
+/// confirmed tip `tip`?
+///
+/// Everything [`check_release_height_for_relay`] checks, plus the epoch
+/// window: every block that could include the tx, from `tip + 1` to
+/// `created_at_height + MAX_TX_AGE`, must be in the same import epoch as
+/// `created_at_height`. Then the recipient tag always equals the including
+/// block's import id and the ledger records it.
+pub fn check_release_height_for_build(
+    created_at_height: u64,
+    tip: u64,
+) -> Result<(), ReleaseHeightError> {
+    check_release_height_for_relay(created_at_height, tip)?;
+    let tag_epoch = bth_cluster_tax::import_epoch(created_at_height);
+    let first_inclusion_epoch = bth_cluster_tax::import_epoch(tip.saturating_add(1));
+    let last_inclusion_epoch =
+        bth_cluster_tax::import_epoch(created_at_height.saturating_add(RELEASE_MAX_TX_AGE));
+    if first_inclusion_epoch != tag_epoch || last_inclusion_epoch != tag_epoch {
+        return Err(ReleaseHeightError::EpochWindow {
+            created_at_height,
+            tip,
+            tag_epoch,
+            last_inclusion_epoch: last_inclusion_epoch.max(first_inclusion_epoch),
+        });
+    }
+    Ok(())
+}
+
+/// The `created_at_height` a release built at confirmed tip `tip` carries.
+///
+/// The height is always the tip itself, never a caller- or queue-supplied
+/// value, and it is refused (retry later) when the inclusion window would
+/// cross an import-epoch boundary — in practice the last
+/// [`RELEASE_MAX_TX_AGE`] blocks of each epoch.
+pub fn release_created_at_height(tip: u64) -> Result<u64, ReleaseHeightError> {
+    check_release_height_for_build(tip, tip)?;
+    Ok(tip)
+}
+
 /// Build and CLSAG-sign a reserve-release transaction.
 ///
 /// Pays `amount` picocredits to a FRESH one-time stealth output for
@@ -370,16 +530,23 @@ pub struct ReleaseInput {
 /// in `inputs` must be a reserve-owned output; `recover_spend_key` recovers the
 /// one-time key for each. The function self-verifies the signed tx before
 /// returning, so it never hands back a tx the node would reject.
+///
+/// `chain_tip` is the confirmed tip at assembly time. The tx's
+/// `created_at_height` (and so its import-epoch tag) is derived from it by
+/// [`release_created_at_height`]; there is no way to pass a height directly
+/// (#1740). A tip whose inclusion window crosses an import-epoch boundary is
+/// refused.
 pub fn build_release_tx<R: CryptoRng>(
     account: &AccountKey,
     recipient: &PublicAddress,
     amount: u64,
     fee: u64,
     inputs: &[ReleaseInput],
-    created_at_height: u64,
+    chain_tip: u64,
     kem_keypair: Option<&MlKem768KeyPair>,
     rng: &mut R,
 ) -> Result<Transaction, String> {
+    let created_at_height = release_created_at_height(chain_tip).map_err(|e| e.to_string())?;
     if inputs.is_empty() {
         return Err("at least one reserve input is required".to_string());
     }
@@ -993,6 +1160,187 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("not enough decoys"), "got: {err}");
+    }
+
+    // ---- #1740: created_at_height window -------------------------------
+
+    use bth_cluster_tax::{import_cluster_id_for_height, import_epoch, BRIDGE_IMPORT_EPOCH_BLOCKS};
+
+    const K: u64 = BRIDGE_IMPORT_EPOCH_BLOCKS;
+
+    /// One reserve input able to fund a 4,000-BTH release.
+    fn one_release_input(rng: &mut StdRng, reserve: &AccountKey) -> Vec<ReleaseInput> {
+        let owned_amount = 10_000_000_000_000u64;
+        let reserve_out = TxOutput::new(owned_amount, &reserve.default_subaddress());
+        let owned = scan_deposit_output(
+            &rpc_output_from_txoutput(&reserve_out, "0xr1740", 0),
+            reserve,
+            None,
+        )
+        .unwrap()
+        .unwrap()
+        .owned;
+        vec![ReleaseInput {
+            owned,
+            decoys: make_decoys(DEFAULT_RING_SIZE - 1, owned_amount, rng),
+        }]
+    }
+
+    #[test]
+    fn release_height_normal_is_the_tip() {
+        // Mid-epoch tips: the height is the tip itself.
+        for tip in [0, 1, 5_000, 3 * K, 3 * K + 42, 7 * K + K / 2] {
+            assert_eq!(release_created_at_height(tip), Ok(tip), "tip {tip}");
+            check_release_height_for_relay(tip, tip).unwrap();
+        }
+    }
+
+    #[test]
+    fn release_height_future_is_refused() {
+        let tip = 3 * K + 42;
+        for created in [tip + 1, tip + RELEASE_MAX_TX_AGE, 4 * K, 50 * K, u64::MAX] {
+            let want = ReleaseHeightError::Future {
+                created_at_height: created,
+                tip,
+            };
+            assert_eq!(
+                check_release_height_for_relay(created, tip),
+                Err(want.clone())
+            );
+            assert_eq!(check_release_height_for_build(created, tip), Err(want));
+        }
+    }
+
+    #[test]
+    fn release_height_stale_is_refused() {
+        let tip = 3 * K + 5_000;
+        // Boundary: created + MAX_TX_AGE == tip + 1 is the oldest the next
+        // block still accepts (the node's `<` rule).
+        let oldest_ok = tip + 1 - RELEASE_MAX_TX_AGE;
+        check_release_height_for_relay(oldest_ok, tip).unwrap();
+        check_release_height_for_build(oldest_ok, tip).unwrap();
+        for created in [oldest_ok - 1, tip - 1_000, 0] {
+            let want = ReleaseHeightError::Stale {
+                created_at_height: created,
+                tip,
+            };
+            assert_eq!(
+                check_release_height_for_relay(created, tip),
+                Err(want.clone())
+            );
+            assert_eq!(check_release_height_for_build(created, tip), Err(want));
+        }
+    }
+
+    #[test]
+    fn release_height_epoch_boundary_is_refused_at_build() {
+        let m = 3;
+        let boundary = (m + 1) * K; // first block of epoch m + 1
+                                    // The last tip whose inclusion window [tip + 1, tip + MAX_TX_AGE] is
+                                    // still inside epoch m.
+        let last_ok = boundary - 1 - RELEASE_MAX_TX_AGE;
+        assert_eq!(release_created_at_height(last_ok), Ok(last_ok));
+        // From one block later through the last block of the epoch, some block
+        // that could include the tx is in epoch m + 1: refused.
+        for tip in [last_ok + 1, boundary - 50, boundary - 1] {
+            assert_eq!(
+                release_created_at_height(tip),
+                Err(ReleaseHeightError::EpochWindow {
+                    created_at_height: tip,
+                    tip,
+                    tag_epoch: m,
+                    last_inclusion_epoch: m + 1,
+                }),
+                "tip {tip}"
+            );
+            // Relay is not epoch-gated (the tx is already out).
+            check_release_height_for_relay(tip, tip).unwrap();
+        }
+        // The first block of the new epoch builds again, tagged to epoch m + 1.
+        assert_eq!(release_created_at_height(boundary), Ok(boundary));
+
+        // A fresh-but-earlier height whose epoch is behind the next block's.
+        let tip = boundary + 10;
+        let created = boundary - 5;
+        assert_eq!(
+            check_release_height_for_build(created, tip),
+            Err(ReleaseHeightError::EpochWindow {
+                created_at_height: created,
+                tip,
+                tag_epoch: m,
+                last_inclusion_epoch: m + 1,
+            })
+        );
+        check_release_height_for_relay(created, tip).unwrap();
+    }
+
+    /// Property: whenever the builder accepts a tip, every block that could
+    /// include the tx has the import id the recipient output is tagged with,
+    /// so the ledger records the tag
+    /// (`record_bridge_import_clusters_for_output`).
+    #[test]
+    fn accepted_release_height_tags_every_includable_block() {
+        let starts = [0, K - 2 * RELEASE_MAX_TX_AGE, 5 * K - 3, 5 * K + 7];
+        for start in starts {
+            for tip in start..start + 3 * RELEASE_MAX_TX_AGE {
+                let Ok(created) = release_created_at_height(tip) else {
+                    continue;
+                };
+                let tag = import_cluster_id_for_height(created);
+                for block in tip + 1..=created + RELEASE_MAX_TX_AGE {
+                    assert_eq!(
+                        import_cluster_id_for_height(block),
+                        tag,
+                        "tip {tip}: block {block} (epoch {}) would not record tag epoch {}",
+                        import_epoch(block),
+                        import_epoch(created)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn build_release_tx_uses_the_tip_and_refuses_the_epoch_boundary() {
+        let mut rng = StdRng::from_seed([29u8; 32]);
+        let reserve = AccountKey::random(&mut rng);
+        let recipient = AccountKey::random(&mut rng).default_subaddress();
+
+        // Normal: created_at_height is the tip and the tag is the tip's epoch.
+        let tip = 4 * K + 123;
+        let inputs = one_release_input(&mut rng, &reserve);
+        let tx = build_release_tx(
+            &reserve,
+            &recipient,
+            4_000_000_000_000,
+            MIN_TX_FEE,
+            &inputs,
+            tip,
+            None,
+            &mut rng,
+        )
+        .expect("mid-epoch release builds");
+        assert_eq!(tx.created_at_height, tip);
+        assert_eq!(
+            tx.outputs[0].cluster_tags.entries[0].cluster_id.0,
+            import_cluster_id_for_height(tip).0
+        );
+
+        // Within MAX_TX_AGE of the boundary: never built.
+        let tip = 5 * K - 1;
+        let inputs = one_release_input(&mut rng, &reserve);
+        let err = build_release_tx(
+            &reserve,
+            &recipient,
+            4_000_000_000_000,
+            MIN_TX_FEE,
+            &inputs,
+            tip,
+            None,
+            &mut rng,
+        )
+        .unwrap_err();
+        assert!(err.contains("import epoch"), "got: {err}");
     }
 
     #[test]

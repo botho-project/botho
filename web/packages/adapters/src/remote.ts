@@ -9,6 +9,7 @@ import type {
   Transaction,
   TxHash,
 } from '@botho/core'
+import { fetchOutputBlocksPaged } from '@botho/core'
 import type {
   BlockFetchOptions,
   ClusterWealthEntry,
@@ -122,6 +123,11 @@ export interface RawChainOutput {
   winnerOutpoint?: string
   /** Stored cluster tags (`[clusterId, weight]`), when the node serves them. */
   clusterTags?: Array<[number, number]>
+  /**
+   * Block height the output was confirmed at. The send path needs it to draw
+   * ring decoys from the real input's age band (#1693).
+   */
+  height?: number
 }
 
 /**
@@ -465,6 +471,23 @@ export class RemoteNodeAdapter implements NodeAdapter {
   }
 
   /**
+   * Every `chain_getOutputs` block in `[startHeight, endHeight]`. The node
+   * clamps one call to 1000 blocks (#1656), so this pages: the send/balance
+   * path asks for `[0, tip]` and must not silently stop at the cap.
+   */
+  private getOutputBlocks(
+    startHeight: number,
+    endHeight: number,
+  ): Promise<Array<{ height: number; outputs: RpcOutputRow[] }>> {
+    return fetchOutputBlocksPaged(startHeight, endHeight, (from) =>
+      this.call<Array<{ height: number; outputs: RpcOutputRow[] }>>('chain_getOutputs', {
+        start_height: from,
+        end_height: endHeight,
+      }),
+    )
+  }
+
+  /**
    * Fetch raw chain outputs for a height range as
    * `{ targetKey, publicKey, amount }`.
    *
@@ -478,18 +501,16 @@ export class RemoteNodeAdapter implements NodeAdapter {
     startHeight: number,
     endHeight: number,
   ): Promise<RawChainOutput[]> {
-    const result = await this.call<Array<{
-      height: number
-      outputs: RpcOutputRow[]
-    }>>('chain_getOutputs', {
-      start_height: startHeight,
-      end_height: endHeight,
-    })
+    const result = await this.getOutputBlocks(startHeight, endHeight)
 
     // Each row keeps the index its hybrid one-time key is bound to (#988; the
     // coinbase u32::MAX sentinel is normalized) and any V2 lottery payout
     // context, so the client-side signer can discover and spend it (#1645).
-    return result.flatMap((block) => block.outputs.map(decodeOutputRow))
+    // Each row also carries its block height so the send path can pick
+    // age-similar ring decoys (#1693) instead of chain-ordered ones.
+    return result.flatMap((block) =>
+      block.outputs.map((output) => ({ ...decodeOutputRow(output), height: block.height })),
+    )
   }
 
   /**
@@ -504,13 +525,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
     startHeight: number,
     endHeight: number,
   ): Promise<Array<RawChainOutput & { txHash: string; height: number }>> {
-    const result = await this.call<Array<{
-      height: number
-      outputs: RpcOutputRow[]
-    }>>('chain_getOutputs', {
-      start_height: startHeight,
-      end_height: endHeight,
-    })
+    const result = await this.getOutputBlocks(startHeight, endHeight)
 
     return result.flatMap((block) =>
       block.outputs.map((output) => ({

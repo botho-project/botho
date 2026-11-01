@@ -1318,13 +1318,10 @@ impl ConsensusService {
             .config
             .max_txs_per_slot
             .saturating_sub(to_propose.len());
-        let transfer_txs: Vec<ConsensusValue> = self
-            .pending_values
-            .iter()
-            .filter(|v| !v.is_minting_tx)
-            .take(remaining_slots)
-            .cloned()
-            .collect();
+        // Fee preference at capacity (issue #1498): rank transfers by
+        // priority (raw fee) before applying the slot cap, rather than taking
+        // the first `remaining_slots` in `pending_values` (hash) order.
+        let transfer_txs = select_transfers_by_priority(&self.pending_values, remaining_slots);
 
         to_propose.extend(transfer_txs);
 
@@ -2049,6 +2046,36 @@ impl fmt::Debug for ConsensusService {
     }
 }
 
+/// Pick at most `limit` transfer (non-minting) values from `pending` for a
+/// local proposal, highest `priority` (raw fee, see [`ConsensusValue`]) first.
+///
+/// Issue #1498: `pending` is a `BTreeSet` ordered by the derived `Ord` on
+/// `ConsensusValue`, which compares `tx_hash` first, so a plain
+/// `iter().take(limit)` admitted transfers by hash and could drop a high-fee
+/// transfer behind lower-fee, lower-hash ones once the queue exceeded the slot
+/// capacity.
+///
+/// This is purely a LOCAL selection choice. It does not change value identity,
+/// validity, or the canonical ballot ordering (the returned values are still
+/// inserted into a `BTreeSet` and the combiner orders the final block). Ranking
+/// uses only fields of `ConsensusValue` (no time or node-local data, see
+/// #449): priority descending, then `tx_hash` ascending, then the full derived
+/// `Ord` as a final total-order tiebreak, so equal-fee ties resolve
+/// deterministically.
+fn select_transfers_by_priority(
+    pending: &BTreeSet<ConsensusValue>,
+    limit: usize,
+) -> Vec<ConsensusValue> {
+    let mut transfers: Vec<&ConsensusValue> = pending.iter().filter(|v| !v.is_minting_tx).collect();
+    transfers.sort_unstable_by(|a, b| {
+        b.priority
+            .cmp(&a.priority)
+            .then_with(|| a.tx_hash.cmp(&b.tx_hash))
+            .then_with(|| a.cmp(b))
+    });
+    transfers.into_iter().take(limit).cloned().collect()
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -2090,6 +2117,222 @@ mod tests {
         assert_eq!(values.len(), 2);
         assert_eq!(values.iter().filter(|v| v.is_minting_tx).count(), 1);
         assert!(values.iter().any(|v| v.tx_hash == transfer.hash()));
+    }
+
+    // ---- Issue #1498: fee preference at slot capacity ----
+
+    /// A structurally valid transfer (same shape as [`valid_transfer_tx`])
+    /// with a caller-chosen key image (distinct real hash), fee, and number of
+    /// outputs (distinct serialized size).
+    fn transfer_with(key_image_tag: u32, fee: u64, n_outputs: usize) -> Transaction {
+        let tx = valid_transfer_tx();
+        let mut key_image = [0u8; 32];
+        key_image[..4].copy_from_slice(&key_image_tag.to_le_bytes());
+        key_image[31] = 0x5a;
+        let mut input = tx.inputs.clsag()[0].clone();
+        input.key_image = key_image;
+        let output = tx.outputs[0].clone();
+        Transaction::new_clsag(vec![input], vec![output; n_outputs], fee, 0)
+    }
+
+    /// Build the #1498 contention fixture at the default capacity: one
+    /// high-fee transfer plus `capacity - 1` (= 99 at the default 100 cap,
+    /// leaving one slot for the mint) low-fee transfers whose hashes all sort
+    /// BELOW the high-fee transfer's hash. Under the old hash-order selection
+    /// the high-fee transfer is the one dropped.
+    fn contention_fixture(low_count: usize) -> (Transaction, Vec<Transaction>) {
+        // Pick a high-fee tx whose hash sorts high, so there is plenty of
+        // room below it for the low-fee ones.
+        let high = (0u32..)
+            .map(|i| transfer_with(1_000_000 + i, 4 * MIN_TX_FEE, 1))
+            .find(|tx| tx.hash()[0] >= 0xF0)
+            .unwrap();
+        let lows: Vec<Transaction> = (0u32..)
+            .map(|i| transfer_with(i, MIN_TX_FEE, 1))
+            .filter(|tx| tx.hash() < high.hash())
+            .take(low_count)
+            .collect();
+        assert!(lows.iter().all(|t| t.hash() < high.hash()));
+        (high, lows)
+    }
+
+    fn submit_tx(svc: &mut ConsensusService, tx: &Transaction) {
+        svc.submit_transaction(tx.hash(), tx.fee, bincode::serialize(tx).unwrap());
+    }
+
+    fn submit_mint(svc: &mut ConsensusService) {
+        let mint = intrinsic_valid_minting_tx(1, [0; 32], 1);
+        svc.submit_minting_tx(
+            mint.hash(),
+            mint.pow_priority(),
+            bincode::serialize(&mint).unwrap(),
+        );
+    }
+
+    /// Run a proposal on `svc` with the contention fixture submitted in the
+    /// given arrival order, returning the locally selected value set.
+    fn propose_contended(
+        mut svc: ConsensusService,
+        high: &Transaction,
+        lows: &[Transaction],
+        high_first: bool,
+    ) -> Vec<ConsensusValue> {
+        if high_first {
+            submit_tx(&mut svc, high);
+        }
+        for tx in lows {
+            submit_tx(&mut svc, tx);
+        }
+        if !high_first {
+            submit_tx(&mut svc, high);
+        }
+        submit_mint(&mut svc);
+        svc.propose_pending_values();
+        if svc.is_solo_mode() {
+            svc.externalized.clone().expect("solo must externalize")
+        } else {
+            assert!(svc.externalized.is_none());
+            svc.proposed_values.iter().cloned().collect()
+        }
+    }
+
+    #[test]
+    fn fee_priority_full_queue_admits_high_fee_transfer_solo_and_federated() {
+        let cap = ConsensusConfig::default().max_txs_per_slot;
+        assert_eq!(cap, 100, "fixture is pinned to the default capacity");
+        let (high, lows) = contention_fixture(cap - 1);
+        for high_first in [true, false] {
+            for (mode, svc) in [
+                ("solo", solo_service()),
+                ("federated", peered_service(&[1, 2])),
+            ] {
+                let selected = propose_contended(svc, &high, &lows, high_first);
+                assert_eq!(selected.len(), cap, "{mode}: proposal fills the cap");
+                assert_eq!(
+                    selected.iter().filter(|v| v.is_minting_tx).count(),
+                    1,
+                    "{mode}: exactly one mandatory mint"
+                );
+                assert!(
+                    selected.iter().any(|v| v.tx_hash == high.hash()),
+                    "{mode} (high_first={high_first}): the 4x-fee transfer must be \
+                     admitted over a lower-hash 1x-fee transfer at capacity"
+                );
+                // Exactly one low-fee transfer is displaced: the highest-hash one
+                // (deterministic equal-fee tiebreak is tx_hash ascending).
+                let max_low = lows.iter().map(|t| t.hash()).max().unwrap();
+                assert!(
+                    !selected.iter().any(|v| v.tx_hash == max_low),
+                    "{mode}: the displaced low-fee transfer is the highest-hash one"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fee_priority_no_contention_includes_every_transfer() {
+        // Control: one fewer low-fee transfer leaves room for all of them.
+        let cap = ConsensusConfig::default().max_txs_per_slot;
+        let (high, lows) = contention_fixture(cap - 2);
+        for (mode, svc) in [
+            ("solo", solo_service()),
+            ("federated", peered_service(&[1, 2])),
+        ] {
+            let selected = propose_contended(svc, &high, &lows, false);
+            assert_eq!(selected.len(), cap, "{mode}");
+            for tx in lows.iter().chain(std::iter::once(&high)) {
+                assert!(
+                    selected.iter().any(|v| v.tx_hash == tx.hash()),
+                    "{mode}: under capacity every transfer is included"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fee_priority_equal_fee_ties_resolve_by_hash() {
+        let txs: Vec<Transaction> = (0..10).map(|i| transfer_with(i, MIN_TX_FEE, 1)).collect();
+        let mut expected: Vec<[u8; 32]> = txs.iter().map(|t| t.hash()).collect();
+        expected.sort();
+        expected.truncate(4);
+
+        let pending: BTreeSet<ConsensusValue> = txs
+            .iter()
+            .map(|t| ConsensusValue::from_transaction(t.hash(), t.fee))
+            .collect();
+        let picked: Vec<[u8; 32]> = select_transfers_by_priority(&pending, 4)
+            .iter()
+            .map(|v| v.tx_hash)
+            .collect();
+        assert_eq!(picked, expected, "equal-fee ties take the lowest hashes");
+
+        // Same result through the service regardless of arrival order.
+        for reverse in [false, true] {
+            let mut cfg = ConsensusConfig::fixed_timing(1);
+            cfg.max_txs_per_slot = 5; // mint + 4 transfers
+            let mut svc = ConsensusService::new(
+                node(1),
+                QuorumSet::new(1, vec![QuorumSetMember::Node(node(1))]),
+                cfg,
+                ChainState::default(),
+            );
+            let mut order = txs.clone();
+            if reverse {
+                order.reverse();
+            }
+            for tx in &order {
+                submit_tx(&mut svc, tx);
+            }
+            submit_mint(&mut svc);
+            svc.propose_pending_values();
+            let mut got: Vec<[u8; 32]> = svc
+                .externalized
+                .as_ref()
+                .unwrap()
+                .iter()
+                .filter(|v| !v.is_minting_tx)
+                .map(|v| v.tx_hash)
+                .collect();
+            got.sort();
+            assert_eq!(got, expected, "reverse={reverse}");
+        }
+    }
+
+    #[test]
+    fn fee_priority_ranks_by_raw_fee_across_tx_sizes() {
+        // A large (4-output) transfer paying 2x and a small (1-output)
+        // transfer paying 1.5x: the large one has the LOWER fee density but
+        // the higher raw fee. Per the `priority` contract (raw fee, #449) the
+        // raw fee decides; fee density is out of scope for #1498.
+        let large = transfer_with(1, 2 * MIN_TX_FEE, 4);
+        let small = transfer_with(2, MIN_TX_FEE * 3 / 2, 1);
+        let filler: Vec<Transaction> = (10..20).map(|i| transfer_with(i, MIN_TX_FEE, 1)).collect();
+        let large_len = bincode::serialize(&large).unwrap().len();
+        let small_len = bincode::serialize(&small).unwrap().len();
+        assert!(large_len > small_len, "fixture must differ in size");
+        assert!(
+            (large.fee as u128) * (small_len as u128) < (small.fee as u128) * (large_len as u128),
+            "fixture: large tx has the lower fee density"
+        );
+
+        let mut pending: BTreeSet<ConsensusValue> = filler
+            .iter()
+            .chain([&large, &small])
+            .map(|t| ConsensusValue::from_transaction(t.hash(), t.fee))
+            .collect();
+        // A mint in the pending set is never returned as a transfer.
+        pending.insert(ConsensusValue::from_minting_tx([0u8; 32], u64::MAX));
+
+        let one = select_transfers_by_priority(&pending, 1);
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].tx_hash, large.hash(), "highest raw fee wins");
+        let two = select_transfers_by_priority(&pending, 2);
+        assert_eq!(two[1].tx_hash, small.hash());
+        assert!(two.iter().all(|v| !v.is_minting_tx));
+        assert_eq!(
+            select_transfers_by_priority(&pending, usize::MAX).len(),
+            filler.len() + 2
+        );
     }
 
     #[test]
@@ -5535,11 +5778,19 @@ mod tests {
         submit_and_register(&mut a, &mut b, &a_tx);
         submit_and_register(&mut b, &mut a, &b_tx);
 
+        // Both externalizations (and so both stall-baseline stamps) happen
+        // inside `run_two_services`, i.e. strictly after `run_started`.
+        let run_started = Instant::now();
         let (a_ext, b_ext) = run_two_services(&mut a, &mut b, 2000);
         assert!(a_ext.is_some() && b_ext.is_some(), "both must externalize");
 
         for (label, svc) in [("A", &a), ("B", &b)] {
             let snap = svc.slot_status();
+            // Read after the snapshot: stamp >= run_started and snapshot <=
+            // now, so the stamped age can never exceed this bound, however
+            // slow the run is under full-suite load (issue #1601). A fixed
+            // wall-clock bound flaked there.
+            let bound = run_started.elapsed().as_secs();
             assert_eq!(
                 snap.last_externalized_slot,
                 Some(1),
@@ -5549,8 +5800,9 @@ mod tests {
                 .last_externalized_seconds_ago
                 .expect("federated externalize must stamp the stall baseline");
             assert!(
-                age <= 5,
-                "node {label}: externalization age must be fresh (got {age}s)"
+                age <= bound,
+                "node {label}: externalization age must be no older than this \
+                 test's own run (got {age}s, run took {bound}s)"
             );
             assert!(
                 !snap.slot_stalled,

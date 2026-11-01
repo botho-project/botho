@@ -1,5 +1,8 @@
 pub mod minter;
 
+#[cfg(test)]
+mod map_full_tests;
+
 use anyhow::Result;
 use std::{
     path::{Path, PathBuf},
@@ -202,11 +205,8 @@ impl Node {
         // RandomX dataset (#568) all threads share ONE ~2 GB dataset (not the
         // `N × 2 GB` that OOM-halted the live testnet, #539), and the count is
         // clamped to avoid oversubscribing a many-core box.
-        let threads = if self.config.minting.threads == 0 {
-            minter::default_mint_threads(num_cpus::get())
-        } else {
-            self.config.minting.threads as usize
-        };
+        // Shared with the RPC layer's reported thread count (#1436).
+        let threads = minter::effective_mint_threads(self.config.minting.threads);
 
         info!(
             "Starting minting with {} threads (one shared ~2 GB RandomX dataset \
@@ -531,6 +531,24 @@ impl Node {
     }
 }
 
+/// True when `error` (from [`commit_block_locked`]) is the ledger's LMDB map
+/// filling up (`MDB_MAP_FULL`, #1535): a local storage fault, not an invalid
+/// block. The node cannot store any further block until it is restarted with
+/// a larger map, so callers must not penalize the peer that served the block
+/// or treat the block as rejected.
+pub fn is_ledger_map_full(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<crate::ledger::LedgerError>()
+        .is_some_and(crate::ledger::LedgerError::is_map_full)
+}
+
+/// Operator message logged when a block write hits `MDB_MAP_FULL` (#1535).
+pub const LEDGER_MAP_FULL_MESSAGE: &str = "LEDGER STORAGE FULL: the LMDB map is exhausted \
+     (MDB_MAP_FULL), so this node cannot store any more blocks and its height will not \
+     advance. This is a local storage fault, not an invalid block or a misbehaving peer. \
+     Restart the node on a build with a larger ledger map size; the chain is intact and \
+     the refused block is accepted after restart (see docs/operations/memory-budget.md)";
+
 /// Commit `block` with the apply mutex ALREADY held by the caller
 /// (`controller` is the guarded emission controller). The only commit path:
 /// used by every off-loop apply job (#1566). A consensus job holds one guard
@@ -624,7 +642,14 @@ pub fn commit_block_locked(
         .read()
         .map_err(|_| anyhow::anyhow!("Ledger lock poisoned"))?
         .add_block_with_emission(block, emission)
-        .map_err(|e| anyhow::anyhow!("Failed to add network block: {}", e))?;
+        .map_err(|e| {
+            // Keep the typed `LedgerError` as the source (#1535) so callers
+            // can tell a local storage fault (`is_ledger_map_full`) from an
+            // invalid block. The context repeats it so `{}` keeps the former
+            // "Failed to add network block: <ledger error>" message.
+            let message = format!("Failed to add network block: {e}");
+            anyhow::Error::new(e).context(message)
+        })?;
 
     // The atomic write committed: now adopt the mutated controller in
     // memory, still inside the apply mutex. Doing this only AFTER a

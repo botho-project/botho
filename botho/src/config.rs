@@ -3,6 +3,7 @@ use bth_transaction_types::constants::Network;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
 };
 
@@ -208,6 +209,18 @@ pub struct NetworkConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics_port: Option<u16>,
 
+    /// Local IP address the gossip, RPC and metrics listeners bind to
+    /// (issue #1582). IPv4 or IPv6, e.g. `"127.0.0.1"`, `"10.0.0.5"` or
+    /// `"::1"`. If not set, all three bind `0.0.0.0` (all IPv4 interfaces),
+    /// which is the historical behaviour. See
+    /// [`NetworkConfig::listen_address`].
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_listen_address"
+    )]
+    pub listen_address: Option<IpAddr>,
+
     /// Allowed CORS origins for RPC server.
     /// Default is ["http://localhost:*", "http://127.0.0.1:*"] for security.
     /// Use ["*"] to allow all origins (not recommended for production).
@@ -330,6 +343,25 @@ fn default_dns_seeds_enabled() -> bool {
     true
 }
 
+/// Parse `network.listen_address`, rejecting anything that is not a bare IPv4
+/// or IPv6 address with a message naming the key (issue #1582).
+fn deserialize_listen_address<'de, D>(deserializer: D) -> Result<Option<IpAddr>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    raw.trim().parse::<IpAddr>().map(Some).map_err(|_| {
+        serde::de::Error::custom(format!(
+            "invalid network.listen_address {raw:?}: expected a bare IPv4 or IPv6 address \
+             such as \"0.0.0.0\", \"127.0.0.1\" or \"::1\" (no port, no brackets)"
+        ))
+    })
+}
+
+/// Bind address used when `network.listen_address` is unset: all IPv4
+/// interfaces, matching the pre-#1582 hard-coded behaviour.
+pub const DEFAULT_LISTEN_ADDRESS: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+
 fn default_fallback_seeds() -> bool {
     true
 }
@@ -416,6 +448,26 @@ impl NetworkConfig {
     pub fn gossip_port(&self, network: Network) -> u16 {
         self.gossip_port
             .unwrap_or_else(|| network.default_gossip_port())
+    }
+
+    /// Local IP the gossip, RPC and metrics listeners bind to (issue #1582).
+    ///
+    /// Defaults to `0.0.0.0` when `listen_address` is unset, so existing
+    /// configs keep listening on every IPv4 interface.
+    pub fn listen_address(&self) -> IpAddr {
+        self.listen_address.unwrap_or(DEFAULT_LISTEN_ADDRESS)
+    }
+
+    /// Socket address for the JSON-RPC server: `listen_address` + `rpc_port`.
+    pub fn rpc_socket_addr(&self, network: Network) -> SocketAddr {
+        SocketAddr::new(self.listen_address(), self.rpc_port(network))
+    }
+
+    /// Socket address for the Prometheus metrics server, or `None` when
+    /// metrics are disabled (`metrics_port = 0`).
+    pub fn metrics_socket_addr(&self, network: Network) -> Option<SocketAddr> {
+        self.metrics_port(network)
+            .map(|port| SocketAddr::new(self.listen_address(), port))
     }
 
     /// Get the RPC port, using network default if not explicitly set
@@ -1002,9 +1054,10 @@ impl Default for TelemetryConfig {
 impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
-            gossip_port: None,  // Uses network-specific default
-            rpc_port: None,     // Uses network-specific default
-            metrics_port: None, // Uses network-specific default (9090/19090)
+            gossip_port: None,    // Uses network-specific default
+            rpc_port: None,       // Uses network-specific default
+            metrics_port: None,   // Uses network-specific default (9090/19090)
+            listen_address: None, // Binds 0.0.0.0
             cors_origins: default_cors_origins(),
             bootstrap_peers: Vec::new(), // Uses DNS discovery or network-specific defaults
             dns_seeds: DnsSeedConfig::default(),
@@ -1241,6 +1294,101 @@ mod tests {
             .unwrap();
             assert!(Config::load(&path).is_err(), "accepted {invalid}");
         }
+    }
+
+    // ---- Issue #1582: `network.listen_address` ----
+
+    #[test]
+    fn test_listen_address_unset_binds_all_ipv4_interfaces() {
+        let unspecified: IpAddr = "0.0.0.0".parse().unwrap();
+        for cfg in [NetworkConfig::default(), network_from_toml("")] {
+            assert_eq!(cfg.listen_address, None);
+            assert_eq!(cfg.listen_address(), unspecified);
+            for network in [Network::Mainnet, Network::Testnet] {
+                assert_eq!(
+                    cfg.rpc_socket_addr(network),
+                    SocketAddr::new(unspecified, network.default_rpc_port())
+                );
+                assert_eq!(cfg.metrics_socket_addr(network).unwrap().ip(), unspecified);
+            }
+        }
+        // Unset key is not written back out, so saved configs stay unchanged.
+        assert!(!toml::to_string(&NetworkConfig::default())
+            .unwrap()
+            .contains("listen_address"));
+    }
+
+    #[test]
+    fn test_listen_address_applies_to_rpc_and_metrics() {
+        let cfg = network_from_toml(
+            "listen_address = \"127.0.0.1\"\nrpc_port = 8101\nmetrics_port = 8090\n",
+        );
+        let lo: IpAddr = "127.0.0.1".parse().unwrap();
+        assert_eq!(cfg.listen_address(), lo);
+        assert_eq!(
+            cfg.rpc_socket_addr(Network::Testnet),
+            SocketAddr::new(lo, 8101)
+        );
+        assert_eq!(
+            cfg.metrics_socket_addr(Network::Testnet),
+            Some(SocketAddr::new(lo, 8090))
+        );
+        // metrics_port = 0 still disables metrics regardless of address.
+        let off = network_from_toml("listen_address = \"127.0.0.1\"\nmetrics_port = 0\n");
+        assert_eq!(off.metrics_socket_addr(Network::Mainnet), None);
+    }
+
+    #[test]
+    fn test_listen_address_accepts_ipv6_and_roundtrips() {
+        for raw in ["::1", "::", "10.0.0.5", "127.0.0.1"] {
+            let cfg = network_from_toml(&format!("listen_address = \"{raw}\"\n"));
+            assert_eq!(cfg.listen_address(), raw.parse::<IpAddr>().unwrap());
+            let back: NetworkConfig = toml::from_str(&toml::to_string(&cfg).unwrap()).unwrap();
+            assert_eq!(back.listen_address, cfg.listen_address);
+        }
+    }
+
+    /// Acceptance: binding the RPC/metrics socket addresses derived from a
+    /// loopback `listen_address` yields loopback-only listeners.
+    #[test]
+    fn test_listen_address_loopback_socket_bind() {
+        let cfg =
+            network_from_toml("listen_address = \"127.0.0.1\"\nrpc_port = 0\nmetrics_port = 1\n");
+        let rpc = std::net::TcpListener::bind(cfg.rpc_socket_addr(Network::Testnet)).unwrap();
+        assert!(rpc.local_addr().unwrap().ip().is_loopback());
+        let mut metrics_addr = cfg.metrics_socket_addr(Network::Testnet).unwrap();
+        metrics_addr.set_port(0); // ephemeral, but same configured IP
+        let metrics = std::net::TcpListener::bind(metrics_addr).unwrap();
+        assert!(metrics.local_addr().unwrap().ip().is_loopback());
+    }
+
+    #[test]
+    fn test_listen_address_invalid_fails_config_load() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        for invalid in [
+            "\"localhost\"",
+            "\"127.0.0.1:7100\"",
+            "\"[::1]\"",
+            "\"999.0.0.1\"",
+            "\"\"",
+            "7",
+        ] {
+            fs::write(
+                &path,
+                format!("[network]\nlisten_address = {invalid}\n[minting]\n"),
+            )
+            .unwrap();
+            let err = format!("{:#}", Config::load(&path).unwrap_err());
+            assert!(err.contains("listen_address"), "{invalid}: {err}");
+        }
+        // Sanity: the same file with a valid address loads.
+        fs::write(
+            &path,
+            "[network]\nlisten_address = \"127.0.0.1\"\n[minting]\n",
+        )
+        .unwrap();
+        assert!(Config::load(&path).is_ok());
     }
 
     // ---- Issue #1578: `network.fallback_seeds` opt-out ----
