@@ -5067,6 +5067,36 @@ mod tests {
         assert_eq!(result["quorumFaultTolerant"], json!(true));
     }
 
+    /// #1535: `node_getStatus` reports the ledger's LMDB map usage, read live
+    /// from the open environment (not hardcoded).
+    #[tokio::test]
+    async fn test_node_status_reports_ledger_storage() {
+        use crate::{ledger::Ledger, mempool::Mempool};
+
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let usage = ledger.storage_usage();
+        let state = RpcState::new(
+            ledger,
+            Mempool::new(),
+            Network::Testnet,
+            None,
+            None,
+            vec![],
+            Arc::new(WsBroadcaster::new(16)),
+        );
+
+        let resp = handle_node_status(json!(1), &state).await;
+        let result = resp.result.unwrap();
+        assert_eq!(result["ledgerMapSizeBytes"], json!(usage.map_size_bytes));
+        assert!(usage.map_size_bytes > 0);
+        let used = result["ledgerUsedBytes"].as_u64().unwrap();
+        assert!(used > 0 && used <= usage.map_size_bytes);
+        let fraction = result["ledgerUsedFraction"].as_f64().unwrap();
+        assert!(fraction > 0.0 && fraction <= 1.0);
+        assert_eq!(result["ledgerStorageFull"], json!(false));
+    }
+
     /// #541: `node_getStatus` must report honest sync state wired to the live
     /// `ChainSyncManager`, not a hardcoded "always synced". This covers BOTH
     /// states: a node mid-download must report `synced=false`,
