@@ -2,6 +2,12 @@
 
 **Issue:** [#833](https://github.com/botho-project/botho/issues/833) (blocks [#831](https://github.com/botho-project/botho/issues/831); shares the horizon with [#925](https://github.com/botho-project/botho/issues/925))
 **Status:** Simulation + recommendation. The final constant is ratified by the maintainer at review, then landed by #831 / #925 (ADR 0003).
+**Update 2026-10-31 (#1698):** §4.3–§4.4 below were computed with a HOLD world that charged
+demurrage every simulated year to every holder and sent 100% of it to the pool. The node does
+neither. [§8](#8-re-run-under-the-nodes-spend-time-charge-1698) re-runs the erosion experiment
+under the node's actual charge: at spend time, through the shared consensus fee model, split 80/20.
+**The ranking does not change.** 5yr is still the only horizon that clears the 0.05 floor at 100%
+adoption, and 1yr still fails. The old tables are kept as the "legacy yearly" before/after.
 **Reproduce:**
 ```
 cargo run -p bth-cluster-tax --features cli --bin cluster-tax-sim -- settlement-horizon-sweep
@@ -272,3 +278,152 @@ constant is a maintainer ratification recorded in ADR 0003 (or a new ADR), and i
 ratification — not this document — that unblocks #831 and #925 for implementation. The sim is
 committed and seeded so the numbers regenerate on demand and can be re-run against different
 population assumptions if the maintainer wants to probe the recommendation further.
+
+
+## 8. Re-run under the node's spend-time charge (#1698)
+
+**Reproduce** (deterministic; spend phases seed `0xB07A_0833`, honest decoy draws seed
+`0xB07A_0833 ^ 0xDEC0_1698`):
+```
+cargo run --release -p bth-cluster-tax --features cli --bin cluster-tax-sim -- settlement-horizon-sweep
+cargo test --release -p bth-cluster-tax --features cli settlement_horizon
+```
+
+### 8.1 What changed in the model
+
+The parity review (#1683, child #1698) found that the HOLD world in §4.3 did not match the node:
+
+| | legacy model (§4.3–§4.4) | node (`Ledger::consensus_fee_floor`) | #1698 model |
+|---|---|---|---|
+| when demurrage is collected | every year, from every wealthy holder | only when a coin is **spent**, on its accrued age | at spend, on accrued age |
+| a coin that is never spent | pays 1 year per year | pays **nothing** | pays nothing (unit test `never_spending_holder_pays_zero`) |
+| charge formula | `demurrage_charge` | `spend_demurrage_charge` inside the fee floor | the shared `cluster_tax::consensus_fee_model` (#1695/PR #1728), not a parallel formula |
+| where the fee goes | 100% to the pool | 80% to the lottery pool, 20% burned (`LotteryFeeConfig::split_fees`, `pool_fraction_permille: 800`) | 80/20 (`split_fee_pool_burn`, drift-guarded against the node) |
+| epoch 0 (first year) | charged | rate 0 (`MonetaryPolicy::demurrage_rate_bps`) | rate 0 (default run starts in epoch 1; launch start reported separately) |
+| ring floor / decoy dilution | none | `max(claimed, ring_centroid_implied_factor)` over a 20-member ring | same, with the wallet's ±10% factor band for honest rings, plus a min-centroid dilution adversary |
+
+Velocities are per wealth decile (`DEFAULT_DECILE_VELOCITY_MILLI`), taken from the M2 ladder:
+deciles 1–9 spend once a year, the top decile once every five years. Each spend is a 1-in/2-out
+self-transfer that restarts the coin's demurrage clock. The pool is paid out per capita to
+resident holders every month. The ESCAPE world's settlement is the #831 charge,
+`capitalized_reset_charge(value, ring_floor, 1×, H, ...)` plus the consensus base fee. At
+`H = SETTLEMENT_HORIZON_BLOCKS` this is exactly `consensus_fee_model` (unit test
+`settlement_fee_at_shipped_horizon_is_the_consensus_model`). The settlement fee is also split
+80/20. The legacy model is still reachable as `ChargeModel::LegacyYearly`, and a test pins its
+headline numbers to §4.3.
+
+### 8.2 Results (generated)
+
+#### dGini erosion by horizon — spend-time model (worst case: 100% of top decile exits)
+
+Erosion population: 90 background holders (1x) + 10 wealthy holders (5.745x, 100000 BTH each), run 10 years from height 6307200 (epoch 1), seed 0xb07a0833. Initial Gini 0.8174; no-demurrage baseline Gini 0.8174 (Δgini anchor). Demurrage is charged ONLY when a coin is spent, on its accrued age, by `cluster_tax::consensus_fee_model` (the pure half of `Ledger::consensus_fee_floor`); the fee is split 80% pool / 20% burned; per-decile velocities (milli-spends/yr) [1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 200]; honest rings of 20. HOLD = top decile holds; ESCAPE = top decile settles+wraps at year 0 then exits. Δgini_escape must stay > 0.05 (design floor).
+
+| horizon | gini_hold | gini_escape | erosion | Δgini_hold | Δgini_escape | pool (escape, BTH) | pool (hold, BTH) | burned (escape, BTH) | burned (hold, BTH) | uncollected (hold, BTH) | floor |
+|---------|----------:|------------:|--------:|-----------:|-------------:|-------------------:|-----------------:|---------------------:|-------------------:|------------------------:|:-----:|
+| 1mo (0.08yr) | 0.7323 | 0.8162 | +0.0840 | +0.0852 | +0.0012 | 1265.33 | 99948.45 | 316.33 | 24987.11 | 55750.97 | FAIL |
+| 6mo (0.50yr) | 0.7323 | 0.8103 | +0.0781 | +0.0852 | +0.0071 | 7592.00 | 99948.45 | 1898.00 | 24987.11 | 55750.97 | FAIL |
+| 1yr (1.00yr) | 0.7323 | 0.8032 | +0.0710 | +0.0852 | +0.0142 | 15184.00 | 99948.45 | 3796.00 | 24987.11 | 55750.97 | FAIL |
+| 2yr (2.00yr) | 0.7323 | 0.7888 | +0.0566 | +0.0852 | +0.0286 | 30368.00 | 99948.45 | 7592.00 | 24987.11 | 55750.97 | FAIL |
+| 5yr (5.00yr) | 0.7323 | 0.7451 | +0.0129 | +0.0852 | +0.0723 | 75920.00 | 99948.45 | 18980.00 | 24987.11 | 55750.97 | PASS |
+
+#### Before/after: the same table under the legacy yearly model
+
+The pre-#1698 model: every wealthy holder pays one year of demurrage every year whether or not it spends, 100% to the pool. The node has never charged this way.
+
+| horizon | gini_hold | gini_escape | erosion | Δgini_hold | Δgini_escape | pool (escape, BTH) | pool (hold, BTH) | floor |
+|---------|----------:|------------:|--------:|-----------:|-------------:|-------------------:|-----------------:|:-----:|
+| 1mo (0.08yr) | 0.6723 | 0.8161 | +0.1438 | +0.1452 | +0.0013 | 1606.90 | 175855.39 | FAIL |
+| 6mo (0.50yr) | 0.6723 | 0.8095 | +0.1372 | +0.1452 | +0.0079 | 9641.46 | 175855.39 | FAIL |
+| 1yr (1.00yr) | 0.6723 | 0.8016 | +0.1293 | +0.1452 | +0.0159 | 19282.92 | 175855.39 | FAIL |
+| 2yr (2.00yr) | 0.6723 | 0.7856 | +0.1134 | +0.1452 | +0.0318 | 38565.85 | 175855.39 | FAIL |
+| 5yr (5.00yr) | 0.6723 | 0.7378 | +0.0656 | +0.1452 | +0.0796 | 96414.62 | 175855.39 | PASS |
+
+#### Sensitivity: Δgini_escape by horizon × adoption fraction (spend-time)
+
+How much residual redistribution gain survives if only a FRACTION of the top decile wraps out. A cell PASSES the floor when Δgini_escape > 0.05.
+
+| horizon | 25% adoption | 50% adoption | 100% adoption |
+|---------|------------:|------------:|------------:|
+| 1mo (0.08yr) | +0.0667 P | +0.0406 F | +0.0012 F |
+| 6mo (0.50yr) | +0.0680 P | +0.0437 F | +0.0071 F |
+| 1yr (1.00yr) | +0.0695 P | +0.0474 F | +0.0142 F |
+| 2yr (2.00yr) | +0.0726 P | +0.0548 P | +0.0286 F |
+| 5yr (5.00yr) | +0.0815 P | +0.0772 P | +0.0723 P |
+
+#### Sensitivity: top-decile spend velocity (spend-time, 100% adoption)
+
+| top-decile velocity | horizon | Δgini_hold | Δgini_escape | erosion | pool (hold, BTH) | uncollected (hold, BTH) | floor |
+|---|---------|-----------:|-------------:|--------:|-----------------:|------------------------:|:-----:|
+| 0.0/yr | 1yr | -0.0001 | +0.0142 | -0.0143 | 0.00 | 189800.00 | FAIL |
+| 0.0/yr | 5yr | -0.0001 | +0.0723 | -0.0724 | 0.00 | 189800.00 | PASS |
+| 0.2/yr | 1yr | +0.0852 | +0.0142 | +0.0710 | 99948.45 | 55750.97 | FAIL |
+| 0.2/yr | 5yr | +0.0852 | +0.0723 | +0.0129 | 99948.45 | 55750.97 | PASS |
+| 1.0/yr | 1yr | +0.1147 | +0.0142 | +0.1005 | 132006.27 | 10600.89 | FAIL |
+| 1.0/yr | 5yr | +0.1147 | +0.0723 | +0.0424 | 132006.27 | 10600.89 | PASS |
+| 4.0/yr | 1yr | +0.1199 | +0.0142 | +0.1057 | 137511.68 | 2626.60 | FAIL |
+| 4.0/yr | 5yr | +0.1199 | +0.0723 | +0.0476 | 137511.68 | 2626.60 | PASS |
+| 12.0/yr | 1yr | +0.1210 | +0.0142 | +0.1068 | 138715.29 | 873.81 | FAIL |
+| 12.0/yr | 5yr | +0.1210 | +0.0723 | +0.0487 | 138715.29 | 873.81 | PASS |
+
+#### Sensitivity: decoy-dilution adversary (spend-time, 100% adoption)
+
+| ring policy | horizon | Δgini_hold | Δgini_escape | erosion | pool (hold, BTH) | uncollected (hold, BTH) | floor |
+|---|---------|-----------:|-------------:|--------:|-----------------:|------------------------:|:-----:|
+| honest ring (node default) | 1yr | +0.0852 | +0.0142 | +0.0710 | 99948.45 | 55750.97 | FAIL |
+| honest ring (node default) | 5yr | +0.0852 | +0.0723 | +0.0129 | 99948.45 | 55750.97 | PASS |
+| min-centroid decoys | 1yr | +0.0838 | +0.0141 | +0.0696 | 98372.42 | 54847.01 | FAIL |
+| min-centroid decoys | 5yr | +0.0838 | +0.0718 | +0.0120 | 98372.42 | 54847.01 | PASS |
+
+#### Launch start: epoch 0 (height 0, first year demurrage-free; 100% adoption)
+
+| horizon | gini_hold | gini_escape | erosion | Δgini_hold | Δgini_escape | pool (escape, BTH) | pool (hold, BTH) | burned (escape, BTH) | burned (hold, BTH) | uncollected (hold, BTH) | floor |
+|---------|----------:|------------:|--------:|-----------:|-------------:|-------------------:|-----------------:|---------------------:|-------------------:|------------------------:|:-----:|
+| 1yr (1.00yr) | 0.7344 | 0.8175 | +0.0831 | +0.0830 | -0.0001 | 0.00 | 97671.72 | 0.00 | 24417.93 | 55968.53 | FAIL |
+| 5yr (5.00yr) | 0.7344 | 0.8175 | +0.0831 | +0.0830 | -0.0001 | 0.00 | 97671.72 | 0.00 | 24417.93 | 55968.53 | FAIL |
+
+### 8.3 Reading it
+
+- **Δgini_hold / Δgini_escape at the two decision horizons (100% adoption, default velocities):**
+
+  | horizon | Δgini_hold (legacy → spend-time) | Δgini_escape (legacy → spend-time) | floor |
+  |---|---|---|---|
+  | 1yr | +0.1452 → **+0.0852** | +0.0159 → **+0.0142** | FAIL → FAIL |
+  | 5yr | +0.1452 → **+0.0852** | +0.0796 → **+0.0723** | PASS → PASS |
+
+- **The legacy model overstated what holding redistributes by about 1.7×.** Under the node's
+  spend-time charge, a whale that spends once every five years pays demurrage only up to its
+  last spend. 55,751 BTH of accrued demurrage is still uncollected at year 10, and 20% of what
+  is collected is burned rather than redistributed. Δgini_hold drops from 0.1452 to 0.0852.
+- **Δgini_escape barely moves.** The escape is a one-shot settlement, so it was always charged
+  at spend time. The only changes are the 20% burn and redistribution to residents only. The
+  floor verdict is unchanged: **5yr is still the only swept horizon that passes at 100%
+  adoption, and 1yr fails it by a wide margin (+0.0142 vs 0.05).**
+- **Partial adoption now separates the horizons more.** At 50% adoption, 1yr fails (+0.0474)
+  where the legacy model passed it (+0.0770). 2yr passes at 50% and fails at 100%. Holding
+  redistributes less than the old model assumed, so each remaining holder contributes less to
+  the floor.
+- **Erosion shrinks, and at very low velocity it reverses.** At 5yr and the default velocity,
+  escaping erodes only +0.0129 (legacy: +0.0656). A whale that **never** spends pays nothing by
+  holding (Δgini_hold ≈ 0, 189,800 BTH uncollected), so for that holder the 5yr settlement
+  *adds* redistribution (erosion −0.0724). For a non-spender, the cheapest way out of
+  demurrage is to keep holding, not to wrap. The horizon prices only the wrap door.
+- **Dilution is weak against the log-domain curve.** A worst-case min-centroid ring (19
+  background decoys, declared class ratcheting down on every spend) cuts the whale's paid
+  demurrage by about 1.6% and moves Δgini by less than 0.002. It changes no floor verdict.
+  Honest rings, with the wallet's ±10% band, dilute nothing.
+- **Epoch 0 makes settlement free.** If the run starts at launch (height 0), the consensus
+  demurrage rate is 0 for the first year. The #831 settlement charge and the #925 capitalized
+  downgrade charge are therefore both **zero**, and a whale can wrap out permanently for the
+  base fee alone (Δgini_escape −0.0001, FAIL at every horizon). No horizon choice can fix this.
+  It is a property of the epoch-0 rate gate, reported for a human decision (see the #1698 issue
+  thread).
+
+### 8.4 Recommendation impact
+
+**No change to `SETTLEMENT_HORIZON_BLOCKS` (5yr) is indicated, and none is made.** The
+node-faithful model favours the shipped 5yr constant over the 1-year horizon that ADR 0007's
+Re-scopes bullet "leans toward". 1yr fails the 0.05 floor at 100% and at 50% adoption, and
+passes only at 25%. Choosing 1yr would therefore mean judging a top-decile exodus of 50% or more
+unrealistic. ADR 0007 made that kind of judgement for the round-trip door, but that is a policy
+call, not something this sweep supports. Moving to 1yr requires an explicit maintainer decision,
+recorded on #1698.
