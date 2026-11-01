@@ -1116,6 +1116,16 @@ mod tests {
         assert!(config.fallback_on_proof_failure);
     }
 
+    /// #1697 drift guard: the calibration sims model the wallet's tag decay
+    /// with `bth_cluster_tax::WALLET_CLUSTER_DECAY_RATE`.
+    #[test]
+    fn wallet_decay_rate_matches_cluster_tax_mirror() {
+        assert_eq!(
+            DEFAULT_CLUSTER_DECAY_RATE,
+            bth_cluster_tax::WALLET_CLUSTER_DECAY_RATE
+        );
+    }
+
     #[test]
     fn test_transaction_config_v2() {
         let config = TransactionConfig::v2();

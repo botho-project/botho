@@ -30,6 +30,9 @@
     "max_payment_inputs": 4,
     "decoy_headroom": 4
   },
+  "lottery_v2": {
+    "min_received_for_spend": 16
+  },
   "funding": {
     "max_grants": 0,
     "max_grants_per_wallet_24h": 3,

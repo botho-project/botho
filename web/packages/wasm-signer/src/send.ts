@@ -26,6 +26,7 @@ import {
   type SpendInput,
   type WasmSigner,
 } from './index'
+import { outputAge, selectDecoysForInput } from './decoys'
 
 /** The account private keys the caller derived from the mnemonic. */
 export interface SignerKeys {
@@ -640,22 +641,18 @@ export async function buildSendTransaction(
       !inputKeys.has(c.targetKey) &&
       !isZeroKey(c.targetKey),
   )
-  if (decoyPool.length < decoysPerInput) {
-    throw new Error(
-      `Not enough decoys on chain for a ring of ${ringSize}: ` +
-        `need ${decoysPerInput} per input, found ${decoyPool.length}. ` +
-        'Mine more blocks / wait for more on-chain outputs.',
-    )
-  }
-
-  const spendInputs: SpendInput[] = inputs.map((input, i) => {
-    // Rotate a window over the decoy pool so each input gets distinct decoys
-    // when the pool is large; if the pool is exactly the minimum, reuse it
-    // (rings still differ because the real member differs).
-    const decoys: ChainOutput[] = []
-    for (let j = 0; j < decoysPerInput; j++) {
-      decoys.push(decoyPool[(i * decoysPerInput + j) % decoyPool.length])
-    }
+  // Per-input decoy selection (#1693): confirmed (>= 10 blocks), drawn
+  // uniformly with a CSPRNG from the native wallet's ±10% age band around the
+  // real input's age, nearest-age fill when the band is thin — the same policy
+  // as the native `GammaDecoySelector::select_decoys_for_input`. Replaces the
+  // former chain-ordered `pool[(i*k + j) % len]` window that gave every ring
+  // the same oldest outputs. Heights are mandatory: a missing height fails the
+  // send closed rather than silently reverting to chain order.
+  const spendInputs: SpendInput[] = inputs.map((input) => {
+    const original = canonical.get(input.targetKey)
+    if (!original) throw new Error('Selected input is missing from the chain scan')
+    const realAge = outputAge(original, height)
+    const decoys = selectDecoysForInput(decoyPool, decoysPerInput, realAge, height)
     return {
       target_key: input.targetKey,
       public_key: input.publicKey,

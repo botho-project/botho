@@ -17,6 +17,7 @@ import type {
   LotteryContext,
   SendRpc,
 } from '@botho/wasm-signer';
+import { fetchOutputBlocksPaged } from '@botho/core';
 
 /**
  * The network id a node must report (via `node_getStatus`'s `network` field) to
@@ -197,19 +198,49 @@ function leHexToBigInt(hex: string): bigint {
 }
 
 /**
+ * Wrap a node caller so `chain_getOutputs` returns the WHOLE requested range.
+ *
+ * The node clamps one call to 1000 blocks (#1656) and returns a dense prefix
+ * of the range; the send/balance path asks for `[0, tip]`, so without paging
+ * it would silently stop scanning at block 999 and miss later funds. Pages
+ * resume at the last served height + 1 (see `fetchOutputBlocksPaged`). Every
+ * other method passes straight through.
+ */
+export function pagedOutputsCall(call: NodeCall): NodeCall {
+  return async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
+    if (method !== 'chain_getOutputs') return call<T>(method, params);
+    const start = Number(params.start_height ?? 0);
+    const end = Number(params.end_height ?? start + 100);
+    const blocks = await fetchOutputBlocksPaged(start, end, (from) =>
+      call<Array<{ height: number }>>(method, { ...params, start_height: from, end_height: end }),
+    );
+    return blocks as T;
+  };
+}
+
+/**
  * Adapt a node caller to the `SendRpc` slice the shared balance/send
  * orchestrators need (`getChainHeight`, `getOutputs`, `areKeyImagesSpent`).
  */
-export function makeSendRpc(call: NodeCall): SendRpc {
+export function makeSendRpc(nodeCall: NodeCall): SendRpc {
+  const call = pagedOutputsCall(nodeCall);
   return {
     getChainHeight: async () =>
       (await call<{ chainHeight: number }>('node_getStatus', {})).chainHeight,
     getOutputs: async (start, end) => {
-      const blocks = await call<Array<{ outputs: RawOutput[] }>>('chain_getOutputs', {
-        start_height: start,
-        end_height: end,
-      });
-      return blocks.flatMap((b) => b.outputs.map(decodeRow));
+      const blocks = await call<Array<{ height?: number; outputs: RawOutput[] }>>(
+        'chain_getOutputs',
+        { start_height: start, end_height: end },
+      );
+      // Keep each row's block height: the shared send path draws ring decoys
+      // from the real input's age band and fails closed without it (#1693).
+      return blocks.flatMap((b) =>
+        b.outputs.map((o) => {
+          const row = decodeRow(o);
+          if (typeof b.height === 'number') row.height = b.height;
+          return row;
+        }),
+      );
     },
     areKeyImagesSpent: (keyImages) =>
       call<KeyImageSpentStatus[]>('chain_areKeyImagesSpent', { keyImages }),
@@ -224,7 +255,8 @@ export function makeSendRpc(call: NodeCall): SendRpc {
  * per-block height + per-output txHash that the flat `getOutputs` drops. The
  * windowed/incremental scanner (`state.ts`) calls this one window at a time.
  */
-export function getOutputsWithMeta(call: NodeCall) {
+export function getOutputsWithMeta(nodeCall: NodeCall) {
+  const call = pagedOutputsCall(nodeCall);
   return async (start: number, end: number): Promise<ChainOutputWithMeta[]> => {
     const blocks = await call<Array<{ height: number; outputs: RawOutputWithMeta[] }>>(
       'chain_getOutputs',

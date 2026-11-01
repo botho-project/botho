@@ -27,10 +27,10 @@ are listed below. The full tables, including the per-rank histograms, are in
 
 | producer | picker | how the real input is exposed |
 |---|---|---|
-| web wallet, Snap, claim links (`send.ts`, before #1735) | chain-ordered `decoyPool[(i*19+j) % len]` | always the youngest member (100% of rings at every age); all web rings share the same decoys |
-| node ledger/wallet, detached signer | `select_decoys_for_input` | edge clamp (#1692): youngest in 100% of rings at ages 1k–5k, oldest in 100% at 100k–1M; midrange guess 85.5% under the gamma spend model |
+| node ledger/wallet, detached signer | `select_decoys_for_input` | edge clamp (#1692): youngest in 100% of rings at ages 1k–5k, oldest in 100% at 100k–1M; midrange guess 85.3% under the gamma spend model |
 | `botho-wallet` CLI | `select_rpc_decoy_pool` | the band is centred on the real age, so the real input is the median member: midrange guess about 50% (95% at age 100) |
-| node and CLI (outputs) | plaintext inherited cluster tags | cluster fingerprint 99.7% when every output is tagged, about 55% when half are untagged |
+| web wallet, Snap, claim links | `decoys.ts` `selectDecoysForInput` (#1735) | same centred band as the CLI (#1755): midrange guess 49–52% (94.7% at age 100). Before #1735 the chain-ordered window made it the youngest member in 100% of rings |
+| node and CLI (outputs) | plaintext inherited cluster tags | cluster fingerprint 99.7% — upper estimate (every output tagged); about 55% when half are untagged. Web outputs carry empty tags (5.0%, uniform) |
 
 A uniform guess identifies the real input 5% of the time (1 in 20). Every
 production route does far worse than that against an adversary who knows the
@@ -41,11 +41,15 @@ close to decisive.
 
 - **Pickers.** `cluster-tax/src/simulation/privacy_routes.rs` ports
   `GammaDecoySelector::select_decoys_for_input`,
-  `select_rpc_decoys_from_history` / `select_rpc_decoy_pool`, and the
-  `send.ts` decoy window. `botho/tests/privacy_sim_route_parity.rs` pins the
-  two native ports to the production functions: same candidates and same
-  seeded RNG give the same ring. A unit test pins the web port to the rings
-  the TypeScript route recorded.
+  `select_rpc_decoys_from_history` / `select_rpc_decoy_pool`, and the web
+  `decoys.ts` `selectDecoysForInput` (#1735).
+  `botho/tests/privacy_sim_route_parity.rs` pins the two native ports to the
+  production functions (same candidates and same seeded RNG give the same
+  ring, including the #1786 tie-break shuffle in the node picker) and replays the rings #1735 recorded from the real `send.ts` with a
+  seeded mulberry32 (`scripts/research/ct-economics/web-selection.json`)
+  through the web port, which must reproduce them exactly. CI runs it in
+  `workspace-build.yml`. The pre-#1735 chain-ordered window survives as the
+  historical `--route web-pre-1735` (not in the production default).
 - **Chain.** One output at every height 1..=1,200,000; real inputs at fixed
   ages, plus a row whose real ages follow the node picker's own gamma spend
   model (k = 19.28, θ = 1.61 days at 720 blocks/day).
@@ -58,11 +62,13 @@ close to decisive.
   used for headline claims, because it can show 95% while the
   identification rate is 59% (see the legacy table below).
 
-Command:
+Commands:
 
 ```bash
 cargo run -p bth-cluster-tax --features cli --bin cluster-tax-sim --release -- \
     privacy -n 10000
+cargo run -p bth-cluster-tax --features cli --bin cluster-tax-sim --release -- \
+    privacy -n 10000 --route web-pre-1735
 ```
 
 ## Results (10,000 rings per row, seed 1700)
@@ -76,10 +82,10 @@ nearest the midrange of the ring's ages.
 | node | 100 | 0.0% | 0.0% | 100.0% (r10) | 50.0% | 99.8% |
 | node | 1000 | 100.0% | 0.0% | 100.0% (r1) | 0.0% | 99.8% |
 | node | 5000 | 100.0% | 0.0% | 100.0% (r1) | 0.0% | 99.6% |
-| node | 30000 | 0.0% | 22.1% | 34.7% (r19) | 59.7% | 99.7% |
+| node | 30000 | 0.0% | 22.1% | 34.7% (r19) | 59.6% | 99.7% |
 | node | 100000 | 0.0% | 100.0% | 100.0% (r20) | 0.0% | 99.7% |
 | node | 1000000 | 0.0% | 100.0% | 100.0% (r20) | 0.0% | 99.7% |
-| node | gamma-spend | 4.8% | 4.6% | 4.6% (r20) | 85.5% | 99.8% |
+| node | gamma-spend | 4.8% | 4.8% | 5.1% (r5) | 85.3% | 99.7% |
 | cli | 100 | 0.0% | 0.0% | 49.9% (r10) | 95.1% | 99.7% |
 | cli | 1000 | 0.0% | 0.0% | 18.1% (r11) | 53.4% | 99.7% |
 | cli | 5000 | 0.0% | 0.0% | 17.8% (r11) | 49.7% | 99.8% |
@@ -87,22 +93,29 @@ nearest the midrange of the ring's ages.
 | cli | 100000 | 0.0% | 0.0% | 18.3% (r10) | 50.3% | 99.7% |
 | cli | 1000000 | 0.0% | 0.0% | 18.0% (r11) | 49.9% | 99.8% |
 | cli | gamma-spend | 0.0% | 0.0% | 18.6% (r10) | 49.1% | 99.8% |
-| web | every age | 100.0% | 0.0% | 100.0% (r1) | 0.0% | 5.0% |
+| web | 100 | 0.0% | 0.0% | 50.0% (r11) | 94.7% | 5.0% |
+| web | 1000 | 0.0% | 0.0% | 18.8% (r11) | 52.3% | 5.0% |
+| web | 5000 | 0.0% | 0.0% | 17.4% (r11) | 50.2% | 5.0% |
+| web | 30000 | 0.0% | 0.0% | 17.0% (r10) | 49.6% | 5.0% |
+| web | 100000 | 0.0% | 0.0% | 16.9% (r10) | 49.1% | 5.0% |
+| web | 1000000 | 0.0% | 0.0% | 17.8% (r10) | 49.5% | 5.0% |
+| web | gamma-spend | 0.0% | 0.0% | 17.5% (r10) | 49.9% | 5.0% |
+| web-pre-1735 (historical) | every age | 100.0% | 0.0% | 100.0% (r1) | 0.0% | 5.0% |
 
 With `--background-fraction 0.5` (half the outputs untagged), the node and CLI
-cluster-fingerprint rates fall to 54–56%. The age columns do not change.
+cluster-fingerprint rates fall to 54–56%; the web rate stays at uniform
+(4.9–5.1%). The age columns do not change.
 
 ### Why each route leaks
 
-1. **Web (pre-#1735).** There is no age band and no randomness. Every ring
-   takes the chain's oldest outputs, so the real input is the odd one out.
-   PR #1735 (#1693) replaces this with a ±10% band picker using a CSPRNG,
-   which is statistically the `cli` row. Re-run this analysis once it
-   merges.
+1. **Web.** #1735 (#1693) replaced the chain-ordered window (no age band, no
+   randomness, real input always the youngest) with a ±10% band picker
+   using a CSPRNG. As expected it now lands on the `cli` row: the
+   centred-band median leak below, not the old youngest-member leak.
 2. **Node.** Each slot's target age is drawn from a gamma with mean about
    22k blocks and then clamped into the band. Outside roughly 13k–33k
    blocks, every target lands on the same band edge (#1692).
-3. **Centred band (node and CLI, and #1735's web picker).** The ±10% band is
+3. **Centred band (node, CLI and web).** The ±10% band is
    centred on the real age. Any symmetric in-band distribution makes each
    decoy younger than the real input with probability ½. The real input's
    rank is then Binomial(19, ½) + 1, and the ring's age midrange estimates
@@ -127,7 +140,7 @@ cargo run -p bth-cluster-tax --features cli --bin cluster-tax-sim --release -- \
 |---|---|---|
 | Naive | 4.32 / 5.2% | 4.32 / 5.2% |
 | Age-Heuristic | 4.26 / 3.6% | 4.27 / 3.5% |
-| Cluster-Fingerprint | 4.11 / **58.7%** | 0.07 / **99.7%** |
+| Cluster-Fingerprint | 4.11 / **58.7%** | 0.07 / **99.7%** (upper estimate: every output tagged) |
 | Combined | 4.11 / 32.1% | 0.09 / 99.2% |
 
 ## Signature cost
@@ -139,7 +152,6 @@ cargo run -p bth-cluster-tax --features cli --bin cluster-tax-sim --release -- \
 
 ## Recommendations (tracked as issues, not changed here)
 
-- Fix the web route: #1693 / PR #1735.
 - Fix the node edge clamp: #1692. Note that its uniform-rank acceptance
   criterion needs a band that is *not* centred on the real input.
 - Stop centring the age band on the real input. One option is to draw the

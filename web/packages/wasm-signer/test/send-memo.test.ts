@@ -68,8 +68,9 @@ function params(bridgeDepositMemo?: string): BuildSendParams {
     rpc: {
       getChainHeight: async () => 100,
       getOutputs: async () => [
-        { targetKey: INPUT_KEY, publicKey: PUB_KEY, amount: 1_000_000_000_000n },
-        { targetKey: DECOY_KEY, publicKey: PUB_KEY, amount: 1_000_000_000_000n },
+        // Block heights are required for age-band decoy selection (#1693).
+        { targetKey: INPUT_KEY, publicKey: PUB_KEY, amount: 1_000_000_000_000n, height: 50 },
+        { targetKey: DECOY_KEY, publicKey: PUB_KEY, amount: 1_000_000_000_000n, height: 50 },
       ],
       areKeyImagesSpent: async (keyImages) =>
         keyImages.map((keyImage) => ({

@@ -103,6 +103,19 @@ pub enum TransactionStructureError {
     NoInputs,
     /// Transaction has no outputs
     NoOutputs,
+    /// Transaction has more than [`bth_transaction_types::MAX_OUTPUTS`]
+    /// outputs.
+    ///
+    /// Relay/mempool policy only (#1772 Part A): `is_valid_structure` runs at
+    /// mempool admission, not in block validation, so a miner may still
+    /// include a larger transaction in a block until consensus enforcement is
+    /// decided under #1684 (#1772 Part B).
+    TooManyOutputs {
+        /// Number of outputs the transaction carries.
+        count: usize,
+        /// The per-transaction output limit.
+        max: u64,
+    },
     /// One or more outputs have zero amount
     ZeroAmountOutput,
     /// One or more outputs are below the dust threshold
@@ -121,6 +134,10 @@ impl std::fmt::Display for TransactionStructureError {
         match self {
             Self::NoInputs => write!(f, "Transaction has no inputs"),
             Self::NoOutputs => write!(f, "Transaction has no outputs"),
+            Self::TooManyOutputs { count, max } => write!(
+                f,
+                "Transaction has {count} outputs, exceeding the maximum of {max} per transaction"
+            ),
             Self::ZeroAmountOutput => write!(f, "Transaction has zero-amount output"),
             Self::DustOutput => write!(f, "Transaction has output below dust threshold"),
             Self::FeeBelowMinimum => write!(f, "Transaction fee below minimum"),
@@ -572,11 +589,14 @@ impl TxOutput {
             return Some(0);
         }
 
-        // Check against change subaddress (index 1)
+        // Check against the change subaddress. Report its real subaddress
+        // index (`CHANGE_SUBADDRESS_INDEX`, u64::MAX - 1), not a label: every
+        // caller passes this value to `recover_spend_key`, which derives the
+        // subaddress spend key from it (#1674).
         let change_subaddr = account.change_subaddress();
         let change_spend = change_subaddr.spend_public_key();
         if recovered_spend_key.to_bytes() == change_spend.to_bytes() {
-            return Some(1);
+            return Some(bth_account_keys::CHANGE_SUBADDRESS_INDEX);
         }
 
         // Could extend to check more subaddresses if needed
@@ -614,8 +634,8 @@ impl TxOutput {
 /// Subaddress indices scanned by the hybrid detector: the default subaddress
 /// and the change subaddress.
 ///
-/// Unlike the classical [`TxOutput::belongs_to`] (which returns the *labels*
-/// 0/1), the hybrid detector returns the *actual* subaddress index so that
+/// Like the classical [`TxOutput::belongs_to`] (#1674), the hybrid detector
+/// returns the *actual* subaddress index so that
 /// [`TxOutput::recover_spend_key_hybrid`] derives the correct spend key.
 #[cfg(feature = "pq")]
 const HYBRID_SCAN_SUBADDRESSES: [u64; 2] = [
@@ -1554,6 +1574,16 @@ impl Transaction {
         if self.outputs.is_empty() {
             return Err(TransactionStructureError::NoOutputs);
         }
+        // Per-transaction output cap (#1772 Part A). Relay policy only: this
+        // function is called at mempool admission, not by block validation,
+        // so block validity is unchanged pending the #1684 decision (#1772
+        // Part B).
+        if self.outputs.len() as u64 > bth_transaction_types::MAX_OUTPUTS {
+            return Err(TransactionStructureError::TooManyOutputs {
+                count: self.outputs.len(),
+                max: bth_transaction_types::MAX_OUTPUTS,
+            });
+        }
         if self.outputs.iter().any(|o| o.amount == 0) {
             return Err(TransactionStructureError::ZeroAmountOutput);
         }
@@ -1764,6 +1794,51 @@ mod tests {
     /// Default test amount that's above the dust threshold
     pub(crate) const TEST_AMOUNT: u64 = DUST_THRESHOLD * 10;
 
+    /// #1674: the classical detector reports the change subaddress by its real
+    /// index (`CHANGE_SUBADDRESS_INDEX`, u64::MAX - 1), so feeding that value
+    /// straight into `recover_spend_key` yields the one-time key x with
+    /// x·G = P and a stable key image. The old label `1` derived the key of
+    /// subaddress 1, which fails x·G = P.
+    #[test]
+    fn classical_change_output_round_trips_to_a_spendable_key() {
+        use bth_account_keys::{AccountKey, CHANGE_SUBADDRESS_INDEX};
+        use rand::{rngs::StdRng, SeedableRng};
+
+        let mut rng = StdRng::from_seed([74u8; 32]);
+        let account = AccountKey::random(&mut rng);
+        let stranger = AccountKey::random(&mut rng);
+
+        for (subaddress, expect_index) in [
+            (account.change_subaddress(), CHANGE_SUBADDRESS_INDEX),
+            (account.default_subaddress(), 0),
+        ] {
+            let out = TxOutput::new(TEST_AMOUNT, &subaddress);
+            assert!(out.kem_ciphertext.is_none(), "classical output");
+            let index = out.belongs_to(&account).expect("owner detects output");
+            assert_eq!(index, expect_index);
+            assert_eq!(out.belongs_to(&stranger), None);
+
+            let key = out
+                .recover_spend_key(&account, index)
+                .expect("owner recovers the one-time key");
+            assert_eq!(
+                RistrettoPublic::from(&key).to_bytes(),
+                out.target_key,
+                "x·G must equal the output target key"
+            );
+            // The key image is a function of x alone, so recovering twice
+            // (as scan and spend do) yields the same image.
+            let again = out.recover_spend_key(&account, index).unwrap();
+            assert_eq!(KeyImage::from(&key), KeyImage::from(&again));
+        }
+
+        // The pre-#1674 label: subaddress 1 is not the change subaddress, so
+        // its derived key does not open a change output.
+        let change = TxOutput::new(TEST_AMOUNT, &account.change_subaddress());
+        let wrong = change.recover_spend_key(&account, 1).unwrap();
+        assert_ne!(RistrettoPublic::from(&wrong).to_bytes(), change.target_key);
+    }
+
     /// A destination memo built from raw 64 bytes preserves them byte-for-byte
     /// in `memo_data()`, is not "unused", and survives an encrypt -> on-chain
     /// output -> `decrypt_memo` round-trip. This is the exact path a
@@ -1896,6 +1971,38 @@ mod tests {
             1,
         );
         assert!(tx.is_valid_structure().is_ok());
+    }
+
+    /// #1772 Part A: exactly `MAX_OUTPUTS` (16) outputs is accepted.
+    #[test]
+    fn test_transaction_max_outputs_accepted() {
+        let n = bth_transaction_types::MAX_OUTPUTS as usize;
+        let outputs = (0..n)
+            .map(|i| test_output(TEST_AMOUNT, [i as u8; 32], [3u8; 32]))
+            .collect();
+        let tx = Transaction::new_clsag(vec![test_clsag_input(1)], outputs, MIN_TX_FEE, 1);
+        assert_eq!(tx.outputs.len(), 16);
+        assert!(tx.is_valid_structure().is_ok());
+    }
+
+    /// #1772 Part A: `MAX_OUTPUTS + 1` (17) outputs is rejected with a clear
+    /// error naming the count and the limit.
+    #[test]
+    fn test_transaction_too_many_outputs_rejected() {
+        let n = bth_transaction_types::MAX_OUTPUTS as usize + 1;
+        let outputs = (0..n)
+            .map(|i| test_output(TEST_AMOUNT, [i as u8; 32], [3u8; 32]))
+            .collect();
+        let tx = Transaction::new_clsag(vec![test_clsag_input(1)], outputs, MIN_TX_FEE, 1);
+        let err = tx.is_valid_structure().unwrap_err();
+        assert_eq!(
+            err,
+            TransactionStructureError::TooManyOutputs { count: 17, max: 16 }
+        );
+        assert_eq!(
+            err.to_string(),
+            "Transaction has 17 outputs, exceeding the maximum of 16 per transaction"
+        );
     }
 
     #[test]

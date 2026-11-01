@@ -105,7 +105,7 @@ Get transaction outputs for wallet sync.
 
 **Parameters:**
 - `start_height` (number) - Starting block height
-- `end_height` (number) - Ending block height (max 100 blocks per request)
+- `end_height` (number) - Ending block height (default `start_height + 100`). At most 1000 blocks are served per request: a longer range is clamped, so page by resuming at the last returned `height + 1` until you reach `end_height` or get an empty array
 
 **Response:** Array of blocks, each containing:
 - `height` - Block height

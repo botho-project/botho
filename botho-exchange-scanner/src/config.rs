@@ -59,7 +59,9 @@ pub struct ScannerConfig {
     #[serde(default = "default_poll_interval")]
     pub poll_interval_secs: u64,
 
-    /// Number of blocks to scan per batch
+    /// Number of blocks to scan per batch. Values above
+    /// [`MAX_GET_OUTPUTS_BLOCKS`] are capped (see
+    /// [`Self::effective_batch_size`]).
     #[serde(default = "default_batch_size")]
     pub batch_size: u64,
 }
@@ -83,6 +85,13 @@ fn default_state_file() -> PathBuf {
 fn default_poll_interval() -> u64 {
     5
 }
+
+/// The node's per-call `chain_getOutputs` block cap (#1656,
+/// `botho::rpc::MAX_GET_OUTPUTS_BLOCKS`). The node clamps a longer request to
+/// this many blocks, so a batch must never exceed it: the scanner advances its
+/// checkpoint to the batch's requested end, and a clamped batch would skip
+/// the unserved blocks' deposits.
+pub const MAX_GET_OUTPUTS_BLOCKS: u64 = 1000;
 
 fn default_batch_size() -> u64 {
     100
@@ -108,6 +117,12 @@ impl Default for ScannerConfig {
 }
 
 impl ScannerConfig {
+    /// The batch size actually requested per `chain_getOutputs` call:
+    /// `batch_size` bounded to `1..=MAX_GET_OUTPUTS_BLOCKS` (#1656).
+    pub fn effective_batch_size(&self) -> u64 {
+        self.batch_size.clamp(1, MAX_GET_OUTPUTS_BLOCKS)
+    }
+
     /// Load configuration from a TOML file.
     pub fn from_file(path: &std::path::Path) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)?;
@@ -184,6 +199,16 @@ impl ScannerConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batch_size_is_capped_at_the_node_range_limit() {
+        let mut config = ScannerConfig::default();
+        assert_eq!(config.effective_batch_size(), 100);
+        config.batch_size = 5_000;
+        assert_eq!(config.effective_batch_size(), MAX_GET_OUTPUTS_BLOCKS);
+        config.batch_size = 0;
+        assert_eq!(config.effective_batch_size(), 1);
+    }
 
     #[test]
     fn test_default_config() {

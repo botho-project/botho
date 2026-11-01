@@ -39,7 +39,7 @@
 //! Note: Ring size 20 is larger than Monero's 16, providing stronger sender
 //! privacy.
 
-use rand::{Rng, RngExt};
+use rand::{seq::SliceRandom, Rng, RngExt};
 use rand_distr::{Distribution, Gamma};
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -746,6 +746,12 @@ impl GammaDecoySelector {
     /// the realized max ring age — and hence the honest over-charge — to the
     /// tightest value the available pool allows, rather than reverting to the
     /// unbounded global-gamma sample that motivated this issue.
+    ///
+    /// # Tie-breaking (#1771)
+    ///
+    /// Equal-distance candidates are chosen uniformly at random using `rng`,
+    /// independent of the order of `candidates` (and hence of DB key /
+    /// `tx_hash` order). Production callers must pass a CSPRNG (`OsRng`).
     pub fn select_decoys_for_input<R: Rng>(
         &self,
         candidates: &[OutputCandidate],
@@ -755,7 +761,7 @@ impl GammaDecoySelector {
         rng: &mut R,
     ) -> Result<Vec<TxOutput>, DecoySelectionError> {
         // Filter eligible candidates (confirmed, not excluded).
-        let eligible: Vec<&OutputCandidate> = candidates
+        let mut eligible: Vec<&OutputCandidate> = candidates
             .iter()
             .filter(|c| {
                 c.age_blocks >= MIN_DECOY_AGE_BLOCKS && !exclude_keys.contains(&c.output.target_key)
@@ -768,6 +774,19 @@ impl GammaDecoySelector {
                 available: eligible.len(),
             });
         }
+
+        // Randomize the tie-break (#1771). Both phases below pick by distance
+        // only: phase 1 via `min_by_key` (first minimum wins) and phase 2 via a
+        // stable `sort_by_key` (ties keep input order). Without this shuffle,
+        // equal-distance ties resolve in CANDIDATE order, which callers derive
+        // from DB key order (`tx_hash || index`). An attacker who grinds output
+        // hashes to sort first would then capture every tie — and with many
+        // equal-age outputs, every decoy slot. Shuffling with the caller's
+        // CSPRNG makes each tie a uniform draw, independent of candidate order
+        // and of `tx_hash`/`UtxoId` bytes. It changes WHICH equal-distance
+        // candidate is chosen, never the distance itself, so the age band and
+        // liveness-fallback guarantees are untouched.
+        eligible.shuffle(rng);
 
         let gamma = Gamma::new(
             self.distribution.gamma_shape,
@@ -792,8 +811,8 @@ impl GammaDecoySelector {
         // can ever be in-band. Its doc comment promises callers fall back to
         // nearest-age selection here — this is that fallback. Entering the loop
         // would hit `u64::clamp(min_age, max_age)`, which panics when
-        // `min_age > max_age` (issue #611). No RNG is drawn in the degenerate
-        // case, so the non-degenerate path is unaffected and stays deterministic.
+        // `min_age > max_age` (issue #611). No gamma sample is drawn in the
+        // degenerate case; selection remains deterministic for a given RNG seed.
         if min_age <= max_age {
             for _ in 0..count {
                 let target_age: f64 = gamma.sample(rng);
@@ -1653,6 +1672,78 @@ mod tests {
         assert_eq!(max_floor, 12);
     }
 
+    /// Shared web<->native conformance fixture (#1693). The web wallet / Snap /
+    /// claim-link decoy picker (`web/packages/wasm-signer/src/decoys.ts`)
+    /// checks the SAME JSON against its `ageSimilarityBand` port, so a
+    /// change to the band policy on either side fails one of the two suites
+    /// until both agree.
+    #[test]
+    fn test_age_similarity_band_matches_shared_web_fixture() {
+        let raw = include_str!("../../web/packages/wasm-signer/test/fixtures/decoy-age-band.json");
+        let fixture: serde_json::Value = serde_json::from_str(raw).expect("fixture parses");
+        assert_eq!(
+            fixture["minDecoyAgeBlocks"].as_u64().unwrap(),
+            MIN_DECOY_AGE_BLOCKS
+        );
+        assert_eq!(
+            fixture["ageSimilaritySpreadBps"].as_u64().unwrap(),
+            AGE_SIMILARITY_SPREAD_BPS
+        );
+
+        let bands = fixture["bands"].as_array().unwrap();
+        assert!(!bands.is_empty());
+        for v in bands {
+            let real = v["realAge"].as_u64().unwrap();
+            let (min_age, max_age) = age_similarity_band(real);
+            assert_eq!(min_age, v["minAge"].as_u64().unwrap(), "minAge for {real}");
+            assert_eq!(max_age, v["maxAge"].as_u64().unwrap(), "maxAge for {real}");
+            assert_eq!(
+                min_age > max_age,
+                v["degenerate"].as_bool().unwrap(),
+                "degenerate flag for {real}"
+            );
+        }
+
+        // Fallback vectors: the selected SET is RNG-independent, so the native
+        // selector must produce exactly the ages the web picker is pinned to.
+        let current_height = 100_000;
+        let selector = GammaDecoySelector::new();
+        for case in fixture["fallback"].as_array().unwrap() {
+            let real = case["realAge"].as_u64().unwrap();
+            let count = case["count"].as_u64().unwrap() as usize;
+            let candidates: Vec<OutputCandidate> = case["poolAges"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| {
+                    let age = a.as_u64().unwrap();
+                    let mut key = [0u8; 32];
+                    key[..8].copy_from_slice(&age.to_le_bytes());
+                    make_candidate(key, age, current_height)
+                })
+                .collect();
+            let mut expected: Vec<u64> = case["expectedAges"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| a.as_u64().unwrap())
+                .collect();
+            expected.sort_unstable();
+            for _ in 0..32 {
+                let mut rng = rand::rng();
+                let picked = selector
+                    .select_decoys_for_input(&candidates, count, &[], real, &mut rng)
+                    .expect("fallback case selects");
+                let mut ages: Vec<u64> = picked
+                    .iter()
+                    .map(|o| u64::from_le_bytes(o.target_key[..8].try_into().unwrap()))
+                    .collect();
+                ages.sort_unstable();
+                assert_eq!(ages, expected, "{}", case["name"]);
+            }
+        }
+    }
+
     /// The core #596 guarantee: for an honest spender, the realized demurrage
     /// over-charge under the `ring_elapsed_quantile@max` kernel (PR #595) stays
     /// within the #314 tolerance (≤15%). The age-similarity band caps it at
@@ -2127,5 +2218,308 @@ mod tests {
             .select_decoys_cluster_aware(&candidates, 6, &real_input, &exclude, &mut rng)
             .expect("liveness fallback selects out-of-band decoys rather than failing");
         assert_eq!(decoys.len(), 6);
+    }
+}
+
+/// Issue #1771: tie-breaking in `select_decoys_for_input` must not depend on
+/// candidate order (which production callers derive from DB key order,
+/// `tx_hash || index`). An attacker who grinds output hashes so its outputs
+/// sort first must gain no capture advantage among equal-distance candidates.
+#[cfg(test)]
+mod tie_break_tests {
+    use super::*;
+    use bth_transaction_types::ClusterTagVector;
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha8Rng;
+
+    const HEIGHT: u64 = 1_000_000;
+    /// Marker byte identifying attacker-owned outputs in `target_key[31]`.
+    const ATTACKER: u8 = 0xAA;
+
+    fn candidate(id: u16, age_blocks: u64, attacker: bool) -> OutputCandidate {
+        let mut target_key = [0u8; 32];
+        target_key[..2].copy_from_slice(&id.to_le_bytes());
+        if attacker {
+            target_key[31] = ATTACKER;
+        }
+        OutputCandidate {
+            output: TxOutput {
+                amount: 1000,
+                target_key,
+                public_key: [0u8; 32],
+                e_memo: None,
+                cluster_tags: ClusterTagVector::empty(),
+                kem_ciphertext: None,
+            },
+            created_at: HEIGHT - age_blocks,
+            age_blocks,
+            cluster_tags: ClusterTags::empty(),
+            effective_factor: FACTOR_SCALE,
+        }
+    }
+
+    fn id_of(o: &TxOutput) -> usize {
+        u16::from_le_bytes([o.target_key[0], o.target_key[1]]) as usize
+    }
+
+    fn is_attacker(o: &TxOutput) -> bool {
+        o.target_key[31] == ATTACKER
+    }
+
+    /// `n` equal-age candidates; the first `attackers` ids are attacker-owned.
+    fn equal_age_pool(n: u16, attackers: u16, age: u64) -> Vec<OutputCandidate> {
+        (0..n).map(|i| candidate(i, age, i < attackers)).collect()
+    }
+
+    /// The candidate orderings an adversary might induce (or that DB key order
+    /// happens to produce): as built, reversed, ground-first (attacker outputs
+    /// sort first, the #1771 attack), ground-last, and interleaved.
+    fn orderings(pool: &[OutputCandidate]) -> Vec<(&'static str, Vec<OutputCandidate>)> {
+        let original = pool.to_vec();
+        let mut reversed = pool.to_vec();
+        reversed.reverse();
+        let mut ground_first = pool.to_vec();
+        ground_first.sort_by_key(|c| c.output.target_key[31] != ATTACKER);
+        let mut ground_last = pool.to_vec();
+        ground_last.sort_by_key(|c| c.output.target_key[31] == ATTACKER);
+        let (evens, odds): (Vec<_>, Vec<_>) = pool
+            .iter()
+            .cloned()
+            .enumerate()
+            .partition(|(i, _)| i % 2 == 0);
+        let interleaved = odds.into_iter().chain(evens).map(|(_, c)| c).collect();
+        vec![
+            ("original", original),
+            ("reversed", reversed),
+            ("ground_first", ground_first),
+            ("ground_last", ground_last),
+            ("interleaved", interleaved),
+        ]
+    }
+
+    /// Per-candidate selection frequency over `trials` seeded draws.
+    fn frequencies(
+        pool: &[OutputCandidate],
+        n: usize,
+        count: usize,
+        real_age: u64,
+        trials: usize,
+        seed: u64,
+    ) -> Vec<f64> {
+        let selector = GammaDecoySelector::new();
+        let mut rng = ChaCha8Rng::seed_from_u64(seed);
+        let mut hits = vec![0usize; n];
+        for _ in 0..trials {
+            let picked = selector
+                .select_decoys_for_input(pool, count, &[], real_age, &mut rng)
+                .expect("selection succeeds");
+            assert_eq!(picked.len(), count);
+            for o in &picked {
+                hits[id_of(o)] += 1;
+            }
+        }
+        hits.into_iter().map(|h| h as f64 / trials as f64).collect()
+    }
+
+    /// AC: permuting, reversing, or "grinding" candidate order leaves the
+    /// selection distribution unchanged, and every equal-age candidate is
+    /// selected with probability `count / n` (phase 1, in-band ties).
+    #[test]
+    fn phase1_ties_are_uniform_and_order_invariant() {
+        let (n, attackers, count, age) = (40u16, 10u16, 19usize, 5_000u64);
+        let pool = equal_age_pool(n, attackers, age);
+        let expected = count as f64 / n as f64; // 0.475
+        let trials = 4_000;
+        // sd ~= sqrt(0.475 * 0.525 / 4000) ~= 0.0079; 0.05 ~= 6 sd.
+        let tol = 0.05;
+        let mut per_order = Vec::new();
+        for (k, (name, ordered)) in orderings(&pool).into_iter().enumerate() {
+            let f = frequencies(&ordered, n as usize, count, age, trials, 0x1771 + k as u64);
+            for (id, p) in f.iter().enumerate() {
+                assert!(
+                    (p - expected).abs() < tol,
+                    "{name}: candidate {id} freq {p:.3} vs expected {expected:.3}"
+                );
+            }
+            per_order.push((name, f));
+        }
+        // Cross-ordering invariance: the same candidate's frequency agrees
+        // across every ordering (difference of two ~N(p, 0.0079) estimates).
+        let (_, base) = &per_order[0];
+        for (name, f) in &per_order[1..] {
+            for id in 0..n as usize {
+                assert!(
+                    (f[id] - base[id]).abs() < 2.0 * tol,
+                    "{name}: candidate {id} freq {:.3} differs from original {:.3}",
+                    f[id],
+                    base[id]
+                );
+            }
+        }
+    }
+
+    /// Exact probability that a uniformly random `k`-subset of `n` items, `m`
+    /// of them attacker-owned, is entirely attacker-owned (hypergeometric).
+    fn p_all_attacker(n: u64, m: u64, k: u64) -> f64 {
+        (0..k).map(|i| (m - i) as f64 / (n - i) as f64).product()
+    }
+
+    /// AC: with attacker outputs ground to sort first, P(all decoys
+    /// attacker-owned) matches the uniform-subset probability (~f^k), not 1.0
+    /// as it would under first-minimum / stable-sort tie-breaking.
+    #[test]
+    fn ground_first_attacker_gains_no_capture_advantage_phase1() {
+        let selector = GammaDecoySelector::new();
+        let (n, m, k, age) = (20u16, 16u16, 4usize, 5_000u64);
+        let pool = equal_age_pool(n, m, age);
+        let mut ground_first = pool.clone();
+        ground_first.sort_by_key(|c| c.output.target_key[31] != ATTACKER);
+
+        let expected = p_all_attacker(n as u64, m as u64, k as u64); // ~0.3757
+        let trials = 4_000;
+        let mut rng = ChaCha8Rng::seed_from_u64(0x1771_0001);
+        let mut all_attacker = 0usize;
+        let mut attacker_slots = 0usize;
+        for _ in 0..trials {
+            let picked = selector
+                .select_decoys_for_input(&ground_first, k, &[], age, &mut rng)
+                .unwrap();
+            let a = picked.iter().filter(|o| is_attacker(o)).count();
+            attacker_slots += a;
+            if a == k {
+                all_attacker += 1;
+            }
+        }
+        let observed = all_attacker as f64 / trials as f64;
+        // sd ~= sqrt(0.376 * 0.624 / 4000) ~= 0.0077.
+        assert!(
+            (observed - expected).abs() < 0.04,
+            "P(all attacker) observed {observed:.3}, expected {expected:.3} (pre-fix: 1.0)"
+        );
+        let share = attacker_slots as f64 / (trials * k) as f64;
+        let f = m as f64 / n as f64;
+        assert!(
+            (share - f).abs() < 0.03,
+            "attacker slot share {share:.3} vs pool fraction {f:.3}"
+        );
+    }
+
+    /// Large-pool version of the #1771 grind at ring size 20 (19 decoys):
+    /// half the equal-age pool is attacker-owned and ground to sort first.
+    /// Uniform tie-breaking makes a fully captured ring ~0.5^19 (≈2e-6), so
+    /// none should appear; pre-fix every ring was fully captured.
+    #[test]
+    fn ground_first_attacker_cannot_fill_ring_size_20() {
+        let selector = GammaDecoySelector::new();
+        let (n, m, k, age) = (400u16, 200u16, 19usize, 5_000u64);
+        let mut pool = equal_age_pool(n, m, age);
+        pool.sort_by_key(|c| c.output.target_key[31] != ATTACKER);
+        let mut rng = ChaCha8Rng::seed_from_u64(0x1771_0002);
+        let trials = 1_000;
+        let mut full_capture = 0usize;
+        let mut attacker_slots = 0usize;
+        for _ in 0..trials {
+            let picked = selector
+                .select_decoys_for_input(&pool, k, &[], age, &mut rng)
+                .unwrap();
+            let a = picked.iter().filter(|o| is_attacker(o)).count();
+            attacker_slots += a;
+            if a == k {
+                full_capture += 1;
+            }
+        }
+        assert_eq!(full_capture, 0, "ground-first attacker filled a ring");
+        let share = attacker_slots as f64 / (trials * k) as f64;
+        assert!((share - 0.5).abs() < 0.03, "attacker slot share {share:.3}");
+    }
+
+    /// Phase 2 (liveness fallback) ties: a real input younger than the
+    /// confirmation depth makes the band degenerate, so every slot comes from
+    /// the nearest-age fallback. Equal-distance candidates must still be a
+    /// uniform draw regardless of order — including candidates equidistant on
+    /// opposite sides of the real age.
+    #[test]
+    fn phase2_ties_are_uniform_and_order_invariant() {
+        let (n, attackers, count) = (24u16, 8u16, 6usize);
+        let real_age = 5u64; // < MIN_DECOY_AGE_BLOCKS: degenerate band
+        let (lo, hi) = age_similarity_band(real_age);
+        assert!(lo > hi, "test requires a degenerate band");
+        // All candidates at distance 15 from the real age.
+        let pool: Vec<OutputCandidate> = (0..n).map(|i| candidate(i, 20, i < attackers)).collect();
+        let expected = count as f64 / n as f64; // 0.25
+        let trials = 4_000;
+        let tol = 0.04; // sd ~= 0.0068
+        for (k, (name, ordered)) in orderings(&pool).into_iter().enumerate() {
+            let f = frequencies(
+                &ordered,
+                n as usize,
+                count,
+                real_age,
+                trials,
+                0x2771 + k as u64,
+            );
+            for (id, p) in f.iter().enumerate() {
+                assert!(
+                    (p - expected).abs() < tol,
+                    "{name}: candidate {id} freq {p:.3} vs expected {expected:.3}"
+                );
+            }
+        }
+    }
+
+    /// Phase 2 when the band is non-degenerate but too sparse: in-band slots
+    /// are filled first, and the equal-distance out-of-band remainder is still
+    /// drawn uniformly, so a ground-first attacker does not capture it.
+    #[test]
+    fn phase2_sparse_band_remainder_is_uniform() {
+        let selector = GammaDecoySelector::new();
+        let real_age = 10_000u64;
+        // 2 honest in-band candidates; 30 out-of-band candidates all at
+        // distance 5_000 (15 attacker, ground to sort first).
+        let mut pool = vec![candidate(0, 10_000, false), candidate(1, 10_050, false)];
+        for i in 0..30u16 {
+            let age = if i % 2 == 0 { 5_000 } else { 15_000 };
+            pool.push(candidate(2 + i, age, i < 15));
+        }
+        pool.sort_by_key(|c| c.output.target_key[31] != ATTACKER);
+        let count = 6usize;
+        let mut rng = ChaCha8Rng::seed_from_u64(0x1771_0003);
+        let trials = 4_000;
+        let mut attacker_slots = 0usize;
+        for _ in 0..trials {
+            let picked = selector
+                .select_decoys_for_input(&pool, count, &[], real_age, &mut rng)
+                .unwrap();
+            assert!(picked.iter().any(|o| id_of(o) == 0) && picked.iter().any(|o| id_of(o) == 1));
+            attacker_slots += picked.iter().filter(|o| is_attacker(o)).count();
+        }
+        // 4 fallback slots per trial drawn from 30 candidates, 15 attacker.
+        let share = attacker_slots as f64 / (trials * (count - 2)) as f64;
+        assert!(
+            (share - 0.5).abs() < 0.03,
+            "fallback attacker share {share:.3} (pre-fix: 1.0)"
+        );
+    }
+
+    /// Tie randomization never trades away age-similarity: when an exact-age
+    /// candidate exists alongside farther ones, the distance ordering still
+    /// governs; only equal-distance choices are randomized.
+    #[test]
+    fn shuffle_does_not_override_distance() {
+        let selector = GammaDecoySelector::new();
+        let real_age = 5u64; // degenerate band -> pure nearest-age fallback
+        let mut pool: Vec<OutputCandidate> = (0..10u16)
+            .map(|i| candidate(i, 100 + i as u64 * 10, i % 2 == 0))
+            .collect();
+        pool.reverse();
+        let mut rng = ChaCha8Rng::seed_from_u64(0x1771_0004);
+        for _ in 0..200 {
+            let picked = selector
+                .select_decoys_for_input(&pool, 3, &[], real_age, &mut rng)
+                .unwrap();
+            let mut ids: Vec<usize> = picked.iter().map(id_of).collect();
+            ids.sort_unstable();
+            assert_eq!(ids, vec![0, 1, 2]);
+        }
     }
 }

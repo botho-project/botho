@@ -179,3 +179,53 @@ def v2_award_evidence(inventory, canonical_ids, rows, spent_by_image):
         'unspent_picocredits': sum(r['amount'] for r in received if not r['spent']),
         'undiscovered': undiscovered,
     }
+
+
+# Award-spend policy (#1681): free-shape campaign payments also spend the
+# sender's oldest mature V2 award (selection.choose ``award_input``). The
+# version is journaled at campaign activation; a journal without it ran an
+# older harness that never spent awards and is not judged by this rule.
+AWARD_SPEND_POLICY = 1
+# Received awards beyond which a campaign must have spent at least one. The
+# live x1 run received ~700 by T0+11h; 16 tolerates a run that ends before
+# awards mature while still catching a policy that never spends.
+DEFAULT_MIN_RECEIVED_FOR_SPEND = 16
+FINAL_STATUSES = ('draining', 'complete', 'incomplete')
+
+
+def spend_expectation_threshold(plan):
+    """The plan's pinned threshold, else the default; validated strictly."""
+    block = (plan or {}).get('lottery_v2')
+    if block is None:
+        return DEFAULT_MIN_RECEIVED_FOR_SPEND
+    if not isinstance(block, dict) or set(block) != {'min_received_for_spend'}:
+        raise ValueError('lottery_v2 block must hold exactly min_received_for_spend')
+    value = block['min_received_for_spend']
+    if type(value) is not int or not 0 <= value <= 100_000:
+        raise ValueError('lottery_v2.min_received_for_spend must be an integer 0-100000')
+    return value
+
+
+def award_spend_expectation(journal):
+    """``received_count > N`` and ``spent_count == 0`` at campaign end fails.
+
+    Statuses: ``not_evaluated`` (no policy marker: older harness), ``pending``
+    (no accounting yet, or zero spends before the campaign ends),
+    ``not_applicable`` (at most N awards received), ``pass``, ``fail``.
+    """
+    policy = journal.get('award_spend_policy')
+    if not isinstance(policy, dict) or policy.get('version') != AWARD_SPEND_POLICY:
+        return {'status': 'not_evaluated',
+                'reason': 'campaign predates the #1681 award-spend policy'}
+    threshold = policy['min_received']
+    v2 = (journal.get('accounting') or {}).get('lottery_v2')
+    if not isinstance(v2, dict):
+        return {'status': 'pending', 'min_received': threshold}
+    received, spent = v2.get('received_count', 0), v2.get('spent_count', 0)
+    out = {'min_received': threshold, 'received_count': received, 'spent_count': spent}
+    if spent > 0:
+        return {**out, 'status': 'pass'}
+    if received <= threshold:
+        return {**out, 'status': 'not_applicable'}
+    final = journal.get('status') in FINAL_STATUSES
+    return {**out, 'status': 'fail' if final else 'pending'}

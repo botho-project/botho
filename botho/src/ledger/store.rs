@@ -46,12 +46,67 @@ use crate::{
     transaction::{RingMember, Transaction as BothoTransaction, TxOutput, Utxo, UtxoId},
 };
 
-/// Fixed LMDB map size for the ledger. LMDB does not grow the map on its own:
-/// once the data file reaches this size, writes fail with `MDB_MAP_FULL`.
-/// The V2 snapshot decompression ceiling is derived from it
-/// (`snapshot::MAX_SNAPSHOT_DECOMPRESSED`), so growing the map never makes
-/// honest snapshots unloadable.
-pub(in crate::ledger) const LEDGER_MAP_SIZE: usize = 1024 * 1024 * 1024; // 1GB
+/// Fixed LMDB map size for the ledger (#1535): 64 GiB on 64-bit hosts.
+///
+/// LMDB does not grow the map on its own: once the data file's high-water
+/// mark reaches this size, every write fails with `MDB_MAP_FULL` (see
+/// [`LedgerError::is_map_full`]). The map is address space, not memory or
+/// disk: without `MDB_WRITEMAP` the data file grows only as pages are used,
+/// and only touched pages count toward RSS. A 72 h stress fleet grew its
+/// ledger about 4.5 MiB/h (#1535), which put the former 1 GiB cap about 8
+/// days out; 64 GiB is years at that rate. [`Ledger::storage_usage`] reports
+/// the high-water mark against this size in `node_getStatus` and metrics.
+///
+/// The map size is NOT a consensus parameter: it decides only whether this
+/// node can store a block, never whether the block is valid. A node that hits
+/// it fails loudly (`MDB_MAP_FULL` is a local storage fault, never an invalid
+/// block) and recovers by restarting with a larger map.
+#[cfg(target_pointer_width = "64")]
+pub(in crate::ledger) const LEDGER_MAP_SIZE: usize = 64 * 1024 * 1024 * 1024;
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(LEDGER_MAP_SIZE >= 64 * 1024 * 1024 * 1024);
+/// 32-bit hosts cannot map 64 GiB; keep the former 1 GiB map there.
+#[cfg(not(target_pointer_width = "64"))]
+pub(in crate::ledger) const LEDGER_MAP_SIZE: usize = 1024 * 1024 * 1024;
+
+/// Map size of ledgers opened by `Ledger::open` / `open_for_network`.
+///
+/// Unit-test builds keep the former 1 GiB map: the lib suite opens hundreds
+/// of LMDB environments concurrently, and raising each one's reservation 64x
+/// would only add pressure to the parallel-open flakes tracked in #1725. A
+/// dedicated test opens a ledger at the full [`LEDGER_MAP_SIZE`].
+#[cfg(not(test))]
+const OPEN_MAP_SIZE: usize = LEDGER_MAP_SIZE;
+#[cfg(test)]
+const OPEN_MAP_SIZE: usize = 1024 * 1024 * 1024;
+
+/// How full the ledger's LMDB map is (#1535), for `node_getStatus` and the
+/// Prometheus exporter.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LedgerStorageUsage {
+    /// The LMDB map size: the most the data file can ever hold.
+    pub map_size_bytes: u64,
+    /// The data file's high-water mark: `(last used page + 1) * page size`.
+    /// `MDB_MAP_FULL` is raised when a write needs a page past the map, so
+    /// this is the figure to compare against `map_size_bytes` (free pages
+    /// below it are reused, so it never shrinks).
+    pub used_bytes: u64,
+    /// True once a block write has failed with `MDB_MAP_FULL` on this open
+    /// ledger. Sticky until restart: the node cannot store another block
+    /// until it is restarted with a larger map.
+    pub map_full: bool,
+}
+
+impl LedgerStorageUsage {
+    /// `used_bytes / map_size_bytes`, in `[0, 1]` (0 for an empty map).
+    pub fn used_fraction(&self) -> f64 {
+        if self.map_size_bytes == 0 {
+            0.0
+        } else {
+            (self.used_bytes as f64 / self.map_size_bytes as f64).min(1.0)
+        }
+    }
+}
 
 /// Maximum allowed clock skew for a block timestamp relative to local time.
 ///
@@ -360,6 +415,10 @@ pub struct Ledger {
     /// gets its derivation context in the same LMDB transaction. Reads are
     /// strict: a missing context is an error, never a default.
     contexts_db: Database<Bytes, Bytes>,
+    /// Set when a block write fails with `MDB_MAP_FULL` (#1535); reported by
+    /// [`Ledger::storage_usage`]. Node-local observability only: it never
+    /// affects what the ledger accepts.
+    map_full: std::sync::atomic::AtomicBool,
 }
 
 /// Serialized width of a `cluster_wealth_db` value: 16-byte little-endian
@@ -459,7 +518,7 @@ impl Ledger {
     /// error on the consensus double-spend check.
     #[cfg(test)]
     pub fn open_single_reader(path: &Path) -> Result<Self, LedgerError> {
-        Self::open_internal(path, Network::Testnet, Some(1), LEDGER_MAP_SIZE)
+        Self::open_internal(path, Network::Testnet, Some(1), OPEN_MAP_SIZE)
     }
 
     /// Test-only: open a ledger with a small LMDB map so tests can drive it to
@@ -533,7 +592,7 @@ impl Ledger {
     /// The ledger will be initialized with the appropriate genesis block
     /// for the specified network if it's empty.
     pub fn open_for_network(path: &Path, network: Network) -> Result<Self, LedgerError> {
-        Self::open_internal(path, network, None, LEDGER_MAP_SIZE)
+        Self::open_internal(path, network, None, OPEN_MAP_SIZE)
     }
 
     /// Internal constructor shared by `open_for_network` and test helpers.
@@ -644,6 +703,7 @@ impl Ledger {
             cluster_wealth_db,
             bridge_import_clusters_db,
             contexts_db,
+            map_full: std::sync::atomic::AtomicBool::new(false),
         };
 
         // Initialize with genesis if empty
@@ -882,7 +942,34 @@ impl Ledger {
 
     /// Add a new block to the chain
     pub fn add_block(&self, block: &Block) -> Result<(), LedgerError> {
-        self.add_block_inner(block, None)
+        self.note_map_full(self.add_block_inner(block, None))
+    }
+
+    /// Record a `MDB_MAP_FULL` block-write failure for
+    /// [`Ledger::storage_usage`] and pass the result through unchanged.
+    fn note_map_full(&self, result: Result<(), LedgerError>) -> Result<(), LedgerError> {
+        if let Err(error) = &result {
+            if error.is_map_full() {
+                self.map_full
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        result
+    }
+
+    /// How full the LMDB map is (#1535): map size, the data file's
+    /// high-water mark, and whether a block write has hit `MDB_MAP_FULL`.
+    /// Cheap (two `mdb_env_*` calls, no transaction).
+    pub fn storage_usage(&self) -> LedgerStorageUsage {
+        let info = self.env.info();
+        let page_size = u64::from(self.env.stat().page_size);
+        LedgerStorageUsage {
+            map_size_bytes: info.map_size as u64,
+            used_bytes: (info.last_page_number as u64)
+                .saturating_add(1)
+                .saturating_mul(page_size),
+            map_full: self.map_full.load(std::sync::atomic::Ordering::Relaxed),
+        }
     }
 
     /// Add a block AND persist the emission-controller state in a SINGLE LMDB
@@ -905,7 +992,7 @@ impl Ledger {
         block: &Block,
         emission: EmissionStateUpdate,
     ) -> Result<(), LedgerError> {
-        self.add_block_inner(block, Some(emission))
+        self.note_map_full(self.add_block_inner(block, Some(emission)))
     }
 
     /// Shared implementation for [`Ledger::add_block`] and
@@ -4973,6 +5060,243 @@ mod tests {
                 "{}",
                 v.name
             );
+        }
+    }
+
+    /// #1697: the pure ledger mirrors in `bth_cluster_tax::fee_floor_inputs`
+    /// (which the bridge-import calibration sim runs on) reproduce the
+    /// ledger's own resolution exactly, over deterministic sampled inputs:
+    /// the writer's per-output wealth accumulation, the output-tag claimed
+    /// wealth, the bridge-import floor blend, the ring-centroid floor, and the
+    /// full consensus fee floor fed through `consensus_fee_model`.
+    #[test]
+    fn fee_floor_inputs_match_ledger_for_sampled_inputs() {
+        use bth_cluster_tax::{
+            consensus_fee_model,
+            fee_floor_inputs::{
+                effective_cluster_wealth_from_outputs as mirror_claimed,
+                import_floor_factor_from_outputs as mirror_import_floor,
+                output_wealth_contributions, ring_centroid_factor,
+            },
+            resolve_fee_floor, ClaimedClass, ConsensusFeeInputs, ConsensusFeeParams, FeeConfig,
+            FeeModelMode, FloorOutput, TagPair, PICO_PER_BTH,
+        };
+        use bth_transaction_types::ClusterId;
+
+        let mut x: u64 = 0x1697_D1CE_5EED_0001;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        let clusters = [3u64, 5, 7, 11, 13];
+        let imports = [5u64, 13];
+        let fc = FeeConfig::default();
+        let h = 8_000_000u64; // epoch 1: demurrage active
+
+        for sample in 0..24u64 {
+            let dir = tempdir().unwrap();
+            let ledger = Ledger::open(dir.path()).unwrap();
+            let mut wealth: std::collections::BTreeMap<u64, u128> = Default::default();
+            for &c in &clusters {
+                let w = (next() % 50_000_000) as u128 * PICO_PER_BTH / 10;
+                ledger.set_cluster_wealth_for_test(c, w).unwrap();
+                wealth.insert(c, w);
+            }
+            for &c in &imports {
+                ledger.record_bridge_import_cluster_for_test(c).unwrap();
+            }
+            let random_tags = |next: &mut dyn FnMut() -> u64| -> Vec<TagPair> {
+                let n = (next() % 4) as usize;
+                let mut left = TAG_WEIGHT_SCALE;
+                let mut tags: Vec<TagPair> = Vec::new();
+                for &c in clusters.iter().skip((next() % 2) as usize).take(n) {
+                    let w = (next() as u32 % left.max(1)).max(1_000).min(left);
+                    if w >= 1_000 {
+                        tags.push((c, w));
+                        left -= w;
+                    }
+                }
+                tags
+            };
+            let to_vec = |tags: &[TagPair]| {
+                ClusterTagVector::from_pairs(
+                    &tags
+                        .iter()
+                        .map(|&(c, w)| (ClusterId(c), w))
+                        .collect::<Vec<_>>(),
+                )
+            };
+
+            // Outputs with random multi-cluster tags.
+            let n_out = 1 + (next() % 3) as usize;
+            let out_tags: Vec<Vec<TagPair>> = (0..n_out).map(|_| random_tags(&mut next)).collect();
+            let outputs: Vec<TxOutput> = out_tags
+                .iter()
+                .enumerate()
+                .map(|(i, t)| {
+                    let amount = 1 + next() % (1_000_000 * PICO_PER_BTH as u64);
+                    mk_tagged_output(amount, 150 + i as u8, to_vec(t))
+                })
+                .collect();
+            // Canonicalize through `from_pairs` exactly as the ledger sees it.
+            let canon: Vec<Vec<TagPair>> = outputs
+                .iter()
+                .map(|o| {
+                    o.cluster_tags
+                        .entries
+                        .iter()
+                        .map(|e| (e.cluster_id.0, e.weight))
+                        .collect()
+                })
+                .collect();
+            let floor_outs: Vec<FloorOutput<'_>> = outputs
+                .iter()
+                .zip(&canon)
+                .map(|(o, t)| FloorOutput {
+                    amount: o.amount,
+                    tags: t,
+                })
+                .collect();
+            let w_of = |c: u64| wealth.get(&c).copied().unwrap_or(0);
+            let is_imp = |c: u64| imports.contains(&c);
+
+            assert_eq!(
+                ledger
+                    .effective_cluster_wealth_from_outputs(&outputs)
+                    .unwrap(),
+                mirror_claimed(&floor_outs, &w_of),
+                "sample {sample}: claimed wealth"
+            );
+            assert_eq!(
+                ledger.import_floor_factor_from_outputs(&outputs).unwrap(),
+                mirror_import_floor(&floor_outs, &is_imp),
+                "sample {sample}: import floor"
+            );
+
+            // Ring members with random multi-cluster tags (centroid floor).
+            let ring_tags: Vec<(u64, Vec<TagPair>)> = (0..1 + next() % 5)
+                .map(|_| {
+                    let t = random_tags(&mut next);
+                    let canon: Vec<TagPair> = to_vec(&t)
+                        .entries
+                        .iter()
+                        .map(|e| (e.cluster_id.0, e.weight))
+                        .collect();
+                    (1 + next() % (100_000 * PICO_PER_BTH as u64), canon)
+                })
+                .collect();
+            let ring_vecs: Vec<(u64, ClusterTagVector)> =
+                ring_tags.iter().map(|(v, t)| (*v, to_vec(t))).collect();
+            let ring_refs: Vec<(u64, &ClusterTagVector)> =
+                ring_vecs.iter().map(|(v, t)| (*v, t)).collect();
+            let ring_slices: Vec<(u64, &[TagPair])> =
+                ring_tags.iter().map(|(v, t)| (*v, t.as_slice())).collect();
+            assert_eq!(
+                ledger
+                    .ring_centroid_floored_factor(
+                        bth_cluster_tax::FACTOR_SCALE,
+                        &ring_refs,
+                        &fc.cluster_curve
+                    )
+                    .unwrap(),
+                ring_centroid_factor(&ring_slices, &w_of, &fc.cluster_curve)
+                    .max(bth_cluster_tax::FACTOR_SCALE),
+                "sample {sample}: ring-centroid floor"
+            );
+
+            // Full consensus fee floor: seeded single-cluster ring members,
+            // the random outputs, resolved by the mirror and priced by the
+            // shared model.
+            let ring_specs: Vec<(u64, u64, u64, u8)> = (0..1 + next() % 4)
+                .map(|i| {
+                    let c = match next() % 3 {
+                        0 => 0,
+                        _ => clusters[(next() % clusters.len() as u64) as usize],
+                    };
+                    (
+                        1 + next() % (100_000 * PICO_PER_BTH as u64),
+                        h - next() % 1_000_000,
+                        c,
+                        10 + i as u8,
+                    )
+                })
+                .collect();
+            let ring = seed_ring_utxos(&ledger, &ring_specs);
+            let tx = mk_transfer_tx(ring, outputs.clone(), 0);
+            let member_tags: Vec<(u64, Vec<TagPair>)> = ring_specs
+                .iter()
+                .map(|&(a, _, c, _)| {
+                    (
+                        a,
+                        if c == 0 {
+                            Vec::new()
+                        } else {
+                            vec![(c, TAG_WEIGHT_SCALE)]
+                        },
+                    )
+                })
+                .collect();
+            let member_slices: Vec<(u64, &[TagPair])> = member_tags
+                .iter()
+                .map(|(v, t)| (*v, t.as_slice()))
+                .collect();
+            let resolved = resolve_fee_floor(&floor_outs, &member_slices, &w_of, &is_imp);
+            let ages: Vec<(u64, u64)> = ring_specs.iter().map(|&(a, c, _, _)| (a, c)).collect();
+            let params = ConsensusFeeParams::from_policy(
+                &crate::monetary::mainnet_policy(),
+                FeeModelMode::ConsensusOnly,
+            );
+            let model = consensus_fee_model(
+                &ConsensusFeeInputs {
+                    size: tx.estimate_size(),
+                    n_out: tx.outputs.len(),
+                    n_memo: 0,
+                    claimed: ClaimedClass::Wealth(resolved.claimed_wealth),
+                    floor: resolved.floor,
+                    elapsed: bth_cluster_tax::ring_elapsed_quantile(
+                        &ages,
+                        h,
+                        CONSENSUS_RING_AGE_QUANTILE_BPS,
+                    ),
+                    height: h,
+                    output_sum: tx.outputs.iter().map(|o| o.amount).sum(),
+                },
+                &params,
+            );
+            let floor = ledger.consensus_fee_floor(&tx, h).unwrap();
+            // +-1 picocredit: the ledger floor and the f64-based sim fee
+            // model round the same quantity through different arithmetic
+            // (integer factor math vs f64), so they can differ by one unit.
+            assert!(
+                floor.abs_diff(model) <= 1,
+                "sample {sample}: mirror-fed model {model} != ledger floor {floor}"
+            );
+
+            // Writer: one output's wealth accumulation.
+            let before: Vec<u128> = clusters
+                .iter()
+                .map(|&c| ledger.get_cluster_wealth(c).unwrap())
+                .collect();
+            let mut wtxn = ledger.env.write_txn().unwrap();
+            ledger
+                .update_cluster_wealth_for_output(&mut wtxn, &outputs[0])
+                .unwrap();
+            wtxn.commit().unwrap();
+            let contributions = output_wealth_contributions(outputs[0].amount, &canon[0]);
+            for (i, &c) in clusters.iter().enumerate() {
+                let added: u128 = contributions
+                    .iter()
+                    .filter(|(id, _)| *id == c)
+                    .map(|(_, w)| *w)
+                    .sum();
+                assert_eq!(
+                    ledger.get_cluster_wealth(c).unwrap(),
+                    before[i].saturating_add(added),
+                    "sample {sample}: writer contribution to cluster {c}"
+                );
+            }
         }
     }
 

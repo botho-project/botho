@@ -227,7 +227,10 @@ pub fn calculate_gini(wealths: &[u64]) -> f64 {
         return 0.0;
     }
 
-    let total: u64 = wealths.iter().sum();
+    // u128 accumulators (#1699): at picocredit scale (#694) a few minters'
+    // balances times their rank overflow u64 (the default emission sweep hit
+    // this), and release builds run with overflow checks on.
+    let total: u128 = wealths.iter().map(|&w| w as u128).sum();
     if total == 0 {
         return 0.0;
     }
@@ -238,10 +241,10 @@ pub fn calculate_gini(wealths: &[u64]) -> f64 {
 
     // Calculate Gini using the formula:
     // G = (2 * Σ(i * x_i) - (n + 1) * Σx_i) / (n * Σx_i)
-    let sum_indexed: u64 = sorted
+    let sum_indexed: u128 = sorted
         .iter()
         .enumerate()
-        .map(|(i, &x)| (i as u64 + 1) * x)
+        .map(|(i, &x)| (i as u128 + 1) * x as u128)
         .sum();
 
     let numerator = 2.0 * sum_indexed as f64 - (n as f64 + 1.0) * total as f64;

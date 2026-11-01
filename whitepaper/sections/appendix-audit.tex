@@ -47,12 +47,17 @@ Minting authenticity & PoW preimage binding & Preimage resistance of RandomX \\
 
 \begin{enumerate}
   \item \textbf{Sybil resistance}: Splitting wealth does not reduce total fees
-    (Theorem~\ref{thm:sybil-resistance})
-  \item \textbf{Lottery fairness}: Winner selection is value-weighted and
-    cluster-tilted (weight $\propto v_i(\phi_{\max}-\phi_i+1)$), verifiable,
-    and grind-resistant --- seeded from the committed previous block hash and
-    height, with the per-block payout capped at one block reward
-    (Appendix~\ref{appendix:formal})
+    (Theorem~\ref{thm:sybil-resistance}), for wallets that write inherited
+    tags; consensus accepts dropped tags (pending \#1687)
+  \item \textbf{Lottery fairness}: Winner selection is uniform over eligible
+    outputs and verifiable, seeded from the parent block's PoW fields
+    (\path{BOTHO_LOTTERY_SEED_V2}), with the per-block payout capped at
+    $\min(\rho \cdot 0.25\text{ BTH}, R(h))$
+    (Appendix~\ref{appendix:formal}). Auditors should treat these as open:
+    candidate-set re-rolls through the parent's transactions (\#1689),
+    ticket-splitting under the implemented cap (\#1682), free coinbase and
+    payout tickets (\#1690), carry-forward drain (\#1691), and a PoW-regrind
+    forfeit of $(1-f_{\text{em}})R(h)$ rather than $R(h)$
   \item \textbf{Inflation bounds}: Supply growth follows the emission schedule
     exactly
 \end{enumerate}

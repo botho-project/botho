@@ -798,11 +798,13 @@ impl<'a> WalletScanner<'a> {
             return Some(0);
         }
 
-        // Check against change subaddress (index 1)
+        // Check against the change subaddress, reporting its real subaddress
+        // index (u64::MAX - 1), which is what `recover_spend_key` expects
+        // (#1674).
         let change_subaddr = self.account_key.change_subaddress();
         let change_spend = change_subaddr.spend_public_key();
         if recovered_spend_key.to_bytes() == change_spend.to_bytes() {
-            return Some(1);
+            return Some(bth_account_keys::CHANGE_SUBADDRESS_INDEX);
         }
 
         None

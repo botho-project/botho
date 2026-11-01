@@ -300,11 +300,12 @@ mod cli {
         ///
         /// By default this drives ports of the decoy pickers production runs
         /// (node `select_decoys_for_input`, CLI wallet `select_rpc_decoy_pool`,
-        /// web/Snap `send.ts`) over an explicit chain model and reports, per
-        /// route and real-input age, the real input's age-rank distribution and
-        /// each adversary's argmax identification rate (#1700). `--route
-        /// legacy` runs the old global-gamma / cluster-aware model, which no
-        /// production producer implements.
+        /// web/Snap `decoys.ts` `selectDecoysForInput`) over an explicit chain
+        /// model and reports, per route and real-input age, the real
+        /// input's age-rank distribution and each adversary's argmax
+        /// identification rate (#1700). `--route legacy` runs the old
+        /// global-gamma / cluster-aware model, which no production
+        /// producer implements.
         Privacy {
             /// Rings per (route, real age) row for the production routes (plus
             /// as many training rings); total rings for `--route legacy`
@@ -312,7 +313,8 @@ mod cli {
             simulations: usize,
 
             /// Which picker(s) to simulate: production (node+cli+web), node,
-            /// cli, web, legacy, or all (production + legacy)
+            /// cli, web, web-pre-1735 (historical chain-ordered web window,
+            /// not in production), legacy, or all (production + legacy)
             #[arg(long, default_value = "production")]
             route: String,
 
@@ -756,15 +758,24 @@ mod cli {
         /// value-weighted incumbent. Reuses the real demurrage_charge,
         /// ClusterFactorCurve and calculate_gini. Does NOT wire anything into
         /// consensus.
-        LotteryRewardCapSweep,
+        LotteryRewardCapSweep {
+            /// Re-run the whale-splitting experiment against the rules the
+            /// node implements (#1682): window ρ truncated at 10k, the
+            /// block-reward clamp, the real consensus fee floor (1..=16
+            /// outputs, with/without MIN_TX_FEE), free tickets, epochs,
+            /// backlog, plus a remedy decision table. Analysis only.
+            #[arg(long)]
+            faithful: bool,
+        },
 
         /// Decoy-flood cost model at the real fee floor, with lottery
         /// recapture (#1701). For each (honest rate, attacker share, block
         /// time, epoch, attacker fee mode) reports gross flood cost, lottery
         /// recapture, net cost and P(all 19 decoys are the attacker's) for
-        /// the CLI and node pickers (the #1700 production-picker ports), with
-        /// uniform and ground (sort-first) attacker keys. States a PROPOSED
-        /// pass criterion. Changes nothing in consensus.
+        /// the CLI, web and node pickers (the #1700 production-picker ports),
+        /// and re-runs the #1771 ground-key case on the node port after the
+        /// #1786 shuffle. States a PROPOSED pass criterion. Changes nothing in
+        /// consensus.
         DecoyFloodSweep {
             /// Node-picker rings per (chain width, real age)
             #[arg(long, default_value = "4000")]
@@ -1142,7 +1153,13 @@ mod cli {
             Command::LotterySelectionSweep => run_lottery_selection_sweep_cli(),
             Command::ProvenanceFactorSweep => run_provenance_factor_sweep_cli(),
             Command::LotterySybilBrakeSweep => run_lottery_sybil_brake_sweep_cli(),
-            Command::LotteryRewardCapSweep => run_lottery_reward_cap_sweep_cli(),
+            Command::LotteryRewardCapSweep { faithful } => {
+                if faithful {
+                    run_lottery_reward_cap_faithful_cli()
+                } else {
+                    run_lottery_reward_cap_sweep_cli()
+                }
+            }
             Command::DecoyFloodSweep {
                 trials,
                 seed,
@@ -2473,10 +2490,11 @@ mod cli {
             "node" => (vec![DecoyRoute::Node], false),
             "cli" => (vec![DecoyRoute::Cli], false),
             "web" => (vec![DecoyRoute::Web], false),
+            "web-pre-1735" => (vec![DecoyRoute::WebPre1735], false),
             "legacy" => (Vec::new(), true),
             other => {
                 eprintln!(
-                    "unknown --route {other:?}; expected production, all, node, cli, web or legacy"
+                    "unknown --route {other:?}; expected production, all, node, cli, web, web-pre-1735 or legacy"
                 );
                 std::process::exit(2);
             }
@@ -4917,7 +4935,8 @@ mod cli {
         quick: bool,
     ) {
         use bth_cluster_tax::simulation::emission_sweep::{
-            run_sweep, to_csv, to_markdown, SweepParams,
+            node_parity_markdown, node_parity_report, run_sweep, to_csv, to_markdown,
+            NodeParityParams, SweepParams,
         };
         use std::path::Path;
 
@@ -4959,8 +4978,18 @@ mod cli {
 
         let results = run_sweep(&params);
 
+        // Node-parity track (#1699): the live policy, block by block, 20
+        // policy-years (~95M tail iterations; quick mode stops after one tail
+        // year).
+        let parity = node_parity_report(&NodeParityParams {
+            horizon_policy_years: if quick { 6 } else { 20 },
+            ..NodeParityParams::default()
+        });
+
         // Print the markdown report to stdout for immediate inspection.
-        let markdown = to_markdown(&results, &params);
+        let mut markdown = to_markdown(&results, &params);
+        markdown.push('\n');
+        markdown.push_str(&node_parity_markdown(&parity));
         println!("{markdown}");
 
         // Write artifacts.
@@ -5071,7 +5100,7 @@ mod cli {
             run_bridge_import_sweep, to_markdown,
         };
         let report = run_bridge_import_sweep();
-        println!("# Bridge-Import Calibration Sweep (issue #937)\n");
+        println!("# Bridge-Import Calibration Sweep (issues #937, #1697)\n");
         println!("{}", to_markdown(&report));
     }
 
@@ -5101,6 +5130,17 @@ mod cli {
         };
         let report = run_reward_cap_sweep();
         println!("# Reward-Cap Sweep — Path C Ratification Gate (issue #902 §9)\n");
+        println!("{}", to_markdown(&report));
+    }
+
+    /// Faithful-to-code reward-cap re-run (#1682). Analysis only; does NOT
+    /// wire anything into consensus.
+    fn run_lottery_reward_cap_faithful_cli() {
+        use bth_cluster_tax::simulation::lottery_reward_cap_faithful::{
+            run_faithful_sweep, to_markdown,
+        };
+        let report = run_faithful_sweep();
+        println!("# Reward-Cap Sweep — faithful to the implemented rules (issue #1682)\n");
         println!("{}", to_markdown(&report));
     }
 

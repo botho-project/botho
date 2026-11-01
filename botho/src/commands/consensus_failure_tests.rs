@@ -38,6 +38,25 @@ pub(super) struct FailureTestHooks {
     completions: Arc<Mutex<Vec<CompletionSample>>>,
     /// Incremented on every parked-decision `error!` (#1583).
     parked_warnings: Arc<AtomicU64>,
+    /// Overrides the consensus config the loop builds, so a test can drive
+    /// the real solo propose path with no slot wait (#1550).
+    pub(super) consensus_config: Option<crate::consensus::ConsensusConfig>,
+    /// Local mint candidates the tick arm feeds to `submit_minting_tx`, as
+    /// the miner's work channel does (#1550).
+    candidates: mpsc::Receiver<MintingTx>,
+    /// One sample per submitted candidate (#1550).
+    submissions: Arc<Mutex<Vec<SubmissionSample>>>,
+}
+
+/// A local mint candidate submitted by the tick arm (#1550).
+#[derive(Debug, Clone, Copy)]
+struct SubmissionSample {
+    /// An apply job was queued or in flight at submission.
+    busy: bool,
+    /// The SCP slot at submission.
+    slot: u64,
+    /// The candidate was accepted into the consensus tx cache.
+    cached: bool,
 }
 
 /// Blocks injected as if they had arrived from the network (#1566).
@@ -53,6 +72,8 @@ struct TickSample {
     slot: u64,
     /// An apply job was queued or in flight.
     in_flight: bool,
+    /// Values queued in the consensus service for the next proposal.
+    pending: usize,
     at: Instant,
 }
 
@@ -111,8 +132,25 @@ impl FailureTestHooks {
         self.samples.lock().unwrap().push(TickSample {
             slot: consensus.current_slot(),
             in_flight,
+            pending: consensus.pending_count(),
             at: Instant::now(),
         });
+    }
+
+    pub(super) fn submit_candidates(&mut self, consensus: &mut ConsensusService, busy: bool) {
+        for minting in self.candidates.try_iter() {
+            let hash = minting.hash();
+            consensus.submit_minting_tx(
+                hash,
+                minting.pow_priority(),
+                bincode::serialize(&minting).unwrap(),
+            );
+            self.submissions.lock().unwrap().push(SubmissionSample {
+                busy,
+                slot: consensus.current_slot(),
+                cached: consensus.get_tx_entry(&hash).is_some(),
+            });
+        }
     }
 
     pub(super) fn on_parked_warning(&mut self) {
@@ -255,6 +293,8 @@ struct Harness {
     network_blocks: mpsc::Sender<InjectedBlocks>,
     completions: Arc<Mutex<Vec<CompletionSample>>>,
     parked_warnings: Arc<AtomicU64>,
+    candidates: mpsc::Sender<MintingTx>,
+    submissions: Arc<Mutex<Vec<SubmissionSample>>>,
     worker: std::thread::JoinHandle<()>,
 }
 
@@ -324,6 +364,14 @@ fn valid_chain_minted_by(scratch: &std::path::Path, count: u64, mnemonic: &str) 
 }
 
 fn spawn_harness_with(apply_delay: Option<Duration>, trivial_pow: bool) -> Harness {
+    spawn_harness_full(apply_delay, trivial_pow, None)
+}
+
+fn spawn_harness_full(
+    apply_delay: Option<Duration>,
+    trivial_pow: bool,
+    consensus_config: Option<crate::consensus::ConsensusConfig>,
+) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let data_dir = dir.path().join("node");
     fs::create_dir(&data_dir).unwrap();
@@ -366,6 +414,9 @@ fn spawn_harness_with(apply_delay: Option<Duration>, trivial_pow: bool) -> Harne
     let parked_warnings = Arc::new(AtomicU64::new(0));
     let worker_parked_warnings = parked_warnings.clone();
     let worker_apply_delay = apply_delay;
+    let (candidates, candidates_rx) = mpsc::channel();
+    let submissions = Arc::new(Mutex::new(Vec::new()));
+    let worker_submissions = submissions.clone();
     drop(reservation);
     let worker = std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -395,6 +446,9 @@ fn spawn_harness_with(apply_delay: Option<Duration>, trivial_pow: bool) -> Harne
                         network_blocks: network_blocks_rx,
                         completions: worker_completions,
                         parked_warnings: worker_parked_warnings,
+                        consensus_config,
+                        candidates: candidates_rx,
+                        submissions: worker_submissions,
                     }),
                 ),
             )
@@ -432,6 +486,8 @@ fn spawn_harness_with(apply_delay: Option<Duration>, trivial_pow: bool) -> Harne
         network_blocks,
         completions,
         parked_warnings,
+        candidates,
+        submissions,
         worker,
     }
 }
@@ -1203,4 +1259,98 @@ fn shutdown_during_in_flight_apply_drains_before_teardown() {
         .is_ok());
     assert!(!consensus_failure::marker_path(&harness.config_path).exists());
     harness.worker.join().unwrap();
+}
+
+// ---- #1550: no proposal on the stale tip while a real decision applies ----
+
+/// #1550: the other tests inject `SlotExternalized` directly, so the service
+/// never holds `externalized` and the propose gate is not exercised through
+/// the real loop. Here the decision comes from the real solo propose path
+/// (`submit_minting_tx` -> `tick` -> direct externalize), so the loop holds
+/// the service's own pending decision while a delayed apply runs off the
+/// loop.
+///
+/// While that apply is in flight the loop keeps ticking, and a competing
+/// mint for the old tip (what the local miner produces in that gap) is
+/// neither cached nor queued: nothing can be proposed or externalized for
+/// the next slot on the stale tip. The slot advances exactly once, after the
+/// apply. A positive control then shows the same submission path does
+/// propose and apply once the decision is applied.
+#[test]
+fn real_decision_apply_in_flight_blocks_stale_tip_proposals() {
+    let scratch_a = tempfile::tempdir().unwrap();
+    let scratch_b = tempfile::tempdir().unwrap();
+    let chain = valid_chain_minted_by(scratch_a.path(), 2, MNEMONIC_A);
+    let competitor = valid_chain_minted_by(scratch_b.path(), 1, MNEMONIC_B);
+    assert_eq!(competitor[0].height(), chain[0].height());
+    assert_ne!(competitor[0].minting_tx.hash(), chain[0].minting_tx.hash());
+    let harness = spawn_harness_full(
+        Some(APPLY_DELAY),
+        true,
+        Some(crate::consensus::ConsensusConfig::fixed_timing(0)),
+    );
+
+    // The first mint is proposed, solo-externalized and applied off the loop.
+    harness
+        .candidates
+        .send(chain[0].minting_tx.clone())
+        .unwrap();
+    let samples = wait_for_sample(&harness, "the decision never started applying", |s| {
+        s.in_flight
+    });
+    let slot = samples.iter().find(|s| s.in_flight).unwrap().slot;
+
+    // The local miner's work on the old tip arrives during the apply.
+    harness
+        .candidates
+        .send(competitor[0].minting_tx.clone())
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let submissions = loop {
+        let submissions = harness.submissions.lock().unwrap().clone();
+        if submissions.len() == 2 {
+            break submissions;
+        }
+        assert!(Instant::now() < deadline, "candidate never submitted");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(submissions[0].cached, "{submissions:?}");
+    assert!(
+        submissions[1].busy && submissions[1].slot == slot,
+        "precondition: the stale candidate arrived during the apply: {submissions:?}"
+    );
+    assert!(
+        !submissions[1].cached,
+        "a stale-tip mint was accepted while the decision awaits application"
+    );
+
+    let samples = wait_busy_then_idle(&harness);
+    let (first, after) = assert_ticks_spread_over(&samples, APPLY_DELAY);
+    assert!(
+        samples[first..after]
+            .iter()
+            .all(|sample| sample.slot == slot && sample.pending == 0),
+        "the slot advanced or a value was queued during the apply: {samples:?}"
+    );
+    assert!(
+        samples[after..]
+            .iter()
+            .all(|sample| sample.slot == slot + 1 && sample.pending == 0),
+        "the slot must advance exactly once, after the apply: {samples:?}"
+    );
+
+    // Positive control: on the applied tip the same path proposes again.
+    harness
+        .candidates
+        .send(chain[1].minting_tx.clone())
+        .unwrap();
+    wait_for_sample(&harness, "the next mint was never applied", |s| {
+        s.slot == slot + 2
+    });
+    let stopped = stop_cleanly(harness);
+    assert_eq!(stopped.delivered, 0, "no decision was injected");
+    assert_eq!(stopped.final_slot, slot + 2);
+    // Block 2 extends block 1, so the tip is the first decision's block and
+    // never the competitor's.
+    assert_eq!(stopped.ledger_height, 2);
 }

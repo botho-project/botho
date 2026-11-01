@@ -10,6 +10,9 @@
 //! helper decides when to emit one summary `warn!` per peer per interval,
 //! carrying the number of drops since the previous summary, broken down by
 //! message type.
+//!
+//! The same helper summarizes gossipsub `SlowPeer` reports (#1572), which
+//! otherwise warn once per slow peer per 1 s heartbeat.
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -88,6 +91,28 @@ impl<K: Hash + Eq + Clone> RateLimitLogSummary<K> {
         kind: &'static str,
         now: Instant,
     ) -> Option<DropSummary> {
+        self.record_drops(peer, &[(kind, 1)], now)
+    }
+
+    /// Record several drops for `peer` at once, `counts` giving the number
+    /// per label (zero counts are ignored). Same warning cadence as
+    /// [`Self::record_drop`]: the first call for a peer warns, later calls
+    /// warn at most once per interval with everything since the last warning.
+    /// Used for gossipsub `SlowPeer` reports, which arrive once per heartbeat
+    /// with per-queue counts (#1572).
+    pub fn record_drops(
+        &mut self,
+        peer: &K,
+        counts: &[(&'static str, u64)],
+        now: Instant,
+    ) -> Option<DropSummary> {
+        let add = |into: &mut BTreeMap<&'static str, u64>| {
+            for &(kind, n) in counts {
+                if n > 0 {
+                    *into.entry(kind).or_insert(0) += n;
+                }
+            }
+        };
         match self.peers.get_mut(peer) {
             None => {
                 self.peers.insert(
@@ -97,12 +122,12 @@ impl<K: Hash + Eq + Clone> RateLimitLogSummary<K> {
                         dropped_since_warn: BTreeMap::new(),
                     },
                 );
-                Some(DropSummary {
-                    by_type: BTreeMap::from([(kind, 1)]),
-                })
+                let mut by_type = BTreeMap::new();
+                add(&mut by_type);
+                Some(DropSummary { by_type })
             }
             Some(p) => {
-                *p.dropped_since_warn.entry(kind).or_insert(0) += 1;
+                add(&mut p.dropped_since_warn);
                 if now.saturating_duration_since(p.last_warn) >= self.interval {
                     p.last_warn = now;
                     Some(DropSummary {
@@ -208,6 +233,33 @@ mod tests {
         assert!(s.record_drop(&2, TX, t0).is_some());
         assert_eq!(s.record_drop(&1, TX, t0 + Duration::from_secs(1)), None);
         assert_eq!(s.tracked_peers(), 2);
+    }
+
+    /// #1572: a slow peer reported every heartbeat warns once at onset, then
+    /// once per interval with the per-queue totals since the last warning.
+    #[test]
+    fn batched_counts_summarize_per_interval() {
+        const PRI: &str = "priority";
+        const NON: &str = "non_priority";
+        let mut s = RateLimitLogSummary::<u32>::new(Duration::from_secs(60));
+        let t0 = Instant::now();
+        let first = s
+            .record_drops(&1, &[(PRI, 0), (NON, 7)], t0)
+            .expect("onset is visible");
+        assert_eq!(first.to_string(), "non_priority=7");
+        for i in 1..60u64 {
+            assert_eq!(
+                s.record_drops(&1, &[(PRI, 1), (NON, 2)], t0 + Duration::from_secs(i)),
+                None,
+                "one report per 1 s heartbeat stays quiet within the interval"
+            );
+        }
+        let summary = s
+            .record_drops(&1, &[(PRI, 1), (NON, 2)], t0 + Duration::from_secs(60))
+            .expect("interval elapsed");
+        assert_eq!(summary.by_type.get(PRI), Some(&60));
+        assert_eq!(summary.by_type.get(NON), Some(&120));
+        assert_eq!(summary.total(), 180);
     }
 
     #[test]

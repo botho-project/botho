@@ -75,6 +75,19 @@ import sys
 FORBIDDEN = ("sorry", "sorryAx", "admit", "native_decide")
 ALLOW_MARKER = "-- formal-gate: allow native_decide"
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_'!?.]*")
+# A Lean char literal starting at a `'`: one plain character, or an escape
+# (`\n`, `\'`, `\xHH`, `\uHHHH`, ...). Only tried where the `'` cannot be
+# part of an identifier (primed names such as `h'` keep their prime).
+CHAR_LIT = re.compile(r"'(?:\\(?:x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|.)|[^\\'\n])'")
+# A Lean raw string opener: `r"`, `r#"`, `r##"`, ... (closed by `"` followed by
+# the same number of `#`; no escapes inside).
+RAW_OPEN = re.compile(r'r(#*)"')
+# `_root_.sorryAx` (and friends) name the same constant as the bare token.
+ROOT_PREFIX = "_root_."
+
+
+def ident_char(ch):
+    return ch.isalnum() or ch in "_'!?."
 
 
 def strip(src):
@@ -105,6 +118,22 @@ def strip(src):
             while i < n and src[i] != "\n":
                 out.append(" ")
                 i += 1
+        elif c == "'" and not (i > 0 and ident_char(src[i - 1])) \
+                and CHAR_LIT.match(src, i):
+            # Char literal such as '"' -- blank it so its quote cannot open a
+            # phantom string that hides the code after it.
+            m = CHAR_LIT.match(src, i)
+            out.append(" " * (m.end() - i))
+            i = m.end()
+        elif c == "r" and not (i > 0 and ident_char(src[i - 1])) \
+                and RAW_OPEN.match(src, i):
+            # Raw string r#"..."# (any number of #, including none).
+            m = RAW_OPEN.match(src, i)
+            close = '"' + m.group(1)
+            end = src.find(close, m.end())
+            end = n if end < 0 else end + len(close)
+            out.append("".join("\n" if ch == "\n" else " " for ch in src[i:end]))
+            i = end
         elif c == '"':
             out.append(" ")
             i += 1
@@ -130,6 +159,9 @@ for path in sys.argv[1:]:
     raw_lines = raw.splitlines()
     for lineno, line in enumerate(strip(raw).splitlines(), 1):
         for tok in IDENT.findall(line):
+            # Match `(\b|_root_\.)sorryAx` etc.: strip any `_root_.` prefix.
+            while tok.startswith(ROOT_PREFIX):
+                tok = tok[len(ROOT_PREFIX):]
             if tok not in FORBIDDEN:
                 continue
             original = raw_lines[lineno - 1] if lineno <= len(raw_lines) else ""

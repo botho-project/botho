@@ -170,63 +170,79 @@ function apply_transaction(
 
 Fee redistribution follows the 80/20 lottery/burn model with a cumulative,
 emission-fed pool and a per-block payout cap. The pseudocode below mirrors
-the consensus implementation (\texttt{consensus/lottery.rs},
-\texttt{cluster-tax/lottery.rs}); it is the authoritative specification of
+the protocol-7.0.0 consensus implementation
+(\path{botho/src/ledger/lottery_v2.rs} \texttt{drawing},
+\path{botho/src/consensus/lottery.rs},
+\path{botho/src/ledger/store/validation.rs} \path{lottery_candidates},
+\path{cluster-tax/src/lottery.rs}); it is the authoritative specification of
 the draw referenced from Sections~\ref{sec:monetary} and \ref{sec:economics}.
+Payout outputs are LotteryV2 records with independently keyed one-time
+targets; that binding is omitted here.
 
-\begin{lstlisting}[caption={Fee processing and lottery draw}]
-const WINNERS_PER_DRAW: usize = 4;
-const MIN_UTXO_AGE:   u64 = 720;         // blocks
-const MIN_UTXO_VALUE: u64 = 1_000_000;   // 1 microBTH, in picocredits
-const MAX_FACTOR: u64 = 6000;            // 6.0x, in FACTOR_SCALE units
-const FACTOR_SCALE: u64 = 1000;          // 1.0x
+\begin{lstlisting}[caption={Fee processing and lottery draw (protocol 7.0.0)}]
+const WINNERS_PER_DRAW:   usize = 4;
+const MIN_UTXO_AGE:       u64 = 720;               // blocks
+const CIRCULATION_WINDOW: u64 = 10_000;            // blocks (max age)
+const MIN_UTXO_VALUE:     u64 = 1_000_000;         // 1 microBTH, picocredits
+const MAX_CANDIDATES:   usize = 10_000;            // candidate-set cap
+const LOTTERY_BASE_FEE:   u64 = 250_000_000_000;   // 0.25 BTH cap unit (never charged)
 
 function process_fees(state: State, block: Block) -> State {
     let total_fees = sum(block.transactions.map(|tx| tx.fee))
     let (fee_pool, burn) = (80% * total_fees, 20% * total_fees) // burn destroyed
 
+    // Seed: PoW fields of the parent (tip) header, never its header hash.
+    let parent = state.tip_header
+    let seed = SHA256("BOTHO_LOTTERY_SEED_V2" || parent.pow_hash()
+                      || parent.prev_block_hash || block.height.le_bytes())
+
+    // Candidates: read from the state AFTER the parent block (see #1689).
+    let candidates = lottery_candidates(state.utxo_set, block.height, seed)
+    let rho = candidates.len()
+
+    // Cap R = min(rho * base_fee, block_reward). rho counts the window (#1682).
+    let cap = min(rho * LOTTERY_BASE_FEE, block.reward)
+
     // Pool is cumulative (u128) and also fed by the block reward's
-    // height-scheduled emission share; payout is capped at one reward.
+    // height-scheduled emission share (0, then +10%/epoch, cap 50%).
     let emission_share = lottery_emission_share(block.height, block.reward)
     let available: u128 = state.pool_carryover + emission_share + fee_pool
-    let payout: u64 = min(available, block.reward)        // anti-grind cap
+    let payout: u64 = min(available, cap)
 
-    if payout > 0 {
-        let winners = draw_winners(state.utxo_set, payout, block.height,
-                                   block.prev_hash)         // may be empty
-        for w in winners {
-            state = apply_lottery_payout(state, w.outpoint, w.payout)
-        }
-        state.pool_carryover = available - payout          // surplus carries
-    } else {
-        state.pool_carryover = available
+    // No draw when payout == 0 or there are no candidates (winners = []).
+    let winners = draw_uniform(candidates, payout, seed)
+    for w in winners {
+        state = apply_lottery_payout(state, w.outpoint, w.payout)
     }
+    state.pool_carryover = available - sum(winners.map(|w| w.payout))
     state
 }
 
-// Verifiable, value-weighted, cluster-tilted selection without replacement.
-function draw_winners(
-    utxos: Set<UTXO>, payout: u64, height: u64, prev_hash: Hash
-) -> Vec<Winner> {
-    let eligible = utxos.filter(|u|
-        height - u.created_height >= MIN_UTXO_AGE && u.value >= MIN_UTXO_VALUE)
-    if eligible.is_empty() { return [] }
+// Seed-offset window over the UTXO set, eligibility by age band and dust floor.
+function lottery_candidates(utxos: Set<UTXO>, height: u64, seed: Hash) -> Vec<UTXO> {
+    let start = offset_key(seed, height)               // 36-byte UTXO-id key
+    let mut out = []
+    for u in utxos.iter_from(start).wrap_around() {    // key order, deterministic
+        if out.len() >= MAX_CANDIDATES { break }
+        let age = height - u.created_height
+        if age >= MIN_UTXO_AGE && age <= CIRCULATION_WINDOW
+           && u.value >= MIN_UTXO_VALUE {             // reads the amount
+            out.push(u)                                // coinbase/payouts included (#1690)
+        }
+    }
+    out
+}
 
-    // Seed = committed PREVIOUS block hash + height (no current-block input).
-    let seed = SHA256("LOTTERY_SEED_V1" || prev_hash || height.le_bytes())
-
-    // weight_i = value_i * (MAX_FACTOR - factor_i + FACTOR_SCALE), all integer.
-    // A factor-1.0 coin has 6x the per-value weight of a factor-6.0 coin.
-    let weights = eligible.map(|u|
-        (u, u.value * (MAX_FACTOR - clamp(u.factor) + FACTOR_SCALE)))
-    let total: u128 = sum(weights.values())
-
+// Verifiable uniform selection without replacement (SelectionMode::Uniform).
+function draw_uniform(eligible: Vec<UTXO>, payout: u64, seed: Hash) -> Vec<Winner> {
+    if eligible.is_empty() || payout == 0 { return [] }
     let n = min(WINNERS_PER_DRAW, eligible.len())
     let per_winner = payout / n
     let mut winners = []
     for i in 0..n {
-        let roll = verifiable_random_u128(seed, i) % total   // deterministic
-        winners.push(cumulative_select(weights, roll, exclude=winners))
+        let remaining = eligible.len() - winners.len()
+        let roll = verifiable_random_u128(seed, i) % remaining   // deterministic
+        winners.push(nth_unselected(eligible, roll, exclude=winners))
     }
     assign_payouts(winners, per_winner, remainder_to_last=payout - per_winner*n)
 }

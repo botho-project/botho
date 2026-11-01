@@ -14,7 +14,9 @@
 //! Nothing in the shipped code charges that. The node charges
 //! `max(consensus floor, MIN_TX_FEE)` per *transaction*, where the floor is
 //! `1 pico/byte × size × factor × min(n_out, 10)²` (+ demurrage) and
-//! `MIN_TX_FEE` is 1e8 pico, and a transaction may carry up to 16 outputs.
+//! `MIN_TX_FEE` is 1e8 pico. Since #1780 the mempool rejects a transaction
+//! with more than `MAX_OUTPUTS` = 16 outputs (relay policy); block validation
+//! still accepts more (#1772 Part B, pending #1684).
 //!
 //! A flood output aged 720..=10,000 blocks is also lottery-eligible, so the
 //! flooder wins back its ticket share of every lottery payout: 80% of all fees
@@ -41,7 +43,14 @@
 //!
 //! The attacker uses background coins (factor 1×, its cheapest class; the
 //! demurrage term is then zero) and gives each flood output exactly the
-//! lottery dust floor `min_utxo_value` = 1e6 pico.
+//! lottery dust floor `min_utxo_value` = 1e6 pico. The factor and the
+//! input-class floor are resolved by the shared ledger mirror
+//! [`crate::resolve_fee_floor`] (#1697) over untagged outputs and an untagged
+//! ring, not assumed.
+//!
+//! Both modes use 16-output transactions. That is exact for `relay` (the
+//! mempool cap). For `consensus` it is an upper bound on cost: a self-mining
+//! attacker may put more outputs in one block-valid transaction.
 //!
 //! ## Lottery recapture
 //!
@@ -62,7 +71,7 @@
 //!
 //! ## Privacy: `P(all decoys are the attacker's)`
 //!
-//! Two production pickers, both via the #1700 ports in
+//! All three production pickers, via the #1700 ports in
 //! [`super::privacy_routes`] (pinned to production by
 //! `botho/tests/privacy_sim_route_parity.rs`):
 //!
@@ -71,37 +80,48 @@
 //!   the band's composition, `P` is exactly hypergeometric, `C(A, 19) / C(N,
 //!   19)`, which the report uses. A unit test checks the port against that
 //!   formula by Monte Carlo.
+//! - **Web** (`selectDecoysForInput`, #1735; web wallet, Snap, claim links):
+//!   when the band holds at least 19 candidates, phase 1 is a partial
+//!   Fisher–Yates over the band — also a uniform sample without replacement, so
+//!   the same hypergeometric `P` applies. A unit test checks the web port
+//!   against the formula by Monte Carlo.
 //! - **Node** (`select_decoys_for_input`): per slot, a gamma target age clamped
-//!   into the band, then the nearest unused candidate, **ties broken by
-//!   candidate order**. Production candidate order is the `utxo_db` key order,
-//!   i.e. `tx_hash ‖ output_index` (`Ledger::get_decoy_outputs_for_input`).
+//!   into the band, then the nearest unused candidate. Since #1786 (#1771) the
+//!   eligible set is shuffled once per ring before selection, so distance ties
+//!   are broken uniformly at random, not by `utxo_db` key order.
 //!
 //! Every block has outputs, so each slot lands at distance 0 in the block at
-//! its target age and takes that block's first unused output in key order.
-//! That gives two attacker strategies:
+//! its target age and takes a uniformly random unused output of that block.
+//! Given the picker's selections, `P = Π_blocks C(a, k_b) / C(n, k_b)` where
+//! `k_b` decoys came from block `b`, whatever the attacker's keys are.
+//!
+//! Two attacker key strategies are still distinguished:
 //!
 //! - **uniform keys**: the attacker's transaction hashes are as random as
-//!   anyone's, so within a block its outputs sit at random positions. Given the
-//!   picker's selections, `P = Π_blocks C(a, k_b) / C(n, k_b)` where `k_b`
-//!   decoys came from block `b`.
+//!   anyone's.
 //! - **ground keys**: the attacker re-signs each flood transaction until its
-//!   hash sorts below every honest transaction hash in the same block (a few
-//!   thousand hash attempts). Its outputs are then the first candidates of
-//!   every block, and the node picker takes them before any honest output. `P =
-//!   1` whenever no block supplies more than `a` decoys.
+//!   hash sorts below every honest transaction hash in the same block. Before
+//!   #1786 this made the node picker take the attacker's outputs first, and 19
+//!   outputs per block gave `P = 1`. The node picker no longer reads key order,
+//!   so grinding does not change `P`; [`node_ground_full_width_prob`] re-runs
+//!   the case on the port at full chain width to show it. Grinding still
+//!   changes the attacker's lottery ticket share (the lottery candidate scan is
+//!   in key order; [`ground_ticket_share`]), downward.
 //!
-//! The node port runs on a chain with `min(n, 20)` outputs per block. That is
-//! exact: a block contributes at most 19 decoys, so with ≥ 20 outputs per
-//! block a target's block is never exhausted and the selection is the same
-//! for any `n ≥ 20` (only the labels differ, which the formulas above apply
-//! with the true `a` and `n`).
+//! For the uniform formula the node port runs on a chain with `min(n, 20)`
+//! outputs per block. That is exact in distribution: a block contributes at
+//! most 19 decoys, so with ≥ 20 outputs per block a target's block is never
+//! exhausted and the per-block counts `k_b` have the same law for any `n ≥ 20`
+//! (only the labels differ, which the formula applies with the true `a` and
+//! `n`). The ground-key re-run needs the true labels, so it runs at full width.
 //!
 //! # What is *not* modelled
 //!
 //! Real honest traffic is not uniform in time; coinbase and lottery payout
-//! outputs are folded into `h`; the web wallet route (chain-order, no band,
-//! #1700/#1735) is out of scope; adversaries beyond "all 19 decoys known" are
-//! in the #1700 report. Nothing here is consensus code.
+//! outputs are folded into `h`; the web picker's thin-band fallback (fewer
+//! than 19 band candidates, never reached at these rates) is not modelled;
+//! adversaries beyond "all 19 decoys known" are in the #1700 report. Nothing
+//! here is consensus code.
 
 use crate::{
     consensus_fee::{
@@ -109,6 +129,8 @@ use crate::{
         ConsensusFeeParams, FeeModelMode, MAINNET_BLOCKS_PER_YEAR,
     },
     fee_curve::{FeeConfig, PICO_PER_BTH},
+    fee_floor_inputs::{resolve_fee_floor, FloorOutput, TagPair},
+    monetary::{mainnet_policy_mirror, node_constants::FEE_BURN_SHARE_PERMILLE},
     LotteryDrawConfig, MonetaryPolicy, LOTTERY_BASE_FEE_PICO,
 };
 use rand::SeedableRng;
@@ -128,36 +150,32 @@ use super::{
 // ============================================================================
 
 /// `bth_transaction_types::constants::MAX_OUTPUTS`: outputs per transaction.
+/// Enforced by the mempool since #1780 (`Transaction::is_valid_structure`), not
+/// by block validation (#1772 Part B).
 pub const MAX_OUTPUTS_PER_TX: u64 = 16;
 
 /// `pool_fraction_permille` of `LotteryFeeConfig::default()` and of the
 /// consensus `ledger::lottery_v2::canonical_config()`: 80% of fees go to the
-/// lottery pool, 20% are burned.
-pub const LOTTERY_POOL_PERMILLE: u64 = 800;
+/// lottery pool, 20% are burned. Derived from the shared
+/// [`crate::monetary::node_constants::FEE_BURN_SHARE_PERMILLE`] (#1751).
+pub const LOTTERY_POOL_PERMILLE: u64 = 1_000 - FEE_BURN_SHARE_PERMILLE as u64;
 
 /// `MAX_LOTTERY_CANDIDATES` in `lottery_candidates`
 /// (`botho/src/ledger/store/validation.rs`, a function-local constant; the
 /// parity test reads the source).
 pub const MAX_LOTTERY_CANDIDATES: u64 = 10_000;
 
-/// `botho::monetary::mainnet_policy()` fields that set the block reward and
-/// the lottery emission share. `cluster-tax`'s `MonetaryPolicy::default()` is a
-/// generic 60 s library default, not mainnet.
-pub const MAINNET_INITIAL_REWARD: u64 = 50 * PICO_PER_BTH as u64;
-/// See [`MAINNET_INITIAL_REWARD`].
+/// Halving interval of `botho::monetary::mainnet_policy()` (one 5 s-block
+/// year), as a constant for [`epoch_height`]. A unit test checks it against
+/// [`mainnet_policy_mirror`].
 pub const MAINNET_HALVING_INTERVAL: u64 = MAINNET_BLOCKS_PER_YEAR;
-/// See [`MAINNET_INITIAL_REWARD`].
-pub const MAINNET_HALVING_COUNT: u32 = 5;
 
-/// The mainnet monetary policy as far as this sweep needs it.
+/// The mainnet monetary policy: the shared, drift-guarded
+/// [`mainnet_policy_mirror`] (#1751; `ledger::emission_parity_tests`).
+/// `cluster-tax`'s `MonetaryPolicy::default()` is a generic 60 s library
+/// default, not mainnet.
 pub fn mainnet_monetary_policy() -> MonetaryPolicy {
-    MonetaryPolicy {
-        initial_reward: MAINNET_INITIAL_REWARD,
-        halving_interval: MAINNET_HALVING_INTERVAL,
-        halving_count: MAINNET_HALVING_COUNT,
-        target_block_time_secs: 5,
-        ..MonetaryPolicy::default()
-    }
+    mainnet_policy_mirror()
 }
 
 /// The lottery eligibility rule, straight from the production default
@@ -172,9 +190,6 @@ pub fn lottery_window_blocks() -> u64 {
     let c = lottery_draw_config();
     c.circulation_window - c.min_utxo_age + 1
 }
-
-/// Factor 1× in `FACTOR_SCALE` units.
-const FACTOR_1X: u64 = 1_000;
 
 // ============================================================================
 // Fees
@@ -215,15 +230,30 @@ pub fn epoch_height(epoch: u64) -> u64 {
     (epoch * MAINNET_HALVING_INTERVAL).max(1)
 }
 
-/// Fee in pico for a 1-input, `n_out`-output transaction of background (1×)
+/// Fee in pico for a 1-input, `n_out`-output transaction of background
 /// coins whose outputs total `output_sum`, at `height`.
+///
+/// The claimed class and the input-class floor come from the shared ledger
+/// mirror [`resolve_fee_floor`] (#1697) over untagged outputs (value split
+/// evenly) and an untagged ring: no cluster wealth, no recorded import, so
+/// both resolve to 1×.
 pub fn tx_fee_pico(n_out: u64, output_sum: u64, mode: FeeModelMode, height: u64) -> u64 {
+    const NO_TAGS: &[TagPair] = &[];
+    let per_output = output_sum / n_out.max(1);
+    let outputs: Vec<FloorOutput<'_>> = (0..n_out)
+        .map(|_| FloorOutput {
+            amount: per_output,
+            tags: NO_TAGS,
+        })
+        .collect();
+    let ring: Vec<(u64, &[TagPair])> = vec![(per_output, NO_TAGS); DECOY_COUNT + 1];
+    let resolved = resolve_fee_floor(&outputs, &ring, &|_| 0, &|_| false);
     let inputs = ConsensusFeeInputs {
         size: consensus_tx_size_bytes(1, n_out as usize, 0),
         n_out: n_out as usize,
         n_memo: 0,
-        claimed: ClaimedClass::Factor(FACTOR_1X),
-        floor: FACTOR_1X,
+        claimed: ClaimedClass::Wealth(resolved.claimed_wealth),
+        floor: resolved.floor,
         // Ring age only feeds demurrage, which is zero at factor 1×.
         elapsed: 0,
         height,
@@ -496,32 +526,50 @@ pub fn node_chain_width(n: u64) -> u64 {
     n.min(DECOY_COUNT as u64 + 1)
 }
 
-/// Node picker `P(all decoys are the attacker's)` for one ring.
-pub fn node_ring_all_attacker(
-    sel: &NodeSelection,
-    a: u64,
-    h: u64,
-    real_age: u64,
-    keys: KeyStrategy,
-) -> f64 {
+/// Node picker `P(all decoys are the attacker's)` for one ring, given the
+/// picker's per-block selection counts.
+///
+/// Since #1786 the node picker breaks distance ties with a per-ring shuffle,
+/// so the outputs it takes from a block are a uniform subset of that block
+/// whatever the attacker's keys are. The same formula therefore holds for
+/// both key strategies; [`node_ground_full_width_prob`] checks the ground-key
+/// case on the port directly.
+pub fn node_ring_all_attacker(sel: &NodeSelection, a: u64, h: u64, real_age: u64) -> f64 {
     let n = a + h;
-    match keys {
-        KeyStrategy::Uniform => sel
-            .iter()
-            .map(|(age, pos)| {
-                // The real input (honest) is excluded from its own block.
-                let total = if *age == real_age { n - 1 } else { n };
-                all_attacker_prob(a, total, pos.len() as u64)
-            })
-            .product(),
-        KeyStrategy::Ground => {
-            if sel.iter().all(|(_, pos)| pos.iter().all(|&j| j < a)) {
-                1.0
-            } else {
-                0.0
-            }
-        }
-    }
+    sel.iter()
+        .map(|(age, pos)| {
+            // The real input (honest) is excluded from its own block.
+            let total = if *age == real_age { n - 1 } else { n };
+            all_attacker_prob(a, total, pos.len() as u64)
+        })
+        .product()
+}
+
+/// Largest `a + h` for which [`node_ground_full_width_prob`] runs (the chain
+/// is built at full width, so its band grows with `a + h`).
+pub const GROUND_FULL_WIDTH_MAX: u64 = 256;
+
+/// The #1771 grind case, re-run on the node port at full chain width: every
+/// block holds `a + h` outputs, the attacker's `a` outputs have the lowest
+/// keys of the block (what grinding the transaction hash buys), and the real
+/// input is the block's last output. Returns the fraction of `trials` rings
+/// whose 19 decoys are all the attacker's.
+///
+/// Before #1786 the port took each block's lowest unused key first, and this
+/// returned 1.0 for `a ≥ 19`. Since #1786 it matches the uniform-key value.
+pub fn node_ground_full_width_prob(a: u64, h: u64, real_age: u64, trials: usize, seed: u64) -> f64 {
+    let n = a + h;
+    assert!(h >= 1, "the real input is honest");
+    assert!(
+        n <= GROUND_FULL_WIDTH_MAX,
+        "full-width chain capped at {GROUND_FULL_WIDTH_MAX}"
+    );
+    let sels = node_selections(n, real_age, trials, seed ^ 0x1786);
+    let hits = sels
+        .iter()
+        .filter(|sel| sel.iter().all(|(_, pos)| pos.iter().all(|&j| j < a)))
+        .count();
+    hits as f64 / sels.len() as f64
 }
 
 /// Caches node-picker selections per (chain width, real age).
@@ -541,8 +589,9 @@ impl NodeSampler {
         }
     }
 
-    /// Mean node-picker `P(all decoys are the attacker's)`.
-    pub fn prob(&mut self, a: u64, h: u64, real_age: u64, keys: KeyStrategy) -> f64 {
+    /// Mean node-picker `P(all decoys are the attacker's)`. Key strategy does
+    /// not enter (see [`node_ring_all_attacker`]).
+    pub fn prob(&mut self, a: u64, h: u64, real_age: u64) -> f64 {
         if a == 0 {
             return 0.0;
         }
@@ -554,16 +603,18 @@ impl NodeSampler {
             .or_insert_with(|| node_selections(width, real_age, trials, seed));
         let sum: f64 = sels
             .iter()
-            .map(|s| node_ring_all_attacker(s, a, h, real_age, keys))
+            .map(|s| node_ring_all_attacker(s, a, h, real_age))
             .sum();
         sum / sels.len() as f64
     }
 }
 
-/// The two production pickers this sweep covers.
+/// The production pickers this sweep covers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Picker {
-    /// `select_rpc_decoy_pool` (botho-wallet thin CLI).
+    /// `select_rpc_decoy_pool` (botho-wallet thin CLI). The web picker
+    /// (`selectDecoysForInput`, #1735) has the same `P` (a uniform band
+    /// sample), so its rows are shared.
     Cli,
     /// `select_decoys_for_input` (node wallet, detached signer).
     Node,
@@ -576,43 +627,42 @@ impl Picker {
     /// Report label.
     pub fn label(self) -> &'static str {
         match self {
-            Picker::Cli => "CLI",
+            Picker::Cli => "CLI / web",
             Picker::Node => "node",
         }
     }
 }
 
-/// `P(all decoys are the attacker's)` for a picker and key strategy. Key
-/// grinding does not affect the CLI picker (it shuffles).
+/// `P(all decoys are the attacker's)` for a picker. Key grinding affects no
+/// picker: CLI and web shuffle the band, and the node picker shuffles its
+/// tie-break since #1786.
 pub fn all_decoys_prob(
     sampler: &mut NodeSampler,
     picker: Picker,
     a: u64,
     h: u64,
     real_age: u64,
-    keys: KeyStrategy,
 ) -> f64 {
     match picker {
         Picker::Cli => cli_all_attacker_prob(a, h, real_age),
-        Picker::Node => sampler.prob(a, h, real_age, keys),
+        Picker::Node => sampler.prob(a, h, real_age),
     }
 }
 
 /// Smallest attacker rate `a` (outputs/block) with `P ≥ target` at every
 /// age in `ages`, searched up to `a_max`. `P` is monotone in `a` for the CLI
-/// formula and for both node formulas over a fixed selection sample.
+/// formula and for the node formula over a fixed selection sample.
 pub fn min_flood_rate(
     sampler: &mut NodeSampler,
     picker: Picker,
     h: u64,
     ages: &[u64],
-    keys: KeyStrategy,
     target: f64,
     a_max: u64,
 ) -> Option<u64> {
     let ok = |s: &mut NodeSampler, a: u64| {
         ages.iter()
-            .all(|&age| all_decoys_prob(s, picker, a, h, age, keys) >= target)
+            .all(|&age| all_decoys_prob(s, picker, a, h, age) >= target)
     };
     if !ok(sampler, a_max) {
         return None;
@@ -751,9 +801,35 @@ pub struct PrivacyRow {
     pub h: u64,
     pub a: u64,
     pub real_age: u64,
+    /// CLI and web picker (exact).
     pub cli: f64,
-    pub node_uniform: f64,
-    pub node_ground: f64,
+    /// Node picker (any attacker keys since #1786).
+    pub node: f64,
+}
+
+/// One row of the #1771 grind re-run (§5): the node port at full chain
+/// width with the attacker's outputs sorted first in every block, against
+/// the uniform-key formula at the same rates.
+#[derive(Clone, Debug)]
+pub struct GrindRow {
+    pub h: u64,
+    pub a: u64,
+    pub real_age: u64,
+    /// [`node_ground_full_width_prob`].
+    pub ground: f64,
+    /// [`NodeSampler::prob`] (uniform keys).
+    pub uniform: f64,
+}
+
+/// Minimal flood for `P ≥ p_target` at one age, ground keys (full-width
+/// port) vs uniform keys (formula).
+#[derive(Clone, Debug)]
+pub struct GrindMinRow {
+    pub h: u64,
+    pub real_age: u64,
+    /// `None`: not reached with `a + h ≤ GROUND_FULL_WIDTH_MAX`.
+    pub ground_a_min: Option<u64>,
+    pub uniform_a_min: Option<u64>,
 }
 
 /// One row of the per-block economics table.
@@ -808,10 +884,15 @@ pub struct SweepReport {
     pub privacy: Vec<PrivacyRow>,
     pub econ: Vec<EconRow>,
     pub criterion: Vec<CriterionRow>,
-    /// Ground-key node picker: minimal `a` per real age (h-independent for
-    /// `a + h ≥ 20`), at h = the smallest honest rate.
-    pub ground_min_by_age: Vec<(u64, Option<u64>)>,
+    /// #1771 grind re-run at h = the smallest honest rate.
+    pub grind: Vec<GrindRow>,
+    /// #1771 grind re-run: minimal flood per real age.
+    pub grind_min: Vec<GrindMinRow>,
 }
+
+/// Attacker rates at which §5 re-runs the grind case: 8 and 19 were the
+/// pre-#1786 ground-key minima (mid band and band edge).
+pub const GRIND_RATES: [u64; 4] = [8, 19, 27, 38];
 
 /// Search ceiling for the minimal flood rate.
 pub const A_MAX: u64 = 1 << 16;
@@ -848,8 +929,7 @@ pub fn run_decoy_flood_sweep(config: &SweepConfig) -> SweepReport {
                     a,
                     real_age: age,
                     cli: cli_all_attacker_prob(a, h, age),
-                    node_uniform: sampler.prob(a, h, age, KeyStrategy::Uniform),
-                    node_ground: sampler.prob(a, h, age, KeyStrategy::Ground),
+                    node: sampler.prob(a, h, age),
                 });
             }
             for &epoch in &config.epochs {
@@ -867,18 +947,17 @@ pub fn run_decoy_flood_sweep(config: &SweepConfig) -> SweepReport {
     }
 
     let mut criterion = Vec::new();
-    for (picker, keys) in [
-        (Picker::Cli, KeyStrategy::Uniform),
-        (Picker::Node, KeyStrategy::Uniform),
-        (Picker::Node, KeyStrategy::Ground),
-    ] {
+    // Since #1786 ground keys no longer change `P` for any picker and only
+    // lower the attacker's ticket share, so they are dominated by uniform
+    // keys; the criterion uses uniform keys (§5 shows the grind re-run).
+    let keys = KeyStrategy::Uniform;
+    for picker in Picker::ALL {
         for &h in &config.honest_rates {
             let a_min = min_flood_rate(
                 &mut sampler,
                 picker,
                 h,
                 &config.real_ages,
-                keys,
                 config.p_target,
                 A_MAX,
             );
@@ -915,24 +994,51 @@ pub fn run_decoy_flood_sweep(config: &SweepConfig) -> SweepReport {
     }
 
     let h_min = config.honest_rates.iter().copied().min().unwrap_or(1);
-    let ground_min_by_age = config
-        .real_ages
-        .iter()
-        .map(|&age| {
-            (
-                age,
-                min_flood_rate(
-                    &mut sampler,
-                    Picker::Node,
-                    h_min,
-                    &[age],
-                    KeyStrategy::Ground,
-                    config.p_target,
-                    A_MAX,
-                ),
-            )
-        })
-        .collect();
+    let mut grind = Vec::new();
+    let mut grind_min = Vec::new();
+    for &age in &config.real_ages {
+        for &a in &GRIND_RATES {
+            grind.push(GrindRow {
+                h: h_min,
+                a,
+                real_age: age,
+                ground: node_ground_full_width_prob(a, h_min, age, config.trials, config.seed),
+                uniform: sampler.prob(a, h_min, age),
+            });
+        }
+        let ground_ok = |a: u64| {
+            node_ground_full_width_prob(a, h_min, age, config.trials, config.seed)
+                >= config.p_target
+        };
+        let a_cap = GROUND_FULL_WIDTH_MAX - h_min;
+        let ground_a_min = if ground_ok(a_cap) {
+            let (mut lo, mut hi) = (0u64, a_cap);
+            while hi - lo > 1 {
+                let mid = lo + (hi - lo) / 2;
+                if ground_ok(mid) {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                }
+            }
+            Some(hi)
+        } else {
+            None
+        };
+        grind_min.push(GrindMinRow {
+            h: h_min,
+            real_age: age,
+            ground_a_min,
+            uniform_a_min: min_flood_rate(
+                &mut sampler,
+                Picker::Node,
+                h_min,
+                &[age],
+                config.p_target,
+                A_MAX,
+            ),
+        });
+    }
 
     SweepReport {
         config: config.clone(),
@@ -940,7 +1046,8 @@ pub fn run_decoy_flood_sweep(config: &SweepConfig) -> SweepReport {
         privacy,
         econ,
         criterion,
-        ground_min_by_age,
+        grind,
+        grind_min,
     }
 }
 
@@ -984,7 +1091,8 @@ pub fn to_markdown(r: &SweepReport) -> String {
     let _ = writeln!(
         s,
         "Code constants: MIN_TX_FEE = {} pico; CONSENSUS_FEE_BASE = {} pico/byte; output \
-         penalty cap = {} outputs; MAX_OUTPUTS = {}; ring size = {} ({} decoys); ±{}% age band; \
+         penalty cap = {} outputs; MAX_OUTPUTS = {} (mempool-enforced since #1780, not by block \
+         validation); ring size = {} ({} decoys); ±{}% age band; \
          lottery pool = {}‰ of fees; lottery window = ages {}..={} ({} blocks), dust floor {} \
          pico; MAX_LOTTERY_CANDIDATES = {}; LOTTERY_BASE_FEE_PICO = {}; reward epoch 0 = {} \
          BTH, halving every {} blocks; lottery emission share +10%/epoch from epoch 1.\n",
@@ -1002,7 +1110,7 @@ pub fn to_markdown(r: &SweepReport) -> String {
         lc.min_utxo_value,
         MAX_LOTTERY_CANDIDATES,
         LOTTERY_BASE_FEE_PICO,
-        MAINNET_INITIAL_REWARD / PICO_PER_BTH as u64,
+        mainnet_monetary_policy().initial_reward / PICO_PER_BTH as u64,
         MAINNET_HALVING_INTERVAL,
     );
     let _ = writeln!(
@@ -1045,28 +1153,25 @@ pub fn to_markdown(r: &SweepReport) -> String {
     );
     let _ = writeln!(
         s,
-        "`a` = attacker outputs/block, `h` = honest outputs/block, `f = a/(a+h)`. CLI is exact \
-         (hypergeometric over the band); node is the #1700 port, Monte Carlo. `f^19` is the \
-         independent-draw reference.\n"
+        "`a` = attacker outputs/block, `h` = honest outputs/block, `f = a/(a+h)`. CLI / web is \
+         exact (hypergeometric over the band; both pickers take a uniform band sample); node is \
+         the #1700 port with the #1786 shuffled tie-break, Monte Carlo. Attacker keys do not \
+         matter to any picker (§5). `f^19` is the independent-draw reference.\n"
     );
-    let _ = writeln!(
-        s,
-        "| h | a | f | f^19 | real age | CLI | node (uniform keys) | node (ground keys) |"
-    );
-    let _ = writeln!(s, "|---:|---:|---:|---:|---:|---:|---:|---:|");
+    let _ = writeln!(s, "| h | a | f | f^19 | real age | CLI / web | node |");
+    let _ = writeln!(s, "|---:|---:|---:|---:|---:|---:|---:|");
     for p in &r.privacy {
         let f = p.a as f64 / (p.a + p.h) as f64;
         let _ = writeln!(
             s,
-            "| {} | {} | {:.4} | {} | {} | {} | {} | {} |",
+            "| {} | {} | {:.4} | {} | {} | {} | {} |",
             p.h,
             p.a,
             f,
             prob(f.powi(DECOY_COUNT as i32)),
             p.real_age,
             prob(p.cli),
-            prob(p.node_uniform),
-            prob(p.node_ground)
+            prob(p.node)
         );
     }
 
@@ -1175,22 +1280,55 @@ pub fn to_markdown(r: &SweepReport) -> String {
 
     let _ = writeln!(
         s,
-        "\n## 5. Node picker with ground keys: minimal flood by real age\n"
+        "\n## 5. Node picker with ground keys: the #1771 grind case after #1786\n"
     );
     let _ = writeln!(
         s,
-        "Attacker outputs per block needed for P ≥ {} when its outputs sort first in every \
-         block (independent of `h` once a + h ≥ 20).\n",
-        c.p_target
+        "The node port at full chain width (a + h outputs per block), with the attacker's \
+         outputs sorted first in every block, against the uniform-key value at the same rates. \
+         Before #1786 the port took each block's lowest key first and the ground column was \
+         1.000 for a ≥ 19 at every age. Monte Carlo, {} rings per cell.\n",
+        c.trials
     );
-    let _ = writeln!(s, "| real age | a_min |");
-    let _ = writeln!(s, "|---:|---:|");
-    for (age, a) in &r.ground_min_by_age {
+    let _ = writeln!(
+        s,
+        "| h | a | real age | node, ground keys | node, uniform keys |"
+    );
+    let _ = writeln!(s, "|---:|---:|---:|---:|---:|");
+    for g in &r.grind {
         let _ = writeln!(
             s,
-            "| {} | {} |",
-            age,
-            a.map(|a| a.to_string())
+            "| {} | {} | {} | {} | {} |",
+            g.h,
+            g.a,
+            g.real_age,
+            prob(g.ground),
+            prob(g.uniform)
+        );
+    }
+    let _ = writeln!(
+        s,
+        "\nMinimal attacker outputs per block for P ≥ {} (ground keys searched up to a + h = \
+         {GROUND_FULL_WIDTH_MAX}; pre-#1786 ground-key minima were 19 / 8 / 19 at ages 1000 / \
+         22000 / 60000).\n",
+        c.p_target
+    );
+    let _ = writeln!(
+        s,
+        "| h | real age | a_min, ground keys | a_min, uniform keys |"
+    );
+    let _ = writeln!(s, "|---:|---:|---:|---:|");
+    for g in &r.grind_min {
+        let _ = writeln!(
+            s,
+            "| {} | {} | {} | {} |",
+            g.h,
+            g.real_age,
+            g.ground_a_min
+                .map(|a| a.to_string())
+                .unwrap_or_else(|| format!("> {}", GROUND_FULL_WIDTH_MAX - g.h)),
+            g.uniform_a_min
+                .map(|a| a.to_string())
                 .unwrap_or_else(|| format!("> {A_MAX}"))
         );
     }
@@ -1206,6 +1344,7 @@ mod tests {
     use super::*;
     use crate::simulation::privacy_routes::{
         cli_select_rpc_decoys_for_input, node_select_decoys_for_input as node_literal,
+        web_select_decoys_for_input, Mulberry32,
     };
     use rand::SeedableRng;
 
@@ -1317,65 +1456,63 @@ mod tests {
     }
 
     #[test]
-    fn node_width_reduction_is_exact() {
-        // With >= 20 outputs per block, the selected (age, position) sets are
-        // identical for any width: compare widths 20 and 37.
+    fn node_width_reduction_is_exact_in_distribution() {
+        // With >= 20 outputs per block the per-block decoy counts have the same
+        // law for any width. Since #1786 the port's tie-break draws consume
+        // RNG, so widths no longer give bit-identical rings; compare the
+        // uniform-key P (with the true a, h) and the number of distinct blocks
+        // used, widths 20 and 37, on independent samples.
+        let (a, h) = (30u64, 7u64);
+        let trials = 1_500;
         for age in [1_000u64, 22_000] {
-            // Same RNG seed for both widths, picker called directly.
-            let (lo, hi) = age_similarity_band(age);
-            let mut sets = Vec::new();
-            for width in [20u64, 37] {
-                let chain = ChainModel {
-                    tip_height: hi + 2_000,
-                    outputs_per_block: width,
-                };
-                let real_key = ChainModel::key(chain.id_at(age, width - 1));
-                let band: Vec<RouteCandidate> = chain
-                    .candidates_by_age(lo, hi)
-                    .into_iter()
-                    .filter(|c| c.key != real_key)
+            let mut stats = Vec::new();
+            for (width, seed) in [(20u64, 99u64), (37, 100)] {
+                let sels = node_selections(width, age, trials, seed);
+                let p: Vec<f64> = sels
+                    .iter()
+                    .map(|s| node_ring_all_attacker(s, a, h, age))
                     .collect();
-                let mut rng = ChaCha8Rng::seed_from_u64(99);
-                let mut rings = Vec::new();
-                for _ in 0..50 {
-                    let keys = node_select_decoys_banded(
-                        &band,
-                        chain.eligible_count() - 1,
-                        DECOY_COUNT,
-                        age,
-                        &mut rng,
-                    )
-                    .unwrap()
-                    .unwrap();
-                    let mut ring: Vec<(u64, u64)> = keys
-                        .iter()
-                        .map(|k| {
-                            let id = ChainModel::id_of(k);
-                            (chain.age_of(id), id % width)
-                        })
-                        .collect();
-                    ring.sort();
-                    rings.push(ring);
-                }
-                sets.push(rings);
+                let blocks: Vec<f64> = sels.iter().map(|s| s.len() as f64).collect();
+                stats.push((mean_se(&p), mean_se(&blocks)));
             }
-            assert_eq!(sets[0], sets[1], "age {age}");
+            let ((p20, sp20), (b20, sb20)) = stats[0];
+            let ((p37, sp37), (b37, sb37)) = stats[1];
+            assert!(
+                (p20 - p37).abs() <= 4.0 * (sp20.hypot(sp37)) + 1e-9,
+                "age {age}: P {p20} vs {p37}"
+            );
+            assert!(
+                (b20 - b37).abs() <= 4.0 * (sb20.hypot(sb37)) + 1e-9,
+                "age {age}: blocks {b20} vs {b37}"
+            );
         }
     }
 
+    fn mean_se(xs: &[f64]) -> (f64, f64) {
+        let n = xs.len() as f64;
+        let m = xs.iter().sum::<f64>() / n;
+        let var = xs.iter().map(|x| (x - m).powi(2)).sum::<f64>() / (n - 1.0);
+        (m, (var / n).sqrt())
+    }
+
     #[test]
-    fn node_ground_keys_need_few_outputs_mid_band_and_19_at_the_edge() {
-        let mut s = NodeSampler::new(400, 5);
-        // Edge clamp (age 1000: every gamma target clamps to the band top):
-        // all 19 decoys come from one block, so 19 ground outputs are needed.
-        assert_eq!(s.prob(18, 4, 1_000, KeyStrategy::Ground), 0.0);
-        assert_eq!(s.prob(19, 4, 1_000, KeyStrategy::Ground), 1.0);
-        // Mid band: targets spread over blocks (the tails still clamp to the
-        // two band edges), so well under 19 per block suffice.
-        assert!(s.prob(10, 16, 22_000, KeyStrategy::Ground) > 0.5);
-        assert!(s.prob(2, 16, 22_000, KeyStrategy::Ground) < 0.5);
-        // Uniform keys at the same rate are hopeless.
-        assert!(s.prob(10, 16, 22_000, KeyStrategy::Uniform) < 1e-5);
+    fn node_ground_keys_no_longer_help_after_1786() {
+        // The #1771 grind case. Before #1786, 19 ground outputs per block gave
+        // P = 1 at the band edge and 8 gave P > 0.5 mid band. With the
+        // shuffled tie-break the ground-key value tracks the uniform one.
+        let mut s = NodeSampler::new(1_000, 5);
+        // Edge clamp (age 1000): all 19 decoys from one 20-output block, so
+        // P = C(19,19)/C(20,19) = 1/20.
+        let ground = node_ground_full_width_prob(19, 1, 1_000, 1_000, 5);
+        let uniform = s.prob(19, 1, 1_000);
+        assert!(ground < 0.2, "ground {ground}");
+        let se = (uniform * (1.0 - uniform) / 1_000.0).sqrt();
+        assert!(
+            (ground - uniform).abs() < 5.0 * se + 0.01,
+            "ground {ground} vs uniform {uniform}"
+        );
+        // Mid band: 8 ground outputs among 24 per block no longer suffice.
+        assert!(node_ground_full_width_prob(8, 16, 22_000, 1_000, 5) < 0.01);
     }
 
     #[test]
@@ -1383,7 +1520,7 @@ mod tests {
         let mut s = NodeSampler::new(400, 9);
         let (a, h) = (27u64, 1u64);
         let f = a as f64 / (a + h) as f64;
-        let p = s.prob(a, h, 22_000, KeyStrategy::Uniform);
+        let p = s.prob(a, h, 22_000);
         assert!(
             (p - f.powi(19)).abs() < 0.05,
             "p {p} vs f^19 {}",
@@ -1392,25 +1529,33 @@ mod tests {
     }
 
     #[test]
-    fn node_literal_and_banded_agree_on_a_small_chain() {
-        // Sanity: the sampler's fast path agrees with the literal port for a
-        // narrow chain where phase 2 cannot trigger.
+    fn node_literal_port_rerun_of_grind_case() {
+        // The #1771 grind case on the literal port (#1786 shuffle included):
+        // 19 attacker outputs with the lowest keys plus 1 honest output per
+        // block. At age 200 every gamma target clamps to the band top, so all
+        // 19 decoys come from one block and P = 1/20 (it was 1 before #1786).
+        // The banded fast path the sweep uses must agree.
+        let (a, h) = (19u64, 1u64);
+        let n = a + h;
         let chain = ChainModel {
-            tip_height: 2_000,
-            outputs_per_block: 3,
+            tip_height: 400,
+            outputs_per_block: n,
         };
-        let age = 500;
+        let age = 200;
         let (lo, hi) = age_similarity_band(age);
-        let real_key = ChainModel::key(chain.id_at(age, 2));
+        let real_key = ChainModel::key(chain.id_at(age, n - 1));
         let band: Vec<RouteCandidate> = chain
             .candidates_by_age(lo, hi)
             .into_iter()
             .filter(|c| c.key != real_key)
             .collect();
         let all = chain.candidates_by_age(0, chain.max_age());
+        let ground = |k: &[[u8; 32]]| k.iter().all(|k| ChainModel::id_of(k) % n < a);
+        let trials = 800;
         let mut r1 = ChaCha8Rng::seed_from_u64(4);
-        let mut r2 = ChaCha8Rng::seed_from_u64(4);
-        for _ in 0..20 {
+        let mut r2 = ChaCha8Rng::seed_from_u64(5);
+        let (mut fast_hits, mut slow_hits) = (0usize, 0usize);
+        for _ in 0..trials {
             let fast = node_select_decoys_banded(
                 &band,
                 chain.eligible_count() - 1,
@@ -1421,8 +1566,67 @@ mod tests {
             .unwrap()
             .unwrap();
             let slow = node_literal(&all, DECOY_COUNT, &[real_key], age, &mut r2).unwrap();
-            assert_eq!(fast, slow);
+            fast_hits += usize::from(ground(&fast));
+            slow_hits += usize::from(ground(&slow));
         }
+        let expected = 1.0 / n as f64;
+        let se = (expected * (1.0 - expected) / trials as f64).sqrt();
+        for (name, hits) in [("banded", fast_hits), ("literal", slow_hits)] {
+            let p = hits as f64 / trials as f64;
+            assert!((p - expected).abs() < 5.0 * se, "{name}: {p} vs {expected}");
+        }
+    }
+
+    #[test]
+    fn web_port_matches_hypergeometric() {
+        // The web picker (#1735) takes a uniform band sample, so the CLI
+        // formula applies to it too.
+        let (a, h) = (9u64, 1u64);
+        let n = a + h;
+        let real_age = 100;
+        let chain = ChainModel {
+            tip_height: 400,
+            outputs_per_block: n,
+        };
+        let real_key = ChainModel::key(chain.id_at(real_age, n - 1));
+        let pool: Vec<RouteCandidate> = chain
+            .candidates_by_age(0, chain.max_age())
+            .into_iter()
+            .filter(|c| c.key != real_key)
+            .collect();
+        let mut rng = Mulberry32::new(1735);
+        let mut next = || rng.next_u32();
+        let trials = 20_000;
+        let mut hits = 0usize;
+        for _ in 0..trials {
+            let keys =
+                web_select_decoys_for_input(&pool, DECOY_COUNT, real_age, &mut next).unwrap();
+            if keys.iter().all(|k| ChainModel::id_of(k) % n < a) {
+                hits += 1;
+            }
+        }
+        let mc = hits as f64 / trials as f64;
+        let exact = cli_all_attacker_prob(a, h, real_age);
+        let se = (exact * (1.0 - exact) / trials as f64).sqrt();
+        assert!(
+            (mc - exact).abs() < 5.0 * se + 1e-3,
+            "mc {mc} vs exact {exact}"
+        );
+    }
+
+    #[test]
+    fn shared_mirrors_match_local_constants() {
+        let policy = mainnet_policy_mirror();
+        assert_eq!(MAINNET_HALVING_INTERVAL, policy.halving_interval);
+        assert_eq!(policy.target_block_time_secs, 5);
+        assert_eq!(LOTTERY_POOL_PERMILLE, 800);
+        // The shared fee-floor mirror resolves untagged flood traffic to 1x.
+        let o = [FloorOutput {
+            amount: 1_000_000,
+            tags: &[],
+        }];
+        let r = resolve_fee_floor(&o, &[(1_000_000, &[])], &|_| 0, &|_| false);
+        assert_eq!((r.claimed_factor, r.floor), (1_000, 1_000));
     }
 
     #[test]
@@ -1430,9 +1634,10 @@ mod tests {
         let report = run_decoy_flood_sweep(&SweepConfig::smoke());
         let md = to_markdown(&report);
         assert!(md.contains("Pass criterion (PROPOSED, not ratified)"));
-        // Ground keys beat the node picker with <= 19 outputs per block.
-        for (_, a) in &report.ground_min_by_age {
-            assert!(a.unwrap() <= 19);
+        // Since #1786 ground keys no longer beat the node picker with <= 19
+        // outputs per block (the pre-#1786 minima were 19 and 8).
+        for g in &report.grind_min {
+            assert!(g.ground_a_min.is_none_or(|a| a > 19), "{g:?}");
         }
         // Uniform flood: CLI needs f >= ~0.964.
         let cli = report

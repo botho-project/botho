@@ -37,6 +37,7 @@ pub mod downgrade_overcharge_sweep;
 pub mod emission_sweep;
 pub mod lottery;
 #[cfg(any(feature = "cli", test))]
+pub mod lottery_reward_cap_faithful;
 pub mod lottery_reward_cap_sweep;
 #[cfg(any(feature = "cli", test))]
 pub mod lottery_selection_sweep;

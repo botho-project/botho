@@ -351,6 +351,15 @@ Get transaction outputs for a range of blocks. Used by thin wallets to scan for 
 | `start_height` | integer | Yes | Start block height |
 | `end_height` | integer | No | End block height (default: start + 100) |
 
+**Range cap (#1656):** one call serves at most **1000 blocks**
+(`MAX_GET_OUTPUTS_BLOCKS`). A longer range is clamped to
+`[start_height, start_height + 999]` rather than rejected. The result is dense
+(every block from `start_height` up to the last served height has an entry,
+even an empty one), so to fetch a whole range resume at the last returned
+`height + 1` until you reach `end_height` or receive an empty array (past the
+tip). A client that treats one clamped page as the full range silently misses
+every later output.
+
 **Response:** Array of blocks, each containing:
 | Field | Type | Description |
 |-------|------|-------------|

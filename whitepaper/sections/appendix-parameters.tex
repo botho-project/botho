@@ -102,14 +102,18 @@ Monetary reference & 5 seconds & Sustained-high-load level \\
   \item Dynamic adjustment aligns emission with network utility
 \end{itemize}
 
-\textbf{Lower bound justification (5s)}:
+\textbf{Lower bound (3s)}: the consensus floor is the fastest dynamic-timing
+tier, 3 seconds at $\geq$20 tx/s (\path{ConsensusConfig::MIN_BLOCK_TIME_SECS},
+\path{botho/src/consensus/service.rs}; \path{BLOCK_TIME_LEVELS},
+\path{botho/src/block.rs}, with a compile-time check that the two agree).
+The budget is roughly:
 \begin{itemize}
   \item SCP nomination: $\sim$1 second
   \item Ballot prepare: $\sim$1 second
-  \item Ballot commit: $\sim$1 second
-  \item Network propagation: $\sim$1 second
-  \item Safety margin: $\sim$1 second
+  \item Ballot commit and propagation: $\sim$1 second
 \end{itemize}
+This leaves no explicit safety margin, which is why 3 seconds is used only
+under sustained very high load; the 5-second tier is the monetary reference.
 
 \subsubsection{Quorum Thresholds: 3-of-4 Infrastructure, 2-of-3 Community}
 
@@ -216,23 +220,27 @@ The five halving epochs ($R_0 = 50$ BTH, halving each year to 25, 12.5, 6.25,
 $50 \times 6{,}307{,}200 \times \tfrac{31}{16} = 611{,}010{,}000$ BTH
 ($\approx$611M).
 
-\subsubsection{Tail Emission: 2\% Net Annual Inflation (Supply-Dependent)}
+\subsubsection{Tail Emission: 2.5\% Gross Annual Rate (Supply-Dependent)}
 
-The tail is not a fixed per-block constant but a constant net annual inflation
-rate on the circulating supply. Gross per-block emission is
+The tail is not a fixed per-block constant but a fixed annual rate on the
+cumulative issuance, recomputed every block. Gross per-block emission is
 $R_{\text{tail}} = S \cdot (\beta_{\text{net}} + \beta_{\text{burn}}) /
 N_{\text{year}}$ with $\beta_{\text{net}} = 2\%$, $\beta_{\text{burn}} = 0.5\%$
-(expected fee burn), and $N_{\text{year}} = 6{,}307{,}200$.
+(assumed fee burn), and $N_{\text{year}} = 6{,}307{,}200$.
 
 \textbf{Security budget analysis} (at the $\approx$611M Phase-1 supply):
 \begin{itemize}
   \item Gross emission $= 611{,}010{,}000 \times 0.025 = 15{,}275{,}250$ BTH/year
     $\Rightarrow \approx 2.42$ BTH/block
   \item Net emission $= 611{,}010{,}000 \times 0.020 = 12{,}220{,}200$ BTH/year
-    $\Rightarrow \approx 1.94$ BTH/block net of the expected fee burn
-  \item Target: 2\% net annual inflation at maturity $\checkmark$
+    $\Rightarrow \approx 1.94$ BTH/block net of the assumed fee burn
+  \item Design target: 2\% net, which holds only if burns reach 0.5\%/year.
+    Burning that much in base fees would take $\approx$4,800 tx/s at the relay
+    minimum, so the realized net rate is $\approx$2.1--2.53\% (Section~7, Realized
+    net rate)
   \item Because $R_{\text{tail}} \propto S$, the per-block reward grows with
-    supply while net inflation stays pinned at 2\%
+    supply and gross issuance compounds at $\approx$2.53\% per $N_{\text{year}}$
+    blocks
 \end{itemize}
 
 \textbf{Why not 0?}
@@ -300,26 +308,26 @@ and the midpoint ($3.5\times$) sits at 100k BTH.
   \item Most users (bottom 50\%) experience near-base fees
 \end{itemize}
 
-\subsubsection{Tag Decay: 0.95 Rate, 720-Block Minimum Age}
+\subsubsection{Tag Decay: 0.95 per Transfer (Wallet Policy)}
 
-\textbf{Decay rate 0.95}:
+\textbf{As built} (Section~\ref{sec:tag-decay}):
 \begin{itemize}
-  \item Half-life: $\ln(0.5) / \ln(0.95) \approx 13.5$ decay events
-  \item At maximum 1 decay per 720 blocks ($\sim$1 hour at the 5\,s
-    reference): $\approx$13.5 hours half-life
-  \item Encourages circulation without rapid tag elimination
+  \item Stock wallets retain 0.95 of each tag weight per transfer
+    (\path{DEFAULT_CLUSTER_DECAY_RATE} $= 50{,}000$ ppm,
+    \path{botho/src/wallet.rs},
+    \path{botho-wallet/src/transaction.rs}), with no age gate
+  \item Half-life: $\ln(0.5) / \ln(0.95) \approx 13.5$ transfers, with no
+    time bound
+  \item Consensus applies no decay (\path{CONSENSUS_TAG_DECAY_RATE}
+    $= 0$, \path{botho/src/ledger/store.rs}) and rejects only tag
+    inflation, so lower or empty output tags are valid (pending \#1687)
 \end{itemize}
 
-\textbf{Minimum age 720 blocks}:
-\begin{itemize}
-  \item $\sim$1 hour at the 5\,s reference block time (longer when blocks are
-    slower under the dynamic schedule)
-  \item Prevents rapid wash trading from bypassing progressive fees
-  \item Patient wash trading over one week ($\sim$168 decay events) approaches
-    100\% decay; the binding cost is the enforced inter-decay age, not the
-    number of transactions
-  \item Creates meaningful time cost for fee evasion
-\end{itemize}
+\textbf{Not implemented: 720-block minimum age.} Earlier drafts gated decay
+on a 720-block minimum UTXO age, which would cap a wash trader at one decay
+event per 720 blocks. That rule exists only as a library model
+(\path{cluster-tax/src/age_decay.rs}) with no production caller, so the
+event rates and hour-based half-lives quoted for it do not apply.
 
 \subsection{Network Parameters}
 
@@ -374,7 +382,7 @@ Block time & 3--40s (dynamic) & Consensus & Soft fork \\
 Quorum threshold & 3/4, 2/3 & Consensus & Hard fork \\
 Initial reward & 50 BTH & Economic & Genesis \\
 Halving period & 6,307,200 blocks & Economic & Hard fork \\
-Tail emission & 2\% net/yr & Economic & Hard fork \\
+Tail emission & 2.5\% gross/yr (2\% net design) & Economic & Hard fork \\
 Fee split & 80/20 & Economic & Soft fork \\
 Max fee multiplier & 6$\times$ & Economic & Soft fork \\
 Max block size & 2 MB & Network & Soft fork \\

@@ -50,6 +50,7 @@ Security auditing is iterative. Each internal audit:
 
 | Date | Auditor | Scope | Critical | High | Medium | Low | Status |
 |------|---------|-------|----------|------|--------|-----|--------|
+| 2026-10-31 (elliptic) | Internal | Dedicated - elliptic ECDSA advisory in Snap tooling (#1562) | 0 | 0 | 0 | 1 (unresolved, contained) | **Open: no upstream fix; CI containment** |
 | 2026-10-29 (lottery V2) | Internal | Dedicated - LotteryV2 payouts P12 (#1647) | 0 | **1** (#1676, fixing pre-x1) | 1 | 2 | Issues found |
 | 2026-07-20 (snap) | Internal | Dedicated - MetaMask Snap key-handling (#1096) | **0** | **0** | 0 | 1 (fixed) | **Clean (internal)** |
 | 2026-07-13 (bridge) | Internal | Dedicated - BTH↔Ethereum wBTH bridge (#830) | **0** | **0** | 3 | 3 | **Clean (internal); external audit pending #616** |
@@ -85,6 +86,10 @@ completion or mainnet fitness is asserted by this index.
 
 ## Report Index
 
+- [2026-10-31 mobile/app npm advisories](2026-10-31-mobile-app-npm-advisories.md) - every `pnpm audit` finding in `mobile/app` (#1769). The critical shell-quote finding is fixed (it was never reachable at runtime), and `pnpm audit` goes from 39 to 5. Residuals: decode-uri-component (bundled through expo-router, but not reachable from incoming-URL handling), zod in `@expo/cli` (the vulnerable v4 code is never loaded), deepmerge (no upstream fix) and minimatch 3.1.5 (the vulnerable code is not in it)
+- [2026-10-31 elliptic in Snap tooling](2026-10-31-elliptic-snap-tooling.md) - GHSA-848j-6mx2-7j84 (#1562): no upstream fix. elliptic is limited to Snap build/test devDependencies, is absent from shipped bundles (positive-controlled) and is never loaded during the Snap build or tests (runtime probe). A CI guard enforces this containment and the advisory is not suppressed
+- [2026-10-31 contracts/ethereum npm advisories](2026-10-31-contracts-ethereum-npm-advisories.md) - npm audit findings in `contracts/ethereum` (#1767): serialize-javascript fixed by in-range bumps, glob/minimatch fixed by scoped overrides on mocha and typechain (19 findings down to 13). The 13 left all come from zod (no 3.x fix; Hardhat 3 requires `zod ^3` and breaks when zod 4 is forced). Dev-only, and no untrusted input reaches it
+- [2026-10-31 Dev-only web advisories](2026-10-31-dev-advisories-glob-minimatch-deepmerge.md) - glob/minimatch/deepmerge findings in `web/` (#1745): glob and the vulnerable minimatch lines are fixed with scoped overrides, minimatch 3.1.5 stays (no 3.x fix, and the vulnerable code is not in it), and deepmerge stays (no upstream fix). Dev-only, and no untrusted input reaches it
 - [2026-10-29 LotteryV2 payouts](2026-10-29-lottery-v2-internal.md) - P12 internal review of the V2 lottery payout path (#1647): the related-key construction, determinism, the body root and RPC trust are clean. Draw seed grindable (#1676, High, pre-dates V2 and V2 made it worse), validator ordering (#1670), coinbase KEM aliasing (#1677)
 - [2026-07-20 Snap key-handling](2026-07-20-snap-keyhandling.md) - Dedicated MetaMask Snap key-handling audit (#1096): SRP→Botho key derivation, claim-link bearer secrets, wasm signing under SES, `snap_manageState` persistence; 0 Critical/High, 1 Low (fixed)
 - [2026-07-13 Bridge](2026-07-13-bridge.md) - Dedicated BTH↔Ethereum wBTH bridge audit (#830): custody, attestation protocol, WrappedBTH.sol, watchers/engine exactly-once, reserve peg invariant, privacy boundary; 0 Critical/High, external audit + mainnet gate remain (operator, #616)
