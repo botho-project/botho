@@ -250,21 +250,30 @@ impl BthNodeRpc {
     /// The node returns one entry per block that exists in the range; a range
     /// that runs past the tip simply yields fewer blocks (never an error), so
     /// the caller can detect "block not available yet" by its absence.
+    ///
+    /// The node clamps one call to 1000 blocks (#1656), shorter than the
+    /// reserve's 10 001-block scan window, so this pages: it resumes at the
+    /// last served height + 1 until it reaches `end_height` or a page comes
+    /// back empty (see [`page_outputs`]). Without paging the reserve scan
+    /// would silently see only the OLDEST 1000 blocks of its window.
     pub async fn get_outputs(
         &self,
         start_height: u64,
         end_height: u64,
     ) -> Result<Vec<RpcBlockOutputs>, RpcError> {
-        let result = self
-            .call(
-                "chain_getOutputs",
-                json!({ "start_height": start_height, "end_height": end_height }),
-            )
-            .await?;
-        let blocks = result
-            .as_array()
-            .ok_or_else(|| RpcError::Decode("chain_getOutputs: result is not an array".into()))?;
-        blocks.iter().map(decode_block_outputs).collect()
+        page_outputs(start_height, end_height, |from| async move {
+            let result = self
+                .call(
+                    "chain_getOutputs",
+                    json!({ "start_height": from, "end_height": end_height }),
+                )
+                .await?;
+            let blocks = result.as_array().ok_or_else(|| {
+                RpcError::Decode("chain_getOutputs: result is not an array".into())
+            })?;
+            blocks.iter().map(decode_block_outputs).collect()
+        })
+        .await
     }
 
     /// Broadcast a bincode-serialized signed transaction (`tx_submit`).
@@ -385,6 +394,42 @@ fn decode_amount(hex_le: &str) -> Result<u64, RpcError> {
     Ok(u64::from_le_bytes(le))
 }
 
+/// Collect `[start, end]` from a `chain_getOutputs` page fetcher (#1656).
+///
+/// `fetch(from)` requests `[from, end]`; the node serves a dense prefix of it
+/// (at most its per-call cap, never past the tip). Resume at the last served
+/// height + 1 until `end` is reached or a page is empty (past the tip). A
+/// page that does not advance is an error, never an infinite loop.
+pub(crate) async fn page_outputs<F, Fut>(
+    start: u64,
+    end: u64,
+    mut fetch: F,
+) -> Result<Vec<RpcBlockOutputs>, RpcError>
+where
+    F: FnMut(u64) -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<RpcBlockOutputs>, RpcError>>,
+{
+    let mut blocks = Vec::new();
+    let mut next = start;
+    while next <= end {
+        let page = fetch(next).await?;
+        let Some(last) = page.last().map(|b| b.height) else {
+            break;
+        };
+        if last < next {
+            return Err(RpcError::Decode(format!(
+                "chain_getOutputs page from {next} ended at {last}: no progress"
+            )));
+        }
+        blocks.extend(page);
+        if last >= end {
+            break;
+        }
+        next = last + 1;
+    }
+    Ok(blocks)
+}
+
 fn decode_block_outputs(block: &Value) -> Result<RpcBlockOutputs, RpcError> {
     let height = block
         .get("height")
@@ -422,6 +467,58 @@ fn decode_block_outputs(block: &Value) -> Result<RpcBlockOutputs, RpcError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A node with blocks `0..=tip` that serves at most `cap` per call.
+    fn capped_page(tip: u64, cap: u64, from: u64, end: u64) -> Vec<RpcBlockOutputs> {
+        (from..=end.min(from.saturating_add(cap - 1)))
+            .take_while(|h| *h <= tip)
+            .map(|height| RpcBlockOutputs {
+                height,
+                outputs: vec![],
+            })
+            .collect()
+    }
+
+    /// #1656: the reserve's `[tip - 10_000, tip]` window against a node that
+    /// clamps each call to 1000 blocks returns every block exactly once.
+    #[tokio::test]
+    async fn page_outputs_covers_the_window_across_the_server_cap() {
+        let tip = 12_345u64;
+        let start = tip - 10_000;
+        let calls = std::cell::Cell::new(0);
+        let blocks = page_outputs(start, tip, |from| {
+            calls.set(calls.get() + 1);
+            let page = capped_page(tip, 1000, from, tip);
+            async move { Ok(page) }
+        })
+        .await
+        .unwrap();
+        let heights: Vec<u64> = blocks.iter().map(|b| b.height).collect();
+        assert_eq!(heights, (start..=tip).collect::<Vec<_>>());
+        assert_eq!(calls.get(), 11, "10 full pages + the last 1 block");
+
+        // Past the tip: stops at the first empty page.
+        calls.set(0);
+        let blocks = page_outputs(tip - 5, tip + 50, |from| {
+            calls.set(calls.get() + 1);
+            let page = capped_page(tip, 4, from, tip + 50);
+            async move { Ok(page) }
+        })
+        .await
+        .unwrap();
+        assert_eq!(blocks.len(), 6);
+        assert_eq!(calls.get(), 3, "[tip-5,tip-2] [tip-1,tip] then empty");
+
+        // A non-advancing page is an error, not a hang.
+        let err = page_outputs(10, 20, |_| async {
+            Ok(vec![RpcBlockOutputs {
+                height: 3,
+                outputs: vec![],
+            }])
+        })
+        .await;
+        assert!(matches!(err, Err(RpcError::Decode(_))));
+    }
 
     #[test]
     fn decode_amount_reads_little_endian() {

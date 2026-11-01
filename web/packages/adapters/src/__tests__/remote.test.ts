@@ -655,3 +655,47 @@ describe('RemoteNodeAdapter V2 lottery rows (#1645)', () => {
     }
   })
 })
+
+describe('RemoteNodeAdapter chain_getOutputs paging (#1656)', () => {
+  /** A node with blocks 0..=tip, one output each, capped at `cap` blocks per call. */
+  async function cappedAdapter(tip: number, cap: number): Promise<RemoteNodeAdapter> {
+    const adapter = await connectedAdapter({})
+    const mock = vi.fn(async (_url: string, init: RequestInit) => {
+      const req = JSON.parse(init.body as string) as { method: string; params: Record<string, number>; id: number }
+      captured.push({ method: req.method, params: req.params })
+      if (req.method !== 'chain_getOutputs') {
+        return { ok: true, json: async () => ({ jsonrpc: '2.0', id: req.id, result: null }) } as unknown as Response
+      }
+      const { start_height: from, end_height: end } = req.params
+      const result: Array<{ height: number; outputs: unknown[] }> = []
+      for (let h = from; h <= Math.min(end, from + cap - 1, tip); h++) {
+        result.push({
+          height: h,
+          outputs: [{
+            txHash: h.toString(16).padStart(64, '0'), outputIndex: 0, targetKey: 'cd', publicKey: 'ef',
+            amountCommitment: '0100000000000000',
+          }],
+        })
+      }
+      return { ok: true, json: async () => ({ jsonrpc: '2.0', id: req.id, result }) } as unknown as Response
+    })
+    vi.stubGlobal('fetch', mock)
+    captured = []
+    return adapter
+  }
+
+  it('getRawOutputs(0, tip) returns every output across the server cap', async () => {
+    const adapter = await cappedAdapter(2_100, 1000)
+    const raw = await adapter.getRawOutputs(0, 2_100)
+    expect(raw).toHaveLength(2_101)
+    const calls = captured.filter((c) => c.method === 'chain_getOutputs').map((c) => c.params.start_height)
+    expect(calls).toEqual([0, 1000, 2000])
+  })
+
+  it('getRawOutputsWithMeta keeps every height when paging past the tip', async () => {
+    const adapter = await cappedAdapter(9, 4)
+    const rows = await adapter.getRawOutputsWithMeta(2, 500)
+    expect(rows.map((r) => r.height)).toEqual([2, 3, 4, 5, 6, 7, 8, 9])
+    expect(rows.map((r) => r.txHash)).toEqual(rows.map((r) => r.height.toString(16).padStart(64, '0')))
+  })
+})

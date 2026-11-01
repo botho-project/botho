@@ -9,6 +9,7 @@ import type {
   Transaction,
   TxHash,
 } from '@botho/core'
+import { fetchOutputBlocksPaged } from '@botho/core'
 import type {
   BlockFetchOptions,
   ClusterWealthEntry,
@@ -465,6 +466,23 @@ export class RemoteNodeAdapter implements NodeAdapter {
   }
 
   /**
+   * Every `chain_getOutputs` block in `[startHeight, endHeight]`. The node
+   * clamps one call to 1000 blocks (#1656), so this pages: the send/balance
+   * path asks for `[0, tip]` and must not silently stop at the cap.
+   */
+  private getOutputBlocks(
+    startHeight: number,
+    endHeight: number,
+  ): Promise<Array<{ height: number; outputs: RpcOutputRow[] }>> {
+    return fetchOutputBlocksPaged(startHeight, endHeight, (from) =>
+      this.call<Array<{ height: number; outputs: RpcOutputRow[] }>>('chain_getOutputs', {
+        start_height: from,
+        end_height: endHeight,
+      }),
+    )
+  }
+
+  /**
    * Fetch raw chain outputs for a height range as
    * `{ targetKey, publicKey, amount }`.
    *
@@ -478,13 +496,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
     startHeight: number,
     endHeight: number,
   ): Promise<RawChainOutput[]> {
-    const result = await this.call<Array<{
-      height: number
-      outputs: RpcOutputRow[]
-    }>>('chain_getOutputs', {
-      start_height: startHeight,
-      end_height: endHeight,
-    })
+    const result = await this.getOutputBlocks(startHeight, endHeight)
 
     // Each row keeps the index its hybrid one-time key is bound to (#988; the
     // coinbase u32::MAX sentinel is normalized) and any V2 lottery payout
@@ -504,13 +516,7 @@ export class RemoteNodeAdapter implements NodeAdapter {
     startHeight: number,
     endHeight: number,
   ): Promise<Array<RawChainOutput & { txHash: string; height: number }>> {
-    const result = await this.call<Array<{
-      height: number
-      outputs: RpcOutputRow[]
-    }>>('chain_getOutputs', {
-      start_height: startHeight,
-      end_height: endHeight,
-    })
+    const result = await this.getOutputBlocks(startHeight, endHeight)
 
     return result.flatMap((block) =>
       block.outputs.map((output) => ({

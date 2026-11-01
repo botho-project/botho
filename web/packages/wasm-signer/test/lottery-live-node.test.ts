@@ -62,7 +62,7 @@ import {
   type SendRpc,
   type WasmSigner,
 } from '../src/index'
-import { startNodeBackedHarness, type NodeHarness } from './node-harness'
+import { startNodeBackedHarness, withPagedOutputs, type NodeHarness } from './node-harness'
 
 const env =
   (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {}
@@ -120,7 +120,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
  */
 function makeRpc(url: string) {
   let id = 1
-  return async function rpc<T>(method: string, params: Record<string, unknown>): Promise<T> {
+  return withPagedOutputs(async function rpc<T>(method: string, params: Record<string, unknown>): Promise<T> {
     for (let attempt = 0; ; attempt++) {
       const res = await fetch(url, {
         method: 'POST',
@@ -138,7 +138,7 @@ function makeRpc(url: string) {
       }
       return json.result as T
     }
-  }
+  })
 }
 
 interface RawOutput {
