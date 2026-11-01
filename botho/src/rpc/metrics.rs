@@ -472,12 +472,15 @@ lazy_static! {
 
     /// Gossipsub messages that a peer failed to receive in time, as reported
     /// by `gossipsub::Event::SlowPeer` at each heartbeat. In
-    /// libp2p-gossipsub 0.50 the `non_priority` count has two sources: our
-    /// own publishes (blocks, txs, SCP) that expired in the connection
-    /// handler before they were sent (forwards never expire), and
-    /// non-priority messages (publishes, forwards, IHAVE/IWANT) dropped
-    /// because the peer's send queue was full. `priority` counts only
-    /// full-queue drops. Expired publishes lost a validator's
+    /// libp2p-gossipsub 0.50 the `non_priority` count has two sources:
+    /// `Publish` RPCs that expired in the connection handler before being
+    /// sent (our own publishes, timeout `publish_queue_duration`, 5 s libp2p
+    /// default, raised by this node; and forwards/IWANT replies, timeout
+    /// `forward_queue_duration`, 1 s default), and non-priority messages
+    /// (publishes, forwards, IHAVE/IWANT) dropped because the peer's send
+    /// queue was full. `priority` counts only full-queue drops of
+    /// GRAFT/PRUNE/IDONTWANT (SUBSCRIBE/UNSUBSCRIBE go on an unbounded queue
+    /// and never fail). Expired publishes lost a validator's
     /// Commit/Externalize in w12 and halted consensus (#1544/#1545).
     pub static ref GOSSIP_FAILED_MESSAGES: IntCounterVec = IntCounterVec::new(
         Opts::new(
@@ -522,8 +525,8 @@ lazy_static! {
 /// Kind label for [`GOSSIP_FAILED_MESSAGES`]: priority-queue failures.
 pub const GOSSIP_FAILED_KIND_PRIORITY: &str = "priority";
 /// Kind label for [`GOSSIP_FAILED_MESSAGES`]: non-priority-queue failures
-/// (publishes that expired before being sent, plus non-priority messages
-/// dropped because the peer's queue was full).
+/// (publishes and forwards that expired before being sent, plus non-priority
+/// messages dropped because the peer's queue was full).
 pub const GOSSIP_FAILED_KIND_NON_PRIORITY: &str = "non_priority";
 
 /// Record the per-peer failed-message counts from a gossipsub `SlowPeer`
