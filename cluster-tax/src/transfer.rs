@@ -145,9 +145,41 @@ pub fn execute_transfer(
         });
     }
 
-    // 1. Compute fee based on sender's effective rate
+    // 1. Compute fee based on sender's effective rate (legacy linear-bps FeeCurve;
+    //    sims select the consensus model via `execute_transfer_with_fee`, #1695)
     let fee_rate = sender.effective_fee_rate(cluster_wealth, &config.fee_curve);
     let fee = (amount as u128 * fee_rate as u128 / 10_000) as u64;
+    let mut result =
+        execute_transfer_with_fee(sender, receiver, amount, fee, config, cluster_wealth)?;
+    result.fee_rate_bps = fee_rate;
+    Ok(result)
+}
+
+/// Execute a transfer with an explicitly supplied fee (in the caller's value
+/// units), applying the same balance, tag-decay, cluster-wealth and tag-mixing
+/// updates as [`execute_transfer`]. Used by simulations that price fees with
+/// the shared consensus fee model (#1695) instead of `config.fee_curve`.
+/// The returned `fee_rate_bps` is the fee as a fraction of `amount`.
+pub fn execute_transfer_with_fee(
+    sender: &mut Account,
+    receiver: &mut Account,
+    amount: u64,
+    fee: u64,
+    config: &TransferConfig,
+    cluster_wealth: &mut ClusterWealth,
+) -> Result<TransferResult, TransferError> {
+    if sender.balance < amount {
+        return Err(TransferError::InsufficientBalance {
+            available: sender.balance,
+            requested: amount,
+        });
+    }
+    let fee = fee.min(amount);
+    let fee_rate = if amount > 0 {
+        (fee as u128 * 10_000 / amount as u128) as FeeRateBps
+    } else {
+        0
+    };
     let net_amount = amount.saturating_sub(fee);
 
     // 2. Update sender balance

@@ -4754,6 +4754,248 @@ mod tests {
         assert_eq!(floor, again, "consensus floor must be deterministic");
     }
 
+    // ---- #1695: shared consensus fee model golden vectors ----
+
+    /// Resolve the ledger-side inputs of `consensus_fee_floor` for `tx` (the
+    /// output-tag wealth, the composed ring-centroid + import floor factor and
+    /// the max-quantile ring age) and feed them to the pure
+    /// `bth_cluster_tax::consensus_fee_model`. `ring_specs` are the
+    /// `(amount, created_at, ...)` specs the ring was seeded from.
+    #[cfg(test)]
+    fn consensus_fee_model_for_tx(
+        ledger: &Ledger,
+        tx: &BothoTransaction,
+        ring_specs: &[(u64, u64, u64, u8)],
+        block_height: u64,
+        mode: bth_cluster_tax::FeeModelMode,
+    ) -> u64 {
+        use bth_cluster_tax::{
+            consensus_fee_model, ClaimedClass, ConsensusFeeInputs, ConsensusFeeParams, FeeConfig,
+        };
+        let fc = FeeConfig::default();
+        let claimed_wealth = ledger
+            .effective_cluster_wealth_from_outputs(&tx.outputs)
+            .unwrap();
+        // Ring-centroid floor over the seeded ring members (claimed factor 1×
+        // so only the ring's implied factor is returned; the model applies the
+        // `max(claimed, floor)` itself), then the bridge-import floor.
+        let ring_tags: Vec<(u64, ClusterTagVector)> = ring_specs
+            .iter()
+            .map(|&(amount, _, cluster, _)| {
+                let tags = if cluster == 0 {
+                    ClusterTagVector::empty()
+                } else {
+                    full_tag(cluster)
+                };
+                (amount, tags)
+            })
+            .collect();
+        let ring_refs: Vec<(u64, &ClusterTagVector)> =
+            ring_tags.iter().map(|(v, t)| (*v, t)).collect();
+        let ring_floor = ledger
+            .ring_centroid_floored_factor(
+                bth_cluster_tax::FACTOR_SCALE,
+                &ring_refs,
+                &fc.cluster_curve,
+            )
+            .unwrap();
+        let floor = ring_floor.max(
+            ledger
+                .import_floor_factor_from_outputs(&tx.outputs)
+                .unwrap(),
+        );
+        let ages: Vec<(u64, u64)> = ring_specs.iter().map(|&(a, c, _, _)| (a, c)).collect();
+        let elapsed = bth_cluster_tax::ring_elapsed_quantile(
+            &ages,
+            block_height,
+            CONSENSUS_RING_AGE_QUANTILE_BPS,
+        );
+        let inputs = ConsensusFeeInputs {
+            size: tx.estimate_size(),
+            n_out: tx.outputs.len(),
+            n_memo: tx.outputs.iter().filter(|o| o.has_memo()).count(),
+            claimed: ClaimedClass::Wealth(claimed_wealth),
+            floor,
+            elapsed,
+            height: block_height,
+            output_sum: tx.outputs.iter().map(|o| o.amount).sum(),
+        };
+        let params = ConsensusFeeParams::from_policy(&crate::monetary::mainnet_policy(), mode);
+        consensus_fee_model(&inputs, &params)
+    }
+
+    /// #1695 golden vectors: the sims' shared `consensus_fee_model` reproduces
+    /// `Ledger::consensus_fee_floor` within 1 pico across background,
+    /// mid-wealth, high-wealth (accrued demurrage), memo, n_out > 10 (the
+    /// `min(n,10)²` cap), young-coin downgrade (capitalized term) and
+    /// bridge-import-floor transactions. The vectors are recomputed from the
+    /// ledger every run, so drift on either side fails CI.
+    #[test]
+    fn consensus_fee_model_matches_ledger_floor_golden_vectors() {
+        use bth_cluster_tax::{consensus_tx_size_bytes, FeeModelMode, PICO_PER_BTH};
+        let dir = tempdir().unwrap();
+        let ledger = Ledger::open(dir.path()).unwrap();
+        let bth = PICO_PER_BTH as u64;
+        // Cluster 3: mid wealth (100k BTH, the curve midpoint). Cluster 7:
+        // high wealth (10M BTH). Cluster 11: a recorded bridge-import cluster.
+        ledger
+            .set_cluster_wealth_for_test(3, 100_000 * PICO_PER_BTH)
+            .unwrap();
+        ledger
+            .set_cluster_wealth_for_test(7, 10_000_000 * PICO_PER_BTH)
+            .unwrap();
+        ledger
+            .set_cluster_wealth_for_test(11, 50 * PICO_PER_BTH)
+            .unwrap();
+        ledger.record_bridge_import_cluster_for_test(11).unwrap();
+
+        let h = 8_000_000u64; // epoch 1: demurrage active
+        let memo = || {
+            Some(
+                bth_transaction_clsag::EncryptedMemo::from_bytes(
+                    &[7u8; bth_transaction_clsag::ENCRYPTED_MEMO_SIZE],
+                )
+                .unwrap(),
+            )
+        };
+
+        struct Vector {
+            name: &'static str,
+            ring: Vec<(u64, u64, u64, u8)>,
+            outputs: Vec<TxOutput>,
+            height: u64,
+            expect_demurrage: bool,
+        }
+        let mut vectors = vec![
+            Vector {
+                name: "background",
+                ring: vec![(10 * bth, 0, 0, 1)],
+                outputs: vec![
+                    mk_tagged_output(6 * bth, 101, ClusterTagVector::empty()),
+                    mk_tagged_output(3 * bth, 102, ClusterTagVector::empty()),
+                ],
+                height: 1_000,
+                expect_demurrage: false,
+            },
+            Vector {
+                name: "mid-wealth, old",
+                ring: vec![(1_000 * bth, 0, 3, 2), (1_000 * bth, 100, 3, 3)],
+                outputs: vec![mk_tagged_output(900 * bth, 103, full_tag(3))],
+                height: h,
+                expect_demurrage: true,
+            },
+            Vector {
+                name: "high-wealth factor, old (accrued)",
+                ring: vec![(100_000 * bth, 0, 7, 4), (5 * bth, h, 0, 5)],
+                outputs: vec![mk_tagged_output(90_000 * bth, 104, full_tag(7))],
+                height: h,
+                expect_demurrage: true,
+            },
+            Vector {
+                name: "memo outputs",
+                ring: vec![(10 * bth, 0, 0, 6)],
+                outputs: vec![
+                    mk_tagged_output(5 * bth, 105, ClusterTagVector::empty()),
+                    mk_tagged_output(4 * bth, 106, ClusterTagVector::empty()),
+                ],
+                height: h,
+                expect_demurrage: false,
+            },
+            Vector {
+                name: "n_out = 12 (min(n,10)^2 cap)",
+                ring: vec![(100 * bth, 0, 0, 7)],
+                outputs: (0..12u8)
+                    .map(|i| mk_tagged_output(5 * bth, 110 + i, ClusterTagVector::empty()))
+                    .collect(),
+                height: h,
+                expect_demurrage: false,
+            },
+            Vector {
+                name: "young wealthy -> background downgrade (capitalized)",
+                ring: (0..11u8).map(|i| (100 * bth, h, 7, 20 + i)).collect(),
+                outputs: vec![mk_tagged_output(90 * bth, 130, ClusterTagVector::empty())],
+                height: h,
+                expect_demurrage: true,
+            },
+            Vector {
+                name: "bridge-import floor",
+                ring: vec![(10 * bth, h - 10, 11, 40)],
+                outputs: vec![mk_tagged_output(9 * bth, 131, full_tag(11))],
+                height: h,
+                expect_demurrage: true,
+            },
+        ];
+        // Memo vector: one of the two outputs carries a memo.
+        vectors[3].outputs[0].e_memo = memo();
+
+        for v in &vectors {
+            let ring = seed_ring_utxos(&ledger, &v.ring);
+            let tx = mk_transfer_tx(ring, v.outputs.clone(), 0);
+            let n_memo = tx.outputs.iter().filter(|o| o.has_memo()).count();
+            // Size-estimate drift guard: the sims price `consensus_tx_size_bytes`.
+            assert_eq!(
+                tx.estimate_size(),
+                consensus_tx_size_bytes(1, tx.outputs.len(), n_memo),
+                "{}: size estimate drifted from cluster_tax::consensus_tx_size_bytes",
+                v.name
+            );
+            let floor = ledger.consensus_fee_floor(&tx, v.height).unwrap();
+            let model = consensus_fee_model_for_tx(
+                &ledger,
+                &tx,
+                &v.ring,
+                v.height,
+                FeeModelMode::ConsensusOnly,
+            );
+            assert!(
+                floor.abs_diff(model) <= 1,
+                "{}: model {model} != ledger floor {floor}",
+                v.name
+            );
+            let base = base_only_fee(&ledger, &tx);
+            assert_eq!(
+                floor > base,
+                v.expect_demurrage,
+                "{}: demurrage presence (floor {floor}, base {base})",
+                v.name
+            );
+            // Relay mode is exactly max(floor, MIN_TX_FEE).
+            let relay = consensus_fee_model_for_tx(
+                &ledger,
+                &tx,
+                &v.ring,
+                v.height,
+                FeeModelMode::ConsensusPlusRelayMin,
+            );
+            assert_eq!(
+                relay,
+                model.max(bth_transaction_clsag::MIN_TX_FEE),
+                "{}",
+                v.name
+            );
+        }
+    }
+
+    /// #1695 drift guards: the model's mirrored constants equal the node's.
+    #[test]
+    fn consensus_fee_model_relay_min_matches_min_tx_fee() {
+        use bth_cluster_tax::{
+            consensus_fee::{
+                CONSENSUS_FEE_BASE as MODEL_FEE_BASE, CONSENSUS_RING_AGE_QUANTILE_BPS as MODEL_Q,
+            },
+            ConsensusFeeParams, FeeModelMode, RELAY_MIN_TX_FEE,
+        };
+        assert_eq!(RELAY_MIN_TX_FEE, bth_transaction_clsag::MIN_TX_FEE);
+        assert_eq!(MODEL_FEE_BASE, CONSENSUS_FEE_BASE);
+        assert_eq!(MODEL_Q, CONSENSUS_RING_AGE_QUANTILE_BPS);
+        let mode = FeeModelMode::ConsensusOnly;
+        assert_eq!(
+            ConsensusFeeParams::mainnet(mode),
+            ConsensusFeeParams::from_policy(&crate::monetary::mainnet_policy(), mode),
+            "cluster_tax mainnet fee params drifted from botho::monetary::mainnet_policy"
+        );
+    }
+
     // ---- #831: demurrage-settlement operation (the wrap on-ramp) ----
 
     /// The consensus fee floor prices an explicit settlement of a young wealthy

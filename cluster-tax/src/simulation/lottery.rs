@@ -570,6 +570,13 @@ pub struct LotterySimulation {
     /// randomness is drawn from system entropy via `rng`, preserving
     /// the original non-deterministic behavior for callers that want it.
     seeded_rng: Option<ChaCha20Rng>,
+
+    /// Fee model (#1695). `Some` prices immediate-mode transactions and churn
+    /// with the shared consensus fee model (size × factor × min(n,10)² +
+    /// the node's demurrage), replacing `config.base_fee` and
+    /// `config.demurrage_at_spend_bps` on those paths. `None` (default) keeps
+    /// the legacy `base_fee × cluster_factor × outputs^exp` pricing.
+    pub consensus_fee: Option<crate::consensus_fee::SimConsensusFee>,
 }
 
 /// Metrics tracked during simulation.
@@ -622,7 +629,50 @@ impl LotterySimulation {
             ring_size: 11,
             metrics: LotteryMetrics::default(),
             seeded_rng: None,
+            consensus_fee: None,
         }
+    }
+
+    /// Price fees with the shared consensus fee model (#1695). `pico_per_unit`
+    /// converts this sim's value unit to picocredits (e.g. `10^9` for the
+    /// milliBTH unit the lottery experiments use). The model's demurrage uses
+    /// this sim's `config.blocks_per_year` so the annual rate is preserved.
+    pub fn with_consensus_fee(
+        mut self,
+        mode: crate::consensus_fee::FeeModelMode,
+        pico_per_unit: u128,
+    ) -> Self {
+        let params = crate::consensus_fee::ConsensusFeeParams::mainnet(mode)
+            .with_blocks_per_year(self.config.blocks_per_year);
+        self.consensus_fee = Some(crate::consensus_fee::SimConsensusFee::new(
+            params,
+            pico_per_unit,
+        ));
+        self
+    }
+
+    /// Fee (in sim units) for spending `value` at `cluster_factor` with
+    /// `num_outputs` outputs and `elapsed` blocks of age under the consensus
+    /// fee model; `None` under the legacy model.
+    fn consensus_spend_fee(
+        &mut self,
+        value: u64,
+        cluster_factor: f64,
+        num_outputs: u32,
+        elapsed: u64,
+    ) -> Option<u64> {
+        let block = self.current_block;
+        let cf = self.consensus_fee.as_mut()?;
+        let factor = (cluster_factor * 1000.0) as u64;
+        Some(cf.charge_transfer(
+            1,
+            num_outputs as usize,
+            crate::consensus_fee::ClaimedClass::Factor(factor),
+            factor,
+            elapsed,
+            block,
+            value,
+        ))
     }
 
     /// Create a new simulation with a fixed RNG seed.
@@ -1127,20 +1177,42 @@ impl LotterySimulation {
         // spend-time demurrage accrual (issue #314: matches the node, which
         // adds accrual to the minimum fee when coins move)
         let current_block = self.current_block;
-        let (actual_fee, cluster_factor) = {
+        let (spender_value, spender_factor, spender_elapsed) =
+            match self.utxos.get(&spender_utxo_id) {
+                Some(s) => (
+                    s.value,
+                    s.cluster_factor,
+                    current_block.saturating_sub(s.demurrage_anchor),
+                ),
+                None => return,
+            };
+        let consensus_fee =
+            self.consensus_spend_fee(spender_value, spender_factor, num_outputs, spender_elapsed);
+        let (actual_fee, _cluster_factor) = {
             let spender = match self.utxos.get(&spender_utxo_id) {
                 Some(s) => s,
                 None => return,
             };
-            let output_multiplier = (num_outputs as f64).powf(self.config.output_fee_exponent);
-            let fee = (base_fee as f64 * spender.cluster_factor * output_multiplier) as u64;
-            let demurrage = spender.accrued_demurrage(current_block, &self.config);
+            let fee = match consensus_fee {
+                // #1695: the node's floor (size × factor × min(n,10)² +
+                // demurrage), already in sim units.
+                Some(fee) => fee,
+                // Legacy: base × factor × outputs^exp + sim demurrage.
+                None => {
+                    let output_multiplier =
+                        (num_outputs as f64).powf(self.config.output_fee_exponent);
+                    let fee = (base_fee as f64 * spender.cluster_factor * output_multiplier) as u64;
+                    fee.saturating_add(spender.accrued_demurrage(current_block, &self.config))
+                }
+            };
             // Don't take more than half the UTXO
-            let capped_fee = fee.saturating_add(demurrage).min(spender.value / 2);
+            let capped_fee = fee.min(spender.value / 2);
             (capped_fee, spender.cluster_factor)
         };
 
-        if actual_fee == 0 {
+        // Under the consensus model a sub-unit fee is still a real spend
+        // (the remainder is carried), so the tx proceeds.
+        if actual_fee == 0 && consensus_fee.is_none() {
             return;
         }
 
@@ -1329,15 +1401,26 @@ impl LotterySimulation {
         for utxo_id in utxo_ids {
             // Churn is a spend: pays the accrued demurrage and resets the
             // anchor (escaping eligibility decay cannot escape accrual)
-            let demurrage = self
-                .utxos
-                .get(&utxo_id)
-                .map(|u| u.accrued_demurrage(current_block, &self.config))
-                .unwrap_or(0);
+            let (demurrage, consensus_fee) = match self.utxos.get(&utxo_id) {
+                Some(u) => {
+                    let (value, factor) = (u.value, u.cluster_factor);
+                    let elapsed = current_block.saturating_sub(u.demurrage_anchor);
+                    let demurrage = u.accrued_demurrage(current_block, &self.config);
+                    // #1695: a 1-in/1-out self-spend under the consensus model.
+                    (
+                        demurrage,
+                        self.consensus_spend_fee(value, factor, 1, elapsed),
+                    )
+                }
+                None => (0, None),
+            };
             if let Some(utxo) = self.utxos.get_mut(&utxo_id) {
-                let fee = ((self.config.base_fee as f64 * utxo.cluster_factor) as u64)
-                    .saturating_add(demurrage)
-                    .min(utxo.value / 2);
+                let fee = match consensus_fee {
+                    Some(fee) => fee,
+                    None => ((self.config.base_fee as f64 * utxo.cluster_factor) as u64)
+                        .saturating_add(demurrage),
+                }
+                .min(utxo.value / 2);
                 if fee > 0 {
                     utxo.value -= fee;
                     total_fees += fee;
@@ -2060,6 +2143,42 @@ mod tests {
     // structural-Gini runs byte-for-byte (#626).
     #![allow(deprecated)]
     use super::*;
+
+    /// #1695: under the consensus fee model the immediate-mode fee is the
+    /// node's floor (sub-unit size fee + node demurrage), not the flat
+    /// `base_fee`, and the sub-unit remainder is carried rather than dropped.
+    #[test]
+    fn consensus_fee_model_replaces_base_fee_in_immediate_mode() {
+        use crate::consensus_fee::FeeModelMode;
+        let build = |consensus: bool| {
+            let mut config = LotteryConfig::combined_mechanism();
+            config.base_fee = 250;
+            let mut sim = LotterySimulation::new_seeded(config, FeeCurve::default_params(), 7);
+            if consensus {
+                sim = sim.with_consensus_fee(FeeModelMode::ConsensusPlusRelayMin, 1_000_000_000);
+            }
+            for _ in 0..20 {
+                sim.add_owner(100_000, SybilStrategy::Normal);
+            }
+            sim.advance_blocks_immediate(200, 5, TransactionModel::ValueWeighted);
+            sim
+        };
+        let legacy = build(false);
+        let consensus = build(true);
+        let priced = consensus.consensus_fee.as_ref().unwrap().total_fee_pico;
+        // 1000 txs × ≥ MIN_TX_FEE (1e8 pico = 0.1 unit) ≥ 1e11 pico ≈ 100 units.
+        assert!(priced >= 1_000 * crate::consensus_fee::RELAY_MIN_TX_FEE as u128);
+        let charged = consensus.metrics.total_fees_collected as u128;
+        assert!(
+            charged.abs_diff(priced / 1_000_000_000) <= 1,
+            "carry keeps totals exact"
+        );
+        assert!(
+            charged * 100 < legacy.metrics.total_fees_collected as u128,
+            "consensus fees ({charged}) far below flat base_fee ({})",
+            legacy.metrics.total_fees_collected
+        );
+    }
 
     #[test]
     fn test_value_weighting_prevents_sybil() {

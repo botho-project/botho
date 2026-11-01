@@ -5,9 +5,24 @@
 //! - Wash trading break-even analysis
 //! - Fee curve sensitivity
 //! - Structuring attack economics
+//!
+//! # Fee models (#1695)
+//!
+//! The `*_consensus` analyses price every transaction with the shared
+//! [`crate::consensus_fee_model`] — the node's consensus fee floor (size ×
+//! factor × min(n,10)² + demurrage), optionally with the relay `MIN_TX_FEE`.
+//! The original [`analyze_wash_trading`] / [`analyze_structuring`] price a
+//! linear bps [`FeeCurve`] on transfer value, which the node has never
+//! enforced; they are kept (not deleted) as the **legacy** model, reachable
+//! from the CLI only via `--fee-model legacy`.
 
 use crate::{
-    fee_curve::{FeeCurve, FeeRateBps},
+    consensus_fee::{
+        consensus_fee_breakdown, consensus_tx_size_bytes, ClaimedClass, ConsensusFeeInputs,
+        ConsensusFeeParams,
+    },
+    demurrage::demurrage_charge,
+    fee_curve::{ClusterFactorCurve, FeeCurve, FeeRateBps},
     tag::{TagWeight, TAG_WEIGHT_SCALE},
 };
 
@@ -259,6 +274,221 @@ pub fn analyze_structuring(
     }
 }
 
+// ============================================================================
+// Consensus-fee-model analyses (#1695)
+// ============================================================================
+
+/// Wash-trading economics under the node's consensus fee floor.
+///
+/// Each hop is a 1-input / 1-output self-transfer of the whole principal at
+/// zero ring age (the cheapest shape for the attacker). Tag decay lowers the
+/// output's claimed cluster wealth below the input's, so each hop is a class
+/// **downgrade** and pays the capitalized reset charge (#925) once demurrage is
+/// active — exactly as `Ledger::consensus_fee_floor` prices it. The benefit of
+/// washing is (a) a lower size fee on every future transaction and (b) lower
+/// accrued demurrage on the held principal.
+#[derive(Debug, Clone)]
+pub struct ConsensusWashTradingAnalysis {
+    /// Number of wash hops.
+    pub hops: u32,
+    /// Cluster factor before washing (`FACTOR_SCALE`, 1000 = 1×).
+    pub initial_factor: u64,
+    /// Cluster factor after washing.
+    pub final_factor: u64,
+    /// Tag weight remaining after the hops (0.0 to 1.0).
+    pub remaining_tag: f64,
+    /// Σ size/output fees over the hops (pico).
+    pub hop_base_fees_pico: u128,
+    /// Σ demurrage (capitalized downgrade) charges over the hops (pico).
+    pub hop_demurrage_pico: u128,
+    /// Total wash cost under the selected mode (pico).
+    pub total_wash_fees_pico: u128,
+    /// Total wash cost as a fraction of the principal.
+    pub total_fees_fraction: f64,
+    /// Fee saved on each future 1-in/2-out transfer (pico, under the mode).
+    pub fee_savings_per_tx_pico: i128,
+    /// Accrued demurrage saved per year of holding the principal (pico).
+    pub demurrage_savings_per_year_pico: u128,
+    /// Future transfers until the per-tx fee savings repay the wash.
+    pub break_even_transactions: Option<u128>,
+    /// Years of holding until the demurrage savings repay the wash.
+    pub break_even_years: Option<f64>,
+}
+
+fn effective_wealth(cluster_wealth_pico: u128, remaining: f64) -> u128 {
+    (cluster_wealth_pico as f64 * remaining) as u128
+}
+
+/// Analyze wash trading with the shared consensus fee model.
+///
+/// `cluster_wealth_pico` is the cluster's global wealth; the attacker's
+/// effective wealth after `k` hops is `cluster_wealth × (1 − decay)^k`, the
+/// same approximation as the legacy [`analyze_wash_trading`].
+pub fn analyze_wash_trading_consensus(
+    cluster_wealth_pico: u128,
+    principal_pico: u64,
+    decay_rate: TagWeight,
+    hops: u32,
+    height: u64,
+    params: &ConsensusFeeParams,
+) -> ConsensusWashTradingAnalysis {
+    let curve = ClusterFactorCurve::default();
+    let mut hop_base: u128 = 0;
+    let mut hop_dem: u128 = 0;
+    let mut total: u128 = 0;
+    for k in 0..hops {
+        let w_in = effective_wealth(cluster_wealth_pico, tag_after_hops(decay_rate, k));
+        let w_out = effective_wealth(cluster_wealth_pico, tag_after_hops(decay_rate, k + 1));
+        let b = consensus_fee_breakdown(
+            &ConsensusFeeInputs {
+                size: consensus_tx_size_bytes(1, 1, 0),
+                n_out: 1,
+                n_memo: 0,
+                claimed: ClaimedClass::Wealth(w_out),
+                floor: curve.factor(w_in),
+                elapsed: 0,
+                height,
+                output_sum: principal_pico,
+            },
+            params,
+        );
+        hop_base += b.base as u128;
+        hop_dem += b.demurrage as u128;
+        total += b.fee as u128;
+    }
+
+    let remaining_tag = tag_after_hops(decay_rate, hops);
+    let w0 = cluster_wealth_pico;
+    let w_n = effective_wealth(cluster_wealth_pico, remaining_tag);
+    let f0 = curve.factor(w0);
+    let f_n = curve.factor(w_n);
+
+    // A typical future transfer: 1-in/2-out, in-class, young.
+    let future_fee = |w: u128| {
+        consensus_fee_breakdown(
+            &ConsensusFeeInputs {
+                size: consensus_tx_size_bytes(1, 2, 0),
+                n_out: 2,
+                n_memo: 0,
+                claimed: ClaimedClass::Wealth(w),
+                floor: curve.factor(w),
+                elapsed: 0,
+                height,
+                output_sum: principal_pico,
+            },
+            params,
+        )
+        .fee as i128
+    };
+    let fee_savings_per_tx_pico = future_fee(w0) - future_fee(w_n);
+
+    let rate = params.demurrage_rate_bps(height);
+    let bpy = params.blocks_per_year;
+    let demurrage_savings_per_year_pico = (demurrage_charge(principal_pico, f0, bpy, rate, bpy)
+        as u128)
+        .saturating_sub(demurrage_charge(principal_pico, f_n, bpy, rate, bpy) as u128);
+
+    let break_even_transactions = if fee_savings_per_tx_pico > 0 {
+        Some(total.div_ceil(fee_savings_per_tx_pico as u128))
+    } else {
+        None
+    };
+    let break_even_years = if demurrage_savings_per_year_pico > 0 {
+        Some(total as f64 / demurrage_savings_per_year_pico as f64)
+    } else {
+        None
+    };
+
+    ConsensusWashTradingAnalysis {
+        hops,
+        initial_factor: f0,
+        final_factor: f_n,
+        remaining_tag,
+        hop_base_fees_pico: hop_base,
+        hop_demurrage_pico: hop_dem,
+        total_wash_fees_pico: total,
+        total_fees_fraction: if principal_pico > 0 {
+            total as f64 / principal_pico as f64
+        } else {
+            0.0
+        },
+        fee_savings_per_tx_pico,
+        demurrage_savings_per_year_pico,
+        break_even_transactions,
+        break_even_years,
+    }
+}
+
+/// Structuring economics under the node's consensus fee floor.
+#[derive(Debug, Clone)]
+pub struct ConsensusStructuringAnalysis {
+    /// Amount moved (pico).
+    pub single_amount_pico: u64,
+    /// Number of pieces.
+    pub num_splits: u32,
+    /// Fee for one 1-in/2-out transfer of the whole amount (pico).
+    pub single_fee_pico: u64,
+    /// Total fee for `num_splits` separate 1-in/2-out transfers (pico).
+    pub split_txs_fee_pico: u128,
+    /// Fee for one transaction with `num_splits` payment outputs + change.
+    pub split_outputs_fee_pico: u64,
+    /// `single − split_txs` (positive = structuring saves money).
+    pub savings_separate_txs_pico: i128,
+    /// `single − split_outputs` (positive = structuring saves money).
+    pub savings_one_tx_pico: i128,
+}
+
+/// Analyze structuring with the shared consensus fee model: does splitting a
+/// transfer into `num_splits` pieces — as separate transactions, or as one
+/// many-output transaction — lower the fee? `elapsed` is the coins' ring age
+/// (demurrage is value-proportional, so it is the same in total either way).
+pub fn analyze_structuring_consensus(
+    amount_pico: u64,
+    cluster_wealth_pico: u128,
+    num_splits: u32,
+    elapsed: u64,
+    height: u64,
+    params: &ConsensusFeeParams,
+) -> ConsensusStructuringAnalysis {
+    let curve = ClusterFactorCurve::default();
+    let factor = curve.factor(cluster_wealth_pico);
+    let fee = |n_out: usize, value: u64| {
+        consensus_fee_breakdown(
+            &ConsensusFeeInputs {
+                size: consensus_tx_size_bytes(1, n_out, 0),
+                n_out,
+                n_memo: 0,
+                claimed: ClaimedClass::Wealth(cluster_wealth_pico),
+                floor: factor,
+                elapsed,
+                height,
+                output_sum: value,
+            },
+            params,
+        )
+        .fee
+    };
+    let splits = num_splits.max(1);
+    let single_fee_pico = fee(2, amount_pico);
+    let piece = amount_pico / splits as u64;
+    let remainder = amount_pico - piece * splits as u64;
+    let mut split_txs_fee_pico: u128 = 0;
+    for i in 0..splits {
+        let v = if i == 0 { piece + remainder } else { piece };
+        split_txs_fee_pico += fee(2, v) as u128;
+    }
+    let split_outputs_fee_pico = fee(splits as usize + 1, amount_pico);
+    ConsensusStructuringAnalysis {
+        single_amount_pico: amount_pico,
+        num_splits: splits,
+        single_fee_pico,
+        split_txs_fee_pico,
+        split_outputs_fee_pico,
+        savings_separate_txs_pico: single_fee_pico as i128 - split_txs_fee_pico as i128,
+        savings_one_tx_pico: single_fee_pico as i128 - split_outputs_fee_pico as i128,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,5 +547,50 @@ mod tests {
                 .unwrap_or(true),
             "Wash trading should not be easily profitable"
         );
+    }
+    #[test]
+    fn consensus_structuring_never_saves() {
+        use crate::{consensus_fee::FeeModelMode, fee_curve::PICO_PER_BTH};
+        for mode in [
+            FeeModelMode::ConsensusOnly,
+            FeeModelMode::ConsensusPlusRelayMin,
+        ] {
+            let p = ConsensusFeeParams::mainnet(mode);
+            for splits in [1u32, 2, 10, 50] {
+                let a = analyze_structuring_consensus(
+                    1_000_000 * PICO_PER_BTH as u64,
+                    10_000_000 * PICO_PER_BTH,
+                    splits,
+                    1_000_000,
+                    p.first_demurrage_height(),
+                    &p,
+                );
+                assert!(a.savings_separate_txs_pico <= 1, "{mode:?} {splits}: {a:?}");
+                assert!(a.savings_one_tx_pico <= 0, "{mode:?} {splits}: {a:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn consensus_wash_prices_downgrade_when_demurrage_active() {
+        use crate::{consensus_fee::FeeModelMode, fee_curve::PICO_PER_BTH};
+        let p = ConsensusFeeParams::mainnet(FeeModelMode::ConsensusOnly);
+        let w = 10_000_000 * PICO_PER_BTH;
+        let principal = 1_000_000 * PICO_PER_BTH as u64;
+        let active = analyze_wash_trading_consensus(
+            w,
+            principal,
+            50_000,
+            20,
+            p.first_demurrage_height(),
+            &p,
+        );
+        assert!(active.final_factor < active.initial_factor);
+        assert!(active.hop_demurrage_pico > 0, "{active:?}");
+        // The capitalized charge prices ~SETTLEMENT_HORIZON years of saved
+        // demurrage, so washing cannot repay in under a year.
+        assert!(active.break_even_years.unwrap() > 1.0, "{active:?}");
+        let epoch0 = analyze_wash_trading_consensus(w, principal, 50_000, 20, 1, &p);
+        assert_eq!(epoch0.hop_demurrage_pico, 0);
     }
 }
