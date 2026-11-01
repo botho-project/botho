@@ -2,13 +2,16 @@
 Manifest of exported theorems (#1705).
 
 Every theorem the project claims as "proven" must be listed here with a
-`#print axioms` line. `scripts/check-axioms.sh` compiles this file and fails
-if a listed theorem depends on an axiom outside `axioms-allowlist.txt`
-(including `sorryAx`), if the number of results does not match the number of
-`#print axioms` lines, or if the manifest is empty.
+`#print axioms` line. `scripts/check-axioms.sh` fails if a listed theorem
+depends on an axiom outside `axioms-allowlist.txt` (including `sorryAx`), if
+the manifest is empty, or if this file contains anything other than comments,
+`import` lines and one `#print axioms NAME` per line (#1770). Prove theorems
+in the `Botho` library, not here.
 
 This file is not part of the `Botho` library. The gate compiles it separately
-with `lake env lean Theorems.lean` after `lake build`.
+with `lake env lean --json Theorems.lean` after `lake build`, and checks each
+result against an independent walk of the compiled library
+(`scripts/AxiomReport.lean`).
 -/
 import Botho
 
