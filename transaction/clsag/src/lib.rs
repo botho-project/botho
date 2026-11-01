@@ -103,6 +103,19 @@ pub enum TransactionStructureError {
     NoInputs,
     /// Transaction has no outputs
     NoOutputs,
+    /// Transaction has more than [`bth_transaction_types::MAX_OUTPUTS`]
+    /// outputs.
+    ///
+    /// Relay/mempool policy only (#1772 Part A): `is_valid_structure` runs at
+    /// mempool admission, not in block validation, so a miner may still
+    /// include a larger transaction in a block until consensus enforcement is
+    /// decided under #1684 (#1772 Part B).
+    TooManyOutputs {
+        /// Number of outputs the transaction carries.
+        count: usize,
+        /// The per-transaction output limit.
+        max: u64,
+    },
     /// One or more outputs have zero amount
     ZeroAmountOutput,
     /// One or more outputs are below the dust threshold
@@ -121,6 +134,10 @@ impl std::fmt::Display for TransactionStructureError {
         match self {
             Self::NoInputs => write!(f, "Transaction has no inputs"),
             Self::NoOutputs => write!(f, "Transaction has no outputs"),
+            Self::TooManyOutputs { count, max } => write!(
+                f,
+                "Transaction has {count} outputs, exceeding the maximum of {max} per transaction"
+            ),
             Self::ZeroAmountOutput => write!(f, "Transaction has zero-amount output"),
             Self::DustOutput => write!(f, "Transaction has output below dust threshold"),
             Self::FeeBelowMinimum => write!(f, "Transaction fee below minimum"),
@@ -1554,6 +1571,16 @@ impl Transaction {
         if self.outputs.is_empty() {
             return Err(TransactionStructureError::NoOutputs);
         }
+        // Per-transaction output cap (#1772 Part A). Relay policy only: this
+        // function is called at mempool admission, not by block validation,
+        // so block validity is unchanged pending the #1684 decision (#1772
+        // Part B).
+        if self.outputs.len() as u64 > bth_transaction_types::MAX_OUTPUTS {
+            return Err(TransactionStructureError::TooManyOutputs {
+                count: self.outputs.len(),
+                max: bth_transaction_types::MAX_OUTPUTS,
+            });
+        }
         if self.outputs.iter().any(|o| o.amount == 0) {
             return Err(TransactionStructureError::ZeroAmountOutput);
         }
@@ -1896,6 +1923,38 @@ mod tests {
             1,
         );
         assert!(tx.is_valid_structure().is_ok());
+    }
+
+    /// #1772 Part A: exactly `MAX_OUTPUTS` (16) outputs is accepted.
+    #[test]
+    fn test_transaction_max_outputs_accepted() {
+        let n = bth_transaction_types::MAX_OUTPUTS as usize;
+        let outputs = (0..n)
+            .map(|i| test_output(TEST_AMOUNT, [i as u8; 32], [3u8; 32]))
+            .collect();
+        let tx = Transaction::new_clsag(vec![test_clsag_input(1)], outputs, MIN_TX_FEE, 1);
+        assert_eq!(tx.outputs.len(), 16);
+        assert!(tx.is_valid_structure().is_ok());
+    }
+
+    /// #1772 Part A: `MAX_OUTPUTS + 1` (17) outputs is rejected with a clear
+    /// error naming the count and the limit.
+    #[test]
+    fn test_transaction_too_many_outputs_rejected() {
+        let n = bth_transaction_types::MAX_OUTPUTS as usize + 1;
+        let outputs = (0..n)
+            .map(|i| test_output(TEST_AMOUNT, [i as u8; 32], [3u8; 32]))
+            .collect();
+        let tx = Transaction::new_clsag(vec![test_clsag_input(1)], outputs, MIN_TX_FEE, 1);
+        let err = tx.is_valid_structure().unwrap_err();
+        assert_eq!(
+            err,
+            TransactionStructureError::TooManyOutputs { count: 17, max: 16 }
+        );
+        assert_eq!(
+            err.to_string(),
+            "Transaction has 17 outputs, exceeding the maximum of 16 per transaction"
+        );
     }
 
     #[test]
