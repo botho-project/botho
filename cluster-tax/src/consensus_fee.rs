@@ -61,6 +61,41 @@ pub const CONSENSUS_FEE_BASE: u64 = 1;
 /// (`consensus_fee_model_relay_min_matches_min_tx_fee`) asserts equality.
 pub const RELAY_MIN_TX_FEE: u64 = 100_000_000;
 
+/// Fraction of a block's total fees (base + demurrage) routed to the lottery
+/// pool, in permille; the remainder is burned.
+///
+/// Mirrors the consensus
+/// `lottery_v2::canonical_config().pool_fraction_permille`
+/// and `LotteryFeeConfig::default()` (`botho/src/consensus/lottery.rs`), which
+/// `cluster-tax` cannot import. A drift-guard test in `botho`
+/// (`consensus_fee_model_pool_split_and_ring_size_match_node`) asserts
+/// equality, and that [`split_fee_pool_burn`] matches `split_fees`.
+pub const LOTTERY_POOL_FRACTION_PERMILLE: u32 = 800;
+
+/// Ring size (real input + decoys) the node requires of every CLSAG input.
+///
+/// Mirrors `bth_transaction_clsag::MIN_RING_SIZE` / `DEFAULT_RING_SIZE`;
+/// drift-guarded in `botho` by
+/// `consensus_fee_model_pool_split_and_ring_size_match_node`. Sims that model
+/// the ring-centroid floor build rings of this size.
+pub const CONSENSUS_RING_SIZE: usize = 20;
+
+/// The wallet's factor-similarity decoy band, in bps of the real input's
+/// factor (±10%): honest wallets draw decoys only from coins in this band.
+///
+/// Mirrors `botho::decoy_selection::FACTOR_SIMILARITY_SPREAD` (wallet policy,
+/// not consensus); drift-guarded in `botho` alongside [`CONSENSUS_RING_SIZE`]
+/// (`consensus_fee_model_pool_split_and_ring_size_match_node`).
+pub const WALLET_FACTOR_SIMILARITY_SPREAD_BPS: u64 = 1_000;
+
+/// Split a fee into `(pool, burn)` exactly as the node's
+/// `LotteryFeeConfig::split_fees` does: `pool = fee × 800 / 1000` (floored),
+/// `burn = fee − pool`.
+pub const fn split_fee_pool_burn(fee: u64) -> (u64, u64) {
+    let pool = (fee as u128 * LOTTERY_POOL_FRACTION_PERMILLE as u128 / 1000) as u64;
+    (pool, fee - pool)
+}
+
 /// Quantile (bps) of ring-member ages the node uses for the demurrage clock
 /// (`CONSENSUS_RING_AGE_QUANTILE_BPS`: the maximum age). Exposed so a sim that
 /// models rings can call [`crate::ring_elapsed_quantile`] the same way.
@@ -516,6 +551,14 @@ mod tests {
         assert_eq!(s.charge(3_960), 0);
         assert_eq!(s.charge(3_960), 1);
         assert_eq!(s.total_fee_pico, 11_880);
+    }
+
+    #[test]
+    fn fee_split_is_eighty_twenty_floored() {
+        assert_eq!(split_fee_pool_burn(1_000), (800, 200));
+        assert_eq!(split_fee_pool_burn(3_961), (3_168, 793));
+        assert_eq!(split_fee_pool_burn(0), (0, 0));
+        assert_eq!(split_fee_pool_burn(1), (0, 1));
     }
 
     #[test]

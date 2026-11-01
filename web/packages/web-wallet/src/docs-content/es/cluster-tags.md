@@ -52,9 +52,9 @@ Entrada 2: 30 BTH {cluster_B: 100%}
 Salida: 100 BTH {cluster_A: 70%, cluster_B: 30%}
 ```
 
-**4. Las etiquetas decaen con el tiempo**
+**4. Las etiquetas decaen al moverse las monedas**
 
-Cada salto de transacción reduce la etiqueta un 5 %, repartiendo la atribución por toda la economía. Pero el decaimiento solo se aplica si el UTXO tiene al menos 720 bloques de antigüedad (de una a unas pocas horas, según el tiempo de bloque adaptativo a la carga), lo que previene ataques de wash trading.
+Los monederos estándar reducen los pesos de las etiquetas un 5 % en cada transferencia, repartiendo la atribución por toda la economía: un peso se reduce a la mitad tras unas 13,5 transferencias. Es una regla del monedero, no del consenso. No hay restricción por antigüedad, y la red en sí no aplica ningún decaimiento; solo rechaza las salidas que reclaman *más* peso de clúster que sus entradas. Qué debe garantizar el protocolo sobre la persistencia de las etiquetas es una decisión abierta (#1687).
 
 ### Por qué dividir no funciona
 
@@ -93,15 +93,15 @@ El 80 % de todas las comisiones de transacción se redistribuye a los UTXO elegi
 2. El 80 % de la comisión se reparte entre 4 ganadores elegidos con aleatoriedad verificable
 3. El 20 % se quema permanentemente (deflacionario)
 
-**Cómo se seleccionan los ganadores (ponderado por clúster):**
+**Cómo se seleccionan los ganadores (sorteo uniforme, tal como está construido):**
 
-El peso ganador de un UTXO es su **valor dividido por su factor de clúster**. Esta es la única ponderación progresiva que es invariante a la división:
+En cada bloque se realiza un sorteo. Los ganadores se eligen de forma **uniforme** entre las salidas elegibles: ni el valor de un UTXO ni su factor de clúster modifican su probabilidad de ser elegido. (Los diseños anteriores ponderaban por valor ÷ factor de clúster; se retiró porque leía los importes directamente y, en simulación, devolvía gran parte del fondo a las ballenas.)
 
-- Los pesos se basan en el valor, así que dividir una posición en muchos UTXO nunca aumenta el peso total
-- El sesgo proviene de la procedencia del clúster, que se hereda a través de las divisiones
-- Las monedas bien circuladas (factor bajo) ganan proporcionalmente más; las monedas de clúster ballena ganan menos
+- **Elegibilidad:** al menos 720 bloques de antigüedad, valor de al menos 1 µBTH (10^6 picoBTH) y dentro de la ventana reciente de 10 000 bloques. Se consideran como máximo 10 000 candidatos elegibles por sorteo, a partir de un desplazamiento derivado de una semilla.
+- **Ganadores:** 4 por sorteo, elegidos sin reemplazo con una semilla vinculada a la prueba de trabajo.
+- **Pago:** el fondo es la parte del 80 % de las comisiones, más la cuota de emisión de lotería del bloque (una parte de la recompensa del bloque que se destina al fondo en lugar de al minero: 0 % en la época de arranque, luego 10 % más por cada halving, con tope del 50 %), más lo arrastrado de bloques anteriores; cada sorteo paga el menor entre lo disponible y el límite por bloque, y el resto se arrastra.
 
-Para participar, un UTXO debe tener al menos 720 bloques de antigüedad y valer al menos 1 µBTH.
+La progresividad proviene ahora del lado de la *entrada* (comisiones progresivas y demurrage), no del sorteo. Parte de la economía del sorteo sigue siendo una decisión abierta: dividir una posición en muchas salidas puede mejorar hoy tus probabilidades ([#1682](https://github.com/botho-project/botho/issues/1682)) y los ganadores anteriores acumulan su cuota ([#1690](https://github.com/botho-project/botho/issues/1690)); véanse también [#1689](https://github.com/botho-project/botho/issues/1689) y [#1691](https://github.com/botho-project/botho/issues/1691). Esta sección describe el mecanismo tal como está construido.
 
 ### Firmas de anillo y privacidad de las etiquetas
 
@@ -119,20 +119,18 @@ Esto previene la evasión de comisiones: no puedes seleccionar a dedo señuelos 
 
 ### Detalles del mecanismo de decaimiento
 
-Para prevenir el wash trading (enviarte fondos a ti mismo repetidamente para decaer las etiquetas):
+Cómo funciona el decaimiento hoy (tal como está implementado):
 
-**Restricción por antigüedad:**
-- El decaimiento solo se aplica a UTXO con al menos 720 bloques de antigüedad
-- Las salidas nuevas de autotransferencias rápidas no decaen
-- La restricción de antigüedad limita de forma natural el decaimiento a ~12 eventos por día
+- **Política del monedero:** los monederos estándar (el monedero del nodo y el monedero CLI) mezclan las etiquetas de las entradas ponderadas por valor y luego reducen el resultado un 5 % en cada transferencia
+- **Sin restricción por antigüedad:** el decaimiento se aplica sin importar lo reciente que sea la moneda gastada, de modo que un peso se reduce a la mitad tras unas 13,5 transferencias, por rápidas que sean
+- **Consenso:** no aplica ningún decaimiento y solo rechaza la *inflación* de etiquetas (salidas que reclaman más peso de clúster que las entradas). Se aceptan etiquetas de salida menores o vacías, así que un monedero modificado puede eliminar las etiquetas en una sola transacción
 
-**Limitación de tasa natural:**
+**El wash trading (enviarte fondos a ti mismo repetidamente para decaer las etiquetas) no está limitado en frecuencia por el protocolo.** Su coste son las comisiones de transacción y el cargo de demurrage por bajada de clase, no el tiempo. Versiones anteriores de esta documentación describían una restricción de antigüedad de 720 bloques que limitaba el decaimiento a ~12 eventos por día; la red no aplica ese diseño. La persistencia de las etiquetas es una decisión abierta (#1687).
 
-| Ataque | Resultado |
-|--------|--------|
-| 100 autotransferencias rápidas | 0 % de decaimiento (todas las salidas demasiado nuevas) |
-| Ataque paciente (1 día) | ~46 % de decaimiento máximo (solo ~12 saltos elegibles) |
-| Ataque paciente (1 semana) | ~99 % de decaimiento, pero has pagado ~84 comisiones de transacción |
+| Escenario | Resultado (monedero estándar) |
+|-----------|-------------------------------|
+| Una transferencia | 5 % de decaimiento |
+| ~14 transferencias (a cualquier velocidad) | ~50 % de decaimiento |
 | Retener sin transaccionar | 0 % de decaimiento |
 
 ### Consideraciones de privacidad
@@ -147,20 +145,21 @@ El sistema de etiquetas de clúster crea incentivos alineados:
 
 | Comportamiento | Efecto en las etiquetas | Incentivo |
 |----------|----------------|-----------|
-| **Circular monedas** | Las etiquetas decaen y se mezclan | Comisiones más bajas, mayor peso en la lotería |
-| **Acumular riqueza** | Las etiquetas permanecen concentradas | Comisiones más altas, menor peso en la lotería, demurrage |
-| **Dividir en muchos UTXO** | Etiquetas sin cambios | Sin beneficio: las comisiones y el peso en la lotería se basan en la procedencia y el valor |
+| **Circular monedas** | Las etiquetas decaen y se mezclan | Comisiones más bajas |
+| **Acumular riqueza** | Las etiquetas permanecen concentradas | Comisiones más altas, demurrage |
+| **Dividir en muchos UTXO** | Etiquetas sin cambios | Las comisiones se basan en la procedencia, así que no hay beneficio en comisiones; tal como está construido, más salidas pueden mejorar las probabilidades en la lotería ([#1682](https://github.com/botho-project/botho/issues/1682)) |
 
 ### Parámetros técnicos
 
 | Parámetro | Valor | Propósito |
 |-----------|-------|---------|
-| Tasa de decaimiento | 5 % por salto elegible | Difusión gradual de etiquetas |
-| Antigüedad mínima del UTXO (decaimiento + lotería) | 720 bloques | Prevención de wash trading |
+| Tasa de decaimiento | 5 % por transferencia (política del monedero; el consenso no aplica ninguno) | Difusión gradual de etiquetas |
+| Antigüedad mínima del UTXO (lotería) | 720 bloques | Elegibilidad para la lotería |
 | Valor mínimo del UTXO (lotería) | 1 µBTH | Exclusión de polvo (dust) |
 | Rango del factor de clúster | 1x–6x (punto medio 3.5x en 100K BTH) | Comisiones progresivas |
 | Tamaño del anillo | 20 | Conjunto de privacidad para la propagación de etiquetas |
-| Ganadores de la lotería | 4 por sorteo | Granularidad de la redistribución |
+| Ganadores de la lotería | 4 por sorteo (sorteo uniforme) | Granularidad de la redistribución |
+| Ventana de la lotería | 10 000 bloques, hasta 10 000 candidatos | Acota el trabajo por sorteo |
 | Tasa de quema | 20 % de las comisiones | Presión deflacionaria |
 | Tasa del fondo | 80 % de las comisiones | Cantidad de redistribución |
 | Demurrage | 2 %/año al factor máximo (ver Tokenómica) | Alcanza la riqueza concentrada e inactiva |
@@ -172,7 +171,7 @@ Las etiquetas de clúster resuelven el problema de la "tributación progresiva r
 1. **Rastrean procedencia, no identidad**: las monedas recuerdan su origen
 2. **Resisten los ataques de división**: la riqueza del clúster se fija en la acuñación
 3. **Habilitan comisiones progresivas**: los clústeres ricos pagan más
-4. **Impulsan una redistribución justa**: el peso en la lotería se inclina hacia las monedas bien circuladas
+4. **Impulsan la redistribución**: el 80 % de las comisiones regresa a los poseedores mediante una lotería uniforme (la progresividad proviene de las comisiones y el demurrage)
 5. **Preservan la privacidad**: funcionan con firmas de anillo
 6. **Fomentan la circulación**: las etiquetas decaen a través del comercio
 

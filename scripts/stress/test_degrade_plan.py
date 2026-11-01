@@ -114,8 +114,13 @@ class DegradePlanTests(unittest.TestCase):
     def test_x_series_changes_only_the_opt_in_phases_and_degrade_block(self):
         base, plan = load("testnet-discovery-v2.json"), self.plan()
         for key in set(base) | set(plan):
-            if key not in ("faults", "phases", "degrade", "limits", "rehearsal", "wallets"):
+            if key not in ("faults", "phases", "degrade", "limits", "rehearsal", "wallets",
+                           "lottery_v2"):
                 self.assertEqual(plan[key], base[key], key)
+        # #1681: x-series pins the V2 award-spend threshold; the reference
+        # plan keeps its golden digest and the default.
+        self.assertNotIn("lottery_v2", base)
+        self.assertEqual(plan["lottery_v2"], {"min_received_for_spend": 16})
         # #1615: 64 senders so peaks never wait on sender reuse.
         self.assertEqual({**plan["wallets"], "count": base["wallets"]["count"]}, base["wallets"])
         self.assertEqual(plan["wallets"]["count"], 64)

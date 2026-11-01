@@ -55,7 +55,7 @@ Las propiedades clave:
 | **Etiquetas concentradas** | Recién acuñada, aún sin circular → Comisiones altas |
 | **Etiquetas diversificadas** | Negociada por muchas manos → Comisiones bajas |
 | **Resistente a la división** | Dividir preserva la concentración de etiquetas |
-| **Resistente al decaimiento** | Solo el comercio real reduce las etiquetas |
+| **A prueba de inflación** | Las salidas nunca pueden reclamar más peso de clúster que sus entradas |
 
 ### Por qué esto es progresivo
 
@@ -119,22 +119,22 @@ Esto significa que **la privacidad no habilita la evasión de comisiones.** Una 
 
 ### La redistribución por lotería
 
-Las comisiones regresan a la comunidad a través de una lotería inclinada por clúster:
+Las comisiones regresan a la comunidad a través de una lotería uniforme entre las salidas elegibles (tal como está construido):
 
 **El 80 % de todas las comisiones** se redistribuye a los UTXO elegibles. **El 20 % se quema** (deflacionario).
 
 **Cómo funciona la selección:**
 
 ```
-peso = valor ÷ factor de clúster
-
-UTXO bien circulado (factor 1x):  peso completo por BTH
-UTXO de clúster ballena (factor 6x):    1/6 del peso por BTH
+Toda salida elegible tiene la misma probabilidad de ser elegida.
+Ni el valor ni el factor de clúster intervienen en el sorteo.
 ```
 
-**Las monedas bien circuladas ganan hasta 6× más por BTH que la riqueza concentrada.** Esta es redistribución progresiva sin conocer la identidad de nadie, y como el peso se basa en el valor, dividir una posición en muchos UTXO nunca aumenta su peso total.
+En cada bloque se eligen cuatro ganadores entre las salidas con al menos 720 bloques de antigüedad y un valor de al menos 1 µBTH, dentro de una ventana de 10 000 bloques (como máximo 10 000 candidatos, a partir de un desplazamiento derivado de una semilla). El fondo (80 % de las comisiones, más la cuota de emisión de lotería de la recompensa del bloque (0 % en la época de arranque, luego 10 % más por cada halving, con tope del 50 %), más lo arrastrado) paga el menor entre lo disponible y un límite por bloque.
 
-**Las restricciones de elegibilidad** previenen el abuso: un UTXO debe tener al menos 720 bloques de antigüedad y valer al menos 1 µBTH para participar.
+La progresividad está en el lado de la *entrada*: las comisiones progresivas y el demurrage llenan el fondo. Se retiró la ponderación anterior valor ÷ factor de clúster. Como el sorteo es uniforme, dividir una posición en muchas salidas puede mejorar hoy tus probabilidades ([#1682](https://github.com/botho-project/botho/issues/1682)); esta y otras cuestiones relacionadas ([#1689](https://github.com/botho-project/botho/issues/1689), [#1690](https://github.com/botho-project/botho/issues/1690), [#1691](https://github.com/botho-project/botho/issues/1691)) son decisiones abiertas.
+
+**Las restricciones de elegibilidad** limitan el abuso: un UTXO debe tener al menos 720 bloques de antigüedad y valer al menos 1 µBTH para participar.
 
 ### Resistencia a ataques
 
@@ -159,20 +159,20 @@ Veredicto: ataque derrotado
 **Ataque de aparcamiento (dividir y esperar):**
 ```
 Atacante: divide en 100 UTXO, espera las ganancias de la lotería
-Resultado: el peso se basa en el valor: dividir NO gana peso
-        El factor de clúster se hereda: el sesgo sigue en tu contra
+Resultado: el sorteo es uniforme por salida, así que, tal como está
+        construido, más salidas pueden aumentar las probabilidades (decisión abierta, #1682)
         Las comisiones cuadráticas por salida hacen que la división cueste hasta 100×
-Veredicto: ataque derrotado
+Veredicto: no derrotado del todo (decisión abierta, #1682)
 ```
 
 **Wash trading (autotransferencias):**
 ```
 Atacante: envía a sí mismo rápidamente para decaer las etiquetas
-Resultado: la restricción de antigüedad requiere 720 bloques por decaimiento
-        Como máximo ~12 decaimientos por día ≈ 46 % de decaimiento diario
-        1 semana de wash trading: ~99 % de decaimiento
-        Coste: ~84 comisiones de transacción (cada una alimentando la lotería)
-Veredicto: caro, lento, detectable
+Resultado: sin restricción de antigüedad; el consenso no aplica decaimiento ni limita la frecuencia
+        Los monederos estándar decaen un 5 % por transferencia (~50 % tras ~14 transferencias)
+        El consenso acepta etiquetas de salida menores o vacías (solo rechaza la inflación)
+        Coste: comisiones de transacción (que alimentan la lotería) + cargo por bajada de clase
+Veredicto: no limitado en frecuencia por el protocolo (decisión abierta, #1687)
 ```
 
 ### El panorama completo
@@ -186,7 +186,7 @@ Botho logra privacidad + progresividad mediante un diseño por capas:
 | **Importe** | Compromisos de Pedersen (en desarrollo — ADR 0006) | — |
 | **Tarifa de comisión** | — | Curva del factor de clúster (1-6×) |
 | **Coste de retención** | — | Demurrage sobre monedas inactivas de clúster rico |
-| **Redistribución** | Sorteo aleatorio verificable | Pesos inclinados por clúster (valor ÷ factor) |
+| **Redistribución** | Sorteo aleatorio verificable | Sorteo uniforme; progresividad desde la entrada (comisiones, demurrage) |
 
 Cada capa contribuye a ambos objetivos sin conflicto.
 
@@ -209,8 +209,8 @@ El mecanismo de privacidad + progresividad de Botho funciona porque:
 1. **Rastreamos procedencia, no identidad**: de dónde vinieron las monedas, no quién las posee
 2. **La procedencia se correlaciona con el comportamiento de riqueza**: los acuñadores nuevos son ricos, los negociantes activos son comerciantes
 3. **Las firmas de anillo preservan la privacidad**: la validación por centroide previene el abuso
-4. **La lotería inclinada por clúster es progresiva**: las monedas bien circuladas ganan más por BTH
-5. **Los pesos basados en el valor y las comisiones cuadráticas por salida disuaden los ataques**: aparcar y dividir no compensan
+4. **Una entrada progresiva alimenta una lotería uniforme**: las comisiones y el demurrage son progresivos; el sorteo en sí es uniforme
+5. **Las comisiones cuadráticas por salida encarecen la división**: si dividir compensa con el sorteo uniforme es una decisión abierta (#1682)
 6. **El comercio se premia**: las etiquetas decaen mediante el comercio legítimo; la riqueza concentrada e inactiva paga demurrage
 
 El resultado: **La primera criptomoneda donde puedes ser privado Y contribuir con equidad a la red, donde los ricos pagan más sin que nadie sepa quiénes son.**

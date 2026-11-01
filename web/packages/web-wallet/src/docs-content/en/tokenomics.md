@@ -59,7 +59,7 @@ At the ~611M BTH Phase-1 supply and full load, 2% works out to roughly **2 BTH p
 
 ### Transaction Fees
 
-Every fee is split two ways: **80% is redistributed** to holders through the cluster-tilted lottery, and **20% is burned**, creating deflationary pressure that offsets tail emission.
+Every fee is split two ways: **80% is redistributed** to holders through a uniform lottery (as built), and **20% is burned**, creating deflationary pressure that offsets tail emission.
 
 ```
 fee = per-byte rate × transaction size × cluster factor × output penalty + memo fees
@@ -84,7 +84,7 @@ Botho implements a novel **progressive fee system** that taxes wealth concentrat
 |-----------|-------|
 | Cluster factor range | 1x to 6x multiplier |
 | Curve shape | Sigmoid in log(cluster wealth), midpoint 3.5x at 100K BTH |
-| Tag decay | 5% per eligible hop |
+| Tag decay | 5% per transfer (wallet policy; consensus applies none) |
 
 **Why it's Sybil-resistant:** Splitting coins doesn't change their origin. A whale's coins carry the same cluster tag whether held in 1 UTXO or 1000.
 
@@ -130,7 +130,7 @@ At sustained full load (5-second blocks; slower when the network is idle):
 
 ### Why Split Fees 80/20?
 
-- **Redistribution** - 80% flows back to holders via the cluster-tilted lottery, favoring well-circulated coins
+- **Redistribution** - 80% flows back to holders via a uniform lottery over eligible outputs (as built; see [Cluster Tags](#cluster-tags))
 - **Deflationary pressure** - The 20% burn offsets tail emission
 - **Predictable** - Net inflation = gross emission − burns
 

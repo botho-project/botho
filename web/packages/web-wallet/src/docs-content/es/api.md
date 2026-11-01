@@ -105,7 +105,7 @@ Obtiene las salidas de transacción para la sincronización del monedero.
 
 **Parámetros:**
 - `start_height` (número) - Altura de bloque inicial
-- `end_height` (número) - Altura de bloque final (máximo 100 bloques por solicitud)
+- `end_height` (número) - Altura de bloque final (por defecto `start_height + 100`). Se sirven como máximo 1000 bloques por solicitud: un rango mayor se recorta, así que pagina reanudando en la última `height` devuelta + 1 hasta llegar a `end_height` o recibir un array vacío
 
 **Respuesta:** Array de bloques, cada uno con:
 - `height` - Altura de bloque

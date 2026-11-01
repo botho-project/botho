@@ -65,6 +65,23 @@ award`, and the report cannot mark final reconciliation verified. Context-less
 (legacy) rows keep the `legacy_lottery` hold above, unchanged. A row with a
 malformed or non-V2 context holds the run.
 
+**Spending V2 awards (#1681).** Largest-value-first selection never reaches a
+V2 payout (about 1.25e8 picocredits next to principal outputs of 1e10 or more),
+so a campaign would discover awards and never spend one. On the isolated
+discovery profile, a free-shape payment (no pinned `input_count`) whose value
+selection leaves room under `max_payment_inputs` (4) also spends the sender's
+oldest eligible mature V2 award: lowest creation height, then id, and only if
+every ring's complete-set decoy pool still holds. Its id is recorded as
+`award_input` in the selection evidence. The award's value returns as change,
+so the exact `difference` is unchanged. Pinned correctness shapes, readiness
+probes and prefund splits are never widened. Campaign activation journals
+`award_spend_policy` (`version`, `min_received`); the report's
+`lottery_v2_spend_expectation` then fails, and the run cannot report
+`complete`, when more than `min_received` awards were received and none spent
+by campaign end. The threshold defaults to 16 and is pinned with the optional
+plan block `"lottery_v2": {"min_received_for_spend": N}`. A journal without
+the marker (an older harness) reports `not_evaluated`.
+
 **Lottery preflight.** Before a campaign or a prefund starts, every node must
 report `getChainInfo.lotteryRules == 2` and `protocolVersion == "7.0.0"`. A V1
 or pre-7.0.0 node refuses the start before anything is written. The result is

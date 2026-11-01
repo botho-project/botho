@@ -7,6 +7,7 @@ import os
 import resource
 import stat
 import time
+from lottery import award_spend_expectation
 from plan import expand
 from runtime import HOSTS, atomic, digest
 
@@ -454,6 +455,8 @@ def controller_report(self):
         "accounting": self.j.get("accounting"),
         # V2 awards received and spent, counted apart from transfers (#1643).
         "lottery_v2": lottery_v2_summary(self.j.get("accounting")),
+        # D0 "discover AND spend" (#1681): awards received must be spent.
+        "lottery_v2_spend_expectation": award_spend_expectation(self.j),
         "artifact_evidence": artifacts,
         "accounting_status": accounting_status(self.j, rows, time.time(), artifacts),
         "fleet": self.j.get("fleet_latest"),
@@ -470,6 +473,7 @@ def controller_report(self):
             "snap": False,
             "confidential_amounts": False,
             "public_node_faults": False,
+            "lottery_v2_spend": award_spend_expectation(self.j)["status"] == "pass",
         },
     }
     atomic(self.state / "report.json", report)
@@ -481,6 +485,8 @@ def workload_complete(journal, events, phases, degrade_steps=()):
 
     Every planned degrade step also needs a stored ``pass`` verdict (#1591),
     so a controller restart that missed a verdict cannot report complete.
+    A campaign that received more V2 awards than its pinned threshold but
+    spent none fails the #1681 expectation and is not complete either.
     """
     rows = journal.rows("kind='campaign'")
     accounting = journal.get("accounting", {})
@@ -491,6 +497,7 @@ def workload_complete(journal, events, phases, degrade_steps=()):
         and all(row["state"] == "reconciled" for row in rows)
         and all(gates.get(phase["id"]) is True for phase in phases)
         and accounting.get("difference") == 0
+        and award_spend_expectation(journal)["status"] != "fail"
         and not journal.pending()
         and all(
             ((journal.get("degrade:" + step["id"]) or {}).get("verdict") or {}).get("status")

@@ -1,7 +1,7 @@
 // Typecheck gate for the Botho Snap. The snap imports the GENERATED wasm-pack
 // `--target bundler` artifact (`@botho/wasm-signer/pkg-bundler`), which is
 // git-ignored. In CI (fresh checkout) it does not exist, so `tsc` cannot
-// resolve the import — skip with a note instead of failing the workspace-wide
+// resolve the import — skip locally with a note (CI builds it first, #1776) instead of failing the workspace-wide
 // `pnpm -r typecheck`. Mirrors `@botho/snap-spike`'s gate.
 import { existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';

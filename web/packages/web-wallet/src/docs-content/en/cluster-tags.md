@@ -52,9 +52,9 @@ Input 2: 30 BTH {cluster_B: 100%}
 Output: 100 BTH {cluster_A: 70%, cluster_B: 30%}
 ```
 
-**4. Tags Decay Over Time**
+**4. Tags Decay as Coins Move**
 
-Each transaction hop decays the tag by 5%, spreading attribution across the economy. But decay only applies if the UTXO is at least 720 blocks old (one to a few hours, depending on the load-adaptive block time), preventing wash trading attacks.
+The standard wallets decay tag weights by 5% on every transfer, spreading attribution across the economy: a weight halves after about 13.5 transfers. This is a wallet rule, not a consensus rule. There is no age gate, and the network itself applies no decay; it only rejects outputs that claim *more* cluster weight than their inputs. What the protocol should guarantee about tag persistence is an open decision (#1687).
 
 ### Why Splitting Doesn't Work
 
@@ -93,15 +93,15 @@ The multiplier applies to a size-based fee (`per-byte rate × transaction size`)
 2. 80% of the fee is split among 4 winners drawn with verifiable randomness
 3. 20% is permanently burned (deflationary)
 
-**How winners are selected (cluster-weighted):**
+**How winners are selected (uniform draw, as built):**
 
-A UTXO's winning weight is its **value divided by its cluster factor**. This is the only progressive weighting that is split-invariant:
+One drawing runs per block. Winners are drawn **uniformly** among eligible outputs: neither a UTXO's value nor its cluster factor changes its chance of being picked. (Earlier designs weighted by value ÷ cluster factor; that was retired because it read amounts directly and, in simulation, routed much of the pool back to whales.)
 
-- Weights are value-based, so splitting a position into many UTXOs never increases total weight
-- The tilt comes from cluster provenance, which inherits through splits
-- Well-circulated (low-factor) coins win proportionally more; whale-cluster coins win less
+- **Eligibility:** at least 720 blocks old, worth at least 1 µBTH (10^6 picoBTH), and inside the most recent 10,000-block window. At most 10,000 eligible candidates are considered per draw, starting from a seeded offset.
+- **Winners:** 4 per drawing, chosen without replacement using a seed bound to proof-of-work.
+- **Payout:** the pool is the 80% fee share, plus the block's lottery emission share (a slice of the block reward routed to the pool instead of the miner: 0% in the bootstrap epoch, then 10% more per halving, capped at 50%), plus anything carried forward from earlier blocks; each drawing pays out the lesser of what is available and the per-block cap, and the remainder carries forward.
 
-To participate, a UTXO must be at least 720 blocks old and worth at least 1 µBTH.
+Progressivity now comes from the *intake* side (progressive fees and demurrage), not from the draw. Some economics of the draw are still open decisions: splitting a position into many outputs can currently improve your odds ([#1682](https://github.com/botho-project/botho/issues/1682)), and past winners compound their share ([#1690](https://github.com/botho-project/botho/issues/1690)); see also [#1689](https://github.com/botho-project/botho/issues/1689) and [#1691](https://github.com/botho-project/botho/issues/1691). Treat this section as describing the mechanism as built.
 
 ### Ring Signatures and Tag Privacy
 
@@ -119,20 +119,18 @@ This prevents fee evasion — you can't cherry-pick low-factor decoys to cut you
 
 ### Decay Mechanism Details
 
-To prevent wash trading (sending to yourself repeatedly to decay tags):
+How decay works today (as built):
 
-**Age-Based Gating:**
-- Decay only applies to UTXOs at least 720 blocks old
-- New outputs from rapid self-transfers don't decay
-- The age gate naturally caps decay at ~12 events per day
+- **Wallet policy:** the standard wallets (node wallet and CLI wallet) blend input tags by value, then decay the result by 5% on every transfer
+- **No age gate:** decay applies however young the spent coin is, so a weight halves after about 13.5 transfers no matter how quickly they are made
+- **Consensus:** applies no decay and only rejects tag *inflation* (outputs claiming more cluster weight than the inputs). Lower or empty output tags are accepted, so a modified wallet can drop tags in one transaction
 
-**Natural rate limiting:**
+**Wash trading (sending to yourself repeatedly to decay tags) is not rate-limited by the protocol.** Its cost is the transaction fees and the demurrage class-downgrade charge, not time. Earlier versions of these docs described a 720-block age gate capping decay at ~12 events per day; that design is not enforced by the network. Tag persistence is an open decision (#1687).
 
-| Attack | Result |
-|--------|--------|
-| 100 rapid self-transfers | 0% decay (all outputs too young) |
-| Patient attack (1 day) | ~46% max decay (only ~12 eligible hops) |
-| Patient attack (1 week) | ~99% decay — but you've paid ~84 transaction fees |
+| Scenario | Result (stock wallet) |
+|----------|-----------------------|
+| One transfer | 5% decay |
+| ~14 transfers (any speed) | ~50% decay |
 | Holding without transacting | 0% decay |
 
 ### Privacy Considerations
@@ -147,20 +145,21 @@ The cluster tag system creates aligned incentives:
 
 | Behavior | Effect on Tags | Incentive |
 |----------|----------------|-----------|
-| **Circulate coins** | Tags decay and blend | Lower fees, higher lottery weight |
-| **Hoard wealth** | Tags remain concentrated | Higher fees, lower lottery weight, demurrage |
-| **Split into many UTXOs** | Tags unchanged | No benefit — fees and lottery weight are provenance- and value-based |
+| **Circulate coins** | Tags decay and blend | Lower fees |
+| **Hoard wealth** | Tags remain concentrated | Higher fees, demurrage |
+| **Split into many UTXOs** | Tags unchanged | Fees are provenance-based, so no fee benefit; as built, extra outputs can improve lottery odds ([#1682](https://github.com/botho-project/botho/issues/1682)) |
 
 ### Technical Parameters
 
 | Parameter | Value | Purpose |
 |-----------|-------|---------|
-| Decay rate | 5% per eligible hop | Gradual tag diffusion |
-| Min UTXO age (decay + lottery) | 720 blocks | Wash trading prevention |
+| Decay rate | 5% per transfer (wallet policy; consensus applies none) | Gradual tag diffusion |
+| Min UTXO age (lottery) | 720 blocks | Lottery eligibility |
 | Min UTXO value (lottery) | 1 µBTH | Dust exclusion |
 | Cluster factor range | 1x–6x (midpoint 3.5x at 100K BTH) | Progressive fees |
 | Ring size | 20 | Privacy set for tag propagation |
-| Lottery winners | 4 per drawing | Redistribution granularity |
+| Lottery winners | 4 per drawing (uniform draw) | Redistribution granularity |
+| Lottery window | 10,000 blocks, up to 10,000 candidates | Bounds the per-draw work |
 | Burn rate | 20% of fees | Deflationary pressure |
 | Pool rate | 80% of fees | Redistribution amount |
 | Demurrage | 2%/yr at max factor (see Tokenomics) | Reaches idle concentrated wealth |
@@ -172,7 +171,7 @@ Cluster tags solve the "Sybil-resistant progressive taxation" problem that plagu
 1. **Track provenance, not identity** — Coins remember their origin
 2. **Resist splitting attacks** — Cluster wealth is fixed at minting
 3. **Enable progressive fees** — Wealthy clusters pay more
-4. **Power fair redistribution** — Lottery weight tilts toward well-circulated coins
+4. **Power redistribution** — 80% of fees flow back to holders through a uniform lottery (progressivity comes from fees and demurrage)
 5. **Preserve privacy** — Works with ring signatures
 6. **Encourage circulation** — Tags decay through commerce
 

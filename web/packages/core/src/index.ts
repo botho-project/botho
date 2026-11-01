@@ -9,3 +9,6 @@ export * from './storage'
 
 // Wallet
 export * from './wallet'
+
+// chain_getOutputs paging (#1656)
+export * from './outputs-paging'
