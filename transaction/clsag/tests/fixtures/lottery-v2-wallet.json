@@ -313,6 +313,30 @@
     },
     {
       "expect": {
+        "keyImage": "62abca3b09707748e4bdd245e69f64458f99497b8606f50d4d8efb96dbc44671",
+        "subaddressIndex": 18446744073709551614
+      },
+      "name": "classical payout, change subaddress",
+      "output": {
+        "kemCiphertext": null,
+        "publicKey": "f2ee28e928c465c1c200d9daa3560cd746c0faf1e44989fc54014343a7117363",
+        "targetKey": "de753e5ec706e5750c5c4f2972a79a847ccc494c083610e808b39bb72e13eb0b"
+      },
+      "source": {
+        "kemCiphertext": null,
+        "publicKey": "f2ee28e928c465c1c200d9daa3560cd746c0faf1e44989fc54014343a7117363",
+        "targetKey": "ae211f77f71fc08536d32ecfe5e9969ca764960fe42abed7c22e79ac2ad5212e"
+      },
+      "wire": {
+        "baseIndex": 0,
+        "height": 17,
+        "ordinal": 0,
+        "tweak": "8e48b3f66f69b05878ba38d88da3c209160bdf28775d482b60fd09a8c278d20a",
+        "version": 2
+      }
+    },
+    {
+      "expect": {
         "keyImage": "0e38130ccad1094b8b12945d3784ed5c40c44f1272df6ddedc533240067d636d",
         "subaddressIndex": 18446744073709551614
       },

@@ -98,7 +98,7 @@ export interface PersistedOwnedOutput {
   /** JSON-safe u64 picocredits (bigint serialised as a decimal string). */
   amount: string;
   /**
-   * Subaddress index that received the output (0 = default, 1 = change),
+   * Subaddress index that received the output (0 = default, u64::MAX - 1 = change),
    * serialised as a decimal string. Persisted because key-image recovery (hence
    * the live spent-status check) is subaddress-dependent — dropping it would
    * mis-derive change outputs' key images.
