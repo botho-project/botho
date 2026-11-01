@@ -55,6 +55,12 @@ GENERATORS = [
               "docs/research/ct-compatible-lottery-selection.md", True),
     Generator("lottery-reward-cap-sweep-faithful", ("lottery-reward-cap-sweep", "--faithful"),
               "docs/research/ct-compatible-lottery-selection.md", True),
+    Generator("redistribution-redesign-splitting",
+              ("redistribution-redesign", "--part", "splitting"),
+              "docs/research/redistribution-redesign-study.md", True),
+    Generator("redistribution-redesign-privacy",
+              ("redistribution-redesign", "--part", "privacy"),
+              "docs/research/redistribution-redesign-study.md", True),
     Generator("lottery-selection-sweep", ("lottery-selection-sweep",),
               "docs/research/ct-compatible-lottery-selection.md", False),
     Generator("lottery-sybil-brake-sweep", ("lottery-sybil-brake-sweep",),
@@ -79,6 +85,8 @@ GENERATORS = [
 # runners are slower). Their reports are not checked by CI.
 SKIPPED = {
     "m2-production (m2-production-verdicts.md)": "> 200 s per run, several runs",
+    "redistribution-redesign --part m2 (redistribution-redesign-study.md)":
+        "~2 min per run, 232 runs",
     "m2-cumulative / m2-decay (consensus-fee-model-sim-verdicts.md)": "~190 s per run",
     "lottery-sweep --seed 1695 (consensus-fee-model-sim-verdicts.md)": "~76 s per fee model",
     "decoy-flood-sweep (decoy-flood-cost.md)": "~49 s; constants pinned by botho/tests/decoy_flood_parity.rs",

@@ -1,0 +1,64 @@
+# Redistribution redesign study: privacy measurements (#1801)
+
+### Claim-reveal: the cost of keeping spent outputs out of the draw
+
+Production routes (#1757 ports), chain of 1 output/block to height 1200000, 4000 rings per row, seed 0x18019817. Every winner reveals its output's key image to claim. q = share of outputs that ever win = 1 - exp(-4/rho), rho = eligible outputs created per block. ID = how often the adversary's single guess is the real input (uniform = 5.0%).
+
+| route | real age | Band-Center ID, no reveal | rho | q | survivors (of 20) | ID uniform-over-survivors | ID Band-Center-over-survivors |
+|---|---|---:|---:|---:|---:|---:|---:|
+| node | 1000 | 0.0% | 5 | 55.1% | 4.8 | 60.0% | 55.0% |
+| node | 1000 | 0.0% | 20 | 18.1% | 13.8 | 23.0% | 17.9% |
+| node | 1000 | 0.0% | 200 | 2.0% | 19.2 | 7.1% | 2.1% |
+| node | 30000 | 60.8% | 5 | 55.1% | 4.8 | 60.0% | 85.8% |
+| node | 30000 | 60.8% | 20 | 18.1% | 13.8 | 23.0% | 70.1% |
+| node | 30000 | 60.8% | 200 | 2.0% | 19.2 | 7.1% | 61.7% |
+| node | 100000 | 0.0% | 5 | 55.1% | 4.8 | 60.0% | 55.0% |
+| node | 100000 | 0.0% | 20 | 18.1% | 13.8 | 23.0% | 17.9% |
+| node | 100000 | 0.0% | 200 | 2.0% | 19.2 | 7.1% | 2.1% |
+| node | gamma-spend | 84.2% | 5 | 55.1% | 4.8 | 60.0% | 93.9% |
+| node | gamma-spend | 84.2% | 20 | 18.1% | 13.8 | 23.0% | 87.3% |
+| node | gamma-spend | 84.2% | 200 | 2.0% | 19.2 | 7.1% | 84.4% |
+| cli | 1000 | 52.0% | 5 | 55.1% | 4.8 | 60.0% | 87.4% |
+| cli | 1000 | 52.0% | 20 | 18.1% | 13.8 | 23.0% | 64.6% |
+| cli | 1000 | 52.0% | 200 | 2.0% | 19.2 | 7.1% | 53.4% |
+| cli | 30000 | 50.0% | 5 | 55.1% | 4.8 | 60.0% | 86.7% |
+| cli | 30000 | 50.0% | 20 | 18.1% | 13.8 | 23.0% | 63.2% |
+| cli | 30000 | 50.0% | 200 | 2.0% | 19.2 | 7.1% | 51.9% |
+| cli | 100000 | 49.8% | 5 | 55.1% | 4.8 | 60.0% | 86.6% |
+| cli | 100000 | 49.8% | 20 | 18.1% | 13.8 | 23.0% | 62.8% |
+| cli | 100000 | 49.8% | 200 | 2.0% | 19.2 | 7.1% | 51.4% |
+| cli | gamma-spend | 49.8% | 5 | 55.1% | 4.8 | 60.0% | 85.9% |
+| cli | gamma-spend | 49.8% | 20 | 18.1% | 13.8 | 23.0% | 62.9% |
+| cli | gamma-spend | 49.8% | 200 | 2.0% | 19.2 | 7.1% | 51.3% |
+| web | 1000 | 51.5% | 5 | 55.1% | 4.8 | 60.0% | 87.0% |
+| web | 1000 | 51.5% | 20 | 18.1% | 13.8 | 23.0% | 63.8% |
+| web | 1000 | 51.5% | 200 | 2.0% | 19.2 | 7.1% | 52.8% |
+| web | 30000 | 49.9% | 5 | 55.1% | 4.8 | 60.0% | 85.9% |
+| web | 30000 | 49.9% | 20 | 18.1% | 13.8 | 23.0% | 62.8% |
+| web | 30000 | 49.9% | 200 | 2.0% | 19.2 | 7.1% | 51.5% |
+| web | 100000 | 51.5% | 5 | 55.1% | 4.8 | 60.0% | 86.9% |
+| web | 100000 | 51.5% | 20 | 18.1% | 13.8 | 23.0% | 64.7% |
+| web | 100000 | 51.5% | 200 | 2.0% | 19.2 | 7.1% | 53.2% |
+| web | gamma-spend | 50.9% | 5 | 55.1% | 4.8 | 60.0% | 85.7% |
+| web | gamma-spend | 50.9% | 20 | 18.1% | 13.8 | 23.0% | 63.2% |
+| web | gamma-spend | 50.9% | 200 | 2.0% | 19.2 | 7.1% | 52.3% |
+
+### Decay oracle (R4/R5): allowance keyed to the real input's age
+
+The published tag weight reveals the real input's age to within 11 blocks for a full-weight tag and 1025 blocks for a 1% tag (one ppm quantum at the R4 decay rate). ID = uniform guess among members whose age matches. Keyed to the ring's youngest member, the allowance reveals only that member's age, which is public; the last column is how often the real input is that member.
+
+| route | real age | rings | ID, full-weight tag | ID, 1% tag | real input is youngest |
+|---|---|---:|---:|---:|---:|
+| node | 1000 | 4000 | 100.0% | 5.0% | 100.0% |
+| node | 30000 | 4000 | 99.6% | 65.4% | 0.0% |
+| node | 100000 | 4000 | 100.0% | 100.0% | 0.0% |
+| node | gamma-spend | 4000 | 98.7% | 43.0% | 4.5% |
+| cli | 1000 | 4000 | 40.5% | 5.0% | 0.0% |
+| cli | 30000 | 4000 | 96.5% | 14.7% | 0.0% |
+| cli | 100000 | 4000 | 99.1% | 43.3% | 0.0% |
+| cli | gamma-spend | 4000 | 95.2% | 10.7% | 0.0% |
+| web | 1000 | 4000 | 40.4% | 5.0% | 0.0% |
+| web | 30000 | 4000 | 96.6% | 14.7% | 0.0% |
+| web | 100000 | 4000 | 98.9% | 43.3% | 0.0% |
+| web | gamma-spend | 4000 | 95.3% | 10.9% | 0.0% |
+
