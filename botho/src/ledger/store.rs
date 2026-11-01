@@ -5266,6 +5266,9 @@ mod tests {
                 &params,
             );
             let floor = ledger.consensus_fee_floor(&tx, h).unwrap();
+            // +-1 picocredit: the ledger floor and the f64-based sim fee
+            // model round the same quantity through different arithmetic
+            // (integer factor math vs f64), so they can differ by one unit.
             assert!(
                 floor.abs_diff(model) <= 1,
                 "sample {sample}: mirror-fed model {model} != ledger floor {floor}"

@@ -89,14 +89,16 @@ At one spend per 12 blocks, 135 spends is about 2.25 hours at 5 s blocks.
 
 These are consensus-valid behaviours, already tracked as #1687 (tags can be dropped; F is read from outputs) and #1686 (the ring-centroid floor is diluted by spender-chosen decoys). The sim gives them numbers.
 
-## 6. Epoch steering by the relayer (finding; fix is separate)
+## 6. Epoch steering by the relayer (partly mitigated in the honest relayer)
 
-`bth_scan::build_release_tx` tags the release to `import_cluster_id_for_height(created_at_height)`, where `created_at_height` is the relayer's choice (`bridge/service/src/bth_scan.rs:379, 420`). The ledger records a tag as an import cluster only if its id matches the epoch of the block that includes it (`record_bridge_import_clusters_for_output`, `writer.rs:511-534`). A release tagged to any *other* epoch's id is still accepted:
+`bth_scan::build_release_tx` tags the release to `import_cluster_id_for_height(created_at_height)`. The ledger records a tag as an import cluster only if its id matches the epoch of the block that includes it (`record_bridge_import_clusters_for_output`, `writer.rs:511-534`). Consensus checks `created_at_height` only from below (the staleness rule): it has no upper bound and no epoch check. So a release tagged to any *other* epoch's id is still accepted by the ledger:
 
-- If the id belongs to an earlier epoch that is already recorded, the release joins that epoch's pool. The relayer can pick a quiet epoch (low `W`) or a flood epoch (high `W`).
+- If the id belongs to an earlier epoch that is already recorded, the release joins that epoch's pool. A relayer can pick a quiet epoch (low `W`) or a flood epoch (high `W`).
 - If the id belongs to an epoch never recorded (a future epoch, or a past one with no unwrap), the cluster is not in the import set. The F-blend does not apply, and the coin is priced on the plain curve of its own amount.
 
-Not fixed here. Filed separately.
+**Honest relayer (#1740, fixed by #1744).** The relayer now derives `created_at_height` from the confirmed tip rather than taking it as a choice, and refuses heights above the tip, stale heights, and heights whose inclusion window crosses an epoch boundary (`ReleaseHeightError` and the release-height checks in `bridge/service/src/bth_scan.rs`, around the `check_release_height_for_relay` helpers). An unmodified relayer therefore cannot be steered to an unrecorded or off-epoch id.
+
+**Residual.** This is a relayer-side rule, not a consensus rule. Consensus still only lower-bounds `created_at_height`, so a modified relayer can still pick the epoch. Closing that needs a consensus-level check and stays with #1687 / #1683. No K or F change follows from this section.
 
 ## 7. Recommendation
 
