@@ -24,7 +24,7 @@ name: Formal (Lean)
 # The workflow file itself comes from the pull request (that is how
 # `pull_request` works; `pull_request_target` would be worse: it runs with a
 # write token and secrets). Changes to this file and to formal/scripts/ need
-# human review.
+# human review; .github/CODEOWNERS names the reviewer (#1804).
 #
 # No workflow-level `paths:` filter on purpose: a path-filtered workflow that
 # is skipped leaves a required check pending forever. The `changes` job decides
@@ -105,6 +105,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      # Needs no Lean: runs the verify step's script against stub verifiers
+      # and checks that a base commit without a verifier fails (#1804).
+      - name: Workflow self-test (verify fails closed)
+        run: scripts/selftest-workflow.sh
       # Only the toolchain is cached, and only this job restores it. There is
       # no .lake cache: a cached build from one run must never feed another
       # (#1799).
@@ -217,16 +221,16 @@ jobs:
       - name: Verify (base-commit gates over the compiled library)
         env:
           SYSROOT: ${{ steps.toolchain.outputs.sysroot }}
+        # Fails closed: if the base commit has no verifier, nothing else runs
+        # (#1804). Never fall back to the pull request's copy. Keep this block
+        # free of ${{ }} expressions: scripts/selftest-workflow.sh runs it.
         run: |
-          gate=trusted/formal
-          if [[ ! -f "$gate/scripts/verify-artifacts.sh" ]]; then
-            # Bootstrap: only the pull request that adds verify-artifacts.sh
-            # (#1799) has a base without it. Its own copy runs, with the
-            # base allow-list. Remove this branch once #1799 is on main.
-            echo "::warning::base commit has no formal/scripts/verify-artifacts.sh; bootstrapping with the pull request's copy"
-            gate=untrusted/formal
+          verifier=trusted/formal/scripts/verify-artifacts.sh
+          if [[ ! -f "$verifier" ]]; then
+            echo "::error::base commit has no formal/scripts/verify-artifacts.sh; refusing to verify"
+            exit 1
           fi
-          bash "$gate/scripts/verify-artifacts.sh" \
+          bash "$verifier" \
             --lib "$RUNNER_TEMP/formal-lib" \
             --sources untrusted/formal \
             --sysroot "$SYSROOT" \
