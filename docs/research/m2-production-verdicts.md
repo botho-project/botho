@@ -18,7 +18,14 @@
 
 Ranges span the honest and optimal-decoy whale. The legacy definition passes under egalitarian mining only because equal block rewards across 140 agents flatten a 23M-BTH genesis ladder under 690M BTH of emission (10 yr). The mechanism-off run shows the same drop, so it is not the mechanism's doing.
 
-The legacy harness at its old parameters still reports +0.2172 (10 yr) and +0.5650 (20 yr) with the flat fee, and +0.0289 (10 yr) under the consensus fee model (#1727).
+For comparison, the legacy harness (`m2-cumulative`, honest, seed 626626626) at its own parameters gives:
+
+| Legacy harness | 10 yr ΔGini | 20 yr ΔGini |
+|---|---|---|
+| `--fee-model legacy` (flat 0.25 BTH) | +0.2172 PASS | +0.5650 PASS |
+| `--fee-model consensus` | +0.0289 FAIL (#1727) | +0.0748 PASS |
+
+The legacy harness still passes at 20 years under consensus fees. It gets there through its cluster-weighted draw, its fixed per-block pool, the absence of mining, and the demurrage it charges on a per-agent cluster that never fades. None of those is how the node works, so that pass does not carry over.
 
 ## What `m2-production` models
 
