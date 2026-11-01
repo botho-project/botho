@@ -1,0 +1,85 @@
+# Honest-Overcharge Sweep for the #925 Downgrade Charge (issue #950)
+
+### Honest archetypes (sourced from `simulation::agents`)
+
+Spend sizes are read off the real agent structs by driving their `decide_action`. Weight = relative frequency in the Monte-Carlo draw.
+
+| archetype | agent | weight | spender class | output class | coin value (BTH) |
+|-----------|-------|-------:|-------------:|------------:|-----------------:|
+| retail-purchase | RetailUserAgent | 50 | 0 BTH | 0 BTH | 283 |
+| merchant-supplier | MerchantAgent | 20 | 0 BTH | 0 BTH | 10000 |
+| mixer-withdrawal | MixerServiceAgent | 15 | 0 BTH | 0 BTH | 500 |
+| whale-consolidation | WhaleAgent | 6 | 10000000 BTH | 10000000 BTH | 50000 |
+| whale-change-making | WhaleAgent | 5 | 10000000 BTH | 10000000 BTH | 10000 |
+| whale-inclass-transfer | WhaleAgent | 4 | 10000000 BTH | 10000000 BTH | 8000 |
+
+### Downgrade classification per archetype (clean rings)
+
+Input floor = `ring_centroid_implied_factor` over the real input + honest (background) decoys. A downgrade is charged only when the declared output factor is strictly below the floor. Honest rows never downgrade; the exploit does.
+
+| archetype | input floor | output factor | downgrade? | charge @1yr | charge @5yr |
+|-----------|-----------:|-------------:|:---------:|-----------:|-----------:|
+| retail-purchase | 1.000x | 1.000x | no | 0.0000% | 0.0000% |
+| merchant-supplier | 1.000x | 1.000x | no | 0.0000% | 0.0000% |
+| mixer-withdrawal | 1.000x | 1.000x | no | 0.0000% | 0.0000% |
+| whale-consolidation | 5.672x | 5.745x | no | 0.0000% | 0.0000% |
+| whale-change-making | 5.536x | 5.745x | no | 0.0000% | 0.0000% |
+| whale-inclass-transfer | 5.521x | 5.745x | no | 0.0000% | 0.0000% |
+| **exploit (young-wealthy→bg)** | 5.745x | 1.000x | **YES** | **1.8980%** | **9.4900%** |
+
+### Honest false-positive rate & over-charge (clean rings, realistic case)
+
+Monte-Carlo over 20000 honest spends (seed `0xB07A0925`), ring size 20, all-background decoys (0% contamination). False-positive rate = fraction of honest spends charged a non-zero downgrade fee.
+
+**Honest false-positive rate: 0.0000% (0 / 20000 spends).**
+
+| horizon | honest FP rate | mean over-charge (% of value) | max over-charge |
+|---------|--------------:|------------------------------:|----------------:|
+| 1mo (0.08yr) | 0.0000% | 0.0000% | 0.0000% |
+| 6mo (0.50yr) | 0.0000% | 0.0000% | 0.0000% |
+| 1yr (1.00yr) | 0.0000% | 0.0000% | 0.0000% |
+| 2yr (2.00yr) | 0.0000% | 0.0000% | 0.0000% |
+| 5yr (5.00yr) | 0.0000% | 0.0000% | 0.0000% |
+
+### Exploit downgrade charge by horizon (the leak is priced)
+
+Young-wealthy→background spend: 10000000-BTH cluster (5.745× floor), 1000-BTH coin, declared background (1.000× output). Charge = capitalized future demurrage; multiple = charge ÷ one year of ordinary demurrage at the floor (= horizon in years, by linearity).
+
+| horizon | exploit charge (% of value) | × annual demurrage |
+|---------|----------------------------:|-------------------:|
+| 1mo (0.08yr) | 0.1582% | 0.08× |
+| 6mo (0.50yr) | 0.9490% | 0.50× |
+| 1yr (1.00yr) | 1.8980% | 1.00× |
+| 2yr (2.00yr) | 3.7960% | 2.00× |
+| 5yr (5.00yr) | 9.4900% | 5.00× |
+
+### Sensitivity: honest FP rate & over-charge vs decoy contamination
+
+The **only** channel to an honest over-charge: a wealthy decoy contaminating a background spender's value-weighted ring floor. FP rate is horizon-independent (classification is `output < floor`); the over-charge magnitude below is at the 5yr horizon (worst case). Contamination = fraction of decoys that are wealthy coins.
+
+| contamination | honest FP rate | mean over-charge @5yr | max over-charge @5yr |
+|--------------:|--------------:|----------------------:|---------------------:|
+| 0.0% | 0.0000% | 0.0000% | 0.0000% |
+| 1.0% | 14.3250% | 9.3257% | 9.4720% |
+| 5.0% | 52.4900% | 9.3603% | 9.4800% |
+| 10.0% | 72.9050% | 9.3955% | 9.4860% |
+
+### Factor-similarity decoy band (picks `FACTOR_SIMILARITY_SPREAD`)
+
+The §4.5 contamination channel is closed at the wallet layer by a factor band mirroring the shipped `AGE_SIMILARITY_SPREAD_BPS` (±10%) age band: a background (1×) spender draws only decoys whose cluster factor sits within the band around its real input's factor. This sweep applies that filter at the pathological 5.0% raw contamination (the §4.5 level that gave a 52.5% FP rate UNFILTERED) and finds the widest band that keeps the honest FP rate at 0%. Band edge = `1000 × (1 + spread)` clamped to 6×; same-class (background) pool retention is 1.00 at every band because factor is class-quantized.
+
+| factor band | band edge (×) | wealthy classes admitted | eligible pool | same-class pool | honest FP rate | mean over-charge @5yr | FP-safe |
+|------------:|--------------:|-------------------------:|--------------:|----------------:|---------------:|----------------------:|:-------:|
+| ±5% | 1.050× | 0 / 6 | 95.00% | 100.00% | 0.0000% | 0.0000% | yes |
+| ±10% | 1.100× | 0 / 6 | 95.00% | 100.00% | 0.0000% | 0.0000% | yes |
+| ±20% | 1.200× | 0 / 6 | 95.00% | 100.00% | 0.0000% | 0.0000% | yes |
+| ±35% | 1.350× | 0 / 6 | 95.00% | 100.00% | 0.0000% | 0.0000% | yes |
+| ±50% | 1.500× | 0 / 6 | 95.00% | 100.00% | 0.0000% | 0.0000% | yes |
+| ±90% | 1.900× | 0 / 6 | 95.00% | 100.00% | 0.0000% | 0.0000% | yes |
+| ±100% | 2.000× | 1 / 6 | 95.83% | 100.00% | 14.4600% | 1.3859% | NO |
+| ±250% | 3.500× | 3 / 6 | 97.50% | 100.00% | 37.7500% | 3.2374% | NO |
+| ±500% | 6.000× | 6 / 6 | 100.00% | 100.00% | 62.3750% | 6.2239% | NO |
+
+**Recommended `FACTOR_SIMILARITY_SPREAD` = ±10% (1000 bps)** — the age-band convention, comfortably inside the widest FP-safe band (±90%). Every band that excludes the nearest wealthy class drives the honest FP rate to exactly 0% while retaining the full same-class background pool.
+
+

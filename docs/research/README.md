@@ -21,6 +21,15 @@ This section contains research analysis, comparisons, and technical evaluations.
 | [Decoy-Flood Cost at the Real Fee Floor](decoy-flood-cost.md) | #1701: what it costs to make all 19 decoys the attacker's, at the node's real fee floor and net of lottery recapture, for the CLI, web and node pickers. A uniform flood roughly self-finances in epoch 0 and is profitable from epoch 1 (#1682). Before #1786 the node picker's key-order tie-break let a hash-grinding attacker own every ring with 19 outputs per block; with the shuffled tie-break grinding no longer helps. Proposes a pass criterion (unratified); every cell fails. |
 | [M2 at Production Parameters](m2-production-verdicts.md) | #1696: M2 re-run on the node's real parameters (6.3M blocks/yr, mainnet emission and lottery-share ramp, uniform V2 lottery with payouts as outputs, coinbase-lineage clusters, optimal-decoy mining whale) with a mechanism-off counterfactual. The mechanism's ΔGini is between −0.028 and +0.001 (3-seed means) against the 0.05 bar, and below +0.019 at up to 1000x the transaction rate, and 100% of top-decile value prices below 1.5x: the #605 premise is broken (decision in #1727). |
 
+## Regenerated tables
+
+CI regenerates the quick, deterministic `cluster-tax-sim` reports and fails on any drift
+(`scripts/research/check_research_tables.py`, #1702). The committed outputs live in
+[`generated/`](generated/). Reports that paste the tables verbatim are also checked
+against the doc. After an intentional sim change, run the script with `--update` and
+update the affected report in the same PR. The script lists the generators it skips
+because they take minutes.
+
 ## Purpose
 
 Research documents serve to:

@@ -1,0 +1,78 @@
+# Structural Sybil-Brake Sweep (issue #902 §7)
+
+### Setup
+
+Attacker: a 100000-BTH whale (factor 5.745×) that fragments its position and continuously refreshes the pieces to keep them inside the last-N window. Per-output base fee 0.25 BTH (the recurring cost of one fresh ticket). Organic stream (a live economy's fresh outputs): retail 18/blk @100 BTH, mid 1.8/blk @2k, wealthy 0.2/blk @20k (≈20 outputs/blk, rescaled to each regime's ρ). Rule under test: **uniform weight over eligible candidates** — the representative value-free rule (all §4 value-free rules share the same per-ticket Sybil hole). All numbers are stationary expected values (the per-block draw averages to the weight share over 10k+ blocks); confirmed by a deterministic K-scan.
+
+### Track A.1 — realized capture vs the last-N window (no floor, no cap)
+
+The whale picks its profit-maximising split K\*. **Realized capture** = share of total payout it takes home over a long run. **cost/captured** = recurring fees burned ÷ pool captured (`<1` ⇒ the attack pays for itself). Note the capture is **flat across N** within a regime — the window does not change the ceiling.
+
+| regime (ρ, R) | N (blocks) | K\* | piece (BTH) | realized capture | cost/blk (BTH) | cost/captured | net/blk (BTH) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| busy chain, steady reward | 100 | 0 | — | 0.00% | 0.0000 | n/a | +0.0000 |
+| busy chain, steady reward | 1000 | 0 | — | 0.00% | 0.0000 | n/a | +0.0000 |
+| busy chain, steady reward | 10000 | 0 | — | 0.00% | 0.0000 | n/a | +0.0000 |
+| busy chain, steady reward | 100000 | 0 | — | 0.00% | 0.0000 | n/a | +0.0000 |
+| quiet chain, steady reward | 100 | 363 | 275 | 64.48% | 0.9075 | 0.37× | +1.5426 |
+| quiet chain, steady reward | 1000 | 3497 | 29 | 63.62% | 0.8742 | 0.36× | +1.5432 |
+| quiet chain, steady reward | 10000 | 33733 | 3 | 62.78% | 0.8433 | 0.35× | +1.5423 |
+| quiet chain, steady reward | 100000 | 364449 | 0 | 64.57% | 0.9111 | 0.37× | +1.5424 |
+| busy chain, fat reward (bootstrap) | 100 | 1984 | 50 | 49.80% | 4.9600 | 0.50× | +4.9998 |
+| busy chain, fat reward (bootstrap) | 1000 | 19141 | 5 | 48.90% | 4.7852 | 0.49× | +4.9953 |
+| busy chain, fat reward (bootstrap) | 10000 | 206798 | 0 | 50.84% | 5.1700 | 0.51× | +4.9972 |
+| busy chain, fat reward (bootstrap) | 100000 | 1994835 | 0 | 49.94% | 4.9871 | 0.50× | +5.0000 |
+
+**Closed form (derived in the module header, matches the K-scan):** the profit-maximising realized capture is `s* = max(0, 1 − √(ρ·base_fee / R))`, **independent of N**. The brake is the ratio `ρ·base_fee / R` — the honest economy's own per-block circulation cost vs the reward. When `ρ·base_fee ≥ R` (busy chain, steady reward) the attack is unprofitable at every window size and K\* = 0. When the chain is quiet or the reward is fat, the whale captures a positive share that **no window shrinks**.
+
+### Track A.2 — payout cap (N=10k, no floor)
+
+A per-block per-owner payout cap (as a fraction of the reward) directly bounds realized capture to the cap — but **only if the cap can be keyed to an unforgeable identity**. Under CT the whale's fresh coins share no tags, so they form distinct stealth clusters: a per-cluster cap is evaded by splitting across unlinkable clusters (the same wall the weight hits). The cap column below is the *best case* (cap enforced per whole attacker); the CT-realistic case is the uncapped row.
+
+| regime (ρ, R) | cap | K\* | realized capture | cost/captured | net/blk (BTH) |
+|---|---:|---:|---:|---:|---:|
+| busy chain, steady reward | none | 0 | 0.00% | n/a | +0.0000 |
+| busy chain, steady reward | 25% | 0 | 0.00% | n/a | +0.0000 |
+| busy chain, steady reward | 10% | 0 | 0.00% | n/a | +0.0000 |
+| busy chain, steady reward | 5% | 0 | 0.00% | n/a | +0.0000 |
+| quiet chain, steady reward | none | 33733 | 62.78% | 0.35× | +1.5423 |
+| quiet chain, steady reward | 25% | 6902 | 25.00% | 0.18× | +0.7774 |
+| quiet chain, steady reward | 10% | 2222 | 10.00% | 0.15× | +0.3244 |
+| quiet chain, steady reward | 5% | 1126 | 5.00% | 0.15× | +0.1618 |
+
+### Track A.3a — the fee floor's aging tax (why F fights the window)
+
+Blocks a coin must age before its public fee clears floor F (at the whale factor 5.745×, the floor's best case). A *fresh* coin has fee ≈ base (0.25 BTH) **regardless of its hidden value**, so any F above base can only be cleared by an *aged* coin — but the last-N window requires *recency*. For reference, N=10k blocks ≈ 14 h; N=100k ≈ 5.8 d; 1 year = 6307200 blocks.
+
+| floor F (BTH) | 100 BTH coin | 1k | 10k | 100k |
+|---:|---:|---:|---:|---:|
+| 0.25 | 0 | 0 | 0 | 0 |
+| 0.50 | 830772 | 83079 | 8313 | 833 |
+| 1.00 | 2492310 | 249236 | 24927 | 2498 |
+
+**Reading it:** a floor set high enough to force the whale into large pieces (fewer eligible tickets) *also* pushes the aging-to-clear beyond a short window — excluding the very poor (100-BTH) coins the lottery is meant to reach, since they can never clear the floor inside the window. The floor is regressive under a recency window: it disenfranchises the poor faster than it caps the whale.
+
+### Track A.3b — window + fee-floor combo (quiet regime, N=10k)
+
+The one regime where the attack pays (quiet chain), now with a floor added. The floor forces the whale into larger pieces and shortens each coin's eligible life (it must age to clear F, then falls out at N), raising cost — but it cannot drive capture to zero without also excluding the organic poor (see A.3a).
+
+| floor F (BTH) | K\* | piece (BTH) | realized capture | cost/captured | net/blk (BTH) |
+|---:|---:|---:|---:|---:|---:|
+| 0.00 | 33733 | 3 | 62.78% | 0.35× | +1.5423 |
+| 0.50 | 11 | 9091 | 8.60% | 0.01× | +0.3237 |
+| 1.00 | 1 | 100000 | 100.00% | 0.00× | +3.8000 |
+
+**Reading it:** the floor is not merely weak, it is *non-monotone and counterproductive*. At F=0.50 it caps the whale (large pieces ⇒ few tickets) but only by excluding every organic tier that cannot clear the floor inside the window. Pushed to F=1.00 it excludes the organic poor *and* the honest wealthy — no in-window coin clears it except the whale's own large, aged, consolidated position, which then wins **100%** of a pool nobody else can enter. A fee floor under a recency window inverts into a whale subsidy.
+
+### Track B — honest redistribution under a windowed lottery
+
+10-year collect-and-redistribute over the honest population (initial Gini 0.7773; burn baseline Gini 0.7525). Does restricting the lottery to *circulated* (recently-moved) holders starve honest redistribution? Δgini = burn − policy (higher = more equalizing).
+
+| policy | final Gini | Δgini |
+|---|---:|---:|
+| Uniform (all holders) | 0.6508 | +0.1017 |
+| Windowed (circulated only) | 0.6381 | +0.1144 |
+
+**Reading it:** the last-N window does **not** starve redistribution — it concentrates the pool on actively-circulating holders (here the poor commerce tier), which are exactly the intended beneficiaries; idle whales self-exclude by not transacting. Windowed redistribution is at least as equalizing as the unrestricted uniform lottery. The caveat is idle *poor* holders, who are also excluded — acceptable only because demurrage already redistributes the stock (per `cluster-tilted-redistribution.md`).
+
+

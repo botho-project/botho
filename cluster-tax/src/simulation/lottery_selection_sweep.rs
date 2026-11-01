@@ -59,24 +59,25 @@
 //! (deterministic, no RNG noise), so the output is byte-for-byte reproducible.
 
 use crate::{
-    demurrage_charge, fee_curve::PICO_PER_BTH, ClusterFactorCurve, LotteryCandidate, SelectionMode,
-    TagVector,
+    consensus_fee::MAINNET_BLOCKS_PER_YEAR, demurrage_charge, fee_curve::PICO_PER_BTH,
+    ClusterFactorCurve, LotteryCandidate, SelectionMode, TagVector, LOTTERY_BASE_FEE_PICO,
 };
 
 use super::metrics::calculate_gini;
 
-/// Blocks per year at the 5s reference block time (matches the node and the
-/// other sweeps).
-pub const BLOCKS_PER_YEAR: u64 = 6_307_200;
+/// Blocks per year at the 5s reference block time, imported from the shared
+/// [`MAINNET_BLOCKS_PER_YEAR`] (#1702).
+pub const BLOCKS_PER_YEAR: u64 = MAINNET_BLOCKS_PER_YEAR;
 
 /// Annual demurrage rate at maximum factor, basis points (2%/yr, #351).
+/// Pinned to the node's rate by `botho/tests/sim_code_parity.rs` (#1702).
 pub const RATE_BPS: u32 = 200;
 
 /// Public per-output base fee floor, in picocredits (0.25 BTH). Every output a
 /// transaction creates pays at least this. It is the ONLY real cost a splitter
 /// pays per extra ticket, so it is the sole brake on a fee-keyed value-free
 /// rule — quantified in the Sybil table.
-pub const BASE_FEE_PICO: u128 = PICO_PER_BTH / 4;
+pub const BASE_FEE_PICO: u128 = LOTTERY_BASE_FEE_PICO as u128;
 
 /// Circulation weight boost for the value-free `CirculationGated` rule: a coin
 /// that has recently been spent-and-recreated (commerce, low idle age) gets

@@ -1,0 +1,65 @@
+name: Research Sims
+
+# Runs the bth-cluster-tax unit tests and regenerates the docs/research sim
+# tables (#1702). Before this, no workflow executed the cluster-tax tests
+# (workspace-build only compiled them), so the sims' `report_is_reproducible`
+# tests never ran, and nothing checked the published tables against their
+# generators.
+#
+# Release profile: the lottery-simulation tests take ~60 s at --release with
+# four threads and many minutes unoptimized. Debug assertions and overflow
+# checks stay on so the release build still catches arithmetic bugs.
+
+on:
+  pull_request:
+    paths:
+      - 'cluster-tax/**'
+      - 'transaction/types/**'
+      - 'docs/research/**'
+      - 'scripts/research/check_research_tables.py'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain'
+      - '.github/workflows/research-sims.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: 'true'
+  CARGO_PROFILE_RELEASE_OVERFLOW_CHECKS: 'true'
+
+jobs:
+  research-sims:
+    name: cluster-tax tests and research tables
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-06-09
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: research-sims
+
+      - name: Compile cluster-tax lib tests and the sim CLI
+        timeout-minutes: 15
+        run: |
+          cargo test --locked --release -p bth-cluster-tax --lib --no-run
+          cargo build --locked --release -p bth-cluster-tax --features cli --bin cluster-tax-sim
+
+      - name: Run cluster-tax lib tests
+        timeout-minutes: 10
+        run: cargo test --locked --release -p bth-cluster-tax --lib -- --test-threads=4
+
+      # Regenerates every quick deterministic docs/research table, diffs it
+      # against docs/research/generated/, and checks verbatim-pasted tables
+      # against the report. The script lists the slow generators it skips.
+      - name: Regenerate research tables and fail on drift
+        timeout-minutes: 5
+        run: python3 scripts/research/check_research_tables.py --bin target/release/cluster-tax-sim

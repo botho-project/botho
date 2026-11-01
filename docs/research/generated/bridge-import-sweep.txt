@@ -1,0 +1,148 @@
+# Bridge-Import Calibration Sweep (issues #937, #1697)
+
+Ratified constants (imported from `cluster_tax::bridge_import`): K = 17280 blocks, F = 1.500x. Reference block time 5 s. Wallet tag decay 5% per transfer; ring size 20. Fees are `consensus_fee_model` (consensus floor only) at the first demurrage-active height.
+
+### Split-game cost by epoch length K and block time (at F)
+
+`undiluted factor` = the demurrage factor at the first wallet spend of the whole import unwrapped in one epoch. `epochs to floor` = the fewest equal epochs after which a tranche's first spend is charged at the import floor (the curve no longer binds). K is fixed in blocks, so the wall-clock cost scales with the block time.
+
+| K | whale import (BTH) | undiluted factor | epochs to floor | days @ 5 s | days @ 20 s | days @ 40 s |
+|---|---:|---:|---:|---:|---:|---:|
+| 14h (10080 blocks) | 500000 | 4.576x | 146 | 85.2 | 340.7 | 681.3 |
+| 1d (17280 blocks) | 500000 | 4.576x | 146 | 146.0 | 584.0 | 1168.0 |
+| 2d (34560 blocks) | 500000 | 4.576x | 146 | 292.0 | 1168.0 | 2336.0 |
+| 3.5d (60480 blocks) | 500000 | 4.576x | 146 | 511.0 | 2044.0 | 4088.0 |
+| 1wk (120960 blocks) | 500000 | 4.576x | 146 | 1022.0 | 4088.0 | 8176.0 |
+| 14h (10080 blocks) | 2000000 | 5.437x | 584 | 340.7 | 1362.7 | 2725.3 |
+| 1d (17280 blocks) | 2000000 | 5.437x | 584 | 584.0 | 2336.0 | 4672.0 |
+| 2d (34560 blocks) | 2000000 | 5.437x | 584 | 1168.0 | 4672.0 | 9344.0 |
+| 3.5d (60480 blocks) | 2000000 | 5.437x | 584 | 2044.0 | 8176.0 | 16352.0 |
+| 1wk (120960 blocks) | 2000000 | 5.437x | 584 | 4088.0 | 16352.0 | 32704.0 |
+| 14h (10080 blocks) | 10000000 | 5.738x | 2919 | 1702.8 | 6811.0 | 13622.0 |
+| 1d (17280 blocks) | 10000000 | 5.738x | 2919 | 2919.0 | 11676.0 | 23352.0 |
+| 2d (34560 blocks) | 10000000 | 5.738x | 2919 | 5838.0 | 23352.0 | 46704.0 |
+| 3.5d (60480 blocks) | 10000000 | 5.738x | 2919 | 10216.5 | 40866.0 | 81732.0 |
+| 1wk (120960 blocks) | 10000000 | 5.738x | 2919 | 20433.0 | 81732.0 | 163464.0 |
+
+### Small-entrant collateral in a flood epoch, as the flood circulates
+
+A 1000-BTH entrant shares an epoch with a flood. Its factor is measured at its first wallet spend, after the flood has been spent 0, 5 and 20 times. Each flood spend adds the flood's import-weighted value to the shared cumulative wealth, so the entrant's factor keeps rising after the epoch closes.
+
+| flood regime | flood (BTH) | entrant alone | caught, 0 hops | caught, 5 hops | caught, 20 hops |
+|---|---:|---:|---:|---:|---:|
+| low | 5000 | 1.475x | 1.579x | 2.576x | 3.203x |
+| medium | 100000 | 1.475x | 3.473x | 4.623x | 5.261x |
+| high | 2000000 | 1.475x | 5.437x | 5.746x | 5.906x |
+
+### Floor F sweep: onboarding toll vs the tag-drop escape
+
+A 1000-BTH entrant alone in its epoch. Fees are the consensus floor as a % of value: its first wallet spend after one day and after one year, and the same coin spent once to background outputs (tag drop) after one day.
+
+| F | entrant factor | wallet spend @ 1 day | wallet spend @ 1 year | tag-drop spend @ 1 day | residual above background |
+|---|---:|---:|---:|---:|---:|
+| 1.000x | 1.254x | 0.0003% | 0.1016% | 0.0600% | 0.000 |
+| 1.250x | 1.254x | 0.0003% | 0.1016% | 0.0600% | 0.050 |
+| 1.500x | 1.475x | 0.4420% | 0.4420% | 0.0600% | 0.100 |
+| 1.750x | 1.712x | 0.9160% | 0.9160% | 0.0600% | 0.150 |
+| 2.000x | 1.950x | 1.3920% | 1.3920% | 0.0600% | 0.200 |
+
+### Decay by domestic circulation (production tags and wealth)
+
+A 10000-BTH coin from a 2000000-BTH epoch. Each spend merges it with an equal-value background input under the wallet's 5% decay, pays half away and keeps half as change. `import W` is the import cluster's cumulative wealth; `next-spend factor` is what the coin's next wallet spend is charged at.
+
+| spends | import weight | import W (BTH) | next-spend factor | step fee | cumulative fee |
+|---:|---:|---:|---:|---:|---:|
+| 0 | 1000000 | 2000000 | 5.437x | 0.0000% | 0.0000% |
+| 1 | 475000 | 2009500 | 5.016x | 0.0044% | 0.0089% |
+| 2 | 225625 | 2014012 | 4.503x | 0.0039% | 0.0166% |
+| 3 | 107171 | 2016156 | 3.993x | 0.0033% | 0.0233% |
+| 4 | 50905 | 2017174 | 3.483x | 0.0028% | 0.0288% |
+| 5 | 24179 | 2017658 | 2.976x | 0.0022% | 0.0332% |
+| 6 | 11484 | 2017887 | 2.469x | 0.0016% | 0.0365% |
+| 7 | 5454 | 2017996 | 1.963x | 0.0011% | 0.0386% |
+| 8 | 2590 | 2018048 | 1.559x | 0.0006% | 0.0399% |
+| 9 | 1230 | 2018073 | 1.425x | 0.0005% | 0.0408% |
+| 10 | 0 | 2018073 | 1.000x | 0.0740% | 0.1888% |
+| 11 | 0 | 2018073 | 1.000x | 0.0000% | 0.1888% |
+| 12 | 0 | 2018073 | 1.000x | 0.0000% | 0.1888% |
+| 13 | 0 | 2018073 | 1.000x | 0.0000% | 0.1888% |
+| 14 | 0 | 2018073 | 1.000x | 0.0000% | 0.1888% |
+| 15 | 0 | 2018073 | 1.000x | 0.0000% | 0.1888% |
+| 16 | 0 | 2018073 | 1.000x | 0.0000% | 0.1888% |
+| 17 | 0 | 2018073 | 1.000x | 0.0000% | 0.1888% |
+| 18 | 0 | 2018073 | 1.000x | 0.0000% | 0.1888% |
+| 19 | 0 | 2018073 | 1.000x | 0.0000% | 0.1888% |
+| 20 | 0 | 2018073 | 1.000x | 0.0000% | 0.1888% |
+
+### Self-churn adversary (no domestic money)
+
+The coin is spent to its owner every 12 blocks. Nothing domestic enters. Under the default wallet the 5% decay alone strips the import tag, and `ClusterTagVector` prunes it to background below 0.1%. The max-shed spender declares decay 95.0% per hop (weight ÷ 20), the most it can shed while its claimed wealth stays at the ring-centroid floor, so the downgrade charge does not fire. Both are valid at consensus, which rejects only tag inflation.
+
+**small entrant (1,000 BTH alone), default wallet**
+
+| spends | import weight | import W (BTH) | next-spend factor | cumulative fee |
+|---:|---:|---:|---:|---:|
+| 0 | 1000000 | 1000 | 1.475x | 0.0000% |
+| 1 | 950000 | 1950 | 1.451x | 0.4420% |
+| 2 | 902500 | 2852 | 1.430x | 0.6160% |
+| 5 | 773780 | 5298 | 1.511x | 0.6160% |
+| 10 | 598735 | 8624 | 1.557x | 0.6160% |
+| 20 | 358482 | 13189 | 1.545x | 0.6160% |
+| 50 | 76937 | 18538 | 1.319x | 0.6160% |
+| 100 | 5911 | 19887 | 1.053x | 0.6160% |
+| 150 | 0 | 19979 | 1.000x | 0.6160% |
+
+Spends to factor ≤ 1.500x: 0; to ≤ 1.100x: 75; to tag pruned: 135 (cumulative fee 0.6160%).
+
+**flood coin (10,000 of a 2,000,000-BTH epoch), default wallet**
+
+| spends | import weight | import W (BTH) | next-spend factor | cumulative fee |
+|---:|---:|---:|---:|---:|
+| 0 | 1000000 | 2000000 | 5.437x | 0.0000% |
+| 1 | 950000 | 2009500 | 5.428x | 0.0000% |
+| 2 | 902500 | 2018525 | 5.419x | 0.0000% |
+| 5 | 773780 | 2042982 | 5.364x | 0.0000% |
+| 10 | 598735 | 2076240 | 5.231x | 0.0000% |
+| 20 | 358482 | 2121887 | 4.863x | 0.0000% |
+| 50 | 76937 | 2175378 | 3.840x | 0.0001% |
+| 100 | 5911 | 2188868 | 2.060x | 0.0001% |
+| 150 | 0 | 2189793 | 1.000x | 0.1081% |
+
+Spends to factor ≤ 1.500x: 124; to ≤ 1.100x: 134; to tag pruned: 135 (cumulative fee 0.1081%).
+
+**flood coin (10,000 of a 2,000,000-BTH epoch), max-shed decay**
+
+| spends | import weight | import W (BTH) | next-spend factor | cumulative fee |
+|---:|---:|---:|---:|---:|
+| 0 | 1000000 | 2000000 | 5.437x | 0.0000% |
+| 1 | 50000 | 2000500 | 3.467x | 0.0000% |
+| 2 | 2500 | 2000525 | 1.552x | 0.0000% |
+| 5 | 0 | 2000525 | 1.000x | 0.1540% |
+| 10 | 0 | 2000525 | 1.000x | 0.1540% |
+| 20 | 0 | 2000525 | 1.000x | 0.1540% |
+| 50 | 0 | 2000525 | 1.000x | 0.1540% |
+| 100 | 0 | 2000525 | 1.000x | 0.1540% |
+| 150 | 0 | 2000525 | 1.000x | 0.1540% |
+
+Spends to factor ≤ 1.500x: 3; to ≤ 1.100x: 3; to tag pruned: 3 (cumulative fee 0.1540%).
+
+### Tag-drop adversary (background outputs)
+
+First spend after one day, honest wallet vs background outputs. With background outputs the import floor reads 1× (it is computed from output tags); only the ring-centroid floor remains, and 19 background decoys dilute it.
+
+| coin | honest factor | honest fee | drop factor | drop ring floor | drop fee |
+|---|---:|---:|---:|---:|---:|
+| small entrant (1,000 BTH alone) | 1.475x | 0.4420% | 1.030x | 1.030x | 0.0600% |
+| flood coin (10,000 of 2,000,000) | 5.437x | 0.0049% | 3.500x | 3.500x | 5.0000% |
+| undiluted whale (2,000,000 alone) | 5.437x | 0.0049% | 3.500x | 3.500x | 5.0000% |
+
+### Concentration signal: flood's cheap-money footprint
+
+100 domestic 1,000-BTH holders plus one 2000000-BTH flood; Gini of value ÷ factor. Production `import_cluster_factor` prices the flood at 5.448x.
+
+| flood enters at | Gini (effective-spendable) |
+|---|---:|
+| factor-1 (ADR 0003 status quo) | 0.9425 |
+| import factor (ADR 0007) | 0.7760 |
+
+

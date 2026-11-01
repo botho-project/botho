@@ -1,0 +1,118 @@
+# Settlement-Horizon Calibration Sweep (issue #833)
+
+### Factor classes (from the real `ClusterFactorCurve`)
+
+| class | cluster wealth (BTH) | coin value (BTH) | factor |
+|-------|---------------------:|-----------------:|-------:|
+| 10k-BTH cluster | 10000 | 1000 | 1.939x |
+| 50k-BTH cluster | 50000 | 5000 | 3.023x |
+| 100k-BTH cluster | 100000 | 10000 | 3.500x |
+| 500k-BTH cluster | 500000 | 50000 | 4.617x |
+| 2M-BTH cluster | 2000000 | 100000 | 5.448x |
+| 10M-BTH cluster | 10000000 | 100000 | 5.745x |
+
+### Wrap cost by horizon × factor class
+
+Wrap cost = settlement charge as a percentage of the settled coin value. Churn-invariance margin = settlement charge ÷ (H-years of ordinary demurrage); must be ≥ 1.00 (settling is never cheaper than holding-and-paying over the horizon).
+
+| horizon | class | factor | wrap cost (% of value) | churn-inv margin |
+|---------|-------|-------:|-----------------------:|-----------------:|
+| 1mo (0.08yr) | 10k-BTH cluster | 1.939x | 0.0313% | 1.0000 |
+| 1mo (0.08yr) | 50k-BTH cluster | 3.023x | 0.0674% | 1.0000 |
+| 1mo (0.08yr) | 100k-BTH cluster | 3.500x | 0.0833% | 1.0000 |
+| 1mo (0.08yr) | 500k-BTH cluster | 4.617x | 0.1206% | 1.0000 |
+| 1mo (0.08yr) | 2M-BTH cluster | 5.448x | 0.1483% | 1.0000 |
+| 1mo (0.08yr) | 10M-BTH cluster | 5.745x | 0.1582% | 1.0000 |
+| 6mo (0.50yr) | 10k-BTH cluster | 1.939x | 0.1878% | 1.0000 |
+| 6mo (0.50yr) | 50k-BTH cluster | 3.023x | 0.4046% | 1.0000 |
+| 6mo (0.50yr) | 100k-BTH cluster | 3.500x | 0.5000% | 1.0000 |
+| 6mo (0.50yr) | 500k-BTH cluster | 4.617x | 0.7234% | 1.0000 |
+| 6mo (0.50yr) | 2M-BTH cluster | 5.448x | 0.8896% | 1.0000 |
+| 6mo (0.50yr) | 10M-BTH cluster | 5.745x | 0.9490% | 1.0000 |
+| 1yr (1.00yr) | 10k-BTH cluster | 1.939x | 0.3756% | 1.0000 |
+| 1yr (1.00yr) | 50k-BTH cluster | 3.023x | 0.8092% | 1.0000 |
+| 1yr (1.00yr) | 100k-BTH cluster | 3.500x | 1.0000% | 1.0000 |
+| 1yr (1.00yr) | 500k-BTH cluster | 4.617x | 1.4468% | 1.0000 |
+| 1yr (1.00yr) | 2M-BTH cluster | 5.448x | 1.7792% | 1.0000 |
+| 1yr (1.00yr) | 10M-BTH cluster | 5.745x | 1.8980% | 1.0000 |
+| 2yr (2.00yr) | 10k-BTH cluster | 1.939x | 0.7512% | 1.0000 |
+| 2yr (2.00yr) | 50k-BTH cluster | 3.023x | 1.6184% | 1.0000 |
+| 2yr (2.00yr) | 100k-BTH cluster | 3.500x | 2.0000% | 1.0000 |
+| 2yr (2.00yr) | 500k-BTH cluster | 4.617x | 2.8936% | 1.0000 |
+| 2yr (2.00yr) | 2M-BTH cluster | 5.448x | 3.5584% | 1.0000 |
+| 2yr (2.00yr) | 10M-BTH cluster | 5.745x | 3.7960% | 1.0000 |
+| 5yr (5.00yr) | 10k-BTH cluster | 1.939x | 1.8780% | 1.0000 |
+| 5yr (5.00yr) | 50k-BTH cluster | 3.023x | 4.0460% | 1.0000 |
+| 5yr (5.00yr) | 100k-BTH cluster | 3.500x | 5.0000% | 1.0000 |
+| 5yr (5.00yr) | 500k-BTH cluster | 4.617x | 7.2340% | 1.0000 |
+| 5yr (5.00yr) | 2M-BTH cluster | 5.448x | 8.8960% | 1.0000 |
+| 5yr (5.00yr) | 10M-BTH cluster | 5.745x | 9.4900% | 1.0000 |
+
+### dGini erosion by horizon — spend-time model (worst case: 100% of top decile exits)
+
+Erosion population: 90 background holders (1x) + 10 wealthy holders (5.745x, 100000 BTH each), run 10 years from height 6307200 (epoch 1), seed 0xb07a0833. Initial Gini 0.8174; no-demurrage baseline Gini 0.8174 (Δgini anchor). Demurrage is charged ONLY when a coin is spent, on its accrued age, by `cluster_tax::consensus_fee_model` (the pure half of `Ledger::consensus_fee_floor`); the fee is split 80% pool / 20% burned; per-decile velocities (milli-spends/yr) [1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000, 200]; honest rings of 20. HOLD = top decile holds; ESCAPE = top decile settles+wraps at year 0 then exits. Δgini_escape must stay > 0.05 (design floor).
+
+| horizon | gini_hold | gini_escape | erosion | Δgini_hold | Δgini_escape | pool (escape, BTH) | pool (hold, BTH) | burned (escape, BTH) | burned (hold, BTH) | uncollected (hold, BTH) | floor |
+|---------|----------:|------------:|--------:|-----------:|-------------:|-------------------:|-----------------:|---------------------:|-------------------:|------------------------:|:-----:|
+| 1mo (0.08yr) | 0.7323 | 0.8162 | +0.0840 | +0.0852 | +0.0012 | 1265.33 | 99948.45 | 316.33 | 24987.11 | 55750.97 | FAIL |
+| 6mo (0.50yr) | 0.7323 | 0.8103 | +0.0781 | +0.0852 | +0.0071 | 7592.00 | 99948.45 | 1898.00 | 24987.11 | 55750.97 | FAIL |
+| 1yr (1.00yr) | 0.7323 | 0.8032 | +0.0710 | +0.0852 | +0.0142 | 15184.00 | 99948.45 | 3796.00 | 24987.11 | 55750.97 | FAIL |
+| 2yr (2.00yr) | 0.7323 | 0.7888 | +0.0566 | +0.0852 | +0.0286 | 30368.00 | 99948.45 | 7592.00 | 24987.11 | 55750.97 | FAIL |
+| 5yr (5.00yr) | 0.7323 | 0.7451 | +0.0129 | +0.0852 | +0.0723 | 75920.00 | 99948.45 | 18980.00 | 24987.11 | 55750.97 | PASS |
+
+### Before/after: the same table under the legacy yearly model
+
+The pre-#1698 model: every wealthy holder pays one year of demurrage every year whether or not it spends, 100% to the pool. The node has never charged this way.
+
+| horizon | gini_hold | gini_escape | erosion | Δgini_hold | Δgini_escape | pool (escape, BTH) | pool (hold, BTH) | floor |
+|---------|----------:|------------:|--------:|-----------:|-------------:|-------------------:|-----------------:|:-----:|
+| 1mo (0.08yr) | 0.6723 | 0.8161 | +0.1438 | +0.1452 | +0.0013 | 1606.90 | 175855.39 | FAIL |
+| 6mo (0.50yr) | 0.6723 | 0.8095 | +0.1372 | +0.1452 | +0.0079 | 9641.46 | 175855.39 | FAIL |
+| 1yr (1.00yr) | 0.6723 | 0.8016 | +0.1293 | +0.1452 | +0.0159 | 19282.92 | 175855.39 | FAIL |
+| 2yr (2.00yr) | 0.6723 | 0.7856 | +0.1134 | +0.1452 | +0.0318 | 38565.85 | 175855.39 | FAIL |
+| 5yr (5.00yr) | 0.6723 | 0.7378 | +0.0656 | +0.1452 | +0.0796 | 96414.62 | 175855.39 | PASS |
+
+### Sensitivity: Δgini_escape by horizon × adoption fraction (spend-time)
+
+How much residual redistribution gain survives if only a FRACTION of the top decile wraps out. A cell PASSES the floor when Δgini_escape > 0.05.
+
+| horizon | 25% adoption | 50% adoption | 100% adoption |
+|---------|------------:|------------:|------------:|
+| 1mo (0.08yr) | +0.0667 P | +0.0406 F | +0.0012 F |
+| 6mo (0.50yr) | +0.0680 P | +0.0437 F | +0.0071 F |
+| 1yr (1.00yr) | +0.0695 P | +0.0474 F | +0.0142 F |
+| 2yr (2.00yr) | +0.0726 P | +0.0548 P | +0.0286 F |
+| 5yr (5.00yr) | +0.0815 P | +0.0772 P | +0.0723 P |
+
+### Sensitivity: top-decile spend velocity (spend-time, 100% adoption)
+
+| top-decile velocity | horizon | Δgini_hold | Δgini_escape | erosion | pool (hold, BTH) | uncollected (hold, BTH) | floor |
+|---|---------|-----------:|-------------:|--------:|-----------------:|------------------------:|:-----:|
+| 0.0/yr | 1yr | -0.0001 | +0.0142 | -0.0143 | 0.00 | 189800.00 | FAIL |
+| 0.0/yr | 5yr | -0.0001 | +0.0723 | -0.0724 | 0.00 | 189800.00 | PASS |
+| 0.2/yr | 1yr | +0.0852 | +0.0142 | +0.0710 | 99948.45 | 55750.97 | FAIL |
+| 0.2/yr | 5yr | +0.0852 | +0.0723 | +0.0129 | 99948.45 | 55750.97 | PASS |
+| 1.0/yr | 1yr | +0.1147 | +0.0142 | +0.1005 | 132006.27 | 10600.89 | FAIL |
+| 1.0/yr | 5yr | +0.1147 | +0.0723 | +0.0424 | 132006.27 | 10600.89 | PASS |
+| 4.0/yr | 1yr | +0.1199 | +0.0142 | +0.1057 | 137511.68 | 2626.60 | FAIL |
+| 4.0/yr | 5yr | +0.1199 | +0.0723 | +0.0476 | 137511.68 | 2626.60 | PASS |
+| 12.0/yr | 1yr | +0.1210 | +0.0142 | +0.1068 | 138715.29 | 873.81 | FAIL |
+| 12.0/yr | 5yr | +0.1210 | +0.0723 | +0.0487 | 138715.29 | 873.81 | PASS |
+
+### Sensitivity: decoy-dilution adversary (spend-time, 100% adoption)
+
+| ring policy | horizon | Δgini_hold | Δgini_escape | erosion | pool (hold, BTH) | uncollected (hold, BTH) | floor |
+|---|---------|-----------:|-------------:|--------:|-----------------:|------------------------:|:-----:|
+| honest ring (node default) | 1yr | +0.0852 | +0.0142 | +0.0710 | 99948.45 | 55750.97 | FAIL |
+| honest ring (node default) | 5yr | +0.0852 | +0.0723 | +0.0129 | 99948.45 | 55750.97 | PASS |
+| min-centroid decoys | 1yr | +0.0838 | +0.0141 | +0.0696 | 98372.42 | 54847.01 | FAIL |
+| min-centroid decoys | 5yr | +0.0838 | +0.0718 | +0.0120 | 98372.42 | 54847.01 | PASS |
+
+### Launch start: epoch 0 (height 0, first year demurrage-free; 100% adoption)
+
+| horizon | gini_hold | gini_escape | erosion | Δgini_hold | Δgini_escape | pool (escape, BTH) | pool (hold, BTH) | burned (escape, BTH) | burned (hold, BTH) | uncollected (hold, BTH) | floor |
+|---------|----------:|------------:|--------:|-----------:|-------------:|-------------------:|-----------------:|---------------------:|-------------------:|------------------------:|:-----:|
+| 1yr (1.00yr) | 0.7344 | 0.8175 | +0.0831 | +0.0830 | -0.0001 | 0.00 | 97671.72 | 0.00 | 24417.93 | 55968.53 | FAIL |
+| 5yr (5.00yr) | 0.7344 | 0.8175 | +0.0831 | +0.0830 | -0.0001 | 0.00 | 97671.72 | 0.00 | 24417.93 | 55968.53 | FAIL |
+
+

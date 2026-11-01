@@ -89,7 +89,8 @@ use crate::SETTLEMENT_HORIZON_BLOCKS;
 use crate::{
     capitalized_reset_charge,
     consensus_fee::{
-        split_fee_pool_burn, CONSENSUS_RING_SIZE, WALLET_FACTOR_SIMILARITY_SPREAD_BPS,
+        split_fee_pool_burn, CONSENSUS_RING_SIZE, MAINNET_BLOCKS_PER_YEAR,
+        WALLET_FACTOR_SIMILARITY_SPREAD_BPS,
     },
     consensus_fee_breakdown, consensus_fee_model, consensus_tx_size_bytes, demurrage_charge,
     fee_curve::{FeeConfig, PICO_PER_BTH},
@@ -99,11 +100,16 @@ use crate::{
 
 use super::metrics::calculate_gini;
 
-/// Blocks per year at the 5s reference block time (matches the node and the
-/// decoy sweep default: `31_536_000 s / 5 s`).
-pub const BLOCKS_PER_YEAR: u64 = 6_307_200;
+/// Blocks per year at the 5s reference block time (`31_536_000 s / 5 s`),
+/// imported from the shared [`MAINNET_BLOCKS_PER_YEAR`] rather than restated
+/// (#1702).
+pub const BLOCKS_PER_YEAR: u64 = MAINNET_BLOCKS_PER_YEAR;
 
 /// Annual demurrage rate at maximum factor, basis points (2%/yr, #351).
+///
+/// `MonetaryPolicy::demurrage_rate_bps` keeps its rate in a function-local
+/// constant, so this cannot be imported; `botho/tests/sim_code_parity.rs`
+/// asserts it equals the node's mainnet epoch-1 rate (#1702).
 pub const RATE_BPS: u32 = 200;
 
 /// A candidate `SETTLEMENT_HORIZON_BLOCKS` value, labelled by its wall-clock
