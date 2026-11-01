@@ -1129,12 +1129,17 @@ async fn run_async_with_shutdown(
         metrics_updater.set_mempool_size(mempool.len());
     }
 
-    let mut consensus = ConsensusService::new(
-        node_id,
-        scp_quorum_set,
-        consensus_config_from_env(),
-        chain_state,
-    );
+    // Unit-test builds may pin the slot timing so the real-loop harness can
+    // drive the solo propose path within its deadline (#1550).
+    #[cfg(test)]
+    let consensus_config = test_hooks
+        .as_ref()
+        .and_then(|hooks| hooks.consensus_config.clone())
+        .unwrap_or_else(consensus_config_from_env);
+    #[cfg(not(test))]
+    let consensus_config = consensus_config_from_env();
+    let mut consensus =
+        ConsensusService::new(node_id, scp_quorum_set, consensus_config, chain_state);
 
     // Participation gate (issue #428): tell the consensus service how many
     // connected peers this node expects before it may produce a block, and the
@@ -1994,6 +1999,10 @@ async fn run_async_with_shutdown(
                 #[cfg(test)]
                 if let Some(hooks) = test_hooks.as_mut() {
                     hooks.on_tick(&consensus, apply_queue.is_busy());
+                    // Injected local mint candidates go through the SAME
+                    // `submit_minting_tx` the miner's work channel uses; the
+                    // next tick's `consensus.tick()` proposes them (#1550).
+                    hooks.submit_candidates(&mut consensus, apply_queue.is_busy());
                     // Injected network blocks go through the SAME enqueue
                     // functions the `NewBlock` / compact / sync arms call.
                     for injected in hooks.take_network_blocks() {
