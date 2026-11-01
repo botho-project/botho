@@ -41,7 +41,8 @@ pub struct SpendInput {
     pub public_key: String,
     /// Amount in picocredits of the owned output.
     pub amount: u64,
-    /// Subaddress index that received this output (0 = default, 1 = change).
+    /// Subaddress index that received this output (0 = default,
+    /// `CHANGE_SUBADDRESS_INDEX` = u64::MAX - 1 = change).
     pub subaddress_index: u64,
     /// The output's position within its creating transaction. Under protocol
     /// 6.0.0 this index is bound into the HYBRID one-time key, so it must be
@@ -762,7 +763,8 @@ pub struct OwnedOutput {
     pub public_key: String,
     /// Amount in picocredits of the owned output.
     pub amount: u64,
-    /// Subaddress index that received this output (0 = default, 1 = change).
+    /// Subaddress index that received this output (0 = default,
+    /// `CHANGE_SUBADDRESS_INDEX` = u64::MAX - 1 = change).
     pub subaddress_index: u64,
     /// The output's position within its creating transaction. Carried through
     /// from the scan so the hybrid one-time-key recovery
@@ -1003,7 +1005,8 @@ pub struct OwnedOutputKeyImage {
     pub public_key: String,
     /// Amount in picocredits of the owned output.
     pub amount: u64,
-    /// Subaddress index that received this output (0 = default, 1 = change).
+    /// Subaddress index that received this output (0 = default,
+    /// `CHANGE_SUBADDRESS_INDEX` = u64::MAX - 1 = change).
     pub subaddress_index: u64,
     /// The output's position within its creating transaction, preserved from
     /// the scan so a subsequent spend recovers the hybrid one-time key on
@@ -1461,7 +1464,10 @@ mod tests {
             .map(|o| (o.amount, o.subaddress_index))
             .collect();
         assert_eq!(by_amount.get(&1_000), Some(&0)); // default subaddress
-        assert_eq!(by_amount.get(&2_000), Some(&1)); // change subaddress
+        assert_eq!(
+            by_amount.get(&2_000),
+            Some(&bth_account_keys::CHANGE_SUBADDRESS_INDEX)
+        ); // change subaddress (#1674)
         assert!(!by_amount.contains_key(&3_000)); // stranger's output excluded
     }
 

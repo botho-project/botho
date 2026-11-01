@@ -92,8 +92,8 @@
     },
     {
       "path": "transaction/clsag/src/lib.rs",
-      "sha256": "761111672e9b7fac3117ce62b7039ab3d5b10370587c7d97efcecd8e7b44d8a9",
-      "reviewed_change": "40e39a7d7741d094660d658c31ea9d5cd254d4ed: exports inactive lottery_v2 module; existing CT and legacy codec functions unchanged. #1638/#1649: complete-output signing hash; Transaction::hash/signing_hash transcript now commits every output field (e_memo, cluster_tags incl. decay state, kem_ciphertext) under new domain separators. apply_memo_keystream, decrypt_memo and assemble_hybrid unchanged. #1772 Part A: TransactionStructureError::TooManyOutputs and an outputs.len() > MAX_OUTPUTS check in is_valid_structure (mempool admission only, not block validation) plus unit tests; apply_memo_keystream, decrypt_memo and assemble_hybrid unchanged.",
+      "sha256": "4da23c819aa9196db1af5f3fcd43508442910e0de5227b72dbff96c6c11bba68",
+      "reviewed_change": "40e39a7d7741d094660d658c31ea9d5cd254d4ed: exports inactive lottery_v2 module; existing CT and legacy codec functions unchanged. #1638/#1649: complete-output signing hash; Transaction::hash/signing_hash transcript now commits every output field (e_memo, cluster_tags incl. decay state, kem_ciphertext) under new domain separators. apply_memo_keystream, decrypt_memo and assemble_hybrid unchanged. #1772 Part A: TransactionStructureError::TooManyOutputs and an outputs.len() > MAX_OUTPUTS check in is_valid_structure (mempool admission only, not block validation) plus unit tests; apply_memo_keystream, decrypt_memo and assemble_hybrid unchanged. #1674: classical TxOutput::belongs_to now returns CHANGE_SUBADDRESS_INDEX (not 1) for change-subaddress matches; apply_memo_keystream, decrypt_memo and assemble_hybrid untouched.",
       "symbols": [
         "fn apply_memo_keystream(",
         "pub fn decrypt_memo(",

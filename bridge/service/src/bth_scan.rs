@@ -63,7 +63,8 @@ pub struct OwnedOutput {
     pub public_key: String,
     /// Transparent amount in picocredits.
     pub amount: u64,
-    /// Subaddress index that received the output (0 = default, 1 = change).
+    /// Subaddress index that received the output (0 = default,
+    /// `CHANGE_SUBADDRESS_INDEX` = u64::MAX - 1 = change).
     pub subaddress_index: u64,
     /// Whether the output is factor-1 (background/commerce, wrap-eligible).
     pub factor_one: bool,

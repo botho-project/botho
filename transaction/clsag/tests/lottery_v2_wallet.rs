@@ -314,10 +314,15 @@ fn print_wallet_vector() {
         &account.default_subaddress(),
         &private("botho lottery v2 wallet vector: r1"),
     );
-    // Hybrid change: the hybrid detector reports the actual change subaddress
-    // index. (The classical detector reports the label 1, which is not a
-    // recoverable subaddress index, so a classical change case would not be a
-    // valid ownership vector.)
+    // Classical change: both detectors report the actual change subaddress
+    // index (`CHANGE_SUBADDRESS_INDEX`, u64::MAX - 1); before #1674 the
+    // classical one reported the label 1, which recovered the wrong key.
+    let classical_change = TxOutput::new_with_key(
+        1,
+        &account.change_subaddress(),
+        &private("botho lottery v2 wallet vector: r4"),
+    );
+    // Hybrid change.
     let change = TxOutput::new_hybrid(
         1,
         &account.change_subaddress(),
@@ -339,6 +344,7 @@ fn print_wallet_vector() {
         &foreign.default_subaddress(),
         &private("botho lottery v2 wallet vector: r3"),
     );
+    let cc_pay = pay(&classical_change, tweak);
     let (c_pay, ch_pay, h_pay, f_pay) = (
         pay(&classical, tweak),
         pay(&change, tweak),
@@ -349,6 +355,8 @@ fn print_wallet_vector() {
     let recoveries = json!([
         {"name": "classical payout, default subaddress", "output": row(&c_pay), "source": row(&classical),
          "wire": wire(0, &t), "expect": expect(&classical, &c_pay, 0, tweak)},
+        {"name": "classical payout, change subaddress", "output": row(&cc_pay), "source": row(&classical_change),
+         "wire": wire(0, &t), "expect": expect(&classical_change, &cc_pay, 0, tweak)},
         {"name": "hybrid payout, change subaddress", "output": row(&ch_pay), "source": row(&change),
          "wire": wire(0, &t), "expect": expect(&change, &ch_pay, 0, tweak)},
         {"name": "hybrid payout at baseIndex 3", "output": row(&h_pay), "source": row(&hybrid),
