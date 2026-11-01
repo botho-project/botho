@@ -5063,6 +5063,243 @@ mod tests {
         }
     }
 
+    /// #1697: the pure ledger mirrors in `bth_cluster_tax::fee_floor_inputs`
+    /// (which the bridge-import calibration sim runs on) reproduce the
+    /// ledger's own resolution exactly, over deterministic sampled inputs:
+    /// the writer's per-output wealth accumulation, the output-tag claimed
+    /// wealth, the bridge-import floor blend, the ring-centroid floor, and the
+    /// full consensus fee floor fed through `consensus_fee_model`.
+    #[test]
+    fn fee_floor_inputs_match_ledger_for_sampled_inputs() {
+        use bth_cluster_tax::{
+            consensus_fee_model,
+            fee_floor_inputs::{
+                effective_cluster_wealth_from_outputs as mirror_claimed,
+                import_floor_factor_from_outputs as mirror_import_floor,
+                output_wealth_contributions, ring_centroid_factor,
+            },
+            resolve_fee_floor, ClaimedClass, ConsensusFeeInputs, ConsensusFeeParams, FeeConfig,
+            FeeModelMode, FloorOutput, TagPair, PICO_PER_BTH,
+        };
+        use bth_transaction_types::ClusterId;
+
+        let mut x: u64 = 0x1697_D1CE_5EED_0001;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        let clusters = [3u64, 5, 7, 11, 13];
+        let imports = [5u64, 13];
+        let fc = FeeConfig::default();
+        let h = 8_000_000u64; // epoch 1: demurrage active
+
+        for sample in 0..24u64 {
+            let dir = tempdir().unwrap();
+            let ledger = Ledger::open(dir.path()).unwrap();
+            let mut wealth: std::collections::BTreeMap<u64, u128> = Default::default();
+            for &c in &clusters {
+                let w = (next() % 50_000_000) as u128 * PICO_PER_BTH / 10;
+                ledger.set_cluster_wealth_for_test(c, w).unwrap();
+                wealth.insert(c, w);
+            }
+            for &c in &imports {
+                ledger.record_bridge_import_cluster_for_test(c).unwrap();
+            }
+            let random_tags = |next: &mut dyn FnMut() -> u64| -> Vec<TagPair> {
+                let n = (next() % 4) as usize;
+                let mut left = TAG_WEIGHT_SCALE;
+                let mut tags: Vec<TagPair> = Vec::new();
+                for &c in clusters.iter().skip((next() % 2) as usize).take(n) {
+                    let w = (next() as u32 % left.max(1)).max(1_000).min(left);
+                    if w >= 1_000 {
+                        tags.push((c, w));
+                        left -= w;
+                    }
+                }
+                tags
+            };
+            let to_vec = |tags: &[TagPair]| {
+                ClusterTagVector::from_pairs(
+                    &tags
+                        .iter()
+                        .map(|&(c, w)| (ClusterId(c), w))
+                        .collect::<Vec<_>>(),
+                )
+            };
+
+            // Outputs with random multi-cluster tags.
+            let n_out = 1 + (next() % 3) as usize;
+            let out_tags: Vec<Vec<TagPair>> = (0..n_out).map(|_| random_tags(&mut next)).collect();
+            let outputs: Vec<TxOutput> = out_tags
+                .iter()
+                .enumerate()
+                .map(|(i, t)| {
+                    let amount = 1 + next() % (1_000_000 * PICO_PER_BTH as u64);
+                    mk_tagged_output(amount, 150 + i as u8, to_vec(t))
+                })
+                .collect();
+            // Canonicalize through `from_pairs` exactly as the ledger sees it.
+            let canon: Vec<Vec<TagPair>> = outputs
+                .iter()
+                .map(|o| {
+                    o.cluster_tags
+                        .entries
+                        .iter()
+                        .map(|e| (e.cluster_id.0, e.weight))
+                        .collect()
+                })
+                .collect();
+            let floor_outs: Vec<FloorOutput<'_>> = outputs
+                .iter()
+                .zip(&canon)
+                .map(|(o, t)| FloorOutput {
+                    amount: o.amount,
+                    tags: t,
+                })
+                .collect();
+            let w_of = |c: u64| wealth.get(&c).copied().unwrap_or(0);
+            let is_imp = |c: u64| imports.contains(&c);
+
+            assert_eq!(
+                ledger
+                    .effective_cluster_wealth_from_outputs(&outputs)
+                    .unwrap(),
+                mirror_claimed(&floor_outs, &w_of),
+                "sample {sample}: claimed wealth"
+            );
+            assert_eq!(
+                ledger.import_floor_factor_from_outputs(&outputs).unwrap(),
+                mirror_import_floor(&floor_outs, &is_imp),
+                "sample {sample}: import floor"
+            );
+
+            // Ring members with random multi-cluster tags (centroid floor).
+            let ring_tags: Vec<(u64, Vec<TagPair>)> = (0..1 + next() % 5)
+                .map(|_| {
+                    let t = random_tags(&mut next);
+                    let canon: Vec<TagPair> = to_vec(&t)
+                        .entries
+                        .iter()
+                        .map(|e| (e.cluster_id.0, e.weight))
+                        .collect();
+                    (1 + next() % (100_000 * PICO_PER_BTH as u64), canon)
+                })
+                .collect();
+            let ring_vecs: Vec<(u64, ClusterTagVector)> =
+                ring_tags.iter().map(|(v, t)| (*v, to_vec(t))).collect();
+            let ring_refs: Vec<(u64, &ClusterTagVector)> =
+                ring_vecs.iter().map(|(v, t)| (*v, t)).collect();
+            let ring_slices: Vec<(u64, &[TagPair])> =
+                ring_tags.iter().map(|(v, t)| (*v, t.as_slice())).collect();
+            assert_eq!(
+                ledger
+                    .ring_centroid_floored_factor(
+                        bth_cluster_tax::FACTOR_SCALE,
+                        &ring_refs,
+                        &fc.cluster_curve
+                    )
+                    .unwrap(),
+                ring_centroid_factor(&ring_slices, &w_of, &fc.cluster_curve)
+                    .max(bth_cluster_tax::FACTOR_SCALE),
+                "sample {sample}: ring-centroid floor"
+            );
+
+            // Full consensus fee floor: seeded single-cluster ring members,
+            // the random outputs, resolved by the mirror and priced by the
+            // shared model.
+            let ring_specs: Vec<(u64, u64, u64, u8)> = (0..1 + next() % 4)
+                .map(|i| {
+                    let c = match next() % 3 {
+                        0 => 0,
+                        _ => clusters[(next() % clusters.len() as u64) as usize],
+                    };
+                    (
+                        1 + next() % (100_000 * PICO_PER_BTH as u64),
+                        h - next() % 1_000_000,
+                        c,
+                        10 + i as u8,
+                    )
+                })
+                .collect();
+            let ring = seed_ring_utxos(&ledger, &ring_specs);
+            let tx = mk_transfer_tx(ring, outputs.clone(), 0);
+            let member_tags: Vec<(u64, Vec<TagPair>)> = ring_specs
+                .iter()
+                .map(|&(a, _, c, _)| {
+                    (
+                        a,
+                        if c == 0 {
+                            Vec::new()
+                        } else {
+                            vec![(c, TAG_WEIGHT_SCALE)]
+                        },
+                    )
+                })
+                .collect();
+            let member_slices: Vec<(u64, &[TagPair])> = member_tags
+                .iter()
+                .map(|(v, t)| (*v, t.as_slice()))
+                .collect();
+            let resolved = resolve_fee_floor(&floor_outs, &member_slices, &w_of, &is_imp);
+            let ages: Vec<(u64, u64)> = ring_specs.iter().map(|&(a, c, _, _)| (a, c)).collect();
+            let params = ConsensusFeeParams::from_policy(
+                &crate::monetary::mainnet_policy(),
+                FeeModelMode::ConsensusOnly,
+            );
+            let model = consensus_fee_model(
+                &ConsensusFeeInputs {
+                    size: tx.estimate_size(),
+                    n_out: tx.outputs.len(),
+                    n_memo: 0,
+                    claimed: ClaimedClass::Wealth(resolved.claimed_wealth),
+                    floor: resolved.floor,
+                    elapsed: bth_cluster_tax::ring_elapsed_quantile(
+                        &ages,
+                        h,
+                        CONSENSUS_RING_AGE_QUANTILE_BPS,
+                    ),
+                    height: h,
+                    output_sum: tx.outputs.iter().map(|o| o.amount).sum(),
+                },
+                &params,
+            );
+            let floor = ledger.consensus_fee_floor(&tx, h).unwrap();
+            // +-1 picocredit: the ledger floor and the f64-based sim fee
+            // model round the same quantity through different arithmetic
+            // (integer factor math vs f64), so they can differ by one unit.
+            assert!(
+                floor.abs_diff(model) <= 1,
+                "sample {sample}: mirror-fed model {model} != ledger floor {floor}"
+            );
+
+            // Writer: one output's wealth accumulation.
+            let before: Vec<u128> = clusters
+                .iter()
+                .map(|&c| ledger.get_cluster_wealth(c).unwrap())
+                .collect();
+            let mut wtxn = ledger.env.write_txn().unwrap();
+            ledger
+                .update_cluster_wealth_for_output(&mut wtxn, &outputs[0])
+                .unwrap();
+            wtxn.commit().unwrap();
+            let contributions = output_wealth_contributions(outputs[0].amount, &canon[0]);
+            for (i, &c) in clusters.iter().enumerate() {
+                let added: u128 = contributions
+                    .iter()
+                    .filter(|(id, _)| *id == c)
+                    .map(|(_, w)| *w)
+                    .sum();
+                assert_eq!(
+                    ledger.get_cluster_wealth(c).unwrap(),
+                    before[i].saturating_add(added),
+                    "sample {sample}: writer contribution to cluster {c}"
+                );
+            }
+        }
+    }
+
     /// #1695 drift guards: the model's mirrored constants equal the node's.
     #[test]
     fn consensus_fee_model_relay_min_matches_min_tx_fee() {

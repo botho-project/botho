@@ -1,6 +1,6 @@
 # ADR 0007: Bridge-Import Cluster Tagging via Block-Epoch Keys
 
-**Status**: Accepted (ratified 2026-07-14 with `K` = 1 day = 17,280 blocks and `F` = 1.5×, per the #937/#940 calibration)
+**Status**: Accepted (ratified 2026-07-14 with `K` = 1 day = 17,280 blocks and `F` = 1.5×, per the #937/#940 calibration). **Re-calibrated on production semantics 2026-10-31 (#1697). The values are unchanged, but several guarantees below do not hold against the node as built. See §Production-semantics re-calibration.**
 **Date**: 2026-07-14
 **Decision Makers**: Core Team
 **Related**: ADR 0002 (federation custody), ADR 0003 (factor-1 wrap + demurrage-settlement), ADR 0004 (bridge privacy / amount revelation), ADR 0006 (PQ + confidential-amounts target); issues #831, #925, #902, #904, epic #816
@@ -61,6 +61,19 @@ Both constants were calibrated by `cluster-tax/src/simulation/bridge_import_swee
 2. **Import-factor floor `F` = 1.5×.** `F = 1.0` is rejected (the whole premium is gameable toward 1× with patience); `F = 1.5` is the residual a split-gamer cannot erode, clears the ~1.27× a retail ~1000-BTH import already prices, and carries a ~0.20%/yr transient onboarding toll.
 
 Decay-by-circulation confirmed against the real `TagVector::mix`: a worst-case 6× flood import blends to the 1.5× floor in ≈9 domestic-mixing spends (most of the drop in the first 4). The ADR §Decision invariant holds: a pure-external holder who never receives domestic value stays at 6× indefinitely (mixing with zero incoming value is a no-op on the tag).
+
+## Production-semantics re-calibration (#1697, 2026-10-31)
+
+The #940 sweep modelled this ADR's text. #1697 rebuilt it on what the node runs: cumulative per-output cluster wealth (`writer.rs:469-500`), the per-spend `max(curve(output-tag wealth), ring-centroid factor, F-blend on output tags)` (`validation.rs:224-246`), production `ClusterTagVector` with the wallet's 5% decay, and `consensus_fee_model` fees. Full numbers are in `docs/research/bridge-import-calibration.md`. Corrections to this ADR:
+
+- **§Decision 2, "wealth = sum of unwrap amounts in the epoch".** On the node, `W[c_import(m)]` is cumulative: every downstream output carrying the tag adds to it, and nothing subtracts. Collateral on a small co-entrant therefore keeps growing after the epoch closes. A 1,000-BTH entrant in a 5,000-BTH flood epoch goes from 1.58× to 3.20× after the flood is spent 20 times.
+- **§Decision 3, "~0.20 %/yr onboarding toll".** The floor applies to the demurrage factor, but the claimed (output) class is the plain curve. An honest wallet's first spend of a lone 1,000-BTH import therefore pays #925's capitalized downgrade charge on the 1.475× − 1.254× gap: **0.44% of value**, once.
+- **§Decision 4, "decay only by circulation" and §Calibration, "a pure-external holder stays at 6× indefinitely".** Neither holds. The stock wallet decays tags 5% per transfer, so 135 self-spends with no domestic money prune the import tag to background (0.11% fees for a flood coin). A spender may declare any decay, because consensus rejects only inflation. Shedding to weight ÷ 20 per hop takes a 5.44× flood coin to 1.00× in **3 spends for 0.15%**. Dropping all tags in one spend costs 0.06% for a small entrant, because the F-blend is read from output tags. Tracked as #1687 and #1686.
+- **§Calibration 1, "541 epochs / 541 days".** Re-run: 584 epochs. `K` is in blocks, so that is 584 days at 5 s, 2,336 days at 20 s and 4,672 days at 40 s. The split-game wall is real but no longer the cheapest escape (above).
+- **§Consequences, "confidential-amounts-clean by construction".** This holds only for the epoch's initial unwrap total. The cumulative `W` also adds the amounts of downstream outputs that carry the tag, and those are not public under confidential amounts (#902).
+- **Epoch steering.** Consensus only lower-bounds `created_at_height` (no upper bound, no epoch check), so the epoch id a release carries was the relayer's choice. The honest relayer now derives `created_at_height` from the tip and refuses off-epoch heights (#1740, fixed by #1744; see `bridge/service/src/bth_scan.rs`). A modified relayer can still steer to an epoch with no recorded unwrap, which is not in the import set and so gets no floor. That residual is a consensus question and stays with #1687 / #1683.
+
+`K` and `F` are **not** changed by this re-calibration. No value of either closes the escapes above; they depend on where the floor is enforced (#1687). Whether `K` should be restated in wall-clock terms, given 20–40 s blocks, is open for a human decision.
 
 ## Alternatives considered
 

@@ -4853,7 +4853,7 @@ mod cli {
             run_bridge_import_sweep, to_markdown,
         };
         let report = run_bridge_import_sweep();
-        println!("# Bridge-Import Calibration Sweep (issue #937)\n");
+        println!("# Bridge-Import Calibration Sweep (issues #937, #1697)\n");
         println!("{}", to_markdown(&report));
     }
 
