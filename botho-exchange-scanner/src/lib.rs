@@ -21,6 +21,7 @@
 //! provides raw blockchain data, and all cryptographic operations happen
 //! locally.
 
+pub mod batch;
 pub mod config;
 pub mod deposit;
 pub mod output;
